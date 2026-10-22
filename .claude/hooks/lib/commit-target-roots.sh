@@ -31,8 +31,10 @@
 # via export/declare), `git --git-dir|--work-tree` and `-c core.worktree=` (which move the
 # repository without naming it), a missing target in a command that also creates paths, and
 # a shell runner or eval whose script operand carries an expansion (the commit may be hiding
-# in the variable). The caller DENIES on a bad target; it never skips. A refusal that comes
-# AFTER the last commit record cannot change that commit's target and is dropped.
+# in the variable). The caller DENIES on a bad target; it never skips. In a STRAIGHT-LINE command
+# list a refusal that comes AFTER the last commit record cannot change that commit's target and
+# is dropped; a command with a loop or a function keeps every refusal (its text order is not its
+# run order).
 #
 # OUTPUT VARIABLES (set by ctr_collect):
 #   CTR_TARGETS      literal target paths, in order of appearance (no duplicates)
@@ -42,6 +44,7 @@
 #   CTR_LEX_STATE    ok | unavailable (perl / lexer missing, lexer error, truncated stream)
 #   CTR_LEX_WHY      the cause when unavailable
 #   CTR_LEX_KIND     tooling | parse | bound — which repair applies when unavailable
+#   CTR_LEXER        path of the lexer (resolved from this file's own location)
 # ctr_resolve_roots then maps CTR_TARGETS to git toplevels in CTR_ROOTS.
 #
 # PORTABILITY: bash 3.2 (stock macOS /bin/bash): no mapfile, no declare -n, no associative
@@ -66,6 +69,10 @@ _CTR_F=()
 _CTR_BAD_MARK=0
 _CTR_CREATOR=0
 _CTR_CAPPED=0
+_CTR_DEPTH=0
+_CTR_TGT_AT_COMMIT=0
+_CTR_TEXT=""
+_CTR_MAX_DEPTH=32
 
 # ctr_wants_lex <command> — cheap pre-filter for the STRICT-match path (`git commit` with
 # nothing between the words): true when the text contains a token that can change which
@@ -76,7 +83,7 @@ _CTR_CAPPED=0
 ctr_wants_lex() {
   local c="$1" re='(^|[^[:alnum:]_.-])(cd|pushd|env|e[v]al|bash|sh|zsh|dash|ksh|sudo|doas|chroot|nsenter|export|declare|typeset)([^[:alnum:]_.-]|$)'
   case "$c" in
-    *GIT_DIR*|*GIT_WORK_TREE*|*GIT_INDEX_FILE*|*GIT_COMMON_DIR*|*--git-dir*|*--work-tree*|*core.worktree*) return 0 ;;
+    *GIT_DIR*|*GIT_WORK_TREE*|*GIT_INDEX_FILE*|*GIT_COMMON_DIR*|*--git-dir*|*--work-tree*|*core.worktree*|*--chdir*|*--wd*|*--working-directory*) return 0 ;;
   esac
   [[ "$c" =~ $re ]] && return 0
   [[ "$c" =~ git[[:space:]]+- ]] && return 0
@@ -85,7 +92,7 @@ ctr_wants_lex() {
 
 _ctr_unavail() { CTR_LEX_STATE=unavailable; CTR_LEX_KIND="$1"; CTR_LEX_WHY="$2"; }
 _ctr_bad() { CTR_BAD+=("$1"); }
-_ctr_mark_commit() { CTR_COMMIT_SEEN=1; _CTR_BAD_MARK=${#CTR_BAD[@]}; }
+_ctr_mark_commit() { CTR_COMMIT_SEEN=1; _CTR_BAD_MARK=${#CTR_BAD[@]}; _CTR_TGT_AT_COMMIT=${#CTR_TARGETS[@]}; }
 
 # _ctr_add_path <text> <flags> — record a path operand as a literal target, or as bad.
 _ctr_add_path() {
@@ -117,6 +124,15 @@ _ctr_is_gitenv() {
   return 1
 }
 
+# _ctr_cfg_moves_worktree <key[=value]> — a git config key that relocates the work tree (git
+# config keys are case-insensitive).
+_ctr_cfg_moves_worktree() {
+  local k="${1%%=*}"
+  k=$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')
+  case "$k" in core.worktree|core.bare) return 0 ;; esac
+  return 1
+}
+
 # _ctr_env_walk <idx-of-env-word> — parse GNU env's options (bundled short options, abbreviated
 # long options, attached or separate operands), collect -C|--chdir as targets, then walk the
 # command env runs.
@@ -126,11 +142,11 @@ _ctr_env_walk() {
     w="${_CTR_W[$k]}"
     case "$w" in
       --) k=$((k + 1)); break ;;
-      --chdir=*|--chd=*|--chdi=*|--ch=*) _ctr_add_path "${w#*=}" "${_CTR_F[$k]}"; k=$((k + 1)) ;;
-      --chdir|--chd|--chdi|--ch)
+      --chdir=*|--chd=*|--chdi=*|--ch=*|--cd=*|--c=*) _ctr_add_path "${w#*=}" "${_CTR_F[$k]}"; k=$((k + 1)) ;;
+      --chdir|--chd|--chdi|--ch|--cd|--c)
         if [ $((k + 1)) -lt "$n" ]; then _ctr_add_idx $((k + 1)); else _ctr_bad "env $w has no operand"; fi
         k=$((k + 2)) ;;
-      --split*) _ctr_bad "env --split-string runs a string the walker cannot read"; _ctr_mark_commit; k=$((k + 1)) ;;
+      --s|--sp|--spl|--spli|--split*) _ctr_bad "env --split-string runs a string the walker cannot read"; _ctr_mark_commit; k=$((k + 1)) ;;
       --unset|--argv0) k=$((k + 2)) ;;
       --*) k=$((k + 1)) ;;
       -?*)
@@ -167,16 +183,19 @@ _ctr_git_walk() {
       -C)
         if [ $((j + 1)) -lt "$n" ]; then _ctr_add_idx $((j + 1)); else _ctr_bad "git -C has no operand"; fi
         j=$((j + 2)) ;;
-      -c)
-        if [ $((j + 1)) -lt "$n" ]; then
-          case "${_CTR_W[$((j + 1))]}" in
-            core.worktree=*|core.bare=*) _ctr_bad "git -c ${_CTR_W[$((j + 1))]%%=*} moves the work tree without a path the walker may trust" ;;
-          esac
+      -c|--config-env)
+        if [ $((j + 1)) -lt "$n" ] && _ctr_cfg_moves_worktree "${_CTR_W[$((j + 1))]}"; then
+          _ctr_bad "git $w ${_CTR_W[$((j + 1))]%%=*} moves the work tree without a path the walker may trust"
         fi
         j=$((j + 2)) ;;
+      --config-env=*)
+        if _ctr_cfg_moves_worktree "${w#--config-env=}"; then
+          _ctr_bad "git --config-env ${w#--config-env=} moves the work tree without a path the walker may trust"
+        fi
+        j=$((j + 1)) ;;
       --git-dir|--work-tree) _ctr_bad "git $w redirects the repository without a path the walker may trust"; j=$((j + 2)) ;;
       --git-dir=*|--work-tree=*) _ctr_bad "git ${w%%=*} redirects the repository without a path the walker may trust"; j=$((j + 1)) ;;
-      --namespace|--config-env|--attr-source|--super-prefix) j=$((j + 2)) ;;
+      --namespace|--attr-source|--super-prefix) j=$((j + 2)) ;;
       --no-pager|--paginate|-p|-P|--bare|--no-replace-objects|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-optional-locks|--no-advice|--no-lazy-fetch|--exec-path|--exec-path=*|-v|--version|-h|--help)
         j=$((j + 1)) ;;
       -*) unknown=1; j=$((j + 1)) ;;
@@ -214,18 +233,21 @@ _ctr_git_walk() {
 }
 
 # _ctr_runner_walk <idx-of-shell-word> — `bash -c SCRIPT`: a literal script was already
-# re-lexed by the lexer; a script held in an expansion hides a possible commit.
+# re-lexed by the lexer; a script held in an expansion hides a possible commit; a shell given
+# no script operand reads one from stdin (heredoc, here-string or pipe), which the lexer treats
+# as data.
 _ctr_runner_walk() {
-  local j=$(($1 + 1)) n="${#_CTR_W[@]}" w
+  local j=$(($1 + 1)) n="${#_CTR_W[@]}" w mode=stdin
   while [ "$j" -lt "$n" ]; do
     w="${_CTR_W[$j]}"
     case "$w" in
-      --) break ;;
-      -o|+o|-O|+O) j=$((j + 2)) ;;
+      --) mode=operand; break ;;
+      -o|+o|-O|+O|--rcfile|--init-file) j=$((j + 2)) ;;
       --*) j=$((j + 1)) ;;
       -[!-]*)
         case "$w" in
           *c*)
+            mode=c
             if [ $((j + 1)) -lt "$n" ]; then
               case "${_CTR_F[$((j + 1))]}" in
                 *x*) _ctr_bad "a shell runs a script held in an expansion"; _ctr_mark_commit ;;
@@ -234,14 +256,34 @@ _ctr_runner_walk() {
             break ;;
         esac
         j=$((j + 1)) ;;
-      *) break ;;
+      *) mode=operand; break ;;
     esac
   done
+  if [ "$mode" = stdin ]; then
+    case "$_CTR_TEXT" in
+      *'<<'*|*'|'*) _ctr_bad "a shell reads its script from stdin (heredoc, here-string or pipe)"; _ctr_mark_commit ;;
+    esac
+  fi
 }
 
 # _ctr_walk_from <idx> — read one argv record from word <idx> and update the CTR_* state.
+# Nesting is bounded (a chain of `env env env ...` recurses once per word, and a deep bash
+# recursion crashes the hook, which lets the tool call proceed): past the bound the command is
+# refused as unreadable.
 _ctr_walk_from() {
-  local i="$1" n="${#_CTR_W[@]}" j w b k
+  _CTR_DEPTH=$((_CTR_DEPTH + 1))
+  if [ "$_CTR_DEPTH" -gt "$_CTR_MAX_DEPTH" ]; then
+    if [ "$_CTR_DEPTH" -eq $((_CTR_MAX_DEPTH + 1)) ]; then
+      _ctr_bad "the command nests launchers deeper than $_CTR_MAX_DEPTH levels"; _ctr_mark_commit
+    fi
+  else
+    _ctr_walk_body "$1"
+  fi
+  _CTR_DEPTH=$((_CTR_DEPTH - 1))
+}
+
+_ctr_walk_body() {
+  local i="$1" n="${#_CTR_W[@]}" j w b k hits h
   # Leading NAME=value assignments.
   while [ "$i" -lt "$n" ]; do
     w="${_CTR_W[$i]}"
@@ -274,7 +316,7 @@ _ctr_walk_from() {
       while [ "$i" -lt "$n" ]; do
         case "${_CTR_W[$i]}" in
           --) i=$((i + 1)); break ;;
-          -L|-P|-e|-@) i=$((i + 1)) ;;
+          -n|-[LPe@]|-[LPe@][LPe@]*) i=$((i + 1)) ;;
           *) break ;;
         esac
       done
@@ -311,29 +353,61 @@ _ctr_walk_from() {
     mkdir|mv|cp|ln|install|rsync|tar|unzip) _CTR_CREATOR=1 ;;
     *)
       # Not a command the walker models: it may be a launcher (timeout, sudo, nice, xargs,
-      # rtk, flock, setsid, exec, command, builtin, ...). Look through it for the real
-      # command, and honour a launcher's own chdir option (sudo -D, --chdir) on the way.
-      j=$((i + 1)); k=-1
-      while [ "$j" -lt "$n" ]; do
+      # rtk, flock, setsid, exec, command, builtin, ...). Look through it for EVERY later
+      # command word (the first may be an operand: `sudo -u git git ...`), and honour a
+      # launcher's own chdir option (sudo -D, --chdir, --working-directory) on the way.
+      case "$b" in
+        chroot|nsenter|unshare)
+          j=$((i + 1))
+          while [ "$j" -lt "$n" ]; do
+            if [ "${_CTR_W[$j]##*/}" = git ]; then
+              _ctr_bad "$b changes the root or namespace the commit runs in"; _ctr_mark_commit; break
+            fi
+            j=$((j + 1))
+          done ;;
+        su|flock|ssh|watch|script|runuser|parallel|fish|ash)
+          # These take the command as ONE string operand.
+          j=$((i + 1))
+          while [ "$j" -lt "$n" ]; do
+            case "${_CTR_W[$j]}" in
+              *git*[[:space:]]*commit*) _ctr_bad "$b runs a command string the walker cannot read"; _ctr_mark_commit; break ;;
+            esac
+            j=$((j + 1))
+          done ;;
+      esac
+      hits=(); j=$((i + 1))
+      while [ "$j" -lt "$n" ] && [ "${#hits[@]}" -lt 8 ]; do
         case "${_CTR_W[$j]##*/}" in
-          git|cd|pushd|env|bash|sh|zsh|dash|ksh|e[v]al|export|declare|typeset|readonly) k=$j; break ;;
+          git|cd|pushd|env|bash|sh|zsh|dash|ksh|e[v]al|export|declare|typeset|readonly|local) hits+=("$j") ;;
         esac
         j=$((j + 1))
       done
-      if [ "$k" -ge 0 ]; then
+      if [ "${#hits[@]}" -gt 0 ]; then
+        k="${hits[$((${#hits[@]} - 1))]}"
         j=$((i + 1))
         while [ "$j" -lt "$k" ]; do
           w="${_CTR_W[$j]}"
           case "$w" in
-            -D|--chdir) if [ $((j + 1)) -lt "$k" ]; then _ctr_add_idx $((j + 1)); fi ;;
-            --chdir=*) _ctr_add_path "${w#--chdir=}" "${_CTR_F[$j]}" ;;
+            -D|--chdir|--wd|--working-directory) if [ $((j + 1)) -lt "$k" ]; then _ctr_add_idx $((j + 1)); fi ;;
+            --chdir=*|--wd=*|--working-directory=*) _ctr_add_path "${w#*=}" "${_CTR_F[$j]}" ;;
+            -D/*) _ctr_add_path "${w#-D}" "${_CTR_F[$j]}" ;;
           esac
           j=$((j + 1))
         done
-        _ctr_walk_from "$k"
+        for h in "${hits[@]}"; do _ctr_walk_from "$h"; done
       fi ;;
   esac
   return 0
+}
+
+# _ctr_has_loop <command> — the text contains a loop or a function definition, where the text
+# order of the commands is not their run order (a commit before a `cd \"$d\"` in a loop body
+# runs again after it). Over-matching only keeps a refusal.
+_ctr_has_loop() {
+  case "$1" in
+    *'for '*|*'while '*|*'until '*|*'select '*|*'()'*|*'function '*) return 0 ;;
+  esac
+  return 1
 }
 
 # ctr_collect <command> — lex and walk the command. Always returns 0; read CTR_LEX_STATE.
@@ -345,8 +419,8 @@ ctr_collect() {
   local cmd="$1" fld i n argc k tag
   local f=()
   CTR_TARGETS=(); CTR_BAD=(); CTR_COMMIT_SEEN=0; CTR_LEX_STATE=ok; CTR_LEX_WHY=""; CTR_LEX_KIND=""
-  _CTR_BAD_MARK=0; _CTR_CREATOR=0; _CTR_CAPPED=0
-  if ! command -v perl >/dev/null 2>&1; then _ctr_unavail tooling "perl is not installed (the command lexer needs it)"; return 0; fi
+  _CTR_BAD_MARK=0; _CTR_CREATOR=0; _CTR_CAPPED=0; _CTR_DEPTH=0; _CTR_TGT_AT_COMMIT=0; _CTR_TEXT="$cmd"
+  if ! command -v perl >/dev/null 2>&1; then _ctr_unavail tooling "perl is not installed, and the command lexer needs it"; return 0; fi
   if [ ! -r "$CTR_LEXER" ]; then _ctr_unavail tooling "the command lexer is missing at $CTR_LEXER"; return 0; fi
   # The `|| true` is inside the process substitution so a lexer exit status (2 = unparseable,
   # 3 = a bound tripped) is absorbed there; failure is read from the stream instead.
@@ -360,7 +434,7 @@ ctr_collect() {
       OK)
         if [ $((i + 1)) -ne "$n" ]; then _ctr_unavail parse "the command lexer wrote data after its OK field"; return 0; fi
         # A refusal after the last commit record cannot change that commit's target.
-        if [ "$CTR_COMMIT_SEEN" -eq 1 ] && [ "$_CTR_BAD_MARK" -lt "${#CTR_BAD[@]}" ]; then
+        if [ "$CTR_COMMIT_SEEN" -eq 1 ] && [ "$_CTR_BAD_MARK" -lt "${#CTR_BAD[@]}" ] && ! _ctr_has_loop "$cmd"; then
           if [ "$_CTR_BAD_MARK" -eq 0 ]; then CTR_BAD=(); else CTR_BAD=("${CTR_BAD[@]:0:$_CTR_BAD_MARK}"); fi
         fi
         return 0 ;;
@@ -383,7 +457,10 @@ ctr_collect() {
       E)
         # The lexer's own failure frame: E <cause>. depth / budget / alarm are bounds.
         _ctr_unavail bound "the command is too large or too deeply nested to analyse (lexer cause '${f[$((i + 1))]:-unknown}')"
-        case "${f[$((i + 1))]:-}" in exit2) CTR_LEX_KIND=parse; CTR_LEX_WHY="the command is not parseable shell (unbalanced quote, unterminated substitution or heredoc)" ;; esac
+        case "${f[$((i + 1))]:-}" in
+          exit2) CTR_LEX_KIND=parse; CTR_LEX_WHY="the command is not parseable shell (unbalanced quote, unterminated substitution or heredoc)" ;;
+          crash) CTR_LEX_KIND=tooling; CTR_LEX_WHY="the command lexer crashed" ;;
+        esac
         return 0 ;;
       *)
         _ctr_unavail parse "the command could not be parsed (lexer field '$tag')"; return 0 ;;
@@ -401,10 +478,11 @@ ctr_collect() {
 # GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE are stripped from the probes, since an inherited
 # GIT_DIR outranks `git -C` and would send the probe to the wrong repository.
 ctr_resolve_roots() {
-  local t base cand top r dup d found s k
+  local t base cand top r dup d found s k ti=-1
   local cands=() seen=() bases=()
   CTR_ROOTS=()
   for t in ${CTR_TARGETS[@]+"${CTR_TARGETS[@]}"}; do
+    ti=$((ti + 1))
     cands=()
     case "$t" in
       /*) cands+=("$t") ;;
@@ -424,13 +502,14 @@ ctr_resolve_roots() {
       for d in ${seen[@]+"${seen[@]}"}; do if [ "$d" = "$cand" ]; then dup=1; fi; done
       [ "$dup" -eq 1 ] && continue
       seen+=("$cand")
-      top=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$cand" rev-parse --show-toplevel 2>/dev/null) || continue
+      top=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR git -C "$cand" rev-parse --show-toplevel 2>/dev/null) || continue
       [ -n "$top" ] || continue
       dup=0
       for r in ${CTR_ROOTS[@]+"${CTR_ROOTS[@]}"}; do if [ "$r" = "$top" ]; then dup=1; fi; done
       if [ "$dup" -eq 0 ]; then CTR_ROOTS+=("$top"); fi
     done
-    if [ "$found" -eq 0 ] && [ "$_CTR_CREATOR" -eq 1 ]; then
+    # A target named after the last commit record cannot be that commit's target.
+    if [ "$found" -eq 0 ] && [ "$_CTR_CREATOR" -eq 1 ] && { [ "$CTR_COMMIT_SEEN" -eq 0 ] || [ "$ti" -lt "$_CTR_TGT_AT_COMMIT" ]; }; then
       _ctr_bad "the target '$t' does not exist yet and this command creates paths"
     fi
   done

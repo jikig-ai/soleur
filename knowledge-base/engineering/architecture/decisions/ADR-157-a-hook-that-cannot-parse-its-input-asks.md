@@ -192,9 +192,10 @@ unrunnable or timed-out gitleaks keeps its existing allow plus bypass row (an en
 an undeterminable target). There is no override variable: an override is the skip.
 
 This is a second scoped exception to "never denies", beside ADR-256's, with these differences,
-stated rather than implied. ADR-256 asks on a tripped lexer bound, a crash, a truncated stream and a
-missing perl, for ANY command; this gate denies on those, for a command that could be a `git commit`
-(it contains `git` and `commit`, or is a plain `git commit`). The scoping is what answers ADR-165's
+stated rather than implied. ADR-256 asks on a tripped lexer bound, a crash or a truncated stream
+for any command, and on a missing perl only for a filing-shaped command; this gate denies on all
+of those for a command that could be a `git commit` (a strict `git commit`, a loose
+`git ... commit` form, or a text that names a directory). The scoping is what answers ADR-165's
 self-repair argument: every repair this gate prescribes (`git checkout -- .claude/hooks/lib`,
 installing perl, splitting or rewriting the command, naming a literal path) is not itself a commit,
 so the deny cannot block its own repair. Every other failure still asks.

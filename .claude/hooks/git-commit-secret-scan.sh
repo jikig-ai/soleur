@@ -140,14 +140,21 @@ need_lex=0
 if [ "$ctr_ok" -eq 1 ]; then
   if [ "$strict_match" -eq 0 ] || ctr_wants_lex "$command"; then need_lex=1; fi
 elif [ "$strict_match" -eq 0 ]; then
-  # Library unavailable: only an option-bearing `git -...` form can still be a loose commit.
+  # Library unavailable: this is a broken install, so lean toward the deny. A loose-only match
+  # is kept when it carries an option-bearing `git -...` form or any quoting / expansion
+  # character a launcher or a quoted global option could hide behind; a plain
+  # `git log --grep=commit` is left alone.
   loose_re='git[[:space:]]+-'
-  [[ "$command" =~ $loose_re ]] || allow
+  case "$command" in
+    *'"'*|*"'"*|*'\'*|*'('*|*'`'*|*'$'*) : ;;
+    *) [[ "$command" =~ $loose_re ]] || allow ;;
+  esac
 fi
 
 # Ambient git env must not redirect any probe or scan below: an inherited GIT_DIR outranks
 # `git -C` and would point every one of them at the wrong repository.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 
 lex_state=skipped
 if [ "$need_lex" -eq 1 ]; then
@@ -155,8 +162,12 @@ if [ "$need_lex" -eq 1 ]; then
   lex_state="$CTR_LEX_STATE"
   if [ "$lex_state" = ok ]; then
     # A loose-only match that the lexer shows is not a commit is not a commit.
-    if [ "$strict_match" -eq 0 ] && [ "$CTR_COMMIT_SEEN" -eq 0 ]; then
-      allow
+    if [ "$CTR_COMMIT_SEEN" -eq 0 ]; then
+      # No commit record: a loose-only match is not a commit. A STRICT textual match with no
+      # record is quoted prose (or something the walker cannot see): keep the cwd roots,
+      # drop the target refusals, which belong to a command that commits.
+      if [ "$strict_match" -eq 0 ]; then allow; fi
+      CTR_BAD=()
     fi
     # Before the undeterminable check below: a missing target in a command that creates
     # paths is itself a refusal that ctr_resolve_roots records.
@@ -236,8 +247,9 @@ gitleaks_runnable() {
 deny_undeterminable() {
   local kind="$1" cause="$2" repair
   case "$kind" in
-    lib) repair="No rewrite of the command can help: the scanner's helper library is damaged. Restore it with: git checkout -- .claude/hooks/lib  and retry." ;;
-    tooling) repair="No rewrite of the command can help: the scanner's tooling is unavailable. Install perl and keep plugins/soleur/hooks/lib/shell-argv.pl intact, then retry." ;;
+    lib) repair="No rewrite of the command can help: the scanner's helper library is damaged. From the repository root restore it with: git checkout -- .claude/hooks/lib  and retry." ;;
+    tooling) repair="Fix the tooling: check that perl is on PATH and that plugins/soleur/hooks/lib/shell-argv.pl is intact, then retry. Until then a plain 'git commit' with no cd, -C or env still works; anything that names a directory needs the command lexer." ;;
+    create) repair="Run the command that creates the path as its own call first, then run the commit as a second call (a path that does not exist yet cannot be scanned in the same command)." ;;
     parse) repair="Rewrite the command so the shell can parse it (balanced quotes, terminated substitutions and heredocs; a stray quote or backtick inside an unquoted message is the usual cause), or run 'git -C /abs/path commit ...' as its own call." ;;
     bound) repair="Split the command: run the long or deeply nested parts as separate calls, then 'git -C /abs/path commit ...' on its own." ;;
     *) repair="Repair: name the repository as a literal absolute path in the same command — 'git -C /abs/path commit ...' or 'cd /abs/path && git commit ...' (list the paths with 'git worktree list'). Or, where the harness reports the shell's cwd to hooks (not Devin), run 'cd <absolute worktree path>' as its own command first and then 'git commit' with no cd or -C in it. Forms that cannot be resolved and are denied: a variable (\$VAR), \$(...), backticks, ~, a glob, 'cd -', GIT_DIR= / GIT_WORK_TREE= / GIT_INDEX_FILE= (inline, after env, or via export), --git-dir / --work-tree, a path that does not exist yet in a command that creates it, and a string held in a variable that is run by bash -c or by eval. Do not route around this hook with a script or an alias: that skips the scan too." ;;
@@ -255,6 +267,7 @@ elif [ "$lex_state" = unavailable ]; then
 elif [ "$lex_state" = ok ] && [ "${#CTR_BAD[@]}" -gt 0 ]; then
   # List up to three causes: one repair round-trip is cheaper than three.
   undeterminable="${CTR_BAD[0]}"
+  case "${CTR_BAD[0]}" in *"does not exist yet"*) undet_kind=create ;; esac
   [ "${#CTR_BAD[@]}" -gt 1 ] && undeterminable="$undeterminable; ${CTR_BAD[1]}"
   [ "${#CTR_BAD[@]}" -gt 2 ] && undeterminable="$undeterminable; ${CTR_BAD[2]}"
   [ "${#CTR_BAD[@]}" -gt 3 ] && undeterminable="$undeterminable; and $(( ${#CTR_BAD[@]} - 3 )) more"
