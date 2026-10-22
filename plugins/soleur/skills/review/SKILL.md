@@ -1095,13 +1095,8 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    above). The script DERIVES `--mode` from the two counts, so a caller cannot label a
    2-of-10 review `full`.
 
-   This is a script invocation rather than a described `git commit` line because
-   the described form has measured zero compliance on exactly the branches that
-   matter. Step 2 above tells you to skip the commit when there are no local
-   changes — which is the *expected* case — so a review that finds nothing
-   leaves no local evidence at all, and every downstream review-evidence gate
-   then reads "review never ran" and denies the merge with no escape hatch
-   (issue 6724).
+   A script, not a described `git commit`: the prose form had zero measured compliance on zero-finding
+   branches (issue 6724).
 
    The script therefore commits `--allow-empty`. It is idempotent (a second
    review pass will not stack a duplicate), it refuses to run on `main`/`master`
@@ -1111,6 +1106,9 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
    Run it even when step 2 committed something: the trailer is the durable
    machine-readable signal, and the commit subject is only a legacy fallback.
+
+   **Then post the evidence a merge can see:** one `Review-Evidence:` PR comment, following
+   [review-evidence-comment.md](./references/review-evidence-comment.md) (merge gate = agent review + green CI; no human approval).
 4. **Continue to `soleur:ship` in the same turn — review is not a stopping point.**
    Findings are fixed inline (§5), so a clean review means the PR is ready to go
    out, not ready to be handed over. Invoke `skill: soleur:compound` then
