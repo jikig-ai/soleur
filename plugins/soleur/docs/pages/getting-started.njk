@@ -96,12 +96,13 @@ codex plugin add soleur@soleur</code></pre>
 
         <h3 class="section-subtitle">OpenCode</h3>
 
-        <p>From the repository root (this needs <code>bun</code>), install Soleur into your OpenCode config directory, then start a session. Keep this checkout where it is &mdash; the installed config points at it for skills, routing rules, and the guard scripts.</p>
+        <p>Install Soleur into your OpenCode config directory via npm (this needs <code>bun</code> on <code>PATH</code>), then start a session. The installer vendors the payload into <code>~/.config/opencode/soleur/</code> (or run <code>bun plugins/soleur/scripts/install-opencode-adapter.ts</code> from a local checkout).</p>
 
         <!-- verified: 2026-10-22 source: plugins/soleur/opencode/INSTRUCTIONS.md -->
         <div class="quickstart-code">
-          <pre><code>bun plugins/soleur/scripts/install-opencode-adapter.ts
-bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints opencode-install ok when the tree matches</code></pre>
+          <pre><code>npx @soleur/opencode install
+# or: bunx @soleur/opencode install
+npx @soleur/opencode install --check    # prints opencode-install ok when the tree matches</code></pre>
         </div>
 
         <p>Commands are bare (<code>/go</code>, <code>/sync</code>, <code>/help</code>) and skills are invoked by bare id (<code>plan</code>, not <code>soleur:plan</code>), because OpenCode has no <code>soleur:</code> namespace. Two guards decide shell commands on OpenCode, and both run for real &mdash; a <code>deny</code> blocks the call, an <code>ask</code> opens a prompt &mdash; but they decide shell calls only: actions taken through OpenCode&rsquo;s code-mode <code>execute</code> are not covered. Soleur&rsquo;s operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline&rsquo;s <code>&lt;promise&gt;DONE&lt;/promise&gt;</code> completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. <code>/version</code> is installed but reports an unknown version, because the canonical command resolves the plugin through <code>CLAUDE_PLUGIN_ROOT</code>, which this harness does not set. Full routing rules and the remaining capability differences: <a href="{{ site.github }}/blob/main/plugins/soleur/opencode/INSTRUCTIONS.md" rel="noopener noreferrer">OpenCode instructions</a>.</p>

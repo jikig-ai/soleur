@@ -1,0 +1,54 @@
+name: npm Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (startsWith(github.ref_name, 'v') &&
+       !startsWith(github.ref_name, 'vinngest-') &&
+       !startsWith(github.ref_name, 'web-') &&
+       !startsWith(github.ref_name, 'zot-'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+
+      - name: Materialize and verify npm package payload
+        run: |
+          set -euo pipefail
+          bun plugins/soleur/scripts/sync-npm-package.ts
+          bun plugins/soleur/scripts/sync-npm-package.ts --check
+
+      - name: Set package version from tag
+        if: github.event_name == 'release'
+        working-directory: packages/opencode-plugin
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version
+
+      - name: Publish
+        working-directory: packages/opencode-plugin
+        run: npm publish --access public --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
