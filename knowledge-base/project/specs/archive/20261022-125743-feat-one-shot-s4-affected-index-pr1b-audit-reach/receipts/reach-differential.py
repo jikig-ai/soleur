@@ -126,7 +126,7 @@ def main(argv):
         print("reach-differential: RE-SPLIT: added >= the re-split line (%d >= %d): PR4 and PR5 split by gap class (code-edge pairs apart from accept-row and non-code pairs)." % (len(added), resplit))
     if a.out:
         # created exclusively and without following a link (drop_stale cleared any earlier file)
-        with os.fdopen(os.open(a.out + ".part", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644), "w", encoding="utf-8") as fh:
+        with os.fdopen(os.open(a.out + ".part", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "w", encoding="utf-8") as fh:
             fh.write("# old_sut=%s tree=%s rows_sha256=%s base_pairs=%d new_pairs=%d added=%d removed=%d\n" % (
                 blob_sha(a.old_sut), tree_head(a.root), hashlib.sha256(open(a.rows, "rb").read()).hexdigest(), base, len(p_new), len(added), len(removed)))
             fh.write("# added\n")
