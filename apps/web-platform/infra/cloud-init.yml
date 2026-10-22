@@ -631,8 +631,8 @@ runcmd:
   - systemctl enable --now orphan-reaper.timer
   - systemctl enable --now bwrap-userns-sysctl.service
 
-  # (#6459 Phase 2.2 PART 2) fresh-boot parity for the 3 web-host probes (#6438/#6548). The baked
-  # web-probe-envwrite.sh writes the 3 /etc/default/web-<probe> EnvironmentFiles (per-host token +
+  # (#6459 Phase 2.2 PART 2) fresh-boot parity for the 4 web-host probes (#6438/#6548, #10455 b). The baked
+  # web-probe-envwrite.sh writes the 4 /etc/default/web-<probe> EnvironmentFiles (per-host token +
   # EXPECTED_IP + endpoints) that the SSH remote-exec provisioners write only on web-1 — WITHOUT
   # these a fresh cattle host's probe units fail to start (missing EnvironmentFile). Token is passed
   # as an env var (same root-only exposure class as the webhook-deploy printf above; the read-scoped
@@ -648,6 +648,7 @@ runcmd:
     /usr/local/bin/web-probe-envwrite.sh || soleur-boot-emit web_probe_envwrite fatal || true
   - systemctl daemon-reload
   - systemctl enable --now web-private-nic-guard.timer
+  - systemctl enable --now web-bash-synthetic.timer
   - systemctl enable --now web-zot-consumer-probe.timer
   - systemctl enable --now inngest-consumer-probe.timer
   - systemctl enable --now web-git-data-probe.timer
