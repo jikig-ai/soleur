@@ -57,6 +57,17 @@ causes avoidable failed reads; agents should report the actual SHA they verify.
 Vitest spies need an explicit `vi` import in files that do not enable globals;
 `tsc --noEmit` catches the missing symbol before tests run.
 
+For GitHub issue creation, pass a milestone title (for example,
+`Post-MVP / Later`) to `gh issue create --milestone`; the milestone number is
+not accepted by that flag. Keep temporary issue bodies at a named `/tmp` path
+when command policy blocks `rm -f`; don't retry the same cleanup syntax. Query
+Playwright's installed browser metadata through its CLI or registry file path,
+not the package-exported `playwright-core/browsers.json` subpath. If the browser
+installer reaches 100% download but remains blocked for many minutes, inspect
+the exact process and cache before retrying; avoid a second installer against
+the same cache and record browser QA as unverified when the required revision
+is still absent.
+
 The Codex command preflight may evaluate a chained commit using the session's
 bare-root context even when the shell call specifies a worktree directory. If
 it reports a false commit-on-main refusal, verify `pwd` and
@@ -72,3 +83,12 @@ Before reading a plan or review artifact, resolve its actual tracked path with
 `rg --files` instead of guessing a date or slug. Keep one Playwright browser
 install process active per cache; concurrent installers can remove or replace
 each other's browser directories and stall QA.
+
+Mutation runs against source-bound tools can fail at source binding before the
+mutated guard executes. Read the refusal code/stage and rebind the synthetic
+dependency closure when needed; a nonzero test run alone does not prove the
+mutation was detected.
+
+Run the qualification module test from `scripts/codex-qualification/` (or name
+the test file explicitly); invoking `python -m unittest test_config_snapshot`
+from the repository root fails module discovery before any tests run.

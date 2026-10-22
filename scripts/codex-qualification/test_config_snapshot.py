@@ -369,14 +369,21 @@ class Snapshot(unittest.TestCase):
         with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
             snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
 
-    def test_review_boolean_integer_equality_cannot_bypass_seal(self):
+    def test_review_noncanonical_json_fails_canonical_comparison(self):
         self.gate()
         value = self.read(snapshot.REVIEW)
-        value['execution_exit'] = False
-        self.write(snapshot.REVIEW, value)
+        fields = {'schema', 'state', 'manifest_sha256', 'command_sha256', 'marker_sha256',
+            'receipt_sha256', 'snapshot', 'execution_exit', 'execution_record_sha256',
+            'engineering', 'security', 'prepared_at', 'reviewed_at', 'expires_at',
+            'observer_kind', 'authority'}
+        snapshot.check_seal(value, fields)
+        review_path = self.root / snapshot.REVIEW
+        review_path.write_text(json.dumps(value, indent=2) + '\n')
+        review_path.chmod(0o600)
         with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam), \
-                self.assertRaises(snapshot.SnapshotFailure):
+                self.assertRaises(snapshot.SnapshotFailure) as caught:
             snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertEqual(caught.exception.code, 'binding')
         self.assertNotIn(snapshot.REPORT, self.names())
 
     def test_tool_result_unknown_nonzero_mismatch_and_staleness_refuse(self):

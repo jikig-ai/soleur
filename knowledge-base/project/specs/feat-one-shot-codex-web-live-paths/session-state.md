@@ -2532,3 +2532,32 @@
   rather than requiring mutable logic inside the applied migration. Focused
   migration tests pass 18/18. This code-only correction performs no shared
   database write; fresh-head CI and remaining review/QA/ship gates are pending.
+
+### Continuation after migration correction — 2026-10-22
+
+- The Config-snapshot correction delta (`a63839a4..b95c4844`) received
+  independent security and engineering review with no findings. Test-design
+  review found the bool/int test could refuse before its intended comparison.
+  Replaced it with validly sealed, noncanonical JSON; the focused snapshot
+  suite passes 52/52, and a sandbox mutation replacing canonical-byte equality
+  with dict equality is now killed by that test. The test correction and this
+  continuation note are not yet pushed or independently re-reviewed.
+- Re-ran the migration correction suites: 18/18 passed; Ruff and
+  `git diff --check` passed before the latest test-only adjustment. The temp
+  browser E2E file was removed; no browser QA or screenshot is claimed because
+  Chromium 145 installation remained stuck after a full download and was
+  stopped after 23 minutes. Existing cached browsers are newer than the pinned
+  Playwright build.
+- Pushed-head CI at `b95c48444d2eb7fb29e22b3f4f547f25b8675f62` reports
+  `rls-fuzz` failure from GHCR `toomanyrequests`; tracked by issue #10868.
+  CodeQL also fails with one critical, one high, and two medium annotations in
+  new Python files, while warning that the JavaScript/TypeScript configuration
+  present on main was absent. These annotations are not resolved or waived.
+- The reviewed spent Config manifest is not reusable. No fresh snapshot
+  manifest was found in the inspected private temp/home locations; source
+  correction review, current private inputs, actual-manifest review, exact
+  command and separate evidence review remain gates. Existing acquisition
+  evidence and legal/provider restrictions are unchanged.
+- GDPR scope for the migration correction is unchanged: restored applied
+  migration bytes plus a guard-ordering test add no data fields, PII surface,
+  processing purpose or retention path. This does not replace CLO/legal review.
