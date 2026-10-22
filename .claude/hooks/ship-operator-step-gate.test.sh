@@ -44,9 +44,13 @@ derive_group() {
   v=${v%\'}
   printf '%s' "$v"
 }
+# shellcheck disable=SC2034 # read by the eval of the hook's DETECT_RE line below
 GROUP_A=$(derive_group GROUP_A)
+# shellcheck disable=SC2034 # read by the eval of the hook's DETECT_RE line below
 GROUP_B=$(derive_group GROUP_B)
+# shellcheck disable=SC2034 # read by the eval of the hook's DETECT_RE line below
 GROUP_C=$(derive_group GROUP_C)
+# shellcheck disable=SC2034 # read by the eval of the hook's DETECT_RE line below
 GROUP_D=$(derive_group GROUP_D)
 DETECT_LINE=$(grep -E '^DETECT_RE=' "$HOOK" || true)
 if [[ -z "$DETECT_LINE" ]]; then
