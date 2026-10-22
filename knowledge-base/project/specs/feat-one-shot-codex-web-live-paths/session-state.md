@@ -2466,3 +2466,30 @@
   retention contract, then RED/GREEN source tests and independent source review.
   Fresh actual bindings/command and separate evidence review follow. Preserve
   all original feature phases and both hosted-authentication legal blocks.
+
+### Continuation verification — 2026-10-22
+
+- Closed the Web text accumulator's unkeyed-event bypass: neutral snapshots now
+  obey the 256 KiB per-answer limit and shared 8 MiB intermediate-output budget,
+  and the latest complete neutral snapshot is flushed before successful stream
+  end. Added RED-first regressions, including the output-budget boundary.
+- Migration 145 now independently rejects NULL or unsupported legacy Codex
+  auth modes before schema changes. The migration integration test covers this
+  refusal. The DSAR cross-tenant test now seeds synthetic runs/attempts/checkpoints
+  and asserts the export contains only requester-owned run IDs.
+- `npm run typecheck` passed. Focused Codex mapper/dispatch and migration tests
+  passed: 47 passed, 3 skipped; the opted-in cross-tenant DSAR integration test
+  ran against the verified dev project and passed 3/3. Python qualification
+  tests passed 27 tests and 28 subtests; Ruff passed. No production database
+  write or provider request occurred.
+- Preflight Check 4 resolved dev ref `mlwiodleouzwniehynfz`; `api.soleur.ai`
+  resolved by the prescribed `resolvectl` fallback to prd ref
+  `ifsccnjhymdmidffkzhl`. The refs are distinct. `dig` is not installed on this
+  host; the DNS result came from system resolver and is not an authenticated
+  DNSSEC observation.
+- Commit `2b4f97fc9f` records the local delta; `origin/main` was merged cleanly
+  afterward. The branch is ahead 354 commits including the existing feature
+  history; current full CI, CodeQL, RLS fuzz recovery, independent review, QA,
+  preflight completion and shipping gates remain pending. Hosted auth remains
+  BLOCKED, alternate route PENDING, and no profile admission or qualification
+  authority is claimed.
