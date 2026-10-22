@@ -292,7 +292,7 @@ emit_known_orphans() {
     [[ -n "$suite" ]] || continue
     base="$(basename "$suite")"
     # shellcheck disable=SC2086
-    if [[ -n "${surfaces# }" ]] && grep -lFq -- "$base" $surfaces 2>/dev/null | grep -q .; then continue; fi
+    if [[ -n "${surfaces# }" ]] && grep -q . < <(grep -lFq -- "$base" $surfaces 2>/dev/null); then continue; fi
     printf '%s # pre-existing at verification-scaffold install (grandfathered — register or remove)\n' "$suite" >> "$out"
     seeded=$((seeded + 1))
   done < <(git -C "$TARGET" ls-files '*.test.sh' 2>/dev/null)

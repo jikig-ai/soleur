@@ -74,7 +74,7 @@ if [ -f "$KNOWN" ]; then
       fails=$((fails + 1))
       continue
     fi
-    if ! printf '%s\n' "$TRACKED" | grep -qxF "$entry_path"; then
+    if ! grep -qxF "$entry_path" <<<"$TRACKED"; then
       printf 'orphan-test: WARN — %s names %s, which is no longer a tracked *.test.sh; a stale exclusion can re-hide the next regression. Remove the line.\n' "$KNOWN" "$entry_path" >&2
     fi
   done < "$KNOWN"
@@ -84,7 +84,7 @@ fi
 while IFS= read -r suite; do
   [ -n "$suite" ] || continue
   base="$(basename "$suite")"
-  if printf '%s' "$SURFACE_TEXT" | grep -qF -- "$base"; then
+  if grep -qF -- "$base" <<<"$SURFACE_TEXT"; then
     continue
   fi
   if [ -f "$KNOWN" ] && grep -qE "^${suite}[[:space:]]*#" "$KNOWN"; then

@@ -148,7 +148,7 @@ grep -q 'MODE="advisory"' "$FX/.claude/hooks/secret-scan.sh" \
   && grep -q 'MODE="advisory"' "$FX/.claude/hooks/block-stash.sh" \
   && pass "advisory install stamps MODE=advisory in every hook" \
   || fail "MODE=advisory stamp missing in an emitted hook"
-grep -c 'continue-on-error: true' "$FX/.github/workflows/verification-gates.yml" | grep -q '^2$' \
+test "$(grep -c 'continue-on-error: true' "$FX/.github/workflows/verification-gates.yml")" = 2 \
   && pass "advisory workflow carries continue-on-error: true on both jobs" \
   || fail "advisory workflow continue-on-error wrong: $(grep -c 'continue-on-error' "$FX/.github/workflows/verification-gates.yml")"
 if grep -rqE '@(MODE|CI_CONTINUE_ON_ERROR|DEFAULT_BRANCHES|GUARD_LIST|GUARD_TABLE|DATE)@' \
