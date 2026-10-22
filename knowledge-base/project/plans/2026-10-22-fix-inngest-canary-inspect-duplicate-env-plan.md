@@ -18,6 +18,25 @@ nothing is merged, nothing is armed, the flip workflow is never run or dispatche
 production is read only through Better Stack, and there is no SSH. The pipeline ends with a `Paused:` line asking for a
 typed go that names the merge. The second flip is a separate owner act after merge.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-22
+**Gates run (deepen-plan):** User-Brand Impact (4.6), Observability (4.7, probe-verb gate exercised, `credentials_required` declared), PAT sweep (4.8, clean), UI wireframe (4.9, not triggered), Encryption Posture (4.10, not triggered: no store or connection), Guard Contract (4.11, `lint-guard-contract.py` green), Scope Check (4.12, one unfenced section, no unmapped ask), precedent diff (4.4, added), cited issues re-verified live (#10205, #10136, #10556, #10697 open; #6616 closed so its claim was dropped).
+**Agents used:** soleur:engineering:cto (rulings Q1 to Q8), dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, architecture-strategist, spec-flow-analyzer, soleur:product:cpo (plan review); observability-coverage-reviewer, security-sentinel (deepen).
+
+### Key Improvements
+
+1. The scrub validates before it renames (conservation plus recount on the temp file), runs every grep as `LC_ALL=C grep -a`, and uses a name-prefix regex that survives an NBSP or BOM prefix (security review).
+2. A scrub fault aborts only a strict (https) deploy, so it can never block a rollback.
+3. The inspect failure has its own synchronous reason literal, so the run log separates a composition defect from a network or CA defect.
+4. Test volume was cut about in half (T-rows 8 to 6, mutation rows 15 to 14 distinct, no committed evidence file) without dropping any ruled requirement.
+
+### New Considerations Discovered
+
+- web-2 receives `ci-deploy.sh` by an in-place file write (#10856): the merge needs an idle check and serialization, and the flip's per-host Better Stack read is mandatory, not optional.
+- The overlay's `grep` loses non-UTF-8 lines and treats NUL files as binary (#10855), and shares the ASCII-space blind spot; both are out of this PR.
+- A repo-global ratchet (`BASELINE_DECLARED_PROBES`) moves with this plan because the Observability block declares `credentials_required`.
+
 ## Overview
 
 The first Inngest TLS flip (workflow run 39817708732, 16:52Z) stopped at the canary's container-level check on web-1:
@@ -107,15 +126,15 @@ to match a daemon's merge order would trade a visible failure for an unverified 
 `# >>> inngest-link-resolver >>>` block, called once at the deploy site directly after the `resolve_inngest_link` failure handling and
 before `PROD_NODE_OPTIONS=`, on every deploy (http and https alike: one code path, so its first live use is a routine release, not the flip).
 
-- Regex (one constant, mirroring the overlay's hijack regex so bare-name and padded lines are covered):
-  `^[[:space:]]*(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)[[:space:]]*(=|$)`. A bare-name line goes too: Docker would resolve it from the docker CLI's own environment.
+- Regex (one constant): `^[^A-Za-z0-9_]*(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)([^A-Za-z0-9_]|$)`. Docker trims leading whitespace with `unicode.IsSpace` and strips a BOM (security review; confirm in Phase 4), and `[[:space:]]` under `LC_ALL=C` is ASCII-only, so a name behind an NBSP or a BOM would survive an overlay-style regex AND its own recount; a name-prefix class that tolerates any non-name character does not. A bare-name line goes too (Docker would resolve it from the docker CLI's own environment); lookalikes such as `INNGEST_BASE_URL_EXTRA` and `XINNGEST_BASE_URL` survive (an underscore or alphanumeric neighbour). A comment line naming the variable is also removed, which is harmless. The overlay's hijack regex has the same ASCII-space blind spot: #10855 (commented), not this PR.
 - Every grep in the function runs as `LC_ALL=C grep -a` (measured by plan review: under the ambient locale `grep -v` silently drops a line with invalid UTF-8, and a NUL byte makes grep treat the file as binary and print nothing, both with rc 0).
 - Order, validate before `mv` (CTO): count the matching lines `n` (rc 1 means none, rc 2+ is `stage=read`); write the non-matching lines to `_gak_tmp=$(mktemp "$1.scrub.XXXXXX")` (rc 0 or 1 accepted, 1 meaning every line matched);
   check conservation (kept lines + `n` equals the total line count, else `stage=write`); recount the target regex on the temp file, which must be 0 (else `stage=recount`); only then `mv -f` over `$1`.
   Every failure path leaves `$1` byte-identical and removes the temp file, so a continue-after-failure is exactly today's behavior.
+- Shell hygiene: `umask 077` inside the function; `n` is normalized with an explicit `|| n=0` fallback (never relying on `$((10#...))`, which aborts on a non-numeric value); `_gak_tmp` is assigned in the function's own shell, never inside `$(...)`, or the EXIT trap would never see it (a wiring assertion pins this); the call site is `inngest_link_scrub_env_file "$ENV_FILE" || SCRUB_RC=$?` (`set -e` is on there); the captured counts and the file's lines never reach a log line.
 - Contract: kept lines are byte-exact, a final newline is guaranteed (a file whose last line lacks one gains one, harmless for a Docker env-file), mode stays 0600 (mktemp).
 - The temp name carries `.scrub.` (distinct from the overlay's `.gak.`) and is held in `_gak_tmp`, which the existing deploy EXIT trap already removes, so no trap edit (CTO; keeps the diff clear of #10697). A comment at the function and at the trap names the second user of the variable.
-- Events: `INNGEST_LINK: class=env_scrubbed level=info removed=<n>` only when `n > 0` (a row means the Doppler snapshot carried a pinned name: the no-SSH, no-key-name answer to the unconfirmed root cause);
+- Events: `INNGEST_LINK: class=env_scrubbed level=info removed=<n>` (n clamped to 99) only when `n > 0` (a row means the Doppler snapshot carried a pinned name: the no-SSH, no-key-name answer to the unconfirmed root cause);
   `INNGEST_LINK: class=env_scrub_failed level=error stage=<read|write|recount>` on failure.
 - Failure policy at the call site (CTO Q7): when `INNGEST_LINK_CA_STRICT=1` abort with `logger ... DEPLOY_ABORT ... keeping previous version`, `final_write_state 1 "inngest_env_scrub_failed"` (a fixed literal: `final_write_state` splices it into JSON unquoted) and `exit 1`, the shape of `github_app_key_merge_failed`;
   when `INNGEST_LINK_CA_STRICT=0` emit the error event and continue, so a persistent scrub fault can never block a rollback (`action=off`, revert redeploy) or a hotfix. After a strict abort the resolver has already installed the CA file and `inngest-link.env`, but the scheme and the stale-CA reset are staged and committed only after the prod container starts, the same footprint as a canary failure after install; the previous container keeps serving.
@@ -147,6 +166,7 @@ composition defect) from "egress, TLS or registry" (a network or CA defect). Ver
 - **Runtime effect on the app:** none expected. The daemon merges `Config.Env` last-wins when it builds the process environment (moby `ReplaceOrAppendEnvValues`, the behavior the 2026-06-16 learning records for `NODE_OPTIONS`), so the effective value was already the `-e` value; only the inspect view was ambiguous. The fix does not depend on this claim (the scrub removes the ambiguity either way); Phase 4 records the real-Docker output.
 - **Padded names:** Docker's env-file parser trims leading whitespace but rejects whitespace inside a variable name (plan-review recollection, confirm in Phase 4), so `INNGEST_BASE_URL =x` fails a `docker run` today; scrubbing it turns that into a pass, which is harmless and intended.
 - **Performance:** one tens-of-lines file rewrite per deploy before the first docker run.
+- **Encryption posture gate:** not triggered. No persistent store or new cross-component connection is introduced; the scrub rewrites the existing 0600 per-deploy tmpfile.
 - **Security:** the pinned values keep coming from script constants, never the snapshot; event privacy is asserted by an anchored regex test on the event line.
 - **Delivery:** ci-deploy.sh reaches web-1 through the infra-config webhook (an atomic write) and web-2 through the `deploy_pipeline_fix_web2` SSH sibling (fail-closed; a plain file write that could rewrite the script under a deploy waiting in the cron drain, up to 4200 s), both fired by `apply-deploy-pipeline-fix.yml` when a merge touches the trigger files. The merge is the authorization and is not run here; the owner merges in a cron-quiet window.
 - **Per-host skew:** both the old check and the old scrub-less composition live in one file, so a host is either old or new. The flip's `ok` proves web-1's canary and swap plus a 202 from web-2, so the runbook's per-host read (below) is the web-2 evidence.
@@ -167,7 +187,7 @@ CPO advisory at plan time (2026-10-22): sign-off yes, conditioned on the red-run
 
 Amend `knowledge-base/engineering/architecture/decisions/ADR-294-inngest-link-tls-terminator-and-flagged-flip.md` with `## Addendum (2026-10-22, #10136 canary inspect)`
 (its existing addenda use the `(date, #issue)` heading form), 8 to 10 lines: the env-file handed to the canary and prod runs is scrubbed of `INNGEST_BASE_URL` and `NODE_EXTRA_CA_CERTS` after resolution so the `-e` flags are the only source; the inspect check stays strict and names its cause;
-alternatives rejected (relax to last-wins: weakens the proof; pinned values via the env-file: untrusted source); status stays `adopting`. A Phase 3 task, not a follow-up issue.
+alternatives rejected (relax to last-wins: weakens the proof; pinned values via the env-file: untrusted source); a note that `INNGEST_LINK_CA_STRICT` is derived from the snapshot's own flag, so anyone who can write the snapshot already controls the flag and the keys, and the strict-only abort policy adds no capability; status stays `adopting`. A Phase 3 task, not a follow-up issue.
 
 ### C4 views
 
@@ -219,7 +239,7 @@ Run every suite one at a time with stdin from `/dev/null` (`bash <suite> < /dev/
 - **1.4 Resolver suite (inngest-link-resolver.test.sh).** Stub docker `inspect` modes: keep `https|http|noca|twice|none`; add `duphttp` (two http URL lines), `dupca` (two CA lines), `badca` (one CA line, wrong value), `empty` (rc 0, no output), `many` (150 URL lines).
 - **E3** loops every failing mode. **E7**'s `check=inspect cause=none` assertion is replaced by one exact line per mode: `http` gives `cause=url_value url_lines=1 url_https=0 ca_lines=1 ca_ok=1`; `noca` gives `cause=ca_count url_lines=1 url_https=1 ca_lines=0 ca_ok=0`; `twice` gives `cause=url_count url_lines=2 url_https=1 ca_lines=1 ca_ok=1`; `duphttp` gives `cause=url_count url_lines=2 url_https=0 ca_lines=1 ca_ok=1`; `dupca` gives `cause=ca_count url_lines=1 url_https=1 ca_lines=2 ca_ok=2`; `badca` gives `cause=ca_value url_lines=1 url_https=1 ca_lines=1 ca_ok=0`; `none` and `empty` give `cause=inspect_failed` with all four counts 0; `many` gives `url_lines=99`. One more assertion: every `check=inspect` event line matches the anchored regex `check=inspect cause=(inspect_failed|url_count|url_value|ca_count|ca_value) url_lines=[0-9]{1,2} url_https=[0-9]{1,2} ca_lines=[0-9]{1,2} ca_ok=[0-9]{1,2}$` and never contains `cause=none`, an IP or a path. E3 also asserts `val reason` is `canary_inngest_link_inspect_failed` and the other rows keep `canary_inngest_link_failed` (`canary_fails` takes the expected reason as a parameter).
 - **Scrub unit rows** (the function sourced from the extracted block, run on throwaway files under `$RUN`).
-- **L1** removes plain, leading-space, trailing-space and bare-name lines of BOTH names, keeps every other line byte-for-byte (`INNGEST_LINK_TLS`, `INNGEST_TLS_CA`, `INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`, the lookalikes `INNGEST_BASE_URL_EXTRA=` and `NODE_EXTRA_CA_CERTS_X=`, a CRLF line, a line with a non-UTF-8 byte), survives a NUL byte, and keeps mode 0600.
+- **L1** removes plain, leading-space, trailing-space and bare-name lines of BOTH names, keeps every other line byte-for-byte (`INNGEST_LINK_TLS`, `INNGEST_TLS_CA`, `INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`, the lookalikes `INNGEST_BASE_URL_EXTRA=` and `NODE_EXTRA_CA_CERTS_X=`, a CRLF line, a line with a non-UTF-8 byte), removes a name behind an NBSP (U+00A0) prefix, behind a BOM on the first line and with a trailing CR, survives a NUL byte, and keeps mode 0600. A further assertion: the `env_scrub_failed` event carries only `stage=` (no free-text detail).
 - **L2** no-match is a no-op (kept lines identical, `removed` silent) and idempotent; a file without a trailing newline gains exactly one.
 - **L3** an unreadable file gives rc 1 `stage=read`; a failing `mktemp` or `mv` stub gives `stage=write`; both leave the original byte-identical and no temp file.
 - **L4** (recount) a `grep` stub that ignores `-v` gives `stage=recount`, original untouched. **L5** (conservation) a `grep` stub that drops a kept line gives `stage=write`, original untouched.
@@ -242,13 +262,13 @@ Run every suite one at a time with stdin from `/dev/null` (`bash <suite> < /dev/
 - **3.1 canary-probe-set.md** (Layer 5 item 1 and the failure-read paragraph): the new grammar, a compact decode (one line per cause with its next no-SSH read), the two reason literals and the defect class each means, and "`canary_ok` proves the canary only; prod evidence is the post-swap `legacy_8288` counter read".
   Decode: `inspect_failed` means the canary vanished or the daemon call failed (read the same deploy's `canary_health_failed` and `cstate` rows); `url_count` above 1 with no `class=env_scrubbed` row means a source the scrub does not cover (an image `ENV` does not duplicate, so suspect a new `-e` or a second env-file; stop and file it, do not retry);
   `url_value` means a non-https URL reached the container; `ca_count` and `ca_value` mean the CA env is absent, duplicated or different; no `canary_ok` or `canary_failed` row at all means the resolver returned `lease_expired` (http, canary skipped) or the health check failed first.
-- **3.2 inngest-server.md** (the resolver event table): update the `canary_failed` row, add `env_scrubbed` (info, only when `removed>0`) and `env_scrub_failed` (error, `stage=read|write|recount`; strict deploys abort with reason `inngest_env_scrub_failed`, non-strict continue), and add the per-host flip read: for each web host, keyed on the OS `host` field (not `host_name`, which can be stale, #6616),
+- **3.2 inngest-server.md** (the resolver event table): update the `canary_failed` row, add `env_scrubbed` (info, only when `removed>0`) and `env_scrub_failed` (error, `stage=read|write|recount`; strict deploys abort with reason `inngest_env_scrub_failed`, non-strict continue), and add the per-host flip read: for each web host, keyed on the OS `host` field printed beside `host_name` (the existing runbook query does the same),
   read `class=resolved`, `class=canary_ok` or `class=canary_failed`, and `class=env_scrub_failed`, each `--since` the flip's T0, because `resolved` is written before the canary and proves neither `canary_ok` nor the swap. Note that no Better Stack or Vector rule keys on the event text (checked: `vector.toml` admits the `ci-deploy` tag by identifier and `betterstack-logs-alerts.tf` has no `INNGEST_LINK` match), so no allowlist change; #10556 still tracks the missing alert. No SSH step anywhere.
 - **3.3** The ADR-294 addendum (above).
 
 ### Phase 4 — local real-Docker confirmation (not CI, not production)
 
-With an image already present locally (`docker image ls`; never pull from an untrusted registry), `docker create` two throwaway containers (not started): one with `--env-file <file with INNGEST_BASE_URL=http://x> -e INNGEST_BASE_URL=https://y`, one with the scrubbed file; `docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}'` each, plus once with a padded `INNGEST_BASE_URL =x` line to record what Docker does.
+With an image already present locally (`docker image ls`; never pull from an untrusted registry), `docker create` two throwaway containers (not started): one with `--env-file <file with INNGEST_BASE_URL=http://x> -e INNGEST_BASE_URL=https://y`, one with the scrubbed file; `docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}'` each, plus once with a padded `INNGEST_BASE_URL =x` line, once with an NBSP-prefixed name and once with a BOM first line, to record what Docker does, and one `docker run`-equivalent check (`docker run --rm ... env` on the same image, if it has `env`) of last-wins, because the non-strict continue arm relies on it.
 Record the counts (2 then 1; no secrets) in the PR description. If the first shows 1 entry the premise is wrong (the Phase 1.5 stop rule). A green mock is a proxy for this; the PR body says so.
 
 ### Phase 5 — review, QA, CI, then stop
@@ -303,7 +323,7 @@ All seven verified to exist (`git ls-files`). No glob is prescribed. Not edited 
 
 **Property.** After the scrub, `$ENV_FILE` has zero lines naming `INNGEST_BASE_URL` or `NODE_EXTRA_CA_CERTS` (plain, whitespace-padded, bare-name), every other line is byte-identical, and a failure leaves the file untouched and, on the strict path, aborts the deploy before any container starts.
 
-**Assembly.** Every reader of `$ENV_FILE` (the resolver, the redactor, the `github_app_key_present` call, the overlay, both docker runs, the EXIT trap) sees the file after one rewrite at one call site; the two `docker run` sites take the same variable, so one scrub covers both, and the tuple census (`TUPLE_COUNT`) keeps the count of `--env-file "$ENV_FILE"` sites at two. Both names are members of one regex; a pinned variable added later must join the regex and L1.
+**Assembly.** Every reader of `$ENV_FILE` (the resolver, the redactor, the `github_app_key_present` call, the overlay, both docker runs, the EXIT trap) sees the file after one rewrite at one call site; the two `docker run` sites take the same variable, so one scrub covers both, and the tuple census keeps it so: `TUPLE_COUNT` pins exactly three start sites (canary, prod, first boot) and each tuple's `--env-file` value must belong to its closed set (`$ENV_FILE` for the two deploy starts, `$TMPENV` for the first boot), so a new start site or a differently-sourced env-file fails the census. Both names are members of one regex; a pinned variable added later must join the regex and L1.
 
 **Mutation matrix** (kill_mut rows mutate a copy of the resolver block; the call-site row cannot, see below):
 
@@ -346,7 +366,7 @@ failure_modes:
     detection: the per-host read in the runbook (class=resolved, canary_ok or canary_failed, env_scrub_failed per host, each since the flip's T0, keyed on host; layer 3)
     alert_route: the owner reads it after the flip; no page
   - mode: an event line leaks an env value
-    detection: the anchored-regex test on the event line (CI); integers and fixed tokens only by construction
+    detection: the anchored-regex test on the event line (CI) is the prevention; a leak would ride layer 3 (Better Stack) and Sentry `extra.detail`, so after the second flip the runbook read `--grep 'check=inspect'` is checked for any non-integer after `url_lines=`; integers and fixed tokens only by construction
     alert_route: CI red
 logs:
   where: Better Stack Logs (Vector Source 4, journald tag ci-deploy) and Sentry (op=inngest-link)
@@ -354,7 +374,7 @@ logs:
 discoverability_test:
   command: doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep 'INNGEST_LINK: class=' --limit 1
   expected_output: class=
-  credentials_required: BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME and BETTERSTACK_QUERY_PASSWORD (ClickHouse read credentials in Doppler soleur/prd_terraform) - Better Stack warehouse reads have no anonymous path and the ingest token is write-only, so no unauthenticated probe verifies the same property. The command reads the channel the new rows ship through (the existing INNGEST_LINK events); the new rows exist only after delivery and a deploy, and are read with --grep 'class=env_scrubbed' or 'check=inspect'
+  credentials_required: BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME and BETTERSTACK_QUERY_PASSWORD (ClickHouse read credentials in Doppler soleur/prd_terraform) - Better Stack warehouse reads have no anonymous path and the ingest token is write-only, so no unauthenticated probe verifies the same property. The command is a CHANNEL probe: it reads the channel the new rows ship through (the existing INNGEST_LINK events, such as class=resolved), and is satisfied with or without this change; the new rows exist only after delivery and a deploy, and are read with --grep 'class=env_scrubbed' or 'check=inspect' (the integration rows T1, T5, T6 are the CI proof that the code emits them). Check that the 7-day query fits the 15-second cap at work time
 ```
 
 Layers cited: 3 (Vector journald shipper to Better Stack, plus the Sentry POST from `inngest_link_event`) and 6 (the release or flip run log, a constant reason only).
@@ -443,7 +463,8 @@ None (200 open `code-review` issues searched by body for the planned files).
 ### Post-merge (owner-gated, NOT performed by this pipeline)
 
 - [ ] The owner's typed go merges in a cron-quiet window; the merge triggers the existing deploy-pipeline auto-apply to both web hosts (irreversible-class, never run here).
-- [ ] Before the second flip: the apply run for the merge commit concluded success (its web-1 and web-2 jobs are fail-closed, a read through `gh run list`), then the second flip is the owner's separate typed go, and the per-host Better Stack read in the runbook is its evidence.
+- [ ] Before the typed go: a read-only deploy-status read of web-1 shows no deploy in flight and no pending drain, and the merge is serialized after any release deploy (web-2 receives `ci-deploy.sh` by an in-place file write, #10856).
+- [ ] Before the second flip: the apply run for the merge commit concluded success (its web-1 and web-2 jobs are fail-closed, a read through `gh run list`), then the second flip is the owner's separate typed go, and the per-host Better Stack read in the runbook is a MANDATORY step of the flip (web-1's single status frame does not carry web-2's canary result), including a check that no non-integer follows `url_lines=` in any `check=inspect` row.
 
 ## Test Scenarios
 
@@ -457,12 +478,24 @@ None (200 open `code-review` issues searched by body for the planned files).
 | E modes | stub inspect `http noca twice duphttp dupca badca none empty many` | `inngest_link_canary_check` | the exact event line per mode |
 | L1 to L7 | throwaway env files, `grep`/`mv`/`mktemp` stubs | the scrub function | per Phase 1.4 |
 
+## Precedent Diff (deepen-plan Phase 4.4)
+
+The scrub is an atomic rewrite of the env-file, a pattern-bound behavior with one in-repo precedent: `overlay_github_app_key` (the `github-app-key-overlay` block, shared byte-for-byte with `soleur-host-bootstrap.sh`).
+
+| Aspect | Precedent (`overlay_github_app_key`) | The scrub | Why it differs |
+|---|---|---|---|
+| Temp file | `_gak_tmp=$(mktemp "$1.gak.XXXXXX")` beside the target, cleared after the `mv` | `mktemp "$1.scrub.XXXXXX"` in the same `_gak_tmp` variable | a distinct infix so Guard 7's stubs and the `mktemp` test shim key on one template each |
+| Write | `printf` of a shell variable captured with `$(grep -v ...)` | `LC_ALL=C grep -a -vE ... "$1" > tmp` | the variable round trip strips trailing newlines, adds a blank line when empty and holds secrets in the shell; measured silent line loss under the ambient locale (#10855) |
+| Validation | none after the write | conservation (kept + removed = total) and a recount on the temp file, before the `mv` | the precedent cannot lose a key it did not name; the scrub rewrites the whole secret file |
+| Failure | rc 2 aborts the deploy | strict path aborts, non-strict continues, file byte-identical either way | a scrub fault must not block a rollback |
+| Durability | no `fdatasync` | none | `$ENV_FILE` is a per-deploy tmpfile that the EXIT trap deletes; a crash discards it, so durability is not a property worth paying for |
+
 ## Dependencies and Risks
 
 - **#10697 (open, sdk-bash)** edits both ci-deploy files: three localized edit places and no trap edit; rebase on `origin/main` before review and keep both sides.
 - **Production not verifiable here** (no SSH, no Doppler or production write): the first live proof is the next flip attempt's `canary_ok` or its new `cause=`; the PR body says so.
 - **Doppler may not carry the name** (unconfirmed): then the diagnostics become the whole fix and the unconditional scrub is a silent no-op (no `env_scrubbed` row). The PR is correct either way.
-- **web-2 skew and non-atomic write:** the per-host read and the cron-quiet merge window mitigate; stated, not eliminated.
+- **web-2 skew and non-atomic write:** web-2 receives `ci-deploy.sh` by a `provisioner "file"` straight onto `/usr/local/bin/ci-deploy.sh` (confirmed in `server.tf`), so a deploy running at that instant continues from a stale byte offset in the new file. Not fixed here (filed as #10856); mitigated by the read-only idle check and merge serialization above, the cron-quiet window, and disclosure in the PR body. A SIGKILLed scrub can leave a `.scrub.` temp copy of the secrets in the unit's PrivateTmp, the same bounded exposure as the overlay's temp file.
 - **Mock approximation:** the mock drops bare-name lines; the scrub's bare-name handling is proven by L1, not T1.
 - **Shared-counter conflicts:** `MIN_ROWS` and `BASELINE_DECLARED_PROBES` can collide with a sibling PR; re-measure at work time and at the last rebase.
 
