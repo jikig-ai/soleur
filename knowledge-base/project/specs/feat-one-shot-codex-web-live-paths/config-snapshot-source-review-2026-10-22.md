@@ -2,8 +2,8 @@
 title: Inert Config snapshot source review
 date: 2026-10-22
 pr: 9051
-reviewed_head: a63839a459d72505e53a44108d1c0ae38efa7242
-status: correction-unpushed-review-pending
+reviewed_head: 8f2bde83e41b085e08fefdececccaa738f2e61f8
+status: correction-delta-reviewed
 ---
 
 # Source review record
@@ -14,9 +14,18 @@ suite passed 91 tests, Ruff passed, and the staged secret scan found no leaks.
 Independent engineering, security and test-design reviews recorded the findings
 below before correction. The first correction was pushed at
 `e4a5ae0aa1ecdaff74e622984860402573438d4b`; review found two further boundary
-issues. Those are now corrected in the worktree and 97 focused tests pass. The
-current combined source still needs to be committed, pushed and independently
-re-reviewed.
+issues. The complete correction delta was pushed through
+`b95c48444d` and re-reviewed. A follow-up test-design review then found that the
+boolean/integer-equality regression test could refuse before exercising its
+intended comparison. At `8f2bde83e41b085e08fefdececccaa738f2e61f8`, the test now
+uses a validly sealed but noncanonical review, verifies the seal passes, and
+asserts a `binding` refusal with no report. Independent engineering,
+security and test-design follow-up reviews found no further actionable issues;
+the test-design reviewer confirmed that replacing canonical-byte equality with
+ordinary dictionary equality makes this regression test fail. The focused suite
+passes 52 tests. This closes the source-correction review only; it does not
+authorize or establish a fresh snapshot preparation, acquisition, or evidence
+review.
 
 ## Findings
 
@@ -99,8 +108,8 @@ asserting expiry. The report-size test uses a stable oversized result.
 `fresh_record_directory()` now rejects the action directory and all descendants
 before creating anything. The nested-path test keeps the digest seam active and
 uses the same otherwise-valid fixture for a successful outside recovery path.
-All ten findings remain open until independent
-correction-delta reviews pass at a pushed commit.
+All ten findings are resolved at the reviewed pushed head above. The original
+acquisition and evidence gates remain separate and open.
 
 No external origin, account, provider or destructive action occurred during
 these reviews. No actual snapshot preparation or execution is authorized by
