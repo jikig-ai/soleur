@@ -133,6 +133,19 @@ describe("normalizeRepoUrl — fixpoint fixtures", () => {
     expect(normalizeRepoUrl(once)).toBe(once);
   });
 
+  // Review finding on #10779: each pass peels one "/..git" segment, so a deep
+  // chain outruns the pass bound. The result must still be a fixpoint.
+  it.each([8, 15, 16, 17, 5000])("a chain of %i '/..git' segments is a fixpoint", (k) => {
+    const once = normalizeRepoUrl("https://github.com/o/r" + "/..git".repeat(k));
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
+
+  it("a chain within the pass bound still normalizes to the repository", () => {
+    expect(normalizeRepoUrl("https://github.com/o/r" + "/..git".repeat(3))).toBe(
+      "https://github.com/o/r",
+    );
+  });
+
   it("the counterexample normalizes to the bare origin", () => {
     expect(normalizeRepoUrl(" http://a.aa/..git/")).toBe("http://a.aa");
   });

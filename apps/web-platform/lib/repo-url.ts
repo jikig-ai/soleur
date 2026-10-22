@@ -48,11 +48,13 @@ function normalizeOnce(raw: string): string {
 }
 
 // One pass is not a fixpoint: each strip can expose input the next call's
-// URL parse or trim would move again ("b.git/." -> "b.git" -> "b"; a trailing
-// "/." -> "/" after a query). Iterate to the fixpoint, bounded so a
-// pathological input cannot spin; every pass strictly shortens or leaves the
-// value unchanged, so the bound is generous.
-const MAX_PASSES = 8;
+// URL parse or trim would move again ("b.git/." -> "b.git" -> "b"). Iterate
+// to the fixpoint. The bound keeps the cost linear in the input, but it is
+// reachable: a chain of sixteen "/..git" segments peels one per pass. When
+// the bound is hit the input is not a plausible repository URL, and
+// returning the unconverged value would break the idempotence contract, so
+// fail closed with "" (itself a fixpoint, and what null/empty already mean).
+const MAX_PASSES = 16;
 
 /**
  * Normalize a repository URL to a canonical form so write boundaries,
@@ -93,5 +95,5 @@ export function normalizeRepoUrl(raw: string | null | undefined): string {
     if (next === current) return next;
     current = next;
   }
-  return current;
+  return "";
 }
