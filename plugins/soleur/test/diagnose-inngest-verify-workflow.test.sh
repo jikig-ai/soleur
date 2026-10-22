@@ -145,7 +145,9 @@ for pin in ("verify-blob", "--network none", "--trusted-root", "--bundle",
             "token.actions.githubusercontent.com", "build-inngest-config-bundle"):
     chk("D2b", "run body pins `%s`" % pin, pin in code)
 chk("D2c", "the pulled bundle ref is digest-parameterized via the workflow input",
-    "soleur-inngest-config@sha256:" in code and "inputs.digest" in code)
+    "soleur-inngest-config@sha256:" in code and "inputs.digest" in text)
+chk("D2e", "the digest input reaches the run body through env:, never a ${{ }} interpolation inside run:",
+    "inputs.digest" not in code)
 chk("D2d", "A/B discriminators present: a 0700 stage-dir arm and a --network host arm",
     "0700" in code and "--network host" in code)
 chk("D4a", "stderr reaches the step summary (bounded)", "GITHUB_STEP_SUMMARY" in code)

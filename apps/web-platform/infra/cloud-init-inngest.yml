@@ -1943,9 +1943,9 @@ write_files:
         # which the comparator would parse as applied state); $3 = extra detail. The emit
         # is reason-change-or-300s-window (emit_due fails toward emitting, never silence).
         write_state "verify-fail:$1" "$${2:-}" "$pointer" || true
-        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1" ] || emit_due "$VF_STAMP"; then
+        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1:$${3:-}" ] || emit_due "$VF_STAMP"; then
           emit "SOLEUR_INFRA_PULL_VERIFY_FAIL" "reason=$1 offered=$${pointer:0:12} rejver=$${2:-none}$${3:+ $3}"
-          printf '%s' "$1" > "$VF_STAMP" 2>/dev/null || true
+          printf '%s' "$1:$${3:-}" > "$VF_STAMP" 2>/dev/null || true
         fi
         exit 1
       }
@@ -2080,21 +2080,20 @@ write_files:
           --bundle /bundle/manifest.txt.sigstore.json \
           --certificate-identity-regexp "$IDENTITY_REGEXP" \
           --certificate-oidc-issuer "$OIDC_ISSUER" \
-          /bundle/manifest.txt >"$STAGE/verify.stdout" 2>"$STATE_DIR/verify.stderr" || _vrc=$?
-      head -c 4096 "$STATE_DIR/verify.stderr" > "$STATE_DIR/verify.stderr.b" 2>/dev/null || true
-      mv "$STATE_DIR/verify.stderr.b" "$STATE_DIR/verify.stderr" 2>/dev/null || true
-      chmod 0600 "$STATE_DIR/verify.stderr" 2>/dev/null || true
-      rm -f "$STAGE/verify.stdout"
+          /bundle/manifest.txt >/dev/null 2>"$STAGE/verify.stderr" || _vrc=$?
       if [ "$_vrc" -ne 0 ]; then
-        # Bounded [a-z-]{1,24} token on the VERIFY_FAIL row — survives the
-        # phone-home redaction and the drift summarizer's allowlist; the raw
-        # stderr stays on-host in verify.stderr.
+        # Persist the failure stderr on-host (bounded 4 KiB, 0600, last failure
+        # only — a clean tick leaves the last failure in place for triage) and
+        # classify it into a bounded [a-z-]{1,24} token on the VERIFY_FAIL row;
+        # the token survives the phone-home redaction and the drift allowlist.
+        head -c 4096 "$STAGE/verify.stderr" > "$STATE_DIR/verify.stderr" 2>/dev/null || true
+        chmod 0600 "$STATE_DIR/verify.stderr" 2>/dev/null || true
         if [ "$_vrc" -eq 124 ]; then _cls=timeout
-        elif grep -qi 'only supported with --new-bundle-format' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=flag-newbundle
-        elif grep -qi 'Error response from daemon' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=docker
-        elif grep -qiE 'log inclusion|tlog|rekor' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=tlog
-        elif grep -qiE 'certificate chain|x509' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=chain
-        elif grep -qiE 'identity|SAN|issuer' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=identity
+        elif grep -qi 'only supported with --new-bundle-format' "$STAGE/verify.stderr" 2>/dev/null; then _cls=flag-newbundle
+        elif grep -qi 'Error response from daemon' "$STAGE/verify.stderr" 2>/dev/null; then _cls=docker
+        elif grep -qiE 'log inclusion|tlog|rekor' "$STAGE/verify.stderr" 2>/dev/null; then _cls=tlog
+        elif grep -qiE 'certificate|x509|signed by' "$STAGE/verify.stderr" 2>/dev/null; then _cls=chain
+        elif grep -qiE 'identity|issuer|\<san\>' "$STAGE/verify.stderr" 2>/dev/null; then _cls=identity
         else _cls=other
         fi
         verify_fail signature "" "detail=$_cls"

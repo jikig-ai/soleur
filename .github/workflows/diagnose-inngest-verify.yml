@@ -54,9 +54,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Reproduce the host verify-blob invocation (stderr visible)
+        env:
+          BUNDLE_DIGEST: ${{ inputs.digest }}
         run: |
           set -uo pipefail
-          BUNDLE_DIGEST="${{ inputs.digest }}"
+          # Input validation: the digest never interpolates into this script
+          # directly (env:), and its shape is pinned before it reaches a ref.
+          [[ "$BUNDLE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] \
+            || { echo "::error::digest input is not a sha256 hex digest: ${BUNDLE_DIGEST:0:32}…"; exit 1; }
           S="$RUNNER_TEMP/diag"; mkdir -p "$S"
           BREF="ghcr.io/jikig-ai/soleur-inngest-config@sha256:${BUNDLE_DIGEST#sha256:}"
           # Same digest bytes as the host's zot mirror; CI can reach public gcr directly.
@@ -73,12 +78,12 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
           echo "== pull bundle =="
-          docker pull "$BREF"
-          cid="$(docker create "$BREF")"
-          docker cp "$cid:/bundle.tar.gz" "$S/bundle.tar.gz"
+          docker pull "$BREF" || exit 1
+          cid="$(docker create "$BREF")" || exit 1
+          docker cp "$cid:/bundle.tar.gz" "$S/bundle.tar.gz" || exit 1
           docker rm -f "$cid" >/dev/null
           echo "== pull verifier =="
-          docker pull "$COSIGN"
+          docker pull "$COSIGN" || exit 1
 
           mkdir -p "$S/bundle"
           tar -xzf "$S/bundle.tar.gz" -C "$S/bundle"

@@ -62,12 +62,12 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUERY="${FT10390_QUERY_SH:-$SCRIPT_DIR/../betterstack-query.sh}"
 if [ ! -f "$QUERY" ]; then
-  printf 'NOT YET: betterstack-query.sh not found at %s\n' "$QUERY" >&2
-  exit 2
+  printf 'CANNOT ESTABLISH: betterstack-query.sh not found at %s — instrument absent.\n' "$QUERY" >&2
+  exit 3
 fi
 if ! command -v jq >/dev/null 2>&1; then
-  printf 'NOT YET: jq not on PATH — cannot decode the JSONEachRow result.\n' >&2
-  exit 2
+  printf 'CANNOT ESTABLISH: jq not on PATH — cannot decode the JSONEachRow result.\n' >&2
+  exit 3
 fi
 
 numeric() { [[ "$1" =~ ^[0-9]+$ ]]; }
@@ -150,16 +150,21 @@ if [[ "$control_rows" -eq 0 ]]; then
   verdict cannot_establish 3
 fi
 
-vf_undetailed=$(( vf_rows - vf_detailed ))
-if [[ "$vf_undetailed" -gt 0 ]]; then
-  printf 'FAIL: %s VERIFY_FAIL row(s) without detail= since %s — the pre-fix refresh script is still running past the replace window.\n' "$vf_undetailed" "$EARLIEST" >&2
+# Only the reason=signature arm carries detail= — an undetailed row on any OTHER
+# reason (pull, sha, install, …) is legal in both old and new code and must not
+# read as "old binary still running". The FAIL discriminator is signature-scoped.
+sig_undetailed=$(( sig_rows - sig_detailed ))
+if [[ "$sig_undetailed" -gt 0 ]]; then
+  printf 'FAIL: %s reason=signature VERIFY_FAIL row(s) without detail= since %s — the pre-fix refresh script is still running past the replace window.\n' "$sig_undetailed" "$EARLIEST" >&2
   verdict fail 1
 fi
 
-if [[ "$vf_rows" -gt 0 ]]; then
-  printf 'NOT YET: %s VERIFY_FAIL row(s) since %s (all carry detail= — the captured token names the residual cause; the root-cause fix is the follow-up).\n' "$vf_rows" "$EARLIEST" >&2
+# The soak verdict (AC7) is signature-scoped; a transient reason=pull row is
+# context, not a soak blocker — otherwise one zot hiccup pins the tracker open.
+if [[ "$sig_rows" -gt 0 ]]; then
+  printf 'NOT YET: %s reason=signature VERIFY_FAIL row(s) since %s (all carry detail= — the token names the residual cause; the root-cause fix is the follow-up). Other-reason VERIFY_FAIL rows in window: %s.\n' "$sig_rows" "$EARLIEST" "$(( vf_rows - sig_rows ))" >&2
   verdict not_yet 2
 fi
 
-printf 'PASS: zero VERIFY_FAIL rows for soleur-inngest since %s over a live channel.\n' "$EARLIEST"
+printf 'PASS: zero reason=signature VERIFY_FAIL rows for soleur-inngest since %s over a live channel (other-reason rows: %s).\n' "$EARLIEST" "$vf_rows"
 verdict pass 0

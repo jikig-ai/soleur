@@ -282,13 +282,19 @@ grep -qF 'verify.stderr' <<<"$SC" \
 grep -qF 'detail=' <<<"$SC" \
   && pass || fail "S10: no detail= classification on the VERIFY_FAIL row"
 # The classifier's token vocabulary is a fixed allowlist — every named arm present.
+# Pinned on the assignment shape `_cls=<tok>`: a bare-token grep is vacuous (it
+# matches prose and flag names), this one fails if the arm is deleted.
 for tok in flag-newbundle tlog identity chain timeout docker other; do
-  grep -qF "$tok" <<<"$SC" \
+  grep -qF "_cls=$tok" <<<"$SC" \
     && pass || fail "S10: classifier arm missing token $tok"
 done
 # detail= must be additive after rejver= on the reason=signature call (row-shape pin).
 grep -qE 'verify_fail signature "" "detail=' <<<"$SC" \
   && pass || fail "S10: verify_fail signature call site does not pass detail="
+# AC5 pin: the drift summarizer's _summ_row allowlist must carry `detail` or the
+# token is emitted but never surfaces in run summaries (a regex revert goes red).
+grep -qF 'member|detail' .github/workflows/inngest-config-drift.yml \
+  && pass || fail "S10: _summ_row regex in inngest-config-drift.yml lost the detail alternation"
 
 # ── F-rows: run the extracted script under fixture seams ─────────────────────────────────
 
@@ -307,7 +313,7 @@ case "$1" in
   rm)    exit 0 ;;
   run)   if [ "${FX_COSIGN_FAIL:-0}" = "1" ]; then
            [ -n "${FX_COSIGN_STDERR:-}" ] && printf '%s\n' "$FX_COSIGN_STDERR" >&2
-           exit 1
+           exit "${FX_COSIGN_RC:-1}"
          fi
          exit 0 ;;
   *)     exit 0 ;;
@@ -389,7 +395,7 @@ run_refresh() {  # env: INNGEST_CONFIG_DIGEST + FX_* fault knobs
     FX_LOG="$FX/calls.log" FX_MARKERS="$FX/markers.log" \
     FX_BUNDLE_TGZ="$FX/bundle.tar.gz" FX_DEST="$FX/dest" FX_NSEEN="$FX/nseen" \
     FX_FAIL_PULL="${FX_FAIL_PULL:-0}" FX_COSIGN_FAIL="${FX_COSIGN_FAIL:-0}" \
-    FX_COSIGN_STDERR="${FX_COSIGN_STDERR:-}" \
+    FX_COSIGN_STDERR="${FX_COSIGN_STDERR:-}" FX_COSIGN_RC="${FX_COSIGN_RC:-}" \
     FX_FAIL_COSIGN_PULL="${FX_FAIL_COSIGN_PULL:-0}" \
     FX_INSTALL_FAIL_AFTER="${FX_INSTALL_FAIL_AFTER:-999}" \
     INNGEST_CONFIG_DIGEST="${INNGEST_CONFIG_DIGEST:-}" \
@@ -612,7 +618,7 @@ grep -q 'detail=flag-newbundle' "$FX/markers.log" \
   && pass || fail "F16: new-bundle gate error not classified detail=flag-newbundle"
 [ -f "$FX/state/verify.stderr" ] && pass || fail "F16: no bounded verify.stderr file written"
 _vc="$(wc -c < "$FX/state/verify.stderr" 2>/dev/null || echo 9999)"
-[ "$_vc" -le 4097 ] && pass || fail "F16: verify.stderr not bounded (${_vc} bytes > 4097)"
+[ "$_vc" -le 4096 ] && pass || fail "F16: verify.stderr not bounded (${_vc} bytes > 4096)"
 
 reset_fx
 echo 0 > "$FX/state/applied.version"
@@ -635,9 +641,17 @@ FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='some unclassified failure text' \
 grep -q 'detail=other' "$FX/markers.log" \
   && pass || fail "F16: unrecognized stderr did not fall through to detail=other"
 
+# rc=124 (timeout kill) classifies timeout regardless of stderr content.
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 FX_COSIGN_RC=124 FX_COSIGN_STDERR='partial output before kill' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+grep -q 'detail=timeout' "$FX/markers.log" \
+  && pass || fail "F16: rc=124 not classified detail=timeout"
+
 # Anti-vacuity floor — the inngest.test.sh convention: a deleted block must red,
 # not silently pass fewer assertions. Raise it when adding rows.
-MIN_ASSERTIONS=124
+MIN_ASSERTIONS=126
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 
