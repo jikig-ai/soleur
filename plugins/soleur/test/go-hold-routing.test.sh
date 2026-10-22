@@ -101,6 +101,7 @@ block_of() {
 # from the heading line to the line before the next heading or either marker.
 #   extract : print the paragraph          strip : print the file without it
 #   sub     : print the file with `from` -> `to` applied inside the paragraph only (case-insensitive)
+#   dropline: print the file without the paragraph line(s) that contain `from` (case-insensitive)
 para_awk() {
   local mode="$1" file="$2" from="${3:-}" to="${4:-}"
   awk -v mode="$mode" -v hre="$HEADING_RE" -v s="$BLOCK_START" -v e="$BLOCK_END" -v from="$from" -v to="$to" '
@@ -110,6 +111,7 @@ para_awk() {
       else if (inp && endsPara($0)) { inp = 0 }
       if (mode == "extract") { if (inp) print; next }
       if (mode == "strip")   { if (!inp) print; next }
+      if (mode == "dropline") { if (!(inp && from != "" && index(tolower($0), tolower(from)))) print; next }
       if (mode == "sub") {
         line = $0
         if (inp && from != "") {
@@ -157,6 +159,22 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'AskUserQuestion'* ]]     || emit no-askuserquestion-for-technical-hold
   [[ "$para" == *'newest admin-authored marker comment decides'* && "$para" == *'invalid newest one means no delegation'* ]] || emit newest-decides
   [[ "$para" == *'delete every delegation comment'* && "$para" == *'gh api -X DELETE'* && "$para" == *'--disable-auto'* && "$para" == *'could not be stopped'* ]] || emit stop-sequence
+
+  # The hold-list source (2026-10-22 ruling F2) and its authority hardening: one property per line, so a row
+  # can neutralise exactly one of them. Static token pins over the paragraph (the file cannot test routing).
+  [[ "$para" == *'may come from three sources'* && "$para" == *'body of the OPEN epic'* && "$para" == *'gh issue view'* && "$para" == *'fenced code stripped'* ]] || emit list-source
+  [[ "$para" == *'git cat-file -e origin/main'* ]] || emit list-source-main-existence
+  [[ "$para" == *'never counts as a hold list'* ]] || emit prose-excluded
+  [[ "$para" == *'a closed epic never triggers'* && "$para" == *'non-production epic'* ]] || emit closed-epic-excluded
+  [[ "$para" == *'envelope table is not a source'* && "$para" != *'fourth source'* ]] || emit runbook-not-a-source
+  [[ "$para" == *'authorAssociation'* && "$para" == *'OWNER, MEMBER or COLLABORATOR'* && "$para" == *'outsider-authored body never triggers'* ]] || emit author-association
+  [[ "$para" == *'no `..`'* && "$para" == *'knowledge-base/project/plans'* && "$para" == *'knowledge-base/project/specs'* && "$para" == *'git ls-tree origin/main -- <path>'* && "$para" == *'100644'* && "$para" == *'git show origin/main:'* ]] || emit plan-path-rules
+  [[ "$para" == *'never discharges a hold'* && "$para" == *'delegation already granted'* ]] || emit trigger-never-discharges
+  [[ "$para" == *'never from epic or plan text'* ]] || emit scope-items-source
+  [[ "$para" == *'exact epic number'* && "$para" == *'repo owner'* && "$para" == *'same sentence in the final summary'* ]] || emit headless-dedupe
+  [[ "$para" == *'before the worktree exists'* && "$para" == *'the worktree is created afterwards'* ]] || emit ask-before-worktree
+  [[ "$para" == *'found in the brief itself, in the open epic'* ]] || emit routing-widened
+  [[ "$para" == *'in none of those three places'* ]] || emit closing-widened
 
   # Location: after the Step 1 heading, before the start marker, and never between the markers.
   start_ln="$(awk -v s="$BLOCK_START" 'index($0, s) { print NR; exit }' "$f")"
@@ -215,7 +233,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules trigger-never-discharges scope-items-source headless-dedupe ask-before-worktree routing-widened closing-widened anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -377,6 +395,34 @@ printf 'not go.md\n' > "$M/degenerate-base.txt"
 row "M24 a degenerate base (not the real file)" "$GO_MD" "file:$M/degenerate-base.txt" base-degenerate; nrows=$((nrows + 1))
 para_awk sub "$GO_MD" 'delete every delegation comment' 'delete the delegation comment' > "$M/m25.md"
 row "M25 the stop sequence deletes only one comment" "$M/m25.md" "$BASE_REF" stop-sequence; nrows=$((nrows + 1))
+
+# M26..M38: the hold-list source and its authority hardening, one mutation per property
+para_awk dropline "$GO_MD" 'may come from three sources' > "$M/m26.md"
+row "M26 delete the list-source bullet" "$M/m26.md" "$BASE_REF" list-source; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'git cat-file -e origin/main' 'git ls-files' > "$M/m27.md"
+row "M27 the main-existence check reads the index instead of main" "$M/m27.md" "$BASE_REF" list-source-main-existence; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'never counts as a hold list' 'counts as a hold list' > "$M/m28.md"
+row "M28 prose may count as a hold list" "$M/m28.md" "$BASE_REF" prose-excluded; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'a closed epic never triggers' 'a closed epic triggers' > "$M/m29.md"
+row "M29 a closed epic triggers" "$M/m29.md" "$BASE_REF" closed-epic-excluded; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'envelope table is not a source' 'envelope table is a fourth source' > "$M/m30.md"
+row "M30 the runbook envelope table becomes a fourth source" "$M/m30.md" "$BASE_REF" runbook-not-a-source; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'authorAssociation' 'authorName' > "$M/m31.md"
+row "M31 the epic-body author check dropped" "$M/m31.md" "$BASE_REF" author-association; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" '100644' '100755' > "$M/m32.md"
+row "M32 the plan-path regular-blob rule weakened" "$M/m32.md" "$BASE_REF" plan-path-rules; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'never discharges a hold' 'discharges a hold' > "$M/m33.md"
+row "M33 the trigger may discharge a hold" "$M/m33.md" "$BASE_REF" trigger-never-discharges; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'never from epic or plan text' 'from epic or plan text' > "$M/m34.md"
+row "M34 Scope items may come from epic or plan text" "$M/m34.md" "$BASE_REF" scope-items-source; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'exact epic number' 'epic title' > "$M/m35.md"
+row "M35 the headless dedupe key is no longer the exact epic number" "$M/m35.md" "$BASE_REF" headless-dedupe; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'before the worktree exists' 'after the worktree exists' > "$M/m36.md"
+row "M36 the epic-start question moves after the worktree" "$M/m36.md" "$BASE_REF" ask-before-worktree; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'found in the brief itself' 'found in the brief' > "$M/m37.md"
+row "M37 the routing sentence loses the widened list location" "$M/m37.md" "$BASE_REF" routing-widened; nrows=$((nrows + 1))
+para_awk sub "$GO_MD" 'in none of those three places' 'nowhere' > "$M/m38.md"
+row "M38 the closing sentence loses the widened list location" "$M/m38.md" "$BASE_REF" closing-widened; nrows=$((nrows + 1))
 # N14: with base == HEAD the anchor is SKIPPED (printed reason) and a changed file is still caught against it
 ck
 _o="$(evaluate "$M/m1.md" "$HEAD_SHA" skip)"; _r=$?
@@ -411,6 +457,26 @@ awk -v e="$BLOCK_END" '
   END { print "" }' "$GO_MD" > "$M/h2.md"
 row "H2 whitespace-only change outside the block" "$M/h2.md" "$BASE_REF" none; nrows=$((nrows + 1))
 
+# H3 must-PASS on a file that is NOT the canonical one: a pinned phrase re-cased where the check is case-insensitive
+# (`ask once` -> `Ask once`); a guard that rejects every changed file is caught here.
+para_awk sub "$GO_MD" 'ask once' 'Ask once' > "$M/h3.md"
+row "H3 a re-cased ask-once phrase stays green" "$M/h3.md" "$BASE_REF" none; nrows=$((nrows + 1))
+
+# H4 the rows prove the CHECK, not just the mutation: remove one new emit from a copy of THIS script (the list-source
+# check, which M26 grades) and require the copy to go RED on that row. The copy skips this row (GOHOLD_NESTED).
+nrows=$((nrows + 1)); ck
+if [[ -n "${GOHOLD_NESTED:-}" ]]; then
+  skip "H4 nested copy: the harness row is not recursed"
+else
+  _self="${BASH_SOURCE[0]}"; _nest="$M/nested.test.sh"
+  sed -e "s|^ROOT=.*|ROOT=\"$ROOT\"|" -e '/|| emit list-source$/d' "$_self" > "$_nest"
+  GOHOLD_NESTED=1 bash "$_nest" </dev/null >"$M/nested.out" 2>"$M/nested.err"; _nrc=$?
+  if [[ "$(grep -c '|| emit list-source$' "$_self" || true)" -eq 1 && "$(grep -c '|| emit list-source$' "$_nest" || true)" -eq 0 ]] \
+     && [[ "$_nrc" -ne 0 ]] && grep -Fq "M26 delete the list-source bullet: expected RED for 'list-source'" "$M/nested.err"; then
+    ok "H4 removing the list-source emit from evaluate() turns M26 RED (the row grades the check)"
+  else bad "H4 removing the list-source emit did not turn M26 RED (nested rc=$_nrc, emit lines in copy: $(grep -c '|| emit list-source$' "$_nest" || true))"; fi
+fi
+
 # Late-redefinition defence: re-run the controls AFTER the last row, so a helper redefined between the first
 # controls and here cannot silently grade the rows above.
 ctl_fails row "ctl-late" "$M/ctl-bad.md" "$BASE_REF" none               || { printf 'FATAL: late control: row() accepted a RED file as green\n' >&2; exit 2; }
@@ -425,7 +491,7 @@ ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { pr
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
 EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 ))
-ABSOLUTE_FLOOR=75
+ABSOLUTE_FLOOR=103
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \

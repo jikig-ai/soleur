@@ -312,6 +312,59 @@ describe("TC-11: copy/copies verb-morphology", () => {
   });
 });
 
+describe("TC-12: delegated-act authoring form (ruling F1, detection unchanged)", () => {
+  const DELEGATION_URL =
+    "https://github.com/example-org/example-repo/issues/1#issuecomment-1";
+  const ENVELOPE = "example/envelope.md#Example";
+
+  // The gate counts phrasing. A CTO-performed act under a recorded Standing
+  // Delegation is written in the form below, which does not start with the word
+  // Operator, so it is not detected. A bullet that starts with Operator and a
+  // verb is still detected whatever URL it cites: there is no URL exemption.
+  const DELEGATED_BULLET =
+    `- Delegated act (CTO, Standing Delegation ${DELEGATION_URL}, envelope ${ENVELOPE}): flip the link`;
+  const OPERATOR_BULLET_WITH_URL =
+    `- Operator runs the flip under Standing Delegation ${DELEGATION_URL}`;
+
+  test("the Delegated act (CTO, ...) bullet is not detected", () => {
+    expect(detectMatches(DELEGATED_BULLET).length).toBe(0);
+    expect(undeferredCount(DELEGATED_BULLET)).toBe(0);
+  });
+
+  test("an Operator-verb bullet citing a delegation URL is still detected and still blocks without a Tracks companion", () => {
+    expect(detectMatches(OPERATOR_BULLET_WITH_URL).length).toBe(1);
+    expect(undeferredCount(OPERATOR_BULLET_WITH_URL)).toBe(1);
+  });
+
+  test("the same Operator-verb bullet is cleared only by a Tracks companion, never by the URL", () => {
+    const withCompanion = [OPERATOR_BULLET_WITH_URL, "  Tracks #4115"].join("\n");
+    expect(undeferredCount(withCompanion)).toBe(0);
+  });
+
+  test("the Undeferred section names the form, the envelope-bound verifier call, the audit rule and the exclusions", () => {
+    // Section only: slice at the next gate heading so text in the Soak-Gated or
+    // Technical-Ruling sections cannot satisfy these. This is also the
+    // delete-the-form mutation row: removing the paragraph turns it RED.
+    const end = GATE_SECTION.indexOf("### Soak-Gated Follow-Through Enrollment Gate");
+    expect(end).toBeGreaterThan(0);
+    const undeferred = GATE_SECTION.slice(0, end);
+    expect(undeferred).toContain(
+      "Delegated act (CTO, Standing Delegation <comment-url>, envelope <path#title>):",
+    );
+    expect(undeferred).toContain("delegation-verify.sh");
+    expect(undeferred).toContain("verify --delegation <comment-url> --envelope <path#title>");
+    expect(undeferred).toContain("--audit --at");
+    // A non-zero exit makes the bullet an operator step; the exclusions never use the form.
+    expect(undeferred).toMatch(/non-zero exit/i);
+    expect(undeferred).toMatch(/A1b/);
+    expect(undeferred).toMatch(/A5/);
+    expect(undeferred).toMatch(/A6/);
+    expect(undeferred).toMatch(/A7/);
+    // The detection regex itself stays untouched by the form.
+    expect(undeferred).toContain("DETECT_RE=");
+  });
+});
+
 describe("TC-9: new gate rule body fits within byte cap", () => {
   test("wg-block-pr-ready-on-undeferred-operator-steps body ≤600 B", () => {
     const line = CORPUS_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));

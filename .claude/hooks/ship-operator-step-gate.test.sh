@@ -72,6 +72,21 @@ t "Operator file (extended verb)" "$DETECT_RE" \
 t "Operator check (extended verb)" "$DETECT_RE" \
   "- Operator checks the dashboard" match
 
+# Delegated-act authoring form (ruling F1, detection unchanged): the gate counts
+# phrasing, so a CTO-performed act under a recorded Standing Delegation is written
+# `Delegated act (CTO, Standing Delegation <url>, envelope <path#title>): ...` and
+# does not start with the word Operator. A bullet that starts with the word Operator
+# and a verb still matches even when it cites a delegation URL: no URL or keyword
+# exemption exists. These rows are regex mirrors, not hook runs.
+t "Delegated act (CTO, Standing Delegation ...) bullet does NOT match" "$DETECT_RE" \
+  "- Delegated act (CTO, Standing Delegation https://github.com/example-org/example-repo/issues/1#issuecomment-1, envelope example/envelope.md#Example): flip the link" no-match
+t "Delegated act as an unchecked checklist item does NOT match" "$DETECT_RE" \
+  "- [ ] Delegated act (CTO, Standing Delegation https://github.com/example-org/example-repo/issues/1#issuecomment-1, envelope example/envelope.md#Example): flip the link" no-match
+t "Operator-runs bullet citing a delegation URL STILL matches (no URL exemption)" "$DETECT_RE" \
+  "- Operator runs the flip under Standing Delegation https://github.com/example-org/example-repo/issues/1#issuecomment-1" match
+t "Operator: heading bullet citing a delegation URL STILL matches" "$DETECT_RE" \
+  "- **Operator: flip under Standing Delegation https://github.com/example-org/example-repo/issues/1#issuecomment-1**" match
+
 # Negatives: prose mentions in body text should not fire.
 t "Prose: 'the operator's choice' (no list marker)" "$DETECT_RE" \
   "  This document mentions the operator's choice in mid-paragraph." no-match

@@ -1,6 +1,6 @@
 ---
 name: fix-issue
-description: "This skill should be used to attempt an automated single-file fix for a GitHub issue. Creates a branch, fixes, tests, opens a PR, and labels for auto-merge or human review."
+description: "This skill should be used to attempt an automated single-file fix for a GitHub issue. Creates a branch, fixes, tests, opens a PR, and labels for auto-merge or agent review."
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -13,7 +13,7 @@ description: "This skill should be used to attempt an automated single-file fix 
 
 # Fix Issue
 
-Attempt a single-file fix for a GitHub issue and open a PR for human review.
+Attempt a single-file fix for a GitHub issue and open a PR for agent review. The review is the drain-prs `needs-review` tier (an inline diff read for a single-file bot fix, `soleur:review` for a feature PR); it runs when `soleur:drain-prs` runs, never automatically.
 
 ## Inputs
 
@@ -197,14 +197,14 @@ rejects a `--body-file` path containing `@`, `..`, `/proc`, `/etc`, `/root`,
 #
 #    ---
 #
-#    *Automated fix by soleur:fix-issue. Human review required before merge.*
-#    *After verifying the fix resolves the issue, close #<N> manually.*
+#    *Automated fix by soleur:fix-issue. Agent review (drain-prs `needs-review` tier) required before merge.*
+#    *The review pass decides when issue #<N> is closed, after verifying the fix resolves it.*
 #
 # 2. Then create the PR pointing at it:
 gh pr create --title "[bot-fix] <ISSUE_TITLE>" --body-file pr-body.md
 ```
 
-Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- the human reviewer decides when to close the issue.
+Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- the review pass decides when to close the issue.
 
 ## Phase 5.5: Auto-Merge Eligibility Check
 
@@ -220,7 +220,7 @@ If all three conditions are met, label the PR for auto-merge:
 gh pr edit <PR_NUMBER> --add-label "bot-fix/auto-merge-eligible"
 ```
 
-If any condition is not met (higher priority source issue, test concerns, multi-file fix that was allowed through), label for human review:
+If any condition is not met (higher priority source issue, test concerns, multi-file fix that was allowed through), label for agent review (the drain-prs `needs-review` tier):
 
 ```bash
 gh pr edit <PR_NUMBER> --add-label "bot-fix/review-required"
@@ -228,7 +228,7 @@ gh pr edit <PR_NUMBER> --add-label "bot-fix/review-required"
 
 Extract `<PR_NUMBER>` from the `gh pr create` output in Phase 5. Exactly one of the two labels must be applied -- never both, never neither.
 
-Note: The auto-merge gate in `scheduled-bug-fixer.yml` independently re-checks file count and priority. This label is a signal, not the sole gate -- defense-in-depth ensures a mislabeled PR cannot bypass mechanical checks.
+Note: The auto-merge gate in `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` independently re-checks the `bot-fix/auto-merge-eligible` label, the single-file diff, and the `priority/p3-low` source issue. This label is a signal, not the sole gate -- defense-in-depth ensures a mislabeled PR cannot bypass mechanical checks. A PR that fails a check, or carries `bot-fix/review-required` (or neither label), is routed to `needs-review` by `triage-prs.sh` and waits for the next `soleur:drain-prs` run.
 
 ## Phase 6: Failure Handler
 

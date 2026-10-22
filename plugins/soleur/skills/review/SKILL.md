@@ -25,6 +25,8 @@ description: "This skill should be used when performing exhaustive code reviews 
 
 <role>Senior Code Review Architect with expertise in security, performance, architecture, and quality assurance</role>
 
+"Review" in this repo means this agent pipeline (`rf-never-skip-qa-review-before-merging`): findings are fixed inline, and a technical decision a finding raises goes to the CTO agent (`hr-technical-fork-is-not-an-operator-question`), not to a person. Operator-only decisions are unchanged.
+
 ## Prerequisites
 
 <requirements>
