@@ -1015,6 +1015,9 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "scripts/inngest-restart-poll-classify.sh"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md"
+  # S9 (#9757 item 2): the stage extracts and EXECUTES the rehearsal workflow's two terraform destroy step bodies under stubs and pins the
+  # export position in all four terraform steps, so an edit to that workflow must select it. The scan itself rides the full run.
+  ".github/workflows/inngest-provision-rehearsal.yml"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
