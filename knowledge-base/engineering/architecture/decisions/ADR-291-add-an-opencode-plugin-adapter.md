@@ -27,18 +27,25 @@ route to the CLO.
 (merged in #10745, commit `06836baf90ec`), so all four ADR-274 points now rest on live captures; §7.1.6
 carries the run-traceability disclosures.
 
-**No public claim is made yet, and the gate on one is editorial.** A repo-wide sweep on 2026-10-22 found
+**No public claim was made at accept time, and the gate on one was editorial.** A repo-wide sweep on 2026-10-22 found
 OpenCode on the public pages named below only as a third-party reference inside one comparison post. The
 accepted text said those pages were "unchanged" — a proxy rather than the fact: #10725 (`3bf4f18ac7ee`,
 2026-10-20) rewrote `README.md` and the getting-started, index, pricing, and `llms.txt` pages with
 multi-harness install instructions naming Claude Code, Grok Build, Codex, and Devin CLI. The load-bearing fact
-is the claim, and none of those pages makes it. What remains is a brand-level editorial decision rather than
-an evidence question. Flipping it is a separate, deliberate change, and it routes to the CLO first: this
-feature's legal gate (§7.2.1 of its `tasks.md`) requires CLO review before any edit to those canonical pages,
-ADR-274 set the same rule for its own harness flip, and the CLO attestation pins the four-member parenthetical
-on them (`including Claude Code, Grok Build, Codex, and Devin CLI`) — non-exhaustive, so a fifth member does
-not falsify it, but editing it is the canonical-page edit that routes to the CLO. This Status entry will be
-updated by that flip.
+is the claim, and none of those pages made it. What remained was a brand-level editorial decision rather than
+an evidence question.
+
+**The claim was made (2026-10-22).** This PR names OpenCode on `README.md` and on the getting-started, index,
+pricing, and `llms.txt` pages, and states the capability differences beside the install instructions: guards
+decide shell calls only (code-mode `execute` is not covered), and the `<promise>DONE</promise>` completion
+marker is advisory because OpenCode V2 has no Stop hook. The CLO ruled **PUBLISH WITH LISTED CHANGES** on the
+draft copy before it landed. No canonical legal page changed and none was a precondition: the four-member
+parenthetical (`including Claude Code, Grok Build, Codex, and Devin CLI`) is expressly non-exhaustive on all
+seven canonicals, and `docs/legal/privacy-policy.md` already discloses the provider-agnostic BYOK path
+class-wide, so naming a fifth harness creates no new Jikigai processor. A CLO-signed follow-up in a separate
+PR — not a precondition for this claim — would add the fifth member to the seven canonicals and their
+mirrors, which forces the `TC_VERSION`, `TC_DOCUMENT_SHA`, and `LEGAL_DOC_SHAS` re-pins. The ruling and the
+deferral are recorded in this PR.
 
 In this record, **harness** means the `Harness` union in `plugins/soleur/lib/harness.ts`. The word is not in
 `knowledge-base/project/glossary.md`.

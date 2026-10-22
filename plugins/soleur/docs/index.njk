@@ -4,8 +4,8 @@ seoTitle: "Soleur — AI Agents for Solo Founders | Every Department, One Platfo
 description: "Company-as-a-Service for solo founders. AI agents across 8 departments — engineering, marketing, legal, finance, operations, product, sales, support."
 layout: base.njk
 permalink: index.html
-date: 2026-10-20
-last_updated: 2026-10-20
+date: 2026-10-22
+last_updated: 2026-10-22
 summaryCounts: computed
 ---
 
@@ -18,7 +18,7 @@ summaryCounts: computed
       <p class="hero-trust">Human-in-the-loop. Your expertise, amplified.</p>
       <div class="landing-hero-install">
         <a href="/getting-started/#self-hosted" class="btn btn-primary plausible-event-name=Hero+Self-host+Click">Get the self-hosted version</a>
-        <p class="landing-hero-install-note">Source-available. Runs inside your own coding harness &mdash; Claude Code, Grok Build, Codex, or Devin CLI; you pay for your own model usage.</p>
+        <p class="landing-hero-install-note">Source-available. Runs inside your own coding harness &mdash; Claude Code, Grok Build, Codex, Devin CLI, or OpenCode; you pay for your own model usage.</p>
       </div>
       <div class="hero-waitlist-form-card" role="group" aria-labelledby="homepage-hosted-label">
         <p class="hero-waitlist-form-label" id="homepage-hosted-label">Hosted version (coming soon)</p>
@@ -38,7 +38,7 @@ summaryCounts: computed
         </form>
       </div>
       <div class="landing-hero-plan">
-        <p>Self-hosted runs inside your own Claude Code, Grok Build, Codex, or Devin CLI &mdash; signed in with your Claude plan or an Anthropic API key; each harness has its own setup guide on the <a href="/getting-started/">getting started page</a>.</p>
+        <p>Self-hosted runs inside your own Claude Code, Grok Build, Codex, Devin CLI, or OpenCode &mdash; signed in with your Claude plan or an Anthropic API key on Claude Code, and with whichever provider you configure on the others; each harness has its own setup guide on the <a href="/getting-started/">getting started page</a>.</p>
         <p>Hosted version (coming soon): bring your own Anthropic API key, billed by Anthropic to you.</p>
       </div>
       <div class="hero-cta">
@@ -186,7 +186,7 @@ summaryCounts: computed
         <h2 class="section-title">Soleur vs. Cursor and GitHub Copilot</h2>
         <p class="section-desc">Cursor and Copilot help you write code. Soleur helps you run a company. Soleur includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more &mdash; not just engineering.</p>
         <p class="section-desc">The core difference is memory. Soleur maintains a persistent, compounding knowledge base across every department: your marketing agent knows your brand voice, your legal agent knows your compliance posture, your finance agent references your actual revenue data.</p>
-        <p class="section-desc">Soleur is built on <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> and the <a href="https://modelcontextprotocol.io/" rel="noopener noreferrer">Model Context Protocol (MCP)</a>, the open standard for connecting AI to external tools.</p>
+        <p class="section-desc">Soleur ships as a plugin for your own coding harness &mdash; Claude Code, Grok Build, Codex, Devin CLI, or OpenCode &mdash; and is built on the <a href="https://modelcontextprotocol.io/" rel="noopener noreferrer">Model Context Protocol (MCP)</a>, the open standard for connecting AI to external tools.</p>
       </div>
     </section>
 
@@ -214,7 +214,7 @@ summaryCounts: computed
           </details>
           <details class="faq-item">
             <summary class="faq-question">Is Soleur free?</summary>
-            <p class="faq-answer">Soleur offers two paths. The self-hosted version is free and source-available under BSL 1.1 (it converts to Apache-2.0 four years after each release) &mdash; every agent, every skill, every department. It runs inside your own coding harness &mdash; Claude Code, Grok Build, Codex, or Devin CLI &mdash; so you pay for your own model usage. The hosted version (coming soon) adds managed infrastructure, a web dashboard, and email support; <a href="/pricing/">see pricing</a> for plan details. Hosted plans use your own Anthropic API key, billed by Anthropic to you.</p>
+            <p class="faq-answer">Soleur offers two paths. The self-hosted version is free and source-available under BSL 1.1 (it converts to Apache-2.0 four years after each release) &mdash; every agent, every skill, every department. It runs inside your own coding harness &mdash; Claude Code, Grok Build, Codex, Devin CLI, or OpenCode &mdash; so you pay for your own model usage. The hosted version (coming soon) adds managed infrastructure, a web dashboard, and email support; <a href="/pricing/">see pricing</a> for plan details. Hosted plans use your own Anthropic API key, billed by Anthropic to you.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Who is Soleur for?</summary>
@@ -222,7 +222,7 @@ summaryCounts: computed
           </details>
           <details class="faq-item">
             <summary class="faq-question">How do I get started?</summary>
-            <p class="faq-answer">Get the self-hosted version and run <code>/soleur:go</code> inside your own harness &mdash; Claude Code, Grok Build, Codex, or Devin CLI; signed in with your Claude plan or an Anthropic API key. Each harness uses its own entry command, shown in the <a href="/getting-started/">setup guide</a>. Or join the waitlist for the hosted version, which takes your own Anthropic API key. Describe what you need &mdash; build a feature, validate a business idea, generate legal documents, run a competitive analysis &mdash; and Soleur routes to the right workflow.</p>
+            <p class="faq-answer">Get the self-hosted version and run <code>/soleur:go</code> inside your own harness &mdash; Claude Code, Grok Build, Codex, Devin CLI, or OpenCode; signed in with your Claude plan or an Anthropic API key on Claude Code, and with whichever provider you configure on the others. Each harness uses its own entry command, shown in the <a href="/getting-started/">setup guide</a>. Or join the waitlist for the hosted version, which takes your own Anthropic API key. Describe what you need &mdash; build a feature, validate a business idea, generate legal documents, run a competitive analysis &mdash; and Soleur routes to the right workflow.</p>
           </details>
         </div>
         <p class="faq-community">Questions we didn&rsquo;t cover? <a href="{{ site.discord }}" rel="noopener noreferrer">Ask in the Soleur Discord</a>.</p>
@@ -271,7 +271,7 @@ summaryCounts: computed
           "name": "Is Soleur free?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur offers two paths. The self-hosted version is free and source-available under BSL 1.1 (it converts to Apache-2.0 four years after each release) — every agent, every skill, every department. It runs inside your own coding harness — Claude Code, Grok Build, Codex, or Devin CLI — so you pay for your own model usage. The hosted version (coming soon) adds managed infrastructure, a web dashboard, and email support; see pricing for plan details. Hosted plans use your own Anthropic API key, billed by Anthropic to you."
+            "text": "Soleur offers two paths. The self-hosted version is free and source-available under BSL 1.1 (it converts to Apache-2.0 four years after each release) — every agent, every skill, every department. It runs inside your own coding harness — Claude Code, Grok Build, Codex, Devin CLI, or OpenCode — so you pay for your own model usage. The hosted version (coming soon) adds managed infrastructure, a web dashboard, and email support; see pricing for plan details. Hosted plans use your own Anthropic API key, billed by Anthropic to you."
           }
         },
         {
@@ -287,7 +287,7 @@ summaryCounts: computed
           "name": "How do I get started?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Get the self-hosted version and run /soleur:go inside your own harness — Claude Code, Grok Build, Codex, or Devin CLI; signed in with your Claude plan or an Anthropic API key. Each harness uses its own entry command, shown in the setup guide. Or join the waitlist for the hosted version, which takes your own Anthropic API key. Describe what you need — build a feature, validate a business idea, generate legal documents, run a competitive analysis — and Soleur routes to the right workflow."
+            "text": "Get the self-hosted version and run /soleur:go inside your own harness — Claude Code, Grok Build, Codex, Devin CLI, or OpenCode; signed in with your Claude plan or an Anthropic API key on Claude Code, and with whichever provider you configure on the others. Each harness uses its own entry command, shown in the setup guide. Or join the waitlist for the hosted version, which takes your own Anthropic API key. Describe what you need — build a feature, validate a business idea, generate legal documents, run a competitive analysis — and Soleur routes to the right workflow."
           }
         }
       ]
