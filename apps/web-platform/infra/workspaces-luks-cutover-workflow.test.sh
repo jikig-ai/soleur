@@ -674,6 +674,28 @@ if [[ -f "$SCRATCH/cutover-run.sh" && -f "$SCRATCH/cutover-env-rehearsal.txt" &&
   [[ "$BODY_RC" == 3 && "$BODY_OUT" == *"::error::workspaces-luks cutover exited 3"* ]] \
     && ok "T5-RC a host failure surfaces the ssh rc unchanged with the outcome-row guidance" \
     || no "T5-RC the host rc was lost (rc=$BODY_RC) ${BODY_OUT:0:160}"
+  # (#9927 item 8b) SITE D has NO read/write fallback. The volume lookup only READS a Hetzner
+  # volume id, so it takes the read-only token alone; O5 and O10 are done (measured 2026-10-20),
+  # and a read-only reader that can reach the destroy-capable token silently stops being read-only
+  # the day the read-only secret goes missing. An empty read-only token must stop the step BEFORE
+  # any Hetzner request and before anything is delivered, name the cause, and never ask Doppler
+  # for the read/write name (the Doppler stub below logs every call).
+  fx_reset; fx_luks; : > "$SCRATCH/doppler.log"
+  run_body "$SCRATCH/cutover-run.sh" "${CENV[@]}" "${RUN_ARGS[@]}" RO_TOKEN= DOPPLER_LOG="$SCRATCH/doppler.log"
+  [[ "$BODY_RC" != 0 && "$BODY_OUT" == *readonly_absent* && ! -s "$SCRATCH/curl.log" && ! -s "$SCRATCH/ssh.log" && ! -s "$SCRATCH/env.capture" ]] \
+    && ok "T5-RO-absent the cutover job STOPS on an empty read-only Hetzner token (named refusal readonly_absent) before any request or delivery" \
+    || no "T5-RO-absent an empty read-only token did not stop the lookup cleanly (rc=$BODY_RC) ${BODY_OUT:0:200}"
+  grep -qE 'secrets get HCLOUD_TOKEN_READONLY ' "$SCRATCH/doppler.log" \
+    && ok "T5-RO-absent control: the read-only name WAS requested (the next row is not vacuous)" \
+    || no "T5-RO-absent control: the read-only name was never requested"
+  grep -qE 'secrets get HCLOUD_TOKEN( |$)' "$SCRATCH/doppler.log" \
+    && no "T5-RO-absent the lookup asked Doppler for the READ/WRITE Hetzner token (the fallback is back)" \
+    || ok "T5-RO-absent the lookup never asks Doppler for the read/write Hetzner token"
+  fx_reset; fx_luks; : > "$SCRATCH/doppler.log"
+  run_body "$SCRATCH/cutover-run.sh" "${CENV[@]}" "${RUN_ARGS[@]}" DOPPLER_LOG="$SCRATCH/doppler.log"
+  { [[ "$BODY_RC" == 0 ]] && ! grep -qE 'secrets get HCLOUD_TOKEN( |$)' "$SCRATCH/doppler.log"; } \
+    && ok "T5-RO-present the happy path (read-only token present) never touches the read/write name" \
+    || no "T5-RO-present the happy path read the read/write name or failed (rc=$BODY_RC)"
 else
   no "T5 the cutover Run body or its evaluated env was not extracted — the delivery was not executed"
 fi
@@ -699,15 +721,29 @@ else
   no "the Cutover summary step body was not extracted — its rollback reporting is unverified"
 fi
 
+# LATE dispatch re-validation (the launder defence). The opening self-test is a point-in-time sample: a `no() { pass=$((pass + 1)); ... }`
+# inserted after it routes every later failure into the PASS counter, the floor below still holds (it counts passes), and the suite prints
+# `N passed, 0 failed` over a regressed workflow. Re-drive both helpers here, after every row; report by printf + exit, never through ok()/no().
+_late_p="$pass"; _late_f="$fail"
+ok "late dispatch re-validation (pass arm)" >/dev/null
+no "late dispatch re-validation (fail arm)" >/dev/null
+if [[ "$pass" -ne $((_late_p + 1)) || "$fail" -ne $((_late_f + 1)) ]]; then
+  printf 'FATAL: LATE DISPATCH RE-VALIDATION FAILED: pass %s->%s (want +1), fail %s->%s (want +1); the verdict helpers were neutered or laundered after the opening self-test\n' \
+    "$_late_p" "$pass" "$_late_f" "$fail"
+  exit 2
+fi
+pass=$((pass - 1))
+fail=$((fail - 1))
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # NON-DEGENERACY FLOOR — see the sibling rationale in workspaces-luks-staging.test.sh. A python
 # leg that dies before emitting verdicts, or a `check()` block deleted wholesale, would otherwise
-# leave this suite reporting "0 passed, 0 failed" and exiting 0. The floor (WF_MIN_ASSERTIONS, 107) is
+# leave this suite reporting "0 passed, 0 failed" and exiting 0. The floor (WF_MIN_ASSERTIONS, 111) is
 # a literal on the `if` itself and is reported by printf + exit 1, never through ok()/no(), so a
 # neutered helper cannot silence the check that exists to notice it.
-if [[ "$pass" -lt 107 ]]; then
-  printf 'FAIL - WF_MIN_ASSERTIONS: only %s assertions passed (floor 107) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous\n' "$pass"
+if [[ "$pass" -lt 111 ]]; then
+  printf 'FAIL - WF_MIN_ASSERTIONS: only %s assertions passed (floor 111) — the structural leg produced fewer verdicts than expected; a green run here would be vacuous\n' "$pass"
   exit 1
 fi
 [[ "$fail" -eq 0 ]] || exit 1
