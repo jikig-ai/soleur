@@ -112,6 +112,16 @@ to the restricted Jikigai-managed key.
 - Pre-PR-B Jikigai-keyed surfaces (out of scope of this register file's
   PA-22 framing; see Vendor Mapping Notes column): `claude-code-action`
   CI + compound-promotion-loop #2720.
+- **Pointer 2026-10-20 (#6107), DRAFT, counsel review pending; pointer
+  only, this file's snapshot (`status_snapshot_date` 2026-08-06) and
+  disposition review dates were not re-reviewed and are unchanged.** The
+  compound-promotion loop now makes a second Anthropic call per proposed
+  cluster (target file, rationale, repeated source summaries); same key,
+  same DPA, no new data category, registered at PA-31. The memo inherits
+  the Commercial Terms status recorded above as unverified (open operator
+  action 4) and does not verify it; if the account is found to be on
+  Consumer Terms, the memo's trigger 14 fires. Re-evaluation at
+  knowledge-base/legal/audits/2026-10-20-dpia-reeval-compound-promote-2720.md.
 - **Enumeration corrected 2026-07-30 (#7086), then re-measured and superseded
   2026-07-31 (#7100).** The list above was non-exhaustive: the
   **Anthropic-egressing Inngest function fleet** is the *dominant* Jikigai-keyed
