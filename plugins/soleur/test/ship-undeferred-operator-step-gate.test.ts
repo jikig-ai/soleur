@@ -328,7 +328,20 @@ describe("TC-12: delegated-act authoring form (ruling F1 + R4, detection unchang
     const undeferred = GATE_SECTION.slice(0, end);
     const lead = undeferred.indexOf("**Delegated acts (authoring form).**");
     expect(lead).toBeGreaterThan(0);
-    const para = undeferred.slice(lead);
+    // The SKILL paragraph is a gated pointer: it keeps the unchanged-detection statement,
+    // the load directive for the reference, and the no-exemption rule for an Operator bullet.
+    const pointer = undeferred.slice(lead);
+    expect(pointer).toContain("`DETECT_RE` and `ship-operator-step-gate.sh` stay unchanged on purpose");
+    expect(pointer).toContain("[delegated-act-authoring-form.md](./references/delegated-act-authoring-form.md)");
+    expect(pointer).toContain("read [delegated-act-authoring-form.md]");
+    expect(pointer).toContain(
+      "A bullet that starts with `Operator` and a verb is still detected and still needs its `Tracks` companion",
+    );
+    // The form itself lives in the reference the pointer loads; every clause below is
+    // pinned there as a whole clause.
+    const REF = resolve(REPO_ROOT, "plugins/soleur/skills/ship/references/delegated-act-authoring-form.md");
+    expect(existsSync(REF)).toBe(true);
+    const para = readFileSync(REF, "utf8");
 
     // The authoring form, with the exact-envelope-line argument.
     expect(para).toContain(
