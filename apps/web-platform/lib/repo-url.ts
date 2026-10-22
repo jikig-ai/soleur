@@ -1,33 +1,5 @@
-/**
- * Normalize a repository URL to a canonical form so write boundaries,
- * read boundaries, and DB indexes agree on equality. Idempotent.
- *
- * Canonical form:
- *   1. `trim()` leading/trailing whitespace.
- *   2. Lowercase scheme + host only — preserve owner/repo path case
- *      (GitHub path segments are case-insensitive at the API but
- *      case-sensitive for display; the user's typed form is the
- *      display form, so we keep it).
- *   3. Strip trailing `.git` case-insensitively (suffix-anchored so
- *      `bar.git.bak` is left alone).
- *   4. Strip trailing `/` (one or more).
- *   5. Re-trim whitespace a suffix strip can expose (`foo .git` →
- *      `foo `): the function's idempotence contract requires the
- *      output to be trim-stable. Defect found by the fast-check
- *      property suite (test/lib/repo-url.property.test.ts).
- *
- * Non-URL input passes through as the trimmed + string-only-op'd value.
- * `null`/`undefined`/`""` → `""`.
- *
- * Coupled with the Postgres backfill in
- * `supabase/migrations/031_normalize_repo_url.sql` — any change here
- * must be mirrored in the SQL regex chain (see migration header).
- *
- * See plan:
- *   `knowledge-base/project/plans/2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md`
- */
-export function normalizeRepoUrl(raw: string | null | undefined): string {
-  if (raw == null) return "";
+/** One normalization pass; see `normalizeRepoUrl` for the contract. */
+function normalizeOnce(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.length === 0) return "";
 
@@ -74,4 +46,52 @@ export function normalizeRepoUrl(raw: string | null | undefined): string {
 
   return working;
 }
-/* #9815 e2e probe — REVERTED BEFORE COMMIT */
+
+// One pass is not a fixpoint: each strip can expose input the next call's
+// URL parse or trim would move again ("b.git/." -> "b.git" -> "b"; a trailing
+// "/." -> "/" after a query). Iterate to the fixpoint, bounded so a
+// pathological input cannot spin; every pass strictly shortens or leaves the
+// value unchanged, so the bound is generous.
+const MAX_PASSES = 8;
+
+/**
+ * Normalize a repository URL to a canonical form so write boundaries,
+ * read boundaries, and DB indexes agree on equality. Idempotent.
+ *
+ * Canonical form:
+ *   1. `trim()` leading/trailing whitespace.
+ *   2. Lowercase scheme + host only — preserve owner/repo path case
+ *      (GitHub path segments are case-insensitive at the API but
+ *      case-sensitive for display; the user's typed form is the
+ *      display form, so we keep it).
+ *   3. Strip trailing `.git` case-insensitively (suffix-anchored so
+ *      `bar.git.bak` is left alone).
+ *   4. Strip trailing `/` (one or more).
+ *   5. Re-trim whitespace a suffix strip can expose (`foo .git` →
+ *      `foo `): the function's idempotence contract requires the
+ *      output to be trim-stable. Defect found by the fast-check
+ *      property suite (test/lib/repo-url.property.test.ts).
+ *
+ * Non-URL input passes through as the trimmed + string-only-op'd value.
+ * `null`/`undefined`/`""` → `""`.
+ *
+ * Coupled with the Postgres backfill in
+ * `supabase/migrations/031_normalize_repo_url.sql` — any change here
+ * must be mirrored in the SQL regex chain (see migration header).
+ *
+ * See plan:
+ *   `knowledge-base/project/plans/2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md`
+ * Applied repeatedly until the value stops changing (bounded), so a single
+ * strip that exposes a dot-segment, `.git` or whitespace cannot leave a
+ * non-fixpoint behind.
+ */
+export function normalizeRepoUrl(raw: string | null | undefined): string {
+  if (raw == null) return "";
+  let current = raw;
+  for (let i = 0; i < MAX_PASSES; i++) {
+    const next = normalizeOnce(current);
+    if (next === current) return next;
+    current = next;
+  }
+  return current;
+}

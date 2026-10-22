@@ -118,6 +118,26 @@ describe("normalizeRepoUrl — regression fixtures", () => {
   });
 });
 
+describe("normalizeRepoUrl — fixpoint fixtures", () => {
+  // regression fixture: fast-check seed -1029694662 (merge_group run 39400877769)
+  // A trailing `.git` strip exposed a `.` segment; the next call's URL parse
+  // collapsed it. One pass was not a fixpoint.
+  it.each([
+    " http://a.aa/..git/",
+    "b.git/.",
+    "?q/\t/..",
+    "http://a.aa#h@u.GIT/..///",
+    "http://a.aa/../%2E%2e/.git/.git",
+  ])("%j is a fixpoint after one call", (x) => {
+    const once = normalizeRepoUrl(x);
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
+
+  it("the counterexample normalizes to the bare origin", () => {
+    expect(normalizeRepoUrl(" http://a.aa/..git/")).toBe("http://a.aa");
+  });
+});
+
 // Negative control (anti-vacuity, AC6): the harness must be able to fail.
 describe("repo-url property suite — negative control", () => {
   it("a deliberately-false property throws", () => {
