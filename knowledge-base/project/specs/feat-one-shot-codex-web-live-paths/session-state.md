@@ -2512,7 +2512,11 @@
   for each seeded requester-owned run before checking all exported ownership.
   Targeted security review found no actionable issue.
 - The first follow-up typecheck found the new spy lacked an explicit Vitest `vi`
-  import. That was corrected. Latest typecheck and focused mapper/dispatch suite
-  pass (40 tests); the development-only DSAR integration test passes 3/3 with
-  the stronger row-presence assertions. Review fixes and this record are local
-  and still need a clean commit/push and targeted re-review.
+  import. That was corrected. Typecheck and focused mapper/dispatch suites pass
+  (40 tests); the development-only DSAR integration test passes 3/3 with the
+  stronger row-presence assertions.
+- The fixes were committed and pushed as `474375e31601a8df3a652c4abbab4a99316d3f51`.
+  Targeted performance and data-integrity reviews at that exact SHA found no
+  actionable findings; the quality reviewer found only this stale status text.
+  Fresh-head CI, Semgrep, QA, preflight, full fix-round verification/trailer,
+  qualification, legal, and shipping gates remain pending.
