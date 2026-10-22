@@ -1,6 +1,6 @@
 # Measurements: Inngest LUKS arc items 6, 8b and C1
 
-Names, counts, timestamps and shapes only. No secret value, diff, version content, identifier or payload appears in this file, and none was printed, logged or stored. Evidence classes: `measured`, `documented, not measured`, `could-not-measure(<reason>)`.
+Names, counts, timestamps and shapes only. No secret value, diff, version content, identifier or payload appears in this file, and none was printed, logged or stored. Evidence classes: `measured`, `documented, not measured`, `could-not-measure(<reason>)`, `inferred` (a conclusion drawn from measured facts, not itself measured) and `not measured` (a question this change did not ask; it carries no answer).
 
 Guard used for every Doppler command: `set +x`, `set -o pipefail`, `2>/dev/null` on both sides of every pipe, exact-key allowlist with a value filter on `jq`, no `--debug`, no `secrets get`, no `doppler run`, no `configs logs get`, no `configs logs rollback`, no write command of any kind.
 
@@ -74,25 +74,25 @@ Command: a PyYAML walk of `.github/workflows/*.yml` for jobs with a step whose `
 | scheduled-terraform-drift.yml | inngest-rehearsal-orphan-sweep | infra-privileged | yes |  |
 | web-host-escrow-diagnose.yml | escrow-check | infra-privileged | no (by job text) | incident-response |
 
-Consumer empty-token handling (the legacy arm now exports nothing): the ten `[[ -z "$HCLOUD_TOKEN" ]]` guards in `apply-web-platform-infra.yml` sat in steps that run under `set -u`, so an unset variable would have aborted with `unbound variable` instead of the named abort; all ten now read `${HCLOUD_TOKEN:-}` (file 488,959 -> 488,999 bytes against the 490,000-byte ADR-231 gate; loader suite rows "consumers"). The drift and rehearsal-sweep jobs read the loader token through their own helpers and were NOT driven with an empty token here: an accepted gap, mitigated by G1j (they cannot reach the legacy arm on `main`). `scripts/cutover-inngest.sh` is unchanged (site C, #10664).
+Consumer empty-token handling (the legacy arm now exports nothing): the ten `[[ -z "$HCLOUD_TOKEN" ]]` guards in `apply-web-platform-infra.yml` were first rewritten to `${HCLOUD_TOKEN:-}` on the belief that an unset variable would abort them under `set -u`, and were reverted in the same PR (CTO, 2026-10-22): every one of the ten steps already runs `HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"` earlier in the same step, so the variable is always bound and the edit changed nothing. The drift and rehearsal-sweep jobs read the loader token through their own helpers and were NOT driven with an empty token here: an accepted gap, mitigated only partly by G1j, which proves each loader job declares a Tier-B environment and not that it takes the Tier-B arm (a missing environment secret still lands in the legacy arm). `scripts/cutover-inngest.sh` is unchanged (site C and `op=backup`, #10664).
 
 ## Item C1: surviving source for the affected-user list
 
 Measured 2026-10-22 ~16:31 UTC by `scripts/inngest-history-probe.sh round1` (CI green on the PR head before the
-run: `test` and `deploy-script-tests` legs, attempt 6). Transport: the Management API's dedicated read-only
+run: `test` and `deploy-script-tests` legs, attempt 6). The probe and its suite were then REMOVED from the PR (CTO, 2026-10-22: the finding is recorded, and a committed path to an account-wide Supabase management token that reaches the production app project is the less safe state). The method is the three queries named below, run through the dedicated read-only endpoint; the script is in git history at the commit that added it, and a "round 2" would re-add it in its own PR with its own suite and CI. Transport: the Management API's dedicated read-only
 endpoint (role `supabase_read_only_user`), pinned to the Inngest Supabase project `pigsfuxruiopinouvjwy`, token
-`SUPABASE_ACCESS_TOKEN` from Doppler `soleur/prd_terraform` by environment only. Queries run (text is in the script,
+`SUPABASE_ACCESS_TOKEN` from Doppler `soleur/prd_terraform` by environment only. Queries run (text is in the script's history,
 all catalog metadata, none opens a row): `identity`, `columns`, `estimates`. Raw output was kept in the session
-scratchpad only and is not committed; the numbers below are the whole result.
+scratchpad only and is not committed; the numbers below are the whole result. The Doppler `configs logs --json` calls of item 6 returned the log entries (including their diff fields) to the CLI process; they were discarded unread and never printed, logged or stored.
 
 | Question | Answer | Evidence class |
 |---|---|---|
-| Right project, right role, read-only? | role `supabase_read_only_user`, `read_only=on`, `statement_timeout=2min`, Inngest sentinel tables present, no web-platform app table present | measured |
-| Does the Postgres half survive a Redis loss and hold history? | yes, by construction (a separate Supabase project); 14 tables, 172 columns | measured |
+| Right project, right role, read-only? | role `supabase_read_only_user`, `read_only=on`, `statement_timeout=2min`, the two Inngest sentinel tables present, none of the 3 sentinel web-platform app tables present | measured |
+| Does the Postgres half hold history? | a separate Supabase project with 14 tables and 172 columns holds history rows (counts below); that it survives a Redis loss follows from being a separate store | measured (project, tables, row estimates); survival is inferred |
 | Size of the history | estimates (`pg_class.reltuples`, live counts from `pg_stat_user_tables`): `history` ~925k / 937k, `spans` ~1.52M / 1.60M, `traces` ~779k / 839k, `events` ~181k / 182k, `function_runs` ~84k / 88k, `function_finishes` ~85k / 88k, `trace_runs` ~88k / 88k, `functions` 76, `apps` 3, others 0 | measured (estimates; supports present, never absent) |
-| Is there a column capable of holding a user reference? | candidate columns by name: `events.event_user` (plus `account_id`, `workspace_id` on `events`, `event_batches`, `trace_runs`, `worker_connections`; `account_id` on `spans`; `worker_connections.worker_ip`). Names only; the Inngest `account_id`/`workspace_id` are Inngest tenancy identifiers, not Soleur users | measured (names) |
-| Typed JSON columns (where the event body would sit) | 5, all in `spans`; no JSON-typed column in `events` (the body is not a typed column there) | measured (names) |
-| Row-level security | on for all 14 tables, 0 policies; `bypassrls=true` for the probe role, so row reads would not be masked, but none were made | measured |
+| Is there a column capable of holding a user reference? | candidate columns by name: `events.event_user` (plus `account_id`, `workspace_id` on `events`, `event_batches`, `trace_runs`, `worker_connections`; `account_id` on `spans`; `worker_connections.worker_ip`). Names only. `event_user` is Inngest's top-level user field and the repo's own senders (Stripe and GitHub webhooks, the dashboard send route, the resend-inbound route) put the founder id inside the event `data`, not in `event_user`: so an empty or sparse `event_user` can neither define nor bound the affected set. The `account_id`/`workspace_id` columns are probably Inngest tenancy identifiers, not Soleur users (inferred) | measured (names); the reading is inferred |
+| Typed JSON columns (where the event body would sit) | 5 `json`/`jsonb` columns, all in `spans`; no `json`/`jsonb` column in `events`; the type of the event body column was not inspected | measured (names and types of json/jsonb only) |
+| Row-level security | on for all 14 tables, 0 policies; `bypassrls=true` for the probe role, so row reads would not have been masked (the committed allowlist, not the role, was the read barrier), but none were made | measured |
 | N rows non-null in `events.event_user` | NOT measured (needs a row-level count, a "round 2" query with its own suite row and green CI) | not measured |
 | Oldest row / retention horizon covers the loss horizon | NOT measured (needs a min-timestamp read) | not measured |
 | Rows tied to work lost with the store (received but not completed) | NOT measured; the queue and armed events live in Redis, so event history alone does not prove it | not measured |

@@ -196,7 +196,9 @@ Phase 4 binds each to a member of the Tier-B environment set; the census row is 
 `mint-inngest-bootstrap-tag::mint` (#4326) left this list. Both declare `infra-privileged` and read
 `DOPPLER_TOKEN_INFRA_PRIVILEGED`, so the census's G1b/G1c rows now cover them. *Dated note, 2026-10-03
 (#9321):* they now read `DOPPLER_TOKEN_INFRA_APP`, which is also an `ENV_SECRETS` member, so G1b/G1c still
-cover them; census row G7f pins their call shape.
+cover them; census row G7f pins their call shape. *Dated note, 2026-10-22 (#9927 item 8b review): the list above is the
+pre-Phase-4 state and is historical. Every one of the 32 jobs that call the loader now declares a Tier-B `environment:`
+(census G1j, which derives the set from the workflow files, so a count written here would go stale).*
 
 `infra-privileged` exists: O0's push apply created it with its `main` policy, and it is referenced
 by `apply-web-platform-infra.yml`, `apply-github-infra.yml`, `apply-sentry-infra.yml`,
@@ -227,23 +229,41 @@ What each reader does when the read-only secret is absent, empty or not a plain 
 | PR-plan step | `::error` `verdict=pr_plan_hcloud_readonly_absent` or `pr_plan_hcloud_readonly_unusable` | the step fails; nothing reaches `$GITHUB_ENV` |
 | `workspaces-luks-cutover` volume lookup | `SOLEUR_CREDENTIAL_REFUSED script=workspaces-luks-cutover reason=readonly_absent` (or `token_shape`) | the step stops before any request and before anything is delivered to web-1 |
 
-**Break-glass: an incident PR needs a plan, or a rollback needs the lookup, and a verdict above fired.**
+**Break-glass: an incident PR needs a plan, or a rollback needs the lookup, and a verdict above fired.** Find the first
+column of the row for the reader that fired, then do the steps in order. The verdicts are `::error` annotations on the run, not only log
+lines: `gh api repos/jikig-ai/soleur/check-runs/<job_id>/annotations --jq '.[]|select(.title=="infra-privileged")|.message'`.
+The loader legacy arm exits 0, so the job can stay green until a consumer fails: read the annotation, not the run conclusion.
 
-1. Restore the job's Tier-B environment secret first (`DOPPLER_TOKEN_INFRA_PRIVILEGED`): the loader's legacy arm
-   is reached when that secret is missing, which is the likelier root cause, and the Tier-B arm reads the
-   token from the privileged project instead.
-2. Only if the environment secret is fine, mint a **new** read-only token in the Hetzner console by the O5
-   procedure and store it in `prd_terraform` **before** deleting the old one; never mint it as read/write.
-3. There is no path that substitutes the read/write token, and none should be added in an incident: a
-   destroy-capable token on a read path is exactly what this change removes. The one remaining reader that still
-   falls back is `scripts/cutover-inngest.sh` (tracked in #10664).
+| Reader that fired | Which credential it uses to read `prd_terraform` | First check | Then |
+| --- | --- | --- | --- |
+| Loader legacy arm (`legacy_hcloud_readonly_*`) | the Tier-A `DOPPLER_TOKEN` (`DP_LEGACY`); the arm is reached because the job's Tier-B environment secret `DOPPLER_TOKEN_INFRA_PRIVILEGED` is missing or empty | restore the environment secret (mint and set by O3) | if the environment secret is fine, step 2 |
+| PR-plan step (`pr_plan_hcloud_readonly_*`) | the repo-level Tier-A `DOPPLER_TOKEN` directly; **no environment secret is involved** | re-run once; check the `DOPPLER_TOKEN` repo secret and Doppler status (this read cannot tell absent from rejected from unreachable) | step 2 |
+| `workspaces-luks-cutover` lookup (`readonly_absent`, `token_shape`) | the same repo-level Tier-A `DOPPLER_TOKEN`; **no environment secret is involved** | as the PR-plan row | step 2 |
 
-Residuals, stated plainly: a read/write token stored under the read-only name is undetectable by these
-readers (the control is the O5 write-probe); and a legacy-arm job's own Terraform steps still read the
-read/write token through their own `doppler run` until the owner evicts it from Tier A. The census guards
-the invariant with G1g (no read of a Tier-B name from `prd_terraform`, by `-c` or by a `DOPPLER_CONFIG`
-env, and no read-only-first allowance) and G1j (every job that calls the loader declares a Tier-B
-`environment:`, so none can reach the legacy arm on `main`).
+1. (Per the table.) Do not mint a Hetzner token until the first check is done: a rejected or unreachable Doppler read prints the
+   same "absent" text, and a re-mint would be the wrong remedy.
+2. Mint a **new** read-only token in the Hetzner console by the O5 procedure and store it in `prd_terraform` **before** deleting the
+   old one; never mint it as read/write. An agent can do everything except the console mint (token creation has no API), so the
+   one owner action is: create a read-only token in the Hetzner console and hand it over through the owner's own terminal. After
+   it is stored (stdin, never argv), run the O5 write-probe (it must answer `forbidden`) before relying on it.
+3. If the verdict is `*_unusable` or `token_shape`, treat the stored value as possible tampering, not only as a typo: the
+   branch-nameable `DOPPLER_TOKEN_WRITE` repo secret can write `prd_terraform` until operator step O11, so read the config's activity
+   log (names and timestamps only) before re-minting.
+4. There is no path that substitutes the read/write token, and none should be added in an incident: a destroy-capable token on a
+   read path is exactly what this change removes. No read/write Hetzner token exists in Tier A at all now (O10 done), so
+   a legacy-arm job cannot write to Hetzner; a Hetzner-writing job depends solely on its Tier-B environment secret. The two
+   places that still read the old read/write name are in `scripts/cutover-inngest.sh` (the site C fallback and the `op=backup`
+   path, which refuses since O10: no pre-snapshot recovery point can be taken by that op), tracked in #10664 and #9755.
+
+Residuals, stated plainly: a read/write token stored under the read-only name is undetectable by these readers; the control is
+the O5 write-probe, **last recorded 2026-09-29 and not re-run in this change**, so that residual is stated and not bounded in
+time (re-run the write-probe before the next token re-mint, owner action). The census guards the invariant with G1g (no read of a
+Tier-B name from `prd_terraform` that the scanner can see: a literal name in a `run:` body with `-c prd_terraform` or a
+`DOPPLER_CONFIG` env; quoted names, variable names, `doppler run -- printenv` and `secrets download` forms are not scanned) and G1j
+(every job that calls the loader declares a Tier-B `environment:`, so the legacy arm is reachable only in the degraded state of a
+missing environment secret; G1j does not prove each job takes the Tier-B arm). The orphan sweeps in
+`scheduled-terraform-drift.yml` (`rung2-rehearsal-orphan-sweep`, `inngest-rehearsal-orphan-sweep`) have no notification path: if the
+legacy arm ran there they fail red with no issue and no email, so a red scheduled run of those two jobs is the only signal.
 
 ## Operator Sequence (canonical copy — verbatim from the plan)
 

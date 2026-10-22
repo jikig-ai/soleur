@@ -263,12 +263,12 @@ liveness_signal:
   alert_target: a failed consumer step reaches the operator through notify-ops-email and the standing drift issue; the loader itself pages nobody
   configured_in: .github/actions/infra-credentials/action.yml (the load step)
 error_reporting:
-  destination: GitHub Actions annotation and job log (observability layer 1, CI log; no Sentry in a composite action)
+  destination: GitHub Actions annotation and job log (observability layer 6, workflow run log / `::error::` annotation; no Sentry in a composite action; the C1 measurement was an operator-session tool, so no layer is claimed and its durable record is specs/.../measurements.md)
   fail_loud: the loader exits 0 on purpose (non-Hetzner callers) but exports nothing and prints the ::error verdict; the Hetzner consumers fail closed on their own empty token, and sites B and D fail their own step with a named message
 failure_modes:
   - mode: read-only token deleted or renamed in Doppler prd_terraform while a job takes the legacy arm
     detection: the ::error verdict in the loader step, then the consumer's own fail-closed refusal; never a silent continuation on the read/write token
-    alert_route: notify-ops-email for apply workflows; standing infra-drift issue for the 12h drift run (observability layer 1, CI log, plus the existing workflow-failure email)
+    alert_route: notify-ops-email for apply workflows; standing infra-drift issue for the drift-check matrix (observability layer 6, workflow run log, plus the existing workflow-failure email). NOT covered, stated plainly (review 2026-10-22): the two orphan-sweep jobs in scheduled-terraform-drift.yml (`rung2-rehearsal-orphan-sweep`, `inngest-rehearsal-orphan-sweep`) have no notification path, so on the legacy arm they fail red with no issue and no email
   - mode: the secret stored as HCLOUD_TOKEN_READONLY is actually a read/write token (mis-minted)
     detection: not detectable by this change; the control is operator step O5's write-probe in infra-credential-tiers-8209.md (stated in the ADR-282 2026-10-16 addendum)
     alert_route: none by design; recorded as an accepted residual

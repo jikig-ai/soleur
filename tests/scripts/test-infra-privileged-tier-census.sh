@@ -2907,7 +2907,8 @@ if fixture_written g1-11-state-rm-only-no-environment "$MUTDIR/tree/.github/work
 fi
 
 # ── G1g: the read-only-first allowance must not be launderable by a comment ──────────
-# The allowance is 1-of-1 on the live tree (`workspaces-luks-cutover::cutover`), so anything
+# (The allowance itself was removed in #9927 item 8b; this mutant stays as the proof that a comment naming the safe form still
+# legalises nothing.) It was 1-of-1 on the live tree (`workspaces-luks-cutover::cutover`), so anything
 # that satisfies it cheaply removes the row's only teeth. `_first` is a raw scan, so a single
 # comment NAMING the read-only read above a bare privileged read used to make that read legal
 # -- and "mention the safe form in a comment" is what a reader does when a lint complains.
@@ -2939,7 +2940,8 @@ if mutate g1-g3-env-config-read "$MUTDIR/tree/.github/workflows/tiera.yml" 5 \
 fi
 
 # (#9927 item 8b) G1j: drop the `environment:` key from ONE loader job. The loader's legacy arm
-# exports no Hetzner token, so a loader job with no Tier-B environment silently loses it.
+# exports only the read-only Hetzner token (or nothing), and no read/write token exists in Tier A, so a loader job with no Tier-B
+# environment loses the privileged token silently. (G1j proves the environment is DECLARED; whether a job takes the Tier-B arm depends on the secret.)
 MUTDIR="$(fixcopy g1-j1)"; assert_fixture_dir "$MUTDIR"
 if mutate g1-j1-loader-job-without-environment "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 \
      '0,/^    environment: infra-privileged$/{/^    environment: infra-privileged$/d}'; then

@@ -469,7 +469,7 @@ jobs:
               refuse_why="the Hetzner token failed the shape check"
               if [[ -z "$HCLOUD_TOKEN" ]]; then
                 refuse_reason=readonly_absent
-                refuse_why="HCLOUD_TOKEN_READONLY is absent from prd_terraform and there is no read/write fallback (re-mint it by the O5 procedure in infra-credential-tiers-8209.md, the new one BEFORE deleting the old)"
+                refuse_why="HCLOUD_TOKEN_READONLY could not be read from prd_terraform (absent, OR the Tier-A DOPPLER_TOKEN was rejected, OR Doppler was unreachable: this read cannot tell them apart) and there is no read/write fallback (FIRST re-run once and check the DOPPLER_TOKEN repo secret and Doppler status; ONLY THEN re-mint by the O5 procedure in infra-credential-tiers-8209.md, the new one BEFORE deleting the old)"
               fi
               echo "workspaces-luks-cutover: HCLOUD_TOKEN unusable" >&2
               echo "SOLEUR_CREDENTIAL_REFUSED script=workspaces-luks-cutover reason=${refuse_reason}" >&2

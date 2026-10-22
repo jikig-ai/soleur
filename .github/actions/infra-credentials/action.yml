@@ -201,10 +201,12 @@ runs:
           # and NOTHING is exported -- three callers (apply-github-infra, apply-sentry-infra,
           # web-host-escrow-diagnose) never touch Hetzner, and every consumer that does fails
           # closed on its own empty token (CTO ruling F2b/F6, decision-challenges.md). "Nothing
-          # exported" is deliberate: exporting an empty `HCLOUD_TOKEN` would win under
-          # `--preserve-env` and break the Terraform steps of a legacy-arm job, which still
-          # need the read/write token from their own `doppler run` until O10 evicts it from
-          # Tier A. That residual is closed by O10, not here (row 8.8 measures the precedence).
+          # exported" is deliberate and harmless: no read/write Hetzner token exists in Tier A any
+          # more (O10 done, names-only listing 2026-10-20), so a legacy-arm job that WRITES to
+          # Hetzner depends solely on its Tier-B environment secret and cannot write from this arm
+          # at all; and an empty `HCLOUD_TOKEN` export would still win under `--preserve-env` and
+          # shadow a read/write value that is ever re-minted into Tier A (row 8.8 measures the
+          # precedence; CTO ruling 2026-10-22: the F6 flip clause fired, behaviour unchanged).
           #
           # `DOPPLER_TOKEN=` IS LOAD-BEARING. The step's `env:` binds only DP_INFRA/DP_LEGACY/
           # GIT_DATA_ROOT_STATE_MIGRATED, never DOPPLER_TOKEN, so without the inline prefix the

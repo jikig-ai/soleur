@@ -394,7 +394,6 @@ scripts/infra-config-red-alert	768	measured
 scripts/infra-credentials-loader	1742	measured
 scripts/infra-drift-autoclose	10115	measured
 scripts/inngest-cutover-flip-rollout-7761	8455	measured
-scripts/inngest-history-probe	1200	floor
 scripts/inngest-host-not-serving-7674	297	measured
 scripts/inngest-host-state	1982	measured
 scripts/inngest-liveness-classify	208	measured

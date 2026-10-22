@@ -5168,7 +5168,8 @@ s4_sweep_row "S4 row 19 luks Hetzner read (inline, data-destructive precondition
 S4_BASE=("${S4_LUKS_BASE[@]}" D_HCLOUD_TOKEN="$S4_HZ")
 s4_sweep r19fb "$S4/b-r19.sh" "$S4/real" s4_v_r19 "D_HCLOUD_TOKEN" ""
 s4_sweep_row "S4 row 19 luks Hetzner read (inline): an empty, unset or hostile read/write token beside an unset read-only name is refused the same way, with zero requests and zero ssh invocations (the read/write name is never read)"
-# CROSS (ADR-241 O10): the fallback to the read/write token happens ONLY when the read-only token is EMPTY or unreadable, never because it is MALFORMED. A refused read-only token
+# CROSS (ADR-241 O10). NOTE, 2026-10-22: since #9927 item 8b the luks lookup, the loader's legacy arm and the PR-plan step no longer fall back to the
+# read/write token at all; the rows below keep proving the stronger claim for any fallback that is ever reintroduced. The fallback happens ONLY when the read-only token is EMPTY or unreadable, never because it is MALFORMED. A refused read-only token
 # beside a VALID read/write token must still ABORT (no request, no ssh), or a refused read-only credential would be silently upgraded to the write-capable one on a data-destructive
 # path (the two sweeps above each leave the other name unset, so an `_bearer_ok "$RO" || HCLOUD_TOKEN=$RW` implementation is green in both).
 S4_X19_BAD=""

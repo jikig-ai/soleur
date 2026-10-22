@@ -721,6 +721,20 @@ else
   no "the Cutover summary step body was not extracted — its rollback reporting is unverified"
 fi
 
+# LATE dispatch re-validation (the launder defence). The opening self-test is a point-in-time sample: a `no() { pass=$((pass + 1)); ... }`
+# inserted after it routes every later failure into the PASS counter, the floor below still holds (it counts passes), and the suite prints
+# `N passed, 0 failed` over a regressed workflow. Re-drive both helpers here, after every row; report by printf + exit, never through ok()/no().
+_late_p="$pass"; _late_f="$fail"
+ok "late dispatch re-validation (pass arm)" >/dev/null
+no "late dispatch re-validation (fail arm)" >/dev/null
+if [[ "$pass" -ne $((_late_p + 1)) || "$fail" -ne $((_late_f + 1)) ]]; then
+  printf 'FATAL: LATE DISPATCH RE-VALIDATION FAILED: pass %s->%s (want +1), fail %s->%s (want +1); the verdict helpers were neutered or laundered after the opening self-test\n' \
+    "$_late_p" "$pass" "$_late_f" "$fail"
+  exit 2
+fi
+pass=$((pass - 1))
+fail=$((fail - 1))
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 
 # NON-DEGENERACY FLOOR — see the sibling rationale in workspaces-luks-staging.test.sh. A python

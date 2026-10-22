@@ -2038,34 +2038,6 @@ else fail "R6b ${_r6rw} read(s) of the bare read/write HCLOUD_TOKEN remain in th
 if [[ "$_r6prose" -eq 0 ]]; then pass "R6c the filer prose no longer says the listing token is the read/write one"
 else fail "R6c ${_r6prose} line(s) still describe the listing token as read/write"; fi
 
-# R7 (#9927 item 8b) -- the consumers of the loader's legacy-arm absence. The legacy arm now exports NOTHING
-# when the read-only token is missing, so a consumer that tests `[[ -z "$HCLOUD_TOKEN" ]]` under `set -u`
-# dies with "unbound variable" at the guard instead of reaching its named abort. All ten such tests in
-# apply-web-platform-infra.yml sit in steps that run under `set -u` (a YAML walk, 2026-10-20), so each
-# reads the name as `${HCLOUD_TOKEN:-}`. Static on purpose: the property is the spelling of one test
-# expression in ten long bodies. The mutant re-bares ONE guard and the predicate must see it.
-echo "R7: the empty-token guards in apply-web-platform-infra.yml tolerate an unset HCLOUD_TOKEN under set -u"
-APPLY_WF="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
-consumer_guards_ok() { # <workflow.yml> -- 0 only when no bare guard remains and at least ten guarded ones exist
-  local bare guarded
-  bare="$(grep -cF '[[ -z "$HCLOUD_TOKEN" ]]' "$1" || true)"
-  guarded="$(grep -cF '[[ -z "${HCLOUD_TOKEN:-}" ]]' "$1" || true)"
-  [[ "${bare:-1}" -eq 0 && "${guarded:-0}" -ge 10 ]]
-}
-if consumer_guards_ok "$APPLY_WF"; then pass "R7a every empty-token guard tolerates an unset HCLOUD_TOKEN under set -u"
-else fail "R7a a bare [[ -z \"\$HCLOUD_TOKEN\" ]] remains (it aborts with 'unbound variable' under set -u instead of its named abort)"; fi
-sed -E '0,/\[\[ -z "\$\{HCLOUD_TOKEN:-\}" \]\]/s//[[ -z "$HCLOUD_TOKEN" ]]/' "$APPLY_WF" > "$TMP/apply.mut.yml"
-if ! cmp -s "$APPLY_WF" "$TMP/apply.mut.yml" && ! consumer_guards_ok "$TMP/apply.mut.yml"; then
-  pass "R7b mutant: re-baring ONE guard makes the predicate fail (the mutation landed and was seen)"
-else fail "R7b mutant: the mutation did not land or the predicate stayed green"; fi
-if ( unset HCLOUD_TOKEN; bash -c 'set -u; [[ -z "$HCLOUD_TOKEN" ]]' ) >/dev/null 2>&1; then
-  fail "R7c control: the bare guard did not abort under set -u (the row's premise is false)"
-else
-  ( unset HCLOUD_TOKEN; bash -c 'set -u; [[ -z "${HCLOUD_TOKEN:-}" ]]' ) >/dev/null 2>&1 \
-    && pass "R7c control: under set -u the bare guard aborts and the defaulted guard does not" \
-    || fail "R7c control: the defaulted guard failed on an unset variable"
-fi
-
 # R5 — the mutation table runs in-process (python, one YAML load); each row injects one spelling into a
 # copy of the workflow. A red row must be flagged under its OWN unit; a green row must produce no
 # finding. The control rows prove the verdict rule can fail in both directions and the table is intact.
@@ -2109,9 +2081,25 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
 # Then 168 -> 172 with R6a-c (the listing blocks load the read-only Hetzner token, no read/write fallback, #9927 item 8b) and the g-doppler-ro
-# classifier row, then 172 -> 175 with R7a-c (the empty-token guards tolerate an unset HCLOUD_TOKEN); 175 is the REALIZED `PASS + FAIL`.
-if [[ "$((PASS + FAIL))" -lt 175 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 175." >&2
+# classifier row, 172 is the REALIZED `PASS + FAIL`. (R7a-c, three rows pinning the spelling of ten empty-token guards, were added and then removed in the same
+# PR: every one of those ten steps pre-binds HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" so the guard could never hit `unbound variable`; CTO ruling 2026-10-22.)
+#
+# LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
+# `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
+# (PASS + FAIL is unchanged), and the suite prints `N passed, 0 failed` over a broken workflow. Reported with printf + exit, never
+# through the helpers under test; the two synthetic verdicts are undone so the floor counts real rows only.
+_LATE_P="$PASS"; _LATE_F="$FAIL"
+pass "late dispatch re-validation: pass() still increments (EXPECTED)" >/dev/null
+fail "late dispatch re-validation: fail() still records (EXPECTED, not a real failure)" >/dev/null
+if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
+  printf 'LATE DISPATCH RE-VALIDATION FAILED: PASS %s->%s (want +1), FAIL %s->%s (want +1). The assertion helpers were neutered or laundered.\n' \
+    "$_LATE_P" "$PASS" "$_LATE_F" "$FAIL" >&2
+  exit 2
+fi
+PASS=$((PASS - 1))
+FAIL=$((FAIL - 1))
+if [[ "$((PASS + FAIL))" -lt 172 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 172." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

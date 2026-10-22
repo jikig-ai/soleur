@@ -53,3 +53,8 @@ Read-only guard for every measurement task: names and metadata only; never print
 - 4.4 Added-lines leak tripwire over the whole diff
 - 4.5 PR body: MEASURED / NOT MEASURED table with dates, caller table, rulings, deferred issues, no-write statement, `Ref #9927` and `Ref #10112`
 - 4.6 Review seats: security-sentinel, user-impact-reviewer, observability-coverage-reviewer, test-design-reviewer
+
+## Review outcome, 2026-10-22
+
+- The C1 probe script and its suite (3.2) were built, run once (3.4, round 1) and then REMOVED from the PR on a CTO ruling: the finding is recorded, and a committed path to an account-wide token is the less safe state. The registrations in `scripts/test-all.sh`, `suite-durations.tsv`, `suite-shard-legs.tsv` and the lint highwater (25 back to 24) were reverted with it. Round 2 is an owner-gated, separate change.
+- The ten `${HCLOUD_TOKEN:-}` guard edits and fence rows R7a-c (2.x) were reverted: every one of the ten steps already pre-binds the variable.

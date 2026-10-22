@@ -2140,7 +2140,7 @@ jobs:
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
           fi
@@ -2326,7 +2326,7 @@ jobs:
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
           fi
@@ -2575,7 +2575,7 @@ jobs:
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
           fi
@@ -2767,7 +2767,7 @@ jobs:
         run: |
           set -euo pipefail
           HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::registry-luks-recut ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot run the live existence probe. Fail-closed: an unreadable signal is not evidence of absence."
             exit 1
           fi
@@ -2882,7 +2882,7 @@ jobs:
         run: |
           set -euo pipefail
           HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::warning::pre-rehearsal stock probe SKIPPED: HCLOUD_TOKEN unreadable. stock_preflight_gate still applies later."
             exit 0
           fi
@@ -3251,7 +3251,7 @@ jobs:
           # Actions (unlike secrets.*); this one carries destroy authority over the whole fleet.
           HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::registry-luks-recut ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot run the live existence probe or PROVE stock. Fail-closed."
             exit 1
           fi
@@ -4076,7 +4076,7 @@ jobs:
           # before any later step can echo it. This token carries destroy authority over the
           # whole prod fleet. Convention: cla-evidence.yml:63, apply-github-infra.yml:134.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability. NO [ack-destroy] bypass."
             exit 1
           fi
@@ -5019,7 +5019,7 @@ jobs:
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability."
             exit 1
           fi
@@ -5442,7 +5442,7 @@ jobs:
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability, and this operation destroys before it creates. NO [ack-destroy] bypass."
             exit 1
           fi
@@ -5954,7 +5954,7 @@ jobs:
           # Doppler-fetched secrets are NOT auto-masked by Actions (unlike secrets.*), and
           # this token carries destroy authority over the whole prod fleet.
           [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
             echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability."
             exit 1
           fi
