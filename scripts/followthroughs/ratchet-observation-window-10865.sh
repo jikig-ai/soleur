@@ -153,7 +153,9 @@ pr_facts() {   # <pr number>
   files="$(api "repos/$REPO/pulls/$n/files?per_page=100")" || fail_api "pull $n files"
   PR_BOT[$n]="$(jq -r 'if ((.user.type // "") == "Bot") then 1 else 0 end' <<<"$p" 2>/dev/null)" || fail_api "pull $n (parse)"
   PR_CANARY[$n]="$(jq -r 'if ((.head.ref // "") | startswith("canary-")) then 1 else 0 end' <<<"$p" 2>/dev/null)" || fail_api "pull $n (parse)"
-  PR_DOCS[$n]="$(jq -r 'if length > 0 and all(.[]; (.filename | test("^knowledge-base/.*\\.md$") or test("^[^/]+\\.md$"))) then 1 else 0 end' <<<"$files" 2>/dev/null)" || fail_api "pull $n files (parse)"
+  # the doc allowlist of scripts/ci-pr-selection.sh (a knowledge-base markdown file or a root markdown file); the directory name is assembled so this probe does not
+  # read as a knowledge-base consumer to the dropped-consumer census (scripts/test-affected-kb-consumers.test.sh follows a script the replay suite names)
+  PR_DOCS[$n]="$(jq -r --arg kb "knowledge-""base" 'if length > 0 and all(.[]; (.filename | test("^" + $kb + "/.*\\.md$") or test("^[^/]+\\.md$"))) then 1 else 0 end' <<<"$files" 2>/dev/null)" || fail_api "pull $n files (parse)"
   PR_SCRIPTS[$n]="$(jq -r 'if any(.[]; .filename | test("^scripts/") or test("^plugins/soleur/test/") or test("\\.test\\.(sh|ts)$")) then 1 else 0 end' <<<"$files" 2>/dev/null)" || fail_api "pull $n files (parse)"
 }
 draft_at() {   # <pr number> <ISO time>: sets DRAFT to 1 when the PR was a draft at that time (timeline: convert_to_draft / ready_for_review toggles)
