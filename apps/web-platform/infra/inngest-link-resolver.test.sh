@@ -208,6 +208,7 @@ case "$1" in
       twicenoca) printf 'INNGEST_BASE_URL=https://10.0.1.40:8443\nINNGEST_BASE_URL=http://10.0.1.40:8288\n' ;;
       manyca) printf 'INNGEST_BASE_URL=https://10.0.1.40:8443\n'; for _i in $(seq 1 150); do printf 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem\n'; done ;;
       manyhttps) for _i in $(seq 1 150); do printf 'INNGEST_BASE_URL=https://10.0.1.40:8443\n'; done; printf 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem\n' ;;
+      tenca) printf 'INNGEST_BASE_URL=https://10.0.1.40:8443\n'; for _i in $(seq 1 12); do printf 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem\n'; done ;;
       many) for _i in $(seq 1 150); do printf 'INNGEST_BASE_URL=http://10.0.1.40:8288\n'; done; printf 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem\n' ;;
       none) exit 1 ;;
     esac
@@ -892,7 +893,7 @@ row_E8_canary_counts_only_the_exact_names() {
 row_E3_canary_inspect_must_show_https() {
   local t m c
   # <stub inspect mode>:<the cause the event must name>; every inspect failure carries the inspect-specific deploy-state reason
-  for t in http:url_value noca:ca_count twice:url_count duphttp:url_count dupca:ca_count badca:ca_value none:inspect_failed empty:inspect_failed many:url_count urlsuffix:url_value casuffix:ca_value httpbadca:url_value httpnoca:url_value twicenoca:url_count manyca:ca_count manyhttps:url_count; do
+  for t in http:url_value noca:ca_count twice:url_count duphttp:url_count dupca:ca_count badca:ca_value none:inspect_failed empty:inspect_failed many:url_count urlsuffix:url_value casuffix:ca_value httpbadca:url_value httpnoca:url_value twicenoca:url_count manyca:ca_count manyhttps:url_count tenca:ca_count; do
     m="${t%%:*}"; c="${t#*:}"
     FX_INSPECT="$m" canary "$1" "$ROW_ID"
     canary_fails canary_inngest_link_inspect_failed || { WHY="inspect=$m: ${WHY:-}"; return 1; }
@@ -952,7 +953,8 @@ class=forged level=info'; do
            'httpnoca|cause=url_value url_lines=1 url_https=0 ca_lines=0 ca_ok=0' \
            'twicenoca|cause=url_count url_lines=2 url_https=1 ca_lines=0 ca_ok=0' \
            'manyca|cause=ca_count url_lines=1 url_https=1 ca_lines=99 ca_ok=99' \
-           'manyhttps|cause=url_count url_lines=99 url_https=99 ca_lines=1 ca_ok=1'; do
+           'manyhttps|cause=url_count url_lines=99 url_https=99 ca_lines=1 ca_ok=1' \
+           'tenca|cause=ca_count url_lines=1 url_https=1 ca_lines=12 ca_ok=12'; do
     FX_INSPECT="${t%%|*}" canary "$1" "$ROW_ID"
     want="${t#*|}"
     need "inspect=${t%%|*}: the event does not read 'check=inspect $want': $(grep canary_failed "$RUN/logger.log")" "$(grep -qF -- "check=inspect $want" "$RUN/logger.log" && grep canary_failed "$RUN/logger.log" | grep -q -- "check=inspect $want\$" && echo 0 || echo 1)" || return 1
@@ -1026,9 +1028,9 @@ scrub_failed() { # <input> <orig copy> <stage>: rc 1, the fixed reason, the stag
 row_L1_scrub_removes_pinned_names_and_keeps_the_rest() {
   local in="$WORK/scrubin/L1" want="$WORK/scrubin/L1.want"
   # nine lines name a pinned variable (plain, leading space, space before '=', bare name, both names, behind a no-break space, behind a BOM with a CR);
-  # thirteen others must survive byte for byte: lookalikes (an underscore, letter, dot or dash neighbour: all valid Docker name bytes), other INNGEST_ keys, a CRLF line, a non-UTF-8 byte, a NUL byte
-  printf '%b' '\xef\xbb\xbfINNGEST_BASE_URL=http://bom\r\nKEY=value\nINNGEST_BASE_URL=http://plain\n INNGEST_BASE_URL=http://lead\nINNGEST_BASE_URL =sp\nINNGEST_BASE_URL\nNODE_EXTRA_CA_CERTS=/tmp/a\n  NODE_EXTRA_CA_CERTS=/tmp/b\nNODE_EXTRA_CA_CERTS\n\xc2\xa0INNGEST_BASE_URL=http://nbsp\nINNGEST_LINK_TLS=1\nINNGEST_TLS_CA=QUJD\nINNGEST_SIGNING_KEY=signkey-prod-aabb\nINNGEST_EVENT_KEY=ek\nINNGEST_BASE_URL_EXTRA=keep\nNODE_EXTRA_CA_CERTS_X=keep\nXINNGEST_BASE_URL=keep\nINNGEST_BASE_URL.bak=keep\nINNGEST_BASE_URL-X=keep\ncrlf=keep\r\nbad=\xff\xfekeep\nnul=a\0bkeep\n' > "$in"
-  printf '%b' 'KEY=value\nINNGEST_LINK_TLS=1\nINNGEST_TLS_CA=QUJD\nINNGEST_SIGNING_KEY=signkey-prod-aabb\nINNGEST_EVENT_KEY=ek\nINNGEST_BASE_URL_EXTRA=keep\nNODE_EXTRA_CA_CERTS_X=keep\nXINNGEST_BASE_URL=keep\nINNGEST_BASE_URL.bak=keep\nINNGEST_BASE_URL-X=keep\ncrlf=keep\r\nbad=\xff\xfekeep\nnul=a\0bkeep\n' > "$want"
+  # fourteen others must survive byte for byte: lookalikes (an underscore, letter, dot or dash neighbour: all valid Docker name bytes), other INNGEST_ keys, a CRLF line, a non-UTF-8 byte, a NUL byte, a NUL before a pinned name
+  printf '%b' '\xef\xbb\xbfINNGEST_BASE_URL=http://bom\r\nKEY=value\nINNGEST_BASE_URL=http://plain\n INNGEST_BASE_URL=http://lead\nINNGEST_BASE_URL =sp\nINNGEST_BASE_URL\nNODE_EXTRA_CA_CERTS=/tmp/a\n  NODE_EXTRA_CA_CERTS=/tmp/b\nNODE_EXTRA_CA_CERTS\n\xc2\xa0INNGEST_BASE_URL=http://nbsp\nINNGEST_LINK_TLS=1\nINNGEST_TLS_CA=QUJD\nINNGEST_SIGNING_KEY=signkey-prod-aabb\nINNGEST_EVENT_KEY=ek\nINNGEST_BASE_URL_EXTRA=keep\nNODE_EXTRA_CA_CERTS_X=keep\nXINNGEST_BASE_URL=keep\nINNGEST_BASE_URL.bak=keep\nINNGEST_BASE_URL-X=keep\ncrlf=keep\r\nbad=\xff\xfekeep\nnul=a\0bkeep\nnul2=a\0INNGEST_BASE_URL=keep\n' > "$in"
+  printf '%b' 'KEY=value\nINNGEST_LINK_TLS=1\nINNGEST_TLS_CA=QUJD\nINNGEST_SIGNING_KEY=signkey-prod-aabb\nINNGEST_EVENT_KEY=ek\nINNGEST_BASE_URL_EXTRA=keep\nNODE_EXTRA_CA_CERTS_X=keep\nXINNGEST_BASE_URL=keep\nINNGEST_BASE_URL.bak=keep\nINNGEST_BASE_URL-X=keep\ncrlf=keep\r\nbad=\xff\xfekeep\nnul=a\0bkeep\nnul2=a\0INNGEST_BASE_URL=keep\n' > "$want"
   chmod 0600 "$in"
   scrub "$1" "$ROW_ID" "$in"
   need "rc=$(val rc), want 0 (reason $(val reason))" "$([ "$(val rc)" = 0 ] && echo 0 || echo 1)" || return 1
@@ -1109,9 +1111,9 @@ row_L7_scrub_holds_under_a_utf8_locale() {
 }
 row_L8_scrub_names_match_the_tuple_census_and_the_canary_counts() {
   local re req cnt
-  re="$(grep -m1 '^INNGEST_LINK_SCRUB_RE=' "$CI_DEPLOY" | grep -oE '\(INNGEST[A-Z_|]*\)|\([A-Z_]+\|[A-Z_|]+\)' | head -1 | tr -d '()' | tr '|' '\n' | sort | paste -sd,)"
+  re="$(grep -m1 '^INNGEST_LINK_SCRUB_RE=' "$1" | grep -oE '\(INNGEST[A-Z_|]*\)|\([A-Z_]+\|[A-Z_|]+\)' | head -1 | tr -d '()' | tr '|' '\n' | sort | paste -sd,)"
   req="$(grep -m1 '^REQUIRED_ENV' "$SCRIPT_DIR/lib/docker-run-tuple.py" | grep -oE '"[A-Z_]+"' | tr -d '"' | sort | paste -sd,)"
-  cnt="$(sed -n '/^inngest_link_canary_check()/,/^}/p' "$CI_DEPLOY" | grep -oE "grep -c '\^[A-Z_]+=" | sed -E "s/grep -c '\^//; s/=\$//" | sort | paste -sd,)"
+  cnt="$(sed -n '/^inngest_link_canary_check()/,/^}/p' "$1" | grep -oE "grep -c '\^[A-Z_]+=" | sed -E "s/grep -c '\^//; s/=\$//" | sort | paste -sd,)"
   need "the scrub regex names [$re] but REQUIRED_ENV in docker-run-tuple.py names [$req]" "$([ -n "$re" ] && [ "$re" = "$req" ] && echo 0 || echo 1)" || return 1
   need "the scrub regex names [$re] but the canary's inspect counts name [$cnt]" "$([ "$re" = "$cnt" ] && echo 0 || echo 1)" || return 1
 }
@@ -1177,7 +1179,7 @@ wire_ok() { # <desc> <a> <b> : a < b, both non-empty
   if [ -n "$2" ] && [ -n "$3" ] && [ "$2" -lt "$3" ]; then ok "wiring: $1 ($2 < $3)"; else bad "wiring: $1 (got '$2' then '$3')"; fi
 }
 wire_ok "the resolver runs before the canary docker run" "$L_RES" "$L_CANARY_RUN"
-# L7: the env-file scrub runs once, after the resolver and before the FIRST docker run (so both app starts read the scrubbed file)
+# wiring: the env-file scrub runs once, after the resolver and before the FIRST docker run (so both app starts read the scrubbed file)
 wire_ok "the env-file scrub runs after the resolver" "$L_RES" "$L_SCRUB"
 wire_ok "the env-file scrub runs before the canary docker run" "$L_SCRUB" "$L_CANARY_RUN"
 ROWS=$((ROWS + 1))
@@ -1547,7 +1549,7 @@ kill_mut M20b-url-count-and-url-value-swapped "E3_canary_inspect_must_show_https
   elif [[ "$https_n" != 1 ]]; then why="inspect"; cause="url_value"' \
   '  elif [[ "$https_n" != 1 ]]; then why="inspect"; cause="url_value"
   elif [[ "$url_n" != 1 ]]; then why="inspect"; cause="url_count"'
-kill_mut M20c-ca-count-measured-by-exact-value "E3_canary_inspect_must_show_https E7_canary_event_carries_check_and_cause" \
+kill_mut M20c-ca-count-measured-by-exact-value "E3_canary_inspect_must_show_https E7_canary_event_carries_check_and_cause L8_scrub_names_match_the_tuple_census_and_the_canary_counts" \
   "ca_n=\"\$(printf '%s\\n' \"\$envs\" | grep -c '^NODE_EXTRA_CA_CERTS=')\"" \
   "ca_n=\"\$(printf '%s\\n' \"\$envs\" | grep -cxF 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem')\""
 kill_mut M20d-url-last-wins "E3_canary_inspect_must_show_https" \
@@ -1573,10 +1575,12 @@ kill_mut M20k-ca-checks-before-the-url-value "E7_canary_event_carries_check_and_
   '  elif [[ "$ca_n" != 1 ]]; then why="inspect"; cause="ca_count"
   elif [[ "$https_n" != 1 ]]; then why="inspect"; cause="url_value"'
 kill_mut M20l-count-clamp-moved-to-three-digits "E7_canary_event_carries_check_and_cause" \
-  'if [[ "${#1}" -gt 2 ]]; then printf '"'"'99'"'"'' 'if [[ "${#1}" -gt 3 ]]; then printf '"'"'99'"'"''
+  'if [[ "${#s}" -gt 2 ]]; then printf '"'"'99'"'"'' 'if [[ "${#s}" -gt 3 ]]; then printf '"'"'99'"'"''
+kill_mut M20m-count-clamp-moved-to-one-digit "E7_canary_event_carries_check_and_cause" \
+  'if [[ "${#s}" -gt 2 ]]; then printf '"'"'99'"'"'' 'if [[ "${#s}" -gt 1 ]]; then printf '"'"'99'"'"''
 
 # the env-file scrub (#10136): each edit below must redden the named rows
-kill_mut M21a-second-pinned-name-dropped-from-the-regex "L1_scrub_removes_pinned_names_and_keeps_the_rest" \
+kill_mut M21a-second-pinned-name-dropped-from-the-regex "L1_scrub_removes_pinned_names_and_keeps_the_rest L8_scrub_names_match_the_tuple_census_and_the_canary_counts" \
   '(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)' '(INNGEST_BASE_URL)'
 kill_mut M21b-bare-name-and-padded-name-not-matched "L1_scrub_removes_pinned_names_and_keeps_the_rest" \
   '([^A-Za-z0-9_.-]|$)' '(=)'
@@ -1592,6 +1596,8 @@ kill_mut M21g-regex-terminator-dropped "L1_scrub_removes_pinned_names_and_keeps_
   "(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)([^A-Za-z0-9_.-]|\$)'" "(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)'"
 kill_mut M21h-dot-and-dash-treated-as-terminators "L1_scrub_removes_pinned_names_and_keeps_the_rest" \
   '([^A-Za-z0-9_.-]|$)' '([^A-Za-z0-9_]|$)'
+kill_mut M21j-no-binary-as-text-on-the-first-count "L1_scrub_removes_pinned_names_and_keeps_the_rest" \
+  'n="$(LC_ALL=C grep -a -c -E' 'n="$(LC_ALL=C grep -c -E'
 kill_mut M21i-no-c-locale-on-the-write "L7_scrub_holds_under_a_utf8_locale" \
   'LC_ALL=C grep -a -v -E' 'grep -a -v -E'
 
@@ -1602,7 +1608,7 @@ kill_mut M21i-no-c-locale-on-the-write "L7_scrub_holds_under_a_utf8_locale" \
 printf '\n=== inngest-link-resolver: %d passed, %d failed, %d skipped (%d rows) ===\n' "$PASS" "$FAIL" "$SKIP" "$ROWS"
 # The anti-vacuity floor comes FIRST: scripts/guard-vacuity-floor.test.sh neuters every counter and runs the first floor it
 # finds, which must be this one (the accounting identity below holds trivially at zero).
-MIN_ROWS=201
+MIN_ROWS=203
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

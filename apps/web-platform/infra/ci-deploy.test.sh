@@ -3512,7 +3512,8 @@ else
   IL_SNAP_EXTRA="INNGEST_BASE_URL=http://10.0.1.99:8288" il_deploy t8b "" "$IL_GOOD_B64" MOCK_SCRUB_MKTEMP_FAIL=1
   IL_OK=1
   [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 ]] || IL_OK=0
-  grep -qF 'class=env_scrub_failed level=error stage=write' "$IL_LOG" || IL_OK=0
+  grep -qE 'class=env_scrub_failed level=error stage=write$' "$IL_LOG" || IL_OK=0
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" != inngest_env_scrub_failed ]] || IL_OK=0
   # the env-file reached the containers unchanged: the snapshot's own line is still there (the -e pair follows it)
   grep -qxF 'INNGEST_BASE_URL=http://10.0.1.99:8288' "$IL_RUNLOG.eff1" || IL_OK=0
   if [[ "$IL_OK" -eq 1 ]]; then

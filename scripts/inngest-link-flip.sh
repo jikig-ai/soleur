@@ -259,7 +259,7 @@ flip_resolved_query() {
 
 # flip_read_line <state=... scheme=...>: the sentence that closes the web-2 gap.
 flip_read_line() {
-  printf 'TO CLOSE THE GAP read the ci-deploy resolved row of EACH host (expect one row from soleur-web-platform = web-1 AND one from soleur-web-2, each with %s): %s' "$1" "$(flip_resolved_query "${FLIP_T0:-0}")"
+  printf 'TO CLOSE THE GAP read the ci-deploy resolved row of EACH host (expect one row from soleur-web-platform = web-1 AND one from soleur-web-2, each with %s), then the class=canary_ok row of each host since T0 (a resolved row alone does not prove the canary or the swap; see the per-host flip read in inngest-server.md): %s' "$1" "$(flip_resolved_query "${FLIP_T0:-0}")"
 }
 
 # flip_emit_results: t=, flag_run= and verdict= to $GITHUB_OUTPUT and a block to $GITHUB_STEP_SUMMARY. Never fails.

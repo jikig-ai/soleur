@@ -152,13 +152,13 @@ quoted in the Consequences sentence "The owner's go is procedural" is superseded
 
 ## Addendum (2026-10-22, the first flip attempt)
 
-The first `flip` (workflow run 39817708732) failed at the canary's `inspect` check with `cause=none` on web-1. The revert (run 39817975968)
-redeployed both hosts; that run's own verdict did not verify web-2's canary and swap or the scheme the running containers resolved, and both
+The first `flip` (workflow run 39817708732) failed at the canary's `inspect` check with `cause=none` on web-1. The flip's revert step
+(its flag write ran as apply run 39817975968) redeployed both hosts; its own verdict did not verify web-2's canary and swap or the scheme the running containers resolved, and both
 hosts' `class=resolved ... state=http_default scheme=http` rows were read afterwards.
 
 **What is established and what is not.** Reproduced locally (Docker 29.9, `docker-evidence.md`): `docker run` keeps an `--env-file` entry **and** a
 `-e` entry for the same key, `docker inspect` lists both, and the `-e` value wins when the process starts. The canary requires exactly one
-`INNGEST_BASE_URL=` and one `NODE_EXTRA_CA_CERTS=` line, so a Doppler snapshot that pins `INNGEST_BASE_URL` fails it exactly as observed. The
+`INNGEST_BASE_URL=` and one `NODE_EXTRA_CA_CERTS=` line, so a Doppler snapshot that pins `INNGEST_BASE_URL` would fail it, which is consistent with the failed run (`cause=none`, no count recorded) and not proven by it. The
 old check printed no counts (`cause=none`), so no production run has measured the line count, and the Doppler key set was never read: the pin is
 the **most likely** cause, not an observed one. The first measurement is the next flip's `check=inspect cause=<token> url_lines= ...` row, and
 the `-e`-wins behaviour was measured on one Docker version (the hosts' own is unknown). The mock docker reported the `-e` pairs only, so no
@@ -178,5 +178,5 @@ resolver-suite row pins that they agree.
 
 Accepted residuals: the first-boot tuple in `cloud-init.yml` keeps its duplicate (no inspect check runs there; the next deploy replaces it), the
 prod container is not inspected (the canary's proof transfers to it only for these two names, through the shared env-file), the image's own `ENV`
-was not measured, a pinned `NODE_EXTRA_CA_CERTS` never reaches the scrub (the key overlay refuses it first), and the overlay's `grep` weakness
+was not measured, a plainly spelled `NODE_EXTRA_CA_CERTS` never reaches the scrub (the key overlay refuses it first; other spellings can), and the overlay's `grep` weakness
 is tracked separately (#10855).

@@ -10,5 +10,6 @@ Not CI and not production. A green mock is a proxy; this is the real daemon's vi
 | `INNGEST_BASE_URL =padded` (space before `=`) | Docker refuses the env-file: `variable 'INNGEST_BASE_URL ' contains whitespaces` |
 | a no-break space (U+00A0) before the name | Docker accepts it as `INNGEST_BASE_URL` (1 entry): the scrub's name-prefix class must tolerate it |
 | a UTF-8 BOM before the name on the first line | Docker accepts it as `INNGEST_BASE_URL` (1 entry): same |
+| `INNGEST_BASE_URL.bak`, `INNGEST_BASE_URL-X`, `NODE_EXTRA_CA_CERTS.bak` (review round 2, `docker create --env-file` plus `inspect`) | each is its own variable in `Config.Env`, distinct from `INNGEST_BASE_URL`: the scrub must keep them |
 
 Limits: the daemon here is 29.9.1 (the client is 29.9.2), the production hosts run their own version; the image's own `ENV` was not exercised; the prod container is never inspected by the deploy.
