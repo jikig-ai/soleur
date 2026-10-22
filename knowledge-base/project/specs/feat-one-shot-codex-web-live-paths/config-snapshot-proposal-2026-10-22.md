@@ -77,7 +77,7 @@ The manifest pins:
 - Exact request plan, descriptor, all budgets and expected output directory
   device/inode/UID; no URL capability is persisted.
 - Fixed leaves `snapshot-manifest.json`, `snapshot-marker.json`,
-  `config.bin`, `snapshot-receipt.json`, optional `field-report.json` and
+  `config.bin`, `snapshot-receipt.json`, `snapshot-review.json`, optional `field-report.json` and
   `snapshot-cleanup-receipt.json` reserved for the later cleanup entry point.
   Unknown leaves cause refusal and prevent directory removal.
 - Integer UTC `prepared_at` and `expires_at`, with
@@ -91,6 +91,21 @@ group/world permissions. Regular payload/report/receipt files require mode
 `0600`, expected owner, link count one and a stable descriptor/name identity.
 Opening an existing artifact for review is read-only. No payload is executable,
 added to Git, printed, passed through argv/environment, sourced or uploaded.
+
+The fresh mode-0700 action directory is exclusively controlled by this stage.
+Every cooperating acquisition, inspection, recovery and cleanup entry point
+obtains a nonblocking exclusive advisory lock on the pinned directory descriptor
+before inspecting or modifying artifacts, retains it through final verification/
+fsync, and refuses contention or unavailable locking. Independent review holds
+the same lock while reading. No lock-file leaf is introduced.
+
+Mode 0700 and advisory locking do not defend against an uncooperative same-UID
+process, root, or modification of the executing program. Such concurrent mutation
+is outside this protocol's threat model. Ownership/inode checks followed by
+unlink are not an atomic conditional deletion. The protocol makes no guarantee
+against substitution between those operations by an excluded writer. Within
+the exclusivity assumption, detected substitutions and ambiguous ownership
+refuse modification; tests must not claim resistance to the excluded race.
 
 # Acquisition and joint publication
 
@@ -158,6 +173,28 @@ with both descriptor and receipt, valid schema on those same bytes and an
 unexpired retention window. Do not print its contents during that verification.
 Record review in a separate sanitized artifact; never rewrite the receipt.
 
+The fixed private `snapshot-review.json` has a closed
+`config-snapshot-review-v1` schema. It contains only an
+`accepted-for-inert-inspection` state; exact manifest/expanded-command/marker/
+receipt hashes and payload descriptor/identity/digest; the original execution
+exit code (required zero) and hash of the separately copied tool-result record;
+engineering/security consistency verdicts (both required pass); prepared,
+reviewed and expiry timestamps; `observer_kind = local-unattested`; the same
+constant-false authority map; and its canonical self-hash. Its execution-record
+hash must match a supplied bounded private closed tool-result record containing
+the exact command hash, observed exit, fixed stdout/stderr hashes and tool-result
+reference. Missing, unknown, nonzero, contradictory, mismatched or stale inputs
+refuse inspection even when the receipt/payload pair is complete.
+
+Only the coordinating agent writes this exclusive mode-0600 review input, after
+observing the original result and obtaining both independent evidence passes;
+acquisition never derives it from its own receipt. Validation proves supplied
+local consistency, not authenticity of the tool result, reviewer identity or
+independence. A forged self-consistent local input remains possible under the
+unattested model and grants no profile or operational authority. The pure parser
+may be tested on synthesized bytes without this gate; the artifact inspection
+entry point requires the gate.
+
 Independent reviewers may verify consistency, but must distinguish that from
 witnessing the original execution. A receipt/payload pair fabricated from supplied
 JSON is not a network observation. Acceptance establishes a bounded retained
@@ -171,8 +208,9 @@ automatic follow-on. Preserve the marker even if every other output is absent.
 
 For ordinary failures after payload creation, close all owned descriptors and
 attempt to remove only newly created payload/report/partial receipt leaves whose
-recorded device/inode still match and whose link count is one. Never unlink a
-replacement or foreign file. Preserve any already valid complete receipt as
+recorded device/inode still match and whose link count is one, under the stated
+exclusive-writer assumption. Detected replacements or foreign leaves are
+preserved with refusal. Preserve any already valid complete receipt as
 historical evidence; if removing its failed payload, record an incomplete pair
 in separate failure review, never claim success. Fixed `cleanup` failure and
 the observed remaining leaf census distinguish uncertain cleanup from absence.
@@ -192,8 +230,18 @@ writable. Preserve evidence for investigation; do not broaden deletion.
 
 # Private field inspection and expiry cleanup
 
-After joint acceptance, the inspection entry point reopens the exact payload
-read-only and revalidates every binding and schema. A pure inspection function
+Acquisition and joint evidence review require the original fresh source, CA and
+input checks. Subsequent inert inspection verifies the accepted historical
+manifest/marker/receipt/payload bindings, unexpired retention and manifest-bound
+inspector implementation; it does not require ambient CA or repository HEAD to
+remain unchanged solely because an evidence/docs commit occurred. Verify the
+historical committed closure and executing inspector bytes; a changed inspector
+requires separate source and command review. No historical check permits a new
+acquisition or profile use.
+
+After joint acceptance, the inspection entry point obtains the directory lock,
+reopens the exact payload read-only and revalidates its historical bindings,
+review input, expiry and schema. A pure inspection function
 then parses those supplied bytes under the same strict bounds, without I/O or
 callbacks. The entry point records its complete decoded structure in private `field-report.json`,
 preserving unknown fields as data and distinguishing absent versus present-null
@@ -222,6 +270,15 @@ read-only recovery evidence, never overwritten. Record any further recovery
 attempt in a new separate private review directory, not an unlisted new leaf.
 Unknown/substituted/hard-linked leaves cause refusal, never recursive removal.
 
+Cleanup uses its own currently reviewed implementation and pinned historical
+manifest/artifact identities. Expiry, ambient CA rotation or changed repository
+HEAD alone must not prevent deletion of positively identified retained data.
+Cleanup exceptions grant no acquisition, payload-use or profile authority.
+Inspection has a five-second monotonic work budget; cleanup has ten seconds.
+Each uses a 15-second outer timeout with five-second forced termination, bounded
+regular-file reads and at most the fixed seven artifact leaves. Refuse an eighth
+leaf without an unbounded directory census. Tests verify these numeric bounds.
+
 The coordinator invokes cleanup once the retention purpose finishes, before
 ending the workflow, or when expiry is reached, whichever comes first. Every
 inspection/use checks expiry and refuses expired data. No detached timer or
@@ -232,6 +289,13 @@ retention condition and stop further payload use. Secure erasure is not claimed.
 
 # TDD and review sequence
 
+Planned coordinator and test paths are
+`scripts/codex-qualification/config_snapshot.py` and
+`scripts/codex-qualification/test_config_snapshot.py`. Any shared collector seam
+must be explicit, retain the existing command's non-retaining default, and be
+reviewed with all existing acquisition regressions. It cannot be an environment
+switch or a second generic downloader.
+
 Write synthesized failing tests before implementation, covering:
 
 - Byte-for-byte success and independent re-read; exact descriptor and schema;
@@ -241,6 +305,10 @@ Write synthesized failing tests before implementation, covering:
   invalid types and malformed numeric values; no invalid payload publication.
 - New/old protocol separation; no old receipt/manifest acceptance; fresh-source
   dependency closure and changed-source/CA/platform/runtime refusal.
+- Historical inert inspection after a docs commit with unchanged bound inspector;
+  changed-inspector refusal; cleanup after expiry, source drift and CA rotation.
+- Lock contention/unavailable locking and lock release after failure; substitution
+  before final verification. No race against an excluded writer is claimed safe.
 - Directory replacement, symlink at every component, hard links, wrong UID/mode,
   special files, unexpected leaves, pre-existing output and named-inode races.
 - Partial/zero writes, ENOSPC, fsync/close failure, receipt failure after durable
@@ -248,6 +316,9 @@ Write synthesized failing tests before implementation, covering:
   handled interruption and a killed-worker orphan recovered without replay.
 - Joint receipt/payload corruption, contradictory success, absent/partial output,
   unknown/nonzero execution result and expiry at each publication/review boundary.
+- Otherwise valid complete pairs with absent, unknown/nonzero, contradictory,
+  mismatched, stale or unaccepted separate review/tool-result inputs; valid gate
+  control; no self-issued acceptance or claimed review provenance.
 - Cleanup exact-identity refusal, successful absence verification, partial cleanup
   and restart classification; cleanup never removes a marker or foreign artifact.
 - Secret canaries in all failure paths; no raw Config, query, token or exceptions
