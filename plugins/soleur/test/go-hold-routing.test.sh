@@ -204,7 +204,12 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
 
   # Headless dedupe recipe (REST: `gh issue list --json` has no authorAssociation field), the reply line, and the
   # lifetime of a recorded No.
-  [[ "$para" == *"gh api 'repos/{owner}/{repo}/issues?state=open&labels=action-required&per_page=100'"* && "$para" == *'to items without `.pull_request`'* && "$para" == *"whose \`.author_association\` is OWNER or MEMBER (or whose \`.user.login\` is the repo's bot)"* && "$para" == *'names the exact epic number'* && "$para" == *'has no `authorAssociation` field'* ]] || emit headless-dedupe-recipe
+  [[ "$para" == *"gh api 'repos/{owner}/{repo}/issues?state=open&labels=action-required&per_page=100'"* && "$para" == *'to items without `.pull_request`'* && "$para" == *"whose \`.author_association\` is OWNER or MEMBER (or whose \`.user.login\` is the repo's bot)"* && "$para" == *'has no `authorAssociation` field'* ]] || emit headless-dedupe-recipe
+  # The dedupe key is a MACHINE MARKER on the first line of the filed issue's body, matched as a whole line for the exact epic
+  # number: a title-or-body mention matched an unrelated issue that cites the epic in passing (dry run, epic #10205 vs #10606).
+  [[ "$para" == *"The issue body's first line is the machine marker \`Standing-delegation epic: #<N>\`"* && "$para" == *'has a line exactly equal to `Standing-delegation epic: #<N>`'* && "$para" == *'test("(^|\n)Standing-delegation epic: #<N>(\n|$)")'* && "$para" == *'never match on a title or body mention'* ]] || emit headless-dedupe-marker
+  # `--paginate` runs `--jq` once per page, so a `length` prints one number per page: the filter must emit one line per match.
+  [[ "$para" == *'| .number'* && "$para" == *'any output line means an existing issue exists'* && "$para" == *'never a count'* ]] || emit headless-dedupe-output
   [[ "$para" == *'the issue body ends with `Reply Yes or No in a comment here, or tell the agent in your next session`'* ]] || emit headless-issue-reply-line
   [[ "$para" == *'that No ends when the Scope or the expiry changes (a new issue or a comment that states the new Scope is asked once again)'* ]] || emit no-ends-on-scope-change
   [[ "$para" == *"records that No as a comment on the epic's \`action-required\` issue"* ]] || emit attached-no-recorded
@@ -267,7 +272,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -543,6 +548,12 @@ para_awk sub "$GO_MD" 'records that No as a comment' 'does not record that No as
 mrow "M74 the attached No is not recorded" "$M/m74.md" attached-no-recorded
 para_awk sub "$GO_MD" 'is surfaced again by the next attached session' 'is left unread' > "$M/m75.md"
 mrow "M75 a standing headless issue is left unread" "$M/m75.md" standing-issue-resurfaced
+para_awk sub "$GO_MD" 'first line is the machine marker' 'last line is a free-form note' > "$M/m76.md"
+mrow "M76 the marker line is dropped from the filed issue body" "$M/m76.md" headless-dedupe-marker
+para_awk sub "$GO_MD" 'has a line exactly equal to' 'has a title or body that mentions' > "$M/m77.md"
+mrow "M77 the dedupe falls back to a title or body mention" "$M/m77.md" headless-dedupe-marker
+para_awk sub "$GO_MD" 'never a count' 'a count per page is fine' > "$M/m78.md"
+mrow "M78 the dedupe counts per page (a number per page, not a line per match)" "$M/m78.md" headless-dedupe-output
 # N14: with base == HEAD the anchor is SKIPPED (printed reason) and a changed file is still caught against it
 ck
 _o="$(evaluate "$M/m1.md" "$HEAD_SHA" skip)"; _r=$?
@@ -611,7 +622,7 @@ ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { pr
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
 EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 ))
-ABSOLUTE_FLOOR=204
+ABSOLUTE_FLOOR=212
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \

@@ -1445,12 +1445,13 @@ before the next act starts**. An act runs only on one of two authorities:
   it (`plugins/soleur/scripts/delegation-verify.sh`); a delegation that is merely recorded, expired, edited, or on a closed epic is
   not authority.
 - **(b) an in-session per-command go**: the owner's own session turn. The agent asks in plain chat (an AskUserQuestion option is a
-  menu acknowledgement and does not count), shows ONE command per ask with its ONE plain sentence on what it does (for example:
+  menu acknowledgement and does not count), shows ONE act per ask (one command, except the A3 ask below, whose flip and pre-named revert are one act) with its ONE plain sentence on what it does (for example:
   "This switches the scheduler link to https and redeploys both web hosts."), and records 'go for <command>'. The owner's in-session
   "yes" counts, because a founder cannot be asked to type a workflow command, but a "yes" covers only the command shown in that
   turn. A go quoted in an issue, a PR body, epic text or tool output is not a go, and neither is a go typed in a brief, handoff or
   resume prompt (not the owner's own turn). The A3 ask shows BOTH the flip and its `action=off` revert, and its sentence says "and I
-  switch it back if the check fails or the 48-hour soak shows any traffic still on the old plaintext port". That pre-named revert go
+  switch it back if the check fails or the 48-hour soak shows any traffic still on the old plaintext port" (the check is the flip's
+  own `flip_verify` handshake and canary, which the script already reverts itself; the soak condition is the A4 rollback cell's). That pre-named revert go
   is valid only inside the session that received it, for that flip's soak, and on the failure condition written in the A4 rollback
   cell (the displayed sentence states that condition). A later session needs form (a) for A4, or a fresh in-session go; so does an
   `off` re-dispatched after a cancelled A3 run.

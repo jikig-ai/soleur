@@ -210,7 +210,7 @@ Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- GitHu
 
 After opening the PR, evaluate whether it qualifies for autonomous merge. All three conditions must be true:
 
-1. **Single file changed** -- the fix touched exactly one file (always true if Phase 3 constraints held)
+1. **Single file changed** -- the PR diff holds exactly one file (false when the commit also carries a test file from Phase 4: the cron gate then demotes the PR to `bot-fix/review-required`)
 2. **Source issue was `priority/p3-low`** -- check the labels fetched in Phase 1
 3. **Tests passed with no new failures** -- Phase 4 completed without aborting
 
@@ -220,7 +220,7 @@ If all three conditions are met, label the PR for auto-merge:
 gh pr edit <PR_NUMBER> --add-label "bot-fix/auto-merge-eligible"
 ```
 
-If any condition is not met (higher priority source issue, test concerns, multi-file fix that was allowed through), label for agent review (the drain-prs `needs-review` tier):
+If any condition is not met (higher priority source issue, test concerns, a fix commit that also carries a test file), label for agent review (the drain-prs `needs-review` tier):
 
 ```bash
 gh pr edit <PR_NUMBER> --add-label "bot-fix/review-required"
