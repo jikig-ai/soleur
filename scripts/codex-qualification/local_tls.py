@@ -120,7 +120,7 @@ def server_context(material, hostname):
     return context
 
 
-class TLSProxy:
+class _TLSProxy:
     """HTTPS to a fixed owned Kong IPv4:8000; never a forward/DNS proxy.
 
     Construction is configuration only. make_server is explicit and is used

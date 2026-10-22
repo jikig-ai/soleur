@@ -7,7 +7,7 @@ they do not prove actual namespace DNS, route isolation or application login.
 import ipaddress
 import socket
 import struct
-from local_tls import Refused, TLSProxy, checked_hostname, material_recipe, private_ipv4, require
+from local_tls import Refused, _TLSProxy, checked_hostname, material_recipe, private_ipv4, require
 
 
 def namespace_recipe(policy, network_receipt, kong_receipt, hostname):
@@ -78,7 +78,7 @@ def tls_proxy_from_receipts(policy, network_receipt, kong_receipt, hostname):
     """Bind the HTTPS proxy to the Kong endpoint validated by both owned receipts."""
     recipe = namespace_recipe(policy, network_receipt, kong_receipt, hostname)
     upstream = recipe['upstream']
-    return TLSProxy(hostname, upstream['ip'], upstream['port'])
+    return _TLSProxy(hostname, upstream['ip'], upstream['port'])
 
 
 def exact_dns_reply(packet, hostname, address):

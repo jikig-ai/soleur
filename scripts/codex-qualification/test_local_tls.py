@@ -8,7 +8,8 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 import local_tls
-from local_tls import Refused, material_recipe, generate_fixture_material, server_context, client_context, TLSProxy
+from local_tls import Refused, material_recipe, generate_fixture_material, server_context, client_context
+from local_tls import _TLSProxy as TLSProxy
 from prepare import browser_contract
 
 
@@ -63,6 +64,9 @@ class LocalTLS(unittest.TestCase):
             self.handshake(self.hostname, trust=False)
         with self.assertRaises(ssl.SSLError):
             self.handshake('other.supabase.co')
+
+    def test_raw_proxy_constructor_is_private_to_fixtures(self):
+        self.assertFalse(hasattr(local_tls, 'TLSProxy'))
 
     def test_material_is_scoped_and_recipe_never_insecure(self):
         recipe = material_recipe(self.hostname)
@@ -190,7 +194,7 @@ class LocalTLS(unittest.TestCase):
         namespace = {'__name__': 'synthetic_tls_admission_mutant'}
         exec(compile(source.replace(guard, '\n'), '<synthetic-tls-admission-mutant>', 'exec'), namespace)
         result = unittest.TestResult()
-        with patch.dict(globals(), {'TLSProxy': namespace['TLSProxy']}):
+        with patch.dict(globals(), {'TLSProxy': namespace['_TLSProxy']}):
             unittest.FunctionTestCase(self.test_actual_https_listener_refuses_foreign_host_before_upstream).run(result)
         self.assertEqual(result.errors, [])
         self.assertEqual(len(result.failures), 1)
