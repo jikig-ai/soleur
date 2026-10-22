@@ -749,11 +749,18 @@ class Snapshot(unittest.TestCase):
         nested = self.root / 'nested-recovery'
         self.args.recovery_directory = str(nested)
         before = {path.name: path.read_bytes() for path in self.root.iterdir() if path.is_file()}
-        with self.assertRaises(snapshot.SnapshotFailure) as caught:
-            snapshot.cleanup_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
+            with self.assertRaises(snapshot.SnapshotFailure) as caught:
+                snapshot.cleanup_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
         self.assertEqual(caught.exception.code, 'cleanup')
         self.assertFalse(nested.exists())
         self.assertEqual(before, {path.name: path.read_bytes() for path in self.root.iterdir() if path.is_file()})
+        outside = Path(self.temp.name) / 'outside-recovery'
+        self.args.recovery_directory = str(outside)
+        with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
+            result = snapshot.cleanup_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertEqual(result['outcome'], 'owned-retained-data-absent')
+        self.assertEqual({path.name for path in outside.iterdir()}, {snapshot.CLEANUP})
 
     def test_killed_synthetic_coordinator_orphan_is_reaped_classified_and_not_replayed(self):
         ready_read, ready_write = os.pipe()

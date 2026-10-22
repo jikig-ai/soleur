@@ -78,6 +78,12 @@ Additional correction-delta findings:
   refused. Reject the action directory and descendants before mkdir; test that
   nested recovery leaves the action tree unchanged and keep the outside-path
   positive control.
+- **Medium — nested recovery test can refuse before reaching its guard.**
+  `test_config_snapshot.py` ›
+  `test_nested_recovery_directory_refuses_before_action_tree_mutation()` must
+  keep the synthetic digest seam active through cleanup, then prove the same
+  fixture succeeds with an outside recovery directory. Without this, a digest
+  mismatch can mask deletion of the nested-path guard.
 
 ## Correction status
 
@@ -91,7 +97,9 @@ use valid canonical framing, rebind both command and execution-record hashes,
 use a valid stale-record mutation, and remove the positive-control report before
 asserting expiry. The report-size test uses a stable oversized result.
 `fresh_record_directory()` now rejects the action directory and all descendants
-before creating anything. All nine findings remain open until independent
+before creating anything. The nested-path test keeps the digest seam active and
+uses the same otherwise-valid fixture for a successful outside recovery path.
+All ten findings remain open until independent
 correction-delta reviews pass at a pushed commit.
 
 No external origin, account, provider or destructive action occurred during
