@@ -13,6 +13,15 @@ BEGIN
   IF auth.role() <> 'service_role' THEN
     RAISE EXCEPTION 'agent engine anonymisation requires service role' USING ERRCODE = '42501';
   END IF;
+  -- Preserve the forward lock order so checkpoint writes cannot race erasure.
+  PERFORM w.id FROM public.workspaces AS w
+   WHERE EXISTS (SELECT 1 FROM public.agent_engine_runs AS r
+                  WHERE r.workspace_id = w.id AND r.created_by = p_user_id)
+      OR EXISTS (SELECT 1 FROM public.workspace_engine_settings AS s
+                  WHERE s.workspace_id = w.id AND s.updated_by = p_user_id)
+   ORDER BY w.id FOR UPDATE OF w;
+  PERFORM r.id FROM public.agent_engine_runs AS r
+   WHERE r.created_by = p_user_id ORDER BY r.id FOR UPDATE OF r;
   DELETE FROM public.agent_engine_recovery_checkpoints AS c
    USING public.agent_engine_runs AS r
    WHERE c.run_id = r.id AND r.created_by = p_user_id;
@@ -37,6 +46,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_run_generation bigint;
+  v_created_by uuid;
   v_attempt_generation bigint;
 BEGIN
   IF auth.role() <> 'service_role' THEN
@@ -46,10 +56,13 @@ BEGIN
      OR octet_length(p_checkpoint::text) > 16384 THEN
     RAISE EXCEPTION 'invalid recovery checkpoint' USING ERRCODE = '22023';
   END IF;
-  SELECT r.auth_mode_generation INTO v_run_generation
+  SELECT r.auth_mode_generation, r.created_by INTO v_run_generation, v_created_by
     FROM public.agent_engine_runs AS r WHERE r.id = p_run_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'engine run not found' USING ERRCODE = 'P0002';
+  END IF;
+  IF v_created_by IS NULL THEN
+    RAISE EXCEPTION 'engine run was anonymised' USING ERRCODE = '55000';
   END IF;
   SELECT a.auth_mode_generation INTO v_attempt_generation
     FROM public.agent_engine_attempts AS a

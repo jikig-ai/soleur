@@ -11,6 +11,7 @@ const container = isCi
 const migration = path.join(__dirname, "../supabase/migrations/145_codex_auth_mode_rebind.sql");
 const preMigrationGuard = path.join(__dirname, "../scripts/sql/codex-auth-mode-pre-migration.sql");
 const erasureMigration = path.join(__dirname, "../supabase/migrations/152_agent_engine_erasure_lock_order.sql");
+const erasureMigrationDown = path.join(__dirname, "../supabase/migrations/152_agent_engine_erasure_lock_order.down.sql");
 const docker = (args: string[], input?: string, timeout = 10_000) => spawnSync("docker", args, {
   encoding: "utf8",
   input,
@@ -48,12 +49,12 @@ const runIds = [
 ];
 const runId = (index: number) => runIds[index - 1];
 
-function ownerRebindFixture(): string {
+function ownerRebindFixture(erasureFile = erasureMigration): string {
   const definitions = [
     { file: migration, name: "set_workspace_default_engine" },
     { file: migration, name: "count_codex_conversation_rebinds" },
-    { file: erasureMigration, name: "save_agent_engine_recovery_checkpoint" },
-    { file: erasureMigration, name: "anonymise_agent_engine_data" },
+    { file: erasureFile, name: "save_agent_engine_recovery_checkpoint" },
+    { file: erasureFile, name: "anonymise_agent_engine_data" },
   ].map(({ file, name }) => {
     const lines = readFileSync(file, "utf8").split(/\r?\n/);
     const start = lines.findIndex((line) => line.startsWith(`CREATE OR REPLACE FUNCTION public.${name}(`));
@@ -127,12 +128,12 @@ function ownerRebindFixture(): string {
   `;
 }
 
-function withOwnerRebindDatabase<T>(assertBehavior: (database: string) => T): T {
+function withOwnerRebindDatabase<T>(assertBehavior: (database: string) => T, erasureFile = erasureMigration): T {
   const database = `codex_rebind_scope_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
   const create = docker(["exec", container, "createdb", "-U", dbUser, database]);
   expect(create.status, create.stderr).toBe(0);
   try {
-    runSql(database, ownerRebindFixture());
+    runSql(database, ownerRebindFixture(erasureFile));
     return assertBehavior(database);
   } finally {
     const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);
@@ -551,5 +552,31 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
         .toBe("55000|engine run was anonymised");
       expect(rebindSnapshot(database)).toEqual(anonymized);
     });
+  });
+
+  it("keeps post-erasure checkpoint writes rejected when migration 152 is rolled back", () => {
+    withOwnerRebindDatabase((database) => {
+      const attemptId = "00000000-0000-4000-8000-000000000001";
+      runSql(database, `INSERT INTO public.agent_engine_attempts VALUES ('${attemptId}', '${runId(1)}', 2);`);
+      expect(runSql(database, `SELECT public.anonymise_agent_engine_data('${ownerId}');`)).toBe("11");
+
+      const rejection = runSql(database, `
+        CREATE TEMP TABLE caught_checkpoint_error (code text NOT NULL, message text NOT NULL);
+        DO $$
+        BEGIN
+          BEGIN
+            PERFORM public.save_agent_engine_recovery_checkpoint(
+              '${runId(1)}', '${attemptId}', '{"threadId":"synthetic-after-rollback-erasure"}'::jsonb
+            );
+          EXCEPTION WHEN SQLSTATE '55000' THEN
+            INSERT INTO caught_checkpoint_error VALUES (SQLSTATE, SQLERRM);
+          END;
+        END;
+        $$;
+        SELECT coalesce((SELECT code || '|' || message FROM caught_checkpoint_error), 'no-error');
+        SELECT count(*) FROM public.agent_engine_recovery_checkpoints WHERE run_id = '${runId(1)}';
+      `);
+      expect(rejection.split("\n")).toEqual(["55000|engine run was anonymised", "0"]);
+    }, erasureMigrationDown);
   });
 });

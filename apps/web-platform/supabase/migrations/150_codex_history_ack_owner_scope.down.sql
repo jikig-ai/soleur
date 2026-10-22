@@ -26,6 +26,7 @@ BEGIN
       ON c.id = r.conversation_id
      AND c.workspace_id = r.workspace_id
    WHERE r.conversation_id = p_conversation_id
+     AND c.user_id = v_member_user_id
      AND r.execution_kind = 'conversation'
      AND r.engine_id = 'codex'
      AND r.auth_mode_generation = p_auth_mode_generation
@@ -85,6 +86,7 @@ BEGIN
        AND a.workspace_member_created_at = m.created_at
        AND a.auth_mode_generation = r.auth_mode_generation
      WHERE r.conversation_id = p_conversation_id
+       AND c.user_id = v_member_user_id
        AND r.execution_kind = 'conversation'
        AND r.engine_id = 'codex'
        AND r.auth_mode_generation = p_auth_mode_generation

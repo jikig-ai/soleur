@@ -3,6 +3,12 @@ import { createEngineRegistry } from "@/server/agent-engine-registry";
 import { dispatchCodexConversationToWebSocket } from "@/server/codex-conversation-dispatch";
 import type { EngineEventPayload } from "@/server/agent-engine-contract";
 import { createCodexCodeAdapter } from "@/server/codex-code-adapter";
+import { reportSilentFallback } from "@/server/observability";
+
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/server/observability")>(),
+  reportSilentFallback: vi.fn(),
+}));
 
 function turnFixture(payloads: EngineEventPayload[]) {
   const binding = {
@@ -263,12 +269,45 @@ describe("Codex conversation dispatch bridge", () => {
   });
 
   it("falls back to the attempt transition if failure-event persistence fails", async () => {
+    vi.mocked(reportSilentFallback).mockClear();
     const { repository, options } = turnFixture([]);
     repository.appendLifecycleEvent.mockRejectedValueOnce(new Error("failure event RPC unavailable"));
     await expect(dispatchCodexConversationToWebSocket(options)).rejects.toMatchObject({ code: "codex_terminal_missing" });
     expect(repository.transitionAttempt.mock.calls).toEqual([
       ["synthetic-attempt", "running"], ["synthetic-attempt", "failed"],
     ]);
+    expect(reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), {
+      feature: "codex-conversation",
+      op: "persist-terminal-lifecycle-event",
+      extra: { status: "failed" },
+    });
+  });
+
+  it("reports when both terminal persistence paths fail while preserving the dispatch error", async () => {
+    vi.mocked(reportSilentFallback).mockClear();
+    const { repository, options } = turnFixture([]);
+    repository.appendLifecycleEvent.mockRejectedValueOnce(new Error("failure event RPC unavailable"));
+    repository.transitionAttempt.mockImplementation(async (_attemptId, status) => {
+      if (status === "failed") throw new Error("attempt transition RPC unavailable");
+      return null;
+    });
+
+    await expect(dispatchCodexConversationToWebSocket(options)).rejects.toMatchObject({ code: "codex_terminal_missing" });
+
+    const terminalReports = vi.mocked(reportSilentFallback).mock.calls.filter(([, context]) =>
+      context.op === "persist-terminal-lifecycle-event" || context.op === "persist-terminal-attempt-fallback"
+    );
+    expect(terminalReports).toHaveLength(2);
+    expect(terminalReports[0]).toEqual([expect.any(Error), {
+      feature: "codex-conversation",
+      op: "persist-terminal-lifecycle-event",
+      extra: { status: "failed" },
+    }]);
+    expect(terminalReports[1]).toEqual([expect.any(Error), {
+      feature: "codex-conversation",
+      op: "persist-terminal-attempt-fallback",
+      extra: { status: "failed" },
+    }]);
   });
 
   it("blocks automatic auth retry after a persisted generation change", async () => {

@@ -9,6 +9,7 @@ const container = isCi
   : "supabase_db_web-platform";
 const migration = path.join(__dirname, "../supabase/migrations/149_codex_history_transfer_ack.sql");
 const ownershipHardening = path.join(__dirname, "../supabase/migrations/150_codex_history_ack_owner_scope.sql");
+const ownershipRollback = path.join(__dirname, "../supabase/migrations/150_codex_history_ack_owner_scope.down.sql");
 const docker = (args: string[], input?: string, timeout = 10_000) => spawnSync("docker", args, {
   encoding: "utf8",
   input,
@@ -65,6 +66,7 @@ describe("migration 149 acknowledgment RPCs on disposable PostgreSQL", () => {
       databaseCreated = true;
       const migrationSql = readFileSync(migration, "utf8");
       const ownershipHardeningSql = readFileSync(ownershipHardening, "utf8");
+      const ownershipRollbackSql = readFileSync(ownershipRollback, "utf8");
       const output = runSql(database, `
         CREATE SCHEMA auth;
         CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
@@ -165,9 +167,18 @@ describe("migration 149 acknowledgment RPCs on disposable PostgreSQL", () => {
         DELETE FROM public.workspace_members WHERE user_id = '30000000-0000-4000-8000-000000000001';
         DELETE FROM public.users WHERE id = '30000000-0000-4000-8000-000000000001';
         SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
+        -- Migration 150 rollback must not restore workspace-only acknowledgment scope.
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
+        ${ownershipRollbackSql}
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 4
+        );
+        SELECT public.codex_history_transfer_acknowledged(
+          '40000000-0000-4000-8000-000000000001', 4
+        );
       `);
 
-      expect(output.split("\n")).toEqual(["t", "f", "f", "0", "f", "f", "t", "t", "f", "0", "f", "t", "f", "t", "0"]);
+      expect(output.split("\n")).toEqual(["t", "f", "f", "0", "f", "f", "t", "t", "f", "0", "f", "t", "f", "t", "0", "f", "f"]);
     } finally {
       if (databaseCreated) {
         const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);

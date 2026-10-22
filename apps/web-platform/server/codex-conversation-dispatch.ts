@@ -6,6 +6,7 @@ import { createCodexWebEngineFactoriesForBinding, type CodexWebRuntimeOptions } 
 import { createCodexWebEventMapper, mapCodexEngineEventToWsMessage } from "./codex-ws-events";
 import { reviewedEngineRegistry } from "./agent-engine-reviewed-definitions";
 import { authorizeEngineDataEgress } from "./agent-engine-data-egress-policy";
+import { reportSilentFallback } from "@/server/observability";
 
 interface ConversationBindingRepository {
   getConversationRun(conversationId: string): Promise<unknown>;
@@ -143,19 +144,37 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     const cancelled = options.context.signal?.aborted || isTurnCancelled(error);
     if (cancelled && terminalStatus === null) terminalStatus = "cancelled";
     if (typeof attemptId === "string" && terminalStatus === null) {
-      try {
-        await options.repository.appendLifecycleEvent(runId, attemptId, { type: "status", status: "failed" });
-      } catch {
-        try { await options.repository.transitionAttempt(attemptId, "failed"); } catch { /* preserve dispatch error */ }
-      }
+      await persistTerminalStatus(options, runId, attemptId, "failed");
     } else if (typeof attemptId === "string" && terminalStatus === "cancelled") {
-      try {
-        await options.repository.appendLifecycleEvent(runId, attemptId, { type: "status", status: "cancelled" });
-      } catch {
-        try { await options.repository.transitionAttempt(attemptId, "cancelled"); } catch { /* preserve dispatch error */ }
-      }
+      await persistTerminalStatus(options, runId, attemptId, "cancelled");
     }
     throw error;
+  }
+}
+
+async function persistTerminalStatus(
+  options: CodexConversationDispatchOptions,
+  runId: string,
+  attemptId: string,
+  status: "failed" | "cancelled",
+): Promise<void> {
+  try {
+    await options.repository.appendLifecycleEvent(runId, attemptId, { type: "status", status });
+  } catch (eventError) {
+    reportSilentFallback(eventError, {
+      feature: "codex-conversation",
+      op: "persist-terminal-lifecycle-event",
+      extra: { status },
+    });
+    try {
+      await options.repository.transitionAttempt(attemptId, status);
+    } catch (transitionError) {
+      reportSilentFallback(transitionError, {
+        feature: "codex-conversation",
+        op: "persist-terminal-attempt-fallback",
+        extra: { status },
+      });
+    }
   }
 }
 

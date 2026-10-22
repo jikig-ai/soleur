@@ -2602,3 +2602,24 @@
   modes remain blocked without mode-specific CLO clearance; the API-funded
   alternative remains pending. Recovery, authenticated QA, profile/runtime
   qualification, promotion, preflight, full review, and shipping stay held.
+
+### Targeted review fixes — 2026-10-22
+
+- Dedup ledger for the panel findings and this fix set:
+
+  | raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+  |---|---|---|---|
+  | Failed/cancelled terminal lifecycle append and fallback transition failures were swallowed | observability::terminal-persistence-fallback-errors | pattern-recognition | next review-fix commit |
+  | Migration 150 rollback restored workspace-only ACK RPC scope | migration-safety::rollback-ack-owner-scope | data-integrity, migration | next review-fix commit |
+  | Migration 152 rollback could recreate checkpoints after erasure and restored unsafe lock order | erasure::rollback-checkpoint-lock-and-anonymized-run | data-integrity, migration | next review-fix commit |
+  | Uncertain provider outcome may cost a repeated billable turn | user-impact::provider-turn-retry-cost | user-impact | disposition pending user-impact review |
+
+- The first focused run exposed a test assertion that counted reports from prior
+  tests sharing the mocked module. The assertion now clears its mock and selects
+  the two named terminal operations. Focused dispatch/rollback migration suites
+  pass 31/31; typecheck passed before that assertion-only adjustment and must be
+  rerun before commit. Same client turn IDs are unique in the durable attempt
+  claim; duplicate claims fail before provider invocation, and the explicit
+  retained-draft resend preserves its original clientTurnId. This evidence
+  narrows the user-impact concern but does not replace the required user-impact
+  review/sign-off or establish retry safety for uncertain provider outcomes.
