@@ -149,3 +149,16 @@ because `delegation-verify.sh` denies `confirm=`, so no valid recorded Standing 
 form, before A5 (the signing-key rotation): after A5 the new key would travel over plaintext `:8288` if the link were turned off, so
 `action=off` after A5 is form (b) only. See "Production Envelope for the post-merge acts" in the Inngest server runbook. The dated go
 quoted in the Consequences sentence "The owner's go is procedural" is superseded by the runbook's authority wording.
+
+## Addendum (2026-10-22, the first flip attempt)
+
+The first `flip` (workflow run 39817708732) failed at the canary's `inspect` check with `cause=none` on web-1 and the revert restored http on both
+hosts. The container's `Config.Env` held more than one `INNGEST_BASE_URL=` line because `docker run` keeps an `--env-file` entry **and** a `-e` entry
+for the same key (the `-e` value wins when the process starts; `docker inspect` lists both), and the Doppler snapshot reached the canary through
+`--env-file`. The mock docker reported the `-e` pairs only, so no test could show it. New invariant: **the `-e` flags are the only source of
+`INNGEST_BASE_URL` and `NODE_EXTRA_CA_CERTS` in the canary and prod containers.** `ci-deploy.sh` scrubs both names from the env-file once per deploy
+(`inngest_link_scrub_env_file`, after the resolver, before the first `docker run`; a fault aborts a strict deploy and is logged and continued
+otherwise), the `inspect` check stays strict and now names its first failing condition (`cause=inspect_failed|url_count|url_value|ca_count|ca_value`
+with four fixed counts) with its own deploy-state reason `canary_inngest_link_inspect_failed`. Ruled by the CTO agent, 2026-10-22 (see the branch's
+decision-challenges file). Accepted residuals: the first-boot tuple keeps its duplicate (no inspect check there; replaced at the next deploy), the prod
+container is not inspected, and the overlay's `grep` weakness is tracked separately.
