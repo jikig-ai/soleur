@@ -1,10 +1,13 @@
 ---
+feature: git-data-apt-skip-policy
+issue: 9394
 lane: cross-domain
 brand_survival_threshold: single-user incident
-closes: 9394
+brainstorm: knowledge-base/project/brainstorms/2026-10-22-git-data-apt-skip-policy-brainstorm.md
+status: draft
 ---
 
-# Spec: git-data apt skip policy (#9394)
+# Feature: git-data apt skip policy (#9394)
 
 ## Problem Statement
 
@@ -17,14 +20,14 @@ After PR #9383 bounded the in-container apt cycles, four git-data CI arms stay h
 
 ## Non-Goals
 
-- Any change to test code or arm_skip routing.
-- A per-arm hold mechanism (parked until the flip condition fires).
+- Any change to test code or `arm_skip` routing.
+- A mechanism for the "hold" (parked until the flip condition fires).
 
 ## Functional Requirements
 
-- FR1: ADR-188 carries a dated resolution of the User-Challenge naming the evidence, the flip condition and the PA-36 wording constraint.
+- FR1: ADR-188 carries a dated resolution of the User-Challenge naming the evidence, the flip condition, the hold definition and the PA-36 wording constraint.
 
 ## Technical Requirements
 
 - TR1: Docs only; no behaviour change in `apps/web-platform/infra/`.
-- TR2: Follow-up issue filed for repairing the #8856 probe (trigger 1 cannot fire while it returns TRANSIENT).
+- TR2: Follow-up #10786 repairs the #8856 probe (the skip-streak trigger cannot fire while it returns TRANSIENT).
