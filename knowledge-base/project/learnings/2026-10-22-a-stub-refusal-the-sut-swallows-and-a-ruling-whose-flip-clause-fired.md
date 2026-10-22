@@ -63,7 +63,7 @@ would make it go silent, and run that.
 8. **The Stop hook caught me ending a turn on an unkept first-person promise.** Recovery: ended with a `Paused:` sentence naming
    the wait. Prevention: if the next action is waiting on a monitor or a seat, say `Paused: <what>` rather than "I'll ...".
 9. **The ten no-op guards and the F6 docs contradicting the PR's own O10 measurement** (shapes 2 and 3 above). Recovery: reverted
-   and rewritten. Prevention: the new review-skill bullet.
+   and rewritten. Prevention: this learning (a review-skill bullet was tried and removed: it pushed `review/SKILL.md` 1,011 bytes over its body-budget ceiling, `lint-skill-body-budget.py`).
 
 ## Tags
 
