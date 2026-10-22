@@ -14,15 +14,19 @@ brand_survival_threshold: single-user incident
 
 **Accepted 2026-10-20** — the adapter shipped in `v3.342.0` (PR #10571, merge commit `95562f22ffb4`), and the
 support bar below is met: all four ADR-274 points are quoted, in full, in
-`knowledge-base/project/specs/archive/20261019-180200-feat-opencode-harness/SHAPE-NOTE.md`. Two of the four
-(§7.1.2 a pipeline skill's gates, §7.1.3 a live agent spawn) are quoted on **substituted evidence** —
-a routed call completing after a guard block and the `spawnAgent()` dispatch shape — because the probe host
-carries no provider credentials for a hermetic OpenCode session; the live reproduction is tracked in
-#10591 item 1. That substitution is a disclosed gap in the evidence, not in the
-adapter, and it is why this record can be `accepted` while **no public "supports OpenCode" claim is made**:
-the README, getting-started, comparison, blog, and battlecard pages are unchanged, and the future-tense
-sweep of `knowledge-base/legal` and `docs/` for support-OpenCode sentences returned zero hits to route
-to the CLO.
+`knowledge-base/project/specs/archive/20261019-180200-feat-opencode-harness/SHAPE-NOTE.md`. At accept time two
+of the four (§7.1.2 a pipeline skill's gates, §7.1.3 a live agent spawn) were quoted on **substituted
+evidence** — a routed call completing after a guard block and the `spawnAgent()` dispatch shape — because the
+probe host carried no provider credentials for a hermetic OpenCode session; the reproduction was tracked in
+#10591 item 1.
+
+**The substitution is closed (2026-10-22).** Both points were reproduced live and quoted in SHAPE-NOTE §7.1.6
+(merged in #10745, commit `06836baf90`), so all four points now rest on live captures. The public
+**"supports OpenCode" claim is still not made**: the README, getting-started, comparison, blog, and battlecard
+pages are unchanged, and the accept-time future-tense sweep of `knowledge-base/legal` and `docs/` for
+support-OpenCode sentences returned zero hits to route to the CLO. The evidence gate is discharged, so what
+remains is a brand-level editorial decision, not an evidence question; the claim flip is a separate,
+deliberate change, and this annotation is updated by that flip.
 
 In this record, **harness** means the `Harness` union in `plugins/soleur/lib/harness.ts`. The word is not in
 `knowledge-base/project/glossary.md`.
@@ -225,9 +229,11 @@ about supporting OpenCode and routing hits to the CLO; that sweep returned **zer
 
 `grep -rniE "(will|going to|plans to|soon|future) support (the )?opencode" knowledge-base/legal/ docs/`
 
-so there was nothing to route and nothing to review. The pages stay unchanged for a separate reason recorded
-above in Status: the ADR-274 bar is met, but two of its four points rest on substituted evidence pending the
-live reproduction in #10591 item 1, and a public claim is not made on that footing.
+so there was nothing to route and nothing to review. At accept time the pages also stayed unchanged on an
+evidence footing: two of the four ADR-274 points rested on substituted evidence pending the live reproduction
+in #10591 item 1. That reproduction landed in SHAPE-NOTE §7.1.6 (2026-10-21, merged 2026-10-22 in #10745), so
+the evidence no longer holds the pages back; the remaining reason is editorial — the claim flip is a separate,
+deliberate brand-level change.
 
 ## Cost Impacts
 
