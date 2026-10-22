@@ -362,15 +362,15 @@ discoverability_test:
 ### Pre-merge (PR)
 
 - [ ] Before the script edit, rows V24, V25 and the shifted V5 boundary rows FAIL against the unmodified script (record the failing output in the PR body's test plan).
-- [ ] `bash plugins/soleur/test/ci-head-verdict.test.sh` reports 0 failed, all new mutants killed, and the raised `MIN_ASSERTIONS` / `MIN_MUTANTS` floors are the measured counts.
-- [ ] `grep -c 'st=stalled' plugins/soleur/scripts/ci-head-verdict.sh` prints `1` (also asserted inside the suite).
-- [ ] `grep -c 'check-suites' plugins/soleur/scripts/ci-head-verdict.sh` is at least 1 and the string appears only inside `read_head_anchor` and the header comment.
-- [ ] A fresh-push fixture yields `pending-full` or `no-run`, never `stalled` (run created T+7500 or suite at T+7500, now T+7560); a stuck fixture (default suite at T-3600 and no run, or a run at T+2, now past the 120-minute boundary) still yields `stalled undecided-after-120m`; the boundary is strict (A+7200 pending, A+7201 stalled).
-- [ ] Failed, malformed, null-`created_at` and empty suite reads each exit 3 with `state=error` outside the closed set.
-- [ ] No suite request appears in the stub log for green, fresh, conflicting, awaiting-approval, never-ready, draft, `n/a` and kept-run fixtures (the stalled-gate rows read at T+7800 so the assertion is not vacuous).
-- [ ] `admin-merge-ready.test.sh`, `monitor-pr-checks.test.sh`, `admin-merge-ready-wiring.test.sh`, `drain-prs.test.sh`, `ship-phase-7-poll-fixtures.test.sh`, `ci-draft-light-soak-9728.test.sh` and `c4-count-parity.test.sh` pass; `shellcheck` is clean on the script and test.
-- [ ] `git diff origin/main...HEAD --name-only` contains no path under `.github/workflows/` or `apps/` and does not touch `scripts/followthroughs/`.
-- [ ] ADR-276 carries the dated addendum; `grep -rn "counts from the ready event" plugins/` prints nothing and `grep -c "see ci-head-verdict.sh for the stall clock" plugins/soleur/scripts/monitor-pr-checks.sh plugins/soleur/scripts/admin-merge-ready.sh` prints 1 for each file.
+- [x] `bash plugins/soleur/test/ci-head-verdict.test.sh` reports 0 failed, all new mutants killed, and the raised `MIN_ASSERTIONS` / `MIN_MUTANTS` floors are the measured counts.
+- [x] `grep -c 'st=stalled' plugins/soleur/scripts/ci-head-verdict.sh` prints `1` (also asserted inside the suite).
+- [x] `grep -c 'check-suites' plugins/soleur/scripts/ci-head-verdict.sh` is at least 1 and the string appears only inside `read_head_anchor`, the header comment and the `usage()` text (amended after review: the `no-check-suites` reason is documented in `usage()`).
+- [x] A fresh-push fixture yields `pending-full` or `no-run`, never `stalled` (run created T+7500 or suite at T+7500, now T+7560); a stuck fixture (default suite at T-3600 and no run, or a run at T+2, now past the 120-minute boundary) still yields `stalled undecided-after-120m`; the boundary is strict (A+7200 pending, A+7201 stalled).
+- [x] Failed, malformed, null-`created_at` and empty suite reads each exit 3 with `state=error` outside the closed set.
+- [x] No suite request appears in the stub log for green, fresh, conflicting, awaiting-approval, never-ready, draft, `n/a` and kept-run fixtures (the stalled-gate rows read at T+7800 so the assertion is not vacuous).
+- [x] `admin-merge-ready.test.sh`, `monitor-pr-checks.test.sh`, `admin-merge-ready-wiring.test.sh`, `drain-prs.test.sh`, `ship-phase-7-poll-fixtures.test.sh`, `ci-draft-light-soak-9728.test.sh` and `c4-count-parity.test.sh` pass; `shellcheck` is clean on the script and test.
+- [x] `git diff origin/main...HEAD --name-only` contains no path under `.github/workflows/` or `apps/` and does not touch `scripts/followthroughs/`.
+- [x] ADR-276 carries the dated addendum; `grep -rn "counts from the ready event" plugins/` prints nothing and `grep -c "see ci-head-verdict.sh --help for the stall clock" plugins/soleur/scripts/monitor-pr-checks.sh plugins/soleur/scripts/admin-merge-ready.sh` prints 1 for each file (amended after review: the pointer names `--help`, where the rule is now readable).
 - [ ] PR body has `Ref #9757` and no `Closes`/`Fixes`/`Resolves`; `gh issue view 9757 --json state` is still OPEN after merge.
 - [ ] Merged through the queue (`gh pr merge <N> --squash --auto`), no `--admin`; any held merge asked exactly one delegation question.
 
