@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016,SC2015,SC2034 # SC2016: mutation anchors and grep patterns are literal; SC2015: pass/fail pairs; SC2034: tuple reads
 # Suite for scripts/apply-delivery-gap.sh and .github/workflows/apply-delivery-gap-follower.yml
 # (plan knowledge-base/project/plans/2026-10-23-feat-apply-delivery-gap-follower-plan.md; tracker #9454).
 #
@@ -72,6 +73,7 @@ for c in jq python3 timeout xargs; do command -v "$c" >/dev/null 2>&1 || { echo 
 
 SANDBOX="$(mktemp -d)" || { echo "[FATAL] mktemp -d failed" >&2; exit 2; }
 assert_fixture_dir "$SANDBOX"
+# shellcheck disable=SC2329 # invoked through the EXIT/INT/TERM traps
 cleanup() { rm -rf "$SANDBOX"; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
@@ -127,7 +129,8 @@ REPO_SLUG="example-org/example-repo"
 NOW_ISO="2026-10-23T12:00:00Z"
 TITLE='infra: apply delivery gap - trigger-file change not applied'
 DEGRADED_TITLE='infra: apply delivery gap follower degraded'
-sha() { printf '%040x' "$1"; }
+# sha <N>: 40 hex whose FIRST seven characters are N zero-padded, so the sha7 a row prints is distinguishable
+sha() { printf '%07x%033x' "$1" 0; }
 ago() { date -u -d "$NOW_ISO - $1 minutes" +%Y-%m-%dT%H:%M:%SZ; }
 mkrun() { # id event branch status conclusion|- shaN created updated [started] [message|@null]
   jq -cn --argjson id "$1" --arg ev "$2" --arg br "$3" --arg st "$4" --arg co "$5" --arg sha "$(sha "$6")" --arg cr "$7" --arg up "$8" \
@@ -135,7 +138,6 @@ mkrun() { # id event branch status conclusion|- shaN created updated [started] [
     '{id:$id,event:$ev,head_branch:$br,status:$st,conclusion:(if $co=="-" then null else $co end),head_sha:$sha,created_at:$cr,run_started_at:$sd,updated_at:$up,run_attempt:1,head_commit:(if $msg=="@null" then null else {message:$msg} end)}'
 }
 runs_file() { local f="$1"; shift; printf '%s\n' "$@" | jq -cs '{total_count: length, workflow_runs: .}' >"$f"; }
-empty_runs() { printf '{"total_count":0,"workflow_runs":[]}\n' >"$ST/runs.$1.json"; }
 mkjobs() { local f="$ST/jobs.$1.json" total="$2" x; shift 2; local j=()
   for x in "$@"; do j+=("{\"name\":\"${x%%:*}\",\"conclusion\":\"${x#*:}\"}"); done
   if ((${#j[@]})); then printf '%s\n' "${j[@]}" | jq -cs --argjson t "$total" '{total_count:$t,jobs:.}' >"$f"; else printf '{"total_count":%s,"jobs":[]}\n' "$total" >"$f"; fi; }
@@ -192,7 +194,9 @@ expect_fail() {
   eq "[$CASE] the open gap issue is not closed" "$(grep -c '^issue-close 7 ' "$ST/out/actions.log" 2>/dev/null || true)" 0
   eq "[$CASE] the open gap issue is not edited" "$(grep -c '^issue-edit 7 ' "$ST/out/actions.log" 2>/dev/null || true)" 0
   eq "[$CASE] no gap issue is created" "$(grep -c "^issue-create title=${TITLE}" "$ST/out/actions.log" 2>/dev/null || true)" 0
-  if [[ "$cls" == "read" ]]; then
+  if [[ "$cls" == "read-repeat" ]]; then
+    :
+  elif [[ "$cls" == "read" ]]; then
     has "[$CASE] degraded issue recorded" "$ST/out/actions.log" "title=${DEGRADED_TITLE} labels=apply-delivery-gap-degraded,action-required"
   else
     lacks "[$CASE] no degraded issue for an issue-API failure" "$ST/out/actions.log" "title=${DEGRADED_TITLE}"
@@ -217,7 +221,7 @@ if want H5; then
   t1=$(date +%s)
   eq "H5 self-test prints the ok line" "$out5" "apply_delivery_gap_self_test=ok"
   eq "H5 self-test exits 0" "$rc5" 0
-  [[ $((t1 - t0)) -lt 5 ]] && pass "H5 self-test under 5 s" || fail "H5 self-test took $((t1 - t0)) s"
+  if [[ $((t1 - t0)) -lt 5 ]]; then pass "H5 self-test under 5 s"; else fail "H5 self-test took $((t1 - t0)) s"; fi
   out5b="$(env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/var/tmp timeout 15s bash "$RO/scripts/apply-delivery-gap.sh" --self-test --extra 2>&1)"; rc5b=$?
   eq "H5 self-test with extra argv is rejected (rc 2)" "$rc5b" 2
   eq "H5 rejected argv names bad_input last" "$(printf '%s\n' "$out5b" | tail -n 1)" "::error::apply_delivery_gap_bad_input"
@@ -608,14 +612,14 @@ if want S8:budget; then
   objs+=("$(mkrun 2000 push main completed cancelled 0x2000 "$(ago 300)" "$(ago 299)")")
   runs_file "$ST/runs.deploy-fix.json" "${objs[@]}"; mkjobs 2000 0
   issues_file "$(gap_issue 7)"
-  run_sut
+  run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=1000
   expect_fail api_budget_exceeded read
   # 150 reads is within the budget
   mk_case s8-budget-ok
   objs=(); for i in $(seq 1 149); do objs+=("$(mkrun $((2000 + i)) push main completed success $((0x3000 + i)) "$(ago $((200 - i)))" "$(ago $((199 - i)))")"); mkcmp 0x2000 $((0x3000 + i)) behind; done
   objs+=("$(mkrun 2000 push main completed cancelled 0x2000 "$(ago 300)" "$(ago 299)")")
   runs_file "$ST/runs.deploy-fix.json" "${objs[@]}"; mkjobs 2000 0
-  run_sut
+  run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=1000
   eq "S8 149 compares plus one jobs read (150 reads) is within budget" "$SUT_RC" 0
   gend
 fi
@@ -657,7 +661,7 @@ if want S8:degraded; then
   s8_world s8-deg-repeat
   issues_file "$(gap_issue 7)" "$(mkissue 9 "$DEGRADED_TITLE" apply-delivery-gap-degraded,action-required app/github-actions true)"
   inj runs.deploy-fix.p1 1 'gh: Server Error (HTTP 500)'; run_sut
-  expect_fail runs_list_failed read
+  expect_fail runs_list_failed read-repeat
   has "S8 a repeat comments on the degraded issue" "$ST/out/actions.log" "issue-comment 9 body="
   eq "S8 and creates no second degraded issue" "$(grep -c "^issue-create" "$ST/out/actions.log" 2>/dev/null || true)" 0
   # a failing upsert is its own named error, after the original
@@ -866,7 +870,7 @@ if want S14; then
   mk_case s14
   objs=(); for i in $(seq 1 140); do objs+=("$(mkrun $((5000 + i)) push main completed cancelled $((0x5000 + i)) "$(ago $((1000 - i)))" "$(ago $((999 - i)))")"); mkjobs $((5000 + i)) 0; done
   runs_file "$ST/runs.deploy-fix.json" "${objs[@]}"
-  run_sut
+  run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=1000
   eq "S14 rc 0" "$SUT_RC" 0
   eq "S14 one create" "$(acts issue-create)" 1
   [[ "$(wc -c <"$(body 1)")" -lt 65536 ]] && pass "S14 body under 65,536 bytes" || fail "S14 body too large"
@@ -1098,7 +1102,7 @@ mut M6 script reconcile_workflow 'if is_descendant "$sha" "$rsha" && apply_job_o
 mut M7 script jobs_have_apply_success '.conclusion == "success")'"'" '.conclusion == "success" or .conclusion == "skipped")'"'" 'S11:skipped'
 mut M8 script reconcile_issue 'if [[ "$N_INFLIGHT" -gt 0 ]]; then' 'if false; then' 'S7:otherwf,S12:inflight'
 mut M9 script read_runs 'if [[ "$p" -eq "$MAX_PAGES" ]]; then fail_loud run_window_truncated; fi' ':' 'S13:trunc'
-mut M10 script reconcile_issue 'labels="${LABEL},action-required"' 'labels="${LABEL}"' 'S9'
+mut M10 script reconcile_issue 'lbls="${LABEL},action-required"' 'lbls="${LABEL}"' 'S9'
 mut M11 script is_descendant 'CMP[$k]="unresolvable"' 'CMP[$k]="ahead"' 'S8:compare404'
 mut M12 script main 'if trigger_visible; then break; fi' 'break' 'S8:trigger-invisible'
 mut M13 script reconcile_workflow '          break\n        fi\n      done <<<"$runs"' '          break\n        fi\n        break\n      done <<<"$runs"' 'S2'
