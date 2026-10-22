@@ -1854,7 +1854,9 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // +5 (=63): egress gateway (#9534) — squid.conf + auth-helper + shared deny
     // set + bootstrap, installed by soleur-host-bootstrap.sh and mounted :ro into
     // soleur-egress-gw; the forwarder rides the image for the PR-B dispatcher.
-    expect(serverTfBakedSet().length).toBe(63);
+    // +4 (=67): the runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22) — web-bash-synthetic.{sh,service,timer} plus
+    // sdk-bash-verdict.sh, the verdict mapping it shares with ci-deploy.sh (installed beside it, sourced not executed).
+    expect(serverTfBakedSet().length).toBe(67);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over

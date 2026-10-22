@@ -493,7 +493,7 @@ reports; it never dispatches a production apply on its own.
 2. **Find the merge-SHA run and wait for it:**
    `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --limit 5 --json databaseId,status,conclusion`. An empty
    list right after the merge is retried (every 30 s, up to 10 min), not read as "no run". Watch the id under Monitor
-   (`gh run watch <id>`; never `run_in_background` polling), bounded to about 50 min (the job runs up to 41 min plus queueing
+   (`gh run watch <id>`; never `run_in_background` polling), bounded to about 65 min (the job's `timeout-minutes` is 53, so keep the bound above it; plus queueing
    on the shared concurrency group). `success` is read back. `cancelled`, `timed_out`, `startup_failure`, `skipped`,
    `failure` or no run within the bound mean **not delivered or superseded**: read back anyway (a merge-SHA run can be
    `cancelled` by the shared concurrency group and still have delivered); the read-back is the arbiter.
@@ -524,7 +524,7 @@ gh issue create --label type/chore --milestone "Post-MVP / Later" \
    `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason='deliver sole-copy protection'`.
    After a go-ahead and the dispatch: note the newest run id first, then
    `gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch --limit 1 --json databaseId,status`
-   (an empty or unchanged id is stale: retry), watch it under Monitor bounded to about 50 min, then read back again.
+   (an empty or unchanged id is stale: retry), watch it under Monitor bounded to about 65 min (above the apply job's 53-min ceiling), then read back again.
    `success` is read back; `cancelled`, `timed_out`, `startup_failure`, `skipped` or no run within the bound mean not
    delivered or superseded: read back anyway, and if it is still `not-protected` recommend the dispatch again (go-ahead).
 6. **On a `protected` read-back that matches the expected word, and only while ADR-282's status is still `adopting`, file ONE tracking issue** so the status flip does not depend

@@ -37,6 +37,12 @@ RUN bash scripts/assert-dev-signin-eliminated.sh
 RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
 RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
+# Runtime Bash synthetic (ADR-079 "Addendum — 2026-10-22 (#10455 b)"): a thin bundle of the dispatcher's own flag read, so
+# web-bash-synthetic.sh can ask "which seccomp artifact would a no-egress session get right now" through the SAME code path
+# production uses (the Flagsmith identity read, never the env mirror: when Flagsmith does not answer the CLI prints `unresolved` and the
+# synthetic skips the run). node_modules stays external (all prod deps), so the bundle is ~26 kB of app code. An image that predates
+# it is `no_ping reason=probe_absent`, never a `fail`. test/resolve-sandbox-selector.test.ts builds it with THIS line and runs it.
+RUN ./node_modules/.bin/esbuild server/resolve-sandbox-selector-cli.ts --bundle --format=esm --platform=node --target=node22 --packages=external --outfile=infra/lib/resolve-sandbox-selector.mjs
 
 # Stage 3: Global CLI tools (the three `npm install -g` layers the runner needs).
 # A stage of their own, FROM the pinned base image (never from `builder`, whose build ARGs
@@ -308,6 +314,9 @@ COPY --from=builder --chmod=0755 /app/infra/bwrap-shim/bwrap /usr/local/bin/bwra
 # is pinned to the production builder by test/sdk-bash-probe-parity.test.ts. The exact-path bang in .dockerignore is the
 # second half of this line.
 COPY --from=builder /app/infra/lib/sdk-bash-probe.mjs ./infra/lib/sdk-bash-probe.mjs
+# The resolver bundle built above; web-bash-synthetic.sh `docker exec`s it in the RUNNING container (full container env, so the
+# live flag read works) before the `env -i` probe exec. No .dockerignore bang: it is produced inside the builder stage.
+COPY --from=builder /app/infra/lib/resolve-sandbox-selector.mjs ./infra/lib/resolve-sandbox-selector.mjs
 
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
@@ -373,6 +382,10 @@ COPY --from=builder \
   /app/infra/web-private-nic-guard.sh \
   /app/infra/web-private-nic-guard.service \
   /app/infra/web-private-nic-guard.timer \
+  /app/infra/web-bash-synthetic.sh \
+  /app/infra/web-bash-synthetic.service \
+  /app/infra/web-bash-synthetic.timer \
+  /app/infra/sdk-bash-verdict.sh \
   /app/infra/web-zot-consumer-probe.sh \
   /app/infra/web-zot-consumer-probe.service \
   /app/infra/web-zot-consumer-probe.timer \

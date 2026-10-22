@@ -337,6 +337,18 @@ export async function isAgentSandboxUnixDenyEnabled(identity: Identity = ANON_ID
 }
 
 /**
+ * #10455 (b) — the same read as `isAgentSandboxUnixDenyEnabled`, plus whether Flagsmith ANSWERED. `fellBack` is true when the
+ * value came from the container's env mirror because the Flagsmith fetch failed (a cold one-shot process hits a 200 ms timeout
+ * routinely). The runtime Bash synthetic's resolver CLI reports `unresolved` on it instead of testing the wrong artifact.
+ */
+export async function readAgentSandboxUnixDenyDetailed(
+  identity: Identity = ANON_IDENTITY,
+): Promise<{ value: boolean; fellBack: boolean }> {
+  const snap = await getRuntimeSnapshot(identity.role, identity.orgId);
+  return { value: snap["agent-sandbox-unix-deny"], fellBack: _fallbackSnapshots.has(snap) };
+}
+
+/**
  * #8211 T2 build 1 — the quiet-window kill-switch. Global by construction: the
  * anonymous identity means the same answer on every host and for every user, and
  * an absent feature reads `false` (the SDK reports an unknown feature disabled),

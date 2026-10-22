@@ -95,6 +95,10 @@ infra/
 !infra/web-private-nic-guard.sh
 !infra/web-private-nic-guard.service
 !infra/web-private-nic-guard.timer
+!infra/web-bash-synthetic.sh
+!infra/web-bash-synthetic.service
+!infra/web-bash-synthetic.timer
+!infra/sdk-bash-verdict.sh
 !infra/web-zot-consumer-probe.sh
 !infra/web-zot-consumer-probe.service
 !infra/web-zot-consumer-probe.timer
