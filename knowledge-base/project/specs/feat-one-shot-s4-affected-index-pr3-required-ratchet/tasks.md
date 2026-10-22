@@ -7,7 +7,7 @@ Plan: `knowledge-base/project/plans/2026-10-22-feat-s4-affected-index-pr3-requir
 - 0.1 `git fetch origin main`, record the start commit, create a detached checkout of it.
 - 0.2 Build the rows file once from the detached checkout (`--print-selection --paths=README.md`, detached run, Monitor wait).
 - 0.3 Measure the line prefixes the real selector prints besides `AFFECTED_SELECTED` rows; pin the `c.extra` allowlist (hazard list plus unknown-prefix rule) with its source command.
-- 0.4 Run the audit with `--list`; record the `SOLEUR_PR_AFFECTED_AUDIT` line (expect gap_refs about 1,884).
+- 0.4 Run the audit with `--list`; record the `SOLEUR_PR_AFFECTED_AUDIT` line (measured on `4da1673510`: gap_refs 1,884; the committed baseline is whatever `wc -l` reports, which adds the pairs this PR's own test text creates).
 
 ## Phase 1 - failing tests first (RED), in `plugins/soleur/test/ci-pr-affected-replay.test.sh`
 
@@ -36,16 +36,16 @@ Plan: `knowledge-base/project/plans/2026-10-22-feat-s4-affected-index-pr3-requir
 
 ## Phase 3 - baseline, job, pins
 
-- 3.1 Generate `scripts/ci-pr-affected-audit.baseline.tsv` on the rebased tree (remove any older copy first, then `ratchet --print-baseline`); `git add` it; line count equals `gap_refs`.
+- 3.1 Generate `scripts/ci-pr-affected-audit.baseline.tsv` on the rebased tree (remove any older copy first, then `ratchet --print-baseline`); `git add` it; line count equals the live set (`wc -l` of the file; the ratchet itself is the check).
 - 3.2 Add job `affected-index-ratchet` to `.github/workflows/ci.yml` (positive `if:`, `continue-on-error`, `timeout-minutes: 5` alone, `fetch-depth: 2`, select timeout 200, annotation from the step) and update the header sentence.
 - 3.3 Classify the job in `UNGATED_PINNED`, `LIGHT_PINNED`, `ALWAYS_RUN_JOBS`; edit the `scripts/pr-fanout-ledger.txt` ci.yml row (27 to 28); run the consumer suites including the kb-consumers and fixture-relative censuses.
 - 3.4 CI-shape rehearsal: `git clone --depth 2` of a merge-shaped commit, `CI=true`, no `origin/main`.
-- 3.5 Record the first real run (`exit=0 reason=pass`, wall time at most 270 s) and read the throwaway DRAFT PR canary (one deliberate unbaselined pair in a tracked fixture) for the failing-`continue-on-error` conclusion; close it afterwards.
+- 3.5 Record the first real run (`exit=0 reason=pass`, wall time at most 270 s; the ceilings are provisional) and read the throwaway DRAFT PR canary (one deliberate unbaselined pair in a tracked fixture) for the failing-`continue-on-error` conclusion and its job duration; close it afterwards. PENDING, lead-owned: until it runs, ci.yml, ADR item 6, the runbook and the probe header say the rendering is UNMEASURED; replace those four in one commit.
 
 ## Follow-through enrollment
 
-- E.1 Author `scripts/followthroughs/ratchet-observation-window-10865.sh` (read-only; jobs API plus the emitted marker line; window rules from decision-challenges.md rows 26-27) and its stub-`gh` rows in the replay suite.
-- E.2 At ship: add the `follow-through` label and the directive to tracker #10865 (closing it does not authorize PR3b #10859).
+- E.1 Author `scripts/followthroughs/ratchet-observation-window-10865.sh` (read-only; jobs API plus the emitted marker line; window rules from decision-challenges.md rows 26-27 and 37-39: an unmet criterion is exit 2 `NOT YET:`, oldest-first bounded reads, the cumulative baseline check) and its stub-`gh` rows in the replay suite.
+- E.2 At ship: replace the tracker #10865 body with the corrected text, add the `follow-through` label and the directive `<!-- soleur:followthrough script=scripts/followthroughs/ratchet-observation-window-10865.sh earliest=<MERGE_DATE+7d> secrets=GH_TOKEN -->` (closing it does not authorize PR3b #10859); update the #10859 and #10861 bodies. PENDING, lead-owned.
 - E.3 Create the `s4-drain` label (`gh label create s4-drain`).
 
 ## Phase 4 - documentation
@@ -56,9 +56,9 @@ Plan: `knowledge-base/project/plans/2026-10-22-feat-s4-affected-index-pr3-requir
 ## Phase 5 - verification before ready
 
 - 5.1 Replay suite green detached; record the new duration; shard manifests only via the generator if required.
-- 5.2 `ratchet` exits 0 on the rebased tree with live equal to baseline equal to `gap_refs`.
+- 5.2 `ratchet` exits 0 on the rebased tree with live equal to baseline (compare with `wc -l`, not with a number written in prose).
 - 5.3 Orphan census after tracking, c4 count parity, technical-ruling gate.
-- 5.4 Simulate the revert in a scratch detached worktree and run its gates.
+- 5.4 Simulate the revert in the SQUASH shape in a scratch detached worktree (`git merge --squash` onto main, commit, `git revert <squash>`, restore the ADR-276 file from the squash commit, run the replay suite, `scripts/ci-push-dedupe.test.sh` and `scripts/ci-draft-light.test.sh`); the earlier per-commit simulation is not that shape.
 - 5.5 Re-run the sibling PR overlap loop; regenerate the baseline on the final rebased tree.
 
 ## Follow-on (not PR3a; file issues with `Ref #10448`)
@@ -68,3 +68,9 @@ Plan: `knowledge-base/project/plans/2026-10-22-feat-s4-affected-index-pr3-requir
 - F3 PR5: accept rows and non-code pairs, delete the baseline (strict zero), closing ADR line.
 - F4 `no-run` investigation (five hypotheses, receipts, decision rule).
 - F5 Evidence re-run, criterion c, flip PR: wait for a go-ahead naming the command.
+
+## Review fix round (2026-10-23, PR #10851)
+
+- R.1 DONE (docs): ADR-276 amendment items 3 to 6, 8, new 9; runbook sections of part 7; decision-challenges rows 34 to 41; `.gitattributes`; drafted issue bodies for #10865, #10859, #10861 (not posted).
+- R.2 Code (other agent): row-grammar validation (`floor-bad-row`), `floor-unreadable`, `accept-unreadable`, notice list, merge-base helper load, `no-marker` annotation, probe exit codes and read budget.
+- R.3 PENDING, lead-owned: 3.5 canary, 5.4 squash-shaped re-simulation, E.2 enrollment, E.3 label; replace the UNMEASURED wording after the canary.
