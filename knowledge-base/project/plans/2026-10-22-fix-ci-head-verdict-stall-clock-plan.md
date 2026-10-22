@@ -13,6 +13,25 @@ brand_survival_threshold: none
 
 # fix: ci-head-verdict.sh measures its stall clock from the head, not only the original ready event
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-22
+**Sections enhanced:** Proposed Solution, Implementation Phases (1-4), Research Insights, Scope Check provenance, Acceptance Criteria, Test Scenarios, Sharp Edges, Observability
+**Review agents used:** DHH, Kieran, code-simplicity (plan-review), CTO (devex lens plus two rulings, resumed once). Deepen halts run mechanically (proportionate to a script change of about 50 lines); no wider agent fan-out was run.
+
+### Key improvements
+
+1. The anchor became a hybrid (the kept run's own `created_at`; check suites only when no run exists), which removes any new API call and failure mode from the pending-full path (DHH, CTO-ruled).
+2. Two fixture defects that would have made the headline rows unsatisfiable were fixed before any code: an appended default suite masking the earliest anchor (replaced by a REPLACING `setsuites` helper over a stub-side default), and `min` of an empty jq array returning `null` with exit 0 (explicit empty-list error).
+3. Existing V5 boundary rows shift by the run's offset (7202 pending, 7203 stalled); the plan names the shift so no assertion is loosened to pass.
+4. Prose edits shrank to pointers at the script header (single source of the rule); tracking issues collapsed to two (CTO-ruled).
+
+### New considerations discovered
+
+- The monitor discards the resolver's stderr and treats `state=error` as "keep today's reading", so the persistent-empty case is made legible through the stderr line and the header residual rather than a consumer-message change.
+- Check-suite listings are populated 200 days back (measured), so the empty list is a fresh-push condition, not a retention artifact.
+- Deepen halts: 4.6, 4.7 (probe verb gate rc 0; literal command prints the marker once), 4.8 (0 PAT hits), 4.12 (one unfenced Scope Check, three subsections, one Recommendation, no unmapped row) pass; 4.9, 4.10, 4.11 and 4.55 do not apply. All cited rule ids are active, both labels exist, every cited knowledge-base path resolves.
+
 Umbrella #9757 stays open. The PR body says `Ref #9757` and carries no closing keyword. Merge through the queue
 (`gh pr merge <N> --squash --auto`), never `--admin`. Spec lacks a valid `lane:` (no spec.md exists for this
 branch), so `lane: cross-domain` is the fail-closed default.
@@ -234,7 +253,7 @@ held. The apply-workflow annotations (item 2) are not touched by any of them.
 ## Files to Edit
 
 - `plugins/soleur/scripts/ci-head-verdict.sh` (new `read_head_anchor`, two-step stall decision, header)
-- `plugins/soleur/test/ci-head-verdict.test.sh` (stub route, `mkrow` default suite, `addsuite`, rows V24-V27, mutants M37-M42, floors)
+- `plugins/soleur/test/ci-head-verdict.test.sh` (stub route with a built-in default suite, `setsuites`, `RUN_TS`-anchored V5 boundary rows, rows V24-V27, mutants M37-M43, floors)
 - `plugins/soleur/test/fixture-relative-assert.baseline.txt` (only if the checker reports a changed count)
 - `plugins/soleur/scripts/monitor-pr-checks.sh` (message and header wording)
 - `plugins/soleur/scripts/admin-merge-ready.sh` (message and header wording)
@@ -255,8 +274,8 @@ None. Queried open `code-review` issues for the script, its test, `monitor-pr-ch
 ### ADR
 
 Extension of an existing ADR: amend **ADR-276** with a dated addendum (not a new ADR, no new ordinal): the stall clock of Decision 4
-(supersession (2)) is `max(T, A)` with A the earliest check-suite `created_at` at the head sha, read lazily; empty or failed read is
-`state=error`. Authored via `soleur:architecture` conventions as a Phase 3 task of THIS PR, not a follow-up issue.
+(supersession (2)) is `max(T, A)` with A the kept run's `created_at` when a run exists, else the earliest check-suite `created_at` at the head sha (read
+lazily). The addendum is two sentences and points at the script header for the rule, residuals and error semantics. Authored via `soleur:architecture` conventions as a Phase 3 task of THIS PR, not a follow-up issue.
 
 ### C4 views
 
