@@ -2469,10 +2469,12 @@
 
 ### Continuation verification — 2026-10-22
 
-- Closed the Web text accumulator's unkeyed-event bypass: neutral snapshots now
-  obey the 256 KiB per-answer limit and shared 8 MiB intermediate-output budget,
-  and the latest complete neutral snapshot is flushed before successful stream
-  end. Added RED-first regressions, including the output-budget boundary.
+- Closed the Web text accumulator's unkeyed-event resource-limit bypass. An
+  architecture design review found that the event contract does not establish
+  neutral text as a complete snapshot. The fix preserves direct pass-through,
+  caps each unkeyed event at 256 KiB and cumulative unkeyed output at 8 MiB,
+  failing visibly at the limit without replacing keyed accumulated content.
+  RED-first regressions cover the output budget and mixed keyed/unkeyed order.
 - Migration 145 now independently rejects NULL or unsupported legacy Codex
   auth modes before schema changes. The migration integration test covers this
   refusal. The DSAR cross-tenant test now seeds synthetic runs/attempts/checkpoints
@@ -2487,9 +2489,10 @@
   `ifsccnjhymdmidffkzhl`. The refs are distinct. `dig` is not installed on this
   host; the DNS result came from system resolver and is not an authenticated
   DNSSEC observation.
-- Commit `2b4f97fc9f` records the local delta; `origin/main` was merged cleanly
-  afterward. The branch is ahead 354 commits including the existing feature
-  history; current full CI, CodeQL, RLS fuzz recovery, independent review, QA,
-  preflight completion and shipping gates remain pending. Hosted auth remains
-  BLOCKED, alternate route PENDING, and no profile admission or qualification
-  authority is claimed.
+- Commit `2b4f97fc9f` records the first local delta; `origin/main` was merged
+  cleanly afterward. Design-validity review found and corrected the neutral
+  text semantics regression in subsequent commit `243867622d` (not yet pushed).
+  CI run `39827130486` targets `681b3fad14`, not the fix. A fresh pushed-head CI,
+  full review/QA, preflight completion and shipping gates remain pending. Hosted
+  auth remains BLOCKED, alternate route PENDING, and no profile admission or
+  qualification authority is claimed.
