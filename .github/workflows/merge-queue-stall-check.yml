@@ -173,11 +173,16 @@ jobs:
           # (title is intentionally excluded to keep the TSV delimiter-safe).
           # Only entries at position <= MAX_ENTRIES_TO_BUILD are aged: deeper
           # entries legitimately wait their turn (see FALSE-POSITIVE FILTER).
+          # UNMERGEABLE entries are skipped: the queue holds them until the author
+          # rebases, they never get a merge_group build, so their age is not evidence
+          # of a required check failing to report (2 of the 4 suspected-stall issues
+          # filed 2026-10-14..20, #10641 and #10319, were exactly this).
           stalled="$(jq -r --argjson now "$now" --argjson thr "$threshold_s" \
             --argjson maxpos "$MAX_ENTRIES_TO_BUILD" '
             (.data.repository.mergeQueue.entries.nodes // [])[]
             | select(.enqueuedAt != null and .pullRequest != null)
             | select(.position <= $maxpos)
+            | select((.state // "") != "UNMERGEABLE")
             | (($now) - (.enqueuedAt | fromdateiso8601)) as $age
             | select($age > $thr)
             | "\(.pullRequest.number)\t\(($age/60)|floor)\t\(.pullRequest.url)\t\(.state // "UNKNOWN")"
