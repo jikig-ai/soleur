@@ -1207,7 +1207,8 @@ case "$mode" in
       if [[ -n "${MOCK_IL_RUN_LOG:-}" && "$*" != *":/plugin-mount"* ]]; then
         printf '%s\n' "$*" >> "$MOCK_IL_RUN_LOG"
         # The run's EFFECTIVE env, kept beside the run log as <log>.eff<N> (N = the run's line number): the --env-file content
-        # as Docker reads it (blank and comment lines dropped, leading whitespace trimmed, a bare-name line dropped - an
+        # as Docker reads it, approximated for ASCII whitespace only (real Docker also trims a no-break space and a BOM: the resolver suite's L1 row and
+        # docker-evidence.md cover those) (blank and comment lines dropped, leading whitespace trimmed, a bare-name line dropped - an
         # approximation of "unset in the CLI environment"), then the -e pairs in order. Docker keeps BOTH entries when a key
         # is in the env-file and on a -e flag (Config.Env is not de-duplicated), which a -e-only mock could never show.
         _il_n="$(grep -c '^' "$MOCK_IL_RUN_LOG" || true)"
@@ -3440,7 +3441,7 @@ else
     IL_OK=1
     [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 ]] || IL_OK=0
     il_effective_clean "$IL_T1_URL" "/etc/soleur/inngest-ca.pem" || IL_OK=0
-    grep -qF 'class=env_scrubbed level=info removed=1' "$IL_LOG" || IL_OK=0
+    grep -qE 'class=env_scrubbed level=info removed=1$' "$IL_LOG" || IL_OK=0
     # the scrub removes the two pinned names only: every other snapshot line reaches the container
     grep -qx 'KEY=value' "$IL_RUNLOG.eff1" && grep -q '^INNGEST_TLS_CA=' "$IL_RUNLOG.eff1" || IL_OK=0
     if [[ "$IL_ARM" == on ]]; then
@@ -3498,7 +3499,9 @@ else
   IL_OK=1
   [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 0 ]] || IL_OK=0
   [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == inngest_env_scrub_failed ]] || IL_OK=0
-  grep -qF 'class=env_scrub_failed level=error stage=write' "$IL_LOG" || IL_OK=0
+  grep -qE 'class=env_scrub_failed level=error stage=write$' "$IL_LOG" || IL_OK=0
+  # the Better Stack copy of the abort (the logger line), not only the state reason
+  grep -qF 'DEPLOY_ABORT: the env-file scrub failed (inngest_env_scrub_failed)' "$IL_LOG" || IL_OK=0
   [[ ! -e "$INNGEST_LINK_DIR/last-scheme" ]] || IL_OK=0
   if [[ "$IL_OK" -eq 1 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: flag on + scrub cannot write: aborts (reason=inngest_env_scrub_failed, stage=write), no container started, last-scheme not recorded"

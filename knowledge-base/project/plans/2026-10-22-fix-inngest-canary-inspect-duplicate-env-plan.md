@@ -67,14 +67,13 @@ deploy-state reason for the inspect check; amend ADR-294 in this PR.
 `inngest_link_canary_check`, the `--name soleur-web-platform-canary` run, the prod `docker run`, the mock `apparmor-trace` /
 `MOCK_IL_CANARY` branch, `docker-run-tuple.py`. The mechanism was checked against the ADR corpus: ADR-294 states the
 five-check canary layer and does not discuss env-file composition, so this is a gap in the adopted design, not a rejected
-alternative. The only other open PR touching these files is #10697 (sdk-bash); edits stay in three localized places. No stale
+alternative. The only other open PR touching these files is #10697 (sdk-bash); edits stay in three localized places (a trial `git merge-tree` against it was clean; its body gives no reason to expect a semantic conflict, which was not otherwise checked). No stale
 premise found. Corrections to the brief found while reading the code: (a) a second suite,
 `apps/web-platform/infra/inngest-link-resolver.test.sh`, also pins this check (stub inspect modes, rows E3/E7 asserting
 `check=inspect cause=none`, mutation anchors ANCH_B1..B3, a `MIN_ROWS` floor-drift check) and changes in the same PR; (b) the
 env overlay runs on `$ENV_FILE` before the resolver, so a snapshot `NODE_EXTRA_CA_CERTS` aborts the deploy with
 `github_app_key_env_hijack` before any docker run (the brief said "should be impossible"; it is enforced, and a row pins it).
-A read-only Better Stack query on 2026-10-22 (`betterstack-query.sh`) confirmed the ci-deploy `INNGEST_LINK:` rows are
-queryable.
+The first-flip failure rows were read from Better Stack on 2026-10-22 (`betterstack-query.sh`), so the ci-deploy `INNGEST_LINK:` rows are queryable.
 
 **Property List (Phase 0.6b).**
 
@@ -176,6 +175,13 @@ composition defect) from "egress, TLS or registry" (a network or CA defect). Ver
 
 - **If this lands broken, the user experiences:** a blocked release (a strict-path scrub fault aborts the deploy; the previous version keeps serving, so stale code, not unavailability), or, worse, a container started with an unintended Inngest URL or without the pinned CA so durable-agent sends (user prompts, task payloads) travel over the wrong link.
 - **If this leaks, the user's data is exposed via:** a regression that lets a snapshot value override the pinned URL (events and the event key in the `/e/<key>` path travel over plaintext `:8288` instead of verified TLS), or an event line that echoes an env value into Better Stack or Sentry. The residual that remains by design: the canary proves what the container was handed, not that the app's send path used TLS (the post-swap `legacy_8288` counter in the soak evidence does).
+- **Accepted by scope-out, each still true after this change (it is what lets the flip complete):**
+  - the dashboard send archives the approved draft when `inngest.send` throws (#10543, open), so a send throw in the flip window loses a draft; the replay check afterwards is the mitigation and stays owed;
+  - a reminder send that times out returns 502 (ADR-294 Consequences);
+  - each flip and each revert is a `docker stop --time=12` swap on every web host, and the drain waits only for cron children, so a running agent session is cut at each swap (up to twice per host for a flip plus its revert);
+  - the fleet can be half-flipped (one host https, one http) if one host fails its canary or scrub; web-2's own result is not visible to the flip run, so the per-host `canary_ok` read is mandatory and the revert is safe;
+  - web-2 receives `ci-deploy.sh` by an in-place write (#10856): a healthy swap in flight can be recorded as a failed exit after the success state was written (no container change), and a deploy that starts mid-write fails before any state change. The owner checks that no deploy is in flight on web-2 at the merge.
+  - The flip itself stays a separate typed go.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** carried from ADR-294 (the same boundary: user event payloads and the event key on the Inngest link); this change touches the code that proves that boundary.
 

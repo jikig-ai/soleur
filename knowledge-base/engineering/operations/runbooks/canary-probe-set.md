@@ -124,8 +124,8 @@ chose the legacy link (flag absent): the default path is the old `http://10.0.1.
    so a `legacy_8288` read taken earlier is contaminated. T for the soak is the last prod swap plus the old-container drain (how to
    read it per host: [inngest-server.md](inngest-server.md), act A3).
 5. **Failure reads (Better Stack only):** the failed release run's log carries one of two constant reasons, **not** the failing check:
-   `canary_inngest_link_inspect_failed` (the `inspect` check: the container was handed the wrong environment, a composition defect, not
-   a network or CA defect) or `canary_inngest_link_failed` (every in-container check: egress, TLS, registry). The check name and its
+   `canary_inngest_link_inspect_failed` (the `inspect` check: usually the container was handed the wrong environment, a composition defect and
+   not a network or CA defect; `cause=inspect_failed` is the daemon call itself failing) or `canary_inngest_link_failed` (every in-container check: egress, TLS, registry). The check name and its
    cause are in the event the resolver logs:
    `INNGEST_LINK: class=canary_failed level=error check=<inspect|health|events|send|registry|negative_control|no_verdict>
    cause=<token>` (Better Stack, journald tag `ci-deploy`; Sentry `op=inngest-link`, tag `classification=canary_failed`). The cause is
@@ -134,9 +134,9 @@ chose the legacy link (flag absent): the default path is the old `http://10.0.1.
    not trust the pinned file, `HTTP_<status>` means the listener answered badly, `EMPTY` means an empty registry, `other` is anything
    outside the list. For `inspect` the event reads `check=inspect cause=<token> url_lines=<n> url_https=<n> ca_lines=<n> ca_ok=<n>` (integers
    clamped to 99, never a value) and the cause is the first failing condition: `inspect_failed` (the canary vanished or the daemon call
-   failed; read the same deploy's `canary_health_failed` and `cstate` rows), `url_count` (`INNGEST_BASE_URL=` is not on exactly one line:
-   with no `class=env_scrubbed` row in the same deploy a source the scrub does not cover reached the container, so stop and file it, do not
-   retry), `url_value` (one line, not the https URL: a non-https URL reached the container), `ca_count` or `ca_value` (the CA env is absent,
+   failed; on the same host read `--grep 'DEPLOY_ROLLBACK: canary failed'`, whose `reason=` separates a health failure from this one), `url_count` (`INNGEST_BASE_URL=` is not on exactly one line:
+   with no `class=env_scrubbed` row on the same host in the minutes before it, a source the scrub does not cover reached the container; with
+   one, the scrub was not the source; either way stop and file it, do not retry), `url_value` (one line, not the https URL: a non-https URL reached the container), `ca_count` or `ca_value` (the CA env is absent,
    duplicated or not the pinned path). No `canary_ok` or `canary_failed` row at all means the resolver returned `lease_expired` (http, the
    canary layer skipped) or the health check failed first. A `class=env_scrub_failed` row (`stage=read|write|recount`) beside it means the
    env-file could not be rewritten: a strict deploy aborted with reason `inngest_env_scrub_failed`, a non-strict one continued unchanged.

@@ -3955,19 +3955,28 @@ inngest_link_commit_scheme() {
 # snapshot that pins either name made the canary's strict inspect check count 2. The name prefix class tolerates ANY non-name byte
 # (a space, a no-break space, a BOM) because Docker trims leading whitespace itself and `[[:space:]]` under LC_ALL=C is ASCII only;
 # a bare-name line goes too (Docker would resolve it from its own environment); lookalikes (INNGEST_BASE_URL_EXTRA, XINNGEST_BASE_URL)
-# survive. Every grep runs as `LC_ALL=C grep -a`: under a UTF-8 locale `grep -v` silently drops a line with an invalid byte, and a NUL
+# survive. The name ends at the first byte Docker would not accept in a name, so `INNGEST_BASE_URL.bak=1` and `INNGEST_BASE_URL-X=2` (valid
+# Docker names, different variables) survive too; a comment line that names the variable is dropped (harmless, and counted). Every grep runs as `LC_ALL=C grep -a`: under a UTF-8 locale `grep -v` silently drops a line with an invalid byte, and a NUL
 # byte makes grep print nothing for a "binary" file, both with rc 0. Order: count, write the kept lines to a temp file, check conservation
 # (kept + removed = total) and recount the pattern on the temp file (0), and only then rename over the original, so every failure
 # leaves <env-file> byte-identical. The temp name is held in _gak_tmp, which the deploy EXIT trap already removes (the overlay's merge
 # uses the same variable, with its own `.gak.` template). Kept lines are byte-exact, the file stays mode 0600 (mktemp), a final newline is
 # guaranteed on a rewrite. Events carry counts and a fixed stage token only. Returns 0, or 1 with INNGEST_LINK_REASON=inngest_env_scrub_failed.
-# Call it directly (never as `x=$(...)`: a subshell would discard _gak_tmp). The caller decides what a failure means.
-INNGEST_LINK_SCRUB_RE='^[^A-Za-z0-9_]*(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)([^A-Za-z0-9_]|$)'
+# Call it directly (never as `x=$(...)`: a subshell would discard _gak_tmp). The caller decides what a failure means. Another reader of the
+# file after this point, `_cred_redact_env_values` (error-tail redaction), simply loses these two non-secret values from its literal set.
+# The overlay (`overlay_github_app_key`) runs first and refuses any NODE_* name, so a pinned NODE_EXTRA_CA_CERTS never gets this far; that
+# name is here for the bytes the overlay's ASCII match misses (a no-break space or BOM prefix). Keep the names in step with REQUIRED_ENV in
+# lib/docker-run-tuple.py and with the two `^NAME=` counts in inngest_link_canary_check (a resolver-suite row pins the first).
+INNGEST_LINK_SCRUB_RE='^[^A-Za-z0-9_]*(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)([^A-Za-z0-9_.-]|$)'
 _inngest_link_scrub_fail() { # <stage: read|write|recount>
   if [[ -n "${_gak_tmp:-}" ]]; then rm -f "$_gak_tmp"; fi
   _gak_tmp=
   INNGEST_LINK_REASON=inngest_env_scrub_failed
   inngest_link_event env_scrub_failed error "stage=$1"
+}
+_inngest_link_count99() { # <n>: a fixed integer 0-99 for an event field; never aborts, whatever it is handed
+  case "$1" in '' | *[!0-9]*) printf '0'; return 0 ;; esac
+  if [[ "${#1}" -gt 2 ]]; then printf '99'; else printf '%s' "$((10#$1))"; fi
 }
 inngest_link_scrub_env_file() { # <env-file>
   local f="$1" n=0 total=0 kept=0 left=0 rc=0
@@ -3991,8 +4000,7 @@ inngest_link_scrub_env_file() { # <env-file>
   if [[ "$left" -ne 0 ]]; then _inngest_link_scrub_fail recount; return 1; fi
   if ! mv -f "$_gak_tmp" "$f"; then _inngest_link_scrub_fail write; return 1; fi
   _gak_tmp=
-  if [[ "$n" -gt 99 ]]; then n=99; fi
-  inngest_link_event env_scrubbed info "removed=$n"
+  inngest_link_event env_scrubbed info "removed=$(_inngest_link_count99 "$n")"
   return 0
 }
 
@@ -4015,8 +4023,8 @@ inngest_link_scrub_env_file() { # <env-file>
 # clamped to 99: `url_lines` `url_https` `ca_lines` `ca_ok`. Never a value, a key or raw text: the event is integers and fixed tokens only.
 # Docker keeps BOTH entries when a key is in the env-file and on a -e flag, which is why the deploy scrubs the two names from the
 # env-file (inngest_link_scrub_env_file) and this check stays strict: a real duplicate still fails.
-# Sets CANARY_FAIL_REASON: canary_inngest_link_inspect_failed for the inspect check (the container was handed the wrong env: a composition
-# defect), canary_inngest_link_failed for every in-container check (egress, TLS, registry). A literal per branch, never built from the
+# Sets CANARY_FAIL_REASON: canary_inngest_link_inspect_failed for the inspect check (usually the container was handed the wrong env, a
+# composition defect; cause=inspect_failed is the daemon call itself failing), canary_inngest_link_failed for every in-container check (egress, TLS, registry). A literal per branch, never built from the
 # cause. The cause lives in the event (Better Stack tag ci-deploy, Sentry op=inngest-link).
 INNGEST_LINK_CANARY_POS='const c=require("crypto"),b=process.env.INNGEST_BASE_URL,o=[];const g=v=>typeof v==="string"?v:"";const w=e=>{const x=g(e&&e.cause&&e.cause.code)||g(e&&e.code)||g(e&&e.name);return /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_[A-Z_]{1,30}|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|CERT_HAS_EXPIRED|ERR_TLS_[A-Z_]{1,30}|TimeoutError|AbortError|SyntaxError)$/.test(x)?x:"other"};const k=(n,v)=>o.push(n+"="+(v?"fail:"+v:"ok"));const h=r=>r.status===200?"":"HTTP_"+r.status;const hs=s=>{const p=(s.match(/^signkey-\w+-/)||[""])[0];return p+c.createHash("sha256").update(s.slice(p.length),"hex").digest("hex")};const t=(u,x)=>fetch(u,Object.assign({signal:AbortSignal.timeout(15000)},x));(async()=>{try{k("health",h(await t(b+"/health")))}catch(e){k("health",w(e))}try{k("events",h(await t(b+"/v1/events?limit=1",{headers:{Authorization:"Bearer "+hs(process.env.INNGEST_SIGNING_KEY||"")}})))}catch(e){k("events",w(e))}try{k("send",h(await t(b+"/e/"+encodeURIComponent(process.env.INNGEST_EVENT_KEY||""),{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify([{name:"soleur.tls-canary.ping",data:{canary:true}}])})))}catch(e){k("send",w(e))}try{const r=await t(b+"/v0/gql",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({query:"query{functions{id}}"})});const j=await r.json();k("registry",r.status!==200?"HTTP_"+r.status:(Array.isArray(j&&j.data&&j.data.functions)&&j.data.functions.length>0?"":"EMPTY"))}catch(e){k("registry",w(e))}console.log("inngest_link_canary "+o.join(" "))})()'
 INNGEST_LINK_CANARY_NEG='fetch(process.env.INNGEST_BASE_URL+"/health",{signal:AbortSignal.timeout(15000)}).then(()=>console.log("inngest_link_canary_neg=accepted"),e=>{const c=(e&&e.cause&&e.cause.code)||"";console.log("inngest_link_canary_neg="+(/^(DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|ERR_TLS_CERT_ALTNAME_INVALID)$/.test(c)?"verify_error":"other"))})'
@@ -4031,11 +4039,8 @@ inngest_link_canary_check() {
   https_n="$(printf '%s\n' "$envs" | grep -cxF "INNGEST_BASE_URL=$INNGEST_LINK_HTTPS_URL")" || true
   ca_n="$(printf '%s\n' "$envs" | grep -c '^NODE_EXTRA_CA_CERTS=')" || true
   ca_ok="$(printf '%s\n' "$envs" | grep -cxF 'NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem')" || true
-  url_n=$((10#${url_n:-0})); https_n=$((10#${https_n:-0})); ca_n=$((10#${ca_n:-0})); ca_ok=$((10#${ca_ok:-0}))
-  if [[ "$url_n" -gt 99 ]]; then url_n=99; fi
-  if [[ "$https_n" -gt 99 ]]; then https_n=99; fi
-  if [[ "$ca_n" -gt 99 ]]; then ca_n=99; fi
-  if [[ "$ca_ok" -gt 99 ]]; then ca_ok=99; fi
+  url_n="$(_inngest_link_count99 "$url_n")"; https_n="$(_inngest_link_count99 "$https_n")"
+  ca_n="$(_inngest_link_count99 "$ca_n")"; ca_ok="$(_inngest_link_count99 "$ca_ok")"
   if [[ "$irc" -ne 0 || -z "$envs" ]]; then why="inspect"; cause="inspect_failed"
   elif [[ "$url_n" != 1 ]]; then why="inspect"; cause="url_count"
   elif [[ "$https_n" != 1 ]]; then why="inspect"; cause="url_value"
@@ -5031,19 +5036,18 @@ case "$COMPONENT" in
       exit 1
     fi
 
-    # #10136: the `-e INNGEST_BASE_URL` and `-e NODE_EXTRA_CA_CERTS` flags below must be the ONLY source of those two names. Docker keeps an
-    # env-file entry AND a -e entry for one key in Config.Env, so a Doppler snapshot that pins either name made the canary's strict inspect
-    # check count 2 (the first flip attempt). Scrub them from the env-file once, for both app starts, on every deploy (flag on or off: one
-    # code path). A scrub fault aborts only a strict (https) deploy, before any container starts; otherwise it is logged and the deploy
-    # continues with the file unchanged, so a persistent scrub fault can never block a rollback or a hotfix. The function's temp file is
-    # held in _gak_tmp (the same variable the key overlay uses), which the EXIT trap above removes.
-    SCRUB_RC=0
-    inngest_link_scrub_env_file "$ENV_FILE" || SCRUB_RC=$?
-    if (( SCRUB_RC != 0 )) && (( INNGEST_LINK_CA_STRICT == 1 )); then
-      logger -t "$LOG_TAG" "DEPLOY_ABORT: the env-file scrub failed (inngest_env_scrub_failed) — keeping previous version"
-      final_write_state 1 "inngest_env_scrub_failed"
+    # #10136: the `-e INNGEST_BASE_URL` / `-e NODE_EXTRA_CA_CERTS` flags below must be the ONLY source of those names (rationale at
+    # inngest_link_scrub_env_file). Once per deploy, flag on or off. A scrub fault aborts only a strict (https) deploy, before any
+    # container starts, and the old container keeps serving; otherwise it is logged and the deploy continues with the file unchanged, so
+    # `action=off`, the flip's revert and any flag-off deploy are never blocked by it (with the flag on it blocks like a resolver fault).
+    INNGEST_SCRUB_RC=0
+    inngest_link_scrub_env_file "$ENV_FILE" || INNGEST_SCRUB_RC=$?
+    if (( INNGEST_SCRUB_RC != 0 )) && (( INNGEST_LINK_CA_STRICT == 1 )); then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: the env-file scrub failed (${INNGEST_LINK_REASON}) — keeping previous version"
+      final_write_state 1 "$INNGEST_LINK_REASON"
       exit 1
     fi
+    INNGEST_LINK_REASON=""
 
     # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
     # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
