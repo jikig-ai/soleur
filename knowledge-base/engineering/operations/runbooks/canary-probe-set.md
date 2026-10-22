@@ -630,6 +630,41 @@ agent-sandbox-unix-deny prd off`, operator-authorized). The flip reaches new que
 **Reading the probes.** Boot: `op=sandbox-hardening-selfprobe` now carries `unixdenyFilter` beside `filter`; an `ok: false` with
 `unixdenyFilter: false` means the image lacks the variant artifact (flag must stay OFF). Deploy: the three hardening reasons above.
 
+## Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22)
+
+One real wrapped Bash call, every 15 minutes, in the RUNNING web container on each web host; a per-host Better Stack heartbeat
+(`soleur-web-bash-synthetic-<host>`, period 900 s, grace 1800 s) is pinged only on a verified pass. It exists because the deploy smoke above sees
+only a sandbox that is broken AT deploy (#10445 lasted ten days between deploys).
+
+**Read it without SSH.**
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep web-bash-synthetic
+```
+
+Expected on a healthy host: `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass reason=ok … consecutive_no_ping=0`, one row per run per host
+(`host_name` tells web-1 from web-2). The heartbeat itself is in Better Stack Uptime, which pages by email when it goes missing.
+
+| Signal | Meaning | What to do |
+|---|---|---|
+| heartbeat missing, no journal rows | the DETECTOR is dead: timer stopped, host dark, unit failing before the script, Doppler token or Vector broken | check host health first (web uptime monitors), then `terraform_data.web_bash_synthetic_install[_web2]` in the last apply |
+| `/fail` incident, `verdict=fail` | Bash was dispatched and no verified nonce came back: the #10445 shape. `detail=` carries the probe's reason | treat as a sandbox outage; compare with the `agent_sandbox_bash_denial` alert and the deploy smoke ledger |
+| `verdict=no_ping reason=deploy_lock` | a deploy holds the lock; normal for the length of a deploy | none unless `consecutive_no_ping` keeps climbing |
+| `reason=container_down` / `container_restarted` | no container, or it was replaced during the run (a deploy swap) | none for one run; persistent means the web container is down |
+| `reason=memory_pressure` | the container is above the memory threshold; the run did not exec into it | investigate the container memory, not the synthetic |
+| `reason=probe_absent` | the running image predates the probe or the resolver bundle | expected on the first merge until the new image is deployed |
+| `reason=host_timeout_before_dispatch` | docker stalled or node did not start before Bash was handed to the SDK | a daemon-level problem, not a Bash result |
+| `reason=infra_error`, `detail=…` | everything else that is not a claim: docker error, bad selector output, unreadable lock table, replay-only coverage | read `detail=` |
+| `reason=no_heartbeat_url` | the per-host URL secret or key name is missing or malformed (a `SOLEUR_CREDENTIAL_REFUSED script=web-bash-synthetic` row says which) | fix the Doppler secret or the env file |
+
+`consecutive_no_ping=<n>` in the journal separates a long deploy lock from a dead host: the beat goes dark after about 45 minutes either way,
+and the journal tells which. `selector=` is the artifact the dispatcher's resolver chose (`base` until the `agent-sandbox-unix-deny` flag is on);
+`masks_missing=<n>` counts masked dirs that did not exist in the production container (informational, they belong to real sessions).
+
+**Arming.** The beats are born paused. `arm-heartbeats.sh` unpauses each host's beat after a measured ping with a 300 s window and a soft landing:
+an unlanded beat is a `::warning::` on the first apply (expected until the image carrying the resolver is deployed), and `soleur:postmerge` fails
+if any `web_bash_synthetic` beat is still paused. Manual arming: `arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>` for the id, then `--arm-one soleur-web-bash-synthetic-<host> --id <id>`.
+
 ## Outer-wrap canary - RETIRED 2026-10-19 (#10454)
 
 The deploy-time outer-wrap arm (`run_outer_wrap_canary`, deploy-state key `outer_wrap_canary`, ledger

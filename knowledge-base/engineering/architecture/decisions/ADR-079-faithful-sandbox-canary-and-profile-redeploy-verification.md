@@ -769,3 +769,50 @@ Coverage means the shim on PATH, the pinned `buildAgentSandboxConfig` literal an
 **Scope of the runtime signal (CTO ruling E, 2026-10-19).** The agent_sandbox_bash_denial alert and the notice rewrite cover cc-soleur-go sessions only. The legacy runner has no tool_result observer, so a helper EPERM there is neither mirrored nor paged. A variant-induced AF_UNIX EPERM has no signal on either runner. The #10455 open item "Legacy agent-runner loop has no tool_result observer" stays open and gains "variant-EPERM signal".
 
 **Flag rollout (CTO ruling G, 2026-10-19).** The `agent-sandbox-unix-deny` flag stays global; enabling it follows the staged, operator-attended procedure in `canary-probe-set.md` ("Enable request must contain"). A per-organisation cohort was deferred, not built.
+
+## Addendum — 2026-10-22 (#10455 b): the runtime Bash synthetic
+
+**Status:** `adopting` (this ADR's Deferral A is unchanged). Amends the Decision's detection contract only: the deploy-time smoke
+(addendum 2026-10-19, #10453) sees a sandbox that is broken at DEPLOY; the 2026-10-06..16 outage (#10445) lasted ten days because nothing
+saw one that broke BETWEEN deploys.
+
+**What shipped.** A systemd timer on every web host (`web-bash-synthetic.{sh,service,timer}`, every 15 minutes) runs one real wrapped Bash
+call in the RUNNING `soleur-web-platform` container, with the same probe, nonce proof and decoy-key `env -i` envelope as the deploy smoke,
+and pings a per-host Better Stack heartbeat (`betteruptime_heartbeat.web_bash_synthetic`, period 900 s, grace 1800 s) ONLY on a verified pass.
+A verified fail pings `<url>/fail` (immediate incident). Any run that cannot make a claim either way is `no_ping reason=<…>` and sends
+nothing: deploy lock held, container down or restarted during the run, memory above 85 %, probe or resolver absent from the running image,
+an infra error. The journal line `SOLEUR_WEB_BASH_SYNTHETIC verdict=… reason=… selector=… coverage=… masks_missing=… consecutive_no_ping=…`
+ships through Vector Source 4 (`SyslogIdentifier=web-bash-synthetic`). The grace is deliberately coarse (a skipped run plus jitter must not
+page): the dead-man beat reports a dead DETECTOR, the `/fail` ping reports a broken SANDBOX.
+
+**Rulings (CTO agent, plan review 2026-10-20).**
+- *Selector.* The synthetic asks the dispatcher's own resolver which seccomp artifact a no-egress session would get right now
+  (`server/resolve-sandbox-selector-cli.ts`, a 26 kB esbuild bundle of `resolveSandboxUnixDeny` with `--packages=external`, built in the Dockerfile
+  builder stage), in the container's FULL env so the live flag read works, then passes the NAME (`base` | `unixdeny`) to the `env -i` probe exec.
+  Never the env mirror: after the #10548 flip a mirror-driven probe would test an artifact production no longer selects. Coverage
+  (`sdk_wrapper_shim_prodtuple`) now names the artifact that was asked for, not a pinned one. The deploy smoke is unchanged and still runs
+  `unixdeny`.
+- *Verdict mapping.* The rc 124 / `SDK_BASH_DISPATCHED` / result-line mapping is extracted from `run_sdk_bash_smoke` into one sourced function
+  (`infra/sdk-bash-verdict.sh`, next to `ci-deploy.sh` in both layouts) used by both callers; a parity row fails if either stops calling it.
+  Behaviour of the deploy smoke is unchanged (its behavioural tests pass unmodified; the one source-text anchor in `ci-deploy.test.sh` and the one in `sdk-bash-probe-parity.test.ts` follow the moved text).
+- *Split and sprawl.* The `masked-dir-precreate` routed alert and the persisted-CLI-output measurement moved to a separate PR (no shared files);
+  the table-driven host-timer registry (the parity sprawl this PR again pays) is one debt issue, not a refactor here.
+
+**Arming budget.** Each `arm_one` deadline of `period + grace − 40` would be 2660 s per host. The two literal calls use 300 s (the first run starts
+within about 90 s of an install, and 300 s is far inside the 2700 s before a first absence alert), with the same soft landing as `inngest_consumer`:
+the first merge can precede the image that carries the resolver, and the unit then correctly sends nothing. The ARM-gate ladder is re-derived
+`2020 < 2100 < 2460` to `2790 < 2820 < 3180` seconds and the fleet-wide apply mutex from 47 to 59 minutes (worst case only; a healthy arm returns in
+seconds). `soleur:postmerge` fails loudly on any beat still paused, so a soft landing is never a silent dark state.
+
+**Safety toward the shared container.** The synthetic execs into the container that serves tenants, so it skips (never fails) while a deploy holds
+`/var/lock/ci-deploy.lock` (read from `/proc/locks`, never taken: a `flock -n` race would fail a real deploy), when memory is high, and when the
+container id or start time changed during the run (a deploy swap kills the probe mid-run). The probe creates nothing outside its own scratch dirs in
+runtime mode: the masked dirs belong to real sessions, so the ones that exist are masked and the rest are counted as `masks_missing`. In-container
+`timeout -k` (130 s) sits between the probe's 120 s cap and the host's 150 s cap so a hang cannot leave orphan node trees. The script's test seams
+are inert unless started with `--fixture-seams` (it runs as root with the whole prd root injected).
+
+**Residuals, stated.** (1) The exec runs as the container's own user (no `-u`), so a pass proves the sandbox for that user, not necessarily uid 1001.
+(2) A pass proves the no-egress shape only (same limit as the deploy smoke). (3) A compromised host can ping a false green. (4) web-2's env file is
+derived on the host from the probe env file written at its birth, so a rotation of `doppler_service_token.web_probes` reaches web-2 only on a host
+replacement, exactly like its three sibling probes. (5) Live Better Stack inventory re-measured read-only 2026-10-22: 7 monitors + 12
+heartbeats = 19 objects; this adds two heartbeats (one per host), so 21. The decode lives in `runbooks/canary-probe-set.md` ("Runtime Bash synthetic").
