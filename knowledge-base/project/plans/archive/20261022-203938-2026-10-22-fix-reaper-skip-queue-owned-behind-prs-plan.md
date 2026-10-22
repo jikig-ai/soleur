@@ -235,7 +235,7 @@ logs:
   where: Inngest run output (structured logger.info) and Sentry events for feature cron-bot-pr-reaper
   retention: Inngest run-history and Sentry project retention as configured for the platform
 discoverability_test:
-  command: curl -fsS "https://api.github.com/repos/jikig-ai/soleur/rules/branches/main?per_page=100" | jq -r '[.[].type] | join(" ")'
+  command: curl -fsS --max-time 10 "https://api.github.com/repos/jikig-ai/soleur/rules/branches/main?per_page=100"
   expected_output: merge_queue
 ```
 
