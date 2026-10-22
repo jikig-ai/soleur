@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import {
@@ -9,11 +9,13 @@ import {
   createSetup,
   decideBash,
   decidePermission,
+  decidesBash,
   decisionMessage,
   guardEnvelope,
   GUARD_RUN_FAILURE,
   parseGuardOutput,
   permissionCommand,
+  resolveWorkdir,
   rulesInjection,
   stripFrontmatter,
   type PermissionEvaluateEvent,
@@ -51,7 +53,7 @@ function denial(reason: string): string {
 }
 
 /** A context whose hooks are captured rather than registered, so they can be driven directly. */
-function fakeContext(): {
+function fakeContext(options: { tool?: boolean; toolRejects?: boolean; directory?: string } = {}): {
   ctx: SetupContext;
   handlers: Record<string, (event: any) => unknown>;
   events: { type: string }[];
@@ -61,8 +63,18 @@ function fakeContext(): {
   const events: { type: string }[] = [];
   let subscribed = false;
   const ctx: SetupContext = {
-    location: { directory: process.cwd() },
+    location: { directory: options.directory ?? process.cwd() },
     permission: { hook: async (name, handler) => void (handlers[`permission:${name}`] = handler) },
+    ...(options.tool === false
+      ? {}
+      : {
+          tool: {
+            hook: async (name: string, handler: (event: { tool?: unknown; id?: unknown; input?: unknown }) => unknown) => {
+              if (options.toolRejects === true) throw new Error("the runtime rejected execute.before");
+              handlers[`tool:${name}`] = handler;
+            },
+          },
+        }),
     session: { hook: async (name, handler) => void (handlers[`session:${name}`] = handler) },
     event: {
       subscribe: () => {
@@ -318,6 +330,348 @@ describe("opencode plugin — the guard's decision lands on the permission event
   });
 });
 
+describe("opencode plugin — the per-call workdir reaches the guard envelope (#10819)", () => {
+  function tempDir(prefix: string): string {
+    return mkdtempSync(join(tmpdir(), prefix));
+  }
+
+  /**
+   * Drive one Bash tool call and the permission event that follows it, exactly as measured: the
+   * tool hook fires FIRST with the call id, then `external_directory` (optional), then `shell` —
+   * both carrying the same `source.id`.
+   */
+  async function drive(options: {
+    directory: string;
+    workdir?: unknown;
+    id?: string;
+    messageID?: string;
+    action?: string;
+    sourceID?: string | undefined;
+    sourceMessageID?: string;
+    withoutSource?: boolean;
+    tool?: boolean;
+    toolRejects?: boolean;
+    workdirField?: boolean;
+  }): Promise<{
+    event: PermissionEvaluateEvent;
+    runs: { script: string; stdin: string; cwd: string }[];
+    lines: string[];
+    reports: string[];
+    handlers: Record<string, (event: any) => unknown>;
+  }> {
+    const { runs, run } = fakeRunner("");
+    const { ctx, handlers } = fakeContext({
+      directory: options.directory,
+      ...(options.tool === undefined ? {} : { tool: options.tool }),
+      ...(options.toolRejects === undefined ? {} : { toolRejects: options.toolRejects }),
+    });
+    const lines: string[] = [];
+    const reports: string[] = [];
+    await createSetup(
+      run,
+      pluginRoot,
+      (line) => void lines.push(line),
+      (line) => void reports.push(line),
+    )(ctx);
+    const id = options.id ?? "call_1";
+    const messageID = options.messageID ?? "msg_1";
+    const capture = handlers["tool:execute.before"];
+    if (capture !== undefined) {
+      const input: Record<string, unknown> = { command: "rm -rf build" };
+      if (options.workdir !== undefined) input["workdir"] = options.workdir;
+      if (options.workdirField === true) input["workdir"] = options.workdir;
+      capture({ tool: "shell", id, messageID, input });
+    }
+    const event: PermissionEvaluateEvent = {
+      action: options.action ?? "shell",
+      resources: ["rm -rf build"],
+      effect: "allow",
+      ...(options.withoutSource === true
+        ? {}
+        : {
+            source: {
+              type: "tool",
+              id: options.sourceID === undefined ? id : options.sourceID,
+              messageID: options.sourceMessageID ?? messageID,
+            },
+          }),
+    };
+    handlers["permission:evaluate"](event);
+    return { event, runs, lines, reports, handlers };
+  }
+
+  test("a captured workdir becomes the envelope cwd and the runner cwd", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-workdir-");
+    try {
+      const { runs, lines, reports } = await drive({ directory: session, workdir });
+      const physical = realpathSync(workdir);
+      expect(runs.length).toBe(BASH_GUARDS.length);
+      expect(runs[0].cwd).toBe(physical);
+      expect(JSON.parse(runs[0].stdin).cwd).toBe(physical);
+      expect(lines.filter((line) => line.includes("workdir-correlated")).length).toBe(1);
+      // The success path is the common one, so it must not teach the operator to ignore stderr.
+      expect(reports).toEqual([]);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  test("no workdir is the normal path: the session directory, and no line at all", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const { runs, lines, reports } = await drive({ directory: session });
+      expect(runs[0].cwd).toBe(session);
+      expect(JSON.parse(runs[0].stdin).cwd).toBe(session);
+      expect(lines).toEqual([]);
+      expect(reports).toEqual([]);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a workdir equal to the session directory is the same decision, and is still recorded", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const { runs, lines } = await drive({ directory: session, workdir: session });
+      expect(runs[0].cwd).toBe(realpathSync(session));
+      expect(JSON.parse(runs[0].stdin).cwd).toBe(realpathSync(session));
+      expect(lines.filter((line) => line.includes("workdir-correlated")).length).toBe(1);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a relative workdir resolves against the session directory", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      mkdirSync(join(session, "sub"));
+      const { runs } = await drive({ directory: session, workdir: "sub" });
+      expect(runs[0].cwd).toBe(join(realpathSync(session), "sub"));
+      expect(JSON.parse(runs[0].stdin).cwd).toBe(join(realpathSync(session), "sub"));
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a symlinked workdir is reported as the physical directory the command runs in", async () => {
+    const session = tempDir("oc-session-");
+    const target = tempDir("oc-target-");
+    try {
+      const link = join(session, "link");
+      symlinkSync(target, link);
+      const { runs } = await drive({ directory: session, workdir: link });
+      expect(runs[0].cwd).toBe(realpathSync(target));
+      expect(JSON.parse(runs[0].stdin).cwd).toBe(realpathSync(target));
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  test("a permission event with no tool source is loud and falls back to the session directory", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const { runs, lines, reports, event } = await drive({ directory: session, withoutSource: true });
+      expect(runs[0].cwd).toBe(session);
+      expect(lines.some((line) => line.includes("workdir-uncorrelated") && line.includes("id=absent"))).toBe(true);
+      expect(reports.some((line) => line.includes("no usable call id"))).toBe(true);
+      expect(event.effect).toBe("allow");
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a call the tool hook never recorded is loud, not silently 'no workdir'", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      // The tool surface is bound, but this test fires no capture: a lookup miss must be visible.
+      const { runs, lines, reports } = await drive({ directory: session, sourceID: "call_never_captured" });
+      expect(runs[0].cwd).toBe(session);
+      expect(lines.some((line) => line.includes("cause=no-capture"))).toBe(true);
+      expect(reports.some((line) => line.includes("recorded nothing"))).toBe(true);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a captured workdir that no longer exists escalates to ask and spawns no guard", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-vanished-");
+    try {
+      const { runs, lines, reports, handlers } = await drive({ directory: session, workdir });
+      expect(runs.length).toBe(BASH_GUARDS.length);
+      rmSync(workdir, { recursive: true, force: true });
+      const event: PermissionEvaluateEvent = {
+        action: "shell",
+        resources: ["rm -rf build"],
+        effect: "allow",
+        source: { type: "tool", id: "call_2", messageID: "msg_1" },
+      };
+      handlers["tool:execute.before"]({ tool: "shell", id: "call_2", messageID: "msg_1", input: { workdir } });
+      handlers["permission:evaluate"](event);
+      expect(event.effect).toBe("ask");
+      expect(event.message).toContain(workdir);
+      expect(lines.some((line) => line.includes("workdir-unusable"))).toBe(true);
+      expect(reports.some((line) => line.includes("not a directory this plugin can use"))).toBe(true);
+      // No decision was made against any directory, so no second guard run happened.
+      expect(runs.length).toBe(BASH_GUARDS.length);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("the V1 `bash` action correlates like `shell`", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-workdir-");
+    try {
+      const { runs, lines } = await drive({ directory: session, workdir, action: "bash" });
+      expect(runs[0].cwd).toBe(realpathSync(workdir));
+      expect(lines.some((line) => line.includes("workdir-correlated"))).toBe(true);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  test("the external_directory event that fires first with the same id does not consume the capture", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-workdir-");
+    try {
+      const { handlers, runs } = await drive({ directory: session, workdir });
+      const external: PermissionEvaluateEvent = {
+        action: "external_directory",
+        resources: [`${workdir}/*`],
+        effect: "allow",
+        source: { type: "tool", id: "call_1", messageID: "msg_1" },
+      };
+      handlers["permission:evaluate"](external);
+      expect(external.effect).toBe("allow");
+      expect(runs.length).toBe(BASH_GUARDS.length);
+      const shell: PermissionEvaluateEvent = {
+        action: "shell",
+        resources: ["rm -rf build"],
+        effect: "allow",
+        source: { type: "tool", id: "call_1", messageID: "msg_1" },
+      };
+      handlers["permission:evaluate"](shell);
+      expect(runs.length).toBe(BASH_GUARDS.length * 2);
+      expect(JSON.parse(runs[BASH_GUARDS.length].stdin).cwd).toBe(realpathSync(workdir));
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  test("a second evaluation of the same call still correlates (the capture is never deleted)", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-workdir-");
+    try {
+      const { handlers, runs } = await drive({ directory: session, workdir });
+      const again: PermissionEvaluateEvent = {
+        action: "shell",
+        resources: ["rm -rf build"],
+        effect: "allow",
+        source: { type: "tool", id: "call_1", messageID: "msg_1" },
+      };
+      handlers["permission:evaluate"](again);
+      expect(runs.length).toBe(BASH_GUARDS.length * 2);
+      expect(JSON.parse(runs[BASH_GUARDS.length].stdin).cwd).toBe(realpathSync(workdir));
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  test("the same call id in another message does not inherit the first call's workdir", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-workdir-");
+    try {
+      const { runs } = await drive({ directory: session, workdir, sourceMessageID: "msg_other" });
+      expect(runs[0].cwd).toBe(session);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  test("a runtime with no tool surface says so once, on stderr and in the log, and still decides", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const { runs, lines, reports } = await drive({ directory: session, tool: false, withoutSource: true });
+      expect(lines.filter((line) => line.includes("no-tool-hook-surface")).length).toBe(1);
+      expect(reports.filter((line) => line.includes("no usable `tool.execute.before` surface")).length).toBe(1);
+      expect(runs[0].cwd).toBe(session);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a rejected tool registration is treated as absent and leaves the guards bound", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const { runs, lines, reports } = await drive({ directory: session, toolRejects: true, withoutSource: true });
+      expect(lines.filter((line) => line.includes("no-tool-hook-surface")).length).toBe(1);
+      expect(reports.some((line) => line.includes("the runtime rejected execute.before"))).toBe(true);
+      expect(runs[0].cwd).toBe(session);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("the capture tolerates a hostile event and never throws", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const { handlers } = await drive({ directory: session });
+      const hostile = { tool: "shell", id: "call_9", messageID: "msg_1", input: { workdir: 42 } };
+      expect(() => handlers["tool:execute.before"](hostile)).not.toThrow();
+      expect(hostile.input.workdir).toBe(42);
+      const unkeyable = { tool: "shell", input: { workdir: "/tmp" } };
+      expect(() => handlers["tool:execute.before"](unkeyable)).not.toThrow();
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveWorkdir separates absent, usable and unusable without throwing", () => {
+    const session = tempDir("oc-session-");
+    try {
+      expect(resolveWorkdir({}, session)).toEqual({ kind: "absent" });
+      expect(resolveWorkdir(null, session)).toEqual({ kind: "absent" });
+      expect(resolveWorkdir({ workdir: "" }, session)).toEqual({ kind: "absent" });
+      expect(resolveWorkdir({ workdir: 42 }, session)).toEqual({ kind: "absent" });
+      expect(resolveWorkdir({ workdir: join(session, "missing") }, session)).toEqual({
+        kind: "unusable",
+        raw: join(session, "missing"),
+      });
+      expect(resolveWorkdir({ workdir: session }, session)).toEqual({ kind: "usable", path: realpathSync(session) });
+      expect(decidesBash("shell")).toBe(true);
+      expect(decidesBash("bash")).toBe(true);
+      expect(decidesBash("read")).toBe(false);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("opencode plugin — a guard that cannot enter its working directory is diagnosed", () => {
+  test("a spawn error names the directory instead of blaming the checkout", () => {
+    const decision = decideBash(
+      "shell",
+      { command: "rm -rf build" },
+      "/not/enterable",
+      () => ({ status: null, stdout: "", stderr: "", error: "EACCES" }),
+      pluginRoot,
+    );
+    expect(decision?.guard).toBe(GUARD_RUN_FAILURE);
+    expect(decision?.decision).toBe("deny");
+    expect(decision?.reason).toContain("EACCES");
+    expect(decision?.reason).toContain("/not/enterable");
+    expect(decision?.reason).not.toContain("may have moved");
+  });
+});
+
 describe("opencode plugin — the rule corpus and the compaction re-read", () => {
   test("frontmatter is stripped before injection", () => {
     expect(stripFrontmatter("---\nkey: value\n---\n\nBody\n")).toBe("\nBody\n");
@@ -448,6 +802,7 @@ describe("opencode plugin — the completion observer cannot enforce anything", 
       location: { directory: process.cwd() },
       permission: { hook: async () => ({}) },
       session: { hook: async () => ({}) },
+      tool: { hook: async () => ({}) },
       event: {
         subscribe: () => ({
           async *[Symbol.asyncIterator]() {
@@ -502,8 +857,19 @@ describe("opencode hook disposition ledger", () => {
     const operatorStage = rows.filter((row) => row.includes("operator-stage-approval.sh"));
     expect(operatorStage.length).toBe(1);
     expect(operatorStage[0]).toContain("absent-with-reason");
-    // tool.execute.before was measured able to block yet is deliberately unbound.
-    expect(rows.some((row) => row.includes("tool.execute.before"))).toBe(true);
+  });
+
+  test("the capture-only binding is recorded as a binding, with what it does and does not deliver", () => {
+    // #10819: `tool.execute.before` used to sit in the rejected-surfaces case above, because it
+    // was unbound. It is bound now — as a capture — and a row that still reads "absent" would be
+    // a false record. All three fields are asserted: disposition, binding call site, and the
+    // reason, because the disposition alone would also pass for a binding that delivers a decision.
+    const rows = ledger.filter((row) => row[1].includes('ctx.tool.hook("execute.before")'));
+    expect(rows.length).toBe(1);
+    expect(rows[0][2]).toBe("PreToolUse");
+    expect(rows[0][4]).toBe("bind");
+    expect(rows[0][5]).toContain("capture-only");
+    expect(rows[0][5]).toContain("delivers no decision");
   });
 
   test("the one downgrade that matters is recorded by name", () => {

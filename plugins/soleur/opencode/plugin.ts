@@ -26,11 +26,22 @@
  *   - `effect = "ask"` + `message` ⇒ the tool stays `running` awaiting a decision. A real
  *     prompt, so a guard's `ask` is delivered as an `ask` and NOT downgraded to a refusal.
  *
- * `ctx.tool.hook("execute.before")` is deliberately **not** bound. It fires *before* the
- * permission hook, and its only refusal channel is a thrown error, so binding it would let a
- * `deny`-or-`ask` both collapse into a throw and preempt the real ask behind it. It is a fine
- * surface (a throw there was measured to block the call and reach the model) and simply the
- * wrong one for a two-valued guard.
+ * `ctx.tool.hook("execute.before")` is bound **as a capture, never as a guard** (#10819). It fires
+ * *before* the permission hook, and its only refusal channel is a thrown error, so a `deny`-or-`ask`
+ * there would collapse into a throw and preempt the real ask behind it. What it *can* do without
+ * deciding anything is publish `input.workdir`, the one value the permission event does not carry:
+ * a `shell` call with `workdir=/tmp/x` was judged against the session directory, so a relative
+ * `rm -rf` was allowed that the guard asks about in the right directory. The permission hook
+ * consumes that capture by call key and passes it as the envelope `cwd`.
+ *
+ * INVARIANTS. (1) One predicate, `decidesBash`, answers "is this a call the Bash guards see" — and
+ * the envelope, the capture and the consume all ask it; a second copy of that question is how a
+ * wire-name change reopens the hole at one site only. (2) The capture runs for every Bash call,
+ * including one with no workdir, so a lookup miss means "the tool hook did not fire" rather than
+ * "no workdir". (3) A capture is never deleted on consume, so a second evaluation of the same call
+ * cannot fall back to the session directory. (4) A degraded correlation is announced; a captured
+ * workdir that cannot be used escalates to `ask` instead of judging somewhere the operator did not
+ * ask about.
  *
  * WHAT IT CANNOT DO (measurement §6.6). Every V2 hook surface communicates only by mutating
  * the event object it is handed, and `ctx.event.subscribe` is a one-way iterator with no
@@ -39,8 +50,8 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { appendFileSync, existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 
 /** Replaced in place by `install-opencode-adapter.ts` with the checkout path. */
 const INSTALLED_ROOT = "__SOLEUR_PLUGIN_ROOT__";
@@ -113,6 +124,13 @@ export interface ScriptRun {
   status: number | null;
   stdout: string;
   stderr: string;
+  /**
+   * The spawn error's code, when the process could not be started at all (`ENOENT`, `EACCES`,
+   * `ENOTDIR`). `spawnSync` reports these as `status: null` with the reason only in `error`, so
+   * discarding it makes an unenterable working directory indistinguishable from a moved checkout
+   * and sends the operator to re-run an installer that will answer `ok`.
+   */
+  error?: string;
 }
 
 export type ScriptRunner = (script: string, stdin: string, cwd: string) => ScriptRun;
@@ -131,6 +149,7 @@ export function runScript(script: string, stdin: string, cwd: string): ScriptRun
     status: result.status,
     stdout: typeof result.stdout === "string" ? result.stdout : "",
     stderr: typeof result.stderr === "string" ? result.stderr : "",
+    ...(result.error === undefined ? {} : { error: result.error.code ?? result.error.message }),
   };
 }
 
@@ -175,6 +194,18 @@ export function claudeToolName(tool: string): string {
 }
 
 /**
+ * Does a call with this wire name reach the Bash guards?
+ *
+ * One answer for three askers — the envelope constructor, the `execute.before` capture and the
+ * `permission.evaluate` consume. Two copies of this question is the rot that would let the
+ * measured wire name (`shell`) or its V1 spelling (`bash`) be handled at one site only, which is
+ * silently the pre-fix behaviour: capture with no consume, or consume with no capture.
+ */
+export function decidesBash(tool: string): boolean {
+  return claudeToolName(tool) === "Bash";
+}
+
+/**
  * The Claude PreToolUse envelope the guards parse. Returns `undefined` for any tool the guards
  * cannot decide, so no process is spawned for a call no guard would look at. `tool_input` is
  * passed through whole rather than pre-extracted: the destructive guard's documented behavior
@@ -182,10 +213,46 @@ export function claudeToolName(tool: string): string {
  * turn that ask into an allow.
  */
 export function guardEnvelope(tool: string, input: unknown, cwd: string): string | undefined {
+  if (!decidesBash(tool)) return undefined;
   const name = claudeToolName(tool);
-  if (name !== "Bash") return undefined;
   const toolInput = input !== null && typeof input === "object" && !Array.isArray(input) ? input : {};
   return JSON.stringify({ hook_event_name: "PreToolUse", tool_name: name, tool_input: toolInput, cwd });
+}
+
+/**
+ * What a `tool.execute.before` event said about the directory its command will start in.
+ *
+ * `absent` and `unusable` are deliberately different: the first is the normal case (no `workdir`
+ * was supplied, so the session directory is correct), the second means the operator asked for a
+ * directory this plugin cannot vouch for — and judging in the session directory instead is exactly
+ * the hole #10819 reports, one order of magnitude rarer.
+ */
+export type WorkdirCapture =
+  | { readonly kind: "absent" }
+  | { readonly kind: "usable"; readonly path: string }
+  | { readonly kind: "unusable"; readonly raw: string };
+
+/**
+ * Resolve the `workdir` a tool call carries. Total by construction: it never throws and never
+ * returns a path it has not confirmed is a directory.
+ *
+ * A relative value is resolved against `baseDir` (the session directory) — measured, not assumed:
+ * with the session moved to a worktree while the OpenCode process kept its launch cwd in the bare
+ * checkout, `workdir: "plugins/soleur"` ran in the worktree. `realpathSync` then yields the physical
+ * directory the shell's `chdir` reaches, so `path.resolve`'s lexical answer for a symlinked or
+ * `..`-containing value cannot disagree with where the command actually runs.
+ */
+export function resolveWorkdir(input: unknown, baseDir: string): WorkdirCapture {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return { kind: "absent" };
+  const raw = (input as Record<string, unknown>)["workdir"];
+  if (typeof raw !== "string" || raw === "") return { kind: "absent" };
+  try {
+    const absolute = isAbsolute(raw) ? raw : resolve(baseDir, raw);
+    if (!existsSync(absolute) || !statSync(absolute).isDirectory()) return { kind: "unusable", raw };
+    return { kind: "usable", path: realpathSync(absolute) };
+  } catch {
+    return { kind: "unusable", raw };
+  }
 }
 
 export interface GuardDecision {
@@ -234,6 +301,15 @@ export function decideBash(
     const parsed = parseGuardOutput(run.stdout);
     if (parsed !== undefined) return { guard: guard.id, ...parsed };
     if (run.status !== 0) {
+      // An unenterable working directory and a moved checkout share a symptom (`status: null`) and
+      // need different fixes, so the spawn error decides which sentence the operator reads.
+      if (run.error !== undefined) {
+        return {
+          guard: GUARD_RUN_FAILURE,
+          decision: "deny",
+          reason: `the guard could not be started in \`${cwd}\` (${run.error}): ${script}. The working directory a \`shell\` call asked for is not enterable, so the command was NOT judged and NOT run. Re-issue it from a directory that exists, or drop the \`workdir\` to use the session directory.`,
+        };
+      }
       const how = run.status === null ? "timed out or could not be spawned" : `exited ${run.status}`;
       return {
         guard: GUARD_RUN_FAILURE,
@@ -346,8 +422,22 @@ export interface PermissionEvaluateEvent {
   readonly action?: unknown;
   readonly resources?: readonly unknown[];
   readonly agent?: unknown;
+  /**
+   * Where the decision came from. Measured (§12.2): a `shell` call carries
+   * `{type: "tool", messageID, id}` and that `id` equals the `tool.execute.before` event's `id`,
+   * which is the only channel through which the per-call `workdir` can reach this event.
+   */
+  readonly source?: { readonly type?: unknown; readonly id?: unknown; readonly messageID?: unknown };
   effect: "allow" | "ask" | "deny";
   message?: string;
+}
+
+/** A `tool.execute.before` event. Measured keys: `tool, sessionID, agent, messageID, id, input`. */
+export interface ToolBeforeEvent {
+  readonly tool?: unknown;
+  readonly id?: unknown;
+  readonly messageID?: unknown;
+  readonly input?: unknown;
 }
 
 export interface SetupContext {
@@ -356,6 +446,17 @@ export interface SetupContext {
     hook(
       name: "evaluate",
       handler: (event: PermissionEvaluateEvent) => Promise<void> | void,
+    ): Promise<unknown>;
+  };
+  /**
+   * The capture surface (#10819). Optional because a runtime that does not offer it must still
+   * load; absence, and a registration the runtime rejects, are both announced at setup rather than
+   * ignored, because every decision then silently reverts to the session directory.
+   */
+  tool?: {
+    hook(
+      name: "execute.before",
+      handler: (event: ToolBeforeEvent) => Promise<void> | void,
     ): Promise<unknown>;
   };
   session: {
@@ -382,6 +483,30 @@ interface SessionState {
 const MAX_SESSIONS = 500;
 
 /**
+ * Cap on captured tool calls. One entry per Bash call, keyed by `(messageID, id)`; a long-lived
+ * `opencode serve` never tells the plugin a call is finished, so the map is bounded here.
+ *
+ * Eviction is **silent**, unlike `remember`'s. A capture that is lost is announced where it could
+ * change a verdict — at the decision, as `workdir-uncorrelated cause=no-capture` — so an eviction
+ * notice would be a second report of the same fact, emitted for calls whose evaluation never
+ * arrived at all (cancelled, auto-allowed by the ruleset). Loudness belongs at the decision.
+ */
+const MAX_CALLS = 500;
+
+/**
+ * The key a call is captured and consumed under.
+ *
+ * `id` alone was the obvious choice and the wrong one: the measured id (`call_00_s3uv…`) reads as a
+ * per-message counter, and one plugin instance is shared by every session an `opencode serve`
+ * process hosts. `messageID` is measured on both events, so the pair makes a colliding suffix
+ * harmless. A missing `messageID` on one side can only produce a loud `no-capture`, never a
+ * cross-call match.
+ */
+function callKey(messageID: unknown, id: string): string {
+  return `${typeof messageID === "string" ? messageID : ""}\u0000${id}`;
+}
+
+/**
  * Build `setup`. The hooks are returned bound to injected collaborators so the unit tests can
  * drive them with a fake context and a fake script runner.
  */
@@ -391,11 +516,34 @@ export function createSetup(
   write: (line: string) => void = (line) => {
     if (EVENT_LOG !== undefined) appendFileSync(EVENT_LOG, `${line}\n`);
   },
+  report: (line: string) => void = (line) => console.error(line),
 ): (ctx: SetupContext) => Promise<void> {
   const sessions = new Map<string, SessionState>();
+  const calls = new Map<string, WorkdirCapture>();
 
   /** Wire-controlled text before it goes into a TSV line: no C0/C1, no line/paragraph separators. */
   const field = (value: unknown): string => String(value).replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, "_");
+
+  /**
+   * Announce a degraded correlation on both channels. The log file is off by default
+   * (`SOLEUR_OPENCODE_EVENT_LOG` unset), so a log-only claim of loudness is false in the default
+   * configuration; stderr visibility in the TUI is not measured, so neither channel alone is
+   * enough. The sentence is for the operator, the TSV token for the record.
+   */
+  const announce = (token: string, detail: string, sentence: string): void => {
+    report(`[soleur] ${sentence}`);
+    write(`soleur-opencode\t${token}\t${detail}`);
+  };
+
+  /** Record a capture, keeping the map bounded. Write-once keys: no recency re-ordering. */
+  const recordCall = (key: string, capture: WorkdirCapture): void => {
+    calls.set(key, capture);
+    while (calls.size > MAX_CALLS) {
+      const oldest = calls.keys().next();
+      if (oldest.done === true) break;
+      calls.delete(oldest.value);
+    }
+  };
 
   /** Remember a session's state, keeping the map bounded and the most recent entry last. */
   const remember = (id: string, state: SessionState): void => {
@@ -411,12 +559,71 @@ export function createSetup(
   return async function setup(ctx: SetupContext): Promise<void> {
     const sessionCwd = ctx.location?.directory ?? process.cwd();
 
+    /**
+     * The one directory a `shell` decision is judged against, or the escalation to make instead.
+     *
+     * `ask` is returned only when a workdir **was** captured and cannot be used. Falling back to the
+     * session directory there is defect #10819 applied to the one case where the operator
+     * explicitly asked for a different directory — and `effect = "ask"` is a measured channel
+     * (§12.2), so the plugin can say "I cannot check this" instead of guessing.
+     */
+    const decisionCwd = (
+      event: PermissionEvaluateEvent,
+    ): { kind: "decide"; cwd: string } | { kind: "ask"; message: string } => {
+      const source = event.source;
+      const id = source?.id;
+      // `source.type` is checked as well as the id: a rule or config source whose id happened to
+      // collide with a call id would otherwise apply a stale workdir and log success.
+      if (source?.type !== "tool" || typeof id !== "string" || id === "") {
+        announce(
+          "workdir-uncorrelated",
+          "id=absent",
+          "a shell call arrived with no usable call id, so a per-call workdir cannot be correlated — this command is judged against the session directory instead. If this repeats, the runtime stopped tagging permission events with their tool call; check the OpenCode version.",
+        );
+        return { kind: "decide", cwd: sessionCwd };
+      }
+      const capture = calls.get(callKey(source.messageID, id));
+      if (capture === undefined) {
+        announce(
+          "workdir-uncorrelated",
+          `id=${field(id)}\tcause=no-capture`,
+          `the tool hook recorded nothing for shell call ${id}, so any workdir it carried is unknown — this command is judged against the session directory instead. The tool hook did not fire; check the OpenCode version, then re-run \`install-opencode-adapter.ts --check\`.`,
+        );
+        return { kind: "decide", cwd: sessionCwd };
+      }
+      if (capture.kind === "absent") return { kind: "decide", cwd: sessionCwd };
+      if (capture.kind === "usable") {
+        write(`soleur-opencode\tworkdir-correlated\tcwd=${field(capture.path)}`);
+        return { kind: "decide", cwd: capture.path };
+      }
+      announce(
+        "workdir-unusable",
+        `cwd=${field(capture.raw)}`,
+        `this shell call asked to run in \`${capture.raw}\`, which is not a directory this plugin can use, so the command was NOT judged against the session directory either. Approve only if you know where it will run.`,
+      );
+      return {
+        kind: "ask",
+        message: `Soleur: this shell call asked for \`${capture.raw}\`, which is not a usable directory, so the command was not checked against the session directory. Approve only if you know where it will run.`,
+      };
+    };
+
     // The only blocking surface bound here. A guard's decision replaces the ruleset's own verdict
     // — except in one direction: an arriving `deny` is never relaxed to `ask`. Only `allow`
     // arrivals were measured (§12.2), and relaxing an unmeasured deny is the silent-enforcement-loss
     // direction.
     await ctx.permission.hook("evaluate", (event) => {
-      const decision = decidePermission(event.action, event.resources ?? [], sessionCwd, runner, pluginRoot);
+      const action = event.action;
+      // ONE predicate for both sides (#10819). A non-Bash action returns before the map is touched:
+      // the measured `external_directory` event fires FIRST with the same call id, and consuming it
+      // there would lose the workdir before the decision that needs it.
+      if (typeof action !== "string" || !decidesBash(action)) return;
+      const target = decisionCwd(event);
+      if (target.kind === "ask") {
+        event.effect = "ask";
+        event.message = target.message;
+        return;
+      }
+      const decision = decidePermission(action, event.resources ?? [], target.cwd, runner, pluginRoot);
       if (decision === undefined) return;
       if (event.effect === "deny" && decision.decision === "ask") return;
       event.effect = decision.decision;
@@ -424,10 +631,54 @@ export function createSetup(
       // A guard that could not run is an operator-visible fault, so it is announced even when the
       // observation channel was never armed.
       if (decision.guard === GUARD_RUN_FAILURE) {
-        console.error(`[soleur] ${decision.reason}`);
+        report(`[soleur] ${decision.reason}`);
         write(`soleur-opencode\tguard-run-failure\teffect=deny\t${field(decision.reason)}`);
       }
     });
+
+    /**
+     * Capture-only (#10819): publish `input.workdir` for the decision above. Bound **after** the
+     * decision surface, so a runtime that rejects this registration cannot leave the guards
+     * unbound; wrapped, because optional chaining covers an absent `tool` and not a rejecting
+     * `hook()`. Never decides, never throws — a throw here would preempt the real ask behind it.
+     */
+    const capture = (event: ToolBeforeEvent): void => {
+      try {
+        const tool = event.tool;
+        if (typeof tool !== "string" || !decidesBash(tool)) return;
+        const id = event.id;
+        if (typeof id !== "string" || id === "") {
+          report(
+            "[soleur] a shell call reached the tool hook with no call id, so its workdir cannot be published — the decision that follows is judged against the session directory. Check the OpenCode version.",
+          );
+          write("soleur-opencode\tworkdir-uncapturable\tid=absent");
+          return;
+        }
+        recordCall(callKey(event.messageID, id), resolveWorkdir(event.input, sessionCwd));
+      } catch (error) {
+        report(
+          `[soleur] the workdir capture failed (${String(error)}); this shell call is judged against the session directory.`,
+        );
+        write(`soleur-opencode\tworkdir-capture-error\t${field(String(error))}`);
+      }
+    };
+
+    const noToolSurface = (reason: string): void => {
+      report(
+        `[soleur] this runtime offers no usable \`tool.execute.before\` surface (${reason}), so a shell call's \`workdir\` cannot be captured — every command is judged against the session directory, as before this fix. The permission guards remain bound.`,
+      );
+      write("soleur-opencode\tno-tool-hook-surface\tworkdir-unavailable");
+    };
+
+    if (ctx.tool === undefined) {
+      noToolSurface("the surface is absent");
+    } else {
+      try {
+        await ctx.tool.hook("execute.before", capture);
+      } catch (error) {
+        noToolSurface(String(error));
+      }
+    }
 
     await ctx.session.hook("context", (event) => {
       const cwd = typeof event["cwd"] === "string" ? event["cwd"] : sessionCwd;
