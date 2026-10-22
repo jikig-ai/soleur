@@ -72,15 +72,57 @@ DECLARED LIMITS. The walk costs the text length times the longest tracked compon
 name such as 'a-a-...' against a suite that repeats it took 2.7 s at 100 KB and 11.5 s at 400 KB (about 230 s per view at the 8 MiB read cap);
 real names and real suites are far below this, and it needs a hostile tracked name plus a hostile suite on the pinned tree. A tracked path
 that contains a newline is found by the scan (it is reported as a gap) but lines are split on newline, so it has no `ref` line and no accept
-row can exempt it: fail-closed, and no such name is tracked. The audit sees literal names only (see the runbook); `source` hops are one
-level; a path glued to the tail of an ANSI colour code is display text and is not a read.
+row can exempt it: fail-closed, and no such name is tracked. A path glued to the tail of an ANSI colour code is display text and is not a
+read. The reach and its limits are in the next section.
+
+REACH (S4 index completion PR1b, #10448; frozen here and quoted by the ADR-276 amendment). `gap_suites=0` means LITERAL-NAME COMPLETENESS OVER
+WHAT THIS AUDIT READS (the suite file, its source closure and the naming walk below, an approximation of the selector closure from inside):
+necessary, not sufficient. What the audit reads for one selector row, in this order:
+  1. the suite's own file (a directory suite: its bun-discoverable test files);
+  2. the SOURCE CLOSURE of each of them: `source X` / `. X` lines, to depth 8 (the selector expands the files at distance 0 to 7; its 8th pass
+     names the distance-8 files as edges without expanding them, so the audit reads one level further: it over-reports, the safe direction), breadth first, each
+     real file once, a cycle ending at the visited file. Operands: `$(dirname "$0")/`, `$(dirname "${BASH_SOURCE[0]}")/`, `$SCRIPT_DIR/`,
+     `${SCRIPT_DIR}/`, `$HERE/`, `${HERE}/`, `$DIR/` and `${DIR}/` resolve against the directory of the INCLUDING file (`..` normalised);
+     `$REPO_ROOT/`, `${REPO_ROOT}/`, `$ROOT_DIR/`, any other `$X/` prefix and a bare path resolve against the repo root. Only a tracked .sh or
+     .bash target is read, never a runner trigger;
+  3. the NAMING WALK: a CODE file (.sh .bash .py .ts .tsx .jsx .js .mjs .cjs .mts .cts .rb) that the row lists in `pats` as an exact `^file`
+     entry and that an already-read text names literally, to depth 8 (sorted within a level), per row. After each level is read, the source
+     closure of its files is read too (a fresh 8-level closure per walk file, or the depth left for a file already read as a closure member) and both feed the next level's naming. The two
+     runner triggers are never nodes; a `glob:` or `dir/` entry never is.
+Every file is read at most once per run and the read order is canonical (per row: each input followed by its closure; then, level by level,
+the walk files of the level by sorted path followed by their closures; the rows of a label ordered by their whole pattern list), so an
+accept row's ordinal never depends on the order the selector printed the rows. An edge is credited exactly when the selector would select
+the suite for a diff naming the path (edge_hit mirrors `_diff_touches`).
+DRAIN-REVEAL: reach is frozen as a definition but its result moves through declared edges and through the text of files it reads: declaring
+a code file as an edge makes the audit read that file, which can reveal more pairs. Accept an anchor-keyed row when the suite does not read or
+execute the file, declare an edge only when it does, and re-run the audit to a fixpoint.
+DECLARED LIMITS (what no run of this audit proves):
+  - literal names only: no computed path, glob expansion or variable-indirect operand;
+  - hops are `source` / `.` lines to .sh or .bash targets. The selector also mints edges from `bash|sh|python3|node|bun|exec` invocations of a
+    path, from `VAR=path; source "$VAR"` assignments, `source --`, other extensions, dotted python imports (`import pkg.mod`), the stem fan of a
+    stem suite and prefixes assigned from `$(cd ... && pwd)` (80 tracked lines use `. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/x.sh"`
+    and are not followed; about 90 tracked lines use a `source` or `.` of a `$(cd ...)` prefix). Measured when this was reviewed: 295 of 536
+    audited labels list in `pats` a code file (CODE_EXT, exact `^file`) that the audit never reads (1,166 label-path pairs; command: code_pats_of(pats)
+    minus the files reach_texts() returns, over `test-all.sh --print-selection --paths=README.md`);
+  - `$(dirname "$0")` inside a sourced file resolves against that file, as the selector's own convention does (bash resolves $0 to the entry script);
+  - the first pattern of a row is taken to be the suite's own file (true by the selector's construction); a runner trigger as first pattern is unaudited;
+  - data inputs in `pats` (manifests, workflows, SKILL.md files, baselines, tsv tables, docs) are checked as declared edges but their contents
+    are never scanned, and code reached only through them is not read; code files that a `dir/` or `glob:` entry covers are read by nothing
+    (making them nodes would add 621 pairs and 10 gap suites on the pinned tree);
+  - suites the runner declines under `--pr-gated` (ADR-262), directory and glob reads, bun helper files and the bunfig preload are not modelled;
+  - the comment table strips only a whole-line comment of the file's own language: a line inside a docstring or heredoc body that begins with the
+    comment marker is blanked (under-read), other block-comment and heredoc lines stay an over-report;
+  - a tracked name holding a TAB or a double quote is framed differently in the selector's diff blob (no such name is tracked);
+  - a runner trigger is covered by the trigger list (a diff touching one runs the full battery), not by its own edges; the registration-only and
+    staged-diff premise of the runner classifier is unchanged.
 
 ACCEPT FILE (--accept FILE; tab-separated, `#` lines and blank lines skipped; a missing file exempts nothing and says so on stderr):
   suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>     one row per source line that names the path
   suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason>                   a whole suite that has NO inputs at all (never one with any)
   anchor    the first 12 hex of sha256 over `" ".join(line.split())`, where `line` is the comment-stripped source line AS WRITTEN
             (whitespace collapsed; Unicode whitespace too, as str.split() does; a comment line is blanked, never removed)
-  ordinal   1, 2, ...: the Nth line with that anchor, counted over the suite file and then the libraries it sources, in hop order
+  ordinal   1, 2, ...: the Nth line with that anchor, counted over the files in the canonical read order (see REACH): the suite file, its
+            source closure, then the naming-walk files
 A gap is accepted only when every boundary line that names it has a row. The 3-column form `suite<TAB>path<TAB>reason` was retired.
 STALE rows (exit 1, reason printed): not-a-gap (the pair is not a gap before the exemptions: an edge declares it, or no line names
 it), anchor-not-live, path-untracked, suite-unaudited, suite-unregistered, suite-always-on, star-row-readable-suite,
@@ -847,16 +889,28 @@ def cmd_cp(a):
 RUNNER_TRIGGERS = ("scripts/test-all.sh", "scripts/lib/test-affected-paths.sh")
 
 
-def strip_comments(text):
-    """Blank whole-line comments: a path named only in a comment is a mention, not a read. Lines are split on "\\n" only (bash does
-    not split on a vertical tab, a form feed, a lone carriage return or U+2028); a carriage return is removed only when it directly
-    precedes the line feed (CRLF), a lone one is an ordinary character. A stripped line becomes an empty line, so every line keeps
-    its number."""
-    keep = []
-    for line in text.replace("\r\n", "\n").split("\n"):
-        t = line.lstrip()
-        keep.append("" if t.startswith("#") or t.startswith("//") else line)
-    return "\n".join(keep)
+# The whole-line comment marker of a file's OWN language, by extension of its real path. A line that is a comment in a different
+# language is not blanked (`// docs/a.md` in a .sh is a command word and a path), and an extension that is not listed strips
+# nothing: over-reporting is the audit's safe direction. Block comments, docstrings and heredoc bodies are a declared over-report.
+COMMENT_PREFIX = {
+    ".sh": "#", ".bash": "#", ".py": "#", ".rb": "#", ".yml": "#", ".yaml": "#",
+    ".ts": "//", ".tsx": "//", ".js": "//", ".jsx": "//", ".mjs": "//", ".cjs": "//", ".mts": "//", ".cts": "//",
+}
+
+
+def comment_prefix(path):
+    return COMMENT_PREFIX.get(os.path.splitext(path)[1], "")
+
+
+def strip_comments(text, prefix):
+    """Blank whole-line comments of the file's own language (`prefix`, from comment_prefix; empty strips nothing; only space and tab may
+    precede the marker, as in bash): a path named only in a comment is a mention, not a read. Lines are split on "\\n" only (bash does not split on a vertical tab, a form feed, a lone
+    carriage return or U+2028); a carriage return is removed only when it directly precedes the line feed (CRLF), a lone one is an
+    ordinary character. A stripped line becomes an empty line, so every line keeps its number."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    if not prefix:
+        return "\n".join(lines)
+    return "\n".join("" if line.lstrip(" \t").startswith(prefix) else line for line in lines)
 
 
 def tracked_files(root):
@@ -866,14 +920,59 @@ def tracked_files(root):
     return {f.decode("utf-8", errors="replace") for f in run(["git", "ls-files", "-z"], cwd=root, binary=True).stdout.split(b"\0") if f}
 
 
+GLOB_CHARSET = re.compile(r"[^A-Za-z0-9_./*-]")
+
+
 def edge_hit(pt, path):
-    """The selector's own edge grammar (`_diff_edge_hit` in the runner), applied to one path: `^glob:<head>/<tail>` is a
-    bash `[[ == ]]` glob (`*` crosses `/`); `^dir/` is a prefix; `^file` is exact equality. Nothing is a regex: a path
-    holding ( ) [ ] + $ matches itself, and `^a.sh` does not match `a.sh.bak`."""
-    e = pt[1:] if pt.startswith("^") else pt
+    """True exactly when the selector would select the suite for a diff whose only name is `path`: `_diff_touches` with the single
+    entry `pt`, over `_diff_edge_hit` (one function, one call site; a bash-versus-python differential in the suite pins it to the
+    real functions). An entry WITHOUT a `^` is a plain substring of the path (a non-caret `glob:` entry is therefore dead, and the
+    empty entry matches everything). A `^` entry is `glob:<head>/<tail>` (a bash `[[ == ]]` glob over the whole path, `*` crosses
+    `/`), `dir/` (a prefix) or a file (exact equality). Nothing is a regex: a path holding ( ) [ ] + $ matches itself, and `^a.sh`
+    does not match `a.sh.bak`. EVERY malformed glob shape matches (a glob edge can only widen a selection): a byte outside
+    [A-Za-z0-9_./*-], a head that is absolute, begins with `./` or `../`, or holds `//`, `/./` or `/../`, a head not ending in `/`, a tail
+    ending in `/`, a tail without `*`. A tracked name holding a TAB or a double quote is framed differently in the selector's diff blob and
+    is not modelled (no such name is tracked)."""
+    if not pt.startswith("^"):
+        return pt in path
+    e = pt[1:]
     if e.startswith("glob:"):
         g = e[len("glob:"):]
-        return re.match("^" + "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in g) + "$", path) is not None
+        if GLOB_CHARSET.search(g):
+            return True
+        head = g.split("*", 1)[0]
+        if head.startswith("/"):        # the head is not repo-relative: six shapes, one line each
+            return True
+        if head.startswith("./"):
+            return True
+        if head.startswith("../"):
+            return True
+        if "//" in head:
+            return True
+        if "/./" in head:
+            return True
+        if "/../" in head:
+            return True
+        if not head.endswith("/"):      # head not /-terminated
+            return True
+        tail = g[len(head):]
+        if tail.endswith("/"):          # unmatchable tail
+            return True
+        if "*" not in tail:             # a tail without a wildcard
+            return True
+        # `*` matches any run of characters, `/` included, and a run of stars is one star: split on `*`, anchor the first and the last
+        # segment and find the middle ones in order. Linear in the path, where the equivalent regex is polynomial in the number of stars.
+        segs = g.split("*")
+        first, last = segs[0], segs[-1]
+        if len(path) < len(first) + len(last) or not path.startswith(first) or not path.endswith(last):
+            return False
+        pos, stop = len(first), len(path) - len(last)
+        for seg in segs[1:-1]:
+            k = path.find(seg, pos, stop)
+            if k < 0:
+                return False
+            pos = k + len(seg)
+        return True
     if e.endswith("/"):
         return path.startswith(e)
     return path == e
@@ -881,10 +980,10 @@ def edge_hit(pt, path):
 
 def suite_file(root, pattern):
     """The suite's own file is the FIRST pattern of its selector row (`^path`, dots literal). None when that is not a
-    readable file (a directory suite, or a pattern the selector derived differently): the caller counts it unaudited."""
+    readable file (a directory suite, a runner trigger, or a pattern the selector derived differently): the caller counts it unaudited."""
     path = pattern[1:] if pattern.startswith("^") else pattern
     full = os.path.join(root, path)
-    return full if path and not path.endswith("/") and os.path.isfile(full) else None
+    return full if path and path not in RUNNER_TRIGGERS and not path.endswith("/") and os.path.isfile(full) else None
 
 
 # ONE BOUNDARY DEFINITION. A match starts where the character before it is not a word character [A-Za-z0-9_] (or at the start of
@@ -904,7 +1003,22 @@ WORD_CHARS = "A-Za-z0-9_"
 WORD = re.compile("[%s]" % WORD_CHARS)
 ESCAPE = re.compile(r"\\(?:[abefnrtv]|0[0-7]{0,3}|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{4})")
 SHORT_OPTION = re.compile(r"""(?<![^\s"'])-[A-Za-z](?=\S)""")
-SOURCE_HOP = re.compile(r"""(?:source|\.)\s+["']?(?:\$\{?[A-Za-z_]+\}?/)?([A-Za-z0-9_./-]+\.sh)""")
+# A `source X` / `. X` line. group 1 is the operand prefix (`$(dirname "$0")`, `$(dirname "${BASH_SOURCE[0]}")` or `$VAR` / `${VAR}`), group 2 the
+# rest of the path (it starts with `/` after a prefix). The keyword must not be glued to a word or to a dot (`resource x.sh` and a prose
+# `see. lib/x.sh` are not hops), and the blank after it is a space or tab (never a newline). Only .sh and .bash targets are followed. A prefix
+# is recognised only when a `/` follows it (the lookahead), which also keeps one long `source $<identifier>` token linear instead of quadratic.
+SOURCE_HOP = re.compile(
+    r"""(?<![\w.])(?:source|\.)[ \t]+["']?"""
+    r"""(\$\(dirname[ \t]+"?(?:\$0|\$\{BASH_SOURCE\[0\]\})"?\)(?=/)|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?=/))?"""
+    r"""([A-Za-z0-9_./-]+\.(?:sh|bash))""")
+# The operand prefixes that stand for the INCLUDING file's directory (the selector's `_affected_edge_token` resolves `$HERE`, `$SCRIPT_DIR`
+# and both `$(dirname ...)` spellings that way; `$DIR` is added). Every other prefix (`$REPO_ROOT`, `$ROOT_DIR`, an unknown `$X`, no prefix)
+# is tried at the repo root; only a TRACKED target is ever read, so a wrong guess costs nothing.
+HOP_DIR_VARS = frozenset(("SCRIPT_DIR", "HERE", "DIR"))
+HOP_DEPTH = 8    # source-hop levels followed from a suite input (the selector reads distance 0 to 7: the audit reads one level further, the safe direction)
+WALK_DEPTH = 8   # naming-walk levels followed over code files the selector row lists
+# The files the naming walk may read: code, by extension. A data file in `pats` is a declared input the audit checks but never scans.
+CODE_EXT = frozenset((".sh", ".bash", ".py", ".ts", ".tsx", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".rb"))
 # bun's test discovery: *.test.* *_test.* *.spec.* *_spec.* over js, jsx, ts, tsx and the module-flavoured mjs, cjs, mts, cts. A
 # SUPERSET on purpose: bunfig `pathIgnorePatterns` are not applied (over-scanning is the safe direction).
 BUN_TEST = re.compile(r"[._](?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs|mts|cts)$")
@@ -970,8 +1084,9 @@ class PathNode:
 
 class PathIndex:
     """The tracked paths as a component trie, plus what one audit run memoises across suites: each file's comment-stripped text as
-    written (`raws`), its two views (`views`) and the tracked paths it names (`refs`), keyed on the FULL path (two libraries named
-    helper.sh in different directories are two entries). `ops` counts every start candidate and every trie step, so a test can
+    written (`raws`), its two views (`views`), the RAW `source` operands it holds (`hops`: (prefix, rest) pairs, resolved per call against
+    the including file's logical path) and the tracked paths it names (`refs`), keyed on the FULL path (two libraries named helper.sh in
+    different directories are two entries). `ops` counts every start candidate and every trie step, so a test can
     bound the work by an operation count instead of a clock."""
 
     def __init__(self, tracked):
@@ -993,6 +1108,7 @@ class PathIndex:
         self.raws = {}
         self.views = {}
         self.refs = {}
+        self.hops = {}
 
     def under(self, prefix):
         """The tracked paths that start with `prefix`, in order."""
@@ -1093,7 +1209,7 @@ def read_text(index, path, base=None):
     views. ReadError when the file is not a readable regular file (see read_bytes)."""
     v = index.views.get(path)
     if v is None:
-        raw = strip_comments(read_bytes(path, base).decode("utf-8", errors="replace"))
+        raw = strip_comments(read_bytes(path, base).decode("utf-8", errors="replace"), comment_prefix(path))
         index.raws[path] = raw
         v = index.views[path] = views(raw)
     return v
@@ -1128,41 +1244,147 @@ def try_read(index, path, bad, base=None):
     return real, full, light, index.raws[real]
 
 
+def hop_targets(rel, raws, tracked):
+    """The tracked, repo-relative targets of the `source` operands `raws` of the file whose LOGICAL repo-relative path is `rel`, in text
+    order. A prefix that stands for the including file's directory resolves against it, every other prefix and a bare path against the
+    repo root; a target that is not tracked, is a runner trigger or leaves the tree is dropped."""
+    out = []
+    for pre, rest in raws:
+        if pre:
+            if not rest.startswith("/"):
+                continue
+            home = os.path.dirname(rel) if pre.startswith("$(dirname") or pre.strip("${}") in HOP_DIR_VARS else ""
+            q = os.path.normpath(os.path.join(home, rest.lstrip("/")))
+        elif rest.startswith("/"):
+            continue
+        else:
+            q = os.path.normpath(rest)
+        if q in tracked and q not in RUNNER_TRIGGERS and q not in out:
+            out.append(q)
+    return out
+
+
+def hops_of(index, real, rel):
+    """The tracked files the file at `real` (logical path `rel`) sources. The raw matches are memoised per real path, unexcluded;
+    the resolution is per call, because it depends on the logical path the file was reached by."""
+    raws = index.hops.get(real)
+    if raws is None:
+        raws = index.hops[real] = [(m.group(1) or "", m.group(2)) for m in SOURCE_HOP.finditer(index.raws[real])]
+    return hop_targets(rel, raws, index.tracked)
+
+
+def source_closure(root, got, rel, index, bad):
+    """-> [try_read() tuple]: `got` (reached as the repo-relative path `rel`), then the files it sources, then theirs, breadth first, in
+    discovery order, to HOP_DEPTH levels. A visited set keyed on the real path ends a cycle. A tracked target that cannot be read is
+    listed in `bad` (the suite is then unaudited, never clean)."""
+    out, visited, level = [got], {got[0]}, [(got, rel)]
+    for _ in range(HOP_DEPTH):
+        nxt = []
+        for g, r in level:
+            for q in hops_of(index, g[0], r):
+                path = os.path.normpath(os.path.join(root, q))
+                real = os.path.realpath(path)
+                if real in visited:
+                    continue
+                visited.add(real)
+                h = try_read(index, path, bad, root)
+                if h is not None:
+                    out.append(h)
+                    nxt.append((h, q))
+        level = nxt
+        if not level:
+            break
+    return out
+
+
 def suite_texts(root, inputs, index, bad=None):
-    """-> [(real path, full view, light view, text as written)]: the suite's own files, then the libraries they source (one hop, in
-    hop order), each real file once. A file that cannot be read is skipped and listed in `bad` (ReadError when `bad` is None). A
-    sourced path counts only when it is a TRACKED path (so the count does not depend on untracked files in the work tree); one that
-    is not a readable regular file inside the tree (a dangling symlink, a directory, a file deleted from the work tree) is an
-    unreadable file; a sourced name that is not tracked is not read."""
+    """-> [(real path, full view, light view, text as written)]: the suite's own files, each followed by the libraries it sources (the
+    `source` closure to HOP_DEPTH levels, breadth first, discovery order), each real file once. A file that cannot be read is skipped
+    and listed in `bad` (ReadError when `bad` is None). A sourced path counts only when it is a TRACKED path (so the count does not
+    depend on untracked files in the work tree); one that is not a readable regular file inside the tree (a dangling symlink, a
+    directory, a file deleted from the work tree) is an unreadable file; a sourced name that is not tracked is not read. This is the
+    closure only: the naming walk over the selector row's code files is reach_texts()."""
     out, seen = [], set()
     for p in inputs:
-        got = try_read(index, os.path.normpath(p), bad, root)
+        path = os.path.normpath(p)
+        got = try_read(index, path, bad, root)
         if got is None:
             continue
-        chain = [got]
-        for m in SOURCE_HOP.finditer(got[3]):
-            q = os.path.normpath(os.path.join(root, m.group(1)))
-            if os.path.relpath(q, root) in index.tracked:
-                g = try_read(index, q, bad, root)
-                if g is not None:
-                    chain.append(g)
-        for g in chain:
+        for g in source_closure(root, got, os.path.relpath(path, root), index, bad):
             if g[0] not in seen:
                 seen.add(g[0])
                 out.append(g)
     return out
 
 
+def code_pats_of(pats, index):
+    """The tracked code files a selector row lists as exact `^file` entries, in order, once each: the nodes of the naming walk. A
+    `glob:` or `dir/` entry, a non-caret entry, a data file and a runner trigger are never a node."""
+    out, seen = [], set()
+    for pt in pats:
+        e = pt[1:]
+        if (pt.startswith("^") and e and not e.startswith("glob:") and not e.endswith("/") and e not in RUNNER_TRIGGERS
+                and os.path.splitext(e)[1] in CODE_EXT and e in index.tracked and e not in seen):
+            seen.add(e)
+            out.append(e)
+    return out
+
+
+def reach_texts(root, inputs, pats, index, bad):
+    """suite_texts() plus the naming walk: from the files read so far, every code file the selector row lists in `pats` (code_pats_of)
+    that one of them names literally is read, level by level to WALK_DEPTH (sorted within a level); after each level the source closure
+    of its files is read too, and both feed the next level's naming (the selector expands every file's edges, so a library a walk file
+    sources can name the next code pat). All state is row-local (`seen` is per call; PathIndex only memoises contents), so a verdict
+    never depends on the order of the rows."""
+    out = suite_texts(root, inputs, index, bad)
+    code = set(code_pats_of(pats, index))
+    if not code:
+        return out
+    seen, frontier = {t[0] for t in out}, list(out)
+    for _ in range(WALK_DEPTH):
+        named = set()
+        for g in frontier:
+            named |= refs_of(index, g) & code
+        level = []
+        for q in sorted(named):
+            path = os.path.join(root, q)
+            if os.path.realpath(path) in seen:
+                continue
+            got = try_read(index, path, bad, root)
+            if got is not None and got[0] not in seen:
+                seen.add(got[0])
+                out.append(got)
+                level.append((got, q))
+        frontier = [got for got, _ in level]
+        for got, q in level:
+            for g in source_closure(root, got, q, index, bad)[1:]:
+                if g[0] not in seen:
+                    seen.add(g[0])
+                    out.append(g)
+                    frontier.append(g)
+        if not frontier:
+            break
+    return out
+
+
+def refs_of(index, got):
+    """The tracked paths one file (a try_read() tuple) names, memoised on the real path and UNEXCLUDED: the suite's own path is
+    dropped by the caller, per call, because the same library is read for other suites that do name it. The ONE scan site of the
+    audit: suite_refs() and the naming walk both read through it."""
+    r = index.refs.get(got[0])
+    if r is None:
+        r = index.refs[got[0]] = scan_views(index, got[1], got[2])
+    return r
+
+
 def suite_refs(root, suite, inputs, index, texts=None, bad=None):
-    """Tracked repo paths this suite (its file, or a directory suite's test files) and the libs it sources, one level, names
-    literally. The per-file result is memoised UNEXCLUDED: the suite's own path is dropped here, per call, because the same
-    library is read for other suites that do name it. `texts` is suite_texts() when the caller already has it."""
+    """Tracked repo paths that the texts of this suite name literally. `texts` is reach_texts() (the suite's files, the libraries they
+    source and the code files its selector row lists and the texts name); without it only the suite_texts() closure is read, which is
+    what the memoisation fixtures want. The per-file result is memoised UNEXCLUDED: the suite's own path is dropped here, per call,
+    because the same library is read for other suites that do name it."""
     named = set()
-    for q, full, light, _ in (texts if texts is not None else suite_texts(root, inputs, index, bad)):
-        r = index.refs.get(q)
-        if r is None:
-            r = index.refs[q] = scan_views(index, full, light)
-        named |= r
+    for got in (texts if texts is not None else suite_texts(root, inputs, index, bad)):
+        named |= refs_of(index, got)
     top = os.path.realpath(root)
     own = {os.path.relpath(p, root) for p in inputs} | {os.path.relpath(os.path.realpath(p), top) for p in inputs}
     return sorted(f for f in named if f != suite and f not in own and f not in RUNNER_TRIGGERS)
@@ -1192,7 +1414,8 @@ def pair_anchors(texts, path):
     """-> [(anchor, ordinal, file, lineno, text)] for every line of the suite's texts that holds a boundary match of `path` in
     either view, in order. The anchor and `text` are the line AS WRITTEN with its whitespace collapsed (" ".join(line.split()), so
     re-indenting or CRLF do not move it), and the anchor is the first 12 hex of its sha256. The ordinal numbers identical anchors
-    1, 2, ... over the suite file and then its sourced libraries in hop order, so two identical reading lines are two rows.
+    1, 2, ... over the files in the canonical read order (the suite file, its source closure, then the naming-walk files; see REACH), so two
+    identical reading lines are two rows.
     `lineno` counts physical lines (a comment line is blanked, never removed)."""
     count, out = {}, []
     for q, no, written in boundary_lines(texts, path):
@@ -1252,7 +1475,7 @@ class Census:
     except `suites`, which counts selector rows.
       gaps        {label: [paths still undeclared after the exemptions]}, in row order
       miss        {label: [paths undeclared BEFORE the exemptions]}
-      pair_texts  {label: {path: suite_texts() of the rows that left the path undeclared}} for the gaps (ref_lines)
+      pair_texts  {label: {path: reach_texts() of the rows that left the path undeclared}} for the gaps (ref_lines)
       unaudited   [(label, why, quoted)] unique; `quoted` says `why` was already passed through quote_field
       stale       [(label, path, anchor/ordinal, why)], sorted and unique
       extra       the selector lines that are not AFFECTED_SELECTED rows (AFFECTED_SUMMARY, AFFECTED_FALLBACK)
@@ -1303,7 +1526,7 @@ def stale_entries(suite, path, entries, why):
 
 
 def judge_rules(suite, rules, miss, texts_of, tracked, star_why, partial=False):
-    """The accept rows of one readable suite against its live gaps -> (stale, accepted, kept). `texts_of[path]` is the suite_texts()
+    """The accept rows of one readable suite against its live gaps -> (stale, accepted, kept). `texts_of[path]` is the reach_texts()
     of the rows that left `path` undeclared. A row is stale when it is a `*` row (a suite with any input is not accepted whole),
     names an untracked path, names a pair that is not a gap before the exemptions (an edge now declares it, or no line names it any
     more), or an (anchor, ordinal) that no live boundary line carries. A gap is accepted only when EVERY boundary line of the pair has
@@ -1373,6 +1596,7 @@ def audit_census(root, rows, accept):
         g["reason"] = f[3]
         g["rows"].append(f[4].split("|"))
     for label, g in groups.items():
+        g["rows"].sort()   # ordinals must not depend on the order the selector printed a label's rows: the whole pattern list is the key
         c.registered[label] = "always_on" if g["always_on"] else g["reason"]
         if g["always_on"]:
             c.always_on_labels.add(label)
@@ -1384,7 +1608,7 @@ def audit_census(root, rows, accept):
             if inputs is None:
                 dead.append(pats[0])
                 continue
-            texts = suite_texts(root, inputs, index, bad)
+            texts = reach_texts(root, inputs, pats, index, bad)
             refs = suite_refs(root, label, inputs, index, texts)
             found.update(refs)
             ok.append((texts, [r for r in refs if not any(edge_hit(pt, r) for pt in pats)]))
@@ -1530,7 +1754,7 @@ def main(argv):
     u.add_argument("--root", default="", help="the tree to audit (default: the current checkout; use a pinned detached one)")
     u.add_argument("--list", default="", help="read AFFECTED_SELECTED rows from FILE instead of running the selector")
     u.add_argument("--accept", default="", help="TSV of exemptions: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>, or suite<TAB>*<TAB>-<TAB>-<TAB>false-positive: <reason> for a suite with no inputs; "
-                  "anchor = first 12 hex of sha256(\" \".join(line.split())) of the comment-stripped line; ordinal = the Nth identical line (suite file, then sourced libraries in hop order); "
+                  "anchor = first 12 hex of sha256(\" \".join(line.split())) of the comment-stripped line; ordinal = the Nth identical line (suite file, its source closure, then the naming-walk files); "
                   "a missing file exempts nothing; the full format and the stale reasons are in the ACCEPT FILE section of the top-level --help)")
     u.add_argument("--all-refs", action="store_true", dest="all_refs", help="print every undeclared path, not the first six, and a ref line (file:line, anchor/ordinal, text) per boundary line")
     a = ap.parse_args(argv)
