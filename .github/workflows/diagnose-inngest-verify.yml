@@ -63,7 +63,7 @@ jobs:
           # Input validation: the digest never interpolates into this script
           # directly (env:), and its shape is pinned before it reaches a ref.
           [[ "$BUNDLE_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] \
-            || { echo "::error::digest input is not a sha256 hex digest: ${BUNDLE_DIGEST:0:32}…"; exit 1; }
+            || { echo "::error::digest input is not a sha256 hex digest: $(printf '%s' "${BUNDLE_DIGEST:0:32}" | tr -d '[:cntrl:]')…"; exit 1; }
           S="$RUNNER_TEMP/diag"; mkdir -p "$S"
           BREF="ghcr.io/jikig-ai/soleur-inngest-config@sha256:${BUNDLE_DIGEST#sha256:}"
           # Same digest bytes as the host's zot mirror; CI can reach public gcr directly.
@@ -88,12 +88,12 @@ jobs:
           docker pull "$COSIGN" || exit 1
 
           mkdir -p "$S/bundle"
+          # Mirror the host's nonregular-member gate BEFORE extraction: symlinks,
+          # hardlinks, fifos, devices — a fifo named manifest.txt would block `cat`
+          # forever. (cloud-init-inngest.yml runs the same typeflag scan.)
+          tar -tzvf "$S/bundle.tar.gz" | awk '$1 !~ /^[-d]/ {found=1; exit} END{exit found?0:1}' \
+            && { echo "::error::bundle carries a non-regular member"; exit 1; } || true
           tar -xzf "$S/bundle.tar.gz" -C "$S/bundle" --no-same-owner
-          # A crafted bundle could symlink manifest.txt at a runner path (e.g. the
-          # docker config holding the base64'd GITHUB_TOKEN); the host rejects
-          # non-regular members — mirror that here before cat/jq follows the link.
-          [[ ! -L "$S/bundle/manifest.txt" && ! -L "$S/bundle/manifest.txt.sigstore.json" ]] \
-            || { echo "::error::bundle carries a symlink member"; exit 1; }
           {
             echo "### bundle members"
             echo '```'

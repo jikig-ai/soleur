@@ -28,8 +28,9 @@
 #                          since earliest
 #   2 = NOT YET            signature rows persist (all carry detail=), earliest
 #                          in the future, or a transient query error
-#   3 = CANNOT ESTABLISH   credentials unset, earliest unset/malformed, or the
-#                          positive control reads 0 (channel dark / host moved)
+#   3 = CANNOT ESTABLISH   credentials unset, earliest unset/malformed,
+#                          betterstack-query.sh or jq absent, transport rc=3, or
+#                          the positive control reads 0 (channel dark / host moved)
 #   78 = refused under xtrace with a live credential bound (#7797)
 #
 # Required env: BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (declared in the
@@ -172,7 +173,10 @@ fi
 # Only the reason=signature arm carries detail= — an undetailed row on any OTHER
 # reason (pull, sha, install, …) is legal in both old and new code and must not
 # read as "old binary still running". The FAIL discriminator is signature-scoped.
+# A numerically-inconsistent payload must not drive sig_undetailed negative
+# (negative silently skips FAIL) — clamp, never sign-extend.
 sig_undetailed=$(( sig_rows - sig_detailed ))
+(( sig_undetailed < 0 )) && sig_undetailed=0
 if [[ "$sig_undetailed" -gt 0 ]]; then
   printf 'FAIL: %s reason=signature VERIFY_FAIL row(s) without detail= since %s — the pre-fix refresh script is still running past the replace window.\n' "$sig_undetailed" "$EARLIEST" >&2
   verdict fail 1

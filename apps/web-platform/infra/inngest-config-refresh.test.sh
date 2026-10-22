@@ -281,7 +281,7 @@ grep -qF '2>"$STAGE/verify.stderr"' <<<"$SC" \
 ! grep -qF -- '/bundle/manifest.txt >/dev/null 2>&1' <<<"$SC" \
   && ! grep -qF -- '/bundle/manifest.txt 2>&1 >/dev/null' <<<"$SC" \
   && ! grep -qF -- '/bundle/manifest.txt &>/dev/null' <<<"$SC" \
-  && ! grep -qF -- '/bundle/manifest.txt > /dev/null' <<<"$SC" \
+  && ! grep -qF -- '/bundle/manifest.txt > /dev/null 2>&1' <<<"$SC" \
   && pass || fail "S10: verify-blob stderr still swallowed by /dev/null"
 grep -qF 'detail=' <<<"$SC" \
   && pass || fail "S10: no detail= classification on the VERIFY_FAIL row"
@@ -690,6 +690,17 @@ grep -q 'detail=identity' "$FX/markers.log" \
 ! grep -q 'detail=chain' "$FX/markers.log" \
   && pass || fail "F16: identity-mismatch misclassified detail=chain"
 
+# Overlapping-token fixture — discriminates ORDER, not just presence: 'issuer'
+# reaches the identity arm AND 'x509' reaches the chain arm, so this stderr
+# classifies identity only under the new order (chain-first would misroute).
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='x509: certificate issuer mismatch' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: overlap rc=$rc (want 1)"
+grep -q 'detail=identity' "$FX/markers.log" \
+  && pass || fail "F16: issuer-bearing x509 stderr should classify detail=identity under new order"
+
 reset_fx
 echo 0 > "$FX/state/applied.version"
 FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='x509: certificate signed by unknown authority' \
@@ -753,7 +764,7 @@ grep -q 'detail=other' "$FX/markers.log" && grep -q 'detail=tlog' "$FX/markers.l
 
 # Anti-vacuity floor — the inngest.test.sh convention: a deleted block must red,
 # not silently pass fewer assertions. Raise it when adding rows.
-MIN_ASSERTIONS=160
+MIN_ASSERTIONS=162
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 
