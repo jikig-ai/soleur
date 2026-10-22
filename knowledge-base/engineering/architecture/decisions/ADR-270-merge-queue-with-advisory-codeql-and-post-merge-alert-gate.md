@@ -733,17 +733,22 @@ under `apps/web-platform/server/` (the behind arm of `reapBotPr`, marked by a co
 `main` has no `merge_queue` rule: a memoized `read-merge-queue-rule` step reads `GET .../rules/branches/main?per_page=100`
 once per sweep, selects the rule by `.type`, and passes a `queue | none | unreadable` verdict into `reapBotPr` by value
 (an in-memory cache would be rebuilt on every Inngest replay). `queue` yields `skipped-queue-owned`, `unreadable` yields
-`skipped-queue-unknown`; neither reads check-runs or pushes. This supersedes the 2026-10-20 note that the reaper sits
-outside the family. (2) Alert, not update: a queue-or-unknown behind PR is routed into the existing `[ci/bot-pr-reaper]`
+`skipped-queue-unknown`; neither reads check-runs or pushes inside the 6 h grace. This closes the residual the PR #10655
+body named (the reaper still called `update-branch` on armed bot PRs; the 2026-10-09 and 2026-10-20 addenda covered
+only the agent-side writers). (2) Alert, not update: a queue-or-unknown behind PR is routed into the existing `[ci/bot-pr-reaper]`
 stuck-issue arm past 6 h from `created_at` with terminal checks, or past 24 h whatever its checks (hung checks must not
 hide a stranded PR), with neutral reason text (never "green", never a cause the code cannot know). The 48 h watchdog in
 `cron-cloud-task-heartbeat` only warns and covers four head-ref prefixes, and a bounded fallback resync would re-add the
 push the queue exists to remove, so both were rejected (CTO rulings, `decision-challenges.md` of this change).
-(3) Fail closed: a failed request, a non-list body, or a full 100-rule page without `merge_queue` is `unreadable`, reported
+(3) Fail closed: a failed request, a non-list body, an empty list or an entry without a string `type` (`main` always carries
+rules, so those are degraded 200s), or a full 100-rule page without `merge_queue` is `unreadable`, reported
 once per sweep to Sentry (`merge-queue-rule-unreadable`, token redacted), and never read as "no queue".
 (4) Accepted residuals: the PR list is not base-filtered, so the verdict is for `main` only; `created_at` over-approximates
 arm age for a re-armed PR (alerts early, the cheap direction); `blocked` while required checks are pending still alerts
-(pre-existing, unchanged); the no-queue update path is retained although this repository's `main` carries the rule, because
+(pre-existing, unchanged); a PR held between 6 h and 24 h by re-running checks stays out of the alert set but keeps an open
+stuck issue open (no close and reopen flap); the 48 h stale-bot-PR watchdog in `cron-cloud-task-heartbeat` still words its
+warning for a disarmed PR ("rebase the branch") and can double-warn a queue-stalled one, a wording gap left as is; the
+no-queue update path is retained although this repository's `main` carries the rule, because
 the verdict is a runtime read and the rule has been reverted once before (the 2026-06-30 deadlock kill-switch). The
 `sync-pr-behind.sh` residuals (hard-coded base, triplicated helpers) are tracked on #10832. No C4 change: no new actor,
 system, container or data store.

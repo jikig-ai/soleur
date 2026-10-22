@@ -29,7 +29,8 @@
  * oldest-first; (d) a 2-h cadence so one PR is updated at most once per sweep.
  *
  * Alert arm: a bot PR unmergeable for reasons update-branch cannot fix
- * (`dirty` conflict, `blocked` review/check gate, `unstable` red checks) is
+ * (`dirty` conflict, `blocked` review/check gate, `unstable` red checks), or a
+ * queue-owned behind PR that outlived its bound (see MERGE QUEUE above), is
  * collected into the dedup-by-title `[ci/bot-pr-reaper]` action-required
  * issue + one aggregated reportSilentFallback — a silent stall is the failure
  * this cron exists to remove, so a stuck PR must be LOUD, not skipped.
@@ -80,8 +81,9 @@ const TOKEN_MIN_LIFETIME_MS = 10 * 60 * 1000;
 // Residual (ADR-270 addendum 2026-10-22): the PR list is not base-filtered, so
 // the queue verdict is read for `main` only.
 const BASE_BRANCH = "main";
-// Measured enqueue of an armed BEHIND PR is 9-47 min; past 6 h with terminal
-// checks GitHub is not going to enqueue it, so alert (never resync).
+// Observed arm-to-enqueue of an armed BEHIND PR is 9-97 min (n=6, ADR-270
+// canary addendum); past 6 h with no check still running GitHub is not going
+// to enqueue it, so alert (never resync).
 const QUEUE_ENQUEUE_GRACE_MS = 6 * 60 * 60 * 1000;
 // Hung or never-started checks must not hide a stranded PR forever.
 const QUEUE_INFLIGHT_BOUND_MS = 24 * 60 * 60 * 1000;
@@ -122,6 +124,7 @@ type PrListItem = {
 
 type PrDetail = {
   number: number;
+  created_at?: string;
   mergeable_state?: string;
   head: { sha: string };
 };
@@ -148,19 +151,21 @@ type SweepResult = {
     | "skipped-queue-unknown"
     | "stuck-alerted"
     | "error";
-  // Only set on a queue/unknown behind PR that aged past its bound; the
-  // dirty/blocked/unstable arm carries none.
+  // Only set on a queue/unknown behind PR that aged past its grace (on
+  // `stuck-alerted`, or on the `skipped-checks-in-flight` that holds the
+  // stuck issue open between 6 h and 24 h); the dirty/blocked/unstable arm
+  // carries none.
   reason?: StuckReason;
 };
 
+const hoursOf = (ms: number) => `${ms / (60 * 60 * 1000)}h`;
 // Neutral wording only: never "green", never a cause the code cannot know.
+// The bounds are derived from the constants so retuning one cannot leave the
+// alert text claiming the old value.
 const STUCK_REASON_TEXT: Record<StuckReason, string> = {
-  "queue-stalled":
-    "armed, behind, not enqueued after 6h; checks complete, may include failures",
-  "queue-stalled-checks-running":
-    "armed, behind, not enqueued after 24h; checks still running",
-  "queue-rule-unreadable":
-    "armed, behind, merge-queue rule unreadable for over 6h",
+  "queue-stalled": `armed, behind, not enqueued after ${hoursOf(QUEUE_ENQUEUE_GRACE_MS)}; no check still running, may include failures`,
+  "queue-stalled-checks-running": `armed, behind, not enqueued after ${hoursOf(QUEUE_INFLIGHT_BOUND_MS)}; checks still running`,
+  "queue-rule-unreadable": `armed, behind, over ${hoursOf(QUEUE_ENQUEUE_GRACE_MS)} old; merge-queue rule unreadable on this sweep`,
 };
 
 async function readPrDetail(
@@ -205,7 +210,7 @@ async function checksTerminal(
  * Does `main` carry a `merge_queue` ruleset rule? Never throws: every failure
  * (request error, non-list body, a full page without the rule so it may sit on
  * a later page) is `unreadable`, which callers treat as "do not update-branch".
- * The rule is selected by `.type`, never by position (it is not first live).
+ * The rule is selected by `.type`, never by position (it is not at a fixed index).
  */
 export async function readMergeQueueRule(
   octokit: Octokit,
@@ -224,11 +229,24 @@ export async function readMergeQueueRule(
     if (!Array.isArray(rules)) {
       return { verdict: "unreadable", cause: "rules response was not a list" };
     }
+    // `main` always carries rules and the endpoint types every one: an empty
+    // list or an entry without a string `type` is a degraded 200, never "no
+    // queue".
     if (
-      rules.some(
-        (r) => (r as { type?: unknown } | null)?.type === "merge_queue",
+      rules.length === 0 ||
+      !rules.every(
+        (r) =>
+          r != null &&
+          typeof r === "object" &&
+          typeof (r as { type?: unknown }).type === "string",
       )
     ) {
+      return {
+        verdict: "unreadable",
+        cause: "rules response was empty or held an entry without a type",
+      };
+    }
+    if (rules.some((r) => (r as { type: string }).type === "merge_queue")) {
       return { verdict: "queue" };
     }
     if (rules.length >= RULES_PAGE_SIZE) {
@@ -261,8 +279,10 @@ export async function reapBotPr(args: {
   // REQUIRED on purpose: an optional/default would fail open (or break
   // silently) at a forgotten call site. Read once per sweep, passed by value.
   queueRule: QueueRuleVerdict;
-  // PR creation time: a proxy for arm time (bot PRs are armed at creation).
+  // PR creation time: a proxy for arm time (bot PRs are usually armed at or
+  // shortly after creation; a re-armed PR alerts early, the cheap direction).
   createdAt: string;
+  // Test seam: production never passes it.
   nowMs?: number;
   // Sweep-level budget: only the first `cap` unknowns pay the 15s settle wait;
   // the rest re-read immediately (cheap) and skip if still unknown.
@@ -310,32 +330,44 @@ export async function reapBotPr(args: {
       // verdict has no side effects inside the grace window and never reaches
       // update-branch (the queue makes the PR current itself).
       if (queueRule !== "none") {
-        const unknown = queueRule === "unreadable";
-        const age = (nowMs ?? Date.now()) - Date.parse(createdAt);
+        const unreadable = queueRule === "unreadable";
+        // A step result memoized by a pre-deploy run lacks `created_at`; the
+        // detail read just above carries it, so a replay never reads NaN.
+        const created =
+          typeof createdAt === "string" ? createdAt : detail.created_at;
+        const age = (nowMs ?? Date.now()) - Date.parse(created ?? "");
         // An unparseable timestamp counts as past both bounds: alert, never hide.
         const pastGrace = !Number.isFinite(age) || age > QUEUE_ENQUEUE_GRACE_MS;
         if (!pastGrace) {
           return {
             number: prNumber,
             state,
-            action: unknown ? "skipped-queue-unknown" : "skipped-queue-owned",
+            action: unreadable
+              ? "skipped-queue-unknown"
+              : "skipped-queue-owned",
           };
         }
         const pastInflight =
           !Number.isFinite(age) || age > QUEUE_INFLIGHT_BOUND_MS;
-        const terminal = await checksTerminal(octokit, headSha);
+        // A failed read must not hide the PR that most needs the alert: treat
+        // it as "still running" (soft skip until 24 h, alert after).
+        const terminal = await checksTerminal(octokit, headSha).catch(
+          () => false,
+        );
         if (!terminal && !pastInflight) {
+          // Carry the reason so the stuck issue is held open meanwhile.
           return {
             number: prNumber,
             state,
             action: "skipped-checks-in-flight",
+            reason: unreadable ? "queue-rule-unreadable" : "queue-stalled",
           };
         }
         return {
           number: prNumber,
           state,
           action: "stuck-alerted",
-          reason: unknown
+          reason: unreadable
             ? "queue-rule-unreadable"
             : terminal
               ? "queue-stalled"
@@ -423,6 +455,8 @@ export async function cronBotPrReaperHandler({
         // the repo-scoped grant sufficient); pull_requests:write for the PR
         // surface; issues:write for the dedup tracking issue; checks:read for
         // the settle-guard's check-runs read (an App token 403s without it).
+        // The queue-rule read (GET rules/branches) needs no grant beyond the
+        // implicit repository metadata read; an unreadable answer fails closed.
         permissions: {
           contents: "write",
           pull_requests: "write",
@@ -530,6 +564,15 @@ export async function cronBotPrReaperHandler({
 
   const stuck = results.filter((r) => r.action === "stuck-alerted");
   const hadError = results.some((r) => r.action === "error");
+  // Hold the stuck issue open (no self-close) while any PR is unresolved
+  // rather than cleared: an errored evaluation, or a queue-owned PR past its
+  // grace whose checks are re-running. Closing then would flap the issue
+  // (close, reopen under a new number, restart the SLA clock).
+  const holdIssueOpen = results.some(
+    (r) =>
+      r.action === "error" ||
+      (r.action === "skipped-checks-in-flight" && r.reason !== undefined),
+  );
 
   await step.run("sync-stuck-issue", async () => {
     const lines = stuck
@@ -542,14 +585,19 @@ export async function cronBotPrReaperHandler({
     if (stuck.length > 0) {
       // Body (not comments) carries the current stuck set — always current,
       // no per-sweep comment noise.
+      const hasQueueCohort = stuck.some((r) => r.reason !== undefined);
       const body = [
         "These `soleur-ai[bot]` PRs have auto-merge armed but are not merging.",
-        "Either they are unmergeable for reasons `update-branch` cannot fix (merge",
-        "conflict, required review, or failing checks), or they are behind and",
-        "the merge queue has not enqueued them within the bound shown on their",
-        "line (the reaper does not resync those: the queue owns them). They need a",
-        "human or agent decision; the reaper will keep them listed here until they",
-        "merge or close.",
+        hasQueueCohort
+          ? "Some are unmergeable for reasons `update-branch` cannot fix (merge conflict, required review, or failing checks); the lines naming a bound are behind PRs the merge queue has not enqueued in time (the reaper does not resync those)."
+          : "They are unmergeable for reasons `update-branch` cannot fix (merge conflict, required review, or failing checks).",
+        ...(hasQueueCohort
+          ? [
+              "For a behind line: inspect the required checks on the head (red: push a fix; none red: follow `plugins/soleur/skills/ship/references/merge-queue-dequeue.md`, section 'Armed and green but never enqueued'). A `rule unreadable` line also has a Sentry event, op `merge-queue-rule-unreadable`.",
+            ]
+          : []),
+        "They need a human or agent decision; the reaper will keep them listed here",
+        "until they merge or close.",
         "",
         `_Updated ${new Date().toISOString()}_`,
         "",
@@ -586,7 +634,8 @@ export async function cronBotPrReaperHandler({
         {
           feature: FUNCTION_NAME,
           op: "bot-pr-unmergeable",
-          message: "bot PRs stuck in a state update-branch cannot fix",
+          message:
+            "armed bot PRs not merging (dirty/blocked/unstable, or behind and not enqueued by the merge queue)",
           extra: {
             fn: FUNCTION_NAME,
             prs: stuck.map((r) => ({
@@ -601,6 +650,7 @@ export async function cronBotPrReaperHandler({
       return;
     }
     // Set drained — self-close the tracking issue if one is open.
+    if (holdIssueOpen) return;
     try {
       const match = await findDedupIssue(octokit, {
         title: STUCK_ISSUE_TITLE,
@@ -644,7 +694,9 @@ export async function cronBotPrReaperHandler({
     {
       fn: FUNCTION_NAME,
       evaluated: results.length,
-      queueRule,
+      queueRule: botPrs.length === 0 ? "not-read" : queueRule,
+      queueDeferred: results.filter((r) => r.action.startsWith("skipped-queue-"))
+        .length,
       updated: updatesUsed,
       stuck: stuck.length,
       errors: results.filter((r) => r.action === "error").length,

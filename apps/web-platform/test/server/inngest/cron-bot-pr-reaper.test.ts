@@ -165,9 +165,8 @@ describe("registration source-shape anchors", () => {
     ['"scheduled-bot-pr-reaper"', "Sentry monitor slug (kebab-case, SLUG_RE)"],
     ['"soleur-ai[bot]"', "REST user.login bot predicate (NOT GraphQL app/soleur-ai)"],
     ["expected_head_sha", "update-branch CAS binding"],
-    ['"merge_queue"', "rule selected by type"],
-    ["rules/branches", "rules read endpoint"],
-    ["read-merge-queue-rule", "memoized once-per-sweep verdict step"],
+    ['step.run("read-merge-queue-rule"', "memoized once-per-sweep verdict step"],
+    ['"GET /repos/{owner}/{repo}/rules/branches/{branch}"', "rules read endpoint"],
     ["checks: \"read\"", "settle-guard check-runs grant"],
   ])("source contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
@@ -406,11 +405,106 @@ describe("reapBotPr — decision table", () => {
       const terminal = mk("behind", [{ status: "completed" }]);
       const r1 = await run(terminal, { queueRule: "queue", createdAt: "not-a-date" });
       expect(r1.action).toBe("stuck-alerted");
+      expect(r1.reason).toBe("queue-stalled");
       const hung = mk("behind", [{ status: "in_progress" }]);
       const r2 = await run(hung, { queueRule: "queue", createdAt: "" });
       expect(r2.action).toBe("stuck-alerted");
+      expect(r2.reason).toBe("queue-stalled-checks-running");
       expect(updated(terminal) || updated(hung)).toBe(false);
     });
+
+    it("the 24 h bound is inclusive: exactly 24 h with checks in flight is still held, 24 h + 1 ms alerts", async () => {
+      const at = mk("behind", [{ status: "in_progress" }]);
+      const rAt = await run(at, {
+        queueRule: "queue",
+        createdAt: new Date(NOW - 24 * HOUR).toISOString(),
+      });
+      expect(rAt.action).toBe("skipped-checks-in-flight");
+      const past = mk("behind", [{ status: "in_progress" }]);
+      const rPast = await run(past, {
+        queueRule: "queue",
+        createdAt: new Date(NOW - 24 * HOUR - 1).toISOString(),
+      });
+      expect(rPast.action).toBe("stuck-alerted");
+      expect(rPast.reason).toBe("queue-stalled-checks-running");
+      expect(updated(at) || updated(past)).toBe(false);
+    });
+
+    it("unreadable with checks in flight: held with a reason until 24 h, alerted after", async () => {
+      const held = mk("behind", [{ status: "in_progress" }]);
+      const r1 = await run(held, { queueRule: "unreadable", createdAt: hoursAgo(7) });
+      expect(r1.action).toBe("skipped-checks-in-flight");
+      expect(r1.reason).toBe("queue-rule-unreadable");
+      const aged = mk("behind", [{ status: "in_progress" }]);
+      const r2 = await run(aged, { queueRule: "unreadable", createdAt: hoursAgo(25) });
+      expect(r2.action).toBe("stuck-alerted");
+      expect(r2.reason).toBe("queue-rule-unreadable");
+      expect(updated(held) || updated(aged)).toBe(false);
+    });
+
+    it("the in-flight hold carries the stalled reason so the stuck issue is held open", async () => {
+      const stub = mk("behind", [{ status: "queued" }]);
+      const r = await run(stub, { queueRule: "queue", createdAt: hoursAgo(7) });
+      expect(r.action).toBe("skipped-checks-in-flight");
+      expect(r.reason).toBe("queue-stalled");
+    });
+
+    it("a failed check-runs read past the grace never hides the PR: held, then alerted past 24 h", async () => {
+      const mkThrowing = () => {
+        const stub = mk("behind");
+        stub.request.mockImplementation(async (route: string) => {
+          if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}") {
+            return { data: detail("behind") };
+          }
+          if (route.includes("check-runs")) {
+            throw Object.assign(new Error("boom"), { status: 500 });
+          }
+          throw new Error(`unexpected ${route}`);
+        });
+        return stub;
+      };
+      const held = mkThrowing();
+      const r1 = await run(held, { queueRule: "queue", createdAt: hoursAgo(7) });
+      expect(r1.action).toBe("skipped-checks-in-flight");
+      const aged = mkThrowing();
+      const r2 = await run(aged, { queueRule: "queue", createdAt: hoursAgo(25) });
+      expect(r2.action).toBe("stuck-alerted");
+      expect(r2.reason).toBe("queue-stalled-checks-running");
+    });
+
+    it("a createdAt missing from a pre-deploy memoized list falls back to the detail read (no spurious stall)", async () => {
+      const stub = octokitStub({
+        pulls: [],
+        details: {
+          1: {
+            number: 1,
+            created_at: hoursAgo(1),
+            mergeable_state: "behind",
+            head: { sha: "abc123" },
+          },
+        },
+        checkRuns: { abc123: [{ status: "completed" }] },
+      });
+      const r = await run(stub as never, {
+        queueRule: "queue",
+        createdAt: undefined as unknown as string,
+      });
+      expect(r.action).toBe("skipped-queue-owned");
+      expect(updated(stub as never)).toBe(false);
+    });
+
+    it.each(["clean", "draft", "has_hooks"])(
+      "%s is still skipped under a queue or unreadable verdict, never alerted or updated",
+      async (state) => {
+        for (const queueRule of ["queue", "unreadable"] as const) {
+          const stub = mk(state);
+          const r = await run(stub, { queueRule, createdAt: hoursAgo(30) });
+          expect(r.action).toMatch(/^skipped-/);
+          expect(r.action).not.toBe("skipped-checks-in-flight");
+          expect(updated(stub)).toBe(false);
+        }
+      },
+    );
 
     it.each(["dirty", "blocked", "unstable"])(
       "%s → stuck-alerted, no update, under every verdict",
@@ -729,6 +823,44 @@ describe("readMergeQueueRule — fail-closed verdict", () => {
     expect((await p).verdict).toBe("unreadable");
   });
 
+  it.each([
+    ["an empty list", []],
+    ["a non-object entry", [1]],
+    ["an entry without a type", [{}]],
+    ["a null entry", [null]],
+    ["a non-string type", [{ type: 7 }]],
+  ])("a degraded 200 (%s) → unreadable, never none", async (_n, rules) => {
+    const { p } = read({ ...base, rules });
+    expect((await p).verdict).toBe("unreadable");
+  });
+
+  it.each(["merge_queue_v2", "MERGE_QUEUE", "not_merge_queue", "queue"])(
+    "a near-miss type (%s) is not a queue",
+    async (type) => {
+      const { p } = read({ ...base, rules: [{ type: "deletion" }, { type }] });
+      await expect(p).resolves.toEqual({ verdict: "none" });
+    },
+  );
+
+  it("a rule that only MENTIONS merge_queue in its parameters is not a queue", async () => {
+    const { p } = read({
+      ...base,
+      rules: [{ type: "required_status_checks", parameters: { note: "merge_queue" } }],
+    });
+    await expect(p).resolves.toEqual({ verdict: "none" });
+  });
+
+  it("99 rules without merge_queue → none (the full-page guard starts at 100)", async () => {
+    const { p } = read({ ...base, rules: filler(99) });
+    await expect(p).resolves.toEqual({ verdict: "none" });
+  });
+
+  it("a rejection cause carries the status and the message", async () => {
+    const err = Object.assign(new Error("Forbidden"), { status: 403 });
+    const { p } = read({ ...base, rulesThrow: err });
+    expect((await p).cause).toBe("status 403: Forbidden");
+  });
+
   it("requests the main branch rules with per_page 100", async () => {
     const { stub, p } = read({ ...base, rules: QUEUE_RULES });
     await p;
@@ -841,7 +973,11 @@ describe("cronBotPrReaperHandler — merge-queue deferral", () => {
     const body = String(create!.params.body);
     expect(body).toContain("#60");
     expect(body).toContain("not enqueued after 6h");
-    expect(body).not.toMatch(/\bgreen\b/);
+    // The reason line never claims the checks are green (the recipe's section
+    // title elsewhere in the body legitimately does).
+    const reasonLine = body.split("\n").find((l) => l.startsWith("- #60")) ?? "";
+    expect(reasonLine).toContain("not enqueued after 6h");
+    expect(reasonLine).not.toMatch(/\bgreen\b/);
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     const report = h.reportSilentFallbackSpy.mock.calls[0][1] as {
       op: string;
@@ -862,18 +998,91 @@ describe("cronBotPrReaperHandler — merge-queue deferral", () => {
     });
     h.requestSpy.mockImplementation(stub.request);
     await cronBotPrReaperHandler({ step: makeStep(), logger });
-    expect(
-      stub.calls.some((c) => c.route === "POST /repos/{owner}/{repo}/issues"),
-    ).toBe(true);
+    const create = stub.calls.find((c) => c.route === "POST /repos/{owner}/{repo}/issues");
+    expect(create).toBeDefined();
+    // A dirty-only cohort has no queue lines: the queue guidance stays out.
+    expect(String(create!.params.body)).not.toContain("merge-queue-dequeue.md");
     expect(h.reportSilentFallbackSpy.mock.calls[0][1]).toMatchObject({
       op: "bot-pr-unmergeable",
     });
   });
 
+  // ensureDedupIssue pays its production 5s miss-retry inside the step here.
+  it("an aged unreadable sweep → issue line and Sentry extra carry queue-rule-unreadable", { timeout: 15_000 }, async () => {
+    const stub = octokitStub({
+      pulls: [BOT_PR(90, recently(7))],
+      details: behindDetails([90]),
+      checkRuns: { sha90: [{ status: "completed" }] },
+      rulesThrow: Object.assign(new Error("Service Unavailable"), { status: 503 }),
+    });
+    h.requestSpy.mockImplementation(stub.request);
+    await cronBotPrReaperHandler({ step: makeStep(), logger });
+    expect(updatesOf(stub)).toHaveLength(0);
+    const create = stub.calls.find((c) => c.route === "POST /repos/{owner}/{repo}/issues");
+    expect(create).toBeDefined();
+    const body = String(create!.params.body);
+    expect(body).toContain("merge-queue rule unreadable on this sweep");
+    expect(body).toContain("merge-queue-dequeue.md");
+    const ops = h.reportSilentFallbackSpy.mock.calls.map(
+      (c) => (c[1] as { op: string }).op,
+    );
+    expect(ops).toEqual(["merge-queue-rule-unreadable", "bot-pr-unmergeable"]);
+    const report = h.reportSilentFallbackSpy.mock.calls[1][1] as {
+      extra: { prs: Array<{ reason?: string }> };
+    };
+    expect(report.extra.prs[0].reason).toBe("queue-rule-unreadable");
+  });
+
+  it("a queue PR past 24 h with checks running → the 24 h reason text in the issue body", { timeout: 15_000 }, async () => {
+    const stub = octokitStub({
+      pulls: [BOT_PR(91, recently(25))],
+      details: behindDetails([91]),
+      checkRuns: { sha91: [{ status: "in_progress" }] },
+      rules: QUEUE_RULES,
+    });
+    h.requestSpy.mockImplementation(stub.request);
+    await cronBotPrReaperHandler({ step: makeStep(), logger });
+    const create = stub.calls.find((c) => c.route === "POST /repos/{owner}/{repo}/issues");
+    expect(String(create!.params.body)).toContain(
+      "not enqueued after 24h; checks still running",
+    );
+  });
+
+  it("a queue PR held between 6 h and 24 h (checks re-running) keeps the open stuck issue open", async () => {
+    const stub = octokitStub({
+      pulls: [BOT_PR(92, recently(7))],
+      details: behindDetails([92]),
+      checkRuns: { sha92: [{ status: "in_progress" }] },
+      rules: QUEUE_RULES,
+      issues: [
+        {
+          title: "[ci/bot-pr-reaper] bot PRs unmergeable without intervention",
+          number: 8812,
+        },
+      ],
+    });
+    h.requestSpy.mockImplementation(stub.request);
+    await cronBotPrReaperHandler({ step: makeStep(), logger });
+    expect(updatesOf(stub)).toHaveLength(0);
+    expect(
+      stub.calls.some(
+        (c) =>
+          c.route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}" &&
+          c.params.state === "closed",
+      ),
+    ).toBe(false);
+    expect(
+      stub.calls.some(
+        (c) => c.route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments",
+      ),
+    ).toBe(false);
+  });
+
   it("replay: a memoizing step.run fake invoked twice reads the rules exactly once", async () => {
     const memo = new Map<string, unknown>();
     // Inngest persists step results as JSON: round-trip so a non-serializable
-    // verdict (or an in-memory cache standing in for the step) cannot pass.
+    // verdict cannot pass. This pins one read per memoized step NAME across
+    // two invocations; it does not by itself rule out a module-level cache.
     const replayStep = {
       run: async <T>(name: string, cb: () => Promise<T>): Promise<T> => {
         if (memo.has(name)) return memo.get(name) as T;
