@@ -13,6 +13,21 @@ requires_cpo_signoff: false
 
 Ref #9454 (merge-queue epic tracker). Spec lacks a valid `lane:` (no spec.md for this branch) - defaulted to `cross-domain` (fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-22. **Gates run:** 4.6 user-brand (pass: threshold none with sensitive-path reason), 4.7 observability (pass: five fields, allowlisted `curl` probe, literal `merge_queue`), 4.8 PAT sweep (0 hits), 4.9 UI wireframe (no UI surface), 4.10 encryption posture (no store or connection), 4.11 guard contract (`lint-guard-contract.py`: 1 entry, green), 4.12 scope check (one live section, no `unmapped`, no `status: BLOCKED`).
+**Verification passes:** live-resolved rule ids, issue states and endpoint semantics (below). Fan-out limited to the available panel: the weekly Anthropic API limit resets 2026-10-25 02:00 Europe/Paris, so no 40-agent sweep was launched; plan-review ran DHH, Kieran and code-simplicity, and the CTO ruled twice.
+
+### Key improvements from review and deepening
+1. 24 h second bound (T6): an armed BEHIND queue/unknown PR with hung or queued checks no longer escapes the alert.
+2. Replay-simulating handler test (memoizing fake `step.run`) makes the "once per sweep" claim enforceable; the plain fake runs each callback once and cannot see replay defects.
+3. Guard Contract cut from nine rows to seven; the fragile repo-wide source-walk test is replaced by a call-site comment plus an exact-literal `rg -c` check (AC8).
+4. First-sweep alert-flood risk measured: 0 armed bot PRs now.
+
+### New considerations discovered
+- `withGithubRetry` retries only a cause-chain `fetch failed` / undici code, not a plain `status: 500`; the "network" rejection test needs fake timers (1 s + 2 s real sleeps otherwise).
+- The rules endpoint defaults to `per_page=30` (max 100), so omitting `per_page` would truncate silently on a repo with more than 30 rules; the plan passes 100 and treats a full page without the rule as unreadable.
+
 ## Overview
 
 `cron-bot-pr-reaper` (Inngest, every 2 h) re-bases armed `soleur-ai[bot]` PRs whose `mergeable_state` is `behind` with
@@ -78,6 +93,13 @@ Nothing cited is stale.
 - `2026-06-30-merge-queue-iac-provider-schema-probe-and-positional-rule-readers.md`: read rules by `.type`, never by position.
 - `2026-07-23-live-api-fail-closed-guard-counts-degraded-200-as-empty-...md`: a degraded 200 (non-list body) is unreadable, not empty.
 - `2026-10-12-the-consumer-test-set-its-own-inputs-and-the-stub-answered-any-argv.md`: the octokit stub must reject unknown routes (it already throws) and assert the rules call's params.
+
+**Deepen-pass verification (live, 2026-10-22).**
+- `gh issue view`: #10655 MERGED, #10832 OPEN, #9454 OPEN, #9274 CLOSED (the original reaper issue), #9869 CLOSED. All rule ids the plan cites (`cq-write-failing-tests-before`, `cq-union-widening-grep-three-patterns`, `hr-type-widening-cross-consumer-grep`, `cq-test-fixtures-synthesized-only`) resolve to active ids in `AGENTS.rules.md`.
+- `rg -n "update-branch" apps/web-platform/server`: the only route literal is the reaper's `PUT .../pulls/{pull_number}/update-branch` (reaper line 225); other hits are prose (`execution-placement.ts:82` reason string, which stays true because the no-queue path remains, and `routine-metadata.ts:52`, edited here).
+- `apps/web-platform/server/github-retry.ts`: `withGithubRetry` = 3 attempts, 1 s then 2 s backoff, retrying only when the cause chain carries `fetch failed` / an undici code (a plain `status: 500` or `403` is NOT retried, so a rules-read failure fails fast into `unreadable`).
+- docs.github.com "Get rules for a branch": `per_page` default 30, max 100. The page lists no fine-grained permission for the endpoint; the endpoint answers unauthenticated on this public repo (measured), and an installation token is a superset of that access. If the live token were nevertheless refused, the result is `unreadable`: safe (no update-branch) and loud (Sentry event, alert after 6 h) - AC14 verifies it post-deploy.
+- Inngest memoization: `reapBotPr`'s `updatesUsed` counter is rebuilt from memoized `evaluate-pr-N` results after replay, so it was already replay-safe; only the new verdict needed the step form.
 
 **CLI/endpoint verification (#2566 gate).** `gh api "repos/jikig-ai/soleur/rules/branches/main?per_page=100"` run 2026-10-22 returned five rules
 (`required_status_checks`, `merge_queue`, `required_status_checks`, `deletion`, `non_fast_forward`). The endpoint needs only
@@ -265,7 +287,7 @@ Field RUM and the soak/follow-through enrollment do not apply (no browser surfac
 - [ ] AC5 One rules read per sweep for N behind PRs, zero reads when there is no bot PR; the grant-mint test still passes unchanged.
 - [ ] AC6 Past 6 h (and for an unparseable `created_at`), a queue/unknown behind PR with terminal checks yields `stuck-alerted` with a neutral reason, files/refreshes the `[ci/bot-pr-reaper]` issue, and emits `bot-pr-unmergeable`; with checks in flight it yields `skipped-checks-in-flight` until 24 h and `stuck-alerted` (`queue-stalled-checks-running`) after.
 - [ ] AC7 `unreadable` emits exactly one `merge-queue-rule-unreadable` Sentry call per sweep with the token redacted; `dirty`/`blocked`/`unstable` still `stuck-alerted` under every verdict.
-- [ ] AC8 The update-branch PUT carries the single-writer comment and `rg -n "update-branch" apps/web-platform/server` shows only the reaper's PUT route literal plus the known prose mentions (`execution-placement.ts` reason, `routine-metadata.ts` description).
+- [ ] AC8 The update-branch PUT carries the single-writer comment, and `rg -c "PUT /repos/\{owner\}/\{repo\}/pulls/\{pull_number\}/update-branch" apps/web-platform/server` reports exactly one hit (the reaper); the other `update-branch` mentions under `apps/web-platform/server/` are prose (reaper comments, the `execution-placement.ts` reason string, the `routine-metadata.ts` description).
 - [ ] AC9 `git diff origin/main...HEAD --name-only` contains none of `AGENTS.md`, `AGENTS.rules.md`, `.claude/rule-weakening-acks.txt`, `plugins/soleur/scripts/sync-pr-behind.sh`; no mention of closing #9482, #10245, #5840 anywhere in commits/PR body.
 - [ ] AC10 ADR-270 addendum present (dated 2026-10-22, names the T1-T4 rulings and residuals); `bash plugins/soleur/test/c4-count-parity.test.sh` still passes.
 - [ ] AC11 PR body: `Ref #9454` and `Ref #10832` only, a `## Changelog` section, `Reviewed-Coverage:` line disclosing any review seat lost to the weekly API limit, ends with the Claude Code generated-with line; commit trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`; files added by explicit path (never `git add -A`); identity Jean Deruelle.

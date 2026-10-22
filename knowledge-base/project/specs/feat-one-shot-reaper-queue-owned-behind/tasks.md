@@ -31,7 +31,7 @@ Ref #9454. Deferral tracked in #10832.
 
 ## Phase 5: Verify and ship
 
-- 5.1 Reaper test, `routine-metadata-parity`, `function-registry-count`, `execution-placement`, `cron-safe-commit-parity`, `tsc --noEmit`, type-widening `rg`, `c4-count-parity.test.sh`, `technical-ruling-gate.sh` on `decision-challenges.md`.
+- 5.1 AC8 `rg -c` check (one PUT route literal under apps/web-platform/server); reaper test, `routine-metadata-parity`, `function-registry-count`, `execution-placement`, `cron-safe-commit-parity`, `tsc --noEmit`, type-widening `rg`, `c4-count-parity.test.sh`, `technical-ruling-gate.sh` on `decision-challenges.md`.
 - 5.2 Commit with explicit paths (never `git add -A`), trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`; PR body `Ref #9454` / `Ref #10832`, Changelog, `Reviewed-Coverage:` disclosure.
 - 5.3 Merge: `plugins/soleur/scripts/lib/session-state.sh with_lock merge-main 600 -- gh pr merge <N> --squash --auto`; wait for this PR's post-merge push run on main.
 - 5.4 `soleur:postmerge` (deploy-arm served == CONTAINS, /health supabase connected); then the AC14 Sentry check after the first sweep.
