@@ -273,11 +273,15 @@ grep -q 'INSTALL_CMD.*infra-config-install' <<<"$SC" \
 
 # S10 (defect 3): the verify stderr is no longer swallowed — a bounded capture file exists
 # and a classified detail= token rides the VERIFY_FAIL row. Anchored on syntax, not prose:
-# the negative pin asserts the verify run does NOT end `>/dev/null 2>&1`.
-grep -qF 'verify.stderr' <<<"$SC" \
-  && pass || fail "S10: no verify.stderr bounded capture in refresh.sh"
+# the negative pin asserts the verify run does NOT end `>/dev/null 2>&1` under any
+# spelling, and the capture pin asserts the redirect target, not the filename alone
+# (a comment or the later head/mv lines can satisfy a bare 'verify.stderr' grep).
+grep -qF '2>"$STAGE/verify.stderr"' <<<"$SC" \
+  && pass || fail "S10: no verify.stderr stderr redirect on the verify run"
 ! grep -qF -- '/bundle/manifest.txt >/dev/null 2>&1' <<<"$SC" \
   && ! grep -qF -- '/bundle/manifest.txt 2>&1 >/dev/null' <<<"$SC" \
+  && ! grep -qF -- '/bundle/manifest.txt &>/dev/null' <<<"$SC" \
+  && ! grep -qF -- '/bundle/manifest.txt > /dev/null' <<<"$SC" \
   && pass || fail "S10: verify-blob stderr still swallowed by /dev/null"
 grep -qF 'detail=' <<<"$SC" \
   && pass || fail "S10: no detail= classification on the VERIFY_FAIL row"
@@ -288,12 +292,40 @@ for tok in flag-newbundle tlog identity chain timeout docker other; do
   grep -qF "_cls=$tok" <<<"$SC" \
     && pass || fail "S10: classifier arm missing token $tok"
 done
-# detail= must be additive after rejver= on the reason=signature call (row-shape pin).
+# Ordering pin (panel finding): the identity arm MUST precede the chain arm — cosign's
+# canonical identity-mismatch stderr contains 'certificate', so a chain-first order
+# misclassifies it. Anchored on the arm bodies' relative position in the render.
+_id_ln="$(grep -nF 'elif grep -qiE '"'"'identity|issuer' <<<"$SC" | head -1 | cut -d: -f1)"
+_ch_ln="$(grep -nF "elif grep -qiE 'certificate chain|x509|signed by'" <<<"$SC" | head -1 | cut -d: -f1)"
+{ [ -n "$_id_ln" ] && [ -n "$_ch_ln" ] && [ "$_id_ln" -lt "$_ch_ln" ]; } \
+  && pass || fail "S10: identity arm must precede chain arm (bare 'certificate' shadows identity)"
+# The emit-channel charset bound is enforced, not just documented: a future arm that
+# yields a non-[a-z-] token must degrade to `other`, never inject into the row.
+grep -qF '*[!a-z-]*) _cls=other' <<<"$SC" \
+  && pass || fail "S10: _cls charset clamp missing (token bound is comment-only)"
+# detail= must be additive after rejver= on the reason=signature call (row-shape pin),
+# and it must be the ONLY signature call site — a second one without detail= is
+# CI-invisible (the grep above finds the pinned one) and surfaces only as probe FAIL.
 grep -qE 'verify_fail signature "" "detail=' <<<"$SC" \
   && pass || fail "S10: verify_fail signature call site does not pass detail="
+[ "$(grep -cE 'verify_fail signature' <<<"$SC")" -eq 1 ] \
+  && pass || fail "S10: a second verify_fail signature call site would evade the detail= pin"
+# No call site may interpolate stderr text into verify_fail's free-text $3 — the
+# phone-home sed chain has no general-secret arm, so raw stderr in $3 ships unredacted.
+! grep -qE 'verify_fail [a-z-]+ "" "[^"]*\$\(' <<<"$SC" \
+  && pass || fail "S10: verify_fail call interpolates a command substitution into \$3"
+# A VERIFY_FAIL row must never carry version=/sha256= — the drift comparator filters
+# them out today, but a widened state-row grep would parse a failure as applied state.
+! grep -qE 'verify_fail [a-z-]+ "" "[^"]*(version|sha256)=' <<<"$SC" \
+  && pass || fail "S10: verify_fail \$3 carries a comparator-parseable key"
 # AC5 pin: the drift summarizer's _summ_row allowlist must carry `detail` or the
 # token is emitted but never surfaces in run summaries (a regex revert goes red).
-grep -qF 'member|detail' .github/workflows/inngest-config-drift.yml \
+# Membership-based (member AND detail inside one (…|…)= alternation), not the
+# 'member|detail' adjacency substring — reordering the alternation stays green,
+# dropping either key goes red. Anchored at $DIR like every sibling file access.
+DRIFT_WF="$DIR/../../../.github/workflows/inngest-config-drift.yml"
+[ -f "$DRIFT_WF" ] && pass || fail "S10: inngest-config-drift.yml not found at $DRIFT_WF"
+grep -oE '\([a-zA-Z0-9_|]*member[a-zA-Z0-9_|]*\)=' "$DRIFT_WF" | grep -q 'detail' \
   && pass || fail "S10: _summ_row regex in inngest-config-drift.yml lost the detail alternation"
 
 # ── F-rows: run the extracted script under fixture seams ─────────────────────────────────
@@ -391,12 +423,12 @@ run_refresh() {  # env: INNGEST_CONFIG_DIGEST + FX_* fault knobs
     REFRESH_COSIGN_IMAGE="${FX_COSIGN_SEAM_IMAGE-fixture/cosign}" \
     REFRESH_BUNDLE_REPO="fixture/repo" \
     REFRESH_IDENTITY_REGEXP="^fixture$" \
-    REFRESH_NOOP_THROTTLE_S=0 \
     FX_LOG="$FX/calls.log" FX_MARKERS="$FX/markers.log" \
     FX_BUNDLE_TGZ="$FX/bundle.tar.gz" FX_DEST="$FX/dest" FX_NSEEN="$FX/nseen" \
     FX_FAIL_PULL="${FX_FAIL_PULL:-0}" FX_COSIGN_FAIL="${FX_COSIGN_FAIL:-0}" \
     FX_COSIGN_STDERR="${FX_COSIGN_STDERR:-}" FX_COSIGN_RC="${FX_COSIGN_RC:-}" \
     FX_FAIL_COSIGN_PULL="${FX_FAIL_COSIGN_PULL:-0}" \
+    REFRESH_NOOP_THROTTLE_S="${FX_NOOP_THROTTLE_S:-0}" \
     FX_INSTALL_FAIL_AFTER="${FX_INSTALL_FAIL_AFTER:-999}" \
     INNGEST_CONFIG_DIGEST="${INNGEST_CONFIG_DIGEST:-}" \
     ZOT_PULL_TOKEN="${ZOT_PULL_TOKEN:-}" \
@@ -605,7 +637,10 @@ grep -q 'member=cosign-image' "$FX/markers.log" \
 
 # F16 — verify stderr classification (defect 3): a stubbed cosign stderr string must land
 # as the classified detail= token on the VERIFY_FAIL row AND write the bounded
-# $STATE_DIR/verify.stderr file. Three fixtures: flag-newbundle, tlog, docker.
+# $STATE_DIR/verify.stderr file. Fixtures cover ALL classifier arms including the
+# identity/chain ordering (cosign's identity-mismatch stderr contains 'certificate'
+# — a chain-first order misclassifies it). mk_bundle runs ONCE up front: the tarball
+# persists across reset_fx, and every arm's verify fails before VERSION is read.
 reset_fx
 echo 0 > "$FX/state/applied.version"
 mk_bundle 14 "$FX/members"
@@ -617,13 +652,20 @@ grep -q 'SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature' "$FX/markers.log" \
 grep -q 'detail=flag-newbundle' "$FX/markers.log" \
   && pass || fail "F16: new-bundle gate error not classified detail=flag-newbundle"
 [ -f "$FX/state/verify.stderr" ] && pass || fail "F16: no bounded verify.stderr file written"
+# The persisted file = one `# ts=` binding header + ≤4 KiB of stderr.
+head -1 "$FX/state/verify.stderr" | grep -qE '^# ts=[0-9T:Z-]+ offered=[0-9a-f]{12} rc=1$' \
+  && pass || fail "F16: verify.stderr missing the ts/offered/rc binding header"
 _vc="$(wc -c < "$FX/state/verify.stderr" 2>/dev/null || echo 9999)"
-[ "$_vc" -le 4096 ] && pass || fail "F16: verify.stderr not bounded (${_vc} bytes > 4096)"
+[ "$_vc" -le 4200 ] && pass || fail "F16: verify.stderr not bounded (${_vc} bytes)"
+[ "$(stat -c %a "$FX/state/verify.stderr")" = "600" ] \
+  && pass || fail "F16: verify.stderr mode != 0600 (umask subshell missing)"
+[ ! -e "$FX/state/verify.stderr.new" ] && pass || fail "F16: verify.stderr.new left behind (mv not atomic)"
 
 reset_fx
 echo 0 > "$FX/state/applied.version"
 FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='error verifying tlog entry: rekor lookup failed' \
   INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: tlog rc=$rc (want 1)"
 grep -q 'detail=tlog' "$FX/markers.log" \
   && pass || fail "F16: tlog stderr not classified detail=tlog"
 
@@ -631,27 +673,87 @@ reset_fx
 echo 0 > "$FX/state/applied.version"
 FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='Error response from daemon: no such image' \
   INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: docker rc=$rc (want 1)"
 grep -q 'detail=docker' "$FX/markers.log" \
   && pass || fail "F16: daemon stderr not classified detail=docker"
+
+# identity BEFORE chain: cosign's canonical identity-mismatch text carries the word
+# 'certificate' — under the pre-fix order it classified `chain`, misrouting triage.
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 \
+  FX_COSIGN_STDERR='Error: none of the expected identities matched what was in the certificate, got subjects [https://x] with issuer https://y' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: identity rc=$rc (want 1)"
+grep -q 'detail=identity' "$FX/markers.log" \
+  && pass || fail "F16: identity-mismatch stderr classified wrong (chain shadows identity)"
+! grep -q 'detail=chain' "$FX/markers.log" \
+  && pass || fail "F16: identity-mismatch misclassified detail=chain"
+
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='x509: certificate signed by unknown authority' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: chain rc=$rc (want 1)"
+grep -q 'detail=chain' "$FX/markers.log" \
+  && pass || fail "F16: x509 chain stderr not classified detail=chain"
+
+# Empty stderr (verify fails without cosign diagnostics) still reaches `other`.
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: empty-stderr rc=$rc (want 1)"
+grep -q 'detail=other' "$FX/markers.log" \
+  && pass || fail "F16: empty stderr did not classify detail=other"
 
 reset_fx
 echo 0 > "$FX/state/applied.version"
 FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='some unclassified failure text' \
   INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: other rc=$rc (want 1)"
 grep -q 'detail=other' "$FX/markers.log" \
   && pass || fail "F16: unrecognized stderr did not fall through to detail=other"
+
+# The 4 KiB bound must actually bind: a >4 KiB stderr lands header + exactly 4096
+# bytes — the `head -c 4096`→`cat` mutation (or a removed cap) goes red here.
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 FX_COSIGN_STDERR="$(head -c 5000 /dev/zero | tr '\0' 'x')" \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: oversize-stderr rc=$rc (want 1)"
+_vc="$(wc -c < "$FX/state/verify.stderr" 2>/dev/null || echo 9999)"
+{ [ "$_vc" -gt 4096 ] && [ "$_vc" -le 4200 ]; } \
+  && pass || fail "F16: verify.stderr cap did not bind (${_vc} bytes from 5001 input)"
 
 # rc=124 (timeout kill) classifies timeout regardless of stderr content.
 reset_fx
 echo 0 > "$FX/state/applied.version"
 FX_COSIGN_FAIL=1 FX_COSIGN_RC=124 FX_COSIGN_STDERR='partial output before kill' \
   INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: timeout rc=$rc (want 1)"
 grep -q 'detail=timeout' "$FX/markers.log" \
   && pass || fail "F16: rc=124 not classified detail=timeout"
 
+# VF_STAMP keys reason:detail — a detail flip inside the 3600 s throttle window
+# re-emits a second row; reason-only keying (the reverted form) suppresses it.
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_NOOP_THROTTLE_S=3600 FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='some unclassified failure text' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: stamp arm1 rc=$rc (want 1)"
+FX_NOOP_THROTTLE_S=3600 FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='error verifying tlog entry: rekor lookup failed' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: stamp arm2 rc=$rc (want 1)"
+# (line-anchored: the phone-home stub echoes the marker text with a PHONE_HOME prefix —
+#  an unanchored count would read 2 lines per emit and 4 total.)
+[ "$(grep -c '^SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature' "$FX/markers.log")" -eq 2 ] \
+  && pass || fail "F16: detail flip did not re-emit inside the throttle window"
+grep -q 'detail=other' "$FX/markers.log" && grep -q 'detail=tlog' "$FX/markers.log" \
+  && pass || fail "F16: stamp rows missing expected detail= tokens"
+
 # Anti-vacuity floor — the inngest.test.sh convention: a deleted block must red,
 # not silently pass fewer assertions. Raise it when adding rows.
-MIN_ASSERTIONS=126
+MIN_ASSERTIONS=160
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 

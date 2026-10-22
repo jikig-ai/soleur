@@ -3,7 +3,7 @@
 ## Summary
 
 The dedicated inngest host's config-refresh channel was rejecting every promoted bundle: each
-~5-minute tick emitted `SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature offered=4e17987c…` and
+~60-second tick (`OnUnitActiveSec=60s`; a sustained identical failure re-emits once per 300 s window) emitted `SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature offered=4e17987c…` and
 installed nothing. The refresh channel — ADR-135's in-place redelivery path for host scripts on the
 deny-all-public scheduler — was dead from the v3 bundle promotion until the fix.
 

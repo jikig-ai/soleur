@@ -19,7 +19,8 @@
 #       this file too, so the guard greps the whole workflow, comments included.
 #   D4. Real stderr reaches $GITHUB_STEP_SUMMARY (bounded) — the point of the probe.
 #
-# Each structural row is re-run against a MUTATED copy to show the analyzer goes red for the
+# Representative structural rows are re-run against MUTATED copies to show the analyzer goes red
+# for the
 # right reason (the escrow-workflow suite's convention).
 #
 # Every token here is synthetic (cq-test-fixtures-synthesized-only). The workflow is NEVER
@@ -205,7 +206,7 @@ awk -F'\t' '$1=="D1c" && $2=="FAIL" {found=1} END{exit found?0:1}' "$SCR/mut/row
   && ok "D1c mutation: dropping packages:read goes red" \
   || no "D1c mutation: workflow without packages:read stayed green (row is vacuous)"
 
-MIN_ASSERTIONS=22
+MIN_ASSERTIONS=26
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 

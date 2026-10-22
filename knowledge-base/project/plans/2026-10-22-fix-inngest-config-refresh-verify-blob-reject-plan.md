@@ -33,7 +33,7 @@ requires_cpo_signoff: true
 ## Overview
 
 The dedicated Inngest host's ADR-135 config-refresh timer emits
-`SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature offered=4e17987c…` on every ~5-minute tick for the
+`SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature offered=4e17987c…` on every ~60-second tick (a sustained identical failure re-emits once per 300 s window) for the
 promoted v3 bundle digest `4e17987c200a355a4c9e51d95d621e9fe1ff0febbb390d3e6d40f825d726d0c1`
 (earlier, the same row fired for v2). The channel is alive end-to-end — pointer resolved, bundle
 pulled from zot, cosign verifier image staged — and the `verify-blob` step itself returns non-zero.
@@ -388,6 +388,8 @@ old boot — a bad fix cannot widen acceptance, only continue emitting `VERIFY_F
 
 ### Guard 1 — verification-weakening-flag ban (AC10 / Test T5)
 
+Note (review): the diff-scoped `grep -nE` over added lines is POSITION-aware — the pattern hits legitimately on quoted *match strings* (the classifier's `'only supported with --new-bundle-format'` needle) and test fixtures; a hit in flag position (`--insecure-ignore-tlog`/`--key`/`--new-bundle-format` on a cosign argv) fails, a hit inside a quoted pattern string is exempt.
+
 **Property.** No flag that relaxes signature verification (`--insecure-ignore-tlog`,
 `--insecure-ignore-sct`, `--key`, `--new-bundle-format`) lands anywhere in this change's added
 lines.
@@ -480,7 +482,7 @@ failure_modes:
     alert_route: "triage reads bounded verify.stderr via next sanctioned host read; detail taxonomy extended"
 logs:
   where: "journald on host (durable), Better Stack Logs source (off-box), $STATE_DIR/verify.stderr (bounded 4 KiB, 0600, on-host)"
-  retention: "Better Stack source retention; journald rotation; verify.stderr overwritten per tick (last failure only)"
+  retention: "Better Stack source retention; journald rotation; verify.stderr rewritten per failure (last failure only; `# ts=`/`offered=`/`rc=` binding header, 0600, via .new+mv)"
 discoverability_test:
   command: "grep -o 'detail=' apps/web-platform/infra/cloud-init-inngest.yml"
   expected_output: "detail="

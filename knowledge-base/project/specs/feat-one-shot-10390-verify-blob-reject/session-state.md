@@ -80,3 +80,33 @@
   security-sentinel, performance-oracle, data-integrity-guardian, agent-native-reviewer,
   code-quality-analyst = 7 — dedup arch-strategist done, code-simplicity reruns at Step 4)
   + test-design-reviewer + structural-enumeration. Then Step 5 fix round → qa → compound → ship.
+
+## Review Phase — panel complete, findings resolved
+
+Panel: 10 seats (7 code-class + test-design + structural-enumeration + user-impact; arch-strategist deduped via design pass; code-simplicity reruns at review Step 4). All 7 settled CTO rulings held; zero DISSENT.
+
+### Dedup ledger (raw findings → canonical defects)
+
+| raw finding | canonical defect key | reporting seat(s) | fix commit |
+|---|---|---|---|
+| run_verify unguarded under bash -e (P1) | errexit-kills-failing-arm | pattern-recognition | this fix round |
+| chain arm shadows identity (P2×2+P3×3) | classifier-ordering | user-impact, test-design, code-quality, data-integrity, structural | this fix round |
+| MIN_ASSERTIONS under-raised/absent ×3 | vacuity-floors | test-design, pattern | this fix round |
+| verdict matrix missing contract rows | probe-matrix-coverage | test-design, pattern, code-quality, data-integrity | this fix round |
+| 4KiB bound pin vacuous | vacuous-bound | test-design, structural | this fix round |
+| verify.stderr: no ts/digest binding; truncate-before-read; umask window | stderr-file-hardening | user-impact, data-integrity, security | this fix round |
+| followthrough enrollment gap + premature task | enrollment-doc | agent-native | this fix round |
+| probe header not signature-scoped; tick wording | contract-doc-drift | pattern, data-integrity, git-history | this fix round |
+| S10 CWD-relative + comment-satisfiable pins; swallow-spelling gaps; call-site/membership pins | test-anchor-hardening | pattern, test-design, code-quality, structural, data-integrity | this fix round |
+| diagnose workflow: arm-B comment, stale "swallows", unbounded cat, tar symlink, cid leak | diagnose-hardening | code-quality, git-history, security, structural | this fix round |
+| VF_STAMP reason-only comment; probe rc=3 swallowed by command-subst | correctness-fixes | git-history, (found by new matrix row) | this fix round |
+| runbook digest source; PATH portability; exec bit; mktemp template; counter self-test | misc-hardening | agent-native, test-design, pattern | this fix round |
+
+Deferred (documented, not fixed): probe substring-predicate edges (detail2=/renamed marker fail toward FAIL = safe direction; old-binary-healthy vacuity bounded by operator-set earliest=); SEAM_REFUSED detail= double-semantics (cosmetic truncation); _summ_row free-text detail on non-signature rows (harmless); F16 boilerplate (house style is explicit); suite-durations rows for new suites (regen-owned); diagnose suite recursion arm (optional).
+
+New real defect found by the added matrix row: run_one's `exit` inside command-substitution made transport rc=3 surface as NOT YET instead of CANNOT ESTABLISH — fixed with SCAN_RC propagation.
+
+### Fix-round state
+- Fix diff base: PANEL_SHA d65c232da6eb4031f52adcd0121dd7954f0cdb76
+- Finding-seats for fix round: pattern-recognition-specialist, user-impact-reviewer, test-design-reviewer, security-sentinel, data-integrity-guardian, structural-enumeration, code-quality-analyst, agent-native-reviewer, git-history-analyzer
+- Suides after fixes: refresh 160/0, diagnose 26/0, probe 14/0

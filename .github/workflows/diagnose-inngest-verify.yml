@@ -3,9 +3,11 @@
 # WHAT IT DOES. Pulls a promoted `ghcr.io/jikig-ai/soleur-inngest-config` bundle image by digest, extracts
 # `bundle.tar.gz`, `jq`-inspects the cosign `.sigstore.json`, then runs the EXACT verify-blob invocation the
 # inngest host runs each tick (pinned cosign v3.1.1 image, `--network none`, baked trusted root, pinned
-# identity regexp + OIDC issuer) — with stderr VISIBLE, which the host swallows (`>/dev/null 2>&1`). Two
-# discriminator arms follow: a 0700 stage-dir arm modelling the host's `mktemp -d` perms under the UID-65532
-# image, and a `--network host` arm isolating the network dimension. Verdicts and bounded stderr land in the
+# identity regexp + OIDC issuer) — with stderr VISIBLE (the host swallowed it via `>/dev/null 2>&1`
+# pre-defect-3-fix). Two discriminator arms follow: an unreadable-mounted-dir arm (worst-case unreadable
+# bind source for the UID-65532 image — the host's 0700 is on the mktemp PARENT of the mount, invisible
+# in-container, so this arm isolates the "unreadable bundle dir → flag-newbundle shape" hypothesis), and
+# a `--network host` arm isolating the network dimension. Verdicts and bounded stderr land in the
 # job summary.
 #
 # WHAT IT CANNOT DO. No environment gate, no Doppler, no GitHub write, no SSH: `contents: read` +
@@ -80,13 +82,18 @@ jobs:
           echo "== pull bundle =="
           docker pull "$BREF" || exit 1
           cid="$(docker create "$BREF")" || exit 1
-          docker cp "$cid:/bundle.tar.gz" "$S/bundle.tar.gz" || exit 1
+          docker cp "$cid:/bundle.tar.gz" "$S/bundle.tar.gz" || { docker rm -f "$cid" >/dev/null; exit 1; }
           docker rm -f "$cid" >/dev/null
           echo "== pull verifier =="
           docker pull "$COSIGN" || exit 1
 
           mkdir -p "$S/bundle"
-          tar -xzf "$S/bundle.tar.gz" -C "$S/bundle"
+          tar -xzf "$S/bundle.tar.gz" -C "$S/bundle" --no-same-owner
+          # A crafted bundle could symlink manifest.txt at a runner path (e.g. the
+          # docker config holding the base64'd GITHUB_TOKEN); the host rejects
+          # non-regular members — mirror that here before cat/jq follows the link.
+          [[ ! -L "$S/bundle/manifest.txt" && ! -L "$S/bundle/manifest.txt.sigstore.json" ]] \
+            || { echo "::error::bundle carries a symlink member"; exit 1; }
           {
             echo "### bundle members"
             echo '```'
@@ -112,6 +119,10 @@ jobs:
           run_verify() {  # $1=label; extra argv after
             local label="$1"; shift
             echo "== verify arm: $label =="
+            # `run:` executes under bash -eo pipefail — an unguarded docker run here
+            # aborts the step on the very failure this probe exists to capture, so
+            # the rc is captured with the same `|| rc=$?` shape the host uses.
+            local rc=0
             timeout 120 docker run --rm "$@" \
               -v "$S/bundle:/bundle:ro" \
               -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
@@ -120,14 +131,13 @@ jobs:
               --bundle /bundle/manifest.txt.sigstore.json \
               --certificate-identity-regexp "$IDENTITY_REGEXP" \
               --certificate-oidc-issuer "$OIDC_ISSUER" \
-              /bundle/manifest.txt >"$S/out.$label" 2>"$S/err.$label"
-            local rc=$?
+              /bundle/manifest.txt >"$S/out.$label" 2>"$S/err.$label" || rc=$?
             echo "rc=$rc"
             {
               echo "### arm \`$label\` — rc=$rc"
               echo '```'
               head -c 8192 "$S/err.$label"; echo
-              cat "$S/out.$label"
+              head -c 8192 "$S/out.$label"
               echo '```'
             } | tee -a "$GITHUB_STEP_SUMMARY"
             return 0  # a failing arm is DATA, never a step failure
@@ -135,7 +145,7 @@ jobs:
 
           # Arm A — verbatim host shape: --network none.
           run_verify verbatim --network none
-          # Arm B — host-mktemp model: stage dir 0700 (what UID-65532 sees on the host).
+          # Arm B — unreadable mounted dir (worst-case unreadable bind source).
           chmod 0700 "$S/bundle"
           run_verify stage0700 --network none
           chmod 0755 "$S/bundle"

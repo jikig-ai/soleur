@@ -1,27 +1,32 @@
 #!/usr/bin/env bash
 # Follow-through verification for epic #10390 defect 3 — the inngest host's
-# config-refresh tick emitted SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature
-# every ~5 min with cosign's stderr swallowed (>/dev/null 2>&1), so the honest
-# reject was undebuggable. The fix captures bounded stderr on-host and rides a
-# classified detail= token on the row.
+# config-refresh tick (OnUnitActiveSec=60s; a sustained identical failure re-emits
+# once per 300s window) emitted SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature
+# with cosign's stderr swallowed (>/dev/null 2>&1), so the honest reject was
+# undebuggable. The fix captures bounded stderr on-host and rides a classified
+# detail= token on the row.
 #
-# WHAT IT VERIFIES, as a conjunction:
+# WHAT IT VERIFIES, as a conjunction — all VERIFY_FAIL predicates below are
+# reason=signature-scoped (a non-signature VERIFY_FAIL is a different defect
+# class and never blocks PASS):
 #   (a) POSITIVE CONTROL — soleur-inngest still ships SOLEUR_INFRA_PULL_* rows
 #       since SOLEUR_FT_EARLIEST (inngest-config-refresh journald → Vector
 #       Source 4). Zero = dark channel, never a clean zero.
-#   (b) NEW-CODE MARKER — a VERIFY_FAIL row carrying detail= can only be
-#       emitted by the fixed refresh script; undetailed VERIFY_FAIL rows
-#       post-earliest mean the old binary is still running past the replace
-#       window → FAIL.
+#   (b) NEW-CODE MARKER — a reason=signature VERIFY_FAIL row carrying detail=
+#       can only be emitted by the fixed refresh script; undetailed signature
+#       rows post-earliest mean the old binary is still running past the
+#       replace window → FAIL.
 #   (c) ABSENCE — zero reason=signature VERIFY_FAIL rows since earliest is the
-#       soak verdict (AC7). Rows that persist WITH detail= mean the channel is
-#       alive and rejecting — that is NOT YET (the captured detail names the
-#       residual cause for the follow-up fix), never a pass.
+#       soak verdict (AC7). Signature rows that persist WITH detail= mean the
+#       channel is alive and rejecting — that is NOT YET (the captured detail
+#       names the residual cause for the follow-up fix), never a pass.
 #
 # Exit semantics (sweep-followthroughs.sh rc→word map):
-#   0 = PASS               control >=1 AND zero VERIFY_FAIL rows since earliest
-#   1 = FAIL               >=1 VERIFY_FAIL row WITHOUT detail= since earliest
-#   2 = NOT YET            VERIFY_FAIL rows persist (all carry detail=), earliest
+#   0 = PASS               control >=1 AND zero reason=signature VERIFY_FAIL
+#                          rows since earliest
+#   1 = FAIL               >=1 reason=signature VERIFY_FAIL row WITHOUT detail=
+#                          since earliest
+#   2 = NOT YET            signature rows persist (all carry detail=), earliest
 #                          in the future, or a transient query error
 #   3 = CANNOT ESTABLISH   credentials unset, earliest unset/malformed, or the
 #                          positive control reads 0 (channel dark / host moved)
@@ -32,8 +37,14 @@
 #   SOLEUR_FT_EARLIEST (the sweeper forwards the directive's earliest=).
 #   Test seam: FT10390_QUERY_SH.
 #
+# ENROLLMENT (an unlabeled directive is invisible to the sweeper):
+#   1. gh issue edit 10390 --add-label follow-through
+#   2. Post the directive below as a comment at column 0 (outside any fence),
+#      substituting earliest=<host-replace timestamp + 24h as an ISO instant> —
+#      a literal `<replace+1d>` exits CANNOT ESTABLISH forever.
+#
 # Directive:
-#   <!-- soleur:followthrough script=scripts/followthroughs/inngest-verify-clean-10390.sh earliest=<replace+1d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
+#   <!-- soleur:followthrough script=scripts/followthroughs/inngest-verify-clean-10390.sh earliest=<replace+1d as ISO instant> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
 #
 # RETIREMENT: when the soak closes, delete this file and remove the directive
 # from the tracker comment.
@@ -128,7 +139,15 @@ FROM ${SRC}
 WHERE dt >= toDateTime('${SINCE_SQL}')
 FORMAT JSONEachRow"
 
-SCAN_OUT="$(run_one "$SCAN_SQL")"
+# run_one runs inside a command substitution — its `exit N` exits the SUBSHELL,
+# not this script, so the verdict rc must be captured and re-raised here.
+SCAN_RC=0
+SCAN_OUT="$(run_one "$SCAN_SQL")" || SCAN_RC=$?
+case "$SCAN_RC" in
+  0) ;;
+  3) exit 3 ;;
+  *) exit 2 ;;
+esac
 read -r control_rows vf_rows vf_detailed sig_rows sig_detailed <<<"$(printf '%s\n' "$SCAN_OUT" \
   | jq -R -r 'fromjson? | select(type == "object")
   | [.control_rows, .vf_rows, .vf_detailed, .sig_rows, .sig_detailed] | map(tostring) | join("\t")')"

@@ -40,5 +40,7 @@ TDD order: failing rows land before the fix rows they pin.
 
 - [x] 5.1 ADR-135 defect-3 addendum. (AC8)
 - [x] 5.2 PIR under `knowledge-base/engineering/operations/post-mortems/`; `## Follow-ups` filed. (AC8)
-- [x] 5.3 `scripts/followthroughs/inngest-verify-clean-10390.sh` + tracker directive + sweeper
-      `secrets=` wiring; ≥24h clean soak. (AC7)
+- [x] 5.3a `scripts/followthroughs/inngest-verify-clean-10390.sh` + sweeper `secrets=` wiring. (AC7)
+- [ ] 5.3b Tracker enrollment post-merge: `gh issue edit 10390 --add-label follow-through`,
+      post the directive comment with `earliest=<replace+1d as ISO instant>` (a literal
+      placeholder exits CANNOT ESTABLISH forever); ≥24h clean soak. (AC7)
