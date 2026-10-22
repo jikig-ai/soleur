@@ -2180,6 +2180,8 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
   && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
 ```
 
+**Arm only with the review evidence**, checked in the arming command: `[ "$(gh pr view PR_NUMBER --json comments --jq '[.comments[].body|select(startswith("Review-Evidence:"))]|length')" -ge 1 ] && gh pr merge PR_NUMBER --squash --auto` (lock-wrapped form where the block below prescribes it). No such comment, a `head=` that is not the PR head, or `coverage` other than `full`: run `soleur:review`, which posts it. Gate text and domain seats: [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md).
+
 Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
 If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
