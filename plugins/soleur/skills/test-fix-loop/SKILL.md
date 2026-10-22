@@ -145,7 +145,7 @@ On termination (success or failure), write a report to stdout:
 - **Fixes applied**: files modified and what changed (last iteration)
 - **Recommendation**: what the user should investigate next (if not success). CIRCULAR or NON_CONVERGENCE on one cluster is an architecture signal, not a fix signal: recommend `soleur:engineering:review:legacy-code-expert` for that cluster's seams and characterization tests before another loop. Likewise when a fix landed but no existing test asserts the behaviour it changed -- this loop never writes tests, so name the agent that should. On NON_CONVERGENCE or MAX_ITERATIONS, name the remaining failures as load-only flake candidates to review against [determinism-checklist.md](./references/determinism-checklist.md) — the isolated re-run under-detects the contention class (fails only under suite load), so the honest answer there is determinism work on the test, not retry.
 
-On success, fixes are staged but NOT committed. The user reviews and commits via `soleur:ship` or manually.
+On success, fixes are staged but NOT committed. Commit through `soleur:ship`, which runs review. A manual commit stays an option and does not skip review: merge stays review-gated (`rf-never-skip-qa-review-before-merging`).
 
 ## Key Principles
 

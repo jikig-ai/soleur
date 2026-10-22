@@ -98,6 +98,8 @@ plugins/soleur/test/fixture-env-adoption.test.sh	knowledge-base/project/learning
 plugins/soleur/test/fixture-env-adoption.test.sh	knowledge-base/project/plans
 plugins/soleur/test/fixture-env-adoption.test.sh	knowledge-base/project/specs
 plugins/soleur/test/generate-kb-index.test.sh	knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md
+plugins/soleur/test/go-hold-routing.test.sh	knowledge-base/project/plans
+plugins/soleur/test/go-hold-routing.test.sh	knowledge-base/project/specs
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md
