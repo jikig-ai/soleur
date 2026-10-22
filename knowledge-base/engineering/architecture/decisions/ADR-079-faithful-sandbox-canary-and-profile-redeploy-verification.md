@@ -786,6 +786,7 @@ ships through Vector Source 4 (`SyslogIdentifier=web-bash-synthetic`). The grace
 page): the dead-man beat reports a dead DETECTOR, the `/fail` ping reports a broken SANDBOX.
 
 **Rulings (CTO agent, plan review 2026-10-20).**
+
 - *Selector.* The synthetic asks the dispatcher's own resolver which seccomp artifact a no-egress session would get right now
   (`server/resolve-sandbox-selector-cli.ts`, a 26 kB esbuild bundle of `resolveSandboxUnixDeny` with `--packages=external`, built in the Dockerfile
   builder stage), in the container's FULL env so the live flag read works, then passes the NAME (`base` | `unixdeny`) to the `env -i` probe exec.
