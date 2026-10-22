@@ -20,6 +20,9 @@ directory, so a session only runs a worktree's edited scripts when it was starte
 which copy ran. Never start a session with `--plugin-dir` pointing at a checkout of a PR you did not author: every
 gate the skills run, including the `--admin` merge gate, would then be that author's copy.
 
+Harness setup below covers Codex and Grok next; OpenCode is at the end of this section. Claude Code is the
+`--plugin-dir` flow above.
+
 ### Codex
 
 From the repository or feature worktree root:
@@ -61,6 +64,59 @@ Do **not** document `/soleur:go` for Grok sessions — use `/go`. Workflow routi
 Before `git push` under Grok Build, run `bash plugins/soleur/scripts/grok-pre-push-gate.sh` from the repo root (local CI parity: `test-all.sh` + fast required checks + `grok-fidelity`). Do not push and wait for CI to fail.
 
 **Grok agent compat:** Soleur agents are nested under `plugins/soleur/agents/**` (Claude recurses; Grok does not). After adding or renaming an agent, run `cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts` to refresh `.grok/agents/` stubs and `.claude-plugin/agents.manifest.json`.
+
+### OpenCode
+
+Install for branch work with an explicit `--target`, not the default:
+
+```bash
+bun plugins/soleur/scripts/install-opencode-adapter.ts --target /tmp/opencode-dev
+bun plugins/soleur/scripts/install-opencode-adapter.ts --check --target /tmp/opencode-dev   # opencode-install ok
+```
+
+The default target is your live `~/.config/opencode`, and the installer removes attributed stale stubs without
+prompting — so a run from a feature worktree silently repoints your real sessions at feature-branch code. Use
+`--target` unless you mean that. `--check` writes nothing and reports `MISSING` against an empty directory, so
+install first or you will read a false red. On failure, `MISSING` means a file is absent, `STALE` means its
+content differs, and `EXTRA` means the installer would add a file `--check` did not expect.
+
+**What is generated, and what is not.** Edit `plugins/soleur/opencode/plugin.ts` directly — it is a source file,
+never generated. Never hand-edit the generated artifacts: `opencode/INSTRUCTIONS.md`, `agents/`, `commands/` and
+`opencode.json`. Change `plugins/soleur/scripts/sync-opencode-adapter.ts` instead, then:
+
+```bash
+bun plugins/soleur/scripts/sync-opencode-adapter.ts          # regenerate
+bun plugins/soleur/scripts/sync-opencode-adapter.ts --check  # opencode-adapter ok
+```
+
+**Re-install after any edit**, including a regeneration: `--check` validates the committed tree, it does not
+refresh an installed copy. Edited behaviour that "did nothing" is almost always a stale install.
+
+**No CI job regenerates or checks this tree.** `--check` before pushing is the only gate, not belt-and-braces.
+
+**Names are bare here.** Commands are `/go`, `/sync`, `/help`, `/version`; skill ids are bare (`plan`, not
+`soleur:plan`); agents spawn by path id (`engineering/cto`). The full routing contract and the hook ledger are in
+[`plugins/soleur/opencode/INSTRUCTIONS.md`](plugins/soleur/opencode/INSTRUCTIONS.md).
+
+**The checkout must stay put.** The installed config points at this tree for skills, routing rules and the guard
+scripts, so moving or renaming the checkout makes every guard fail closed (`guard-did-not-run`).
+
+**Verify behaviour and record hook changes:**
+
+```bash
+cd plugins/soleur && bun test test/opencode-plugin.test.ts
+```
+
+A change to a hook's disposition or binding is part of the same PR — see
+`.claude/hooks/opencode-dispositions.tsv`, whose legend defines every disposition.
+
+**Degraded decisions are visible.** A shell call whose `workdir` cannot be correlated, or a runtime with no
+`tool.execute.before` surface, is announced on stderr; set `SOLEUR_OPENCODE_EVENT_LOG=<path>` to keep the durable
+TSV record, because the log file is off by default.
+
+**One gate is absent.** The operator-stage approval hook cannot be bound here (it needs a command rewrite and an
+ask in the same decision), so a staged bootstrap `--apply` exits **75** rather than approving. Nothing is
+approved silently.
 
 ## Contributor License Agreement
 

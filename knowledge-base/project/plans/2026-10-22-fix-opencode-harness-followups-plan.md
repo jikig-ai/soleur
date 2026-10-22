@@ -397,9 +397,8 @@ its own commit so a review finding on it cannot hold the three disclosure edits.
 
 1. Focused suite: `cd plugins/soleur && bun test test/opencode-plugin.test.ts
    test/opencode-adapter-drift.test.ts test/harness-claim-parity.test.ts test/harness-tool-map.test.ts`
-   (baseline before the change: 84 pass / 0 fail). Expect **84 + N pass, 0 fail**, where N is the
-   number of new rows and is stated in the PR body — an exact count, because `≥` is also satisfied
-   by deleting cases elsewhere.
+   (baseline before the change: 84 pass / 0 fail; measured after: **102 pass / 0 fail**, 18 new
+   rows — an exact count, because `≥` is also satisfied by deleting cases elsewhere).
 2. `bun plugins/soleur/scripts/sync-opencode-adapter.ts --check` → `opencode-adapter ok`.
 3. `TARGET=$(mktemp -d)`; `bun plugins/soleur/scripts/install-opencode-adapter.ts --target "$TARGET"`,
    then `… install-opencode-adapter.ts --check --target "$TARGET"` → `opencode-install ok`. The
@@ -622,7 +621,7 @@ logs:
   retention: "operator's filesystem policy; not a hosted log sink"
 discoverability_test:
   command: 'grep -c "decidesBash" plugins/soleur/opencode/plugin.ts'
-  expected_output: "4"
+  expected_output: "5"
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -667,14 +666,14 @@ same value becomes the envelope `cwd` and the runner cwd inside `decideBash`, fo
 events reuse the same call id and cannot consume the entry, because they fail `decidesBash` and the
 handler returns before touching the map.
 
-| # | Mutation (must drive the guard RED) | Why it is derivable from the design |
-|---|--------------------------------------|--------------------------------------|
-| 1 | Delete the capture write in `execute.before` (`calls.set`) | The only source of the value; P1 cannot hold |
-| 2 | Ignore the map in the consume (always `sessionCwd`) | The property is about the decision, not the capture |
-| 3 | Gate the consume on the literal `"shell"` instead of `decidesBash` | The `bash` alias then captures and never consumes — a silent fallback |
-| 4 | Consume on any action, not only a Bash one | `external_directory` fires first with the same call id, so a correct capture still loses the value |
-| 5 | Delete the entry inside the consume | A second evaluation for the same call falls back to the session directory |
-| 6 | Record an entry only when a workdir is usable (drop the sentinel) | A lookup miss becomes indistinguishable from "no workdir" — the ambiguity the sentinel exists to remove |
+| # | Mutation (must drive the guard RED) | Why it is derivable from the design | Observed red |
+|---|--------------------------------------|--------------------------------------|--------------|
+| 1 | Delete the capture write in `execute.before` (`recordCall`) | The only source of the value; P1 cannot hold | (a) and 8 others |
+| 2 | Ignore the map in the consume (always `sessionCwd`) | The property is about the decision, not the capture | (a) and 8 others |
+| 3 | Gate the consume on the literal `"shell"` instead of `decidesBash` | The `bash` alias then captures and never consumes — a silent fallback | (i), alone |
+| 4 | Delete the entry **before** the action gate, so a non-Bash event consumes it | `external_directory` fires first with the same call id, so the capture is gone before the decision | (j) and (k) |
+| 5 | Delete the entry on consume (after the read) | A second evaluation for the same call falls back to the session directory | (j) and (k), alone |
+| 6 | Record an entry only when a workdir is usable (drop the sentinel) | A lookup miss becomes indistinguishable from "no workdir" — the normal path turns into a false alarm | (b) and (h) |
 
 **Harness rows.**
 
@@ -747,10 +746,12 @@ ledger are independent surfaces that also name the bound hook.
     `SOLEUR_OPENCODE_EVENT_LOG`, `exit 75`, `opencode/INSTRUCTIONS.md`.
 12. `plugins/soleur/lib/harness.ts` no longer enumerates harnesses in its header;
     `grep -rniE "three of four|other three harness" plugins/soleur/lib plugins/soleur/test` returns
-    **nothing** (the `components.test.ts` comments name devin, codex and grok instead of counting),
-    and no comment describes a four-harness total.
-13. Focused suite green with an **exact** count: 84 baseline + N new rows, 0 fail, N stated in the
-    PR body.
+    **one** hit — the detector's own pattern in `test/harness-claim-parity.test.ts` — and no comment
+    or string states a four-harness total (the `components.test.ts` comments name devin, codex and
+    grok instead of counting).
+13. Focused suite green with an **exact** count: 84 baseline + 18 new rows = **102 pass / 0 fail**
+    across `test/opencode-plugin.test.ts`, `test/opencode-adapter-drift.test.ts`,
+    `test/harness-claim-parity.test.ts`, `test/harness-tool-map.test.ts`.
 14. The PR body closes #10819, #10820, #10821, #10822, carries a `## Changelog`, and discloses the
     overlap-preflight `rc=2`, the #10866 C4 gap, the new tracking issue, the ADR-291 note, the
     relative-workdir measurement, the default-branch narrowing residual, and that stderr visibility

@@ -1,5 +1,5 @@
 /**
- * Harness adapter — maps Soleur workflow invocations to Claude Code, Grok Build, Codex, Devin CLI, or the Cursor CLI.
+ * Harness adapter — maps Soleur workflow invocations to each member of the `Harness` union.
  *
  * Claude: Skill tool (`soleur:<skill>`), Task tool (agents), `/soleur:<command>` slash commands.
  * Grok:   slash commands (`/<skill>`, `/go`), spawn_subagent (agents).
