@@ -5,9 +5,10 @@
 --   doppler run -p soleur -c dev -- sh -c \
 --     'psql "$DATABASE_URL_POOLER" --no-psqlrc -X -tA -f test/fixtures/sql/normalize-repo-url-163-golden.sql'
 --
--- Each output line is one JSON array of 4 values (a value can be JSON null), in
+-- Each output line is one JSON array of 5 values (a value can be JSON null), in
 -- row order of the VALUES list below: raw input, the OLD 031 chain, the 163
--- chain, the 163 backfill outcome (canon_ok when eligible, else the row as is).
+-- chain, the 163 backfill outcome (canon_ok when eligible, else the row as is),
+-- and canon_ok itself (null means the eligibility guard rejected the row).
 -- to_json keeps tab/newline and NULL intact on a line. Paste each line as one
 -- array element of PG_GOLDEN_163 (add the trailing comma); a raw longer than 200
 -- characters is written in the test as a repeat() expression of the same shape.
@@ -25,7 +26,8 @@ SELECT '[' || COALESCE(to_json(x.repo_url)::text, 'null')
                                      '/+$', '', 'g'), '(\.git)+$', '', 'i'), '/+$', '', 'g')
                               ELSE x.repo_url END)::text, 'null')
        || ',' || COALESCE(to_json(CASE WHEN b.canon ~ '^[^/]*//[^/]+' THEN b.canon END)::text, 'null')
-       || ',' || COALESCE(to_json(COALESCE(c.canon_ok, x.repo_url))::text, 'null') || ']' AS golden_row
+       || ',' || COALESCE(to_json(COALESCE(c.canon_ok, x.repo_url))::text, 'null')
+       || ',' || COALESCE(to_json(c.canon_ok)::text, 'null') || ']' AS golden_row
   FROM (VALUES
     -- golden-rows begin
     ('http://a.aa .git'),
@@ -56,6 +58,10 @@ SELECT '[' || COALESCE(to_json(x.repo_url)::text, 'null')
     ('https://github.com/o%20x/'),
     ('https://github.com/o?q=1'),
     ('https://github.com/o#f'),
+    ('https://github.com/o?q=1/'),
+    ('https://github.com/o#f/'),
+    ('https://github.com/o' || chr(13) || 'x/'),
+    ('https://github.com/o' || chr(12) || chr(11) || 'x/'),
     ('https://github.com//o/'),
     ('https://github.com/.github.git'),
     ('https://h.1a/x/'),

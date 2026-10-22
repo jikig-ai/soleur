@@ -46,4 +46,4 @@ Branch: `feat-one-shot-10633-normalize-repo-url-sql-retrim` | Draft PR: #10876
 - 6.2 `lint-migration-immutability.sh`, `lint-guard-contract.py`, `technical-ruling-gate.sh --branch ...`, markdownlint on plan and tasks.
 - 6.3 One RED proof per Guard Contract guard (Guard 1 row 1, Guard 2 row 4), reverted.
 - 6.4 PR body: `Closes #10633`, `Closes #10732`, `Closes #10713`, baselines, rehearsal notes, #10692 untouched.
-- 6.5 Post-merge: confirm the `verify-migrations` conclusion is `success` (not `skipped`) with all three `verify/163` rows at `bad = 0`.
+- 6.5 Post-merge: confirm `migrate` is green and its log shows `Applying: 163_renormalize_repo_url.sql`; run `verify/163` read-only against prd (`psql -f`, all three rows `bad = 0`). `verify-migrations` is skipped on the workflow_run arm (#9471), so its conclusion is not evidence.

@@ -30,8 +30,8 @@ brand_survival_threshold: aggregate pattern
 ### New considerations discovered
 
 - `verify/031`'s input-guarded probe would stay red for any row 163 skips but the old chain would rewrite; prd must show 0 such rows (baseline column `skipped_but_changed`).
-- `verify/163` is deliberately strict and permanent: a future non-normalizing writer blocks deploys until fixed.
-- Postgres regex cost is quadratic-leaning on pathological values (0.9 s at 400 KB); prod max length is 59.
+- `verify/163` is deliberately strict and permanent: a future non-normalizing writer blocks the release where verify-migrations runs until fixed (it does not run on the workflow_run deploy arm, #9471).
+- Postgres regex cost was measured linear to 400 KB (review, 2026-10-23; an earlier plan-time reading of 'quadratic-leaning' did not hold); prod max length is 59.
 
 ## Overview
 
@@ -152,7 +152,7 @@ output. Applying the same SQL chain to both tables preserves raw equality only; 
 - the trimmed input has no internal ASCII whitespace (031's output keeps whitespace only at the tail, which is exactly the
   stored shape this migration repairs; a raw `x y .git` is never what 031 left behind), and
 - the trimmed input is at most 2048 characters (CTO L2: over-length rows are skipped, not raised on, which also bounds the
-  quadratic-leaning regex; prod max is 59), and
+  regex-cost parity bound, not a DoS guard; prod max is 59), and
 - the canonical result matches a clean shape:
   `^https?://([a-z0-9-]+[.])*[a-z][a-z0-9-]*(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$` (http/https, letter-bearing final host
   label so no IPv4 canonicalization, no userinfo, port, `%`, `?`, `#`, dot-segment or empty segment).
@@ -460,7 +460,7 @@ via `Closes #10732`, `Closes #10713` and `Closes #10633` in the PR body (after t
 
 ### Phase 6 - Post-merge (automated)
 
-`web-platform-release.yml` `migrate` applies 163; `verify-migrations` runs `verify/163` (all `bad` must be 0); the
+`web-platform-release.yml` `migrate` applies 163; `verify-migrations` runs `verify/163` (all `bad` must be 0) only where that job runs (not on the workflow_run arm, #9471); the
 follow-through scan closes issues naming `163_renormalize_repo_url`. No soak window and no operator step. If `migrate` aborts
 on the precondition (a collision group on prd), the failure is a plain loud error naming the count; resolution is a data
 decision (which conversation to keep), not made by the migration.
@@ -654,8 +654,8 @@ No `exception` block: no row is `plaintext-exception` and no connection has `cer
 ```yaml
 liveness_signal:
   what: the verify-migrations job runs apps/web-platform/scripts/run-verify.sh, which executes verify/163_renormalize_repo_url.sql and fails on any bad > 0
-  cadence: every release run on push to main (per deploy)
-  alert_target: the deploy job is gated on verify-migrations (needs list), so a red verify blocks the deploy and the release workflow reports failure
+  cadence: every release dispatch where verify-migrations runs; it is skipped on the workflow_run deploy arm today (#9471), so the merge deploy relies on the migrate log plus a manual read-only prd run of verify/163
+  alert_target: where it runs, the deploy job is gated on verify-migrations (needs list), so a red verify blocks the deploy; on the workflow_run arm it is skipped and the gate tolerates that
   configured_in: .github/workflows/web-platform-release.yml (verify-migrations job, run-verify.sh step)
 error_reporting:
   destination: GitHub Actions run annotations (::error:: lines from run-verify.sh); the migrate job surfaces the migration's RAISE EXCEPTION text via psql ON_ERROR_STOP
@@ -698,9 +698,9 @@ The probe reads the committed sentinel in this PR's tree and prints its check na
   `server/resolve-founder-for-installation.ts` would move from one match to ambiguous and drop events: an availability effect,
   not a leak, and the prd baseline shows nothing to rewrite.
 - **Regex cost bound (measured).** On the dev engine the trim regex took 0.9 s on a 400 KB value with a 200 KB interior
-  whitespace run and the tail strip 0.1-0.3 s on 600 KB inputs (quadratic-leaning, not catastrophic). Prod `repo_url` max
+  whitespace run and the tail strip 0.1-0.3 s on 600 KB inputs (later measured linear, see the review addendum). Prod `repo_url` max
   length is 59 (workspaces) and 44 (conversations), checked 2026-10-22 with an aggregate `max(length())`, and the write
-  boundary enforces `^https://github.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`; no length guard is added.
+  boundary enforces `^https://github.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`; the 2048-character eligibility clause is a parity bound, not a cost guard.
 - **Reduced verify cost.** `verify/163` scans ~200 rows today; re-check if `conversations` grows by orders of magnitude.
 
 ## Plan Review Revisions (2026-10-22)
@@ -723,6 +723,10 @@ guard and its safety property (see "Backfill safety"); fixtures and golden table
 with a row-count tie to the script; `canon-expr` block made table-independent so the identity set can be size 1; precondition-body-scoped
 shape assertions; Guard 2 row 2 replaced (a TS-side re-trim revert is not killable because the fixpoint loop re-trims; verified by
 mutation); non-discriminating pins annotated; `LOCK TABLE` with `lock_timeout` and a 2048-character eligibility clause (CTO L1, L2); baseline columns `to_rewrite` and
-`skipped_but_changed` re-run on prd within the hour before merge; post-merge AC requires the `verify-migrations` conclusion to be
+`skipped_but_changed` re-run on prd within the hour before merge; post-merge AC (reworded in review, see Post-merge) originally required the `verify-migrations` conclusion to be
 `success`, not `skipped`; forward-fix procedure documented (164, never an edit). Not applied: a pre-image snapshot table and a CSV
 backup (zero rows to protect; backup only if the baseline shows rewrites).
+
+## Review Addendum (2026-10-23)
+
+Two panels (15 seats, then 9 targeted seats over the fix commits). Applied: ASCII-only eligibility (`octet_length = char_length`), `OFFSET 0` fences (13 to 2 `regexp_replace` calls per row), compare-and-swap on the UPDATEs, header corrections, a canon-expr hash pin, port-constant ties, a 43-row Postgres golden table with a `canon_ok` column, a completeness property, ADR-044 amendment, and a reworded post-merge criterion (verify-migrations is skipped on the workflow_run arm, #9471). Measured corrections to this plan: regex cost is linear; the `OFFSET 0` gain is about 2x on read-only probes and 8x on the UPDATE, not 25x. Declined with reason: replacing the DO block with a `unique_violation` handler (CTO rulings R4 and L1 stand), a TEMP-table single copy of the expression, and test-line trims (plan-prescribed, small).

@@ -5,8 +5,8 @@ import path from "node:path";
 // Shape test for 163_renormalize_repo_url.sql (#10633). A regression TRIPWIRE
 // over the committed text, not proof of runtime behaviour: the runtime evidence
 // is the one-time dev rehearsal, the Postgres-generated golden table in
-// test/repo-url-sql-parity.test.ts, and the strict verify/163 sentinel that runs
-// on every deploy.
+// test/repo-url-sql-parity.test.ts, and the strict verify/163 sentinel, which runs
+// wherever verify-migrations runs (not on the workflow_run deploy arm, #9471).
 //
 // What it pins: the order of the lock, the precondition and the UPDATEs; the
 // precondition's own filters (scoped to its BODY, since the same tokens appear
@@ -75,7 +75,8 @@ describe("migration 163_renormalize_repo_url", () => {
     for (const stmt of [conv, ws]) {
       expect(stmt).toMatch(/SELECT x\.id, x\.repo_url AS old_url, c\.canon_ok/);
       expect(stmt).toMatch(/WHERE n\.id = t\.id/);
-      expect(stmt).toMatch(/AND t\.repo_url = n\.old_url/);
+      expect(stmt).toMatch(/^\s*AND t\.repo_url = n\.old_url\s*$/m);
+      expect(stmt).toMatch(/^\s*AND n\.canon_ok IS NOT NULL\s*$/m);
     }
   });
 

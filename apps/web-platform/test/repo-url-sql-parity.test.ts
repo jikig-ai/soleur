@@ -23,13 +23,17 @@ import { normalizeRepoUrl } from "@/lib/repo-url";
 // ALL of: lib/repo-url.ts, the ports below (sqlNormalize031 is the frozen
 // historical oracle; sqlChain163/sqlBackfill163 mirror the live chain), the
 // golden SQL fixture test/fixtures/sql/normalize-repo-url-163-golden.sql with
-// PG_GOLDEN_163 regenerated from Postgres, and a NEW migration plus verify file
-// (migration 163 is frozen once applied; a defect in it ships as 164, never an
-// edit). That new verify file supersedes verify/163: delete or relax verify/163 in
-// the same PR, or the two will disagree on what "canonical" means. Parity domain = URL-clean ASCII input. Out of domain (SQL cannot
-// mirror, see OUT_OF_PARITY): D4 URL-parser effects (%20 path encoding,
-// dot-segments, userinfo/port, numeric-host IPv4 canonicalization), D5 exotic
-// Unicode whitespace, D6 rows that are not scheme://host.
+// PG_GOLDEN_163 regenerated from Postgres, the canon-expr hash pin below, and a
+// NEW migration plus verify file (migration 163 is frozen once merged; a defect
+// in it ships as 164, never an edit). The new verify file supersedes verify/163:
+// delete or relax verify/163 in the same PR, and with it the VERIFY_SQL and
+// selftestRows readers below and the 3/3/1 copy-count expectations in
+// test/supabase-migrations/163-renormalize-repo-url.test.ts, or the two verify
+// files will disagree on what "canonical" means. Parity domain = URL-clean ASCII
+// input. Out of domain (SQL cannot mirror, see OUT_OF_PARITY): D4 URL-parser
+// effects (%20 path encoding, dot-segments, userinfo/port, numeric-host IPv4
+// canonicalization), D5 exotic Unicode whitespace, D6 rows that are not
+// scheme://host.
 //
 // All fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only) — no
 // real owner/repo, no captured production data.
@@ -145,6 +149,7 @@ const ASCII_WS_TRIM = /^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g;
 const TAIL_STRIP = /(\/|\.git|[ \t\n\r\f\v])+$/i;
 const CLEAN_SHAPE =
   /^https?:\/\/([a-z0-9-]+[.])*[a-z][a-z0-9-]*(\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$/;
+const INTERNAL_WS = /[ \t\n\r\f\v]/;
 const MAX_LEN = 2048;
 
 // JS port of the 163 canon-expr chain: ASCII-class trim, lowercase scheme+host,
@@ -166,10 +171,12 @@ function sqlBackfill163(raw: string): string {
   const canon = sqlChain163(raw);
   if (canon === null) return raw;
   const t = raw.replace(ASCII_WS_TRIM, "");
-  // octet_length(t) = char_length(t): lower() is locale-dependent and TS
-  // punycodes non-ASCII hosts, so anything outside printable ASCII is skipped.
+  // SQL requires octet_length(t) = char_length(t) (ASCII only): case-folding of
+  // non-ASCII characters is engine-dependent, so those rows are left as stored.
+  // This check is stricter than SQL's (it also rejects control characters), which
+  // changes no outcome because CLEAN_SHAPE rejects them anyway.
   if (/[^ -~]/.test(t)) return raw;
-  if (/[ \t\n\r\f\v]/.test(t)) return raw;
+  if (INTERNAL_WS.test(t)) return raw;
   // ASCII only, so UTF-16 length equals PG char_length.
   if (t.length > MAX_LEN) return raw;
   return CLEAN_SHAPE.test(canon) ? canon : raw;
@@ -179,46 +186,58 @@ function sqlBackfill163(raw: string): string {
 // recipe in test/fixtures/sql/normalize-repo-url-163-golden.sql (dev, SELECT
 // only) and paste the output; never fill it from the JS ports above. A raw longer
 // than 200 characters is written as the repeat() expression that builds it.
-const PG_GOLDEN_163: ReadonlyArray<readonly [raw: string, pg031: string | null, pg163Chain: string | null, pg163Backfill: string | null]> = [
-  ["http://a.aa .git", "http://a.aa ", "http://a.aa", "http://a.aa .git"],
-  ["http://a.aa /", "http://a.aa ", "http://a.aa", "http://a.aa /"],
-  ["a://A .git", "a://a ", "a://a", "a://A .git"],
-  ["http://a.aa\t.git", "http://a.aa\t", "http://a.aa", "http://a.aa\t.git"],
-  ["http://a.aa/\n.git/", "http://a.aa/\n", "http://a.aa", "http://a.aa/\n.git/"],
-  ["https://github.com/foo/bar/.git/.git", "https://github.com/foo/bar/.git", "https://github.com/foo/bar", "https://github.com/foo/bar"],
-  ["https://github.com/foo/bar.GIT\t/", "https://github.com/foo/bar.GIT\t", "https://github.com/foo/bar", "https://github.com/foo/bar.GIT\t/"],
-  ["\thttps://github.com/foo/bar\n", "\thttps://github.com/foo/bar\n", "https://github.com/foo/bar", "https://github.com/foo/bar"],
-  ["https://x/y .git", "https://x/y ", "https://x/y", "https://x/y .git"],
-  ["http://a.aa/ \n.git/ ", "http://a.aa/ \n", "http://a.aa", "http://a.aa/ \n.git/ "],
-  ["http://a.aa/./x", "http://a.aa/./x", "http://a.aa/./x", "http://a.aa/./x"],
-  ["http://a.aa:80/x", "http://a.aa:80/x", "http://a.aa:80/x", "http://a.aa:80/x"],
-  ["http://.git", "http:", null, "http://.git"],
-  ["http://a.aa ", "http://a.aa", "http://a.aa", "http://a.aa"],
-  ["https://github.com/Foo/Bar/ ", "https://github.com/Foo/Bar", "https://github.com/Foo/Bar", "https://github.com/Foo/Bar"],
-  ["HTTPS://GitHub.com/foo/bar.git/", "https://github.com/foo/bar", "https://github.com/foo/bar", "https://github.com/foo/bar"],
-  ["https://github.com/o .git", "https://github.com/o ", "https://github.com/o", "https://github.com/o .git"],
-  ["https://u:p@Host/x", "https://u:p@host/x", "https://u:p@host/x", "https://u:p@Host/x"],
-  ["https://0/x", "https://0/x", "https://0/x", "https://0/x"],
-  ["a://A", "a://a", "a://a", "a://A"],
-  ["https://github.com/Owner/Repo", "https://github.com/Owner/Repo", "https://github.com/Owner/Repo", "https://github.com/Owner/Repo"],
-  ["foo/bar", "foo/bar", null, "foo/bar"],
-  ["https://0/x/", "https://0/x", "https://0/x", "https://0/x/"],
-  ["http://a.aa:80/x/", "http://a.aa:80/x", "http://a.aa:80/x", "http://a.aa:80/x/"],
-  ["http://a.aa/./x.git", "http://a.aa/./x", "http://a.aa/./x", "http://a.aa/./x.git"],
-  ["https://github.com/o%20x/", "https://github.com/o%20x", "https://github.com/o%20x", "https://github.com/o%20x/"],
-  ["https://github.com/o?q=1", "https://github.com/o?q=1", "https://github.com/o?q=1", "https://github.com/o?q=1"],
-  ["https://github.com/o#f", "https://github.com/o#f", "https://github.com/o#f", "https://github.com/o#f"],
-  ["https://github.com//o/", "https://github.com//o", "https://github.com//o", "https://github.com//o/"],
-  ["https://github.com/.github.git", "https://github.com/.github", "https://github.com/.github", "https://github.com/.github.git"],
-  ["https://h.1a/x/", "https://h.1a/x", "https://h.1a/x", "https://h.1a/x/"],
-  ["https://İ.com/o/", "https://i̇.com/o", "https://i̇.com/o", "https://İ.com/o/"],
-  ["https://K.com/o/", "https://k.com/o", "https://k.com/o", "https://K.com/o/"],
-  ["https://github.com/o ", "https://github.com/o ", "https://github.com/o ", "https://github.com/o "],
-  ["https://github.com/o\r", "https://github.com/o\r", "https://github.com/o", "https://github.com/o"],
-  ["https://github.com/o/\f\u000b", "https://github.com/o/\f\u000b", "https://github.com/o", "https://github.com/o"],
-  ["https://My-Host.Example.io/my_repo/~x/Repo.git.git/", "https://my-host.example.io/my_repo/~x/Repo", "https://my-host.example.io/my_repo/~x/Repo", "https://my-host.example.io/my_repo/~x/Repo"],
-  ["https://h.io/" + "a".repeat(2034) + "/", "https://h.io/" + "a".repeat(2034), "https://h.io/" + "a".repeat(2034), "https://h.io/" + "a".repeat(2034)],
-  ["https://h.io/" + "a".repeat(2035) + "/", "https://h.io/" + "a".repeat(2035), "https://h.io/" + "a".repeat(2035), "https://h.io/" + "a".repeat(2035) + "/"],
+const PG_GOLDEN_163: ReadonlyArray<
+  readonly [
+    raw: string,
+    pg031: string | null,
+    pg163Chain: string | null,
+    pg163Backfill: string | null,
+    canonOk: string | null,
+  ]
+> = [
+  ["http://a.aa .git", "http://a.aa ", "http://a.aa", "http://a.aa .git", null],
+  ["http://a.aa /", "http://a.aa ", "http://a.aa", "http://a.aa /", null],
+  ["a://A .git", "a://a ", "a://a", "a://A .git", null],
+  ["http://a.aa\t.git", "http://a.aa\t", "http://a.aa", "http://a.aa\t.git", null],
+  ["http://a.aa/\n.git/", "http://a.aa/\n", "http://a.aa", "http://a.aa/\n.git/", null],
+  ["https://github.com/foo/bar/.git/.git", "https://github.com/foo/bar/.git", "https://github.com/foo/bar", "https://github.com/foo/bar", "https://github.com/foo/bar"],
+  ["https://github.com/foo/bar.GIT\t/", "https://github.com/foo/bar.GIT\t", "https://github.com/foo/bar", "https://github.com/foo/bar.GIT\t/", null],
+  ["\thttps://github.com/foo/bar\n", "\thttps://github.com/foo/bar\n", "https://github.com/foo/bar", "https://github.com/foo/bar", "https://github.com/foo/bar"],
+  ["https://x/y .git", "https://x/y ", "https://x/y", "https://x/y .git", null],
+  ["http://a.aa/ \n.git/ ", "http://a.aa/ \n", "http://a.aa", "http://a.aa/ \n.git/ ", null],
+  ["http://a.aa/./x", "http://a.aa/./x", "http://a.aa/./x", "http://a.aa/./x", null],
+  ["http://a.aa:80/x", "http://a.aa:80/x", "http://a.aa:80/x", "http://a.aa:80/x", null],
+  ["http://.git", "http:", null, "http://.git", null],
+  ["http://a.aa ", "http://a.aa", "http://a.aa", "http://a.aa", "http://a.aa"],
+  ["https://github.com/Foo/Bar/ ", "https://github.com/Foo/Bar", "https://github.com/Foo/Bar", "https://github.com/Foo/Bar", "https://github.com/Foo/Bar"],
+  ["HTTPS://GitHub.com/foo/bar.git/", "https://github.com/foo/bar", "https://github.com/foo/bar", "https://github.com/foo/bar", "https://github.com/foo/bar"],
+  ["https://github.com/o .git", "https://github.com/o ", "https://github.com/o", "https://github.com/o .git", null],
+  ["https://u:p@Host/x", "https://u:p@host/x", "https://u:p@host/x", "https://u:p@Host/x", null],
+  ["https://0/x", "https://0/x", "https://0/x", "https://0/x", null],
+  ["a://A", "a://a", "a://a", "a://A", null],
+  ["https://github.com/Owner/Repo", "https://github.com/Owner/Repo", "https://github.com/Owner/Repo", "https://github.com/Owner/Repo", "https://github.com/Owner/Repo"],
+  ["foo/bar", "foo/bar", null, "foo/bar", null],
+  ["https://0/x/", "https://0/x", "https://0/x", "https://0/x/", null],
+  ["http://a.aa:80/x/", "http://a.aa:80/x", "http://a.aa:80/x", "http://a.aa:80/x/", null],
+  ["http://a.aa/./x.git", "http://a.aa/./x", "http://a.aa/./x", "http://a.aa/./x.git", null],
+  ["https://github.com/o%20x/", "https://github.com/o%20x", "https://github.com/o%20x", "https://github.com/o%20x/", null],
+  ["https://github.com/o?q=1", "https://github.com/o?q=1", "https://github.com/o?q=1", "https://github.com/o?q=1", null],
+  ["https://github.com/o#f", "https://github.com/o#f", "https://github.com/o#f", "https://github.com/o#f", null],
+  ["https://github.com/o?q=1/", "https://github.com/o?q=1", "https://github.com/o?q=1", "https://github.com/o?q=1/", null],
+  ["https://github.com/o#f/", "https://github.com/o#f", "https://github.com/o#f", "https://github.com/o#f/", null],
+  ["https://github.com/o\rx/", "https://github.com/o\rx", "https://github.com/o\rx", "https://github.com/o\rx/", null],
+  ["https://github.com/o\f\u000bx/", "https://github.com/o\f\u000bx", "https://github.com/o\f\u000bx", "https://github.com/o\f\u000bx/", null],
+  ["https://github.com//o/", "https://github.com//o", "https://github.com//o", "https://github.com//o/", null],
+  ["https://github.com/.github.git", "https://github.com/.github", "https://github.com/.github", "https://github.com/.github.git", null],
+  ["https://h.1a/x/", "https://h.1a/x", "https://h.1a/x", "https://h.1a/x/", null],
+  ["https://\u0130.com/o/", "https://i\u0307.com/o", "https://i\u0307.com/o", "https://\u0130.com/o/", null],
+  ["https://\u212a.com/o/", "https://k.com/o", "https://k.com/o", "https://\u212a.com/o/", null],
+  ["https://github.com/o\u00a0", "https://github.com/o\u00a0", "https://github.com/o\u00a0", "https://github.com/o\u00a0", null],
+  ["https://github.com/o\r", "https://github.com/o\r", "https://github.com/o", "https://github.com/o", "https://github.com/o"],
+  ["https://github.com/o/\f\u000b", "https://github.com/o/\f\u000b", "https://github.com/o", "https://github.com/o", "https://github.com/o"],
+  ["https://My-Host.Example.io/my_repo/~x/Repo.git.git/", "https://my-host.example.io/my_repo/~x/Repo", "https://my-host.example.io/my_repo/~x/Repo", "https://my-host.example.io/my_repo/~x/Repo", "https://my-host.example.io/my_repo/~x/Repo"],
+  ["https://h.io/" + "a".repeat(2034) + "/", "https://h.io/" + "a".repeat(2034), "https://h.io/" + "a".repeat(2034), "https://h.io/" + "a".repeat(2034), "https://h.io/" + "a".repeat(2034)],
+  ["https://h.io/" + "a".repeat(2035) + "/", "https://h.io/" + "a".repeat(2035), "https://h.io/" + "a".repeat(2035), "https://h.io/" + "a".repeat(2035) + "/", null],
 ];
 
 const MIGRATION_SQL = readFileSync(
@@ -235,7 +254,7 @@ const GOLDEN_SCRIPT = readFileSync(
 );
 const golden = new Map(PG_GOLDEN_163.map((r) => [r[0], r] as const));
 
-// Pinned hash of the canon-expr block (whitespace collapsed). Editing the SQL
+// Pinned hash of the canon-expr block (runs of spaces and newlines collapsed; tabs and other whitespace are significant). Editing the SQL
 // expression in every copy keeps the identity test green, so this is what forces
 // the golden table to be regenerated from Postgres: when it fails, re-run the
 // recipe in the golden script, update PG_GOLDEN_163 and the ports, then re-pin.
@@ -243,7 +262,7 @@ const CANON_EXPR_SHA256 = "4f52a75bb7322f66c9d429db1004f281f90f6f33cb9bbc4b6b452
 const canonBlock = (() => {
   const m = /-- canon-expr begin([\s\S]*?)-- canon-expr end/.exec(MIGRATION_SQL);
   if (!m) throw new Error("canon-expr block not found in the 163 migration");
-  return m[1]!.replace(/\s+/g, " ").trim();
+  return m[1]!.replace(/[ \n]+/g, " ").trim();
 })();
 
 // A tiny evaluator for the SQL string expressions the golden script and the
@@ -378,6 +397,7 @@ describe("163 golden table (Postgres is the oracle for the ports)", () => {
     expect(literals).toContain(ASCII_WS_TRIM.source);
     expect(literals).toContain(TAIL_STRIP.source.replace(/\\\//g, "/"));
     expect(literals).toContain(CLEAN_SHAPE.source.replace(/\\\//g, "/"));
+    expect(literals).toContain(INTERNAL_WS.source);
     expect(canonBlock).toContain(`char_length(a.t) <= ${MAX_LEN}`);
     expect(canonBlock).toContain("octet_length(a.t) = char_length(a.t)");
   });
@@ -397,22 +417,24 @@ describe("163 golden table (Postgres is the oracle for the ports)", () => {
     expect(PG_GOLDEN_163.map((r) => r[0])).toEqual(scriptRaws);
   });
 
-  test("the verify selftest expectations agree with the golden backfill column", () => {
-    expect(selftestRows.length).toBeGreaterThanOrEqual(8);
+  test("the verify selftest expectations equal the golden canon_ok column", () => {
+    expect(selftestRows.length).toBeGreaterThanOrEqual(18);
     for (const [raw, expected] of selftestRows) {
       const row = golden.get(raw);
       expect(row, "selftest raw missing from the golden table: " + JSON.stringify(raw)).toBeDefined();
-      // NULL means "ineligible": the backfill leaves the row as stored.
-      expect(row![3], JSON.stringify(raw)).toBe(expected ?? raw);
+      // NULL means "ineligible" (canon_ok is NULL), which is not the same as an
+      // eligible row that happens to be unchanged.
+      expect(row![4], JSON.stringify(raw)).toBe(expected);
     }
   });
 
   test.each(PG_GOLDEN_163.map((r) => [JSON.stringify(r[0]).slice(0, 80), r] as const))(
     "ports equal Postgres for %s",
-    (_label, [raw, pg031, pg163Chain, pg163Backfill]) => {
+    (_label, [raw, pg031, pg163Chain, pg163Backfill, canonOk]) => {
       expect(sqlNormalize031(raw)).toBe(pg031);
       expect(sqlChain163(raw)).toBe(pg163Chain);
       expect(sqlBackfill163(raw)).toBe(pg163Backfill);
+      expect(pg163Backfill).toBe(canonOk ?? raw);
     },
   );
 });

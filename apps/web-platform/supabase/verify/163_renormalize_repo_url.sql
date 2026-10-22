@@ -1,11 +1,11 @@
 -- Verify 163_renormalize_repo_url.sql.
 --
 -- Contract (see run-verify.sh): every row returns check_name + bad.
--- Any row with bad > 0 fails the CI verify-migrations job.
+-- Any row with bad > 0 fails the CI verify-migrations job where that job runs.
 --
 -- Deliberately strict and permanent: no excused residue. A future writer that
 -- bypasses normalizeRepoUrl leaves an eligible non-canonical row here and blocks
--- deploys until that row is fixed. Rows the eligibility guard skips (internal
+-- release dispatches until that row is fixed. Rows the eligibility guard skips (internal
 -- whitespace, port, userinfo, non-http, degenerate host) are excluded by
 -- construction, exactly as the migration leaves them alone.
 --
@@ -72,6 +72,7 @@ SELECT 'canon_expr_selftest', count(*)::int
     ('http://.git', NULL),
     ('a://A', NULL),
     ('https://' || chr(304) || '.com/o/', NULL),
+    ('https://' || chr(8490) || '.com/o/', NULL),
     ('foo/bar', NULL)
   ) AS x(repo_url, expected)
   -- canon-expr begin
