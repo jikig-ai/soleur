@@ -319,3 +319,20 @@ The push's default-branch dependency warning was investigated through GitHub's
 existing Dependabot alerts: six open npm alerts (hono, markdown-it, vite and
 sprintf-js) concern existing lockfiles, not this Python containment correction.
 Those existing alerts retain their own tracking; no dependency fix is claimed.
+
+### Final containment acceptance — 2026-10-22
+
+At `63fef0d2687c9510cdf9dcba2ccfab7600622de9`, primary committed-source offline
+discovery passed **487 tests in 94.274 seconds**, exit 0, with warnings treated
+as errors. Independent engineering and security each reran the guarded 41-test
+suite (10.219 and 9.875 seconds) and accepted corrected source. Independent
+test-design review passed the three affected correction tests (0.411 seconds),
+accepted both Low fixes and the unchanged automatic isolation boundary, and
+scored 8.5/10 (Grade B), pyramid PASS. No findings remain in this correction.
+
+Ruled by CTO agent: proceed to fresh Config preparation and actual manifest
+review. Do not reuse the preserved stale manifest or equate source acceptance
+with successful acquisition, qualification or shipping clearance. Expanded
+operator authority remains the execution authority; actual bindings and the
+bounded command still require technical review, followed by separate evidence
+review. This documentation-only acceptance does not change runtime bytes.
