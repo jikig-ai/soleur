@@ -16,7 +16,7 @@ Umbrella issue #9757 stays open. The PR body says `Ref #9757` and carries no clo
 
 **Deepened on:** 2026-10-22
 **Sections enhanced:** 2 (Research Insights, Sharp Edges verification)
-**Research agents used:** none (proportionate to a two-file docs change); the deepen halts were run mechanically.
+**Research agents used:** none (proportionate to a two-file docs change); the deepen halts were run mechanically. One CTO consult ruled the three technical rows in `decision-challenges.md` at the pre-work gate.
 
 ### Verified in the deepen pass
 
@@ -113,7 +113,7 @@ Only after the PR exists and `git log`/`git show` on this branch confirm the run
 | `.markdownlintignore` line (Files to Edit) | "add its path to .markdownlintignore" | asked |
 | sha256 verification (Phase 1, 2) | "verify the sha256 afterwards" | asked |
 | Worktree and branch removal (Phase 4) | "remove the .worktrees/deleg-env-10789 worktree and the deleg-env-10789 branch" | asked |
-| `git branch -D` instead of `-d` | - | inferred - justification: the branch is unmerged by construction (squash-merge target is this branch, not `deleg-env-10789`), so `-d` refuses; the sha256-verified copy is the safeguard |
+| `git branch -D` instead of `-d` | - | inferred - justification: the branch is unmerged by construction (this branch is the squash source and `main` the target; `deleg-env-10789` never merges, so `-d` refuses), so `-d` refuses; the sha256-verified copy is the safeguard |
 | Clean-status check before worktree removal (Phase 4 step 1) | - | inferred - justification: `git worktree remove` fails or discards work on a dirty tree; the check makes the removal safe |
 
 ### Split Assessment
@@ -127,14 +127,14 @@ Only after the PR exists and `git log`/`git show` on this branch confirm the run
 
 ### Pre-merge (PR)
 
-- [ ] `sha256sum knowledge-base/engineering/operations/runbooks/delegated-merge-10789-envelope.md` prints `1076fca70602fbdf2e6abb81fee73d46186afd4338ac0b4ea0214dafedb54504`, checked after the final commit.
+- [x] `sha256sum knowledge-base/engineering/operations/runbooks/delegated-merge-10789-envelope.md` prints `1076fca70602fbdf2e6abb81fee73d46186afd4338ac0b4ea0214dafedb54504`, checked after the final commit.
 - [ ] `git diff origin/main...HEAD --stat` lists the runbook and `.markdownlintignore` (plus this feature's plan/spec files under `knowledge-base/project/{plans,specs}/`), and nothing else.
-- [ ] `.markdownlintignore` contains the 10789 path on the line right after the 10663 path, with no duplicate entry.
+- [x] `.markdownlintignore` contains the 10789 path on the line right after the 10663 path, with no duplicate entry.
 - [ ] The markdownlint check passes on the PR.
 - [ ] PR body contains `Ref #9757` and no `Closes`, `Fixes` or `Resolves` keyword; `gh issue view 9757 --json state` still prints OPEN after merge.
 - [ ] `PJ_TRIPLES` recomputed after the last merge of `main`; pin edited only if the count moved.
 
-### Post-merge (operator-free)
+### Before merge, after the PR exists (operator-free)
 
 - [ ] `git worktree list` shows no `deleg-env-10789` entry and `git branch --list deleg-env-10789` prints nothing.
 - [ ] The merge went through the queue (`gh pr merge <N> --squash --auto`); no `--admin`.
