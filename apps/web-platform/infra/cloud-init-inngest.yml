@@ -2068,7 +2068,11 @@ write_files:
       # nothing here touches Fulcio/Rekor; the trusted root is baked and mounted :ro.
       # --network none: the verify needs no egress at all. The image was staged by the
       # explicit pull above, so docker's implicit pull is a no-op cache hit here.
-      if ! timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
+      # stderr is captured around `timeout` (not inside it) so an rc=124 kill still
+      # lands the partial stderr for the `timeout` classifier arm; the file is
+      # bounded (4 KiB), mode 0600, and overwritten per tick — last failure only.
+      _vrc=0
+      timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
           -v "$STAGE/bundle:/bundle:ro" \
           -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
           "$COSIGN_IMAGE" verify-blob \
@@ -2076,8 +2080,24 @@ write_files:
           --bundle /bundle/manifest.txt.sigstore.json \
           --certificate-identity-regexp "$IDENTITY_REGEXP" \
           --certificate-oidc-issuer "$OIDC_ISSUER" \
-          /bundle/manifest.txt >/dev/null 2>&1; then
-        verify_fail signature
+          /bundle/manifest.txt >"$STAGE/verify.stdout" 2>"$STATE_DIR/verify.stderr" || _vrc=$?
+      head -c 4096 "$STATE_DIR/verify.stderr" > "$STATE_DIR/verify.stderr.b" 2>/dev/null || true
+      mv "$STATE_DIR/verify.stderr.b" "$STATE_DIR/verify.stderr" 2>/dev/null || true
+      chmod 0600 "$STATE_DIR/verify.stderr" 2>/dev/null || true
+      rm -f "$STAGE/verify.stdout"
+      if [ "$_vrc" -ne 0 ]; then
+        # Bounded [a-z-]{1,24} token on the VERIFY_FAIL row — survives the
+        # phone-home redaction and the drift summarizer's allowlist; the raw
+        # stderr stays on-host in verify.stderr.
+        if [ "$_vrc" -eq 124 ]; then _cls=timeout
+        elif grep -qi 'only supported with --new-bundle-format' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=flag-newbundle
+        elif grep -qi 'Error response from daemon' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=docker
+        elif grep -qiE 'log inclusion|tlog|rekor' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=tlog
+        elif grep -qiE 'certificate chain|x509' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=chain
+        elif grep -qiE 'identity|SAN|issuer' "$STATE_DIR/verify.stderr" 2>/dev/null; then _cls=identity
+        else _cls=other
+        fi
+        verify_fail signature "" "detail=$_cls"
       fi
 
       # VERSION is read ONLY from the signed manifest — never from an OCI tag or the pointer

@@ -271,6 +271,25 @@ grep -q 'IDENTITY_REGEXP.*build-inngest-config-bundle' <<<"$SC" \
 grep -q 'INSTALL_CMD.*infra-config-install' <<<"$SC" \
   && pass || fail "S9: install path not infra-config-install"
 
+# S10 (defect 3): the verify stderr is no longer swallowed — a bounded capture file exists
+# and a classified detail= token rides the VERIFY_FAIL row. Anchored on syntax, not prose:
+# the negative pin asserts the verify run does NOT end `>/dev/null 2>&1`.
+grep -qF 'verify.stderr' <<<"$SC" \
+  && pass || fail "S10: no verify.stderr bounded capture in refresh.sh"
+! grep -qF -- '/bundle/manifest.txt >/dev/null 2>&1' <<<"$SC" \
+  && ! grep -qF -- '/bundle/manifest.txt 2>&1 >/dev/null' <<<"$SC" \
+  && pass || fail "S10: verify-blob stderr still swallowed by /dev/null"
+grep -qF 'detail=' <<<"$SC" \
+  && pass || fail "S10: no detail= classification on the VERIFY_FAIL row"
+# The classifier's token vocabulary is a fixed allowlist — every named arm present.
+for tok in flag-newbundle tlog identity chain timeout docker other; do
+  grep -qF "$tok" <<<"$SC" \
+    && pass || fail "S10: classifier arm missing token $tok"
+done
+# detail= must be additive after rejver= on the reason=signature call (row-shape pin).
+grep -qE 'verify_fail signature "" "detail=' <<<"$SC" \
+  && pass || fail "S10: verify_fail signature call site does not pass detail="
+
 # ── F-rows: run the extracted script under fixture seams ─────────────────────────────────
 
 FX="$WORK/fx"; mkdir -p "$FX/bin" "$FX/state" "$FX/dest"
@@ -286,7 +305,11 @@ case "$1" in
   create) echo "fixture-cid"; exit 0 ;;
   cp)    cp "$FX_BUNDLE_TGZ" "$3" 2>/dev/null || exit 1 ;;
   rm)    exit 0 ;;
-  run)   [ "${FX_COSIGN_FAIL:-0}" = "1" ] && exit 1; exit 0 ;;
+  run)   if [ "${FX_COSIGN_FAIL:-0}" = "1" ]; then
+           [ -n "${FX_COSIGN_STDERR:-}" ] && printf '%s\n' "$FX_COSIGN_STDERR" >&2
+           exit 1
+         fi
+         exit 0 ;;
   *)     exit 0 ;;
 esac
 EOF
@@ -366,6 +389,7 @@ run_refresh() {  # env: INNGEST_CONFIG_DIGEST + FX_* fault knobs
     FX_LOG="$FX/calls.log" FX_MARKERS="$FX/markers.log" \
     FX_BUNDLE_TGZ="$FX/bundle.tar.gz" FX_DEST="$FX/dest" FX_NSEEN="$FX/nseen" \
     FX_FAIL_PULL="${FX_FAIL_PULL:-0}" FX_COSIGN_FAIL="${FX_COSIGN_FAIL:-0}" \
+    FX_COSIGN_STDERR="${FX_COSIGN_STDERR:-}" \
     FX_FAIL_COSIGN_PULL="${FX_FAIL_COSIGN_PULL:-0}" \
     FX_INSTALL_FAIL_AFTER="${FX_INSTALL_FAIL_AFTER:-999}" \
     INNGEST_CONFIG_DIGEST="${INNGEST_CONFIG_DIGEST:-}" \
@@ -573,9 +597,47 @@ grep -q 'member=cosign-image' "$FX/markers.log" \
 [ "$(cat "$FX/state/applied.version")" = "0" ] && pass || fail "F15: version advanced on cosign pull failure"
 [ "$(ls "$FX/dest" | wc -l)" -eq 0 ] && pass || fail "F15: files installed despite cosign pull failure"
 
+# F16 — verify stderr classification (defect 3): a stubbed cosign stderr string must land
+# as the classified detail= token on the VERIFY_FAIL row AND write the bounded
+# $STATE_DIR/verify.stderr file. Three fixtures: flag-newbundle, tlog, docker.
+reset_fx
+echo 0 > "$FX/state/applied.version"
+mk_bundle 14 "$FX/members"
+FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='Error: --trusted-root only supported with --new-bundle-format' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+[ $rc -eq 1 ] && pass || fail "F16: flag-newbundle rc=$rc (want 1)"
+grep -q 'SOLEUR_INFRA_PULL_VERIFY_FAIL reason=signature' "$FX/markers.log" \
+  && pass || fail "F16: no VERIFY_FAIL reason=signature row"
+grep -q 'detail=flag-newbundle' "$FX/markers.log" \
+  && pass || fail "F16: new-bundle gate error not classified detail=flag-newbundle"
+[ -f "$FX/state/verify.stderr" ] && pass || fail "F16: no bounded verify.stderr file written"
+_vc="$(wc -c < "$FX/state/verify.stderr" 2>/dev/null || echo 9999)"
+[ "$_vc" -le 4097 ] && pass || fail "F16: verify.stderr not bounded (${_vc} bytes > 4097)"
+
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='error verifying tlog entry: rekor lookup failed' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+grep -q 'detail=tlog' "$FX/markers.log" \
+  && pass || fail "F16: tlog stderr not classified detail=tlog"
+
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='Error response from daemon: no such image' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+grep -q 'detail=docker' "$FX/markers.log" \
+  && pass || fail "F16: daemon stderr not classified detail=docker"
+
+reset_fx
+echo 0 > "$FX/state/applied.version"
+FX_COSIGN_FAIL=1 FX_COSIGN_STDERR='some unclassified failure text' \
+  INNGEST_CONFIG_DIGEST="$PTR2" run_refresh; rc=$?
+grep -q 'detail=other' "$FX/markers.log" \
+  && pass || fail "F16: unrecognized stderr did not fall through to detail=other"
+
 # Anti-vacuity floor — the inngest.test.sh convention: a deleted block must red,
 # not silently pass fewer assertions. Raise it when adding rows.
-MIN_ASSERTIONS=113
+MIN_ASSERTIONS=124
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 
