@@ -104,7 +104,7 @@ codex plugin add soleur@soleur</code></pre>
 bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints opencode-install ok when the tree matches</code></pre>
         </div>
 
-        <p>Commands are bare (<code>/go</code>, <code>/sync</code>, <code>/help</code>) and skills are invoked by bare id (<code>plan</code>, not <code>soleur:plan</code>), because this harness has no <code>soleur:</code> namespace. The guards that decide shell commands run for real &mdash; a <code>deny</code> blocks the call, an <code>ask</code> opens a prompt &mdash; but they decide shell calls only: actions taken through OpenCode&rsquo;s code-mode <code>execute</code> are not covered. OpenCode has no Stop hook, so the pipeline&rsquo;s <code>&lt;promise&gt;DONE&lt;/promise&gt;</code> completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. Full routing rules and the remaining capability differences: <a href="{{ site.github }}/blob/main/plugins/soleur/opencode/INSTRUCTIONS.md" rel="noopener noreferrer">OpenCode instructions</a>.</p>
+        <p>Commands are bare (<code>/go</code>, <code>/sync</code>, <code>/help</code>) and skills are invoked by bare id (<code>plan</code>, not <code>soleur:plan</code>), because this harness has no <code>soleur:</code> namespace. The guards that decide shell commands run for real &mdash; a <code>deny</code> blocks the call, an <code>ask</code> opens a prompt &mdash; but they decide shell calls only: actions taken through OpenCode&rsquo;s code-mode <code>execute</code> are not covered. OpenCode has no Stop hook, so the pipeline&rsquo;s <code>&lt;promise&gt;DONE&lt;/promise&gt;</code> completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. <code>/version</code> is installed but reports an unknown version, because the canonical command resolves the plugin through <code>CLAUDE_PLUGIN_ROOT</code>, which this harness does not set. Full routing rules and the remaining capability differences: <a href="{{ site.github }}/blob/main/plugins/soleur/opencode/INSTRUCTIONS.md" rel="noopener noreferrer">OpenCode instructions</a>.</p>
 
         <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Devin CLI: <code>/soleur:go</code>. OpenCode: <code>/go</code>.</p>
         <table>
@@ -271,7 +271,7 @@ bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints openc
           </details>
           <details class="faq-item">
             <summary class="faq-question">Does Soleur work on Windows, Linux, and macOS?</summary>
-            <p class="faq-answer">The self-hosted version runs wherever the harness you choose runs &mdash; install inside whichever one you already use. Each harness&rsquo;s own platform support decides the details. The hosted version will be accessible from any browser on any operating system.</p>
+            <p class="faq-answer">The self-hosted version runs anywhere its harnesses run: Claude Code, Grok Build, Codex, and Devin CLI all support Linux, macOS, and Windows via WSL, and OpenCode follows its own platform support &mdash; install inside whichever one you already use. The hosted version will be accessible from any browser on any operating system.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How much does Soleur cost?</summary>
@@ -319,7 +319,7 @@ bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints openc
           "name": "Does Soleur work on Windows, Linux, and macOS?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The self-hosted version runs wherever the harness you choose runs — install inside whichever one you already use. Each harness's own platform support decides the details. The hosted version will be accessible from any browser on any operating system."
+            "text": "The self-hosted version runs anywhere its harnesses run: Claude Code, Grok Build, Codex, and Devin CLI all support Linux, macOS, and Windows via WSL, and OpenCode follows its own platform support — install inside whichever one you already use. The hosted version will be accessible from any browser on any operating system."
           }
         },
         {

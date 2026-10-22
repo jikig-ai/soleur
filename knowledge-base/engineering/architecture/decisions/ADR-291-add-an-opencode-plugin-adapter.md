@@ -242,15 +242,18 @@ to load: the global discovery directory `<configdir>/plugins/*` with no config e
 satisfied vacuously, and a pin added back "for safety" would be a dependency the loader never asked
 for.
 
-None of the public README, getting-started, comparison, blog, or battlecard pages claims OpenCode support —
-repo-wide sweep, 2026-10-22. The flip to
+No public page claimed OpenCode support at accept time — repo-wide sweep, 2026-10-22. The flip to
 `accepted` (2026-10-20) required grepping `knowledge-base/legal` and `docs/` for future-tense sentences
 about supporting OpenCode and routing hits to the CLO; that sweep returned **zero** hits — this is empty:
 
 `grep -rniE "(will|going to|plans to|soon|future) support (the )?opencode" knowledge-base/legal/ docs/`
 
-so there was nothing to route and nothing to review. See Status: the evidence no longer holds the pages back,
-and the claim flip is a separate, deliberate brand-level change that routes to the CLO first.
+so there was nothing to route and nothing to review. Accepting the adapter did not itself lift the pages,
+and the claim stayed a separate, deliberate brand-level change routed to the CLO first. **That change has
+since landed**: #10815 names OpenCode on the README and on the getting-started, index, pricing, and
+`llms.txt` pages, after a CLO ruling of PUBLISH WITH LISTED CHANGES — see §Status. The five public
+surfaces are therefore no longer silent about the harness, and this paragraph records only the
+pre-claim state.
 
 ## Cost Impacts
 

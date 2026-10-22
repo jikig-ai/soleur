@@ -23,6 +23,16 @@ claude plugin install soleur@soleur-marketplace
 
 **Grok Build:** load the same in-repo plugin from the repository root — `grok inspect` must list the Soleur plugin, then start a session with `grok`. Use `/go <intent>`. See the [Grok Build onboarding guide](../../knowledge-base/engineering/grok-onboarding.md).
 
+**OpenCode:**
+
+From the repository root (this needs `bun`), install Soleur into your OpenCode config directory, then start a session:
+
+```bash
+bun plugins/soleur/scripts/install-opencode-adapter.ts
+```
+
+Verify the install with `bun plugins/soleur/scripts/install-opencode-adapter.ts --check` — it prints `opencode-install ok` when the generated tree matches. Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because this harness has no `soleur:` namespace. The guards that decide shell commands run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. `/version` is installed but reports an unknown version, because the canonical command resolves the plugin through `CLAUDE_PLUGIN_ROOT`, which this harness does not set. Full routing rules and the remaining capability differences: [OpenCode instructions](opencode/INSTRUCTIONS.md).
+
 ## The Soleur Workflow
 
 **Local data the plugin writes:** one metadata-only line per `/soleur:go` routing
@@ -53,19 +63,19 @@ The recommended way to use Soleur is through the unified entry point:
 
 This classifies your intent and routes to the right workflow skill. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
 
-Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`.
+Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`. OpenCode: `/go`.
 
-| Step | Claude Code | Grok Build | Codex | Devin CLI |
-|------|-------------|------------|-------|-----------|
-| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` |
-| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` |
-| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` |
-| Version | `/soleur:version` (Claude Code only) | not available | not available | not available |
-| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` |
+| Step | Claude Code | Grok Build | Codex | Devin CLI | OpenCode |
+|------|-------------|------------|-------|-----------|----------|
+| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` | `/help` |
+| Version | `/soleur:version` (Claude Code only) | not available | not available | not available | `/version` (unknown) |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` | Skill tool, bare id (`plan`) |
 
-Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](../../knowledge-base/engineering/grok-onboarding.md) · [Codex](codex/INSTRUCTIONS.md) · [Devin](devin/INSTRUCTIONS.md).
+Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](../../knowledge-base/engineering/grok-onboarding.md) · [Codex](codex/INSTRUCTIONS.md) · [Devin](devin/INSTRUCTIONS.md) · [OpenCode](opencode/INSTRUCTIONS.md).
 
-The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build):
+The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build; via `/go` then the Skill tool with the bare id on OpenCode):
 
 ```text
 brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
@@ -569,7 +579,7 @@ unconditionally.
 
 ### Harness support
 
-The compaction lifecycle is a Claude Code API. The other three harnesses
+The compaction lifecycle is a Claude Code API. The other four harnesses
 degrade to **silence**, never to a false claim that the behaviour is present.
 
 | Harness | Compaction hooks | What you get instead |
@@ -578,6 +588,7 @@ degrade to **silence**, never to a false claim that the behaviour is present.
 | Codex | No | The skill-prose fallback: the end-of-work resume prompt still fires, with no `/clear` recommendation |
 | Devin Cloud | No | Same as Codex. Plugin hooks do not fire in cloud sessions at all — see `devin/INSTRUCTIONS.md` §Cloud Mode |
 | Grok Build | No | Same as Codex |
+| OpenCode | No | Same as Codex. The adapter carries no compaction hook, so nothing is written and no directive is emitted |
 
 ## Destructive-Command Guard
 

@@ -58,7 +58,7 @@ From the repository root (this needs `bun`), install Soleur into your OpenCode c
 bun plugins/soleur/scripts/install-opencode-adapter.ts
 ```
 
-Verify the install with `bun plugins/soleur/scripts/install-opencode-adapter.ts --check` — it prints `opencode-install ok` when the generated tree matches. Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because this harness has no `soleur:` namespace. The guards that decide shell commands run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. Full routing rules and the remaining capability differences: [OpenCode instructions](plugins/soleur/opencode/INSTRUCTIONS.md).
+Verify the install with `bun plugins/soleur/scripts/install-opencode-adapter.ts --check` — it prints `opencode-install ok` when the generated tree matches. Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because this harness has no `soleur:` namespace. The guards that decide shell commands run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. `/version` is installed but reports an unknown version, because the canonical command resolves the plugin through `CLAUDE_PLUGIN_ROOT`, which this harness does not set. Full routing rules and the remaining capability differences: [OpenCode instructions](plugins/soleur/opencode/INSTRUCTIONS.md).
 
 **Claude Code (recommended, via the published marketplace):**
 
@@ -218,7 +218,7 @@ Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/
 | Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` | `/go` |
 | Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` | `/sync` |
 | Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` | `/help` |
-| Version | `/soleur:version` (Claude Code only) | not available | not available | not available | not available |
+| Version | `/soleur:version` (Claude Code only) | not available | not available | not available | `/version` (unknown) |
 | Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` | Skill tool, bare id (`plan`) |
 
 Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](knowledge-base/engineering/grok-onboarding.md) · [Codex](knowledge-base/engineering/codex-onboarding.md) · [Devin](plugins/soleur/devin/INSTRUCTIONS.md) · [OpenCode](plugins/soleur/opencode/INSTRUCTIONS.md).
