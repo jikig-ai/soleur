@@ -373,13 +373,13 @@ every successfully delivered event creates a row in
 export SUPABASE_URL=$(doppler secrets get SUPABASE_URL -p soleur -c prd --plain)
 export SUPABASE_SERVICE_ROLE_KEY=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)
 
-curl -sS "$SUPABASE_URL/rest/v1/processed_stripe_events?event_type=eq.checkout.session.completed&order=inserted_at.desc&limit=1" \
+curl -sS "$SUPABASE_URL/rest/v1/processed_stripe_events?event_type=eq.checkout.session.completed&order=processed_at.desc&limit=1" \
   -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" | jq .
 ```
 
 Expected: one row with `event_type = "checkout.session.completed"`
-and `inserted_at` within the last 60s. Zero rows means the webhook
+and `processed_at` within the last 60s. Zero rows means the webhook
 did not reach the handler -- skip to G.5's signing-secret check
 before continuing.
 

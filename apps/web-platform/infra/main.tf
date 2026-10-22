@@ -149,6 +149,13 @@ provider "hcloud" {
 
 provider "cloudflare" {
   api_token = var.cf_api_token
+
+  # 5xx retry budget ~7.75min/request (15+30+60+120+120+120s vs ~7s v4
+  # default) — rides out multi-minute Cloudflare API blips at plan (#10643).
+  # v5 renames this trio `max_retries`; carry the budget across a migration.
+  retries     = 6
+  min_backoff = 15
+  max_backoff = 120
 }
 
 # Separate provider for zone-settings APIs (HSTS / security_header).
@@ -158,6 +165,13 @@ provider "cloudflare" {
 provider "cloudflare" {
   alias     = "zone_settings"
   api_token = var.cf_api_token_zone_settings
+
+  # 5xx retry budget ~7.75min/request (15+30+60+120+120+120s vs ~7s v4
+  # default) — rides out multi-minute Cloudflare API blips at plan (#10643).
+  # v5 renames this trio `max_retries`; carry the budget across a migration.
+  retries     = 6
+  min_backoff = 15
+  max_backoff = 120
 }
 
 # Separate provider for Cloudflare Rulesets APIs. The default cf_api_token
@@ -189,6 +203,13 @@ provider "cloudflare" {
 provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets
+
+  # 5xx retry budget ~7.75min/request (15+30+60+120+120+120s vs ~7s v4
+  # default) — rides out multi-minute Cloudflare API blips at plan (#10643).
+  # v5 renames this trio `max_retries`; carry the budget across a migration.
+  retries     = 6
+  min_backoff = 15
+  max_backoff = 120
 }
 
 # Separate provider for Bot Management APIs. Cloudflare's "Block AI bots"
@@ -201,6 +222,13 @@ provider "cloudflare" {
 provider "cloudflare" {
   alias     = "bot_management"
   api_token = var.cf_api_token_bot_management
+
+  # 5xx retry budget ~7.75min/request (15+30+60+120+120+120s vs ~7s v4
+  # default) — rides out multi-minute Cloudflare API blips at plan (#10643).
+  # v5 renames this trio `max_retries`; carry the budget across a migration.
+  retries     = 6
+  min_backoff = 15
+  max_backoff = 120
 }
 
 # Separate provider for Cloudflare R2 (object storage). The default cf_api_token is scoped
@@ -211,6 +239,13 @@ provider "cloudflare" {
 provider "cloudflare" {
   alias     = "r2"
   api_token = var.cf_api_token_r2
+
+  # 5xx retry budget ~7.75min/request (15+30+60+120+120+120s vs ~7s v4
+  # default) — rides out multi-minute Cloudflare API blips at plan (#10643).
+  # v5 renames this trio `max_retries`; carry the budget across a migration.
+  retries     = 6
+  min_backoff = 15
+  max_backoff = 120
 }
 
 # Separate provider for Cloudflare Pages (ADR-194, #7640). Pages is an ACCOUNT-level
@@ -222,6 +257,13 @@ provider "cloudflare" {
 provider "cloudflare" {
   alias     = "pages"
   api_token = var.cf_api_token_pages
+
+  # 5xx retry budget ~7.75min/request (15+30+60+120+120+120s vs ~7s v4
+  # default) — rides out multi-minute Cloudflare API blips at plan (#10643).
+  # v5 renames this trio `max_retries`; carry the budget across a migration.
+  retries     = 6
+  min_backoff = 15
+  max_backoff = 120
 }
 
 # #9168 — Supabase Management API provider, declared for the supabase_project.prd

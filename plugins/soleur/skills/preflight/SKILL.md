@@ -526,7 +526,7 @@ The `## User-Brand Impact` section may live in the PR body itself (typical for s
 grep -q '^## User-Brand Impact' "$COMBINED"
 ```
 
-If absent, return **FAIL** with: "Sensitive-path diff detected but neither PR body nor linked plan file contains a `## User-Brand Impact` section. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
+If absent, return **FAIL** with: "Sensitive-path diff detected but neither PR body nor linked plan file contains a `## User-Brand Impact` section. Add the section per `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md`."
 
 **Step 6.5: Validate threshold and scope-out — anchored, not substring.**
 
@@ -737,7 +737,7 @@ awk '/^## Observability$/{ino=1; next} /^## /{if (ino) exit} ino' "$PLAN_PATH" >
 test -s "$PREFLIGHT_TMP/preflight-observability.txt" || { echo "FAIL: Plan touches sensitive paths but '## Observability' block is missing. See hr-observability-as-plan-quality-gate."; exit 1; }
 ```
 
-If the block is missing, return **FAIL** with: "Sensitive-path diff but plan file `<PLAN_PATH>` is missing the `## Observability` block. See `hr-observability-as-plan-quality-gate`. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
+If the block is missing, return **FAIL** with: "Sensitive-path diff but plan file `<PLAN_PATH>` is missing the `## Observability` block. See `hr-observability-as-plan-quality-gate`. Add the section per `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md`."
 
 **Step 10.4: Extract `discoverability_test.command` and `expected_output`.**
 
@@ -882,7 +882,7 @@ CMD="${CMD%"${CMD##*[![:space:]]}"}"
 # Version skew: this fence and parse-form-a.awk must come from ONE plugin root. New SKILL.md + old awk leaves the quotes in, so the exec fails rc=127; old SKILL.md + new awk decodes twice.
 ```
 
-If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
+If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `${CLAUDE_PLUGIN_ROOT}/skills/plan/references/plan-issue-templates.md` §Observability."
 
 **Reject SSH commands** (defense-in-depth):
 

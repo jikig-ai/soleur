@@ -2,14 +2,15 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1200
-# generated-at=2026-10-19T13:55:54Z
+# default-weight-ms=1204
+# generated-at=2026-10-20T16:38:42Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
 .claude/hooks/agent-token-tee.test.sh	3
 .claude/hooks/background-poll-prefer-monitor.test.sh	7
 .claude/hooks/bare-head-self-heal.test.sh	1
+.claude/hooks/bare-root-cwd-guard.test.sh	1
 .claude/hooks/brand-hex-commit-gate.test.sh	8
 .claude/hooks/browser-snapshot-credential-guard.test.sh	7
 .claude/hooks/cla-signed-author-gate.test.sh	4
@@ -31,6 +32,7 @@
 .claude/hooks/incident-sandbox-coverage.test.sh	6
 .claude/hooks/incidents.test.sh	8
 .claude/hooks/kb-domain-allowlist-guard.test.sh	7
+.claude/hooks/lib/context-sanitize.test.sh	1
 .claude/hooks/lib/filing-shape.test.sh	5
 .claude/hooks/lib/freeze-lock.test.sh	1
 .claude/hooks/log-rotation.test.sh	3
@@ -93,6 +95,7 @@ apps/web-platform/scripts/sentry-monitors-audit.test.sh	8
 apps/web-platform/scripts/supabase-local.test.sh	4
 apps/web-platform/test/parse-gitleaks-allowlists	2
 plugins/soleur/scripts/admin-merge-ready.test.sh	3
+plugins/soleur/scripts/affected-tests.test.sh	1
 plugins/soleur/scripts/alpha-metrics.test.sh	5
 plugins/soleur/scripts/delegation-verify.test.sh	1
 plugins/soleur/scripts/emit-decision.test.sh	8
@@ -148,6 +151,7 @@ plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	7
+plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1
 plugins/soleur/test/boundary-prefix.test.sh	1
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	7
 plugins/soleur/test/c4-count-parity.test.sh	2
@@ -198,6 +202,7 @@ plugins/soleur/test/generate-kb-index.test.sh	6
 plugins/soleur/test/git-env-list-parity.test.sh	7
 plugins/soleur/test/git-fixture-containment.test.sh	5
 plugins/soleur/test/git-fixture-env-shell.test.sh	4
+plugins/soleur/test/git-repo-readiness-diag.test.sh	1
 plugins/soleur/test/git-tripwire.test.sh	7
 plugins/soleur/test/gitleaks-merge-commit.test.sh	6
 plugins/soleur/test/gitleaks-rules.test.sh	6
@@ -344,6 +349,7 @@ scripts/ci-pr-selection	1
 scripts/ci-push-dedupe	5
 scripts/classify-workflow-transitions	5
 scripts/compound-promote	6
+scripts/compound-promote-draft-edit-10552	1
 scripts/compound-promote-outcome-8281	3
 scripts/concierge-strand-754ee124-5733	4
 scripts/content-publisher	5
@@ -402,6 +408,7 @@ scripts/inngest-soak-6178	7
 scripts/inngest-tls-soak-10136	1
 scripts/inngest-zot-boot-7462	5
 scripts/inngest-zot-client-authz-6500	3
+scripts/jobs1-stopgap-7432	1
 scripts/learning-retrieval-bench	7
 scripts/lib/bearer-curl.test.sh	8
 scripts/lib/frontmatter-strip.test.sh	1
@@ -411,6 +418,7 @@ scripts/lib/git-data-wipe-runs.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
 scripts/lib/legal-base-ref.test.sh	7
+scripts/lib/legal-normalise-property.test.sh	1
 scripts/lib/legal-normalise.test.sh	6
 scripts/lib/repo-write-boundary.test.sh	4
 scripts/lib/rule-line-regex-parity.test.sh	3
@@ -435,6 +443,8 @@ scripts/lint-doppler-description-length-unit	7
 scripts/lint-dual-lockfile	2
 scripts/lint-dual-lockfile-live	3
 scripts/lint-encryption-posture	6
+scripts/lint-feature-map-coverage-battery	1
+scripts/lint-feature-map-coverage-live	1
 scripts/lint-gh-argv-arg	3
 scripts/lint-gh-argv-arg-live	7
 scripts/lint-guard-contract	7
@@ -540,6 +550,7 @@ scripts/watchdog-debounce-soak-9686	3
 scripts/web-fresh-boot-zot-8651	7
 scripts/web-host-escrow-preflight	3
 scripts/web2-luks-live-6931	4
+scripts/web2-plugin-seed-8743	1
 scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
 scripts/zot-fill-rate-standing-wiring	1
