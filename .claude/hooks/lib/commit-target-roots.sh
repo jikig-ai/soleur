@@ -73,6 +73,9 @@ _CTR_DEPTH=0
 _CTR_TGT_AT_COMMIT=0
 _CTR_TEXT=""
 _CTR_MAX_DEPTH=32
+_CTR_STEPS=0
+_CTR_MAX_STEPS=500
+_CTR_LAUNCHED=0
 
 # ctr_wants_lex <command> — cheap pre-filter for the STRICT-match path (`git commit` with
 # nothing between the words): true when the text contains a token that can change which
@@ -234,16 +237,19 @@ _ctr_git_walk() {
 
 # _ctr_runner_walk <idx-of-shell-word> — `bash -c SCRIPT`: a literal script was already
 # re-lexed by the lexer; a script held in an expansion hides a possible commit; a shell given
-# no script operand reads one from stdin (heredoc, here-string or pipe), which the lexer treats
-# as data.
+# no script operand reads one from stdin (heredoc, here-string, pipe or redirect), which the
+# lexer treats as data. The stdin refusal applies only when the shell is the command word
+# itself: a `bash` that is merely an ARGUMENT of an unmodelled command (`which bash | head`,
+# `echo run bash`) is not a shell being run.
 _ctr_runner_walk() {
-  local j=$(($1 + 1)) n="${#_CTR_W[@]}" w mode=stdin
+  local j=$(($1 + 1)) n="${#_CTR_W[@]}" w mode=stdin sflag=0
   while [ "$j" -lt "$n" ]; do
     w="${_CTR_W[$j]}"
     case "$w" in
-      --) mode=operand; break ;;
+      --) if [ "$sflag" -eq 1 ]; then mode=stdin; else mode=operand; fi; break ;;
+      --version|--help|-h) mode=operand; break ;;
       -o|+o|-O|+O|--rcfile|--init-file) j=$((j + 2)) ;;
-      --*) j=$((j + 1)) ;;
+      --*|+?*) j=$((j + 1)) ;;
       -[!-]*)
         case "$w" in
           *c*)
@@ -254,14 +260,16 @@ _ctr_runner_walk() {
               esac
             fi
             break ;;
+          *s*) sflag=1 ;;
         esac
         j=$((j + 1)) ;;
-      *) mode=operand; break ;;
+      '<('*) mode=stdin; break ;;  # bash < <(cmd): the lexer leaves the substitution as a word
+      *) if [ "$sflag" -eq 1 ]; then mode=stdin; else mode=operand; fi; break ;;
     esac
   done
-  if [ "$mode" = stdin ]; then
+  if [ "$mode" = stdin ] && [ "$_CTR_LAUNCHED" -eq 0 ]; then
     case "$_CTR_TEXT" in
-      *'<<'*|*'|'*) _ctr_bad "a shell reads its script from stdin (heredoc, here-string or pipe)"; _ctr_mark_commit ;;
+      *'<'*|*'|'*) _ctr_bad "a shell reads its script from stdin (heredoc, here-string, redirect or pipe)"; _ctr_mark_commit ;;
     esac
   fi
 }
@@ -271,10 +279,16 @@ _ctr_runner_walk() {
 # recursion crashes the hook, which lets the tool call proceed): past the bound the command is
 # refused as unreadable.
 _ctr_walk_from() {
-  _CTR_DEPTH=$((_CTR_DEPTH + 1))
+  _CTR_DEPTH=$((_CTR_DEPTH + 1)); _CTR_STEPS=$((_CTR_STEPS + 1))
   if [ "$_CTR_DEPTH" -gt "$_CTR_MAX_DEPTH" ]; then
     if [ "$_CTR_DEPTH" -eq $((_CTR_MAX_DEPTH + 1)) ]; then
       _ctr_bad "the command nests launchers deeper than $_CTR_MAX_DEPTH levels"; _ctr_mark_commit
+    fi
+  elif [ "$_CTR_STEPS" -gt "$_CTR_MAX_STEPS" ]; then
+    # Depth alone does not bound the WORK: a launcher word between env words branches at
+    # every level. A hook that outlives its timeout lets the tool call proceed.
+    if [ "$_CTR_STEPS" -eq $((_CTR_MAX_STEPS + 1)) ]; then
+      _ctr_bad "one command record needs more than $_CTR_MAX_STEPS walker steps (nested launchers)"; _ctr_mark_commit
     fi
   else
     _ctr_walk_body "$1"
@@ -376,9 +390,13 @@ _ctr_walk_body() {
           done ;;
       esac
       hits=(); j=$((i + 1))
-      while [ "$j" -lt "$n" ] && [ "${#hits[@]}" -lt 8 ]; do
+      while [ "$j" -lt "$n" ]; do
         case "${_CTR_W[$j]##*/}" in
-          git|cd|pushd|env|bash|sh|zsh|dash|ksh|e[v]al|export|declare|typeset|readonly|local) hits+=("$j") ;;
+          git|cd|pushd|env|bash|sh|zsh|dash|ksh|e[v]al|export|declare|typeset|readonly|local)
+            if [ "${#hits[@]}" -ge 8 ]; then
+              _ctr_bad "more than 8 command words behind an unmodelled launcher"; _ctr_mark_commit; break
+            fi
+            hits+=("$j") ;;
         esac
         j=$((j + 1))
       done
@@ -394,7 +412,9 @@ _ctr_walk_body() {
           esac
           j=$((j + 1))
         done
-        for h in "${hits[@]}"; do _ctr_walk_from "$h"; done
+        for h in "${hits[@]}"; do
+          _CTR_LAUNCHED=$((_CTR_LAUNCHED + 1)); _ctr_walk_from "$h"; _CTR_LAUNCHED=$((_CTR_LAUNCHED - 1))
+        done
       fi ;;
   esac
   return 0
@@ -452,6 +472,7 @@ ctr_collect() {
           _CTR_W+=("${f[$((i + 4 + 2 * k))]}")
           k=$((k + 1))
         done
+        _CTR_STEPS=0; _CTR_LAUNCHED=0
         _ctr_walk_from 0
         i=$((i + 3 + 2 * argc)) ;;
       E)
@@ -509,7 +530,7 @@ ctr_resolve_roots() {
       if [ "$dup" -eq 0 ]; then CTR_ROOTS+=("$top"); fi
     done
     # A target named after the last commit record cannot be that commit's target.
-    if [ "$found" -eq 0 ] && [ "$_CTR_CREATOR" -eq 1 ] && { [ "$CTR_COMMIT_SEEN" -eq 0 ] || [ "$ti" -lt "$_CTR_TGT_AT_COMMIT" ]; }; then
+    if [ "$found" -eq 0 ] && [ "$_CTR_CREATOR" -eq 1 ] && { [ "$CTR_COMMIT_SEEN" -eq 0 ] || [ "$ti" -lt "$_CTR_TGT_AT_COMMIT" ] || _ctr_has_loop "$_CTR_TEXT"; }; then
       _ctr_bad "the target '$t' does not exist yet and this command creates paths"
     fi
   done

@@ -1100,7 +1100,7 @@ _k_main() {
 # Second review round: shapes the first fix round left open, and the behaviours it added.
 _t_target_resolution3() {
   _needs_gl "T60-T75 round-2 rows" || return 0
-  local R W R2 W2 A cp s deep i
+  local R W R2 W2 A cp s deep inter i
   _mk_bare_root_with_worktree leak; R="$FX_ROOT"; W="$FX_WT"
   _mk_bare_root_with_worktree clean; R2="$FX_ROOT"; W2="$FX_WT"
   _fx_control "$W" || return 0
@@ -1147,6 +1147,11 @@ _t_target_resolution3() {
   # T69: the nesting bound (a chain of env words recursed once per word and segfaulted the hook).
   deep=""
   for i in $(seq 1 100); do deep+="env "; done
+  # T70: a launcher word between env words branches at every level; depth alone does not bound the work.
+  inter="foo env"
+  for i in $(seq 1 40); do inter+=" foo env"; done
+  _expect "T70 interleaved launcher/env chain → deny, quickly" "$R" "${inter} git -C $W commit -m x" deny "cannot determine" "more than"
+  _expect "T71 loop: a path created by the commit's own loop body → deny" "$R2" 'f() { git commit -m x; }; git init -q /nope-v/n; cd /nope-v/n; f' deny "cannot determine" "does not exist yet"
   _expect "T69 100 chained env words → deny, quickly" "$R" "${deep}git commit -m x" deny "cannot determine" "nests launchers"
 }
 
@@ -1309,6 +1314,15 @@ _t_walker() {
   local chain=""
   for i in $(seq 1 40); do chain+="env "; done
   _w_row "a 40-deep env chain is refused, not recursed" "${chain}git commit -m x"     ''      1 1 "nests launchers"
+  _w_row "bash -s -- <args> reads stdin"        'echo x | bash -s -- a'                ''      1 1 "stdin"
+  _w_row "bash -s <arg> reads stdin"            'echo x | bash -s foo'                 ''      1 1 "stdin"
+  _w_row "bash +x with a here-string reads stdin" 'bash +x <<< x'                      ''      1 1 "stdin"
+  _w_row "bash < <(cmd) reads stdin"            'bash < <(echo x)'                     ''      1 1 "stdin"
+  _w_row "bash --version | head is not a stdin script" 'bash --version | head -1; git commit -m x' '' 0 1
+  _w_row "which bash | head is not a shell being run" 'which bash | head -1 && git commit -m x'   '' 0 1
+  _w_row "echo run bash | tee is not a shell being run" 'echo run bash | tee n && git commit -m x' '' 0 1
+  _w_row "git log | grep -w bash is not a shell being run" 'git log --oneline | grep -w bash; git commit -m x' '' 0 1
+  _w_row "a ninth command word behind a launcher is refused, not skipped" 'a git git git git git git git git git -C /w commit' '' 1 1 "more than 8 command words"
   _w_lex "a parseable command"                 'cd /a && git commit -m x'             "S=ok K="
   _w_lex "an unbalanced quote is a parse failure" 'git -C "/a commit'                "S=unavailable K=parse"
   local deep="" tail=""
@@ -1444,7 +1458,7 @@ _t_floor_contract
 # a host with no runnable gitleaks skips whole arms (reported, and failed under CI=true by the
 # epilogue), so the floor only binds when nothing was skipped. Reported by printf + exit,
 # never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=394
+MIN_ASSERTIONS=405
 if (( ${#SKIPPED_ARMS[@]} == 0 )) && (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

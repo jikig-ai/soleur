@@ -191,7 +191,7 @@ it cannot read statically is **denied**, with a repair that matches the cause: `
 via `export` / `declare`), `--git-dir`, `--work-tree`, `-c core.worktree=` / `core.bare=`
 (also `--config-env`), `chroot` / `nsenter`, a shell that reads its script from stdin (heredoc,
 here-string or pipe), a launcher that takes the command as one string (`flock -c`, `su -c`,
-`ssh`, ...), a script held in a variable that `bash -c` or `eval` runs, and a path that does not
+`ssh`, ...), more than 8 command words behind one unmodelled launcher, more than 500 walker steps in one record, a script held in a variable that `bash -c` or `eval` runs, and a path that does not
 exist yet in a command that also creates paths (run the creating command as its own call first).
 In a command with a loop or a function every refusal is kept, because its text order is not its
 run order; in a straight-line list a refusal after the last commit is dropped.
@@ -208,7 +208,7 @@ from an expansion (`"$GIT" commit`, `c=commit; git -C A $c`); a commit that runs
 an alias, a stored string run as `$cmd`, `git -c alias.ci=commit ci`); `git commit-tree`;
 `git submodule foreach`; `xargs -I@` placeholders; creators the walker does not know (`./setup.sh`,
 `gh repo clone`) and an existing empty directory that the command turns into a repository;
-`CDPATH`, a symlink-vs-logical `cd`, `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS`, `read` / `printf -v`
+a stdin-fed shell BEHIND a launcher (`sudo bash <<EOF`), launchers that take a command string or a chdir option the walker does not know (`tmux new-session`, `at`, `python -c`, `mise -C`, `yarn --cwd`, `direnv exec`, `systemd-run -p WorkingDirectory=`); `CDPATH`, a symlink-vs-logical `cd`, `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS`, `read` / `printf -v`
 into `GIT_DIR`, and a `GIT_DIR` exported by an earlier call; and the commit-time index changes the
 command makes itself (`git add -A && git commit`, `commit -a`, a pathspec commit): the hook scans
 the index as it is BEFORE the command runs (#10696). A `git commit` into a repository that has no
