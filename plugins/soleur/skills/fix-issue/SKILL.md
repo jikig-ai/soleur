@@ -1,6 +1,6 @@
 ---
 name: fix-issue
-description: "This skill should be used to attempt an automated single-file fix for a GitHub issue. Creates a branch, fixes, tests, opens a PR, and labels for auto-merge or human review."
+description: "This skill should be used to attempt an automated single-file fix for a GitHub issue. Creates a branch, fixes, tests, opens a PR, and labels for auto-merge or agent review."
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -13,7 +13,7 @@ description: "This skill should be used to attempt an automated single-file fix 
 
 # Fix Issue
 
-Attempt a single-file fix for a GitHub issue and open a PR for human review.
+Attempt a single-file fix for a GitHub issue and open a PR for agent review. The review is the drain-prs `needs-review` tier (an inline diff read for a single-file bot fix, `soleur:review` for a feature PR); it runs when `soleur:drain-prs` runs, never automatically.
 
 ## Inputs
 
@@ -197,20 +197,20 @@ rejects a `--body-file` path containing `@`, `..`, `/proc`, `/etc`, `/root`,
 #
 #    ---
 #
-#    *Automated fix by soleur:fix-issue. Human review required before merge.*
-#    *After verifying the fix resolves the issue, close #<N> manually.*
+#    *Automated fix by soleur:fix-issue. A PR labeled `bot-fix/auto-merge-eligible` merges through the cron's mechanical gate (no drain-prs review) if the gate does not demote it. Any other PR needs agent review (drain-prs `needs-review` tier), which runs only when `soleur:drain-prs` runs -- nothing schedules it.*
+#    *This PR does not close issue #<N>. When the squash commit keeps the `[bot-fix]` title prefix and CI passes on main, `post-merge-monitor.yml` closes #<N> with the `bot-fix/verified` label (on red CI it reverts the commit and labels #<N> `bot-fix/reverted`).*
 #
 # 2. Then create the PR pointing at it:
 gh pr create --title "[bot-fix] <ISSUE_TITLE>" --body-file pr-body.md
 ```
 
-Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- the human reviewer decides when to close the issue.
+Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- GitHub would close the issue at merge, before CI on main has verified the fix. Instead `.github/workflows/post-merge-monitor.yml` parses `Ref #N` from the PR body of a squash commit whose message starts with `[bot-fix]` (the PR title prefix above), requires the issue to carry a `bot-fix/*` label, and acts on the CI result on main: green CI closes the issue with the `bot-fix/verified` label; red CI reverts the commit and labels the issue `bot-fix/reverted`. A PR not squashed with the `[bot-fix]` title prefix is not matched by that workflow, so its issue stays open until whoever merged it closes it.
 
 ## Phase 5.5: Auto-Merge Eligibility Check
 
 After opening the PR, evaluate whether it qualifies for autonomous merge. All three conditions must be true:
 
-1. **Single file changed** -- the fix touched exactly one file (always true if Phase 3 constraints held)
+1. **Single file changed** -- the PR diff holds exactly one file (false when the commit also carries a test file from Phase 4: the cron gate then demotes the PR to `bot-fix/review-required`)
 2. **Source issue was `priority/p3-low`** -- check the labels fetched in Phase 1
 3. **Tests passed with no new failures** -- Phase 4 completed without aborting
 
@@ -220,7 +220,7 @@ If all three conditions are met, label the PR for auto-merge:
 gh pr edit <PR_NUMBER> --add-label "bot-fix/auto-merge-eligible"
 ```
 
-If any condition is not met (higher priority source issue, test concerns, multi-file fix that was allowed through), label for human review:
+If any condition is not met (higher priority source issue, test concerns, a fix commit that also carries a test file), label for agent review (the drain-prs `needs-review` tier):
 
 ```bash
 gh pr edit <PR_NUMBER> --add-label "bot-fix/review-required"
@@ -228,7 +228,7 @@ gh pr edit <PR_NUMBER> --add-label "bot-fix/review-required"
 
 Extract `<PR_NUMBER>` from the `gh pr create` output in Phase 5. Exactly one of the two labels must be applied -- never both, never neither.
 
-Note: The auto-merge gate in `scheduled-bug-fixer.yml` independently re-checks file count and priority. This label is a signal, not the sole gate -- defense-in-depth ensures a mislabeled PR cannot bypass mechanical checks.
+Note: The auto-merge gate in `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` independently re-checks the `bot-fix/auto-merge-eligible` label, the single-file diff, and the `priority/p3-low` source issue. This label is a signal, not the sole gate -- defense-in-depth ensures a mislabeled PR cannot bypass mechanical checks. The gate's outcomes: the multi-file and non-`priority/p3-low` failures swap the eligibility label for `bot-fix/review-required`, and `triage-prs.sh` routes a PR carrying `bot-fix/review-required` (or one with failing checks) to `needs-review`, where it waits for the next `soleur:drain-prs` run. The bot-identity and missing-eligibility-label failures return early without relabelling. A PR with neither label is an agent defect (this phase must apply exactly one of the two labels) and, if mergeable with zero failing checks, lands in `ready-green`, not `needs-review`.
 
 ## Phase 6: Failure Handler
 

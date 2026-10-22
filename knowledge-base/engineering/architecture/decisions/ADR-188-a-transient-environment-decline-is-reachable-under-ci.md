@@ -520,3 +520,21 @@ rehearsal suite make `12 x budget` exceed the 600 s bound for any budget large e
 day). A wall-clock deadline (measured above). Making T5 primary, T17 healthy or R4 skip-eligible, or
 giving ownership a counted skip: not taken here; recorded as a User-Challenge for the operator because
 each weakens a guard or reverses #8744.
+
+**User-Challenge resolved (2026-10-22, #9394; Ruled by CTO agent).** No change: T5 primary, T17 healthy and R4 stay
+hard, and the ownership runtime arm gets no counted skip for a TIMEOUT cause (a bounded-apt timeout emits
+`FIXTURE_APT_FAILED`, which already takes `_runtime_skip`: a counted skip off CI and a failure when `CI=true`).
+Why: this ADR's own invariant (2026-08-20 amendment, #7572) needs at least one container-dependent arm that cannot
+decline, and during an apt failure only these three remain; T5 primary is the supply-chain checksum guard, and a guard
+whose failing direction can be skipped on a transient fault loses its anti-vacuity value (ADR-180). This concerns the
+primary arms: T5 mutation, T17 mutation and the S1 family already reach `arm_skip`. Re-evaluation triggers, as the
+issue states them: (1) the skip-persistence probe #8856 reports a skip streak; (2) two consecutive `main` runs red on a
+primary-arm `FIXTURE_APT_CAUSE` line. Live evidence at ruling time: 20 recent `main` runs of `infra-validation.yml`
+(about 2026-10-19 to 2026-10-21), 0 `FIXTURE_APT_CAUSE` / `FIXTURE_APT_FAILED` hits, so trigger 2 has not fired.
+Trigger 1 cannot fire yet: the #8856 probe has returned TRANSIENT (no `git-data-runcmd-rehearsal:` marker in the
+sampled logs, 3 consecutive as of 2026-10-18); repair is tracked in #10786. Flip condition: two consecutive red `main`
+runs on a primary-arm `FIXTURE_APT_CAUSE` line with a confirmed archive outage. The first response is a hold: a
+time-boxed, issue-tracked, human-approved edit, never an `arm_skip` and never a `CI` override. Legal note (CLO): the
+Article 30 register row PA-36 (declared, not live) lists `git-data-ownership.test.sh` as backing the ownership control;
+keep that wording at "suite exists" and do not extend it to claim CI enforcement while that arm can be declined
+locally.
