@@ -48,3 +48,26 @@ This proves that fixture race, not any historical operational failure.
 A later wildcard discovery guessed nonexistent `.soleur/*config*.py` helpers.
 List the directory's real filenames first; the existence of Config JSON records
 does not imply similarly named preparation scripts exist.
+
+## Addendum — 2026-10-22 mutation execution boundary
+
+The new Config lifecycle suite generated mutants of a helper that calls
+`process.kill()`. Primary full discovery and two review seats ran those owned
+scratch-process mutants on the host. Test-design review correctly blocked that
+instrument: known PIDs and scratch argv are not the required PID namespace.
+Those historical green runs establish no namespace-safety coverage.
+
+The owning work reference now explicitly covers mutants reached through default
+test discovery. The suite must dispatch them through the canonical namespace
+runner under `timeout -k`, prove an unmutated control, and refuse without host
+fallback. A harmless namespace probe succeeded here; this does not excuse the
+earlier runs. Complete corrected instrument verification before any new Config
+preparation or action. Retire reaped fixture PIDs immediately and establish
+cleanup ownership before readiness assertions so failed tests cannot leave
+unrecorded synthetic children.
+
+The first corrected complete discovery ran before committing its runtime test
+changes. Its preparation fixture correctly refused dirty source (481 tests,
+one setup error); that is not a green complete run. Commit the candidate before
+running tests whose contract binds the current clean revision, then report that
+exact revision and the fresh result separately.

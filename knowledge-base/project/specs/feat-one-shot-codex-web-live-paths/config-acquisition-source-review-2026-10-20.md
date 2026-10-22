@@ -277,3 +277,24 @@ passed all seven changed Python files; whitespace checks passed. The complete
 discovery includes only offline/synthetic qualification tests, not an operational
 Config attempt or live provider matrix. Corrected-source independent review is
 still required before replacing the preserved unused manifest.
+
+### Mutation execution correction — 2026-10-22
+
+Engineering and security accepted production containment at
+`77324397ddefc620c018b07bdd0fb193eae05d09`, but test-design review blocked the
+instrument: generated signalling-helper mutants ran on the host. The historical
+480-test pass above does not prove namespace safety. The revised lifecycle suite
+automatically dispatches all three signalling mutation rows through the repository
+allocator and canonical PID namespace, under `timeout -k`, including during
+ordinary discovery. Each namespace runs a passing unmutated control first;
+refusal and timeout fail closed without a host fallback. Reentry verifies PID 1
+and the namespace PID census rather than trusting an environment marker.
+
+The fixture now inventories nonce-owned descendants independently of readiness
+and retires PIDs immediately after reap or established absence. Synthetic fault
+rows cover readiness/PID-file errors, refusal, timeout, spoofed reentry, a red
+control, and the rejected 2147483648 parent boundary. The focused author run
+passed 41 tests and removed its allocated sandbox. Primary complete discovery
+on the dirty candidate refused the clean-source preparation precondition (481
+tests, one setup error); a committed-source rerun and independent re-review are
+required. No new Config manifest or execution occurred.

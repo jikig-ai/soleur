@@ -2432,3 +2432,21 @@
   DNS/network, retries, resync/full CI, full review,
   QA, preflight, recovery, qualification, promotion and ship remain held.
   Historical evidence and hashes are unchanged; no operational artifact exists.
+
+### Expanded continuation — 2026-10-21/22
+
+- The operator approved all remaining work and said not to ask for each step.
+  Earlier per-phase operator holds are superseded within that scope; do not
+  re-request preparation/review/non-production execution permission. Technical
+  gates, provider restrictions and exact destructive shared-production approval
+  remain applicable. The [continuation and completed resolver record](resolver-only-source-review-2026-10-20.md#expanded-continuation-authority-and-completed-resolver-action--2026-10-21)
+  owns the authority and independently accepted successful resolver evidence.
+- Fresh Config preparation was reviewed but not executed: helper containment
+  blocked it before execution. The [Config containment record](config-acquisition-source-review-2026-10-20.md#config-helper-containment-finding--2026-10-21)
+  owns Ref #10760, source correction and offline checks. The prepared manifest
+  remains unused and stale. Engineering/security accepted production source at
+  `77324397ddefc620c018b07bdd0fb193eae05d09`; test-design acceptance remains blocked
+  until mutation execution itself is isolated and fixture ownership is corrected.
+- The [fresh CLO audit](../../../legal/audits/2026-10-21-codex-web-hosted-auth-recheck.md)
+  preserves both hosted-authentication blocks and alternate-route PENDING. Do not
+  convert owner consent into provider permission or drop retained feature phases.

@@ -421,7 +421,7 @@ class ResolverTests(unittest.TestCase):
 
     def test_helper_refuses_invalid_parent_before_arming_or_resolution(self):
         import config_resolver
-        for parent in ('', '1', '0', '-2', '+123', ' 123', '123 ', '1.5', '１２３', '9' * 100):
+        for parent in ('', '1', '0', '-2', '+123', ' 123', '123 ', '1.5', '１２３', '2147483648', '9' * 100):
             with self.subTest(parent=parent), \
                     patch.object(config_resolver.sys, 'argv', ['helper', 'auth.docker.io', parent]), \
                     patch('resolver_supervisor.arm_parent_death') as arm, \
