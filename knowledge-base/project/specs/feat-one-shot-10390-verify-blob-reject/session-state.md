@@ -110,3 +110,13 @@ New real defect found by the added matrix row: run_one's `exit` inside command-s
 - Fix diff base: PANEL_SHA d65c232da6eb4031f52adcd0121dd7954f0cdb76
 - Finding-seats for fix round: pattern-recognition-specialist, user-impact-reviewer, test-design-reviewer, security-sentinel, data-integrity-guardian, structural-enumeration, code-quality-analyst, agent-native-reviewer, git-history-analyzer
 - Suites after fixes: refresh 160/0, diagnose 26/0, probe 14/0
+
+## QA Phase — complete (Step 5.5)
+- T2/T3/T4/T5: VERIFIED — refresh 162/0, diagnose 29/0, probe 15/0; Guard-1 grep clean.
+- T1: POST-MERGE-GATED (dispatch probe only works from default branch; shape suite 29/0 stands in).
+- T6: not applicable this PR (AC9 conditional — no new bundle promoted).
+- T7: post-replace — owned by the followthrough probe + tasks.md 5.3b enrollment.
+
+## Fix-round (ADR-267) — complete
+- Round 1: 9 seats + shellcheck over d65c232..fb0e9789e1 → P3 residuals fixed (8d2b73d803, fba8749ef7).
+- Verification pass: single fresh-eyes seat spawned over cumulative fix diff.
