@@ -40,7 +40,13 @@ Plan: `knowledge-base/project/plans/2026-10-22-feat-s4-affected-index-pr3-requir
 - 3.2 Add job `affected-index-ratchet` to `.github/workflows/ci.yml` (positive `if:`, `continue-on-error`, `timeout-minutes: 5` alone, `fetch-depth: 2`, select timeout 200, annotation from the step) and update the header sentence.
 - 3.3 Classify the job in `UNGATED_PINNED`, `LIGHT_PINNED`, `ALWAYS_RUN_JOBS`; edit the `scripts/pr-fanout-ledger.txt` ci.yml row (27 to 28); run the consumer suites including the kb-consumers and fixture-relative censuses.
 - 3.4 CI-shape rehearsal: `git clone --depth 2` of a merge-shaped commit, `CI=true`, no `origin/main`.
-- 3.5 Record the first real run (`exit=0 reason=pass`, wall time at most 270 s) and read the throwaway-branch canary for the failing-`continue-on-error` conclusion.
+- 3.5 Record the first real run (`exit=0 reason=pass`, wall time at most 270 s) and read the throwaway DRAFT PR canary (one deliberate unbaselined pair in a tracked fixture) for the failing-`continue-on-error` conclusion; close it afterwards.
+
+## Follow-through enrollment
+
+- E.1 Author `scripts/followthroughs/ratchet-observation-window-10865.sh` (read-only; jobs API plus the emitted marker line; window rules from decision-challenges.md rows 26-27) and its stub-`gh` rows in the replay suite.
+- E.2 At ship: add the `follow-through` label and the directive to tracker #10865 (closing it does not authorize PR3b #10859).
+- E.3 Create the `s4-drain` label (`gh label create s4-drain`).
 
 ## Phase 4 - documentation
 
