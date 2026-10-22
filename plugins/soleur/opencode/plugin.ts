@@ -30,9 +30,9 @@
  * *before* the permission hook, and its only refusal channel is a thrown error, so a `deny`-or-`ask`
  * there would collapse into a throw and preempt the real ask behind it. What it *can* do without
  * deciding anything is publish `input.workdir`, the one value the permission event does not carry:
- * a `shell` call with `workdir=/tmp/x` was judged against the session directory, so a relative
- * `rm -rf` was allowed that the guard asks about in the right directory. The permission hook
- * consumes that capture by call key and passes it as the envelope `cwd`.
+ * a `shell` call with `workdir=$HOME` was judged against the session directory, so `rm -rf *` was
+ * allowed that the destructive guard **denies** in the directory the command asked for. The
+ * permission hook consumes that capture by call key and passes it as the envelope `cwd`.
  *
  * INVARIANTS. (1) One predicate, `decidesBash`, answers "is this a call the Bash guards see" — and
  * the envelope, the capture and the consume all ask it; a second copy of that question is how a

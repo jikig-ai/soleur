@@ -15,7 +15,8 @@ Four follow-ups filed against the OpenCode adapter rollout, each a single scoped
 
 1. **#10819** — the Bash guard envelope carries the session directory as `cwd`, so a `shell` call
    with a per-call `workdir` is judged against the wrong directory. Measurement below shows this is
-   a real guard hole (relative `rm -rf` is allowed from the session dir, asked from the workdir).
+   a real guard hole: the same `rm -rf *` is allowed from the session directory and **denied** when
+   the envelope carries `$HOME`.
 2. **#10820** — the generated capability matrix never names the one approval gate OpenCode cannot
    carry, so the disclosure lives only in marketing copy.
 3. **#10821** — ADR-245's supported-harness set still excludes OpenCode, while ADR-291 records the
@@ -73,14 +74,26 @@ Conclusions that bind the design:
   tool hook's `messageID`, so the two hooks correlate on either alone or on the pair.
 - `external_directory` fires **first** with the same call id — consuming the correlation on any
   action other than the shell decision would lose it before that decision.
-- Guard pair run with the production envelope construction (both guards, ordered):
-  `cwd=sessionDir` → no output, exit 0 (**allow**); `cwd=workdir` → `ask`,
-  rule `recursive-delete-workdir`. The hole is real: a relative destructive command is silently
-  allowed whenever `workdir` differs from the session directory.
-- The hole is worse than a missing `ask`: the guard's **deny** class is cwd-dependent too ("a bare
-  `*` `**` or `./*` when the working directory is home or an ancestor", the rule table's
-  `recursive-delete-home` arm). With `workdir=$HOME` and envelope `cwd=<checkout>`, `rm -rf *`
-  matches no rule at all and is allowed with no prompt of any class.
+- Guard pair run with the production envelope construction (both guards, ordered), and **the
+  cwd-dependent class is the deny class**. End-to-end through the plugin and the real guard script
+  (QA probe, `HOME` pointed at a temporary directory containing one file):
+
+  ```text
+  rm -rf *   with capture workdir=$HOME   → effect=deny  rule=recursive-delete-home
+  rm -rf *   with no capture (session)     → effect=allow (no rule matched)
+  ```
+
+  Same command, same event shape, different directory alone. The guard's own matcher is
+  `anc_or_eq "$RP" "$HL"` over the resolved glob directory, so pointing the envelope at the
+  requested directory is what makes the home rule reachable — before the fix the envelope said
+  `<checkout>`, which is neither home nor an ancestor of it.
+- **A correction to the pre-compaction record, kept rather than quietly dropped.** An earlier run in
+  this plan recorded a `recursive-delete-workdir` **ask** for a relative target. It did not
+  reproduce in this checkout: `rm -rf *`, `rm -rf .` and `rm -rf ../sess` were allowed at three
+  different cwds. The rule exists in the script (`(( glob == 0 )) && anc_or_eq "$RP" "$SIMCWD"`),
+  but the reproducing command was not recorded, so the ask arm is **not** claimed. The fix does not
+  depend on it: it is proven on the deny class, which is the worse one, and the workdir rule would
+  be satisfied by the same `cwd` wiring if a reproducing command is found later.
 - Running the guards with `cwd = workdir` is safe for the credential guard, checked rather than
   assumed: `browser-snapshot-credential-guard.sh` reads `.tool_input.command` and gates on
   `.tool_name` through `hook-tool-kind.sh`; it has **no cwd reference**, so repointing `cwd` cannot
@@ -591,10 +604,11 @@ canonical parenthetical) is explicitly excluded by the CLO ruling.
 **If this lands broken, the user experiences:** a `shell` call that supplies `workdir` is judged
 against the session directory because the capture was lost or unusable. That is not merely a missed
 `ask`: the destructive guard's **deny** class is cwd-dependent, so `rm -rf *` with `workdir=$HOME`
-and envelope `cwd=<checkout>` matches no rule and is allowed with no prompt of any class, and the
-recursive-delete `ask` is lost too. The operator's **working tree and everything uncommitted** are
-deleted — `rm -rf *` does not match dotfiles, so `.git` and `~/.ssh` survive and the repository is
-recoverable from the remote.
+and envelope `cwd=<checkout>` matches no rule and is allowed with no prompt of any class — measured,
+and the reverse is measured too: with the envelope at `$HOME` the same command is denied
+`recursive-delete-home`. The operator's **working tree and everything uncommitted** are deleted —
+`rm -rf *` does not match dotfiles, so `.git` and `~/.ssh` survive and the repository is recoverable
+from the remote.
 
 **If this leaks, the user's data is exposed via:** no new data path is introduced — the exposure
 vector is destruction, not disclosure. A mis-correlated `cwd` changes which paths the destructive

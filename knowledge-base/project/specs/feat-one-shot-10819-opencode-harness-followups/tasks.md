@@ -73,6 +73,21 @@ capture, not-a-directory, `..`, out-of-order, `ETIMEDOUT`, real-runner error, un
 
 See the plan's `## Acceptance Criteria` (AC1–AC14). Note AC13 needs an **exact** count, not `≥`.
 
+## QA (functional, run before merge)
+
+- **#10819 end to end** through `createSetup` + the real `destructive-command-guard.sh`:
+  `rm -rf *` with a captured `workdir=$HOME` → `effect=deny`, rule `recursive-delete-home`; the same
+  call with no capture → `effect=allow`. The fix changes the verdict, not just the log.
+- **#10819 envelope**: `workdir-correlated cwd=…` written, and the guard's stdin `cwd` equals the
+  resolved workdir (asserted on the bytes, per test).
+- **#10820**: the generated matrix names the gate, the `exit 75` consequence and the unscoped tty
+  arm; `--check` reports `opencode-adapter ok`.
+- **#10821**: one `## Amendment — 2026-10-22` in each ADR; the set phrase count is unchanged in both
+  (2 and 3); ADR-245 keeps its original sentence with an inline pointer.
+- **#10822**: the `### OpenCode` subsection answers each AC11 pattern; the four comment phrases name
+  devin/codex/grok or are count-free.
+- **Install**: `--target $(mktemp -d)` then `--check` → `opencode-install ok`.
+
 ## Disclosures
 
 - Overlap preflight: `pr-overlap-preflight.sh --mode start` failed twice with `rc=2`
