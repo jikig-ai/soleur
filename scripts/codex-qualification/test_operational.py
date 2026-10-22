@@ -11,6 +11,7 @@ import prepare
 import test_candidate
 import operational
 import config_acquisition
+import config_snapshot
 
 
 class Operational(unittest.TestCase):
@@ -41,7 +42,8 @@ class Operational(unittest.TestCase):
                      'redirect_diagnostic.py', 'test_redirect_diagnostic.py',
                      'config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
                      'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
-                     'test_config_execution.py', 'resolver_supervisor.py', 'test_config_resolver_lifecycle.py'):
+                     'test_config_execution.py', 'resolver_supervisor.py', 'test_config_resolver_lifecycle.py',
+                     'config_snapshot.py', 'test_config_snapshot.py'):
             (self.component.parent / name).write_bytes((Path(__file__).parent / name).read_bytes())
         for name in ('40_race_holder.sql', '41_race_waiter.sql', '42_race_observe.sql', '43_race_assert.sql'):
             path = self.component.parent / 'scenarios' / name
@@ -124,6 +126,17 @@ class Operational(unittest.TestCase):
                 with self.assertRaisesRegex(prepare.Refused, config_acquisition.ERROR):
                     config_acquisition._dependencies(self.repo, changed)
         self.assertFalse(self.destination.exists())
+
+    def test_snapshot_source_census_and_dependencies_cannot_omit_new_coordinator_or_tests(self):
+        dependencies = config_snapshot._dependencies(self.repo, self.contract)
+        for name in ('config_snapshot.py', 'test_config_snapshot.py'):
+            with self.subTest(name=name):
+                path = 'scripts/codex-qualification/' + name
+                self.assertEqual(dependencies[name], prepare.sha((self.repo / path).read_bytes()))
+                changed = copy.deepcopy(self.contract)
+                del changed['source_references'][path]
+                with self.assertRaises((prepare.Refused, KeyError)):
+                    config_snapshot._dependencies(self.repo, changed)
 
     def test_builder_binds_exact_source_recipe_and_unresolved_dependencies(self):
         spec = candidate.candidate_spec(self.repo, self.source, self.destination)

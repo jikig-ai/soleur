@@ -3,7 +3,7 @@ title: Separate inert Mailpit Config snapshot proposal
 date: 2026-10-22
 pr: 9051
 reviewed_source: 52c4fc8a03a5e7b0d05bd5848f9561cb15c880c8
-status: proposed-source-contract-independent-review-pending
+status: source-contract-accepted-implementation-pending
 ---
 
 # Decision and purpose
@@ -366,3 +366,14 @@ mode-specific legal disposition. No default-off shipping clearance is inferred.
 Keep PR draft/disarmed, flags off and customer content blocked until the retained
 technical, permitted Web/CLO, full review, QA, GDPR/preflight and shipping gates
 actually pass. This proposal removes no original phase or acceptance criterion.
+
+## Independent contract acceptance — 2026-10-22
+
+Engineering, security and test-design accepted this corrected contract at
+`ae4a0777d98bc6226b6eee1ea88fcc1646297e25`. The earlier Medium cleanup-guarantee
+finding and unspecified joint-review gate are resolved by the explicit exclusive
+directory threat model, advisory locking, historical binding lifecycle and closed
+review/tool-result inputs above. No proposal findings remain. Ruled by CTO agent:
+proceed with RED-first source implementation and synthesized tests. This design
+acceptance supplies no implementation, actual-manifest, execution or evidence
+clearance, and preserves every original qualification/legal phase.

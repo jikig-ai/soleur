@@ -44,7 +44,8 @@ def prepare_operational(repo, source, directory):
              'redirect_diagnostic.py', 'test_redirect_diagnostic.py',
              'config_acquisition.py', 'config_https.py', 'config_resolver.py', 'config_schema.py',
              'test_config_acquisition.py', 'test_config_https.py', 'test_config_schema.py',
-             'test_config_execution.py', 'resolver_supervisor.py', 'test_config_resolver_lifecycle.py')]
+             'test_config_execution.py', 'resolver_supervisor.py', 'test_config_resolver_lifecycle.py',
+             'config_snapshot.py', 'test_config_snapshot.py')]
     paths += [root + 'scenarios/' + name for name in RACE_SCENARIOS]
     references = {}
     for entry in git(repo, 'ls-tree', '-z', source, '--', *paths).split(b'\0'):

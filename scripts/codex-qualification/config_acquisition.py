@@ -226,6 +226,9 @@ class ConfigAcquisition:
         self.clock, self.attempted = clock, False
         self.overall_deadline = overall_deadline
 
+    def _validated_payload(self, _payload):
+        """Explicit subclass seam after all byte/schema checks; this protocol discards."""
+
     def collect(self):
         _ensure(not self.attempted, 'replay')
         self.attempted = True
@@ -346,6 +349,7 @@ class ConfigAcquisition:
                         checks['schema_ok'] = False
                         raise https.TransportRefused('schema') from None
                     checks['schema_ok'] = True
+                    self._validated_payload(payload)
                     payload = None
                     remaining(deadline)
                     output_check()
