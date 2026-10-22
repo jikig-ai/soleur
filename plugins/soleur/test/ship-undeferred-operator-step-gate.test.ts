@@ -312,6 +312,86 @@ describe("TC-11: copy/copies verb-morphology", () => {
   });
 });
 
+describe("TC-12: delegated-act authoring form (ruling F1 + R4, detection unchanged)", () => {
+  // The allow/deny verdicts for the form come from the REAL hook, run with a stub gh
+  // in .claude/hooks/ship-operator-step-gate.test.sh (registered in
+  // scripts/suite-shard-legs.tsv, so CI runs it). The TS DETECT_REGEX above is a
+  // deliberately narrow mirror (no `Operator:` arm) and cannot see the hook's wider
+  // regex, so this section pins only the ship paragraph that tells the agent what to do.
+  test("the Undeferred section's Delegated-acts paragraph pins whole clauses of the R4 form", () => {
+    // Section only: slice at the next gate heading so text in the Soak-Gated or
+    // Technical-Ruling sections cannot satisfy these, then slice again at the
+    // paragraph's own lead so text elsewhere in the Undeferred section cannot either.
+    // Removing or reversing a clause turns this RED.
+    const end = GATE_SECTION.indexOf("### Soak-Gated Follow-Through Enrollment Gate");
+    expect(end).toBeGreaterThan(0);
+    const undeferred = GATE_SECTION.slice(0, end);
+    const lead = undeferred.indexOf("**Delegated acts (authoring form).**");
+    expect(lead).toBeGreaterThan(0);
+    // The SKILL paragraph is a gated pointer: it keeps the unchanged-detection statement,
+    // the load directive for the reference, and the no-exemption rule for an Operator bullet.
+    const pointer = undeferred.slice(lead);
+    expect(pointer).toContain("`DETECT_RE` and `ship-operator-step-gate.sh` stay unchanged on purpose");
+    expect(pointer).toContain("[delegated-act-authoring-form.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/delegated-act-authoring-form.md)");
+    expect(pointer).toContain("read [delegated-act-authoring-form.md]");
+    expect(pointer).toContain(
+      "A bullet that starts with `Operator` and a verb is still detected and still needs its `Tracks` companion",
+    );
+    // The form itself lives in the reference the pointer loads; every clause below is
+    // pinned there as a whole clause.
+    const REF = resolve(REPO_ROOT, "plugins/soleur/skills/ship/references/delegated-act-authoring-form.md");
+    expect(existsSync(REF)).toBe(true);
+    const para = readFileSync(REF, "utf8");
+
+    // The authoring form, with the exact-envelope-line argument.
+    expect(para).toContain(
+      'Delegated act (CTO, Standing Delegation <comment-url>, envelope <path#title>, command "<exact envelope line>"): <act in words>',
+    );
+    // The envelope-bound verifier call, including --command, and that it is a prose step.
+    expect(para).toContain("delegation-verify.sh");
+    expect(para).toContain(
+      'verify --delegation <comment-url> --envelope <path#title> --command "<exact envelope line>"',
+    );
+    expect(para).toContain("As a prose step (not a hook exemption)");
+    // A non-zero exit makes the bullet an operator step: the full consequence sentence.
+    expect(para).toContain("a non-zero exit (1 invalid, 2 unverifiable)");
+    expect(para).toContain("makes the bullet an operator step");
+    expect(para).toContain(
+      "so strip the form and give the bullet a `Tracks` companion, or hold the PR",
+    );
+    // No exemption beyond the form: an Operator bullet keeps its Tracks companion even
+    // when it cites a delegation URL.
+    expect(para).toContain("No URL or keyword exempts any other bullet");
+    expect(para).toContain(
+      "still needs its `Tracks` companion even when it cites a delegation URL",
+    );
+    // An act that already ran: receipt URL, the ran row, audit mode with the run time,
+    // in the one format the verifier accepts.
+    expect(para).toContain("receipt URL");
+    expect(para).toContain("`ran` row");
+    expect(para).toContain("--audit --at <time the act ran>");
+    expect(para).toContain("UTC, ending in Z, format YYYY-MM-DDTHH:MM:SSZ");
+    expect(para).toContain("standing-delegation.md");
+    // The agent compares the three and treats any mismatch as an operator step.
+    expect(para).toContain(
+      "the ship agent compares the quoted envelope line, the act in words, and (for an act that already ran) the `ran` row, and treats any mismatch as an operator step",
+    );
+    // The exclusions, generic rather than hard-coded ids only, and the owner-human acts.
+    expect(para).toContain(
+      "Never use the form for any act the envelope or the Standing Delegation Excluded list names",
+    );
+    expect(para).toContain("any act whose text names an owner-human act");
+    expect(para).toContain("SIGNED BY OWNER");
+    expect(para).toContain("such a bullet is an operator step whatever its prefix");
+    // The reversed clauses must not be present.
+    expect(para).not.toContain("Always use the form");
+    expect(para).not.toContain("exempt when it cites a delegation URL");
+    expect(para).not.toContain("keep the form");
+    // The detection regex itself stays untouched by the form.
+    expect(undeferred).toContain("DETECT_RE=");
+  });
+});
+
 describe("TC-9: new gate rule body fits within byte cap", () => {
   test("wg-block-pr-ready-on-undeferred-operator-steps body ≤600 B", () => {
     const line = CORPUS_TEXT.split("\n").find((l) => l.includes(`[id: ${GATE_ID}]`));

@@ -175,8 +175,9 @@ start of Phase 6.45, before the plan and spec are archived (the last point at wh
 STANDS. The grammar is `Gate: pr-merged <N>` and `Gate: no-inflight-run <workflow-file>` only. **`command` and `run-green` are
 deferred. The first real consumer re-adds them, and only by CTO ruling.** (Ruling R1; an unknown kind makes the evaluator exit 2 and
 the hold stands.) With no `Delegation:` line in the plan, the evaluator exits 3 before any other check and the legacy prose path is
-unchanged. `soleur:go` routes a brief that carries an epic reference (`#N`) AND a structured `HOLDS:` list to the CTO, outside the eval-gated
-routing block; a message that merely says "ask the operator" is an ordinary message (`go.md` Step 1.5 is the authority).
+unchanged. `soleur:go` routes an epic's production holds to the CTO outside the eval-gated routing block; the trigger, its hold-list
+sources and its negative cases are defined in `go.md` Step 1.5, which is the authority (see the 2026-10-22 addendum below); a
+message that merely says "ask the operator" is an ordinary message.
 
 ### What the ship gate checks (execution receipts)
 
@@ -340,3 +341,12 @@ it carries its own deadline and disclosure and why nothing in the authorization 
 The C4 model shows the CTO component and one read-only edge to GitHub from the plugin side (verifier, hold evaluator, ship gate's
 receipt read of the epic's comments, overlap preflight; authenticated per-user reads of the user's own repository). There is no hook-side edge: the delegation arm was removed
 (R2). See `knowledge-base/engineering/architecture/diagrams/model.c4`.
+
+## Addendum 2026-10-22 (#10783)
+
+The hold-list source of the `soleur:go` trigger widened from the brief alone to any of: the brief, the body of an open epic (read
+only when its `author_association` is OWNER, MEMBER or COLLABORATOR), or the `## Operator Holds` section of a plan the brief or
+epic names. `go.md` Step 1.5 is the authority for the trigger. The trigger only routes; it never discharges a hold. Its author
+check is weaker than the delegation's admin-author rule and grants no authority: every production act still needs a valid
+recorded Standing Delegation, verified by `delegation-verify.sh`, or an in-session per-command go (the runbook's Production
+Envelope for the Inngest TLS acts records which acts are envelope-delegable and which are in-session go only).

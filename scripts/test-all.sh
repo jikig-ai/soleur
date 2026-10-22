@@ -6227,6 +6227,8 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
+  run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
   # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
   # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
   # auto-discovered, so this line IS the registration.

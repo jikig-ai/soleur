@@ -97,6 +97,10 @@ audit (a suite the audit never read is not a suite with no gaps). `always_on` su
 the selector's own grammar (`^dir/` prefix, `^file` exact, `^glob:` bash glob), not as regexes. Tally the most frequent undeclared paths
 from the `--all-refs` output (the default prints only the first six per suite).
 
+What the audit reads is frozen, and `python3 scripts/ci-pr-affected-replay.py --help` (the REACH and DECLARED LIMITS sections of its docstring) is the single place that defines it: the suite's own file; the `source` closure of it to depth 8, operands resolved against the including file for `$(dirname ...)`, `$SCRIPT_DIR`, `$HERE` and `$DIR` and against the repo root for `$REPO_ROOT`, `$ROOT_DIR`, any other `$X` and a bare path; and the code files the suite's own selector row lists that an already-read text names, to depth 8, each with its own source closure. `gap_suites=0` is literal-name completeness over what the audit reads, an approximation of the selector closure: necessary but not sufficient. The limits that matter most when reading a clean result: hops are `source` and `.` only (not `bash x.sh`, `VAR=path; source "$VAR"`, python imports, or a prefix assigned from `cd ... && pwd`), and data files in `pats` are never scanned.
+
+Reach moves through declared edges and through the text of files it reads (the drain-reveal rule): declaring a code file as an edge makes the audit read it, which can reveal more pairs, and it can shift the ordinals of accept rows (a `stale ... anchor-not-live` row). So accept an anchor-keyed row when the suite does not read or execute the file, declare an edge only when it does, and re-run the audit until `refs`, `files_read`, `gap_refs` and `stale` stop changing.
+
 ```bash
 OUT=/var/tmp/s4-replay
 # the last 300 first-parent commits of main (resumable; --chunk I/K splits it; --reclassify re-reads every non-clean unit)

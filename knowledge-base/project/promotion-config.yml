@@ -6,6 +6,15 @@
 # - The pre-promotion GDPR shell pre-pass excludes any learning matching
 #   the canonical PII regex (email, IPv4, IBAN, API-key shapes) BEFORE the
 #   Anthropic call.
+# - Each cluster that passes the allowlist, size and duplicate checks also
+#   sends the full target file (AGENTS.rules.md or one
+#   plugins/soleur/skills/<name>/SKILL.md, up to EDIT_TARGET_MAX_BYTES =
+#   120,000 bytes), a model-written rationale and a second copy of that
+#   cluster's learning summaries to Anthropic. At most WEEK_CAP_DEFAULT = 2
+#   clusters per attempt. The PII pre-pass applies to the summaries, not to
+#   the target file or to the model's output on the draft-PR path. For a
+#   skill target, a skill-conflict comment can post the model-derived diff
+#   on an unrelated open PR (full PII pattern applied, no human gate).
 # - Opens public draft PRs whose bodies quote source-learning paths and the
 #   proposed diff. PR bodies are world-readable on the public repo.
 # - Kill switch: set `enabled: false` and commit; next cron tick exits no-op.
