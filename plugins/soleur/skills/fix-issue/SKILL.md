@@ -197,14 +197,14 @@ rejects a `--body-file` path containing `@`, `..`, `/proc`, `/etc`, `/root`,
 #
 #    ---
 #
-#    *Automated fix by soleur:fix-issue. A PR labeled `bot-fix/auto-merge-eligible` merges through the cron's mechanical gate (no drain-prs review). Any other PR needs agent review (drain-prs `needs-review` tier), which runs only when `soleur:drain-prs` runs -- nothing schedules it.*
-#    *The agent that merges this PR closes issue #<N> after verifying the fix resolves it.*
+#    *Automated fix by soleur:fix-issue. A PR labeled `bot-fix/auto-merge-eligible` merges through the cron's mechanical gate (no drain-prs review) if the gate does not demote it. Any other PR needs agent review (drain-prs `needs-review` tier), which runs only when `soleur:drain-prs` runs -- nothing schedules it.*
+#    *This PR does not close issue #<N>. When the squash commit keeps the `[bot-fix]` title prefix and CI passes on main, `post-merge-monitor.yml` closes #<N> with the `bot-fix/verified` label (on red CI it reverts the commit and labels #<N> `bot-fix/reverted`).*
 #
 # 2. Then create the PR pointing at it:
 gh pr create --title "[bot-fix] <ISSUE_TITLE>" --body-file pr-body.md
 ```
 
-Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- the agent that merges the PR closes issue `#N` itself, after verifying the fix resolves it.
+Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- GitHub would close the issue at merge, before CI on main has verified the fix. Instead `.github/workflows/post-merge-monitor.yml` parses `Ref #N` from the PR body of a squash commit whose message starts with `[bot-fix]` (the PR title prefix above), requires the issue to carry a `bot-fix/*` label, and acts on the CI result on main: green CI closes the issue with the `bot-fix/verified` label; red CI reverts the commit and labels the issue `bot-fix/reverted`. A PR not squashed with the `[bot-fix]` title prefix is not matched by that workflow, so its issue stays open until whoever merged it closes it.
 
 ## Phase 5.5: Auto-Merge Eligibility Check
 

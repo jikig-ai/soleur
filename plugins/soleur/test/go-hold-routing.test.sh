@@ -156,7 +156,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-verify.sh"'* && "$para" == *'"${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh"'* ]] || emit plugin-root-paths
   if [[ "$para" == *'plugins/soleur/'* ]]; then emit repo-relative-path; fi
   [[ "$para" == *'execution sentence'* && "$para" == *'run summary'* ]] || emit receipt-wiring
-  [[ "$para" == *'AskUserQuestion'* ]]     || emit no-askuserquestion-for-technical-hold
+  [[ "$para" == *'never call AskUserQuestion for a technical hold'* ]] || emit no-askuserquestion-for-technical-hold
   [[ "$para" == *'newest admin-authored marker comment decides'* && "$para" == *'invalid newest one means no delegation'* ]] || emit newest-decides
   [[ "$para" == *'delete every delegation comment'* && "$para" == *'gh api -X DELETE'* && "$para" == *'--disable-auto'* && "$para" == *'could not be stopped'* ]] || emit stop-sequence
 
@@ -168,7 +168,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'a closed epic never triggers, and'* ]] || emit closed-epic-excluded
   # The envelope table is "not a source" AND no sentence adds one: a closed check, not a bare absence of "fourth source".
   if [[ "$para" != *'envelope table is not a source'* ]] \
-     || printf '%s\n' "$para" | grep -Eiq '(fourth|4th|fifth|also)[[:space:]]+([[:alnum:]-]+[[:space:]]+){0,3}source'; then emit runbook-not-a-source; fi
+     || grep -Eiq '(fourth|4th|fifth|also)[[:space:]]+([[:alnum:]-]+[[:space:]]+){0,3}source' <<<"$para"; then emit runbook-not-a-source; fi
   [[ "$para" == *'its `author_association` is OWNER, MEMBER or COLLABORATOR (an outsider-authored body never triggers)'* ]] || emit author-association
   [[ "$para" == *'must hold no `..` and no leading `-`'* && "$para" == *'be read with `git show origin/main:<path>`'* ]] || emit plan-path-rules
   [[ "$para" == *'under `knowledge-base/project/plans/` or `knowledge-base/project/specs/`'* && "$para" == *'a prefix sibling such as `plans-x` does not match'* && "$para" == *'hold no `/archive/` segment'* ]] || emit plan-path-prefix
@@ -186,6 +186,29 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'stall sentences of standing-delegation.md section 6'* ]] || emit stall-section
   [[ "$para" == *'found in the brief itself, in the open epic'* ]] || emit routing-widened
   [[ "$para" == *'in none of those three places'* ]] || emit closing-widened
+
+  # Delegation-safety clauses (second-round review): WHOLE-CLAUSE pins that include the verb, so inverting what a
+  # rule says (not only deleting a token) goes RED. One property per clause; M56..M68 invert one each.
+  [[ "$para" == *'still stands and is never discharged on a guess'* ]] || emit no-guess-discharge
+  [[ "$para" == *'the calling skill (never the CTO) record it with `render`'* ]] || emit render-not-cto
+  [[ "$para" == *'(a record that is not `valid` is deleted)'* ]] || emit invalid-record-deleted
+  [[ "$para" == *'The CTO re-runs `verify` immediately before every delegated act'* ]] || emit verify-before-each-act
+  [[ "$para" == *"ship's own auto-merge arming of its PR is not a delegated act"* ]] || emit ship-arming-not-delegated
+  [[ "$para" == *'and leaves every hold standing'* ]] || emit stall-holds-stand
+  [[ "$para" == *'falls through to normal routing, and its holds still stand'* ]] || emit paraphrase-holds-stand
+  [[ "$para" == *'disarm every auto-merge the CTO armed (`gh pr merge <N> --disable-auto`)'* ]] || emit disarm-auto-merge
+  [[ "$para" == *'do not ask. No delegation exists, so every production act stays a hold'* ]] || emit headless-no-delegation
+  [[ "$para" == *'the expiry (30 days at most)'* ]] || emit expiry-30-days-at-most
+  [[ "$para" == *'asks once unless a recorded No is on it'* ]] || emit later-session-asks-once
+  [[ "$para" == *'under a runbook path, never in an archived folder'* ]] || emit envelope-not-archived
+
+  # Headless dedupe recipe (REST: `gh issue list --json` has no authorAssociation field), the reply line, and the
+  # lifetime of a recorded No.
+  [[ "$para" == *"gh api 'repos/{owner}/{repo}/issues?state=open&labels=action-required&per_page=100'"* && "$para" == *'to items without `.pull_request`'* && "$para" == *"whose \`.author_association\` is OWNER or MEMBER (or whose \`.user.login\` is the repo's bot)"* && "$para" == *'names the exact epic number'* && "$para" == *'has no `authorAssociation` field'* ]] || emit headless-dedupe-recipe
+  [[ "$para" == *'the issue body ends with `Reply Yes or No in a comment here, or tell the agent in your next session`'* ]] || emit headless-issue-reply-line
+  [[ "$para" == *'that No ends when the Scope or the expiry changes (a new issue or a comment that states the new Scope is asked once again)'* ]] || emit no-ends-on-scope-change
+  [[ "$para" == *"records that No as a comment on the epic's \`action-required\` issue"* ]] || emit attached-no-recorded
+  [[ "$para" == *'a standing headless hold issue is surfaced again by the next attached session'* ]] || emit standing-issue-resurfaced
 
   # Location: after the Step 1 heading, before the start marker, and never between the markers.
   start_ln="$(awk -v s="$BLOCK_START" 'index($0, s) { print NR; exit }' "$f")"
@@ -244,7 +267,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -478,6 +501,48 @@ para_awk sub "$GO_MD" 'must be written' 'may be written' > "$M/m54.md"
 mrow "M54 owner-reserved conversion becomes optional" "$M/m54.md" reserved-conversion
 para_awk sub "$GO_MD" 'standing-delegation.md section 6' 'standing-delegation.md section 7' > "$M/m55.md"
 mrow "M55 the stall sentences point at the wrong section" "$M/m55.md" stall-section
+# M56..M75: whole-clause inversions of the delegation-safety rules and the dedupe/reply/No-lifetime clauses added in the
+# second review round. Each mutates ONE clause inside the paragraph; `mrow` also asserts the mutation landed.
+para_awk sub "$GO_MD" 'is never discharged on a guess' 'is discharged on a guess' > "$M/m56.md"
+mrow "M56 a fail-closed hold is discharged on a guess" "$M/m56.md" no-guess-discharge
+para_awk sub "$GO_MD" '(never the CTO)' '(or the CTO)' > "$M/m57.md"
+mrow "M57 the CTO may record the render" "$M/m57.md" render-not-cto
+para_awk sub "$GO_MD" '`valid` is deleted' '`valid` is kept' > "$M/m58.md"
+mrow "M58 an invalid record is kept" "$M/m58.md" invalid-record-deleted
+para_awk sub "$GO_MD" 're-runs `verify` immediately before every delegated act' 'runs `verify` once at the start' > "$M/m59.md"
+mrow "M59 verify runs once at the start" "$M/m59.md" verify-before-each-act
+para_awk sub "$GO_MD" 'is not a delegated act' 'is a delegated act' > "$M/m60.md"
+mrow "M60 ship's auto-merge arming becomes a delegated act" "$M/m60.md" ship-arming-not-delegated
+para_awk sub "$GO_MD" 'leaves every hold standing' 'discharges every hold' > "$M/m61.md"
+mrow "M61 a stalled delegation discharges every hold" "$M/m61.md" stall-holds-stand
+para_awk sub "$GO_MD" 'its holds still stand' 'its holds are discharged' > "$M/m62.md"
+mrow "M62 a paraphrased handoff discharges its holds" "$M/m62.md" paraphrase-holds-stand
+para_awk sub "$GO_MD" 'disarm every auto-merge' 'leave it armed: every auto-merge' > "$M/m63.md"
+mrow "M63 the stop sequence leaves the auto-merge armed" "$M/m63.md" disarm-auto-merge
+para_awk sub "$GO_MD" 'never call AskUserQuestion' 'always call AskUserQuestion' > "$M/m64.md"
+mrow "M64 a technical hold always asks the operator" "$M/m64.md" no-askuserquestion-for-technical-hold
+para_awk sub "$GO_MD" 'No delegation exists, so every production act stays a hold' 'A delegation is assumed, so every production act is delegable' > "$M/m65.md"
+mrow "M65 a headless run assumes a delegation" "$M/m65.md" headless-no-delegation
+para_awk sub "$GO_MD" '30 days at most' '30 days at least' > "$M/m66.md"
+mrow "M66 the expiry bound becomes a minimum" "$M/m66.md" expiry-30-days-at-most
+para_awk sub "$GO_MD" 'asks once unless a recorded No' 'never asks' > "$M/m67.md"
+mrow "M67 a later attached session never asks" "$M/m67.md" later-session-asks-once
+para_awk sub "$GO_MD" 'never in an archived folder' 'in an archived folder' > "$M/m68.md"
+mrow "M68 the envelope file may live in an archived folder" "$M/m68.md" envelope-not-archived
+para_awk sub "$GO_MD" 'without `.pull_request`' 'with `.pull_request`' > "$M/m69.md"
+mrow "M69 the dedupe recipe keeps only pull requests" "$M/m69.md" headless-dedupe-recipe
+para_awk sub "$GO_MD" 'whose `.author_association` is OWNER or MEMBER' 'whose `.author_association` is any value' > "$M/m70.md"
+mrow "M70 the dedupe recipe matches any author" "$M/m70.md" headless-dedupe-recipe
+para_awk sub "$GO_MD" 'labels=action-required' 'labels=bug' > "$M/m71.md"
+mrow "M71 the dedupe recipe queries the wrong label" "$M/m71.md" headless-dedupe-recipe
+para_awk sub "$GO_MD" 'the issue body ends with' 'the issue body starts with' > "$M/m72.md"
+mrow "M72 the reply line is no longer the last line" "$M/m72.md" headless-issue-reply-line
+para_awk sub "$GO_MD" 'that No ends when the Scope or the expiry changes' 'that No never ends' > "$M/m73.md"
+mrow "M73 a recorded No never ends" "$M/m73.md" no-ends-on-scope-change
+para_awk sub "$GO_MD" 'records that No as a comment' 'does not record that No as a comment' > "$M/m74.md"
+mrow "M74 the attached No is not recorded" "$M/m74.md" attached-no-recorded
+para_awk sub "$GO_MD" 'is surfaced again by the next attached session' 'is left unread' > "$M/m75.md"
+mrow "M75 a standing headless issue is left unread" "$M/m75.md" standing-issue-resurfaced
 # N14: with base == HEAD the anchor is SKIPPED (printed reason) and a changed file is still caught against it
 ck
 _o="$(evaluate "$M/m1.md" "$HEAD_SHA" skip)"; _r=$?
@@ -546,7 +611,7 @@ ctl_passes row "ctl-late" "$GO_MD" "$BASE_REF" none                      || { pr
 #     the same commit that adds rows, never ahead of them.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
 EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 ))
-ABSOLUTE_FLOOR=147
+ABSOLUTE_FLOOR=204
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \

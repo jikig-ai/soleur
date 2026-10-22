@@ -4,7 +4,8 @@
 # narrower /ship Phase 5.5 regex in PR #4227, and that the command-trigger
 # regex catches `gh pr ready` + `gh pr merge --auto` (and chained forms).
 #
-# The regex rows mirror the hook's own regex, DERIVED from it at runtime. The
+# The regex rows mirror the hook's own regexes (DETECT_RE and the command trigger CMD_RE),
+# both DERIVED from it at runtime. The
 # "REAL hook" rows run the shipped hook with a stub gh on a private PATH dir (no
 # network), so an allow/deny verdict is the hook's, not a restated copy's.
 
@@ -58,14 +59,35 @@ if [[ -z "$DETECT_LINE" ]]; then
   exit 1
 fi
 eval "$DETECT_LINE"
-# The shared wrapper-boundary fragment (#10248) — same source the gate's own
-# incidents.sh chain provides; restated here so CMD_RE stays a faithful copy.
+# The shared wrapper-boundary fragment (#10248) — the same source the gate's own
+# incidents.sh chain provides, so the hook's trigger line evaluates to the same regex here.
 # unset-first per the lib contract: an inherited env value must not masquerade
 # as the loaded fragment after a failed source.
 # shellcheck source=../../plugins/soleur/scripts/lib/wrapper-boundary.sh
 unset SOLEUR_ENV_ASN_RE SOLEUR_LAUNCHER_RE SOLEUR_RTK_RE SOLEUR_BOUNDARY_PFX SOLEUR_BOUNDARY_PFX_LOADED
 source "$SCRIPT_DIR/../../plugins/soleur/scripts/lib/wrapper-boundary.sh" 2>/dev/null || true
-CMD_RE='(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)'
+# CMD_RE is DERIVED from the hook too, never restated. The hook's trigger is the one
+# `if ! grep -qE <pattern> <<<"$SCAN"; then` line; the pattern is a shell word that splices
+# in ${SOLEUR_BOUNDARY_PFX:-}, so evaluate it as an assignment (as DETECT_RE is above).
+# Fail loudly unless exactly one such line exists and it carries a non-empty pattern.
+TRIGGER_PAT='^if ! grep -qE .* <<<"[$]SCAN"; then$'
+TRIGGER_N=$(grep -cE "$TRIGGER_PAT" "$HOOK" || true)
+if [[ "$TRIGGER_N" != 1 ]]; then
+  echo "FATAL: expected exactly one 'if ! grep -qE <pattern> <<<\"\$SCAN\"; then' trigger line in the hook, found $TRIGGER_N" >&2
+  exit 1
+fi
+TRIGGER_LINE=$(grep -E "$TRIGGER_PAT" "$HOOK")
+TRIGGER_ARG=${TRIGGER_LINE#'if ! grep -qE '}
+TRIGGER_ARG=${TRIGGER_ARG%' <<<"$SCAN"; then'}
+if [[ "$TRIGGER_ARG" != \'* || "$TRIGGER_ARG" != *\' ]]; then
+  echo "FATAL: the hook's trigger pattern is not a quoted word: $TRIGGER_ARG" >&2
+  exit 1
+fi
+eval "CMD_RE=$TRIGGER_ARG"
+if [[ -z "$CMD_RE" || "$CMD_RE" != *'gh\s+pr\s+'* ]]; then
+  echo "FATAL: derived CMD_RE is empty or lacks the gh pr arm: $CMD_RE" >&2
+  exit 1
+fi
 
 t() {
   TOTAL=$((TOTAL + 1))
@@ -180,10 +202,15 @@ fi
 
 # --- REAL hook runs (stub gh on a private PATH dir) -------------------------
 # The mirror rows above prove the regex; these prove the SHIPPED hook allows the
-# Delegated-act form and still denies the Operator forms. gh is a stub that logs
-# every argv, answers only the exact calls the hook makes, and exits 64 on any other
-# argv. The hook swallows gh failures (fail-open), so an allow is only evidence when
-# the log proves the PR-body call was reached and nothing unexpected was called.
+# Delegated-act form, still denies the Operator forms, fires on BOTH trigger arms
+# (`gh pr ready`, `gh pr merge --auto`) and not on a plain merge, and clears a
+# match only through the Tracks companion path. gh is a stub that logs every argv,
+# answers only the exact calls the hook makes, and exits 64 on any other argv. The
+# hook swallows gh failures (fail-open), so a verdict is only evidence when the log
+# proves which calls were made and that nothing unexpected was called.
+#   issue #5: OPEN, body carries the deferred-automation sentinel
+#   issue #6: CLOSED
+#   issue #7: OPEN, body lacks the sentinel
 STUB_DIR=$(mktemp -d -p "${SOLEUR_TEST_INCIDENT_ROOT:?incident sandbox not initialised}" stubgh-XXXXXX)
 GH_STUB_LOG="$STUB_DIR/calls.log"
 GH_STUB_BAD="$STUB_DIR/unexpected.log"
@@ -195,24 +222,41 @@ case "$*" in
   "pr view 7 --json body --jq .body") cat "$GH_STUB_BODY" ;;
   "issue view 5 --json state --jq .state") echo OPEN ;;
   "issue view 5 --json body --jq .body") echo "deferred-automation backlog item" ;;
+  "issue view 6 --json state --jq .state") echo CLOSED ;;
+  "issue view 7 --json state --jq .state") echo OPEN ;;
+  "issue view 7 --json body --jq .body") echo "an ordinary feature request, no deferral context" ;;
   *) printf '%s\n' "$*" >> "$GH_STUB_BAD"; echo "gh stub: unexpected argv: $*" >&2; exit 64 ;;
 esac
 STUB
 chmod +x "$STUB_DIR/gh"
 
-# h <label> <expected: allow|deny> <PR body (may be multi-line)>
+PR_BODY_CALL="pr view 7 --json body --jq .body"
+
+# h <label> <expected: allow|deny> <PR body (may be multi-line)> [command] [required log line ...]
+#   command defaults to `gh pr ready 7`. Required log lines default to the PR-body call;
+#   a single `--none` asserts the stub was NEVER called (the hook exited at the trigger).
 h() {
   TOTAL=$((TOTAL + 1))
-  local label="$1" expected="$2" body="$3" json out got="allow" why=""
+  local label="$1" expected="$2" body="$3" cmd="${4:-gh pr ready 7}" json out got="allow" why="" line
+  shift 3 || true
+  shift || true
+  local required=("$@")
+  [[ ${#required[@]} -gt 0 ]] || required=("$PR_BODY_CALL")
   printf '%s\n' "$body" > "$GH_STUB_BODY"
   : > "$GH_STUB_LOG"; : > "$GH_STUB_BAD"
-  json=$(jq -nc --arg c "gh pr ready 7" --arg d "$STUB_DIR" \
+  json=$(jq -nc --arg c "$cmd" --arg d "$STUB_DIR" \
     '{tool_name: "Bash", tool_input: {command: $c}, cwd: $d}')
   out=$(env -u SOLEUR_SKIP_OPERATOR_STEP_GATE PATH="$STUB_DIR:$PATH" \
     GH_STUB_LOG="$GH_STUB_LOG" GH_STUB_BAD="$GH_STUB_BAD" GH_STUB_BODY="$GH_STUB_BODY" \
     bash "$HOOK" <<<"$json" 2>/dev/null || true)
   [[ "$(jq -r '.decision // empty' <<<"$out" 2>/dev/null || true)" == "deny" ]] && got="deny"
-  grep -qxF "pr view 7 --json body --jq .body" "$GH_STUB_LOG" || why="stub never saw the PR-body call; "
+  if [[ "${required[0]}" == "--none" ]]; then
+    [[ ! -s "$GH_STUB_LOG" ]] || why="stub was called but the hook should have exited at the trigger: $(head -1 "$GH_STUB_LOG"); "
+  else
+    for line in "${required[@]}"; do
+      grep -qxF "$line" "$GH_STUB_LOG" || why="${why}stub never saw '$line'; "
+    done
+  fi
   [[ ! -s "$GH_STUB_BAD" ]] || why="${why}stub saw an unexpected argv: $(head -1 "$GH_STUB_BAD"); "
   if [[ "$got" == "$expected" && -z "$why" ]]; then
     PASS=$((PASS + 1))
@@ -234,8 +278,26 @@ h "REAL hook: '- **Operator: ...**' heading bullet is denied" deny \
   "- **Operator: flip under Standing Delegation ${DELEG_URL}**"
 h "REAL hook: Delegated-act bullet does not shield an Operator bullet in the same body" deny \
   "$(printf '%s\n%s' "- ${DELEG_BULLET}" "- Operator confirms the dashboard")"
-h "REAL hook: Operator bullet with an OPEN deferred-automation Tracks companion is allowed (stub control)" allow \
-  "- Operator runs the flip Tracks #5"
+
+# Trigger arms, through the shipped hook: `gh pr merge --auto` is gated like `gh pr ready`,
+# and a plain `gh pr merge` (no --auto) is NOT gated even over a body the gate would deny.
+h "REAL hook: 'gh pr merge 7 --auto' with an Operator bullet is denied (merge --auto arm)" deny \
+  "- Operator confirms the dashboard" "gh pr merge 7 --auto"
+h "REAL hook: 'gh pr merge 7 --squash' (no --auto) is NOT gated, even over an Operator bullet" allow \
+  "- Operator confirms the dashboard" "gh pr merge 7 --squash" --none
+
+# Companion path: a match is cleared only by (Tracks|Refs) #N on an OPEN issue whose body
+# carries the sentinel. The control row proves the companion path ran (both issue-view calls
+# are in the log), so its allow is not the vacuous allow of a gate that never looked.
+h "REAL hook: Operator bullet with an OPEN deferred-automation Tracks companion is allowed (control; state AND body checked)" allow \
+  "- Operator runs the flip Tracks #5" "" \
+  "$PR_BODY_CALL" "issue view 5 --json state --jq .state" "issue view 5 --json body --jq .body"
+h "REAL hook: Operator bullet whose Tracks issue is CLOSED is denied (state call seen in the log)" deny \
+  "- Operator runs the flip Tracks #6" "" \
+  "$PR_BODY_CALL" "issue view 6 --json state --jq .state"
+h "REAL hook: Operator bullet whose Tracks issue is OPEN but lacks the sentinel is denied (state and body checked)" deny \
+  "- Operator runs the flip Tracks #7" "" \
+  "$PR_BODY_CALL" "issue view 7 --json state --jq .state" "issue view 7 --json body --jq .body"
 rm -rf "$STUB_DIR"
 
 # --- Hook script syntax check (no real invocation; lacks gh + PR context) --
@@ -253,8 +315,8 @@ echo "=== $PASS/$TOTAL pass ($FAIL fail) ==="
 
 # Anti-vacuity floor: a suite that silently stops running rows (a sourced helper that
 # exits early, a deleted block) must not read as green. Raise this whenever rows are
-# added, derived from a green run's TOTAL (37 at the R4 edit).
-ROW_FLOOR=37
+# added, derived from a green run's TOTAL (41 at the second-round review edit).
+ROW_FLOOR=41
 if (( TOTAL < ROW_FLOOR )); then
   echo "FAIL: only $TOTAL rows ran; the floor is $ROW_FLOOR (rows were dropped or never ran)"
   exit 1

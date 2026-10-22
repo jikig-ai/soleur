@@ -8,18 +8,9 @@
 //
 // Test harness: bun:test (matches sibling tests in plugins/soleur/test/*.ts).
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { resolve, join } from "path";
-import { tmpdir } from "os";
-import {
-  readFileSync,
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  chmodSync,
-  rmSync,
-} from "fs";
+import { describe, test, expect, beforeAll } from "bun:test";
+import { resolve } from "path";
+import { readFileSync, existsSync } from "fs";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -322,146 +313,11 @@ describe("TC-11: copy/copies verb-morphology", () => {
 });
 
 describe("TC-12: delegated-act authoring form (ruling F1 + R4, detection unchanged)", () => {
-  const DELEGATION_URL =
-    "https://github.com/example-org/example-repo/issues/1#issuecomment-1";
-  const ENVELOPE = "example/envelope.md#Example";
-  const COMMAND_LINE = "example --flag value";
-
-  // The gate counts phrasing. A CTO-performed act under a recorded Standing
-  // Delegation is written in the form below, which does not start with the word
-  // Operator, so it is not detected. A bullet that starts with Operator and a
-  // verb is still detected whatever URL it cites: there is no URL exemption.
-  const DELEGATED_BULLET =
-    `- Delegated act (CTO, Standing Delegation ${DELEGATION_URL}, envelope ${ENVELOPE}, command "${COMMAND_LINE}"): flip the link`;
-  const OPERATOR_VERB_BULLET =
-    `- Operator runs the flip under Standing Delegation ${DELEGATION_URL}`;
-  const OPERATOR_COLON_BULLET =
-    `- **Operator: flip under Standing Delegation ${DELEGATION_URL}**`;
-
-  // The TS DETECT_REGEX above is a deliberately narrow mirror (it has no
-  // `Operator:` arm), so a "0 matches" assertion on it cannot see the hook's wider
-  // regex and proves nothing about the form. The allow/deny verdicts below come from
-  // the REAL hook: the shipped script, run with a stub gh on a private PATH dir and a
-  // PreToolUse JSON on a piped (never inherited) stdin.
-  const HOOK = resolve(REPO_ROOT, ".claude/hooks/ship-operator-step-gate.sh");
-  let scratch: string;
-
-  beforeAll(() => {
-    scratch = mkdtempSync(join(tmpdir(), "ship-gate-realhook-"));
-    mkdirSync(join(scratch, "incidents", ".claude"), { recursive: true });
-    writeFileSync(
-      join(scratch, "gh"),
-      [
-        "#!/usr/bin/env bash",
-        'printf \'%s\\n\' "$*" >> "$GH_STUB_LOG"',
-        'case "$*" in',
-        '  "pr view 7 --json body --jq .body") cat "$GH_STUB_BODY" ;;',
-        '  "issue view 5 --json state --jq .state") echo OPEN ;;',
-        '  "issue view 5 --json body --jq .body") echo "deferred-automation backlog item" ;;',
-        '  *) printf \'%s\\n\' "$*" >> "$GH_STUB_BAD"; echo "gh stub: unexpected argv: $*" >&2; exit 64 ;;',
-        "esac",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(join(scratch, "gh"), 0o755);
-  });
-
-  afterAll(() => {
-    if (scratch) rmSync(scratch, { recursive: true, force: true });
-  });
-
-  // Runs the real hook against `gh pr ready 7` with the given PR body. The hook
-  // fails OPEN when gh fails, so an allow only counts as evidence when the stub log
-  // proves the PR-body call was reached and no unexpected argv was seen.
-  function runRealHook(body: string): {
-    decision: "allow" | "deny";
-    reachedBodyCall: boolean;
-    unexpected: string;
-    stdout: string;
-  } {
-    const bodyFile = join(scratch, "body.md");
-    const logFile = join(scratch, "calls.log");
-    const badFile = join(scratch, "unexpected.log");
-    writeFileSync(bodyFile, body + "\n");
-    writeFileSync(logFile, "");
-    writeFileSync(badFile, "");
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined && k !== "SOLEUR_SKIP_OPERATOR_STEP_GATE") env[k] = v;
-    }
-    env.PATH = `${scratch}:${process.env.PATH ?? ""}`;
-    env.GH_STUB_LOG = logFile;
-    env.GH_STUB_BAD = badFile;
-    env.GH_STUB_BODY = bodyFile;
-    env.INCIDENTS_REPO_ROOT = join(scratch, "incidents");
-    const input = JSON.stringify({
-      tool_name: "Bash",
-      tool_input: { command: "gh pr ready 7" },
-      cwd: scratch,
-    });
-    const r = Bun.spawnSync({
-      cmd: ["bash", HOOK],
-      stdin: new TextEncoder().encode(input),
-      stdout: "pipe",
-      stderr: "pipe",
-      env,
-    });
-    const stdout = r.stdout.toString();
-    let decision: "allow" | "deny" = "allow";
-    try {
-      if (JSON.parse(stdout).decision === "deny") decision = "deny";
-    } catch {
-      // empty stdout (allow) is not JSON
-    }
-    return {
-      decision,
-      reachedBodyCall: readFileSync(logFile, "utf8")
-        .split("\n")
-        .includes("pr view 7 --json body --jq .body"),
-      unexpected: readFileSync(badFile, "utf8"),
-      stdout,
-    };
-  }
-
-  test("REAL hook: the Delegated act (CTO, ..., command \"...\") bullet is allowed", () => {
-    const r = runRealHook(DELEGATED_BULLET);
-    expect(r.unexpected).toBe("");
-    expect(r.reachedBodyCall).toBe(true);
-    expect(r.decision).toBe("allow");
-  });
-
-  test("REAL hook: an Operator-verb bullet citing a delegation URL is denied (no URL exemption)", () => {
-    const r = runRealHook(OPERATOR_VERB_BULLET);
-    expect(r.unexpected).toBe("");
-    expect(r.reachedBodyCall).toBe(true);
-    expect(r.decision).toBe("deny");
-  });
-
-  test("REAL hook: a bold `Operator:` heading bullet is denied (the arm the TS mirror cannot see)", () => {
-    const r = runRealHook(OPERATOR_COLON_BULLET);
-    expect(r.unexpected).toBe("");
-    expect(r.reachedBodyCall).toBe(true);
-    expect(r.decision).toBe("deny");
-  });
-
-  test("REAL hook: the Delegated-act bullet does not shield an Operator bullet in the same body", () => {
-    const r = runRealHook([DELEGATED_BULLET, "- Operator confirms the dashboard"].join("\n"));
-    expect(r.reachedBodyCall).toBe(true);
-    expect(r.decision).toBe("deny");
-  });
-
-  test("REAL hook: the Operator-verb bullet is cleared only by an OPEN deferred-automation Tracks companion (stub control)", () => {
-    const r = runRealHook(`${OPERATOR_VERB_BULLET} Tracks #5`);
-    expect(r.unexpected).toBe("");
-    expect(r.reachedBodyCall).toBe(true);
-    expect(r.decision).toBe("allow");
-  });
-
-  test("mirror: an Operator-verb bullet citing a delegation URL is counted undeferred by the TS mirror's own logic", () => {
-    expect(detectMatches(OPERATOR_VERB_BULLET).length).toBe(1);
-    expect(undeferredCount(OPERATOR_VERB_BULLET)).toBe(1);
-  });
-
+  // The allow/deny verdicts for the form come from the REAL hook, run with a stub gh
+  // in .claude/hooks/ship-operator-step-gate.test.sh (registered in
+  // scripts/suite-shard-legs.tsv, so CI runs it). The TS DETECT_REGEX above is a
+  // deliberately narrow mirror (no `Operator:` arm) and cannot see the hook's wider
+  // regex, so this section pins only the ship paragraph that tells the agent what to do.
   test("the Undeferred section's Delegated-acts paragraph pins whole clauses of the R4 form", () => {
     // Section only: slice at the next gate heading so text in the Soak-Gated or
     // Technical-Ruling sections cannot satisfy these, then slice again at the
@@ -478,21 +334,35 @@ describe("TC-12: delegated-act authoring form (ruling F1 + R4, detection unchang
     expect(para).toContain(
       'Delegated act (CTO, Standing Delegation <comment-url>, envelope <path#title>, command "<exact envelope line>"): <act in words>',
     );
-    // The envelope-bound verifier call, including --command.
+    // The envelope-bound verifier call, including --command, and that it is a prose step.
     expect(para).toContain("delegation-verify.sh");
     expect(para).toContain(
       'verify --delegation <comment-url> --envelope <path#title> --command "<exact envelope line>"',
     );
-    // A non-zero exit makes the bullet an operator step.
+    expect(para).toContain("As a prose step (not a hook exemption)");
+    // A non-zero exit makes the bullet an operator step: the full consequence sentence.
     expect(para).toContain("a non-zero exit (1 invalid, 2 unverifiable)");
     expect(para).toContain("makes the bullet an operator step");
-    // No exemption beyond the form.
+    expect(para).toContain(
+      "so strip the form and give the bullet a `Tracks` companion, or hold the PR",
+    );
+    // No exemption beyond the form: an Operator bullet keeps its Tracks companion even
+    // when it cites a delegation URL.
     expect(para).toContain("No URL or keyword exempts any other bullet");
-    // An act that already ran: receipt URL, the ran row, audit mode with the run time.
+    expect(para).toContain(
+      "still needs its `Tracks` companion even when it cites a delegation URL",
+    );
+    // An act that already ran: receipt URL, the ran row, audit mode with the run time,
+    // in the one format the verifier accepts.
     expect(para).toContain("receipt URL");
     expect(para).toContain("`ran` row");
-    expect(para).toContain("--audit --at <ISO time the act ran>");
+    expect(para).toContain("--audit --at <time the act ran>");
+    expect(para).toContain("UTC, ending in Z, format YYYY-MM-DDTHH:MM:SSZ");
     expect(para).toContain("standing-delegation.md");
+    // The agent compares the three and treats any mismatch as an operator step.
+    expect(para).toContain(
+      "the ship agent compares the quoted envelope line, the act in words, and (for an act that already ran) the `ran` row, and treats any mismatch as an operator step",
+    );
     // The exclusions, generic rather than hard-coded ids only, and the owner-human acts.
     expect(para).toContain(
       "Never use the form for any act the envelope or the Standing Delegation Excluded list names",
@@ -500,8 +370,10 @@ describe("TC-12: delegated-act authoring form (ruling F1 + R4, detection unchang
     expect(para).toContain("any act whose text names an owner-human act");
     expect(para).toContain("SIGNED BY OWNER");
     expect(para).toContain("such a bullet is an operator step whatever its prefix");
-    // The reversed clause must not be present.
+    // The reversed clauses must not be present.
     expect(para).not.toContain("Always use the form");
+    expect(para).not.toContain("exempt when it cites a delegation URL");
+    expect(para).not.toContain("keep the form");
     // The detection regex itself stays untouched by the form.
     expect(undeferred).toContain("DETECT_RE=");
   });

@@ -135,10 +135,17 @@ see what moved.
   environment and origins. These are key-derived values, not secrets in themselves, but the owner-signed leg-2 record (#10538) should
   list them. Not verified: which sync kind (in-band or out-of-band) Inngest server v1.45.1 sends on the `sdk_url` poll, and whether this
   deployment's SDK runs in the mode that fills `inspection`.
-- **The go is procedural.** `infra-privileged` has no required reviewer (ADR-241), so the authorization for a flag write is a process
-  control, with authority per the runbook Production Envelope: form (a) or (b); the typo-guard on `inngest-link-flip.yml` is not an
-  authorization.
+- **The owner's go is procedural.** `infra-privileged` has no required reviewer (ADR-241), so the dated go for a flag write is a process
+  control; the typo-guard on `inngest-link-flip.yml` is not an authorization.
 - **Filed follow-ups.** #10538 (`sdk_url` poll), #10539 (loopback bind), #10540 (key rotation apply route, including the event-key
   decision), #10541 (TLS key out of the server environment), #10542 (Stripe send swallow, P1, blocks the host-replace go), #10543
   (dashboard send), #10544 (`inngest-host-replace` confirm and id-pin), #10545 (nft loader idempotency), #10556 (Sentry alert rule for
   `op=inngest-link`), #10557 (no no-SSH repair for a wedged `/mnt/data/inngest-link`).
+
+## Addendum (2026-10-22, #10783)
+
+Authority for the two flag writes on `inngest-link-flip.yml` is split. The `flip` is an in-session per-command go (form (b)) only
+because `delegation-verify.sh` denies `confirm=`, so no valid recorded Standing Delegation can cover it. `action=off` takes either
+form, before A5 (the signing-key rotation): after A5 the new key would travel over plaintext `:8288` if the link were turned off, so
+`action=off` after A5 is form (b) only. See "Production Envelope for the post-merge acts" in the Inngest server runbook. The dated go
+quoted in the Consequences sentence "The owner's go is procedural" is superseded by the runbook's authority wording.
