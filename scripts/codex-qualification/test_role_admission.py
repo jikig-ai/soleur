@@ -1,6 +1,8 @@
 """Exact-role execution authority tests; pure requests, no daemon or startup."""
 import copy
 import json
+from pathlib import Path
+import tempfile
 import unittest
 from api_policy import Policy, Refused
 
@@ -118,6 +120,26 @@ class RoleAdmission(unittest.TestCase):
         with self.assertRaises(Refused):
             request(policy(profiles()), {'NetworkingConfig': {'EndpointsConfig': {
                     'fixture-internal': {'Aliases': ['foreign.invalid']}}}})
+
+    def test_admitted_host_bind_is_rewritten_to_its_canonical_scratch_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / 'tls-material'
+            target.mkdir()
+            alias = root / 'tls-alias'
+            alias.symlink_to(target, target_is_directory=True)
+            role_profiles = profiles()
+            role_profiles[NAME]['host']['Binds'] = [f'{alias}:/qualification/tls:ro']
+            p = Policy('fixture', 'fixture-internal', root, {IMAGE: IMAGE},
+                       role_profiles=role_profiles)
+            p.admit('POST', '/networks/create', json.dumps({'Name': p.network,
+                    'Labels': {'com.supabase.cli.project': p.project}}).encode())
+            p.created_network(p.network, {'Id': 'b' * 64})
+
+            _, body = request(p)
+
+            self.assertEqual(json.loads(body)['HostConfig']['Binds'],
+                             [f'{target}:/qualification/tls:ro'])
 
 if __name__ == '__main__':
     unittest.main()

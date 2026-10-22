@@ -198,13 +198,19 @@ class Policy:
             self.require(host.get('LogConfig') in (None, {}, {'Type': 'json-file', 'Config': {}}),
                          'Daemon logging override refused')
             host['LogConfig'] = {'Type': 'json-file', 'Config': {'max-size': '10m', 'max-file': '1'}}
-            for binding in (host.get('Binds') or []):
-                src = binding.split(':', 1)[0]
+            canonical_binds = []
+            for binding in (profile['host'].get('Binds') or []):
+                parts = binding.split(':')
+                src = parts[0]
                 if src.startswith('/'):
-                    self.require(Path(src).resolve().is_relative_to(self.scratch),
+                    resolved = Path(src).resolve()
+                    self.require(resolved.is_relative_to(self.scratch),
                                  'Host bind is outside task scratch')
+                    parts[0] = str(resolved)
                 else:
                     self.require(src in self.volume_receipts, 'Unowned named volume refused')
+                canonical_binds.append(':'.join(parts))
+            host['Binds'] = canonical_binds
             self.require(not host.get('Mounts'), 'Unreviewed Mounts contract refused')
             for mappings in (host.get('PortBindings') or {}).values():
                 for mapping in mappings:

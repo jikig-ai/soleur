@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import ssl
 import subprocess
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from prepare import browser_contract
 
 
@@ -139,6 +139,7 @@ class TLSProxy:
     def admit(self, method, target, headers):
         require(method in ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'), 'Proxy method refused')
         require(isinstance(target, str) and target.startswith('/') and not target.startswith('//') and
+                '#' not in target and
                 not any(ord(char) < 33 or char == '\\' for char in target), 'Only unambiguous origin-form target admitted')
         parsed = urlsplit(target)
         require(not parsed.scheme and not parsed.netloc and not parsed.fragment, 'Forward proxy target refused')
@@ -158,7 +159,9 @@ class TLSProxy:
         lengths = values.get('content-length', [])
         require(not lengths or (re.fullmatch(r'[0-9]+', lengths[0]) and int(lengths[0]) <= self.LIMIT),
                 'Unbounded/invalid request length refused')
-        return target
+        safe_path = quote(parsed.path, safe="/%:@!$&'()*+,;=-._~")
+        safe_query = quote(parsed.query, safe="/%?:@!$&'()*+,;=-._~")
+        return safe_path + ('?' + safe_query if parsed.query else '')
 
     def redirect(self, location):
         require(isinstance(location, str) and location and not any(ord(char) < 33 or char == '\\' for char in location),
@@ -180,7 +183,7 @@ class TLSProxy:
             def handle_request(self):
                 connection = None
                 try:
-                    proxy.admit(self.command, self.path, list(self.headers.items()))
+                    target = proxy.admit(self.command, self.path, list(self.headers.items()))
                     body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
                     require(len(body) == int(self.headers.get('Content-Length', '0')), 'Early request EOF')
                     headers = {name: value for name, value in self.headers.items()
@@ -188,7 +191,7 @@ class TLSProxy:
                                ('host', 'x-forwarded-for', 'x-forwarded-proto', 'content-length')}
                     headers.update({'Host': proxy.hostname, 'X-Forwarded-Proto': 'https'})
                     connection = http.client.HTTPConnection(proxy.upstream_ip, proxy.upstream_port, timeout=5)
-                    connection.request(self.command, self.path, body, headers)
+                    connection.request(self.command, target, body, headers)
                     response = connection.getresponse()
                     response_headers = response.getheaders()
                     for name, value in response_headers:

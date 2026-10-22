@@ -115,6 +115,9 @@ class LocalTLS(unittest.TestCase):
     def test_http_boundary_has_no_general_proxy_or_redirect_escape(self):
         proxy = TLSProxy(self.hostname, '172.28.5.3', 8000)
         self.assertEqual(proxy.admit('GET', '/auth/v1/settings', [('Host', self.hostname)]), '/auth/v1/settings')
+        self.assertEqual(proxy.admit('GET', '/auth/v1/caf\N{LATIN SMALL LETTER E WITH ACUTE}?next=r\N{LATIN SMALL LETTER E WITH ACUTE}sum\N{LATIN SMALL LETTER E WITH ACUTE}',
+                                     [('Host', self.hostname)]),
+                         '/auth/v1/caf%C3%A9?next=r%C3%A9sum%C3%A9')
         for method, path, headers in [
             ('CONNECT', self.hostname + ':443', [('Host', self.hostname)]),
             ('GET', 'https://foreign.invalid/', [('Host', self.hostname)]),
@@ -154,12 +157,12 @@ class LocalTLS(unittest.TestCase):
         connection = Mock()
         connection.getresponse.return_value = response
         upstream = Mock(return_value=connection)
-        status, actual = self.https_response(('GET /fixture HTTP/1.0\r\nHost: ' + self.hostname +
+        status, actual = self.https_response(('GET /fixture%20path?name=a%20b HTTP/1.0\r\nHost: ' + self.hostname +
                                              '\r\nConnection: close\r\n\r\n').encode(), upstream)
         self.assertEqual(status, 200)
         self.assertEqual(actual, payload)
         upstream.assert_called_once_with('172.28.5.3', 8000, timeout=5)
-        connection.request.assert_called_once_with('GET', '/fixture', b'',
+        connection.request.assert_called_once_with('GET', '/fixture%20path?name=a%20b', b'',
                                                    {'Host': self.hostname, 'X-Forwarded-Proto': 'https'})
         connection.getresponse.assert_called_once_with()
         response.read.assert_called_once_with(TLSProxy.LIMIT + 1)
@@ -182,7 +185,7 @@ class LocalTLS(unittest.TestCase):
         # Compile an isolated in-memory mutant. The exercised listener still
         # uses the fail-on-construction mock, so no nonfixture socket can open.
         source = Path(local_tls.__file__).read_text()
-        guard = '\n                    proxy.admit(self.command, self.path, list(self.headers.items()))\n'
+        guard = '\n                    target = proxy.admit(self.command, self.path, list(self.headers.items()))\n'
         self.assertEqual(source.count(guard), 1)
         namespace = {'__name__': 'synthetic_tls_admission_mutant'}
         exec(compile(source.replace(guard, '\n'), '<synthetic-tls-admission-mutant>', 'exec'), namespace)

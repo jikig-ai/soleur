@@ -2561,3 +2561,44 @@
 - GDPR scope for the migration correction is unchanged: restored applied
   migration bytes plus a guard-ordering test add no data fields, PII surface,
   processing purpose or retention path. This does not replace CLO/legal review.
+
+### Config snapshot continuation and qualification-boundary delta — 2026-10-22
+
+- Fresh private source-bound manifest `96f8650bdde397a6a75f0fcca679a3209a0a643a510fc3ba6380d6510b2b8226`
+  for attempt `codex9051-snapshot-ea3eff07-20261022-01` was reviewed read-only,
+  separately approved, and executed. The fixed action returned the expected
+  bounded success output. Receipt, spent marker, sanitized tool-result record,
+  and field report passed local binding/privacy checks. Independent engineering
+  and security reviews passed local consistency only; no provenance, authority,
+  profile, runtime, or qualification claim is inferred. The private field report
+  remains owner-only and expires with its manifest.
+- The full offline qualification wrapper passed after the current edits; focused
+  role-admission/TLS tests passed 20/20, isolated Ruff checks passed, and
+  `git diff --check` passed. The new regressions prove role bind sources are
+  canonicalized before forwarding and Unicode path/query text is percent-encoded
+  before the fixed private TLS request. The TLS mutation oracle was updated to
+  target the admitted-target assignment.
+- `soleur:qa` scenario execution is skipped per its contract: the plan's
+  scenarios are Given/When/Then prose without executable Browser/API/Cleanup
+  steps. Its structural `nav-states` condition is also false for the diff
+  (no dashboard components or `layout.tsx`); existing committed implementation
+  screenshots remain the visual evidence. No authenticated live QA is claimed.
+- CTO ruling for CodeQL alerts 288–292 is recorded in `decision-challenges.md`.
+  The path check now reads only reviewed role-profile binds and rewrites admitted
+  absolute sources to their canonical contained paths. The TLS proxy now sends
+  only the encoded origin-form target returned by admission. Exact-head CodeQL
+  must be rerun before deciding whether the remaining bounded header guards
+  need a supported false-positive disposition.
+- At `ea3eff077f87f40d2a1c2afa0555d596d35ebb55`, CodeQL still reported four
+  findings (one critical, one high, two medium); RLS fuzz failed because GHCR
+  throttled the pinned Supabase image pull, tracked by OPEN issue #10868. CI's
+  aggregate test failure is the intentional draft-light gate (`draft: full
+  battery owed at ready`), not a full test-suite verdict. The new source delta
+  is not yet pushed, so these remote results do not cover it.
+- Review command-path and fixture-name lookup errors, the intentionally red
+  regression runs, and the Ruff PATH mismatch are recorded in
+  `knowledge-base/project/learnings/build-errors/2026-10-22-qualification-review-paths-and-fixtures.md`.
+- PR #9051 remains OPEN, draft, BEHIND, and auto-merge disarmed. Hosted auth
+  modes remain blocked without mode-specific CLO clearance; the API-funded
+  alternative remains pending. Recovery, authenticated QA, profile/runtime
+  qualification, promotion, preflight, full review, and shipping stay held.

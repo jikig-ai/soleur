@@ -87,3 +87,9 @@ workspace-wide credential-routing change without improving the member's required
 or qualification gates. Agent-native parity is therefore intentionally deferred until a scoped,
 owner-authorized confirmation contract exists; Codex execution remains disabled for ordinary
 traffic.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| CodeQL alerts 288–292 in qualification boundaries | technical | Ruled by CTO agent, 2026-10-22: canonicalize controller-profile bind sources before Docker use, preserve the fixed private TLS destination and origin-form request guard, and preserve rejection of unsafe upstream header bytes - the path check must bind the bytes Docker later receives; fixed-destination and pre-forwarding header controls address the remaining reported flows. Dissent: ownership of the private upstream address was not independently verified by the ruling agent. |
