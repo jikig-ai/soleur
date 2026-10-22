@@ -1204,15 +1204,37 @@ case "$mode" in
       echo "DOCKER_RUN_ARGS:$*"
       # The #8743 plugin-mount seed is a root helper run, not an app start: it never enters the app-start log the
       # #10136 rows count (canary + prod), exactly as the apparmor rows above exclude it from DOCKER_RUN_ARGS.
-      [[ -n "${MOCK_IL_RUN_LOG:-}" && "$*" != *":/plugin-mount"* ]] && printf '%s\n' "$*" >> "$MOCK_IL_RUN_LOG"
+      if [[ -n "${MOCK_IL_RUN_LOG:-}" && "$*" != *":/plugin-mount"* ]]; then
+        printf '%s\n' "$*" >> "$MOCK_IL_RUN_LOG"
+        # The run's EFFECTIVE env, kept beside the run log as <log>.eff<N> (N = the run's line number): the --env-file content
+        # as Docker reads it (blank and comment lines dropped, leading whitespace trimmed, a bare-name line dropped - an
+        # approximation of "unset in the CLI environment"), then the -e pairs in order. Docker keeps BOTH entries when a key
+        # is in the env-file and on a -e flag (Config.Env is not de-duplicated), which a -e-only mock could never show.
+        _il_n="$(grep -c '^' "$MOCK_IL_RUN_LOG" || true)"
+        _il_ef=""; _il_prev=""
+        for _il_a in "$@"; do [[ "$_il_prev" == "--env-file" ]] && _il_ef="$_il_a"; _il_prev="$_il_a"; done
+        {
+          if [[ -n "$_il_ef" && -r "$_il_ef" ]]; then
+            LC_ALL=C sed -e 's/^[[:space:]]*//' "$_il_ef" | LC_ALL=C grep -a -v -e '^#' -e '^$' | LC_ALL=C grep -a '=' || true
+          fi
+          _il_prev=""
+          for _il_a in "$@"; do [[ "$_il_prev" == "-e" ]] && printf '%s\n' "$_il_a"; _il_prev="$_il_a"; done
+        } > "${MOCK_IL_RUN_LOG}.eff${_il_n}"
+      fi
       echo "abc123"
     fi
-    # #10136 (MOCK_IL_CANARY=1): answer the Inngest-link canary layer like docker would. `inspect` reports the -e pairs of the
-    # CANARY run exactly as the deploy passed them (so a clobbered INNGEST_BASE_URL shows up there); the two in-container node
+    # #10136 (MOCK_IL_CANARY=1): answer the Inngest-link canary layer like docker would. `inspect` reports the CANARY run's
+    # effective env (the env-file lines, then the -e pairs, exactly as Docker does - a key in both appears twice) followed by
+    # MOCK_IL_INSPECT_EXTRA; MOCK_IL_INSPECT_FAIL=1 makes the daemon call fail with no output. The two in-container node
     # scripts print MOCK_IL_POS / MOCK_IL_NEG. Every other exec keeps the trace line.
     if [[ "${MOCK_IL_CANARY:-}" == "1" && "${1:-}" == "inspect" && "$*" == *".Config.Env"* && "$*" == *soleur-web-platform-canary* ]]; then
-      grep -F -- '--name soleur-web-platform-canary ' "${MOCK_IL_RUN_LOG:?}" | head -1 \
-        | awk '{for (i = 1; i < NF; i++) if ($i == "-e") print $(i + 1)}'
+      [[ "${MOCK_IL_INSPECT_FAIL:-}" == "1" ]] && exit 1
+      _il_cn="$(grep -nF -- '--name soleur-web-platform-canary ' "${MOCK_IL_RUN_LOG:?}" | head -1 | cut -d: -f1)"
+      {
+        [[ -n "$_il_cn" && -r "${MOCK_IL_RUN_LOG}.eff${_il_cn}" ]] && cat "${MOCK_IL_RUN_LOG}.eff${_il_cn}"
+        [[ -n "${MOCK_IL_INSPECT_EXTRA:-}" ]] && printf '%s\n' "$MOCK_IL_INSPECT_EXTRA"
+        true
+      } | tee "${MOCK_IL_RUN_LOG}.inspect"
       exit 0
     fi
     if [[ "${MOCK_IL_CANARY:-}" == "1" && "${1:-}" == "exec" && "$*" == *"inngest_link_canary"* ]]; then
@@ -1604,6 +1626,15 @@ exec "$(command -p -v mv)" "$@"
 MOCK
     chmod +x "$mock_dir/mv"
   fi
+  # #10136: the env-file scrub writes its temp file as "<env-file>.scrub.XXXXXX". MOCK_SCRUB_MKTEMP_FAIL=1 makes ONLY that template fail
+  # (the overlay's ".gak." template and every state-file template run the real mktemp), so a row can reach "the scrub could not
+  # write". Installed on every run: a pass-through that execs the real binary.
+  cat > "$mock_dir/mktemp" << 'MOCK'
+#!/bin/bash
+if [[ "${MOCK_SCRUB_MKTEMP_FAIL:-}" == "1" && "$*" == *".scrub."* ]]; then exit 1; fi
+exec "$(command -p -v mktemp)" "$@"
+MOCK
+  chmod +x "$mock_dir/mktemp"
   create_mock_flock "$mock_dir"
   create_mock_systemctl "$mock_dir"
   create_mock_df "$mock_dir"
@@ -3283,11 +3314,13 @@ il_deploy() {
   rm -rf "$INNGEST_LINK_DIR"
   if [[ -n "${IL_PRESEED_CA:-}" ]]; then mkdir -p "$INNGEST_LINK_DIR"; cp "$IL_PRESEED_CA" "$INNGEST_LINK_DIR/inngest-ca.pem"; fi
   IL_STATE="$IL_DIR/$label.state"; IL_RUNLOG="$IL_DIR/$label.runs"; IL_LOG="$IL_DIR/$label.log"
-  : > "$IL_RUNLOG"; : > "$IL_LOG"
+  : > "$IL_RUNLOG"; : > "$IL_LOG"; rm -f "$IL_RUNLOG".eff* "$IL_RUNLOG".inspect
   {
     printf 'KEY=value\nDOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nDOPPLER_ENVIRONMENT=prd\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\n'
     [[ -n "$flag" ]] && printf '%s\n' "$flag"
     [[ -n "$ca" ]] && printf 'INNGEST_TLS_CA=%s\n' "$ca"
+    # IL_SNAP_EXTRA: extra snapshot lines (newline-separated), e.g. a pinned INNGEST_BASE_URL the Doppler config carries
+    [[ -n "${IL_SNAP_EXTRA:-}" ]] && printf '%s\n' "$IL_SNAP_EXTRA"
   } > "$IL_DIR/$label.env"
   IL_OUT=$( ( export MOCK_DOCKER_MODE="apparmor-trace" MOCK_IL_CANARY=1 MOCK_IL_RUN_LOG="$IL_RUNLOG" MOCK_GAK_PRD_BODY="$IL_DIR/$label.env" \
       CI_DEPLOY_STATE="$IL_STATE" MOCK_LOGGER_CAPTURE_FILE="$IL_LOG" "$@"
@@ -3299,6 +3332,19 @@ il_url_clean() { # <expected url>: every docker run line has EXACTLY ONE INNGEST
   [[ "$n" -ge 1 ]] || return 1
   [[ "$(grep -c -- "-e INNGEST_BASE_URL=$1 " "$IL_RUNLOG")" -eq "$n" ]] || return 1
   [[ "$(grep -o -- 'INNGEST_BASE_URL=' "$IL_RUNLOG" | wc -l | tr -d ' ')" -eq "$n" ]] || return 1
+}
+# il_effective_clean <url> <ca path>: every run in the log (canary and prod) carries, in its EFFECTIVE env (<log>.eff<N>: the env-file
+# lines plus the -e pairs, as Docker keeps them), exactly one INNGEST_BASE_URL= equal to <url> and exactly one NODE_EXTRA_CA_CERTS=
+# equal to <ca path>. il_url_clean reads the -e flags only; this is the view `docker inspect` reports.
+il_effective_clean() {
+  local n i f; n="$(il_runs)"
+  [[ "$n" -ge 1 ]] || return 1
+  for ((i = 1; i <= n; i++)); do
+    f="$IL_RUNLOG.eff$i"
+    [[ -r "$f" ]] || return 1
+    [[ "$(grep -c '^INNGEST_BASE_URL=' "$f")" -eq 1 && "$(grep -cxF "INNGEST_BASE_URL=$1" "$f")" -eq 1 ]] || return 1
+    [[ "$(grep -c '^NODE_EXTRA_CA_CERTS=' "$f")" -eq 1 && "$(grep -cxF "NODE_EXTRA_CA_CERTS=$2" "$f")" -eq 1 ]] || return 1
+  done
 }
 
 TOTAL=$((TOTAL + 1))
@@ -3342,6 +3388,8 @@ else
   IL_OK=1
   [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 1 ]] || IL_OK=0
   grep -qF 'class=canary_failed level=error check=health cause=ECONNREFUSED' "$IL_LOG" || IL_OK=0
+  # a failing in-container check keeps the generic reason; only the inspect check carries canary_inngest_link_inspect_failed
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == canary_inngest_link_failed ]] || IL_OK=0
   if [[ "$IL_OK" -eq 1 ]]; then
     PASS=$((PASS + 1)); echo "  PASS: flag on + a failing in-container check: deploy fails before the swap, the event names check=health cause=ECONNREFUSED"
   else
@@ -3379,6 +3427,95 @@ else
     PASS=$((PASS + 1)); echo "  PASS: flag on + keyCertSign CA: refused (reason=inngest_link_ca_invalid why=ca), no container started"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: hostile CA with the flag on (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
+  fi
+
+  # --- #10136: the canary inspect check sees the EFFECTIVE env (env-file lines plus -e pairs, as Docker keeps them) ---
+  # T1: the Doppler snapshot carries its own INNGEST_BASE_URL. Docker keeps both entries in Config.Env, so without the env-file scrub
+  # the canary's inspect check counts 2 and fails with the cause unnamed. Both the flag-on and the flag-off deploy must run the
+  # scrub (one code path), and every run (canary and prod) must carry exactly one of each pinned name in its effective env.
+  for IL_ARM in on off; do
+    TOTAL=$((TOTAL + 1))
+    if [[ "$IL_ARM" == on ]]; then IL_T1_FLAG="INNGEST_LINK_TLS=1"; IL_T1_URL="https://10.0.1.40:8443"; else IL_T1_FLAG=""; IL_T1_URL="http://10.0.1.40:8288"; fi
+    IL_SNAP_EXTRA="INNGEST_BASE_URL=http://10.0.1.40:8288" il_deploy "t1-$IL_ARM" "$IL_T1_FLAG" "$IL_GOOD_B64"
+    IL_OK=1
+    [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 ]] || IL_OK=0
+    il_effective_clean "$IL_T1_URL" "/etc/soleur/inngest-ca.pem" || IL_OK=0
+    grep -qF 'class=env_scrubbed level=info removed=1' "$IL_LOG" || IL_OK=0
+    # the scrub removes the two pinned names only: every other snapshot line reaches the container
+    grep -qx 'KEY=value' "$IL_RUNLOG.eff1" && grep -q '^INNGEST_TLS_CA=' "$IL_RUNLOG.eff1" || IL_OK=0
+    if [[ "$IL_ARM" == on ]]; then
+      grep -qx 'INNGEST_LINK_TLS=1' "$IL_RUNLOG.eff1" || IL_OK=0
+      grep -qF 'class=canary_ok' "$IL_LOG" || IL_OK=0
+      # harness sentinel: the mocked inspect must carry the env-file lines (a mock that reported the -e pairs only would make this row vacuous)
+      grep -qx 'KEY=value' "$IL_RUNLOG.inspect" || IL_OK=0
+    fi
+    if [[ "$IL_OK" -eq 1 ]]; then
+      PASS=$((PASS + 1)); echo "  PASS: snapshot pins INNGEST_BASE_URL (flag $IL_ARM): scrubbed (env_scrubbed removed=1), canary and prod each carry exactly one INNGEST_BASE_URL and one NODE_EXTRA_CA_CERTS in their effective env"
+    else
+      FAIL=$((FAIL + 1)); echo "  FAIL: snapshot-pinned INNGEST_BASE_URL (flag $IL_ARM; rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"; grep -E 'INNGEST_LINK' "$IL_LOG" | head -4
+    fi
+  done
+
+  # T3 (characterization): a NODE_EXTRA_CA_CERTS line in the snapshot is the existing overlay refusal, before any container starts
+  TOTAL=$((TOTAL + 1))
+  IL_SNAP_EXTRA="NODE_EXTRA_CA_CERTS=/tmp/x" il_deploy t3 "INNGEST_LINK_TLS=1" "$IL_GOOD_B64"
+  if [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 0 && "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == github_app_key_env_hijack ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: snapshot NODE_EXTRA_CA_CERTS: refused by the overlay (github_app_key_env_hijack), no container started"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: snapshot NODE_EXTRA_CA_CERTS not refused (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
+  fi
+
+  # T5: strictness is kept - a REAL duplicate (a second http URL reaching the canary's Config.Env) still fails the canary, and the event names why
+  TOTAL=$((TOTAL + 1))
+  il_deploy t5 "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" "MOCK_IL_INSPECT_EXTRA=INNGEST_BASE_URL=http://10.0.1.40:8288"
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 1 ]] || IL_OK=0
+  grep -qF 'class=canary_failed level=error check=inspect cause=url_count url_lines=2 url_https=1 ca_lines=1 ca_ok=1' "$IL_LOG" || IL_OK=0
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == canary_inngest_link_inspect_failed ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: a real duplicate INNGEST_BASE_URL still fails the canary: check=inspect cause=url_count with the counts, reason canary_inngest_link_inspect_failed, only the canary started"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: real duplicate not named (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"; grep -E 'check=inspect' "$IL_LOG" | head -3
+  fi
+
+  # T6: a failed `docker inspect` is its own cause - never "none", never a wrong count
+  TOTAL=$((TOTAL + 1))
+  il_deploy t6 "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_IL_INSPECT_FAIL=1
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 1 ]] || IL_OK=0
+  grep -qF 'class=canary_failed level=error check=inspect cause=inspect_failed url_lines=0 url_https=0 ca_lines=0 ca_ok=0' "$IL_LOG" || IL_OK=0
+  grep -qF 'cause=none' "$IL_LOG" && IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: docker inspect failing: check=inspect cause=inspect_failed with zero counts, no cause=none"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: failed inspect not named (rc=$IL_RC runs=$(il_runs))"; grep -E 'check=inspect' "$IL_LOG" | head -3
+  fi
+
+  # T8a / T8b: the scrub cannot write. A strict (flag on) deploy aborts before any container starts; a non-strict one logs the error
+  # and continues with the env-file untouched, so a persistent scrub fault can never block a rollback or a hotfix.
+  TOTAL=$((TOTAL + 1))
+  IL_SNAP_EXTRA="INNGEST_BASE_URL=http://10.0.1.99:8288" il_deploy t8a "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_SCRUB_MKTEMP_FAIL=1
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 && "$(il_runs)" -eq 0 ]] || IL_OK=0
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == inngest_env_scrub_failed ]] || IL_OK=0
+  grep -qF 'class=env_scrub_failed level=error stage=write' "$IL_LOG" || IL_OK=0
+  [[ ! -e "$INNGEST_LINK_DIR/last-scheme" ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + scrub cannot write: aborts (reason=inngest_env_scrub_failed, stage=write), no container started, last-scheme not recorded"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: strict scrub failure not an abort (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"
+  fi
+  TOTAL=$((TOTAL + 1))
+  IL_SNAP_EXTRA="INNGEST_BASE_URL=http://10.0.1.99:8288" il_deploy t8b "" "$IL_GOOD_B64" MOCK_SCRUB_MKTEMP_FAIL=1
+  IL_OK=1
+  [[ "$IL_RC" -eq 0 && "$(il_runs)" -eq 2 ]] || IL_OK=0
+  grep -qF 'class=env_scrub_failed level=error stage=write' "$IL_LOG" || IL_OK=0
+  # the env-file reached the containers unchanged: the snapshot's own line is still there (the -e pair follows it)
+  grep -qxF 'INNGEST_BASE_URL=http://10.0.1.99:8288' "$IL_RUNLOG.eff1" || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag off + scrub cannot write: the error is logged and the deploy continues with the env-file unchanged"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: non-strict scrub failure blocked or changed the deploy (rc=$IL_RC runs=$(il_runs))"
   fi
 
   # userimpact F1: a snapshot WITHOUT the Doppler metadata lines must not fail every deploy while the flag is absent
