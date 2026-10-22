@@ -520,3 +520,15 @@ rehearsal suite make `12 x budget` exceed the 600 s bound for any budget large e
 day). A wall-clock deadline (measured above). Making T5 primary, T17 healthy or R4 skip-eligible, or
 giving ownership a counted skip: not taken here; recorded as a User-Challenge for the operator because
 each weakens a guard or reverses #8744.
+
+**User-Challenge resolved (2026-10-22, #9394; Ruled by CTO agent).** No change: T5 primary, T17 healthy and R4 stay
+hard, and ownership gets no counted skip for a TIMEOUT cause. Why: this ADR's own invariant needs at least one
+container-dependent arm that cannot decline, and during an apt failure only these three remain; T5 primary is the
+supply-chain checksum guard, and a guard whose failing direction can be skipped on a transient fault loses its
+anti-vacuity value (ADR-180). Live evidence at ruling time: 20 recent `main` runs of `infra-validation.yml`, 0
+`FIXTURE_APT_CAUSE` / `FIXTURE_APT_FAILED` hits, so the two-red-primary-runs trigger has not fired. The #8856 trigger
+cannot fire yet because its probe has returned TRANSIENT (no `git-data-runcmd-rehearsal:` marker in the sampled logs)
+since 2026-10-18. Flip condition: two consecutive red `main` runs on a primary-arm `FIXTURE_APT_CAUSE` line with a
+confirmed archive outage; the first response is a per-arm hold, not a skip. Legal note (CLO): Article 30 register row
+PA-36 lists `git-data-ownership.test.sh` as backing the ownership control; keep that wording at "suite exists" and do not
+extend it to claim CI enforcement while that arm can be declined locally.
