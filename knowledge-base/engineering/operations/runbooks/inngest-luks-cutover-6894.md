@@ -544,7 +544,7 @@ identifier, email, payload, event body or per-user count was selected, printed, 
 record identifies WHICH users had armed reminders or in-flight jobs was NOT established. Measured on 2026-10-22 by
 three catalog-metadata queries (identity, columns, estimates) through the dedicated read-only Management API endpoint against project
 `pigsfuxruiopinouvjwy`; the probe script was removed from the PR once the finding was recorded, so the method lives in the record
-(`knowledge-base/project/specs/feat-one-shot-9927-inngest-luks-items-6-8b-c1/measurements.md`) and in git history, and a "round 2"
+(`knowledge-base/project/specs/archive/20261022-221258-feat-one-shot-9927-inngest-luks-items-6-8b-c1/measurements.md`) and in git history, and a "round 2"
 would re-add it in its own PR with its own suite (owner-gated).
 **Superseded 2026-10-20 (#9927), as to "the default is all active users":** the default stays, but it is not complete. The
 code read below shows two groups it does not cover: **users who are not currently active** (a founder with a connected GitHub

@@ -338,7 +338,7 @@ Appended, with one exception to the append-only convention, stated here: the los
 
 ## Addendum — 2026-10-22 (#9927 items 6, 8b and C1, measured versus not measured)
 
-Appended. Measurements live in `knowledge-base/project/specs/feat-one-shot-9927-inngest-luks-items-6-8b-c1/measurements.md`; rulings in the sibling `decision-challenges.md`. Evidence classes: measured, documented (not measured), could-not-measure, inferred, not measured.
+Appended. Measurements live in `knowledge-base/project/specs/archive/20261022-221258-feat-one-shot-9927-inngest-luks-items-6-8b-c1/measurements.md`; rulings in the sibling `decision-challenges.md`. Evidence classes: measured, documented (not measured), could-not-measure, inferred, not measured.
 
 | Item | Question | Answer | Evidence class | Date |
 |---|---|---|---|---|
