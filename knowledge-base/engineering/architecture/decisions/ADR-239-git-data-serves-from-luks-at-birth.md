@@ -368,6 +368,7 @@ Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-
   the served-store ones when a freeze window runs; none has run, and neither the purge nor any other removal is
   taken by this amendment. That amendment's binding of the residue to the freeze window is narrowed here to the
   served store; the plaintext-volume limb is separate and ends as below.
+  > **Superseded 2026-10-22 (#10138), as to "none has run": the freeze step of flip run 39253824891 (2026-10-19) ran the legacy-lock purge and concluded ok (the run as a whole failed and was unwound at about 12:56Z). The count it removed is not in the public log, so whether any file was removed, and whether any remains, is not measured. The CTO reports the purge ran on the encrypted volume (`/dev/mapper/git-data`), read 34 seconds before it; a mount re-read at the instant of the purge was not taken. This marker changes no other sentence and no published wording; the purge count and device are inputs to the 2026-10-24 CLO re-ruling.**
 - **Retention end for the plaintext volume.** The residue on `hcloud_volume.git_data` ends when that volume is
   destroyed by the DL-2 destructive wipe (#6897). The wipe PR must include the destroy of the volume itself:
   emptying `git_data_volume_id` alone leaves the volume, and the Hetzner volume delete, recorded in that PR's
