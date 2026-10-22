@@ -32,3 +32,5 @@ the required milestone and a filing-gate exit (`--label meta/machinery`, a
 `User-Impact:`/`Fix-Size:` pair, or a mandated-rule line) on the create call.
 When a `gh --json` query rejects a field, use the supported-field list from its
 error; `gh pr view` exposes `statusCheckRollup`, not `checks`.
+`gh run list --jq` does not accept jq's `--arg` option; use its `--commit <sha>`
+filter when selecting exact-head runs.
