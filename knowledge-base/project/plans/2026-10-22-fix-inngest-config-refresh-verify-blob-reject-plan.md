@@ -12,6 +12,24 @@ requires_cpo_signoff: true
 
 # fix: inngest config-refresh verify-blob rejects the promoted bundle (epic #10390, defect 3)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-22 (same session as authoring — plan + deepen ran in one headless pass)
+
+### Key Improvements
+1. Named the mechanism gate precisely: cosign v3.1.1 `verify-blob` admits `--trusted-root` only when
+   `checkNewBundle(bundlePath)` = `sgbundle.LoadJSONFromPath` succeeds (`verify_blob.go:117,172`;
+   `verify_bundle.go:41`) — a load failure reads as the same honest reject as a crypto failure.
+2. Verified all three prior suspects dead by live measurement (Sigstore live-root deep-diff, Rekor
+   entry SAN + logID decode, offline `--network none` `Verified OK` reproduction).
+3. Added the mandatory sections the gates require: Downtime & Cutover (singleton-replace), Guard
+   Contract (weakening-flag ban), Network-Outage Deep-Dive, mechanical Scope Check.
+
+### New Considerations Discovered
+- `reason=signature` is a classification-overloaded row — the `detail=` fix is the actual
+  diagnosability deliverable regardless of which root cause Phase 0 names.
+- The distroless cosign image runs UID 65532 — mount-perm arithmetic checked (0755/0644 benign).
+
 ## Overview
 
 The dedicated Inngest host's ADR-135 config-refresh timer emits
@@ -306,19 +324,94 @@ runs at review-time per the plan-signoff lifecycle.
 
 ## Scope Check
 
-Ask mapping: "root-cause diagnosis of the honest verify-blob reject" → Phase 0 + Hypotheses table +
-AC1/AC2. "the fix" → Phase 1 + Phase 4. "its tests (TDD)" → Phase 3 + AC4/AC5. "how the fix ships
-to the host (immutable re-provision)" → Phase 4 + AC6. "declare an Observability block" → ##
-Observability + AC3/AC7. "floor 5→6 pin bump" → Phase 4 + AC9 (conditional on a new promotion).
-"backlog items … context only" → excluded via Non-Goals.
+### Ask Mapping
 
-Item provenance: all items trace to the brief except (inferred, justified) the `detail=` stderr-
-capture fix — inferred from the evidence that `reason=signature` is a classification-overloaded row
-that made this defect un-debuggable for a full session; (inferred) the kept diagnostic workflow —
-justified as the sanctioned no-SSH probe for future rejects.
+| Ask (quoted from the brief) | Plan item | Status |
+|---|---|---|
+| "root-cause diagnosis of the honest verify-blob reject (enumerate the three suspects plus any you find; the plan should include the reproduction/verification path — a CI dispatch workflow run or equivalent no-SSH probe that captures cosign's stderr)" | Phase 0 dispatch probe + ## Hypotheses + AC1/AC2 | mapped |
+| "the fix" | Phase 1 (branched on measured stderr) + Phase 4 ship | mapped |
+| "its tests (this repo has shell test suites … follow TDD: failing test first)" | Phase 3 + AC4/AC5 | mapped |
+| "how the fix ships to the host (running-prod-host config changes ship via cloud-init/Terraform immutable re-provision — respect hr-prod-host-config-change-immutable-redeploy)" | Phase 4 + ## Infrastructure (IaC) + AC6 | mapped |
+| "declare an ## Observability block" | ## Observability + AC3/AC7 | mapped |
+| "floor 5→6 pin bump" | Phase 4 item 2 + AC9 (conditional on a new promotion) | mapped |
+| "backlog items #9927 items 2+4, #8620, #7596, #10713, #10751 (context only — do not plan their implementation)" | ## Non-Goals + ## Open Code-Review Overlap | mapped |
 
-Split assessment: single coherent fix — the diagnostic, the stderr-capture improvement, the root-
-cause fix, and the redeploy are one change arc; the deferred backlog items are explicitly out.
+### Plan-Item Provenance
+
+| Plan item | Provenance | Justification |
+|---|---|---|
+| Phases 0/1/3/4, tests, immutable redeploy, Observability block, floor bump | asked | Directly named in the brief |
+| `detail=` stderr-capture + bounded `verify.stderr` + drift-executor field-regex update | inferred | `reason=signature` maps every nonzero rc to one row — the classification overload is what made this defect un-debuggable for a session; the fix is the smallest change that makes the next reject self-diagnosing without weakening the gate |
+| Kept `diagnose-inngest-verify.yml` workflow | inferred | A dispatch probe is the only no-SSH path to the private bundle; keeping it is cheaper than re-deriving it on the next reject |
+| ADR-135 addendum + PIR + follow-through enrollment | asked-by-convention | Constitution (incident → PIR), `wg-architecture-decision-is-a-plan-deliverable`, ship soak-gate |
+
+### Split Assessment
+
+- Recommendation: single PR/change arc — diagnosis probe, stderr-capture, fix, tests, and host
+  replace are one causal chain; splitting would strand the probe or ship an undiagnosed fix. The
+  context-only backlog items are excluded via Non-Goals, not split into siblings.
+
+## Downtime & Cutover
+
+**Offline-inducing operation.** `inngest-host-replace` is a full rebirth of `soleur-inngest-prd`,
+the SINGLETON production scheduler (ADR-100) — every cron/notification fire stops while the host is
+down and resumes when the new host re-attaches the Redis AOF volume.
+
+**Zero-downtime evaluation.** No zero-downtime path exists for THIS change: the defect lives inside
+`inngest-config-refresh.sh`, which ADR-135 HARD-1 deliberately places OUTSIDE the refresh-set — the
+engine cannot self-update (a signed bundle that could replace the verifier is the accept-all-shim
+RCE it exists to prevent). So the refresh channel cannot ship its own fix; a host replace is the
+only sanctioned delivery route, exactly as defect 2's fix (run 39818534701) and the channel bake
+itself shipped. Blue-green is also unavailable by design: the scheduler is a singleton with a
+single LUKS store — running two schedulers concurrently is the split-brain the singleton decision
+forbids.
+
+**Residual downtime (accepted with justification).** Bounded maintenance window identical to the
+defect-2 replace: Inngest durable functions replay from Redis AOF post-rebirth (zero data loss per
+ADR-142/ADR-105), so missed fires during the window reschedule rather than vanish. The refresh
+channel being dead TODAY means nothing user-visible regresses during the window — the scheduler's
+cron delivery pauses, not degrades further. Operator authorization for the window is implicit in
+dispatching `apply_target=inngest-host-replace` (the same authorization defect 2 used).
+
+**Rollback.** The prior boot's image stays replaceable back; the channel stays fail-closed on the
+old boot — a bad fix cannot widen acceptance, only continue emitting `VERIFY_FAIL`.
+
+## Guard Contract
+
+### Guard 1 — verification-weakening-flag ban (AC10 / Test T5)
+
+**Property.** No flag that relaxes signature verification (`--insecure-ignore-tlog`,
+`--insecure-ignore-sct`, `--key`, `--new-bundle-format`) lands anywhere in this change's added
+lines.
+
+**Assembly.** The diff's added lines to the two verify-invocation surfaces —
+`inngest-config-refresh.sh` inside `cloud-init-inngest.yml` and any producer/verify edit the Phase-1
+branch touches — i.e., the chokepoint is "added line in the PR diff touching an infra file", not
+today's call sites. Checked via a diff-scoped `git grep -nE 'insecure-ignore|(--key[ =])|new-bundle-format'`
+over added lines (not whole files — the strings legitimately exist in comments/prose).
+
+**Mutation matrix.**
+
+| # | Mutation | Expected |
+|---|---|---|
+| M1 | Add `--insecure-ignore-tlog` to the host verify invocation | RED |
+| M2 | Add `--key /etc/soleur/pub.pem` to the same invocation | RED |
+| M3 | Add `--new-bundle-format` to the invocation or the workflow | RED |
+| M4 (harness) | Weaken the grep pattern (drop `new-bundle-format` alternation) | RED on a seeded M3 fixture — the guard's own dispatch is exercised, not vacuous |
+| M5 (must-pass) | A benign flag/classifier change (e.g., a new `detail=` token arm) | PASS — the guard keys on the weakening set, not on any edit to the line |
+
+**Anchor.** The ban-list is inside the commit; an attacker editing both the flag and the test in
+one diff defeats it — mitigated by review (the `single-user incident` threshold pulls in
+`user-impact-reviewer`) and the S-row parity-pins in `inngest-config-refresh.test.sh`.
+
+## Network-Outage Deep-Dive
+
+Trigger pattern `timeout` matched (`VERIFY_TIMEOUT_S`, the `timeout` classifier arm). Layer check:
+L3 firewall/DNS — not implicated (the verify is `--network none` by design; zot pull on the private
+net is proven working by defect-2's fix and the successful bundle/cosign pulls). L7 — not
+implicated (no HTTPS path on the verify leg; the Rekor entry verifies offline). The only
+`timeout`-adjacent hypothesis is H3 (rc=124 misclassified as `signature`), covered by the Phase-0
+stderr capture and the `detail=timeout` classifier arm. No SSH diagnosis is proposed anywhere.
 
 ## Infrastructure (IaC)
 
@@ -381,8 +474,8 @@ logs:
   where: "journald on host (durable), Better Stack Logs source (off-box), $STATE_DIR/verify.stderr (bounded 4 KiB, 0600, on-host)"
   retention: "Better Stack source retention; journald rotation; verify.stderr overwritten per tick (last failure only)"
 discoverability_test:
-  command: "grep -c 'detail=' apps/web-platform/infra/cloud-init-inngest.yml"
-  expected_output: "1"
+  command: "grep -o 'detail=' apps/web-platform/infra/cloud-init-inngest.yml"
+  expected_output: "detail="
 ```
 
 The grep is illustrative of the pre-merge signal; the POST-deploy discoverability path is the drift
@@ -394,7 +487,7 @@ locally, so the shipped AC is AC6/AC7's off-box row check.
 ```yaml
 at_rest:
   - store: "$STATE_DIR/verify.stderr (new, bounded diagnostic file on host volume)"
-    mechanism: "host root volume plaintext by ADR-8620-known posture; file mode 0600 root:root; content is cosign stderr (no secrets — verified: the verify path holds no credential material; the zot pull token never reaches this file)"
+    mechanism: "host root volume plaintext by #8620-known posture; file mode 0600 root:root; content is cosign stderr (no secrets — verified: the verify path holds no credential material; the zot pull token never reaches this file)"
     defends_against: "local non-root readers"
     does_not_defend: "host-volume compromise, privileged escalation (accepted — diagnostic text only)"
     disclosed_as: "this plan + the PIR"
