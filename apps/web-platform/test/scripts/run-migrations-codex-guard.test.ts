@@ -81,4 +81,12 @@ esac
     expect(result.output).toContain("explicit ledger reconciliation");
     expect(result.sql).toBe("");
   });
+
+  it("checks the whole renamed chain before an earlier pending migration", () => {
+    const result = captureApply("163_agent_engine_attempts.sql", false, ["145_codex_auth_mode_rebind.sql"]);
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain("legacy migration ledger row 145_codex_auth_mode_rebind.sql");
+    expect(result.output).toContain("renamed migration 165_codex_auth_mode_rebind.sql");
+    expect(result.sql).toBe("");
+  });
 });
