@@ -755,10 +755,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         : " Check the selected credential and billing mode in workspace settings.";
     return {
       code: "codex_history_transfer_required",
-      message: "OpenAI will receive this conversation's stored history when you resend or send a later message."
+      message: "OpenAI will receive the message you resend and any later messages. Saved conversation history is not transferred to the selected account."
         + billingNotice
         + (draftRetentionFailed ? " This draft could not be saved in this tab; copy this draft before leaving or reloading." : "")
-        + " Acknowledge history transfer, then resend your message. Your original message was not sent.",
+        + " Acknowledge, then resend your message. Your original message was not sent.",
       conversationId: targetConversationId,
       authModeGeneration: generation,
     };

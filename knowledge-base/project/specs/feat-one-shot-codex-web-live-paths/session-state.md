@@ -5,6 +5,24 @@
 - Plan file: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wiring-plan.md`
 - Status: partial implementation; production qualification and required review gates pending
 
+### 2026-10-23 resumed continuation
+
+- CTO ruled that migration ledger compatibility must fail closed for legacy
+  rows 143–145 when renamed rows 163–165 are absent; shared-dev reconciliation
+  must treat legacy 145 and renamed 165 as forward-only. The runner now reports
+  the exact legacy/new mapping before applying the renamed chain, and the
+  reconciliation scanner/writer protects both names. No database reads or
+  writes were performed for tenant integration; a live mapping dry run and
+  separately authorized reconciliation remain required.
+- PR migrations 143–152 and their focused tests were renumbered to 163–172 to
+  follow current main. The member-facing provider acknowledgment now says only
+  the resent and later messages go to the selected account; saved conversation
+  history is not transferred.
+- Verification on this continuation: migration parity 267/267; focused UI and
+  migration tests 81/81; migration integration tests 11/11; typecheck,
+  migration-ledger unit tests 4/4, RLS posture tests 29/29, and `git diff
+  --check` passed. Changes are not yet committed or pushed.
+
 ### Errors
 
 - An initial multi-file patch did not match the current RPC upsert clause, so `apply_patch` applied none of that patch. The exact migration and source ranges were reread, and the change is now split into smaller edits.

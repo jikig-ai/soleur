@@ -80,7 +80,7 @@ if '-f' in args and os.environ['FAIL_APPLY']=='1': sys.exit(1)
         self.assertIn('--single-transaction', applies[0]['argv'])
 
     def test_codex_guard_body_then_ledger_order_and_no_outer_commit(self):
-        result, applies, _ = self.capture({'145_codex_auth_mode_rebind.sql': 'BEGIN;\nSELECT 145;\nCOMMIT;\n'})
+        result, applies, _ = self.capture({'165_codex_auth_mode_rebind.sql': 'BEGIN;\nSELECT 145;\nCOMMIT;\n'})
         self.assertEqual(result.returncode, 0, result.stderr)
         sql = applies[0]['sql']
         self.assertLess(sql.index('LOCK TABLE public.workspace_engine_settings'), sql.index('SELECT 145;'))

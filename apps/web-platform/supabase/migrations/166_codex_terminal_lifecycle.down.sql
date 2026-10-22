@@ -1,5 +1,5 @@
 -- 146_codex_terminal_lifecycle.down.sql
--- Restore migration 145 lifecycle event behavior.
+-- Restore migration 165 lifecycle event behavior.
 BEGIN;
 SET LOCAL lock_timeout = '30s';
 SET LOCAL statement_timeout = '5min';

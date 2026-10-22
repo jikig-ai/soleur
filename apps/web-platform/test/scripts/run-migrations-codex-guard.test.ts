@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 
 const scripts = path.resolve(__dirname, "../../scripts");
 
-describe("migration 145 admission in the real migration runner", () => {
-  function captureApply(filename: string, missingGuard = false) {
+describe("migration 165 admission in the real migration runner", () => {
+  function captureApply(filename: string, missingGuard = false, legacyRows: string[] = []) {
     const fixture = mkdtempSync(path.join(tmpdir(), "codex-migration-runner-"));
     try {
       for (const dir of ["scripts/sql", "supabase/migrations", "bin"]) mkdirSync(path.join(fixture, dir), { recursive: true });
@@ -18,7 +18,10 @@ describe("migration 145 admission in the real migration runner", () => {
       writeFileSync(path.join(fixture, "bin/git"), "#!/usr/bin/env bash\ncase \"$1\" in\nfetch) exit 0 ;;\nls-tree) printf '100644 blob 1111111111111111111111111111111111111111 fixture.sql\\n' ;;\nhash-object) printf '1111111111111111111111111111111111111111\\n' ;;\n*) exit 64 ;;\nesac\n");
       writeFileSync(path.join(fixture, "bin/psql"), `#!/usr/bin/env bash
 case "$*" in
-  *" -c "*) case "$*" in *"SELECT count(*)"*) printf '0\\n' ;; esac ;;
+  *" -c "*) case "$*" in
+    *"SELECT count(*)"*) printf '0\\n' ;;
+    *"SELECT filename FROM public._schema_migrations"*) printf '%s\\n' ${legacyRows.map((row) => `'${row}'`).join(" ") || ""} ;;
+  esac ;;
   *"--single-transaction"*" -f -"*) cat > '${path.join(fixture, "apply.sql")}' ;;
   *) exit 64 ;;
 esac
@@ -37,7 +40,7 @@ esac
   }
 
   it("places the bounded lock and rejection before the unchanged migration and its ledger write in one transaction", () => {
-    const result = captureApply("145_codex_auth_mode_rebind.sql");
+    const result = captureApply("165_codex_auth_mode_rebind.sql");
     expect(result.status, result.output).toBe(0);
     const lock = result.sql.search(/^LOCK TABLE public\.workspace_engine_settings IN ACCESS EXCLUSIVE MODE;/m);
     const rejection = result.sql.search(/^\s*RAISE EXCEPTION 'Codex auth-mode migration refused:/m);
@@ -53,7 +56,7 @@ esac
   });
 
   it("fails before applying when the required guard asset is absent", () => {
-    const result = captureApply("145_codex_auth_mode_rebind.sql", true);
+    const result = captureApply("165_codex_auth_mode_rebind.sql", true);
     expect(result.status).not.toBe(0);
     expect(result.output).toContain("Codex auth-mode pre-migration guard is unavailable");
     expect(result.sql).toBe("");
@@ -64,5 +67,18 @@ esac
     expect(result.status, result.output).toBe(0);
     expect(result.sql).toMatch(/^CREATE TABLE public\.synthetic_migration_body/m);
     expect(result.sql).not.toMatch(/^LOCK TABLE public\.workspace_engine_settings/m);
+  });
+
+  it.each([
+    ["143_agent_engine_attempts.sql", "163_agent_engine_attempts.sql"],
+    ["144_codex_auth_mode_rebind.sql", "164_codex_auth_mode_rebind.sql"],
+    ["145_codex_auth_mode_rebind.sql", "165_codex_auth_mode_rebind.sql"],
+  ])("fails closed on legacy ledger row %s before applying the renamed chain", (legacy, renamed) => {
+    const result = captureApply(renamed, false, [legacy]);
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain(`legacy migration ledger row ${legacy}`);
+    expect(result.output).toContain(`renamed migration ${renamed}`);
+    expect(result.output).toContain("explicit ledger reconciliation");
+    expect(result.sql).toBe("");
   });
 });

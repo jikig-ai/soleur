@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = join(__dirname, "..", "supabase", "migrations");
-const migration = readFileSync(join(root, "149_codex_history_transfer_ack.sql"), "utf8");
-const rollback = readFileSync(join(root, "149_codex_history_transfer_ack.down.sql"), "utf8");
+const migration = readFileSync(join(root, "169_codex_history_transfer_ack.sql"), "utf8");
+const rollback = readFileSync(join(root, "169_codex_history_transfer_ack.down.sql"), "utf8");
 
-describe("migration 149: Codex history-transfer acknowledgments", () => {
+describe("migration 169: Codex history-transfer acknowledgments", () => {
   it("stores a member acknowledgment for one conversation and auth-mode generation", () => {
     expect(migration).toMatch(/-- LAWFUL_BASIS: provisional Art\. 6\(1\)\(b\) candidate/);
     expect(migration).toMatch(/-- RETENTION: only the current generation and active workspace-membership epoch/);

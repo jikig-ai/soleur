@@ -233,6 +233,28 @@ if [[ -n "$collision_check" ]]; then
   done <<<"$collision_check"
 fi
 
+# These filenames were renumbered after main advanced. The runner is filename-
+# keyed, so a legacy applied row does not make its renamed counterpart applied.
+# Refuse the entire renamed chain before applying any member until an operator
+# explicitly reconciles the ledger after verifying the schema.
+legacy_chain_rows=$(run_sql "SELECT filename FROM public._schema_migrations WHERE filename IN ('143_agent_engine_attempts.sql', '144_codex_auth_mode_rebind.sql', '145_codex_auth_mode_rebind.sql', '163_agent_engine_attempts.sql', '164_codex_auth_mode_rebind.sql', '165_codex_auth_mode_rebind.sql') ORDER BY filename;")
+legacy_chain_refusals=""
+while IFS= read -r tracked_filename; do
+  case "$tracked_filename" in
+    143_agent_engine_attempts.sql) counterpart=163_agent_engine_attempts.sql ;;
+    144_codex_auth_mode_rebind.sql) counterpart=164_codex_auth_mode_rebind.sql ;;
+    145_codex_auth_mode_rebind.sql) counterpart=165_codex_auth_mode_rebind.sql ;;
+    *) continue ;;
+  esac
+  if ! grep -qxF "$counterpart" <<<"$legacy_chain_rows"; then
+    legacy_chain_refusals+="  legacy migration ledger row $tracked_filename has renamed migration $counterpart pending; explicit ledger reconciliation is required after schema verification.\n"
+  fi
+done <<<"$legacy_chain_rows"
+if [[ -n "$legacy_chain_refusals" ]]; then
+  printf '::error::Legacy Codex migration ledger rows block the renamed migration chain:\n%b' "$legacy_chain_refusals"
+  exit 1
+fi
+
 # Apply unapplied migrations in sorted order
 applied=0
 skipped=0
@@ -424,14 +446,14 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # Applied migration bytes stay immutable. Admission must hold its lock through
   # the body and ledger insert; a separate preflight SELECT is not race-safe.
   codex_guard="$SCRIPT_DIR/sql/codex-auth-mode-pre-migration.sql"
-  if [[ "$filename" == "145_codex_auth_mode_rebind.sql" && ! -r "$codex_guard" ]]; then
-    echo "::error::Codex auth-mode pre-migration guard is unavailable; refusing migration 145"
+  if [[ "$filename" == "165_codex_auth_mode_rebind.sql" && ! -r "$codex_guard" ]]; then
+    echo "::error::Codex auth-mode pre-migration guard is unavailable; refusing migration 165"
     exit 1
   fi
   # psql's --single-transaction requires -f/-c; plain piped stdin silently
   # disables it. The ledger row carries content_sha when known.
   if ! {
-    if [[ "$filename" == "145_codex_auth_mode_rebind.sql" ]]; then
+    if [[ "$filename" == "165_codex_auth_mode_rebind.sql" ]]; then
       cat "$codex_guard" || exit 1
     fi
     if [[ "$strip_outer_txn" == "true" ]]; then

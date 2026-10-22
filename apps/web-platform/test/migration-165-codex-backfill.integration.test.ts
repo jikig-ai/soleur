@@ -8,10 +8,10 @@ const isCi = process.env.CI === "true";
 const container = isCi
   ? `codex_rebind_pg_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`
   : "supabase_db_web-platform";
-const migration = path.join(__dirname, "../supabase/migrations/145_codex_auth_mode_rebind.sql");
+const migration = path.join(__dirname, "../supabase/migrations/165_codex_auth_mode_rebind.sql");
 const preMigrationGuard = path.join(__dirname, "../scripts/sql/codex-auth-mode-pre-migration.sql");
-const erasureMigration = path.join(__dirname, "../supabase/migrations/152_agent_engine_erasure_lock_order.sql");
-const erasureMigrationDown = path.join(__dirname, "../supabase/migrations/152_agent_engine_erasure_lock_order.down.sql");
+const erasureMigration = path.join(__dirname, "../supabase/migrations/172_agent_engine_erasure_lock_order.sql");
+const erasureMigrationDown = path.join(__dirname, "../supabase/migrations/172_agent_engine_erasure_lock_order.down.sql");
 const docker = (args: string[], input?: string, timeout = 10_000) => spawnSync("docker", args, {
   encoding: "utf8",
   input,
@@ -154,7 +154,7 @@ function hasErasureRollbackLockOrder(sql: string): boolean {
     && checkpointDelete > runLock && ownerAnonymization > checkpointDelete;
 }
 
-describe("migration 152 rollback erasure lock order", () => {
+describe("migration 172 rollback erasure lock order", () => {
   it("locks workspace then runs before deleting checkpoints, and rejects lock-removal mutants", () => {
     const sql = readFileSync(erasureMigrationDown, "utf8");
     expect(hasErasureRollbackLockOrder(sql)).toBe(true);
@@ -175,7 +175,7 @@ function rebindSnapshot(database: string) {
   `));
 }
 
-describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable PostgreSQL", () => {
+describe.skipIf(!canRunDatabaseTest)("migration 165 Codex mode SQL on disposable PostgreSQL", () => {
   let ownsContainer = false;
 
   beforeAll(async () => {
@@ -333,7 +333,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     try {
       const migrationSql = readFileSync(migration, "utf8");
       const update = migrationSql.match(/UPDATE public\.workspace_engine_settings AS settings[\s\S]*?;\n\nCREATE INDEX/);
-      expect(update, "migration 145 backfill statement").not.toBeNull();
+      expect(update, "migration 165 backfill statement").not.toBeNull();
       const guard = readFileSync(preMigrationGuard, "utf8");
       runSql(database, `
         CREATE SCHEMA codex_precheck;
@@ -394,7 +394,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     try {
       const migrationSql = readFileSync(migration, "utf8");
       const functionDefinition = migrationSql.match(/CREATE(?: OR REPLACE)? FUNCTION public\.set_workspace_default_engine\([\s\S]*?^\$\$;/m);
-      expect(functionDefinition, "migration 145 owner rebind RPC").not.toBeNull();
+      expect(functionDefinition, "migration 165 owner rebind RPC").not.toBeNull();
       const rpc = functionDefinition![0].replaceAll("public.", "codex_rpc.");
       const output = runSql(database, `
         CREATE SCHEMA auth;
@@ -578,7 +578,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     });
   });
 
-  it("keeps post-erasure checkpoint writes rejected when migration 152 is rolled back", () => {
+  it("keeps post-erasure checkpoint writes rejected when migration 172 is rolled back", () => {
     withOwnerRebindDatabase((database) => {
       const attemptId = "00000000-0000-4000-8000-000000000001";
       runSql(database, `INSERT INTO public.agent_engine_attempts VALUES ('${attemptId}', '${runId(1)}', 2);`);

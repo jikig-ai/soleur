@@ -248,7 +248,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
                 role="note"
                 data-testid="user-provider-disclosure"
               >
-                This uses the API key belonging to the member who resumes a conversation. A Codex mode change applies to existing Codex conversations in this workspace. Each member must acknowledge before their stored history is sent to OpenAI under their own account, which may incur provider charges. Previous Codex session data is cleared. Only submit data you are authorized to share with the provider.
+                This uses the API key belonging to the member who sends a message. A Codex mode change applies to existing Codex conversations in this workspace. After acknowledgment, the resent message and future messages are sent to OpenAI under that member's account. Saved conversation history is not transferred. Provider charges may apply. Previous Codex session data is cleared. Only submit data you are authorized to share with the provider.
               </p>
             )}
           </label>
@@ -266,7 +266,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
               {" "}
               This affects all Codex conversations in this workspace, including chats started by other members.
               The current selection will change {pendingAuthChange.affectedConversationCount} existing Codex conversation{pendingAuthChange.affectedConversationCount === 1 ? "" : "s"}.
-              Their stored history will be sent under the selected provider account only after each member acknowledges.
+              After each member acknowledges, their resent message and future messages are sent under the selected provider account. Saved conversation history is not transferred.
               Each member uses their own credential and is responsible for provider charges. Old Codex recovery sessions are cleared.
             </p>
             <div className="mt-4 flex gap-3">

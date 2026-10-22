@@ -26,7 +26,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
       messages: [{ id: "unsent-turn", type: "text", role: "user", content: "Please continue this draft", delivery: "unsent" }],
       lastError: {
         code: "codex_history_transfer_required",
-        message: "OpenAI will receive this conversation's stored history when you resend or send a later message. API-key mode uses your own credential and charges your provider account. Acknowledge history transfer, then resend your message. Your original message was not sent.",
+        message: "OpenAI will receive the message you resend and any later messages. Saved conversation history is not transferred to the selected account. API-key mode uses your own credential and charges your provider account. Acknowledge, then resend your message. Your original message was not sent.",
         conversationId: "test-id",
         authModeGeneration: 2,
       },
@@ -37,18 +37,19 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     const { ChatSurface } = await import("@/components/chat/chat-surface");
     const view = render(<ChatSurface variant="full" conversationId="test-id" />);
 
-    expect(screen.getByText(/OpenAI will receive/)).toBeVisible();
+    expect(screen.getByText(/OpenAI will receive the message you resend/)).toBeVisible();
+    expect(screen.getByText(/Saved conversation history is not transferred/)).toBeVisible();
     expect(screen.getByText("Please continue this draft")).toBeVisible();
     expect(screen.getByText("Message not sent")).toBeVisible();
     vi.mocked(wsReturn.sendMessage).mockClear();
     vi.mocked(wsReturn.resendMessage).mockClear();
     vi.mocked(wsReturn.resumeSession).mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "Acknowledge history transfer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acknowledge provider change" }));
     expect(wsReturn.acknowledgeCodexHistoryTransfer).toHaveBeenCalledWith("test-id", 2);
     expect(wsReturn.sendMessage).not.toHaveBeenCalled();
     expect(wsReturn.resendMessage).not.toHaveBeenCalled();
     expect(wsReturn.resumeSession).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Acknowledge history transfer" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Acknowledge provider change" })).toBeVisible();
 
     const heldMessage = wsReturn.messages[0];
     if (heldMessage.type !== "text") throw new Error("expected held user text message");
@@ -129,7 +130,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
       connection: { phase: "unrecoverable" },
       lastError: {
         code: "codex_history_transfer_required",
-        message: "OpenAI will receive this conversation's stored history. Acknowledge before resending.",
+        message: "OpenAI will receive the message you resend. Saved conversation history is not transferred. Acknowledge before resending.",
         conversationId: "test-id",
         authModeGeneration: 2,
       },
@@ -145,7 +146,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     wsReturn.sessionConfirmed = true;
     view.rerender(<ChatSurface variant="full" conversationId="new" />);
     expect(wsReturn.startSession).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Acknowledge history transfer" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Acknowledge provider change" })).toBeVisible();
     expect(screen.getByText("Keep this original draft")).toBeVisible();
   });
 });

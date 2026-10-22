@@ -447,7 +447,8 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     }));
     expect(result.current.messages[1]).not.toHaveProperty("delivery");
     expect(result.current.lastError?.message).toContain("OpenAI");
-    expect(result.current.lastError?.message).toContain("stored history");
+    expect(result.current.lastError?.message).toContain("Saved conversation history is not transferred");
+    expect(result.current.lastError?.message).toContain("message you resend and any later messages");
     expect(result.current.lastError?.message).toContain(billing);
     expect(result.current.lastError?.message).toContain(account);
     expect(result.current.lastError?.message).toContain("then resend");

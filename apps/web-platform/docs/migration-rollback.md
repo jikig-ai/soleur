@@ -15,9 +15,9 @@ downs under its separate ownership and safety checks.
   `--single-transaction`, so a failed migration rolls back automatically and
   leaves no partial state.
 
-## Codex migration 145: retain the schema when reverting code
+## Codex migration 165: retain the schema when reverting code
 
-`145_codex_auth_mode_rebind.sql` is forward-only. Its historical paired down file
+`165_codex_auth_mode_rebind.sql` is forward-only. Its historical paired down file
 is **unsupported**: it drops both `workspace_engine_settings.codex_auth_mode`
 (the owner's separate Codex mode choice) and `agent_engine_attempts.accepted_at`
 (the evidence that an admitted turn may finish after a mode switch). Reapplying
@@ -31,19 +31,32 @@ through the existing reviewed release/deploy path to a build compatible with
 the retained schema and generation fencing. If no such build is verified,
 keep execution disabled and ship a forward correction. The production migrate
 job calls `scripts/run-migrations.sh`, which skips down files; the deployment
-rollback does not reverse database migrations. Shared-dev reconciliation also
-refuses migration 145, including with `--allow-later-rows`.
+rollback does not reverse database migrations. Shared-dev reconciliation refuses
+legacy migration 145 and renamed migration 165, including with
+`--allow-later-rows`; the read-only scanner classifies both down-file names as
+forward-only.
 
-The reconciliation restriction also protects the entire retained ledger:
-migration 138's down removes `workspace_engine_settings`, and migration 143's
-down removes `agent_engine_attempts`. Either would erase migration 145's fields
-without selecting 145 itself for discard. While 145 remains applied, the writer
+The runner checks the legacy-to-renamed chain before applying any renamed
+migration: 143 → 163, 144 → 164, and 145 → 165. If a legacy ledger row exists
+while its renamed counterpart is absent, the runner stops before applying any
+member of the renamed chain and reports the exact mapping. It does not treat the
+renamed file as already applied. Reconcile a ledger only after reviewed schema
+inspection and explicit authorization. This guard is not evidence that a
+mapping or database write has occurred.
+
+The reconciliation restriction also protects the entire retained ledger,
+whether the auth-mode migration is recorded under legacy name 145 or renamed
+name 165:
+migration 138's down removes `workspace_engine_settings`, and migration 163's
+down removes `agent_engine_attempts`. Either would erase migration 165's fields
+without selecting 165 itself for discard. While legacy 145 or renamed 165
+remains applied, the writer
 therefore refuses **every eligible paired down**, regardless of ledger age,
 migration ownership, advisory classification or `--allow-later-rows`. This
 conservative restriction also blocks non-destructive and unrelated downs:
 the advisory scanner strips executable dollar-quoted bodies and cannot prove
 that a down preserves the protected fields. Unrelated ledger-only cleanup
-remains available because it executes no down body; 145's own ledger row always
+remains available because it executes no down body; 165's own ledger row always
 remains protected. Use forward corrections instead of paired-down shared-dev
 reconciliation while the protected schema remains. Direct ancestor downs are
 equally unsupported.
@@ -52,7 +65,7 @@ The read-only refusal classification is available without database credentials:
 
 ```bash
 bash apps/web-platform/scripts/dev-ledger-reconcile.sh --scan-down \
-  apps/web-platform/supabase/migrations/145_codex_auth_mode_rebind.down.sql
+  apps/web-platform/supabase/migrations/165_codex_auth_mode_rebind.down.sql
 ```
 
 Its output includes `codex-forward-only`. This is an enforced refusal in the
@@ -65,7 +78,7 @@ preserve tenant isolation, erasure, retention and admission semantics; this PR
 does not create a new backup store or claim snapshot restoration exists.
 
 First production apply is also guarded in the runner's migration transaction.
-Before executing migration 145, the runner acquires a bounded exclusive lock on
+Before executing migration 165, the runner acquires a bounded exclusive lock on
 `workspace_engine_settings` and refuses unsupported Codex `default_auth_mode`
 values before the unchanged body or its ledger insert runs. The lock stays held
 through the constrained backfill. A separate aggregate count, even zero, is
@@ -96,7 +109,7 @@ WHERE codex_auth_mode IS NULL
 -- Post-apply: expected 1; also compare content_sha with the release blob SHA.
 SELECT count(*) AS applied_rows
 FROM public._schema_migrations
-WHERE filename = '145_codex_auth_mode_rebind.sql';
+WHERE filename = '165_codex_auth_mode_rebind.sql';
 
 -- Post-apply: expected 1 admission-evidence column.
 SELECT count(*) AS admission_columns
@@ -109,7 +122,7 @@ WHERE table_schema = 'public' AND table_name = 'agent_engine_attempts'
 
 When a successfully applied migration must be reversed:
 
-This generic procedure does not authorize the unsupported Codex migration 145
+This generic procedure does not authorize the unsupported Codex migration 165
 downgrade described above.
 
 ### 1. Identify the migration to reverse

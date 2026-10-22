@@ -105,8 +105,9 @@ GITHUB_REPOSITORY and a GH_TOKEN with pull-requests: read.
   --execute           write (dry run first)
   --allow-later-rows  run a CASCADE / redefinition down although later rows exist, or
                       a destructive down although a later row is a migration on main.
-                      Does not waive migration 145's Codex forward-only restriction.
-                      While 145 remains in the live ledger, EVERY paired down is
+                      Does not waive legacy migration 145 or renamed migration 165's
+                      Codex forward-only restriction.
+                      While legacy 145 or renamed 165 remains in the live ledger, EVERY paired down is
                       refused, including non-destructive/unrelated migrations.
                       Unrelated ledger-only cleanup remains available.
                       (the dry run lists them; the close-time run never passes this)
@@ -304,7 +305,7 @@ dlr_scan_down() {
       *) echo "::error::ledger-discard: --scan-down: reading a file failed" >&2; return 2 ;;
     esac
     cls=$(dlr_classify "$f" "$tmpn") || { echo "::error::ledger-discard: --scan-down: the classifier failed" >&2; return 2; }
-    if [[ "$(basename "$f")" == "145_codex_auth_mode_rebind.down.sql" ]]; then
+    if [[ "$(basename "$f")" == "145_codex_auth_mode_rebind.down.sql" || "$(basename "$f")" == "165_codex_auth_mode_rebind.down.sql" ]]; then
       cls="${cls:+${cls},}codex-forward-only"
     fi
     printf '%s\t%s\n' "$(basename "$f")" "$cls"
@@ -678,7 +679,7 @@ while IFS= read -r line; do
 done <<<"$LEDGER_OUT"
 CODEX_SCHEMA_PROTECTED=0
 for f in "${L_F[@]}"; do
-  [[ "$f" == "145_codex_auth_mode_rebind.sql" ]] && CODEX_SCHEMA_PROTECTED=1
+  [[ "$f" == "145_codex_auth_mode_rebind.sql" || "$f" == "165_codex_auth_mode_rebind.sql" ]] && CODEX_SCHEMA_PROTECTED=1
 done
 [[ ${#L_F[@]} -gt 0 ]] \
   || cannot_measure config "public._schema_migrations returned no row in the expected <file>|<sha>|<applied_at> shape ($n_lines line(s), $suspicious outside the runner's whitelist) — wrong database or broken query"
@@ -796,8 +797,8 @@ declare -A NORM_CLS=()    # down blob id -> refusal classes of its normalized bo
 declare -A REFUSAL=()
 for i in "${ORDER[@]}"; do
   f="${E_F[$i]}"; d="${E_D[$i]}"
-  if [[ "$f" == "145_codex_auth_mode_rebind.sql" ]]; then
-    echo "::error::ledger-discard: Codex migration 145 is forward-only: its down body destroys codex_auth_mode and accepted_at. Retain the schema and ledger when rolling back application code; a schema downgrade needs a separately reviewed recoverable snapshot and restoration procedure. --allow-later-rows cannot waive this refusal."
+  if [[ "$f" == "145_codex_auth_mode_rebind.sql" || "$f" == "165_codex_auth_mode_rebind.sql" ]]; then
+    echo "::error::ledger-discard: Codex migration $f is forward-only: its down body destroys codex_auth_mode and accepted_at. Retain the schema and ledger when rolling back application code; a schema downgrade needs a separately reviewed recoverable snapshot and restoration procedure. --allow-later-rows cannot waive this refusal."
     REFUSAL[codex-forward-only]=1
   fi
   if [[ "$d" == "none" ]]; then
@@ -813,7 +814,7 @@ for i in "${ORDER[@]}"; do
   # bodies are stripped from its view, so a class '-' down can still erase data.
   # Ledger-only rows have already continued above and execute no down body.
   if [[ "$CODEX_SCHEMA_PROTECTED" == "1" ]]; then
-    echo "::error::ledger-discard: $f has a paired down while Codex migration 145 remains in the ledger. Every paired down is refused to retain its settings and admission evidence; --allow-later-rows cannot waive this forward-only restriction."
+    echo "::error::ledger-discard: $f has a paired down while a legacy or renamed Codex auth-mode migration (145 or 165) remains in the ledger. Every paired down is refused to retain its settings and admission evidence; --allow-later-rows cannot waive this forward-only restriction."
     REFUSAL[codex-forward-only]=1
   fi
   if [[ -z "${NORM[$d]:-}" ]]; then

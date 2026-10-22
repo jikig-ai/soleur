@@ -2949,7 +2949,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       const dispatchConversationId = session.conversationId!;
       const clientTurnId = chatClientTurnId ?? randomUUID();
       const codexKey = codexTurnKey(userId, dispatchConversationId);
-      // Migration 145's unique `(run_id, attempt_key)` claim rejects a same-id
+      // Migration 163's unique `(run_id, attempt_key)` claim rejects a same-id
       // retry. Return before any asynchronous work so it cannot interfere with
       // the already accepted request for that key.
       if (codexTurnClientTurnIds.get(codexKey) === clientTurnId) break;

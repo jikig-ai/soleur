@@ -5,9 +5,9 @@ import path from "node:path";
 const root = path.join(__dirname, "../supabase/migrations");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
 
-describe("migration 143: durable engine turn attempts", () => {
+describe("migration 163: durable engine turn attempts", () => {
   it("separates attempts from immutable conversation bindings and cascades erasure", () => {
-    const sql = read("143_agent_engine_attempts.sql");
+    const sql = read("163_agent_engine_attempts.sql");
     expect(sql).toMatch(/CREATE TABLE public\.agent_engine_attempts/);
     expect(sql).toMatch(/run_id uuid NOT NULL REFERENCES public\.agent_engine_runs\(id\) ON DELETE CASCADE/);
     expect(sql).toMatch(/UNIQUE \(run_id, attempt_key\)/);
@@ -17,13 +17,13 @@ describe("migration 143: durable engine turn attempts", () => {
   });
 
   it("rejects replaying an already-used attempt key instead of returning the old attempt", () => {
-    const sql = read("143_agent_engine_attempts.sql");
+    const sql = read("163_agent_engine_attempts.sql");
     expect(sql).toMatch(/ON CONFLICT \(run_id, attempt_key\) DO NOTHING/);
     expect(sql).toMatch(/attempt key already exists/);
   });
 
   it("allows only forward attempt transitions and keeps terminal rows immutable", () => {
-    const sql = read("143_agent_engine_attempts.sql");
+    const sql = read("163_agent_engine_attempts.sql");
     expect(sql).toMatch(/WHEN 'queued' THEN p_status IN \('running','cancel_requested','failed','cancelled'\)/);
     expect(sql).toMatch(/WHEN 'running' THEN p_status IN \('waiting','cancel_requested','completed','failed','cancelled'\)/);
     expect(sql).toMatch(/WHEN 'waiting' THEN p_status IN \('running','cancel_requested','failed','cancelled'\)/);
@@ -32,7 +32,7 @@ describe("migration 143: durable engine turn attempts", () => {
   });
 
   it("allocates event sequence under a row lock and stores bounded lifecycle metadata only", () => {
-    const sql = read("143_agent_engine_attempts.sql");
+    const sql = read("163_agent_engine_attempts.sql");
     expect(sql).toMatch(/FOR UPDATE/);
     expect(sql).toMatch(/INSERT INTO public\.agent_engine_events/);
     expect(sql).toMatch(/source_type' NOT IN \('status','approval','error'\)/);
@@ -40,7 +40,7 @@ describe("migration 143: durable engine turn attempts", () => {
   });
 
   it("protects native checkpoints from member reads and writes", () => {
-    const sql = read("143_agent_engine_attempts.sql");
+    const sql = read("163_agent_engine_attempts.sql");
     expect(sql).toMatch(/CREATE TABLE public\.agent_engine_recovery_checkpoints/);
     expect(sql).toMatch(/REVOKE ALL ON TABLE public\.agent_engine_recovery_checkpoints FROM anon, authenticated/);
     expect(sql).toMatch(/ENABLE ROW LEVEL SECURITY/);
@@ -53,7 +53,7 @@ describe("migration 143: durable engine turn attempts", () => {
   });
 
   it("has a down migration", () => {
-    const down = read("143_agent_engine_attempts.down.sql");
+    const down = read("163_agent_engine_attempts.down.sql");
     expect(down).toMatch(/DROP TABLE IF EXISTS public\.agent_engine_recovery_checkpoints/);
     expect(down).toMatch(/DROP TABLE IF EXISTS public\.agent_engine_attempts/);
   });

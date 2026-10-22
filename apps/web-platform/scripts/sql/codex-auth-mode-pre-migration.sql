@@ -1,4 +1,4 @@
--- run-migrations.sh injects this before migration 145 in the SAME transaction
+-- run-migrations.sh injects this before migration 165 in the SAME transaction
 -- as its unchanged body and ledger insert. The table lock excludes both owner
 -- RPCs and direct writes until the constrained backfill finishes. Do not run
 -- this as a separate count query: that leaves a write window before the ALTER.

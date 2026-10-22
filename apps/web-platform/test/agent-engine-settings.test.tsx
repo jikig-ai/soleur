@@ -260,7 +260,9 @@ describe("AgentEngineSettings", () => {
     const { findByLabelText, findByTestId } = render(<AgentEngineSettings isOwner />);
     const mode = await findByLabelText("Authentication mode");
     fireEvent.change(mode, { target: { value: "api-key" } });
-    expect(await findByTestId("user-provider-disclosure")).toHaveTextContent(/history|retention/i);
+    const disclosure = await findByTestId("user-provider-disclosure");
+    expect(disclosure).toHaveTextContent(/history|retention/i);
+    expect(disclosure).toHaveTextContent("Saved conversation history is not transferred");
   });
 
   it("marks only an explicit Codex auth-mode choice as applying to existing conversations", async () => {
