@@ -8344,7 +8344,8 @@ SELFTEST_PASSES=0
 # 819 -> 823 at the PR C review round: the guard-copy parity row and its mutation row, and two scanner-reach rows (bare HEARTBEAT_URL; path-prefixed, backslashed and backtick curl): measured (823 passed, 0 failed).
 # 823 -> 840 at #9757 (stage S8, Guard 3: registry login password off argv, tokenised derived census): the 15 S8 rows. The tree measured 825 before S8 (the floor had 2 rows of slack), so the new floor is the measured total (840 passed, 0 failed).
 # 841 -> 874 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 33 S9 rows. The tree measured 841 after merging main (the floor said 840, so it had 1 row of slack), so the new floor is the measured total (874 passed, 0 failed).
-EXPECTED_TESTS=874
+# 874 -> 875 at the second merge of main: #10566 added one S4 manifest row (git-data-rehearsal-evidence), so the base is 842 and the total is the measured 875 (875 passed, 0 failed).
+EXPECTED_TESTS=875
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
