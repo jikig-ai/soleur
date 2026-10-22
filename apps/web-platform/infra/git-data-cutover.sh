@@ -860,17 +860,17 @@ mode_probe() {
   local rc=0
   gd_exec "id=$qp; d=$qd
     repo=\"\$d/\$id.git\"
-    env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" runuser -u git -- /usr/local/bin/git-data-provision.sh || exit 11
+    env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" /usr/sbin/runuser -u git -- /usr/local/bin/git-data-provision.sh || exit 11
     [ -d \"\$repo\" ] || exit 12
     t=\$(mktemp -d) && chown git:git \"\$t\" || exit 13
     runuser -u git -- sh -c \"cd \\\"\$t\\\" && git init -q && git config user.email cutover@probe && git config user.name probe && git commit -q --allow-empty -m probe && git push --push-option=lease-gen=1 --push-option=worktree-id=cutover-probe \\\"\$repo\\\" HEAD:refs/soleur/worktrees/cutover-probe/probe\" || { rm -rf \"\$t\"; exit 14; }
     rm -rf \"\$t\"
     git --git-dir=\"\$repo\" rev-parse --verify -q refs/soleur/worktrees/cutover-probe/probe >/dev/null || exit 15
-    env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" runuser -u git -- /usr/local/bin/git-data-remove.sh || exit 16
+    env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" /usr/sbin/runuser -u git -- /usr/local/bin/git-data-remove.sh || exit 16
     [ ! -e \"\$repo\" ] || exit 17" || rc=$?
   if [ "$rc" -ne 0 ]; then
     # Zero-residue: try the remove once more (idempotent) before reporting.
-    gd_exec "env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=$qp runuser -u git -- /usr/local/bin/git-data-remove.sh" || true
+    gd_exec "env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=$qp /usr/sbin/runuser -u git -- /usr/local/bin/git-data-remove.sh" || true
     case "$rc" in
       11) _store_refuse probe probe_failed "" provision ;;
       12) _store_refuse probe probe_failed "" repo_absent_after_provision ;;
