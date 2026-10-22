@@ -403,11 +403,14 @@ jobs:
   # knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md#ratchet-red-on-a-pr-or-queue-entry. NOT in scripts/required-checks.txt,
   # the canonical ruleset JSON or infra/github: making it a required context is PR3b (#10859) and waits for an observation window and the budget
   # owner's go-ahead. It runs on pull_request and merge_group only, written positively (the form scripts/probe-merge-group-coverage.sh accepts):
-  # a push run would spend 3 to 4 billed minutes re-proving a tree the merge_group run of the same SHA already proved.
-  # continue-on-error keeps the pull_request and merge_group RUN conclusions green while the context is not required, and avoids a red advisory
-  # job reading as a failing `CI` check on the PR list. The deploy coupling (web-platform-release.yml acts on a PUSH run and refuses a non-success
-  # `CI` conclusion) is not live today because this job never runs on push; adding `push` to the `if:` re-activates it. PR3b MUST remove the
-  # continue-on-error line in the commit that makes the context required (#8574 says the same for harness-discovery).
+  # a push run would spend about 3.4 billed minutes re-proving a tree the merge_group run of the same SHA already proved. The job is always on for
+  # pull_request (drafts, docs-only and bot PRs included): the observation window needs those shapes, and its cost is bounded by the 30-day review trigger.
+  # continue-on-error keeps the pull_request and merge_group RUN conclusions green while the context is not required. How a failing job-level
+  # continue-on-error job renders on the PR check list and in the jobs API is UNMEASURED until the throwaway canary (task 3.5; the result goes in the
+  # runbook observation log); the harness-discovery job below states its own view of that rendering and nothing here relies on it. The deploy coupling
+  # (web-platform-release.yml acts on a PUSH run and refuses a non-success `CI` conclusion) is not live today because this job never runs on push; adding
+  # `push` to the `if:` re-activates it. PR3b MUST remove the continue-on-error line in the commit that makes the context required (#8574 says the same
+  # for harness-discovery).
   # fetch-depth: 2 is what the growth rule needs (HEAD^1 on a merge ref); 200 s of selector timeout leaves a hung selector an exit 2 with an
   # annotation, well inside the 300 s job timeout (the pre-pass alone is about 146 s cold). No secrets, and no ${{ }} inside run:.
   affected-index-ratchet:
@@ -434,16 +437,27 @@ jobs:
           python3 -I scripts/ci-pr-affected-replay.py ratchet --report "$full" > "$out" || rc=$?
           cat "$out"
           reason="$(sed -n 's/^SOLEUR_PR_AFFECTED_RATCHET exit=[0-9]* reason=\([a-z0-9-]*\) .*/\1/p' "$out" | tail -n 1)"
+          if [ -z "$reason" ]; then
+            rc=2
+            reason=no-marker
+          fi
           if [ "$rc" -ne 0 ]; then
-            echo "::error title=affected-index-ratchet::exit=$rc reason=${reason:-unknown}"
+            echo "::error title=affected-index-ratchet::exit=$rc reason=$reason"
           fi
           if grep -q '^oracle-inputs-changed:' "$out"; then
-            echo "::warning title=affected-index-ratchet::oracle-inputs-changed: ci.yml, the replay script or the baseline changed in this diff; review it as the oracle, see the runbook"
+            echo "::warning title=affected-index-ratchet::oracle-inputs-changed: the check's own oracle changed in this diff (files in the log line and the summary); review it as the oracle, see the runbook"
           fi
+          src="$full"
+          [ -s "$src" ] || src="$out"
+          sed 's/^/    /' "$src" > "$RUNNER_TEMP/affected-index-ratchet.summary"
           {
             echo "### affected-index-ratchet"
             echo
-            sed 's/^/    /' "$full" 2>/dev/null || sed 's/^/    /' "$out"
+            head -c 900000 "$RUNNER_TEMP/affected-index-ratchet.summary"
+            if [ "$(wc -c < "$RUNNER_TEMP/affected-index-ratchet.summary")" -gt 900000 ]; then
+              echo
+              echo "(truncated at 900000 bytes: the first 25 entries of every class are in the job log above)"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 
