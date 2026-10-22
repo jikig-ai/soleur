@@ -159,9 +159,26 @@ describe("Codex Web cumulative text", () => {
       expect(map(text("codex:item:synthetic-item:message", answer))).toMatchObject({ type: "stream" });
       now += 100;
     }
-    expect(map(text("codex:item:synthetic-item:message", answer))).toBeUndefined();
-    expect(map({ runId: "synthetic-run", eventId: "synthetic-end", sequence: 34, payload: { type: "status", status: "completed" } })).toMatchObject({ type: "stream_end" });
+    expect(map({ runId: "synthetic-run", eventId: "synthetic-end", sequence: 33, payload: { type: "status", status: "completed" } })).toMatchObject({ type: "stream_end" });
     expect(map.takeFinalSnapshot()).toMatchObject({ type: "stream", content: answer, answerSnapshot: true });
+  });
+
+  it("bounds total received text work after intermediate snapshots are suppressed", () => {
+    let now = 0;
+    const encode = vi.spyOn(TextEncoder.prototype, "encode");
+    const map = createCodexWebEventMapper(options, () => now);
+    const answer = "a".repeat(256 * 1024);
+    try {
+      for (let i = 0; i < 32; i++) {
+        map(text("codex:item:synthetic-item:message", answer));
+        now += 100;
+      }
+      expect(encode).toHaveBeenCalledTimes(32);
+      expect(() => map(text("codex:item:synthetic-item:message", answer))).toThrow("codex_web_text_limit");
+      expect(encode).toHaveBeenCalledTimes(32);
+    } finally {
+      encode.mockRestore();
+    }
   });
 
   it("bounds unkeyed text output without inferring snapshot semantics", () => {

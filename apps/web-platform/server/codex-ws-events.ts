@@ -16,6 +16,7 @@ export function createCodexWebEventMapper(
 ): ((event: EngineEvent) => WSMessage | undefined) & { takeFinalSnapshot: () => WSMessage | undefined } {
   const items = new Map<string, { chunks: string[]; byteLength: number }>();
   let retainedBytes = 0;
+  let receivedTextBytes = 0;
   let textEventCount = 0;
   let intermediateSnapshotBytes = 0;
   let lastSnapshotAt = Number.NEGATIVE_INFINITY;
@@ -23,13 +24,14 @@ export function createCodexWebEventMapper(
   let finalSnapshot: WSMessage | undefined;
   const encoder = new TextEncoder();
   const textBytes = (text: string): number => {
-    if (text.length > MAX_TEXT_BYTES) {
+    if (text.length > MAX_TEXT_BYTES || text.length > 8 * 1024 * 1024 - receivedTextBytes) {
       throw Object.assign(new Error("codex_web_text_limit"), { code: "codex_web_text_limit" });
     }
     const byteLength = encoder.encode(text).byteLength;
-    if (byteLength > MAX_TEXT_BYTES) {
+    if (byteLength > MAX_TEXT_BYTES || byteLength > 8 * 1024 * 1024 - receivedTextBytes) {
       throw Object.assign(new Error("codex_web_text_limit"), { code: "codex_web_text_limit" });
     }
+    receivedTextBytes += byteLength;
     return byteLength;
   };
   const map = ((event: EngineEvent): WSMessage | undefined => {
