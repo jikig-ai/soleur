@@ -458,7 +458,7 @@ bare_rw_read() { grep -qE 'secrets get HCLOUD_TOKEN( |$)' "$LOADER_DIR/calls"; }
 # the stub's refusal is invisible: a read through ANY other spelling (`doppler run -- printenv HCLOUD_TOKEN`) stayed green.
 loader_miss() { grep -q '^MISS:' "$LOADER_DIR/calls"; }
 # A value-echo probe: a non-blank bad value appearing in ANY stream means an annotation carried the value.
-echoed() { [[ "$1" == *[![:space:]]* ]] && sentinel_leaked "$1"; }
+echoed() { if [[ "$1" == *[![:space:]]* ]]; then sentinel_leaked "$1"; else return 1; fi; }
 sentinel_leaked() { # <sentinel> — in the env file, the log, or the step output
   grep -qF -- "$1" "$LOADER_DIR/github_env" "$LOADER_DIR/stdout" "$LOADER_DIR/stderr" "$LOADER_DIR/github_output"
 }
@@ -874,7 +874,7 @@ sb_env_val() { awk '/^TF_VAR_hcloud_token<[<]/ {getline; print; exit}' "$SB_DIR/
 sb_leaked() { grep -qF -- "$1" "$SB_DIR/github_env" "$SB_DIR/stdout" "$SB_DIR/stderr"; }
 sb_bare_rw() { grep -qE 'secrets get HCLOUD_TOKEN( |$)' "$SB_DIR/calls"; }
 sb_miss() { grep -q '^MISS:' "$SB_DIR/calls"; }
-sb_echoed() { [[ "$1" == *[![:space:]]* ]] && sb_leaked "$1"; }
+sb_echoed() { if [[ "$1" == *[![:space:]]* ]]; then sb_leaked "$1"; else return 1; fi; }
 sb_said() { grep -qF -- "$1" "$SB_DIR/stdout"; }
 if extract_siteb "$INFRA_VALIDATION_YML" "$WORK/siteb.sh"; then
   run_siteb "ro.valid-TOKEN_1" "$SB_SENTINEL"
