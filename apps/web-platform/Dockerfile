@@ -381,6 +381,10 @@ COPY --from=builder \
   /app/infra/web-private-nic-guard.sh \
   /app/infra/web-private-nic-guard.service \
   /app/infra/web-private-nic-guard.timer \
+  /app/infra/web-bash-synthetic.sh \
+  /app/infra/web-bash-synthetic.service \
+  /app/infra/web-bash-synthetic.timer \
+  /app/infra/sdk-bash-verdict.sh \
   /app/infra/web-zot-consumer-probe.sh \
   /app/infra/web-zot-consumer-probe.service \
   /app/infra/web-zot-consumer-probe.timer \

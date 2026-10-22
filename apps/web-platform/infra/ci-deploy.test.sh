@@ -4675,7 +4675,7 @@ assert_sdk_bash_smoke() {
   # The 124 arm moved out of run_sdk_bash_smoke into the sourced lib shared with the runtime synthetic (ADR-079 addendum 2026-10-20):
   # the marker is read there, and the function reaches it through sdk_bash_map_result.
   local verdict_lib
-  verdict_lib="$(dirname "$DEPLOY_SCRIPT")/lib/sdk-bash-verdict.sh"
+  verdict_lib="$(dirname "$DEPLOY_SCRIPT")/sdk-bash-verdict.sh"
   sbs_check "SBS-12f" "SDK_BASH_DISPATCHED is printed by the probe beside state.dispatched = true and read by the 124 arm in the shared verdict lib the smoke calls (parity)" \
     "$([[ "$(grep -A1 'state\.dispatched = true;' "$probe_src" | grep -c 'SDK_BASH_DISPATCHED' || true)" -ge 1 \
         && "$(grep -cF 'SDK_BASH_DISPATCHED' "$verdict_lib" || true)" -ge 1 \

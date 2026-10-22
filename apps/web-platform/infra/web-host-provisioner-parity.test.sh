@@ -317,8 +317,10 @@ else:
        "CI genuinely gained another route, the forward, the firewall and the -target lists "
        "must change FIRST, and this check with them.")
 
-# The web-2 sibling class (#9151 / #7103-B4). The vetted web-2 dialer set is exactly three
-# resources today: deploy_pipeline_fix_web2, (#9534) egress_gateway_web2 — the latter
+# The web-2 sibling class (#9151 / #7103-B4). The vetted web-2 dialer set is exactly four
+# resources today (the fourth, web_bash_synthetic_install_web2 (#10455 b), delivers the runtime Bash synthetic to the RUNNING
+# web-2 and derives its env file on the host from the probe env file web-probe-envwrite.sh wrote at birth, so the resource itself
+# carries no credential material); the first three: deploy_pipeline_fix_web2, (#9534) egress_gateway_web2 — the latter
 # delivers the squid gateway to the RUNNING web-2 (replace-only delivery would leave an
 # entitled session on web-2 fail-closed until its next -replace) — and
 # journald_persistent_web2, which re-delivers vector.toml so a Source-4 tag added after
@@ -331,7 +333,7 @@ else:
 # carries all three — the failure that puts the prd credential on a host the issue
 # explicitly scopes out of this change.
 W2_DIALERS = [n for n, b in ssh_resources.items() if re.search(DIAL_W2, b)]
-W2_ALLOWED = {"deploy_pipeline_fix_web2", "egress_gateway_web2", "journald_persistent_web2"}
+W2_ALLOWED = {"deploy_pipeline_fix_web2", "egress_gateway_web2", "journald_persistent_web2", "web_bash_synthetic_install_web2"}
 w2_bad_key = [n for n in W2_DIALERS
               if not re.search(r'host_key\s*=\s*local\.web_2_ssh_host_key', ssh_resources[n])]
 # Credential-boundary token set, widened at review: a bare `doppler_token` covers
@@ -1369,7 +1371,7 @@ else:
        "inherit an EXT_RESIDENCE member's exemption: " + ", ".join(dup_addrs))
 
 ssh_blocks = [(loc, b, a) for loc, b, a, _k in blocks if not is_winrm(b)]
-FLOOR_BLOCKS = 25  # floor = census: 21 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123/#9151/#9529); slack below census lets blocks vanish unflagged
+FLOOR_BLOCKS = 27  # floor = census: 23 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123/#9151/#9529/#10455); slack below census lets blocks vanish unflagged
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
 else:

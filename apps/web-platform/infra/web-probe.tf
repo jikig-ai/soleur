@@ -97,6 +97,33 @@ resource "betteruptime_heartbeat" "web_nic_guard" {
   }
 }
 
+# §4 — runtime Bash synthetic liveness heartbeat (per host; #10455 b, ADR-079 addendum 2026-10-20). Pinged ONLY on a
+# verified pass of one real wrapped Bash call in the RUNNING web container, so a sandbox that breaks between deploys (the
+# 2026-10-06..16 outage, #10445) stops the beat and pages. PERMANENT and INDEPENDENT of the nic-guard and zot beats (folding
+# would re-introduce OR-masking across distinct failure domains; own URL per unit, never shared).
+# period 900 s = the timer cadence; grace 1800 s: a skipped run (deploy lock, restart, memory skip) plus jitter must not page,
+# and a verified FAIL already pages immediately through <url>/fail, so this beat only needs to be coarse about a DEAD detector.
+# The apply-workflow arm gate (arm-heartbeats.sh) PATCHes paused=false only after a real beat lands.
+resource "betteruptime_heartbeat" "web_bash_synthetic" {
+  for_each = var.web_hosts
+
+  name      = "soleur-web-bash-synthetic-${each.key}"
+  period    = 900
+  grace     = 1800
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    ignore_changes = [paused]
+  }
+}
+
 # Per-host heartbeat URLs → Doppler soleur/prd. Each probe/guard resolves its host's own URL by
 # indirect expansion (${!<KEY>}) over the WEB_*_URL_KEY name baked into its env file: the nic-guard and
 # zot SCRIPTS do it after their xtrace refusal (#9639 F6); the git-data and inngest units still do it in
@@ -120,5 +147,15 @@ resource "doppler_secret" "web_nic_guard_url" {
   config     = "prd"
   name       = "WEB_NIC_GUARD_URL_${upper(replace(each.key, "-", "_"))}"
   value      = betteruptime_heartbeat.web_nic_guard[each.key].url
+  visibility = "masked"
+}
+
+resource "doppler_secret" "web_bash_synthetic_url" {
+  for_each = var.web_hosts
+
+  project    = "soleur"
+  config     = "prd"
+  name       = "WEB_BASH_SYNTHETIC_URL_${upper(replace(each.key, "-", "_"))}"
+  value      = betteruptime_heartbeat.web_bash_synthetic[each.key].url
   visibility = "masked"
 }

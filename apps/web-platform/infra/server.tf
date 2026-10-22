@@ -264,6 +264,12 @@ locals {
     "web-private-nic-guard.sh",
     "web-private-nic-guard.service",
     "web-private-nic-guard.timer",
+    # Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-20): the script, its units and the verdict lib it shares
+    # with ci-deploy.sh. Baked for the same reason as the three probes above: the SSH installers below reach running hosts only.
+    "web-bash-synthetic.sh",
+    "web-bash-synthetic.service",
+    "web-bash-synthetic.timer",
+    "sdk-bash-verdict.sh",
     "web-zot-consumer-probe.sh",
     "web-zot-consumer-probe.service",
     "web-zot-consumer-probe.timer",
@@ -964,6 +970,133 @@ resource "terraform_data" "private_nic_guard_install" {
   }
 }
 
+# Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-20) on web-1: one real wrapped Bash call in the RUNNING container every
+# 15 minutes, heartbeat web_bash_synthetic pinged only on a verified pass. Shape of private_nic_guard_install (same connection, trigger
+# hash, probe-first Vector ordering). web-2 is a RUNNING cattle host whose cloud-init never re-runs, so it has its own twin below.
+resource "terraform_data" "web_bash_synthetic_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering), so the first verdict line ships.
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-bash-synthetic.sh"),
+    file("${path.module}/web-bash-synthetic.service"),
+    file("${path.module}/web-bash-synthetic.timer"),
+    file("${path.module}/sdk-bash-verdict.sh"),
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery of the new key (see nic-guard).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_1_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-web-bash-synthetic-install-web-1-%RAND%.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.sh"
+    destination = "/usr/local/bin/web-bash-synthetic.sh"
+  }
+  # The shared verdict mapping lands NEXT TO ci-deploy.sh, which sources it from its own directory.
+  provisioner "file" {
+    source      = "${path.module}/sdk-bash-verdict.sh"
+    destination = "/usr/local/bin/sdk-bash-verdict.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.service"
+    destination = "/etc/systemd/system/web-bash-synthetic.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.timer"
+    destination = "/etc/systemd/system/web-bash-synthetic.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-bash-synthetic.sh",
+      "chmod 0644 /usr/local/bin/sdk-bash-verdict.sh",
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit: see the web-private-nic-guard install above.
+      # umask 0137: never world/group-readable, the env file holds a live prd read token.
+      "( umask 0137 && printf 'WEB_BASH_SYNTHETIC_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' 'WEB_BASH_SYNTHETIC_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-bash-synthetic )",
+      "chmod 600 /etc/default/web-bash-synthetic",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-bash-synthetic.timer",
+      "systemctl list-timers web-bash-synthetic.timer --no-pager",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (twin of web_bash_synthetic_install; dialed through the web-1 bastion in CI, ADR-220). A fresh
+# host gets the same files from cloud-init + soleur-host-bootstrap.sh + web-probe-envwrite.sh. web-host-provisioner-parity.test.sh's
+# W2_ALLOWED admits it.
+resource "terraform_data" "web_bash_synthetic_install_web2" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering), so the first verdict line ships.
+  depends_on = [terraform_data.journald_persistent_web2]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/web-bash-synthetic.sh"),
+    file("${path.module}/web-bash-synthetic.service"),
+    file("${path.module}/web-bash-synthetic.timer"),
+    file("${path.module}/sdk-bash-verdict.sh"),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+    host_key    = local.web_2_ssh_host_key
+    # #8706: Terraform uploads each inline script before running it and blanks it only after an
+    # exit 0, so a failed run would leave this resource's secret in world-readable /tmp.
+    script_path = "/root/tf-web-bash-synthetic-install-web-2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.sh"
+    destination = "/usr/local/bin/web-bash-synthetic.sh"
+  }
+  # The shared verdict mapping lands NEXT TO ci-deploy.sh, which sources it from its own directory.
+  provisioner "file" {
+    source      = "${path.module}/sdk-bash-verdict.sh"
+    destination = "/usr/local/bin/sdk-bash-verdict.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.service"
+    destination = "/etc/systemd/system/web-bash-synthetic.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/web-bash-synthetic.timer"
+    destination = "/etc/systemd/system/web-bash-synthetic.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/web-bash-synthetic.sh",
+      "chmod 0644 /usr/local/bin/sdk-bash-verdict.sh",
+      # NO credential material in this resource (web-host-provisioner-parity.test.sh bars it from every web-2 dialer): the unit's
+      # env file is DERIVED on the host from the sibling probe env file that web-probe-envwrite.sh wrote at web-2's birth, which
+      # already holds the SAME read-scoped web_probes token. Everything the nic-guard file carries that this unit does not use is
+      # dropped; the per-host heartbeat key name is the only line written here. A missing source file fails the apply loudly:
+      # the alternative is a unit that fails every 15 minutes with the cause only in the journal.
+      "probe_env=/etc/default/web-private-nic-guard",
+      "test -s \"$probe_env\" || { echo \"FATAL: $probe_env is missing on web-2, so the synthetic cannot inherit the probe token. Check web-probe-envwrite.sh ran at boot.\" >&2; exit 1; }",
+      "( umask 0137 && { printf 'WEB_BASH_SYNTHETIC_URL_KEY=%s\\n' 'WEB_BASH_SYNTHETIC_URL_${upper(replace("web-2", "-", "_"))}'; grep -vE '^(EXPECTED_IP|BETTERSTACK_INGEST_URL|WEB_NIC_GUARD_URL_KEY)=' \"$probe_env\"; } > /etc/default/web-bash-synthetic )",
+      "chmod 600 /etc/default/web-bash-synthetic",
+      "test \"$(wc -l < /etc/default/web-bash-synthetic)\" -eq 3",
+      "systemctl daemon-reload",
+      "systemctl enable --now web-bash-synthetic.timer",
+      "systemctl list-timers web-bash-synthetic.timer --no-pager",
+    ]
+  }
+}
+
 # #9169 — the ghcr.io hosts-file deny for the RUNNING web hosts (ADR-096 amendment 2026-09-30).
 # ghcr_deny_sh is a byte copy of the registry's runcmd entry (cloud-init-registry.yml) and of the
 # web cloud-init runcmd[1] entry that covers fresh/replaced hosts; web-ghcr-deny.test.sh asserts all
@@ -1471,6 +1604,7 @@ resource "terraform_data" "journald_persistent" {
       "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
       "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
       "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      "grep -q 'web-bash-synthetic' /etc/vector/vector.toml",
       # (#7228 / #7542) The FOURTH Source-4 tag, asserted for the same reason as the three above
       # and added when apply_target=vector-redeliver gave this file a delivery path of its own.
       # It is what makes AC27(a) a property of the APPLY rather than a claim about it: the arm's
@@ -1576,6 +1710,7 @@ resource "terraform_data" "journald_persistent_web2" {
       "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
       "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
       "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      "grep -q 'web-bash-synthetic' /etc/vector/vector.toml",
       "grep -q 'inngest-consumer-probe' /etc/vector/vector.toml",
       # This twin's reason to exist (#9534): the egress-gw-probe Source-4 tag must
       # land in the file the agent reads, or web-2's probe rows keep dying at the

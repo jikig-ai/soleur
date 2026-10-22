@@ -926,8 +926,8 @@ rc=0
 # deadline = period + grace − 40, where 40 = ARM_POLL_INTERVAL_S + 2 × ARM_CURL_MAX_TIME_S is the
 # worst-case gap between the poll loop's last clock read and the rollback PATCH landing (#7657
 # D5; the old reserve of 10 re-paused AFTER the first absence alert at ≥2 s of vendor latency).
-# zot 180+60−40, nic-guard 360+120−40, git-data 60+180−40. inngest-consumer departs from the
-# formula deliberately — see its own block below and the 2026-08-20 amendment to ADR-117.
+# zot 180+60−40, nic-guard 360+120−40, git-data 60+180−40. inngest-consumer and web-bash-synthetic depart from the
+# formula deliberately — see their own blocks below and the 2026-08-20 amendment to ADR-117.
 arm_one 'betteruptime_heartbeat.web_zot_consumer["web-1"]' 'web-zot-consumer (web-1)' 200 || rc=1
 arm_one 'betteruptime_heartbeat.web_nic_guard["web-1"]'    'web-nic-guard (web-1)'    440 || rc=1
 # (#6459/ADR-143) web-2's per-host heartbeats are born `paused` (web-probe.tf
@@ -941,6 +941,31 @@ arm_one 'betteruptime_heartbeat.web_nic_guard["web-2"]'    'web-nic-guard (web-2
 # present in tfstate"), so today this arm returns in milliseconds. It is still a live call site
 # and still counts toward the step's wall-clock ceiling, which is why the budget guard sums it.
 arm_one 'betteruptime_heartbeat.git_data_prd'              'git-data-prd'             200 || rc=1
+
+# (#10455 b, ADR-079 addendum 2026-10-20) web-bash-synthetic, one literal arm per host (the `for_each` beat is born `paused`
+# like its siblings and this gate is its only unpause path; web-host-coverage in arm-heartbeats.test.sh fails when a
+# var.web_hosts member lacks a call). The deadline departs from period+grace-40 (2660) ON PURPOSE, like the inngest arm below:
+# 2660 s per host would put ~90 minutes of worst-case wall clock into every merge's ARM step whenever no beat can land.
+# 300 s catches the first run after an install (timer first fires 30 s + up to 60 s of jitter after enable, then the run) and
+# stays far below the first absence alert (900+1800), so a failed attempt cannot false-page. A beat is NOT guaranteed inside
+# the window on a later apply (the cadence is 900 s): an unlanded beat is a soft landing, exactly as for inngest-consumer,
+# because the first merge can precede the image that carries the probe's resolver (the unit then reports
+# no_ping reason=probe_absent and, correctly, sends nothing). It arms on the first apply whose window catches a beat, and the
+# post-merge check (soleur:postmerge) fails loudly on any beat still paused, so this is never a silent dark state.
+ARM_WBS_DEADLINE=300
+arm_wbs_soft() {  # <label> <arm_one rc>: rc 2 = the gate worked and no beat landed yet (soft); anything else non-zero is a real failure
+  if [[ "$2" -eq 2 ]]; then
+    echo "::warning::${1}: no beat within ${ARM_WBS_DEADLINE}s (elapsed ${ARM_ELAPSED}s); monitor rolled back to paused. Better Stack reported status=${ARM_LAST_STATUS:-unknown} at rollback. The runtime Bash synthetic pings every 15 minutes, and until the web image carrying the probe's resolver is running the unit sends no ping by design (journal: reason=probe_absent), so on the first apply this warning is expected. It arms on the first apply whose window catches a beat; soleur:postmerge verifies it."
+  elif [[ "$2" -ne 0 ]]; then
+    rc=1
+  fi
+}
+wrc=0
+arm_one 'betteruptime_heartbeat.web_bash_synthetic["web-1"]' 'web-bash-synthetic (web-1)' "$ARM_WBS_DEADLINE" || wrc=$?
+arm_wbs_soft 'web-bash-synthetic (web-1)' "$wrc"
+wrc=0
+arm_one 'betteruptime_heartbeat.web_bash_synthetic["web-2"]' 'web-bash-synthetic (web-2)' "$ARM_WBS_DEADLINE" || wrc=$?
+arm_wbs_soft 'web-bash-synthetic (web-2)' "$wrc"
 
 # (#7228/#7587) inngest-consumer — the ONE caller that distinguishes rc=2 (see arm_one's
 # terminal branch), and the ONE arm whose deadline deliberately departs from period+grace−40.

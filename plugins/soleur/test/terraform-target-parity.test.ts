@@ -124,7 +124,8 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // #8706: raised 17 -> 18 for terraform_data.luks_monitor_install (workspaces-luks.tf).
 // #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
 // #9534-review: raised 19 -> 20 for terraform_data.journald_persistent_web2 (server.tf).
-const MIN_SSH_PROVISIONED = 20;
+// #10455 b: raised 20 -> 22 for terraform_data.web_bash_synthetic_install and terraform_data.web_bash_synthetic_install_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 22;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -2562,8 +2563,10 @@ const WEB_HOST_BIRTH_TARGET_BASES = [
   "cloudflare_record.app",
   "betteruptime_heartbeat.web_zot_consumer",
   "betteruptime_heartbeat.web_nic_guard",
+  "betteruptime_heartbeat.web_bash_synthetic",
   "doppler_secret.web_zot_consumer_url",
   "doppler_secret.web_nic_guard_url",
+  "doppler_secret.web_bash_synthetic_url",
 ];
 // The FLEET-SCOPED members: singletons with no per-host instance, so they carry no
 // `["<key>"]` and are exempt from the same-key assertion below.
@@ -2576,8 +2579,10 @@ const WEB_HOST_BIRTH_PER_MERGE_COVERED = [
   "hcloud_firewall_attachment.web",
   "betteruptime_heartbeat.web_zot_consumer",
   "betteruptime_heartbeat.web_nic_guard",
+  "betteruptime_heartbeat.web_bash_synthetic",
   "doppler_secret.web_zot_consumer_url",
   "doppler_secret.web_nic_guard_url",
+  "doppler_secret.web_bash_synthetic_url",
 ];
 
 /**
@@ -2619,7 +2624,7 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     expect(keyedTargets.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
   });
 
-  test("the -targets are EXACTLY the nine per-host birth fan-out addresses", () => {
+  test("the -targets are EXACTLY the twelve per-host birth fan-out addresses", () => {
     const bases = [...new Set(keyedTargets.map((t) => t.replace(/\[.*$/, "")))];
     expect(bases.sort()).toEqual([...WEB_HOST_BIRTH_TARGET_BASES].sort());
   });
@@ -2788,7 +2793,7 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     const src = birthGateSrc();
     expect(allowOk(src)).toBe(true); // control
     for (const extra of ["hcloud_volume_attachment.workspaces_luks", "hcloud_volume.workspaces_luks", "hcloud_volume.workspaces_sibling"]) {
-      const mutated = src.replace('"doppler_secret.web_nic_guard_url[\\"\\($k)\\"]"\n];', `"doppler_secret.web_nic_guard_url[\\"\\($k)\\"]",\n      "${extra}"\n];`);
+      const mutated = src.replace('"doppler_secret.web_bash_synthetic_url[\\"\\($k)\\"]"\n];', `"doppler_secret.web_bash_synthetic_url[\\"\\($k)\\"]",\n      "${extra}"\n];`);
       expect(mutated).not.toBe(src);
       expect(allowOk(mutated)).toBe(false);
     }
@@ -6851,7 +6856,7 @@ describe("the ARM gate's deadlines fit its job", () => {
     const deadlines = armOneDeadlines(script);
     // Every hand-written call site, not just the ones reachable on today's merge path: a call site
     // absent from tfstate today is still a call site, and the ceiling has to hold when it is not.
-    expect(deadlines.length).toBe(6);
+    expect(deadlines.length).toBe(8);
     expect(ladderViolations(jobS, stepS, deadlines, terms())).toEqual([]);
   });
 
@@ -6876,7 +6881,7 @@ describe("the ARM gate's deadlines fit its job", () => {
     const windows = heartbeatWindows();
     expectNonEmptyDispatch(Object.keys(windows).length, 4);
     const calls = armOneCalls(script);
-    expectNonEmptyDispatch(calls.length, 6);
+    expectNonEmptyDispatch(calls.length, 8);
     for (const { addr, deadline } of calls) {
       const name = /^betteruptime_heartbeat\.([a-z0-9_]+)/.exec(addr)?.[1];
       expect(name).toBeDefined();
@@ -6885,16 +6890,25 @@ describe("the ARM gate's deadlines fit its job", () => {
       // Every arm must roll back BEFORE the first absence alert. The inngest arm sits far below
       // the formula on purpose (#7228), which is still inside the bound.
       expect(deadline).toBeLessThanOrEqual(window - reserve);
-      if (name !== "inngest_consumer") expect(deadline).toBe(window - reserve);
+      // The two arms that depart from the formula on purpose, each pinned EXACTLY in the next test: inngest_consumer (#7228) and
+      // web_bash_synthetic (#10455 b: 2660 s per host would put ~90 minutes of worst-case wall clock into every merge's ARM step).
+      if (name !== "inngest_consumer" && name !== "web_bash_synthetic") expect(deadline).toBe(window - reserve);
     }
   });
 
-  test("the `inngest_consumer` deadline is EXACTLY 30, and every other deadline is unchanged", () => {
+  test("the `inngest_consumer` deadline is EXACTLY 30, `web_bash_synthetic` EXACTLY 300 on each host, and every other deadline is unchanged", () => {
     // Not "<= 60": the reclaimed ~200 s and the 1-in-6 arming probability both plug in 30, so a
     // looser bound would pass while falsifying the arithmetic.
     const stripped = script.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
     expect(stripped).toMatch(/^ARM_INNGEST_DEADLINE=30$/m);
-    expect(armOneDeadlines(script)).toEqual([200, 440, 200, 440, 200, 30]);
+    expect(stripped).toMatch(/^ARM_WBS_DEADLINE=300$/m);
+    expect(armOneDeadlines(script)).toEqual([200, 440, 200, 440, 200, 300, 300, 30]);
+    // …and the departure stays strictly inside the monitor's own window, so a failed attempt cannot false-page.
+    const wbs = armOneCalls(script).filter((c) => c.addr.includes("web_bash_synthetic"));
+    expect(wbs.map((c) => c.addr)).toEqual([
+      'betteruptime_heartbeat.web_bash_synthetic["web-1"]',
+      'betteruptime_heartbeat.web_bash_synthetic["web-2"]',
+    ]);
   });
 
   test("the workflow's own ladder arithmetic matches the derived numbers", () => {
@@ -6923,7 +6937,7 @@ describe("the ARM gate's deadlines fit its job", () => {
       "the notify job",
     );
     const mutexMin = (preflightS + jobS + notifyS) / 60;
-    expect(mutexMin).toBe(47);
+    expect(mutexMin).toBe(59);
     // Every comment line in the file that states an ADDITIVE minute sum. There are three copies —
     // the apply header, the notify-apply-failure header, and the registry_luks_recut accounting
     // paragraph 1,300 lines away — and they used to be able to drift apart silently.
@@ -7063,8 +7077,8 @@ describe("Guard 2 mutation battery (#7587)", () => {
   };
 
   test("control: the SHIPPED ladder is clean, read live from the workflow", () => {
-    expect(JOB_S).toBe(41 * 60);
-    expect(STEP_S).toBe(35 * 60);
+    expect(JOB_S).toBe(53 * 60);
+    expect(STEP_S).toBe(47 * 60);
     expect(ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, T)).toEqual([]);
   });
 
@@ -7166,8 +7180,9 @@ describe("Guard 2 mutation battery (#7587)", () => {
   });
 
   test("H4 PASS: a non-canonical step ceiling that still satisfies the inequality MUST NOT red", () => {
-    // The contract is the inequality, not a literal. 36 min is not what ships and is fine.
-    expect(ladderViolations(JOB_S, 36 * 60, REAL_DEADLINES, T)).toEqual([]);
+    // The contract is the inequality, not a literal. 2800 s (46 min 40 s) is not what ships and is fine: it covers the
+    // 2790 s of work and leaves the job its 321 s of pre- and post-gate room.
+    expect(ladderViolations(JOB_S, 2800, REAL_DEADLINES, T)).toEqual([]);
   });
 
   test("H5 RED: an unresolvable deadline variable fails closed rather than dropping the term", () => {

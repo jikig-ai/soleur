@@ -24,7 +24,7 @@ esac
 # THE ONE RULE (Guard 1): every exit flows through finish(), and finish() is the only caller of ping_heartbeat(), AFTER the
 # verdict is computed. A no_ping run never reaches the heartbeat; a container swapped mid-run is never a fail.
 #
-# THE MAPPING from "what docker exec returned" to pass/fail/skip is NOT here: it is lib/sdk-bash-verdict.sh, sourced by this
+# THE MAPPING from "what docker exec returned" to pass/fail/skip is NOT here: it is sdk-bash-verdict.sh (next to this file), sourced by this
 # script AND by ci-deploy.sh's deploy-time smoke, so the two cannot drift.
 #
 # SAFETY toward the shared production container (this execs into the container that serves tenants): the run SKIPS
@@ -38,7 +38,14 @@ esac
 # `docker exec` client. No `-u` (the container's own user; a root pass would not prove uid 1001, recorded in the ADR addendum).
 # The probe writes only its own scratch dirs (runtime mode creates no masked dir); this script writes only STATE_DIR.
 #
-# SEAMS (SOLEUR_WBS_*) exist for web-bash-synthetic.test.sh and are NEVER set by the unit.
+# SEAMS (SOLEUR_WBS_*) exist for web-bash-synthetic.test.sh and are NEVER set by the unit. They are honored ONLY when the script is
+# started with `--fixture-seams` (the unit passes no argument): otherwise every one is unset below, so a stray secret of that name
+# in the shared soleur/prd config that `doppler run` injects can neither redirect PATH, the sourced verdict lib or the container,
+# nor silence the ping. (The script runs as root with the whole prd root in its environment: doppler-injection-bound.test.sh.)
+if [ "${1:-}" != "--fixture-seams" ]; then
+  unset SOLEUR_WBS_PATH_PREFIX SOLEUR_WBS_CONTAINER SOLEUR_WBS_STATE_DIR SOLEUR_WBS_LOCK_FILE SOLEUR_WBS_PROC_LOCKS \
+    SOLEUR_WBS_VERDICT_LIB SOLEUR_WBS_PING_LOG SOLEUR_WBS_PROBE_TIMEOUT SOLEUR_WBS_MEM_PCT_MAX
+fi
 
 PATH="${SOLEUR_WBS_PATH_PREFIX:+$SOLEUR_WBS_PATH_PREFIX:}/usr/sbin:/usr/bin:/bin"
 export PATH
@@ -130,12 +137,12 @@ fi
 # --- the shared verdict mapping ------------------------------------------------------------------------------------------------
 VLIB="${SOLEUR_WBS_VERDICT_LIB:-}"
 if [ -z "$VLIB" ]; then
-  for _c in "$(dirname "${BASH_SOURCE[0]}")/lib/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh; do
+  for _c in "$(dirname "${BASH_SOURCE[0]}")/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh; do
     if [ -r "$_c" ]; then VLIB="$_c"; break; fi
   done
 fi
 if [ -n "$VLIB" ] && [ -r "$VLIB" ]; then
-  # shellcheck source=lib/sdk-bash-verdict.sh
+  # shellcheck source=sdk-bash-verdict.sh
   . "$VLIB" || true
 fi
 if ! declare -F sdk_bash_map_result >/dev/null 2>&1; then

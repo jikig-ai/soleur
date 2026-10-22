@@ -648,6 +648,7 @@ runcmd:
     /usr/local/bin/web-probe-envwrite.sh || soleur-boot-emit web_probe_envwrite fatal || true
   - systemctl daemon-reload
   - systemctl enable --now web-private-nic-guard.timer
+  - systemctl enable --now web-bash-synthetic.timer
   - systemctl enable --now web-zot-consumer-probe.timer
   - systemctl enable --now inngest-consumer-probe.timer
   - systemctl enable --now web-git-data-probe.timer

@@ -125,8 +125,10 @@ _WEB_HOST_BIRTH_ALLOW='def allow($k): [
       "cloudflare_record.app",
       "betteruptime_heartbeat.web_zot_consumer[\"\($k)\"]",
       "betteruptime_heartbeat.web_nic_guard[\"\($k)\"]",
+      "betteruptime_heartbeat.web_bash_synthetic[\"\($k)\"]",
       "doppler_secret.web_zot_consumer_url[\"\($k)\"]",
-      "doppler_secret.web_nic_guard_url[\"\($k)\"]"
+      "doppler_secret.web_nic_guard_url[\"\($k)\"]",
+      "doppler_secret.web_bash_synthetic_url[\"\($k)\"]"
 ];'
 
 # The host key whose LUKS attachment lives OUTSIDE the birth fan-out (singleton

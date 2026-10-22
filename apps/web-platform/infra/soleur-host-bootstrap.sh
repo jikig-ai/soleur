@@ -83,12 +83,17 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          cron-egress-postapply-assert.sh cron-egress-enforce-probe.sh \
          orphan-reaper.sh \
          web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh \
+         web-bash-synthetic.sh \
          inngest-consumer-probe.sh inngest-registry-probe.sh \
          web-probe-envwrite.sh \
          egress-gateway-bootstrap.sh egress-auth-helper.sh \
          workspaces-luks-provision.sh workspaces-luks-reopen.sh workspaces-luks-emit.sh; do
   FAILED_FILE="$f"; install -D -m 0755 -o root -g root "$SEED/$f" "/usr/local/bin/$f"
 done
+# The shared SDK Bash verdict mapping (#10455 b) sits NEXT TO ci-deploy.sh, which sources it from its own directory, and is sourced
+# (never executed) by web-bash-synthetic.sh: 0644, like the running-host install.
+FAILED_FILE=sdk-bash-verdict.sh
+install -D -m 0644 -o root -g root "$SEED/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh
 # The daily LUKS probe installs WITHOUT the .sh suffix (luks-monitor.service ExecStart and the
 # web-1 SSH installer both name /usr/local/bin/luks-monitor).
 FAILED_FILE=luks-monitor
@@ -102,6 +107,7 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
          cron-egress-alarm@.service \
          orphan-reaper.service orphan-reaper.timer bwrap-userns-sysctl.service \
          web-private-nic-guard.service web-private-nic-guard.timer \
+         web-bash-synthetic.service web-bash-synthetic.timer \
          web-zot-consumer-probe.service web-zot-consumer-probe.timer \
          web-git-data-probe.service web-git-data-probe.timer \
          inngest-consumer-probe.service inngest-consumer-probe.timer \

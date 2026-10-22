@@ -6,7 +6,7 @@
 # preserves exit statuses, and pins GUARD 1 of the plan (no false green, no false red on a deploy):
 #   - a `no_ping` run never pings; a failed run pings /fail; a run overlapped by a container swap is never a `fail`;
 #   - the ping happens AFTER the probe returned (the mock stamps PROBE_DONE into the same log the ping seam writes to);
-#   - the verdict mapping is the ONE function in lib/sdk-bash-verdict.sh, sourced by this script AND ci-deploy.sh.
+#   - the verdict mapping is the ONE function in sdk-bash-verdict.sh, sourced by this script AND ci-deploy.sh.
 # Each Guard 1 mutation row is applied to a COPY of the SUT/lib and must turn the core cases RED; the control (unmutated) run must be
 # GREEN first, and each mutation is asserted to have LANDED against a pristine copy (a mutation that does not land reports the baseline).
 #
@@ -16,7 +16,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/web-bash-synthetic.sh"
-LIB="$SCRIPT_DIR/lib/sdk-bash-verdict.sh"
+LIB="$SCRIPT_DIR/sdk-bash-verdict.sh"
 DEPLOY="$SCRIPT_DIR/ci-deploy.sh"
 SERVICE="$SCRIPT_DIR/web-bash-synthetic.service"
 TIMER="$SCRIPT_DIR/web-bash-synthetic.timer"
@@ -151,7 +151,7 @@ run_case() {
     SOLEUR_WBS_LOCK_FILE="${CASE_LOCK_FILE:-$RUN_DIR/no-such-lock}" SOLEUR_WBS_PROC_LOCKS="${CASE_PROC_LOCKS:-$RUN_DIR/proc-locks}" \
     SOLEUR_WBS_PROBE_TIMEOUT="${CASE_PROBE_TIMEOUT:-5}" \
     WEB_BASH_SYNTHETIC_URL_KEY="${CASE_URL_KEY-WBS_TEST_URL}" WBS_TEST_URL="${CASE_URL-https://uptime.example.invalid/api/v1/heartbeat/abc123}" \
-    bash "$sut" > "$RUN_DIR/out" 2> "$RUN_DIR/err" || ec=$?
+    bash "$sut" --fixture-seams > "$RUN_DIR/out" 2> "$RUN_DIR/err" || ec=$?
   EC=$ec
   ERR="$(cat "$RUN_DIR/err")"
   PINGS="$(cat "$RUN_DIR/ping.log")"
@@ -252,7 +252,7 @@ reset_case_env; MOCK_SEL_RC=1 run_case "$SUT" "$LIB"; expect_no_ping "resolver e
 reset_case_env; MOCK_PROBE_RC=125 MOCK_NO_RESULT=1 MOCK_DISPATCHED=0 run_case "$SUT" "$LIB"; expect_no_ping "docker exec rc 125 before dispatch" infra_error
 reset_case_env; MOCK_RESULT='{"verdict":"pass","reason":"ok","coverage":"replay_only"}' run_case "$SUT" "$LIB"; expect_no_ping "pass-shaped result with replay_only coverage (a HOLD)" infra_error
 reset_case_env; MOCK_NO_RESULT=1 run_case "$SUT" "$LIB"; expect_no_ping "rc 0 with no result line" infra_error
-reset_case_env; run_case "$SUT" "$SCRIPT_DIR/lib/no-such-lib.sh"; expect_no_ping "verdict lib absent" infra_error
+reset_case_env; run_case "$SUT" "$SCRIPT_DIR/no-such-lib.sh"; expect_no_ping "verdict lib absent" infra_error
 ok_if "verdict lib absent: names the cause" "[[ \"\$ERR\" == *verdict_lib_absent* ]]"
 
 echo "--- result-line parsing ---"
@@ -300,7 +300,7 @@ curl_run() {  # like run_case, but with the real ping path (no ping-log seam)
   MOCK_LOG="$RUN_DIR/log" SOLEUR_WBS_PATH_PREFIX="$BIN" SOLEUR_WBS_STATE_DIR="$RUN_DIR/state" SOLEUR_WBS_VERDICT_LIB="$LIB" \
     SOLEUR_WBS_LOCK_FILE="$RUN_DIR/no-such-lock" SOLEUR_WBS_PROC_LOCKS="$RUN_DIR/proc-locks" SOLEUR_WBS_PROBE_TIMEOUT=5 \
     WEB_BASH_SYNTHETIC_URL_KEY="${CASE_URL_KEY-WBS_TEST_URL}" WBS_TEST_URL="${CASE_URL-https://uptime.example.invalid/api/v1/heartbeat/abc123}" \
-    bash "$SUT" > "$RUN_DIR/out" 2> "$RUN_DIR/err" || ec=$?
+    bash "$SUT" --fixture-seams > "$RUN_DIR/out" 2> "$RUN_DIR/err" || ec=$?
   EC=$ec; ERR="$(cat "$RUN_DIR/err")"; CURLS="$(cat "$RUN_DIR/log/curl.calls" 2>/dev/null || true)"
 }
 reset_case_env; curl_run
@@ -319,6 +319,27 @@ ok_if "a failed ping is retried once and warned, never aborting the unit" "[[ \"
 reset_case_env
 xtrace_ec=0; bash -x "$SUT" > /dev/null 2>&1 || xtrace_ec=$?
 ok_if "refuses to run under xtrace (exit 78): the heartbeat URL is a credential" "[[ '$xtrace_ec' -eq 78 ]]"
+
+echo "--- seams are inert without --fixture-seams (an injected secret cannot steer the root script) ---"
+seam_run() {  # <extra arg or empty> <VAR=value...>: runs the SUT with exactly those seam variables; sets RUN_DIR / SEAM_ERR
+  local arg="$1" ec=0; shift
+  RUN_DIR="$(mktemp -d "$TMP_ROOT/run.XXXXXX")"; assert_fixture_dir "$RUN_DIR"; mkdir -p "$RUN_DIR/state" "$RUN_DIR/log"; : > "$RUN_DIR/ping.log"; : > "$RUN_DIR/log/calls"
+  env "$@" MOCK_LOG="$RUN_DIR/log" SOLEUR_WBS_STATE_DIR="$RUN_DIR/state" SOLEUR_WBS_PING_LOG="$RUN_DIR/ping.log" \
+    WEB_BASH_SYNTHETIC_URL_KEY=WBS_TEST_URL WBS_TEST_URL=https://uptime.example.invalid/api/v1/heartbeat/abc123 \
+    bash "$SUT" ${arg:+"$arg"} > "$RUN_DIR/out" 2> "$RUN_DIR/err" || ec=$?
+  SEAM_ERR="$(cat "$RUN_DIR/err")"
+}
+reset_case_env
+seam_run --fixture-seams SOLEUR_WBS_PATH_PREFIX="$BIN" SOLEUR_WBS_CONTAINER=attacker-chosen
+ok_if "control: WITH --fixture-seams the PATH and container seams take effect (the mock docker sees the chosen name)" "grep -q 'attacker-chosen' '$RUN_DIR/log/calls'"
+seam_run --fixture-seams SOLEUR_WBS_PATH_PREFIX="$BIN" SOLEUR_WBS_VERDICT_LIB="$RUN_DIR/no-such-lib.sh"
+ok_if "control: WITH --fixture-seams a bogus verdict-lib seam takes effect (verdict_lib_absent)" "[[ \"\$SEAM_ERR\" == *verdict_lib_absent* ]]"
+seam_run "" SOLEUR_WBS_PATH_PREFIX="$BIN" SOLEUR_WBS_CONTAINER=attacker-chosen
+ok_if "WITHOUT it the PATH and container seams are ignored: the mock docker is never reached" "[[ ! -s '$RUN_DIR/log/calls' ]]"
+ok_if "WITHOUT it the ping-log seam is ignored too (nothing written to the log)" "[[ ! -s '$RUN_DIR/ping.log' ]]"
+sut_seams="$(grep -vE '^[[:space:]]*#' "$SUT" | grep -oE 'SOLEUR_WBS_[A-Z_]+' | sort -u | tr '\n' ' ')"
+unset_seams="$(awk '/^if \[ "\$\{1:-\}" != "--fixture-seams" \]; then$/{f=1;next} f&&/^fi$/{exit} f' "$SUT" | grep -oE 'SOLEUR_WBS_[A-Z_]+' | sort -u | tr '\n' ' ')"
+ok_if "every SOLEUR_WBS_* name the script reads is in the unset statement (a new seam cannot silently skip the gate)" "[[ -n '$unset_seams' && '$sut_seams' == '$unset_seams' ]]"
 
 echo "--- AC4: the host side writes only its state dir (scratch lives there) ---"
 reset_case_env
@@ -407,7 +428,7 @@ fi
 ok_if "the pristine SUT/lib copies still equal the files under test (no mutation leaked into the tree)" "cmp -s '$SUT' '$PRISTINE_SUT' && cmp -s '$LIB' '$PRISTINE_LIB'"
 
 # Assertion floor (anti-vacuity): reported with printf + exit, never through the helpers it backstops.
-FLOOR=121
+FLOOR=126
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR" ]]; then printf 'FAIL: only %s assertions ran (floor %s): the suite lost coverage\n' "$total" "$FLOOR"; exit 1; fi
 echo "=== $passes passed, $fails failed ($total assertions) ==="

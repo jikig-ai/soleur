@@ -319,11 +319,13 @@ jobs:
     # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply (test-anchored lines kept below)
     #   (1) arm_step_timeout ≥ Σ over call sites of
     #       (deadline_i + poll_interval + (3 + rollback_attempts) × curl_max_time)
-    #       → 2100 ≥ (200+440+200+440+200+30) + 6 × 85 = 1510 + 510 = 2020      ✓ slack 80 s
+    #       → 2820 ≥ (200+440+200+440+200+300+300+30) + 8 × 85 = 2110 + 680 = 2790      ✓ slack 30 s
     #   (2) job_timeout − arm_step_timeout ≥ max(pre-gate) + post-gate budget
-    #       → 2460 − 2100 = 360 ≥ 111 + 180 = 291                               ✓ slack 69 s
-    #   Mutex sum (three push-chain jobs): preflight 1 + apply 41 + notify-apply-failure 5 = 47 min.
-    timeout-minutes: 41
+    #       → 3180 − 2820 = 360 ≥ 111 + 210 = 321                               ✓ slack 39 s
+    #   (2026-10-22, #10455 b: two web-bash-synthetic arms at 300 s each took the ladder from 2020 < 2100 < 2460 to 2790 < 2820 < 3180;
+    #    runbooks/apply-web-platform-infra-job-rationale.md carries the dated addendum.)
+    #   Mutex sum (three push-chain jobs): preflight 1 + apply 53 + notify-apply-failure 5 = 59 min.
+    timeout-minutes: 53
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
     # reviewer click was duplicative friction on top of the PR-merge gate,
     # and was blocking apply runs for up to 13h (#4204 on 2026-05-20). The
@@ -636,10 +638,12 @@ jobs:
               -target=doppler_secret.cf_api_token_dns_edit \
               -target=betteruptime_heartbeat.web_zot_consumer \
               -target=betteruptime_heartbeat.web_nic_guard \
+              -target=betteruptime_heartbeat.web_bash_synthetic \
               -target=betteruptime_heartbeat.inngest_consumer \
               -target=doppler_secret.inngest_consumer_url \
               -target=doppler_secret.web_zot_consumer_url \
               -target=doppler_secret.web_nic_guard_url \
+              -target=doppler_secret.web_bash_synthetic_url \
               -target=doppler_service_token.web_probes \
               -target=doppler_service_token.web_arm_write \
               -target=github_actions_secret.doppler_token_web_arm \
@@ -1258,6 +1262,8 @@ jobs:
               -target=terraform_data.orphan_reaper_install \
               -target=terraform_data.cron_egress_firewall \
               -target=terraform_data.private_nic_guard_install \
+              -target=terraform_data.web_bash_synthetic_install \
+              -target=terraform_data.web_bash_synthetic_install_web2 \
               -target=terraform_data.zot_consumer_probe_install \
               -target=terraform_data.git_data_probe_install \
               -target=terraform_data.inngest_consumer_probe_install \
@@ -1335,13 +1341,13 @@ jobs:
         # is nothing to arm.
         if: always() && steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
         # STEP-LEVEL CEILING (#7587), the lower rung of the ladder documented on the job's own
-        # `timeout-minutes` above: 2020 (the script's worst-case wall clock) < 2100 (this step)
-        # < 2460 (the job). It is what makes an over-running ARM gate fail INSIDE the job — where
+        # `timeout-minutes` above: 2790 (the script's worst-case wall clock) < 2820 (this step)
+        # < 3180 (the job). It is what makes an over-running ARM gate fail INSIDE the job — where
         # the `if: always()` re-pause sweep below and the post-apply summary still run — instead
         # of being cancelled WITH the job, which is #7587's shape: the in-script rollback never
         # runs and a heartbeat is left unpaused-and-unfed until its grace window expires and it
         # pages, at whatever hour.
-        timeout-minutes: 35
+        timeout-minutes: 47
         working-directory: ${{ env.INFRA_DIR }}
         env:
           # Passed as DOPPLER_TOKEN (the CLI's own variable) rather than on argv: `--token <secret>`
@@ -1517,7 +1523,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Bounds the fleet-mutex hold this job adds; GitHub's default is 360 minutes. The
     # `concurrency` group is WORKFLOW-level, so the run-level worst case is the SUM across every
-    # job that can execute on a push, chained by `needs:`: preflight 1 + apply 41 + this 5 = 47 min.
+    # job that can execute on a push, chained by `needs:`: preflight 1 + apply 53 + this 5 = 59 min.
     # `preflight` is counted — it was omitted from the earlier "40 min" arithmetic, which was 41.
     # Pinned to exactly 5 by the guard suite (raising it silently falsifies all three copies of the
     # sum, so the guard asserts the literal rather than a ceiling).
@@ -3099,7 +3105,7 @@ jobs:
 
   # Selected by `-f apply_target=registry-luks-recut` (#6929, ADR-096 amendment 2026-07-24).
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §registry_luks_recut (test-anchored lines kept below)
-  # preflight 1 + apply 41 + notify 5 = 47 min rather than 15. (`preflight` is chained by `needs:`
+  # preflight 1 + apply 53 + notify 5 = 59 min rather than 15. (`preflight` is chained by `needs:`
   registry_luks_recut:
     environment: infra-privileged
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
@@ -4966,8 +4972,10 @@ jobs:
               -target="cloudflare_record.app" \
               -target="betteruptime_heartbeat.web_zot_consumer[\"${WEB_HOST_KEY}\"]" \
               -target="betteruptime_heartbeat.web_nic_guard[\"${WEB_HOST_KEY}\"]" \
+              -target="betteruptime_heartbeat.web_bash_synthetic[\"${WEB_HOST_KEY}\"]" \
               -target="doppler_secret.web_zot_consumer_url[\"${WEB_HOST_KEY}\"]" \
               -target="doppler_secret.web_nic_guard_url[\"${WEB_HOST_KEY}\"]" \
+              -target="doppler_secret.web_bash_synthetic_url[\"${WEB_HOST_KEY}\"]" \
               -var="ssh_key_path=${CI_SSH_PUB}" \
               -var="image_name=${PINNED}"
           rc=$?

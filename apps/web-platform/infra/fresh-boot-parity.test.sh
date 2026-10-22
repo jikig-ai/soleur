@@ -106,11 +106,13 @@ fi
 # the per-host env file (/etc/default/web-<probe>): the SSH path writes it via a remote-exec
 # `printf`, the fresh-boot path writes it via the baked `web-probe-envwrite.sh` invoked by
 # cloud-init. The env-content parity guard (section 12) pins the KEY SET of the two writers equal.
-PROBE_SCRIPTS="web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh web-probe-envwrite.sh"
+# (#10455 b) web-bash-synthetic rides the same machinery, plus sdk-bash-verdict.sh, the verdict lib it shares with ci-deploy.sh.
+PROBE_SCRIPTS="web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh web-probe-envwrite.sh web-bash-synthetic.sh sdk-bash-verdict.sh"
 PROBE_UNITS="web-private-nic-guard.service web-private-nic-guard.timer \
              web-zot-consumer-probe.service web-zot-consumer-probe.timer \
-             web-git-data-probe.service web-git-data-probe.timer"
-PROBE_DESTS="web-private-nic-guard web-zot-consumer-probe web-git-data-probe"
+             web-git-data-probe.service web-git-data-probe.timer \
+             web-bash-synthetic.service web-bash-synthetic.timer"
+PROBE_DESTS="web-private-nic-guard web-zot-consumer-probe web-git-data-probe web-bash-synthetic"
 
 # ── 7. Repo files exist (3 probe scripts + the new baked env-writer + 6 units) ──
 for f in $PROBE_SCRIPTS $PROBE_UNITS; do
@@ -172,7 +174,7 @@ for d in $PROBE_DESTS; do
 done
 
 # ── 13. The 3 probe SSH provisioners are RETAINED (Phase 2 adds coverage; Phase 5 removes SSH) ──
-for r in private_nic_guard_install zot_consumer_probe_install git_data_probe_install; do
+for r in private_nic_guard_install zot_consumer_probe_install git_data_probe_install web_bash_synthetic_install web_bash_synthetic_install_web2; do
   if grep -qE "resource \"terraform_data\" \"$r\"" "$SRV"; then
     ok "13: terraform_data.$r retained (web-1 running-host rotation until Phase 5)"
   else
@@ -490,7 +492,7 @@ mut_ddir "the provisioner's detail dir default drifted" prov 's#(DETAIL_DIR=.*)/
 mut_ddir "ONE emitter's detail dir default drifted" boot '0,/DDIR="\$\{SOLEUR_STAGE_DETAIL_DIR:-\/run\/soleur-stage-detail\.d\}"/s##DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail2.d}"#'
 
 # ── Anti-vacuity: an exact assertion count (deleting sections 14-21 leaves a lower one) ──
-EXPECTED_ASSERTIONS=166
+EXPECTED_ASSERTIONS=186  # 166 + 20 for the runtime Bash synthetic joining the probe lists (#10455 b): 2 scripts, 2 units, 1 dest, 2 retained provisioners
 if [[ "$((pass + fail))" -ne "$EXPECTED_ASSERTIONS" ]]; then no "floor: ran $((pass + fail)) assertions, expected exactly $EXPECTED_ASSERTIONS (a section was deleted or added without moving the floor)"; fi
 
 echo "=== fresh-boot-parity: $pass passed, $fail failed ==="

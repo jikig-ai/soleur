@@ -262,6 +262,12 @@ ACK_REASONS = {
         'the script resolves WEB_NIC_GUARD_URL_KEY by indirect expansion (${!WEB_NIC_GUARD_URL_KEY}), which '
         'the WEB_NIC_GUARD_URL_KEY printf in server.tf builds PER HOST (WEB_NIC_GUARD_URL_WEB_1) — same fail-closed '
         'multi-host break',
+    'web-bash-synthetic.service':
+        'the script resolves WEB_BASH_SYNTHETIC_URL_KEY by indirect expansion (${!WEB_BASH_SYNTHETIC_URL_KEY}), which '
+        'the WEB_BASH_SYNTHETIC_URL_KEY printf in server.tf builds PER HOST (WEB_BASH_SYNTHETIC_URL_WEB_1 / _WEB_2) — no literal '
+        'list in a tracked unit can name it. The script is the same class as its siblings in the one respect that matters here: '
+        'its SOLEUR_WBS_* fixture seams (container, PATH prefix, verdict lib) are unset unless it is started with --fixture-seams, '
+        'which the unit never passes, so a stray name in the injected prd root steers nothing',
     'inngest-consumer-probe.service':
         'indirect expansion of INNGEST_CONSUMER_URL_KEY; the INNGEST_CONSUMER_URL_KEY printf in server.tf maps it to the '
         'identity name today (one dedicated inngest host), but the unit still never names the secret, so '
@@ -298,10 +304,11 @@ ACK_REASONS = {
         'apply_target=inngest-host, which does not reach the web hosts, so a bound added here '
         'would merge green and land nowhere. Tracked in #7775.',
 }
+# 8 -> 9 (#10455 b): web-bash-synthetic.service, class A (per-host key name; its seams are gated behind --fixture-seams).
 # 7 -> 8: cron-egress-firewall.service, added when the review widened the seam predicate. This
 # pin exists so the escape hatch cannot grow silently; it should only ever RATCHET DOWN as #7775
 # drains it.
-ACK_CARDINALITY = 8
+ACK_CARDINALITY = 9
 
 # ── wrapper acks (#9639): units whose Exec directive STILL expands a secret by indirect expansion ─────────────────
 # An Exec directive that expands a doppler-injected secret runs that expansion before the target script can refuse to

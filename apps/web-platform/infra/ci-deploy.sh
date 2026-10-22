@@ -489,18 +489,18 @@ if [[ "$SDK_BASH_SMOKE_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" || "$SDK_BASH
   logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STATE_FILE aliases another canary ledger ($SDK_BASH_SMOKE_STATE_FILE) — SDK Bash smoke SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
 fi
 # The rc/marker -> verdict mapping, shared with the runtime synthetic (web-bash-synthetic.sh) so the two cannot drift (ADR-079
-# addendum 2026-10-20). Repo layout: lib/ next to this file; on a host: delivered beside the other /usr/local/bin scripts by the
-# web_bash_synthetic install block (running host) and cloud-init (fresh host). A host that has this script but not yet the lib
-# reports smoke_infra_error reason=verdict_lib_absent (a HOLD, never a rollback): the smoke is non-blocking by design.
+# addendum 2026-10-20). It sits NEXT TO THIS FILE in both layouts (infra/ in the repo, /usr/local/bin on a host: delivered there by
+# the web_bash_synthetic install blocks on running hosts and baked via cloud-init on fresh ones). A host that has this script but
+# not yet the lib reports smoke_infra_error reason=verdict_lib_absent (a HOLD, never a rollback): the smoke is non-blocking.
 if [[ -z "${SDK_BASH_VERDICT_LIB:-}" ]]; then
   SDK_BASH_VERDICT_LIB=""
   _sbv_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _sbv_here=""
-  for _sbv_c in "$_sbv_here/lib/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh; do
+  for _sbv_c in "$_sbv_here/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh; do
     if [[ -r "$_sbv_c" ]]; then SDK_BASH_VERDICT_LIB="$_sbv_c"; break; fi
   done
 fi
 if [[ -n "$SDK_BASH_VERDICT_LIB" && -r "$SDK_BASH_VERDICT_LIB" ]]; then
-  # shellcheck source=lib/sdk-bash-verdict.sh
+  # shellcheck source=sdk-bash-verdict.sh
   source "$SDK_BASH_VERDICT_LIB" || true
 fi
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
@@ -3271,7 +3271,7 @@ run_sdk_bash_smoke() {
         exec_rc=$?
       fi
       docker_err="$(_cred_err_tail "$(head -1 "$err_file" 2>/dev/null)" | cut -c1-120)"
-      # The mapping is the shared function (lib/sdk-bash-verdict.sh): ONE definition for this smoke and the runtime synthetic.
+      # The mapping is the shared function (sdk-bash-verdict.sh): ONE definition for this smoke and the runtime synthetic.
       if declare -F sdk_bash_map_result >/dev/null 2>&1; then
         sdk_bash_map_result "$exec_rc" "$out" "$docker_err" "$SDK_BASH_SMOKE_TIMEOUT"
         verdict="$SBV_VERDICT"; reason="$SBV_REASON"; coverage="$SBV_COVERAGE"

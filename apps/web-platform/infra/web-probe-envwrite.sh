@@ -49,6 +49,12 @@ GIT_DATA_ENDPOINT="10.0.1.20:22"
 ( umask 0137 && printf 'EXPECTED_IP=%s\nBETTERSTACK_INGEST_URL=%s\nWEB_NIC_GUARD_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "$SOLEUR_EXPECTED_IP" "$SOLEUR_BETTERSTACK_INGEST_URL" "WEB_NIC_GUARD_URL_${HOST_UPPER}" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-private-nic-guard )
 chmod 600 /etc/default/web-private-nic-guard
 
+# (#10455 b) runtime Bash synthetic. Key set byte-parallel to the SSH provisioners' write in server.tf
+# (terraform_data.web_bash_synthetic_install / _web2) -- fresh-boot-parity.test.sh section 12 drift-guards that parity. The beat's
+# URL var is per host (WEB_BASH_SYNTHETIC_URL_WEB_2 ...), resolved by the SCRIPT through the key NAME written here, after its xtrace refusal.
+( umask 0137 && printf 'WEB_BASH_SYNTHETIC_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "WEB_BASH_SYNTHETIC_URL_${HOST_UPPER}" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-bash-synthetic )
+chmod 600 /etc/default/web-bash-synthetic
+
 ( umask 0137 && printf 'ZOT_ENDPOINT=%s\nZOT_PROBE_REPO=%s\nWEB_ZOT_CONSUMER_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "$SOLEUR_ZOT_ENDPOINT" "$SOLEUR_ZOT_PROBE_REPO" "WEB_ZOT_CONSUMER_URL_${HOST_UPPER}" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-zot-consumer-probe )
 chmod 600 /etc/default/web-zot-consumer-probe
 
