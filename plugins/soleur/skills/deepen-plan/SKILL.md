@@ -750,7 +750,7 @@ Wait for ALL parallel agents to complete - skills, research agents, review agent
 
 - Merge similar recommendations from multiple agents
 - Prioritize by impact (high-value improvements first)
-- Flag conflicting advice for human review
+- Route conflicting advice to the CTO agent for a ruling; a conflict on the operator-only list (money, scope, priority and schedule, irreversible-act authorization, legal risk, brand) still goes to the operator
 - Group by plan section
 
 ### 7. Enhance Plan Sections

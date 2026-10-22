@@ -91,7 +91,8 @@ gh pr merge <N> --squash --auto
 ### 5. Review delegation
 
 - **Feature PRs** (`needs-review`, non-trivial diff): delegate to `soleur:review`. Merge only if it passes.
-- **Single-file bot-fixes** (`bot-fix/review-required`): inline diff review (`gh pr diff <N>`) is sufficient; the diff is small and the change is mechanical.
+- **Single-file `priority/p3-low` bot-fixes**: inline diff review (`gh pr diff <N>`) is sufficient; the diff is small and the change is mechanical.
+- **Bot-fix PRs that failed the cron gate** (multi-file, or the source issue is not `priority/p3-low`, so the PR carries `bot-fix/review-required`): delegate to `soleur:review`, not an inline read. Inline reading is for single-file `priority/p3-low` PRs only.
 
 ### 6. Fix-recipes
 
