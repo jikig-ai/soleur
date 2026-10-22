@@ -178,5 +178,5 @@ resolver-suite row pins that they agree.
 
 Accepted residuals: the first-boot tuple in `cloud-init.yml` keeps its duplicate (no inspect check runs there; the next deploy replaces it), the
 prod container is not inspected (the canary's proof transfers to it only for these two names, through the shared env-file), the image's own `ENV`
-was not measured, a plainly spelled `NODE_EXTRA_CA_CERTS` never reaches the scrub (the key overlay refuses it first; other spellings can), and the overlay's `grep` weakness
+was not measured, a plainly spelled `NODE_EXTRA_CA_CERTS` never reaches the scrub (the key overlay refuses it first; a no-break-space or BOM prefixed spelling can), and the overlay's `grep` weakness
 is tracked separately (#10855).

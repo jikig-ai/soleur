@@ -3957,7 +3957,7 @@ inngest_link_commit_scheme() {
 # a bare-name line goes too (Docker would resolve it from its own environment); lookalikes (INNGEST_BASE_URL_EXTRA, XINNGEST_BASE_URL)
 # survive. A name ends at the first byte outside [A-Za-z0-9_.-]: Docker reads `INNGEST_BASE_URL.bak` and `INNGEST_BASE_URL-X` as other
 # variables (measured, docker-evidence.md), so they survive, while other punctuation after the name (`:`, `/`) is over-removed, and so is a
-# `.` or `-` BEFORE the name; all harmless (no such variable is set) and counted. A comment line that names the variable is dropped too.
+# `.` or `-` BEFORE the name; all harmless in practice (nothing sets such names) and counted. A comment line that names the variable is dropped too.
 # Every grep runs as `LC_ALL=C grep -a`: under a UTF-8 locale `grep -v` silently drops a line with an invalid byte, and a NUL
 # byte makes grep print nothing for a "binary" file, both with rc 0. Order: count, write the kept lines to a temp file, check conservation
 # (kept + removed = total) and recount the pattern on the temp file (0), and only then rename over the original, so every failure
@@ -3967,7 +3967,7 @@ inngest_link_commit_scheme() {
 # Call it directly (never as `x=$(...)`: a subshell would discard _gak_tmp). The caller decides what a failure means. Another reader of the
 # file after this point, `_cred_redact_env_values` (error-tail redaction), simply loses these two non-secret values from its literal set.
 # The overlay (`overlay_github_app_key`) runs first and refuses a plainly spelled NODE_* name, so a pinned NODE_EXTRA_CA_CERTS reaches this
-# scrub only through spellings the overlay's match misses (a no-break-space or BOM prefix, a commented or quoted name). Keep the names in
+# scrub only through spellings the overlay's match misses (a no-break-space or BOM prefix). Keep the names in
 # step with REQUIRED_ENV in lib/docker-run-tuple.py and with the two `^NAME=` counts in inngest_link_canary_check (resolver-suite row L8 pins all three).
 INNGEST_LINK_SCRUB_RE='^[^A-Za-z0-9_]*(INNGEST_BASE_URL|NODE_EXTRA_CA_CERTS)([^A-Za-z0-9_.-]|$)'
 _inngest_link_scrub_fail() { # <stage: read|write|recount>

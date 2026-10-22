@@ -150,7 +150,7 @@ and evaluates in this order, emitting the first failing condition:
 | `ca_value` | exactly one such line, but not `NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem` |
 
 Event: `INNGEST_LINK: class=canary_failed level=error check=inspect cause=<enum> url_lines=<n> url_https=<n> ca_lines=<n> ca_ok=<n>`,
-each integer normalized with `$((10#${n:-0}))` and clamped to 99. No env value, no key beyond the two fixed names, no raw text enters the event.
+each integer normalized and clamped to 99 by `_inngest_link_count99` (a non-numeric value reads 0, leading zeros are stripped, three or more digits read 99). No env value, no key beyond the two fixed names, no raw text enters the event.
 The other checks' events are byte-unchanged.
 
 **3. Synchronous reason (CTO Q6).** For `check=inspect` only, `CANARY_FAIL_REASON` becomes the fixed literal `canary_inngest_link_inspect_failed`; every other in-container check

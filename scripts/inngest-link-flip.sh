@@ -257,9 +257,13 @@ flip_resolved_query() {
   printf '%s' "doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since ${since} --grep 'class=resolved' | jq -R -r 'fromjson? | .raw? | fromjson? | select(.SYSLOG_IDENTIFIER == \"ci-deploy\") | \"\\(.host_name) \\(.host) \\(.message)\"'"
 }
 
-# flip_read_line <state=... scheme=...>: the sentence that closes the web-2 gap.
+# flip_read_line <state=... scheme=...>: the sentence that reads the resolved row of every host. A resolved row says which scheme a host's
+# resolver chose; for an https deploy it does not prove the canary or the swap, so that sentence also names the canary_ok row (a flag-off
+# deploy runs no canary layer, so the off and revert verdicts do not ask for one).
 flip_read_line() {
-  printf 'TO CLOSE THE GAP read the ci-deploy resolved row of EACH host (expect one row from soleur-web-platform = web-1 AND one from soleur-web-2, each with %s), then the class=canary_ok row of each host since T0 (a resolved row alone does not prove the canary or the swap; see the per-host flip read in inngest-server.md): %s' "$1" "$(flip_resolved_query "${FLIP_T0:-0}")"
+  local more=""
+  case "$1" in *scheme=https*) more=", then the class=canary_ok row of each host since T0 (a resolved row alone does not prove the canary or the swap; see the per-host flip read in inngest-server.md)" ;; esac
+  printf 'TO CLOSE THE GAP read the ci-deploy resolved row of EACH host (expect one row from soleur-web-platform = web-1 AND one from soleur-web-2, each with %s)%s: %s' "$1" "$more" "$(flip_resolved_query "${FLIP_T0:-0}")"
 }
 
 # flip_emit_results: t=, flag_run= and verdict= to $GITHUB_OUTPUT and a block to $GITHUB_STEP_SUMMARY. Never fails.
