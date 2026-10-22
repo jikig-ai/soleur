@@ -109,4 +109,4 @@ New real defect found by the added matrix row: run_one's `exit` inside command-s
 ### Fix-round state
 - Fix diff base: PANEL_SHA d65c232da6eb4031f52adcd0121dd7954f0cdb76
 - Finding-seats for fix round: pattern-recognition-specialist, user-impact-reviewer, test-design-reviewer, security-sentinel, data-integrity-guardian, structural-enumeration, code-quality-analyst, agent-native-reviewer, git-history-analyzer
-- Suides after fixes: refresh 160/0, diagnose 26/0, probe 14/0
+- Suites after fixes: refresh 160/0, diagnose 26/0, probe 14/0

@@ -39,12 +39,13 @@ run_probe "$(row 5 1 0 1 0)" >/dev/null 2>&1; [ $? -eq 1 ] && pass || fail "unde
 run_probe "$(row 5 2 0 0 0)" >/dev/null 2>&1; [ $? -eq 0 ] && pass || fail "non-signature VERIFY_FAIL rows must not FAIL (got non-0)"
 # detailed signature rows still rejecting → NOT YET(2)
 run_probe "$(row 5 1 1 1 1)" >/dev/null 2>&1; [ $? -eq 2 ] && pass || fail "detailed signature rows should be NOT YET (rc 2)"
-# earliest in the future → NOT YET(2) — the "no evidence can exist yet" anti-vacuity arm;
-# deleting it (earliest check absent) is invisible to every row above.
+# earliest in the future → NOT YET(2) — the "no evidence can exist yet" anti-vacuity arm.
+# The canned row is clean-signature data (would PASS=0 past the gate), so only the
+# future-check itself yields rc 2 — deleting the check turns this arm red.
 env -i PATH="$PATH" HOME="$WORK" \
   BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
   SOLEUR_FT_EARLIEST=2999-01-01T00:00:00Z \
-  FT10390_QUERY_SH="$WORK/q.sh" FIX_ROW="$(row 5 1 1 1 1)" \
+  FT10390_QUERY_SH="$WORK/q.sh" FIX_ROW="$(row 5 0 0 0 0)" \
   bash "$PROBE" >/dev/null 2>&1; [ $? -eq 2 ] && pass || fail "future earliest did not exit 2"
 # transport error (stub rc=3) → CANNOT ESTABLISH(3), not a verdict on data that never arrived
 FIX_QRC=3 run_probe "$(row 5 0 0 0 0)" >/dev/null 2>&1; [ $? -eq 3 ] && pass || fail "query transport rc=3 did not map to CANNOT ESTABLISH"
@@ -68,10 +69,12 @@ env -i PATH="$PATH" BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTER
 # unparseable scan → 2
 run_probe 'not-json' >/dev/null 2>&1; [ $? -eq 2 ] && pass || fail "unparseable scan did not exit 2"
 
-# pass/fail counter self-test (sibling-suite convention): a rewritten fail() that still
-# counts would satisfy a bare assertion-count floor — prove the instrument moves.
+# Counter self-test (sibling-suite convention): a rewritten fail() that does not
+# increment fails would leave a green terminal check — drive BOTH counters.
 _pre="$passes"; pass; [ "$passes" -eq $((_pre + 1)) ] || fail "counter self-test: pass() did not increment"
-MIN_ASSERTIONS=14
+_fpre="$fails"; fails=$((fails + 1))
+[ "$fails" -eq $((_fpre + 1)) ] && { fails=$((fails - 1)); pass; } || { fails=$((fails - 1)); fail "counter self-test: fails did not increment"; }
+MIN_ASSERTIONS=15
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 

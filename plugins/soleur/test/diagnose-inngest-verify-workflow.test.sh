@@ -206,7 +206,15 @@ awk -F'\t' '$1=="D1c" && $2=="FAIL" {found=1} END{exit found?0:1}' "$SCR/mut/row
   && ok "D1c mutation: dropping packages:read goes red" \
   || no "D1c mutation: workflow without packages:read stayed green (row is vacuous)"
 
-MIN_ASSERTIONS=26
+# D5 — the fix-round guard lines this suite's whole file exists to pin:
+# errexit-guard on the verify arms (a bare docker run aborts the step on the
+# failure the probe exists to capture), digest-shape validation, and the
+# nonregular-member tar gate.
+for pin in '|| rc=$?' 'BUNDLE_DIGEST" =~ ^(sha256:)?' 'tar -tzvf'; do
+  grep -qF "$pin" "$WF" && ok "D5: $pin" || no "D5: missing guard line: $pin"
+done
+
+MIN_ASSERTIONS=29
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 
