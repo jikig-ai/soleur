@@ -883,7 +883,7 @@ end
 - [ ] Include prompts or instructions that worked well during research
 - [ ] Note which AI tools were used for initial exploration (Claude, Copilot, etc.)
 - [ ] Emphasize comprehensive testing given rapid implementation
-- [ ] Document any AI-generated code that needs human review
+- [ ] Name any AI-generated file and the concern that warrants a closer `soleur:review` pass
 
 ### 6. Final Review & Submission
 
