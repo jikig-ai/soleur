@@ -131,6 +131,12 @@ was the objection any infra sharding had to answer *with numbers*.
   `run: bash <suite>.test.sh` appearing in the workflow. The gate, the
   the self-registration assertions inside twelve suites, and the `work` skill's
   onboarding guidance were all updated in the same change.
+- Per-suite output is captured and reaped on a green run, so nothing that reads the Actions log sees a suite's own
+  text. An observer of suite stdout reads the runner's `SOLEUR| relay <basename>: <line>` lines instead (column-0
+  `SKIP (loud):` lines of any suite, plus the rehearsal suite's terminal line; see the EVIDENCE RELAY note in
+  `run-registered-suites.sh`). The skip-persistence probe was blind from 2026-09-28 until that relay (#10786). The
+  drift pins are `T13` in `run-registered-suites.test.sh` and section `(k)` of
+  `scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh`.
 
 ## Alternatives considered
 

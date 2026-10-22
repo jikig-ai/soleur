@@ -258,11 +258,127 @@ if [ "$_xt_rc2" -ne 78 ]; then pass; else
   fail "(j.ii) xtrace refusal is unconditional: traced WITHOUT a credential also exited 78; the guard must key on the credential, not on xtrace alone"
 fi
 
+# ── (k) END TO END: the REAL runner's stdout, fed to the probe (#10786) ──────
+# The probe reads the Actions log of infra-validation.yml. Since #8763 that log is produced by
+# apps/web-platform/infra/run-registered-suites.sh, which captures each suite's output into a
+# per-suite file and prints only `PASS <path>`; the suite's `SKIP (loud):` lines and terminal
+# summary never reached the log, and the probe was TRANSIENT from 2026-09-28 on. The runner now
+# relays them as `SOLEUR| relay <basename>: <line>`. These rows run the REAL runner over a fixture
+# infra dir and feed ITS stdout to the probe, so the three-way contract (suite text, runner relay,
+# probe literal) cannot drift apart silently a second time.
+#
+# The fixture text is DERIVED from this probe's own literals, not hand-copied: a probe literal edit
+# moves the fixture, and the (hard-coded) runner regex then no longer matches it, which reddens.
+RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
+SUITE_SRC="$REPO_ROOT/apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
+[ -x "$RUNNER" ] || { printf 'FAIL: runner not executable at %s\n' "$RUNNER" >&2; exit 2; }
+
+# $1 = probe file to read the literals from. Prints: SUITE_TERMINAL, then the first SKIP_MARKERS entry.
+probe_literals() {
+  local f="$1" term mark
+  term=$(sed -n "s/^SUITE_TERMINAL='\\(.*\\)'\$/\\1/p" "$f" | sed -n '1p')
+  mark=$(sed -n "s/^  '\\(SKIP (loud): T5 \\)'\$/\\1/p" "$f" | sed -n '1p')
+  [ -n "$term" ] && [ -n "$mark" ] || return 1
+  printf '%s\n%s\n' "$term" "$mark"
+}
+
+# k_case <name> <variant> <probe file> <runner file>; sets RC/OUT via run_probe, RUNNER_LOG for the
+# precondition. Variants: skip (skip line + terminal), terminal (terminal only), neither.
+k_case() {
+  local name="$1" variant="$2" pfile="$3" rfile="$4" fx="$SANDBOX/kfix.$1" lits term mark
+  lits=$(probe_literals "$pfile") || { fail "(k) $name: could not read the probe literals from $pfile"; RC=99; return 0; }
+  term=$(sed -n '1p' <<<"$lits"); mark=$(sed -n '2p' <<<"$lits")
+  mkdir -p "$fx"
+  {
+    printf '#!/usr/bin/env bash\n'
+    [ "$variant" = skip ] && printf 'echo %q >&2\n' "${mark}MUTATION fixture skip"
+    [ "$variant" != neither ] && printf 'echo %q\n' "${term} 73 passed, 0 failed, Skipped: 2 (75 assertions)"
+    printf 'exit 0\n'
+  } > "$fx/git-data-runcmd-rehearsal.test.sh"
+  {
+    printf '#!/usr/bin/env bash\n'
+    [ "$variant" = skip ] && printf 'echo %q >&2\n' "SKIP (loud): S1 MUTATION fixture second member"
+    printf 'exit 0\n'
+  } > "$fx/second.test.sh"
+  chmod +x "$fx"/*.test.sh
+  RUNNER_LOG="$SANDBOX/kout.$name"
+  ( cd "$REPO_ROOT" && SOLEUR_INFRA_DIR="$fx" timeout 120 bash "$rfile" ) > "$RUNNER_LOG" 2>&1 || true
+  local root; root=$(mkcase "k.$name" 20 < "$RUNNER_LOG")
+  OUT="$SANDBOX/out.k.$name"
+  ( PATH="$root/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$root/streak" bash "$pfile" ) >"$OUT" 2>&1
+  RC=$?
+}
+
+k_case skip skip "$PROBE" "$RUNNER"
+_k_relays=$(grep -cE '^SOLEUR\| relay ' "$RUNNER_LOG" || true)
+if [ "$_k_relays" -ge 1 ]; then pass; else
+  fail "(k) precondition: the runner's own stdout carries ${_k_relays} relay line(s) — the probe is being fed a log the runner never produced evidence into"
+fi
+expect "(k) skip via the real runner" 1 "a loud skip the suite prints must survive the runner's per-suite capture and reach the probe; this is the exit-2 TRANSIENT of 2026-09-28 onwards"
+
+k_case terminal terminal "$PROBE" "$RUNNER"
+expect "(k) terminal line via the real runner" 0 "the suite's terminal line must survive the runner's capture, or the positive control reads every run as unreadable"
+
+k_case neither neither "$PROBE" "$RUNNER"
+expect "(k) neither line via the real runner" 2 "a suite that printed no evidence at all is an unreadable sample, never a clean bill of health"
+
+# The pre-fix production shape, verbatim from main run 39612112094: the runner printed ONLY the
+# PASS line for the rehearsal suite. The probe must keep refusing a verdict on it (exit 2).
+_r=$(mkcase kpre 20 <<'EOF'
+PASS apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
+EOF
+)
+run_probe "$_r"
+expect "(k) pre-fix log shape" 2 "a log carrying only the runner's PASS line has no evidence; the probe must stay TRANSIENT on it rather than report a skip count of zero"
+
+# The suite end of the pin, by VALUE: expand the real suite's terminal `echo` with sample numbers
+# and match it against the regex the RUNNER relays on. A wording or separator edit that keeps the
+# statement but misses the regex reddens here, where a presence check would stay green.
+_term_stmt=$(grep -E '^echo "git-data-runcmd-rehearsal: ' "$SUITE_SRC" || true)
+_term_n=$(grep -c . <<<"$_term_stmt" || true)
+_ere=$(sed -n "s/^EVIDENCE_TERMINAL_ERE='\\(.*\\)'\$/\\1/p" "$RUNNER" | sed -n '1p')
+if [ "$_term_n" -eq 1 ] && [ -n "$_ere" ]; then
+  _expanded=${_term_stmt#echo \"}; _expanded=${_expanded%\"}
+  _expanded=${_expanded//'${passes}'/73}; _expanded=${_expanded//'${fails}'/0}
+  _expanded=${_expanded//'${SKIPPED_ASSERTIONS}'/2}; _expanded=${_expanded//'${total}'/75}
+  case "$_expanded" in
+    *'$'*) fail "(k) suite end: the terminal echo still has an unexpanded variable after substituting the four known ones: $_expanded" ;;
+    *) if grep -Eq -- "$_ere" <<<"$_expanded"; then pass; else
+         fail "(k) suite end: the real suite's terminal line '$_expanded' no longer matches the runner's EVIDENCE_TERMINAL_ERE '$_ere' — the runner would stop relaying it and the probe would go TRANSIENT again"
+       fi ;;
+  esac
+else
+  fail "(k) suite end: found ${_term_n} terminal echo statement(s) in the rehearsal suite and regex '${_ere}' in the runner, expected exactly 1 and a non-empty regex"
+fi
+
+# Edit-the-pair harness: a mutation to ONE end of the pair must turn the terminal-only case from 0
+# into something else. The runner suite's T9 mutates only the runner copy and greps its own output,
+# so it cannot score an edit to the PROBE literal; this can.
+for _mut in probe-literal runner-regex; do
+  _mp="$SANDBOX/mut.$_mut.probe.sh"; _mr="$SANDBOX/mut.$_mut.runner.sh"
+  cp "$PROBE" "$_mp"; cp "$RUNNER" "$_mr"; chmod +x "$_mr"
+  case "$_mut" in
+    probe-literal) sed -i "s/^SUITE_TERMINAL='git-data-runcmd-rehearsal:'/SUITE_TERMINAL='git-data-runcmd-rehearsal-moved:'/" "$_mp" ;;
+    runner-regex)  sed -i "s/^EVIDENCE_TERMINAL_ERE='\\^git-data-runcmd-rehearsal:/EVIDENCE_TERMINAL_ERE='^git-data-runcmd-rehearsal-moved:/" "$_mr" ;;
+  esac
+  if cmp -s "$PROBE" "$_mp" && cmp -s "$RUNNER" "$_mr"; then
+    fail "(k) harness[$_mut]: the mutation did not land — this row proves nothing"
+    continue
+  fi
+  k_case "mut.$_mut" terminal "$_mp" "$_mr"
+  if [ "$RC" -ne 0 ]; then pass; else
+    fail "(k) harness[$_mut]: an edit to one end of the probe/runner pair left the terminal-only case at exit 0 — the pin does not hold"
+  fi
+done
+
 # ── Assertion floor (not routed through fail(), deliberately) ────────────────
 # RAISED 9 -> 12 (#7535 Phase 2), ITEMISED: (i) the T17 marker registration, plus
 # (j) and (j.ii), the two directions of the xtrace credential refusal.
+# RAISED 12 -> 20 (#10786), ITEMISED: (k) has 8 assertions: the relay-line precondition, three real-runner
+# cases (skip, terminal only, neither), the pre-fix log shape, the suite-end value pin, and the two
+# edit-the-pair harness rows (probe literal, runner regex). Measured on the green run: 20.
 _total=$((passes + fails))
-_FLOOR=12
+_FLOOR=20
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
