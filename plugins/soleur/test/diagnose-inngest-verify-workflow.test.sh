@@ -210,11 +210,11 @@ awk -F'\t' '$1=="D1c" && $2=="FAIL" {found=1} END{exit found?0:1}' "$SCR/mut/row
 # errexit-guard on the verify arms (a bare docker run aborts the step on the
 # failure the probe exists to capture), digest-shape validation, and the
 # nonregular-member tar gate.
-for pin in '|| rc=$?' 'BUNDLE_DIGEST" =~ ^(sha256:)?' 'tar -tzvf'; do
+for pin in '|| rc=$?' 'BUNDLE_DIGEST" =~ ^(sha256:)?' 'tar -tzvf' 'END{exit found?0:1}'; do
   grep -qF "$pin" "$WF" && ok "D5: $pin" || no "D5: missing guard line: $pin"
 done
 
-MIN_ASSERTIONS=29
+MIN_ASSERTIONS=30
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 

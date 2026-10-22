@@ -2058,7 +2058,7 @@ write_files:
       _tgz_bytes="$(stat -c %s "$STAGE/bundle.tar.gz" 2>/dev/null || echo 0)"
       case "$_tgz_bytes" in ''|*[!0-9]*) _tgz_bytes=0 ;; esac
       [ "$_tgz_bytes" -gt 67108864 ] && verify_fail extract "" "member=oversized"
-      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '$1 !~ /^[-d]/ {found=1; exit} END{exit found?0:1}' \
+      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '{if ($1 !~ /^[-d]/) found=1} END{exit found?0:1}' \
         && verify_fail extract "" "member=nonregular" || true
       tar -xzf "$STAGE/bundle.tar.gz" -C "$STAGE/bundle" \
         --no-same-owner --no-same-permissions 2>/dev/null || verify_fail extract

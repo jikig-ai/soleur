@@ -283,6 +283,10 @@ grep -qF '2>"$STAGE/verify.stderr"' <<<"$SC" \
   && ! grep -qF -- '/bundle/manifest.txt &>/dev/null' <<<"$SC" \
   && ! grep -qF -- '/bundle/manifest.txt > /dev/null 2>&1' <<<"$SC" \
   && pass || fail "S10: verify-blob stderr still swallowed by /dev/null"
+# The bundle member-type gate must DRAIN the listing — an early `exit` in awk's
+# pattern action SIGPIPEs tar under pipefail and the `|| true` swallows rc=141.
+grep -qF 'END{exit found?0:1}' <<<"$SC" && ! grep -qF 'found=1; exit' <<<"$SC" \
+  && pass || fail "S10: member-type gate early-exits (SIGPIPE-bypassable)"
 grep -qF 'detail=' <<<"$SC" \
   && pass || fail "S10: no detail= classification on the VERIFY_FAIL row"
 # The classifier's token vocabulary is a fixed allowlist — every named arm present.
@@ -764,7 +768,7 @@ grep -q 'detail=other' "$FX/markers.log" && grep -q 'detail=tlog' "$FX/markers.l
 
 # Anti-vacuity floor — the inngest.test.sh convention: a deleted block must red,
 # not silently pass fewer assertions. Raise it when adding rows.
-MIN_ASSERTIONS=162
+MIN_ASSERTIONS=163
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 
