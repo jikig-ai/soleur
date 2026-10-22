@@ -466,7 +466,7 @@ fi
 
 # ── §1: resource enumeration and host-pinning ────────────────────────────────────────
 expect_red "M1 (§1 floor: a provisioner deleted)" server.tf \
-  "1: swept only 21 SSH-connected" '
+  "1: swept only 23 SSH-connected" '
 import re
 m = re.search(r"resource \"terraform_data\" \"orphan_reaper_install\" \{", s)
 assert m, "anchor missing"
@@ -504,7 +504,7 @@ s = s.replace(old, "    host        = local.web1_ip\n    user        = \"root\"\
 # Repointing the sibling's dial to web-1 removes it from W2_DIALERS, so the presence check
 # (deploy_pipeline_fix_web2 present=) fires -- the class rule, not the pin check.
 expect_red "M4a (§1: web-2 sibling repointed to web-1)" server.tf \
-  "web-2 dialers=['deploy_pipeline_fix_web2', 'egress_gateway_web2']" '
+  "web-2 dialers=['deploy_pipeline_fix_web2', 'egress_gateway_web2', 'journald_persistent_web2']" '
 old = "    host        = hcloud_server.web[\"web-2\"].ipv4_address"
 assert old in s
 s = s.replace(old, "    host        = hcloud_server.web[\"web-1\"].ipv4_address", 1)
@@ -1036,11 +1036,11 @@ s = s.replace(a, a + """
 # sweeps -- the anchor still attributes this case to FLOOR_DESTS, which is what the rule requires.
 # The expected count tracks FLOOR_DESTS - 1 and must be re-derived whenever the baseline
 # moves: 56 while the baseline was 57, 58 since #7539 took it to 59, 78 since #9534 took
-# it to 79. A stale literal here does
+# it to 79, 83 since #10455 took it to 84. A stale literal here does
 # not fail loudly -- the guard still goes red, just via a different message -- so the battery
 # reports "red but NOT via <expected>" and the mutation stops being attributed to this floor.
 expect_red "M30 (§2 floor: one delivered artifact removed)" server.tf \
-  "2: swept only 78 destinations" '
+  "2: swept only 83 destinations" '
 blk = """  provisioner "file" {
     source      = "${path.module}/cron-egress-alarm@.service"
     destination = "/etc/systemd/system/cron-egress-alarm@.service"
@@ -1138,7 +1138,7 @@ s = s.replace(old, ins + old, 1)
 # -- the exact "clean sweep of nothing" the new floor exists to name. §2 co-fires with fifteen
 # uncovered destinations, which is inherent: §3 quantifies over an intersection §2 also owns.
 expect_red "M35 (§3 floor: the seed-baked check quietly stops checking anything)" soleur-host-bootstrap.sh \
-  "3: the seed-baked check ran over only 31" '
+  "3: the seed-baked check ran over only 33" '
 old = "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/system/$f\""
 assert old in s
 s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/units.d/$f\"", 1)

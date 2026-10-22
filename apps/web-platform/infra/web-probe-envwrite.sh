@@ -23,6 +23,18 @@
 # file holds a live prd read token). NOT "closes the TOCTOU" — it narrows it to root-group-only.
 set -euo pipefail
 
+# Refuse to run under xtrace while the probe token is set (#7797): this script writes the read-scoped web_probes token into the
+# per-host env files, and `set -x` would print it into the cloud-init journal. Added with the web-bash-synthetic env file (#10455 b),
+# which made the credential-refusal lint see this script as binding a live credential.
+case "$-" in
+  *x*)
+    if [ -n "${SOLEUR_HOST_KEY:+x}${SOLEUR_WEB_PROBES_TOKEN:+x}${WEB_BASH_SYNTHETIC_URL_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Fail LOUD on any unset required input — no silent Doppler/env fallback (fresh-boot readiness
 # contract; 2026-04-03-doppler-not-installed-env-fallback-outage). A missing value here means the
 # render/wiring is broken; a probe env file half-written from empty vars is worse than none.
@@ -48,6 +60,12 @@ GIT_DATA_ENDPOINT="10.0.1.20:22"
 # prd read token), then chmod 600 — byte-key-identical to the retained SSH remote-exec printf.
 ( umask 0137 && printf 'EXPECTED_IP=%s\nBETTERSTACK_INGEST_URL=%s\nWEB_NIC_GUARD_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "$SOLEUR_EXPECTED_IP" "$SOLEUR_BETTERSTACK_INGEST_URL" "WEB_NIC_GUARD_URL_${HOST_UPPER}" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-private-nic-guard )
 chmod 600 /etc/default/web-private-nic-guard
+
+# (#10455 b) runtime Bash synthetic. Key set byte-parallel to the SSH provisioners' write in server.tf
+# (terraform_data.web_bash_synthetic_install / _web2) -- fresh-boot-parity.test.sh section 12 drift-guards that parity. The beat's
+# URL var is per host (WEB_BASH_SYNTHETIC_URL_WEB_2 ...), resolved by the SCRIPT through the key NAME written here, after its xtrace refusal.
+( umask 0137 && printf 'WEB_BASH_SYNTHETIC_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "WEB_BASH_SYNTHETIC_URL_${HOST_UPPER}" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-bash-synthetic )
+chmod 600 /etc/default/web-bash-synthetic
 
 ( umask 0137 && printf 'ZOT_ENDPOINT=%s\nZOT_PROBE_REPO=%s\nWEB_ZOT_CONSUMER_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "$SOLEUR_ZOT_ENDPOINT" "$SOLEUR_ZOT_PROBE_REPO" "WEB_ZOT_CONSUMER_URL_${HOST_UPPER}" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-zot-consumer-probe )
 chmod 600 /etc/default/web-zot-consumer-probe

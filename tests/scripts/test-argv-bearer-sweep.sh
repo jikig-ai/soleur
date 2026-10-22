@@ -6743,7 +6743,7 @@ echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, res
 # CONVERTED SCRIPTS (S6H_CONVERTED): exactly one stdin config line (`url = "..."`) each, and exactly one copy of the shape-guard class, on a line BEFORE it.
 # =====================================================================================
 S6H_DIR="apps/web-platform/infra"
-S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh inngest-bootstrap.sh web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh)
+S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh inngest-bootstrap.sh web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh web-bash-synthetic.sh)
 S6H_FILE_FLOOR=7
 S6H_ALLOW_CEIL=0
 S6H_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
@@ -6881,6 +6881,47 @@ if s6_edit "$S6H_MPA/$S6H_DIR/web-zot-consumer-probe.sh" '  case "$1" in https:/
   if [[ -n "$S6H_DA" && -n "$S6H_DB" && "$S6H_DA" != "$S6H_DB" ]]; then row "S6-HB guard-copy parity mutation: loosening the scheme test in ONE copy changes its digest (the parity row would be RED)" ok
   else row "S6-HB guard-copy parity mutation: a one-copy edit of the guard is not visible to the digest" fail "a=$S6H_DA b=$S6H_DB"; fi
 else row "S6-HB guard-copy parity mutation: the edit did not land (re-anchor with the scheme case line)" fail "no scheme case line once in the scratch copy"; fi
+# web-bash-synthetic.sh (#10455) carries a FIFTH copy of the shape guard but NOT of the full pair: its `_hb_curl` takes the URL as "$1" (finish() appends `/fail`
+# to the path, so the curl must take the target as an argument), where the four siblings read "$URL". It stays out of S6H_PARITY_FILES ON PURPOSE and is pinned in
+# two parts instead: (1) its `_hb_url_ok` digest equals the siblings', and (2) its `_hb_curl` line equals the siblings' line with "$URL" replaced by "$1".
+s6h_urlok_digest() { # <file> -> md5 of the _hb_url_ok function alone, empty when it is missing or defined twice
+  python3 -I -c '
+import hashlib, sys
+src = open(sys.argv[1], encoding="utf-8", errors="replace").read().split("\n")
+heads = [i for i, l in enumerate(src) if l.startswith("_hb_url_ok() {")]
+if len(heads) != 1: sys.exit(0)
+j = heads[0]
+while j < len(src) and src[j] != "}": j += 1
+print(hashlib.md5("\n".join(src[heads[0]:j + 1]).encode()).hexdigest())
+' "$1"
+}
+s6h_curl_line() { [[ "$(grep -cF '_hb_curl() {' "$1")" == 1 ]] && grep -F '_hb_curl() {' "$1"; } # the one definition line, rc 1 when absent or repeated
+S6H_WBS_FILE="$REPO_ROOT/$S6H_DIR/web-bash-synthetic.sh"
+S6H_UO_SET=""; S6H_UO_EMPTY=0
+for f in "${S6H_PARITY_FILES[@]}" web-bash-synthetic.sh; do
+  S6H_D="$(s6h_urlok_digest "$REPO_ROOT/$S6H_DIR/$f")"
+  if [[ -z "$S6H_D" ]]; then S6H_UO_EMPTY=$((S6H_UO_EMPTY + 1)); else S6H_UO_SET+="$S6H_D"$'\n'; fi
+done
+S6H_UO_N="$(printf '%s' "$S6H_UO_SET" | sort -u | grep -c . || true)"
+S6H_SIB_CURL="$(s6h_curl_line "$REPO_ROOT/$S6H_DIR/web-git-data-probe.sh" || true)"
+S6H_WBS_CURL="$(s6h_curl_line "$S6H_WBS_FILE" || true)"
+S6H_WBS_WANT="${S6H_SIB_CURL//\"\$URL\"/\"\$1\"}"
+if [[ "$S6H_UO_EMPTY" -eq 0 && "$S6H_UO_N" -eq 1 ]]; then row "S6-HB guard-copy parity (web-bash-synthetic): its _hb_url_ok is byte-identical to the ${#S6H_PARITY_FILES[@]} sibling copies (one digest, none missing)" ok
+else row "S6-HB guard-copy parity (web-bash-synthetic): its _hb_url_ok drifted from the siblings' or lost its definition" fail "distinct=$S6H_UO_N missing=$S6H_UO_EMPTY"; fi
+if [[ -n "$S6H_SIB_CURL" && -n "$S6H_WBS_CURL" && "$S6H_WBS_CURL" != "$S6H_SIB_CURL" && "$S6H_WBS_CURL" == "$S6H_WBS_WANT" ]]; then row "S6-HB guard-copy parity (web-bash-synthetic): its _hb_curl is the siblings' line with the URL taken as \$1 (the one intended divergence)" ok
+else row "S6-HB guard-copy parity (web-bash-synthetic): its _hb_curl is not the siblings' line with \"\$URL\" replaced by \"\$1\"" fail "sib='$S6H_SIB_CURL' wbs='$S6H_WBS_CURL'"; fi
+S6H_MWU="$(s6h_fresh mwu)"
+if s6_edit "$S6H_MWU/$S6H_DIR/web-bash-synthetic.sh" '  case "$1" in https://*) ;; *) return 1 ;; esac' '  case "$1" in http*://*) ;; *) return 1 ;; esac'; then
+  S6H_DA="$(s6h_urlok_digest "$S6H_MWU/$S6H_DIR/web-bash-synthetic.sh")"; S6H_DB="$(s6h_urlok_digest "$S6H_MWU/$S6H_DIR/web-git-data-probe.sh")"
+  if [[ -n "$S6H_DA" && -n "$S6H_DB" && "$S6H_DA" != "$S6H_DB" ]]; then row "S6-HB guard-copy parity (web-bash-synthetic) mutation: loosening the scheme test in the synthetic's copy changes its _hb_url_ok digest" ok
+  else row "S6-HB guard-copy parity (web-bash-synthetic) mutation: a one-copy edit of the synthetic's guard is not visible to the digest" fail "a=$S6H_DA b=$S6H_DB"; fi
+else row "S6-HB guard-copy parity (web-bash-synthetic) mutation: the edit did not land (re-anchor with the scheme case line)" fail "no scheme case line once in the scratch copy"; fi
+S6H_MWC="$(s6h_fresh mwc)"
+if s6_edit "$S6H_MWC/$S6H_DIR/web-bash-synthetic.sh" "curl --disable --noproxy '*' -gfsS -m 10" "curl --disable --noproxy '*' -gsS -m 10"; then
+  S6H_CA="$(s6h_curl_line "$S6H_MWC/$S6H_DIR/web-bash-synthetic.sh" || true)"; S6H_CB="$(s6h_curl_line "$S6H_MWC/$S6H_DIR/web-git-data-probe.sh" || true)"
+  if [[ -n "$S6H_CA" && "$S6H_CA" != "${S6H_CB//\"\$URL\"/\"\$1\"}" ]]; then row "S6-HB guard-copy parity (web-bash-synthetic) mutation: dropping -f from the synthetic's _hb_curl breaks the line pin (a 404 would read as a delivered ping)" ok
+  else row "S6-HB guard-copy parity (web-bash-synthetic) mutation: a flag dropped from the synthetic's _hb_curl is not visible to the line pin" fail "a='$S6H_CA'"; fi
+else row "S6-HB guard-copy parity (web-bash-synthetic) mutation: the edit did not land (re-anchor with the curl flags)" fail "no curl flag string once in the scratch copy"; fi
 # M-var/M-curl (scanner reach, CTO-ruled 2026-10-15): the stage contract says *HEARTBEAT_URL, which includes the bare name, and the curl word may be path-prefixed,
 # backslashed or inside backticks. Each spelling is appended to a converted script (no allowlist to hide behind) and must be an argv violation.
 S6H_MV="$(s6h_fresh mv)"; assert_fixture_dir "$S6H_MV"; printf '%s\n' 'curl -fsS "$HEARTBEAT_URL" >/dev/null' >> "$S6H_MV/$S6H_DIR/luks-monitor.sh"
@@ -8345,7 +8386,8 @@ SELFTEST_PASSES=0
 # 823 -> 840 at #9757 (stage S8, Guard 3: registry login password off argv, tokenised derived census): the 15 S8 rows. The tree measured 825 before S8 (the floor had 2 rows of slack), so the new floor is the measured total (840 passed, 0 failed).
 # 841 -> 874 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 33 S9 rows. The tree measured 841 after merging main (the floor said 840, so it had 1 row of slack), so the new floor is the measured total (874 passed, 0 failed).
 # 874 -> 875 at the second merge of main: #10566 added one S4 manifest row (git-data-rehearsal-evidence), so the base is 842 and the total is the measured 875 (875 passed, 0 failed).
-EXPECTED_TESTS=875
+# 875 -> 880 at the #10697 fix round (rebased onto the 875 above; was 842 -> 847 on its own base) (#10455): web-bash-synthetic.sh joins S6H_CONVERTED (1 row), its _hb_url_ok digest and _hb_curl line pins (2 rows) and one mutation row each (2): measured (847 passed, 0 failed). S6H_FILE_FLOOR stays 7: it detects a mis-resolved directory (the derived population is 17 files), and the S6-HB scratch tree holds only the converted scripts plus two controls.
+EXPECTED_TESTS=880
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

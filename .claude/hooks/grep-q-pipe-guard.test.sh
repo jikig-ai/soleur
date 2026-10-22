@@ -2045,7 +2045,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=292   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=293   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2110,6 +2110,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh | grep | exempt | arm-drain the shims drain on purpose and only when reading stdin (the suite negative arms depend on it)'
   'apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh | doppler | exempt | text-only the derived producer apps/cla-evidence/infra/bootstrap.sh matches by basename only; the suite says bootstrap.sh only in assertion messages about the host bootstrap script and never runs the cla-evidence script'
   'apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh | curl | exempt | text-only the suite names cloud-init-inngest.yml and workspaces-luks-provision.sh only to grep their text; the curl stub (exit 0, stdin ignored) serves the F5 emit and none of their piped curl calls is run'
+  'apps/web-platform/infra/web-bash-synthetic.test.sh | docker | exempt | text-only derived site ci-deploy.sh is named as text only (the verdict-library source anchor and the SBS cross-reference comments); the suite is a mock docker serving inspect, stats and exec for web-bash-synthetic.sh, and no piped call from ci-deploy.sh reaches it'
   'apps/web-platform/infra/web-ghcr-deny.test.sh | docker | exempt | text-only the shim only sees `timeout 120 sudo docker pull` with no piped stdin'
   'apps/web-platform/infra/web-ghcr-deny.test.sh | timeout | exempt | text-only no pipe feeds the timeout shim here (cloud-init-registry.yml:2085 is not run)'
   'apps/web-platform/infra/web-probes-token-rotation.test.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/20s; hits 0 (stdin-flag))'

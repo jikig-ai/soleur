@@ -107,7 +107,8 @@ its evidence covers and what it does not.
 
   Measurement note that feeds the ladder: a timeout kill overshoots its declared ceiling by
   13–31 s of API wall clock (313 s against 300, 859–930 s against 840, 4243 s against 4200).
-  The job ceiling's 69 s of slack over the step ceiling absorbs that; do not shrink it below it.
+  The job ceiling's slack over the step ceiling absorbs that (69 s as of 2026-08-20; 39 s since the
+  2026-10-22 addendum under `## apply`, still above the 13–31 s overshoot measured); do not shrink it below it.
 
 This job's HEADER COMMENT is inside `extractJobBlock(wf, "apply")` — that helper resets only
 on `/^ {2}[A-Za-z0-9_-]+:/` and `#` is not in that class, so 2-space-indented comment lines
@@ -460,7 +461,8 @@ job, and `registry_store_restore`.
 2026-08-20 (#7587, corrected #7657): that same workflow-level accounting moved on the OTHER
 side of the file. The per-merge `apply` job went 15 → 41 and gained a `notify-apply-failure`
 sibling at 5, so the routine-merge arm of this group now has a run-level worst case of
-preflight 1 + apply 41 + notify 5 = 47 min rather than 15. (`preflight` is chained by `needs:`
+preflight 1 + apply 41 + notify 5 = 47 min rather than 15 (as of 2026-10-22 apply is 53 and the sum 59 min:
+see the addendum under `## apply`). (`preflight` is chained by `needs:`
 and was uncounted in the first version of this paragraph, which said 40 for what was then 41.)
 This job is dispatch-only and runs by deliberate action — but "deliberate" governs when a
 dispatch is ISSUED, not whether a merge apply is already in flight, and the measurement below
@@ -468,7 +470,7 @@ says it queues: over 80 completed runs of the shared group across 35 days the ov
 was {0 concurrent: 69, 1 concurrent: 11}, i.e. 11 of 80 runs DID queue. Observed queue depth
 never exceeded 1 and the longest run took 23.7 min. Priced consequence, because it lands on the
 dispatches issued during an outage: worst-case wait for an emergency dispatch stuck behind a
-routine merge apply moves from 16 min to 47 min, and this group covers `ci_ssh_token_replace`
+routine merge apply moves from 16 min to 47 min (59 min since 2026-10-22), and this group covers `ci_ssh_token_replace`
 — described in this same file as "the ONE arm that can run while the SSH bridge is dead".
 
 ### Retired job: `inngest_backstop_retire` (formerly `inngest_volume_recut`)
@@ -877,6 +879,10 @@ workflow-injection guidance. All action references are SHA-pinned.
     entire "the ARM gate's deadline sum must be truncated to fit" framing rested on treating
     900 s as fixed.
 
+    HISTORICAL FIGURES BELOW (2026-08-20): the derivation that follows is kept as the record of how the terms were
+    chosen. The numbers it ends on (six arms, 2020 < 2100 < 2460, a 47-minute mutex) are superseded by the
+    `### Addendum — 2026-10-22 (#10455)` at the end of this section (eight arms, 2790 < 2820 < 3180, a 59-minute mutex).
+
     The replacement is a two-part inequality, every term measured or derived from the shipped
     script, and both asserted by the `the ARM gate's deadlines fit its job` describe in
     `plugins/soleur/test/terraform-target-parity.test.ts` — which parses the deadlines, the poll
@@ -921,6 +927,39 @@ workflow-injection guidance. All action references are SHA-pinned.
     queue depth never exceeded 1, the longest run took 23.7 min, and the sibling that shares this
     mutex already runs a 90-minute apply. Priced honestly: the worst case for an emergency
     dispatch issued while a merge apply is in flight is now a 47-minute wait.
+
+### Addendum — 2026-10-22 (#10455)
+
+Two `web-bash-synthetic` arms (one literal `arm_one` per `var.web_hosts` member, 300 s each) joined the ARM gate, so the ladder and
+the fleet-wide mutex moved. Every figure below is re-derived from the shipped script and workflow, and the same inequality is asserted
+live by the `the ARM gate's deadlines fit its job` describe in `plugins/soleur/test/terraform-target-parity.test.ts` (which parses the
+deadlines, poll interval, curl ceiling and rollback attempts OUT of `arm-heartbeats.sh`, and the two timeouts out of the workflow).
+
+      (1) arm_step_timeout ≥ Σ over call sites of
+          (deadline_i + poll_interval + (3 + rollback_attempts) × curl_max_time)
+          → 2820 ≥ (200+440+200+440+200+300+300+30) + 8 × 85 = 2110 + 680 = 2790     ✓ slack 30 s
+      (2) job_timeout − arm_step_timeout ≥ max(pre-gate) + post-gate budget
+          → 3180 − 2820 = 360 ≥ 111 + (8 × 15 + 30 + 60 = 210) = 321                 ✓ slack 39 s
+
+The ladder is 2790 (work) < 2820 (47 min step ceiling) < 3180 (53 min job ceiling). The mutex sum is preflight 1 + apply 53 +
+notify-apply-failure 5 = 59 min, so the worst-case wait for an emergency dispatch issued behind a merge apply is now 59 minutes
+(it was 47 in the 2026-08-20 accounting above). The sweep step keeps its 3 min ceiling: it covers one re-PATCH per call site (8 × 15 s)
+plus the 30 s mint = 150 s, with 30 s of slack inside the 210 s post-gate term.
+
+WHY 300 s AND NOT `period + grace − 40` FOR THE NEW ARMS. The sibling formula would give 900 + 1800 − 40 = 2660 s per host, about 90
+minutes of worst-case wall clock in every merge's ARM step whenever no beat can land. 300 s stays far inside the first absence alert
+(2700 s). The cost is that arming is PROBABILISTIC: the synthetic's cadence is 900 s (start-based, plus `RandomizedDelaySec` jitter,
+about 93 runs a day) against a 300 s window, so a healthy synthetic lands a beat inside one apply's window with p ≈ 1/3 per host, and
+the first run after an install usually precedes the ARM step (the SSH stage runs many resources between the timer enable and ARM) while
+a paused beat ignores pings. An unlanded beat is a soft landing (`::warning::`, exit 0), the same shape as `inngest-consumer`. A beat
+that stays paused is NOT watched by a post-merge check (none exists). The nets are the twice-daily `heartbeat-live-reconcile` job in
+`scheduled-terraform-drift.yml`, whose `fed-but-paused` class flags a paused beat whose manifest feeder is a working feeder, and
+`arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>`; the host journal separates the cases
+(`reason=probe_absent` = the image carrying the probe's resolver is not running yet; `verdict=pass` = healthy, the window was missed).
+Decision record: ADR-079 addendum 2026-10-22.
+
+The `soleur:postmerge` bound for watching this workflow moved with it: it must stay above the 53-minute job ceiling (about 65 minutes
+with queueing), because a bound below the ceiling reads a healthy slow run as "not delivered".
 
 ## registry-host scoped -replace
 

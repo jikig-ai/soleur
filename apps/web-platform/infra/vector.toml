@@ -136,6 +136,7 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  "web-bash-synthetic",
   "inngest-consumer-probe",
   "inngest-redis",
   "inngest-nftables",
@@ -204,6 +205,7 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  "web-bash-synthetic",
   "inngest-consumer-probe",
   "inngest-redis",
   "inngest-nftables",
@@ -473,6 +475,7 @@ include_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  "web-bash-synthetic",
   # (#7228) The inngest consumer-perspective probe on the web host. Same argument as the three
   # above: the heartbeat only says "suppressed", this channel says WHY — UNREACHABLE (no listener
   # at 10.0.1.40:8288) vs EMPTY REGISTRY (serving, owns nothing) vs WEDGED (GraphQL error

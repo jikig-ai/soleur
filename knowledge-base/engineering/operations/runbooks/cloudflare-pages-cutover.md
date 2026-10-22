@@ -244,7 +244,7 @@ before you get to spend it on judgement:
   tighter than that and was not stated: the forward apply and the rollback apply
   are the SAME workflow and therefore the same group, with
   `cancel-in-progress: false`, and that workflow's own comment budgets a worst
-  case of preflight 1 + apply 41 + notify 5 = 47 minutes. So at T+20 the rollback
+  case of preflight 1 + apply 53 + notify 5 = 59 minutes (as of 2026-10-22; read the workflow comment, not this sentence, for the live figure). So at T+20 the rollback
   can be queued behind the tail of the very run you are rolling back.
 
   The lever is therefore confirming the forward run has actually CONCLUDED

@@ -28,8 +28,9 @@
 # (NC rows). The battery runs in the default invocation, so the one registered CI step executes it
 # (#7942: a battery that runs in no gate).
 #
-# FLOOR NOTE: FLOOR_HASH (4) encodes today's probe count — nic-guard, zot-consumer,
-# inngest-consumer, git-data. Retiring a probe on purpose means editing that one variable.
+# FLOOR NOTE: FLOOR_HASH (5) encodes today's web-1 installer count — nic-guard, zot-consumer,
+# inngest-consumer, git-data, web-bash-synthetic (the web-2 twin carries no hash by design: its
+# env file is derived on the host). Retiring a probe on purpose means editing that one variable.
 #
 # Run from the repo root: bash apps/web-platform/infra/web-probes-token-rotation.test.sh
 set -euo pipefail
@@ -80,7 +81,7 @@ cp "$INFRA"/*.tf "$SCRATCH/pristine/"
 CHECK="$SCRATCH/check.py"
 MUT="$SCRATCH/mut.py"
 # The installer floor encodes today's probe count (see the FLOOR NOTE in the header). One place.
-FLOOR_HASH=4
+FLOOR_HASH=5
 export WPTR_FLOOR_HASH="$FLOOR_HASH"
 
 # --- the checker ----------------------------------------------------------------------------------
@@ -372,6 +373,7 @@ HDR = {
     "nic": 'resource "terraform_data" "private_nic_guard_install" {',
     "inngest": 'resource "terraform_data" "inngest_consumer_probe_install" {',
     "gitdata": 'resource "terraform_data" "git_data_probe_install" {',
+    "wbs": 'resource "terraform_data" "web_bash_synthetic_install" {',
     "server": 'resource "hcloud_server" "web" {',
     "def": 'resource "doppler_service_token" "web_probes" {',
 }
@@ -475,6 +477,8 @@ elif mid == "g1r7":
     del L[i]
     j = one(L, s, e - 1, lambda l: l == "  ]))", "triggers_replace close")
     L.insert(j + 1, "  input = nonsensitive(sha256(doppler_service_token.web_probes.key))"); wr(S, L)
+elif mid == "g1r17":
+    L = rd(S); s, e = scope(L, "wbs"); del L[one(L, s, e, lambda l: l.strip() == HASH, "hash line")]; wr(S, L)
 elif mid == "g1r8":
     L = rd(S); s, e = scope(L, "inngest"); del L[s:e + 1]; wr(S, L)
 elif mid == "g1r9":
@@ -609,6 +613,7 @@ cases=$((cases + 1)); g_row "G1-R6 the only reference is inside a heredoc" g1 g1
 cases=$((cases + 1)); g_row "G1-R7 the hash moved from triggers_replace into input" g1 g1r7 red '^G1 terraform_data\.git_data_probe_install: no sha256'
 # R8 runs with the floor set to TODAY's count, so it tests the floor mechanism whatever that count is.
 cases=$((cases + 1)); WPTR_FLOOR_HASH="$f_hash" g_row "G1-R8 inngest_consumer_probe_install deleted" g1 g1r8 red "^G1 floor: hash-bearing terraform_data blocks $((f_hash - 1)) < $f_hash"
+cases=$((cases + 1)); g_row "G1-R17 hash deleted from web_bash_synthetic_install" g1 g1r17 red '^G1 terraform_data\.web_bash_synthetic_install: no sha256'
 cases=$((cases + 1)); g_row "G1-R11a lifecycle.ignore_changes = [triggers_replace] on an installer" g1 g1r11a red '^G1 terraform_data\.git_data_probe_install: lifecycle\.ignore_changes'
 cases=$((cases + 1)); g_row "G1-R11b lifecycle.ignore_changes = all on an installer" g1 g1r11b red '^G1 terraform_data\.git_data_probe_install: lifecycle\.ignore_changes'
 cases=$((cases + 1)); g_row "G1-R12 the key laundered through input on a hash-bearing block" g1 g1r12 red '^G1 terraform_data\.git_data_probe_install: reference outside triggers_replace'
@@ -684,7 +689,7 @@ if [[ -z "${WPTR_INNER:-}" ]]; then
   else
     no "G1-H2 the stubbed inner run's control row still passes"
   fi
-  for r in R1 R3 R4 R5 R6 R7 R9 R10 R11a R11b R12 R13 R14; do
+  for r in R1 R3 R4 R5 R6 R7 R9 R10 R11a R11b R12 R13 R14 R17; do
     cases=$((cases + 1))
     # rc=0 means the stubbed checker PASSED the mutation; a crash (rc=2) or a failed anchor is not proof.
     if grep -qE "^FAIL - G1-$r .*rc=0: " <<< "$inner"; then
@@ -1016,21 +1021,33 @@ static_rows "$SCRATCH/static.tsv"
 
 # --- Targeting: the rotation reaches the installers only through the post-bridge SSH stage -------
 python3 - ".github/workflows/apply-web-platform-infra.yml" > "$SCRATCH/targets.tsv" <<'PY'
+import re
 import sys
 
 import yaml
+
+
+def targets(run, name):
+    """True when `run` carries -target=<name> as a WHOLE address: web_bash_synthetic_install is a prefix of its _web2 twin."""
+    return re.search(r"-target=" + re.escape(name) + r"(?![A-Za-z0-9_])", run) is not None
+
 
 wf = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
 steps = [s for j in (wf.get("jobs") or {}).values() for s in (j.get("steps") or [])]
 ssh = [str(s.get("run", "")) for s in steps if s.get("name") == "Terraform apply (SSH-provisioned resources, over the bridge)"]
 plan = [str(s.get("run", "")) for s in steps if s.get("name") == "Terraform plan (allow-list, non-SSH resources only)"]
-installers = ["private_nic_guard_install", "zot_consumer_probe_install", "inngest_consumer_probe_install", "git_data_probe_install"]
+installers = ["private_nic_guard_install", "zot_consumer_probe_install", "inngest_consumer_probe_install", "git_data_probe_install", "web_bash_synthetic_install"]
 for inst in installers:
-    ok = len(ssh) == 1 and f"-target=terraform_data.{inst}" in ssh[0]
+    ok = len(ssh) == 1 and targets(ssh[0], f"terraform_data.{inst}")
     print(f"{'ok' if ok else 'no'}\tTGT the post-bridge SSH stage targets terraform_data.{inst}\t")
+# The web-2 twin hashes nothing (its env file is derived on the host) but is an SSH provisioner all the same: it must ride the
+# same stage and stay out of the bridge-less main plan.
+twin = "web_bash_synthetic_install_web2"
+ok = len(ssh) == 1 and targets(ssh[0], f"terraform_data.{twin}")
+print(f"{'ok' if ok else 'no'}\tTGT the post-bridge SSH stage targets terraform_data.{twin}\t")
 ok = len(plan) == 1 and "-target=doppler_service_token.web_probes" in plan[0]
 print(f"{'ok' if ok else 'no'}\tTGT the main plan targets doppler_service_token.web_probes\t")
-ok = len(plan) == 1 and not any(f"-target=terraform_data.{i}" in plan[0] for i in installers)
+ok = len(plan) == 1 and not any(targets(plan[0], f"terraform_data.{i}") for i in installers + [twin])
 print(f"{'ok' if ok else 'no'}\tTGT the bridge-less main plan targets none of the installers\t")
 PY
 static_rows "$SCRATCH/targets.tsv"
@@ -1068,7 +1085,7 @@ if [[ $((pass + fail)) -ne "$cases" ]]; then
 fi
 
 # Anti-vacuity floor. The threshold sits on the line directly above its `if`.
-MIN_ASSERTIONS=119
+MIN_ASSERTIONS=123
 if [[ "$pass" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL - only %s assertions passed (floor %s) — a block stopped running\n' "$pass" "$MIN_ASSERTIONS"
   exit 1
