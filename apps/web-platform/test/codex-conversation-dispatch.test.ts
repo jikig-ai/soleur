@@ -310,7 +310,26 @@ describe("Codex conversation dispatch bridge", () => {
     }]);
   });
 
-  it("blocks automatic auth retry after a persisted generation change", async () => {
+  it("still attempts terminal fallback if observability reporting itself throws", async () => {
+    vi.mocked(reportSilentFallback).mockClear().mockImplementation(() => {
+      throw new Error("synthetic observability failure");
+    });
+    const { repository, options } = turnFixture([]);
+    repository.appendLifecycleEvent.mockRejectedValueOnce(new Error("failure event RPC unavailable"));
+
+    await expect(dispatchCodexConversationToWebSocket(options)).rejects.toMatchObject({ code: "codex_terminal_missing" });
+
+    expect(reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), {
+      feature: "codex-conversation",
+      op: "persist-terminal-lifecycle-event",
+      extra: { status: "failed" },
+    });
+    expect(repository.transitionAttempt.mock.calls).toEqual([
+      ["synthetic-attempt", "running"], ["synthetic-attempt", "failed"],
+    ]);
+  });
+
+  it("does not refresh or retry a billable turn after an authorization error", async () => {
     const { options, repository } = turnFixture([]);
     let generation = 2;
     repository.assertAttemptGeneration.mockImplementation(async () => {
@@ -334,8 +353,8 @@ describe("Codex conversation dispatch bridge", () => {
     options.runtime.transport = { start, dispose: vi.fn(async () => undefined) } as never;
     options.runtime.createCodex = createCodexCodeAdapter;
     const outcome = await dispatchCodexConversationToWebSocket(options).then(() => null, (error) => error);
-    expect(provider.refresh).toHaveBeenCalledOnce();
+    expect(provider.refresh).not.toHaveBeenCalled();
     expect(start).toHaveBeenCalledTimes(1);
-    expect(outcome).toMatchObject({ code: "codex_binding_stale" });
+    expect(outcome).toMatchObject({ code: "codex_credential_expired" });
   });
 });

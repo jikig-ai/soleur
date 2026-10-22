@@ -141,6 +141,30 @@ function withOwnerRebindDatabase<T>(assertBehavior: (database: string) => T, era
   }
 }
 
+function hasErasureRollbackLockOrder(sql: string): boolean {
+  const start = sql.indexOf("CREATE OR REPLACE FUNCTION public.anonymise_agent_engine_data(");
+  const end = sql.indexOf("\n$$;", start);
+  if (start < 0 || end < 0) return false;
+  const body = sql.slice(start, end);
+  const workspaceLock = body.search(/^[\t ]*PERFORM w\.id FROM public\.workspaces AS w[\s\S]*?FOR UPDATE OF w;[\t ]*$/m);
+  const runLock = body.search(/^[\t ]*PERFORM r\.id FROM public\.agent_engine_runs AS r[\s\S]*?FOR UPDATE OF r;[\t ]*$/m);
+  const checkpointDelete = body.search(/^[\t ]*DELETE FROM public\.agent_engine_recovery_checkpoints AS c[\t ]*$/m);
+  const ownerAnonymization = body.search(/^[\t ]*UPDATE public\.agent_engine_runs[\t ]*$/m);
+  return workspaceLock >= 0 && runLock > workspaceLock
+    && checkpointDelete > runLock && ownerAnonymization > checkpointDelete;
+}
+
+describe("migration 152 rollback erasure lock order", () => {
+  it("locks workspace then runs before deleting checkpoints, and rejects lock-removal mutants", () => {
+    const sql = readFileSync(erasureMigrationDown, "utf8");
+    expect(hasErasureRollbackLockOrder(sql)).toBe(true);
+    expect(hasErasureRollbackLockOrder(sql.replace(/^[\t ]*PERFORM w\.id FROM public\.workspaces AS w[\s\S]*?FOR UPDATE OF w;[\t ]*$/m, "")))
+      .toBe(false);
+    expect(hasErasureRollbackLockOrder(sql.replace(/^[\t ]*PERFORM r\.id FROM public\.agent_engine_runs AS r[\s\S]*?FOR UPDATE OF r;[\t ]*$/m, "")))
+      .toBe(false);
+  });
+});
+
 function rebindSnapshot(database: string) {
   return JSON.parse(runSql(database, `
     SELECT jsonb_build_object(

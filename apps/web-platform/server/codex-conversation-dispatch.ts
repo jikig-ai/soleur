@@ -161,20 +161,24 @@ async function persistTerminalStatus(
   try {
     await options.repository.appendLifecycleEvent(runId, attemptId, { type: "status", status });
   } catch (eventError) {
-    reportSilentFallback(eventError, {
-      feature: "codex-conversation",
-      op: "persist-terminal-lifecycle-event",
-      extra: { status },
-    });
+    reportTerminalPersistenceFailure(eventError, "persist-terminal-lifecycle-event", status);
     try {
       await options.repository.transitionAttempt(attemptId, status);
     } catch (transitionError) {
-      reportSilentFallback(transitionError, {
-        feature: "codex-conversation",
-        op: "persist-terminal-attempt-fallback",
-        extra: { status },
-      });
+      reportTerminalPersistenceFailure(transitionError, "persist-terminal-attempt-fallback", status);
     }
+  }
+}
+
+function reportTerminalPersistenceFailure(
+  error: unknown,
+  op: "persist-terminal-lifecycle-event" | "persist-terminal-attempt-fallback",
+  status: "failed" | "cancelled",
+): void {
+  try {
+    reportSilentFallback(error, { feature: "codex-conversation", op, extra: { status } });
+  } catch {
+    // Telemetry must never block terminal-state persistence or replace the dispatch error.
   }
 }
 

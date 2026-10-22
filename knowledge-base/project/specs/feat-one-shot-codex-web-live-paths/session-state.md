@@ -2609,17 +2609,38 @@
 
   | raw finding | canonical defect key | reporting seat(s) | planned fix commit |
   |---|---|---|---|
-  | Failed/cancelled terminal lifecycle append and fallback transition failures were swallowed | observability::terminal-persistence-fallback-errors | pattern-recognition | next review-fix commit |
-  | Migration 150 rollback restored workspace-only ACK RPC scope | migration-safety::rollback-ack-owner-scope | data-integrity, migration | next review-fix commit |
-  | Migration 152 rollback could recreate checkpoints after erasure and restored unsafe lock order | erasure::rollback-checkpoint-lock-and-anonymized-run | data-integrity, migration | next review-fix commit |
-  | Uncertain provider outcome may cost a repeated billable turn | user-impact::provider-turn-retry-cost | user-impact | disposition pending user-impact review |
+  | Failed/cancelled terminal lifecycle append and fallback transition failures were swallowed | observability::terminal-persistence-fallback-errors | pattern | d317ad0ea6 |
+  | Migration 150 rollback restored workspace-only ACK RPC scope | migration-safety::rollback-ack-owner-scope | data-integrity, data-migration | d317ad0ea6 |
+  | Migration 152 rollback could recreate checkpoints after erasure and restored unsafe lock order | erasure::rollback-checkpoint-lock-and-anonymized-run | data-integrity, data-migration | d317ad0ea6 |
+  | Telemetry failure could suppress terminal fallback and mask the original dispatch error | observability::telemetry-failure-interferes-with-terminal-persistence | pattern | pending commit |
+  | Uncertain provider outcome may cost a repeated billable turn | user-impact::provider-turn-retry-cost | user-impact | pending commit |
 
 - The first focused run exposed a test assertion that counted reports from prior
   tests sharing the mocked module. The assertion now clears its mock and selects
-  the two named terminal operations. Focused dispatch/rollback migration suites
-  pass 31/31; typecheck passed before that assertion-only adjustment and must be
-  rerun before commit. Same client turn IDs are unique in the durable attempt
-  claim; duplicate claims fail before provider invocation, and the explicit
-  retained-draft resend preserves its original clientTurnId. This evidence
-  narrows the user-impact concern but does not replace the required user-impact
-  review/sign-off or establish retry safety for uncertain provider outcomes.
+  the two named terminal operations. The fix-round pattern re-review then found
+  that a throwing telemetry helper could block fallback persistence; a RED test
+  reproduced this, and a guarded reporting helper now keeps telemetry failures
+  from replacing dispatch errors. The first agent-definition lookup used the
+  wrong directory (`agents/`); `rg --files` located the canonical definitions
+  under `plugins/soleur/agents/`. Focused dispatch/rollback migration suites
+  passed 31/31 before the newest regression, and typecheck passed before the
+  assertion-only adjustment. Follow-up checks now pass: four focused files,
+  60/60 tests, plus TypeScript. Same client turn IDs are unique in the durable
+  attempt claim; duplicate claims fail before provider invocation, and the explicit
+  retained-draft resend preserves its original clientTurnId. User-impact review
+  found an ambiguous `turn/start` authorization error could trigger a refresh
+  and second provider request before any event arrived. A RED test reproduced
+  two starts; the adapter now surfaces errors from billable `start`/`continue`
+  without retry, while read-only cursor replay retains bounded auth recovery.
+  The plan records that future retry requires provider idempotency or native
+  thread reconciliation. Two regressions cover start and continue; an existing
+  dispatch assertion was updated to match the no-retry contract. A fresh
+  test-design review also found the telemetry test needed to assert reporting
+  was attempted and the rollback test needed to guard lock ordering; the former
+  now asserts the report call, and a syntax-anchored lock-order test kills
+  mutants removing either ordered lock. The migration static test applies its
+  own removal mutations.
+- One review-agent prompt used a guessed Codex `INSTRUCTIONS.md` location; the
+  agent recovered by reading the installed canonical path at
+  `plugins/soleur/local/codex/INSTRUCTIONS.md`. Future review prompts use the
+  canonical file path.

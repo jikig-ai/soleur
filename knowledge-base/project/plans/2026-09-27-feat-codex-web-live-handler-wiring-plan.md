@@ -49,6 +49,17 @@ This branch has no `spec.md` with a valid `lane:`; planning defaults to `cross-d
 - **If this leaks or misroutes, the user's data is exposed via:** a Codex request using another workspace's credential, an unapproved endpoint, or a data class without the mode's legal basis. An explicit owner auth-mode change affects existing Codex conversation bindings in that workspace. Each conversation continues to use the credential lease belonging to the user who resumes it; the owner's key is never shared with members. If that user lacks a valid key, resume fails closed without Managed fallback. Claude bindings and routine runs remain unchanged. The next turn after a switch reconstructs context from that conversation's tenant-scoped stored messages; it must not reuse native provider state from the old account. The owner confirms workspace scope and affected-conversation count before saving. Each affected member separately acknowledges the provider history transfer before their transcript is replayed; no transcript or provider request is sent before that acknowledgment.
 - **Brand-survival threshold:** `single-user incident`. CPO plan sign-off and the review-time user-impact reviewer are required before shipment; CTO reviews the launcher, egress and credential contract. CLO approval is mode-specific and applies to customer data, not the technical implementation.
 
+- **Ambiguous provider-turn billing:** if App Server `turn/start` returns an
+  authorization or transport error before emitting events, the provider may
+  have accepted the request even though this service has no turn ID or usage
+  receipt. Do not automatically refresh credentials and replay `start` or
+  `continue` in that state. The adapter must surface the failure; any future
+  retry requires provider-supported idempotency or reconciliation against the
+  native thread before another billable request. This is independent of the
+  durable client attempt key, which prevents duplicate claims for the same
+  client turn but cannot establish whether the provider accepted an ambiguous
+  request.
+
 - **If account erasure races with recovery checkpoint persistence:** a checkpoint could remain linked to a deleted user's run or be recreated after erasure. Migration `152_agent_engine_erasure_lock_order.sql` locks owned runs before deleting checkpoints and anonymizing run ownership; `rls-rpc.integration.test.ts` verifies erase-then-save is rejected and no checkpoint remains.
 - **If a DSAR query is scoped to the wrong run IDs:** another user's attempt status or checkpoint timestamp could enter the export. `exportSqlTable()` derives child-table IDs only from runs owned by the requester, and `dsar-export-cross-tenant.integration.test.ts` must assert attempt and checkpoint exports contain only the requester's synthetic run ID.
 
