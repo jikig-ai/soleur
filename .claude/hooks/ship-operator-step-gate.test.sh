@@ -211,7 +211,10 @@ fi
 #   issue #5: OPEN, body carries the deferred-automation sentinel
 #   issue #6: CLOSED
 #   issue #7: OPEN, body lacks the sentinel
-STUB_DIR=$(mktemp -d -p "${SOLEUR_TEST_INCIDENT_ROOT:?incident sandbox not initialised}" stubgh-XXXXXX)
+# Not mktemp: the incident sandbox root is already private and removed by the EXIT trap in
+# lib/test-incident-sandbox.sh, so a per-pid directory inside it needs no trap of its own.
+STUB_DIR="${SOLEUR_TEST_INCIDENT_ROOT:?incident sandbox not initialised}/stubgh-$$"
+mkdir -p "$STUB_DIR"
 GH_STUB_LOG="$STUB_DIR/calls.log"
 GH_STUB_BAD="$STUB_DIR/unexpected.log"
 GH_STUB_BODY="$STUB_DIR/body.md"
