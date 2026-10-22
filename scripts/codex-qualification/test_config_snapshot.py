@@ -362,11 +362,11 @@ class Snapshot(unittest.TestCase):
         self.gate()
         original = json.loads(self.tool_path.read_bytes())
         original_review = self.read(snapshot.REVIEW)
-        changes = [lambda r: r.update(exit_code=1), lambda r: r.update(exit_code=None),
-            lambda r: r.update(command_sha256='0' * 64), lambda r: r.update(stdout_sha256='0' * 64),
-            lambda r: r.update(stderr_sha256='0' * 64), lambda r: r.update(reference=''),
-            lambda r: r.update(extra='private')]
-        for change in changes:
+        changes = [(lambda r: r.update(exit_code=1), False), (lambda r: r.update(exit_code=None), False),
+            (lambda r: r.update(command_sha256='0' * 64), True), (lambda r: r.update(stdout_sha256='0' * 64), False),
+            (lambda r: r.update(stderr_sha256='0' * 64), False), (lambda r: r.update(reference=''), False),
+            (lambda r: r.update(extra='private'), False)]
+        for change, command_binding in changes:
             value = copy.deepcopy(original)
             change(value)
             value = snapshot.sealed({k: v for k, v in value.items() if k != 'self_sha256'})
@@ -375,6 +375,8 @@ class Snapshot(unittest.TestCase):
                     patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
                 review = copy.deepcopy(original_review)
                 review['execution_record_sha256'] = sha(canonical(value) + b'\n')
+                if command_binding:
+                    review['command_sha256'] = value['command_sha256']
                 self.write(snapshot.REVIEW, snapshot.sealed({k: v for k, v in review.items() if k != 'self_sha256'}))
                 with self.assertRaises(snapshot.SnapshotFailure):
                     snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
@@ -382,7 +384,7 @@ class Snapshot(unittest.TestCase):
         # Preserve a separate stale binding case after semantic negatives.
         self.tool_path.write_bytes(canonical(original) + b'\n')
         stale = copy.deepcopy(original)
-        stale['stdout_sha256'] = '0' * 64
+        stale['reference'] = 'synthetic-other-reference'
         stale = snapshot.sealed({k: v for k, v in stale.items() if k != 'self_sha256'})
         self.tool_path.write_bytes(canonical(stale) + b'\n')
         self.write(snapshot.REVIEW, original_review)
@@ -393,9 +395,12 @@ class Snapshot(unittest.TestCase):
         self.write(snapshot.REVIEW, original_review)
         with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam):
             snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        (self.root / snapshot.REPORT).unlink()
         self.utc = self.plan['expires_at']
-        with self.assertRaises(snapshot.SnapshotFailure):
+        with self.assertRaises(snapshot.SnapshotFailure) as caught:
             snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertEqual(caught.exception.code, 'expiry')
+        self.assertNotIn(snapshot.REPORT, self.names())
 
     def test_read_only_joint_verification_never_self_issues_review(self):
         self.gate()
@@ -788,6 +793,29 @@ class Snapshot(unittest.TestCase):
                 self.assertRaises(snapshot.SnapshotFailure) as caught:
             snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
         self.assertEqual((caught.exception.code, caught.exception.stage), ('cleanup', 'inspection'))
+        self.assertIn(snapshot.REPORT, self.names())
+
+    def test_unidentified_report_creation_is_preserved_and_reported_as_cleanup(self):
+        self.gate()
+        real_fstat = os.fstat
+        opened = []
+        def fail_report(fd):
+            try:
+                name = Path(f'/proc/self/fd/{fd}').readlink().name
+            except OSError:
+                name = ''
+            if name == snapshot.REPORT:
+                opened.append(fd)
+                raise OSError('SYNTHETIC_REPORT_FSTAT_FAILURE')
+            return real_fstat(fd)
+        with patch.object(acquisition, '_config_sha256', side_effect=self.digest_seam), \
+                patch.object(os, 'fstat', side_effect=fail_report), \
+                self.assertRaises(snapshot.SnapshotFailure) as caught:
+            snapshot.inspect_action(self.args, clock=lambda: self.now, utc=lambda: self.utc)
+        self.assertEqual((caught.exception.code, caught.exception.stage), ('cleanup', 'inspection'))
+        self.assertTrue(opened)
+        with self.assertRaises(OSError):
+            real_fstat(opened[-1])
         self.assertIn(snapshot.REPORT, self.names())
 
     def test_receipt_and_payload_corruption_each_refuse_a_previously_valid_pair(self):

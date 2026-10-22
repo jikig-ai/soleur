@@ -257,7 +257,8 @@ class Store:
     def remove_created(self, names):
         # Check+unlink is safe only under the documented quiescent writer model.
         for name in names:
-            if self.created.get(name) is not None:
+            if name in self.created:
+                ensure(self.created[name] is not None, 'cleanup')
                 self.named(name, self.created[name])
                 os.unlink(name, dir_fd=self.fd)
         os.fsync(self.fd)

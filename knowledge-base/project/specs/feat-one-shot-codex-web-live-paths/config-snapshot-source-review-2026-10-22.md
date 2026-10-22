@@ -3,7 +3,7 @@ title: Inert Config snapshot source review
 date: 2026-10-22
 pr: 9051
 reviewed_head: a63839a459d72505e53a44108d1c0ae38efa7242
-status: correction-pushed-review-pending
+status: correction-unpushed-review-pending
 ---
 
 # Source review record
@@ -12,8 +12,10 @@ The accepted [snapshot contract](config-snapshot-proposal-2026-10-22.md) was
 implemented at `a63839a459d72505e53a44108d1c0ae38efa7242`. The initial focused
 suite passed 91 tests, Ruff passed, and the staged secret scan found no leaks.
 Independent engineering, security and test-design reviews recorded the findings
-below before correction. Corrections are now on the worktree and passed 96
-focused tests; the corrected source still needs to be pushed and independently
+below before correction. The first correction was pushed at
+`e4a5ae0aa1ecdaff74e622984860402573438d4b`; review found two further boundary
+issues. Those are now corrected in the worktree and 97 focused tests pass. The
+current combined source still needs to be committed, pushed and independently
 re-reviewed.
 
 ## Findings
@@ -56,16 +58,34 @@ re-reviewed.
   calls. A stable oversized-fields stub should exercise serialization without
   coupling the test to internal parse count.
 
+Additional correction-delta findings:
+
+- **Low — an unidentified created report is silently left after rollback.** In
+  `config_snapshot.py` › `Store.remove_created()`, `created[name] = None` means
+  exclusive creation succeeded but the inode could not be verified. Skipping
+  that requested deletion returns success while retaining a private report,
+  which masks cleanup uncertainty. Preserve it and raise fixed `cleanup`; test
+  the report-specific initial-fstat failure.
+- **Medium — three tool-result test rows still have competing refusal causes.**
+  `test_config_snapshot.py` ›
+  `test_tool_result_unknown_nonzero_mismatch_and_staleness_refuse()` must also
+  rebind `review.command_sha256` when testing the tool command hash, use a
+  semantically valid tool mutation for the stale-record case, and remove the
+  positive-control report before expiry. Assert each intended failure code.
+
 ## Correction status
 
 The worktree now carries these corrections: `Store.write()` records exclusive
 creation before metadata inspection and closes the descriptor on every path;
+rollback refuses cleanup-success when an owned leaf has no verified inode;
 the action wrapper reports late outer failures as spent when the marker was
 created; inspection validates the review seal and canonical bytes; report
 rollback failure reports cleanup uncertainty; and tool-result semantic tests
-use valid canonical framing, rebound review hashes and positive controls. The
-report-size test uses a stable oversized result. All six findings remain open
-until independent correction-delta reviews pass at a pushed commit.
+use valid canonical framing, rebind both command and execution-record hashes,
+use a valid stale-record mutation, and remove the positive-control report before
+asserting expiry. The report-size test uses a stable oversized result. All
+eight findings remain open until independent correction-delta reviews pass at
+a pushed commit.
 
 No external origin, account, provider or destructive action occurred during
 these reviews. No actual snapshot preparation or execution is authorized by
