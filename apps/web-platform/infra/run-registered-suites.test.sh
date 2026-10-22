@@ -1299,10 +1299,11 @@ else no "T13n: neutralised W3 line ${N13_W3} time(s), lowercase W4 line ${N13_W4
 
 # T13o — mapfile -t: a relay line must not keep its newline (it would double every line with a blank
 # SOLEUR| line right after it). The RED fixture's LAST relay line is legitimately followed by the blank
-# line that opens the "retained per-suite log dir" note, so exactly one such pair is expected.
+# line that opens the "retained per-suite log dir" note, so at most one such pair is expected (a bound,
+# not an equality, so output added between the relay and that note cannot turn this row red by itself).
 N13_BLANKAFTER=$(awk '/^SOLEUR\| relay /{r=1; next} r && /^SOLEUR\| $/{n++} {r=0} END{print n+0}' <<<"$OUT13")
-if (( N13_BLANKAFTER == 1 )); then ok "T13o: only the last relay line is followed by a blank SOLEUR| line (the retained-dir note's opener)"
-else no "T13o: ${N13_BLANKAFTER} relay line(s) are followed by a blank SOLEUR| line, expected exactly 1 (mapfile -t dropped?)"; fi
+if (( N13_BLANKAFTER <= 1 )); then ok "T13o: at most the last relay line is followed by a blank SOLEUR| line (the retained-dir note's opener)"
+else no "T13o: ${N13_BLANKAFTER} relay line(s) are followed by a blank SOLEUR| line, expected at most 1 (mapfile -t dropped, so each relayed line keeps its newline?)"; fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # T9 — MUTATION MATRIX. Every assertion above is a claim that some property holds;
