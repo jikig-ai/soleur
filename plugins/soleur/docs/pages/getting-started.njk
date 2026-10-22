@@ -96,7 +96,7 @@ codex plugin add soleur@soleur</code></pre>
 
         <h3 class="section-subtitle">OpenCode</h3>
 
-        <p>From the repository root (this needs <code>bun</code>), install Soleur into your OpenCode config directory, then start a session:</p>
+        <p>From the repository root (this needs <code>bun</code>), install Soleur into your OpenCode config directory, then start a session. Keep this checkout where it is &mdash; the installed config points at it for skills, routing rules, and the guard scripts.</p>
 
         <!-- verified: 2026-10-22 source: plugins/soleur/opencode/INSTRUCTIONS.md -->
         <div class="quickstart-code">
@@ -104,7 +104,7 @@ codex plugin add soleur@soleur</code></pre>
 bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints opencode-install ok when the tree matches</code></pre>
         </div>
 
-        <p>Commands are bare (<code>/go</code>, <code>/sync</code>, <code>/help</code>) and skills are invoked by bare id (<code>plan</code>, not <code>soleur:plan</code>), because this harness has no <code>soleur:</code> namespace. The guards that decide shell commands run for real &mdash; a <code>deny</code> blocks the call, an <code>ask</code> opens a prompt &mdash; but they decide shell calls only: actions taken through OpenCode&rsquo;s code-mode <code>execute</code> are not covered. OpenCode has no Stop hook, so the pipeline&rsquo;s <code>&lt;promise&gt;DONE&lt;/promise&gt;</code> completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. <code>/version</code> is installed but reports an unknown version, because the canonical command resolves the plugin through <code>CLAUDE_PLUGIN_ROOT</code>, which this harness does not set. Full routing rules and the remaining capability differences: <a href="{{ site.github }}/blob/main/plugins/soleur/opencode/INSTRUCTIONS.md" rel="noopener noreferrer">OpenCode instructions</a>.</p>
+        <p>Commands are bare (<code>/go</code>, <code>/sync</code>, <code>/help</code>) and skills are invoked by bare id (<code>plan</code>, not <code>soleur:plan</code>), because OpenCode has no <code>soleur:</code> namespace. Two guards decide shell commands on OpenCode, and both run for real &mdash; a <code>deny</code> blocks the call, an <code>ask</code> opens a prompt &mdash; but they decide shell calls only: actions taken through OpenCode&rsquo;s code-mode <code>execute</code> are not covered. Soleur&rsquo;s operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline&rsquo;s <code>&lt;promise&gt;DONE&lt;/promise&gt;</code> completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. <code>/version</code> is installed but reports an unknown version, because the canonical command resolves the plugin through <code>CLAUDE_PLUGIN_ROOT</code>, which this harness does not set. Full routing rules and the remaining capability differences: <a href="{{ site.github }}/blob/main/plugins/soleur/opencode/INSTRUCTIONS.md" rel="noopener noreferrer">OpenCode instructions</a>.</p>
 
         <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Devin CLI: <code>/soleur:go</code>. OpenCode: <code>/go</code>.</p>
         <table>
@@ -149,7 +149,7 @@ bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints openc
               <td>Read <code>SKILL.md</code> in this process (<code>/&lt;skill&gt;</code>)</td>
               <td>Load <code>$soleur:&lt;skill&gt;</code>, or read <code>SKILL.md</code></td>
               <td>Slash <code>/soleur:&lt;skill&gt;</code></td>
-              <td>Skill tool, bare id (<code>plan</code>)</td>
+              <td><code>skill</code> tool, bare id (<code>plan</code>)</td>
             </tr>
           </tbody>
         </table>
@@ -166,7 +166,7 @@ bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints openc
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>
         <p>Soleur follows a structured 6-step workflow for software development:</p>
 
-        <p>The 6-step workflow (invoked automatically via <code>/soleur:go</code> or Skill tool <code>soleur:&lt;skill&gt;</code> on Claude Code; via <code>/go</code> then Read <code>SKILL.md</code> in this process on Grok Build; via <code>$soleur:go</code> on Codex; via the <code>/soleur:&lt;skill&gt;</code> slash command on Devin CLI; via <code>/go</code> or the skill tool with a bare id on OpenCode):</p>
+        <p>The 6-step workflow (each harness invokes it with its own entry command &mdash; see the table above):</p>
 
         <div class="commands-list">
           <div class="command-item">
@@ -263,7 +263,7 @@ bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints openc
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What do I need to run Soleur?</summary>
-            <p class="faq-answer">Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, Devin CLI, or OpenCode, on the platforms that harness supports. Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide.</p>
+            <p class="faq-answer">Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, Devin CLI, or OpenCode. Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Why a waitlist?</summary>
@@ -303,7 +303,7 @@ bun plugins/soleur/scripts/install-opencode-adapter.ts --check    # prints openc
           "name": "What do I need to run Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, Devin CLI, or OpenCode, on the platforms that harness supports. Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide."
+            "text": "Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The self-hosted version runs inside your own agentic harness -- Claude Code, Grok Build, Codex, Devin CLI, or OpenCode. Setup is two commands on Claude Code; the other harnesses install from this repository and each has its own setup guide."
           }
         },
         {

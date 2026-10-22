@@ -42,7 +42,8 @@ marker is advisory because OpenCode V2 has no Stop hook. The CLO ruled **PUBLISH
 draft copy before it landed. No canonical legal page changed and none was a precondition: the four-member
 parenthetical (`including Claude Code, Grok Build, Codex, and Devin CLI`) is expressly non-exhaustive on all
 seven canonicals, and `docs/legal/privacy-policy.md` already discloses the provider-agnostic BYOK path
-class-wide, so naming a fifth harness creates no new Jikigai processor. A CLO-signed follow-up in a separate
+class-wide, so naming a fifth harness creates no new Jikigai processor — a position that holds only
+while no Jikigai-held OpenCode provider credential and no Jikigai-run OpenCode session exist. A CLO-signed follow-up in a separate
 PR — not a precondition for this claim — would add the fifth member to the seven canonicals and their
 mirrors, which forces the `TC_VERSION`, `TC_DOCUMENT_SHA`, and `LEGAL_DOC_SHAS` re-pins. The ruling and the
 deferral are recorded in #10815.
@@ -67,9 +68,9 @@ restate its numbers here.
 
 ## Context
 
-An operator who already runs Soleur in Claude Code, Grok Build, Codex, or Devin cannot run the same
-lifecycle in OpenCode V2. `Harness` has no `opencode` member, so that session is `unknown`, and the
-unknown instructions name the Skill tool and the Task tool in Claude's vocabulary.
+Before this adapter, an operator who already ran Soleur in Claude Code, Grok Build, Codex, or Devin could
+not run the same lifecycle in OpenCode V2. `Harness` had no `opencode` member, so that session was
+`unknown`, and the unknown instructions named the Skill tool and the Task tool in Claude's vocabulary.
 
 OpenCode V2 is a different host from Cursor. Measured (measurements §2.2), it consumes Soleur's
 **canonical** `plugins/soleur/skills` tree directly through the `skills` config key — 103 skills
