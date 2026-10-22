@@ -68,12 +68,13 @@ the exact process and cache before retrying; avoid a second installer against
 the same cache and record browser QA as unverified when the required revision
 is still absent.
 
-The Codex command preflight may evaluate a chained commit using the session's
-bare-root context even when the shell call specifies a worktree directory. If
-it reports a false commit-on-main refusal, verify `pwd` and
-`git branch --show-current`, then issue the commit as a separate `git -C
-<absolute-worktree> commit ...` command. The explicit `-C` pins the exact
-repository for both the command preflight and the canonical commit guard.
+The Codex command preflight may evaluate a commit using the session's bare-root
+context even when the shell tool specifies a worktree directory. If it reports
+a false commit-on-main refusal, verify `pwd` and `git branch --show-current`,
+then include an explicit `cd <absolute-worktree> &&` or `git -C
+<absolute-worktree>` in the command text. The worktree setting alone may not be
+visible to the preflight; an explicit repository path pins the branch for both
+the command preflight and the canonical commit guard.
 
 For migration-ledger drift, retrieve the applied Git blob and restore the
 historical migration byte-for-byte; move new admission logic to the migration
