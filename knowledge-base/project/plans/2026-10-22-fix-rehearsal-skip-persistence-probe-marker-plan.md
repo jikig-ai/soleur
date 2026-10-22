@@ -44,7 +44,7 @@ Always-on halts: Phase 4.6 User-Brand Impact present, threshold `none` with the 
 4.7 Observability present, probe verb allowlisted, no `ssh`, `expected_output` literal, non-placeholder
 `credentials_required`; 4.8 no PAT-shaped variable; 4.11 `lint-guard-contract.py` green and the Assembly names the
 chokepoint, not the members; 4.12 exactly one unfenced `## Scope Check`, every row compliant. Conditional halts not
-fired: 4.5 network outage (no SSH or timeout symptom), 4.55 downtime (CI tooling only), 4.9 UI wireframe (no UI
+fired: 4.5 network connectivity (no SSH or timeout symptom), 4.55 downtime (CI tooling only), 4.9 UI wireframe (no UI
 surface), 4.10 encryption posture (no `.tf`, migration or cloud-init edit, no new store or connection). Cited
 issues and PRs (#8763 merged, #9394, #8856, #7510, #7574, #7376, #10786) and both ADR files resolved live; the one
 rule id cited (`cq-write-failing-tests-before`) is an active rule.
