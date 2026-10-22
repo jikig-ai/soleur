@@ -56,3 +56,10 @@ causes avoidable failed reads; agents should report the actual SHA they verify.
 
 Vitest spies need an explicit `vi` import in files that do not enable globals;
 `tsc --noEmit` catches the missing symbol before tests run.
+
+The Codex command preflight may evaluate a chained commit using the session's
+bare-root context even when the shell call specifies a worktree directory. If
+it reports a false commit-on-main refusal, verify `pwd` and
+`git branch --show-current`, then issue the commit as a separate `git -C
+<absolute-worktree> commit ...` command. The explicit `-C` pins the exact
+repository for both the command preflight and the canonical commit guard.
