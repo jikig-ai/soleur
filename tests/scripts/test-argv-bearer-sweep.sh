@@ -6895,7 +6895,7 @@ while j < len(src) and src[j] != "}": j += 1
 print(hashlib.md5("\n".join(src[heads[0]:j + 1]).encode()).hexdigest())
 ' "$1"
 }
-s6h_curl_line() { grep -F '_hb_curl() {' "$1" | grep -c . | grep -qx 1 && grep -F '_hb_curl() {' "$1"; } # the one definition line, rc 1 when absent or repeated
+s6h_curl_line() { [[ "$(grep -cF '_hb_curl() {' "$1")" == 1 ]] && grep -F '_hb_curl() {' "$1"; } # the one definition line, rc 1 when absent or repeated
 S6H_WBS_FILE="$REPO_ROOT/$S6H_DIR/web-bash-synthetic.sh"
 S6H_UO_SET=""; S6H_UO_EMPTY=0
 for f in "${S6H_PARITY_FILES[@]}" web-bash-synthetic.sh; do

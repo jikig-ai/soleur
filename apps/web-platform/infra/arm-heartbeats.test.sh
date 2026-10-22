@@ -844,7 +844,7 @@ host_coverage_missing() {  # <sut path> <keys...>: prints each "<beat>/<key>" la
   local sut="$1" k beat; shift
   for beat in web_zot_consumer web_nic_guard web_bash_synthetic; do
     for k in "$@"; do
-      grep -vE '^[[:space:]]*#' "$sut" | grep -qF "arm_one 'betteruptime_heartbeat.${beat}[\"${k}\"]'" || echo "${beat}/${k}"
+      grep -qF "arm_one 'betteruptime_heartbeat.${beat}[\"${k}\"]'" < <(grep -vE '^[[:space:]]*#' "$sut") || echo "${beat}/${k}"
     done
   done
 }
