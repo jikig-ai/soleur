@@ -120,12 +120,21 @@ class NamespaceDispatchTests(unittest.TestCase):
         @namespace_mutant
         def mutant(seat):
             called.append(True)
+        for pid, status in ((1, 'NSpid:\t42\n'), (1, 'NSpid:\t42\t1\n'),
+                            (42, 'NSpid:\t1\n')):
+            with self.subTest(pid=pid, status=status), \
+                    patch.dict(os.environ, {'SOLEUR_LIFECYCLE_NAMESPACE': '1'}), \
+                    patch.object(os, 'getpid', return_value=pid), \
+                    patch.object(Path, 'read_text', return_value=status):
+                with self.assertRaisesRegex(AssertionError, 'UNVERIFIED-NO-NAMESPACE'):
+                    mutant(self)
+                self.assertEqual(called, [])
+        # This is a no-process synthetic callback, never a signalling mutant.
         with patch.dict(os.environ, {'SOLEUR_LIFECYCLE_NAMESPACE': '1'}), \
-                patch.object(os, 'getpid', return_value=42), \
-                patch.object(Path, 'read_text', return_value='NSpid:\t42\n'):
-            with self.assertRaisesRegex(AssertionError, 'UNVERIFIED-NO-NAMESPACE'):
-                mutant(self)
-        self.assertEqual(called, [])
+                patch.object(os, 'getpid', return_value=1), \
+                patch.object(Path, 'read_text', return_value='NSpid:\t1\n'):
+            mutant(self)
+        self.assertEqual(called, [True])
 
     def test_red_namespace_control_prevents_mutant_execution(self):
         commands = []
@@ -222,7 +231,7 @@ class ConfigLifecycle(unittest.TestCase):
                     self.adopted.append(pid)
 
     def retire(self, pid):
-        if pid in self.adopted:
+        while pid in self.adopted:
             self.adopted.remove(pid)
 
     def cleanup_owned(self):
@@ -326,7 +335,8 @@ class ConfigLifecycle(unittest.TestCase):
         self.assertEqual(stdout, b'')
         self.assertFalse(ready.exists())
         pid = int(pidfile.read_text())
-        self.adopted.append(pid)
+        if pid not in self.adopted:
+            self.adopted.append(pid)
         done, status = os.waitpid(pid, 0)
         self.retire(pid)
         self.assertEqual(done, pid)
@@ -382,7 +392,8 @@ class ConfigLifecycle(unittest.TestCase):
     def test_reaping_immediately_retires_success_and_known_absence(self):
         for absent in (False, True):
             with self.subTest(absent=absent):
-                self.adopted.append(2147483647)
+                # Census and PID-file enrollment may report the same child.
+                self.adopted.extend((2147483647, 2147483647))
                 with patch.object(os, 'waitpid', side_effect=ChildProcessError if absent else None,
                                   return_value=(2147483647, 0)):
                     self.assertTrue(self.reaped(2147483647, .1))

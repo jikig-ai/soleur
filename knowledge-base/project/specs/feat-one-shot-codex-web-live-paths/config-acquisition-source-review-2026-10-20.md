@@ -298,3 +298,24 @@ passed 41 tests and removed its allocated sandbox. Primary complete discovery
 on the dirty candidate refused the clean-source preparation precondition (481
 tests, one setup error); a committed-source rerun and independent re-review are
 required. No new Config manifest or execution occurred.
+
+At committed source `4bf9ffa8e4847a4f7400fdac501deb94baae0e48`, complete offline
+discovery passed **487 tests in 63.162 seconds**, exit 0. Independent engineering,
+security and test-design reviewers each passed the guarded 41-test focused suite
+(7.064, 6.628 and 6.509 seconds). Security accepted source; engineering held
+acceptance for one Low duplicate-enrollment invariant, and test-design accepted
+the prior High isolation correction with two Low findings (score 8.3/10, Grade B;
+pyramid PASS). Neither run establishes acquisition or hosted qualification.
+
+The follow-up makes PID-file enrollment idempotent and retires every duplicate
+entry. Its duplicate-retirement regression failed both successful-reap and
+known-absence cases before correction. Reentry negatives now invalidate PID and
+namespace census independently, with a no-process valid-tuple control. The
+corrected focused suite passed **41 tests in 8.733 seconds**; Ruff and whitespace
+checks passed. Fresh committed-source discovery and final independent acceptance
+remain pending. Production transport/helper bytes are unchanged from `77324397`.
+
+The push's default-branch dependency warning was investigated through GitHub's
+existing Dependabot alerts: six open npm alerts (hono, markdown-it, vite and
+sprintf-js) concern existing lockfiles, not this Python containment correction.
+Those existing alerts retain their own tracking; no dependency fix is claimed.
