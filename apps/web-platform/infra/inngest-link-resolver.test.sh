@@ -957,10 +957,10 @@ class=forged level=info'; do
            'tenca|cause=ca_count url_lines=1 url_https=1 ca_lines=12 ca_ok=12'; do
     FX_INSPECT="${t%%|*}" canary "$1" "$ROW_ID"
     want="${t#*|}"
-    need "inspect=${t%%|*}: the event does not read 'check=inspect $want': $(grep canary_failed "$RUN/logger.log")" "$(grep -qF -- "check=inspect $want" "$RUN/logger.log" && grep canary_failed "$RUN/logger.log" | grep -q -- "check=inspect $want\$" && echo 0 || echo 1)" || return 1
+    need "inspect=${t%%|*}: the event does not read 'check=inspect $want': $(grep canary_failed "$RUN/logger.log")" "$(grep -qF -- "check=inspect $want" "$RUN/logger.log" && grep -q -- "check=inspect $want\$" < <(grep canary_failed "$RUN/logger.log") && echo 0 || echo 1)" || return 1
     # the line is integers and fixed tokens only: never 'cause=none', an IP, a path or a scheme
-    need "inspect=${t%%|*}: the event is not the anchored grammar: $(grep canary_failed "$RUN/logger.log")" "$(grep canary_failed "$RUN/logger.log" | grep -qE 'check=inspect cause=(inspect_failed|url_count|url_value|ca_count|ca_value) url_lines=[0-9]{1,2} url_https=[0-9]{1,2} ca_lines=[0-9]{1,2} ca_ok=[0-9]{1,2}$' && echo 0 || echo 1)" || return 1
-    need "inspect=${t%%|*}: the event leaks a value or says cause=none: $(grep canary_failed "$RUN/logger.log")" "$(grep canary_failed "$RUN/logger.log" | grep -qE 'cause=none|10\.0\.1\.|https?://|/etc/' && echo 1 || echo 0)" || return 1
+    need "inspect=${t%%|*}: the event is not the anchored grammar: $(grep canary_failed "$RUN/logger.log")" "$(grep -qE 'check=inspect cause=(inspect_failed|url_count|url_value|ca_count|ca_value) url_lines=[0-9]{1,2} url_https=[0-9]{1,2} ca_lines=[0-9]{1,2} ca_ok=[0-9]{1,2}$' < <(grep canary_failed "$RUN/logger.log") && echo 0 || echo 1)" || return 1
+    need "inspect=${t%%|*}: the event leaks a value or says cause=none: $(grep canary_failed "$RUN/logger.log")" "$(grep -qE 'cause=none|10\.0\.1\.|https?://|/etc/' < <(grep canary_failed "$RUN/logger.log") && echo 1 || echo 0)" || return 1
   done
   FX_POS='garbage' canary "$1" "$ROW_ID"
   need "no verdict: the event does not read 'check=no_verdict cause=none'" "$(log_has 'class=canary_failed level=error check=no_verdict cause=none' && echo 0 || echo 1)" || return 1
