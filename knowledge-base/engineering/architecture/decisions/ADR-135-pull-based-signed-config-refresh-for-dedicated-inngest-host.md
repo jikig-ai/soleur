@@ -273,3 +273,17 @@ interim-soft (it degrades loudly and exits 0, `SOLEUR-DEBT` marker in its commen
 reads the bundle yet, and it must become blocking, as `reusable-release.yml`'s mirror is, when the
 consumer reads zot only. The body of this ADR keeps its original wording as the record of the
 decision at the time; amend it in full when the consumer is built.
+
+## Addendum 2026-10-21 — defect 2: the verifier image itself was un-mirrored
+
+The "zot is the ONLY registry read on this host" claim was one image short: the refresh
+tick ran `docker run --network none gcr.io/projectsigstore/cosign@sha256:57c0e93a…`, whose
+daemon-side implicit pull needs the public egress this host does not have. The verify path
+had never run (v1 died at extract, v2 reached verify and died at the pull), and the failure
+emitted as `reason=signature` — a fetch failure misattributed to provenance. Fix: the
+bundle producer's `zot_mirror` step now also copies the pinned cosign image to
+`127.0.0.1:5000/jikig-ai/cosign:v3.1.1` and equality-checks the mirrored digest; the host's
+`COSIGN_IMAGE` default resolves to `${ZOT_EP}/jikig-ai/cosign@sha256:57c0e93a…` after
+`ZOT_EP`, staged by an explicit bounded pull that reports `reason=pull
+member=cosign-image`. The claim is now literally true. The gcr ref remains correct on the
+web hosts, which have public egress (ADR-096 amendment 2026-09-28).

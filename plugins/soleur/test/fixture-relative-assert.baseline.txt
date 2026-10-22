@@ -163,8 +163,8 @@
 4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-16	apps/web-platform/infra/ci-deploy.sh
-8	apps/web-platform/infra/ci-deploy.test.sh
+19	apps/web-platform/infra/ci-deploy.sh
+10	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
@@ -228,6 +228,7 @@
 1	apps/web-platform/infra/resource-monitor.sh
 12	apps/web-platform/infra/resource-monitor.test.sh
 5	apps/web-platform/infra/run-registered-suites.sh
+1	apps/web-platform/infra/run-registered-suites.test.sh
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 1	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh

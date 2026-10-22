@@ -647,3 +647,18 @@ a live-wedged holder bounds the wait at `timeout_s + slack` and the heartbeat
 names the holder state for whoever comes looking. On the no-timeout fallback
 the bound remains only `flock -w` and the blocked-mask defeat stays reachable —
 the `[note]` emitted there names that residual risk.
+
+## Addendum — 2026-10-20 (#7376): a memory-derived `JOBS` cap is a rejected alternative
+
+For the parallel infra-suite runner's capacity question, deriving `-P` width from
+available memory at run time is REJECTED: the width would vary run-to-run and
+host-to-host, making the flake it exists to fix irreproducible and the evidence
+stream self-masking (the cap silently lowers width exactly when contention
+rises). The runner also cannot source `scripts/lib/test-contention.sh` (ADR-177
+§A3 single-file SUT), so a cap would be a second inlined capacity
+implementation. The ruled arm is deterministic class-serialisation of the heavy
+set at width 1 — evidence-gated: it ships only if kill-class evidence lands
+(UNACCOUNTED with xargs rc 125, or a signal-shaped `.meta` rc on a heavy suite).
+Contention-slowdown stays owned by `_SUITE_BOUNDS` (rc=124 renders as a named
+RED). Recorded in
+`knowledge-base/project/specs/feat-one-shot-7376-suite-flake/decision-challenges.md`.

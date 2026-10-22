@@ -760,6 +760,32 @@ else
   fail "wrapped treatment: the knob-set Bash call did not return the command's stdout (out=$(printf '%s' "$TREAT_WRAP" | head -c 300) err=$(head -c 200 "$WORK/sdkbash.err"))"
 fi
 
+# AF_UNIX-deny variant arms (#10455 a, ADR-075 addendum 2026-10-19). The production run tuple (this container's AppArmor +
+# seccomp posture) must let the SDK start Bash under BOTH seccomp artifacts, and the variant must deny socket(AF_UNIX)
+# while the base keeps allowing it. Same probe, same shim; only SOLEUR_BWRAP_SECCOMP_BPF differs. A node connect() to a
+# path that does not exist reports ENOENT when the AF_UNIX socket was created and EPERM when socket() was denied. The
+# container profile also keeps io_uring closed (no ring, so no IORING_OP_SOCKET bypass of the socket() filter); that is
+# pinned statically in test/bwrap-userns-seccomp.test.ts.
+sdk_bash_sel() { # <KNOB 0|1> <command> <seccomp artifact path> -> the single SDK_BASH_RESULT line
+  docker exec -e APP=/app -e KNOB="$1" -e CMD="$2" -e HOME=/home/soleur -e SOLEUR_BWRAP_SECCOMP_BPF="$3" "$CTR" node /app/infra/lib/sdk-bash-probe.mjs 2>"$WORK/sdkbash.err" \
+    | grep -a '^SDK_BASH_RESULT ' | tail -1
+}
+read -r -d '' AFU_CMD <<'AFU_EOF' || true
+node -e "const c=require('net').connect('/afunix-probe.sock');c.on('error',e=>{console.log('AFUNIX_'+e.code);process.exit(0)});c.on('connect',()=>{console.log('AFUNIX_CONNECTED');process.exit(0)})"; echo AFUNIX_DONE
+AFU_EOF
+AFU_VARIANT="$(sdk_bash_sel 1 "$AFU_CMD" /app/infra/bwrap-userns-clone3-unixdeny.bpf)"
+if [[ "$AFU_VARIANT" == *'"isError":false'* && "$AFU_VARIANT" == *AFUNIX_DONE* && "$AFU_VARIANT" == *AFUNIX_EPERM* ]]; then
+  pass "variant: under the unixdeny artifact Bash starts on the production tuple and socket(AF_UNIX) is EPERM"
+else
+  fail "variant: the unixdeny artifact either broke Bash start or did not deny socket(AF_UNIX) (out=$(printf '%s' "$AFU_VARIANT" | head -c 300) err=$(head -c 200 "$WORK/sdkbash.err")) - ADR-075 addendum 2026-10-19 flips to descope"
+fi
+AFU_BASE="$(sdk_bash_sel 1 "$AFU_CMD" /app/infra/bwrap-userns-clone3-deny.bpf)"
+if [[ "$AFU_BASE" == *'"isError":false'* && "$AFU_BASE" == *AFUNIX_DONE* && "$AFU_BASE" == *AFUNIX_ENOENT* ]]; then
+  pass "variant control: under the base artifact the same probe creates its AF_UNIX socket (ENOENT on connect), so the variant's EPERM is attributable to the artifact"
+else
+  fail "variant control: the base artifact did not allow socket(AF_UNIX) or Bash did not start (out=$(printf '%s' "$AFU_BASE" | head -c 300))"
+fi
+
 # Census: with AF_UNIX no longer blocked inside the inner sandbox, list every pathname socket visible from it. Only the
 # SDK's own proxy bridge sockets under /tmp are expected (peer-messaging and transcript dirs are masked). Two
 # instrument checks keep a silent census from passing: the listing must END with its sentinel (a failed `find` prints
@@ -798,7 +824,7 @@ fi
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a literal adjacent to its use (guard-vacuity-floor shape).
-MIN_ASSERTIONS=52
+MIN_ASSERTIONS=54
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS) — the suite did not exercise its arms"
   exit 1

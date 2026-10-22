@@ -917,7 +917,8 @@ workspaces-luks-soak-6604|bs-chained|betterstack-query.sh|after the Sentry call 
 DELEGATED_MANIFEST='anthropic-admin-key-6297|scripts/followthroughs/anthropic-admin-key-6297.test.sh
 cwv-field-rum-9178|scripts/followthroughs/cwv-field-rum-9178.test.sh
 send-failed-alert-probe-8097|scripts/followthroughs/send-failed-alert-probe-8097.test.sh
-betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh'
+betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh
+git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh'
 
 # HMAC (S2-C): the four probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
 # config channel: name | kind | hosts (regex) | min_calls | canned 200 body | owning test (delegated only). `dynamic` probes have
@@ -929,8 +930,7 @@ workspace-isolation-verdict-2640|dynamic|deploy\.soleur\.ai|1|workspace_isolatio
 infra-config-fatal-channel-7220|dynamic|deploy\.soleur\.ai|1|fatal_frame|
 infra-config-activation-7220|delegated|||activation_frame|scripts/followthroughs/infra-config-activation-7220.test.sh
 inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
-tenant-outer-wrap-soak-5863|delegated|||none|scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh
-sandbox-readback-10445|delegated|||none|scripts/followthroughs/sandbox-readback-10445.test.sh'
+sdk-bash-smoke-verdict-10548|delegated|||none|scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh'
 
 # --- the DERIVED population: tracked followthrough probes holding a credentialed curl ---------
 derive_population() {
@@ -4492,7 +4492,7 @@ else row "S4 parity population: a Markdown file teaches a divergent or unlisted 
 # first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
 # names the file).
 # =====================================================================================
-S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh | sort)"
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
 S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
 S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
 S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
@@ -4668,9 +4668,9 @@ for f in files:
 print(n_ok, n_sig, n_brr, ",".join(bad))
 '
 read -r S4_G_OK S4_G_SIG S4_G_BRR S4_G_BAD < <(cd "$REPO_ROOT" && python3 -I -c "$s4_guard_py" "$BEARER_FN" "$CUT" $S4_OK_DERIVED)
-# BOTH operands are literals above the `if`: 77 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
-# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3), 6 `_sig_curl`, 2 `_bearer_curl`.
-S4_GUARD_FLOOR=77
+# BOTH operands are literals above the `if`: 76 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
+# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3; #10546 retired two of those probes, the outer-wrap soak and the sandbox readback, taking the count from 77 to 76), 6 `_sig_curl`, 2 `_bearer_curl`.
+S4_GUARD_FLOOR=76
 if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 6 && "$S4_G_BRR" == 2 ]]; then
   row "S4 inline guard pin: all $S4_G_OK _bearer_ok definitions of the $(printf '%s\n' "$S4_OK_DERIVED" | grep -c .) tracked files that define one equal the canonical text byte for byte (the count equals git grep's), and the $S4_G_SIG _sig_curl and $S4_G_BRR _bearer_curl wrappers equal the cutover script's (marker name and its --max-time normalized); floor $S4_GUARD_FLOOR"  ok
 else row "S4 inline guard pin: an inline guard or wrapper differs from the canonical text" fail "ok=$S4_G_OK defs=$S4_OK_DEFS sig=$S4_G_SIG brr=$S4_G_BRR bad=$S4_G_BAD"; fi
