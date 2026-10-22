@@ -1687,6 +1687,17 @@ if grep -qF "HEAD:refs/soleur/worktrees/cutover-probe/probe" "$SCRIPT" \
   pass "MZ-P9: the probe pushes/verifies refs/soleur/worktrees/cutover-probe/probe — the only namespace the fence admits"
 else fail "MZ-P9: the probe refspec is outside the worktree namespace (the fence would reject it on every real run)"; fi
 
+# MZ-P14: every remote `env -i PATH=/usr/bin:/bin … runuser` names runuser by absolute path. The
+# ssh shim logs the remote bytes instead of executing them, so no row above can see a bare
+# `runuser` fail to resolve: on the git-data host runuser lives in /usr/sbin, which env -i's
+# PATH omits, and the live flip died at probe_failed reason=provision (run 39805041138).
+# Comment-stripped; the count pins the container (three sites: provision, remove, residue retry).
+_p14_all="$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'env -i PATH=/usr/bin:/bin .*runuser' || true)"
+_p14_bare="$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep 'env -i PATH=/usr/bin:/bin .*runuser' | grep -vc '/usr/sbin/runuser' || true)"
+if [ "$_p14_all" = 3 ] && [ "$_p14_bare" = 0 ]; then
+  pass "MZ-P14: the probe's three env -i remote calls name /usr/sbin/runuser — a bare runuser is not on env -i's PATH"
+else fail "MZ-P14: an env -i call reaches a bare runuser (sites=$_p14_all bare=$_p14_bare; want 3 and 0)"; fi
+
 # MZ-P5: provision failure -> probe_failed reason=provision.
 run_mode mz-p5-provfail probe SHIM_PROBE=provfail
 if [ "$RC" = 5 ] && has_store probe probe_failed && grep -q 'reason=provision' "$OUT"; then
@@ -3676,7 +3687,8 @@ fi
 # Review round 2 (#10138): 148 mutants x 2 = 296 (+10 over 143 x 2); no new standalone row (the G5 census, N-body and N-exprs were restated in place): 635.
 # Pin-fault read (#8211): WF-pinfault (1) and the executed FP1-FP3 rows (3): 636 -> 639 (the workflow verdict count 56 -> 57 moves with WF-pinfault).
 # #10297: 151 mutants x 2 = 302 (+6 over 148 x 2); one new standalone workflow verdict (WF-rbclear), which also moves the workflow verdict count 57 -> 58: 639 -> 646.
-FLOOR=646
+# Probe runuser path (flip run 39805041138): one new standalone row (MZ-P14): 646 -> 647.
+FLOOR=647
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
