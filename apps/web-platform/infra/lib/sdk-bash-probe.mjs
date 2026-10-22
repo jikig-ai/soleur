@@ -10,7 +10,7 @@
 //                          masked dirs belong to real sessions: the ones that exist are masked, the rest are counted in the
 //                          result as masks_missing). The SDK CLI's own temp base (CLAUDE_CODE_TMPDIR / TMPDIR) is the probe's scratch
 //                          config dir, never the shared /tmp/claude-<uid> (the #10445 cross-tenant channel), and the scratch dirs
-//                          are removed on every exit path; leftovers of a killed run older than a day are swept at start.
+//                          are removed on the normal and infra() exits; a run killed by TERM/KILL can leave a dir (the SDK's claude child recreates it while it flushes), and leftovers older than a day are swept at start.
 //
 //   default (SMOKE unset)  The docker suite's control/treatment probe (infra/sandbox-masked-proc-docker.test.sh):
 //                          observes, under the production run tuple, what a hosted Bash call returns with and
@@ -436,8 +436,9 @@ async function runSmoke() {
   }
   const ws = mkdtempSync(`${tmp}/sdk-bash-probe-`);
   const cfg = mkdtempSync(`${tmp}/sdk-bash-probe-cfg-`);
-  // Scratch is removed on EVERY exit path: the normal end and every `infra()` (process.exit runs this), and a TERM from the
-  // in-container `timeout` (the handler turns it into an exit, rc 143). Only a SIGKILL leaves it, which the sweep above reaps.
+  // Scratch is removed on the normal end and every `infra()` (process.exit runs this), and a TERM from the in-container
+  // `timeout` runs it too (the handler turns it into an exit, rc 143). A killed run can still leak a dir: the SDK's claude child
+  // is TERMed as well and may recreate the config dir while it flushes. The day-old sweep above reaps those (bounded, a few KB).
   const cleanup = () => {
     for (const d of [ws, cfg]) {
       try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort scratch cleanup */ }

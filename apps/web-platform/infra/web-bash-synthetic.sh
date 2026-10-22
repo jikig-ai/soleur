@@ -219,6 +219,8 @@ _deploy_lock_held() {
   read -r maj min ino < <(stat -c '%Hd %Ld %i' "$LOCK_FILE" 2>/dev/null) || return 2
   case "$maj$min$ino" in ''|*[!0-9]*) return 2 ;; esac
   [ -r "$PROC_LOCKS" ] || return 2
+  # maj:min as /proc/locks prints them; matches stat's st_dev on tmpfs (/var/lock in prod). On a filesystem where the two differ
+  # (e.g. btrfs) this reads "not held", i.e. the run proceeds during a deploy; it never produces a false /fail.
   want="$(printf '%02x:%02x:%d' "$maj" "$min" "$ino")"
   awk -v want="$want" '{ for (i = 5; i <= NF; i++) if ($i == want) found = 1 } END { exit found ? 0 : 1 }' "$PROC_LOCKS" 2>/dev/null || rc=$?
   case "$rc" in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
