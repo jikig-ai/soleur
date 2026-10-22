@@ -76,6 +76,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/resend-sender-domain.test.ts",
   "test/safe-bash.test.ts",
   "test/safe-return-to.test.ts",
+  "test/sdk-bash-probe-runtime.test.ts",
   "test/bwrap-shim.test.ts",
   "test/sandbox-relative-paths.test.ts",
   "test/sandbox.test.ts",

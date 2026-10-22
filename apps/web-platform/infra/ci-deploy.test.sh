@@ -4419,6 +4419,44 @@ assert_sdk_bash_smoke() {
   sbs_check "SBS-5c" "an unresolvable container HOME is smoke_infra_error container_home_unresolved (the probe is not exec'd with a guessed HOME)" \
     "$([[ "$rc" -eq 0 && "$(sbs_jq "$d/sb-state.json" '.reason')" == container_home_unresolved && "$(grep -c 'node /app/infra/lib/sdk-bash-probe.mjs' "$d/smoke-argv.log" || true)" == 0 ]] && echo 0 || echo 1)"
 
+  # SBS-5k: the shared verdict lib (sdk-bash-verdict.sh) is absent while this script is present: the two ship through different
+  # channels (apply-deploy-pipeline-fix.yml vs the web_bash_synthetic install blocks), so a host can run the new script before the
+  # lib lands. The smoke must be an explicit, non-blocking HOLD (smoke_infra_error verdict_lib_absent), never a pass and never a
+  # rollback. The lib is hidden by running a COPY of ci-deploy.sh from a directory that lacks it (there is no env override of the
+  # lib path: this script is root). A host-wide /usr/local/bin copy would defeat the row, so it is skipped there with a reason.
+  if [[ -e /usr/local/bin/sdk-bash-verdict.sh ]]; then
+    echo "  SKIP: SBS-5k (a real /usr/local/bin/sdk-bash-verdict.sh exists on this machine: the lib cannot be hidden)"
+  else
+    local nolib_dir nolib_mut_dir
+    nolib_dir=$(mktemp -d); nolib_mut_dir=$(mktemp -d)
+    cp "$DEPLOY_SCRIPT" "$nolib_dir/ci-deploy.sh"
+    # the mutant: the else branch (lib absent) reports a green pass instead (mutant C02 of the test-design review)
+    python3 - "$DEPLOY_SCRIPT" "$nolib_mut_dir/ci-deploy.sh" <<'PY2'
+import sys
+s = open(sys.argv[1]).read()
+old = 'verdict="smoke_infra_error"; reason="verdict_lib_absent"; coverage=""'
+assert s.count(old) == 1, "verdict_lib_absent branch not found exactly once"
+open(sys.argv[2], "w").write(s.replace(old, 'verdict="pass"; reason="ok"; coverage="sdk_wrapper_shim_prodtuple"'))
+PY2
+    out=$(run_sbs_deploy "DEPLOY_SCRIPT='$nolib_dir/ci-deploy.sh'") && rc=0 || rc=$?
+    d=$(sbs_dir "$out")
+    nolib_ok() {  # <out> <dir> <rc>: the lib-absent smoke is a HOLD: ledger verdict, no page, no Sentry event, deploy continues
+      [[ "$3" -eq 0 && "$1" == *"$swap_msg"* && "$(sbs_jq "$2/sb-state.json" '.verdict')" == smoke_infra_error \
+        && "$(sbs_jq "$2/sb-state.json" '.reason')" == verdict_lib_absent && "$(sbs_jq "$2/sb-state.json" '.coverage // ""')" == "" \
+        && "$(sbs_count "$2/logger.txt" 'SANDBOX_CANARY_FAIL')" == 0 && "$(sbs_count "$2/logger.txt" 'SDK_BASH_SMOKE: verdict=smoke_infra_error reason=verdict_lib_absent')" == 1 ]]
+    }
+    sbs_check "SBS-5k" "lib absent: smoke_infra_error verdict_lib_absent in the ledger and the SDK_BASH_SMOKE row, no page, deploy continues (no rollback)" \
+      "$(nolib_ok "$out" "$d" "$rc" && echo 0 || echo 1)" "state: $(cat "$d/sb-state.json" 2>/dev/null)"
+    out=$(run_sbs_deploy "DEPLOY_SCRIPT='$nolib_mut_dir/ci-deploy.sh'") && rc=0 || rc=$?
+    d=$(sbs_dir "$out")
+    sbs_check "SBS-5k/mutant" "mutation: a lib-absent branch that reports a pass is caught by SBS-5k (the predicate is false for it)" \
+      "$(nolib_ok "$out" "$d" "$rc" && echo 1 || echo 0)" "state: $(cat "$d/sb-state.json" 2>/dev/null)"
+    sbs_check "SBS-5l" "ci-deploy.sh has no environment override of the lib path: the lib is found only next to the script or in /usr/local/bin" \
+      "$([[ "$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" | grep -cE 'SDK_BASH_VERDICT_LIB:-|-z "\$\{SDK_BASH_VERDICT_LIB' || true)" == 0 \
+          && "$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" | grep -cE '^SDK_BASH_VERDICT_LIB=""$' || true)" == 1 ]] && echo 0 || echo 1)"
+    rm -rf "$nolib_dir" "$nolib_mut_dir"
+  fi
+
   # SBS-5d: no weak nonce. When /dev/urandom cannot supply one the smoke is an infra error, never a $RANDOM-derived nonce.
   out=$(run_sbs_deploy "export MOCK_OD_FAIL=1") && rc=0 || rc=$?
   d=$(sbs_dir "$out")
@@ -4672,9 +4710,14 @@ assert_sdk_bash_smoke() {
   # SBS-12f (F4): the dispatched marker is ONE literal in both files, next to `state.dispatched = true` in the probe.
   local probe_src
   probe_src="$(dirname "$DEPLOY_SCRIPT")/lib/sdk-bash-probe.mjs"
-  sbs_check "SBS-12f" "SDK_BASH_DISPATCHED is printed by the probe beside state.dispatched = true and read by the 124 arm (parity)" \
+  # The 124 arm moved out of run_sdk_bash_smoke into the sourced lib shared with the runtime synthetic (ADR-079 "Addendum — 2026-10-22 (#10455 b)"):
+  # the marker is read there, and the function reaches it through sdk_bash_map_result.
+  local verdict_lib
+  verdict_lib="$(dirname "$DEPLOY_SCRIPT")/sdk-bash-verdict.sh"
+  sbs_check "SBS-12f" "SDK_BASH_DISPATCHED is printed by the probe beside state.dispatched = true and read by the 124 arm in the shared verdict lib the smoke calls (parity)" \
     "$([[ "$(grep -A1 'state\.dispatched = true;' "$probe_src" | grep -c 'SDK_BASH_DISPATCHED' || true)" -ge 1 \
-        && "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -cF 'SDK_BASH_DISPATCHED' || true)" -ge 1 ]] && echo 0 || echo 1)"
+        && "$(grep -cF 'SDK_BASH_DISPATCHED' "$verdict_lib" || true)" -ge 1 \
+        && "$(awk '/^run_sdk_bash_smoke\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$DEPLOY_SCRIPT" | grep -cF 'sdk_bash_map_result' || true)" -ge 1 ]] && echo 0 || echo 1)"
   rm -rf "$d2" "$d6" "$d7" "$d8" "$d9s" "$d11"
 }
 

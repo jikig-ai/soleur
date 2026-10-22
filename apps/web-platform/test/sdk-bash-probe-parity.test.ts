@@ -182,8 +182,11 @@ describe("the probe is baked into the image and ci-deploy.sh execs the baked pat
     // printed right after the assignment, gated on the smoke-only `announce` flag so the docker suite's default mode stays one-line
     expect(src).toMatch(/state\.dispatched = true;\n\s*if \(state\.announce\) console\.log\("SDK_BASH_DISPATCHED"\);/);
     expect(src).toMatch(/const state = \{ dispatched: false, announce: true \};/);
-    // the 124 arm of run_sdk_bash_smoke reads the identical literal, and the result parse ignores it (it is anchored on `SDK_BASH_RESULT `)
-    const smokeFn = deploy.slice(deploy.indexOf("run_sdk_bash_smoke() {"));
+    // the 124 arm reads the identical literal, and the result parse ignores it (it is anchored on `SDK_BASH_RESULT `). The rc/marker
+    // mapping moved out of run_sdk_bash_smoke into the sourced lib shared with the runtime synthetic (ADR-079 "Addendum — 2026-10-22 (#10455 b)"),
+    // so the contract is the function plus the lib it calls.
+    const smokeFn = deploy.slice(deploy.indexOf("run_sdk_bash_smoke() {")) + read("infra", "sdk-bash-verdict.sh");
+    expect(deploy).toContain("sdk_bash_map_result");
     expect(smokeFn).toContain(`SDK_BASH_DISPATCHED`);
     expect(smokeFn).toContain("grep -a '^SDK_BASH_RESULT '");
     expect(smokeFn).toContain("host_timeout_before_dispatch");
@@ -220,6 +223,10 @@ const ROWS: Row[] = [
   { name: "failed: dispatched, unknown error wording without any sandbox signature (signature-independent)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: true, content: "the widget exploded" }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /widget exploded/ },
   { name: "failed: dispatched and hung past the internal cap", obs: { nonce: NONCE, dispatched: true, timedOut: true, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^hung_after_dispatch$/ },
   { name: "failed: dispatched, the SDK threw a non-sandbox error", obs: { nonce: NONCE, dispatched: true, thrown: "Error: stream closed", coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^dispatched_then_error/ },
+  { name: "infra: dispatched, the SDK's child died to the OOM killer (exited with code 137): a host memory event, never a /fail page", obs: { nonce: NONCE, dispatched: true, thrown: "Error: Claude Code process exited with code 137", coverage: FULL }, verdict: "smoke_infra_error", reason: /^cli_child_killed/ },
+  { name: "infra: dispatched, the SDK's child got SIGTERM (a container stop or a deploy signal)", obs: { nonce: NONCE, dispatched: true, thrown: "Error: Claude Code process terminated by signal SIGTERM", coverage: FULL }, verdict: "smoke_infra_error", reason: /^cli_child_killed/ },
+  { name: "infra: the SDK's child was killed before Bash was dispatched too (code 143)", obs: { nonce: NONCE, dispatched: false, thrown: "Error: Claude Code process exited with code 143", coverage: FULL }, verdict: "smoke_infra_error", reason: /^cli_child_killed/ },
+  { name: "failed: dispatched, the SDK's child exited with code 1 (an ordinary failure, not a kill) stays a failure", obs: { nonce: NONCE, dispatched: true, thrown: "Error: Claude Code process exited with code 1", coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^dispatched_then_error/ },
   { name: "failed: dispatched, no tool_result at all", obs: { nonce: NONCE, dispatched: true, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /^dispatched_no_tool_result$/ },
   { name: "failed: the SDK threw 'sandbox required but unavailable' before Bash was dispatched (a sandbox that cannot start is the incident)", obs: { nonce: NONCE, dispatched: false, thrown: "Error: sandbox required but unavailable", coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /sandbox required but unavailable/ },
   { name: "failed: nonce present but the result is error-flagged (a failing command cannot certify)", obs: { nonce: NONCE, dispatched: true, toolResult: { isError: true, content: `SDK_SMOKE_${EXECUTED}\nboom` }, coverage: FULL }, verdict: "sdk_bash_smoke_failed", reason: /./ },
@@ -237,7 +244,7 @@ const ROWS: Row[] = [
 describe("smokeVerdict classifies every known outcome", () => {
   // Anti-vacuity floor: the table must not be emptied (a verdict suite that runs zero rows passes).
   it("runs at least the floor of rows", () => {
-    expect(ROWS.length).toBeGreaterThanOrEqual(18);
+    expect(ROWS.length).toBeGreaterThanOrEqual(22);
   });
 
   for (const row of ROWS) {
