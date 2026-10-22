@@ -196,10 +196,12 @@ its own commit so a review finding on it cannot hold the three disclosure edits.
      `path.resolve`'s lexical answer. Any failure is `kind: "unusable"`, not a silent session-dir
      fallback.
    - `createSetup` holds `calls = new Map<string, WorkdirCapture>()`, keyed
-     `` `${typeof messageID === "string" ? messageID : ""}\u0000${id}` `` — both fields are measured
-     on both events, and the pair is what makes a colliding counter suffix harmless. Bounded FIFO at
-     500 (`MAX_CALLS`), evicting oldest-first **silently**: a lost capture is announced at the
-     decision (`cause=no-capture`), which is the surface where it could change a verdict.
+     `` `${messageID}\u0000${id}` `` — both fields are measured on both events, and the pair is what
+     makes a colliding counter suffix harmless. **Both ids are required**: defaulting a missing one
+     to `""` would collapse the key back to the bare counter and let call A's workdir answer call B.
+     Bounded FIFO at 500 (`MAX_CALLS`), evicting oldest-first **silently**: a lost capture is
+     announced at the decision (`cause=no-capture`), which is the surface where it could change a
+     verdict.
    - Bind `ctx.tool?.hook("execute.before", …)` **after** `ctx.permission.hook("evaluate", …)`, and
      wrap registration in `try/catch`: a rejecting `hook()` must not abort `setup` and leave the
      guards unbound. A throw is treated exactly like an absent surface.
@@ -217,9 +219,11 @@ its own commit so a review finding on it cannot hold the three disclosure edits.
      - no entry → loud `cause=no-capture` (the tool hook did not fire) → session dir;
      - `kind: "absent"` → session dir, silent (the normal path);
      - `kind: "usable"` → `entry.path`, and write `workdir-correlated\tcwd=…`;
-     - `kind: "unusable"` → **do not run the guards**. `event.effect = "ask"`,
-       `event.message` names the path and the reason, `console.error` + `workdir-unusable`. Judging
-       in a directory the operator did not ask about is the defect; a prompt is not.
+     - `kind: "unusable"` → **the guards still run, against the session directory**, and only if
+       they decline does the decision become `effect = "ask"` with a message naming the path: their
+       cwd-independent classes (a home wipe, an infra destroy, a credential-bearing snapshot, a
+       forced push to the default branch) must not be skipped, and an arriving `deny` is never
+       relaxed into that prompt.
    - Pass the resolved cwd as the existing `cwd` argument of `decidePermission(action, resources, cwd, …)`
      — **no new parameter**: that value becomes both the envelope `cwd` and the runner cwd inside
      `decideBash`. `guardEnvelope` and both guard scripts change only as stated above.
@@ -253,7 +257,11 @@ its own commit so a review finding on it cannot hold the three disclosure edits.
      writes `no-tool-hook-surface` to **stderr** and the log once; (n) a rejecting `tool.hook` does
      the same and the permission handler is still bound and decides; (o) the capture handler
      tolerates a non-object input and a non-string `workdir` without throwing and without mutating
-     the event.
+     the event; (p) an arriving `deny` is not relaxed into the unusable-workdir prompt, and the
+     guards are still consulted; (q) a non-Bash tool call is not captured at all; (r) two live
+     captures are consumed by key, so an out-of-order evaluation still correlates; (s) a guard
+     `ETIMEDOUT` is not reported as an unenterable directory; (t) the real `runScript` surfaces
+     `spawnSync`'s error code for a missing cwd.
    - Every correlation assertion reads the **bytes handed to the guard** (`runs[0].stdin`), not an
      internal variable.
    - Update the ledger suite: the `tool.execute.before` row today sits in the case named for
@@ -397,7 +405,7 @@ its own commit so a review finding on it cannot hold the three disclosure edits.
 
 1. Focused suite: `cd plugins/soleur && bun test test/opencode-plugin.test.ts
    test/opencode-adapter-drift.test.ts test/harness-claim-parity.test.ts test/harness-tool-map.test.ts`
-   (baseline before the change: 84 pass / 0 fail; measured after: **102 pass / 0 fail**, 18 new
+   (baseline before the change: 84 pass / 0 fail; measured after: **111 pass / 0 fail**, 27 new
    rows — an exact count, because `≥` is also satisfied by deleting cases elsewhere).
 2. `bun plugins/soleur/scripts/sync-opencode-adapter.ts --check` → `opencode-adapter ok`.
 3. `TARGET=$(mktemp -d)`; `bun plugins/soleur/scripts/install-opencode-adapter.ts --target "$TARGET"`,
@@ -533,6 +541,34 @@ near-miss; and the acceptance criteria stop pinning source shape.
 Kept against panel advice, with reasons: the `calls` map rather than a single last-workdir slot
 (interleaved calls), the sentinel entry (P2), and the two-channel announce (stderr **and** log).
 
+### Code review round (post-implementation, 4 agents)
+
+`security-sentinel`, `observability-coverage-reviewer`, `test-design-reviewer` and
+`code-simplicity-reviewer` reviewed the diff. One P0 and three P1s were real and are fixed:
+
+1. **The new `ask` branch relaxed an arriving `deny`** and skipped the guards entirely — a
+   model-controlled `workdir` could have suppressed a credential deny or a home-wipe deny. Fixed:
+   the guards run against the session directory on that path, an arriving `deny` is preserved, and
+   only their *declining* becomes the prompt. Two tests pin it.
+2. **The ask message told the operator to approve** a command the plugin had just said it could not
+   check, and understated the scope ("not checked against the session directory" — it was not
+   checked at all). Reworded to state the facts and the repair.
+3. **A missing `messageID` on both sides collapsed the key** to the bare counter and could hand one
+   call's workdir to another. Fixed: both ids are required; absence is loud and uncorrelated.
+4. **Model-controlled paths reached stderr and the prompt unescaped**, and a 1 MB `workdir` was
+   echoed whole. Fixed: one `clip()` (control characters flattened, length bounded) on every
+   operator-facing interpolation, and `announce()` fields its own detail.
+5. **`run.error` hijacked the timeout path**, so a 12 s guard timeout was reported as an unenterable
+   directory. Fixed: only `EACCES`/`ENOTDIR`/missing-cwd get the directory sentence.
+6. **An unwritable `SOLEUR_OPENCODE_EVENT_LOG` rejected `setup`** — taking every hook with it.
+   Fixed: the default writer announces once and continues.
+7. Missing test arms added: arriving-deny preservation, non-`tool` source, non-Bash capture,
+   not-a-directory workdir, `..`, out-of-order captures, `ETIMEDOUT`, real `runScript` error
+   extraction, unkeyable capture.
+
+Simplification applied: `existsSync`/`isAbsolute` dropped from `resolveWorkdir` (both redundant), the
+unused test option removed, and the three hand-rolled announce pairs routed through `announce`.
+
 ### Product
 
 CPO sign-off — **granted** (Phase 2.5), threshold confirmed as `single-user incident`, with four
@@ -590,34 +626,38 @@ prompts.
 
 ```yaml
 liveness_signal:
-  what: "`soleur-opencode\tworkdir-correlated` per shell call that applies a captured workdir, and one of `workdir-uncorrelated cause=absent|no-capture`, `workdir-unusable`, `workdir-uncapturable` on each degraded decision"
+  what: "`soleur-opencode\tworkdir-correlated` per shell call that applies a captured workdir, and one of `workdir-uncorrelated id=<id|absent> cause=<source-not-tool|id-absent|message-id-absent|no-capture>`, `workdir-unusable`, `workdir-uncapturable`, `workdir-capture-error` on each degraded decision"
   cadence: "per shell call; plus one `no-tool-hook-surface` at setup when the tool surface is absent or rejects registration"
   alert_target: "none — a local CLI writes to the operator's own stderr and log; the line is the record, not an alert"
   configured_in: "SOLEUR_OPENCODE_EVENT_LOG (unset = no log file; every degraded path still console.errors a sentence)"
+  layer: "observability layer 7 `cli-stdout-artifact` — stderr in-session, plus the operator-local TSV file as the durable artifact; no vendor-side sink"
 error_reporting:
   destination: "console.error for every degraded correlation (the log file is off by default), plus the event-log line when armed; the success line is log-only"
   fail_loud: true
 failure_modes:
-  - mode: "a shell decision arrives with no usable call id"
-    detection: "`[soleur] …` sentence on stderr + `soleur-opencode\tworkdir-uncorrelated\tid=absent`"
-    remedy: "the decision falls back to the session directory; if this repeats, the runtime stopped populating `source.id` — check the OpenCode version"
+  - mode: "a shell decision arrives with ids the capture cannot be keyed by"
+    detection: "`[soleur] …` sentence on stderr + `workdir-uncorrelated\tid=…\tcause=source-not-tool|id-absent|message-id-absent`"
+    remedy: "the decision falls back to the session directory; if this repeats, the runtime changed the event shape — check the OpenCode version"
   - mode: "call id present but no capture (the tool hook never fired)"
     detection: "`[soleur] …` sentence on stderr + `workdir-uncorrelated\tid=…\tcause=no-capture`"
     remedy: "session directory used — the pre-fix behaviour, deliberately loud; check the OpenCode version and re-run `install-opencode-adapter.ts --check`"
-  - mode: "captured workdir cannot be resolved to an existing, real directory"
-    detection: "`[soleur] …` sentence + `workdir-unusable\tcwd=…`; `effect = ask` with a message naming the path"
-    remedy: "the operator is prompted; nothing is judged in a directory they did not ask about"
-  - mode: "the capture cannot be keyed (no call id on the tool event)"
-    detection: "`[soleur] …` sentence + `workdir-uncapturable\tid=absent` at capture time"
+  - mode: "captured workdir cannot be resolved to an existing, real directory (or is a present non-string value)"
+    detection: "`[soleur] …` sentence + `workdir-unusable\tcwd=…`; the guards are run against the session directory first, and only their declining becomes `effect = ask`"
+    remedy: "re-issue without `workdir`, or create the directory; an arriving `deny` is never relaxed into that prompt"
+  - mode: "the capture cannot be keyed (no call id, or no message id, on the tool event)"
+    detection: "`[soleur] …` sentence + `workdir-uncapturable\tid=…\treason=id-absent|message-id-absent` at capture time"
     remedy: "the following decision reports `cause=no-capture`; both lines point at the runtime's event shape"
   - mode: "runtime exposes no tool hook surface, or rejects the registration"
-    detection: "one `[soleur] …` sentence on stderr + `soleur-opencode\tno-tool-hook-surface\tworkdir-unavailable` at setup"
+    detection: "one `[soleur] …` sentence on stderr + `no-tool-hook-surface\tworkdir-unavailable\treason=…` at setup"
     remedy: "every decision uses the session directory, as before the fix; the permission guards remain bound"
-  - mode: "a guard script cannot run (moved checkout, unenterable cwd, spawn error, timeout)"
-    detection: "existing GUARD_RUN_FAILURE deny path, with the branch naming an unenterable working directory rather than blaming the checkout"
-    remedy: "re-run the installer for a moved checkout; otherwise fix the directory the guard could not enter"
+  - mode: "the capture threw (containment path; unreachable with the current total helpers)"
+    detection: "`[soleur] …` sentence + `workdir-capture-error\treason=…`"
+    remedy: "the shell call is judged in the session directory and the guards still run; report the text"
+  - mode: "a guard script cannot run (moved checkout, unenterable cwd, timeout, spawn error)"
+    detection: "existing GUARD_RUN_FAILURE deny path; `ENOENT`/`ENOTDIR`/`EACCES` (or a cwd that does not exist) name the unenterable directory, `ETIMEDOUT`/`ENOBUFS` keep the checkout sentence"
+    remedy: "create the directory or re-issue without `workdir` for a directory fault; re-run the installer for a moved checkout; retry for a timeout"
 logs:
-  where: "the file named by SOLEUR_OPENCODE_EVENT_LOG (operator-chosen; unset means no log file)"
+  where: "the file named by SOLEUR_OPENCODE_EVENT_LOG (operator-chosen; its parent directory must exist; unset means no log file)"
   retention: "operator's filesystem policy; not a hosted log sink"
 discoverability_test:
   command: 'grep -c "decidesBash" plugins/soleur/opencode/plugin.ts'
@@ -705,12 +745,15 @@ ledger are independent surfaces that also name the bound hook.
    directory and a symlinked one is reported as its realpath.
 3. Each of the six Guard Contract mutations reddens the suite in a scratch copy, with the quoted
    fail count recorded in the PR body; the real tree is never mutated for this check.
-4. **Degraded-correlation paths, one assertion each:** no usable `source.id` (`id=absent`), no
-   capture (`cause=no-capture`), and an unkeyable capture (`workdir-uncapturable`) each
-   `console.error` a sentence **and** write their distinct line **and** fall back to the session
-   directory; a captured-but-unusable workdir sets `effect = "ask"`, names the path, writes
-   `workdir-unusable`, and spawns no guard; an absent **or rejecting** `ctx.tool` writes
-   `no-tool-hook-surface` to stderr **and** the log once, and leaves the permission handler bound.
+4. **Degraded-correlation paths, one assertion each:** a non-`tool` source, a missing call id, and a
+   missing message id each `console.error` a sentence **and** write `workdir-uncorrelated` with
+   their own `cause=` **and** fall back to the session directory; a captured-but-unusable workdir
+   (missing, not-a-directory, or a present non-string value) runs the guards against the session
+   directory and, only if they decline, sets `effect = "ask"` naming the path and writes
+   `workdir-unusable`; an arriving `deny` is **not** relaxed into that prompt; an absent **or
+   rejecting** `ctx.tool` writes `no-tool-hook-surface` with its `reason=` to stderr **and** the log
+   once, and leaves the permission handler bound; an unkeyable capture writes `workdir-uncapturable`
+   with `reason=id-absent|message-id-absent`.
 5. The ledger suite asserts **all three** fields of the `tool.execute.before` row — disposition
    `bind`, binding `ctx.tool.hook("execute.before")`, reason containing *capture-only* — in a case
    named for the binding, not inside the case named for rejected surfaces; the legend defines what
@@ -749,7 +792,7 @@ ledger are independent surfaces that also name the bound hook.
     **one** hit — the detector's own pattern in `test/harness-claim-parity.test.ts` — and no comment
     or string states a four-harness total (the `components.test.ts` comments name devin, codex and
     grok instead of counting).
-13. Focused suite green with an **exact** count: 84 baseline + 18 new rows = **102 pass / 0 fail**
+13. Focused suite green with an **exact** count: 84 baseline + 27 new rows = **111 pass / 0 fail**
     across `test/opencode-plugin.test.ts`, `test/opencode-adapter-drift.test.ts`,
     `test/harness-claim-parity.test.ts`, `test/harness-tool-map.test.ts`.
 14. The PR body closes #10819, #10820, #10821, #10822, carries a `## Changelog`, and discloses the
@@ -772,9 +815,20 @@ ledger are independent surfaces that also name the bound hook.
 - **Do not fall back to the session directory when a workdir *was* captured but is unusable.** That
   is the one case where the operator asked for a different directory and can be told; `ask` is a
   measured channel.
+- **A captured workdir that cannot be used must not skip the guards.** Run them against the session
+  directory, and let only their declining become the prompt. Skipping them would suppress the
+  cwd-independent denies — a home wipe, an infra destroy, a credential-bearing snapshot — exactly
+  where the plugin has admitted it cannot vouch for the directory.
+- **Never relax an arriving `deny` into that prompt.** The file's own invariant ("an arriving deny is
+  never relaxed to an ask") has to hold on every branch, including the new one.
+- **Key on both ids, never on the counter alone.** Defaulting a missing `messageID` to `""` lets two
+  concurrent messages share a key and hands one call's workdir to the other — silent, and in the
+  allow direction.
+- **A timeout is not a directory fault.** `ETIMEDOUT`/`ENOBUFS` keep the checkout sentence; only
+  `EACCES`/`ENOTDIR` and an `ENOENT` with a missing cwd may say the directory is unenterable.
 - **`console.error` every degraded decision**, and write the log line too — the log is unset by
   default, so a log-only claim is false in the default configuration; stderr visibility in the TUI
-  is unmeasured, so neither channel alone is enough.
+  is unmeasured, so neither channel alone is enough. An unwritable log path must not reject `setup`.
 - **Keep the success line quiet.** `workdir-correlated` is log-only. The generated matrix tells
   agents to set `workdir`, so the success path is the common one, and a stderr line per call is
   noise that trains the operator to ignore the loud ones.

@@ -128,8 +128,11 @@ refuses rather than approving. Nothing is approved silently.
 
 A degraded hook decision — a shell call whose `workdir` could not be correlated, or a runtime
 with no `tool.execute.before` surface — is announced on stderr **and** written to the event log
-when `SOLEUR_OPENCODE_EVENT_LOG` names a file. The log is off by default, so stderr is the
-channel you will see; the file is the durable record.
+when `SOLEUR_OPENCODE_EVENT_LOG` names a file (its parent directory must exist; unset means no
+log). Whether your terminal surfaces plugin stderr is not something this adapter measured, so
+arm the log when you need certainty. A `shell` call whose `workdir` cannot be used is
+**prompted** rather than run unchecked — the guards still run, against the session directory,
+and only their declining becomes the prompt.
 
 The post-compaction re-read is **armed, not guaranteed**, unlike Codex and Devin:
 `ctx.session.hook("compaction")` sets state and the next `ctx.session.hook("context")`

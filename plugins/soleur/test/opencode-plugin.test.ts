@@ -351,7 +351,6 @@ describe("opencode plugin — the per-call workdir reaches the guard envelope (#
     withoutSource?: boolean;
     tool?: boolean;
     toolRejects?: boolean;
-    workdirField?: boolean;
   }): Promise<{
     event: PermissionEvaluateEvent;
     runs: { script: string; stdin: string; cwd: string }[];
@@ -379,7 +378,6 @@ describe("opencode plugin — the per-call workdir reaches the guard envelope (#
     if (capture !== undefined) {
       const input: Record<string, unknown> = { command: "rm -rf build" };
       if (options.workdir !== undefined) input["workdir"] = options.workdir;
-      if (options.workdirField === true) input["workdir"] = options.workdir;
       capture({ tool: "shell", id, messageID, input });
     }
     const event: PermissionEvaluateEvent = {
@@ -473,13 +471,52 @@ describe("opencode plugin — the per-call workdir reaches the guard envelope (#
   test("a permission event with no tool source is loud and falls back to the session directory", async () => {
     const session = tempDir("oc-session-");
     try {
-      const { runs, lines, reports, event } = await drive({ directory: session, withoutSource: true });
+      const { runs, lines, reports } = await drive({ directory: session, withoutSource: true });
       expect(runs[0].cwd).toBe(session);
-      expect(lines.some((line) => line.includes("workdir-uncorrelated") && line.includes("id=absent"))).toBe(true);
-      expect(reports.some((line) => line.includes("no usable call id"))).toBe(true);
-      expect(event.effect).toBe("allow");
+      expect(lines.some((line) => line.includes("workdir-uncorrelated") && line.includes("cause=source-not-tool"))).toBe(true);
+      expect(reports.some((line) => line.includes("the ids the capture is keyed by"))).toBe(true);
     } finally {
       rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-tool source carrying a live call id does not inherit a captured workdir", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-workdir-");
+    try {
+      const { runs, lines, handlers } = await drive({ directory: session, workdir });
+      const event: PermissionEvaluateEvent = {
+        action: "shell",
+        resources: ["rm -rf build"],
+        effect: "allow",
+        source: { type: "rule", id: "call_1", messageID: "msg_1" },
+      };
+      handlers["permission:evaluate"](event);
+      expect(JSON.parse(runs[BASH_GUARDS.length].stdin).cwd).toBe(session);
+      expect(lines.some((line) => line.includes("cause=source-not-tool"))).toBe(true);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  test("a permission event with no message id is uncorrelated rather than keyed on half an id", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-workdir-");
+    try {
+      const { runs, lines, handlers } = await drive({ directory: session, workdir });
+      const event: PermissionEvaluateEvent = {
+        action: "shell",
+        resources: ["rm -rf build"],
+        effect: "allow",
+        source: { type: "tool", id: "call_1" },
+      };
+      handlers["permission:evaluate"](event);
+      expect(JSON.parse(runs[BASH_GUARDS.length].stdin).cwd).toBe(session);
+      expect(lines.some((line) => line.includes("cause=message-id-absent"))).toBe(true);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(workdir, { recursive: true, force: true });
     }
   });
 
@@ -496,7 +533,7 @@ describe("opencode plugin — the per-call workdir reaches the guard envelope (#
     }
   });
 
-  test("a captured workdir that no longer exists escalates to ask and spawns no guard", async () => {
+  test("a captured workdir that no longer exists still runs the guards, then prompts", async () => {
     const session = tempDir("oc-session-");
     const workdir = tempDir("oc-vanished-");
     try {
@@ -515,8 +552,50 @@ describe("opencode plugin — the per-call workdir reaches the guard envelope (#
       expect(event.message).toContain(workdir);
       expect(lines.some((line) => line.includes("workdir-unusable"))).toBe(true);
       expect(reports.some((line) => line.includes("not a directory this plugin can use"))).toBe(true);
-      // No decision was made against any directory, so no second guard run happened.
-      expect(runs.length).toBe(BASH_GUARDS.length);
+      // The guards still ran — against the session directory — because their cwd-independent
+      // classes must not be skipped when the requested directory is unknown.
+      expect(runs.length).toBe(BASH_GUARDS.length * 2);
+      expect(JSON.parse(runs[BASH_GUARDS.length].stdin).cwd).toBe(session);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("an unusable workdir never relaxes an arriving deny into a prompt", async () => {
+    const session = tempDir("oc-session-");
+    const workdir = tempDir("oc-vanished-");
+    const denialPayload = denial("never run this");
+    try {
+      const { runs, run } = fakeRunner(denialPayload);
+      const { ctx, handlers } = fakeContext({ directory: session });
+      await createSetup(run, pluginRoot, () => {}, () => {})(ctx);
+      rmSync(workdir, { recursive: true, force: true });
+      handlers["tool:execute.before"]({ tool: "shell", id: "c1", messageID: "m1", input: { workdir } });
+      const event: PermissionEvaluateEvent = {
+        action: "shell",
+        resources: ["rm -rf build"],
+        effect: "deny",
+        source: { type: "tool", id: "c1", messageID: "m1" },
+      };
+      handlers["permission:evaluate"](event);
+      // The ruleset denied and the guard denied: the ask branch must not overwrite either.
+      expect(event.effect).toBe("deny");
+      expect(event.message).not.toContain("not a usable directory");
+      expect(runs.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a workdir that exists but is not a directory is unusable, not absent", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const file = join(session, "not-a-directory");
+      writeFileSync(file, "x");
+      const { runs, lines } = await drive({ directory: session, workdir: file });
+      // The guards ran against the session directory, and the decision escalated.
+      expect(JSON.parse(runs[0].stdin).cwd).toBe(session);
+      expect(lines.some((line) => line.includes("workdir-unusable"))).toBe(true);
     } finally {
       rmSync(session, { recursive: true, force: true });
     }
@@ -634,18 +713,79 @@ describe("opencode plugin — the per-call workdir reaches the guard envelope (#
     }
   });
 
-  test("resolveWorkdir separates absent, usable and unusable without throwing", () => {
+  test("a workdir the capture never saw is loud, and the token says which id was missing", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const { lines, reports, handlers } = await drive({ directory: session });
+      handlers["tool:execute.before"]({ tool: "shell", id: "call_7", input: { workdir: "/tmp" } });
+      expect(lines.some((line) => line.includes("workdir-uncapturable") && line.includes("reason=message-id-absent"))).toBe(true);
+      expect(reports.some((line) => line.includes("without the ids its permission event is keyed by"))).toBe(true);
+      handlers["tool:execute.before"]({ tool: "shell", messageID: "msg_1", input: { workdir: "/tmp" } });
+      expect(lines.some((line) => line.includes("workdir-uncapturable") && line.includes("reason=id-absent"))).toBe(true);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-Bash tool call is not captured at all", async () => {
+    const session = tempDir("oc-session-");
+    try {
+      const { lines, handlers } = await drive({ directory: session });
+      handlers["tool:execute.before"]({ tool: "write", id: "call_1", messageID: "msg_1", input: { workdir: "/tmp" } });
+      // No capture, so the following shell decision reports the miss rather than a capture.
+      expect(lines.some((line) => line.includes("workdir-correlated"))).toBe(false);
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+    }
+  });
+
+  test("two live captures are consumed by key, so an out-of-order evaluation still correlates", async () => {
+    const session = tempDir("oc-session-");
+    const first = tempDir("oc-first-");
+    const second = tempDir("oc-second-");
+    try {
+      const { runs, handlers } = await drive({ directory: session, workdir: first });
+      handlers["tool:execute.before"]({ tool: "shell", id: "call_2", messageID: "msg_1", input: { workdir: second } });
+      const later: PermissionEvaluateEvent = {
+        action: "shell",
+        resources: ["rm -rf build"],
+        effect: "allow",
+        source: { type: "tool", id: "call_2", messageID: "msg_1" },
+      };
+      handlers["permission:evaluate"](later);
+      expect(JSON.parse(runs[BASH_GUARDS.length].stdin).cwd).toBe(realpathSync(second));
+      const earlier: PermissionEvaluateEvent = {
+        action: "shell",
+        resources: ["rm -rf build"],
+        effect: "allow",
+        source: { type: "tool", id: "call_1", messageID: "msg_1" },
+      };
+      handlers["permission:evaluate"](earlier);
+      expect(JSON.parse(runs[BASH_GUARDS.length * 2].stdin).cwd).toBe(realpathSync(first));
+    } finally {
+      rmSync(session, { recursive: true, force: true });
+      rmSync(first, { recursive: true, force: true });
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveWorkdir separates absent, usable and unusable, and decidesBash answers the one predicate question", () => {
     const session = tempDir("oc-session-");
     try {
       expect(resolveWorkdir({}, session)).toEqual({ kind: "absent" });
       expect(resolveWorkdir(null, session)).toEqual({ kind: "absent" });
       expect(resolveWorkdir({ workdir: "" }, session)).toEqual({ kind: "absent" });
-      expect(resolveWorkdir({ workdir: 42 }, session)).toEqual({ kind: "absent" });
+      expect(resolveWorkdir({ workdir: null }, session)).toEqual({ kind: "absent" });
+      // A present but non-string value is a shape violation: judgment in the session directory
+      // without saying so is the silence this change removes.
+      expect(resolveWorkdir({ workdir: 42 }, session)).toEqual({ kind: "unusable", raw: "42" });
       expect(resolveWorkdir({ workdir: join(session, "missing") }, session)).toEqual({
         kind: "unusable",
         raw: join(session, "missing"),
       });
       expect(resolveWorkdir({ workdir: session }, session)).toEqual({ kind: "usable", path: realpathSync(session) });
+      mkdirSync(join(session, "nested"));
+      expect(resolveWorkdir({ workdir: "nested/.." }, session)).toEqual({ kind: "usable", path: realpathSync(session) });
       expect(decidesBash("shell")).toBe(true);
       expect(decidesBash("bash")).toBe(true);
       expect(decidesBash("read")).toBe(false);
@@ -669,6 +809,30 @@ describe("opencode plugin — a guard that cannot enter its working directory is
     expect(decision?.reason).toContain("EACCES");
     expect(decision?.reason).toContain("/not/enterable");
     expect(decision?.reason).not.toContain("may have moved");
+  });
+
+  test("the real runner reports the spawn error, so a missing cwd is not read as a moved checkout", () => {
+    // Exercises `runScript`'s extraction — a hand-built ScriptRun would leave that line untested.
+    const missing = join(tmpdir(), "oc-definitely-absent-dir", "nested");
+    const decision = decideBash("shell", { command: "rm -rf build" }, missing);
+    expect(decision?.decision).toBe("deny");
+    expect(decision?.reason).toContain("not enterable");
+    expect(decision?.reason).not.toContain("may have moved");
+  });
+
+  test("a guard timeout is not misdiagnosed as an unenterable directory", () => {
+    // `spawnSync` sets `error.code = "ETIMEDOUT"` on the 12 s cap with `status: null`; the cwd
+    // exists, so the directory sentence would send the operator to the wrong fix.
+    const decision = decideBash(
+      "shell",
+      { command: "rm -rf build" },
+      tmpdir(),
+      () => ({ status: null, stdout: "", stderr: "", error: "ETIMEDOUT" }),
+      pluginRoot,
+    );
+    expect(decision?.reason).not.toContain("not enterable");
+    expect(decision?.reason).toContain("ETIMEDOUT");
+    expect(decision?.reason).toContain("may have moved");
   });
 });
 

@@ -52,12 +52,22 @@ finds a defect in the guard change, re-land the disclosure and record fixes ahea
 
 ## Phase 5 — verification
 
-- [ ] 5.1 Focused suite: 84 + N pass, 0 fail; quote the exact counts
+- [ ] 5.1 Focused suite: 84 baseline + 27 new = **111 pass / 0 fail**; quote the exact counts
 - [ ] 5.2 `sync-opencode-adapter.ts --check`
 - [ ] 5.3 Install then `--check` into a `mktemp -d`
 - [ ] 5.4 C4 suite green (no component added)
 - [ ] 5.5 Six mutations red in a scratch copy, each with its quoted fail count
 - [ ] 5.6 PR body disclosures (below)
+
+## Review round (applied)
+
+`security-sentinel` + `observability-coverage-reviewer` + `test-design-reviewer` +
+`code-simplicity-reviewer`. P0 fixed: the unusable-workdir `ask` branch relaxed an arriving `deny`
+and skipped the guards — it now runs them against the session directory and preserves the deny.
+P1s fixed: truthful ask message; both ids required in the call key; `clip()` on every
+operator-facing path; `run.error` no longer hijacks the timeout branch; an unwritable event log no
+longer rejects `setup`. Test arms added for each (arriving deny, non-`tool` source, non-Bash
+capture, not-a-directory, `..`, out-of-order, `ETIMEDOUT`, real-runner error, unkeyable capture).
 
 ## Acceptance criteria
 

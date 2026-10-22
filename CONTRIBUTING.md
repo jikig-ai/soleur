@@ -111,8 +111,10 @@ A change to a hook's disposition or binding is part of the same PR — see
 `.claude/hooks/opencode-dispositions.tsv`, whose legend defines every disposition.
 
 **Degraded decisions are visible.** A shell call whose `workdir` cannot be correlated, or a runtime with no
-`tool.execute.before` surface, is announced on stderr; set `SOLEUR_OPENCODE_EVENT_LOG=<path>` to keep the durable
-TSV record, because the log file is off by default.
+`tool.execute.before` surface, is announced on stderr; set `SOLEUR_OPENCODE_EVENT_LOG=<path>` (the parent directory
+must exist) to keep the durable TSV record. The log is off by default, and whether a given terminal surfaces plugin
+stderr is not measured, so arm the log when you need certainty. A `workdir` that cannot be used produces a prompt
+rather than an unchecked run.
 
 **One gate is absent.** The operator-stage approval hook cannot be bound here (it needs a command rewrite and an
 ask in the same decision), so a staged bootstrap `--apply` exits **75** rather than approving. Nothing is
