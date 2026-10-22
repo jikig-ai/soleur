@@ -24,8 +24,9 @@
 # not [A-Za-z0-9_], after printf escapes (\t, \0, \x09, \u0009 ...) and an attached short option (-Iplugins/x) are blanked ONCE by
 # views(); the SUT's start regex and boundary() derive from that one definition, and this file keeps independent oracles of its own. The scan walks a trie of the tracked
 # paths with the per-file result memoised across suites; a directory suite is read through its bun test files; an accept row is
-# keyed on the whitespace-collapsed ORIGINAL line it describes. The work bound is an operation count, never a clock, read from two
-# instruments (PathIndex.ops, and an independent profile-event count that a mutant cannot under-report). The committed
+# keyed on the whitespace-collapsed ORIGINAL line it describes. The work bound is an operation count, never a clock, read from four
+# instruments (PathIndex.ops, an independent profile-event count that a mutant cannot under-report, a materialization probe over the
+# two O(tracked-paths) collections, and best-of-3 CPU time for cost hidden inside one C call). The committed
 # receipts/audit-differential.tsv is judged per occurrence, on its stored line text, with the SUT's own views()/boundary(); this file does
 # NOT regenerate the pinned-tree receipt, so the completeness of its rows is attested by re-running receipts/audit-differential.py.
 # A mutant that CRASHES (does not import, exits rc 4, prints a Traceback) is never a kill.
@@ -944,12 +945,14 @@ row_bnd_mid && pass "accept rows follow the same boundary: a suite with a bounda
 row_bnd_start && pass "accept rows: a path at the very start of a line (offset 0) is a boundary line the row can describe" || fail "boundary twin, line start (rc=$RC): $AOUT"
 row_bnd_orig && pass "the anchor hashes the ORIGINAL line (printf 'A\\x09docs/be.md\\n' with the escape as written), while the match uses the normalised copy" || fail "anchor over the original line (rc=$RC): $AOUT"
 
-echo "== audit scan: the work is bounded by the text, not by the tracked-path count, the top-level width or (superlinearly) the text (three instruments: PathIndex.ops, line events, CPU time)"
-# Three instruments, because each one alone has a blind spot. PathIndex.ops is self-reported. The LINE-EVENT count (sys.settrace, which
+echo "== audit scan: the work is bounded by the text, not by the tracked-path count, the top-level width or (superlinearly) the text (four instruments: PathIndex.ops, line events, a materialization probe, CPU time)"
+# Four instruments, because each one alone has a blind spot. PathIndex.ops is self-reported. The LINE-EVENT count (sys.settrace, which
 # every CPython 3.x has; sys.monitoring needs 3.12) counts the interpreter's own executed lines in every frame below scan_text, so
 # call-less Python work (`for p in paths: p in text`, a loop over the top-level names or range(len(text)) per start) is seen even when ops
-# is not incremented. CPU time (best of 3, bounded with 3x slack, never pinned) is the only one that sees a cost inside ONE C call, such
-# as a regex alternation that grows with the number of top-level names.
+# is not incremented. The MATERIALIZATION probe wraps idx.paths and idx.tracked in counting objects inside traced(), so work a mutant
+# hides inside C calls against the collections themselves (a "\n".join(index.paths), sorted(index.tracked), tuple(index.paths)) trips a
+# counter with no clock involved. CPU time (best of 3, bounded with 3x slack, never pinned) is the only one that sees a cost inside ONE
+# C call against the TEXT, such as a regex alternation that grows with the number of top-level names.
 row_scan_ops() {
   local out
   out="$(python3 - "$SUT" <<'PY' 2>&1
@@ -968,8 +971,27 @@ def wide(width):
     lines = ["cat t%d/s/f%d.txt" % (i % 40, i) for i in range(400)]
     want = {"t%d/s/f%d.txt" % (i % 40, i) for i in range(400)}
     return "\n".join(lines), want, want | {"pad%d/x.txt" % i for i in range(width - 40)}
+class _SeqProbe:          # wraps index.paths (a list) — a sequence, never a list, so join()/sorted()/list() must iterate it
+    def __init__(self, data):
+        self._d, self.hits = data, 0
+    def __len__(self):
+        return len(self._d)
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            self.hits += 1
+        return self._d[i]
+    def __iter__(self):
+        self.hits += 1
+        return iter(self._d)
+
+class _SetProbe(set):     # wraps index.tracked — iteration counted, O(1) membership left uncounted
+    hits = 0
+    def __iter__(self):
+        self.hits += 1
+        return super().__iter__()
 def traced(tracked, text):
     idx = m.PathIndex(tracked)
+    idx.paths, idx.tracked = _SeqProbe(idx.paths), _SetProbe(idx.tracked)   # a scan may never materialize a tracked-path collection
     ev, cap = [0], 40 * len(text) + 20000
     def local(frame, event, arg):
         if event == "line":
@@ -984,7 +1006,7 @@ def traced(tracked, text):
         got = None
     finally:
         sys.settrace(None)
-    return got, idx.ops, ev[0]
+    return got, idx.ops, ev[0], idx.paths.hits + idx.tracked.hits
 def cpu(tracked, text, reps=10, give_up=None):
     idx = m.PathIndex(tracked)
     best = None
@@ -1004,7 +1026,9 @@ T = tree(20000)
 per_byte = []
 for size in (5000, 10000, 20000):                      # the text-length axis: events per byte may not grow with the text
     b, want = blob(size)
-    got, ops, ev = traced(T, b)
+    got, ops, ev, mat = traced(T, b)
+    if mat:
+        bad.append("materialization probe: %d collection reads on the %d-byte fixture" % (mat, len(b)))
     if got != (want & T):
         bad.append("wrong refs at %d bytes" % len(b))
     if not (ops > len(b) / 20 and ev > len(b) / 10):           # a FLOOR: 180 paths in 10 KB cannot be found with less
@@ -1015,18 +1039,24 @@ for size in (5000, 10000, 20000):                      # the text-length axis: e
 if per_byte[2][0] > 1.5 * per_byte[0][0] or per_byte[2][1] > 1.5 * per_byte[0][1]:
     bad.append("per-byte cost grows with the text: %s" % per_byte)
 b, want = blob(10000)
-g20, o20, e20 = traced(T, b); g2, o2, e2 = traced(tree(2000), b)
+g20, o20, e20, m20 = traced(T, b); g2, o2, e2, m2 = traced(tree(2000), b)
+if m20 or m2:
+    bad.append("materialization probe: paths axis reads %d/%d" % (m20, m2))
 if g2 is None or o20 > 2 * o2 or e20 > 2 * e2:
     bad.append("paths axis (20k vs 2k): ops %d/%d events %d/%d" % (o20, o2, e20, e2))
 wb, wwant, w40 = wide(40); _, _, w4k = wide(4000)
-g40, o40, e40 = traced(w40, wb); g4k, o4k, e4k = traced(w4k, wb)
+g40, o40, e40, m40 = traced(w40, wb); g4k, o4k, e4k, m4k = traced(w4k, wb)
+if m40 or m4k:
+    bad.append("materialization probe: width axis reads %d/%d" % (m40, m4k))
 if g40 != wwant or g4k != wwant or o4k > 2 * o40 or e4k > 2 * e40 or e40 > 12 * len(wb):
     bad.append("width axis (4000 vs 40 names): ops %d/%d events %d/%d" % (o4k, o40, e4k, e40))
 if bad:                                                  # the CPU phase is not run on an implementation the counters already condemned (it could take minutes)
     print("; ".join(bad)); sys.exit(0)
 hb = "d/a " * 10000                                      # hostile for a per-length loop: every start sits in a directory with 250 name lengths
 l250, l2 = lengths(250), lengths(2)
-g250, o250, e250 = traced(l250, hb); g2l, o2l, e2l = traced(l2, hb)
+g250, o250, e250, m250 = traced(l250, hb); g2l, o2l, e2l, m2l = traced(l2, hb)
+if m250 or m2l:
+    bad.append("materialization probe: name-length axis reads %d/%d" % (m250, m2l))
 if g250 is None or o250 > 2 * o2l or e250 > 2 * e2l:
     bad.append("name-length axis (250 vs 2 distinct lengths): ops %d/%d events %d/%d" % (o250, o2l, e250, e2l))
 if bad:
@@ -1053,7 +1083,7 @@ PY
   out="${out##*$'\n'}"
   [[ "$out" = ok ]] || { echo "$out" >&2; return 1; }
 }
-row_scan_ops && pass "scanning 5, 10 and 20 KB against 20,000 tracked paths costs a roughly constant number of operations and line events per byte; 10x the paths or 100x the top-level names (40 vs 4,000, same text) costs no more than twice by ops and by executed lines, and no more than 3x in best-of-3 CPU time" || fail "operation-count fixture: $(row_scan_ops 2>&1 | tail -1)"
+row_scan_ops && pass "scanning 5, 10 and 20 KB against 20,000 tracked paths costs a roughly constant number of operations and line events per byte and never materializes a tracked-path collection; 10x the paths or 100x the top-level names (40 vs 4,000, same text) costs no more than twice by ops and by executed lines, and no more than 3x in best-of-3 CPU time" || fail "operation-count fixture: $(row_scan_ops 2>&1 | tail -1)"
 
 echo "== audit scan: the committed differential receipt (old scan versus new scan on the pinned tree, per occurrence) and its regenerator"
 SPECS="$SCRIPT_DIR/../../../knowledge-base/project/specs"
@@ -2542,6 +2572,10 @@ mutate scan-hidden-replace-per-start '        cur, node = m.start(), index.root'
         cur, node = m.start(), index.root' row_scan_ops
 mutate scan-hidden-join-and-find-per-scan '    for m in index.start.finditer(text):' '    "\n".join(index.paths).find("zz")
     for m in index.start.finditer(text):' row_scan_ops
+mutate scan-hidden-sorted-tracked-per-scan '    for m in index.start.finditer(text):' '    "\n".join(sorted(index.tracked))
+    for m in index.start.finditer(text):' row_scan_ops
+mutate scan-hidden-tuple-paths-per-scan '    for m in index.start.finditer(text):' '    tuple(index.paths)
+    for m in index.start.finditer(text):' row_scan_ops
 mutate read-containment-without-the-separator '        if real != top and not real.startswith(top.rstrip(os.sep) + os.sep):' '        if real != top and not real.startswith(top):' row_sym
 mutate read-opens-blocking 'os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)' 'os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)' row_sym
 mutate read-oserror-unmapped '        raise ReadError("cannot read %s: %s" % (path, e.strerror or e))
@@ -2740,12 +2774,12 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=712   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 (measured: 712 passed, 0 failed)
+FLOOR_ASSERTIONS=714   # 712 + 2 mutant-killed passes for the collection-materialization spellings — #10724 (measured: 714 passed, 0 failed)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=298   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 (measured: 298 mutants, all killed)
+FLOOR_MUTANTS=300   # 298 + 2 scan-hidden collection-materialization spellings (sorted(index.tracked), tuple(index.paths)) — #10724
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi
