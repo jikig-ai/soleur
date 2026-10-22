@@ -971,24 +971,28 @@ def wide(width):
     lines = ["cat t%d/s/f%d.txt" % (i % 40, i) for i in range(400)]
     want = {"t%d/s/f%d.txt" % (i % 40, i) for i in range(400)}
     return "\n".join(lines), want, want | {"pad%d/x.txt" % i for i in range(width - 40)}
-class _SeqProbe:          # wraps index.paths (a list) — a sequence, never a list, so join()/sorted()/list() must iterate it
+class _SeqProbe:          # wraps index.paths (a list) — a sequence, never a list, so join()/sorted()/list()/reversed() must iterate or index it
     def __init__(self, data):
         self._d, self.hits = data, 0
     def __len__(self):
         return len(self._d)
-    def __getitem__(self, i):
-        if isinstance(i, slice):
-            self.hits += 1
+    def __getitem__(self, i):   # every element read counts (slice or int index) — a genexpr over index.paths[i] may not hide either
+        self.hits += 1
         return self._d[i]
     def __iter__(self):
         self.hits += 1
         return iter(self._d)
 
-class _SetProbe(set):     # wraps index.tracked — iteration counted, O(1) membership left uncounted
-    hits = 0
+class _SetProbe:          # wraps index.tracked — a set interface, never a set subclass (set.copy()/.union()/| all bypass __iter__ at C level)
+    def __init__(self, data):
+        self._d, self.hits = data, 0
+    def __len__(self):
+        return len(self._d)
+    def __contains__(self, x):  # O(1) membership stays uncounted — materialization is the tell
+        return x in self._d
     def __iter__(self):
         self.hits += 1
-        return super().__iter__()
+        return iter(self._d)
 def traced(tracked, text):
     idx = m.PathIndex(tracked)
     idx.paths, idx.tracked = _SeqProbe(idx.paths), _SetProbe(idx.tracked)   # a scan may never materialize a tracked-path collection
@@ -1026,9 +1030,9 @@ T = tree(20000)
 per_byte = []
 for size in (5000, 10000, 20000):                      # the text-length axis: events per byte may not grow with the text
     b, want = blob(size)
-    got, ops, ev, mat = traced(T, b)
-    if mat:
-        bad.append("materialization probe: %d collection reads on the %d-byte fixture" % (mat, len(b)))
+    got, ops, ev, msz = traced(T, b)
+    if msz:
+        bad.append("materialization probe: %d collection reads on the %d-byte fixture" % (msz, len(b)))
     if got != (want & T):
         bad.append("wrong refs at %d bytes" % len(b))
     if not (ops > len(b) / 20 and ev > len(b) / 10):           # a FLOOR: 180 paths in 10 KB cannot be found with less
@@ -2148,7 +2152,7 @@ row_rc_rt() { raudit "$SANDBOX/r-reach2.rows"; grep -qxF -- "$(printf 'unaudited
 echo "== mutation rows (each edit lands once, leaves valid python, leaves the row GREEN on the pristine SUT, and the named row must then FAIL)"
 MUT_RUN=0; MUT_KILLED=0
 declare -A PRISTINE_OK=() PRISTINE_RC4=()
-CRASH_IS_THE_POINT=" row_acc_isdir:accept-os-error-unmapped row_cp_big:cp-overflow row_sym:read-oserror-unmapped "   # row:mutant pairs whose property IS "does not crash": an unmapped OSError is rc 4 instead of rc 3; the float-product cp_upper overflows
+CRASH_IS_THE_POINT=" row_acc_isdir:accept-os-error-unmapped row_cp_big:cp-overflow row_sym:read-oserror-unmapped row_scan_ops:scan-hidden-copy-tracked-per-scan "   # row:mutant pairs whose crash IS the kill: an unmapped OSError is rc 4 instead of rc 3; the float-product cp_upper overflows; the copy() mutant dies on the probe's no-delegation contract (AttributeError) — a loud kill, never a silent survive
 crash_seen() {  # crash_seen <row output file>: rc 4 was logged, a Traceback printed, or main() reported an internal error
   grep -qx 4 "$RCLOG" || grep -q 'Traceback (most recent call last)\|replay: internal error' "$1"
 }
@@ -2576,6 +2580,8 @@ mutate scan-hidden-sorted-tracked-per-scan '    for m in index.start.finditer(te
     for m in index.start.finditer(text):' row_scan_ops
 mutate scan-hidden-tuple-paths-per-scan '    for m in index.start.finditer(text):' '    tuple(index.paths)
     for m in index.start.finditer(text):' row_scan_ops
+mutate scan-hidden-copy-tracked-per-scan '    for m in index.start.finditer(text):' '    "\n".join(index.tracked.copy())
+    for m in index.start.finditer(text):' row_scan_ops   # a copy() on the delegating _SetProbe raises AttributeError — the no-delegation contract is the kill
 mutate read-containment-without-the-separator '        if real != top and not real.startswith(top.rstrip(os.sep) + os.sep):' '        if real != top and not real.startswith(top):' row_sym
 mutate read-opens-blocking 'os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)' 'os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)' row_sym
 mutate read-oserror-unmapped '        raise ReadError("cannot read %s: %s" % (path, e.strerror or e))
@@ -2774,12 +2780,12 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=714   # 712 + 2 mutant-killed passes for the collection-materialization spellings — #10724 (measured: 714 passed, 0 failed)
+FLOOR_ASSERTIONS=715   # 712 + 3 mutant-killed passes for the collection-materialization spellings — #10724 (measured: 715 passed, 0 failed)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=300   # 298 + 2 scan-hidden collection-materialization spellings (sorted(index.tracked), tuple(index.paths)) — #10724
+FLOOR_MUTANTS=301   # 298 + 3 scan-hidden collection-materialization spellings (sorted(index.tracked), tuple(index.paths), index.tracked.copy()) — #10724
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi
