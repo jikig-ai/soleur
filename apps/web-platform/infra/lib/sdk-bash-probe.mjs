@@ -1,14 +1,16 @@
 // One scripted Bash turn through the REAL Agent SDK (query()), a local stand-in for the Messages API, and
 // whatever `bwrap` the PATH resolves (the shim, in the suite and production images). No model, no network, no real
-// credential. Two modes, one file (the production image has no TypeScript sources, so the probe is plain ESM):
+// credential. Three entries, one file (the production image has no TypeScript sources, so the probe is plain ESM):
 //
-//   runtime (SMOKE=1 and SDK_BASH_PROBE_RUNTIME=1)  The runtime Bash synthetic (infra/web-bash-synthetic.sh, ADR-079 addendum
-//                          2026-10-20) in the RUNNING production container. Same verdict function and result contract as the
+//   runtime (SMOKE=1 and SDK_BASH_PROBE_RUNTIME=1)  The runtime Bash synthetic (infra/web-bash-synthetic.sh, ADR-079
+//                          "Addendum — 2026-10-22 (#10455 b)") in the RUNNING production container. Same verdict function and result contract as the
 //                          deploy smoke, with three differences: the seccomp artifact comes from SDK_BASH_PROBE_SELECTOR (the
 //                          host asked the dispatcher's own resolver, so the synthetic tests what production would select now),
 //                          coverage names THAT artifact, and nothing is created outside the probe's own scratch dirs (the
 //                          masked dirs belong to real sessions: the ones that exist are masked, the rest are counted in the
-//                          result as masks_missing).
+//                          result as masks_missing). The SDK CLI's own temp base (CLAUDE_CODE_TMPDIR / TMPDIR) is the probe's scratch
+//                          config dir, never the shared /tmp/claude-<uid> (the #10445 cross-tenant channel), and the scratch dirs
+//                          are removed on every exit path; leftovers of a killed run older than a day are swept at start.
 //
 //   default (SMOKE unset)  The docker suite's control/treatment probe (infra/sandbox-masked-proc-docker.test.sh):
 //                          observes, under the production run tuple, what a hosted Bash call returns with and
@@ -33,7 +35,7 @@
 // the file is the entry point.
 import http from "node:http";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -75,6 +77,54 @@ export function runtimeMaskedDirs(uid, home, exists) {
   const present = maskedDirs(uid, home).filter((d) => exists(d));
   return { present, missing: maskedDirs(uid, home).length - present.length };
 }
+
+/** Everything runSmoke decides from its environment, as one pure value (unit-tested for both modes in test/sdk-bash-probe-runtime.test.ts).
+ *  Deploy mode (SDK_BASH_PROBE_RUNTIME unset): the pinned unixdeny artifact, every masked dir is created (`mkdir`: a canary container has
+ *  none). Runtime mode: the artifact NAMED by SDK_BASH_PROBE_SELECTOR (null when it is not one of the two), only the masked dirs that
+ *  already exist are applied, the rest are counted, and `mkdir` is ALWAYS empty (those paths belong to real sessions).
+ *  `exists` is injected so nothing here touches the filesystem. */
+export function planSmoke({ env, uid, home, exists }) {
+  const runtime = env?.SDK_BASH_PROBE_RUNTIME === "1";
+  const selectorName = runtime ? env.SDK_BASH_PROBE_SELECTOR ?? "" : "unixdeny";
+  const selectedPath = runtime ? runtimeSelectorPath(selectorName) : smokeSelectorPath();
+  if (selectedPath === null) return { runtime, selectorName, selectedPath, masked: [], masksMissing: 0, mkdir: [] };
+  if (!runtime) {
+    const all = maskedDirs(uid, home);
+    return { runtime, selectorName, selectedPath, masked: all, masksMissing: 0, mkdir: all };
+  }
+  const r = runtimeMaskedDirs(uid, home, exists);
+  return { runtime, selectorName, selectedPath, masked: r.present, masksMissing: r.missing, mkdir: [] };
+}
+
+/** The env the SDK child gets for its own scratch. CLAUDE_CODE_TMPDIR / TMPDIR point INSIDE the probe's scratch config dir, so the
+ *  CLI never writes under the shared `<tmpdir>/claude-<uid>` of the production container (the #10445 cross-tenant channel, see
+ *  server/agent-session-tmp.ts) and one rmSync removes everything. The CLI falls back to that shared dir when its per-uid dir
+ *  `<base>/claude-<uid>` is longer than 44 bytes, so `cliTmpBaseOk` is checked before the run. */
+export function scratchEnv(cfg) {
+  return { CLAUDE_CONFIG_DIR: cfg, CLAUDE_CODE_TMPDIR: cfg, TMPDIR: cfg };
+}
+export function cliTmpBaseOk(cfg, uid) {
+  return Buffer.byteLength(`${cfg}/claude-${uid}`) <= 44;
+}
+
+/** Leftovers of a probe run that was killed (`timeout -k`, the OOM killer) before it could clean up: the probe's own scratch dirs
+ *  (`sdk-bash-probe-*`, owned by this uid) in `tmp` that are older than `maxAgeMs`. Everything is injected; nothing follows a symlink. */
+export function staleScratchDirs(tmp, nowMs, uid, { readdir, lstat }, maxAgeMs = 24 * 3600 * 1000) {
+  const out = [];
+  let names = [];
+  try { names = readdir(tmp); } catch { return out; }
+  for (const n of names) {
+    if (!n.startsWith("sdk-bash-probe-")) continue;
+    try {
+      const st = lstat(join(tmp, n));
+      if (st.isDirectory() && st.uid === uid && nowMs - st.mtimeMs > maxAgeMs) out.push(join(tmp, n));
+    } catch { /* vanished */ }
+  }
+  return out;
+}
+
+/** A thrown SDK error that says its child was killed by a signal (the OOM killer, a container stop): not a Bash result. */
+const CHILD_KILLED_SIGNATURE = /exited with code (137|143)\b|\bSIGKILL\b|\bSIGTERM\b/i;
 
 /** The per-session masked dirs of the production config for a container env with no XDG_RUNTIME_DIR /
  *  CLAUDE_CODE_TMPDIR / TMPDIR: `/tmp/cc-socks`, the CLI's `/tmp/cc-socks-<uid>` fallback and the shared-HOME transcript
@@ -200,6 +250,8 @@ export function smokeVerdict(obs) {
 
   if (thrown) {
     if (SANDBOX_SIGNATURE.test(thrown)) return { verdict: "sdk_bash_smoke_failed", reason: safeReason(signatureLine(thrown)), coverage };
+    // The SDK's child died to a signal (137/143): a memory or stop event on the host, not a Bash outcome. Never a /fail page.
+    if (CHILD_KILLED_SIGNATURE.test(thrown)) return { verdict: "smoke_infra_error", reason: safeReason(`cli_child_killed: ${thrown}`), coverage };
     if (dispatched) return { verdict: "sdk_bash_smoke_failed", reason: safeReason(`dispatched_then_error: ${thrown}`), coverage };
     return { verdict: "smoke_infra_error", reason: safeReason(`sdk_error_before_dispatch: ${thrown}`), coverage };
   }
@@ -347,11 +399,15 @@ async function runSmoke() {
   if (!/^[0-9a-f]{16,64}$/.test(nonce)) infra("nonce_missing_or_malformed");
   const home = process.env.HOME;
   if (!home || !home.startsWith("/")) infra("home_not_absolute");
-  const runtime = process.env.SDK_BASH_PROBE_RUNTIME === "1";
-  // Runtime mode: the host passes the selector NAME it got from the dispatcher's resolver; deploy mode always runs unixdeny.
-  const selectorName = runtime ? process.env.SDK_BASH_PROBE_SELECTOR ?? "" : "unixdeny";
-  const selectedPath = runtime ? runtimeSelectorPath(selectorName) : smokeSelectorPath();
-  if (selectedPath === null) infra("selector_invalid");
+  const uid = process.getuid();
+  // Every mode decision lives in planSmoke (pure, unit-tested for both modes). Runtime mode: the host passes the selector NAME it
+  // got from the dispatcher's resolver; deploy mode always runs unixdeny. Each masked dir must exist before the namespace is built
+  // (the SDK skips a deny landing that does not exist): the deploy smoke runs in a canary that has none, so it creates them; the
+  // runtime synthetic runs in the production container, where those paths belong to real sessions, so `plan.mkdir` is empty there.
+  const isDir = (d) => { try { return statSync(d).isDirectory(); } catch { return false; } };
+  const plan = planSmoke({ env: process.env, uid, home, exists: isDir });
+  if (plan.selectedPath === null) infra("selector_invalid");
+  const { runtime, selectorName, selectedPath, masked, masksMissing } = plan;
   const APP = process.env.APP || "/app";
   let query;
   try {
@@ -371,24 +427,28 @@ async function runSmoke() {
   const port = server.address().port;
 
   const tmp = process.env.TMPDIR || "/tmp";
+  // A run killed before it could clean up (`timeout -k`, the OOM killer) leaves its scratch dirs in the production container's
+  // /tmp. Sweep the ones older than a day (runtime mode only: the deploy smoke runs in a throwaway canary).
+  if (runtime) {
+    for (const d of staleScratchDirs(tmp, Date.now(), uid, { readdir: readdirSync, lstat: lstatSync })) {
+      try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  }
   const ws = mkdtempSync(`${tmp}/sdk-bash-probe-`);
   const cfg = mkdtempSync(`${tmp}/sdk-bash-probe-cfg-`);
-  const uid = process.getuid();
-  // Each masked dir must exist before the namespace is built (the SDK skips a deny landing that does not exist). The deploy
-  // smoke runs in a canary that has none, so it creates them; the runtime synthetic runs in the production container, where
-  // those paths belong to real sessions, so it creates nothing and masks only the ones that already exist.
-  let masked = maskedDirs(uid, home);
-  let masksMissing = 0;
-  try {
-    if (!runtime) {
-      for (const d of maskedDirs(uid, home)) mkdirSync(d, { recursive: true, mode: 0o700 });
-    } else {
-      const r = runtimeMaskedDirs(uid, home, (d) => { try { return statSync(d).isDirectory(); } catch { return false; } });
-      masked = r.present;
-      masksMissing = r.missing;
+  // Scratch is removed on EVERY exit path: the normal end and every `infra()` (process.exit runs this), and a TERM from the
+  // in-container `timeout` (the handler turns it into an exit, rc 143). Only a SIGKILL leaves it, which the sweep above reaps.
+  const cleanup = () => {
+    for (const d of [ws, cfg]) {
+      try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort scratch cleanup */ }
     }
+  };
+  process.on("exit", cleanup);
+  process.on("SIGTERM", () => process.exit(143));
+  if (runtime && !cliTmpBaseOk(cfg, uid)) infra("cli_tmp_path_too_long");
+  try {
+    for (const d of plan.mkdir) mkdirSync(d, { recursive: true, mode: 0o700 });
   } catch (e) {
-    try { rmSync(ws, { recursive: true, force: true }); rmSync(cfg, { recursive: true, force: true }); } catch { /* scratch */ }
     infra(`masked_dir_precreate_failed: ${String(e).slice(0, 120)}`);
   }
   // SDK_BASH_PROBE_BPF is a TEST-ONLY override (a dev machine has no /app/infra); ci-deploy.sh never sets it. Any value
@@ -404,8 +464,9 @@ async function runSmoke() {
     DISABLE_TELEMETRY: "1",
     DISABLE_AUTOUPDATER: "1",
     SOLEUR_BWRAP_SECCOMP_BPF: bpfPath,
-    // A scratch config dir keeps the synthetic transcript out of the shared HOME.
-    CLAUDE_CONFIG_DIR: cfg,
+    // A scratch config dir keeps the synthetic transcript out of the shared HOME. Runtime mode (the production container) also
+    // puts the CLI's temp base inside it, so its persisted Bash output stays out of the shared /tmp/claude-<uid> (see scratchEnv).
+    ...(runtime ? scratchEnv(cfg) : { CLAUDE_CONFIG_DIR: cfg }),
   };
 
   const controller = new AbortController();
@@ -443,10 +504,7 @@ async function runSmoke() {
     controller.abort();
   }
   const v = smokeVerdict({ nonce, dispatched: state.dispatched, toolResult, thrown, timedOut, coverage });
-  for (const d of [ws, cfg]) {
-    try { rmSync(d, { recursive: true, force: true }); } catch { /* best-effort scratch cleanup */ }
-  }
-  // Runtime mode adds two observations the host journals; the verdict contract is unchanged.
+  // Runtime mode adds two observations the host journals and cross-checks; the verdict contract is unchanged.
   emit(runtime ? { ...v, selector: selectorName, masks_missing: masksMissing } : v);
   server.close();
   process.exit(0);

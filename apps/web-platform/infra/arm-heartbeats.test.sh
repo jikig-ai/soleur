@@ -804,6 +804,16 @@ assert_eq "W2 exits 0" "0" "$RC"
 assert "W2 declares web-1 ARMED on a measured beat" "[[ \"\$OUT\" == *'web-bash-synthetic (web-1): status=up within'* ]]"
 assert "W2 soft-lands web-2" "[[ \"\$OUT\" == *'::warning::web-bash-synthetic (web-2): no beat within 300s'* ]]"
 
+echo "--- W6 web-1 dark, web-2 landed: web-2 ARMED with no false warning (the wrc reset between the two calls)"
+case_setup w6
+add_wbs
+printf "360" > "$FAKE_STATE/$ID_WBS2.upat"   # absolute fake-clock second: after web-1's 300 s poll has run out, so web-2 reads paused first and flips to up in its own window
+FAKE_CURL_COST=1 run_sut
+assert_eq "W6 exits 0" "0" "$RC"
+assert "W6 soft-lands web-1" "[[ \"\$OUT\" == *'::warning::web-bash-synthetic (web-1): no beat within 300s'* ]]"
+assert "W6 declares web-2 ARMED on a measured beat" "[[ \"\$OUT\" == *'web-bash-synthetic (web-2): status=up within'* ]]"
+assert "W6 does not carry web-1's rc into a false web-2 warning" "[[ \"\$OUT\" != *'::warning::web-bash-synthetic (web-2)'* ]]"
+
 echo "--- W3 a FAILED rollback on a web-bash-synthetic arm is a real failure, never the soft landing"
 case_setup w3
 add_wbs
@@ -825,9 +835,11 @@ assert_eq "W4 issues no PATCH" "0" "$(patch_count)"
 
 echo "--- W5 host coverage: every var.web_hosts member has a literal arm_one for each per-host beat"
 # The keys come from variables.tf, not from this file: a member added there with no arm_one makes its beat born paused and
-# DARK forever, and nothing else notices (the post-merge read-back is the only other net).
+# DARK forever, and nothing else notices (the twice-daily heartbeat-live-reconcile fed-but-paused alert is the only other net).
 INFRA_DIR_W="$(cd "$(dirname "$SUT")" && pwd)"
-web_hosts_keys() { awk '/variable "web_hosts"/{f=1} f&&/default *= *\{/{d=1} d&&/^    "web-[0-9]+" *= *\{/{gsub(/[ ="{]/,"",$1); print $1} f&&/^}/{exit}' "$INFRA_DIR_W/variables.tf"; }
+web_hosts_keys() {  # [variables.tf path]: members at ANY indentation (a re-indented or tab-indented member must not drop out)
+  awk '/variable "web_hosts"/{f=1} f&&/default *= *\{/{d=1} d&&/^[[:space:]]+"web-[0-9]+"[[:space:]]*=[[:space:]]*\{/{gsub(/[ \t="{]/,"",$1); print $1} f&&/^}/{exit}' "${1:-$INFRA_DIR_W/variables.tf}"
+}
 host_coverage_missing() {  # <sut path> <keys...>: prints each "<beat>/<key>" lacking a literal arm_one
   local sut="$1" k beat; shift
   for beat in web_zot_consumer web_nic_guard web_bash_synthetic; do
@@ -838,6 +850,11 @@ host_coverage_missing() {  # <sut path> <keys...>: prints each "<beat>/<key>" la
 }
 mapfile -t WH_KEYS < <(web_hosts_keys)
 assert "W5 read at least web-1 and web-2 from variables.tf (the extraction is not vacuous)" "[[ \" \${WH_KEYS[*]} \" == *' web-1 '* && \" \${WH_KEYS[*]} \" == *' web-2 '* ]]"
+assert_eq "W5 the extraction derives every quoted web-N member variables.tf declares (the loose count is independent of the extractor's indentation regex)" \
+  "$(grep -cE '^[[:space:]]*"web-[0-9]+"[[:space:]]*=' "$INFRA_DIR_W/variables.tf")" "${#WH_KEYS[@]}"
+printf 'variable "web_hosts" {\n  default = {\n  "web-1" = { a = 1 }\n\t"web-3" = { a = 1 }\n  }\n}\n' > "$WORK/w5-indent.tf"
+assert "W5 RED control: members at two-space and tab indentation are still extracted" \
+  "[[ \"\$(web_hosts_keys '$WORK/w5-indent.tf' | tr '\n' ' ')\" == 'web-1 web-3 ' ]]"
 assert_eq "W5 no per-host beat lacks an arm_one" "" "$(host_coverage_missing "$SUT" "${WH_KEYS[@]}")"
 grep -v "web_bash_synthetic\[\"web-2\"\]" "$SUT" > "$WORK/w5-no-web2.sh" || { echo "FATAL: w5 mutant build failed"; exit 2; }
 assert "W5 RED control: a SUT without the web-2 web_bash_synthetic arm is reported missing" \
@@ -2417,7 +2434,8 @@ echo "arm-heartbeats: ${PASS} passed, ${FAIL} failed ($((PASS + FAIL)) assertion
 # AO6f-g, AO7b-d, AO10-AO12 and mutation rows M35-M42. Ratcheted 454 -> 562 for the second fix-round: AO13-AO34 (record-before-act pinned
 # by a snapshot taken at the unpause PATCH, the books read-back, residual-books independence) and mutation rows M43-M54.
 # Ratcheted 562 -> 583 for the web-bash-synthetic arms (#10455 b): W1-W5 (soft landing, one-host arming, failed rollback, no-op, host coverage + RED controls).
-ASSERT_FLOOR=583
+# Ratcheted 583 -> 589 for the #10697 fix round: W6 (web-1 dark, web-2 landed: the wrc reset) and the two W5 extractor rows (independent member count, indentation RED control).
+ASSERT_FLOOR=589
 if [[ $((PASS + FAIL)) -lt "$ASSERT_FLOOR" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran against a floor of ${ASSERT_FLOOR} — the suite is narrowed or a case aborted early."
   exit 1

@@ -264,7 +264,7 @@ locals {
     "web-private-nic-guard.sh",
     "web-private-nic-guard.service",
     "web-private-nic-guard.timer",
-    # Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-20): the script, its units and the verdict lib it shares
+    # Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22): the script, its units and the verdict lib it shares
     # with ci-deploy.sh. Baked for the same reason as the three probes above: the SSH installers below reach running hosts only.
     "web-bash-synthetic.sh",
     "web-bash-synthetic.service",
@@ -970,7 +970,7 @@ resource "terraform_data" "private_nic_guard_install" {
   }
 }
 
-# Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-20) on web-1: one real wrapped Bash call in the RUNNING container every
+# Runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22) on web-1: one real wrapped Bash call in the RUNNING container every
 # 15 minutes, heartbeat web_bash_synthetic pinged only on a verified pass. Shape of private_nic_guard_install (same connection, trigger
 # hash, probe-first Vector ordering). web-2 is a RUNNING cattle host whose cloud-init never re-runs, so it has its own twin below.
 resource "terraform_data" "web_bash_synthetic_install" {
@@ -1033,7 +1033,10 @@ resource "terraform_data" "web_bash_synthetic_install" {
 
 # Same delivery to the RUNNING web-2 (twin of web_bash_synthetic_install; dialed through the web-1 bastion in CI, ADR-220). A fresh
 # host gets the same files from cloud-init + soleur-host-bootstrap.sh + web-probe-envwrite.sh. web-host-provisioner-parity.test.sh's
-# W2_ALLOWED admits it.
+# W2_ALLOWED admits it. ROTATION GAP, stated: this twin hashes no token (the env file is derived on the host from the probe env
+# file web-probe-envwrite.sh wrote at birth), so a `-replace` rotation of doppler_service_token.web_probes re-fires only the web-1
+# installers; web-2's synthetic keeps the old token until the host is replaced, exactly like its sibling probes (ADR-079 addendum
+# 2026-10-22, residual 4; the web-1 side is pinned by web-probes-token-rotation.test.sh).
 resource "terraform_data" "web_bash_synthetic_install_web2" {
   # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first ordering), so the first verdict line ships.
   depends_on = [terraform_data.journald_persistent_web2]
@@ -1082,13 +1085,18 @@ resource "terraform_data" "web_bash_synthetic_install_web2" {
       "chmod 0644 /usr/local/bin/sdk-bash-verdict.sh",
       # NO credential material in this resource (web-host-provisioner-parity.test.sh bars it from every web-2 dialer): the unit's
       # env file is DERIVED on the host from the sibling probe env file that web-probe-envwrite.sh wrote at web-2's birth, which
-      # already holds the SAME read-scoped web_probes token. Everything the nic-guard file carries that this unit does not use is
-      # dropped; the per-host heartbeat key name is the only line written here. A missing source file fails the apply loudly:
-      # the alternative is a unit that fails every 15 minutes with the cause only in the journal.
+      # already holds the SAME read-scoped web_probes token. The derivation is an ALLOW-LIST of the two Doppler keys this unit uses
+      # (the key names are spelled `DOPPLER_(…)` so this resource never names the credential variable outright, which
+      # web-host-provisioner-parity.test.sh's W2_CRED_RE bars; names are not material), plus the per-host heartbeat key name
+      # written here: a key a future nic-guard file gains can never leak into this unit's env. A missing source file, a missing
+      # key or a wrong line count fails the apply loudly: the alternative is a unit that fails every 15 minutes with the cause only
+      # in the journal.
       "probe_env=/etc/default/web-private-nic-guard",
       "test -s \"$probe_env\" || { echo \"FATAL: $probe_env is missing on web-2, so the synthetic cannot inherit the probe token. Check web-probe-envwrite.sh ran at boot.\" >&2; exit 1; }",
-      "( umask 0137 && { printf 'WEB_BASH_SYNTHETIC_URL_KEY=%s\\n' 'WEB_BASH_SYNTHETIC_URL_${upper(replace("web-2", "-", "_"))}'; grep -vE '^(EXPECTED_IP|BETTERSTACK_INGEST_URL|WEB_NIC_GUARD_URL_KEY)=' \"$probe_env\"; } > /etc/default/web-bash-synthetic )",
+      "( umask 0137 && { printf 'WEB_BASH_SYNTHETIC_URL_KEY=%s\\n' 'WEB_BASH_SYNTHETIC_URL_${upper(replace("web-2", "-", "_"))}'; grep -E '^DOPPLER_(TOKEN|ENABLE_VERSION_CHECK)=' \"$probe_env\"; } > /etc/default/web-bash-synthetic )",
       "chmod 600 /etc/default/web-bash-synthetic",
+      "for k in TOKEN ENABLE_VERSION_CHECK; do grep -q \"^DOPPLER_$k=.\" /etc/default/web-bash-synthetic || { echo \"FATAL: /etc/default/web-bash-synthetic has no DOPPLER_$k line: $probe_env no longer carries it, so the derivation is broken.\" >&2; exit 1; }; done",
+      "grep -qx 'WEB_BASH_SYNTHETIC_URL_KEY=WEB_BASH_SYNTHETIC_URL_${upper(replace("web-2", "-", "_"))}' /etc/default/web-bash-synthetic || { echo 'FATAL: the per-host heartbeat key line is missing from the web-bash-synthetic env file' >&2; exit 1; }",
       "test \"$(wc -l < /etc/default/web-bash-synthetic)\" -eq 3",
       "systemctl daemon-reload",
       "systemctl enable --now web-bash-synthetic.timer",

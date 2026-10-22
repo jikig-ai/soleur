@@ -97,7 +97,7 @@ resource "betteruptime_heartbeat" "web_nic_guard" {
   }
 }
 
-# §4 — runtime Bash synthetic liveness heartbeat (per host; #10455 b, ADR-079 addendum 2026-10-20). Pinged ONLY on a
+# §4 — runtime Bash synthetic liveness heartbeat (per host; #10455 b, ADR-079 addendum 2026-10-22). Pinged ONLY on a
 # verified pass of one real wrapped Bash call in the RUNNING web container, so a sandbox that breaks between deploys (the
 # 2026-10-06..16 outage, #10445) stops the beat and pages. PERMANENT and INDEPENDENT of the nic-guard and zot beats (folding
 # would re-introduce OR-masking across distinct failure domains; own URL per unit, never shared).
@@ -125,8 +125,8 @@ resource "betteruptime_heartbeat" "web_bash_synthetic" {
 }
 
 # Per-host heartbeat URLs → Doppler soleur/prd. Each probe/guard resolves its host's own URL by
-# indirect expansion (${!<KEY>}) over the WEB_*_URL_KEY name baked into its env file: the nic-guard and
-# zot SCRIPTS do it after their xtrace refusal (#9639 F6); the git-data and inngest units still do it in
+# indirect expansion (${!<KEY>}) over the WEB_*_URL_KEY name baked into its env file: the nic-guard, zot and
+# web-bash-synthetic SCRIPTS do it after their xtrace refusal (#9639 F6); the git-data and inngest units still do it in
 # their wrapper (recorded not fixed on #9639), so these secrets are GENUINELY consumed (not a reserved-but-inert reservation — the anti-pattern
 # doppler_secret.zot_heartbeat_url_prd was deleted for, #6438 B3). Masked, same class as every
 # existing heartbeat URL secret.

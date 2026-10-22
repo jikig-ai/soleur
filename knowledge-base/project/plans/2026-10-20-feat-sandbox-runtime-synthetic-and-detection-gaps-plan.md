@@ -194,16 +194,19 @@ error_reporting:
 failure_modes:
   - mode: sandbox Bash broken between deploys
     detection: nonce missing from the real tool_result (verdict=fail)
-    alert_route: heartbeat /fail -> Better Stack incident
+    alert_route: heartbeat /fail -> Better Stack incident (dead-man heartbeat, outside layers 1-5); vector (layer 3, Vector journald shipper, Source 4) carries the SOLEUR_WEB_BASH_SYNTHETIC decode line
   - mode: timer stopped, host dark, unit failed, vector path broken
     detection: no heartbeat within period+grace
-    alert_route: Better Stack heartbeat incident (independent of the log path)
+    alert_route: Better Stack heartbeat incident (dead-man heartbeat, outside layers 1-5, independent of the log path); vector (layer 3) rows under the SyslogIdentifier without a SOLEUR_ marker separate a Doppler/token failure from a stopped timer
   - mode: no_ping for many consecutive cycles (long deploy lock, drained host, probe absent)
     detection: consecutive_no_ping journaled; the beat goes dark after period+grace
-    alert_route: Better Stack heartbeat incident; the journal tells a skip from a dead host
+    alert_route: Better Stack heartbeat incident (dead-man heartbeat, outside layers 1-5); vector (layer 3) journald row tells a skip from a dead host
   - mode: synthetic harms the shared container (memory or process pile-up)
-    detection: memory_pressure skip reason; in-container timeout -k bounds orphans
-    alert_route: no_ping reason=memory_pressure in journald; web uptime monitors
+    detection: memory_pressure / memory_pressure_host skip reasons; in-container timeout -k bounds orphans
+    alert_route: no_ping reason=memory_pressure in the vector (layer 3) journald row; web uptime monitors
+  - mode: a beat is born paused and the ARM gate's 300 s window misses it (probabilistic arming, p ~ 1/3 per apply per host)
+    detection: arm-heartbeats.sh ::warning:: naming the host, plus the twice-daily heartbeat-live-reconcile fed-but-paused class
+    alert_route: workflow run log (layer 6, the ::warning:: annotation on the apply run) and the reconcile issue/email; there is no post-merge check
 logs:
   where: Better Stack source soleur-inngest-vector-prd (shared), host_name discriminates
   retention: per source configuration
@@ -280,7 +283,7 @@ Harness rows: (a) a mock `docker` that always exits 0 with no output must still 
 - [x] AC4: the synthetic writes nothing outside its scratch dir (asserted in `web-bash-synthetic.test.sh` against the probe's file operations).
 - [ ] AC5: PR body uses `Ref #10455` and never a closing keyword for #10455, #10548, #10549 or #10604; a #10455 note lists what shipped and the PR-B items.
 - [x] AC6 (#10777): one debt issue (table-driven host-timer registry) is filed with the issue-filing gate's required line.
-- [ ] Post-merge verification (owned by `soleur:postmerge`, not an AC of the diff): every `var.web_hosts` beat reads not-paused through `arm-heartbeats.sh`'s read-back, and the `discoverability_test` returns `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass` after the first timer run.
+- [ ] Post-merge verification (a follow-up check for the merger or a later session; NOT an AC of the diff and NOT implemented in `soleur:postmerge`): every `var.web_hosts` beat reads not-paused (`arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>`), and the `discoverability_test` returns `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass` after the first timer run. The standing net for a beat that stays paused is the twice-daily `heartbeat-live-reconcile` `fed-but-paused` alert.
 
 ## Test Scenarios
 
@@ -289,7 +292,7 @@ Deploy lock held; container not running; container replaced mid-run; memory abov
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` is empty or placeholder fails `deepen-plan` Phase 4.6; this one is filled.
-- Merging does not arm the beat: a heartbeat born paused is dark until `arm_one` runs for every host; the post-merge check verifies it.
+- Merging does not arm the beat: a heartbeat born paused is dark until `arm_one` runs for every host; nothing watches it per merge: the twice-daily `heartbeat-live-reconcile` `fed-but-paused` alert and `arm-heartbeats.sh --status` are the nets (arming is probabilistic, p ~ 1/3 per apply per host).
 - The ARM-gate ladder is derived from `period + grace - 40`; do not set grace without re-deriving it.
 - `FLOOR_BLOCKS`, the three `vector.toml` arrays and `suite-shard-legs.tsv` are the most-forgotten registrations.
 - #10548's soak and the flag enable are untouched and must not be bundled.

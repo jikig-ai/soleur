@@ -489,17 +489,21 @@ if [[ "$SDK_BASH_SMOKE_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" || "$SDK_BASH
   logger -t "$LOG_TAG" "SDK_BASH_SMOKE_STATE_FILE aliases another canary ledger ($SDK_BASH_SMOKE_STATE_FILE) — SDK Bash smoke SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
 fi
 # The rc/marker -> verdict mapping, shared with the runtime synthetic (web-bash-synthetic.sh) so the two cannot drift (ADR-079
-# addendum 2026-10-20). It sits NEXT TO THIS FILE in both layouts (infra/ in the repo, /usr/local/bin on a host: delivered there by
-# the web_bash_synthetic install blocks on running hosts and baked via cloud-init on fresh ones). A host that has this script but
-# not yet the lib reports smoke_infra_error reason=verdict_lib_absent (a HOLD, never a rollback): the smoke is non-blocking.
-if [[ -z "${SDK_BASH_VERDICT_LIB:-}" ]]; then
-  SDK_BASH_VERDICT_LIB=""
-  _sbv_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _sbv_here=""
-  for _sbv_c in "$_sbv_here/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh; do
-    if [[ -r "$_sbv_c" ]]; then SDK_BASH_VERDICT_LIB="$_sbv_c"; break; fi
-  done
-fi
-if [[ -n "$SDK_BASH_VERDICT_LIB" && -r "$SDK_BASH_VERDICT_LIB" ]]; then
+# "Addendum — 2026-10-22 (#10455 b)"). It sits NEXT TO THIS FILE in both layouts (infra/ in the repo, /usr/local/bin on a host: delivered
+# there by the web_bash_synthetic install blocks on running hosts and baked via cloud-init on fresh ones). A host that has this
+# script but not yet the lib reports smoke_infra_error reason=verdict_lib_absent (a HOLD, never a rollback): the smoke is
+# non-blocking, and it stays blind until the lib lands. KNOWN TRANSITIONAL GAP (recorded in the ADR addendum): this script ships
+# through apply-deploy-pipeline-fix.yml while the lib ships only with the install blocks, so the two can land minutes apart; an
+# inline fallback copy of the mapping was rejected because a second copy is the drift the lib exists to remove. There is NO
+# environment override of the lib path: this script runs as root, and an overridable `source` is arbitrary code execution (the
+# runtime synthetic gates its equivalent seam behind --fixture-seams for the same reason). ci-deploy.test.sh hides the lib by
+# running a copy of this script from a directory that lacks it.
+SDK_BASH_VERDICT_LIB=""
+_sbv_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _sbv_here=""
+for _sbv_c in "$_sbv_here/sdk-bash-verdict.sh" /usr/local/bin/sdk-bash-verdict.sh; do
+  if [[ -r "$_sbv_c" ]]; then SDK_BASH_VERDICT_LIB="$_sbv_c"; break; fi
+done
+if [[ -n "$SDK_BASH_VERDICT_LIB" ]]; then
   # shellcheck source=sdk-bash-verdict.sh
   source "$SDK_BASH_VERDICT_LIB" || true
 fi

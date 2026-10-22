@@ -215,7 +215,7 @@ export const MANIFEST: ManifestEntry[] = [
   },
   {
     name: "web_bash_synthetic",
-    // #10455 b (ADR-079 addendum 2026-10-20) — the runtime Bash synthetic's liveness beat, one per host (for_each var.web_hosts).
+    // #10455 b (ADR-079 addendum 2026-10-22) — the runtime Bash synthetic's liveness beat, one per host (for_each var.web_hosts).
     // Pinged ONLY on a verified pass of one real wrapped Bash call in the RUNNING web container, so a sandbox that breaks between
     // deploys (the 2026-10-06..16 outage, #10445) stops the beat. Same web-host-cron / SSH-provisioner delivery and measured-beat
     // arming shape as web_nic_guard, with its own URL and its own failure domain (folding would re-introduce OR-masking). Period

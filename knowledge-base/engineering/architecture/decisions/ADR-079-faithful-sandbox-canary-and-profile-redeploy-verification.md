@@ -780,8 +780,8 @@ saw one that broke BETWEEN deploys.
 call in the RUNNING `soleur-web-platform` container, with the same probe, nonce proof and decoy-key `env -i` envelope as the deploy smoke,
 and pings a per-host Better Stack heartbeat (`betteruptime_heartbeat.web_bash_synthetic`, period 900 s, grace 1800 s) ONLY on a verified pass.
 A verified fail pings `<url>/fail` (immediate incident). Any run that cannot make a claim either way is `no_ping reason=<…>` and sends
-nothing: deploy lock held, container down or restarted during the run, memory above 85 %, probe or resolver absent from the running image,
-an infra error. The journal line `SOLEUR_WEB_BASH_SYNTHETIC verdict=… reason=… selector=… coverage=… masks_missing=… consecutive_no_ping=…`
+nothing: deploy lock held, container down or restarted during the run, container memory at or above 70 % or the HOST short of memory (see "Safety
+toward the shared container"), the flag read not answered (`selector_unresolved`), probe or resolver absent from the running image, an infra error. The journal line `SOLEUR_WEB_BASH_SYNTHETIC verdict=… reason=… selector=… coverage=… masks_missing=… consecutive_no_ping=…`
 ships through Vector Source 4 (`SyslogIdentifier=web-bash-synthetic`). The grace is deliberately coarse (a skipped run plus jitter must not
 page): the dead-man beat reports a dead DETECTOR, the `/fail` ping reports a broken SANDBOX.
 
@@ -789,7 +789,11 @@ page): the dead-man beat reports a dead DETECTOR, the `/fail` ping reports a bro
 - *Selector.* The synthetic asks the dispatcher's own resolver which seccomp artifact a no-egress session would get right now
   (`server/resolve-sandbox-selector-cli.ts`, a 26 kB esbuild bundle of `resolveSandboxUnixDeny` with `--packages=external`, built in the Dockerfile
   builder stage), in the container's FULL env so the live flag read works, then passes the NAME (`base` | `unixdeny`) to the `env -i` probe exec.
-  Never the env mirror: after the #10548 flip a mirror-driven probe would test an artifact production no longer selects. Coverage
+  Never the env mirror: after the #10548 flip a mirror-driven probe would test an artifact production no longer selects. The one-shot resolver is a
+  COLD process (no warm client, no 30 s snapshot cache), so its flag read gets a long budget, and a read that did not answer is OBSERVABLE rather
+  than silently `base`: the resolver (3 s budget) prints `SOLEUR_SELECTOR=unresolved` and the host journals `no_ping reason=selector_unresolved` (the
+  env-mirror fallback inside `lib/feature-flags/server.ts` is never turned into a pass for the wrong artifact). The host also compares the probe's
+  echoed `.selector` with the name it asked for (`no_ping reason=selector_mismatch` on a difference). Coverage
   (`sdk_wrapper_shim_prodtuple`) now names the artifact that was asked for, not a pinned one. The deploy smoke is unchanged and still runs
   `unixdeny`.
 - *Verdict mapping.* The rc 124 / `SDK_BASH_DISPATCHED` / result-line mapping is extracted from `run_sdk_bash_smoke` into one sourced function
@@ -802,11 +806,26 @@ page): the dead-man beat reports a dead DETECTOR, the `/fail` ping reports a bro
 within about 90 s of an install, and 300 s is far inside the 2700 s before a first absence alert), with the same soft landing as `inngest_consumer`:
 the first merge can precede the image that carries the resolver, and the unit then correctly sends nothing. The ARM-gate ladder is re-derived
 `2020 < 2100 < 2460` to `2790 < 2820 < 3180` seconds and the fleet-wide apply mutex from 47 to 59 minutes (worst case only; a healthy arm returns in
-seconds). `soleur:postmerge` fails loudly on any beat still paused, so a soft landing is never a silent dark state.
+seconds). ARMING IS PROBABILISTIC: the cadence is 900 s (start-based, plus `RandomizedDelaySec` jitter, about 93 runs a day) against a 300 s
+window, so a healthy synthetic lands a beat inside one apply's window with p ~ 1/3 per host per apply, and the first run after an install usually
+precedes the ARM step. A soft landing therefore CAN leave a beat paused for several applies. No `soleur:postmerge` check watches it (none exists; an
+earlier draft of this paragraph claimed one). The nets are the twice-daily `heartbeat-live-reconcile` job in `scheduled-terraform-drift.yml`, whose
+`fed-but-paused` class flags a paused beat whose manifest feeder is a working feeder (the manifest row carries no `arming_pending`), and the
+operator-readable `arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>`; the `::warning::` names `reason=probe_absent` (journal) as the
+discriminator between "the image has no probe yet" and "healthy, window missed". Making arming deterministic (a window of at least cadence plus
+jitter plus run, about 960 s, with the two hosts armed concurrently) would re-derive the ladder and is deferred (#10777).
 
 **Safety toward the shared container.** The synthetic execs into the container that serves tenants, so it skips (never fails) while a deploy holds
 `/var/lock/ci-deploy.lock` (read from `/proc/locks`, never taken: a `flock -n` race would fail a real deploy), when memory is high, and when the
-container id or start time changed during the run (a deploy swap kills the probe mid-run). The probe creates nothing outside its own scratch dirs in
+container id or start time changed during the run (a deploy swap kills the probe mid-run). MEASURED (perf review, 2026-10-22): the exec'd tree
+peaks at 172-293 MB of container cgroup memory, the resolver process is about 108 MB RSS, and the probe needs about 330 MB of headroom. The
+container is capped at 4096m (`PROD_MEMORY_CAP`, swap equal), so a cgroup OOM would kill the largest process in it, i.e. the tenant-serving server.
+The first guess of 85 % (about 614 MB left) was too thin once a tenant spike lands during the run, so the threshold is `MEM_PCT_MAX` 70 (about
+1.2 GB left, ~3x the peak), AND a HOST gate skips when `/proc/meminfo` `MemAvailable` is below 700 MB (`reason=memory_pressure_host`): on a 4 GB web
+host the container's cap is the whole host, so only the host number protects the kernel's other tenants. Both gates, and the deploy-lock check, are
+re-sampled immediately before the probe exec, and the exec'd tree runs at `oom_score_adj` 1000 so that, if memory does run out, the kernel picks the
+probe before the server. They are time-of-check guards, not caps. The heartbeat URL is pinned to the Better Stack heartbeat host and path (no query);
+the unit runs the script as `bash -p` with a scrubbed environment and a 0700 runtime directory. The probe creates nothing outside its own scratch dirs in
 runtime mode: the masked dirs belong to real sessions, so the ones that exist are masked and the rest are counted as `masks_missing`. In-container
 `timeout -k` (130 s) sits between the probe's 120 s cap and the host's 150 s cap so a hang cannot leave orphan node trees. The script's test seams
 are inert unless started with `--fixture-seams` (it runs as root with the whole prd root injected).
@@ -816,3 +835,18 @@ are inert unless started with `--fixture-seams` (it runs as root with the whole 
 derived on the host from the probe env file written at its birth, so a rotation of `doppler_service_token.web_probes` reaches web-2 only on a host
 replacement, exactly like its three sibling probes. (5) Live Better Stack inventory re-measured read-only 2026-10-22: 7 monitors + 12
 heartbeats = 19 objects; this adds two heartbeats (one per host), so 21. The decode lives in `runbooks/canary-probe-set.md` ("Runtime Bash synthetic").
+
+**Known limitation: the deploy smoke is transitionally blind until the verdict lib lands.** `ci-deploy.sh` ships through `apply-deploy-pipeline-fix.yml`
+(FILE_MAP `CI_DEPLOY_SH_B64`, the webhook channel), while `sdk-bash-verdict.sh` is delivered ONLY by the two `web_bash_synthetic_install[_web2]` SSH install
+blocks (and by cloud-init + `soleur-host-bootstrap.sh` on a fresh host). The two workflows are independent, with no ordering between them. From the moment
+a new `ci-deploy.sh` is live until the SSH stage installs the lib, every deploy's SDK Bash smoke takes the lib-absent branch and returns
+`smoke_infra_error reason=verdict_lib_absent` (non-blocking: no rollback, the soak counters HOLD); after three consecutive such results
+`sdk_bash_smoke_stale` goes to Sentry ("the deploy-time Bash check is blind"). The window is the mutex wait plus the apply (up to 59 minutes) and does not close
+if the SSH stage is skipped green or fails. ACCEPTED rather than fixed here: delivering the lib through the `deploy_pipeline_fix` channel (a FILE_MAP entry,
+the `push-infra-config.sh` payload, both `deploy_pipeline_fix[_web2]` `triggers_replace`, the workflow `paths:` list and its TRIGGER_FILES parity test) is a
+cross-workflow delivery change that does not belong in this PR (#10777). RE-EVALUATE when the lib is delivered through the same channel as `ci-deploy.sh` (#10777), when the first merge after this lands shows `verdict_lib_absent` in the
+deploy ledger for longer than one apply, when `sdk_bash_smoke_stale` fires, or when the smoke is next edited. The state is observable, never silent: the
+reason is journaled and ledgered, and a ci-deploy.test.sh row pins the branch. A fresh host born from an image that predates this change cannot be born
+silently without the detector: `soleur-host-bootstrap.sh` installs `web-bash-synthetic.sh` and `sdk-bash-verdict.sh` under `set -e` with an EXIT trap that
+emits a fatal Sentry event naming `failed_file=`, and cloud-init's fail-closed gate powers the host off before the `systemctl enable --now
+web-bash-synthetic.timer` line is reached (so no `|| soleur-boot-emit` was added to that line: it also has no spare bytes under the user_data budget).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sdk-bash-verdict.sh: the ONE mapping from "what `docker exec` of infra/lib/sdk-bash-probe.mjs returned" to a verdict.
-# shellcheck disable=SC2034  # SBV_VERDICT / SBV_REASON / SBV_COVERAGE are the function's output contract, read by the sourcing script
-# SOURCED, never executed, by two callers that must agree on it (ADR-079 addendum 2026-10-20, CTO ruling):
+# shellcheck disable=SC2034  # SBV_VERDICT / SBV_REASON / SBV_COVERAGE / SBV_JSON are the function's output contract, read by the sourcing script
+# SOURCED, never executed, by two callers that must agree on it (ADR-079 "Addendum — 2026-10-22 (#10455 b)", CTO ruling):
 #   - ci-deploy.sh run_sdk_bash_smoke   (deploy-time smoke, CANARY container, non-blocking)
 #   - web-bash-synthetic.sh             (runtime synthetic, RUNNING container, per-host dead-man heartbeat)
 # Two copies of the rc 124 / SDK_BASH_DISPATCHED mapping drift; this is the single definition.
@@ -10,8 +10,10 @@
 #     exec_rc            the rc of the `timeout <N> docker exec ... node sdk-bash-probe.mjs`
 #     out                the probe's captured stdout (SDK_BASH_DISPATCHED, SDK_BASH_RESULT {json})
 #     docker_err         docker's first scrubbed stderr line, or empty
-#     host_timeout_secs  the host `timeout` value, only named in the reason
-#   Sets (globals, NOT stdout: a subshell would discard them) SBV_VERDICT, SBV_REASON, SBV_COVERAGE.
+#     host_timeout_secs  the `timeout` cap that fired (the host's, or the in-container one the synthetic also sets), only named in
+#                        the reason
+#   Sets (globals, NOT stdout: a subshell would discard them) SBV_VERDICT, SBV_REASON, SBV_COVERAGE and SBV_JSON (the probe's
+#   result object on rc 0, else empty: the runtime synthetic reads its extra fields from it, so the line is parsed in ONE place).
 #     SBV_VERDICT  pass | sdk_bash_smoke_failed | smoke_infra_error
 #
 # Mapping (the #4941 false-rollback guard; the #10445 shape):
@@ -27,6 +29,7 @@
 sdk_bash_map_result() {
   local exec_rc="${1:-}" out="${2:-}" docker_err="${3:-}" host_timeout="${4:-150}"
   local line json
+  SBV_JSON=""
   SBV_VERDICT=""
   SBV_REASON=""
   SBV_COVERAGE=""
@@ -34,6 +37,7 @@ sdk_bash_map_result() {
     0)
       line="$(printf '%s\n' "$out" | { grep -a '^SDK_BASH_RESULT ' || true; } | tail -n 1)"
       json="${line#SDK_BASH_RESULT }"
+      SBV_JSON="$json"
       SBV_VERDICT="$(printf '%s' "$json" | jq -r '.verdict // ""' 2>/dev/null || echo '')"
       SBV_REASON="$(printf '%s' "$json" | jq -r '.reason // ""' 2>/dev/null || echo '')"
       SBV_COVERAGE="$(printf '%s' "$json" | jq -r '.coverage // ""' 2>/dev/null || echo '')"

@@ -151,8 +151,9 @@
 # EXIT CODES.
 #   --arm (default)
 #     0 = every arm either ARMED, was a NO-OP (already live), was ABSENT from tfstate, or — for
-#         the one soft call site, inngest-consumer — measured no beat and was rolled back to
-#         paused, which is an assertion about the FEEDER and not about the arming.
+#         the three soft call sites (inngest-consumer, web-bash-synthetic web-1 and web-2) —
+#         measured no beat and was rolled back to paused, which is an assertion about the FEEDER
+#         and not about the arming.
 #     1 = at least one arm could not do its job (GET failed, unpause failed, rollback failed, or
 #         the status could not be read at all during the poll), OR the pre-arm contract/tfstate
 #         checks refused to start.
@@ -521,7 +522,7 @@ if [[ "$MODE" == arm ]]; then
   fi
   # READABLE IS NOT THE SAME AS POPULATED (#7658 E10). A readable `{}` — a `terraform show -json`
   # that failed soft, a truncated write, the wrong root — makes every `jq` lookup return empty, so
-  # all six arms report "not present in tfstate" and the gate exits 0 having armed NOTHING, with no
+  # all eight arm calls report "not present in tfstate" and the gate exits 0 having armed NOTHING, with no
   # error channel fired. A state with zero resources is never a legitimate input to this step.
   _resource_count=$(jq -r '[.values.root_module.resources[]?] | length' "$TFSTATE_JSON" 2>/dev/null)
   if [[ ! "$_resource_count" =~ ^[0-9]+$ || "$_resource_count" -eq 0 ]]; then
@@ -551,8 +552,8 @@ arm_one() {
   ARM_LAST_STATUS=""
   ARM_LAST_UPDATED_AT=""
   # `--arm-one` hands the id it already resolved by exact name as a 4th POSITIONAL argument (#9980): a
-  # positional cannot be steered by the environment, and the six per-list `arm_one` call lines (five
-  # per-merge arms plus the inngest block) pass three arguments.
+  # positional cannot be steered by the environment, and the eight per-list `arm_one` call lines (five
+  # per-merge arms, the two web-bash-synthetic lines and the inngest block) pass three arguments.
   if [[ -n "$given_id" ]]; then
     id="$given_id"
   else
@@ -619,12 +620,14 @@ arm_one() {
   ARM_ELAPSED="$elapsed"
   # No `up` in time: roll back to paused BEFORE the first absence alert.
   #
-  # rc=2, NOT 1, and the distinction is load-bearing for exactly one caller. Every other
+  # rc=2, NOT 1, and the distinction is load-bearing for three callers (inngest-consumer and the two
+  # web-bash-synthetic lines). Every other
   # non-zero exit from this function ("GET failed", "PATCH failed") means the gate could not do
   # its job. THIS one means the gate worked and the FEEDER is not feeding — an assertion about
   # the monitored system, not about the arming. Callers whose feeder is expected to be healthy
   # still treat it as fatal (`|| rc=1` catches any non-zero); the inngest-consumer caller below
-  # distinguishes it, because its feeder is knowingly dark.
+  # distinguishes it because its feeder is knowingly dark, and arm_wbs_soft distinguishes it
+  # because a 300 s window cannot be guaranteed to catch a 900 s beat.
   #
   # A FAILED rollback is NOT that case and returns 1 even for the soft caller. "The monitor is
   # unpaused and nothing is feeding it" is a statement about the arming, and it is the one
@@ -927,7 +930,8 @@ rc=0
 # worst-case gap between the poll loop's last clock read and the rollback PATCH landing (#7657
 # D5; the old reserve of 10 re-paused AFTER the first absence alert at ≥2 s of vendor latency).
 # zot 180+60−40, nic-guard 360+120−40, git-data 60+180−40. inngest-consumer and web-bash-synthetic depart from the
-# formula deliberately — see their own blocks below and the 2026-08-20 amendment to ADR-117.
+# formula deliberately — see their own blocks below, the 2026-08-20 amendment to ADR-117 (inngest-consumer) and
+# the ADR-079 addendum 2026-10-22 (web-bash-synthetic).
 arm_one 'betteruptime_heartbeat.web_zot_consumer["web-1"]' 'web-zot-consumer (web-1)' 200 || rc=1
 arm_one 'betteruptime_heartbeat.web_nic_guard["web-1"]'    'web-nic-guard (web-1)'    440 || rc=1
 # (#6459/ADR-143) web-2's per-host heartbeats are born `paused` (web-probe.tf
@@ -942,20 +946,24 @@ arm_one 'betteruptime_heartbeat.web_nic_guard["web-2"]'    'web-nic-guard (web-2
 # and still counts toward the step's wall-clock ceiling, which is why the budget guard sums it.
 arm_one 'betteruptime_heartbeat.git_data_prd'              'git-data-prd'             200 || rc=1
 
-# (#10455 b, ADR-079 addendum 2026-10-20) web-bash-synthetic, one literal arm per host (the `for_each` beat is born `paused`
+# (#10455 b, ADR-079 addendum 2026-10-22) web-bash-synthetic, one literal arm per host (the `for_each` beat is born `paused`
 # like its siblings and this gate is its only unpause path; web-host-coverage in arm-heartbeats.test.sh fails when a
 # var.web_hosts member lacks a call). The deadline departs from period+grace-40 (2660) ON PURPOSE, like the inngest arm below:
 # 2660 s per host would put ~90 minutes of worst-case wall clock into every merge's ARM step whenever no beat can land.
-# 300 s catches the first run after an install (timer first fires 30 s + up to 60 s of jitter after enable, then the run) and
-# stays far below the first absence alert (900+1800), so a failed attempt cannot false-page. A beat is NOT guaranteed inside
-# the window on a later apply (the cadence is 900 s): an unlanded beat is a soft landing, exactly as for inngest-consumer,
-# because the first merge can precede the image that carries the probe's resolver (the unit then reports
-# no_ping reason=probe_absent and, correctly, sends nothing). It arms on the first apply whose window catches a beat, and the
-# post-merge check (soleur:postmerge) fails loudly on any beat still paused, so this is never a silent dark state.
+# 300 s stays far below the first absence alert (900+1800), so a failed attempt cannot false-page. ARMING IS PROBABILISTIC,
+# like the inngest arm below: the cadence is 900 s (start-based, plus RandomizedDelaySec jitter, ~93 runs/day) against a 300 s
+# window, so a HEALTHY synthetic lands a beat inside the window with p ~ 1/3 per apply per host, and the first run after an
+# install usually precedes this step (the SSH stage runs many resources between the timer enable and ARM) and a paused beat
+# ignores pings. An unlanded beat is a soft landing, exactly as for inngest-consumer; it also happens on the first merge
+# when the image carrying the probe's resolver is not running yet (the unit then reports no_ping reason=probe_absent and,
+# correctly, sends nothing). It arms on the first apply whose window catches a beat. The safety net for a beat that stays
+# paused is NOT a post-merge check (none exists): it is the twice-daily `heartbeat-live-reconcile` job in
+# scheduled-terraform-drift.yml, whose `fed-but-paused` class flags a paused beat that has a working feeder (the manifest row
+# carries no arming_pending), plus the operator-visible `arm-heartbeats.sh --status soleur-web-bash-synthetic-<host>`.
 ARM_WBS_DEADLINE=300
 arm_wbs_soft() {  # <label> <arm_one rc>: rc 2 = the gate worked and no beat landed yet (soft); anything else non-zero is a real failure
   if [[ "$2" -eq 2 ]]; then
-    echo "::warning::${1}: no beat within ${ARM_WBS_DEADLINE}s (elapsed ${ARM_ELAPSED}s); monitor rolled back to paused. Better Stack reported status=${ARM_LAST_STATUS:-unknown} at rollback. The runtime Bash synthetic pings every 15 minutes, and until the web image carrying the probe's resolver is running the unit sends no ping by design (journal: reason=probe_absent), so on the first apply this warning is expected. It arms on the first apply whose window catches a beat; soleur:postmerge verifies it."
+    echo "::warning::${1}: no beat within ${ARM_WBS_DEADLINE}s (elapsed ${ARM_ELAPSED}s); monitor rolled back to paused. Better Stack reported status=${ARM_LAST_STATUS:-unknown} at rollback. The runtime Bash synthetic pings every 15 minutes and this arm polls for ${ARM_WBS_DEADLINE}s, so a HEALTHY synthetic misses the window roughly two applies in three (a later apply catches a beat with p ~ 1/3): on its own this warning is not a fault. The discriminator is the host journal: reason=probe_absent means the web image carrying the probe's resolver is not running yet (expected on the first apply, the unit sends no ping by design), while verdict=pass means the synthetic is healthy and the window was simply missed. The monitor stays paused until an apply catches a beat. No post-merge check watches it: the twice-daily heartbeat-live-reconcile job raises a fed-but-paused alert for it, and arm-heartbeats.sh --status shows the live state."
   elif [[ "$2" -ne 0 ]]; then
     rc=1
   fi
@@ -967,8 +975,8 @@ wrc=0
 arm_one 'betteruptime_heartbeat.web_bash_synthetic["web-2"]' 'web-bash-synthetic (web-2)' "$ARM_WBS_DEADLINE" || wrc=$?
 arm_wbs_soft 'web-bash-synthetic (web-2)' "$wrc"
 
-# (#7228/#7587) inngest-consumer — the ONE caller that distinguishes rc=2 (see arm_one's
-# terminal branch), and the ONE arm whose deadline deliberately departs from period+grace−40.
+# (#7228/#7587) inngest-consumer — a caller that distinguishes rc=2 (see arm_one's terminal branch, and
+# arm_wbs_soft above for the two web-bash-synthetic lines), and the arm whose deadline departs furthest from period+grace−40.
 #
 # Its feeder is inngest-consumer-probe.sh on web-1, which pings only after reading a NON-EMPTY
 # function registry out of 10.0.1.40:8288. That host has not bound :8288 since 2026-07-30, and

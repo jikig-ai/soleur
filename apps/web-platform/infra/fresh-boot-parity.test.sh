@@ -99,8 +99,8 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
-# Phase 2.2 PART 2 — the 3 SSH-only probes (#6438/#6548): private-NIC guard, zot-consumer,
-# git-data reachability. Unlike Part 1's orphan-reaper (heredoc units), the probes deliver their
+# Phase 2.2 PART 2 — the SSH-only probes (#6438/#6548): private-NIC guard, zot-consumer,
+# git-data reachability (and, #10455 b, the runtime Bash synthetic). Unlike Part 1's orphan-reaper (heredoc units), the probes deliver their
 # .sh + .service + .timer via `provisioner "file"` from the SAME repo files, so the units are
 # byte-identical across both paths BY CONSTRUCTION (no heredoc-drift risk). What DOES diverge is
 # the per-host env file (/etc/default/web-<probe>): the SSH path writes it via a remote-exec
@@ -114,7 +114,7 @@ PROBE_UNITS="web-private-nic-guard.service web-private-nic-guard.timer \
              web-bash-synthetic.service web-bash-synthetic.timer"
 PROBE_DESTS="web-private-nic-guard web-zot-consumer-probe web-git-data-probe web-bash-synthetic"
 
-# ── 7. Repo files exist (3 probe scripts + the new baked env-writer + 6 units) ──
+# ── 7. Repo files exist (the probe scripts + the baked env-writer + the shared verdict lib + the probe units) ──
 for f in $PROBE_SCRIPTS $PROBE_UNITS; do
   if [[ -s "$DIR/$f" ]]; then ok "7: repo file present: $f"; else no "7: missing repo file: $f"; fi
 done
@@ -148,7 +148,7 @@ else
   no "10: cloud-init does not invoke web-probe-envwrite.sh (env files would be absent on fresh boot)"
 fi
 
-# ── 11. cloud-init enables the 3 probe timers ──
+# ── 11. cloud-init enables every probe timer ──
 for d in $PROBE_DESTS; do
   if grep -qE "systemctl enable --now $d\.timer" "$CI"; then
     ok "11: cloud-init enables $d.timer"
@@ -163,8 +163,15 @@ done
 env_keys_from() { # $1=file  $2=dest-basename → sorted-unique KEY= tokens on the printf line writing that dest
   grep -F "/etc/default/$2" "$1" | grep -oE "printf '[^']*'" | grep -oE '[A-Za-z_][A-Za-z_0-9]*=' | sort -u
 }
+res_block() { # <tf-file> <terraform_data name> -> the resource block, comment lines stripped
+  awk -v hdr="resource \"terraform_data\" \"$2\" {" '$0 == hdr {f=1} f && $0 !~ /^[[:space:]]*#/ {print} f && /^}/ {exit}' "$1"
+}
+# The synthetic's dest is written by TWO server.tf resources (web-1 printf; web-2 derives it, section 13b). Reading the whole file would union
+# both, so the web-2 block's lone URL-key printf could hide a web-1 writer that lost a key: compare the web-1 block only.
+res_block "$SRV" web_bash_synthetic_install > "$PAR_SCR/wbs1.blk"
 for d in $PROBE_DESTS; do
-  ssh_keys="$(env_keys_from "$SRV" "$d")"
+  src="$SRV"; [[ "$d" == web-bash-synthetic ]] && src="$PAR_SCR/wbs1.blk"
+  ssh_keys="$(env_keys_from "$src" "$d")"
   bake_keys="$(env_keys_from "$DIR/web-probe-envwrite.sh" "$d")"
   if [[ -n "$ssh_keys" && "$ssh_keys" == "$bake_keys" ]]; then
     ok "12: /etc/default/$d key set matches across SSH remote-exec and baked env-writer"
@@ -173,7 +180,7 @@ for d in $PROBE_DESTS; do
   fi
 done
 
-# ── 13. The 3 probe SSH provisioners are RETAINED (Phase 2 adds coverage; Phase 5 removes SSH) ──
+# ── 13. The probe SSH provisioners are RETAINED (Phase 2 adds coverage; Phase 5 removes SSH) ──
 for r in private_nic_guard_install zot_consumer_probe_install git_data_probe_install web_bash_synthetic_install web_bash_synthetic_install_web2; do
   if grep -qE "resource \"terraform_data\" \"$r\"" "$SRV"; then
     ok "13: terraform_data.$r retained (web-1 running-host rotation until Phase 5)"
@@ -181,6 +188,95 @@ for r in private_nic_guard_install zot_consumer_probe_install git_data_probe_ins
     no "13: $r SSH provisioner was removed — that is a Phase-5 change, not Phase 2"
   fi
 done
+
+# ── 13b. The web-2 twin DERIVES its env file on the host (web_bash_synthetic_install_web2 carries no credential material, so it
+#         cannot printf the file like section 12's web-1 writer). The derivation is an ALLOW-LIST filter over the nic-guard env file
+#         that web-probe-envwrite.sh wrote at birth: feed that writer's REAL key set through the filter extracted from server.tf and
+#         require exactly the key set the synthetic's own writer emits. A key the nic-guard file gains, or a filter that stops
+#         selecting a Doppler key, reds here instead of at apply time on the host. ──
+w2_filter() { # <tf-file> -> the ERE of the block's `grep -E '<ere>' "$probe_env"` derivation (empty when absent or not exactly one)
+  local blk n
+  blk="$(res_block "$1" web_bash_synthetic_install_web2)"
+  n="$(grep -oE "grep -E '[^']+' \\\\\"\\\$probe_env\\\\\"" <<<"$blk" | grep -c . || true)"
+  [[ "$n" == 1 ]] || return 0
+  grep -oE "grep -E '[^']+' \\\\\"\\\$probe_env\\\\\"" <<<"$blk" | sed -E "s/^grep -E '//; s/' .*$//"
+}
+clean_env_keys() { # <file> <dest-basename> -> sorted-unique KEY= tokens of the printf writing that dest, split on the literal \n separators
+  grep -F "/etc/default/$2" "$1" | grep -oE "printf '[^']*'" | sed -E "s/\\\\+n/\n/g" | grep -oE '^(printf .)?[A-Z][A-Z_0-9]*=' | sed -E "s/^printf .//" | sort -u
+}
+w2_derived_bad() { # <tf-file> -> 1 when the derivation does not yield the synthetic writer's key set from the nic-guard writer's key set
+  local ere nic want got fixture="$PAR_SCR/w2-probe-env" blk
+  ere="$(w2_filter "$1")"
+  [[ -n "$ere" ]] || { echo 1; return; }
+  blk="$(res_block "$1" web_bash_synthetic_install_web2)"
+  # The deny-list form is gone for good: a filter that REMOVES known keys passes every key the next writer adds.
+  if grep -qE "grep -vE" <<<"$blk"; then echo 1; return; fi
+  nic="$(clean_env_keys "$DIR/web-probe-envwrite.sh" web-private-nic-guard)"
+  want="$(clean_env_keys "$DIR/web-probe-envwrite.sh" web-bash-synthetic)"
+  [[ -n "$nic" && -n "$want" ]] || { echo 1; return; }
+  # One KEY=value line per key of the nic-guard file (a non-empty value, as the real file carries), then the same filter the host runs.
+  while IFS= read -r k; do printf '%sv\n' "$k"; done <<<"$nic" > "$fixture"
+  got="$({ printf 'WEB_BASH_SYNTHETIC_URL_KEY=x\n'; grep -E "$ere" "$fixture" || true; } | grep -oE '^[A-Za-z_][A-Za-z_0-9]*=' | sort -u)"
+  [[ -n "$got" && "$got" == "$want" ]] && echo 0 || echo 1
+}
+if [[ "$(w2_derived_bad "$SRV")" == 0 ]]; then
+  ok "13b: web-2's derived env file (allow-list filter over the nic-guard writer's key set) yields exactly the synthetic writer's key set"
+else
+  no "13b: web-2's derivation DRIFTED from the synthetic's writer (filter='$(w2_filter "$SRV")')"
+fi
+w2_mut() { # <name> <sed-expr>
+  local m="$PAR_SCR/w2.mut"
+  sed -E "$2" "$SRV" > "$m"
+  if cmp -s "$SRV" "$m"; then no "13b mutation: $1 — did not land"; return; fi
+  if [[ "$(w2_derived_bad "$m")" == 1 ]]; then ok "13b mutation: $1 is caught"; else no "13b mutation: $1 SURVIVED"; fi
+}
+w2_mut "the filter widened to also pass the nic-guard's EXPECTED_IP" "s/\^DOPPLER_\(TOKEN\|ENABLE_VERSION_CHECK\)=/^(EXPECTED_IP|DOPPLER_(TOKEN|ENABLE_VERSION_CHECK))=/"
+w2_mut "the version-check key dropped from the filter" "s/\^DOPPLER_\(TOKEN\|ENABLE_VERSION_CHECK\)=/^DOPPLER_(TOKEN)=/"
+w2_mut "the allow-list reverted to a deny-list" "s/grep -E '\^DOPPLER_\(TOKEN\|ENABLE_VERSION_CHECK\)='/grep -vE '^(EXPECTED_IP|BETTERSTACK_INGEST_URL|WEB_NIC_GUARD_URL_KEY)='/"
+
+# ── 13c. PER-RESOURCE install-block pins for the two running-host synthetic installers. Sections 12/13 are satisfied by web-2 plus
+#         cloud-init alone, so web-1 (where the SSH block is the ONLY delivery) could lose the verdict lib, the enable line or the
+#         token's mode with every other suite green. Each block must: ship the four files to their exact destinations (one
+#         `provisioner "file"` each), hash all four into triggers_replace, chmod the script +x and the sourced lib 0644, lock the env
+#         file to 0600, enable the timer, and order itself after its host's journald_persistent. ──
+wbs_pin_bad() { # <tf-file> <resource> <depends_on target> -> space-joined labels of the pins that do not hold (empty == all hold)
+  local blk out="" pair f d
+  blk="$(res_block "$1" "$2")"
+  [[ -n "$blk" ]] || { echo "block-missing"; return; }
+  local pairs; pairs="$(awk '/provisioner "file" \{/ {f=1; src=""; dst=""} f && /source[[:space:]]*=/ {s=$0; sub(/^.*\$\{path\.module\}\//,"",s); sub(/".*$/,"",s); src=s} f && /destination[[:space:]]*=/ {d=$0; sub(/^[^"]*"/,"",d); sub(/".*$/,"",d); dst=d} f && /^  \}/ {print src "|" dst; f=0}' <<<"$blk")"
+  for pair in "web-bash-synthetic.sh|/usr/local/bin/web-bash-synthetic.sh" "sdk-bash-verdict.sh|/usr/local/bin/sdk-bash-verdict.sh" \
+              "web-bash-synthetic.service|/etc/systemd/system/web-bash-synthetic.service" "web-bash-synthetic.timer|/etc/systemd/system/web-bash-synthetic.timer"; do
+    [[ "$(grep -cxF -- "$pair" <<<"$pairs")" == 1 ]] || out="$out file:${pair%%|*}"
+  done
+  for f in web-bash-synthetic.sh web-bash-synthetic.service web-bash-synthetic.timer sdk-bash-verdict.sh; do
+    grep -qF "file(\"\${path.module}/$f\")," <<<"$blk" || out="$out trigger:$f"
+  done
+  grep -qF '"chmod +x /usr/local/bin/web-bash-synthetic.sh",' <<<"$blk" || out="$out chmod-x"
+  grep -qF '"chmod 0644 /usr/local/bin/sdk-bash-verdict.sh",' <<<"$blk" || out="$out chmod-lib"
+  grep -qF '"chmod 600 /etc/default/web-bash-synthetic",' <<<"$blk" || out="$out chmod-env"
+  grep -qF '"systemctl enable --now web-bash-synthetic.timer",' <<<"$blk" || out="$out enable"
+  grep -qE "^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[terraform_data\.$3\]" <<<"$blk" || out="$out depends_on"
+  printf '%s' "${out# }"
+}
+for r in "web_bash_synthetic_install journald_persistent" "web_bash_synthetic_install_web2 journald_persistent_web2"; do
+  set -- $r
+  got="$(wbs_pin_bad "$SRV" "$1" "$2")"
+  if [[ -z "$got" ]]; then ok "13c: terraform_data.$1 ships the four files, hashes them, chmods, enables the timer and orders after $2"; else no "13c: terraform_data.$1 install block lost a pin: $got"; fi
+done
+wbs_mut() { # <name> <resource> <depends> <expected-label> <sed-expr limited to the resource block>
+  local m="$PAR_SCR/wbs.mut" got
+  sed -E "/^resource \"terraform_data\" \"$2\" \{/,/^\}/ $5" "$SRV" > "$m"
+  if cmp -s "$SRV" "$m"; then no "13c mutation: $1 — did not land"; return; fi
+  got="$(wbs_pin_bad "$m" "$2" "$3")"
+  if [[ " $got " == *" $4 "* ]]; then ok "13c mutation: $1 is caught as '$4'"; else no "13c mutation: $1 SURVIVED (got '${got:-green}', wanted '$4')"; fi
+}
+wbs_mut "web-1 stops shipping the verdict lib" web_bash_synthetic_install journald_persistent file:sdk-bash-verdict.sh 's#(source[[:space:]]*=[[:space:]]*"\$\{path\.module\}/)sdk-bash-verdict\.sh"#\1sdk-bash-verdict-moved.sh"#'
+wbs_mut "web-1 drops the lib from triggers_replace" web_bash_synthetic_install journald_persistent trigger:sdk-bash-verdict.sh 's#^[[:space:]]*file\("\$\{path\.module\}/sdk-bash-verdict\.sh"\),$#    "x",#'
+wbs_mut "web-1 drops the lib chmod" web_bash_synthetic_install journald_persistent chmod-lib 's#chmod 0644 /usr/local/bin/sdk-bash-verdict\.sh#true#'
+wbs_mut "web-1 drops the timer enable" web_bash_synthetic_install journald_persistent enable 's#systemctl enable --now web-bash-synthetic\.timer#systemctl list-timers#'
+wbs_mut "web-1 drops the journald ordering" web_bash_synthetic_install journald_persistent depends_on 's#depends_on = \[terraform_data\.journald_persistent\]#depends_on = []#'
+wbs_mut "web-1 drops the env file chmod 600" web_bash_synthetic_install journald_persistent chmod-env 's#chmod 600 /etc/default/web-bash-synthetic#chmod 644 /etc/default/web-bash-synthetic#'
+wbs_mut "web-2 stops shipping the verdict lib" web_bash_synthetic_install_web2 journald_persistent_web2 file:sdk-bash-verdict.sh 's#(destination[[:space:]]*=[[:space:]]*")/usr/local/bin/sdk-bash-verdict\.sh"#\1/tmp/sdk-bash-verdict.sh"#'
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # #6931 PART 3 — guest-side fresh-boot LUKS (ADR-263). A fresh cattle host never receives web-1's SSH
@@ -492,7 +588,7 @@ mut_ddir "the provisioner's detail dir default drifted" prov 's#(DETAIL_DIR=.*)/
 mut_ddir "ONE emitter's detail dir default drifted" boot '0,/DDIR="\$\{SOLEUR_STAGE_DETAIL_DIR:-\/run\/soleur-stage-detail\.d\}"/s##DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail2.d}"#'
 
 # ── Anti-vacuity: an exact assertion count (deleting sections 14-21 leaves a lower one) ──
-EXPECTED_ASSERTIONS=186  # 166 + 20 for the runtime Bash synthetic joining the probe lists (#10455 b): 2 scripts, 2 units, 1 dest, 2 retained provisioners
+EXPECTED_ASSERTIONS=199  # 166 + 20 for the runtime Bash synthetic joining the probe lists (#10455 b): 2 scripts, 2 units, 1 dest, 2 retained provisioners; + 13 for the #10697 fix round: 13b (web-2 derivation + 3 mutations), 13c (2 per-resource pins + 7 mutations)
 if [[ "$((pass + fail))" -ne "$EXPECTED_ASSERTIONS" ]]; then no "floor: ran $((pass + fail)) assertions, expected exactly $EXPECTED_ASSERTIONS (a section was deleted or added without moving the floor)"; fi
 
 echo "=== fresh-boot-parity: $pass passed, $fail failed ==="

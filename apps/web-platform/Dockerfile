@@ -37,10 +37,11 @@ RUN bash scripts/assert-dev-signin-eliminated.sh
 RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
 RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
-# Runtime Bash synthetic (ADR-079 addendum 2026-10-20): a thin bundle of the dispatcher's own flag resolver, so
+# Runtime Bash synthetic (ADR-079 "Addendum — 2026-10-22 (#10455 b)"): a thin bundle of the dispatcher's own flag read, so
 # web-bash-synthetic.sh can ask "which seccomp artifact would a no-egress session get right now" through the SAME code path
-# production uses (fails closed to `base`, memoised) instead of the env mirror. node_modules stays external (all prod deps),
-# so the bundle is ~26 kB of app code. An image that predates it is `no_ping reason=probe_absent`, never a `fail`.
+# production uses (the Flagsmith identity read, never the env mirror: when Flagsmith does not answer the CLI prints `unresolved` and the
+# synthetic skips the run). node_modules stays external (all prod deps), so the bundle is ~26 kB of app code. An image that predates
+# it is `no_ping reason=probe_absent`, never a `fail`. test/resolve-sandbox-selector.test.ts builds it with THIS line and runs it.
 RUN ./node_modules/.bin/esbuild server/resolve-sandbox-selector-cli.ts --bundle --format=esm --platform=node --target=node22 --packages=external --outfile=infra/lib/resolve-sandbox-selector.mjs
 
 # Stage 3: Global CLI tools (the three `npm install -g` layers the runner needs).

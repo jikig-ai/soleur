@@ -1407,8 +1407,8 @@ jobs:
         # POST-GATE CEILING (#7657 D3). The ARM step got a ceiling and the LAST-CHANCE ROLLBACK did
         # not, and the correlation is adversarial: the state file is non-empty precisely when the
         # ARM step was cut, i.e. exactly when the least job budget remains. 3 min covers the whole
-        # post-gate budget the job's ladder reserves — six re-PATCHes at `--max-time 15` (90 s) plus
-        # the `timeout 30` mint — with 60 s of slack.
+        # post-gate budget the ladder reserves for the sweep — eight re-PATCHes at `--max-time 15` (120 s) plus
+        # the `timeout 30` mint, with 30 s of slack (full derivation: the rationale runbook's 2026-10-22 addendum).
         timeout-minutes: 3
         env:
           # See the ARM step: DOPPLER_TOKEN, not `--token` on argv (#7661 G11).
@@ -4998,9 +4998,9 @@ jobs:
           # path inngest-host, and the difference is the fan-out. The birth gate above proves
           # the plan is the exact scoped birth; it cannot prove the create is FEASIBLE.
           # terraform creates this host's dependencies FIRST — the workspaces volume and the
-          # two Better Stack heartbeats — and only then the server. So a server_type with no
+          # per-host Better Stack heartbeats — and only then the server. So a server_type with no
           # stock in the target DC does not fail cleanly here: it strands a 20 GB volume
-          # attached to nothing, plus two heartbeat resources for a host that will never
+          # attached to nothing, plus the heartbeat resources for a host that will never
           # exist. That is not "recoverable, not a strand" (the inngest-host reasoning, which
           # holds for a host with no such fan-out) — it is billed debris and a dirty state
           # slot, caught by a gate we already own and can run in 2 seconds.
@@ -5016,7 +5016,7 @@ jobs:
           # the right reason.
           #
           # KNOWN GAP (not fixed here): the same fact means a SUCCESSFUL birth also leaves the
-          # new host's two heartbeats paused, so it has no active heartbeat coverage until a
+          # new host's heartbeats paused, so it has no active heartbeat coverage until a
           # later merge-to-main apply arms them. The Dispatch summary says so explicitly.
           #
           # HCLOUD_TOKEN: this step's env: is DOPPLER_TOKEN only and the sourced gate runs
@@ -5120,9 +5120,9 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            echo "Purely additive +create of the host's ten-address fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
+            echo "Purely additive +create of the host's birth fan-out on a digest-pinned image. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
-            echo "**This host has NO active heartbeat coverage yet.** Its two Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
+            echo "**This host has NO active heartbeat coverage yet.** Its Better Stack heartbeats were REGISTERED by this dispatch but are \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured). The arming step lives in the \`apply\` job, so coverage begins at the next merge-to-main infra apply. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6969 (ADR-148): the web-host REPLACE path -------------------------------
@@ -5537,7 +5537,7 @@ jobs:
             echo ""
             echo "Scoped \`-replace\` of the host plus its private NIC, its workspaces volume attachment and the fleet firewall re-attachment, on a digest-pinned image. The workspaces volume, the LUKS volume and the LUKS passphrase were all kept OUT of the \`-target\` set. The workspaces volume is still in the plan graph as a no-op (\`-target\` prunes dependents, not dependencies) and is held by \`prevent_destroy\` plus two gate arms; the LUKS volume and passphrase are outside the graph entirely. A green apply is not a green boot — see the fresh-host Sentry pointer above for the last-reached boot stage."
             echo ""
-            echo "**This host's heartbeat coverage is unchanged by this dispatch.** Its two Better Stack heartbeats already exist and are not in this job's \`-target\` set; if they are still \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured), the arming step lives in the \`apply\` job. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
+            echo "**This host's heartbeat coverage is unchanged by this dispatch.** Its Better Stack heartbeats already exist and are not in this job's \`-target\` set; if they are still \`paused\` (web-probe.tf ships \`paused = true\` + \`ignore_changes = [paused]\`; ADR-117 arms a heartbeat only after a real beat is measured), the arming step lives in the \`apply\` job. To arm now: \`gh workflow run apply-web-platform-infra.yml -f apply_target=manual-rerun -f reason='arm ${WEB_HOST_KEY:-?} heartbeats'\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --- #6767: read-only retrospective entrypoint drift AUDIT --------------------

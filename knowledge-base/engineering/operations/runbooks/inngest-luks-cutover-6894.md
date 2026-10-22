@@ -360,8 +360,8 @@ Order matters. The merge's own apply delivers the protection, so the read-back i
 2. **Find the merge run and wait for it.**
    `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --json databaseId,status,conclusion`.
    An empty list right after the merge is retried (every 30 seconds, up to 10 minutes), not read as "no run". Watch the run
-   id under Monitor (`gh run watch <id>`; never background polling), bounded to about 50 minutes (the apply job takes up to
-   41 minutes, plus queueing behind the shared concurrency group). Conclusion `success` is read back. Any other
+   id under Monitor (`gh run watch <id>`; never background polling), bounded to about 65 minutes (the apply job takes up to
+   53 minutes, plus queueing behind the shared concurrency group; keep the bound above that ceiling). Conclusion `success` is read back. Any other
    conclusion (`cancelled`, `timed_out`, `startup_failure`, `skipped`, `failure`) and "no run within the bound" mean **not
    delivered or superseded**: read back anyway. A merge-SHA run can be `cancelled` by the shared concurrency group when a
    later merge supersedes it and still have delivered the update; the read-back is the arbiter, not the conclusion.
@@ -413,7 +413,7 @@ file and, when drift is found, to the body or a comment of the open `infra-drift
   the volume).
 - **After any dispatch**, note the newest run id before dispatching, then get the new one with
   `gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch --limit 1 --json databaseId,status`
-  (an empty or unchanged id is stale: retry). Watch it under Monitor (`gh run watch <id>`), bounded to about 50 minutes,
+  (an empty or unchanged id is stale: retry). Watch it under Monitor (`gh run watch <id>`), bounded to about 65 minutes (above the apply job's 53-minute ceiling),
   then run the read-back. Outcomes: `success` is read back; `cancelled`, `timed_out`, `startup_failure`, `skipped` or no
   run within the bound is **not delivered or superseded**: read back anyway, and if the read says `not-protected`,
   recommend the dispatch again (owner go-ahead).

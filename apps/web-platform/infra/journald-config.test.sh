@@ -279,7 +279,7 @@ assert "P3-6 the journal dir is created BEFORE vector.service is restarted (orde
 # not the whole file — a name relocated into a comment / exclude / other sink would defeat a file-wide
 # grep while breaking Source-4 delivery (test-design + pattern review).
 HSJ="$(awk '/^\[sources\.host_scripts_journald\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
-assert "Source 4 (host_scripts_journald) include list carries all 3 probe SyslogIdentifiers" \
+assert "Source 4 (host_scripts_journald) include list carries the zot-consumer, git-data and nic-guard probe SyslogIdentifiers (the inngest probe and the synthetic have their own rows)" \
   "grep -q 'web-zot-consumer-probe' <<<\"\$HSJ\" && grep -q 'web-git-data-probe' <<<\"\$HSJ\" && grep -q 'web-nic-guard' <<<\"\$HSJ\""
 
 # --- #10455 b: the runtime Bash synthetic's tag, on BOTH sides of the join, and in all three vector.toml arrays ---

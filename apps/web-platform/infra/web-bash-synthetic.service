@@ -20,10 +20,18 @@ SyslogIdentifier=web-bash-synthetic
 # exports NOTHING (#9639): the URL is a credential, and a wrapper that expanded it would print it under a traced launch before
 # the script could refuse. doppler-injection-bound.test.sh rejects an indirect expansion in the Exec directives of a doppler-run unit.
 EnvironmentFile=/etc/default/web-bash-synthetic
-# The consecutive-no_ping counter must survive between oneshot runs; /run is tmpfs, so a reboot resets it (intended).
+# The consecutive-no_ping counter must survive between oneshot runs; /run is tmpfs, so a reboot resets it (intended). The directory
+# also holds docker's captured stderr (the resolver runs in the container's full env), so it is root-only: 0700 and umask 077.
 RuntimeDirectory=web-bash-synthetic
+RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
-# Worst case is about 4 minutes (pre-exec 20 + resolver 30 + probe 150 + stats/inspect), well inside the 15 minute cadence. A
-# run that exceeds this is killed and sends no ping, which the heartbeat's grace turns into an incident.
-TimeoutStartSec=330
-ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/web-bash-synthetic.sh'
+UMask=0077
+# The caps inside the script add up to about 325 s (inspect 20 x 2, stats 30 x 2, pre-exec 20, resolver 30, probe 150 + 5, two
+# 10 s pings with one retry), plus up to about 55 s for `doppler run` (--attempts 5, --timeout 10s) before the script starts:
+# well inside the 15 minute cadence. A run that exceeds this is killed and sends no ping, which the heartbeat's grace turns into an
+# incident. web-bash-synthetic.test.sh asserts this stays above the script's own sum of caps.
+TimeoutStartSec=420
+# `bash -p` (privileged mode): the script is root with the whole prd root in its environment, and -p makes bash ignore BASH_ENV,
+# ENV, SHELLOPTS and exported functions, so a stray secret of that name cannot run code before the script's first line.
+# Only ExecStart: no ExecStartPre/Post, ExecStop*, OnFailure or OnSuccess may ping or run anything else (asserted by the test).
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /bin/bash -p /usr/local/bin/web-bash-synthetic.sh'

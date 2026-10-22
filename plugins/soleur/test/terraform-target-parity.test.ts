@@ -92,7 +92,8 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // Exact again: grep -cE '^\s*test\(' = 276.
 // 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
 // 279 -> 286 (#10175, +7): the rotate's store-never-written gate describe (real-tree pins, the wiring mutation battery, the no-other-flag-writer scan, the flag-seam credential enumeration, the census pin, and the two executed-step tests). The 2 rows of slack above are unchanged (declared 288).
-const TEST_FLOOR = 296;
+// 296 -> 297 (#10697 fix round, +1): the web_bash_synthetic beat's period/grace/alerting-attribute pins and the URL-secret name tie.
+const TEST_FLOOR = 297;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -6911,6 +6912,42 @@ describe("the ARM gate's deadlines fit its job", () => {
     ]);
   });
 
+  test("the `web_bash_synthetic` beat pins period 900 / grace 1800 and mirrors the nic-guard sibling's alerting attributes, and its URL secret is the name both env writers emit", () => {
+    // testdesign 8 / 7: the ARM test only asserts `deadline <= window - reserve`, which holds for ANY grace >= 0 and any email flag, so
+    // `email = false` (with `policy_id = null` on the free tier nobody is told the detector died), `grace = 60` or `period = 3600`
+    // all stayed green. And a renamed `doppler_secret` leaves the env files naming a key that no secret carries.
+    const tf = stripComments(readFileSync(join(INFRA_DIR, "web-probe.tf"), "utf8"));
+    const block = (type: string, name: string): string => {
+      const m = new RegExp(`resource\\s+"${type}"\\s+"${name}"\\s*\\{([\\s\\S]*?)\\n\\}`).exec(tf);
+      if (!m) throw new Error(`web-probe.tf has no resource ${type}.${name}`);
+      return m[1];
+    };
+    const attrs = (b: string): Record<string, string> =>
+      Object.fromEntries([...b.matchAll(/^\s{2}([a-z_]+)\s*=\s*(.+?)\s*$/gm)].map((m) => [m[1], m[2]]));
+    const wbs = attrs(block("betteruptime_heartbeat", "web_bash_synthetic"));
+    const nic = attrs(block("betteruptime_heartbeat", "web_nic_guard"));
+    expect(wbs.period).toBe("900");
+    expect(wbs.grace).toBe("1800");
+    // Non-vacuity: the sibling really carries the alerting attributes being compared (an empty parse would equal an empty parse).
+    expect(nic.email).toBe("true");
+    expect(Object.keys(nic).length).toBeGreaterThanOrEqual(10);
+    for (const k of ["for_each", "call", "sms", "email", "push", "team_wait", "team_name", "policy_id", "paused"]) {
+      expect(`${k}=${wbs[k]}`).toBe(`${k}=${nic[k]}`);
+    }
+    const secret = attrs(block("doppler_secret", "web_bash_synthetic_url"));
+    expect(secret.name).toBe('"WEB_BASH_SYNTHETIC_URL_${upper(replace(each.key, "-", "_"))}"');
+    expect(secret.visibility).toBe('"masked"');
+    expect(secret.value).toBe("betteruptime_heartbeat.web_bash_synthetic[each.key].url");
+    // …and both env writers emit that same name for a host: the baked one from the upper-cased host key, the SSH one from `upper(replace(...))`.
+    const envwrite = readFileSync(join(INFRA_DIR, "web-probe-envwrite.sh"), "utf8");
+    expect(envwrite).toContain('"WEB_BASH_SYNTHETIC_URL_${HOST_UPPER}"');
+    expect(envwrite).toMatch(/^HOST_UPPER="\$\(printf '%s' "\$SOLEUR_HOST_KEY" \| tr 'a-z-' 'A-Z_'\)"$/m);
+    const server = stripComments(readFileSync(join(INFRA_DIR, "server.tf"), "utf8"));
+    for (const host of ["web-1", "web-2"]) {
+      expect(server).toContain(`'WEB_BASH_SYNTHETIC_URL_\${upper(replace("${host}", "-", "_"))}'`);
+    }
+  });
+
   test("the workflow's own ladder arithmetic matches the derived numbers", () => {
     // #7661 G7: 1660/1860/2100 appeared in three comments and were pinned by nothing, so the
     // inequality guard stayed green on the exact edit that made the prose wrong. Every literal the
@@ -7102,10 +7139,11 @@ describe("Guard 2 mutation battery (#7587)", () => {
     expect(v[0]).toContain("worst-case script wall clock");
   });
 
-  test("M3b RED: a SEVENTH call site with a TINY deadline still reds — the overhead is per site", () => {
+  test("M3b RED: one call site more than ships (a NINTH) with a TINY deadline still reds — the overhead is per site", () => {
     // This is the row `Σ × 1.1` could not carry: a multiplier on the deadline sum grows with the
-    // deadlines, while the real overhead grows with the number of call sites. Six 15 s round-trips
-    // and a poll interval cost 70 s whether the deadline is 440 or 1.
+    // deadlines, while the real overhead grows with the number of call sites. Five 15 s round-trips
+    // (three unconditional plus two rollback attempts) and a poll interval cost 85 s whether the
+    // deadline is 440 or 1.
     const clean = ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, T);
     expect(clean).toEqual([]);
     const headroom = STEP_S - (REAL_DEADLINES.reduce((a, b) => a + b, 0) + REAL_DEADLINES.length * perSiteOverheadS(T));
