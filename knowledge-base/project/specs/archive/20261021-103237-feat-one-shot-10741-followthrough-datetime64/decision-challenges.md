@@ -1,0 +1,7 @@
+# Decision Challenges — feat-one-shot-10741-followthrough-datetime64
+
+| Item | Class | Ruling |
+|---|---|---|
+| Absence-query fix mechanism: `toDateTime64('${first_marker_dt}', 6)` vs bash fraction-strip (`${first_marker_dt%%.*}`) vs `parseDateTime64BestEffort` | technical | Ruled by CTO agent, 2026-10-21: `toDateTime64` - preserves the sub-second absence floor so a pre-marker row in the same second cannot false-FAIL, and strict parse fails loud (exit 2) on unexpected literal shapes. Dissent: fraction-strip loses on dominance regardless of the same-second census, which could not run without Better Stack creds |
+| Timezone argument on `toDateTime64`: implicit (2-arg) vs explicit `'UTC'` (3-arg, matching the column's `DateTime64(6,'UTC')` decl) | technical | Ruled by CTO agent, 2026-10-21: 3-arg explicit 'UTC' - both prior naive-literal parse sites pin 'UTC' (registry-clientip-alert-7530.sh:473, inngest-provision-rehearsal-capture.sh:211,501) and the session TZ is only measured, not contracted; a silent boundary shift misgrades the soak. Dissent: aligning probe:151 SINCE_SQL to 'UTC' noted as optional follow-up, out of scope |
+| Brand-survival threshold `none` | operator (brand) | Ruled by CTO agent, 2026-10-21: none is correct - probe is read-only (SELECT aggregates + exit code to an internal tracker comment); no user data path, credential scope, or payment/auth surface. Dissent: residual false-PASS-to-close chain is pre-existing telemetry quality from PR 10577, not a property of this diff |
