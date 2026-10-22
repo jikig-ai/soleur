@@ -50,6 +50,16 @@ grok            # interactive session
 
 Use `/go <what you want to do>` (Grok's bare entry name), not `/soleur:go`. If `grok inspect` does not list Soleur, stop — there is no `grok plugin install` command to fall back on today, so install is done by pointing Grok at this repository (`.grok/config.toml`, merged via the project plugin loader) rather than a marketplace command. Full setup — subagent spawning, trust, and command naming — is in the [Grok Build onboarding guide](knowledge-base/engineering/grok-onboarding.md).
 
+**OpenCode:**
+
+From the repository root (this needs `bun`), install Soleur into your OpenCode config directory, then start a session. Keep this checkout where it is — the installed config points at it for skills, routing rules, and the guard scripts:
+
+```bash
+bun plugins/soleur/scripts/install-opencode-adapter.ts
+```
+
+Verify the install with `bun plugins/soleur/scripts/install-opencode-adapter.ts --check` — it prints `opencode-install ok` when the generated tree matches. Use `/go <what you want to do>`. Commands are bare (`/go`, `/sync`, `/help`) and skills are invoked by bare id (`plan`, not `soleur:plan`), because OpenCode has no `soleur:` namespace. Two guards decide shell commands on OpenCode, and both run for real — a `deny` blocks the call, an `ask` opens a prompt — but they decide shell calls only: actions taken through OpenCode's code-mode `execute` are not covered. Soleur's operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline's `<promise>DONE</promise>` completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. `/version` is installed but reports an unknown version, because the canonical command resolves the plugin through `CLAUDE_PLUGIN_ROOT`, which this harness does not set. Full routing rules and the remaining capability differences: [OpenCode instructions](plugins/soleur/opencode/INSTRUCTIONS.md).
+
 **Claude Code (recommended, via the published marketplace):**
 
 ```bash
@@ -201,17 +211,17 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
 | `/soleur:version` | Show the installed plugin version and whether a newer release exists (Claude Code only) |
 
-Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`.
+Claude Code: `/soleur:go`. Grok Build: `/go`. Codex: `$soleur:go`. Devin CLI: `/soleur:go`. OpenCode: `/go`.
 
-| Step | Claude Code | Grok Build | Codex | Devin CLI |
-|------|-------------|------------|-------|-----------|
-| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` |
-| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` |
-| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` |
-| Version | `/soleur:version` (Claude Code only) | not available | not available | not available |
-| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` |
+| Step | Claude Code | Grok Build | Codex | Devin CLI | OpenCode |
+|------|-------------|------------|-------|-----------|----------|
+| Entry | `/soleur:go` | `/go` | `$soleur:go` | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` | `$soleur:sync` | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/local:help` | `$soleur:help` | `/soleur:help` | `/help` |
+| Version | `/soleur:version` (Claude Code only) | not available | not available | not available | `/version` (reports unknown) |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) | Load `$soleur:<skill>`, or read `SKILL.md` | Slash `/soleur:<skill>` | `skill` tool, bare id (`plan`) |
 
-Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](knowledge-base/engineering/grok-onboarding.md) · [Codex](knowledge-base/engineering/codex-onboarding.md) · [Devin](plugins/soleur/devin/INSTRUCTIONS.md).
+Per-harness setup guides: [Claude Code](https://code.claude.com/docs/en/plugins) · [Grok Build](knowledge-base/engineering/grok-onboarding.md) · [Codex](knowledge-base/engineering/codex-onboarding.md) · [Devin](plugins/soleur/devin/INSTRUCTIONS.md) · [OpenCode](plugins/soleur/opencode/INSTRUCTIONS.md).
 
 ### Workflow Skills
 
