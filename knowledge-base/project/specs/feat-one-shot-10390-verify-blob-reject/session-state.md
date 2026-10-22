@@ -27,3 +27,6 @@
 - Open PRs linked to #10390: #10744 (verification-scaffold guardrails — no file overlap), #10742 (followthrough DateTime64 — no file overlap). Disjoint scope; continuing.
 - Anchor probe: no open PR touches cloud-init-inngest.yml / cosign-trusted-root.json / inngest-config-drift.yml / diagnose-inngest-verify.yml.
 - pr-overlap-preflight.sh --mode start: exit 2 twice (jq Argument list too long) — NOT checked; continuing per contract with disclosure.
+
+## Rulings
+- cto_spawns=1 (batched, 7 rows; all assumed defaults affirmed)
