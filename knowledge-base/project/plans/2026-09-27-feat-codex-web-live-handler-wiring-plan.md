@@ -60,6 +60,16 @@ This branch has no `spec.md` with a valid `lane:`; planning defaults to `cross-d
   client turn but cannot establish whether the provider accepted an ambiguous
   request.
 
+- **Terminal persistence outage:** if both the lifecycle append and attempt
+  transition fail while recording a failed or cancelled turn, the attempt can
+  remain non-terminal and appear stuck. The dispatcher reports each failed
+  persistence path to Sentry, attempts the fallback transition, and preserves
+  the original dispatch error; it cannot promise a terminal status while both
+  storage operations are unavailable. The regression asserts both reports and
+  preserves the original error. Recovery requires restoring persistence and
+  reconciling the attempt; this failure must not be described as a persisted
+  terminal result.
+
 - **If account erasure races with recovery checkpoint persistence:** a checkpoint could remain linked to a deleted user's run or be recreated after erasure. Migration `152_agent_engine_erasure_lock_order.sql` locks owned runs before deleting checkpoints and anonymizing run ownership; `rls-rpc.integration.test.ts` verifies erase-then-save is rejected and no checkpoint remains.
 - **If a DSAR query is scoped to the wrong run IDs:** another user's attempt status or checkpoint timestamp could enter the export. `exportSqlTable()` derives child-table IDs only from runs owned by the requester, and `dsar-export-cross-tenant.integration.test.ts` must assert attempt and checkpoint exports contain only the requester's synthetic run ID.
 
@@ -166,7 +176,7 @@ liveness_signal:
   configured_in: "apps/web-platform health route and agent-engine-observability.ts"
 error_reporting:
   destination: "Sentry web-platform and Inngest run status"
-  fail_loud: "denied egress, binding mismatch, unavailable credential and provider errors produce bounded error codes and terminal run status"
+  fail_loud: "denied egress, binding mismatch, unavailable credential and provider errors produce bounded error codes; terminal persistence failures are reported to Sentry, and a failed lifecycle append triggers an attempt-transition fallback"
 failure_modes:
   - mode: "wrong persisted engine or auth mode, revoked credential, or tenant mismatch"
     detection: "engine Sentry error and failed bound-run lifecycle"
@@ -176,6 +186,9 @@ failure_modes:
     alert_route: "web-platform engineering on call"
   - mode: "denied provider egress, replay/approval/usage failure"
     detection: "bounded engine observability event and Sentry capture"
+    alert_route: "web-platform engineering on call"
+  - mode: "lifecycle append and attempt-transition fallback both fail"
+    detection: "two content-free Sentry reports; the attempt may remain non-terminal until persistence is restored and it is reconciled"
     alert_route: "web-platform engineering on call"
   - mode: "Web text retention exceeds 32 items or 256 KiB UTF-8"
     detection: "failed attempt lifecycle and WebSocket handler error captured by Sentry; no text included in the limit error"
