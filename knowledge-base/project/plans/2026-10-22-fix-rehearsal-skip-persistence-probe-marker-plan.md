@@ -429,15 +429,15 @@ the fixture together passes the unit rows but cannot satisfy the live log check.
 
 ### Pre-merge (PR)
 
-- [ ] Phase 0 tests were observed RED for the right reason before Phase 1 (recorded in the PR body).
-- [ ] `bash apps/web-platform/infra/run-registered-suites.test.sh` passes, including T13 rows and the extended
+- [x] Phase 0 tests were observed RED for the right reason before Phase 1 (recorded in the PR body).
+- [x] `bash apps/web-platform/infra/run-registered-suites.test.sh` passes, including T13 rows and the extended
       T9 matrix with every new row reporting "killed by", and its floors raised and itemised.
-- [ ] `bash scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh` passes, including the end-to-end
-      `(k)` rows (skip -> exit 1, terminal only -> exit 0, neither -> exit 2) and the diagnostic case.
-- [ ] A relayed line never starts at column 0 and the runner's summary line is byte-identical and last
+- [x] `bash scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh` passes, including the end-to-end
+      `(k)` rows (skip -> exit 1, terminal only -> exit 0, neither -> exit 2) and the pre-fix-shape case.
+- [x] A relayed line never starts at column 0 and the runner's summary line is byte-identical and last
       (T6u/T6v unchanged and green).
-- [ ] `bash plugins/soleur/test/main-health-monitor-workflow.test.sh` still passes (public excerpt filter).
-- [ ] `bash plugins/soleur/test/c4-count-parity.test.sh` passes (no embedded cardinality moved).
+- [x] `bash plugins/soleur/test/main-health-monitor-workflow.test.sh` still passes (public excerpt filter).
+- [x] `bash plugins/soleur/test/c4-count-parity.test.sh` passes (no embedded cardinality moved).
 - [ ] ADR-252 carries the consequence note and ADR-188 records the repaired evidence path; PR body says the streak-cache defect is deferred and links its
       tracking issue.
 - [ ] PR body contains `Closes #10786`.
@@ -468,8 +468,8 @@ no user surface, no personal data).
 - Given a runner fixture where the mapped rehearsal suite prints a `SKIP (loud): T5 ...` stderr line and a
   terminal line, when the real runner runs and its stdout is fed to the probe, then the probe exits 1 (unit/integration).
 - Given only the terminal line, then the probe exits 0 with "across N observed" (integration).
-- Given neither line (the pre-fix production shape: only `PASS <path>`), then the probe exits 2 and its reason
-  says the suite ran but its terminal line is absent, not "did not run" (integration).
+- Given neither line (the pre-fix production shape: only `PASS <path>`), then the probe exits 2 (integration).
+  (The reason-text diagnostic this scenario once asked for was cut at plan review; the exit code is the contract.)
 - Given a clean fixture suite with no evidence lines, the runner emits no `SOLEUR|` line (T6u regression, unit).
 - Given a suite printing 200 `SKIP (loud):` lines, the relay emits exactly 50 (unit).
 - Given a RED suite that printed a skip line early, the line appears relayed once (unit).
