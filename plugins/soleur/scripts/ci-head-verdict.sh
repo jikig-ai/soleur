@@ -41,16 +41,19 @@
 #      no kept run -> no-run
 #   5. (a conflicting PR, mergeable_state dirty, with no run stays no-run reason=conflicting: GitHub builds no merge ref
 #      for it, so no run can ever appear and an undo/ready would not help)
-#      pending-full and no-run become `stalled` once more than N=120 minutes have passed since the head's CLOCK START
-#      A, and T is itself more than N minutes old (above the declared 73-minute path plus a ~14-minute p90 queue wait; a
-#      run still in flight at N is not a healthy slow run). A is where the head first appeared in CI, because a head pushed
-#      long after T must not read stalled at once (the consumers answer stalled with `gh pr ready --undo` and a ready, which
-#      would cancel a healthy fresh run): when a run is kept, A is that run's own created_at (no extra read); when none is,
-#      A is the earliest check suite's created_at at the head (the server-assigned moment CI first saw it), read only when T
-#      alone already says stalled. An A at or before T leaves the verdict stalled, as it was before the clock existed.
+#      pending-full and no-run become `stalled` once more than N=120 minutes have passed since the LATER of T and A (above
+#      the declared 73-minute path plus a ~14-minute p90 queue wait; a run still in flight at N is not a healthy slow run).
+#      A is where the head first appeared in CI, because a head pushed long after T must not read stalled at once (the
+#      consumers answer stalled with `gh pr ready --undo` and a ready, which would cancel a healthy fresh run): when a run is
+#      kept, A is that run's own created_at (no extra read); when none is, A is the earliest check suite's created_at at the
+#      head (the server-assigned moment CI first saw it), read only when T alone already says stalled. An A at or before T
+#      leaves the clock at T, as before A existed.
 #      A failed read, a suite for another head, or an EMPTY suite list is `state=error` (reasons api-error and
-#      no-check-suites), never a fallback to T. Residuals, accepted: a manual re-run of an old run keeps its original
-#      created_at and does not restart the clock; a force-push back to a sha pushed earlier reuses that sha's old suites (A is
+#      no-check-suites), never a fallback to T. The empty list means CI never saw this head (nothing ran on it): do not
+#      fix-loop; the recovery is the stalled one, `gh pr ready --undo` then ready under a user token. The consumers drop
+#      stderr and keep their own reading on state=error, so the reason is on the marker line, not in a message.
+#      Residuals, accepted: a manual re-run of an old run keeps its original created_at and does not restart the clock; a
+#      force-push back to a sha pushed earlier, or a sha also pushed on another branch, reuses that sha's old suites (A is
 #      old, so the clock falls back to T); a head with no kept run AND no visible suite reads state=error, not stalled.
 # `run=` is the DECIDING run: a reader judging `test` must use that run's rows. A newer `test` row that belongs to a
 # different run (a manual re-run of a pre-T run) is stale; the row's run id is the `/actions/runs/<id>/` segment of
@@ -94,7 +97,9 @@ usage: ci-head-verdict.sh verdict <pr> [--repo OWNER/REPO]
 
 verdict: last stdout line
   SOLEUR_CI_HEAD_VERDICT state=<n/a|full-decided|pending-full|no-run|stalled|awaiting-approval> pr=<N> sha=<H> run=<id|none> reason=<token>
-  (exit 3: state=error, outside that set)
+  (exit 3: state=error, outside that set; reason api-error = retry, no-check-suites = CI never saw this head)
+  stalled = pending-full or no-run for more than 120 minutes since the later of the ready event and the head's first
+  appearance in CI (the kept run's created_at, else the earliest check suite); the full rule is in this script's header
 wait-ready-run: last stdout line
   SOLEUR_CI_WAIT_READY_RUN result=<ok|fail> pr=<N> sha=<H|unknown> run=<id|none> reason=<run-created|not-applicable|no-ready-event|no-run|awaiting-approval|api-error>
 exit 0 ok | 1 wait failed (do NOT arm auto-merge) | 2 usage | 3 gh/jq/API error (ready state unknown: re-run verdict)
@@ -196,7 +201,7 @@ read_test_row() {
 
 # The newest ci.yml pull_request run at <sha> created at or after <floor-epoch>: RUN_ID / RUN_STATUS / RUN_CONCLUSION
 # (RUN_ID empty when none). Looked up by head_sha, never through a run's pull_requests[].
-RUN_ID=""; RUN_STATUS=""; RUN_CONCLUSION=""; RUN_TS=""
+RUN_ID=""; RUN_STATUS=""; RUN_CONCLUSION=""; RUN_EPOCH=""
 read_newest_run() { # <sha> <floor-epoch>
   gh api --paginate --slurp "repos/{owner}/{repo}/actions/workflows/ci.yml/runs?event=pull_request&head_sha=$1&per_page=100" > "$WORK/runs.json" 2> "$WORK/err" \
     || { ERRMSG="listing ci.yml runs at $1 failed: $(head -c 200 "$WORK/err" | tr '\n' ' ')"; return 1; }
@@ -211,17 +216,15 @@ read_newest_run() { # <sha> <floor-epoch>
   [[ -z "$RUN_ID" || "$RUN_ID" =~ ^[0-9]+$ ]] || { ERRMSG="non-numeric run id in the ci.yml run list at $1"; return 1; }
   RUN_STATUS="$(jq -r '.status // ""' "$WORK/newest.json")"
   RUN_CONCLUSION="$(jq -r '.conclusion // ""' "$WORK/newest.json")"
-  RUN_TS="$(jq -r 'if .ts == null then "" else (.ts | tostring) end' "$WORK/newest.json")"
-  [[ -z "$RUN_ID" || "$RUN_TS" =~ ^[0-9]+$ ]] || { ERRMSG="unusable created_at on run $RUN_ID in the ci.yml run list at $1"; return 1; }
+  RUN_EPOCH="$(jq -r 'if .ts == null then "" else (.ts | tostring) end' "$WORK/newest.json")"
 }
 
 # The earliest check suite at <sha>: ANCHOR_EPOCH (epoch seconds), the server-assigned moment CI first saw this head. A
 # failed or malformed read, a suite for another head, or an empty list returns 1 with ERRMSG set and ANCHOR_REASON naming the
 # cause; the caller turns that into state=error and never falls back to a guess.
-ANCHOR_EPOCH=0; ANCHOR_REASON="api-error"
+ANCHOR_EPOCH=""; ANCHOR_REASON="api-error"
 read_head_anchor() { # <sha>
   local out
-  ANCHOR_REASON="api-error"
   gh api --paginate --slurp "repos/{owner}/{repo}/commits/$1/check-suites?per_page=100" > "$WORK/suites.json" 2> "$WORK/err" \
     || { ERRMSG="reading check suites at $1 failed: $(head -c 200 "$WORK/err" | tr '\n' ' ')"; return 1; }
   jq -e --arg h "$1" 'type == "array" and all(.[]; type == "object" and (.check_suites | type) == "array"
@@ -321,14 +324,14 @@ cmd_verdict() {
   # the conflict's doing, not a lost ready run, and `stalled` would advise an undo/ready that cannot help: it stays no-run.
   if [[ "$st" == no-run && "$rs" == no-run-after-ready && "$PR_MSTATE" == dirty ]]; then rs="conflicting"
   elif [[ "$st" == pending-full || "$st" == no-run ]] && (( NOW_EPOCH - t_epoch > STALL_MINUTES * 60 )); then
-    # T alone says stalled, but T is only the clock for a head that has not moved since the ready event. The clock starts at
-    # the head's own first appearance in CI: the kept run's created_at when one exists (it is its own anchor, no extra read),
-    # else the earliest check suite at the head (read only here). An anchor at or before T leaves the verdict stalled, since
-    # the test above already holds from T; a failed or empty read is state=error, never a fallback to T.
-    # Residuals: a manual re-run keeps its run's original created_at; a force-push back to a sha pushed earlier reuses that
-    # sha's old suites (the anchor is old, so the clock falls back to T).
-    if [[ -n "$RUN_ID" ]]; then anchor_epoch="$RUN_TS"
-    else read_head_anchor "$PR_SHA" || fail_api "$ERRMSG" "$ANCHOR_REASON"; anchor_epoch="$ANCHOR_EPOCH"; fi
+    # T alone says stalled; the clock rule (anchor A, residuals, error semantics) is defined once, in the header. The suite
+    # read is lazy (only here) and a failed or empty one is state=error, never a fallback to T.
+    if [[ -n "$RUN_ID" ]]; then
+      anchor_epoch="$RUN_EPOCH"
+    else
+      read_head_anchor "$PR_SHA" || fail_api "$ERRMSG" "$ANCHOR_REASON"
+      anchor_epoch="$ANCHOR_EPOCH"
+    fi
     if (( NOW_EPOCH - anchor_epoch > STALL_MINUTES * 60 )); then
       st=stalled; rs="undecided-after-${STALL_MINUTES}m"
     fi

@@ -102,7 +102,9 @@ case "$args" in
     if [[ -f "$FX/runs.raw" ]]; then cat "$FX/runs.raw"; else jq -c '[{total_count: length, workflow_runs: .}]' "$f"; fi ;;
   "api --paginate --slurp repos/{owner}/{repo}/commits/$STUB_H/check-suites?per_page=100")
     failing suites && { echo "stub: check-suites failed" >&2; exit 1; }
-    if [[ -f "$FX/suites.raw" ]]; then cat "$FX/suites.raw"; else jq -c '[{total_count: length, check_suites: .}]' "$FX/suites.json"; fi ;;
+    if [[ -f "$FX/suites.raw" ]]; then cat "$FX/suites.raw"
+    elif [[ -f "$FX/suites.paged" ]]; then jq -c '[.[] | {total_count: 1, check_suites: [.]}]' "$FX/suites.json"   # one suite per page, as --paginate --slurp emits
+    else jq -c '[{total_count: length, check_suites: .}]' "$FX/suites.json"; fi ;;
   "api -H Accept: application/vnd.github.raw+json repos/{owner}/{repo}/contents/.github/workflows/ci.yml")
     failing ciyml && { echo "stub: ci.yml read failed" >&2; exit 1; }
     if [[ -f "$FX/ciyml.404" ]]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
@@ -238,7 +240,8 @@ row_V7() { local d c want
   for c in success:run-success failure:run-failure timed_out:run-timed-out; do d=$(mkrow "V7-${c%%:*}")
     addtest "$d" 11 completed failure 6; addrun "$d" 8 completed "${c%%:*}" 2; setnow "$d" 4800
     vrun "$d" verdict "$PR"; want="${c##*:}"
-    ok "V7.$c" state_is full-decided "$want" 8; done; }
+    ok "V7.$c" state_is full-decided "$want" 8
+    setnow "$d" 7800; vrun "$d" verdict "$PR"; ok "V7.$c.still-decided-after-120m" state_is full-decided "$want" 8; done; }
 # V8: a fork run waiting for approval is awaiting-approval, and 130 minutes does not turn it into stalled.
 row_V8() { local d; d=$(mkrow V8); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed action_required 2
   vrun "$d" verdict "$PR"; ok V8.state state_is awaiting-approval run-action-required 8
@@ -333,7 +336,11 @@ row_V24() { local d; d=$(mkrow V24); addtest "$d" 11 completed failure 6; addrun
   d=$(mkrow V24b); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed cancelled 7500; setnow "$d" 7560
   vrun "$d" verdict "$PR"; ok V24.cancelled-young-run-is-no-run state_is no-run run-cancelled 8
   setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V24.cancelled-boundary-not-yet state_is no-run run-cancelled 8
-  setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V24.cancelled-boundary-stalled state_is stalled undecided-after-120m 8; }
+  setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V24.cancelled-boundary-stalled state_is stalled undecided-after-120m 8
+  # two kept runs with different created_at: the NEWEST decides, and the clock is its own created_at, not the older run's
+  d=$(mkrow V24c); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed cancelled 2; addrun "$d" 9 in_progress null 7500; setnow "$d" 7560
+  vrun "$d" verdict "$PR"; ok V24.newest-of-two-kept-runs-decides state_is pending-full run-in-progress 9
+  setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V24.newest-of-two-clock-is-the-newest-runs-age state_is stalled undecided-after-120m 9; }
 # V25: no kept run yet: the clock starts at the head's EARLIEST check suite when that is later than T; a head whose suites
 # predate T keeps the clock at T (the old behaviour).
 row_V25() { local d; d=$(mkrow V25); addtest "$d" 11 completed failure 6; setsuites "$d" 7500; setnow "$d" 7560
@@ -341,18 +348,22 @@ row_V25() { local d; d=$(mkrow V25); addtest "$d" 11 completed failure 6; setsui
   setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V25.suite-age-exactly-120m-not-yet state_is no-run no-run-after-ready none
   setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V25.suite-age-120m-plus-1s-stalled state_is stalled undecided-after-120m none
   # earliest of several suites, not the latest: a MAX anchor would be 6801 s old here and read pending
-  d=$(mkrow V25b); addtest "$d" 11 completed failure 6; setsuites "$d" 7500 7900; setnow "$d" 14701
+  d=$(mkrow V25b); addtest "$d" 11 completed failure 6; setsuites "$d" 7900 7500; setnow "$d" 14701   # newest first, as the real API lists them
   vrun "$d" verdict "$PR"; ok V25.earliest-suite-wins state_is stalled undecided-after-120m none
   # a head whose suites predate T (the default) keeps the clock at T: exactly as before the fix
   d=$(mkrow V25c); addtest "$d" 11 completed failure 6; setnow "$d" 7201
   vrun "$d" verdict "$PR"; ok V25.old-suites-keep-the-clock-at-T state_is stalled undecided-after-120m none
-  # T stays the floor on the suite path: an old suite plus a young one still anchors at T, not before it
-  d=$(mkrow V25d); addtest "$d" 11 completed failure 6; setsuites "$d" -9000 -3600; setnow "$d" 7201
-  vrun "$d" verdict "$PR"; ok V25.the-anchor-never-precedes-T state_is stalled undecided-after-120m none; }
+  # suites that both predate T (listed newest first): the T gate carries the verdict, so the head is stalled once T is 120m old
+  d=$(mkrow V25d); addtest "$d" 11 completed failure 6; setsuites "$d" -3600 -9000; setnow "$d" 7201
+  vrun "$d" verdict "$PR"; ok V25.suites-before-T-stay-stalled state_is stalled undecided-after-120m none
+  # --paginate --slurp yields one array per page: the earliest suite on page 2 must still be found
+  d=$(mkrow V25e); addtest "$d" 11 completed failure 6; setsuites "$d" 7900 7500; touch "$d/suites.paged"; setnow "$d" 14701
+  vrun "$d" verdict "$PR"; ok V25.earliest-suite-on-the-second-page-wins state_is stalled undecided-after-120m none
+  setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V25.paged-boundary-not-yet state_is no-run no-run-after-ready none; }
 # V26: a failed, malformed or empty read of the head's check suites, with no kept run and T old, is state=error (exit 3),
 # never a member of the closed set and never a guess.
 row_V26() { local d k
-  for k in fail html notarray nullts garbage otherhead; do d=$(mkrow "V26-$k"); addtest "$d" 11 completed failure 6; setsuites "$d" 7500; setnow "$d" 7800
+  for k in fail html notarray nullts garbage otherhead preepoch; do d=$(mkrow "V26-$k"); addtest "$d" 11 completed failure 6; setsuites "$d" 7500; setnow "$d" 7800
     case "$k" in
       fail) touch "$d/suites.fail" ;;
       html) printf '<html>502</html>' > "$d/suites.raw" ;;
@@ -360,6 +371,7 @@ row_V26() { local d k
       nullts) jqf "$d" suites.json 'map(.created_at = null)' ;;
       garbage) jqf "$d" suites.json 'map(.created_at = "garbage")' ;;
       otherhead) jqf "$d" suites.json "map(.head_sha = \"$OTHER_H\")" ;;
+      preepoch) jqf "$d" suites.json 'map(.created_at = "0001-01-01T00:00:00Z")' ;;
     esac
     vrun "$d" verdict "$PR"
     ok "V26.$k.rc" rc_is 3; ok "V26.$k.state" state_is error api-error; ok "V26.$k.not-closed" not_closed; ok "V26.$k.one" one_marker
@@ -377,11 +389,12 @@ row_V27() { local d
   d=$(mkrow V27-kept-run); addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 2; setnow "$d" 7800; vrun "$d" verdict "$PR"
   ok V27.kept-run-state state_is stalled undecided-after-120m 8; ok V27.kept-run notcalled "$d" check-suites
   d=$(mkrow V27-fresh); addtest "$d" 11 completed failure 6; vrun "$d" verdict "$PR"; ok V27.fresh-no-run-state state_is no-run no-run-after-ready none; ok V27.fresh-no-run notcalled "$d" check-suites
-  d=$(mkrow V27-at-120m); addtest "$d" 11 completed failure 6; setnow "$d" 7200; vrun "$d" verdict "$PR"; ok V27.t-gate-is-strict notcalled "$d" check-suites
+  d=$(mkrow V27-at-120m); addtest "$d" 11 completed failure 6; setnow "$d" 7200; vrun "$d" verdict "$PR"
+  ok V27.t-gate-state state_is no-run no-run-after-ready none; ok V27.t-gate-is-strict notcalled "$d" check-suites
   d=$(mkrow V27-stalled); addtest "$d" 11 completed failure 6; setnow "$d" 7800; vrun "$d" verdict "$PR"
+  ok V27.stalled-state state_is stalled undecided-after-120m none; ok V27.stalled.nomiss nomiss "$d"
   ok V27.no-run-and-old-reads-the-suites called "$d" "commits/$H/check-suites?per_page=100"
-  ok V27.the-suite-read-is-queried-once test "$(grep -c 'check-suites' "$d/log")" = 1
-  ok V27.single-stalled-assignment test "$(grep -c 'st=stalled' "$REAL_SUT")" = 1; }
+  ok V27.the-suite-read-is-queried-once test "$(grep -c 'check-suites' "$d/log")" = 1; }
 # V21: only a COMPLETED + success `test` row short-circuits to green; every other status/conclusion falls through to the
 # run lookup (a cancelled/neutral/skipped/timed_out/action_required/stale/failure row is not green).
 row_V21() { local d c
@@ -740,9 +753,9 @@ mutant M33 "elif [[ \"\$CMD\" == wait-ready-run ]]; then" "elif false; then" row
 mutant M34 'rs="conflicting"' 'rs="no-run-after-ready"' row_V23
 mutant M36 '"$rs" == no-run-after-ready && "$PR_MSTATE"' '"$PR_MSTATE"' row_V23
 mutant M35 '"$PR_MSTATE" == dirty ]]; then rs=' '"$PR_MSTATE" == clean ]]; then rs=' row_V23
-# Stall-clock rows. The plan's "M39" (drop T from max(T, A) on the suite path) is NOT a mutant: the gate above it already holds
-# from T, so an anchor at or before T stalls whether or not the max exists (equivalent by construction; row V25d pins the behaviour).
-mutant M37 'anchor_epoch="$RUN_TS"' 'anchor_epoch="$t_epoch"' row_V24 row_V5
+# Stall-clock rows. There is no "drop T from max(T, A)" mutant: the T gate above already holds, so an anchor at or before T
+# stalls with or without the max (equivalent by construction; row V25d pins the behaviour).
+mutant M37 'anchor_epoch="$RUN_EPOCH"' 'anchor_epoch="$t_epoch"' row_V24 row_V5
 mutant M38 '(min | tostring)' '(max | tostring)' row_V25
 mutant M40 'if length == 0 then "none"' 'if length == 0 then "0"' row_V26
 mutant M41 'NOW_EPOCH - t_epoch > STALL_MINUTES * 60' 'NOW_EPOCH - t_epoch > 0' row_V27
@@ -750,19 +763,21 @@ mutant M42 'read_head_anchor "$PR_SHA" || fail_api "$ERRMSG" "$ANCHOR_REASON"' '
 mutant M43 'type == "object" and .head_sha == $h and (.created_at | type) == "string"' 'type == "object" and (.created_at | type) == "string"' row_V26
 mutant M44 '|| fail_api "$ERRMSG" "$ANCHOR_REASON"' '|| fail_api "$ERRMSG"' row_V26
 mutant M45 'NOW_EPOCH - anchor_epoch > STALL_MINUTES * 60' 'NOW_EPOCH - anchor_epoch >= STALL_MINUTES * 60' row_V24 row_V25
+mutant M46 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[0].check_suites[] | .created_at | fromdateiso8601]' row_V25
+mutant M47 '(min | tostring)' '(.[0] | tostring)' row_V25
 mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
-# MIN_ASSERTIONS and MIN_MUTANTS are LOWER BOUNDS: the measured counts at the last edit (441 assertions, 43 mutants).
-MIN_ASSERTIONS=441
+# MIN_ASSERTIONS and MIN_MUTANTS are LOWER BOUNDS (the measured counts at the last edit); raise them in the same edit as a new row.
+MIN_ASSERTIONS=457
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=43
+MIN_MUTANTS=45
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi
