@@ -32,9 +32,9 @@ cwd), `--guards a,b` / `--all` (default: all v1 rows of [guards.tsv](references/
 | Guard | Surfaces | Emitted |
 |---|---|---|
 | `secret-scan` | hook + CI | `.claude/hooks/secret-scan.sh` (gitleaks staged scan), `.gitleaks.toml` (only when absent — a default-ruleset pointer, never overwrites a user's), the `secret-scan` job in `.github/workflows/verification-gates.yml` |
-| `commit-on-main` | hook | `.claude/hooks/commit-on-main.sh` → `scripts/verification/precommit-guard.sh` + `lib/wrapper-boundary.sh` (the near-verbatim canonical emit, default-branch set stamped) |
+| `commit-on-main` | hook | `.claude/hooks/commit-on-main.sh` → [scripts/verification/precommit-guard.sh](references/guards/precommit-guard.sh.template) + [lib/wrapper-boundary.sh](references/guards/wrapper-boundary.sh.template) (the near-verbatim canonical emit, default-branch set stamped) |
 | `block-stash` | hook | `.claude/hooks/block-stash.sh` (chain-boundary `git stash`; `list`/`show` are documented read-only exceptions) |
-| `orphan-test` | CI | `scripts/verification/orphan-test-check.sh` + the `orphan-test` job + `.github/verification-known-orphans.txt` (reason-required exclusion manifest, seeded with grandfathered rows) |
+| `orphan-test` | CI | [scripts/verification/orphan-test-check.sh](references/guards/orphan-test-check.sh.template) + the `orphan-test` job + `.github/verification-known-orphans.txt` (reason-required exclusion manifest, seeded with grandfathered rows) |
 
 Hooks are registered as `PreToolUse` `Bash` entries in `.claude/settings.json`
 (node-first, `jq` fallback — a repo with neither is refused with the dependency
