@@ -105,6 +105,8 @@ describe("Codex Web cumulative text", () => {
     const first = createTestMapper();
     first(text("codex:item:synthetic-item:delta:1", "First"));
     expect(first(text("synthetic-neutral-event", "Snapshot"))).toMatchObject({ content: "Snapshot" });
+    first({ runId: "synthetic-run", eventId: "synthetic-end", sequence: 2, payload: { type: "status", status: "completed" } });
+    expect(first.takeFinalSnapshot()).toMatchObject({ content: "First" });
     expect(createTestMapper()(text("codex:item:synthetic-item:delta:1", "Next"))).toMatchObject({ content: "Next" });
   });
 
@@ -162,21 +164,17 @@ describe("Codex Web cumulative text", () => {
     expect(map.takeFinalSnapshot()).toMatchObject({ type: "stream", content: answer, answerSnapshot: true });
   });
 
-  it("bounds unkeyed snapshots and flushes the final neutral answer", () => {
-    let now = 0;
-    const map = createCodexWebEventMapper(options, () => now);
+  it("bounds unkeyed text output without inferring snapshot semantics", () => {
+    const map = createCodexWebEventMapper(options, () => 0);
     const answer = "a".repeat(256 * 1024);
     for (let i = 0; i < 32; i++) {
       const frame = map(text("synthetic-neutral-event", answer));
       if (frame?.type !== "stream") throw new Error("expected neutral snapshot frame");
       expect(frame.content === answer).toBe(true);
-      now += 100;
     }
-    expect(map(text("synthetic-neutral-event", answer)) === undefined).toBe(true);
+    expect(() => map(text("synthetic-neutral-event", answer))).toThrow("codex_web_text_limit");
     expect(map({ runId: "synthetic-run", eventId: "synthetic-end", sequence: 34, payload: { type: "status", status: "completed" } })?.type).toBe("stream_end");
-    const finalSnapshot = map.takeFinalSnapshot();
-    if (finalSnapshot?.type !== "stream") throw new Error("expected final neutral snapshot");
-    expect(finalSnapshot.content === answer && finalSnapshot.answerSnapshot).toBe(true);
+    expect(map.takeFinalSnapshot()).toBeUndefined();
   });
 
   it("rejects an oversized unkeyed snapshot", () => {

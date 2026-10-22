@@ -19,7 +19,6 @@ export function createCodexWebEventMapper(
   let lastSnapshotAt = Number.NEGATIVE_INFINITY;
   let intermediateSnapshotsSuppressed = false;
   let finalSnapshot: WSMessage | undefined;
-  let neutralSnapshot: string | undefined;
   const encoder = new TextEncoder();
   const map = ((event: EngineEvent): WSMessage | undefined => {
     if (event.payload.type === "text") {
@@ -31,11 +30,6 @@ export function createCodexWebEventMapper(
       const snapshot = /^codex:item:(.+):message$/.exec(event.eventId);
       const itemId = delta?.[1] ?? snapshot?.[1];
       if (itemId) {
-        if (neutralSnapshot !== undefined) {
-          items.clear();
-          retainedBytes = 0;
-        }
-        neutralSnapshot = undefined;
         const previous = items.get(itemId);
         const contentBytes = encoder.encode(event.payload.text).byteLength;
         const nextBytes = delta && previous
@@ -70,31 +64,26 @@ export function createCodexWebEventMapper(
       if (contentBytes > 256 * 1024) {
         throw Object.assign(new Error("codex_web_text_limit"), { code: "codex_web_text_limit" });
       }
-      items.clear();
-      retainedBytes = contentBytes;
-      neutralSnapshot = event.payload.text;
-      if (intermediateSnapshotsSuppressed || now() - lastSnapshotAt < 100) return undefined;
-      if (intermediateSnapshotBytes + contentBytes > 8 * 1024 * 1024) {
-        intermediateSnapshotsSuppressed = true;
-        return undefined;
+      // Unkeyed text has no contractually defined delta/snapshot identity.
+      // Preserve its original pass-through behavior and fail visibly if its
+      // output would exceed the same bounded per-turn budget.
+      if (intermediateSnapshotsSuppressed || intermediateSnapshotBytes + contentBytes > 8 * 1024 * 1024) {
+        throw Object.assign(new Error("codex_web_text_limit"), { code: "codex_web_text_limit" });
       }
-      lastSnapshotAt = now();
       intermediateSnapshotBytes += contentBytes;
       return mapCodexEngineEventToWsMessage(event, options);
     }
-    if (event.payload.type === "status" && event.payload.status === "completed" && (items.size > 0 || neutralSnapshot !== undefined)) {
+    if (event.payload.type === "status" && event.payload.status === "completed" && items.size > 0) {
       finalSnapshot = mapCodexEngineEventToWsMessage({
         ...event,
-        payload: { type: "text", text: neutralSnapshot ?? [...items.values()].map((item) => item.chunks.join("")).join("\n\n") },
+        payload: { type: "text", text: [...items.values()].map((item) => item.chunks.join("")).join("\n\n") },
       }, options);
       items.clear();
       retainedBytes = 0;
-      neutralSnapshot = undefined;
     } else if (event.payload.type === "error" || (event.payload.type === "status"
       && ["cancelled", "failed"].includes(event.payload.status))) {
       items.clear();
       retainedBytes = 0;
-      neutralSnapshot = undefined;
     }
     return mapCodexEngineEventToWsMessage(event, options);
   }) as ((event: EngineEvent) => WSMessage | undefined) & { takeFinalSnapshot: () => WSMessage | undefined };
