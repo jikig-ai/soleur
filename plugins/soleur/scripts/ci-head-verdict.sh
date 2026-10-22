@@ -99,7 +99,7 @@ verdict: last stdout line
   SOLEUR_CI_HEAD_VERDICT state=<n/a|full-decided|pending-full|no-run|stalled|awaiting-approval> pr=<N> sha=<H> run=<id|none> reason=<token>
   (exit 3: state=error, outside that set; reason api-error = retry, no-check-suites = CI never saw this head)
   stalled = pending-full or no-run for more than 120 minutes since the later of the ready event and the head's first
-  appearance in CI (the kept run's created_at, else the earliest check suite); the full rule is in this script's header
+  appearance in CI (the kept run's created_at, else the earliest check suite; a conflicting PR stays no-run); the full rule is in this script's header
 wait-ready-run: last stdout line
   SOLEUR_CI_WAIT_READY_RUN result=<ok|fail> pr=<N> sha=<H|unknown> run=<id|none> reason=<run-created|not-applicable|no-ready-event|no-run|awaiting-approval|api-error>
 exit 0 ok | 1 wait failed (do NOT arm auto-merge) | 2 usage | 3 gh/jq/API error (ready state unknown: re-run verdict)
@@ -235,7 +235,7 @@ read_head_anchor() { # <sha>
     || { ERRMSG="unparseable created_at in the check-suites response at $1"; return 1; }
   if [[ "$out" == none ]]; then
     ANCHOR_REASON="no-check-suites"
-    ERRMSG="no check suites visible at $1; cannot place the stall clock (a head with no CI history is not judged stalled)"
+    ERRMSG="no check suites visible at $1; cannot place the stall clock (CI never saw this head: recover as for stalled, gh pr ready --undo then ready under a user token)"
     return 1
   fi
   [[ "$out" =~ ^[0-9]+$ ]] || { ERRMSG="unusable created_at in the check-suites response at $1"; return 1; }

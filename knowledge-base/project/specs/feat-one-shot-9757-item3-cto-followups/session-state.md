@@ -37,3 +37,7 @@ dedup: 45 raw -> 19 unique. structural-cause roll-up: none. Risk tier: none (sou
 | re-run keeps created_at (run_started_at) | architecture | wontfix: named residual, Actions-tab check before undo is the guard |
 | retry the suite read once before error | history | wontfix: CTO ruling forbids a fallback; the next poll resolves a transient |
 | ABSENT line wording in admin-merge-ready.sh | agent-native, quality | wontfix: test-pinned, still literally true |
+
+### Fix round 1 (since e1f662fa86; seats: code-quality, test-design, agent-native — 3 of 6 mapped, the three whose findings the fixes close; history, pattern, architecture not re-spawned, the fix diff changed no behaviour in their lenses)
+
+No P1. Closed inline: red-`test` reading note + trigger and the Actions-tab applicability in ready-run-wait.md (agent-native P2/P3), earliest-in-the-middle fixture for V25b/V25e and mutants M48/M49 (test-design P2: last-element and last-page survivors), ERRMSG and usage() wording (code-quality P3). Floors 459 assertions / 47 mutants.

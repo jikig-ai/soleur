@@ -348,7 +348,7 @@ row_V25() { local d; d=$(mkrow V25); addtest "$d" 11 completed failure 6; setsui
   setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V25.suite-age-exactly-120m-not-yet state_is no-run no-run-after-ready none
   setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V25.suite-age-120m-plus-1s-stalled state_is stalled undecided-after-120m none
   # earliest of several suites, not the latest: a MAX anchor would be 6801 s old here and read pending
-  d=$(mkrow V25b); addtest "$d" 11 completed failure 6; setsuites "$d" 7900 7500; setnow "$d" 14701   # newest first, as the real API lists them
+  d=$(mkrow V25b); addtest "$d" 11 completed failure 6; setsuites "$d" 7900 7500 7700; setnow "$d" 14701   # newest first as the real API lists them, earliest in the MIDDLE so first and last differ from min
   vrun "$d" verdict "$PR"; ok V25.earliest-suite-wins state_is stalled undecided-after-120m none
   # a head whose suites predate T (the default) keeps the clock at T: exactly as before the fix
   d=$(mkrow V25c); addtest "$d" 11 completed failure 6; setnow "$d" 7201
@@ -357,7 +357,7 @@ row_V25() { local d; d=$(mkrow V25); addtest "$d" 11 completed failure 6; setsui
   d=$(mkrow V25d); addtest "$d" 11 completed failure 6; setsuites "$d" -3600 -9000; setnow "$d" 7201
   vrun "$d" verdict "$PR"; ok V25.suites-before-T-stay-stalled state_is stalled undecided-after-120m none
   # --paginate --slurp yields one array per page: the earliest suite on page 2 must still be found
-  d=$(mkrow V25e); addtest "$d" 11 completed failure 6; setsuites "$d" 7900 7500; touch "$d/suites.paged"; setnow "$d" 14701
+  d=$(mkrow V25e); addtest "$d" 11 completed failure 6; setsuites "$d" 7900 7500 7700; touch "$d/suites.paged"; setnow "$d" 14701   # three pages, earliest on the middle one
   vrun "$d" verdict "$PR"; ok V25.earliest-suite-on-the-second-page-wins state_is stalled undecided-after-120m none
   setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V25.paged-boundary-not-yet state_is no-run no-run-after-ready none; }
 # V26: a failed, malformed or empty read of the head's check suites, with no kept run and T old, is state=error (exit 3),
@@ -765,19 +765,21 @@ mutant M44 '|| fail_api "$ERRMSG" "$ANCHOR_REASON"' '|| fail_api "$ERRMSG"' row_
 mutant M45 'NOW_EPOCH - anchor_epoch > STALL_MINUTES * 60' 'NOW_EPOCH - anchor_epoch >= STALL_MINUTES * 60' row_V24 row_V25
 mutant M46 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[0].check_suites[] | .created_at | fromdateiso8601]' row_V25
 mutant M47 '(min | tostring)' '(.[0] | tostring)' row_V25
+mutant M48 '(min | tostring)' '(.[-1] | tostring)' row_V25
+mutant M49 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[-1].check_suites[] | .created_at | fromdateiso8601]' row_V25
 mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
 # MIN_ASSERTIONS and MIN_MUTANTS are LOWER BOUNDS (the measured counts at the last edit); raise them in the same edit as a new row.
-MIN_ASSERTIONS=457
+MIN_ASSERTIONS=459
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=45
+MIN_MUTANTS=47
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi
