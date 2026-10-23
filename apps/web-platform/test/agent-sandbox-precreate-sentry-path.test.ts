@@ -3,7 +3,7 @@
 // mirrors `logger.error({ err })` to Sentry.captureException(err, { tags: { feature: "pino-mirror" } }) and Sentry drops the
 // second, tagged capture, so a rule filtering feature=agent-sandbox AND op=masked-dir-precreate could never match.
 // Here the logger and reportSilentFallback are REAL; only the Sentry SDK is replaced by spies.
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +91,14 @@ describe("masked-dir-precreate over the real logger and the real reportSilentFal
       code: /^ENOSPC$/,
     },
   ];
+
+  it("the three forced kinds are exactly the contract test's KINDS (the rule's closed dir_kind set): a fourth kind must be forced here too", () => {
+    const contract = readFileSync(join(__dirname, "sentry-masked-dir-precreate-alert-op-contract.test.ts"), "utf8");
+    const declared = /^const KINDS = (\[[^\]]+\]);/m.exec(contract);
+    expect(declared, "the contract test's KINDS declaration was not found").not.toBeNull();
+    expect(kinds.map((k) => k.kind).sort()).toEqual((JSON.parse(declared![1]) as string[]).sort());
+    expect(kinds).toHaveLength(3);
+  });
 
   for (const { kind, force, code } of kinds) {
     it(`a forced ${kind} failure is captured ONCE as a tagged message, with no pino-mirror exception beside it`, () => {
