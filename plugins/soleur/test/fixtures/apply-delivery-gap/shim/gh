@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# Synthesized `gh` shim for plugins/soleur/test/apply-delivery-gap-follower.test.sh.
+#
+# It sits on PATH as <state>/bin/gh and finds its state directory from its own location (<state>/bin/..).
+# It REFUSES (exit 64, one line in out/refusals.log) any request shape it was not written for: a fake that
+# answers every question identically would let a caller that queried the wrong thing read the right
+# fixture (learning 2026-09-25-gh-stub-must-mirror-real-cli-flags). The suite asserts the refusal log is
+# empty in every case.
+#
+# Reads served (the only ones the script may make):
+#   gh api repos/R/actions/workflows/<file>/runs?per_page=N&page=P   -> runs.<wf>[.p<P>][.r<n>].json
+#         <wf> is deploy-fix | infra. Page 1 is runs.<wf>.json, page P>1 is runs.<wf>.p<P>.json. A file
+#         runs.<wf>[.p<P>].r<n>.json is served from the n-th read of that page on (sticky), so a sequence
+#         of answers can be modelled. ANY other query parameter (status=, event=, branch=, created=) is refused.
+#   gh api repos/R/actions/runs/<id>/jobs?per_page=N                 -> jobs.<id>.json (jobs sliced to N, total_count kept)
+#   gh api repos/R/compare/<40hex>...<40hex>?per_page=1              -> compare.<S>.<R>.json
+#   gh issue list --author X --state open --limit N --json F         -> issues.json (author/state/limit/--json modelled)
+#   gh issue view N --json comments                                  -> issues.json
+# Writes served (state in issues.json is mutated, so a second reconcile sees the first one's work):
+#   gh label create / gh issue create / edit / close / comment
+# Every read is appended to out/reads.log and every write to out/actions.log. Bodies passed by --body-file
+# are copied to out/bodies/<n>.md.
+# A file lax-author makes `gh issue list` ignore --author (models a gh that matches the qualifier loosely), so a
+# foreign-authored issue reaches the script and its own identity filter is what must reject it.
+# Failure injection: a file fail.<K> holding `rc=`, `err=`, `out=` and `count=` lines makes the call with key K
+# (runs.<wf>.p<P>, jobs.<id>, compare.<S>.<R>, issue-list, issue-view, issue-create, issue-edit, issue-close,
+# issue-comment, label-create) fail; count=N fails only the first N calls.
+set -u
+bindir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+st="$(cd "$bindir/.." && pwd)"
+out="$st/out"
+mkdir -p "$out/bodies"
+
+refuse() { printf 'refused: %s\n' "$*" >>"$out/refusals.log"; printf 'shim: refusing %s\n' "$*" >&2; exit 64; }
+oneline() { local v="$1"; v="${v//$'\r'/\\r}"; printf '%s' "${v//$'\n'/\\n}"; }
+
+# inject <key>: honour fail.<key>
+inject() {
+  local k="$1" f="$st/fail.$1" rc=1 err="" body="" count="" n=0 line
+  [[ -f "$f" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      rc=*) rc="${line#rc=}" ;;
+      err=*) err="${line#err=}" ;;
+      out=*) body="${line#out=}" ;;
+      count=*) count="${line#count=}" ;;
+    esac
+  done <"$f"
+  [[ -f "$out/fail.$k.n" ]] && n="$(cat "$out/fail.$k.n")"
+  n=$((n + 1)); printf '%s' "$n" >"$out/fail.$k.n"
+  if [[ -n "$count" && "$n" -gt "$count" ]]; then return 0; fi
+  [[ -n "$body" ]] && printf '%s\n' "$body"
+  [[ -n "$err" ]] && printf '%s\n' "$err" >&2
+  exit "$rc"
+}
+
+seq_n() { # <key> -> increments and prints the call number
+  local k="$1" n=0
+  [[ -f "$out/cnt.$k" ]] && n="$(cat "$out/cnt.$k")"
+  n=$((n + 1)); printf '%s' "$n" >"$out/cnt.$k"; printf '%s' "$n"
+}
+
+copy_body() { # <path> -> prints the recorded relative name
+  local n; n="$(seq_n body)"
+  [[ -f "$1" ]] || refuse "body file $1 does not exist"
+  cp "$1" "$out/bodies/$n.md"; printf 'bodies/%s.md' "$n"
+}
+
+state_file="$st/issues.json"
+[[ -f "$state_file" ]] || printf '[]' >"$state_file"
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  api)
+    endpoint=""
+    while (($#)); do
+      case "$1" in
+        -*) refuse "gh api flag $1" ;;
+        *) [[ -z "$endpoint" ]] || refuse "second gh api endpoint $1"; endpoint="$1" ;;
+      esac
+      shift
+    done
+    printf '%s\n' "$endpoint" >>"$out/reads.log"
+    if [[ "$endpoint" =~ ^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/workflows/([a-z0-9.-]+\.yml)/runs\?per_page=([0-9]+)\&page=([0-9]+)$ ]]; then
+      file="${BASH_REMATCH[1]}" page="${BASH_REMATCH[3]}"
+      case "$file" in
+        apply-deploy-pipeline-fix.yml) wf=deploy-fix ;;
+        apply-web-platform-infra.yml) wf=infra ;;
+        *) refuse "workflow file $file" ;;
+      esac
+      key="runs.$wf.p$page"
+      n="$(seq_n "$key")"
+      inject "$key"
+      base="runs.$wf"; [[ "$page" -gt 1 ]] && base="runs.$wf.p$page"
+      fx=""
+      for ((m = n; m >= 2; m--)); do [[ -f "$st/$base.r$m.json" ]] && { fx="$st/$base.r$m.json"; break; }; done
+      [[ -z "$fx" && -f "$st/$base.json" ]] && fx="$st/$base.json"
+      [[ -n "$fx" ]] || refuse "no runs fixture for $key (call $n)"
+      cat "$fx"
+    elif [[ "$endpoint" =~ ^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/([0-9]+)/jobs\?per_page=([0-9]+)$ ]]; then
+      id="${BASH_REMATCH[1]}" pp="${BASH_REMATCH[2]}"
+      key="jobs.$id"
+      seq_n "$key" >/dev/null
+      inject "$key"
+      [[ -f "$st/jobs.$id.json" ]] || refuse "no jobs fixture for run $id"
+      jq -c --argjson pp "$pp" '.jobs |= (.[:$pp])' "$st/jobs.$id.json"
+    elif [[ "$endpoint" =~ ^repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/compare/([0-9a-f]{40})\.\.\.([0-9a-f]{40})\?per_page=1$ ]]; then
+      key="compare.${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+      seq_n "$key" >/dev/null
+      inject "$key"
+      [[ -f "$st/$key.json" ]] || refuse "no compare fixture $key"
+      cat "$st/$key.json"
+    else
+      refuse "gh api endpoint $endpoint"
+    fi
+    ;;
+  issue)
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      list)
+        author="" state="" limit=30 json=""
+        while (($#)); do
+          case "$1" in
+            --author) author="${2-}"; shift ;;
+            --state) state="${2-}"; shift ;;
+            --limit) limit="${2-}"; shift ;;
+            --json) json="${2-}"; shift ;;
+            *) refuse "gh issue list flag $1" ;;
+          esac
+          shift
+        done
+        [[ -n "$author" ]] || refuse "gh issue list without --author (an unfiltered list cannot be bounded)"
+        [[ "$author" == "app/github-actions" || "$author" == "github-actions[bot]" ]] || refuse "gh issue list --author $author"
+        [[ "$state" == "open" ]] || refuse "gh issue list --state ${state:-<unset>}"
+        [[ "$limit" =~ ^[0-9]+$ ]] || refuse "gh issue list --limit ${limit:-<unset>}"
+        [[ -n "$json" ]] || refuse "gh issue list without --json"
+        printf 'issue-list author=%s state=%s limit=%s json=%s\n' "$author" "$state" "$limit" "$json" >>"$out/reads.log"
+        seq_n issue-list >/dev/null
+        inject issue-list
+        lax=false; [[ -f "$st/lax-author" ]] && lax=true
+        jq -c --arg author "$author" --argjson limit "$limit" --arg fields "$json" --argjson lax "$lax" '
+          map(select(.state == "open"))
+          | (if $lax then . else map(select(.author.login == "app/github-actions" and ($author == "app/github-actions" or $author == "github-actions[bot]"))) end)
+          | .[:$limit]
+          | map(with_entries(select(.key as $k | ($fields | split(",") | any(. == $k)))))' "$state_file"
+        ;;
+      view)
+        num="${1-}"; shift || true
+        [[ "$num" =~ ^[0-9]+$ ]] || refuse "gh issue view number $num"
+        [[ "${1-}" == "--json" && "${2-}" == "comments" && $# -eq 2 ]] || refuse "gh issue view args $*"
+        printf 'issue-view %s json=comments\n' "$num" >>"$out/reads.log"
+        seq_n issue-view >/dev/null
+        inject issue-view
+        jq -c --argjson n "$num" 'map(select(.number == $n)) | (.[0] // {}) | {comments: (.comments // [])}' "$state_file"
+        ;;
+      create)
+        title="" bodyfile="" labels=()
+        while (($#)); do
+          case "$1" in
+            --title) title="${2-}"; shift ;;
+            --body-file) bodyfile="${2-}"; shift ;;
+            --label) labels+=("${2-}"); shift ;;
+            *) refuse "gh issue create flag $1" ;;
+          esac
+          shift
+        done
+        [[ -n "$title" && -n "$bodyfile" ]] || refuse "gh issue create needs --title and --body-file"
+        seq_n issue-create >/dev/null
+        inject issue-create
+        b="$(copy_body "$bodyfile")"
+        lj="$(printf '%s\n' "${labels[@]}" | jq -R '{name: .}' | jq -cs .)"
+        num="$(jq -r '([.[].number] | max // 100) + 1' "$state_file")"
+        jq -c --arg t "$title" --argjson n "$num" --argjson l "$lj" --rawfile body "$bodyfile" \
+          '. + [{number: $n, title: $t, state: "open", labels: $l, author: {login: "app/github-actions", is_bot: true}, body: $body, comments: []}]' \
+          "$state_file" >"$state_file.tmp" && mv "$state_file.tmp" "$state_file"
+        printf 'issue-create title=%s labels=%s body=%s\n' "$(oneline "$title")" "$(IFS=,; printf '%s' "${labels[*]}")" "$b" >>"$out/actions.log"
+        printf 'https://github.com/example-org/example-repo/issues/%s\n' "$num"
+        ;;
+      edit)
+        num="${1-}"; shift || true
+        [[ "$num" =~ ^[0-9]+$ ]] || refuse "gh issue edit number $num"
+        bodyfile="" addl=""
+        while (($#)); do
+          case "$1" in
+            --body-file) bodyfile="${2-}"; shift ;;
+            --add-label) addl="${2-}"; shift ;;
+            *) refuse "gh issue edit flag $1" ;;
+          esac
+          shift
+        done
+        [[ -n "$bodyfile" && -n "$addl" ]] || refuse "gh issue edit needs --body-file and --add-label"
+        seq_n issue-edit >/dev/null
+        inject issue-edit
+        b="$(copy_body "$bodyfile")"
+        jq -c --argjson n "$num" --arg add "$addl" --rawfile body "$bodyfile" '
+          map(if .number == $n then
+                .body = $body
+                | .labels = (((.labels // []) | map(.name)) + ($add | split(",")) | unique | map({name: .}))
+              else . end)' "$state_file" >"$state_file.tmp" && mv "$state_file.tmp" "$state_file"
+        printf 'issue-edit %s body=%s add-labels=%s\n' "$num" "$b" "$addl" >>"$out/actions.log"
+        ;;
+      close)
+        num="${1-}"; shift || true
+        [[ "$num" =~ ^[0-9]+$ ]] || refuse "gh issue close number $num"
+        reason="" comment=""
+        while (($#)); do
+          case "$1" in
+            --reason) reason="${2-}"; shift ;;
+            --comment) comment="${2-}"; shift ;;
+            *) refuse "gh issue close flag $1" ;;
+          esac
+          shift
+        done
+        [[ "$reason" == "completed" || "$reason" == "not planned" ]] || refuse "gh issue close --reason $reason"
+        [[ -n "$comment" ]] || refuse "gh issue close without --comment"
+        seq_n issue-close >/dev/null
+        inject issue-close
+        jq -c --argjson n "$num" --arg c "$comment" '
+          map(if .number == $n then .state = "closed" | .comments = ((.comments // []) + [{body: $c}]) else . end)' \
+          "$state_file" >"$state_file.tmp" && mv "$state_file.tmp" "$state_file"
+        printf 'issue-close %s reason=%s comment=%s\n' "$num" "$reason" "$(oneline "$comment")" >>"$out/actions.log"
+        ;;
+      comment)
+        num="${1-}"; shift || true
+        [[ "$num" =~ ^[0-9]+$ ]] || refuse "gh issue comment number $num"
+        [[ "${1-}" == "--body" && $# -eq 2 ]] || refuse "gh issue comment args $*"
+        comment="$2"
+        seq_n issue-comment >/dev/null
+        inject issue-comment
+        jq -c --argjson n "$num" --arg c "$comment" '
+          map(if .number == $n then .comments = ((.comments // []) + [{body: $c}]) else . end)' \
+          "$state_file" >"$state_file.tmp" && mv "$state_file.tmp" "$state_file"
+        printf 'issue-comment %s body=%s\n' "$num" "$(oneline "$comment")" >>"$out/actions.log"
+        ;;
+      *) refuse "gh issue $sub" ;;
+    esac
+    ;;
+  label)
+    [[ "${1-}" == "create" ]] || refuse "gh label ${1-}"
+    shift
+    name="${1-}"; shift || true
+    [[ "$name" =~ ^[a-z0-9/-]+$ ]] || refuse "gh label create name $name"
+    color="" desc=""
+    while (($#)); do
+      case "$1" in
+        --color) color="${2-}"; shift ;;
+        --description) desc="${2-}"; shift ;;
+        *) refuse "gh label create flag $1" ;;
+      esac
+      shift
+    done
+    [[ "$color" =~ ^[0-9a-f]{6}$ && -n "$desc" ]] || refuse "gh label create needs --color (6 hex) and --description"
+    seq_n label-create >/dev/null
+    inject label-create
+    printf 'label-create %s\n' "$name" >>"$out/actions.log"
+    ;;
+  *) refuse "gh $cmd" ;;
+esac
