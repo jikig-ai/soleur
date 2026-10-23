@@ -668,8 +668,73 @@ Expected on a healthy host: `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass reason=ok â€
 
 `consecutive_no_ping=<n>` in the journal separates a long deploy lock from a dead host: the beat goes dark after about 45 minutes either way,
 and the journal tells which. `selector=` is the artifact the dispatcher's resolver chose (`base` until the `agent-sandbox-unix-deny` flag is on);
-`masks_missing=<n>` counts masked dirs that did not exist in the production container (informational, they belong to real sessions); a `pass` with
-`masks_missing>0` journals `coverage=prodtuple_partial` because it tested a weaker config than production.
+`masks_missing=<n>` counts the masked dirs (of the four the app pre-creates) that are not a usable directory after the probe's own attempt to create them:
+absent, not a real directory (a symlink or a file), or owned by another uid. A `pass` with `masks_missing>0` journals `coverage=prodtuple_partial`
+because it tested a weaker config than production; the ping is unchanged on purpose (the run makes a claim, and withholding the beat would read as a
+dead host). `masks_created=<0-4>` is how many of those dirs THIS run created (`4` on the first run after a container start, `0` afterwards; a
+restart wipes the tmpfs `/tmp` dirs, so several `4` lines over a day are normal). `masks_note=` is the reason the probe refused to create something,
+from a closed list; `-` means no refusal, and an old probe (an apply that lands before the release) journals `-` for both new fields.
+
+**Decode `masks_created` / `masks_note` (read `masks_note` first).**
+
+| `masks_note` | Meaning | What to do |
+|---|---|---|
+| `-` | no guard fired | with `masks_missing=0` nothing; with `masks_missing>0` a dir is a symlink, a file, foreign-owned, or the mkdir failed: the probe could not make it usable, and the app's next dispatch will hit the same wall (expect a `masked-dir-precreate-failed` Sentry email) |
+| `uid_mismatch` | the probe's uid is not PID 1's real uid (read from `/proc/1/status`, first `Uid:` field); NOTHING was created, because a dir owned by another uid is one the app cannot use. A future `docker exec -u root` would show this | check how the synthetic execs into the container; the app is unaffected |
+| `pid1_unreadable` | PID 1's uid could not be read; nothing was created | read the row as "no claim about the masks"; persistent means the container's `/proc` is restricted |
+| `pid1_env_unreadable` | PID 1's environment could not be read (or was over the 256 KiB cap), so the probe could not confirm it shares the app's HOME; the HOME-derived dir (`~/.claude/projects`) was NOT created and counts missing, the other three were created | expected only if the image restricts `/proc/1/environ`; the transcript mask is then unobserved by the synthetic |
+| `home_mismatch` | PID 1's HOME is not the probe's HOME; same handling as above | the synthetic's HOME comes from the container's own `$HOME` (pre-exec step); a mismatch means the app runs with another HOME, so the transcript mask the app uses is a different dir than the one the probe models |
+| `env_divergence` | informational: PID 1 has an absolute `CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR`, bases the probe does not model; nothing was refused and nothing is counted missing | none; it surfaces the accepted residual below |
+
+No Better Stack rule matches these fields; the reader is whoever runs the Logs query above (`scripts/betterstack-query.sh --grep SOLEUR_WEB_BASH_SYNTHETIC`).
+A persistent `masks_missing>0` means: expect a `masked-dir-precreate` Sentry email on the next dispatch, and use the section below.
+
+### Masked-dir pre-create alert (#10455 PR-B): Sentry rule `masked-dir-precreate-failed`
+
+`buildAgentSandboxConfig` pre-creates four dirs before every session's namespace is built (the SDK skips a deny landing that does not exist). When one
+`mkdirSync` throws, the builder emits `op=masked-dir-precreate` (`feature=agent-sandbox`, tag `dir_kind`, `extra.code`, `extra.syscall`, `extra.dir`) and
+**carries on fail-open**: the entry stays in `denyRead`, the session starts, and the read-deny may not apply. The Sentry email rule
+`masked-dir-precreate-failed` (email to issue owners, ActiveMembers fallthrough; email only until the Slack wake path of ADR-260 is verified) routes it.
+
+**Decode by `dir_kind` (one Sentry issue per kind, so acknowledging one does not silence another).**
+
+| `dir_kind` | Dir | What stays unmasked for later sessions in that container |
+|---|---|---|
+| `peer-socket` | `/tmp/cc-socks`, `/tmp/cc-socks-<uid>` (and the same names under an `XDG_RUNTIME_DIR`/`CLAUDE_CODE_TMPDIR`/`TMPDIR` base) | a sibling tenant's Bash can reach another session's bridge socket |
+| `transcript` | `~/.claude/projects` (and `<CLAUDE_CONFIG_DIR>/projects`) | a sibling can read another session's transcript, which can hold a proxy credential |
+| `session-tmp` | `/tmp/.cs` | a sibling can read persisted CLI output under the shared temp root |
+
+**Decode `extra.code`:** `EACCES` a permission problem on the parent; `EEXIST` a regular file is in the way (the recursive mkdir cannot replace it);
+`ENOSPC` the 256 MB `/tmp` tmpfs is full (one tenant's session tmp usage can cause this for the whole container; the per-session bound is an open #10455 item);
+`EROFS` a read-only mount; `ENOTDIR` a parent component is not a directory.
+
+**Containment.** Redeploy through the existing `deploy` webhook path (the release workflow's deploy step), which starts a fresh container. A plain
+container restart keeps the writable layer: `~/.claude/projects` survives it and only the tmpfs `/tmp` dirs reset, so a `transcript` fault caused by
+a file or foreign-owned dir under HOME needs the redeploy (a new container) and a fault that persists after a redeploy needs a code fix. Do not
+`chmod`/`chown` from outside the app; the builder's mkdir is the only creator. **Acknowledge or resolve the Sentry issue** once contained; while a fault
+persists the rule re-notifies every `frequency_minutes` to the same inbox as the other rules.
+
+**An email proves the app's own pre-create failed.** The first synthetic run after a container start creates the missing dirs itself (`masks_created=4`),
+so from then on the synthetic can no longer observe a cold-start mkdir failure; the Sentry rule is the detector for that, and the synthetic is a
+second, journal-only witness.
+
+### What the synthetic does and does not prove about the masks (accepted limits)
+
+- It proves the sandbox namespace can mount over the four dirs under the production tuple. It does NOT prove the app created them: dirs the probe
+  created hide an app-side regression that stops pre-creating (control: the builder-versus-reality and probe/builder set-equality tests in CI, not a
+  runtime signal).
+- The app's env subset is not modelled: bases from `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR` in PID 1's environment are not created or checked
+  (`masks_note=env_divergence` flags it). A green synthetic is no proof for those.
+- A post-creation swap of a masked dir for a symlink or file is seen only by the probe's `lstat` (journal-only, 15-minute cadence): the app's recursive
+  mkdir succeeds on an existing symlink-to-directory, so no alert route sees it. A tenant's Bash cannot write `/tmp` or `~/.claude` (`allowWrite` is the
+  workspace), so this needs a same-uid actor outside the sandbox.
+- Probe-created dirs are empty directories (mode 0700, the probe's uid = PID 1's uid); they persist after a revert and are harmless because the app's own
+  mkdir is idempotent.
+- Email delivery after the rule matches is not proven by firing a production event; the proven chain is forced failure, tagged emit, live rule with an
+  email action (`scripts/masked-dir-alert-discoverability.sh` prints `MASKED_DIR_ALERT_PATH_OK` for the committed half).
+- **#10548 soak.** The soak reads the DEPLOY-time ledger (`.sdk_bash_smoke.coverage`, read by `scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`).
+  This change does not touch the deploy mode of the probe or that ledger, so the soak clock does not restart and the flag `agent-sandbox-unix-deny`
+  stays an operator-typed step (ADR-236).
 
 **Arming.** The beats are born paused. `arm-heartbeats.sh` unpauses each host's beat after a measured ping with a 300 s window and a soft landing.
 Arming is PROBABILISTIC: the cadence is 900 s against a 300 s window, so a healthy synthetic lands a beat inside one apply's window with p ~ 1/3 per
