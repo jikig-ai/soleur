@@ -121,8 +121,11 @@ ordinal), and the `_affected_glob_split` advisory (recorded deferred-to-next-gra
   matches `a/x.test.sh` unless the arm ALSO requires the line to be dir-less (`!= */*`). Same in
   Python (`fnmatch.fnmatchcase("a/b.sh", "*.sh")` is True) — the dir-less predicate is the whole
   feature; both mirrors need it.
-- `covers()` dir-less-dir trap: a top-level dir ref (`docs`, `knowledge-base`) is `/`-free, so the
-  root arm must ALSO decline dir refs (`p in _tracked()[1] or os.path.isdir(p)`) or `glob:*` would
+- `covers()` dir-less-dir trap: EVERY dir ref under a root-anchored `^glob:` declines outright —
+  including nested refs like `a/b` (Python `fnmatch`'s `*` crosses `/` exactly like bash
+  `[[ == ]]`, so `fnmatchcase("docs/x.sh", "*.sh")` is True). A top-level dir ref (`docs`,
+  `knowledge-base`) is `/`-free, so the root arm must decline dir refs
+  (`p in _tracked()[1] or os.path.isdir(p)`) or `glob:*` would
   certify a whole dir.
 - Reclassification safety: `glob:x*.sh` (non-empty `/`-free head) is malformed TODAY and the census
   REDs it ("its head does not end in /" — M22 pins this), so no live tree can carry one; upgrading
@@ -214,8 +217,11 @@ doc-block update (top-of-file only, S4-separated); stale comment block updates (
   idiom), never stdout.
 - **The `declare -F` fold**: `_AFF_LIB_OK` gates on `ALWAYS_ON_SUITES` AND `_affected_glob_split` —
   a missing helper yields `AFFECTED_FALLBACK reason=index-missing` → selects everything, never a
-  crash. Verify by grep that every `_affected_add_edge`/`_diff_edge_hit` call site sits inside the
-  classify walk (all do — :2669 plus the derive/extraction call sites :3121-3439).
+  crash. CTO ruling additionally REQUIRES a fail-wide in-arm guard at the top of the hit arm's
+  glob branch — `declare -F _affected_glob_split >/dev/null || return 0` — because
+  `_diff_touches` over the relevance arrays calls `_diff_edge_hit` OUTSIDE the `_AFF_LIB_OK` gate
+  (test-all.sh:2669), so a hand-placed `^glob:` relevance entry would otherwise rc-127 into a
+  silent narrow under `set -euo pipefail`.
 - **Content-minted tokens reclassify**: a `glob:`-spelled token in scanned file content that is
   `/`-free-headed now mints a REAL root edge instead of always-match — narrower and honest; live
   trees can't carry malformed members anyway (census REDs them).
@@ -387,7 +393,9 @@ weakening the predicate without the fixture arrays goes red via the th8v vector.
 2. Rewire mint arm, hit arm, census arm, `materialise()` `_mp` site to call it; `_AGS_WHY`-to-message
    map in the census keeps every existing reason string.
 3. Plumbing: `test-all.sh` glob-lib source + `_AFF_LIB_OK` `declare -F` fold; lint-orphan fail-closed
-   source; `build_sandbox` + `build_pristine` `cp` lines; `_edge_run`/`derive_run` lib source.
+   source; `build_sandbox` + `build_pristine` `cp` lines; `_edge_run`/`derive_run` lib source;
+   `extract_oracle`/`edge-run.sh` in `plugins/soleur/test/ci-pr-affected-replay.test.sh` sources
+   the lib in its eval (rc-127 on every `^glob:` row otherwise — CTO ruling).
 4. Full green on all four batteries — the refactor proves itself.
 
 ### Phase 2 — RED-first rows
@@ -435,6 +443,11 @@ weakening the predicate without the fixture arrays goes red via the th8v vector.
   out); new Rg root rows; `MIN_CASES`
 - `scripts/ci-pr-affected-replay.py` — `edge_hit` root arm + mid-slash/root-tail malformed rules +
   docstring
+- `plugins/soleur/test/ci-pr-affected-replay.test.sh` — `extract_oracle`/`edge-run.sh` eval sources
+  `affected-glob.sh`; `er` row `mal-head-not-slash-empty` (:1868) re-anchored (its `glob:*.sh` over
+  `lib/z.txt` flips to non-match) + new root-arm rows (`x.sh`→1, `a/x.sh`→0, dir-bearing `.sh`→0);
+  `row_edge_*` `mal-` name-prefix grouping and `EDGE_ROWS -ge 50` count literal reconciled (CTO
+  ruling — the seventh consumer the site enumeration missed)
 - `scripts/lib/test-affected-paths.sh` — header doc block (:35-46) ONLY: name the root form + helper
   (comment region; zero array-region touch — S4-separated)
 - `knowledge-base/engineering/architecture/decisions/ADR-242-the-local-gate-defaults-to-affected-suites-and-always-on-ratchets.md`
@@ -485,7 +498,7 @@ weakening the predicate without the fixture arrays goes red via the th8v vector.
 ### Split Assessment
 
 - Subsystems touched: 2 — `scripts`, `knowledge-base`
-- Planned files: 10 (9 edit + 1 create) | Estimated changed lines: ~420 (net; large comment blocks
+- Planned files: 11 (10 edit + 1 create) | Estimated changed lines: ~450 (net; large comment blocks
   inflate the count — code is ~180)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR — one grammar change whose sites must move in lockstep; splitting mint
@@ -573,7 +586,9 @@ it — repo-internal test machinery, not shipped in the plugin payload.
 - **Reclassification widening→narrow**: `glob:x*.sh` and `glob:*.sh` upgrade from always-match to
   real edges — safe because the census REDs those shapes today (no live array can hold one); the
   one channel that could carry them (hand-placed `^glob:` relevance entries) is asserted absent by
-  a `git grep '\^glob:' scripts/lib/test-relevance-paths.sh` sweep in Phase 3.
+  a `git grep '\^glob:'` sweep over BOTH `scripts/lib/test-relevance-paths.sh` AND
+  `scripts/lib/test-affected-paths.sh` in Phase 3, re-run in the SAME commit as the grammar flip
+  (CTO ruling — closes the sibling-PR window).
 - **The `*`-crosses-`/` trap** is the feature's central defect class — the dir-less conjunct in the
   hit arm AND both Python mirrors; one site forgetting it is the widening regression Guard 2 exists
   to catch.

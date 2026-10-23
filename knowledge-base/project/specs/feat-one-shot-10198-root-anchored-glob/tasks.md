@@ -9,7 +9,9 @@ Issue: #10198 (closes it). One PR.
       `_AGS_CLASS ∈ {literal,dir,malformed}`, `_AGS_WHY`, `_AGS_HEAD`, `_AGS_TAIL`; rc 0 always;
       bash 3.2-safe; comment block carries the ONE-doctrine doctrine.
 - [ ] 1.2 `scripts/test-all.sh`: glob-lib source in the `_AFF_LIB` block; `_AFF_LIB_OK` requires
-      `declare -F _affected_glob_split`; rewire mint arm + hit arm to call the helper.
+      `declare -F _affected_glob_split`; rewire mint arm + hit arm to call the helper; hit arm's
+      glob branch opens with `declare -F _affected_glob_split >/dev/null || return 0` (fail-wide —
+      `_diff_touches` reaches `_diff_edge_hit` outside the `_AFF_LIB_OK` gate at :2669).
 - [ ] 1.3 `scripts/lint-orphan-test-suites.sh`: fail-closed source beside REL/AFF; census arm →
       helper + `_AGS_WHY`-to-message map (keep every existing reason string).
 - [ ] 1.4 `scripts/lint-orphan-test-suites.test.sh`: `materialise()` `_mp` → helper;
@@ -17,6 +19,9 @@ Issue: #10198 (closes it). One PR.
 - [ ] 1.5 `scripts/test-all-affected.test.sh`: `build_sandbox` `cp` line; `_edge_run` sources the
       lib inside its eval.
 - [ ] 1.6 `scripts/test-affected-derive.test.sh`: `derive_run` sources the lib inside its eval.
+- [ ] 1.6b `plugins/soleur/test/ci-pr-affected-replay.test.sh`: `extract_oracle`/`edge-run.sh`
+      eval sources `affected-glob.sh` (rc-127 on every `^glob:` row once the hit arm calls the
+      out-of-window helper).
 - [ ] 1.7 Run all four batteries — all green (neutrality proof). Commit.
 
 ## Phase 2 — RED-first battery rows
@@ -32,6 +37,10 @@ Issue: #10198 (closes it). One PR.
 - [ ] 2.4 covers() k5 cells (foo*.sh flips 1→0; dir-less covered/declined/dir-ref cells);
       `edge_hit` differential cells; GLOBENT admit/semantic fixtures; th8v vector + reworked th8
       rows + th8m anchors.
+- [ ] 2.4b `plugins/soleur/test/ci-pr-affected-replay.test.sh`: re-anchor `er` row
+      `mal-head-not-slash-empty` (:1868 — `glob:*.sh` over `lib/z.txt` flips to non-match); add
+      root-arm rows (`x.sh`→1, `a/x.sh`→0, dir-bearing `.sh`→0); reconcile `row_edge_*` `mal-`
+      name-prefix grouping + `EDGE_ROWS -ge 50` count literal.
 - [ ] 2.5 Run; record every new row RED; bump `MIN_CASES` (×3) + sweep count literals. Commit.
 
 ## Phase 3 — the extension
@@ -47,9 +56,10 @@ Issue: #10198 (closes it). One PR.
 - [ ] 3.6 th8 rework: `_th8_corpus_covered <array> <member>` (literal | metachar-free glob literal |
       well-formed root glob `[[ == ]]`); `_th8_eval` emits uncovered suite:member pairs; comment +
       message updates.
-- [ ] 3.7 `git grep '\^glob:' scripts/lib/test-relevance-paths.sh` sweep (reclassification
-      evidence); three doctrine comment blocks updated; `git grep` stale-doctrine sweep
-      (`does not end in /`, `no head to mint`, `deferred to #10198`).
+- [ ] 3.7 `git grep '\^glob:'` sweep over BOTH `scripts/lib/test-relevance-paths.sh` AND
+      `scripts/lib/test-affected-paths.sh` (reclassification evidence — CTO ruling), re-run in the
+      SAME commit as the grammar flip; three doctrine comment blocks updated; `git grep`
+      stale-doctrine sweep (`does not end in /`, `no head to mint`, `deferred to #10198`).
 - [ ] 3.8 All four batteries green. Commit.
 
 ## Phase 4 — records + verify
