@@ -318,8 +318,10 @@ flip_segment_in_env() {
     # First-time override: feature_states_to_create.
     body=$(printf '{"feature_states_to_create":[{"feature_segment":{"segment":%d},"enabled":%s,"feature_state_value":{"type":"unicode","string_value":null,"integer_value":null,"boolean_value":null}}],"feature_states_to_update":[],"segment_ids_to_delete_overrides":[],"publish_immediately":true}' "$segment_id" "$enabled")
   else
-    # Existing override: feature_states_to_update referencing the fs_id.
-    body=$(printf '{"feature_states_to_create":[],"feature_states_to_update":[{"feature_segment":{"id":%d},"enabled":%s,"feature_state_value":{"type":"unicode","string_value":null,"integer_value":null,"boolean_value":null}}],"segment_ids_to_delete_overrides":[],"publish_immediately":true}' "$existing_fs_id" "$enabled")
+    # Existing override: feature_states_to_update referencing the fs_id. Flagsmith requires BOTH
+    # feature_segment.id and feature_segment.segment here (the same object its featurestates read
+    # returns); an {id}-only body is rejected with "segment: This field is required.".
+    body=$(printf '{"feature_states_to_create":[],"feature_states_to_update":[{"feature_segment":{"id":%d,"segment":%d},"enabled":%s,"feature_state_value":{"type":"unicode","string_value":null,"integer_value":null,"boolean_value":null}}],"segment_ids_to_delete_overrides":[],"publish_immediately":true}' "$existing_fs_id" "$segment_id" "$enabled")
   fi
 
   local resp

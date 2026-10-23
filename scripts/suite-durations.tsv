@@ -196,6 +196,7 @@ plugins/soleur/test/flag-detach-shared.test.sh	8189	measured
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	4625	measured
 plugins/soleur/test/flagsmith-stdin-config.test.sh	227	measured
 plugins/soleur/test/flip-flag-map-parity.test.sh	1184	floor
+plugins/soleur/test/flip-update-existing-override.test.sh	1204	floor
 plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	9	measured
 plugins/soleur/test/gdpr-gate-self-test.test.sh	386	measured
 plugins/soleur/test/generate-kb-index.test.sh	718	measured
