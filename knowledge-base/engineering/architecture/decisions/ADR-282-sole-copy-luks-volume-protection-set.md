@@ -199,6 +199,8 @@ the same owner and the `soleur:incident` skill as the route.
   click, a wrong id, a pasted recipe; the drift workflow's issue bodies printed runnable DELETE recipes until #9927 item 8c
   removed them), not against a leaked read/write token.
   That token is also the silent fallback of the read-only loader; a no-fallback loader is carried by #9927.
+  *(Superseded 2026-10-23: the loader and every Hetzner read-only reader, including the Inngest generation anchor, no longer fall
+  back to the read/write token; see ADR-241's 2026-10-20 and 2026-10-23 entries.)*
 - **Other credentials can overwrite or delete the key:** the three writers of the Doppler copy are the inngest cutover arm
   token `doppler_service_token.inngest_arm_write` (read/write on `soleur-inngest/prd`, published as
   `DOPPLER_TOKEN_INNGEST_ARM`), the workplace Doppler token `DOPPLER_TOKEN_TF`, and the host boot token `inngest-boot`
