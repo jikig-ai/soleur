@@ -8,7 +8,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
   (this root's convention against a POST-time dedup keyed on action shape +
-  frequency; unmeasured on the workflows endpoint — `grep -h frequency_minutes *.tf`).
+  frequency; unmeasured on the workflows endpoint — `grep -h frequency_minutes *.tf`). Re-check it after every merge of `origin/main`: a sibling can take the value you picked (#10892 lost 38 to #10898 and shipped 39).
 
   **TWO are FROZEN (#8451).** `auth-per-user-loop` and `sandbox-startup-failure`
   trigger on `event_unique_user_frequency_count`, which the pinned provider's
