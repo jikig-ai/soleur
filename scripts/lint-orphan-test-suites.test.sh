@@ -59,6 +59,10 @@ set -uo pipefail
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The shared glob: shape classifier — materialise() classifies declared glob:
+# members through it (the same function the SUT's census arm calls).
+# shellcheck source=scripts/lib/affected-glob.sh
+source "$REPO_ROOT/scripts/lib/affected-glob.sh"
 # Overridable so this battery can be pointed at an older or already-broken copy and PROVED to
 # red against it. A guard that has never been shown to fail is not evidence.
 SUT="${LINT_ORPHAN_TARGET_OVERRIDE:-$REPO_ROOT/scripts/lint-orphan-test-suites.sh}"
@@ -159,11 +163,14 @@ materialise() {
     case "$p" in
       glob:*)
         # Third declared kind (#9813): materialise the head dir only — the census
-        # arm probes [[ -d ]] on it; the pattern tail is not a path.
-        _mp="${p#glob:}"; _mp="${_mp%%[*?[]*}"
-        [[ "$_mp" == */ ]] || continue
-        mkdir -p "$PRISTINE/${_mp%/}" || return 1
-        : > "$PRISTINE/${_mp%/}/.keep" || return 1
+        # arm probes [[ -d ]] on it; the pattern tail is not a path. Classified
+        # through the shared helper: a /-terminated head (dir or literal) gets a
+        # dir; every other class materialises nothing.
+        _mp="${p#glob:}"
+        _affected_glob_split "$_mp"
+        [[ "$_AGS_HEAD" == */ ]] || continue
+        mkdir -p "$PRISTINE/${_AGS_HEAD%/}" || return 1
+        : > "$PRISTINE/${_AGS_HEAD%/}/.keep" || return 1
         continue
         ;;
     esac
@@ -221,6 +228,8 @@ build_pristine() {
   # receipts — without both copies that call exits 2 and every census row
   # reds for a reason unrelated to the row under test.
   cp "$REPO_ROOT/scripts/lib/test-affected-paths.sh" "$PRISTINE/scripts/lib/" || return 1
+  # The shared glob: classifier — the SUT sources it fail-closed beside AFF_LIB.
+  cp "$REPO_ROOT/scripts/lib/affected-glob.sh" "$PRISTINE/scripts/lib/" || return 1
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$PRISTINE/scripts/lib/" || return 1
   cp "$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh" "$PRISTINE/apps/web-platform/infra/" || return 1
   cp "$REPO_ROOT"/.github/workflows/*.yml "$PRISTINE/.github/workflows/" || return 1

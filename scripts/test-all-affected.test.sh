@@ -133,6 +133,7 @@ build_sandbox() {
   cp "$RUNNER" "$out" || return 1
   cp "$REL_LIB" "$dir/lib/" || return 1
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$dir/lib/" || return 1
+  cp "$REPO_ROOT/scripts/lib/affected-glob.sh" "$dir/lib/" || return 1
   if [[ "$with_lib" == "with-lib" ]]; then
     cp "$AFF_LIB" "$dir/lib/" || return 1
   fi
@@ -2580,7 +2581,7 @@ fi
 #     normalisation and must change t11's directory answer.
 cases=$((cases + 1))
 _edge_src=$(awk '/^_affected_in_list\(\) \{/{f=1} f{print} f && /^_affected_add_edge\(\) \{/{g=1} g && /^\}/{exit}' "$RUNNER")
-_edge_run() { ( cd "$REPO_ROOT" && eval "$1" && _AC_EDGES=() && _affected_add_edge "$2" && printf '%s' "${_AC_EDGES[*]}" ); }
+_edge_run() { ( cd "$REPO_ROOT" && source scripts/lib/affected-glob.sh && eval "$1" && _AC_EDGES=() && _affected_add_edge "$2" && printf '%s' "${_AC_EDGES[*]}" ); }
 _t11_dir=$(_edge_run "$_edge_src" scripts/lib)
 _t11_file=$(_edge_run "$_edge_src" scripts/test-all.sh)
 _t11_dot=$(_edge_run "$_edge_src" ./scripts)

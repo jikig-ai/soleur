@@ -75,7 +75,7 @@ awk '/^_affected_classify\(\) \{/ {s=1} s {print} s && /^\}$/ {exit}' "$RUNNER" 
 
 # Run a snippet against the extracted block in a fixture tree: derive_run <fixture-dir> <snippet>.
 derive_run() { # DERIVE_BLOCK overrides the extracted block (the mutant rows run a block with one guard removed)
-  ( cd "$1" && set -uo pipefail && _PRINT_AFFECTED=0 && _wt_missing_die() { :; } && eval "$(cat "${DERIVE_BLOCK:-$DERIVE_SRC}")" && eval "$2" )
+  ( cd "$1" && set -uo pipefail && _PRINT_AFFECTED=0 && _wt_missing_die() { :; } && source "$REPO_ROOT/scripts/lib/affected-glob.sh" && eval "$(cat "${DERIVE_BLOCK:-$DERIVE_SRC}")" && eval "$2" )
 }
 
 cases=$((cases + 1))

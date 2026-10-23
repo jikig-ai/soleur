@@ -1892,6 +1892,7 @@ extract_oracle() {  # extract_oracle <test-all.sh> <out>: the pieces by content 
 cat > "$SANDBOX/edge-run.sh" <<'EOS'
 LC_ALL=C; export LC_ALL
 unset CI SOLEUR_TEST_FORCE_ALL
+source "$3"   # affected-glob.sh — _diff_edge_hit's ^glob: arm calls the out-of-window helper (#10198)
 source "$1"
 _FULL_GATE=0; _ENUMERATE=0; _diff_detect_ok=1; _diff_head_ok=1; _pr_gate_canary_failed=0
 i=0
@@ -1902,7 +1903,8 @@ while IFS=$'\t' read -r e p n; do
 done < "$2"
 EOS
 EDGE_SRC="$SCRIPT_DIR/../../../scripts/test-all.sh"
-extract_oracle "$EDGE_SRC" "$SANDBOX/edge-oracle.sh" && bash "$SANDBOX/edge-run.sh" "$SANDBOX/edge-oracle.sh" "$SANDBOX/edge.table" > "$SANDBOX/edge.oracle" 2>/dev/null
+GLOB_LIB_SRC="$SCRIPT_DIR/../../../scripts/lib/affected-glob.sh"
+extract_oracle "$EDGE_SRC" "$SANDBOX/edge-oracle.sh" && bash "$SANDBOX/edge-run.sh" "$SANDBOX/edge-oracle.sh" "$SANDBOX/edge.table" "$GLOB_LIB_SRC" > "$SANDBOX/edge.oracle" 2>/dev/null
 [[ "$(wc -l < "$SANDBOX/edge.oracle")" -eq "${#EDGE_ROWS[@]}" ]] && pass "edge oracle: the real _diff_touches answered all ${#EDGE_ROWS[@]} rows" || fail "edge oracle did not answer every row"
 edge_py() {  # the python side: edge_hit of the SUT under test, one '<row> <0|1>' line per table row
   python3 - "$SUT" "$SANDBOX/edge.table" <<'PY'

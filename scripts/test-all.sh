@@ -1060,7 +1060,20 @@ if [[ -f "$_AFF_LIB" ]]; then
   # shellcheck source=scripts/lib/test-affected-paths.sh
   source "$_AFF_LIB" || true
 fi
-if declare -p ALWAYS_ON_SUITES >/dev/null 2>&1; then
+# Same degrade-never-block class as _AFF_LIB (CTO ruling, #10198): the glob
+# shape classifier lives beside the declarations lib and is folded into the
+# same gate — a missing helper is `index-missing` (select-all), never a
+# rc-127 mid-run abort. The hit arm's `^glob:` branch additionally carries its
+# own `declare -F … || return 0` fail-wide guard, because `_diff_touches`
+# reaches `_diff_edge_hit` OUTSIDE the `_AFF_LIB_OK` gate for hand-placed
+# `^glob:` relevance entries.
+_AFF_GLOB_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/affected-glob.sh"
+if [[ -f "$_AFF_GLOB_LIB" ]]; then
+  # shellcheck source=scripts/lib/affected-glob.sh
+  source "$_AFF_GLOB_LIB" || true
+fi
+if declare -p ALWAYS_ON_SUITES >/dev/null 2>&1 \
+   && declare -F _affected_glob_split >/dev/null 2>&1; then
   _AFF_LIB_OK=1
 fi
 
@@ -2213,26 +2226,24 @@ _diff_edge_hit() {
       # non-`/` head, `*`-less tail) are unreachable from minted edges (their
       # `:` trips the charset arm first) but ARE reachable via hand-placed
       # `^glob:` entries in relevance arrays — defense-in-depth for that channel.
-      local _g="${e#glob:}" _gh _gt _line
-      case "$_g" in
-        *[!A-Za-z0-9_./*-]*) return 0 ;;    # byte outside the grammar charset → match
+      # Fail-WIDE guard (CTO ruling, #10198): `_diff_touches` reaches this arm
+      # OUTSIDE the `_AFF_LIB_OK` gate for hand-placed `^glob:` relevance
+      # entries, so a missing classifier must match, never rc-127 into a silent
+      # narrow under `set -euo pipefail`.
+      declare -F _affected_glob_split >/dev/null || return 0
+      local _g="${e#glob:}" _line
+      _affected_glob_split "$_g"
+      case "$_AGS_CLASS" in
+        dir)
+          # Cheap head pre-check — no line under the head means no line can match.
+          [[ "$_n" == *"${_NL}${_AGS_HEAD}"* ]] || return 1
+          while IFS= read -r _line; do
+            [[ -n "$_line" && "$_line" == "$_AGS_HEAD"* && "$_line" == $_g ]] && return 0
+          done <<< "$_DEH_N"
+          return 1
+          ;;
+        *) return 0 ;;   # literal + every malformed shape → match (widen-only)
       esac
-      _gh="${_g%%[*?[]*}"
-      case "$_gh" in
-        /*|./*|../*|*"//"*|*"/./"*|*"/../"*) return 0 ;;  # not repo-relative → match
-      esac
-      # (shape checks as [[ ]] — a bare `*) return 0 ;;` here would collide the
-      # substring-unique budget anchor in test-all-killed-classification's fixture)
-      [[ "$_gh" == */ ]] || return 0        # head not /-terminated → match
-      _gt="${_g#$_gh}"
-      [[ "$_gt" == */ ]] && return 0        # tail ends / — unmatchable → match
-      [[ "$_gt" == *\** ]] || return 0      # tail without * → match
-      # Cheap head pre-check — no line under the head means no line can match.
-      [[ "$_n" == *"${_NL}${_gh}"* ]] || return 1
-      while IFS= read -r _line; do
-        [[ -n "$_line" && "$_line" == "$_gh"* && "$_line" == $_g ]] && return 0
-      done <<< "$_DEH_N"
-      return 1
       ;;
     */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
     *)  [[ "$_n" == *"${_NL}${e}${_NL}"* ]] ;;
@@ -2842,7 +2853,7 @@ _affected_rec_read() { # <path>
 # `.` names the whole tree, and an anchored `^./` could never match a diff line,
 # which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
-  local _p="$1" _nl=$'\n' _g _gh _gt
+  local _p="$1" _nl=$'\n' _g
   # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
   case "$_p" in *"$_nl"*) return 0 ;; esac
   case "$_p" in
@@ -2876,24 +2887,14 @@ _affected_add_edge() {
       # malformed → always-match (widen-only by design); a metachar-free one
       # takes the literal-path recursion above — a real edge if the path exists,
       # nothing otherwise.
-      case "$_g" in
-        *[!A-Za-z0-9_./*-]*) _p="^glob:${_p}" ;;   # byte outside the grammar charset → verbatim
-        *)
-          _gh="${_g%%[*?[]*}"               # longest leading metachar-free run
-          case "$_gh" in
-            /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _p="^glob:${_p}" ;;  # not repo-relative → verbatim
-            */)
-              _gt="${_g#$_gh}"
-              case "$_gt" in
-                */) _p="^glob:${_p}" ;;     # _gt ends / — no path can match it → verbatim
-                *\**)                       # _gt carries a *
-                  if _affected_probe d "$_gh"; then _p="^glob:${_g}"; else _p="^${_gh}"; fi ;;
-                *) _p="^glob:${_p}" ;;      # _gt without * → malformed → verbatim
-              esac
-              ;;
-            *) _p="^glob:${_p}" ;;          # _gh does not end in / → malformed → verbatim
-          esac
-          ;;
+      _affected_glob_split "$_g"
+      case "$_AGS_CLASS" in
+        dir)
+          # Well-formed: probe the head dir — present mints `^glob:<pattern>`,
+          # absent degrades to `^<head>/` (the dir-prefix edge the entry
+          # replaced, never narrower).
+          if _affected_probe d "$_AGS_HEAD"; then _p="^glob:${_g}"; else _p="^${_AGS_HEAD}"; fi ;;
+        *) _p="^glob:${_p}" ;;          # malformed (every why) → verbatim always-match
       esac
       ;;
     *)

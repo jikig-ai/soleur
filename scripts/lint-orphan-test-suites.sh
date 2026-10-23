@@ -973,12 +973,20 @@ fi
 # The classification is read from `test-all.sh --print-affected-set` receipts,
 # NOT recomputed here -- a second classifier would certify its own drift.
 AFF_LIB="$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+GLOB_LIB="$REPO_ROOT/scripts/lib/affected-glob.sh"
 if [[ ! -f "$AFF_LIB" ]]; then
   echo "ERROR: $AFF_LIB is missing -- test-all.sh degrades to full without it, so no classification is trustworthy." >&2
+  fails=$((fails + 1))
+elif [[ ! -f "$GLOB_LIB" ]]; then
+  # Fail CLOSED (the REL_LIB class): without the shared glob: classifier the
+  # census arm below cannot classify, and a skipped check reads as green.
+  echo "ERROR: $GLOB_LIB is missing -- the glob: declared-member census cannot run, so every glob: check below would certify nothing." >&2
   fails=$((fails + 1))
 else
   # shellcheck source=scripts/lib/test-affected-paths.sh
   source "$AFF_LIB"
+  # shellcheck source=scripts/lib/affected-glob.sh
+  source "$GLOB_LIB"
 
   # The live registration stream. Same env-scrubbing as the --print-suite-globs
   # call above and for the same reasons: this runs INSIDE test-all.sh as a
@@ -1127,29 +1135,9 @@ else
           # repo-relative diff line ever (a dead edge that narrows).
           _cg="${p#glob:}"
           _cg_why=""
-          case "$_cg" in
-            *[\*?[]*)
-              case "$_cg" in
-                *[?[]*) _cg_why="contains ? or [ (outside the grammar)" ;;
-                *[!A-Za-z0-9_./*-]*) _cg_why="contains a byte outside the grammar charset" ;;
-                *)
-                  _cgh="${_cg%%[*?[]*}"
-                  case "$_cgh" in
-                    /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _cg_why="its head is not a repo-relative prefix" ;;
-                    */)
-                      _cgt="${_cg#$_cgh}"
-                      case "$_cgt" in
-                        */) _cg_why="its tail ends in / — no path can match it" ;;
-                        *\**) [[ -d "$REPO_ROOT/${_cgh%/}" ]] || _cg_why="its head dir ${_cgh} does not exist" ;;
-                        *) _cg_why="its tail carries no *" ;;
-                      esac
-                      ;;
-                    *) _cg_why="its head does not end in /" ;;
-                  esac
-                  ;;
-              esac
-              ;;
-            *)
+          _affected_glob_split "$_cg"
+          case "$_AGS_CLASS" in
+            literal)
               # No metachar: the mint recurses it as a literal path entry —
               # the census checks it as one. A miss here mints NOTHING — the
               # entry is dead, which narrows (the opposite direction from the
@@ -1159,6 +1147,20 @@ else
               elif ! _tracked_member "$_cg"; then
                 _cg_why="a literal entry that is not a tracked file -- a dead edge that can never match a diff"
               fi
+              ;;
+            dir)
+              [[ -d "$REPO_ROOT/${_AGS_HEAD%/}" ]] || _cg_why="its head dir ${_AGS_HEAD} does not exist" ;;
+            malformed)
+              # The _AGS_WHY → message map is the single reason vocabulary.
+              case "$_AGS_WHY" in
+                qbracket) _cg_why="contains ? or [ (outside the grammar)" ;;
+                charset) _cg_why="contains a byte outside the grammar charset" ;;
+                head-not-reporel) _cg_why="its head is not a repo-relative prefix" ;;
+                head-mid-slash) _cg_why="its head does not end in /" ;;
+                tail-trailing-slash) _cg_why="its tail ends in / — no path can match it" ;;
+                tail-no-star) _cg_why="its tail carries no *" ;;
+                *) _cg_why="its shape is malformed" ;;
+              esac
               ;;
           esac
           if [[ -n "$_cg_why" ]]; then
