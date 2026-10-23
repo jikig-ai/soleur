@@ -17,19 +17,36 @@
 # inside the apt cycle is charged.
 #
 # A stalled attempt is killed at GD_APT_ATTEMPT_CAP (default 90 s) and retried, up to 3 attempts, all
-# inside the shared budget. Measured: about one apt cycle in three stalled for the full allotted time
-# although apt's own Acquire timeouts were set, and a fresh attempt succeeded in about 15 s.
+# inside the shared budget. Measured: about one apt cycle in three stalled for the full allotted time and a
+# fresh attempt succeeded in about 15 s. NO apt Acquire timeout is set (only Acquire::Retries=5): apt's
+# default HTTP timeout is 120 s, longer than the 90 s attempt cap, so apt's own timeouts and retries can never
+# act inside a cap; the cap is the only bound on a stall.
+#
+# SHARED LISTS + ARCHIVES (#10781). Every container of one suite used to run a full `apt-get update` + `install`
+# into its own empty /var/lib/apt/lists and /var/cache/apt/archives, so a suite with ~12 containers paid ~12
+# index downloads and ~12 package downloads and exhausted the shared budget on a slow-mirror day. Both
+# apt-get calls now pass `-o Dir::State::lists=<state>/lists -o Dir::Cache::archives=<state>/archives`, the
+# directories inside the same host-owned state dir. `update` still runs in every container (a conditional GET: it
+# proves the mirror is reachable); only the first container pays the downloads. The state dir is per suite
+# run and its containers run serially (apt's own lock files are not exercised across concurrent containers).
+# `Dir::State::status` is NOT overridden, so dpkg state stays per container. A mirror outage during the FIRST
+# container still fails closed (#8744); a cache cannot help the first cycle.
 #
 # TWO HALVES.
 #   host      gd_apt_state_arm <state-dir> <budget-seconds>   idempotent ON DISK (a second call, even from a
 #             subshell, finds `budget` and changes nothing); creates the state dir, copies this file into it,
-#             writes budget/spent; exports GD_APT_STATE. Returns non-zero on a bad budget or an unwritable
+#             writes budget/spent and the cache dirs lists/partial + archives/partial (apt exits 100 without
+#             them); exports GD_APT_STATE. Returns non-zero on a bad budget or an unwritable
 #             dir, which callers must treat as a harness defect. Call it immediately before each apt-bearing
 #             `docker run`, which then mounts `-v "$GD_APT_STATE:/work/apt"` (read-write: the container
 #             appends to `spent`).
 #             gd_apt_state_summary                            one `GD_APT: spent=..` line for the log
 #   container . /work/apt/apt-bounded.sh || exit 97
 #             gd_apt_install_bounded <pkg>... || exit $?
+#             On EVERY exit path (success, decline, apt rc) it ends with a container-side `chmod -R a+rwX` of the
+#             state dir: container root creates the cache files, and apt chowns lists/partial and archives/partial
+#             to its download user with mode 0700, so without it the host user could not remove the state dir.
+#             (A container killed from OUTSIDE, for example by the suite's host-side `timeout`, skips it.)
 #
 # CONTRACT (return codes of gd_apt_install_bounded).
 #   0    installed
@@ -79,7 +96,7 @@ gd_apt_state_arm() {
   case "$budget" in ''|*[!0-9]*) echo "GD_APT: budget '${budget}' is not an integer" >&2; return 2 ;; esac
   budget=$(( 10#$budget ))   # a leading zero would otherwise read as octal downstream
   if [ -r "$dir/budget" ]; then GD_APT_STATE="$dir"; export GD_APT_STATE; return 0; fi   # already armed on disk
-  mkdir -p "$dir" || return 2
+  mkdir -p "$dir" "$dir/lists/partial" "$dir/archives/partial" || return 2   # apt's update/install exit 100 without partial/
   cp "$_GD_APT_LIB_SELF" "$dir/apt-bounded.sh" || return 2
   printf '%s\n' "$budget" > "$dir/budget" || return 2
   : > "$dir/spent" || return 2
@@ -106,7 +123,16 @@ _gd_apt_scrubbed_tail() {
     -e 's#([Aa]uthorization:[[:space:]]*[A-Za-z]+)[[:space:]]+[^[:space:]]+#\1 ***#g' >&2
 }
 
+# The public entry: runs the bounded cycle and then makes the state dir removable by the host user whatever the
+# outcome. rc passes through untouched. `|| rc=$?` keeps it correct under `set -e`.
 gd_apt_install_bounded() {
+  local rc=0 dir="${GD_APT_STATE_DIR:-/work/apt}"
+  _gd_apt_install_bounded_cycle "$@" || rc=$?
+  [ -d "$dir" ] && chmod -R a+rwX "$dir" 2>/dev/null
+  return "$rc"
+}
+
+_gd_apt_install_bounded_cycle() {
   local dir="${GD_APT_STATE_DIR:-/work/apt}" budget
   budget="$(cat "$dir/budget" 2>/dev/null || true)"
   case "$budget" in
@@ -131,11 +157,14 @@ gd_apt_install_bounded() {
     # ONE timeout per attempt around the whole pair: the `&&` is the final status inside bash -c,
     # so there is no per-call cap to clamp and no AND-OR errexit hazard.
     # shellcheck disable=SC2016  # the script is deliberately single-quoted: it expands inside bash -c
+    # The shared cache options come from the SAME $dir (GD_APT_STATE_DIR) as the budget, not a second literal, and
+    # sit BEFORE Acquire::Retries on both calls.
     timeout -k 5 "$allot" bash -c '
+      d="$1"; shift
       echo GD_APT_STAGE=update
-      apt-get update -qq -o Acquire::Retries=5 \
-        && { echo GD_APT_STAGE=install; apt-get install -y -qq -o Acquire::Retries=5 "$@"; }
-    ' _ "$@" >> "$log" 2>&1 || rc=$?
+      apt-get update -qq -o "Dir::State::lists=$d/lists" -o "Dir::Cache::archives=$d/archives" -o Acquire::Retries=5 \
+        && { echo GD_APT_STAGE=install; apt-get install -y -qq -o "Dir::State::lists=$d/lists" -o "Dir::Cache::archives=$d/archives" -o Acquire::Retries=5 "$@"; }
+    ' _ "$dir" "$@" >> "$log" 2>&1 || rc=$?
     dt=$(( $(date +%s) - started )); [ "$dt" -lt 0 ] && dt=0   # a backward clock step must not refund budget
     printf '%s\n' "$dt" >> "$dir/spent"   # charge the attempt whatever its outcome
     [ "$rc" -eq 0 ] && return 0

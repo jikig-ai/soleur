@@ -40,14 +40,63 @@ if [ "$_st" != "1 1 1" ]; then
 fi
 
 W="$(mktemp -d "${TMPDIR}/aptb.XXXXXX")"
-trap 'rm -rf "$W"' EXIT
+trap 'chmod -R u+rwX "$W" 2>/dev/null; rm -rf "$W"' EXIT
 STUB="$W/bin"; mkdir -p "$STUB"
 # Stub apt-get. Mode comes from GD_STUB_MODE; every invocation appends one line to GD_STUB_CALLS.
 cat > "$STUB/apt-get" <<'STUBEOF'
 #!/usr/bin/env bash
 echo "$*" >> "${GD_STUB_CALLS:?}"
 n=$(wc -l < "${GD_STUB_CALLS}")
+# CACHE SIMULATION (Guard 4, #10781). Modes cache, cache-stall-once, cache-perms and cache-perms-fail model apt's use of
+# `-o Dir::State::lists=` / `-o Dir::Cache::archives=`: a network cost is recorded in GD_STUB_NET ONLY when the lists are
+# empty (FETCH-INDEX) or the package is neither in the archives dir (FETCH-PKG) nor resumable from archives/partial
+# (RESUME-PKG); a populated lists dir costs one REVALIDATE (the conditional GET, not a download). A missing partial/ dir
+# is fatal exactly as in real apt (rc 100); `install` needs the lists. Without a -o the call uses a fresh, private
+# default dir of its own, so every call pays the network (what a per-container private cache looks like).
+_opt() { local k="$1" a prev=""; shift; for a in "$@"; do if [ "$prev" = -o ]; then case "$a" in "$k"=*) printf '%s' "${a#*=}"; return ;; esac; fi; prev="$a"; done; }
+_cache_apt() {
+  local verb="$1" lists archives p prev="" a; shift
+  local -a pkgs=()
+  lists="$(_opt Dir::State::lists "$@")"; archives="$(_opt Dir::Cache::archives "$@")"
+  for a in "$@"; do
+    if [ "$prev" = -o ]; then prev=""; continue; fi
+    case "$a" in -o) prev=-o ;; -*) ;; *) pkgs+=("$a") ;; esac
+  done
+  case "${GD_STUB_MODE}" in cache-perms*) [ -z "$lists" ] || chmod -R u+rwX "$lists" 2>/dev/null; [ -z "$archives" ] || chmod -R u+rwX "$archives" 2>/dev/null ;; esac
+  case "$verb" in
+    update)
+      if [ -z "$lists" ]; then echo "FETCH-INDEX private" >> "${GD_STUB_NET:?}"
+      else
+        [ -d "$lists/partial" ] || { echo "E: List directory $lists/partial is missing. - Acquire (2: No such file or directory)" >&2; return 100; }
+        if [ -e "$lists/InRelease" ]; then echo "REVALIDATE" >> "${GD_STUB_NET:?}"; else echo "FETCH-INDEX shared" >> "${GD_STUB_NET:?}"; : > "$lists/InRelease"; fi
+      fi ;;
+    install)
+      if [ -n "$lists" ] && [ ! -e "$lists/InRelease" ]; then echo "E: Unable to locate package ${pkgs[0]:-?}" >&2; return 100; fi
+      if [ -n "$archives" ]; then
+        [ -d "$archives/partial" ] || { echo "E: Archives directory $archives/partial is missing. - Acquire (2: No such file or directory)" >&2; return 100; }
+        for p in "${pkgs[@]}"; do
+          if [ -e "$archives/$p.deb" ]; then continue
+          elif [ -e "$archives/partial/$p.deb.part" ]; then echo "RESUME-PKG $p" >> "${GD_STUB_NET:?}"; mv "$archives/partial/$p.deb.part" "$archives/$p.deb"
+          else
+            echo "FETCH-PKG $p" >> "${GD_STUB_NET:?}"
+            if [ "${GD_STUB_MODE}" = cache-stall-once ] && [ ! -e "${GD_STUB_STALLED:?}" ]; then
+              : > "$GD_STUB_STALLED"; : > "$archives/partial/$p.deb.part"
+              sleep 300 & echo "$!" > "${GD_STUB_CHILD:?}"; wait
+            fi
+            : > "$archives/$p.deb"
+          fi
+        done
+      else for p in "${pkgs[@]}"; do echo "FETCH-PKG $p private" >> "${GD_STUB_NET:?}"; done; fi ;;
+  esac
+  case "${GD_STUB_MODE}" in
+    cache-perms*) # what a root apt leaves behind: download-user dirs and files the host user cannot remove
+      for d in "$lists" "$archives"; do [ -z "$d" ] || { : > "$d/partial/lock"; chmod 600 "$d/partial/lock" "$d/InRelease" 2>/dev/null; chmod 500 "$d/partial"; }; done ;;
+  esac
+  return 0
+}
 case "${GD_STUB_MODE:?}" in
+  cache|cache-stall-once|cache-perms) _cache_apt "$@"; exit $? ;;
+  cache-perms-fail) case "$1" in update) _cache_apt "$@"; exit $? ;; *) _cache_apt "$@"; echo "E: install failed" >&2; exit 100 ;; esac ;;
   ok)   exit 0 ;;
   fail) echo "E: Failed to fetch http://alice:s3cr3t@proxy.invalid:3128/ubuntu/dists/noble/InRelease  Unable to connect" >&2
         echo "E: Failed to fetch http://bob:p@ss/w0rd@proxy2.invalid:3128/x  Unable to connect" >&2
@@ -70,16 +119,16 @@ chmod +x "$STUB/apt-get"
 # per call unless KEEP_STATE=1 (rows that chain calls to prove the budget is SHARED); PRE_SPENT seeds it.
 run_helper() {
   local mode="$1" budget="$2"; shift 2
-  OUT="$W/out"; ERR="$W/err"; CALLS="$W/calls"; : > "$CALLS"; : > "$OUT"; : > "$ERR"
+  OUT="$W/out"; ERR="$W/err"; CALLS="$W/calls"; NET="$W/net"; : > "$CALLS"; : > "$NET"; : > "$OUT"; : > "$ERR"
   rm -f "$W/child"
   if [ "${KEEP_STATE:-0}" != 1 ]; then
-    rm -rf "$W/state"
+    chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state"; rm -f "$W/stalled"
     if [ "$budget" != unset ]; then mkdir -p "$W/state"; printf '%s\n' "$budget" > "$W/state/budget"; printf '%s\n' "${PRE_SPENT:-}" | sed '/^$/d' > "$W/state/spent"; fi
   fi
   local t0; t0=$(date +%s)
   RC=0
   # shellcheck disable=SC2016  # single-quoted on purpose: expands inside the fresh bash
-  env PATH="$STUB:$PATH" GD_STUB_MODE="$mode" GD_STUB_CALLS="$CALLS" GD_STUB_CHILD="$W/child" \
+  env PATH="$STUB:$PATH" GD_STUB_MODE="$mode" GD_STUB_CALLS="$CALLS" GD_STUB_NET="$NET" GD_STUB_STALLED="$W/stalled" GD_STUB_CHILD="$W/child" \
     GD_APT_LOG="$W/apt.log" GD_APT_BACKOFFS="${GD_APT_BACKOFFS:-0 0}" GD_APT_STATE_DIR="${GD_APT_STATE_DIR:-$W/state}" \
     bash --noprofile --norc -c 'set -u; . "$1" || exit 97; shift; gd_apt_install_bounded "$@"' _ "$LIB" "${@:-curl}" \
     >"$OUT" 2>"$ERR" || RC=$?
@@ -238,6 +287,95 @@ if printf '%s\n' "$_ao" | grep -cx >/dev/null 'rc2=0 budget=7 spent=3' && printf
    && cmp -s "$LIB" "$_ad/apt-bounded.sh" && [ "$_oct" = 8 ] && [ "$_badrc" -eq 2 ] && [ "$_ia" -eq 0 ]; then
   pass "A19: arm is idempotent on disk and keeps spent, copies the lib, normalises 08, rejects abc; the summary reports; the armed dir drives the helper"
 else fail "A19: host arm/summary" "arm-out=[$(printf '%s' "$_ao" | tr '\n' '|')] oct=[$_oct] bad-rc=$_badrc helper-rc=$_ia"; fi
+
+# ── Guard 4: the shared apt cache (#10781) ───────────────────────────────────────────────
+# A cache-simulating stub (modes cache*, above) records a network cost only when the lists are empty or the package is
+# not in the archives dir, so a warm run that still costs a fetch turns a row red. The state dir is armed by the REAL
+# host half (gd_apt_state_arm), not hand-built, so a missing partial/ dir is fatal here exactly as in real apt.
+arm_state() { local d="${2:-$W/state}"; chmod -R u+rwX "$d" 2>/dev/null; rm -rf "$d" "$W/stalled"; ( . "$LIB"; gd_apt_state_arm "$d" "$1" ) >/dev/null 2>&1; }
+n_net() { grep -c "^$1" "$NET" || true; }
+
+# G4-1 — cold then warm on the SAME state dir: the second container makes ZERO downloads (one REVALIDATE only).
+row
+arm_state 60
+KEEP_STATE=1 run_helper cache 60 curl python3
+_c_rc=$RC; _c_calls=$(calls); _c_fetch=$(n_net FETCH); _c_net="$(tr '\n' '|' < "$NET")"
+KEEP_STATE=1 run_helper cache 60 curl python3
+_w_rc=$RC; _w_calls=$(calls); _w_fetch=$(n_net FETCH); _w_reval=$(n_net REVALIDATE)
+if [ "$_c_rc" -eq 0 ] && [ "$_c_calls" -eq 2 ] && [ "$_c_fetch" -eq 3 ] \
+   && [ "$_w_rc" -eq 0 ] && [ "$_w_calls" -eq 2 ] && [ "$_w_fetch" -eq 0 ] && [ "$_w_reval" -eq 1 ]; then
+  pass "G4-1: cold container downloads the index and both packages (3 fetches); the warm second container makes 0 downloads (1 revalidation)"
+else fail "G4-1: shared cache cold/warm" "cold rc=$_c_rc calls=$_c_calls fetches=$_c_fetch net=[$_c_net] stderr=[$(head -c 200 "$ERR")]; warm rc=$_w_rc calls=$_w_calls fetches=$_w_fetch revalidations=$_w_reval net=[$(tr '\n' '|' < "$NET")]"; fi
+
+# G4-2 — BOTH apt calls carry the same -o Dir::State::lists / Dir::Cache::archives, derived from the state dir
+# (an alternate dir proves no second literal), placed before Acquire::Retries.
+row
+_alt="$W/alt"; arm_state 60 "$_alt"
+GD_APT_STATE_DIR="$_alt" KEEP_STATE=1 run_helper cache 60 curl python3
+_u="$(grep '^update ' "$CALLS" || true)"; _i="$(grep '^install ' "$CALLS" || true)"
+_ok=1
+for _l in "$_u" "$_i"; do
+  case "$_l" in *"-o Dir::State::lists=${_alt}/lists -o Dir::Cache::archives=${_alt}/archives -o Acquire::Retries=5"*) ;; *) _ok=0 ;; esac
+done
+if [ "$RC" -eq 0 ] && [ "$_ok" -eq 1 ] && [ "$(calls)" -eq 2 ] && printf '%s\n' "$_i" | grep -qE '^install .*Acquire::Retries=5.* curl python3$'; then
+  pass "G4-2: update AND install both pass -o Dir::State::lists=<state>/lists -o Dir::Cache::archives=<state>/archives (derived from GD_APT_STATE_DIR) before Acquire::Retries; the A1 shape still holds"
+else fail "G4-2: shared -o options on both calls" "rc=$RC update=[$_u] install=[$_i]"; fi
+rm -rf "$_alt"
+
+# G4-3 — the arm creates lists/partial and archives/partial, and a NON-CANONICAL state (a pre-existing populated lists/
+# and a different budget) still works: the index is not re-downloaded, the packages are.
+row
+rm -rf "$W/state" "$W/stalled"; mkdir -p "$W/state/lists"; : > "$W/state/lists/InRelease"
+( . "$LIB"; gd_apt_state_arm "$W/state" 45 ) >/dev/null 2>&1; _arm_rc=$?
+_parts=no; [ -d "$W/state/lists/partial" ] && [ -d "$W/state/archives/partial" ] && _parts=yes
+KEEP_STATE=1 run_helper cache 45 curl
+if [ "$_arm_rc" -eq 0 ] && [ "$_parts" = yes ] && [ "$(cat "$W/state/budget")" = 45 ] && [ "$RC" -eq 0 ] \
+   && [ "$(n_net FETCH-INDEX)" -eq 0 ] && [ "$(n_net FETCH-PKG)" -eq 1 ]; then
+  pass "G4-3: arm creates lists/partial and archives/partial; a pre-existing lists/ with another budget (45) still arms and cycles (index reused, package fetched)"
+else fail "G4-3: arm partial dirs / pre-existing lists" "arm-rc=$_arm_rc partial-dirs=$_parts budget=$(cat "$W/state/budget" 2>/dev/null) rc=$RC net=[$(tr '\n' '|' < "$NET")] stderr=[$(head -c 200 "$ERR")]"; fi
+
+# G4-4 — a download stalled mid-package is cut at the attempt cap and the retry RESUMES from archives/partial
+# instead of starting over, inside the budget; the shared dirs are what make the retry cheap.
+row
+arm_state 60
+GD_APT_ATTEMPT_CAP=2 KEEP_STATE=1 run_helper cache-stall-once 60 curl
+reap_child
+if [ "$RC" -eq 0 ] && [ "$ELAPSED" -le 10 ] && [ "$(calls)" -eq 4 ] && [ "$(n_net FETCH-PKG)" -eq 1 ] && [ "$(n_net RESUME-PKG)" -eq 1 ] && [ "$(spent_total)" -le 10 ]; then
+  pass "G4-4: a stalled download is cut at the cap and the retry resumes from archives/partial (rc 0 after ${ELAPSED}s, 4 apt calls, 1 fetch + 1 resume, charged $(spent_total)s)"
+else fail "G4-4: capped then resumed" "rc=$RC elapsed=${ELAPSED}s calls=$(calls) net=[$(tr '\n' '|' < "$NET")] spent=$(spent_total)"; fi
+
+# G4-5 — the host can REMOVE the state dir after a run on EVERY exit path. The stub leaves what a root apt leaves
+# (download-user dirs mode 0500, files 0600); the helper's container-side chmod must open them, on success, on exhausted
+# apt errors, with the budget already spent (no apt run at all) and on a timeout.
+row
+_g5=""
+_g5_check() { # <label>: nothing left non-rw for others, and the host removes the tree
+  local bad rmrc=0
+  bad="$(find "$W/state" \( -type d -o -type f \) ! -perm -006 2>/dev/null | head -3 | tr '\n' ' ')"
+  rm -rf "$W/state" 2>/dev/null || rmrc=$?
+  if [ -n "$bad" ] || [ "$rmrc" -ne 0 ] || [ -e "$W/state" ]; then _g5="${_g5} $1:[non-open=${bad:-none} rm-rc=$rmrc still-there=$( [ -e "$W/state" ] && echo yes || echo no )]"; fi
+  chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state"
+}
+_seed_perms() { mkdir -p "$W/state/archives/partial"; : > "$W/state/archives/partial/lock"; chmod 600 "$W/state/archives/partial/lock"; chmod 500 "$W/state/archives/partial"; }
+arm_state 60; KEEP_STATE=1 run_helper cache-perms 60 curl;                         [ "$RC" -eq 0 ]   || _g5="${_g5} success:[rc=$RC]";  _g5_check success
+arm_state 60; KEEP_STATE=1 run_helper cache-perms-fail 60 curl;                    [ "$RC" -eq 100 ] || _g5="${_g5} apt-error:[rc=$RC]"; _g5_check apt-error
+arm_state 60; _seed_perms; printf '99\n' >> "$W/state/spent"; KEEP_STATE=1 run_helper cache-perms 60 curl
+[ "$RC" -eq 100 ] && [ "$(calls)" -eq 0 ] || _g5="${_g5} spent:[rc=$RC calls=$(calls)]";                                                                        _g5_check spent
+arm_state 3; _seed_perms; GD_APT_ATTEMPT_CAP=1 KEEP_STATE=1 run_helper hang 3 curl; reap_child
+[ "$RC" -eq 100 ] || _g5="${_g5} timeout:[rc=$RC]";                                                                                                               _g5_check timeout
+if [ -z "$_g5" ]; then
+  pass "G4-5: the host can remove the state dir after success, exhausted apt errors, a spent budget and a timeout (container-side chmod -R a+rwX on every exit path)"
+else fail "G4-5: state dir not removable by the host" "$_g5"; fi
+
+# G4-6 — a --no-install-recommends call site (sandbox-masked-proc-docker, cloud-init-inngest-provision-unit) keeps its
+# argument order: the flag stays the first package-side argument, after the shared options.
+row
+arm_state 60
+KEEP_STATE=1 run_helper cache 60 --no-install-recommends bubblewrap procps
+_i="$(grep '^install ' "$CALLS" || true)"
+if [ "$RC" -eq 0 ] && printf '%s\n' "$_i" | grep -qE '^install -y -qq -o Dir::State::lists=[^ ]+ -o Dir::Cache::archives=[^ ]+ -o Acquire::Retries=5 --no-install-recommends bubblewrap procps$' && [ "$(n_net FETCH-PKG)" -eq 2 ]; then
+  pass "G4-6: --no-install-recommends keeps its position (after the shared options and Acquire::Retries, before the packages)"
+else fail "G4-6: --no-install-recommends order" "rc=$RC install=[$_i] net=[$(tr '\n' '|' < "$NET")]"; fi
 
 # ── Derived assembly row ─────────────────────────────────────────────────────────────────
 # For each consumer suite (comment-stripped, continuation-joined): every `docker run` site is either mounted
@@ -408,8 +546,8 @@ if [ -z "$_asm" ] && [ "$_tot" -eq "$_exp_tot" ] && [ "$_unm" -eq "$_exp_unm" ];
 else fail "A10: assembly drift" "${_asm:-ok} total-helper-calls=$_tot (want $_exp_tot) unmounted=$_unm (want $_exp_unm). Legend: docker=docker run sites, mounted=sites carrying -v \"\$GD_APT_STATE:/work/apt\", calls=gd_apt_install_bounded calls (each needs '|| exit \$?' and a preceding '. /work/apt/apt-bounded.sh || exit 97'), arms=gd_apt_state_arm lines (exactly 'gd_apt_state_arm \"\$<var>/aptstate\" \"\$APT_BUDGET_S\" || { ...; exit 2; }', directly before a MOUNTED docker run), raw-apt must be 0. Keep APT_BUDGET_S plus the container's non-apt time under the site's host timeout and the suite bound."; fi
 
 # ── FLOOR + LEDGER (ADR-193: printf + exit inside the block, never through pass()/fail()) ──
-if [ "$checked" -lt 19 ]; then
-  printf 'FAIL ANTI-VACUITY: only %s rows ran, floor is 19 — rows were deleted or the suite exited early.\n' "$checked" >&2
+if [ "$checked" -lt 25 ]; then
+  printf 'FAIL ANTI-VACUITY: only %s rows ran, floor is 25 — rows were deleted or the suite exited early.\n' "$checked" >&2
   exit 1
 fi
 if [ "$((passes + fails))" -ne "$checked" ]; then
