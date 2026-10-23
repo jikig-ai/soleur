@@ -2,6 +2,18 @@ BEGIN;
 SET LOCAL lock_timeout = '30s';
 SET LOCAL statement_timeout = '5min';
 
+DO $$ BEGIN
+  IF to_regclass('public.conversations') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.conversations must exist before 173';
+  END IF;
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.users must exist before 173';
+  END IF;
+  IF to_regclass('public.workspace_members') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.workspace_members must exist before 173';
+  END IF;
+END $$;
+
 -- Stores that the current conversation owner was sent the notice for one
 -- provider-mode generation. It contains no message or notice text.
 -- LAWFUL_BASIS: provisional Art. 6(1)(b) candidate — records the explicit step required to perform an owner-requested provider switch; validate with CLO before qualification.
