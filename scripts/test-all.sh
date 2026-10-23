@@ -3805,7 +3805,8 @@ _aff_runner_banner() {
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
-_MIN_ALWAYS_ON_DECLARED=113
+# #10664: +1 always-on (the hcloud-token read-only no-fallback scan); re-pinned at 119-5.
+_MIN_ALWAYS_ON_DECLARED=114
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5729,15 +5730,8 @@ if want_scripts; then
   # the daily verify leg; a structural arm pins that it carries no query or parse of its own. Four
   # mutants are replayed against the arms, each from a sandbox tree.
   run_suite "scripts/web2-luks-live-6931" bash scripts/followthroughs/web2-luks-live-6931.test.sh
-  # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
-  # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
-  # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
-  # sibling `SOLEUR_INFRA_CONFIG_RESTART_STDERR:` diagnostic rows, toward its PASS condition. So
-  # the probe would have closed the issue on the evidence of its own recurrence. The suite pins
-  # the action-vocabulary split and the freshness guard that a PASS now requires.
-  run_suite "scripts/infra-config-activation-7220" bash scripts/followthroughs/infra-config-activation-7220.test.sh
-  # Post-recut registry fill rate (#7341). Same failure family as the probe directly above, which
-  # is why it is registered next to it: five separate fail-open defects, every one of which
+  # Post-recut registry fill rate (#7341). Same failure family as the probes registered above, which
+  # is why it is registered here: five separate fail-open defects, every one of which
   # produced a GREEN verdict. Two are worth pinning here. A 72h window straddling the recut fitted
   # one line through the old 100%-full volume and the new empty one, reporting a WIPE as a trend
   # (`PASS slope=-58.48pp/day`). And `boot_id=([0-9a-f-]+)` matched only a PREFIX of the token, so
@@ -6227,6 +6221,11 @@ if want_scripts; then
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
+  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential outside the one
+  # expiring op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
+  # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing
+  # auto-discovers tests/scripts/.
+  run_suite "tests/scripts/hcloud-token-readonly-no-fallback-scan" bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh
   # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
   # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
   # auto-discovered, so this line IS the registration.

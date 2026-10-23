@@ -245,6 +245,11 @@ ALWAYS_ON_SUITES=(
   # the whole tracked tree; any file anywhere can introduce a TOFU violation, so
   # no path edge can express its selection.
   "tests/scripts/no-tofu-ssh"
+  # tests/scripts/hcloud-token-readonly-no-fallback-scan — the Hetzner read-only-token no-fallback scan (scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4) walks `git ls-files`
+  # over the whole tracked tree (everything except a pinned exclusion list): a doppler secrets-get read of the
+  # read/write Hetzner credential can appear in any file anywhere, so the verdict is a property of the tree,
+  # not of a diff, and no path edge can express its selection. An edit to the scanner selects it too.
+  "tests/scripts/hcloud-token-readonly-no-fallback-scan"
   "blog-link-validation"
   # (#9307) Audited as demotable and put back. The first reason was derive cost (~82 s of first-touch
   # attribution; 0.2 s once the runner became a closure leaf, always-on-audit.md Round 3), and that
@@ -964,6 +969,9 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
 # curl), so the edge is the directory prefix, and the rows are keyed off the Rule E baseline.
 AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "scripts/followthroughs/"
+  # G1 PR-4a (#10937): the parity script is the one HMAC surface this suite still EXECUTES directly under the shim
+  # (live status arm, hostile-credential, xtrace, big-secret and mutant rows); it used to be reached only through the retired probes.
+  "scripts/check-deploy-script-parity.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
   # S2 (#9597): the suite pins the sentences these records carry about the converted surfaces.
@@ -1389,6 +1397,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_FLAG_DETACH_SHARED_TEST_SH_PATHS=(
   "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
   "plugins/soleur/test/flag-detach-shared.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/flip-update-existing-override.test.sh — extracts fs_api, read_feature_segment_id and
+# flip_segment_in_env out of flip.sh by content at run time, so no derived import edge reaches its subject;
+# declared from the script it names.
+AFFECTED_PLUGINS_SOLEUR_TEST_FLIP_UPDATE_EXISTING_OVERRIDE_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+  "plugins/soleur/test/flip-update-existing-override.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
