@@ -16,7 +16,9 @@ restore_header_codes() {
   awk '/^[^#]/ { exit } /^#[[:space:]]+[0-9]+[[:space:]][[:space:]]+[A-Za-z]/ { if ($2 != 0) print $2 }' | sort -un
 }
 
-# The non-zero codes at the engine's own `die N` / `exit N` sites, comments stripped.
+# The non-zero codes at the engine's own `die N` / `exit N` sites, comments stripped. LITERAL
+# codes only, written with a single space (`die 7`): a computed `die "$x"` or `exit $((n))` is
+# not seen, and neither suite claims to cover one.
 restore_emit_codes() {
   grep -vE '^[[:space:]]*#' | grep -oE '(^|[^A-Za-z0-9_])(die|exit) [0-9]+' | grep -oE '[0-9]+$' | sort -un | grep -vx 0
 }
