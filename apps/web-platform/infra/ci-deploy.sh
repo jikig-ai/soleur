@@ -3764,14 +3764,29 @@ _inngest_link_install() {
   return 1
 }
 
+# _inngest_link_time_nonzero <t>: classifies ONE curl timer field (time_connect or time_appconnect). Pure: no I/O, never aborts. The ONE
+# place a timer is interpreted: the phase helper below and the tcp/tls counters of the attempt loop both call it, so the two can never
+# disagree about what a zero or an unreadable timer is (resolver-suite rows S1, S4 and S8 pin the comma-decimal zero and the counters).
+#   returns 0  a decimal number that is not zero (the stage happened)
+#   returns 1  a decimal number that is zero, dot or comma separated, `0.000000` or `0,000000` (the stage never happened)
+#   returns 2  not a decimal number (empty, text, an exponent): it says nothing about the stage
+_inngest_link_time_nonzero() { # <t>
+  local t="${1-}" num='^[0-9]+[.,][0-9]+$' zero='^[0.,]*$'
+  if [[ ! "$t" =~ $num ]]; then return 2; fi
+  if [[ "$t" =~ $zero ]]; then return 1; fi
+  return 0
+}
+
 # _inngest_link_selfgate_phase <rc> <code> <time_connect> <time_appconnect>: prints ONE fixed token naming the stage the LAST attempt
 # reached (#10934). Pure: no I/O, no side effect, never aborts. The input is what one curl attempt printed, split into fields; this is
-# the only code that interprets those fields. Order matters (rc 124 or an empty line first, then the two exit codes that are certain
-# without any timer, then a received HTTP status, then the timers):
+# the only code that turns the fields into a STAGE (the timers themselves are read by _inngest_link_time_nonzero, and the attempt loop
+# reads only the HTTP code and the verification result for the event). Order matters (rc 124 or an empty line first, then the two exit
+# codes that are certain without any timer, then a received HTTP status, then the timers):
 #   unknown    rc 124 (the timeout wrapper killed curl: a hang), an empty line, or a timer that is not a decimal number. Never a
-#              success-looking token: an unparsable attempt must not read as a stage.
+#              success-looking token: an unparsable attempt must not read as a stage. The rc 77, rc 60 and validated-status arms run
+#              BEFORE the timers are looked at, so a non-numeric timer beside them still reads ca_file, verify or status.
 #   ca_file    rc 77 (curl could not use the pinned CA file).
-#   verify     rc 60 (the handshake completed but the served certificate does not verify against the pinned file).
+#   verify     rc 60 (the served certificate does not verify against the pinned file; the handshake did not complete, tls is 0).
 #   status     a validated three-digit code other than 000 and 200 (TLS verified and an HTTP status other than 200 came back). A 200
 #              code with a non-zero rc is a body cut short: it is NOT status, it falls through to the timers and reads request.
 #   connect    time_connect is zero (no TCP connection: refused, firewall drop, unreachable).
@@ -3779,16 +3794,19 @@ _inngest_link_install() {
 #   request    TLS completed and verified, no HTTP status came back. It does NOT prove a cause: it means only that the certificate is
 #              not the problem and the terminator or whatever sits behind it is to be checked. Classified by the timers, never by an
 #              rc list, because one wire event prints rc 52 on one curl build and rc 56 on another.
+# The rc tests are string compares on purpose (`${1-}` may be empty, where `-eq` would abort): do not turn them into `-eq`.
 _inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
-  local rc="${1-}" code="${2-}" tc="${3-}" ta="${4-}"
-  local num='^[0-9]+[.,][0-9]+$' zero='^[0.,]*$' c3='^[0-9]{3}$'
+  local rc="${1-}" code="${2-}" tc="${3-}" ta="${4-}" tcr=0 tar=0
+  local c3='^[0-9]{3}$'
   if [[ "$rc" == 124 || -z "$code$tc$ta" ]]; then printf unknown; return 0; fi
   if [[ "$rc" == 77 ]]; then printf ca_file; return 0; fi
   if [[ "$rc" == 60 ]]; then printf verify; return 0; fi
   if [[ "$code" =~ $c3 && "$code" != 000 && "$code" != 200 ]]; then printf status; return 0; fi
-  if [[ ! "$tc" =~ $num || ! "$ta" =~ $num ]]; then printf unknown; return 0; fi
-  if [[ "$tc" =~ $zero ]]; then printf connect; return 0; fi
-  if [[ "$ta" =~ $zero ]]; then printf handshake; return 0; fi
+  _inngest_link_time_nonzero "$tc" || tcr=$?
+  _inngest_link_time_nonzero "$ta" || tar=$?
+  if [[ "$tcr" -eq 2 || "$tar" -eq 2 ]]; then printf unknown; return 0; fi
+  if [[ "$tcr" -eq 1 ]]; then printf connect; return 0; fi
+  if [[ "$tar" -eq 1 ]]; then printf handshake; return 0; fi
   printf request
 }
 
@@ -3810,18 +3828,18 @@ _inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
 _inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verified against the pinned file AND 200
   local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" out code tc ta ver rc=0
   local phase=unknown http=none vv=0 tcpn=0 tlsn=0
-  local num='^[0-9]+[.,][0-9]+$' zero='^[0.,]*$' c3='^[0-9]{3}$'
+  local c3='^[0-9]{3}$'
   case "$max" in '' | *[!0-9]*) max=3 ;; esac
   while :; do
     rc=0
     out="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code} %{time_connect} %{time_appconnect} %{ssl_verify_result}' --connect-timeout 5 --max-time 10 \
       --cacert "$1" "$INNGEST_LINK_HTTPS_URL/health" 2>/dev/null)" || rc=$?
     code=""; tc=""; ta=""; ver=""
-    read -r code tc ta ver <<< "$out" || true
+    IFS=' ' read -r code tc ta ver <<< "$out" || true
     if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi
     phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"
-    if [[ "$tc" =~ $num && ! "$tc" =~ $zero ]]; then tcpn=$((tcpn + 1)); fi
-    if [[ "$ta" =~ $num && ! "$ta" =~ $zero ]]; then tlsn=$((tlsn + 1)); fi
+    if _inngest_link_time_nonzero "$tc"; then tcpn=$((tcpn + 1)); fi
+    if _inngest_link_time_nonzero "$ta"; then tlsn=$((tlsn + 1)); fi
     http=none
     if [[ "$code" =~ $c3 ]]; then http="$code"; fi
     vv=0

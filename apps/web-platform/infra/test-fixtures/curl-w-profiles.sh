@@ -12,7 +12,7 @@
 # measured 2026-10-23 on curl 7.81.0, 8.5.0 and 8.23.0 against real local listeners (a python `ssl` server and real stunnel 5.72);
 # the values printed here are the curl 8.5.0 column. `req_partial` and `status_partial` (rc 18) were measured on 8.5.0 in the deepen
 # pass. Only the four variables that exist since curl 7.19 are modelled: http_code time_connect time_appconnect ssl_verify_result.
-# There is deliberately NO num_connects column (it is never printed) and NO default profile: an unknown profile or an unknown
+# There is deliberately NO num_connects column (it is never printed) and NO default profile inside the printer (the callers pick ok200 themselves when their row names none): an unknown profile or an unknown
 # write-out variable is refused (stderr, exit 99, a sentinel file), because a double that "helpfully" answers 200 is how #10874 hid.
 #
 # PROFILE SPEC: <name> or <name>@<rc> (the rc override is for rows that pin the SAME times under a different exit code, or that pair a
@@ -48,13 +48,23 @@ ok200|0|200|0.000503|0.009276|0'
 #   raw_nonnum502 the same with a 502 code
 #   ok200_comma_extra   a healthy 200 with a comma decimal separator and one extra trailing token (no trailing newline, like curl)
 #   req_reset_comma     the incident shape (req_reset) with comma decimal separators
+#   raw_refused_comma   a refused connection (rc 7) whose zero timers use the comma separator (`0,000000`): zero is zero in either form
+#   raw_hs_comma        TCP connected, no handshake (rc 35) with comma separators: a non-zero time_connect, a zero time_appconnect
+#   raw_verify_nonnum   rc 60 whose verification-result field is text, not an integer (the event must print verify=0)
+#   raw_status204       rc 0 with HTTP 204 and good timers: a gate that accepts "any 2xx" passes it, the real one must fail closed
+#   raw_code2000        rc 0 with the four-digit code 2000: a gate that matches "200*" passes it, the real one must fail closed
 CURLW_RAW='raw_empty|124|
 raw_garbage|56|https://leak.invalid/x 10.0.1.40 garbage 0
 raw_short3|56|200 0.000503
 raw_nonnum|56|000 abc def 18
 raw_nonnum502|56|502 abc def 0
 ok200_comma_extra|0|200 0,000503 0,009276 0 extra
-req_reset_comma|56|000 0,000138 0,004360 0'
+req_reset_comma|56|000 0,000138 0,004360 0
+raw_refused_comma|7|000 0,000000 0,000000 0
+raw_hs_comma|35|000 0,000198 0,000000 1
+raw_verify_nonnum|60|000 0.000119 0.000000 abc
+raw_status204|0|204 0.000235 0.010363 0
+raw_code2000|0|2000 0.000235 0.010363 0'
 
 CURLW_KNOWN_VARS="http_code time_connect time_appconnect ssl_verify_result"
 
@@ -88,10 +98,11 @@ curlw_lookup() {
   return 1
 }
 
-# curlw_render <profile> <fmt>: sets CURLW_OUT to what curl would print for the -w string <fmt> (the four modelled variables, %%, and
-# the backslash escapes \n \r \t \\ ), no trailing newline unless the format asks for one. Returns 99 on an unknown variable.
+# curlw_render <fmt>: sets CURLW_OUT to what curl would print for the -w string <fmt> (the four modelled variables, %%, and the backslash
+# escapes \n \r \t \\ ), no trailing newline unless the format asks for one. It renders the profile of the PRECEDING curlw_lookup (the
+# CURLW_* variables it set), so call curlw_lookup first; curlw_print does. Returns 99 on an unknown variable.
 curlw_render() {
-  local f="$2" out="" name v known bs=$'\\'
+  local f="$1" out="" name v known bs=$'\\'
   CURLW_OUT=""
   while [[ -n "$f" ]]; do
     case "$f" in
@@ -126,7 +137,7 @@ curlw_render() {
 # (callers do `curlw_print ...; exit $?`). An unknown profile or variable returns 99 (and drops the sentinel).
 curlw_print() {
   if ! curlw_lookup "$1"; then curlw_fail "unknown profile: $1"; return 99; fi
-  curlw_render "$1" "$2" || return 99
+  curlw_render "$2" || return 99
   if [[ "$CURLW_KIND" == raw ]]; then printf '%s' "$CURLW_RAWOUT"; else printf '%s' "$CURLW_OUT"; fi
   return "$CURLW_RC"
 }
