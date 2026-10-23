@@ -132,11 +132,10 @@ done
 # A clean config read-back does NOT prove the origin answers — this is the check that
 # catches a correct-looking pin at a dead address.
 APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || echo "soleur.ai")
-WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET "${DOPPLER_ARGS[@]}" --plain)
-CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID "${DOPPLER_ARGS[@]}" --plain 2>/dev/null \
-  || doppler secrets get CI_SSH_ACCESS_TOKEN_ID "${DOPPLER_ARGS[@]}" --plain)
-CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET "${DOPPLER_ARGS[@]}" --plain 2>/dev/null \
-  || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET "${DOPPLER_ARGS[@]}" --plain)
+# The trio comes from the caller's env (the Tier-B loader step, #9294), never from prd_terraform.
+WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
+CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
+CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
 [[ -n "$WEBHOOK_SECRET" ]] && echo "::add-mask::$WEBHOOK_SECRET"
 [[ -n "$CF_ACCESS_SECRET" ]] && echo "::add-mask::$CF_ACCESS_SECRET"
 

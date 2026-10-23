@@ -1231,8 +1231,12 @@ sed -i "1s|.*|#!${BASH_BIN}|" "$VT_STUBS/doppler" "$VT_STUBS/terraform"
 chmod +x "$VT_STUBS/doppler" "$VT_STUBS/terraform"
 vt_run() { # <rowname> <script> [env...] -- runs under the stub set; CF token defaults to the fixture
   local name="$1" script="$2"; shift 2
+  # #9294 G1: the webhook trio is the caller's env (the Tier-B loader step), not a doppler read; the VT_CF_ACCESS_* knobs override it.
+  local acc_id=cfid0001 acc_sec=cfsecret0001 a
+  for a in "$@"; do case "$a" in VT_CF_ACCESS_ID=*) acc_id="${a#*=}" ;; VT_CF_ACCESS_SECRET=*) acc_sec="${a#*=}" ;; esac; done
   RUN_EXTRA_PATH="$VT_STUBS"
-  run_probe "$name" "$script" "VT_CF_API_TOKEN=$FIXTURE_TOKEN" "SHIM_BODY_FILE=$BODIES/cf_tunnel_cfg.json" SHIM_MODE=noauth "$@"
+  run_probe "$name" "$script" "VT_CF_API_TOKEN=$FIXTURE_TOKEN" "SHIM_BODY_FILE=$BODIES/cf_tunnel_cfg.json" SHIM_MODE=noauth "$@" \
+    "WEBHOOK_DEPLOY_SECRET=webhook-secret-0001" "CF_ACCESS_CLIENT_ID=$acc_id" "CF_ACCESS_CLIENT_SECRET=$acc_sec"
   RUN_EXTRA_PATH=""
 }
 vt_stdin() { cat "$ROWS/$1/shim/calls/$2.stdin" 2>/dev/null; }
@@ -4181,6 +4185,14 @@ s4_run() {
     done
     set -- ${kept[@]+"${kept[@]}"}
   fi
+  # #9294 G1: the webhook trio reaches a step as the Tier-B loader composite's env export, not as a doppler read. A row that sets the
+  # trio's D_<NAME> (the doppler stub's answer) therefore ALSO sets <NAME> itself, with the same value (set-but-empty stays empty,
+  # no D_<NAME> stays unset), so the existing rows keep driving the same credential states through the new source.
+  local -a trio_env=(); local ta
+  for ta in "$@"; do
+    case "${ta%%=*}" in D_WEBHOOK_DEPLOY_SECRET|D_CF_ACCESS_CLIENT_ID|D_CF_ACCESS_CLIENT_SECRET) trio_env+=("${ta#D_}") ;; esac
+  done
+  set -- "$@" ${trio_env[@]+"${trio_env[@]}"}
   S4_RC=0
   ( cd "${S4_CWD:-$REPO_ROOT}" && env -i PATH="$S4_SHIM:$realdir" HOME="$r" TMPDIR="$r" RUNNER_TEMP="$r/rt" GITHUB_OUTPUT="$r/gho" GITHUB_ENV="$r/genv" \
       GITHUB_STEP_SUMMARY="$r/summary" GITHUB_WORKSPACE="$REPO_ROOT" CALLS_DIR="$r/calls" TOOLS_DIR="$r/tools" "$@" \

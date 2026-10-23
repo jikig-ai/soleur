@@ -4204,12 +4204,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
-          [[ -n "$CF_ACCESS_CLIENT_SECRET" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
-          [[ -n "$CF_ACCESS_CLIENT_ID" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_ID}"
+          # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
+          # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
 
       - name: Post-replace readiness note (non-SSH)
@@ -6084,12 +6080,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
-          [[ -n "$CF_ACCESS_CLIENT_SECRET" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
-          [[ -n "$CF_ACCESS_CLIENT_ID" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_ID}"
+          # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
+          # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
 
       - name: Dispatch summary

@@ -249,6 +249,16 @@ jobs:
           fi
           echo "required secrets present."
 
+      # #9294 G1: the webhook trio (the redeploy's HMAC key and Access pair) is a Tier-B read now. This
+      # step runs before the first flag write, so the finalizer's unwind redeploy always has it in env; a
+      # job without the Tier-B token exports none and the redeploy step refuses (no prd_terraform fallback).
+      - name: Load infra credentials (tiered)
+        if: steps.flag_precheck.outputs.nothing_to_rollback != '1'
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
       # --- flip preconditions (precondition chain, flip only) ------------------------
       - name: Flip preconditions (live-rule / d6 freshness / deploy-in-flight)
         id: flip_preconditions
@@ -540,10 +550,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
+          # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
+          # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
 
       # --- per-host git_data_store= readback via Better Stack (host_name keyed) -------
@@ -746,19 +754,12 @@ jobs:
               unwind_failed=1
             fi
             if [[ "$unwind_failed" = 0 ]]; then
-              export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-              WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform 2>/dev/null)" || true
-              CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform 2>/dev/null)" || true
-              CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform 2>/dev/null)" || true
-              if [[ -n "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then
-                if REDEPLOY_TIMEOUT_S=900 bash .github/actions/dispatch-web-redeploy/track.sh; then
-                  echo "finalizer: off-line redeploy confirmed"
-                else
-                  echo "::error::finalizer: unwind redeploy did not confirm — verify git_data_store=disabled per host via Better Stack"
-                  unwind_failed=1
-                fi
+              # The trio is the Tier-B loader step's export (job env). track.sh refuses with
+              # verdict=redeploy_credential_absent when it is missing (a job that died before that step).
+              if REDEPLOY_TIMEOUT_S=900 bash .github/actions/dispatch-web-redeploy/track.sh; then
+                echo "finalizer: off-line redeploy confirmed"
               else
-                echo "::error::finalizer: WEBHOOK_DEPLOY_SECRET unreadable — flag-off written but NO redeploy dispatched; the fleet still runs the prior env. Page on-call."
+                echo "::error::finalizer: unwind redeploy did not confirm (verdict=redeploy_credential_absent above means the Tier-B loader step exported no trio) — verify git_data_store=disabled per host via Better Stack"
                 unwind_failed=1
               fi
             fi

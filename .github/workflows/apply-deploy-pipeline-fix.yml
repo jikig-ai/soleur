@@ -651,15 +651,13 @@ jobs:
           PRE_TS=""
 
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain 2>/dev/null)
+          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET:-}"
           # Mask before any of these can reach a log line. This repo is PUBLIC and this same
           # workflow already does exactly this ~200 lines below for the same credential class;
           # the omission here was an inconsistency, not a considered exception.
           [[ -n "${WEBHOOK_SECRET:-}" ]] && echo "::add-mask::${WEBHOOK_SECRET}"
-          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null)
-          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null)
-          [[ -n "${CF_ACCESS_SECRET:-}" ]] && echo "::add-mask::${CF_ACCESS_SECRET}"
-          [[ -n "${CF_ACCESS_ID:-}" ]] && echo "::add-mask::${CF_ACCESS_ID}"
+          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID:-}"
+          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
 
           if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
             # Its OWN token, not the generic `error`. The step ran and measured a specific
@@ -848,11 +846,11 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
 
           for attempt in 1 2 3; do
             # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
@@ -892,11 +890,9 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          export APP_DOMAIN_BASE WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+          export APP_DOMAIN_BASE
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-          WEBHOOK_DEPLOY_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
-          CF_ACCESS_CLIENT_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
-          CF_ACCESS_CLIENT_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+          : "${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}" "${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}" "${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
           bash scripts/check-deploy-script-parity.sh --status-only
 
       - name: Export rendered credential digest (activates the gate's byte compare)
@@ -1232,12 +1228,8 @@ jobs:
           # DISTINGUISHABLE, and the consumers can stop asserting a cause nobody measured.
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           cf_rc=0
-          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null \
-            || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null) || cf_rc=$?
-          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null \
-            || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null) || cf_rc=$?
-          [[ -n "${CF_ACCESS_SECRET:-}" ]] && echo "::add-mask::${CF_ACCESS_SECRET}"
-          [[ -n "${CF_ACCESS_ID:-}" ]] && echo "::add-mask::${CF_ACCESS_ID}"
+          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID:-}"
+          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
           if [[ "$cf_rc" -ne 0 || -z "${CF_ACCESS_ID:-}" || -z "${CF_ACCESS_SECRET:-}" ]]; then
             echo "listener_state=probe_error" >> "$GITHUB_OUTPUT"
             echo "::error::The post-re-push liveness probe COULD NOT RUN: the CF Access credentials could not be read from Doppler (rc=$cf_rc). This says NOTHING about the webhook listener — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Re-run the workflow once Doppler is reachable; if it recurs, check CF_ACCESS_CLIENT_ID/SECRET in the prd_terraform config."
@@ -2173,11 +2165,11 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
 
           # #6512 Fix 2a: source the actionable-alert emitter (fail-open) called at every terminal
           # failure below that leaves the running container's seccomp profile UNENFORCED.
@@ -2469,11 +2461,11 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
+          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
 
           PERSISTENT=""
           for attempt in 1 2 3; do

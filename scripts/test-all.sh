@@ -6223,6 +6223,8 @@ if want_scripts; then
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
+  # G1 PR-2 (#9294): the deploy Access token is forgotten from state (removed block), never destroyed.
+  run_suite "tests/scripts/deploy-access-token-forget" bash tests/scripts/test-deploy-access-token-forget.sh
   # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
   # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
   # auto-discovered, so this line IS the registration.

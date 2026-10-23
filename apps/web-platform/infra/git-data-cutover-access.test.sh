@@ -2078,9 +2078,22 @@ remote = [u for u in uses if not re.search(r"uses:\s+\./", u)]
 local = [re.sub(r"^(-\s+)?uses:\s+", "", u) for u in uses if re.search(r"uses:\s+\./", u)]
 NOTIFY_ACTION = "./.github/actions/notify-ops-email"
 INFRA_CREDS_ACTION = "./.github/actions/infra-credentials"
-check("AC9 pins: every remote uses: is @<40 hex> # v… (%d remote, exactly four: three checkouts and the Doppler install), and the only local actions are the bridge (once per gated job), the Tier-B credential loader (the wipe job, once) and the notify composite" % len(remote),
-      len(remote) == 4 and all(re.search(r"uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v", u) for u in remote) and sorted(local) == sorted([BRIDGE, BRIDGE, INFRA_CREDS_ACTION, NOTIFY_ACTION]),
+check("AC9 pins: every remote uses: is @<40 hex> # v… (%d remote, exactly four: three checkouts and the Doppler install), and the only local actions are the bridge (once per gated job), the Tier-B credential loader (once per job that needs the webhook trio: the cutover job since #9294, and the wipe job) and the notify composite" % len(remote),
+      len(remote) == 4 and all(re.search(r"uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v", u) for u in remote) and sorted(local) == sorted([BRIDGE, BRIDGE, INFRA_CREDS_ACTION, INFRA_CREDS_ACTION, NOTIFY_ACTION]),
       (remote, local))
+# #9294 G1: the cutover job's redeploy and its finalizer unwind take the webhook trio from the loader's env export, so the loader step
+# must exist exactly once, run BEFORE the first flag write (a flip that dies after writing the flag still unwinds with a trio in env),
+# and be fed the Tier-B read token. The redeploy/unwind steps themselves read no store (track.sh refuses an absent trio).
+csteps = (jobs.get("cutover") or {}).get("steps") or []
+c_loader = [i for i, st in enumerate(csteps) if isinstance(st, dict) and st.get("uses") == INFRA_CREDS_ACTION]
+c_flag = [i for i, st in enumerate(csteps) if isinstance(st, dict) and "DOPPLER_TOKEN_GIT_DATA_FLAG" in (st.get("env") or {})]   # a BINDING of the write token (the presence check names it inside an expression, under another key)
+check("AC9/G1: the cutover job loads the Tier-B credentials exactly once, before the first step that can write the flag, with the Tier-B read token and the legacy verifier token",
+      len(c_loader) == 1 and bool(c_flag) and c_loader[0] < min(c_flag)
+      and (csteps[c_loader[0]].get("with") or {}) == {"doppler-token-infra-privileged": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", "doppler-token-legacy": "${{ secrets.DOPPLER_TOKEN }}"},
+      (c_loader, c_flag))
+cstep_runs = "\n".join(str(st.get("run") or "") for st in csteps if isinstance(st, dict))
+check("AC9/G1: no cutover step reads the webhook trio from a store (no `doppler secrets get` of it, no prd_terraform fallback to CI_SSH_ACCESS_TOKEN_*)",
+      not re.search(r"doppler secrets get (WEBHOOK_DEPLOY_SECRET|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET|CI_SSH_ACCESS_TOKEN_(ID|SECRET))", cstep_runs), "")
 # --- notify-failure (Guard 2, #8211 plan): a failed, stranded or cancelled cutover always reaches the
 # notify path, a clean run never does, and the path carries no workspace id, no free-text input and no
 # privileged credential. The finalizer and the notify body are EXECUTED below (NB/FZ rows); these rows pin
@@ -2201,7 +2214,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -eq 58 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 58) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -eq 60 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 60) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -3709,7 +3722,8 @@ fi
 # #10297: 151 mutants x 2 = 302 (+6 over 148 x 2); one new standalone workflow verdict (WF-rbclear), which also moves the workflow verdict count 57 -> 58: 639 -> 646.
 # Probe runuser path (#8211): one new standalone row (MZ-P14): 646 -> 647.
 # Probe cwd (flip run 39844703839): one new standalone row (MZ-P15): 647 -> 648.
-FLOOR=648
+# #9294 G1 (PR-2): the cutover job loads the Tier-B trio (two AC9/G1 rows, the loader pin itself unchanged in count): 648 -> 650.
+FLOOR=650
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

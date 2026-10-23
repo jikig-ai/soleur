@@ -46,9 +46,12 @@ fi
 ALLOW_MISSING_STATUS="${ALLOW_MISSING_STATUS:-false}"
 
 APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
-CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
-CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+# The webhook trio comes from the caller's env (the Tier-B loader step exports and masks it, #9294); there is
+# no prd_terraform read and no CI_SSH_ACCESS_TOKEN_* fallback, so a job without the Tier-B seam fails here (UNSET aborts;
+# an empty or hostile value flows to the header-value guard below, which refuses it with its own named message).
+WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
+CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
+CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
 
 # Initial delay: the async script + state write + sync + restart
 # scheduling takes ~5-8s; polling immediately wastes attempt 1.

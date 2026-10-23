@@ -1,0 +1,32 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_zero_trust_access_service_token.deploy",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_service_token",
+      "name": "deploy",
+      "change": {
+        "actions": ["forget"],
+        "before": { "id": "00000000-0000-4000-8000-000000000001", "name": "github-actions-deploy" },
+        "after": null
+      }
+    },
+    {
+      "address": "cloudflare_zero_trust_access_policy.deploy_service_token",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_policy",
+      "name": "deploy_service_token",
+      "change": {
+        "actions": ["no-op"],
+        "before": { "decision": "non_identity", "include": [{ "service_token": ["00000000-0000-4000-8000-000000000001"] }] },
+        "after": { "decision": "non_identity", "include": [{ "service_token": ["00000000-0000-4000-8000-000000000001"] }] }
+      }
+    }
+  ],
+  "output_changes": {
+    "access_service_token_client_id": { "actions": ["delete"], "before": null, "after": null, "after_unknown": false, "before_sensitive": true, "after_sensitive": false },
+    "access_service_token_client_secret": { "actions": ["delete"], "before": null, "after": null, "after_unknown": false, "before_sensitive": true, "after_sensitive": false }
+  }
+}
