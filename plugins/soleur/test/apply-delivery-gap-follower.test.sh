@@ -324,6 +324,8 @@ issue-list author=github-actions[bot] state=open limit=500 json=number,title,lab
   tn "S1 no created-epoch digits land in the later-run cell" grep -E 'actions/runs/[0-9]{10}\)' "$B"
   has "S1 the later-run column header says it is not proof of delivery" "$B" "| Latest later run (any outcome; not proof of delivery) |"
   lacks "S1 no dropped-by-kill-switch line when nothing was dropped" "$B" "Dropped by kill switch"
+  has "S1 the footer states only what the drift check does (F29)" "$B" "separate detector of Terraform-managed drift: it does not examine individual pushes and does not monitor this follower."
+  lacks "S1 the footer no longer calls the drift check the backstop (F29)" "$B" "remains the backstop"
   cmdline="$(grep '^gh workflow run ' "$B")"
   hasre "S1 printed command shape" <(printf '%s\n' "$cmdline") "^gh workflow run [a-z0-9.-]+\.yml --ref main( -f [a-z_]+=[a-z-]+)* -f reason='apply-delivery-gap [0-9a-f]{7}'$"
   has "S1 printed command names the deploy-fix file and sha7" <(printf '%s\n' "$cmdline") "gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason='apply-delivery-gap 0000101'"
@@ -367,7 +369,8 @@ if want S2; then
   eq "S2 exactly one close" "$(acts issue-close)" 1
   has "S2 close reason completed" "$ST/out/actions.log" "issue-close 7 reason=completed comment="
   has "S2 close comment lists sha7" "$ST/out/actions.log" "0000201"
-  has "S2 close comment scopes its claim to the 7-day horizon and names the backstop" "$ST/out/actions.log" "Every cancelled push seen in the last 7 days now has a delivering run. Pushes older than 7 days are not examined by this check; the 12 h scheduled drift check covers them."
+  has "S2 close comment scopes its claim to the 7-day horizon and says nothing about older pushes" "$ST/out/actions.log" "Every cancelled push seen in the last 7 days now has a delivering run, other than any dropped by a workflow skip marker. Pushes older than 7 days are not examined by this check."
+  lacks "S2 close comment makes no drift-check coverage claim (F29)" "$ST/out/actions.log" "covers them"
   has "S2 close comment lists the DELIVERING run id (not the earlier non-descendant)" "$ST/out/actions.log" "delivered by run 203, 63 minutes"
   eq "S2 no create" "$(acts issue-create)" 0
   eq "S2 no edit" "$(acts issue-edit)" 0

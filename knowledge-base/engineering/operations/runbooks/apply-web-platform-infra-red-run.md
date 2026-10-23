@@ -133,9 +133,9 @@ the `apply` job alone is not enough: it can end `success` with the SSH-provision
 the step `Terraform apply (SSH-provisioned resources, over the bridge)` to have concluded `success` (read from the same
 jobs response; a missing step counts as not delivered, so a rename of that step leaves rows open and the suite fails
 until the script is updated). `deploy-fix` has no such skip and needs the `apply` job only. The close comment says
-"Every cancelled push seen in the last 7 days now has a delivering run" and that pushes older than 7 days are not
-examined by this check: the 12 h scheduled drift check covers those, the follower does not. For `deploy-fix` rows
-also run `scripts/check-deploy-script-parity.sh` to confirm the host copy matches.
+"Every cancelled push seen in the last 7 days now has a delivering run, other than any dropped by a workflow skip
+marker" and that pushes older than 7 days are not examined by this check; it claims nothing else about older pushes. For
+`deploy-fix` rows also run `scripts/check-deploy-script-parity.sh` to confirm the host copy matches.
 
 **Closing is not an acknowledgement.** The follower is stateless: while a row remains inside the 7-day window a new
 issue is filed after you close this one. Comment on the issue rather than editing it: the body is rewritten on every
@@ -166,10 +166,11 @@ The next step is always `gh run rerun <run-id> --repo jikig-ai/soleur --failed`:
 The next fully complete reconcile closes the degraded issue by itself.
 
 **Who watches the follower.** Nobody does. A follower failure is a red run only (plus the degraded issue for the read-class
-reasons above, which is how a human learns it is blind). The 12 h `scheduled-terraform-drift` check backstops the gap itself,
-not the follower: it is dispatched by Inngest at 06:00 and 18:00 UTC, runs a Terraform plan (so latency is up to about 12 h),
-does not monitor the follower, and does not catch a missed delivery that is not Terraform state, such as a `deploy-fix` script
-copy on the host.
+reasons above, which is how a human learns it is blind). The 12 h `scheduled-terraform-drift` check is a separate detector, not
+a monitor of the follower: it is dispatched by Inngest at 06:00 and 18:00 UTC and runs an untargeted `terraform plan` (so
+latency is up to about 12 h). It detects unapplied Terraform-managed changes, including a changed `deploy-fix` trigger
+(`terraform_data.deploy_pipeline_fix`), but it does not examine individual cancelled pushes, cannot tell which push was
+missed, and does not monitor the follower.
 
 **Flip-evidence count (read-only).** The decision to build the deferred fixes (merge the two workflows, or add a
 re-dispatch follower) needs a count of distinct pushes, not runs. Counting unit: the **SHA**. Every reconcile re-prints a

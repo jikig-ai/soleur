@@ -608,14 +608,14 @@ render_body() {
     if [[ "$N_DROPPED" -gt 0 ]]; then
       printf -- '- Dropped by kill switch (not a gap): %s\n' "$N_DROPPED"
     fi
-    printf -- '- Runbook: `%s`. The 12 h scheduled drift check remains the backstop.\n' "$RUNBOOK"
+    printf -- '- Runbook: `%s`. The 12 h scheduled drift check is a separate detector of Terraform-managed drift: it does not examine individual pushes and does not monitor this follower.\n' "$RUNBOOK"
   } >"$body"
   if [[ "$(wc -c <"$body")" -ge 60000 ]]; then fail_loud issue_write_failed; fi
 }
 
 emit_close_comment() { # -> stdout
   local key sha rid mins
-  printf 'Every cancelled push seen in the last %s days now has a delivering run. Pushes older than %s days are not examined by this check; the 12 h scheduled drift check covers them.\n' "$WINDOW_DAYS" "$WINDOW_DAYS"
+  printf 'Every cancelled push seen in the last %s days now has a delivering run, other than any dropped by a workflow skip marker. Pushes older than %s days are not examined by this check.\n' "$WINDOW_DAYS" "$WINDOW_DAYS"
   while IFS=$'\t' read -r key sha rid mins; do
     printf -- '- %s %s delivered by run %s, %s minutes from cancel to delivery\n' "$key" "${sha:0:7}" "$rid" "$mins"
   done <"$DELIVERED"

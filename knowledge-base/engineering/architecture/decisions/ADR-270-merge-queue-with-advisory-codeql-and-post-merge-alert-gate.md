@@ -773,7 +773,7 @@ Why the two fixes stay deferred (tracked by the still-open #10033 and #8167): me
 serializer of lock-less R2 state; a re-dispatch follower writes production and would have to honour two kill switches;
 "poll for the sibling" (the second option on #8167) is rejected because evicted runs have zero jobs and so carry no signal
 to poll; a `schedule:` trigger as a second detection path is rejected because it would duplicate the 12 h
-`scheduled-terraform-drift` cron, which backstops the gap itself (not the follower) for Terraform-managed state only.
+`scheduled-terraform-drift` cron, which separately detects unapplied Terraform-managed changes (it neither examines individual pushes nor monitors the follower).
 
 Flip evidence bar: build a deferred fix when there are 3 or more distinct undelivered SHAs in 30 days, or one row aged past
 1 hour with real deploy impact, plus a green operator-reviewed rehearsal on a disposable concurrency group and state key.
@@ -795,14 +795,22 @@ issue is identified by bot author plus exact title, never by label alone; `prior
 `priority/p0-critical` is add-only; and a degraded issue pages a blind follower.
 
 A follower failure is a red run only (plus the degraded issue for read-class failures): nothing monitors the follower itself.
-The drift check backstops the gap itself, not the follower: `scheduled-terraform-drift.yml` is dispatched by Inngest at
-06:00/18:00 UTC, runs a Terraform plan (about 12 h latency), does not watch the follower, and does not catch a missed delivery
-that is not Terraform state (a `deploy-fix` host copy).
+The drift check is a separate detector, not a follower monitor: `scheduled-terraform-drift.yml` is dispatched by Inngest at
+06:00/18:00 UTC and runs an untargeted `terraform plan` (about 12 h latency). It detects unapplied Terraform-managed changes
+(including the `deploy-fix` trigger, `terraform_data.deploy_pipeline_fix`), but it does not examine individual cancelled pushes,
+cannot tell which push was missed, and does not watch the follower.
+
+> **Corrected 2026-10-23 (#10879 review):** the text above first said the drift check "does not catch a missed delivery that is
+> not Terraform state (a `deploy-fix` host copy)". That premise was false: `terraform_data.deploy_pipeline_fix`
+> (`apps/web-platform/infra/server.tf`) is Terraform state whose trigger hash changes with the script, and the drift workflow runs
+> a full-root plan with no `-target`, so a missed `deploy-fix` apply does surface in drift. The close comment likewise no longer
+> says the drift check covers pushes older than the window. See decision row F29 in
+> `knowledge-base/project/specs/feat-one-shot-apply-delivery-gap-follower/decision-challenges.md`.
 
 Accepted residuals: an untouched gap older than 7 days ages out and the issue is left open with one marker comment (the
 follower never closes without having seen a delivery); the close comment claims only the 7-day horizon ("Every cancelled push
-seen in the last 7 days now has a delivering run. Pushes older than 7 days are not examined by this check; the 12 h scheduled
-drift check covers them."), so a close never asserts anything about older pushes; `failure`, `timed_out` and `startup_failure` runs are not follower
+seen in the last 7 days now has a delivering run, other than any dropped by a workflow skip marker. Pushes older than 7 days are
+not examined by this check."), so a close never asserts anything about older pushes; `failure`, `timed_out` and `startup_failure` runs are not follower
 candidates: when they have jobs `notify-apply-failure` mails, but a run with zero jobs (a refused workflow file) fires no
 email and is caught only by the drift check (up to 12 h) and runbook triage (the runbook's "Zero jobs and no email" section);
 a preflight-only cancelled run is classed
