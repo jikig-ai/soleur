@@ -1,4 +1,6 @@
 # Standing daily monitor for the git-data rehearsal suite's loud SKIP arms (#7574).
+# Scope: it also observes the guard-script fixture suites' g1b./g2b./fl. loud
+# skips in pr-quality-guards.yml pull_request + merge_group logs (#10921).
 #
 # <!-- gate-override: new-scheduled-cron-prefer-inngest -->
 #
@@ -231,9 +233,9 @@ jobs:
           # about the arms at all; anything else reaching this step is a failed STATE step (the
           # probe verdict was pass or transient), which says nothing about the arms either.
           case "$VERDICT" in
-            broken) title="monitor: the rehearsal skip-persistence probe is not running to a verdict" ;;
-            fail)   title="monitor: git-data rehearsal suite is skipping arms across runs" ;;
-            *)      title="monitor: the rehearsal skip monitor streak store failed" ;;
+            broken) title="monitor: the skip-persistence probe is not running to a verdict" ;;
+            fail)   title="monitor: a skip-persistence source is skipping arms across runs" ;;
+            *)      title="monitor: the skip monitor streak store failed" ;;
           esac
           # DEDUPE AGAINST OPEN ISSUES ONLY, and this comment now describes what the code
           # does. It previously passed `--state all` while the jq below filtered to OPEN, so
@@ -268,9 +270,9 @@ jobs:
           {
             case "$VERDICT" in
               broken)
-                printf '%s\n\n' "The rehearsal skip-persistence probe exited OUTSIDE its declared 0/1/2 contract -- it did not run to a verdict. This is a BROKEN INSTRUMENT, not evidence that the arms are healthy." ;;
+                printf '%s\n\n' "The skip-persistence probe exited OUTSIDE its declared 0/1/2 contract -- it did not run to a verdict. This is a BROKEN INSTRUMENT, not evidence that the arms are healthy." ;;
               fail)
-                printf '%s\n\n' "The rehearsal skip-persistence probe returned FAIL." ;;
+                printf '%s\n\n' "The skip-persistence probe returned FAIL -- one or more sampled run-sources carry loud SKIP markers (the probe's per-source lines name which)." ;;
               *)
                 printf '%s\n\n' "The monitor's streak store failed, so the consecutive-TRANSIENT escalation cannot be trusted this run. The probe verdict itself was ${VERDICT:-unknown}." ;;
             esac
@@ -283,7 +285,7 @@ jobs:
             esac
             # shellcheck disable=SC2016  # the backticks are a literal markdown fence
             printf '```\n%s\n```\n\n' "$SUMMARY"
-            printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. A sustained skip means the deferred pre-baked image (#7535) is owed."
+            printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. The probe's per-source FAIL lines name the arm family: rehearsal-arm hits mean the deferred pre-baked image (#7535) is owed; guard-suite (g1b./g2b./fl.) hits mean a runner git no longer exhibits the walk contract the corrupt-walk rows validate (#10921) -- refusal coverage is degraded until the runner image or the rows change."
           } > "$body_file"
           # Report a FAILED filing rather than letting a red run stand for both outcomes --
           # the same treatment the postmerge job gets in this PR. Without it, "alert filed"
@@ -299,7 +301,7 @@ jobs:
           iss_rc=$?
           set -e
           if [ "$iss_rc" -ne 0 ]; then
-            echo "::error::the rehearsal-skip alert could NOT be filed (gh exited $iss_rc). The FAIL exists only in this run log; see $RUN_URL."
+            echo "::error::the skip-persistence alert could NOT be filed (gh exited $iss_rc). The FAIL exists only in this run log; see $RUN_URL."
             exit 1
           fi
 

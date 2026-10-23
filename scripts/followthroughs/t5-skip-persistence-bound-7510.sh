@@ -123,20 +123,7 @@ _clear_transient_streak() { rm -f "$T5_PROBE_STATE" 2>/dev/null || true; }
 if [[ -z "${GH_TOKEN:-}" ]]; then _transient "GH_TOKEN not set"; fi
 
 REPO="jikig-ai/soleur"
-WF="infra-validation.yml"
 SAMPLE=20   # ADR-188's declared window: "more than 1 in 20 post-merge runs"
-
-runs=$(gh run list --repo "$REPO" --workflow "$WF" --branch main \
-         --limit "$SAMPLE" --json databaseId,conclusion 2>/dev/null) || {
-  _transient "gh run list failed"; }
-
-ids=$(printf '%s' "$runs" | jq -r '.[] | select(.conclusion == "success") | .databaseId' 2>/dev/null) || {
-  _transient "could not parse run list"; }
-
-# An empty sample is NOT a clean bill of health — it is an un-run instrument. Absence of evidence
-# here is indistinguishable from evidence of absence, which is the exact trap this file's own
-# subject matter is about.
-[[ -n "$ids" ]] || _transient "no successful post-merge runs to sample"
 
 # THE POSITIVE CONTROL, added at review. Counting occurrences of a marker and reporting PASS on
 # zero cannot distinguish "the arm did not skip" from "this probe can no longer see the arm at
@@ -171,54 +158,177 @@ SKIP_MARKERS=(
   'SKIP (loud): T17 '
 )
 
+# SECOND RUN-SOURCE (#10921). The guard-script fixture suites' corrupt-walk rows
+# emit `SKIP (loud): g1b.`/`g2b.` (test-bump-inngest-bootstrap-pin.sh) and
+# `SKIP (loud): fl.` (test-mint-inngest-bootstrap-tag.sh) inside the
+# `guard-script-fixture-tests` job of pr-quality-guards.yml. That workflow has
+# NO post-merge leg — its triggers are pull_request + merge_group, and
+# merge_group runs land on gh-readonly-queue/* refs — so the rehearsal source's
+# `--branch main` / `conclusion==success` sampling cannot be reused: this source
+# samples BY EVENT. merge_group legs are REQUIRED evidence (they gate landing
+# to main); pull_request legs add density — and they count output from
+# UNMERGED branches, so a PR introducing a skip arm trips the monitor pre-merge
+# (real evidence, labelled by source).
+#
+# PER-SUITE discriminators, not per-job: the bump and mint suites' output shares
+# one job log, so a single positive control cannot tell "the mint suite didn't
+# run" from "no fl. skips". Each marker-emitting suite keys on the
+# `=== test-<name>.sh ===` banner run-all.sh prints before it runs that suite.
+#
+# Format: <unit>|<log discriminator>|<markers, ';'-separated>
+GUARD_UNITS=(
+  'bump|=== test-bump-inngest-bootstrap-pin.sh ===|SKIP (loud): g1b.;SKIP (loud): g2b.'
+  'mint|=== test-mint-inngest-bootstrap-tag.sh ===|SKIP (loud): fl.'
+)
+
+# PER-SOURCE accounting, NEVER pooled: each source contributes `observed >= 1`
+# independently; a source (or a suite within it) with zero observed logs reads
+# TRANSIENT — it never pools into another source's clean reading ("a probe that
+# goes quiet on the arm the fix creates is worse than no probe").
+any_fail=0
+transient_reasons=""
+
+# --- source 1: infra-validation.yml post-merge main runs (rehearsal arms) ----
 sampled=0
 observed=0
 hits=0
 declare -A per_arm=()
 for _m in "${SKIP_MARKERS[@]}"; do per_arm["$_m"]=0; done
 
-while IFS= read -r id; do
-  [[ -n "$id" ]] || continue
-  log=$(gh run view "$id" --repo "$REPO" --log 2>/dev/null) || continue
-  sampled=$((sampled + 1))
-  # HERE-STRING, NOT A PIPE. This was
-  #   printf '%s' "$log" | grep -qF "$SUITE_TERMINAL" || continue
-  # and under `set -o pipefail` it lost the match it was testing for: grep -q
-  # exits on its FIRST hit and closes the pipe, printf takes SIGPIPE (141),
-  # pipefail promotes that to the pipeline's status, and `|| continue` fires
-  # BECAUSE the match succeeded. Measured 2026-08-19: twenty logs that all
-  # contained this line, observed=0, exit 2. A here-string has no pipe and no
-  # second process, so there is nothing to break.
-  grep -qF "$SUITE_TERMINAL" <<<"$log" || continue
-  observed=$((observed + 1))
-  for _m in "${SKIP_MARKERS[@]}"; do
-    # `grep -c` reads to EOF and never breaks the pipe, so this line was not
-    # affected. Converted anyway so the file has ONE form and the next reader
-    # does not have to re-derive which shapes are safe.
-    n=$(grep -cF "$_m" <<<"$log" || true)
-    per_arm["$_m"]=$(( ${per_arm["$_m"]} + n ))
-    hits=$((hits + n))
-  done
-done <<< "$ids"
-
-[[ "$sampled" -ge 1 ]] || _transient "no run logs could be fetched"
-[[ "$observed" -ge 1 ]] || _transient "fetched ${sampled} run log(s), none containing '${SUITE_TERMINAL}' — the suite did not run in this window, or its output moved. A zero skip-count here would be an un-run instrument reporting a clean bill of health."
-
-_clear_transient_streak
-
-if [[ "$hits" -eq 0 ]]; then
-  echo "PASS: 0 loud rehearsal skips (arms: ${SKIP_MARKERS[*]}) across ${observed} observed post-merge run(s) (${sampled} sampled) — the persistence residual has not materialised."
-  exit 0
+if ! runs=$(gh run list --repo "$REPO" --workflow infra-validation.yml --branch main \
+         --limit "$SAMPLE" --json databaseId,conclusion 2>/dev/null); then
+  echo "TRANSIENT: infra-validation.yml — gh run list failed" >&2
+  transient_reasons="infra-validation gh run list failed"
+else
+  ids=$(printf '%s' "$runs" | jq -r '.[] | select(.conclusion == "success") | .databaseId' 2>/dev/null)
+  # An empty sample is NOT a clean bill of health — it is an un-run instrument.
+  if [[ -z "$ids" ]]; then
+    echo "TRANSIENT: infra-validation.yml — no successful post-merge runs to sample" >&2
+    transient_reasons="no successful infra-validation runs"
+  else
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      log=$(gh run view "$id" --repo "$REPO" --log 2>/dev/null) || continue
+      sampled=$((sampled + 1))
+      # HERE-STRING, NOT A PIPE. This was
+      #   printf '%s' "$log" | grep -qF "$SUITE_TERMINAL" || continue
+      # and under `set -o pipefail` it lost the match it was testing for: grep -q
+      # exits on its FIRST hit and closes the pipe, printf takes SIGPIPE (141),
+      # pipefail promotes that to the pipeline's status, and `|| continue` fires
+      # BECAUSE the match succeeded. Measured 2026-08-19: twenty logs that all
+      # contained this line, observed=0, exit 2. A here-string has no pipe and no
+      # second process, so there is nothing to break.
+      grep -qF "$SUITE_TERMINAL" <<<"$log" || continue
+      observed=$((observed + 1))
+      for _m in "${SKIP_MARKERS[@]}"; do
+        # `grep -c` reads to EOF and never breaks the pipe, so this line was not
+        # affected. Converted anyway so the file has ONE form and the next reader
+        # does not have to re-derive which shapes are safe.
+        n=$(grep -cF "$_m" <<<"$log" || true)
+        per_arm["$_m"]=$(( ${per_arm["$_m"]} + n ))
+        hits=$((hits + n))
+      done
+    done <<< "$ids"
+    if [[ "$sampled" -lt 1 ]]; then
+      echo "TRANSIENT: infra-validation.yml — no run logs could be fetched" >&2
+      transient_reasons="no infra-validation run logs fetched"
+    elif [[ "$observed" -lt 1 ]]; then
+      echo "TRANSIENT: infra-validation.yml — fetched ${sampled} run log(s), none containing '${SUITE_TERMINAL}' — the suite did not run in this window, or its output moved. A zero skip-count here would be an un-run instrument reporting a clean bill of health." >&2
+      transient_reasons="rehearsal suite unobserved in sampled logs"
+    elif [[ "$hits" -eq 0 ]]; then
+      echo "PASS: infra-validation.yml — 0 loud rehearsal skips (arms: ${SKIP_MARKERS[*]}) across ${observed} observed post-merge run(s) (${sampled} sampled)"
+    else
+      # DENOMINATOR: `observed`, not `sampled` — the two verdicts describe
+      # different populations and reporting FAIL over sampled understates the rate.
+      echo "FAIL: infra-validation.yml — ${hits} loud rehearsal skip(s) across ${observed} observed post-merge run(s) (${sampled} sampled)." >&2
+      for _m in "${SKIP_MARKERS[@]}"; do
+        echo "        ${_m}=${per_arm["$_m"]}" >&2
+      done
+      any_fail=1
+    fi
+  fi
 fi
 
-# DENOMINATOR: `observed`, not `sampled`. PASS reported over observed and FAIL
-# over sampled, so the two verdicts described different populations and the FAIL
-# understated the rate whenever a fetched log did not carry the terminal line.
-echo "FAIL: ${hits} loud rehearsal skip(s) across ${observed} observed post-merge run(s) (${sampled} sampled)." >&2
-for _m in "${SKIP_MARKERS[@]}"; do
-  echo "        ${_m}=${per_arm["$_m"]}" >&2
+# --- source 2: pr-quality-guards.yml by EVENT (guard-suite corrupt-walk arms) -
+declare -A unit_obs=() unit_hits=()
+for _u in "${GUARD_UNITS[@]}"; do
+  IFS='|' read -r _uname _disc _marks <<< "$_u"
+  unit_obs["$_uname"]=0; unit_hits["$_uname"]=0
 done
-echo "      ADR-188's declared observation window has fired: the skip is masking a persistent" >&2
-echo "      condition rather than a transient one. The deferred pre-baked image (#7535) is owed," >&2
-echo "      and the S1 extension (#7572) becomes the same class of problem." >&2
-exit 1
+
+pg_ids=$( {
+  gh run list --repo "$REPO" --workflow pr-quality-guards.yml --event merge_group \
+    --limit "$SAMPLE" --json databaseId 2>/dev/null | jq -r '.[].databaseId'
+  gh run list --repo "$REPO" --workflow pr-quality-guards.yml --event pull_request \
+    --limit "$SAMPLE" --json databaseId 2>/dev/null | jq -r '.[].databaseId'
+} | awk 'NF && !seen[$0]++' | head -n "$SAMPLE" )
+
+if [[ -z "$pg_ids" ]]; then
+  echo "TRANSIENT: pr-quality-guards.yml — no merge_group/pull_request runs to sample" >&2
+  transient_reasons="${transient_reasons:+$transient_reasons; }no pr-quality-guards runs"
+else
+  g_sampled=0
+  g_hits=0
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    log=$(gh run view "$id" --repo "$REPO" --log 2>/dev/null) || continue
+    g_sampled=$((g_sampled + 1))
+    for _u in "${GUARD_UNITS[@]}"; do
+      IFS='|' read -r _uname _disc _marks <<< "$_u"
+      grep -qF "$_disc" <<<"$log" || continue
+      unit_obs["$_uname"]=$(( ${unit_obs["$_uname"]} + 1 ))
+      IFS=';' read -ra _marr <<< "$_marks"
+      for _m in "${_marr[@]}"; do
+        [[ -n "$_m" ]] || continue
+        n=$(grep -cF "$_m" <<<"$log" || true)
+        unit_hits["$_uname"]=$(( ${unit_hits["$_uname"]} + n ))
+        g_hits=$((g_hits + n))
+      done
+    done
+  done <<< "$pg_ids"
+  if [[ "$g_sampled" -lt 1 ]]; then
+    echo "TRANSIENT: pr-quality-guards.yml — no run logs could be fetched" >&2
+    transient_reasons="${transient_reasons:+$transient_reasons; }no pr-quality-guards logs fetched"
+  else
+    g_all_observed=1
+    for _u in "${GUARD_UNITS[@]}"; do
+      IFS='|' read -r _uname _disc _marks <<< "$_u"
+      if [[ "${unit_obs[$_uname]}" -lt 1 ]]; then
+        g_all_observed=0
+        echo "TRANSIENT: pr-quality-guards.yml — 0 observed log(s) for suite '${_uname}' (discriminator '${_disc}' absent in all ${g_sampled} sampled log(s)) — the suite did not run or its banner moved; a zero skip-count here would be an un-run instrument reporting a clean bill of health." >&2
+        transient_reasons="${transient_reasons:+$transient_reasons; }guard suite ${_uname} unobserved"
+      fi
+    done
+    if [[ "$g_hits" -gt 0 ]]; then
+      echo "FAIL: pr-quality-guards.yml — ${g_hits} loud guard-suite skip(s) across ${g_sampled} sampled run log(s) (merge_group + pull_request legs)." >&2
+      for _u in "${GUARD_UNITS[@]}"; do
+        IFS='|' read -r _uname _disc _marks <<< "$_u"
+        echo "        ${_uname}: ${unit_hits[$_uname]} hit(s) in ${unit_obs[$_uname]} observed log(s) — markers: ${_marks//;/, }" >&2
+      done
+      any_fail=1
+    elif [[ "$g_all_observed" -eq 1 ]]; then
+      echo "PASS: pr-quality-guards.yml — 0 loud guard-suite skips across ${g_sampled} sampled run log(s) (bump observed ${unit_obs[bump]}, mint observed ${unit_obs[mint]})"
+    fi
+  fi
+fi
+
+# Verdict: FAIL dominates (a hit counts even when another source could not be
+# read); otherwise any unreadable source is TRANSIENT — never a clean bill.
+if [[ "$any_fail" -eq 1 ]]; then
+  _clear_transient_streak
+  echo "      ADR-188's declared observation window has fired: a skip is masking a persistent" >&2
+  echo "      condition rather than a transient one. For rehearsal-arm hits the deferred" >&2
+  echo "      pre-baked image (#7535) is owed and the S1 extension (#7572) becomes the same" >&2
+  echo "      class of problem; for g1b./g2b./fl. hits a runner git no longer exhibits the" >&2
+  echo "      walk contract the guard-suite rows validate (#10921) — refusal coverage is" >&2
+  echo "      degraded until the runner image or the rows change." >&2
+  exit 1
+fi
+
+if [[ -n "$transient_reasons" ]]; then
+  _transient "$transient_reasons"
+fi
+
+_clear_transient_streak
+echo "PASS: no loud skips in any observed source — the persistence residual has not materialised."
+exit 0

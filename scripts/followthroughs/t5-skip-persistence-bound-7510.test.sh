@@ -69,34 +69,64 @@ TERMINAL_LINE='git-data-runcmd-rehearsal: 73 passed, 0 failed, Skipped: 2 (75 as
 # the race is genuinely reachable, and the marker lines are placed EARLY so the
 # match happens while the producer still has most of its output pending.
 PIPE_PAD_LINES=6000
+# The pr-quality-guards source fixture: the suite banners are DERIVED from the
+# probe's own discriminator literals so a literal edit moves the fixture too.
+BUMP_BANNER=$(grep -oF '=== test-bump-inngest-bootstrap-pin.sh ===' "$PROBE" | head -1)
+MINT_BANNER=$(grep -oF '=== test-mint-inngest-bootstrap-tag.sh ===' "$PROBE" | head -1)
+[ -n "$BUMP_BANNER" ] && [ -n "$MINT_BANNER" ] \
+  || { printf 'FAIL: could not derive the guard-suite banner literals from %s\n' "$PROBE" >&2; exit 2; }
+cat > "$SANDBOX/pg.default.head" <<EOF
+guard-script-fixture-tests job output
+$BUMP_BANNER
+bump suite output
+$MINT_BANNER
+mint suite output
+EOF
+
+# mkcase <name> <iv-run-count> [mode] — stdin is the infra-validation log head.
+# The pr-quality-guards source is served too: PG_HEAD_FILE supplies its log head
+# (default: both suite banners, no markers) and "$root/pg.n" its run count
+# (default 8 — write it after mkcase to change). gh stubs key on --workflow and
+# the run-id prefix (9xxx infra-validation, 7xxx pr-quality-guards).
 mkcase() {
   local nruns="$2" mode="${3:-present}" root="$SANDBOX/$1"
   mkdir -p "$root/bin"
-  cat > "$root/log.head"
+  cat > "$root/log.iv.head"
   {
-    cat "$root/log.head"
+    cat "$root/log.iv.head"
     # Padding AFTER the markers: the producer must still be writing when grep
     # exits, which is the whole condition.
     awk -v n="$PIPE_PAD_LINES" 'BEGIN{for(i=0;i<n;i++) print "2026-08-19T00:00:00Z filler log line to push this fixture past the 64KiB pipe buffer " i}'
-  } > "$root/log.txt"
+  } > "$root/log.iv.txt"
+  {
+    cat "${PG_HEAD_FILE:-$SANDBOX/pg.default.head}"
+    awk -v n="$PIPE_PAD_LINES" 'BEGIN{for(i=0;i<n;i++) print "2026-08-19T00:00:00Z filler log line to push this fixture past the 64KiB pipe buffer " i}'
+  } > "$root/log.pg.txt"
+  printf '8\n' > "$root/pg.n"
   if [ "$mode" != "missing" ]; then
     {
       printf '#!/usr/bin/env bash\n'
-      printf 'case "$1" in\n'
-      printf '  run)\n'
-      printf '    case "$2" in\n'
-      printf '      list)\n'
-      # Emit $nruns successful entries.
-      printf '        printf "["\n'
-      printf '        for i in $(seq 1 %s); do\n' "$nruns"
-      printf '          [ "$i" -gt 1 ] && printf ","\n'
-      printf '          printf "{\\"databaseId\\":%%s,\\"conclusion\\":\\"success\\"}" "$i"\n'
-      printf '        done\n'
-      printf '        printf "]"\n'
-      printf '        ;;\n'
-      printf '      view) cat %s ;;\n' "$root/log.txt"
-      printf '      *) exit 1 ;;\n'
-      printf '    esac ;;\n'
+      printf 'wf=""; pos=""; prev=""\n'
+      printf 'for a in "$@"; do\n'
+      printf '  case "$prev" in --workflow) wf="$a";; esac\n'
+      printf '  case "$a" in [0-9]*) pos="$a";; esac\n'
+      printf '  prev="$a"\n'
+      printf 'done\n'
+      printf 'case "$2" in\n'
+      printf '  list)\n'
+      printf '    case "$wf" in\n'
+      printf '      *infra-validation*) base=9000; n=%s ;;\n' "$nruns"
+      printf '      *pr-quality-guards*) base=7000; n=$(cat %s 2>/dev/null || echo 0) ;;\n' "$root/pg.n"
+      printf '      *) n=0 ;;\n'
+      printf '    esac\n'
+      printf '    printf "["\n'
+      printf '    for i in $(seq 1 "$n"); do\n'
+      printf '      [ "$i" -gt 1 ] && printf ","\n'
+      printf '      printf "{\\"databaseId\\":%%s,\\"conclusion\\":\\"success\\"}" "$((base+i))"\n'
+      printf '    done\n'
+      printf '    printf "]"\n'
+      printf '    ;;\n'
+      printf '  view) case "$pos" in 9*) cat %s ;; 7*) cat %s ;; *) exit 1 ;; esac ;;\n' "$root/log.iv.txt" "$root/log.pg.txt"
       printf '  *) exit 1 ;;\n'
       printf 'esac\n'
     } > "$root/bin/gh"
@@ -397,6 +427,84 @@ cp "$PROBE" "$SANDBOX/mut.control.probe.sh"; cp "$RUNNER" "$SANDBOX/mut.control.
 k_case "mut.control" terminal "$SANDBOX/mut.control.probe.sh" "$SANDBOX/mut.control.runner.sh"
 expect "(k) harness control" 0 "an unmutated copy of the pair through the harness's own copy path must read exit 0, or the mutation rows prove nothing"
 
+# ── (l) a loud g1b. guard-suite skip must be a FAIL (#10921) ─────────────────
+# The second run-source samples pr-quality-guards.yml by event; the bump
+# suite's corrupt-walk rows emit `SKIP (loud): g1b.`/`g2b.` markers.
+PG_HEAD_FILE="$SANDBOX/pg.g1b.head"
+{
+  printf '%s\n' "$BUMP_BANNER"
+  printf 'SKIP (loud): g1b.B7 runner git does not exhibit the non-empty-stderr corrupt-walk contract\n'
+  printf '%s\n' "$MINT_BANNER"
+} > "$PG_HEAD_FILE"
+_r=$(mkcase l 20 <<EOF
+everything healthy here
+$TERMINAL_LINE
+EOF
+)
+run_probe "$_r"
+expect "(l) g1b. guard skip present" 1 "a loud g1b. skip in pr-quality-guards logs is the condition the second source exists to report"
+
+# ── (m) a loud fl. guard-suite skip must ALSO be a FAIL ──────────────────────
+PG_HEAD_FILE="$SANDBOX/pg.fl.head"
+{
+  printf '%s\n' "$BUMP_BANNER"
+  printf '%s\n' "$MINT_BANNER"
+  printf 'SKIP (loud): fl.walk runner git does not exhibit the non-empty-stderr corrupt-walk contract\n'
+} > "$PG_HEAD_FILE"
+_r=$(mkcase m 20 <<EOF
+everything healthy here
+$TERMINAL_LINE
+EOF
+)
+run_probe "$_r"
+expect "(m) fl. guard skip present" 1 "a loud fl. skip in pr-quality-guards logs must fire — the marker set is not bump-only"
+
+# ── (n) guard logs without the suite banners => TRANSIENT, never pooled ──────
+# The clean infra-validation source must NOT pool into the unreadable
+# pr-quality-guards source: per-source observed >= 1 is required independently.
+PG_HEAD_FILE="$SANDBOX/pg.nobanners.head"
+printf 'guard-script-fixture-tests job output with no suite banners\n' > "$PG_HEAD_FILE"
+_r=$(mkcase n 20 <<EOF
+everything healthy here
+$TERMINAL_LINE
+EOF
+)
+run_probe "$_r"
+expect "(n) guard suites unobserved" 2 "a source whose discriminators are absent in every sampled log is unreadable; a clean other-source reading must not pool into a PASS"
+unset PG_HEAD_FILE
+
+# ── (o) a guard hit counts even when the OTHER source is unreadable ──────────
+# FAIL dominates over TRANSIENT across sources.
+PG_HEAD_FILE="$SANDBOX/pg.hit.head"
+{
+  printf '%s\n' "$BUMP_BANNER"
+  printf 'SKIP (loud): g2b.I6 runner git does not exhibit the merge-base corrupt-walk contract\n'
+  printf '%s\n' "$MINT_BANNER"
+} > "$PG_HEAD_FILE"
+_r=$(mkcase o 20 <<'EOF'
+the rehearsal suite did not run in this window
+EOF
+)
+run_probe "$_r"
+expect "(o) guard hit + rehearsal unobserved" 1 "a marker in one observed source is a real verdict; the other source's unreadability cannot downgrade it"
+unset PG_HEAD_FILE
+
+# ── (p) roster parity: every enumerated guard prefix has a producer ──────────
+# (AC8b) For each `SKIP (loud): <prefix>` the probe enumerates for the guard
+# suites, at least one `corrupt_skip '<prefix>...' call site must exist in
+# .github/scripts/test/ — a prefix with no producer is dead enumeration, and a
+# producer with no prefix is invisible to the monitor (the suites' own
+# roster-parity self-checks cover the other direction).
+_guard_prefixes=$(grep -oE "SKIP \(loud\): [a-z0-9]+\." "$PROBE" | sed 's/SKIP (loud): //' | sort -u)
+_p_missing=""
+for _pfx in $_guard_prefixes; do
+  grep -rF "corrupt_skip '${_pfx}" "$REPO_ROOT/.github/scripts/test/" >/dev/null \
+    || _p_missing="$_p_missing $_pfx"
+done
+if [ -z "$_p_missing" ]; then pass; else
+  fail "(p) roster parity: probe-enumerated prefix(es) with no corrupt_skip producer in .github/scripts/test/:$_p_missing"
+fi
+
 # ── Assertion floor (not routed through fail(), deliberately) ────────────────
 # RAISED 9 -> 12 (#7535 Phase 2), ITEMISED: (i) the T17 marker registration, plus
 # (j) and (j.ii), the two directions of the xtrace credential refusal.
@@ -405,8 +513,12 @@ expect "(k) harness control" 0 "an unmutated copy of the pair through the harnes
 # edit-the-pair harness rows (probe literal, runner regex). Measured on the green run: 20.
 # RAISED 20 -> 22 after review (#10786), ITEMISED: the skip-side value pin against the real `arm_skip`
 # echo, and the unmutated control through the harness's own copy path. Measured: 22.
+# RAISED 22 -> 27 (#10921), ITEMISED: (l) g1b. marker -> FAIL, (m) fl. marker -> FAIL, (n) guard
+# discriminators absent -> TRANSIENT (per-source, never pooled), (o) guard hit + rehearsal
+# unobserved -> FAIL dominates, (p) roster parity (every enumerated guard prefix has a producer).
+# Measured on the green run: 27.
 _total=$((passes + fails))
-_FLOOR=22
+_FLOOR=27
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
