@@ -154,7 +154,7 @@ of which 14 sit in Phase 7 and the rest are spread over 23 other headings (24 di
 awk heading tally). Any that a script or hook enforces fail the executor litmus and cannot be in a
 slice; M's plan must count how many that is rather than assume. Move PR (M) must label those "not
 harness-evaluated". Whether that satisfies "attach the eval
-comparison" is a scope question for the operator, so this plan does not assume it does.
+comparison" is an evidence-bar question, ruled by the CTO agent, 2026-10-23 (`decision-challenges.md` T5): slice-only harness evidence is necessary but not sufficient, and the Move PR attaches the harness verdict AND a rationale-only-diff lint.
 
 **Discrimination bar** (T2b; the gate counts as able only when all hold, each measured by running it):
 a degraded candidate (decision-bearing rule text dropped or flipped) returns `accept:false` while a
@@ -218,8 +218,9 @@ details from main, which moves quickly (`ship/SKILL.md` took 40 commits in 30 da
   above (`decision-challenges.md` T2b); an AC running `node scripts/eval-gate.cjs --dry-run --target <t>`
   (exit 0) and the registry-completeness test so the gate cannot ship dormant; a smoke run first
   (`--filter-first-n 1 --repeat 1 --no-cache`) with each row's output read. A rationale-only-diff
-  lint (non-Why lines byte-preserved, `[id: ]` tokens and gate headings set-equal) is a recommended
-  complement, to be scoped and Guard-Contract'd in C's own plan.
+  lint (non-Why lines byte-preserved, `[id: ]` tokens and gate headings set-equal, every moved
+  paragraph present in PURPOSE.md by heading) is required evidence for M (`decision-challenges.md`
+  T5), to be scoped and Guard-Contract'd in C's own plan.
 - **Move PR (M):** only after C merges and the gate-flip checks pass against main. Moves Why
   paragraphs keyed by heading into `ship/PURPOSE.md`, keeps every step, fence, `[id: ]`, marker and
   `references/` link in SKILL.md, links PURPOSE.md once, edits no `description:`, lowers the `ship`
@@ -241,7 +242,7 @@ details from main, which moves quickly (`ship/SKILL.md` took 40 commits in 30 da
 | 6 | "the PR body uses `Ref #10551`, never Closes, until the sweeper closes it" [brief] | Work task 4, Acceptance Criteria | mapped |
 | 7 | "Do not comment on, edit or close any other WikiSkills-related issue" [brief] | Work task 2, Acceptance Criteria | mapped |
 | 8 | "Merge-queue PRs are never synced or pushed to. ... One `gh pr merge` per call. No secrets in argv." [brief] | Work task 4 | mapped |
-| 9 | "Technical forks go to the CTO agent, not the operator." and "Persist every decision as a row of the `| Item | Class | Ruling |` table" [brief] | `decision-challenges.md` T1 to T4 (with T2b) | mapped |
+| 9 | "Technical forks go to the CTO agent, not the operator." and "Persist every decision as a row of the `| Item | Class | Ruling |` table" [brief] | `decision-challenges.md` T1 to T6 (with T2b) | mapped |
 
 ### Plan-Item Provenance
 
@@ -307,7 +308,7 @@ No other domain is relevant (internal harness tooling, no UI surface, no retaine
   after the commit (the files are untracked until then).
 - [ ] `git diff --quiet origin/main...HEAD -- plugins/` exits 0 (no `ship/SKILL.md` or PURPOSE.md
   change, no harness change).
-- [ ] `test "$(grep -c '| technical |' knowledge-base/project/specs/feat-one-shot-10551-ship-purpose-md/decision-challenges.md)" -eq 5`
+- [ ] `test "$(grep -c '| technical |' knowledge-base/project/specs/feat-one-shot-10551-ship-purpose-md/decision-challenges.md)" -eq 7`
   and `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` exits 0.
 - [ ] The PR body matches `Ref #10551` and does not match `(Closes|Fixes|Resolves) #`
   (`gh pr view --json body -q .body | grep -E 'Ref #10551'`, then the negative grep).
