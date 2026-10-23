@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import type postgres from "postgres";
 import { attackAsAnon, connect, rolledBackRaw, withTransientRetry } from "./harness-fixture";
@@ -53,6 +55,7 @@ const RPC_CALLS = [
   `select public.resolve_git_data_erasure_pending('${ANY_ID}'::uuid)`,
   `select public.oldest_git_data_erasure_pending_age()`,
   `select public.git_data_erasure_owner_gone('${ANY_ID}'::uuid)`,
+  `select * from public.git_data_erasure_pending_ages()`,
 ];
 
 const TABLES = ["git_data_erasure_pending", "git_data_erasure_counts"] as const;
@@ -92,7 +95,7 @@ describe.skipIf(!ENABLED)("git_data_erasure_pending (local, live database)", () 
     if (sqlB) await sqlB.end({ timeout: 5 });
   });
 
-  test("anon and authenticated cannot execute any of the six RPC forms; service_role can (positive control)", async () => {
+  test("anon and authenticated cannot execute any of the seven RPC forms; service_role can (positive control)", async () => {
     for (const stmt of RPC_CALLS) {
       await expect(as.authenticated((t) => t.unsafe(stmt)), stmt).rejects.toMatchObject({ code: "42501" });
       await expect(as.anon((t) => t.unsafe(stmt)), stmt).rejects.toMatchObject({ code: "42501" });
@@ -133,8 +136,8 @@ describe.skipIf(!ENABLED)("git_data_erasure_pending (local, live database)", () 
        where pronamespace = 'public'::regnamespace and proname in (
          'record_git_data_erasure_pending', 'claim_git_data_erasure_pending',
          'resolve_git_data_erasure_pending', 'oldest_git_data_erasure_pending_age',
-         'git_data_erasure_owner_gone')`;
-    expect(rows).toHaveLength(5);
+         'git_data_erasure_owner_gone', 'git_data_erasure_pending_ages')`;
+    expect(rows).toHaveLength(6);
     for (const r of rows) {
       expect(r.prosecdef, r.proname).toBe(true);
       expect(r.proconfig, r.proname).toContain("search_path=public, pg_temp");
@@ -182,6 +185,35 @@ describe.skipIf(!ENABLED)("git_data_erasure_pending (local, live database)", () 
         return [first, second, third, fourth];
       });
       expect(ages).toEqual([10 * 86400, 10 * 86400, 12 * 86400, 12 * 86400]);
+    });
+
+    test("a seeded write never overwrites an existing row's known last_outcome; a real outcome still does", async () => {
+      const id = randomUUID();
+      const outcomes = await asService(async (t) => {
+        const get = async () => {
+          await t`reset role`;
+          const [r] = await t<{ o: string }[]>`select last_outcome as o from public.git_data_erasure_pending where workspace_id = ${id}`;
+          await t`set local role service_role`;
+          return r.o;
+        };
+        await t`select public.record_git_data_erasure_pending(${id}::uuid, 'seeded')`;
+        const first = await get(); // a fresh seed row is 'seeded'
+        await t`select public.record_git_data_erasure_pending(${id}::uuid, 'unreachable')`;
+        await t`select public.record_git_data_erasure_pending(${id}::uuid, 'seeded', now() - interval '3 days')`;
+        const second = await get(); // keeps 'unreachable'
+        await t`select public.record_git_data_erasure_pending(${id}::uuid, 'refused')`;
+        return [first, second, await get()];
+      });
+      expect(outcomes).toEqual(["seeded", "unreachable", "refused"]);
+    });
+
+    test("rejects a requested_at before 2020-01-01 (and accepts exactly 2020-01-01)", async () => {
+      await expect(
+        asService((t) => t`select public.record_git_data_erasure_pending(${randomUUID()}::uuid, 'seeded', timestamptz '2019-12-31 23:59:59+00')`),
+      ).rejects.toThrow(/before 2020-01-01/);
+      await expect(
+        asService((t) => t`select public.record_git_data_erasure_pending(${randomUUID()}::uuid, 'seeded', timestamptz '2020-01-01 00:00:00+00')`),
+      ).resolves.toBeDefined();
     });
 
     test("rejects a future requested_at, a NULL outcome, a NULL id and an outcome outside the closed enum", async () => {
@@ -394,19 +426,72 @@ describe.skipIf(!ENABLED)("git_data_erasure_pending (local, live database)", () 
     });
   });
 
+  describe("pending_ages", () => {
+    test("splits the oldest age by owner_gone; NULL on an empty side; never negative", async () => {
+      const out = await rolledBackRaw(sql, async (t) => {
+        const ages = async () => {
+          await t`set local role service_role`;
+          const [r] = await t<{ g: string | null; l: string | null }[]>`
+            select oldest_gone_seconds::text as g, oldest_live_seconds::text as l from public.git_data_erasure_pending_ages()`;
+          await t`reset role`;
+          return { gone: r.g === null ? null : Number(r.g), live: r.l === null ? null : Number(r.l) };
+        };
+        const empty = await ages();
+        const liveUser = randomUUID();
+        await t`insert into auth.users (id, email) values (${liveUser}, ${`${liveUser}@example.test`})`;
+        const goneId = randomUUID(); // no user rows, no members: gone
+        for (const [id, age] of [[liveUser, "9 days"], [goneId, "3 days"]] as const) {
+          await t`set local role service_role`;
+          await t`select public.record_git_data_erasure_pending(${id}::uuid, 'refused')`;
+          await t`reset role`;
+          await t`update public.git_data_erasure_pending set requested_at = now() - ${age}::interval where workspace_id = ${id}`;
+        }
+        const both = await ages();
+        await t`update public.git_data_erasure_pending set requested_at = now() + interval '1 hour' where workspace_id = ${goneId}`;
+        const future = await ages();
+        return { empty, both, future };
+      });
+      expect(out.empty).toEqual({ gone: null, live: null });
+      expect(out.both).toEqual({ gone: 3 * 86400, live: 9 * 86400 });
+      expect(out.future.gone).toBe(0);
+    });
+  });
+
   describe("git_data_erasure_owner_gone", () => {
     const newUser = async (t: Txn): Promise<string> => {
       const id = randomUUID();
       await t`insert into auth.users (id, email) values (${id}, ${`${id}@example.test`})`;
       return id;
     };
-
     // The Art. 17 saga's own steps (account-delete 3.91, 3.92, 3.93, then step 6), run as the table owner.
-    const eraseAccount = async (t: Txn, id: string) => {
+    const sagaSteps = async (t: Txn, id: string) => {
       await t`select public.anonymise_workspace_members(${id}::uuid)`;
       await t`select public.anonymise_organization_membership(${id}::uuid)`;
       await t`select public.anonymise_workspace_member_actions(${id}::uuid)`;
+    };
+    const eraseAccount = async (t: Txn, id: string) => {
+      await sagaSteps(t, id);
       await t`delete from auth.users where id = ${id}`;
+    };
+    const gone = async (t: Txn, id: string): Promise<boolean> => {
+      await t`set local role service_role`;
+      const [r] = await t<{ g: boolean }[]>`select public.git_data_erasure_owner_gone(${id}::uuid) as g`;
+      await t`reset role`;
+      return r.g;
+    };
+    const ledger = async (t: Txn, id: string, outcome: string) => {
+      await t`set local role service_role`;
+      await t`select public.record_git_data_erasure_pending(${id}::uuid, ${outcome})`;
+      await t`reset role`;
+    };
+    // A real TEAM workspace: random id (never a user id), an organization owned by `owner`, one member.
+    const newTeamWorkspace = async (t: Txn, owner: string): Promise<string> => {
+      const org = randomUUID();
+      const ws = randomUUID();
+      await t`insert into public.organizations (id, owner_user_id) values (${org}, ${owner})`;
+      await t`insert into public.workspaces (id, organization_id) values (${ws}, ${org})`;
+      await t`insert into public.workspace_members (workspace_id, user_id, role) values (${ws}, ${owner}, 'owner')`;
+      return ws;
     };
 
     test("an id that exists nowhere is gone; NULL raises (a caller must treat an error as not gone)", async () => {
@@ -415,43 +500,143 @@ describe.skipIf(!ENABLED)("git_data_erasure_pending (local, live database)", () 
       await expect(asService((t) => t`select public.git_data_erasure_owner_gone(null::uuid)`)).rejects.toThrow(/workspace id is required/);
     });
 
-    test("a live account (auth user, public user, own membership) is NOT gone", async () => {
-      const g = await asService(async (t) => {
-        await t`reset role`;
+    test("a live account (auth user, public user, own membership) is NOT gone, even with an account-delete ledger row (aborted deletion)", async () => {
+      const out = await rolledBackRaw(sql, async (t) => {
         const id = await newUser(t);
-        await t`set local role service_role`;
-        const [r] = await t<{ g: boolean }[]>`select public.git_data_erasure_owner_gone(${id}::uuid) as g`;
-        return r.g;
+        const before = await gone(t, id);
+        await ledger(t, id, "refused");
+        return { before, withRow: await gone(t, id) };
+      });
+      expect(out).toEqual({ before: false, withRow: false });
+    });
+
+    test("branch auth.users: an auth row alone (public.users and memberships already removed) is NOT gone", async () => {
+      const g = await rolledBackRaw(sql, async (t) => {
+        const id = await newUser(t);
+        await sagaSteps(t, id);
+        await t`delete from public.users where id = ${id}`; // auth.users row deliberately left
+        return gone(t, id);
       });
       expect(g).toBe(false);
     });
 
-    test("another member still in the workspace keeps it NOT gone even when the owner's account is deleted", async () => {
-      const g = await asService(async (t) => {
-        await t`reset role`;
+    // Branch public.users: unreachable without an auth.users row (users_id_fkey cascade), so no live state
+    // separates it from the branch above; it is pinned by exact text in the shape test.
+
+    test("a solo workspace that kept a CO-MEMBER becomes gone once the user rows are gone (otherwise the erasure is stuck forever)", async () => {
+      const out = await rolledBackRaw(sql, async (t) => {
         const owner = await newUser(t);
-        const other = await newUser(t);
-        await t`insert into public.workspace_members (workspace_id, user_id, role) values (${owner}, ${other}, 'member')`;
+        const invitee = await newUser(t);
+        await t`insert into public.workspace_members (workspace_id, user_id, role) values (${owner}, ${invitee}, 'member')`;
+        await ledger(t, owner, "refused"); // written by account-delete
+        const beforeErase = await gone(t, owner);
         await eraseAccount(t, owner);
-        await t`set local role service_role`;
-        const [r] = await t<{ g: boolean }[]>`select public.git_data_erasure_owner_gone(${owner}::uuid) as g`;
-        return r.g;
+        const [m] = await t<{ n: number }[]>`select count(*)::int as n from public.workspace_members where workspace_id = ${owner}`;
+        return { beforeErase, afterErase: await gone(t, owner), coMemberRowsLeft: m.n };
       });
-      expect(g).toBe(false);
+      expect(out).toEqual({ beforeErase: false, afterErase: true, coMemberRowsLeft: 1 });
+    });
+
+    test("a SEEDED team workspace id (members, zero user rows) stays NOT gone, with or without a ledger row", async () => {
+      const out = await rolledBackRaw(sql, async (t) => {
+        const owner = await newUser(t);
+        const team = await newTeamWorkspace(t, owner);
+        const noRow = await gone(t, team); // the seed path asks BEFORE recording
+        await ledger(t, team, "seeded");
+        return { noRow, seeded: await gone(t, team) };
+      });
+      expect(out).toEqual({ noRow: false, seeded: false });
+    });
+
+    test("a seeded ex-solo id whose workspace kept a co-member stays NOT gone (documented limit); an orphan with no members is gone", async () => {
+      const out = await rolledBackRaw(sql, async (t) => {
+        const owner = await newUser(t);
+        const invitee = await newUser(t);
+        await t`insert into public.workspace_members (workspace_id, user_id, role) values (${owner}, ${invitee}, 'member')`;
+        await ledger(t, owner, "seeded");
+        await eraseAccount(t, owner);
+        const withCoMember = await gone(t, owner);
+        const orphan = await newUser(t);
+        await ledger(t, orphan, "seeded");
+        await eraseAccount(t, orphan);
+        return { withCoMember, orphan: await gone(t, orphan) };
+      });
+      expect(out).toEqual({ withCoMember: false, orphan: true });
+    });
+
+    test("branch ledger provenance: a refreshed outcome keeps an account-delete row trusted; a seed never downgrades it", async () => {
+      const out = await rolledBackRaw(sql, async (t) => {
+        const owner = await newUser(t);
+        const invitee = await newUser(t);
+        await t`insert into public.workspace_members (workspace_id, user_id, role) values (${owner}, ${invitee}, 'member')`;
+        await ledger(t, owner, "unreachable");
+        await ledger(t, owner, "seeded"); // a later seed must not turn the known outcome into 'seeded'
+        await eraseAccount(t, owner);
+        const [row] = await t<{ o: string }[]>`select last_outcome as o from public.git_data_erasure_pending where workspace_id = ${owner}`;
+        return { gone: await gone(t, owner), outcome: row.o };
+      });
+      expect(out).toEqual({ gone: true, outcome: "unreachable" });
     });
 
     test("after the saga (memberships and auth user deleted) the id is gone even though the orphan workspace row survives (mig 065)", async () => {
-      const out = await asService(async (t) => {
-        await t`reset role`;
+      const out = await rolledBackRaw(sql, async (t) => {
         const id = await newUser(t);
         await eraseAccount(t, id);
         const [ws] = await t<{ n: number }[]>`select count(*)::int as n from public.workspaces where id = ${id}`;
-        await t`set local role service_role`;
-        const [r] = await t<{ g: boolean }[]>`select public.git_data_erasure_owner_gone(${id}::uuid) as g`;
-        return { gone: r.g, orphanWorkspaceRows: ws.n };
+        return { gone: await gone(t, id), orphanWorkspaceRows: ws.n };
       });
       expect(out.orphanWorkspaceRows).toBe(1);
       expect(out.gone).toBe(true);
+    });
+  });
+
+  describe("re-applying the migration", () => {
+    const UP_SQL = readFileSync(path.join(__dirname, "../../supabase/migrations/164_git_data_erasure_pending.sql"), "utf8");
+
+    test("removes a stale 2-argument record overload left by an earlier edit of 164, leaving exactly one record function", async () => {
+      const out = await rolledBackRaw(sql, async (t) => {
+        await t.unsafe(`create function public.record_git_data_erasure_pending(p_workspace_id uuid, p_outcome text) returns void language sql as 'select 1'`);
+        const [before] = await t<{ n: number }[]>`select count(*)::int as n from pg_proc where proname = 'record_git_data_erasure_pending'`;
+        await t.unsafe(UP_SQL);
+        const [after] = await t<{ n: number; args: string }[]>`
+          select count(*)::int as n, min(pg_get_function_identity_arguments(oid)) as args from pg_proc where proname = 'record_git_data_erasure_pending'`;
+        return { before: before.n, after: after.n, args: after.args };
+      });
+      expect(out.before).toBe(2);
+      expect(out.after).toBe(1);
+      expect(out.args).toBe("p_workspace_id uuid, p_outcome text, p_requested_at timestamp with time zone");
+    });
+  });
+
+  describe("down migration", () => {
+    const DOWN_SQL = readFileSync(path.join(__dirname, "../../supabase/migrations/164_git_data_erasure_pending.down.sql"), "utf8");
+
+    test("REFUSES while the ledger holds a row, and drops nothing", async () => {
+      const out = await rolledBackRaw(sql, async (t) => {
+        await t`insert into public.git_data_erasure_pending (workspace_id) values (${randomUUID()})`;
+        let message = "";
+        await t.savepoint(async (sp) => {
+          await sp.unsafe(DOWN_SQL);
+        }).catch((e: Error) => {
+          message = e.message;
+        });
+        const [r] = await t<{ n: number }[]>`select count(*)::int as n from pg_proc where proname = 'git_data_erasure_owner_gone'`;
+        return { message, functionStillThere: r.n };
+      });
+      expect(out.message).toMatch(/Refusing to drop git_data_erasure_pending/);
+      expect(out.functionStillThere).toBe(1);
+    });
+
+    test("with an empty ledger it drops all five functions and both tables (rolled back afterwards)", async () => {
+      const left = await rolledBackRaw(sql, async (t) => {
+        await t`delete from public.git_data_erasure_pending`;
+        await t.unsafe(DOWN_SQL);
+        const [r] = await t<{ fns: number; tables: number }[]>`
+          select (select count(*)::int from pg_proc where pronamespace = 'public'::regnamespace and proname like '%git_data_erasure%') as fns,
+                 (select count(*)::int from pg_class where relnamespace = 'public'::regnamespace and relname like 'git_data_erasure%') as tables`;
+        return r;
+      });
+      expect(left).toEqual({ fns: 0, tables: 0 });
     });
   });
 });

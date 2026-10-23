@@ -42,20 +42,28 @@
 -- is older than that (the PR-B2 seed path, for ids swept from Sentry) must pass p_requested_at so
 -- the Art. 12(3) clock is not reset to age 0.
 --
--- git_data_erasure_owner_gone(workspace) is the re-drive's proof that an account really is gone
+-- git_data_erasure_owner_gone(workspace) is the re-drive's proof that an account is really gone
 -- before it erases anything: the ledger alone is NOT proof (a seeded wrong id, or a deletion that
 -- aborts after the ledger write at account-delete step 3.01, would otherwise get a LIVE user's
--- repository erased). It returns true only when NONE of these hold for the id:
---   auth.users.id = id                 (the account row; deleted last, step 6)
---   public.users.id = id               (cascade child of auth.users, mig 001)
---   public.workspace_members.user_id = id        (deleted in step 3.91)
---   public.workspace_members.workspace_id = id   (no member, live or otherwise, of that workspace)
--- It deliberately does NOT require public.workspaces / public.organizations rows to be absent:
--- the saga keeps the orphan workspace and organization rows (mig 065 Part 1: "record-of-existence"),
--- so demanding their absence would make the check unsatisfiable after every real deletion.
---
--- Per cq-pg-security-definer-search-path-pin-pg-temp every SECURITY DEFINER function pins
--- `public, pg_temp`. No CREATE INDEX CONCURRENTLY (the migration runs inside a transaction).
+-- repository erased). It returns TRUE only when ALL of these hold:
+--   1. no auth.users row with id = the id       (the account row; deleted last, step 6)
+--   2. no public.users row with id = the id     (cascade child of auth.users, mig 001)
+--   3. the id is not a TEAM workspace, decided by PROVENANCE of the ledger row, because the schema
+--      cannot decide it: every workspaces row has a NOT NULL organization_id, and when a solo owner
+--      is deleted anonymise_organization_membership PROMOTES the oldest remaining member to owner
+--      (mig 058/065), so an ex-solo workspace that kept a co-member is structurally identical to a
+--      team workspace (workspaces.id is the deleted user's id; its organization has a live owner).
+--        - a ledger row whose last_outcome is NOT 'seeded' was written by account-delete for that
+--          very user id (the only other writer is the manual seed path), so it IS a deleted account's
+--          solo workspace id: TRUE once rows 1 and 2 are gone, even though the co-member's
+--          workspace_members row remains (otherwise the erasure would be stuck forever);
+--        - a 'seeded' row, or an id with no ledger row yet (the seed path asks BEFORE recording),
+--          is operator input: TRUE only if no workspace_members row still keys on that workspace id,
+--          so a seeded TEAM workspace id (members, zero user rows) stays FALSE.
+--      Known limit: a seeded ex-solo id whose workspace kept a co-member also stays FALSE; it is
+--      reported as owner_still_exists and needs an operator decision.
+-- It deliberately does NOT require public.workspaces / public.organizations rows to be absent: the
+-- saga keeps the orphan workspace and organization rows (mig 065 Part 1, "record-of-existence").
 
 DO $$
 BEGIN
@@ -105,10 +113,17 @@ COMMENT ON TABLE public.git_data_erasure_counts IS
 -- record_git_data_erasure_pending(workspace, outcome, requested_at)
 -- Idempotent upsert. A NULL outcome is refused (no NULL row, and a known last_outcome is never
 -- overwritten with NULL). p_requested_at is for the seed path only: it lets an id swept from
--- Sentry keep its ORIGINAL request time; a future value is refused. On conflict the EARLIER
--- requested_at wins (the original is kept; a seed may only move the clock earlier, never reset
--- it to now) and attempts / last_attempt_at are untouched.
+-- Sentry keep its ORIGINAL request time; a future value and one before 2020-01-01 are refused.
+-- On conflict the EARLIER requested_at wins (the original is kept; a seed may only move the clock
+-- earlier, never reset it to now), a 'seeded' write never overwrites an existing row's known
+-- last_outcome (the seed path has no host outcome of its own), and attempts / last_attempt_at are
+-- untouched.
+--
+-- The 2-argument form existed in an earlier edit of this migration: drop it first so a database
+-- that ever applied that edit does not keep an ambiguous overload with the old grants.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.record_git_data_erasure_pending(uuid, text);
+
 CREATE OR REPLACE FUNCTION public.record_git_data_erasure_pending(
   p_workspace_id uuid,
   p_outcome      text,
@@ -129,10 +144,13 @@ BEGIN
   IF p_requested_at IS NOT NULL AND p_requested_at > now() THEN
     RAISE EXCEPTION 'record_git_data_erasure_pending: requested_at must not be in the future';
   END IF;
+  IF p_requested_at IS NOT NULL AND p_requested_at < timestamptz '2020-01-01 00:00:00+00' THEN
+    RAISE EXCEPTION 'record_git_data_erasure_pending: requested_at must not be before 2020-01-01';
+  END IF;
   INSERT INTO public.git_data_erasure_pending AS g (workspace_id, last_outcome, requested_at)
   VALUES (p_workspace_id, p_outcome, COALESCE(p_requested_at, now()))
   ON CONFLICT (workspace_id) DO UPDATE
-    SET last_outcome = EXCLUDED.last_outcome,
+    SET last_outcome = CASE WHEN EXCLUDED.last_outcome = 'seeded' THEN g.last_outcome ELSE EXCLUDED.last_outcome END,
         requested_at = LEAST(g.requested_at, EXCLUDED.requested_at);
 END;
 $$;
@@ -143,8 +161,8 @@ GRANT EXECUTE ON FUNCTION public.record_git_data_erasure_pending(uuid, text, tim
 
 COMMENT ON FUNCTION public.record_git_data_erasure_pending(uuid, text, timestamptz) IS
   '#8211: service-role idempotent upsert into git_data_erasure_pending. Refuses NULL outcome and a '
-  'future requested_at; keeps the earlier requested_at on conflict; updates last_outcome (closed '
-  'enum, CHECK-enforced).';
+  'requested_at in the future or before 2020; keeps the earlier requested_at on conflict; updates '
+  'last_outcome (closed enum, CHECK-enforced) except that a seeded write keeps a known outcome.';
 
 -- ---------------------------------------------------------------------------
 -- claim_git_data_erasure_pending(limit, min_interval)
@@ -282,16 +300,23 @@ CREATE OR REPLACE FUNCTION public.git_data_erasure_owner_gone(p_workspace_id uui
   SECURITY DEFINER
   SET search_path = public, pg_temp
 AS $$
+DECLARE
+  v_outcome text;
 BEGIN
   IF p_workspace_id IS NULL THEN
     RAISE EXCEPTION 'git_data_erasure_owner_gone: workspace id is required';
   END IF;
-  RETURN NOT (
-    EXISTS (SELECT 1 FROM auth.users u WHERE u.id = p_workspace_id)
-    OR EXISTS (SELECT 1 FROM public.users pu WHERE pu.id = p_workspace_id)
-    OR EXISTS (SELECT 1 FROM public.workspace_members m WHERE m.user_id = p_workspace_id)
-    OR EXISTS (SELECT 1 FROM public.workspace_members m WHERE m.workspace_id = p_workspace_id)
-  );
+  IF EXISTS (SELECT 1 FROM auth.users u WHERE u.id = p_workspace_id)
+     OR EXISTS (SELECT 1 FROM public.users pu WHERE pu.id = p_workspace_id) THEN
+    RETURN false;
+  END IF;
+  SELECT g.last_outcome INTO v_outcome
+    FROM public.git_data_erasure_pending g
+   WHERE g.workspace_id = p_workspace_id;
+  IF FOUND AND v_outcome <> 'seeded' THEN
+    RETURN true; -- written by account-delete for this very user id: a deleted account's solo workspace
+  END IF;
+  RETURN NOT EXISTS (SELECT 1 FROM public.workspace_members m WHERE m.workspace_id = p_workspace_id);
 END;
 $$;
 
@@ -300,6 +325,37 @@ REVOKE ALL ON FUNCTION public.git_data_erasure_owner_gone(uuid)
 GRANT EXECUTE ON FUNCTION public.git_data_erasure_owner_gone(uuid) TO service_role;
 
 COMMENT ON FUNCTION public.git_data_erasure_owner_gone(uuid) IS
-  '#8211: service-role proof that no account/membership row still keys on the id (auth.users, '
-  'public.users, workspace_members by user_id and by workspace_id). Does not look at workspaces / '
-  'organizations, which the Art. 17 saga keeps as orphans (mig 065).';
+  '#8211: service-role proof that an account is gone: no auth.users / public.users row, and the id is '
+  'not a team workspace (ledger provenance: an account-delete row is trusted, a seeded or unrecorded '
+  'id must have no workspace_members left). Does not read workspaces / organizations (kept as orphans, '
+  'mig 065).';
+
+-- ---------------------------------------------------------------------------
+-- git_data_erasure_pending_ages() -> (oldest_gone_seconds, oldest_live_seconds)
+-- The re-drive's gauge and escalation must consider ONLY rows whose owner is gone: a row whose owner
+-- still exists is an aborted deletion (or a wrong seeded id) that must NOT be erased, so it must not
+-- page anyone to "erase by hand". Split by git_data_erasure_owner_gone; each side is NULL when empty,
+-- never negative.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.git_data_erasure_pending_ages()
+  RETURNS TABLE (oldest_gone_seconds bigint, oldest_live_seconds bigint)
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+  SELECT
+    max(CASE WHEN public.git_data_erasure_owner_gone(g.workspace_id)
+             THEN GREATEST(0, floor(extract(epoch FROM (now() - g.requested_at))))::bigint END),
+    max(CASE WHEN NOT public.git_data_erasure_owner_gone(g.workspace_id)
+             THEN GREATEST(0, floor(extract(epoch FROM (now() - g.requested_at))))::bigint END)
+    FROM public.git_data_erasure_pending g;
+$$;
+
+REVOKE ALL ON FUNCTION public.git_data_erasure_pending_ages()
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.git_data_erasure_pending_ages() TO service_role;
+
+COMMENT ON FUNCTION public.git_data_erasure_pending_ages() IS
+  '#8211: service-role oldest pending age in seconds, split into rows whose owner is gone (erasable, '
+  'escalates) and rows whose owner still exists (aborted deletion; never erased, warns separately).';
