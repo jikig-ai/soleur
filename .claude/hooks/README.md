@@ -209,14 +209,35 @@ an alias, a stored string run as `$cmd`, `git -c alias.ci=commit ci`); `git comm
 `git submodule foreach`; `xargs -I@` placeholders; creators the walker does not know (`./setup.sh`,
 `gh repo clone`) and an existing empty directory that the command turns into a repository;
 a stdin-fed shell BEHIND a launcher (`sudo bash <<EOF`), launchers that take a command string or a chdir option the walker does not know (`tmux new-session`, `at`, `python -c`, `mise -C`, `yarn --cwd`, `direnv exec`, `systemd-run -p WorkingDirectory=`); `CDPATH`, a symlink-vs-logical `cd`, `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS`, `read` / `printf -v`
-into `GIT_DIR`, and a `GIT_DIR` exported by an earlier call; and the commit-time index changes the
-command makes itself (`git add -A && git commit`, `commit -a`, a pathspec commit): the hook scans
-the index as it is BEFORE the command runs (#10696). A `git commit` into a repository that has no
+into `GIT_DIR`, and a `GIT_DIR` exported by an earlier call. A `git commit` into a repository that has no
 `.gitleaks.toml` is skipped with a bypass row, as it always was. On a harness whose hook payload
 carries no `cwd` (Devin), a plain `git commit` after a separate `cd` call is scanned against the
 process cwd only: name the repository as a literal path (`git -C /abs/path commit`) there.
 Sessions anchored at the bare-root mirror pick the fix up after
 `worktree-manager.sh sync-bare-files`. Rationale: ADR-157 addendum (2026-10-21).
+
+### `git-commit-secret-scan` would-be index (#10696)
+
+A command that stages and commits in one call (`git add -A && git commit`, `commit -a`, `commit -am`,
+`commit -- <path>`) used to be scanned against the index as it was BEFORE the command ran, so a secret
+in the working tree passed unscanned. The hook now builds the index the commit will record:
+`lib/commit-target-roots.sh` records the command's own staging, and `lib/commit-index-sim.sh` copies
+the real index to a temp file in a 0700 directory, replays the staging onto the copy (an exact replay
+of the literal `git add` words when the directory is proven, else the superset `git add -A`), and runs
+the unchanged scan with the copy and a quarantined object directory exported. Nothing in the real
+index, object store, git directory or working tree is written. A plain `git commit -m x` pays nothing.
+When the simulation cannot be built or bounded the hook denies (rule id
+`git-commit-secret-scan-sim-deny`, repair: run `git add` as its own call, then the commit); the one
+benign case, a path that does not exist yet with nothing in the command to create it, scans the whole
+working tree and writes a `git-commit-secret-scan-sim-failed` bypass row. The full contract, the failure
+table and the named residuals are in the header of `git-commit-secret-scan.sh`.
+
+Named residuals (one follow-up issue lists them): a script or wrapper that runs `git add` inside; content
+created or changed earlier in the same command is denied only when a producer is detected (`sed -i` or
+`prettier --write` before `commit -a` is invisible); a positional pathspec after `-m "..."`; content a verb
+brings from outside the working tree (`apply --index`, `cherry-pick -n`, `stash pop`, `merge`,
+`checkout <ref> --`); a clean filter or Git LFS may record bytes the simulation never saw (clean filters are
+pinned off on every simulated `git add`); and other tools that stage (an IDE, a git alias).
 
 ### Scope of the mandate
 
