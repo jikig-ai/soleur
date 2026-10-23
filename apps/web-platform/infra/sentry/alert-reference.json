@@ -189,14 +189,6 @@
         "conditions": [
           {
             "comparison": {
-              "key": "feature",
-              "match": "eq",
-              "value": "account-delete"
-            },
-            "type": "tagged_event"
-          },
-          {
-            "comparison": {
               "key": "op",
               "match": "eq",
               "value": "workspace-tree-erasure"
@@ -211,7 +203,7 @@
       "1213799"
     ],
     "enabled": true,
-    "frequency": 6,
+    "frequency": 38,
     "name": "art17-workspace-tree-erasure-incomplete",
     "triggerConditions": [
       {

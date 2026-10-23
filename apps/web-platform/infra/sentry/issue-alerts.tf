@@ -682,22 +682,19 @@ resource "sentry_alert" "art17_erasure_incomplete" {
   }
 }
 
-# (#8211) Sibling of art17_erasure_incomplete: the SAME pager, for the LOCAL working-tree leg
-# of the Art. 17 erasure. `deleteWorkspace` reaps WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>;
-# when any root cannot be removed (or the tree was only MOVED ASIDE to `<id>.orphaned-<ts>`,
-# which nothing under WORKTREE_ROOT ever cleans), account-delete mirrors it as
-# feature=account-delete op=workspace-tree-erasure while the user is still told the deletion
-# succeeded. Without this rule that event pages nobody. Filters, triggers and actions are
-# copied from art17_erasure_incomplete (feature + op only, re-pages per event). The ONLY
-# differences are the `op` literal and `frequency_minutes = 6`: Sentry's POST-time dedup is
-# keyed on action shape + frequency + match, NOT conditions, so a second rule at 5 would be an
-# exact duplicate of the first (taken: see `grep -h frequency_minutes *.tf`; 6 was unused).
-# Cross-artifact op contract: test/sentry-git-data-pin-fault-alert-op-contract.test.ts.
+# (#8211) Sibling of art17_erasure_incomplete, for the LOCAL working-tree leg of the Art. 17
+# erasure. `deleteWorkspace` reaps WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>; a root it cannot
+# remove (or a tree only MOVED ASIDE to `<id>.orphaned-<ts>`) is mirrored as op=workspace-tree-
+# erasure by account-delete (feature=account-delete) AND repo/disconnect (feature=repo-disconnect)
+# while the caller still succeeds, so the filter is the OP ALONE. Triggers/actions copy the rule
+# above (re-pages per event). Distinct `frequency_minutes = 38` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10-37,60-63,120,240,1440-1442; keyed on action shape +
+# frequency, NOT conditions). Contract: test/sentry-git-data-pin-fault-alert-op-contract.test.ts.
 resource "sentry_alert" "art17_workspace_tree_erasure_incomplete" {
   organization      = var.sentry_org
   name              = "art17-workspace-tree-erasure-incomplete"
   enabled           = true
-  frequency_minutes = 6
+  frequency_minutes = 38
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
   trigger_conditions = [
@@ -711,7 +708,6 @@ resource "sentry_alert" "art17_workspace_tree_erasure_incomplete" {
     {
       logic_type = "all"
       conditions = [
-        { tagged_event = { key = "feature", match = "eq", value = "account-delete" } },
         { tagged_event = { key = "op", match = "eq", value = "workspace-tree-erasure" } },
       ]
       actions = [

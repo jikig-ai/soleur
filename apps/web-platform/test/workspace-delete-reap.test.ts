@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "os";
 import { join } from "path";
 import { REAP_RECHECK_DELAY_MS } from "../server/workspace";
+import { mockChildProcess } from "./helpers/mock-child-process";
 
 // Contains hex LETTERS: an all-digit id is its own upper-case form and proves nothing.
 const ID = "abcdef01-2222-4333-8444-5555555555ab";
@@ -106,16 +107,7 @@ describe("deleteWorkspace reaps every tenant root", () => {
   test("a non-UUID id throws BEFORE any rm", async () => {
     const a = seed(wsRoot, "not-a-uuid");
     const calls: string[] = [];
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        execFileSync: (cmd: string, ...rest: unknown[]) => {
-          calls.push(cmd);
-          return (actual.execFileSync as (...a: unknown[]) => unknown)(cmd, ...rest);
-        },
-      };
-    });
+    mockChildProcess((cmd) => void calls.push(cmd));
     const { deleteWorkspace } = await import("../server/workspace");
 
     await expect(deleteWorkspace("not-a-uuid")).rejects.toThrow(/Invalid workspaceId/);
@@ -151,19 +143,10 @@ describe("deleteWorkspace reaps every tenant root", () => {
   test("a failure on the first root still attempts the second, then throws an aggregate", async () => {
     const a = seed(wsRoot);
     const b = seed(wtRoot);
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
+    mockChildProcess((_cmd, args) => {
           // Make EVERY phase fail for the workspaces-root tree only.
-          if (args.some((p) => typeof p === "string" && p.startsWith(wsRoot))) {
-            throw new Error("Permission denied");
-          }
-          return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
-        },
-      };
-    });
+          if (args.some((p) => typeof p === "string" && p.startsWith(wsRoot))) throw new Error("Permission denied");
+        });
     const { deleteWorkspace } = await import("../server/workspace");
 
     const err = await deleteWorkspace(ID).then(
@@ -183,14 +166,8 @@ describe("deleteWorkspace reaps every tenant root", () => {
 
   test("verifies each dir is gone: a dir that survives rm is reported, not swallowed", async () => {
     const b = seed(wtRoot);
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        // rm "succeeds" without removing anything.
-        execFileSync: () => Buffer.alloc(0),
-      };
-    });
+    // rm "succeeds" without removing anything.
+        mockChildProcess(() => "skip");
     const { deleteWorkspace } = await import("../server/workspace");
 
     const err = await deleteWorkspace(ID).then(
@@ -214,16 +191,7 @@ describe("deleteWorkspace reaps every tenant root", () => {
         createChildLogger: () => ({ info, warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
       };
     });
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        execFileSync: (cmd: string, ...rest: unknown[]) => {
-          execCalls.push(cmd);
-          return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, ...rest);
-        },
-      };
-    });
+    mockChildProcess((cmd) => void execCalls.push(cmd));
     const { deleteWorkspace } = await import("../server/workspace");
 
     await deleteWorkspace(ID);
@@ -330,18 +298,9 @@ describe("deleteWorkspace reaps every tenant root", () => {
 
   test("a move-aside (rm/chmod/find fail, mv works) is an erasure FAILURE and the orphan is reported", async () => {
     const b = seed(wtRoot);
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
-          if (cmd === "rm" || cmd === "chmod" || cmd === "find" || cmd === "rmdir") {
-            throw new Error("Permission denied");
-          }
-          return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest); // real mv
-        },
-      };
-    });
+    mockChildProcess((cmd) => {
+          if (cmd === "rm" || cmd === "chmod" || cmd === "find" || cmd === "rmdir") throw new Error("Permission denied");
+        }); // real mv
     const { deleteWorkspace } = await import("../server/workspace");
 
     const err = await deleteWorkspace(ID).then(
@@ -373,15 +332,9 @@ describe("deleteWorkspace reaps every tenant root", () => {
     seed(wtRoot);
     const logged: unknown[][] = [];
     stubLogger(logged);
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        execFileSync: () => {
+    mockChildProcess(() => {
           throw new Error(`rm: cannot remove '${wtRoot}/${ID}': Permission denied`);
-        },
-      };
-    });
+        });
     const { deleteWorkspace } = await import("../server/workspace");
 
     const err = (await deleteWorkspace(ID).then(
@@ -435,16 +388,9 @@ describe("deleteWorkspace reaps every tenant root", () => {
     seed(wsRoot);
     seed(wtRoot);
     const rmTargets: string[] = [];
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
+    mockChildProcess((cmd, args) => {
           if (cmd === "rm") rmTargets.push(args[args.length - 1]);
-          return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
-        },
-      };
-    });
+        });
     const { deleteWorkspace } = await import("../server/workspace");
 
     await deleteWorkspace(ID);
@@ -536,18 +482,10 @@ describe("deleteWorkspace reaps every tenant root", () => {
     test("an orphan that survives is a FAILURE and counts in the total", async () => {
       const o = join(wtRoot, `${ID}.orphaned-${ts}`);
       mkdirSync(o);
-      vi.doMock("child_process", async () => {
-        const actual = await vi.importActual<typeof import("child_process")>("child_process");
-        return {
-          ...actual,
-          execFileSync: (cmd: string) => {
-            if (cmd === "rm" || cmd === "chmod" || cmd === "find" || cmd === "rmdir" || cmd === "mv") {
-              throw new Error("Permission denied");
-            }
-            return Buffer.alloc(0);
-          },
-        };
-      });
+      mockChildProcess((cmd) => {
+              if (["rm", "chmod", "find", "rmdir", "mv"].includes(cmd)) throw new Error("Permission denied");
+              return "skip";
+            });
       const { deleteWorkspace } = await import("../server/workspace");
 
       const err = await deleteWorkspace(ID).then(
@@ -564,16 +502,9 @@ describe("deleteWorkspace reaps every tenant root", () => {
     test("a provision-time move-aside leaves an orphan that a later delete reaps", async () => {
       const dir = seed(wtRoot, ID);
       process.env.WORKTREE_ROOT = wtRoot;
-      vi.doMock("child_process", async () => {
-        const actual = await vi.importActual<typeof import("child_process")>("child_process");
-        return {
-          ...actual,
-          execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
-            if (cmd === "rm" || cmd === "chmod" || cmd === "find" || cmd === "rmdir") throw new Error("denied");
-            return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
-          },
-        };
-      });
+      mockChildProcess((cmd) => {
+              if (["rm", "chmod", "find", "rmdir"].includes(cmd)) throw new Error("denied");
+            });
       const { removeWorkspaceDir } = await import("../server/workspace");
       expect(removeWorkspaceDir(dir, [wtRoot])).toBe("moved-aside"); // what provision does and ignores
       expect(readdirSync(wtRoot).filter((n) => n.startsWith(`${ID}.orphaned-`))).toHaveLength(1);
@@ -633,20 +564,12 @@ describe("deleteWorkspace reaps every tenant root", () => {
 
   test("a file recreated by a straggler after the reap is caught by the re-check", async () => {
     const b = seed(wtRoot);
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
-          const out = (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
+    mockChildProcess((cmd, args) => {
           if (cmd === "rm" && args[args.length - 1] === b) {
             // The straggling writer lands just inside the re-check delay (a shorter delay misses it).
-            setTimeout(() => mkdirSync(b), REAP_RECHECK_DELAY_MS - 30);
+            return () => void setTimeout(() => mkdirSync(b), REAP_RECHECK_DELAY_MS - 30);
           }
-          return out;
-        },
-      };
-    });
+        });
     const { deleteWorkspace } = await import("../server/workspace");
 
     const err = await deleteWorkspace(ID).then(
@@ -706,18 +629,9 @@ describe("removeWorkspaceDir allowed-roots guard", () => {
 
   test("returns the outcome; a move-aside is reported, not thrown (provision caller semantics unchanged)", async () => {
     const dir = seed(wsRoot, "provision-me");
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>("child_process");
-      return {
-        ...actual,
-        execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
-          if (cmd === "rm" || cmd === "chmod" || cmd === "find" || cmd === "rmdir") {
-            throw new Error("Permission denied");
-          }
-          return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
-        },
-      };
-    });
+    mockChildProcess((cmd) => {
+          if (["rm", "chmod", "find", "rmdir"].includes(cmd)) throw new Error("Permission denied");
+        });
     const { removeWorkspaceDir } = await import("../server/workspace");
 
     expect(removeWorkspaceDir(dir)).toBe("moved-aside");

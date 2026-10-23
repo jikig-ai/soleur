@@ -150,3 +150,42 @@ describe("workspacePathForWorkspaceId lowercases after the shape check", () => {
     expect(() => workspacePathForWorkspaceId("../x")).toThrow(/Invalid workspaceId/);
   });
 });
+
+describe("validation parity: workspaceReapRoots vs workspaceTenantDenyRoots (kept in sync by hand)", () => {
+  // The two functions carry separate copies of the `/` / relative / `..` rules (the deny set
+  // must stay byte-identical to main). Drive BOTH over the same bad roots: any root one
+  // refuses, the other must refuse too, and the messages say which function refused.
+  test.each([
+    ["root '/'", "/", /filesystem root/],
+    ["a trailing-slash-only root '//'", "//", /filesystem root/],
+    ["relative", "wt/rel", /not an absolute normalized path/],
+    ["dotdot", "/tmp/../etc", /not an absolute normalized path/],
+    ["leading dotdot", "../x", /not an absolute normalized path/],
+  ])("%s on WORKTREE_ROOT: deny throws, reap records a fault", (_n, value, re) => {
+    process.env.WORKTREE_ROOT = value;
+    expect(() => workspaceTenantDenyRoots()).toThrow(re);
+    expect(() => workspaceTenantDenyRoots()).toThrow(/^workspaceTenantDenyRoots:/);
+    const out = workspaceReapRoots();
+    expect(out.faults).toHaveLength(1);
+    expect(out.faults[0].label).toBe("worktree");
+    expect((out.faults[0].err as Error).message).toMatch(re);
+    expect((out.faults[0].err as Error).message).toMatch(/^workspaceReapRoots:/);
+  });
+
+  test.each([
+    ["root '/'", "/"],
+    ["relative", "ws/rel"],
+    ["dotdot", "/a/../b"],
+  ])("%s on WORKSPACES_ROOT: deny throws, reap records a fault for the workspaces root only", (_n, value) => {
+    process.env.WORKSPACES_ROOT = value;
+    expect(() => workspaceTenantDenyRoots()).toThrow();
+    const out = workspaceReapRoots();
+    expect(out.faults.map((f) => f.label)).toEqual(["workspaces"]);
+    expect(out.roots.map((r) => r.label)).toEqual(["worktree"]);
+  });
+
+  test("a good configuration is accepted by both", () => {
+    expect(() => workspaceTenantDenyRoots()).not.toThrow();
+    expect(workspaceReapRoots().faults).toEqual([]);
+  });
+});

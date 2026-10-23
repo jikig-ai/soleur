@@ -3,7 +3,12 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { abortAllUserSessions } from "@/server/agent-runner";
 import { deleteWorkspace, purgeWorkspaceLogoObjects } from "@/server/workspace";
 import { removeGitDataRepo } from "@/server/git-data-replication";
-import { waitForUserSessionsToDeregister } from "@/server/agent-session-registry";
+import { drainBeforeReap, waitForUserSessionsToDeregister } from "@/server/agent-session-registry";
+import {
+  WORKSPACE_TREE_ERASURE_OP,
+  WorkspaceReapError,
+  type ReapFailure,
+} from "@/server/workspace-reap-error";
 import { createChildLogger } from "./logger";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
@@ -15,7 +20,7 @@ import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/o
 export const ART17_ERASURE_FEATURE = "account-delete";
 export const ART17_ERASURE_OP = "git-data-bare-repo-erasure";
 // The LOCAL working-tree leg of the same erasure; paged by its own sibling alert rule.
-export const ART17_WORKSPACE_TREE_ERASURE_OP = "workspace-tree-erasure";
+export const ART17_WORKSPACE_TREE_ERASURE_OP = WORKSPACE_TREE_ERASURE_OP;
 
 const log = createChildLogger("account-delete");
 
@@ -223,21 +228,9 @@ export async function deleteAccount(
   // ON this clone, so removing the directory reaps them with no extra step. The
   // unreferenced git objects they pointed at are reclaimed by the clone's normal
   // gc — moot here since the whole directory is removed.
-  // Abort only SIGNALS; wait (bounded, 5 s) for the user's sessions to deregister so the
-  // rm below does not race a still-writing child (ENOENT/ENOTEMPTY feeding the repair and
-  // move-aside phases). The bound never blocks the erasure: proceed, with a hashed breadcrumb.
-  try {
-    const drain = await waitForUserSessionsToDeregister(userId);
-    if (!drain.drained) {
-      log.warn(
-        { userIdHash: hashUserId(userId), waitedMs: drain.waitedMs },
-        "Sessions still registered after the drain bound; reaping the workspace anyway",
-      );
-    }
-  } catch (err) {
-    const userIdHash = hashUserId(userId);
-    log.warn({ userIdHash, err }, "Session drain wait threw (non-fatal)");
-  }
+  // Abort only SIGNALS: wait (bounded) for the user's sessions to deregister before the rm.
+  const userIdHash = hashUserId(userId);
+  await drainBeforeReap(() => waitForUserSessionsToDeregister(userId), log, { userIdHash });
 
   // deleteWorkspace reaps EVERY tenant root (WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>,
   // #8211) on THIS host, attempts them all, and throws a WorkspaceReapError. A move-aside
@@ -251,9 +244,7 @@ export async function deleteAccount(
   try {
     await deleteWorkspace(userId);
   } catch (err) {
-    const failures = Array.isArray((err as { failures?: unknown })?.failures)
-      ? ((err as { failures: { root: string; kind: string; code?: string; label?: string }[] }).failures)
-      : [];
+    const failures: readonly ReapFailure[] = err instanceof WorkspaceReapError ? err.failures : [];
     reportSilentFallback(null, {
       feature: ART17_ERASURE_FEATURE,
       op: ART17_WORKSPACE_TREE_ERASURE_OP,

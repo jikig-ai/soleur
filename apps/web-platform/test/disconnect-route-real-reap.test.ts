@@ -42,16 +42,12 @@ vi.mock("@/server/workspace-resolver", async (importOriginal) => ({
 }));
 // Real rm, except for a configured path substring (simulates an undeletable tree).
 vi.mock("child_process", async () => {
-  const actual = await vi.importActual<typeof import("child_process")>("child_process");
-  return {
-    ...actual,
-    execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
-      if (rmFailure.substr && args.some((a) => typeof a === "string" && a.includes(rmFailure.substr!))) {
-        throw new Error("Permission denied");
-      }
-      return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
-    },
-  };
+  const { mockChildProcessFactory } = await import("./helpers/mock-child-process");
+  return mockChildProcessFactory((_cmd, args) => {
+    if (rmFailure.substr && args.some((a) => typeof a === "string" && a.includes(rmFailure.substr!))) {
+      throw new Error("Permission denied");
+    }
+  });
 });
 
 import * as Sentry from "@sentry/nextjs";
@@ -131,7 +127,7 @@ describe("DELETE /api/repo/disconnect through the REAL deleteWorkspace", () => {
     expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     const [err, ctx] = vi.mocked(Sentry.captureException).mock.calls[0] as [AggregateError, object];
     expect(err).toBeInstanceOf(AggregateError);
-    expect(ctx).toMatchObject({ tags: { feature: "repo-disconnect", op: "workspace-cleanup" } });
+    expect(ctx).toMatchObject({ tags: { feature: "repo-disconnect", op: "workspace-tree-erasure" } });
     expect(JSON.stringify([err.message, err.errors.map((e) => e.message), ctx])).not.toContain(TEAM);
     expect(existsSync(live)).toBe(true); // the failed tree is still there, and was reported
   });

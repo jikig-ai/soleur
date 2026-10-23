@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "fs";
 import { basename, join, resolve } from "path";
-import { execFileSync } from "child_process";
+import { execFile, execFileSync } from "child_process";
 import { createChildLogger } from "./logger";
 import {
   gitWithInstallationAuth,
@@ -21,6 +21,15 @@ import { getPluginPath } from "./plugin-path";
 import { hashUserId, reportSilentFallback } from "./observability";
 import { seedWorktreeConfig } from "./worktree-config-seed";
 import { atomicGitConfig } from "./git-config-atomic";
+import {
+  WorkspaceReapError,
+  type ReapFailure,
+  type ReapFailureKind,
+  type ReapFailureRoot,
+} from "./workspace-reap-error";
+
+export { WorkspaceReapError };
+export type { ReapFailure, ReapFailureKind, ReapFailureRoot };
 import {
   workspaceReapRoots,
   type ReapRootLabel,
@@ -276,41 +285,6 @@ export async function provisionWorkspaceWithRepo(
   return workspacePath;
 }
 
-/** Which leg of the reap failed. `resolver` = the root list itself could not be built. */
-export type ReapFailureRoot = ReapRootLabel | "resolver";
-/**
- * Why. `moved-aside`: the tree was only RENAMED to `<id>.orphaned-<ts>` (still on
- * disk, nothing under WORKTREE_ROOT ever sweeps it). `survived`: the path is still
- * there after the removal. `recreated`: it was gone, then reappeared (a straggling
- * writer). `error`: a removal/stat call threw.
- */
-export type ReapFailureKind = "moved-aside" | "survived" | "recreated" | "error";
-export interface ReapFailure {
-  root: ReapFailureRoot;
-  kind: ReapFailureKind;
-  code?: string;
-  /** For `root: "resolver"`: which tenant root could not be resolved. */
-  label?: ReapRootLabel;
-}
-
-/**
- * Thrown by {@link deleteWorkspace} after EVERY root was attempted. Carries
- * path-free, id-free summaries only (root LABEL, kind, errno code): the raw
- * errors from rm/unlink/lstat embed `<root>/<uuid>`, and this object is handed
- * to Sentry by callers.
- */
-export class WorkspaceReapError extends AggregateError {
-  readonly failures: ReadonlyArray<ReapFailure>;
-  constructor(failures: ReapFailure[], errors: Error[], total: number) {
-    super(
-      errors,
-      `deleteWorkspace: ${failures.length} of ${total} reap targets could not be reaped`,
-    );
-    this.name = "WorkspaceReapError";
-    this.failures = failures;
-  }
-}
-
 /** Pause before the final re-verification, so a straggling writer's file is caught. */
 export const REAP_RECHECK_DELAY_MS = 250;
 
@@ -410,7 +384,7 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
   for (const t of units) {
     try {
       const existed = lstatOrNull(t.path) !== null;
-      const outcome = removeWorkspaceDir(t.path, [t.root]);
+      const outcome = await removeWorkspaceDirAsync(t.path, [t.root]);
       if (outcome === "moved-aside") {
         fail(t.label, "moved-aside");
       } else if (lstatOrNull(t.path)) {
@@ -421,7 +395,7 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
         log.info({ workspaceIdHash: idHash, root: t.label }, "Workspace deleted");
       }
     } catch (err) {
-      fail(t.label, "error", err);
+      fail(t.label, err instanceof RemoveTimeoutError ? "timeout" : "error", err);
     }
   }
 
@@ -472,31 +446,37 @@ function pathFields(workspacePath: string): { workspaceIdHash: string } {
 /** What {@link removeWorkspaceDir} did to the path. */
 export type RemoveOutcome = "removed" | "unlinked" | "absent" | "moved-aside";
 
-/**
- * Removes a workspace directory, handling permission-denied errors from
- * root-owned files (created by bubblewrap sandbox UID remapping).
- *
- * Phase 1: Direct rm -rf (fast path for user-owned files).
- * Phase 2: chmod to fix restrictive permission bits, then find -delete
- *          which continues past individual permission errors.
- *
- * Throws with manual cleanup instructions if the directory cannot be
- * fully removed (e.g., root-owned files that require sudo).
- *
- * `allowedRoots` is the set of roots the path must be a strict child of; it
- * DEFAULTS to the single workspaces root, so existing callers keep the exact
- * guard. A `/` root never matches. A symlink at the path is unlinked, never
- * followed.
- *
- * Returns what happened. `"moved-aside"` means the tree was only RENAMED to
- * `<path>.orphaned-<ts>` (undeletable files remain on disk): the path is free for
- * re-provisioning, which is all the provision caller needs and why it ignores the
- * return, but it is NOT an erasure, so `deleteWorkspace` treats it as a failure.
- */
-export function removeWorkspaceDir(
+/** Per-child time limits for the ASYNC reap (the sync path has none, unchanged). */
+export const REAP_CMD_TIMEOUT_MS = {
+  rm: 60_000,
+  chmod: 30_000,
+  find: 60_000,
+  rmdir: 10_000,
+  mv: 10_000,
+} as const;
+
+/** A removal child process was killed at its time limit (async path only). */
+export class RemoveTimeoutError extends Error {
+  readonly code = "ETIMEDOUT";
+  constructor(cmd: string) {
+    super(`Workspace cleanup timed out in ${cmd}`);
+    this.name = "RemoveTimeoutError";
+  }
+}
+
+// The command-runner seam shared by the sync and async removers. The phase LOGIC lives once
+// in `removeSteps`; a runner only executes one command and reports whether it succeeded, so
+// the two entry points cannot drift apart.
+interface RemoveStep {
+  cmd: keyof typeof REAP_CMD_TIMEOUT_MS;
+  args: string[];
+}
+type RemoveStepResult = { ok: true } | { ok: false; timedOut: boolean; code?: string };
+
+function* removeSteps(
   workspacePath: string,
-  allowedRoots: string[] = [getWorkspacesRoot()],
-): RemoveOutcome {
+  allowedRoots: string[],
+): Generator<RemoveStep, RemoveOutcome, RemoveStepResult> {
   const resolved = resolve(workspacePath);
   const allowed = allowedRoots.some((r) => {
     // A "/" root can never match: resolve("/") + "/" is "//", which no resolved path starts with.
@@ -516,59 +496,118 @@ export function removeWorkspaceDir(
 
   if (!existsSync(workspacePath)) return "absent";
 
+  const run = function* (step: RemoveStep): Generator<RemoveStep, RemoveStepResult, RemoveStepResult> {
+    const r = yield step;
+    if (!r.ok && r.timedOut) throw new RemoveTimeoutError(step.cmd);
+    return r;
+  };
+
   // Phase 1: Direct removal (works when all files owned by current user)
-  try {
-    execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
-    return "removed";
-  } catch {
-    log.warn({ ...pathFields(workspacePath) }, "Direct rm -rf failed, attempting partial cleanup");
-  }
+  if ((yield* run({ cmd: "rm", args: ["-rf", workspacePath] })).ok) return "removed";
+  log.warn({ ...pathFields(workspacePath) }, "Direct rm -rf failed, attempting partial cleanup");
 
   // Phase 2: Fix permission bits on user-owned files, then delete individually.
-  // chmod fixes restrictive modes (git pack 444, dirs 555) on files WE own.
-  // find -delete continues past root-owned files instead of aborting.
-  try {
-    execFileSync("chmod", ["-R", "u+rwX", workspacePath], { stdio: "pipe" });
-  } catch {
-    // chmod may fail on root-owned files -- continue to find -delete
-  }
+  // chmod fixes restrictive modes (git pack 444, dirs 555) on files WE own; it may fail on
+  // root-owned files -- continue to find -delete. find -delete continues past root-owned
+  // files instead of aborting; its aggregate exit code is ignored.
+  yield* run({ cmd: "chmod", args: ["-R", "u+rwX", workspacePath] });
+  yield* run({ cmd: "find", args: [workspacePath, "-mindepth", "1", "-delete"] });
 
-  try {
-    execFileSync("find", [workspacePath, "-mindepth", "1", "-delete"], {
-      stdio: "pipe",
-    });
-  } catch {
-    // find -delete continues past individual errors; ignore aggregate exit code
-  }
-
-  // Check if workspace dir is now empty
-  try {
-    execFileSync("rmdir", [workspacePath], { stdio: "pipe" });
-    return "removed"; // fully cleaned
-  } catch {
-    // Directory not empty -- root-owned files remain
-  }
+  // Check if workspace dir is now empty (else: directory not empty -- root-owned files remain)
+  if ((yield* run({ cmd: "rmdir", args: [workspacePath] })).ok) return "removed";
 
   // Phase 3: Move aside so provisioning can proceed.
   // mv (rename) operates on the parent directory's inode, not the contents,
   // so it succeeds even when the directory contains root-owned files.
   const orphanedPath = workspacePath + `.orphaned-${Date.now()}`;
-  try {
-    execFileSync("mv", [workspacePath, orphanedPath], { stdio: "pipe" });
+  const mv = yield* run({ cmd: "mv", args: [workspacePath, orphanedPath] });
+  if (mv.ok) {
     log.warn(
       { ...pathFields(workspacePath), orphanedAt: orphanedPath.slice(workspacePath.length) },
       "Workspace contained undeletable files; moved aside for background cleanup",
     );
     return "moved-aside";
-  } catch (err) {
-    log.error(
-      { ...pathFields(workspacePath), errCode: (err as NodeJS.ErrnoException)?.code },
-      "Workspace cleanup failed: cannot move aside",
-    );
-    throw new Error(
-      "Workspace cleanup failed \u2014 please try again or contact support",
-    );
   }
+  log.error(
+    { ...pathFields(workspacePath), errCode: mv.code },
+    "Workspace cleanup failed: cannot move aside",
+  );
+  throw new Error("Workspace cleanup failed \u2014 please try again or contact support");
+}
+
+function runStepSync(step: RemoveStep): RemoveStepResult {
+  try {
+    execFileSync(step.cmd, step.args, { stdio: "pipe" });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, timedOut: false, code: (err as NodeJS.ErrnoException)?.code };
+  }
+}
+
+function runStepAsync(step: RemoveStep): Promise<RemoveStepResult> {
+  return new Promise((resolveStep) => {
+    execFile(
+      step.cmd,
+      step.args,
+      { timeout: REAP_CMD_TIMEOUT_MS[step.cmd], killSignal: "SIGKILL" },
+      (err) => {
+        if (!err) return resolveStep({ ok: true });
+        const e = err as NodeJS.ErrnoException & { killed?: boolean };
+        resolveStep({ ok: false, timedOut: e.killed === true, code: e.code ? String(e.code) : undefined });
+      },
+    );
+  });
+}
+
+/**
+ * Removes a workspace directory, handling permission-denied errors from
+ * root-owned files (created by bubblewrap sandbox UID remapping).
+ *
+ * Phase 1: Direct rm -rf (fast path for user-owned files).
+ * Phase 2: chmod to fix restrictive permission bits, then find -delete
+ *          which continues past individual permission errors.
+ * Phase 3: move the tree aside (`<path>.orphaned-<ts>`) when files remain.
+ *
+ * Throws if the directory cannot be fully removed AND cannot be moved aside.
+ *
+ * `allowedRoots` is the set of roots the path must be a strict child of; it
+ * DEFAULTS to the single workspaces root, so existing callers keep the exact
+ * guard. A `/` root never matches. A symlink at the path is unlinked, never
+ * followed.
+ *
+ * Returns what happened. `"moved-aside"` means the tree was only RENAMED to
+ * `<path>.orphaned-<ts>` (undeletable files remain on disk): the path is free for
+ * re-provisioning, which is all the provision caller needs and why it ignores the
+ * return, but it is NOT an erasure, so `deleteWorkspace` treats it as a failure.
+ *
+ * SYNCHRONOUS: it blocks the event loop for the length of the removal. Only the
+ * provision callers use it; the erasure path uses {@link removeWorkspaceDirAsync}.
+ */
+export function removeWorkspaceDir(
+  workspacePath: string,
+  allowedRoots: string[] = [getWorkspacesRoot()],
+): RemoveOutcome {
+  const gen = removeSteps(workspacePath, allowedRoots);
+  let next = gen.next();
+  while (!next.done) next = gen.next(runStepSync(next.value));
+  return next.value;
+}
+
+/**
+ * Same phases, guards, allowed-roots, symlink handling and {@link RemoveOutcome}s as
+ * {@link removeWorkspaceDir} (one shared step generator), but every child process runs
+ * through async `execFile` with a per-command time limit ({@link REAP_CMD_TIMEOUT_MS}),
+ * so a node_modules-heavy tree does not block the event loop and a wedged `rm` cannot hang
+ * the caller: a timeout rejects with {@link RemoveTimeoutError}.
+ */
+export async function removeWorkspaceDirAsync(
+  workspacePath: string,
+  allowedRoots: string[] = [getWorkspacesRoot()],
+): Promise<RemoveOutcome> {
+  const gen = removeSteps(workspacePath, allowedRoots);
+  let next = gen.next();
+  while (!next.done) next = gen.next(await runStepAsync(next.value));
+  return next.value;
 }
 
 /**

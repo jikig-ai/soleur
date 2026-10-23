@@ -323,6 +323,27 @@ from that account's own session. An agent cannot drive any of these steps and do
   flip, although "`GIT_DATA_STORE_ENABLED` has never been on" is no longer literally true. This exception covers the rehearsal flip
   only: the per-id re-erasure path, which is not built, stays a hard precondition of the first REAL flip (Ruled by CTO agent,
   2026-10-19). The `deleteWorkspace` that also reaps `WORKTREE_ROOT/<id>` is built (#8211).
+- **Reading the working-tree erasure signal (#8211).** A Delete Account or repo disconnect whose local reap failed (a root not
+  removed, a tree only moved aside, a child killed at its time limit) raises a Sentry event with `op:workspace-tree-erasure` and
+  pages through `art17-workspace-tree-erasure-incomplete`. List the issues (same token and org as [Store not empty](#store-not-empty-store_not_empty)
+  step 3), then read each issue's events; `extra.failedRoots` (`workspaces`, `worktree`, or `resolver:<root>`), `extra.failureKinds`
+  (`moved-aside`, `survived`, `recreated`, `timeout`, `error`) and `extra.errorCodes` say what failed, and no path or raw id is carried:
+
+  ```bash
+  SENTRY_ISSUE_RO_TOKEN=$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain)
+  curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+    'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=feature%3Aaccount-delete%20op%3Aworkspace-tree-erasure%20OR%20feature%3Arepo-disconnect%20op%3Aworkspace-tree-erasure&statsPeriod=14d' \
+    | jq -r '.[].id'
+  # for each issue id:
+  curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+    "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/<issue-id>/events/?full=true" \
+    | jq -r '.[] | [.dateCreated, (.tags[]? | select(.key == "feature") | .value), ((.context // .extra) | [.failedRoots, .failureKinds, .errorCodes] | tostring), ((.context // .extra) | .userIdHash // .workspaceIdHash // "no-id-hash")] | @tsv'
+  ```
+
+  The id is hashed (`userIdHash` on account-delete, `workspaceIdHash` on disconnect): to find the event for a known id, hash that
+  id with `SENTRY_USERID_PEPPER` from Doppler `prd` (HMAC-SHA256, hex) and compare. A hash equal to the literal `pepper_unset`
+  means the pepper was missing in the emitting process, so the events cannot be matched to an id. Resolve the issue once a
+  container replacement has released the tree (its absence is not observed), never archive it (an archived issue fires no trigger).
 **Preconditions for R1.** Every item of "Preconditions for the flip" above holds, except that the per-id re-erasure item is narrowed
 for the rehearsal flip by the Art. 17 rule above; the workflow enforces part of them and the owner holds the rest. The `Verify required secrets present` step refuses `flag_write_credential_absent`. The `Flip preconditions`
 step refuses `precondition_8209_open`, `pin_fault_paging_absent`, `d6_replace_stale`, `d6_last_rotate_failed`,

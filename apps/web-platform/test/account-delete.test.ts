@@ -81,6 +81,7 @@ import {
   deleteAccount,
 } from "../server/account-delete";
 import { registerSession, unregisterSession, __test_only__ } from "../server/agent-session-registry";
+import { WorkspaceReapError } from "../server/workspace-reap-error";
 import type { GitDataErasureOutcome } from "../server/git-data-replication";
 
 // ---------------------------------------------------------------------------
@@ -291,14 +292,15 @@ describe("deleteAccount", () => {
     setupSupabaseMocks();
     const raw = "11111111-2222-4333-8444-555555555555";
     mockDeleteWorkspace.mockRejectedValue(
-      Object.assign(
-        new AggregateError([new Error(`rm failed for /var/lib/soleur/worktrees/${raw}`)], `could not reap ${raw}`),
-        {
-          failures: [
-            { root: "worktree", kind: "moved-aside" },
-            { root: "workspaces", kind: "error", code: "EACCES" },
-          ],
-        },
+      new WorkspaceReapError(
+        [
+          { root: "worktree", kind: "moved-aside" },
+          { root: "workspaces", kind: "error", code: "EACCES" },
+          { root: "resolver", kind: "error", label: "worktree" },
+          { root: "worktree", kind: "timeout", code: "ETIMEDOUT" },
+        ],
+        [new Error(`rm failed for /var/lib/soleur/worktrees/${raw}`)],
+        5,
       ),
     );
 
@@ -322,10 +324,10 @@ describe("deleteAccount", () => {
     expect(JSON.stringify(opts)).not.toContain("/var/lib/soleur");
     // Which root failed (label), why, and the errno code: not just "AggregateError".
     expect(opts.extra).toMatchObject({
-      errorName: "AggregateError",
-      failedRoots: ["worktree", "workspaces"],
-      failureKinds: ["moved-aside", "error"],
-      errorCodes: ["EACCES"],
+      errorName: "WorkspaceReapError",
+      failedRoots: ["worktree", "workspaces", "resolver:worktree", "worktree"],
+      failureKinds: ["moved-aside", "error", "error", "timeout"],
+      errorCodes: ["EACCES", "ETIMEDOUT"],
     });
   });
 

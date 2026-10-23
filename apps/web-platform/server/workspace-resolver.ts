@@ -922,12 +922,17 @@ export function workspaceTenantDenyRoots(): string[] {
 }
 
 /**
- * The two raw tenant roots: `WORKSPACES_ROOT` then `WORKTREE_ROOT`, each falling
- * back to its default when unset OR empty, trailing slashes stripped, each
- * VALIDATED on its own. A bad root carries its `error` instead of throwing, so a
- * caller that must keep going per root (the erasure reap) can; a caller that must
- * fail whole (the sandbox deny set, {@link workspaceTenantDenyRoots}) validates on its own. Rejects `/`, a
+ * The two raw tenant roots for the ERASURE reap ({@link workspaceReapRoots}):
+ * `WORKSPACES_ROOT` then `WORKTREE_ROOT`, each falling back to its default when unset
+ * OR empty, trailing slashes stripped, each VALIDATED on its own. A bad root carries its
+ * `error` instead of throwing, so the reap can keep going per root. Rejects `/`, a
  * non-absolute root and a `..` segment.
+ *
+ * KEEP IN SYNC with the validation inside {@link workspaceTenantDenyRoots} (the sandbox
+ * deny set, which throws on the first bad root and must stay byte-identical to main: the
+ * git-data flag precheck reads `process.env.WORKTREE_ROOT` inside its body). The two
+ * copies of the `/` and non-absolute/`..` rules are pinned against each other by
+ * `workspace-reap-roots.test.ts` (parity test over the same bad roots).
  */
 function rawTenantRootEntries(): {
   label: ReapRootLabel;
@@ -943,16 +948,16 @@ function rawTenantRootEntries(): {
   ).map(([label, raw]) => {
     const root = raw.replace(/\/+$/, "");
     let error: Error | undefined;
-    if (root === "" || root === "/") {
-      // A "/" deny root masks the whole rootfs — but dropping it silently is
-      // WORSE: workspacePathForWorkspaceId would resolve `/<uuid>` with no
-      // tenant deny at all. Fail loud either way.
+    // (`/` strips to "" here, so one comparison covers `/`, `//`, and the empty string.)
+    if (root === "") {
+      // Same rule as workspaceTenantDenyRoots: a `/` root is catastrophic (a reap under it
+      // would address `/<uuid>`), and dropping it silently is worse. Refuse loudly.
       error = new Error(
-        `workspaceTenantDenyRoots: tenant root '${raw}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
+        `workspaceReapRoots: tenant root '${raw}' resolves to the filesystem root — refusing to reap under it`,
       );
     } else if (!isAbsolute(root) || root.split("/").includes("..")) {
       error = new Error(
-        `workspaceTenantDenyRoots: tenant root '${raw}' is not an absolute normalized path — refusing a deny set that masks the wrong tree`,
+        `workspaceReapRoots: tenant root '${raw}' is not an absolute normalized path — refusing to reap under it`,
       );
     }
     return { label, raw, root, ...(error ? { error } : {}) };
@@ -1008,7 +1013,8 @@ export interface ReapRootFault {
  *
  * Deliberately separate from {@link workspaceTenantDenyRoots}: that is a
  * sandbox-masking contract (canonical aliases included, throws on any bad root),
- * this is the delete list. Both share `rawTenantRootEntries`.
+ * this is the delete list. Their root validation is duplicated on purpose (keep in sync with
+ * `workspaceTenantDenyRoots`; parity-tested), because that function must not change.
  */
 export function workspaceReapRoots(): {
   roots: { label: ReapRootLabel; root: string }[];

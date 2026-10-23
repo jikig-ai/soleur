@@ -56,7 +56,9 @@ vi.mock("@/server/workspace-repo-mirror", () => ({
 }));
 
 // ADR-044 PR-2 / P0-6: live member agent sessions are aborted before teardown.
-vi.mock("@/server/agent-session-registry", () => ({
+vi.mock("@/server/agent-session-registry", async (importOriginal) => ({
+  // Real drainBeforeReap (the shared drain wording/logging), controlled abort + wait.
+  ...(await importOriginal<typeof import("@/server/agent-session-registry")>()),
   abortAllSessionsForWorkspace: mockAbortAllSessionsForWorkspace,
   waitForWorkspaceSessionsToDeregister: mockWaitForWorkspaceSessions,
 }));
@@ -94,6 +96,7 @@ vi.mock("@sentry/nextjs", () => ({
 import { DELETE } from "@/app/api/repo/disconnect/route";
 import { validateOrigin } from "@/lib/auth/validate-origin";
 import * as Sentry from "@sentry/nextjs";
+import { WorkspaceReapError } from "@/server/workspace-reap-error";
 import logger from "@/server/logger";
 
 // ---------------------------------------------------------------------------
@@ -443,9 +446,7 @@ describe("DELETE /api/repo/disconnect", () => {
     mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: TEAM_WORKSPACE_ID });
     setupServiceMocks({ repoStatus: "ready" });
     mockDeleteWorkspace.mockRejectedValue(
-      Object.assign(new AggregateError([], "deleteWorkspace: 1 of 2 tenant roots could not be reaped"), {
-        failures: [{ root: "worktree", kind: "moved-aside" }],
-      }),
+      new WorkspaceReapError([{ root: "worktree", kind: "moved-aside" }], [new Error("reap worktree moved-aside")], 2),
     );
 
     const res = await DELETE(makeRequest());
@@ -454,7 +455,7 @@ describe("DELETE /api/repo/disconnect", () => {
     expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     const [, ctx] = vi.mocked(Sentry.captureException).mock.calls[0] as [unknown, Record<string, unknown>];
     expect(ctx).toMatchObject({
-      tags: { feature: "repo-disconnect", op: "workspace-cleanup" },
+      tags: { feature: "repo-disconnect", op: "workspace-tree-erasure" },
       extra: { failures: [{ root: "worktree", kind: "moved-aside" }] },
     });
     expect(JSON.stringify([ctx, vi.mocked(logger.warn).mock.calls])).not.toContain(TEAM_WORKSPACE_ID);

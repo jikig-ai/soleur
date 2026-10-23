@@ -10,6 +10,7 @@ import {
   ART17_WORKSPACE_TREE_ERASURE_OP,
 } from "@/server/account-delete";
 import { stripComments } from "./helpers/strip-comments";
+import { WORKSPACE_TREE_ERASURE_OP } from "@/server/workspace-reap-error";
 
 // #8572 — cross-artifact contracts between two emitters and the rules that page on them.
 //
@@ -276,15 +277,26 @@ describe("art17_workspace_tree_erasure_incomplete — sibling pager for the work
     expect(ART17_WORKSPACE_TREE_ERASURE_OP).not.toBe(ART17_ERASURE_OP);
   });
 
-  it("has exactly two conditions, feature and op, both `eq` on the emitter's literals, under `all`", () => {
+  it("has exactly ONE condition: op `eq` on the emitter's literal, NO feature filter, under `all`", () => {
+    // Two emitters share the op (account-delete and repo/disconnect, different features), so a
+    // feature filter would silently drop one of them. Exactly one entry of ANY kind.
     const c = conditions(block());
-    expect(c).toHaveLength(2);
-    const feature = c.map((l) => l.match(TAGGED("feature"))).find(Boolean);
-    const op = c.map((l) => l.match(TAGGED("op"))).find(Boolean);
-    if (!feature || !op) throw new Error(`fixture: expected feature and op filters, read: ${c.join(" | ")}`);
-    expect([feature[1], feature[2]]).toEqual(["eq", ART17_ERASURE_FEATURE]);
+    expect(c).toHaveLength(1);
+    const op = c[0].match(TAGGED("op"));
+    if (!op) throw new Error(`fixture: expected a single op filter, read: ${c.join(" | ")}`);
     expect([op[1], op[2]]).toEqual(["eq", ART17_WORKSPACE_TREE_ERASURE_OP]);
     expect(logicTypes(block())).toEqual(["all"]);
+  });
+
+  it("BOTH emitters tag the shared op: account-delete via the shared literal, disconnect with its own feature", () => {
+    // The route is the second emitter; if it tags any other op this rule pages nobody for it.
+    const routePath = join(appRoot, "app/api/repo/disconnect/route.ts");
+    const route = stripComments(readFileSync(routePath, "utf8"), routePath);
+    expect(route).toMatch(/tags:\s*\{\s*feature:\s*"repo-disconnect",\s*op:\s*WORKSPACE_TREE_ERASURE_OP\s*\}/);
+    expect(WORKSPACE_TREE_ERASURE_OP).toBe(ART17_WORKSPACE_TREE_ERASURE_OP);
+    const adPath = join(appRoot, "server/account-delete.ts");
+    const ad = stripComments(readFileSync(adPath, "utf8"), adPath);
+    expect(ad).toMatch(/op:\s*ART17_WORKSPACE_TREE_ERASURE_OP\b/);
   });
 
   it("pages on the transitions AND re-pages per event, same as its sibling", () => {
@@ -301,7 +313,7 @@ describe("art17_workspace_tree_erasure_incomplete — sibling pager for the work
 
   it("uses a frequency_minutes no other rule uses (Sentry dedups on action shape + frequency)", () => {
     const { own, count } = ownFrequencyIsUnique(block());
-    expect(own).toBe(6);
+    expect(own).toBe(38);
     expect(count).toBe(1);
   });
 
@@ -315,14 +327,13 @@ describe("art17_workspace_tree_erasure_incomplete — sibling pager for the work
     expect(ref.actionFilters).toHaveLength(1);
     expect(ref.actionFilters[0].logicType).toBe("all");
     expect(ref.actionFilters[0].conditions.map((c) => [c.comparison.key, c.comparison.match, c.comparison.value])).toEqual([
-      ["feature", "eq", ART17_ERASURE_FEATURE],
       ["op", "eq", ART17_WORKSPACE_TREE_ERASURE_OP],
     ]);
     expect(ref.triggerConditions.filter((t) => t.type === "event_frequency_count")).toEqual([
       { type: "event_frequency_count", comparison: { interval: "1h", value: 0 } },
     ]);
     expect(ref.enabled).toBe(true);
-    expect(ref.frequency).toBe(6);
+    expect(ref.frequency).toBe(38);
     expect(ref.actionFilters[0].actions.map((a) => [a.type, a.targetType, a.fallthroughType])).toEqual([
       ["email", "issue_owners", "ActiveMembers"],
     ]);

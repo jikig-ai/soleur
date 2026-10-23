@@ -512,6 +512,34 @@ export async function waitForSessionsToDeregister(
   return { drained: true, waitedMs };
 }
 
+/**
+ * The drain step both erasure callers (account-delete, repo/disconnect) run between
+ * "abort sessions" and "reap the tree": wait (bounded by {@link SESSION_DRAIN_MAX_MS}) for the
+ * aborted sessions to deregister so the rm does not race a still-writing child. NEVER blocks
+ * or throws: when the bound elapses (or the wait itself fails) it logs one hashed breadcrumb
+ * and the caller proceeds with the reap. `hashFields` must carry the already-hashed id.
+ */
+export async function drainBeforeReap(
+  wait: () => Promise<{ drained: boolean; waitedMs: number }>,
+  log: { warn: (fields: Record<string, unknown>, msg: string) => void },
+  hashFields: Record<string, string>,
+): Promise<void> {
+  try {
+    const drain = await wait();
+    if (!drain.drained) {
+      log.warn(
+        { ...hashFields, waitedMs: drain.waitedMs, boundMs: SESSION_DRAIN_MAX_MS },
+        "Sessions still registered after the drain bound; reaping anyway",
+      );
+    }
+  } catch (err) {
+    log.warn(
+      { ...hashFields, errName: err instanceof Error ? err.name : typeof err },
+      "Session drain wait threw (non-fatal); reaping anyway",
+    );
+  }
+}
+
 export function waitForUserSessionsToDeregister(userId: string, opts?: { maxMs?: number; stepMs?: number }) {
   return waitForSessionsToDeregister(() => hasRegisteredSessionForUser(userId), opts);
 }

@@ -7,9 +7,15 @@ import { deleteWorkspace } from "@/server/workspace";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import {
   abortAllSessionsForWorkspace,
+  drainBeforeReap,
   waitForWorkspaceSessionsToDeregister,
 } from "@/server/agent-session-registry";
 import { hashUserId } from "@/server/observability";
+import {
+  WORKSPACE_TREE_ERASURE_OP,
+  WorkspaceReapError,
+  type ReapFailure,
+} from "@/server/workspace-reap-error";
 import { verifiedUserId } from "@/server/request-auth";
 import logger from "@/server/logger";
 
@@ -193,22 +199,11 @@ export async function DELETE(request: Request) {
     );
   }
 
-  // Abort only SIGNALS: wait (bounded, 5 s) for the aborted sessions to deregister so the
-  // reap below does not race a still-writing child. The bound never blocks the disconnect.
-  try {
-    const drain = await waitForWorkspaceSessionsToDeregister(activeWorkspaceId);
-    if (!drain.drained) {
-      logger.warn(
-        { workspaceIdHash: hashUserId(activeWorkspaceId), waitedMs: drain.waitedMs },
-        "Sessions still registered after the drain bound; tearing down the workspace anyway",
-      );
-    }
-  } catch (waitErr) {
-    logger.warn(
-      { err: waitErr, workspaceIdHash: hashUserId(activeWorkspaceId) },
-      "Session drain wait threw (best-effort)",
-    );
-  }
+  // Abort only SIGNALS: wait (bounded) for the aborted sessions to deregister before the reap.
+  const workspaceIdHash = hashUserId(activeWorkspaceId);
+  await drainBeforeReap(() => waitForWorkspaceSessionsToDeregister(activeWorkspaceId), logger, {
+    workspaceIdHash,
+  });
 
   // Best-effort workspace cleanup — deleteWorkspace derives the paths from every
   // tenant root + the workspace identifier and handles non-existent directories.
@@ -219,16 +214,14 @@ export async function DELETE(request: Request) {
   } catch (err) {
     // Hashed ids and path-free failure summaries only: a raw error from rm/unlink/lstat
     // embeds `<root>/<workspace uuid>`, and WorkspaceReapError carries none of that.
-    const failures = Array.isArray((err as { failures?: unknown })?.failures)
-      ? (err as { failures: unknown[] }).failures
-      : [];
-    const workspaceIdHash = hashUserId(activeWorkspaceId);
+    const failures: readonly ReapFailure[] = err instanceof WorkspaceReapError ? err.failures : [];
     logger.warn(
       { err, userIdHash: hashUserId(userId), workspaceIdHash },
       "Workspace cleanup failed during disconnect (best-effort)",
     );
     Sentry.captureException(err, {
-      tags: { feature: "repo-disconnect", op: "workspace-cleanup" },
+      // Same op as the account-delete leg: the sibling alert pages on the op, whatever the feature.
+      tags: { feature: "repo-disconnect", op: WORKSPACE_TREE_ERASURE_OP },
       extra: { workspaceIdHash, failures },
     });
   }

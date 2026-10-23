@@ -7,6 +7,7 @@ import {
   hasRegisteredSessionForUser,
   hasRegisteredSessionForWorkspace,
   waitForSessionsToDeregister,
+  drainBeforeReap,
   waitForUserSessionsToDeregister,
   waitForWorkspaceSessionsToDeregister,
   SESSION_DRAIN_MAX_MS,
@@ -110,5 +111,43 @@ describe("waitForSessionsToDeregister", () => {
       drained: false,
       waitedMs: 0,
     });
+  });
+});
+
+describe("drainBeforeReap (the one drain step both erasure callers run)", () => {
+  const mkLog = () => ({ warn: vi.fn() });
+
+  it("a drained wait logs nothing", async () => {
+    const log = mkLog();
+    await drainBeforeReap(async () => ({ drained: true, waitedMs: 100 }), log, { userIdHash: "h" });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("an elapsed bound logs ONE hashed breadcrumb with the bound derived from SESSION_DRAIN_MAX_MS, then returns", async () => {
+    const log = mkLog();
+    await drainBeforeReap(async () => ({ drained: false, waitedMs: 5000 }), log, { workspaceIdHash: "h" });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      { workspaceIdHash: "h", waitedMs: 5000, boundMs: SESSION_DRAIN_MAX_MS },
+      "Sessions still registered after the drain bound; reaping anyway",
+    );
+  });
+
+  it("a wait that THROWS is swallowed (never blocks the erasure) and logged without the raw error", async () => {
+    const log = mkLog();
+    await expect(
+      drainBeforeReap(
+        async () => {
+          throw new Error("boom /workspaces/raw-id");
+        },
+        log,
+        { userIdHash: "h" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(log.warn).toHaveBeenCalledWith(
+      { userIdHash: "h", errName: "Error" },
+      "Session drain wait threw (non-fatal); reaping anyway",
+    );
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("raw-id");
   });
 });
