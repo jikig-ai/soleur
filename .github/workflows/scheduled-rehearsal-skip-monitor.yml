@@ -49,7 +49,7 @@ concurrency:
 
 # THE STREAK LIVES IN A WORKFLOW ARTIFACT, NOT THE ACTIONS CACHE (ADR-296). The probe's
 # consecutive-TRANSIENT counter has to survive between daily runs. It used to round-trip through
-# actions/cache, which the release pipeline's BuildKit gha export keeps over the repository's
+# the cache action, which the release pipeline's BuildKit gha export keeps over the repository's
 # 10 GB cap (about 1.2 GB per release, measured 2026-10-23: 9.6 of 10.23 GB). GitHub evicts
 # least-recently-accessed first, so a 192-byte entry read once a day was always the loser, the
 # counter reset daily, and the round-trip assertion was red most days. An artifact is outside
