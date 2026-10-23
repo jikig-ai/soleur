@@ -216,6 +216,7 @@ jobs:
           cd "$P"
           go mod init probe >/dev/null
           go get github.com/sigstore/sigstore-go@v1.2.0
+          go mod tidy # transitives (rekor models, ct-go) need go.sum entries before go run
           out="$(go run . "$BUNDLE_JSON" 2>&1)" || true
           echo "$out"
           {
