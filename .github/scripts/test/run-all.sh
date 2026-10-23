@@ -178,7 +178,8 @@ for t in "$DIR"/test-*.sh; do
   # back, which is precisely the bit that separates a terminated suite from a failed one.
   rc=0
   bash "$t" || rc=$?
-  case "$(suite_exit_class "$rc")" in
+  _suite_class="$(suite_exit_class "$rc")"
+  case "$_suite_class" in
     ok) ;;
     killed)
       KILLED=$((KILLED + 1))
@@ -196,6 +197,15 @@ for t in "$DIR"/test-*.sh; do
     *) echo "WARNING: suite_exit_class returned unrecognized class for rc=$rc; counting as FAILED." >&2
        FAIL=1 ;;
   esac
+  # COMPLETION DISCRIMINATOR (#10921 fix round): the `=== <basename> ===` banner
+  # above proves only that the glob enumerated the suite; this `done` line
+  # proves the suite's process returned a directly-observed rc — the standing
+  # skip-persistence probe keys its per-suite "observed" positive control on
+  # it. A signal-KILLED suite gets NO done-line: a suite that never ran to
+  # completion must read unobserved (TRANSIENT) there, never clean. Residual:
+  # a suite that exits non-zero before reaching its late rows still earns the
+  # line — bounded, because that run is already red.
+  [[ "$_suite_class" == killed ]] || echo "=== $(basename "$t") done ==="
   echo ""
 done
 

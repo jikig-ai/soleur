@@ -69,10 +69,13 @@ TERMINAL_LINE='git-data-runcmd-rehearsal: 73 passed, 0 failed, Skipped: 2 (75 as
 # the race is genuinely reachable, and the marker lines are placed EARLY so the
 # match happens while the producer still has most of its output pending.
 PIPE_PAD_LINES=6000
-# The pr-quality-guards source fixture: the suite banners are DERIVED from the
-# probe's own discriminator literals so a literal edit moves the fixture too.
-BUMP_BANNER=$(grep -oF '=== test-bump-inngest-bootstrap-pin.sh ===' "$PROBE" | head -1)
-MINT_BANNER=$(grep -oF '=== test-mint-inngest-bootstrap-tag.sh ===' "$PROBE" | head -1)
+# The pr-quality-guards source fixture: the suite COMPLETION discriminators
+# (`=== <basename> done ===`, emitted by run-all.sh after the suite returns)
+# are DERIVED from the probe's own discriminator literals so a literal edit
+# moves the fixture too. `sed -n '1p'`, not `| head -1`: grep -o into head is
+# the SIGPIPE/pipefail shape this file's header exists to document.
+BUMP_BANNER=$(grep -oF '=== test-bump-inngest-bootstrap-pin.sh done ===' "$PROBE" | sed -n '1p')
+MINT_BANNER=$(grep -oF '=== test-mint-inngest-bootstrap-tag.sh done ===' "$PROBE" | sed -n '1p')
 [ -n "$BUMP_BANNER" ] && [ -n "$MINT_BANNER" ] \
   || { printf 'FAIL: could not derive the guard-suite banner literals from %s\n' "$PROBE" >&2; exit 2; }
 cat > "$SANDBOX/pg.default.head" <<EOF
@@ -498,11 +501,26 @@ unset PG_HEAD_FILE
 _guard_prefixes=$(grep -oE "SKIP \(loud\): [a-z0-9]+\." "$PROBE" | sed 's/SKIP (loud): //' | sort -u)
 _p_missing=""
 for _pfx in $_guard_prefixes; do
-  grep -rF "corrupt_skip '${_pfx}" "$REPO_ROOT/.github/scripts/test/" >/dev/null \
+  # EXCLUDING captured-selftest producers: the suites' own selftest rows name
+  # *.selftest-* and emit only into files — a prefix satisfied only by them
+  # produces nothing the monitor can ever see (the suites' own roster checks
+  # assert the same exclusion the other direction).
+  grep -rE "corrupt_skip[[:space:]]+'${_pfx//./\\.}[^']*'" "$REPO_ROOT/.github/scripts/test/" \
+    | grep -v 'selftest' | grep -q . \
     || _p_missing="$_p_missing $_pfx"
 done
 if [ -z "$_p_missing" ]; then pass; else
-  fail "(p) roster parity: probe-enumerated prefix(es) with no corrupt_skip producer in .github/scripts/test/:$_p_missing"
+  fail "(p) roster parity: probe-enumerated prefix(es) with no non-selftest corrupt_skip producer in .github/scripts/test/:$_p_missing"
+fi
+
+# ── (q) the lib's emitted marker literal is pinned to the probe's literals ──
+# The probe greps `SKIP (loud): g1b.`/`g2b.`/`fl.` from corrupt_skip's printf;
+# NOTHING else pins that literal for the guard source — one printf edit in
+# git-corrupt-graph.sh silently unobserves every guard-suite skip while the
+# done-line discriminators keep the source "observed" → green unobservation.
+CORRUPT_LIB="$REPO_ROOT/plugins/soleur/test/lib/git-corrupt-graph.sh"
+if grep -qF "printf 'SKIP (loud): %s %s\\n'" "$CORRUPT_LIB"; then pass; else
+  fail "(q) marker literal: git-corrupt-graph.sh no longer emits the exact 'SKIP (loud): %s %s\\n' the probe greps — an edit to the literal is a RED here, not silent unobservation"
 fi
 
 # ── Assertion floor (not routed through fail(), deliberately) ────────────────
@@ -517,8 +535,11 @@ fi
 # discriminators absent -> TRANSIENT (per-source, never pooled), (o) guard hit + rehearsal
 # unobserved -> FAIL dominates, (p) roster parity (every enumerated guard prefix has a producer).
 # Measured on the green run: 27.
+# RAISED 27 -> 28 (#10921 fix round), ITEMISED: (q) the lib's `SKIP (loud):`
+# printf literal is pinned by value — an edit to it unobserves every guard-suite
+# skip while banners keep the source "observed". Measured on the green run: 28.
 _total=$((passes + fails))
-_FLOOR=27
+_FLOOR=28
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

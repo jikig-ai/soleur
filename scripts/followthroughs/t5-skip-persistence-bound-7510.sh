@@ -6,19 +6,29 @@
 # all four and reports green, and the only carrier is `Skipped: N` plus a NOTE on the stdout of
 # a check that exits 0. This probe is that missing observer.
 #
-# It reads the ONE signal that already exists — the suite's own loud SKIP line in post-merge
-# `infra-validation.yml` logs. The CARRIER of that line is the runner
+# It reads the signals that already exist, across TWO run-sources (#10921 added
+# the second): (1) the rehearsal suite's own loud SKIP line in post-merge
+# `infra-validation.yml` logs, and (2) the guard-suite `SKIP (loud):
+# g1b./g2b./fl.` lines in `pr-quality-guards.yml` run logs, sampled BY EVENT
+# (merge_group + pull_request — that workflow has no post-merge leg; the SECOND
+# RUN-SOURCE block below). The CARRIER of the first is the runner
 # apps/web-platform/infra/run-registered-suites.sh: it captures each suite's output into a per-suite
 # file, so the suite's own text never reaches the Actions log; the runner RELAYS the column-0
 # `SKIP (loud): ` lines and the rehearsal suite's terminal line as `SOLEUR| relay <basename>: <line>`
 # (#10786). Between #8763 (2026-09-25) and that relay the marker below was invisible and this probe
 # was TRANSIENT from 2026-09-28 on; run-registered-suites.test.sh (T13) and this probe's own suite
 # (section (k), which feeds the real runner's stdout to this file) keep the chain from drifting again.
+# The second source needs no relay: run-all.sh invokes the guard suites with inherited stdio, so
+# banners and markers reach the job log directly.
 #
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS       (no skip observed in the sampled window; the residual has not materialised)
-#   1 = FAIL       (>= 1 skip observed; the deferred pre-bake / S1 extension is now owed)
-#   2 = TRANSIENT  (gh unreachable, auth failure, no runs to sample)
+#   1 = FAIL       (>= 1 skip observed in either source; for rehearsal-arm hits the deferred
+#                  pre-bake / S1 extension is now owed, for g1b./g2b./fl. hits a runner git no
+#                  longer exhibits the walk contract the corrupt-walk rows validate — the
+#                  per-source lines name which)
+#   2 = TRANSIENT  (gh unreachable, auth failure, no runs to sample, or a source's
+#                  positive-control discriminator absent in every sampled log)
 #  78 = REFUSED    (running under `set -x` with a live GH_TOKEN -- see the guard below, #7797)
 #
 # 78 IS A FOURTH ROW, ADDED AT REVIEW (#7535 Phase 2). It is deliberately NOT folded into
@@ -39,13 +49,19 @@
 #                          `env -i` and strips everything not declared)
 #
 # Close criteria:
-#   - Sample the most recent successful post-merge runs of infra-validation.yml on main
+#   - Source 1: sample the most recent successful post-merge runs of
+#     infra-validation.yml on main
+#   - Source 2: sample the most recent COMPLETED pr-quality-guards.yml runs by
+#     EVENT (merge_group required, pull_request for density — that workflow
+#     has no post-merge leg to filter by branch/conclusion)
 #   - Grep their logs for EVERY marker in SKIP_MARKERS (T5, S1 and T17 today,
 #     enumerated below) -- not the single `SKIP (loud): T5 MUTATION` literal this
 #     once used, which made the probe blind to the S1 arm #7572 makes skip-eligible
-#     and would equally have missed the T17 arm #7535 Phase 2 makes skip-eligible
+#     and would equally have missed the T17 arm #7535 Phase 2 makes skip-eligible —
+#     and for every per-suite marker set in GUARD_UNITS (source 2)
 #   - 0 occurrences  => PASS (the skip is not persistent)
-#   - >=1 occurrence => FAIL (the deferred pre-bake / S1 extension is owed)
+#   - >=1 occurrence => FAIL (the deferred pre-bake / S1 extension is owed for
+#     rehearsal-arm hits; a degraded runner-git walk contract for guard hits)
 #
 # CARRIER (#7574). This probe is NOT enrolled as a `<!-- soleur:followthrough -->`
 # directive. The sweeper closes a follow-through on its first PASS and
@@ -173,12 +189,20 @@ SKIP_MARKERS=(
 # PER-SUITE discriminators, not per-job: the bump and mint suites' output shares
 # one job log, so a single positive control cannot tell "the mint suite didn't
 # run" from "no fl. skips". Each marker-emitting suite keys on the
-# `=== test-<name>.sh ===` banner run-all.sh prints before it runs that suite.
+# `=== test-<name>.sh done ===` line run-all.sh prints AFTER the suite returns
+# — a completion discriminator: the start banner proves only enumeration, and a
+# suite killed before its corrupt-walk rows would still have printed it
+# (run-all suppresses the done-line for signal-killed suites).
+#
+# The done-line is forgeable text inside the same log it discriminates: any
+# step (or a PR's own output) echoing the literal would mark that suite
+# "observed" — it can over-state observation, it can NEVER hide real markers
+# (they are grepped from the same log). Bounded, documented, accepted.
 #
 # Format: <unit>|<log discriminator>|<markers, ';'-separated>
 GUARD_UNITS=(
-  'bump|=== test-bump-inngest-bootstrap-pin.sh ===|SKIP (loud): g1b.;SKIP (loud): g2b.'
-  'mint|=== test-mint-inngest-bootstrap-tag.sh ===|SKIP (loud): fl.'
+  'bump|=== test-bump-inngest-bootstrap-pin.sh done ===|SKIP (loud): g1b.;SKIP (loud): g2b.'
+  'mint|=== test-mint-inngest-bootstrap-tag.sh done ===|SKIP (loud): fl.'
 )
 
 # PER-SOURCE accounting, NEVER pooled: each source contributes `observed >= 1`
@@ -256,26 +280,45 @@ for _u in "${GUARD_UNITS[@]}"; do
   unit_obs["$_uname"]=0; unit_hits["$_uname"]=0
 done
 
-pg_ids=$( {
-  gh run list --repo "$REPO" --workflow pr-quality-guards.yml --event merge_group \
-    --limit "$SAMPLE" --json databaseId 2>/dev/null | jq -r '.[].databaseId'
-  gh run list --repo "$REPO" --workflow pr-quality-guards.yml --event pull_request \
-    --limit "$SAMPLE" --json databaseId 2>/dev/null | jq -r '.[].databaseId'
-} | awk 'NF && !seen[$0]++' | head -n "$SAMPLE" )
+# --status completed: an in-progress/queued run can carry a fetchable-but-
+# partial log — banners absent, rows unreached — and must not count toward the
+# sample at all. merge_group ids precede pull_request ids and head -n truncates
+# the union, so ≥20 merge_group runs STARVE the PR legs entirely — deliberate:
+# merge_group legs are the landing-gating evidence and PR legs are density
+# only (CTO ruling); under an active queue the sample is merge_group-only and
+# that is the intended bias, recorded so it reads as a choice.
+_pg_list_rc=0
+_pg_mg=$(gh run list --repo "$REPO" --workflow pr-quality-guards.yml --event merge_group \
+    --status completed --limit "$SAMPLE" --json databaseId 2>/dev/null) || _pg_list_rc=1
+_pg_pr=$(gh run list --repo "$REPO" --workflow pr-quality-guards.yml --event pull_request \
+    --status completed --limit "$SAMPLE" --json databaseId 2>/dev/null) || _pg_list_rc=1
+pg_ids=$( { printf '%s\n' "$_pg_mg" | jq -r '.[].databaseId' 2>/dev/null
+            printf '%s\n' "$_pg_pr" | jq -r '.[].databaseId' 2>/dev/null
+          } | awk 'NF && !seen[$0]++' | head -n "$SAMPLE" )
 
 if [[ -z "$pg_ids" ]]; then
-  echo "TRANSIENT: pr-quality-guards.yml — no merge_group/pull_request runs to sample" >&2
-  transient_reasons="${transient_reasons:+$transient_reasons; }no pr-quality-guards runs"
+  if [[ "$_pg_list_rc" -ne 0 ]]; then
+    # Distinguish a gh failure from a genuinely empty window: both yield zero
+    # ids, but the reason names which instrument failed.
+    echo "TRANSIENT: pr-quality-guards.yml — gh run list failed" >&2
+    transient_reasons="${transient_reasons:+$transient_reasons; }pr-quality-guards gh run list failed"
+  else
+    echo "TRANSIENT: pr-quality-guards.yml — no merge_group/pull_request runs to sample" >&2
+    transient_reasons="${transient_reasons:+$transient_reasons; }no pr-quality-guards runs"
+  fi
 else
   g_sampled=0
+  g_observed=0   # logs in which >= 1 unit discriminator matched — the hits denominator
   g_hits=0
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
     log=$(gh run view "$id" --repo "$REPO" --log 2>/dev/null) || continue
     g_sampled=$((g_sampled + 1))
+    _log_observed=0
     for _u in "${GUARD_UNITS[@]}"; do
       IFS='|' read -r _uname _disc _marks <<< "$_u"
       grep -qF "$_disc" <<<"$log" || continue
+      _log_observed=1
       unit_obs["$_uname"]=$(( ${unit_obs["$_uname"]} + 1 ))
       IFS=';' read -ra _marr <<< "$_marks"
       for _m in "${_marr[@]}"; do
@@ -285,6 +328,7 @@ else
         g_hits=$((g_hits + n))
       done
     done
+    g_observed=$((g_observed + _log_observed))
   done <<< "$pg_ids"
   if [[ "$g_sampled" -lt 1 ]]; then
     echo "TRANSIENT: pr-quality-guards.yml — no run logs could be fetched" >&2
@@ -295,19 +339,30 @@ else
       IFS='|' read -r _uname _disc _marks <<< "$_u"
       if [[ "${unit_obs[$_uname]}" -lt 1 ]]; then
         g_all_observed=0
-        echo "TRANSIENT: pr-quality-guards.yml — 0 observed log(s) for suite '${_uname}' (discriminator '${_disc}' absent in all ${g_sampled} sampled log(s)) — the suite did not run or its banner moved; a zero skip-count here would be an un-run instrument reporting a clean bill of health." >&2
+        echo "TRANSIENT: pr-quality-guards.yml — 0 observed log(s) for suite '${_uname}' (discriminator '${_disc}' absent in all ${g_sampled} sampled log(s)) — the suite did not run to completion or its done-line moved; a zero skip-count here would be an un-run instrument reporting a clean bill of health." >&2
         transient_reasons="${transient_reasons:+$transient_reasons; }guard suite ${_uname} unobserved"
       fi
     done
     if [[ "$g_hits" -gt 0 ]]; then
-      echo "FAIL: pr-quality-guards.yml — ${g_hits} loud guard-suite skip(s) across ${g_sampled} sampled run log(s) (merge_group + pull_request legs)." >&2
+      # DENOMINATOR: `g_observed`, not `g_sampled` — hits only accrue inside
+      # logs carrying a suite done-line, matching source 1's observed-over-
+      # sampled convention.
+      echo "FAIL: pr-quality-guards.yml — ${g_hits} loud guard-suite skip(s) across ${g_observed} observed run log(s) (${g_sampled} sampled; merge_group + pull_request legs)." >&2
       for _u in "${GUARD_UNITS[@]}"; do
         IFS='|' read -r _uname _disc _marks <<< "$_u"
         echo "        ${_uname}: ${unit_hits[$_uname]} hit(s) in ${unit_obs[$_uname]} observed log(s) — markers: ${_marks//;/, }" >&2
       done
       any_fail=1
     elif [[ "$g_all_observed" -eq 1 ]]; then
-      echo "PASS: pr-quality-guards.yml — 0 loud guard-suite skips across ${g_sampled} sampled run log(s) (bump observed ${unit_obs[bump]}, mint observed ${unit_obs[mint]})"
+      # Derive the per-unit tallies from GUARD_UNITS rather than naming keys —
+      # under `set -u` a renamed unit would otherwise unbound the reference and
+      # exit non-contract, reading as a broken instrument.
+      _obs_parts=""
+      for _u in "${GUARD_UNITS[@]}"; do
+        IFS='|' read -r _uname _disc _marks <<< "$_u"
+        _obs_parts="${_obs_parts:+${_obs_parts}, }${_uname} observed ${unit_obs[$_uname]}"
+      done
+      echo "PASS: pr-quality-guards.yml — 0 loud guard-suite skips across ${g_observed} observed run log(s) (${g_sampled} sampled; ${_obs_parts})"
     fi
   fi
 fi
