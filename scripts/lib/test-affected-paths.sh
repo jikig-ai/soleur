@@ -1130,6 +1130,8 @@ AFFECTED_TESTS_SCRIPTS_REGISTRY_D10_WORKFLOW_WIRING_PATHS=(
   "scripts/derive-app-domain-base.sh"
   "scripts/derive-app-domain-base.test.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/registry-restore-from-ghcr.sh"
+  "tests/scripts/lib/restore-engine-header.sh"
   "tests/scripts/test-registry-d10-workflow-wiring.sh"
 )
 

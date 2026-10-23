@@ -664,7 +664,7 @@ runbook is the document the annotation is supposed to route people INTO.
 Moved from a comment in the restore step's `env:` block (ADR-231 section 2), verbatim:
 
 DOPPLER_TOKEN, not DOPPLER_TOKEN_PRD. The Doppler CLI reads `DOPPLER_TOKEN` (or
-`--token`); it does not know the _PRD suffix. This step declared the suffixed name,
+`--token`); it does not know the `_PRD` suffix. This step declared the suffixed name,
 referenced it NOWHERE in its body, and called `doppler secrets get` bare -- so the CLI
 ran unauthenticated and returned "you must provide a token", the sink credentials came
 back empty, and the engine aborted exit 3 (SINK unavailable).
