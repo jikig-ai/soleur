@@ -6,7 +6,8 @@ Branch: `feat-one-shot-9757-item2-apply-annotations` | Umbrella: #9757 (Ref only
 ## Phase 0: Baseline measurements
 
 - 0.1 Record `wc -c .github/workflows/apply-web-platform-infra.yml` (489,845 at plan time) and `git rev-parse origin/main`.
-- 0.2 Re-locate the restore step by its name `Restore production's pinned image set from GHCR` and the gate arms by `case "$restore_rc"` (never by line number).
+- 0.2 Check sibling PRs/worktrees editing the same workflow (#10928, #10678, #7390, `fix-apply-infra-workflow-size`) for byte-baseline and comment-block collisions, and check no run holds the `terraform-apply-web-platform-host` concurrency group before arming the merge.
+- 0.3 Re-locate the restore step by its name `Restore production's pinned image set from GHCR` and the gate arms by `case "$restore_rc"` (never by line number).
 
 ## Phase 1: Failing tests first
 
@@ -26,12 +27,12 @@ Branch: `feat-one-shot-9757-item2-apply-annotations` | Umbrella: #9757 (Ref only
 
 - 3.1 `bash tests/scripts/test-registry-d10-workflow-wiring.sh`, `bash tests/scripts/test-registry-pull-path-health.sh`, `bash tests/scripts/test-registry-gate-mutation-battery.sh` (G18b caught, anchor unique), `bun test plugins/soleur/test/workflow-file-size.test.ts`.
 - 3.2 Scratch-tree mutation runs: Guard 1 rows 1, 3, 6 and the reordered-arms must-PASS; Guard 2 rows 1 and 3. Copy the suite, workflow, `.github/actions/`, `scripts/derive-app-domain-base.sh` and the engine into a scratch tree.
-- 3.3 Derived-state checks, each edited only if it reports: affected-selection for the wiring suite on a diff touching the workflow and engine paths (consumer: `scripts/test-all.sh --affected` reading `scripts/lib/test-affected-paths.sh`; measure before adding an edge); `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main`; the fixture-relative-assert lint.
+- 3.3 Derived-state checks, each edited only if it reports: affected-selection for the wiring suite on a diff touching the workflow and engine paths (consumer: `scripts/test-all.sh --affected` reading `scripts/lib/test-affected-paths.sh`; measure before adding an edge); `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main`; the fixture-relative-assert lint; `python3 scripts/lint-workflow-run-body-syntax.py` and `python3 scripts/lint-workflow-errexit-capture.py` as CI invokes them. Adding the workflow and engine paths to the wiring suite's affected-paths array is expected to be owed (verified missing).
 - 3.4 `python3 scripts/lint-guard-contract.py` on the plan, markdownlint on plan and tasks, `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch`.
 - 3.5 Confirm `git diff --stat origin/main...HEAD` shows no `apps/**` path and no change to `scripts/registry-restore-from-ghcr.sh`; `grep -c "no arm for 78"` on the runbook is 0.
 
 ## Phase 4: Ship (operator gate)
 
 - 4.1 PR body: first line answers "does merging THIS alone mutate production?" (yes, the production apply fires once, no Terraform diff expected); `Ref #9757` only; link #10932; RED-then-GREEN evidence and scratch-run results.
-- 4.2 Ask the operator exactly ONE plain question before marking the PR ready or arming the merge: "Merging this PR runs the production infrastructure apply once, because it edits the apply workflow's own file. Should I go ahead and arm the merge?" Record the answer in `decision-challenges.md`. No answer: stay draft.
+- 4.2 Ask the operator exactly ONE plain question before marking the PR ready or arming the merge: "Merging this PR runs the production infrastructure apply once, because it edits the apply workflow's own file. Should I go ahead and arm the merge?" If the operator prefers no apply but still wants the merge, the alternative is a `[skip-web-platform-apply]` line in the squash-commit body; never use it unasked. Record the answer in `decision-challenges.md`. No answer: stay draft.
 - 4.3 After the go-ahead: `gh pr merge --squash --auto` (never `--admin`); watch the production apply run to conclusion; leave #9757 open.
