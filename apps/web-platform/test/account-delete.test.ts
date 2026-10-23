@@ -56,6 +56,20 @@ vi.mock("@/server/observability", async (importOriginal) => ({
   reportSilentFallback: (...args: unknown[]) => mockReportSilentFallback(...args),
 }));
 
+// Records the bounded session wait in the order test. Everything else (and the wait itself)
+// is the REAL registry, so the drain tests below still exercise real polling.
+const mockWaitSpy = vi.fn();
+vi.mock("@/server/agent-session-registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/agent-session-registry")>();
+  return {
+    ...actual,
+    waitForUserSessionsToDeregister: (...args: Parameters<typeof actual.waitForUserSessionsToDeregister>) => {
+      mockWaitSpy(...args);
+      return actual.waitForUserSessionsToDeregister(...args);
+    },
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Import the module under test
 // ---------------------------------------------------------------------------
@@ -315,10 +329,11 @@ describe("deleteAccount", () => {
     });
   });
 
-  test("order: sessions aborted, THEN the tree is reaped, THEN the bare repo, THEN the auth user (#8211)", async () => {
+  test("order: sessions aborted, THEN waited on, THEN the tree is reaped, THEN the bare repo, THEN the auth user (#8211)", async () => {
     setupSupabaseMocks();
     const order: string[] = [];
     mockAbortAllUserSessions.mockImplementation(() => void order.push("abort"));
+    mockWaitSpy.mockImplementation(() => void order.push("wait"));
     mockDeleteWorkspace.mockImplementation(async () => void order.push("reap"));
     mockRemoveGitDataRepo.mockImplementation(async () => {
       order.push("removeGitDataRepo");
@@ -331,7 +346,8 @@ describe("deleteAccount", () => {
 
     await deleteAccount("user-123", "test@example.com");
 
-    expect(order).toEqual(["abort", "reap", "removeGitDataRepo", "deleteUser"]);
+    expect(order).toEqual(["abort", "wait", "reap", "removeGitDataRepo", "deleteUser"]);
+    mockWaitSpy.mockReset();
   });
 
   describe("bounded wait for aborted sessions before the reap (#8211)", () => {
@@ -370,9 +386,10 @@ describe("deleteAccount", () => {
       });
 
       const p = deleteAccount("user-123", "test@example.com");
-      await vi.advanceTimersByTimeAsync(4_000);
+      // The 5 s bound, probed tightly: still waiting at 4.9 s, proceeding by 5.1 s.
+      await vi.advanceTimersByTimeAsync(4_900);
       expect(mockDeleteWorkspace).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(200);
       expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
       await vi.advanceTimersByTimeAsync(10_000);
       expect((await p).success).toBe(true);

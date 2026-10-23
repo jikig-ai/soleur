@@ -15,6 +15,7 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { REAP_RECHECK_DELAY_MS } from "../server/workspace";
 
 // Contains hex LETTERS: an all-digit id is its own upper-case form and proves nothing.
 const ID = "abcdef01-2222-4333-8444-5555555555ab";
@@ -44,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.resetModules();
   vi.doUnmock("child_process");
+  vi.doUnmock("fs");
   vi.doUnmock("../server/logger");
   vi.doUnmock("../server/workspace-resolver");
   if (saved.ws === undefined) delete process.env.WORKSPACES_ROOT;
@@ -172,6 +174,8 @@ describe("deleteWorkspace reaps every tenant root", () => {
     expect(err).toBeInstanceOf(AggregateError);
     expect((err as AggregateError).errors).toHaveLength(1);
     expect((err as { failures: unknown[] }).failures).toEqual([{ root: "workspaces", kind: "error" }]);
+    // "N of M": one failure out of the two reap targets (the tree under each root).
+    expect((err as Error).message).toBe("deleteWorkspace: 1 of 2 reap targets could not be reaped");
     // The second root was still reaped despite the first root's failure.
     expect(existsSync(b)).toBe(false);
     expect(existsSync(a)).toBe(true);
@@ -241,7 +245,7 @@ describe("deleteWorkspace reaps every tenant root", () => {
       (e: unknown) => e,
     );
 
-    expect((err as { failures: unknown[] }).failures).toEqual([{ root: "resolver", kind: "error" }]);
+    expect((err as { failures: unknown[] }).failures).toEqual([{ root: "resolver", kind: "error", label: "worktree" }]);
     expect(existsSync(a)).toBe(false); // legacy reap NOT skipped by the resolver throw
     expect(existsSync(wtKeep)).toBe(true);
   });
@@ -267,7 +271,7 @@ describe("deleteWorkspace reaps every tenant root", () => {
     const a = seed(wsRoot);
     process.env.WORKTREE_ROOT = "";
     const { workspaceReapRoots } = await import("../server/workspace-resolver");
-    expect(workspaceReapRoots().map((r) => r.root)).toEqual([wsRoot, "/var/lib/soleur/worktrees"]);
+    expect(workspaceReapRoots().roots.map((r) => r.root)).toEqual([wsRoot, "/var/lib/soleur/worktrees"]);
     const { deleteWorkspace } = await import("../server/workspace");
 
     await deleteWorkspace(ID);
@@ -352,14 +356,23 @@ describe("deleteWorkspace reaps every tenant root", () => {
     expect(readdirSync(wtRoot).some((n) => n.startsWith(`${ID}.orphaned-`))).toBe(true);
   });
 
-  test("the thrown error and every log call carry no path and no raw id", async () => {
-    seed(wtRoot);
-    const logged: unknown[][] = [];
+  // Error objects serialise to {} under plain JSON.stringify, which would hide a path-bearing
+  // `err` handed to a log call. Expand them (name, message, stack, code) so it cannot.
+  const ser = (v: unknown) =>
+    JSON.stringify(v, (_k, x) =>
+      x instanceof Error ? { name: x.name, message: x.message, stack: x.stack, code: (x as { code?: string }).code } : x,
+    );
+  const stubLogger = (logged: unknown[][]) =>
     vi.doMock("../server/logger", async () => {
       const actual = await vi.importActual<typeof import("../server/logger")>("../server/logger");
       const rec = (...a: unknown[]) => void logged.push(a);
       return { ...actual, createChildLogger: () => ({ info: rec, warn: rec, error: rec, debug: rec }) };
     });
+
+  test("rm failure: the thrown error and every log call carry no path and no raw id", async () => {
+    seed(wtRoot);
+    const logged: unknown[][] = [];
+    stubLogger(logged);
     vi.doMock("child_process", async () => {
       const actual = await vi.importActual<typeof import("child_process")>("child_process");
       return {
@@ -377,9 +390,245 @@ describe("deleteWorkspace reaps every tenant root", () => {
     )) as AggregateError;
 
     expect(err).toBeInstanceOf(AggregateError);
-    const blob = JSON.stringify([err.message, err.errors.map((e) => e.message), logged]);
+    const blob = ser([err.message, err.stack, err.errors, logged]);
     expect(blob).not.toContain(ID);
     expect(blob).not.toContain(sandbox);
+    expect(logged.length).toBeGreaterThan(0);
+  });
+
+  test("lstat failure (path-bearing EACCES): the raw error object never reaches a log call or the thrown error", async () => {
+    seed(wtRoot);
+    const target = join(wtRoot, ID);
+    const logged: unknown[][] = [];
+    stubLogger(logged);
+    vi.doMock("fs", async () => {
+      const actual = await vi.importActual<typeof import("fs")>("fs");
+      return {
+        ...actual,
+        lstatSync: Object.assign(
+          (p: string, ...rest: unknown[]) => {
+            if (p === target) {
+              throw Object.assign(new Error(`EACCES: permission denied, lstat '${p}'`), { code: "EACCES" });
+            }
+            return (actual.lstatSync as (...a: unknown[]) => unknown)(p, ...rest);
+          },
+          actual.lstatSync,
+        ),
+      };
+    });
+    const { deleteWorkspace } = await import("../server/workspace");
+
+    const err = (await deleteWorkspace(ID).then(
+      () => null,
+      (e: unknown) => e,
+    )) as AggregateError & { failures: unknown[] };
+
+    expect(err.failures).toEqual([{ root: "worktree", kind: "error", code: "EACCES" }]);
+    const blob = ser([err.message, err.stack, err.errors, logged]);
+    expect(blob).not.toContain(ID);
+    expect(blob).not.toContain(sandbox);
+    expect(blob).toContain("EACCES"); // the code survives; the path does not
+    vi.doUnmock("fs");
+  });
+
+  test("the legacy volume root is reaped BEFORE the worktree root (order of removal, not just labels)", async () => {
+    seed(wsRoot);
+    seed(wtRoot);
+    const rmTargets: string[] = [];
+    vi.doMock("child_process", async () => {
+      const actual = await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
+          if (cmd === "rm") rmTargets.push(args[args.length - 1]);
+          return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
+        },
+      };
+    });
+    const { deleteWorkspace } = await import("../server/workspace");
+
+    await deleteWorkspace(ID);
+
+    expect(rmTargets).toEqual([join(wsRoot, ID), join(wtRoot, ID)]);
+  });
+
+  test("a RELATIVE WORKSPACES_ROOT is refused, never resolved against the cwd; the worktree root is still reaped", async () => {
+    const cwdTree = join(sandbox, "rel", ID);
+    mkdirSync(cwdTree, { recursive: true });
+    const b = seed(wtRoot);
+    process.env.WORKSPACES_ROOT = "rel";
+    const prev = process.cwd();
+    process.chdir(sandbox);
+    try {
+      const { deleteWorkspace } = await import("../server/workspace");
+      const err = await deleteWorkspace(ID).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((err as { failures: unknown[] }).failures).toEqual([
+        { root: "resolver", kind: "error", label: "workspaces" },
+      ]);
+      expect((err as Error).message).toBe("deleteWorkspace: 1 of 2 reap targets could not be reaped");
+    } finally {
+      process.chdir(prev);
+    }
+    expect(existsSync(cwdTree)).toBe(true);
+    expect(existsSync(b)).toBe(false);
+  });
+
+  test("an EMPTY WORKSPACES_ROOT falls back to /workspaces (not '' and not the cwd)", async () => {
+    process.env.WORKSPACES_ROOT = "";
+    const b = seed(wtRoot);
+    const { deleteWorkspace } = await import("../server/workspace");
+    await expect(deleteWorkspace(ID)).resolves.toBeUndefined();
+    expect(existsSync(b)).toBe(false);
+  });
+
+  test("REAP_RECHECK_DELAY_MS is exactly 250 ms", async () => {
+    const { REAP_RECHECK_DELAY_MS: d } = await import("../server/workspace");
+    expect(d).toBe(250);
+  });
+
+  describe("orphan siblings (<id>.orphaned-<ts>)", () => {
+    const ts = "1760000000000";
+
+    test("an orphan of THIS id is removed under EVERY root; another tenant's orphan survives", async () => {
+      const mine = [join(wsRoot, `${ID}.orphaned-${ts}`), join(wtRoot, `${ID}.orphaned-${ts}`)];
+      const theirs = [
+        join(wsRoot, `99999999-2222-4333-8444-555555555555.orphaned-${ts}`),
+        join(wtRoot, `99999999-2222-4333-8444-555555555555.orphaned-${ts}`),
+      ];
+      for (const d of [...mine, ...theirs]) mkdirSync(join(d, "sub"), { recursive: true });
+      const { deleteWorkspace } = await import("../server/workspace");
+
+      await deleteWorkspace(ID);
+
+      for (const d of mine) expect(existsSync(d)).toBe(false);
+      for (const d of theirs) expect(existsSync(d)).toBe(true);
+    });
+
+    test("the match is STRICT: near-miss names are never touched", async () => {
+      const near = [
+        `${ID}.orphaned-abc`,
+        `${ID}.orphaned-`,
+        `${ID}.orphaned-${ts}.orphaned-${ts}`,
+        `${ID}x.orphaned-${ts}`,
+        `${ID}.orphaned-12`,
+        `X${ID}.orphaned-${ts}`,
+        `${ID}-backup`,
+      ].map((n) => join(wtRoot, n));
+      for (const d of near) mkdirSync(d);
+      const { deleteWorkspace } = await import("../server/workspace");
+
+      await deleteWorkspace(ID);
+
+      for (const d of near) expect(existsSync(d)).toBe(true);
+    });
+
+    test("an uppercase id reaps the lowercase orphan", async () => {
+      const o = join(wtRoot, `${ID}.orphaned-${ts}`);
+      mkdirSync(o);
+      const { deleteWorkspace } = await import("../server/workspace");
+      await deleteWorkspace(ID.toUpperCase());
+      expect(existsSync(o)).toBe(false);
+    });
+
+    test("an orphan that survives is a FAILURE and counts in the total", async () => {
+      const o = join(wtRoot, `${ID}.orphaned-${ts}`);
+      mkdirSync(o);
+      vi.doMock("child_process", async () => {
+        const actual = await vi.importActual<typeof import("child_process")>("child_process");
+        return {
+          ...actual,
+          execFileSync: (cmd: string) => {
+            if (cmd === "rm" || cmd === "chmod" || cmd === "find" || cmd === "rmdir" || cmd === "mv") {
+              throw new Error("Permission denied");
+            }
+            return Buffer.alloc(0);
+          },
+        };
+      });
+      const { deleteWorkspace } = await import("../server/workspace");
+
+      const err = await deleteWorkspace(ID).then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+      expect((err as { failures: unknown[] }).failures).toEqual([{ root: "worktree", kind: "error" }]);
+      // 2 roots x (tree) + 1 orphan = 3 targets.
+      expect((err as Error).message).toBe("deleteWorkspace: 1 of 3 reap targets could not be reaped");
+      expect(existsSync(o)).toBe(true);
+    });
+
+    test("a provision-time move-aside leaves an orphan that a later delete reaps", async () => {
+      const dir = seed(wtRoot, ID);
+      process.env.WORKTREE_ROOT = wtRoot;
+      vi.doMock("child_process", async () => {
+        const actual = await vi.importActual<typeof import("child_process")>("child_process");
+        return {
+          ...actual,
+          execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
+            if (cmd === "rm" || cmd === "chmod" || cmd === "find" || cmd === "rmdir") throw new Error("denied");
+            return (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
+          },
+        };
+      });
+      const { removeWorkspaceDir } = await import("../server/workspace");
+      expect(removeWorkspaceDir(dir, [wtRoot])).toBe("moved-aside"); // what provision does and ignores
+      expect(readdirSync(wtRoot).filter((n) => n.startsWith(`${ID}.orphaned-`))).toHaveLength(1);
+
+      vi.resetModules();
+      vi.doUnmock("child_process");
+      const { deleteWorkspace } = await import("../server/workspace");
+      await deleteWorkspace(ID);
+
+      expect(readdirSync(wtRoot)).toEqual([]);
+    });
+  });
+
+  test("provisionWorkspaceWithRepo also builds the LOWERCASE path (clone target)", async () => {
+    let cloneTarget = "";
+    vi.doMock("../server/github-app", async () => {
+      const actual = await vi.importActual<typeof import("../server/github-app")>("../server/github-app");
+      return {
+        ...actual,
+        generateInstallationToken: async () => "tok",
+        checkRepoAccess: async () => "ok",
+      };
+    });
+    vi.doMock("../server/git-auth", async () => {
+      const actual = await vi.importActual<typeof import("../server/git-auth")>("../server/git-auth");
+      return {
+        ...actual,
+        gitWithInstallationAuth: async (args: string[]) => {
+          cloneTarget = args[args.length - 1];
+          throw new Error("stop after recording the clone target");
+        },
+      };
+    });
+    const { provisionWorkspaceWithRepo } = await import("../server/workspace");
+
+    await expect(
+      provisionWorkspaceWithRepo(ID.toUpperCase(), "https://github.com/o/r", 1),
+    ).rejects.toThrow();
+
+    expect(cloneTarget).toBe(join(wsRoot, ID));
+    vi.doUnmock("../server/github-app");
+    vi.doUnmock("../server/git-auth");
+  });
+
+  test("a mixed-case id provisions to, and deletes from, the SAME lowercase directory", async () => {
+    process.env.SOLEUR_PLUGIN_PATH = "/nonexistent";
+    const { provisionWorkspace, deleteWorkspace } = await import("../server/workspace");
+
+    const path = await provisionWorkspace(ID.toUpperCase());
+
+    expect(path).toBe(join(wsRoot, ID));
+    expect(readdirSync(wsRoot)).toEqual([ID]);
+
+    await deleteWorkspace(ID.toUpperCase());
+    expect(readdirSync(wsRoot)).toEqual([]);
   });
 
   test("a file recreated by a straggler after the reap is caught by the re-check", async () => {
@@ -391,8 +640,8 @@ describe("deleteWorkspace reaps every tenant root", () => {
         execFileSync: (cmd: string, args: string[], ...rest: unknown[]) => {
           const out = (actual.execFileSync as (...x: unknown[]) => unknown)(cmd, args, ...rest);
           if (cmd === "rm" && args[args.length - 1] === b) {
-            // The straggling writer wins the race right after the rm.
-            setTimeout(() => mkdirSync(b), 20);
+            // The straggling writer lands just inside the re-check delay (a shorter delay misses it).
+            setTimeout(() => mkdirSync(b), REAP_RECHECK_DELAY_MS - 30);
           }
           return out;
         },

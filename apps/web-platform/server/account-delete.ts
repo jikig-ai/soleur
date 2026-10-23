@@ -251,7 +251,7 @@ export async function deleteAccount(
     await deleteWorkspace(userId);
   } catch (err) {
     const failures = Array.isArray((err as { failures?: unknown })?.failures)
-      ? ((err as { failures: { root: string; kind: string; code?: string }[] }).failures)
+      ? ((err as { failures: { root: string; kind: string; code?: string; label?: string }[] }).failures)
       : [];
     reportSilentFallback(null, {
       feature: ART17_ERASURE_FEATURE,
@@ -259,7 +259,7 @@ export async function deleteAccount(
       extra: {
         userId,
         errorName: err instanceof Error ? err.name : typeof err,
-        failedRoots: failures.map((f) => f.root),
+        failedRoots: failures.map((f) => (f.label ? `${f.root}:${f.label}` : f.root)),
         failureKinds: failures.map((f) => f.kind),
         errorCodes: [...new Set(failures.flatMap((f) => (f.code ? [f.code] : [])))],
       },

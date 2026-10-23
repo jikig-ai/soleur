@@ -328,3 +328,17 @@ describe("art17_workspace_tree_erasure_incomplete — sibling pager for the work
     ]);
   });
 });
+
+describe("Sentry rule census — README count is real (#8211)", () => {
+  it("README's stated `sentry_alert` rule count equals the number of resources in the root", () => {
+    // Raw text: a `^resource` anchor cannot match inside a `#` comment line, and the block-comment
+    // stripper is not exact enough to count with.
+    const declared = [...allTf.matchAll(/^resource\s+"sentry_alert"\s+"[^"]+"/gm)].length;
+    const readme = readFileSync(join(sentryDir, "README.md"), "utf8");
+    const m = readme.match(/\*\*(\d+) `sentry_alert` rules\*\* \((\d+) alert rules total\)/);
+    if (!m) throw new Error("fixture: README rule-count sentence not found");
+    expect(Number(m[1])).toBe(declared);
+    expect(Number(m[2])).toBe(declared);
+    expect(declared).toBeGreaterThanOrEqual(46); // this PR added the 46th
+  });
+});

@@ -825,7 +825,9 @@ export async function resolveWorkspacePathForUser(
     // a crafted/corrupted id would otherwise open (#5344).
     throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
   }
-  return join(getWorkspaceWorktreeRoot(), workspaceId);
+  // Lowercase AFTER the (case-insensitive) shape check: the filesystem is case-sensitive,
+  // so an upper-case id would otherwise name a different directory than provision/delete use.
+  return join(getWorkspaceWorktreeRoot(), workspaceId.toLowerCase());
 }
 
 /**
@@ -839,7 +841,7 @@ export function workspacePathForWorkspaceId(workspaceId: string): string {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
   }
-  return join(getWorkspaceWorktreeRoot(), workspaceId);
+  return join(getWorkspaceWorktreeRoot(), workspaceId.toLowerCase());
 }
 
 /**
@@ -885,36 +887,54 @@ export function workspaceTenantDenyRoots(): string[] {
 }
 
 /**
- * The two raw tenant roots, validated and normalized (trailing slashes
- * stripped): `WORKSPACES_ROOT` then `WORKTREE_ROOT`, each falling back to its
- * default when unset OR empty. Shared by the sandbox deny set
- * ({@link workspaceTenantDenyRoots}) and the erasure reap set
- * ({@link workspaceReapRoots}) so the two can never disagree about what a
- * "tenant root" is. THROWS on `/`, a non-absolute root, or a `..` segment.
+ * The two raw tenant roots: `WORKSPACES_ROOT` then `WORKTREE_ROOT`, each falling
+ * back to its default when unset OR empty, trailing slashes stripped, each
+ * VALIDATED on its own. A bad root carries its `error` instead of throwing, so a
+ * caller that must keep going per root (the erasure reap) can; a caller that must
+ * fail whole (the sandbox deny set) uses {@link rawTenantRoots}. Rejects `/`, a
+ * non-absolute root and a `..` segment.
  */
-function rawTenantRoots(): { label: ReapRootLabel; root: string; raw: string }[] {
-  const out: { label: ReapRootLabel; root: string; raw: string }[] = [];
-  for (const [label, root] of [
-    ["workspaces", process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT],
-    ["worktree", process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT],
-  ] as const) {
-    const norm = root.replace(/\/+$/, "");
-    if (norm === "" || norm === "/") {
+function rawTenantRootEntries(): {
+  label: ReapRootLabel;
+  raw: string;
+  root: string;
+  error?: Error;
+}[] {
+  return (
+    [
+      ["workspaces", process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT],
+      ["worktree", process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT],
+    ] as const
+  ).map(([label, raw]) => {
+    const root = raw.replace(/\/+$/, "");
+    let error: Error | undefined;
+    if (root === "" || root === "/") {
       // A "/" deny root masks the whole rootfs — but dropping it silently is
       // WORSE: workspacePathForWorkspaceId would resolve `/<uuid>` with no
       // tenant deny at all. Fail loud either way.
-      throw new Error(
-        `workspaceTenantDenyRoots: tenant root '${root}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
+      error = new Error(
+        `workspaceTenantDenyRoots: tenant root '${raw}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
+      );
+    } else if (!isAbsolute(root) || root.split("/").includes("..")) {
+      error = new Error(
+        `workspaceTenantDenyRoots: tenant root '${raw}' is not an absolute normalized path — refusing a deny set that masks the wrong tree`,
       );
     }
-    if (!isAbsolute(norm) || norm.split("/").includes("..")) {
-      throw new Error(
-        `workspaceTenantDenyRoots: tenant root '${root}' is not an absolute normalized path — refusing a deny set that masks the wrong tree`,
-      );
-    }
-    out.push({ label, root: norm, raw: root });
-  }
-  return out;
+    return { label, raw, root, ...(error ? { error } : {}) };
+  });
+}
+
+/**
+ * The two raw tenant roots, validated and normalized. Shared by the sandbox deny
+ * set ({@link workspaceTenantDenyRoots}) and the erasure reap set
+ * ({@link workspaceReapRoots}) through {@link rawTenantRootEntries}, so the two can
+ * never disagree about what a "tenant root" is. THROWS on the first invalid root.
+ */
+function rawTenantRoots(): { label: ReapRootLabel; root: string; raw: string }[] {
+  return rawTenantRootEntries().map(({ error, ...r }) => {
+    if (error) throw error;
+    return r;
+  });
 }
 
 /**
@@ -946,33 +966,59 @@ export function canonicalizeRoot(norm: string): string | null {
 
 export type ReapRootLabel = "workspaces" | "worktree";
 
+/** One tenant root that could not be resolved for the reap, kept per root. */
+export interface ReapRootFault {
+  label: ReapRootLabel;
+  err: unknown;
+}
+
 /**
  * Roots an Art. 17 erasure must reap `<root>/<workspaceId>` under (#8211):
- * `WORKSPACES_ROOT` and `WORKTREE_ROOT`, raw and FLAG-INDEPENDENT (a tree left
- * under the NVMe root after a rollback is erased too), deduped by CANONICAL
- * target so one symlinked directory is reaped, counted and reported once.
- * Each entry carries a stable LABEL for log/Sentry (never the path, which
- * embeds ids at the leaf and host layout above it).
+ * `WORKSPACES_ROOT` (first) and `WORKTREE_ROOT`, raw and FLAG-INDEPENDENT (a tree
+ * left under the NVMe root after a rollback is erased too), deduped by CANONICAL
+ * target so one symlinked directory is reaped, counted and reported once. Each
+ * entry carries a stable LABEL for log/Sentry (never the path).
+ *
+ * Resolution is PER ROOT: a root that is invalid (`/`, relative, `..`) or whose
+ * canonicalization fails (EACCES, ELOOP) is returned in `faults` and skipped, and
+ * never prevents the other root from being attempted. Nothing here ever resolves a
+ * root against the cwd: a relative root is a fault, not a path.
  *
  * Deliberately separate from {@link workspaceTenantDenyRoots}: that is a
- * sandbox-masking contract (canonical aliases included, may add entries a
- * delete must not), this is the delete list. Both share `rawTenantRoots`.
- * THROWS like the deny set on a `/` / relative / `..` root; the caller must
- * not let that skip the legacy volume reap.
+ * sandbox-masking contract (canonical aliases included, throws on any bad root),
+ * this is the delete list. Both share `rawTenantRootEntries`.
  */
-export function workspaceReapRoots(): { label: ReapRootLabel; root: string }[] {
+export function workspaceReapRoots(): {
+  roots: { label: ReapRootLabel; root: string }[];
+  faults: ReapRootFault[];
+} {
   const seen = new Set<string>();
-  const out: { label: ReapRootLabel; root: string }[] = [];
-  for (const { label, root, raw } of rawTenantRoots()) {
-    const canon = canonicalizeRoot(root) ?? root;
+  const roots: { label: ReapRootLabel; root: string }[] = [];
+  const faults: ReapRootFault[] = [];
+  for (const { label, root, raw, error } of rawTenantRootEntries()) {
+    if (error) {
+      faults.push({ label, err: error });
+      continue;
+    }
+    let canon: string;
+    try {
+      canon = canonicalizeRoot(root) ?? root;
+    } catch (err) {
+      faults.push({ label, err });
+      continue;
+    }
     if (canon === "/") {
-      throw new Error(
-        `workspaceReapRoots: tenant root '${raw}' resolves to the filesystem root — refusing to reap under it`,
-      );
+      faults.push({
+        label,
+        err: new Error(
+          `workspaceReapRoots: tenant root '${raw}' resolves to the filesystem root — refusing to reap under it`,
+        ),
+      });
+      continue;
     }
     if (seen.has(canon)) continue;
     seen.add(canon);
-    out.push({ label, root });
+    roots.push({ label, root });
   }
-  return out;
+  return { roots, faults };
 }

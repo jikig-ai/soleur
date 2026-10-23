@@ -2,6 +2,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -21,7 +22,6 @@ import { hashUserId, reportSilentFallback } from "./observability";
 import { seedWorktreeConfig } from "./worktree-config-seed";
 import { atomicGitConfig } from "./git-config-atomic";
 import {
-  canonicalizeRoot,
   workspaceReapRoots,
   type ReapRootLabel,
 } from "./workspace-resolver";
@@ -113,7 +113,9 @@ export async function provisionWorkspace(workspaceId: string): Promise<string> {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
-  const workspacePath = join(getWorkspacesRoot(), workspaceId);
+  // Lowercase AFTER the case-insensitive shape check: the filesystem is case-sensitive, and
+  // delete reaps the lowercase path, so every entry point must build the same one.
+  const workspacePath = join(getWorkspacesRoot(), workspaceId.toLowerCase());
 
   // 1. Create workspace root (skip if exists)
   ensureDir(workspacePath);
@@ -175,7 +177,7 @@ export async function provisionWorkspaceWithRepo(
     throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
 
-  const workspacePath = join(getWorkspacesRoot(), workspaceId);
+  const workspacePath = join(getWorkspacesRoot(), workspaceId.toLowerCase());
 
   // 1. Pre-fetch the installation token so token-generation failures surface
   //    with a distinct "Token generation failed: …" message. The result is
@@ -287,6 +289,8 @@ export interface ReapFailure {
   root: ReapFailureRoot;
   kind: ReapFailureKind;
   code?: string;
+  /** For `root: "resolver"`: which tenant root could not be resolved. */
+  label?: ReapRootLabel;
 }
 
 /**
@@ -300,7 +304,7 @@ export class WorkspaceReapError extends AggregateError {
   constructor(failures: ReapFailure[], errors: Error[], total: number) {
     super(
       errors,
-      `deleteWorkspace: ${failures.length} of ${total} tenant roots could not be reaped`,
+      `deleteWorkspace: ${failures.length} of ${total} reap targets could not be reaped`,
     );
     this.name = "WorkspaceReapError";
     this.failures = failures;
@@ -313,13 +317,15 @@ export const REAP_RECHECK_DELAY_MS = 250;
 /**
  * Deletes a workspace's directories (Art. 17 erasure of the local working tree).
  *
- * Reaps `<root>/<workspaceId>` under `getWorkspacesRoot()` FIRST and independently
- * of the resolver, then under every root from {@link workspaceReapRoots}
- * (`WORKTREE_ROOT`, raw and flag-independent, so the live clone with the git-data
- * split on AND a tree left behind after a rollback are both erased, #8211). A
- * resolver throw (a `/` or relative root) is recorded as a failure and never skips
- * the legacy reap. Every root is attempted; failures are thrown together as one
- * {@link WorkspaceReapError} after the loop.
+ * Reaps `<root>/<workspaceId>` under every root from {@link workspaceReapRoots}:
+ * `WORKSPACES_ROOT` FIRST, then `WORKTREE_ROOT` (raw and flag-independent, so the
+ * live clone with the git-data split on AND a tree left behind after a rollback are
+ * both erased, #8211). Roots resolve per root: a bad or unresolvable root is
+ * recorded as a `resolver` failure and never skips the other. Each root's
+ * `<id>.orphaned-<ms timestamp>` siblings (left by a PROVISION-time move-aside,
+ * which ignores the outcome; nothing sweeps a `WORKTREE_ROOT` orphan) are reaped
+ * too, matched strictly on the exact validated id. Every target is attempted;
+ * failures are thrown together as one {@link WorkspaceReapError} after the loop.
  *
  * "Erased" is decided by the tree being GONE, not by the original path being
  * absent: a move-aside (`removeWorkspaceDir` phase 3) counts as a FAILURE, the
@@ -344,47 +350,64 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
 
   const failures: ReapFailure[] = [];
   const errors: Error[] = [];
-  const fail = (root: ReapFailureRoot, kind: ReapFailureKind, err?: unknown) => {
+  const fail = (
+    root: ReapFailureRoot,
+    kind: ReapFailureKind,
+    err?: unknown,
+    label?: ReapRootLabel,
+  ) => {
     const code =
       err && typeof (err as NodeJS.ErrnoException).code === "string"
         ? (err as NodeJS.ErrnoException).code
         : undefined;
-    failures.push({ root, kind, ...(code ? { code } : {}) });
-    // Path-free summary: the raw error's message embeds `<root>/<uuid>`.
+    failures.push({ root, kind, ...(code ? { code } : {}), ...(label ? { label } : {}) });
+    // Path-free summary: the raw error's message embeds `<root>/<uuid>`, so the raw error
+    // is never logged or forwarded.
     const summary = Object.assign(
-      new Error(`reap ${root} ${kind}${code ? ` (${code})` : err instanceof Error ? ` (${err.name})` : ""}`),
+      new Error(
+        `reap ${label ?? root} ${kind}${code ? ` (${code})` : err instanceof Error ? ` (${err.name})` : ""}`,
+      ),
       code ? { code } : {},
     );
     errors.push(summary);
-    log.error({ workspaceIdHash: idHash, root, kind, code }, "Workspace root reap failed");
+    log.error({ workspaceIdHash: idHash, root, label, kind, code }, "Workspace root reap failed");
   };
 
-  // Equal-by-canonical-target roots (one symlinked dir, WORKTREE_ROOT ==
-  // WORKSPACES_ROOT) are reaped and counted once; the legacy root is added first.
-  const targets: { label: ReapRootLabel; root: string; path: string }[] = [];
-  const seen = new Set<string>();
-  const addRoot = (label: ReapRootLabel, root: string) => {
-    let key = root;
-    try {
-      key = canonicalizeRoot(root) ?? root;
-    } catch {
-      // Unresolvable prefix: fall back to the lexical root; removal reports the real fault.
-    }
-    if (seen.has(key)) return;
-    seen.add(key);
-    targets.push({ label, root, path: join(root, id) });
-  };
-  addRoot("workspaces", getWorkspacesRoot());
-  let resolverFailed = 0;
+  // Roots resolve PER ROOT (see workspaceReapRoots): WORKSPACES_ROOT comes first and a
+  // fault on one root is recorded without skipping the other. Nothing is resolved against
+  // the cwd: a relative root is a fault, not a path.
+  let roots: { label: ReapRootLabel; root: string }[] = [];
+  let resolverFaults = 0;
   try {
-    for (const r of workspaceReapRoots()) addRoot(r.label, r.root);
+    const resolved = workspaceReapRoots();
+    roots = resolved.roots;
+    for (const f of resolved.faults) {
+      resolverFaults += 1;
+      fail("resolver", "error", f.err, f.label);
+    }
   } catch (err) {
-    resolverFailed = 1;
+    resolverFaults += 1;
     fail("resolver", "error", err);
   }
 
-  const removed: typeof targets = [];
-  for (const t of targets) {
+  // Each unit is one path to erase: the tree itself, plus any `<id>.orphaned-<ts>` sibling a
+  // PROVISION-time move-aside left behind (that caller ignores the outcome, and nothing sweeps
+  // a WORKTREE_ROOT orphan). Orphans are listed BEFORE the tree is touched, so the orphan this
+  // very call may create stays a reported failure rather than being retried silently.
+  const units: { label: ReapRootLabel; root: string; path: string }[] = [];
+  for (const { label, root } of roots) {
+    try {
+      for (const name of readdirSync(root)) {
+        if (isOrphanOf(id, name)) units.push({ label, root, path: join(root, name) });
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") fail(label, "error", err);
+    }
+    units.push({ label, root, path: join(root, id) });
+  }
+
+  const removed: typeof units = [];
+  for (const t of units) {
     try {
       const existed = lstatOrNull(t.path) !== null;
       const outcome = removeWorkspaceDir(t.path, [t.root]);
@@ -414,8 +437,18 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
   }
 
   if (failures.length > 0) {
-    throw new WorkspaceReapError(failures, errors, targets.length + resolverFailed);
+    throw new WorkspaceReapError(failures, errors, units.length + resolverFaults);
   }
+}
+
+/**
+ * Strictly `<id>.orphaned-<digits>`: the exact (already validated, lowercased) id, the
+ * literal `.orphaned-`, and a millisecond timestamp (`Date.now()`) and nothing else. Never
+ * a broader glob: another tenant's orphan, `<id>x`, or a doubly-orphaned name must not match.
+ */
+function isOrphanOf(id: string, name: string): boolean {
+  const prefix = `${id}.orphaned-`;
+  return name.startsWith(prefix) && /^\d{10,16}$/.test(name.slice(prefix.length));
 }
 
 function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {

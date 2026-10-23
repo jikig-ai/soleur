@@ -476,6 +476,8 @@ export function hasRegisteredSessionForWorkspace(workspaceId: string): boolean {
 
 export const SESSION_DRAIN_MAX_MS = 5_000;
 export const SESSION_DRAIN_STEP_MS = 100;
+/** Hard ceiling on a caller-supplied `maxMs`. */
+export const SESSION_DRAIN_MAX_CEILING_MS = 30_000;
 
 /**
  * Bounded wait for the aborted sessions of a user / workspace to deregister.
@@ -497,8 +499,10 @@ export async function waitForSessionsToDeregister(
   isLive: () => boolean,
   opts: { maxMs?: number; stepMs?: number } = {},
 ): Promise<{ drained: boolean; waitedMs: number }> {
-  const maxMs = opts.maxMs ?? SESSION_DRAIN_MAX_MS;
-  const stepMs = opts.stepMs ?? SESSION_DRAIN_STEP_MS;
+  // Clamp, so no caller can spin (stepMs 0 / NaN) or park an erasure for minutes (maxMs huge).
+  const finite = (n: number | undefined, d: number) => (typeof n === "number" && Number.isFinite(n) ? n : d);
+  const maxMs = Math.min(finite(opts.maxMs, SESSION_DRAIN_MAX_MS), SESSION_DRAIN_MAX_CEILING_MS);
+  const stepMs = Math.max(finite(opts.stepMs, SESSION_DRAIN_STEP_MS), 1);
   let waitedMs = 0;
   while (isLive()) {
     if (waitedMs >= maxMs) return { drained: false, waitedMs };
