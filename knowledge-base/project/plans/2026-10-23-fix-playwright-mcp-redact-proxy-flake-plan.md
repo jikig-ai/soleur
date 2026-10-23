@@ -24,17 +24,17 @@ brand_survival_threshold: none
 1. Gate verification: `lint-guard-contract.py` rc=0; Scope Check unfenced count=1; PAT sweep clean; Observability 5-field block validates (probe verb `grep`, literal `ok`); User-Brand Impact threshold `none` with no sensitive-path match.
 2. Network-Outage Deep-Dive added (gate 4.5 fired on the `timeout` keyword — documented as a local-process deadline, all four layers N/A with the artifact cited).
 3. Literal-command verification of the plan's census greps run on current state (65 `assert_refused_start`, 108 `session --timeout 3`, 0 `--expect-death` — the expected pre-implementation census).
-4. Verify-the-negative pass (inline): every mutant row's assert type checked — all are `started`/`delivered_ok`/file-fact live-session asserts, none a startup-exit rc; the synthetic helper-control `assert_refused_start` confirmed to pair with no `session(` call; `B1` rows confirmed direct-run with no driver involvement.
+4. Verify-the-negative pass (inline): the synthetic helper-control `assert_refused_start` confirmed to pair with no `session(` call; `B1` rows confirmed direct-run with no driver involvement. CTO-review correction (2026-10-23): `m63` (~line 1151) IS a startup-exit mutant row — its `red` verdict asserts `rcof != "2"`, which a TIMEOUT satisfies (false green); it joins the sweep, and the "no mutant row asserts a startup exit" claim is corrected here.
 5. Precedent-diff (gate 4.4): deadline-free startup-exit assertion precedent exists in-suite — the `B1` usage rows (`python3 "$PROXY" … </dev/null` direct, ~lines 675-678); the chosen driver-flag mechanism keeps refusal rows inside the driver's env/stdin plumbing, which `B1` does not exercise.
 
 ### New Considerations Discovered
 
 - `expect_death` must be initialized `False` inside `parse()`'s options literal — an arm-only store produces `KeyError` on the ~110 sessions that never pass the flag (folded into FR-1).
-- The sweep-completeness check is a structural pairing (each `assert_refused_start` ↔ nearest preceding `session(`), not a count equality — the synthetic helper-control row has no session and would break a naive count (folded into AC-3).
+- The sweep-completeness check is a structural pairing (each startup-exit verdict ↔ its `session(`), not a count equality — the synthetic helper-control row has no session and would break a naive count, and the `m63` mutant row's `red` verdict is a startup-exit assert the `assert_refused_start`-only pairing would miss (folded into AC-3).
 
 ## Overview
 
-The agent-browser guard-contract suite (`plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh`, 499 cases) flaked the same single case in three observed CI attempts — run 39874186208 attempt 1 (PR #10881, the run that blocked the armed merge queue ~10h) and run 39937573660 attempts 1 and 2 (PR #10896, tracked as #10919): `FAIL - G1: a BaseException subclass outside the narrowed tuple at import → rc 1, nothing relayed, no child spawned`. The suite is green on main and locally (~0.23s for the row vs a ~6.07s elapsed gap on every failed CI run). The ~6.07s signature equals the session driver's two 3s deadline windows almost exactly, and the driver maps "proxy still alive when the post-eof deadline lapses" to `rc=TIMEOUT` — so a proxy whose startup was stalled on the runner past the deadline records TIMEOUT instead of its real exit 1, and the four-conjunct `assert_true` reports the failure with no per-observable detail. The fix removes the deadline from the verdict path for the startup-death class (~66 rows share the same coupling) and makes every surviving failure line self-explaining.
+The agent-browser guard-contract suite (`plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh`, 499 cases) flaked the same single case in three observed CI attempts — run 39874186208 attempt 1 (PR #10881, the run that blocked the armed merge queue ~10h) and run 39937573660 attempts 1 and 2 (PR #10896, tracked as #10919): `FAIL - G1: a BaseException subclass outside the narrowed tuple at import → rc 1, nothing relayed, no child spawned`. The suite is green on main and locally (~0.23s for the row vs a ~6.07s elapsed gap on every failed CI run). The ~6.07s signature equals the session driver's two 3s deadline windows almost exactly, and the driver maps "proxy still alive when the post-eof deadline lapses" to `rc=TIMEOUT` — so a proxy whose startup was stalled on the runner past the deadline records TIMEOUT instead of its real exit 1, and the four-conjunct `assert_true` reports the failure with no per-observable detail. The fix removes the deadline from the verdict path for the startup-death class (~103 runtime rows share the same coupling) and makes every surviving failure line self-explaining.
 
 ## Problem Statement / Motivation
 
@@ -82,7 +82,7 @@ The agent-browser guard-contract suite (`plugins/soleur/skills/agent-browser/tes
 - The post-`--end` wait uses a fixed death budget `EXPECT_DEATH_TIMEOUT_S = 30` (constant in the driver), not `o["timeout"]` — a real startup hang still records `rc = "TIMEOUT"` at 30s (informative, ~150× the normal 0.2s death path so environment stalls cannot trip it without masking a genuine hang).
 - All capture outputs (`rc`, `stdout.bin`, `stderr.txt`, `child_pgid`, `group_after`, `responses.json`) are written identically — every existing `fact`/`rcof`/`stderr_has`/`assert_*` consumer works unchanged.
 
-**FR-2 — sweep the startup-exit rows.** Every `session()` call whose verdict is a startup exit replaces `--timeout 3` with `--expect-death`: the ~64 session-fed `assert_refused_start` rows (the FR5 config-refusal block, FR6/B2/G1 variant refusals, UDD/fallback/sink/env refusal rows — the synthetic helper-control `assert_refused_start` on hand-written out-dirs has no session and is untouched) plus the `v-load-outside` row. The `B1` usage rows need no conversion: they already bypass the driver (`python3 "$PROXY" … </dev/null` direct, lines ~675-678) — the suite's existing precedent for deadline-free startup-exit asserts. Live-session rows — every `odd`, `m<N>` mutant (all assert `started`/`delivered_ok`/file facts, never a startup-exit rc — verified by reading all 86 mutant rows' assert types), `inst-hold`, `inst-grandchild`, spy/withheld/delivered rows — keep `--timeout` exactly as-is: they legitimately wait on replies or bounded group teardown.
+**FR-2 — sweep the startup-exit rows.** Every `session()` call whose verdict asserts a startup exit replaces `--timeout 3` with `--expect-death` — membership is defined by that PREDICATE, not by the `assert_refused_start` count (CTO ruling 2026-10-23): the ~68 `assert_refused_start` call sites (all verified `--end eof --timeout 3`; the synthetic helper-control `assert_refused_start` on a hand-written out-dir — line ~247 — has no session and is exempt), PLUS `v-load-outside` (line ~735), PLUS `m63` (line ~1151 — a mutant row the original census missed: its `session … --timeout 3` feeds a `red` verdict asserting `rcof != "2"`, and a stalled startup records `TIMEOUT`, which satisfies `!= "2"` — a FALSE GREEN that vacuously passes the mutation matrix, strictly worse than a false red). Runtime-row count is ~103, not ~66 — four call sites sit inside `for` loops (`dbg` ×7 ~line 575, sink pairs ×15+×15 ~lines 603/605, `cls` ×2 ~line 718). The `B1` usage rows need no conversion: they already bypass the driver (`python3 "$PROXY" … </dev/null` direct, lines ~675-678) — the suite's existing precedent for deadline-free startup-exit asserts. Live-session rows — `odd`, the served `m<N>` mutants (asserting `started`/`delivered_ok`/file facts), `inst-hold`, `inst-grandchild`, `exit3`, `killchild`, spy/withheld/delivered rows — keep `--timeout` exactly as-is: they legitimately wait on replies or bounded group teardown. Dissent clause carried: if implementation surfaces a startup-exit row whose `--timeout` is semantically load-bearing beyond the death wait, it stays on `--timeout` and is named in the sweep-exemption list.
 
 **FR-3 — self-explaining failure lines.** Split the single opaque `assert_true` on `v-load-outside` into per-observable verdicts using the suite's own helpers:
 
@@ -113,7 +113,7 @@ Gate 4.5 fired on the `timeout` keyword. The word in this plan names `proxy-sess
 ## Files to Edit
 
 - `plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py` — add `--expect-death` parse arm, skip reply-wait when set, `EXPECT_DEATH_TIMEOUT_S = 30` death budget on the post-end wait, docstring flag line.
-- `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` — convert every startup-exit `session … --timeout 3` row to `--expect-death` (~66 call sites: the 65 `assert_refused_start` rows + `v-load-outside` + `B1` usage rows); split the `v-load-outside` `assert_true` into the four per-observable rows (FR-3); add the `v-load-outside-slow` stall-injection row (FR-4); update `MIN_ASSERTIONS` comment/count as the case census moves (still ≥ floor; the suite's trailing count line is self-computed).
+- `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` — convert every startup-exit `session … --timeout 3` row to `--expect-death` (~70 call sites: the ~68 session-fed `assert_refused_start` sites + `v-load-outside` + `m63`; ~103 runtime rows counting loop bodies; `B1` rows and the helper-control are exempt); split the `v-load-outside` `assert_true` into the four per-observable rows (FR-3); add the `v-load-outside-slow` stall-injection row (FR-4); update `MIN_ASSERTIONS` comment/count as the case census moves (still ≥ floor; the suite's trailing count line is self-computed).
 
 ## Files to Create
 
@@ -147,7 +147,7 @@ failure_modes:
     detection: stdout lines are still captured — lines != 0 rows go RED; Guard Contract mutation matrix row 5 pins this
     alert_route: same FAIL line channel
   - mode: sweep misses a startup-exit row
-    detection: grep census `assert_refused_start` count vs `expect-death` count on the file (AC-5)
+    detection: structural pairing — each startup-exit verdict pairs to a `session(` carrying `--expect-death` (AC-3)
     alert_route: local verify + PR diff review
 
 logs:
@@ -165,7 +165,7 @@ discoverability_test:
 
 **Property.** For every startup-exit session row, the recorded rc is the proxy's real exit code whenever the proxy exits at all; a deadline can only produce TIMEOUT on a genuine hang, never on a slow-but-correct death.
 
-**Assembly.** Every `session()` call in `playwright-mcp-redact-proxy.test.sh` whose verdict asserts a startup exit — the chokepoint is the pair `session()` → `proxy-session-driver.py` post-`--end` wait loop; the membership is enumerable: every row feeding `assert_refused_start` (65), `v-load-outside` (1), and the `B1` usage rows — vs. the disjoint live-session set (`odd`, `m<N>` mutant rows, `inst-hold`, `inst-grandchild`, spy/withheld rows) that keeps `--timeout` by design. A second chokepoint exists: the driver's reply-wait phase must be skipped under `--expect-death` or a stalled startup burns one deadline window for nothing.
+**Assembly.** Every `session()` call in `playwright-mcp-redact-proxy.test.sh` whose verdict asserts a startup exit — the chokepoint is the pair `session()` → `proxy-session-driver.py` post-`--end` wait loop; the membership is enumerable by predicate: every site feeding `assert_refused_start` (~68), `v-load-outside`, and `m63`'s startup-exit `red` verdict — vs. the disjoint live-session set (`odd`, served `m<N>` mutant rows, `inst-hold`, `inst-grandchild`, `exit3`, `killchild`, spy/withheld rows) that keeps `--timeout` by design, and the exempt non-session rows (`B1` direct runs, the helper-control). A second chokepoint exists: the driver's reply-wait phase must be skipped under `--expect-death` or a stalled startup burns one deadline window for nothing.
 
 **Mutation matrix:**
 
@@ -175,11 +175,11 @@ discoverability_test:
 | 2 | Driver drops the `--expect-death` parse arm (flag unrecognized → usage exit 2, or falls back to `o["timeout"]` semantics) while `v-load-outside-slow` sleeps >3s | RED — records `TIMEOUT`, not the real rc |
 | 3 | Variant redactor writes a JSON-RPC reply to stdout before raising (compliant first observable rc=1, failed second) | RED — "nothing relayed" row |
 | 4 | Variant proxy spawns a child before dying (first two observables pass, third fails) | RED — "no child spawned" row |
-| 5 | `--expect-death` swapped onto a live-session row (`inst-hold` or a mutant row expecting a reply) — dispatch-level misuse | RED — reply-wait skip changes nothing for a served session, but pinning the sweep boundary: any `assert_refused_start` row still carrying `--timeout` fails the AC-5 census |
+| 5 | `--expect-death` swapped onto a live-session row (`inst-hold` or a mutant row expecting a reply) — dispatch-level misuse | RED — reply-wait skip changes nothing for a served session, but pinning the sweep boundary: any startup-exit verdict whose `session(` still carries `--timeout` fails the AC-3 pairing |
 | 6 | Harness row: `v-load-outside-slow` (sleep-then-raise) under `--expect-death` | PASS — proves the guard admits a non-canonical slow-but-correct death (a guard that rejects everything cannot be caught by RED rows alone) |
 | 7 | `p.kill()`/TIMEOUT arm deleted entirely from the death path | RED — a genuinely hung proxy would hang the suite; the bound row asserting TIMEOUT-on-hang (or the outer ceiling) must fire |
 
-**Anchor.** The sweep's completeness is checked by census, not by the suite's own green: `grep -c "assert_refused_start '"` vs `grep -c -- "--expect-death"` on the suite file must satisfy the declared relation (every refusal row converted). The census check lives in the plan ACs and is reproducible by any reviewer from `origin/main`'s diff.
+**Anchor.** The sweep's completeness is checked by the structural pairing (each startup-exit verdict — `assert_refused_start`, the `v-load-outside` rc-1 verdicts, `m63`'s `rcof != "2"` red row — ↔ its `session(`), not by count equality: loop bodies and the exempt non-session rows make raw counts non-comparable. The pairing check lives in the plan ACs and is reproducible by any reviewer from `origin/main`'s diff.
 
 ## Scope Check
 
@@ -195,7 +195,7 @@ discoverability_test:
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
 | FR-1 `--expect-death` driver mode | "then fix or quarantine it" | asked (mechanism choice inferred — justification: the determinism checklist forbids the timeout bump; the flag is the minimum change removing the deadline→verdict coupling at the chokepoint) |
-| FR-2 startup-exit sweep (~66 rows) | — | inferred — justification: every `assert_refused_start` row shares the identical `--timeout 3` + startup-exit coupling; fixing one row leaves 65 identical flake vectors and guarantees the next filing (cf. #10921, #10373) |
+| FR-2 startup-exit sweep (~103 runtime rows / ~70 call sites) | — | inferred — justification: every startup-exit session row shares the identical `--timeout 3` + deadline→verdict coupling; fixing one row leaves ~102 identical flake vectors (and `m63` a false-green vector) and guarantees the next filing (cf. #10921, #10373); sweep-by-predicate ruled by CTO agent 2026-10-23 |
 | FR-3 per-observable asserts | — | inferred — justification: #10919 (open, same case) states the required next step verbatim: "Add the case's own `rc`, stderr head and elapsed time to the failure line so the next CI failure is self-explaining" |
 | FR-4 slow-death reproduction row | "dispatch ci.yml on a branch to catch the failing case" | asked |
 | Files to Edit entries (2 files) | "fix or quarantine it" (the suite named in the issue body) | asked |
@@ -217,7 +217,7 @@ No cross-domain implications detected — test-machinery change inside `plugins/
 
 - [ ] AC-1: `proxy-session-driver.py` accepts `--expect-death`; under it the reply-wait phase is skipped and the post-`--end` wait is bounded by `EXPECT_DEATH_TIMEOUT_S = 30`, recording `rc="TIMEOUT"` only when the process is still alive at that cap.
 - [ ] AC-2: A stall-injected reproduction (`v-load-outside-slow`, module-level sleep >3s before `raise _OutsideBase()`) records `rc="TIMEOUT"` under `--timeout 3` semantics and the real `rc=1` under `--expect-death` — the before/after mechanism proof is itself a committed row.
-- [ ] AC-3: Every `session()` call feeding an `assert_refused_start` verdict, plus `v-load-outside`, carries `--expect-death` — verified by a structural pairing check, not a bare count: a python/awk pass over the suite file that pairs each `assert_refused_start` with its nearest preceding `session(` call asserts `--expect-death` is present on it (the synthetic helper-control row on a hand-written out-dir pairs with no `session(` and is exempt), and `grep -n 'session .*--timeout'` reviewed against the pairing list confirms the only remaining `--timeout` sessions are the live-session set (`odd`, `m<N>`, `inst-*`, spy/withheld).
+- [ ] AC-3: Every `session()` call whose verdict asserts a startup exit carries `--expect-death` — verified by a structural pairing check, not a bare count: a python/awk pass over the suite file pairs each startup-exit verdict (`assert_refused_start`, `v-load-outside`'s rc-1 asserts, `m63`'s `rcof != "2"` red verdict at ~line 1151) with its `session(` call and asserts `--expect-death` is present on it (the synthetic helper-control row on a hand-written out-dir pairs with no `session(` and is exempt; `B1` direct-run rows have no `session(` and are exempt), and `grep -n 'session .*--timeout'` reviewed against the pairing list confirms the only remaining `--timeout` sessions are the live-session set (`odd`, served `m<N>` mutants, `inst-*`, `exit3`, `killchild`, spy/withheld). Any startup-exit row whose `--timeout` proves semantically load-bearing beyond the death wait stays on `--timeout` and is named in a sweep-exemption list (CTO dissent clause).
 - [ ] AC-4: The `v-load-outside` verdict is four named observables (rc 1 / zero stdout lines / no child pgid / `_OutsideBase` on stderr); any single-conjunct failure prints which observable failed.
 - [ ] AC-5: Full suite green locally: `bash plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` exits 0 with `0 failed`; `MIN_ASSERTIONS` floor still satisfied (cases ≥ 499).
 - [ ] AC-6: `SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh` green on the feature branch (or the affected subset covering this suite), plus one `gh workflow run ci.yml` dispatch on the branch reporting `test-scripts (5/8)` green — the issue's own prescribed verification.
@@ -227,7 +227,7 @@ No cross-domain implications detected — test-machinery change inside `plugins/
 - Given a redactor variant that raises `_OutsideBase` after a >3s module-level sleep, when the session runs under `--expect-death`, then `rc` file contains `1`, stdout has 0 lines, `child_pgid` is empty, and stderr names `_OutsideBase`. (integration)
 - Given a proxy that hangs at startup (sleeps > `EXPECT_DEATH_TIMEOUT_S`), when the session runs under `--expect-death`, then `rc` is `TIMEOUT` and the row reports it against the expected exit code — a real hang stays a loud failure. (integration)
 - Given a served reply instead of a death (misuse boundary), when a live-session row keeps `--timeout`, then reply capture, `want`-satisfaction, and group-teardown behavior are unchanged — pinned by the untouched `inst-hold`/`inst-grandchild`/mutant rows staying green. (integration)
-- Given the suite file, when `grep -c "assert_refused_start '"` and `grep -c -- "--expect-death"` are compared, then every startup-exit row is on the new mode — the sweep-census gate. (unit)
+- Given the suite file, when the structural pairing pass pairs each startup-exit verdict (`assert_refused_start`, `v-load-outside`, `m63`) to its `session(`, then every paired session carries `--expect-death` — the sweep-pairing gate. (unit)
 
 ## Open Code-Review Overlap
 
@@ -247,7 +247,7 @@ None — `gh issue list --label code-review --state open` bodies searched for `p
 | Bump `--timeout 3` → larger on the flaked row | Rejected — determinism checklist: "triage to mechanism, never bump a timeout"; narrows the window, keeps the deadline→verdict coupling |
 | Quarantine the case | Rejected — mechanism is identified and fixable; quarantine protocol is for unfixable nondeterminism (filed issue + `flaky` label, never counts as fixed) |
 | Suite-local `run_dead` helper driving `timeout(1)` directly | Rejected — correct property but requires per-row arg re-mapping across ~66 heterogeneous call sites; one-token driver flag is the smaller diff for the identical contract |
-| Fix only the `v-load-outside` row | Rejected — leaves 65 sibling rows carrying the identical vector; the next stall files #10913 again under a new label |
+| Fix only the `v-load-outside` row | Rejected — leaves ~102 sibling runtime rows carrying the identical vector plus `m63` as a false-green vector; the next stall files #10913 again under a new label (CTO ruling 2026-10-23) |
 | Retry-on-failure wrapper | Rejected — retry-until-green is the exact anti-pattern the determinism checklist exists to prevent |
 
 ## Sharp Edges

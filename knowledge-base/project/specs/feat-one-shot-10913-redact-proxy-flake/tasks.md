@@ -12,10 +12,10 @@ Issue: #10913 (sibling #10919 — same case; diagnostics ask covered by FR-3)
 
 ## Phase 2 — Suite sweep + asserts (FR-2, FR-3, FR-4)
 
-- [ ] 2.1 In `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh`, replace `--timeout 3` with `--expect-death` on every `session()` call feeding `assert_refused_start` (~64 rows) and on `v-load-outside`. Do NOT touch live-session rows (`odd`, `m<N>`, `inst-*`, spy/withheld) or the synthetic helper-control.
+- [ ] 2.1 In `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh`, replace `--timeout 3` with `--expect-death` on every `session()` call whose verdict asserts a startup exit: the ~68 `assert_refused_start` call sites, `v-load-outside` (~line 735), AND `m63` (~line 1151 — its `red` verdict asserts `rcof != "2"`, which a TIMEOUT satisfies → false green; CTO ruling 2026-10-23). Do NOT touch live-session rows (`odd`, served `m<N>` mutants, `inst-*`, `exit3`, `killchild`, spy/withheld) or the synthetic helper-control; `B1` rows are already driver-free. If a startup-exit row's `--timeout` proves load-bearing beyond the death wait, keep it and record it in the sweep-exemption list (CTO dissent clause).
 - [ ] 2.2 Split the `v-load-outside` `assert_true` into four per-observable rows: `assert_rc` (rc 1), `assert_true` zero stdout lines via `fact`, `assert_true` empty `child_pgid`, `assert_stderr_marker` `_OutsideBase` ×1 (FR-3).
 - [ ] 2.3 Add `v-load-outside-slow` fixture + two rows (FR-4): module-level `import time; time.sleep(4)` before the `raise _OutsideBase()` — one row under `--expect-death` asserting rc 1, one row under `--timeout 3` asserting `rc=TIMEOUT` (negative control pinning the old deadline arm).
-- [ ] 2.4 Sweep-census check (AC-3): python/awk pairing pass asserting each `assert_refused_start` pairs with a preceding `session(` line carrying `--expect-death` (helper-control exempt).
+- [ ] 2.4 Sweep-pairing check (AC-3): python/awk pass asserting each startup-exit verdict (`assert_refused_start`, `v-load-outside`'s rc-1 asserts, `m63`'s `rcof != "2"` verdict) pairs with a `session(` line carrying `--expect-death` (helper-control and `B1` exempt); `grep -n 'session .*--timeout'` output reviewed against the pairing list confirms only the live-session set retains `--timeout`.
 
 ## Phase 3 — Verification
 
