@@ -682,6 +682,45 @@ resource "sentry_alert" "art17_erasure_incomplete" {
   }
 }
 
+# (#8211) Sibling of art17_erasure_incomplete, for the LOCAL working-tree leg of the Art. 17
+# erasure. `deleteWorkspace` reaps WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>; a root it cannot
+# remove (or a tree only MOVED ASIDE to `<id>.orphaned-<ts>`) is mirrored as op=workspace-tree-
+# erasure by account-delete (feature=account-delete) AND repo/disconnect (feature=repo-disconnect)
+# while the caller still succeeds, so the filter is the OP ALONE. Triggers/actions copy the rule
+# above (re-pages per event). Distinct `frequency_minutes = 38` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10-37,60-63,120,240,1440-1442; keyed on action shape +
+# frequency, NOT conditions). Contract: test/sentry-git-data-pin-fault-alert-op-contract.test.ts.
+resource "sentry_alert" "art17_workspace_tree_erasure_incomplete" {
+  organization      = var.sentry_org
+  name              = "art17-workspace-tree-erasure-incomplete"
+  enabled           = true
+  frequency_minutes = 38
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "op", match = "eq", value = "workspace-tree-erasure" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # Rule 2 — BYOK delegation cap exceeded (hourly | daily). Lower urgency:
 # wider frequency + quieter `NoOne` fallthrough. Filters require
 # feature=byok-delegations AND op ∈ {hourly-cap-exceeded, daily-cap-exceeded}

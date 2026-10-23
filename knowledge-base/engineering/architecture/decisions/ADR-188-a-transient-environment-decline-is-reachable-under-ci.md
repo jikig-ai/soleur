@@ -394,6 +394,9 @@ the standing daily monitor `.github/workflows/scheduled-rehearsal-skip-monitor.y
 follow-through sweeper, which closes on first PASS and would retire the observer after one clean
 sample.
 
+The monitor's cross-run transient streak is persisted in a workflow artifact, not the Actions cache,
+since ADR-296 (the cache entry was evicted daily by the release pipeline's cache churn).
+
 ## Amendment — 2026-09-17 (#7535 Phase 2): T17 becomes skip-eligible
 
 Same change class as the #7572 amendment above, and recorded the same way rather than left to

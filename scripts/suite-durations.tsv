@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1204
-# generated-at=2026-10-21T08:43:07Z
+# generated-at=2026-10-23T11:42:06Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -388,6 +388,7 @@ scripts/generate-kb-index-live	2444	measured
 scripts/ghcr-read-retired-8036	2048	measured
 scripts/git-data-boot-poll-8178	2834	measured
 scripts/git-data-reboot-evidence-landed-8210	1324	measured
+scripts/git-data-rehearsal-evidence-8211	1204	floor
 scripts/guard-vacuity-floor	44880	measured
 scripts/hosted-destroy-ask-window-9776	1194	floor
 scripts/hostname-mislabel-web1-6616	221	measured
@@ -491,6 +492,7 @@ scripts/marketplace-drift-check	1808	measured
 scripts/marketplace-manifest-validate	804	measured
 scripts/md-to-mrkdwn	218	measured
 scripts/measure-plan-sharp-edges-turns	2422	measured
+scripts/monitor-streak-state	1204	floor
 scripts/no-dangling-committed-symlinks	16	measured
 scripts/orphan-process-reaper	10250	measured
 scripts/orphan-process-reaper-mutations	134967	measured
@@ -642,6 +644,7 @@ tests/scripts/supabase-advisor-scan	1002	measured
 tests/scripts/supabase-logs-query	8686	measured
 tests/scripts/tenant-integration-gate-verdict	57	measured
 tests/scripts/tmp-purge	6916	measured
+tests/scripts/trio-baseline-census	1204	floor
 tests/scripts/vector-redeliver-gate	776	measured
 tests/scripts/vector-redeliver-wiring	410	measured
 tests/scripts/vendor-pin-gate-verdict	46	measured

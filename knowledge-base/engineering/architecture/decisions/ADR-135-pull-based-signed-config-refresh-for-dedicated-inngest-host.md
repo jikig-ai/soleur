@@ -287,3 +287,30 @@ bundle producer's `zot_mirror` step now also copies the pinned cosign image to
 `ZOT_EP`, staged by an explicit bounded pull that reports `reason=pull
 member=cosign-image`. The claim is now literally true. The gcr ref remains correct on the
 web hosts, which have public egress (ADR-096 amendment 2026-09-28).
+
+## Addendum 2026-10-22 — defect 3: honest rejects were undebuggable (stderr swallowed)
+
+The verify path ran `docker run … verify-blob … >/dev/null 2>&1`, mapping EVERY non-zero
+exit — cryptographic reject, cosign flag-parse error, docker daemon error, `timeout` kill —
+onto `reason=signature`. When the promoted v3 bundle began rejecting honestly on the host,
+the channel carried no evidence of why, and the three plausible suspects (tlog reach under
+`--network none`, trusted-root staleness, identity-regexp drift) could not be separated
+without a host login.
+
+Two measurements close the suspects without one: the baked trusted root is key-identical
+to Sigstore's live root, and a v0.3 bundle reconstructed from the real Rekor entry verifies
+`Verified OK` under the verbatim `--network none` invocation — the offline machinery is
+sound. The remaining hypothesis class is bundle-load (`sgbundle.LoadJSONFromPath`, which
+cosign v3.1.1 gates `--trusted-root` on) or host-state divergence, discriminated by
+evidence rather than flags.
+
+Fix (this PR): the tick now captures stderr to a bounded on-host `$STATE_DIR/verify.stderr`
+(4 KiB, 0600, last-failure-only) — around the `timeout` wrapper so rc=124 still lands it —
+and classifies it into a `[a-z-]{1,24}` `detail=` token (`flag-newbundle|tlog|identity|
+chain|timeout|docker|other`) appended additively to the VERIFY_FAIL row, which survives the
+phone-home redaction and the drift summarizer's allowlist. A kept dispatch-only workflow
+(`diagnose-inngest-verify.yml`) reproduces the verbatim invocation in CI with stderr
+visible. No verification-relaxing flag (`--insecure-ignore-tlog`, `--insecure-ignore-sct`,
+`--key`, `--new-bundle-format`) was added — adopting one is a posture change requiring an
+amendment here, not a patch (HARD-10's spirit extended: diagnosability must not cost
+fail-closed).

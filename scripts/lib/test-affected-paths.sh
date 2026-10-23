@@ -1358,6 +1358,17 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/infra-validation-detect.test.sh — walks a corpus (the
+# TS13b sentinel census `find`s under apps/ + infra/) and pins the workflow's
+# run-block structurally; declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_INFRA_VALIDATION_DETECT_TEST_SH_PATHS=(
+  ".github/workflows/infra-validation.yml"
+  "apps/"
+  "infra/"
+  "plugins/soleur/test/infra-validation-detect.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/concurrent-ship.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(
@@ -2472,6 +2483,16 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "scripts/suite-durations.tsv"
   "scripts/suite-shard-legs.tsv"
+)
+
+# scripts/monitor-streak-state.test.sh — the rehearsal skip monitor's streak-store suite. Its Section B parses the
+# monitor workflow with PyYAML (wiring properties and the mutation rows) and Section C runs the alert step's shell
+# body out of it; Section A drives the t5 skip-persistence probe, whose streak write the store's `seal` step
+# checks. Both are reads through $REPO_ROOT-built paths, which no derivation channel reaches.
+AFFECTED_SCRIPTS_MONITOR_STREAK_STATE_PATHS=(
+  ".github/workflows/scheduled-rehearsal-skip-monitor.yml"
+  "scripts/followthroughs/t5-skip-persistence-bound-7510.sh"
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
 
 # plugins/soleur/scripts/affected-tests.test.sh — the #9307 plugin-gate contract suite. The

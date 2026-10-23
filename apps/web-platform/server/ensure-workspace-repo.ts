@@ -17,6 +17,7 @@ import {
 } from "@/server/git-worktree-validity";
 import { withWorkspacePermissionLock } from "@/server/workspace-permission-lock";
 import { isGitDataStoreEnabled } from "@/server/workspace-resolver";
+import { isWorkspaceBeingReaped } from "@/server/workspace-reap-guard";
 import { fetchFromGitData } from "@/server/git-data-client";
 import { resolveWorktreeId } from "@/server/worktree-write-lease";
 import { seedWorktreeConfig } from "@/server/worktree-config-seed";
@@ -188,6 +189,10 @@ export async function ensureWorkspaceRepoCloned(
 ): Promise<ReprovisionOutcome> {
   const { userId, workspacePath, installationId, repoUrl } = args;
   if (installationId === null || !repoUrl) return "ok"; // not connected → nothing to ensure
+
+  // #8211: never re-clone into a workspace whose reap is still running (deleteWorkspace's async rm
+  // would delete the new clone). Honest-blocking for the moment; the next boot finds the settled state.
+  if (isWorkspaceBeingReaped(basename(workspacePath))) return "failed";
 
   // #5733 — STRANDING gitdir-POINTER heal (BEFORE the validity no-op below). A
   // `.git` FILE at a workspace ROOT is never a legitimate linked-worktree (a
