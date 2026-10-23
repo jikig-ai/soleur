@@ -12,6 +12,42 @@ brand_survival_threshold: aggregate pattern
 
 # flake(ci): g1b.B7 corrupt-ancestry fixture preconditions intermittently false on CI runners
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23
+**Sections enhanced:** 4 (`Observability` added; `Proposed Solution` sequencing trap + annotation
+sanitization folded in; `Gate evaluation` carried in `## Research Insights`)
+**Research agents used:** none spawnable in this context (planning subagent, no Task tool) —
+deepening executed inline. `Reviewed-Coverage: sequential-fallback`: no independent review agent
+ran; research, reproduction, and gate evaluation were performed by the orchestrator and are
+recorded as `pending - assumed` rows in `specs/…/decision-challenges.md`.
+
+### Key improvements from the deepen pass
+
+1. `## Observability` section added — Phase 4.7's pure-docs exemption does not cover `.sh`
+   Files-to-Edit; the plan now declares the required-check + monitor + `::warning::` surface
+   with a `grep`-allowlisted discoverability probe (`grep -F 'corrupt_skip' …` → `corrupt_skip`).
+2. Measured sequencing trap folded into `## Technical Considerations` and the B7c site-mapping
+   row: below-break tags must be seeded before `corrupt_walk_break`; B7c construction verified
+   end-to-end (merged = exactly `{v1.1.38}` + `Could not read` stderr).
+3. Annotation-injection sanitization (`%`→`%25`, CR/LF strip) required of `corrupt_skip`'s
+   `::warning::`/`SKIP (loud):` emission.
+
+### Deepen halt-gate ledger
+
+- 4.6 User-Brand Impact — PASS (section present, `aggregate pattern`, challengeable decision
+  line; no sensitive-path match on the file list).
+- 4.7 Observability — initially ABSENT → section added this pass; all 5 fields non-placeholder,
+  probe verb `grep` allowlisted, literal `expected_output`.
+- 4.8 PAT — zero hits on the canonical regex.
+- 4.9 UI-wireframe — not triggered (no UI surface files).
+- 4.10 Encryption Posture — not triggered (no `.tf`/`.sql`/cloud-init/docker-compose files).
+- 4.11 Guard Contract — PASS: `lint-guard-contract.py` green (2 guard entries), assemblies are
+  structural (chokepoint lib + census AC), matrices carry RED + must-PASS + harness rows.
+- 4.12 Scope Check — PASS: exactly one unfenced `## Scope Check`, 3 asks quoted-verbatim from
+  #10921 and mapped, every `inferred` row justified, `Recommendation: single PR` present, no
+  `status: BLOCKED` marker.
+
 ## Overview
 
 The g1b.B7 fixture in `test-bump-inngest-bootstrap-pin.sh` builds its corrupt tag-ancestry graph
@@ -295,6 +331,36 @@ the workflow calls the script; only its internals widen.
   money — realized harm requires BOTH this change weakening coverage AND a subsequent real tag
   anomaly; that is a coverage-regression pattern across runs, not a single merge's breach (see
   decision-challenges.md for the pending-assumed ruling).
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: Required-check `Bash fixture tests for guard scripts` (job guard-script-fixture-tests) outcome — green = corrupt-walk refusal coverage verified on this run
+  cadence: every pull_request and merge_group run
+  alert_target: the PR's required-check panel (a red job blocks merge)
+  configured_in: .github/workflows/pr-quality-guards.yml:94-100
+
+error_reporting:
+  destination: GitHub Actions job log for the run + `::warning::` annotations on the run summary page
+  fail_loud: `FAIL [<row>]` lines red the suite and the required check; a skip emits `SKIP (loud): <row> <reason>` plus a `::warning::` annotation — a coverage degradation is never silent-green
+
+failure_modes:
+  - mode: persistent skip — a runner whose git can no longer exhibit the corrupt-walk contract leaves the refusal rows unverifiable while the suite stays green
+    detection: the standing skip-persistence probe samples pr-quality-guards.yml run logs for `SKIP (loud): g1b.`/`g2b.`/`fl.` markers (extended in Phase 3) — a per-source positive-control discriminator means "the suite did not run" reads TRANSIENT, never clean
+    alert_route: scheduled-rehearsal-skip-monitor files an issue on any observed marker
+  - mode: suite weakened — skip machinery eroding the assertion count
+    detection: anti-vacuity floor `PASS + FAIL + SKIPPED_ASSERTIONS >= MIN_ASSERTIONS` and the `SKIPPED_ASSERTIONS <= <cap>` ceiling in each suite's tail
+    alert_route: required check reds the PR
+
+logs:
+  where: GitHub Actions log of the `guard-script-fixture-tests` job (`bash .github/scripts/test/run-all.sh` relays each suite's stdout unbuffered — no capture layer)
+  retention: GitHub's default run-log retention for the repo
+
+discoverability_test:
+  command: grep -F 'corrupt_skip' .github/scripts/test/test-bump-inngest-bootstrap-pin.sh
+  expected_output: corrupt_skip
+```
 
 ## Guard Contract
 
