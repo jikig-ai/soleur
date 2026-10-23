@@ -181,11 +181,14 @@ the follower's own logs, deduplicated by `sha`:
 gh run list --repo jikig-ai/soleur --workflow apply-delivery-gap-follower.yml --limit 1000 --json databaseId,createdAt \
   --jq '.[] | select(.createdAt >= (now - 30*86400 | todate)) | .databaseId' |
 while read -r id; do
-  gh run view "$id" --repo jikig-ai/soleur --log | grep 'apply-delivery-gap::row'
-done | grep -oE 'sha=[0-9a-f]{40}' | sort -u | wc -l
+  gh run view "$id" --repo jikig-ai/soleur --log | grep -E 'row workflow=[a-z-]+ sha=[0-9a-f]{40}'
+done | grep -oE 'sha=[0-9a-f]{40}' | cut -d= -f2 | sort -u | wc -l
 ```
 
-Each line is `::notice title=apply-delivery-gap::row workflow=<key> sha=<40hex> class=<c>`. Run logs are kept for about 90 days. Beyond
+The script prints `::notice title=apply-delivery-gap::row workflow=<key> sha=<40hex> class=<c>`, but `gh run view --log` renders
+a workflow command as `##[notice]row workflow=<key> sha=<40hex> class=<c>` (the title is dropped and the `::` spelling never
+appears), so a grep on `apply-delivery-gap::row` returns nothing on a real run. The pattern above anchors on the text after
+`row ` and matches both spellings (the suite pins it against the script's own output). Run logs are kept for about 90 days. Beyond
 that, fall back to the close comments of past gap issues (`gh issue list --repo jikig-ai/soleur --label apply-delivery-gap
 --state all`): a close comment lists the 7-character SHAs of the pushes that were DELIVERED only, so it undercounts pushes that
 were never delivered or were closed by hand. An issue body is rewritten on every refresh and holds no history; do not count

@@ -21,7 +21,7 @@
 #
 # Knobs (tests only): ADG_ONLY=<ids> run only those groups/sub-cases; ADG_NO_META=1 skip the self-referential groups
 # (H1 and M; children set it); ADG_SUT=<path> run against another script copy; ADG_WF=<path> run the wiring leg against
-# another workflow copy; ADG_MUT_LOGS=<dir> keep the per-mutant logs there; ADG_PRINT_COUNTS=1 print per-group assertion counts (used to record the floor table).
+# another workflow copy; ADG_RUNBOOK=<path> read the flip-evidence recipe from another runbook copy; ADG_MUT_LOGS=<dir> keep the per-mutant logs there; ADG_PRINT_COUNTS=1 print per-group assertion counts (used to record the floor table).
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 set -uo pipefail
@@ -34,10 +34,12 @@ SUT_REL="scripts/apply-delivery-gap.sh"
 WF_REL=".github/workflows/apply-delivery-gap-follower.yml"
 DEPLOY_WF_REL=".github/workflows/apply-deploy-pipeline-fix.yml"
 INFRA_WF_REL=".github/workflows/apply-web-platform-infra.yml"
+RUNBOOK_REL="knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md"
 SUT="${ADG_SUT:-$ROOT/$SUT_REL}"
 WF="${ADG_WF:-$ROOT/$WF_REL}"
 DEPLOY_WF="$ROOT/$DEPLOY_WF_REL"
 INFRA_WF="$ROOT/$INFRA_WF_REL"
+RUNBOOK="${ADG_RUNBOOK:-$ROOT/$RUNBOOK_REL}"
 FIX="$SCRIPT_DIR/fixtures/apply-delivery-gap"
 SELF="$SCRIPT_DIR/apply-delivery-gap-follower.test.sh"
 
@@ -326,6 +328,17 @@ issue-list author=github-actions[bot] state=open limit=500 json=number,title,lab
   lacks "S1 no dropped-by-kill-switch line when nothing was dropped" "$B" "Dropped by kill switch"
   has "S1 the footer states only what the drift check does (F29)" "$B" "separate detector of Terraform-managed drift: it does not examine individual pushes and does not monitor this follower."
   lacks "S1 the footer no longer calls the drift check the backstop (F29)" "$B" "remains the backstop"
+  # F30: the runbook's flip-evidence grep must match what the emitter really printed, in the raw spelling and in the
+  # `##[notice]` spelling `gh run view --log` renders (title dropped), prefixed the way the log prefixes a line.
+  recipe_re="$(sed -n "s/.*| grep -E '\(row workflow=[^']*\)'.*/\1/p" "$RUNBOOK" | head -n 1)"
+  raw_row="$(grep '^::notice title=apply-delivery-gap::row ' "$ST/all.txt" | head -n 1)"
+  log_row="build	Reconcile	2026-10-23T12:00:00.0000000Z ##[notice]row ${raw_row#*::row }"
+  [[ -n "$recipe_re" ]] && pass "S1 the runbook recipe carries a row pattern" || fail "S1 the runbook recipe carries a row pattern"
+  eq "S1 the recipe pattern matches the emitter's raw line" "$(printf '%s\n' "$raw_row" | grep -cE -- "$recipe_re")" 1
+  eq "S1 the recipe pattern matches the rendered ##[notice] line" "$(printf '%s\n' "$log_row" | grep -cE -- "$recipe_re")" 1
+  eq "S1 the recipe pattern matches only the row line of the whole output" "$(grep -cE -- "$recipe_re" "$ST/all.txt")" 1
+  eq "S1 the recipe extracts the full 40-hex sha for the dedup" "$(printf '%s\n' "$log_row" | grep -E -- "$recipe_re" | grep -oE 'sha=[0-9a-f]{40}' | cut -d= -f2)" "$(sha 0x101)"
+  tn "S1 the old ::row spelling does not match the rendered line (the defect this pattern replaces)" grep -q 'apply-delivery-gap::row' <<<"$log_row"
   cmdline="$(grep '^gh workflow run ' "$B")"
   hasre "S1 printed command shape" <(printf '%s\n' "$cmdline") "^gh workflow run [a-z0-9.-]+\.yml --ref main( -f [a-z_]+=[a-z-]+)* -f reason='apply-delivery-gap [0-9a-f]{7}'$"
   has "S1 printed command names the deploy-fix file and sha7" <(printf '%s\n' "$cmdline") "gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason='apply-delivery-gap 0000101'"

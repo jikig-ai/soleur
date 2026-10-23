@@ -778,7 +778,9 @@ to poll; a `schedule:` trigger as a second detection path is rejected because it
 Flip evidence bar: build a deferred fix when there are 3 or more distinct undelivered SHAs in 30 days, or one row aged past
 1 hour with real deploy impact, plus a green operator-reviewed rehearsal on a disposable concurrency group and state key.
 The evidence unit is the SHA (the same SHA is re-printed by every reconcile while it stays undelivered): the recipe counts
-distinct 40-hex SHAs over 30 days from the follower's `row` notices in `gh run view --log`, falls back to the close comments
+distinct 40-hex SHAs over 30 days from the follower's `row` notices in `gh run view --log` (which renders the notice as
+`##[notice]row workflow=<key> sha=<40hex> ...`, title dropped, so the grep anchors on `row workflow=[a-z-]+ sha=[0-9a-f]{40}`, not on
+the `::` spelling; decision row F30), falls back to the close comments
 of past gap issues beyond the 90-day log retention (they list delivered pushes only), and reads the "more than 1 hour" half of
 the bar from the live open issue, never retroactively; issue bodies hold no history. The recipe is in the runbook
 `apply-web-platform-infra-red-run.md`, section "An apply delivery gap issue".
