@@ -1,12 +1,14 @@
 // Runtime Bash synthetic (ADR-079 "Addendum — 2026-10-22 (#10455 b)"): the pure pieces of sdk-bash-probe.mjs that the runtime mode adds.
 // The deploy smoke (SMOKE=1 alone) is pinned by sdk-bash-probe-parity.test.ts and must not move; this suite pins what the
 // RUNNING-container synthetic changes: the selector comes from the host (which asked the dispatcher's own resolver), the
-// coverage claim names THAT selector, and nothing is created outside the probe's scratch dirs.
+// coverage claim names THAT selector, and the only directories it creates outside its scratch dirs are the closed
+// production masked set (precreateDirs), through ensureMaskedDirs and under the PID-1 uid and HOME guards (ADR-079 addendum 2026-10-23).
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import * as probe from "../infra/lib/sdk-bash-probe.mjs";
 
@@ -47,26 +49,302 @@ describe("smokeCoverage names the selector it was asked to verify", () => {
   });
 });
 
-describe("runtimeMaskedDirs: observe, never create", () => {
+describe("precreateDirs: the closed set the runtime probe may create", () => {
+  it("is maskedDirs plus the session tmp root (4 dirs), and runtimeMaskedDirs is gone", () => {
+    expect(probe.SESSION_TMP_ROOT).toBe("/tmp/.cs");
+    expect(probe.precreateDirs(1001, "/home/soleur")).toEqual(["/tmp/cc-socks", "/tmp/cc-socks-1001", "/home/soleur/.claude/projects", "/tmp/.cs"]);
+    expect((probe as Record<string, unknown>).runtimeMaskedDirs).toBeUndefined();
+  });
+});
+
+// ---- ensureMaskedDirs (Guard 3): I/O injected, an in-memory filesystem -----------------------------------------------------------
+type Ent = { dir?: boolean; link?: boolean; uid: number };
+function fakeFs(initial: Record<string, Ent>, opts: { mkdirFails?: Set<string>; mkdirNoop?: Set<string>; lstatErr?: Record<string, string>; me?: number } = {}) {
+  const me = opts.me ?? 1001;
+  const ents: Record<string, Ent> = { ...initial };
+  const mkdirCalls: Array<[string, unknown]> = [];
+  const lstatCalls: string[] = [];
+  const err = (code: string) => Object.assign(new Error(code), { code });
+  return {
+    ents,
+    mkdirCalls,
+    lstatCalls,
+    lstat: (p: string) => {
+      lstatCalls.push(p);
+      if (opts.lstatErr?.[p]) throw err(opts.lstatErr[p]);
+      const e = ents[p];
+      if (!e) throw err("ENOENT");
+      return { isDirectory: () => e.dir === true && e.link !== true, isSymbolicLink: () => e.link === true, uid: e.uid };
+    },
+    mkdir: (p: string, o: unknown) => {
+      mkdirCalls.push([p, o]);
+      if (opts.mkdirFails?.has(p)) throw err("EACCES");
+      if (opts.mkdirNoop?.has(p)) return;
+      ents[p] = { dir: true, uid: me };
+    },
+  };
+}
+
+describe("ensureMaskedDirs: create only what is absent, only as PID 1's uid, with production's own mkdir call", () => {
   const uid = 1001;
   const home = "/home/soleur";
-  const all = probe.maskedDirs(uid, home);
+  const dirs = probe.precreateDirs(uid, home);
+  const homeDirs = [`${home}/.claude/projects`];
+  const okPid1 = { uid, env: { homeMatches: true, divergent: false } };
+  const run = (fs: ReturnType<typeof fakeFs>, ...rest: [unknown?]) =>
+    probe.ensureMaskedDirs({ dirs, homeDirs, uid, pid1: rest.length ? rest[0] : okPid1, lstat: fs.lstat, mkdir: fs.mkdir });
 
-  it("keeps the masks that exist and counts the ones that do not, calling nothing but the injected predicate", () => {
-    const seen: string[] = [];
-    const exists = (p: string) => {
-      seen.push(p);
-      return p === all[0];
-    };
-    const r = probe.runtimeMaskedDirs(uid, home, exists);
-    expect(r.present).toEqual([all[0]]);
-    expect(r.missing).toBe(2);
-    expect(seen).toEqual(all);
+  it("a cold container: all four are created with mkdir(dir, { recursive: true, mode: 0o700 }) and nothing else", () => {
+    const fs = fakeFs({});
+    const r = run(fs);
+    expect(r).toEqual({ created: 4, failed: [], note: null });
+    expect(fs.mkdirCalls).toEqual(dirs.map((d) => [d, { recursive: true, mode: 0o700 }]));
   });
 
-  it("all present: nothing missing; none present: all missing", () => {
-    expect(probe.runtimeMaskedDirs(uid, home, () => true)).toEqual({ present: all, missing: 0 });
-    expect(probe.runtimeMaskedDirs(uid, home, () => false)).toEqual({ present: [], missing: 3 });
+  it("two runs in a row: the second creates nothing and does not call mkdir at all", () => {
+    const fs = fakeFs({});
+    run(fs);
+    fs.mkdirCalls.length = 0;
+    expect(run(fs)).toEqual({ created: 0, failed: [], note: null });
+    expect(fs.mkdirCalls).toEqual([]);
+  });
+
+  it("an existing 0755 directory owned by the probe uid is fine and untouched (mode is not asserted)", () => {
+    const fs = fakeFs({ [dirs[0]]: { dir: true, uid } });
+    const r = run(fs);
+    expect(r.failed).toEqual([]);
+    expect(r.created).toBe(3);
+    expect(fs.mkdirCalls.map((c) => c[0])).not.toContain(dirs[0]);
+  });
+
+  it("a foreign-owned directory and a symlink are failed, and are never replaced or re-created", () => {
+    const fs = fakeFs({ [dirs[0]]: { dir: true, uid: 0 }, [dirs[1]]: { dir: true, link: true, uid } });
+    const r = run(fs);
+    expect(r.failed).toEqual([dirs[0], dirs[1]]);
+    expect(r.created).toBe(2);
+    expect(fs.mkdirCalls.map((c) => c[0])).toEqual([dirs[2], dirs[3]]);
+  });
+
+  it("a regular file in the way is failed and left alone", () => {
+    const fs = fakeFs({ [dirs[3]]: { dir: false, uid } });
+    expect(run(fs).failed).toEqual([dirs[3]]);
+    expect(fs.mkdirCalls.map((c) => c[0])).not.toContain(dirs[3]);
+  });
+
+  it("a mkdir error fails THAT dir and the loop carries on to the rest", () => {
+    const fs = fakeFs({}, { mkdirFails: new Set([dirs[0]]) });
+    const r = run(fs);
+    expect(r.failed).toEqual([dirs[0]]);
+    expect(r.created).toBe(3);
+    expect(fs.mkdirCalls.map((c) => c[0])).toEqual(dirs);
+  });
+
+  it("a mkdir that returns without producing the directory is failed, and is not counted as created", () => {
+    const fs = fakeFs({}, { mkdirNoop: new Set([dirs[2]]) });
+    const r = run(fs);
+    expect(r.failed).toEqual([dirs[2]]);
+    expect(r.created).toBe(3);
+  });
+
+  it("an lstat error other than ENOENT is not 'absent': nothing is created and the dir is failed", () => {
+    const fs = fakeFs({}, { lstatErr: { [dirs[1]]: "EACCES" } });
+    const r = run(fs);
+    expect(r.failed).toEqual([dirs[1]]);
+    expect(fs.mkdirCalls.map((c) => c[0])).not.toContain(dirs[1]);
+  });
+
+  describe("PID-1 uid guard: all creation stops", () => {
+    it("uid_mismatch: the probe uid differs from PID 1's real uid", () => {
+      const fs = fakeFs({ [dirs[0]]: { dir: true, uid } });
+      const r = run(fs, { uid: 0, env: okPid1.env });
+      expect(fs.mkdirCalls).toEqual([]);
+      expect(r).toEqual({ created: 0, failed: [dirs[1], dirs[2], dirs[3]], note: "uid_mismatch" });
+    });
+
+    it("pid1_unreadable: PID 1's uid could not be read (undefined, never 'assume equal')", () => {
+      for (const pid1 of [{ uid: undefined, env: okPid1.env }, { env: okPid1.env }, undefined, null]) {
+        const fs = fakeFs({});
+        const r = run(fs, pid1);
+        expect(fs.mkdirCalls, String(pid1)).toEqual([]);
+        expect(r.note, String(pid1)).toBe("pid1_unreadable");
+        expect(r.failed.length, String(pid1)).toBe(4);
+      }
+    });
+
+    it("uid_mismatch outranks every other note, and pid1_unreadable outranks the env ones", () => {
+      expect(run(fakeFs({}), { uid: 0, env: null }).note).toBe("uid_mismatch");
+      expect(run(fakeFs({}), { uid: undefined, env: null }).note).toBe("pid1_unreadable");
+    });
+  });
+
+  describe("HOME guard: refuse ONLY the HOME-derived dir, still create the other three", () => {
+    it("pid1_env_unreadable: /proc/1/environ could not be read", () => {
+      const fs = fakeFs({});
+      const r = run(fs, { uid, env: null });
+      expect(r).toEqual({ created: 3, failed: [dirs[2]], note: "pid1_env_unreadable" });
+      expect(fs.mkdirCalls.map((c) => c[0])).toEqual([dirs[0], dirs[1], dirs[3]]);
+    });
+
+    it("home_mismatch: PID 1's HOME is not the probe's HOME", () => {
+      const fs = fakeFs({});
+      const r = run(fs, { uid, env: { homeMatches: false, divergent: false } });
+      expect(r).toEqual({ created: 3, failed: [dirs[2]], note: "home_mismatch" });
+      expect(fs.mkdirCalls.map((c) => c[0])).not.toContain(dirs[2]);
+    });
+
+    it("a refused HOME-derived dir that already exists as a real directory is simply present (nothing to create)", () => {
+      const fs = fakeFs({ [dirs[2]]: { dir: true, uid } });
+      expect(run(fs, { uid, env: { homeMatches: false, divergent: false } })).toEqual({ created: 3, failed: [], note: "home_mismatch" });
+    });
+
+    it("home_mismatch outranks env_divergence", () => {
+      expect(run(fakeFs({}), { uid, env: { homeMatches: false, divergent: true } }).note).toBe("home_mismatch");
+    });
+  });
+
+  it("env_divergence is informational: all four are created, none counted missing", () => {
+    const fs = fakeFs({});
+    expect(run(fs, { uid, env: { homeMatches: true, divergent: true } })).toEqual({ created: 4, failed: [], note: "env_divergence" });
+  });
+
+  it("works against the REAL filesystem: creates 0700 dirs as this uid, and a symlink-to-directory is failed, never followed or replaced", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ensure-masks-")));
+    try {
+      const me = process.getuid!();
+      const a = join(root, "a", "nested");
+      const target = join(root, "target");
+      const link = join(root, "link");
+      mkdirSync(target);
+      symlinkSync(target, link);
+      const r = probe.ensureMaskedDirs({ dirs: [a, link], homeDirs: [], uid: me, pid1: { uid: me, env: { homeMatches: true, divergent: false } }, lstat: lstatSync, mkdir: mkdirSync });
+      expect(r).toEqual({ created: 1, failed: [link], note: null });
+      expect(statSync(a).mode & 0o777).toBe(0o700 & ~process.umask());
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readdirSync(target)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("maskFields: the result-JSON fields, and nothing else", () => {
+  it("maps the ensureMaskedDirs result to masks_missing / masks_created / masks_note", () => {
+    expect(probe.maskFields({ created: 3, failed: ["/a"], note: "home_mismatch" })).toEqual({ masks_missing: 1, masks_created: 3, masks_note: "home_mismatch" });
+    expect(probe.maskFields({ created: 0, failed: [], note: null })).toEqual({ masks_missing: 0, masks_created: 0, masks_note: null });
+  });
+});
+
+// ---- PID 1 reads: narrow, capped, and no value ever leaves the parser ------------------------------------------------------------------
+describe("parsePid1Uid: the REAL uid is the first Uid: field of /proc/1/status", () => {
+  it("reads the first field, not the effective/saved ones", () => {
+    expect(probe.parsePid1Uid("Name:\tnode\nUmask:\t0022\nUid:\t1001\t0\t0\t0\nGid:\t1001\t1001\t1001\t1001\n")).toBe(1001);
+    expect(probe.parsePid1Uid("Uid:\t0\t1001\t1001\t1001\n")).toBe(0);
+  });
+  it("anything unparseable is undefined", () => {
+    for (const t of ["", "Name:\tnode\n", "Uid:\n", "Uid:\tabc\t1\t1\t1\n", "Uid:\t-1\t1\t1\t1\n", "XUid:\t5\t5\t5\t5\n", undefined, null]) {
+      expect(probe.parsePid1Uid(t as unknown as string), String(t)).toBeUndefined();
+    }
+  });
+});
+
+describe("parsePid1Environ: only five names are looked at, and only booleans come out", () => {
+  const SECRET = "sentinel-secret-9f8e7d6c5b4a";
+  const env = (...e: string[]) => Buffer.from(`${e.join("\0")}\0`, "latin1");
+  const HOME = "/home/soleur";
+
+  it("HOME equality and 'any of the four other bases is an absolute path'", () => {
+    expect(probe.parsePid1Environ(env("PATH=/usr/bin", `HOME=${HOME}`, `API_KEY=${SECRET}`), HOME)).toEqual({ homeMatches: true, divergent: false });
+    for (const n of ["CLAUDE_CONFIG_DIR", "XDG_RUNTIME_DIR", "CLAUDE_CODE_TMPDIR", "TMPDIR"]) {
+      expect(probe.parsePid1Environ(env(`HOME=${HOME}`, `${n}=/some/abs`), HOME), n).toEqual({ homeMatches: true, divergent: true });
+      expect(probe.parsePid1Environ(env(`HOME=${HOME}`, `${n}=relative`), HOME), `${n} relative`).toEqual({ homeMatches: true, divergent: false });
+      expect(probe.parsePid1Environ(env(`HOME=${HOME}`, `${n}=`), HOME), `${n} empty`).toEqual({ homeMatches: true, divergent: false });
+    }
+  });
+
+  it("HOME differing, absent, relative, or only a look-alike name is not a match", () => {
+    expect(probe.parsePid1Environ(env("HOME=/root"), HOME)?.homeMatches).toBe(false);
+    expect(probe.parsePid1Environ(env("HOME=/home/soleur/"), HOME)?.homeMatches).toBe(false);
+    expect(probe.parsePid1Environ(env("PATH=/x"), HOME)?.homeMatches).toBe(false);
+    expect(probe.parsePid1Environ(env("XHOME=/home/soleur", "HOMEX=/home/soleur"), HOME)?.homeMatches).toBe(false);
+    expect(probe.parsePid1Environ(env("HOME=relative"), "relative")?.homeMatches).toBe(false);
+    expect(probe.parsePid1Environ(env("XTMPDIR=/a", "TMPDIR_X=/a"), HOME)?.divergent).toBe(false);
+  });
+
+  it("an entry that merely STARTS with the secret-carrying names is not a hit, and a secret value never appears in the result", () => {
+    const r = probe.parsePid1Environ(env(`HOME=${HOME}`, `DOPPLER_TOKEN=${SECRET}`, `TMPDIR=/t`), HOME);
+    expect(JSON.stringify(r)).not.toContain(SECRET);
+    expect(Object.keys(r as object).sort()).toEqual(["divergent", "homeMatches"]);
+  });
+
+  it("a read that hit the cap is unreadable (null), without parsing a partial entry", () => {
+    expect(probe.PID1_ENV_CAP).toBe(256 * 1024);
+    const big = Buffer.alloc(probe.PID1_ENV_CAP + 1, 0x41);
+    expect(probe.parsePid1Environ(big, HOME)).toBeNull();
+    const atCap = Buffer.concat([Buffer.from(`HOME=${HOME}\0`), Buffer.alloc(probe.PID1_ENV_CAP - HOME.length - 6, 0)]);
+    expect(atCap.length).toBe(probe.PID1_ENV_CAP);
+    expect(probe.parsePid1Environ(atCap, HOME)).toEqual({ homeMatches: true, divergent: false });
+  });
+
+  it("not a buffer, or an empty one, is unreadable", () => {
+    for (const b of [undefined, null, "HOME=/home/soleur", Buffer.alloc(0)]) expect(probe.parsePid1Environ(b as unknown as Buffer, HOME), String(b)).toBeNull();
+  });
+});
+
+describe("readPid1: injected readers, bounded, scrubbed, and silent", () => {
+  const SECRET = "sentinel-secret-1a2b3c4d5e6f";
+  const HOME = "/home/soleur";
+
+  it("returns {uid, env} from the injected readers and asks for at most cap+1 bytes of environ", () => {
+    const asked: number[] = [];
+    const r = probe.readPid1(HOME, {
+      readStatus: () => "Uid:\t1001\t1001\t1001\t1001\n",
+      readEnviron: (cap: number) => {
+        asked.push(cap);
+        return Buffer.from(`HOME=${HOME}\0TMPDIR=/x\0`);
+      },
+    });
+    expect(r).toEqual({ uid: 1001, env: { homeMatches: true, divergent: true } });
+    expect(asked).toEqual([probe.PID1_ENV_CAP + 1]);
+  });
+
+  it("an unreadable status or environ (a throwing reader) degrades to undefined / null, never throws", () => {
+    const boom = () => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    };
+    expect(probe.readPid1(HOME, { readStatus: boom, readEnviron: boom })).toEqual({ uid: undefined, env: null });
+  });
+
+  it("zero-fills the environ buffer it read before returning", () => {
+    const buf = Buffer.from(`HOME=${HOME}\0SECRET=${SECRET}\0`);
+    probe.readPid1(HOME, { readStatus: () => "Uid:\t1\t1\t1\t1\n", readEnviron: () => buf });
+    expect(buf.every((b) => b === 0)).toBe(true);
+  });
+
+  it("SENTINEL: a secret seeded in a fake PID-1 environ never reaches stdout, stderr, the console or the result JSON", () => {
+    const writes: string[] = [];
+    const spies = [
+      vi.spyOn(process.stdout, "write").mockImplementation((c: unknown) => (writes.push(String(c)), true)),
+      vi.spyOn(process.stderr, "write").mockImplementation((c: unknown) => (writes.push(String(c)), true)),
+      vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void writes.push(a.map(String).join(" "))),
+      vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void writes.push(a.map(String).join(" "))),
+      vi.spyOn(console, "warn").mockImplementation((...a: unknown[]) => void writes.push(a.map(String).join(" "))),
+    ];
+    let json = "";
+    try {
+      const pid1 = probe.readPid1(HOME, {
+        readStatus: () => "Uid:\t1001\t1001\t1001\t1001\n",
+        readEnviron: () => Buffer.from(`PATH=/usr/bin\0HOME=/root\0ANTHROPIC_API_KEY=${SECRET}\0TMPDIR=/t\0DOPPLER_TOKEN=${SECRET}\0`),
+      });
+      const fs = fakeFs({});
+      const r = probe.ensureMaskedDirs({ dirs: probe.precreateDirs(1001, HOME), homeDirs: [`${HOME}/.claude/projects`], uid: 1001, pid1, lstat: fs.lstat, mkdir: fs.mkdir });
+      json = JSON.stringify({ pid1, r, fields: probe.maskFields(r) });
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
+    expect(json).not.toContain(SECRET);
+    expect(json).not.toContain("/root");
+    expect(writes.join("\n")).not.toContain(SECRET);
+    expect(writes.join("\n")).not.toContain("/root");
   });
 });
 
@@ -89,52 +367,47 @@ describe("planSmoke: every mode decision of runSmoke, as one pure value", () => 
   const uid = 1001;
   const home = "/home/soleur";
   const all = probe.maskedDirs(uid, home);
-  const never = () => {
-    throw new Error("deploy mode must not look at the filesystem");
-  };
 
   it("deploy mode (SDK_BASH_PROBE_RUNTIME unset): the pinned unixdeny artifact, every masked dir applied AND created, a stray selector env ignored", () => {
-    const plan = probe.planSmoke({ env: { SDK_BASH_PROBE_SELECTOR: "base" }, uid, home, exists: never });
+    const plan = probe.planSmoke({ env: { SDK_BASH_PROBE_SELECTOR: "base" }, uid, home });
     expect(plan).toEqual({
       runtime: false,
       selectorName: "unixdeny",
       selectedPath: probe.SMOKE_SELECTOR_PATHS.unixdeny,
       masked: all,
-      masksMissing: 0,
       mkdir: all,
+      precreate: [],
     });
   });
 
   it("runtime mode honours the selector NAME and expects exactly that artifact", () => {
     for (const name of ["base", "unixdeny"] as const) {
-      const plan = probe.planSmoke({ env: { SDK_BASH_PROBE_RUNTIME: "1", SDK_BASH_PROBE_SELECTOR: name }, uid, home, exists: () => true });
+      const plan = probe.planSmoke({ env: { SDK_BASH_PROBE_RUNTIME: "1", SDK_BASH_PROBE_SELECTOR: name }, uid, home });
       expect(plan.runtime).toBe(true);
       expect(plan.selectorName).toBe(name);
       expect(plan.selectedPath).toBe(probe.SMOKE_SELECTOR_PATHS[name]);
     }
   });
 
-  it("runtime mode never creates a directory, whatever exists: masks the ones that exist and counts the rest", () => {
-    const env = { SDK_BASH_PROBE_RUNTIME: "1", SDK_BASH_PROBE_SELECTOR: "base" };
-    const none = probe.planSmoke({ env, uid, home, exists: () => false });
-    expect(none).toMatchObject({ masked: [], masksMissing: 3, mkdir: [] });
-    const some = probe.planSmoke({ env, uid, home, exists: (d: string) => d === all[1] });
-    expect(some).toMatchObject({ masked: [all[1]], masksMissing: 2, mkdir: [] });
-    const every = probe.planSmoke({ env, uid, home, exists: () => true });
-    expect(every).toMatchObject({ masked: all, masksMissing: 0, mkdir: [] });
+  it("runtime mode applies every masked dir like production and hands the creation to ensureMaskedDirs: plan.mkdir is always empty, precreate is the closed 4-dir set", () => {
+    const plan = probe.planSmoke({ env: { SDK_BASH_PROBE_RUNTIME: "1", SDK_BASH_PROBE_SELECTOR: "base" }, uid, home });
+    expect(plan).toMatchObject({ masked: all, mkdir: [], precreate: probe.precreateDirs(uid, home) });
+    expect(plan.precreate).toHaveLength(4);
+    expect((plan as Record<string, unknown>).masksMissing).toBeUndefined();
   });
 
   it("runtime mode with an unknown or missing selector has no artifact (the caller reports selector_invalid)", () => {
     for (const sel of [undefined, "", "BASE", "../x", "__proto__", "/app/infra/other.bpf"]) {
-      const plan = probe.planSmoke({ env: { SDK_BASH_PROBE_RUNTIME: "1", SDK_BASH_PROBE_SELECTOR: sel }, uid, home, exists: () => true });
+      const plan = probe.planSmoke({ env: { SDK_BASH_PROBE_RUNTIME: "1", SDK_BASH_PROBE_SELECTOR: sel }, uid, home });
       expect(plan.selectedPath, String(sel)).toBeNull();
       expect(plan.mkdir, String(sel)).toEqual([]);
+      expect(plan.precreate, String(sel)).toEqual([]);
     }
   });
 
   it("only the exact string \"1\" turns runtime mode on", () => {
     for (const v of ["", "0", "true", "yes", "11"]) {
-      expect(probe.planSmoke({ env: { SDK_BASH_PROBE_RUNTIME: v }, uid, home, exists: never }).runtime, v).toBe(false);
+      expect(probe.planSmoke({ env: { SDK_BASH_PROBE_RUNTIME: v }, uid, home }).runtime, v).toBe(false);
     }
   });
 });
@@ -143,11 +416,35 @@ describe("runSmoke is wired to planSmoke, not to its own copy of the decisions",
   const runSmoke = probeSrc.slice(probeSrc.indexOf("async function runSmoke()"));
   const code = runSmoke.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 
-  it("creates masked dirs only from plan.mkdir, and applies plan.masked", () => {
+  it("ensureMaskedDirs is the ONLY runtime creation site: one call, fed lstat and mkdir by reference, never a stat; the deploy loop is the only direct mkdirSync", () => {
+    expect(code.match(/ensureMaskedDirs\(/g)?.length).toBe(1);
+    expect(code).toContain("lstat: lstatSync, mkdir: mkdirSync");
+    expect(code).toContain("readPid1(home)");
     expect(code.match(/mkdirSync\(/g)?.length).toBe(1);
     expect(code).toContain("for (const d of plan.mkdir) mkdirSync(d, { recursive: true, mode: 0o700 });");
-    expect(code).toContain("const { runtime, selectorName, selectedPath, masked, masksMissing } = plan;");
+    expect(code).toContain("const { runtime, selectorName, selectedPath, masked } = plan;");
     expect(code).toContain("smokeSandboxConfig({ workspace: ws, uid, home, masked })");
+    expect(code).toContain("...maskFields(masksResult)");
+  });
+
+  it("ensureMaskedDirs itself: one mkdir call with production's exact options, lstat only, no chmod/chown/replace anywhere in the file", () => {
+    const fn = probeSrc.slice(probeSrc.indexOf("export function ensureMaskedDirs("), probeSrc.indexOf("export function maskFields("));
+    const fnCode = fn.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    expect(fnCode.match(/\bmkdir\(/g)?.length).toBe(1);
+    expect(fnCode).toContain("mkdir(dir, { recursive: true, mode: 0o700 })");
+    expect(fnCode).toMatch(/\blstat\(/);
+    expect(fnCode).not.toMatch(/\bstat\(|statSync|\bchmod|\bchown|\brename|\bunlink|\brm\b|rmSync|symlink/);
+    const all = probeSrc.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/**")).join("\n");
+    expect(all).not.toMatch(/\b(chmod|fchmod|chown|lchown|fchown)\w*\(/);
+  });
+
+  it("PID 1 is read in exactly one place, narrowly: status and environ paths each appear once in code, and the environ read is capped", () => {
+    const all = probeSrc.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/**")).join("\n");
+    expect(all.match(/\/proc\/1\/status/g)?.length).toBe(1);
+    expect(all.match(/\/proc\/1\/environ/g)?.length).toBe(1);
+    expect(all).toContain("PID1_ENV_CAP");
+    // no value from the environ is turned into a string except through the five-name parser
+    expect(all).not.toMatch(/environ[^\n]*(console|process\.std)/);
   });
 
   it("every other filesystem write in the smoke path is a scratch dir the probe made, or the day-old sweep of its own leftovers", () => {
