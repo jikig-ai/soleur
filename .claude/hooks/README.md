@@ -199,8 +199,11 @@ run order; in a straight-line list a refusal after the last commit is dropped.
 When the scanner's own tooling is unavailable the hook denies, and the text says so: a missing
 helper library denies every strict `git commit` and every loose form that carries an option or a
 quoting character; a missing perl or lexer denies a command that names a directory (`cd`, `-C`,
-`env`, ...) or is a loose `git ... commit` form, while a plain `git commit` with no directory
-token is still scanned. There is no override variable.
+`env`, ...), that stages and commits in one call (`git add ... && git commit`, `commit -a`, a pathspec
+commit) or is a loose `git ... commit` form, while a plain `git commit -m x` with none of those
+tokens is still scanned against the real index (without perl a positional pathspec after `-m "..."`
+is not seen: write `git commit -m x -- <path>`). Where perl exists every strict commit is lexed. There is
+no override variable.
 
 Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one): a
 `git` or `commit` word spelled with quoting inside the word (`g''it`, `git com''mit`) or built
@@ -224,20 +227,34 @@ in the working tree passed unscanned. The hook now builds the index the commit w
 `lib/commit-target-roots.sh` records the command's own staging, and `lib/commit-index-sim.sh` copies
 the real index to a temp file in a 0700 directory, replays the staging onto the copy (an exact replay
 of the literal `git add` words when the directory is proven, else the superset `git add -A`), and runs
-the unchanged scan with the copy and a quarantined object directory exported. Nothing in the real
-index, object store, git directory or working tree is written. A plain `git commit -m x` pays nothing.
-When the simulation cannot be built or bounded the hook denies (rule id
-`git-commit-secret-scan-sim-deny`, repair: run `git add` as its own call, then the commit); the one
-benign case, a path that does not exist yet with nothing in the command to create it, scans the whole
-working tree and writes a `git-commit-secret-scan-sim-failed` bypass row. The full contract, the failure
-table and the named residuals are in the header of `git-commit-secret-scan.sh`.
+the scan with the copy and a quarantined object directory exported. With a proven directory only that
+directory's repository is simulated and any other repository (the hook's cwd, the payload cwd) is
+scanned against its real index. Nothing in the real index content, listing or git directory or in the
+working tree is written (an existing object's mtime may be refreshed). The whole simulation and scan
+share one 30 s deadline.
 
-Named residuals (one follow-up issue lists them): a script or wrapper that runs `git add` inside; content
-created or changed earlier in the same command is denied only when a producer is detected (`sed -i` or
-`prettier --write` before `commit -a` is invisible); a positional pathspec after `-m "..."`; content a verb
-brings from outside the working tree (`apply --index`, `cherry-pick -n`, `stash pop`, `merge`,
-`checkout <ref> --`); a clean filter or Git LFS may record bytes the simulation never saw (clean filters are
-pinned off on every simulated `git add`); and other tools that stage (an IDE, a git alias).
+Every failure of the simulation **denies** (rule id `git-commit-secret-scan-sim-deny`, row text
+`mode=... cause=...`) and never bypasses, because the harness's own hook timeout is non-blocking. The deny
+text names a retry that fits the command: for `commit -a`, run `git add -u` as its own call and commit
+again WITHOUT `-a`; for a pathspec commit, `git add <paths>`, check `git diff --cached --name-only`, and
+commit WITHOUT the paths; otherwise `git add <paths>` as its own call, then the commit. A real finding keeps
+the rule id `git-commit-secret-scan` (row `mode=... cause=finding`). Staging the replay cannot reproduce is
+refused (`config-refused`): `-c` keys under `core. filter. diff. attr. include. add. apply. submodule.
+alias.`, `--namespace`, `--attr-source`, an environment variable outside the allowlist (`LC_*`, `LANG`, `LANGUAGE`,
+`TZ`, `TERM`, `NO_COLOR`, `CI`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_EDITOR`, `GIT_PAGER`, `GIT_TERMINAL_PROMPT`) on a staging
+command or exported earlier, `env -i`, `sudo`; and content from outside the working tree
+(`update-index --add/--cacheinfo/--index-info`, `apply --index/--cached`) is denied `stage-unsimulable`.
+The contract, the cause table and the residuals are indexed in
+[ADR-296](../../knowledge-base/engineering/architecture/decisions/ADR-296-scan-the-would-be-index-of-a-chained-git-commit.md).
+
+Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one): what an
+EARLIER command in the same call changes (a producer, `sed -i` or `prettier --write` before `commit -a`,
+an edit of `.gitignore`, config or attributes); a script or wrapper that runs `git add` inside, and
+user-config aliases; a host without perl (`git commit -m x <path>` is not seen there); the raw-byte scan (a clean
+filter or Git LFS may record bytes the simulation never saw); checkout, stash, read-tree, cherry-pick,
+merge, revert, am, restore, mv and rm (they take the superset); a SIGKILL that leaves a 0700 temp
+directory behind; other tools that stage (an IDE); and a harness that sends no payload cwd (Devin), which
+never has proof of the directory and always takes the superset.
 
 ### Scope of the mandate
 

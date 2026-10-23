@@ -50,8 +50,10 @@ is pruned (a file that held only this block is removed).
 - The secret-scan hook needs `gitleaks` on PATH to run locally (8.24.x
   recommended); without it the hook warns and allows (advisory) — the CI job
   still scans every PR. The hook scans the staged index as it is before the
-  command runs, so a chained `git add ... && git commit` in one command is not
-  covered: stage in a separate call.
+  command runs, so a command that stages and commits in one call is not
+  covered: `git add ... && git commit`, `git commit -a` / `-am` and
+  `git commit -- <path>`. Stage in a separate call (`git add <paths>`, or
+  `git add -u` instead of `-a`), then run a plain `git commit`.
 - `.claude/settings.json` hook entries serve Claude-Code-compatible agent
   sessions; the workflow is the floor for everyone else.
 <!-- verification-scaffold:readme:end -->
