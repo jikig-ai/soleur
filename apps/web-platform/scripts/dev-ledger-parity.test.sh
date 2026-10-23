@@ -3358,6 +3358,19 @@ else
   fail "expected legacy schema protection with zero writes; got rc=$rc out=$out"
 fi
 
+echo "G3-Codex-malformed-protected: a malformed raw 165 row is detected before parsing and blocks every write"
+CASES=$((CASES + 1))
+gh_reset; pr_json 548 "" closed w548
+wledger "163_agent_engine_attempts.sql|$(blob_file CODEX143-legacy-protect)|$(ts 110)" \
+  "165_codex_auth_mode_rebind.sql|synthetic|sha|$(ts 120)"
+run_writer --pr 548 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'protected Codex migration ledger row is malformed' <<<"$out" \
+  && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "malformed Codex protection is not lost when content_sha contains a delimiter"
+else
+  fail "expected malformed protected-row refusal with zero writes; got rc=$rc out=$out"
+fi
+
 echo "G3-Codex163: an ancestor down cannot erase admission evidence while 165 is retained"
 CASES=$((CASES + 1))
 pr_start w541

@@ -195,23 +195,12 @@ class _TLSProxy:
                     connection = http.client.HTTPConnection(proxy.upstream_ip, proxy.upstream_port, timeout=5)
                     connection.request(self.command, target, body, headers)
                     response = connection.getresponse()
-                    response_headers = []
-                    for name, value in response.getheaders():
-                        safe_value = value.replace('\r', '').replace('\n', '') if isinstance(value, str) else None
-                        require(isinstance(name, str) and re.fullmatch(r'[!#$%&\'*+.^_`|~0-9A-Za-z-]+', name)
-                                and safe_value is not None and safe_value == value
-                                and not any(ord(char) < 32 or ord(char) == 127 for char in safe_value),
-                                'Invalid upstream response header refused')
-                        if name.lower() == 'location':
-                            proxy.redirect(safe_value)
-                        require(name.lower() != 'refresh', 'Upstream refresh redirect refused')
-                        response_headers.append((name, safe_value))
+                    # Never reflect upstream-controlled response headers.
+                    # API framing is reconstructed from the bounded body.
+                    require(not 300 <= response.status < 400, 'Upstream redirect response refused')
                     payload = response.read(proxy.LIMIT + 1)
                     require(len(payload) <= proxy.LIMIT, 'Upstream response limit exceeded')
                     self.send_response(response.status)
-                    for name, value in response_headers:
-                        if name.lower() not in proxy.HOP and name.lower() not in ('content-length', 'server', 'date'):
-                            self.send_header(name, value)
                     self.send_header('Content-Length', str(len(payload)))
                     self.end_headers()
                     if self.command != 'HEAD':

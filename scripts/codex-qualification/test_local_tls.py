@@ -152,7 +152,7 @@ class LocalTLS(unittest.TestCase):
 
     def test_actual_https_listener_refuses_foreign_host_before_upstream(self):
         upstream = Mock(side_effect=OSError('Fixture forbids every upstream connection'))
-        status, payload = self.https_response(b'GET / HTTP/1.0\r\nHost: foreign.invalid\r\n\r\n', upstream)
+        status, payload, _headers = self.https_response(b'GET / HTTP/1.0\r\nHost: foreign.invalid\r\n\r\n', upstream)
         self.assertEqual(status, 502)
         self.assertEqual(payload, b'')
         upstream.assert_not_called()
@@ -165,10 +165,12 @@ class LocalTLS(unittest.TestCase):
         connection = Mock()
         connection.getresponse.return_value = response
         upstream = Mock(return_value=connection)
-        status, actual = self.https_response(('GET /auth/v1/fixture_path?name=a%20b HTTP/1.0\r\nHost: ' + self.hostname +
+        status, actual, headers = self.https_response(('GET /auth/v1/fixture_path?name=a%20b HTTP/1.0\r\nHost: ' + self.hostname +
                                              '\r\nConnection: close\r\n\r\n').encode(), upstream)
         self.assertEqual(status, 200)
         self.assertEqual(actual, payload)
+        self.assertNotIn('X-Synthetic', headers)
+        self.assertNotIn('Content-Type', headers)
         upstream.assert_called_once_with('172.28.5.3', 8000, timeout=5)
         connection.request.assert_called_once_with('GET', '/auth/v1/fixture_path?name=a%20b', b'',
                                                    {'Host': self.hostname, 'X-Forwarded-Proto': 'https'})
@@ -176,17 +178,20 @@ class LocalTLS(unittest.TestCase):
         response.read.assert_called_once_with(TLSProxy.LIMIT + 1)
         connection.close.assert_called_once_with()
 
-    def test_actual_https_listener_refuses_upstream_response_header_injection(self):
+    def test_actual_https_listener_never_forwards_upstream_response_headers(self):
         response = Mock(status=200)
         response.getheaders.return_value = [('X-Synthetic', 'safe\r\nX-Injected: yes')]
+        response.read.return_value = b''
         connection = Mock()
         connection.getresponse.return_value = response
         upstream = Mock(return_value=connection)
-        status, payload = self.https_response(('GET /auth/v1/fixture HTTP/1.0\r\nHost: ' + self.hostname +
+        status, payload, headers = self.https_response(('GET /auth/v1/fixture HTTP/1.0\r\nHost: ' + self.hostname +
                                               '\r\nConnection: close\r\n\r\n').encode(), upstream)
-        self.assertEqual(status, 502)
+        self.assertEqual(status, 200)
         self.assertEqual(payload, b'')
-        response.read.assert_not_called()
+        self.assertNotIn('X-Synthetic', headers)
+        response.read.assert_called_once_with(TLSProxy.LIMIT + 1)
+        response.getheaders.assert_not_called()
         connection.close.assert_called_once_with()
 
     def test_foreign_host_oracle_detects_deleted_handler_admission(self):
@@ -225,7 +230,7 @@ class LocalTLS(unittest.TestCase):
                         connection.sendall(request)
                         response = http.client.HTTPResponse(connection)
                         response.begin()
-                        result = response.status, response.read()
+                        result = response.status, response.read(), dict(response.getheaders())
                         response.close()
                         return result
             finally:

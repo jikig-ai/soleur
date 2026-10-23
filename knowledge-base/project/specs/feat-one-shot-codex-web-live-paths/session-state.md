@@ -2683,3 +2683,22 @@
 - CTO ruling, 2026-10-23: if migration 170 fails, the separately committed revoke must remain active until a successful retry. No shared database apply or qualification is authorized in this session. The tenant integration path is currently blocked by legacy-ledger parity before apply.
 - The Node `DEP0205` warning was traced with `--trace-deprecation` to the installed `@tailwindcss/node` package calling deprecated `module.register()`; no repository change was made for that dependency warning. The read-only `/var/tmp` report found 21 quarantined entries and changed nothing; no drain was run.
 - PR #9051 remains draft with auto-merge off. These source and artifact edits are uncommitted and require review, full applicable validation, push, exact-head CI/CodeQL, and the outstanding privacy, runtime, qualification and legal gates.
+
+### Full review and fix preparation — 2026-10-23
+
+- The pushed review head was `9df5c82f76534fa9e7200ebc5b18d94444cdb2e8`; PR #9051 was OPEN/draft/BLOCKED with auto-merge off. The full panel ran in bounded waves under the Codex three-child limit: 31 review seats total, including the design pass, structural enumeration in place of pattern recognition for the migration runner, conditional migration/deployment/test-design lenses, user impact, and Semgrep. Semgrep scanned 90 changed source files and 79 isolated test files; its six reports were inspected false positives (policy text, verified TLS context, and repository-owned mutation fixtures). GDPR review was heuristic/static only, not legal review.
+- Dedup ledger for the actionable findings carried into this fix round:
+
+  | raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+  |---|---|---|---|
+  | CodeQL response splitting from dynamically forwarded upstream headers | security::upstream-header-response-splitting | security-sentinel, semgrep-sast | pending |
+  | CodeQL partial SSRF at the fixed-private TLS request boundary | security::fixed-private-origin-form-request-boundary | security-sentinel, semgrep-sast | pending exact-head CodeQL |
+  | Renumber protection enumerated only three migration pairs | migration-safety::renumber-guard-hardcoded-pairs | structural-enumeration | pending |
+  | Malformed raw 145/165 ledger row lost forward-only protection | migration-safety::malformed-protected-ledger-row | structural-enumeration | pending |
+  | Migration 165 could select arbitrary auth mode on tied latest timestamps | data-integrity::auth-mode-backfill-latest-timestamp-tie | data-migration | pending |
+  | Plan/tasks implied saved-history replay and duplicated scenarios | product-contract::resend-only-history-wording | simplicity, code-quality | pending |
+  | Plan impact coverage omitted direct RPC/foreign-conversation acknowledgment | user-impact::acknowledgment-rpc-owner-scope | user-impact | pending |
+- Fixes now in the worktree: slug-driven old/current migration matching; raw protected-row detection and refusal before reconciliation work; read-only preflight refusal before pending migration 165 on conflicting auth modes at the latest timestamp; no upstream response-header reflection and refusal of redirects; corrected resend-only plan/task language, removed duplicated scenarios, and recorded the owner-scope RPC risk. Migration 165/145 bytes were not changed.
+- Focused verification: migration runner 12/12; local TLS listener 9/9; `dev-ledger-parity.test.sh` 269/269; Shell syntax, Ruff, and `git diff --check` pass. The offline qualification wrapper ran but remains red at two source-identity assertions because its runner pins await independent fix-round review; all preceding offline fixture suites passed. No shared DB query, migration, reconciliation, provider request, or feature-flag mutation occurred.
+- Exact-head CI at `9df5c82` previously failed the expected draft-light aggregate, shared dev tenant parity for legacy rows 149–152 vs renamed 169–172 (10 violations, no write), and CodeQL alerts (critical partial SSRF and medium response splitting in `local_tls.py`). Exact-head CodeQL after the fix is pending. The fix delta is not committed or pushed yet; this worktree's path-based fix review is the next required gate.
+- Remaining holds: shared-ledger parity/reconciliation, exact-head CodeQL and full CI, source-bound review-pin refresh only after independent review, authenticated QA, recovery, runtime/profile qualification, mode-specific CLO/legal review, preflight, final full review/ship gates. Keep PR draft and auto-merge disarmed.

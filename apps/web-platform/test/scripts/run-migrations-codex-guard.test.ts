@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 const scripts = path.resolve(__dirname, "../../scripts");
 
 describe("migration 165 admission in the real migration runner", () => {
-  function captureApply(filename: string, missingGuard = false, legacyRows: string[] = [], migrationBodies: Record<string, string> = {}, failAckPreflight = false, failOwnerScopeApply = false) {
+  function captureApply(filename: string, missingGuard = false, legacyRows: string[] = [], migrationBodies: Record<string, string> = {}, failAckPreflight = false, failOwnerScopeApply = false, failTiePreflight = false) {
     const fixture = mkdtempSync(path.join(tmpdir(), "codex-migration-runner-"));
     try {
       for (const dir of ["scripts/sql", "supabase/migrations", "bin"]) mkdirSync(path.join(fixture, dir), { recursive: true });
@@ -22,6 +22,7 @@ describe("migration 165 admission in the real migration runner", () => {
       writeFileSync(path.join(fixture, "bin/psql"), `#!/usr/bin/env bash
 case "$*" in
   *" -c "*) case "$*" in
+    *"codex_auth_mode_timestamp_tie_count"*) [[ '${failTiePreflight}' == true ]] && printf '1\\n' || printf '0\\n' ;;
     *"SELECT count(*)"*) printf '0\\n' ;;
     *"SELECT filename FROM public._schema_migrations"*) printf '%s\\n' ${legacyRows.map((row) => `'${row}'`).join(" ") || ""} ;;
     *"REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment"*)
@@ -93,10 +94,27 @@ esac
   });
 
   it("checks the whole renamed chain before an earlier pending migration", () => {
-    const result = captureApply("163_agent_engine_attempts.sql", false, ["145_codex_auth_mode_rebind.sql"]);
+    const result = captureApply("163_agent_engine_attempts.sql", false, ["145_codex_auth_mode_rebind.sql"], {
+      "165_codex_auth_mode_rebind.sql": "BEGIN;\\nSELECT 1;\\nCOMMIT;\\n",
+    });
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("legacy migration ledger row 145_codex_auth_mode_rebind.sql");
     expect(result.output).toContain("renamed migration 165_codex_auth_mode_rebind.sql");
+    expect(result.sql).toBe("");
+  });
+
+  it("detects a future legacy/current migration pair by slug without a hardcoded mapping", () => {
+    const result = captureApply("166_synthetic_slug.sql", false, ["146_synthetic_slug.sql"]);
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain("legacy migration ledger row 146_synthetic_slug.sql");
+    expect(result.output).toContain("renamed migration 166_synthetic_slug.sql");
+    expect(result.sql).toBe("");
+  });
+
+  it("refuses migration 165 when latest Codex run timestamps tie across auth modes", () => {
+    const result = captureApply("165_codex_auth_mode_rebind.sql", false, [], {}, false, false, true);
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain("Codex auth-mode backfill has conflicting latest timestamps");
     expect(result.sql).toBe("");
   });
 

@@ -677,17 +677,24 @@ LEDGER_PRE="$LEDGER_OUT"
 declare -a L_F=() L_B=() L_T=()
 suspicious=0
 n_lines=0
+CODEX_SCHEMA_PROTECTED=0
+CODEX_PROTECTED_ROW_MALFORMED=0
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
   n_lines=$((n_lines + 1))
+  raw_filename="${line%%|*}"
+  if [[ "$raw_filename" == "145_codex_auth_mode_rebind.sql" || "$raw_filename" == "165_codex_auth_mode_rebind.sql" ]]; then
+    CODEX_SCHEMA_PROTECTED=1
+    if [[ ! "$line" =~ ^([^|]*)\|([^|]*)\|([0-9]{20})$ ]]; then CODEX_PROTECTED_ROW_MALFORMED=1; fi
+  fi
   if [[ ! "$line" =~ ^([^|]*)\|([^|]*)\|([0-9]{20})$ ]]; then suspicious=$((suspicious + 1)); continue; fi
   if ! name_ok "${BASH_REMATCH[1]}"; then suspicious=$((suspicious + 1)); continue; fi
   L_F+=("${BASH_REMATCH[1]}"); L_B+=("${BASH_REMATCH[2]}"); L_T+=("${BASH_REMATCH[3]}")
 done <<<"$LEDGER_OUT"
-CODEX_SCHEMA_PROTECTED=0
-for f in "${L_F[@]}"; do
-  [[ "$f" == "145_codex_auth_mode_rebind.sql" || "$f" == "165_codex_auth_mode_rebind.sql" ]] && CODEX_SCHEMA_PROTECTED=1
-done
+if [[ "$CODEX_PROTECTED_ROW_MALFORMED" == "1" ]]; then
+  echo "::error::ledger-discard: protected Codex migration ledger row is malformed; refusing before reconciliation so its schema cannot be downgraded without measurable protection"
+  refused codex-forward-only
+fi
 [[ ${#L_F[@]} -gt 0 ]] \
   || cannot_measure config "public._schema_migrations returned no row in the expected <file>|<sha>|<applied_at> shape ($n_lines line(s), $suspicious outside the runner's whitelist) — wrong database or broken query"
 if [[ "$suspicious" -gt 0 ]]; then

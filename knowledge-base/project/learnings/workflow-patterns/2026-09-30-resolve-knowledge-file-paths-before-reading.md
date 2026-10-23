@@ -235,3 +235,17 @@ guessed `plugins/soleur/scripts/git-worktree.sh` path does not exist.
 
 `git worktree list` can enumerate hundreds of unrelated agent worktrees. Pipe
 it through a branch/path filter when only the active task worktree matters.
+
+## Addendum — 2026-10-23 plugin helper path lookup
+
+The session tally is plugin-owned, not repo-root-owned. Resolve pipeline
+tally and review helpers under the installed Soleur root (`local/scripts/`
+and `local/skills/review/scripts/`) instead of guessing their locations in
+the worktree.
+
+## Addendum — 2026-10-23 bounded test-script lookup
+
+A focused test was invoked from the repository root using an app-relative path
+and failed before starting. Resolve script paths with `rg --files` from the
+explicit worktree and invoke the path relative to that same directory (for
+example, `apps/web-platform/scripts/dev-ledger-parity.test.sh`).

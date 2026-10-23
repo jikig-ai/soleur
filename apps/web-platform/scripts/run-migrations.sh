@@ -233,25 +233,31 @@ if [[ -n "$collision_check" ]]; then
   done <<<"$collision_check"
 fi
 
-# These filenames were renumbered after main advanced. The runner is filename-
-# keyed, so a legacy applied row does not make its renamed counterpart applied.
-# Refuse the entire renamed chain before applying any member until an operator
-# explicitly reconciles the ledger after verifying the schema.
-legacy_chain_rows=$(run_sql "SELECT filename FROM public._schema_migrations WHERE filename IN ('143_agent_engine_attempts.sql', '144_codex_auth_mode_rebind.sql', '145_codex_auth_mode_rebind.sql', '163_agent_engine_attempts.sql', '164_codex_auth_mode_rebind.sql', '165_codex_auth_mode_rebind.sql') ORDER BY filename;")
+# The runner is filename-keyed, so a legacy applied row does not make a renamed
+# current migration applied. Discover missing-current ledger names by slug
+# instead of carrying a mapping that can silently miss the next renumber.
+legacy_chain_rows=$(run_sql "SELECT filename FROM public._schema_migrations ORDER BY filename;")
 legacy_chain_refusals=""
 while IFS= read -r tracked_filename; do
-  case "$tracked_filename" in
-    143_agent_engine_attempts.sql) counterpart=163_agent_engine_attempts.sql ;;
-    144_codex_auth_mode_rebind.sql) counterpart=164_codex_auth_mode_rebind.sql ;;
-    145_codex_auth_mode_rebind.sql) counterpart=165_codex_auth_mode_rebind.sql ;;
-    *) continue ;;
-  esac
-  if ! grep -qxF "$counterpart" <<<"$legacy_chain_rows"; then
-    legacy_chain_refusals+="  legacy migration ledger row $tracked_filename has renamed migration $counterpart pending; explicit ledger reconciliation is required after schema verification.\n"
-  fi
+  [[ "$tracked_filename" =~ ^([0-9]{3})_([A-Za-z0-9_-]+)\.sql$ ]] || continue
+  [[ -f "$MIGRATIONS_DIR/$tracked_filename" ]] && continue
+  legacy_prefix="${BASH_REMATCH[1]}"
+  legacy_slug="${BASH_REMATCH[2]}"
+  for candidate_file in "$MIGRATIONS_DIR"/*.sql; do
+    [[ -e "$candidate_file" ]] || continue
+    candidate="$(basename "$candidate_file")"
+    [[ "$candidate" == *.down.sql ]] && continue
+    [[ "$candidate" =~ ^([0-9]{3})_([A-Za-z0-9_-]+)\.sql$ ]] || continue
+    candidate_prefix="${BASH_REMATCH[1]}"
+    candidate_slug="${BASH_REMATCH[2]}"
+    [[ "$candidate_slug" == "$legacy_slug" && "$candidate_prefix" != "$legacy_prefix" ]] || continue
+    if ! grep -qxF "$candidate" <<<"$legacy_chain_rows"; then
+      legacy_chain_refusals+="  legacy migration ledger row $tracked_filename has renamed migration $candidate pending; explicit ledger reconciliation is required after schema verification.\n"
+    fi
+  done
 done <<<"$legacy_chain_rows"
 if [[ -n "$legacy_chain_refusals" ]]; then
-  printf '::error::Legacy Codex migration ledger rows block the renamed migration chain:\n%b' "$legacy_chain_refusals"
+  printf '::error::Legacy migration ledger rows block renamed migrations:\n%b' "$legacy_chain_refusals"
   exit 1
 fi
 
@@ -357,6 +363,37 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   if [[ "$already_applied" -gt 0 ]]; then
     skipped=$((skipped + 1))
     continue
+  fi
+
+  # Migration 165 backfills the workspace mode from the latest Codex
+  # conversation run. Refuse when conflicting modes share that latest
+  # timestamp; ORDER BY created_at alone cannot choose deterministically.
+  if [[ "$filename" == "165_codex_auth_mode_rebind.sql" ]]; then
+    codex_auth_mode_timestamp_tie_count=$(run_sql "/* codex_auth_mode_timestamp_tie_count */
+      SELECT count(*)
+        FROM (
+          SELECT r.workspace_id
+            FROM public.agent_engine_runs AS r
+            JOIN public.workspace_engine_settings AS s ON s.workspace_id = r.workspace_id
+           WHERE s.default_engine_id IS DISTINCT FROM 'codex'
+             AND r.execution_kind = 'conversation'
+             AND r.engine_id = 'codex'
+             AND r.auth_mode IN ('managed', 'api-key')
+             AND r.created_at = (
+               SELECT max(latest.created_at)
+                 FROM public.agent_engine_runs AS latest
+                WHERE latest.workspace_id = r.workspace_id
+                  AND latest.execution_kind = 'conversation'
+                  AND latest.engine_id = 'codex'
+                  AND latest.auth_mode IN ('managed', 'api-key')
+             )
+           GROUP BY r.workspace_id
+          HAVING count(DISTINCT r.auth_mode) > 1
+        ) AS conflicting_latest_modes;")
+    if [[ ! "$codex_auth_mode_timestamp_tie_count" =~ ^[0-9]+$ || "$codex_auth_mode_timestamp_tie_count" -gt 0 ]]; then
+      echo "::error::Codex auth-mode backfill has conflicting latest timestamps; resolve the affected workspace state before migration 165. No migration was applied."
+      exit 1
+    fi
   fi
 
   # Schema-presence probe (#4338). Before applying a migration, extract
