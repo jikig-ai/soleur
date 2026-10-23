@@ -260,6 +260,10 @@ else fail "S9c: git-data-gc.service does not declare RuntimeDirectory=git-data-g
 # floor, reported as such) — and under CI=true that is a failure, because the runner must
 # provide the dependency (the rehearsal suite's _skip has the same contract).
 RUNTIME_ROWS=10   # R1..R10; R9 runs a REAL forced command through sshd under the template's login shell
+# The apt-bearing container's output holds the helper's 20-line credential-scrubbed apt tail plus the FIXTURE_APT_CAUSE
+# line (lib/apt-bounded.sh scrubs it before it is printed). A 2-5 line tail shows only the cause and drops the stalled
+# phase (#10781); when the cause line is present show the whole block, otherwise the usual short tail.
+_out_tail() { if grep -q '^FIXTURE_APT_CAUSE:' "$1" 2>/dev/null; then tail -n 24 "$1"; else tail -n "$2" "$1"; fi; }
 _runtime_skip() {
   if [ "${CI:-}" = "true" ]; then
     fail "runtime arm: $1 — and CI=true, so this is a FAILURE: the runner must provide docker"
@@ -360,9 +364,9 @@ DRV
     _allow ssh_auth_shipped && [ "$(_rv ssh_auth_shipped_ran)" = 1 ] && pass "R9: sshd accepts the key at the shipped literals AND the forced command RUNS under the template's login shell ($GIT_SHELL)" || fail "R9: the forced command did not run through sshd (rc=$(_rv ssh_auth_shipped), ran=$(_rv ssh_auth_shipped_ran)) — unreadable map, StrictModes, or a login shell that refuses '<shell> -c'" "$(_rv ssh_auth_shipped_out | head -c 200)"
     _deny ssh_auth_control_0600 && pass "R10: NEGATIVE CONTROL — root:root 0600 is refused by sshd (R9 can fail)"     || fail "R10: the negative control was ACCEPTED — R9 proves nothing" "rc=$(_rv ssh_auth_control_0600)"
   elif grep -qx FIXTURE_APT_FAILED "$TMP/out/stdout" || [ "$DRC" = 125 ]; then
-    _runtime_skip "container did not reach the fixture (docker rc=$DRC): $(tail -2 "$TMP/out/stdout" | tr '\n' ' ')"
+    _runtime_skip "container did not reach the fixture (docker rc=$DRC): $(_out_tail "$TMP/out/stdout" 2 | tr '\n' ' ')"
   else
-    fail "runtime arm: the driver did not complete (docker rc=$DRC)" "$(tail -5 "$TMP/out/stdout" | tr '\n' ' ')"
+    fail "runtime arm: the driver did not complete (docker rc=$DRC)" "$(_out_tail "$TMP/out/stdout" 5 | tr '\n' ' ')"
     SKIPPED=$((SKIPPED + RUNTIME_ROWS - 1))
   fi
 fi
