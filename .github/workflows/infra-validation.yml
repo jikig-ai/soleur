@@ -408,7 +408,9 @@ jobs:
           # annotation — inside the $() above it could only reach stderr.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
-              is_plan_skipped "$d" && echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
+              if is_plan_skipped "$d"; then
+                echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
+              fi
             done
           fi
 
