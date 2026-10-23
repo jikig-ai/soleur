@@ -5,7 +5,7 @@ import { parse } from "url";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { basename as pathBasename } from "path";
 
-import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode } from "@/lib/types";
+import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode, type AttachmentRef } from "@/lib/types";
 import { ByokDelegationError } from "@/server/byok-resolver";
 import type { ConversationContext } from "@/lib/types";
 import {
@@ -1291,6 +1291,7 @@ async function persistCodexNoticeDelivery(userId: string, notice: Omit<CodexNoti
   // Retrying the same nonce is safe even when the first write committed but its
   // response was lost. Bound each wait so a fast acknowledgment cannot hang.
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const requestController = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
@@ -1299,9 +1300,12 @@ async function persistCodexNoticeDelivery(userId: string, notice: Omit<CodexNoti
           p_auth_mode_generation: notice.authModeGeneration,
           p_member_user_id: userId,
           p_nonce_hash: notice.nonceHash,
-        }),
+        }).abortSignal(requestController.signal),
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error("Codex notice delivery persistence timed out")), 5_000);
+          timeout = setTimeout(() => {
+            requestController.abort();
+            reject(new Error("Codex notice delivery persistence timed out"));
+          }, 5_000);
         }),
       ]);
       if (result.error || result.data !== true) {
@@ -1312,6 +1316,7 @@ async function persistCodexNoticeDelivery(userId: string, notice: Omit<CodexNoti
       reportSilentFallback(error, { feature: "codex-history-transfer", op: "mark-notice-delivered" });
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
+      requestController.abort();
     }
   }
   return false;
@@ -1585,7 +1590,7 @@ export async function dispatchSoleurGoForConversation(
   userMessage: string,
   routing: ConversationRouting,
   context?: ConversationContext,
-  attachments?: import("@/lib/types").AttachmentRef[],
+  attachments?: AttachmentRef[],
   sessionId?: string | null,
   /**
    * feat-cc-cap-raise-resume (#9565) — cached

@@ -4,6 +4,8 @@ import * as credentials from "@/server/codex-credential-provider";
 import * as codexRuntimeModule from "@/server/codex-conversation-runtime";
 import { createEngineRegistry } from "@/server/agent-engine-registry";
 
+type SyntheticRpcArgs = Record<string, unknown> & { p_attempt_key?: string };
+
 const fixture = vi.hoisted(() => ({
   userId: "synthetic-codex-user",
   conversationId: "synthetic-codex-conversation",
@@ -13,7 +15,8 @@ const fixture = vi.hoisted(() => ({
   generation: 0,
   tenantGate: null as Promise<void> | null,
   tenantMintStarted: vi.fn(),
-  rpc: vi.fn(async (_name: string): Promise<{ data: unknown; error: null }> => ({ data: null, error: null })),
+  rpc: vi.fn(async (_name: string, _args?: SyntheticRpcArgs): Promise<{ data: unknown; error: null }> => ({ data: null, error: null })),
+  rpcStarts: vi.fn((_name: string, _signal?: AbortSignal) => {}),
   from: vi.fn(),
   spawn: vi.fn(() => { throw new Error("Unexpected provider process launch"); }),
   captureException: vi.fn(),
@@ -24,7 +27,22 @@ const fixture = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({ rpc: fixture.rpc, from: fixture.from }),
+  createServiceClient: () => ({
+    // PostgREST configures abortSignal synchronously and starts fetch only when
+    // its thenable is awaited. Keep that ordering observable in timeout tests.
+    rpc: (name: string, args?: SyntheticRpcArgs) => {
+      let signal: AbortSignal | undefined;
+      const builder = {
+        abortSignal(value: AbortSignal) { signal = value; return builder; },
+        then(onFulfilled: (value: { data: unknown; error: null }) => unknown, onRejected: (reason: unknown) => unknown) {
+          fixture.rpcStarts(name, signal);
+          return fixture.rpc(name, args).then(onFulfilled, onRejected);
+        },
+      };
+      return builder;
+    },
+    from: fixture.from,
+  }),
 }));
 vi.mock("@/lib/supabase/tenant", () => ({
   getFreshTenantClient: vi.fn(async () => {
@@ -77,6 +95,7 @@ describe("Codex real production handler boundary", () => {
     fixture.tenantGate = null;
     fixture.tenantMintStarted.mockReset();
     fixture.rpc.mockReset().mockResolvedValue({ data: null, error: null });
+    fixture.rpcStarts.mockReset();
     vi.useFakeTimers();
     fixture.from.mockImplementation((table: string) => {
       const chain: Record<string, unknown> = {};
@@ -348,6 +367,31 @@ describe("Codex real production handler boundary", () => {
     await acknowledgeNotice(client.frames()[0].noticeNonce);
     expect(client.frames()).toContainEqual(expect.objectContaining({ type: "codex_history_transfer_acknowledged" }));
     expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+
+  it("aborts each stalled marker fetch before retrying and leaves no active signal after timeout", async () => {
+    fixture.generation = 1;
+    noticeSession();
+    const markerSignals: AbortSignal[] = [];
+    fixture.rpcStarts.mockImplementation((name, signal) => {
+      if (name !== "mark_codex_history_transfer_notice_delivered") return;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(markerSignals.every((previous) => previous.aborted)).toBe(true);
+      expect(signal?.aborted).toBe(false);
+      markerSignals.push(signal!);
+    });
+    fixture.rpc.mockImplementation(async (name: string) => {
+      if (name === "codex_history_transfer_acknowledged") return { data: false, error: null };
+      if (name === "mark_codex_history_transfer_notice_delivered") return new Promise<never>(() => {});
+      return { data: true, error: null };
+    });
+    const turn = noticeChat();
+    await vi.waitFor(() => expect(fixture.rpcStarts).toHaveBeenCalledWith("mark_codex_history_transfer_notice_delivered", expect.anything()));
+    await vi.advanceTimersByTimeAsync(10_001);
+    await turn;
+    expect(markerSignals).toHaveLength(2);
+    expect(markerSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(fixture.rpc.mock.calls.filter(([name]) => name === "mark_codex_history_transfer_notice_delivered")).toHaveLength(2);
   });
 
   it("does not let an unrelated nonce trigger privileged delivery recovery", async () => {

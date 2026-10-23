@@ -65,3 +65,13 @@ polled from the lead's tool session; ask the owning agent for its final verdict.
 An anchored hook-name probe used the wrong indentation and matched nothing;
 the corrected key-name lookup found the hooks. The installed plugin lacks the
 CI-only hook-exclusion reference present in this worktree; no exclusion was used.
+
+Semgrep's `auto` configuration requires metrics, so the metrics-disabled rerun
+used explicit JavaScript, TypeScript, Python, OWASP and local custom packs.
+The default engine crashed before scanning on `io_uring_queue_init`; the
+documented `EIO_BACKEND=posix` and single-worker rerun completed. A TypeScript
+inline import type caused a partial parse; replacing it with the equivalent
+named type import restores scanner coverage. A TLS finding matched a forbidden
+configuration string in policy data, not an executed setting. The cancellation
+regression's first TypeScript run found a mock argument type too broad for an
+existing implementation; the corrected record type passed the compiler.

@@ -50,6 +50,18 @@ This branch has no `spec.md` with a valid `lane:`; planning defaults to `cross-d
 - **Brand-survival threshold:** `single-user incident`. CPO plan sign-off and the review-time user-impact reviewer are required before shipment; CTO reviews the launcher, egress and credential contract. CLO approval is mode-specific and applies to customer data, not the technical implementation.
 - **User-impact review coverage:** A member must not bypass the notice or acknowledge another member's conversation through a direct authenticated RPC. Migrations 169/170 revoke public/anonymous access, scope both acknowledgment functions to the conversation owner, and grant authenticated execution only after the owner-scoped definitions are installed. Runner/static tests cover grant ordering and owner predicates; unauthorized and cross-tenant calls remain a required isolated database test before qualification.
 
+- **Notice delivery persistence fails or races acknowledgment:** an owner could
+  receive a notice whose acknowledgment is rejected before the delivery marker
+  commits, or lose the usable notice to a generic error. The socket-session and
+  nonce-bound barrier waits for marking; same-nonce retries preserve its first
+  delivery time. Persistent failure retains the notice for an explicit retry,
+  without sending content to a provider. Each marker attempt has a five-second
+  deadline that aborts its fetch before retry; the marker's idempotence handles
+  a commit whose response was lost. Replacement sessions and wrong nonces cannot
+  inherit the wait or acknowledgment. The handler regressions and disposable
+  migration integration cover these cases. The nonce establishes payload
+  possession, not visual presentation; the CLO presentation-proof hold remains.
+
 - **Ambiguous provider-turn billing:** if App Server `turn/start` returns an
   authorization or transport error before emitting events, the provider may
   have accepted the request even though this service has no turn ID or usage
