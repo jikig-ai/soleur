@@ -235,7 +235,8 @@ export async function deleteAccount(
       );
     }
   } catch (err) {
-    log.warn({ userIdHash: hashUserId(userId), err }, "Session drain wait threw (non-fatal)");
+    const userIdHash = hashUserId(userId);
+    log.warn({ userIdHash, err }, "Session drain wait threw (non-fatal)");
   }
 
   // deleteWorkspace reaps EVERY tenant root (WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>,
