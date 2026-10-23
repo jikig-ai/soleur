@@ -185,8 +185,8 @@ runs:
           # THE LEGACY ARM SUPPLIES A READ-ONLY HETZNER TOKEN AND NOTHING ELSE (#9927 item 8b).
           #
           # Several Tier-B steps read `$HCLOUD_TOKEN` from the JOB environment rather than
-          # from inside a `doppler run` wrapper -- the stock-preflight gates, the drift
-          # orphan sweep, the rung-2 hard reset, the root-key fingerprint attestation. Census
+          # from inside a `doppler run` wrapper -- the stock-preflight gates, the
+          # rung-2 hard reset, the root-key fingerprint attestation (the drift orphan sweeps left the loader on 2026-10-23). Census
           # row G1g forbids reading a Tier-B name from `prd_terraform` outside THIS action, so
           # the read belongs here, not nowhere (deleting it would make every one of those steps
           # abort on an empty token).
