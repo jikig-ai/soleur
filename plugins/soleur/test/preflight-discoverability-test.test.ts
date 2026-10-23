@@ -2857,7 +2857,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (a double-quoted scalar). TRUTH: the probe (`curl -fsS https://deploy.soleur.ai/hooks/deploy-status`)
   // signs the GET with a WEBHOOK_DEPLOY_SECRET HMAC over the empty body plus the
   // CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET service-token pair (Doppler soleur/prd_terraform) —
-  // the same credential shape `scripts/followthroughs/workspace-isolation-verdict-2640.sh` uses.
+  // the same credential shape the retired workspace-isolation soak probe used (G1 PR-4a, #10937; history in git).
   // NO SUBSTITUTE: the endpoint answers 403 without them and the `.workspace_isolation` verdict lives
   // only in the deploy host's state file surfaced through that gate, so no unauthenticated read can
   // verify the live verdict. Genuine.
