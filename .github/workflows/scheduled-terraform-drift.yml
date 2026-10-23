@@ -2653,15 +2653,16 @@ jobs:
             echo "has forgotten the resource, the dispatch will say so instead of exiting 0."
             echo ""
             echo "If that arm reports survivors, they are unreachable through Terraform. The block"
-            echo "below only makes GET calls (the token it loads is still the read/write one): it"
-            echo "lists every object still carrying the rehearsal label, with its id. Reclaiming a"
+            echo "below only makes GET calls (it loads the read-only Hetzner token, with no"
+            echo "read/write fallback): it lists every object still carrying the rehearsal label,"
+            echo "with its id. Reclaiming a"
             echo "survivor is a Hetzner write, so an agent session names each exact call and runs"
             echo "it only after the owner's per-command go-ahead; it is never a command to paste"
             echo "from an issue body. The procedure is the \"Reclaiming survivors that state"
             echo "forgot\" section of the inngest-provision-rehearsal runbook."
             echo ""
             echo '```bash'
-            echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"'
+            echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)"'
             echo '# READ-ONLY: list every stranded rehearsal object with its id'
             echo 'for k in servers volumes ssh_keys firewalls; do'
             echo '  curl -sS -H "Authorization: Bearer $TOKEN" \'
@@ -2979,15 +2980,15 @@ jobs:
             echo ""
             echo "Dispatch **inngest provision forced-race rehearsal** with \`teardown_only=true\`."
             echo "That arm exists for exactly this case. If state has forgotten the resource,"
-            echo "the block below only makes GET calls (the token it loads is still the"
-            echo "read/write one): it lists every object still carrying the rehearsal label, with"
-            echo "its id. Reclaiming a survivor is a Hetzner write, so an agent session names each"
+            echo "the block below only makes GET calls (it loads the read-only Hetzner token,"
+            echo "with no read/write fallback): it lists every object still carrying the rehearsal"
+            echo "label, with its id. Reclaiming a survivor is a Hetzner write, so an agent session names each"
             echo "exact call and runs it only after the owner's per-command go-ahead; it is never"
             echo "a command to paste from an issue body. The procedure is the \"Reclaiming"
             echo "survivors that state forgot\" section of the inngest-provision-rehearsal runbook."
             echo ""
             echo '```bash'
-            echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"'
+            echo 'TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)"'
             echo '# READ-ONLY: list every stranded rehearsal object with its id'
             echo 'for k in servers volumes ssh_keys firewalls; do'
             echo '  curl -sS -H "Authorization: Bearer $TOKEN" \'

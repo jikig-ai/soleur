@@ -70,8 +70,11 @@ WORK="$(mktemp -d "${TMPDIR%/}/infra-credentials-test.XXXXXXXX")"
 assert_fixture_dir "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
-rc=0
-python3 - "$ACTION_YML" "$WORK/loader.sh" <<'PY' || rc=$?
+# One extraction function, used for the real action AND for the Guard 1 mutants below: a mutant
+# that went through a different (or no) marker check could be a truncated program that parses
+# and answers.
+extract_loader() { # <action.yml> <out.sh>
+  python3 - "$1" "$2" <<'PY'
 import sys, yaml
 action = yaml.safe_load(open(sys.argv[1]))
 steps = action["runs"]["steps"]
@@ -86,18 +89,23 @@ if body is None:
 # Refuse a truncated extraction. A program that parses and answers is worse than an
 # absent one: it produces a verdict about the SUT from an instrument that is broken.
 for marker in ("PRIV_BUCKET=", "META_FILTER=", "git_data_root_state_pair_half_set",
-               "privileged_source_missing", "MIN_EXPORTED=", "GAR_NAME="):
+               "privileged_source_missing", "legacy_hcloud_readonly_absent",
+               "MIN_EXPORTED=", "GAR_NAME="):
     if marker not in body:
         print(f"EXTRACTION LOST A DEFINING CONSTRUCT: {marker!r}", file=sys.stderr)
         sys.exit(3)
 open(sys.argv[2], "w").write(body)
 PY
+}
+rc=0
+extract_loader "$ACTION_YML" "$WORK/loader.sh" || rc=$?
 if [[ "$rc" -ne 0 ]]; then
   printf 'CANNOT EXTRACT LOADER BODY (rc=%s) — every row below would be void.\n' "$rc" >&2
   exit 2
 fi
 
 # ---- The stub ------------------------------------------------------------
+assert_fixture_dir "$WORK"
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/doppler" <<'STUB'
 #!/usr/bin/env bash
@@ -140,6 +148,7 @@ case "$args" in
 esac
 
 echo "STUB-MISS: doppler $args" >&2
+echo "MISS: doppler $args" >> "$STUB_CALLS"
 exit 64
 STUB
 chmod +x "$WORK/bin/doppler"
@@ -178,7 +187,7 @@ run_loader() {
     STUB_EXPECT_LEGACY_TOKEN="${STUB_EXPECT_LEGACY_TOKEN:-dp.st.LEGACY-FIXTURE}" \
     GITHUB_ENV="$case_dir/github_env" \
     GITHUB_OUTPUT="$case_dir/github_output" \
-    bash --noprofile --norc -eo pipefail "$WORK/loader.sh" \
+    bash --noprofile --norc -eo pipefail "${LOADER_SH:-$WORK/loader.sh}" \
     > "$case_dir/stdout" 2> "$case_dir/stderr"
   LOADER_RC=$?
   set -e
@@ -202,6 +211,15 @@ env_keys() {
 }
 env_has() { grep -qE "^$1<<" "$LOADER_DIR/github_env"; }
 said()    { grep -qF -- "$1" "$LOADER_DIR/stdout"; }
+
+env_last() { # <name> — the LAST value $GITHUB_ENV assigns to <name>; prints nothing and returns 1 if none
+  awk -v k="$1" '
+    pending != "" { if ($0 == pending) { pending = ""; if (cur == k) { val = body; found = 1 } } else { body = (nb++ ? body "\n" : "") $0 }; next }
+    /^[A-Za-z_][A-Za-z0-9_]*<[<]/ { cur = $0; sub(/<[<].*/, "", cur); pending = $0; sub(/^[^<]*<[<]/, "", pending); body = ""; nb = 0; next }
+    /^[A-Za-z_][A-Za-z0-9_]*=/ { cur = $0; sub(/=.*/, "", cur); if (cur == k) { val = $0; sub(/^[^=]*=/, "", val); found = 1 } }
+    END { if (found) { printf "%s", val; exit 0 } exit 1 }
+  ' "$LOADER_DIR/github_env"
+}
 
 # A realistic payload: the metadata keys Doppler always injects, a multi-line PEM, and
 # the git-data state pair.
@@ -425,20 +443,49 @@ grep -qF -- "ro-token" "$LOADER_DIR/github_env" \
   && pass "row1b: prefers the READ-ONLY token when present" \
   || fail "row1b: exported value is not the read-only token"
 
-# ROW 1c — the before-state fallback. Until operator step O5 mints HCLOUD_TOKEN_READONLY
-# the read-only name does not exist, and the read/write token must still be supplied or
-# the same outage occurs for the whole merge->O5 window.
-STUB_HCLOUD_RO="" STUB_HCLOUD_RW="rw-token" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
-grep -qF -- "rw-token" "$LOADER_DIR/github_env" \
-  && pass "row1c: falls back to the read/write token before O5" \
-  || fail "row1c: no fallback — merge->O5 window has no Hetzner token"
+# ROW 1c — (#9927 item 8b, CTO F2b/F6) THERE IS NO FALLBACK TO THE READ/WRITE TOKEN. The
+# old row asserted the opposite ("falls back to the read/write token before O5") for the
+# merge->O5 window; O5 and O10 are both done (measured 2026-10-20: the read-only name is
+# listed in prd_terraform and the read/write name is gone), so the window is spent and the
+# fallback is dead code that would silently hand a destroy-capable token to a job that only
+# reads. With ONLY the read/write token present the arm must: exit 0 (three callers never
+# touch Hetzner; a non-zero exit would break them), export NOTHING named HCLOUD_TOKEN, never
+# request the read/write name, never let the read/write sentinel reach the env file or the
+# log, and say so with a named verdict whose first suspect is the missing Tier-B secret.
+RW_SENTINEL="rw-sentinel-DO-NOT-LEAK-7c1"
+bare_rw_read() { grep -qE 'secrets get HCLOUD_TOKEN( |$)' "$LOADER_DIR/calls"; }
+# A refused (unmodelled) argv. The SUT's own `|| legacy_hcloud=""` turns the stub's exit 64 into an empty value, so without this
+# the stub's refusal is invisible: a read through ANY other spelling (`doppler run -- printenv HCLOUD_TOKEN`) stayed green.
+loader_miss() { grep -q '^MISS:' "$LOADER_DIR/calls"; }
+# A value-echo probe: a non-blank bad value appearing in ANY stream means an annotation carried the value.
+echoed() { if [[ "$1" == *[![:space:]]* ]]; then sentinel_leaked "$1"; else return 1; fi; }
+sentinel_leaked() { # <sentinel> — in the env file, the log, or the step output
+  grep -qF -- "$1" "$LOADER_DIR/github_env" "$LOADER_DIR/stdout" "$LOADER_DIR/stderr" "$LOADER_DIR/github_output"
+}
+STUB_HCLOUD_RO="" STUB_HCLOUD_RW="$RW_SENTINEL" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+[[ "$LOADER_RC" -eq 0 ]] && pass "row1c: only the read/write token present is still rc 0 (non-Hetzner callers)" || fail "row1c: rc=$LOADER_RC"
+env_has "HCLOUD_TOKEN" && fail "row1c: exported HCLOUD_TOKEN from a read-only reader's job (the read/write token reached the env)" \
+  || pass "row1c: exports no HCLOUD_TOKEN"
+loader_miss && fail "row1c: the arm tried an argv the stub does not model (a second read path)" || pass "row1c: the arm read only through modelled argv"
+sentinel_leaked "$RW_SENTINEL" && fail "row1c: the read/write sentinel reached the env file, the log or the output" \
+  || pass "row1c: the read/write sentinel appears in no stream"
+bare_rw_read && fail "row1c: the arm REQUESTED the read/write token from prd_terraform" \
+  || pass "row1c: the read log never lists the read/write name"
+grep -qE 'secrets get HCLOUD_TOKEN_READONLY ' "$LOADER_DIR/calls" \
+  && pass "row1c: the read-only name WAS requested (the negative above is not vacuous)" \
+  || fail "row1c: the read-only name was never requested — the 'never requested' rows above proved nothing"
+said "::error title=infra-privileged::source=legacy verdict=legacy_hcloud_readonly_absent" \
+  && pass "row1c: loud ::error with the named verdict" || fail "row1c: no named ::error verdict"
+grep -qE 'verdict=legacy_hcloud_readonly_absent.*privileged_source_missing' "$LOADER_DIR/stdout" \
+  && pass "row1c: the verdict names privileged_source_missing as the likelier root cause" \
+  || fail "row1c: the verdict does not point at the missing Tier-B secret first"
 
-# ROW 1d — neither present: a WARNING, not a hard failure. A Tier-A job that never touches
-# Hetzner is a legitimate caller, and every consumer already fail-closes loudly on an empty
-# token while naming its own gate. Making this fatal would break those callers.
+# ROW 1d — neither present: the SAME verdict, still rc 0 (a Tier-A job that never touches
+# Hetzner is a legitimate caller and every consumer already fail-closes loudly on an empty
+# token while naming its own gate), nothing exported, and not reported as an auth failure.
 STUB_HCLOUD_RO="" STUB_HCLOUD_RW="" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
 [[ "$LOADER_RC" -eq 0 ]] && pass "row1d: no Hetzner token is not fatal for a non-Hetzner caller" || fail "row1d: rc=$LOADER_RC"
-said "hcloud_token=absent" && pass "row1d: names the condition" || fail "row1d: silent"
+said "verdict=legacy_hcloud_readonly_absent" && pass "row1d: names the condition" || fail "row1d: silent"
 # ...and names it as an ABSENCE, never as an auth failure. The two send an operator to
 # opposite places: "absent" is the expected state after O10 and needs no action, while a
 # rejected token means the DOPPLER_TOKEN repo secret is broken. Conflating them is what
@@ -496,11 +543,77 @@ else
 fi
 # Non-vacuity: the parser must be able to SEE a key, or the assertion above passes because
 # it found nothing at all rather than because nothing was injected.
+# (#9927 item 8b) A multi-line value is not a bearer token. Before this change it was
+# CONTAINED (exported whole through the heredoc form); the shape check now REFUSES it
+# outright, so the injection never reaches $GITHUB_ENV at all. The heredoc form and the
+# per-line mask stay as the second line of defence for a value the shape check admits.
+env_has "HCLOUD_TOKEN" && fail "row1f: a multi-line read-only value was exported (the shape check did not refuse it)" \
+  || pass "row1f: a multi-line read-only value is refused, not exported"
+said "verdict=legacy_hcloud_readonly_unusable" \
+  && pass "row1f: the refusal is NAMED (unusable, not absent)" \
+  || fail "row1f: the multi-line value was refused silently or as a different verdict"
+# Non-vacuity: the parser must still be able to SEE a key in the file the same fixture
+# class writes, or the BASH_ENV assertion above passes because it found nothing at all.
+STUB_HCLOUD_RO="ro.tok-VALID_1~2+3/4=" STUB_HCLOUD_RW="" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
 env_keys | grep -cx >/dev/null 'HCLOUD_TOKEN' \
   && pass "row1f: the env parser resolves the real key (the check is not vacuous)" \
   || fail "row1f: env parser found no keys — the injection assertion above proved nothing"
-env_has "HCLOUD_TOKEN" && pass "row1f: the value is still exported (contained, not dropped)" \
-  || fail "row1f: containment dropped the value"
+
+# ROW 1h — SHAPE GUARD (Guard 1 mutation 8). `[[ -n "$v" ]]` accepts a whitespace-only value,
+# which would then be masked, exported and used as a bearer token. A whitespace-only and a
+# metacharacter value must each yield the NAMED refusal and NO export; a non-canonical but
+# VALID value (every character the bearer charset allows) must still be exported verbatim.
+for bad in "   " "tok en" 'tok$(id)' "tok;rm" "tok'q" 'tok"q' "tok|x" "tok&x"; do
+  STUB_HCLOUD_RO="$bad" STUB_HCLOUD_RW="$RW_SENTINEL" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+  if env_has "HCLOUD_TOKEN" || sentinel_leaked "$RW_SENTINEL" || ! said "verdict=legacy_hcloud_readonly_unusable" || echoed "$bad" || loader_miss; then
+    fail "row1h: unusable read-only value [$(printf '%s' "$bad" | tr ' ' '_')] was exported, not named, echoed into a stream, or read through an unmodelled argv"
+  else
+    pass "row1h: unusable read-only value [$(printf '%s' "$bad" | tr ' ' '_')] is refused by name and not exported"
+  fi
+done
+VALID_RO="aZ09._~+/=-valid"
+STUB_HCLOUD_RO="$VALID_RO" STUB_HCLOUD_RW="$RW_SENTINEL" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+[[ "$(env_last HCLOUD_TOKEN)" == "$VALID_RO" ]] \
+  && pass "row1h: a non-canonical but VALID read-only value is exported verbatim (must-pass)" \
+  || fail "row1h: the valid read-only value was altered or dropped"
+sentinel_leaked "$RW_SENTINEL" && fail "row1h: with both tokens present the read/write sentinel reached a stream" \
+  || pass "row1h: with both tokens present the read/write sentinel appears in no stream"
+bare_rw_read && fail "row1h: with both tokens present the arm still requested the read/write name" \
+  || pass "row1h: with both tokens present the read log never lists the read/write name"
+
+# ROW 1i — the new ::error strings are STATIC. A `${` in an annotation text is an expansion of
+# something the loader read; the verdict lines must never be able to carry a value.
+if awk '/legacy_hcloud_readonly_(absent|unusable)/ && /\$[A-Za-z_{(]/ {bad=1} END {exit bad ? 0 : 1}' "$ACTION_YML"; then
+  fail "row1i: a legacy_hcloud_readonly_* annotation contains an expansion"
+else
+  pass "row1i: the legacy_hcloud_readonly_* annotations are static text"
+fi
+
+# ======================================================================
+# GUARD 1 MUTANTS (#9927 item 8b). Each mutant is the REAL action.yml with one edit, extracted
+# through the SAME function (and the same truncation markers) and driven by the SAME harness.
+# A mutant row asserts the mutation LANDED (cmp against the original) and that the
+# corresponding row above goes RED on it -- a mutation that did not land reports the baseline,
+# which is indistinguishable from a pass.
+# ======================================================================
+mutant_reds() { # <sed-expr> <label> — 0 when the mutant EXPORTS the read/write token or requests it
+  local label="$2" mut="$WORK/action.mut1.yml" msh="$WORK/loader.mut1.sh"
+  assert_fixture_dir "$WORK"
+  sed -E "$1" "$ACTION_YML" > "$mut"
+  if cmp -s "$ACTION_YML" "$mut"; then fail "mutant $label: the mutation did not land"; return 0; fi
+  if ! extract_loader "$mut" "$msh" 2>/dev/null; then fail "mutant $label: the mutant could not be extracted (markers lost)"; return 0; fi
+  LOADER_SH="$msh" STUB_HCLOUD_RO="" STUB_HCLOUD_RW="$RW_SENTINEL" run_loader "" "dp.st.LEGACY-FIXTURE" "" "{}"
+  if env_has "HCLOUD_TOKEN" || bare_rw_read || sentinel_leaked "$RW_SENTINEL"; then
+    pass "mutant $label: caught (the read/write token is requested, exported or leaked)"
+  else
+    fail "mutant $label: SURVIVED -- the rows above cannot see this mutation"
+  fi
+}
+# 1: the arm reads the read/write name instead of the read-only one.
+mutant_reds 's/secrets get HCLOUD_TOKEN_READONLY --plain/secrets get HCLOUD_TOKEN --plain/' "read-the-read-write-name"
+# 4: indirection -- the name comes from a variable defaulting to the read/write one, so a
+# grep on the literal cannot see it; only the recorded read can.
+mutant_reds 's/secrets get HCLOUD_TOKEN_READONLY --plain/secrets get "${rw_name:-HCLOUD_TOKEN}" --plain/' "indirection-via-variable"
 
 # ROW 1e — the Tier-B arm must NOT make these Tier-A reads. In tier_b mode the value comes
 # from the privileged project; reading prd_terraform there would re-introduce exactly the
@@ -522,14 +635,6 @@ grep -q 'secrets get HCLOUD_TOKEN' "$LOADER_DIR/calls" \
 # there is one (Actions applies them in order), else the value a `DOPPLER_TOKEN_WRITE` holder
 # planted in `prd_terraform`. The vendor side of the precedence is row 9 (real CLI).
 # ======================================================================
-env_last() { # <name> — the LAST value $GITHUB_ENV assigns to <name>; prints nothing and returns 1 if none
-  awk -v k="$1" '
-    pending != "" { if ($0 == pending) { pending = ""; if (cur == k) { val = body; found = 1 } } else { body = (nb++ ? body "\n" : "") $0 }; next }
-    /^[A-Za-z_][A-Za-z0-9_]*<[<]/ { cur = $0; sub(/<[<].*/, "", cur); pending = $0; sub(/^[^<]*<[<]/, "", pending); body = ""; nb = 0; next }
-    /^[A-Za-z_][A-Za-z0-9_]*=/ { cur = $0; sub(/=.*/, "", cur); if (cur == k) { val = $0; sub(/^[^=]*=/, "", val); found = 1 } }
-    END { if (found) { printf "%s", val; exit 0 } exit 1 }
-  ' "$LOADER_DIR/github_env"
-}
 PLANTED="planted-by-a-prd_terraform-writer"
 effective_tfvar() { env_last TF_VAR_github_app_runtime_doppler_token || printf '%s' "$PLANTED"; }
 # Synthesized, split across concatenation so no contiguous token-shaped literal sits in source.
@@ -709,6 +814,123 @@ else
   printf '[skip] row9: no authorized Doppler CLI; the static Guard 2 census row still covers this\n'
 fi
 
+# ======================================================================
+# SITE B (#9927 item 8b) -- the infra-validation PR-plan step "Tier-A plan credentials
+# (bounded substitutes)". It is a read-only Hetzner token reader that used to fall back to the
+# read/write name, runs on `pull_request`, and had NO suite: the census read its fallback only if
+# the config was named with `-c`, and it is named by the step's `env:`. Extracted by NAME from the
+# workflow and EXECUTED under the runner's shell against a stub, like the loader above.
+# ======================================================================
+INFRA_VALIDATION_YML="$HERE/../../workflows/infra-validation.yml"
+extract_siteb() { # <workflow.yml> <out.sh>
+  python3 - "$1" "$2" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+body = None
+for j in (doc.get("jobs") or {}).values():
+    for st in (j.get("steps") or []):
+        if st.get("name") == "Tier-A plan credentials (bounded substitutes)":
+            body = st["run"]
+if body is None:
+    print("EXTRACTION FOUND NO SITE B STEP", file=sys.stderr); sys.exit(3)
+for marker in ("PLAN_ACTIONS_CREDENTIAL", "TF_VAR_hcloud_token", "TF_VAR_doppler_token_tf", "pr_plan_hcloud_readonly_absent"):
+    if marker not in body:
+        print(f"SITE B EXTRACTION LOST A DEFINING CONSTRUCT: {marker!r}", file=sys.stderr); sys.exit(3)
+open(sys.argv[2], "w").write(body)
+PY
+}
+assert_fixture_dir "$WORK"
+mkdir -p "$WORK/binb"
+cat > "$WORK/binb/doppler" <<'STUB'
+#!/usr/bin/env bash
+# Site B reads with the config named by the step env, so the argv carries NO -p/-c. Fail closed on
+# anything else; record every call; answer per NAME so the read-only and read/write names are
+# independent.
+set -u
+echo "doppler $*" >> "${STUB_CALLS:?}"
+case "$*" in
+  "secrets get HCLOUD_TOKEN_READONLY --plain") v="${SB_RO-}" ;;
+  "secrets get HCLOUD_TOKEN --plain")          v="${SB_RW-}" ;;
+  *) echo "STUB-MISS: doppler $*" >&2; echo "MISS: doppler $*" >> "${STUB_CALLS:?}"; exit 64 ;;
+esac
+[[ -n "$v" ]] || exit 1
+printf '%s' "$v"; exit 0
+STUB
+chmod +x "$WORK/binb/doppler"
+SB_SENTINEL="rw-sentinel-SITE-B-DO-NOT-LEAK-9d4"
+SB_RC=0; SB_DIR=""
+run_siteb() { # <ro> <rw> [script]
+  local script="${3:-$WORK/siteb.sh}"
+  SB_DIR="$(mktemp -d "$WORK/sb.XXXXXXXX")"; assert_fixture_dir "$SB_DIR"
+  : > "$SB_DIR/calls"; : > "$SB_DIR/github_env"
+  SB_RC=0
+  env -i PATH="$WORK/binb:$(dirname "$REAL_OPENSSL"):/usr/bin:/bin" HOME="$SB_DIR" \
+    STUB_CALLS="$SB_DIR/calls" SB_RO="$1" SB_RW="$2" \
+    PLAN_ACTIONS_CREDENTIAL="gha-plan-credential-synth" DOPPLER_TOKEN="dp.st.SB-FIXTURE" \
+    DOPPLER_PROJECT=soleur DOPPLER_CONFIG=prd_terraform GITHUB_ENV="$SB_DIR/github_env" \
+    bash --noprofile --norc -eo pipefail "$script" > "$SB_DIR/stdout" 2> "$SB_DIR/stderr" || SB_RC=$?
+}
+sb_env_val() { awk '/^TF_VAR_hcloud_token<[<]/ {getline; print; exit}' "$SB_DIR/github_env"; }
+sb_leaked() { grep -qF -- "$1" "$SB_DIR/github_env" "$SB_DIR/stdout" "$SB_DIR/stderr"; }
+sb_bare_rw() { grep -qE 'secrets get HCLOUD_TOKEN( |$)' "$SB_DIR/calls"; }
+sb_miss() { grep -q '^MISS:' "$SB_DIR/calls"; }
+sb_echoed() { if [[ "$1" == *[![:space:]]* ]]; then sb_leaked "$1"; else return 1; fi; }
+sb_said() { grep -qF -- "$1" "$SB_DIR/stdout"; }
+if extract_siteb "$INFRA_VALIDATION_YML" "$WORK/siteb.sh"; then
+  run_siteb "ro.valid-TOKEN_1" "$SB_SENTINEL"
+  [[ "$SB_RC" -eq 0 ]] && pass "siteB: a valid read-only value exits 0" || fail "siteB: rc=$SB_RC"
+  [[ "$(sb_env_val)" == "ro.valid-TOKEN_1" ]] && pass "siteB: TF_VAR_hcloud_token carries the READ-ONLY value" || fail "siteB: wrong TF_VAR_hcloud_token"
+  sb_leaked "$SB_SENTINEL" && fail "siteB: the read/write sentinel reached a stream" || pass "siteB: the read/write sentinel appears in no stream"
+  sb_bare_rw && fail "siteB: the step requested the read/write name" || pass "siteB: the read log never lists the read/write name"
+  grep -qF -- "::add-mask::ro.valid-TOKEN_1" "$SB_DIR/stdout" && pass "siteB: the read-only value is masked" || fail "siteB: not masked"
+
+  run_siteb "" "$SB_SENTINEL"
+  [[ "$SB_RC" -ne 0 ]] && pass "siteB: an absent read-only token FAILS the step (no silent downgrade)" || fail "siteB: rc 0 with the read-only token absent"
+  sb_said "verdict=pr_plan_hcloud_readonly_absent" && pass "siteB: the absence is named" || fail "siteB: absence not named"
+  grep -qE 'TF_VAR_hcloud_token' "$SB_DIR/github_env" && fail "siteB: TF_VAR_hcloud_token was written although the read-only token is absent" \
+    || pass "siteB: nothing is exported to GITHUB_ENV on the absent path"
+  sb_leaked "$SB_SENTINEL" && fail "siteB: absent path leaked the read/write sentinel" || pass "siteB: absent path leaks nothing"
+  sb_bare_rw && fail "siteB: absent path requested the read/write name" || pass "siteB: absent path never requests the read/write name"
+
+  for bad in "   " "tok en" 'tok$(id)' "tok;rm" "tok|x"; do
+    run_siteb "$bad" "$SB_SENTINEL"
+    if [[ "$SB_RC" -ne 0 ]] && sb_said "verdict=pr_plan_hcloud_readonly_unusable" && ! grep -q 'TF_VAR_hcloud_token' "$SB_DIR/github_env" && ! sb_echoed "$bad" && ! sb_miss; then
+      pass "siteB: unusable read-only value [$(printf '%s' "$bad" | tr ' ' '_')] is refused by name and not exported"
+    else
+      fail "siteB: unusable read-only value [$(printf '%s' "$bad" | tr ' ' '_')] was accepted, not named, echoed into a stream, or read through an unmodelled argv"
+    fi
+  done
+  run_siteb "$(printf 'tok\nBASH_ENV=/tmp/pwn')" "$SB_SENTINEL"
+  if [[ "$SB_RC" -ne 0 ]] && ! grep -q 'BASH_ENV' "$SB_DIR/github_env"; then
+    pass "siteB: a multi-line value (the pull_request injection shape) is refused and defines no second key"
+  else
+    fail "siteB: a multi-line read-only value reached GITHUB_ENV"
+  fi
+  if awk '/pr_plan_hcloud_readonly_(absent|unusable)/ && /\$[A-Za-z_{(]/ {bad=1} END {exit bad ? 0 : 1}' "$INFRA_VALIDATION_YML"; then
+    fail "siteB: a pr_plan_hcloud_readonly_* annotation contains an expansion"
+  else
+    pass "siteB: the pr_plan_hcloud_readonly_* annotations are static text"
+  fi
+
+  # Mutant: the step reads the read/write name. The absent-path rows above must see it.
+  assert_fixture_dir "$WORK"
+  sed -E 's/secrets get HCLOUD_TOKEN_READONLY --plain/secrets get HCLOUD_TOKEN --plain/' "$INFRA_VALIDATION_YML" > "$WORK/iv.mut.yml"
+  if cmp -s "$INFRA_VALIDATION_YML" "$WORK/iv.mut.yml"; then
+    fail "siteB mutant read-the-read-write-name: the mutation did not land"
+  elif ! extract_siteb "$WORK/iv.mut.yml" "$WORK/siteb.mut.sh" 2>/dev/null; then
+    fail "siteB mutant read-the-read-write-name: could not be extracted"
+  else
+    run_siteb "" "$SB_SENTINEL" "$WORK/siteb.mut.sh"
+    if sb_bare_rw || grep -q 'TF_VAR_hcloud_token' "$SB_DIR/github_env" || sb_leaked "$SB_SENTINEL"; then
+      pass "siteB mutant read-the-read-write-name: caught"
+    else
+      fail "siteB mutant read-the-read-write-name: SURVIVED"
+    fi
+  fi
+else
+  fail "siteB: the PR-plan step could not be extracted (the workflow no longer has the verdict word, or the step was renamed)"
+fi
+
 # ---- Verdict --------------------------------------------------------------
 #
 # Failures print FIRST, then the floor. The floor must enforce ITSELF -- a direct printf
@@ -760,8 +982,11 @@ fi
 # further up is UNBOUND in the mutant slice, so the mutant dies at `set -u` and the floor
 # scores CONSTRUCTION FAILURE rather than FIRES. The literal is safe because the self-test
 # already asserts `PASSES == 1` at that point and aborts otherwise.
+# 117 -> 118 (review, 2026-10-22): row1c asserts the arm read only through modelled argv (the stub's refusals are logged as MISS).
+# 78 -> 117 (#9927 item 8b): the rewritten legacy-arm rows (1c, 1d, 1f), the new rows 1h and 1i, the two Guard 1 mutants and the
+# site B block (the consumer-guard rows live in token-drift-workflow-causes.test.sh, R7). Measured: 117 ran, with rows 8.8 and 9 skipped (no pinned CLI, no DOPPLER_TOKEN) as on the CI runner.
 SELFTEST_PASSES=1
-MIN_ASSERTIONS=78
+MIN_ASSERTIONS=118
 REAL=$((PASSES - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s real assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$MIN_ASSERTIONS" >&2

@@ -1489,10 +1489,13 @@ jobs:
           # Terraform's github provider runs in TOKEN mode when this is set and no infra
           # App key is (main.tf).
           PLAN_ACTIONS_CREDENTIAL: ${{ github.token }}
-          # A Hetzner token with the READ permission only. Falls back to the read/write
-          # HCLOUD_TOKEN in the before state so this merges before operator step O5; that
-          # fallback disappears with the name at O10. A DIFFERENT NAME on purpose: a
-          # same-named Tier-A value could shadow the Tier-B one, and this one cannot.
+          # A Hetzner token with the READ permission only, and NO fallback (#9927 item 8b). It
+          # used to fall back to the read/write HCLOUD_TOKEN before operator step O5; O5 and
+          # O10 are done (measured 2026-10-20: the read-only name is listed in prd_terraform and
+          # the read/write name is gone), and a PR-plan step that can reach a destroy-capable
+          # token silently stops being read-only the day the read-only secret goes missing.
+          # A DIFFERENT NAME on purpose: a same-named Tier-A value could shadow the Tier-B one,
+          # and this one cannot.
           # Tier-A repo secret: this job keeps it, and reads the read-only Hetzner
           # value through it. It is the credential #8209 is NARROWING, not removing.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -1502,18 +1505,30 @@ jobs:
           set -euo pipefail
           # Read the read-only Hetzner value FIRST, so every write to $GITHUB_ENV can be
           # one grouped redirect (shellcheck SC2129) rather than four separate ones.
-          RO="$(doppler secrets get HCLOUD_TOKEN_READONLY --plain 2>/dev/null)" || RO=""
+          # One read, one name. Absent or unusable FAILS this step with a named verdict and
+          # writes NOTHING to $GITHUB_ENV: a `pull_request` plan that silently planned with a
+          # missing or read/write token would be a green check over the wrong credential.
+          RO=""
+          if RO="$(doppler secrets get HCLOUD_TOKEN_READONLY --plain 2>/dev/null)"; then :; else RO=""; fi
+          # A bearer token is one line of [A-Za-z0-9._~+/=-]; `[[ -n ]]` accepts a whitespace-only
+          # or multi-line value. This job runs on `pull_request` with `pull-requests: write`, and the
+          # value comes from `prd_terraform`, which the branch-nameable `DOPPLER_TOKEN_WRITE` repo
+          # secret can write until operator step O11, so anything that is not a plain token is
+          # refused here, before it is masked or exported. The value is never echoed.
+          _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
           if [[ -z "$RO" ]]; then
-            RO="$(doppler secrets get HCLOUD_TOKEN --plain 2>/dev/null)" || RO=""
-            echo "::warning title=infra-privileged::source=legacy HCLOUD_TOKEN_READONLY is absent from prd_terraform, so the PR plan is using the read/write HCLOUD_TOKEN. Expected before operator step O5; after O10 it means the read-only token was never minted."
+            echo "::error title=infra-privileged::source=legacy verdict=pr_plan_hcloud_readonly_absent — HCLOUD_TOKEN_READONLY could not be read from prd_terraform (absent, OR the Tier-A DOPPLER_TOKEN was rejected, OR Doppler was unreachable: this read cannot tell them apart) and the PR plan no longer falls back to the read/write token. FIRST re-run once and check the DOPPLER_TOKEN repo secret and Doppler status; ONLY THEN re-mint the Hetzner token by the O5 procedure in infra-credential-tiers-8209.md (mint the new one BEFORE deleting the old)."
+            exit 1
           fi
-          # An explicit `if`, not `[[ ... ]] && printf`. Under the runner's `-e` the
-          # AND-OR form is exempt only while another command follows it; move it to the
-          # end of the body and the step aborts when RO is empty (measured:
-          # `bash -e -c '[[ -n "" ]] && printf x'` exits 1). That would be an abort on the
-          # exact path the fallback exists to serve.
+          if ! _bearer_ok "$RO"; then
+            echo "::error title=infra-privileged::source=legacy verdict=pr_plan_hcloud_readonly_unusable — HCLOUD_TOKEN_READONLY in prd_terraform is not a plain one-line bearer token. Nothing was exported."
+            exit 1
+          fi
+          # RO is non-empty and a plain one-line token here (both refusals above exit), so the
+          # mask is unconditional: there is no empty-value path left for an AND-OR form to trip
+          # the runner's `-e` on.
           rodelim="SOLEUR_EOF_$(openssl rand -hex 12)"
-          if [[ -n "$RO" ]]; then printf '::add-mask::%s\n' "$RO"; fi
+          printf '::add-mask::%s\n' "$RO"
           {
             printf 'TF_VAR_github_plan_actions_credential=%s\n' "$PLAN_ACTIONS_CREDENTIAL"
             # Well-formed but inert. The FORMATS were measured in M8 because a malformed

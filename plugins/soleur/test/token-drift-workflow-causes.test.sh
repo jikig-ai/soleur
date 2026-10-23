@@ -1861,6 +1861,7 @@ ROWS = [
     ("g-lower",   "none",    "run",  "curl -sS -X get https://api.hetzner.cloud/v1/servers"),
     ("g-hcloud",  "none",    "run",  "hcloud server list"),
     ("g-doppler", "none",    "run",  "doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain"),
+    ("g-doppler-ro", "none", "run", "doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain"),
     ("g-gh",      "none",    "run",  "gh issue create --title t --body-file b"),
     ("sc-x-delete", "write",  "scrun", "curl -sS -X DELETE https://api.hetzner.cloud/v1/volumes/1"),
     ("sc-detach",   "write",  "scrun", "hcloud volume detach 1"),
@@ -2020,10 +2021,27 @@ else
   fail "a filer body no longer names '${_head}', the runbook heading was renamed or demoted, or the heading check cannot reject a prose-only mention — the issue would point at nothing"
 fi
 
+# R6 (#9927 item 8b) -- the two pasteable listing blocks use the READ-ONLY Hetzner token with no
+# fallback. The filers print a GET-only listing, so the token it loads must be the read-permission
+# one: a pasted block that loads the destroy-capable token turns "list the survivors" into one
+# typo away from "delete them". The checks assert BEHAVIOUR of the printed text (the read-only
+# name is read, the bare name is not, the prose no longer claims the token is read/write), and a
+# word-bounded name test, because `HCLOUD_TOKEN` is a PREFIX of `HCLOUD_TOKEN_READONLY`.
+echo "R6: the listing blocks load the read-only Hetzner token, with no read/write fallback"
+_r6ro=$(grep -cE "^[[:space:]]*echo 'TOKEN=\"\\$\(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain\)\"'$" "$WF") || _r6ro=0
+_r6rw=$(grep -cE "doppler secrets get HCLOUD_TOKEN([[:space:]]|\"|'|$)" "$WF") || _r6rw=0
+_r6prose=$(grep -cE "still (the|a) read/write|read/write one\)" "$WF") || _r6prose=0
+if [[ "$_r6ro" -eq 2 ]]; then pass "R6a both listing blocks load HCLOUD_TOKEN_READONLY (found ${_r6ro})"
+else fail "R6a expected 2 listing blocks loading HCLOUD_TOKEN_READONLY, found ${_r6ro}"; fi
+if [[ "$_r6rw" -eq 0 ]]; then pass "R6b no step or printed block reads the bare read/write HCLOUD_TOKEN from Doppler"
+else fail "R6b ${_r6rw} read(s) of the bare read/write HCLOUD_TOKEN remain in the workflow"; fi
+if [[ "$_r6prose" -eq 0 ]]; then pass "R6c the filer prose no longer says the listing token is the read/write one"
+else fail "R6c ${_r6prose} line(s) still describe the listing token as read/write"; fi
+
 # R5 — the mutation table runs in-process (python, one YAML load); each row injects one spelling into a
 # copy of the workflow. A red row must be flagged under its OWN unit; a green row must produce no
 # finding. The control rows prove the verdict rule can fail in both directions and the table is intact.
-R5_MIN=101
+R5_MIN=102
 echo "R5: mutation rows — every spelling of an injected write/destroy is RED, legitimate steps are GREEN"
 R5_OUT=$(python3 -c "$SCAN_PY" mutate "$WF") || { echo "FATAL: the mutation runner crashed" >&2; exit 2; }
 r5_line() { if [[ "$1" == "PASS" ]]; then pass "R5/$2: $3"; else fail "R5/$2: $3"; fi; }
@@ -2062,8 +2080,26 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # in this comment and the number in the guard below MUST be the same number. They disagreed once
 # (comment 46, guard 48, run 48/48), which is a ratchet whose own prose says the notch is
 # lower than it is — a reader trusting the comment would have "raised" it downward.
-if [[ "$((PASS + FAIL))" -lt 168 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 168." >&2
+# Then 168 -> 172 with R6a-c (the listing blocks load the read-only Hetzner token, no read/write fallback, #9927 item 8b) and the g-doppler-ro
+# classifier row, 172 is the REALIZED `PASS + FAIL`. (R7a-c, three rows pinning the spelling of ten empty-token guards, were added and then removed in the same
+# PR: every one of those ten steps pre-binds HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" so the guard could never hit `unbound variable`; CTO ruling 2026-10-22.)
+#
+# LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
+# `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
+# (PASS + FAIL is unchanged), and the suite prints `N passed, 0 failed` over a broken workflow. Reported with printf + exit, never
+# through the helpers under test; the two synthetic verdicts are undone so the floor counts real rows only.
+_LATE_P="$PASS"; _LATE_F="$FAIL"
+pass "late dispatch re-validation: pass() still increments (EXPECTED)" >/dev/null
+fail "late dispatch re-validation: fail() still records (EXPECTED, not a real failure)" >/dev/null
+if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
+  printf 'LATE DISPATCH RE-VALIDATION FAILED: PASS %s->%s (want +1), FAIL %s->%s (want +1). The assertion helpers were neutered or laundered.\n' \
+    "$_LATE_P" "$PASS" "$_LATE_F" "$FAIL" >&2
+  exit 2
+fi
+PASS=$((PASS - 1))
+FAIL=$((FAIL - 1))
+if [[ "$((PASS + FAIL))" -lt 172 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 172." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
