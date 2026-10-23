@@ -140,27 +140,40 @@ resource "cloudflare_zero_trust_access_application" "deploy" {
   session_duration = "24h"
 }
 
-resource "cloudflare_zero_trust_access_service_token" "deploy" {
-  account_id = var.cf_account_id
-  name       = "github-actions-deploy"
+# The deploy Access service token is no longer a Terraform resource (#9294 G1, ADR-241 D10).
+# Its client_id/client_secret were sensitive attributes of this resource, so they sat in the
+# Tier-A-readable state. They now live only in Doppler (Tier B, soleur-infra-privileged/prd); the
+# token itself is minted outside Terraform and rotated by the owner-named sequence in the plan.
+#
+# `removed { destroy = false }` FORGETS the resource: the token in Cloudflare is untouched and keeps
+# working, only the state entry (and the secret in it) goes. NEVER `-replace` or `destroy` it, and
+# NEVER re-declare the resource: that creates a NEW token whose secret is in no Doppler project, so
+# this change is forward-fix only (no revert).
+#
+# The `-target=cloudflare_zero_trust_access_service_token.deploy` line in apply-web-platform-infra.yml
+# stays: a `removed` block is only planned when its address is targeted (same reason as github-app.tf).
+removed {
+  from = cloudflare_zero_trust_access_service_token.deploy
 
-  # Without this, the token is UNROTATABLE via Terraform. `-replace` defaults to
-  # destroy-then-create, and Cloudflare rejects the destroy while an Access policy
-  # still references the token:
-  #   access.api.error.service_token_in_use: cannot delete service token because it
-  #   is used by a policy, group, or app SCIM configuration (12139)
-  # `cloudflare_zero_trust_access_policy.deploy_service_token` holds exactly such a
-  # reference, so the apply fails after planning 3-add/3-destroy and changes nothing.
-  # create_before_destroy inverts the order: new token → policy repointed to it →
-  # old token destroyed, all in one apply.
-  #
-  # Safe on the name collision this implies (both tokens exist briefly): Cloudflare
-  # permits duplicate service-token names — probed 2026-07-29 against the live account
-  # by creating two tokens with an identical name (both succeeded, both deleted), so
-  # no unique-name suffix is required.
   lifecycle {
-    create_before_destroy = true
+    destroy = false
   }
+}
+
+# The ids the deploy application's policy admits. Not secret (a service-token id is a UUID, the
+# client_secret is the credential), but it is an AUTHORIZATION boundary, so it is a committed CONSTANT
+# reviewed in a PR. It is a `locals` value and not a variable on purpose (Ruled by CTO agent, 2026-10-23,
+# amending 2026-10-15 Fork 2 on the mechanism only): a root variable can be overridden from the
+# environment, and the web-platform plan runs under `doppler run --name-transformer tf-var` against
+# prd_terraform, so a planted DEPLOY_SERVICE_TOKEN_IDS key would silently replace a committed default.
+# A local cannot be set from outside the repository. Rotation stays two PRs: add the new id (both tokens
+# admitted), then remove the old one; each carries `[ack-deploy-policy]` because the policy changes in place.
+#
+# OWNER: replace the empty list with the live token id (read-only: terraform state show on the deploy
+# token, id line only) BEFORE this change merges. The policy's precondition refuses an empty or malformed
+# list, so a plan of this root fails loudly until then rather than locking the deploy webhook out.
+locals {
+  deploy_service_token_ids = []
 }
 
 resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
@@ -171,7 +184,14 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
   precedence     = 1
 
   include {
-    service_token = [cloudflare_zero_trust_access_service_token.deploy.id]
+    service_token = local.deploy_service_token_ids
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.deploy_service_token_ids) > 0 && alltrue([for id in local.deploy_service_token_ids : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))])
+      error_message = "local.deploy_service_token_ids must be a non-empty list of Cloudflare service-token ids (UUIDs). An empty include would lock the deploy webhook out."
+    }
   }
 }
 
@@ -332,16 +352,6 @@ resource "cloudflare_notification_policy" "service_token_expiry" {
 
 output "tunnel_token" {
   value     = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
-  sensitive = true
-}
-
-output "access_service_token_client_id" {
-  value     = cloudflare_zero_trust_access_service_token.deploy.client_id
-  sensitive = true
-}
-
-output "access_service_token_client_secret" {
-  value     = cloudflare_zero_trust_access_service_token.deploy.client_secret
   sensitive = true
 }
 

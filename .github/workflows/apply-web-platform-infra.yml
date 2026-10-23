@@ -857,6 +857,9 @@ jobs:
             grep -E 'will be created|must be replaced|moved from|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
+          # Deploy-webhook Access policy gate (#9294 PR-2): outside the destroy_count sum, no [ack-destroy] path.
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/deploy-policy-gate.sh"
+          deploy_policy_gate "$counts" "$HEAD_MSG" || exit 1
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
@@ -983,6 +986,18 @@ jobs:
           set -euo pipefail
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
+
+      # #9294 PR-2 (Ruled by CTO agent, 2026-10-23): the apply is `-target`ed, and a targeted plan does not prune the
+      # two deleted deploy-token root outputs, so their stored values may stay in state. Observe only (boolean, no
+      # values, never fails the job): if they persist, the old Access token is treated as exposed and rotated first.
+      - name: Report deploy-token outputs left in state
+        if: success()
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -uo pipefail
+          if terraform state pull 2>/dev/null | jq -e '.outputs | keys | any(test("^access_service_token_client_(id|secret)$"))' >/dev/null 2>&1; then
+            echo "::warning::the deleted deploy-token outputs are STILL in state after this targeted apply; treat the old deploy Access token as exposed and rotate it first (ADR-241 G1 rotation)."
+          fi
 
       # Tunnel ingress origin verification (#6594 / ADR-114 I2).
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply/Measure the apex origin (ADR-194 Hypothesis Z) (test-anchored lines kept below)
@@ -4195,7 +4210,6 @@ jobs:
         id: pin_load
         if: ${{ !cancelled() && inputs.plan_only != true && steps.poll.outcome == 'success' }}
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
           # The webhook swap is minutes; 1200 s bounds the poll well inside the
           # 50-min job budget — a wedged status read becomes verdict=redeploy_timeout,
@@ -4204,12 +4218,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
-          [[ -n "$CF_ACCESS_CLIENT_SECRET" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
-          [[ -n "$CF_ACCESS_CLIENT_ID" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_ID}"
+          # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
+          # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
 
       - name: Post-replace readiness note (non-SSH)
@@ -6075,7 +6085,6 @@ jobs:
         id: pin_load
         if: ${{ !cancelled() && inputs.plan_only != true && steps.poll.outcome == 'success' }}
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
           # The webhook swap is minutes; 1200 s bounds the poll well inside the
           # 50-min job budget — a wedged status read becomes verdict=redeploy_timeout,
@@ -6084,12 +6093,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
-          [[ -n "$CF_ACCESS_CLIENT_SECRET" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
-          [[ -n "$CF_ACCESS_CLIENT_ID" ]] && echo "::add-mask::${CF_ACCESS_CLIENT_ID}"
+          # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
+          # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
 
       - name: Dispatch summary

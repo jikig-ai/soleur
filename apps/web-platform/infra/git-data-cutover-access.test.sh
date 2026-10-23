@@ -1902,15 +1902,17 @@ pos = {
     "host_proof": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "proof"),
     "freeze": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "freeze"),
     "flag_write": idx(lambda s: s.get("id") == "flag_write"),
-    "redeploy": idx(lambda s: isinstance(s.get("run"), str) and "dispatch-web-redeploy/track.sh" in s["run"] and not s.get("if") == "always()"),
+    "tiered_creds": idx(lambda s: s.get("id") == "tiered_creds"),
+    "trio_preflight": idx(lambda s: str(s.get("name") or "").startswith("Webhook trio preflight")),
+    "redeploy": idx(lambda s: isinstance(s.get("run"), str) and "dispatch-web-redeploy/track.sh" in s["run"] and "TRACK_PREFLIGHT" not in s["run"] and not s.get("if") == "always()"),
     "unfreeze": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "unfreeze"),
     "probe": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "probe"),
     "teardown": idx(lambda s: s.get("name") == "Tear down cloudflared SSH bridge"),
     "finalizer": idx(lambda s: s.get("name") and "Finalizer" in s["name"]),
 }
 single = all(len(v) == 1 for v in pos.values())
-order = ["confirm", "checkout", "doppler", "flag_precheck", "secrets_check", "flip_preconditions", "bridge", "key_fetch", "ssh_config", "host_proof", "freeze", "flag_write", "redeploy", "unfreeze", "probe", "finalizer", "teardown"]
-check("D-6: each step exists exactly once, in order confirm < checkout < doppler < flag precheck < secrets check < preconditions < bridge < key fetch < ssh_config < proof < freeze < flag write < redeploy < unfreeze < probe < finalizer < teardown (the finalizer runs BEFORE the bridge teardown — its unfreeze arm needs the SSH path alive)",
+order = ["confirm", "checkout", "doppler", "flag_precheck", "secrets_check", "tiered_creds", "trio_preflight", "flip_preconditions", "bridge", "key_fetch", "ssh_config", "host_proof", "freeze", "flag_write", "redeploy", "unfreeze", "probe", "finalizer", "teardown"]
+check("D-6: each step exists exactly once, in order confirm < checkout < doppler < flag precheck < secrets check < tier-b loader < trio preflight < preconditions < bridge < key fetch < ssh_config < proof < freeze < flag write < redeploy < unfreeze < probe < finalizer < teardown (the finalizer runs BEFORE the bridge teardown — its unfreeze arm needs the SSH path alive)",
       single and [pos[k][0] for k in order] == sorted(pos[k][0] for k in order), {k: v for k, v in pos.items()})
 def step(k):
     return steps[pos[k][0]] if len(pos[k]) == 1 else {}
@@ -2078,9 +2080,67 @@ remote = [u for u in uses if not re.search(r"uses:\s+\./", u)]
 local = [re.sub(r"^(-\s+)?uses:\s+", "", u) for u in uses if re.search(r"uses:\s+\./", u)]
 NOTIFY_ACTION = "./.github/actions/notify-ops-email"
 INFRA_CREDS_ACTION = "./.github/actions/infra-credentials"
-check("AC9 pins: every remote uses: is @<40 hex> # v… (%d remote, exactly four: three checkouts and the Doppler install), and the only local actions are the bridge (once per gated job), the Tier-B credential loader (the wipe job, once) and the notify composite" % len(remote),
-      len(remote) == 4 and all(re.search(r"uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v", u) for u in remote) and sorted(local) == sorted([BRIDGE, BRIDGE, INFRA_CREDS_ACTION, NOTIFY_ACTION]),
+check("AC9 pins: every remote uses: is @<40 hex> # v… (%d remote, exactly four: three checkouts and the Doppler install), and the only local actions are the bridge (once per gated job), the Tier-B credential loader (once per job that needs the webhook trio: the cutover job since #9294, and the wipe job) and the notify composite" % len(remote),
+      len(remote) == 4 and all(re.search(r"uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v", u) for u in remote) and sorted(local) == sorted([BRIDGE, BRIDGE, INFRA_CREDS_ACTION, INFRA_CREDS_ACTION, NOTIFY_ACTION]),
       (remote, local))
+# #9294 G1: the cutover job's redeploy and its finalizer unwind take the webhook trio from the loader's env export, so the loader step
+# must exist exactly once, run BEFORE the first flag write (a flip that dies after writing the flag still unwinds with a trio in env),
+# and be fed the Tier-B read token. The redeploy/unwind steps themselves read no store (track.sh refuses an absent trio).
+csteps = (jobs.get("cutover") or {}).get("steps") or []
+c_loader = [i for i, st in enumerate(csteps) if isinstance(st, dict) and st.get("uses") == INFRA_CREDS_ACTION]
+c_flag = [i for i, st in enumerate(csteps) if isinstance(st, dict) and "DOPPLER_TOKEN_GIT_DATA_FLAG" in (st.get("env") or {})]   # a BINDING of the write token (the presence check names it inside an expression, under another key)
+check("AC9/G1: the cutover job loads the Tier-B credentials exactly once, before the first step that can write the flag, with the Tier-B read token and the legacy verifier token",
+      len(c_loader) == 1 and bool(c_flag) and c_loader[0] < min(c_flag)
+      and (csteps[c_loader[0]].get("with") or {}) == {"doppler-token-infra-privileged": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", "doppler-token-legacy": "${{ secrets.DOPPLER_TOKEN }}"},
+      (c_loader, c_flag))
+cstep_runs = "\n".join(str(st.get("run") or "") for st in csteps if isinstance(st, dict))
+# The alternation is built from fragments on purpose: this file is in the census's exempt class, and a literal trio name inside a
+# `doppler secrets get` regex would be a read shape that needs a baseline row (a new key needs a reserved @allow).
+_trio_re = r"doppler secrets get (WEBHOOK_DEPLOY_(SECRET)|CF_ACCESS_CLIENT_(ID|SECRET)|CI_SSH_ACCESS_TOKEN_(ID|SECRET))"
+check("AC9/G1: no cutover step reads the webhook trio from a store (no `doppler secrets get` of it, no prd_terraform fallback to the ci_ssh token)",
+      not re.search(_trio_re, cstep_runs), "")
+# The loader runs only in the modes that dispatch a redeploy (proof and unfreeze never reach track.sh, so a revoked Tier-B token must not
+# stop an unfreeze), carries an id the preflight reads, and is skipped when the precheck said there is nothing to roll back.
+_REDEPLOY_MODES_IF = "steps.flag_precheck.outputs.nothing_to_rollback != '1' && (steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback' || steps.confirm.outputs.mode == 'redeploy')"
+_ld = csteps[c_loader[0]] if len(c_loader) == 1 else {}
+check("AC9/G1: the loader step has id tiered_creds and runs only for flip|rollback|redeploy (exact if:), never for proof or unfreeze",
+      _ld.get("id") == "tiered_creds" and " ".join(str(_ld.get("if") or "").split()) == _REDEPLOY_MODES_IF, (_ld.get("id"), _ld.get("if")))
+# The trio preflight: after the loader, before the freeze and before every step that can write the flag, same gating, fed the loader's source
+# output, and it applies track.sh's own credential checks in preflight mode (so the workflow names no trio member).
+c_pre = [i for i, st in enumerate(csteps) if isinstance(st, dict) and str(st.get("name") or "").startswith("Webhook trio preflight")]
+c_freeze = [i for i, st in enumerate(csteps) if isinstance(st, dict) and "apps/web-platform/infra/git-data-cutover.sh" in str(st.get("run") or "")]
+_pr = csteps[c_pre[0]] if len(c_pre) == 1 else {}
+_prun = "\n".join(l for l in str(_pr.get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+check("AC9/G1: exactly one trio preflight step, after the loader and before the freeze and every flag-writing step, gated like the loader, fed steps.tiered_creds.outputs.source, running track.sh in TRACK_PREFLIGHT mode and refusing unless source is tier_b",
+      len(c_pre) == 1 and bool(c_freeze) and len(c_loader) == 1 and c_loader[0] < c_pre[0] < min(c_freeze + c_flag)
+      and " ".join(str(_pr.get("if") or "").split()) == _REDEPLOY_MODES_IF
+      and (_pr.get("env") or {}) == {"LOADER_SOURCE": "${{ steps.tiered_creds.outputs.source }}"}
+      and 'TRACK_PREFLIGHT=1 bash .github/actions/dispatch-web-redeploy/track.sh' in _prun and '"$LOADER_SOURCE" != "tier_b"' in _prun and "exit 1" in _prun,
+      (c_loader, c_pre, c_freeze, c_flag, _pr.get("env")))
+# EXECUTED (user-impact P1, #9294 PR-2): the preflight body run for real. The loader's legacy arm, and a Tier-B project without the trio,
+# both refuse BEFORE anything is frozen or written; a complete well-formed trio passes. The body runs under the workflow's shell flags
+# with an empty environment (no ambient credential can satisfy it), against the repository's own track.sh.
+import os, subprocess
+_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(wf_path))))
+def _run_pre(src, trio):
+    env = {"PATH": "/usr/bin:/bin", "HOME": "/tmp", "LOADER_SOURCE": src}
+    env.update(trio)
+    r = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", str(_pr.get("run") or "")], cwd=_root, env=env, capture_output=True, text=True, timeout=60)
+    return r.returncode, r.stdout + r.stderr
+_full = {"WEBHOOK_DEPLOY" + "_SECRET": "k" * 32, "CF_ACCESS_CLIENT" + "_ID": "idid.access", "CF_ACCESS_CLIENT" + "_SECRET": "s" * 40}
+_rc_legacy, _o_legacy = _run_pre("legacy", _full)
+_rc_empty, _o_empty = _run_pre("tier_b", {})
+_rc_part, _o_part = _run_pre("tier_b", {k: v for k, v in _full.items() if not k.endswith("_ID")})
+_rc_ok, _o_ok = _run_pre("tier_b", _full)
+check("AC9/G1 EXEC: the preflight body refuses source=legacy (even with a full trio in env), a tier_b job with no trio, and a tier_b job missing one name, each naming precondition_trio_absent, and passes a complete trio",
+      len(c_pre) == 1 and _rc_legacy == 1 and "precondition_trio_absent" in _o_legacy and _rc_empty == 1 and "precondition_trio_absent" in _o_empty
+      and _rc_part == 1 and "precondition_trio_absent" in _o_part and _rc_ok == 0 and "precondition_trio_absent" not in _o_ok,
+      (_rc_legacy, _rc_empty, _rc_part, _rc_ok, _o_empty[-120:]))
+_rd = [st for st in csteps if isinstance(st, dict) and "dispatch-web-redeploy/track.sh" in str(st.get("run") or "") and "TRACK_PREFLIGHT" not in str(st.get("run") or "") and st.get("if") != "always()"]
+_rdrun = "\n".join(l for l in str((_rd[0] if len(_rd) == 1 else {}).get("run") or "").splitlines() if not l.lstrip().startswith("#"))
+_rt = _rdrun.find('touch "$RUNNER_TEMP/cutover-progress/redeploy_confirmed"')
+check("AC9/G1: the same-version redeploy step touches redeploy_confirmed only AFTER track.sh returns (set -e: a failed redeploy never marks), which the finalizer's rollback arm reads",
+      len(_rd) == 1 and 0 <= _rdrun.find("bash .github/actions/dispatch-web-redeploy/track.sh") < _rt, (len(_rd), _rt))
 # --- notify-failure (Guard 2, #8211 plan): a failed, stranded or cancelled cutover always reaches the
 # notify path, a clean run never does, and the path carries no workspace id, no free-text input and no
 # privileged credential. The finalizer and the notify body are EXECUTED below (NB/FZ rows); these rows pin
@@ -2201,7 +2261,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -eq 58 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 58) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -eq 64 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 64) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -2649,12 +2709,16 @@ case_fz() { # <finalizer-body-file>
   fz_expect "FZ3 flip, flag-off write fails" 1 "ran=1 recovery_failed=1 " 0 || return 1
   fz_run "$body" flip success "flag_written freeze_held cutover_at_written"
   fz_expect "FZ4 flip, concluded" 0 "ran=1 " 0 || return 1
-  fz_run "$body" rollback success "flag_written"
+  fz_run "$body" rollback success "flag_written redeploy_confirmed"
   fz_expect "FZ5 rollback, its own unfreeze succeeded: no second unfreeze, no output" 0 "ran=1 " 0 || return 1
-  fz_run "$body" rollback failure "flag_written" STUB_UNFREEZE_RC=1
+  fz_run "$body" rollback failure "flag_written redeploy_confirmed" STUB_UNFREEZE_RC=1
   fz_expect "FZ6 rollback, unfreeze failed and the retry fails" 1 "freeze_held=1 ran=1 recovery_failed=1 " 1 || return 1
-  fz_run "$body" rollback skipped "flag_written"
+  fz_run "$body" rollback skipped "flag_written redeploy_confirmed"
   fz_expect "FZ6b rollback, unfreeze skipped and the retry succeeds" 0 "ran=1 " 1 || return 1
+  # FZ6c (#9294 PR-2, user-impact P1): a rollback that wrote the flag off and never confirmed the same-version redeploy leaves the
+  # fleet on the flag-on env while Doppler says off; the finalizer must say so (recovery_failed) instead of "unwind complete".
+  fz_run "$body" rollback skipped "flag_written"
+  fz_expect "FZ6c rollback, flag written but the redeploy never confirmed: RECOVERY_FAILED (the retry unfreeze still runs)" 1 "ran=1 recovery_failed=1 " 1 || return 1
   fz_run "$body" unfreeze failure ""
   fz_expect "FZ7 unfreeze mode, the step failed: the sentinel may still be held" 0 "freeze_held=1 ran=1 " 0 || return 1
   fz_run "$body" unfreeze success ""
@@ -2682,9 +2746,9 @@ case_fz() { # <finalizer-body-file>
   [[ "$FZ_LOGTXT" != *"flagwrite"* ]] && [[ "$FZ_LOGTXT" != *"track"* ]] || { FZ_WHY="FZ13 a timer-only failure unwound a concluded flip: $FZ_DETAIL"; return 1; }
   fz_run "$body" unfreeze failure "" GC_TIMER_FAILED=1
   fz_expect "FZ14 unfreeze mode, gc timer stopped: no freeze_held" 0 "gc_timer_stopped=1 ran=1 " 0 || return 1
-  fz_run "$body" rollback failure "flag_written" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=6
+  fz_run "$body" rollback failure "flag_written redeploy_confirmed" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=6
   fz_expect "FZ15 rollback, timer still stopped after the finalizer's retry" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
-  fz_run "$body" rollback failure "flag_written" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=0
+  fz_run "$body" rollback failure "flag_written redeploy_confirmed" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=0
   fz_expect "FZ16 rollback, the finalizer's retry heals the timer: silent" 0 "ran=1 " 1 || return 1
   fz_run "$body" flip failure "flag_written freeze_held" GC_TIMER_FAILED=1 STUB_UNFREEZE_RC=6
   fz_expect "FZ17 flip failed later with the timer stopped: unwound, but no freeze_held / recovery_failed" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
@@ -2698,11 +2762,11 @@ case_fz() { # <finalizer-body-file>
   # FZ20/FZ21: the finalizer's OWN child unfreeze exiting 6 (no step flag: a flip/rollback that failed before the unfreeze step).
   fz_run "$body" flip failure "flag_written freeze_held" STUB_UNFREEZE_RC=6
   fz_expect "FZ20 flip failed early, the finalizer's own unfreeze finds the timer stuck: gc word, not a freeze" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
-  fz_run "$body" rollback failure "flag_written" STUB_UNFREEZE_RC=6
+  fz_run "$body" rollback failure "flag_written redeploy_confirmed" STUB_UNFREEZE_RC=6
   fz_expect "FZ21 rollback failed early, the finalizer's own unfreeze finds the timer stuck: gc word, not a freeze" 0 "gc_timer_stopped=1 ran=1 " 1 || return 1
   # FZ22: two child unfreezes in one finalizer (rollback + a freeze_held marker): a held sentinel on the FIRST must not be re-labelled
   # a timer-only failure by a rc-6 SECOND (the word invariant holds across calls, not only within one).
-  fz_run "$body" rollback failure "flag_written freeze_held" STUB_UNFREEZE_RC=5 STUB_UNFREEZE_RC2=6
+  fz_run "$body" rollback failure "flag_written freeze_held redeploy_confirmed" STUB_UNFREEZE_RC=5 STUB_UNFREEZE_RC2=6
   fz_expect "FZ22 rollback, first unfreeze held then the second finds the timer stuck: freeze_held + recovery_failed, no gc word" 1 "freeze_held=1 ran=1 recovery_failed=1 " 2 || return 1
   return 0
 }
@@ -3709,7 +3773,8 @@ fi
 # #10297: 151 mutants x 2 = 302 (+6 over 148 x 2); one new standalone workflow verdict (WF-rbclear), which also moves the workflow verdict count 57 -> 58: 639 -> 646.
 # Probe runuser path (#8211): one new standalone row (MZ-P14): 646 -> 647.
 # Probe cwd (flip run 39844703839): one new standalone row (MZ-P15): 647 -> 648.
-FLOOR=648
+# #9294 G1 (PR-2): the cutover job loads the Tier-B trio (six AC9/G1 rows: single loader, no store read, loader gating, trio preflight, executed preflight, redeploy marker): 648 -> 654.
+FLOOR=654
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

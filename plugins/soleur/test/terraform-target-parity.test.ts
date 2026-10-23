@@ -2513,12 +2513,22 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       ]);
     });
 
-    test("PL2: the pin-load reads webhook creds from prd_terraform only, and fans out to every web host", () => {
+    test("PL2: the pin-load takes the webhook trio from the Tier-B loader's env (no prd_terraform read), and fans out to every web host", () => {
       for (const job of gitDataJobs) {
+        const steps = (wfd.jobs?.[job]?.steps ?? []) as any[];
         const s = pinLoad(wfd, job)[0];
         const run = String(s.run ?? "");
-        expect(run).toContain("-p soleur -c prd_terraform");
-        expect(run).toContain("WEBHOOK_DEPLOY_SECRET");
+        // #9294 G1: the loader step runs earlier in the same job and exports the trio into the job env;
+        // the step itself reads no store, so a job without the Tier-B seam gets track.sh's credential-absent refusal.
+        const loaderIdx = steps.findIndex((x) => String(x.uses ?? "") === "./.github/actions/infra-credentials");
+        expect(loaderIdx, `${job}: the Tier-B loader step`).toBeGreaterThanOrEqual(0);
+        expect(loaderIdx, `${job}: the loader runs before the pin-load`).toBeLessThan(steps.indexOf(s));
+        // A disabled or unprivileged loader exports no trio: the step must run unconditionally and be fed the Tier-B read token.
+        expect(steps[loaderIdx].if, `${job}: the loader step has no if:`).toBeUndefined();
+        expect(String(steps[loaderIdx].with?.["doppler-token-infra-privileged"] ?? ""), `${job}: the loader is fed the Tier-B token`).toContain("secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED");
+        expect(run).not.toContain("prd_terraform");
+        expect(run).not.toContain("doppler secrets get");
+        expect(run).not.toContain("CI_SSH_ACCESS_TOKEN");
         // The peers CSV must be present — a single-host swap leaves the fleet MIXED.
         expect(String((s.env as any)?.WEB_HOST_PRIVATE_IPS ?? "")).toBe("10.0.1.10,10.0.1.11");
       }
