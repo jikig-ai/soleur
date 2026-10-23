@@ -21,5 +21,5 @@ Issue: #10913 (sibling #10919 — same case; diagnostics ask covered by FR-3)
 
 - [x] 3.1 `bash plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` → exits 0, `0 failed`, cases ≥ `MIN_ASSERTIONS`.
 - [x] 3.2 Mechanism proof: run the slow fixture under both modes; record before/after rc in PR body evidence.
-- [x] 3.3 `SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh` (or affected subset covering the suite) green on branch.
+- [ ] 3.3 `SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh` (or affected subset covering the suite) green on branch.
 - [ ] 3.4 `gh workflow run ci.yml` on the branch; verify `test-scripts (5/8)` green (issue's prescribed verification).
