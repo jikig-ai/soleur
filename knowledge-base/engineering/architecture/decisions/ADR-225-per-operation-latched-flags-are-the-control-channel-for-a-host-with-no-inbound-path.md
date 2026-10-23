@@ -136,6 +136,16 @@ is a recovery path, so a Hetzner-side outage now delays a LUKS rollback until th
 the cost the default carries, recorded in DC-1 of the change's decision challenges: a refusal a
 re-dispatch clears, against a write that could otherwise land on a server nobody has heard from.
 
+#### Amendment — 2026-10-23: the generation-anchor read has no fallback
+
+Item 4 of the 2026-09-24 Amendment above is a true record of what was measured then and is not edited.
+It is superseded: the generation-anchor read uses `HCLOUD_TOKEN_READONLY` alone (ADR-241 D4). The
+fallback to the read/write `HCLOUD_TOKEN` was the live path from 2026-09-24 until operator steps O5 and
+O10 landed; it was removed once both were measured done (names-only listing of `soleur/prd_terraform`,
+2026-10-20) under #10664 Site C. An absent, empty or unusable read-only token is `unreadable` with one
+warning naming `HCLOUD_TOKEN_READONLY`. The mask, stdin and no-response-byte rules of item 4 are
+unchanged. The scan that keeps a fallback from returning is described in ADR-241's 2026-10-23 entry.
+
 ### 5. The effect is confirmed from the host's telemetry, within a window anchored at the write
 
 The dispatch polls Better Stack for a terminal flag row, with the window starting at the moment of
@@ -209,13 +219,3 @@ a row, that is a gap in the emitter — not grounds for opening a shell on a hos
 | Rule 4, a freshness bound on the newest row — added 2026-09-24 | A heuristic with no authority behind it; a predecessor's last rows can be minutes old, exactly as on 2026-09-24. |
 
 **Appended 2026-10-09 (#8285 PR B).** `op=luks-rollback`, named in the G3 passages above, was retired together with the plaintext volume it copied back to; `op=luks-cutover` keeps its G3 liveness guard unchanged. See the ADR-142 addendum of 2026-10-09.
-
-#### Amendment — 2026-10-23: the generation-anchor read has no fallback
-
-Item 4 of the 2026-09-24 Amendment above is a true record of what was measured then and is not edited.
-It is superseded: the generation-anchor read uses `HCLOUD_TOKEN_READONLY` alone (ADR-241 D4). The
-fallback to the read/write `HCLOUD_TOKEN` was the live path from 2026-09-24 until operator steps O5 and
-O10 landed; it was removed once both were measured done (names-only listing of `soleur/prd_terraform`,
-2026-10-20) under #10664 Site C. An absent, empty or unusable read-only token is `unreadable` with one
-warning naming `HCLOUD_TOKEN_READONLY`. The mask, stdin and no-response-byte rules of item 4 are
-unchanged. The scan that keeps a fallback from returning is described in ADR-241's 2026-10-23 entry.
