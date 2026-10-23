@@ -152,8 +152,8 @@ explicit go-ahead that names the command, from the person who owns the budget.
 
 ## 7. The ratchet (S4 index completion PR3a, #10448)
 
-The audit exits 1 on `main` today (294 gap suites on the tree PR3a measured, with 1,884 gap pairs on `4da1673510`; the committed baseline holds whatever
-`wc -l scripts/ci-pr-affected-audit.baseline.tsv` reports, which is those pairs plus the ones this PR's own test text creates), so a check that simply required the audit to pass could never
+The audit exits 1 on `main` today (the committed baseline holds whatever `wc -l scripts/ci-pr-affected-audit.baseline.tsv` reports, which is the number to quote; dated measurements: 294 gap suites and 1,884 gap pairs on `4da1673510` when PR3a was built,
+1,886 pairs on `33feda184e`, and the count after the PR4 drain is in the PR4 body and on #10448), so a check that simply required the audit to pass could never
 be green. `python3 -I scripts/ci-pr-affected-replay.py ratchet` is the audit as a **ratchet**: the live set of `(suite, undeclared tracked path)` pairs, after the `--accept`
 exemptions, must EQUAL the committed shrink-only baseline `scripts/ci-pr-affected-audit.baseline.tsv`, and the baseline may only lose pairs against its base. Its contract
 (exit codes, the order of the checks, the baseline-state table, the formats) is the RATCHET section of `python3 scripts/ci-pr-affected-replay.py --help`; this section is how to
@@ -210,8 +210,9 @@ reads); or it touched **neither** (main moved, or an edge or accept row that cov
 1. **Declare the path** in `AFFECTED_<LABEL>_PATHS` in `scripts/lib/test-affected-paths.sh`, only when the suite really reads or executes the file (that is what the selector must know to select the suite). Editing that file is a runner trigger and runs the full battery once.
 2. **Add an anchor-keyed accept row** to `scripts/ci-pr-affected-audit.accept.tsv` (`suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>`; the anchor and ordinal are on the `ref` line of the failure text and in `audit --all-refs`) only when the suite merely names the file: a message, a fixture it writes into a scratch tree, a negative-test string. The reason names the line kind. **An accept row on a file the suite really reads is a false negative that becomes live once the lever flips**, and no automated control checks that the suite does not read the file: this check does not verify it. A CODEOWNERS entry routes the review, but no required review exists in this repository's ruleset, so the author and the reviewer must check the claim by reading the suite.
 
-A baseline row cannot be added: the failure text offers no way to, `ratchet --print-baseline` only removes pairs once a baseline exists, and the growth rule refuses any line the base does not have. Until PR4
-drains the baselined pairs (the file's `wc -l` count), **a PR that adds a new path mention to a suite fails the ratchet and must declare an edge** (or add an accept row for a mention) in the same PR.
+A baseline row cannot be added: the failure text offers no way to, `ratchet --print-baseline` only removes pairs once a baseline exists, and the growth rule refuses any line the base does not have. PR4 (#10860) drained the code-extension pairs
+it could prove are real reads; the pairs that remain in the file (`wc -l` is the count) are mentions, non-code pairs, and the real reads whose edge was held back because declaring it reveals more mentions (PR5 and PR4b). Until they are drained or accepted,
+**a PR that adds a new path mention to a suite fails the ratchet and must declare an edge** (or add an accept row for a mention) in the same PR.
 
 A rename or move of a path a baselined suite names reads as a new pair (growth, exit 1): a rename of a baselined path or suite is a **drain-class PR**. Declare or accept the renamed pairs first, then rename, or rename in the same PR with every renamed pair declared or accepted.
 While the job is advisory a red on such a rename is expected and is noted in the PR; rename-carry (an exact one-to-one rename of a pair already in the base baseline) is a PR3b entry condition, not built.
@@ -243,7 +244,18 @@ If the pruned file is still not equal to the live set, the difference is a new p
 
 PR4 (#10860) and PR5 (#10861) shrink the baseline in the same commit as the edge or accept edit, so the live set and the baseline move together. Only one drain PR is open at a time: the claim is the label `s4-drain` on one open DRAFT PR plus a mirror
 comment on #10448 (`gh pr list --label s4-drain --state open` must be empty before a second is started). A second PR rebases and regenerates with the prune-only `--print-baseline` until the diff to main is empty, never by hand. A drain PR merged inside the PR3b observation window
-restarts the window count (it changes the baseline, the live set and the runner oracle): the default order is PR3a, the window, PR3b, PR4.
+changes the baseline, the live set and the runner oracle, so it is recorded on #10865 with the merge SHA and restarts the window count by hand; nothing in the probe enforces the restart (tracked in #10949), so the closer of #10865 counts only units created after the latest recorded drain SHA. The default order was PR3a, the window, PR3b, PR4; PR4 was not delayed, which is the owner's schedule call.
+
+### The drain rubric
+
+One home for the bar PR4 applied, so PR4b, PR5 and later authors apply the same one (evidence for each pair: `knowledge-base/project/specs/feat-one-shot-s4-affected-index-pr4-code-edge-drain/pairs-decisions.tsv`).
+
+- **Declare an exact-file edge** in `AFFECTED_<LABEL>_PATHS` only when, at run time, the suite or a library or script it runs (a) executes or sources the file (a computed path and a best-effort `source ... || true` count), (b) opens its content (cat, grep, jq, readFileSync, import, hash, diff, or copy-then-assert on a copy), (c) asserts its existence or mode where the verdict depends on it, or (d) the path is a data-table row that a quoted loop feeds to a read, exec or stat. No quoted loop means no declaration.
+- **A mention is not declared.** Messages, docstrings and comments, test-vector arguments to a predicate that never opens the path, fixture rows, files the suite writes into a scratch tree, allow-list, classification and relevance rows (a text-scanned data library is not a read), negative strings. Mentions move to PR5 as accept rows.
+- **Shared helper reads** go through an underscore-prefixed shared array (`_CLOSURE_LEAF_*`, defined above the first label that spreads it, commented with the sourcing `file:line`), spread only into labels whose suite really sources the helper.
+- **Breadth.** Exact file by default; a directory prefix only for a real walker (loop line quoted, at least 3 segments, at most 25 tracked files); `glob:` only for extension-aware walks; no `ALWAYS_ON_SUITES` entry in a drain PR (a whole-tree walker is a selection-policy call for criterion (c)).
+- **Reveal and hold-back.** Declaring a file makes the audit read it, and every path it names becomes a pair for that suite. Count the `new-pair` entries of the first report (`ratchet --report <file>`). A revealed real read is declared next round; a revealed mention means the revealing edge is held back (its original pair stays baselined, nothing is added to the baseline or to an accept file). Stop line: round 1 under 60 new pairs, later rounds under 30, at most 4 rounds, strictly shrinking, cumulative at most 150; over a cap, hold back and continue in a follow-up PR under the same `s4-drain` claim.
+- **A revert is not a clean rollback.** It re-adds the drained baseline lines, which the growth rule reads as `grown` (advisory red until the next drain regenerates the baseline). Correct forward: keep the edge, or remove it together with a PR5 accept row.
 
 ### The observation log
 
