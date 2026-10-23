@@ -249,3 +249,9 @@ A focused test was invoked from the repository root using an app-relative path
 and failed before starting. Resolve script paths with `rg --files` from the
 explicit worktree and invoke the path relative to that same directory (for
 example, `apps/web-platform/scripts/dev-ledger-parity.test.sh`).
+
+## Addendum — 2026-10-23 commit hook worktree resolution
+
+When a commit hook misidentifies a feature worktree as main/master, verify the
+branch and `git status` explicitly, then retry with `git -C <absolute-worktree>
+commit ...` rather than trusting the hook's current-directory resolution.
