@@ -265,6 +265,29 @@ describe("model contract (#10552)", () => {
     expect(prompt).not.toContain("proposed_diff_unified");
     expect(prompt).not.toContain("byte_impact");
   });
+
+  it("the phase-1 prompt states the quorum from the constant, tells the model the server enforces it, and keeps no literal threshold", () => {
+    // Comment-stripped: the file documents the very construct, and a `// ${PROMOTION_QUORUM}`
+    // comment inside the array must not stand in for a prompt line.
+    const src = readFileSync(
+      join(__dirname, "../../../server/inngest/functions/cron-compound-promote.ts"),
+      "utf-8",
+    )
+      .split("\n")
+      .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+      .join("\n");
+    const start = src.indexOf("You are a clustering agent");
+    const prompt = src.slice(start, src.indexOf("].join(", start));
+    // Both prompt lines state it (the census pins the sense of both too): the sense (>=) and
+    // the "N or more distinct" line, each read from the constant, with no literal anywhere.
+    expect(prompt).toContain(">=${PROMOTION_QUORUM} source learnings");
+    expect(prompt).toContain("${PROMOTION_QUORUM} or more distinct");
+    expect(prompt.match(/\$\{PROMOTION_QUORUM\}/g)).toHaveLength(2);
+    expect(prompt).not.toMatch(/>=\s*\d/);
+    expect(prompt).not.toMatch(/\b\d+\s+or more\b/);
+    // The model is told a short cluster is refused, so it does not spend a slot on one.
+    expect(prompt).toMatch(/server refuses a cluster with fewer/);
+  });
 });
 
 // =============================================================================

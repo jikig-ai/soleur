@@ -702,11 +702,18 @@ Reading it:
   |---|---|---|
   | `edit-target-unreadable` | path not in HEAD, not a regular file, no trailing newline, or contains a carriage return | N (no proof) |
   | `edit-target-too-large` | base over 120,000 bytes (about 30k tokens); `review`, `work`, `ship`, `brainstorm` today (#10551) | N |
-  | `edit-invalid` | schema, empty, charset, length, credential shape, rule-bullet shape, frontmatter or fence anchor, no resolvable source learning, or a `max_tokens` stop; the cause is the Sentry `cause` tag | N |
+  | `edit-invalid` | schema, empty, charset, length, credential shape, rule-bullet shape, frontmatter or fence anchor, or a `max_tokens` stop; the cause is the Sentry `cause` tag | N |
   | `edit-anchor-not-found` | the anchor line does not occur in the file | N |
   | `edit-anchor-ambiguous` | the anchor line occurs more than once | N |
   | `edit-target-duplicate` | a second cluster on a target already drafted this run (both PRs would fork from one base) | N |
   | `edit-derive-failed` | a SERVER defect: the derived diff was not additive, or the derivation itself failed (Sentry op `draft-edit-error`) | F (defect) |
+
+  One more pre-draft refusal is NOT an `edit-*` member (the census pins that prefix to the seven above), so it
+  has its own row, like `target-path-refused`:
+
+  | reason | what actually happened | probe class |
+  |---|---|---|
+  | `quorum-not-met` | the cluster had fewer than `PROMOTION_QUORUM` (5) distinct corpus-resolved source learnings; refused before the target file is read and before the phase-2 model call (the draft step's API-key check and always-loaded read still run first; ADR-092 Amendment 2026-10-20). Sentry tags `reason=quorum-not-met`, `cause=below-quorum`; `extra.source_count` (distinct resolved) and `extra.proposed_count` (the model's raw list length) are bare integers, also present on the mirrored error row (key `cluster_hash`), not on the `hash`-keyed warn line | N |
 
   `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` can no longer fire
   for a correct server derivation (the diff touches only the declared target, removes nothing, and cannot mint
