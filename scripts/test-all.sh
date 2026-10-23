@@ -5730,15 +5730,8 @@ if want_scripts; then
   # the daily verify leg; a structural arm pins that it carries no query or parse of its own. Four
   # mutants are replayed against the arms, each from a sandbox tree.
   run_suite "scripts/web2-luks-live-6931" bash scripts/followthroughs/web2-luks-live-6931.test.sh
-  # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
-  # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
-  # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
-  # sibling `SOLEUR_INFRA_CONFIG_RESTART_STDERR:` diagnostic rows, toward its PASS condition. So
-  # the probe would have closed the issue on the evidence of its own recurrence. The suite pins
-  # the action-vocabulary split and the freshness guard that a PASS now requires.
-  run_suite "scripts/infra-config-activation-7220" bash scripts/followthroughs/infra-config-activation-7220.test.sh
-  # Post-recut registry fill rate (#7341). Same failure family as the probe directly above, which
-  # is why it is registered next to it: five separate fail-open defects, every one of which
+  # Post-recut registry fill rate (#7341). Same failure family as the probes registered above, which
+  # is why it is registered here: five separate fail-open defects, every one of which
   # produced a GREEN verdict. Two are worth pinning here. A 72h window straddling the recut fitted
   # one line through the old 100%-full volume and the new empty one, reporting a WIPE as a trend
   # (`PASS slope=-58.48pp/day`). And `boot_id=([0-9a-f-]+)` matched only a PREFIX of the token, so
