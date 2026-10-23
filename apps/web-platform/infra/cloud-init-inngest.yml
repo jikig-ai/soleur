@@ -1932,20 +1932,22 @@ write_files:
 
       # verify_fail — the named-failure exit. Records the attempt in applied.json WITHOUT
       # advancing the applied pair (best-effort — a dead state dir must not mask the emit),
-      # emits the marker under the same fail-open 300 s throttle as NOOP (a reason CHANGE
-      # always emits; a sustained identical failure re-emits once per window — ~288
-      # rows/day per sustained reason, not ~1,440), and exits 1 EVERY
+      # emits the marker under the same fail-open NOOP_THROTTLE_S (default 300 s)
+      # throttle as NOOP (a reason-or-detail CHANGE always emits; a sustained
+      # identical failure re-emits once per window — ~288 rows/day per sustained
+      # reason at the default, not ~1,440), and exits 1 EVERY
       # tick regardless — the oneshot failure + timer retry is the liveness signal, the row
       # is the reason (the comparator DIVERGES if it is the last thing the host said).
       VF_STAMP="$${STATE_DIR}/.verify-fail-emitted"
       verify_fail() {
         # $1 = reason token; $2 = manifest VERSION when known (rejver= — never `version=`,
         # which the comparator would parse as applied state); $3 = extra detail. The emit
-        # is reason-change-or-300s-window (emit_due fails toward emitting, never silence).
+        # is reason-or-detail-change-or-300s-window (VF_STAMP keys `reason:detail`, so a
+        # detail flip re-emits immediately; emit_due fails toward emitting, never silence).
         write_state "verify-fail:$1" "$${2:-}" "$pointer" || true
-        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1" ] || emit_due "$VF_STAMP"; then
+        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1:$${3:-}" ] || emit_due "$VF_STAMP"; then
           emit "SOLEUR_INFRA_PULL_VERIFY_FAIL" "reason=$1 offered=$${pointer:0:12} rejver=$${2:-none}$${3:+ $3}"
-          printf '%s' "$1" > "$VF_STAMP" 2>/dev/null || true
+          printf '%s' "$1:$${3:-}" > "$VF_STAMP" 2>/dev/null || true
         fi
         exit 1
       }
@@ -2018,7 +2020,7 @@ write_files:
       # Sweep residue first: a SIGKILL'd tick leaks its stage dir and orphan .new files
       # (the EXIT trap can't run under SIGKILL).
       rm -rf "$${STATE_DIR}"/stage.* 2>/dev/null || true
-      rm -f "$${APPLIED_JSON}.new" "$${APPLIED_VERSION_FILE}.new" 2>/dev/null || true
+      rm -f "$${APPLIED_JSON}.new" "$${APPLIED_VERSION_FILE}.new" "$${STATE_DIR}/verify.stderr.new" 2>/dev/null || true
       STAGE="$(mktemp -d "$${STATE_DIR}/stage.XXXXXX" 2>/dev/null)" || verify_fail stage-init
       trap 'rm -rf "$STAGE"' EXIT
 
@@ -2056,7 +2058,7 @@ write_files:
       _tgz_bytes="$(stat -c %s "$STAGE/bundle.tar.gz" 2>/dev/null || echo 0)"
       case "$_tgz_bytes" in ''|*[!0-9]*) _tgz_bytes=0 ;; esac
       [ "$_tgz_bytes" -gt 67108864 ] && verify_fail extract "" "member=oversized"
-      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '$1 !~ /^[-d]/ {found=1; exit} END{exit found?0:1}' \
+      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '{if ($1 !~ /^[-d]/) found=1} END{exit found?0:1}' \
         && verify_fail extract "" "member=nonregular" || true
       tar -xzf "$STAGE/bundle.tar.gz" -C "$STAGE/bundle" \
         --no-same-owner --no-same-permissions 2>/dev/null || verify_fail extract
@@ -2068,7 +2070,13 @@ write_files:
       # nothing here touches Fulcio/Rekor; the trusted root is baked and mounted :ro.
       # --network none: the verify needs no egress at all. The image was staged by the
       # explicit pull above, so docker's implicit pull is a no-op cache hit here.
-      if ! timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
+      # stderr is captured around `timeout` (not inside it) so an rc=124 kill still
+      # lands the partial stderr for the `timeout` classifier arm. The $STAGE copy
+      # is unbounded-by-design (the classifier reads it; piping `2>` through `head`
+      # would SIGPIPE the verifier) and trap-cleaned each tick; the persisted
+      # $STATE_DIR copy is bounded (4 KiB), mode 0600, last failure only.
+      _vrc=0
+      timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
           -v "$STAGE/bundle:/bundle:ro" \
           -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
           "$COSIGN_IMAGE" verify-blob \
@@ -2076,8 +2084,39 @@ write_files:
           --bundle /bundle/manifest.txt.sigstore.json \
           --certificate-identity-regexp "$IDENTITY_REGEXP" \
           --certificate-oidc-issuer "$OIDC_ISSUER" \
-          /bundle/manifest.txt >/dev/null 2>&1; then
-        verify_fail signature
+          /bundle/manifest.txt >/dev/null 2>"$STAGE/verify.stderr" || _vrc=$?
+      if [ "$_vrc" -ne 0 ]; then
+        # Persist the failure stderr on-host (bounded 4 KiB, 0600, last failure
+        # only — a clean tick leaves the last failure in place for triage; the
+        # `# ts=` header binds it to the rejecting tick + offered digest). Written
+        # via .new+mv inside a umask subshell: a bare `>` creates the file at the
+        # unit's umask before chmod narrows it, and a truncate-before-read would
+        # zero the LAST failure's evidence when the stage read itself fails.
+        # The classifier emits a bounded [a-z-]{1,24} token on the VERIFY_FAIL
+        # row; the token survives the phone-home redaction and the drift
+        # allowlist. Token list is restated in the S10 test loop, the runbook
+        # detail= table, and the _summ_row alternation — keep all four in sync.
+        if [ -r "$STAGE/verify.stderr" ]; then
+          ( umask 0177 && {
+              printf '# ts=%s offered=%s rc=%s\n' \
+                "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
+                "$${pointer:0:12}" "$_vrc"
+              head -c 4096 "$STAGE/verify.stderr"
+            } > "$STATE_DIR/verify.stderr.new" ) 2>/dev/null \
+            && mv -f "$STATE_DIR/verify.stderr.new" "$STATE_DIR/verify.stderr" 2>/dev/null || true
+        fi
+        if [ "$_vrc" -eq 124 ]; then _cls=timeout
+        elif grep -qi 'only supported with --new-bundle-format' "$STAGE/verify.stderr" 2>/dev/null; then _cls=flag-newbundle
+        elif grep -qi 'Error response from daemon' "$STAGE/verify.stderr" 2>/dev/null; then _cls=docker
+        elif grep -qiE 'log inclusion|tlog|rekor' "$STAGE/verify.stderr" 2>/dev/null; then _cls=tlog
+        elif grep -qiE 'identity|issuer|\<san\>' "$STAGE/verify.stderr" 2>/dev/null; then _cls=identity
+        elif grep -qiE 'certificate chain|x509|signed by' "$STAGE/verify.stderr" 2>/dev/null; then _cls=chain
+        else _cls=other
+        fi
+        # Charset clamp — the emit channels and _summ_row admit only
+        # [a-z-]{1,24}-shaped tokens; a future arm must degrade, never inject.
+        case "$_cls" in ''|*[!a-z-]*) _cls=other ;; esac
+        verify_fail signature "" "detail=$_cls"
       fi
 
       # VERSION is read ONLY from the signed manifest — never from an OCI tag or the pointer
