@@ -138,8 +138,8 @@ re-dispatch clears, against a write that could otherwise land on a server nobody
 
 #### Amendment — 2026-10-23: the generation-anchor read has no fallback
 
-Item 4 of the 2026-09-24 Amendment above is a true record of what was measured then and is not edited.
-It is superseded: the generation-anchor read uses `HCLOUD_TOKEN_READONLY` alone (ADR-241 D4). The
+Item 4's text of the 2026-09-24 Amendment above is unchanged (a true record of what was measured then);
+a bracketed pointer to this Amendment was added to its first line. It is superseded: the generation-anchor read uses `HCLOUD_TOKEN_READONLY` alone (ADR-241 D4). The
 fallback to the read/write `HCLOUD_TOKEN` was the live path from 2026-09-24 until operator steps O5 and
 O10 landed; it was removed once both were measured done (names-only listing of `soleur/prd_terraform`,
 2026-10-20) under #10664 Site C. An absent, empty or unusable read-only token is `unreadable` with one
