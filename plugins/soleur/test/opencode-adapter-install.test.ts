@@ -262,3 +262,40 @@ describe("opencode adapter install — stale generated files are swept (review f
     }
   });
 });
+
+describe("opencode adapter install — vendored payload mode (npm distribution)", () => {
+  test("vendorPayload mirrors PAYLOAD_DIRS into <target>/soleur/ and resolves tokens to that durable copy", () => {
+    const { target, checkout } = workspace();
+    try {
+      mkdirSync(join(checkout, "scripts"), { recursive: true });
+      writeFileSync(join(checkout, "scripts", "guard.sh"), "#!/usr/bin/env bash\necho ok\n");
+      mkdirSync(join(checkout, "hooks"), { recursive: true });
+      writeFileSync(join(checkout, "hooks", "hooks.json"), "{}\n");
+      mkdirSync(join(checkout, "lib"), { recursive: true });
+      writeFileSync(join(checkout, "lib", "helper.ts"), "export const x = 1;\n");
+      mkdirSync(join(checkout, ".claude-plugin"), { recursive: true });
+      writeFileSync(join(checkout, ".claude-plugin", "plugin.json"), '{"name":"soleur"}\n');
+
+      const result = installOpenCodeAdapter(target, checkout, { vendorPayload: true });
+      expect(result.written).toContain("soleur/.soleur-vendored.json");
+      expect(result.written).toContain("soleur/skills/plan.md");
+      expect(result.written).toContain("soleur/scripts/guard.sh");
+
+      const vendoredRoot = join(target, "soleur");
+      const config = JSON.parse(readFileSync(join(target, "opencode.json"), "utf-8"));
+      expect(config.skills).toEqual([join(vendoredRoot, "skills")]);
+
+      const stub = readFileSync(join(target, "agents", "engineering", "cto.md"), "utf-8");
+      expect(stub).toContain(join(vendoredRoot, "agents/engineering/cto.md"));
+      expect(stub).not.toContain(checkout);
+
+      // Even after the ephemeral npx cache (`checkout`) is deleted, `--check` against the
+      // vendored root passes and every referenced file still exists on disk.
+      rmSync(checkout, { recursive: true, force: true });
+      expect(installProblems(target, vendoredRoot)).toEqual([]);
+    } finally {
+      rmSync(join(target, ".."), { recursive: true, force: true });
+    }
+  });
+});
+

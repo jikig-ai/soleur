@@ -846,6 +846,8 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **Trigger:** PR matches ANY of: (a) touches files in `knowledge-base/product/research/`, `knowledge-base/marketing/`, or adds new workflow patterns (new AGENTS.md rules, new skill phases); (b) has a `semver:minor` or `semver:major` label; (c) title matches `^feat(\(.*\))?:` pattern.
 
+**A resumed or manually-driven ship tail still runs this gate.** When ship is resumed after a dead runner, a context reset, or any path where the merge is driven by hand rather than by an uninterrupted Phase 5.5→Phase 7 flow, run this gate's detection BEFORE arming merge — the gate fires on diff state, not on session continuity, and a partial tail that skips it produces a merged PR with no content disposition (epic #10397's #10404 child shipped this way — retroactive brief filed as #10903).
+
 **Detection:** Run `git diff --name-only origin/main...HEAD` and check file paths against trigger (a). Run `gh pr view --json labels,title` and check against triggers (b) and (c). If any trigger matches, proceed to "If triggered."
 
 **If triggered:**
@@ -2994,20 +2996,15 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Do NOT skip this step.** Do NOT proceed to Step 4 (cleanup) without invoking postmerge. The rationalization "the PR merged, we're done" is exactly the failure mode this gate prevents — a merged PR is not a deployed PR, and a deployed PR is not a healthy deployment. **Why:** PR #4512 — the agent jumped from merge confirmation directly to cleanup, skipping release workflow monitoring (Step 2) and postmerge verification (Step 3.8). The release was still in progress and could have failed silently.
 
+3.9. **Epic-Close Domain-Leader Sweep (conditional — reconcile before cleanup).** Phase 5.5's CMO gate is PR-scoped; aggregate claims, cross-child meta-findings, and deadline-shaped timing exist only at epic scope. **Trigger:** this merge completed a tracked epic — an issue it closed is a child of an epic whose other children are all CLOSED. When the trigger may hold, load [epic-close-sweep.md](./references/epic-close-sweep.md) for detection, the per-child Phase 5.5 disposition census, the arc-level CMO assessment, and the inconclusive-report rule. **If not triggered:** skip to Step 4. **Why:** epic #10397 closed 5/7 briefed with no arc-level assessment — the synthesis surfaced only because the operator asked; the two missed children were partial-ship tails a per-PR gate cannot cover.
+
 4. Clean up worktree and local branch:
 
    Navigate to the repository root directory, then run `bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged`.
 
 This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
 
-**It does NOT durably archive spec directories — do not defer archival to it.** `cleanup-merged` carries an archive step, but its own header scopes it: *"Backward-compat for legacy pre-#2815 worktrees that created specs at the bare root. New layout commits the spec inside the worktree (git history is the canonical archive); the `[[ -d ]]` guard silently skips when the bare-root dir does not exist."* Two independent reasons it cannot durably archive a modern spec dir:
-
-1. **It usually does not run at all.** The step guards on `[[ -d "$GIT_ROOT/knowledge-base/project/specs/<branch>" ]]` against the BARE ROOT's on-disk files, and it executes *before* the "Updated main to latest" step. On a just-merged branch the bare root is therefore still at the pre-merge commit, where the spec dir does not exist — it arrives only with the merge being cleaned up. Guard false, silent skip. Measured on PR #7240: the dir is ABSENT at `5133e3cb` (main at archival time) and PRESENT at `933635603` (the merge commit).
-2. **Even when it runs it commits nothing.** It is a plain `mv` of the bare root's working files, so it produces no commit and leaves the spec dir tracked at its LIVE path on `main`.
-
-The archives that actually exist under `specs/archive/` were committed by **compound's** automatic consolidation (`git mv` + commit on the feature branch), which is the only mechanism that persists.
-
-The practical consequence: **ship's Phase 6.45 (KB Artifact Archival) is now the in-PR archival point** — the named phase both PR arms run before any `gh pr ready` / `gh pr merge` site, backed by the `ship-kb-archive-gate.sh` PreToolUse hook. Compound's Step E archives eagerly when no live-path reader remains, but a deferred archival — the legitimate choice when `specs/<branch>/decision-challenges.md` must stay live for Phase 6 step 2.5's Model Dissents render or the plan file's `## Operator Holds` for step 5 — no longer strands the artifacts: Phase 6.45 runs `archive-kb.sh` AFTER those last reads and the `git mv` rides the same PR. A follow-up PR is never required for archival. **Why the ordering is load-bearing:** PR #7240 deferred compound's archival so Phase 6 step 2.5 could read `decision-challenges.md`, on the strength of `cleanup-merged` archiving post-merge — it did not, and the spec dir shipped unarchived; #9768 shipped unarchived the same way in 2026-10.
+**It does NOT durably archive spec directories — do not defer archival to it.** Its archive step is scoped to legacy bare-root specs, skips silently when the dir is absent, and commits nothing; the in-PR archival point is Phase 6.45. Full reasoning: [cleanup-merged-archival.md](./references/cleanup-merged-archival.md).
 
 **If working from a worktree:** Navigate to the main repo root first, then run cleanup.
 
