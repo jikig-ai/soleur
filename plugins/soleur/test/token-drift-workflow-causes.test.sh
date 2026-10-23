@@ -2507,6 +2507,7 @@ case "$1 $2" in
     case "$R9_MODE" in
       empty) exit 0 ;;
       unauth) exit 1 ;;
+      trailws) printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  \r\n' ;;
       timeout) exit 124 ;;
       killed) exit 137 ;;
       badshape) printf 'abc def\n' ;;
@@ -2520,10 +2521,10 @@ SHIM
 cat > "$R9_DIR/bin/curl" <<'SHIM'
 #!/usr/bin/env bash
 # stands in for curl: the stdin config is recorded, and -f is honoured (an HTTP error exits 22 only when -f was passed)
-cfg="$(cat)"
+cfg=""; [[ -t 0 ]] || cfg="$(cat)"   # a mutant that drops the stdin config must not hang on a terminal
 echo "curl $*" >> "$R9_CALLS"
 printf '%s\n' "$cfg" >> "$R9_CALLS.stdin"
-has_f=0; for a in "$@"; do [[ "$a" == -f || "$a" == -sSf || "$a" == -fsS ]] && has_f=1; done
+has_f=0; for a in "$@"; do [[ "$a" =~ ^-[A-Za-z]*f[A-Za-z]*$ ]] && has_f=1; done
 if [[ "$R9_MODE" == apifail ]]; then
   if (( has_f )); then exit 22; fi
   printf '{"message":"unauthorized"}'
@@ -2559,9 +2560,16 @@ r9_case() {
       grep -q '^BADARGV' "$calls" && { echo "BAD:a doppler call used an unreviewed argv"; return; }
       local nbound; nbound=$(grep '^curl ' "$calls" | grep -c -- '--max-time 30') || nbound=0
       (( nbound == ncurl )) || { echo "BAD:$((ncurl - nbound)) of $ncurl requests carry no --max-time 30"; return; }
-      local nf; nf=$(grep '^curl ' "$calls" | grep -cE -- '(^| )-(sS)?f( |$)|-sSf') || nf=0
+      local nf; nf=$(grep '^curl ' "$calls" | grep -cE -- '(^| )-[A-Za-z]*f[A-Za-z]*( |$)') || nf=0
       (( nf == ncurl )) || { echo "BAD:$((ncurl - nf)) of $ncurl requests lack -f"; return; }
-      grep -q 'AAAAAAAA' "$calls.stdin" || { echo "BAD:the token did not reach curl on its stdin config"; return; } ;;
+      local ntok; ntok=$(grep -c 'AAAAAAAA' "$calls.stdin") || ntok=0
+      (( ntok == ncurl )) || { echo "BAD:the token reached curl's stdin config on $ntok of $ncurl requests"; return; }
+      grep '^curl ' "$calls" | grep -q 'AAAAAAAA' && { echo "BAD:the token is on a curl argv line"; return; } ;;
+    trailws)
+      [[ "$rc" == 0 ]] || { echo "BAD:a token with trailing whitespace rc=$rc"; return; }
+      grep -qE '^::add-mask::A+$' <<<"$out" || { echo "BAD:the trimmed token was not the masked value"; return; }
+      grep -qE '^::add-mask::A+[[:space:]]' <<<"$out" && { echo "BAD:a mask line carries trailing whitespace the sent value lacks"; return; }
+      grep -q 'AAAAAAAA' "$calls.stdin" || { echo "BAD:the token did not reach curl"; return; } ;;
     unauth)
       [[ "$rc" != 0 ]] || { echo "BAD:a rejected secret read exited 0"; return; }
       grep -q 'secret-store exit status 1' <<<"$out" || { echo "BAD:the no-token error does not carry exit status 1"; return; }
@@ -2598,7 +2606,7 @@ r9_case() {
 echo "R9: each converted sweep step decides correctly (clean, absent token, timed-out or killed read, shape-invalid token, rejected listing, found orphan)"
 _r9_ok=1
 for _job in rung2-rehearsal-orphan-sweep inngest-rehearsal-orphan-sweep; do
-  for _mode in clean empty unauth timeout killed badshape apifail paginated orphan; do
+  for _mode in clean empty unauth trailws timeout killed badshape apifail paginated orphan; do
     _v=$(r9_case "$R9_DIR/$_job.sh" "$_mode")
     if [[ "$_v" == OK ]]; then pass "R9/$_job/$_mode"; else fail "R9/$_job/$_mode: ${_v#BAD:}"; _r9_ok=0; fi
   done
@@ -2637,7 +2645,7 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Then 168 -> 172 with R6a-c (the listing blocks load the read-only Hetzner token, no read/write fallback, #9927 item 8b) and the g-doppler-ro
 # classifier row, 172 is the REALIZED `PASS + FAIL`. (R7a-c, three rows pinning the spelling of ten empty-token guards, were added and then removed in the same
 # PR: every one of those ten steps pre-binds HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" so the guard could never hit `unbound variable`; CTO ruling 2026-10-22.)
-# Then 172 -> 255 with R7 and R8 (the orphan sweeps hold the read-only Hetzner token only, and email on failure; NOT the retired R7a-c above, which are different rows) with their 61 mutation rows (the review round hardened the guard from the sweeps' spelling to the property: loader/environment population, closed job shape, pinned install, bounds, fail-propagating sweep), and R9 (the converted sweep steps run under the runner's shell with shimmed doppler and curl: 18 case rows and 2 mutation rows) (#10664 follow-up): 83 added, 255 is the REALIZED `PASS + FAIL`.
+# Then 172 -> 257 with R7 and R8 (the orphan sweeps hold the read-only Hetzner token only, and email on failure; NOT the retired R7a-c above, which are different rows) with their 61 mutation rows (the review round hardened the guard from the sweeps' spelling to the property: loader/environment population, closed job shape, pinned install, bounds, fail-propagating sweep), and R9 (the converted sweep steps run under the runner's shell with shimmed doppler and curl: 20 case rows and 2 mutation rows) (#10664 follow-up): 85 added, 257 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -2653,8 +2661,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 255 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 255." >&2
+if [[ "$((PASS + FAIL))" -lt 257 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 257." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

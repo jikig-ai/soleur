@@ -2532,6 +2532,7 @@ jobs:
           # kill that follows it, and a timeout is NOT a missing credential. Masked per line before anything else.
           doppler_rc=0
           TOKEN="$(timeout -k 5 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform 2>/dev/null)" || doppler_rc=$?
+          TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"  # the masked, checked and sent value is this one
           if [[ "$doppler_rc" == 124 || "$doppler_rc" == 137 ]]; then
             echo "::error::orphan_sweep_doppler_timeout — the secret store was killed or did not answer within 60 s; this sweep has no verdict (this is not a missing credential)."
             exit 1
