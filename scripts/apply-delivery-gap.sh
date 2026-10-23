@@ -29,7 +29,8 @@
 # `--fixture-dir <abs dir>`: <dir>/bin/gh (a shim) is put first on PATH and `now` is read from <dir>/now; the test-only
 # APPLY_DELIVERY_GAP_PAGE_SIZE / APPLY_DELIVERY_GAP_MAX_PAGES overrides are honoured ONLY there. No other input.
 #
-# ENV: GH_REPO (owner/repo, required), GH_TOKEN (live), TRIGGER_RUN_ID (digits, the run that fired the follower),
+# ENV: GH_REPO (owner/repo, required), GH_TOKEN (live), TRIGGER_RUN_ID (digits, the run that fired the follower; required
+#      in live mode, may be empty only with --fixture-dir),
 #      GITHUB_RUN_ID (digits, linked from issue text).
 # EXIT: 0 reconcile complete; 1 any read/write failure (::error::apply_delivery_gap_<reason> is the LAST line);
 #       2 rejected input.
@@ -161,6 +162,11 @@ TRIGGER_RUN_ID="${TRIGGER_RUN_ID-}"
 GITHUB_RUN_ID="${GITHUB_RUN_ID-}"
 [[ "$GH_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || reject_input "GH_REPO is not owner/repo"
 [[ -z "$TRIGGER_RUN_ID" || "$TRIGGER_RUN_ID" =~ ^[0-9]{1,20}$ ]] || reject_input "TRIGGER_RUN_ID is not digits"
+# Live mode (no --fixture-dir) is always started by a workflow_run, which carries the run id: an empty value there would
+# silently skip the trigger-visibility check, so it is rejected. Empty is allowed only with --fixture-dir (and --self-test).
+if [[ -z "$FIXTURE" ]]; then
+  [[ "$TRIGGER_RUN_ID" =~ ^[0-9]{1,20}$ ]] || reject_input "TRIGGER_RUN_ID is required (digits) in live mode"
+fi
 [[ -z "$GITHUB_RUN_ID" || "$GITHUB_RUN_ID" =~ ^[0-9]{1,20}$ ]] || reject_input "GITHUB_RUN_ID is not digits"
 
 if [[ -n "$FIXTURE" ]]; then

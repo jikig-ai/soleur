@@ -41,7 +41,7 @@ INFRA_WF="$ROOT/$INFRA_WF_REL"
 FIX="$SCRIPT_DIR/fixtures/apply-delivery-gap"
 SELF="$SCRIPT_DIR/apply-delivery-gap-follower.test.sh"
 
-MUTANT_FLOOR=23
+MUTANT_FLOOR=24
 # Per-group assertion floors, recorded from the first green full run (ADG_PRINT_COUNTS=1 prints the counts to re-derive
 # them). Enforced only on a full run: a group that silently stops asserting reds the suite.
 declare -A FLOOR=(
@@ -738,6 +738,18 @@ if want S8:input; then
   eq "S8 non-digit TRIGGER_RUN_ID: rc 2" "$SUT_RC" 2
   bad GH_REPO="$REPO_SLUG" GITHUB_RUN_ID='1 2' bash "$SUT" --fixture-dir "$ST"
   eq "S8 non-digit GITHUB_RUN_ID: rc 2" "$SUT_RC" 2
+  # F27a: in live mode (no --fixture-dir) an empty or non-digit TRIGGER_RUN_ID is rejected; the shim is first on PATH so a
+  # missing guard could still never reach the network, and no read may have been made.
+  : >"$ST/out/reads.log"
+  bad PATH="$ST/bin:$PATH" GH_REPO="$REPO_SLUG" bash "$SUT"
+  eq "S8 live mode with no TRIGGER_RUN_ID: rc 2" "$SUT_RC" 2
+  eq "S8 live mode with no TRIGGER_RUN_ID: named error last" "$(last_line)" "::error::apply_delivery_gap_bad_input"
+  has "S8 live mode with no TRIGGER_RUN_ID: the rejection names the variable" "$ST/all.txt" "TRIGGER_RUN_ID is required (digits) in live mode"
+  bad PATH="$ST/bin:$PATH" GH_REPO="$REPO_SLUG" TRIGGER_RUN_ID= bash "$SUT"
+  eq "S8 live mode with an explicitly empty TRIGGER_RUN_ID: rc 2" "$SUT_RC" 2
+  bad PATH="$ST/bin:$PATH" GH_REPO="$REPO_SLUG" TRIGGER_RUN_ID=12ab bash "$SUT"
+  eq "S8 live mode with a non-digit TRIGGER_RUN_ID: rc 2" "$SUT_RC" 2
+  eq "S8 and none of the rejected live runs made a read" "$(wc -l <"$ST/out/reads.log" | tr -d ' ')" 0
   ASSERTED_REASONS+=(bad_input)
   gend
 fi
@@ -997,7 +1009,7 @@ if want S17; then
   mk_case s17
   runs_file "$ST/runs.deploy-fix.json" "$(mkrun 1701 push main completed success 0x1701 "$(ago 10)" "$(ago 9)")" "$(mkrun 1702 push main completed success 0x1702 "$(ago 20)" "$(ago 19)")"
   rc=0
-  env -i PATH="$ST/bin:$PATH" HOME="$ST" TMPDIR="$ST/tmp" GH_REPO="$REPO_SLUG" GH_TOKEN=synthetic-token \
+  env -i PATH="$ST/bin:$PATH" HOME="$ST" TMPDIR="$ST/tmp" GH_REPO="$REPO_SLUG" GH_TOKEN=synthetic-token TRIGGER_RUN_ID=1701 \
     APPLY_DELIVERY_GAP_PAGE_SIZE=2 APPLY_DELIVERY_GAP_MAX_PAGES=1 bash "$SUT" >"$ST/all.txt" 2>&1 || rc=$?
   SUT_RC=$rc
   eq "S17 live mode ignores the page overrides (rc 0, no truncation)" "$SUT_RC" 0
@@ -1187,6 +1199,7 @@ mut M18 script render_body 'total="$(wc -l <"$ROWS")"' 'total="$(wc -l <"$WORK/r
 mut M19 script degraded_upsert 'nums="$(issue_numbers "$DEGRADED_TITLE")"' 'nums="$(issue_numbers "$TITLE")"' 'S8:degraded'
 mut M20 script issue_numbers ' and (.title == $t))' ')' 'S9:foreign-title'
 mut M21 script reconcile_workflow 'if [[ "$key" == "infra" ]]; then req="$INFRA_SSH_STEP"; fi' 'if false; then req="$INFRA_SSH_STEP"; fi' 'S11:ssh-step'
+mut M22 script - 'reject_input "TRIGGER_RUN_ID is required (digits) in live mode"' ':' 'S8:input'
 mut Y1 workflow - '    timeout-minutes: 10<NL>' '    timeout-minutes: 10<NL>    permissions:<NL>      contents: write<NL>' 'W'
 mut Y2 workflow - 'group: apply-delivery-gap-follower' 'group: terraform-apply-web-platform-host' 'W'
 
