@@ -210,7 +210,12 @@ jobs:
           		fmt.Printf("LOAD_ERR: %v\n", err)
           		return
           	}
-          	fmt.Printf("LOAD_OK version=%s\n", b.Version())
+          	ver, verr := b.Version()
+          	if verr != nil {
+          		fmt.Printf("LOAD_OK (version unreadable: %v)\n", verr)
+          		return
+          	}
+          	fmt.Printf("LOAD_OK version=%s\n", ver)
           }
           GO
           cd "$P"
