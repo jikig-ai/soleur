@@ -3136,7 +3136,7 @@ echo "=== stage S2-B: Better Stack reader (basic auth off argv) done ==="
 
 # =====================================================================================
 # STAGE S2-C: the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) off curl argv in
-# scripts/check-deploy-script-parity.sh and the two followthrough probes that remain. Same canonical HMAC snippet as the
+# scripts/check-deploy-script-parity.sh and the followthrough probes that remain in HMAC_MANIFEST. Same canonical HMAC snippet as the
 # cutover copies (key on the python3 child's ENVIRONMENT only), `_bearer_ok` (a copy of the cutover function) on both
 # Cloudflare Access values, `--disable --noproxy '*'` first, `--config -` with three `header = "..."` lines on a
 # process substitution. A refusal sends nothing and prints the value-free marker; the exit code is the SURFACE'S
@@ -3185,7 +3185,7 @@ hmx_status chm6 "$HMX_GOOD" "$HMX_CFID" "${HMX_CFSEC}x"; hmx_st6="$HMX_ST"
 [[ "$hmx_st5" == 401 && "$hmx_st6" == 401 ]] || fatal "CHM5/6 a wrong Cloudflare Access value was accepted (id $hmx_st5, secret $hmx_st6)"
 row "control CHM5: a wrong Cloudflare Access client id or secret is 401 (both compared exactly)" ok
 
-# ---- the audit of the five converted files: ONE function, so the real rows and the mutant rows judge identically ----
+# ---- the audit of the converted files: ONE function, so the real rows and the mutant rows judge identically ----
 # HM5_BAD names the failed facets: snippet (the HMAC line is not the canonical program with the deploy key, exactly once),
 # guard (no `|| VAR=""` after it), hexcheck (no ^[0-9a-f]{64}$ test), openssl (an openssl/-hmac token on a non-comment line),
 # bearer (the _bearer_ok function differs from the cutover's, or is not applied to exactly two values), config (the curl command
@@ -3215,14 +3215,23 @@ hm5_audit() { # <file>
 # swapped entry kept the row count while dropping a probe's audit.
 HM5_FILES="scripts/check-deploy-script-parity.sh
 $(printf '%s\n' "$HMAC_MANIFEST" | cut -d'|' -f1 | sed 's|^|scripts/followthroughs/|; s|$|.sh|')"
+# a malformed manifest row (empty name, no separator) derives a bogus path: refuse it here, by name, before the audit and its mutants run on nothing
+while IFS= read -r hf; do
+  [[ -f "$hf" ]] || fatal "HM5_FILES derived a path that is not a file ($hf): an HMAC_MANIFEST row is malformed"
+done <<< "$HM5_FILES"
+# the files that hold the canonical HMAC program (outside *.test.sh) must be exactly the audited set: a probe classified into another manifest, or moved
+# out of this one, would otherwise leave the audit green with that probe unaudited
+HM5_HOLDERS="$(git ls-files 'scripts/*.sh' 'scripts/followthroughs/*.sh' | grep -v '\.test\.sh$' | xargs grep -lF 'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3' | sort)"
+if [[ -n "$HM5_HOLDERS" && "$HM5_HOLDERS" == "$(printf '%s\n' "$HM5_FILES" | sort)" ]]; then row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script and every HMAC_MANIFEST probe)" ok
+else row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script and every HMAC_MANIFEST probe)" fail "holders='${HM5_HOLDERS//$'\n'/,}' audited='${HM5_FILES//$'\n'/,}'"; fi
 while IFS= read -r hf; do
   hm5_audit "$hf"
   if [[ -z "$HM5_BAD" ]]; then row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" ok
   else row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" fail "failed facets:$HM5_BAD"; fi
 done <<< "$HM5_FILES"
 hm_hmacflag="$(git grep -nE -- '-hmac' -- $HM5_FILES | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -c . || true)"
-if [[ "$hm_hmacflag" == 0 ]]; then row "census: no -hmac operand remains in the parity script or the two probes (the key is on no openssl argv)" ok
-else row "census: no -hmac operand remains in the parity script or the two probes (the key is on no openssl argv)" fail "$hm_hmacflag non-comment -hmac lines"; fi
+if [[ "$hm_hmacflag" == 0 ]]; then row "census: no -hmac operand remains in the parity script or the manifest probes (the key is on no openssl argv)" ok
+else row "census: no -hmac operand remains in the parity script or the manifest probes (the key is on no openssl argv)" fail "$hm_hmacflag non-comment -hmac lines"; fi
 
 # ---- per-script mutants of the audit: one mutant per script and kind, each asserting WHICH facet fails and WHICH LINE it touched ----
 hm5_mut() { # <file> <label> <from> <to> -> HM5_MUT (path); fatal when the literal is absent
@@ -3457,7 +3466,7 @@ par_run par-Mbearer "CF_ACCESS_CLIENT_SECRET=$(tok_for quote)"; evaluate_hmac "$
 PAR_SCRIPT=""
 if [[ "$(bk_calls "$RUN_ROW")" -ge 1 && " $EV_FAILED " == *" injected "* ]]; then row "check-deploy-script-parity: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED" ok
 else row "check-deploy-script-parity: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED" fail "calls=$(bk_calls "$RUN_ROW") failed='$EV_FAILED'"; fi
-echo "=== stage S2-C: deploy-webhook triple (parity script and two probes) done ==="
+echo "=== stage S2-C: deploy-webhook triple (parity script and the HMAC manifest probes) done ==="
 
 # =====================================================================================
 # STAGE S3 (argv-bearer sweep S3, ADR-280): workflow YAML and the two composite actions send their credential
@@ -8260,8 +8269,8 @@ SELFTEST_PASSES=0
 # 841 -> 874 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 33 S9 rows. The tree measured 841 after merging main (the floor said 840, so it had 1 row of slack), so the new floor is the measured total (874 passed, 0 failed).
 # 874 -> 875 at the second merge of main: #10566 added one S4 manifest row (git-data-rehearsal-evidence), so the base is 842 and the total is the measured 875 (875 passed, 0 failed).
 # 875 -> 880 at the #10697 fix round (rebased onto the 875 above; was 842 -> 847 on its own base) (#10455): web-bash-synthetic.sh joins S6H_CONVERTED (1 row), its _hb_url_ok digest and _hb_curl line pins (2 rows) and one mutation row each (2): measured (847 passed, 0 failed). S6H_FILE_FLOOR stays 7: it detects a mis-resolved directory (the derived population is 17 files), and the S6-HB scratch tree holds only the converted scripts plus two controls.
-# 880 -> 824 at G1 PR-4a (#10937; S4_GUARD_FLOOR 76 -> 74, the measured count): the four retired followthrough probes take their per-probe HMAC rows (the dynamic rows of three, the delegated row of the fourth, their hm5_audit and mutation rows and the manifest rows) with them; the parity block gains one E4 row and HM5_FILES gains sdk-bash-smoke-verdict-10548.sh (its audit and mutation rows): measured (824 passed, 0 failed).
-EXPECTED_TESTS=824
+# 880 -> 824 at G1 PR-4a (#10937; S4_GUARD_FLOOR 76 -> 74, the measured count): the four retired followthrough probes take their per-probe HMAC rows (the dynamic rows of three, the delegated row of the fourth, their hm5_audit and mutation rows and the manifest rows) with them; the parity block gains one E4 row and HM5_FILES gains sdk-bash-smoke-verdict-10548.sh (its audit and mutation rows): measured (824 passed, 0 failed); 824 -> 825 at the same PR's review round: one census row (the files holding the canonical HMAC program are exactly the audited set): measured (825 passed, 0 failed).
+EXPECTED_TESTS=825
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
