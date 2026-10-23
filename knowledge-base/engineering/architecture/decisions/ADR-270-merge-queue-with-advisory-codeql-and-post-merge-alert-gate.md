@@ -824,6 +824,36 @@ the script, suite and fixtures, and a suite-affected-paths declaration if the or
 PRs that currently edit those files merge. No C4 change: the follower is GitHub-internal, adds no actor, system, container
 or data store, and no monitor.
 
+### Addendum 2026-10-24 (#9454; Ref #10832): the sync script judges an armed BEHIND PR against its own base branch
+
+Residual (6) of the 2026-10-20 addendum ("the base is `main`, as everywhere in the script") is partly closed.
+`plugins/soleur/scripts/sync-pr-behind.sh` reads `rules/branches/<base>` from the PR's own `baseRefName`, validated against a
+conservative allowlist with `/` encoded as `%2F`, instead of a literal `main`; the request for a `main`-based PR is
+byte-identical. Still `main`: `sync_step`'s fetch and merge, the Phase 7 fences' inline rules reads, and the pre-merge hook's
+own merge. The `pr view` snapshot now has four fields (state, merge state, armed bit, `baseRefName`); the standalone loop
+widens its one pre-loop head read, so no path makes an extra `gh` call. One bounds helper (`qb_bounds`) and one sanitiser
+(`qb_clean`) replace the triplicated blocks, with identical behaviour for `main`.
+
+Judging the rules against the real base changed what a zero-rule answer means for a non-`main` base: the old script refused it
+by accident (it read `main`), and the new read would have handed it to a sync that merges `origin/main`. So the change adds
+two internal verdicts, `foreign` (a zero-rule read on a non-`main` base) and `badbase` (an empty or unsupported base name),
+with one arm per caller. Flagless `--step` and the standalone loop print `kind=gh` rc 4 and exit 4 with a "not a transient
+error" lead; `--queue-wait` prints `queue_wait` and exits 0, so the pre-merge hook skips its own `origin/main` merge instead of
+falling through to it. The scope is deliberately narrow: only an armed BEHIND or UNKNOWN PR with a non-`main` base and no queue
+rule. A disarmed, DIRTY, BLOCKED or CLEAN non-`main` PR keeps syncing `origin/main` exactly as before (pinned in the suite as
+known-wrong), and the Phase 7 fences pass `--fence`, skip the guard and keep their inline `main` reads, so accepted residual (2)
+(the fence guard bypass) extends to this class and is the live exposure. The refusal is a convenience interlock, not an
+authorization boundary: a PR author can retarget between the snapshot and the read.
+
+Ruled by CTO agent, 2026-10-23 (rows F1-F7 in the branch's `decision-challenges.md`): making `sync_step` merge `origin/<base>`
+(option (c)) was cut because it touches the shared merge and push path the fences use. These places keep saying "main has a
+merge queue" on purpose: the fence prose in `ship/SKILL.md` and `merge-pr/SKILL.md`, `monitor-pr-checks.sh`,
+`plugins/soleur/lib/harness.ts`, `antigravity/INSTRUCTIONS.md`, `infra/github/README.md`,
+`plugins/soleur/skills/ship/references/merge-queue-dequeue.md`, `plugins/soleur/skills/drain-prs/SKILL.md`, `AGENTS.rules.md`
+(rule-body hashes pin it) and `plugins/soleur/lib/pr-merge-poll.ts`. Everything left is tracked on #10958 (Ref #9454, Ref
+#10832). No C4 change: the script talks only to GitHub through `gh`, and no actor, system, container, data store or access
+relationship changes.
+
 ## Cost Impacts
 
 No new vendor or subscription. A queue adds one `merge_group` run per candidate on
