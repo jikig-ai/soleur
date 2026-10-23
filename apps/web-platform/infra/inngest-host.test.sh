@@ -503,7 +503,7 @@ FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$ISO_SRC" | grep -oE '[0-9]+
 # Non-vacuity: a failed extraction must NOT silently pass every case below. An empty GUARD_RE
 # makes `grep -Ec ""` match every line, which would fake a clean replay.
 [[ -n "$GUARD_RE" ]] && pass || fail "could not extract the admit-regex from the provision script in $CLOUD_INIT (the replay below would be vacuous)"
-[[ "$FLOOR" == "5" ]] && pass || fail "could not extract the cardinality floor, or it is not 5 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
+[[ "$FLOOR" == "6" ]] && pass || fail "could not extract the cardinality floor, or it is not 6 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
 
 # Replays the file's exact predicate: strip DOPPLER_ builtins, then FATAL unless the visible
 # non-DOPPLER set is a SUBSET of the allowlist (n_total == n_inngest) AND meets the floor.
