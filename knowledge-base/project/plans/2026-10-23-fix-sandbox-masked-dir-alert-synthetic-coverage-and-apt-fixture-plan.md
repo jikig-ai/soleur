@@ -57,7 +57,7 @@ found on the same day. Four deliverables, one PR (draft PR #10892):
    `apt-get update`; a cache cannot help the first container, so this PR only bounds the stall cost
    (the cache cuts the stall exposure from ~12 cycles to 1-2) and makes the stalled phase visible (surfacing the apt
    tail), so the next occurrence is diagnosable. It does not claim to fix (b); a first-cycle mirror stall remains
-   and fails closed. No `Acquire::http::Timeout` is added (never shipped in this repo, see Corrections; the 90 s attempt cap sits below apt's default 120 s HTTP timeout). No budget or assertion is loosened and no
+   and fails closed. No `Acquire::http::Timeout` is added (never committed in this repo, see Corrections; the 90 s attempt cap is believed to sit below apt's default 120 s HTTP timeout, which is unverified). No budget or assertion is loosened and no
    arm becomes skip-eligible.
 4. **Inngest GuardA re-check.** Verified green on main (see Research Insights). No change.
 
@@ -86,7 +86,7 @@ GuardA row is in `cloud-init-inngest-bootstrap.test.sh`. Two claims in the brief
 |---|---|---|
 | #10455 comment: "`masks_missing=3` is the PR-B `masked-dir-precreate` territory" | 85 of 85 passing synthetic runs on both web hosts in the last 24 h read `masks_missing=3`; Sentry has **zero** `op:masked-dir-precreate` events in 14 d; Supabase `prd` has 0 assistant messages in 36 h and 8 in 7 d. The production `mkdirSync` has not failed. The dirs are created by the first real dispatch only. | The finding is a probe-coverage defect, not a pre-create defect. Fix the probe (Phase 2), keep the alert as the detector for the real pre-create failure (Phase 1). |
 | Probe masks = "the production masked set" | `maskedDirs()` has 3 entries; production pre-creates 4 (`AGENT_SESSION_TMP_ROOT` = `/tmp/.cs` too) and `smokeSandboxConfig.denyRead` carries `/tmp/.cs` as a literal outside `masked`. Neither the deploy smoke nor the runtime synthetic ever creates or counts it. | Add it through a separate constant (order of `denyRead` is pinned by `sdk-bash-probe-parity.test.ts`). |
-| "apt-get fixture times out" | Healthy runs spend 3 s of apt; failing runs spend 420 s across 7 to 11 attempts (rehearsal) or 2 x 90 s on the first `update` (ownership, htpasswd). `apt-bounded.sh` said apt's own timeouts were set although the helper only ever set `Acquire::Retries` (see Corrections: `Acquire::http::Timeout` was never shipped). | Phase 3 (shared cache + visible tail; no timeout option, unproven); stale comment fixed. |
+| "apt-get fixture times out" | Healthy runs spend 3 s of apt; failing runs spend 420 s across 7 to 11 attempts (rehearsal) or 2 x 90 s on the first `update` (ownership, htpasswd). `apt-bounded.sh` said apt's own timeouts were set although the helper only ever set `Acquire::Retries` (see Corrections: `Acquire::http::Timeout` was never committed). | Phase 3 (shared cache + visible tail; no timeout option, unproven); stale comment fixed. |
 | "GuardA red pending the pin bump" | Red on every main/PR run from 21:45Z to 00:10Z on 10-22/23 (`pin v1.1.57` vs latest tag `vinngest-v1.1.58`). `f6ebfa6c68` (#10878) bumped the pin; `Infra Validation` on main is green since 01:01Z (run 39881599619, all `deploy-script-tests` legs including 4/4). HEAD contains the bump. | No change; recorded in the PR body. |
 | Brief: "persisted-CLI-output measurement" is PR-B | The #10697 comment lists it for PR-B, but the operator's brief for this PR scopes only the alert and the `masks_missing` finding. | Not in this PR (Scope Check); it stays an open item on #10455. |
 
@@ -143,7 +143,7 @@ skipped-assertion ceiling (#10781); (b) `git-data-ownership` and `htpasswd-stdin
 attempt_secs=90 spent_before=0s budget=180s` (two 90 s cap kills on the very first `update`). Facts from the
 code and commit `3e5c5e0a38` (#9383): one `apt-get update` + `install` per container, ~12 containers in the
 rehearsal, measured healthy cost ~32 s per container (386 s of 420 s on a slow box), apt's default HTTP
-timeout is 120 s (longer than the 90 s attempt cap, so apt's `Retries` can never act inside a cap), and the
+timeout is believed to be 120 s (UNVERIFIED; if so it is longer than the 90 s attempt cap, so apt's `Retries` could not act inside a cap), and the
 18-20 line scrubbed apt tail the helper prints is not in the CI output, so the stalled phase is invisible.
 **Measured here** (value proposition, Phase 0.6c; command: `docker run` of the digest-pinned `ubuntu:24.04`
 with `-o Dir::State::lists=/work/apt/lists -o Dir::Cache::archives=/work/apt/archives`, `curl python3`):
@@ -306,8 +306,8 @@ carrying `feature` eq `agent-sandbox`, that op and an email action, (3) prints `
   behaviour for a tmpfs over a non-directory is unmeasured, so its test asserts only `masks_missing>0` and a
   verdict from the existing mapping.
 - `ensureMaskedDirs({ dirs, uid, pid1, lstat, mkdir })` (pure, I/O injected; `lstat` everywhere, never `stat`).
-  Guards, in this precedence: `uid_mismatch` (probe uid differs from PID 1's real uid, read from
-  `/proc/1/status` `Uid:` first field, not `stat`) > `pid1_unreadable` > `pid1_env_unreadable` > `home_mismatch`
+  Guards, in this precedence: `uid_mismatch` (probe uid differs from PID 1's real or effective uid, read from
+  the first two `/proc/1/status` `Uid:` fields, not `stat`) > `pid1_unreadable` > `pid1_env_unreadable` > `home_mismatch`
   > `env_divergence`. The first two stop ALL creation. `home_mismatch` / `pid1_env_unreadable`: PID 1's `HOME`
   (from `/proc/1/environ`, NUL-separated; readability in this image is unverified, so the unreadable fallback is
   mandatory) must equal the probe's `HOME` by exact string, both absolute. Hardening (CTO ruling E2: `/proc/1/environ`
@@ -354,7 +354,7 @@ Scenarios.
 `masks_note` (values `uid_mismatch`, `pid1_unreadable`, `pid1_env_unreadable`, `home_mismatch`, `env_divergence`;
 check `masks_note` first); the reader is the person running the Better Stack Logs query
 (`scripts/betterstack-query.sh --grep SOLEUR_WEB_BASH_SYNTHETIC`), because no rule matches the line; a
-persistent `masks_missing>0` means expect a `masked-dir-precreate-failed` Sentry email on the next dispatch ONLY when the path is absent or a regular file (a symlink-to-directory or foreign-owned dir makes the app's recursive mkdir succeed, so only the journal line shows it); (b) an
+persistent `masks_missing>0` means expect a `masked-dir-precreate-failed` Sentry email on the next dispatch ONLY when the app's recursive mkdir throws, that is when the path is absent or anything that is not a directory after symlink resolution (a symlink-to-directory, a real directory with a foreign owner or wrong mode, or a real directory makes it succeed, so only the journal line shows it; the journal gives a count, so WHICH dir is bad is unobservable without host access, and a redeploy then `masks_missing=0` on the next tick is the remedy and its confirmation); (b) an
 alert-response section for the Sentry rule `masked-dir-precreate-failed`: decode by `dir_kind`
 (`peer-socket` -> a sibling can reach another session's bridge socket; `transcript` -> a sibling can read a
 transcript; `session-tmp` -> a sibling can read persisted CLI output), the existing fail-open posture stated
@@ -388,11 +388,11 @@ clock does not restart.
 - `gd_apt_install_bounded` passes the same `-o Dir::State::lists=/work/apt/lists -o Dir::Cache::archives=/work/apt/archives`
   on BOTH `update` and `install` (derived from `GD_APT_STATE_DIR`, not a second literal). `update` still runs in
   every container (a conditional GET; it proves the mirror is reachable). No budget, cap, backoff or rc contract
-  changes, and no `Acquire::http::Timeout` is added (CTO ruling, plan review: unproven; never shipped here, see Corrections). The A1 regex `^install .*Acquire::Retries=5.* curl python3$` keeps matching if the new `-o` options are
+  changes, and no `Acquire::http::Timeout` is added (CTO ruling, plan review: unproven; never committed here, see Corrections). The A1 regex `^install .*Acquire::Retries=5.* curl python3$` keeps matching if the new `-o` options are
   placed before `Acquire::Retries`; `--no-install-recommends` call sites (`sandbox-masked-proc-docker`,
   `cloud-init-inngest-provision-unit`) keep their argument order (test row).
-- Fix the stale header sentence about apt's own timeouts to say what ships (none set; apt's 120 s default exceeds
-  the 90 s attempt cap).
+- Fix the stale header sentence about apt's own timeouts to say what ships (none set; apt's default is believed to be 120 s, which exceeds
+  the 90 s attempt cap, but that figure is unverified).
 3.2 Surface the scrubbed apt tail: the 20-line credential-scrubbed tail the helper writes to stderr is not in the
 CI output today (the failures show only the cause line), so a stalled phase is invisible. Make the consumer
 suites' FIXTURE-FAIL / FAIL lines include it (scrubbed text only). Measure first which consumers drop it
@@ -468,9 +468,13 @@ Yes, three ways, all automatic on merge; the PR body's FIRST line states this (A
 3. `web-platform-release.yml` (path `apps/web-platform/**`) builds and deploys the new image: the probe
    (`infra/lib/sdk-bash-probe.mjs`) and the builder change reach the production containers, which restarts them.
    A restart wipes `/tmp` (tmpfs), so the first synthetic run after it is the cold-container case this PR fixes.
-   Three further consequences of this step: (i) the changed probe also runs in the release's deploy-mode canary
-   gate, so a regression in it blocks the production deploy; (ii) the release restart ends live tenant sessions on
-   both web hosts; (iii) the first write into a PRODUCTION container (the probe creating masked dirs) happens at the
+   Three further consequences of this step: (i) the changed probe also runs in the release's deploy-time SDK
+   Bash smoke, which is NON-BLOCKING (`run_sdk_bash_smoke || true` in `ci-deploy.sh`; it never gates or rolls back
+   the deploy), so a regression in it does NOT block the production deploy: it raises a Sentry `sandbox-canary`
+   event (verdict `sandbox_broken`, reason `sdk_bash_smoke_failed: ...`) and the deploy proceeds; (ii) the release
+   restart ends live tenant sessions on both web hosts after a bounded drain (the deploy script waits for
+   in-container `claude` children up to `CRON_DRAIN_TIMEOUT`, default 4200 s, then stops the container with
+   `docker stop --time=12`), so pick a quiet moment; (iii) the first write into a PRODUCTION container (the probe creating masked dirs) happens at the
    first synthetic tick after the new image is live, not at merge.
 
 No new infrastructure is introduced (Phase 2.8 does not fire): the only Terraform addition is one `sentry_alert`
@@ -753,12 +757,30 @@ exist and are unchanged.
 
 ## Corrections (2026-10-23, review fixes; outcome unchanged, premises corrected)
 
-- **`Acquire::http::Timeout` was never shipped.** `git log --all -S"Acquire::http::Timeout" -- apps scripts` returns nothing, so the plan's
-  statements that "#9379 saw stalls with it set" and that it "was removed between #8744 and the shipped helper" were wrong. The #9379 issue says its
-  stalls happened with NO `Acquire::*::Timeout` set. The decision stands (no apt timeout option is added) for a different reason: the bound is the 90 s
-  per-attempt cap, which sits below apt's default 120 s HTTP timeout (unverified here; apt's config is absent on the dev box), and `Acquire::Retries`
-  only helps fast failures. The Fork 3 ruling's "plus `Acquire::http::Timeout=20`" and Plan review A's "stalls were seen with it set" carry the same
-  premise error (see `decision-challenges.md`).
+- **`Acquire::http::Timeout` was never committed.** `git log --all -S"Acquire::http::Timeout" -- apps scripts` returns nothing, so no committed
+  version of the helper or of any script set it, and the plan's statement that it "was removed between #8744 and the shipped helper" was wrong.
+  Without the pathspec the search returns 3e5c5e0a38 (#9383), whose plan, learning and decision-challenges record a first-cut experiment (ADR-188,
+  2026-10-01 amendment, "Measured, not assumed"): about one apt cycle in three stalled although `Acquire::http::Timeout=20` was set, and the
+  option is in no committed file of that PR. That experiment is not reproduced here. The #9379 issue body says one stalled fetch with no
+  `Acquire::*::Timeout` "can" consume the whole suite budget: a hypothesis, not an observed stall with nothing set. The decision stands (no apt
+  timeout option is added): never committed; the #9383 first-cut experiment recorded stalls with it set; not reproduced here; therefore not
+  added. The 90 s per-attempt cap is the bound; apt's default HTTP timeout is believed to be 120 s but is UNVERIFIED (`apt-config dump` on
+  `ubuntu:24.04` does not list it), and `Acquire::Retries` only helps fast failures. The Fork 3 ruling's "plus `Acquire::http::Timeout=20`" and
+  Plan review A's "stalls were seen with it set" both rest on that uncommitted, unreproduced experiment, not on a shipped setting (see
+  `decision-challenges.md`).
 - **`masks_created` by container state.** `4` on a fresh container (redeploy), `3` after a plain restart (`~/.claude/projects` survives in the writable
   layer; only the tmpfs `/tmp` dirs are recreated), `0` afterwards. Earlier wording that every restart produces a `4` line was wrong.
 - **App-side alert wording.** The Sentry rule emails; it pages no one (Phase 3 observability row).
+- **Plan review D narrowed (email only when the app's mkdir throws).** "A persistent `masks_missing>0` means expect a `masked-dir-precreate-failed`
+  Sentry email" holds only when the app's recursive `mkdirSync` throws: the path is absent, or anything that is not a directory after symlink
+  resolution (a regular file or a symlink to a file: `EEXIST`; a dangling symlink: `ENOENT`, both measured on node v26.12.0). A symlink to a
+  directory, a real directory with a foreign owner or wrong mode, and a real directory all make the mkdir succeed, so no event is emitted and the
+  journal line is the only signal. The journal gives a COUNT only, so which of the four dirs is bad is unobservable without host access; redeploy
+  is the check-free remedy and `masks_missing=0` on the next tick the confirmation. The runbook states this.
+- **Probe uid guard.** The guard requires PID 1's real AND effective uid (the first two `Uid:` fields of `/proc/1/status`) to equal the probe's;
+  the plan's earlier text names the real uid only.
+- **Merge-time production effects, item 3.** The changed probe runs in the deploy-time SDK Bash smoke, which is NON-BLOCKING (`run_sdk_bash_smoke || true`
+  in `ci-deploy.sh`): a regression raises a Sentry `sandbox-canary` event and the deploy proceeds. The earlier text said it blocks the production
+  deploy; that was wrong. The container stop that ends live sessions happens after a bounded drain.
+- **Shared apt state directory.** It is world-writable with the sticky bit, and the sourced script is `go-w`; both are needed (sticky stops a
+  rename-over by another uid). Root inside the container is not stopped (it is the uid that sources the script).

@@ -697,17 +697,20 @@ lands before the release), a value the synthetic rejected, or a probe killed aft
 
 | `masks_note` | Meaning | What to do |
 |---|---|---|
-| `-` | no guard fired (or the field was not emitted: see the caveat above) | with `masks_missing=0` nothing; with `masks_missing>0` a dir is a symlink, a file, foreign-owned, or the mkdir failed: the probe could not make it usable. A `masked-dir-precreate-failed` Sentry email follows ONLY if the path is absent or a regular file (the app's recursive mkdir then fails, for example with `EEXIST`). A symlink to a directory or a foreign-owned directory makes that mkdir SUCCEED, so the app emits nothing and the journal line is the only signal |
-| `uid_mismatch` | the probe's uid is not PID 1's real uid (read from `/proc/1/status`, first `Uid:` field); NOTHING was created, because a dir owned by another uid is one the app cannot use. A future `docker exec -u root` would show this | check how the synthetic execs into the container; the app is unaffected |
+| `-` | no guard fired (or the field was not emitted: see the caveat above) | with `masks_missing=0` nothing; with `masks_missing>0` a dir is a symlink, a file, foreign-owned, or the mkdir failed: the probe could not make it usable. The journal gives a COUNT only, so WHICH of the four dirs is bad is unobservable without host access, and the `dir_kind` decode below applies only when a Sentry event exists. A `masked-dir-precreate-failed` Sentry email follows only if the app's recursive mkdir throws: the path is absent, or anything that is not a directory after symlink resolution (a regular file or a symlink to a file: `EEXIST`; a dangling symlink: `ENOENT`). A symlink to a directory, a real directory with a foreign owner or wrong mode, and a real directory make that mkdir SUCCEED, so the app emits nothing and the journal line is the only signal. Check-free remedy: redeploy (see Containment below; redeploying ends every live tenant session after a bounded drain, so pick a quiet moment), then `masks_missing=0` on the next tick confirms |
+| `uid_mismatch` | the probe's uid differs from PID 1's real or effective uid (the first two `Uid:` fields of `/proc/1/status`); NOTHING was created, because a dir owned by another uid is one the app cannot use. A future `docker exec -u root` would show this | check how the synthetic execs into the container; the app is unaffected |
 | `pid1_unreadable` | PID 1's uid could not be read; nothing was created | read the row as "no claim about the masks"; persistent means the container's `/proc` is restricted |
 | `pid1_env_unreadable` | PID 1's environment could not be read (or was over the 256 KiB cap), so the probe could not confirm it shares the app's HOME; the HOME-derived dir (`~/.claude/projects`) was NOT created and counts missing, the other three were created | expected only if the image restricts `/proc/1/environ`; the transcript mask is then unobserved by the synthetic |
 | `home_mismatch` | PID 1's HOME is not the probe's HOME; same handling as above | the synthetic's HOME comes from the container's own `$HOME` (pre-exec step); a mismatch means the app runs with another HOME, so the transcript mask the app uses is a different dir than the one the probe models |
 | `env_divergence` | informational: PID 1 has an absolute `CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR`, bases the probe does not model; nothing was refused and nothing is counted missing, and coverage still reads `sdk_wrapper_shim_prodtuple` | none; it surfaces the accepted residual below, and a green line carrying this note is no proof for those bases |
 
 No Better Stack rule matches these fields; the reader is whoever runs the Logs query above (`scripts/betterstack-query.sh --grep SOLEUR_WEB_BASH_SYNTHETIC`).
-A persistent `masks_missing>0` means the probe could not make a masked dir usable. If the path is absent or a regular file, expect a `masked-dir-precreate-failed`
-Sentry email on the app's next dispatch and use the section below. If it is a symlink to a directory or a foreign-owned directory, NO email will come
-(the app's recursive mkdir succeeds on it), the journal line is the only signal, and the section below is still the containment recipe.
+A persistent `masks_missing>0` means the probe could not make a masked dir usable. If the app's recursive mkdir throws on it (the path is absent, or anything that
+is not a directory after symlink resolution), expect a `masked-dir-precreate-failed` Sentry email on the app's next dispatch and use the section below, decoding by
+`dir_kind`. If it is a symlink to a directory, or a directory with a foreign owner or wrong mode, NO email will come (the app's recursive mkdir succeeds on it) and
+the journal line is the only signal; that line gives a count, not a dir, so WHICH of the four is bad is unobservable without host access. The check-free remedy is the
+redeploy in the Containment paragraph below (it ends every live tenant session after a bounded drain, so pick a quiet moment), and `masks_missing=0` on the next tick
+is the confirmation; a count that stays above zero after a redeploy needs a code fix.
 
 ### Masked-dir pre-create alert (#10455 PR-B): Sentry rule `masked-dir-precreate-failed`
 
@@ -724,13 +727,15 @@ Sentry email on the app's next dispatch and use the section below. If it is a sy
 | `transcript` | `~/.claude/projects` (and `<CLAUDE_CONFIG_DIR>/projects`) | a sibling can read another session's transcript, which can hold a proxy credential |
 | `session-tmp` | `/tmp/.cs` | a sibling can read persisted CLI output under the shared temp root |
 
-**Decode `extra.code`:** `EACCES` a permission problem on the parent; `EEXIST` a regular file is in the way (the recursive mkdir cannot replace it);
+**Decode `extra.code`:** `EACCES` a permission problem on the parent; `EEXIST` a regular file, or a symlink to a file, is in the way (the recursive mkdir cannot replace it); `ENOENT` a dangling symlink is in the way;
 `ENOSPC` the 256 MB `/tmp` tmpfs is full (one tenant's session tmp usage can cause this for the whole container; the per-session bound is an open #10455 item);
 `EROFS` a read-only mount; `ENOTDIR` a parent component is not a directory.
 
 **Containment.** Redeploy through the existing release deploy path: `gh workflow run web-platform-release.yml --ref main -f bump_type=patch`
 (leave `skip_deploy` at its default `false`; the dispatch publishes a patch release and deploys it, which starts a fresh container on both web hosts and
-ENDS every live tenant session, so pick a quiet moment). A plain
+ENDS every live tenant session after a bounded drain, so pick a quiet moment). Dispatching the workflow deploys whatever is on `main` at that moment
+with the CI gate bypassed (the workflow's own comment: "On a dispatch the CI gate is bypassed too — `resolve-target` reads the in-run release job rather than requiring a
+workflow_run event"), not only the fix, and it cuts and publishes a patch release on the public repository. A plain
 container restart keeps the writable layer: `~/.claude/projects` survives it and only the tmpfs `/tmp` dirs reset, so a `transcript` fault caused by
 a file or foreign-owned dir under HOME needs the redeploy (a new container) and a fault that persists after a redeploy needs a code fix. Do not
 `chmod`/`chown` from outside the app: the app's own pre-create (and, in runtime mode, the synthetic probe) are the only creators, and a manual change
