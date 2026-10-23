@@ -5152,10 +5152,12 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 && "$(s4_ssh_
    && s4_creds_clean "$S4_HZ" "$S4_BOOT" && s4_genv_has 'REMOTE_DIR=/var/lib/workspaces-luks/wl-cutover.AbCd12' && grep -qF 'volumes?name=soleur-web-platform-data-luks' "$S4_ROW/calls/1.argv"; then
   row "S4 row 19 luks Hetzner read (inline): a well-formed run reads the volume with the read-only token as the ONLY stdin header, the token and the boot token are on no curl, python3, openssl or ssh argument, and the delivery follows (3 ssh calls)" ok
 else row "S4 row 19 luks Hetzner read (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) ssh=$(s4_ssh_calls) markers=$(s4_markers)"; fi
-# The fallback arm until ADR-241 O10: an unset or empty read-only name reads the read/write name, judged by the same guard.
-s4_luks_ok_run r19-fallback "$S4/b-r19.sh" D_HCLOUD_TOKEN="$S4_HZ"
-[[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $S4_HZ\"" && "$(s4_ssh_calls)" == 3 ]] && s4_calls_ok 1 && s4_creds_clean "$S4_HZ" \
-  && row "S4 row 19 luks Hetzner read (inline): with the read-only name unset the read/write fallback is used and judged by the same guard" ok || row "S4 row 19 luks Hetzner read (inline): fallback arm" fail "rc=$S4_RC calls=$(s4_ncalls)"
+# (#9927 item 8b) NO fallback arm. Until ADR-241 O10 an unset or empty read-only name read the read/write name; O5 and O10
+# are done, so the read-only name is the only one read. With it unset and a VALID read/write token present, the step must
+# REFUSE like any unusable token, and the read/write value must reach no request and no ssh invocation.
+s4_run r19-no-fallback "$S4/b-r19.sh" "$S4/real" "${S4_LUKS_BASE[@]}" D_HCLOUD_TOKEN="$S4_HZ"
+[[ "$S4_RC" == 1 && "$(s4_ncalls)" == 0 && "$(s4_ssh_calls)" == 0 && "$(s4_markers)" == 1 ]] && s4_said 'reason=readonly_absent' && s4_creds_clean "$S4_HZ" \
+  && row "S4 row 19 luks Hetzner read (inline): with the read-only name unset a valid read/write token is NOT used (named readonly_absent refusal, zero requests, zero ssh)" ok || row "S4 row 19 luks Hetzner read (inline): no-fallback arm" fail "rc=$S4_RC calls=$(s4_ncalls) ssh=$(s4_ssh_calls) markers=$(s4_markers)"
 s4_v_r19() { # a refusal: exit 1 with the step's own sentence and ONE marker, zero requests, ZERO ssh calls, no bundle dir, nothing delivered
   [[ "$S4_RC" == 1 && "$(s4_markers)" == 1 && "$(s4_ncalls)" == 0 && "$(s4_ssh_calls)" == 0 ]] && s4_said 'workspaces-luks-cutover: HCLOUD_TOKEN unusable' \
     && s4_said 'no request was made and nothing was delivered to web-1' && ! s4_said 'refusing to guess' && ! grep -q '^REMOTE_DIR=' "$S4_ROW/genv" && [[ ! -e "$S4_ROW/calls/ssh.log" ]]
@@ -5165,8 +5167,9 @@ s4_sweep r19 "$S4/b-r19.sh" "$S4/real" s4_v_r19 "D_HCLOUD_TOKEN_READONLY" ""
 s4_sweep_row "S4 row 19 luks Hetzner read (inline, data-destructive precondition): an empty, unset or hostile read-only token (the fallback unavailable) aborts the step with exit 1, ONE marker, ZERO requests and ZERO ssh invocations, before the device is resolved or anything is delivered"
 S4_BASE=("${S4_LUKS_BASE[@]}" D_HCLOUD_TOKEN="$S4_HZ")
 s4_sweep r19fb "$S4/b-r19.sh" "$S4/real" s4_v_r19 "D_HCLOUD_TOKEN" ""
-s4_sweep_row "S4 row 19 luks Hetzner read (inline): an empty, unset or hostile read/write FALLBACK token (the read-only name unset) is refused the same way, with zero requests and zero ssh invocations"
-# CROSS (ADR-241 O10): the fallback to the read/write token happens ONLY when the read-only token is EMPTY or unreadable, never because it is MALFORMED. A refused read-only token
+s4_sweep_row "S4 row 19 luks Hetzner read (inline): an empty, unset or hostile read/write token beside an unset read-only name is refused the same way, with zero requests and zero ssh invocations (the read/write name is never read)"
+# CROSS (ADR-241 O10). NOTE, 2026-10-22: since #9927 item 8b the luks lookup, the loader's legacy arm and the PR-plan step no longer fall back to the
+# read/write token at all; the rows below keep proving the stronger claim for any fallback that is ever reintroduced. The fallback happens ONLY when the read-only token is EMPTY or unreadable, never because it is MALFORMED. A refused read-only token
 # beside a VALID read/write token must still ABORT (no request, no ssh), or a refused read-only credential would be silently upgraded to the write-capable one on a data-destructive
 # path (the two sweeps above each leave the other name unset, so an `_bearer_ok "$RO" || HCLOUD_TOKEN=$RW` implementation is green in both).
 S4_X19_BAD=""

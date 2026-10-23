@@ -1,0 +1,13 @@
+# .gitleaks.toml — emitted by soleur:verification-scaffold ONLY because the repo
+# had none (a pre-existing ruleset is never overwritten). It is deliberately a
+# default-pack pointer: `useDefault = true` inherits the gitleaks default rules
+# (cloud keys, vendor tokens, PEM bodies, webhooks). Narrow or widen by editing
+# this file — the emitted hook and the emitted CI job both read it.
+#
+# Waivers: annotate a known-safe line with `# gitleaks:allow <reason>` (or the
+# `//` form) — never commit-then-rotate.
+
+title = "verification-scaffold secret-scan floor"
+
+[extend]
+useDefault = true

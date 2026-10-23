@@ -710,6 +710,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "knowledge-base/marketing/brand-guide.md"
   "knowledge-base/overview/vision.md"
   "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
+  "packages/opencode-plugin/"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
@@ -1969,6 +1970,7 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
   "lefthook.yml"
   "package-lock.json"
   "package.json"
+  "packages/"
   "plugins/"
   "pricing-wireframe.pen"
   "ruff.toml"
@@ -2160,6 +2162,7 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "glob:docs/**.test.sh"
   "glob:infra/**.test.sh"
   "glob:knowledge-base/**.test.sh"
+  "glob:packages/**.test.sh"
   "glob:spike/**.test.sh"
   "glob:todos/**.test.sh"
   "scripts/test-all.sh"
@@ -2223,6 +2226,7 @@ AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
   "glob:docs/**.test.sh"
   "glob:infra/**.test.sh"
   "glob:knowledge-base/**.test.sh"
+  "glob:packages/**.test.sh"
   "glob:spike/**.test.sh"
   "glob:todos/**.test.sh"
   "scripts/test-all.sh"
@@ -2416,6 +2420,7 @@ AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
   "glob:docs/**.sh"
   "glob:infra/**.sh"
   "glob:knowledge-base/**.sh"
+  "glob:packages/**.sh"
   "glob:plugins/**.sh"
   "glob:scripts/**.sh"
   "glob:spike/**.sh"
@@ -2476,5 +2481,34 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_AFFECTED_TESTS_TEST_SH_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "plugins/soleur/test/test-helpers.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/verification-scaffold/test/generator.test.sh — the corpus-walk
+# arm flagged its `grep -rq` for unsubstituted @PLACEHOLDER@s: that scan runs over
+# EMITTED artifacts inside hermetic mktemp fixture repos, a synthesized corpus, not
+# the tracked tree. Declared from what the suite drives: the skill's generator and
+# the references/ templates + guards.tsv it renders from.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_VERIFICATION_SCAFFOLD_TEST_GENERATOR_TEST_SH_PATHS=(
+  "plugins/soleur/skills/verification-scaffold/"
+  "plugins/soleur/skills/verification-scaffold/test/generator.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/verification-scaffold/test/manifest.test.sh — its git ls-files
+# census is scoped by construction: .claude/hooks/**/*.sh non-test + scripts/lint-* are
+# the audit corpus the suite exists to keep classified (a new member missing an audit
+# row is exactly the diff that must select it), and the parity anchors are the two
+# canonical sources its templates byte-pin. The lint-* shape is not expressible in the
+# glob: grammar (the literal head must end in /), so the scripts/ prefix stands for it;
+# everything else the suite reads lives inside the skill dir.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_VERIFICATION_SCAFFOLD_TEST_MANIFEST_TEST_SH_PATHS=(
+  ".claude/hooks/"
+  "scripts/"
+  "plugins/soleur/scripts/lib/wrapper-boundary.sh"
+  "plugins/soleur/scripts/precommit-guard.sh"
+  "plugins/soleur/skills/verification-scaffold/"
+  "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
 )

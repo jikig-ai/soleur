@@ -169,3 +169,13 @@ bun.lockb
 
 # post-dispatch-watch-gate state (per-worktree, never committed)
 soleur-pending-dispatch
+
+# Generated @soleur/opencode payload subtrees (materialized by sync-npm-package.ts before npm pack/publish)
+packages/opencode-plugin/skills/
+packages/opencode-plugin/agents/
+packages/opencode-plugin/commands/
+packages/opencode-plugin/hooks/
+packages/opencode-plugin/scripts/
+packages/opencode-plugin/lib/
+packages/opencode-plugin/opencode/
+packages/opencode-plugin/.claude-plugin/

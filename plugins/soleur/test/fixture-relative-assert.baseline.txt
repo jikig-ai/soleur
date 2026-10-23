@@ -163,8 +163,8 @@
 4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-19	apps/web-platform/infra/ci-deploy.sh
-10	apps/web-platform/infra/ci-deploy.test.sh
+21	apps/web-platform/infra/ci-deploy.sh
+12	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
@@ -353,6 +353,7 @@
 11	plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh
 3	plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
 1	plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
+29	plugins/soleur/skills/verification-scaffold/scripts/verification-scaffold.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh
 1	plugins/soleur/test/claude-code-action-auth.test.sh
 6	plugins/soleur/test/fanout-suite-scope.test.sh
