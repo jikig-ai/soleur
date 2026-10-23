@@ -1,0 +1,17 @@
+# Decision challenges: feat-one-shot-follower-suite-shard-manifest-rows
+
+Headless planning run (2026-10-23). Ref #9454 (ADR-270 merge queue epic), follow-up 1 of 2. The brief itself authorises the
+"already covered or tolerated by design, recommend no change" outcome, so the no-change ruling below is not a
+User-Challenge. No row is an operator question; every `technical` row was ruled by the `soleur:engineering:cto` agent in
+this run, from evidence the planner measured (see the plan's Research Insights).
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Q1 Land the apply-delivery-gap follower rows in this PR, or recommend no change given that open PR #10891 already carries the identical rows | technical | Ruled by CTO agent, 2026-10-23: no change in this PR, with PR #10891 as the vehicle for the rows - the gap is tolerated by design (ADR-240, untabled labels hash onto a leg), a second writer on the two TSVs guarantees a generated-at conflict in #10891 and reopens the hand-merge duplicate-label hazard, and the only cost of waiting is balance (about 80 s on the critical path). Flip to landing the rows via the regenerator if #10891 is closed or abandoned, or is still unmerged after its blocker lands, or a rows-only PR is shown to pass affected-index-ratchet while #10891 does not. |
+| Q2 If rows do land: full regenerator output or a hand-added single row | technical | Ruled by CTO agent, 2026-10-23: full `--incremental --write` output (three rows per file, leg 1, durations at the floor, generated-at bump) - the generator cannot add one label and the 2026-10-14 F5 precedent forbids hand edits; the two sibling labels (diagnose-inngest-verify-workflow and inngest-verify-clean-10390) are the same defect so bundling them is in scope; never add the hcloud-token-readonly-no-fallback-scan row because that suite is not on main and would be a phantom. |
+| Q3 Price of the roughly 100 s suite: the 1204 ms floor, or a hand-set measured value | technical | Ruled by CTO agent, 2026-10-23: accept the floor with src=floor - src=measured means derived from the CI runs named in generated-from-runs and a local timing would corrupt that provenance; pinning to leg 1 (priced about 566 s) already beats the leg 5 hash fallback even at floor price; the scheduled rebalance is what replaces the floor. |
+| Q4 The two stray `*.tsv.n` files and the heavy manifests | technical | Ruled by CTO agent, 2026-10-23: leave scripts/suite-shard-legs.tsv.n and scripts/suite-durations.tsv.n untouched (stale, no consumer, #10937 already edits them) and leave the suite-shard-legs-heavy and suite-durations-heavy tables untouched (different registration set, this suite is light-group). |
+| PR-R1 Plan-review (DHH panel seat): ship no plan file and no PR, and post the three evidence lines as a comment on #10891 instead | taste | Surfaced for the operator, not applied: the one-shot pipeline contract and the brief's "second PR follows" both expect this branch's artifacts and PR, and a comment on another session's PR is outside the brief. The operator may instead close draft #10944 and paste the evidence snapshot into #9454 or #10891. |
+| PR-R2 Plan-review (DHH and simplicity seats): the tracking issue only tracks a tracker | taste | Kept in minimal form: the plan skill's deferral-tracking check requires one, the flip conditions need a durable home after this PR merges, and it is skipped when #10891 has already merged with 0 new. |
