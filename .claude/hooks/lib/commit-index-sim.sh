@@ -32,16 +32,24 @@
 #   CIS_ENV=(NAME=value ...)          the same three assignments, so a consumer that is not a shell function
 #                                     can run:  env "${CIS_ENV[@]}" git diff --cached
 #   cis_clock_start / cis_remaining   one total deadline for the whole simulation across roots, INCLUDING the
-#                                     scan the caller runs inside the window. 30 s, tracked with $SECONDS.
-#   cis_bound_init                    picks the bound: timeout, gtimeout, or `perl -e 'alarm N; exec @ARGV'`;
-#                                     CIS_BOUND_KIND is none when no tool exists (the caller must DENY).
+#                                     scan the caller runs inside the window. 30 s, tracked with $SECONDS. A
+#                                     consumer that never started the clock has no time left (fail closed).
+#   cis_bound_argv                    CIS_BOUND_ARGV=(perl -e "$CIS_BOUND_PL" <seconds left>): a prefix that runs
+#                                     its command in its own process group and, when the time is up, TERMs then
+#                                     KILLs the whole group and exits 124 (the child's own status otherwise).
+#                                     Returns 1 when no time is left. perl is on every host that gets this far
+#                                     (the lexer needs it), so there is no fallback tool ladder.
+#   cis_pins_build <root>             CIS_PINS=(-c ... ): the pin arguments every git call that reads or writes the
+#                                     simulated index must carry (below).
+#   CIS_API=1                         the contract version a caller can test before it trusts this file.
 #
 # DOCUMENTED INPUTS (read, never written): the CTR_* staging facts, _CTR_TEXT (the command text), CIS_ROOT_COUNT
 # (how many repositories the caller scans; the replay is exact only for exactly one), and CIS_DEADLINE_SECONDS.
 #
-# CIS_DEADLINE_SECONDS is a TEST-ONLY knob and can only LOWER the ceiling: a value of ^[0-9]{1,9}$ becomes
-# min(30, value); anything else is ignored; 0 means no time remains, so the first call fails. It cannot raise
-# the ceiling, so a hostile value can only cause a deny, never an allow.
+# CIS_DEADLINE_SECONDS is a TEST-ONLY knob and can only LOWER the ceiling: a plain non-negative integer below 30
+# becomes the limit; anything else (a larger number, a negative or non-number) is ignored; 0 means no time remains,
+# so the first call fails. It
+# cannot raise the ceiling, so a hostile value can only cause a deny, never an allow. (Decision-challenges row 37.)
 #
 # THE REPLAY. Exact replay runs the command's own add records, in text order, as `git -C <dir> add <validated
 # options> -- <paths>` and then the commit's own flags (`-a`/`-p` -> add -u; a pathspec -> add -u -- <literal
@@ -52,27 +60,33 @@
 # record followed only by &&-joined git records. Everything else uses the SUPERSET: `git add -A`, plus
 # `git add -f -- <literal words>` for any force-add record (a non-literal force-add fails: CIS_WHY
 # force-nonliteral). A replay failure is classified by git's own words, under LC_ALL=C: rc 128 and a first line
-# matching `fatal: pathspec '...' did not match any files` is the trusted pathspec-missing error (return 10);
-# ANY other failure (timeout, ENOSPC, another exit 128) abandons the exact replay and rebuilds from a FRESH copy
-# with the superset. A failed superset is a failure (return 20), never an allow.
+# matching `fatal: pathspec '...' did not match any files` is the trusted pathspec-missing error (a path that does
+# not exist cannot be scanned: a failure, CIS_WHY pathspec-missing, never an allow); ANY other failure (timeout,
+# ENOSPC, another exit 128) abandons the exact replay and rebuilds from a FRESH copy with the superset. A failed
+# superset is a failure (return 20), never an allow.
 #
-# EVERY replay git call carries the same pins (CTO row 18): `-c core.fsmonitor=false -c core.untrackedCache=false
-# -c core.splitIndex=false`, plus `-c filter.<n>.clean= -c filter.<n>.process= -c filter.<n>.smudge= -c
-# filter.<n>.required=false` for each configured filter, LC_ALL=C, and the verb is always the literal `add`
-# (an alias cannot hijack it). The replay forwards NOTHING from the command except validated options and paths.
-# `git add` on a temp index would otherwise run configured clean filters at hook time, write a sharedindex.* into
-# the REAL git directory under core.splitIndex, and start an fsmonitor daemon. The sim therefore scans the RAW
-# bytes: a clean filter or Git LFS may record bytes the sim never saw (a named residual). The read-only prepare
-# calls (rev-parse, config) are not pinned and not bounded: they write nothing and run no filter.
+# EVERY replay git call carries the same pins (CTO rows 18 and 28): `-c core.fsmonitor=false -c
+# core.untrackedCache=false -c core.splitIndex=false -c core.hooksPath=/dev/null`, plus `-c filter.<n>.clean= -c
+# filter.<n>.process= -c filter.<n>.smudge= -c filter.<n>.required=false` for each configured filter, LC_ALL=C and
+# GIT_OPTIONAL_LOCKS=0, and the verb is always the literal `add` (an alias cannot hijack it). The replay forwards
+# NOTHING from the command except validated options and paths. `git add` on a temp index would otherwise run
+# configured clean filters and the repository's hooks at hook time, write a sharedindex.* into the REAL git
+# directory under core.splitIndex, start an fsmonitor daemon, and (with a dirty submodule) rewrite the submodule's
+# real index. The sim therefore scans the RAW bytes: a clean filter or Git LFS may record bytes the sim never saw
+# (a named residual). What the sim does NOT guarantee: it may refresh the mtime of an existing real loose object
+# or shared index when the content it adds is already present. Content, directory listing and index bytes of the
+# real repository do not change. The read-only prepare calls (rev-parse, config) are not pinned and not bounded:
+# they write nothing and run no filter.
 #
-# RULES THIS FILE FOLLOWS (a hook that dies here fails OPEN): it calls no mktemp (the caller allocates the
-# temp directory and owns its trap), sets no trap, never calls `exit` (one exception: the canonical
-# assert_fixture_dir guard below `exit 2`s on an empty or relative directory, which is a BLOCKING hook error, so it
-# fails closed, and cannot fire on a workdir this file has just made absolute), and is never called inside `$(...)` (a
-# call there loses the exports). Every step ends in `|| return` / an explicit check, because a bare failing
-# command under the hook's `set -e` exits 1, which the harness treats as non-blocking. bash 3.2: no mapfile,
-# no declare -n, no associative arrays; an empty array is read as ${a[@]+"${a[@]}"}. It needs `cp`, `mkdir`,
-# `rm`, `date`, and one of timeout / gtimeout / perl.
+# RULES THIS FILE FOLLOWS: it calls no mktemp (the caller allocates the temp directory and owns its trap), sets no
+# trap, never calls `exit` (one exception: the canonical assert_fixture_dir guard below `exit 2`s on an empty or
+# relative directory, which is a BLOCKING hook error, so it fails closed, and cannot fire on a workdir this file
+# has just made absolute), and is never called inside `$(...)` (a call there loses the exports). Every fallible
+# step is checked explicitly and returns a code, and that holds under BOTH errexit regimes: called bare under the
+# hook's `set -e`, a failing command would exit 1 (which the harness treats as non-blocking); called on the left
+# of `||` or inside an `if`, errexit is OFF for the whole function, so an unchecked failure would CONTINUE with a
+# half-built state. bash 3.2: no mapfile, no declare -n, no associative arrays; an empty array is read as
+# ${a[@]+"${a[@]}"}. It needs git, perl, cp, mkdir, rm, tr and chmod-free POSIX tools.
 #
 # THE COPY KEEPS THE INDEX'S MTIME (`cp -p`). git decides whether a file is "racily clean" by comparing an entry's
 # mtime with the mtime of the index FILE; a plain cp stamps the copy "now", so a file edited in the same second
@@ -85,13 +99,13 @@ CIS_WHY=""
 CIS_ERR=""
 CIS_DIR=""
 CIS_ENV=()
+CIS_API=1
 CIS_ROOT_COUNT=1
 CIS_REMAINING=0
-CIS_BOUND_KIND=""
-CIS_DEADLINE_EPOCH=""
+CIS_BOUND_ARGV=()
+CIS_PINS=()
 _CIS_T0=""
 _CIS_LIMIT=30
-_CIS_PINS=()
 _CIS_ERRF=""
 _CIS_RC=0
 _CIS_EXPORTED=0
@@ -119,64 +133,61 @@ assert_fixture_dir() {
 
 # ---- the clock and the bound --------------------------------------------------------------------
 
+# The bound (CTO row 30): one fork/waitpid/kill program for every host. A perl `alarm` + exec does NOT stop gitleaks
+# (a Go program: measured, still running 30 s after a 2 s alarm), and `timeout` is absent on a stock macOS. The
+# child runs in its own process group so the TERM (then KILL, 2 s later) reaches its grandchildren too.
+read -r -d '' CIS_BOUND_PL <<'PL' || true
+my $t = shift; my $p = fork(); defined $p or exit 125;
+if (!$p) { setpgrp(0,0); exec @ARGV or exit 127 }
+$SIG{ALRM} = sub { kill 'TERM', -$p; select(undef,undef,undef,2); kill 'KILL', -$p; waitpid($p,0); exit 124 };
+alarm $t; waitpid($p,0); alarm 0;
+exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+PL
+
 cis_clock_start() {
-  local v="${CIS_DEADLINE_SECONDS-}" now
+  local v
   _CIS_LIMIT=30
+  # lower-only, and only for a plain non-negative integer (read as decimal: `08` is 8, not a bad octal that would
+  # abort the arithmetic below under the hook's errexit): anything else is ignored.
+  v="${CIS_DEADLINE_SECONDS-}"
   case "$v" in
     ''|*[!0-9]*) : ;;
-    *)
-      if [ "${#v}" -le 9 ]; then
-        v=$((10#$v))
-        if [ "$v" -lt 30 ]; then _CIS_LIMIT=$v; fi
-      fi ;;
+    *) if [ "${#v}" -le 9 ]; then v=$((10#$v)); if [ "$v" -lt "$_CIS_LIMIT" ]; then _CIS_LIMIT=$v; fi; fi ;;
   esac
   _CIS_T0=$SECONDS
-  CIS_DEADLINE_EPOCH=""
-  if now=$(date +%s 2>/dev/null); then
-    case "$now" in ''|*[!0-9]*) : ;; *) CIS_DEADLINE_EPOCH=$((now + _CIS_LIMIT)) ;; esac
-  fi
   return 0
 }
 
-# cis_remaining — CIS_REMAINING = whole seconds left (<= 0: none).
+# cis_remaining — CIS_REMAINING = whole seconds left (<= 0: none; also when the clock was never started).
 cis_remaining() {
-  if [ -z "$_CIS_T0" ]; then cis_clock_start; fi
+  if [ -z "$_CIS_T0" ]; then CIS_REMAINING=0; return 0; fi
   CIS_REMAINING=$((_CIS_LIMIT - (SECONDS - _CIS_T0)))
   return 0
 }
 
-cis_bound_init() {
-  if command -v timeout >/dev/null 2>&1; then CIS_BOUND_KIND=timeout
-  elif command -v gtimeout >/dev/null 2>&1; then CIS_BOUND_KIND=gtimeout
-  elif command -v perl >/dev/null 2>&1; then CIS_BOUND_KIND=perl
-  else CIS_BOUND_KIND=none
-  fi
+# cis_bound_argv — CIS_BOUND_ARGV for the time left; returns 1 when none is left.
+cis_bound_argv() {
+  cis_remaining
+  CIS_BOUND_ARGV=()
+  if [ "$CIS_REMAINING" -le 0 ]; then return 1; fi
+  CIS_BOUND_ARGV=(perl -e "$CIS_BOUND_PL" "$CIS_REMAINING")
   return 0
 }
 
 # _cis_git_run <git args...> — one pinned, bounded git call. stdout is dropped; stderr goes to $_CIS_ERRF.
-# Returns git's status (124 / 137 / 142: the bound expired). Call it in an `if`.
+# Returns git's status (124: the bound expired). Call it in an `if`.
 _cis_git_run() {
   local rc=0
-  cis_remaining
-  if [ "$CIS_REMAINING" -le 0 ]; then
+  if ! cis_bound_argv; then
     _CIS_RC=124
     assert_fixture_dir "$_CIS_ERRF"
     : > "$_CIS_ERRF"
     return 124
   fi
-  case "$CIS_BOUND_KIND" in
-    timeout) LC_ALL=C timeout -k 2 "$CIS_REMAINING" git "$@" >/dev/null 2>"$_CIS_ERRF" || rc=$? ;;
-    gtimeout) LC_ALL=C gtimeout -k 2 "$CIS_REMAINING" git "$@" >/dev/null 2>"$_CIS_ERRF" || rc=$? ;;
-    perl) LC_ALL=C perl -e 'alarm shift; exec @ARGV' "$CIS_REMAINING" git "$@" >/dev/null 2>"$_CIS_ERRF" || rc=$? ;;
-    *) rc=125 ;;
-  esac
+  LC_ALL=C GIT_OPTIONAL_LOCKS=0 "${CIS_BOUND_ARGV[@]}" git "$@" >/dev/null 2>"$_CIS_ERRF" || rc=$?
   _CIS_RC=$rc
   return "$rc"
 }
-
-# _cis_is_timeout <rc>
-_cis_is_timeout() { case "$1" in 124|137|142) return 0 ;; esac; return 1; }
 
 # ---- the exported window ------------------------------------------------------------------------
 
@@ -285,16 +296,16 @@ _cis_fresh() {
   return 0
 }
 
-# _cis_pins_build <root> — the pin arguments, including one neutralisation per configured filter.
-_cis_pins_build() {
+# cis_pins_build <root> — CIS_PINS: the pin arguments, including one neutralisation per configured filter.
+cis_pins_build() {
   local line k name seen=" "
-  _CIS_PINS=(-c core.fsmonitor=false -c core.untrackedCache=false -c core.splitIndex=false)
+  CIS_PINS=(-c core.fsmonitor=false -c core.untrackedCache=false -c core.splitIndex=false -c core.hooksPath=/dev/null)
   while IFS= read -r line; do
     k="${line%% *}"
     name="${k%.*}"
     case "$seen" in *" $name "*) continue ;; esac
     seen="$seen$name "
-    _CIS_PINS+=(-c "$name.clean=" -c "$name.process=" -c "$name.smudge=" -c "$name.required=false")
+    CIS_PINS+=(-c "$name.clean=" -c "$name.process=" -c "$name.smudge=" -c "$name.required=false")
   done < <(git -C "${1:?}" config --get-regexp '^filter\..*\.(clean|process|smudge|required)$' 2>/dev/null || true)
   return 0
 }
@@ -302,7 +313,7 @@ _cis_pins_build() {
 # _cis_add <git add args...> in <dir>: one pinned, bounded add on the sim index.
 _cis_add() {  # <dir> <args...>
   local d="$1"; shift
-  _cis_git_run "${_CIS_PINS[@]}" -C "$d" add "$@"
+  _cis_git_run "${CIS_PINS[@]}" -C "$d" add "$@"
 }
 
 # _cis_split_record <record index> — _CIS_OPTS and _CIS_PATHS of one add record (words before `--` that start with
@@ -379,7 +390,7 @@ _cis_replay() {
   while [ "$i" -lt "$n" ]; do
     _cis_split_record "$i"
     if [ "${#_CIS_PATHS[@]}" -gt 0 ]; then a=(add ${_CIS_OPTS[@]+"${_CIS_OPTS[@]}"} -- "${_CIS_PATHS[@]}"); else a=(add ${_CIS_OPTS[@]+"${_CIS_OPTS[@]}"}); fi
-    if ! _cis_git_run "${_CIS_PINS[@]}" -C "$CIS_DIR" "${a[@]}"; then
+    if ! _cis_git_run "${CIS_PINS[@]}" -C "$CIS_DIR" "${a[@]}"; then
       rc=$_CIS_RC
       line=""
       IFS= read -r line < "$_CIS_ERRF" || true
@@ -414,8 +425,6 @@ cis_build() {
   _CIS_ERRF="$wd/err"
   assert_fixture_dir "$_CIS_ERRF"
   if ! : > "$_CIS_ERRF" 2>/dev/null; then _cis_fail prepare-failed; return 20; fi
-  cis_bound_init
-  if [ "$CIS_BOUND_KIND" = none ]; then _cis_fail no-bound; return 20; fi
   cis_remaining
   if [ "$CIS_REMAINING" -le 0 ]; then _cis_fail sim-timeout; return 20; fi
 
@@ -434,7 +443,7 @@ cis_build() {
     top=$(git -C "$CIS_DIR" rev-parse --show-toplevel 2>/dev/null) || top=""
     if [ "$top" != "$root" ]; then CIS_MODE=superset; CIS_WHY=dir-not-root; CIS_DIR=""; fi
   fi
-  _cis_pins_build "$root"
+  cis_pins_build "$root"
   if ! mkdir -m 700 "$wd/objs" 2>/dev/null; then _cis_fail prepare-failed; return 20; fi
   assert_fixture_dir "$wd"
   if [ -f "$idx" ]; then

@@ -168,6 +168,8 @@ STUB
       # (ls.N = git ls-files -s), and reports a finding when an INDEXED blob contains $GL_REC_MARK.
       # It never reads a real credential: the mark is the fixture's own synthetic body.
       # GL_REC_HOLD: signal "started" then wait (bounded) for $GL_REC_RELEASE. GL_REC_SLEEP: sleep.
+      # GL_REC_RC / GL_REC_DETECT_RC: exit with that status (a gitleaks that errors out); with GL_REC_RC_REPORT the
+      # finding report is still written first (a gitleaks that finds something AND then fails).
       cat > "$d/gitleaks" <<'STUB'
 #!/bin/sh
 [ "$1" = version ] && { echo 8.24.2; exit 0; }
@@ -184,9 +186,10 @@ g() { "$rg" -c core.fsmonitor=false -c core.untrackedCache=false "$@"; }
 n=$(cat "$d/n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$d/n"
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$sub" "${GIT_INDEX_FILE-<unset>}" "${GIT_OBJECT_DIRECTORY-<unset>}" \
   "${GIT_ALTERNATE_OBJECT_DIRECTORIES-<unset>}" "$PWD" >> "$d/calls.log"
+env | grep -E '^GIT_CONFIG_(COUNT|KEY_|VALUE_|PARAMETERS)' > "$d/env.$n" 2>/dev/null
 if [ "$sub" = detect ]; then
   if [ -n "$src" ] && [ -d "$src" ]; then (cd "$src" && find . -type f -print0 | sort -z | tr '\000' '|') > "$d/nodiff.$n"; fi
-  exit 0
+  exit "${GL_REC_DETECT_RC:-0}"
 fi
 [ "$sub" = git ] || exit 0
 if [ -n "${GIT_INDEX_FILE-}" ]; then
@@ -209,14 +212,15 @@ if [ -n "${GL_REC_HOLD-}" ]; then
   while [ ! -e "${GL_REC_RELEASE-/nonexistent}" ] && [ "$k" -lt 100 ]; do sleep 0.1; k=$((k + 1)); done
 fi
 [ -n "${GL_REC_SLEEP-}" ] && sleep "$GL_REC_SLEEP"
+if [ -n "${GL_REC_RC-}" ] && [ -z "${GL_REC_RC_REPORT-}" ]; then exit "$GL_REC_RC"; fi
 if [ -n "${GL_REC_MARK-}" ]; then
   hit=$(g grep --cached -l -F -e "$GL_REC_MARK" 2>/dev/null | head -n 1)
   if [ -n "$hit" ] && [ -n "$rp" ]; then
     printf '[{"RuleID":"private-key","File":"%s","StartLine":1}]' "$hit" > "$rp"
-    exit 1
+    exit "${GL_REC_RC:-1}"
   fi
 fi
-exit 0
+exit "${GL_REC_RC:-0}"
 STUB
       ;;
     findings)
@@ -1525,7 +1529,8 @@ _t() {
 # the verb after `-C <dir>` / `-c k=v`. "SIM=1" = GIT_INDEX_FILE is set and is not $SHIM_REAL_INDEX,
 # i.e. a would-be-index call (fixture and gitleaks-internal calls pass through). Failure modes are
 # read at CALL time: SHIM_FAIL=addA (a sim `add` carrying -A/--all), replay (a sim `add` carrying
-# neither -A/--all nor -u: the exact replay), anyadd; SHIM_MSG / SHIM_RC choose the output.
+# neither -A/--all nor -u: the exact replay), anyadd; SHIM_MSG / SHIM_RC choose the output. SHIM_FAILV=<verb> fails
+# every call of that verb (check-attr, checkout-index, ...) with rc 128.
 _sim_init() {
   [[ -n "$SIM_SHIM" ]] && return 0
   SIM_REAL_GIT=$(command -v git)
@@ -1545,10 +1550,14 @@ sim=0
 if [ -n "${GIT_INDEX_FILE-}" ] && [ "${GIT_INDEX_FILE}" != "${SHIM_REAL_INDEX-}" ]; then sim=1; fi
 if [ -n "${SHIM_LOG-}" ]; then
   {
-    printf 'SIM=%s VERB=%s LC_ALL=%s IDX=%s OBJ=%s ALT=%s ARGS=' "$sim" "$verb" "${LC_ALL-<unset>}" \
+    printf 'SIM=%s VERB=%s LC_ALL=%s OPTLOCKS=%s IDX=%s OBJ=%s ALT=%s ARGS=' "$sim" "$verb" "${LC_ALL-<unset>}" "${GIT_OPTIONAL_LOCKS-<unset>}" \
       "${GIT_INDEX_FILE-<unset>}" "${GIT_OBJECT_DIRECTORY-<unset>}" "${GIT_ALTERNATE_OBJECT_DIRECTORIES-<unset>}"
     printf '%q ' "$@"; printf '\n'
   } >> "$SHIM_LOG" 2>/dev/null
+fi
+if [ -n "${SHIM_FAILV-}" ] && [ "$verb" = "$SHIM_FAILV" ]; then
+  printf 'fatal: shim-injected %s failure\n' "$verb" >&2
+  exit 128
 fi
 if [ "$sim" = 1 ] && [ "$verb" = add ] && [ -n "${SHIM_FAIL-}" ]; then
   broad=0; upd=0
@@ -1576,7 +1585,7 @@ SHIM
 # A stub PATH for the structural tier: the recording gitleaks stub, perl (the lexer), timeout (unless
 # $1 is the empty string: the no-timeout host), and the git SHIM in place of the real git.
 _mk_sim_path() {
-  local d; d=$(_mk_stub_path record perl "${1-timeout}")
+  local d; d=$(_mk_stub_path record perl "${1-}")
   assert_fixture_dir "$d"; rm -f "$d/git"; cp "$SIM_SHIM" "$d/git"; chmod +x "$d/git"
   printf '%s\n' "$d"
 }
@@ -1646,8 +1655,9 @@ _sim_run() {  # <cwd> <command> [pd|real]
   SIM_REC="$SUITE_TMP/rec.$SIM_N"; mkdir -p "$SIM_REC"
   SIM_LOG="$SUITE_TMP/shim.$SIM_N.log"; assert_fixture_dir "$SIM_LOG"; : > "$SIM_LOG"
   SIM_TMP="${SIM_TMP_FIXED:-$SUITE_TMP/tmp.$SIM_N}"; mkdir -p "$SIM_TMP"
-  RUN_ENV=(${saved[@]+"${saved[@]}"} ${SIM_ENV[@]+"${SIM_ENV[@]}"} "TMPDIR=$SIM_TMP" "SHIM_LOG=$SIM_LOG" \
-           "SHIM_REAL_GIT=$SIM_REAL_GIT" "GL_REC_DIR=$SIM_REC")
+  # SIM_ENV comes LAST: a case can override TMPDIR (a relative one) or any other variable of the run.
+  RUN_ENV=(${saved[@]+"${saved[@]}"} "TMPDIR=$SIM_TMP" "SHIM_LOG=$SIM_LOG" \
+           "SHIM_REAL_GIT=$SIM_REAL_GIT" "GL_REC_DIR=$SIM_REC" ${SIM_ENV[@]+"${SIM_ENV[@]}"})
   if [[ "$pd" == real ]]; then
     RUN_ENV+=("PATH=$SIM_SHIMDIR:$PATH")
     _run_cmd "$cwd" "$cmd"
@@ -2211,7 +2221,7 @@ _t_sim_canary() {
   _sxr "G8 [gitleaks] -diff attribute + 'git add leak.json && git commit -m x' -> deny with the -diff message" "$D" \
     "git add leak.json && git commit -m x" deny "-diff"
   local v
-  for v in diff check-attr show; do
+  for v in diff check-attr checkout-index; do
     _t "G8b the shim env log shows the sim variables on '$v' (one export covers all four injection sites)" "log=$(grep "VERB=$v " "$SIM_LOG" | head -c 300)" \
       grep -q -E "^SIM=1 VERB=$v .* IDX=/.* OBJ=/.* ALT=/" "$SIM_LOG"
   done
@@ -2269,62 +2279,48 @@ _t_sim_invariants() {
 }
 
 # The INT/TERM trap must END the hook (measured: bash runs the handler and CONTINUES, so a trap that
-# only cleans up lets the hook finish and print a decision). Contract: rc 143, empty stdout (allow and
+# only cleans up lets the hook finish and print a decision). Contract per signal: rc 128+n, empty stdout (allow and
 # deny both print JSON), an empty private TMPDIR, and the recording stub proves it ran inside a sim dir.
 _t_sim_term() {
   _sim_init
-  local U pd tmpd rec rel hp rc=0 outf errf payload n=0 sd
-  U=$(_mk_leaky_repo untracked); pd=$(_mk_sim_path)
-  rec="$SUITE_TMP/rec.term"; mkdir -p "$rec"; rel="$SUITE_TMP/release.term"; rm -f "$rel"
-  tmpd="$SUITE_TMP/tmp.term"; mkdir -p "$tmpd"
-  outf="$SUITE_TMP/term.out"; errf="$SUITE_TMP/term.err"; : > "$outf"
-  payload=$(jq -nc --arg w "$U" '{tool_name: "Bash", cwd: $w, tool_input: {command: "git add -A && git commit -m x"}}')
-  ( cd "$U" && exec env PATH="$pd" TMPDIR="$tmpd" CLAUDE_PROJECT_DIR="$REPO_ROOT" SHIM_REAL_GIT="$SIM_REAL_GIT" \
-      SHIM_LOG="$SUITE_TMP/shim.term.log" GL_REC_DIR="$rec" GL_REC_HOLD=1 GL_REC_RELEASE="$rel" \
-      "$pd/bash" "$HOOK" <<<"$payload" >"$outf" 2>"$errf" ) &
-  hp=$!
-  while [[ ! -e "$rec/started" && "$n" -lt 100 ]]; do sleep 0.1; n=$((n + 1)); done
-  if [[ ! -e "$rec/started" ]]; then
-    kill -KILL "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true
-    _report "G9i TERM arm: the gitleaks stub started" fail "the stub never reported 'started' within 10 s: the arm cannot signal the hook mid-scan"
-    return 0
-  fi
-  kill -TERM "$hp" 2>/dev/null || true
-  : > "$rel"
-  wait "$hp" || rc=$?
-  _t "G9i TERM mid-scan: the hook exits 143 (the handler must END the hook, not resume it)" "rc=$rc" test "$rc" -eq 143
-  _t "G9j ... and printed nothing on stdout (neither allow nor deny)" "stdout=$(head -c 200 "$outf")" test ! -s "$outf"
-  SIM_TMP="$tmpd"
-  _t "G9k ... and left the private TMPDIR empty" "left: $(ls -A "$tmpd")" _tmp_empty
-  sd=$(cat "$rec"/simdir.* 2>/dev/null | head -n 1 || true)
-  _t "G9l positive control: the stub ran inside a commit-sim-* directory while it was held" "simdir='${sd}'" _contains "$sd" "commit-sim-"
-  _t "G9m ... and that directory is gone after the TERM" "simdir=$sd" test -n "$sd" -a ! -e "$sd"
-}
-
-# Stale commit-sim-* directories are swept at sim start: older than 60 minutes and owned by the
-# caller go; a fresh one stays; a symlink is never followed.
-_t_sim_sweep() {
-  _sim_init
-  local C tmpd old fresh victim
-  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
-  C=$(_mk_leaky_repo clean)
-  tmpd="$SUITE_TMP/tmp.sweep"; mkdir -p "$tmpd"
-  old="$tmpd/commit-sim-oldold"; fresh="$tmpd/commit-sim-fresh1"; victim="$SUITE_TMP/victim.sweep"
-  mkdir -m 700 "$old" "$fresh" "$victim"; echo x > "$old/f"; echo keep > "$victim/keep"
-  ln -s "$victim" "$tmpd/commit-sim-link1"
-  touch -t 202001010000 "$old/f"; touch -t 202001010000 "$old"; touch -h -t 202001010000 "$tmpd/commit-sim-link1"
-  SIM_TMP_FIXED="$tmpd"
-  _sx "G-sweep 'git add -A && git commit' on a clean repo allows" "$C" "git add -A && git commit -m x" allow
-  SIM_TMP_FIXED=""
-  _t "G-sweep a commit-sim-* directory older than 60 minutes is removed at sim start" "still there: $old" test ! -e "$old"
-  _t "G-sweep a fresh commit-sim-* directory is kept" "gone: $fresh" test -d "$fresh"
-  _t "G-sweep a symlink named commit-sim-* is never followed (the target survives)" "victim content: $(ls -A "$victim")" test -f "$victim/keep"
+  local sig rc_want U pd tmpd rec rel hp rc outf errf payload n sd
+  for sig in TERM INT; do
+    if [[ "$sig" == TERM ]]; then rc_want=143; else rc_want=130; fi
+    U=$(_mk_leaky_repo untracked); pd=$(_mk_sim_path)
+    rec="$SUITE_TMP/rec.$sig"; mkdir -p "$rec"; rel="$SUITE_TMP/release.$sig"; rm -f "$rel"
+    tmpd="$SUITE_TMP/tmp.$sig"; mkdir -p "$tmpd"
+    outf="$SUITE_TMP/$sig.out"; errf="$SUITE_TMP/$sig.err"; : > "$outf"; rc=0; n=0
+    payload=$(jq -nc --arg w "$U" '{tool_name: "Bash", cwd: $w, tool_input: {command: "git add -A && git commit -m x"}}')
+    # A background job of a non-interactive shell starts with SIGINT IGNORED, and bash cannot trap a signal that was
+    # ignored on entry; perl resets the disposition to the default before it execs the hook.
+    ( cd "$U" && exec env PATH="$pd" TMPDIR="$tmpd" CLAUDE_PROJECT_DIR="$REPO_ROOT" SHIM_REAL_GIT="$SIM_REAL_GIT" \
+        SHIM_LOG="$SUITE_TMP/shim.$sig.log" GL_REC_DIR="$rec" GL_REC_HOLD=1 GL_REC_RELEASE="$rel" \
+        perl -e '$SIG{INT} = "DEFAULT"; $SIG{QUIT} = "DEFAULT"; exec @ARGV or exit 127' "$pd/bash" "$HOOK" <<<"$payload" >"$outf" 2>"$errf" ) &
+    hp=$!
+    while [[ ! -e "$rec/started" && "$n" -lt 100 ]]; do sleep 0.1; n=$((n + 1)); done
+    if [[ ! -e "$rec/started" ]]; then
+      kill -KILL "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true
+      _report "G9i $sig arm: the gitleaks stub started" fail "the stub never reported 'started' within 10 s: the arm cannot signal the hook mid-scan"
+      continue
+    fi
+    kill -"$sig" "$hp" 2>/dev/null || true
+    : > "$rel"
+    wait "$hp" || rc=$?
+    _t "G9i $sig mid-scan: the hook exits $rc_want (the handler must END the hook, not resume it)" "rc=$rc" test "$rc" -eq "$rc_want"
+    _t "G9j $sig ... and printed nothing on stdout (neither allow nor deny)" "stdout=$(head -c 200 "$outf")" test ! -s "$outf"
+    SIM_TMP="$tmpd"
+    _t "G9k $sig ... and left the private TMPDIR empty" "left: $(ls -A "$tmpd")" _tmp_empty
+    sd=$(cat "$rec"/simdir.* 2>/dev/null | head -n 1 || true)
+    _t "G9l $sig positive control: the stub ran inside a commit-sim-* directory while it was held" "simdir='${sd}'" _contains "$sd" "commit-sim-"
+    _t "G9m $sig ... and that directory is gone after the signal" "simdir=$sd" test -n "$sd" -a ! -e "$sd"
+  done
 }
 
 _with_pd() { local keep="$SIM_PD"; SIM_PD="$1"; shift; "$@"; SIM_PD="$keep"; }
 _distinct_idx() {  # <n>: the recording stub saw n distinct sim indexes (one per scanned root)
   [[ "$(awk -F'\t' '$2 == "git" { print $3 }' "$SIM_REC/calls.log" | sort -u | wc -l | tr -d ' ')" -eq "$1" ]]
 }
+_no_sleep61() { [[ -z "$(ps -eo args= | awk '$1 == "sleep" && $2 == "61"')" ]]; }
 
 # ---- group 10: the directory the replay may trust (CTO row 15) ----------------------------------
 _t_sim_dirproof() {
@@ -2378,7 +2374,7 @@ _t_sim_dirproof() {
 _t_sim_failures() {
   _sim_init
   [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
-  local C U Cc pd2 pd3 pdn pdnt cp msg xs r start
+  local C U Cc pd2 pd3 pdn cp msg xs r start
   C=$(_mk_leaky_repo clean); U=$(_mk_leaky_repo untracked)
 
   # a. a path that does not exist cannot be scanned: ALWAYS a deny (decision-challenges row 25). Under `&&` the real
@@ -2424,25 +2420,20 @@ _t_sim_failures() {
   Cc="$SUITE_TMP/co:lon.repo"; rm -rf "$Cc"; mv "$(_mk_leaky_repo clean)" "$Cc"
   _sx "G11g a ':' in the objects path (GIT_ALTERNATE_OBJECT_DIRECTORIES is colon separated) -> deny" "$Cc" "git add -A && git commit -m x" deny "its own call"
 
-  # f. the deadline: expiry always DENIES, never bypasses (CIS_DEADLINE_SECONDS can only LOWER the 30 s ceiling)
-  SIM_ENV=("CIS_DEADLINE_SECONDS=2" "GL_REC_SLEEP=6"); start=$SECONDS
+  # f. the deadline: expiry always DENIES, never bypasses (CIS_DEADLINE_SECONDS can only LOWER the 30 s ceiling).
+  # The bound is one perl fork/waitpid/kill program on every host; the default stub PATH has no timeout(1) at all.
+  if [[ -e "$SIM_PD/timeout" || -e "$SIM_PD/gtimeout" ]]; then
+    _report "G11h0 fixture PATH has no timeout" fail "the stub PATH carries a timeout binary: the arm would not prove the perl bound"
+  fi
+  SIM_ENV=("CIS_DEADLINE_SECONDS=2" "GL_REC_SLEEP=61"); start=$SECONDS
   _sx "G11h the gitleaks scan outlives the (test-shortened) deadline -> deny" "$C" "git add -A && git commit -m x" deny
-  _t "G11h2 ... bounded: the wrapper ended it near the deadline (not after the stub's 6 s)" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 6
+  _t "G11h2 ... bounded: ended near the deadline, not after the stub's 61 s" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 20
   _rows_since_mark git-commit-secret-scan-sim-deny
   _t "G11h3 ... one sim-deny row, cause sim-timeout" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=sim-timeout"
+  _t "G11h4 ... and no gitleaks child (the stub's sleep) is left running: the whole process group was killed" \
+    "left: $(ps -eo args= | awk '$1 == "sleep" && $2 == "61"' | head -c 100)" _no_sleep61
   SIM_ENV=("CIS_DEADLINE_SECONDS=0")
   _sx "G11i no time remaining (deadline 0) before the first call -> deny" "$C" "git add -A && git commit -m x" deny
-  pdnt=$(_mk_sim_path "")
-  if [[ -e "$pdnt/timeout" || -e "$pdnt/gtimeout" ]]; then
-    _report "G11j fixture PATH has no timeout" fail "the no-timeout stub PATH carries a timeout binary"
-  else
-    SIM_ENV=("CIS_DEADLINE_SECONDS=2" "GL_REC_SLEEP=6"); start=$SECONDS
-    _with_pd "$pdnt" _sx "G11j no timeout/gtimeout on PATH: the perl alarm bounds the scan -> deny" "$C" "git add -A && git commit -m x" deny
-    _t "G11j2 ... bounded" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 6
-    SIM_ENV=()
-    _with_pd "$pdnt" _sx "G11k no timeout/gtimeout: an exact replay still works -> allow" "$U" "git add clean.txt && git commit -m x" allow
-    _t "G11k2 ... exact" "adds=$(_sim_adds)" _exact_add clean.txt
-  fi
   SIM_ENV=()
 
   # g. the sim library missing: a strict commit is DENIED (a lazy fail-open source would skip the scan)
@@ -2505,7 +2496,7 @@ _t_sim_pins() {
   _sx "G12b2 a configured clean filter, 'git add -A && git commit' -> deny (the sim index holds the raw bytes)" "$F" "git add -A && git commit -m x" deny "leak.json"
   _t "G12b3 ... the simulation really ran" "sim adds=$(_sim_add_n)" test "$(_sim_add_n)" -ge 1
   _t "G12b4 ... and the filter never ran at hook time (the marker was not created)" "marker $fm exists" test ! -e "$fm"
-  _t "G12b5 ... every sim add neutralised the configured filter (-c filter.mark.clean=)" "adds=$(_sim_adds)" _adds_neutralise_filter mark
+  _t "G12b5 ... every sim add neutralised the configured filter (clean, process, smudge, required=false)" "adds=$(_sim_adds)" _adds_neutralise_filter mark
 
   # core.fsmonitor=true / core.untrackedCache / core.splitIndex are pinned OFF on every sim `add`, the
   # locale is C, and every configured filter is neutralised. (A whole-hook "no daemon" assertion is NOT
@@ -2515,17 +2506,22 @@ _t_sim_pins() {
   FM=$(_mk_leaky_repo untracked); git -C "${FM:?}" config core.fsmonitor true
   _sx "G12c core.fsmonitor=true configured: 'git add -A && git commit' -> deny" "$FM" "git add -A && git commit -m x" deny "leak.json"
   _t "G12c2 ... the simulation really ran" "sim adds=$(_sim_add_n)" test "$(_sim_add_n)" -ge 1
-  _t "G12c3 ... every sim add carries -c core.fsmonitor=false -c core.untrackedCache=false -c core.splitIndex=false and LC_ALL=C" "adds=$(_sim_adds)" _adds_pinned
+  _t "G12c3 ... every sim add carries -c core.fsmonitor=false -c core.untrackedCache=false -c core.splitIndex=false -c core.hooksPath=/dev/null, LC_ALL=C and GIT_OPTIONAL_LOCKS=0" "adds=$(_sim_adds)" _adds_pinned
   git -C "$FM" fsmonitor--daemon stop >/dev/null 2>&1 || true
 }
-_adds_neutralise_filter() {  # <filter name>: every sim add carries -c filter.<n>.clean= (and at least one add ran)
-  local a l; a=$(_sim_adds); [[ -n "$a" ]] || return 1
-  while IFS= read -r l; do [[ "$l" == *"filter.$1.clean="* ]] || return 1; done <<<"$a"
+_adds_neutralise_filter() {  # <filter name>...: every sim add carries all four neutralising -c settings for each
+  local a l n; a=$(_sim_adds); [[ -n "$a" ]] || return 1
+  while IFS= read -r l; do
+    for n in "$@"; do
+      [[ "$l" == *"filter.$n.clean="* && "$l" == *"filter.$n.process="* && "$l" == *"filter.$n.smudge="* && "$l" == *"filter.$n.required=false"* ]] || return 1
+    done
+  done <<<"$a"
 }
 _adds_pinned() {  # at least one sim add; every one carries the pins (the verb is the literal add)
   local a l; a=$(_sim_adds); [[ -n "$a" ]] || return 1
   while IFS= read -r l; do
-    [[ "$l" == *"LC_ALL=C "* && "$l" == *"core.fsmonitor=false"* && "$l" == *"core.untrackedCache=false"* && "$l" == *"core.splitIndex=false"* ]] || return 1
+    [[ "$l" == *"LC_ALL=C "* && "$l" == *"OPTLOCKS=0 "* && "$l" == *"core.fsmonitor=false"* && "$l" == *"core.untrackedCache=false"* \
+       && "$l" == *"core.splitIndex=false"* && "$l" == *"core.hooksPath=/dev/null"* ]] || return 1
   done <<<"$a"
 }
 
@@ -2682,9 +2678,215 @@ EOF
   _sx "L2 control: an exact add of a clean path with NO commit -a stages only that path -> allow" "$T" "git add clean.txt && git commit -m x" allow
 }
 
+# ---- fail-open seams, the bound, and scan_root's own pins (review round, rows 28 to 32) -------------------
+# A mktemp that misbehaves for one template (fail: exit 1; badpath: prints a path that cannot be written).
+_mk_mktemp_wrapper() {  # <stub PATH dir> <template glob> <fail|badpath>
+  local d="$1" glob="$2" mode="$3" real
+  real=$(command -v mktemp); assert_fixture_dir "$d"; rm -f "$d/mktemp"
+  if [[ "$mode" == fail ]]; then
+    printf '#!/bin/sh\nfor a in "$@"; do case "$a" in %s) exit 1 ;; esac; done\nexec %s "$@"\n' "$glob" "$real" > "$d/mktemp"
+  else
+    printf '#!/bin/sh\nfor a in "$@"; do case "$a" in %s) echo /no/such/dir/for/the/hook/report.json; exit 0 ;; esac; done\nexec %s "$@"\n' "$glob" "$real" > "$d/mktemp"
+  fi
+  chmod +x "$d/mktemp"
+}
+# A copy of the hooks tree with one edit, for the torn-install arms.
+_mk_hooks_copy() {  # <sed expression> <relative file> -> prints the copied hook script
+  local cp; cp=$(mktemp -d "$SUITE_TMP/hookcopy.XXXXXX"); assert_fixture_dir "$cp"
+  mkdir -p "$cp/.claude" "$cp/plugins/soleur/hooks"; cp -R "$REPO_ROOT/.claude/hooks" "$cp/.claude/hooks"
+  cp -R "$REPO_ROOT/plugins/soleur/hooks/lib" "$cp/plugins/soleur/hooks/lib"
+  sed "$1" "$cp/.claude/hooks/$2" > "$cp/.claude/hooks/$2.new" && mv "$cp/.claude/hooks/$2.new" "$cp/.claude/hooks/$2"
+  printf '%s\n' "$cp/.claude/hooks/git-commit-secret-scan.sh"
+}
+_no_json() { [[ -z "$OUT" ]]; }
+
+_t_sim_seams() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local C U S A B C3 hk pd mk i out rc start fx fsm D lib walk
+  C=$(_mk_leaky_repo clean); U=$(_mk_leaky_repo untracked); S=$(_mk_staged_repo)
+  lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh"; walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh"
+
+  # --- torn install (row 32): a walker or lib that does not announce its API denies every strict commit ---
+  hk=$(_mk_hooks_copy 's/^  CTR_STAGE_API=1$/  :/' lib/commit-target-roots.sh)
+  _t "S1 fixture: the edited walker copy really lacks CTR_STAGE_API=1" "still present" bash -c '! grep -q "^  CTR_STAGE_API=1" "$1"' _ "$(dirname "$hk")/lib/commit-target-roots.sh"
+  HOOK_OVERRIDE="$hk" _sx "S1a a walker without CTR_STAGE_API: a CHAINED commit is denied through the lib repair" "$C" "git add -A && git commit -m x" deny "git checkout -- .claude/hooks/lib"
+  HOOK_OVERRIDE="$hk" _sx "S1b ... and a PLAIN strict commit is denied too (never a silent revert to the pre-run index)" "$C" "git commit -m x" deny "git checkout -- .claude/hooks/lib"
+  hk=$(_mk_hooks_copy 's/^CIS_API=1$/CIS_API=0/' lib/commit-index-sim.sh)
+  HOOK_OVERRIDE="$hk" _sx "S1c a sim lib announcing another API version is denied the same way" "$C" "git add -A && git commit -m x" deny "git checkout -- .claude/hooks/lib"
+  hk=$(_mk_hooks_copy 's/^  CTR_STAGE_API=1$/  CTR_STAGE_API=1/' lib/commit-target-roots.sh)
+  HOOK_OVERRIDE="$hk" _sx "S1d control: an unedited copy of the tree still works (clean repo, chained commit -> allow)" "$C" "git add -A && git commit -m x" allow
+
+  # --- an unexpected error inside the simulated scan DENIES (set -E + the ERR trap); with the sim off nothing changes ---
+  pd=$(_mk_sim_path); _mk_mktemp_wrapper "$pd" '*gitleaks-staged-*' badpath
+  _with_pd "$pd" _sx "S2 an unwritable report file under 'git add -A && git commit' -> deny, not a silent exit 1" "$C" "git add -A && git commit -m x" deny "unexpected error"
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "S2b ... one sim-deny row, cause internal-error" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=internal-error"
+  _with_pd "$pd" _sim_run "$C" "git commit -m x"
+  _t "S2c control: the same broken mktemp under a PLAIN commit keeps the old behaviour (exit 1, no JSON)" "out=${OUT:0:100}" _no_json
+  pd=$(_mk_sim_path); _mk_mktemp_wrapper "$pd" '*gitleaks-nodiff-*' fail
+  _with_pd "$pd" _sx "S3 a failed mktemp for the report files under a would-be-index scan -> deny temp-dir" "$C" "git add -A && git commit -m x" deny "temporary file"
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "S3b ... cause temp-dir" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=temp-dir"
+
+  # --- a gitleaks that errors in sim mode is a deny (row 31); the plain-mode bypass is unchanged ---
+  SIM_ENV=("GL_REC_RC=2")
+  _sx "S4 gitleaks exits 2 on the simulated index -> deny scan-error" "$C" "git add -A && git commit -m x" deny "did not complete"
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "S4b ... cause scan-error" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=scan-error"
+  SIM_ENV=("GL_REC_RC=2" "GL_REC_RC_REPORT=1")
+  _sx "S4e gitleaks writes a finding and then exits 2: an ERROR first (the label is scan-error, not finding)" "$U" "git add -A && git commit -m x" deny "did not complete"
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "S4f ... cause scan-error" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=scan-error"
+  SIM_ENV=("GL_REC_RC=1")
+  _sx "S4c gitleaks exits 1 with NO report on the simulated index -> deny scan-error" "$C" "git add -A && git commit -m x" deny "did not complete"
+  SIM_ENV=("GL_REC_RC=2")
+  _sx "S4d control: the same gitleaks error on a PLAIN commit is still the old bypass -> allow" "$C" "git commit -m x" allow
+  SIM_ENV=()
+  # the -diff re-scan: a failing detect, and a blob that cannot be read
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"; mkdir -p "$D/.git/info"; echo 'clean.txt -diff' > "$D/.git/info/attributes"
+  SIM_ENV=("GL_REC_DETECT_RC=2")
+  _sx "S5 the -diff re-scan (detect --no-git) exits 2 in sim mode -> deny scan-error" "$D" "git add clean.txt && git commit -m x" deny "did not complete"
+  SIM_ENV=("GL_REC_DETECT_RC=0")
+  _sx "S5b control: the same fixture with a healthy re-scan -> allow" "$D" "git add clean.txt && git commit -m x" allow
+  _t "S5c ... and the re-scan really saw clean.txt (checkout-index wrote the blob)" "nodiff=$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" _contains "$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" "clean.txt"
+  SIM_ENV=("SHIM_FAILV=checkout-index")
+  _sx "S5d a blob that cannot be read for the -diff re-scan -> deny scan-error (never an empty file read as clean)" "$D" "git add clean.txt && git commit -m x" deny "did not complete"
+  SIM_ENV=("SHIM_FAILV=check-attr")
+  _sx "S6 the batched check-attr fails in sim mode -> deny check-attr-failed" "$C" "git add -A && git commit -m x" deny "attribute guard could not run"
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "S6b ... cause check-attr-failed" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=check-attr-failed"
+  _sx "S6c control: the same failure on a PLAIN commit warns and allows" "$C" "git commit -m x" allow
+  SIM_ENV=()
+
+  # --- scan_root pins core.fsmonitor off (row 29): stub-tier proof of WHERE, real-tier proof of WHAT ---
+  _sx "S7 a chained commit: gitleaks and the three direct git calls carry core.fsmonitor=false" "$U" "git add -A && git commit -m x" deny "leak.json"
+  _t "S7b ... gitleaks saw core.fsmonitor=false in GIT_CONFIG_COUNT/KEY/VALUE and in GIT_CONFIG_PARAMETERS" "env=$(cat "$SIM_REC"/env.* 2>/dev/null | head -c 400)" _gitleaks_env_pinned
+  _t "S7c ... check-attr and diff --cached carry -c core.fsmonitor=false" "log=$(grep -E 'VERB=(diff|check-attr) ' "$SIM_LOG" | head -c 300)" _scan_git_pinned
+  fsm="$SUITE_TMP/fsm-malformed.sh"; printf '#!/bin/sh\nprintf "\\0"\n' > "$fsm"; chmod +x "$fsm"; assert_fixture_dir "$S"
+  git -C "${S:?}" config core.fsmonitor "$fsm"
+  if _needs_gl "S8 malformed-token core.fsmonitor on a staged secret"; then
+    # The fixture control is informational: on a gitleaks where a bare `gitleaks git --staged` is NOT blinded by the
+    # config the hook-level assertion below still has to hold; where it IS blinded (8.30.1, measured) it is the proof.
+    rc=0; ( cd "$S" && gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 --report-format json --report-path "$SUITE_TMP/fsm-ctl.json" >/dev/null 2>&1 ) || rc=$?
+    _sxr "S8 [gitleaks] a core.fsmonitor program answering with a malformed token must not blind the scan of a staged secret (bare gitleaks rc=$rc) -> deny" "$S" "git commit -m x" deny "leak.json"
+  fi
+
+  # --- 4,000 untracked `*.dat binary` files: the -diff re-scan is one checkout-index call, not 4,000 forks ---
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"
+  ( cd "$D" && printf '*.dat binary\n' > .gitattributes && mkdir -p dat && i=0 && while [ "$i" -lt 4000 ]; do echo "x$i" > "dat/f$i.dat"; i=$((i + 1)); done )
+  start=$SECONDS
+  _sx "S9 4,000 untracked '*.dat binary' files + 'git add -A && git commit' -> allow (no load deny)" "$D" "git add -A && git commit -m x" allow
+  _t "S9b ... well inside the deadline (the old per-path loop took 42 s)" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 15
+  _t "S9c ... and the re-scan was given all 4,000 blobs" "n=$(tr -cd '|' < "$(ls "$SIM_REC"/nodiff.* | head -n 1)" | wc -c | tr -d ' ')" _nodiff_has_4000
+
+  # --- the sim's git calls run no repository hook and leave a dirty submodule's real index alone (row 28) ---
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"
+  mk="$SUITE_TMP/hook.marker"; rm -f "$mk"
+  mkdir -p "$D/.git/hooks"; printf '#!/bin/sh\necho ran >> "%s"\n' "$mk" > "$D/.git/hooks/post-index-change"; chmod +x "$D/.git/hooks/post-index-change"
+  cl=$(mktemp -d "$SUITE_TMP/hookctl.XXXXXX"); cp -a "$D/." "$cl/"; git -C "${cl:?}" add clean.txt
+  _t "S10 fixture control: a plain 'git add' DOES run the post-index-change hook" "no marker" test -e "$mk"
+  rm -f "$mk"
+  _sx "S10b 'git add -A && git commit' on that repo -> allow" "$D" "git add -A && git commit -m x" allow
+  _t "S10c ... and the repository's post-index-change hook never ran at hook time" "marker exists" test ! -e "$mk"
+  _make_dirty_submodule_repo
+  _sx "S11 a repo with a DIRTY submodule that has its own hook: 'git add -A && git commit' -> allow" "$SM" "git add -A && git commit -m x" allow
+  _t "S11b ... the submodule's own hook never ran" "markers: $(cat "$SM_MARK" 2>/dev/null)" test ! -e "$SM_MARK"
+  _t "S11c ... and the submodule's REAL index was not rewritten (mtime unchanged)" "before=$SM_IDX_MT after=$(_mtime "$SM_IDX")" test "$(_mtime "$SM_IDX")" = "$SM_IDX_MT"
+
+  # --- a RELATIVE TMPDIR must not turn the guard's exit 2 into a hook that blocks every staging commit ---
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"; mkdir -p "$D/rel-tmp"
+  SIM_ENV=("TMPDIR=rel-tmp")
+  _sx "S15 TMPDIR=rel-tmp (relative): 'git add -A && git commit' on a clean repo -> allow (the sim directory is canonicalised once)" "$D" "git add -A && git commit -m x" allow
+  _t "S15b ... and the relative TMPDIR is empty afterwards" "left: $(ls -A "$D/rel-tmp")" test -z "$(ls -A "$D/rel-tmp")"
+  SIM_ENV=()
+
+  # --- more than two roots, and one clock for ALL of them ---
+  A=$(_mk_leaky_repo clean); B=$(_mk_leaky_repo clean); C3=$(_mk_leaky_repo untracked)
+  _sx "S12 three roots (the leak is in the THIRD): 'cd A && cd B && cd C && git add clean.txt && git commit' -> superset in every root -> deny" "$A" \
+    "cd $A && cd $B && cd $C3 && git add clean.txt && git commit -m x" deny "leak.json" "$C3"
+  _t "S12b ... one sim index per root (three distinct GIT_INDEX_FILE values)" "calls=$(cat "$SIM_REC/calls.log" 2>/dev/null | head -c 300)" _distinct_idx 3
+  SIM_ENV=("CIS_DEADLINE_SECONDS=5" "GL_REC_SLEEP=3")
+  _sx "S13 two roots whose scans take 3 s each under a 5 s TOTAL deadline -> deny (one clock, not one per root)" "$A" \
+    "cd $A && cd $B && git add clean.txt && git commit -m x" deny
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "S13b ... cause sim-timeout" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=sim-timeout"
+  SIM_ENV=()
+
+  # --- every configured filter is neutralised: all four settings, for every filter (a dotted name included) ---
+  fx=$(_mk_leaky_repo untracked); assert_fixture_dir "$fx"; rm -f "$SUITE_TMP/f1.mark" "$SUITE_TMP/f2.mark"
+  git -C "${fx:?}" config filter.mark.clean "touch $SUITE_TMP/f1.mark; cat"; git -C "$fx" config filter.mark.smudge cat
+  git -C "$fx" config filter.mark.process cat; git -C "$fx" config filter.mark.required true
+  git -C "$fx" config filter.a.b.clean "touch $SUITE_TMP/f2.mark; cat"
+  printf '*.json filter=mark\n*.txt filter=a.b\n' > "$fx/.gitattributes"
+  _sx "S14 two configured filters, one required=true: 'git add -A && git commit' -> deny on the leak (the add did not die)" "$fx" "git add -A && git commit -m x" deny "leak.json"
+  _t "S14b ... both filters neutralised on every sim add (clean, process, smudge, required=false)" "adds=$(_sim_adds)" _adds_neutralise_filter mark a.b
+  _t "S14c ... and neither filter ran at hook time" "markers: $(ls "$SUITE_TMP"/f?.mark 2>/dev/null)" _no_filter_markers
+}
+_gitleaks_env_pinned() {
+  local e; e=$(cat "$SIM_REC"/env.* 2>/dev/null) || return 1
+  [[ "$e" == *"core.fsmonitor"* && "$e" == *"'core.fsmonitor'='false'"* ]]
+}
+_scan_git_pinned() {
+  local l n=0
+  while IFS= read -r l; do
+    n=$((n + 1)); [[ "$l" == *"core.fsmonitor=false"* ]] || return 1
+  done < <(grep -E 'VERB=(diff|check-attr) ' "$SIM_LOG")
+  [[ "$n" -ge 2 ]]
+}
+_nodiff_has_4000() { local c; c=$(tr -cd '|' < "$(ls "$SIM_REC"/nodiff.* | head -n 1)" | wc -c | tr -d ' '); [[ "$c" -eq 4000 ]]; }
+_no_filter_markers() { [[ ! -e "$SUITE_TMP/f1.mark" && ! -e "$SUITE_TMP/f2.mark" ]]; }
+_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+# A clean repo with a submodule whose working tree is DIRTY, whose own gitdir carries a post-index-change hook, and
+# whose real index has an old mtime. Sets SM (the repo), SM_MARK (the hook's marker), SM_IDX and SM_IDX_MT.
+_make_dirty_submodule_repo() {
+  local src
+  src=$(mktemp -d "$SUITE_TMP/subsrc.XXXXXX"); assert_fixture_dir "$src"
+  ( cd "$src" && git init -q -b main && git config user.email t@t && git config user.name t && echo s > s.txt && git add s.txt \
+      && git -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m s )
+  SM=$(_mk_leaky_repo clean); assert_fixture_dir "$SM"
+  ( cd "$SM" && git -c protocol.file.allow=always submodule add -q "$src" sub >/dev/null 2>&1 \
+      && git -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m addsub )
+  SM_MARK="$SUITE_TMP/sub.marker"; rm -f "$SM_MARK"
+  SM_IDX=$(git -C "$SM/sub" rev-parse --absolute-git-dir)/index
+  mkdir -p "$(dirname "$SM_IDX")/hooks"
+  printf '#!/bin/sh\necho ran >> "%s"\n' "$SM_MARK" > "$(dirname "$SM_IDX")/hooks/post-index-change"; chmod +x "$(dirname "$SM_IDX")/hooks/post-index-change"
+  echo more >> "$SM/sub/s.txt"; sleep 1; touch "$SM/sub/s.txt"
+  touch -t 200101010000 "$SM_IDX"
+  SM_IDX_MT=$(_mtime "$SM_IDX")
+}
+
+# ---- the library's clock and bound, driven directly --------------------------------------------------------
+_t_sim_lib_unit() {
+  local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" v out rc t0
+  for v in 999 abc 08 5 0 -5; do
+    out=$(env CIS_DEADLINE_SECONDS="$v" bash -c 'source "$1" || exit 9; source "$2" || exit 9; cis_clock_start; cis_remaining; echo "$CIS_REMAINING"' _ "$walk" "$lib" 2>&1) || out="ERR"
+    case "$v" in
+      999|abc|-5) _t "U1 CIS_DEADLINE_SECONDS=$v cannot raise the ceiling: at most 30 s, at least 28" "got $out" test "$out" -le 30 -a "$out" -ge 28 ;;
+      08) _t "U1 CIS_DEADLINE_SECONDS=08 is read as decimal 8 (not a bad octal): between 6 and 8" "got $out" test "$out" -le 8 -a "$out" -ge 6 ;;
+      5) _t "U1 CIS_DEADLINE_SECONDS=5 lowers it: between 3 and 5" "got $out" test "$out" -le 5 -a "$out" -ge 3 ;;
+      0) _t "U1 CIS_DEADLINE_SECONDS=0 leaves no time (deny, never more)" "got $out" test "$out" -le 0 ;;
+    esac
+  done
+  out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; cis_remaining; echo "$CIS_REMAINING"; cis_bound_argv; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || out="ERR"
+  _t "U2 a consumer that never started the clock has no time left (fail closed), and cis_bound_argv says so" "got $out" _contains "$out" "rc=1"
+  # the bound program: expiry kills the WHOLE group (rc 124), a child's own status passes through, a signal death is 128+n
+  t0=$SECONDS
+  out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 1 sh -c "sleep 62 >/dev/null 2>&1 & wait"; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || out="ERR"
+  _t "U3 the bound program ends a command that outlives it: rc 124, within a few seconds" "got $out after $((SECONDS - t0)) s" _contains "$out" "rc=124"
+  _t "U3b ... and its grandchild (the sleep) is gone too" "left: $(ps -eo args= | awk '$1 == "sleep" && $2 == "62"' | head -c 100)" _no_sleep62
+  out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 5 sh -c "exit 7"; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || out="ERR"
+  _t "U3c the child's own exit status passes through" "got $out" _contains "$out" "rc=7"
+  out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 5 sh -c "kill -9 \$\$"; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || out="ERR"
+  _t "U3d a child killed by a signal reports 128+n" "got $out" _contains "$out" "rc=137"
+  rc=0; out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 5 /no/such/program-xyz; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || rc=$?
+  _t "U3e a command that cannot be executed is a non-zero status, never a silent 0" "got $out" _contains "$out" "rc=127"
+}
+_no_sleep62() { [[ -z "$(ps -eo args= | awk '$1 == "sleep" && $2 == "62"')" ]]; }
+
 # ---- consumer stub: proves property 5 (the brand-hex gate, #10793, reuses construction) ----------
 _t_sim_consumer() {
-  local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" ctr="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" U wd out
+  local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" ctr="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" U wd out out2
   _sim_init
   U=$(_mk_leaky_repo untracked); wd=$(mktemp -d "$SUITE_TMP/cis.XXXXXX")
   out=$(env -u GIT_DIR -u GIT_INDEX_FILE bash -c '
@@ -2692,6 +2894,7 @@ _t_sim_consumer() {
     source "$1" || exit 90
     source "$2" || exit 91
     ctr_collect "git add -A && git commit -m x"
+    cis_clock_start
     rc=0; cis_build "$3" "$3" "$4" || rc=$?
     echo "build-rc=$rc"
     env "${CIS_ENV[@]}" git -C "$3" diff --cached --name-only
@@ -2699,6 +2902,16 @@ _t_sim_consumer() {
   _t "X5 consumer stub: sourcing the library and cis_build exist and build the would-be index (rc 0)" "out=${out:0:300}" _contains "$out" "build-rc=0"
   _t "X5b ... 'env \"\${CIS_ENV[@]}\" git diff --cached' lists the untracked leak.json the superset staged" "out=${out:0:300}" _contains "$out" "leak.json"
   _t "X5c ... and clean.txt" "out=${out:0:300}" _contains "$out" "clean.txt"
+  # A consumer that forgot the clock has no time left: it must FAIL (rc 20, cause sim-timeout), never run unbounded.
+  wd=$(mktemp -d "$SUITE_TMP/cis.XXXXXX")
+  out2=$(env -u GIT_DIR -u GIT_INDEX_FILE bash -c '
+    source "$1" || exit 90
+    source "$2" || exit 91
+    ctr_collect "git add -A && git commit -m x"
+    rc=0; cis_build "$3" "$3" "$4" || rc=$?
+    echo "build-rc=$rc why=$CIS_WHY"
+  ' _ "$ctr" "$lib" "$U" "$wd" 2>&1) || true
+  _t "X5e a consumer that never started the clock fails closed (rc 20, sim-timeout), not unbounded" "out=${out2:0:200}" _contains "$out2" "build-rc=20 why=sim-timeout"
   _t "X5d ... while the REAL index still holds nothing new (no secret-scan code ran here)" "build/real: ${out:0:120} / $(git -C "$U" diff --cached --name-only)" \
     test -z "$(git -C "$U" diff --cached --name-only)" -a "$([[ "$out" == *build-rc=0* ]] && echo y)" = y
 }
@@ -2884,13 +3097,14 @@ _t_sim_core
 _t_sim_canary
 _t_sim_invariants
 _t_sim_term
-_t_sim_sweep
 _t_sim_dirproof
 _t_sim_failures
 _t_sim_pins
 _t_sim_worktree
 _t_sim_extra
 _t_sim_fidelity
+_t_sim_seams
+_t_sim_lib_unit
 _t_sim_consumer
 _t_sim_oracle
 _t_sim_checkattr
@@ -2905,7 +3119,7 @@ _t_floor_contract
 # a host with no runnable gitleaks skips whole arms (reported, and failed under CI=true by the
 # epilogue), so the floor only binds when nothing was skipped. Reported by printf + exit,
 # never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=894
+MIN_ASSERTIONS=961
 if (( ${#SKIPPED_ARMS[@]} == 0 )) && (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

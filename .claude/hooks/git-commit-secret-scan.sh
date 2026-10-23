@@ -193,12 +193,15 @@ ctr_ok=0
 case "${BASH_SOURCE[0]}" in */*) ctr_dir="${BASH_SOURCE[0]%/*}" ;; *) ctr_dir=. ;; esac
 ctr_lib="$ctr_dir/lib/commit-target-roots.sh"
 cis_lib="$ctr_dir/lib/commit-index-sim.sh"
-# The sim library is sourced in the SAME checked `if` (CTO row 13): a lazy source that fails open would let a
-# broken library silently skip the would-be-index scan, so a missing or broken one denies every strict commit.
+# The sim library is sourced in the SAME checked `if` (CTO row 13), and both libraries must announce the API they
+# were written against (CTO row 32): a lazy source, or an older walker beside a newer hook, would silently skip
+# the would-be-index scan, so a missing, broken or mismatched one denies every strict commit.
 # shellcheck source=lib/commit-target-roots.sh
 # shellcheck source=lib/commit-index-sim.sh
 if [ -r "$ctr_lib" ] && . "$ctr_lib" 2>/dev/null && declare -f ctr_collect >/dev/null 2>&1 \
-   && [ -r "$cis_lib" ] && . "$cis_lib" 2>/dev/null && declare -f cis_build >/dev/null 2>&1; then
+   && [ "${CTR_STAGE_API:-0}" = 1 ] \
+   && [ -r "$cis_lib" ] && . "$cis_lib" 2>/dev/null && declare -f cis_build >/dev/null 2>&1 \
+   && [ "${CIS_API:-0}" = 1 ]; then
   ctr_ok=1
 fi
 
@@ -402,12 +405,17 @@ gitleaks_runnable
 # `--report-format json` + `--report-path` capture findings for the deny
 # reason without printing the raw secrets to the hook's stdout/stderr.
 #
+# sim_on: this command stages AND commits, so it is scanned through the would-be index. Computed BEFORE the first
+# allocation: from here on an unexpected failure must DENY when sim_on=1 (see the ERR trap).
+sim_on=0
+if [ "$lex_state" = ok ] && [ "$CTR_COMMIT_SEEN" -eq 1 ] && [ "${CTR_COMMIT_STAGES:-0}" -eq 1 ]; then sim_on=1; fi
+
 # TRAPS. EXIT cleans up; INT and TERM must END the hook: bash runs a signal handler and then CONTINUES the script
 # (measured), so a handler that only cleans up would delete the sim directory mid-run and let the hook finish in
 # `allow`. The handlers therefore `exit` (130 / 143), and the exit runs the EXIT trap. The sim directory holds
-# blobs of working-tree files (possibly secrets); mktemp -d allocated it, so it is removed whole.
+# blobs of working-tree files (possibly secrets); mktemp -d allocated it, so it is removed whole. (A SIGKILL can
+# still leave a 0700 directory behind: a named residual.)
 report_file=""; nodiff_dir=""; nodiff_report=""; sim_dir=""
-# assert_fixture_dir comes from lib/commit-index-sim.sh (sourced above in the same checked `if`).
 cleanup() {
   if [ -n "$report_file" ]; then rm -f "$report_file" 2>/dev/null || true; fi
   if [ -n "$nodiff_report" ]; then rm -f "$nodiff_report" 2>/dev/null || true; fi
@@ -421,28 +429,58 @@ cleanup() {
   fi
   return 0
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-report_file="$(mktemp -t gitleaks-staged-XXXXXX.json)"
-nodiff_dir="$(mktemp -d -t gitleaks-nodiff-XXXXXX)"
-nodiff_report="$(mktemp -t gitleaks-nodiff-XXXXXX.json)"
 
-# sim_deny <cause> <reason> — a deny that is about the SIMULATION (it could not be built or bounded, or the
-# staging was refused), not about a finding. One distinct rule id; the row carries only enumerated words.
+# sim_deny <cause> <reason> — a deny that is about the SIMULATION (it could not be built or bounded, the staging was
+# refused, a scan could not complete), not about a finding. One distinct rule id; the row carries only enumerated words.
 sim_deny() {
   cis_unexport 2>/dev/null || true
   deny "$2" git-commit-secret-scan-sim-deny "mode=${CIS_MODE:-unknown} cause=$1"
 }
+
+sim_timeout_deny() {  # <root>
+  sim_deny sim-timeout "BLOCKED: the gitleaks scan of the simulated index of $1 did not finish within the simulation's time limit, so the content the commit would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+}
+sim_scan_error() {  # <root> <what>
+  sim_deny scan-error "BLOCKED: the scan of the simulated index of $1 did not complete ($2), so the content the commit would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+}
+
+# ERRORS. An unguarded failing command under `set -e` exits 1, which the harness treats as NON-blocking: the commit
+# would land unscanned. `set -E` lets this ERR trap see failures inside functions and substitutions; when the
+# simulation is on it DENIES (cause internal-error). With the simulation off nothing changes: errexit proceeds.
+set -E
+sim_err_trap() {
+  local rc=$? line="${1-?}"
+  trap - ERR
+  if [ "$sim_on" -eq 1 ]; then
+    sim_deny internal-error "BLOCKED: the scan of the commit's own staging hit an unexpected error (exit $rc near line $line of the hook), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'sim_err_trap $LINENO' ERR
+# The three report temp files are allocated under the same rule: a failed mktemp must not slide out as exit 1.
+tmp_fail() {
+  if [ "$sim_on" -eq 1 ]; then
+    sim_deny temp-dir "BLOCKED: the commit's own staging could not be scanned (a temporary file could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: free space in TMPDIR, then run the same command again."
+  fi
+  exit 1
+}
+report_file="$(mktemp -t gitleaks-staged-XXXXXX.json)" || tmp_fail
+nodiff_dir="$(mktemp -d -t gitleaks-nodiff-XXXXXX)" || tmp_fail
+nodiff_report="$(mktemp -t gitleaks-nodiff-XXXXXX.json)" || tmp_fail
+# a relative TMPDIR makes mktemp -t return relative paths: canonicalise the directory once, before any `cd`
+case "$nodiff_dir" in /*) : ;; *) nodiff_dir="$PWD/$nodiff_dir" ;; esac
 
 # scan_root <root> — scan ONE repository's staged index. It returns 0 when the root is
 # clean or its scan failed transiently (a bypass row is emitted and the loop moves on) and
 # NEVER allows or exits the hook: only a finding denies. All state is per call, so a root
 # that errors cannot leak into, or end the scan of, the next.
 scan_root() {
-  local repo_root="$1" _p _a _v ca_rc gl_nodiff=() gl_cfg_n scan_rc=0 nodiff_rc nd_count nd_files
+  local repo_root="$1" _p _a _v ca_rc co_rc gl_nodiff=() gl_bound=() gl_cfg_n scan_rc=0 nodiff_rc nd_count nd_files
   local findings_count=0 findings_summary="" reason
   : > "$report_file"; : > "$nodiff_report"
+  assert_fixture_dir "$nodiff_dir"
   rm -rf "$nodiff_dir"; mkdir -p "$nodiff_dir"
 
   # GITATTRIBUTE BYPASS GUARD. `gitleaks git` reads a PATCH, so a path marked
@@ -466,8 +504,8 @@ scan_root() {
   # guard) and, on the plain path, leaves no path to re-scan, which is what the old per-path loop also did when
   # its `check-attr` failed (an empty answer is not `unset`).
   ca_rc=0
-  git -C "$repo_root" diff --cached --name-only -z --diff-filter=ACMR 2>/dev/null \
-    | git -C "$repo_root" check-attr -z --stdin diff > "$nodiff_report" 2>/dev/null || ca_rc=$?
+  git -c core.fsmonitor=false -C "$repo_root" diff --cached --name-only -z --diff-filter=ACMR 2>/dev/null \
+    | git -c core.fsmonitor=false -C "$repo_root" check-attr -z --stdin diff > "$nodiff_report" 2>/dev/null || ca_rc=$?
   if [ "$ca_rc" -eq 0 ]; then
     while IFS= read -r -d '' _p && IFS= read -r -d '' _a && IFS= read -r -d '' _v; do
       [ -n "$_p" ] || continue
@@ -508,35 +546,74 @@ scan_root() {
   # A `-diff` gitattribute defeats colour pinning entirely (it removes the `+`
   # lines rather than decorating them); that is closed separately by the
   # check-attr guard above, not by these two pins.
+  #
+  # core.fsmonitor is pinned off the same way (CTO row 29): `git config core.fsmonitor <script>` is an ordinary Bash
+  # call, and a program that answers with a malformed token made `gitleaks git --staged` return rc 0 on a staged
+  # key (measured). In a would-be-index scan gitleaks runs under the bound program: the time left of the ONE total
+  # deadline, a TERM-then-KILL of its whole process group, rc 124.
   gl_cfg_n="${GIT_CONFIG_COUNT:-0}"
   case "$gl_cfg_n" in ''|*[!0-9]*) gl_cfg_n=0 ;; esac
+  if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
+    if ! cis_bound_argv; then sim_timeout_deny "$repo_root"; fi
+    gl_bound=("${CIS_BOUND_ARGV[@]}")
+  fi
   (
     cd "$repo_root" || exit 1
-    env "GIT_CONFIG_COUNT=$((gl_cfg_n + 2))" \
+    env "GIT_CONFIG_COUNT=$((gl_cfg_n + 3))" \
       "GIT_CONFIG_KEY_${gl_cfg_n}=color.ui" "GIT_CONFIG_VALUE_${gl_cfg_n}=never" \
       "GIT_CONFIG_KEY_$((gl_cfg_n + 1))=color.diff" "GIT_CONFIG_VALUE_$((gl_cfg_n + 1))=never" \
-      "GIT_CONFIG_PARAMETERS=${GIT_CONFIG_PARAMETERS:+${GIT_CONFIG_PARAMETERS} }'color.ui'='never' 'color.diff'='never'" \
+      "GIT_CONFIG_KEY_$((gl_cfg_n + 2))=core.fsmonitor" "GIT_CONFIG_VALUE_$((gl_cfg_n + 2))=false" \
+      "GIT_CONFIG_PARAMETERS=${GIT_CONFIG_PARAMETERS:+${GIT_CONFIG_PARAMETERS} }'color.ui'='never' 'color.diff'='never' 'core.fsmonitor'='false'" \
+      ${gl_bound[@]+"${gl_bound[@]}"} \
       gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 \
         --report-format json --report-path "$report_file" >/dev/null 2>&1
   ) || scan_rc=$?
+  # In a would-be-index scan nothing about the content was ever scanned if gitleaks did not finish its job: an exit
+  # other than 0 / 1 is an error (124: the bound), and so is a non-zero exit with no report (CTO row 31).
+  if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
+    case "$scan_rc" in
+      0|1) : ;;
+      124) sim_timeout_deny "$repo_root" ;;
+      *) sim_scan_error "$repo_root" "gitleaks exited $scan_rc" ;;
+    esac
+  fi
 
   # Re-scan any `-diff` path from its STAGED blob before trusting a clean verdict.
   # `gitleaks git` structurally could not see these (no `+` lines), so "clean" above
   # is not a statement about them. `detect --no-git` reads file CONTENT and never
   # consults git's diff machinery, so no gitattribute can reach it.
   if (( ${#gl_nodiff[@]} > 0 )); then
-    nodiff_rc=0
-    for _p in "${gl_nodiff[@]}"; do
-      mkdir -p "$nodiff_dir/$(dirname "$_p")" 2>/dev/null || true
-      git -C "$repo_root" show ":$_p" > "$nodiff_dir/$_p" 2>/dev/null || true
-    done
-    gitleaks detect --no-git --source "$nodiff_dir" --config "$repo_root/.gitleaks.toml" --redact --no-banner --exit-code 1 \
+    nodiff_rc=0; co_rc=0
+    # ONE checkout-index call writes every staged blob (a per-path mkdir + git show cost 42 s at 4,000 paths). The pins
+    # keep configured filters out of it; a blob that could not be read is NOT a clean file.
+    cis_pins_build "$repo_root"
+    printf '%s\0' "${gl_nodiff[@]}" \
+      | git "${CIS_PINS[@]}" -C "$repo_root" checkout-index -z --stdin --prefix="$nodiff_dir/" >/dev/null 2>&1 || co_rc=$?
+    if [ "$co_rc" -ne 0 ]; then
+      if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then sim_scan_error "$repo_root" "the \`-diff\` blobs could not be read (checkout-index exit $co_rc)"; fi
+      echo "[git-commit-secret-scan] WARN: the \`-diff\` blobs of $repo_root could not be read (checkout-index exit $co_rc); those paths were NOT verified." >&2
+      emit git-commit-secret-scan-nodiff-rescan-failed bypass "-diff blob read exit=$co_rc"
+    fi
+    gl_bound=()
+    if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
+      if ! cis_bound_argv; then sim_timeout_deny "$repo_root"; fi
+      gl_bound=("${CIS_BOUND_ARGV[@]}")
+    fi
+    ${gl_bound[@]+"${gl_bound[@]}"} gitleaks detect --no-git --source "$nodiff_dir" --config "$repo_root/.gitleaks.toml" --redact --no-banner --exit-code 1 \
       --report-format json --report-path "$nodiff_report" >/dev/null 2>&1 || nodiff_rc=$?
+    if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
+      case "$nodiff_rc" in
+        0|1) : ;;
+        124) sim_timeout_deny "$repo_root" ;;
+        *) sim_scan_error "$repo_root" "the \`-diff\` re-scan exited $nodiff_rc" ;;
+      esac
+    fi
     if [ "$nodiff_rc" -eq 1 ] && [ -s "$nodiff_report" ] && grep -q '"RuleID"' "$nodiff_report" 2>/dev/null; then
       nd_count="$(jq -r 'length' "$nodiff_report" 2>/dev/null || echo 0)"
       nd_files="$(printf '%s, ' "${gl_nodiff[@]}")"
       deny "BLOCKED: gitleaks found ${nd_count} secret-shaped string(s) in staged file(s) of ${repo_root} carrying a \`-diff\` gitattribute: ${nd_files%, }. A \`-diff\` attribute makes git emit \"Binary files … differ\" with no added lines, so the normal staged scan sees NOTHING in these files — they were re-scanned from their staged blobs. Recovery: (1) scrub the secret bytes (never commit-then-rotate); (2) if the \`-diff\` attribute is not deliberate, remove it from .gitattributes / .git/info/attributes."
     fi
+    if [ "$nodiff_rc" -eq 1 ] && [ "${CIS_ACTIVE:-0}" -eq 1 ]; then sim_scan_error "$repo_root" "the \`-diff\` re-scan reported a failure and no findings"; fi
     if [ "$nodiff_rc" -ne 0 ] && [ "$nodiff_rc" -ne 1 ]; then
       echo "[git-commit-secret-scan] WARN: the \`-diff\` re-scan exited $nodiff_rc without a findings report; those paths were NOT verified." >&2
       emit git-commit-secret-scan-nodiff-rescan-failed bypass "-diff re-scan exit=$nodiff_rc, empty report"
@@ -561,7 +638,9 @@ scan_root() {
   if [ "$findings_count" = "0" ] || [ -z "$findings_summary" ]; then
     # gitleaks exited non-zero but the report file is empty/missing — likely
     # a transient gitleaks error rather than a real finding. Fail-open with
-    # a warn so a broken binary doesn't block every commit.
+    # a warn so a broken binary doesn't block every commit. (Not in a would-be-index scan: there the
+    # content was never scanned, and the environment is ours, not the operator's.)
+    if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then sim_scan_error "$repo_root" "gitleaks exited $scan_rc with no findings report"; fi
     echo "[git-commit-secret-scan] WARN: gitleaks exited $scan_rc but produced no findings report for $repo_root; continuing with the remaining roots. Run 'gitleaks git --pre-commit --staged' there to diagnose." >&2
     emit git-commit-secret-scan bypass "gitleaks exit=$scan_rc, empty report"
     return 0
@@ -575,9 +654,6 @@ scan_root() {
 # A command that stages AND commits (`git add -A && git commit`, `commit -a`, `commit -- <path>`) is scanned
 # against the index the commit WILL record, built by commit-index-sim.sh on a temp copy: nothing in the real
 # index, object store, git directory or working tree is touched. A plain `git commit -m x` reaches none of this.
-sim_on=0
-if [ "$lex_state" = ok ] && [ "$CTR_COMMIT_SEEN" -eq 1 ] && [ "${CTR_COMMIT_STAGES:-0}" -eq 1 ]; then sim_on=1; fi
-
 if [ "$sim_on" -ne 1 ]; then
   for _r in "${toml_roots[@]}"; do
     scan_root "$_r"
@@ -590,53 +666,14 @@ if [ "${CTR_STAGE_REFUSE:-0}" -eq 1 ]; then
   sim_deny config-refused "BLOCKED: the commit's own staging cannot be simulated safely (${CTR_STAGE_REFUSE_WHY}), so the content it would record was NOT scanned and the commit is blocked. Repair: stage in its own call: run 'git add <paths>' as its own command first (the scan then reads the real index), then run the commit as a second call."
 fi
 
-# Stale commit-sim-* directories (a SIGKILL cannot run the EXIT trap) older than 60 minutes, owned by the caller,
-# real directories only (find -type d never follows a symlink), are swept before a new one is allocated.
-sim_tmp="${TMPDIR:-/tmp}"
-if [ -d "$sim_tmp" ]; then
-  while IFS= read -r _d; do
-    if [ -d "$_d" ] && [ ! -L "$_d" ]; then
-      assert_fixture_dir "$_d"
-      rm -rf "$_d" 2>/dev/null || true
-    fi
-  done < <(find "$sim_tmp" -maxdepth 1 -type d -name 'commit-sim-*' -user "$(id -u)" -mmin +60 2>/dev/null || true)
-fi
 if ! sim_dir="$(mktemp -d -t commit-sim-XXXXXX)"; then
   sim_dir=""
   sim_deny temp-dir "BLOCKED: the commit's own staging could not be simulated (a temporary directory could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
 fi
+# a relative TMPDIR makes mktemp -t return a relative path: canonicalise it once
+case "$sim_dir" in /*) : ;; *) sim_dir="$PWD/$sim_dir" ;; esac
 
 cis_clock_start
-cis_bound_init
-if [ "$CIS_BOUND_KIND" = none ]; then
-  sim_deny no-bound "BLOCKED: the commit's own staging could not be simulated and bounded (none of timeout, gtimeout or perl is on PATH), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
-fi
-
-# gitleaks resolves to a generated wrapper FIRST on PATH: scan_root calls `env ... gitleaks`, which bypasses a
-# shell function, so the bound has to be a program. It applies the time left of the ONE total deadline and, on
-# expiry, touches sim_dir/gl-timeout; an expired scan always DENIES (below), it never bypasses.
-sim_real_gl="$(command -v gitleaks)"
-mkdir -m 700 "$sim_dir/bin" 2>/dev/null || sim_deny temp-dir "BLOCKED: the commit's own staging could not be simulated (a temporary directory could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
-assert_fixture_dir "$sim_dir"
-cat > "$sim_dir/bin/gitleaks" <<'WRAP'
-#!/bin/sh
-now=$(date +%s 2>/dev/null) || now=""
-rem=0
-if [ -n "$now" ] && [ -n "$CIS_WRAP_DEADLINE" ]; then rem=$((CIS_WRAP_DEADLINE - now)); fi
-if [ "$rem" -le 0 ]; then : > "$CIS_WRAP_MARK"; exit 124; fi
-rc=0
-case "$CIS_WRAP_KIND" in
-  timeout) timeout -k 2 "$rem" "$CIS_WRAP_REAL" "$@" || rc=$? ;;
-  gtimeout) gtimeout -k 2 "$rem" "$CIS_WRAP_REAL" "$@" || rc=$? ;;
-  perl) perl -e 'alarm shift; exec @ARGV' "$rem" "$CIS_WRAP_REAL" "$@" || rc=$? ;;
-  *) : > "$CIS_WRAP_MARK"; exit 124 ;;
-esac
-case "$rc" in 124|137|142) : > "$CIS_WRAP_MARK" ;; esac
-exit "$rc"
-WRAP
-chmod 700 "$sim_dir/bin/gitleaks"
-export CIS_WRAP_REAL="$sim_real_gl" CIS_WRAP_KIND="$CIS_BOUND_KIND" CIS_WRAP_DEADLINE="$CIS_DEADLINE_EPOCH" CIS_WRAP_MARK="$sim_dir/gl-timeout"
-export PATH="$sim_dir/bin:$PATH"
 
 # The payload's own .cwd (not HOOK_CWD, which falls back to CLAUDE_PROJECT_DIR / PWD and is never empty): the
 # exact replay trusts only a directory the payload itself names.
@@ -669,8 +706,5 @@ for _r in "${toml_roots[@]}"; do
   scan_root "$_r"
   cis_unexport
   assert_fixture_dir "$sim_work"; rm -rf "$sim_work" 2>/dev/null || true
-  if [ -e "$sim_dir/gl-timeout" ]; then
-    sim_deny sim-timeout "BLOCKED: the gitleaks scan of the simulated index of $_r did not finish within the simulation's time limit, so the content the commit would record was NOT scanned and the commit is blocked. This is a load condition: re-run when the machine is quieter, or run git add as its own call, then run the commit in the next call."
-  fi
 done
 allow
