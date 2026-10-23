@@ -21,7 +21,7 @@
 // `new_sessions_paused=1` on a host is the proof that host is refusing.
 
 import { isNewAgentSessionsPaused } from "@/lib/feature-flags/server";
-import { warnSilentFallback } from "@/server/observability";
+import { infoSilentFallback, warnSilentFallback } from "@/server/observability";
 import { createChildLogger } from "@/server/logger";
 
 const FEATURE = "quiet-window";
@@ -30,15 +30,43 @@ const FEATURE = "quiet-window";
 export const QUIET_WINDOW_MESSAGE =
   "Soleur is in a short maintenance window and is not starting new sessions right now. Your existing work is safe, but this message was not sent. Please try again in a few minutes.";
 
+// #8211 rehearsal (CTO ruling 2026-10-23): ONE named Soleur-owned synthetic account may run its single
+// Level 2 session while the pause is on. The id is a lowercase UUID in Doppler `prd` (not a secret, not
+// PII; logged only as a hash). Anything else (absent, empty, whitespace, uppercase, a list, two ids)
+// exempts nobody, so a typo can only keep the window closed. Exact match, no normalisation of the
+// caller's id.
+const EXEMPT_USER_ENV = "QUIET_WINDOW_EXEMPT_USER_ID";
+const EXEMPT_USER_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function configuredExemptId(): string | null {
+  const raw = process.env[EXEMPT_USER_ENV];
+  return typeof raw === "string" && EXEMPT_USER_PATTERN.test(raw) ? raw : null;
+}
+
 /**
  * True when a NEW agent session must be refused. Anything other than a strict
  * `true` from the flag read (absent, off, a thrown read) allows the session.
+ *
+ * `userId` is the caller's raw id: only the one configured exempt account passes while the pause is
+ * on. A call without a `userId` (the reporter's read, auto-sync) is never exempt. An exempt pass is
+ * mirrored to Sentry (hashed id) and is not counted in `refused_since_last`.
  */
 export async function newAgentSessionsRefused(
-  opts: { observe?: boolean } = {},
+  opts: { observe?: boolean; userId?: string } = {},
 ): Promise<boolean> {
   try {
     const refused = (await isNewAgentSessionsPaused()) === true;
+    if (refused && opts.userId !== undefined && opts.userId === configuredExemptId()) {
+      if (opts.observe !== true) {
+        infoSilentFallback(null, {
+          feature: FEATURE,
+          op: "exempt-pass",
+          message: "quiet-window: the exempt synthetic account passed the pause",
+          extra: { userId: opts.userId },
+        });
+      }
+      return false;
+    }
     // Each REAL refusal is counted so the per-minute line proves off-box that the gates fired (the
     // refusal log itself is info level and never leaves the container). The reporter's own read
     // passes observe:true and is not a refusal.

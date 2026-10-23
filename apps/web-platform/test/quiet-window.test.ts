@@ -7,9 +7,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // the decision wrapper (absent/off allows, on refuses, a throwing read allows
 // and is mirrored) and the reporter's output shape (counts only).
 
-const { mockIsPaused, mockWarnSilentFallback, mockLogWarn } = vi.hoisted(() => ({
+const { mockIsPaused, mockWarnSilentFallback, mockInfoSilentFallback, mockLogWarn } = vi.hoisted(() => ({
   mockIsPaused: vi.fn(),
   mockWarnSilentFallback: vi.fn(),
+  mockInfoSilentFallback: vi.fn(),
   mockLogWarn: vi.fn(),
 }));
 
@@ -19,6 +20,7 @@ vi.mock("@/lib/feature-flags/server", () => ({
 
 vi.mock("@/server/observability", () => ({
   warnSilentFallback: mockWarnSilentFallback,
+  infoSilentFallback: mockInfoSilentFallback,
   reportSilentFallback: vi.fn(),
 }));
 
@@ -69,6 +71,103 @@ describe("newAgentSessionsRefused", () => {
   it("only a strict boolean true refuses (truthy non-boolean does not)", async () => {
     mockIsPaused.mockResolvedValue("1" as unknown as boolean);
     expect(await newAgentSessionsRefused()).toBe(false);
+  });
+});
+
+// #8211 rehearsal: ONE configured synthetic account passes the pause. Everything else stays refused.
+describe("newAgentSessionsRefused: the single exempt synthetic account", () => {
+  const EXEMPT = "0b8f6f1e-3c1d-4a53-9a55-5b6f7c8d9e01";
+  const OTHER = "1c9a7a2f-4d2e-4b64-8b66-6c7a8d9e0f12";
+  const original = process.env.QUIET_WINDOW_EXEMPT_USER_ID;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetQuietWindowCountersForTests();
+    mockIsPaused.mockResolvedValue(true);
+    process.env.QUIET_WINDOW_EXEMPT_USER_ID = EXEMPT;
+  });
+  afterEach(() => {
+    if (original === undefined) delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
+    else process.env.QUIET_WINDOW_EXEMPT_USER_ID = original;
+  });
+
+  it("pause on: the exempt id passes, mirrored once with the raw id left to the emit-boundary hash", async () => {
+    expect(await newAgentSessionsRefused({ userId: EXEMPT })).toBe(false);
+    expect(mockInfoSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockInfoSilentFallback.mock.calls[0][1]).toMatchObject({
+      feature: "quiet-window",
+      op: "exempt-pass",
+      extra: { userId: EXEMPT },
+    });
+  });
+
+  it("pause on: any other id is refused and counted", async () => {
+    expect(await newAgentSessionsRefused({ userId: OTHER })).toBe(true);
+    expect(mockInfoSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("pause on: a call with no userId (the reporter read, auto-sync) is never exempt", async () => {
+    expect(await newAgentSessionsRefused()).toBe(true);
+    expect(await newAgentSessionsRefused({ observe: true })).toBe(true);
+    expect(await newAgentSessionsRefused({ userId: undefined })).toBe(true);
+  });
+
+  it.each([
+    ["uppercase", EXEMPT.toUpperCase()],
+    ["prefix", EXEMPT.slice(0, 35)],
+    ["suffix", `${EXEMPT}0`],
+    ["leading space", ` ${EXEMPT}`],
+    ["trailing space", `${EXEMPT} `],
+    ["empty", ""],
+  ])("pause on: a near-miss id (%s) is refused", async (_n, id) => {
+    expect(await newAgentSessionsRefused({ userId: id })).toBe(true);
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["empty", ""],
+    ["whitespace around the id", ` ${EXEMPT} `],
+    ["uppercase id", EXEMPT.toUpperCase()],
+    ["a list of two", `${EXEMPT},${OTHER}`],
+    ["not a uuid", "synthetic"],
+  ])("malformed or absent config (%s) exempts nobody, not even the id it names", async (_n, cfg) => {
+    if (cfg === undefined) delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
+    else process.env.QUIET_WINDOW_EXEMPT_USER_ID = cfg;
+    expect(await newAgentSessionsRefused({ userId: EXEMPT })).toBe(true);
+    expect(await newAgentSessionsRefused({ userId: OTHER })).toBe(true);
+  });
+
+  it("pause off: allowed with no exemption event", async () => {
+    mockIsPaused.mockResolvedValue(false);
+    expect(await newAgentSessionsRefused({ userId: EXEMPT })).toBe(false);
+    expect(mockInfoSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("an observe read by the exempt id passes without emitting an event", async () => {
+    expect(await newAgentSessionsRefused({ observe: true, userId: EXEMPT })).toBe(false);
+    expect(mockInfoSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("an exempt pass is not a refusal: refused_since_last stays 0 while a real refusal counts", async () => {
+    await newAgentSessionsRefused({ userId: EXEMPT });
+    vi.useFakeTimers();
+    try {
+      const timer = startQuietWindowReporter({ readCounts: () => ({ ccQueries: 0, legacySessions: 0 }) });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockLogWarn.mock.calls.at(-1)?.[1]).toMatch(/new_sessions_paused=1 refused_since_last=0$/);
+      await newAgentSessionsRefused({ userId: OTHER });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockLogWarn.mock.calls.at(-1)?.[1]).toMatch(/new_sessions_paused=1 refused_since_last=1$/);
+      clearInterval(timer);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a throwing flag read still fails OPEN for everyone (unchanged) and mirrors once", async () => {
+    mockIsPaused.mockRejectedValue(new Error("flagsmith exploded"));
+    expect(await newAgentSessionsRefused({ userId: OTHER })).toBe(false);
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
   });
 });
 

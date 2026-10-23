@@ -30,7 +30,11 @@ describe("quiet-window wiring", () => {
     expect(src).toMatch(
       /agentSessionsLive:[\s\S]*ccQueries:[\s\S]*legacySessions:[\s\S]*newSessionsPaused:/,
     );
-    expect(src).not.toMatch(/userId|conversationId/);
+    // Scoped to the reporter half: the gate half above it takes the caller's id (exempt-account match)
+    // and never prints it. Nothing from the counts interface onward may name a user or conversation.
+    const reporter = src.slice(src.indexOf("export interface LiveAgentSessionCounts"));
+    expect(reporter.length).toBeGreaterThan(0);
+    expect(reporter).not.toMatch(/userId|conversationId/);
   });
 });
 
@@ -48,7 +52,7 @@ describe("quiet-window gate ordering and coverage (review P2)", () => {
     const src = code("server/agent-runner.ts");
     const start = idx(src, "async function sendUserMessageInner(");
     expect(start).toBeGreaterThan(0);
-    const gate = idx(src, "await newAgentSessionsRefused()", start);
+    const gate = idx(src, "await newAgentSessionsRefused({ userId })", start);
     const convRead = idx(src, 'getFreshTenantClient(userId)', start);
     const insert = idx(src, '.from("messages")', start);
     expect(gate).toBeGreaterThan(start);
@@ -78,6 +82,35 @@ describe("quiet-window gate ordering and coverage (review P2)", () => {
     const guarded = src.match(/await abortActiveSessionUnlessPaused\(userId, session\)/g) ?? [];
     expect(bare).toHaveLength(1); // inside abortActiveSessionUnlessPaused itself
     expect(guarded).toHaveLength(2); // start_session and resume_session
+  });
+
+  it("every refusal gate passes the raw userId (the exempt account is matched there); auto-sync and the reporter never do", () => {
+    const gates: Array<[string, RegExp, number]> = [
+      ["server/cc-dispatcher.ts", /await newAgentSessionsRefused\(\{ userId \}\)/g, 1],
+      ["server/agent-runner.ts", /await newAgentSessionsRefused\(\{ userId \}\)/g, 2],
+      ["server/ws-handler.ts", /await newAgentSessionsRefused\(\{ userId \}\)/g, 1],
+      ["server/ws-handler.ts", /await newAgentSessionsRefused\(\{ observe: true, userId \}\)/g, 1],
+      ["server/quiet-window-http.ts", /await newAgentSessionsRefused\(\{ userId \}\)/g, 1],
+    ];
+    for (const [f, re, n] of gates) {
+      expect(code(f).match(re) ?? [], `${f} ${re}`).toHaveLength(n);
+    }
+    // No bare call survives at any consumer, so a gate cannot silently lose the exemption or keep it
+    // while passing the wrong argument.
+    for (const f of [
+      "server/cc-dispatcher.ts",
+      "server/agent-runner.ts",
+      "server/ws-handler.ts",
+      "server/quiet-window-http.ts",
+    ]) {
+      expect(code(f), f).not.toMatch(/newAgentSessionsRefused\(\s*\)/);
+    }
+    // Auto-sync stays refused for everyone, the exempt account included (a sync agent would be a second
+    // session): its call takes no argument, and the route-level helpers pass the raw id, not a hash.
+    expect(code("server/auto-sync-trigger.ts")).toMatch(/\.newAgentSessionsRefused\(\)/);
+    expect(code("server/auto-sync-trigger.ts")).not.toMatch(/newAgentSessionsRefused\([^)]/);
+    expect(code("app/api/repo/setup/route.ts")).toMatch(/quietWindowRefusal\("repo-setup", user\.id\)/);
+    expect(code("app/api/repo/create/route.ts")).toMatch(/quietWindowRefusal\("repo-create", userId\)/);
   });
 
   it("a first message is refused BEFORE createConversation (no empty active row, no held slot)", () => {
