@@ -1,4 +1,4 @@
-# Learning: fix-round agents reported "green" on their own files and broke three repo-global gates
+# Learning: fix-round agents reported "green" on their own files and broke three repo-global gates (and CI found three more)
 
 ## Problem
 
@@ -12,6 +12,14 @@ combined tree then failed three gates none of them had run:
   `apps/web-platform`) without registering it in `test/repo-wide-suites.ts`.
 - `test/sandbox-wrapped-command-runtime.test.ts:151`: a source-pin of the old body of `maskedDirs()` in the probe,
   which the same agent refactored to call `transcriptDir(home)`.
+
+CI then found three more the same way, after the branch was marked ready: `tsc --noEmit` (vitest does not
+type-check, so `spawnSync` env literals without `NODE_ENV` and a `homeDirs = []` default inferred as `never[]` passed
+187 tests and failed the required type-check), `grep-q-pipe-guard` (12 `printf | grep -q` sites in the new apt rows),
+and `fixture-relative-assert` (an `rm -rf "$d"` with no `assert_fixture_dir` in a test helper). All three were visible
+to a local run by name; none was in the affected-test selection. A fourth, unrelated, was a bug already on `main`
+(#10895's `A && echo` as the last statement of a `while` under `bash -e` reddened `detect-changes` for every PR whose
+last changed infra root has no sentinel), fixed inline because it blocked this merge.
 
 The gates were found by the fix-round panel (two seats ran suites nobody had touched) and by the combined-tree affected
 gate, not by the implementers. Two more things went stale between plan and merge: a sibling PR took the "free"
