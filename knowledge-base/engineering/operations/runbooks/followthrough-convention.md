@@ -321,7 +321,7 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 
 ## Retiring a probe
 
-- **Deleting a probe script leaves live GitHub state behind.** The sweeper re-scans CLOSED `follow-through` issues for 14 days, so a closed *promotion* tracker (not just the tracker the probe is named for) whose directive names the deleted script logs a `missing in repo HEAD` ERROR on every daily sweep until the window lapses. Before merging a deletion, `gh issue list --state closed --label follow-through --search "closed:>=<14 days ago>" --json number,body` and `grep` the directive for the script name; after merge, remove the `follow-through` label from any hit (reversible, closed body untouched). Found on G1 PR-4a, where the plan checked the named tracker (#2640) and missed its promotion tracker (#9888).
+- **Deleting a probe script leaves live GitHub state behind.** The sweeper re-scans CLOSED `follow-through` issues for 14 days, so a closed *promotion* tracker (not just the tracker the probe is named for) whose directive names the deleted script logs a `missing in repo HEAD` ERROR on every daily sweep until the window lapses. Before merging a deletion, `gh issue list --state closed --label follow-through -L 200 --search "closed:>=<14 days ago>" --json number,body` and `grep` the directive for the script name; after merge, remove the `follow-through` label from any hit (reversible, closed body untouched). Found on G1 PR-4a, where the plan checked the named tracker (#2640) and missed its promotion tracker (#9888).
 
 ## Operator reference
 

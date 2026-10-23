@@ -964,6 +964,9 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
 # curl), so the edge is the directory prefix, and the rows are keyed off the Rule E baseline.
 AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "scripts/followthroughs/"
+  # G1 PR-4a (#10937): the parity script is the one HMAC surface this suite still EXECUTES directly under the shim
+  # (live status arm, hostile-credential, xtrace, big-secret and mutant rows); it used to be reached only through the retired probes.
+  "scripts/check-deploy-script-parity.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
   # S2 (#9597): the suite pins the sentences these records carry about the converted surfaces.
