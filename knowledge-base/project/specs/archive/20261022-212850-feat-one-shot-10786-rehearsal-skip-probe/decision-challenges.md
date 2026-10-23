@@ -1,0 +1,9 @@
+# Decision challenges: feat-one-shot-10786-rehearsal-skip-probe
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| How the rehearsal suite's skip and terminal lines reach the probe once the infra runner captures per-suite output (relay in the runner vs. suite-emitted contract vs. artifact download vs. blind positive control) | technical | Ruled by CTO agent, 2026-10-22: design A. The runner relays every `^SKIP \(loud\): ` line from any suite log plus the terminal line of suites in a one-entry map (`git-data-runcmd-rehearsal`), as `SOLEUR\| `-prefixed stdout lines in the existing diagnostic block, before the summary line and the logdir reap; capped near 50 lines per suite; probe literals unchanged; single source of truth enforced by an end-to-end test that reads `SUITE_TERMINAL` and `SKIP_MARKERS` out of the probe and runs the real runner into the probe. Rationale: B edits a 3900-line mutation-pinned suite, C adds an artifact lifecycle on an over-cap cache, D keeps the probe blind to skips. |
+| Relay from PASSed suites only, or from every suite log | technical | Ruled by CTO agent, 2026-10-22: every suite log in the logdir, no PASS filter (one loop, fewer branches; the probe samples only successful runs, so the verdict is identical; a RED run's context helps diagnosis). Pin that the relay emits each skip line exactly once (a RED dump's fallback tail may print it again in its own block; harmless, the probe samples only successful runs). |
+| Fold the streak-cache eviction (monitor job red most days, escalation counter resets) into this PR | technical | Ruled by CTO agent, 2026-10-22: defer to its own tracking issue; different failure domain, does not change the probe verdict. The PR body states that the escalation counter is unreliable until that issue lands. |

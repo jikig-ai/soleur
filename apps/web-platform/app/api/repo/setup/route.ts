@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   // #8211 quiet-window (CTO ruling): connecting a repo clones a working tree onto the web host, so
   // it is a NEW-session-class write and is refused while the kill-switch is on. After auth and BEFORE
   // any resolution, lock flip or clone: a refusal leaves repo_status and the filesystem untouched.
-  const quietWindow = await quietWindowRefusal("repo-setup", hashUserIdValue(user.id));
+  const quietWindow = await quietWindowRefusal("repo-setup", user.id);
   if (quietWindow) return quietWindow;
 
   // ADR-044 PR-2 team write-cutover (#5462): resolve the target workspace id

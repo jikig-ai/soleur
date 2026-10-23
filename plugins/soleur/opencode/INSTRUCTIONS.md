@@ -115,6 +115,25 @@ The shell tool's wire name here is **`shell`**, not `bash`; the plugin maps both
 JavaScript rather than a command and are not decided by the Bash guards — a limitation this
 harness shares with the guard scripts' own input contract.
 
+**One canonical gate is absent here, and its consequence is a refusal you cannot talk around.**
+`hooks/operator-stage-approval.sh` is what mints the digest-bound approval receipt a staged
+`--apply` consumes, and no OpenCode surface can both rewrite the command and ask in the same
+decision (ADR-264). So `plugins/soleur/scripts/lib/operator-script.sh`'s `soleur_op_stage_gate`
+finds no receipt and exits **75** (`SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED`). The typed-`yes`
+fallback is gated on `-t 0`/`-t 1` **and** `soleur_op_in_agent_harness`, which recognises only
+`CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT` — neither is set under OpenCode — so that arm is open
+here whenever the spawned shell has a tty, and a terminal confirmation from an agent is not
+evidence of a person. **No receipt can be minted on this harness**, so a staged `--apply`
+refuses rather than approving. Nothing is approved silently.
+
+A degraded hook decision — a shell call whose `workdir` could not be correlated, or a runtime
+with no `tool.execute.before` surface — is announced on stderr **and** written to the event log
+when `SOLEUR_OPENCODE_EVENT_LOG` names a file (its parent directory must exist; unset means no
+log). Whether your terminal surfaces plugin stderr is not something this adapter measured, so
+arm the log when you need certainty. A `shell` call whose `workdir` cannot be used is
+**prompted** rather than run unchecked — the guards still run, against the session directory,
+and only their declining becomes the prompt.
+
 The post-compaction re-read is **armed, not guaranteed**, unlike Codex and Devin:
 `ctx.session.hook("compaction")` sets state and the next `ctx.session.hook("context")`
 re-injects the rule corpus plus the re-read directive. §12.3 captured that `context` fire

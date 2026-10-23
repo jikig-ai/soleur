@@ -538,3 +538,12 @@ time-boxed, issue-tracked, human-approved edit, never an `arm_skip` and never a 
 Article 30 register row PA-36 (declared, not live) lists `git-data-ownership.test.sh` as backing the ownership control;
 keep that wording at "suite exists" and do not extend it to claim CI enforcement while that arm can be declined
 locally.
+
+> **Addendum 2026-10-22 (#10786):** the evidence path of trigger 1 is repaired in code (the first observed verdict will be
+> recorded on #10786 once the relay has reached `main`), which supersedes the sentence above saying it cannot fire yet. The probe was TRANSIENT because
+> #8763 (2026-09-25) moved the rehearsal suite out of its own workflow step into the infra runner, which has captured
+> each suite's output into a per-suite file since #7423 and prints only `PASS <path>`; the marker never reached the
+> Actions log. The suite did not skip. `run-registered-suites.sh` now relays the column-0 `SKIP (loud):` lines and the rehearsal suite's
+> terminal line as `SOLEUR| relay ...` lines, and the probe's literals are unchanged. The first read after the relay
+> reaches `main` will count only the runs that carry it (the 20-run window still holds earlier runs without it), so a
+> verdict is worded around its `observed` count, not around 20 clean runs. The observed verdict will be recorded on #10786.

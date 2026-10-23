@@ -104,7 +104,9 @@ while IFS= read -r seg; do
   else
     continue # nowhere to resolve — nothing to refuse on
   fi
-  if [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+  # The alternation is the stamped default-branch set — soleur:verification-scaffold
+  # emits this file with `main|master` substituted for the target's resolved default.
+  if [[ "$BRANCH" =~ ^(main|master)$ ]]; then
     printf 'BLOCKED: Committing directly to %s is not allowed. Create a feature branch first.\n' "$BRANCH" >&2
     exit 1
   fi

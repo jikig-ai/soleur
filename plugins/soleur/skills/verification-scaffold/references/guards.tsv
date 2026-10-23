@@ -1,0 +1,21 @@
+# verification-scaffold guard manifest (#10404) — the machine form of guardrail-audit.md.
+# One row per installable guard. Columns:
+#   name         guard id the CLI accepts (--guards/--uninstall/--list)
+#   verdict      audit verdict (references/guardrail-audit.md) — every v1 row is
+#                generic-after-extraction by construction
+#   surfaces     hook | ci | hook+ci — which emitted surfaces the guard owns
+#   templates    `;`-separated template paths under references/ this row emits
+#   default_mode advisory — every v1 guard installs advisory-first (flip MODE= / drop
+#                continue-on-error to promote; emitted VERIFICATION.md names the step)
+#   deps         external deps the emitted guard needs at the target (NOT satisfied by
+#                the emit; checked and named, never silently assumed)
+#   source_files `;`-separated repo sources the templates were extracted from (provenance;
+#                the near-verbatim pair is byte-pinned by test/manifest.test.sh)
+#   emits        `;`-separated target-relative artifact paths this guard emits
+#   tier         v1 | v2 — v2 rows are candidates only; the generator refuses to emit them
+name	verdict	surfaces	templates	default_mode	deps	source_files	emits	tier
+secret-scan	generic-after-extraction	hook+ci	references/guards/secret-scan-hook.sh.template;references/gitleaks.toml.template;references/guards/verification-gates.yml.template	advisory	gitleaks 8.24.x on PATH (hook) or gitleaks-action (CI);jq or node for the settings merge	.claude/hooks/git-commit-secret-scan.sh	.claude/hooks/secret-scan.sh;.gitleaks.toml;.github/workflows/verification-gates.yml	v1
+commit-on-main	generic-after-extraction	hook	references/guards/commit-on-main-hook.sh.template;references/guards/precommit-guard.sh.template;references/guards/wrapper-boundary.sh.template	advisory	git	plugins/soleur/scripts/precommit-guard.sh;plugins/soleur/scripts/lib/wrapper-boundary.sh;.claude/hooks/guardrails.sh	.claude/hooks/commit-on-main.sh;scripts/verification/precommit-guard.sh;scripts/verification/lib/wrapper-boundary.sh	v1
+block-stash	generic-after-extraction	hook	references/guards/block-stash-hook.sh.template	advisory	git	.claude/hooks/guardrails.sh	.claude/hooks/block-stash.sh	v1
+orphan-test	generic-after-extraction	ci	references/guards/orphan-test-check.sh.template;references/guards/verification-gates.yml.template	advisory	git	scripts/lint-orphan-test-suites.sh	scripts/verification/orphan-test-check.sh;.github/workflows/verification-gates.yml;.github/verification-known-orphans.txt	v1
+block-rm-rf	generic-after-extraction	hook	-	advisory	git	.claude/hooks/guardrails.sh	.claude/hooks/block-rm-rf.sh	v2

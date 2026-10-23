@@ -85,11 +85,11 @@ const MAX_EXTRA_PASSES = 32;
  * Non-URL input passes through as the trimmed + string-only-op'd value.
  * `null`/`undefined`/`""` → `""`.
  *
- * Coupled with the Postgres backfill in
- * `supabase/migrations/031_normalize_repo_url.sql` — any change here
- * must be mirrored in the SQL regex chain (see migration header). Step 6
- * and URL path resolution (dot-segments, `%2e`, userinfo/port) have no SQL
- * equivalent: parity holds for URL-clean inputs only.
+ * Coupled with a Postgres twin of this chain: any change here must follow the
+ * sync-sites registry in `test/repo-url-sql-parity.test.ts` (ports, golden
+ * table, and a NEW migration plus verify file — an applied migration is never
+ * edited). Step 6 and URL path resolution (dot-segments, `%2e`, userinfo/port)
+ * have no SQL equivalent: parity holds for URL-clean inputs only.
  *
  * See plan:
  *   `knowledge-base/project/plans/2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md`

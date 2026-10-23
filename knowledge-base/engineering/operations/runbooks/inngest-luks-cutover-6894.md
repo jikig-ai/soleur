@@ -442,7 +442,7 @@ Doppler secret and the Terraform state value `random_password.inngest_redis_luks
 | Mode (ADR table row) | Procedure |
 | --- | --- |
 | Doppler secret deleted | Stop. Deliver a `manual-rerun` of the per-merge apply, with the owner's per-command go-ahead naming it (it applies the whole per-merge plan; "Delivery route") (the create of the Doppler copy alone is legal there and restores the value held in state). Confirm the next drift run shows no pending change at `doppler_secret.inngest_redis_luks_key`. |
-| Doppler secret overwritten | Stop; do not dispatch any apply (a repair is a secret update with `random_password` a no-op, and the per-merge HALT blocks an update of the pair unattended, correctly). Route A: restore the previous value from Doppler version history (plan tier and rollback scope not measured, #9927; never print values or diffs). Route B, when history is unavailable: the Terraform state value is the second, independent copy, so this is NOT total loss; the owner writes it back (below). Total loss only if both copies are gone. **While the Doppler value stays overwritten, every infra-path merge's per-merge apply plans an update of the Doppler copy and halts on the rotation HALT: merge infra PRs with `[skip-web-platform-apply]` until the key is repaired.** |
+| Doppler secret overwritten | Stop; do not dispatch any apply (a repair is a secret update with `random_password` a no-op, and the per-merge HALT blocks an update of the pair unattended, correctly). Route A: restore the previous value from Doppler version history (plan tier and rollback scope not measured, #9927; never print values or diffs). **Superseded 2026-10-20 (#9927), as to "plan tier and rollback scope not measured":** Route A is **unverified; treat it as unavailable and plan on Route B**. Recorded 2026-10-20: the plan tier is not measurable from the CLI (no plan field); the `soleur-inngest/prd` config log holds 68 entries back to 2026-07-23 (89 days old), which a 3-day activity-log window (documented for the free Developer plan) could not hold; a rollback restores one log entry (a secret add, update or delete), not a whole config (documented, never run); an owner who still chooses Route A reads the entry's age first (it must be inside the 7-day repair horizon stated in the ADR-282 2026-10-22 addendum) and never prints the diff. Route B, when history is unavailable: the Terraform state value is the second, independent copy, so this is NOT total loss; the owner writes it back (below). Total loss only if both copies are gone. **While the Doppler value stays overwritten, every infra-path merge's per-merge apply plans an update of the Doppler copy and halts on the rotation HALT: merge infra PRs with `[skip-web-platform-apply]` until the key is repaired.** |
 | Terraform state entry lost | Stop; do not apply. The per-merge HALT blocks a create of `random_password.inngest_redis_luks` (alone or with the Doppler copy); a create of the Doppler copy alone stays legal. **This halt wedges every merge's per-merge apply, so all infra delivery stops, not only the inngest store, until the owner repairs state** (an `import {}` block is not a route that plans as a no-op: it plans the same replacement); until then merging needs `[skip-web-platform-apply]` and applies nothing. Rehearsed offline by `inngest-redis-luks-import-rehearsal.test.sh`: verified on local state with a synthetic value; not run against R2-backed state. Follow "State-loss recovery: owner procedure" directly below the table; result and limits: the ADR-282 addendum of 2026-10-19. The repository owner decides the repair; no agent applies it. |
 | Both copies lost | Total loss of the store. Follow "After a total loss" below. |
 | LUKS header corrupted | No recovery; the host fails to open the volume. Incident (`soleur:incident`); follow "After a total loss" if the data is unreadable. Detection lags to the first Redis failure. |
@@ -525,11 +525,32 @@ plan should show no change at `doppler_secret.inngest_redis_luks_key`.
 ### After a total loss: who tells affected users
 
 The repository owner is the incident owner and sends the user notice as a product notice, using `soleur:incident` to
-scaffold the report. Who is affected is **unknowable from surviving data**: `schedule-reminder` persists nothing app-side
-(ADR-282, "What losing the store costs"), so no record survives that says whose reminders or runs were in the store. The
-default is to treat **all active users** as potentially affected: no per-user list exists, because `schedule-reminder` persists
-nothing app-side. Whether a surviving source exists (the Inngest Postgres run history, application logs) is open and tracked
-in #9927; until it is verified, do not state a narrower set.
+scaffold the report. **No per-user list is kept app-side**: `schedule-reminder` persists nothing app-side (ADR-282, "What
+losing the store costs"). Whether any surviving record identifies whose reminders or runs were in the store is **NOT
+established** (partial, see the C1 paragraph below); do not tell anyone "no record survives" or "nothing identifies them". The
+default is to treat **all active users** as potentially affected, and that default is a floor, not a ceiling: the event-class table
+below lists who it does not cover. Do not state a narrower set.
+**Superseded 2026-10-22 (#9927 C1), as to "Whether a surviving source exists ... is open and tracked in #9927":** measured,
+evidence class **partial**. A candidate source exists: the Inngest Postgres half is a dedicated Supabase project with 14
+tables and estimated ~937k `history`, ~182k `events` and ~1.6M `spans` rows (estimates: they support present, never
+absent), and a column capable of holding a user reference (`events.event_user`, by name). That column is Inngest's top-level user field and
+this repo's own senders do not set it (they put the founder id inside the event `data`), so neither a non-null count nor an empty
+result there can define or bound the affected set. The number of non-null rows was NOT measured and the oldest row was NOT
+measured. The default stays in force: treat all active users as potentially
+affected, and do not state a narrower set. Narrowing would need an incident-time row-level reconstruction, which was not
+tested and is separate processing needing its own owner decision. The ciphertext backup (1b) stays parked, and no second
+copy of identifying payloads may be created before an Art. 17 retention and erasure design exists (#10848). No row,
+identifier, email, payload, event body or per-user count was selected, printed, logged or stored. Whether any surviving
+record identifies WHICH users had armed reminders or in-flight jobs was NOT established. Measured on 2026-10-22 by
+three catalog-metadata queries (identity, columns, estimates) through the dedicated read-only Management API endpoint against project
+`pigsfuxruiopinouvjwy`; the probe script was removed from the PR once the finding was recorded, so the method lives in the record
+(`knowledge-base/project/specs/archive/20261022-221258-feat-one-shot-9927-inngest-luks-items-6-8b-c1/measurements.md`) and in git history, and a "round 2"
+would re-add it in its own PR with its own suite (owner-gated).
+**Superseded 2026-10-20 (#9927), as to "the default is all active users":** the default stays, but it is not complete. The
+code read below shows two groups it does not cover: **users who are not currently active** (a founder with a connected GitHub
+installation or an unpaid invoice may be past due or churned yet still have a lost draft card), and **people who are not users
+at all** (the sender of an inbound email whose triage event was in flight). The loss horizon is the whole life of the store,
+because no copy exists off the volume; in practice the harm is work that was queued or in flight at the moment of loss.
 Before sending, assess with counsel whether the loss of availability of personal data held in the store is a
 personal-data breach (Art. 4(12), 33 and 34; total loss of availability is not necessarily one, so the step is to assess).
 If any limb is a personal-data breach, the 72-hour clock of Art. 33 runs from awareness. The breach register is
@@ -539,6 +560,35 @@ empty store, the app's behaviour is that functions re-register and new reminders
 reminders will be restored. **Restoring an empty store has no automated route:** the recut dispatch is retired (#8285), the
 per-merge create HALT refuses a new passphrase, and the inngest-host shape gate refuses the volume and passphrase pair, so
 the owner designs the restoration in a reviewed change (#9927).
+
+#### Which Inngest events carry a user reference (code read, 2026-10-20, #9927 item C1)
+
+Read from the repository only (no production access): the senders, the handlers and the payload FIELD NAMES, never values.
+This table is the code-side half of the C1 finding; the measured half is the C1 paragraph above (the Superseded 2026-10-22 block). A `bot-fix/*` name is a GitHub
+label, not an Inngest event, and no `vendor/*` event exists (the only vendor-related event is
+`cron/content-vendor-drift.manual-trigger`).
+
+| Event family | User reference in the payload | User-visible harm if an armed or in-flight instance is lost | Covered by "all active users"? |
+| --- | --- | --- | --- |
+| `reminder.scheduled` (`app/api/internal/schedule-reminder`, handler `eventScheduledReminder`) | none (`reminder_id`, `fire_at`, a platform actor, `action`); the `action` can hold operator or agent free text | a scheduled operator comment or registered check never fires | not applicable (operator work) |
+| GitHub action-class events: `engineering.pr_review_pending`, `engineering.ci_failed`, `triage.p0p1_issue`, `security.cve_alert` (`app/api/webhooks/github`, handler `githubOnEvent`) | `founderId`, `installationId`, `deliveryId`; a redacted copy of the webhook body (titles, author logins) | the founder's draft card for that PR, CI failure, P0/P1 issue or CVE alert is never created; the webhook dedup row is already claimed, so GitHub does not redeliver | yes if the founder is active; no if inactive |
+| `platform/workspace.reconcile.requested` | `installationId`, `deliveryId`, repository slug (no user id since schema v3) | a workspace is not synced to its default branch until the next push | partly (identified by installation and repository, not user) |
+| `finance.payment_failed` (`app/api/webhooks/stripe`, handler `cfoOnPaymentFailed`) | `founderId`, `customerEmailHash`, `invoiceId` | the founder's payment-failure draft card is never created | yes if active; a past-due founder may not be |
+| `agent.spawn.requested` (`app/api/dashboard/today/[id]/send`, handler `agentOnSpawnRequested`) | `founderId`, `messageId`, `actionSendId`, `actionClass`, `sourceRef` | an action the founder approved with "send" is never executed and no acknowledgement is posted; no redelivery | yes if active |
+| `agent.spawn.orphaned` (internal) | the whole original envelope, so `founderId` and `actionSendId` | the failed spawn is never settled and its `action_sends` row stays unfinished | yes if active |
+| `email/inbound.received` (`app/api/webhooks/resend-inbound`, handler `email-on-received`) | the sender address, the recipient inbox addresses, provider message ids, a subject | an inbound email is never triaged, including a possible statutory request (a data-subject request); its clock still runs | **no**: the person harmed is an external correspondent, not a user |
+| `cron/<name>.manual-trigger` (57 names; `server/routines/run-routine.ts`, `app/api/internal/trigger-cron`) | `actor_id`, `delegating_principal`, `actor_class`, run ids | an operator-requested one-off run is lost; the scheduled run still happens | yes (an operator or user requested it) |
+| `oneshot/*.fire`, `cron/action-required-sla.process-issue`, `ship-merge.manual-trigger`, `cf-token-expiry-check.manual-trigger` | none | an operator check or a daily nudge for one issue is skipped | not applicable |
+
+Only `reminder.scheduled` has a re-arm path (`apps/web-platform/infra/inngest-rearm-reminders.sh`). The event store keeps payloads with no automatic
+deletion, per a source comment in the GitHub webhook route (not independently verified): the redacted GitHub body and the inbound
+email addresses sit in the Postgres history. That is why this section never asks anyone to copy the store, and why the ciphertext
+backup (item 1b of #9927) stays parked until an Art. 17 retention and erasure design exists.
+
+**The one group the "all active users" default never reaches, and a step for it.** An inbound email that was in flight when the store
+was lost (`email/inbound.received`) harms its external sender, and a statutory request among them keeps its clock running. After a
+loss the owner lists the inbound mail received since the last known-good triage from the mail provider's side (counts only; no address
+goes into a committed file), triages it by hand, and records the clock in the incident report. Nothing in the user notice covers this group.
 
 ### Deliberate unprotect (two reviewed changes; no sanctioned erase path)
 

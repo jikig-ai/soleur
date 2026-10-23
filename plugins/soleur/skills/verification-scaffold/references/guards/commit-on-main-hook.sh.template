@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# commit-on-main.sh — PreToolUse hook emitted by soleur:verification-scaffold.
+# Runs scripts/verification/precommit-guard.sh (the emitted copy) over every
+# Bash command payload and translates its refusal into the hook decision
+# envelope. The DETECTION lives entirely in the emitted guard — this wrapper
+# owns only the decision verb.
+#
+# MODE=@MODE@ — advisory (installed default): a refusal warns and allows;
+# enforce: a refusal denies. A guard/tool error (missing script, usage error)
+# warns+allows in advisory and denies with remediation in enforce — `ask`
+# never fires on an error path in either mode.
+#
+# Hook stdin: JSON payload with tool_input.command. Hook stdout: the PreToolUse
+# JSON decision envelope. Exit code is always 0.
+set -euo pipefail
+
+MODE="@MODE@"
+
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+GUARD="$PROJECT_DIR/scripts/verification/precommit-guard.sh"
+
+_vs_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' '; }
+_vs_decide() {
+  local d="$1" r="${2:-}"
+  if [ -n "$r" ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":"%s"}}\n' \
+      "$d" "$(_vs_escape "$r")"
+  else
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s"}}\n' "$d"
+  fi
+  exit 0
+}
+_vs_allow() { _vs_decide allow; }
+_vs_tool_error() {
+  printf '[commit-on-main] WARN: %s\n' "$1" >&2
+  if [ "$MODE" = "enforce" ]; then
+    _vs_decide deny "BLOCKED: commit-on-main: $1"
+  else
+    _vs_decide allow
+  fi
+}
+
+# --- stdin command extraction (jq -> node -> sed fallback) --------------------
+_vs_payload="$(cat)"
+_vs_cmd=""
+if command -v jq >/dev/null 2>&1; then
+  _vs_cmd="$(printf '%s' "$_vs_payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
+elif command -v node >/dev/null 2>&1; then
+  _vs_cmd="$(printf '%s' "$_vs_payload" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const c=JSON.parse(s).tool_input.command;process.stdout.write(typeof c==="string"?c:"")}catch(e){}})' 2>/dev/null || true)"
+else
+  _vs_cmd="$(printf '%s' "$_vs_payload" | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+fi
+[ -n "$_vs_cmd" ] || _vs_allow
+
+# Cheap pre-filter: a payload that names neither git nor commit cannot be a
+# commit. The emitted guard runs the real chain-boundary verdict.
+grep -qE 'git' <<<"$_vs_cmd" && grep -qE 'commit' <<<"$_vs_cmd" || _vs_allow
+
+[ -f "$GUARD" ] || _vs_tool_error "scripts/verification/precommit-guard.sh is missing — the commit-on-main gate is NOT running. Re-run verification-scaffold or restore the file."
+# The hook's cwd is what the tool call runs in — pass it so a `cd`-free payload
+# resolves the right repo.
+hook_cwd=""
+if command -v jq >/dev/null 2>&1; then
+  hook_cwd="$(printf '%s' "$_vs_payload" | jq -r '.cwd // ""' 2>/dev/null || true)"
+fi
+[ -n "$hook_cwd" ] || hook_cwd="$PWD"
+
+guard_rc=0
+guard_out="$(bash "$GUARD" --cwd "$hook_cwd" "$_vs_cmd" 2>&1)" || guard_rc=$?
+case "$guard_rc" in
+  0) _vs_allow ;;
+  1)
+    reason="${guard_out:-commit refused: the target repo is checked out on a default branch. Create a feature branch first.}"
+    if [ "$MODE" = "enforce" ]; then
+      _vs_decide deny "BLOCKED: $reason"
+    else
+      printf '[commit-on-main] WARN: %s\n' "$reason" >&2
+      _vs_decide allow
+    fi
+    ;;
+  *) _vs_tool_error "precommit-guard.sh exited $guard_rc (${guard_out:-no output}) — a tool error, not a refusal; nothing was decided." ;;
+esac
