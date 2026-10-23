@@ -60,6 +60,9 @@ declare -A FLOOR=(
 # end with printf + exit 1, not through the helpers they back-stop (ADR-193).
 EXPECTED_GROUPS="H1 H3 H3b H4 H5 M R REASONS S1 S10 S11a S11b S11c S11d S11e S11f S12a S12b S13a S13b S13c S14 S15 S16 S17 S18 S18b S19 S1live S2 S2b-ahead S2b-behind S2b-diverged S2b-identical S3 S3c S4 S4c S4l S4m S4n S4o S4x S5 S6 S6d S7 S7a S7c S7o S8a S8b S8c S8d S8dg S8e S8f S8g S8h S8i S8in S8m S8n S8o S8ok S8r S8t S8t2 S8ti S8u S9 S9f W"
 META_GROUPS="H1 M"
+# A literal minimum for the number of expected groups: emptying EXPECTED_GROUPS and FLOOR in one edit, or deleting a group from
+# EXPECTED_GROUPS together with its block, still reds. Raise it when a group is added; never lower it.
+EXPECTED_GROUPS_MIN=73
 TOTAL_FLOOR=600
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); }
@@ -1474,6 +1477,8 @@ printf '\n[apply-delivery-gap-follower] %s assertions, %s passed, %s failed\n' "
 if [[ -z "${ADG_ONLY:-}" ]]; then
   ledger_bad=""
   exp_groups="$EXPECTED_GROUPS"
+  n_exp=0; for g in $EXPECTED_GROUPS; do n_exp=$((n_exp + 1)); done
+  if [[ "$n_exp" -lt "$EXPECTED_GROUPS_MIN" ]]; then ledger_bad="$ledger_bad groups:$n_exp<min:$EXPECTED_GROUPS_MIN"; fi
   if [[ -n "${ADG_NO_META:-}" ]]; then for mg in $META_GROUPS; do exp_groups=" $exp_groups "; exp_groups="${exp_groups// $mg / }"; done; fi
   for g in $exp_groups; do [[ -n "${GRAN[$g]+x}" ]] || ledger_bad="$ledger_bad missing:$g"; done
   for g in "${!GRAN[@]}"; do [[ " $exp_groups " == *" $g "* ]] || ledger_bad="$ledger_bad unexpected:$g"; done
