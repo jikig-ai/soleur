@@ -1066,20 +1066,20 @@ if g250 is None or o250 > 2 * o2l or e250 > 2 * e2l:
 if bad:
     print("; ".join(bad)); sys.exit(0)
 FLOOR = 0.001                                            # CPU time: best of 3, 3x slack, and a 1 ms floor under the baseline
-bs, _ = blob(1000)                                       # 100k paths: an O(paths) C call per scan (a join, a find) shows against a 1 KB scan
+bs, _ = blob(1000)                                       # 400k paths: an O(paths) C call per scan (a join, a find) is ~4-20 ms -- past the bound on any host; at 100k it was ~1-3 ms and fit under 3*max(t2, PFLOOR) on a fast runner (#10404's merge-group survivor)
 PFLOOR = 0.0003
 t2 = cpu(tree(2000), bs, reps=200)
-t100k = cpu(tree(100000), bs, reps=200, give_up=30 * max(t2, PFLOOR))
+t400k = cpu(tree(400000), bs, reps=200, give_up=30 * max(t2, PFLOOR))
 tw40, tw4k = cpu(w40, wb), cpu(w4k, wb)
 tl2, tl250 = cpu(l2, hb), cpu(l250, hb)
-if t100k > 3 * max(t2, PFLOOR) or tw4k > 3 * max(tw40, FLOOR) or tl250 > 3 * max(tl2, FLOOR):
-    bad.append("cpu: 100k/2k paths %.4f/%.4f s, 4000/40 names %.4f/%.4f s, 250/2 name lengths %.4f/%.4f s" % (t100k, t2, tw4k, tw40, tl250, tl2))
+if t400k > 3 * max(t2, PFLOOR) or tw4k > 3 * max(tw40, FLOOR) or tl250 > 3 * max(tl2, FLOOR):
+    bad.append("cpu: 400k/2k paths %.4f/%.4f s, 4000/40 names %.4f/%.4f s, 250/2 name lengths %.4f/%.4f s" % (t400k, t2, tw4k, tw40, tl250, tl2))
 b64, _ = blob(65536); b1m, _ = blob(1048576)             # the TEXT axis in CPU time: per byte, 1 MB may cost at most 3x what 64 KB costs
 c64 = cpu(T, b64, reps=6)
 c1m = cpu(T, b1m, reps=1, give_up=3 * c64 * (len(b1m) / len(b64)))
 if c1m / len(b1m) > 3 * max(c64, FLOOR) / len(b64):
     bad.append("cpu text axis: 64 KB %.4f s, 1 MB %.4f s (%.1fx per byte)" % (c64, c1m, (c1m / len(b1m)) / (c64 / len(b64))))
-print("RATIOS paths=%.2f width=%.2f lengths=%.2f text=%.2f" % (t100k / max(t2, PFLOOR), tw4k / max(tw40, FLOOR), tl250 / max(tl2, FLOOR), (c1m / len(b1m)) / (max(c64, FLOOR) / len(b64))), file=sys.stderr)
+print("RATIOS paths=%.2f width=%.2f lengths=%.2f text=%.2f" % (t400k / max(t2, PFLOOR), tw4k / max(tw40, FLOOR), tl250 / max(tl2, FLOOR), (c1m / len(b1m)) / (max(c64, FLOOR) / len(b64))), file=sys.stderr)
 print("; ".join(bad) or "ok")
 PY
 )" || { echo "$out" >&2; return 1; }
@@ -1087,7 +1087,7 @@ PY
   out="${out##*$'\n'}"
   [[ "$out" = ok ]] || { echo "$out" >&2; return 1; }
 }
-row_scan_ops && pass "scanning 5, 10 and 20 KB against 20,000 tracked paths costs a roughly constant number of operations and line events per byte and never materializes a tracked-path collection; 10x the paths or 100x the top-level names (40 vs 4,000, same text) costs no more than twice by ops and by executed lines, and no more than 3x in best-of-3 CPU time" || fail "operation-count fixture: $(row_scan_ops 2>&1 | tail -1)"
+row_scan_ops && pass "scanning 5, 10 and 20 KB against 20,000 tracked paths costs a roughly constant number of operations and line events per byte and never materializes a tracked-path collection; 10x the paths or 100x the top-level names (40 vs 4,000, same text) costs no more than twice by ops and by executed lines, and no more than 3x in best-of-3 CPU time (200x the paths, 100x the names, 125x the name lengths)" || fail "operation-count fixture: $(row_scan_ops 2>&1 | tail -1)"
 
 echo "== audit scan: the committed differential receipt (old scan versus new scan on the pinned tree, per occurrence) and its regenerator"
 SPECS="$SCRIPT_DIR/../../../knowledge-base/project/specs"
