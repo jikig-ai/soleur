@@ -529,6 +529,8 @@ plugins/soleur/skills/linear-fetch/test/parity.test.sh	.github/workflows/pr-qual
 plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization.test.sh	knowledge-base/legal/tenant-dpa-register.md
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	README.md
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	.claude/hooks/skill-security-scan-write.sh
+plugins/soleur/skills/verification-scaffold/test/generator.test.sh	.claude/settings.json
+plugins/soleur/skills/verification-scaffold/test/generator.test.sh	.gitleaks.toml
 plugins/soleur/test/_base-notice-frontmatter.test.sh	scripts/lib/scratch-root.sh
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md
 plugins/soleur/test/audit-flag-flip.test.sh	plugins/soleur/skills/flag-create/scripts/create.sh
@@ -957,8 +959,6 @@ scripts/capture-web-2-host-key	apps/web-platform/infra/web-2-ssh-host-key.pub
 scripts/check-backstop-revision	.claude/hooks/lib/log-rotation.sh
 scripts/check-backstop-revision	.claude/hooks/memory-backstop.sh
 scripts/check-backstop-revision	README.md
-scripts/check-deploy-script-parity	apps/web-platform/infra/server.tf
-scripts/check-deploy-script-parity	apps/web-platform/infra/variables.tf
 scripts/check-deploy-script-parity	knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md
 scripts/check-deploy-script-parity	scripts/betterstack-query.sh
 scripts/ci-demand-census	.github/workflows/secret-scan.yml
@@ -1105,7 +1105,6 @@ scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-read-classify.s
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-sources.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/git-data-rotate-stamp.sh
 scripts/infra-config-activation-7220	scripts/betterstack-query.sh
-scripts/infra-credentials-loader	apps/web-platform/infra/cloud-init.yml
 scripts/infra-drift-autoclose	.github/workflows/apply-deploy-pipeline-fix.yml
 scripts/inngest-probe-heartbeat-feeder	.github/workflows/scheduled-inngest-probe-heartbeat.yml
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/sentry/cron-monitors.tf
