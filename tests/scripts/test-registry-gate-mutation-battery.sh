@@ -394,6 +394,10 @@ mutate "G18 A2 rehearsal failure ignored for every enumerated exit code" gate \
   'if (( restore_rc != 0 )); then' \
   'if (( restore_rc > 100 )); then'
 
+mutate "G18b A2 exit-78 arm renumbered so 78 falls into the unenumerated arm" gate \
+  '78) abort A2 "the rehearsal failed with exit 78' \
+  '77) abort A2 "the rehearsal failed with exit 78'
+
 mutate "G19 A2 missing restore engine no longer aborts" gate \
   '[[ -x "$RESTORE" ]] || abort A2 ' ': # '
 

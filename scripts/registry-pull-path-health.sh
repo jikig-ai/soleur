@@ -573,11 +573,13 @@ sed 's/^/    /' "$WORK/restore.out" 2>/dev/null | tail -20
 if (( restore_rc != 0 )); then
   case "$restore_rc" in
     1) abort A2 "the rehearsal failed with exit 1 (INPUT/MANIFEST fault) — the engine rejected its own arguments or the pin manifest: an unreadable/unparseable manifest, a non-numeric or absent floor, zero required entries, duplicated required pairs, or a bad --target. This is a CORRECT DIAGNOSIS from the engine, not an engine defect: do not file it as one. The manifest is derived by this same job's PREPARE step, so re-run the dispatch; if it recurs, read the engine's message above — it names which shape check failed." ;;
-    2) abort A2 "the rehearsal failed with exit 2 (source unavailable) — GHCR could not be read, so there is nothing to restore FROM. Refusing to destroy the only remaining copy." ;;
+    2) abort A2 "the rehearsal failed with exit 2 (source unavailable) — GHCR could not be read, so there is nothing to restore FROM, or the runner's ghcr.io login command failed locally (the engine's own line above says which). Either way the rehearsal restored nothing. Refusing to destroy the only remaining copy." ;;
     3) abort A2 "the rehearsal failed with exit 3 (sink unavailable) — the throwaway registry did not accept the write. This is a rehearsal-harness fault, not a production signal, but it means the pass condition was never established." ;;
     4) abort A2 "the rehearsal failed with exit 4 (verification mismatch) — the restore produced a registry whose contents do not match GHCR, or whose blobs are incomplete. A host would fail these pulls. This is the defect the gate exists to catch." ;;
-    5) abort A2 "the rehearsal failed with exit 5 (credential unusable) — the rehearsal could not authenticate to the throwaway." ;;
+    5) abort A2 "the rehearsal failed with exit 5 (credential unusable) — EITHER the throwaway rejected the rehearsal credential OR the sink login command failed locally on the runner; the engine's own line above says which, so assume neither. That credential is generated in this job, so this is not a production-credential signal. Nothing was destroyed." ;;
     6) abort A2 "the rehearsal failed with exit 6 (could-not-classify) — the restore engine hit a failure it could not name, so the pass condition is unproven." ;;
+    # Defense in depth: this gate's own refusal (above) checks two credential names; the engine's wider set adds GHCR_TOKEN/DOPPLER_TOKEN.
+    78) abort A2 "the rehearsal failed with exit 78 (traced invocation) — the engine refused to run under xtrace with a live credential, before any network call. The rehearsal never ran, so the pass condition was not established; this is a harness or invocation fault and nothing was destroyed. Remove the trace and re-dispatch." ;;
     *) abort A2 "the rehearsal failed with an unenumerated exit ${restore_rc}. Every exit code of the restore engine is supposed to be enumerated; an unrecognised one is a could-not-measure outcome." ;;
   esac
 fi

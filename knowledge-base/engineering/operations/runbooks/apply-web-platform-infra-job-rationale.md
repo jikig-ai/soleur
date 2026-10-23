@@ -644,6 +644,37 @@ default the 30 was chosen against, but it is 4.5x the number that comment defend
 otherwise would be naming a property the change does not have. Genuinely releasing it needs a
 SEPARATE WORKFLOW (workflow_run), not a chained job — tracked, not done here.
 
+### Why the exit-5 annotation must not say "rotate"
+
+Moved from a comment in the restore step's `case "$rc"` block (ADR-231 section 2), verbatim:
+
+DO NOT reinstate "rotate ZOT_PUSH_*" here. This annotation is the first thing the
+operator reads, and rotating is the one action that makes this PERMANENT:
+/etc/zot/htpasswd is baked ONCE at boot from the ISOLATED soleur-registry/prd
+config, so a hand-rotation of soleur/prd desyncs CI from a host that will not
+re-read anything until it is replaced. The runbook was corrected first and this
+string was left behind — which is worse than never fixing either, because the
+runbook is the document the annotation is supposed to route people INTO.
+
+### Why the restore step names DOPPLER_TOKEN and not DOPPLER_TOKEN_PRD
+
+Moved from a comment in the restore step's `env:` block (ADR-231 section 2), verbatim:
+
+DOPPLER_TOKEN, not DOPPLER_TOKEN_PRD. The Doppler CLI reads `DOPPLER_TOKEN` (or
+`--token`); it does not know the _PRD suffix. This step declared the suffixed name,
+referenced it NOWHERE in its body, and called `doppler secrets get` bare -- so the CLI
+ran unauthenticated and returned "you must provide a token", the sink credentials came
+back empty, and the engine aborted exit 3 (SINK unavailable).
+
+It failed POST-DESTROY. The store was already wiped when this ran, so the one job whose
+entire purpose is refilling it could not read the credential it needed. The bridge step
+directly above sets `DOPPLER_TOKEN` correctly and succeeded, which is what made the
+failure look like a bridge problem in the log.
+
+This was LATENT behind the D10 gate: A2 had never once passed, so this leg had never
+run. Fixing A2 did not create this bug, it exposed it -- a saga only ever surfaces its
+FIRST broken step.
+
 ## confirm and the gate model
 
 Relocated from `apply-web-platform-infra.yml`'s `confirm:` field label (ADR-231 byte
