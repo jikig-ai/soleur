@@ -80,6 +80,7 @@ for c in jq python3 timeout xargs; do command -v "$c" >/dev/null 2>&1 || { echo 
 
 SANDBOX="$(mktemp -d)" || { echo "[FATAL] mktemp -d failed" >&2; exit 2; }
 assert_fixture_dir "$SANDBOX"
+ST="$SANDBOX/idle"   # the current case dir; bound before the builders below so every write rooted at it resolves to the sandbox
 # shellcheck disable=SC2329 # invoked through the EXIT/INT/TERM traps
 cleanup() { rm -rf "$SANDBOX"; }
 trap cleanup EXIT
@@ -144,7 +145,7 @@ mkrun() { # id event branch status conclusion|- shaN created updated [started] [
     --arg sd "${9:-$7}" --arg msg "${10-synthetic commit message}" \
     '{id:$id,event:$ev,head_branch:$br,status:$st,conclusion:(if $co=="-" then null else $co end),head_sha:$sha,created_at:$cr,run_started_at:$sd,updated_at:$up,run_attempt:1,head_commit:(if $msg=="@null" then null else {message:$msg} end)}'
 }
-runs_file() { local f="$1"; shift; printf '%s\n' "$@" | jq -cs '{total_count: length, workflow_runs: .}' >"$f"; }
+runs_file() { local f="$1"; shift; assert_fixture_dir "$f"; printf '%s\n' "$@" | jq -cs '{total_count: length, workflow_runs: .}' >"$f"; }
 # mkjobs <run id> <total> [name:conclusion[:ssh-step-conclusion] ...]: a third field gives the job a steps[] holding the infra
 # workflow's SSH-provisioned stage (SSH_STEP_NAME) with that conclusion.
 SSH_STEP_NAME='Terraform apply (SSH-provisioned resources, over the bridge)'
@@ -166,7 +167,7 @@ inj() { # key rc err [out] [count]
   { printf 'rc=%s\nerr=%s\n' "$2" "$3"; [[ -n "${4-}" ]] && printf 'out=%s\n' "$4"; [[ -n "${5-}" ]] && printf 'count=%s\n' "$5"; } >"$ST/fail.$1"
 }
 
-CASE="" ST="" SUT_RC=0
+CASE="" SUT_RC=0
 mk_case() { # <name> [scenario]
   CASE="$1"; ST="$SANDBOX/$1"; assert_fixture_dir "$ST"
   rm -rf "$ST"; mkdir -p "$ST/bin" "$ST/tmp" "$ST/out" || exit 2
@@ -1287,7 +1288,10 @@ CTL
     esac
   done
   printf '[M] %s/%s mutants caught\n' "$caught" "${#MUTANTS[@]}"
-  if [[ -n "${ADG_MUT_LOGS:-}" ]]; then mkdir -p "$ADG_MUT_LOGS" && cp "$MD"/*.log "$ADG_MUT_LOGS"/ 2>/dev/null; fi
+  if [[ -n "${ADG_MUT_LOGS:-}" ]]; then
+    assert_fixture_dir "$ADG_MUT_LOGS"
+    mkdir -p "$ADG_MUT_LOGS" && cp "$MD"/*.log "$ADG_MUT_LOGS"/ 2>/dev/null
+  fi
   gend
 fi
 
