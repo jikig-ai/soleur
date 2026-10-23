@@ -40,3 +40,13 @@ Branch: `feat-one-shot-apply-delivery-gap-follower` | Draft PR: #10879 | Refs: #
 - [x] 5.1 Run the full Phase 5 command list from the plan, the Check-10-shaped `--self-test` run and the uncommitted live read-only rehearsal; `git diff --name-only origin/main...HEAD` must not list CODEOWNERS, `test-affected-paths.sh`, `suite-shard-legs.tsv`, `suite-durations.tsv`, an apply workflow, an AGENTS file or the acks file.
 - [x] 5.2 Merge-time check: any cancelled push inside the 7-day window will page on the first reconcile. (checked 2026-10-23: no cancelled push inside the 7-day window of either workflow; the live-snapshot first reconcile yields candidates=0)
 - [ ] 5.3 PR body: `Ref #9454`, `Ref #10033`, `Ref #8167`; no closing keyword; merge only through the merge queue.
+
+## Phase 6 - review fix round 1 (decision rows F21-F28)
+
+- [x] 6.1 Row emitter sentinel so the "later run" cell cannot merge; column renamed; dropped-by-kill-switch footer line.
+- [x] 6.2 Infra delivery also needs the SSH-provisioned apply step (F21); close comment states the 7-day horizon (F22).
+- [x] 6.3 Delivery loop reads the apply job before ancestry (F26); live-mode `TRIGGER_RUN_ID` rejection (F27).
+- [x] 6.4 Inline `assert_fixture_dir` copies byte-identical to the canonical body; the six new relative sites reworded to the 1546 baseline (F28).
+- [x] 6.5 Suite hardening: group-ran ledger, helper positive controls, exact workflow shape, shared non-main/window/dedup fixture (F25).
+- [x] 6.6 Docs: follower-failure wording (F23), flip-evidence recipe and runbook/ADR corrections (F24).
+- [x] 6.7 Cheap P3s: loud jq failures, one in-flight predicate, `local` variables.
