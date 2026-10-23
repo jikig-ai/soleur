@@ -606,58 +606,70 @@ check("G1f: no `pull_request_target` Tier-B job checks out the pull request's ow
 PRD_TF = re.compile(r"(?:-c|--config)[= ]+prd_terraform\b")
 DOPPLER_SECRETS_GET = re.compile(r"doppler\s+secrets\s+get\s+([A-Za-z_][A-Za-z0-9_]*)")
 ac3 = []
-# THE ONE SANCTIONED READ: a Tier-A job may read `HCLOUD_TOKEN` as the SECOND arm of a
-# `HCLOUD_TOKEN_READONLY`-first read in the SAME step (ADR-241 D4). That is the before-state
-# fallback -- `workspaces-luks-cutover::cutover` only READS a Hetzner volume id, so it takes
-# the read-permission token, and the fallback keeps it working until the operator mints one at
-# step O5. It disappears with the name at O10.
+# (#9927 item 8b) THERE IS NO SANCTIONED READ ANY MORE. This row used to carry a read-only-first
+# ALLOWANCE (`RO_FIRST`): a Tier-A job could read `HCLOUD_TOKEN` as the second arm of a
+# `HCLOUD_TOKEN_READONLY`-first read in the same step, a before-state fallback that lasted until
+# operator step O5/O10. Both are done (measured 2026-10-20: the read-only name is listed in
+# prd_terraform, the read/write name is gone), so the allowance has no live member left: its
+# only user, the workspaces-luks-cutover volume lookup, now reads the read-only name alone. A
+# read-only reader that can fall back to the destroy-capable token silently stops being
+# read-only the moment the read-only secret goes missing, so the allowance is deleted rather
+# than kept "for later": any read of a tier_b_names entry from prd_terraform outside the
+# loader is RED, whichever name it reads first.
 #
-# The allowance is ORDER-ANCHORED, not a name allowlist: the read-only name must appear
-# EARLIER in the step body than the privileged one, so the privileged read is genuinely
-# unreachable while the read-only name resolves. A bare `HCLOUD_TOKEN` read with no preceding
-# read-only read is still RED, which is the mutation row below.
-def _first(body, name):
-    """Index of the first `doppler secrets get <name>` where <name> is the WHOLE token."""
-    mm = re.search(r"doppler\s+secrets\s+get\s+" + re.escape(name) + r"(?![A-Za-z0-9_])", body)
-    return mm.start() if mm else -1
+# The config can be named TWO ways, and both are the same read. `-c prd_terraform` on the
+# command line, or a step (or job, or workflow) `env:` that sets `DOPPLER_CONFIG: prd_terraform`
+# and lets `doppler` pick it up. The second form is how the infra-validation PR-plan step reads
+# its Hetzner value, and the command-line-only form never saw it.
+def _cfg_env_is_prd_terraform(j, st):
+    for env in (st.get("env"), j.body.get("env"), (docs[j.rel][0].get("env") if isinstance(docs[j.rel][0], dict) else None)):
+        if isinstance(env, dict) and str(env.get("DOPPLER_CONFIG", "")).strip() == "prd_terraform":
+            return True
+    return False
 
-RO_FIRST = {"HCLOUD_TOKEN": "HCLOUD_TOKEN_READONLY"}
 for rel, (doc, text) in sorted(docs.items()):
     if rel == LOADER_REL:
         continue
     for j in [x for x in jobs if x.rel == rel]:
         for st in j.steps:
             body = str(st.get("run") or "")
+            cfg_env = _cfg_env_is_prd_terraform(j, st)
             for line, m in cmd_sites(body, DOPPLER_SECRETS_GET):
                 name = m.group(1)
-                if name not in TIER_B_NAMES or not PRD_TF.search(line[m.end():]):
+                if name not in TIER_B_NAMES:
                     continue
-                ro = RO_FIRST.get(name)
-                if ro:
-                    # WORD-BOUNDED, both sides. `HCLOUD_TOKEN` is a PREFIX of
-                    # `HCLOUD_TOKEN_READONLY`, so a bare `.find()` for the privileged name
-                    # matches the read-only occurrence and the two indices come back EQUAL
-                    # -- the ordering test then reads "not earlier" and the allowance never
-                    # applies. Same bare-token trap this file's own header warns about.
-                    # COMMAND POSITION for the read-only read, not a raw scan. `_first` is
-                    # a bare `re.search` over the whole step body, so it saw comments,
-                    # heredoc bodies and `echo` arguments -- and a single comment line
-                    #
-                    #   # NOTE: the read-only path would be `doppler secrets get
-                    #   # HCLOUD_TOKEN_READONLY --plain`,
-                    #
-                    # above a bare privileged read made that read LEGAL. The allowance is
-                    # 1-of-1 on the live tree, so laundering it costs one comment and
-                    # removes the row's only teeth.
-                    ro_re = re.compile(r"doppler\s+secrets\s+get\s+" + re.escape(ro) + r"\b")
-                    ro_pos = [_l for _l, _mm in cmd_sites(body, ro_re)]
-                    i_ro = _first(body, ro) if ro_pos else -1
-                    i_priv = _first(body, name)
-                    if i_ro != -1 and i_priv != -1 and i_ro < i_priv:
-                        continue
+                if not (PRD_TF.search(line[m.end():]) or cfg_env):
+                    continue
                 ac3.append("%s [%s]" % (j.id, name))
-check("G1g: no workflow step reads a tier_b_names entry with `-c prd_terraform` outside the loader "
-      "(%s) [AC3]" % os.path.join(".github", LOADER_REL), not ac3, sorted(set(ac3))[:8])
+check("G1g: no workflow step reads a tier_b_names entry from `prd_terraform` (`-c prd_terraform` or a "
+      "DOPPLER_CONFIG env) outside the loader (%s), and there is no read-only-first allowance [AC3, #9927 8b]"
+      % os.path.join(".github", LOADER_REL), not ac3, sorted(set(ac3))[:8])
+
+# (#9927 item 8b) G1j -- the CALLER INVARIANT that replaces the committed caller-audit file. Every
+# job that calls the loader declares a Tier-B `environment:`, so it takes the Tier-B arm on main and
+# cannot be in the loader's legacy arm. The legacy arm no longer exports a Hetzner token at all, so a
+# loader job without the environment would silently lose it; this row is what makes that a RED in
+# review instead of a surprise in an incident. The count is cross-checked against an independent raw
+# scan of the same files (a `uses:` line, comments excluded by the anchor), so a parse that drops a
+# workflow cannot shrink the population quietly, and a tree with ZERO loader jobs is a RED, not a
+# vacuous green.
+G1J_USES = re.compile(r"^[ \t]*-?[ \t]*uses:[ \t]*\./\.github/actions/infra-credentials/?[ \t]*(?:#.*)?$", re.M)
+g1j_jobs, g1j_bad = [], []
+for j in jobs:
+    if any(isinstance(st.get("uses"), str) and re.match(r"^\./\.github/actions/infra-credentials/?$", st["uses"].strip())
+           for st in j.steps):
+        g1j_jobs.append(j.id)
+        if not (j.has_env_key and j.arms and all(a in TIER_B_ENVIRONMENTS for a in j.arms)):
+            g1j_bad.append("%s -> %r" % (j.id, j.arms))
+g1j_raw = sum(len(G1J_USES.findall(text)) for rel, (doc, text) in docs.items()
+              if rel.startswith("workflows" + os.sep))
+g1j_steps = sum(1 for j in jobs for st in j.steps
+                if isinstance(st.get("uses"), str) and re.match(r"^\./\.github/actions/infra-credentials/?$", st["uses"].strip()))
+check("G1j: every job that calls the infra-credentials loader declares a Tier-B `environment:` "
+      "[%d loader jobs; %d loader steps; %d raw `uses:` lines; floor > 0 and steps == raw]"
+      % (len(g1j_jobs), g1j_steps, g1j_raw),
+      len(g1j_jobs) > 0 and g1j_steps == g1j_raw and not g1j_bad,
+      "bad=%s jobs=%d steps=%d raw=%d" % (g1j_bad[:8], len(g1j_jobs), g1j_steps, g1j_raw))
 
 # AC7b limb 2 — every writer of the shared state bucket is Tier B
 writers = []
@@ -1954,7 +1966,7 @@ check("G6u: every unit or drop-in that loads /etc/default/soleur-doppler-token a
 
 print("\n".join(out))
 PY
-CENSUS_ROWS=46  # 43 -> 45 (#9879): +2 rows, G4h (no removed/moved over a sole-copy address) and G4h2 (the exact sole-copy set); main carries 43 live rows against a floor of 42 (the floor sat one below the live count), and the floor is now exactly the live count. 45 -> 46 (#9879 round 2): +1 row, G4h4 (the live removed/moved counts equal the unscrubbed count). 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+CENSUS_ROWS=47  # 46 -> 47 (#9927 8b): +1 row, G1j (every loader job declares a Tier-B environment). Previously: # 43 -> 45 (#9879): +2 rows, G4h (no removed/moved over a sole-copy address) and G4h2 (the exact sole-copy set); main carries 43 live rows against a floor of 42 (the floor sat one below the live count), and the floor is now exactly the live count. 45 -> 46 (#9879 round 2): +1 row, G4h4 (the live removed/moved counts equal the unscrubbed count). 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
 # 41 -> 42 (#9321 PR-2, 2026-10-03): G7f, the App-token composite and callers source-shape row.
 # 34 -> 38 (#8609 review): G6o (plan-context invariance), G6q (exact opt-in set), G6s (cosign
 # caller-ref pin), G6u (UnsetEnvironment sweep).
@@ -2895,7 +2907,8 @@ if fixture_written g1-11-state-rm-only-no-environment "$MUTDIR/tree/.github/work
 fi
 
 # ── G1g: the read-only-first allowance must not be launderable by a comment ──────────
-# The allowance is 1-of-1 on the live tree (`workspaces-luks-cutover::cutover`), so anything
+# (The allowance itself was removed in #9927 item 8b; this mutant stays as the proof that a comment naming the safe form still
+# legalises nothing.) It was 1-of-1 on the live tree (`workspaces-luks-cutover::cutover`), so anything
 # that satisfies it cheaply removes the row's only teeth. `_first` is a raw scan, so a single
 # comment NAMING the read-only read above a bare privileged read used to make that read legal
 # -- and "mention the safe form in a comment" is what a reader does when a lint complains.
@@ -2905,18 +2918,52 @@ if mutate g1-g1-comment-laundered "$MUTDIR/tree/.github/workflows/tiera.yml" 2 \
   fixcensus "$MUTDIR" "$T/mut/g1-g1.tsv" ""
   mutant_red g1-g1-comment-laundered wf_row "$T/mut/g1-g1.tsv" "G1g:"
 fi
-# CONTROL for the allowance's POSITIVE branch: a genuine read-only-first read in the same
-# step must still be ACCEPTED, or the fix above would be "delete the allowance" wearing a
-# mutation row's clothes.
+# (#9927 item 8b) The allowance is DELETED, so what used to be this row's POSITIVE control is now
+# its NEGATIVE one: a genuine read-only-first read followed by a bare read/write fallback is RED.
+# Keeping the fixture byte-identical to the old positive control is the point -- it proves the
+# row went RED because the allowance is gone, not because the fixture changed.
 MUTDIR="$(fixcopy g1-g2)"; assert_fixture_dir "$MUTDIR"
-if mutate g1-g2-genuine-ro-first "$MUTDIR/tree/.github/workflows/tiera.yml" 2 \
+if mutate g1-g2-ro-first-fallback-now-red "$MUTDIR/tree/.github/workflows/tiera.yml" 2 \
      '$a\          RO=$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)\n          HCLOUD_TOKEN=${RO:-$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)}'; then
   fixcensus "$MUTDIR" "$T/mut/g1-g2.tsv" ""
-  if wf_row "$T/mut/g1-g2.tsv" "G1g:"; then
-    pass "M-g1-g2-genuine-ro-first: a real read-only-first read is still ALLOWED (the allowance was not simply deleted)"
-  else
-    fail "M-g1-g2-genuine-ro-first: the allowance no longer accepts a genuine read-only-first read" "$(grep G1g "$T/mut/g1-g2.tsv" | cut -c1-200)"
-  fi
+  mutant_red g1-g2-ro-first-fallback-now-red wf_row "$T/mut/g1-g2.tsv" "G1g:"
+fi
+
+# (#9927 item 8b) SITE B shape: the config is named by a step `env:` (`DOPPLER_CONFIG: prd_terraform`),
+# not by `-c`, which is how the infra-validation PR-plan step reads its Hetzner value. The
+# command-line-only detection never saw it, so the fallback sat there unscanned.
+MUTDIR="$(fixcopy g1-g3)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-g3-env-config-read "$MUTDIR/tree/.github/workflows/tiera.yml" 5 \
+     '$a\      - name: Read\n        env:\n          DOPPLER_CONFIG: prd_terraform\n        run: |\n          HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-g3.tsv" ""
+  mutant_red g1-g3-env-config-read wf_row "$T/mut/g1-g3.tsv" "G1g:"
+fi
+
+# (#9927 item 8b) G1j: drop the `environment:` key from ONE loader job. The loader's legacy arm
+# exports only the read-only Hetzner token (or nothing), and no read/write token exists in Tier A, so a loader job with no Tier-B
+# environment loses the privileged token silently. (G1j proves the environment is DECLARED; whether a job takes the Tier-B arm depends on the secret.)
+MUTDIR="$(fixcopy g1-j1)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-j1-loader-job-without-environment "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 \
+     '0,/^    environment: infra-privileged$/{/^    environment: infra-privileged$/d}'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-j1.tsv" ""
+  mutant_red g1-j1-loader-job-without-environment wf_row "$T/mut/g1-j1.tsv" "G1j:"
+fi
+# ...and the FLOOR: a tree whose workflows call the loader zero times is a RED, not a vacuous
+# green (the population is what the row quantifies over).
+MUTDIR="$(fixcopy g1-j2)"; assert_fixture_dir "$MUTDIR"
+_j2n=0
+for _f in "$MUTDIR"/tree/.github/workflows/*.yml; do
+  _before="$(grep -cE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*\./\.github/actions/infra-credentials[[:space:]]*$' "$_f" || true)"
+  [ "${_before:-0}" -gt 0 ] || continue
+  sed -E -i 's#^([[:space:]]*-?[[:space:]]*uses:[[:space:]]*)\./\.github/actions/infra-credentials[[:space:]]*$#\1./.github/actions/zz-not-the-loader#' "$_f"
+  _j2n=$((_j2n + _before))
+done
+if [ "$_j2n" -gt 0 ]; then
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g1-j2-zero-loader-jobs: removed $_j2n loader call(s) from a pristine copy"
+  fixcensus "$MUTDIR" "$T/mut/g1-j2.tsv" ""
+  mutant_red g1-j2-zero-loader-jobs wf_row "$T/mut/g1-j2.tsv" "G1j:"
+else
+  fail "M-g1-j2-zero-loader-jobs: found no loader call in the fixture workflows to remove"
 fi
 
 # ── Guard 5 ─────────────────────────────────────────────────────────────────────────
@@ -4283,7 +4330,10 @@ fi
 #   (comment / heredoc / block-comment look-alikes stay green); 1 landing each. Measured: 138 ran.
 # 138 -> 142 (#9879 round 2): g4h-9 (scrubber `#`/`//` branch neutered), g4h-10 (string tracking neutered), g4h-11 (unterminated
 #   heredoc hides the fixture's removed blocks; only the G4h4 count pin sees it) and g4c-read-tf (Guard 4 reader unscrubbed); 1 landing each. Measured: 142 ran.
-MUTANT_FLOOR=142
+# 142 -> 145 (#9927 8b): g1-g2 inverted (the read-only-first allowance is deleted; still 1 landing, same fixture), g1-g3 (a step
+#   `env:` DOPPLER_CONFIG read, 1 landing), g1-j1 (drop a loader job's environment key, 1 landing) and g1-j2 (zero loader jobs,
+#   one landing per removed call, counted once). Measured: 145 ran.
+MUTANT_FLOOR=145
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
