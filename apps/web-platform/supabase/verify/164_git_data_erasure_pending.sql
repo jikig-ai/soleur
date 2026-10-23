@@ -1,7 +1,7 @@
 -- verify/164_git_data_erasure_pending.sql
 -- Runtime sentinel for the git-data erasure ledger (#8211, precedent: verify/162). Each row
 -- returns bad=1 on drift; run-verify.sh fails the deploy if any bad=1. Asserts the LIVE state:
--- only service_role may execute the five RPCs, both tables keep RLS on with no policy and no
+-- only service_role may execute the six RPCs, both tables keep RLS on with no policy and no
 -- client-role (nor service_role) table privilege, the CHECK constraints equal their full expected
 -- text, and each table holds EXACTLY the expected column set (the data-minimisation guarantee:
 -- a column added later, such as an email or a user id, turns this red).
@@ -69,6 +69,19 @@ SELECT 'owner_gone_service_role_granted',
 UNION ALL
 SELECT 'owner_gone_definer_pinned_search_path',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.git_data_erasure_owner_gone(uuid)'::regprocedure
+                          AND p.prosecdef AND 'search_path=public, pg_temp' = ANY (p.proconfig)) THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'ages_anon_revoked',
+       CASE WHEN has_function_privilege('anon', 'public.git_data_erasure_pending_ages()', 'EXECUTE') THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'ages_authenticated_revoked',
+       CASE WHEN has_function_privilege('authenticated', 'public.git_data_erasure_pending_ages()', 'EXECUTE') THEN 1 ELSE 0 END::int
+UNION ALL
+SELECT 'ages_service_role_granted',
+       CASE WHEN has_function_privilege('service_role', 'public.git_data_erasure_pending_ages()', 'EXECUTE') THEN 0 ELSE 1 END::int
+UNION ALL
+SELECT 'ages_definer_pinned_search_path',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.git_data_erasure_pending_ages()'::regprocedure
                           AND p.prosecdef AND 'search_path=public, pg_temp' = ANY (p.proconfig)) THEN 0 ELSE 1 END::int
 UNION ALL
 SELECT 'git_data_erasure_pending_rls_enabled',

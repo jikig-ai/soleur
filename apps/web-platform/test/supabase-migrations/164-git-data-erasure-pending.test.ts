@@ -30,6 +30,7 @@ const FUNCS = [
   ["resolve_git_data_erasure_pending", "uuid"],
   ["oldest_git_data_erasure_pending_age", ""],
   ["git_data_erasure_owner_gone", "uuid"],
+  ["git_data_erasure_pending_ages", ""],
 ] as const;
 
 const fnBlock = (name: string): string =>
@@ -124,8 +125,9 @@ describe("migration 164_git_data_erasure_pending", () => {
     it("record keeps the earlier requested_at, never touches attempts, refuses a NULL outcome and a future value", () => {
       const block = fnBlock("record_git_data_erasure_pending");
       expect(squash(block)).toMatch(
-        /ON CONFLICT \(workspace_id\) DO UPDATE SET last_outcome = EXCLUDED\.last_outcome, requested_at = LEAST\(g\.requested_at, EXCLUDED\.requested_at\);/i,
+        /ON CONFLICT \(workspace_id\) DO UPDATE SET last_outcome = CASE WHEN EXCLUDED\.last_outcome = 'seeded' THEN g\.last_outcome ELSE EXCLUDED\.last_outcome END, requested_at = LEAST\(g\.requested_at, EXCLUDED\.requested_at\);/i,
       );
+      expect(squash(block)).toMatch(/IF p_requested_at IS NOT NULL AND p_requested_at < timestamptz '2020-01-01 00:00:00\+00' THEN RAISE EXCEPTION/i);
       expect(block).not.toMatch(/attempts\s*=/i);
       expect(block).toMatch(/IF\s+p_outcome\s+IS\s+NULL\s+THEN\s+RAISE\s+EXCEPTION/i);
       expect(block).toMatch(/p_requested_at\s+IS\s+NOT\s+NULL\s+AND\s+p_requested_at\s*>\s*now\(\)\s+THEN\s+RAISE\s+EXCEPTION/i);
@@ -163,11 +165,31 @@ describe("migration 164_git_data_erasure_pending", () => {
       expect(block).toMatch(/CASE WHEN count\(\*\) = 0 THEN NULL ELSE GREATEST\(0, floor\(extract\(epoch FROM \(now\(\) - min\(requested_at\)\)\)\)\)::bigint END FROM public\.git_data_erasure_pending;/i);
     });
 
-    it("owner_gone reads exactly auth.users, public.users and workspace_members (by user and by workspace), fully qualified, and NOT workspaces/organizations", () => {
+    it("owner_gone: exact text of every branch (the branches no live state can separate are pinned here)", () => {
       const block = squash(fnBlock("git_data_erasure_owner_gone"));
-      expect(block).toMatch(/RETURN NOT \( EXISTS \(SELECT 1 FROM auth\.users u WHERE u\.id = p_workspace_id\) OR EXISTS \(SELECT 1 FROM public\.users pu WHERE pu\.id = p_workspace_id\) OR EXISTS \(SELECT 1 FROM public\.workspace_members m WHERE m\.user_id = p_workspace_id\) OR EXISTS \(SELECT 1 FROM public\.workspace_members m WHERE m\.workspace_id = p_workspace_id\) \);/i);
-      expect(block).not.toMatch(/FROM\s+public\.(workspaces|organizations)\b/i);
+      // 1 and 2: auth.users OR public.users => false. The public.users branch is implied by the auth.users
+      // branch through the users_id_fkey cascade, so no reachable state separates them live: exact-text pin.
+      expect(block).toMatch(/IF EXISTS \(SELECT 1 FROM auth\.users u WHERE u\.id = p_workspace_id\) OR EXISTS \(SELECT 1 FROM public\.users pu WHERE pu\.id = p_workspace_id\) THEN RETURN false; END IF;/i);
+      // 3: provenance. A non-seeded ledger row (account-delete) is trusted; anything else must have no members.
+      expect(block).toMatch(/SELECT g\.last_outcome INTO v_outcome FROM public\.git_data_erasure_pending g WHERE g\.workspace_id = p_workspace_id; IF FOUND AND v_outcome <> 'seeded' THEN RETURN true;/i);
+      expect(block).toMatch(/RETURN NOT EXISTS \(SELECT 1 FROM public\.workspace_members m WHERE m\.workspace_id = p_workspace_id\); END;/i);
       expect(block).toMatch(/IF p_workspace_id IS NULL THEN RAISE EXCEPTION/i);
+      // never reads the orphans the saga keeps
+      expect(block).not.toMatch(/(FROM|JOIN)\s+public\.(workspaces|organizations)\b/i);
+      expect(block).not.toMatch(/workspace_members m WHERE m\.user_id/i);
+    });
+
+    it("drops the superseded 2-argument record function before creating the 3-argument form", () => {
+      const drop = up.search(/DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\.record_git_data_erasure_pending\s*\(\s*uuid\s*,\s*text\s*\)\s*;/i);
+      const create = up.search(/CREATE\s+OR\s+REPLACE\s+FUNCTION\s+public\.record_git_data_erasure_pending\s*\(\s*p_workspace_id\s+uuid\s*,\s*p_outcome\s+text\s*,\s*p_requested_at/i);
+      expect(drop).toBeGreaterThan(-1);
+      expect(create).toBeGreaterThan(drop);
+    });
+
+    it("pending_ages splits the oldest age by owner_gone, never negative, NULL when a side is empty, and reads only the ledger", () => {
+      const block = squash(fnBlock("git_data_erasure_pending_ages"));
+      expect(block).toMatch(/RETURNS TABLE \(oldest_gone_seconds bigint, oldest_live_seconds bigint\)/i);
+      expect(block).toMatch(/SELECT max\(CASE WHEN public\.git_data_erasure_owner_gone\(g\.workspace_id\) THEN GREATEST\(0, floor\(extract\(epoch FROM \(now\(\) - g\.requested_at\)\)\)\)::bigint END\), max\(CASE WHEN NOT public\.git_data_erasure_owner_gone\(g\.workspace_id\) THEN GREATEST\(0, floor\(extract\(epoch FROM \(now\(\) - g\.requested_at\)\)\)\)::bigint END\) FROM public\.git_data_erasure_pending g;/i);
     });
 
     it("no function purges the ledger on a timer", () => {
@@ -176,13 +198,15 @@ describe("migration 164_git_data_erasure_pending", () => {
     });
   });
 
-  it("the down migration drops all five functions and both tables, and refuses while the ledger holds rows", () => {
-    for (const [name] of FUNCS) expect(down).toMatch(new RegExp(`DROP\\s+FUNCTION\\s+IF\\s+EXISTS\\s+public\\.${name}\\b`, "i"));
+  it("the down migration drops all six functions and both tables, and refuses while the ledger holds rows", () => {
+    for (const [name] of FUNCS) expect(down).toMatch(new RegExp(`DROP\\s+FUNCTION\\s+IF\\s+EXISTS\\s+public\\.${name}\\s*\\(`, "i"));
     expect(down).toMatch(/DROP\s+TABLE\s+IF\s+EXISTS\s+public\.git_data_erasure_pending\s*;/i);
     expect(down).toMatch(/DROP\s+TABLE\s+IF\s+EXISTS\s+public\.git_data_erasure_counts\s*;/i);
-    const guard = down.match(/DO\s+\$\$[\s\S]*?END\s+\$\$;/i)?.[0] ?? "";
-    expect(guard).toMatch(/EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+public\.git_data_erasure_pending\s*\)/i);
-    expect(guard).toMatch(/RAISE\s+EXCEPTION/i);
+    const guard = squash(down.match(/DO\s+\$\$[\s\S]*?END\s+\$\$;/i)?.[0] ?? "");
+    // exact, anchored: a NOT EXISTS / IS NULL / inverted variant must not pass
+    expect(guard).toMatch(
+      /^DO \$\$ BEGIN IF to_regclass\('public\.git_data_erasure_pending'\) IS NOT NULL AND EXISTS \(SELECT 1 FROM public\.git_data_erasure_pending\) THEN RAISE EXCEPTION 'Refusing to drop git_data_erasure_pending: it holds pending erasures\. Resolve or export them first\.'; END IF; END \$\$;$/,
+    );
     expect(down.indexOf("RAISE EXCEPTION")).toBeLessThan(down.search(/DROP\s+FUNCTION/i));
   });
 

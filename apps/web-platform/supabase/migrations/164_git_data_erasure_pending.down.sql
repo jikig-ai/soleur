@@ -1,4 +1,4 @@
--- Reverts 164: drop the five RPCs, then the two tables. REFUSES while the ledger holds rows:
+-- Reverts 164: drop the six RPCs, then the two tables. REFUSES while the ledger holds rows:
 -- dropping a populated ledger discards the only durable record of owed Art. 17 erasures.
 DO $$
 BEGIN
@@ -8,6 +8,7 @@ BEGIN
   END IF;
 END $$;
 
+DROP FUNCTION IF EXISTS public.git_data_erasure_pending_ages();
 DROP FUNCTION IF EXISTS public.git_data_erasure_owner_gone(uuid);
 DROP FUNCTION IF EXISTS public.oldest_git_data_erasure_pending_age();
 DROP FUNCTION IF EXISTS public.resolve_git_data_erasure_pending(uuid);
