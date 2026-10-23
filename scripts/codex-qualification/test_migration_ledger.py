@@ -10,7 +10,7 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / 'apps/web-platform/scripts'
 
 class MigrationLedger(unittest.TestCase):
-    def capture(self, bodies, fail=False):
+    def capture(self, bodies, fail=False, producer_failure=None, partial_output=False):
         with tempfile.TemporaryDirectory(prefix='codex9051-ledger-') as name:
             root = Path(name)
             for path in ('scripts/sql', 'supabase/migrations', 'bin'):
@@ -43,9 +43,22 @@ if '-f' in args and os.environ['FAIL_APPLY']=='1': sys.exit(1)
 ''')
             for path in ('git', 'psql'):
                 (root/'bin'/path).chmod(0o755)
+            if producer_failure:
+                command, target = producer_failure
+                shim = root/'bin'/command
+                shim.write_text('''#!/usr/bin/python3
+import os, sys
+if any(arg.endswith(os.environ['FAIL_PRODUCER_TARGET']) for arg in sys.argv[1:]):
+    if os.environ['PARTIAL_OUTPUT']=='1': print("SELECT 'partial synthetic body';")
+    sys.exit(42)
+os.execv('/usr/bin/COMMAND', ['COMMAND', *sys.argv[1:]])
+'''.replace('COMMAND', command))
+                shim.chmod(0o755)
             env = {'PATH': str(root/'bin') + ':/usr/bin:/bin', 'HOME': str(root/'absent'),
                    'DATABASE_URL': 'postgres://synthetic.invalid/never-contacted',
-                   'CAPTURE': str(root/'capture.jsonl'), 'FAIL_APPLY': '1' if fail else '0'}
+                   'CAPTURE': str(root/'capture.jsonl'), 'FAIL_APPLY': '1' if fail else '0',
+                   'FAIL_PRODUCER_TARGET': producer_failure[1] if producer_failure else '',
+                   'PARTIAL_OUTPUT': '1' if partial_output else '0'}
             result = subprocess.run(['bash', str(root/'scripts/run-migrations.sh'), '--bootstrap=skip'],
                                     cwd=root, env=env, capture_output=True, text=True, timeout=15)
             captures = [json.loads(line) for line in (root/'capture.jsonl').read_text().splitlines()]
@@ -86,6 +99,29 @@ if '-f' in args and os.environ['FAIL_APPLY']=='1': sys.exit(1)
         self.assertLess(sql.index('LOCK TABLE public.workspace_engine_settings'), sql.index('SELECT 145;'))
         self.assertLess(sql.index('SELECT 145;'), sql.index('DO $migration_ledger$'))
         self.assertFalse(any(line.strip() in ('BEGIN;', 'COMMIT;', 'ROLLBACK;') for line in sql.splitlines()))
+
+    def test_every_failed_sql_producer_refuses_before_apply_even_after_partial_output(self):
+        # Cover every file-producing assembly site: injected guard, wrapped
+        # migration via sed, and unwrapped migration via cat. Include both
+        # acknowledgment migrations whose grants must never outlive a body.
+        cases = [
+            ('cat', 'codex-auth-mode-pre-migration.sql', '165_codex_auth_mode_rebind.sql', True),
+            ('sed', '165_codex_auth_mode_rebind.sql', '165_codex_auth_mode_rebind.sql', True),
+            ('sed', '169_codex_history_transfer_ack.sql', '169_codex_history_transfer_ack.sql', True),
+            ('sed', '170_codex_history_ack_owner_scope.sql', '170_codex_history_ack_owner_scope.sql', True),
+            ('cat', '170_codex_history_ack_owner_scope.sql', '170_codex_history_ack_owner_scope.sql', False),
+            ('cat', '001_synthetic.sql', '001_synthetic.sql', False),
+        ]
+        for command, target, filename, wrapped in cases:
+            for partial in (False, True):
+                with self.subTest(command=command, target=target, partial=partial):
+                    body = 'SELECT 1;\n'
+                    if wrapped:
+                        body = 'BEGIN;\n' + body + 'COMMIT;\n'
+                    result, applies, _ = self.capture({filename: body},
+                        producer_failure=(command, target), partial_output=partial)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(applies, [], 'an incomplete SQL unit must never reach psql')
 
     def test_existing_schema_probe_assertions_with_networkless_git(self):
         # Existing suite hardcodes inner PATH via env -i. Preserve its test

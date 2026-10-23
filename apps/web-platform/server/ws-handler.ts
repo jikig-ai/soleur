@@ -402,6 +402,12 @@ type CodexNoticeDelivery = {
 // One latest notice per socket session. A replaced/disconnected session can be
 // collected; retain no plaintext nonce or unbounded per-turn collection.
 const codexNoticeDeliveries = new WeakMap<ClientSession, CodexNoticeDelivery>();
+const codexNoticeDeliveryRecoveries = new Map<string, Promise<boolean>>();
+const CODEX_NOTICE_RECOVERY_CACHE_LIMIT = 256;
+
+function codexNoticeRecoveryKey(userId: string, notice: Omit<CodexNoticeDelivery, "completion">): string {
+  return `${userId}:${notice.conversationId}:${notice.authModeGeneration}:${notice.nonceHash}`;
+}
 
 function codexTurnKey(userId: string, conversationId: string): string {
   return `${userId}:${conversationId}`;
@@ -1288,6 +1294,24 @@ async function resolveConversationEngineRun(
 }
 
 async function persistCodexNoticeDelivery(userId: string, notice: Omit<CodexNoticeDelivery, "completion">): Promise<boolean> {
+  const key = codexNoticeRecoveryKey(userId, notice);
+  const existing = codexNoticeDeliveryRecoveries.get(key);
+  if (existing) return existing;
+  const recovery = persistCodexNoticeDeliveryOnce(userId, notice);
+  codexNoticeDeliveryRecoveries.set(key, recovery);
+  while (codexNoticeDeliveryRecoveries.size > CODEX_NOTICE_RECOVERY_CACHE_LIMIT) {
+    const oldest = codexNoticeDeliveryRecoveries.keys().next().value;
+    if (oldest === undefined) break;
+    codexNoticeDeliveryRecoveries.delete(oldest);
+  }
+  const delivered = await recovery;
+  if (codexNoticeDeliveryRecoveries.get(key) === recovery) {
+    codexNoticeDeliveryRecoveries.delete(key);
+  }
+  return delivered;
+}
+
+async function persistCodexNoticeDeliveryOnce(userId: string, notice: Omit<CodexNoticeDelivery, "completion">): Promise<boolean> {
   // Retrying the same nonce is safe even when the first write committed but its
   // response was lost. Bound each wait so a fast acknowledgment cannot hang.
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1320,6 +1344,23 @@ async function persistCodexNoticeDelivery(userId: string, notice: Omit<CodexNoti
     }
   }
   return false;
+}
+
+async function discardCodexNoticeIssuance(
+  userId: string,
+  notice: Omit<CodexNoticeDelivery, "completion">,
+): Promise<void> {
+  try {
+    const { error } = await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
+      p_conversation_id: notice.conversationId,
+      p_auth_mode_generation: notice.authModeGeneration,
+      p_member_user_id: userId,
+      p_nonce_hash: notice.nonceHash,
+    });
+    if (error) reportSilentFallback(error, { feature: "codex-history-transfer", op: "discard-unsent-notice" });
+  } catch (error) {
+    reportSilentFallback(error, { feature: "codex-history-transfer", op: "discard-unsent-notice" });
+  }
 }
 
 async function dispatchCodexChatTurn(
@@ -1421,22 +1462,13 @@ async function dispatchCodexChatTurn(
             codexNoticeDeliveries.delete(sourceSession);
           }
           if (!delivered) {
-            const { error } = await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
-              p_conversation_id: conversationId,
-              p_auth_mode_generation: authModeGeneration,
-              p_member_user_id: userId,
-              p_nonce_hash: noticeNonceHash,
-            });
-            if (error) reportSilentFallback(error, { feature: "codex-history-transfer", op: "discard-unsent-notice" });
+            await discardCodexNoticeIssuance(userId, notice);
           }
         }
         if (delivered) assertCurrent();
       } else {
-        await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
-          p_conversation_id: conversationId,
-          p_auth_mode_generation: authModeGeneration,
-          p_member_user_id: userId,
-          p_nonce_hash: noticeNonceHash,
+        await discardCodexNoticeIssuance(userId, {
+          conversationId, authModeGeneration, nonceHash: noticeNonceHash,
         });
       }
       return;
@@ -3257,18 +3289,34 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
         const nonceHash = createHash("sha256").update(msg.noticeNonce).digest("hex");
         const notice = codexNoticeDeliveries.get(session);
-        if (notice?.conversationId === msg.conversationId
-          && notice.authModeGeneration === msg.authModeGeneration
-          && notice.nonceHash === nonceHash) {
-          const pending = notice.completion;
-          const delivered = await pending;
+        if (notice && (notice.conversationId !== msg.conversationId
+          || notice.authModeGeneration !== msg.authModeGeneration
+          || notice.nonceHash !== nonceHash)) {
+          // This socket already has a locally issued notice. A different nonce
+          // is stale and must not trigger a privileged marker repair.
+        } else {
+          const delivery = notice ?? {
+            conversationId: msg.conversationId,
+            authModeGeneration: msg.authModeGeneration,
+            nonceHash,
+            completion: Promise.resolve(false),
+          };
+          const delivered = notice
+            ? await notice.completion
+            : await persistCodexNoticeDelivery(userId, delivery);
           if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
-          if (!delivered) {
+          if (notice && !delivered) {
             // Share a retry with acknowledgments that arrived together.
-            if (notice.completion === pending) {
+            const pending = notice.completion;
+            if (!await pending && notice.completion === pending) {
               notice.completion = persistCodexNoticeDelivery(userId, notice);
             }
-            if (!await notice.completion) throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
+            if (!await notice.completion) {
+              throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
+            }
+          }
+          if (!notice && !delivered) {
+            throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
           }
         }
         if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;

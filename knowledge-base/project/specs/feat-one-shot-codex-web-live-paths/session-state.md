@@ -5,6 +5,29 @@
 - Plan file: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wiring-plan.md`
 - Status: partial implementation; production qualification and required review gates pending
 
+### 2026-10-23 delivery and runner follow-up
+
+- Notice marker recovery now works after reconnect using only the original
+  nonce. The replacement-session path sends no new notice, turn, or provider
+  request. The service marker locks the current run and conversation, checks
+  owner, Codex engine, generation, membership epoch, nonce issuance, and prior
+  consumption before setting `delivered_at`; tenant acknowledgment remains the
+  only consume path. Marker recovery is shared while in flight and bounded.
+- The runner now assembles every migration input fully before invoking psql, so
+  a failed `cat`, `sed`, or SQL suffix producer cannot commit partial output.
+  The migration 165 disposable fixtures now include the real guard tables and
+  cover unsupported/null modes, tied latest runs, and a concurrent owner write.
+- RED/GREEN: the final focused handler/migration/RLS set passed 43/43, including
+  disposable PostgreSQL checks. Migration-ledger producer-failure tests passed
+  5/5; scoped TypeScript passed; scoped ESLint had zero errors and the same
+  three pre-existing fallthrough warnings. Semgrep scanned the nine changed
+  production/test files with 235 rules, zero findings, and no parse errors.
+- The full offline runner-admission tests still refuse the changed runner hash
+  until independent review; the immutable historical blocked-runner fixture is
+  pinned separately and is not executed. No shared database, provider, or
+  production action occurred. Exact-head review, resync, CI, legal, runtime,
+  authenticated QA, preflight, readiness, merge, and shipping remain pending.
+
 ### 2026-10-23 resumed continuation
 
 - CTO ruled that migration ledger compatibility must fail closed for legacy

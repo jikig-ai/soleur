@@ -1,5 +1,6 @@
 """Offline source/recipe assertions; never invoke SQL, Docker or recovery."""
 import base64
+import gzip
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,14 +19,16 @@ class RunnerAdmission(unittest.TestCase):
                        'body_base64':base64.b64encode(b'ADD COLUMN IF NOT EXISTS content_sha text').decode()}]
         self.assertEqual(runner_blockers(runner,migrations),[])
         start=runner.index(b'    if [[ -n "$content_sha" ]]; then')
-        end=runner.index(b'\n  } | psql',start)
+        end=runner.index(b'\n  )"; then',start)
         assembly=runner[start:end]
         commented=b'\n'.join(b'# '+line for line in assembly.splitlines())
+        producer=b'  if ! migration_sql="$(\n'
+        self.assertEqual(runner.count(producer),1)
         mutants={
             'comment-only':b'\n'.join(b'# '+line for line in runner.splitlines())+b'\nexit 0\n',
             'deleted-assembly':runner[:start]+b'    :\n'+runner[end:]+b'\n'+commented+b'\n',
             'commented-assembly':runner[:start]+b'    :\n'+commented+b'\n'+runner[end:],
-            'moved-before-body':runner.replace(assembly,b'',1).replace(b'  if ! {\n',b'  if ! {\n'+assembly+b'\n',1),
+            'moved-before-body':runner.replace(assembly,b'',1).replace(producer,producer+assembly+b'\n',1),
         }
         for label,body in mutants.items():
             with self.subTest(mutant=label):
@@ -85,16 +88,22 @@ class Rehearsal(unittest.TestCase):
             ledger_sql(files + [{'path': "migrations/a'bad.sql", 'blob': 'a'*40, 'body_base64': ''}])
 
     def test_fresh_schema_fix_is_recognized_but_inherited_runner_stays_blocked(self):
-        # Reconstruct the exact historical baseline without requiring that
-        # commit to exist in a shallow CI checkout; verify its full identity.
+        # Immutable source blob 6e264ac0944852cb810c93d7243ca381cf78769b
+        # from bc0f0d47, compressed for shallow/offline checkouts. Never execute
+        # this historical fixture or reconstruct it from the evolving runner.
+        fixture=Path(__file__).with_name('fixtures')/'blocked-runner-bc0f0d47.sh.gz.b64'
+        old=gzip.decompress(base64.b64decode(''.join(fixture.read_text().split()),validate=True))
+        self.assertEqual(sha(old),BLOCKED_BASELINE_RUNNER_SHA256)
+        self.assertEqual(runner_blockers(old, self.result['forward_migrations']), ['fresh-ledger-content-sha-column'])
+        # A current runner with the fresh-ledger fix removed is a different,
+        # unreviewed source identity even when unrelated changes have landed.
         current=(REPO/'apps/web-platform/scripts/run-migrations.sh').read_bytes()
         start=current.index(b'      # A fresh --bootstrap=skip')
         end=current.index(b'    else\n',start)
         prior=b'''      printf "\\nINSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\\n" "$filename" "$content_sha"
 '''
-        old=current[:start]+prior+current[end:]
-        self.assertEqual(sha(old),BLOCKED_BASELINE_RUNNER_SHA256)
-        self.assertEqual(runner_blockers(old, self.result['forward_migrations']), ['fresh-ledger-content-sha-column'])
+        mutant=current[:start]+prior+current[end:]
+        self.assertEqual(runner_blockers(mutant,self.result['forward_migrations']), ['runner-identity-review-required'])
         self.assertEqual(runner_blockers((REPO/'apps/web-platform/scripts/run-migrations.sh').read_bytes(),self.result['forward_migrations']), [])
         self.assertFalse(self.result['execute_available'])
         self.assertEqual(self.result['runner']['argv'], ['bash', 'apps/web-platform/scripts/run-migrations.sh', '--bootstrap=skip'])

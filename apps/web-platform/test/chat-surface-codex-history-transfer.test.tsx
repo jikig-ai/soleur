@@ -5,6 +5,7 @@ import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { createWebSocketMock } from "./mocks/use-websocket";
 
 let wsReturn = createWebSocketMock();
+const noticeNonce = "a".repeat(43);
 
 vi.mock("@/lib/ws-client", () => ({ useWebSocket: () => wsReturn }));
 vi.mock("@/hooks/use-team-names", () => ({
@@ -29,6 +30,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
         message: "OpenAI will receive the message you resend and any later messages. Saved conversation history is not transferred to the selected account. API-key mode uses your own credential and charges your provider account. Acknowledge, then resend your message. Your original message was not sent.",
         conversationId: "test-id",
         authModeGeneration: 2,
+        noticeNonce,
       },
     });
   });
@@ -45,7 +47,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     vi.mocked(wsReturn.resendMessage).mockClear();
     vi.mocked(wsReturn.resumeSession).mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Acknowledge provider change" }));
-    expect(wsReturn.acknowledgeCodexHistoryTransfer).toHaveBeenCalledWith("test-id", 2);
+    expect(wsReturn.acknowledgeCodexHistoryTransfer).toHaveBeenCalledWith("test-id", 2, noticeNonce);
     expect(wsReturn.sendMessage).not.toHaveBeenCalled();
     expect(wsReturn.resendMessage).not.toHaveBeenCalled();
     expect(wsReturn.resumeSession).not.toHaveBeenCalled();
@@ -133,6 +135,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
         message: "OpenAI will receive the message you resend. Saved conversation history is not transferred. Acknowledge before resending.",
         conversationId: "test-id",
         authModeGeneration: 2,
+        noticeNonce,
       },
     });
     const view = render(<ChatSurface variant="full" conversationId="new" />);

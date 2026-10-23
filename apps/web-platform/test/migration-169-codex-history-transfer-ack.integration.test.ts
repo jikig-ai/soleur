@@ -153,6 +153,58 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
           '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
         );
         RESET ROLE;
+        CREATE FUNCTION public.assert_codex_notice_repair_refused(reason text, nonce_hash text DEFAULT repeat('0', 64))
+        RETURNS void LANGUAGE plpgsql AS $$
+        DECLARE
+          before_rows jsonb;
+          after_rows jsonb;
+        BEGIN
+          SELECT coalesce(jsonb_agg(to_jsonb(i)), '[]'::jsonb) INTO before_rows
+            FROM public.codex_history_transfer_notice_issuances AS i;
+          IF public.mark_codex_history_transfer_notice_delivered(
+            '40000000-0000-4000-8000-000000000001', 3,
+            '30000000-0000-4000-8000-000000000001', nonce_hash
+          ) IS DISTINCT FROM false THEN
+            RAISE EXCEPTION 'notice repair must refuse: %', reason;
+          END IF;
+          SELECT coalesce(jsonb_agg(to_jsonb(i)), '[]'::jsonb) INTO after_rows
+            FROM public.codex_history_transfer_notice_issuances AS i;
+          IF before_rows IS DISTINCT FROM after_rows THEN
+            RAISE EXCEPTION 'refused notice repair changed ledger: %', reason;
+          END IF;
+        END;
+        $$;
+        BEGIN;
+        SAVEPOINT notice_repair_fence;
+        UPDATE public.conversations SET user_id = '30000000-0000-4000-8000-000000000002';
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('owner changed'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        UPDATE public.agent_engine_runs SET engine_id = 'claude-code';
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('engine changed'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        -- Retain deliberately stale rows to prove the repair RPC independently
+        -- enforces generation and membership epoch even without purge help.
+        ALTER TABLE public.agent_engine_runs DISABLE TRIGGER purge_stale_codex_history_transfer_notice_issuances;
+        UPDATE public.agent_engine_runs SET auth_mode_generation = 4;
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('generation changed'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        ALTER TABLE public.workspace_members DISABLE TRIGGER purge_replaced_codex_history_notice_membership;
+        UPDATE public.workspace_members SET created_at = '2026-09-02T00:00:00Z'
+          WHERE user_id = '30000000-0000-4000-8000-000000000001';
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('membership epoch changed'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        DELETE FROM public.workspace_members WHERE user_id = '30000000-0000-4000-8000-000000000001';
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('membership revoked'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('fabricated nonce', repeat('f', 64)); END $$;
+        DO $$ BEGIN
+          PERFORM public.issue_codex_history_transfer_notice(
+            '40000000-0000-4000-8000-000000000001', 3,
+            '30000000-0000-4000-8000-000000000001', repeat('1', 64)
+          );
+          PERFORM public.assert_codex_notice_repair_refused('superseded nonce');
+        END $$;
+        ROLLBACK;
         -- The fixture owns a real issuance; tenant denial below cannot pass
         -- merely because the private ledger is empty.
         SELECT count(*) FROM public.codex_history_transfer_notice_issuances;
@@ -193,6 +245,9 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         SELECT public.record_codex_history_transfer_acknowledgment(
           '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
         );
+        RESET ROLE;
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('consumed nonce'); END $$;
+        SET ROLE authenticated;
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
         RESET ROLE;
         SET ROLE service_role;

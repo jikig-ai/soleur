@@ -118,3 +118,27 @@ presentation-bound server control is implemented or the internal contract is
 explicitly and independently reviewed. This is an internal posture assessment, not
 external-counsel advice. Legal posture does not treat the acknowledgment as GDPR
 consent or independent provider-transfer authorization.
+
+### Addendum — notice recovery after reconnect — 2026-10-23
+
+Ruled by CTO agent, 2026-10-23: explicitly amend the earlier engineering
+condition that delivery marking follows only WebSocket send acceptance. After
+reconnect, the authenticated conversation owner may repair a pending marker by
+presenting the original unpredictable nonce, disclosed exclusively in that
+notice. This proves payload possession, not rendering or understanding; the CLO
+presentation-proof hold remains unchanged.
+
+Recovery must preserve the existing matching-session wait and shared retry,
+reject a different nonce when current local state identifies the same notice,
+and use the existing bounded abortable attempts without issuing a new notice or
+dispatching a provider turn. The service-only marker must independently lock the
+run then membership, check current owner/Codex generation/membership epoch and
+issuance hash, and leave invalid or consumed issuance untouched. The tenant RPC
+alone consumes the delivered issuance and records acknowledgment. Recheck socket
+session and conversation after asynchronous boundaries. Synthetic outage,
+reconnect, concurrent recovery, wrong scope, membership replacement, consumed
+nonce, and timeout tests are required before accepting the fix.
+
+Dissent: this technical amendment does not resolve legal presentation proof or
+authorize shared database access, migration application, provider requests,
+qualification, readiness or merge.

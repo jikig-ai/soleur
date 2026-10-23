@@ -75,3 +75,16 @@ named type import restores scanner coverage. A TLS finding matched a forbidden
 configuration string in policy data, not an executed setting. The cancellation
 regression's first TypeScript run found a mock argument type too broad for an
 existing implementation; the corrected record type passed the compiler.
+
+The continuation also exposed a streaming-shell failure boundary: a SQL
+producer can emit valid bytes and then exit nonzero while the consumer still
+commits at EOF. Assemble the complete SQL in a checked command substitution
+before starting psql, and inject producer failures both before and after partial
+output. Keep disposable migration fixtures structurally faithful to every
+relation and column the pre-migration guard locks or queries; otherwise an
+unrelated missing-table error can masquerade as the intended refusal. Run
+`test_rehearsal.py` directly from its path (or set its script directory on
+`PYTHONPATH`); unittest module loading from the hyphenated
+`codex-qualification` directory cannot import its local `prepare` module. A
+runner admission failure on a changed hash is an independent-review hold, not a
+reason to refresh the pin automatically.

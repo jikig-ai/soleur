@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as ChildProcessModule from "node:child_process";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import * as credentials from "@/server/codex-credential-provider";
 import * as codexRuntimeModule from "@/server/codex-conversation-runtime";
@@ -15,11 +16,12 @@ const fixture = vi.hoisted(() => ({
   generation: 0,
   tenantGate: null as Promise<void> | null,
   tenantMintStarted: vi.fn(),
-  rpc: vi.fn(async (_name: string, _args?: SyntheticRpcArgs): Promise<{ data: unknown; error: null }> => ({ data: null, error: null })),
+  rpc: vi.fn(async (_name: string, _args?: SyntheticRpcArgs): Promise<{ data: unknown; error: unknown }> => ({ data: null, error: null })),
   rpcStarts: vi.fn((_name: string, _signal?: AbortSignal) => {}),
   from: vi.fn(),
   spawn: vi.fn(() => { throw new Error("Unexpected provider process launch"); }),
   captureException: vi.fn(),
+  reportSilentFallback: vi.fn(),
   hashUserId: vi.fn(() => "synthetic-user-hash"),
   sendUserMessage: vi.fn(),
   startAgentSession: vi.fn(),
@@ -34,7 +36,7 @@ vi.mock("@/lib/supabase/service", () => ({
       let signal: AbortSignal | undefined;
       const builder = {
         abortSignal(value: AbortSignal) { signal = value; return builder; },
-        then(onFulfilled: (value: { data: unknown; error: null }) => unknown, onRejected: (reason: unknown) => unknown) {
+        then(onFulfilled: (value: { data: unknown; error: unknown }) => unknown, onRejected: (reason: unknown) => unknown) {
           fixture.rpcStarts(name, signal);
           return fixture.rpc(name, args).then(onFulfilled, onRejected);
         },
@@ -74,13 +76,13 @@ vi.mock("@/server/cc-dispatcher", () => ({
   closeCcConversation: vi.fn(),
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
-  ...await importOriginal<typeof import("node:child_process")>(),
+  ...await importOriginal<typeof ChildProcessModule>(),
   spawn: fixture.spawn,
 }));
 vi.mock("@sentry/nextjs", () => ({ captureException: fixture.captureException }));
 vi.mock("@/server/observability", () => ({
   hashUserId: fixture.hashUserId,
-  reportSilentFallback: vi.fn(),
+  reportSilentFallback: fixture.reportSilentFallback,
   warnSilentFallback: vi.fn(),
 }));
 
@@ -410,6 +412,92 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.spawn).not.toHaveBeenCalled();
   });
 
+  it.each(["outage", "committed-response-lost"])("recovers the retained nonce after a new socket session following %s", async (failure) => {
+    fixture.generation = 1;
+    const original = noticeSession();
+    let storageAvailable = false;
+    let delivered = false;
+    let consumed = false;
+    fixture.rpc.mockImplementation(async (name: string) => {
+      if (name === "codex_history_transfer_acknowledged") return { data: false, error: null };
+      if (name === "mark_codex_history_transfer_notice_delivered") {
+        if (storageAvailable || failure === "committed-response-lost") delivered = true;
+        if (!storageAvailable) throw new Error("Synthetic marker response unavailable");
+      }
+      if (name === "record_codex_history_transfer_acknowledgment") {
+        const accepted = delivered && !consumed;
+        consumed ||= accepted;
+        return { data: accepted, error: null };
+      }
+      return { data: true, error: null };
+    });
+    await noticeChat();
+    const nonce = original.frames()[0].noticeNonce;
+    const reconnected = noticeSession();
+    storageAvailable = true;
+    await acknowledgeNotice(nonce);
+    expect(reconnected.frames()).toEqual([expect.objectContaining({ type: "codex_history_transfer_acknowledged" })]);
+    expect(fixture.rpc.mock.calls.filter(([name]) => name === "mark_codex_history_transfer_notice_delivered")).toHaveLength(3);
+    expect(fixture.rpc.mock.calls.filter(([name]) => name === "issue_codex_history_transfer_notice")).toHaveLength(1);
+    expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
+    expect(fixture.from).not.toHaveBeenCalledWith("messages");
+    expect(fixture.spawn).not.toHaveBeenCalled();
+    expect(fixture.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("shares a reconnect marker recovery between simultaneous acknowledgments without consuming twice", async () => {
+    const client = noticeSession();
+    let releaseMarker!: () => void;
+    const markerGate = new Promise<void>((resolve) => { releaseMarker = resolve; });
+    let delivered = false;
+    let consumed = false;
+    fixture.rpc.mockImplementation(async (name: string) => {
+      if (name === "mark_codex_history_transfer_notice_delivered") { await markerGate; delivered = true; }
+      if (name === "record_codex_history_transfer_acknowledgment") {
+        const accepted = delivered && !consumed;
+        consumed ||= accepted;
+        return { data: accepted, error: null };
+      }
+      return { data: true, error: null };
+    });
+    const first = acknowledgeNotice("A".repeat(43));
+    const second = acknowledgeNotice("A".repeat(43));
+    try {
+      await vi.waitFor(() => expect(fixture.rpc.mock.calls.filter(([name]) => name === "mark_codex_history_transfer_notice_delivered")).toHaveLength(1));
+      expect(fixture.rpc).not.toHaveBeenCalledWith("record_codex_history_transfer_acknowledgment", expect.anything());
+      releaseMarker();
+      await Promise.all([first, second]);
+      expect(client.frames().filter((frame) => frame.type === "codex_history_transfer_acknowledged")).toHaveLength(1);
+      expect(client.frames()).toContainEqual(expect.objectContaining({ errorCode: "codex_history_transfer_acknowledgment_rejected" }));
+      expect(fixture.rpc.mock.calls.filter(([name]) => name === "mark_codex_history_transfer_notice_delivered")).toHaveLength(1);
+    } finally {
+      releaseMarker();
+      await Promise.all([first, second]);
+    }
+  });
+
+  it("does not consume or reply into a replacement socket during reconnect recovery", async () => {
+    noticeSession();
+    let releaseMarker!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseMarker = resolve; });
+    fixture.rpc.mockImplementation(async (name: string) => {
+      if (name === "mark_codex_history_transfer_notice_delivered") await gate;
+      return { data: true, error: null };
+    });
+    const ack = acknowledgeNotice("A".repeat(43));
+    try {
+      await vi.waitFor(() => expect(fixture.rpc).toHaveBeenCalledWith("mark_codex_history_transfer_notice_delivered", expect.anything()));
+      const replacement = noticeSession();
+      releaseMarker();
+      await ack;
+      expect(fixture.rpc).not.toHaveBeenCalledWith("record_codex_history_transfer_acknowledgment", expect.anything());
+      expect(replacement.frames()).toEqual([]);
+    } finally {
+      releaseMarker();
+      await ack;
+    }
+  });
+
   it("does not acknowledge into a replacement session after waiting for delivery", async () => {
     fixture.generation = 1;
     const client = noticeSession();
@@ -443,7 +531,8 @@ describe("Codex real production handler boundary", () => {
     const client = noticeSession();
     client.send.mockImplementationOnce(() => { throw new Error("Synthetic socket send failure"); });
     fixture.rpc.mockImplementation(async (name: string) => ({
-      data: name !== "codex_history_transfer_acknowledged", error: null,
+      data: name !== "codex_history_transfer_acknowledged",
+      error: name === "delete_codex_history_transfer_notice_issuance" ? new Error("Synthetic cleanup failure") : null,
     }));
     await noticeChat();
     expect(fixture.rpc).toHaveBeenCalledWith("delete_codex_history_transfer_notice_issuance", expect.objectContaining({
@@ -451,6 +540,9 @@ describe("Codex real production handler boundary", () => {
       p_member_user_id: fixture.userId, p_nonce_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
     }));
     expect(fixture.rpc).not.toHaveBeenCalledWith("mark_codex_history_transfer_notice_delivered", expect.anything());
+    expect(fixture.reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), {
+      feature: "codex-history-transfer", op: "discard-unsent-notice",
+    });
     expect(client.send.mock.results[0]?.type).toBe("throw");
   });
 

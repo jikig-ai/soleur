@@ -213,8 +213,9 @@ describe.skipIf(!canRunDatabaseTest)("migration 165 Codex mode SQL on disposable
     expect(create.status, create.stderr).toBe(0);
     try {
       runSql(database, `
-        CREATE TABLE public.workspace_engine_settings (default_engine_id text NOT NULL, default_auth_mode text);
-        INSERT INTO public.workspace_engine_settings VALUES ('codex', 'unsupported-synthetic-mode');
+        CREATE TABLE public.workspace_engine_settings (workspace_id uuid PRIMARY KEY, default_engine_id text NOT NULL, default_auth_mode text);
+        CREATE TABLE public.agent_engine_runs (workspace_id uuid NOT NULL, execution_kind text NOT NULL, engine_id text NOT NULL, auth_mode text NOT NULL, created_at timestamptz NOT NULL);
+        INSERT INTO public.workspace_engine_settings VALUES ('00000000-0000-4000-8000-000000000001', 'codex', 'unsupported-synthetic-mode');
       `);
       const guard = readFileSync(preMigrationGuard, "utf8");
       const applyAfterGuard = () => docker(["exec", "-i", container, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], `
@@ -233,8 +234,22 @@ describe.skipIf(!canRunDatabaseTest)("migration 165 Codex mode SQL on disposable
       expect(rejectedNull.stderr).toContain("Codex auth-mode migration refused:");
       expect(runSql(database, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'workspace_engine_settings' AND column_name = 'synthetic_after_guard';`)).toBe("0");
       runSql(database, `
+        UPDATE public.workspace_engine_settings SET default_engine_id = 'claude-code';
+        INSERT INTO public.agent_engine_runs VALUES
+          ('00000000-0000-4000-8000-000000000001', 'conversation', 'codex', 'managed', '2026-01-01T00:00:00Z'),
+          ('00000000-0000-4000-8000-000000000001', 'conversation', 'codex', 'api-key', '2026-01-01T00:00:00Z');
+      `);
+      const tiedLatest = applyAfterGuard();
+      expect(tiedLatest.status).not.toBe(0);
+      expect(tiedLatest.stderr).toContain("conflicting latest run timestamps");
+      expect(runSql(database, `SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'workspace_engine_settings' AND column_name = 'synthetic_after_guard';`)).toBe("0");
+      runSql(database, `
+        DELETE FROM public.agent_engine_runs;
         DELETE FROM public.workspace_engine_settings;
-        INSERT INTO public.workspace_engine_settings VALUES ('codex', 'managed'), ('codex', 'api-key'), ('claude-code', 'legacy-synthetic-mode');
+        INSERT INTO public.workspace_engine_settings VALUES
+          ('00000000-0000-4000-8000-000000000001', 'codex', 'managed'),
+          ('00000000-0000-4000-8000-000000000002', 'codex', 'api-key'),
+          ('00000000-0000-4000-8000-000000000003', 'claude-code', 'legacy-synthetic-mode');
         BEGIN;
         ${guard}
         ALTER TABLE public.workspace_engine_settings ADD COLUMN synthetic_after_guard boolean;
@@ -278,8 +293,9 @@ describe.skipIf(!canRunDatabaseTest)("migration 165 Codex mode SQL on disposable
       }
     }
     try {
-      runSql(database, `CREATE TABLE public.workspace_engine_settings (default_engine_id text, default_auth_mode text);
-        INSERT INTO public.workspace_engine_settings VALUES ('codex', 'managed');`);
+      runSql(database, `CREATE TABLE public.workspace_engine_settings (workspace_id uuid PRIMARY KEY, default_engine_id text, default_auth_mode text);
+        CREATE TABLE public.agent_engine_runs (workspace_id uuid NOT NULL, execution_kind text NOT NULL, engine_id text NOT NULL, auth_mode text NOT NULL, created_at timestamptz NOT NULL);
+        INSERT INTO public.workspace_engine_settings VALUES ('00000000-0000-4000-8000-000000000001', 'codex', 'managed');`);
       locker = spawn("docker", ["exec", "-i", container, "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database], { stdio: "pipe", timeout: 60_000, killSignal: "SIGKILL" });
       let stderr = "";
       locker.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
@@ -337,8 +353,9 @@ describe.skipIf(!canRunDatabaseTest)("migration 165 Codex mode SQL on disposable
       const guard = readFileSync(preMigrationGuard, "utf8");
       runSql(database, `
         CREATE SCHEMA codex_precheck;
-        CREATE TABLE codex_precheck.workspace_engine_settings (default_engine_id text, default_auth_mode text);
-        INSERT INTO codex_precheck.workspace_engine_settings VALUES ('codex', 'legacy-synthetic-mode');
+        CREATE TABLE codex_precheck.workspace_engine_settings (workspace_id uuid PRIMARY KEY, default_engine_id text, default_auth_mode text);
+        CREATE TABLE codex_precheck.agent_engine_runs (workspace_id uuid NOT NULL, execution_kind text NOT NULL, engine_id text NOT NULL, auth_mode text NOT NULL, created_at timestamptz NOT NULL);
+        INSERT INTO codex_precheck.workspace_engine_settings VALUES ('00000000-0000-4000-8000-000000000001', 'codex', 'legacy-synthetic-mode');
       `);
       expect(() => runSql(database, `BEGIN;\n${guard.replaceAll("public.", "codex_precheck.")}\nCOMMIT;`))
         .toThrow("Codex auth-mode migration refused: unsupported source mode; obtain an explicit owner choice before retrying");

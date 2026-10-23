@@ -67,7 +67,7 @@ BEGIN
      AND r.auth_mode_generation = p_auth_mode_generation
    ORDER BY r.id
    LIMIT 1
-   FOR UPDATE OF r;
+   FOR UPDATE OF r, c;
   IF NOT FOUND THEN
     RETURN false;
   END IF;
@@ -101,16 +101,77 @@ $$;
 CREATE FUNCTION public.mark_codex_history_transfer_notice_delivered(
   p_conversation_id uuid, p_auth_mode_generation bigint, p_member_user_id uuid, p_nonce_hash text
 ) RETURNS boolean
-LANGUAGE sql SECURITY DEFINER
+LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-  UPDATE public.codex_history_transfer_notice_issuances AS i
-     SET delivered_at = coalesce(i.delivered_at, now())
+DECLARE
+  v_workspace_id uuid;
+  v_membership_created_at timestamptz;
+  v_nonce_hash text;
+  v_delivered_at timestamptz;
+BEGIN
+  IF p_member_user_id IS NULL OR p_auth_mode_generation IS NULL OR p_auth_mode_generation <= 0
+     OR p_nonce_hash IS NULL OR p_nonce_hash !~ '^[a-f0-9]{64}$' THEN
+    RETURN false;
+  END IF;
+
+  -- Match issue/ack lock order: current Codex run, then the owner's current
+  -- membership epoch, then the private issuance. Never trust stale client
+  -- session state for a replacement socket's repair request.
+  SELECT r.workspace_id INTO v_workspace_id
+    FROM public.agent_engine_runs AS r
+    JOIN public.conversations AS c
+      ON c.id = r.conversation_id AND c.workspace_id = r.workspace_id
+   WHERE r.conversation_id = p_conversation_id
+     AND c.user_id = p_member_user_id
+     AND r.execution_kind = 'conversation'
+     AND r.engine_id = 'codex'
+     AND r.auth_mode_generation = p_auth_mode_generation
+   ORDER BY r.id
+   LIMIT 1
+   FOR UPDATE OF r, c;
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  SELECT m.created_at INTO v_membership_created_at
+    FROM public.workspace_members AS m
+   WHERE m.workspace_id = v_workspace_id AND m.user_id = p_member_user_id
+   FOR UPDATE OF m;
+  IF NOT FOUND OR NOT public.is_workspace_member(v_workspace_id, p_member_user_id) THEN
+    RETURN false;
+  END IF;
+
+  SELECT i.nonce_hash, i.delivered_at INTO v_nonce_hash, v_delivered_at
+    FROM public.codex_history_transfer_notice_issuances AS i
    WHERE i.conversation_id = p_conversation_id
+     AND i.workspace_id = v_workspace_id
      AND i.member_user_id = p_member_user_id
      AND i.auth_mode_generation = p_auth_mode_generation
-     AND i.nonce_hash = p_nonce_hash
-  RETURNING true
+     AND i.workspace_member_created_at = v_membership_created_at
+   FOR UPDATE OF i;
+  IF NOT FOUND OR v_nonce_hash <> p_nonce_hash THEN
+    RETURN false;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.codex_history_transfer_acknowledgments AS a
+     WHERE a.conversation_id = p_conversation_id
+       AND a.member_user_id = p_member_user_id
+       AND a.auth_mode_generation = p_auth_mode_generation
+       AND a.workspace_member_created_at = v_membership_created_at
+  ) THEN
+    RETURN false;
+  END IF;
+
+  UPDATE public.codex_history_transfer_notice_issuances
+     SET delivered_at = coalesce(v_delivered_at, now())
+   WHERE conversation_id = p_conversation_id
+     AND member_user_id = p_member_user_id
+     AND auth_mode_generation = p_auth_mode_generation
+     AND workspace_member_created_at = v_membership_created_at
+     AND nonce_hash = p_nonce_hash;
+  RETURN FOUND;
+END;
 $$;
 
 CREATE FUNCTION public.delete_codex_history_transfer_notice_issuance(

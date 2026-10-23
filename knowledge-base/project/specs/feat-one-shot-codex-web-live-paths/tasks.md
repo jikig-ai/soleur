@@ -73,8 +73,8 @@ Plan: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wirin
 ## October 23 continuation: proxy and notice delivery
 
 - [x] RED(unit): reproduce malformed complete proxy targets, fast acknowledgment, ambiguous marker failure, and persistent marker failure before changing implementation.
-- [ ] GREEN: guard the complete origin-form proxy target and verify exact-head CodeQL; depends on the proxy RED cases.
-- [ ] GREEN: serialize acknowledgment with delivery marking and recover same-nonce marker failures; depends on the delivery RED cases.
-- [ ] Register the private issuance ledger in the RLS coverage registry with disposable PostgreSQL direct-access denial evidence; CI already reproduces the missing registry entry.
+- [x] GREEN: guard the complete origin-form proxy target; exact-head CodeQL passed at `5bf8a9ffd7fdd6b42dec30857aefdc6c55d4c2f9` and must rerun after the current source push.
+- [x] GREEN: serialize acknowledgment with delivery marking and recover same-nonce marker failures across replacement sessions; focused handler and disposable PostgreSQL cases pass locally.
+- [x] Register the private issuance ledger in the RLS coverage registry with disposable PostgreSQL direct-access denial evidence; exact-head RLS passed at `5bf8a9ffd7fdd6b42dec30857aefdc6c55d4c2f9` and must rerun after the current source push.
 - [ ] Run touched suites, lint and TypeScript, obtain scoped independent review, resync main, push, and measure exact-head CI.
 - [ ] Preserve shared-ledger, data, qualification, recovery, legal, authenticated QA, preflight and final ship holds until their own evidence and authorization clear.
