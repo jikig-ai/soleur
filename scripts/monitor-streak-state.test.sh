@@ -63,9 +63,9 @@ assert_fixture_dir() {
 # Verdict-owning helpers each get a control: called with an input that MUST fail, the failure counter
 # has to move. The counters are unwound so the assertion floor stays exact.
 ctl() { # helper args...
-  local f0=$fails n0=${#FAILURES[@]}
+  local f0=$fails n0=${#FAILURES[@]} p0=$passes
   "$@" 2>/dev/null
-  if [ "$fails" -ne $((f0 + 1)) ] || [ "${#FAILURES[@]}" -ne $((n0 + 1)) ]; then
+  if [ "$fails" -ne $((f0 + 1)) ] || [ "${#FAILURES[@]}" -ne $((n0 + 1)) ] || [ "$passes" -ne "$p0" ]; then
     printf '[FATAL] instrument control: %s did not record a failure on a must-fail input\n' "$1" >&2
     exit 2
   fi
@@ -496,7 +496,11 @@ import copy, re, sys
 import yaml
 
 SF = "${{ runner.temp }}/monitor-state/streak"
+STATUS = "${{ !cancelled() }}"
 ALERT_NAME = "Open or update the alert issue"
+ALERT_IF = ("${{ !cancelled() && (steps.probe.outputs.verdict == 'fail' || steps.probe.outputs.verdict == 'broken' "
+            "|| steps.fetch.outcome == 'failure' || steps.seal.outcome == 'failure' "
+            "|| steps.assert.outcome == 'failure' || steps.upload.outcome == 'failure') }}")
 BOOT = "${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}"
 UPLOAD_IF = ("${{ !cancelled() && github.ref == format('refs/heads/{0}', env.STREAK_BRANCH) "
              "&& steps.fetch.outcome == 'success' && steps.seal.outcome == 'success' }}")
@@ -565,10 +569,7 @@ def check(path, script_path):
         "indices=%s" % idx)
 
     # P3 the state steps always run and cannot fail open
-    def status_ok(k):
-        cond = str(sget(k, "if", ""))
-        return "!cancelled()" in cond and "always()" not in cond
-    bad = [k for k in ("fetch", "probe", "seal", "assert") if not status_ok(k) or "continue-on-error" in (by_id(d, k)[1] or {})]
+    bad = [k for k in ("fetch", "probe", "seal", "assert") if sget(k, "if") != STATUS or "continue-on-error" in (by_id(d, k)[1] or {})]
     job = d["jobs"]["monitor"]
     bad += ["job" for k in ("if", "continue-on-error") if k in job]
     rec("P3", not bad, "steps with a wrong status function or continue-on-error: %s" % bad)
@@ -626,16 +627,13 @@ def check(path, script_path):
     m = re.search(r"printf '([A-Za-z0-9._-]+)\\n' > \"\$tmp/members\.want\"", script)
     rec("P9", bool(m) and str(vals[0]).rsplit("/", 1)[-1] == m.group(1), "member literal=%r" % (m.group(1) if m else None))
 
-    # P10 a failed state step must reach the alert step: !cancelled(), both probe verdicts and the four
-    # state-step outcomes in its `if:`, never always(), and the outcomes handed to its script
+    # P10 a failed state step must reach the alert step: its `if:` is compared by EXACT equality (a substring
+    # test lets `&& false` neutralise a disjunct), and the four outcomes are handed to its script
     alert = by_name(d, ALERT_NAME) or {}
-    cond = str(alert.get("if", ""))
-    need = ["!cancelled()", "steps.probe.outputs.verdict == 'fail'", "steps.probe.outputs.verdict == 'broken'"] + \
-           ["steps.%s.outcome == 'failure'" % k for k in ("fetch", "seal", "assert", "upload")]
     envs = alert.get("env") or {}
-    rec("P10", bool(alert) and all(t in cond for t in need) and "always()" not in cond
+    rec("P10", bool(alert) and alert.get("if") == ALERT_IF and "continue-on-error" not in alert
         and all(envs.get(k.upper() + "_OUTCOME") == "${{ steps.%s.outcome }}" % k for k in ("fetch", "seal", "assert", "upload")),
-        "alert if=%r" % cond)
+        "alert if=%r" % alert.get("if"))
     return out
 
 
@@ -697,6 +695,10 @@ def mutate(name, src, dst):
         "m8f-no-schedule": lambda: on.pop("schedule"),
         "m8g-permissions": lambda: d["permissions"].__setitem__("contents", "write"),
         "m9-basename": lambda: set_all_paths("${{ runner.temp }}/monitor-state/other"),
+        "m3-probe-never": lambda: st_probe.__setitem__("if", "${{ !cancelled() && github.event_name == 'never' }}"),
+        "m10-alert-dead-upload": lambda: alert.__setitem__("if", alert["if"].replace("steps.upload.outcome == 'failure'", "(steps.upload.outcome == 'failure' && false)")),
+        "m10-alert-dead-fetch": lambda: alert.__setitem__("if", alert["if"].replace("steps.fetch.outcome == 'failure' ||", "steps.fetch.outcome == 'failure' && false ||")),
+        "m10-alert-continue": lambda: alert.__setitem__("continue-on-error", True),
         "m10-alert-probe-only": lambda: alert.__setitem__("if", "${{ !cancelled() && (steps.probe.outputs.verdict == 'fail' || steps.probe.outputs.verdict == 'broken') }}"),
         "m10-alert-no-upload": lambda: alert.__setitem__("if", alert["if"].replace(" || steps.upload.outcome == 'failure'", "")),
         "m10-alert-no-fetch": lambda: alert.__setitem__("if", alert["if"].replace(" || steps.fetch.outcome == 'failure'", "")),
@@ -760,6 +762,7 @@ mrow m3-assert-status P3
 mrow m3-seal-status P3
 mrow m3-fetch-status P3
 mrow m3-probe-status P3
+mrow m3-probe-never P3
 mrow m3b-assert-continue P3
 mrow m3c-job-continue P3
 mrow m4-hidden P4
@@ -793,6 +796,9 @@ mrow m10-alert-no-upload P10
 mrow m10-alert-no-fetch P10
 mrow m10-alert-no-cancel P10
 mrow m10-alert-always P10
+mrow m10-alert-dead-upload P10
+mrow m10-alert-dead-fetch P10
+mrow m10-alert-continue P10
 mrow m10-alert-no-outcome-env P10
 
 # must-PASS variant: an unrelated trailing step keeps every property green
@@ -805,10 +811,57 @@ printf 'not: [valid\n' > "$SANDBOX/broken.yml"
 eq "B4 an unparseable workflow reports $NPROPS bad properties" "$(wiring_check "$SANDBOX/broken.yml" | grep -c '^bad P')" "$NPROPS"
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SECTION C — the alert step's shell body, run under the Actions default shell
+# ─────────────────────────────────────────────────────────────────────────────
+ALERT_RUN="$SANDBOX/alert-run.sh"
+python3 -I - "$WF" "$ALERT_RUN" <<'PYC'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+run = [s for s in d["jobs"]["monitor"]["steps"] if s.get("name") == "Open or update the alert issue"][0]["run"]
+open(sys.argv[2], "w").write(run.replace("${{ github.repository }}", "o/r"))
+PYC
+ALERTGH="$SANDBOX/alert-gh"
+cat > "$ALERTGH" <<'GHEOF'
+#!/usr/bin/env bash
+d="${FAKE_GH_DIR:?}"
+printf '%s\n' "$*" >> "$d/argv.log"
+case "$1 $2" in
+  "issue list") exit 0 ;;
+  "issue comment") exit 0 ;;
+  "issue create")
+    while [ $# -gt 0 ]; do
+      case "$1" in --title) printf '%s' "$2" > "$d/title"; shift ;; --body-file) cp "$2" "$d/body"; shift ;; esac
+      shift
+    done
+    exit 0 ;;
+esac
+exit 64
+GHEOF
+chmod +x "$ALERTGH"
+alert_case() { # name verdict fetch seal assert upload title-fragment outcomes-line(yes|no)
+  newcase; cp "$ALERTGH" "$C/bin/gh"; mkdir -p "$C/tmp"
+  ( cd "$C" && env -i PATH="$C/bin:$PATH" HOME="$C" FAKE_GH_DIR="$C" GH_TOKEN=x SUMMARY=probe-summary VERDICT="$2" \
+      FETCH_OUTCOME="$3" SEAL_OUTCOME="$4" ASSERT_OUTCOME="$5" UPLOAD_OUTCOME="$6" RUN_URL=http://run RUNNER_TEMP="$C/tmp" \
+      bash --noprofile --norc -eo pipefail "$ALERT_RUN" ) > "$C/log" 2>&1
+  eq "$1 rc" "$?" "0"
+  has "$1 title" "$C/title" "$7"
+  if [ "$8" = yes ]; then
+    has "$1 body lists the state-step outcomes" "$C/body" "Streak store step outcomes: fetch=$3 seal=$4 assert=$5 upload=$6."
+  else
+    lacks "$1 body has no state-step outcomes line" "$C/body" "Streak store step outcomes"
+  fi
+}
+alert_case "C1 pass + failed upload" pass success success success failure "skip monitor streak store failed" yes
+alert_case "C2 transient + failed seal" transient success failure success success "skip monitor streak store failed" yes
+alert_case "C3 probe FAIL + failed fetch (the store failure must still show)" fail failure success success skipped "skipping arms across runs" yes
+alert_case "C4 probe FAIL, store healthy" fail success success success success "skipping arms across runs" no
+alert_case "C5 probe broken + failed assert" broken success success failure success "not running to a verdict" yes
+
+# ─────────────────────────────────────────────────────────────────────────────
 # verdict
 # ─────────────────────────────────────────────────────────────────────────────
 printf 'monitor-streak-state: %s passed, %s failed\n' "$passes" "$fails"
-EXPECTED_MIN_PASSES=714
+EXPECTED_MIN_PASSES=733
 if [ "$passes" -lt "$EXPECTED_MIN_PASSES" ]; then
   printf 'FAIL: only %s assertions ran (floor %s): a suite that stopped asserting is not green\n' "$passes" "$EXPECTED_MIN_PASSES" >&2
   exit 1
