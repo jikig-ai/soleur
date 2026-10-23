@@ -29,6 +29,14 @@ on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: >-
+          Permit a missing or corrupt prior streak artifact for THIS run only (reseed after
+          a retention lapse, a deleted artifact or a poisoned one). Scheduled runs can never
+          set it. Dispatch with --ref main.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,6 +46,29 @@ permissions:
 concurrency:
   group: scheduled-rehearsal-skip-monitor
   cancel-in-progress: false
+
+# THE STREAK LIVES IN A WORKFLOW ARTIFACT, NOT THE ACTIONS CACHE (ADR-296). The probe's
+# consecutive-TRANSIENT counter has to survive between daily runs. It used to round-trip through
+# actions/cache, which the release pipeline's BuildKit gha export keeps over the repository's
+# 10 GB cap (about 1.2 GB per release, measured 2026-10-23: 9.6 of 10.23 GB). GitHub evicts
+# least-recently-accessed first, so a 192-byte entry read once a day was always the loser, the
+# counter reset daily, and the round-trip assertion was red most days. An artifact is outside
+# that quota and carries an explicit retention (90 days, above the 60-day scheduled-workflow
+# auto-disable). All the decision logic is in scripts/monitor-streak-state.sh so it is testable
+# without a hosted runner: `fetch` (before the probe), `seal` and `assert` (after it).
+#
+# TO RESEED after a retention lapse, a deleted artifact or a poisoned one:
+#   gh workflow run scheduled-rehearsal-skip-monitor.yml --ref main -f bootstrap=true
+# then dispatch once more with bootstrap=false and confirm `restored=true`. Each dispatch counts
+# like a scheduled run (the streak counts consecutive TRANSIENT RUNS, not days).
+#
+# ACCEPTED RESIDUALS, each recorded rather than hidden: a cancelled run skips the upload and can
+# under-count by one (the next daily run re-detects a real FAIL); a day on which `fetch` fails
+# leaves the stored value stale because the upload is skipped (a later TRANSIENT then reads N+1);
+# there is no age bound (a scheduler re-enabled after 60 days resumes from the stored value).
+env:
+  STREAK_ARTIFACT_NAME: rehearsal-skip-monitor-streak
+  STREAK_BRANCH: main
 
 jobs:
   monitor:
@@ -49,26 +80,21 @@ jobs:
       # PR whose subject is a supply-chain gate is the wrong default.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      # THE STREAK FILE IS THE CARRIER'S RESPONSIBILITY. The probe escalates to
-      # a FAIL after N consecutive runs that could not reach a verdict; without
-      # persistence the counter resets every run and escalation never fires.
-      # That degrades OPEN, so the round-trip is asserted below rather than
-      # assumed.
-      - name: Restore transient-streak state
-        id: streak
-        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-        with:
-          path: .monitor-state
-          # ROLLING WRITE KEY + PREFIX RESTORE. Actions cache entries are IMMUTABLE: a
-          # `save` against an existing key is a silent no-op (it logs and exits 0). With a
-          # FIXED key -- which is what this shipped as -- run 1 pins the cache forever, every
-          # later run restores that same value, increments it in-memory, and fails to save.
-          # The streak could never reach T5_TRANSIENT_ESCALATE_AFTER, so the one mechanism
-          # separating "permanently broken probe" from "healthy quiet window" was dead on
-          # arrival. Only a rotating write key with a prefix restore round-trips.
-          key: rehearsal-skip-monitor-streak-${{ github.run_id }}
-          restore-keys: |
-            rehearsal-skip-monitor-streak-
+      # THE STREAK FILE IS THE CARRIER'S RESPONSIBILITY. The probe escalates to a FAIL after N
+      # consecutive runs that could not reach a verdict; without persistence the counter resets
+      # every run and escalation never fires. That degrades OPEN, so the round-trip is asserted
+      # below rather than assumed. `fetch` exits 1 on an UNREADABLE store (a failed listing) and
+      # reports `matched=false` for an EMPTY one; the assert step turns that into a red run.
+      # `!cancelled()` and no `continue-on-error`: a failed fetch must not skip the probe.
+      - name: Fetch transient-streak state
+        id: fetch
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          STREAK_FILE: ${{ runner.temp }}/monitor-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: bash scripts/monitor-streak-state.sh fetch
 
       - name: Run the skip-persistence probe
         id: probe
@@ -80,12 +106,15 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          T5_PROBE_STATE: .monitor-state/streak
+          T5_PROBE_STATE: ${{ runner.temp }}/monitor-state/streak
         run: |
           set -uo pipefail
-          mkdir -p .monitor-state
+          mkdir -p "$(dirname "$T5_PROBE_STATE")"
           rc=0
-          bash scripts/followthroughs/t5-skip-persistence-bound-7510.sh \
+          # `timeout 600`: a hung probe becomes rc 124, which the case below maps to `broken`
+          # (and the alert step files). Otherwise the 15-minute job timeout cancels seal,
+          # upload, the alert and the report, leaving a red job with no issue and no advance.
+          timeout 600 bash scripts/followthroughs/t5-skip-persistence-bound-7510.sh \
             > "${RUNNER_TEMP}/probe.out" 2> "${RUNNER_TEMP}/probe.err" || rc=$?
           cat "${RUNNER_TEMP}/probe.out"
           cat "${RUNNER_TEMP}/probe.err" >&2
@@ -123,35 +152,48 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Assert the streak state round-trips
+      # `seal` makes the state an explicit number once the probe has run: a real verdict clears the
+      # probe's file, so absence becomes 0, but a TRANSIENT verdict must have left a value >= 1
+      # (the probe's own write is `2>/dev/null || true`, so a lost increment would otherwise be
+      # sealed as a reset).
+      - name: Seal the streak value
+        id: seal
         if: ${{ !cancelled() }}
         env:
-          MATCHED: ${{ steps.streak.outputs.cache-matched-key }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          set -uo pipefail
-          # ASSERT ON THE CACHE SERVICE, NOT ON THE DIRECTORY. This tested
-          # `[ -d .monitor-state ]`, which the probe step `mkdir -p`s two steps earlier in
-          # the SAME job -- so it was always true, the ::warning:: branch was unreachable
-          # code, and it passed at 100% broken persistence. A vacuous guard inside a PR whose
-          # subject is vacuous guards.
-          #
-          # It also exits NON-ZERO rather than warning. A ::warning:: does not change the job
-          # conclusion, so nothing surfaces it without someone opening the run — which
-          # hr-no-dashboard-eyeball-pull-data-yourself says will not happen. A red run is the
-          # only status GitHub surfaces on its own.
-          if [ "$RUN_NUMBER" -gt 1 ] && [ -z "$MATCHED" ]; then
-            echo "::error::cache restore returned no prior generation (run #$RUN_NUMBER). The consecutive-TRANSIENT escalation cannot fire, so a permanently broken probe is indistinguishable from a healthy quiet window."
-            exit 1
-          fi
-          echo "streak state: matched-key='${MATCHED:-<none, first run>}' value=$(cat .monitor-state/streak 2>/dev/null || echo '<cleared by a real verdict>')"
+          STREAK_FILE: ${{ runner.temp }}/monitor-state/streak
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+        run: bash scripts/monitor-streak-state.sh seal
 
-      - name: Save transient-streak state
+      # ASSERT ON THE STORE, NOT ON THE DIRECTORY. The previous assertion tested the cache
+      # service's matched key; the one before that tested `[ -d .monitor-state ]`, which the probe
+      # step created two steps earlier in the same job and so passed at 100% broken persistence.
+      # This exits NON-ZERO rather than warning: a ::warning:: does not change the job
+      # conclusion, and a red run is the only status GitHub surfaces on its own
+      # (hr-no-dashboard-eyeball-pull-data-yourself). The step name is kept so history is searchable.
+      - name: Assert the streak state round-trips
+        id: assert
         if: ${{ !cancelled() }}
-        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        env:
+          MATCHED: ${{ steps.fetch.outputs.matched }}
+          STREAK_FILE: ${{ runner.temp }}/monitor-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: bash scripts/monitor-streak-state.sh assert
+
+      # Published only when the store was readable (fetch succeeded), the value was sealed, and
+      # this is the streak branch: a non-main dispatch reads main's state but must not write one
+      # `fetch` would never read. `overwrite: true` only replaces THIS run's earlier attempt (a
+      # re-run); `fetch` excludes the current run id so an attempt-2 read cannot double-count
+      # attempt 1. The state directory is NOT hidden: upload-artifact v4.4+ skips dot-directories.
+      - name: Upload transient-streak state
+        id: upload
+        if: ${{ !cancelled() && github.ref == format('refs/heads/{0}', env.STREAK_BRANCH) && steps.fetch.outcome == 'success' && steps.seal.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: .monitor-state
-          key: rehearsal-skip-monitor-streak-${{ github.run_id }}
+          name: ${{ env.STREAK_ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/monitor-state/streak
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
 
       - name: Open or update the alert issue
         # `!cancelled()` IS LOAD-BEARING, not decoration. Without an explicit status

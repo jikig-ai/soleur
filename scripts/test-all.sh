@@ -6349,6 +6349,11 @@ if want_scripts; then
   # with fixtures padded past the 64 KiB pipe buffer so the SIGPIPE race the
   # probe was losing matches to is actually reachable (#7574).
   run_suite "scripts/followthroughs/t5-skip-persistence-bound-7510" bash scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
+  # The rehearsal skip monitor keeps its consecutive-TRANSIENT counter in a workflow artifact
+  # (the Actions cache was evicted daily). This suite drives the fetch/seal/assert script with a
+  # fake `gh` and parses the monitor workflow's wiring; explicit run_suite, scripts/*.test.sh is
+  # covered by no glob here.
+  run_suite "scripts/monitor-streak-state" bash scripts/monitor-streak-state.test.sh
   # #9168: the Supabase Postgres-hang restart classifier — the single verdict
   # chokepoint for scheduled-supabase-watchdog.yml (signature + corroboration +
   # sentinel-ledger restart gate). Explicit run_suite — scripts/*.test.sh is
