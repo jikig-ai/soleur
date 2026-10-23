@@ -245,6 +245,11 @@ ALWAYS_ON_SUITES=(
   # the whole tracked tree; any file anywhere can introduce a TOFU violation, so
   # no path edge can express its selection.
   "tests/scripts/no-tofu-ssh"
+  # tests/scripts/hcloud-token-readonly-no-fallback-scan — Guard 1 (#10664/ADR-241 D4) walks `git ls-files`
+  # over the whole tracked tree (everything except a pinned exclusion list): a doppler secrets-get read of the
+  # read/write Hetzner credential can appear in any file anywhere, so the verdict is a property of the tree,
+  # not of a diff, and no path edge can express its selection. An edit to the scanner selects it too.
+  "tests/scripts/hcloud-token-readonly-no-fallback-scan"
   "blog-link-validation"
   # (#9307) Audited as demotable and put back. The first reason was derive cost (~82 s of first-touch
   # attribution; 0.2 s once the runner became a closure leaf, always-on-audit.md Round 3), and that
