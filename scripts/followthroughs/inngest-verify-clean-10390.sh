@@ -112,8 +112,11 @@ SRC="(SELECT dt, raw FROM remote(\$BS_TABLE)
       UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)"
 
 # Host scoping mirrors the drift comparator's dual extraction: _HOSTNAME for
-# journald rows, host for the phone-home POST path.
-HOST_PRED="(JSONExtractString(raw,'_HOSTNAME') = 'soleur-inngest' OR JSONExtractString(raw,'host') = 'soleur-inngest')"
+# journald rows, host for the phone-home POST path. The journald arm is
+# emitter-scoped to the refresh unit's SyslogIdentifier (cloud-init-inngest.yml:
+# `SyslogIdentifier=inngest-config-refresh`) — a different journald unit on the
+# same host that merely QUOTES a SOLEUR_INFRA_PULL_* string cannot satisfy it.
+HOST_PRED="((JSONExtractString(raw,'_HOSTNAME') = 'soleur-inngest' AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'inngest-config-refresh') OR JSONExtractString(raw,'host') = 'soleur-inngest')"
 VF="raw LIKE '%SOLEUR_INFRA_PULL_VERIFY_FAIL%'"
 
 run_one() { # $1 = SQL; prints result rows or exits with the query rc

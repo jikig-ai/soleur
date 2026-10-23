@@ -329,7 +329,7 @@ grep -qE 'verify_fail signature "" "detail=' <<<"$SC" \
 # dropping either key goes red. Anchored at $DIR like every sibling file access.
 DRIFT_WF="$DIR/../../../.github/workflows/inngest-config-drift.yml"
 [ -f "$DRIFT_WF" ] && pass || fail "S10: inngest-config-drift.yml not found at $DRIFT_WF"
-grep -oE '\([a-zA-Z0-9_|]*member[a-zA-Z0-9_|]*\)=' "$DRIFT_WF" | grep -q 'detail' \
+grep -q 'detail' <<<"$(grep -oE '\([a-zA-Z0-9_|]*member[a-zA-Z0-9_|]*\)=' "$DRIFT_WF")" \
   && pass || fail "S10: _summ_row regex in inngest-config-drift.yml lost the detail alternation"
 
 # ── F-rows: run the extracted script under fixture seams ─────────────────────────────────
@@ -657,7 +657,7 @@ grep -q 'detail=flag-newbundle' "$FX/markers.log" \
   && pass || fail "F16: new-bundle gate error not classified detail=flag-newbundle"
 [ -f "$FX/state/verify.stderr" ] && pass || fail "F16: no bounded verify.stderr file written"
 # The persisted file = one `# ts=` binding header + ≤4 KiB of stderr.
-head -1 "$FX/state/verify.stderr" | grep -qE '^# ts=[0-9T:Z-]+ offered=[0-9a-f]{12} rc=1$' \
+grep -qE '^# ts=[0-9T:Z-]+ offered=[0-9a-f]{12} rc=1$' <<<"$(head -1 "$FX/state/verify.stderr")" \
   && pass || fail "F16: verify.stderr missing the ts/offered/rc binding header"
 _vc="$(wc -c < "$FX/state/verify.stderr" 2>/dev/null || echo 9999)"
 [ "$_vc" -le 4200 ] && pass || fail "F16: verify.stderr not bounded (${_vc} bytes)"
