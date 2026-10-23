@@ -283,3 +283,22 @@ AP-011 (ADRs for architecture decisions): Aligned — this record is the decisio
 
 AP-012 (New vendor checklist): N/A — no Soleur-paid vendor and no new vendor environment variable.
 OpenCode is the operator's own tool, not a Soleur processor.
+
+## Amendment — 2026-10-22 (#10819)
+
+Clause-scoped to the §Decision paragraph that records the earlier `tool.execute.before` binding as
+"withdrawn as measured-false".
+
+That withdrawal stands for **decisions**: the surface's only refusal channel is still a throw, so a
+guard's `deny`/`ask` delivered there would preempt the real ask behind it, exactly as measured. What
+the adapter now binds on that surface is a **capture** — it publishes `input.workdir`, the one value
+`permission.evaluate` does not carry, keyed by the call's `(messageID, id)`; the permission hook
+consumes it to build the envelope `cwd`. No decision moves to `tool.execute.before`.
+
+The ordering dependency is the part worth recording here, because it is architectural rather than
+incidental: the guard decision's correctness now depends on a *different* surface having fired
+first. It is announced rather than assumed — an absent surface, a rejected registration, and a call
+the capture never saw each write `no-tool-hook-surface` / `workdir-uncorrelated` and fall back to
+the session directory, and a captured workdir that cannot be used escalates to `ask`. The event
+shapes remain §12.1/§12.2 of this record; the base a relative `workdir` resolves against is measured
+in #10819's plan.

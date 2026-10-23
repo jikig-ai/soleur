@@ -1512,8 +1512,8 @@ describe("plugin slash-name uniqueness", () => {
   // `devin/skills/go`, each [user,model]. The Codex and Devin manifests declare
   // two roots and the three entry-point shims live in both.
   //
-  // Collapsing it means DELETING the shared shims, and that is blocked on the
-  // OTHER THREE HARNESSES, not on Claude Code dispatch.
+  // Collapsing it means DELETING the shared shims, and that is blocked on devin,
+  // codex and grok, not on Claude Code dispatch.
   //
   // CORRECTED 2026-09-17 by measurement. This comment previously said
   // `plugins/soleur/skills/go/` is the only model-invocable `Skill(soleur:go)`
@@ -1528,7 +1528,7 @@ describe("plugin slash-name uniqueness", () => {
   // What actually blocks the deletion: `devin skills list` resolves these three
   // names from both roots, `.codex-plugin` declares `./skills`, and
   // `.grok/config.toml` loads this same tree. Claude Code happens to absorb the
-  // deletion; the other three do not.
+  // deletion; devin, codex and grok do not.
   //
   // Ack'd BY NAME so a NEW cross-root duplicate — the class this clause exists
   // to catch — still reds; mutation row M6 proves that. Adding a name here is a
@@ -1624,12 +1624,12 @@ describe("plugin slash-name uniqueness", () => {
   // skill, so the command supplies the handle and the skill is a fallback behind
   // it.
   //
-  // What this still guards, and why it is not merely belt-and-braces: the other
-  // three harnesses DO resolve these paths. `devin skills list` reports
+  // What this still guards, and why it is not merely belt-and-braces: devin,
+  // codex and grok DO resolve these paths. `devin skills list` reports
   // /soleur:go; `.codex-plugin` declares `./skills` AND `./codex/skills`;
-  // `.grok/config.toml` loads this tree. Deleting them is a real change on three
-  // harnesses even though Claude Code absorbs it. Retired with #8236, which owns
-  // that deletion.
+  // `.grok/config.toml` loads this tree. Deleting them is a real change on those
+  // three harnesses even though Claude Code absorbs it. Retired with #8236, which
+  // owns that deletion.
   //
   // CORRECTED 2026-09-23 by measurement (#8390 bundle). An earlier version of
   // this comment said Devin "reports /soleur:go from BOTH roots". Measured on
@@ -1650,8 +1650,8 @@ describe("plugin slash-name uniqueness", () => {
         existsSync(resolve(PLUGIN_ROOT, rel)),
         `${rel} is resolved by Codex, Devin and Grok (measured: devin skills ` +
           `list reports /soleur:${name} from this root). Claude Code absorbs its ` +
-          `deletion because commands/${name}.md shadows it, but the other three ` +
-          `harnesses do not. Deletion is owned by #8236, not by an edit here.`,
+          `deletion because commands/${name}.md shadows it, but devin, codex and ` +
+          `grok do not. Deletion is owned by #8236, not by an edit here.`,
       ).toBe(true);
       const fm = parseComponent(rel).frontmatter;
       expect(
