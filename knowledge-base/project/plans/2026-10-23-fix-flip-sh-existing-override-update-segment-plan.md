@@ -11,6 +11,10 @@ closes: []
 
 # fix: flip.sh existing-override update payload omits feature_segment.segment
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23. **Gates run and passed:** user-brand impact (threshold `none` with scope-out), observability (all five fields, allowlisted `grep` probe printing the literal `1`), PAT-shaped variables (0 hits), guard contract (`lint-guard-contract.py`, 1 guard entry), scope check (one live section, no `unmapped`/`BLOCKED`), cited issue #8800 verified OPEN. **Not run:** the all-agents fan-out (a one-field fix; the same reviewer lenses run on the real diff in `soleur:review`), and the encryption-posture, downtime and UI gates, which do not trigger. **Plan-review outcome (DHH, Kieran, simplicity, CTO):** no P1; consolidated changes applied: registration edits unconditional, mutation row for audit order cut (pinned by `audit-flag-flip.test.sh`), H2 reworked to different ids, suite proves its stub shadows `curl`/`doppler`, body asserted as one valid JSON object, observability text corrected, API verification stated as partial with residual risk, deviation from "existing suite" disclosed and ruled by the CTO agent.
+
 ## Overview
 
 `plugins/soleur/skills/flag-set-role/scripts/flip.sh`, function `flip_segment_in_env`, builds two
