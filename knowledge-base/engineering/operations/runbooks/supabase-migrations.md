@@ -51,6 +51,7 @@ the rule exists to prevent silent single-DB exposure (#2887).
 
 **Once a migration file has been applied to ANY database (dev included), it is
 immutable — byte-for-byte, comments included — for the life of that PR.**
+
 `tenant-integration` CI applies any migration a PR touches to the shared dev
 project automatically on push; a later commit that edits that same file
 (even a comments-only fix during review) makes the tree's blob diverge from
@@ -61,6 +62,8 @@ correction, route it to a non-frozen artifact (an ADR, the plan, a genuinely
 new follow-up migration for real DDL changes) rather than editing the applied
 file. **Why:** #8486/PR #8650 — see
 `knowledge-base/project/learnings/2026-09-24-editing-an-already-applied-migration-during-review-breaks-the-dev-ledger.md`.
+
+When the DDL or data semantics genuinely must change in an OPEN PR (not a comment), the sanctioned route is `dev-ledger-reconcile.yml` (PR author only, paired `.down.sql` required; ADR-061 Decision 4): dispatch it with `execute=true` to discard that PR's ledger row, then push the edited bytes. Re-applying is safe only when the migration is idempotent; a comment or wording correction does not qualify and goes to the plan, ADR or PR body instead.
 
 ### First-time provisioning: skip bootstrap
 

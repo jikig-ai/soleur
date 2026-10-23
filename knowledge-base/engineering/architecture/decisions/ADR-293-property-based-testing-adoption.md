@@ -62,5 +62,8 @@ The `repo-url` property suite found a real defect on first run:
 trailing whitespace, breaking the documented idempotence contract. Fixed by
 re-trimming after the strips (`lib/repo-url.ts` step 5); the shrunk
 counterexamples are pinned as regression fixtures. The same shape exists in
-the SQL twin (`031_normalize_repo_url.sql`) and is tracked as a follow-up —
-the TS↔SQL parity boundary only covers URL-parseable inputs.
+the SQL twin (`031_normalize_repo_url.sql`). Migration 031 is immutable once
+applied, so the corrected chain and a stored-row re-normalization shipped as
+`163_renormalize_repo_url.sql` (#10633), with a strict `verify/163` sentinel and
+a Postgres-generated golden table behind the parity test; the TS↔SQL parity
+boundary still only covers URL-clean inputs.

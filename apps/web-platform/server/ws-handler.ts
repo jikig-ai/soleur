@@ -516,7 +516,7 @@ export function abortActiveSession(userId: string, session: ClientSession): void
  * refusal count.
  */
 async function abortActiveSessionUnlessPaused(userId: string, session: ClientSession): Promise<void> {
-  if (await newAgentSessionsRefused({ observe: true })) {
+  if (await newAgentSessionsRefused({ observe: true, userId })) {
     log.info(
       { feature: "quiet-window", op: "skip-supersede-abort" },
       "quiet-window: left the in-flight session running (new-sessions-paused)",
@@ -2821,7 +2821,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // #8211 quiet-window (review P2): refuse a FIRST message BEFORE createConversation. Gating only
         // inside the dispatch left an empty "active" conversation row and a held concurrency slot behind
         // every refused first message. session.pending is kept so the user can resend after the window.
-        if (await newAgentSessionsRefused()) {
+        if (await newAgentSessionsRefused({ userId })) {
           log.info(
             { feature: "quiet-window", op: "refuse-first-message" },
             "quiet-window: refused a first message before creating its conversation (new-sessions-paused)",
