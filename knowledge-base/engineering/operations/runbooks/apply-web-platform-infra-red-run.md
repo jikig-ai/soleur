@@ -118,6 +118,7 @@ is detection only: it applies nothing and starts nothing. The body prints one di
 | class `cancelled-mid-run` | Read the cancelled run first: state is possibly partial (the follower over-classifies a preflight-only run as mid-run). If the re-dispatch then goes red, use the heartbeat sweep section above before re-running. |
 | "Latest later run" column shows a FAILED run | Read that run first. A failed run after an eviction is a different problem and `notify-apply-failure` already owns it. |
 | a kill-switch commit sits between the row and HEAD | The printed dispatch applies HEAD **including** the change that commit deliberately skipped. Decide about that change first. |
+| "Latest later run" shows `success` but the row stays open | That run does not count as delivery: its `apply` job was skipped (a kill-switched push or a plan-only or other dispatch target ends `success` without applying), or, for the infra workflow, its SSH-provisioned Terraform step was skipped. Re-dispatching alone will not clear the row until a run actually applies it. Read the run's step list and logs (the skipped step is named there) and check whether a kill-switch marker sits on the commits involved; do not open an SSH session. Then dispatch from `main`. |
 | you cancelled the push on purpose because it was bad | A revert commit touching the trigger paths delivers it by descendant and the row clears itself. An operator-cancelled mid-run push correctly stays `cancelled-mid-run`. |
 
 Always dispatch with `--repo jikig-ai/soleur --ref main` (the printed commands name the workflow file and `--ref main`; add the
@@ -146,7 +147,8 @@ hand. `priority/p0-critical` is only ever added automatically; remove it by hand
 **First reconcile after the follower merged.** Merging does not fire a reconcile (the follower runs only after an apply run
 completes), and a reconcile examines only the last 7 days. The three incident replays used as fixtures (runs 37964350917,
 37964762496 and 38144232116) predate that cutoff, so none of them is filed on the first reconcile; do not expect the issue to
-appear for them.
+appear for them. Any OTHER undelivered cancelled push inside the 7-day window at that moment is filed on the first reconcile
+after the merge, so a first issue that appears is real, not noise.
 
 **The degraded issue** ("infra: apply delivery gap follower degraded", label `apply-delivery-gap-degraded`, plus
 `action-required`) means the follower could not finish a full read, so it cannot tell you the state. It never closes the
