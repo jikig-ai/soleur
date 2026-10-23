@@ -1094,6 +1094,8 @@ scripts/followthroughs/registry-clientip-alert-7530	scripts/betterstack-query.sh
 scripts/followthroughs/registry-clientip-alert-7530	scripts/lint-agents-rule-budget.py
 scripts/followthroughs/registry-clientip-alert-7530	scripts/lint-workflows.sh
 scripts/followthroughs/registry-clientip-alert-7530	scripts/prod-version-drift-b9-probe.sh
+scripts/followthroughs/t5-skip-persistence-bound-7510	apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
+scripts/followthroughs/t5-skip-persistence-bound-7510	apps/web-platform/infra/run-registered-suites.sh
 scripts/git-data-reboot-evidence-landed-8210	apps/web-platform/infra/cloud-init-git-data.yml
 scripts/git-data-reboot-evidence-landed-8210	apps/web-platform/infra/git-data-rung2-boot-evidence.env
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
