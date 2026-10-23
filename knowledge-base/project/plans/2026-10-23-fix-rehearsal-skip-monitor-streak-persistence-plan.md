@@ -146,7 +146,7 @@ quota within hours), so no cache cleanup is part of this change and none needs o
 | Legacy-cache fallback during migration | 1 | Cut. It would re-introduce the evictable store as a silent second source. |
 | `RUN_NUMBER > 1` first-run test | 2 | Replaced by the explicit `bootstrap` input (the first scheduled run after merge has `run_number` far above 1, a guaranteed false red). |
 | Compatible `streak state: matched-key=` log line for the retired follow-through | none | Cut; the follow-through script is deleted instead (its tracker #7672 closed 2026-10-02). |
-| Age-based hard failure | 2 | Cut (CTO): consecutive runs can be 2 days apart under scheduler load. `::warning::` above 3 days only. |
+| Age-based hard failure | 2 | Cut (CTO): consecutive runs can be 2 days apart under scheduler load, and no consumer reads an age warning either. |
 
 ### Institutional learnings applied
 
@@ -182,7 +182,10 @@ shape regex without whitespace tolerance), P2 6-9 (`set -u` defaults and listing
 check, `STREAK_FILE` equality across five places, dispatch-counting note in Phase 5.0); simplicity cuts
 (wiring suite folded into the one test file with five properties and fewer mutation rows, the
 instrument-self-test/`NPROPS`/shuffle ceremony dropped, `value`/`source_*` outputs and the 3-day age warning
-dropped, the bootstrap "discard malformed" branch dropped, ADR shortened and written `accepted`). Not
+dropped, ADR shortened and written `accepted`). The bootstrap "discard malformed" branch was cut in this pass
+and restored by the deepen-plan SpecFlow P0 (`decision-challenges.md`, rows "Deepen-plan (SpecFlow P0)" and
+the simplification row): without it a poisoned newest artifact wedges the monitor red with no in-band
+recovery. Not
 applied, recorded in `decision-challenges.md`: DHH's proposal to drop the `bootstrap` input (the CTO ruled it
 in), and DHH's proposal to make the probe write `0` instead of a separate `seal` (the upload gating needs a
 separate step outcome, and `seal` also catches a lost TRANSIENT increment, which the probe's silent write
