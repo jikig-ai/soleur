@@ -4288,6 +4288,22 @@ else
   fail "expected legacy forward-only classification; got rc=$legacy_codex_scan_rc out=$legacy_codex_scan"
 fi
 
+echo "G3-Codex165-backslash-scan: preserve both refusal classes when the file contains a backslash"
+CASES=$((CASES + 1))
+backslash_codex_dir=$(mktemp -d)
+backslash_codex_down="$backslash_codex_dir/165_codex_auth_mode_rebind.down.sql"
+printf 'SELECT \\\n' >"$backslash_codex_down"
+set +e
+backslash_codex_scan=$(bash "$WBIN/dev-ledger-reconcile.sh" --scan-down "$backslash_codex_down" 2>&1)
+backslash_codex_scan_rc=$?
+set -e
+rmdir "$backslash_codex_dir" 2>/dev/null || true
+if [[ "$backslash_codex_scan_rc" == "0" ]] && awk -F '\t' '$1 == "165_codex_auth_mode_rebind.down.sql" && $2 == "backslash,codex-forward-only" { found=1 } END { exit !found }' <<<"$backslash_codex_scan"; then
+  pass "the scanner retains the Codex forward-only class beside backslash"
+else
+  fail "expected both refusal classes; got rc=$backslash_codex_scan_rc out=$backslash_codex_scan"
+fi
+
 echo "== Guard 4: .github/workflows/dev-ledger-reconcile.yml wiring =="
 
 RW="$REPO_ROOT/.github/workflows/dev-ledger-reconcile.yml"

@@ -143,6 +143,8 @@ class _TLSProxy:
                 not any(ord(char) < 33 or char == '\\' for char in target), 'Only unambiguous origin-form target admitted')
         parsed = urlsplit(target)
         require(not parsed.scheme and not parsed.netloc and not parsed.fragment, 'Forward proxy target refused')
+        require(re.fullmatch(r'/(?:auth|rest|storage|functions)/v1(?:/[\w-]+)+', parsed.path),
+                'Only admitted Supabase API routes are forwarded')
         values = {}
         for name, value in headers:
             require(re.fullmatch(r'[!#$%&\'*+.^_`|~0-9A-Za-z-]+', name) and
@@ -193,15 +195,17 @@ class _TLSProxy:
                     connection = http.client.HTTPConnection(proxy.upstream_ip, proxy.upstream_port, timeout=5)
                     connection.request(self.command, target, body, headers)
                     response = connection.getresponse()
-                    response_headers = response.getheaders()
-                    for name, value in response_headers:
+                    response_headers = []
+                    for name, value in response.getheaders():
+                        safe_value = value.replace('\r', '').replace('\n', '') if isinstance(value, str) else None
                         require(isinstance(name, str) and re.fullmatch(r'[!#$%&\'*+.^_`|~0-9A-Za-z-]+', name)
-                                and isinstance(value, str)
-                                and not any(ord(char) < 32 or ord(char) == 127 for char in value),
+                                and safe_value is not None and safe_value == value
+                                and not any(ord(char) < 32 or ord(char) == 127 for char in safe_value),
                                 'Invalid upstream response header refused')
                         if name.lower() == 'location':
-                            proxy.redirect(value)
+                            proxy.redirect(safe_value)
                         require(name.lower() != 'refresh', 'Upstream refresh redirect refused')
+                        response_headers.append((name, safe_value))
                     payload = response.read(proxy.LIMIT + 1)
                     require(len(payload) <= proxy.LIMIT, 'Upstream response limit exceeded')
                     self.send_response(response.status)

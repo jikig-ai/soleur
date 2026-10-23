@@ -300,7 +300,14 @@ dlr_scan_down() {
     [[ -f "$f" ]] || { echo "::error::ledger-discard: --scan-down: not a file" >&2; return 2; }
     rc=0; has_backslash "$f" || rc=$?
     case "$rc" in
-      0) printf '%s\tbackslash\n' "$(basename "$f")"; continue ;;
+      0)
+        cls=""
+        if [[ "$(basename "$f")" == "145_codex_auth_mode_rebind.down.sql" || "$(basename "$f")" == "165_codex_auth_mode_rebind.down.sql" ]]; then
+          cls=",codex-forward-only"
+        fi
+        printf '%s\tbackslash%s\n' "$(basename "$f")" "$cls"
+        continue
+        ;;
       1) : ;;
       *) echo "::error::ledger-discard: --scan-down: reading a file failed" >&2; return 2 ;;
     esac

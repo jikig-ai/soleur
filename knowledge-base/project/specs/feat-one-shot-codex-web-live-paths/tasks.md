@@ -29,6 +29,7 @@ Plan: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wirin
 - [ ] 3.5 Wire only the named eligible Inngest routine consumer to the existing Codex routine bridge. Re-read bound identity and current policy; reconcile failed enqueue and duplicate deliveries.
 - [ ] 3.6 Extend the owner settings RPC with an explicit auth-mode-change intent. Atomically update only Codex conversation auth modes in the workspace and purge old provider checkpoints; engine changes and automatic auth-mode adjustments must not trigger rebinding.
 - [ ] 3.7 Fence switched turns and all lifecycle/checkpoint writes by an auth-mode generation. Restore context from tenant-scoped stored messages under the new provider account; distinguish empty history from read failure and require member acknowledgment before replay.
+- [x] 3.8 Preserve the migration 169/170 acknowledgment RPC barrier without editing applied migration files: revoke within 169's transaction, commit a separate revoke before pending 170, and restore authenticated grants only after both owner-scoped definitions. Runner tests cover successful ordering and refusal when the revoke or owner-scope apply fails; shared database verification remains blocked by the ledger gate and CTO ruling.
 
 ## Phase 4: Security, review and QA
 

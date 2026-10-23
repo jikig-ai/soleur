@@ -452,14 +452,46 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   fi
   # psql's --single-transaction requires -f/-c; plain piped stdin silently
   # disables it. The ledger row carries content_sha when known.
+  if [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+    # This committed barrier also covers a database that ledgered 169 before
+    # the runner gained its in-transaction revoke. Keep it separate from 170:
+    # if 170 fails, authenticated execution stays closed until a successful
+    # retry installs the owner-scoped functions and restores the grants.
+    if ! psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 \
+      -c "REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role; REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;"; then
+      echo "::error::Could not close Codex acknowledgment RPC grants before migration 170; refusing owner-scope migration"
+      exit 1
+    fi
+  fi
   if ! {
     if [[ "$filename" == "165_codex_auth_mode_rebind.sql" ]]; then
       cat "$codex_guard" || exit 1
+    fi
+    if [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+      # Also cover a database where 169 was ledgered before this runner gained
+      # the 169 barrier: close the old grants within 170's transaction before
+      # replacing either function. The commit then reveals owner-scoped bodies
+      # and restored grants atomically.
+      printf 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n'
+      printf 'REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n\n'
     fi
     if [[ "$strip_outer_txn" == "true" ]]; then
       sed -E '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$migration_file"
     else
       cat "$migration_file"
+    fi
+    # Migration 169 originally grants authenticated callers two acknowledgment
+    # RPCs that do not yet enforce conversation ownership. Keep those grants
+    # from becoming visible at the transaction boundary; migration 170 restores
+    # them only after replacing both functions with owner-scoped definitions.
+    # The migration files remain immutable for databases that already ledgered
+    # them, while fresh runner-managed installs have no exposed interval.
+    if [[ "$filename" == "169_codex_history_transfer_ack.sql" ]]; then
+      printf '\nREVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n'
+      printf 'REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n'
+    elif [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+      printf '\nGRANT EXECUTE ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) TO authenticated;\n'
+      printf 'GRANT EXECUTE ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) TO authenticated;\n'
     fi
     if [[ -n "$content_sha" ]]; then
       # A fresh --bootstrap=skip schema does not have content_sha until 054.

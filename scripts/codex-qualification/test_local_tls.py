@@ -135,6 +135,10 @@ class LocalTLS(unittest.TestCase):
         ]:
             with self.assertRaises(Refused):
                 proxy.admit(method, path, headers)
+        for path in ['/admin/v1/users', '/metrics', '/auth/v1/../admin/v1/users',
+                     '/auth/v1/%2e%2e/admin/v1/users']:
+            with self.assertRaises(Refused):
+                proxy.admit('GET', path, [('Host', self.hostname)])
         self.assertEqual(proxy.redirect('/auth/v1/settings'), '/auth/v1/settings')
         self.assertEqual(proxy.redirect('https://' + self.hostname + '/auth/v1/settings'),
                          'https://' + self.hostname + '/auth/v1/settings')
@@ -161,12 +165,12 @@ class LocalTLS(unittest.TestCase):
         connection = Mock()
         connection.getresponse.return_value = response
         upstream = Mock(return_value=connection)
-        status, actual = self.https_response(('GET /fixture%20path?name=a%20b HTTP/1.0\r\nHost: ' + self.hostname +
+        status, actual = self.https_response(('GET /auth/v1/fixture_path?name=a%20b HTTP/1.0\r\nHost: ' + self.hostname +
                                              '\r\nConnection: close\r\n\r\n').encode(), upstream)
         self.assertEqual(status, 200)
         self.assertEqual(actual, payload)
         upstream.assert_called_once_with('172.28.5.3', 8000, timeout=5)
-        connection.request.assert_called_once_with('GET', '/fixture%20path?name=a%20b', b'',
+        connection.request.assert_called_once_with('GET', '/auth/v1/fixture_path?name=a%20b', b'',
                                                    {'Host': self.hostname, 'X-Forwarded-Proto': 'https'})
         connection.getresponse.assert_called_once_with()
         response.read.assert_called_once_with(TLSProxy.LIMIT + 1)
@@ -178,7 +182,7 @@ class LocalTLS(unittest.TestCase):
         connection = Mock()
         connection.getresponse.return_value = response
         upstream = Mock(return_value=connection)
-        status, payload = self.https_response(('GET /fixture HTTP/1.0\r\nHost: ' + self.hostname +
+        status, payload = self.https_response(('GET /auth/v1/fixture HTTP/1.0\r\nHost: ' + self.hostname +
                                               '\r\nConnection: close\r\n\r\n').encode(), upstream)
         self.assertEqual(status, 502)
         self.assertEqual(payload, b'')

@@ -56,9 +56,9 @@ class Namespace(unittest.TestCase):
         proxy = tls_proxy_from_receipts(self.policy, network, kong, self.hostname)
 
         self.assertEqual((proxy.upstream_ip, proxy.upstream_port), ('172.28.5.4', 8000))
-        for target in ('/fixture?next=https://foreign.invalid/',
-                       '/https://foreign.invalid:443/path',
-                       '/%2F%2Fforeign.invalid:443/path'):
+        for target in ('/auth/v1/fixture?next=https://foreign.invalid/',
+                       '/rest/v1/fixture?next=https://foreign.invalid:443/path',
+                       '/storage/v1/fixture?next=%2F%2Fforeign.invalid:443/path'):
             admitted = proxy.admit('GET', target, [('Host', self.hostname)])
             self.assertEqual(admitted, target)
             self.assertEqual((proxy.upstream_ip, proxy.upstream_port), ('172.28.5.4', 8000))
