@@ -119,7 +119,7 @@ describe("deleteWorkspace reaps every tenant root", () => {
     const { deleteWorkspace } = await import("../server/workspace");
 
     await expect(deleteWorkspace("not-a-uuid")).rejects.toThrow(/Invalid workspaceId/);
-    await expect(deleteWorkspace("../../etc")).rejects.toThrow(/Invalid workspaceId/);
+    await expect(deleteWorkspace("../etc")).rejects.toThrow(/Invalid workspaceId/);
 
     expect(calls).toEqual([]);
     expect(existsSync(a)).toBe(true);

@@ -870,18 +870,53 @@ export function workspacePathForWorkspaceId(workspaceId: string): string {
  */
 export function workspaceTenantDenyRoots(): string[] {
   const roots = new Set<string>();
-  for (const { root: norm, raw: root } of rawTenantRoots()) {
-    roots.add(norm);
-    // A symlinked (or partially-symlinked) root masks the LINK path while the
-    // target stays visible under `--ro-bind / /` — deny the canonical path
-    // too (see canonicalizeRoot). A root that resolves to `/` THROWS.
-    const canon = canonicalizeRoot(norm);
-    if (canon === "/") {
+  for (const root of [
+    process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT,
+    process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT,
+  ]) {
+    const norm = root.replace(/\/+$/, "");
+    if (norm === "" || norm === "/") {
+      // A "/" deny root masks the whole rootfs — but dropping it silently is
+      // WORSE: workspacePathForWorkspaceId would resolve `/<uuid>` with no
+      // tenant deny at all. Fail loud either way.
       throw new Error(
         `workspaceTenantDenyRoots: tenant root '${root}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
       );
     }
-    if (canon !== null) roots.add(canon);
+    if (!isAbsolute(norm) || norm.split("/").includes("..")) {
+      throw new Error(
+        `workspaceTenantDenyRoots: tenant root '${root}' is not an absolute normalized path — refusing a deny set that masks the wrong tree`,
+      );
+    }
+    roots.add(norm);
+    // A symlinked (or partially-symlinked) root masks the LINK path while the
+    // target stays visible under `--ro-bind / /` — deny the canonical path
+    // too. Canonicalize via the longest existing PREFIX: realpathSync itself
+    // throws on absent leaves AND on dangling links, and skipping either
+    // silently leaves the target unmasked — same fail-open class as a
+    // stat error. ENOENT/ENOTDIR during the prefix walk just climbs; any
+    // other error throws (fail loud over silently unmasked).
+    let probe = norm;
+    const tail: string[] = [];
+    while (true) {
+      try {
+        const canon = realpathSync(probe);
+        if (tail.length === 0 && canon === "/") {
+          throw new Error(
+            `workspaceTenantDenyRoots: tenant root '${root}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
+          );
+        }
+        roots.add(tail.length === 0 ? canon : join(canon, ...tail.reverse()));
+        break;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+        const parent = dirname(probe);
+        if (parent === probe) break; // climbed to / — no canonical prefix exists
+        tail.push(basename(probe));
+        probe = parent;
+      }
+    }
   }
   return [...roots];
 }
@@ -891,7 +926,7 @@ export function workspaceTenantDenyRoots(): string[] {
  * back to its default when unset OR empty, trailing slashes stripped, each
  * VALIDATED on its own. A bad root carries its `error` instead of throwing, so a
  * caller that must keep going per root (the erasure reap) can; a caller that must
- * fail whole (the sandbox deny set) uses {@link rawTenantRoots}. Rejects `/`, a
+ * fail whole (the sandbox deny set, {@link workspaceTenantDenyRoots}) validates on its own. Rejects `/`, a
  * non-absolute root and a `..` segment.
  */
 function rawTenantRootEntries(): {
@@ -921,19 +956,6 @@ function rawTenantRootEntries(): {
       );
     }
     return { label, raw, root, ...(error ? { error } : {}) };
-  });
-}
-
-/**
- * The two raw tenant roots, validated and normalized. Shared by the sandbox deny
- * set ({@link workspaceTenantDenyRoots}) and the erasure reap set
- * ({@link workspaceReapRoots}) through {@link rawTenantRootEntries}, so the two can
- * never disagree about what a "tenant root" is. THROWS on the first invalid root.
- */
-function rawTenantRoots(): { label: ReapRootLabel; root: string; raw: string }[] {
-  return rawTenantRootEntries().map(({ error, ...r }) => {
-    if (error) throw error;
-    return r;
   });
 }
 
