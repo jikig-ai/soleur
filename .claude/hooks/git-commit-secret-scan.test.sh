@@ -2571,6 +2571,13 @@ _t_sim_extra() {
   _sx "X1d mixed directories: 'git -C docs add f.txt && git add clean.txt && git commit' -> superset -> deny" "$U" \
     "git -C docs add f.txt && git add clean.txt && git commit -m x" deny "leak.json"
   _t "X1e ... every sim add is the superset" "adds=$(_sim_adds)" _all_adds_superset
+  # Two roots with NO cd / -C: the process cwd is repo B (the untracked leak), the payload cwd is repo A (clean).
+  # The directory proof (i) names A; a replay in A must never stand in for B. (Two independent defences hold
+  # this: the one-root rule and the replay-directory-belongs-to-the-root check; dropping either alone is an
+  # equivalent mutant, dropping both is not.)
+  PAYLOAD_CWD="$A" _sx "X1f process cwd = leaky repo B, payload cwd = clean repo A, 'git add clean.txt && git commit' -> deny naming B" "$B" \
+    "git add clean.txt && git commit -m x" deny "leak.json" "$B"
+  _t "X1g ... B was scanned from a superset, never from a replay made in A" "adds=$(_sim_adds)" _all_adds_superset
 
   # force-add: add -A never sees an ignored file
   I=$(_mk_leaky_repo ignored)
@@ -2819,7 +2826,7 @@ _t_floor_contract
 # a host with no runnable gitleaks skips whole arms (reported, and failed under CI=true by the
 # epilogue), so the floor only binds when nothing was skipped. Reported by printf + exit,
 # never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=405
+MIN_ASSERTIONS=894
 if (( ${#SKIPPED_ARMS[@]} == 0 )) && (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
