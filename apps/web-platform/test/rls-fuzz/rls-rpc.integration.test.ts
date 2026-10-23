@@ -255,26 +255,36 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     expect(await readAsA(`select resolve_workspace_installation_id('${ctx.wsA}')`), "A must resolve its own installation id").not.toBeNull();
   });
 
-  test("Codex history acknowledgment RPCs positively resolve A's seeded member acknowledgment", async () => {
+  test("Codex history acknowledgment RPCs positively exercise A's fresh current generation", async () => {
     const values = await rolledBackRaw(sql, async (t) => {
       await t`set local role service_role`;
+      const [positiveControlRun] = await t.unsafe(
+        `insert into public.agent_engine_runs (
+           workspace_id, execution_kind, conversation_id, engine_id, auth_mode,
+           auth_mode_generation, adapter_version, status, created_by
+         ) values ($1::uuid, 'conversation', $2::uuid, 'codex', 'managed', $3::bigint,
+                   'rls-fuzz-positive-control', 'queued', $4::uuid)
+         returning conversation_id`,
+        [ctx.wsA, ctx.convA2, ctx.engineAuthModeGenerationA, ctx.userA],
+      );
+      expect(positiveControlRun?.conversation_id).toBe(ctx.convA2);
       const [issued] = await t.unsafe(
         "select public.issue_codex_history_transfer_notice($1::uuid, $2::bigint, $3::uuid, $4::text) as value",
-        [ctx.convA, ctx.engineAuthModeGenerationA, ctx.userA, "0".repeat(64)],
+        [ctx.convA2, ctx.engineAuthModeGenerationA, ctx.userA, "0".repeat(64)],
       );
       const [delivered] = await t.unsafe(
         "select public.mark_codex_history_transfer_notice_delivered($1::uuid, $2::bigint, $3::uuid, $4::text) as value",
-        [ctx.convA, ctx.engineAuthModeGenerationA, ctx.userA, "0".repeat(64)],
+        [ctx.convA2, ctx.engineAuthModeGenerationA, ctx.userA, "0".repeat(64)],
       );
       await t`set local role authenticated`;
       await t.unsafe("select set_config('request.jwt.claims', $1, true)", [buildAuthenticatedClaims({ sub: ctx.userA })]);
       const [recorded] = await t.unsafe(
         "select public.record_codex_history_transfer_acknowledgment($1::uuid, $2::bigint, $3::text) as value",
-        [ctx.convA, ctx.engineAuthModeGenerationA, "0".repeat(64)],
+        [ctx.convA2, ctx.engineAuthModeGenerationA, "0".repeat(64)],
       );
       const [acknowledged] = await t.unsafe(
         "select public.codex_history_transfer_acknowledged($1::uuid, $2::bigint) as value",
-        [ctx.convA, ctx.engineAuthModeGenerationA],
+        [ctx.convA2, ctx.engineAuthModeGenerationA],
       );
       return [issued.value, delivered.value, recorded.value, acknowledged.value];
     });
