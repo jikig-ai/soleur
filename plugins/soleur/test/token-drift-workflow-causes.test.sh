@@ -2063,16 +2063,25 @@ done <<<"$R5_OUT"
 # ---------------------------------------------------------------------------
 # R7 / R8 (orphan sweeps hold the read-only Hetzner token only, and a red sweep reaches a person)
 #
-# R7. Property: no job whose id ends in `-orphan-sweep` calls the infra-credentials loader, declares an
-# `environment:`, reads a Tier-B secret name, or names the read/write Hetzner token (whole word, so the
-# read-only name is not matched); its `sweep` step reads the read-only name with a bounded, rc-checked,
-# shape-checked secret read. The population is DERIVED from the parsed workflow by job-id suffix, never a
-# hard-coded pair, and has a floor of 2 so a rename cannot empty it. The positive checks read ONLY the
-# `sweep` step: the issue filers print a read-only listing recipe that names the same secret, so a
-# whole-job positive check would pass with the real read deleted.
-# R8. Property: each sweep job has a notify-ops-email step gated on `failure()` alone (no always()/success()),
-# continue-on-error, with a step timeout; where a job has a second email step, the failure email is
-# de-duplicated against it by naming that step's id.
+# R7. Property: the Hetzner read/write credential cannot reach a job that lists Hetzner. Four layers:
+#   (1) WORKFLOW SCOPE: the top-level `env:` names no Hetzner token or Tier-B secret (it reaches every job);
+#   (2) POPULATION BY BEHAVIOUR, not by spelling: the jobs that call the credential loader or declare an
+#       `environment:` are exactly the two Tier-B jobs, and a job that names api.hetzner.cloud or the read-only
+#       secret is a sweep (job id ending `-orphan-sweep`) or the sole-copy job, so a third lister with another
+#       name, or a loader call added elsewhere, fails here instead of passing outside the guard;
+#   (3) PER SWEEP, a CLOSED job shape (only name/if/runs-on/steps/timeout-minutes, so no `uses:`, `secrets:`,
+#       `env:`, `environment:`, `permissions:` or `container:`), the main-only `if:` (the dropped environment's
+#       policy), steps limited to checkout, run steps and the notify action (no wrapper action can re-export a
+#       token), no whole-job mention of the read/write name or a Tier-B secret (EVERY string, including values
+#       under keys named `name` or `id`), every `doppler` call one of the two reviewed pairs, the repository
+#       DOPPLER_TOKEN bound as the sweep step's only secret, the Doppler install pinned to the SAME release and
+#       sha256 as the sole-copy job and checked with `sha256sum -c`, the 60 s secret-read bound (comment-stripped),
+#       and a job cap that covers the sum of the step bounds (a job-level cancel skips `failure()`);
+#   (4) the sweep step itself cannot be turned green (`continue-on-error`). The read's other properties (the pinned
+#       argv, the rc handling, the shape check, the masking) are pinned by R9, which RUNS the step body.
+# The population has a floor of 2 so a rename cannot empty it.
+# R8. Property: each sweep job has a notify-ops-email step whose `if` is exactly `failure()`, placed AFTER the sweep
+# step, continue-on-error, bounded, and carrying the repository RESEND_API_KEY.
 # New prose in the sweep jobs must not spell the read/write token name, or R7 fires on its own text.
 # ---------------------------------------------------------------------------
 SWEEP_PY=$(cat <<'PYD'
@@ -2080,99 +2089,155 @@ import copy, re, sys, yaml
 
 LOADER = "./.github/actions/infra-credentials"
 EMAIL = "actions/notify-ops-email"
-BARE = re.compile(r"\bHCLOUD_TOKEN(?![A-Za-z0-9_])")
+# any spelling of the Hetzner token name except the read-only one: bare, TF_VAR_-prefixed, suffixed, any case
+BARE = re.compile(r"(?i)hcloud_token(?!_readonly)")
 PRIV = re.compile(r"DOPPLER_TOKEN_INFRA_PRIVILEGED")
-GETN = re.compile(r"doppler\s+secrets\s+get\s+([A-Za-z0-9_]+)")
-RC_CAPTURE = re.compile(r"\|\|\s*doppler_rc=\$\?")
+DOPPLER_CALL = re.compile(r"\bdoppler[ \t]+([a-z]+)(?:[ \t]+([a-z]+))?(?:[ \t]+([A-Za-z0-9_]+))?")
+# the CLI's subcommands: a match whose first word is NOT one of these is prose ("doppler config: ..."), not a call
+DOPPLER_SUBS = {"run", "secrets", "configs", "configure", "projects", "setup", "login", "logout", "me", "update", "import",
+                "environments", "access", "activity", "serviceaccounts", "workplace", "auth", "logs", "open", "oidc", "target"}
 RO = "HCLOUD_TOKEN_READONLY"
+LOADER_JOBS = {"drift-check", "heartbeat-live-reconcile"}   # the Tier-B jobs: the only loader callers
+LISTERS = {"sole-copy-protection-check"}                    # non-sweep jobs that may name the Hetzner API
+SWEEP_JOB_KEYS = {"name", "if", "runs-on", "steps", "timeout-minutes"}
+MAIN_ONLY = "github.ref == 'refs/heads/main'"
 
-def leaves(x, skip=()):
+def leaves(x):
     if isinstance(x, str):
         yield x
     elif isinstance(x, dict):
         for k, v in x.items():
-            if k in skip:
-                continue
             if isinstance(k, str):
                 yield k
-            yield from leaves(v, skip)
+            yield from leaves(v)
     elif isinstance(x, list):
         for v in x:
-            yield from leaves(v, skip)
+            yield from leaves(v)
 
-def sweeps(wf, first_only=False):
-    js = [(k, v) for k, v in wf["jobs"].items() if k.endswith("-orphan-sweep")]
-    return js[:1] if first_only else js
+def code(run):
+    return "\n".join(l for l in str(run).splitlines() if not l.lstrip().startswith("#"))
 
-def sweep_step(job):
-    return next((s for s in job.get("steps") or [] if s.get("id") == "sweep"), None)
+def is_email(s):
+    return str(s.get("uses", "")).rstrip("/").endswith(EMAIL)
 
-def r7(wf, first_only=False):
+def sweeps(wf):
+    return [(k, v) for k, v in wf["jobs"].items() if k.endswith("-orphan-sweep")]
+
+def step_by_id(job, sid):
+    return next((s for s in job.get("steps") or [] if s.get("id") == sid), None)
+
+def r7(wf):
     out = []
     allj = sweeps(wf)
     if len(allj) < 2:
         out.append("population %d < 2" % len(allj))
-    for jid, job in sweeps(wf, first_only):
-        if "environment" in job:
-            out.append("%s declares an environment" % jid)
+    wtext = "\n".join(leaves(wf.get("env") or {}))
+    if BARE.search(wtext) or PRIV.search(wtext):
+        out.append("workflow-level env names a Hetzner or Tier-B credential")
+    ref = step_by_id(wf["jobs"].get("sole-copy-protection-check", {}), "doppler_cli")
+    if ref is None:
+        out.append("the sole-copy job has no doppler_cli step to compare the installs against")
+    for jid, job in wf["jobs"].items():
+        uses = [str(s.get("uses", "")).rstrip("/") for s in job.get("steps") or []]
+        if LOADER in uses and jid not in LOADER_JOBS:
+            out.append("%s calls the credential loader but is not a Tier-B job" % jid)
+        if "environment" in job and jid not in LOADER_JOBS:
+            out.append("%s declares an environment but is not a Tier-B job" % jid)
+        if jid.endswith("-orphan-sweep") or jid in LISTERS or jid in LOADER_JOBS:
+            continue
+        jt = "\n".join(leaves(job))
+        if "api.hetzner.cloud" in jt or RO in jt:
+            out.append("%s lists Hetzner or reads the read-only token but is outside the guarded population" % jid)
+    for jid, job in allj:
+        extra = sorted(set(job) - SWEEP_JOB_KEYS)
+        if extra:
+            out.append("%s carries job keys %s outside the closed shape" % (jid, ",".join(extra)))
+        if str(job.get("if", "")).strip() != MAIN_ONLY:
+            out.append("%s lacks the main-only job guard" % jid)
         steps = job.get("steps") or []
         for s in steps:
-            if str(s.get("uses", "")).rstrip("/") == LOADER:
+            u = str(s.get("uses", "")).rstrip("/")
+            if u == LOADER:
                 out.append("%s calls the credential loader" % jid)
-        text = "\n".join(leaves({k: v for k, v in job.items() if k != "name"}, skip=("name", "id")))
+            elif u and not (u.startswith("actions/checkout@") or u.endswith(EMAIL)):
+                out.append("%s uses %s outside the allowed actions" % (jid, u))
+        text = "\n".join(leaves(job))
         if BARE.search(text):
             out.append("%s names the read/write token" % jid)
         if PRIV.search(text):
             out.append("%s names a Tier-B secret" % jid)
-        for m in GETN.finditer(text):
-            if m.group(1) != RO:
-                out.append("%s reads secret %s" % (jid, m.group(1)))
-        st = sweep_step(job)
-        run = str((st or {}).get("run", ""))
+        for s in steps:
+            for m in DOPPLER_CALL.finditer(code(s.get("run", ""))):
+                pair = (m.group(1), m.group(2))
+                if pair[0] not in DOPPLER_SUBS:
+                    continue
+                if pair == ("secrets", "get"):
+                    if m.group(3) != RO:
+                        out.append("%s reads secret %s" % (jid, m.group(3)))
+                elif pair != ("configs", "list"):
+                    out.append("%s runs doppler %s %s" % (jid, pair[0], pair[1] or ""))
+        st = step_by_id(job, "sweep")
         if st is None:
             out.append("%s has no sweep step" % jid)
             continue
-        for what, ok in (("the read-only secret read", ("doppler secrets get " + RO) in run),
-                         ("--project soleur", "--project soleur" in run),
-                         ("--config prd_terraform", "--config prd_terraform" in run),
-                         ("the 60 s bound", "timeout -k 5 60" in run),
-                         ("the rc capture", bool(RC_CAPTURE.search(run))),
-                         ("the shape check", "bc_ok_var TOKEN" in run)):
-            if not ok:
-                out.append("%s sweep step lacks %s" % (jid, what))
+        if "timeout -k 5 60" not in code(st.get("run", "")):
+            out.append("%s sweep step lacks the 60 s secret-read bound" % jid)
+        if (st.get("env") or {}).get("DOPPLER_TOKEN") != "${{ secrets.DOPPLER_TOKEN }}":
+            out.append("%s sweep step does not bind the repository DOPPLER_TOKEN" % jid)
+        inst = step_by_id(job, "doppler_cli")
+        if inst is None:
+            out.append("%s has no pinned Doppler install step" % jid)
+        else:
+            if ref is not None:
+                for k in ("DOPPLER_CLI_VERSION", "DOPPLER_CLI_SHA256"):
+                    if (inst.get("env") or {}).get(k) != (ref.get("env") or {}).get(k):
+                        out.append("%s Doppler install %s differs from the sole-copy job's" % (jid, k))
+            if "sha256sum -c" not in code(inst.get("run", "")):
+                out.append("%s Doppler install is not checksum-verified" % jid)
+        total = sum(s["timeout-minutes"] for s in steps if isinstance(s.get("timeout-minutes"), int))
+        for sid in ("sweep", "doppler_cli"):
+            s = step_by_id(job, sid)
+            if s is not None and not isinstance(s.get("timeout-minutes"), int):
+                out.append("%s step %s has no timeout" % (jid, sid))
+        cap = job.get("timeout-minutes")
+        if not isinstance(cap, int) or cap < total:
+            out.append("%s job cap %r is below the sum of its step bounds %d" % (jid, cap, total))
     return out
 
-def r8(wf, first_only=False):
+def r8(wf):
     out = []
     allj = sweeps(wf)
     if len(allj) < 2:
         out.append("population %d < 2" % len(allj))
-    for jid, job in sweeps(wf, first_only):
+    for jid, job in allj:
         steps = job.get("steps") or []
-        emails = [s for s in steps if str(s.get("uses", "")).rstrip("/").endswith(EMAIL)]
-        fails = [e for e in emails if "failure()" in str(e.get("if", ""))]
+        st = step_by_id(job, "sweep")
+        si = steps.index(st) if st is not None else None
+        if st is not None and st.get("continue-on-error") not in (None, False):
+            out.append("%s sweep step is continue-on-error, so a red sweep keeps the job green" % jid)
+        if job.get("continue-on-error") not in (None, False):
+            out.append("%s job is continue-on-error" % jid)
+        fails = [e for e in steps if is_email(e) and re.sub(r"\s+", "", str(e.get("if", ""))) == "failure()"]
         if not fails:
-            out.append("%s has no failure email" % jid)
+            out.append("%s has no failure email gated on exactly failure()" % jid)
             continue
         f = fails[0]
-        if re.search(r"\b(always|success)\(\)", str(f.get("if", ""))):
-            out.append("%s failure email is gated on always()/success()" % jid)
+        if si is not None and steps.index(f) < si:
+            out.append("%s failure email precedes the sweep step" % jid)
         if f.get("continue-on-error") is not True:
             out.append("%s failure email is not continue-on-error" % jid)
-        if "timeout-minutes" not in f:
-            out.append("%s failure email has no timeout" % jid)
-        for o in emails:
-            if o is f:
-                continue
-            if not o.get("id") or ("steps.%s." % o.get("id")) not in str(f.get("if", "")):
-                out.append("%s failure email is not de-duplicated against another email step" % jid)
+        t = f.get("timeout-minutes")
+        if not (isinstance(t, int) and 1 <= t <= 5):
+            out.append("%s failure email has no bounded timeout" % jid)
+        if (f.get("with") or {}).get("resend-api-key") != "${{ secrets.RESEND_API_KEY }}":
+            out.append("%s failure email does not carry the repository RESEND_API_KEY" % jid)
     return out
 
 def jobs(m):
     return m["jobs"]
 
-def sub_run(job, old, new):
-    st = sweep_step(job)
+def sub_run(job, sid, old, new):
+    st = step_by_id(job, sid)
     assert old in st["run"], "mutation did not land: %r" % old
     st["run"] = st["run"].replace(old, new)
 
@@ -2180,68 +2245,128 @@ def add_loader(job):
     job["steps"].insert(1, {"name": "Load infra credentials (tiered)", "uses": LOADER, "with": {}})
 
 def no_email(job):
-    job["steps"] = [s for s in job["steps"] if not str(s.get("uses", "")).rstrip("/").endswith(EMAIL)]
+    job["steps"] = [s for s in job["steps"] if not is_email(s)]
 
 def fail_email(job):
-    return next(s for s in job["steps"] if str(s.get("uses", "")).rstrip("/").endswith(EMAIL) and "failure()" in str(s.get("if", "")))
+    return next(s for s in job["steps"] if is_email(s) and re.sub(r"\s+", "", str(s.get("if", ""))) == "failure()")
 
 RUNG, INN = "rung2-rehearsal-orphan-sweep", "inngest-rehearsal-orphan-sweep"
 
 def m_loader_inn(m): add_loader(jobs(m)[INN])
 def m_env_rung(m): jobs(m)[RUNG]["environment"] = "infra-privileged"
-def m_bare_get(m): sub_run(jobs(m)[INN], "doppler secrets get " + RO, "doppler secrets get HCLOUD_TOKEN")
+def m_bare_get(m): sub_run(jobs(m)[INN], "sweep", "doppler secrets get " + RO, "doppler secrets get HCLOUD_TOKEN")
 def m_third_loader(m):
     j = copy.deepcopy(jobs(m)[INN]); add_loader(j); jobs(m)["rehearsal-x-orphan-sweep"] = j
 def m_rename(m):
     m["jobs"] = {("rung2-rehearsal-sweep" if k == RUNG else "inngest-rehearsal-sweep" if k == INN else k): v for k, v in m["jobs"].items()}
-def m_env_read(m): jobs(m)[INN]["steps"][-1].setdefault("env", {})["HCLOUD_TOKEN"] = "x"
+def m_env_read(m): step_by_id(jobs(m)[INN], "sweep").setdefault("env", {})["HCLOUD_TOKEN"] = "x"
 def m_bare_line(m):
-    st = sweep_step(jobs(m)[INN]); st["run"] = st["run"] + "\nTOKEN=\"${HCLOUD_TOKEN:-}\"\n"
-def m_no_capture(m): sub_run(jobs(m)[RUNG], "|| doppler_rc=$?", "|| true")
-def m_no_timeout(m): sub_run(jobs(m)[INN], "timeout -k 5 60 ", "")
-def m_no_shape(m): sub_run(jobs(m)[RUNG], "bc_ok_var TOKEN", "true TOKEN")
-def m_priv(m): jobs(m)[INN]["steps"][1].setdefault("env", {})["T"] = "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}"
-def m_flags_swapped(m): sub_run(jobs(m)[INN], "--project soleur --config prd_terraform", "--config prd_terraform --project soleur")
-def m_loopvar(m):
-    st = sweep_step(jobs(m)[RUNG]); assert "_line" in st["run"], "mutation did not land"; st["run"] = st["run"].replace("_line", "_ln")
+    st = step_by_id(jobs(m)[INN], "sweep"); st["run"] = st["run"] + "\nTOKEN=\"${HCLOUD_TOKEN:-}\"\n"
+def m_no_timeout(m): sub_run(jobs(m)[INN], "sweep", "timeout -k 5 60 ", "")
+def m_timeout_in_comment(m):
+    sub_run(jobs(m)[INN], "sweep", "timeout -k 5 60 ", ""); step_by_id(jobs(m)[INN], "sweep")["run"] += "\n# timeout -k 5 60 \n"
+def m_priv(m): step_by_id(jobs(m)[INN], "sweep").setdefault("env", {})["T"] = "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}"
+def m_wf_env(m): m["env"]["HCLOUD_TOKEN"] = "${{ secrets.X }}"
+def m_wf_env_tf(m): m["env"]["TF_VAR_hcloud_token"] = "${{ secrets.X }}"
+def m_env_value_under_name(m): jobs(m)[INN]["steps"][0].setdefault("with", {})["name"] = "${{ env.HCLOUD_TOKEN }}"
+def m_env_value_under_id(m): step_by_id(jobs(m)[RUNG], "sweep").setdefault("env", {})["id"] = "${{ env.HCLOUD_TOKEN }}"
+def m_third_lister(m):
+    j = copy.deepcopy(jobs(m)[INN]); jobs(m)["hetzner-orphan-scan"] = j
+def m_loader_elsewhere(m): add_loader(jobs(m)["sole-copy-protection-check"])
+def m_env_elsewhere(m): jobs(m)["sole-copy-protection-check"]["environment"] = "infra-privileged"
+def m_job_uses(m): jobs(m)[INN]["uses"] = "./.github/workflows/x.yml"; jobs(m)[INN]["secrets"] = "inherit"
+def m_job_env(m): jobs(m)[RUNG]["env"] = {"A": "b"}
+def m_wrapper_action(m): jobs(m)[INN]["steps"].insert(1, {"name": "wrap", "uses": "./.github/actions/wrapper"})
+def m_loader_absolute(m): jobs(m)[INN]["steps"].insert(1, {"name": "wrap", "uses": "jikig-ai/soleur/.github/actions/infra-credentials@main"})
+def m_no_main_if(m): jobs(m)[RUNG].pop("if")
+def m_wide_main_if(m): jobs(m)[INN]["if"] = "github.ref != 'refs/heads/never'"
+def m_doppler_run(m): step_by_id(jobs(m)[RUNG], "sweep")["run"] += "\ndoppler run -- env\n"
+def m_doppler_download(m): step_by_id(jobs(m)[INN], "sweep")["run"] += "\ndoppler secrets download --no-file\n"
+def m_install_sha(m): step_by_id(jobs(m)[INN], "doppler_cli")["env"]["DOPPLER_CLI_SHA256"] = "0" * 64
+def m_install_version(m): step_by_id(jobs(m)[RUNG], "doppler_cli")["env"]["DOPPLER_CLI_VERSION"] = "latest"
+def m_install_unchecked(m): sub_run(jobs(m)[RUNG], "doppler_cli", "| sha256sum -c -", "| cat")
+def m_install_deleted(m): jobs(m)[INN]["steps"] = [s for s in jobs(m)[INN]["steps"] if s.get("id") != "doppler_cli"]
+def m_dtoken_other(m): step_by_id(jobs(m)[INN], "sweep")["env"]["DOPPLER_TOKEN"] = "${{ secrets.OTHER }}"
+def m_dtoken_removed(m): step_by_id(jobs(m)[RUNG], "sweep")["env"].pop("DOPPLER_TOKEN")
+def m_cap_low(m): jobs(m)[RUNG]["timeout-minutes"] = 10
+def m_sweep_no_timeout(m): step_by_id(jobs(m)[INN], "sweep").pop("timeout-minutes")
 
 def m_no_email_inn(m): no_email(jobs(m)[INN])
 def m_if_success(m): fail_email(jobs(m)[INN])["if"] = "success()"
 def m_if_always(m): fail_email(jobs(m)[INN])["if"] = "always()"
+def m_if_always_failure(m): fail_email(jobs(m)[INN])["if"] = "always() && failure()"
+def m_if_not_failure(m): fail_email(jobs(m)[INN])["if"] = "${{ !failure() }}"
+def m_if_and_false(m): fail_email(jobs(m)[INN])["if"] = "failure() && false"
 def m_no_coe(m): fail_email(jobs(m)[INN]).pop("continue-on-error")
 def m_no_email_timeout(m): fail_email(jobs(m)[INN]).pop("timeout-minutes")
+def m_email_timeout_huge(m): fail_email(jobs(m)[RUNG])["timeout-minutes"] = 360
+def m_email_key_blank(m): fail_email(jobs(m)[INN])["with"]["resend-api-key"] = ""
+def m_email_key_other(m): fail_email(jobs(m)[RUNG])["with"]["resend-api-key"] = "${{ secrets.OTHER }}"
+def m_email_first(m):
+    j = jobs(m)[INN]; e = fail_email(j); j["steps"].remove(e); j["steps"].insert(1, e)
+def m_sweep_coe(m): step_by_id(jobs(m)[INN], "sweep")["continue-on-error"] = True
+def m_job_coe(m): jobs(m)[RUNG]["continue-on-error"] = True
 def m_third_noemail(m):
     j = copy.deepcopy(jobs(m)[INN]); no_email(j); jobs(m)["rehearsal-x-orphan-sweep"] = j
-def m_no_dedup(m): fail_email(jobs(m)[RUNG])["if"] = "failure()"
-def m_dedup_spelled(m):
-    e = fail_email(jobs(m)[RUNG]); assert "steps.notify_channel.outcome != 'success'" in e["if"], "mutation did not land"
-    e["if"] = e["if"].replace("steps.notify_channel.outcome != 'success'", "(steps.notify_channel.outcome == 'skipped' || steps.notify_channel.outcome == 'failure')")
 def m_other_action(m): fail_email(jobs(m)[INN])["uses"] = "./.github/actions/other"
+def m_email_body_reworded(m): fail_email(jobs(m)[RUNG])["with"]["body"] = "<p>reworded</p>"
+def m_filer_timeout_changed(m):
+    j = jobs(m)[INN]; i = [k for k, s in enumerate(j["steps"]) if s.get("name", "").startswith("File an issue")][0]
+    j["steps"][i]["timeout-minutes"] = 3
 
 # (name, checker, mutator, expect) -- expect "red" means the checker must report >= 1 violation
 ROWS = [
-    ("r7-loader-added",        r7, m_loader_inn,   "red"),
-    ("r7-environment-added",   r7, m_env_rung,     "red"),
-    ("r7-bare-name-read",      r7, m_bare_get,     "red"),
-    ("r7-third-job-with-loader", r7, m_third_loader, "red"),
-    ("r7-jobs-renamed-population-zero", r7, m_rename, "red"),
-    ("r7-env-key-names-rw-token", r7, m_env_read,  "red"),
-    ("r7-default-read-line",   r7, m_bare_line,    "red"),
-    ("r7-rc-capture-removed",  r7, m_no_capture,   "red"),
-    ("r7-timeout-removed",     r7, m_no_timeout,   "red"),
-    ("r7-shape-check-removed", r7, m_no_shape,     "red"),
-    ("r7-tier-b-secret-named", r7, m_priv,         "red"),
-    ("r7-must-pass-flags-swapped", r7, m_flags_swapped, "clean"),
-    ("r7-must-pass-loop-var-renamed", r7, m_loopvar, "clean"),
-    ("r8-email-deleted",       r8, m_no_email_inn, "red"),
-    ("r8-if-success",          r8, m_if_success,   "red"),
-    ("r8-if-always",           r8, m_if_always,    "red"),
-    ("r8-continue-on-error-removed", r8, m_no_coe, "red"),
-    ("r8-email-timeout-removed", r8, m_no_email_timeout, "red"),
-    ("r8-third-job-without-email", r8, m_third_noemail, "red"),
-    ("r8-dedup-removed",       r8, m_no_dedup,     "red"),
-    ("r8-other-action",        r8, m_other_action, "red"),
-    ("r8-must-pass-dedup-spelled-differently", r8, m_dedup_spelled, "clean"),
+    ("r7-loader-added",                r7, m_loader_inn,        "red"),
+    ("r7-environment-added",           r7, m_env_rung,          "red"),
+    ("r7-bare-name-read",              r7, m_bare_get,          "red"),
+    ("r7-third-job-with-loader",       r7, m_third_loader,      "red"),
+    ("r7-jobs-renamed-population-zero", r7, m_rename,           "red"),
+    ("r7-env-key-names-rw-token",      r7, m_env_read,          "red"),
+    ("r7-default-read-line",           r7, m_bare_line,         "red"),
+    ("r7-timeout-removed",             r7, m_no_timeout,        "red"),
+    ("r7-timeout-only-in-comment",     r7, m_timeout_in_comment, "red"),
+    ("r7-tier-b-secret-named",         r7, m_priv,              "red"),
+    ("r7-workflow-env-rw-token",       r7, m_wf_env,            "red"),
+    ("r7-workflow-env-tf-var-name",    r7, m_wf_env_tf,         "red"),
+    ("r7-rw-value-under-key-name",     r7, m_env_value_under_name, "red"),
+    ("r7-rw-value-under-key-id",       r7, m_env_value_under_id, "red"),
+    ("r7-third-lister-other-suffix",   r7, m_third_lister,      "red"),
+    ("r7-loader-in-non-tier-b-job",    r7, m_loader_elsewhere,  "red"),
+    ("r7-environment-in-non-tier-b-job", r7, m_env_elsewhere,   "red"),
+    ("r7-job-level-uses-and-secrets",  r7, m_job_uses,          "red"),
+    ("r7-job-level-env",               r7, m_job_env,           "red"),
+    ("r7-wrapper-action-step",         r7, m_wrapper_action,    "red"),
+    ("r7-loader-by-absolute-path",     r7, m_loader_absolute,   "red"),
+    ("r7-main-only-guard-removed",     r7, m_no_main_if,        "red"),
+    ("r7-main-only-guard-widened",     r7, m_wide_main_if,      "red"),
+    ("r7-doppler-run",                 r7, m_doppler_run,       "red"),
+    ("r7-doppler-secrets-download",    r7, m_doppler_download,  "red"),
+    ("r7-install-sha-zeroed",          r7, m_install_sha,       "red"),
+    ("r7-install-version-latest",      r7, m_install_version,   "red"),
+    ("r7-install-checksum-dropped",    r7, m_install_unchecked, "red"),
+    ("r7-install-step-deleted",        r7, m_install_deleted,   "red"),
+    ("r7-doppler-token-swapped",       r7, m_dtoken_other,      "red"),
+    ("r7-doppler-token-unbound",       r7, m_dtoken_removed,    "red"),
+    ("r7-job-cap-below-step-bounds",   r7, m_cap_low,           "red"),
+    ("r7-sweep-step-unbounded",        r7, m_sweep_no_timeout,  "red"),
+    ("r7-must-pass-filer-timeout-changed", r7, m_filer_timeout_changed, "clean"),
+    ("r8-email-deleted",               r8, m_no_email_inn,      "red"),
+    ("r8-if-success",                  r8, m_if_success,        "red"),
+    ("r8-if-always",                   r8, m_if_always,         "red"),
+    ("r8-if-always-and-failure",       r8, m_if_always_failure, "red"),
+    ("r8-if-negated",                  r8, m_if_not_failure,    "red"),
+    ("r8-if-and-false",                r8, m_if_and_false,      "red"),
+    ("r8-continue-on-error-removed",   r8, m_no_coe,            "red"),
+    ("r8-email-timeout-removed",       r8, m_no_email_timeout,  "red"),
+    ("r8-email-timeout-huge",          r8, m_email_timeout_huge, "red"),
+    ("r8-email-key-blank",             r8, m_email_key_blank,   "red"),
+    ("r8-email-key-other-secret",      r8, m_email_key_other,   "red"),
+    ("r8-email-before-sweep",          r8, m_email_first,       "red"),
+    ("r8-sweep-step-continue-on-error", r8, m_sweep_coe,        "red"),
+    ("r8-job-continue-on-error",       r8, m_job_coe,           "red"),
+    ("r8-third-job-without-email",     r8, m_third_noemail,     "red"),
+    ("r8-other-action",                r8, m_other_action,      "red"),
+    ("r8-must-pass-email-body-reworded", r8, m_email_body_reworded, "clean"),
 ]
 
 if __name__ == "__main__":
@@ -2253,11 +2378,6 @@ if __name__ == "__main__":
         for x in v:
             print("violation\t%s" % x)
     else:
-        # control: the verdict rule can fail in both directions, on the real workflow's own shape
-        probe = copy.deepcopy(wf); m_loader_inn(probe); probe2 = copy.deepcopy(wf); m_no_email_inn(probe2)
-        ctl = bool(r7(probe)) and bool(r8(probe2))
-        print("%s\tcontrol\tthe checkers can report a violation in both directions" % ("PASS" if ctl else "FAIL"))
-        print("%s\trows\t%d mutation rows (table intact)" % ("PASS" if len(ROWS) >= 22 else "FAIL", len(ROWS)))
         res = []
         for name, chk, mut, expect in ROWS:
             m = copy.deepcopy(wf)
@@ -2265,48 +2385,46 @@ if __name__ == "__main__":
                 mut(m)
             except Exception as e:
                 print("FAIL\t%s\tmutation could not be applied: %s %s" % (name, type(e).__name__, e)); res.append(False); continue
-            if m == wf:
+            if expect == "red" and m == wf:
                 print("FAIL\t%s\tthe mutation did not change the workflow" % name); res.append(False); continue
             v = chk(m)
             ok = bool(v) if expect == "red" else not v
             print("%s\t%s\t%s" % ("PASS" if ok else "FAIL", name,
                   ("flagged: " + v[0]) if (ok and expect == "red") else "legitimate variant is not flagged" if ok else "wrong verdict (expect %s, got %s)" % (expect, v[:2] or "no violation")))
             res.append(ok)
-        # harness rows: a checker that stops at the first member must miss a violation placed in the second
-        m = copy.deepcopy(wf); m_loader_inn(m)
-        ok = bool(r7(m)) and not r7(m, first_only=True)
-        print("%s\tharness-first-member-only\ta first-member-only checker misses the second member; the real one does not" % ("PASS" if ok else "FAIL")); res.append(ok)
         print("RESULT\t%d\t%d" % (len(res), len([r for r in res if not r])))
 PYD
 )
 
-echo "R7: no orphan-sweep job holds the read/write Hetzner credential; each reads the read-only token (bounded, rc-checked, shape-checked)"
+echo "R7: no orphan-sweep job can reach the read/write Hetzner credential (workflow scope, loader/environment population, closed job shape, pinned install, bounds)"
 _r7=$(python3 -c "$SWEEP_PY" r7 "$WF") || { echo "FATAL: the R7 scan crashed" >&2; exit 2; }
 _r7_pop=$(sed -n 's/^population=//p' <<<"$_r7")
 _r7_bad=$(grep -c '^violation' <<<"$_r7") || _r7_bad=0
 if [[ "$_r7_pop" =~ ^[0-9]+$ ]] && (( _r7_pop >= 2 )) && [[ "$_r7_bad" == "0" ]]; then
-  pass "R7 ${_r7_pop} orphan-sweep jobs, none holds the read/write credential, each reads HCLOUD_TOKEN_READONLY with the bounded read"
+  pass "R7 ${_r7_pop} orphan-sweep jobs, none can reach the read/write credential, each has the closed shape, the pinned install and the bounded read"
 else
   fail "R7 (${_r7_pop:-?} jobs, ${_r7_bad} violation(s)): $(grep '^violation' <<<"$_r7" | cut -f2 | tr '\n' ';')"
 fi
 
-echo "R8: each orphan-sweep job emails on failure (failure()-gated, continue-on-error, bounded, de-duplicated)"
+echo "R8: each orphan-sweep job emails on failure (exactly failure(), after the sweep, non-blocking, bounded, keyed) and its sweep step cannot turn the job green"
 _r8=$(python3 -c "$SWEEP_PY" r8 "$WF") || { echo "FATAL: the R8 scan crashed" >&2; exit 2; }
 _r8_bad=$(grep -c '^violation' <<<"$_r8") || _r8_bad=0
 if [[ "$_r8_bad" == "0" ]]; then
-  pass "R8 every orphan-sweep job has a failure()-gated, bounded, non-blocking email step"
+  pass "R8 every orphan-sweep job has a failure()-gated, bounded, keyed, non-blocking email step placed after a fail-propagating sweep step"
 else
   fail "R8 ${_r8_bad} violation(s): $(grep '^violation' <<<"$_r8" | cut -f2 | tr '\n' ';')"
 fi
 
-R78_MIN=24
+# The floor is the table's CURRENT size, so a removed row is visible in the diff that removes it.
+R78_MIN=51
 echo "R7/R8: mutation rows — every spelling that re-opens the read/write credential or drops the failure email is RED, legitimate variants GREEN"
 R78_OUT=$(python3 -c "$SWEEP_PY" mutate "$WF") || { echo "FATAL: the R7/R8 mutation runner crashed" >&2; exit 2; }
+r78_line() { if [[ "$1" == "PASS" ]]; then pass "R78/$2: $3"; else fail "R78/$2: $3"; fi; }
 _r78n=0; _r78res=""
 while IFS=$'\t' read -r _verdict _row _msg; do
   if [[ "$_verdict" == "RESULT" ]]; then _r78res="$_row/$_msg"; continue; fi
   _r78n=$((_r78n + 1))
-  r5_line "$_verdict" "R78-$_row" "$_msg"
+  r78_line "$_verdict" "$_row" "$_msg"
 done <<<"$R78_OUT"
 [[ -n "$_r78res" ]] || { echo "FATAL: the R7/R8 mutation runner printed no RESULT line" >&2; exit 2; }
 (( _r78n >= R78_MIN )) || { echo "FATAL: the R7/R8 mutation runner produced only ${_r78n} verdict lines" >&2; exit 2; }
@@ -2335,6 +2453,7 @@ case "$1 $2" in
     case "$R9_MODE" in
       empty) exit 0 ;;
       timeout) exit 124 ;;
+      killed) exit 137 ;;
       badshape) printf 'abc def\n' ;;
       *) printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' ;;
     esac ;;
@@ -2345,7 +2464,9 @@ cat > "$R9_DIR/bin/curl" <<'SHIM'
 #!/usr/bin/env bash
 cat > /dev/null
 echo "curl $*" >> "$R9_CALLS"
-if [[ "$R9_MODE" == orphan ]]; then
+if [[ "$R9_MODE" == apifail ]]; then
+  exit 22
+elif [[ "$R9_MODE" == orphan ]]; then
   printf '{"servers":[{"name":"soleur-rehearsal-x","id":1}],"volumes":[],"ssh_keys":[],"firewalls":[],"meta":{"pagination":{"next_page":null}}}'
 else
   printf '{"servers":[],"volumes":[],"ssh_keys":[],"firewalls":[],"meta":{"pagination":{"next_page":null}}}'
@@ -2361,7 +2482,7 @@ r9_case() {
   out=$(env -i PATH="$R9_DIR/bin:/usr/bin:/bin" HOME="$d" GITHUB_WORKSPACE="$REPO_ROOT" GITHUB_OUTPUT="$gho" \
           RUNNER_TEMP="$d" DOPPLER_TOKEN=x R9_CALLS="$calls" R9_MODE="$mode" \
           REHEARSAL_PREFIX=soleur-rehearsal- RUNG2_CONFIGS_FLOOR=13 \
-          bash --noprofile --norc -eo pipefail "$script" 2>&1)
+          bash --noprofile --norc -e "$script" 2>&1)
   rc=$?
   local ncurl; ncurl=$(grep -c '^curl ' "$calls") || ncurl=0
   case "$mode" in
@@ -2375,8 +2496,9 @@ r9_case() {
     empty)
       [[ "$rc" != 0 ]] || { echo "BAD:empty token exited 0"; return; }
       grep -q 'orphan_sweep_no_token' <<<"$out" || { echo "BAD:no named no-token error"; return; }
+      grep -q 'secret-store exit status 0' <<<"$out" || { echo "BAD:the no-token error does not carry the secret-store exit status"; return; }
       (( ncurl == 0 )) || { echo "BAD:a request left with no token"; return; } ;;
-    timeout)
+    timeout|killed)
       [[ "$rc" != 0 ]] || { echo "BAD:timed-out read exited 0"; return; }
       grep -q 'orphan_sweep_doppler_timeout' <<<"$out" || { echo "BAD:no named timeout error"; return; }
       (( ncurl == 0 )) || { echo "BAD:a request left after a timed-out read"; return; } ;;
@@ -2386,6 +2508,10 @@ r9_case() {
       # the runner consumes ::add-mask:: directives (the masking itself), so only the visible log is judged
       local visible; visible=$(grep -v '^::add-mask::' <<<"$out" || true)
       grep -q 'abc def' <<<"$visible" && { echo "BAD:the shape-invalid value was printed"; return; } ;;
+    apifail)
+      [[ "$rc" != 0 ]] || { echo "BAD:a rejected Hetzner listing exited 0"; return; }
+      grep -q 'could not list Hetzner' <<<"$out" || { echo "BAD:no named listing-failure error"; return; }
+      grep -q '^orphans=0$' "$gho" && { echo "BAD:a clean orphans=0 was published after a failed listing"; return; } ;;
     orphan)
       [[ "$rc" == 0 ]] || { echo "BAD:orphan listing rc=$rc"; return; }
       grep -qE '^orphans=[1-9]' "$gho" || { echo "BAD:an orphan was not counted"; return; } ;;
@@ -2393,10 +2519,10 @@ r9_case() {
   echo OK
 }
 
-echo "R9: each converted sweep step decides correctly (clean, absent token, timed-out read, shape-invalid token, found orphan)"
+echo "R9: each converted sweep step decides correctly (clean, absent token, timed-out or killed read, shape-invalid token, rejected listing, found orphan)"
 _r9_ok=1
 for _job in rung2-rehearsal-orphan-sweep inngest-rehearsal-orphan-sweep; do
-  for _mode in clean empty timeout badshape orphan; do
+  for _mode in clean empty timeout killed badshape apifail orphan; do
     _v=$(r9_case "$R9_DIR/$_job.sh" "$_mode")
     if [[ "$_v" == OK ]]; then pass "R9/$_job/$_mode"; else fail "R9/$_job/$_mode: ${_v#BAD:}"; _r9_ok=0; fi
   done
@@ -2435,7 +2561,7 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Then 168 -> 172 with R6a-c (the listing blocks load the read-only Hetzner token, no read/write fallback, #9927 item 8b) and the g-doppler-ro
 # classifier row, 172 is the REALIZED `PASS + FAIL`. (R7a-c, three rows pinning the spelling of ten empty-token guards, were added and then removed in the same
 # PR: every one of those ten steps pre-binds HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" so the guard could never hit `unbound variable`; CTO ruling 2026-10-22.)
-# Then 172 -> 211 with R7 and R8 (the orphan sweeps hold the read-only Hetzner token only, and email on failure) with their 22 mutation rows, 1 harness row, 1 control and 1 row-count row, and R9 (the converted sweep steps run under the runner's shell with shimmed doppler and curl: 10 case rows and 2 mutation rows) (#10664 follow-up): 39 added, 211 is the REALIZED `PASS + FAIL`.
+# Then 172 -> 241 with R7 and R8 (the orphan sweeps hold the read-only Hetzner token only, and email on failure; NOT the retired R7a-c above, which are different rows) with their 51 mutation rows (the review round hardened the guard from the sweeps' spelling to the property: loader/environment population, closed job shape, pinned install, bounds, fail-propagating sweep), and R9 (the converted sweep steps run under the runner's shell with shimmed doppler and curl: 14 case rows and 2 mutation rows) (#10664 follow-up): 69 added, 241 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -2451,8 +2577,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 211 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 211." >&2
+if [[ "$((PASS + FAIL))" -lt 241 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 241." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

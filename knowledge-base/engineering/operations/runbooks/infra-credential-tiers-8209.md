@@ -200,7 +200,7 @@ Phase 4 binds each to a member of the Tier-B environment set; the census row is 
 cover them; census row G7f pins their call shape. *Dated note, 2026-10-22 (#9927 item 8b review): the list above is the
 pre-Phase-4 state and is historical. Every one of the 32 jobs that call the loader now declares a Tier-B `environment:`
 (census G1j, which derives the set from the workflow files, so a count written here would go stale).*
-*Dated note, 2026-10-23 (Ref #10664): the two orphan sweeps in `scheduled-terraform-drift.yml` left the loader and the `infra-privileged` environment (see their rows in Group 3); census G1j, run on the branch, reports 30 loader jobs, two fewer than the 32 above.*
+*Dated note, 2026-10-23 (Ref #10664): the two orphan sweeps in `scheduled-terraform-drift.yml` left the loader and the `infra-privileged` environment (see their rows in Group 3); census G1j derives its population from the workflow files, so it follows the change without an edit.*
 
 `infra-privileged` exists: O0's push apply created it with its `main` policy, and it is referenced
 by `apply-web-platform-infra.yml`, `apply-github-infra.yml`, `apply-sentry-infra.yml`,
@@ -265,10 +265,11 @@ Tier-B name from `prd_terraform` that the scanner can see: a literal name in a `
 (every job that calls the loader declares a Tier-B `environment:`, so the legacy arm is reachable only in the degraded state of a
 missing environment secret; G1j does not prove each job takes the Tier-B arm). The orphan sweeps in
 `scheduled-terraform-drift.yml` (`rung2-rehearsal-orphan-sweep`, `inngest-rehearsal-orphan-sweep`) no longer use the loader (changed
-2026-10-23, Ref #10664): each reads `HCLOUD_TOKEN_READONLY` alone, and each sends a `notify-ops-email` message on any failed step, so a
-red sweep (an unreadable secret, an unreachable API, a filer that could not file) reaches a person. The email channel is itself
-unmonitored (no Sentry check-in covers these jobs, #10430), and the project identity of the read-only token is checked by
-`sole-copy-protection-check` and not by the sweeps; both are stated residuals.
+2026-10-23, Ref #10664): each reads `HCLOUD_TOKEN_READONLY` alone, and each sends a `notify-ops-email` message when a step after checkout
+fails, so a red sweep (an unreadable secret, an unreachable API, a filer that could not file) reaches a person. Stated residuals:
+a failed checkout or a job-level cancel or timeout sends nothing; the email channel is itself unmonitored (only `drift-check`
+publishes a Sentry check-in, so none covers these jobs; #10430 tracks the sole-copy job's channel); and the project identity of
+the read-only token is checked indirectly, by `sole-copy-protection-check` paging on `volume-not-found`, and not by the sweeps.
 
 ## Operator Sequence (canonical copy — verbatim from the plan)
 

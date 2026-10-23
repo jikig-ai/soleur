@@ -2461,15 +2461,17 @@ jobs:
   # git-data host as a leaked rehearsal — and the remedy an operator would reach for on that
   # report is a destroy.
   #
-  # THE TOKEN. This job lists with GET calls only, so it holds the Hetzner Read-permission token and nothing that
-  # can write: no `environment:`, no credential loader, and no fallback to the read/write name. It reads
+  # THE TOKEN. This job lists with GET calls only, so it holds the Hetzner Read-permission token and no Hetzner write
+  # credential: no `environment:`, no credential loader, and no fallback to the read/write name. It reads
   # HCLOUD_TOKEN_READONLY from soleur/prd_terraform with the repository secret DOPPLER_TOKEN, the same way the
-  # sole-copy-protection-check job above does. That job pins the token's project on every run, so a token for another
-  # project is already a paged condition there and is not re-checked here. An absent, malformed, timed-out or rejected
+  # sole-copy-protection-check job above does. The token's project is NOT checked here: the sole-copy job pins the
+  # Inngest store volume by name and id and pages on `volume-not-found`, so a token for another project reaches a
+  # person through that job, while this sweep would only list nothing. An absent, malformed, timed-out or rejected
   # read ends this job red (never a clean sweep), and the failure email below is what turns that red into a message.
   rung2-rehearsal-orphan-sweep:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Above the sum of the step bounds (2 + 3 + 6 + 2 + 2 + 2): a job-level cancel skips `failure()`, so the cap must never fire first.
+    timeout-minutes: 20
     # Hygiene only, NOT a security boundary (the dropped environment carried the main-only policy): it stops a branch
     # dispatch from filing issues on an accidental run.
     if: github.ref == 'refs/heads/main'
@@ -2538,7 +2540,7 @@ jobs:
             if [[ -n "$_line" ]]; then printf '::add-mask::%s\n' "$_line"; fi
           done <<<"$TOKEN"
           if [[ -z "$TOKEN" ]]; then
-            echo "::error::orphan_sweep_no_token — the Hetzner Read token (HCLOUD_TOKEN_READONLY in soleur/prd_terraform) was empty or unreadable; this sweep has no verdict."
+            echo "::error::orphan_sweep_no_token — the Hetzner Read token (HCLOUD_TOKEN_READONLY in soleur/prd_terraform) was empty or unreadable (secret-store exit status ${doppler_rc}); this sweep has no verdict."
             exit 1
           fi
           if ! bc_ok_var TOKEN; then
@@ -2559,7 +2561,7 @@ jobs:
           # Fail CLOSED: an unreachable API is not evidence that nothing leaked.
           survivors=""
           for _kind in servers volumes ssh_keys firewalls; do
-            body="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS -f \
+            body="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS -f --max-time 30 \
                       "https://api.hetzner.cloud/v1/${_kind}?per_page=50&label_selector=app%3Dsoleur-rung2-rehearsal")" || {
               echo "::error::could not list Hetzner ${_kind} — this sweep has no verdict. Fail-closed rather than reporting a clean sweep it did not perform."
               exit 1; }
@@ -2605,7 +2607,7 @@ jobs:
           _cfg_rc=0
           _cfg_total=0
           _cfgs=""
-          _cfg_raw="$(doppler configs list -p soleur --json)" || _cfg_rc=$?
+          _cfg_raw="$(timeout -k 5 30 doppler configs list -p soleur --json)" || _cfg_rc=$?
           if (( _cfg_rc == 0 )); then
             _cfg_total="$(printf '%s' "$_cfg_raw" | jq -r 'length')" || _cfg_rc=$?
           fi
@@ -2664,8 +2666,10 @@ jobs:
           fi
 
       - name: File an issue for orphaned rehearsal hosts
+        timeout-minutes: 2
         if: >-
           always()
+          && steps.sweep.outputs.orphans != ''
           && steps.sweep.outputs.orphans != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2903,7 +2907,6 @@ jobs:
       # `failure`) for a skipped step, so this leg preserves the positive polarity that keeps a
       # skipped filer — the steady-state `performed` run — from firing the email.
       - name: Email notification (rung-2 sweep — the scratch-config finding could not reach its issue channel)
-        id: notify_channel
         if: >-
           always()
           && (steps.scratch_cfg_issue.outputs.channel_failed == 'true'
@@ -2917,18 +2920,19 @@ jobs:
 
       # ── A SWEEP THAT CANNOT PRODUCE A VERDICT MUST REACH A PERSON ──────────────────
       # Nothing reads this job's conclusion (the cron only dispatches the workflow, and no Sentry check-in covers it:
-      # #10430), so a red run alone reaches nobody. This fires on any failed step of the job: the secret read, the
-      # Hetzner listing, the Doppler listing or an issue filer. The scratch-config email above is the more specific
-      # message for its own finding, so this one stays quiet whenever that one was sent. Never fails the job itself.
+      # #10430), so a red run alone reaches nobody. This fires when a step AFTER checkout fails: the Doppler install,
+      # the secret read, the Hetzner listing or an issue filer. It does not fire when checkout itself fails (the local
+      # action it uses is not on disk yet) or when the job is cancelled or times out (`failure()` is false then), and
+      # a Resend rejection leaves a warning, not a retry (#10430). It may send alongside the scratch-config email above:
+      # two messages in a rare run are cheaper than losing the finding the other one did not carry. Never fails the job.
       - name: Email notification (rung-2 sweep — the job failed)
-        id: notify_failed
-        if: failure() && steps.notify_channel.outcome != 'success'
+        if: failure()
         continue-on-error: true
         timeout-minutes: 2
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[INFRA DRIFT] The rung-2 rehearsal orphan sweep failed'
-          body: '<p><strong>The twice-daily rung-2 rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch Doppler config was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner or Doppler listing was unreachable, or an issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>This job holds only the Read-permission token. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
+          body: '<p><strong>The twice-daily rung-2 rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch Doppler config was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or an issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>This job holds no Hetzner write credential. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
   # ── (#9175) INNGEST-PROVISION REHEARSAL ORPHAN SWEEP ───────────────────────────
@@ -2946,12 +2950,13 @@ jobs:
   #
   # THE TOKEN. Same shape as the rung-2 sweep above and the sole-copy-protection-check job: GET calls only, so the
   # job holds the Hetzner Read-permission token (HCLOUD_TOKEN_READONLY from soleur/prd_terraform, read with the
-  # repository secret DOPPLER_TOKEN), with no `environment:`, no credential loader and no fallback to the read/write
-  # name. An absent, malformed, timed-out or rejected read ends this job red, and the failure email at the end of the
+  # repository secret DOPPLER_TOKEN) and no Hetzner write credential, with no `environment:`, no credential loader and
+  # no fallback to the read/write name. An absent, malformed, timed-out or rejected read ends this job red, and the failure email at the end of the
   # job is what turns that red into a message.
   inngest-rehearsal-orphan-sweep:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Above the sum of the step bounds (2 + 3 + 6 + 2 + 2): a job-level cancel skips `failure()`, so the cap must never fire first.
+    timeout-minutes: 20
     # Hygiene only, NOT a security boundary (the dropped environment carried the main-only policy).
     if: github.ref == 'refs/heads/main'
     steps:
@@ -3001,13 +3006,15 @@ jobs:
             if [[ -n "$_line" ]]; then printf '::add-mask::%s\n' "$_line"; fi
           done <<<"$TOKEN"
           if [[ -z "$TOKEN" ]]; then
-            echo "::error::orphan_sweep_no_token — the Hetzner Read token (HCLOUD_TOKEN_READONLY in soleur/prd_terraform) was empty or unreadable; this sweep has no verdict."
+            echo "::error::orphan_sweep_no_token — the Hetzner Read token (HCLOUD_TOKEN_READONLY in soleur/prd_terraform) was empty or unreadable (secret-store exit status ${doppler_rc}); this sweep has no verdict."
             exit 1
           fi
           if ! bc_ok_var TOKEN; then
             bc_refuse scheduled-terraform-drift TOKEN
             exit 1
           fi
+          # bc_ok_var judged the value with trailing whitespace trimmed; send exactly that value.
+          TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
           # PAGINATION IS CHECKED, not assumed: 50 is Hetzner's per_page MAXIMUM, so a
           # truncated first page would produce a clean verdict from an incomplete list.
           # Fail CLOSED: an unreachable API is not evidence that nothing leaked.
@@ -3058,6 +3065,7 @@ jobs:
           fi
 
       - name: File an issue for orphaned rehearsal hosts
+        timeout-minutes: 2
         if: steps.sweep.outputs.orphans != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -3119,15 +3127,14 @@ jobs:
 
       # A SWEEP THAT CANNOT PRODUCE A VERDICT MUST REACH A PERSON. Nothing reads this job's conclusion (the cron only
       # dispatches the workflow, and no Sentry check-in covers it: #10430), so a red run alone reaches nobody. This
-      # fires on any failed step of the job: the secret read, the Hetzner listing or the issue filer. It never fails
-      # the job itself.
+      # fires when a step AFTER checkout fails: the Doppler install, the secret read, the Hetzner listing or the issue
+      # filer. It does not fire when checkout fails or when the job is cancelled or times out. It never fails the job.
       - name: Email notification (inngest rehearsal sweep — the job failed)
-        id: notify_failed
         if: failure()
         continue-on-error: true
         timeout-minutes: 2
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[INFRA DRIFT] The inngest rehearsal orphan sweep failed'
-          body: '<p><strong>The twice-daily inngest rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall or SSH key was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or the issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>This job holds only the Read-permission token. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
+          body: '<p><strong>The twice-daily inngest rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall or SSH key was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or the issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>This job holds no Hetzner write credential. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
