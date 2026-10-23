@@ -4944,7 +4944,10 @@ _DISPATCHED=$((PASS + FAIL))
 #   row (+1), the empty-scan row (+1), and the two positive controls (+2).
 # 1127 -> 1131 (+4) at the #8316 review round, measured: the strip's suffix and prefix over-reach rows (+2) and the two pins on
 #   the reworded G3.7 `latched` ::error:: text (+2); the every-_erg_*-helper row now derives from `_GATE_OTHER_RE` (net 0).
-_EXACT_FLOOR=1131
+# 1131 -> 1129 (-2) at #10664 Site C (the generation anchor has no read/write fallback), measured: the "fallback is announced by
+#   NAME", "read/write token is masked too" and "falls back only after an empty read-only read" assertions are removed (-3) and
+#   one block asserting the read/write token is never read, sent or printed replaces them (+1); the 401 row keeps its place.
+_EXACT_FLOOR=1129
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
