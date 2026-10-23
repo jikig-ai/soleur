@@ -153,8 +153,13 @@ gap issue and never reports "no gap" on a partial read. The workflow run's last 
 | `bad_input` | A configuration error in the workflow (rejected before any API call). |
 
 The next step is always `gh run rerun <run-id> --failed`: every reconcile is a full stateless read, so a re-run is safe.
-The next fully complete reconcile closes the degraded issue by itself. The 12 h `scheduled-terraform-drift` check remains
-the independent backstop.
+The next fully complete reconcile closes the degraded issue by itself.
+
+**Who watches the follower.** Nobody does. A follower failure is a red run only (plus the degraded issue for the read-class
+reasons above, which is how a human learns it is blind). The 12 h `scheduled-terraform-drift` check backstops the gap itself,
+not the follower: it is dispatched by Inngest at 06:00 and 18:00 UTC, runs a Terraform plan (so latency is up to about 12 h),
+does not monitor the follower, and does not catch a missed delivery that is not Terraform state, such as a `deploy-fix` script
+copy on the host.
 
 **Flip-evidence count (read-only).** The decision to build the deferred fixes (merge the two workflows, or add a
 re-dispatch follower) needs a count of distinct pushes, not runs. Counting unit: the **SHA**. The same SHA can appear in

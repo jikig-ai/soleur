@@ -773,7 +773,7 @@ Why the two fixes stay deferred (tracked by the still-open #10033 and #8167): me
 serializer of lock-less R2 state; a re-dispatch follower writes production and would have to honour two kill switches;
 "poll for the sibling" (the second option on #8167) is rejected because evicted runs have zero jobs and so carry no signal
 to poll; a `schedule:` trigger as a second detection path is rejected because it would duplicate the 12 h
-`scheduled-terraform-drift` cron, which remains the independent backstop.
+`scheduled-terraform-drift` cron, which backstops the gap itself (not the follower) for Terraform-managed state only.
 
 Flip evidence bar: build a deferred fix when there are 3 or more distinct undelivered SHAs in 30 days, or one row aged past
 1 hour with real deploy impact, plus a green operator-reviewed rehearsal on a disposable concurrency group and state key.
@@ -790,6 +790,11 @@ carries its own skip marker, so each candidate is dropped by its own workflow's 
 in-flight deferral (deploy-fix 150 min, infra 120 min, `waiting` 60 min), each above the workflow's `apply` timeout; the open
 issue is identified by bot author plus exact title, never by label alone; `priority/p1-high` is added at create only and
 `priority/p0-critical` is add-only; and a degraded issue pages a blind follower.
+
+A follower failure is a red run only (plus the degraded issue for read-class failures): nothing monitors the follower itself.
+The drift check backstops the gap itself, not the follower: `scheduled-terraform-drift.yml` is dispatched by Inngest at
+06:00/18:00 UTC, runs a Terraform plan (about 12 h latency), does not watch the follower, and does not catch a missed delivery
+that is not Terraform state (a `deploy-fix` host copy).
 
 Accepted residuals: an untouched gap older than 7 days ages out and the issue is left open with one marker comment (the
 follower never closes without having seen a delivery); the close comment claims only the 7-day horizon ("Every cancelled push
