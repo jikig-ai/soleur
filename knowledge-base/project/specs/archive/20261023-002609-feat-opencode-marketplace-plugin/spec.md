@@ -1,12 +1,12 @@
 ---
 name: feat-opencode-marketplace-plugin
-status: draft
-issue: TBD
+status: completed
+issue: 10723
 lane: cross-domain
-epic: TBD
-created: 2025-10-20
-last_reviewed: 2025-10-20
-updated: 2025-10-20
+epic: 10591
+created: 2026-10-20
+last_reviewed: 2026-10-23
+updated: 2026-10-23
 brand_survival_threshold: single-user incident
 user_brand_critical: true
 ---

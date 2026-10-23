@@ -3,6 +3,9 @@ name: npm Publish
 on:
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Version Bump and Release"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -11,18 +14,24 @@ permissions:
 jobs:
   publish:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (startsWith(github.ref_name, 'v') &&
+      (github.event_name == 'release' &&
+       startsWith(github.ref_name, 'v') &&
        !startsWith(github.ref_name, 'vinngest-') &&
        !startsWith(github.ref_name, 'web-') &&
-       !startsWith(github.ref_name, 'zot-'))
+       !startsWith(github.ref_name, 'zot-')) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -33,22 +42,32 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 
-      - name: Materialize and verify npm package payload
+      - name: Materialize npm package payload
         run: |
           set -euo pipefail
           bun plugins/soleur/scripts/sync-npm-package.ts
-          bun plugins/soleur/scripts/sync-npm-package.ts --check
 
-      - name: Set package version from tag
-        if: github.event_name == 'release'
+      - name: Resolve version and publish to npm
         working-directory: packages/opencode-plugin
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          npm version "$VERSION" --no-git-tag-version
-
-      - name: Publish
-        working-directory: packages/opencode-plugin
-        run: npm publish --access public --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            RAW_TAG="$REF_NAME"
+          else
+            RAW_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)
+          fi
+          VERSION="${RAW_TAG#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Error: invalid semver version '$VERSION' (from '$RAW_TAG')" >&2
+            exit 1
+          fi
+          if npm view "@soleur/opencode@$VERSION" version >/dev/null 2>&1; then
+            echo "@soleur/opencode@$VERSION is already published on npm; skipping."
+            exit 0
+          fi
+          npm version --no-git-tag-version -- "$VERSION"
+          npm publish --access public --ignore-scripts
