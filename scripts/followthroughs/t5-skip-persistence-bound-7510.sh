@@ -7,7 +7,13 @@
 # a check that exits 0. This probe is that missing observer.
 #
 # It reads the ONE signal that already exists — the suite's own loud SKIP line in post-merge
-# `infra-validation.yml` logs — so it needs no new instrumentation to be useful today.
+# `infra-validation.yml` logs. The CARRIER of that line is the runner
+# apps/web-platform/infra/run-registered-suites.sh: it captures each suite's output into a per-suite
+# file, so the suite's own text never reaches the Actions log; the runner RELAYS the column-0
+# `SKIP (loud): ` lines and the rehearsal suite's terminal line as `SOLEUR| relay <basename>: <line>`
+# (#10786). Between #8763 (2026-09-25) and that relay the marker below was invisible and this probe
+# was TRANSIENT from 2026-09-28 on; run-registered-suites.test.sh (T13) and this probe's own suite
+# (section (k), which feeds the real runner's stdout to this file) keep the chain from drifting again.
 #
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS       (no skip observed in the sampled window; the residual has not materialised)

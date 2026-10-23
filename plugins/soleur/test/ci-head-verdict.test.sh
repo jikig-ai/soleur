@@ -46,6 +46,16 @@ for tool in jq python3 date timeout; do
 done
 TIMEOUT_BIN="$(command -v timeout)"
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 SANDBOX="$(mktemp -d "$TMPDIR/ci-head-verdict.XXXXXXXX")" || { echo "[FATAL] mktemp failed" >&2; exit 1; }
 case "$SANDBOX" in /*) : ;; *) echo "[FATAL] sandbox is not absolute" >&2; exit 1 ;; esac
 trap 'rm -rf "$SANDBOX"' EXIT
@@ -90,6 +100,11 @@ case "$args" in
     failing runs && { echo "stub: runs failed" >&2; exit 1; }
     f="$FX/runs.json"; [[ -f "$FX/runs.$poll.json" ]] && f="$FX/runs.$poll.json"
     if [[ -f "$FX/runs.raw" ]]; then cat "$FX/runs.raw"; else jq -c '[{total_count: length, workflow_runs: .}]' "$f"; fi ;;
+  "api --paginate --slurp repos/{owner}/{repo}/commits/$STUB_H/check-suites?per_page=100")
+    failing suites && { echo "stub: check-suites failed" >&2; exit 1; }
+    if [[ -f "$FX/suites.raw" ]]; then cat "$FX/suites.raw"
+    elif [[ -f "$FX/suites.paged" ]]; then jq -c '[.[] | {total_count: 1, check_suites: [.]}]' "$FX/suites.json"   # one suite per page, as --paginate --slurp emits
+    else jq -c '[{total_count: length, check_suites: .}]' "$FX/suites.json"; fi ;;
   "api -H Accept: application/vnd.github.raw+json repos/{owner}/{repo}/contents/.github/workflows/ci.yml")
     failing ciyml && { echo "stub: ci.yml read failed" >&2; exit 1; }
     if [[ -f "$FX/ciyml.404" ]]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
@@ -115,7 +130,19 @@ mkrow() { # <name> -> prints the dir: a non-draft PR at H, ONE ready event at T,
   echo '[]' > "$d/checkruns.json"; echo '[]' > "$d/runs.json"
   printf 'jobs:\n  detect-changes:\n    runs-on: ubuntu-latest\n  draft-light:\n    runs-on: ubuntu-latest\n' > "$d/ciyml.yml"
   http_date 600 > "$d/date"
+  # DEFAULT check suite: ONE suite that predates the ready event (the head existed before T), so a no-run row keeps the
+  # clock at T and every pre-existing stalled row is unchanged. `setsuites` REPLACES this file, never appends to it.
+  setsuites "$d" -3600
   printf '%s' "$d"
+}
+setsuites() { # <dir> <seconds-relative-to-T>...  REPLACES the head's check suites (no offsets = an empty list)
+  local d="$1"; shift
+  local o list='[]'
+  assert_fixture_dir "$d"
+  for o in "$@"; do
+    list=$(jq -c --arg h "$H" --arg c "$(iso_at "$o")" '. + [{id: (length + 1), head_sha: $h, created_at: $c, app: {slug: "github-actions"}}]' <<<"$list")
+  done
+  printf '%s\n' "$list" > "$d/suites.json"
 }
 setready() { # <dir> <iso...>  (oldest first; none = never readied)
   local d="$1"; shift
@@ -182,10 +209,10 @@ row_V1() { local d; d=$(mkrow V1); setready "$d"; addtest "$d" 11 completed succ
   vrun "$d" verdict "$PR"
   ok V1.rc rc_is 0; ok V1.state state_is n/a never-ready none; ok V1.nomiss nomiss "$d"
   ok V1.one one_marker
-  ok V1.no-row-read notcalled "$d" check-runs; ok V1.no-run-read notcalled "$d" ci.yml/runs; }
+  ok V1.no-row-read notcalled "$d" check-runs; ok V1.no-run-read notcalled "$d" ci.yml/runs; ok V1.no-suite-read notcalled "$d" check-suites; }
 # V2: a PR that is a draft NOW is n/a whatever its history (readers change nothing for a draft).
 row_V2() { local d; d=$(mkrow V2); setdraft "$d" true; vrun "$d" verdict "$PR"
-  ok V2.rc rc_is 0; ok V2.state state_is n/a draft none; ok V2.nomiss nomiss "$d"; ok V2.no-run-read notcalled "$d" ci.yml/runs; }
+  ok V2.rc rc_is 0; ok V2.state state_is n/a draft none; ok V2.nomiss nomiss "$d"; ok V2.no-run-read notcalled "$d" ci.yml/runs; ok V2.no-suite-read notcalled "$d" check-suites; }
 # V3: readied before S3 merged, green full draft-era test, read after 80 minutes: full-decided, never stalled.
 row_V3() { local d; d=$(mkrow V3); addtest "$d" 11 completed success 7; setnow "$d" 4800; vrun "$d" verdict "$PR"
   ok V3.rc rc_is 0; ok V3.state state_is full-decided green-test 7; ok V3.sha sha_is "$H"; ok V3.nomiss nomiss "$d"; }
@@ -200,8 +227,9 @@ row_V5() { local d; d=$(mkrow V5); addtest "$d" 11 completed failure 6; addrun "
   setnow "$d" 7800; vrun "$d" verdict "$PR"
   ok V5.rc rc_is 0; ok V5.state state_is stalled undecided-after-120m 8
   setnow "$d" 5220; vrun "$d" verdict "$PR"; ok V5.87m-slow-healthy-run-still-pending state_is pending-full run-in-progress 8
-  setnow "$d" 7200; vrun "$d" verdict "$PR"; ok V5.at-120m-exactly-not-yet state_is pending-full run-in-progress 8
-  setnow "$d" 7201; vrun "$d" verdict "$PR"; ok V5.120m-plus-1s state_is stalled undecided-after-120m 8; }
+  # The run is the anchor (it was created at T+2), so the boundary is the RUN's age: 7202 is exactly 120 minutes old.
+  setnow "$d" 7202; vrun "$d" verdict "$PR"; ok V5.at-120m-exactly-not-yet state_is pending-full run-in-progress 8
+  setnow "$d" 7203; vrun "$d" verdict "$PR"; ok V5.120m-plus-1s state_is stalled undecided-after-120m 8; }
 # V6: no run created at or after the ready event: no-run, then stalled after 120 minutes; the draft-era run is ignored.
 row_V6() { local d; d=$(mkrow V6); addtest "$d" 11 completed failure 6; addrun "$d" 6 completed failure -900
   vrun "$d" verdict "$PR"
@@ -212,7 +240,8 @@ row_V7() { local d c want
   for c in success:run-success failure:run-failure timed_out:run-timed-out; do d=$(mkrow "V7-${c%%:*}")
     addtest "$d" 11 completed failure 6; addrun "$d" 8 completed "${c%%:*}" 2; setnow "$d" 4800
     vrun "$d" verdict "$PR"; want="${c##*:}"
-    ok "V7.$c" state_is full-decided "$want" 8; done; }
+    ok "V7.$c" state_is full-decided "$want" 8
+    setnow "$d" 7800; vrun "$d" verdict "$PR"; ok "V7.$c.still-decided-after-120m" state_is full-decided "$want" 8; done; }
 # V8: a fork run waiting for approval is awaiting-approval, and 130 minutes does not turn it into stalled.
 row_V8() { local d; d=$(mkrow V8); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed action_required 2
   vrun "$d" verdict "$PR"; ok V8.state state_is awaiting-approval run-action-required 8
@@ -298,6 +327,74 @@ row_V23() { local d; d=$(mkrow V23); addtest "$d" 11 completed failure 6; jqf "$
   # a dirty PR whose ready run was CANCELLED is not the "no run can ever appear" case: it still stalls
   d=$(mkrow V23e); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed cancelled 2; jqf "$d" pr.json '.mergeable_state = "dirty"'; setnow "$d" 7800
   vrun "$d" verdict "$PR"; ok V23.dirty-with-a-cancelled-run-still-stalls state_is stalled undecided-after-120m 8; }
+# V24: the stall clock starts at max(ready event T, the kept run's own created_at). A head pushed long after T, whose run
+# is young, is NOT stalled; the boundary is exactly 120 minutes of the RUN's age (strict).
+row_V24() { local d; d=$(mkrow V24); addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 7500; setnow "$d" 7560
+  vrun "$d" verdict "$PR"; ok V24.fresh-push-young-run-is-pending state_is pending-full run-in-progress 8; ok V24.rc rc_is 0; ok V24.nomiss nomiss "$d"
+  setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V24.run-age-exactly-120m-not-yet state_is pending-full run-in-progress 8
+  setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V24.run-age-120m-plus-1s-stalled state_is stalled undecided-after-120m 8
+  d=$(mkrow V24b); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed cancelled 7500; setnow "$d" 7560
+  vrun "$d" verdict "$PR"; ok V24.cancelled-young-run-is-no-run state_is no-run run-cancelled 8
+  setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V24.cancelled-boundary-not-yet state_is no-run run-cancelled 8
+  setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V24.cancelled-boundary-stalled state_is stalled undecided-after-120m 8
+  # two kept runs with different created_at: the NEWEST decides, and the clock is its own created_at, not the older run's
+  d=$(mkrow V24c); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed cancelled 2; addrun "$d" 9 in_progress null 7500; setnow "$d" 7560
+  vrun "$d" verdict "$PR"; ok V24.newest-of-two-kept-runs-decides state_is pending-full run-in-progress 9
+  setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V24.newest-of-two-clock-is-the-newest-runs-age state_is stalled undecided-after-120m 9; }
+# V25: no kept run yet: the clock starts at the head's EARLIEST check suite when that is later than T; a head whose suites
+# predate T keeps the clock at T (the old behaviour).
+row_V25() { local d; d=$(mkrow V25); addtest "$d" 11 completed failure 6; setsuites "$d" 7500; setnow "$d" 7560
+  vrun "$d" verdict "$PR"; ok V25.fresh-push-no-run-yet state_is no-run no-run-after-ready none; ok V25.rc rc_is 0; ok V25.nomiss nomiss "$d"
+  setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V25.suite-age-exactly-120m-not-yet state_is no-run no-run-after-ready none
+  setnow "$d" 14701; vrun "$d" verdict "$PR"; ok V25.suite-age-120m-plus-1s-stalled state_is stalled undecided-after-120m none
+  # earliest of several suites, not the latest: a MAX anchor would be 6801 s old here and read pending
+  d=$(mkrow V25b); addtest "$d" 11 completed failure 6; setsuites "$d" 7900 7500 7700; setnow "$d" 14701   # newest first as the real API lists them, earliest in the MIDDLE so first and last differ from min
+  vrun "$d" verdict "$PR"; ok V25.earliest-suite-wins state_is stalled undecided-after-120m none
+  # a head whose suites predate T (the default) keeps the clock at T: exactly as before the fix
+  d=$(mkrow V25c); addtest "$d" 11 completed failure 6; setnow "$d" 7201
+  vrun "$d" verdict "$PR"; ok V25.old-suites-keep-the-clock-at-T state_is stalled undecided-after-120m none
+  # suites that both predate T (listed newest first): the T gate carries the verdict, so the head is stalled once T is 120m old
+  d=$(mkrow V25d); addtest "$d" 11 completed failure 6; setsuites "$d" -3600 -9000; setnow "$d" 7201
+  vrun "$d" verdict "$PR"; ok V25.suites-before-T-stay-stalled state_is stalled undecided-after-120m none
+  # --paginate --slurp yields one array per page: the earliest suite on page 2 must still be found
+  d=$(mkrow V25e); addtest "$d" 11 completed failure 6; setsuites "$d" 7900 7500 7700; touch "$d/suites.paged"; setnow "$d" 14701   # three pages, earliest on the middle one
+  vrun "$d" verdict "$PR"; ok V25.earliest-suite-on-the-second-page-wins state_is stalled undecided-after-120m none
+  setnow "$d" 14700; vrun "$d" verdict "$PR"; ok V25.paged-boundary-not-yet state_is no-run no-run-after-ready none; }
+# V26: a failed, malformed or empty read of the head's check suites, with no kept run and T old, is state=error (exit 3),
+# never a member of the closed set and never a guess.
+row_V26() { local d k
+  for k in fail html notarray nullts garbage otherhead preepoch; do d=$(mkrow "V26-$k"); addtest "$d" 11 completed failure 6; setsuites "$d" 7500; setnow "$d" 7800
+    case "$k" in
+      fail) touch "$d/suites.fail" ;;
+      html) printf '<html>502</html>' > "$d/suites.raw" ;;
+      notarray) echo '[{"total_count":1,"check_suites":"x"}]' > "$d/suites.raw" ;;
+      nullts) jqf "$d" suites.json 'map(.created_at = null)' ;;
+      garbage) jqf "$d" suites.json 'map(.created_at = "garbage")' ;;
+      otherhead) jqf "$d" suites.json "map(.head_sha = \"$OTHER_H\")" ;;
+      preepoch) jqf "$d" suites.json 'map(.created_at = "0001-01-01T00:00:00Z")' ;;
+    esac
+    vrun "$d" verdict "$PR"
+    ok "V26.$k.rc" rc_is 3; ok "V26.$k.state" state_is error api-error; ok "V26.$k.not-closed" not_closed; ok "V26.$k.one" one_marker
+    ok "V26.$k.nomiss" nomiss "$d"; done
+  d=$(mkrow V26-empty); addtest "$d" 11 completed failure 6; setsuites "$d"; setnow "$d" 7800; vrun "$d" verdict "$PR"
+  ok V26.empty-list.rc rc_is 3; ok V26.empty-list.reason state_is error no-check-suites; ok V26.empty-list.not-closed not_closed; ok V26.empty-list.one one_marker
+  ok V26.empty-list.names-the-sha eq "$(grep -c "no check suites visible at $H" <<<"$ERR")" 1; ok V26.empty-list.nomiss nomiss "$d"; }
+# V27: the suite read is LAZY. It happens only when no run is kept AND T alone already says stalled; every other path makes
+# no such request (the stalled-gate rows read at T+7800, so a hoisted read would be seen).
+row_V27() { local d
+  d=$(mkrow V27-green); addtest "$d" 11 completed success 7; setnow "$d" 7800; vrun "$d" verdict "$PR"; ok V27.green notcalled "$d" check-suites
+  d=$(mkrow V27-dirty); addtest "$d" 11 completed failure 6; jqf "$d" pr.json '.mergeable_state = "dirty"'; setnow "$d" 7800; vrun "$d" verdict "$PR"
+  ok V27.dirty-state state_is no-run conflicting none; ok V27.dirty notcalled "$d" check-suites
+  d=$(mkrow V27-approval); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed action_required 2; setnow "$d" 7800; vrun "$d" verdict "$PR"; ok V27.awaiting-approval notcalled "$d" check-suites
+  d=$(mkrow V27-kept-run); addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 2; setnow "$d" 7800; vrun "$d" verdict "$PR"
+  ok V27.kept-run-state state_is stalled undecided-after-120m 8; ok V27.kept-run notcalled "$d" check-suites
+  d=$(mkrow V27-fresh); addtest "$d" 11 completed failure 6; vrun "$d" verdict "$PR"; ok V27.fresh-no-run-state state_is no-run no-run-after-ready none; ok V27.fresh-no-run notcalled "$d" check-suites
+  d=$(mkrow V27-at-120m); addtest "$d" 11 completed failure 6; setnow "$d" 7200; vrun "$d" verdict "$PR"
+  ok V27.t-gate-state state_is no-run no-run-after-ready none; ok V27.t-gate-is-strict notcalled "$d" check-suites
+  d=$(mkrow V27-stalled); addtest "$d" 11 completed failure 6; setnow "$d" 7800; vrun "$d" verdict "$PR"
+  ok V27.stalled-state state_is stalled undecided-after-120m none; ok V27.stalled.nomiss nomiss "$d"
+  ok V27.no-run-and-old-reads-the-suites called "$d" "commits/$H/check-suites?per_page=100"
+  ok V27.the-suite-read-is-queried-once test "$(grep -c 'check-suites' "$d/log")" = 1; }
 # V21: only a COMPLETED + success `test` row short-circuits to green; every other status/conclusion falls through to the
 # run lookup (a cancelled/neutral/skipped/timed_out/action_required/stale/failure row is not green).
 row_V21() { local d c
@@ -309,7 +406,7 @@ row_V21() { local d c
 # produces a ready run: verdict is n/a (no run or check read), and the wait answers ok at once (arming = today's flow).
 row_V22() { local d
   d=$(mkrow V22-404); touch "$d/ciyml.404"; addtest "$d" 11 completed failure 6; setnow "$d" 7800; vrun "$d" verdict "$PR"
-  ok V22.404.rc rc_is 0; ok V22.404.state state_is n/a no-draft-light none; ok V22.404.no-run-read notcalled "$d" ci.yml/runs; ok V22.404.no-row-read notcalled "$d" check-runs
+  ok V22.404.rc rc_is 0; ok V22.404.state state_is n/a no-draft-light none; ok V22.404.no-run-read notcalled "$d" ci.yml/runs; ok V22.404.no-row-read notcalled "$d" check-runs; ok V22.404.no-suite-read notcalled "$d" check-suites
   d=$(mkrow V22-nojob); printf 'jobs:\n  test:\n    runs-on: ubuntu-latest\n' > "$d/ciyml.yml"; addtest "$d" 11 completed failure 6; vrun "$d" verdict "$PR"
   ok V22.no-job.state state_is n/a no-draft-light none; ok V22.no-job.nomiss nomiss "$d"
   d=$(mkrow V22-wait404); touch "$d/ciyml.404"; setready "$d" "$(iso_at -3600)" "$T_ISO"
@@ -591,6 +688,10 @@ run_row row_V16 "V16 an empty gh body fails every subcommand"
 run_row row_V17 "V17 the clock is the server's (Date header / injected), never local"
 run_row row_V18 "V18 one marker, last, closed state set, over every conclusion"
 run_row row_V19 "V19 usage errors exit 2 with no gh call; --repo exports GH_REPO"
+run_row row_V24 "V24 the stall clock starts at the kept run's own created_at when it is later than T"
+run_row row_V25 "V25 no run yet: the clock starts at the earliest check suite when it is later than T"
+run_row row_V26 "V26 an unreadable, malformed or empty suite list is state=error, never a guess"
+run_row row_V27 "V27 the check-suite read is lazy: only when no run is kept and T alone says stalled"
 run_row row_V23 "V23 a conflicting PR with no run is no-run/conflicting, never stalled"
 run_row row_V21 "V21 only a completed+success test row short-circuits to green"
 run_row row_V22 "V22 a repo without the draft-light mechanism: n/a, wait is ok at once"
@@ -652,18 +753,33 @@ mutant M33 "elif [[ \"\$CMD\" == wait-ready-run ]]; then" "elif false; then" row
 mutant M34 'rs="conflicting"' 'rs="no-run-after-ready"' row_V23
 mutant M36 '"$rs" == no-run-after-ready && "$PR_MSTATE"' '"$PR_MSTATE"' row_V23
 mutant M35 '"$PR_MSTATE" == dirty ]]; then rs=' '"$PR_MSTATE" == clean ]]; then rs=' row_V23
+# Stall-clock rows. There is no "drop T from max(T, A)" mutant: the T gate above already holds, so an anchor at or before T
+# stalls with or without the max (equivalent by construction; row V25d pins the behaviour).
+mutant M37 'anchor_epoch="$RUN_EPOCH"' 'anchor_epoch="$t_epoch"' row_V24 row_V5
+mutant M38 '(min | tostring)' '(max | tostring)' row_V25
+mutant M40 'if length == 0 then "none"' 'if length == 0 then "0"' row_V26
+mutant M41 'NOW_EPOCH - t_epoch > STALL_MINUTES * 60' 'NOW_EPOCH - t_epoch > 0' row_V27
+mutant M42 'read_head_anchor "$PR_SHA" || fail_api "$ERRMSG" "$ANCHOR_REASON"' 'read_head_anchor "$PR_SHA" || ANCHOR_EPOCH="$t_epoch"' row_V26
+mutant M43 'type == "object" and .head_sha == $h and (.created_at | type) == "string"' 'type == "object" and (.created_at | type) == "string"' row_V26
+mutant M44 '|| fail_api "$ERRMSG" "$ANCHOR_REASON"' '|| fail_api "$ERRMSG"' row_V26
+mutant M45 'NOW_EPOCH - anchor_epoch > STALL_MINUTES * 60' 'NOW_EPOCH - anchor_epoch >= STALL_MINUTES * 60' row_V24 row_V25
+mutant M46 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[0].check_suites[] | .created_at | fromdateiso8601]' row_V25
+mutant M47 '(min | tostring)' '(.[0] | tostring)' row_V25
+mutant M48 '(min | tostring)' '(.[-1] | tostring)' row_V25
+mutant M49 '[.[].check_suites[] | .created_at | fromdateiso8601]' '[.[-1].check_suites[] | .created_at | fromdateiso8601]' row_V25
 mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
-MIN_ASSERTIONS=366
+# MIN_ASSERTIONS and MIN_MUTANTS are LOWER BOUNDS (the measured counts at the last edit); raise them in the same edit as a new row.
+MIN_ASSERTIONS=459
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=35
+MIN_MUTANTS=47
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi

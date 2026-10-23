@@ -939,7 +939,7 @@ async function startAgentSessionInner(
   // session and never registers a dangling one. No lease, no clone, no spawn.
   // Info breadcrumb only (an owner-set window is not an incident); hashed user
   // id, no conversation id.
-  if (await newAgentSessionsRefused()) {
+  if (await newAgentSessionsRefused({ userId })) {
     log.info(
       {
         feature: "quiet-window",
@@ -3017,10 +3017,11 @@ async function sendUserMessageInner(
   // startAgentSession sits after the messages INSERT, the attachment download into the user's
   // working tree, the BYOK routing call and the status flip to active, so gating only there left a
   // stored message, written files and a conversation stuck "active" with no session. No warm
-  // exemption: every message here ends in startAgentSession, whose gate refuses unconditionally, so
-  // an exemption would only move the refusal back below the writes. The prior session is never
+  // exemption: every message here ends in startAgentSession, whose gate refuses everyone but the one
+  // configured synthetic account (same `userId` rule at both gates), so a warm exemption would only
+  // move the refusal back below the writes. The prior session is never
   // touched (nothing below runs), so it stays alive and registered.
-  if (await newAgentSessionsRefused()) {
+  if (await newAgentSessionsRefused({ userId })) {
     log.info(
       {
         feature: "quiet-window",
