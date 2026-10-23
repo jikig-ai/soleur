@@ -644,6 +644,20 @@ AFFECTED_PLUGINS_SOLEUR_TEST_WEB_HOST_ESCROW_DIAGNOSE_WORKFLOW_TEST_SH_PATHS=(
   "plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh"  # self-inclusion
   "scripts/lib/test-affected-paths.sh"                              # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
+  "scripts/apply-delivery-gap.sh"
+  ".github/workflows/apply-delivery-gap-follower.yml"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
+  "knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md"
+  "plugins/soleur/test/apply-delivery-gap-follower.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                       # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_DIAGNOSE_INNGEST_VERIFY_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/diagnose-inngest-verify.yml"
+  "plugins/soleur/test/diagnose-inngest-verify-workflow.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                            # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_PROC_TEST_SH_PATHS=(
   "plugins/soleur/scripts/lib/proc.sh"
   "plugins/soleur/test/proc.test.sh"
