@@ -29,7 +29,24 @@ trap _cleanup_tmp_dirs EXIT
 # One suite-level scratch root, registered HERE in the parent shell. Helpers that
 # are called as `x=$(helper)` run in a subshell, so a `_TMP_DIRS+=` inside them
 # is discarded and their dirs would leak; they create under this root instead.
+# TMPDIR is pinned to an absolute root: every fixture path below is rooted at SUITE_TMP, and a relative TMPDIR
+# would make `mktemp -d` (and every path derived from it) relative (fixture-relative-assert, #7708).
+export TMPDIR="${TMPDIR:-/var/tmp}"
 SUITE_TMP=$(mktemp -d); _TMP_DIRS+=("$SUITE_TMP")
+
+# The canonical fixture-dir guard (byte-identical to plugins/soleur/test/test-helpers.sh; asserted by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh): refuse an empty, relative or synthetic-fs directory
+# before a fixture write, so a function-returned path that came back wrong cannot retarget the write. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 
 _report() {
   local label="$1" status="$2" detail="${3:-}"
@@ -1559,7 +1576,7 @@ SHIM
 # $1 is the empty string: the no-timeout host), and the git SHIM in place of the real git.
 _mk_sim_path() {
   local d; d=$(_mk_stub_path record perl "${1-timeout}")
-  rm -f "$d/git"; cp "$SIM_SHIM" "$d/git"; chmod +x "$d/git"
+  assert_fixture_dir "$d"; rm -f "$d/git"; cp "$SIM_SHIM" "$d/git"; chmod +x "$d/git"
   printf '%s\n' "$d"
 }
 
@@ -1626,7 +1643,7 @@ _sim_run() {  # <cwd> <command> [pd|real]
   for e in ${RUN_ENV[@]+"${RUN_ENV[@]}"}; do saved+=("$e"); done
   SIM_N=$((SIM_N + 1))
   SIM_REC="$SUITE_TMP/rec.$SIM_N"; mkdir -p "$SIM_REC"
-  SIM_LOG="$SUITE_TMP/shim.$SIM_N.log"; : > "$SIM_LOG"
+  SIM_LOG="$SUITE_TMP/shim.$SIM_N.log"; assert_fixture_dir "$SIM_LOG"; : > "$SIM_LOG"
   SIM_TMP="${SIM_TMP_FIXED:-$SUITE_TMP/tmp.$SIM_N}"; mkdir -p "$SIM_TMP"
   RUN_ENV=(${saved[@]+"${saved[@]}"} ${SIM_ENV[@]+"${SIM_ENV[@]}"} "TMPDIR=$SIM_TMP" "SHIM_LOG=$SIM_LOG" \
            "SHIM_REAL_GIT=$SIM_REAL_GIT" "GL_REC_DIR=$SIM_REC")
@@ -1680,7 +1697,11 @@ _all_adds_superset() {  # every sim add is `-A` (two roots, mixed directories)
   while IFS= read -r l; do [[ "$l" == *" -A "* ]] || return 1; done <<<"$a"
 }
 _has_update() { local a; a=$(_sim_adds); [[ "$a" == *" -u "* && "$a" != *" -A "* ]]; }
-_no_sim() { [[ "$(_log_n)" -gt 0 && "$(_sim_add_n)" -eq 0 ]] && [[ -z "$(find "$SIM_TMP" -mindepth 1 -print -quit 2>/dev/null)" ]]; }
+_no_sim() {
+  [[ "$(_log_n)" -gt 0 && "$(_sim_add_n)" -eq 0 ]] || return 1
+  [[ -z "$(find "$SIM_TMP" -mindepth 1 -print -quit 2>/dev/null)" ]] || return 1
+  return 0
+}
 _tmp_empty() { [[ -z "$(find "$SIM_TMP" -mindepth 1 -print -quit 2>/dev/null)" ]]; }
 # The recorded sim index listings (`git ls-files -s` of the index the gitleaks stub was handed).
 _rec_ls() { cat "$SIM_REC"/ls.* 2>/dev/null || true; }
@@ -2170,7 +2191,7 @@ _t_sim_canary() {
 
   # --- group 8: a `-diff` gitattribute blinds `gitleaks git`; the guard must still see the would-be blob ---
   D=$(_mk_leaky_repo untracked)
-  mkdir -p "$D/.git/info"; echo 'leak.json -diff' > "$D/.git/info/attributes"
+  assert_fixture_dir "$D"; mkdir -p "$D/.git/info"; echo 'leak.json -diff' > "$D/.git/info/attributes"
   cl=$(mktemp -d "$SUITE_TMP/ndclone.XXXXXX")
   cp -a "$D/." "$cl/"; git -C "${cl:?}" add leak.json
   ( cd "$cl" && gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 --report-format json \
@@ -2324,7 +2345,7 @@ _t_sim_dirproof() {
   # 10b: commands whose cd does NOT take effect (or is undone) before the add. The leak is at the repo
   # root; a replay that trusts the named directory would scan docs/ instead. A clean docs/leak.json
   # is present, then absent: the exact-replay outcome differs, the verdict must not.
-  U=$(_mk_leaky_repo untracked); D="$U/docs"
+  U=$(_mk_leaky_repo untracked); D="$U/docs"; assert_fixture_dir "$D"
   for state in present absent; do
     if [[ "$state" == present ]]; then echo clean > "$D/leak.json"; else rm -f "$D/leak.json"; fi
     for cmd in "false && cd $D; git add leak.json && git commit -m x" \
@@ -2386,9 +2407,9 @@ _t_sim_failures() {
   SIM_ENV=()
 
   # e. temp dir / index copy / ':' in the objects path
-  pd2=$(_mk_sim_path); rm -f "$pd2/cp"; printf '#!/bin/sh\nexit 1\n' > "$pd2/cp"; chmod +x "$pd2/cp"
+  pd2=$(_mk_sim_path); assert_fixture_dir "$pd2"; rm -f "$pd2/cp"; printf '#!/bin/sh\nexit 1\n' > "$pd2/cp"; chmod +x "$pd2/cp"
   _with_pd "$pd2" _sx "G11e the index copy fails (cp fails) -> deny" "$C" "git add -A && git commit -m x" deny "its own call"
-  pd3=$(_mk_sim_path); rm -f "$pd3/mktemp"
+  pd3=$(_mk_sim_path); assert_fixture_dir "$pd3"; rm -f "$pd3/mktemp"
   printf '#!/bin/sh\nfor a in "$@"; do case "$a" in *commit-sim-*) exit 1 ;; esac; done\nexec %s "$@"\n' "$(command -v mktemp)" > "$pd3/mktemp"
   chmod +x "$pd3/mktemp"
   _with_pd "$pd3" _sx "G11f the sim directory cannot be allocated (mktemp fails for commit-sim-*) -> deny" "$C" "git add -A && git commit -m x" deny "its own call"
@@ -2468,7 +2489,7 @@ _t_sim_pins() {
   # A configured clean filter must never run at hook time: git add on the temp index would execute it.
   F=$(_mk_leaky_repo untracked); fm="$SUITE_TMP/filter.mark"; rm -f "$fm"
   git -C "${F:?}" config filter.mark.clean "touch $fm; cat"
-  printf '* filter=mark\n' > "$F/.gitattributes"
+  assert_fixture_dir "$F"; printf '* filter=mark\n' > "$F/.gitattributes"
   cl=$(mktemp -d "$SUITE_TMP/filterctl.XXXXXX"); cp -a "$F/." "$cl/"
   git -C "${cl:?}" add clean.txt
   _t "G12b fixture control: the configured filter DOES fire on a plain git add" "no marker after a real add" test -e "$fm"
@@ -2655,12 +2676,12 @@ _t_sim_checkattr() {
   [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
   local R f bad="" want got exp
   local names=('unset.txt' 'sp ace.txt' 'qu"ote.txt' $'nl\nname.txt' 'set.txt' 'valued.txt' 'unspec.txt')
-  R=$(mktemp -d "$SUITE_TMP/attr.XXXXXX")
+  R=$(mktemp -d "$SUITE_TMP/attr.XXXXXX"); assert_fixture_dir "$R"
   (
     cd "$R" || exit 1
     git init -q -b main; git config user.email t@t; git config user.name t
     cp "$GITLEAKS_TOML" .gitleaks.toml
-    for f in "${names[@]}"; do printf 'content of %s\n' "x" > "$f"; done
+    for f in "${names[@]}"; do printf 'content of %s\n' "x" > "$R/$f"; done
     mkdir -p .git/info
     printf '%s\n' 'unset.txt -diff' '"sp ace.txt" -diff' '"qu\"ote.txt" -diff' 'nl?name.txt -diff' 'set.txt diff' 'valued.txt diff=foo' > .git/info/attributes
     git add -A
