@@ -53,6 +53,7 @@ ok200|0|200|0.000503|0.009276|0'
 #   raw_verify_nonnum   rc 60 whose verification-result field is text, not an integer (the event must print verify=0)
 #   raw_status204       rc 0 with HTTP 204 and good timers: a gate that accepts "any 2xx" passes it, the real one must fail closed
 #   raw_code2000        rc 0 with the four-digit code 2000: a gate that matches "200*" passes it, the real one must fail closed
+#   raw_tc_bad          rc 56 whose time_connect is text and whose time_appconnect is a readable non-zero number (one unreadable timer beside a good one)
 CURLW_RAW='raw_empty|124|
 raw_garbage|56|https://leak.invalid/x 10.0.1.40 garbage 0
 raw_short3|56|200 0.000503
@@ -64,7 +65,8 @@ raw_refused_comma|7|000 0,000000 0,000000 0
 raw_hs_comma|35|000 0,000198 0,000000 1
 raw_verify_nonnum|60|000 0.000119 0.000000 abc
 raw_status204|0|204 0.000235 0.010363 0
-raw_code2000|0|2000 0.000235 0.010363 0'
+raw_code2000|0|2000 0.000235 0.010363 0
+raw_tc_bad|56|000 abc 0.004360 0'
 
 CURLW_KNOWN_VARS="http_code time_connect time_appconnect ssl_verify_result"
 

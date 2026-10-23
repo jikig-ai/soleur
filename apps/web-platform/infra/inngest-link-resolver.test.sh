@@ -62,8 +62,13 @@ assert_fixture_dir() {
   esac
 }
 
-# an ambient override of the shared profile file would be sourced by every curl double: only H9 sets it, deliberately, in a subshell
-unset CURL_W_PROFILES_FILE
+# an ambient override of the shared profile file would be sourced by every curl double: only H9 sets it, deliberately, in a subshell.
+# CURL_W_SENTINEL is the same class: the in-process rows (H7a, h6_compare) source the fixture in THIS shell, where curlw_fail appends to the
+# ambient path (the doubles bake their own sentinel path and are not affected). The scenario knobs below are read by scenario() with a
+# default, so a developer's exported value would silently change every row that does not name the knob itself.
+unset CURL_W_PROFILES_FILE CURL_W_SENTINEL
+unset SNAP_EXTRA SNAP_SCOPE CA_MODE CA_FILE CA_RAW SERVER_CERT SKIP_SNAPSHOT PRE LINK_SUBDIR PATH_OVERRIDE NO_COMMIT COMMIT_CHMOD
+unset CURL_ALWAYS_OK CURL_FAIL_FIRST CURL_CODE CURL_PROFILES CURL_PROFILES_IGNORED KEEP_SENTRY SG_ATTEMPTS SCEN_IFS SCEN_AGAIN
 WORK="$(mktemp -d -t inngest-link-resolver.XXXXXX)" || die "mktemp -d failed"
 assert_fixture_dir "$WORK"
 # H6_PID (the local TLS listener of the H6 rows) is owned by this trap too: a suite killed mid-H6 must not leave the process behind
@@ -330,6 +335,17 @@ scenario() { # <block file> <run id>
     if [ -n "${SCEN_IFS+x}" ]; then IFS="$SCEN_IFS"; fi   # S12: the resolver must not depend on the caller's IFS
     resolve_inngest_link "$snap" || rc=$?
     IFS=$' \t\n'
+    # S13: SCEN_AGAIN runs a SECOND resolve in the SAME shell (the globals the first one left behind are the point): `pass` re-resolves the same
+    # snapshot (the curl profile list moves on), `flagoff` re-resolves a snapshot without the flag. rc1 and phase1 are what the FIRST resolve left.
+    rc1=""; phase1=""
+    if [ -n "${SCEN_AGAIN:-}" ]; then
+      rc1="$rc"; phase1="${INNGEST_LINK_SELFGATE_PHASE-<unset>}"
+      if [ "$SCEN_AGAIN" = flagoff ]; then
+        { printf '%b' "${SNAP_SCOPE-DOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nDOPPLER_ENVIRONMENT=prd\n}"; printf 'KEY=value\nGITHUB_APP_ID=4242\n'; } > "$snap"
+      fi
+      rc=0
+      resolve_inngest_link "$snap" || rc=$?
+    fi
     # the deploy records the scheme only once the production container started (ci-deploy.sh calls inngest_link_commit_scheme there);
     # NO_COMMIT=1 models a deploy that died before that point (failed canary, aborted swap)
     if [ "$rc" = 0 ] && [ "${COMMIT_CHMOD:-}" = 1 ]; then chmod 0555 "$INNGEST_LINK_DIR"; fi
@@ -340,6 +356,9 @@ scenario() { # <block file> <run id>
       printf 'url=%s\n' "${INNGEST_BASE_URL_RESOLVED-<unset>}"
       printf 'state=%s\n' "${INNGEST_LINK_STATE-<unset>}"
       printf 'reason=%s\n' "${INNGEST_LINK_REASON-<unset>}"
+      printf 'phase=%s\n' "${INNGEST_LINK_SELFGATE_PHASE-<unset>}"
+      printf 'rc1=%s\n' "$rc1"
+      printf 'phase1=%s\n' "$phase1"
     } > "$RUN/out"
   ) > "$RUN/stdout" 2>&1
   [ -s "$RUN/out" ] || printf 'rc=harness\n' > "$RUN/out"
@@ -1268,7 +1287,7 @@ row_S5_event_grammar_on_both_sinks() {
   # every failing profile, the raw ones included: the whole event is a fixed grammar and never a URL, an address or curl text
   for p in refused fw_drop ca_file hs_close hs_rst hs_plain hs_hang verify18 verify10 verify1_san req_reset req_empty req_hang req_http09 req_partial \
            status_partial status502 raw_empty raw_garbage raw_short3 raw_nonnum raw_nonnum502 req_reset_comma req_reset@124 raw_empty@2 \
-           raw_refused_comma raw_hs_comma raw_verify_nonnum raw_status204 raw_code2000; do
+           raw_refused_comma raw_hs_comma raw_verify_nonnum raw_status204 raw_code2000 raw_tc_bad; do
     CURL_PROFILES="$p" SG_ATTEMPTS=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID-${p//@/_}"
     line="$(sg_line)"
     need "[$p] no selfgate_failed event was logged (rc=$(val rc) reason=$(val reason))" "$([ -n "$line" ] && echo 0 || echo 1)" || return 1
@@ -1307,6 +1326,12 @@ row_S6_unknown_arms_and_validated_values() {
   # rc 124 beating perfectly good times (req_reset@124 reads unknown, never request), and a verification result that is text (raw_verify_nonnum
   # reads verify=0: the one field a curl line could inject text through is clamped to an integer): every row states its rc and its whole line
   sg_table "$1" s6 "$SG_S6"
+}
+row_S6c_one_unreadable_timer_beside_a_readable_one_reads_unknown() {
+  # time_connect is text, time_appconnect is a readable non-zero number (rc 56): the phase is unknown (an unreadable timer says nothing about the
+  # stage, whichever of the two it is), tcp counts nothing (its OWN field failed the shape check) and tls counts the attempt (its own field passed).
+  # A shape check that looked at time_appconnect alone would read `request` here.
+  sg_expect "$1" tcbad raw_tc_bad 56 000 1 unknown 0 1 0
 }
 row_S7_wflags_allowlist_is_the_four_names() {
   local names want n
@@ -1355,7 +1380,7 @@ row_S10_pass_verdict_is_exactly_rc0_and_http_200_through_the_pinned_file() {
   need "the self-gate argv carries -k, --insecure or --capath: $argv" "$(case " $argv " in *" -k "*|*" -sk "*|*"--insecure"*|*"--capath"*) echo 1 ;; *) echo 0 ;; esac)" || return 1
 }
 row_S11_one_event_on_every_sink_and_no_raw_output() {
-  local nlog nstore sinks raw
+  local nlog nstore sinks raw emitted
   # a failing gate (three attempts) emits exactly ONE INNGEST_LINK line over the journald logger and exactly ONE Sentry POST, and no sink
   # (the logger, the POST body, the resolver's own stdout and stderr) carries curl's raw -w output: a new log line in the failure tail
   # would otherwise be invisible to every other row
@@ -1365,9 +1390,15 @@ row_S11_one_event_on_every_sink_and_no_raw_output() {
   sinks="$(cat "$RUN/logger.log" "$RUN/stdout"; grep 'api/7/store/' "$RUN/curl.argv" || true)"
   need "a failing gate logged $nlog INNGEST_LINK line(s), want exactly 1: $(cat "$RUN/logger.log")" "$([ "$nlog" = 1 ] && echo 0 || echo 1)" || return 1
   need "a failing gate made $nstore Sentry POST(s), want exactly 1" "$([ "$nstore" = 1 ] && echo 0 || echo 1)" || return 1
+  need "a failing gate emitted $(sg_count) selfgate_failed line(s) over the logger, want exactly 1" "$([ "$(sg_count)" = 1 ] && echo 0 || echo 1)" || return 1
   for raw in '000 0.' '0.000138' '0.004360'; do
     need "a sink carries curl's raw -w output [$raw]" "$(grep -qF -- "$raw" <<< "$sinks" && echo 1 || echo 0)" || return 1
   done
+  # no EMITTED INNGEST_LINK line carries a URL, on any sink: the logger and the resolver's own stdout and stderr (every INNGEST_LINK line there), and
+  # the Sentry extra.detail (the POST's own argv names the Sentry endpoint, so the body's detail fields are read, not the whole argv)
+  emitted="$(grep -h 'INNGEST_LINK' "$RUN/logger.log" "$RUN/stdout" || true; grep 'api/7/store/' "$RUN/curl.argv" | grep -o '"detail":"[^"]*"' || true)"
+  need "no INNGEST_LINK line was emitted on any sink (the check below would be vacuous)" "$([ -n "$emitted" ] && echo 0 || echo 1)" || return 1
+  need "an emitted INNGEST_LINK line carries a URL (://): $(grep -F '://' <<< "$emitted" | head -n1)" "$(grep -qF '://' <<< "$emitted" && echo 1 || echo 0)" || return 1
   # the pass path emits no failure event: its one INNGEST_LINK line is the info `class=resolved` row, never a selfgate_failed or any warning or
   # error, there is no Sentry POST and no raw output
   CURL_PROFILES=ok200 KEEP_SENTRY=1 SG_ATTEMPTS=3 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID-pass"
@@ -1385,6 +1416,26 @@ row_S12_the_w_line_parse_does_not_depend_on_the_callers_ifs() {
   # the four fields are split on a single space whatever IFS the caller holds (the production read is `IFS=' ' read`): with IFS a newline the
   # incident line must still read phase=request tcp=1 tls=1
   SCEN_IFS=$'\n' sg_expect "$1" ifs-newline req_reset 56 000 1 request 1 1 0
+}
+row_S13_the_phase_belongs_to_one_resolve_and_is_never_left_over() {
+  local first="$1"
+  # (a) a gate that fails once and then passes (rc 0): the phase of the failed attempt must not outlive the pass. The variable is the empty
+  # string (reset at the top of resolve_inngest_link), neither the failed attempt's `request` nor unset, and no failure event was emitted.
+  CURL_PROFILES='req_reset,ok200' SG_ATTEMPTS=3 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$first" "$ROW_ID-a"
+  ok_https || return 1
+  need "[a] curl calls=$(curl_calls), want 2 (one failed attempt, then the pass)" "$([ "$(curl_calls)" = 2 ] && echo 0 || echo 1)" || return 1
+  need "[a] a gate that passed on its second attempt left the phase [$(val phase)] (want the empty string)" "$([ "$(val phase)" = "" ] && echo 0 || echo 1)" || return 1
+  need "[a] a passing gate emitted a selfgate_failed event: $(sg_line)" "$([ "$(sg_count)" = 0 ] && echo 0 || echo 1)" || return 1
+  # (b) ONE shell, two resolves: a failing resolve leaves request, and the next resolve (a pass, then a flag-off one) must leave it empty again
+  CURL_PROFILES='req_reset,ok200' SCEN_AGAIN=pass SG_ATTEMPTS=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$first" "$ROW_ID-b"
+  need "[b] the first resolve did not fail (rc1=$(val rc1))" "$([ -n "$(val rc1)" ] && [ "$(val rc1)" != 0 ] && echo 0 || echo 1)" || return 1
+  need "[b] the first (failing) resolve left the phase [$(val phase1)], want request" "$([ "$(val phase1)" = request ] && echo 0 || echo 1)" || return 1
+  ok_https || return 1
+  need "[b] the second (passing) resolve left the phase [$(val phase)] from the first (want the empty string)" "$([ "$(val phase)" = "" ] && echo 0 || echo 1)" || return 1
+  CURL_PROFILES=req_reset SCEN_AGAIN=flagoff SG_ATTEMPTS=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$first" "$ROW_ID-c"
+  need "[c] the first resolve did not leave phase request (phase1=[$(val phase1)])" "$([ "$(val phase1)" = request ] && echo 0 || echo 1)" || return 1
+  need "[c] the flag-off second resolve: rc=$(val rc) url=$(val url)" "$([ "$(val rc)" = 0 ] && [ "$(val url)" = http://10.0.1.40:8288 ] && echo 0 || echo 1)" || return 1
+  need "[c] the flag-off second resolve left the phase [$(val phase)] from the first (want the empty string)" "$([ "$(val phase)" = "" ] && echo 0 || echo 1)" || return 1
 }
 
 # S9: the runbook decode tables name every token and every field of the grammar. The checker reads TABLE ROWS of the section headed
@@ -1516,6 +1567,7 @@ ROW_IDS=(
   S8_noncanonical_input_and_success_first S8b_no_trailing_newline_parses_last_field S9_decode_names_every_token_and_field S9b_decode_checker_can_go_red
   S4c_verify_does_not_outlive_its_attempt S4d_http_does_not_outlive_its_attempt S6b_comma_decimal_zero_is_zero
   S10_pass_verdict_is_exactly_rc0_and_http_200_through_the_pinned_file S11_one_event_on_every_sink_and_no_raw_output S12_the_w_line_parse_does_not_depend_on_the_callers_ifs
+  S6c_one_unreadable_timer_beside_a_readable_one_reads_unknown S13_the_phase_belongs_to_one_resolve_and_is_never_left_over
 )
 
 ROW_ID=""; ROW_WHY=""
@@ -1857,7 +1909,7 @@ if h6_tools_ok; then
     h9_flip time_appconnect 'req_empty|52|000|0.000125|0.008238|0' 'req_empty|52|000|0.000125|0.000000|0'
     h9_flip ssl_verify_result 'verify18|60|000|0.000119|0.000000|18' 'verify18|60|000|0.000119|0.000000|1'
   fi
-  if [ -n "$H6_PID" ]; then kill "$H6_PID" 2>/dev/null; wait "$H6_PID" 2>/dev/null; fi
+  if [ -n "$H6_PID" ]; then kill "$H6_PID" 2>/dev/null; wait "$H6_PID" 2>/dev/null; H6_PID=""; fi   # cleared: the EXIT trap must not signal a reaped (reusable) PID
 elif [ -n "${CI:-}" ]; then
   for _i in $(seq 1 "$H6_N"); do ROWS=$((ROWS + 1)); bad "H6 curl, python3 or openssl is missing under CI: the real-curl differential is mandatory there"; done
 else
@@ -2276,11 +2328,13 @@ print(open(sys.argv[1]).read().count(sys.argv[2]))
 PY
 }
 kill_mut_sg() { # <mutation id> "<row id> ..." <old> <new> [<old> <new>]...   (kill_mut plus the pristine-green and anchor-unique steps)
-  local mid="$1" rows="$2" id i a n_sg n_blk why=""
+  # SG_ANCHOR_FILE=<file> (default: the self-gate text) names the text each anchor must occur in exactly once besides the whole block: a mutant
+  # of code OUTSIDE the `_inngest_link_*` self-gate functions (the reset at the top of resolve_inngest_link) passes SG_ANCHOR_FILE="$BLOCK_REAL".
+  local mid="$1" rows="$2" id i a n_sg n_blk why="" af="${SG_ANCHOR_FILE:-$SG_TEXT}"
   shift 2
   for ((i = 1; i <= $#; i += 2)); do
     a="${!i}"
-    n_sg="$(sg_anchor_count "$SG_TEXT" "$a")"; n_blk="$(sg_anchor_count "$BLOCK_REAL" "$a")"
+    n_sg="$(sg_anchor_count "$af" "$a")"; n_blk="$(sg_anchor_count "$BLOCK_REAL" "$a")"
     if [ "$n_sg" != 1 ] || [ "$n_blk" != 1 ]; then why="the anchor [${a:0:70}] occurs $n_sg time(s) in the self-gate text and $n_blk in the block, want exactly 1 in both"; break; fi
   done
   if [ -z "$why" ]; then for id in $rows; do if [ "${PRISTINE[$id]:-1}" != 0 ]; then why="named row $id is not GREEN on the pristine block"; break; fi; done; fi
@@ -2356,6 +2410,17 @@ kill_mut_sg M22ae-w-line-split-on-the-callers-ifs "S12_the_w_line_parse_does_not
   "IFS=' ' read -r code tc ta ver" 'read -r code tc ta ver'
 kill_mut_sg M22af-failure-tail-logs-the-raw-output "S11_one_event_on_every_sink_and_no_raw_output" \
   $'verify=$vv"\n  return 1' $'verify=$vv"\n  logger -t "$LOG_TAG" "INNGEST_LINK: raw=$out"\n  return 1'
+# review round 2 (#10934): the phase belongs to ONE resolve, the event carries no URL on any sink, one unreadable timer reads unknown
+kill_mut_sg M23a-phase-assigned-inside-the-attempt-loop "S13_the_phase_belongs_to_one_resolve_and_is_never_left_over" \
+  'phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"' 'phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"; INNGEST_LINK_SELFGATE_PHASE="$phase"'
+SG_ANCHOR_FILE="$BLOCK_REAL" kill_mut_sg M23b-reset-at-the-top-of-the-resolver-deleted "S13_the_phase_belongs_to_one_resolve_and_is_never_left_over" \
+  'INNGEST_LINK_SELFGATE_PHASE=""' ':'
+kill_mut_sg M23c-failure-tail-logs-a-second-line-carrying-the-url "S11_one_event_on_every_sink_and_no_raw_output" \
+  $'verify=$vv"\n  return 1' $'verify=$vv"\n  logger -t "$LOG_TAG" "INNGEST_LINK: class=selfgate_trace level=info target=$INNGEST_LINK_HTTPS_URL"\n  return 1'
+kill_mut_sg M23d-failure-tail-prints-a-line-carrying-the-url-on-stdout "S11_one_event_on_every_sink_and_no_raw_output" \
+  $'verify=$vv"\n  return 1' $'verify=$vv"\n  printf \'INNGEST_LINK: class=selfgate_trace target=%s\\n\' "$INNGEST_LINK_HTTPS_URL"\n  return 1'
+kill_mut_sg M23e-unreadable-timer-arm-tests-only-appconnect "S6c_one_unreadable_timer_beside_a_readable_one_reads_unknown" \
+  "$A_SHAPE" 'if [[ "$tar" -eq 2 ]]; then printf unknown; return 0; fi'
 
 
 # ---------------------------------------------------------------------------------------
@@ -2367,7 +2432,8 @@ printf '\n=== inngest-link-resolver: %d passed, %d failed, %d skipped (%d rows) 
 # #10934: 203 -> 249 (+46: S1 to S9b = 14 rows, H1b, H8, H7a to H7c, H6 x6, H9 = 12, M22a to M22t = 20), measured from the RED run on the unmodified block;
 # re-measured from the GREEN run after the fix: 249 rows ran (252 passes, 0 failures, 0 skips; the H6 harness row was changed, no row was added)
 # review round 1 (#10934): 249 -> 271 (+22: S4c, S4d, S6b, S10, S11, S12 = 6 rows; H9 one row -> five column flips = +4; M22u to M22af = 12 mutants), measured from the GREEN run
-MIN_ROWS=271
+# review round 2 (#10934): 271 -> 278 (+7: S6c, S13 = 2 rows; M23a to M23e = 5 mutants), measured from the GREEN run
+MIN_ROWS=278
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

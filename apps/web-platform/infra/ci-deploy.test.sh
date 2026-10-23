@@ -12460,6 +12460,74 @@ if cmp -s "$DEPLOY_SCRIPT" "$_s3m"; then _s3_bad="$_s3_bad [mutant did not land]
 rm -f "$_s3m"
 if [[ -z "$_s3_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s3 write_state writes inngest_link_selfgate_phase as a closed enum (request as request, a JSON-breaking value as 'invalid', empty as ABSENT); the unchecked mutant is RED"
 else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s3 write_state selfgate phase —$_s3_bad"; fi
+# 7.s4 / 7.s5 (#10934 review round 2): the seven phase tokens are written out twice, in `_inngest_link_selfgate_phase`'s printf arms and in
+# write_state's `_gak_enum` allowlist, and nothing tied the two together (a one-token drift records a real phase as `invalid`, a diagnostic loss
+# with no failing row). 7.s4 reads both sets out of the REAL file and asserts they are EQUAL; 7.s5 drives the REAL write_state once per token
+# (each token must be written as itself), once for an out-of-enum value (`invalid`) and once for an empty value (key ABSENT).
+_sgp_helper_tokens() {  # <ci-file> → the tokens the phase helper prints, one per line, sorted
+  { awk '/^_inngest_link_selfgate_phase\(\) \{/,/^\}/' "$1" | grep -vE '^[[:space:]]*#' | grep -oE 'printf [a-z_]+(;|$)' | sed -E 's/^printf //; s/;$//' | sort -u; } || true
+}
+_sgp_enum_tokens() {  # <ci-file> → the tokens of write_state's closed enum for the key, one per line, sorted
+  { grep -oE "_gak_enum \"\\\$INNGEST_LINK_SELFGATE_PHASE\" '[^']*'" "$1" | head -n1 | sed -E "s/^[^']*'//; s/'\$//" | tr '|' '\n' | sort -u; } || true
+}
+_sgp_parity_harness() {  # <ci-file> → 0 when the helper's token set equals the enum's token set (both non-empty)
+  local h e
+  h="$(_sgp_helper_tokens "$1")"; e="$(_sgp_enum_tokens "$1")"
+  [[ -n "$h" && -n "$e" ]] || { GAK_WHY="an empty extraction: helper [$(tr '\n' ' ' <<<"$h")] enum [$(tr '\n' ' ' <<<"$e")]"; return 1; }
+  [[ "$h" == "$e" ]] || { GAK_WHY="the helper prints [$(tr '\n' ' ' <<<"$h")] but the enum allows [$(tr '\n' ' ' <<<"$e")]"; return 1; }
+}
+_sgp_each_token_harness() {  # <ci-file> → 0 when every helper token is written as itself, `bogus` as `invalid`, an empty value not at all
+  local f="$1" t v tokens rc=0
+  tokens="$(_sgp_helper_tokens "$f")"
+  [[ -n "$tokens" ]] || { GAK_WHY="the helper prints no token"; return 1; }
+  t="$(mktemp -d)"
+  { awk '/^_gak_enum\(\) \{/,/^\}/' "$f"; awk '/^write_state\(\) \{/,/^\}/' "$f"; } > "$t/fn.sh"
+  for v in $tokens bogus ''; do
+    rm -f "$t/state"
+    # shellcheck disable=SC2034,SC2329  # consumed by the sourced write_state; logger shadows the binary
+    ( set -euo pipefail
+      logger() { :; }
+      LOG_TAG=ci-deploy STATE_FILE="$t/state" START_TS=0 COMPONENT=web-platform IMAGE=x TAG=v1.0.0 INNGEST_LINK_SELFGATE_PHASE="$v"
+      # shellcheck source=/dev/null
+      . "$t/fn.sh"
+      write_state 7 "inngest_link_selfgate_failed" ) >/dev/null 2>&1 || rc=1
+    case "$v" in
+      '') jq -e '.exit_code == 7 and (has("inngest_link_selfgate_phase") | not)' "$t/state" >/dev/null 2>&1 || { GAK_WHY="an empty value did not leave the key absent: [$(head -c 240 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1; } ;;
+      bogus) jq -e '.exit_code == 7 and .inngest_link_selfgate_phase == "invalid"' "$t/state" >/dev/null 2>&1 || { GAK_WHY="an out-of-enum value was not written as invalid: [$(head -c 240 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1; } ;;
+      *) jq -e --arg v "$v" '.exit_code == 7 and .inngest_link_selfgate_phase == $v' "$t/state" >/dev/null 2>&1 || { GAK_WHY="the token [$v] was not written as itself: [$(head -c 240 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1; } ;;
+    esac
+  done
+  rm -rf "$t"; (( rc == 0 ))
+}
+_SGP_ENUM="'connect|handshake|verify|ca_file|request|status|unknown'"
+_sgp_enum_mutants() {  # <harness fn> <label=newlist>... → prints the mutants that did NOT land or did NOT go RED (empty = every one went RED)
+  local h="$1" m label list mf out=""
+  shift
+  for m in "$@"; do
+    label="${m%%=*}"; list="${m#*=}"; mf="$(mktemp)"
+    gak_mut "$DEPLOY_SCRIPT" "$mf" "$_SGP_ENUM" "'$list'"
+    if cmp -s "$DEPLOY_SCRIPT" "$mf"; then out="$out [$label: did not land]"; elif "$h" "$mf"; then out="$out [$label: stayed GREEN]"; fi
+    rm -f "$mf"
+  done
+  printf '%s' "$out"
+}
+_SGP_DROPS=(
+  "drop-unknown=connect|handshake|verify|ca_file|request|status"
+  "drop-status=connect|handshake|verify|ca_file|request|unknown"
+  "drop-ca_file=connect|handshake|verify|request|status|unknown"
+  "drop-connect=handshake|verify|ca_file|request|status|unknown"
+  "typo-handshak=connect|handshak|verify|ca_file|request|status|unknown"
+)
+TOTAL=$((TOTAL + 1))
+_s4_bad=""; _sgp_parity_harness "$DEPLOY_SCRIPT" || _s4_bad=" [control: $GAK_WHY]"
+_s4_bad="$_s4_bad$(_sgp_enum_mutants _sgp_parity_harness "${_SGP_DROPS[@]}" "extra-token=connect|handshake|verify|ca_file|request|status|unknown|extra")"
+if [[ -z "$_s4_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s4 the phase helper's token set equals write_state's enum set; a dropped token (x4), a typo and an extra token are each RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s4 selfgate phase enum parity —$_s4_bad"; fi
+TOTAL=$((TOTAL + 1))
+_s5_bad=""; _sgp_each_token_harness "$DEPLOY_SCRIPT" || _s5_bad=" [control: $GAK_WHY]"
+_s5_bad="$_s5_bad$(_sgp_enum_mutants _sgp_each_token_harness "${_SGP_DROPS[@]}")"
+if [[ -z "$_s5_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s5 write_state writes every phase token as itself, an out-of-enum value as 'invalid' and an empty value as ABSENT; a dropped token (x4) and a typo are each RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s5 write_state per-token selfgate phase —$_s5_bad"; fi
 gak_row 7.s2 "inherited GITHUB_APP_KEY_* values reach deploy state (the top-of-script reset is gone)" inherit ci \
   $'GITHUB_APP_KEY_SOURCE=""\nGITHUB_APP_KEY_FETCH=""\nGITHUB_APP_KEY_PROBE=""\n' ''
 
@@ -12873,7 +12941,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #10934 (the selfgate phase fields): raised 719 -> 732, the measured total of the green run (732/732) after the https self-gate route moved onto the shared curl profile table and two end-to-end rows (raw_short3 passes the gate, req_reset fails it with the phase event) were added.
 # review round 1 (#10934, CTO R2): raised 732 -> 733 (+1 PASS row, 7.s3: write_state's inngest_link_selfgate_phase closed enum); the incident-signature and the short-line rows
 # gained assertions (the key reads request / is ABSENT) without becoming rows. Measured from the green run (733/733).
-CI_DEPLOY_ASSERT_FLOOR=733
+# review round 2 (#10934): raised 733 -> 735 (+2 PASS rows: 7.s4 the helper's token set equals write_state's enum set, 7.s5 write_state writes every token as itself,
+# an out-of-enum value as invalid and an empty value as ABSENT; each carries its own mutants inside the row). Measured from the green run (735/735).
+CI_DEPLOY_ASSERT_FLOOR=735
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
