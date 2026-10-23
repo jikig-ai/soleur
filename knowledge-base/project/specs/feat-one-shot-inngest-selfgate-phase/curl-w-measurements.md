@@ -46,6 +46,8 @@ and 8.5.0), so a misspelled variable is silent: the test stub must refuse any va
 | request | **real stunnel, upstream 127.0.0.1:8288 refused** (the incident signature) | **56** | 000 | 0.000138 | 0.004360 | 0 | 1 | measured on 8.5.0 only |
 | request | real stunnel, upstream accepts then closes, or RSTs | 52 | 000 | 0.000128 | 0.004774 | 0 | 1 | 8.5.0 only |
 | request | real stunnel, upstream silent until `--max-time` | 28 (10 s) | 000 | 0.000184 | 0.007224 | 0 | 1 | 8.5.0 only |
+| request | TLS completed, `200` header then the body closes short (truncated, `Content-Length: 100`, 2 bytes sent) | **18** | **200** | 0.000329 | 0.012484 | 0 | 1 | 8.5.0 only (added in the deepen pass); a code of 200 with a non-zero rc is NOT `status` |
+| status | TLS completed, `502` header then the body closes short | 18 | 502 | 0.000110 | 0.007349 | 0 | 1 | 8.5.0 only (deepen pass); a non-200 status was received, so it stays `status` |
 | status | TLS completed and verified, HTTP 502 (also real stunnel with a 502 upstream) | 0 | 502 | 0.000235 | 0.010363 | 0 | 1 | yes / yes |
 | pass | TLS completed and verified, HTTP 200 (also real stunnel with a 200 upstream) | 0 | 200 | 0.000503 | 0.009276 | 0 | 1 | yes / yes |
 

@@ -10,21 +10,21 @@ Run every suite one at a time with stdin from `/dev/null`. Measurement evidence:
 
 ## Phase 1: the honest doubles (tests only)
 
-- 1.1 create `apps/web-platform/infra/test-fixtures/curl-w-profiles.sh`: profile table (values copied from the evidence file, no `num_connects` column), raw profiles (`raw_empty`, `raw_garbage`, `raw_short3`, `raw_nonnum`, `ok200_comma_extra`), one printer that interprets `-w` from argv, prints no trailing newline, and on an unknown variable or profile prints to stderr, exits 99 and drops a sentinel file
+- 1.1 create `apps/web-platform/infra/test-fixtures/curl-w-profiles.sh`: profile table (values copied from the evidence file, no `num_connects` column), raw profiles (`raw_empty`, `raw_garbage`, `raw_short3`, `raw_nonnum`, `ok200_comma_extra`), `req_partial` and `status_partial` (rc 18, from the evidence file), profile file path overridable by `CURL_W_PROFILES_FILE`, one printer that interprets `-w` from argv, prints no trailing newline, and on an unknown variable or profile prints to stderr, exits 99 and drops a sentinel file
 - 1.2 `inngest-link-resolver.test.sh`: rebuild `$BIN/curl` on the shared file, per-attempt `FX_CURL_PROFILES`, keep `FX_CURL_FAIL_FIRST` (now prints `verify18`), `FX_CURL_ALWAYS_OK`, `FX_CURL_CODE`, `-k` and fingerprint behaviour, Sentry POST passes through silently, sentinel asserted absent after every row
 - 1.3 `ci-deploy.test.sh`: unified mock `*"8443/health"*` route on the shared file with `MOCK_IL_SELFGATE_PROFILE` (default `ok200`), sentinel assertion
 
 ## Phase 2: rows, mutation rows, real-curl differential (tests only), then RED
 
 - 2.1 resolver suite rows S1 to S9 (whole-line assertions; profiles by phase; S3b same times with rc 52, 56, 1; S4 sequence and flapping fixture; S5 anchored grammar on journald and Sentry sinks; S6 unknown arms and validated values; S7 variable allowlist; S8 and S8b non-canonical input and success-before-validation; S9 decode drift), the TLS-complete-but-not-200 row asserting `phase=status`
-- 2.2 resolver suite H6 (real function against real curl and local python `ssl` servers, six scenarios, compare rc class, code, zero-ness of connect and appconnect, verify; skip counted locally with `ROWS+=N; SKIP+=N`, failure under `CI`), H7 (printer fidelity and sentinel), H8 (profiles ignored goes RED), H1 extended
-- 2.3 resolver suite `kill_mut` rows M22a to M22f, M22h, M22i, M22m to M22p; register rows in `ROW_IDS`
-- 2.4 `ci-deploy.test.sh`: one end-to-end row (`MOCK_IL_SELFGATE_PROFILE=req_reset`: non-zero exit, reason `inngest_link_selfgate_failed`, no `docker run`, anchored event line with `phase=request tcp=3 tls=3 verify=0`)
-- 2.5 run both suites on UNMODIFIED `ci-deploy.sh`: the new rows RED, every old row GREEN (exact counters excluded); the RED commit stays local, pushed with the fix; FAIL lines in the commit message
+- 2.2 resolver suite H6 (real function against real curl and local python `ssl` servers, six scenarios, compare rc class, code, zero-ness of connect and appconnect, verify; skip counted locally with `ROWS+=N; SKIP+=N`, failure under `CI`), H7 (printer fidelity and sentinel), H8 (profiles ignored goes RED), H9 (H6 against a profile-file copy with one value flipped goes RED), H1 extended; H6 mechanics: own PATH with a passthrough shim around real curl logging stdout and rc, `INNGEST_LINK_HTTPS_URL` overridden after sourcing, `IP:127.0.0.1` SAN, port-0 listeners with a readiness poll, `SG_ATTEMPTS=1`
+- 2.3 resolver suite `kill_mut` rows M22a to M22t (each proven after the fix in three steps: named rows GREEN on the pristine block, mutation kills them, anchor unique inside the self-gate text); register rows in `ROW_IDS`
+- 2.4 `ci-deploy.test.sh`: two end-to-end rows (`raw_short3` rc 0 code 200 reaches `docker run`; `MOCK_IL_SELFGATE_PROFILE=req_reset`: non-zero exit, reason `inngest_link_selfgate_failed`, no `docker run`, anchored event line with `phase=request tcp=3 tls=3 verify=0`)
+- 2.5 run both suites on UNMODIFIED `ci-deploy.sh`: the S rows and end-to-end rows RED, every old row GREEN (exact counters and mutation rows excluded); the RED commit stays local, pushed with the fix; FAIL lines in the commit message
 
 ## Phase 3: the fix
 
-- 3.1 `ci-deploy.sh` inside the `inngest-link-resolver` markers: `_inngest_link_selfgate_phase`, new `-w`, parse with the verdict first, validation with regex variables, `tcp` / `tls` counters, `verify` coercion, `http=` from a validated token, event with the appended fields, header comment
+- 3.1 `ci-deploy.sh` inside the `inngest-link-resolver` markers: `_inngest_link_selfgate_phase`, new `-w`, parse with the verdict first, validation with regex variables, `status` only for a code other than 000 and 200, `tcp` / `tls` counters, `verify` coercion, `http=` from a validated token, event with the appended fields, header comment
 - 3.2 re-anchor M18a to M18e and M05c on the new text
 - 3.3 resolver suite and `ci-deploy.test.sh` GREEN; `bash -n` and `shellcheck` clean
 
