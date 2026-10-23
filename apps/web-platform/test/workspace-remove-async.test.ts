@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, w
 import { tmpdir } from "os";
 import { join } from "path";
 import { mockChildProcess } from "./helpers/mock-child-process";
+import { resolve } from "path";
 
 const ID = "abcdef01-2222-4333-8444-5555555555ab";
 let sandbox: string;
@@ -271,5 +272,85 @@ describe("sync / async parity (one step generator, two runners)", () => {
       mkdirSync(x);
       return x;
     }
+  });
+});
+
+describe("argv hardening", () => {
+  test("every command gets the GUARD-RESOLVED absolute path, and `--` before it where supported", async () => {
+    const calls: { cmd: string; args: string[] }[] = [];
+    mockChildProcess((cmd, args) => {
+      calls.push({ cmd, args });
+      if (["rm", "chmod", "find", "rmdir"].includes(cmd)) throw new Error("denied");
+    });
+    const m = await import("../server/workspace");
+    const root = mkdtempSync(join(sandbox, "argv-"));
+    const dir = join(root, "tree");
+    mkdirSync(join(dir, "sub"), { recursive: true });
+    // Non-normalised spelling of the same path: what is run must be the resolved one.
+    const messy = `${root}/./other/../tree/`;
+
+    await m.removeWorkspaceDirAsync(messy, [root]);
+
+    const p = resolve(messy);
+    expect(p).toBe(dir);
+    expect(calls.map((c) => c.cmd)).toEqual(["rm", "chmod", "find", "rmdir", "mv"]);
+    expect(calls[0].args).toEqual(["-rf", "--", p]);
+    expect(calls[1].args).toEqual(["-R", "u+rwX", "--", p]);
+    expect(calls[2].args).toEqual([p, "-mindepth", "1", "-delete"]);
+    expect(calls[3].args).toEqual(["--", p]);
+    expect(calls[4].args.slice(0, 2)).toEqual(["--", p]);
+    expect(calls[4].args[2]).toMatch(new RegExp(`^${p}\\.orphaned-\\d+$`));
+    for (const c of calls) expect(c.args.find((a) => a.includes("/"))!.startsWith("/") || c.args.includes(p)).toBe(true);
+  });
+
+  test("a leading-dash directory name is never read as an option (real commands)", async () => {
+    const m = await import("../server/workspace");
+    const root = mkdtempSync(join(sandbox, "dash-"));
+    const dir = join(root, "-rf");
+    mkdirSync(join(dir, "sub"), { recursive: true });
+    expect(await m.removeWorkspaceDirAsync(dir, [root])).toBe("removed");
+    expect(existsSync(dir)).toBe(false);
+    const dir2 = join(root, "-x");
+    mkdirSync(dir2);
+    expect(m.removeWorkspaceDir(dir2, [root])).toBe("removed");
+  });
+});
+
+describe("overall deadline", () => {
+  test("once the budget is spent, remaining targets are recorded as `timeout` and no child is started for them", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const a = seed(wsRoot);
+    const b = seed(wtRoot);
+    const started: string[] = [];
+    vi.doMock("child_process", async () => {
+      const actual = await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFile: (cmd: string, args: string[], _o: unknown, cb: (...x: unknown[]) => void) => {
+          started.push(args[args.length - 1]);
+          rmSync(args[args.length - 1], { recursive: true, force: true });
+          vi.setSystemTime(Date.now() + 300_000 + 1); // the first removal "took" the whole budget
+          setImmediate(() => cb(null, "", ""));
+          return undefined;
+        },
+      };
+    });
+    const { deleteWorkspace } = await import("../server/workspace");
+
+    const err = await deleteWorkspace(ID).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect((err as { failures: unknown[] }).failures).toEqual([{ root: "worktree", kind: "timeout" }]);
+    expect(started).toEqual([a]); // the volume root was reaped; the worktree root was NOT started
+    expect(existsSync(b)).toBe(true);
+    vi.useRealTimers();
+  });
+
+  test("REAP_DEADLINE_MS is 5 minutes", async () => {
+    const m = await import("../server/workspace");
+    expect(m.REAP_DEADLINE_MS).toBe(300_000);
+    expect(m.REAP_HARD_STOP_GRACE_MS).toBe(5_000);
   });
 });

@@ -47,3 +47,16 @@ export class WorkspaceReapError extends AggregateError {
     this.failures = failures;
   }
 }
+
+/**
+ * Thrown by a path that would CREATE `<root>/<id>` (provision, clone, ensure) while
+ * `deleteWorkspace` is still reaping that id: the reap's `rm -rf` can run up to a minute with
+ * the event loop free, and would delete the new tree. Retryable; carries no id.
+ */
+export class WorkspaceReapInProgressError extends Error {
+  readonly code = "WORKSPACE_REAP_IN_PROGRESS";
+  constructor() {
+    super("Workspace is being deleted; retry shortly");
+    this.name = "WorkspaceReapInProgressError";
+  }
+}

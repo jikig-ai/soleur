@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
+import { isWorkspaceBeingReaped } from "@/server/workspace-reap-guard";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
@@ -258,6 +259,16 @@ export async function POST(request: Request) {
   // is unaffected by the column-level REVOKE. The installation grant is written
   // here too so the workspaces-only credential read (resolve_workspace_installation_id)
   // sees the in-progress connection.
+  // #8211: a disconnect / account deletion of THIS workspace is still removing its tree (the rm
+  // runs async). Starting a clone now would have it deleted underneath. Same calm, retryable 409 as
+  // the "already cloning" lock below, answered BEFORE the lock flip so repo_status stays untouched.
+  if (isWorkspaceBeingReaped(activeWorkspaceId)) {
+    return NextResponse.json(
+      { error: "Setup already in progress" },
+      { status: 409, headers: { "Retry-After": "5" } },
+    );
+  }
+
   const cloningAt = new Date().toISOString();
   const { data: lockResult, error: updateError } = await serviceClient
     .from("workspaces")

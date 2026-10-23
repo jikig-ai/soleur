@@ -306,7 +306,7 @@ from that account's own session. An agent cannot drive any of these steps and do
 - **Art. 17 inside the window (Ruled by CLO agent, 2026-10-19; v1 internal attestation, not external counsel).** While the flag is on,
   Delete Account (`deleteWorkspace`) removes both `/workspaces/<id>` and `WORKTREE_ROOT/<id>` on the serving host (#8211). The tree is
   host-local and only the in-process session is aborted, so a tree on the other web host is not reached. A tree the reap could
-  not remove, or only moved aside, is reported to Sentry (`feature:account-delete op:workspace-tree-erasure`, paged by the
+  not remove, or only moved aside, is reported to Sentry (`op:workspace-tree-erasure`, from Delete Account and from repo disconnect, paged by the
   `art17-workspace-tree-erasure-incomplete` rule; the cascade continues) and is released only when the rollback swap replaces the
   container (storage released, not overwritten, and its absence is not observed); a `removeGitDataRepo` call inside a freeze span
   is refused and logged as an Art. 17 event. The rehearsal flip may run with the
@@ -332,7 +332,7 @@ from that account's own session. An agent cannot drive any of these steps and do
   ```bash
   SENTRY_ISSUE_RO_TOKEN=$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain)
   curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
-    'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=feature%3Aaccount-delete%20op%3Aworkspace-tree-erasure%20OR%20feature%3Arepo-disconnect%20op%3Aworkspace-tree-erasure&statsPeriod=14d' \
+    'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=op%3Aworkspace-tree-erasure&statsPeriod=14d' \
     | jq -r '.[].id'
   # for each issue id:
   curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \

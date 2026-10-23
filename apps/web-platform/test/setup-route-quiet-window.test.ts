@@ -89,6 +89,7 @@ vi.mock("@/server/repo-connect-guard", () => ({
 import { POST } from "../app/api/repo/setup/route";
 import { QUIET_WINDOW_MESSAGE } from "@/server/quiet-window";
 import { __resetFeatureFlagsForTests } from "@/lib/feature-flags/server";
+import { runExclusiveReap } from "@/server/workspace-reap-guard";
 
 // Tracks whether the cloning-flip UPDATE on `workspaces` was issued.
 let cloningFlipCalled = false;
@@ -214,5 +215,33 @@ describe("POST /api/repo/setup — quiet-window kill-switch (#8211)", () => {
     __resetFeatureFlagsForTests();
     const res = await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
     expect(res.status).toBe(200);
+  });
+
+  test("a reap of THIS workspace in flight -> calm retryable 409 (the cloning response), lock and clone untouched; after it settles -> 200 (#8211)", async () => {
+    let release!: () => void;
+    const reaping = runExclusiveReap("user-1", () => new Promise<void>((r) => (release = r)));
+
+    const res = await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
+
+    expect(res.status).toBe(409);
+    expect(res.headers.get("Retry-After")).toBe("5");
+    expect(await res.json()).toEqual({ error: "Setup already in progress" });
+    expect(cloningFlipCalled).toBe(false);
+    expect(mockProvisionWorkspaceWithRepo).not.toHaveBeenCalled();
+
+    release();
+    await reaping;
+    const after = await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
+    expect(after.status).toBe(200);
+    expect(mockProvisionWorkspaceWithRepo).toHaveBeenCalledTimes(1);
+  });
+
+  test("a reap of ANOTHER workspace does not block this one", async () => {
+    let release!: () => void;
+    const reaping = runExclusiveReap("someone-else", () => new Promise<void>((r) => (release = r)));
+    const res = await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
+    expect(res.status).toBe(200);
+    release();
+    await reaping;
   });
 });
