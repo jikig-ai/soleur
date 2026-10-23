@@ -82,3 +82,31 @@ and 8.5.0), so a misspelled variable is silent: the test stub must refuse any va
 - **Four curl 8.23.0 measurements, not three,** are in "Added during implementation": the no-IP-SAN certificate (reads 1), the matching-SAN certificate (reads 18), the non-pinned CA leaf (reads 20) and the missing `--cacert` file (exit 2).
 - **No handshake time on rc 60 and rc 77.** Every rc 60 row (verify 18, 10, 1 in the table; 1, 18 and 20 in the 8.23 section) and the rc 77 row printed `time_appconnect` 0.000000, so `phase=verify` and `phase=ca_file` lines read `tcp=<attempts> tls=0`, the same counts as a steady `handshake`.
 - **The resolver suite's H6 ran against REAL curl 8.5.0.** On 2026-10-23 the resolver suite ran in an `ubuntu:24.04` container (curl 8.5.0 with OpenSSL 3.0.13, bash 5.2.21): H6 passed 6 of 6 (closed port, accept and close, the pinned-certificate mismatch, TLS then a clean close, 200, 502), including the mismatch row, where a different self-signed certificate carrying the matching loopback IP printed `verify=18` (`/var/tmp/soleur-selfgate/c2-resolver.log`, `252 passed, 0 failed`). The earlier note that the mismatch row was "not run on 7.81 or 8.5.0 in this form" is superseded for 8.5.0 (7.81 still unrun). The rc 58, 83 and 51 codes were never measured; the classifier files them under `handshake` when the connect time is non-zero.
+
+## Corrections and additions (2026-10-23, review round 2; the text above is left as written)
+
+- **The 252-passed figure above is stale and is not current proof.** The `252 passed, 0 failed` run of H6 against real curl 8.5.0 predates the round-1 fix commits (it was a run of the code before the phase-equality comparison, the `H6_N` change and the added H9 rows), so it says nothing about the code that ships. Use the two post-fix runs below.
+- **H6 on REAL curl 8.5.0 after the fix, two runs.** Container `ubuntu:24.04`, curl 8.5.0 (OpenSSL 3.0.13), bash 5.2.21, resolver suite run from the worktree at the named commit. At commit `4500ff682c`: `274 passed, 0 failed, 0 skipped (271 rows)`. At commit `c2ac316a14`: `281 passed, 0 failed, 0 skipped (278 rows)`. In both runs H6 ran six real-curl scenarios (closed port, accept and close, the pinned-certificate mismatch, TLS then a clean close, 200, 502) and each one compared the stub profile with real curl on the rc class, the HTTP code, which of the connect and handshake times are zero, and the verify result, AND checked that the phase the real self-gate function emits equals the stub's. The mismatch scenario served a different self-signed certificate that carries the matching loopback IP and printed `verify=18`. (Logs are host-local under `/var/tmp/soleur-selfgate/`, not durable.)
+- **Not covered by that run:** the hosts' own curl version, the hang phases, a TCP reset, an empty CA file and a truncated body remain stub-only in the suite (measured once above, not compared against real curl).
+
+## Better Stack rows read on 2026-10-23 (the 15:22:00Z window of the second flip attempt)
+
+Read through `scripts/betterstack-query.sh` with the Better Stack credentials by the lead agent, not by the agent that wrote this note; transcribed as the lead reported them:
+
+```
+2026-10-23T15:24:42Z soleur-web-platform INNGEST_LINK: class=selfgate_failed level=error rc=56 http=000 attempts=3
+15:26:10Z soleur-web-platform INNGEST_LINK: class=env_scrubbed level=info removed=1
+15:26:10Z soleur-web-platform INNGEST_LINK: class=resolved level=info state=http_default scheme=http
+15:26:44Z soleur-web-2 INNGEST_LINK: class=env_scrubbed level=info removed=1
+15:26:44Z soleur-web-2 INNGEST_LINK: class=resolved level=info state=http_default scheme=http
+```
+
+The row at 15:24:42Z is the failed gate; the four rows after it are the revert redeploy rewriting each host (web-1 at 15:26:10Z, web-2 at 15:26:44Z). The deploy state is rewritten at the start of every deploy, so a deploy-state key written at 15:24:42Z does not outlive those rewrites: for a failed flip the event row is the only record.
+
+The read-only handshake hook result of 15:49:10Z (also posted on #10136):
+
+```
+inngest-tls-handshake verified=fail verified_rc=77 unverified=fail unverified_rc=60 result=fail
+```
+
+Reading it: `verified_rc=77` is curl's code for an unusable CA file, and the hook reads the INSTALLED file, not the gate's candidate, so it is not a verdict on the 15:24:42Z event. Whether the installed file was the empty placeholder is not shown by this result.

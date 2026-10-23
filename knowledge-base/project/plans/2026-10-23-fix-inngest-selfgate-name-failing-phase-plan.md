@@ -31,11 +31,11 @@ web hosts, and the third flip is a separate owner act after it.
 2. The phase map is derived from times with rc used only for 77 and 60; the same times with rc 52, 56 and 1 pin `request`; a truncated 200 (rc 18, measured in the deepen pass) reads `request`, not `status`; `verify` is forced to 0 outside `phase=verify`.
 3. One shared profile table and printer for both curl doubles, a sentinel that makes an unknown variable or profile fail loudly (the function under test swallows curl's exit and stderr), a real-curl differential comparing rc class, code, zero-ness of the times and verify, and a profile-file mutation row that proves the differential can go RED.
 4. Mutation rows proven after the fix in three steps (not claimed RED before it); 20 rows with split `unknown` arms; S rows pin `SG_ATTEMPTS`; S7 asserts equality; S9 runs against a known-bad doc copy.
-5. The decode names a first no-SSH read per token from the shipped `tls-health` phone-home rows, keeps the phase honest about layer 6 (the run log carries only the constant reason), lists the unexpected `verify` values, and states that `attempts=` is the denominator.
+5. The decode names a first no-SSH read per token from the shipped `tls-health` phone-home rows, keeps the phase honest about layer 6 (the run log carries only the constant reason; amended 2026-10-23: the phase is also in the deploy-state key, in the release run's state dump only), lists the unexpected `verify` values, and states that `attempts=` is the denominator.
 
 ### New Considerations Discovered
 
-- The Inngest host already ships `tls-health` rows (unit, nrestarts, listener, bind, served_sha256 against cert_sha256) by a direct phone-home POST independent of the journald shipper, so a terminator-state read exists without #10880.
+- The Inngest host already ships `tls-health` rows (unit, nrestarts, listener, bind, served_sha256 against cert_sha256) by a direct phone-home POST independent of the journald shipper, so a terminator-state read exists without shipping the terminator's journald (which no issue tracks; #10880 is a different `vector.toml` item, a carrier-drift CI guard).
 - The ratchet `BASELINE_DECLARED_PROBES` moved the moment this plan was committed (it declares `credentials_required`), so its bump is Phase 0 and the first work commit.
 - A RED commit cannot pass the pre-push ratchet lane; it stays local and is pushed with the fix.
 
@@ -43,9 +43,9 @@ web hosts, and the third flip is a separate owner act after it.
 
 On 2026-10-23 the second flip of the Inngest scheduler link (run 39977793262) failed at the host-side self-gate on web-1 with
 `INNGEST_LINK: class=selfgate_failed level=error rc=56 http=000 attempts=3` (deploy reason `inngest_link_selfgate_failed`) before any canary ran,
-and the fleet reverted to http. The event carries only the last attempt's curl exit code and HTTP status, so the stage that failed (listener
+and the revert redeploy ran on both hosts (Better Stack rows `class=resolved level=info state=http_default scheme=http` at 15:26:10Z on `soleur-web-platform` and 15:26:44Z on `soleur-web-2`, after the failure row at 15:24:42Z; the revert run did not verify the scheme itself). The event carries only the last attempt's curl exit code and HTTP status, so the stage that failed (listener
 unreachable, TLS handshake, certificate verification, or the request after a verified handshake) cannot be read from it, and the terminator's own
-journald is not shipped (#10880). This change makes `_inngest_link_selfgate` name that stage with fixed-token and clamped-integer fields only, the
+journald is not shipped (no issue tracks it; #10880 is a `vector.toml` carrier-drift CI guard, not a journald shipper). This change makes `_inngest_link_selfgate` name that stage with fixed-token and clamped-integer fields only, the
 same move #10874 made for the canary's `inspect` check, and proves the new fields against what real curl prints, not against a hand-written mock.
 
 ## Research Insights
@@ -68,7 +68,7 @@ phase, and a double that drifts from real curl turns a test red. P5: the fields 
 by adding an unverified-TLS code path to the trust path and a second timeout budget; the single `-w` line already buys P1; cut (CTO F3). (b)
 Raw millisecond timing fields (`time_connect`, `time_appconnect` as numbers) buy no decision beyond the derived token and add cardinality plus a
 certificate-timing side channel; cut (CTO F1). (c) `%{errormsg}` / `%{exitcode}` (curl 7.75+) buy a readable cause but are free text and a version
-constraint; cut, P2 and P5. (d) Shipping the Inngest host's journald (#10880) and a Sentry alert on `op=inngest-link` (#10556) are named out of scope by
+constraint; cut, P2 and P5. (d) Shipping the Inngest host's journald (no issue tracks it; the `#10880` cite originally here was wrong, it is a carrier-drift CI guard) and a Sentry alert on `op=inngest-link` (#10556) are named out of scope by
 the issue.
 
 **Measured, not assumed (the evidence file).** `knowledge-base/project/specs/feat-one-shot-inngest-selfgate-phase/curl-w-measurements.md` records the
@@ -331,33 +331,36 @@ The uncovered profiles (RST, empty CA file, truncated body, the hang phases) res
 liveness_signal:
   what: per web host and per flag-on deploy that reaches the self-gate, the existing INNGEST_LINK journald rows; a failed gate now carries class=selfgate_failed with phase=, tcp=, tls=, verify= (a passing gate emits no row of its own: the next row, class=resolved, proves the resolver ran)
   cadence: once per flag-on deploy per host (not periodic); the self-gate is not called with the flag off
-  alert_target: none today for op=inngest-link (#10556, tracked); the flip run and the release run fail non-zero with the constant reason inngest_link_selfgate_failed (synchronous, layer 6); the rows are read in Better Stack
+  alert_target: none today for op=inngest-link (#10556, tracked); the flip run and the release run fail non-zero with the constant reason inngest_link_selfgate_failed (synchronous, layer 6); the rows are read in Better Stack; amended 2026-10-23 (review round 2): the phase is ALSO the deploy-state key inngest_link_selfgate_phase, printed in the release run log's non-zero-exit state dump and readable at /hooks/deploy-status until the next deploy, NOT in the flip run log, erased by the next deploy
   configured_in: apps/web-platform/infra/ci-deploy.sh (inngest_link_event); shipped by apps/web-platform/infra/vector.toml Source 4 (tag ci-deploy), unchanged
 error_reporting:
   destination: Better Stack Logs via the journald tag ci-deploy (layer 3) and Sentry (feature=ci-deploy, op=inngest-link, classification=selfgate_failed) for the error event (the existing inngest_link_event path)
-  fail_loud: a failed strict deploy exits non-zero with the constant reason inngest_link_selfgate_failed in the run log (layer 6), and the event carries the discriminating fields (layer 3 and Sentry)
+  fail_loud: a failed strict deploy exits non-zero with the constant reason inngest_link_selfgate_failed in the run log (layer 6); the release run log also dumps the state body with the closed-enum key inngest_link_selfgate_phase (layer 6), the flip run log does not; the event carries the discriminating fields (layer 3 and Sentry)
 failure_modes:
   - mode: the listener is unreachable (stopped terminator, firewall drop, wrong address)
     detection: phase=connect with tcp=0 tls=0 (rc 7 or rc 28 in the same event, rc is needed to tell them apart; tcp and tls count against attempts=); one event discriminates it from every later stage (layer 3 vector/Better Stack and Sentry); first read: the Inngest host's `tls-health` phone-home rows (`listener`, `nrestarts`, `bind`; layer 3, a direct POST independent of the journald shipper)
-    alert_route: none today (#10556); failed release or flip run (layer 6 workflow run log, which carries only the constant reason, so the phase is read in Better Stack before any re-flip)
+    alert_route: none today (#10556); failed release run (layer 6: the run log carries the constant reason, and its state dump carries the phase key) or failed flip run (layer 6: constant reason only, the revert redeploy erases the state key within about two minutes, so the phase is read from the Better Stack event before any re-flip)
   - mode: TCP is accepted but TLS does not complete (terminator crash loop, plaintext on the TLS port, a stalled handshake)
     detection: phase=handshake with tcp>=1 tls=0 (layer 3)
-    alert_route: none today (#10556); failed release or flip run (layer 6 workflow run log, which carries only the constant reason, so the phase is read in Better Stack before any re-flip)
+    alert_route: none today (#10556); failed release run (layer 6: the run log carries the constant reason, and its state dump carries the phase key) or failed flip run (layer 6: constant reason only, the revert redeploy erases the state key within about two minutes, so the phase is read from the Better Stack event before any re-flip)
   - mode: the pinned CA does not verify the served certificate (cert re-mint without a CA re-publish, expired cert, SAN without the IP)
     detection: phase=verify with verify=18 (the served certificate is a different self-signed certificate than the pin: the pinned file is a self-signed leaf by design, so a re-mint without a re-publish reads 18), 10 (expired) or 1 (hostname/SAN mismatch); 19, 20 and 21 mean the served chain is not the designed self-signed shape and read as unexpected (layer 3); first read: `tls-health` `served_sha256` against `cert_sha256`
-    alert_route: none today (#10556); failed release or flip run (layer 6 workflow run log, which carries only the constant reason, so the phase is read in Better Stack before any re-flip)
+    alert_route: none today (#10556); failed release run (layer 6: the run log carries the constant reason, and its state dump carries the phase key) or failed flip run (layer 6: constant reason only, the revert redeploy erases the state key within about two minutes, so the phase is read from the Better Stack event before any re-flip)
   - mode: TLS verified, then no HTTP status (the terminator reset or closed the session: its upstream 127.0.0.1:8288 refused or closed, or the app answered nothing)
     detection: phase=request with tls>=1 verify=0 (the incident signature; rc 56, 52 or 28, and rc 18 with a 200 code) - check the terminator and its upstream, not the certificate; the event does not prove which (layer 3); first read: `tls-health` `unit`, `nrestarts`, `listener` of the Inngest host for the same window, the only terminator state shipped today (no SSH step; SSH is the owner's decision only after these reads)
-    alert_route: none today (#10556); failed release or flip run (layer 6 workflow run log, which carries only the constant reason, so the phase is read in Better Stack before any re-flip)
+    alert_route: none today (#10556); failed release run (layer 6: the run log carries the constant reason, and its state dump carries the phase key) or failed flip run (layer 6: constant reason only, the revert redeploy erases the state key within about two minutes, so the phase is read from the Better Stack event before any re-flip)
   - mode: TLS verified and the app answered a non-200 status
     detection: phase=status with an http= value (layer 3)
-    alert_route: none today (#10556); failed release or flip run (layer 6 workflow run log, which carries only the constant reason, so the phase is read in Better Stack before any re-flip)
+    alert_route: none today (#10556); failed release run (layer 6: the run log carries the constant reason, and its state dump carries the phase key) or failed flip run (layer 6: constant reason only, the revert redeploy erases the state key within about two minutes, so the phase is read from the Better Stack event before any re-flip)
   - mode: the listener changes state across the three attempts (a terminator restart between tries)
-    detection: tcp or tls below attempts while tls>=1, or a last phase that differs from what the counts imply (for example phase=handshake with tls>=1): read it as an unstable or restarting listener, not as the last token alone; the runbook carries one worked line per mixed pattern (layer 3)
+    detection: tcp or tls below attempts while tls>=1, or a last phase that differs from what the counts imply (for example phase=handshake with tls>=1): read it as an unstable listener, not as the last token alone; a count below attempts is not proof of a restart because a hung or empty-output attempt also lowers both counts, so confirm a restart from nrestarts in tls-health; the runbook carries one worked line per mixed pattern (layer 3)
     alert_route: none today (#10556); failed release or flip run (layer 6)
   - mode: a field is unparsable (timeout kill, an unexpected curl)
-    detection: phase=unknown with tcp=0 tls=0 does NOT mean connect failed (unparsable attempts count nothing); rc=124 is the timeout wrapper killing curl, rc=2 an unreadable CA file on curl 8.23, rc=0 a changed curl output format; http=none (layer 3)
+    detection: phase=unknown with tcp=0 tls=0 does NOT mean connect failed (unparsable attempts count nothing); rc=124 is the timeout wrapper killing curl, rc=2 a MISSING CA file on curl 8.23 (an empty or garbage file reads rc 77), rc=0 a changed curl output format; http=none (layer 3)
     alert_route: none (read after the next flip)
+  - mode: the new deploy-state key itself is absent, stale or wrong
+    detection: an ABSENT inngest_link_selfgate_phase is ambiguous and never a pass: the gate did not fail, or the host does not yet run the upgraded ci-deploy.sh, or a later deploy (for a failed flip, its own revert redeploy about two minutes later) overwrote the frame; `invalid` means a value outside the seven-token enum was written (layer 6: release run state dump, /hooks/deploy-status; web-2's body is under .peers["<ip>"] in web-1's body); the Better Stack event is the record to read for a flip
+    alert_route: none today (#10556); a failed flip with an empty Better Stack read means STOP and ask the owner for the shipper check, not read the state key instead
   - mode: the event line leaks a value
     detection: the anchored-regex row S5 (CI) is the prevention; a leak would ride layer 3 and Sentry extra.detail, so the post-flip read checks that every field after attempts= is a token from the set or an integer
     alert_route: CI red
@@ -370,8 +373,8 @@ discoverability_test:
   credentials_required: BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME and BETTERSTACK_QUERY_PASSWORD (ClickHouse read credentials in Doppler soleur/prd_terraform) - Better Stack warehouse reads have no anonymous path and the ingest token is write-only, so no unauthenticated probe verifies the same property. The command is a CHANNEL probe: it reads the channel the new fields ship through (existing INNGEST_LINK rows such as class=resolved) and is satisfied with or without this change; the new fields exist only after delivery and a failed flip, and are read with --grep 'class=selfgate_failed' (the integration rows S1 to S4 and the end-to-end row are the CI proof that the code emits them). This pipeline does not run the probe. Check that the 7-day query fits the 15-second cap at work time
 ```
 
-Layers cited: 3 (Vector journald shipper to Better Stack, plus the Sentry POST from `inngest_link_event`) and 6 (the release or flip run log, a constant reason only).
-Stated limit: the phase and counts are asynchronous (layer 3); the run log carries one constant reason for every self-gate failure. The terminator's own journald is not shipped (#10880), so the cause behind `phase=request` is not readable without it.
+Layers cited: 3 (Vector journald shipper to Better Stack, plus the Sentry POST from `inngest_link_event`) and 6 (the release run log: the constant reason plus the state dump with the phase key; the flip run log: the constant reason only).
+Stated limit: the phase and counts are asynchronous (layer 3); the flip run log carries one constant reason for every self-gate failure, and the state key is the last deploy's, erased by the next. The terminator's own journald is not shipped (no issue tracks it; #10880 is a different item), so the cause behind `phase=request` is not readable without it.
 
 ## Domain Review
 
@@ -400,7 +403,7 @@ No product, marketing, finance, sales, support, legal or operations surface: inf
 | 7 | "Technical forks go to the CTO agent (soleur:engineering:cto)" [brief] | `decision-challenges.md` rows F1 to F5 | mapped |
 | 8 | "expect the same ratchets to need bumping and check each" [brief] | Phase 5 | mapped |
 | 9 | "arm nothing, MERGE NOTHING ... do not run or dispatch the flip workflow, no Doppler writes, no production writes or reads. Stop before merge" [brief] | Acceptance Criteria (process), Phase 6 | mapped |
-| 10 | "Related open issues: #10880 ..., #10556 ..., #10543 ..., #10856 ..." [brief] | context only; #10880 and #10556 are the issue's own "Out of scope"; #10856 is disclosed in the PR body; #10543 is unrelated to this diff | descoped - justification: each is named out of scope by the issue or does not touch the diff |
+| 10 | "Related open issues: #10880 ..., #10556 ..., #10543 ..., #10856 ..." [brief] | context only; #10556 is the issue's own "Out of scope", and #10880 (a `vector.toml` carrier-drift CI guard, not a journald shipper) was mis-cited here as the journald work; #10856 is disclosed in the PR body; #10543 is unrelated to this diff | descoped - justification: each is named out of scope by the issue or does not touch the diff |
 
 ### Plan-Item Provenance
 
@@ -417,7 +420,7 @@ No product, marketing, finance, sales, support, legal or operations surface: inf
 | `curl-w-measurements.md` | "MEASURE the `-w` variables" (asks 5) | asked |
 | `decision-challenges.md` | "Technical forks go to the CTO agent" (asks 7) | asked |
 | ratchet bumps (`MIN_ROWS`, `CI_DEPLOY_ASSERT_FLOOR`, `BASELINE_DECLARED_PROBES`, baselines) | "expect the same ratchets to need bumping and check each" (asks 8) | asked |
-| `deploy-status-debugging.md` row for `inngest_link_selfgate_failed` | - | inferred - justification: the failed run's log carries only the constant reason, and that reason has no row in the table the postmerge skill reads, so an operator would not reach the new decode; without the row the decode is unreachable from the log |
+| `deploy-status-debugging.md` row for `inngest_link_selfgate_failed` | - | inferred - justification: the failed flip run's log carries only the constant reason (the release run's state dump also has the phase key), and that reason has no row in the table the postmerge skill reads, so an operator would not reach the new decode; without the row the decode is unreachable from the log |
 | ADR-294 second-flip addendum | - | inferred - justification: the two earlier flip attempts each got an addendum recording what was observed and what is not established; skipping it leaves the recorded history one attempt behind and the wording of "request" unqualified |
 | `tasks.md` | - | inferred - justification: the pipeline's work phase consumes it |
 
@@ -446,7 +449,7 @@ No product, marketing, finance, sales, support, legal or operations surface: inf
 - [ ] Both changed suites pass once inside `docker run --rm -v "$PWD":/w ubuntu:24.04` after the apt install step (curl 8.5.0, bash 5.2); `bash -n` and `shellcheck` are clean on `ci-deploy.sh`.
 - [ ] Ratchets re-measured from green runs and moved only as earned: `BASELINE_DECLARED_PROBES` equal to the live value plus one with a PLACEMENT / TRUTH / NO SUBSTITUTE entry (first commit), `MIN_ROWS` exact in the resolver suite, `CI_DEPLOY_ASSERT_FLOOR` in `ci-deploy.test.sh`, `fixture-relative-assert.test.sh` green (baseline regenerated only if it reddened, rows this diff earned), `grep-q-pipe-guard.test.sh` green (`PJ_TRIPLES` / `PRODUCER_JOIN` moved only if a triple appeared), `scripts/pre-push-ratchet-lane.sh` green, `lint-guard-contract.py` green, `lint-trap-tempfile-ownership.py --check-highwater` unchanged, `c4-count-parity.test.sh` green, `lint-orphan-test-suites.sh` does not report the shared fixture file.
 - [ ] Runbook: the `selfgate_failed` row and the decode table cover every field and every token, name a first no-SSH read per token (connect, handshake, request: the Inngest host's `tls-health` rows `listener`, `nrestarts`, `bind`, with the exact `betterstack-query.sh --grep stage=tls-health` form the runbook already documents; verify: `served_sha256` against `cert_sha256`), list `verify` 18, 10, 1 and the unexpected 19, 20, 21 (the pinned file is a self-signed leaf by design, so 18 means a different self-signed certificate), state that `attempts=` is the denominator for `tcp` and `tls` and that `rc` is needed to separate rc 7 from rc 28 when `tcp=0`, give a retry column (deterministic phases fail the same way on a re-flip; a mixed pattern may pass, and each retry costs two host swaps), a flapping rule, the `unknown` decode and the proof limits (hang phases, RST and the empty CA file are stub-only; the stunnel signature is measured on curl 8.5.0 only), state the `verify` reading rule and the unlisted-code case,
-  word `phase=request` as "TLS verified, no HTTP response: check the terminator and its upstream, not the certificate, and no cause is readable until #10880 ships the Inngest host's journald", point at the existing read-only `/hooks/inngest-tls-handshake` call already documented in the runbook, and carry no SSH step; `deploy-status-debugging.md` has one `inngest_link_selfgate_failed` row that says the phase is only in Better Stack (the run log carries the constant reason, `INNGEST_LINK_REASON` is enum-checked) and to read `--grep 'class=selfgate_failed'` before any re-flip; ADR-294 has an addendum of at most 8 lines with measured facts only and the unmeasured parts named.
+  word `phase=request` as "TLS verified, no HTTP response: check the terminator and its upstream, not the certificate, and no cause is readable while the terminator's journald is not shipped", point at the existing read-only `/hooks/inngest-tls-handshake` call already documented in the runbook, and carry no SSH step; `deploy-status-debugging.md` has one `inngest_link_selfgate_failed` row that says the phase is in Better Stack and, since review round 2, also in the deploy-state key `inngest_link_selfgate_phase` (release run's state dump and `/hooks/deploy-status` only, erased by the next deploy; the run log's reason stays the constant) and to read `--grep 'class=selfgate_failed'` before any re-flip; ADR-294 has an addendum of at most 8 lines with measured facts only and the unmeasured parts named.
 - [ ] `decision-challenges.md` carries one row per ruled fork (F1 to F5, F2a, R3a to R3d) and `technical-ruling-gate.sh --branch` passes; no row is `pending`.
 - [ ] Nothing merged, armed, dispatched or written in Doppler or production; the PR body names the proof limits and #10856; the pipeline ends with a `Paused:` line asking for a typed go that names the merge and stating the owner's preconditions for the third flip (parity green on both hosts; the idle check immediately before the merge).
 
@@ -491,7 +494,7 @@ No novel pattern: every shape above has a sibling on `main`.
 ## Dependencies & Risks
 
 - **The host curl was not read.** The four variables predate curl 7.19, were measured on three builds, and an allowlist row pins them; a host curl older than 7.19 is not a supported Ubuntu userland. Residual accepted and named in the PR body.
-- **`phase=request` can be over-read.** It means TLS verified and no HTTP status came back; it does not prove the upstream refused (the terminator's journald is not shipped, #10880). Wording is constrained by an AC and the runbook says "check, do not conclude".
+- **`phase=request` can be over-read.** It means TLS verified and no HTTP status came back; it does not prove the upstream refused (the terminator's journald is not shipped; no issue tracks it, #10880 is a carrier-drift CI guard). Wording is constrained by an AC and the runbook says "check, do not conclude".
 - **The stub can drift from real curl.** Mitigated by H6 running real curl in CI and failing, not skipping, when a tool is missing under `CI`.
 - **Ratchets move with unrelated PRs.** `BASELINE_DECLARED_PROBES` and the baselines are re-measured after rebasing onto `origin/main`, never by reasoning.
 - **The block is shared by every deploy.** A parse error would break all deploys including a rollback: `bash -n`, shellcheck and the CI-userland run are acceptance criteria, and no non-ASCII or `$(...)`-inside-`[[ ]]` construct is added.
