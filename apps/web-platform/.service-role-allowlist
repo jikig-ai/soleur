@@ -389,3 +389,10 @@ apps/web-platform/server/workstream/mutate-workstream-issue.ts
 # error / no-row). Same trusted-server injected-service-client shape as
 # resolve-installation-id-for-workspace.ts / workspace-identity-resolver.ts.
 apps/web-platform/server/session-proxy.ts
+
+# 2026-10-23 (#8211 PR-B2) — cron-git-data-erasure-redrive.ts re-drives the git-data pending-erasure
+# ledger. No user JWT is in scope (scheduled/manual), and the ledger tables have no client-reachable
+# grant: every access is a service_role-only SECURITY DEFINER RPC (migration 164: claim / resolve /
+# record / oldest-age). Same cron posture as cron-supabase-disk-io; it holds no per-tenant data
+# beyond the workspace ids the RPCs return, which it never logs.
+apps/web-platform/server/inngest/functions/cron-git-data-erasure-redrive.ts
