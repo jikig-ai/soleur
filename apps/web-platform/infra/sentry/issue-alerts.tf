@@ -1662,7 +1662,7 @@ resource "sentry_alert" "seccomp_remediation_failed" {
 }
 
 # server/agent-runner-sandbox-config.ts (buildAgentSandboxConfig) pre-creates each masked dir (peer-socket,
-# transcript, session-tmp) before every dispatch; the SDK skips a deny landing that does not exist, so a failed
+# transcript, session-tmp) before every dispatch (an ungated, idempotent mkdirSync on each build); the SDK skips a deny landing that does not exist, so a failed
 # mkdir leaves a cross-tenant read channel UNMASKED for that dir (the entry stays in denyRead: fail-open per dir).
 # Before this rule the failure was an error event with nobody behind it (#10455). The emit is
 # `reportSilentFallback(null, { feature: "agent-sandbox", op: "masked-dir-precreate", tags: { dir_kind } })`: the

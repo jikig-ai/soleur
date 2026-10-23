@@ -29,3 +29,13 @@ the technical-ruling delegation rule; no technical item was put to the operator.
 | Ref (never Closes) for #10455 per the brief, for #10548 which stays operator-only, and for #10781 | taste | Plan default after review: Ref #10781 because the failure is intermittent, GitHub closes on merge unconditionally, and one green leg proves nothing; close it later by a comment citing three consecutive green runs. Earlier draft closed it conditionally; dissent: none after DHH, Kieran and spec-flow objected. |
 | Persisted-CLI-output measurement (listed for PR-B in the #10697 comment) | operator (scope) | Not in this PR: the brief scopes PR-B to the alert and the masks_missing finding; the measurement stays an open item on #10455. The operator may pull it into this PR by saying so. |
 | Enable the agent-sandbox-unix-deny flag in production (#10548) | operator (production-mutating) | Not done here: creating and enabling the flag are typed by the human via the commands listed in the PR body hand-off line (ADR-236), each production write needing its own authorization (hr-menu-option-ack-not-prod-write-auth); the soak runs to 2026-10-26. |
+
+## Corrections
+
+Appended 2026-10-23 after review; the rulings above are left as recorded and their outcomes stand. Only a premise is corrected.
+
+| Item | Correction |
+|------|------------|
+| Fork 3 and Plan review A: `Acquire::http::Timeout` | Premise error. Plan review A's ruling said the option was cut because "stalls were seen with it set", and Fork 3's ruling had listed it as a cheap addition. `git log --all -S"Acquire::http::Timeout" -- apps scripts` returns nothing: it was never shipped, and the #9379 issue says its stalls happened with no `Acquire::*::Timeout` set. Outcome unchanged (not added), now for this reason: the bound is the 90 s per-attempt cap, which sits below apt's default 120 s HTTP timeout (unverified here), and `Acquire::Retries` only helps fast failures. |
+| Plan review D: "a persistent masks_missing above zero means expect a masked-dir-precreate Sentry email" | Narrowed. An email follows only when the path is absent or a regular file; a symlink-to-directory or foreign-owned directory makes the app's recursive mkdir succeed, so no event is emitted and the journal line is the only signal. The runbook states this. |
+

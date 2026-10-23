@@ -685,23 +685,29 @@ and the journal tells which. `selector=` is the artifact the dispatcher's resolv
 `masks_missing=<n>` counts the masked dirs (of the four the app pre-creates) that are not a usable directory after the probe's own attempt to create them:
 absent, not a real directory (a symlink or a file), or owned by another uid. A `pass` with `masks_missing>0` journals `coverage=prodtuple_partial`
 because it tested a weaker config than production; the ping is unchanged on purpose (the run makes a claim, and withholding the beat would read as a
-dead host). `masks_created=<0-4>` is how many of those dirs THIS run created (`4` on the first run after a container start, `0` afterwards; a
-restart wipes the tmpfs `/tmp` dirs, so several `4` lines over a day are normal). `masks_note=` is the reason the probe refused to create something,
-from a closed list; `-` means no refusal, and an old probe (an apply that lands before the release) journals `-` for both new fields.
+dead host). `masks_created=<0-4>` is how many of those dirs THIS run created. On a FRESH container (a redeploy) it is `4`; after a plain restart
+`~/.claude/projects` survives in the writable layer and only the three tmpfs `/tmp` dirs are recreated, so it is `3`; it is `0` on every run after that.
+A real session's dispatch before the first synthetic tick lowers it (the app creates the dirs too), so the value depends on rollout order and is
+diagnostic only. `masks_note=` is the reason the probe refused to create something, from a closed list; `-` means no refusal, with a caveat: both
+fields are emitted at the END of a run and the synthetic keeps only a value inside the closed set, so `-` ALSO means an old probe (an apply that
+lands before the release), a value the synthetic rejected, or a probe killed after it created dirs but before it emitted. A `-` next to an unexpected
+`masks_missing` is therefore not proof that nothing was created or refused; read the next run.
 
 **Decode `masks_created` / `masks_note` (read `masks_note` first).**
 
 | `masks_note` | Meaning | What to do |
 |---|---|---|
-| `-` | no guard fired | with `masks_missing=0` nothing; with `masks_missing>0` a dir is a symlink, a file, foreign-owned, or the mkdir failed: the probe could not make it usable, and the app's next dispatch will hit the same wall (expect a `masked-dir-precreate-failed` Sentry email) |
+| `-` | no guard fired (or the field was not emitted: see the caveat above) | with `masks_missing=0` nothing; with `masks_missing>0` a dir is a symlink, a file, foreign-owned, or the mkdir failed: the probe could not make it usable. A `masked-dir-precreate-failed` Sentry email follows ONLY if the path is absent or a regular file (the app's recursive mkdir then fails, for example with `EEXIST`). A symlink to a directory or a foreign-owned directory makes that mkdir SUCCEED, so the app emits nothing and the journal line is the only signal |
 | `uid_mismatch` | the probe's uid is not PID 1's real uid (read from `/proc/1/status`, first `Uid:` field); NOTHING was created, because a dir owned by another uid is one the app cannot use. A future `docker exec -u root` would show this | check how the synthetic execs into the container; the app is unaffected |
 | `pid1_unreadable` | PID 1's uid could not be read; nothing was created | read the row as "no claim about the masks"; persistent means the container's `/proc` is restricted |
 | `pid1_env_unreadable` | PID 1's environment could not be read (or was over the 256 KiB cap), so the probe could not confirm it shares the app's HOME; the HOME-derived dir (`~/.claude/projects`) was NOT created and counts missing, the other three were created | expected only if the image restricts `/proc/1/environ`; the transcript mask is then unobserved by the synthetic |
 | `home_mismatch` | PID 1's HOME is not the probe's HOME; same handling as above | the synthetic's HOME comes from the container's own `$HOME` (pre-exec step); a mismatch means the app runs with another HOME, so the transcript mask the app uses is a different dir than the one the probe models |
-| `env_divergence` | informational: PID 1 has an absolute `CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR`, bases the probe does not model; nothing was refused and nothing is counted missing | none; it surfaces the accepted residual below |
+| `env_divergence` | informational: PID 1 has an absolute `CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR`, bases the probe does not model; nothing was refused and nothing is counted missing, and coverage still reads `sdk_wrapper_shim_prodtuple` | none; it surfaces the accepted residual below, and a green line carrying this note is no proof for those bases |
 
 No Better Stack rule matches these fields; the reader is whoever runs the Logs query above (`scripts/betterstack-query.sh --grep SOLEUR_WEB_BASH_SYNTHETIC`).
-A persistent `masks_missing>0` means: expect a `masked-dir-precreate` Sentry email on the next dispatch, and use the section below.
+A persistent `masks_missing>0` means the probe could not make a masked dir usable. If the path is absent or a regular file, expect a `masked-dir-precreate-failed`
+Sentry email on the app's next dispatch and use the section below. If it is a symlink to a directory or a foreign-owned directory, NO email will come
+(the app's recursive mkdir succeeds on it), the journal line is the only signal, and the section below is still the containment recipe.
 
 ### Masked-dir pre-create alert (#10455 PR-B): Sentry rule `masked-dir-precreate-failed`
 
@@ -722,15 +728,19 @@ A persistent `masks_missing>0` means: expect a `masked-dir-precreate` Sentry ema
 `ENOSPC` the 256 MB `/tmp` tmpfs is full (one tenant's session tmp usage can cause this for the whole container; the per-session bound is an open #10455 item);
 `EROFS` a read-only mount; `ENOTDIR` a parent component is not a directory.
 
-**Containment.** Redeploy through the existing `deploy` webhook path (the release workflow's deploy step), which starts a fresh container. A plain
+**Containment.** Redeploy through the existing release deploy path: `gh workflow run web-platform-release.yml --ref main -f bump_type=patch`
+(leave `skip_deploy` at its default `false`; the dispatch publishes a patch release and deploys it, which starts a fresh container on both web hosts and
+ENDS every live tenant session, so pick a quiet moment). A plain
 container restart keeps the writable layer: `~/.claude/projects` survives it and only the tmpfs `/tmp` dirs reset, so a `transcript` fault caused by
 a file or foreign-owned dir under HOME needs the redeploy (a new container) and a fault that persists after a redeploy needs a code fix. Do not
-`chmod`/`chown` from outside the app; the builder's mkdir is the only creator. **Acknowledge or resolve the Sentry issue** once contained; while a fault
-persists the rule re-notifies every `frequency_minutes` to the same inbox as the other rules.
+`chmod`/`chown` from outside the app: the app's own pre-create (and, in runtime mode, the synthetic probe) are the only creators, and a manual change
+hides the fault the alert is for. **RESOLVE the per-kind Sentry issue** once contained; do not archive or ignore it, because an archived issue silences a
+later failure of the same kind. While a fault persists the rule re-notifies every `frequency_minutes` to the same inbox as the other rules.
 
-**An email proves the app's own pre-create failed.** The first synthetic run after a container start creates the missing dirs itself (`masks_created=4`),
-so from then on the synthetic can no longer observe a cold-start mkdir failure; the Sentry rule is the detector for that, and the synthetic is a
-second, journal-only witness.
+**An email proves the app's own pre-create failed.** The first synthetic run after a container start creates the missing dirs itself (`masks_created=4`
+on a fresh container, `3` after a plain restart), so from then on the synthetic can no longer observe a cold-start mkdir failure; the Sentry rule is the
+detector for that, and the synthetic is a second, journal-only witness. The converse does not hold: no email does not prove the dirs are usable (see
+the symlink and foreign-owned cases above).
 
 ### What the synthetic does and does not prove about the masks (accepted limits)
 
