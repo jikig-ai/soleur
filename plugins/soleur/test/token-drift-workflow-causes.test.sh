@@ -2564,7 +2564,7 @@ r9_case() {
       (( nf == ncurl )) || { echo "BAD:$((ncurl - nf)) of $ncurl requests lack -f"; return; }
       local ntok; ntok=$(grep -c 'AAAAAAAA' "$calls.stdin") || ntok=0
       (( ntok == ncurl )) || { echo "BAD:the token reached curl's stdin config on $ntok of $ncurl requests"; return; }
-      grep '^curl ' "$calls" | grep -q 'AAAAAAAA' && { echo "BAD:the token is on a curl argv line"; return; } ;;
+      grep '^curl ' "$calls" | grep -c 'AAAAAAAA' >/dev/null && { echo "BAD:the token is on a curl argv line"; return; } ;;
     trailws)
       [[ "$rc" == 0 ]] || { echo "BAD:a token with trailing whitespace rc=$rc"; return; }
       grep -qE '^::add-mask::A+$' <<<"$out" || { echo "BAD:the trimmed token was not the masked value"; return; }
