@@ -1661,6 +1661,55 @@ resource "sentry_alert" "seccomp_remediation_failed" {
   }
 }
 
+# server/agent-runner-sandbox-config.ts (buildAgentSandboxConfig) pre-creates each masked dir (peer-socket,
+# transcript, session-tmp) before every dispatch; the SDK skips a deny landing that does not exist, so a failed
+# mkdir leaves a cross-tenant read channel UNMASKED for that dir (the entry stays in denyRead: fail-open per dir).
+# Before this rule the failure was an error event with nobody behind it (#10455). The emit is
+# `reportSilentFallback(null, { feature: "agent-sandbox", op: "masked-dir-precreate", tags: { dir_kind } })`: the
+# literal `null` first argument keeps it on the MESSAGE path, because an Error would be mirrored by the pino
+# logger as feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never
+# match. Contract: test/sentry-masked-dir-precreate-alert-op-contract.test.ts (emit site <-> this block) and
+# test/agent-sandbox-precreate-sentry-path.test.ts (real logger, real helper).
+#
+# GROUPING: the message is constant per `dir_kind` (peer-socket | transcript | session-tmp) and carries no path, so
+# Sentry opens ONE issue per kind (an acknowledged benign kind cannot silence a later one); no per-dir fingerprint
+# (one persistent fault would otherwise page once per dir). value=0 notifies on the first event of a group within
+# the hour, and a persistent fault re-notifies every `frequency_minutes` (an acknowledged/resolved issue stops it).
+# Email only (issue owners, ActiveMembers fallthrough: the project has no ownership rule, so issue_owners alone
+# resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
+# are carried: `op` alone would also match any future emitter reusing the op name under another feature.
+# Distinct frequency_minutes = 38 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-37,60-63,120,240,
+# 1440-1442; verified free 2026-10-23); dedup keys on action shape + action_match + filter_match + frequency, not
+# conditions. Events carry only the kind, the errno (code/syscall) and the dir path: no user content.
+resource "sentry_alert" "masked_dir_precreate_failed" {
+  organization      = var.sentry_org
+  name              = "masked-dir-precreate-failed"
+  enabled           = true
+  frequency_minutes = 38
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-sandbox" } },
+        { tagged_event = { key = "op", match = "eq", value = "masked-dir-precreate" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-cloud-task-heartbeat.ts: the stale-bot-PR
 # watchdog (#5138) emits `feature=cron-cloud-task-heartbeat` events for three
 # ops — `stale-bot-pr` (warnSilentFallback, a ci/* PR open >48h: auto-merge
