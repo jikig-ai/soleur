@@ -366,31 +366,31 @@ assert_true 'FR15: --user-data-dir=<XDG_CACHE_HOME>/<name> injected once, before
 session argv-udd-home "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=" --env "HOME=$WORK/home" --env FAKE_PW_ARGV_OUT="$WORK/argv-udd-home" --send "$INIT" --end eof >/dev/null
 assert_true 'FR15: XDG_CACHE_HOME empty → profile resolves under $HOME/.cache' bash -c 'test -f "$1" && grep -qxF -- "--user-data-dir=$2/.cache/soleur-test-profile" "$1"' _ "$WORK/argv-udd-home" "$WORK/home"
 assert_true 'FR15: flag absent → child argv carries no --user-data-dir (unchanged behaviour)' bash -c 'test -f "$1" && ! grep -q -- "--user-data-dir" "$1"' _ "$WORK/argv-out"
-r="$(session udd-dotdot "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg '..' --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-dotdot "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg '..' --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: a .. basename refuses to start' "$r" '..'
-r="$(session udd-sep "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg 'a/b' --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-sep "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg 'a/b' --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: a basename containing / refuses to start' "$r" 'separator'
-r="$(session udd-sep-bs "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg 'a\b' --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-sep-bs "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg 'a\b' --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: a basename containing a backslash refuses to start' "$r" 'separator'
-r="$(session udd-conflict "$PROXY" "${UDD[@]}" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --user-data-dir=/x)"
+r="$(session udd-conflict "$PROXY" "${UDD[@]}" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --user-data-dir=/x)"
 assert_refused_start 'FR15: the flag combined with an explicit --user-data-dir refuses to start' "$r" 'explicit'
-r="$(session udd-relxdg "$PROXY" "${UDD[@]}" --env XDG_CACHE_HOME=relative/cache --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-relxdg "$PROXY" "${UDD[@]}" --env XDG_CACHE_HOME=relative/cache --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: a relative XDG_CACHE_HOME refuses to start' "$r" 'absolute'
-r="$(session udd-nohome "$PROXY" "${UDD[@]}" --env XDG_CACHE_HOME= --env HOME= --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-nohome "$PROXY" "${UDD[@]}" --env XDG_CACHE_HOME= --env HOME= --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: XDG_CACHE_HOME and HOME both unset refuses to start' "$r" 'HOME is set'
-r="$(session udd-missing "$PROXY" --proxy-arg --user-data-dir-name --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-missing "$PROXY" --proxy-arg --user-data-dir-name --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: --user-data-dir-name with no argument refuses to start' "$r" 'basename argument'
-r="$(session udd-unknown "$PROXY" --proxy-arg --bogus-flag --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-unknown "$PROXY" --proxy-arg --bogus-flag --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: an unrecognised proxy flag refuses to start' "$r" 'unrecognised'
-r="$(session udd-dup "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg a --proxy-arg --user-data-dir-name=b --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-dup "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg a --proxy-arg --user-data-dir-name=b --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: the flag given twice refuses to start' "$r" 'twice'
-r="$(session udd-dash "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg '--bogus' --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-dash "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg '--bogus' --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: a basename beginning with - refuses to start' "$r" "leading '-'"
 # the = spelling, and a root that only resolves after realpath normalisation
 UDDEQ=(--proxy-arg --user-data-dir-name=eq-profile)
 session argv-udd-eq "$PROXY" "${UDDEQ[@]}" --env "XDG_CACHE_HOME=$WORK/xdg" --env FAKE_PW_ARGV_OUT="$WORK/argv-udd-eq" --send "$INIT" --end eof >/dev/null
 assert_true 'FR15: --user-data-dir-name=<name> injects the same profile dir' bash -c 'test -f "$1" && grep -qxF -- "--user-data-dir=$2/eq-profile" "$1"' _ "$WORK/argv-udd-eq" "$WORK/xdg"
-r="$(session udd-eqempty "$PROXY" --proxy-arg '--user-data-dir-name=' --send "$INIT" --end eof --timeout 3)"
+r="$(session udd-eqempty "$PROXY" --proxy-arg '--user-data-dir-name=' --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR15: --user-data-dir-name= (empty value) refuses to start' "$r" 'basename'
 mkdir -p "$WORK/sub" "$WORK/xdg-real"; ln -sfn "$WORK/xdg-real" "$WORK/xdg-link"
 session argv-udd-dotroot "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/sub/.." --env FAKE_PW_ARGV_OUT="$WORK/argv-udd-dotroot" --send "$INIT" --end eof >/dev/null
@@ -508,18 +508,18 @@ for node in tree.body:
         found = ast.literal_eval(node.value)
 sys.exit(0 if found == {"linux": [sys.argv[2]], "darwin": [sys.argv[3]]} else 1)
 PY
-r="$(session fb-twice "$PROXY" --proxy-arg --chromium-fallback --proxy-arg --chromium-fallback --send "$INIT" --end eof --timeout 3)"
+r="$(session fb-twice "$PROXY" --proxy-arg --chromium-fallback --proxy-arg --chromium-fallback --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR16: --chromium-fallback given twice refuses to start' "$r" 'twice'
-r="$(session fb-eq "$PROXY" --proxy-arg --chromium-fallback=1 --send "$INIT" --end eof --timeout 3)"
+r="$(session fb-eq "$PROXY" --proxy-arg --chromium-fallback=1 --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR16: --chromium-fallback=<v> is not a recognised spelling (the flag is a boolean) and refuses to start' "$r" 'unrecognised'
-r="$(session fb-trailing "$PROXY" "${CFB[@]}" --env "$NOCHROME" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --browser)"
+r="$(session fb-trailing "$PROXY" "${CFB[@]}" --env "$NOCHROME" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --browser)"
 assert_refused_start 'FR16: a trailing --browser would bind the appended flag as its value — refuses even with the fallback on' "$r" 'expects a value'
-r="$(session fb-name-swallow "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg --chromium-fallback --send "$INIT" --end eof --timeout 3)"
+r="$(session fb-name-swallow "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg --chromium-fallback --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR16: --user-data-dir-name never swallows the fallback flag as its basename (a leading - refuses)' "$r" "leading '-'"
 # The sandbox refusals hold with the fallback ON: the fallback adds --sandbox, it never opens a bypass for the forbidden spelling.
-r="$(session fb-nosandbox "$PROXY" "${CFB[@]}" --env "$NOCHROME" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --no-sandbox)"
+r="$(session fb-nosandbox "$PROXY" "${CFB[@]}" --env "$NOCHROME" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --no-sandbox)"
 assert_refused_start 'FR16: --no-sandbox in the server argv still refuses to start with the fallback on' "$r" '--no-sandbox'
-r="$(session fb-nosandbox-env "$PROXY" "${CFB[@]}" --env "$NOCHROME" --env PLAYWRIGHT_MCP_SANDBOX=1 --send "$INIT" --end eof --timeout 3)"
+r="$(session fb-nosandbox-env "$PROXY" "${CFB[@]}" --env "$NOCHROME" --env PLAYWRIGHT_MCP_SANDBOX=1 --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR16: PLAYWRIGHT_MCP_SANDBOX in the env still refuses to start with the fallback on' "$r" 'PLAYWRIGHT_MCP_SANDBOX'
 session fb-udd "$PROXY" "${CFB[@]}" "${UDD[@]}" --env "$NOCHROME" --env "XDG_CACHE_HOME=$WORK/xdg" --env FAKE_PW_ARGV_OUT="$WORK/fb-udd" --send "$INIT" --end eof >/dev/null
 assert_true 'FR16: with a profile flag too, the appended flags arrive as --browser chromium --sandbox, --user-data-dir=<dir>, --snapshot-mode none, in that order' python3 "$FBCHK" "$WORK/fb-udd" udd-order "$WORK/xdg/soleur-test-profile"
@@ -532,50 +532,50 @@ assert_true 'FR17 control: the stub reports <unset> when the variable is absent 
 # FR5 — refuse to start (no child spawned)
 # ---------------------------------------------------------------------------
 NOSIB="$WORK/nosib"; mkdir -p "$NOSIB"; cp "$PROXY" "$NOSIB/proxy.py"
-r="$(session nosib "$NOSIB/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session nosib "$NOSIB/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: proxy beside no redactor refuses to start' "$r" 'missing'
-r="$(session savesess "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --save-session)"
+r="$(session savesess "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --save-session)"
 assert_refused_start 'FR5: --save-session in the wrapped argv refuses to start' "$r" 'save-session'
 printf '{"saveSession": true}\n' > "$WORK/cfg-save.json"
-r="$(session savecfg "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config "$WORK/cfg-save.json")"
+r="$(session savecfg "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config "$WORK/cfg-save.json")"
 assert_refused_start 'FR5: config saveSession (via --config) refuses to start' "$r" 'saveSession'
-r="$(session savecfgenv "$PROXY" --env PLAYWRIGHT_MCP_CONFIG="$WORK/cfg-save.json" --send "$INIT" --end eof --timeout 3)"
+r="$(session savecfgenv "$PROXY" --env PLAYWRIGHT_MCP_CONFIG="$WORK/cfg-save.json" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: config saveSession (via $PLAYWRIGHT_MCP_CONFIG) refuses to start' "$r" 'saveSession'
 printf 'saveSession = true\n' > "$WORK/cfg-save.ini"
-r="$(session saveini "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-save.ini")"
+r="$(session saveini "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-save.ini")"
 assert_refused_start 'FR5: a config the proxy cannot parse as JSON (the server reads INI) refuses to start' "$r" 'not JSON'
-r="$(session cfgmissing "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/nope.json")"
+r="$(session cfgmissing "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/nope.json")"
 assert_refused_start 'FR5: a --config that does not exist refuses to start with a named reason' "$r" 'does not exist'
 printf '{"saveVideo": {"width": 800, "height": 600}}\n' > "$WORK/cfg-video.json"
-r="$(session savevideo "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-video.json")"
+r="$(session savevideo "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-video.json")"
 assert_refused_start 'FR5: config saveVideo refuses to start' "$r" 'saveVideo'
 printf '{"capabilities": ["devtools"]}\n' > "$WORK/cfg-caps.json"
-r="$(session cfgcaps "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-caps.json")"
+r="$(session cfgcaps "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-caps.json")"
 assert_refused_start 'FR5: config capabilities other than vision refuses to start' "$r" 'capabilities'
 printf '{"server": {"port": 8931}}\n' > "$WORK/cfg-port.json"
-r="$(session cfgport "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-port.json")"
+r="$(session cfgport "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-port.json")"
 assert_refused_start 'FR5: config server.port refuses to start' "$r" 'server.port'
-r="$(session port "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --port 8931)"
+r="$(session port "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --port 8931)"
 assert_refused_start 'FR5: --port (HTTP transport around the relay) refuses to start' "$r" '--port'
-r="$(session portenv "$PROXY" --env PLAYWRIGHT_MCP_PORT=8931 --send "$INIT" --end eof --timeout 3)"
+r="$(session portenv "$PROXY" --env PLAYWRIGHT_MCP_PORT=8931 --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: PLAYWRIGHT_MCP_PORT refuses to start' "$r" '--port'
-r="$(session host "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --host=0.0.0.0)"
+r="$(session host "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --host=0.0.0.0)"
 assert_refused_start 'FR5: --host refuses to start' "$r" '--host'
-r="$(session caps "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --caps=vision,devtools)"
+r="$(session caps "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --caps=vision,devtools)"
 assert_refused_start 'FR5: --caps with devtools refuses to start' "$r" '--caps'
-r="$(session capsenv "$PROXY" --env PLAYWRIGHT_MCP_CAPS=storage --send "$INIT" --end eof --timeout 3)"
+r="$(session capsenv "$PROXY" --env PLAYWRIGHT_MCP_CAPS=storage --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: PLAYWRIGHT_MCP_CAPS=storage refuses to start' "$r" '--caps'
-r="$(session outmode "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --output-mode file)"
+r="$(session outmode "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --output-mode file)"
 assert_refused_start 'FR5: --output-mode file refuses to start' "$r" 'output-mode'
 printf '{"snapshot": {"mode": "full"}, "capabilities": ["vision"]}\n' > "$WORK/cfg-ok.json"
 r="$(session cfgok "$PROXY" --send "$INIT" --send "$SNAP" --end eof --server python3 "$STUB" --config="$WORK/cfg-ok.json" --caps vision)"
 assert_redacted_result 'FR5 companion: a benign JSON --config=<file> and --caps vision start and serve' "$r" 3 1
 for dbg in 'pw:mcp:server:response' '*' 'pw:*' 'pw:api *' '*:response' 'express:router, *' 'p*'; do
-  r="$(session "debug-$(printf '%s' "$dbg" | md5sum | cut -c1-8)" "$PROXY" --env "DEBUG=$dbg" --send "$INIT" --end eof --timeout 3)"
+  r="$(session "debug-$(printf '%s' "$dbg" | md5sum | cut -c1-8)" "$PROXY" --env "DEBUG=$dbg" --send "$INIT" --end eof --expect-death)"
   assert_refused_start "FR5: DEBUG='$dbg' (enables a pw:* logger) refuses to start" "$r" 'DEBUG'
 done
 assert_true 'FR5: the DEBUG reason never quotes the value' bash -c 'stderr_has "$1" "refusing to start" && ! grep -qF "p*" "$1/stderr.txt"' _ "$r"
-r="$(session debugfile "$PROXY" --env DEBUG_FILE="$WORK/dbg" --send "$INIT" --end eof --timeout 3)"
+r="$(session debugfile "$PROXY" --env DEBUG_FILE="$WORK/dbg" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: DEBUG_FILE refuses to start' "$r" 'DEBUG_FILE'
 r="$(session debugother "$PROXY" --env 'DEBUG=express:router,-pw:*' --send "$INIT" --send "$SNAP" --end eof)"
 assert_redacted_result 'FR5 companion: an unrelated DEBUG namespace (plus a pw exclusion) starts and serves' "$r" 3 1
@@ -599,78 +599,78 @@ for pair in \
   '--no-sandbox:PLAYWRIGHT_MCP_SANDBOX' \
   '--daemon:PLAYWRIGHT_MCP_DAEMON'; do
   flag="${pair%%:*}"; envvar="${pair##*:}"
-  r="$(session "sink-$flag" "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" "$flag=/tmp/x")"
+  r="$(session "sink-$flag" "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" "$flag=/tmp/x")"
   assert_refused_start "FR5: $flag=<v> in the wrapped argv refuses to start" "$r" "$flag"
-  r="$(session "sinkenv-${envvar#PLAYWRIGHT_MCP_}" "$PROXY" --env "$envvar=/tmp/x" --send "$INIT" --end eof --timeout 3)"
+  r="$(session "sinkenv-${envvar#PLAYWRIGHT_MCP_}" "$PROXY" --env "$envvar=/tmp/x" --send "$INIT" --end eof --expect-death)"
   assert_refused_start "FR5: $envvar refuses to start" "$r" "$envvar"
 done
-r="$(session sink-aufa "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --allow-unrestricted-file-access)"
+r="$(session sink-aufa "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --allow-unrestricted-file-access)"
 assert_refused_start 'FR5: bare --allow-unrestricted-file-access refuses to start' "$r" 'allow-unrestricted-file-access'
-r="$(session sinkenv-aufa "$PROXY" --env PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS=1 --send "$INIT" --end eof --timeout 3)"
+r="$(session sinkenv-aufa "$PROXY" --env PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS=1 --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS refuses to start' "$r" 'PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS'
-r="$(session sink-savesess-eq "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --save-session=/x)"
+r="$(session sink-savesess-eq "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --save-session=/x)"
 assert_refused_start 'FR5: --save-session=<v> (the = spelling) refuses to start' "$r" 'save-session'
-r="$(session sinkenv-savesess "$PROXY" --env PLAYWRIGHT_MCP_SAVE_SESSION=1 --send "$INIT" --end eof --timeout 3)"
+r="$(session sinkenv-savesess "$PROXY" --env PLAYWRIGHT_MCP_SAVE_SESSION=1 --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: PLAYWRIGHT_MCP_SAVE_SESSION refuses to start' "$r" 'PLAYWRIGHT_MCP_SAVE_SESSION'
-r="$(session sinkenv-udd "$PROXY" --env PLAYWRIGHT_MCP_USER_DATA_DIR=/tmp/p --send "$INIT" --end eof --timeout 3)"
+r="$(session sinkenv-udd "$PROXY" --env PLAYWRIGHT_MCP_USER_DATA_DIR=/tmp/p --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: PLAYWRIGHT_MCP_USER_DATA_DIR refuses to start (the env form of an audited argv setting)' "$r" 'PLAYWRIGHT_MCP_USER_DATA_DIR'
-r="$(session sinkenv-snap "$PROXY" --env PLAYWRIGHT_MCP_SNAPSHOT_MODE=full --send "$INIT" --end eof --timeout 3)"
+r="$(session sinkenv-snap "$PROXY" --env PLAYWRIGHT_MCP_SNAPSHOT_MODE=full --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: PLAYWRIGHT_MCP_SNAPSHOT_MODE refuses to start (the proxy owns the flag)' "$r" 'PLAYWRIGHT_MCP_SNAPSHOT_MODE'
 # a bare valued flag as the LAST server arg would bind an appended
 # `--user-data-dir=`/`--snapshot-mode` token as its value — refused, whatever
 # the flag
-r="$(session trailcfg "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config)"
+r="$(session trailcfg "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config)"
 assert_refused_start 'FR5: a trailing --config would swallow an appended flag into its value — refuses' "$r" 'expects a value'
-r="$(session trailua "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --user-agent)"
+r="$(session trailua "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --user-agent)"
 assert_refused_start 'FR5: a trailing --user-agent (valued, not a sink) refuses the same way' "$r" 'expects a value'
 r="$(session midua "$PROXY" --send "$INIT" --send "$SNAP" --end eof --server python3 "$STUB" --user-agent suite-ua)"
 assert_redacted_result 'FR5 companion: a valued flag with its value mid-argv starts and serves' "$r" 3 1
 # the config-file forms of the same sinks (audited argv stays allowed)
 printf '{"saveTrace": true}\n' > "$WORK/cfg-trace.json"
-r="$(session cfgtrace "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-trace.json")"
+r="$(session cfgtrace "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-trace.json")"
 assert_refused_start 'FR5: config saveTrace refuses to start' "$r" 'saveTrace'
 printf '{"secrets": "/tmp/s.json"}\n' > "$WORK/cfg-secrets.json"
-r="$(session cfgsecrets "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-secrets.json")"
+r="$(session cfgsecrets "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-secrets.json")"
 assert_refused_start 'FR5: config secrets refuses to start' "$r" 'secrets'
 printf '{"outputDir": "/tmp/o"}\n' > "$WORK/cfg-outdir.json"
-r="$(session cfgoutdir "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-outdir.json")"
+r="$(session cfgoutdir "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-outdir.json")"
 assert_refused_start 'FR5: config outputDir refuses to start' "$r" 'outputDir'
 printf '{"allowUnrestrictedFileAccess": true}\n' > "$WORK/cfg-aufa.json"
-r="$(session cfgaufa "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-aufa.json")"
+r="$(session cfgaufa "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-aufa.json")"
 assert_refused_start 'FR5: config allowUnrestrictedFileAccess refuses to start' "$r" 'allowUnrestrictedFileAccess'
 printf '{"extension": true}\n' > "$WORK/cfg-ext.json"
-r="$(session cfgext "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ext.json")"
+r="$(session cfgext "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ext.json")"
 assert_refused_start 'FR5: config extension refuses to start' "$r" 'extension'
 printf '{"browser": {"cdpEndpoint": "ws://127.0.0.1:1"}}\n' > "$WORK/cfg-cdp.json"
-r="$(session cfgcdp "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-cdp.json")"
+r="$(session cfgcdp "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-cdp.json")"
 assert_refused_start 'FR5: config browser.cdpEndpoint refuses to start' "$r" 'cdpEndpoint'
 printf '{"browser": {"initScript": "/tmp/x.js"}}\n' > "$WORK/cfg-initscript.json"
-r="$(session cfginitscript "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-initscript.json")"
+r="$(session cfginitscript "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-initscript.json")"
 assert_refused_start 'FR5: config browser.initScript refuses to start' "$r" 'initScript'
 printf '{"browser": {"launchOptions": {"executablePath": "/tmp/x"}}}\n' > "$WORK/cfg-execpath.json"
-r="$(session cfgexecpath "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-execpath.json")"
+r="$(session cfgexecpath "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-execpath.json")"
 assert_refused_start 'FR5: config browser.launchOptions.executablePath refuses to start' "$r" 'executablePath'
 printf '{"browser": {"launchOptions": {"args": ["--remote-debugging-port=9222"]}}}\n' > "$WORK/cfg-rdbg.json"
-r="$(session cfgrdbg "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-rdbg.json")"
+r="$(session cfgrdbg "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-rdbg.json")"
 assert_refused_start 'FR5: config launchOptions.args with a remote debugging flag refuses to start' "$r" 'remote debugging'
 printf '{"browser": {"userDataDir": "/tmp/p"}}\n' > "$WORK/cfg-udd.json"
-r="$(session cfgudd "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/xdg" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-udd.json")"
+r="$(session cfgudd "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/xdg" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-udd.json")"
 assert_refused_start 'FR5: config browser.userDataDir conflicts with --user-data-dir-name' "$r" 'userDataDir'
 r="$(session cfgudd-ok "$PROXY" --send "$INIT" --send "$SNAP" --end eof --server python3 "$STUB" --config="$WORK/cfg-udd.json")"
 assert_redacted_result 'FR5 companion: config browser.userDataDir WITHOUT the profile flag is the audited form — starts and serves' "$r" 3 1
 printf '{"browser": {"contextOptions": {"storageState": "/tmp/s.json"}}}\n' > "$WORK/cfg-ctxstorage.json"
-r="$(session cfgctxstorage "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ctxstorage.json")"
+r="$(session cfgctxstorage "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxstorage.json")"
 assert_refused_start 'FR5: config browser.contextOptions.storageState refuses to start' "$r" 'storageState'
 printf '{"browser": {"contextOptions": {"permissions": ["clipboard-read"]}}}\n' > "$WORK/cfg-ctxperms.json"
-r="$(session cfgctxperms "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ctxperms.json")"
+r="$(session cfgctxperms "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxperms.json")"
 assert_refused_start 'FR5: config browser.contextOptions.permissions refuses to start' "$r" 'permissions'
 printf '{"browser": {"contextOptions": {"ignoreHTTPSErrors": true}}}\n' > "$WORK/cfg-ctxhttps.json"
-r="$(session cfgctxhttps "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ctxhttps.json")"
+r="$(session cfgctxhttps "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxhttps.json")"
 assert_refused_start 'FR5: config browser.contextOptions.ignoreHTTPSErrors refuses to start' "$r" 'ignoreHTTPSErrors'
 printf '{"browser": {"launchOptions": {"chromiumSandbox": false}}}\n' > "$WORK/cfg-sandbox.json"
-r="$(session cfgsandbox "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-sandbox.json")"
+r="$(session cfgsandbox "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-sandbox.json")"
 assert_refused_start 'FR5: config browser.launchOptions.chromiumSandbox refuses to start' "$r" 'chromiumSandbox'
-r="$(session traildaemon "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --daemon)"
+r="$(session traildaemon "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --daemon)"
 assert_refused_start 'FR5: a trailing --daemon (hidden valued option) would swallow an appended flag — refuses' "$r" 'expects a value'
 usage_rc=0; python3 "$PROXY" -- </dev/null >"$WORK/usage.out" 2>"$WORK/usage.err" || usage_rc=$?
 assert_true 'B1: empty server argv → exit 2, usage on stderr, nothing on stdout' bash -c '[[ "$1" == "2" ]] && grep -qF "refusing to start: usage:" "$2" && [[ ! -s "$3" ]]' _ "$usage_rc" "$WORK/usage.err" "$WORK/usage.out"
@@ -690,13 +690,13 @@ open(sys.argv[2], "w").write(src.replace(old, new))
 PY
 }
 mk_variant "$WORK/v-identity" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    return text\n\ndef _unused_redact_text(text: str) -> str:'
-r="$(session v-identity "$WORK/v-identity/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session v-identity "$WORK/v-identity/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR6: a redactor returning its input unchanged → refuse to start' "$r" 'self-test'
 mk_variant "$WORK/v-append" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    return text + " <redacted>"\n\ndef _unused_redact_text(text: str) -> str:'
-r="$(session v-append "$WORK/v-append/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session v-append "$WORK/v-append/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR6/row 9 input: a redactor appending <redacted> without removing the value → refuse' "$r" 'self-test'
 mk_variant "$WORK/v-false" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    return False\n\ndef _unused_looks(value: str) -> bool:'
-r="$(session v-false "$WORK/v-false/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session v-false "$WORK/v-false/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR6/row 29 input: constant-False looks_like_a11y_tree → refuse' "$r" 'looks_like_a11y_tree'
 # raises only for long text, so the startup self-test passes (row 34's input)
 mk_variant "$WORK/v-raise" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    if len(text) > 200:\n        raise RuntimeError("boom")\n    return _orig_redact_text(text)\n\ndef _orig_redact_text(text: str) -> str:'
@@ -707,33 +707,48 @@ assert_stderr_marker 'FR7b: one withheld line for the raise' "$r" 'withheld tool
 assert_rc 'FR7: the session ended cleanly after the withhold' "$r" 0
 # the four-name contract: a redactor missing one name → refuse, not a per-result withhold
 mk_variant "$WORK/v-rename" "$PROXY" 'def main() -> None:' 'del looks_like_a11y_tree\n\n\ndef main() -> None:'
-r="$(session v-rename "$WORK/v-rename/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session v-rename "$WORK/v-rename/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'B2: a redactor missing one of the four names → refuse (not a per-result withhold)' "$r" 'does not export looks_like_a11y_tree'
 # Startup refusal (slice 1 of #10331): the startup handlers catch (Exception, SystemExit, KeyboardInterrupt), not BaseException. Each excluded
 # class must still refuse with rc 2 and the unchanged reason line, at every member: the import, the redact_text call and the
 # looks_like_a11y_tree call in the self-test (a case for one member does not cover the other).
 for cls in SystemExit KeyboardInterrupt; do
   mk_variant "$WORK/v-load-$cls" "$PROXY" 'def main() -> None:' "raise $cls()\n\n\ndef main() -> None:"
-  r="$(session "v-load-$cls" "$WORK/v-load-$cls/proxy.py" --send "$INIT" --end eof --timeout 3)"
+  r="$(session "v-load-$cls" "$WORK/v-load-$cls/proxy.py" --send "$INIT" --end eof --expect-death)"
   assert_refused_start "G1: a redactor raising $cls at import → refuse to start (rc 2), class named" "$r" "cannot load redact-a11y-snapshot.py: $cls"
 done
 mk_variant "$WORK/v-st-redact" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    raise KeyboardInterrupt()\n\ndef _unused_redact_text(text: str) -> str:'
-r="$(session v-st-redact "$WORK/v-st-redact/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session v-st-redact "$WORK/v-st-redact/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'G1: redact_text raising KeyboardInterrupt in the self-test → refuse (rc 2), class named' "$r" 'redactor self-test raised KeyboardInterrupt'
 mk_variant "$WORK/v-st-redact-exit" "$PROXY" 'def redact_text(text: str) -> str:' 'def redact_text(text: str) -> str:\n    raise SystemExit(3)\n\ndef _unused_redact_text(text: str) -> str:'
-r="$(session v-st-redact-exit "$WORK/v-st-redact-exit/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session v-st-redact-exit "$WORK/v-st-redact-exit/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'G1: redact_text raising SystemExit in the self-test → refuse (rc 2), class named' "$r" 'redactor self-test raised SystemExit'
 mk_variant "$WORK/v-st-looks" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    raise KeyboardInterrupt()\n\ndef _unused_looks(value: str) -> bool:'
-r="$(session v-st-looks "$WORK/v-st-looks/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session v-st-looks "$WORK/v-st-looks/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'G1: looks_like_a11y_tree raising KeyboardInterrupt in the self-test → refuse (rc 2), class named' "$r" 'looks_like_a11y_tree raised KeyboardInterrupt'
 mk_variant "$WORK/v-st-looks-exit" "$PROXY" 'def looks_like_a11y_tree(value: str) -> bool:' 'def looks_like_a11y_tree(value: str) -> bool:\n    raise SystemExit(3)\n\ndef _unused_looks(value: str) -> bool:'
-r="$(session v-st-looks-exit "$WORK/v-st-looks-exit/proxy.py" --send "$INIT" --end eof --timeout 3)"
+r="$(session v-st-looks-exit "$WORK/v-st-looks-exit/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'G1: looks_like_a11y_tree raising SystemExit in the self-test → refuse (rc 2), class named' "$r" 'looks_like_a11y_tree raised SystemExit'
 # The narrowing is deliberate: a BaseException subclass outside (Exception, SystemExit, KeyboardInterrupt) is not caught, so the proxy
 # dies with rc 1 and a traceback. Still fail-closed (no stdout line, no child) -- pinned so widening back to BaseException (rc 2) is a decision.
 mk_variant "$WORK/v-load-outside" "$PROXY" 'def main() -> None:' "class _OutsideBase(BaseException):\n    pass\n\n\nraise _OutsideBase()\n\n\ndef main() -> None:"
-r="$(session v-load-outside "$WORK/v-load-outside/proxy.py" --send "$INIT" --end eof --timeout 3)"
-assert_true 'G1: a BaseException subclass outside the narrowed tuple at import → rc 1, nothing relayed, no child spawned' bash -c '[[ "$(rcof "$1")" == "1" && "$(fact "$1" 0 lines)" == "0" && -z "$(cat "$1/child_pgid" 2>/dev/null)" ]] && stderr_has "$1" "_OutsideBase"' _ "$r"
+r="$(session v-load-outside "$WORK/v-load-outside/proxy.py" --send "$INIT" --end eof --expect-death)"
+# Split per-observable (#10919): a recurrence must name the failed conjunct, not
+# just the label — the 4-in-1 assert_true is what made #10913 undiagnosable.
+assert_rc 'G1: a BaseException subclass outside the narrowed tuple at import → proxy exit 1' "$r" 1
+assert_true 'G1: … nothing relayed (zero stdout lines)' bash -c '[[ "$(fact "$1" 0 lines)" == "0" ]]' _ "$r"
+assert_true 'G1: … no child spawned' bash -c '[[ -z "$(cat "$1/child_pgid" 2>/dev/null)" ]]' _ "$r"
+assert_true 'G1: … _OutsideBase named on stderr' bash -c 'stderr_has "$1" "_OutsideBase"' _ "$r"
+# Mechanism proof for the deadline→verdict decoupling (AC-2): a redactor whose
+# module top sleeps past BOTH 3s deadline windows (>6s — the measured stall was
+# 6.07s) then raises _OutsideBase must still record TIMEOUT under --timeout 3
+# (negative control pinning the deadline arm) and the real rc 1 under
+# --expect-death.
+mk_variant "$WORK/v-load-outside-slow" "$PROXY" 'def main() -> None:' "import time\ntime.sleep(7)\n\n\nclass _OutsideBase(BaseException):\n    pass\n\n\nraise _OutsideBase()\n\n\ndef main() -> None:"
+r="$(session v-load-outside-slow-deadline "$WORK/v-load-outside-slow/proxy.py" --send "$INIT" --end eof --timeout 3)"
+assert_rc 'G1b: negative control — a >6s slow death still records TIMEOUT under --timeout 3' "$r" TIMEOUT
+r="$(session v-load-outside-slow "$WORK/v-load-outside-slow/proxy.py" --send "$INIT" --end eof --expect-death)"
+assert_rc 'G1b: the same slow death under --expect-death records the real exit 1' "$r" 1
 # FR13 behavioural: a SPY redactor tags every string it is handed. Every text block
 # the proxy delivers must carry the tag — a proxy-side predicate that skips some
 # text (a literal, a tool-name allowlist, any spelling of either) cannot hide.
@@ -1148,7 +1163,7 @@ if [[ -n "$MUTANT_PATH" ]]; then r="$(session m61 "$MUTANT_PATH" "${UDD[@]}" --s
 mutant 62-udd-nohome-ok profile_dir_from_args '        if not home:' '        if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m62 "$MUTANT_PATH" "${UDD[@]}" --env XDG_CACHE_HOME= --env HOME= --send "$INIT" --end eof --timeout 3)"; red 'row 62: the HOME check removed → the refusal no longer names the setting' bash -c 'started "$1" || ! stderr_has "$1" "HOME is set"' _ "$r"; fi
 mutant 63-udd-missing-ok profile_dir_from_args '            if i + 1 >= len(args):' '            if False:'
-if [[ -n "$MUTANT_PATH" ]]; then r="$(session m63 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --send "$INIT" --end eof --timeout 3)"; red 'row 63: the missing-argument check removed → a bare flag crashes instead of refusing cleanly' bash -c '[[ "$(rcof "$1")" != "2" ]] || ! stderr_has "$1" "refusing to start"' _ "$r"; fi
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m63 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --send "$INIT" --end eof --expect-death)"; red 'row 63: the missing-argument check removed → a bare flag crashes instead of refusing cleanly' bash -c '[[ "$(rcof "$1")" != "2" ]] || ! stderr_has "$1" "refusing to start"' _ "$r"; fi
 mutant 64-udd-dup-ok profile_dir_from_args '            if name is not None:' '            if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m64 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --proxy-arg a --proxy-arg --user-data-dir-name=b --send "$INIT" --end eof --timeout 3)"; red 'row 64: the duplicate-flag check removed → the second value silently wins' started "$r"; fi
 mutant 65-udd-dash-ok profile_dir_from_args '    if name.startswith("-"):' '    if False:'
