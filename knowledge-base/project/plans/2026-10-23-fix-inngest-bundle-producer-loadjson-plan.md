@@ -12,6 +12,38 @@ requires_cpo_signoff: true
 
 # fix: inngest config-bundle producer emits a .sigstore.json the pinned verify-blob cannot load (epic #10390, defect 3 — Phase-1 producer fix)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23 (same session as authoring — plan + deepen ran in one headless pass;
+sequential-fallback: no Task/Agent tool on this harness, fan-outs executed inline)
+
+### Key Improvements
+
+1. **Prime suspect refuted by measurement, not prose:** `tlog_entries`/`timestamp_verification_data`
+   are NOT mutually exclusive in bundle v0.3 (protobuf-specs v0.5.1 source: independent fields; the
+   oneof covers only key material). Live A/B on the pinned cosign image proved a fixture bundle
+   loads WITH both present — the fix is therefore emit-surface control + verbatim-error capture,
+   not "delete tsvd".
+2. **Failure locus narrowed to `validate()` → `TlogEntries()` → `ParseTransparencyLogEntry`** by
+   elimination (protojson.Unmarshal cannot fail on protojson.Marshal output; all other validate
+   arms verified vacuous on the observed field set). Phase 0's Go repro prints the verbatim check
+   name `checkNewBundle` currently swallows.
+3. **Verify-before-publish guard added** — the producer never self-verified its artifact against
+   the consumer's pinned loader (`sign.Bundle` in-process validate skips when TrustedRoot is nil,
+   and in-memory validate ≠ the on-disk load path). The new step hard-fails pre-push.
+4. **Floor-bump ordering hazard made explicit:** floor 6 merged while `INNGEST_CONFIG_DIGEST` is
+   still absent FATALs the next boot — merge→promote must ride the same window; no host-replace
+   dispatch between them.
+
+### New Considerations Discovered
+
+- Rekor-v2 emit hypothesis: `SignData` REQUIRES a TSA when a Rekor-v2 service is selected —
+  `timestampVerificationData` presence is consistent with either a v1+TSA sign or a v2 sign;
+  `tlogEntries[0].kindVersion.version` (0.0.1 vs 0.0.2) discriminates.
+- `--signing-config <path>` alone suffices: `LoadTrustedMaterialAndSigningConfig` prefers the
+  explicit path over `--use-signing-config` default-true-unset (mutual exclusivity only when both
+  are explicitly set).
+
 ## Overview
 
 Defect 3 follow-up. The prior arc (plan `archive/20261023-130322-…-verify-blob-reject-plan.md`,
@@ -372,13 +404,14 @@ established signed-bundle channel; no UI surface, no regulated-data surface, no 
 |---|---|---|
 | Phases 1-4, tests, floor bump, promotion | asked | Directly named in the brief |
 | Phase 0 verbatim-error probe (Go LoadJSONFromPath repro) | inferred | `checkNewBundle` swallows the error — without the verbatim check name the fix is guesswork; this session's source audit already refuted the stated prime suspect once |
-| Verify-before-publish step in the producer | inferred | The self-test gap that let an unloadable bundle reach GHCR — smallest structural fix for the defect class, required by `hr-no-...` observability discipline (a producer asserting its own artifact) |
+| Verify-before-publish step in the producer | inferred | The self-test gap that let an unloadable bundle reach GHCR — smallest structural fix for the defect class, required by `hr-observability-as-plan-quality-gate` (a producer asserting its own artifact before publish) |
 | PIR/runbook/ADR amendments | asked-by-convention | ADR deliverable rule + incident record completeness |
 
 ### Split Assessment
 
-Single PR/change arc — the probe extension, producer fix, tests, and floor bump are one causal
-chain (the floor's safety depends on the promotion this arc delivers). No sibling split.
+- Recommendation: single PR/change arc — the probe extension, producer fix, tests, and floor bump
+  are one causal chain (the floor's safety depends on the promotion this arc delivers). No sibling
+  split.
 
 ## Downtime & Cutover
 
