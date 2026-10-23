@@ -29,7 +29,7 @@ import {
   type ReapFailureRoot,
 } from "./workspace-reap-error";
 
-import { assertWorkspaceNotBeingReaped, runExclusiveReap } from "./workspace-reap-guard";
+import { assertWorkspaceNotBeingReaped, beginReapChild, runExclusiveReap } from "./workspace-reap-guard";
 
 export { WorkspaceReapError, WorkspaceReapInProgressError };
 export type { ReapFailure, ReapFailureKind, ReapFailureRoot };
@@ -402,6 +402,18 @@ async function reapWorkspace(id: string): Promise<void> {
     units.push({ label, root, path: join(root, id) });
   }
 
+  // Each reap child holds the id until its callback fires, past the hard stop and past this reap
+  // settling; the ceiling drops a never-exiting child's hold with one hashed breadcrumb.
+  const childHold: ChildHold = {
+    begin: () =>
+      beginReapChild(id, () =>
+        log.warn(
+          { workspaceIdHash: idHash },
+          "An abandoned reap child is still running at the hold ceiling; releasing the workspace id",
+        ),
+      ),
+  };
+
   const removed: typeof units = [];
   for (const t of units) {
     if (Date.now() >= deadline) {
@@ -412,7 +424,7 @@ async function reapWorkspace(id: string): Promise<void> {
     }
     try {
       const existed = lstatOrNull(t.path) !== null;
-      const outcome = await removeWorkspaceDirAsync(t.path, [t.root]);
+      const outcome = await removeWorkspaceDirAsync(t.path, [t.root], childHold);
       if (outcome === "moved-aside") {
         fail(t.label, "moved-aside");
       } else if (lstatOrNull(t.path)) {
@@ -586,8 +598,16 @@ function runStepSync(step: RemoveStep): RemoveStepResult {
  */
 export const REAP_HARD_STOP_GRACE_MS = 5_000;
 
-function runStepAsync(step: RemoveStep): Promise<RemoveStepResult> {
+/** Lets the async remover tell the per-id guard a child is alive (see workspace-reap-guard.ts). */
+export interface ChildHold {
+  begin: () => () => void;
+}
+
+function runStepAsync(step: RemoveStep, hold?: ChildHold): Promise<RemoveStepResult> {
   return new Promise((resolveStep) => {
+    // The hold lasts until the child's callback ACTUALLY fires, not until the hard stop: an
+    // abandoned child may still be running its rm (see workspace-reap-guard.ts).
+    const releaseHold = hold?.begin();
     const hardStop = setTimeout(() => {
       log.warn(
         { ...pathFields(step.target), cmd: step.cmd, hardStop: true },
@@ -601,6 +621,7 @@ function runStepAsync(step: RemoveStep): Promise<RemoveStepResult> {
       { timeout: REAP_CMD_TIMEOUT_MS[step.cmd], killSignal: "SIGKILL" },
       (err) => {
         clearTimeout(hardStop);
+        releaseHold?.();
         if (!err) return resolveStep({ ok: true });
         const e = err as NodeJS.ErrnoException & { killed?: boolean };
         resolveStep({ ok: false, timedOut: e.killed === true, code: e.code ? String(e.code) : undefined });
@@ -653,10 +674,11 @@ export function removeWorkspaceDir(
 export async function removeWorkspaceDirAsync(
   workspacePath: string,
   allowedRoots: string[] = [getWorkspacesRoot()],
+  hold?: ChildHold,
 ): Promise<RemoveOutcome> {
   const gen = removeSteps(workspacePath, allowedRoots);
   let next = gen.next();
-  while (!next.done) next = gen.next(await runStepAsync(next.value));
+  while (!next.done) next = gen.next(await runStepAsync(next.value, hold));
   return next.value;
 }
 

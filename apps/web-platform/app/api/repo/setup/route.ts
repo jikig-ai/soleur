@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { isWorkspaceBeingReaped } from "@/server/workspace-reap-guard";
+import { WorkspaceReapInProgressError } from "@/server/workspace-reap-error";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
 import { writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
@@ -407,6 +408,24 @@ export async function POST(request: Request) {
       });
     })
     .catch(async (err) => {
+      // #8211: a reap of THIS workspace registered between the route's guard check and the clone
+      // (disconnect / account deletion). Calm, like the early 409: no Sentry, and NOT a clone error.
+      // The lock flip above overwrote the not_connected state disconnect had just written, so put
+      // back exactly that cleared state (never `error`, and never leave `cloning` stuck).
+      if (err instanceof WorkspaceReapInProgressError) {
+        logger.info(
+          { userIdHash: hashUserIdValue(user.id) },
+          "repo setup: workspace is being deleted; clone not started",
+        );
+        await writeRepoColsToWorkspace(serviceClient, activeWorkspaceId, {
+          github_installation_id: null,
+          repo_url: null,
+          repo_status: "not_connected",
+          repo_last_synced_at: null,
+          repo_error: null,
+        });
+        return;
+      }
       Sentry.withIsolationScope(() => {
         Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
         reportSilentFallback(err, {

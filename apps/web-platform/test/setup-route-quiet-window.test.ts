@@ -90,6 +90,9 @@ import { POST } from "../app/api/repo/setup/route";
 import { QUIET_WINDOW_MESSAGE } from "@/server/quiet-window";
 import { __resetFeatureFlagsForTests } from "@/lib/feature-flags/server";
 import { runExclusiveReap } from "@/server/workspace-reap-guard";
+import { WorkspaceReapInProgressError } from "@/server/workspace-reap-error";
+import * as SentryMod from "@sentry/nextjs";
+import { reportSilentFallback } from "@/server/observability";
 
 // Tracks whether the cloning-flip UPDATE on `workspaces` was issued.
 let cloningFlipCalled = false;
@@ -234,6 +237,38 @@ describe("POST /api/repo/setup — quiet-window kill-switch (#8211)", () => {
     const after = await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
     expect(after.status).toBe(200);
     expect(mockProvisionWorkspaceWithRepo).toHaveBeenCalledTimes(1);
+  });
+
+  test("a reap that registers AFTER the guard check (provision refuses in the background): calm, no Sentry, no error status, the disconnect state is restored", async () => {
+    mockProvisionWorkspaceWithRepo.mockRejectedValue(new WorkspaceReapInProgressError());
+
+    const res = await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
+    expect(res.status).toBe(200); // the clone started as far as the route can tell
+    await new Promise((r) => setTimeout(r, 20)); // let the background .catch run
+
+    expect(vi.mocked(reportSilentFallback)).not.toHaveBeenCalled();
+    expect(vi.mocked(SentryMod.captureException)).not.toHaveBeenCalled();
+    const writes = mockWriteRepoColsToWorkspace.mock.calls.map((c) => c[2] as Record<string, unknown>);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toEqual({
+      github_installation_id: null,
+      repo_url: null,
+      repo_status: "not_connected",
+      repo_last_synced_at: null,
+      repo_error: null,
+    });
+    expect(writes.some((w) => w.repo_status === "error")).toBe(false);
+  });
+
+  test("any OTHER background provisioning failure is still reported and written as `error`", async () => {
+    mockProvisionWorkspaceWithRepo.mockRejectedValue(new Error("clone blew up"));
+
+    await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledTimes(1);
+    const writes = mockWriteRepoColsToWorkspace.mock.calls.map((c) => c[2] as Record<string, unknown>);
+    expect(writes[0].repo_status).toBe("error");
   });
 
   test("a reap of ANOTHER workspace does not block this one", async () => {

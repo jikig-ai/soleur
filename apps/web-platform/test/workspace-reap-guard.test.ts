@@ -281,7 +281,7 @@ describe("the guard is released in `finally`", () => {
     await expect(provisionWorkspace(ID)).resolves.toBe(join(wsRoot, ID));
   });
 
-  test("after a hard-stopped child (TIMEOUT)", async () => {
+  test("after a hard-stopped child (TIMEOUT): the reap is over, but the id stays held by the abandoned child (see the hold tests below)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { isWorkspaceBeingReaped } = await import("../server/workspace-reap-guard");
     seed(wtRoot);
@@ -303,6 +303,131 @@ describe("the guard is released in `finally`", () => {
     const err = await p;
 
     expect((err as { failures: unknown[] }).failures).toEqual([{ root: "worktree", kind: "timeout", code: "ETIMEDOUT" }]);
-    expect(isWorkspaceBeingReaped(ID)).toBe(false);
+    expect(isWorkspaceBeingReaped(ID)).toBe(true);
+  });
+});
+
+describe("an abandoned (hard-stopped) child keeps the id blocked until it actually exits", () => {
+  /** rm calls: the first HANGS (callback captured), later ones complete and remove the tree. */
+  function hangFirstRm() {
+    const hung: ((...a: unknown[]) => void)[] = [];
+    let n = 0;
+    vi.doMock("child_process", async () => {
+      const actual = await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFile: (cmd: string, args: string[], opts: unknown, cb: (...a: unknown[]) => void) => {
+          if (cmd !== "rm") return (actual.execFile as (...x: unknown[]) => unknown)(cmd, args, opts, cb);
+          n += 1;
+          if (n === 1) {
+            hung.push(cb);
+            return undefined;
+          }
+          rmSync(args[args.length - 1], { recursive: true, force: true });
+          setImmediate(() => cb(null, "", ""));
+          return undefined;
+        },
+      };
+    });
+    return hung;
+  }
+  const FAKE = { toFake: ["setTimeout", "clearTimeout", "Date"] as ("setTimeout" | "clearTimeout" | "Date")[] };
+
+  test("the reap reports the timeout at once, but provisioning stays refused until the child's callback fires", async () => {
+    vi.useFakeTimers(FAKE);
+    seed(wtRoot);
+    const hung = hangFirstRm();
+    const guard = await import("../server/workspace-reap-guard");
+    const { deleteWorkspace, provisionWorkspace, REAP_CMD_TIMEOUT_MS, REAP_HARD_STOP_GRACE_MS, WorkspaceReapInProgressError } =
+      await import("../server/workspace");
+
+    const p = deleteWorkspace(ID).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    await vi.advanceTimersByTimeAsync(REAP_CMD_TIMEOUT_MS.rm + REAP_HARD_STOP_GRACE_MS + 10);
+    const err = await p;
+
+    // deleteWorkspace's own result is unchanged: the unit is a timeout failure, immediately.
+    expect((err as { failures: unknown[] }).failures).toEqual([{ root: "worktree", kind: "timeout", code: "ETIMEDOUT" }]);
+    // ...but the abandoned rm may still be alive: the id is NOT free.
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(true);
+    await expect(provisionWorkspace(ID)).rejects.toBeInstanceOf(WorkspaceReapInProgressError);
+
+    hung[0](null, "", ""); // the child finally exits
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(false);
+    await expect(provisionWorkspace(ID)).resolves.toBe(join(wsRoot, ID));
+  });
+
+  test("the hold has a CEILING: a child that never exits releases the id after 10 min, with one hashed breadcrumb", async () => {
+    vi.useFakeTimers(FAKE);
+    seed(wtRoot);
+    hangFirstRm();
+    const logged: unknown[][] = [];
+    vi.doMock("../server/logger", async () => {
+      const actual = await vi.importActual<typeof import("../server/logger")>("../server/logger");
+      const rec = (...a: unknown[]) => void logged.push(a);
+      return { ...actual, createChildLogger: () => ({ info: rec, warn: rec, error: rec, debug: rec }) };
+    });
+    const guard = await import("../server/workspace-reap-guard");
+    const { deleteWorkspace, REAP_CMD_TIMEOUT_MS, REAP_HARD_STOP_GRACE_MS } = await import("../server/workspace");
+
+    const p = deleteWorkspace(ID).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(REAP_CMD_TIMEOUT_MS.rm + REAP_HARD_STOP_GRACE_MS + 10);
+    await p;
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(guard.REAP_CHILD_HOLD_CEILING_MS - REAP_CMD_TIMEOUT_MS.rm - REAP_HARD_STOP_GRACE_MS - 20);
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(true); // just short of the ceiling
+    await vi.advanceTimersByTimeAsync(100);
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(false);
+
+    const crumbs = logged.filter(([, m]) => /hold ceiling/.test(String(m)));
+    expect(crumbs).toHaveLength(1);
+    expect(JSON.stringify(crumbs)).not.toContain(ID);
+    expect(crumbs[0][0]).toHaveProperty("workspaceIdHash");
+  });
+
+  test("overlapping reaps of one id count children: a later reap finishing does not release the abandoned one's hold", async () => {
+    vi.useFakeTimers(FAKE);
+    seed(wtRoot);
+    const hung = hangFirstRm();
+    const guard = await import("../server/workspace-reap-guard");
+    const { deleteWorkspace, REAP_CMD_TIMEOUT_MS, REAP_HARD_STOP_GRACE_MS } = await import("../server/workspace");
+
+    const first = deleteWorkspace(ID).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(REAP_CMD_TIMEOUT_MS.rm + REAP_HARD_STOP_GRACE_MS + 10);
+    await first;
+
+    // A SECOND reap of the same id runs and completes while the first child is still alive.
+    seed(wtRoot);
+    let settled = false;
+    const second = deleteWorkspace(ID).then(() => void (settled = true));
+    for (let i = 0; i < 50 && !settled; i++) {
+      await new Promise((r) => setImmediate(r)); // let the (real) child callback run
+      await vi.advanceTimersByTimeAsync(300); // then the re-check delay
+    }
+    await second;
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(true); // still held by the first, abandoned child
+
+    hung[0](null, "", "");
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(false);
+  });
+
+  test("guard unit: holds are counted, release is idempotent and never underflows", async () => {
+    const guard = await import("../server/workspace-reap-guard");
+    const a = guard.beginReapChild(ID);
+    const b = guard.beginReapChild(ID.toUpperCase());
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(true);
+    a();
+    a(); // double release must not drop b's hold
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(true);
+    b();
+    expect(guard.isWorkspaceBeingReaped(ID)).toBe(false);
+    expect(() => guard.assertWorkspaceNotBeingReaped(ID)).not.toThrow();
+    // another id is never affected
+    const c = guard.beginReapChild(ID);
+    expect(guard.isWorkspaceBeingReaped("99999999-2222-4333-8444-555555555555")).toBe(false);
+    c();
   });
 });
