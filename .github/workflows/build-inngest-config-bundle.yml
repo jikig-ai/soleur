@@ -128,8 +128,19 @@ jobs:
           COSIGN="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
           REF_ESCAPED="$(printf '%s' "$GITHUB_REF" | sed 's/[.[\*^$()+?{|\\]/\\&/g')"
           IDENTITY_REGEXP="^https://github\.com/jikig-ai/soleur/\.github/workflows/build-inngest-config-bundle\.yml@${REF_ESCAPED}$"
-          docker pull "$COSIGN"
-          out="$(docker run --rm --network none \
+          timeout 300 docker pull "$COSIGN"
+          # The gate's EACCES-class coverage exists only because the pinned image's default
+          # user is nonroot (UID 65532 — asserted below via image inspect). A future pin
+          # bump to a root-default image would silently disarm exactly the defect class this
+          # step exists to catch: hard-fail if the pinned verifier ever runs as root.
+          VERIFIER_USER="$(docker image inspect -f '{{.Config.User}}' "$COSIGN")"
+          if [[ -z "$VERIFIER_USER" || "$VERIFIER_USER" == "0" || "$VERIFIER_USER" == "root" ]]; then
+            echo "::error::pinned cosign verifier image defaults to a root/empty user (Config.User='${VERIFIER_USER}') — the gate cannot see EACCES-class member-mode defects; refusing to publish"
+            exit 1
+          fi
+          # `timeout` mirrors the host's bounded verify (VERIFY_TIMEOUT_S=120): an unbounded
+          # container invocation here could hang the whole job on a wedged daemon, not just fail.
+          out="$(timeout 120 docker run --rm --network none \
             -v "$(dirname "$MANIFEST"):/bundle:ro" \
             -v "$GITHUB_WORKSPACE/apps/web-platform/infra/cosign-trusted-root.json:/etc/cosign/trusted_root.json:ro" \
             "$COSIGN" verify-blob \

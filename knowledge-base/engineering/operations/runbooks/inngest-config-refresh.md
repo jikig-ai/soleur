@@ -49,6 +49,10 @@ from the applied digest.
    gh workflow run build-inngest-config-bundle.yml -f version=<N+1>
    ```
 
+   Dispatch only from the **default branch** (no `-r` flag): the host pins
+   `@refs/heads/main` in its identity regexp, so a branch-dispatched bundle verifies at the
+   producer gate but fails the host's check (`reason=signature`, `detail=identity`).
+
    The run is held for reviewer approval (the `inngest-config-signing` environment — HARD-7), then
    `cosign sign-blob`s the manifest (VERSION is a signed field — HARD-2) and dual-publishes to GHCR +
    zot. Its job summary prints `IMAGE@DIGEST`.
@@ -68,10 +72,10 @@ from the applied digest.
 3. **Promote the pointer (separate principal — HARD-6).** The interim route is a MANUAL targeted
    apply in an authorized window — set `TF_VAR_inngest_config_digest=<IMAGE@DIGEST sha256>` for a
    `soleur/prd_terraform` apply of `doppler_secret.inngest_config_digest` (the `count`-gated
-   resource springs to life on a non-empty value), verify with `doppler secrets get`, and land the
-   regex+floor admission the same window — the header of
-   `inngest-config-digest.tf` prescribes the exact sequence and bumps the isolation self-check
-   floor from 5 to 6. #9060 automates this per-merge (`-target` route); its absence does not block
+   resource springs to life on a non-empty value), verify with `doppler secrets get`. The
+   regex+floor admission already LANDED (regex at #8754; floor 5→6 in the defect-3 producer
+   fix) — what survives is the ordering gate: between that merge and this apply, NO dispatch
+   that renders and boots merged cloud-init may run (cloud-init-inngest.yml). #9060 automates this per-merge (`-target` route); its absence does not block
    the manual promotion — `doppler_secret.inngest_config_digest` is on no job's `-target` list
    (pinned by `plugins/soleur/test/terraform-target-parity.test.ts`), so no merge reaches it.
    Terraform is the writer, so no standing CI token can write the isolated `soleur-inngest/prd`.

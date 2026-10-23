@@ -15,7 +15,7 @@
 - Added verify-before-publish step to build-inngest-config-bundle.yml (hard-fail unless `Verified OK` under exact host invocation shape).
 - Floor bump 5→6 (Doppler admit-set count) rides this diff; merge→promote same-window ordering gate documented (no inngest-host-replace between merge and promotion).
 - TDD rows in inngest-config-bundle-mirror.test.sh, diagnose-inngest-verify-workflow.test.sh, inngest-host.test.sh.
-- cto_spawns=0 (pending — technical-ruling gate next)
+- cto_spawns=1 — all five rows ruled in decision-challenges.md
 
 ### Components Invoked
 - Skills plan + deepen-plan (inline execution, all phases)

@@ -178,15 +178,31 @@ gbody = str(gate_hits[0].get("run", "")) if gate_hits else ""
 for _tok in ("verify-blob", "--trusted-root",
              "apps/web-platform/infra/cosign-trusted-root.json", "--bundle",
              "certificate-identity-regexp", "certificate-oidc-issuer",
-             "token.actions.githubusercontent.com", "Verified OK"):
+             "token.actions.githubusercontent.com", "Verified OK",
+             "docker run", "--network none", "-v ", "docker image inspect"):
     v(_tok in gbody, "the verify-before-publish run body carries `%s`" % _tok)
 v(bool(gate_hits) and gate_hits[0].get("continue-on-error") is not True,
   "the verify-before-publish step is a HARD fail (no continue-on-error) — it must block the push steps")
 v("57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" in gbody,
   "the verify gate runs the PINNED cosign image — the consumer's own nonroot verifier, which is the only arm that sees EACCES-class member-mode defects")
+# The gate's defect-class coverage lives in WHO reads the file: the pinned image's nonroot
+# default user (65532) over a bind mount. A `--user` override (root) or a runner-binary
+# `cosign verify-blob` (file owner) makes EACCES invisible while every token above survives —
+# pin both out. The workflow asserts Config.User non-root at run time; the token pins keep
+# the container wrapper itself.
+v(not re.search(r"--user\b", gbody),
+  "the verify-before-publish docker run carries no `--user` override — a root user disarms the EACCES coverage the gate exists for")
 v(not re.search(r"--insecure-ignore-tlog|--insecure-ignore-sct|--new-bundle-format|--key[\s=]",
                 sbody + "\n" + gbody),
   "neither the sign nor the verify argv carries a verification-weakening flag (AC10)")
+# Guard-2 M4 (plan): a push-path step carrying an outcome-insulating `if:` (always(),
+# failure()) bypasses the hard-fail — the implicit success() skip is the ONLY thing that
+# stops the push after a red gate. The build/push step must carry no `if:` at all.
+push_steps = [s for j in jobs.values() for s in j.get("steps", [])
+              if s.get("id") == "docker_build"
+              or re.search(r"docker/build-push-action", str(s.get("uses", "")))]
+v(bool(push_steps) and all(s.get("if") is None for s in push_steps),
+  "push steps carry no `if:` — an always()/outcome-insulating condition would bypass the verify hard-fail (Guard-2 M4)")
 
 # OCI-image pin (#10390): the host extract runs `docker create` + `docker cp`, and create
 # refuses a command-less scratch image ("no command specified") — a bare FROM scratch +
@@ -728,6 +744,16 @@ elif name == "verify-soft-fail":
 elif name == "verify-adds-insecure-flag":
     s = must_sub(r'verify-blob \\\n',
                  lambda m: 'verify-blob --insecure-ignore-tlog \\\n', s)
+elif name == "verify-drops-docker":
+    # Runner-binary verify: `cosign verify-blob` runs as the file's OWNER — the EACCES
+    # class is invisible to it. Keeps every token pin except the container wrapper.
+    s = must_sub(r'timeout 120 docker run --rm --network none \\\n', 'exec cosign \\\n', s)
+elif name == "verify-adds-user-root":
+    s = must_sub(r'--network none', '--network none --user 0', s)
+elif name == "verify-drops-user-inspect":
+    s = must_sub(r'VERIFIER_USER="\$\(docker image inspect[^\n]*\n', "", s)
+elif name == "push-step-if-always":
+    s = must_sub(r"(id: docker_build\n)", "\\1        if: always()\n", s)
 elif name == "dockerfile-cmd-dropped":
     s = must_sub(r'CMD \["true"\]\\n', "", s)
 elif name == "cosign-copy-dropped":
@@ -844,6 +870,10 @@ else
     "verify-step-deleted|struct|verify-before-publish step"
     "verify-soft-fail|struct|HARD fail"
     "verify-adds-insecure-flag|struct|verification-weakening flag"
+    "verify-drops-docker|struct|docker run"
+    "verify-adds-user-root|struct|a root user disarms"
+    "verify-drops-user-inspect|struct|docker image inspect"
+    "push-step-if-always|struct|push steps carry no"
     "dockerfile-cmd-dropped|struct|carries a CMD"
     "cosign-copy-dropped|struct|cosign verifier image is copied"
     "cosign-copy-route-dropped|cosigncopyfail|cosign copy failing every time"
@@ -905,7 +935,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=134
+MIN_ASSERTIONS=144
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1
