@@ -94,6 +94,7 @@ locals {
     "2026-09-25-parked-vs-forgotten-ideas"                          = "parked-vs-forgotten-ideas"
     "2026-09-26-beta-testers-went-quiet"                            = "beta-testers-went-quiet"
     "2026-10-23-agentic-verification-checklist-shipped"             = "agentic-verification-checklist-shipped"
+    "2026-10-23-own-your-ai-team-without-vendor-lock-in"            = "own-your-ai-team-without-vendor-lock-in"
   }
 
   # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs
