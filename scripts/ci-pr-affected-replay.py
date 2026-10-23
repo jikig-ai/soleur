@@ -170,7 +170,6 @@ on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, n
 import argparse
 import errno
 import hashlib
-import importlib.util
 import json
 import math
 import os
