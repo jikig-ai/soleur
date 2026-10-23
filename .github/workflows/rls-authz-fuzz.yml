@@ -138,7 +138,7 @@ jobs:
           report="${RUNNER_TEMP}/git-data-erasure-pending-report.json"
           ./node_modules/.bin/vitest run test/rls-fuzz/git-data-erasure-pending.integration.test.ts \
             --reporter=json --outputFile="$report"
-          jq -e '.numPassedTests >= 12 and .numPendingTests == 0 and .numFailedTests == 0' "$report" >/dev/null \
+          jq -e '.numPassedTests >= 22 and .numPendingTests == 0 and .numFailedTests == 0' "$report" >/dev/null \
             || { echo "::error::git-data erasure ledger live-database cases did not all execute"; jq '{numPassedTests,numPendingTests,numFailedTests}' "$report"; exit 1; }
 
       # Prod-parity catalog diff — read-only introspection over the run-verify

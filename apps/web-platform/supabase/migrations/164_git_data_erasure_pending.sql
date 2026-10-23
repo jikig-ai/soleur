@@ -8,8 +8,11 @@
 -- hard precondition of the real flip. This migration ships the ledger and its RPCs; the account-
 -- delete write path and the Inngest re-drive cron land in PR-B2 (this PR is inert on its own).
 --
--- LAWFUL_BASIS: pending CLO ruling (re-ruling dated 2026-10-24); the disclosure update (DPD 10.3,
--- privacy policy, GDPR policy, Art. 30 register) must land before the write path is merged.
+-- LAWFUL_BASIS: legal obligation, Art. 6(1)(c) (completing the Art. 17 erasure the subject requested),
+-- as ruled by the CLO on 2026-10-23, who also required the non-identifying counter below and ruled
+-- that no tombstone is left. The FINAL CLO re-ruling is dated 2026-10-24 (#9066); the disclosure
+-- update (DPD 10.3, privacy policy, GDPR policy, Art. 30 register) must land before the write path
+-- (PR-B2) is merged or enabled. Nothing here edits any legal document.
 --
 -- Two tables, both service-role-only through SECURITY DEFINER RPCs (RLS on, NO policy, every
 -- table privilege revoked from PUBLIC/anon/authenticated/service_role):
@@ -21,7 +24,11 @@
 --       seconds later in the same cascade and the ledger row must outlive both.
 --     * requested_at is the Art. 12(3) clock (request time). record_* keeps the ORIGINAL value.
 --     * last_outcome is a closed enum (CHECK), never free text, so a host-supplied stderr string
---       (which can carry paths or ids) can never be stored.
+--       (which can carry paths or ids) can never be stored. The words are the non-terminal
+--       GitDataErasureOutcome statuses (refused, unreachable, unauthorized, unconfigured,
+--       host_key_mismatch) plus two deliberate extras: `threw` (account-delete's thrown arm, the
+--       same spelling as its erasure_outcome tag) and `seeded` (a row written by the re-drive's
+--       manual seed path, which has no host outcome yet; nothing else emits it).
 --     * A stuck row is NEVER purged on a timer. Escalation is by alerting (PR-B2), not deletion.
 --   git_data_erasure_counts   non-identifying monthly counter of confirmed erasures by how long
 --     they took. No id, no per-event timestamp. Written in the SAME statement as the ledger
@@ -30,8 +37,34 @@
 --
 -- Deleted ledger rows may persist in Supabase backups (unmeasured).
 --
+-- record-after-resolve on the same id inserts a FRESH row and so restarts requested_at at now()
+-- (the resolved row, and its clock, are gone by design). A caller re-recording an id whose request
+-- is older than that (the PR-B2 seed path, for ids swept from Sentry) must pass p_requested_at so
+-- the Art. 12(3) clock is not reset to age 0.
+--
+-- git_data_erasure_owner_gone(workspace) is the re-drive's proof that an account really is gone
+-- before it erases anything: the ledger alone is NOT proof (a seeded wrong id, or a deletion that
+-- aborts after the ledger write at account-delete step 3.01, would otherwise get a LIVE user's
+-- repository erased). It returns true only when NONE of these hold for the id:
+--   auth.users.id = id                 (the account row; deleted last, step 6)
+--   public.users.id = id               (cascade child of auth.users, mig 001)
+--   public.workspace_members.user_id = id        (deleted in step 3.91)
+--   public.workspace_members.workspace_id = id   (no member, live or otherwise, of that workspace)
+-- It deliberately does NOT require public.workspaces / public.organizations rows to be absent:
+-- the saga keeps the orphan workspace and organization rows (mig 065 Part 1: "record-of-existence"),
+-- so demanding their absence would make the check unsatisfiable after every real deletion.
+--
 -- Per cq-pg-security-definer-search-path-pin-pg-temp every SECURITY DEFINER function pins
 -- `public, pg_temp`. No CREATE INDEX CONCURRENTLY (the migration runs inside a transaction).
+
+DO $$
+BEGIN
+  IF to_regclass('auth.users') IS NULL
+     OR to_regclass('public.users') IS NULL
+     OR to_regclass('public.workspace_members') IS NULL THEN
+    RAISE EXCEPTION 'Migration 164 precondition failed: auth.users, public.users and public.workspace_members must exist (git_data_erasure_owner_gone reads them).';
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.git_data_erasure_pending (
   workspace_id    uuid        PRIMARY KEY,
@@ -39,7 +72,7 @@ CREATE TABLE IF NOT EXISTS public.git_data_erasure_pending (
   attempts        int         NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   last_attempt_at timestamptz,
   last_outcome    text        CHECK (last_outcome IN (
-    'refused', 'unreachable', 'unauthorized', 'unconfigured', 'host_key_mismatch', 'thrown', 'seeded'))
+    'refused', 'unreachable', 'unauthorized', 'unconfigured', 'host_key_mismatch', 'threw', 'seeded'))
 );
 
 -- The claim query filters on last_attempt_at and orders by requested_at.
@@ -69,12 +102,17 @@ COMMENT ON TABLE public.git_data_erasure_counts IS
   'No id, no per-event timestamp. Incremented in the same statement that deletes the ledger row.';
 
 -- ---------------------------------------------------------------------------
--- record_git_data_erasure_pending(workspace, outcome)
--- Idempotent upsert. The ORIGINAL requested_at is kept on conflict; only last_outcome moves.
+-- record_git_data_erasure_pending(workspace, outcome, requested_at)
+-- Idempotent upsert. A NULL outcome is refused (no NULL row, and a known last_outcome is never
+-- overwritten with NULL). p_requested_at is for the seed path only: it lets an id swept from
+-- Sentry keep its ORIGINAL request time; a future value is refused. On conflict the EARLIER
+-- requested_at wins (the original is kept; a seed may only move the clock earlier, never reset
+-- it to now) and attempts / last_attempt_at are untouched.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.record_git_data_erasure_pending(
   p_workspace_id uuid,
-  p_outcome      text
+  p_outcome      text,
+  p_requested_at timestamptz DEFAULT NULL
 )
   RETURNS void
   LANGUAGE plpgsql
@@ -85,20 +123,28 @@ BEGIN
   IF p_workspace_id IS NULL THEN
     RAISE EXCEPTION 'record_git_data_erasure_pending: workspace id is required';
   END IF;
-  INSERT INTO public.git_data_erasure_pending AS g (workspace_id, last_outcome)
-  VALUES (p_workspace_id, p_outcome)
+  IF p_outcome IS NULL THEN
+    RAISE EXCEPTION 'record_git_data_erasure_pending: outcome is required';
+  END IF;
+  IF p_requested_at IS NOT NULL AND p_requested_at > now() THEN
+    RAISE EXCEPTION 'record_git_data_erasure_pending: requested_at must not be in the future';
+  END IF;
+  INSERT INTO public.git_data_erasure_pending AS g (workspace_id, last_outcome, requested_at)
+  VALUES (p_workspace_id, p_outcome, COALESCE(p_requested_at, now()))
   ON CONFLICT (workspace_id) DO UPDATE
-    SET last_outcome = EXCLUDED.last_outcome;
+    SET last_outcome = EXCLUDED.last_outcome,
+        requested_at = LEAST(g.requested_at, EXCLUDED.requested_at);
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.record_git_data_erasure_pending(uuid, text)
+REVOKE ALL ON FUNCTION public.record_git_data_erasure_pending(uuid, text, timestamptz)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.record_git_data_erasure_pending(uuid, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.record_git_data_erasure_pending(uuid, text, timestamptz) TO service_role;
 
-COMMENT ON FUNCTION public.record_git_data_erasure_pending(uuid, text) IS
-  '#8211: service-role idempotent upsert into git_data_erasure_pending; keeps the original '
-  'requested_at, updates last_outcome (closed enum, CHECK-enforced).';
+COMMENT ON FUNCTION public.record_git_data_erasure_pending(uuid, text, timestamptz) IS
+  '#8211: service-role idempotent upsert into git_data_erasure_pending. Refuses NULL outcome and a '
+  'future requested_at; keeps the earlier requested_at on conflict; updates last_outcome (closed '
+  'enum, CHECK-enforced).';
 
 -- ---------------------------------------------------------------------------
 -- claim_git_data_erasure_pending(limit, min_interval)
@@ -132,13 +178,18 @@ BEGIN
      ORDER BY p.requested_at, p.workspace_id
      LIMIT p_limit
        FOR UPDATE SKIP LOCKED
+  ), stamped AS (
+    UPDATE public.git_data_erasure_pending g
+       SET last_attempt_at = now(),
+           attempts        = g.attempts + 1
+      FROM picked
+     WHERE g.workspace_id = picked.workspace_id
+    RETURNING g.workspace_id, g.requested_at, g.attempts, g.last_outcome
   )
-  UPDATE public.git_data_erasure_pending g
-     SET last_attempt_at = now(),
-         attempts        = g.attempts + 1
-    FROM picked
-   WHERE g.workspace_id = picked.workspace_id
-  RETURNING g.workspace_id, g.requested_at, g.attempts, g.last_outcome;
+  -- UPDATE ... RETURNING has no defined order; hand the rows back oldest request first.
+  SELECT s.workspace_id, s.requested_at, s.attempts, s.last_outcome
+    FROM stamped s
+   ORDER BY s.requested_at, s.workspace_id;
 END;
 $$;
 
@@ -179,7 +230,7 @@ BEGIN
       FROM d
   ), c AS (
     INSERT INTO public.git_data_erasure_counts AS k (month, bucket, count)
-    SELECT date_trunc('month', now())::date, b.bucket, 1 FROM b
+    SELECT date_trunc('month', now() AT TIME ZONE 'UTC')::date, b.bucket, 1 FROM b
     ON CONFLICT (month, bucket) DO UPDATE SET count = k.count + 1
   )
   SELECT b.bucket INTO v_bucket FROM b;
@@ -196,7 +247,8 @@ COMMENT ON FUNCTION public.resolve_git_data_erasure_pending(uuid) IS
   'git_data_erasure_counts in one statement; returns the elapsed bucket or NULL when absent.';
 
 -- ---------------------------------------------------------------------------
--- oldest_git_data_erasure_pending_age() -> seconds, NULL when the ledger is empty (for the gauge).
+-- oldest_git_data_erasure_pending_age() -> seconds (never negative), NULL when the ledger is empty
+-- (GREATEST ignores NULL, so the empty case needs its own branch). For the gauge.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.oldest_git_data_erasure_pending_age()
   RETURNS bigint
@@ -205,7 +257,9 @@ CREATE OR REPLACE FUNCTION public.oldest_git_data_erasure_pending_age()
   SECURITY DEFINER
   SET search_path = public, pg_temp
 AS $$
-  SELECT floor(extract(epoch FROM (now() - min(requested_at))))::bigint
+  SELECT CASE WHEN count(*) = 0 THEN NULL
+              ELSE GREATEST(0, floor(extract(epoch FROM (now() - min(requested_at)))))::bigint
+         END
     FROM public.git_data_erasure_pending;
 $$;
 
@@ -215,3 +269,37 @@ GRANT EXECUTE ON FUNCTION public.oldest_git_data_erasure_pending_age() TO servic
 
 COMMENT ON FUNCTION public.oldest_git_data_erasure_pending_age() IS
   '#8211: service-role age in seconds of the oldest pending git-data erasure (NULL when none).';
+
+-- ---------------------------------------------------------------------------
+-- git_data_erasure_owner_gone(workspace) -> true only when the account is really gone.
+-- See the header for exactly what is checked and why workspaces/organizations are not.
+-- A NULL id raises (the caller must treat an error as "not gone", never as gone).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.git_data_erasure_owner_gone(p_workspace_id uuid)
+  RETURNS boolean
+  LANGUAGE plpgsql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF p_workspace_id IS NULL THEN
+    RAISE EXCEPTION 'git_data_erasure_owner_gone: workspace id is required';
+  END IF;
+  RETURN NOT (
+    EXISTS (SELECT 1 FROM auth.users u WHERE u.id = p_workspace_id)
+    OR EXISTS (SELECT 1 FROM public.users pu WHERE pu.id = p_workspace_id)
+    OR EXISTS (SELECT 1 FROM public.workspace_members m WHERE m.user_id = p_workspace_id)
+    OR EXISTS (SELECT 1 FROM public.workspace_members m WHERE m.workspace_id = p_workspace_id)
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.git_data_erasure_owner_gone(uuid)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.git_data_erasure_owner_gone(uuid) TO service_role;
+
+COMMENT ON FUNCTION public.git_data_erasure_owner_gone(uuid) IS
+  '#8211: service-role proof that no account/membership row still keys on the id (auth.users, '
+  'public.users, workspace_members by user_id and by workspace_id). Does not look at workspaces / '
+  'organizations, which the Art. 17 saga keeps as orphans (mig 065).';
