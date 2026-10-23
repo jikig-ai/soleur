@@ -406,6 +406,11 @@ also used by `sandbox-masked-proc-docker`, `cloud-init-inngest-provision-unit`, 
 `htpasswd-stdin`, `git-data-ownership`, `git-data-runcmd-rehearsal`), not only the three that went red; re-run the
 A10 raw-apt census and S1 skipped-assertion ceilings unchanged. The measured cold run (102 s) exceeds the 90 s
 attempt cap on a slow box, so one row covers a capped-then-resumed attempt (apt resumes from `partial/`).
+Work-phase measurements still owed (a deepen-pass apt researcher did not report in time; the plan-time cold/warm
+pair covers only the happy path, run as root with `chmod a+rwX`): (1) `partial/` writability for apt's download
+user when files come from a previous container, (2) `lock` files in `lists/` and `archives/` between two
+sequential containers, (3) `Dir::State::status` stays per-container (dpkg state unaffected), (4) what a
+`timeout -k` kill mid-download leaves behind for the next attempt. Record the observed behavior in the PR body.
 3.4 Record on #10781 (comment): root cause, the measured cold/warm pair, and the residual (a mirror outage during
 the first container still fails closed; no mirror fail-over built; the two first-`update` stall signatures are
 instrumented, not fixed). The PR body uses `Ref #10781`, never `Closes`: GitHub closes on merge unconditionally
