@@ -15,3 +15,22 @@ None. Two non-blocking snags: an issue filing refused by a hook (re-filed with t
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; CTO agent (forks F1-F4); learnings-researcher; dhh, kieran, simplicity, architecture, test-design reviewers.
+
+## Review Phase (panel SHA c4131ddacb; tier none, source plan; class code)
+Seats (7): git-history, pattern, architecture, security, code-quality, test-design, structural-enumeration. Shed (no path match): data-integrity, agent-native, performance. shellcheck run by lead (clean).
+dedup: ~40 raw -> 20 unique. structural-cause roll-up: W9 asserts the PRESENCE of a labelled line in the step body, not the property rc -> case arm -> annotation -> exit; seats enumeration, testdesign, architecture each found a different instance.
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+|---|---|---|---|
+| W9 greps whole step body; case subject / exit rc / dead-branch copies stay green | W9 is presence-not-structure (P2) | enumeration, testdesign | review: rewrite W9 as a scoped function (P2) |
+| W9 token checks over whole line incl. trailing comment; no negative control; population from header only; awk comment vs blank line | same root cause | testdesign, enumeration, architecture | same commit |
+| A2 abort_line grep satisfied by stub chatter | A2 loop anchor (P2) | testdesign | review: anchor on gate's ::error:: prefix (P2) |
+| gate A2 loop hand-written; arm 1, gate arms 2/5 `failed locally` unpinned | gate suite does not derive/pin | enumeration, architecture, pattern | same commit as A2 anchor |
+| gate exit-2 text "restored nothing" false mid-loop; runbook row 2 "Nothing was written" | false claim on mid-loop exit 2 (P2) | codequality | review: reword (P2) |
+| 78 arm "store unchanged" vs EMPTY (contradicts ruling F4); `set -x` not a cause; re-run advice | 78 arm wording | security, pattern, codequality, githistory | review: reword 78 arm |
+| arms 2/5 rank causes ("not GHCR", "fix it") without measuring | ADR-166 unmeasured cause | githistory | review: reword arms |
+| gate comment "wider set" not nested; "generated in this job"; "assume neither" | gate comment accuracy | security, githistory, codequality | review: reword |
+| exit 1 gap not visible at `*)`; W9 comment | #10932 pointer | architecture | review: pointer |
+| stubs name no subsection / preamble lacks ### contract / long lines | relocation pointer wording | architecture, codequality, githistory | review: stubs + preamble |
+| battery floor 66 vs 67; G18b id | battery floor | pattern | review: floor 67, id G26 |
+| runbook relocated block "here"; "names rotation" stale in gate header, ADR-169, recut runbook; "Six codes" count; restore-suite header count | stale prose siblings | pattern, githistory, codequality | review: sweep |
