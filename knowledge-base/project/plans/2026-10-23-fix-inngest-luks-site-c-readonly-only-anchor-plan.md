@@ -483,7 +483,7 @@ here by the no-live-probe rule).
 liveness_signal:
   what: the scanner's line "live: findings=0 allowlisted=1", run by the suite's real-tree row L1 in every per-PR test-all run
   cadence: per pull request and per push to main (always-on suite; also infra-validation deploy-script-tests when scripts/cutover-inngest.sh changes)
-  alert_target: a red required check on the PR; a warning annotation on push after the allowlist expiry
+  alert_target: a red required check on the PR for any finding; the allowlist expiry is a warning annotation only and never turns the check red
   configured_in: scripts/test-all.sh (run_suite line) and scripts/lib/test-affected-paths.sh (ALWAYS_ON_SUITES)
 error_reporting:
   destination: GitHub Actions run annotations on the cutover-inngest.yml dispatch (the public run log), not Sentry; the script runs on a runner, not in the web app
