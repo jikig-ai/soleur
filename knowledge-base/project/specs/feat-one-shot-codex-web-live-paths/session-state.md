@@ -2757,3 +2757,11 @@
   hosted-data parity, exact-head CodeQL/full CI, CLO/legal, recovery, QA,
   qualification, preflight, remaining full-panel review, and shipping gates
   remain held.
+
+### 2026-10-23 Codex continuation — acknowledgment overload and migration lint
+
+- Exact pushed head before this continuation: `2400c7aecb94411cfc169a0e762e720e019bff36`.
+- Security review found migration 173 left the legacy authenticated two-argument acknowledgment overload executable. Commit `ee989fbe963c781244cb07c4bde8f2d4c1d4167c` explicitly revokes and drops that overload, asserts it is absent in disposable PostgreSQL, and updates the RLS positive control to issue with four arguments, mark delivery, and acknowledge with the nonce hash. Focused migration tests passed (3 tests); RLS fuzz is gated off locally; TypeScript passed.
+- Exact-head tenant integration then failed the FK-precondition lint because migration 173 referenced `conversations`, `users`, and `workspace_members` without explicit `to_regclass` guards. Commit `e52b315c26208537d4f623f03094407d3e2fe483` adds those preconditions and records the root-relative script path correction in the workflow learning. The lint passed for 11 migration files, migration integration passed, TypeScript and diff checks passed, and dev-ledger parity passed 269/269.
+- CI on superseded `ee989fbe96` reported the expected FK-precondition failure and a separate critical CodeQL partial-SSRF alert at `scripts/codex-qualification/local_tls.py:196` (`connection.request(self.command, target, ...)`). The CodeQL alert is not fixed or dismissed. Fresh CI is running on `e52b315c`; PR #9051 remains OPEN/draft/BEHIND with auto-merge off.
+- Keep shared-ledger parity/reconciliation, shared database access or migration, provider requests, recovery, authenticated QA, runtime/profile qualification, CLO/legal, preflight, full review, readiness, merge, and shipping held. No production or shared-data action occurred.
