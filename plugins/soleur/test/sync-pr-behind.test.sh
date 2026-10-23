@@ -1674,7 +1674,7 @@ qw_mutant "delete the flagless --step guard call" f1 $'    step_guard\n' $'    :
 qw_mutant "treat DIRTY like BEHIND (the BEHIND/UNKNOWN-only boundary widened)" f4 ' && "$1" != *DIRTY* ]] || return 0' ' || "$1" == *DIRTY* ]] || return 0'
 qw_mutant "drop the armed condition (bare --step)" f3 $'  [[ "$am" == armed ]] || return 0\n' ''
 qw_mutant "an unreadable rules read is read as proceed" f5r $'  QW_VERDICT=unreadable; QW_DETAIL="rule read failed after' $'  QW_VERDICT=proceed; QW_DETAIL="rule read failed after'
-qw_mutant "an unreadable pr view is read as proceed" f5v $'  if [[ "$rc" -eq 0 && "$out" =~ ^(OPEN|CLOSED|MERGED)\\ [A-Z_]+\\ (armed|disarmed)$ ]]; then\n' $'  if true; then\n'
+qw_mutant "an unreadable pr view is read as proceed" f5v $'  if [[ "$rc" -eq 0 && "$out" =~ ^(OPEN|CLOSED|MERGED)\\ [A-Z_]+\\ (armed|disarmed)\\ [^[:space:]]*$ ]]; then\n' $'  if true; then\n'
 qw_mutant "--fence runs the guard anyway" f6 $'  if [[ "$FENCE" != 1 ]]; then\n' $'  if true; then\n'
 qw_mutant "evaluate the predicate only on the first standalone attempt" r6 $'  queue_wait_gate "$state_line"\n' $'  [[ "$attempt" -gt 1 ]] || queue_wait_gate "$state_line"\n'
 qw_mutant "accept --fence without --step" f7 $'if [[ "$FENCE" == 1 && "$MODE" != step ]]; then usage_err "--fence is only valid with --step"; fi\n' ''
@@ -2112,7 +2112,7 @@ qw_done
 # occurs exactly once; before the change an anchor is absent and the row reports that (an instrument message, NOT RED evidence). ---
 CTL_GREEN=" "; CTL_RED=" "
 qw_judge() {  # <label> <scenario> <mutant-file> → the shared verdict of the new mutation rows (same rules as qw_mutant)
-  local label="$1" kind="$2" mut="$3"
+  local label="$1" kind="$2" mutant_file="$3"
   # A mutant is only evidence when its scenario holds on the UNMUTATED script (memoised per kind): against a red control every mutant is
   # "caught", which proves nothing, so the row fails with that instrument message instead of passing vacuously.
   if [[ "$CTL_GREEN" != *" $kind "* ]]; then
@@ -2120,7 +2120,7 @@ qw_judge() {  # <label> <scenario> <mutant-file> → the shared verdict of the n
     QW_SUT=""
     if qw_scenario "$kind"; then CTL_GREEN+="$kind "; else CTL_RED+="$kind "; fail "mutation '$label': the unmutated control for the '$kind' scenario is red, so 'caught' would prove nothing"; return; fi
   fi
-  QW_SUT="$mut"
+  QW_SUT="$mutant_file"
   if qw_scenario "$kind"; then fail "mutation '$label' SURVIVED: the '$kind' scenario stayed green"
   elif [[ "$QW_RC" -eq 2 || "$QW_RC" -eq 127 ]]; then fail "mutation '$label': the mutant does not RUN (rc $QW_RC), so 'caught' would be an instrument error"
   else pass "mutation '$label' caught by the '$kind' scenario"; fi
@@ -2272,7 +2272,7 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
-# PHASE 0 (#10832): the pin stays 172 until the GREEN phases land; it is moved deliberately to 172 plus the 59 new row ids (231) in the
-# change that makes them pass, never here. The RED rows above fail now, so this suite exits non-zero by design.
-[[ "$FAIL" -eq 0 && "$PASS" -eq 172 ]]
+# The pin is a count floor: 172 pre-existing rows plus the 59 row ids of #10832 (7 C, 2 S, 16 RED base, 9 green-before guards, 15 Guard 1
+# mutants and harness, 8 Guard 2 mutants and harness, 2 controls) = 231. Moved deliberately, in the change that turned the base rows green.
+[[ "$FAIL" -eq 0 && "$PASS" -eq 231 ]]
 exit $?
