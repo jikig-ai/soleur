@@ -48,7 +48,7 @@ MUTANT_FLOOR=24
 # them). Enforced only on a full run: a group that silently stops asserting reds the suite.
 declare -A FLOOR=(
   [H1]=2 [H3]=3 [H3b]=3 [H4]=5 [H5]=5 [M]=26 [R]=28 [REASONS]=1 [S1]=22 [S10]=7 [S11a]=2 [S11b]=2 [S11c]=2 [S11d]=3 [S11e]=9
-  [S11f]=2 [S12a]=4 [S12b]=5 [S13a]=9 [S13b]=2 [S13c]=2 [S14]=7 [S15]=14 [S16]=5 [S17]=3 [S18]=10 [S18b]=5 [S1live]=1
+  [S11f]=2 [S12a]=4 [S12b]=5 [S13a]=9 [S13b]=2 [S13c]=2 [S14]=7 [S15]=14 [S16]=5 [S17]=3 [S18]=10 [S18b]=5 [S19]=10 [S1live]=1
   [S2]=15 [S2b-ahead]=4 [S2b-behind]=4 [S2b-diverged]=4 [S2b-identical]=4 [S3]=6 [S3c]=4 [S4]=11 [S4c]=3 [S4l]=2 [S4m]=3
   [S4n]=4 [S4o]=3 [S4x]=3 [S5]=13 [S6]=5 [S6d]=2 [S7]=6 [S7a]=55 [S7c]=1 [S7o]=4 [S8a]=9 [S8b]=9 [S8c]=9 [S8d]=9 [S8dg]=29
   [S8e]=9 [S8f]=9 [S8g]=9 [S8h]=9 [S8i]=9 [S8in]=13 [S8m]=48 [S8n]=5 [S8o]=7 [S8ok]=4 [S8r]=26 [S8t]=3 [S8t2]=10 [S8ti]=9
@@ -58,7 +58,7 @@ declare -A FLOOR=(
 # The groups a full run must have run (a deleted `if want X` block never calls grp, so its floor never fires; this list is the
 # independent record) and the total-assertion floor of a full run excluding the two meta groups. Both are checked at the very
 # end with printf + exit 1, not through the helpers they back-stop (ADR-193).
-EXPECTED_GROUPS="H1 H3 H3b H4 H5 M R REASONS S1 S10 S11a S11b S11c S11d S11e S11f S12a S12b S13a S13b S13c S14 S15 S16 S17 S18 S18b S1live S2 S2b-ahead S2b-behind S2b-diverged S2b-identical S3 S3c S4 S4c S4l S4m S4n S4o S4x S5 S6 S6d S7 S7a S7c S7o S8a S8b S8c S8d S8dg S8e S8f S8g S8h S8i S8in S8m S8n S8o S8ok S8r S8t S8t2 S8ti S8u S9 S9f W"
+EXPECTED_GROUPS="H1 H3 H3b H4 H5 M R REASONS S1 S10 S11a S11b S11c S11d S11e S11f S12a S12b S13a S13b S13c S14 S15 S16 S17 S18 S18b S19 S1live S2 S2b-ahead S2b-behind S2b-diverged S2b-identical S3 S3c S4 S4c S4l S4m S4n S4o S4x S5 S6 S6d S7 S7a S7c S7o S8a S8b S8c S8d S8dg S8e S8f S8g S8h S8i S8in S8m S8n S8o S8ok S8r S8t S8t2 S8ti S8u S9 S9f W"
 META_GROUPS="H1 M"
 TOTAL_FLOOR=600
 ASSERTS=0 passes=0 fails=0 FAILED=()
@@ -1121,6 +1121,32 @@ if want S17; then
   eq "S17 live mode ignores the page overrides (rc 0, no truncation)" "$SUT_RC" 0
   has "S17 reads use the production page size" "$ST/out/reads.log" "apply-deploy-pipeline-fix.yml/runs?per_page=100&page=1"
   has "S17 summary mode=live" <(summary) "mode=live"
+  gend
+fi
+
+# ---- S19: a jq that fails inside the reconcile is a NAMED failure, not a silent rc ------------------------------------------
+# A PATH wrapper (first on the SUT's PATH through the fixture bin) fails any jq whose arguments contain FAULT_JQ_MARK and
+# execs the real jq otherwise. Two guarded sites: the per-candidate field read in the reconcile loop and the count_inflight read.
+if want S19; then
+  grp S19
+  mk_case s19 cancelled-zero-jobs
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'for a in "$@"; do if [[ -n "${FAULT_JQ_MARK:-}" && "$a" == *"$FAULT_JQ_MARK"* ]]; then printf "faultjq: injected failure\n" >&2; exit 3; fi; done' \
+    'exec "$REAL_JQ" "$@"' >"$ST/bin/jq"
+  chmod +x "$ST/bin/jq"
+  real_jq="$(command -v jq)"
+  run_sut REAL_JQ="$real_jq"
+  eq "S19 control: the wrapper with no mark changes nothing (rc 0)" "$SUT_RC" 0
+  eq "S19 control: the control still files its row" "$(rows)" 1
+  for site in 'loop|[.id, .sha, .ce, .ue]' 'count-inflight|select(live and .ce >= $cutoff)'; do
+    mk_case "s19-${site%%|*}" cancelled-zero-jobs
+    cp "$SANDBOX/s19/bin/jq" "$ST/bin/jq"
+    run_sut REAL_JQ="$real_jq" FAULT_JQ_MARK="${site#*|}"
+    has "S19 [${site%%|*}] the injected failure fired" "$ST/all.txt" "faultjq: injected failure"
+    eq "S19 [${site%%|*}] rc is exactly 1 (not jq's own rc)" "$SUT_RC" 1
+    eq "S19 [${site%%|*}] last line is the named error" "$(last_line)" "::error::apply_delivery_gap_malformed_response"
+    lacks "S19 [${site%%|*}] no summary line" "$ST/all.txt" "apply_delivery_gap_summary"
+  done
   gend
 fi
 

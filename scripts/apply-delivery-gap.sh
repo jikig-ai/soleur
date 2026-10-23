@@ -293,12 +293,13 @@ BOT_ISSUES="$WORK/bot-issues.json"
 # OPEN bot-authored issues, both author spellings (gh versions differ on `app/github-actions` versus
 # `github-actions[bot]`; measured 2026-10-23 on gh 2.103.0: only the second matched), bounded by --limit.
 list_bot_issues() {
-  local a n=0
+  local a n=0 np
   printf '[]' >"$BOT_ISSUES"
   for a in 'app/github-actions' 'github-actions[bot]'; do
     api_get issue_list_failed 0 issue list --author "$a" --state open --limit "$ISSUE_LIMIT" --json number,title,labels,author
     jq -e 'type == "array"' "$API_OUT" >/dev/null 2>/dev/null || fail_loud issue_list_failed
-    n=$((n + $(jq 'length' "$API_OUT")))
+    np="$(jq 'length' "$API_OUT")" || fail_loud issue_list_failed
+    n=$((n + np))
     jq -s '(.[0] + .[1]) | unique_by(.number)' "$BOT_ISSUES" "$API_OUT" >"$BOT_ISSUES.new" || fail_loud issue_list_failed
     mv "$BOT_ISSUES.new" "$BOT_ISSUES"
   done
@@ -343,7 +344,7 @@ degraded_upsert() {
 WORKFLOWS_READ=0
 
 read_runs() { # key file
-  local key="$1" file="$2" p=1 cnt older res
+  local key="$1" file="$2" p=1 cnt older res nbad nskip
   local raw="$WORK/raw.$key.json"
   printf '[]' >"$raw"
   while [[ "$p" -le "$MAX_PAGES" ]]; do
@@ -384,9 +385,11 @@ read_runs() { # key file
                   | .se = (if (.started | iso) then (.started | ep) else .ce end)
                   | del(.idok, .shaok, .crok, .matters, .inwin, .valid) ]
                 | group_by(.id) | map(.[0]) | sort_by([.ce, .id]) | reverse ) }' "$raw")" || fail_loud malformed_response
-  if [[ "$(jq '.malformed' <<<"$res")" -gt 0 ]]; then fail_loud malformed_response; fi
-  if [[ "$(jq '.skipped' <<<"$res")" -gt 0 ]]; then printf '::warning::apply_delivery_gap_skipped_malformed_records workflow=%s\n' "$key"; fi
-  jq -c '.runs' <<<"$res" >"$WORK/n.$key.json"
+  nbad="$(jq '.malformed' <<<"$res")" || fail_loud malformed_response
+  nskip="$(jq '.skipped' <<<"$res")" || fail_loud malformed_response
+  if [[ "$nbad" -gt 0 ]]; then fail_loud malformed_response; fi
+  if [[ "$nskip" -gt 0 ]]; then printf '::warning::apply_delivery_gap_skipped_malformed_records workflow=%s\n' "$key"; fi
+  jq -c '.runs' <<<"$res" >"$WORK/n.$key.json" || fail_loud malformed_response
   WORKFLOWS_READ=$((WORKFLOWS_READ + 1))
 }
 
@@ -413,7 +416,7 @@ is_descendant() {
       printf '::warning::apply_delivery_gap_compare_unresolvable sha=%s\n' "${s:0:7}"
       CMP[$k]="unresolvable"
     else
-      status="$(jq -r '.status // ""' "$API_OUT")"
+      status="$(jq -r '.status // ""' "$API_OUT")" || fail_loud malformed_response
       case "$status" in
         identical|ahead|behind|diverged) CMP[$k]="$status" ;;
         *) fail_loud malformed_response ;;
@@ -464,16 +467,17 @@ N_CAND=0; N_DROPPED=0; N_DEFERRED=0; N_DELIVERED=0; N_ROWS=0; N_MID=0; N_INFLIGH
 
 reconcile_workflow() { # key file ks-function cap
   local key="$1" ks="$3" cap="$4" nf="$WORK/n.$1.json" raw="$WORK/raw.$1.json"
-  local cands c id sha ce ue msg state rid rsha rue dmin class later lid llabel runs infl req=""
+  local cands c fields id sha ce ue msg state rid rsha rue dmin class later lid llabel runs infl req=""
   if [[ "$key" == "infra" ]]; then req="$INFRA_SSH_STEP"; fi
   cands="$(jq -c --argjson cutoff "$CUTOFF" '
     [ .[] | select(.event == "push" and .branch == "main" and .status == "completed" and .conclusion == "cancelled" and .ce >= $cutoff) ]
-    | group_by(.sha) | map(min_by(.ce)) | sort_by([.ce, .id]) | .[]' "$nf")"
+    | group_by(.sha) | map(min_by(.ce)) | sort_by([.ce, .id]) | .[]' "$nf")" || fail_loud malformed_response
   [[ -n "$cands" ]] || return 0
   while IFS= read -r c; do
-    id="$(jq -r '.id' <<<"$c")"; sha="$(jq -r '.sha' <<<"$c")"; ce="$(jq -r '.ce' <<<"$c")"; ue="$(jq -r '.ue' <<<"$c")"
+    fields="$(jq -r '[.id, .sha, .ce, .ue] | @tsv' <<<"$c")" || fail_loud malformed_response
+    IFS=$'\t' read -r id sha ce ue <<<"$fields"
     N_CAND=$((N_CAND + 1))
-    msg="$(jq -r --argjson id "$id" '[.[] | select(.id == $id)][0] | ((.head_commit.message // "") | tostring)' "$raw")"
+    msg="$(jq -r --argjson id "$id" '[.[] | select(.id == $id)][0] | ((.head_commit.message // "") | tostring)' "$raw")" || fail_loud malformed_response
     if "$ks" "$msg"; then
       N_DROPPED=$((N_DROPPED + 1))
       printf 'dropped killswitch workflow=%s sha=%s\n' "$key" "${sha:0:7}"
@@ -483,7 +487,7 @@ reconcile_workflow() { # key file ks-function cap
     # (a) delivered: first qualifying run (created order) that passes every leg wins
     runs="$(jq -r --argjson ce "$ce" '
       [ .[] | select(.status == "completed" and .conclusion == "success" and .branch == "main" and .ce >= $ce) ]
-      | sort_by([.ce, .id]) | .[] | [.id, .sha, .ue] | @tsv' "$nf")"
+      | sort_by([.ce, .id]) | .[] | [.id, .sha, .ue] | @tsv' "$nf")" || fail_loud malformed_response
     if [[ -n "$runs" ]]; then
       while IFS=$'\t' read -r rid rsha rue; do
         if apply_job_ok "$rid" "$req" && is_descendant "$sha" "$rsha"; then
@@ -500,7 +504,7 @@ reconcile_workflow() { # key file ks-function cap
     # (b) deferred: a non-stale in-flight run at the candidate or a descendant
     infl="$(jq -r --argjson ce "$ce" --argjson now "$NOW_EPOCH" --argjson cap "$cap" --argjson wcap "$WAITING_CAP_MIN" "$JQ_LIVE"'
       [ .[] | select(live and .branch == "main" and .ce >= $ce) ]
-      | sort_by([.ce, .id]) | .[] | [.id, .sha] | @tsv' "$nf")"
+      | sort_by([.ce, .id]) | .[] | [.id, .sha] | @tsv' "$nf")" || fail_loud malformed_response
     if [[ -n "$infl" ]]; then
       while IFS=$'\t' read -r rid rsha; do
         if is_descendant "$sha" "$rsha"; then state=deferred; break; fi
@@ -518,7 +522,7 @@ reconcile_workflow() { # key file ks-function cap
       def en: if IN("success", "failure", "cancelled", "skipped", "neutral", "timed_out", "action_required", "startup_failure", "stale",
                     "queued", "in_progress", "waiting", "pending", "requested") then . else "unknown" end;
       [ .[] | select(.id != $id and .ce >= $ce) ] | sort_by([.ce, .id]) | last
-      | if . == null then "" else [.id, ((if .status == "completed" then .conclusion else .status end) | en)] | @tsv end' "$nf")"
+      | if . == null then "" else [.id, ((if .status == "completed" then .conclusion else .status end) | en)] | @tsv end' "$nf")" || fail_loud malformed_response
     lid=""; llabel=""
     if [[ -n "$later" ]]; then IFS=$'\t' read -r lid llabel <<<"$later"; fi
     # an empty field is written as the sentinel `-`: tab is IFS whitespace, so adjacent tabs would collapse on read
@@ -536,7 +540,7 @@ count_inflight() {
     IFS='|' read -r key _ _ _ cap <<<"$row"
     f="$WORK/n.$key.json"
     n="$(jq --argjson now "$NOW_EPOCH" --argjson cap "$cap" --argjson wcap "$WAITING_CAP_MIN" --argjson cutoff "$CUTOFF" "$JQ_LIVE"'
-      [ .[] | select(live and .ce >= $cutoff) ] | length' "$f")"
+      [ .[] | select(live and .ce >= $cutoff) ] | length' "$f")" || fail_loud malformed_response
     total=$((total + n))
   done
   N_INFLIGHT="$total"
