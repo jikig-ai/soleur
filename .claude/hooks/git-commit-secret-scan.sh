@@ -101,7 +101,7 @@ sim_recovery() {
     why=" The simulation used a full 'git add -A' (${CIS_WHY}), so unrelated untracked files are scanned too."
   fi
   if [ "${CTR_COMMIT_ALL:-0}" -eq 1 ] || [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then
-    if [ "${#CTR_ADD_META[@]}" -eq 0 ] && [ "${CIS_MODE:-}" = exact ]; then
+    if [ "${#CTR_ADD_EXACT[@]}" -eq 0 ] && [ "${CIS_MODE:-}" = exact ]; then
       printf '%s' "The finding is in a TRACKED file that this commit's own -a / pathspec would record; nothing is staged yet. Recovery: scrub the secret bytes in place (never commit-then-rotate); a .gitignore entry does not help for a tracked file. Then retry.${why}"
       return 0
     fi
@@ -405,23 +405,9 @@ gitleaks_runnable
 # TRAPS. EXIT cleans up; INT and TERM must END the hook: bash runs a signal handler and then CONTINUES the script
 # (measured), so a handler that only cleans up would delete the sim directory mid-run and let the hook finish in
 # `allow`. The handlers therefore `exit` (130 / 143), and the exit runs the EXIT trap. The sim directory holds
-# blobs of working-tree files (possibly secrets): it is removed only when it is non-empty, a real directory (not
-# a symlink), named commit-sim-*, and owned by the caller.
+# blobs of working-tree files (possibly secrets); mktemp -d allocated it, so it is removed whole.
 report_file=""; nodiff_dir=""; nodiff_report=""; sim_dir=""
-# The canonical fixture-dir guard (byte-identical to plugins/soleur/test/test-helpers.sh; asserted by
-# plugins/soleur/test/fixture-dir-operand-assert.test.sh). It runs only on a temp path this hook just allocated
-# (always absolute), before a recursive remove or a write, so a path that came back empty or relative cannot
-# retarget the remove at the caller's directory. #7652
-assert_fixture_dir() {
-  case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
-    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
-    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
-    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
-    /*) : ;;
-    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
-  esac
-}
+# assert_fixture_dir comes from lib/commit-index-sim.sh (sourced above in the same checked `if`).
 cleanup() {
   if [ -n "$report_file" ]; then rm -f "$report_file" 2>/dev/null || true; fi
   if [ -n "$nodiff_report" ]; then rm -f "$nodiff_report" 2>/dev/null || true; fi
@@ -429,12 +415,9 @@ cleanup() {
     assert_fixture_dir "$nodiff_dir"
     rm -rf "$nodiff_dir" 2>/dev/null || true
   fi
-  if [ -n "$sim_dir" ] && [ -d "$sim_dir" ] && [ ! -L "$sim_dir" ] && [ -O "$sim_dir" ]; then
-    case "$sim_dir" in
-      */commit-sim-*)
-        assert_fixture_dir "$sim_dir"
-        rm -rf "$sim_dir" 2>/dev/null || true ;;
-    esac
+  if [ -n "$sim_dir" ]; then
+    assert_fixture_dir "$sim_dir"
+    rm -rf "$sim_dir" 2>/dev/null || true
   fi
   return 0
 }
@@ -449,7 +432,6 @@ nodiff_report="$(mktemp -t gitleaks-nodiff-XXXXXX.json)"
 # staging was refused), not about a finding. One distinct rule id; the row carries only enumerated words.
 sim_deny() {
   cis_unexport 2>/dev/null || true
-  CIS_ACTIVE=0
   deny "$2" git-commit-secret-scan-sim-deny "mode=${CIS_MODE:-unknown} cause=$1"
 }
 
@@ -480,27 +462,23 @@ scan_root() {
   # which never consults git's diff machinery at all — the same mechanism
   # code-to-prd.sh's Layer 3 already relies on.
   # ONE batched pass (a per-path `git check-attr` + `sed` cost 83 s at 5,000 paths; the batch costs 43 ms and
-  # reports the same value). A batch failure falls back to the old per-path loop on the plain path; in a
-  # would-be-index scan it DENIES (a guard that could not run is not a guard).
+  # reports the same value). A failed batch DENIES in a would-be-index scan (a guard that could not run is not a
+  # guard) and, on the plain path, leaves no path to re-scan, which is what the old per-path loop also did when
+  # its `check-attr` failed (an empty answer is not `unset`).
   ca_rc=0
   git -C "$repo_root" diff --cached --name-only -z --diff-filter=ACMR 2>/dev/null \
-    | git -C "$repo_root" check-attr -z --stdin diff > "$report_file" 2>/dev/null || ca_rc=$?
+    | git -C "$repo_root" check-attr -z --stdin diff > "$nodiff_report" 2>/dev/null || ca_rc=$?
   if [ "$ca_rc" -eq 0 ]; then
     while IFS= read -r -d '' _p && IFS= read -r -d '' _a && IFS= read -r -d '' _v; do
       [ -n "$_p" ] || continue
       if [ "$_v" = "unset" ]; then gl_nodiff+=("$_p"); fi
-    done < "$report_file"
+    done < "$nodiff_report"
   elif [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
     sim_deny check-attr-failed "BLOCKED: the \`-diff\` attribute guard could not run on the simulated index of ${repo_root}, so the content the commit would record was NOT verified and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
   else
-    while IFS= read -r -d '' _p; do
-      [ -n "$_p" ] || continue
-      if [ "$(git -C "$repo_root" check-attr diff -- "$_p" 2>/dev/null | sed 's/.*: //')" = "unset" ]; then
-        gl_nodiff+=("$_p")
-      fi
-    done < <(git -C "$repo_root" diff --cached --name-only -z --diff-filter=ACMR 2>/dev/null)
+    echo "[git-commit-secret-scan] WARN: the \`-diff\` attribute check failed in $repo_root; files carrying a \`-diff\` attribute were NOT re-scanned." >&2
   fi
-  : > "$report_file"
+  : > "$nodiff_report"
 
   # `gitleaks git --pre-commit --staged` scans only files added to the index
   # (matches the lefthook-staged invocation byte-for-byte). The hook's CWD
@@ -676,19 +654,11 @@ for _r in "${toml_roots[@]}"; do
   cis_build "$_r" "$payload_cwd" "$sim_work" || sim_brc=$?
   case "$sim_brc" in
     0) : ;;
-    10)
-      # The exact replay named a path that does not exist yet (trusted git error, in a proven directory).
-      if [ "${CTR_STAGE_PRODUCER:-0}" -eq 1 ]; then
-        # An earlier part of the same command may create it: that is a bypass vector, not a typo.
-        cis_unexport
-        deny_undeterminable create "a path the command stages does not exist yet, and the same command may create it"
-      fi
-      echo "[git-commit-secret-scan] WARN: a path named by the command's own 'git add' does not exist yet; the whole working tree of $_r was scanned instead." >&2
-      emit git-commit-secret-scan-sim-failed bypass "mode=${CIS_MODE:-superset} cause=pathspec-missing"
-      ;;
     *)
       case "$CIS_WHY" in
-        force-nonliteral)
+        pathspec-missing)
+          sim_deny "$CIS_WHY" "BLOCKED: this command stages a path that does not exist${CIS_ERR:+ (git said: $CIS_ERR)}, so what it would record cannot be scanned and the commit is blocked. Repair: create the file in an earlier call or fix the spelling, then run the same command." ;;
+        force-nonliteral|force-unproven-dir)
           sim_deny "$CIS_WHY" "BLOCKED: this command force-adds (git add -f) a path the hook cannot read literally, so the ignored content it would record was NOT scanned and the commit is blocked. Repair: run the force-add as its own call, then run the commit in the next call." ;;
         sim-timeout)
           sim_deny "$CIS_WHY" "BLOCKED: the commit's own staging could not be simulated within its time limit${CIS_ERR:+ ($CIS_ERR)}, so the content it would record was NOT scanned and the commit is blocked. This is a load condition: re-run when the machine is quieter, or run git add as its own call, then run the commit in the next call." ;;

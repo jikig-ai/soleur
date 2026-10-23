@@ -1476,20 +1476,21 @@ _t_lexer_contract() {
 # fixture control (`gitleaks detect --no-git`, rc 1) in _t_sim_fixtures.
 #
 # CONTRACTS THESE ARMS PIN (the implementation must match; each was ruled in decision-challenges.md):
-#   ctr_stage_dump        row 15/Design 1 + CTO ruling 2026-10-23 (fork B): one summary line
-#                         `stage stages=.. opaque=.. refuse=.. producer=.. all=.. paths_n=..
-#                         paths_literal=.. cd_first=..`, one `refuse_why: ..` line, and one
-#                         `add exact=.. force=.. tgt_known=.. own_C=.. words: <verb> <%q words>` line
-#                         per add/stage record. Asserted by substring on key=value tokens only.
-#   CIS_DEADLINE_SECONDS  CTO ruling (fork A): read by commit-index-sim.sh, effective = min(30, v)
-#                         for ^[0-9]{1,9}$, anything else ignored, 0 = no time left (deny).
+#   ctr_stage_dump        TEST-ONLY (defined below, exported to the child shells): one summary line
+#                         `stage stages=.. opaque=.. refuse=.. all=.. paths_n=.. paths_literal=..
+#                         cd_first=..`, one `refuse_why: ..` line, and one
+#                         `add exact=.. force=.. lit=.. own_C=.. words: <verb> <%q words>` line per
+#                         add/stage record, read from the walker's CTR_* arrays. Asserted by substring on
+#                         key=value tokens only. (Decision-challenges row 38.)
+#   CIS_DEADLINE_SECONDS  read by commit-index-sim.sh, effective = min(30, v) when v is an integer below 30,
+#                         anything else ignored, 0 = no time left (deny). (Decision-challenges row 37.)
 #   Deny-text fragments   `its own call` (every sim failure + config-transforming refusal),
 #                         `.gitignore` and `separate call` (untracked-file recovery), `force-add`
 #                         (non-literal force-add), `the commit in the next` (tooling repair),
 #                         no `restore --staged` in a sim deny.
-#   Ledger                rule ids git-commit-secret-scan-sim-deny (deny, row text carries
-#                         `cause=<enumerated>`: pathspec-missing | sim-timeout | superset-failed ...)
-#                         and git-commit-secret-scan-sim-failed (bypass, cause pathspec-missing).
+#   Ledger                rule id git-commit-secret-scan-sim-deny (a simulation failure; row text carries
+#                         `cause=<enumerated>`: pathspec-missing | sim-timeout | superset-failed ...).
+#                         There is no sim-failed bypass row (decision-challenges row 25).
 # ===========================================================================================
 _SIM_MARK=t10696_sim_leak
 _SIM_BODY=t10696_sim_leak_payload_7q3kZx
@@ -1854,6 +1855,24 @@ _t_sim_prefilter() {
 # ---- walker output through ctr_stage_dump -----------------------------------------------------
 # One bash process walks every row (a process per row would cost seconds). The dump format is the
 # CTO-ruled one (see the header); rows assert key=value tokens by SUBSTRING, never layout.
+# The canonical text form of the walker's staging facts. TEST-ONLY: production never prints them. Exported so the
+# child shells that source the walker can call it.
+ctr_stage_dump() {
+  local i=0 n="${#CTR_ADD_EXACT[@]}" k
+  printf 'stage stages=%s opaque=%s refuse=%s all=%s paths_n=%s paths_literal=%s cd_first=%s\n' \
+    "${CTR_COMMIT_STAGES:-0}" "${CTR_STAGE_OPAQUE:-0}" "${CTR_STAGE_REFUSE:-0}" \
+    "${CTR_COMMIT_ALL:-0}" "${#CTR_COMMIT_PATHS[@]}" "${CTR_COMMIT_PATHS_LITERAL:-1}" "${CTR_STAGE_CD_FIRST:-0}"
+  printf 'refuse_why: %s\n' "${CTR_STAGE_REFUSE_WHY:-}"
+  while [ "$i" -lt "$n" ]; do
+    printf 'add exact=%s force=%s lit=%s own_C=%s words:' "${CTR_ADD_EXACT[$i]}" "${CTR_ADD_FORCE[$i]}" "${CTR_ADD_LIT[$i]}" "${CTR_ADD_OWNC[$i]}"
+    k=0
+    while [ "$k" -lt "${CTR_ADD_NW[$i]}" ]; do printf ' %q' "${CTR_ADD_ARGV[$((${CTR_ADD_OFF[$i]} + k))]}"; k=$((k + 1)); done
+    printf '\n'
+    i=$((i + 1))
+  done
+  return 0
+}
+export -f ctr_stage_dump
 SD_L=(); SD_C=(); SD_T=()
 _sd_add() {  # <label> <command> <token>...
   local label="$1" cmd="$2" IFS=$'\037'; shift 2
@@ -1953,6 +1972,8 @@ _t_sim_dump() {
   _sd_add 'a short bundle is checked per character (-fp)' 'git add -fp f.txt && git commit -m x' 'exact=0'
   _sd_add 'a path named -p after -- is a path, not an option' 'git add -- -p && git commit -m x' 'exact=1'
   _sd_add 'add -A -- <path> is exact' 'git add -A -- f.txt && git commit -m x' 'exact=1'
+  _sd_add 'add --pathspec-from-file=- is not literal either (its paths are not words)' 'git add -f --pathspec-from-file=- && git commit -m x' 'lit=0' 'exact=0'
+  _sd_add 'two -C options: the record has no single provable directory' 'git -C a -C b add f.txt && git commit -m x' 'own_C=<several>' 'exact=0'
   _sd_add 'add -f carries force=1' 'git add -f f.txt && git commit -m x' 'exact=1' 'force=1'
   _sd_add 'add --force carries force=1' 'git add --force f.txt && git commit -m x' 'exact=1' 'force=1'
   _sd_add 'a -fA bundle carries force=1' 'git add -fA && git commit -m x' 'exact=1' 'force=1'
@@ -1978,19 +1999,6 @@ _t_sim_dump() {
   _sd_add 'a subshell cd: cd_first=0' '(cd /abs); git add f.txt && git commit -m x' 'cd_first=0'
   _sd_add 'pushd first: cd_first=0' 'pushd /abs && git add f.txt && git commit -m x' 'cd_first=0'
   _sd_add 'a ; between the add and the commit: cd_first=0' 'cd /abs && git add f.txt; git commit -m x' 'cd_first=0'
-  # --- producer facts (a path the same command creates cannot be scanned at hook time) ---
-  _sd_add 'an output redirect is a producer' 'printf x > f.txt && git add f.txt && git commit -m x' 'producer=1'
-  _sd_add 'tee is a producer' 'echo x | tee f.txt && git add f.txt && git commit -m x' 'producer=1'
-  _sd_add 'sed -i is a producer' 'sed -i s/a/b/ f.txt && git add f.txt && git commit -m x' 'producer=1'
-  _sd_add 'an unknown command before the add is a producer' 'terraform show -json && git add f.txt && git commit -m x' 'producer=1'
-  _sd_add 'ls before the add is a producer (outside the allowlist)' 'ls && git add f.txt && git commit -m x' 'producer=1'
-  _sd_add 'echo without a redirect is not a producer' 'echo hi && git add f.txt && git commit -m x' 'producer=0'
-  _sd_add 'cd is not a producer' 'cd /abs && git add f.txt && git commit -m x' 'producer=0'
-  _sd_add 'true is not a producer' 'true && git add f.txt && git commit -m x' 'producer=0'
-  _sd_add 'test is not a producer' 'test -f f.txt && git add f.txt && git commit -m x' 'producer=0'
-  _sd_add 'a git status before the add is not a producer' 'git status && git add f.txt && git commit -m x' 'producer=0'
-  _sd_add 'env/rtk launchers are not producers' 'rtk git add f.txt && rtk git commit -m x' 'producer=0'
-
   # --- the commit's own flags ---
   _sd_add 'commit -am: a is a bundle character' 'git commit -am x' 'stages=1' 'all=1'
   _sd_add 'commit -a -m' 'git commit -a -m x' 'all=1'
@@ -2057,7 +2065,7 @@ _t_sim_dump() {
 }
 _dump_is_zero() {
   local z="$1"
-  [[ "$z" == *"stages=0"* && "$z" == *"opaque=0"* && "$z" == *"refuse=0"* && "$z" == *"producer=0"* && "$z" == *"all=0"* && "$z" == *"paths_n=0"* \
+  [[ "$z" == *"stages=0"* && "$z" == *"opaque=0"* && "$z" == *"refuse=0"* && "$z" == *"all=0"* && "$z" == *"paths_n=0"* \
      && "$z" != *"add exact="* && "$z" != *NODUMP* && "$z" != *SOURCEFAIL* && "$z" == *"stages-var=0"* ]]
 }
 
@@ -2373,20 +2381,20 @@ _t_sim_failures() {
   local C U Cc pd2 pd3 pdn pdnt cp msg xs r start
   C=$(_mk_leaky_repo clean); U=$(_mk_leaky_repo untracked)
 
-  # a. the provably benign case: a missing pathspec with no earlier producer
-  _sx "G11a 'git add no-such-file && git commit' (no producer) -> allow after the superset scan" "$C" "git add no-such-file && git commit -m x" allow
-  _t "G11a2 ... the superset ran (add -A in the shim log)" "adds=$(_sim_adds)" _superset_add
-  _rows_since_mark git-commit-secret-scan-sim-failed
-  _t "G11a3 ... exactly ONE git-commit-secret-scan-sim-failed bypass row, cause pathspec-missing" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "pathspec-missing"
-  _sx "G11a4 deny-twin shape: 'git add clean.txt && git commit' (the path exists) -> allow, NO sim-failed row" "$C" "git add clean.txt && git commit -m x" allow
-  _rows_since_mark git-commit-secret-scan-sim-failed
+  # a. a path that does not exist cannot be scanned: ALWAYS a deny (decision-challenges row 25). Under `&&` the real
+  # add would fail anyway; under `;` or `||` it is the bypass shape. The text names the path git named.
+  _sx "G11a 'git add no-such-file && git commit' -> deny naming the missing path" "$C" "git add no-such-file && git commit -m x" deny \
+    "does not exist" "no-such-file" "earlier call"
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "G11a2 ... one sim-deny row, cause pathspec-missing" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=pathspec-missing"
+  _sx "G11a3 the commit trailer's '>' makes no difference: the same deny" "$C" \
+    'git add no-such-file && git commit -m "x" -m "Co-Authored-By: A <a@b.c>"' deny "does not exist" "no-such-file"
+  _sx "G11a4 twin: 'git add clean.txt && git commit' (the path exists) -> allow, no sim-deny row" "$C" "git add clean.txt && git commit -m x" allow
+  _rows_since_mark git-commit-secret-scan-sim-deny
   _t "G11a5 ... no row" "n=$ROWS_N" _row_has 0
-
-  # b. a file the SAME command creates (the lexer drops redirects): the missing path is a bypass vector
-  _sx "G11b 'printf x > leak.json && git add leak.json && git commit' -> deny with the create repair" "$C" \
-    "printf x > leak.json && git add leak.json && git commit -m x" deny "creates the path as its own call"
-  _sx "G11b2 'terraform show -json > f && git add f && git commit' -> deny with the create repair" "$C" \
-    "terraform show -json > out.json && git add out.json && git commit -m x" deny "creates the path as its own call"
+  _sx "G11b a typo under ';' (the bypass shape) -> deny" "$C" "git add no-such-file; git commit -m x" deny "does not exist"
+  _sx "G11b2 a file the same command writes, then adds -> deny (a missing path cannot be scanned)" "$C" \
+    "printf x > leak.json && git add leak.json && git commit -m x" deny "does not exist" "leak.json"
 
   # c. any OTHER replay failure abandons the exact replay and rebuilds with the superset
   SIM_ENV=("SHIM_FAIL=replay" "SHIM_RC=128" "SHIM_MSG=fatal: shim-injected replay failure")
@@ -2395,7 +2403,7 @@ _t_sim_failures() {
   r=$(_sim_adds)
   _t "G11c2 ... the failed exact add (clean.txt) was followed by add -A" "adds=$r" _contains "$r" " -A "
   _rows_since_mark git-commit-secret-scan-sim-failed
-  _t "G11c3 ... and it is NOT the benign pathspec-missing bypass" "n=$ROWS_N" _row_has 0
+  _t "G11c3 ... and no sim-failed bypass row exists any more" "n=$ROWS_N" _row_has 0
   _sx "G11c4 twin on a clean repo -> allow after the superset" "$C" "git add clean.txt && git commit -m x" allow
   _t "G11c5 ... the superset ran" "adds=$(_sim_adds)" _superset_add
   SIM_ENV=()
@@ -2609,6 +2617,71 @@ _t_sim_extra() {
   _sx "X4b residual: a positional pathspec AFTER -m is not covered -> allow (documented, not claimed)" "$T" "git commit -m x tracked.json" allow
 }
 
+# ---- fidelity: the replay must read what the COMMAND reads (review round, rows 26 and 27) ---------
+# A repo with an IGNORED .env at the root (content per $1: benign | secret) and an ignored sub/.env holding the
+# synthetic secret. `git add -f .env` reads whichever file is in the directory the command is in.
+_mk_force_repo() {  # <benign|secret> -> prints the repo
+  local d; d=$(_mk_leaky_repo clean)
+  assert_fixture_dir "$d"
+  (
+    cd "$d" || exit 1
+    printf 'ignored.pem\n.env\n' > .gitignore; mkdir -p sub; echo keep > sub/keep.txt
+    git add .gitignore sub/keep.txt
+    git -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m ignore
+    if [[ "$1" == secret ]]; then _mk_pem "$_SIM_BODY" > .env; else echo BENIGN_ROOT > .env; fi
+    _mk_pem "$_SIM_BODY" > sub/.env
+  )
+  printf '%s\n' "$d"
+}
+
+_t_sim_fidelity() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local F A B T I cmd
+  F=$(_mk_force_repo benign); A=$(_mk_force_repo secret); B=$(_mk_force_repo benign); T=$(_mk_leaky_repo tracked-modified)
+  I=$(_mk_leaky_repo ignored)
+
+  # L1: a force-add in the SUPERSET must read the file in the directory the command is in, not the payload cwd.
+  _sx "L1 a relative cd: 'cd sub && git add -f .env && git commit' (a benign .env at the cwd) -> deny, the secret is in sub/" "$F" \
+    "cd sub && git add -f .env && git commit -m x" deny "force-add" "its own call"
+  _sx "L1b positive control: the same command with an ABSOLUTE first cd is replayed in sub/ and finds the secret" "$F" \
+    "cd $F/sub && git add -f .env && git commit -m x" deny "sub/.env"
+  _sx "L1c benign control: 'git add -f .env && git commit' at the root scans the root .env -> allow" "$F" \
+    "git add -f .env && git commit -m x" allow
+  _sx "L1d cross-repo: 'cd <A> && git add -f .env && git commit' from repo B -> deny (A's secret is scanned, not B's .env)" "$B" \
+    "cd $A && git add -f .env && git commit -m x" deny
+  _sx "L1e cross-repo, a '\$' in the text defeats the cd-first proof: still deny, never the wrong repo's file" "$B" \
+    "cd $A && git add -f .env && git commit -m \"\$(cat <<'EOF'
+x
+EOF
+)\"" deny
+  _sx "L1f a relative -C: 'git -C sub add -f .env && git commit' -> deny (the directory is not proven)" "$F" \
+    "git -C sub add -f .env && git commit -m x" deny "force-add"
+
+  # L2: the commit step ALWAYS runs. A dry-run add stages nothing, and an exact add before `commit -a` still
+  # leaves every tracked change to the commit. (tracked.json holds the secret, unstaged; clean.txt is untracked.)
+  for cmd in "git add clean.txt && git commit -am x" \
+             "git add -A -- docs && git commit -am x" \
+             "git add -n -A && git commit -am x" \
+             "git add -A -n && git commit -am x" \
+             "git add --dry-run -A && git commit -am x" \
+             "git add -nA && git commit -am x" \
+             "git add -An && git commit -am x" \
+             "git add -n -A && git commit -m x -- tracked.json" \
+             "git add clean.txt && git commit -m x -- tracked.json"; do
+    _sx "L2 the commit step runs after an exact add: $cmd" "$T" "$cmd" deny "tracked.json"
+  done
+  # A force-add whose paths come from stdin or a file has no literal path word to re-run: deny, never skip.
+  _sx "L1g force-add with its paths on stdin ('xargs git add -f') -> deny force-add (no literal path to scan)" "$I" \
+    "printf 'ignored.pem\\n' | xargs git add -f && git commit -m x" deny "force-add" "its own call"
+  _sx "L1h force-add with --pathspec-from-file -> deny force-add" "$I" \
+    "git add -f --pathspec-from-file=paths.txt && git commit -m x" deny "force-add" "its own call"
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "L1i ... one sim-deny row, cause force-nonliteral" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=force-nonliteral"
+  _sx "L2 control: a dry-run add with NO commit -a stages nothing -> allow" "$T" "git add -n -A && git commit -m x" allow
+  _sx "L2 control: an exact add of a clean path with NO commit -a stages only that path -> allow" "$T" "git add clean.txt && git commit -m x" allow
+}
+
 # ---- consumer stub: proves property 5 (the brand-hex gate, #10793, reuses construction) ----------
 _t_sim_consumer() {
   local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" ctr="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" U wd out
@@ -2635,43 +2708,48 @@ _t_sim_consumer() {
 # (mode, blob, stage, path) entry of that real index must appear in the sim index the recording stub
 # was handed. No real gitleaks. A row the unmodified hook cannot satisfy is RED because the index it
 # scans is the real one, which lacks the working-tree content.
-_oracle_stage() {  # <clone> <git argument string>: real git applies the literal staging words
-  ( cd "$1" && eval "set -- $2" && git "$@" ) >/dev/null 2>&1 || true
+_oracle_stage() {  # <clone> <shell command>: real git applies what the command's staging does
+  ( cd "$1" && bash -c "$2" ) >/dev/null 2>&1 || true
 }
 _t_sim_oracle() {
   _sim_init
   [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
-  local U T I row mode rest hookcmd sargs fx clone n=0 merged missing
+  local U T I row mode rest hookcmd stage fx clone n=0 merged missing
   U=$(_mk_leaky_repo untracked); T=$(_mk_leaky_repo tracked-modified); I=$(_mk_leaky_repo ignored)
+  # mode | the command the hook sees | what real git does for that command's staging
   local rows=(
-    'untracked|git add -A && git commit -m x|add -A'
-    'untracked|git add . && git commit -m x|add .'
-    'untracked|git add clean.txt && git commit -m x|add clean.txt'
-    "untracked|git add 'my file.md' clean.txt && git commit -m x|add 'my file.md' clean.txt"
-    'untracked|git add leak.json clean.txt && git commit -m x|add leak.json clean.txt'
-    'untracked|git add docs && git commit -m x|add docs'
-    'untracked|git add --all && git commit -m x|add --all'
-    'untracked|git commit -a -m x|add -u'
-    'untracked|git commit -m x -- tracked.json|add -u -- tracked.json'
-    'tracked-modified|git commit -am x|add -u'
-    'tracked-modified|git commit -m x -- tracked.json|add -u -- tracked.json'
-    'tracked-modified|git commit -o other.json -m x|add -u -- other.json'
-    'tracked-modified|git add -A && git commit -m x|add -A'
-    'tracked-modified|git add tracked.json && git commit -m x|add tracked.json'
-    'ignored|git add -f ignored.pem && git commit -m x|add -f ignored.pem'
-    'ignored|git add -A && git commit -m x|add -A'
+    'untracked|git add -A && git commit -m x|git add -A'
+    'untracked|git add . && git commit -m x|git add .'
+    'untracked|git add clean.txt && git commit -m x|git add clean.txt'
+    "untracked|git add 'my file.md' clean.txt && git commit -m x|git add 'my file.md' clean.txt"
+    'untracked|git add leak.json clean.txt && git commit -m x|git add leak.json clean.txt'
+    'untracked|git add --all && git commit -m x|git add --all'
+    'tracked-modified|git commit -am x|git add -u'
+    'tracked-modified|git commit -m x -- tracked.json|git add -u -- tracked.json'
+    'tracked-modified|git commit -o other.json -m x|git add -u -- other.json'
+    'tracked-modified|git add -A && git commit -m x|git add -A'
+    'tracked-modified|git add tracked.json && git commit -m x|git add tracked.json'
+    'tracked-modified|git add clean.txt && git commit -am x|git add clean.txt; git add -u'
+    'tracked-modified|git add -n -A && git commit -am x|git add -u'
+    'tracked-modified|git add -A -- docs && git commit -am x|git add -A -- docs; git add -u'
+    'ignored|git add -f ignored.pem && git commit -m x|git add -f ignored.pem'
+    'ignored|git add -A && git commit -m x|git add -A'
   )
   for row in "${rows[@]}"; do
-    n=$((n + 1)); mode="${row%%|*}"; rest="${row#*|}"; hookcmd="${rest%|*}"; sargs="${rest##*|}"
+    n=$((n + 1)); mode="${row%%|*}"; rest="${row#*|}"; hookcmd="${rest%|*}"; stage="${rest##*|}"
     case "$mode" in untracked) fx="$U" ;; tracked-modified) fx="$T" ;; ignored) fx="$I" ;; esac
     clone="$SUITE_TMP/oracle.$n"; cp -a "$fx" "$clone"
-    _oracle_stage "$clone" "$sargs"
+    git -C "$fx" ls-files -s > "$clone.before"
+    _oracle_stage "$clone" "$stage"
     git -C "$clone" ls-files -s > "$clone.exp"
     _sim_run "$fx" "$hookcmd"
     merged="$SUITE_TMP/oracle.$n.sim"; _rec_ls > "$merged"
     missing=$(grep -v -x -F -f "$merged" "$clone.exp" || true)
-    if [[ -z "$missing" && -s "$merged" && "$(_sim_add_n)" -ge 1 ]]; then _report "oracle[$mode]: sim index ⊇ the index of '$sargs' for: $hookcmd" ok
-    else _report "oracle[$mode]: sim index ⊇ the index of '$sargs' for: $hookcmd" fail "sim adds=$(_sim_add_n); sim index lacks: ${missing//$'\n'/ ; }"; fi
+    # A row that stages nothing proves nothing: the real staging must have CHANGED the clone's index.
+    if cmp -s "$clone.before" "$clone.exp"; then
+      _report "oracle[$mode]: precondition: '$stage' changes the clone's index (for: $hookcmd)" fail "the real staging added nothing: the row is vacuous"
+    elif [[ -z "$missing" && -s "$merged" && "$(_sim_add_n)" -ge 1 ]]; then _report "oracle[$mode]: sim index ⊇ the index of '$stage' for: $hookcmd" ok
+    else _report "oracle[$mode]: sim index ⊇ the index of '$stage' for: $hookcmd" fail "sim adds=$(_sim_add_n); sim index lacks: ${missing//$'\n'/ ; }"; fi
   done
 }
 
@@ -2812,6 +2890,7 @@ _t_sim_failures
 _t_sim_pins
 _t_sim_worktree
 _t_sim_extra
+_t_sim_fidelity
 _t_sim_consumer
 _t_sim_oracle
 _t_sim_checkattr

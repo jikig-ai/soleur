@@ -61,11 +61,9 @@
 #   CTR_STAGE_REFUSE(_WHY)   1 when a staging record carries something that makes git execute configuration
 #                            (-c / --config-env keys core. filter. diff. attr. include. includeif. add.
 #                            apply. submodule., --namespace, --attr-source, a GIT_* env prefix) -> DENY
-#   CTR_STAGE_PRODUCER       1 when the text has an output redirect or a command word that may create the
-#                            file before the first add (anything outside git cd pushd env launchers true
-#                            test echo)
-#   CTR_ADD_META / CTR_ADD_ARGV   one META entry per add/stage record, "tgt_known:exact:force:lit:nwords:own_C",
-#                            and the record's words (verb first) appended to ARGV. exact=0 when any word is
+#   CTR_ADD_EXACT / _FORCE / _LIT / _NW / _OFF / _OWNC   six parallel arrays, one entry per add/stage record
+#                            (OFF = the record's first word in CTR_ADD_ARGV, NW = how many words), and
+#                            CTR_ADD_ARGV: every record's words, verb first, appended. exact=0 when any word is
 #                            non-literal, an option is outside the allowlist, a pathspec-semantics or -c
 #                            global option precedes the verb, or the record was reached through a launcher
 #                            outside the pass-through allowlist (rtk timeout nice sudo env command exec
@@ -74,7 +72,7 @@
 #   CTR_COMMIT_PATHS(_LITERAL)  the commit's pathspec words; literal = no expansion, quoting or glob
 #   CTR_COMMIT_OWN_C         the commit's own `git -C <dir>` word (empty when none)
 #   CTR_STAGE_CD_FIRST       1 for `cd <dir> && git ... && git ...` and nothing else (no ; || ( { | pushd)
-# ctr_stage_dump prints these in a canonical text form; the tests assert on it, not on the encoding.
+# The test suite carries its own ctr_stage_dump (a canonical text form of these facts); production never prints them.
 #
 # PORTABILITY: bash 3.2 (stock macOS /bin/bash): no mapfile, no declare -n, no associative
 # arrays; an empty array is read as ${a[@]+"${a[@]}"} so `set -u` does not trip on it; $HOME
@@ -115,8 +113,7 @@ _ctr_reset_stage() {
   CTR_STAGE_OPAQUE=0
   CTR_STAGE_REFUSE=0
   CTR_STAGE_REFUSE_WHY=""
-  CTR_STAGE_PRODUCER=0
-  CTR_ADD_META=()
+  CTR_ADD_EXACT=(); CTR_ADD_FORCE=(); CTR_ADD_LIT=(); CTR_ADD_NW=(); CTR_ADD_OFF=(); CTR_ADD_OWNC=()
   CTR_ADD_ARGV=()
   CTR_COMMIT_ALL=0
   CTR_COMMIT_PATHS=()
@@ -131,11 +128,18 @@ _ctr_reset_stage() {
   _CTR_FIRST_NW=0
   _CTR_CD_N=0
   _CTR_CD_BAD=0
-  _CTR_ADD_SEEN=0
   _CTR_COMMIT_N=0
   return 0
 }
 _ctr_reset_stage
+
+# The staging verbs the walker knows: add/stage are replayed; the rest change the index in ways it cannot replay.
+# ONE list, used by the pre-filter, the subcommand switch and the unknown-option scan.
+_CTR_STAGE_VERBS=" add stage apply update-index checkout cherry-pick merge revert stash am read-tree restore pull switch rebase submodule sparse-checkout "
+_ctr_is_stage_verb() {
+  case "$_CTR_STAGE_VERBS" in *" $1 "*) return 0 ;; esac
+  return 1
+}
 
 # ctr_wants_lex <command> — cheap pre-filter for the STRICT-match path (`git commit` with
 # nothing between the words): true when the text contains a token that can change which
@@ -147,7 +151,9 @@ ctr_wants_lex() {
   local c="$1" re='(^|[^[:alnum:]_.-])(cd|pushd|env|e[v]al|bash|sh|zsh|dash|ksh|sudo|doas|chroot|nsenter|export|declare|typeset)([^[:alnum:]_.-]|$)'
   # #10696: same-command staging. Detecting it needs the lexer's argv, so every form that can stage is
   # pinned must-match by the suite; a form this misses never reaches the walker.
-  local stage_re='git[[:space:]]+(add|stage|apply|update-index|checkout|cherry-pick|merge|revert|stash|am|read-tree|restore|pull|switch|rebase|submodule|sparse-checkout)([[:space:]]|$)'
+  local verbs="${_CTR_STAGE_VERBS# }" stage_re
+  verbs="${verbs% }"; verbs="${verbs// /|}"
+  stage_re="git[[:space:]]+(${verbs})([[:space:]]|\$)"
   local bundle_re='[[:space:]]-[^-[:space:]]*[aoip]' long_re='[[:space:]]--(al|o|in|pa)' dd_re='[[:space:]]--([[:space:]]|$)'
   # Anchored to git: a bare non-option first word right after `commit` is a pathspec. A positional after a
   # `-m "..."` is NOT detected (a named residual: putting perl on every commit is the worse trade).
@@ -290,9 +296,9 @@ _ctr_refuse() {
   return 0
 }
 
-# _ctr_stage_add <idx-of-verb> — record one `add` / `stage` record: scalar metadata in CTR_ADD_META and the
+# _ctr_stage_add <idx-of-verb> — record one `add` / `stage` record: scalar facts in the CTR_ADD_* arrays and the
 # record's words (verb first) in CTR_ADD_ARGV (no in-band delimiter). Reads its caller's locals (g_nonexact
-# g_ownc g_ncs g_tgt g_refuse), which _ctr_git_walk sets while it reads git's global options.
+# g_ownc g_ncs g_refuse), which _ctr_git_walk sets while it reads git's global options.
 _ctr_stage_add() {
   local j="$1" n="${#_CTR_W[@]}" k w fl exact=1 lit=1 force=0 dd=0 s ch
   if [ "$g_nonexact" -eq 1 ] || [ "$_CTR_REC_NONEXACT" -eq 1 ] || [ "$g_ncs" -gt 1 ]; then exact=0; fi
@@ -307,6 +313,7 @@ _ctr_stage_add() {
         --) dd=1 ;;
         --force) force=1 ;;
         --all|--update|--verbose|--dry-run) : ;;
+        --pathspec-from-file|--pathspec-from-file=*|--pathspec-file-nul) exact=0; lit=0 ;;
         --*) exact=0 ;;
         -) exact=0 ;;
         -?*)
@@ -323,10 +330,10 @@ _ctr_stage_add() {
     fi
     k=$((k + 1))
   done
-  CTR_ADD_META+=("${g_tgt}:${exact}:${force}:${lit}:$((n - j)):${g_ownc}")
+  CTR_ADD_EXACT+=("$exact"); CTR_ADD_FORCE+=("$force"); CTR_ADD_LIT+=("$lit"); CTR_ADD_NW+=("$((n - j))")
+  CTR_ADD_OFF+=("${#CTR_ADD_ARGV[@]}"); CTR_ADD_OWNC+=("$g_ownc")
   k=$j
   while [ "$k" -lt "$n" ]; do CTR_ADD_ARGV+=("${_CTR_W[$k]}"); k=$((k + 1)); done
-  _CTR_ADD_SEEN=1
   if [ -n "$g_refuse" ]; then
     _ctr_refuse "$g_refuse"
   elif [ "$_CTR_REC_GITENV" -eq 1 ]; then
@@ -402,7 +409,7 @@ _ctr_note_commit_c() {
 # _ctr_git_walk <idx-of-git-word> — git's global options, then the subcommand.
 _ctr_git_walk() {
   local j=$(($1 + 1)) n="${#_CTR_W[@]}" w unknown=0 sub m q v
-  local g_nonexact=0 g_refuse="" g_ownc="-" g_ncs=0 g_tgt=1
+  local g_nonexact=0 g_refuse="" g_ownc="-" g_ncs=0
   while [ "$j" -lt "$n" ]; do
     w="${_CTR_W[$j]}"
     case "$w" in
@@ -410,7 +417,8 @@ _ctr_git_walk() {
         if [ $((j + 1)) -lt "$n" ]; then
           _ctr_add_idx $((j + 1))
           g_ncs=$((g_ncs + 1)); g_ownc="${_CTR_W[$((j + 1))]}"
-          if ! _ctr_word_literal "$g_ownc" "${_CTR_F[$((j + 1))]}"; then g_nonexact=1; g_tgt=0; fi
+          if [ "$g_ncs" -gt 1 ]; then g_ownc="<several>"; fi
+          if ! _ctr_word_literal "$g_ownc" "${_CTR_F[$((j + 1))]}"; then g_nonexact=1; fi
         else _ctr_bad "git -C has no operand"; fi
         j=$((j + 2)) ;;
       -c|--config-env)
@@ -456,16 +464,15 @@ _ctr_git_walk() {
       rm|mv) : ;;
       submodule) _CTR_CREATOR=1; CTR_STAGE_OPAQUE=1 ;;
       worktree|clone|init) _CTR_CREATOR=1 ;;
-      # Verbs that change the index in ways the walker cannot replay: the caller scans the superset.
-      apply|update-index|checkout|cherry-pick|merge|revert|stash|am|read-tree|restore|pull|switch|rebase|sparse-checkout)
-        CTR_STAGE_OPAQUE=1 ;;
       *)
+        # Verbs that change the index in ways the walker cannot replay: the caller scans the superset.
+        if _ctr_is_stage_verb "$sub"; then CTR_STAGE_OPAQUE=1; fi
         # An option the walker does not know may have swallowed the real subcommand as its
         # operand; if a `commit` word follows, treat it as a commit rather than guess.
         if [ "$unknown" -eq 1 ]; then
           m=$((j + 1))
           for v in "${_CTR_W[@]:$j}"; do
-            case "$v" in add|stage|apply|update-index|checkout|cherry-pick|merge|revert|stash|am|read-tree|restore|pull|switch|rebase|submodule|sparse-checkout) CTR_STAGE_OPAQUE=1 ;; esac
+            if _ctr_is_stage_verb "$v"; then CTR_STAGE_OPAQUE=1; fi
           done
           while [ "$m" -lt "$n" ]; do
             if [ "${_CTR_W[$m]}" = commit ]; then
@@ -569,7 +576,7 @@ _ctr_walk_body() {
     *x*)
       j=$((i + 1))
       while [ "$j" -lt "$n" ]; do
-        case "${_CTR_W[$j]}" in add|stage) CTR_STAGE_OPAQUE=1 ;; esac
+        if _ctr_is_stage_verb "${_CTR_W[$j]}"; then CTR_STAGE_OPAQUE=1; fi
         j=$((j + 1))
       done
       j=$((i + 1))
@@ -581,14 +588,6 @@ _ctr_walk_body() {
   esac
 
   b="${_CTR_W[$i]##*/}"
-  # A command word before the FIRST add that may create the file it will name (outside git / cd / pushd /
-  # env / the pass-through launchers / true / test / echo): the missing-pathspec case is then NOT benign.
-  if [ "$_CTR_ADD_SEEN" -eq 0 ]; then
-    case "$b" in
-      git|cd|pushd|popd|env|rtk|timeout|nice|sudo|command|exec|flock|true|test|echo|'['|:) : ;;
-      *) CTR_STAGE_PRODUCER=1 ;;
-    esac
-  fi
   case "$b" in
     cd|pushd)
       i=$((i + 1))
@@ -723,7 +722,7 @@ _ctr_rec_note() {
 # _ctr_stage_finish <command> — the derived facts, once the whole stream parsed.
 _ctr_stage_finish() {
   local cmd="$1" t
-  if [ "${#CTR_ADD_META[@]}" -gt 0 ] || [ "$CTR_STAGE_OPAQUE" -eq 1 ] || [ "$CTR_STAGE_REFUSE" -eq 1 ] \
+  if [ "${#CTR_ADD_EXACT[@]}" -gt 0 ] || [ "$CTR_STAGE_OPAQUE" -eq 1 ] || [ "$CTR_STAGE_REFUSE" -eq 1 ] \
      || [ "$CTR_COMMIT_ALL" -eq 1 ] || [ "$_CTR_PATHSMODE" -eq 1 ] || [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then
     CTR_COMMIT_STAGES=1
   fi
@@ -739,29 +738,6 @@ _ctr_stage_finish() {
   return 0
 }
 
-# ctr_stage_dump — the staging facts in a canonical text form (the tests assert on key=value tokens and on the
-# quoted word sequence, never on layout, so the encoding of CTR_ADD_META may change).
-ctr_stage_dump() {
-  local m i=0 off=0 tgt exact force lit nw own rest k
-  printf 'stage stages=%s opaque=%s refuse=%s producer=%s all=%s paths_n=%s paths_literal=%s cd_first=%s\n' \
-    "${CTR_COMMIT_STAGES:-0}" "${CTR_STAGE_OPAQUE:-0}" "${CTR_STAGE_REFUSE:-0}" "${CTR_STAGE_PRODUCER:-0}" \
-    "${CTR_COMMIT_ALL:-0}" "${#CTR_COMMIT_PATHS[@]}" "${CTR_COMMIT_PATHS_LITERAL:-1}" "${CTR_STAGE_CD_FIRST:-0}"
-  printf 'refuse_why: %s\n' "${CTR_STAGE_REFUSE_WHY:-}"
-  for m in ${CTR_ADD_META[@]+"${CTR_ADD_META[@]}"}; do
-    tgt="${m%%:*}"; rest="${m#*:}"
-    exact="${rest%%:*}"; rest="${rest#*:}"
-    force="${rest%%:*}"; rest="${rest#*:}"
-    lit="${rest%%:*}"; rest="${rest#*:}"
-    nw="${rest%%:*}"; own="${rest#*:}"
-    printf 'add exact=%s force=%s tgt_known=%s lit=%s own_C=%s words:' "$exact" "$force" "$tgt" "$lit" "$own"
-    k=0
-    while [ "$k" -lt "$nw" ]; do printf ' %q' "${CTR_ADD_ARGV[$((off + k))]}"; k=$((k + 1)); done
-    printf '\n'
-    off=$((off + nw)); i=$((i + 1))
-  done
-  return 0
-}
-
 # ctr_collect <command> — lex and walk the command. Always returns 0; read CTR_LEX_STATE.
 # The lexer's stdout is NUL-framed (see the OUTPUT CONTRACT in shell-argv.pl): parsed BY
 # COUNT, and the closing OK field is the ONLY success signal — a `$(...)` capture drops NUL
@@ -773,8 +749,6 @@ ctr_collect() {
   CTR_TARGETS=(); CTR_BAD=(); CTR_COMMIT_SEEN=0; CTR_LEX_STATE=ok; CTR_LEX_WHY=""; CTR_LEX_KIND=""
   _CTR_BAD_MARK=0; _CTR_CREATOR=0; _CTR_CAPPED=0; _CTR_DEPTH=0; _CTR_TGT_AT_COMMIT=0; _CTR_TEXT="$cmd"
   _ctr_reset_stage
-  # A redirect may write the file a later `git add` names; the lexer drops redirects, so look at the text.
-  case "$cmd" in *'>'*) CTR_STAGE_PRODUCER=1 ;; esac
   if ! command -v perl >/dev/null 2>&1; then _ctr_unavail tooling "perl is not installed, and the command lexer needs it"; return 0; fi
   if [ ! -r "$CTR_LEXER" ]; then _ctr_unavail tooling "the command lexer is missing at $CTR_LEXER"; return 0; fi
   # The `|| true` is inside the process substitution so a lexer exit status (2 = unparseable,

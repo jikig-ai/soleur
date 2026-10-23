@@ -94,7 +94,6 @@ _CIS_LIMIT=30
 _CIS_PINS=()
 _CIS_ERRF=""
 _CIS_RC=0
-_CIS_ALL_RAN=0
 _CIS_EXPORTED=0
 _CIS_HAD_IDX=0; _CIS_OLD_IDX=""
 _CIS_HAD_OBJ=0; _CIS_OLD_OBJ=""
@@ -216,34 +215,29 @@ _cis_abs_dir() {
 
 # cis_plan <payload-cwd> — exact only when every condition holds; the first that fails names the cause.
 cis_plan() {
-  local pcwd="${1-}" m ex own t0 nt any_own=0
+  local pcwd="${1-}" i n own t0 nt any_own=0 all_t0=1
   CIS_MODE=superset; CIS_WHY=""; CIS_DIR=""
   if [ "${CTR_STAGE_OPAQUE:-0}" -eq 1 ]; then CIS_WHY=opaque; return 0; fi
   if [ "${CIS_ROOT_COUNT:-1}" -ne 1 ]; then CIS_WHY=roots; return 0; fi
-  case "${_CTR_TEXT-}" in
-    *'for '*|*'while '*|*'until '*|*'select '*|*'()'*|*'function '*) CIS_WHY=loop; return 0 ;;
-  esac
-  for m in ${CTR_ADD_META[@]+"${CTR_ADD_META[@]}"}; do
-    ex="${m#*:}"; ex="${ex%%:*}"
-    if [ "$ex" != 1 ]; then CIS_WHY=inexact-word; return 0; fi
-    own="${m#*:*:*:*:*:}"
-    if [ "$own" != "-" ]; then any_own=1; fi
-  done
+  if _ctr_has_loop "${_CTR_TEXT-}"; then CIS_WHY=loop; return 0; fi
   nt="${#CTR_TARGETS[@]}"
   t0="${CTR_TARGETS[0]-}"
+  n="${#CTR_ADD_EXACT[@]}"; i=0
+  while [ "$i" -lt "$n" ]; do
+    if [ "${CTR_ADD_EXACT[$i]}" != 1 ]; then CIS_WHY=inexact-word; return 0; fi
+    own="${CTR_ADD_OWNC[$i]}"
+    if [ "$own" != "-" ]; then any_own=1; fi
+    if [ "$own" != "$t0" ]; then all_t0=0; fi
+    i=$((i + 1))
+  done
   # (i) nothing in the command moves the directory and the payload cwd is a real absolute directory
   if [ "$nt" -eq 0 ] && [ "$any_own" -eq 0 ] && [ -z "${CTR_COMMIT_OWN_C-}" ] && _cis_abs_dir "$pcwd"; then
     CIS_MODE=exact; CIS_DIR="$pcwd"; return 0
   fi
   if [ "$nt" -eq 1 ] && _cis_abs_dir "$t0"; then
     # (ii) every add record and the commit carry the same absolute -C
-    if [ -n "${CTR_COMMIT_OWN_C-}" ] && [ "$CTR_COMMIT_OWN_C" = "$t0" ]; then
-      ex=1
-      for m in ${CTR_ADD_META[@]+"${CTR_ADD_META[@]}"}; do
-        own="${m#*:*:*:*:*:}"
-        if [ "$own" != "$t0" ]; then ex=0; fi
-      done
-      if [ "$ex" -eq 1 ]; then CIS_MODE=exact; CIS_DIR="$t0"; return 0; fi
+    if [ -n "${CTR_COMMIT_OWN_C-}" ] && [ "$CTR_COMMIT_OWN_C" = "$t0" ] && [ "$all_t0" -eq 1 ]; then
+      CIS_MODE=exact; CIS_DIR="$t0"; return 0
     fi
     # (iii) `cd <abs>` first, && joined, nothing else
     if [ "${CTR_STAGE_CD_FIRST:-0}" -eq 1 ] && [ "$any_own" -eq 0 ] && [ -z "${CTR_COMMIT_OWN_C-}" ]; then
@@ -256,16 +250,15 @@ cis_plan() {
 
 # ---- build ---------------------------------------------------------------------------------------
 
-# _cis_err_line — CIS_ERR = the first line of $_CIS_ERRF with control characters and U+2028 / U+2029 removed,
-# capped at 200 characters. Git's own words go into the deny text, never into the ledger.
+# _cis_err_line — CIS_ERR = the first line of $_CIS_ERRF reduced to printable ASCII (every control character, U+0085,
+# U+2028/2029 and bidi override is a non-ASCII byte and is dropped), capped at 200 characters. Git's own words go into
+# the deny text, never into the ledger.
 _cis_err_line() {
   local line=""
   CIS_ERR=""
   if [ -s "$_CIS_ERRF" ]; then
     IFS= read -r line < "$_CIS_ERRF" || true
-    line="${line//$'\xe2\x80\xa8'/}"
-    line="${line//$'\xe2\x80\xa9'/}"
-    line=$(printf '%s' "$line" | LC_ALL=C tr -d '\000-\037\177') || line=""
+    line=$(printf '%s' "$line" | LC_ALL=C tr -cd '\040-\176') || line=""
     CIS_ERR="${line:0:200}"
   fi
   return 0
@@ -312,69 +305,80 @@ _cis_add() {  # <dir> <args...>
   _cis_git_run "${_CIS_PINS[@]}" -C "$d" add "$@"
 }
 
-# _cis_superset — fresh copy, `add -A` from the root, then `add -f -- <literal words>` for every force-add
-# record. Returns 0, or 1 with CIS_WHY / CIS_ERR set.
-_cis_superset() {
-  local m i=0 off=0 nw force lit k w fd dd paths rc=0
-  if ! _cis_fresh; then CIS_WHY=copy-failed; _cis_err_line; return 1; fi
-  if ! _cis_add "$_CIS_ROOT" -A; then
-    rc=$_CIS_RC
-    if _cis_is_timeout "$rc"; then CIS_WHY=sim-timeout; else CIS_WHY=superset-failed; fi
-    _cis_err_line; return 1
-  fi
-  _CIS_ALL_RAN=1
-  fd="$_CIS_ROOT"; if _cis_abs_dir "$_CIS_PCWD"; then fd="$_CIS_PCWD"; fi
-  for m in ${CTR_ADD_META[@]+"${CTR_ADD_META[@]}"}; do
-    force="${m#*:*:}"; force="${force%%:*}"
-    lit="${m#*:*:*:}"; lit="${lit%%:*}"
-    nw="${m#*:*:*:*:}"; nw="${nw%%:*}"
-    if [ "$force" = 1 ]; then
-      if [ "$lit" != 1 ]; then CIS_WHY="force-nonliteral"; CIS_ERR=""; return 1; fi
-      paths=(); dd=0; k=1
-      while [ "$k" -lt "$nw" ]; do
-        w="${CTR_ADD_ARGV[$((off + k))]}"
-        if [ "$dd" -eq 1 ]; then paths+=("$w")
-        elif [ "$w" = -- ]; then dd=1
-        else case "$w" in -*) : ;; *) paths+=("$w") ;; esac
-        fi
-        k=$((k + 1))
-      done
-      if [ "${#paths[@]}" -gt 0 ]; then
-        if ! _cis_add "$fd" -f -- "${paths[@]}"; then
-          rc=$_CIS_RC
-          if _cis_is_timeout "$rc"; then CIS_WHY=sim-timeout; else CIS_WHY=superset-failed; fi
-          _cis_err_line; return 1
-        fi
-      fi
+# _cis_split_record <record index> — _CIS_OPTS and _CIS_PATHS of one add record (words before `--` that start with
+# `-` are options; everything else is a path).
+_cis_split_record() {
+  local off="${CTR_ADD_OFF[$1]}" nw="${CTR_ADD_NW[$1]}" k=1 dd=0 w
+  _CIS_OPTS=(); _CIS_PATHS=()
+  while [ "$k" -lt "$nw" ]; do
+    w="${CTR_ADD_ARGV[$((off + k))]}"
+    if [ "$dd" -eq 1 ]; then _CIS_PATHS+=("$w")
+    elif [ "$w" = -- ]; then dd=1
+    else
+      case "$w" in -*) _CIS_OPTS+=("$w") ;; *) _CIS_PATHS+=("$w") ;; esac
     fi
-    off=$((off + nw)); i=$((i + 1))
+    k=$((k + 1))
+  done
+  return 0
+}
+
+# _cis_force_dir <record index> — the directory a force-add record's relative paths resolve against, and only when
+# the command PROVES it: the record's own absolute -C, the first-cd target, or (nothing in the command moves the
+# directory) the payload cwd. It must be inside the root being built, or the paths would be read from another repo.
+_cis_force_dir() {
+  local own="${CTR_ADD_OWNC[$1]}" nt="${#CTR_TARGETS[@]}" t0="${CTR_TARGETS[0]-}" top
+  _CIS_FD=""
+  if [ "$own" != "-" ]; then
+    _cis_abs_dir "$own" || return 1
+    _CIS_FD="$own"
+  elif [ "$nt" -eq 1 ] && [ "${CTR_STAGE_CD_FIRST:-0}" -eq 1 ] && _cis_abs_dir "$t0"; then
+    _CIS_FD="$t0"
+  elif [ "$nt" -eq 0 ] && _cis_abs_dir "$_CIS_PCWD"; then
+    _CIS_FD="$_CIS_PCWD"
+  else
+    return 1
+  fi
+  top=$(git -C "$_CIS_FD" rev-parse --show-toplevel 2>/dev/null) || return 1
+  if [ "$top" != "$_CIS_ROOT" ]; then return 1; fi
+  return 0
+}
+
+# _cis_fail_run — a pinned git call failed: name the cause (a bound that fired is a timeout) and keep git's line.
+_cis_fail_run() {
+  if _cis_is_timeout "$_CIS_RC"; then CIS_WHY=sim-timeout; else CIS_WHY="$1"; fi
+  _cis_err_line
+  return 0
+}
+
+# _cis_superset — fresh copy, `add -A` from the root, then `add -f -- <literal words>` for every force-add record,
+# each in the directory that record PROVES (an unprovable one, or one with no literal path word, fails). Returns 0,
+# or 1 with CIS_WHY / CIS_ERR set.
+_cis_superset() {
+  local n="${#CTR_ADD_FORCE[@]}" i=0
+  if ! _cis_fresh; then CIS_WHY=fresh-failed; _cis_err_line; return 1; fi
+  if ! _cis_add "$_CIS_ROOT" -A; then _cis_fail_run superset-failed; return 1; fi
+  while [ "$i" -lt "$n" ]; do
+    if [ "${CTR_ADD_FORCE[$i]}" = 1 ]; then
+      _cis_split_record "$i"
+      if [ "${CTR_ADD_LIT[$i]}" != 1 ] || [ "${#_CIS_PATHS[@]}" -eq 0 ]; then CIS_WHY=force-nonliteral; CIS_ERR=""; return 1; fi
+      if ! _cis_force_dir "$i"; then CIS_WHY=force-unproven-dir; CIS_ERR=""; return 1; fi
+      if ! _cis_add "$_CIS_FD" -f -- "${_CIS_PATHS[@]}"; then _cis_fail_run superset-failed; return 1; fi
+    fi
+    i=$((i + 1))
   done
   CIS_MODE=superset
   return 0
 }
 
-# _cis_replay — the exact replay of every add record, then the commit step. Returns 0 (built), 10 (a trusted
-# pathspec-missing error: the caller builds the superset instead) or 11 (any other failure: ditto, from a fresh copy).
+# _cis_replay — the exact replay of every add record (in text order), then the commit's own flags. Returns 0 (built),
+# 10 (a trusted pathspec-missing error: git said so, in a directory the command proves) or 11 (any other failure: the
+# caller rebuilds from a fresh copy with the superset). The commit step ALWAYS runs: a dry-run `add -n -A` stages
+# nothing, and `add <path> && git commit -a` still records every tracked change.
 _cis_replay() {
-  local m off=0 nw k w dd opts paths rc line a has_all_opt
-  for m in ${CTR_ADD_META[@]+"${CTR_ADD_META[@]}"}; do
-    nw="${m#*:*:*:*:}"; nw="${nw%%:*}"
-    opts=(); paths=(); dd=0; has_all_opt=0; k=1
-    while [ "$k" -lt "$nw" ]; do
-      w="${CTR_ADD_ARGV[$((off + k))]}"
-      if [ "$dd" -eq 1 ]; then paths+=("$w")
-      elif [ "$w" = -- ]; then dd=1
-      else
-        case "$w" in
-          -*)
-            opts+=("$w")
-            case "$w" in -A|--all|-[!-]*A*) has_all_opt=1 ;; esac ;;
-          *) paths+=("$w") ;;
-        esac
-      fi
-      k=$((k + 1))
-    done
-    if [ "${#paths[@]}" -gt 0 ]; then a=(add ${opts[@]+"${opts[@]}"} -- "${paths[@]}"); else a=(add ${opts[@]+"${opts[@]}"}); fi
+  local n="${#CTR_ADD_EXACT[@]}" i=0 rc line a
+  while [ "$i" -lt "$n" ]; do
+    _cis_split_record "$i"
+    if [ "${#_CIS_PATHS[@]}" -gt 0 ]; then a=(add ${_CIS_OPTS[@]+"${_CIS_OPTS[@]}"} -- "${_CIS_PATHS[@]}"); else a=(add ${_CIS_OPTS[@]+"${_CIS_OPTS[@]}"}); fi
     if ! _cis_git_run "${_CIS_PINS[@]}" -C "$CIS_DIR" "${a[@]}"; then
       rc=$_CIS_RC
       line=""
@@ -386,35 +390,24 @@ _cis_replay() {
       fi
       return 11
     fi
-    # `add -A` with no pathspec is the whole tree: the commit step has nothing left to add
-    if [ "$has_all_opt" -eq 1 ] && [ "${#paths[@]}" -eq 0 ]; then _CIS_ALL_RAN=1; fi
-    off=$((off + nw))
+    i=$((i + 1))
   done
-  if ! _cis_commit_step; then return 11; fi
-  return 0
-}
-
-# _cis_commit_step — the commit's own flags, unless add -A already ran. Returns non-zero when a step failed.
-_cis_commit_step() {
-  if [ "$_CIS_ALL_RAN" -eq 1 ]; then return 0; fi
   if [ "${CTR_COMMIT_ALL:-0}" -eq 1 ]; then
-    if _cis_add "$CIS_DIR" -u; then return 0; fi
-    return 1
-  fi
-  if [ "${_CTR_PATHSMODE:-0}" -eq 1 ] || [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then
-    if [ "${CTR_COMMIT_PATHS_LITERAL:-1}" -eq 1 ] && [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then
-      if _cis_add "$CIS_DIR" -u -- "${CTR_COMMIT_PATHS[@]}"; then return 0; fi
+    if ! _cis_add "$CIS_DIR" -u; then return 11; fi
+  elif [ "${_CTR_PATHSMODE:-0}" -eq 1 ] || [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then
+    # the pathspec ladder: add -u -- <literal paths>, then add -u; either failing sends the caller to the superset
+    if [ "${CTR_COMMIT_PATHS_LITERAL:-1}" -eq 1 ] && [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ] && _cis_add "$CIS_DIR" -u -- "${CTR_COMMIT_PATHS[@]}"; then
+      return 0
     fi
-    if _cis_add "$CIS_DIR" -u; then return 0; fi
-    return 1
+    if ! _cis_add "$CIS_DIR" -u; then return 11; fi
   fi
   return 0
 }
 
 cis_build() {
-  local root="$1" pcwd="${2-}" wd="${3-}" idx objs top r=0 rc=0 why err
+  local root="$1" pcwd="${2-}" wd="${3-}" idx objs top r=0 why err
   CIS_ERR=""; CIS_WHY=""; CIS_MODE=superset; CIS_DIR=""
-  _CIS_ALL_RAN=0; _CIS_WD=""; _CIS_ROOT="$root"; _CIS_PCWD="$pcwd"
+  _CIS_WD=""; _CIS_ROOT="$root"; _CIS_PCWD="$pcwd"
   if [ -z "$wd" ] || [ ! -d "$wd" ]; then CIS_WHY=prepare-failed; return 20; fi
   case "$wd" in /*) ;; *) wd="$PWD/$wd" ;; esac
   _CIS_WD="$wd"
@@ -455,7 +448,10 @@ cis_build() {
     _cis_replay || r=$?
     case "$r" in
       0) return 0 ;;
-      10) CIS_WHY=pathspec-missing; rc=10 ;;
+      10)
+        # git said the path does not exist in the proven directory: it cannot be scanned, so this is a failure
+        # (create it in an earlier call, or fix the spelling), never an allow.
+        _cis_err_line; err="$CIS_ERR"; _cis_fail pathspec-missing; CIS_ERR="$err"; return 20 ;;
       *) CIS_WHY=replay-failed ;;
     esac
   fi
@@ -465,5 +461,5 @@ cis_build() {
     _cis_fail "$why"; CIS_ERR="$err"
     return 20
   fi
-  return "$rc"
+  return 0
 }
