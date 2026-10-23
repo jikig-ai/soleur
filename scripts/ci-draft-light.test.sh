@@ -93,7 +93,7 @@ PR_T_HE="needs.pr-selection.outputs.head_sha == github.event.pull_request.head.s
 PR_TERM_PRE="!($PR_T_EV$PR_T_AC$PR_T_HN${PR_T_HE}contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',"
 pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # Every other job: cheap guards and the lever itself. A NEW job must be classified: add it to HEAVY_PINNED or here.
-LIGHT_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection push-dedupe rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
+LIGHT_PINNED="adr-ordinals affected-index-ratchet credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection push-dedupe rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
 TYPES_PINNED='["opened", "synchronize", "reopened", "ready_for_review"]'
 REASONS="bad_pr ready fork read_error not_draft switch_off ok"
 REPO_SLUG="jikig-ai/soleur"

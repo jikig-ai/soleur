@@ -140,6 +140,7 @@ declare -A ALLOW=(
   ["apps/web-platform/infra/betterstack-logs-alerts.tf"]="SQL alert, already anchored; emitter check deferred to #8874"
   [".github/workflows/infra-validation.yml"]="pull_request paths: filter naming the lib"
   ["scripts/lib/bs-emitter-row.sh"]="the #8875 sibling lib — its header names this lib for contract lineage; it selects nothing itself (its own def is bs_emitter_row)"
+  ["scripts/ci-pr-affected-audit.baseline.tsv"]="a data file of suite and path pairs (the affected-index ratchet baseline): it names this lib as a pair member and selects nothing"
 )
 
 # Files that MUST be discovered (#8873 review: a `>= N` count floor let the discovery drop the

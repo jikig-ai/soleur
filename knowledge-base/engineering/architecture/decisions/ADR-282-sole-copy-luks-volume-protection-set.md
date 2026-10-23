@@ -190,8 +190,11 @@ the same owner and the `soleur:incident` skill as the route.
 
 ### Residuals recorded, not mitigated
 
-- **Hetzner project deletion or account loss** is not covered; whether delete protection blocks a project deletion is
-  unverified.
+- **Hetzner project deletion or account loss** is not covered. Whether delete protection blocks a project deletion, or
+  survives account loss, is not established: the Hetzner pages read on 2026-10-23 are silent on it (Addendum 2026-10-23; terms and
+  conditions and the projects documentation were not read). Plan as if project deletion or account loss destroys the
+  volume regardless of delete protection, and never cite delete protection as cover against either. No backup exists to
+  fall back on (see "The ciphertext has no backup" below).
 - **A holder of the read/write Hetzner token can lift protection.** Protection defends against mistaken deletes (a console
   click, a wrong id, a pasted recipe; the drift workflow's issue bodies printed runnable DELETE recipes until #9927 item 8c
   removed them), not against a leaked read/write token.
@@ -359,3 +362,21 @@ CLO ruling 2026-10-22: C1 may ship, no stop condition. One published sentence (`
 The probe script and its suite were removed in this PR (CTO, 2026-10-22): the finding is recorded, and a committed path to an account-wide Supabase management token that reaches the production app project is the less safe state; the method and queries live in `measurements.md` and git history, and a round 2 would be a separate owner-gated change with its own suite.
 
 C4: no change. `inngestPostgres` and its edge from `inngest` already exist in `model.c4`; the probe was a one-off operator tool, not a standing relationship, so no founder-to-Supabase edge is drawn.
+
+## Addendum — 2026-10-23 (#9927 item 7, Hetzner project-deletion coverage, documentation read only)
+
+Appended; the only change above is the residual "Hetzner project deletion or account loss": it now states the planning posture in place of a bare "unverified". Status stays `accepted`. Evidence classes as in the 2026-10-22 addendum. Public documentation files were read on 2026-10-23; no Hetzner API call, account access, write or live test was made.
+
+| Question | Answer | Evidence class | Date |
+|---|---|---|---|
+| Does delete protection block deleting the volume itself? | The Cloud API reference (`https://docs.hetzner.cloud/cloud.spec.json`, Delete a Volume) says the Volume must not be attached to a Server and must not have delete protection enabled; the protection flag `delete` "prevents the Volume from being deleted" | documented, not measured | 2026-10-23 |
+| Is protection a safeguard against accidental deletion, and on which resource types? | The servers FAQ (`https://docs.hetzner.com/cloud/servers/faq/`) says a protected resource must have its protection removed before deletion, calls protection "an additional safeguard for accidental deletion", and names servers, snapshots and floating IPs (volumes are not named on that page) | documented, not measured | 2026-10-23 |
+| Does delete protection block deleting the containing project, or survive account loss? | Not found in the pages read: the API reference holds no text pairing a project with deletion, `docs.hetzner.com/accounts/` returned 404, and the cloud general FAQ (`https://docs.hetzner.com/cloud/general/faq/`) says nothing about whether protection blocks deleting a project, or about account closure (its only mention of deleting a project concerns moving a resource between accounts), nor do the account-deactivation and account-deletion entries of the data-protection page (`https://docs.hetzner.com/general/company-and-policy/data-protection-at-hetzner/`) | not measured | 2026-10-23 |
+
+Terms and conditions, the projects documentation, the cloud changelog and the Terraform provider documentation were not read, so "not found in the pages read" is scoped to the pages above. The planning posture stands until Hetzner documentation or written support confirmation says otherwise, and even then account loss (suspension or closure) would need its own evidence. Delete protection is documented only as a safeguard against accidental deletion; treat it as no cover against project deletion or account loss until evidence says otherwise. The same unknown applies to any other Hetzner volume in the project, including the web-1 workspaces volume (ADR-119 records no such residual); this addendum does not edit ADR-119. For the volume this ADR protects, no off-project copy of its data exists today (see the residual "The ciphertext has no backup"); adding one is a separate spend and effort decision this item does not make.
+
+The optional scratch-volume proof that detach works under delete protection is dropped: it is a Hetzner write and out of scope for a documentation read. The first sanctioned host replace remains the live proof that Hetzner allows detach of a delete-protected volume (see the residual on the first sanctioned host replace above); it proves detach under protection only and does not settle project deletion or account loss.
+
+A written Hetzner support question is one non-binding, owner-side, read-only way to settle the fact; it is not the only route and not a gate, and a live deletion test is out of scope because project deletion is irreversible.
+
+Ruled by CTO agent, 2026-10-23: state the planning posture "plan as if project deletion or account loss destroys the volume regardless of delete protection" and label the underlying fact not established, in the reworded residual plus this addendum - docs-silent evidence does not separate the options, so the stricter one wins: assuming protection survives risks sole-copy data loss, assuming it does not costs no data, only a pending mitigation decision (rationale amended the same day on review dissent; the posture is unchanged).

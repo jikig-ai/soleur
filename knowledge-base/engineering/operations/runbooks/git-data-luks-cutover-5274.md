@@ -151,7 +151,7 @@ promise.
 | `unfreeze` | nothing | n/a | removes the sentinel and restarts `git-data-gc.timer` (exit 6 if it will not start) |
 | `flip` | **web-1's app container restarts** (web-1 is the singleton ingress, ADR-143 D2); the freeze refuses git-data store writes for the window between freeze and unfreeze | the same-version redeploy takes ~75 s as a release deploy job (runs 36970234398 and 36962950359, 2026-10-02: 74 s and 77 s wall time, both hosts). The container's own unavailable window is inside that and is *not measured*: no per-host availability probe exists. The job bounds are 2400 s for the redeploy and 900 s for the finalizer's unwind. | `gh run view <id> --json jobs` on the two runs; `track.sh` bounds |
 | `rollback` | the same web-1 container restart, with the flag off; git-data keeps serving | as `flip`, plus the erasure probe that follows | as above |
-| `flip` to `rollback` (the flag-on window, #8211) | **no host stops, but the app runs the flag-on path for any user who opens a workspace or starts a session** from the flip's redeploy until the rollback's redeploy has restarted both hosts: a session's working tree is created under `WORKTREE_ROOT` on the web host (in the container's writable layer) and replicated to git-data only at session end. A session killed by a redeploy never replicates, and the rollback's redeploy discards every tree under `WORKTREE_ROOT`, so a session killed or still running at the rollback loses its unreplicated work (it may be the only copy). A user opening an existing workspace in the window can find it missing until the rollback. Delete Account inside the window removes only `/workspaces/<id>`, not the `WORKTREE_ROOT` tree (see the run sheet's Art. 17 rule) | *not measured*: it is the minutes between the flip's per-host `enabled` readback and the rollback's per-host `disabled` readback, so it includes the rollback's redeploy and the second dispatch's approval wait; the first run records it in the evidence block | `apps/web-platform/server/workspace-resolver.ts` (`getWorkspaceWorktreeRoot`, `isGitDataStoreEnabled`), `apps/web-platform/infra/lib/docker-run-tuple.py` (the mounts), `apps/web-platform/server/git-data-replication.ts` (replication at session end) |
+| `flip` to `rollback` (the flag-on window, #8211) | **no host stops, but the app runs the flag-on path for any user who opens a workspace or starts a session** from the flip's redeploy until the rollback's redeploy has restarted both hosts: a session's working tree is created under `WORKTREE_ROOT` on the web host (in the container's writable layer) and replicated to git-data only at session end. A session killed by a redeploy never replicates, and the rollback's redeploy discards every tree under `WORKTREE_ROOT`, so a session killed or still running at the rollback loses its unreplicated work (it may be the only copy). A user opening an existing workspace in the window can find it missing until the rollback. Delete Account inside the window removes both `/workspaces/<id>` and the `WORKTREE_ROOT/<id>` tree, on the serving host only (see the run sheet's Art. 17 rule) | *not measured*: it is the minutes between the flip's per-host `enabled` readback and the rollback's per-host `disabled` readback, so it includes the rollback's redeploy and the second dispatch's approval wait; the first run records it in the evidence block | `apps/web-platform/server/workspace-resolver.ts` (`getWorkspaceWorktreeRoot`, `isGitDataStoreEnabled`), `apps/web-platform/infra/lib/docker-run-tuple.py` (the mounts), `apps/web-platform/server/git-data-replication.ts` (replication at session end) |
 | `redeploy` | the same web-1 container restart; no flag or host change | ~75 s | as above |
 | `wipe_check` | nothing | n/a | no volume or provider state changes: provider API reads, a Better Stack read and one host-side session that creates and removes a transient host-local device-mapper snapshot (mounted read-only; a killed run can leave it, see `snapshot_clear`) |
 | `snapshot_clear` | nothing | n/a | removes one LEFTOVER host-local device-mapper snapshot of the plaintext device, its loop device and its RAM copy-on-write file; no volume or provider operation |
@@ -304,9 +304,12 @@ from that account's own session. An agent cannot drive any of these steps and do
   R1 until the CTO or the owner has classified where it points. This is a configuration name check, not the tree listing that was ruled
   out.
 - **Art. 17 inside the window (Ruled by CLO agent, 2026-10-19; v1 internal attestation, not external counsel).** While the flag is on,
-  Delete Account (`deleteWorkspace`) removes only `/workspaces/<id>`, so a working tree under `WORKTREE_ROOT` is not removed by it and
-  is released only when the rollback swap replaces the container (storage released, not overwritten, and its absence is not
-  observed); a `removeGitDataRepo` call inside a freeze span is refused and logged as an Art. 17 event. The rehearsal flip may run with the
+  Delete Account (`deleteWorkspace`) removes both `/workspaces/<id>` and `WORKTREE_ROOT/<id>` on the serving host (#8211). The tree is
+  host-local and only the in-process session is aborted, so a tree on the other web host is not reached. A tree the reap could
+  not remove, or only moved aside, is reported to Sentry (`op:workspace-tree-erasure`, from Delete Account and from repo disconnect, paged by the
+  `art17-workspace-tree-erasure-incomplete` rule; the cascade continues) and is released only when the rollback swap replaces the
+  container (storage released, not overwritten, and its absence is not observed); a `removeGitDataRepo` call inside a freeze span
+  is refused and logged as an Art. 17 event. The rehearsal flip may run with the
   per-id re-erasure path unbuilt ONLY while the built session-refusal control holds, shown by the control's per-host reporter line
   (`new_sessions_paused=1` in the quiet-window build's current draft; the control fails open on an unreadable flag, so the flag alone
   proves nothing) on both hosts before R1 and again immediately before R4. An owner acceptance does not substitute for the control on
@@ -318,8 +321,29 @@ from that account's own session. An agent cannot drive any of these steps and do
   blocked. The owner's dispatch approval covers the production-flip risk, not an Art. 17 shortfall. After a rehearsal whose R7 read `clear`,
   with the flag off and no store-enabled window since, the emptiness discharge of host-key step 5 remains available until the real
   flip, although "`GIT_DATA_STORE_ENABLED` has never been on" is no longer literally true. This exception covers the rehearsal flip
-  only: the per-id re-erasure path, and a `deleteWorkspace` that also reaps `WORKTREE_ROOT/<id>` (it does not today), stay hard
-  preconditions of the first REAL flip (Ruled by CTO agent, 2026-10-19). Neither is built.
+  only: the per-id re-erasure path, which is not built, stays a hard precondition of the first REAL flip (Ruled by CTO agent,
+  2026-10-19). The `deleteWorkspace` that also reaps `WORKTREE_ROOT/<id>` is built (#8211).
+- **Reading the working-tree erasure signal (#8211).** A Delete Account or repo disconnect whose local reap failed (a root not
+  removed, a tree only moved aside, a child killed at its time limit) raises a Sentry event with `op:workspace-tree-erasure` and
+  pages through `art17-workspace-tree-erasure-incomplete`. List the issues (same token and org as [Store not empty](#store-not-empty-store_not_empty)
+  step 3), then read each issue's events; `extra.failedRoots` (`workspaces`, `worktree`, or `resolver:<root>`), `extra.failureKinds`
+  (`moved-aside`, `survived`, `recreated`, `timeout`, `error`) and `extra.errorCodes` say what failed, and no path or raw id is carried:
+
+  ```bash
+  SENTRY_ISSUE_RO_TOKEN=$(doppler secrets get SENTRY_ISSUE_RO_TOKEN -p soleur -c prd --plain)
+  curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+    'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/?query=op%3Aworkspace-tree-erasure&statsPeriod=14d' \
+    | jq -r '.[].id'
+  # for each issue id:
+  curl -fsS -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
+    "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/issues/<issue-id>/events/?full=true" \
+    | jq -r '.[] | [.dateCreated, (.tags[]? | select(.key == "feature") | .value), ((.context // .extra) | [.failedRoots, .failureKinds, .errorCodes] | tostring), ((.context // .extra) | .userIdHash // .workspaceIdHash // "no-id-hash")] | @tsv'
+  ```
+
+  The id is hashed (`userIdHash` on account-delete, `workspaceIdHash` on disconnect): to find the event for a known id, hash that
+  id with `SENTRY_USERID_PEPPER` from Doppler `prd` (HMAC-SHA256, hex) and compare. A hash equal to the literal `pepper_unset`
+  means the pepper was missing in the emitting process, so the events cannot be matched to an id. Resolve the issue once a
+  container replacement has released the tree (its absence is not observed), never archive it (an archived issue fires no trigger).
 **Preconditions for R1.** Every item of "Preconditions for the flip" above holds, except that the per-id re-erasure item is narrowed
 for the rehearsal flip by the Art. 17 rule above; the workflow enforces part of them and the owner holds the rest. The `Verify required secrets present` step refuses `flag_write_credential_absent`. The `Flip preconditions`
 step refuses `precondition_8209_open`, `pin_fault_paging_absent`, `d6_replace_stale`, `d6_last_rotate_failed`,

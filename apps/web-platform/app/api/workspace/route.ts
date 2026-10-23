@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { provisionWorkspace } from "@/server/workspace";
+import { WorkspaceReapInProgressError } from "@/server/workspace-reap-error";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import * as Sentry from "@sentry/nextjs";
 import { reportSilentFallback } from "@/server/observability";
@@ -74,6 +75,13 @@ export async function POST(request: Request) {
       workspace_path: workspacePath,
     });
   } catch (err) {
+    // #8211: this workspace is still being deleted; calm and retryable, not an incident.
+    if (err instanceof WorkspaceReapInProgressError) {
+      return NextResponse.json(
+        { error: "Setup already in progress" },
+        { status: 409, headers: { "Retry-After": "5" } },
+      );
+    }
     Sentry.withIsolationScope(() => {
       Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
       reportSilentFallback(err, {
