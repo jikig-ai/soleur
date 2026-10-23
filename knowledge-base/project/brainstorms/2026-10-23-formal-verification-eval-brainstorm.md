@@ -1,6 +1,10 @@
 ---
+title: Formal verification for Soleur (evaluation, parked)
 date: 2026-10-23
 topic: formal-verification-eval
+issue: 10897
+pr: 10896
+spec: knowledge-base/project/specs/feat-formal-verification-eval/spec.md
 lane: cross-domain
 brand_survival_threshold: single-user incident
 status: parked
@@ -10,7 +14,7 @@ status: parked
 
 ## What We're Building
 
-Nothing yet. The question was whether Soleur could apply formal verification (FV) per PR or as a scheduled job, what it would cost, and whether it could let Soleur ship "bug-free" code to users. Triggered by Anthropic Frontier Red Team, "formal-verification" (2026-10-22). Decision: park, record findings, file a tracking issue with revisit triggers.
+Nothing yet. The question was whether Soleur could apply formal verification (FV) per PR or as a scheduled job, what it would cost, and whether it could let Soleur ship "bug-free" code to users. Triggered by Anthropic Frontier Red Team, "formal-verification" (2026-10-22), https://www.anthropic.com/research/formal-verification. Decision: park, record findings, tracking issue #10897 carries the revisit triggers.
 
 ## Source article (fetched 2026-10-23, treated as data)
 
@@ -21,11 +25,11 @@ Nothing yet. The question was whether Soleur could apply formal verification (FV
 
 ## Why This Approach (park)
 
-- **Wrong target class.** Tracked files (re-derived two ways by repo research): 2,050 `.ts`, 528 `.tsx`, 1,680 `.sh`, 336 `.sql`, 90 `.tf`, 0 `.rs`. No mature verifier for TypeScript; Kani/Verus have nothing to verify.
+- **Wrong target class.** Tracked files (re-derived two ways by repo research): 2,050 `.ts`, 528 `.tsx`, 1,680 `.sh`, 336 `.sql`, 90 `.tf`, 0 `.rs`. No TypeScript verifier was evaluated (the article used none for TS; a literature search was not run); Kani/Verus have nothing to verify.
 - **Escaped-bug classes mostly aren't provable.** Learnings point to tests-pass-for-wrong-reason, vacuous gates, config drift, env leakage. Those need mutation testing, hermetic isolation or live checks, not proofs. (Keyword histogram from the learnings agent is noisy; treat as rough.)
 - **Closest existing primitives:** fast-check property tests (ADR-293, 4 suites), RLS authz fuzz gate (ADR-111). No TLA+/Alloy/SMT/mutation testing anywhere.
 - **Cadence:** nothing viable is cheap enough to gate PRs. If anything is built, it is scheduled/nightly.
-- **Claims risk:** "bug-free"/"verified" conflicts with T&C §7/§10 and Disclaimer §1.1/§3.3 as-is language; CLO and CPO both flag overclaim risk.
+- **Claims risk:** "bug-free"/"verified" conflicts with the as-is wording (T&C §10, Disclaimer §1.1 and §2.2) and sits beside the EU consumer carve-out (Disclaimer §3.3) and the AI-output clause (T&C §7); CLO and CPO both flag overclaim risk.
 
 ## Key Decisions
 
@@ -38,22 +42,22 @@ Nothing yet. The question was whether Soleur could apply formal verification (FV
 ## Candidate spike (not committed to)
 
 1. Model-based property tests (`fc.commands`) for `apps/web-platform/lib/chat-state-machine.ts` (2,302 lines, example-based tests only), nightly with high `numRuns`.
-2. Per-PR check that every RLS-table migration has a fuzz case (extends ADR-111).
-3. Mutation testing (Stryker) to grade existing tests: the cheapest answer to the vacuous-gate class.
+2. Nightly check that every RLS-table migration has a fuzz case (extends ADR-111; a cheap lint-style check, still not a PR gate).
+3. JS/TS mutation testing (Stryker) to grade existing tests: the cheapest answer to the vacuous-gate class. Shell mutation batteries already exist (e.g. `.claude/hooks/memory-backstop-mutation-battery.sh`); no JS mutation tool does.
 4. Bounded TLA+ spike on the Inngest cutover state machine or session lifecycle.
 5. Adjacent gap: Semgrep runs only via the review agent, not in any CI workflow.
 Record bugs found per token spent, then decide.
 
 ## Revisit triggers (any one)
 
-- At least 3 of the 10 alpha founders ask for correctness assurance, or a founder churns over a shipped bug (CPO).
+- At least 3 alpha founders ask for correctness assurance, or a founder churns over a shipped bug (CPO). Measure via #1439; the 2026-08-06 snapshot was 1 of 10 recruited, so this needs recruitment first.
 - A spike shows a technique catches defects property tests missed at acceptable token cost (CPO/CTO).
 - A Soleur component is written in Rust/C where the article's method applies.
 
 ## Open Questions
 
 - Theorem's proof/semantics licence compatibility with Soleur's BSL: unverified (CLO).
-- Whether PA-22 (BYOK) governs customer code sent to a third-party prover: unverified; a prover vendor would be a new Art. 30 recipient and needs a `gdpr-gate` run.
+- Whether the Anthropic-runtime activities (PA-22 leader-prompt runtime, PA-23 BYOK delegation) govern customer code sent to a third-party prover: unverified; a prover vendor would be a new Art. 30 recipient and needs a `gdpr-gate` run.
 - Architecture decision on a verification tiering (property / model-check / SMT) would need an ADR if pursued.
 
 ## User-Brand Impact
@@ -68,11 +72,15 @@ Record bugs found per token spent, then decide.
 
 ### Engineering
 
-**Summary:** No FV exists; method doesn't transfer to TS/SQL/bash. Property tests, RLS fuzz and mutation testing give most of the value at ~1% of cost; scheduled cadence only.
+**Summary:** No FV exists; method doesn't transfer to TS/SQL/bash. Property tests, RLS fuzz and mutation testing give most of the value at roughly 1% of cost (CTO estimate, unmeasured); scheduled cadence only.
 
 ### Product
 
 **Summary:** Demand unproven (PIVOT verdict, 1/10 alpha founders). Dogfood-only; if user-facing, an assurance report of what was and wasn't checked, never "verified".
+
+### Marketing / Sales / Finance / Operations / Support
+
+**Summary:** Not consulted; no implications while parked. Any future user-facing assurance wording goes through the CMO with the CLO.
 
 ### Legal
 
@@ -80,6 +88,6 @@ Record bugs found per token spent, then decide.
 
 ## Capability Gaps
 
-- No mutation-testing tool: `git grep -il stryker` returned nothing (CTO).
+- No JS/TS mutation-testing tool: no Stryker dependency or config in any package.json or lockfile (CTO; `git grep -il stryker` still hits `.gitignore` and `.gitleaks.toml`, which are only ignore entries).
 - No TLA+/Alloy/SMT tooling: strict-term grep across `knowledge-base/**` found only 2 incidental hits (repo research).
 - Semgrep absent from CI: `grep -il semgrep .github/workflows/*.yml` returned 0 (repo research).

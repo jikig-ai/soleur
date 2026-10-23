@@ -3,7 +3,8 @@ feature: formal-verification-eval
 lane: cross-domain
 brand_survival_threshold: single-user incident
 status: parked
-tracking_issue: 10897
+issue: 10897
+brainstorm: knowledge-base/project/brainstorms/2026-10-23-formal-verification-eval-brainstorm.md
 ---
 
 # Spec: formal verification evaluation (parked)
