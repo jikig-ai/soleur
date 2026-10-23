@@ -14,6 +14,56 @@ brand_survival_threshold: none
 Ref #9454 (Merge Queue epic, ADR-270), follow-up 1 of 2. The second follow-up (the `sync-pr-behind.sh` cleanup) is a
 separate PR and is not bundled here.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23
+**Sections enhanced:** 4 (Overview, Research Insights, Acceptance Criteria, Sharp Edges)
+**Agents and sources used:** `soleur:engineering:cto` (binding ruling Q1-Q4), `soleur:engineering:research:learnings-researcher`,
+plan-review seats (`soleur:engineering:review:code-simplicity-reviewer`, `soleur:engineering:review:kieran-rails-reviewer`,
+`soleur:engineering:review:dhh-rails-reviewer`), plus the live `gh` and repo checks listed under Deepen Verification.
+
+**Proportionality note.** The skill's "run every discovered agent" fan-out was deliberately NOT applied: the plan edits no
+code, no schema, no infrastructure and no UI, and its verdict is "no change", so a 40-agent sweep would only restate what the
+CTO ruling, the learnings pass and three review seats already established. The mechanical halts (4.6-4.12) and the quality
+checklist were run in full.
+
+### Key Improvements
+
+1. Corrected the blocker description: #10891's failing `affected-index-ratchet` job is advisory (#10865 observation window,
+   #10859 promotion held) and the PR is `MERGEABLE` / `UNSTABLE`, so the "wait for #10891" ruling does not rest on a required
+   check being red.
+2. Verified every cited PR, issue, path and attribution claim live (below); none was stale.
+3. Confirmed the mechanical halts pass (below), so `soleur:work` can start without a re-plan.
+
+### New Considerations Discovered
+
+- #10891 also edits `scripts/lib/test-affected-paths.sh` (adds an `ALWAYS_ON_SUITES` entry for its own hcloud scan), so it is
+  one of the open PRs that owns that file; this plan must not add a second editor of it, and does not.
+- #10937 removes `scripts/infra-config-activation-7220` from `suite-shard-legs.tsv`, `suite-durations.tsv` and both `*.tsv.n`
+  files; it touches different rows than the three missing labels, so the two PRs merge independently, but any contingency
+  regeneration must run after both land on main so the dry run reads the final registered set.
+
+## Deepen Verification
+
+Mechanical halts (run against this plan, tasks.md and decision-challenges.md):
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | section present, threshold `none`; 0 of the 3 written files match the sensitive-path regex, so no scope-out line is required (one is present anyway) |
+| 4.7 Observability | skipped: every written path is under `knowledge-base/` (pure docs) |
+| 4.8 PAT-shaped variables | 0 hits |
+| 4.9 UI wireframe | skipped: no UI-surface path |
+| 4.10 Encryption posture | skipped: no `.tf`, migration, cloud-init or compose path; the only keyword hits are "merge queue" |
+| 4.11 Guard contract | skipped: the deliverable contains no guard |
+| 4.12 Scope check | 1 unfenced `## Scope Check`; all three subsections present; 1 `Recommendation:` line; 0 `status: BLOCKED`; no `unmapped` status cell |
+| 4.55 Downtime | skipped: no serving surface changes |
+
+Live citation checks (state via `gh api repos/jikig-ai/soleur/issues/<N>`): #10891, #10900, #10937, #7390 and #10944 are open
+pull requests; #10448, #10865, #10859 and #9454 are open issues. Attribution: `gh pr view 10891 --json files` lists
+`scripts/lib/test-affected-paths.sh`; `gh pr diff 10937` shows `-scripts/infra-config-activation-7220` removed in four files
+(both TSVs and both `*.tsv.n`). Cited repo paths (runbook, learnings, ADR-240, archived decision log, `session-state.sh`,
+`lint-orphan-test-suites.sh`) all exist. The plan cites no AGENTS.md rule ids and no SHAs.
+
 ## Overview
 
 `plugins/soleur/test/apply-delivery-gap-follower.test.sh` landed on main on 2026-10-23 together with
