@@ -88,3 +88,11 @@ unrelated missing-table error can masquerade as the intended refusal. Run
 `codex-qualification` directory cannot import its local `prepare` module. A
 runner admission failure on a changed hash is an independent-review hold, not a
 reason to refresh the pin automatically.
+
+Keep safety barriers that must survive a later preparation failure before the
+fallible preparation step. Migration 170's separate grant revocation must
+commit before reading or assembling the replacement SQL; the owner-scoped
+function replacement and grant restoration remain one later atomic apply.
+Likewise, after an acknowledgment RPC error or false result, read the
+tenant-scoped durable acknowledgment state before reporting failure. This
+recovers an ambiguous commit without repeating notice issuance or provider work.

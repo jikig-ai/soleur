@@ -113,15 +113,23 @@ os.execv('/usr/bin/COMMAND', ['COMMAND', *sys.argv[1:]])
             ('cat', '001_synthetic.sql', '001_synthetic.sql', False),
         ]
         for command, target, filename, wrapped in cases:
+            body = 'SELECT 1;\n'
+            if wrapped:
+                body = 'BEGIN;\n' + body + 'COMMIT;\n'
+            control, control_applies, _ = self.capture({filename: body})
+            self.assertEqual(control.returncode, 0, control.stderr)
+            self.assertEqual(len(control_applies), 1, 'each producer fixture must reach one successful apply')
             for partial in (False, True):
                 with self.subTest(command=command, target=target, partial=partial):
-                    body = 'SELECT 1;\n'
-                    if wrapped:
-                        body = 'BEGIN;\n' + body + 'COMMIT;\n'
-                    result, applies, _ = self.capture({filename: body},
+                    result, applies, calls = self.capture({filename: body},
                         producer_failure=(command, target), partial_output=partial)
                     self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('Could not assemble migration SQL', result.stdout)
                     self.assertEqual(applies, [], 'an incomplete SQL unit must never reach psql')
+                    if filename == '170_codex_history_ack_owner_scope.sql':
+                        barriers = [call for call in calls if '-c' in call['argv'] and 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment' in call['sql']]
+                        self.assertEqual(len(barriers), 1, 'the legacy grant barrier must commit before fallible assembly')
+                        self.assertIn('REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged', barriers[0]['sql'])
 
     def test_existing_schema_probe_assertions_with_networkless_git(self):
         # Existing suite hardcodes inner PATH via env -i. Preserve its test

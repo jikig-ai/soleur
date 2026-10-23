@@ -453,6 +453,7 @@ describe("Codex real production handler boundary", () => {
     let consumed = false;
     fixture.rpc.mockImplementation(async (name: string) => {
       if (name === "mark_codex_history_transfer_notice_delivered") { await markerGate; delivered = true; }
+      if (name === "codex_history_transfer_acknowledged") return { data: consumed, error: null };
       if (name === "record_codex_history_transfer_acknowledgment") {
         const accepted = delivered && !consumed;
         consumed ||= accepted;
@@ -467,8 +468,8 @@ describe("Codex real production handler boundary", () => {
       expect(fixture.rpc).not.toHaveBeenCalledWith("record_codex_history_transfer_acknowledgment", expect.anything());
       releaseMarker();
       await Promise.all([first, second]);
-      expect(client.frames().filter((frame) => frame.type === "codex_history_transfer_acknowledged")).toHaveLength(1);
-      expect(client.frames()).toContainEqual(expect.objectContaining({ errorCode: "codex_history_transfer_acknowledgment_rejected" }));
+      expect(client.frames().filter((frame) => frame.type === "codex_history_transfer_acknowledged")).toHaveLength(2);
+      expect(client.frames().filter((frame) => frame.type === "error")).toHaveLength(0);
       expect(fixture.rpc.mock.calls.filter(([name]) => name === "mark_codex_history_transfer_notice_delivered")).toHaveLength(1);
     } finally {
       releaseMarker();
@@ -496,6 +497,36 @@ describe("Codex real production handler boundary", () => {
       releaseMarker();
       await ack;
     }
+  });
+
+  it("confirms a durable acknowledgment after the record RPC commits but loses its response", async () => {
+    fixture.generation = 1;
+    const original = noticeSession();
+    let acknowledgmentCommitted = false;
+    let recordCalls = 0;
+    fixture.rpc.mockImplementation(async (name: string) => {
+      if (name === "codex_history_transfer_acknowledged") return { data: acknowledgmentCommitted, error: null };
+      if (name === "mark_codex_history_transfer_notice_delivered") return { data: !acknowledgmentCommitted, error: null };
+      if (name === "record_codex_history_transfer_acknowledgment") {
+        recordCalls += 1;
+        acknowledgmentCommitted = true;
+        throw new Error("Synthetic committed acknowledgment response lost");
+      }
+      return { data: true, error: null };
+    });
+
+    await noticeChat();
+    const nonce = original.frames()[0].noticeNonce;
+    await acknowledgeNotice(nonce);
+    expect(original.frames()).toContainEqual(expect.objectContaining({ type: "codex_history_transfer_acknowledged" }));
+
+    const reconnected = noticeSession();
+    await acknowledgeNotice(nonce);
+    expect(reconnected.frames()).toContainEqual(expect.objectContaining({ type: "codex_history_transfer_acknowledged" }));
+    expect(recordCalls).toBe(1);
+    expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
+    expect(fixture.from).not.toHaveBeenCalledWith("messages");
+    expect(fixture.spawn).not.toHaveBeenCalled();
   });
 
   it("does not acknowledge into a replacement session after waiting for delivery", async () => {

@@ -28,6 +28,32 @@
   production action occurred. Exact-head review, resync, CI, legal, runtime,
   authenticated QA, preflight, readiness, merge, and shipping remain pending.
 
+### 2026-10-23 independent-review follow-up
+
+- Independent review found that migration 170's committed grant revocation ran
+  after fallible SQL assembly, leaving legacy 169 grants open if assembly
+  failed. The barrier now runs before assembly; migration application still
+  starts only after the complete SQL unit is prepared. Failure tests verify the
+  revoke ran while no migration apply was attempted.
+- Deployment review also found an ambiguous acknowledgment-commit gap. The
+  handler now checks tenant acknowledgment state after an unsuccessful or
+  ambiguous consume response, confirming a durable acknowledgment without
+  replaying provider work. Replacement sockets can recover the confirmation
+  after the issuance has already been consumed. A SQL case now reissues a
+  synthetic nonce beside an existing acknowledgment to isolate the marker's
+  consumed-ack refusal check.
+- RED/GREEN on the follow-up: the new runner barrier cases and committed-ACK
+  response-loss case failed before their implementation changes. The focused
+  handler/migration/RLS/UI set now passes 44/44; runner producer tests pass
+  5/5; TypeScript passes. ESLint has zero errors and three existing handler
+  fallthrough warnings. The runner identity must be reviewed again after this
+  update; SHA-256 is `4922a24ef83d13acb5a8cab2eaa0873909e78b9746889668fda8f62ddd196df3`,
+  and no pin was changed. `test_rehearsal.py` ran 8 cases: 6 passed and the two
+  reviewed-runner identity assertions refused this new hash as intended.
+  Semgrep scanned nine changed production/test files with 235 rules, zero
+  findings, and no parse errors. Main is 13 commits ahead of the prior feature
+  base, and resync plus exact-head CI remain pending.
+
 ### 2026-10-23 resumed continuation
 
 - CTO ruled that migration ledger compatibility must fail closed for legacy

@@ -487,6 +487,16 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     echo "::error::Codex auth-mode pre-migration guard is unavailable; refusing migration 165"
     exit 1
   fi
+  if [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+    # Preserve the fail-closed state even if preparing this migration fails.
+    # A database may already have ledgered 169 under the older runner while
+    # retaining its workspace-only authenticated RPC grants.
+    if ! psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 \
+      -c "REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role; REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;"; then
+      echo "::error::Could not close Codex acknowledgment RPC grants before migration 170; refusing owner-scope migration"
+      exit 1
+    fi
+  fi
   # Assemble the complete unit before opening psql. A streaming producer can
   # fail after emitting valid SQL, and psql would commit that prefix at EOF.
   # Conditional command substitutions suppress errexit, so check EVERY output
@@ -542,17 +552,6 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   )"; then
     echo "::error::Could not assemble migration SQL: $filename; no migration apply was attempted"
     exit 1
-  fi
-  if [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
-    # This committed barrier also covers a database that ledgered 169 before
-    # the runner gained its in-transaction revoke. Keep it separate from 170:
-    # if 170 fails, authenticated execution stays closed until a successful
-    # retry installs the owner-scoped functions and restores the grants.
-    if ! psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 \
-      -c "REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role; REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;"; then
-      echo "::error::Could not close Codex acknowledgment RPC grants before migration 170; refusing owner-scope migration"
-      exit 1
-    fi
   fi
   # -f - makes --single-transaction effective. The here-string supplies only
   # the successfully assembled unit, with no fallible streaming producer.

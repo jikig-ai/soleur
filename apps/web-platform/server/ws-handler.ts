@@ -3293,41 +3293,83 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           || notice.authModeGeneration !== msg.authModeGeneration
           || notice.nonceHash !== nonceHash)) {
           // This socket already has a locally issued notice. A different nonce
-          // is stale and must not trigger a privileged marker repair.
-        } else {
-          const delivery = notice ?? {
-            conversationId: msg.conversationId,
-            authModeGeneration: msg.authModeGeneration,
-            nonceHash,
-            completion: Promise.resolve(false),
-          };
-          const delivered = notice
-            ? await notice.completion
-            : await persistCodexNoticeDelivery(userId, delivery);
-          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
-          if (notice && !delivered) {
-            // Share a retry with acknowledgments that arrived together.
-            const pending = notice.completion;
-            if (!await pending && notice.completion === pending) {
-              notice.completion = persistCodexNoticeDelivery(userId, notice);
-            }
-            if (!await notice.completion) {
-              throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
-            }
+          // is stale and must not trigger privileged repair or acknowledgment.
+          sendToClient(userId, {
+            type: "error",
+            message: "The Codex account changed while you were reviewing this notice. Reopen the conversation and review the latest notice.",
+            errorCode: "codex_history_transfer_acknowledgment_rejected",
+          });
+          break;
+        }
+
+        const acknowledgmentArgs = {
+          p_conversation_id: msg.conversationId,
+          p_auth_mode_generation: msg.authModeGeneration,
+        };
+        const readAcknowledgment = async (): Promise<boolean> => {
+          const { data, error } = await tenant.rpc("codex_history_transfer_acknowledged", acknowledgmentArgs);
+          if (error) throw error;
+          return data === true;
+        };
+        const delivery = notice ?? {
+          conversationId: msg.conversationId,
+          authModeGeneration: msg.authModeGeneration,
+          nonceHash,
+          completion: Promise.resolve(false),
+        };
+        const delivered = notice
+          ? await notice.completion
+          : await persistCodexNoticeDelivery(userId, delivery);
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        let acknowledgmentRecorded = false;
+        if (!delivered && notice) {
+          // Share a retry with acknowledgments that arrived together.
+          const pending = notice.completion;
+          if (!await pending && notice.completion === pending) {
+            notice.completion = persistCodexNoticeDelivery(userId, notice);
           }
-          if (!notice && !delivered) {
-            throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
+          if (!await notice.completion) {
+            acknowledgmentRecorded = await readAcknowledgment();
+            if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+            if (!acknowledgmentRecorded) throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
+          }
+        } else if (!delivered) {
+          acknowledgmentRecorded = await readAcknowledgment();
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (!acknowledgmentRecorded) throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
+        }
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        let recordError: unknown;
+        let recorded = acknowledgmentRecorded;
+        if (!recorded) {
+          try {
+            const { data, error } = await tenant.rpc("record_codex_history_transfer_acknowledgment", {
+              p_conversation_id: msg.conversationId,
+              p_auth_mode_generation: msg.authModeGeneration,
+              p_nonce_hash: nonceHash,
+            });
+            if (error) recordError = error;
+            else recorded = data === true;
+          } catch (error) {
+            recordError = error;
           }
         }
         if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
-        const { data, error } = await tenant.rpc("record_codex_history_transfer_acknowledgment", {
-          p_conversation_id: msg.conversationId,
-          p_auth_mode_generation: msg.authModeGeneration,
-          p_nonce_hash: nonceHash,
-        });
-        if (error) throw error;
-        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
-        if (data !== true) {
+        if (!recorded) {
+          const alreadyAcknowledged = await readAcknowledgment();
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (alreadyAcknowledged) {
+            if (recordError) {
+              reportSilentFallback(recordError, {
+                feature: "codex-history-transfer",
+                op: "reconcile-member-acknowledgment",
+              });
+            }
+            recorded = true;
+          }
+        }
+        if (!recorded) {
+          if (recordError) throw recordError;
           sendToClient(userId, {
             type: "error",
             message: "The Codex account changed while you were reviewing this notice. Reopen the conversation and review the latest notice.",

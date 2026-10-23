@@ -246,6 +246,16 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
           '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
         );
         RESET ROLE;
+        SET ROLE service_role;
+        SELECT public.issue_codex_history_transfer_notice(
+          '40000000-0000-4000-8000-000000000001', 3,
+          '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        );
+        SELECT public.mark_codex_history_transfer_notice_delivered(
+          '40000000-0000-4000-8000-000000000001', 3,
+          '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        ) IS NOT TRUE;
+        RESET ROLE;
         DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('consumed nonce'); END $$;
         SET ROLE authenticated;
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
@@ -301,7 +311,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         );
       `);
 
-      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "t", "0", "f", "f", "f", "t", "1", "f", "f", "f", "f", "t", "t", "t", "t", "t", "f", "f", "f", "0", "f", "f", "t", "f", "f", "0", "0", "f", "f"]);
+      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "t", "0", "f", "f", "f", "t", "1", "f", "f", "f", "f", "t", "t", "t", "t", "t", "f", "t", "t", "f", "f", "0", "f", "f", "t", "f", "f", "0", "0", "f", "f"]);
     } finally {
       if (databaseCreated) {
         const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);
