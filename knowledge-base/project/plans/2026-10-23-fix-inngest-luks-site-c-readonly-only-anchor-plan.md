@@ -656,8 +656,8 @@ cloud-init), no persistent store or new network connection (the Encryption Postu
 3. Read-only token of every hostile shape: marker plus shape warning, zero requests (existing rows,
    updated warning text).
 4. Hetzner 401: the warning names `HCLOUD_TOKEN_READONLY`.
-5. Scan: the Guard 1 matrix, including the instrument controls, the live-tree and population-copy
-   rows, and the clock and event rows.
+5. Scan: the scan suite's matrix (as shipped after the review rounds), including the harness canary,
+   the live-tree row and the derived clock rows (the population-copy and event rows were cut by CTO R10).
 6. Scan liveness: an emptied population is RED, not vacuously green.
 
 ## Risks and Sharp Edges
