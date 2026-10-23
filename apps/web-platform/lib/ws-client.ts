@@ -66,6 +66,7 @@ export interface WebSocketError {
   message: string;
   conversationId?: string;
   authModeGeneration?: number;
+  noticeNonce?: string;
   action?: {
     label: string;
     href: string;
@@ -104,7 +105,7 @@ interface UseWebSocketReturn {
   resumeSession: (conversationId: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   resendMessage: (message: Extract<ChatMessage, { type: "text" }>) => void;
-  acknowledgeCodexHistoryTransfer: (conversationId: string, authModeGeneration: number) => void;
+  acknowledgeCodexHistoryTransfer: (conversationId: string, authModeGeneration: number, noticeNonce: string) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   /** feat-bash-autonomous-default-on: client→server ack for the first-run
    *  autonomous-mode disclosure soft-gate. Selection is "Got it" /
@@ -747,6 +748,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     generation: number,
     authMode?: "api-key" | "managed",
     draftRetentionFailed = false,
+    noticeNonce?: string,
   ): WebSocketError {
     const billingNotice = authMode === "api-key"
       ? " API-key mode uses your own credential and charges your provider account."
@@ -761,6 +763,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         + " Acknowledge, then resend your message. Your original message was not sent.",
       conversationId: targetConversationId,
       authModeGeneration: generation,
+      noticeNonce,
     };
   }
 
@@ -777,7 +780,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (restored.length > 0) {
       dispatch({ type: "filter_prepend", messages: restored.map((turn) => turn.message) });
       const latest = restored.reduce((current, turn) => turn.authModeGeneration > current.authModeGeneration ? turn : current);
-      setLastError(historyTransferNotice(targetConversationId, latest.authModeGeneration, latest.authMode));
+      setLastError(historyTransferNotice(targetConversationId, latest.authModeGeneration, latest.authMode, false, latest.noticeNonce));
     }
   }
   // #5290 false-positive fix — mirror of `sessionKind` for the `auth_ok`
@@ -1284,7 +1287,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             if (message?.type === "text" && message.role === "user"
               && !codexHeldTurnCache.put(codexDraftScopeRef.current, {
                 clientTurnId: msg.clientTurnId, conversationId: msg.conversationId,
-                authModeGeneration: msg.authModeGeneration, authMode: msg.authMode, message,
+                authModeGeneration: msg.authModeGeneration, noticeNonce: msg.noticeNonce, authMode: msg.authMode, message,
               })) {
               draftRetentionFailed = true;
               reportSilentFallback(new Error("Held Codex draft cache capacity exceeded"), {
@@ -1292,7 +1295,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               });
             }
           }
-          setLastError(historyTransferNotice(msg.conversationId, msg.authModeGeneration, msg.authMode, draftRetentionFailed));
+          codexHeldTurnCache.setNoticeNonce(
+            codexDraftScopeRef.current, msg.conversationId, msg.authModeGeneration, msg.noticeNonce,
+          );
+          setLastError(historyTransferNotice(msg.conversationId, msg.authModeGeneration, msg.authMode, draftRetentionFailed, msg.noticeNonce));
           break;
         }
 
@@ -2261,11 +2267,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   );
 
   const acknowledgeCodexHistoryTransfer = useCallback(
-    (targetConversationId: string, authModeGeneration: number) => {
+    (targetConversationId: string, authModeGeneration: number, noticeNonce: string) => {
       send({
         type: "codex_history_transfer_acknowledge",
         conversationId: targetConversationId,
         authModeGeneration,
+        noticeNonce,
       });
     },
     [send],

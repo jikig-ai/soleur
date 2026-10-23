@@ -7,6 +7,8 @@ const migration = readFileSync(join(__dirname, "../supabase/migrations/173_codex
 describe("migration 173: notice-bound Codex acknowledgment", () => {
   it("stores private notice issuance by owner, conversation, generation, and membership epoch", () => {
     expect(migration).toMatch(/CREATE TABLE public\.codex_history_transfer_notice_issuances/);
+    expect(migration).toMatch(/nonce_hash text NOT NULL/);
+    expect(migration).toMatch(/delivered_at timestamptz/);
     expect(migration).toMatch(/workspace_id uuid NOT NULL/);
     expect(migration).toMatch(/member_user_id uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE/);
     expect(migration).toMatch(/FOREIGN KEY \(workspace_id, member_user_id\)\s+REFERENCES public\.workspace_members\(workspace_id, user_id\) ON DELETE CASCADE/);
@@ -27,8 +29,12 @@ describe("migration 173: notice-bound Codex acknowledgment", () => {
     expect(issuanceDelete).toBeGreaterThan(record);
     expect(ackInsert).toBeGreaterThan(issuanceDelete);
     expect(migration.slice(issuanceDelete, ackInsert)).toMatch(/IF NOT FOUND THEN\s+RETURN false;/);
-    expect(migration).toMatch(/REVOKE ALL ON FUNCTION public\.issue_codex_history_transfer_notice\(uuid, bigint, uuid\) FROM PUBLIC, anon, authenticated, service_role/);
-    expect(migration).toMatch(/GRANT EXECUTE ON FUNCTION public\.issue_codex_history_transfer_notice\(uuid, bigint, uuid\) TO service_role/);
-    expect(migration).toMatch(/GRANT EXECUTE ON FUNCTION public\.record_codex_history_transfer_acknowledgment\(uuid, bigint\) TO authenticated/);
+    expect(migration).toMatch(/nonce_hash = p_nonce_hash/);
+    expect(migration).toMatch(/delivered_at IS NOT NULL/);
+    expect(migration).toMatch(/CREATE TRIGGER purge_stale_codex_history_transfer_notice_issuances/);
+    expect(migration).toMatch(/CREATE TRIGGER purge_replaced_codex_history_notice_membership/);
+    expect(migration).toMatch(/REVOKE ALL ON FUNCTION public\.issue_codex_history_transfer_notice\(uuid, bigint, uuid, text\) FROM PUBLIC, anon, authenticated, service_role/);
+    expect(migration).toMatch(/GRANT EXECUTE ON FUNCTION public\.issue_codex_history_transfer_notice\(uuid, bigint, uuid, text\) TO service_role/);
+    expect(migration).toMatch(/GRANT EXECUTE ON FUNCTION public\.record_codex_history_transfer_acknowledgment\(uuid, bigint, text\) TO authenticated/);
   });
 });

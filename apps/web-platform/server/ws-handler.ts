@@ -2,7 +2,7 @@ import { Server as HTTPServer } from "http";
 import { newAgentSessionsRefused, QUIET_WINDOW_MESSAGE } from "./quiet-window";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
-import { randomUUID } from "crypto";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import { basename as pathBasename } from "path";
 
 import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode } from "@/lib/types";
@@ -1333,25 +1333,52 @@ async function dispatchCodexChatTurn(
       throw new Error("Codex history-transfer acknowledgment could not be verified");
     }
     if (historyTransferAcknowledged !== true) {
+      const noticeNonce = randomBytes(32).toString("base64url");
+      const noticeNonceHash = createHash("sha256").update(noticeNonce).digest("hex");
       const { data: noticeIssued, error: noticeIssueError } = await createServiceClient().rpc(
         "issue_codex_history_transfer_notice",
         {
           p_conversation_id: conversationId,
           p_auth_mode_generation: authModeGeneration,
           p_member_user_id: userId,
+          p_nonce_hash: noticeNonceHash,
         },
       );
-      assertCurrent();
       if (noticeIssueError || noticeIssued !== true) {
         throw new Error("Codex history-transfer notice could not be recorded");
       }
-      if (sessions.get(userId) === sourceSession && sourceSession.conversationId === conversationId) {
-        sendToClient(userId, {
+      if (!controller.signal.aborted && sessions.get(userId) === sourceSession && sourceSession.conversationId === conversationId) {
+        const delivered = sendToClient(userId, {
           type: "codex_history_transfer_required",
           conversationId,
           authModeGeneration,
+          noticeNonce,
           authMode: binding.authMode === "api-key" || binding.authMode === "managed" ? binding.authMode : undefined,
           clientTurnId,
+        });
+        if (delivered) {
+          const { data, error } = await createServiceClient().rpc("mark_codex_history_transfer_notice_delivered", {
+            p_conversation_id: conversationId,
+            p_auth_mode_generation: authModeGeneration,
+            p_member_user_id: userId,
+            p_nonce_hash: noticeNonceHash,
+          });
+          assertCurrent();
+          if (error || data !== true) throw new Error("Codex history-transfer notice delivery could not be recorded");
+        } else {
+          await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
+            p_conversation_id: conversationId,
+            p_auth_mode_generation: authModeGeneration,
+            p_member_user_id: userId,
+            p_nonce_hash: noticeNonceHash,
+          });
+        }
+      } else {
+        await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
+          p_conversation_id: conversationId,
+          p_auth_mode_generation: authModeGeneration,
+          p_member_user_id: userId,
+          p_nonce_hash: noticeNonceHash,
         });
       }
       return;
@@ -3172,6 +3199,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         const { data, error } = await tenant.rpc("record_codex_history_transfer_acknowledgment", {
           p_conversation_id: msg.conversationId,
           p_auth_mode_generation: msg.authModeGeneration,
+          p_nonce_hash: createHash("sha256").update(msg.noticeNonce).digest("hex"),
         });
         if (error) throw error;
         if (data !== true) {

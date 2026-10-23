@@ -257,12 +257,13 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
 
   test("Codex history acknowledgment RPCs positively resolve A's seeded member acknowledgment", async () => {
     const values = await rolledBackRaw(sql, async (t) => {
+      await t`set local role service_role`;
+      const [issued] = await t.unsafe(
+        "select public.issue_codex_history_transfer_notice($1::uuid, $2::bigint, $3::uuid) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA, ctx.userA],
+      );
       await t`set local role authenticated`;
       await t.unsafe("select set_config('request.jwt.claims', $1, true)", [buildAuthenticatedClaims({ sub: ctx.userA })]);
-      const [issued] = await t.unsafe(
-        "select public.issue_codex_history_transfer_notice($1::uuid, $2::bigint) as value",
-        [ctx.convA, ctx.engineAuthModeGenerationA],
-      );
       const [recorded] = await t.unsafe(
         "select public.record_codex_history_transfer_acknowledgment($1::uuid, $2::bigint) as value",
         [ctx.convA, ctx.engineAuthModeGenerationA],

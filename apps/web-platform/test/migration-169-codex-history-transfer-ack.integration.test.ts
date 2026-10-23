@@ -138,41 +138,56 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         -- Another member of the SAME workspace cannot acknowledge the owner's conversation.
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
         SELECT public.record_codex_history_transfer_acknowledgment(
-          '40000000-0000-4000-8000-000000000001', 3
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
         );
         SELECT public.codex_history_transfer_acknowledged(
           '40000000-0000-4000-8000-000000000001', 3
         );
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000001';
         SELECT public.record_codex_history_transfer_acknowledgment(
-          '40000000-0000-4000-8000-000000000001', 3
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
         );
         SET ROLE service_role;
         SELECT public.issue_codex_history_transfer_notice(
-          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001'
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
         );
         RESET ROLE;
+        SET ROLE authenticated;
+        -- A valid token cannot be consumed until the server confirms send acceptance.
         SELECT public.record_codex_history_transfer_acknowledgment(
-          '40000000-0000-4000-8000-000000000001', 3
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
+        );
+        RESET ROLE;
+        SET ROLE service_role;
+        SELECT public.mark_codex_history_transfer_notice_delivered(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        );
+        RESET ROLE;
+        SET ROLE authenticated;
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
         );
         SELECT public.codex_history_transfer_acknowledged(
           '40000000-0000-4000-8000-000000000001', 3
         );
         SELECT public.record_codex_history_transfer_acknowledgment(
-          '40000000-0000-4000-8000-000000000001', 3
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
         );
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
+        RESET ROLE;
         SET ROLE service_role;
         SELECT public.issue_codex_history_transfer_notice(
-          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000002'
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000002', repeat('1', 64)
         );
         RESET ROLE;
+        SET ROLE authenticated;
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000001';
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
         SELECT public.record_codex_history_transfer_acknowledgment(
-          '40000000-0000-4000-8000-000000000001', 3
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
         );
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000001';
+        RESET ROLE;
         UPDATE public.agent_engine_runs SET auth_mode_generation = 4
          WHERE conversation_id = '40000000-0000-4000-8000-000000000001';
         SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
@@ -180,16 +195,22 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
           '40000000-0000-4000-8000-000000000001', 3
         );
         SELECT public.record_codex_history_transfer_acknowledgment(
-          '40000000-0000-4000-8000-000000000001', 4
+          '40000000-0000-4000-8000-000000000001', 4, repeat('0', 64)
         );
+        SET ROLE service_role;
+        SELECT public.issue_codex_history_transfer_notice(
+          '40000000-0000-4000-8000-000000000001', 4, '30000000-0000-4000-8000-000000000001', repeat('2', 64)
+        );
+        RESET ROLE;
         UPDATE public.workspace_members SET created_at = '2026-09-02T00:00:00Z'
          WHERE user_id = '30000000-0000-4000-8000-000000000001';
         SELECT public.codex_history_transfer_acknowledged(
           '40000000-0000-4000-8000-000000000001', 4
         );
         SELECT public.record_codex_history_transfer_acknowledgment(
-          '40000000-0000-4000-8000-000000000001', 4
+          '40000000-0000-4000-8000-000000000001', 4, repeat('0', 64)
         );
+        SELECT count(*) FROM public.codex_history_transfer_notice_issuances;
         DELETE FROM public.workspace_members WHERE user_id = '30000000-0000-4000-8000-000000000001';
         DELETE FROM public.users WHERE id = '30000000-0000-4000-8000-000000000001';
         SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
@@ -205,7 +226,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         );
       `);
 
-      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "0", "f", "f", "f", "t", "t", "t", "f", "f", "f", "0", "f", "f", "f", "f", "0", "f", "f"]);
+      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "0", "f", "f", "f", "t", "f", "t", "t", "t", "f", "f", "f", "0", "f", "f", "t", "f", "f", "0", "0", "f", "f"]);
     } finally {
       if (databaseCreated) {
         const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);

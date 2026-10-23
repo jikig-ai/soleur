@@ -1017,7 +1017,8 @@ export function ChatSurface({
                 onConfirm={lastError.code === "codex_history_transfer_required"
                   && lastError.conversationId
                   && lastError.authModeGeneration !== undefined
-                  ? () => acknowledgeCodexHistoryTransfer(lastError.conversationId!, lastError.authModeGeneration!)
+                  && lastError.noticeNonce
+                  ? () => acknowledgeCodexHistoryTransfer(lastError.conversationId!, lastError.authModeGeneration!, lastError.noticeNonce!)
                   : undefined}
                 action={lastError.action}
                 onDismiss={() => setDismissedErrorKey(activeErrorKey)}

@@ -2,9 +2,18 @@ BEGIN;
 SET LOCAL lock_timeout = '30s';
 SET LOCAL statement_timeout = '5min';
 
-REVOKE ALL ON FUNCTION public.issue_codex_history_transfer_notice(uuid, bigint, uuid) FROM PUBLIC, anon, authenticated, service_role;
-REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;
-DROP FUNCTION public.issue_codex_history_transfer_notice(uuid, bigint, uuid);
+REVOKE ALL ON FUNCTION public.issue_codex_history_transfer_notice(uuid, bigint, uuid, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.mark_codex_history_transfer_notice_delivered(uuid, bigint, uuid, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.delete_codex_history_transfer_notice_issuance(uuid, bigint, uuid, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint, text) FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER purge_stale_codex_history_transfer_notice_issuances ON public.agent_engine_runs;
+DROP TRIGGER purge_replaced_codex_history_notice_membership ON public.workspace_members;
+DROP FUNCTION public.purge_stale_codex_history_transfer_notice_issuances();
+DROP FUNCTION public.purge_replaced_codex_history_notice_membership();
+DROP FUNCTION public.mark_codex_history_transfer_notice_delivered(uuid, bigint, uuid, text);
+DROP FUNCTION public.delete_codex_history_transfer_notice_issuance(uuid, bigint, uuid, text);
+DROP FUNCTION public.issue_codex_history_transfer_notice(uuid, bigint, uuid, text);
+DROP FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint, text);
 
 -- Restore migration 170's owner-scoped record contract. This rollback removes
 -- notice proof and therefore must be accompanied by the corresponding release

@@ -5,6 +5,7 @@ export type HeldCodexTurn = {
   clientTurnId: string;
   conversationId: string;
   authModeGeneration: number;
+  noticeNonce: string;
   authMode?: "api-key" | "managed";
   message: Extract<ChatMessage, { type: "text" }>;
 };
@@ -81,6 +82,14 @@ export const codexHeldTurnCache = {
     if (!scope || scope !== activeScope) return [];
     prune();
     return [...turns.values()].filter(({ turn }) => turn.conversationId === conversationId).map(({ turn }) => ({ ...turn, message: { ...turn.message, delivery: "unsent" } }));
+  },
+  setNoticeNonce(scope: string | null, conversationId: string, authModeGeneration: number, noticeNonce: string) {
+    if (!scope || scope !== activeScope) return;
+    for (const [key, entry] of turns) {
+      if (entry.turn.conversationId !== conversationId || entry.turn.authModeGeneration !== authModeGeneration) continue;
+      const turn = { ...entry.turn, noticeNonce };
+      turns.set(key, { ...entry, turn, bytes: new TextEncoder().encode(JSON.stringify(turn)).length });
+    }
   },
   remove(scope: string | null, conversationId: string, clientTurnId: string) {
     if (scope && scope === activeScope) turns.delete(JSON.stringify([conversationId, clientTurnId]));

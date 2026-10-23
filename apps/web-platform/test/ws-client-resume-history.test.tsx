@@ -100,9 +100,12 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
 
   /** Helper: simulate server sending a WS message to the client */
   function serverSend(data: Record<string, unknown>) {
+    const message = data.type === "codex_history_transfer_required" && !data.noticeNonce
+      ? { ...data, noticeNonce: "A".repeat(43) }
+      : data;
     act(() => {
       wsInstance?.onmessage?.(new MessageEvent("message", {
-        data: JSON.stringify(data),
+        data: JSON.stringify(message),
       }));
     });
   }
@@ -137,7 +140,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
       type: "codex_history_transfer_required", conversationId: "conv-history-ack",
       authModeGeneration: 2, authMode: "api-key", clientTurnId: chat.clientTurnId,
     });
-    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2));
+    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2, "A".repeat(43)));
     serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
     const retainedMessage = result.current.messages[0];
     if (retainedMessage.type !== "text") throw new Error("expected retained text draft");
@@ -180,7 +183,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
       type: "codex_history_transfer_required", conversationId: "conv-held-remount",
       authModeGeneration: 3, authMode: "managed", clientTurnId: chat.clientTurnId,
     });
-    act(() => mounted.result.current.acknowledgeCodexHistoryTransfer("conv-held-remount", 3));
+    act(() => mounted.result.current.acknowledgeCodexHistoryTransfer("conv-held-remount", 3, "A".repeat(43)));
     serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-held-remount", authModeGeneration: 3 });
     expect(mounted.result.current.messages.map((message) => message.type === "text" ? message.delivery : null)).toEqual(["retryable", "retryable"]);
     mounted.unmount();
@@ -197,11 +200,12 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(held.map((message) => message.id)).toEqual(chats.map((chat) => `user-${chat.clientTurnId}`));
     expect(held.map((message) => message.content)).toEqual(["First held turn", "Second held turn"]);
     expect(mounted.result.current.lastError?.code).toBe("codex_history_transfer_required");
+    expect(mounted.result.current.lastError?.noticeNonce).toBe("A".repeat(43));
     const socket = wsInstance!;
     socket.send.mockClear();
     for (const message of held) if (message.type === "text") act(() => mounted.result.current.resendMessage({ ...message, delivery: "retryable" }));
     expect(socket.send).not.toHaveBeenCalled(); // A forged local delivery flag cannot restore prior permission.
-    act(() => mounted.result.current.acknowledgeCodexHistoryTransfer("conv-held-remount", 3));
+    act(() => mounted.result.current.acknowledgeCodexHistoryTransfer("conv-held-remount", 3, "A".repeat(43)));
     expect(socket.send.mock.calls.map(([frame]) => JSON.parse(frame as string).type)).toEqual(["codex_history_transfer_acknowledge"]);
     serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-held-remount", authModeGeneration: 3 });
     expect(socket.send).toHaveBeenCalledTimes(1); // The ACK never sends a held turn.
@@ -355,10 +359,10 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.sessionConfirmed).toBe(true);
     expect(result.current.messages).toEqual([retainedMessage]);
 
-    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2));
+    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2, "A".repeat(43)));
     expect(recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([
       { type: "resume_session", conversationId: "conv-history-ack" },
-      { type: "codex_history_transfer_acknowledge", conversationId: "conv-history-ack", authModeGeneration: 2 },
+      { type: "codex_history_transfer_acknowledge", conversationId: "conv-history-ack", authModeGeneration: 2, noticeNonce: "A".repeat(43) },
     ]);
     serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
     expect(result.current.lastError).toBeNull();
@@ -460,10 +464,10 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.messages[1]).toEqual(expect.objectContaining({ content: "A separate turn", delivery: "unsent" }));
 
     wsInstance?.send.mockClear();
-    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2));
+    act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2, "A".repeat(43)));
     expect(result.current.lastError?.code).toBe("codex_history_transfer_required");
     expect(wsInstance?.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([{
-      type: "codex_history_transfer_acknowledge", conversationId: "conv-history-ack", authModeGeneration: 2,
+      type: "codex_history_transfer_acknowledge", conversationId: "conv-history-ack", authModeGeneration: 2, noticeNonce: "A".repeat(43),
     }]);
     serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
     expect(result.current.lastError).toBeNull();

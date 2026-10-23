@@ -166,26 +166,36 @@ describe("Codex real production handler boundary", () => {
       ? { data: false, error: null }
       : name === "issue_codex_history_transfer_notice"
         ? { data: true, error: null }
+      : name === "mark_codex_history_transfer_notice_delivered"
+        ? { data: true, error: null }
       : { data: null, error: null });
 
     const frames = await chat();
 
-    expect(frames).toEqual([{
+    expect(frames).toEqual([expect.objectContaining({
       type: "codex_history_transfer_required",
       conversationId: fixture.conversationId,
       authModeGeneration: 1,
       authMode: mode,
       clientTurnId: "90000000-0000-4000-8000-000000000001",
-    }]);
+      noticeNonce: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    })]);
     expect(fixture.rpc).toHaveBeenCalledWith("codex_history_transfer_acknowledged", {
       p_conversation_id: fixture.conversationId,
       p_auth_mode_generation: 1,
     });
-    expect(fixture.rpc).toHaveBeenCalledWith("issue_codex_history_transfer_notice", {
+    expect(fixture.rpc).toHaveBeenCalledWith("issue_codex_history_transfer_notice", expect.objectContaining({
       p_conversation_id: fixture.conversationId,
       p_auth_mode_generation: 1,
       p_member_user_id: fixture.userId,
-    });
+      p_nonce_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    }));
+    expect(fixture.rpc).toHaveBeenCalledWith("mark_codex_history_transfer_notice_delivered", expect.objectContaining({
+      p_conversation_id: fixture.conversationId,
+      p_auth_mode_generation: 1,
+      p_member_user_id: fixture.userId,
+      p_nonce_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    }));
     expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
     expect(fixture.from).not.toHaveBeenCalledWith("api_keys");
     expect(fixture.from).not.toHaveBeenCalledWith("messages");
@@ -226,11 +236,13 @@ describe("Codex real production handler boundary", () => {
       type: "codex_history_transfer_acknowledge",
       conversationId: fixture.conversationId,
       authModeGeneration: 1,
+      noticeNonce: "A".repeat(43),
     }));
 
     expect(fixture.rpc).toHaveBeenCalledWith("record_codex_history_transfer_acknowledgment", {
       p_conversation_id: fixture.conversationId,
       p_auth_mode_generation: 1,
+      p_nonce_hash: "0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a",
     });
     expect(send.mock.calls.map(([value]) => JSON.parse(value as string))).toContainEqual({
       type: "codex_history_transfer_acknowledged",

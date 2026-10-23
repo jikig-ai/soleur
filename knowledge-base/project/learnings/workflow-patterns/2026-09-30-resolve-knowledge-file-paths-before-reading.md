@@ -299,3 +299,11 @@ introspection; this fixture's aggregate check returned false for a valid grant.
 Run Vitest from `apps/web-platform`, not the repository root: the root command
 recurses into ignored `.soleur/candidate-*` worktrees and produces duplicate
 test discoveries. The failed root run did not test the target suite.
+
+For new PostgreSQL row locks, verify selected columns against the target table's
+real schema and against the disposable integration fixture before choosing an
+ordering expression. `agent_engine_runs` has no `created_at`; the first bounded
+lock query failed until it ordered by the existing primary key. Integration
+fixtures that switch to `service_role` must explicitly switch back to
+`authenticated` before exercising authenticated RPCs, including pending-state
+denial checks.

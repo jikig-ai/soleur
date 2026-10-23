@@ -18,6 +18,7 @@ function heldTurn(clientTurnId: string, content = "synthetic draft"): HeldCodexT
     clientTurnId,
     conversationId: "synthetic-conversation",
     authModeGeneration: 1,
+    noticeNonce: "A".repeat(43),
     message: { id: `user-${clientTurnId}`, type: "text", role: "user", content },
   };
 }
@@ -37,6 +38,15 @@ describe("Codex held-turn cache bounds", () => {
 
     expect(codexHeldTurnCache.put(scope, heldTurn("turn-over-limit"))).toBe(false);
     expect(codexHeldTurnCache.get(scope, "synthetic-conversation")).toHaveLength(MAX_TURNS);
+  });
+
+  it("refreshes one current notice nonce across every held turn in its generation", () => {
+    codexHeldTurnCache.put(scope, { ...heldTurn("turn-a"), noticeNonce: "A".repeat(43) });
+    codexHeldTurnCache.put(scope, { ...heldTurn("turn-b"), noticeNonce: "B".repeat(43) });
+    codexHeldTurnCache.setNoticeNonce(scope, "synthetic-conversation", 1, "C".repeat(43));
+
+    expect(codexHeldTurnCache.get(scope, "synthetic-conversation").map((turn) => turn.noticeNonce))
+      .toEqual(["C".repeat(43), "C".repeat(43)]);
   });
 
   it("measures UTF-8 bytes, permits same-key replacement at the exact limit, and rejects overflow", () => {

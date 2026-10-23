@@ -2735,8 +2735,25 @@
   rollback's refusal classification. TypeScript, ShellCheck, syntax, and diff
   checks pass. The focused integration used an isolated temporary database and
   cleaned it up; no shared-data query or mutation occurred.
-- Source and documentation changes remain uncommitted and require the second
-  targeted fix-round review and fresh-eyes verification. No shared database
-  migrations, provider calls, or qualification occurred. PR remains draft with
-  auto-merge off; hosted-data parity, exact-head CodeQL/full CI, legal,
-  recovery, QA, qualification, preflight, review, and shipping gates remain held.
+- Second targeted fix round addressed review findings with nonce-hash-bound
+  pending/delivered issuance, one-use authenticated consumption, cleanup on
+  generation and membership-epoch changes, and a corrected RLS positive control
+  that issues under `service_role` before acknowledging under `authenticated`.
+  The nonce is generated with 256 bits of entropy and appears only in the notice
+  frame; storage and the authenticated RPC receive its SHA-256 hash. PostgreSQL
+  integration confirms acknowledgment is false before delivered marking, true
+  once after delivery, and stale issuance is purged on generation/membership
+  change. The nonce is retained only in the bounded browser-memory held-turn
+  cache so acknowledgment remains possible after component remount; it is
+  discarded on auth-scope change, expiry, or reload. Focused Vitest passed 57
+  tests with 50 integration skips; disposable PostgreSQL, handler/client/cache
+  coverage, and `tsc --noEmit` passed. The RLS integration file
+  was skipped in this local focused run, so hosted RLS CI remains required. The
+  nonce proves payload possession, not visual presentation; CLO's release hold
+  therefore remains.
+- The second targeted fix round is implemented locally; it still needs a fresh
+  exact-range review before commit/push. No shared database migrations, provider
+  calls, or qualification occurred. PR remains draft with auto-merge off;
+  hosted-data parity, exact-head CodeQL/full CI, CLO/legal, recovery, QA,
+  qualification, preflight, remaining full-panel review, and shipping gates
+  remain held.

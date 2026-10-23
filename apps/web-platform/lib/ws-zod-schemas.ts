@@ -227,6 +227,7 @@ const codexHistoryTransferAcknowledgeSchema = z.strictObject({
   type: z.literal("codex_history_transfer_acknowledge"),
   conversationId: conversationIdSchema,
   authModeGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  noticeNonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
 // feat-stream-since-disconnect (#5273) — client→server transient-reconnect
 // reattach control frame. `ackSeq` is the highest `seq` the client already
@@ -407,6 +408,7 @@ const codexHistoryTransferRequiredSchema = z.strictObject({
   type: z.literal("codex_history_transfer_required"),
   conversationId: conversationIdSchema,
   authModeGeneration: z.number().int().nonnegative(),
+  noticeNonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   authMode: z.enum(["api-key", "managed"]).optional(),
   clientTurnId: z.string().uuid().optional(),
 });
