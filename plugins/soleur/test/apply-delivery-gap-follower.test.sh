@@ -325,6 +325,7 @@ if want S2; then
   eq "S2 exactly one close" "$(acts issue-close)" 1
   has "S2 close reason completed" "$ST/out/actions.log" "issue-close 7 reason=completed comment="
   has "S2 close comment lists sha7" "$ST/out/actions.log" "0000201"
+  has "S2 close comment scopes its claim to the 7-day horizon and names the backstop" "$ST/out/actions.log" "Every cancelled push seen in the last 7 days now has a delivering run. Pushes older than 7 days are not examined by this check; the 12 h scheduled drift check covers them."
   has "S2 close comment lists the DELIVERING run id (not the earlier non-descendant)" "$ST/out/actions.log" "delivered by run 203, 63 minutes"
   eq "S2 no create" "$(acts issue-create)" 0
   eq "S2 no edit" "$(acts issue-edit)" 0

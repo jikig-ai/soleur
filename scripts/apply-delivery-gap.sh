@@ -596,7 +596,7 @@ render_body() {
 
 emit_close_comment() { # -> stdout
   local key sha rid mins
-  printf 'Every cancelled push in the window now has a delivering run:\n'
+  printf 'Every cancelled push seen in the last %s days now has a delivering run. Pushes older than %s days are not examined by this check; the 12 h scheduled drift check covers them.\n' "$WINDOW_DAYS" "$WINDOW_DAYS"
   while IFS=$'\t' read -r key sha rid mins; do
     printf -- '- %s %s delivered by run %s, %s minutes from cancel to delivery\n' "$key" "${sha:0:7}" "$rid" "$mins"
   done <"$DELIVERED"

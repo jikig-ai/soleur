@@ -792,7 +792,9 @@ issue is identified by bot author plus exact title, never by label alone; `prior
 `priority/p0-critical` is add-only; and a degraded issue pages a blind follower.
 
 Accepted residuals: an untouched gap older than 7 days ages out and the issue is left open with one marker comment (the
-follower never closes without having seen a delivery); `failure`, `timed_out` and `startup_failure` runs are owned by
+follower never closes without having seen a delivery); the close comment claims only the 7-day horizon ("Every cancelled push
+seen in the last 7 days now has a delivering run. Pushes older than 7 days are not examined by this check; the 12 h scheduled
+drift check covers them."), so a close never asserts anything about older pushes; `failure`, `timed_out` and `startup_failure` runs are owned by
 `notify-apply-failure` and the drift cron, not by this follower; a preflight-only cancelled run is classed
 `cancelled-mid-run` (conservative); a disabled follower workflow is silent (its cadence is per apply run, so absence is
 undetectable); detection can be delayed to the completion of the evicting run if the platform does not emit
