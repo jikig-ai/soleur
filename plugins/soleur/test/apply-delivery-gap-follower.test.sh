@@ -48,7 +48,7 @@ declare -A FLOOR=(
   [H1]=2 [H3]=3 [H3b]=3 [H4]=5 [H5]=5 [M]=26 [R]=28 [REASONS]=1 [S1]=22 [S10]=7 [S11a]=2 [S11b]=2 [S11c]=2 [S11d]=3 [S11e]=9
   [S11f]=2 [S12a]=4 [S12b]=5 [S13a]=9 [S13b]=2 [S13c]=2 [S14]=7 [S15]=14 [S16]=5 [S17]=3 [S18]=10 [S18b]=5 [S1live]=1
   [S2]=15 [S2b-ahead]=4 [S2b-behind]=4 [S2b-diverged]=4 [S2b-identical]=4 [S3]=6 [S3c]=4 [S4]=11 [S4c]=3 [S4l]=2 [S4m]=3
-  [S4n]=4 [S4o]=3 [S4x]=3 [S5]=13 [S6]=5 [S6d]=2 [S7]=6 [S7a]=44 [S7c]=1 [S7o]=4 [S8a]=9 [S8b]=9 [S8c]=9 [S8d]=9 [S8dg]=29
+  [S4n]=4 [S4o]=3 [S4x]=3 [S5]=13 [S6]=5 [S6d]=2 [S7]=6 [S7a]=55 [S7c]=1 [S7o]=4 [S8a]=9 [S8b]=9 [S8c]=9 [S8d]=9 [S8dg]=29
   [S8e]=9 [S8f]=9 [S8g]=9 [S8h]=9 [S8i]=9 [S8in]=13 [S8m]=48 [S8n]=5 [S8o]=7 [S8ok]=4 [S8r]=26 [S8t]=3 [S8t2]=10 [S8ti]=9
   [S8u]=12 [S9]=23 [S9f]=7 [W]=47
 )
@@ -543,6 +543,7 @@ s7_one() { # <wf> <status> <age-min> <expect deferred 1|0> [started-age]
   c="$(cnt "$ST/all.txt" '::notice::apply_delivery_gap_deferred')"
   eq "S7[$wf $st ${age}m] deferred" "$c" "$want_def"
   eq "S7[$wf $st ${age}m] rows" "$(rows)" "$((1 - want_def))"
+  eq "S7[$wf $st ${age}m] the close-blocking in-flight count uses the same stale cap" "$(summary | grep -o 'inflight=[0-9]*')" "inflight=$want_def"
 }
 if want S7:ages; then
   grp S7a

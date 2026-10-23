@@ -45,6 +45,20 @@ READ_BUDGET=150
 WAITING_CAP_MIN=60
 ISSUE_LIMIT=500
 
+# The ONE definition of "in flight and not past its stale cap" (a jq prelude; callers pass --argjson now, cap, wcap). Both the
+# deferral selector in reconcile_workflow and count_inflight use it, so the set of runs that DEFER a candidate is always a subset
+# of the set that BLOCKS the close arm (deferral adds only `branch == main` and `created >= candidate` on top of this): a
+# deferred candidate can never sit beside a close. Stale = `waiting` older than WAITING_CAP_MIN from created_at, `in_progress`
+# older than the workflow's cap from run_started_at, every other in-flight status older than the cap from created_at.
+# shellcheck disable=SC2016 # jq program text, not shell
+JQ_LIVE='
+  def inflight: .status | IN("queued", "pending", "requested", "waiting", "in_progress");
+  def stale: if .status == "waiting" then ($now - .ce) > ($wcap * 60)
+             elif .status == "in_progress" then ($now - .se) > ($cap * 60)
+             else ($now - .ce) > ($cap * 60) end;
+  def live: inflight and (stale | not);
+'
+
 LABEL='apply-delivery-gap'
 DEGRADED_LABEL='apply-delivery-gap-degraded'
 TITLE='infra: apply delivery gap - trigger-file change not applied'
@@ -285,7 +299,8 @@ list_bot_issues() {
     api_get issue_list_failed 0 issue list --author "$a" --state open --limit "$ISSUE_LIMIT" --json number,title,labels,author
     jq -e 'type == "array"' "$API_OUT" >/dev/null 2>/dev/null || fail_loud issue_list_failed
     n=$((n + $(jq 'length' "$API_OUT")))
-    jq -s '(.[0] + .[1]) | unique_by(.number)' "$BOT_ISSUES" "$API_OUT" >"$BOT_ISSUES.new" && mv "$BOT_ISSUES.new" "$BOT_ISSUES"
+    jq -s '(.[0] + .[1]) | unique_by(.number)' "$BOT_ISSUES" "$API_OUT" >"$BOT_ISSUES.new" || fail_loud issue_list_failed
+    mv "$BOT_ISSUES.new" "$BOT_ISSUES"
   done
   if [[ "$n" -ge "$ISSUE_LIMIT" ]]; then
     printf '::warning::apply_delivery_gap_issue_list_may_be_truncated\n'
@@ -334,9 +349,10 @@ read_runs() { # key file
   while [[ "$p" -le "$MAX_PAGES" ]]; do
     api_get runs_list_failed 0 api "repos/${GH_REPO}/actions/workflows/${file}/runs?per_page=${PAGE_SIZE}&page=${p}"
     jq -e '(.workflow_runs | type) == "array"' "$API_OUT" >/dev/null 2>/dev/null || fail_loud malformed_response
-    cnt="$(jq '.workflow_runs | length' "$API_OUT")"
-    older="$(jq --argjson c "$CUTOFF" '[.workflow_runs[] | ((.created_at // "") | (try fromdateiso8601 catch null)) | select(. != null and . < $c)] | length' "$API_OUT")"
-    jq -s '.[0] + .[1].workflow_runs' "$raw" "$API_OUT" >"$raw.new" && mv "$raw.new" "$raw"
+    cnt="$(jq '.workflow_runs | length' "$API_OUT")" || fail_loud malformed_response
+    older="$(jq --argjson c "$CUTOFF" '[.workflow_runs[] | ((.created_at // "") | (try fromdateiso8601 catch null)) | select(. != null and . < $c)] | length' "$API_OUT")" || fail_loud malformed_response
+    jq -s '.[0] + .[1].workflow_runs' "$raw" "$API_OUT" >"$raw.new" || fail_loud malformed_response
+    mv "$raw.new" "$raw"
     if [[ "$cnt" -lt "$PAGE_SIZE" ]]; then break; fi
     if [[ "$older" -eq "$cnt" ]]; then break; fi
     if [[ "$p" -eq "$MAX_PAGES" ]]; then fail_loud run_window_truncated; fi
@@ -448,7 +464,7 @@ N_CAND=0; N_DROPPED=0; N_DEFERRED=0; N_DELIVERED=0; N_ROWS=0; N_MID=0; N_INFLIGH
 
 reconcile_workflow() { # key file ks-function cap
   local key="$1" ks="$3" cap="$4" nf="$WORK/n.$1.json" raw="$WORK/raw.$1.json"
-  local cands id sha ce ue msg state rid rsha rue dmin class later lid llabel runs infl req=""
+  local cands c id sha ce ue msg state rid rsha rue dmin class later lid llabel runs infl req=""
   if [[ "$key" == "infra" ]]; then req="$INFRA_SSH_STEP"; fi
   cands="$(jq -c --argjson cutoff "$CUTOFF" '
     [ .[] | select(.event == "push" and .branch == "main" and .status == "completed" and .conclusion == "cancelled" and .ce >= $cutoff) ]
@@ -482,11 +498,8 @@ reconcile_workflow() { # key file ks-function cap
       continue
     fi
     # (b) deferred: a non-stale in-flight run at the candidate or a descendant
-    infl="$(jq -r --argjson ce "$ce" --argjson now "$NOW_EPOCH" --argjson cap "$cap" --argjson wcap "$WAITING_CAP_MIN" '
-      [ .[] | select((.status | IN("queued", "pending", "requested", "waiting", "in_progress")) and .branch == "main" and .ce >= $ce)
-            | select(((if .status == "waiting" then ($now - .ce) > ($wcap * 60)
-                       elif .status == "in_progress" then ($now - .se) > ($cap * 60)
-                       else ($now - .ce) > ($cap * 60) end)) | not) ]
+    infl="$(jq -r --argjson ce "$ce" --argjson now "$NOW_EPOCH" --argjson cap "$cap" --argjson wcap "$WAITING_CAP_MIN" "$JQ_LIVE"'
+      [ .[] | select(live and .branch == "main" and .ce >= $ce) ]
       | sort_by([.ce, .id]) | .[] | [.id, .sha] | @tsv' "$nf")"
     if [[ -n "$infl" ]]; then
       while IFS=$'\t' read -r rid rsha; do
@@ -522,11 +535,8 @@ count_inflight() {
   for row in "${WATCHED[@]}"; do
     IFS='|' read -r key _ _ _ cap <<<"$row"
     f="$WORK/n.$key.json"
-    n="$(jq --argjson now "$NOW_EPOCH" --argjson cap "$cap" --argjson wcap "$WAITING_CAP_MIN" --argjson cutoff "$CUTOFF" '
-      [ .[] | select((.status | IN("queued", "pending", "requested", "waiting", "in_progress")) and .ce >= $cutoff)
-            | select(((if .status == "waiting" then ($now - .ce) > ($wcap * 60)
-                       elif .status == "in_progress" then ($now - .se) > ($cap * 60)
-                       else ($now - .ce) > ($cap * 60) end)) | not) ] | length' "$f")"
+    n="$(jq --argjson now "$NOW_EPOCH" --argjson cap "$cap" --argjson wcap "$WAITING_CAP_MIN" --argjson cutoff "$CUTOFF" "$JQ_LIVE"'
+      [ .[] | select(live and .ce >= $cutoff) ] | length' "$f")"
     total=$((total + n))
   done
   N_INFLIGHT="$total"
@@ -534,6 +544,7 @@ count_inflight() {
 
 watched_field() { # key field-index (1-based)
   local row k
+  local -a f
   for row in "${WATCHED[@]}"; do
     IFS='|' read -r k _ <<<"$row"
     if [[ "$k" == "$1" ]]; then
