@@ -134,6 +134,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
           '30000000-0000-4000-8000-000000000002', 3, '2026-09-01T00:00:00Z');
         ${ownershipHardeningSql}
         ${noticeIssuanceSql}
+        SELECT to_regprocedure('public.record_codex_history_transfer_acknowledgment(uuid,bigint)') IS NULL;
         SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
         -- Another member of the SAME workspace cannot acknowledge the owner's conversation.
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
@@ -226,7 +227,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         );
       `);
 
-      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "0", "f", "f", "f", "t", "f", "t", "t", "t", "f", "f", "f", "0", "f", "f", "t", "f", "f", "0", "0", "f", "f"]);
+      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "t", "0", "f", "f", "f", "t", "f", "t", "t", "t", "f", "f", "f", "0", "f", "f", "t", "f", "f", "0", "0", "f", "f"]);
     } finally {
       if (databaseCreated) {
         const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);

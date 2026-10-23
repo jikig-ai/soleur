@@ -18,7 +18,7 @@ describe("migration 173: notice-bound Codex acknowledgment", () => {
 
   it("requires one current server-issued notice and consumes it before acknowledging", () => {
     const issue = migration.search(/^CREATE FUNCTION public\.issue_codex_history_transfer_notice\($/m);
-    const record = migration.search(/^CREATE OR REPLACE FUNCTION public\.record_codex_history_transfer_acknowledgment\($/m);
+    const record = migration.search(/^CREATE FUNCTION public\.record_codex_history_transfer_acknowledgment\($/m);
     const recordBody = migration.slice(record);
     const issuanceDelete = record + recordBody.search(/^  DELETE FROM public\.codex_history_transfer_notice_issuances AS i$/m);
     const ackInsert = record + recordBody.search(/^  INSERT INTO public\.codex_history_transfer_acknowledgments \($/m);
@@ -29,6 +29,7 @@ describe("migration 173: notice-bound Codex acknowledgment", () => {
     expect(issuanceDelete).toBeGreaterThan(record);
     expect(ackInsert).toBeGreaterThan(issuanceDelete);
     expect(migration.slice(issuanceDelete, ackInsert)).toMatch(/IF NOT FOUND THEN\s+RETURN false;/);
+    expect(migration).toMatch(/REVOKE ALL ON FUNCTION public\.record_codex_history_transfer_acknowledgment\(uuid, bigint\) FROM PUBLIC, anon, authenticated, service_role;\s+DROP FUNCTION public\.record_codex_history_transfer_acknowledgment\(uuid, bigint\);/);
     expect(migration).toMatch(/nonce_hash = p_nonce_hash/);
     expect(migration).toMatch(/delivered_at IS NOT NULL/);
     expect(migration).toMatch(/CREATE TRIGGER purge_stale_codex_history_transfer_notice_issuances/);

@@ -259,22 +259,26 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     const values = await rolledBackRaw(sql, async (t) => {
       await t`set local role service_role`;
       const [issued] = await t.unsafe(
-        "select public.issue_codex_history_transfer_notice($1::uuid, $2::bigint, $3::uuid) as value",
-        [ctx.convA, ctx.engineAuthModeGenerationA, ctx.userA],
+        "select public.issue_codex_history_transfer_notice($1::uuid, $2::bigint, $3::uuid, $4::text) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA, ctx.userA, "0".repeat(64)],
+      );
+      const [delivered] = await t.unsafe(
+        "select public.mark_codex_history_transfer_notice_delivered($1::uuid, $2::bigint, $3::uuid, $4::text) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA, ctx.userA, "0".repeat(64)],
       );
       await t`set local role authenticated`;
       await t.unsafe("select set_config('request.jwt.claims', $1, true)", [buildAuthenticatedClaims({ sub: ctx.userA })]);
       const [recorded] = await t.unsafe(
-        "select public.record_codex_history_transfer_acknowledgment($1::uuid, $2::bigint) as value",
-        [ctx.convA, ctx.engineAuthModeGenerationA],
+        "select public.record_codex_history_transfer_acknowledgment($1::uuid, $2::bigint, $3::text) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA, "0".repeat(64)],
       );
       const [acknowledged] = await t.unsafe(
         "select public.codex_history_transfer_acknowledged($1::uuid, $2::bigint) as value",
         [ctx.convA, ctx.engineAuthModeGenerationA],
       );
-      return [issued.value, recorded.value, acknowledged.value];
+      return [issued.value, delivered.value, recorded.value, acknowledged.value];
     });
-    expect(values, "fixture must prove issuance, acknowledgment, and lookup accept A's valid current generation").toEqual([true, true, true]);
+    expect(values, "fixture must prove issuance, delivery, acknowledgment, and lookup accept A's valid current generation").toEqual([true, true, true, true]);
   });
 
   // authorize_template bespoke attack (#6307 Item 2). founder-scoped write: the

@@ -151,7 +151,12 @@ CREATE TRIGGER purge_replaced_codex_history_notice_membership
 AFTER UPDATE OF created_at ON public.workspace_members
 FOR EACH ROW EXECUTE FUNCTION public.purge_replaced_codex_history_notice_membership();
 
-CREATE OR REPLACE FUNCTION public.record_codex_history_transfer_acknowledgment(
+-- Remove the legacy two-argument overload. Leaving it executable would let
+-- authenticated callers bypass notice possession and delivery proof.
+REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;
+DROP FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint);
+
+CREATE FUNCTION public.record_codex_history_transfer_acknowledgment(
   p_conversation_id uuid,
   p_auth_mode_generation bigint,
   p_nonce_hash text
