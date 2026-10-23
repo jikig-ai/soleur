@@ -720,6 +720,9 @@ same value becomes the envelope `cwd` and the runner cwd inside `decideBash`, fo
 events reuse the same call id and cannot consume the entry, because they fail `decidesBash` and the
 handler returns before touching the map.
 
+**Mutation matrix.** Every row below was executed in a scratch copy of
+`plugins/soleur`; the last column names the test that reddened, quoted from the run.
+
 | # | Mutation (must drive the guard RED) | Why it is derivable from the design | Observed red |
 |---|--------------------------------------|--------------------------------------|--------------|
 | 1 | Delete the capture write in `execute.before` (`recordCall`) | The only source of the value; P1 cannot hold | (a) and 8 others |
