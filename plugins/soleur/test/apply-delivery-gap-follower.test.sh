@@ -715,7 +715,7 @@ if want S9; then
   has "S9 edit re-asserts the label and action-required" "$ST/out/actions.log" "issue-edit 7 body=bodies/1.md add-labels=apply-delivery-gap,action-required"
   lacks "S9 p1 is added at create only" "$ST/out/actions.log" "priority/p1-high"
   lacks "S9 no p0 without a mid-run row" "$ST/out/actions.log" "priority/p0-critical"
-  tn "S9 no remove-label anywhere" grep -r -e '--remove-label' "$ST/out/actions.log"
+  tn "S9 no remove-label anywhere" grep -F -e '--remove-label' "$ST/out/actions.log"
   eq "S9 two rows in the body" "$(grep -c '^| Deploy-pipeline\|^| Apply deploy-pipeline-fix' "$(body 1)")" 2
   # same input again: again exactly one edit, same rows
   reset_logs; run_sut

@@ -519,16 +519,16 @@ discoverability_test:
 
 ### Pre-merge (PR)
 
-- [ ] `bash plugins/soleur/test/apply-delivery-gap-follower.test.sh` exits 0 (per-case assertion floors met, every case ran at least one assertion) with every mutant landed, controlled and red (0 survivors, `MUTANT_FLOOR` equal to the table length). RED was observed first (Phase 0).
-- [ ] `bash scripts/apply-delivery-gap.sh --self-test` prints `apply_delivery_gap_self_test=ok` offline with `PATH=/usr/local/bin:/usr/bin:/bin`, no `GH_REPO`/`GH_TOKEN`, under the 15 s Check-10 cap (target 5 s).
-- [ ] R1, R2, R3 each yield exactly one row with class `evicted-before-start`; R4 yields zero rows and a close with `--reason completed`.
-- [ ] The workflow file: triggers only `workflow_run` on the two exact `name:` strings, `types: [completed]`, `branches: [main]`; permissions exactly `contents: read`, `actions: read`, `issues: write`; concurrency group `apply-delivery-gap-follower`, `cancel-in-progress: false`; no `secrets.`, `environment:`, `terraform`, dispatch spelling; every action SHA-pinned; passes the linters listed in Phase 5.
-- [ ] No `::error::` text echoes API stderr; every failure class has a distinct `apply_delivery_gap_<reason>` and a pinned scenario; read-class failures record a degraded upsert and never touch the gap issue.
-- [ ] The suite is registered and classified: `bash scripts/lint-orphan-test-suites.sh` is green, or the blocker is reported in the PR body per "Suite classification".
-- [ ] The runbook section and the ADR-270 addendum exist; the addendum records the flip bar, the evidence unit and the residuals; no remote-shell instruction anywhere.
-- [ ] `lint-guard-contract.py` passes on this plan; `lint-infra-no-human-steps.py --changed --base origin/main` passes; `technical-ruling-gate.sh --branch ...` passes; markdownlint is clean on the plan, `tasks.md` and the runbook.
-- [ ] No closing keyword adjacent to #10033 / #8167 / #9454 in the PR body or any commit; the body lists `Ref #9454`, `Ref #10033`, `Ref #8167`.
-- [ ] `git diff --name-only origin/main...HEAD` contains none of: `.github/CODEOWNERS`, `scripts/lib/test-affected-paths.sh`, `scripts/suite-shard-legs.tsv`, `scripts/suite-durations.tsv`, either apply workflow, any AGENTS file, `.claude/rule-weakening-acks.txt`.
+- [x] `bash plugins/soleur/test/apply-delivery-gap-follower.test.sh` exits 0 (per-case assertion floors met, every case ran at least one assertion) with every mutant landed, controlled and red (0 survivors, `MUTANT_FLOOR` equal to the table length). RED was observed first (Phase 0).
+- [x] `bash scripts/apply-delivery-gap.sh --self-test` prints `apply_delivery_gap_self_test=ok` offline with `PATH=/usr/local/bin:/usr/bin:/bin`, no `GH_REPO`/`GH_TOKEN`, under the 15 s Check-10 cap (target 5 s).
+- [x] R1, R2, R3 each yield exactly one row with class `evicted-before-start`; R4 yields zero rows and a close with `--reason completed`.
+- [x] The workflow file: triggers only `workflow_run` on the two exact `name:` strings, `types: [completed]`, `branches: [main]`; permissions exactly `contents: read`, `actions: read`, `issues: write`; concurrency group `apply-delivery-gap-follower`, `cancel-in-progress: false`; no `secrets.`, `environment:`, `terraform`, dispatch spelling; every action SHA-pinned; passes the linters listed in Phase 5.
+- [x] No `::error::` text echoes API stderr; every failure class has a distinct `apply_delivery_gap_<reason>` and a pinned scenario; read-class failures record a degraded upsert and never touch the gap issue.
+- [x] The suite is registered and classified: `bash scripts/lint-orphan-test-suites.sh` is green, or the blocker is reported in the PR body per "Suite classification".
+- [x] The runbook section and the ADR-270 addendum exist; the addendum records the flip bar, the evidence unit and the residuals; no remote-shell instruction anywhere.
+- [x] `lint-guard-contract.py` passes on this plan; `lint-infra-no-human-steps.py --changed --base origin/main` passes; `technical-ruling-gate.sh --branch ...` passes; markdownlint is clean on the plan, `tasks.md` and the runbook.
+- [x] No closing keyword adjacent to #10033 / #8167 / #9454 in the PR body or any commit; the body lists `Ref #9454`, `Ref #10033`, `Ref #8167`.
+- [x] `git diff --name-only origin/main...HEAD` contains none of: `.github/CODEOWNERS`, `scripts/lib/test-affected-paths.sh`, `scripts/suite-shard-legs.tsv`, `scripts/suite-durations.tsv`, either apply workflow, any AGENTS file, `.claude/rule-weakening-acks.txt`.
 
 ### Post-merge (observation, not a merge or ship gate)
 

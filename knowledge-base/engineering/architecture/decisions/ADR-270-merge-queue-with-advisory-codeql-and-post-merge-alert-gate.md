@@ -755,6 +755,51 @@ the verdict is a runtime read and the rule has been reverted once before (the 20
 `sync-pr-behind.sh` residuals (hard-coded base, triplicated helpers) are tracked on #10832. No C4 change: no new actor,
 system, container or data store.
 
+### Addendum 2026-10-23 (#9454; Ref #10033, #8167): the apply delivery gap follower is detection only
+
+The merge queue raises the push rate to `main`, and the two apply workflows share one concurrency group that keeps a
+single pending run, so a second push evicts the first: the evicted run ends `cancelled` (usually with zero jobs) and nothing
+pages. The R2 state backend has no lock (ADR-006), so that group is the sole serializer of production applies. The sibling
+workflow's `-target` set excludes the deploy-fix resources, so a success of the other workflow is not delivery.
+
+Decision: ship a detect-and-file follower (`.github/workflows/apply-delivery-gap-follower.yml`, `scripts/apply-delivery-gap.sh`)
+and nothing else. It runs on `workflow_run: completed` of either apply workflow (main only), holds `contents: read`,
+`actions: read`, `issues: write`, no secret, no environment, applies nothing and dispatches nothing, and files one
+deduplicated `apply-delivery-gap` issue (a table keyed by workflow and push SHA, with the printed dispatch command). A gap is
+a green run (the issue is the page); a failed or partial read is a red run plus an `apply-delivery-gap-degraded` issue,
+because a run triggered by a queue-made push has no human actor.
+
+Why the two fixes stay deferred (tracked by the still-open #10033 and #8167): merging the two workflows would change the sole
+serializer of lock-less R2 state; a re-dispatch follower writes production and would have to honour two kill switches;
+"poll for the sibling" (the second option on #8167) is rejected because evicted runs have zero jobs and so carry no signal
+to poll; a `schedule:` trigger as a second detection path is rejected because it would duplicate the 12 h
+`scheduled-terraform-drift` cron, which remains the independent backstop.
+
+Flip evidence bar: build a deferred fix when there are 3 or more distinct undelivered SHAs in 30 days, or one row aged past
+1 hour with real deploy impact, plus a green operator-reviewed rehearsal on a disposable concurrency group and state key.
+The evidence unit is the SHA (the same SHA can appear in several issues); the count recipe is in the runbook
+`apply-web-platform-infra-red-run.md`, section "An apply delivery gap issue".
+
+Refinements to the 2026-10-22 ruling, each pinned by the suite: the "last ~50 runs" read became an unfiltered paged read to a
+7-day cutoff with a 10-page ceiling (`run_window_truncated`), because the search parameters were measured stale against the
+unfiltered list; a push is delivered only when a later run of the same workflow succeeded at the push or a descendant AND its
+`apply` job succeeded (a skipped apply, a kill-switched push or another dispatch target are not delivery); the infra workflow
+carries its own skip marker, so each candidate is dropped by its own workflow's marker; per-workflow stale caps for
+in-flight deferral (deploy-fix 150 min, infra 120 min, `waiting` 60 min), each above the workflow's `apply` timeout; the open
+issue is identified by bot author plus exact title, never by label alone; `priority/p1-high` is added at create only and
+`priority/p0-critical` is add-only; and a degraded issue pages a blind follower.
+
+Accepted residuals: an untouched gap older than 7 days ages out and the issue is left open with one marker comment (the
+follower never closes without having seen a delivery); `failure`, `timed_out` and `startup_failure` runs are owned by
+`notify-apply-failure` and the drift cron, not by this follower; a preflight-only cancelled run is classed
+`cancelled-mid-run` (conservative); a disabled follower workflow is silent (its cadence is per apply run, so absence is
+undetectable); detection can be delayed to the completion of the evicting run if the platform does not emit
+`workflow_run` for a run cancelled while pending (undocumented; the design does not depend on it); the lookup of the open
+issue is bounded by the 500 most recent open bot-authored issues and warns when it reaches that bound; CODEOWNERS rows for
+the script, suite and fixtures, and a suite-affected-paths declaration if the orphan census needs one, follow after the
+PRs that currently edit those files merge. No C4 change: the follower is GitHub-internal, adds no actor, system, container
+or data store, and no monitor.
+
 ## Cost Impacts
 
 No new vendor or subscription. A queue adds one `merge_group` run per candidate on

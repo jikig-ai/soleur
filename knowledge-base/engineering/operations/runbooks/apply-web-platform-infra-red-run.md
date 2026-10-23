@@ -100,3 +100,67 @@ outlasted that budget — re-running once Cloudflare settles is the documented r
 - The `Heartbeat re-pause sweep` step reports `outcome=noop` (nothing was left unconfirmed).
 - No further ops email arrives; there is deliberately **no** green-again email (deferred to a
   repo-wide `workflow_run` watcher).
+
+## An apply delivery gap issue (label `apply-delivery-gap`)
+
+**What it is.** The issue titled "infra: apply delivery gap - trigger-file change not applied" is filed by the
+`Apply Delivery Gap Follower` workflow (`scripts/apply-delivery-gap.sh`). Both apply workflows share one concurrency
+group that keeps a single pending run, so a second push can evict the first: the evicted run ends `cancelled`, usually
+with zero jobs, and no email is sent. The issue lists every such push from the last 7 days that no later run of the
+**same** workflow applied (table: workflow, push SHA, run, class, minutes since cancel, later run of this workflow). It
+is detection only: it applies nothing and starts nothing. The body prints one dispatch command per workflow that has rows.
+
+**Decision table** (same shape as "Do NOT fire this on these" above):
+
+| Row says | Do this |
+|---|---|
+| class `evicted-before-start` | Run the printed command from `main`. It applies `main` HEAD, which covers every listed SHA of that workflow. |
+| class `cancelled-mid-run` | Read the cancelled run first: state is possibly partial (the follower over-classifies a preflight-only run as mid-run). If the re-dispatch then goes red, use the heartbeat sweep section above before re-running. |
+| "Later run" column shows a FAILED run | Read that run first. A failed run after an eviction is a different problem and `notify-apply-failure` already owns it. |
+| a kill-switch commit sits between the row and HEAD | The printed dispatch applies HEAD **including** the change that commit deliberately skipped. Decide about that change first. |
+| you cancelled the push on purpose because it was bad | A revert commit touching the trigger paths delivers it by descendant and the row clears itself. An operator-cancelled mid-run push correctly stays `cancelled-mid-run`. |
+
+Always dispatch with `--ref main`. A dispatch from another ref applies that branch to production and leaves the gap open.
+
+**Verification.** The issue closes itself on the next reconcile that sees every listed push delivered (a later run of the
+same workflow, at the push or a descendant, whose `apply` job succeeded) with nothing in flight. For `deploy-fix` rows
+also run `scripts/check-deploy-script-parity.sh` to confirm the host copy matches.
+
+**Closing is not an acknowledgement.** The follower is stateless: while a row remains inside the 7-day window a new
+issue is filed after you close this one. Comment on the issue rather than editing it: the body is rewritten on every
+refresh. If the follower leaves a comment marked `apply-delivery-gap:aged-out`, no cancelled push remains inside the window
+and none was seen delivered: verify delivery (the parity check above, or the latest apply run) and close the issue by
+hand. `priority/p0-critical` is only ever added automatically; remove it by hand if the new gap is not mid-run.
+
+**The degraded issue** ("infra: apply delivery gap follower degraded", label `apply-delivery-gap-degraded`, plus
+`action-required`) means the follower could not finish a full read, so it cannot tell you the state. It never closes the
+gap issue and never reports "no gap" on a partial read. The workflow run's last line names the reason:
+
+| `::error::apply_delivery_gap_<reason>` | Meaning |
+|---|---|
+| `runs_list_failed`, `jobs_read_failed`, `compare_failed`, `malformed_response` | An Actions API read failed after retries, or returned an unexpected shape. |
+| `run_window_truncated` | More than 10 pages of runs fall inside the 7-day window (the apply workflows are running far above their usual rate). |
+| `trigger_run_not_visible` | The run that fired the follower was not yet listed as completed after 3 reads. |
+| `api_budget_exceeded` | More than 150 jobs and compare reads were needed in one reconcile. |
+| `issue_list_failed`, `issue_write_failed`, `label_failed` | The issue API failed; no issue can be written, so the red run is the only trace. |
+| `degraded_upsert_failed` | The follower could not even file the degraded issue. |
+| `bad_input` | A configuration error in the workflow (rejected before any API call). |
+
+The next step is always `gh run rerun <run-id> --failed`: every reconcile is a full stateless read, so a re-run is safe.
+The next fully complete reconcile closes the degraded issue by itself. The 12 h `scheduled-terraform-drift` check remains
+the independent backstop.
+
+**Flip-evidence count (read-only).** The decision to build the deferred fixes (merge the two workflows, or add a
+re-dispatch follower) needs a count of distinct pushes, not runs. Counting unit: the **SHA**. The same SHA can appear in
+several issues (an issue closed by hand is re-filed), so count distinct SHAs:
+
+```bash
+gh issue list --author "github-actions[bot]" --state all --limit 500 \
+  --json number,createdAt,title,body,comments \
+  --jq '[.[] | select(.title | startswith("infra: apply delivery gap - "))]'
+```
+
+(Some `gh` versions only match the spelling `app/github-actions`; if the list comes back empty, try that one.)
+Add the `::notice title=apply-delivery-gap::row workflow=<key> sha=<40hex> class=<c>` lines of the follower's runs (log
+retention is about 90 days, so also read the issue bodies and comments). Row ages come from the close comment's
+"minutes from cancel to delivery". The bar is recorded in ADR-270 (2026-10-23 addendum).
