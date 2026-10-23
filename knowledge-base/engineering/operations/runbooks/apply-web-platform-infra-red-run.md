@@ -7,7 +7,7 @@ production infrastructure may be un-applied"**, or when you notice the workflow 
 - **Confirm token:** none — `manual-rerun` is the historical escape hatch and takes only a `reason`
 - **Irreversible:** no. It re-runs the ordinary per-merge apply against `main`'s current state
 - **Who sends the email:** the `notify-apply-failure` job in the same workflow (#7586)
-- **ADR:** none. The decision content lives in that job's own header
+- **ADR:** none for the apply itself (the decision content lives in that job's own header); the apply delivery gap follower below is recorded in the ADR-270 addendum of 2026-10-23
 
 Written because the recovery lever the email prescribes had no runbook entry while every sibling
 `apply_target` in that workflow had one (#7659 F4). An agent — or a person — who learns the apply
@@ -72,7 +72,7 @@ top right.
 **Or from a terminal**, if you have the GitHub CLI signed in with `workflow` scope:
 
 ```bash
-gh workflow run apply-web-platform-infra.yml --ref main \
+gh workflow run apply-web-platform-infra.yml --repo jikig-ai/soleur --ref main \
   -f apply_target=manual-rerun \
   -f reason='re-run after a non-green apply'
 ```
@@ -120,9 +120,14 @@ is detection only: it applies nothing and starts nothing. The body prints one di
 | a kill-switch commit sits between the row and HEAD | The printed dispatch applies HEAD **including** the change that commit deliberately skipped. Decide about that change first. |
 | you cancelled the push on purpose because it was bad | A revert commit touching the trigger paths delivers it by descendant and the row clears itself. An operator-cancelled mid-run push correctly stays `cancelled-mid-run`. |
 
-Always dispatch with `--ref main`. A dispatch from another ref applies that branch to production and leaves the gap open.
+Always dispatch with `--repo jikig-ai/soleur --ref main` (the printed commands name the workflow file and `--ref main`; add the
+`--repo` flag when you are not standing in the checkout). A dispatch from another ref applies that branch to production and
+leaves the gap open.
 
-**Verification.** The issue closes itself on the next reconcile that sees every listed push delivered (a later run of the
+**Verification.** List the follower's own runs with
+`gh run list --repo jikig-ai/soleur --workflow apply-delivery-gap-follower.yml --limit 5`: it is not started by hand, it runs
+after every completed run of either apply workflow on `main` (`workflow_run`), so the run after your dispatch completes is the
+reconcile that confirms it. The issue closes itself on the next reconcile that sees every listed push delivered (a later run of the
 same workflow, at the push or a descendant, whose `apply` job succeeded) with nothing in flight. For the infra workflow
 the `apply` job alone is not enough: it can end `success` with the SSH-provisioned stage skipped, so delivery also needs
 the step `Terraform apply (SSH-provisioned resources, over the bridge)` to have concluded `success` (read from the same
@@ -138,6 +143,11 @@ refresh. If the follower leaves a comment marked `apply-delivery-gap:aged-out`, 
 and none was seen delivered: verify delivery (the parity check above, or the latest apply run) and close the issue by
 hand. `priority/p0-critical` is only ever added automatically; remove it by hand if the new gap is not mid-run.
 
+**First reconcile after the follower merged.** Merging does not fire a reconcile (the follower runs only after an apply run
+completes), and a reconcile examines only the last 7 days. The three incident replays used as fixtures (runs 37964350917,
+37964762496 and 38144232116) predate that cutoff, so none of them is filed on the first reconcile; do not expect the issue to
+appear for them.
+
 **The degraded issue** ("infra: apply delivery gap follower degraded", label `apply-delivery-gap-degraded`, plus
 `action-required`) means the follower could not finish a full read, so it cannot tell you the state. It never closes the
 gap issue and never reports "no gap" on a partial read. The workflow run's last line names the reason:
@@ -152,7 +162,7 @@ gap issue and never reports "no gap" on a partial read. The workflow run's last 
 | `degraded_upsert_failed` | The follower could not even file the degraded issue. |
 | `bad_input` | A configuration error in the workflow (rejected before any API call). |
 
-The next step is always `gh run rerun <run-id> --failed`: every reconcile is a full stateless read, so a re-run is safe.
+The next step is always `gh run rerun <run-id> --repo jikig-ai/soleur --failed`: every reconcile is a full stateless read, so a re-run is safe.
 The next fully complete reconcile closes the degraded issue by itself.
 
 **Who watches the follower.** Nobody does. A follower failure is a red run only (plus the degraded issue for the read-class
@@ -162,16 +172,21 @@ does not monitor the follower, and does not catch a missed delivery that is not 
 copy on the host.
 
 **Flip-evidence count (read-only).** The decision to build the deferred fixes (merge the two workflows, or add a
-re-dispatch follower) needs a count of distinct pushes, not runs. Counting unit: the **SHA**. The same SHA can appear in
-several issues (an issue closed by hand is re-filed), so count distinct SHAs:
+re-dispatch follower) needs a count of distinct pushes, not runs. Counting unit: the **SHA**. Every reconcile re-prints a
+`row` notice for each still-undelivered push, so the same SHA appears in many runs: count distinct 40-hex SHAs over 30 days from
+the follower's own logs, deduplicated by `sha`:
 
 ```bash
-gh issue list --author "github-actions[bot]" --state all --limit 500 \
-  --json number,createdAt,title,body,comments \
-  --jq '[.[] | select(.title | startswith("infra: apply delivery gap - "))]'
+gh run list --repo jikig-ai/soleur --workflow apply-delivery-gap-follower.yml --limit 1000 --json databaseId,createdAt \
+  --jq '.[] | select(.createdAt >= (now - 30*86400 | todate)) | .databaseId' |
+while read -r id; do
+  gh run view "$id" --repo jikig-ai/soleur --log | grep 'apply-delivery-gap::row'
+done | grep -oE 'sha=[0-9a-f]{40}' | sort -u | wc -l
 ```
 
-(Some `gh` versions only match the spelling `app/github-actions`; if the list comes back empty, try that one.)
-Add the `::notice title=apply-delivery-gap::row workflow=<key> sha=<40hex> class=<c>` lines of the follower's runs (log
-retention is about 90 days, so also read the issue bodies and comments). Row ages come from the close comment's
-"minutes from cancel to delivery". The bar is recorded in ADR-270 (2026-10-23 addendum).
+Each line is `::notice title=apply-delivery-gap::row workflow=<key> sha=<40hex> class=<c>`. Run logs are kept for about 90 days. Beyond
+that, fall back to the close comments of past gap issues (`gh issue list --repo jikig-ai/soleur --label apply-delivery-gap
+--state all`): a close comment lists the 7-character SHAs of the pushes that were DELIVERED only, so it undercounts pushes that
+were never delivered or were closed by hand. An issue body is rewritten on every refresh and holds no history; do not count
+from bodies. The ">1 h with deploy impact" half of the bar is read from the live open issue ("Minutes since cancel" column) at
+the time, not reconstructed afterwards. The bar is recorded in ADR-270 (2026-10-23 addendum).

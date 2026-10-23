@@ -4,7 +4,7 @@ status: accepted
 date: 2026-10-03
 supersedes: ADR-032 (the 2026-07-01 "keep CodeQL required, no queue" decision and the 2026-09-14 capacity rejection, in part)
 issue: 9454
-related: [4856, 5840, 5780, 5800, 5811, 8149, 8450]
+related: [4856, 5840, 5780, 5800, 5811, 8149, 8450, 10033, 8167]
 related_adrs: [ADR-032, ADR-033, ADR-216]
 tags: [github, ruleset, merge-queue, codeql, terraform, ci]
 brand_survival_threshold: aggregate pattern
@@ -777,7 +777,10 @@ to poll; a `schedule:` trigger as a second detection path is rejected because it
 
 Flip evidence bar: build a deferred fix when there are 3 or more distinct undelivered SHAs in 30 days, or one row aged past
 1 hour with real deploy impact, plus a green operator-reviewed rehearsal on a disposable concurrency group and state key.
-The evidence unit is the SHA (the same SHA can appear in several issues); the count recipe is in the runbook
+The evidence unit is the SHA (the same SHA is re-printed by every reconcile while it stays undelivered): the recipe counts
+distinct 40-hex SHAs over 30 days from the follower's `row` notices in `gh run view --log`, falls back to the close comments
+of past gap issues beyond the 90-day log retention (they list delivered pushes only), and reads the "more than 1 hour" half of
+the bar from the live open issue, never retroactively; issue bodies hold no history. The recipe is in the runbook
 `apply-web-platform-infra-red-run.md`, section "An apply delivery gap issue".
 
 Refinements to the 2026-10-22 ruling, each pinned by the suite: the "last ~50 runs" read became an unfiltered paged read to a
@@ -799,8 +802,10 @@ that is not Terraform state (a `deploy-fix` host copy).
 Accepted residuals: an untouched gap older than 7 days ages out and the issue is left open with one marker comment (the
 follower never closes without having seen a delivery); the close comment claims only the 7-day horizon ("Every cancelled push
 seen in the last 7 days now has a delivering run. Pushes older than 7 days are not examined by this check; the 12 h scheduled
-drift check covers them."), so a close never asserts anything about older pushes; `failure`, `timed_out` and `startup_failure` runs are owned by
-`notify-apply-failure` and the drift cron, not by this follower; a preflight-only cancelled run is classed
+drift check covers them."), so a close never asserts anything about older pushes; `failure`, `timed_out` and `startup_failure` runs are not follower
+candidates: when they have jobs `notify-apply-failure` mails, but a run with zero jobs (a refused workflow file) fires no
+email and is caught only by the drift check (up to 12 h) and runbook triage (the runbook's "Zero jobs and no email" section);
+a preflight-only cancelled run is classed
 `cancelled-mid-run` (conservative); a disabled follower workflow is silent (its cadence is per apply run, so absence is
 undetectable); detection can be delayed to the completion of the evicting run if the platform does not emit
 `workflow_run` for a run cancelled while pending (undocumented; the design does not depend on it); the lookup of the open
