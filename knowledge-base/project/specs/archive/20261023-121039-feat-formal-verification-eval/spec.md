@@ -4,7 +4,7 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 status: parked
 issue: 10897
-brainstorm: knowledge-base/project/brainstorms/2026-10-23-formal-verification-eval-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261023-121039-2026-10-23-formal-verification-eval-brainstorm.md
 ---
 
 # Spec: formal verification evaluation (parked)
@@ -32,4 +32,4 @@ Anthropic showed Claude proving binary-level properties of C/C++ libraries. Can 
 - Keep specs and properties in human-reviewed files separate from agent-editable code (reward-hacking guard).
 - Run the CLO and CMO gate before any external wording, and the gdpr-gate before any customer code reaches a third-party prover.
 
-Brainstorm: knowledge-base/project/brainstorms/2026-10-23-formal-verification-eval-brainstorm.md
+Brainstorm: knowledge-base/project/brainstorms/archive/20261023-121039-2026-10-23-formal-verification-eval-brainstorm.md

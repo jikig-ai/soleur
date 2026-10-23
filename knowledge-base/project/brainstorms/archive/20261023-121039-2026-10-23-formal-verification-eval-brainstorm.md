@@ -4,7 +4,7 @@ date: 2026-10-23
 topic: formal-verification-eval
 issue: 10897
 pr: 10896
-spec: knowledge-base/project/specs/feat-formal-verification-eval/spec.md
+spec: knowledge-base/project/specs/archive/20261023-121039-feat-formal-verification-eval/spec.md
 lane: cross-domain
 brand_survival_threshold: single-user incident
 status: parked
