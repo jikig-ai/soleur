@@ -362,11 +362,14 @@ _psel=""
 if [ -n "${SBV_JSON:-}" ]; then
   _psel="$(printf '%s' "$SBV_JSON" | jq -r '.selector // ""' 2>/dev/null || true)"
   _m="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_missing // "-") | tostring' 2>/dev/null || echo -)"
-  # masks_missing and masks_created: one digit 0-4 (the probe's closed set has four dirs), whole-string; anything else is `-`.
+  # masks_created: one digit 0-4 (the probe's closed set has four dirs), whole-string; anything else is `-`.
+  # masks_missing: the same digit 0-4; any OTHER all-digit value (5, 12: a count the closed set cannot produce, so a stale or broken probe
+  # that is still reporting missing dirs) is journaled as the bounded token `5+` and, like any non-zero count, downgrades coverage below;
+  # only an absent or non-numeric value is `-` (unknown).
   # masks_note: a WHOLE-string match against the closed enum, so an embedded newline (command substitution strips only a trailing one)
   # or any other text is `-`; never derived from errno text or a path and never fed to detail=. An old probe emits neither
   # masks_created nor masks_note: both read `-`.
-  case "$_m" in [0-4]) MASKS="$_m" ;; *) MASKS="-" ;; esac
+  case "$_m" in [0-4]) MASKS="$_m" ;; ''|*[!0-9]*) MASKS="-" ;; *) MASKS="5+" ;; esac
   _c="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_created // "-") | tostring' 2>/dev/null || echo -)"
   case "$_c" in [0-4]) MCREATED="$_c" ;; *) MCREATED="-" ;; esac
   _n="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_note // "-") | tostring' 2>/dev/null || echo -)"

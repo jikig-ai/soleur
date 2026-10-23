@@ -458,18 +458,24 @@ case_masks_note() {  # <sut> <lib>: masks_note is a whole-string match against t
   reset_case_env
 }
 
-case_masks_missing() {  # <sut> <lib>: masks_missing is the same shape as masks_created
+case_masks_missing() {  # <sut> <lib>: masks_missing is one digit 0-4; an over-range count is `5+` AND partial; only non-numeric is `-`
   local sut="$1" lib="$2"
   reset_case_env
   local base='{"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":0'
-  # masks_missing: the same shape as masks_created (one digit 0-4, whole-string); anything else is `-`
-  for bad in '12' '5' '-1' '007' '"4 forged=1"' '"4\nforged=1"' 'true' '[1]' '4.5' '"9;touch x"'; do
+  # Non-numeric or non-integer text is `-` (unknown): no forged field, no journal pollution, the run still passes with the tuple it claimed.
+  for bad in '-1' '"4 forged=1"' '"4\nforged=1"' 'true' '[1]' '4.5' '"9;touch x"'; do
     MOCK_RESULT="${base/\"masks_missing\":0/\"masks_missing\":$bad}}" run_case "$sut" "$lib"
-    ok_if "masks_missing $bad is journaled as - (one digit 0-4 only), the run still passes" "[[ \"\$(field masks_missing)\" == '-' && -z \"\$(field forged)\" && \"\$(field verdict)\" == pass && \"\$(pings_ok)\" -eq 1 ]]"
+    ok_if "masks_missing $bad is journaled as - (not a count), the run still passes" "[[ \"\$(field masks_missing)\" == '-' && -z \"\$(field forged)\" && \"\$(field verdict)\" == pass && \"\$(pings_ok)\" -eq 1 ]]"
+  done
+  # An all-digit count above 4 is something the closed set cannot produce: it is NOT unknown. It is journaled as the bounded token 5+ and
+  # the pass is downgraded exactly like any non-zero count (the ping is unchanged). A `-` here would read as "no gap" and keep the full tuple.
+  for over in 5 12 99999999999999999999 '"7"' 007; do
+    MOCK_RESULT="${base/\"masks_missing\":0/\"masks_missing\":$over}}" run_case "$sut" "$lib"
+    ok_if "masks_missing $over (over-range count) is journaled as 5+, downgrades coverage to prodtuple_partial, and still pings ok" "[[ \"\$(field masks_missing)\" == '5+' && \"\$(field coverage)\" == prodtuple_partial && \"\$(field verdict)\" == pass && \"\$(pings_ok)\" -eq 1 ]]"
   done
   for good in 0 1 2 3 4; do
     MOCK_RESULT="${base/\"masks_missing\":0/\"masks_missing\":$good}}" run_case "$sut" "$lib"
-    ok_if "masks_missing $good is journaled as that digit" "[[ \"\$(field masks_missing)\" == '$good' ]]"
+    ok_if "masks_missing $good is journaled as that digit; coverage is the full tuple only for 0" "[[ \"\$(field masks_missing)\" == '$good' && ( ( '$good' == 0 && \"\$(field coverage)\" == sdk_wrapper_shim_prodtuple ) || ( '$good' != 0 && \"\$(field coverage)\" == prodtuple_partial ) ) ]]"
   done
   reset_case_env
 }
@@ -963,8 +969,14 @@ mut_sut P3_scrub_allowlist_dropped case_journal "tr -cd 'A-Za-z0-9._:/ =-' | cut
 mut_sut P3_scrub_cut_dropped case_journal "tr -cd 'A-Za-z0-9._:/ =-' | cut -c1-120" "tr -cd 'A-Za-z0-9._:/ =-'"
 mut_sut P3_scrub_env_values_dropped case_journal 'if [ "${#v}" -ge 8 ]; then' 'if false; then'
 mut_sut P3_scrub_shapes_dropped case_journal 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g' 's/ZZZZ/ZZZZ/g'
-mut_sut P3_masks_digit_guard_dropped case_journal 'case "$_m" in [0-4]) MASKS="$_m" ;; *) MASKS="-" ;; esac' 'MASKS="$_m"'
-mut_sut P3_masks_missing_guard_loosened case_masks_missing 'case "$_m" in [0-4]) MASKS="$_m" ;; *) MASKS="-" ;; esac' 'case "$_m" in '"''"'|*[!0-9]*) MASKS="-" ;; *) MASKS="$_m" ;; esac'
+# The masks_missing guard line, as written in the SUT (the empty pattern is spelled with a quote pair inside single quotes).
+MASKS_M_CASE='case "$_m" in [0-4]) MASKS="$_m" ;; '"''"'|*[!0-9]*) MASKS="-" ;; *) MASKS="5+" ;; esac'
+mut_sut P3_masks_digit_guard_dropped case_journal "$MASKS_M_CASE" 'MASKS="$_m"'
+mut_sut P3_masks_missing_guard_loosened case_masks_missing "$MASKS_M_CASE" 'case "$_m" in '"''"'|*[!0-9]*) MASKS="-" ;; *) MASKS="$_m" ;; esac'
+# The over-range count read as unknown (`-`): the pre-fix shape, where 5 or 12 kept the full tuple.
+mut_sut P4_masks_overrange_is_unknown case_masks_missing "$MASKS_M_CASE" 'case "$_m" in [0-4]) MASKS="$_m" ;; *) MASKS="-" ;; esac'
+# The over-range count journaled but not downgraded.
+mut_sut P4_masks_overrange_keeps_full_tuple case_masks_missing 'case "$MASKS" in -|0) : ;; *) COV=prodtuple_partial ;; esac' 'case "$MASKS" in -|0|5+) : ;; *) COV=prodtuple_partial ;; esac'
 mut_sut P3_masks_created_guard_dropped case_masks_created 'case "$_c" in [0-4]) MCREATED="$_c" ;; *) MCREATED="-" ;; esac' 'MCREATED="$_c"'
 mut_sut P3_masks_note_enum_dropped case_masks_note 'case "$_n" in uid_mismatch|pid1_unreadable|pid1_env_unreadable|home_mismatch|env_divergence) MNOTE="$_n" ;; *) MNOTE="-" ;; esac' 'MNOTE="$_n"'
 mut_sut P3_masks_note_enum_prefix_match case_masks_note 'case "$_n" in uid_mismatch|pid1_unreadable|pid1_env_unreadable|home_mismatch|env_divergence) MNOTE="$_n" ;;' 'case "$_n" in uid_mismatch*|pid1_unreadable*|pid1_env_unreadable*|home_mismatch*|env_divergence*) MNOTE="$_n" ;;'
@@ -1001,7 +1013,7 @@ done
 ok_if "the pristine SUT/lib copies still equal the files under test (no mutation leaked into the tree)" "cmp -s '$SUT' '$PRISTINE_SUT' && cmp -s '$LIB' '$PRISTINE_LIB'"
 
 # Assertion floor (anti-vacuity): reported with printf + exit, never through the helpers it backstops.
-FLOOR=377
+FLOOR=381
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR" ]]; then printf 'FAIL: only %s assertions ran (floor %s): the suite lost coverage\n' "$total" "$FLOOR"; exit 1; fi
 echo "=== $passes passed, $fails failed ($total assertions) ==="
