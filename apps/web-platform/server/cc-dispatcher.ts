@@ -3953,7 +3953,7 @@ async function dispatchSoleurGoInner(
   // status. Sent as an `error` frame with NO errorCode (the client renders the
   // text as a chat message, same as the repo `cloning` block). Info breadcrumb
   // only, no Sentry: an owner-set maintenance window is not an incident.
-  if (!hasActiveCcQuery(conversationId) && (await newAgentSessionsRefused())) {
+  if (!hasActiveCcQuery(conversationId) && (await newAgentSessionsRefused({ userId }))) {
     log.info(
       {
         feature: "quiet-window",
