@@ -15,7 +15,7 @@ Plan: `knowledge-base/project/plans/2026-10-23-fix-orphan-sweeps-read-only-token
 - 1.5 Rewrite the stale comment above the sole-copy job.
 
 ## Phase 2 — Failure email
-- 2.1 Rung-2: `id: notify_channel` on the existing email step; add the de-duplicated failure email.
+- 2.1 Rung-2: `id: notify_channel` on the existing email step; add the de-duplicated failure email. (SUPERSEDED in review: no `notify_channel` id, no de-duplication; the failure email is `failure()` alone.)
 - 2.2 Inngest: add the failure email.
 
 ## Phase 3 — Floor and runbook

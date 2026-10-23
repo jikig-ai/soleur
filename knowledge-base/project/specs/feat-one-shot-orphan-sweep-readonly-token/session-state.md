@@ -9,7 +9,7 @@ None
 
 ### Decisions
 - Convert both sweeps to the sole-copy job shape (no environment, no loader, read-only token, main-only guard).
-- Failure email per job, rung-2 de-duplicated against its existing email step.
+- Failure email per job, rung-2 de-duplicated against its existing email step. (SUPERSEDED in review: `failure()` alone, no de-duplication.)
 - Guard rows R7/R8 in the drift suite, population derived by job-id suffix.
 - No project-identity canary in the sweeps (the sole-copy check already pins it).
 

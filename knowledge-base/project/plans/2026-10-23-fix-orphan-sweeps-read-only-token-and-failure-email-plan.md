@@ -100,7 +100,7 @@ In `.github/workflows/scheduled-terraform-drift.yml`, for `rung2-rehearsal-orpha
 
 ### Phase 2 — failure email on both jobs
 
-1. Rung-2 job: give the existing scratch-config email step `id: notify_channel`. Append `Email notification (rung-2 sweep — the job failed)` with `if: failure() && steps.notify_channel.outcome != 'success'`, `continue-on-error: true`, `timeout-minutes: 2`, `uses: ./.github/actions/notify-ops-email`, `resend-api-key: ${{ secrets.RESEND_API_KEY }}`. The de-duplication leg keeps one message per failed run.
+1. Rung-2 job: give the existing scratch-config email step `id: notify_channel`. Append `Email notification (rung-2 sweep — the job failed)` with `if: failure() && steps.notify_channel.outcome != 'success'`, `continue-on-error: true`, `timeout-minutes: 2`, `uses: ./.github/actions/notify-ops-email`, `resend-api-key: ${{ secrets.RESEND_API_KEY }}`. The de-duplication leg keeps one message per failed run. **SUPERSEDED (review, 2026-10-23):** the failure email is gated on `failure()` alone and the existing scratch-config step no longer carries an id; the de-duplication keyed on a step outcome that stays `success` when Resend rejects a send, and could drop the orphan finding. Two messages in a rare run are cheaper than a lost finding.
 2. Inngest job: append `Email notification (inngest rehearsal sweep — the job failed)` with `if: failure()`, same bounds.
 3. Bodies carry run URL and step outcomes only (sweep, filer, Doppler install): no resource names, no API body, no token. Subject prefix `[INFRA DRIFT]`.
 
@@ -150,7 +150,7 @@ Add rows R7 and R8 to `plugins/soleur/test/token-drift-workflow-causes.test.sh` 
 
 ### Guard 2 — every sweep job emails on failure
 
-**Property.** Each `-orphan-sweep` job has a step using `./.github/actions/notify-ops-email` whose `if:` contains `failure()`, is `continue-on-error: true`, and is bounded by `timeout-minutes`; the rung-2 job's email is de-duplicated against its existing email step.
+**Property.** Each `-orphan-sweep` job has a step using `./.github/actions/notify-ops-email` whose `if:` contains `failure()`, is `continue-on-error: true`, and is bounded by `timeout-minutes`; the rung-2 job's email is de-duplicated against its existing email step. **SUPERSEDED (review, 2026-10-23):** the failure email is gated on `failure()` alone and the existing scratch-config step no longer carries an id; the de-duplication keyed on a step outcome that stays `success` when Resend rejects a send, and could drop the orphan finding. Two messages in a rare run are cheaper than a lost finding.
 
 **Assembly.** Same derived population; chokepoints: step `uses:`, `if:` text, `continue-on-error`, `timeout-minutes` on that step.
 
@@ -164,7 +164,7 @@ Add rows R7 and R8 to `plugins/soleur/test/token-drift-workflow-causes.test.sh` 
 | 4 | Remove `continue-on-error` from the email step | must-not-fail-the-job |
 | 5 | Add a third `-orphan-sweep` job without an email step | second member after compliant first |
 
-**Harness rows.** (H3) The rung-2 email with the de-duplication leg spelled differently (`steps.notify_channel.outcome == 'skipped'` plus `'failure'` legs) must stay GREEN (must-PASS non-canonical). (H4) A mutation copy where the email step's `uses:` points at a different action must be RED.
+**Harness rows.** (H3) The rung-2 email with the de-duplication leg spelled differently (`steps.notify_channel.outcome == 'skipped'` plus `'failure'` legs) must stay GREEN (must-PASS non-canonical). (H4) A mutation copy where the email step's `uses:` points at a different action must be RED. **SUPERSEDED (review, 2026-10-23):** the failure email is gated on `failure()` alone and the existing scratch-config step no longer carries an id; the de-duplication keyed on a step outcome that stays `success` when Resend rejects a send, and could drop the orphan finding. Two messages in a rare run are cheaper than a lost finding.
 
 **Anchor.** None stored; consistency of the file against itself is the property.
 
