@@ -1490,6 +1490,15 @@ if [[ -z "${ADG_ONLY:-}" ]]; then
     exit 1
   fi
 fi
+# Anti-vacuity floor (ADR-193): reported with printf + exit 1 directly, never through pass()/fail(), over the raw counters, so an
+# assertion machinery neutered to a no-op leaves them at 0 and this fires. It is the shape scripts/guard-vacuity-floor.test.sh can
+# build a mutant from; the group-ran ledger above carries the real per-run bound.
+MIN_RAN=1
+ran_total=$((passes + fails))
+if [ "$ran_total" -lt "$MIN_RAN" ]; then
+  printf '[FATAL] assertion floor: only %s assertion(s) ran, expected at least %s\n' "$ran_total" "$MIN_RAN" >&2
+  exit 1
+fi
 if [[ "$fails" -gt 0 ]]; then
   printf 'FAILED:\n'; printf '  - %s\n' "${FAILED[@]}"
   exit 1
