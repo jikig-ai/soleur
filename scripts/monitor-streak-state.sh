@@ -4,13 +4,14 @@
 #
 # Subcommands (the workflow wires them in this order: fetch, probe, seal, assert, upload):
 #   fetch  find the newest eligible prior artifact, validate it, write its value to $STREAK_FILE,
-#          emit `matched=true|false` and `restored=<n>` to $GITHUB_OUTPUT. An UNREADABLE store (the
+#          emit `matched=true|false` and `prior=<n>` to $GITHUB_OUTPUT. An UNREADABLE store (the
 #          listing or the download failed) always exits 1: it is not "no prior state". With
 #          BOOTSTRAP=true a corrupt NEWEST artifact is discarded (the documented reseed path).
 #   seal   after the probe: make $STREAK_FILE an explicit number, verdict-aware. The probe's own
 #          write is `2>/dev/null || true`, so a TRANSIENT verdict must have moved the streak to
 #          exactly RESTORED+1 (the value fetch restored); anything else means the increment was lost.
-#   assert exit 1 unless fetch matched a prior streak or this is an explicit BOOTSTRAP run.
+#   assert exit 1 unless fetch matched a prior streak or this is an explicit BOOTSTRAP run. A red assert
+#          on an empty store still lets the upload publish this run's value, so the next run self-heals.
 #
 # Selection is fail-closed. Artifacts are repository-scoped, not ref-scoped, and a fork
 # pull_request run is listed under this repository with a fork-controlled head_branch, so the head
@@ -22,7 +23,8 @@
 #
 # Required env (fetch): GH_TOKEN GITHUB_REPOSITORY GITHUB_REPOSITORY_ID GITHUB_RUN_ID
 # STREAK_ARTIFACT_NAME STREAK_BRANCH STREAK_FILE GITHUB_OUTPUT. Optional: BOOTSTRAP GITHUB_ACTOR
-# STREAK_LIST_TIMEOUT (seconds, default 120). seal: STREAK_FILE VERDICT RESTORED. assert: STREAK_FILE
+# STREAK_LIST_TIMEOUT (seconds, 1 or more, default 120). seal: STREAK_FILE VERDICT RESTORED (the `prior`
+# output of fetch). assert: STREAK_FILE
 # MATCHED BOOTSTRAP.
 
 set -uo pipefail
@@ -72,13 +74,14 @@ cmd_fetch() {
   [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || die "GITHUB_RUN_ID is not numeric"
   assert_fixture_dir "$STREAK_FILE"
   local list_timeout="${STREAK_LIST_TIMEOUT:-120}"
-  [[ "$list_timeout" =~ ^[0-9]+$ ]] || die "STREAK_LIST_TIMEOUT is not numeric"
+  # `timeout 0` means no limit, which would recreate the hang this bound exists to close.
+  [[ "$list_timeout" =~ ^[1-9][0-9]{0,3}$ ]] || die "STREAK_LIST_TIMEOUT must be 1 to 9999 seconds"
 
   mkdir -p "$(dirname "$STREAK_FILE")" || die "could not create the state directory"
   local tmp; tmp=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/streak-fetch.XXXXXXXX") || die "could not create a scratch directory"
-  assert_fixture_dir "$tmp"
   # shellcheck disable=SC2064
   trap "rm -rf '$tmp'" EXIT
+  assert_fixture_dir "$tmp"
 
   local actor="${GITHUB_ACTOR:-unknown}"
   [[ "$actor" =~ ^[A-Za-z0-9-]{1,39}$ ]] || actor=unknown
@@ -114,7 +117,7 @@ cmd_fetch() {
     || die "artifact selection failed"
   if [ -z "$art_id" ]; then
     printf '::notice::no eligible prior streak artifact\n'
-    printf 'matched=false\nrestored=0\n' >> "$GITHUB_OUTPUT"
+    printf 'matched=false\nprior=0\n' >> "$GITHUB_OUTPUT"
     return 0
   fi
   [[ "$art_id" =~ ^[0-9]+$ ]] || die "selected artifact id is not numeric"
@@ -130,23 +133,25 @@ cmd_fetch() {
   discard() { # $1 = reason (fixed text only, never artifact content)
     if [ "$bootstrap" = true ]; then
       printf '::warning::discarding the newest streak artifact (%s); bootstrap run\n' "$1"
-      printf 'matched=false\nrestored=0\n' >> "$GITHUB_OUTPUT"
+      printf 'matched=false\nprior=0\n' >> "$GITHUB_OUTPUT"
       return 0
     fi
     die "the newest streak artifact is unusable (${1}); dispatch with bootstrap=true to reseed"
   }
+  # Repeated on purpose: the repo's fixture-relative ratchet ends a guard's window at the nested
+  # function definition above, so the redirects below need their own guard.
   assert_fixture_dir "$tmp"
   unzip -Z1 "$tmp/a.zip" > "$tmp/members" 2> /dev/null || { discard "not a readable archive"; return; }
   printf 'streak\n' > "$tmp/members.want"
   cmp -s "$tmp/members" "$tmp/members.want" || { discard "archive members are not exactly one file named streak"; return; }
   # Bounded read: the size limit above is on the COMPRESSED archive, so cap what is decompressed. unzip
   # dies of SIGPIPE (141) once head has its 8 bytes; that is the expected early stop, not an error.
-  local read_rc=0
+  local rcs
   timeout 10 unzip -p "$tmp/a.zip" streak < /dev/null 2> /dev/null | head -c 8 > "$tmp/val.raw"
-  read_rc=${PIPESTATUS[0]}
-  { [ "$read_rc" -eq 0 ] || [ "$read_rc" -eq 141 ]; } || { discard "member unreadable"; return; }
-  # Digits plus newlines only (no NUL, space or letter), at most 6 digits and one newline: a trailing
-  # newline is the only thing a writer legitimately adds.
+  rcs=("${PIPESTATUS[@]}")
+  { [ "${rcs[0]}" -eq 0 ] || [ "${rcs[0]}" -eq 141 ]; } && [ "${rcs[1]}" -eq 0 ] || { discard "member unreadable"; return; }
+  # Digits plus newlines only (no NUL, space or letter) and at most 7 bytes: 6 digits and the one trailing
+  # newline a writer may add; the value check below then requires digits only once the newlines are stripped.
   local raw_bytes stray v
   raw_bytes=$(wc -c < "$tmp/val.raw")
   stray=$(tr -d '0-9\n' < "$tmp/val.raw" | wc -c)
@@ -160,7 +165,7 @@ cmd_fetch() {
   assert_fixture_dir "$STREAK_FILE"
   printf '%s' "$((10#$v))" > "$STREAK_FILE" || die "could not write the state file"
   printf 'streak artifact %s restored from a prior run\n' "$art_id"
-  printf 'matched=true\nrestored=%s\n' "$((10#$v))" >> "$GITHUB_OUTPUT"
+  printf 'matched=true\nprior=%s\n' "$((10#$v))" >> "$GITHUB_OUTPUT"
 }
 
 cmd_seal() {
@@ -209,7 +214,7 @@ cmd_assert() {
     if [ -z "$matched" ]; then
       die "the fetch step produced no result (it failed or was skipped); see that step. An unreadable store is not fixed by bootstrap=true."
     fi
-    die "the streak store returned no prior generation. The consecutive-TRANSIENT escalation cannot fire, so a permanently broken probe is indistinguishable from a healthy quiet window. Dispatch with bootstrap=true to reseed."
+    die "the streak store returned no prior generation. The consecutive-TRANSIENT escalation cannot fire, so a permanently broken probe is indistinguishable from a healthy quiet window. This run still publishes its own value, so the next run restores it; dispatch with bootstrap=true to make a run like this one green."
   fi
   printf 'streak state: restored=%s value=%s\n' "${matched:-false}" "$((10#$v))"
 }

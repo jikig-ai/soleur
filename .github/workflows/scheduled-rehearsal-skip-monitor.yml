@@ -90,8 +90,9 @@ jobs:
       # THE STREAK FILE IS THE CARRIER'S RESPONSIBILITY. The probe escalates to a FAIL after N
       # consecutive runs that could not reach a verdict; without persistence the counter resets
       # every run and escalation never fires. That degrades OPEN, so the round-trip is asserted
-      # below rather than assumed. `fetch` exits 1 on an UNREADABLE store (a failed listing) and
-      # reports `matched=false` for an EMPTY one; the assert step turns that into a red run.
+      # below rather than assumed. `fetch` exits 1 on an UNREADABLE store (a failed or hung listing, a
+      # failed download) or, without `bootstrap`, a corrupt newest artifact, and reports `matched=false`
+      # for an EMPTY one; the assert step turns that into a red run.
       # `!cancelled()` and no `continue-on-error`: a failed fetch must not skip the probe.
       - name: Fetch transient-streak state
         id: fetch
@@ -166,7 +167,7 @@ jobs:
         env:
           STREAK_FILE: ${{ runner.temp }}/monitor-state/streak
           VERDICT: ${{ steps.probe.outputs.verdict }}
-          RESTORED: ${{ steps.fetch.outputs.restored }}
+          RESTORED: ${{ steps.fetch.outputs.prior }}
         run: bash scripts/monitor-streak-state.sh seal
 
       # ASSERT ON THE STORE, NOT ON THE DIRECTORY (a `[ -d ]` test passed at 100% broken persistence).
@@ -232,7 +233,7 @@ jobs:
           case "$VERDICT" in
             broken) title="monitor: the rehearsal skip-persistence probe is not running to a verdict" ;;
             fail)   title="monitor: git-data rehearsal suite is skipping arms across runs" ;;
-            *)      title="monitor: the rehearsal skip monitor's streak store failed" ;;
+            *)      title="monitor: the rehearsal skip monitor streak store failed" ;;
           esac
           # DEDUPE AGAINST OPEN ISSUES ONLY, and this comment now describes what the code
           # does. It previously passed `--state all` while the jq below filtered to OPEN, so
@@ -271,9 +272,15 @@ jobs:
               fail)
                 printf '%s\n\n' "The rehearsal skip-persistence probe returned FAIL." ;;
               *)
-                printf '%s\n\n' "The monitor's streak store failed, so the consecutive-TRANSIENT escalation cannot be trusted this run. Step outcomes: fetch=${FETCH_OUTCOME} seal=${SEAL_OUTCOME} assert=${ASSERT_OUTCOME} upload=${UPLOAD_OUTCOME}. See ADR-296 and the workflow header for the reseed procedure (a bootstrap dispatch). The probe verdict itself was ${VERDICT:-unknown}." ;;
+                printf '%s\n\n' "The monitor's streak store failed, so the consecutive-TRANSIENT escalation cannot be trusted this run. The probe verdict itself was ${VERDICT:-unknown}." ;;
             esac
             printf 'Run: %s\n\n' "$RUN_URL"
+            # A failed STATE step is reported whichever title wins: a standing probe FAIL must not hide it.
+            case "${FETCH_OUTCOME} ${SEAL_OUTCOME} ${ASSERT_OUTCOME} ${UPLOAD_OUTCOME}" in
+              *failure*)
+                printf 'Streak store step outcomes: fetch=%s seal=%s assert=%s upload=%s. See ADR-296 and the workflow header for the reseed procedure.\n\n' \
+                  "$FETCH_OUTCOME" "$SEAL_OUTCOME" "$ASSERT_OUTCOME" "$UPLOAD_OUTCOME" ;;
+            esac
             # shellcheck disable=SC2016  # the backticks are a literal markdown fence
             printf '```\n%s\n```\n\n' "$SUMMARY"
             printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. A sustained skip means the deferred pre-baked image (#7535) is owed."

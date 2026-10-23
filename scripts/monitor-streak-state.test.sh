@@ -73,7 +73,10 @@ ctl() { # helper args...
   FAILURES=("${FAILURES[@]:0:$n0}")
 }
 ctl eq ctl-eq a b
-ctl has ctl-has /nonexistent/path/for/the/control x
+ctl eq ctl-eq-longer-actual abc ab
+ctl eq ctl-eq-longer-expected ab abc
+ctl has ctl-has-missing-string "${BASH_SOURCE[0]}" "zz""qq9-never-written-contiguously"
+ctl has ctl-has-missing-file /nonexistent/path/for/the/control x
 ctl lacks ctl-lacks "${BASH_SOURCE[0]}" "set -uo pipefail"
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -130,6 +133,8 @@ with zipfile.ZipFile(out, "w") as z:
         comp = zipfile.ZIP_STORED
         if content.startswith("hex:"):
             data = bytes.fromhex(content[4:])
+        elif content.startswith("badcrc:"):
+            data = content[7:].encode()
         elif content.startswith("bomb:"):
             data = b"0" * int(content[5:])
             comp = zipfile.ZIP_BZIP2
@@ -138,6 +143,10 @@ with zipfile.ZipFile(out, "w") as z:
         zi = zipfile.ZipInfo(name)
         zi.compress_type = comp
         z.writestr(zi, data)
+if len(pairs) == 2 and pairs[1].startswith("badcrc:"):
+    raw = bytearray(open(out, "rb").read())
+    raw[30 + len(pairs[0].encode())] ^= 0x01  # first data byte of the only (stored) member
+    open(out, "wb").write(bytes(raw))
 PY
 mkzip() { python3 -I "$SANDBOX/mkzip.py" "$@"; } # out member content [member content ...]
 
@@ -202,12 +211,15 @@ expect_fetch() {
     eq "$name ($mode) matched" "$(matched)" "$m_want"
     if [ "$rc_want" = 0 ]; then
       eq "$name ($mode) exactly one matched line" "$(grep -c '^matched=' "$C/gho")" "1"
+      eq "$name ($mode) exactly one prior line" "$(grep -c '^prior=' "$C/gho")" "1"
+      if [ "$m_want" = false ]; then eq "$name ($mode) prior is 0 when nothing matched" "$(out_value prior)" "0"; fi
     else
       eq "$name ($mode) no matched line on failure" "$(grep -c '^matched=' "$C/gho")" "0"
+      eq "$name ($mode) no prior line on failure" "$(grep -c '^prior=' "$C/gho")" "0"
     fi
     if [ -n "$f_want" ]; then
       eq "$name ($mode) value" "$(streakfile)" "$f_want"
-      if [ "$f_want" != "<absent>" ]; then eq "$name ($mode) restored output" "$(out_value restored)" "$f_want"; fi
+      if [ "$f_want" != "<absent>" ]; then eq "$name ($mode) prior output" "$(out_value prior)" "$f_want"; fi
     fi
   done
 }
@@ -233,6 +245,9 @@ expect_fetch "T5b listing order does not decide" 0 true 0 true 2 2
 newcase; setlist "$(good 21 4002)" "$(good 22 4001)"
 mkzip "$C/zip.21" streak 2; mkzip "$C/zip.22" streak 1
 expect_fetch "T5c the newest RUN wins even with the lower artifact id" 0 true 0 true 2 2
+newcase; setlist "$(good 12 4001)" "$(good 11 4001)"
+mkzip "$C/zip.12" streak 2; mkzip "$C/zip.11" streak 1
+expect_fetch "T5e two eligible artifacts of the SAME run: the higher artifact id wins, whatever the order" 0 true 0 true 2 2
 newcase
 setpages "[$(good 31 4001)]" "[$(good 32 4003)]" "[$(good 33 4002)]"
 mkzip "$C/zip.31" streak 1; mkzip "$C/zip.32" streak 3; mkzip "$C/zip.33" streak 2
@@ -272,7 +287,7 @@ newcase; setlist "$(art 11 4001 main 1000 1000 4097 false 2026-10-20T06:00:00Z)"
 expect_fetch "T6c size 4097 is not" 0 false 0 false
 
 # T7 valid values, including a trailing newline; extra unknown fields in the listing are tolerated
-for v in 3 0 12 999999 $'3\n'; do
+for v in 3 0 12 999999 $'999999\n' $'3\n'; do
   newcase; setlist "$(good 11 4001)"; mkzip "$C/zip.11" streak "$v"
   want="${v%$'\n'}"
   expect_fetch "T7 value '$(printf %q "$v")'" 0 true 0 true "$want" "$want"
@@ -294,6 +309,10 @@ runsut fetch BOOTSTRAP=; lacks "T9a the malformed-value notice never carries the
 runsut fetch BOOTSTRAP=true; lacks "T9a the malformed-value notice never carries the value it read (bootstrap)" "$C/log" "ZZPLANT1"
 newcase; setlist "$(good 11 4001)"; mkzip "$C/zip.11" streak 2 other 9
 expect_fetch "T9b two-member archive" 1 none 0 false
+# T9e a member that fails its CRC (unzip exits non-zero while still printing data): corrupt content
+newcase; setlist "$(good 11 4001)"; mkzip "$C/zip.11" streak badcrc:7
+expect_fetch "T9e corrupt CRC" 1 none 0 false "<absent>" "<absent>"
+runsut fetch BOOTSTRAP=; has "T9e a CRC failure is reported as an unreadable member" "$C/log" "member unreadable"
 # T9c only the literal BOOTSTRAP=true reseeds: false, 1, True, yes behave like unset
 for b in false 1 True yes; do
   newcase; setlist "$(good 11 4001)"; mkzip "$C/zip.11" streak abc
@@ -322,6 +341,13 @@ newcase; : > "$C/list.body"
 expect_fetch "T10 listing is empty body" 1 none 1 none
 newcase; printf '{"artifacts":["x"]}\n' > "$C/list.body"
 expect_fetch "T10d a non-object listing element is an unreadable store" 1 none 1 none
+# T10f the listing timeout knob: 0 means no limit to `timeout`, so only 1 to 9999 seconds is accepted
+for t in 0 00 10000 abc -1; do
+  newcase; setlist "$(good 11 4001)"; mkzip "$C/zip.11" streak 2
+  runsut fetch BOOTSTRAP=true "STREAK_LIST_TIMEOUT=$t"
+  eq "T10f STREAK_LIST_TIMEOUT='$t' is rejected (rc)" "$RC" "1"
+  has "T10f STREAK_LIST_TIMEOUT='$t' names the bound" "$C/log" "must be 1 to 9999 seconds"
+done
 # T10e a hung listing is bounded and fatal (timeout 1s, fake gh sleeps 3s)
 newcase; setlist "$(good 11 4001)"; mkzip "$C/zip.11" streak 2
 runsut fetch BOOTSTRAP=true FAKE_LIST_SLEEP=3 STREAK_LIST_TIMEOUT=1
@@ -332,7 +358,10 @@ has "T10e hung listing names the timeout" "$C/log" "timed out"
 for m in '../streak' 'streak/' $'streak\nx' 'other'; do
   newcase; setlist "$(good 11 4001)"; mkzip "$C/zip.11" "$m" 2
   expect_fetch "T10c member '$(printf %q "$m")'" 1 none 0 false "<absent>" "<absent>"
-  case "$m" in *$'\n'*) ;; *) lacks "T10c log has no raw member name" "$C/log" "$m" ;; esac
+  runsut fetch BOOTSTRAP=
+  case "$m" in *$'\n'*) ;; *) lacks "T10c plain log has no raw member name" "$C/log" "$m" ;; esac
+  runsut fetch BOOTSTRAP=true
+  case "$m" in *$'\n'*) ;; *) lacks "T10c bootstrap log has no raw member name" "$C/log" "$m" ;; esac
 done
 newcase; setlist "$(good 11 4001)"; mkzip "$C/zip.11" streak $'::stop-commands::PLANTEDVALUE\n::error::PLANTEDVALUE'
 runsut fetch BOOTSTRAP=; lacks "T10c log never carries the raw artifact value (plain)" "$C/log" "PLANTEDVALUE"
@@ -388,6 +417,12 @@ seal_case "T13 transient+007 normalises to base 10" transient 007 6 7
 seal_case "T13 transient with RESTORED unset reads 0" transient 1 @unset 1
 seal_case "T13 RESTORED not a number" transient 1 abc @fail
 seal_case "T13 RESTORED not a number, pass verdict" pass 0 abc @fail
+seal_case "T13 RESTORED arithmetic-shaped" transient 3 '1+1' @fail
+seal_case "T13 RESTORED with a space" pass 0 '2 3' @fail
+seal_case "T13 RESTORED negative" transient 1 '-1' @fail
+seal_case "T13 state file arithmetic-shaped" transient '1+1' 0 @fail
+seal_case "T13 state file arithmetic that would evaluate to the expected value" transient '0+1' 0 @fail
+seal_case "T13 state file with a space under a fail verdict" fail '2 3' 0 @fail
 seal_case "T13 unknown verdict" weird 1 0 @fail
 seal_case "T13 empty verdict" "" 1 0 @fail
 
@@ -410,6 +445,8 @@ for m in true false @unset; do
   done
 done
 assert_case "T14b assert with a non-numeric sealed file" true @unset x 1
+assert_case "T14b2 assert with an arithmetic-shaped sealed file" true @unset '1+1' 1
+assert_case "T14b3 assert with a sealed file holding a space" true @unset '2 3' 1
 assert_case "T14c assert with a missing sealed file" true @unset @absent 1
 assert_case "T14d assert prints the restored state" true @unset 3 0
 has "T14d assert prints the restored line" "$C/log" "streak state: restored=true value=3"
@@ -434,14 +471,20 @@ chain() { # restored-value|@none  ->  CHAIN_RC of the probe, log in $C/probe.log
   CHAIN_RC=$?
 }
 chain 2
+PRIOR=$(out_value prior)
+eq "T15 fetch reports the restored 2 as prior" "$PRIOR" "2"
 eq "T15 restored 2 escalates (rc)" "$CHAIN_RC" "1"
 has "T15 restored 2 reaches the real probe as 3/3" "$C/probe.log" "consecutive transient runs: 3/3"
-runsut_seal fail "$(cat "$C/state/dir/streak")" 2
+runsut_seal fail "$(cat "$C/state/dir/streak")" "$PRIOR"
+eq "T15 seal accepts the escalation FAIL (rc)" "$RC" "0"
 eq "T15 the escalation FAIL keeps its streak through seal" "$(streakfile)" "3"
 chain @none
+PRIOR=$(out_value prior)
+eq "T15 an empty store reports prior 0" "$PRIOR" "0"
 eq "T15 no restored state starts at 1/3 (rc)" "$CHAIN_RC" "2"
 has "T15 no restored state starts at 1/3" "$C/probe.log" "consecutive transient runs: 1/3"
-runsut_seal transient "$(cat "$C/state/dir/streak")" 0
+runsut_seal transient "$(cat "$C/state/dir/streak")" "$PRIOR"
+eq "T15 seal accepts the probe's first increment from nothing (rc)" "$RC" "0"
 eq "T15 seal accepts the probe's first increment from nothing" "$(streakfile)" "1"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -453,14 +496,14 @@ import copy, re, sys
 import yaml
 
 SF = "${{ runner.temp }}/monitor-state/streak"
-STATUS = "${{ !cancelled() }}"
+ALERT_NAME = "Open or update the alert issue"
 BOOT = "${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}"
 UPLOAD_IF = ("${{ !cancelled() && github.ref == format('refs/heads/{0}', env.STREAK_BRANCH) "
              "&& steps.fetch.outcome == 'success' && steps.seal.outcome == 'success' }}")
 PROBE_LINE = re.compile(r"^\s*timeout 600 bash scripts/followthroughs/t5-skip-persistence-bound-7510\.sh( \\)?$", re.M)
 ARMS = [r"^\s*0\) verdict=pass ;;$", r"^\s*1\) verdict=fail ;;$", r"^\s*2\) verdict=transient ;;$",
         r"^\s*\*\) verdict=broken ;;$"]
-PROPS = ("P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9")
+PROPS = ("P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10")
 
 
 def load(path):
@@ -477,6 +520,17 @@ def by_id(d, sid):
         if s.get("id") == sid:
             return i, s
     return -1, None
+
+
+def by_name(d, name):
+    for s in steps_of(d):
+        if s.get("name") == name:
+            return s
+    return None
+
+
+def subset(required, actual):
+    return isinstance(actual, dict) and all(actual.get(k) == v for k, v in required.items())
 
 
 def on_of(d):
@@ -511,7 +565,10 @@ def check(path, script_path):
         "indices=%s" % idx)
 
     # P3 the state steps always run and cannot fail open
-    bad = [k for k in ("fetch", "probe", "seal", "assert") if sget(k, "if") != STATUS or "continue-on-error" in (by_id(d, k)[1] or {})]
+    def status_ok(k):
+        cond = str(sget(k, "if", ""))
+        return "!cancelled()" in cond and "always()" not in cond
+    bad = [k for k in ("fetch", "probe", "seal", "assert") if not status_ok(k) or "continue-on-error" in (by_id(d, k)[1] or {})]
     job = d["jobs"]["monitor"]
     bad += ["job" for k in ("if", "continue-on-error") if k in job]
     rec("P3", not bad, "steps with a wrong status function or continue-on-error: %s" % bad)
@@ -522,7 +579,8 @@ def check(path, script_path):
         vals.append((sget(k, "env") or {}).get("STREAK_FILE"))
     vals.append((sget("upload", "with") or {}).get("path"))
     hidden = any(seg.startswith(".") for v in vals if v for seg in str(v).split("/") if seg not in ("", "."))
-    rec("P4", vals == [SF] * 5 and not hidden, "values=%s" % vals)
+    rec("P4", len(set(map(str, vals))) == 1 and str(vals[0]).startswith("${{ runner.temp }}/") and not hidden,
+        "values=%s" % vals)
 
     # P5 upload gating and strictness, by exact equality
     up = by_id(d, "upload")[1] or {}
@@ -545,25 +603,39 @@ def check(path, script_path):
         and "T5_TRANSIENT_ESCALATE_AFTER" not in every_env,
         "probe invocation, verdict arms or threshold override")
 
-    # P8 the step skeleton: exact commands, exact input wiring, exact workflow-level settings
-    fetch_env = {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}", "GITHUB_REPOSITORY_ID": "${{ github.repository_id }}",
-                 "STREAK_FILE": SF, "BOOTSTRAP": BOOT}
-    seal_env = {"STREAK_FILE": SF, "VERDICT": "${{ steps.probe.outputs.verdict }}",
-                "RESTORED": "${{ steps.fetch.outputs.restored }}"}
-    assert_env = {"MATCHED": "${{ steps.fetch.outputs.matched }}", "STREAK_FILE": SF, "BOOTSTRAP": BOOT}
+    # P8 the step wiring: exact commands, the required inputs of each state step (extra keys are fine),
+    # the required workflow-level settings, a permissions ceiling and a trigger that still schedules
+    perms = d.get("permissions") or {}
     sched = on_of(d).get("schedule")
-    rec("P8", sget("fetch", "run") == "bash scripts/monitor-streak-state.sh fetch" and sget("fetch", "env") == fetch_env
-        and sget("seal", "run") == "bash scripts/monitor-streak-state.sh seal" and sget("seal", "env") == seal_env
-        and sget("assert", "run") == "bash scripts/monitor-streak-state.sh assert" and sget("assert", "env") == assert_env
-        and (sget("probe", "env") or {}) == {"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}", "T5_PROBE_STATE": SF}
-        and d.get("env") == {"STREAK_ARTIFACT_NAME": "rehearsal-skip-monitor-streak", "STREAK_BRANCH": "main"}
-        and d.get("permissions") == {"contents": "read", "issues": "write", "actions": "read"}
-        and sched == [{"cron": "0 6 * * *"}] and "workflow_dispatch" in on_of(d),
-        "skeleton differs from the expected step/env/permissions/trigger wiring")
+    rec("P8", sget("fetch", "run") == "bash scripts/monitor-streak-state.sh fetch"
+        and subset({"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}", "GITHUB_REPOSITORY_ID": "${{ github.repository_id }}",
+                    "BOOTSTRAP": BOOT}, sget("fetch", "env"))
+        and sget("seal", "run") == "bash scripts/monitor-streak-state.sh seal"
+        and subset({"VERDICT": "${{ steps.probe.outputs.verdict }}", "RESTORED": "${{ steps.fetch.outputs.prior }}"},
+                   sget("seal", "env"))
+        and sget("assert", "run") == "bash scripts/monitor-streak-state.sh assert"
+        and subset({"MATCHED": "${{ steps.fetch.outputs.matched }}", "BOOTSTRAP": BOOT}, sget("assert", "env"))
+        and subset({"GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"}, sget("probe", "env"))
+        and subset({"STREAK_ARTIFACT_NAME": "rehearsal-skip-monitor-streak", "STREAK_BRANCH": "main"}, d.get("env"))
+        and perms.get("contents") == "read" and perms.get("actions") == "read"
+        and set(perms) <= {"contents", "issues", "actions"} and perms.get("issues") in (None, "read", "write")
+        and isinstance(sched, list) and len(sched) >= 1 and "cron" in sched[0] and "workflow_dispatch" in on_of(d),
+        "step wiring, workflow settings, permissions ceiling or triggers differ from the required shape")
 
     # P9 the state file's basename is the one zip member the script requires
     m = re.search(r"printf '([A-Za-z0-9._-]+)\\n' > \"\$tmp/members\.want\"", script)
-    rec("P9", bool(m) and SF.rsplit("/", 1)[-1] == m.group(1), "member literal=%r" % (m.group(1) if m else None))
+    rec("P9", bool(m) and str(vals[0]).rsplit("/", 1)[-1] == m.group(1), "member literal=%r" % (m.group(1) if m else None))
+
+    # P10 a failed state step must reach the alert step: !cancelled(), both probe verdicts and the four
+    # state-step outcomes in its `if:`, never always(), and the outcomes handed to its script
+    alert = by_name(d, ALERT_NAME) or {}
+    cond = str(alert.get("if", ""))
+    need = ["!cancelled()", "steps.probe.outputs.verdict == 'fail'", "steps.probe.outputs.verdict == 'broken'"] + \
+           ["steps.%s.outcome == 'failure'" % k for k in ("fetch", "seal", "assert", "upload")]
+    envs = alert.get("env") or {}
+    rec("P10", bool(alert) and all(t in cond for t in need) and "always()" not in cond
+        and all(envs.get(k.upper() + "_OUTCOME") == "${{ steps.%s.outcome }}" % k for k in ("fetch", "seal", "assert", "upload")),
+        "alert if=%r" % cond)
     return out
 
 
@@ -580,6 +652,13 @@ def mutate(name, src, dst):
     i_up, st_up = by_id(d, "upload")
     st_fetch, st_seal, st_probe = by_id(d, "fetch")[1], by_id(d, "seal")[1], by_id(d, "probe")[1]
     on = on_of(d)
+    alert = by_name(d, ALERT_NAME) or {}
+
+    def set_all_paths(v):
+        st_probe["env"]["T5_PROBE_STATE"] = v
+        for st in (st_fetch, st_seal, st_assert):
+            st["env"]["STREAK_FILE"] = v
+        st_up["with"]["path"] = v
     M = {
         "m1-cache": lambda: steps.append({"name": "x", "uses": "actions/cache/restore@" + "0" * 40}),
         "m1b-plain-cache": lambda: steps.append({"name": "x", "uses": "actions/cache@" + "0" * 40}),
@@ -617,6 +696,13 @@ def mutate(name, src, dst):
         "m8e-fetch-or-true": lambda: st_fetch.__setitem__("run", st_fetch["run"] + " || true"),
         "m8f-no-schedule": lambda: on.pop("schedule"),
         "m8g-permissions": lambda: d["permissions"].__setitem__("contents", "write"),
+        "m9-basename": lambda: set_all_paths("${{ runner.temp }}/monitor-state/other"),
+        "m10-alert-probe-only": lambda: alert.__setitem__("if", "${{ !cancelled() && (steps.probe.outputs.verdict == 'fail' || steps.probe.outputs.verdict == 'broken') }}"),
+        "m10-alert-no-upload": lambda: alert.__setitem__("if", alert["if"].replace(" || steps.upload.outcome == 'failure'", "")),
+        "m10-alert-no-fetch": lambda: alert.__setitem__("if", alert["if"].replace(" || steps.fetch.outcome == 'failure'", "")),
+        "m10-alert-no-cancel": lambda: alert.__setitem__("if", alert["if"].replace("!cancelled() && ", "")),
+        "m10-alert-always": lambda: alert.__setitem__("if", alert["if"].replace("!cancelled()", "always()")),
+        "m10-alert-no-outcome-env": lambda: alert["env"].pop("UPLOAD_OUTCOME"),
         "benign": lambda: steps.append({"name": "Unrelated trailing step", "run": "true"}),
     }
     if name not in M:
@@ -634,17 +720,25 @@ if __name__ == "__main__":
         mutate(sys.argv[2], sys.argv[3], sys.argv[4])
 PY
 
-NPROPS=9
+NPROPS=10
+expect_prop_ok() { # name output-text prop
+  local line; line=$(printf '%s\n' "$2" | grep "^[a-z]* $3 " || true)
+  case "$line" in "ok $3 "*) pass ;; *) fail "$1: property $3 is not green: ${line:-<no line>}" ;; esac
+}
+expect_prop_bad() { # name output-text prop
+  local line; line=$(printf '%s\n' "$2" | grep "^[a-z]* $3 " || true)
+  case "$line" in "bad $3 "*) pass ;; *) fail "$1: property $3 stayed green: ${line:-<no line>}" ;; esac
+}
+ctl expect_prop_ok ctl-prop-ok "bad P1 broken" P1
+ctl expect_prop_ok ctl-prop-ok-missing "" P1
+ctl expect_prop_bad ctl-prop-bad "ok P1 fine" P1
+ctl expect_prop_bad ctl-prop-bad-missing "" P1
 wiring_check() { python3 -I "$WIRING" check "$1" "$SUT" 2>"$SANDBOX/wiring.err"; }
 
 PRISTINE_OUT=$(wiring_check "$WF")
 eq "B1 pristine workflow reports exactly $NPROPS property lines" "$(printf '%s\n' "$PRISTINE_OUT" | grep -c '^\(ok\|bad\) P')" "$NPROPS"
-for p in P1 P2 P3 P4 P5 P6 P7 P8 P9; do
-  line=$(printf '%s\n' "$PRISTINE_OUT" | grep "^[a-z]* $p " || true)
-  case "$line" in
-    "ok $p "*) pass ;;
-    *) fail "B1 property $p is not green on the workflow: ${line:-<no line>}" ;;
-  esac
+for p in P1 P2 P3 P4 P5 P6 P7 P8 P9 P10; do
+  expect_prop_ok "B1 workflow" "$PRISTINE_OUT" "$p"
 done
 
 # mutation rows: <mutation> <property that must go bad>
@@ -654,13 +748,10 @@ mrow() {
     fail "B2 mutation $m did not land: $(head -c 200 "$SANDBOX/mut.err")"; return
   fi
   out=$(wiring_check "$mf")
-  line=$(printf '%s\n' "$out" | grep "^[a-z]* $prop " || true)
-  case "$line" in
-    "bad $prop "*) pass ;;
-    *) fail "B2 mutation $m left property $prop green: ${line:-<no line>}" ;;
-  esac
+  expect_prop_bad "B2 mutation $m" "$out" "$prop"
 }
 ctl mrow bogus-mutation P1
+ctl mrow benign P1
 mrow m1-cache P1
 mrow m1b-plain-cache P1
 mrow m2-order P2
@@ -696,6 +787,13 @@ mrow m8d-seal-no-restored P8
 mrow m8e-fetch-or-true P8
 mrow m8f-no-schedule P8
 mrow m8g-permissions P8
+mrow m9-basename P9
+mrow m10-alert-probe-only P10
+mrow m10-alert-no-upload P10
+mrow m10-alert-no-fetch P10
+mrow m10-alert-no-cancel P10
+mrow m10-alert-always P10
+mrow m10-alert-no-outcome-env P10
 
 # must-PASS variant: an unrelated trailing step keeps every property green
 python3 -I "$WIRING" mutate benign "$WF" "$SANDBOX/mut-benign.yml" 2>/dev/null
@@ -710,7 +808,7 @@ eq "B4 an unparseable workflow reports $NPROPS bad properties" "$(wiring_check "
 # verdict
 # ─────────────────────────────────────────────────────────────────────────────
 printf 'monitor-streak-state: %s passed, %s failed\n' "$passes" "$fails"
-EXPECTED_MIN_PASSES=519
+EXPECTED_MIN_PASSES=714
 if [ "$passes" -lt "$EXPECTED_MIN_PASSES" ]; then
   printf 'FAIL: only %s assertions ran (floor %s): a suite that stopped asserting is not green\n' "$passes" "$EXPECTED_MIN_PASSES" >&2
   exit 1
