@@ -42,17 +42,17 @@ ok200|0|200|0.000503|0.009276|0'
 
 # name|rc|the raw output curl would print (printed verbatim, whatever the -w string asked for; outside the measured-format regex)
 #   raw_empty    nothing printed (the `timeout 20` wrapper killed curl: rc 124; curl 8.23 with a missing --cacert file: rc 2)
-#   raw_garbage  not four fields; the first token is URL-shaped (an event must never carry it)
+#   raw_garbage  four tokens, none usable: the first is URL-shaped (an event must never carry it), both time fields are text
 #   raw_short3   a short line: only the first two fields (code, time_connect); named for the plan row, kept as is
-#   raw_nonnum   a non-numeric time_connect, otherwise a TLS-complete rc 56 shape; verify field 18
+#   raw_nonnum   both time fields non-numeric; verify field 18 (read only when the exit code is 60)
 #   raw_nonnum502 the same with a 502 code
 #   ok200_comma_extra   a healthy 200 with a comma decimal separator and one extra trailing token (no trailing newline, like curl)
 #   req_reset_comma     the incident shape (req_reset) with comma decimal separators
 CURLW_RAW='raw_empty|124|
-raw_garbage|56|https://leak.invalid/x 10.0.1.40 0.000100 0
+raw_garbage|56|https://leak.invalid/x 10.0.1.40 garbage 0
 raw_short3|56|200 0.000503
-raw_nonnum|56|000 abc 0.004360 18
-raw_nonnum502|56|502 abc 0.004360 0
+raw_nonnum|56|000 abc def 18
+raw_nonnum502|56|502 abc def 0
 ok200_comma_extra|0|200 0,000503 0,009276 0 extra
 req_reset_comma|56|000 0,000138 0,004360 0'
 

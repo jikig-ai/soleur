@@ -39,6 +39,13 @@ export PLUGIN_MOUNT_DIR_ALLOW_UNSAFE=1
 INNGEST_LINK_TEST_DIR="$(mktemp -d)"
 export INNGEST_LINK_DIR="$INNGEST_LINK_TEST_DIR/inngest-link"
 
+# #10934: the unified curl mock answers the https self-gate (`*8443/health*`) from the SAME measured profile table and `-w` printer the
+# resolver suite uses (test-fixtures/curl-w-profiles.sh), selected by MOCK_IL_SELFGATE_PROFILE (default ok200). An unknown profile or
+# write-out variable exits 99 and drops the sentinel; a closing row asserts it was never dropped. The scratch dir is the one above
+# (removed by the EXIT trap below): no new mktemp.
+CURLW_FIXTURE="$SCRIPT_DIR/test-fixtures/curl-w-profiles.sh"
+CURL_W_SENTINEL="$INNGEST_LINK_TEST_DIR/curlw.sentinel"
+
 # #6665: the sleep mock's invocation cap has to be able to REPORT itself, and its own stderr
 # cannot. `run_deploy` merges the deploy script's stderr into the subshell's stdout
 # (`bash "$DEPLOY_SCRIPT" 2>&1`) and 18 call sites close with `>/dev/null 2>&1`, so a diagnostic
@@ -1333,17 +1340,21 @@ MOCK
 #   MOCK_CURL_DASH_ERROR_BODY=1 /dashboard returns 200 but body contains the
 #                               error.tsx sentinel string
 #   MOCK_CURL_LOGIN_EMPTY=1     /login returns 200 with empty body
+#   MOCK_IL_SELFGATE_PROFILE=<name>[@rc]  the Inngest https self-gate (8443/health) prints that profile of the shared curl
+#                               write-out table (test-fixtures/curl-w-profiles.sh); default ok200, an unknown name exits 99
 create_curl_mock() {
-  cat > "$1/curl" << 'MOCK'
-#!/bin/bash
+  # the absolute fixture and sentinel paths are baked in at creation (the heredoc below is quoted); the mock exits 98 when the source fails
+  { printf '#!/bin/bash\nCURLW_FIXTURE=%q\nCURL_W_SENTINEL=%q\n' "$CURLW_FIXTURE" "$CURL_W_SENTINEL"; cat << 'MOCK'
 ARGS=("$@")
 URL=""
 OUTPUT_FILE=""
 WANT_HTTP_CODE=0
+WFMT=""
 for ((i=0; i<${#ARGS[@]}; i++)); do
   case "${ARGS[$i]}" in
     -o) OUTPUT_FILE="${ARGS[$((i+1))]}" ;;
     -w)
+      WFMT="${ARGS[$((i+1))]}"
       if [[ "${ARGS[$((i+1))]}" == *"http_code"* ]]; then WANT_HTTP_CODE=1; fi
       ;;
     http*) URL="${ARGS[$i]}" ;;
@@ -1412,6 +1423,15 @@ case "$URL" in
     write_body '{"status":200,"message":"OK"}'
     exit 0
     ;;
+  *"8443/health"*)
+    # #10934: the Inngest https self-gate (`curl --cacert <candidate> -w '<four variables>' https://10.0.1.40:8443/health`). Must match
+    # before the generic /health route. The profile (and its exit code) come from the shared measured table, interpreted against the
+    # -w string the script actually passed (an unmodelled variable exits 99 and drops the sentinel: it is never answered as a 200).
+    # shellcheck disable=SC1090
+    source "${CURL_W_PROFILES_FILE:-$CURLW_FIXTURE}" || exit 98
+    curlw_print "${MOCK_IL_SELFGATE_PROFILE:-ok200}" "$WFMT"
+    exit $?
+    ;;
   *"/health"*)
     write_body "OK"
     if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; fi
@@ -1465,6 +1485,7 @@ if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; exit 0; fi
 write_body "OK"
 exit 0
 MOCK
+  } > "$1/curl"
   chmod +x "$1/curl"
 }
 
@@ -3397,6 +3418,44 @@ else
     FAIL=$((FAIL + 1)); echo "  FAIL: failing positive check not honoured (rc=$IL_RC runs=$(il_runs))"
   fi
 
+  # --- #10934: the self-gate failure event names the stage the LAST attempt reached (phase=, tcp=, tls=, verify=) ---
+  # End to end through the real deploy flow with the unified curl mock answering from the shared measured profile table. req_reset is
+  # the incident signature (rc 56, TLS completed and verified, no HTTP status): the gate fails (3 attempts), nothing is started, the
+  # reason stays the constant token, and the ONE event line is exactly the anchored grammar with phase=request tcp=3 tls=3 verify=0.
+  TOTAL=$((TOTAL + 1))
+  rm -f "$CURL_W_SENTINEL"
+  il_deploy sg-reset "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_IL_SELFGATE_PROFILE=req_reset
+  IL_SG_LINE="$(grep -F 'class=selfgate_failed' "$IL_LOG" | sed -E 's/^-t [^ ]+ //' || true)"
+  IL_OK=1
+  [[ "$IL_RC" -ne 0 ]] || IL_OK=0
+  [[ "$(il_runs)" -eq 0 ]] || IL_OK=0   # no container of any kind was started
+  [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == inngest_link_selfgate_failed ]] || IL_OK=0
+  [[ "$(printf '%s\n' "$IL_SG_LINE" | grep -c '^')" -eq 1 ]] || IL_OK=0
+  [[ "$IL_SG_LINE" == 'INNGEST_LINK: class=selfgate_failed level=error rc=56 http=000 attempts=3 phase=request tcp=3 tls=3 verify=0' ]] || IL_OK=0
+  [[ ! -e "$CURL_W_SENTINEL" ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + the incident signature (TLS verified, rc 56): deploy fails (reason=inngest_link_selfgate_failed), no docker run, the event reads phase=request tcp=3 tls=3 verify=0"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: self-gate failure event (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null)) line=[$IL_SG_LINE] sentinel=$(head -n1 "$CURL_W_SENTINEL" 2>/dev/null)"
+  fi
+
+  # a healthy listener whose -w line is SHORT (rc 0, code 200, the later fields missing) still passes the gate: the verdict is decided
+  # from the exit code and the first token before any other field is looked at
+  TOTAL=$((TOTAL + 1))
+  rm -f "$CURL_W_SENTINEL"
+  il_deploy sg-short "INNGEST_LINK_TLS=1" "$IL_GOOD_B64" MOCK_IL_SELFGATE_PROFILE=raw_short3@0
+  IL_OK=1
+  [[ "$IL_RC" -eq 0 ]] || IL_OK=0
+  [[ "$(il_runs)" -eq 2 ]] || IL_OK=0   # the canary and the production container were started: the gate passed
+  il_url_clean "https://10.0.1.40:8443" || IL_OK=0
+  grep -qF 'class=selfgate_failed' "$IL_LOG" && IL_OK=0
+  [[ ! -e "$CURL_W_SENTINEL" ]] || IL_OK=0
+  if [[ "$IL_OK" -eq 1 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: flag on + a healthy listener with a short -w line (rc 0, code 200): the gate passes and both containers start"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: a short -w line from a healthy listener (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"; grep -E 'selfgate' "$IL_LOG" | head -3
+  fi
+
   # flag ABSENT: the canary layer is a no-op even when the container mock would fail every check, and the value stays http, once per run
   TOTAL=$((TOTAL + 1))
   il_deploy off "" "$IL_GOOD_B64" MOCK_IL_NEG=inngest_link_canary_neg=accepted "MOCK_IL_POS=garbage"
@@ -3581,6 +3640,15 @@ else
   fi
 fi
 rm -rf "$IL_DIR"
+
+# #10934: the shared curl profile printer refused nothing during any flag-on deploy of this suite (an unknown profile or write-out variable
+# exits 99 and drops the sentinel; the deploy would only have seen one more failed gate attempt)
+TOTAL=$((TOTAL + 1))
+if [[ ! -e "$CURL_W_SENTINEL" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: the shared curl profile printer refused no profile or write-out variable in this suite"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the shared curl profile printer refused: $(head -n1 "$CURL_W_SENTINEL")"
+fi
 
 echo ""
 echo "--- tmpfs /tmp on docker run (closes #2473) ---"
