@@ -1456,18 +1456,19 @@ assert "G3 generation anchor: a rejected token names the variable that was sent"
 # A local filter fault must warn, so the `unreadable` refusal never points at a warning that is absent.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' 'garbage'; }
-  printf '%s\n' "$FIX_CUR_1_FLIP" | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip <<<"$FIX_CUR_1_FLIP" 2>"$FLV_ERR" )"
 assert "G3 generation: a filter that does not yield six integers -> __UNREADABLE__ WITH a warning naming it" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]] && grep -qF 'row-count filter did not yield six integers' '$FLV_ERR'"
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' '2 2 2 0 0 0 9'; }
-  printf '%s\n' "$FIX_CUR_1_FLIP" | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip <<<"$FIX_CUR_1_FLIP" 2>"$FLV_ERR" )"
 assert "G3 generation: a SEVENTH token from the filter is refused, not silently absorbed" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]]"
 # #8846: a counter reached without an emitter tag cannot scope to the FSM, so it refuses, and says
 # the defect is in the script (not the host) — on STDERR, never inside the stdout token.
+# Ref #9325: refusing consumers need no input; a pipe races printf against their exit under pipefail.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
-  printf '%s\n' "$FIX_CUR_1_FLIP" "$FIX_CUR_2_FLIP" | _generation_scoped_count "$FIX_FLOOR" test "" 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test "" <<<"$FIX_CUR_1_FLIP"$'\n'"$FIX_CUR_2_FLIP" 2>"$FLV_ERR" )"
 assert "#8846 an EMPTY emitter tag -> __UNREADABLE__ (got '$FILTER_OUT'), with the missing-tag warning on stderr" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]] && grep -qF '::warning::' '$FLV_ERR' && grep -qF 'liveness counter called without an emitter tag — a defect in cutover-inngest.sh, not a host state' '$FLV_ERR'"
 # #8873 review (test-design F4): the emitter match is EXACT. The other FSM's rows, and a tag that

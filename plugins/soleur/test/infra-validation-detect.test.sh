@@ -209,4 +209,27 @@ OUT=$(printf '%s' '["apps/dir-sentinel/infra"]' | detect_plan_dirs "$FIX_PLAN")
 assert_eq '["apps/dir-sentinel/infra"]' "$OUT" "directory sentinel → root kept"
 echo ""
 
+echo "TS18: non-sentinel roots do not fail the warning loop under errexit"
+if OUT=$(bash -e -o pipefail -c '
+  is_plan_skipped() { [ -f "$1/.pr-plan-skip" ] && [ -s "$1/.pr-plan-skip" ]; }
+  DIRS="[\"apps/web-platform/infra\"]"
+  printf "%s" "$DIRS" | jq -r ".[]" | while IFS= read -r d; do
+    if is_plan_skipped "$d"; then
+      echo "::warning::excluding ${d}"
+    fi
+  done
+'); then
+  assert_eq "" "$OUT" "non-sentinel root emits no warning and returns success"
+else
+  echo "  FAIL: non-sentinel root made the workflow warning loop exit non-zero"
+  FAIL=$((FAIL + 1))
+fi
+echo ""
+
+echo "TS19: warning loop remains pinned to the workflow's real guard"
+WARN_STEP=$(awk '/# Emit the exclusion on real stdout/{f=1} f{print} f&&/^          fi$/{exit}' \
+  "$REPO_ROOT/.github/workflows/infra-validation.yml")
+assert_contains "$WARN_STEP" 'if is_plan_skipped "$d"; then' "workflow guards the expected false predicate"
+echo ""
+
 print_results

@@ -261,3 +261,23 @@ toward the reassuring one. Two mechanical rules:
 This is the same defect the rest of this file is about, committed by the instrument rather than the
 CI step: a check whose passing state is indistinguishable from its broken state. It cost nothing
 here only because the claim was independently re-derived — which is the habit, not the mechanism.
+
+## Addendum — 2026-10-08 PostgreSQL-client recurrence
+
+PR #9051's [RLS run 37689946758](https://github.com/jikig-ai/soleur/actions/runs/37689946758)
+exhausted its 25-minute deadline in an unconditional PostgreSQL-client package install.
+Migration application and the fuzz harness never ran. Main retained the same installer,
+while the tenant workflow already relied on the GitHub-hosted Ubuntu image's client.
+[Issue #9740](https://github.com/jikig-ai/soleur/issues/9740) tracks the defect.
+
+Replace the installer with an unconditional `psql --version` assertion. The workflow's
+own path filter schedules the changed assertion; verification must also require migration
+application and the actual fuzz harness to succeed. An assertion-only pass or skipped
+consumer is insufficient. Retain the loopback guards, parity conditions and job deadline.
+
+The first issue-filing attempt was visibly rejected because it omitted a milestone and
+recognized filing fields. Operational filings require `--milestone 'Post-MVP / Later'`
+and a filing exit in the same invocation/body. The successful retry included
+`User-Impact:`, `Fix-Size:` and the pre-existing-finding rule in `Mandated-By:`.
+Treat the rejection as a failed filing, correct its arguments, and verify OPEN before
+editing the tracked defect; no permission request is needed for that correction.

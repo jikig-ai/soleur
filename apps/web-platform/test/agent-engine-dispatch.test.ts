@@ -3,8 +3,32 @@ import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, d
 import { createEngineRegistry } from "@/server/agent-engine-registry";
 
 describe("dispatchBoundEngineRun", () => {
+  it.each(["completion", "provider failure", "consumer return"])("disposes its factory-owned adapter on %s", async (outcome) => {
+    const adapter = {
+      start: vi.fn(async function* () {
+        if (outcome === "provider failure") throw new Error("provider rejected");
+        yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+      }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const iterator = dispatchBoundEngineRunFromRegistry({
+      repository: { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) },
+      factories: { "claude-code": () => adapter as never },
+      runId: "run-1", input: { text: "hi", attachmentIds: [] }, context: {} as never,
+    });
+    if (outcome === "provider failure") {
+      await expect(iterator.next()).rejects.toThrow("provider rejected");
+    } else {
+      await iterator.next();
+      expect(adapter.dispose).not.toHaveBeenCalled();
+      if (outcome === "consumer return") await iterator.return(undefined);
+      else await iterator.next();
+    }
+    expect(adapter.dispose).toHaveBeenCalledOnce();
+  });
+
   it("resolves a conversation binding before selecting its adapter", async () => {
-    const adapter = { start: vi.fn(async function* () {
+    const adapter = { dispose: vi.fn().mockResolvedValue(undefined), start: vi.fn(async function* () {
       yield { runId: "run-conv-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
     }) };
     const persisted = {
@@ -55,7 +79,7 @@ describe("dispatchBoundEngineRun", () => {
   });
 
   it("resolves a routine binding before selecting its adapter", async () => {
-    const adapter = { start: vi.fn(async function* () {
+    const adapter = { dispose: vi.fn().mockResolvedValue(undefined), start: vi.fn(async function* () {
       yield { runId: "run-routine-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
     }) };
     const persisted = {
@@ -108,7 +132,7 @@ describe("dispatchBoundEngineRun", () => {
   });
 
   it("resolves the adapter from the persisted engine binding", async () => {
-    const adapter = { start: vi.fn(async function* () {
+    const adapter = { dispose: vi.fn().mockResolvedValue(undefined), start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
     }) };
     const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
@@ -119,7 +143,7 @@ describe("dispatchBoundEngineRun", () => {
   });
 
   it("resolves future engines through an explicit reviewed registry", async () => {
-    const adapter = { start: vi.fn(async function* () {
+    const adapter = { dispose: vi.fn().mockResolvedValue(undefined), start: vi.fn(async function* () {
       yield { runId: "run-grok-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
     }) };
     const registry = createEngineRegistry([{

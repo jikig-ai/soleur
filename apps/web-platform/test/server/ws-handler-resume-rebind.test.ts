@@ -29,9 +29,11 @@ const USER_ID = "user-resume-A";
 
 const { rpcSpy, singleSpy, engineRunSpy } = vi.hoisted(() => ({
   rpcSpy: vi.fn(
-    async (): Promise<{
+    async (name?: string): Promise<{
+      data?: { id: string };
       error: { code: string; message: string } | null;
-    }> => ({ error: null }),
+    }> => name === "start_agent_engine_attempt"
+      ? { data: { id: "attempt-1" }, error: null } : { error: null },
   ),
   singleSpy: vi.fn(async () => ({
     data: {
@@ -44,6 +46,36 @@ const { rpcSpy, singleSpy, engineRunSpy } = vi.hoisted(() => ({
     error: null,
   })),
   engineRunSpy: vi.fn(async (): Promise<{ data: Record<string, unknown> | null; error: null }> => ({ data: null, error: null })),
+}));
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    rpc: rpcSpy,
+    from: (table: string) => {
+      const chain: Record<string, unknown> = {};
+      chain.select = () => chain;
+      chain.eq = () => chain;
+      chain.maybeSingle = table === "agent_engine_runs" ? engineRunSpy : singleSpy;
+      return chain;
+    },
+  }),
+}));
+
+vi.mock("@/server/codex-conversation-runtime", () => ({
+  codexConversationRuntime: (userId: string) => ({
+    dataClass: "synthetic",
+    runtime: {
+      userId, transport: {},
+      apiKeyProvider: { mode: "api-key", acquire: vi.fn(), refresh: vi.fn(), logout: vi.fn() },
+      createCodex: () => ({ start: async function* (context: { runId: string }) {
+        yield { runId: context.runId, eventId: "e-1", sequence: 1, payload: { type: "status", status: "running" } };
+        yield { runId: context.runId, eventId: "e-2", sequence: 2, payload: { type: "text", text: "synthetic answer" } };
+        yield { runId: context.runId, eventId: "e-3", sequence: 3, payload: { type: "status", status: "completed" } };
+      }, dispose: async () => undefined }),
+    },
+    registry: { get: () => ({ id: "codex", enabledForExistingRuns: true }), resolve: () => ({ id: "codex", enabledForExistingRuns: true }) },
+    evidence: { endpoint: "https://api.openai.com/v1", allowedHosts: ["api.openai.com"], acceptedDataClasses: ["synthetic"], vendorDpaStatus: "verified", transferGeography: "scc", deletionSupport: "verified", approvalRequired: false },
+  }),
 }));
 
 vi.mock("@/server/current-repo-url", () => ({
@@ -246,7 +278,7 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
     expect(frames).not.toContain("session_started");
   });
 
-  it("rejects a Codex-bound conversation before workspace rebind or legacy session start", async () => {
+  it("resumes a Codex-bound conversation after the workspace rebind", async () => {
     engineRunSpy.mockResolvedValueOnce({
       data: {
         id: "run-codex-1",
@@ -255,7 +287,8 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
         workspace_id: WORKSPACE_ID,
         engine_id: "codex",
         auth_mode: "api-key",
-        adapter_version: "1",
+        auth_mode_generation: 0,
+        adapter_version: "codex-v1",
         created_at: "2026-01-01T00:00:00Z",
       },
       error: null,
@@ -265,9 +298,32 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
 
     await handleMessage(USER_ID, JSON.stringify({ type: "resume_session", conversationId: CONV_ID }));
 
+    expect(engineRunSpy).toHaveBeenCalled();
+    expect(rpcSpy).toHaveBeenCalledWith("set_current_workspace_id", { p_workspace_id: WORKSPACE_ID });
+    expect(sessions.get(USER_ID)?.conversationId).toBe(CONV_ID);
+    const frames = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call: unknown[]) => JSON.parse(call[0] as string).type,
+    );
+    expect(frames).not.toContain("error");
+    expect(frames).toContain("session_started");
+  });
+
+  it.each(["pending", "bound"])("keeps a %s conversation with no persisted run closed on resume", async (state) => {
+    singleSpy.mockResolvedValueOnce({
+      data: { id: CONV_ID, status: "active", repo_url: REPO_URL, workspace_id: WORKSPACE_ID, engine_binding_state: state },
+      error: null,
+    }).mockResolvedValueOnce({
+      data: { id: CONV_ID, status: "active", repo_url: REPO_URL, workspace_id: WORKSPACE_ID, engine_binding_state: state },
+      error: null,
+    });
+    const session = makeSession();
+    sessions.set(USER_ID, session);
+
+    await handleMessage(USER_ID, JSON.stringify({ type: "resume_session", conversationId: CONV_ID }));
+
     expect(engineRunSpy).toHaveBeenCalledOnce();
-    expect(rpcSpy).not.toHaveBeenCalled();
-    expect(sessions.get(USER_ID)?.conversationId).toBeUndefined();
+    expect(rpcSpy).not.toHaveBeenCalledWith("set_current_workspace_id", expect.anything());
+    expect(session.conversationId).toBeUndefined();
     const frames = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
       (call: unknown[]) => JSON.parse(call[0] as string).type,
     );
@@ -275,8 +331,31 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
     expect(frames).not.toContain("session_started");
   });
 
-  it("rejects a Codex-bound chat turn on an already resumed session", async () => {
+  it("keeps an invalid persisted engine binding closed on resume", async () => {
     engineRunSpy.mockResolvedValueOnce({
+      data: {
+        id: "run-invalid-1", execution_kind: "conversation", conversation_id: CONV_ID,
+        workspace_id: WORKSPACE_ID, engine_id: "unreviewed-engine", auth_mode: "api-key",
+        adapter_version: "unknown-v1", created_at: "2026-09-27T00:00:00Z",
+      },
+      error: null,
+    });
+    const session = makeSession();
+    sessions.set(USER_ID, session);
+
+    await handleMessage(USER_ID, JSON.stringify({ type: "resume_session", conversationId: CONV_ID }));
+
+    expect(rpcSpy).not.toHaveBeenCalledWith("set_current_workspace_id", expect.anything());
+    expect(session.conversationId).toBeUndefined();
+    const frames = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call: unknown[]) => JSON.parse(call[0] as string).type,
+    );
+    expect(frames).toContain("error");
+    expect(frames).not.toContain("session_started");
+  });
+
+  it("dispatches a Codex-bound chat turn on an already resumed session", async () => {
+    engineRunSpy.mockResolvedValue({
       data: {
         id: "run-codex-1",
         execution_kind: "conversation",
@@ -284,7 +363,8 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
         workspace_id: WORKSPACE_ID,
         engine_id: "codex",
         auth_mode: "api-key",
-        adapter_version: "1",
+        auth_mode_generation: 0,
+        adapter_version: "codex-v1",
         created_at: "2026-01-01T00:00:00Z",
       },
       error: null,
@@ -295,11 +375,14 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
 
     await handleMessage(USER_ID, JSON.stringify({ type: "chat", content: "synthetic hello" }));
 
-    expect(engineRunSpy).toHaveBeenCalledOnce();
+    expect(engineRunSpy).toHaveBeenCalled();
     const frames = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
       (call: unknown[]) => JSON.parse(call[0] as string).type,
     );
-    expect(frames).toContain("error");
-    expect(frames).not.toContain("session_started");
+    expect(frames).not.toContain("error");
+    expect(frames).toContain("stream");
+    expect(rpcSpy).toHaveBeenCalledWith("append_agent_engine_lifecycle_event", expect.objectContaining({
+      p_run_id: "run-codex-1",
+    }));
   });
 });

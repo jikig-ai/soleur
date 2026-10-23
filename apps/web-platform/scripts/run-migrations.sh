@@ -233,6 +233,34 @@ if [[ -n "$collision_check" ]]; then
   done <<<"$collision_check"
 fi
 
+# The runner is filename-keyed, so a legacy applied row does not make a renamed
+# current migration applied. Discover missing-current ledger names by slug
+# instead of carrying a mapping that can silently miss the next renumber.
+legacy_chain_rows=$(run_sql "SELECT filename FROM public._schema_migrations ORDER BY filename;")
+legacy_chain_refusals=""
+while IFS= read -r tracked_filename; do
+  [[ "$tracked_filename" =~ ^([0-9]{3})_([A-Za-z0-9_-]+)\.sql$ ]] || continue
+  [[ -f "$MIGRATIONS_DIR/$tracked_filename" ]] && continue
+  legacy_prefix="${BASH_REMATCH[1]}"
+  legacy_slug="${BASH_REMATCH[2]}"
+  for candidate_file in "$MIGRATIONS_DIR"/*.sql; do
+    [[ -e "$candidate_file" ]] || continue
+    candidate="$(basename "$candidate_file")"
+    [[ "$candidate" == *.down.sql ]] && continue
+    [[ "$candidate" =~ ^([0-9]{3})_([A-Za-z0-9_-]+)\.sql$ ]] || continue
+    candidate_prefix="${BASH_REMATCH[1]}"
+    candidate_slug="${BASH_REMATCH[2]}"
+    [[ "$candidate_slug" == "$legacy_slug" && "$candidate_prefix" != "$legacy_prefix" ]] || continue
+    if ! grep -qxF "$candidate" <<<"$legacy_chain_rows"; then
+      legacy_chain_refusals+="  legacy migration ledger row $tracked_filename has renamed migration $candidate pending; explicit ledger reconciliation is required after schema verification.\n"
+    fi
+  done
+done <<<"$legacy_chain_rows"
+if [[ -n "$legacy_chain_refusals" ]]; then
+  printf '::error::Legacy migration ledger rows block renamed migrations:\n%b' "$legacy_chain_refusals"
+  exit 1
+fi
+
 # Apply unapplied migrations in sorted order
 applied=0
 skipped=0
@@ -337,6 +365,37 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     continue
   fi
 
+  # Migration 165 backfills the workspace mode from the latest Codex
+  # conversation run. Refuse when conflicting modes share that latest
+  # timestamp; ORDER BY created_at alone cannot choose deterministically.
+  if [[ "$filename" == "165_codex_auth_mode_rebind.sql" ]]; then
+    codex_auth_mode_timestamp_tie_count=$(run_sql "/* codex_auth_mode_timestamp_tie_count */
+      SELECT count(*)
+        FROM (
+          SELECT r.workspace_id
+            FROM public.agent_engine_runs AS r
+            JOIN public.workspace_engine_settings AS s ON s.workspace_id = r.workspace_id
+           WHERE s.default_engine_id IS DISTINCT FROM 'codex'
+             AND r.execution_kind = 'conversation'
+             AND r.engine_id = 'codex'
+             AND r.auth_mode IN ('managed', 'api-key')
+             AND r.created_at = (
+               SELECT max(latest.created_at)
+                 FROM public.agent_engine_runs AS latest
+                WHERE latest.workspace_id = r.workspace_id
+                  AND latest.execution_kind = 'conversation'
+                  AND latest.engine_id = 'codex'
+                  AND latest.auth_mode IN ('managed', 'api-key')
+             )
+           GROUP BY r.workspace_id
+          HAVING count(DISTINCT r.auth_mode) > 1
+        ) AS conflicting_latest_modes;")
+    if [[ ! "$codex_auth_mode_timestamp_tie_count" =~ ^[0-9]+$ || "$codex_auth_mode_timestamp_tie_count" -gt 0 ]]; then
+      echo "::error::Codex auth-mode backfill has conflicting latest timestamps; resolve the affected workspace state before migration 165. No migration was applied."
+      exit 1
+    fi
+  fi
+
   # Schema-presence probe (#4338). Before applying a migration, extract
   # the `REFERENCES public.<table>` mentions from its body, SUBTRACT the
   # tables the same file CREATEs, and confirm each remaining cross-file
@@ -421,20 +480,82 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     echo "::error::Migration $filename has unsupported transaction commands; refusing non-atomic ledger write"
     exit 1
   fi
-  # psql's --single-transaction requires -f/-c; plain piped stdin silently
-  # disables it. The ledger row carries content_sha when known.
-  if ! {
+  # Applied migration bytes stay immutable. Admission must hold its lock through
+  # the body and ledger insert; a separate preflight SELECT is not race-safe.
+  codex_guard="$SCRIPT_DIR/sql/codex-auth-mode-pre-migration.sql"
+  if [[ "$filename" == "165_codex_auth_mode_rebind.sql" && ! -r "$codex_guard" ]]; then
+    echo "::error::Codex auth-mode pre-migration guard is unavailable; refusing migration 165"
+    exit 1
+  fi
+  if [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+    # Preserve the fail-closed state even if preparing this migration fails.
+    # A database may already have ledgered 169 under the older runner while
+    # retaining its workspace-only authenticated RPC grants.
+    if ! psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 \
+      -c "REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role; REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;"; then
+      echo "::error::Could not close Codex acknowledgment RPC grants before migration 170; refusing owner-scope migration"
+      exit 1
+    fi
+  fi
+  # Assemble the complete unit before opening psql. A streaming producer can
+  # fail after emitting valid SQL, and psql would commit that prefix at EOF.
+  # Conditional command substitutions suppress errexit, so check EVERY output
+  # command explicitly, including literal SQL and the ledger suffix.
+  if ! migration_sql="$(
+    if [[ "$filename" == "165_codex_auth_mode_rebind.sql" ]]; then
+      cat "$codex_guard" || exit 1
+    fi
+    if [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+      # Also cover a database where 169 was ledgered before this runner gained
+      # the 169 barrier: close the old grants within 170's transaction before
+      # replacing either function. The commit then reveals owner-scoped bodies
+      # and restored grants atomically.
+      printf 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n' || exit 1
+      printf 'REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n\n' || exit 1
+    fi
     if [[ "$strip_outer_txn" == "true" ]]; then
-      sed -E '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$migration_file"
+      sed -E '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$migration_file" || exit 1
     else
-      cat "$migration_file"
+      cat "$migration_file" || exit 1
+    fi
+    # Migration 169 originally grants authenticated callers two acknowledgment
+    # RPCs that do not yet enforce conversation ownership. Keep those grants
+    # from becoming visible at the transaction boundary; migration 170 restores
+    # them only after replacing both functions with owner-scoped definitions.
+    # The migration files remain immutable for databases that already ledgered
+    # them, while fresh runner-managed installs have no exposed interval.
+    if [[ "$filename" == "169_codex_history_transfer_ack.sql" ]]; then
+      printf '\nREVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n' || exit 1
+      printf 'REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n' || exit 1
+    elif [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+      printf '\nGRANT EXECUTE ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) TO authenticated;\n' || exit 1
+      printf 'GRANT EXECUTE ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) TO authenticated;\n' || exit 1
     fi
     if [[ -n "$content_sha" ]]; then
-      printf "\nINSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
+      # A fresh --bootstrap=skip schema does not have content_sha until 054.
+      # Inspect AFTER this migration body in the SAME transaction: the file
+      # adding the column gets its own apply-time hash, while earlier rows stay
+      # NULL when 054 adds it. Do not create/backfill columns outside migrations.
+      # SQL dollar-quote delimiter is literal, not shell interpolation.
+      # shellcheck disable=SC2016
+      printf '\nDO $migration_ledger$\nBEGIN\n' || exit 1
+      printf "  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public._schema_migrations'::regclass AND attname = 'content_sha' AND NOT attisdropped) THEN\n" || exit 1
+      printf "    INSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha" || exit 1
+      printf '  ELSE\n' || exit 1
+      printf "    INSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename" || exit 1
+      # SQL dollar-quote delimiter is literal, not shell interpolation.
+      # shellcheck disable=SC2016
+      printf '  END IF;\nEND;\n$migration_ledger$;\n' || exit 1
     else
-      printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
+      printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename" || exit 1
     fi
-  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 -f -; then
+  )"; then
+    echo "::error::Could not assemble migration SQL: $filename; no migration apply was attempted"
+    exit 1
+  fi
+  # -f - makes --single-transaction effective. The here-string supplies only
+  # the successfully assembled unit, with no fallible streaming producer.
+  if ! psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 -f - <<<"$migration_sql"; then
     echo "::error::Migration failed: $filename"
     exit 1
   fi

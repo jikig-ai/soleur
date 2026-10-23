@@ -165,3 +165,18 @@ reds 2 tests; making it unconditional reds 24.
 - #7853 — hook self-tests write fabricated deny events into the real ledger
 - ADR-201 — the Corporate CLA is a repo-tracked roster; AP-026 (additive evidence must not gate)
 - `knowledge-base/project/learnings/2026-09-04-every-verification-i-wrote-passed-and-three-of-them-proved-nothing.md`
+
+## Addendum — 2026-10-07 completed polling sessions
+
+A Codex CI watch returned its final green line and exit code 0 during the first
+of two sequential `write_stdin` calls. The second call used the now-closed session
+and returned `Unknown process id`, causing the enclosing orchestration cell to
+fail. The watch's completed result remained available; this was a polling-owner
+error, not a CI failure. Exact-head workflow conclusions and required aggregates
+were inspected separately before accepting the CI verdict.
+
+After each poll, inspect the result's `session_id` before polling again. If it is
+absent, retain the output and exit code, stop using that session and evaluate the
+actual command's verdict. A planned second wait must depend on the first poll
+still reporting a running session. Do not rerun the command because its finished
+session can no longer be polled.

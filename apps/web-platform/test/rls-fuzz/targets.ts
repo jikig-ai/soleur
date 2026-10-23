@@ -27,8 +27,9 @@ export interface Ctx {
   convA: string;
   /** A second A-owned conversation — the ucs INSERT-forge needs a non-colliding (user,conv) pair. */
   convA2: string;
-  /** An A-owned engine run shared by event-table and append-RPC isolation attacks. */
+  /** An A-owned Codex engine run with a seeded generation-bound history acknowledgment. */
   engineRunA: string;
+  engineAuthModeGenerationA: string;
 }
 
 /** A WHERE clause + params that uniquely identify A's seeded canonical row. */
@@ -90,6 +91,8 @@ export const EXCLUDED_ISOLATION: Record<string, string> = {
     "workspace-OWNER-gated (is_email_triage_workspace_owner, mig 111 dropped the user_id policy); INSERT REVOKE'd from authenticated → now fuzzed on SELECT-USING (owner userA sees, co-member userC denied) in rls-excluded-deepened via the shared seedEmailTriageItem fixture + the set_email_triage_status RPC attack (Phase 7)",
   email_inbox_routes:
     "inbound email routing table (mig 155, ADR-269): RLS ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated (service-role-only) → every authenticated read or write is denied for every tenant, so a co-member positive control is schema-impossible; the grant-level denial is asserted by supabase/verify/155_email_inbox_routes.sql and scripts/check-tom4-rls-posture.sh",
+  codex_history_transfer_notice_issuances:
+    "private one-use notice ledger (mig 173): RLS ENABLED with ZERO policies and ALL direct table privileges revoked from anon/authenticated/service_role; only scoped SECURITY DEFINER RPCs can access it. A tenant SELECT positive control is schema-impossible; disposable PostgreSQL coverage in migration-169-codex-history-transfer-ack.integration.test.ts verifies a stored issuance and direct-access denial, while rls-rpc.integration.test.ts attacks the authenticated acknowledgment RPC.",
   dsar_export_jobs:
     "GDPR DSAR export jobs, user-keyed (auth.uid()=user_id), SELECT-only policy → now fuzzed on SELECT-USING (owner sees, co-member denied) in rls-excluded-deepened; INSERT default-denied (no INSERT policy) so no write-forge",
   workspace_egress_audit_rollup:

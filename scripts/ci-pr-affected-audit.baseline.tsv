@@ -713,11 +713,6 @@ plugins/soleur/test/hook-input-classification-mutation.test.sh	plugins/soleur/sc
 plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/lib/rule-metrics-constants.sh
 plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/rule-metrics-aggregate.sh
 plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh	scripts/lib/scratch-root.sh
-plugins/soleur/test/infra-validation-detect.test.sh	apps/cla-evidence/infra/main.tf
-plugins/soleur/test/infra-validation-detect.test.sh	apps/web-platform/infra/git-data-root-key/key.tf
-plugins/soleur/test/infra-validation-detect.test.sh	apps/web-platform/infra/sentry/uptime-monitors.tf
-plugins/soleur/test/infra-validation-detect.test.sh	apps/web-platform/infra/uptime-alerts.tf
-plugins/soleur/test/infra-validation-detect.test.sh	infra/github/main.tf
 plugins/soleur/test/infra-validation-detect.test.sh	scripts/lib/scratch-root.sh
 plugins/soleur/test/inngest-config-bundle-mirror.test.sh	.github/workflows/reusable-release.yml
 plugins/soleur/test/issue-flow-measure.test.sh	apps/web-platform/server/inngest/functions/_cron-run-reports.ts

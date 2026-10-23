@@ -1,0 +1,326 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+
+const isCi = process.env.CI === "true";
+const container = isCi
+  ? `codex_ack_pg_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`
+  : "supabase_db_web-platform";
+const migration = path.join(__dirname, "../supabase/migrations/169_codex_history_transfer_ack.sql");
+const ownershipHardening = path.join(__dirname, "../supabase/migrations/170_codex_history_ack_owner_scope.sql");
+const ownershipRollback = path.join(__dirname, "../supabase/migrations/170_codex_history_ack_owner_scope.down.sql");
+const noticeIssuance = path.join(__dirname, "../supabase/migrations/173_codex_history_notice_issuance.sql");
+const noticeIssuanceRollback = path.join(__dirname, "../supabase/migrations/173_codex_history_notice_issuance.down.sql");
+const docker = (args: string[], input?: string, timeout = 10_000) => spawnSync("docker", args, {
+  encoding: "utf8",
+  input,
+  timeout,
+  maxBuffer: 1024 * 1024,
+});
+const dockerAvailable = isCi
+  ? { status: 0, stdout: "true" }
+  : docker(["inspect", "--format", "{{.State.Running}}", container]);
+const canRunDatabaseTest = isCi || (dockerAvailable.status === 0 && dockerAvailable.stdout.trim() === "true");
+const dbUser = isCi ? "postgres" : "supabase_admin";
+
+function runSql(database: string, sql: string): string {
+  const result = docker([
+    "exec", "-i", container, "psql", "-X", "-q", "-A", "-t", "-F", "|",
+    "-v", "ON_ERROR_STOP=1", "-U", dbUser, "-d", database,
+  ], sql);
+  if (result.status !== 0) {
+    throw new Error(`Codex acknowledgment SQL failed (${result.status}): ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
+  it.skipIf(!canRunDatabaseTest)("fences acknowledgments by active member and current binding generation", async () => {
+    let ownsContainer = false;
+    const database = `codex_ack_test_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
+    let databaseCreated = false;
+
+    try {
+      if (isCi) {
+        const start = docker([
+          "run", "--detach", "--rm", "--name", container,
+          "-e", "POSTGRES_PASSWORD=codex-ack-test-only",
+          "postgres:17-alpine",
+        ], undefined, 180_000);
+        expect(start.status, `could not start disposable PostgreSQL: ${start.stderr}`).toBe(0);
+        ownsContainer = true;
+        let ready = false;
+        for (let attempt = 0; attempt < 90; attempt += 1) {
+          // Wait for the final server, not the socket-only initialization server.
+          const probe = docker(["exec", container, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]);
+          if (probe.status === 0) {
+            ready = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        expect(ready, "disposable PostgreSQL did not become ready within 45 seconds").toBe(true);
+      }
+
+      const create = docker(["exec", container, "createdb", "-U", dbUser, database]);
+      expect(create.status, create.stderr).toBe(0);
+      databaseCreated = true;
+      const migrationSql = readFileSync(migration, "utf8");
+      const ownershipHardeningSql = readFileSync(ownershipHardening, "utf8");
+      const ownershipRollbackSql = readFileSync(ownershipRollback, "utf8");
+      const noticeIssuanceSql = readFileSync(noticeIssuance, "utf8");
+      const noticeIssuanceRollbackSql = readFileSync(noticeIssuanceRollback, "utf8");
+      const output = runSql(database, `
+        CREATE SCHEMA auth;
+        CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
+          SELECT NULLIF(current_setting('request.jwt.claim.sub', true), '')::uuid
+        $$;
+        DO $$ BEGIN CREATE ROLE anon; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+        DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+        DO $$ BEGIN CREATE ROLE service_role; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+        CREATE TABLE public.users (id uuid PRIMARY KEY);
+        CREATE TABLE public.conversations (id uuid PRIMARY KEY, user_id uuid NOT NULL, workspace_id uuid NOT NULL);
+        CREATE TABLE public.workspace_members (
+          workspace_id uuid NOT NULL,
+          user_id uuid NOT NULL REFERENCES public.users(id),
+          created_at timestamptz NOT NULL,
+          PRIMARY KEY (workspace_id, user_id)
+        );
+        CREATE TABLE public.agent_engine_runs (
+          id uuid PRIMARY KEY,
+          workspace_id uuid NOT NULL,
+          execution_kind text NOT NULL,
+          conversation_id uuid NOT NULL,
+          engine_id text NOT NULL,
+          auth_mode_generation bigint NOT NULL
+        );
+        CREATE FUNCTION public.is_workspace_member(uuid, uuid) RETURNS boolean
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+        BEGIN
+          RETURN EXISTS (
+            SELECT 1 FROM public.workspace_members AS m
+             WHERE m.workspace_id = $1 AND m.user_id = $2
+          );
+        END;
+        $$;
+        ${migrationSql}
+        SELECT has_table_privilege('service_role', 'public.codex_history_transfer_acknowledgments', 'SELECT');
+        SELECT has_table_privilege('authenticated', 'public.codex_history_transfer_acknowledgments', 'SELECT');
+        SELECT has_table_privilege('anon', 'public.codex_history_transfer_acknowledgments', 'SELECT');
+        SELECT coalesce(bool_or(has_function_privilege('authenticated', p.oid, 'EXECUTE')), false)
+          FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'issue_codex_history_transfer_notice';
+        INSERT INTO public.users VALUES
+          ('30000000-0000-4000-8000-000000000001'),
+          ('30000000-0000-4000-8000-000000000002');
+        INSERT INTO public.conversations VALUES
+          ('40000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001', '50000000-0000-4000-8000-000000000001');
+        INSERT INTO public.workspace_members VALUES
+          ('50000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001', '2026-09-01T00:00:00Z'),
+          ('50000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000002', '2026-09-01T00:00:00Z');
+        INSERT INTO public.agent_engine_runs VALUES (
+          '60000000-0000-4000-8000-000000000001',
+          '50000000-0000-4000-8000-000000000001',
+          'conversation',
+          '40000000-0000-4000-8000-000000000001',
+          'codex',
+          3
+        );
+        -- A row permitted by 149 must be purged by the forward correction.
+        INSERT INTO public.codex_history_transfer_acknowledgments
+          (conversation_id, member_user_id, auth_mode_generation, workspace_member_created_at)
+        VALUES ('40000000-0000-4000-8000-000000000001',
+          '30000000-0000-4000-8000-000000000002', 3, '2026-09-01T00:00:00Z');
+        ${ownershipHardeningSql}
+        ${noticeIssuanceSql}
+        SELECT to_regprocedure('public.record_codex_history_transfer_acknowledgment(uuid,bigint)') IS NULL;
+        SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
+        -- Another member of the SAME workspace cannot acknowledge the owner's conversation.
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
+        );
+        SELECT public.codex_history_transfer_acknowledged(
+          '40000000-0000-4000-8000-000000000001', 3
+        );
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000001';
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
+        );
+        SET ROLE service_role;
+        SELECT public.issue_codex_history_transfer_notice(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        );
+        RESET ROLE;
+        CREATE FUNCTION public.assert_codex_notice_repair_refused(reason text, nonce_hash text DEFAULT repeat('0', 64))
+        RETURNS void LANGUAGE plpgsql AS $$
+        DECLARE
+          before_rows jsonb;
+          after_rows jsonb;
+        BEGIN
+          SELECT coalesce(jsonb_agg(to_jsonb(i)), '[]'::jsonb) INTO before_rows
+            FROM public.codex_history_transfer_notice_issuances AS i;
+          IF public.mark_codex_history_transfer_notice_delivered(
+            '40000000-0000-4000-8000-000000000001', 3,
+            '30000000-0000-4000-8000-000000000001', nonce_hash
+          ) IS DISTINCT FROM false THEN
+            RAISE EXCEPTION 'notice repair must refuse: %', reason;
+          END IF;
+          SELECT coalesce(jsonb_agg(to_jsonb(i)), '[]'::jsonb) INTO after_rows
+            FROM public.codex_history_transfer_notice_issuances AS i;
+          IF before_rows IS DISTINCT FROM after_rows THEN
+            RAISE EXCEPTION 'refused notice repair changed ledger: %', reason;
+          END IF;
+        END;
+        $$;
+        BEGIN;
+        SAVEPOINT notice_repair_fence;
+        UPDATE public.conversations SET user_id = '30000000-0000-4000-8000-000000000002';
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('owner changed'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        UPDATE public.agent_engine_runs SET engine_id = 'claude-code';
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('engine changed'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        -- Retain deliberately stale rows to prove the repair RPC independently
+        -- enforces generation and membership epoch even without purge help.
+        ALTER TABLE public.agent_engine_runs DISABLE TRIGGER purge_stale_codex_history_transfer_notice_issuances;
+        UPDATE public.agent_engine_runs SET auth_mode_generation = 4;
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('generation changed'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        ALTER TABLE public.workspace_members DISABLE TRIGGER purge_replaced_codex_history_notice_membership;
+        UPDATE public.workspace_members SET created_at = '2026-09-02T00:00:00Z'
+          WHERE user_id = '30000000-0000-4000-8000-000000000001';
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('membership epoch changed'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        DELETE FROM public.workspace_members WHERE user_id = '30000000-0000-4000-8000-000000000001';
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('membership revoked'); END $$;
+        ROLLBACK TO notice_repair_fence;
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('fabricated nonce', repeat('f', 64)); END $$;
+        DO $$ BEGIN
+          PERFORM public.issue_codex_history_transfer_notice(
+            '40000000-0000-4000-8000-000000000001', 3,
+            '30000000-0000-4000-8000-000000000001', repeat('1', 64)
+          );
+          PERFORM public.assert_codex_notice_repair_refused('superseded nonce');
+        END $$;
+        ROLLBACK;
+        -- The fixture owns a real issuance; tenant denial below cannot pass
+        -- merely because the private ledger is empty.
+        SELECT count(*) FROM public.codex_history_transfer_notice_issuances;
+        SELECT has_table_privilege('anon', 'public.codex_history_transfer_notice_issuances', 'SELECT,INSERT,UPDATE,DELETE');
+        SELECT has_table_privilege('authenticated', 'public.codex_history_transfer_notice_issuances', 'SELECT,INSERT,UPDATE,DELETE');
+        SELECT has_table_privilege('service_role', 'public.codex_history_transfer_notice_issuances', 'SELECT,INSERT,UPDATE,DELETE');
+        SET ROLE authenticated;
+        DO $$ BEGIN
+          PERFORM 1 FROM public.codex_history_transfer_notice_issuances;
+          RAISE EXCEPTION 'authenticated unexpectedly read notice issuance ledger';
+        EXCEPTION WHEN insufficient_privilege THEN NULL;
+        END $$;
+        -- A valid token cannot be consumed until the server confirms send acceptance.
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
+        );
+        RESET ROLE;
+        SET ROLE service_role;
+        SELECT public.mark_codex_history_transfer_notice_delivered(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        );
+        -- A committed marker whose response was lost can be retried without
+        -- changing the nonce or granting an acknowledgment before delivery.
+        SELECT public.mark_codex_history_transfer_notice_delivered(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        );
+        SELECT public.mark_codex_history_transfer_notice_delivered(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('1', 64)
+        ) IS NOT TRUE;
+        RESET ROLE;
+        SET ROLE authenticated;
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
+        );
+        SELECT public.codex_history_transfer_acknowledged(
+          '40000000-0000-4000-8000-000000000001', 3
+        );
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
+        );
+        RESET ROLE;
+        SET ROLE service_role;
+        SELECT public.issue_codex_history_transfer_notice(
+          '40000000-0000-4000-8000-000000000001', 3,
+          '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        );
+        SELECT public.mark_codex_history_transfer_notice_delivered(
+          '40000000-0000-4000-8000-000000000001', 3,
+          '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        ) IS NOT TRUE;
+        RESET ROLE;
+        DO $$ BEGIN PERFORM public.assert_codex_notice_repair_refused('consumed nonce'); END $$;
+        SET ROLE authenticated;
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
+        RESET ROLE;
+        SET ROLE service_role;
+        SELECT public.issue_codex_history_transfer_notice(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000002', repeat('1', 64)
+        );
+        RESET ROLE;
+        SET ROLE authenticated;
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000001';
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
+        );
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000001';
+        RESET ROLE;
+        UPDATE public.agent_engine_runs SET auth_mode_generation = 4
+         WHERE conversation_id = '40000000-0000-4000-8000-000000000001';
+        SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
+        SELECT public.codex_history_transfer_acknowledged(
+          '40000000-0000-4000-8000-000000000001', 3
+        );
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 4, repeat('0', 64)
+        );
+        SET ROLE service_role;
+        SELECT public.issue_codex_history_transfer_notice(
+          '40000000-0000-4000-8000-000000000001', 4, '30000000-0000-4000-8000-000000000001', repeat('2', 64)
+        );
+        RESET ROLE;
+        UPDATE public.workspace_members SET created_at = '2026-09-02T00:00:00Z'
+         WHERE user_id = '30000000-0000-4000-8000-000000000001';
+        SELECT public.codex_history_transfer_acknowledged(
+          '40000000-0000-4000-8000-000000000001', 4
+        );
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 4, repeat('0', 64)
+        );
+        SELECT count(*) FROM public.codex_history_transfer_notice_issuances;
+        DELETE FROM public.workspace_members WHERE user_id = '30000000-0000-4000-8000-000000000001';
+        DELETE FROM public.users WHERE id = '30000000-0000-4000-8000-000000000001';
+        SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
+        ${noticeIssuanceRollbackSql}
+        -- Migration 170 rollback must not restore workspace-only acknowledgment scope.
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
+        ${ownershipRollbackSql}
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 4
+        );
+        SELECT public.codex_history_transfer_acknowledged(
+          '40000000-0000-4000-8000-000000000001', 4
+        );
+      `);
+
+      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "t", "0", "f", "f", "f", "t", "1", "f", "f", "f", "f", "t", "t", "t", "t", "t", "f", "t", "t", "f", "f", "0", "f", "f", "t", "f", "f", "0", "0", "f", "f"]);
+    } finally {
+      if (databaseCreated) {
+        const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);
+        expect(drop.status, drop.stderr).toBe(0);
+      }
+      if (ownsContainer) {
+        const remove = docker(["rm", "--force", container]);
+        expect(remove.status, remove.stderr).toBe(0);
+      }
+    }
+  }, 180_000);
+});

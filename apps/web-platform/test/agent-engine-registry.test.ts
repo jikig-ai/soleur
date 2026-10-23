@@ -84,6 +84,17 @@ describe("reviewed engine registry", () => {
     expect(() => disabled.resolve(selection({ operation: "existing-run" }))).toThrow("engine_disabled");
   });
 
+  it("does not treat settings selectability as permission to execute", () => {
+    const registry = createEngineRegistry([definition({
+      enabledForNewRuns: false,
+      enabledForExistingRuns: false,
+      settingsSelectable: true,
+    })]);
+    expect(registry.get("codex").settingsSelectable).toBe(true);
+    expect(() => registry.resolve(selection())).toThrow("engine_disabled");
+    expect(() => registry.resolve(selection({ operation: "existing-run" }))).toThrow("engine_disabled");
+  });
+
   it("does not reuse API-key qualification for ChatGPT sign-in", () => {
     const d = definition();
     const registry = createEngineRegistry([definition({ qualifications: d.qualifications.slice(0, 1) })]);

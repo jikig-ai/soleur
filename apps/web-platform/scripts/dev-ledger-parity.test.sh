@@ -3305,6 +3305,158 @@ else
   fail "expected written with the override; got rc=$rc out=$out"
 fi
 
+echo "G3-Codex145: schema downgrade is refused even without later rows"
+CASES=$((CASES + 1))
+pr_start w540
+pr_commit 'w540' 165_codex_auth_mode_rebind.sql="CODEX145-synthetic" 165_codex_auth_mode_rebind.down.sql="ALTER TABLE public.workspace_engine_settings DROP COLUMN codex_auth_mode; ALTER TABLE public.agent_engine_attempts DROP COLUMN accepted_at;"
+pr_publish 540 w540
+gh_reset; pr_json 540 "" closed w540
+wledger "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 90)"
+run_writer --pr 540 --execute
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "mode choices and admission evidence cannot be discarded"
+else
+  fail "expected forward-only refusal with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex145-override: --allow-later-rows cannot authorize the lossy downgrade"
+CASES=$((CASES + 1))
+gh_reset; pr_json 540 "" closed w540
+wledger "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 90)"
+run_writer --pr 540 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "the later-row override does not waive Codex recovery safety"
+else
+  fail "expected unwaivable forward-only refusal; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex145-legacy: a legacy applied row is forward-only"
+CASES=$((CASES + 1))
+pr_start w547
+pr_commit 'w547' 145_codex_auth_mode_rebind.sql="CODEX145-legacy-synthetic" 145_codex_auth_mode_rebind.down.sql="ALTER TABLE public.workspace_engine_settings DROP COLUMN codex_auth_mode; ALTER TABLE public.agent_engine_attempts DROP COLUMN accepted_at;"
+pr_publish 547 w547
+gh_reset; pr_json 547 "" closed w547
+wledger "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-legacy-synthetic)|$(ts 90)"
+run_writer --pr 547 --execute
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "legacy migration 145 cannot be downgraded"
+else
+  fail "expected legacy forward-only refusal with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex145-legacy-protect: a legacy applied row protects every paired down"
+CASES=$((CASES + 1))
+pr_start w548
+pr_commit 'w548' 163_agent_engine_attempts.sql="CODEX143-legacy-protect" 163_agent_engine_attempts.down.sql="$(cat "$REPO_ROOT/$MDIR/163_agent_engine_attempts.down.sql")"
+pr_publish 548 w548
+gh_reset; pr_json 548 "" closed w548
+wledger "163_agent_engine_attempts.sql|$(blob_file CODEX143-legacy-protect)|$(ts 110)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 120)"
+run_writer --pr 548 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "legacy migration 145 protects the renamed ancestor down"
+else
+  fail "expected legacy schema protection with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex-malformed-protected: a malformed raw 165 row is detected before parsing and blocks every write"
+CASES=$((CASES + 1))
+gh_reset; pr_json 548 "" closed w548
+wledger "163_agent_engine_attempts.sql|$(blob_file CODEX143-legacy-protect)|$(ts 110)" \
+  "165_codex_auth_mode_rebind.sql|synthetic|sha|$(ts 120)"
+run_writer --pr 548 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'protected Codex migration ledger row is malformed' <<<"$out" \
+  && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "malformed Codex protection is not lost when content_sha contains a delimiter"
+else
+  fail "expected malformed protected-row refusal with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex163: an ancestor down cannot erase admission evidence while 165 is retained"
+CASES=$((CASES + 1))
+pr_start w541
+pr_commit 'w541' 163_agent_engine_attempts.sql="CODEX143-synthetic" 163_agent_engine_attempts.down.sql="$(cat "$REPO_ROOT/$MDIR/163_agent_engine_attempts.down.sql")"
+pr_publish 541 w541
+gh_reset; pr_json 541 "" closed w541
+wledger "163_agent_engine_attempts.sql|$(blob_file CODEX143-synthetic)|$(ts 110)" "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 120)"
+run_writer --pr 541 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "the actual attempt-table down cannot bypass the protected later migration"
+else
+  fail "expected ancestor refusal with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex138: the settings-table ancestor is protected independently of ledger age"
+CASES=$((CASES + 1))
+pr_start w542
+pr_commit 'w542' 138_agent_engine_runs.sql="CODEX138-synthetic" 138_agent_engine_runs.down.sql="$(cat "$REPO_ROOT/$MDIR/138_agent_engine_runs.down.sql")"
+pr_publish 542 w542
+gh_reset; pr_json 542 "" closed w542
+wledger "138_agent_engine_runs.sql|$(blob_file CODEX138-synthetic)|$(ts 120)" "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 542 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "the actual settings-table down is refused even when 165 is not a later row"
+else
+  fail "expected age-independent refusal with zero writes; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex-conservative: unrelated shared-object redefinition also refuses while 165 remains"
+CASES=$((CASES + 1))
+pr_start w543
+pr_commit 'w543' 342_codex_unrelated.sql="CODEX342-synthetic" 342_codex_unrelated.down.sql='CREATE OR REPLACE FUNCTION public.synthetic_unrelated() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;'
+pr_publish 543 w543
+gh_reset; pr_json 543 "" closed w543
+wledger "342_codex_unrelated.sql|$(blob_file CODEX342-synthetic)|$(ts 120)" "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 543 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "unknown redefinition dependencies fail closed without an override"
+else
+  fail "expected conservative shared-object refusal; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex-dollar-body: a nested DROP hidden from the advisory classifier is refused"
+CASES=$((CASES + 1))
+pr_start w544
+pr_commit 'w544' 343_codex_nested.sql="CODEX343-synthetic" 343_codex_nested.down.sql='DO $$ BEGIN ALTER TABLE public.agent_engine_attempts DROP COLUMN accepted_at; END $$;'
+pr_publish 544 w544
+gh_reset; pr_json 544 "" closed w544
+wledger "343_codex_nested.sql|$(blob_file CODEX343-synthetic)|$(ts 120)" "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 544 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "a dollar-quoted DROP never reaches the protected schema"
+else
+  fail "expected unclassified nested down refusal; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex-benign-down: even a non-destructive class '-' paired down is refused"
+CASES=$((CASES + 1))
+pr_start w545
+pr_commit 'w545' 344_codex_benign.sql="CODEX344-synthetic" 344_codex_benign.down.sql="SELECT 1;"
+pr_publish 545 w545
+gh_reset; pr_json 545 "" closed w545
+wledger "344_codex_benign.sql|$(blob_file CODEX344-synthetic)|$(ts 120)" "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 545 --execute --allow-later-rows
+if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+  pass "protection does not depend on the advisory classifier's verdict"
+else
+  fail "expected every-paired-down refusal; got rc=$rc out=$out"
+fi
+
+echo "G3-Codex-ledger-only: unrelated ledger-only cleanup preserves protected 165"
+CASES=$((CASES + 1))
+pr_start w546
+pr_commit 'w546' 345_codex_ledger_only.sql="CODEX345-synthetic"
+pr_publish 546 w546
+gh_reset; pr_json 546 "" closed w546
+wledger "345_codex_ledger_only.sql|$(blob_file CODEX345-synthetic)|$(ts 120)" "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 110)"
+run_writer --pr 546 --execute
+if [[ "$rc" == "0" ]] && one_unit && grep -q 'ledger-only=1' <<<"$out" \
+  && grep -qF "$(cas_of 345_codex_ledger_only.sql "$(blob_file CODEX345-synthetic)")" "$PAYLOAD" \
+  && ! grep -q '^  DELETE FROM public\._schema_migrations WHERE filename = '\''165_codex_auth_mode_rebind.sql'\''' "$PAYLOAD"; then
+  pass "ledger-only cleanup executes without removing protected 165"
+else
+  fail "expected unrelated ledger-only cleanup; got rc=$rc out=$out"
+fi
+
 echo "G3-M10d: a CREATE OR REPLACE FUNCTION down while a later MAIN row exists -> rc 1"
 CASES=$((CASES + 1))
 pr_start w510
@@ -4046,7 +4198,9 @@ set -e
 set_of() { awk -F'\t' -v c="$1" '{ n = split($2, a, ","); for (i = 1; i <= n; i++) if (a[i] == c) print $1 }' <<<"$scan" | LC_ALL=C sort | tr '\n' ' '; }
 got_txn=$(set_of transaction-control); got_nontx=$(set_of non-transactional); got_later=$(set_of later-row-sensitive)
 got_bs=$(set_of backslash); got_unp=$(set_of unparseable)
-# The pinned sets (the stored value of this guard). Measured 2026-09-23 over 95 files:
+# The pinned sets (the stored value of this guard). Main's baseline was measured 2026-09-29 over 102 files;
+# the later-row-sensitive set below includes this PR's shared-object redefinition downs,
+# including the acknowledgment-contract rollback introduced by this change:
 # every top-level BEGIN;/COMMIT; on main is ONE wrapping pair, which the writer
 # normalizes away, so no file is transaction-control; 132_drop_unused_indexes.down.sql
 # mentions CONCURRENTLY only in a comment, so no file is non-transactional; the
@@ -4112,6 +4266,14 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 160_dsar_export_audit_pii_cascade_null_carveout.down.sql
 161_audit_github_token_use_cascade_null_carveout.down.sql
 162_action_sends_message_id_cascade_null_carveout.down.sql
+163_agent_engine_attempts.down.sql
+165_codex_auth_mode_rebind.down.sql
+166_codex_terminal_lifecycle.down.sql
+167_codex_lifecycle_state_sync.down.sql
+168_codex_lifecycle_lock_order.down.sql
+170_codex_history_ack_owner_scope.down.sql
+172_agent_engine_erasure_lock_order.down.sql
+173_codex_history_notice_issuance.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \
@@ -4123,6 +4285,38 @@ else
     nontx=[$got_nontx]
     later=[$got_later]
     backslash=[$got_bs] unparseable=[$got_unp]"
+fi
+
+echo "G3-Codex145-scan: legacy auth-mode down name is forward-only"
+CASES=$((CASES + 1))
+legacy_codex_dir=$(mktemp -d)
+legacy_codex_down="$legacy_codex_dir/145_codex_auth_mode_rebind.down.sql"
+printf 'SELECT 1;\n' >"$legacy_codex_down"
+set +e
+legacy_codex_scan=$(bash "$WBIN/dev-ledger-reconcile.sh" --scan-down "$legacy_codex_down" 2>&1)
+legacy_codex_scan_rc=$?
+set -e
+rm -rf "$legacy_codex_dir"
+if [[ "$legacy_codex_scan_rc" == "0" ]] && awk -F '\t' '$1 == "145_codex_auth_mode_rebind.down.sql" && $2 ~ /(^|,)codex-forward-only(,|$)/ { found=1 } END { exit !found }' <<<"$legacy_codex_scan"; then
+  pass "the scanner adds the forward-only refusal for legacy 145 down files"
+else
+  fail "expected legacy forward-only classification; got rc=$legacy_codex_scan_rc out=$legacy_codex_scan"
+fi
+
+echo "G3-Codex165-backslash-scan: preserve both refusal classes when the file contains a backslash"
+CASES=$((CASES + 1))
+backslash_codex_dir=$(mktemp -d)
+backslash_codex_down="$backslash_codex_dir/165_codex_auth_mode_rebind.down.sql"
+printf 'SELECT \\\n' >"$backslash_codex_down"
+set +e
+backslash_codex_scan=$(bash "$WBIN/dev-ledger-reconcile.sh" --scan-down "$backslash_codex_down" 2>&1)
+backslash_codex_scan_rc=$?
+set -e
+rmdir "$backslash_codex_dir" 2>/dev/null || true
+if [[ "$backslash_codex_scan_rc" == "0" ]] && awk -F '\t' '$1 == "165_codex_auth_mode_rebind.down.sql" && $2 == "backslash,codex-forward-only" { found=1 } END { exit !found }' <<<"$backslash_codex_scan"; then
+  pass "the scanner retains the Codex forward-only class beside backslash"
+else
+  fail "expected both refusal classes; got rc=$backslash_codex_scan_rc out=$backslash_codex_scan"
 fi
 
 echo "== Guard 4: .github/workflows/dev-ledger-reconcile.yml wiring =="
@@ -4708,7 +4902,7 @@ else
 fi
 
 echo ""
-EXPECTED_CASES=256
+EXPECTED_CASES=264
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: only %s of %s cases ran — suite is truncated\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

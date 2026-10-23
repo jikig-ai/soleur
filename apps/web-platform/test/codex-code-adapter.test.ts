@@ -231,11 +231,12 @@ describe("Codex neutral adapter boundary", () => {
     expect(transport.cancel.mock.calls[1][2]).toEqual(expect.objectContaining({ accessToken: "second" }));
   });
 
-  it("refreshes once for an authorization failure before a stream emits events", async () => {
+  it("does not retry a billable turn after an authorization error with no events", async () => {
+    const refresh = vi.fn(async () => ({ accessToken: "second", expiresAt: Date.now() + 60_000 }));
     const auth = createCodexAuthBoundary({
       mode: "api-key",
       acquire: vi.fn(async () => ({ accessToken: "first", expiresAt: Date.now() + 60_000 })),
-      refresh: vi.fn(async () => ({ accessToken: "second", expiresAt: Date.now() + 60_000 })),
+      refresh,
       logout: vi.fn(async () => undefined),
     });
     let attempts = 0;
@@ -254,10 +255,42 @@ describe("Codex neutral adapter boundary", () => {
       dispose: vi.fn().mockResolvedValue(undefined),
     };
     const adapter = createCodexCodeAdapter(transport, auth);
-    const events = [];
-    for await (const event of adapter.start({ runId: "run-1" } as never, { text: "hi", attachmentIds: [] })) events.push(event);
-    expect(events).toHaveLength(1);
-    expect(transport.start).toHaveBeenCalledTimes(2);
+    await expect((async () => {
+      for await (const event of adapter.start({ runId: "run-1" } as never, { text: "hi", attachmentIds: [] })) void event;
+    })()).rejects.toMatchObject({ code: "codex_credentials_revoked" });
+    expect(transport.start).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a billable continuation after an authorization error with no events", async () => {
+    const refresh = vi.fn(async () => ({ accessToken: "second", expiresAt: Date.now() + 60_000 }));
+    const auth = createCodexAuthBoundary({
+      mode: "api-key",
+      acquire: vi.fn(async () => ({ accessToken: "first", expiresAt: Date.now() + 60_000 })),
+      refresh,
+      logout: vi.fn(async () => undefined),
+    });
+    const transport = {
+      start: vi.fn(async function* () { yield* []; }),
+      continue: vi.fn(async function* () { throw Object.assign(new Error("ambiguous turn/start"), { code: "unauthorized" }); }),
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createCodexCodeAdapter(transport, auth);
+
+    await expect((async () => {
+      for await (const event of adapter.continue(
+        { runId: "run-1" } as never,
+        { resumeHandle: "opaque", sessionId: null },
+        { text: "hi", attachmentIds: [] },
+      )) void event;
+    })()).rejects.toMatchObject({ code: "unauthorized" });
+    expect(transport.continue).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 
