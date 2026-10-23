@@ -1,0 +1,919 @@
+---
+title: "feat: verification-scaffold — ship generic guardrail corpus to user repos"
+type: feat
+date: 2026-10-21
+slug: feat-verification-scaffold-guardrail-corpus
+branch: feat-one-shot-10404-verification-scaffold
+issue: 10404
+closes: 10404
+priority: p3-low
+domain: engineering
+brand_survival_threshold: single-user incident
+requires_cpo_signoff: true
+lane: cross-domain
+---
+
+## Overview
+
+Epic #10397 child 7. Soleur plugin users receive the pipeline (review/qa/ship) but not the
+guardrail depth Soleur runs on itself: the `.claude/hooks/` corpus and `scripts/lint-*`
+checks are repo-internal, and `constraint-scaffold` already proves the
+generate-a-gate-into-user-CI pattern for a single gate. This change audits the hook/lint
+corpus for repo-generic entries (no Soleur-domain coupling) and ships a
+`verification-scaffold` skill that installs the chosen generic set — at minimum a
+secret-scan, an orphan-test registration check, and a commit-on-main guard — into a user
+repo's hooks and CI, advisory-first where a gate can block.
+
+Spec lacks `lane:` (no spec.md on the one-shot path) — defaulted to cross-domain (TR2 fail-closed).
+
+## Enhancement Summary (deepen-plan, 2026-10-21)
+
+**Deepened on:** 2026-10-21 · **Mode:** sequential in-process (Devin harness — no Task
+substrate; per-section lenses applied inline per the sibling-plan precedent).
+
+### Gate results
+
+| Gate | Verdict |
+|---|---|
+| 4.6 User-Brand Impact | PASS — `single-user incident` + challengeable threshold + CPO row |
+| 4.7 Observability | PASS — 5 fields; probe is a single `grep` call, allowlisted verb, literal `secret-scan` output (fixed from an `&&`-chained form Check 10's shell-active reject would have killed) |
+| 4.8 PAT halt | PASS — no PAT-shaped tokens |
+| 4.9 UI-wireframe | N/A — no UI-surface files |
+| 4.10 Encryption posture | N/A — no persistent store / cross-component connection |
+| 4.11 Guard Contract | PASS — lint green (6 entries), assemblies chokepoint-structural, matrices carry own-dispatch + second-member + must-PASS + anchor rows |
+| 4.12 Scope Check | PASS — 1 live section, 5 mapped asks, inferred items all justified, `Recommendation:` present |
+
+### Deepen-pass findings folded in
+
+1. **`precommit-guard.sh` + `wrapper-boundary.sh` coupling audit (verify-the-negative).**
+   Grep shows zero domain coupling (no `emit_incident` — its own header says so — no KB/
+   vendor paths); the only hits are `SOLEUR_*` *internal variable names* in
+   `wrapper-boundary.sh`'s boundary-prefix regexes (`SOLEUR_ENV_ASN_RE`,
+   `SOLEUR_LAUNCHER_RE`, `SOLEUR_RTK_RE`, `SOLEUR_BOUNDARY_PFX`). Cosmetic but
+   misleading in a user repo — the emitted templates rename them to
+   `VERIFICATION_*` (byte-parity test then compares against a rename-normalized
+   copy, not raw bytes; SpecFlow row for the template task).
+2. **Sharp-edges additions (Phase 6.5).** SpecFlow findings #8 (gitleaks
+   `GIT_CONFIG_*` colour pin — `color.diff=always` yields zero findings, measured)
+   and #9 (binary-resolution via `command -v` + PATH-stub arm; `actionlint` on the
+   emitted workflow fixture).
+3. **Probe fix.** `discoverability_test.command` replaced: `grep` first-token
+   allowlist, no shell-active tokens (`&&`/`|`/`;`), sub-second, literal
+   `secret-scan` output.
+4. **Existence checks.** `regenerate-shard-manifest.py`, `suite-shard-legs.tsv`,
+   `scripts/sync-cursor-name-map.ts`, `plugins/soleur/cursor/skills/`,
+   `knowledge-base/marketing/content-strategy.md` all verified present — Files to
+   Create/Edit paths real.
+
+### New considerations discovered
+
+- `worktree-manager.sh` is the repo's only existing settings.json-touching
+  script (registration-side precedent for the jq merge — review it for the
+  dedup-on-command-string idiom during Phase 3, no blocking fork).
+- `hookify` (anthropics/claude-code) noted as Tier-1 community overlap — fixed
+  corpus vs LLM-authored rules; not adopted.
+
+## Research Insights
+
+### Premise Validation (Phase 0.6)
+
+- `#10404` OPEN; epic `#10397` OPEN. Sibling children shipped one PR each:
+  `#10401`→PR #10727, `#10402`→PR #10735, `#10403`→PR #10738 (all COMPLETED); `#10400` open.
+- `.claude/hooks/` = **112 files, 55 non-test `.sh`** (issue says "~121 hooks" — stale
+  count; directionally right, the corpus is large).
+- All four expected candidates exist but with different shapes:
+  `git-commit-secret-scan.sh` (standalone hook, 315 lines, depends on
+  `.claude/hooks/lib/hook-input.sh` + gitleaks + repo-root `.gitleaks.toml`),
+  `scripts/lint-orphan-test-suites.sh` (1276 lines, hardcodes `scripts/test-all.sh`,
+  `TEST_GROUP`/`SCRIPTS_SHARD`, `apps/web-platform/infra/` surfaces),
+  `scripts/lint-trap-tempfile-ownership.py` (1603 lines, keys on
+  `SOLEUR_SCRATCH_SESSION_ROOT` markers), `block-stash-in-worktrees` +
+  `block-commit-on-main` (arms inside the 970-line `guardrails.sh` monolith, which
+  depends on `lib/incidents.sh` emit machinery).
+- `plugins/soleur/skills/constraint-scaffold/` exists: SKILL.md +
+  `scripts/constraint-scaffold.sh` + `references/*.template` (6) + `test/*.test.sh` (5).
+  ADR-071 (L1 gates) + ADR-074 (two-stage auto-recovery) sanction the
+  generate-a-gate-into-user-CI pattern.
+- `plugins/soleur/hooks/hooks.json` ships ~8 session hooks (PreToolUse + SessionStart) —
+  that is plugin-session delivery, a different surface than repo-CI gates; the generic
+  lint corpus is indeed unpackaged.
+- No `verification-scaffold` skill exists (`ls plugins/soleur/skills/` — 104 dirs,
+  only `constraint-scaffold` matches "scaffold").
+- Mechanism/ADR check: grepped `knowledge-base/engineering/architecture/decisions/` for
+  scaffold/guardrail-shipping mechanisms; ADR-071/074 are the pattern authority, none
+  rejected this shape.
+- Verdict: premise holds; hook-count "~121" corrected to 112 files / 55 non-test.
+
+### Property List (Phase 0.6b)
+
+- P1: a durable written audit classifying each `.claude/hooks/*.sh` (non-test) +
+  `scripts/lint-*` entry as generic / generic-after-extraction / Soleur-coupled, with
+  per-entry rationale (AC1).
+- P2: a `verification-scaffold` skill that installs a chosen generic set — minimum
+  secret-scan + orphan-test registration + commit-on-main guard — into a user repo's
+  hooks and/or CI (AC2).
+- P3: scaffolded gates default to advisory/non-blocking where they can block, with a
+  documented promotion path (AC3, `wg-dark-launch-deploy-gates`).
+- P4: the agent-owns-gates recovery model (ADR-071) carries to emitted artifacts —
+  the target user cannot hand-edit a gate.
+
+### Cut List (Phase 0.6b)
+
+- None. M1 (audit doc) is the only mechanism that buys P1; M2 (scaffold skill) is the
+  only mechanism that buys P2/P3/P4 — `constraint-scaffold` covers exactly one gate,
+  `hooks/hooks.json` covers session hooks not repo CI. No mechanism on `origin/main`
+  covers either property.
+
+### Value-Proposition Measurement (Phase 0.6c)
+
+- Not applicable — justification is a user-facing capability gap, not a
+  cost/performance saving.
+
+### Repo Research (Phase 1)
+
+- Sibling epic children shipped *references inside existing skills*; #10404 is the one
+  child that asks for a NEW skill — a `constraint-scaffold` sibling.
+- Skill registration: `plugins/soleur/docs/_data/skills.js` `SKILL_CATEGORIES`
+  (name→category map; unregistered falls back to "Uncategorized" — note:
+  `constraint-scaffold` itself is unregistered today).
+- Skill tests register via `scripts/suite-shard-legs.tsv`, generated by
+  `scripts/regenerate-shard-manifest.py --incremental --write`; `lint-orphan-test-suites`
+  enforces that every `*.test.sh` is run by a runner (the thing being shipped must not
+  orphan its own tests).
+- `SKILL_DESCRIPTION_WORD_BUDGET = 2413` in `plugins/soleur/test/components.test.ts`;
+  measured baseline **2413/2413 — zero headroom**. A new model-visible skill
+  description requires a budget bump (+N words, the file's comment convention).
+- `guardrails.sh` arms of interest live at `.claude/hooks/guardrails.sh:130`
+  (`block-commit-on-main`), `:471` (`block-stash-in-worktrees`), `:200`
+  (`block-recursive-delete`), `:185` (`block-rm-rf-worktrees`).
+- Coupling census (grep for SOLEUR_/knowledge-base//plugins/soleur/apps/web-platform/
+  doppler/sentry per file): low/zero-coupling hooks — `git-commit-secret-scan.sh` (1),
+  `worktree-write-guard.sh` (0), `context-reviewed-gate.sh` (0),
+  `memory-backstop-mutation-battery.sh` (0). Zero-coupling lints worth auditing:
+  `lint-workflows.sh`, `lint-gh-argv-arg.py`, `lint-workflow-step-env-refs.py`,
+  `lint-workflow-issue-write-scope.py`, `lint-workflow-errexit-capture.py`,
+  `lint-shell-capture-exit.py`, `lint-dual-lockfile.sh` (3),
+  `lint-squash-ci-directives.sh`, `lint-bot-synthetic-*.sh`.
+
+### Institutional Learnings (Phase 1)
+
+- `2026-06-30-constraint-scaffold-verify-every-assumed-capability-at-brand-survival-threshold.md`
+  — seven defects, one root cause (assumed-unverified capability): `.github/workflows/`
+  only runs at **repo root** in a monorepo (emitted workflow in a subdir is dormant);
+  depcruise rc semantics differed from plan; generation path must capture merge-base,
+  not working tree; multi-copy drift needs parity tests. The scaffold's emit-target and
+  verification model must be designed against this list.
+- `2026-10-12-a-global-hook-that-shells-out-inherits-the-project-it-runs-in.md` —
+  hooks running in arbitrary user repos treat cwd/env/git-config as attacker-controlled
+  input: isolate `GIT_CONFIG_*`, cwd, `HOME`; key persisted state per identity.
+- `2026-04-12-hook-paths-must-use-claude-project-dir.md` — hook commands resolve via
+  `$CLAUDE_PROJECT_DIR`, never relative paths.
+- `2026-07-16-advisory-first-precedent...` + `2026-09-23-arming-an-advisory-gate...` —
+  "advisory-first" is a claim to define mechanically (continue-on-error / informational
+  exit / non-required check), and promoting an advisory gate to blocking re-reads every
+  lenient branch as a bypass: the emitted artifacts must separate "advisory" from
+  "weak" so promotion is a one-line flip, not a rewrite.
+- `2026-08-01-i-shipped-a-gate-my-own-tests-could-not-see.md` — assertions must anchor
+  on constructs a comment cannot produce; deleting the gate must red the suite.
+- `2026-05-04-gitleaks-secret-scanning-floor-rollout.md` — gitleaks `secretGroup`
+  regex pitfalls; runbook `knowledge-base/engineering/operations/secret-scanning.md`.
+- `2026-10-11-sole-copy-pins...` — an advisory guard and its required-check anchor must
+  not drift: where a scaffolded repo has both hook (advisory) and CI (blocking later)
+  copies of a guard, keep predicate parity or the weaker one certifies the stronger.
+
+### External Research Decision (Phase 1.6)
+
+- Skipped. The guard shapes already exist and are battle-tested in-repo; the novel work
+  is extraction/templating/verification against `constraint-scaffold`'s proven pattern,
+  not external best practice.
+
+### Functional Overlap (Phase 1.5b)
+
+- Tier-1 hit: `hookify` (anthropics/claude-code) turns conversation instructions into
+  warn/block hook rules — LLM-authored rules, not a fixed tested corpus; does not cover
+  the AC (curated generic set + CI gates + advisory-first contract). Noted, not adopted.
+- `git-hygiene-enforcer` (3★) overlaps partially — Tier 3, discarded per trust model.
+- No community artifact covers "install a fixed verified guard set into repo CI".
+
+### Related Issues / PRs
+
+- Epic #10397; siblings #10400 (open), #10401/#10402/#10403 (closed via #10727/#10735/#10738).
+- constraint-scaffold lineage: #5765/PR #5770, ADR-071, ADR-074, #5777 amendment.
+- `wg-dark-launch-deploy-gates` (AGENTS.rules.md:80) — deploy-gating checks ship
+  non-blocking first, observed ≥1 real run before they gate.
+
+### CLAUDE.md / Constitution Conventions Applied
+
+- New skill → register in `docs/_data/skills.js` SKILL_CATEGORIES; SKILL.md +
+  optional `scripts/`, `references/`, `test/` dirs; kebab-case; third-person
+  description; `--headless` ARGUMENTS convention for non-interactive use.
+- Shell scripts: `#!/usr/bin/env bash`, `set -euo pipefail`, operator-protection
+  signals to stdout.
+- Never a `version` key in plugin manifests (delivery mechanism is commit SHA).
+- Semver label on PRs touching `plugins/soleur/` (this is `semver:minor` — new skill).
+
+## Problem Statement / Motivation
+
+Soleur applies ~55 non-test hooks and ~40 lint scripts to itself, but ships none of
+the *generic* fraction to plugin users. Epic #10397 measured the asymmetry:
+`constraint-scaffold` proved a skill can generate a deterministic gate into a user
+repo's CI, yet the broader corpus — secret scanning, orphan-test registration,
+commit-on-main, stash blocking — stays repo-internal. Users get the pipeline but
+not the guardrail depth the pipeline was designed around.
+
+## Proposed Solution
+
+Ship `verification-scaffold`, a `constraint-scaffold` sibling that (a) carries a
+written audit of the hook/lint corpus classifying every member as
+`generic` / `generic-after-extraction` / `soleur-coupled` with rationale, and
+(b) generates the chosen generic set — v1: `secret-scan`, `commit-on-main`,
+`block-stash`, `orphan-test` — into a user repo's `.claude/hooks/` +
+`.claude/settings.json` (agent surface) and `.github/workflows/` (CI floor),
+advisory-first by default with a one-line promotion path.
+
+## Technical Approach
+
+### Architecture
+
+Generator `scripts/verification-scaffold.sh` (POSIX bash, `set -euo pipefail`,
+stdout-only operator signals) iterates `references/guards.tsv` — the machine
+manifest the audit produces — and emits per-guard templates from
+`references/guards/*.template` into the target repo. Flags:
+`--target <path>` (default cwd), `--guards <csv>` (default the v1 set),
+`--all`, `--mode advisory|enforce` (default `advisory`), `--dry-run`,
+`--list`, `--uninstall <guard>`, `--headless` (accepts defaults, no prompts —
+constitution headless convention).
+
+Emission contract (mirrors constraint-scaffold): refuse to overwrite any existing
+artifact (no `--force`); marker-keyed append-once doc block (`VERIFICATION.md`
+created if absent, else a marker block in `README.md`); `.claude/settings.json`
+merged via `node` (guaranteed present for any Claude Code user; `jq` fallback,
+refuse-and-name-the-dependency if neither resolves) — created if absent,
+malformed JSON refused pre-write, hook entries deduped on their `command`
+string; workflows land at **repo root**
+`.github/workflows/` (monorepo lesson: subdir workflows are dormant); a `mkdir`
+lock in the git common dir serializes concurrent runs; a TMPDIR-detached-worktree
+bite-proof proves every installed guard pass→fail→pass before the doc block is
+written; a pre-first-write armed trap restores the tree on any failure (exit-site
+table in the Guard Contract).
+
+### Emitted artifacts (per guard)
+
+| Guard | Hook surface (`.claude/hooks/` + settings.json) | CI surface (`.github/workflows/verification-gates.yml` jobs) | Aux artifacts |
+|---|---|---|---|
+| `secret-scan` | PreToolUse `git commit` gate → gitleaks staged scan; advisory: warn+allow→`ask` on finding; enforce: deny | `gitleaks git --pre-commit`-style job on PRs, `continue-on-error: true` in advisory | `.gitleaks.toml` emitted only when absent (default-ruleset pointer; never overwrites a user's ruleset) |
+| `commit-on-main` | PreToolUse `git commit` → emitted `precommit-guard.sh` (near-verbatim emit of `plugins/soleur/scripts/precommit-guard.sh` + `lib/wrapper-boundary.sh`); advisory: warn+allow; enforce: deny | none (a local-commit concern; README documents branch protection as the remote floor) | `scripts/verification/precommit-guard.sh`, `scripts/verification/lib/wrapper-boundary.sh` |
+| `block-stash` | PreToolUse gate on `git stash` (boundary-prefixed regex); advisory: warn+allow; enforce: deny | none | — |
+| `orphan-test` | none (a lint, not a command gate) | `orphan-test` job: `scripts/verification/orphan-test-check.sh` — `git ls-files '*.test.sh'` must each be named in ≥1 registration surface: any `.github/workflows/*.{yml,yaml}`, any file matched by user-declared runner globs (`scripts/test-all.sh`, `scripts/run-tests*`, `Makefile`, `package.json` — declared in `verification-gates.yml` env), or the exclusion manifest `.github/verification-known-orphans.txt` (reason-required per line) | `scripts/verification/orphan-test-check.sh`, seed manifest |
+
+### Advisory-first contract
+
+Advisory is a *decision-verb* difference, never a detection difference: every
+emitted guard runs identical predicates in both modes; only the terminal decision
+changes (warn+allow / `ask` / non-blocking job vs deny / failing job). The
+emitted README names the promotion step per artifact — flip `MODE=` in the hook,
+drop `continue-on-error`, add the check to required status checks — and requires
+≥1 observed clean run first (per `wg-dark-launch-deploy-gates`). Promotion
+re-reads every lenient branch as a bypass (`2026-09-23` learning), so the
+templates carry NO advisory-only skip arms: a missing gitleaks in advisory mode
+warns-and-allows loudly; in enforce mode it denies with the install remediation.
+Emitted guards are local-only: zero network egress, findings redacted
+(`--redact`), nothing transmitted.
+
+### Portability floor (sharp-edges pass)
+
+Emitted scripts/hooks run on arbitrary user hosts — stock macOS included.
+Templates must use the repo's `timeout`→`gtimeout`→bare-fallback pattern
+(`.claude/hooks/git-commit-secret-scan.sh` reference) and avoid GNU-only
+forms: `sed -i` (use `sed -i ''`-safe temp+mv), `readlink -f`, `stat -c`,
+`date -d`, `bc`, `/usr/bin/time`, unguarded `timeout`. `manifest.test.sh`
+greps emitted templates for these tokens as a portability lint (AC8's
+emitted-content battery).
+
+### Templates, not copies
+
+Every corpus member carries Soleur couplings (`lib/hook-input.sh`,
+`emit_incident`, KB pointers, `TEST_GROUP`/`SCRIPTS_SHARD`). Templates are
+self-contained single files — no lib sourcing, jq optional-with-degradation,
+no KB citations in emitted runtime text (provenance lives in comments +
+`guards.tsv`, never in user-facing output). The one near-verbatim emit is
+`precommit-guard.sh` + `wrapper-boundary.sh`, already designed self-contained;
+a repo test byte-pins template↔source.
+
+### Implementation Phases
+
+#### Phase 1 — Audit + manifest
+
+Walk `.claude/hooks/*.sh` (non-test) + `scripts/lint-*` (excluding `.test.sh`,
+`.baseline.txt`, `.highwater`): classify each `generic` /
+`generic-after-extraction` / `soleur-coupled` with one-line rationale citing its
+couplings. Emit `references/guardrail-audit.md` (human doc) and
+`references/guards.tsv` (columns: name, verdict, surfaces, template, default
+mode, deps, source_files, v1|v2). The v1 set per CTO ruling 4; `block-rm-rf`
+promoted to v1 only if the audit confirms a self-contained arm.
+
+#### Phase 2 — Templates + docs
+
+Author `references/guards/*.template` (self-contained generic variants),
+`references/verification-readme.template`, `references/gitleaks.toml.template`.
+
+#### Phase 3 — Generator
+
+`scripts/verification-scaffold.sh`: flag parsing, guards.tsv iteration, emit +
+settings.json merge + workflow emit + doc block, TMPDIR bite-proof, trap-based
+self-cleanup, lock, `--uninstall`, `--dry-run`, `--list`.
+
+#### Phase 4 — Tests, registration, docs
+
+`test/generator.test.sh` (flags, refusals, idempotent re-run, settings merge,
+mode flips), `test/bite-proof.test.sh` (per-guard pass→fail→pass on fixture
+repo), `test/manifest.test.sh` (every guards.tsv v1 row has a template + audit
+entry; every audit corpus member appears — census over the live tree, not a
+pinned list; `precommit-guard.sh` template↔source one-hunk parity). Registrations:
+`docs/_data/skills.js` (`"verification-scaffold": "Workflow"`), cursor stub via
+`sync-cursor-name-map.ts`, `components.test.ts` budget bump, shard manifest
+regen, README 103→104, content-strategy entry.
+
+## Alternative Approaches Considered
+
+| Option | Why rejected |
+|---|---|
+| Ship guards via `hooks/hooks.json` (plugin session hooks) | Session hooks guard the user's agent sessions but not their CI, and give no per-repo opt-in, no audit artifact, no advisory→enforce lifecycle. The issue asks for repo-installed gates. |
+| Extend `constraint-scaffold` in place | It emits exactly one gate with a Next.js precondition; a multi-guard corpus is a different skill contract (guards.tsv, per-guard modes, hook+CI dual surface). Sibling, not extension. |
+| Verbatim-vendor the repo hook/lint files | Every candidate carries Soleur couplings that dead-reference in a user repo (census in Research Insights). Templates are the honest generalization. |
+| Two PRs (audit, then scaffold) | CTO ruling 1: the audit's only consumer is the scaffold; split leaves an unactioned artifact and splits one design decision across two reviews. Escape hatch recorded in decision-challenges.md if the audit balloons. |
+| Emit lefthook/pre-commit framework config instead of Claude hooks | Claude Code hooks are the surface the plugin user's agents actually hit; lefthook is a repo-toolchain assumption the scaffold cannot make. CI workflow covers the non-agent floor. |
+
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:** a half-installed guard set in
+  their repo (untracked scripts, a settings.json hook entry pointing at a
+  missing file, a workflow that reds every PR) — or worse, a silently inert
+  guard the user believes protects them (the emitted `secret-scan` that never
+  runs because `.gitleaks.toml` was never emitted).
+- **If this leaks, the user's [data / workflow / money] is exposed via:** a
+  shipped secret-scan template whose ruleset is weaker than the repo source
+  lets a credential land in the user's git history — a data exposure the user
+  adopted Soleur precisely to prevent; a settings.json merge that corrupts the
+  file wedges every hook the user already had (workflow exposure).
+- **Brand-survival threshold:** `single-user incident`
+- **Threshold decision (challengeable):** the deliverable writes executable
+  gates into a mutable user surface — a single bad emit is a single user's CI
+  or credential; it is not bounded to prose quality (as #10403 was), so `none`
+  and `aggregate pattern` are both wrong.
+
+*CPO sign-off required at plan time (`requires_cpo_signoff: true`); CPO
+assessment ran in-process at Phase 2.5 — operator countersignature recorded as a
+decision-challenges row for `ship` to render.*
+`soleur:engineering:review:user-impact-reviewer` runs at review time per the
+sign-off lifecycle.
+
+## Architecture Decision (ADR/C4)
+
+### ADR
+
+- New ADR (**provisional ADR-295** — next free on this branch; a sibling may
+  claim it, `adr-ordinals` CI + ship Phase 5.5 re-verify): "Ship the generic
+  guardrail corpus via template emission into user-repo hooks + CI". Records:
+  dual-surface delivery, advisory-first mode contract, template-over-vendoring,
+  guards.tsv manifest, and that `precommit-guard.sh` is the sole near-verbatim
+  emit. Amends nothing; ADR-071/074 are cited as precedent, not superseded.
+
+### C4 views
+
+- **Component view** (`model.c4` + `views.c4`): add `verificationscaffold`
+  component beside `constraintscaffold` in the plugin system — "Generates the
+  generic guardrail set (secret-scan, commit-on-main, block-stash, orphan-test)
+  into a user repo's hooks and CI, advisory-first" — plus its `view … include`
+  line where `constraintscaffold` is included (views.c4:111 region). C4
+  completeness check performed: external actors (plugin user — already modeled
+  as the operator/founder elements), external systems (GitHub Actions runner —
+  modeled; gitleaks binary — a local tool, not a system element), containers
+  touched (plugin system — already present), access relationships (plugin →
+  user repo write surface — already asserted by the `emit-decision.sh` /
+  `lint-ratchet.py` write-surface prose in the plugin description). New element
+  needed: the component itself only. Run `c4-code-syntax.test.ts` +
+  `c4-render.test.ts` after editing.
+
+### Sequencing
+
+ADR authored in this PR describing the shipped state (status: active); no soak
+gate applies.
+
+## Files to Create
+
+- `plugins/soleur/skills/verification-scaffold/SKILL.md`
+- `plugins/soleur/skills/verification-scaffold/scripts/verification-scaffold.sh`
+- `plugins/soleur/skills/verification-scaffold/references/guardrail-audit.md`
+- `plugins/soleur/skills/verification-scaffold/references/guards.tsv`
+- `plugins/soleur/skills/verification-scaffold/references/verification-readme.template`
+- `plugins/soleur/skills/verification-scaffold/references/gitleaks.toml.template`
+- `plugins/soleur/skills/verification-scaffold/references/guards/secret-scan-hook.sh.template`
+- `plugins/soleur/skills/verification-scaffold/references/guards/commit-on-main-hook.sh.template`
+- `plugins/soleur/skills/verification-scaffold/references/guards/precommit-guard.sh.template`
+- `plugins/soleur/skills/verification-scaffold/references/guards/wrapper-boundary.sh.template`
+- `plugins/soleur/skills/verification-scaffold/references/guards/block-stash-hook.sh.template`
+- `plugins/soleur/skills/verification-scaffold/references/guards/orphan-test-check.sh.template`
+- `plugins/soleur/skills/verification-scaffold/references/guards/verification-gates.yml.template`
+- `plugins/soleur/skills/verification-scaffold/test/generator.test.sh`
+- `plugins/soleur/skills/verification-scaffold/test/bite-proof.test.sh`
+- `plugins/soleur/skills/verification-scaffold/test/manifest.test.sh`
+- `plugins/soleur/cursor/skills/soleur-verification-scaffold/SKILL.md` (generated by `sync-cursor-name-map.ts`)
+- `knowledge-base/engineering/architecture/decisions/ADR-295-*.md` (provisional ordinal)
+
+## Files to Edit
+
+- `plugins/soleur/docs/_data/skills.js` — `"verification-scaffold": "Workflow"` in `SKILL_CATEGORIES`
+- `plugins/soleur/test/components.test.ts` — `SKILL_DESCRIPTION_WORD_BUDGET` bump (+~20 words, comment convention)
+- `scripts/suite-shard-legs.tsv` — `regenerate-shard-manifest.py --incremental --write`
+- `plugins/soleur/README.md` — skills count 103 → 104
+- `knowledge-base/marketing/content-strategy.md` — one entry (sibling-PR pattern)
+- `knowledge-base/engineering/architecture/diagrams/model.c4` + `views.c4` — `verificationscaffold` component + include
+
+## Implementation Phases
+
+See `### Implementation Phases` under Technical Approach (audit → templates →
+generator → tests/registration/docs). Sequencing constraint: Phase 1's
+`guards.tsv` is the data spine for everything after it; Phase 4's manifest test
+is what keeps audit ↔ manifest ↔ templates consistent.
+
+## Open Code-Review Overlap
+
+3 open code-review issues touch planned paths; all acknowledged, none folded:
+
+- `#8593` (components.test.ts probe-gate scope-out) — **acknowledge**: unrelated
+  to the budget-constant bump; its own cycle.
+- `#10240`, `#3649` (content-strategy.md marketing scope-outs) — **acknowledge**:
+  one-line entry added here; their campaigns are independent.
+- `#8800` (lint-orphan-test-suites fixture census) — **acknowledge**: the audit
+  *reads* that script but no edit is planned; the emitted orphan-test guard is a
+  new template, not a port of the file the scope-out concerns.
+
+Query: `gh issue list --label code-review --state open --limit 200` (95 issues),
+jq `contains($path)` per planned path, 2026-10-21.
+
+## Observability
+
+The shipped surface is a generator plus emitted guards; the observability
+questions are (a) does the skill stay registered/wired in the plugin, (b) do the
+manifest↔audit↔template links stay consistent, (c) does the emitted contract
+stay honest (advisory-by-default, no egress).
+
+```yaml
+liveness_signal:
+  what: "verification-scaffold skill registered (skills.js + cursor stub + README count) and manifest/audit/template triad consistent (manifest.test.sh census)"
+  cadence: "per-PR: components.test.ts + suite shard legs; manifest.test.sh in scripts shard"
+  alert_target: "CI check failure (plugin test shard)"
+  configured_in: "plugins/soleur/test/components.test.ts; plugins/soleur/skills/verification-scaffold/test/manifest.test.sh"
+error_reporting:
+  destination: "CI job log — census failure names the unmanifested guard/template/orphan audit row"
+  fail_loud: "yes — registration and manifest drift are suite failures"
+failure_modes:
+  - mode: "a guards.tsv row without a template (or a template no row names)"
+    detection: "manifest.test.sh census"
+    alert_route: "CI red on the diff that created the orphan"
+  - mode: "a new .claude/hooks or scripts/lint-* member unclassified by the audit"
+    detection: "manifest.test.sh corpus census (git ls-files driven, not a name list)"
+    alert_route: "CI red"
+  - mode: "emitted guard defaults drift to blocking (advisory contract broken)"
+    detection: "generator.test.sh mode assertions + emitted-fixture grep for continue-on-error / MODE="
+    alert_route: "CI red"
+  - mode: "template acquires a Soleur coupling or network egress"
+    detection: "manifest.test.sh emitted-content grep: zero hits for knowledge-base/|SOLEUR_|plugins/soleur in emitted runtime text; zero curl|wget|https?:// outside comments"
+    alert_route: "CI red"
+logs:
+  where: "CI job log (suite assertion lines)"
+  retention: "GitHub Actions retention"
+discoverability_test:
+  command: "grep secret-scan plugins/soleur/skills/verification-scaffold/references/guards.tsv"
+  expected_output: "secret-scan"
+```
+
+## Guard Contract
+
+The deliverable IS guards. Entries below are written against the design; the
+implementation test suites instantiate them.
+
+### Guard 1 — emitted `secret-scan` (hook + CI job)
+
+**Property.** A `git commit` (hook) or PR push (CI) whose staged/diff content
+contains a secret-shaped string is reported; in enforce mode it is denied, in
+advisory mode it surfaces as `ask` (hook) or a visible non-blocking failure
+(CI).
+
+**Assembly.** Emitted `.claude/hooks/secret-scan.sh` registered in the user's
+`.claude/settings.json` `hooks.PreToolUse` (matcher `git commit` commands —
+chokepoint: the settings.json hook registry entry, the single registration
+point the generator owns); emitted `gitleaks` job in
+`.github/workflows/verification-gates.yml` (chokepoint: the workflow's job
+block); `.gitleaks.toml` at repo root (emitted only when absent — never
+overwrites an existing ruleset).
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | Bite-proof injects a secret-shaped string into a staged fixture file | RED — hook reports (advisory: `ask`; enforce: deny) and CI job fails |
+| 2 | Hook's gitleaks invocation neutered (scanner exits 0 without scanning — empty report treated as clean) | RED — bite-proof arm asserts a finding was produced, not just rc==0; the guard's own dispatch is suspect when "0 checked" |
+| 3 | A SECOND staged file carrying a secret after a clean first file | RED — scan must cover the whole index, not first match |
+| 4 | Harness: fixture gitleaks stub always reports clean | RED — suite must fail, proving the fixture asserts on real signal |
+| 5 | Must-PASS: a `gitleaks:allow`-annotated known-safe fixture commits | PASS — advisory or enforce, no report |
+| 6 | Same diff weakens emitted `.gitleaks.toml` rules AND the fixture set | RED — anchor: manifest.test.sh byte-pins the template's rule count to `guards.tsv` `deps` column; a ruleset weaker than declared cannot pass |
+
+### Guard 2 — emitted `commit-on-main` (hook only)
+
+**Property.** No `git commit` executes against a default-branch checkout without
+a decision: deny in enforce, warn+allow in advisory.
+
+**Assembly.** Emitted `.claude/hooks/commit-on-main.sh` (settings.json
+chokepoint as Guard 1) → emitted `scripts/verification/precommit-guard.sh`
++ `lib/wrapper-boundary.sh` (the detector, near-verbatim emit);
+`.claude/settings.json` registration (same chokepoint).
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | Fixture repo checked out on `main`, stdin payload `{"tool_input":{"command":"git commit -m x"}}` | RED — deny (enforce) / warn+allow (advisory) per mode |
+| 2 | settings.json hook entry deleted while script remains (registration severed) | RED — generator bite-proof asserts the registration, not just the file; `generator.test.sh` asserts idempotent re-registration dedupes on command string |
+| 3 | `cd repo && git commit` chained payload (second member after a bare `git commit`) | RED — boundary-prefixed detection covers chain operators |
+| 4 | Harness: payload fixture `git commit` on a `feat-x` branch | PASS — must-PASS input differing from canonical main; proves the guard is not deny-everything |
+| 5 | Same diff weakens `precommit-guard.sh` detection AND the emitted template | RED — anchor: `manifest.test.sh` one-hunk parity (template renders byte-identical to `plugins/soleur/scripts/precommit-guard.sh` under the default `main|master` substitution) catches drift, and the fixture battery catches a weakened detector on BOTH sides of the parity |
+
+### Guard 3 — emitted `block-stash` (hook only)
+
+**Property.** No `git stash` command (any chain position) passes the hook
+undecided.
+
+**Assembly.** Emitted `.claude/hooks/block-stash.sh` + settings.json
+registration (same chokepoint as Guards 1–2).
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | stdin payload `git stash` | RED — deny (enforce) / warn+allow (advisory) |
+| 2 | `git add x && git stash pop` (stash not leading) | RED — chain-boundary regex, not `^`-anchored |
+| 3 | Registration removed (hook unregistered in settings.json) | RED — bite-proof asserts registry entry presence |
+| 4 | Must-PASS: `git stash list` documented-exception payload or `git status` | PASS — non-stash-mutating command flows through |
+
+### Guard 4 — emitted `orphan-test` (CI job + runner script)
+
+**Property.** Every `git ls-files '*.test.sh'` in the target repo is referenced
+by ≥1 declared registration surface — a workflow file, a declared runner glob,
+or a reason-carrying exclusion-manifest line.
+
+**Assembly.** Emitted `scripts/verification/orphan-test-check.sh` invoked by the
+`orphan-test` job in `verification-gates.yml` (chokepoint: the job's run line);
+registration surfaces declared in the job env (`RUNNER_GLOBS`) +
+`.github/verification-known-orphans.txt`.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | Bite-proof adds `scratch.test.sh` referenced by nothing | RED — orphan reported by path |
+| 2 | A suite's only registration reference deleted (runner line removed) | RED — re-derives orphans, doesn't trust a stale allow-list |
+| 3 | `RUNNER_GLOBS` narrowed so zero files match (guard's own dispatch — "0 checked" exits 0) | RED — the check fails loudly when its producer enumerates nothing |
+| 4 | TWO orphan suites added | RED — both named, not just the first |
+| 5 | Must-PASS: an orphan listed in `verification-known-orphans.txt` WITH a reason suffix | PASS — exclusion manifest is a recorded decision, not silent absorption |
+
+### Guard 5 — generator emit-safety (the install window)
+
+**Property.** Every failure after the first emitted write leaves the user tree
+as found; no failure leaves a partial install.
+
+**Assembly.** All emit sites in `verification-scaffold.sh` ordered: templates →
+scripts → `.gitleaks.toml` → settings.json merge → workflow → [bite-proof] →
+doc block last; trap armed before the FIRST write and disarmed after the
+bite-proof passes. Exit-site table (position relative to first write): pre-write
+refusals (missing target, malformed settings.json, TMPDIR-inside-repo, existing
+artifact collision, lock held) write nothing; mid-write failures (any emit rc≠0,
+INT/TERM, set -e abort) trigger the trap; post-bite failures (doc-block write)
+warn only — the install is proven by then.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | `kill -TERM` after the second emitted file | tree identical to pre-install (`git status` clean of untracked emits) |
+| 2 | settings.json malformed at install time | refusal BEFORE any write; file untouched |
+| 3 | second `--guards` run after a successful first (existing artifacts) | refusal, zero writes — no overwrite path exists |
+| 4 | TMPDIR resolving inside the target repo | refusal pre-write (constraint-scaffold exit-69 precedent) |
+| 5 | Must-PASS: `--uninstall secret-scan` on a clean install | removes only that guard's artifacts + settings entry, leaves siblings |
+
+### Guard 6 — advisory-mode contract (cross-cutting)
+
+**Property.** A default install cannot block a commit or a PR; `--mode enforce`
+flips only the decision verb, never the detection predicate.
+
+**Assembly.** `MODE=` line in each emitted hook + `continue-on-error: true` in
+each emitted CI job (chokepoints: per-template mode lines, the workflow job
+block).
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | Default-install fixture: secret-scan hook fed a secret payload | reports + `ask`, never a silent `allow` and never a `deny` |
+| 2 | `--mode enforce` install: same payload | `deny` |
+| 3 | `--mode bogus` | install refuses pre-write (fail-closed flag validation) |
+| 4 | CI job emitted without `continue-on-error` in advisory mode | RED — `generator.test.sh` asserts the advisory markers on the emitted fixture, not the template text |
+| 5 | Must-PASS: emitted README promotion paragraph present in both modes | PASS — promotion path documented regardless of installed mode |
+
+## SpecFlow Findings (Phase 3, in-process)
+
+Flow-walk of the install/promote/uninstall journeys produced seven resolutions,
+each bound to an implementation site (paper-resolution lint — no orphan FRs):
+
+1. **Default-branch detection.** The emitted commit-on-main guard must not
+   hardcode `main|master`: `verification-scaffold.sh` resolves the target's
+   default via `git symbolic-ref refs/remotes/origin/HEAD` (fallback
+   `main|master`) and substitutes it into the emitted copy's
+   `@DEFAULT_BRANCHES@` placeholder — the canonical `precommit-guard.sh:107`
+   hardcodes `main|master`, so the template renders byte-identical to source
+   under the default substitution and the one-hunk parity anchor (AC11) still
+   holds. Covers `trunk`/custom defaults.
+2. **Target precondition.** Target must be a git work tree (`git rev-parse
+   --is-inside-work-tree`); non-repo targets refuse pre-write — the git-common-
+   dir lock requires git anyway. Same class as constraint-scaffold's
+   precondition (exit 65).
+3. **Directory creation.** `.claude/hooks/`, `.github/workflows/`,
+   `scripts/verification/` are created when absent — documented emit behavior,
+   removed by `--uninstall` only if the run created them AND they're empty.
+4. **CI gitleaks provisioning.** Emitted workflow uses
+   `gitleaks/gitleaks-action` **pinned by commit SHA** (supply-chain posture —
+   a curl-installed binary would be an unpinned executable fetch); the README
+   documents the pin and the version it resolves to.
+5. **`--uninstall` idempotent.** On a never-installed guard: prints "not
+   installed", lists installed guards, exit 0.
+6. **Advisory `ask` scope.** The emitted secret-scan returns `ask` ONLY on real
+   gitleaks findings (high-signal, rare); scanner errors/missing binary →
+   warn+allow (advisory) / deny+remediation (enforce). An `ask` can never fire
+   on tool-error in any mode.
+7. **POSIX-only.** Emitted guards require bash+POSIX tools (stated in SKILL.md
+   and emitted README); no Windows surface in v1.
+8. **gitleaks color-pin travels.** The emitted secret-scan's gitleaks invocation
+   must pin `GIT_CONFIG_*`/`GIT_CONFIG_PARAMETERS` colour-off exactly as
+   `lefthook.yml:73-75` and `git-commit-secret-scan.sh` do — measured in-repo,
+   a user's `color.ui=always`/`color.diff=always` makes gitleaks report ZERO
+   findings on a staged key. The bite battery runs one arm under
+   `color.diff=always`.
+9. **Binary resolution + emitted workflow lint.** The emitted hook resolves
+   `gitleaks` via `command -v` at exec time — the bite battery stubs PATH so a
+   name-resolving wrong binary is caught (not just a missing one), per the
+   installed-BINARY sharp edge (#8615). The emitted `verification-gates.yml`
+   template is `actionlint`-clean; `manifest.test.sh` runs actionlint on the
+   emitted fixture workflow, not only the template text.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "A written audit list: which hooks/lints are generic vs Soleur-coupled, with rationale." | `references/guardrail-audit.md` + `references/guards.tsv` (Phase 1) | mapped |
+| 2 | "Users can scaffold at least the secret-scan + orphan-test + commit-guard set into their own repo." | the skill + `verification-scaffold.sh` + guard templates + settings/workflow emit (Phases 2–3) | mapped |
+| 3 | "Shipped gates are advisory-first per `wg-dark-launch-deploy-gates` where they can block." | advisory-first mode contract (Guard 6) + `continue-on-error` CI + warn/ask hook defaults | mapped |
+| 4 | "audit the 121 hooks + `scripts/lint-*` for entries that are repo-generic (no Soleur-domain coupling)" | Phase 1 audit — census over `.claude/hooks/*.sh` non-test + `scripts/lint-*`, count corrected to 112/55 | mapped |
+| 5 | "a `verification-scaffold` skill (constraint-scaffold sibling) that installs the chosen generic set into a user repo's hooks/CI" | `plugins/soleur/skills/verification-scaffold/` — dual-surface generator | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited | Verdict |
+|-----------|------------------|---------|
+| `references/guardrail-audit.md` | "A written audit list: which hooks/lints are generic vs Soleur-coupled, with rationale." | asked |
+| `references/guards.tsv` | "installs the chosen generic set" — the manifest IS the chosen set | inferred — justification: machine-readable form the generator iterates; the audit doc alone is prose a script cannot consume |
+| `scripts/verification-scaffold.sh` + `references/guards/*.template` | "a `verification-scaffold` skill … that installs the chosen generic set into a user repo's hooks/CI" | asked |
+| `verification-gates.yml.template` | "into a user repo's hooks/CI" | asked |
+| `gitleaks.toml.template` | "secret-scan" — the repo's own guard fails open without it; emitting no config ships a vacuous guard | inferred — justification: a secret-scan that never scans is the vacuous-guard class the Guard Contract exists to prevent |
+| `test/*.test.sh` ×3 | constraint-scaffold precedent + lint-orphan-test-suites (every new suite must be registered) | inferred — justification: a guard whose failure mode is "silently stops detecting" needs a companion suite (repo convention, enforced) |
+| `cursor/skills/soleur-verification-scaffold/SKILL.md` | — | inferred — justification: cursor-name-map harness parity; missing stub fails `cursor-name-map.test.ts` |
+| `docs/_data/skills.js` entry | — | inferred — justification: constitution "manually register it in SKILL_CATEGORIES … silently omit unregistered skills" |
+| `components.test.ts` budget bump | — | inferred — justification: zero headroom measured (2413/2413); the enforcing gate |
+| `suite-shard-legs.tsv` regen | — | inferred — justification: new test files need shard legs or lint-orphan-test-suites reds |
+| `README.md` 103→104 | — | inferred — justification: pre-commit component-count verification |
+| `content-strategy.md` entry | — | inferred — justification: sibling epic children all carried it (#10727/#10735/#10738) |
+| ADR-295 + `model.c4`/`views.c4` edit | — | inferred — justification: plan Phase 2.10 — new user-repo write surface is an architectural decision; deferral is a reject condition |
+
+### Split Assessment
+
+- Subsystems touched: 3 — `plugins/soleur`, `scripts`, `knowledge-base`
+- Planned files: ~24 | Estimated changed lines: ~3,200
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: split — `references/guardrail-audit.md`+`guards.tsv` vs the
+  rest — **overridden**: CTO ruling 1 (decision-challenges.md) keeps audit +
+  scaffold in one PR; the audit's only consumer is the scaffold and sibling
+  children all landed single PRs. Escape hatch: if the audit exceeds ~500 lines
+  of per-entry rationale, split it per the recorded dissent.
+
+## Acceptance Criteria
+
+- [x] AC1: `references/guardrail-audit.md` classifies EVERY `.claude/hooks/*.sh`
+  non-test file + `scripts/lint-*` (excluding `.test.sh`/`.baseline.txt`/`.highwater`)
+  as `generic` / `generic-after-extraction` / `soleur-coupled` with a one-line
+  rationale; `manifest.test.sh` drives the corpus from `git ls-files` so a new
+  member missing a classification reds CI.
+- [x] AC2: `bash verification-scaffold.sh --target <fixture> --headless` installs
+  the v1 set (secret-scan, commit-on-main, block-stash, orphan-test): emitted
+  files present at fixture-relative paths, settings.json hook entries
+  registered, `verification-gates.yml` at repo root.
+- [x] AC3: On the default (advisory) install, every emitted CI job carries
+  `continue-on-error: true` and every emitted hook warns/asks instead of
+  denying; `--mode enforce` produces deny-decisions; emitted README documents
+  the promotion step per artifact.
+- [x] AC4: Bite-proof on the fixture repo: each installed guard passes clean →
+  fails on an injected violation → passes after revert, per-guard, with logs.
+- [x] AC5: Non-destructive: pre-existing `.gitleaks.toml`, settings.json,
+  workflow, or hook file causes refusal with zero writes; second full run
+  refuses; `--uninstall <guard>` removes only that guard's artifacts.
+- [x] AC6: Self-cleanup: a TERM/failure after first write but before bite-proof
+  completion leaves `git status` identical to pre-install.
+- [x] AC7: settings.json merge: absent file created; existing file preserves
+  unrelated entries; malformed JSON refused pre-write; re-run dedupes (no
+  double hook entries).
+- [x] AC8: Emitted-content hygiene: zero `SOLEUR_`/`knowledge-base/`/
+  `plugins/soleur` references in emitted runtime text; zero network egress
+  tokens (`curl|wget|https?://`) outside comments in emitted artifacts.
+- [x] AC9: Registrations green: `components.test.ts` (budget bump), cursor stub
+  exists (`cursor-name-map.test.ts`), skills.js entry, `suite-shard-legs.tsv`
+  regenerated (new suites have legs), README skills count = 104.
+- [x] AC10: `ADR-295-*.md` (or renumbered ordinal) exists; `model.c4` +
+  `views.c4` carry `verificationscaffold`; `c4-code-syntax.test.ts` +
+  `c4-render.test.ts` pass.
+- [x] AC11: `manifest.test.sh` one-hunk parity: `precommit-guard.sh.template`
+  renders byte-identical to `plugins/soleur/scripts/precommit-guard.sh` when
+  the `@DEFAULT_BRANCHES@` placeholder substitutes `main|master` (and
+  `wrapper-boundary` pair is raw `cmp`), so the canonical source and the emit
+  cannot drift silently.
+- [ ] AC12: PR carries `semver:minor` label + `## Changelog` section
+  (`plugins/soleur/` touched). *(review-phase note 2026-10-21: pending — ship applies the label/changelog at ship time)*
+
+## Domain Review
+
+**Domains relevant:** engineering, product, marketing
+
+### Engineering
+
+**Status:** reviewed (in-process, CTO Rule interface — headless pipeline)
+**Assessment:** nine rulings recorded in
+`knowledge-base/project/specs/feat-one-shot-10404-verification-scaffold/decision-challenges.md`:
+single-PR, dual-surface delivery, mode-flag advisory mechanics, v1 guard set,
+templates-over-vendoring, audit+manifest co-location, per-guard bite-proof,
+single-user-incident threshold.
+
+### Product/UX Gate
+
+**Tier:** none — no UI-surface files in Files to Create/Edit (all
+`.sh`/`.md`/`.yml`/`.tsv`/`.c4`); mechanical override does not fire.
+**Decision:** auto-accepted (pipeline) — CPO assessment ran in-process:
+user-facing capability requiring simple invocation + legible emitted docs +
+documented uninstall; spec-flow-analyzer delegated for Phase 3 flow validation.
+**Agents invoked:** soleur:product:cpo (in-process assessment)
+**Skipped specialists:** soleur:product:design:ux-design-lead (no UI surface —
+non-skippable rule does not apply), soleur:marketing:copywriter (no marketing
+copy surface; emitted README is technical reference)
+**Pencil available:** N/A (no UI surface)
+
+### Marketing
+
+**Status:** reviewed (in-process, CMO role)
+**Assessment:** new user-facing capability = content amplification opportunity;
+matches the "taste compounds" positioning. One `content-strategy.md` entry
+(sibling-PR pattern); no copywriter needed (no landing/email/social surface).
+
+## Test Scenarios
+
+### Acceptance Tests (RED phase targets)
+
+- `unit` Given fixture repo with clean tree, when generator runs `--headless`,
+  then all v1 artifacts exist at fixture-relative paths + settings.json
+  registered + workflow at repo root.
+- `unit` Given fixture carrying a real `.gitleaks.toml`, when generator runs,
+  then refusal pre-write (no overwrite) — AC5.
+- `unit` Given malformed `.claude/settings.json`, when generator runs, then
+  refusal before any write — AC7.
+- `unit` Given a first successful install, when re-run, then refusal + zero
+  writes; when `--uninstall block-stash`, then only that guard's artifacts +
+  settings entry removed — AC5.
+- `integration` Given installed advisory fixture, when hook stdin carries a
+  secret-shaped staged file, then `ask` decision + redacted finding; when
+  `--mode enforce` install, then `deny` — AC3/Guard 6.
+- `integration` Given installed fixture, when a scratch `x.test.sh` is
+  committed unregistered, then `orphan-test-check.sh` names it by path; when
+  added to `verification-known-orphans.txt` with a reason, then clean —
+  AC4/Guard 4.
+- `integration` Given bite-proof run, when `kill -TERM` lands after second
+  emit, then `git status` identical to pre-install — AC6.
+- `unit` Given `git ls-files` corpus enumeration, when a new
+  `.claude/hooks/x.sh` lacks an audit row, then `manifest.test.sh` reds — AC1.
+- `unit` Given the emitted artifact set, when grepped for
+  `SOLEUR_|knowledge-base/|curl|wget|https://`, then zero runtime hits — AC8.
+
+### Regression / Edge Cases
+
+- `git commit` inside `cd <dir> &&` chains and env-assignment prefixes are
+  detected (wrapper-boundary grammar parity with the canonical source).
+- A user repo on `master` (not `main`) default branch is honored — the
+  commit-guard's default-branch set is not Soleur-specific.
+- `gitleaks` absent on the user's PATH: hook warns-and-allows (advisory) /
+  denies-with-remediation (enforce); CI job installs or skips per its declared
+  posture — never a silent clean.
+- `--dry-run` writes nothing and prints the full emit plan.
+- A monorepo target: workflow still lands at repo root (subdir workflows are
+  dormant — constraint-scaffold defect 5).
+
+## Success Metrics
+
+- `gh issue view 10404` AC bullets mechanically satisfied (audit doc exists +
+  census-enforced; v1 set scaffolds; advisory default).
+- `manifest.test.sh` + `generator.test.sh` + `bite-proof.test.sh` green in the
+  scripts shard.
+- Zero regressions: components.test.ts, cursor-name-map.test.ts,
+  lint-orphan-test-suites.sh all green post-registration.
+
+## Dependencies & Prerequisites
+
+- `node` (guaranteed for Claude Code users) or `jq` at generator runtime for
+  settings.json merge — degrade: refuse hook registration with a named
+  remediation rather than corrupt the file (CI legs still emit).
+- `gitleaks` on the user's PATH for the emitted secret-scan hook; the CI job
+  pins a version (`GL_REMEDIATION` precedent: 8.24.x).
+- `git` worktree support for the bite-proof's detached TMPDIR staging.
+- No new runtime dependencies added to the repo (constitution: no dependency an
+  LLM can generate inline).
+
+## Risk Analysis & Mitigation
+
+- **Risk: emitted guards drift from repo sources.** Mitigation: templates are
+  the shipped form (the repo versions are NOT their source of truth at
+  runtime); `manifest.test.sh` one-hunk parity on the one verbatim pair;
+  guards.tsv provenance column.
+- **Risk: settings.json merge corrupts a user's config.** Mitigation:
+  jq-parse-then-write, refuse on malformed input pre-write, dedupe on command
+  string, trap-restored on any post-merge failure.
+- **Risk: advisory defaults become permanent weak guards.** Mitigation: emitted
+  README names the promotion step + ≥1-clean-run precondition per
+  `wg-dark-launch-deploy-gates`; promotion is a one-line flip by design.
+- **Risk: the audit rots as the corpus grows.** Mitigation: census-driven
+  `manifest.test.sh` — a new unclassified corpus member reds CI (the audit is
+  enforced, not aspirational).
+- **Risk: hook surface unusable on non-Claude harnesses.** Mitigation:
+  documented — hooks serve Claude-Code-compatible `.claude/` consumers; CI
+  serves everyone else; both emitted together so no cohort is floorless.
+
+## Resource Requirements
+
+- ~1 day audit (issue estimate) + generator/templates/tests comparable to a
+  constraint-scaffold-sized change; single-PR per CTO ruling.
+
+## Future Considerations
+
+- v2 candidates the audit marks `generic-after-extraction` (e.g.
+  `lint-trap-tempfile-ownership`, `lint-workflows.*`, `lint-gh-argv-arg`,
+  `lint-dual-lockfile`, `block-rm-rf`, `worktree-write-guard`,
+  `memory-backstop-mutation-battery` core) — add = one guards.tsv row +
+  template + audit row.
+- `soleur-coupled` members stay repo-internal by design; the audit doc is the
+  record of why.
+- Non-goals carried below stay non-goals until a follow-up issue re-scopes.
+
+## Non-Goals
+
+- Porting the full ~40-lint corpus or the `guardrails.sh` monolith wholesale —
+  Soleur-coupled by the census; v2 candidates only where the audit says
+  `generic-after-extraction`.
+- Auto-recovery (ADR-074-style two-stage dispatcher) for emitted gates —
+  v1 gates are advisory; a stuck founder can delete the artifacts.
+- `lefthook`/pre-commit-framework emission — wrong toolchain assumption.
+- `--force`/overwrite semantics — refusal is the contract.
+- The pre-existing `flag-bootstrap/` SKILL.md absence — observed, out of scope.
+
+## Documentation Plan
+
+- `SKILL.md` (usage, modes, emitted-artifact table, agent-owns-gates model).
+- Emitted `VERIFICATION.md`/README block in the target repo (what's installed,
+  advisory→enforce promotion, uninstall).
+- `references/guardrail-audit.md` ships with the skill — the corpus rationale
+  is user-visible documentation.
+- ADR-295 (provisional) + C4 component.
+
+## References & Research
+
+### Internal References
+
+- Pattern authority: `plugins/soleur/skills/constraint-scaffold/` (SKILL.md,
+  `scripts/constraint-scaffold.sh`, `test/parity.test.sh`); ADR-071, ADR-074.
+- Canonical emit: `plugins/soleur/scripts/precommit-guard.sh` +
+  `scripts/lib/wrapper-boundary.sh` (self-contained by design).
+- Repo sources per guard: `.claude/hooks/git-commit-secret-scan.sh`,
+  `guardrails.sh` arms (`block-commit-on-main`:130, `block-stash-in-worktrees`:471),
+  `scripts/lint-orphan-test-suites.sh`.
+- Learnings cited in Research Insights (constraint-scaffold capability
+  verification, global-hook env isolation, CLAUDE_PROJECT_DIR, advisory-first
+  mechanics, assertion anchoring, gitleaks rollout, sole-copy predicate parity).
+
+### Related Work
+
+- Epic #10397; siblings #10400–#10403 (closed: PRs #10727/#10735/#10738).
+- constraint-scaffold: #5765/PR #5770, #5777 amendment, #8288.

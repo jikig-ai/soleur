@@ -139,7 +139,7 @@ operator authorizes the change in the App or installation settings
 | `infra-validation.yml::check-secrets` | push, pull_request, workflow_dispatch | (none) | `DOPPLER_TOKEN` presence probe — never reads a value | **read** | **A** |
 | `infra-validation.yml::plan` | **pull_request only**, deliberately | (none) | `DOPPLER_TOKEN` tf-var, R2 state `AWS_*` | **read** — plan only | **A.** This is the job the whole Tier-A design is built around: `-refresh=false`, a read-only Hetzner token, placeholders for the Doppler and R2 providers, and the workflow's own `github.token` for the GitHub provider (measured, plan M8) |
 | `workspaces-luks-cutover.yml::preflight` | workflow_dispatch | (none) by design | `DOPPLER_TOKEN` → the cf-tunnel SSH bridge | **read** | **A** |
-| `workspaces-luks-cutover.yml::cutover` | workflow_dispatch | **`workspaces-luks-cutover`** | `DOPPLER_TOKEN` → `HCLOUD_TOKEN` (a volume-id lookup) | **read** on the Hetzner side — no Terraform in the file | **A** for the Hetzner read → `HCLOUD_TOKEN_READONLY`. The job keeps its Tier-B environment gate for its host-side mutation, which is why that environment gains a `main` policy in this PR |
+| `workspaces-luks-cutover.yml::cutover` | workflow_dispatch | **`workspaces-luks-cutover`** | `DOPPLER_TOKEN` → `HCLOUD_TOKEN_READONLY` alone (a volume-id lookup; no read/write fallback since #9927 item 8b, 2026-10-20) | **read** on the Hetzner side — no Terraform in the file | **A** for the Hetzner read → `HCLOUD_TOKEN_READONLY`. The job keeps its Tier-B environment gate for its host-side mutation, which is why that environment gains a `main` policy in this PR |
 | `workspaces-luks-verify.yml::verify` | schedule, workflow_dispatch | (none) | `DOPPLER_TOKEN` — read-only probe | **read** | **A** |
 | RETIRED 2026-10-12: `web-host-reboot.yml::reboot` (#9372) | workflow_dispatch only; job-gated `github.ref == 'refs/heads/main'`; `needs: validate` | **`web-platform-infra-apply`**, with job concurrency `web-1-swap` | `DOPPLER_TOKEN_INFRA_PRIVILEGED` through `.github/actions/infra-credentials` (`HCLOUD_TOKEN`, R2 state `AWS_*`), plus the marker-config token bound to the never-pooled step only; `terraform init` and `terraform state pull` only (no plan, apply or `-target`) | **write** — one `POST /servers/{id}/actions/reboot` for the allow-listed web-2 server, after every refusal; the four steps that run repo code beyond the loader (never-pooled, snapshot, reboot, summary) each run under an `env -i` allow-list; `validate` and the re-check step refuse a re-run (`github.run_attempt` must be 1) | **B** — a new consumer of the Tier-B Hetzner write token. The environment's only reviewer is the owner's own login with `prevent_self_review` off (measured 2026-10-07), so the approval's independence is a rule, not a platform control (ADR-241 dated section 2026-10-07; two-party question: #8044) |
 | RETIRED 2026-10-12: `web-host-reboot.yml::observe` (#9372) | same run (`needs: reboot`, `!cancelled()` and a non-empty anchor output; a cancelled run starts no poll) | (none) | `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` repo secrets only; no credential action, no Doppler, no Hetzner token | **read** — Better Stack rows through `scripts/web-host-reboot-evidence.sh grade` | **A**-class: references no Tier-B secret and is not classified by the census; listed because "it reads Better Stack" is the wrong discriminator |
@@ -157,7 +157,7 @@ operator authorizes the change in the App or installation settings
 | `weakness-miner.yml::open-pr` (added 2026-10-11, #9454 item 4, ADR-285) | schedule (Sunday 06:00 UTC), workflow_dispatch; job-gated `github.ref == 'refs/heads/main'`; `needs: mine`, a job that holds no environment and no secret and hands over one file (the digest) | **`infra-privileged`** | `DOPPLER_TOKEN_INFRA_APP` → `.github/actions/mint-infra-app-token` (default source `soleur-infra-app`/`prd`), installation `166065653`, scoped to `permissions: {"contents":"write","pull_requests":"write"}`, `repositories: soleur`, passed to `.github/actions/bot-pr-with-synthetic-checks` as `pr-token`; the job's `GITHUB_TOKEN` (`contents: read`, `checks: write`) posts the synthetic check-runs only | **write** — a branch push, a PR, and arming auto-merge for one digest file, all as the App | **B** — the third narrow-source consumer of the mint composite (the fourth caller overall). The job runs no inline script (the miner runs in `mine`), so no content-producing step shares it with the credential |
 | `build-inngest-bootstrap-image.yml::build` | workflow_dispatch (the `push: tags` trigger was removed by #9262) | (none) | `DOPPLER_TOKEN_PRD` | **read** | **A** — `prd` root config |
 | `mint-inngest-bootstrap-tag.yml::mint` (added by #4326; re-tiered by #9262) | push to `main` (paths), workflow_dispatch; job-gated `github.ref == 'refs/heads/main'` | **`infra-privileged`** (#9262) | Two, never in one step: `DOPPLER_TOKEN_INFRA_APP` (since 2026-10-03, #9321; `DOPPLER_TOKEN_INFRA_PRIVILEGED` from #9262 until then) → `.github/actions/mint-infra-app-token` (default source `soleur-infra-app`/`prd`; before 2026-10-03 the fixed source was `soleur-infra-privileged`/`prd`), installation `166065653`, scoped to `permissions: {"actions":"write"}`, `repositories: soleur`, minted BEFORE the tag step and read only by the dispatch step (then revoked); and the job's `GITHUB_TOKEN` (`contents: write`) for the tag write only | **write** — a tag ref, then one `workflow_dispatch` | **B** — a push-to-`main` job, so the `main` policy admits it. **Before #9262:** no `environment:`, and its App step read the soleur-ai key from `prd_terraform` through `DOPPLER_TOKEN`, so O10's sentinel would have failed it with `verdict=legacy_app_key_evicted` before any tag was cut (ADR-232 §8) |
-| `cutover-inngest.yml::cutover` (generation anchor) | workflow_dispatch, push | **`inngest-cutover`** | Since 2026-09-24 the G3 generation anchor (`GET /v1/servers?name=soleur-inngest`) on op=resume / op=arm / op=luks-*, which reads `HCLOUD_TOKEN_READONLY` first and falls back to `HCLOUD_TOKEN` until step O5 | **read** on the Hetzner side; no Terraform | **A** for the Hetzner read → `HCLOUD_TOKEN_READONLY`; keeps its Tier-B environment gate |
+| `cutover-inngest.yml::cutover` (generation anchor) | workflow_dispatch, push | **`inngest-cutover`** | Since 2026-09-24 the G3 generation anchor (`GET /v1/servers?name=soleur-inngest`) on op=resume / op=arm / op=luks-*, which reads `HCLOUD_TOKEN_READONLY` first and falls back to `HCLOUD_TOKEN` until step O5 (**still true on 2026-10-20: `scripts/cutover-inngest.sh` is the one remaining fallback, unscanned by the census; removal is tracked in #10664**) | **read** on the Hetzner side; no Terraform | **A** for the Hetzner read → `HCLOUD_TOKEN_READONLY`; keeps its Tier-B environment gate |
 | `cutover-inngest.yml::cutover` (`op=backup`, split from the row above 2026-10-08, #8767) | workflow_dispatch | **none today** (the `environment:` expression lists arm, rollback, resume, reflush and luks-cutover, not `backup`; `luks-rollback` was retired by #8285 PR B) | `DOPPLER_TOKEN` → `HCLOUD_TOKEN` (read/write), masked with `::add-mask::` immediately after the read and shape-checked before first use; the response body is never printed, only the HTTP code | **write** — a Hetzner `create_image` | **B** by classification (`HCLOUD_TOKEN_READONLY` returns `forbidden` on it). **Currently ungated and non-conformant:** the tier census cannot see this script-level read, so nothing enforces the classification until #9755 lands (workflow expression + pinned infra suite + the ADR-241 O10 re-plumb; blocked by nothing, deadline before O10) |
 | `git-data-cutover.yml::cutover` | workflow_dispatch | **`web-platform-infra-apply`** | `DOPPLER_TOKEN_PRD`, `DOPPLER_TOKEN`, **`DOPPLER_TOKEN_GIT_DATA_ROOT`** | **read** of all three; host-side cutover write | **B** — it holds `DOPPLER_TOKEN_GIT_DATA_ROOT`. **No edit to this file is needed and none is made**: it belongs to the parallel #8211 session, it already declares a Tier-B environment, and an environment secret overrides a repository secret of the same name |
 | `git-data-cutover.yml::wipe` (added 2026-10-14, #10138) | workflow_dispatch; `mode` is `wipe_check`, `wipe`, `wipe_finish` or `snapshot_clear`, and the `cutover` job is skipped for all four (`snapshot_clear` loads no Tier-B credential and makes no provider write: it uses `DOPPLER_TOKEN_PRD` only to write the host-key pin, and the git-data root key for one ssh session) | **`web-platform-infra-apply`** | `DOPPLER_TOKEN`, `DOPPLER_TOKEN_PRD`, `DOPPLER_TOKEN_GIT_DATA_ROOT`, and `DOPPLER_TOKEN_INFRA_PRIVILEGED` through `.github/actions/infra-credentials` (one loader call, with only the Tier-B token: `doppler-token-legacy` is omitted, so only the Tier-B arm can run) | **write** — `mode=wipe`: one detach and one delete of the allow-listed plaintext volume `soleur-git-data-store`; `mode=wipe_finish`: no detach and at most one delete (none when the volume is already absent). The loader's `HCLOUD_TOKEN` is a value source in exactly two steps; every read uses `HCLOUD_TOKEN_READONLY`. `mode=wipe_check` only reads | **B** — the first loader consumer in `git-data-cutover.yml`: the `::cutover` row above only checks that the Tier-B secret is present and never calls the loader, and it is not edited. Every step after the loader runs under an `exec env -i` allow-list, a credential reaches a child on stdin, and the job's only remote `uses:` is `actions/checkout`, pinned by SHA (the two local actions are composite with no `post:` hook; ADR-241, amendment 2026-10-14). Runbook: `git-data-luks-cutover-5274.md`, "The wipe" |
@@ -196,7 +196,9 @@ Phase 4 binds each to a member of the Tier-B environment set; the census row is 
 `mint-inngest-bootstrap-tag::mint` (#4326) left this list. Both declare `infra-privileged` and read
 `DOPPLER_TOKEN_INFRA_PRIVILEGED`, so the census's G1b/G1c rows now cover them. *Dated note, 2026-10-03
 (#9321):* they now read `DOPPLER_TOKEN_INFRA_APP`, which is also an `ENV_SECRETS` member, so G1b/G1c still
-cover them; census row G7f pins their call shape.
+cover them; census row G7f pins their call shape. *Dated note, 2026-10-22 (#9927 item 8b review): the list above is the
+pre-Phase-4 state and is historical. Every one of the 32 jobs that call the loader now declares a Tier-B `environment:`
+(census G1j, which derives the set from the workflow files, so a count written here would go stale).*
 
 `infra-privileged` exists: O0's push apply created it with its `main` policy, and it is referenced
 by `apply-web-platform-infra.yml`, `apply-github-infra.yml`, `apply-sentry-infra.yml`,
@@ -207,6 +209,61 @@ by `apply-web-platform-infra.yml`, `apply-github-infra.yml`, `apply-sentry-infra
 live; none carries `DOPPLER_TOKEN_INFRA_PRIVILEGED` until O3.
 *Dated note, 2026-09-30 (#9262):* O3 done (measured 2026-09-30: the secret exists on
 `infra-privileged`, and on the other three Tier-B environments, all set 2026-09-29).
+
+### No read/write fallback in the Hetzner read-only readers (#9927 item 8b, 2026-10-20)
+
+Three readers of the read-only Hetzner token no longer fall back to the read/write `HCLOUD_TOKEN`: the
+loader's legacy arm (`.github/actions/infra-credentials/action.yml`), the PR-plan step "Tier-A plan
+credentials (bounded substitutes)" in `infra-validation.yml`, and the volume-id lookup in
+`workspaces-luks-cutover.yml::cutover`. The fallback was the before-state of O5 and O10; both are done
+(measured 2026-10-20 by a names-only listing of `soleur/prd_terraform`: `HCLOUD_TOKEN_READONLY` listed,
+`HCLOUD_TOKEN` absent; the O5 write-probe was last recorded 2026-09-29 and was not re-run, because it
+calls the Hetzner API). A reader that can reach the destroy-capable token silently stops being read-only
+the day the read-only secret goes missing; now it fails by name instead.
+
+What each reader does when the read-only secret is absent, empty or not a plain one-line bearer token:
+
+| Reader | Verdict | Effect |
+| --- | --- | --- |
+| Loader legacy arm | `::error` `verdict=legacy_hcloud_readonly_absent` (names `privileged_source_missing` as the likelier root cause) or `legacy_hcloud_readonly_unusable` | exit 0, **nothing exported**; each Hetzner consumer fails closed on its own empty token, and the three callers that never touch Hetzner (`apply-github-infra`, `apply-sentry-infra`, `web-host-escrow-diagnose`) are unaffected |
+| PR-plan step | `::error` `verdict=pr_plan_hcloud_readonly_absent` or `pr_plan_hcloud_readonly_unusable` | the step fails; nothing reaches `$GITHUB_ENV` |
+| `workspaces-luks-cutover` volume lookup | `SOLEUR_CREDENTIAL_REFUSED script=workspaces-luks-cutover reason=readonly_absent` (or `token_shape`) | the step stops before any request and before anything is delivered to web-1 |
+
+**Break-glass: an incident PR needs a plan, or a rollback needs the lookup, and a verdict above fired.** Find the first
+column of the row for the reader that fired, then do the steps in order. The verdicts are `::error` annotations on the run, not only log
+lines: `gh api repos/jikig-ai/soleur/check-runs/<job_id>/annotations --jq '.[]|select(.title=="infra-privileged")|.message'`.
+The loader legacy arm exits 0, so the job can stay green until a consumer fails: read the annotation, not the run conclusion.
+
+| Reader that fired | Which credential it uses to read `prd_terraform` | First check | Then |
+| --- | --- | --- | --- |
+| Loader legacy arm (`legacy_hcloud_readonly_*`) | the Tier-A `DOPPLER_TOKEN` (`DP_LEGACY`); the arm is reached because the job's Tier-B environment secret `DOPPLER_TOKEN_INFRA_PRIVILEGED` is missing or empty | restore the environment secret (mint and set by O3) | if the environment secret is fine, step 2 |
+| PR-plan step (`pr_plan_hcloud_readonly_*`) | the repo-level Tier-A `DOPPLER_TOKEN` directly; **no environment secret is involved** | re-run once; check the `DOPPLER_TOKEN` repo secret and Doppler status (this read cannot tell absent from rejected from unreachable) | step 2 |
+| `workspaces-luks-cutover` lookup (`readonly_absent`, `token_shape`) | the same repo-level Tier-A `DOPPLER_TOKEN`; **no environment secret is involved** | as the PR-plan row | step 2 |
+
+1. (Per the table.) Do not mint a Hetzner token until the first check is done: a rejected or unreachable Doppler read prints the
+   same "absent" text, and a re-mint would be the wrong remedy.
+2. Mint a **new** read-only token in the Hetzner console by the O5 procedure and store it in `prd_terraform` **before** deleting the
+   old one; never mint it as read/write. An agent can do everything except the console mint (token creation has no API), so the
+   one owner action is: create a read-only token in the Hetzner console and hand it over through the owner's own terminal. After
+   it is stored (stdin, never argv), run the O5 write-probe (it must answer `forbidden`) before relying on it.
+3. If the verdict is `*_unusable` or `token_shape`, treat the stored value as possible tampering, not only as a typo: the
+   branch-nameable `DOPPLER_TOKEN_WRITE` repo secret can write `prd_terraform` until operator step O11, so read the config's activity
+   log (names and timestamps only) before re-minting.
+4. There is no path that substitutes the read/write token, and none should be added in an incident: a destroy-capable token on a
+   read path is exactly what this change removes. No read/write Hetzner token exists in Tier A at all now (O10 done), so
+   a legacy-arm job cannot write to Hetzner; a Hetzner-writing job depends solely on its Tier-B environment secret. The two
+   places that still read the old read/write name are in `scripts/cutover-inngest.sh` (the site C fallback and the `op=backup`
+   path, which refuses since O10: no pre-snapshot recovery point can be taken by that op), tracked in #10664 and #9755.
+
+Residuals, stated plainly: a read/write token stored under the read-only name is undetectable by these readers; the control is
+the O5 write-probe, **last recorded 2026-09-29 and not re-run in this change**, so that residual is stated and not bounded in
+time (re-run the write-probe before the next token re-mint, owner action). The census guards the invariant with G1g (no read of a
+Tier-B name from `prd_terraform` that the scanner can see: a literal name in a `run:` body with `-c prd_terraform` or a
+`DOPPLER_CONFIG` env; quoted names, variable names, `doppler run -- printenv` and `secrets download` forms are not scanned) and G1j
+(every job that calls the loader declares a Tier-B `environment:`, so the legacy arm is reachable only in the degraded state of a
+missing environment secret; G1j does not prove each job takes the Tier-B arm). The orphan sweeps in
+`scheduled-terraform-drift.yml` (`rung2-rehearsal-orphan-sweep`, `inngest-rehearsal-orphan-sweep`) have no notification path: if the
+legacy arm ran there they fail red with no issue and no email, so a red scheduled run of those two jobs is the only signal.
 
 ## Operator Sequence (canonical copy — verbatim from the plan)
 
@@ -266,7 +323,7 @@ Reproduced verbatim from `knowledge-base/project/plans/archive/20261013-051752-2
   → O4c → O10 → O13's `DOPPLER_TOKEN_TF` rotation → #8609 R-step 1** (§Runtime App key gates R-step 1
   on #8209 O10 done **and** O13's `DOPPLER_TOKEN_TF` rotation done). O4c's App widening may run
   before the merge; its probe dispatch runs after it.
-- O1b, O5 and O5b precede O10. Without O5 the PR plan's Hetzner fallback is empty. Without O1b,
+- O1b, O5 and O5b precede O10. Without O5 the PR plan's Hetzner fallback is empty. *(Dated note, 2026-10-20, #9927 item 8b: O5 and O10 are both done and the PR plan no longer has a fallback; an absent read-only token now FAILS the plan step by name. See "No read/write fallback in the Hetzner read-only readers" above.)* Without O1b,
   board sync mints with the sentinel. The fallback refuses the sentinel with
   `verdict=legacy_app_key_evicted`.
 - O6, O7 and O8 precede O11.

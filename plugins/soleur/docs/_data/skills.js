@@ -112,6 +112,7 @@ const SKILL_CATEGORIES = {
   work: "Workflow",
   "test-browser": "Workflow",
   "test-fix-loop": "Workflow",
+  "verification-scaffold": "Workflow",
   "xcode-test": "Workflow",
 };
 
