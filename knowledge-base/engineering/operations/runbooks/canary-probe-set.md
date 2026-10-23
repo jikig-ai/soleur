@@ -107,8 +107,10 @@ chose the legacy link (flag absent): the default path is the old `http://10.0.1.
    swap, so a failure refuses promotion and the old container keeps serving.
 2. **The five checks, all inside the canary container (the host's own `curl --cacert` self-gate proves the host OUTPUT path and
    the pinned bytes only, never container egress or Node trust):**
-   1. (`inspect`) `docker inspect` shows the canary's `INNGEST_BASE_URL` is exactly `https://10.0.1.40:8443` and its
-      `NODE_EXTRA_CA_CERTS` is `/etc/soleur/inngest-ca.pem`.
+   1. (`inspect`) `docker inspect` shows the canary's `Config.Env` holds exactly one `INNGEST_BASE_URL=` line, that line is
+      `https://10.0.1.40:8443`, exactly one `NODE_EXTRA_CA_CERTS=` line, and that line is `/etc/soleur/inngest-ca.pem`. Docker keeps an
+      env-file entry **and** a `-e` entry for the same key, so `ci-deploy.sh` scrubs both names from the env-file once per deploy
+      (`inngest_link_scrub_env_file`, event `class=env_scrubbed`) and this check stays strict: a real duplicate still fails.
    2. (`health`, `events`) In-container `fetch` of the URL the container was actually handed succeeds: `/health`, and
       `/v1/events?limit=1` with the hashed-signing-key Bearer.
    3. (`send`) A real in-container `inngest.send` of the synthetic event `soleur.tls-canary.ping` is accepted. A test asserts no function
@@ -121,17 +123,29 @@ chose the legacy link (flag absent): the default path is the old `http://10.0.1.
 4. **Counters are read only after both prod swaps complete.** Until the old prod container is drained it still dials `:8288`,
    so a `legacy_8288` read taken earlier is contaminated. T for the soak is the last prod swap plus the old-container drain (how to
    read it per host: [inngest-server.md](inngest-server.md), act A3).
-5. **Failure reads (no SSH):** the failed release run's log carries only the constant reason `canary_inngest_link_failed`, **not**
-   the failing check. The check name and its cause are in the event the resolver logs:
+5. **Failure reads (Better Stack only):** the failed release run's log carries one of two constant reasons, **not** the failing check:
+   `canary_inngest_link_inspect_failed` (the `inspect` check: usually the container was handed the wrong environment, a composition defect and
+   not a network or CA defect; `cause=inspect_failed` is the daemon call itself failing) or `canary_inngest_link_failed` (every in-container check: egress, TLS, registry). The check name and its
+   cause are in the event the resolver logs:
    `INNGEST_LINK: class=canary_failed level=error check=<inspect|health|events|send|registry|negative_control|no_verdict>
    cause=<token>` (Better Stack, journald tag `ci-deploy`; Sentry `op=inngest-link`, tag `classification=canary_failed`). The cause is
    mapped inside the container from a fixed allowlist: `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `EHOSTUNREACH` and the like mean egress
    or the listener (a missing `:8443` accept reads as a timeout), a certificate code such as `DEPTH_ZERO_SELF_SIGNED_CERT` means Node did
    not trust the pinned file, `HTTP_<status>` means the listener answered badly, `EMPTY` means an empty registry, `other` is anything
-   outside the list. For `negative_control` the cause is `accepted` (the container trusted without the CA), `other` (it failed, but not with a certificate-verification error) or `no_verdict`. The exact query
+   outside the list. For `inspect` the event reads `check=inspect cause=<token> url_lines=<n> url_https=<n> ca_lines=<n> ca_ok=<n>` (integers
+   clamped to 99, never a value) and the cause is the first failing condition: `inspect_failed` (the canary vanished or the daemon call
+   failed; on the same host read `--grep 'DEPLOY_ROLLBACK: canary failed'`, whose `reason=` separates a health failure from this one), `url_count` (`INNGEST_BASE_URL=` is not on exactly one line:
+   with no `class=env_scrubbed` row on the same host in the minutes before it, a source the scrub does not cover reached the container; with
+   one, the scrub was not the source; either way stop and file it, do not retry), `url_value` (one line, not the https URL: a non-https URL reached the container), `ca_count` or `ca_value` (the CA env is absent,
+   duplicated or not the pinned path). No `canary_ok` or `canary_failed` row at all means the resolver returned `lease_expired` (http, the
+   canary layer skipped) or the health check failed first. A `class=env_scrub_failed` row (`stage=read|write|recount`) beside it means the
+   env-file could not be rewritten: a strict deploy aborted with reason `inngest_env_scrub_failed`, a non-strict one continued unchanged.
+   For `negative_control` the cause is `accepted` (the container trusted without the CA), `other` (it failed, but not with a certificate-verification error) or `no_verdict`. The exact query
    is under "Resolver events" in [inngest-server.md](inngest-server.md) section "Link TLS (#10136)". The host-side `tls-health` row
    carries no handshake-failure counter (it was removed by ruling; do not look for `hs_fail_15m`).
-6. **A broken gate blocks ordinary releases while the flag is on** (the resolver fails the deploy rather than downgrade to http).
+6. **`canary_ok` proves the canary only.** The prod container is not inspected: its evidence is the post-swap `legacy_8288` counter read
+   (item 4) and, per host, the `class=resolved` and `class=canary_ok` rows (see the per-host flip read in [inngest-server.md](inngest-server.md)).
+7. **A broken gate blocks ordinary releases while the flag is on** (the resolver fails the deploy rather than downgrade to http).
    Rollback: `inngest-link-flip.yml` with `action=off`, then a redeploy.
 
 ## Removing a probe

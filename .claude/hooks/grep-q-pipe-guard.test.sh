@@ -2045,7 +2045,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=293   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=294   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2098,6 +2098,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/inngest-inventory.test.sh | logger | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T2; t2:rc0/27s; hits 0)'
   'apps/web-platform/infra/inngest-link-flip-workflow.test.sh | doppler | drains | 1 | *'
   'apps/web-platform/infra/inngest-link-resolver.test.sh | docker | exempt | text-only the suite sources only the inngest-link-resolver block of ci-deploy.sh (no pipe into docker inside it); the derived producer sites (the printf-to-docker-login --password-stdin pipe, the canary layer 3 pipe into logger and the docker logs pipe into logger) lie outside the block and are never executed here'
+  'apps/web-platform/infra/inngest-link-resolver.test.sh | grep | exempt | pass-through the two grep shims (novv strips -v then execs the real grep; dropline execs the real grep and trims its last line) are put on PATH only for scrub calls, which read a file operand and never a pipe; the canary check in piped greps in ci-deploy.sh run in rows that use the docker stub and the real grep'
   'apps/web-platform/infra/inngest-link-resolver.test.sh | logger | exempt | text-only the suite sources only the inngest-link-resolver block of ci-deploy.sh, whose logger calls are plain calls or after a || (no pipe into logger); the derived producer sites (canary layer 3 and docker logs piped into logger) lie outside the block and are never executed here'
   'apps/web-platform/infra/inngest.test.sh | curl | exempt | text-only the probe body under test never pipes into curl; both stubs ignore stdin'
   'apps/web-platform/infra/inngest.test.sh | logger | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T2; t2:rc0/36s; hits 0)'

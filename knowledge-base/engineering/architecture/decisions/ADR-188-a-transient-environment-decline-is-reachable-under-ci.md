@@ -539,6 +539,15 @@ Article 30 register row PA-36 (declared, not live) lists `git-data-ownership.tes
 keep that wording at "suite exists" and do not extend it to claim CI enforcement while that arm can be declined
 locally.
 
+> **Addendum 2026-10-22 (#10786):** the evidence path of trigger 1 is repaired in code (the first observed verdict will be
+> recorded on #10786 once the relay has reached `main`), which supersedes the sentence above saying it cannot fire yet. The probe was TRANSIENT because
+> #8763 (2026-09-25) moved the rehearsal suite out of its own workflow step into the infra runner, which has captured
+> each suite's output into a per-suite file since #7423 and prints only `PASS <path>`; the marker never reached the
+> Actions log. The suite did not skip. `run-registered-suites.sh` now relays the column-0 `SKIP (loud):` lines and the rehearsal suite's
+> terminal line as `SOLEUR| relay ...` lines, and the probe's literals are unchanged. The first read after the relay
+> reaches `main` will count only the runs that carry it (the 20-run window still holds earlier runs without it), so a
+> verdict is worded around its `observed` count, not around 20 clean runs. The observed verdict will be recorded on #10786.
+
 ## Amendment — 2026-10-23 (#10781): the apt helper shares its lists and archives across a suite's containers
 
 **Why.** On 2026-10-22 `git-data-runcmd-rehearsal` exhausted its 420 s apt budget on three runs (7 to 11 attempts, budget gone before the last container started). Each of its ~12 containers ran a full `apt-get update` plus `install`, so a slow-mirror day multiplied the cost by 12. Two other suites (`git-data-ownership`, `htpasswd-stdin`) stalled twice on the very first `update`; that signature is a different one.

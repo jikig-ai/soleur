@@ -208,6 +208,26 @@ describe("cc-dispatcher quiet-window kill-switch (#8211)", () => {
     expect(runner.closeConversation).not.toHaveBeenCalled();
   });
 
+  it("flag ON + cold + the configured exempt account: NOT refused; another account still is", async () => {
+    const EXEMPT = "0b8f6f1e-3c1d-4a53-9a55-5b6f7c8d9e01";
+    const OTHER = "1c9a7a2f-4d2e-4b64-8b66-6c7a8d9e0f12";
+    setPaused(true);
+    process.env.QUIET_WINDOW_EXEMPT_USER_ID = EXEMPT;
+    try {
+      __setCcRunnerForTests(stubRunner({ warm: false }));
+      const sendExempt = vi.fn().mockReturnValue(true);
+      await dispatchSoleurGo(args(sendExempt, EXEMPT));
+      expect(errorFrames(sendExempt).filter((e) => e.message === QUIET_WINDOW_MESSAGE)).toHaveLength(0);
+
+      __setCcRunnerForTests(stubRunner({ warm: false }));
+      const sendOther = vi.fn().mockReturnValue(true);
+      await dispatchSoleurGo(args(sendOther, OTHER));
+      expect(errorFrames(sendOther).filter((e) => e.message === QUIET_WINDOW_MESSAGE)).toHaveLength(1);
+    } finally {
+      delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
+    }
+  });
+
   it("flag ABSENT + cold: sessions allowed (default)", async () => {
     const runner = stubRunner({ warm: false });
     __setCcRunnerForTests(runner);
