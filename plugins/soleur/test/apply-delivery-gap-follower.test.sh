@@ -45,13 +45,20 @@ MUTANT_FLOOR=24
 # Per-group assertion floors, recorded from the first green full run (ADG_PRINT_COUNTS=1 prints the counts to re-derive
 # them). Enforced only on a full run: a group that silently stops asserting reds the suite.
 declare -A FLOOR=(
-  [H1]=2 [H3]=3 [H3b]=3 [H4]=5 [H5]=5 [M]=24 [R]=22 [REASONS]=1 [S1]=18 [S10]=7 [S11a]=2 [S11b]=2 [S11c]=2 [S11d]=3 [S12a]=4
-  [S12b]=5 [S13a]=9 [S13b]=2 [S13c]=2 [S14]=7 [S15]=14 [S16]=5 [S17]=3 [S1live]=1 [S2]=13 [S2b-ahead]=4 [S2b-behind]=4
-  [S2b-diverged]=4 [S2b-identical]=4 [S3]=6 [S3c]=4 [S4]=10 [S4c]=3 [S4l]=2 [S4m]=3 [S4n]=4 [S4o]=3 [S4x]=3 [S5]=13
-  [S6]=5 [S6d]=2 [S7]=6 [S7a]=40 [S7c]=1 [S7o]=4 [S8a]=9 [S8b]=9 [S8c]=9 [S8d]=9 [S8dg]=29 [S8e]=9 [S8f]=9 [S8g]=9
-  [S8h]=9 [S8i]=9 [S8in]=7 [S8m]=48 [S8n]=5 [S8ok]=4 [S8r]=26 [S8t]=3 [S8t2]=10 [S8ti]=9 [S8u]=11 [S9]=23 [S9f]=7 [W]=35
+  [H1]=2 [H3]=3 [H3b]=3 [H4]=5 [H5]=5 [M]=26 [R]=28 [REASONS]=1 [S1]=22 [S10]=7 [S11a]=2 [S11b]=2 [S11c]=2 [S11d]=3 [S11e]=9
+  [S11f]=2 [S12a]=4 [S12b]=5 [S13a]=9 [S13b]=2 [S13c]=2 [S14]=7 [S15]=14 [S16]=5 [S17]=3 [S18]=10 [S18b]=5 [S1live]=1
+  [S2]=15 [S2b-ahead]=4 [S2b-behind]=4 [S2b-diverged]=4 [S2b-identical]=4 [S3]=6 [S3c]=4 [S4]=11 [S4c]=3 [S4l]=2 [S4m]=3
+  [S4n]=4 [S4o]=3 [S4x]=3 [S5]=13 [S6]=5 [S6d]=2 [S7]=6 [S7a]=44 [S7c]=1 [S7o]=4 [S8a]=9 [S8b]=9 [S8c]=9 [S8d]=9 [S8dg]=29
+  [S8e]=9 [S8f]=9 [S8g]=9 [S8h]=9 [S8i]=9 [S8in]=13 [S8m]=48 [S8n]=5 [S8o]=7 [S8ok]=4 [S8r]=26 [S8t]=3 [S8t2]=10 [S8ti]=9
+  [S8u]=12 [S9]=23 [S9f]=7 [W]=47
 )
 
+# The groups a full run must have run (a deleted `if want X` block never calls grp, so its floor never fires; this list is the
+# independent record) and the total-assertion floor of a full run excluding the two meta groups. Both are checked at the very
+# end with printf + exit 1, not through the helpers they back-stop (ADR-193).
+EXPECTED_GROUPS="H1 H3 H3b H4 H5 M R REASONS S1 S10 S11a S11b S11c S11d S11e S11f S12a S12b S13a S13b S13c S14 S15 S16 S17 S18 S18b S1live S2 S2b-ahead S2b-behind S2b-diverged S2b-identical S3 S3c S4 S4c S4l S4m S4n S4o S4x S5 S6 S6d S7 S7a S7c S7o S8a S8b S8c S8d S8dg S8e S8f S8g S8h S8i S8in S8m S8n S8o S8ok S8r S8t S8t2 S8ti S8u S9 S9f W"
+META_GROUPS="H1 M"
+TOTAL_FLOOR=600
 ASSERTS=0 passes=0 fails=0 FAILED=()
 pass() { passes=$((passes + 1)); ASSERTS=$((ASSERTS + 1)); }
 fail() { fails=$((fails + 1)); ASSERTS=$((ASSERTS + 1)); FAILED+=("$1"); echo "  FAIL: $1" >&2; }
@@ -122,8 +129,9 @@ want() {
 }
 
 declare -A GCOUNT=()
+declare -A GRAN=()   # the group-ran ledger: every grp call registers its group, checked against EXPECTED_GROUPS at the end of a full run
 G="" G0=0
-grp() { G="$1"; G0="$ASSERTS"; }
+grp() { G="$1"; G0="$ASSERTS"; GRAN[$1]=1; }
 gend() {
   GCOUNT[$G]=$((ASSERTS - G0))
   if [[ -z "${ADG_ONLY:-}" ]]; then
@@ -198,6 +206,39 @@ acts() { cnt "$ST/out/actions.log" "^$1"; }
 rows() { cnt "$ST/all.txt" '^::notice title=apply-delivery-gap::row '; }
 summary() { grep '^::notice::apply_delivery_gap_summary' "$ST/all.txt" | head -n 1; }
 body() { printf '%s/out/bodies/%s.md' "$ST" "$1"; }
+
+# Positive controls for the other helpers a verdict depends on (hasre, cnt, the check_harness refusal/vacuity gate and the gend
+# floor check), each driven true AND false: a helper neutered to a constant must RED the suite, not just stop reporting.
+reader_helper_controls() {
+  local p_orig="$passes" f_orig="$fails" a0="$ASSERTS" n0="${#FAILED[@]}" bad="" p0 f0 tmp="$SANDBOX/rc.txt"
+  local s_ST="$ST" s_CASE="$CASE" s_RC="$SUT_RC" s_only="${ADG_ONLY-}" s_G="$G" s_G0="$G0"
+  printf 'abc\nabd\n' >"$tmp"
+  p0="$passes"; f0="$fails"; { hasre vc "$tmp" 'ab[cd]'; } >/dev/null 2>&1; [[ "$passes" -eq $((p0 + 1)) && "$fails" -eq "$f0" ]] || bad="$bad hasre-pass"
+  p0="$passes"; f0="$fails"; { hasre vc "$tmp" 'zz+'; } >/dev/null 2>&1; [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] || bad="$bad hasre-fail"
+  [[ "$(cnt "$tmp" 'ab')" == "2" ]] || bad="$bad cnt-two"
+  [[ "$(cnt "$tmp" 'zzz')" == "0" ]] || bad="$bad cnt-zero"
+  [[ "$(cnt "$SANDBOX/no-such-file" 'x')" == "0" ]] || bad="$bad cnt-missing-file"
+  ST="$SANDBOX/hc"; CASE=control; mkdir -p "$ST/out"
+  printf 'GET x\n' >"$ST/out/reads.log"; : >"$ST/out/refusals.log"; SUT_RC=0
+  p0="$passes"; f0="$fails"; { check_harness; } >/dev/null 2>&1; [[ "$passes" -eq $((p0 + 1)) && "$fails" -eq "$f0" ]] || bad="$bad harness-clean"
+  printf 'refused: y\n' >"$ST/out/refusals.log"
+  p0="$passes"; f0="$fails"; { check_harness; } >/dev/null 2>&1; [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq "$p0" ]] || bad="$bad harness-refusal"
+  : >"$ST/out/refusals.log"; : >"$ST/out/reads.log"
+  p0="$passes"; f0="$fails"; { check_harness; } >/dev/null 2>&1; [[ "$fails" -eq $((f0 + 1)) && "$passes" -eq $((p0 + 1)) ]] || bad="$bad harness-vacuous"
+  SUT_RC=1
+  p0="$passes"; f0="$fails"; { check_harness; } >/dev/null 2>&1; [[ "$passes" -eq $((p0 + 1)) && "$fails" -eq "$f0" ]] || bad="$bad harness-nonzero-rc-not-vacuous"
+  ADG_ONLY=""; G=control
+  G0="$ASSERTS"; f0="$fails"; { gend; } >/dev/null 2>&1; [[ "$fails" -gt "$f0" ]] || bad="$bad gend-no-assertion"   # no FLOOR entry: only the ran-nothing check can fire
+  FLOOR[control]=3
+  G0="$ASSERTS"; { pass vc; } >/dev/null 2>&1; f0="$fails"; { gend; } >/dev/null 2>&1; [[ "$fails" -eq $((f0 + 1)) ]] || bad="$bad gend-below-floor"
+  G0="$ASSERTS"; { pass vc; pass vc; pass vc; } >/dev/null 2>&1; f0="$fails"; { gend; } >/dev/null 2>&1; [[ "$fails" -eq "$f0" ]] || bad="$bad gend-at-floor"
+  ADG_ONLY="ctl"; G0="$ASSERTS"; f0="$fails"; { gend; } >/dev/null 2>&1; [[ "$fails" -eq "$f0" ]] || bad="$bad gend-filtered-run-skips-floor"
+  unset 'FLOOR[control]' 'GCOUNT[control]'
+  ST="$s_ST"; CASE="$s_CASE"; SUT_RC="$s_RC"; ADG_ONLY="$s_only"; G="$s_G"; G0="$s_G0"
+  passes="$p_orig"; fails="$f_orig"; ASSERTS="$a0"; FAILED=("${FAILED[@]:0:$n0}")
+  if [[ -n "$bad" ]]; then printf '[FATAL] reader/harness helper positive control failed:%s\n' "$bad" >&2; exit 2; fi
+}
+reader_helper_controls
 
 # expect_fail <reason> <class read|issue>: the failure contract of S8.
 expect_fail() {
@@ -510,6 +551,7 @@ if want S7:ages; then
   s7_one deploy-fix queued 149 1; s7_one deploy-fix queued 151 0
   s7_one deploy-fix in_progress 100 1 100
   s7_one infra queued 119 1; s7_one infra queued 121 0
+  s7_one deploy-fix in_progress 151 0 151   # an in_progress run past its cap (from run_started_at) is stale: it neither defers nor blocks
   gend
 fi
 if want S7:otherwf; then
@@ -541,6 +583,53 @@ for key, f in (("deploy-fix", "apply-deploy-pipeline-fix.yml"), ("infra", "apply
 print("OK" if not bad else "; ".join(bad))
 PY
   eq "S7 each stale cap exceeds the workflow's apply timeout-minutes" "$(python3 -I "$py" "$ROOT" "$SUT" 2>&1 | tail -n 1)" OK
+  gend
+fi
+
+# ---- S18: branch, window, dedup and deferral-eligibility edges in one shared world ---------------------------------------
+# One deploy-fix world (now = 12:00Z): c1 is a cancelled push 4 days old (inside the 7-day window), c2 is cancelled twice on the
+# same sha (8102 first, 8103 re-cancelled later), c3 is a recent cancel. Nothing may deliver or defer any of them:
+#   * a SUCCESS on a non-main branch (8110) with apply success and an `ahead` compare must not deliver c1 or c2;
+#   * an IN-FLIGHT run on a non-main branch (8111) at a descendant must not defer c1, c2 or c3;
+#   * a queued MAIN run (8112) that is NOT a descendant of c1/c2 must not defer them;
+#   * that same queued run was created BEFORE c3, so even though it is an `ahead` descendant of c3 it must not defer c3.
+if want S18; then
+  grp S18
+  mk_case s18
+  runs_file "$ST/runs.deploy-fix.json" \
+    "$(mkrun 8101 push main completed cancelled 0x8101 "$(ago 5760)" "$(ago 5758)")" \
+    "$(mkrun 8102 push main completed cancelled 0x8102 "$(ago 600)" "$(ago 598)")" \
+    "$(mkrun 8103 push main completed cancelled 0x8102 "$(ago 590)" "$(ago 588)")" \
+    "$(mkrun 8104 push main completed cancelled 0x8104 "$(ago 30)" "$(ago 28)")" \
+    "$(mkrun 8110 workflow_dispatch feature-x completed success 0x8110 "$(ago 100)" "$(ago 95)")" \
+    "$(mkrun 8111 push feature-y in_progress - 0x8111 "$(ago 20)" "$(ago 19)" "$(ago 19)")" \
+    "$(mkrun 8112 push main queued - 0x8112 "$(ago 60)" "$(ago 60)")"
+  for id in 8101 8102 8103 8104; do mkjobs $id 0; done
+  mkjobs 8110 2 preflight:success apply:success
+  for c in 0x8101 0x8102 0x8104; do mkcmp $c 0x8111 ahead; done
+  mkcmp 0x8101 0x8110 ahead; mkcmp 0x8102 0x8110 ahead
+  mkcmp 0x8101 0x8112 diverged; mkcmp 0x8102 0x8112 diverged; mkcmp 0x8104 0x8112 ahead
+  run_sut
+  eq "S18 rc 0" "$SUT_RC" 0
+  eq "S18 three rows: the 4-day-old cancel, the deduplicated same-sha pair, the recent cancel" "$(rows)" 3
+  has "S18 the 4-day-old push is a candidate (the window is 7 days, not 2)" "$ST/all.txt" "row workflow=deploy-fix sha=$(sha 0x8101) "
+  has "S18 summary: 3 candidates, 3 rows, nothing deferred or delivered" <(summary) "candidates=3 rows=3 deferred=0 delivered=0"
+  has "S18 summary: both non-stale in-flight runs (any branch) are counted" <(summary) "inflight=2"
+  eq "S18 no deferral notice (non-main and non-descendant and older in-flight runs never defer)" "$(cnt "$ST/all.txt" '::notice::apply_delivery_gap_deferred')" 0
+  B="$(body 1)"
+  eq "S18 the same-sha pair is exactly one table row" "$(grep -c "$(sha 0x8102)" "$B")" 1
+  has "S18 and that row is the EARLIER cancelled run" "$B" "| [8102](https://github.com/$REPO_SLUG/actions/runs/8102) |"
+  lacks "S18 and not the later duplicate" "$B" "| [8103]("
+  gend
+  grp S18b
+  mk_case s18b
+  runs_file "$ST/runs.deploy-fix.json" "$(mkrun 8201 push main completed cancelled 0x8201 "$(ago 300)" "$(ago 299)" "$(ago 300)" '[skip-deploy-fix-apply]')"
+  issues_file "$(gap_issue 7)"
+  run_sut
+  eq "S18 a kill-switched-only window: rc 0" "$SUT_RC" 0
+  has "S18 the push was dropped, not delivered" <(summary) "rows=0 deferred=0 delivered=0 dropped=1"
+  eq "S18 and an open issue is NOT closed on dropped-only evidence" "$(acts issue-close)" 0
+  eq "S18 it gets the aged-out marker comment instead" "$(acts issue-comment)" 1
   gend
 fi
 
@@ -1120,6 +1209,31 @@ runs = [s.get("run") for s in steps if s.get("run")]
 chk("the run: line is exactly bash scripts/apply-delivery-gap.sh", runs == ["bash scripts/apply-delivery-gap.sh"])
 chk("job timeout-minutes is set", all("timeout-minutes" in j for j in jobs.values()))
 chk("no step env reads a secret", "secrets" not in str([s.get("env") for s in steps]))
+# ---- exact shape of the parsed workflow (a new key anywhere is a new capability and must be a conscious edit) ----
+top = {("on" if k is True else k) for k in doc}
+chk("top-level keys are exactly name, on, concurrency, permissions, jobs (no workflow-level env, defaults or run-name)", top == {"name", "on", "concurrency", "permissions", "jobs"})
+chk("exactly one job", len(jobs) == 1)
+job = next(iter(jobs.values())) if jobs else {}
+chk("job keys are exactly runs-on, timeout-minutes, steps (no if, needs, environment, container, services, strategy, outputs, defaults, continue-on-error)", set(job) == {"runs-on", "timeout-minutes", "steps"})
+chk("runs-on is exactly ubuntu-24.04", job.get("runs-on") == "ubuntu-24.04")
+chk("timeout-minutes is exactly 10", job.get("timeout-minutes") == 10 and not isinstance(job.get("timeout-minutes"), bool))
+chk("exactly two steps (checkout, reconcile)", len(steps) == 2)
+chk("step key sets are exactly {name, uses, with} and {name, env, run}", [set(x) for x in steps] == [{"name", "uses", "with"}, {"name", "env", "run"}])
+def keys_anywhere(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            yield str(k)
+            yield from keys_anywhere(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from keys_anywhere(v)
+banned = {"if", "continue-on-error", "defaults", "environment", "container", "services", "strategy", "needs", "outputs", "secrets"}
+chk("no if:, continue-on-error, defaults, environment, container, services, strategy, needs, outputs or secrets key anywhere", not (banned & set(keys_anywhere(doc))))
+chk("checkout with: keys are exactly persist-credentials, sparse-checkout, sparse-checkout-cone-mode", [set(x.get("with") or {}) for x in steps[:1]] == [{"persist-credentials", "sparse-checkout", "sparse-checkout-cone-mode"}])
+run_env = steps[1].get("env") if len(steps) > 1 else None
+chk("the run step env is exactly the four expected names and values", run_env == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}", "GITHUB_RUN_ID": "${{ github.run_id }}", "TRIGGER_RUN_ID": "${{ github.event.workflow_run.id }}"})
+chk("no env value is sourced from head_ref, head_branch, head_commit or any head_*", isinstance(run_env, dict) and all("head_" not in str(v) for v in run_env.values()) and "head_" not in text)
+chk("every uses: owner is actions/ only", len(uses) >= 1 and all(u.startswith("actions/") for u in uses))
 for r in res: print(r[0] + "\t" + r[1])
 PY
   while IFS=$'\t' read -r verdict desc; do
@@ -1313,6 +1427,21 @@ if [[ -n "${ADG_PRINT_COUNTS:-}" ]]; then
   for k in "${!GCOUNT[@]}"; do printf 'COUNT %s %s\n' "$k" "${GCOUNT[$k]}"; done | sort
 fi
 printf '\n[apply-delivery-gap-follower] %s assertions, %s passed, %s failed\n' "$ASSERTS" "$passes" "$fails"
+# The group-ran ledger (full run only; a filtered run legitimately runs fewer groups). Reported with printf and exit 1 directly.
+if [[ -z "${ADG_ONLY:-}" ]]; then
+  ledger_bad=""
+  exp_groups="$EXPECTED_GROUPS"
+  if [[ -n "${ADG_NO_META:-}" ]]; then for mg in $META_GROUPS; do exp_groups=" $exp_groups "; exp_groups="${exp_groups// $mg / }"; done; fi
+  for g in $exp_groups; do [[ -n "${GRAN[$g]+x}" ]] || ledger_bad="$ledger_bad missing:$g"; done
+  for g in "${!GRAN[@]}"; do [[ " $exp_groups " == *" $g "* ]] || ledger_bad="$ledger_bad unexpected:$g"; done
+  total_nonmeta="$ASSERTS"
+  for mg in $META_GROUPS; do total_nonmeta=$((total_nonmeta - ${GCOUNT[$mg]:-0})); done
+  if [[ "$total_nonmeta" -lt "$TOTAL_FLOOR" ]]; then ledger_bad="$ledger_bad total:$total_nonmeta<floor:$TOTAL_FLOOR"; fi
+  if [[ -n "$ledger_bad" ]]; then
+    printf '[LEDGER] the groups that ran differ from the expected set, or the total fell below its floor:%s\n' "$ledger_bad" >&2
+    exit 1
+  fi
+fi
 if [[ "$fails" -gt 0 ]]; then
   printf 'FAILED:\n'; printf '  - %s\n' "${FAILED[@]}"
   exit 1
