@@ -32,8 +32,10 @@
 #
 # SKIP-PRODUCER REGISTRATION CONTRACT. `corrupt_skip` is the single
 # emission/charge site for the ADR-188 counted-skip verdict these rows use when
-# a runner's git cannot exhibit the walk contract the row validates. A call
-# site MUST:
+# a runner's git cannot exhibit the walk contract the row validates. The probe
+# is `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` (its fed-log
+# test file sits beside it); the carrier that files on its verdicts is
+# `.github/workflows/scheduled-rehearsal-skip-monitor.yml`. A call site MUST:
 #   * open its row name with a prefix the standing skip-persistence probe
 #     enumerates (`SKIP (loud): g1b.` / `g2b.` in the bump suite, `SKIP (loud):
 #     fl.` in the mint suite) — an unregistered name is a skip the monitor can
@@ -51,13 +53,23 @@
 #   SOLEUR_FIXTURE_PACKED=1     the packed-store arm (AC4): each forge helper
 #                               `git repack -ad`s the fixture repo between the
 #                               caller's seeding and its own forge, so the same
-#                               rows run against an all-packed store.
+#                               rows run against an all-packed store. DRIVER:
+#                               the `guard-script-fixture-tests` job in
+#                               pr-quality-guards.yml runs the two corrupt-row
+#                               suites once more under this knob every PR.
 #   CORRUPT_WALK_PROBE_FORCE=skip   the forced-divergence arm (AC5): every
 #                               walk-contract probe reads "contract absent" and
 #                               the row takes the skip path. Only `skip` is
 #                               wired; any other value is flagged via fail() —
 #                               a knob that could force "contract present"
 #                               would silently delete the environment gate.
+#                               A forced run must only ever be a CAPTURED
+#                               exercise: a forced skip's marker is
+#                               byte-identical in shape to an organic one, so a
+#                               sampled-carrier leg that exported the knob
+#                               would file real monitor alerts indistinguishable
+#                               from defects. Rows label the forced reason so
+#                               a leak reads as what it is.
 #
 # CALLER CONTRACT. The sourcing suite must define pass()/fail() (the harness
 # verdict verbs) and declare SKIPPED_ASSERTIONS=0 before any corrupt_skip call.
@@ -88,20 +100,32 @@ _corrupt_assert_repo() {
 # `hash-object --stdin` WITHOUT -w computes the sha a blob of these bytes would
 # have, without writing it: absence is a construction invariant, not a race.
 # The nonce is a CONSTANT on purpose — the property is absence, not uniqueness,
-# so there is no per-call nonce machinery. BLOB type, not `-t commit`: a
-# commit-typed hash of nonce bytes is refused by format fsck on git 2.56
-# (`missingTree: invalid format`) even without -w — measured by the CTO ruling.
+# so there is no per-call nonce machinery. The constant is EXPORTED
+# (CORRUPT_DEAD_NONCE): the suites' readable-dead-oid selftests write exactly
+# this blob, and corrupt_invariant_dead_absent re-derives the sha from the same
+# bytes — a per-call "uniqueness" change would silently vacuate the invariant
+# by checking the WRONG oid. BLOB type, not `-t commit`: a commit-typed hash of
+# nonce bytes is refused by format fsck on git 2.56 (`missingTree: invalid
+# format`) even without -w — measured by the CTO ruling.
+CORRUPT_DEAD_NONCE='soleur-corrupt-graph dead-parent'
 dead_oid() {
   _corrupt_assert_repo "${1:-}" || return
-  printf 'soleur-corrupt-graph dead-parent\n' | git -C "$1" hash-object --stdin
+  printf '%s\n' "$CORRUPT_DEAD_NONCE" | git -C "$1" hash-object --stdin
 }
 
 # _corrupt_maybe_repack <repo> — the packed-store arm. Repacking BEFORE the
 # forge packs every seeded object; repacking AFTER would fail on the dead
 # parent (repack traverses reflogs, which record the forged tip — measured).
+# A FAILED repack must not silently degrade the packed arm to a loose-store
+# run reporting green — that is the Arm-B flake's own shape one layer up —
+# so it is FATAL and every caller propagates the rc onto the harness-defect
+# rung.
 _corrupt_maybe_repack() {
   if [[ "${SOLEUR_FIXTURE_PACKED:-0}" == "1" ]]; then
-    git -C "$1" repack -adq
+    git -C "$1" repack -adq || {
+      printf 'FATAL: _corrupt_maybe_repack: packed-arm repack failed in %s — refusing to run the packed arm against a loose store\n' "$1" >&2
+      return 1
+    }
   fi
 }
 
@@ -117,14 +141,24 @@ corrupt_walk_break() {
   if [[ -z "$ref" ]]; then
     printf 'FATAL: corrupt_walk_break: <ref> operand is EMPTY\n' >&2; return 2
   fi
-  _corrupt_maybe_repack "$repo"
+  _corrupt_maybe_repack "$repo" || return
   local dead tree headers forged
   dead=$(dead_oid "$repo") || return
   tree=$(git -C "$repo" rev-parse -q --verify "${ref}^{tree}") || {
     printf 'FATAL: corrupt_walk_break: %s does not resolve to a commit tree in %s\n' "$ref" "$repo" >&2
     return 1
   }
-  headers=$(git -C "$repo" cat-file commit "$ref" | sed -n '/^author /p;/^committer /p')
+  # Harvest headers from the commit HEADER BLOCK ONLY — `/^$/q` stops the scan
+  # at the blank line before the message, so an `author `/`committer ` line in
+  # the message text cannot be copied in as a duplicate header. An EMPTY
+  # harvest (e.g. <ref> resolved through a tag to a non-commit) would forge a
+  # headerless commit, so it is FATAL, mirroring corrupt_dead_tag's tagger
+  # guard.
+  headers=$(git -C "$repo" cat-file commit "$ref" | sed -n '/^$/q; /^author /p; /^committer /p')
+  [[ -n "$headers" ]] || {
+    printf 'FATAL: corrupt_walk_break: no author/committer header found in %s (%s) — refusing to forge a malformed commit\n' "$ref" "$repo" >&2
+    return 1
+  }
   forged=$({
     printf 'tree %s\n' "$tree"
     printf 'parent %s\n' "$dead"
@@ -148,10 +182,13 @@ corrupt_dead_tag() {
   if [[ -z "$tag" ]]; then
     printf 'FATAL: corrupt_dead_tag: <tag> operand is EMPTY\n' >&2; return 2
   fi
-  _corrupt_maybe_repack "$repo"
+  _corrupt_maybe_repack "$repo" || return
   local dead tagger tagobj
   dead=$(dead_oid "$repo") || return
-  tagger=$(git -C "$repo" cat-file commit HEAD | sed -n 's/^committer //p' | head -1)
+  # Header-block-bound like corrupt_walk_break's harvest (a `committer ` line
+  # inside HEAD's message must not be picked up); a commit object carries
+  # exactly one committer header, so no `head -1` is needed.
+  tagger=$(git -C "$repo" cat-file commit HEAD | sed -n '/^$/q; s/^committer //p')
   [[ -n "$tagger" ]] || {
     printf 'FATAL: corrupt_dead_tag: cannot read a committer header from HEAD in %s\n' "$repo" >&2
     return 1
@@ -212,15 +249,21 @@ corrupt_probe_forced_skip() {
 # pinned: `SKIP (loud): <row> <reason>` goes to STDERR (arm_skip convention —
 # it reaches the job log and the standing skip-persistence probe greps for it
 # there), `::warning::<row> skipped: <reason>` goes to STDOUT because GitHub
-# Actions scans workflow commands on stdout only. <reason> is sanitized before
-# either line — `%`→`%25`, CR/LF stripped — so observed evidence echoed into
-# the message cannot forge a second annotation line (the mint suite pins the
-# same contract at its fl-encode row).
+# Actions scans workflow commands on stdout only. <reason> AND <row-id> are
+# sanitized before either line — `%`→`%25`, every C0 control byte, \x7f and the
+# Unicode line separators U+2028/U+2029 stripped (the corpus log-injection
+# rule, knowledge-base/project/learnings/security-issues/
+# 2026-04-17-log-injection-unicode-line-separators.md) — so observed evidence
+# echoed into either field cannot forge a second annotation or marker line
+# (the mint suite pins the same contract at its fl-encode row).
 #
 # <cost> is the row's declared assertion cost, VALIDATED numerically per
 # arm_skip: a missing or non-numeric cost fails loudly rather than silently
-# contributing nothing to the floor. The charge lands on the caller's
-# SKIPPED_ASSERTIONS, which the suite tail folds into TOTAL.
+# contributing nothing to the floor. The `10#` prefix pins base-10: the numeric
+# guard admits `08`/`09`, which bash arithmetic would otherwise read as octal
+# and error on — the marker would emit with NO charge (measured fail-open, the
+# same class the probe's own streak counter documents). The charge lands on
+# the caller's SKIPPED_ASSERTIONS, which the suite tail folds into TOTAL.
 corrupt_skip() {
   local row="${1:-}" cost="${2:-}" reason="${*:3}"
   case "$cost" in
@@ -233,9 +276,21 @@ corrupt_skip() {
       fi
       return 1 ;;
   esac
+  # The `SKIP (loud):` literal is pinned by the probe's own test file: editing
+  # it unobserves every guard-suite skip while banners keep the source
+  # "observed", so an edit here is a RED there, not silent unobservation.
+  # [[:cntrl:]] covers \x00-\x1f and \x7f in one class (measured on bash 5.3 —
+  # an ANSI-C range inside a bracket expression does NOT expand). U+2028/9 are
+  # stripped by byte sequence.
   reason=${reason//'%'/'%25'}
-  reason=${reason//[$'\n\r']/}
-  SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + cost))
+  reason=${reason//[[:cntrl:]]/}
+  reason=${reason//$'\u2028'/}
+  reason=${reason//$'\u2029'/}
+  row=${row//'%'/'%25'}
+  row=${row//[[:cntrl:]]/}
+  row=${row//$'\u2028'/}
+  row=${row//$'\u2029'/}
+  SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 10#$cost))
   printf 'SKIP (loud): %s %s\n' "$row" "$reason" >&2
   printf '::warning::%s skipped: %s\n' "$row" "$reason"
 }
