@@ -225,6 +225,26 @@ because the defect census found FIVE sites across TWO suites spelling it indepen
 - `corrupt_dead_tag <repo> <tag>` — write a tag OBJECT via `hash-object -w -t tag` whose
   `object` field names a `dead_oid`, `update-ref refs/tags/<tag>` — tag resolves, `^{commit}`
   peel fails deterministically (Arm D, the B7a shape).
+- `corrupt_skip <row-id> <cost> "<reason>"` — the single emission/charge site, mirroring
+  `arm_skip`'s contract (`git-data-runcmd-rehearsal.test.sh:174-181`): `<cost>` is an explicit
+  assertion count with a numeric-validation guard (a missing/non-numeric cost fails loudly —
+  never an arithmetic noop). Emission streams are pinned by the review finding: `SKIP (loud):
+  <row> <reason>` to **stderr** (per `arm_skip` convention; reaches the job log and the probe),
+  `::warning::<row> skipped: <reason>` to **stdout** — GitHub Actions scans workflow commands on
+  stdout only, so an stderr annotation renders as dead log text that a text grep cannot catch.
+  `<observed>` evidence is sanitized before either line (`%`→`%25`, CR/LF stripped).
+
+Lib-level contract (header + invariants, per review findings):
+- Header carries: the root cause (Arm-B reproduction), the "one spelling" rationale, the
+  **forge-is-the-last-construction-step** rule (any commit/repack/fsck after `corrupt_walk_break`
+  hits the dead parent — repack traverses reflogs, which record the forged tip, so even a
+  ref-less forge breaks `repack -ad`), and the **registration contract** for skip producers
+  (emit `SKIP (loud): <probe-greppable name>`, charge exact cost, stay under cap, be covered by
+  the monitor, feed a probe test row).
+- Every forge helper asserts its `<repo>` operand non-empty (`assert_fixture_dir` precedent —
+  `git -C ""` operates on cwd and would corrupt the caller's repo silently).
+- The nonce is a constant — absence, not uniqueness, is the property; no per-call nonce
+  machinery.
 
 Site-by-site mapping (each keeps its existing expected semantics — only the construction changes):
 
@@ -246,16 +266,27 @@ variance: the guard under test (and therefore the row) relies on `git tag --merg
 printing `Could not read` on stderr while exiting 0 — a git-version behavior `ubuntu-latest` can
 change. Each skip-eligible row gains a probe before `run_bump`/`run_mint`/`run_step`:
 
-- Probe: run the walk on the constructed graph; contract = `Could not read` (or `error:`) present
-  on stderr with the expected list/exit shape.
+- Probe: run the walk on the constructed graph; contract = **the walk emits non-empty stderr** —
+  the SUT's actual acceptance (both `bump-` and `mint-` refuse on ANY non-empty walk stderr,
+  not on a specific message). Requiring the literal `Could not read`/`error:` text would let a
+  differently-worded future stderr keep the row green while quietly losing coverage.
 - Probe satisfied → run the row normally.
-- Probe absent → `corrupt_skip <row-id> "runner git does not exhibit the rc0+stderr corrupt-walk
-  contract (<observed>)"` — emits `SKIP (loud): <row> <reason>` AND `::warning::<row> skipped:
-  <reason>` (annotation renders on the run's summary page), and charges `SKIPPED_ASSERTIONS` by
-  the row's declared assertion cost. Any `<observed>` evidence echoed into either line is
-  sanitized first — `%`→`%25`, CR/LF stripped via `${var//[$'\n\r']/}` — a raw stderr echo can
-  forge a second annotation line (the mint suite already pins this percent-encode contract at
-  its `fl-encode` row).
+- Probe absent → `corrupt_skip <row-id> <cost> "runner git does not exhibit the non-empty-stderr
+  corrupt-walk contract (<observed>)"` — emits `SKIP (loud):` to stderr AND `::warning::` to
+  stdout (annotation renders on the run's summary page), and charges `SKIPPED_ASSERTIONS` by the
+  row's declared assertion cost. Any `<observed>` evidence echoed into either line is sanitized
+  first — `%`→`%25`, CR/LF stripped via `${var//[$'\n\r']/}` — a raw stderr echo can forge a
+  second annotation line (the mint suite already pins this percent-encode contract at its
+  `fl-encode` row).
+- **Charge convention (pinned by review):** construction-invariant checks are fail-only,
+  zero-counted — the existing `MIN_ASSERTIONS` comment precedent ("the newshape fixture
+  self-check emits fail-only, zero counted assertions"). A skipped row therefore charges exactly
+  its declared cost; counted pre-skip emissions never double-charge the floor.
+- **B7a's probe is its own shape** (CTO dissent + review): B7a's graph is healthy — its
+  environment dependence is healthy-walk `--merged` *silently dropping* an unpeelable tag. Its
+  probe asserts: tag listed ∧ `^{commit}` peel fails ∧ merged set == `{v1.1.37}` with clean
+  stderr. Eligibility is restated as "`--merged`/`merge-base` behavioral divergence," not the
+  corrupt-walk contract alone.
 
 ADR-188's four properties, ported:
 
@@ -295,8 +326,28 @@ Mirror the marker additions in `t5-skip-persistence-bound-7510.test.sh`'s fed-lo
 `scheduled-rehearsal-skip-monitor.yml` DOES need edits (CTO correction — the "needs no edit"
 claim was false): its alert title/body ("git-data rehearsal suite is skipping arms across runs",
 ~lines 234-236) and pre-bake remediation text (~line 286) are rehearsal-specific, so a g1b skip
-would file a mislabeled issue; generalize them or make them per-source, and give the probe's
-FAIL remediation lines (~221-223) a per-source line as well.
+would file a mislabeled issue; generalize them or make them per-source. The probe's OWN verdict
+strings are rehearsal-specific too — PASS line (~`:210`, "0 loud rehearsal skips"), the
+`observed=0` TRANSIENT line (~`:205`), and the FAIL remediation (~`:217-223`) — all get
+per-source/generalized text in the same edit. The workflow header gains one scope-comment line
+noting it now observes guard-script suites (keep the `rehearsal-skip-monitor-streak` artifact
+name — it is load-bearing for streak-state fetch).
+
+Accounting rules the extension MUST satisfy (review findings):
+
+- **Per-source `observed`, never pooled.** Each configured run-source contributes `observed >= 1`
+  independently; a source with zero observed logs degrades that source to TRANSIENT — it never
+  pools into another source's clean reading (the probe's own invariant: "a probe that goes quiet
+  on the arm the fix creates").
+- **Per-SUITE discriminators, not per-job.** `g1b.`/`g2b.` (bump) and `fl.` (mint) output share
+  one job log; a single discriminator cannot tell "mint suite didn't run" from "no fl. skips."
+  Each marker-emitting suite gets its own positive control — the per-suite
+  `=== test-<name>.sh ===` banner `run-all.sh` emits, or a suite-unique header (`=== Guard 1b:`,
+  `=== Guard 3:`), verified at implement time.
+- **Event sampling.** `merge_group` legs are required evidence (they gate landing to main);
+  `pull_request` legs are denser and equally valid — sample both when the shape supports it, with
+  the caveat that pull_request logs count markers from *unmerged* branches (a PR introducing a
+  new skip arm can trip the monitor pre-merge — real evidence, label it accordingly).
 
 ## Technical Considerations
 
@@ -332,6 +383,7 @@ FAIL remediation lines (~221-223) a per-source line as well.
 | `git fsck` as the probe | Cut — measures store integrity, not the walk contract; heavier and noisier |
 | Quarantine / soft-fail the suite or the row | Rejected — degrades a required check's coverage for every PR (the #8747 refusal rows are the point) |
 | Per-suite duplicated forge helpers | Rejected — five sites across two suites is exactly the "four spellings of one idea" drift class #7849 closed |
+| Pin `gc.auto 0`/`maintenance.auto false` via `GIT_CONFIG_COUNT` in `git-fixture-env.sh` (the #10373 mechanism) | Rejected — defends the same store-layout assumption class that failed; the forge removes the assumption rather than pinning around it. A legitimate hardening addition later, independently |
 
 ## User-Brand Impact
 
@@ -388,10 +440,16 @@ readable.
 
 **Assembly.** All corrupt-walk construction flows through ONE chokepoint:
 `plugins/soleur/test/lib/git-corrupt-graph.sh` (`dead_oid`, `corrupt_walk_break`,
-`corrupt_dead_tag`). The five call sites (g1b.B7, g1b.B7a, g1b.B7c, g2b.I6, fl.walk) are its only
-consumers today; the zero-`objects/`-rm census AC pins the no-bypass invariant over the whole
-`.github/scripts/test/` directory, not over the five known members — a sixth site written the old
-way is itself the defect.
+`corrupt_dead_tag`, `corrupt_skip`). The five call sites (g1b.B7, g1b.B7a, g1b.B7c, g2b.I6,
+fl.walk) are its only consumers today; the census invariant pins the no-bypass invariant over the
+whole `.github/scripts/test/` directory, not over the five known members — a sixth site written
+the old way is itself the defect. The census has a STANDING home (review finding): a fail-only
+self-check row inside the bump suite greps its own directory for under-`.git/objects` deletions
+(enumerate the deletion verbs — `rm`, `find -delete`, `unlink`, `rm -rf` — not only `rm`), so
+Guard-1 row 3's RED is enforced every run, not just at review time. Two same-construction sites
+OUTSIDE this directory exist (`scripts/ci-pr-selection.test.sh:432`,
+`apps/web-platform/infra/workspaces-luks-loopback.test.sh:868`) — out of scope, tracked in
+#10956; the census row's scope is `.github/scripts/test/` and says so.
 
 **Mutation matrix:**
 
@@ -403,6 +461,8 @@ way is itself the defect.
 | 4 | Reorder: the forge moved to AFTER `run_bump`/`run_mint`/`run_step` in a row | RED — the SUT walks a healthy graph and the row's refusal assertions fail (order is the property) |
 | 5 | Harness: `corrupt_skip` emits SKIP but omits the `SKIPPED_ASSERTIONS` charge | RED — a skipping run under-counts `TOTAL` below `MIN_ASSERTIONS` |
 | 6 | Must-PASS (non-canonical input): the entire suite run with all fixture objects packed (`git repack -ad` injected into fixture setup) | PASS — construction is layout-agnostic; identical assertions |
+| 7 | A `corrupt_skip` call-site under a name the probe does not enumerate | RED — the roster-parity self-check (call-site prefixes vs probe-registered prefixes, the rehearsal `_PROBE_NAMED`/`_SKIP_CALL_SITES` shape) fails |
+| 8 | A selftest lets an exercised `SKIP (loud):`/`::warning::` line reach the suite's own streams | RED — forced-skip exercises must capture emitted lines into a file/variable and grep the capture (the `$LAST_OUT`/`STEP_OUT` pattern); a marker streamed to the real job log poisons the very monitor Phase 3 extends (selftest-poisoning finding) |
 
 ### Guard 2 — counted, capped SKIP verdict
 
@@ -440,7 +500,7 @@ own test file re-derives from the suite's emitted lines.
 |---|---|---|---|
 | 1 | "Make the corrupt-graph construction deterministic (e.g., write the corrupt object with `git hash-object -w` + ref update rather than whatever currently races)" | `git-corrupt-graph.sh` + the five-site construction rewrite (Phase 1–2) | mapped |
 | 2 | "or gate the fixture's precondition with a `git fsck`/cat-file probe that skips with a named reason when the environment refuses to reproduce the corruption — a precondition that cannot be established should be an explicit `SKIP`, not a broken-fixture `FAIL`" | Counted-skip plumbing + walk-contract probe (Phase 1–2) | mapped |
-| 3 | "Ref #10887 …, epic #10397 line (flake-quarantine guidance shipped via #10403 — this is a live case for it)" | ADR-188-shape skip + `SKIP (loud):`/`::warning::` emission + monitor coverage (Phase 3) | mapped |
+| 3 | "Ref #10887 …, epic #10397 line (flake-quarantine guidance shipped via #10403 — this is a live case for it)" | ADR-188-shape skip + `SKIP (loud):`/`::warning::` emission + monitor coverage (Phase 3) | inferred — the quoted line is a reference, not an ask; the monitor extension's real requirement is ADR-188's across-runs residual bound |
 
 ### Plan-Item Provenance
 
@@ -462,31 +522,50 @@ own test file re-derives from the suite's emitted lines.
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `grep -rn 'rm .*objects/' .github/scripts/test/` returns zero hits for loose-object
-  fanout deletions in `test-bump-inngest-bootstrap-pin.sh` and
-  `test-mint-inngest-bootstrap-tag.sh` (census, not a spot-check).
+- [ ] AC1 — a fail-only self-check row inside the bump suite greps `.github/scripts/test/` for
+  under-`.git/objects` deletions across the deletion verbs (`rm`, `find -delete`, `unlink`,
+  `rm -rf`) and returns zero hits — a standing guard run every suite invocation, not a
+  review-time grep. Two same-construction sites outside this directory are out of scope, tracked
+  in #10956.
 - [ ] AC2 — `plugins/soleur/test/lib/git-corrupt-graph.sh` exists and both suites source it;
-  `bash -n` clean and shellcheck clean per the suites' own lint conventions.
+  `bash -n` clean and shellcheck clean per the suites' own lint conventions; header carries the
+  forge-last rule + skip-producer registration contract; every forge helper asserts a non-empty
+  `<repo>` operand.
 - [ ] AC3 — `bash .github/scripts/test/run-all.sh` exits 0 locally; the bump suite prints
   `Results:` with all g1b.B7/B7a/B7c and g2b.I6 rows PASS; the mint suite's fl.walk rows PASS.
-- [ ] AC4 — Packed-store proof: a fixture-setup arm injecting `git repack -ad` before the corrupt
-  construction produces identical row outcomes (preconditions hold, refusals asserted) — the
-  observed flake class is closed, not just worked around.
-- [ ] AC5 — Forced-divergence proof: with the walk-contract probe made to observe no stderr
-  marker (stub git or forced probe flag), each affected row emits exactly one
-  `SKIP (loud): <row>` line, one `::warning::` annotation, charges its declared assertion cost,
-  and both suites still exit 0.
+- [ ] AC4 — Packed-store proof: a permanent selftest arm drives an env knob
+  (`SOLEUR_FIXTURE_PACKED=1` or equivalent in `git-corrupt-graph.sh`) that `git repack -ad`s each
+  fixture repo BETWEEN seeding and forging (post-forge repack fails on the dead parent —
+  verified, incl. via reflog reachability); row outcomes identical to loose-store (AC3).
+- [ ] AC5 — Forced-divergence proof: a probe-force env flag (e.g.
+  `CORRUPT_WALK_PROBE_FORCE=skip`) makes each skip-eligible row's probe observe no stderr marker
+  — `STEP_PATH_PREFIX` cannot drive this (it stubs git only inside `run_step`, not the suite's
+  own probe). Each affected row emits exactly one `SKIP (loud): <row>` line (stderr) and one
+  `::warning::` (stdout), charges its declared assertion cost, both suites exit 0 — and every
+  selftest exercise of the machinery CAPTURES the emitted lines (`$LAST_OUT`/`STEP_OUT` pattern);
+  no exercised marker reaches the suite's own streams.
 - [ ] AC6 — Construction-invariant proof: forcing a readable dead-oid (e.g., the `-w` mutation
   from Guard 1 row 1) produces FAIL — never SKIP.
 - [ ] AC7 — Tail accounting: `TOTAL=$((PASS + FAIL + SKIPPED_ASSERTIONS))` and a
   `SKIPPED_ASSERTIONS <= <cap>` ceiling assertion exist in both suites; a skip beyond cap reds.
-- [ ] AC8 — `SKIP_MARKERS`/run-source coverage: the standing probe (or a sibling it invokes)
-  samples `pr-quality-guards.yml` runs by EVENT (`pull_request` and/or `merge_group` —
-  merge_group preferred if one) — never the `--branch main`/`conclusion==success` sampling used
-  for `infra-validation.yml` — and greps `SKIP (loud): g1b.`/`g2b.`/`fl.` markers, with a
-  suite-level positive-control discriminator so marker-absence can never read as clean; and
-  `scheduled-rehearsal-skip-monitor.yml`'s alert/remediation text is generalized or per-source so
-  a g1b/g2b/fl marker never files a rehearsal-labeled issue.
+  Charge convention pinned: construction-invariant checks are fail-only/zero-counted, so a
+  skipped row charges exactly its declared cost; `st_run`/`st_moved` snapshot and restore
+  `SKIPPED_ASSERTIONS` alongside `PASS`/`FAIL`; `corrupt_skip` validates `<cost>` numerically
+  (`arm_skip` parity); both `Results:` lines append `, $SKIPPED_ASSERTIONS skipped`.
+- [ ] AC8 — `SKIP_MARKERS`/run-source coverage: the standing probe samples
+  `pr-quality-guards.yml` runs by EVENT (`merge_group` required; `pull_request` for density —
+  noting it counts unmerged-branch output) — never `--branch main`/`conclusion==success` — and
+  greps `SKIP (loud): g1b.`/`g2b.`/`fl.` markers. Per-SUITE positive-control discriminators
+  (bump vs mint each provable — e.g. per-suite `=== test-<name>.sh ===` banners or `=== Guard
+  1b:`/`=== Guard 3:` headers), per-SOURCE `observed >= 1` accounting (a zero-observed source
+  degrades TRANSIENT, never pools into another source's clean). Alert title/body, remediation,
+  AND the probe's own verdict strings (PASS/TRANSIENT/FAIL lines) are generalized or per-source
+  so a g1b/g2b/fl marker never files a rehearsal-labeled issue; workflow header gains a scope
+  comment.
+- [ ] AC8b — Roster parity: a suite-side self-check asserts every `corrupt_skip` call-site name
+  starts with a probe-registered prefix, and the probe's `.test.sh` asserts every enumerated
+  `g1b.`/`g2b.`/`fl.` prefix has at least one producer (the rehearsal `_PROBE_NAMED`/
+  `_SKIP_CALL_SITES` two-count shape).
 - [ ] AC9 — `MIN_ASSERTIONS` floor comments carry re-derived counts where assertion rows moved;
   floors were not lowered silently.
 - [ ] AC10 — `git diff origin/main` touches no file under `.github/scripts/` outside
@@ -506,7 +585,7 @@ measured bug fix instantiating an existing ADR-188 pattern, not an architecture 
 mechanical UI-surface override did not fire (no `components/**/*.tsx`, `app/**/page.tsx`, or
 `app/**/layout.tsx` in Files to Create/Edit). Domain-leader agents were not spawnable in this
 subagent context (no Task tool); the sweep above is the orchestrator's own semantic assessment.
-Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
+Frontmatter carries `lane: cross-domain` — consistent with the assessment (CI-internal change).
 
 ## Test Scenarios
 
@@ -555,9 +634,18 @@ Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
   but the comments are prose.
 - **`hash-object -w` writes objects permanently** into the fixture repo — intended; the forged
   objects are scenario-local under `$TMP` and die with the suite's `rm -rf "$TMP"` trap.
-- **Deferred:** extending the monitor is an inferred scope item — recorded in
-  decision-challenges.md as pending-assumed; if deferred at review, file the tracking issue
-  before merge (a deferral without a tracking issue is invisible).
+- **Selftest-poisoning (review finding).** The forced-skip selftests exercise the emission path
+  on the suites' real streams; an uncaptured `SKIP (loud):`/`::warning::` in the job log trips
+  the Phase-3 monitor on every green run. Guard-1 row 8 pins the capture contract.
+- **pull_request sampling caveat.** PR-leg logs count markers from unmerged branches — a new
+  skip arm can trip the monitor pre-merge (acceptable evidence; the per-source verdict strings
+  label the source).
+- **Deferred (review):** the two same-construction sites outside `.github/scripts/test/`
+  (`scripts/ci-pr-selection.test.sh:432` — required `test` check, partially pinned;
+  `apps/web-platform/infra/workspaces-luks-loopback.test.sh:868` — unpinned, infra-validation)
+  are out of scope; tracked in #10956.
+- **Deferred:** extending the monitor is an inferred scope item — kept in this PR per the CTO
+  ruling (the probe's own "a probe that goes quiet on the arm the fix creates" invariant).
 
 ## Open Code-Review Overlap
 

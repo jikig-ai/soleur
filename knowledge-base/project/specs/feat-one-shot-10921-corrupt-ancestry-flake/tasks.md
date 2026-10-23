@@ -3,14 +3,22 @@
 Plan: `knowledge-base/project/plans/2026-10-23-fix-g1b-corrupt-ancestry-fixture-flake-plan.md`
 Issue: #10921 · closes #10921
 
+Amended post plan-review (DHH + Kieran + code-simplicity + CTO-devex panel): stream pins,
+charge convention, per-suite discriminators, selftest-capture contract, roster parity,
+standing census, mint selftest driver. Deferred: two external `rm -f objects/` sites → #10956.
+
 ## Phase 1 — Setup + shared lib
 
 - [ ] 1.1 Write `plugins/soleur/test/lib/git-corrupt-graph.sh`: `dead_oid <repo>` (hash-object
-  WITHOUT `-w`, BLOB type — `-t commit` on nonce bytes is fsck-refused on git 2.56, CTO ruling),
-  `corrupt_walk_break <repo> <ref>` (forged commit, well-formed 40-hex parent = dead oid,
-  `update-ref`), `corrupt_dead_tag <repo> <tag>` (forged tag object targeting
-  a dead oid), `corrupt_skip <row> <reason>` (`SKIP (loud):` + `::warning::` with `%`/CR/LF
-  sanitization + `SKIPPED_ASSERTIONS` charge). Header cites #10921 + the Arm-B reproduction.
+  WITHOUT `-w`, BLOB type — `-t commit` on nonce bytes is fsck-refused on git 2.56, CTO ruling;
+  constant nonce — absence, not uniqueness, is the property), `corrupt_walk_break <repo> <ref>`
+  (forged commit, well-formed 40-hex parent = dead oid, `update-ref`), `corrupt_dead_tag <repo>
+  <tag>` (forged tag object targeting a dead oid), `corrupt_skip <row> <cost> "<reason>"`
+  (numeric `<cost>` validation per `arm_skip`; `SKIP (loud):` → stderr, `::warning::` → STDOUT —
+  GH scans commands on stdout only; `%`/CR/LF sanitize). Header: #10921 + Arm-B reproduction +
+  one-spelling rationale + forge-is-last-construction-step rule (repack traverses reflogs) +
+  skip-producer registration contract. Every forge helper asserts non-empty `<repo>`
+  (`assert_fixture_dir` precedent).
 - [ ] 1.2 `bash -n` + shellcheck per suite conventions; fixture-env adoption stays clean.
 
 ## Phase 2 — bump suite rewrite
@@ -19,45 +27,59 @@ Issue: #10921 · closes #10921
 - [ ] 2.2 g1b.B7 (~L1593-1614): replace `main_commit c2/c3` + `rm -f` with `corrupt_walk_break`
   on `refs/heads/main` (keep `side_commit`/`seed_tag_at` — tag must still resolve).
 - [ ] 2.3 g1b.B7c (~L1627-1640): seed `vinngest-v1.1.37` BEFORE `corrupt_walk_break` (below-break
-  objects are unreachable afterwards — sequencing trap in plan §Technical Considerations), tag
-  the forged tip; merged set must be exactly `{v1.1.38}` + stderr marker.
+  objects unreachable afterwards), tag the forged tip; merged = exactly `{v1.1.38}` + stderr.
 - [ ] 2.4 g1b.B7a (~L1642-1661): `corrupt_dead_tag` — tag listed, `^{commit}` peel fails,
-  merged set = `v1.1.37` only.
-- [ ] 2.5 g2b.I6 (~L2602-2614): `corrupt_walk_break` on `refs/remotes/origin/main` in `$H`.
+  merged = `v1.1.37` only. Peel precondition is CONSTRUCTION-INVARIANT (comment at site) — its
+  own probe shape: tag listed ∧ peel fails ∧ merged == `{v1.1.37}` with clean stderr.
+- [ ] 2.5 g2b.I6 (~L2602-2614): `corrupt_walk_break` on `refs/remotes/origin/main` in `$H`
+  (`merge-base` rc 128 + stderr verified — Kieran arm).
 - [ ] 2.6 Add `SKIPPED_ASSERTIONS=0` + `corrupt_skip` plumbing: per skip-eligible row —
-  construction-invariant check → walk-contract probe (skip on absence) → row. Tail:
-  `TOTAL=$((PASS + FAIL + SKIPPED_ASSERTIONS))`, ceiling `SKIPPED_ASSERTIONS <= <cap>` (cap =
-  skip-eligible rows' declared assertion cost). Re-derive `MIN_ASSERTIONS` comment.
-- [ ] 2.7 Selftest rows (st_run harness): forced-skip → SKIP counted + warning; readable dead-oid
-  → FAIL not SKIP; charge-omission → floor fires; probe hard-coded present → selftest flags.
+  construction-invariant check (fail-only, ZERO counted) → walk-contract probe (contract =
+  walk stderr NON-EMPTY, the SUT's acceptance — not `Could not read` text) → row. Tail:
+  `TOTAL=$((PASS + FAIL + SKIPPED_ASSERTIONS))`, ceiling `<= <cap>`; `Results:` line appends
+  `, $SKIPPED_ASSERTIONS skipped`. `st_run`/`st_moved` snapshot+restore `SKIPPED_ASSERTIONS`.
+  Re-derive `MIN_ASSERTIONS` comment.
+- [ ] 2.7 Selftest rows: forced-skip → SKIP counted + warning, CAPTURED into file/var
+  (`$LAST_OUT`/`STEP_OUT` pattern) — NO exercised `SKIP (loud):`/`::warning::` reaches suite
+  streams (selftest-poisoning, Guard-1 row 8); readable dead-oid → FAIL not SKIP;
+  charge-omission → floor fires; probe-forced-present → flagged.
+- [ ] 2.8 Standing census self-check row (fail-only, zero counted): grep `.github/scripts/test/`
+  for under-`.git/objects` deletions across verbs (`rm`, `find -delete`, `unlink`, `rm -rf`) →
+  zero hits. Roster-parity self-check: every `corrupt_skip` call-site name starts with a
+  probe-registered prefix (rehearsal `_PROBE_NAMED`/`_SKIP_CALL_SITES` shape). Scope comment:
+  census covers `.github/scripts/test/` only; external sites tracked in #10956.
 
 ## Phase 3 — mint suite
 
 - [ ] 3.1 Source the lib in `.github/scripts/test/test-mint-inngest-bootstrap-tag.sh`; rewrite
   fl.walk (~L1127-1138) to forged-tip construction (tag ON the forged tip — arm F verified).
-- [ ] 3.2 Same skip plumbing + tail arithmetic; re-derive `MIN_ASSERTIONS` comment.
+- [ ] 3.2 Same skip plumbing + tail arithmetic; re-derive `MIN_ASSERTIONS` comment; `Results:`
+  line appends skipped count. Add a minimal st_run-shaped driver for the forced-skip path
+  (bump parity — `mut_row` mutates the SUT, cannot exercise `corrupt_skip`).
 
 ## Phase 4 — cross-run observer
 
 - [ ] 4.1 `scripts/followthroughs/t5-skip-persistence-bound-7510.sh`: second run-source for
-  `pr-quality-guards.yml` runs; markers `SKIP (loud): g1b.`/`g2b.`/`fl.`; suite-scoped
-  positive-control discriminator per source (per-source `observed` — never one shared counter).
+  `pr-quality-guards.yml` runs sampled BY EVENT (`merge_group` required, `pull_request` for
+  density — never `--branch main`/`conclusion==success`); markers `SKIP (loud): g1b.`/`g2b.`/
+  `fl.`; per-SUITE discriminators (`=== test-<name>.sh ===` banners or `=== Guard 1b:`/`===
+  Guard 3:` headers — verify at implement); per-SOURCE `observed >= 1` (zero-observed source →
+  TRANSIENT, never pooled); per-source verdict strings (PASS/TRANSIENT/FAIL).
 - [ ] 4.2 `scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh`: fed-log rows — marker
-  present → hit; discriminator present + no markers → PASS; neither → TRANSIENT.
-- [ ] 4.3 Edit `scheduled-rehearsal-skip-monitor.yml`: generalize or make per-source the alert
-  title/body and remediation lines (currently rehearsal-specific) so g1b/g2b/fl markers file
-  correctly labeled issues (CTO ruling; probe's second source samples by event — merge_group
-  preferred, never `--branch main`/`conclusion==success` on `gh-readonly-queue/*` refs).
+  present → hit; discriminator present + no markers → PASS; neither → TRANSIENT; pooled-vs-
+  per-source observed row; roster parity (every enumerated prefix has ≥1 producer).
+- [ ] 4.3 Edit `.github/workflows/scheduled-rehearsal-skip-monitor.yml`: generalize/per-source
+  alert title/body + remediation; one scope-comment header line (keep streak artifact name).
 
 ## Phase 5 — Verification
 
 - [ ] 5.1 `bash .github/scripts/test/run-all.sh` → rc 0; g1b.B7/B7a/B7c, g2b.I6, fl.walk PASS.
-- [ ] 5.2 Packed-store arm: inject `git repack -ad` into a fixture-setup copy → identical row
-  outcomes (AC4).
-- [ ] 5.3 Forced-divergence arm: probe sees no stderr marker → SKIP + `::warning::` + charged,
-  suite exits 0 (AC5).
-- [ ] 5.4 `grep -rn 'rm .*objects/' .github/scripts/test/` → zero hits in the two suites (AC1);
-  `git diff origin/main` touches no `.github/scripts/` file outside `test/` (AC10).
+- [ ] 5.2 Packed arm: `SOLEUR_FIXTURE_PACKED=1` selftest arm repacks between seed+forge →
+  identical outcomes (AC4).
+- [ ] 5.3 Forced-divergence: `CORRUPT_WALK_PROBE_FORCE=skip` → captured SKIP + `::warning::` +
+  charged, suites exit 0 (AC5).
+- [ ] 5.4 Census self-check green; `git diff origin/main` touches no `.github/scripts/` file
+  outside `test/` (AC10).
 - [ ] 5.5 CI green on `Bash fixture tests for guard scripts`.
 
 ## Commit
