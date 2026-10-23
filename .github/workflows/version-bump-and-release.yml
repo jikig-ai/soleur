@@ -3,7 +3,7 @@ name: Version Bump and Release
 on:
   push:
     branches: [main]
-    paths: ['plugins/soleur/**', 'plugin.json']
+    paths: ['plugins/soleur/**', 'packages/opencode-plugin/**', 'plugin.json']
   workflow_dispatch:
     inputs:
       bump_type:

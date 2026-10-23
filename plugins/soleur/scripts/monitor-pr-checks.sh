@@ -323,7 +323,7 @@ while :; do
   # the draft run is not a recovery (it reuses the cached draft-light output and can cancel the in-flight ready run).
   case "$V_STATE" in
     stalled)
-      printf 'READY RUN STALLED — PR #%s was marked ready but no full CI run decided (%s: the stall window counts from the ready event); the red test row is the DRAFT run'"'"'s, by design. Do NOT start a fix loop on it. First confirm in the Actions tab that the ready run is not still in flight; recovery with a user token (never GITHUB_TOKEN): gh pr ready --undo %s ; gh pr ready %s\n' "$PR" "$V_WHY" "$PR" "$PR"
+      printf 'READY RUN STALLED — PR #%s was marked ready but no full CI run decided (%s: see ci-head-verdict.sh --help for the stall clock); the red test row is the DRAFT run'"'"'s, by design. Do NOT start a fix loop on it. First confirm in the Actions tab that the ready run is not still in flight; recovery with a user token (never GITHUB_TOKEN): gh pr ready --undo %s ; gh pr ready %s\n' "$PR" "$V_WHY" "$PR" "$PR"
       exit 1 ;;
     no-run)
       # A conflicting PR gets no pull_request run (GitHub builds no merge ref), so the PENDING relabel above would watch it

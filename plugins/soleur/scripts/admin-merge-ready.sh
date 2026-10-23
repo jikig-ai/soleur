@@ -262,7 +262,7 @@ soften_test_row() {
              | .lines |= map(if startswith("FAILED  test (") then "PENDING test (awaiting-approval: a maintainer must approve the fork workflow run)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
     stalled)
       REASON_OVERRIDE="stalled"
-      MSG="STALLED: this PR was marked ready but no full CI run decided ($V_WHY: the stall window counts from the ready event). Recovery: $RECOVERY"
+      MSG="STALLED: this PR was marked ready but no full CI run decided ($V_WHY: see ci-head-verdict.sh --help for the stall clock). Recovery: $RECOVERY"
       jq -c '.failed -= ["test"] | .absent += ["test"]
              | .lines |= map(if startswith("FAILED  test (") then "ABSENT  test (stalled: no full CI run decided after the ready event)" else . end)' <<<"$out" > "$WORK/soft.json" ;;
     full-decided)
