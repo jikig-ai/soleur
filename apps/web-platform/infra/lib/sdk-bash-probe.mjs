@@ -196,12 +196,13 @@ export function parsePid1Environ(buf, probeHome) {
   return { homeMatches, divergent };
 }
 
-/** Read at most `cap` bytes of `path` (a /proc file, or a fixture in the unit tests; `read` is the injectable readSync). The returned
- *  Buffer is a view of the bytes read, which the CALLER zero-fills after use (readPid1 does). If the read throws part-way the allocated
- *  buffer is zero-filled here before the error propagates, so no half-read environment outlives the call. */
-export function readProcCapped(path, cap, read = readSync) {
-  const fd = openSync(path, "r");
+/** Read at most `cap` bytes of `path` (a /proc file, or a fixture in the unit tests; `read` / `close` are the injectable readSync / closeSync).
+ *  The returned Buffer is a view of the bytes read, which the CALLER zero-fills after use (readPid1 does). If the read throws part-way the
+ *  allocated buffer is zero-filled here before the error propagates, so no half-read environment outlives the call. The buffer is allocated
+ *  BEFORE the file is opened, so an allocation failure cannot leak a descriptor; the descriptor is closed on every path after the open. */
+export function readProcCapped(path, cap, read = readSync, close = closeSync) {
   const buf = Buffer.alloc(cap);
+  const fd = openSync(path, "r");
   let done = false;
   try {
     let n = 0;
@@ -215,7 +216,7 @@ export function readProcCapped(path, cap, read = readSync) {
     return buf.subarray(0, n);
   } finally {
     if (!done) buf.fill(0);
-    closeSync(fd);
+    close(fd);
   }
 }
 
@@ -242,10 +243,15 @@ export function readPid1(probeHome, io = {}) {
   return { uid, euid, env };
 }
 
+/** The closed set of `masks_note` values (the note ensureMaskedDirs reports, one at most). web-bash-synthetic.sh's `case` alternatives and the
+ *  runbook's decode table are copies pinned equal to this by test/sdk-bash-probe-runtime.test.ts. */
+export const MASKS_NOTES = Object.freeze(["uid_mismatch", "pid1_unreadable", "pid1_env_unreadable", "home_mismatch", "env_divergence"]);
+
 /** Create the missing members of `dirs` the way production does (`buildAgentSandboxConfig`: `mkdirSync(dir, { recursive: true, mode: 0o700 })`)
  *  and report which are not usable afterwards. Pure: every effect is the injected `lstat` / `mkdir` (lstat, never stat: a symlink is not a
  *  directory). Guards, in precedence order, one note at most:
- *    uid_mismatch        the probe's uid is not PID 1's real AND effective uid: NO creation (a dir owned by another uid is one the app cannot use)
+ *    uid_mismatch        the probe's real or effective uid differs from PID 1's (`uid` vs its real, `euid` vs its effective; `euid` defaults to
+ *                        `uid`): NO creation (a dir owned by another uid is one the app cannot use)
  *    pid1_unreadable     PID 1's uid is unknown: NO creation
  *    pid1_env_unreadable PID 1's environ is unreadable: the HOME-derived dirs (`homeDirs`) are not created, the rest are
  *    home_mismatch       PID 1's HOME is not the probe's: same
@@ -253,13 +259,13 @@ export function readPid1(probeHome, io = {}) {
  *  A dir is created only when lstat says it is absent (ENOENT); an existing path is never chmod'ed, chown'ed or replaced. A mkdir error
  *  fails THAT dir and the loop carries on. A dir is FAILED iff after the pass it is not a real directory, is owned by another uid, or is
  *  still absent. Mode is not asserted. Returns `{ created, failed, note }`. */
-export function ensureMaskedDirs({ dirs, homeDirs = [], uid, pid1, lstat, mkdir }) {
+export function ensureMaskedDirs({ dirs, homeDirs = [], uid, euid = uid, pid1, lstat, mkdir }) {
   const env = pid1?.env;
   let note = null;
   let createAll = true;
   let refuseHome = false;
   if (typeof pid1?.uid !== "number") { note = "pid1_unreadable"; createAll = false; }
-  else if (pid1.uid !== uid || pid1.euid !== uid) { note = "uid_mismatch"; createAll = false; }
+  else if (pid1.uid !== uid || pid1.euid !== euid) { note = "uid_mismatch"; createAll = false; }
   else if (!env) { note = "pid1_env_unreadable"; refuseHome = true; }
   else if (env.homeMatches !== true) { note = "home_mismatch"; refuseHome = true; }
   else if (env.divergent === true) note = "env_divergence";
@@ -291,8 +297,17 @@ export function ensureMaskedDirs({ dirs, homeDirs = [], uid, pid1, lstat, mkdir 
 /** Runtime mode's one creation step, as a function so the unit tests can drive the SAME call runSmoke makes: the closed `plan.precreate` set
  *  goes in as `dirs`, and the transcript dir (the only one derived from HOME) as `homeDirs`, so the HOME guard can refuse it alone.
  *  `pid1` is `readPid1(home)`'s value. */
-export function applyRuntimeMasks({ plan, home, uid, pid1, lstat, mkdir }) {
-  return ensureMaskedDirs({ dirs: plan.precreate, homeDirs: [transcriptDir(home)], uid, pid1, lstat, mkdir });
+export function applyRuntimeMasks({ plan, home, uid, euid = uid, pid1, lstat, mkdir }) {
+  return ensureMaskedDirs({ dirs: plan.precreate, homeDirs: [transcriptDir(home)], uid, euid, pid1, lstat, mkdir });
+}
+
+/** The whole runtime-masks step of runSmoke, as one function so a unit test drives the SAME code path end to end: null for a deploy plan
+ *  (no creation, no PID 1 read), else PID 1 is read (`readPid1(home, io)`) and applyRuntimeMasks runs with the real `lstatSync` / `mkdirSync`.
+ *  `io` (all optional) injects `statusPath` / `environPath` (fixture files) or `readStatus` / `readEnviron`, and `lstat` / `mkdir`. runSmoke passes
+ *  none of them, so production always gets the real /proc files and the real filesystem. */
+export function runtimeMasks({ plan, home, uid, euid = uid, io = {} }) {
+  if (!plan.runtime) return null;
+  return applyRuntimeMasks({ plan, home, uid, euid, pid1: readPid1(home, io), lstat: io.lstat ?? lstatSync, mkdir: io.mkdir ?? mkdirSync });
 }
 
 /** The runtime result-JSON fields for an ensureMaskedDirs result (counts and a closed-enum note only; never a path or an errno). */
@@ -324,7 +339,7 @@ export function smokeSandboxConfig({ workspace, uid, home, masked = maskedDirs(u
         "/sys",
         "/var/lib/soleur/egress-tokens",
         ...masked,
-        "/tmp/.cs",
+        SESSION_TMP_ROOT,
       ],
     },
     credentials: {
@@ -567,10 +582,11 @@ async function runSmoke() {
   const home = process.env.HOME;
   if (!home || !home.startsWith("/")) infra("home_not_absolute");
   const uid = process.getuid();
+  const euid = process.geteuid();
   // Every mode decision lives in planSmoke (pure, unit-tested for both modes). Runtime mode: the host passes the selector NAME it
   // got from the dispatcher's resolver; deploy mode always runs unixdeny. Each masked dir must exist before the namespace is built
   // (the SDK skips a deny landing that does not exist): the deploy smoke runs in a canary that has none, so it creates them; the
-  // runtime synthetic runs in the production container, where `plan.mkdir` is empty and ensureMaskedDirs (via applyRuntimeMasks, below)
+  // runtime synthetic runs in the production container, where `plan.mkdir` is empty and ensureMaskedDirs (via runtimeMasks, below)
   // creates what a real session has not yet, under the PID-1 uid and HOME guards.
   const plan = planSmoke({ env: process.env, uid, home });
   if (plan.selectedPath === null) infra("selector_invalid");
@@ -619,11 +635,9 @@ async function runSmoke() {
   } catch (e) {
     infra(`masked_dir_precreate_failed: ${String(e).slice(0, 120)}`);
   }
-  // Runtime mode: the one creation site. A failed create is DATA (masks_missing), never an infra exit; the sandbox below still gets every
-  // masked dir, like production (which keeps an entry in denyRead whether or not its pre-create worked).
-  const masksResult = runtime
-    ? applyRuntimeMasks({ plan, home, uid, pid1: readPid1(home), lstat: lstatSync, mkdir: mkdirSync })
-    : null;
+  // Runtime mode: the one creation site (null in deploy mode). A failed create is DATA (masks_missing), never an infra exit; the sandbox below
+  // still gets every masked dir, like production (which keeps an entry in denyRead whether or not its pre-create worked).
+  const masksResult = runtimeMasks({ plan, home, uid, euid });
   // SDK_BASH_PROBE_BPF is a TEST-ONLY override (a dev machine has no /app/infra); ci-deploy.sh never sets it. Any value
   // other than the pinned path reports coverage replay_only, which the verdict treats as a hold, never a pass.
   const bpfPath = process.env.SDK_BASH_PROBE_BPF || selectedPath;

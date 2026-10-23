@@ -4,7 +4,7 @@
 // coverage claim names THAT selector, and the only directories it creates outside its scratch dirs are the closed
 // production masked set (precreateDirs), through ensureMaskedDirs and under the PID-1 uid and HOME guards (ADR-079 addendum 2026-10-23).
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,6 +170,23 @@ describe("ensureMaskedDirs: create only what is absent, only as PID 1's uid, wit
         expect(fs.mkdirCalls, JSON.stringify(pid1)).toEqual([]);
         expect(r, JSON.stringify(pid1)).toEqual({ created: 0, failed: dirs, note: "uid_mismatch" });
       }
+    });
+
+    it("uid_mismatch when the PROBE's own effective uid differs from PID 1's (real matches): nothing is created; euid defaults to uid", () => {
+      for (const probeEuid of [0, 1002]) {
+        const fs = fakeFs({});
+        const r = probe.ensureMaskedDirs({ dirs, homeDirs, uid, euid: probeEuid, pid1: okPid1, lstat: fs.lstat, mkdir: fs.mkdir });
+        expect(fs.mkdirCalls, String(probeEuid)).toEqual([]);
+        expect(r, String(probeEuid)).toEqual({ created: 0, failed: dirs, note: "uid_mismatch" });
+      }
+      // both pairs equal and non-trivially split (real 1001, effective 0 on both sides): the guard passes (the ownership check judges the result)
+      const fs = fakeFs({});
+      const same = probe.ensureMaskedDirs({ dirs, homeDirs, uid, euid: 0, pid1: { uid, euid: 0, env: okPid1.env }, lstat: fs.lstat, mkdir: fs.mkdir });
+      expect(same.note).toBeNull();
+      expect(fs.mkdirCalls.length).toBe(4);
+      // omitted euid behaves as euid === uid
+      const fs2 = fakeFs({});
+      expect(probe.ensureMaskedDirs({ dirs, homeDirs, uid, pid1: okPid1, lstat: fs2.lstat, mkdir: fs2.mkdir })).toEqual({ created: 4, failed: [], note: null });
     });
 
     it("pid1_unreadable: PID 1's uid could not be read (undefined, never 'assume equal')", () => {
@@ -431,6 +448,65 @@ describe("readProcCapped / readPid1 against real files", () => {
     expect(probe.readProcCapped(f, 64).length).toBe(0);
   });
 
+  it("the cap is reached across chunks of 60, 3 and 1 bytes: all 64 are returned (an early stop at cap-1 would drop the last byte)", () => {
+    const d = scratch();
+    const f = join(d, "f");
+    writeFileSync(f, "x");
+    const sizes = [60, 3, 1];
+    let calls = 0;
+    const chunked = ((_fd: number, buf: Buffer, off: number, len: number) => {
+      const n = Math.min(sizes[calls++] ?? 0, len);
+      buf.fill(0x41 + calls, off, off + n);
+      return n;
+    }) as unknown as typeof import("node:fs").readSync;
+    const out = probe.readProcCapped(f, 64, chunked);
+    expect(out.length).toBe(64);
+    expect(out[63]).toBe(0x41 + 3);
+    expect(calls).toBe(3);
+  });
+
+  it("a FIFO that delivers exactly CAP bytes in several chunks is returned whole (no off-by-one at the cap)", () => {
+    const d = scratch();
+    const fifo = join(d, "cap.fifo");
+    execFileSync("mkfifo", [fifo]);
+    // 40 + 23 + 1 bytes with a pause between writes: three separate reads, the last one a single byte.
+    const writer = spawn("sh", ["-c", `{ printf '%040d' 0; sleep 0.3; printf '%023d' 0; sleep 0.3; printf 'Z'; } > "$1"`, "sh", fifo], { stdio: "ignore" });
+    try {
+      const out = probe.readProcCapped(fifo, 64);
+      expect(out.length).toBe(64);
+      expect(out.toString().endsWith("Z")).toBe(true);
+    } finally {
+      writer.kill();
+    }
+  });
+
+  it("the descriptor is closed exactly once on a normal return and on a throw (injected close sees the fd the open returned)", () => {
+    const d = scratch();
+    const f = join(d, "f");
+    writeFileSync(f, "0123456789");
+    const closed: number[] = [];
+    const close = ((fd: number) => { closed.push(fd); }) as unknown as typeof import("node:fs").closeSync;
+    probe.readProcCapped(f, 4, undefined, close);
+    expect(closed.length).toBe(1);
+    expect(closed[0]).toBeGreaterThan(2);
+    const boom = (() => { throw new Error("EIO"); }) as unknown as typeof import("node:fs").readSync;
+    expect(() => probe.readProcCapped(f, 4, boom, close)).toThrow("EIO");
+    expect(closed.length).toBe(2);
+    // the injected close never closed the real fds: close them so the suite does not leak
+    for (const fd of closed) closeSync(fd);
+  });
+
+  it("an allocation that throws never opens the file (no descriptor leak, and not even an ENOENT from the open)", () => {
+    const d = scratch();
+    const fdCount = () => readdirSync("/proc/self/fd").length;
+    const f = join(d, "f");
+    writeFileSync(f, "x");
+    const before = fdCount();
+    expect(() => probe.readProcCapped(f, 2 ** 53)).toThrow(/range|size|allocation|memory/i);
+    expect(() => probe.readProcCapped(join(d, "does-not-exist"), 2 ** 53)).toThrow(/range|size|allocation|memory/i);
+    expect(fdCount()).toBe(before);
+  });
+
   it("a read that throws part-way leaves the allocated buffer zero-filled (no half-read environment survives) and the error propagates", () => {
     const d = scratch();
     const f = join(d, "f");
@@ -454,6 +530,92 @@ describe("readProcCapped / readPid1 against real files", () => {
     expect(probe.readPid1(HOME, { statusPath: status(d, "Uid:\t1001\t0\t0\t0"), environPath: env })).toMatchObject({ uid: 1001, euid: 0 });
     expect(probe.readPid1(HOME, { statusPath: join(d, "nope"), environPath: join(d, "nope2") })).toEqual({ uid: undefined, euid: undefined, env: null });
     expect(probe.readPid1(HOME, { statusPath: status(d, "Uid:\tgarbage"), environPath: env })).toMatchObject({ uid: undefined, euid: undefined });
+  });
+});
+
+// ---- runtimeMasks: runSmoke's runtime step, end to end against FIXTURE /proc files (the real readers, an in-memory filesystem) ----------------
+describe("runtimeMasks: the step runSmoke calls, driven through readPid1's real readers", () => {
+  const uid = 1001;
+  const home = "/home/soleur";
+  const tmps: string[] = [];
+  afterEach(() => {
+    for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  const fixture = (statusUid: string, environ: string[] | null) => {
+    const d = realpathSync(mkdtempSync(join(tmpdir(), "rtmasks-fixture-")));
+    tmps.push(d);
+    writeFileSync(join(d, "status"), `Name:\tnode\nUid:\t${statusUid}\nGid:\t1001\t1001\t1001\t1001\n`);
+    if (environ) writeFileSync(join(d, "environ"), `${environ.join("\0")}\0`);
+    return { statusPath: join(d, "status"), environPath: join(d, "environ") };
+  };
+  const runtime = probe.planSmoke({ env: { SDK_BASH_PROBE_RUNTIME: "1", SDK_BASH_PROBE_SELECTOR: "base" }, uid, home });
+  const drive = (io: Record<string, unknown>, fs: ReturnType<typeof fakeFs>, over: { uid?: number; euid?: number; home?: string } = {}) =>
+    probe.runtimeMasks({ plan: runtime, home: over.home ?? home, uid: over.uid ?? uid, euid: over.euid ?? over.uid ?? uid, io: { ...io, lstat: fs.lstat, mkdir: fs.mkdir } });
+
+  it("a PID 1 with the probe's uid and HOME: all four closed-set dirs are created, nothing is refused, and the result-JSON fields say so", () => {
+    const fs = fakeFs({});
+    const r = drive(fixture("1001\t1001\t1001\t1001", [`HOME=${home}`, "PATH=/usr/bin"]), fs);
+    expect(r).toEqual({ created: 4, failed: [], note: null });
+    expect(fs.mkdirCalls.map((c) => c[0])).toEqual(probe.precreateDirs(uid, home));
+    expect(probe.maskFields(r!)).toEqual({ masks_missing: 0, masks_created: 4, masks_note: null });
+  });
+
+  it("a PID 1 whose HOME is different: ONLY the transcript dir is refused (home_mismatch), the other three are created", () => {
+    const fs = fakeFs({});
+    const r = drive(fixture("1001\t1001\t1001\t1001", ["HOME=/root"]), fs);
+    expect(r).toEqual({ created: 3, failed: [`${home}/.claude/projects`], note: "home_mismatch" });
+    expect(fs.mkdirCalls.map((c) => c[0])).not.toContain(`${home}/.claude/projects`);
+    expect(probe.maskFields(r!)).toEqual({ masks_missing: 1, masks_created: 3, masks_note: "home_mismatch" });
+  });
+
+  it("an unreadable /proc/1/environ: pid1_env_unreadable, the transcript dir refused, the other three created", () => {
+    const fs = fakeFs({});
+    const r = drive(fixture("1001\t1001\t1001\t1001", null), fs);
+    expect(r).toEqual({ created: 3, failed: [`${home}/.claude/projects`], note: "pid1_env_unreadable" });
+  });
+
+  it("an unreadable /proc/1/status: pid1_unreadable and NOTHING is created", () => {
+    const fs = fakeFs({});
+    const io = fixture("1001\t1001\t1001\t1001", [`HOME=${home}`]);
+    const r = drive({ ...io, statusPath: `${io.statusPath}.missing` }, fs);
+    expect(r!.note).toBe("pid1_unreadable");
+    expect(fs.mkdirCalls).toEqual([]);
+  });
+
+  it("PID 1 under another real or effective uid than the probe's real or effective uid: uid_mismatch, nothing is created (all four combinations)", () => {
+    const cases: Array<[string, { uid?: number; euid?: number }]> = [
+      ["0\t0\t0\t0", {}],                          // PID 1 is root, the probe is 1001
+      ["1001\t0\t0\t0", {}],                       // PID 1's effective uid differs
+      ["1001\t1001\t1001\t1001", { euid: 0 }],     // the probe's effective uid differs (a setuid probe)
+      ["1001\t1001\t1001\t1001", { uid: 0, euid: 1001 }], // the probe's real uid differs
+    ];
+    for (const [status, over] of cases) {
+      const fs = fakeFs({});
+      const r = drive(fixture(status, [`HOME=${home}`]), fs, over);
+      expect(r!.note, status + JSON.stringify(over)).toBe("uid_mismatch");
+      expect(fs.mkdirCalls, status + JSON.stringify(over)).toEqual([]);
+    }
+  });
+
+  it("a deploy-mode plan is a no-op returning null: PID 1 is not even read, nothing is created", () => {
+    const deploy = probe.planSmoke({ env: {}, uid, home });
+    const fs = fakeFs({});
+    const touched: string[] = [];
+    const r = probe.runtimeMasks({
+      plan: deploy, home, uid, euid: uid,
+      io: { lstat: fs.lstat, mkdir: fs.mkdir, readStatus: () => { touched.push("status"); return ""; }, readEnviron: () => { touched.push("environ"); return Buffer.alloc(0); } },
+    });
+    expect(r).toBeNull();
+    expect(touched).toEqual([]);
+    expect(fs.mkdirCalls).toEqual([]);
+  });
+
+  it("euid defaults to uid, and the closed set is created only through the injected mkdir with production's options", () => {
+    const fs = fakeFs({});
+    const io = fixture("1001\t1001\t1001\t1001", [`HOME=${home}`]);
+    const r = probe.runtimeMasks({ plan: runtime, home, uid, io: { ...io, lstat: fs.lstat, mkdir: fs.mkdir } });
+    expect(r!.created).toBe(4);
+    expect(fs.mkdirCalls.every((c) => JSON.stringify(c[1]) === JSON.stringify({ recursive: true, mode: 0o700 }))).toBe(true);
   });
 });
 
@@ -505,6 +667,11 @@ describe("masks_note / masks_created: one closed set, derived from the probe, eq
 
   it("the probe's set is the five documented notes (floor: an empty derivation must not pass)", () => {
     expect(probeNotes).toEqual(["env_divergence", "home_mismatch", "pid1_env_unreadable", "pid1_unreadable", "uid_mismatch"]);
+  });
+
+  it("the probe's exported MASKS_NOTES constant equals the notes ensureMaskedDirs can assign (a new note must be added to both)", () => {
+    expect([...probe.MASKS_NOTES].sort()).toEqual(probeNotes);
+    expect(Object.isFrozen(probe.MASKS_NOTES)).toBe(true);
   });
 
   it("web-bash-synthetic.sh's `case` alternatives are exactly the probe's notes", () => {
@@ -606,15 +773,30 @@ describe("runSmoke is wired to planSmoke, not to its own copy of the decisions",
   const runSmoke = probeSrc.slice(probeSrc.indexOf("async function runSmoke()"));
   const code = runSmoke.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 
-  it("applyRuntimeMasks (-> ensureMaskedDirs) is the ONLY runtime creation site: one call, fed lstat and mkdir by reference, never a stat; the deploy loop is the only direct mkdirSync", () => {
-    expect(code.match(/applyRuntimeMasks\(/g)?.length).toBe(1);
-    expect(code).toContain("applyRuntimeMasks({ plan, home, uid, pid1: readPid1(home), lstat: lstatSync, mkdir: mkdirSync })");
-    expect(code).not.toMatch(/\bensureMaskedDirs\(/);
+  it("runtimeMasks (-> applyRuntimeMasks -> ensureMaskedDirs) is the ONLY runtime creation site: one top-level call before the sandbox is built, fed the real uid, euid and HOME; the deploy loop is the only direct mkdirSync", () => {
+    expect(code.match(/runtimeMasks\(/g)?.length).toBe(1);
+    expect(code).not.toMatch(/applyRuntimeMasks\(|\bensureMaskedDirs\(|\breadPid1\(/);
+    // The bindings the call takes are the process's own, not a stand-in: a runSmoke that read geteuid for `uid`, defaulted HOME, or hard-coded a
+    // uid would create dirs for the wrong owner (the behaviour of runtimeMasks itself is driven above, with these as inputs).
+    expect(code).toContain("  const home = process.env.HOME;\n");
+    expect(code).toContain("  const uid = process.getuid();\n  const euid = process.geteuid();\n");
+    // A STATEMENT of runSmoke's own body (two-space indent, no guard, no callback, no io override): not behind an env test, a timer or a ternary.
+    const call = /^ {2}const masksResult = runtimeMasks\(\{ plan, home, uid, euid \}\);$/m.exec(code);
+    expect(call, "the runtimeMasks call is not an unconditional top-level statement with exactly { plan, home, uid, euid }").not.toBeNull();
+    // ... and it runs BEFORE the sandbox config is built and the SDK query starts (a deferred creation would race the namespace build).
+    expect(call!.index).toBeLessThan(code.indexOf("const sandbox = smokeSandboxConfig("));
+    expect(call!.index).toBeLessThan(code.indexOf("const q = query("));
     expect(code.match(/mkdirSync\(/g)?.length).toBe(1);
     expect(code).toContain("for (const d of plan.mkdir) mkdirSync(d, { recursive: true, mode: 0o700 });");
     expect(code).toContain("const { runtime, selectorName, selectedPath, masked } = plan;");
     expect(code).toContain("smokeSandboxConfig({ workspace: ws, uid, home, masked })");
-    expect(code).toContain("...maskFields(masksResult)");
+    // The result fields ride only in runtime mode, from THIS result.
+    expect(code).toContain("emit(runtime ? { ...v, selector: selectorName, ...maskFields(masksResult) } : v);");
+    // runtimeMasks itself: the deploy guard, the real readers and the real fs defaults, the euid pass-through.
+    const fn = probeSrc.slice(probeSrc.indexOf("export function runtimeMasks("), probeSrc.indexOf("/** The runtime result-JSON fields"));
+    expect(fn).toContain("if (!plan.runtime) return null;");
+    expect(fn).toContain("pid1: readPid1(home, io), lstat: io.lstat ?? lstatSync, mkdir: io.mkdir ?? mkdirSync");
+    expect(fn.match(/applyRuntimeMasks\(/g)?.length).toBe(1);
   });
 
   it("ensureMaskedDirs itself: one mkdir call with production's exact options, lstat only, no chmod/chown/replace anywhere in the file", () => {
@@ -624,7 +806,7 @@ describe("runSmoke is wired to planSmoke, not to its own copy of the decisions",
     expect(fnCode).toContain("mkdir(dir, { recursive: true, mode: 0o700 })");
     expect(fnCode).toMatch(/\blstat\(/);
     const apply = probeSrc.slice(probeSrc.indexOf("export function applyRuntimeMasks("), probeSrc.indexOf("export function maskFields("));
-    expect(apply).toContain("ensureMaskedDirs({ dirs: plan.precreate, homeDirs: [transcriptDir(home)], uid, pid1, lstat, mkdir })");
+    expect(apply).toContain("ensureMaskedDirs({ dirs: plan.precreate, homeDirs: [transcriptDir(home)], uid, euid, pid1, lstat, mkdir })");
     expect(fnCode).not.toMatch(/\bstat\(|statSync|\bchmod|\bchown|\brename|\bunlink|\brm\b|rmSync|symlink/);
     const all = probeSrc.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/**")).join("\n");
     expect(all).not.toMatch(/\b(chmod|fchmod|chown|lchown|fchown)\w*\(/);
