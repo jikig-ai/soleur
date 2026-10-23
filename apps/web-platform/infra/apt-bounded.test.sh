@@ -299,7 +299,17 @@ else fail "A19: host arm/summary" "arm-out=[$(printf '%s' "$_ao" | tr '\n' '|')]
 # A cache-simulating stub (modes cache*, above) records a network cost only when the lists are empty or the package is
 # not in the archives dir, so a warm run that still costs a fetch turns a row red. The state dir is armed by the REAL
 # host half (gd_apt_state_arm), not hand-built, so a missing partial/ dir is fatal here exactly as in real apt.
-arm_state() { local d="${2:-$W/state}"; chmod -R u+rwX "$d" 2>/dev/null; rm -rf "$d" "$W/stalled"; ( . "$LIB"; gd_apt_state_arm "$d" "$1" ) >/dev/null 2>&1; }
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+arm_state() { local d="${2:-$W/state}"; assert_fixture_dir "$d"; chmod -R u+rwX "$d" 2>/dev/null; rm -rf "$d" "$W/stalled"; ( . "$LIB"; gd_apt_state_arm "$d" "$1" ) >/dev/null 2>&1; }
 n_net() { grep -c "^$1" "$NET" || true; }
 
 # G4-1 — cold then warm on the SAME state dir: the second container makes ZERO downloads (one REVALIDATE only).
@@ -386,7 +396,7 @@ row
 arm_state 60
 KEEP_STATE=1 run_helper cache 60 --no-install-recommends bubblewrap procps
 _i="$(grep '^install ' "$CALLS" || true)"
-if [ "$RC" -eq 0 ] && printf '%s\n' "$_i" | grep -qE '^install -y -qq -o Dir::State::lists=[^ ]+ -o Dir::Cache::archives=[^ ]+ -o Acquire::Retries=5 --no-install-recommends bubblewrap procps$' && [ "$(n_net FETCH-PKG)" -eq 2 ]; then
+if [ "$RC" -eq 0 ] && grep -qE '^install -y -qq -o Dir::State::lists=[^ ]+ -o Dir::Cache::archives=[^ ]+ -o Acquire::Retries=5 --no-install-recommends bubblewrap procps$' <<<"$_i" && [ "$(n_net FETCH-PKG)" -eq 2 ]; then
   pass "G4-6: --no-install-recommends keeps its position (after the shared options and Acquire::Retries, before the packages)"
 else fail "G4-6: --no-install-recommends order" "rc=$RC install=[$_i] net=[$(tr '\n' '|' < "$NET")]"; fi
 
@@ -442,7 +452,7 @@ if docker info >/dev/null 2>&1 && docker image inspect bash:3.2 >/dev/null 2>&1;
     echo END' 2>&1)"
   _g9_same=no; cmp -s "$LIB" "$W/state/apt-bounded.sh" && _g9_same=yes
   _g9_rm=0; chmod -R u+rwX "$W/state" 2>/dev/null; rm -rf "$W/state" 2>/dev/null || _g9_rm=$?
-  if printf '%s\n' "$_g9" | grep -qx CREATED && printf '%s\n' "$_g9" | grep -qx END && ! printf '%s\n' "$_g9" | grep -qxE 'RENAMED_OVER|REMOVED' \
+  if grep -qx CREATED <<<"$_g9" && grep -qx END <<<"$_g9" && ! grep -qxE 'RENAMED_OVER|REMOVED' <<<"$_g9" \
      && [ "$_g9_same" = yes ] && [ "$_g9_rm" -eq 0 ] && [ ! -e "$W/state" ]; then
     pass "G4-9: as uid ${_other_uid} in a container the state dir accepts new files but refuses a rename over, and a removal of, the sourced script (still byte-identical); the host removes the tree"
   else fail "G4-9: another uid could replace or remove the sourced script" "container-out=[$(printf '%s' "$_g9" | tr '\n' '|' | head -c 300)] script-identical=$_g9_same host-rm-rc=$_g9_rm"; fi
@@ -469,9 +479,9 @@ _mkcap "$ERR" 6
 _h1="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
 _h1_n=$(printf '%s\n' "$_h1" | wc -l | tr -d ' ')
 _h1_want=$(( $( . "$LIB"; printf '%s' "$GD_APT_TAIL_LINES" ) + 1 ))
-if [ "$_h1_rc" -eq 100 ] && [ "$_h1_want" -eq 21 ] && printf '%s\n' "$_h1" | head -n 1 | grep -qE '^FIXTURE_APT_CAUSE: apt-error ' \
-   && [ "$_h1_n" -eq "$_h1_want" ] && printf '%s\n' "$_h1" | grep -qE '^Get:30 ' && printf '%s\n' "$_h1" | grep -qE '^Get:11 ' \
-   && ! printf '%s\n' "$_h1" | grep -qE '^Get:10 ' && ! printf '%s\n' "$_h1" | grep -qE 'NOISE|FIXTURE_APT_FAILED'; then
+if [ "$_h1_rc" -eq 100 ] && [ "$_h1_want" -eq 21 ] && grep -qE '^FIXTURE_APT_CAUSE: apt-error ' < <(head -n 1 <<<"$_h1") \
+   && [ "$_h1_n" -eq "$_h1_want" ] && grep -qE '^Get:30 ' <<<"$_h1" && grep -qE '^Get:11 ' <<<"$_h1" \
+   && ! grep -qE '^Get:10 ' <<<"$_h1" && ! grep -qE 'NOISE|FIXTURE_APT_FAILED' <<<"$_h1"; then
   pass "gd_apt_out_tail H1: cause line first, then exactly the last $(( _h1_want - 1 )) scrubbed lines, bounded at ${_h1_want} lines in all, none of the unscrubbed lines around them"
 else fail "gd_apt_out_tail H1: full block" "apt rc=$_h1_rc lines=$_h1_n want=$_h1_want head=[$(printf '%s\n' "$_h1" | head -n 2 | cut -c1-120 | tr '\n' '|')] tail=[$(printf '%s\n' "$_h1" | tail -n 2 | cut -c1-100 | tr '\n' '|')]"; fi
 
@@ -484,8 +494,8 @@ _mkcap "$ERR" 30
 _h2="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
 _h2_n=$(printf '%s\n' "$_h2" | wc -l | tr -d ' ')
 if [ "$_h2_rc" -eq 100 ] && [ "$_h2_blk" -ge 3 ] && [ "$_h2_blk" -lt 20 ] && [ "$_h2_n" -eq $(( _h2_blk + 1 )) ] \
-   && printf '%s\n' "$_h2" | head -n 1 | grep -qE '^FIXTURE_APT_CAUSE: apt-error ' && ! printf '%s\n' "$_h2" | grep -qE 'NOISE' \
-   && printf '%s\n' "$_h2" | grep -qF 'archive.ubuntu.com/ubuntu noble InRelease' && ! printf '%s\n' "$_h2" | grep -qF 's3cr3t'; then
+   && grep -qE '^FIXTURE_APT_CAUSE: apt-error ' < <(head -n 1 <<<"$_h2") && ! grep -qE 'NOISE' <<<"$_h2" \
+   && grep -qF 'archive.ubuntu.com/ubuntu noble InRelease' <<<"$_h2" && ! grep -qF 's3cr3t' <<<"$_h2"; then
   pass "gd_apt_out_tail H2: a ${_h2_blk}-line scrubbed block yields the cause plus exactly those ${_h2_blk} lines (no reach into the 30 unscrubbed lines above), credentials still scrubbed"
 else fail "gd_apt_out_tail H2: short block" "apt rc=$_h2_rc block=$_h2_blk lines=$_h2_n head=[$(printf '%s\n' "$_h2" | head -n 2 | cut -c1-120 | tr '\n' '|')]"; fi
 
@@ -511,7 +521,7 @@ _oneline_len=$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 | tr '\n' ' ' ) | wc -c | t
 _x_multi="$( { echo "FAIL: T5 MUTATION: shape one"; echo "      $( . "$LIB"; gd_apt_out_tail "$_ct" 5)"; } | _excerpt )"
 _x_note="$( { echo "FAIL: T5 MUTATION: shape two"; echo "      docker rc=1 (measured classes); tail: $( . "$LIB"; gd_apt_out_tail "$_ct" 5)"; } | _excerpt )"
 _x_one="$( { printf '  FAIL %s\n       %s\n' "runtime arm: the driver did not complete" "$( . "$LIB"; gd_apt_out_tail "$_ct" 5 | tr '\n' ' ')"; } | _excerpt )"
-_hx=ok; for _v in "$_x_multi" "$_x_note" "$_x_one"; do printf '%s\n' "$_v" | grep -qF 'FIXTURE_APT_CAUSE: apt-error ' || _hx=lost; done
+_hx=ok; for _v in "$_x_multi" "$_x_note" "$_x_one"; do grep -qF 'FIXTURE_APT_CAUSE: apt-error ' <<<"$_v" || _hx=lost; done
 if [ -n "$_mre" ] && [ -n "$_cap" ] && [ "$_oneline_len" -gt 2000 ] && [ "$_hx" = ok ]; then
   pass "gd_apt_out_tail H4: through the runner's real excerpt (MARKER_ERE, grep -A3, ${_cap} lines, cut 2000) the cause survives in all three suite shapes, including a ${_oneline_len}-char one-line form"
 else fail "gd_apt_out_tail H4: runner excerpt" "marker-ere=[${_mre:-<not found in run-registered-suites.sh>}] cap=[${_cap:-?}] oneline-chars=$_oneline_len verdict=$_hx multi=[$(printf '%s' "$_x_multi" | head -c 160)] one=[$(printf '%s' "$_x_one" | head -c 160)]"; fi
@@ -526,9 +536,9 @@ printf '::notice::fallback-leading\nplain ##[group]x\n' > "$_ct"
 _h5b="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
 printf 'FIXTURE_APT_CAUSE: ::stop-commands::tok tail_lines=0\n' > "$_ct"
 _h5c="$( ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 )"
-_h5bad=""; for _v in "$_h5a" "$_h5b" "$_h5c"; do printf '%s\n' "$_v" | grep -qE '::|##\[' && _h5bad="${_h5bad} [$(printf '%s' "$_v" | tr '\n' '|' | head -c 120)]"; done
-if [ -z "$_h5bad" ] && printf '%s\n' "$_h5a" | grep -qF 'injected-leading' && printf '%s\n' "$_h5a" | grep -qF 'mid-line' && printf '%s\n' "$_h5a" | grep -qF 'hash-form' \
-   && printf '%s\n' "$_h5b" | grep -qF 'fallback-leading' && printf '%s\n' "$_h5c" | grep -qF 'stop-commands'; then
+_h5bad=""; for _v in "$_h5a" "$_h5b" "$_h5c"; do grep -qE '::|##\[' <<<"$_v" && _h5bad="${_h5bad} [$(printf '%s' "$_v" | tr '\n' '|' | head -c 120)]"; done
+if [ -z "$_h5bad" ] && grep -qF 'injected-leading' <<<"$_h5a" && grep -qF 'mid-line' <<<"$_h5a" && grep -qF 'hash-form' <<<"$_h5a" \
+   && grep -qF 'fallback-leading' <<<"$_h5b" && grep -qF 'stop-commands' <<<"$_h5c"; then
   pass "gd_apt_out_tail H5: no '::' or '##[' survives in the scrubbed block, the cause line or the no-cause fallback, and the surrounding text is kept"
 else fail "gd_apt_out_tail H5: workflow-command openers not defused" "still-live=${_h5bad:-none} a=[$(printf '%s' "$_h5a" | tr '\n' '|' | head -c 200)] b=[$(printf '%s' "$_h5b" | tr '\n' '|' | head -c 100)]"; fi
 
@@ -573,7 +583,7 @@ while IFS= read -r _l; do
   [ -n "$_l" ] || continue
   _lit="${_l#*arm_skip \"}"; _lit="${_lit%%\$\{*}"       # the literal text before the first expansion
   # shellcheck disable=SC2016  # literal source text
-  printf '%s\n' "$_l" | grep -qE 'arm_skip "(T5|S1|T17|S2)[^$]*\$\{(S1_APT|S1_NOTE|_t5m_apt|_t17m_apt)\}' && [ "${#_lit}" -le 200 ] || _h7_bad="${_h7_bad} [${_l:0:70}… literal-before-field=${#_lit}]"
+  grep -qE 'arm_skip "(T5|S1|T17|S2)[^$]*\$\{(S1_APT|S1_NOTE|_t5m_apt|_t17m_apt)\}' <<<"$_l" && [ "${#_lit}" -le 200 ] || _h7_bad="${_h7_bad} [${_l:0:70}… literal-before-field=${#_lit}]"
 done <<< "$_h7_sites"
 # shellcheck disable=SC2016  # literal source text
 _h7_note=$(printf '%s\n' "$_h7_src" | grep -c 'S1_NOTE="\${S1_APT}; ' || true)
