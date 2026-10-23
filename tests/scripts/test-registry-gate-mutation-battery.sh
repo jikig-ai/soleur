@@ -394,9 +394,13 @@ mutate "G18 A2 rehearsal failure ignored for every enumerated exit code" gate \
   'if (( restore_rc != 0 )); then' \
   'if (( restore_rc > 100 )); then'
 
-mutate "G18b A2 exit-78 arm renumbered so 78 falls into the unenumerated arm" gate \
+mutate "G26 A2 exit-78 arm renumbered so 78 falls into the unenumerated arm" gate \
   '78) abort A2 "the rehearsal failed with exit 78' \
   '77) abort A2 "the rehearsal failed with exit 78'
+
+mutate "G27 A2 exit-5 arm loses the local-login cause" gate \
+  'EITHER the throwaway rejected the rehearsal credential OR the sink login command failed locally on the runner;' \
+  'the throwaway rejected the rehearsal credential;'
 
 mutate "G19 A2 missing restore engine no longer aborts" gate \
   '[[ -x "$RESTORE" ]] || abort A2 ' ': # '
@@ -644,8 +648,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 66 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 66. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 68 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 68. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 

@@ -3603,7 +3603,8 @@ jobs:
         # best-effort restore whose failure does not fail the job would leave the window open
         # while the run reported green.
         env:
-          # DOPPLER_TOKEN, not DOPPLER_TOKEN_PRD: the CLI does not know the _PRD suffix (history: rationale runbook, registry_store_restore).
+          # DOPPLER_TOKEN, not DOPPLER_TOKEN_PRD: the CLI does not know the _PRD suffix. History: "Why the restore step
+          # names DOPPLER_TOKEN" in the registry_store_restore section of the rationale runbook.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
           GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -3665,14 +3666,15 @@ jobs:
           # exit codes consumed as a single boolean would be a contract nobody can act on.
           case "$rc" in
             0) echo "restore: production's full required pin set is present and blob-verified in the rebuilt store." ;;
-            2) echo "::error::restore FAILED exit 2 (SOURCE unavailable) — GHCR could not be read, so there is nothing to restore from, OR the runner's ghcr.io login command failed locally. Read the engine's own ::error:: line above first: a login command that failed locally is runner tooling (crane version, DOCKER_CONFIG), not GHCR; otherwise check the job's 'packages: read' permission and GHCR's status. The store is EMPTY. This is NOT proof the images were deleted." ;;
+            2) echo "::error::restore FAILED exit 2 (SOURCE unavailable) — GHCR could not be read, so there is nothing to restore from, OR the runner's ghcr.io login command failed locally. This step did not measure which: read the engine's own ::error:: line above first. A login command that failed locally points at runner tooling (crane version, DOCKER_CONFIG); otherwise check the job's 'packages: read' permission and GHCR's status. The store is EMPTY or only partly refilled. This is NOT proof the images were deleted." ;;
             3) echo "::error::restore FAILED exit 3 (SINK unavailable) after ${max} attempts — the rebuilt registry did not accept the write and the tunnel did not converge within the backoff. The store is EMPTY. Verify the registry host is serving, then re-run this job." ;;
             4) echo "::error::restore FAILED exit 4 (VERIFICATION mismatch) — images were copied but a digest did not match, a blob is missing, or a signature is absent. The store contents are NOT trustworthy. Do not deploy; re-run this job and read the per-entry lines above." ;;
-            # DO NOT reinstate "rotate ZOT_PUSH_*" here; the registry_store_restore section of the rationale runbook says why.
-            5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — read the engine's own ::error:: line above first. If the sink login command failed locally, that is runner tooling (crane version, DOCKER_CONFIG): fix it, rotating changes nothing. Otherwise the sink rejected the credential or it was unreadable, and retrying will not clear it. Do NOT rotate ZOT_PUSH_* as a first response: /etc/zot/htpasswd is baked once at boot from the ISOLATED soleur-registry/prd config, so rotating converts a possibly-transient rejection into a guaranteed one until the host is replaced. MEASURE FIRST, no SSH: 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK', then read htpasswd_push_matches on the NEWEST boot_id. Follow the runbook section 'If the sink rejects the credential'." ;;
+            # DO NOT reinstate "rotate ZOT_PUSH_*" here; see "Why the exit-5 annotation must not say rotate" in the
+            # registry_store_restore section of the rationale runbook.
+            5) echo "::error::restore FAILED exit 5 (CREDENTIAL unusable) — read the engine's own ::error:: line above first; this step did not measure which cause applies. If it says the sink login command failed locally, that points at runner tooling (crane version, DOCKER_CONFIG) and rotating changes nothing. Otherwise the sink rejected the credential or it was unreadable, and retrying will not clear it. Do NOT rotate ZOT_PUSH_* as a first response: /etc/zot/htpasswd is baked once at boot from the ISOLATED soleur-registry/prd config, so rotating converts a possibly-transient rejection into a guaranteed one until the host is replaced. MEASURE FIRST, no SSH: 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_DISK', then read htpasswd_push_matches on the NEWEST boot_id. Follow the runbook section 'If the sink rejects the credential'." ;;
             6) echo "::error::restore FAILED exit 6 (COULD NOT CLASSIFY) — the engine hit a failure it could not name. Read the crane stderr in the per-entry line above before acting; do not assume the images are absent." ;;
-            78) echo "::error::restore FAILED exit 78 (TRACED INVOCATION) — the engine refused to run under xtrace with a registry credential in the environment, before any network call, so this attempt wrote nothing and the store is unchanged from before it. Remove the trace (bash -x, set -x, SHELLOPTS, BASH_ENV) and re-run this job." ;;
-            *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every exit code of the restore engine is supposed to be enumerated, so this is itself a defect worth filing alongside the recovery." ;;
+            78) echo "::error::restore FAILED exit 78 (TRACED INVOCATION) — the engine refused to run under xtrace with a registry credential in the environment, before any network call, so this attempt wrote nothing and the store is still EMPTY. Remove the trace (bash -x, an exported SHELLOPTS=xtrace, or a BASH_ENV file that sets -x); a re-run replays this same workflow file, so if the trace is in it, fix it in a new commit first." ;;
+            *) echo "::error::restore FAILED with an unenumerated exit ${rc}. Every documented exit code of the restore engine is enumerated above (exit 1 is a known gap, #10932), so this is itself a defect worth filing alongside the recovery." ;;
           esac
           exit "$rc"
 

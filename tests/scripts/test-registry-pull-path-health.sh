@@ -282,17 +282,36 @@ fi
 
 # Every restore exit code must abort the gate — the rehearsal is the PASS condition, so any
 # failure of it is a failure to establish authorisation. Each code must also be ENUMERATED: the
-# gate's own `A2 ABORT` line names `exit <code>` and is not the `unenumerated` fallthrough. The
-# assertions read that one line only, because the restore stub's output is printed too and must
-# neither satisfy nor poison them. Exit 1 is deliberately absent from this list (it has its own
-# arm, and the workflow-side gap for it is tracked in #10932); 78 is the xtrace refusal.
-for code in 2 3 4 5 6 78; do
+# gate's own `A2 ABORT` line names `exit <code>` and is not the `unenumerated` fallthrough, and
+# the arms for 2, 5 and 78 carry their meaning (the local-login cause; the traced invocation).
+# The assertions read the gate's own `::error::` line only, anchored at column 0: the restore
+# stub's output is printed too, indented, and must neither satisfy nor poison them.
+#
+# The code list is DERIVED from the engine's header table (the same rows the workflow suite's W9
+# reads), plus 1: the gate has an arm for the engine's input fault that the header does not list
+# (the workflow side of exit 1 is tracked in #10932). Code 0 is the success row, not a failure.
+ENGINE="${ROOT}/scripts/registry-restore-from-ghcr.sh"
+a2_codes="1 $(awk '/^[^#]/ { exit } /^#[[:space:]]+[0-9]+[[:space:]][[:space:]]+[A-Za-z]/ { if ($2 != 0) print $2 }' "$ENGINE" | tr '\n' ' ')"
+a2_n=$(wc -w <<<"$a2_codes")
+if [[ "$a2_n" -ge 7 ]]; then
+  pass "A2: the exit-code list is derived from the engine header ($a2_n codes: $a2_codes)"
+else
+  fail "the engine header must yield at least 7 failure codes for the A2 loop (1 + six header rows)" "$a2_n" "$a2_codes"
+fi
+for code in $a2_codes; do
   W="$(world "$TMP/w-a2-$code")"
   restore_stub "$W/restore" "$code"
   out="$(run_gate "$W")"; rc=$?
-  abort_line="$(printf '%s\n' "$out" | grep -F 'A2 ABORT' | head -1)"
-  if [[ "$rc" -ne 0 ]] && grep -qE "exit ${code}[^0-9]" <<<"$abort_line" \
-     && ! grep -qF "unenumerated" <<<"$abort_line"; then
+  abort_line="$(printf '%s\n' "$out" | grep -E '^::error::registry-pull-path-health: A2 ABORT' | head -1)"
+  ok=1
+  [[ "$rc" -ne 0 ]] || ok=0
+  grep -qE "exit ${code}[^0-9]" <<<"$abort_line" || ok=0
+  ! grep -qiF "unenumerated" <<<"$abort_line" || ok=0
+  case "$code" in
+    2|5) grep -qiF 'failed locally' <<<"$abort_line" || ok=0 ;;
+    78)  grep -qiF 'traced invocation' <<<"$abort_line" || ok=0 ;;
+  esac
+  if [[ "$ok" -eq 1 ]]; then
     pass "A2: rehearsal exit $code => ABORT, enumerated (no authorisation without a proven restore)"
   else
     fail "a failed rehearsal (exit $code) must abort the gate with an enumerated message" "$rc" "$out"

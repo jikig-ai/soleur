@@ -323,77 +323,116 @@ else
   _report "W8 every doppler-calling step supplies a token (${_dop_seen} steps inspected)" ok
 fi
 
-# ── W9: every exit code the restore engine documents has its OWN arm in the restore step. ────
+# ── W9: every exit code the restore engine documents has its OWN arm in the restore step's `case`. ──
 # The restore step maps the engine's exit code to one operator-facing `::error::` line. Exit 78
 # (the engine refusing to run traced) had no arm and fell into the `*)` text that calls it "a
 # defect worth filing", and the arms for 2 and 5 kept describing only the older meaning. Nothing
 # pinned the enumeration: the gate suite's loop asserts only `rc != 0`, which the fallthrough
-# also satisfies. So the population is DERIVED from the engine's own header table, and every
-# member must have one explicit arm before `*)`.
+# also satisfies.
 #
-# Exit 1 is deliberately OUTSIDE this population: the engine header does not list it, and its
-# workflow arm is tracked in #10932. Do not "fix" a failure here by adding 1 to the list.
+# What this pins is the chain rc -> `case "$rc"` -> one echo line -> `exit "$rc"`, not merely that
+# a labelled line exists somewhere in the step: the arms are read from INSIDE the one
+# `case "$rc" in ... esac` block, `rc=$?` must be captured before it, nothing may assign `rc`
+# inside it, and `exit "$rc"` must follow it. Each arm must be a single `echo "..." ;;` (nothing
+# between the closing quote and `;;`, so no redirect or second command), and its tokens are read
+# from the message only, never from a trailing comment. It does not grade the prose beyond those
+# tokens.
+#
+# The population is DERIVED: the engine's header table must equal the codes its own `die N` /
+# `exit N` sites emit (minus 1, below), and every member needs an arm. Exit 1 is deliberately
+# OUTSIDE it: the engine does not list 1, and the workflow arm for it is tracked in #10932. Once
+# #10932 adds a header row and an arm for 1 this guard picks it up on its own; do not add 1 here.
+#
+# w9_check <step body> <engine text>: prints one problem per line; no output means the contract holds.
+# The four controls below drive it with a body or engine it must refuse (a guard that has never
+# been shown to say no has not said yes).
 RESTORE_ENGINE="${ROOT}/scripts/registry-restore-from-ghcr.sh"
+RESTORE_ENGINE_TEXT="$(cat "$RESTORE_ENGINE" 2>/dev/null)"
 RESTORE_BODY="$(_step_body "Restore production's pinned image set from GHCR")"
-_w9_codes() {
-  # The header table runs from the shebang to the first non-comment line. The pattern needs
-  # whitespace AFTER the digits and a letter after that, so prose such as `#   1. as a REHEARSAL`
-  # (digit then a dot) is not a table row.
-  awk '/^[^#]/ { exit } /^#[[:space:]]+[0-9]+[[:space:]]+[A-Za-z]/ { print $2 }' "$RESTORE_ENGINE"
-}
-w9_problems=""
-w9_codes="$(_w9_codes)"
-w9_count="$(printf '%s\n' "$w9_codes" | grep -c '^[0-9][0-9]*$')"
-if [[ ! -f "$RESTORE_ENGINE" ]]; then
-  w9_problems="the restore engine is missing at ${RESTORE_ENGINE}"
-elif [[ -z "$RESTORE_BODY" ]]; then
-  w9_problems="the restore step body extracted empty (step renamed?)"
-elif [[ "$w9_count" -lt 7 ]]; then
-  w9_problems="the engine header table yielded ${w9_count} codes, expected at least 7 (header reshaped?)"
-else
-  w9_star="$(grep -nE '^[[:space:]]*\*\)[[:space:]]' <<<"$RESTORE_BODY" | head -1 | cut -d: -f1)"
-  if [[ -z "$w9_star" ]]; then
-    w9_problems="the restore step has no *) fallthrough arm"
+w9_check() {
+  local body="$1" engine="$2" hdr emit code ncase cs es region star pre post last pat cnt hit line arm msg
+  [[ -n "$engine" ]] || { echo "the restore engine is missing or empty at ${RESTORE_ENGINE}"; return; }
+  [[ -n "$body" ]] || { echo "the restore step body extracted empty (step renamed?)"; return; }
+  # The header table is the leading comment block: rows are `#   N  LABEL` (two or more spaces
+  # after the code, which prose such as `#   1. as a REHEARSAL` or `#   10 attempts` lacks). The
+  # block ends at the first line that is neither a comment nor blank.
+  hdr="$(awk '/^[^#]/ { exit } /^#[[:space:]]+[0-9]+[[:space:]][[:space:]]+[A-Za-z]/ { print $2 }' <<<"$engine" | sort -un)"
+  if [[ "$(grep -c . <<<"$hdr")" -lt 7 ]]; then
+    echo "the engine header table yielded fewer than 7 codes (header reshaped?)"; return
   fi
-  for w9_code in $w9_codes; do
-    if [[ "$w9_code" == 0 ]]; then
+  emit="$(grep -vE '^[[:space:]]*#' <<<"$engine" | grep -oE '(^|[^A-Za-z0-9_])(die|exit) [0-9]+' | grep -oE '[0-9]+$' | sort -un | grep -vx 1)"
+  if [[ "$hdr" != "$emit" ]]; then
+    echo "the engine header table (${hdr//$'\n'/ }) differs from the codes its die/exit sites emit, minus 1 (${emit//$'\n'/ })"
+  fi
+  read -r ncase cs es < <(awk '/^[[:space:]]*case "\$rc" in[[:space:]]*$/ { n++; if (n == 1) { cs = NR; inr = 1; next } } inr && /^[[:space:]]*esac[[:space:]]*$/ { es = NR; inr = 0 } END { printf "%d %d %d\n", n, cs, es }' <<<"$body")
+  if [[ "$ncase" != 1 || "$cs" -le 0 || "$es" -le "$cs" ]]; then
+    echo "expected exactly one case \"\$rc\" in ... esac block in the restore step, found ${ncase} (open at ${cs}, close at ${es})"; return
+  fi
+  region="$(sed -n "$((cs + 1)),$((es - 1))p" <<<"$body")"
+  pre="$(sed -n "1,$((cs - 1))p" <<<"$body")"
+  post="$(sed -n "$((es + 1)),\$p" <<<"$body" | grep -vE '^[[:space:]]*$' | head -1)"
+  last="$(grep -E '^[[:space:]]*rc=' <<<"$pre" | tail -1)"
+  grep -qE 'rc=\$\?[[:space:]]*$' <<<"$last" || echo "the last rc assignment before the case is not the rc=\$? capture"
+  if grep -qE '(^|[^A-Za-z0-9_])rc=' <<<"$region"; then echo "something assigns rc inside the case block"; fi
+  if ! grep -qE '^[[:space:]]*exit "\$rc"[[:space:]]*$' <<<"$post"; then echo "the line after esac is not exit \"\$rc\""; fi
+  star="$(grep -nE '^[[:space:]]*\*\)[[:space:]]' <<<"$region" | head -1 | cut -d: -f1)"
+  [[ -n "$star" ]] || echo "the case has no *) fallthrough arm"
+  for code in $hdr; do
+    if [[ "$code" == 0 ]]; then
       # The success arm prints a plain `restore:` line and can carry no ::error:: text.
-      w9_pat='^[[:space:]]*0\)[[:space:]]+echo '
+      pat='^[[:space:]]*0\)[[:space:]]+echo "'
     else
-      w9_pat="^[[:space:]]*${w9_code}\\)[[:space:]]+echo .*::error::restore FAILED exit ${w9_code}[^0-9]"
+      pat="^[[:space:]]*${code}\\)[[:space:]]+echo \".*::error::restore FAILED exit ${code}[^0-9]"
     fi
-    w9_hit="$(grep -nE -- "$w9_pat" <<<"$RESTORE_BODY" | head -1)"
-    w9_line="${w9_hit%%:*}"
-    w9_arm="${w9_hit#*:}"
-    if [[ -z "$w9_hit" ]]; then
-      w9_problems="${w9_problems}${w9_problems:+; }no explicit arm for exit ${w9_code}"
-      continue
+    cnt="$(grep -cE -- "$pat" <<<"$region")"
+    if [[ "$cnt" != 1 ]]; then echo "exit ${code} has ${cnt} explicit arms inside the case (want exactly 1)"; continue; fi
+    hit="$(grep -nE -- "$pat" <<<"$region")"; line="${hit%%:*}"; arm="${hit#*:}"
+    if [[ -n "$star" && "$line" -ge "$star" ]]; then echo "the arm for exit ${code} is after *) so it is unreachable"; fi
+    if ! grep -qE '"[[:space:]]+;;[[:space:]]*(#.*)?$' <<<"$arm"; then
+      echo "the arm for exit ${code} is not a single echo ending in \" ;;"; continue
     fi
-    if [[ -n "$w9_star" && "$w9_line" -ge "$w9_star" ]]; then
-      w9_problems="${w9_problems}${w9_problems:+; }the arm for exit ${w9_code} is after *) so it is unreachable"
-    fi
-    if grep -qiF 'unenumerated' <<<"$w9_arm"; then
-      w9_problems="${w9_problems}${w9_problems:+; }the arm for exit ${w9_code} uses the unenumerated wording"
-    fi
-    case "$w9_code" in
-      2|5) grep -qiF 'failed locally' <<<"$w9_arm" \
-             || w9_problems="${w9_problems}${w9_problems:+; }the arm for exit ${w9_code} does not name the local login failure" ;;
-      78)  grep -qiF 'traced invocation' <<<"$w9_arm" \
-             || w9_problems="${w9_problems}${w9_problems:+; }the arm for exit 78 does not say traced invocation" ;;
+    msg="$(sed -E 's/^[[:space:]]*[0-9]+\)[[:space:]]+echo "//; s/"[[:space:]]+;;[[:space:]]*(#.*)?$//' <<<"$arm")"
+    if grep -qiF 'unenumerated' <<<"$msg"; then echo "the arm for exit ${code} uses the unenumerated wording"; fi
+    case "$code" in
+      2|5) grep -qiF 'failed locally' <<<"$msg" || echo "the arm for exit ${code} does not name the local login failure" ;;
+      78)  grep -qiF 'traced invocation' <<<"$msg" || echo "the arm for exit 78 does not say traced invocation" ;;
     esac
   done
-fi
+}
+w9_problems="$(w9_check "$RESTORE_BODY" "$RESTORE_ENGINE_TEXT")"
+w9_count="$(awk '/^[^#]/ { exit } /^#[[:space:]]+[0-9]+[[:space:]][[:space:]]+[A-Za-z]/ { n++ } END { print n + 0 }' <<<"$RESTORE_ENGINE_TEXT")"
 if [[ -z "$w9_problems" ]]; then
-  _report "W9 every engine exit code (${w9_count} from the header) has its own arm in the restore step" ok
+  _report "W9 every engine exit code (${w9_count} from the header) has its own arm in the restore step's case" ok
 else
-  _report "W9 every engine exit code has its own arm in the restore step" fail "$w9_problems"
+  _report "W9 every engine exit code has its own arm in the restore step's case" fail "${w9_problems//$'\n'/; }"
 fi
+
+# W9 controls: each feeds the checker a body or engine it MUST refuse, built from the real ones so
+# they stay in step with their shape, and requires the refusal to name the right thing.
+w9_ctl_no78="$(grep -vE '^[[:space:]]*78\)[[:space:]]+echo ' <<<"$RESTORE_BODY")"
+w9_ctl_subject="${RESTORE_BODY/case \"\$rc\" in/case \"\$zz\" in}"
+w9_ctl_dead="$(awk -v arm="$(grep -E '^[[:space:]]*78\)[[:space:]]+echo ' <<<"$RESTORE_BODY")" '
+  $0 == arm { next }
+  /^[[:space:]]*case "\$rc" in[[:space:]]*$/ { print "if false; then"; print arm; print "fi" }
+  { print }' <<<"$RESTORE_BODY")"
+w9_ctl_reset="$(awk '/^[[:space:]]*case "\$rc" in[[:space:]]*$/ { print "rc=0" } { print }' <<<"$RESTORE_BODY")"
+w9_ctl_engine="${RESTORE_ENGINE_TEXT}"$'\n''die 7 "a code the header does not list"'
+w9_ctl() { # <label> <expected token in the refusal> <body> <engine text>
+  local out; out="$(w9_check "$3" "$4")"
+  if [[ -n "$out" ]] && grep -qF -- "$2" <<<"$out"; then _report "W9 control: $1" ok
+  else _report "W9 control: $1" fail "expected a refusal naming '$2', got: ${out:-<nothing>}"; fi
+}
+w9_ctl "dropping the 78 arm is refused" "exit 78" "$w9_ctl_no78" "$RESTORE_ENGINE_TEXT"
+w9_ctl "a case on another variable is refused" "case" "$w9_ctl_subject" "$RESTORE_ENGINE_TEXT"
+w9_ctl "an arm moved into a dead branch above the case is refused" "exit 78" "$w9_ctl_dead" "$RESTORE_ENGINE_TEXT"
+w9_ctl "an rc reset between the retry loop and the case is refused" "rc=" "$w9_ctl_reset" "$RESTORE_ENGINE_TEXT"
+w9_ctl "an engine code missing from its header is refused" "differs" "$RESTORE_BODY" "$w9_ctl_engine"
 
 # ── Anti-vacuity assertion floor ────────────────────────────────────────────────────────────
 # Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
 # suite asserting nothing is byte-indistinguishable from one that passed, because `fails` is a
 # single unguarded integer. Pinned EXACTLY: a `>=` re-opens the hole on the next added row.
-EXPECTED_ASSERTIONS=24
+EXPECTED_ASSERTIONS=29
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"
