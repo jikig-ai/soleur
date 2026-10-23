@@ -261,3 +261,41 @@ commit ...` rather than trusting the hook's current-directory resolution.
 Use `pipeline-tally.sh show` to read counts; `status` is unsupported. The
 fix-round seat resolver accepts canonical seat names, so use
 `code-simplicity-reviewer`, not the informal `simplicity` label.
+
+## Addendum — 2026-10-23 bounded worktree lookup and validation paths
+
+Resolve the active feature spec by searching for a unique known manifest digest
+or exact feature slug; do not guess its folder name. When running validation
+from a worktree root, use repository-root-relative paths, and when running from
+an app directory, use app-relative paths. A failed path lookup exits before
+validation and must be corrected before reporting test status. Vitest's
+configured root also rejects absolute test paths outside that root; in isolated
+sandboxes, set `--root` to the sandbox app and pass its test path relative to
+that root.
+
+Migration filenames in an active feature may have suffixes that differ from
+the table or RPC name. Use `rg --files apps/web-platform/supabase/migrations |
+rg <migration-number-or-token>` before opening a guessed filename; the failed
+`169_codex_history_transfer_acknowledgment.sql` lookup stopped before further
+inspection.
+
+When running multiple checks, keep each command's working directory and paths
+consistent: `apps/web-platform/scripts/dev-ledger-parity.test.sh` is invoked
+from the repository root, while the same script is `scripts/dev-ledger-parity.test.sh`
+from the app directory. If a migration-parity fixture reports refusal-set
+drift after adding a `.down.sql`, inspect its pinned literal and include the new
+file only after reviewing its refusal classification; do not treat the harness
+failure as a feature migration failure.
+
+For a malformed patch-tool hunk, re-read the exact target block and rebuild the
+whole hunk; a rejected patch changes nothing and must not be reported as applied.
+
+Static SQL tests that compare statement order must search within the specific
+function body; an anchored global search can select the same statement from an
+earlier function and fail despite correct SQL. For PostgreSQL function grants,
+an integration call under `SET ROLE` is clearer than fixture catalog privilege
+introspection; this fixture's aggregate check returned false for a valid grant.
+
+Run Vitest from `apps/web-platform`, not the repository root: the root command
+recurses into ignored `.soleur/candidate-*` worktrees and produces duplicate
+test discoveries. The failed root run did not test the target suite.

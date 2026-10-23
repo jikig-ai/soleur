@@ -164,6 +164,8 @@ describe("Codex real production handler boundary", () => {
     fixture.generation = 1;
     fixture.rpc.mockImplementation(async (name: string) => name === "codex_history_transfer_acknowledged"
       ? { data: false, error: null }
+      : name === "issue_codex_history_transfer_notice"
+        ? { data: true, error: null }
       : { data: null, error: null });
 
     const frames = await chat();
@@ -179,6 +181,11 @@ describe("Codex real production handler boundary", () => {
       p_conversation_id: fixture.conversationId,
       p_auth_mode_generation: 1,
     });
+    expect(fixture.rpc).toHaveBeenCalledWith("issue_codex_history_transfer_notice", {
+      p_conversation_id: fixture.conversationId,
+      p_auth_mode_generation: 1,
+      p_member_user_id: fixture.userId,
+    });
     expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
     expect(fixture.from).not.toHaveBeenCalledWith("api_keys");
     expect(fixture.from).not.toHaveBeenCalledWith("messages");
@@ -186,6 +193,23 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.sendUserMessage).not.toHaveBeenCalled();
     expect(fixture.startAgentSession).not.toHaveBeenCalled();
     expect(fixture.dispatchSoleurGo).not.toHaveBeenCalled();
+  });
+
+  it("does not send an acknowledgment notice unless server issuance is recorded", async () => {
+    fixture.mode = "managed";
+    fixture.generation = 1;
+    fixture.rpc.mockImplementation(async (name: string) => name === "codex_history_transfer_acknowledged"
+      ? { data: false, error: null }
+      : name === "issue_codex_history_transfer_notice"
+        ? { data: false, error: null }
+        : { data: null, error: null });
+
+    const frames = await chat();
+
+    expect(frames).not.toContainEqual(expect.objectContaining({ type: "codex_history_transfer_required" }));
+    expect(frames).toContainEqual(expect.objectContaining({ type: "error" }));
+    expect(fixture.spawn).not.toHaveBeenCalled();
+    expect(fixture.sendUserMessage).not.toHaveBeenCalled();
   });
 
   it("records the active member's acknowledgment for the exact conversation generation", async () => {

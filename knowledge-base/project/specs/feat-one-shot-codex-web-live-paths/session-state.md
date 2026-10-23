@@ -2702,3 +2702,41 @@
 - Focused verification: migration runner 12/12; local TLS listener 9/9; `dev-ledger-parity.test.sh` 269/269; Shell syntax, Ruff, and `git diff --check` pass. The offline qualification wrapper ran but remains red at two source-identity assertions because its runner pins await independent fix-round review; all preceding offline fixture suites passed. No shared DB query, migration, reconciliation, provider request, or feature-flag mutation occurred.
 - Exact-head CI at `9df5c82` previously failed the expected draft-light aggregate, shared dev tenant parity for legacy rows 149–152 vs renamed 169–172 (10 violations, no write), and CodeQL alerts (critical partial SSRF and medium response splitting in `local_tls.py`). Fix commit `03fbd401fb01378abcce1aa8c805a3d847267297` is pushed. Its exact-head CodeQL run is still in progress; tenant parity again failed before any preflight/apply step, preserving the no-write hold. The path-based fix review remains the next required gate.
 - Remaining holds: shared-ledger parity/reconciliation, exact-head CodeQL and full CI, source-bound review-pin refresh only after independent review, authenticated QA, recovery, runtime/profile qualification, mode-specific CLO/legal review, preflight, final full review/ship gates. Keep PR draft and auto-merge disarmed.
+
+### Continuation — transactional latest-run tie guard and acknowledgment issuance — 2026-10-23
+
+- CTO ruled that migration 165's timestamp-tie refusal must be repeated inside
+  the migration transaction after `workspace_engine_settings` is locked, with
+  `agent_engine_runs` locked in SHARE mode. The shell preflight remains an early
+  diagnostic; applied migration 165 bytes stay immutable. The injected guard
+  now locks both tables and rejects conflicting latest auth-mode ties. A new
+  test runs through the migration runner using the real migration-165 bytes and
+  asserts lock ordering, SQL tie predicate, and execution before the body.
+- The correct validation invocation passed: 32 files / 106 tests for the
+  configured Vitest run, shell syntax, ShellCheck on the runner, and diff check.
+  Earlier invalid relative paths stopped before tests; the lookup guidance is
+  recorded in the workflow learning.
+- CLO assessment found authenticated owner RPC calls can record acknowledgments
+  without notice issuance, and the plan's member wording exceeds today's
+  owner-only dispatch contract. CTO ruled to add one-use server-side notice
+  issuance keyed by member, conversation, and auth-mode generation, created
+  only when the server sends the notice and consumed by acknowledgment. Keep
+  owner-only while dispatch remains owner-only. Issuance is service-role-only;
+  authenticated users cannot create the receipt directly. The issuance proves
+  server delivery, not visual reading. The legal gate stays closed.
+- Implemented migration 173 with private one-use issuance storage, service-role
+  issue RPC, and atomic issue-consume-ack flow; updated the WebSocket server to
+  record issuance before sending the notice. The disposable PostgreSQL integration
+  verifies authenticated issue is denied, service-role issue succeeds,
+  acknowledgment without issuance fails, the issued acknowledgment succeeds once,
+  replay fails, and owner/membership/generation fences remain intact. Focused
+  acknowledgment/handler suites pass; migration integration passes 1/1;
+  `dev-ledger-parity.test.sh` passes 269/269 after reviewing and pinning the new
+  rollback's refusal classification. TypeScript, ShellCheck, syntax, and diff
+  checks pass. The focused integration used an isolated temporary database and
+  cleaned it up; no shared-data query or mutation occurred.
+- Source and documentation changes remain uncommitted and require the second
+  targeted fix-round review and fresh-eyes verification. No shared database
+  migrations, provider calls, or qualification occurred. PR remains draft with
+  auto-merge off; hosted-data parity, exact-head CodeQL/full CI, legal,
+  recovery, QA, qualification, preflight, review, and shipping gates remain held.

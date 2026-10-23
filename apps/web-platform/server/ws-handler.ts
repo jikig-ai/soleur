@@ -1333,13 +1333,27 @@ async function dispatchCodexChatTurn(
       throw new Error("Codex history-transfer acknowledgment could not be verified");
     }
     if (historyTransferAcknowledged !== true) {
-      if (sessions.get(userId) === sourceSession && sourceSession.conversationId === conversationId) sendToClient(userId, {
-        type: "codex_history_transfer_required",
-        conversationId,
-        authModeGeneration,
-        authMode: binding.authMode === "api-key" || binding.authMode === "managed" ? binding.authMode : undefined,
-        clientTurnId,
-      });
+      const { data: noticeIssued, error: noticeIssueError } = await createServiceClient().rpc(
+        "issue_codex_history_transfer_notice",
+        {
+          p_conversation_id: conversationId,
+          p_auth_mode_generation: authModeGeneration,
+          p_member_user_id: userId,
+        },
+      );
+      assertCurrent();
+      if (noticeIssueError || noticeIssued !== true) {
+        throw new Error("Codex history-transfer notice could not be recorded");
+      }
+      if (sessions.get(userId) === sourceSession && sourceSession.conversationId === conversationId) {
+        sendToClient(userId, {
+          type: "codex_history_transfer_required",
+          conversationId,
+          authModeGeneration,
+          authMode: binding.authMode === "api-key" || binding.authMode === "managed" ? binding.authMode : undefined,
+          clientTurnId,
+        });
+      }
       return;
     }
   }

@@ -259,6 +259,10 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     const values = await rolledBackRaw(sql, async (t) => {
       await t`set local role authenticated`;
       await t.unsafe("select set_config('request.jwt.claims', $1, true)", [buildAuthenticatedClaims({ sub: ctx.userA })]);
+      const [issued] = await t.unsafe(
+        "select public.issue_codex_history_transfer_notice($1::uuid, $2::bigint) as value",
+        [ctx.convA, ctx.engineAuthModeGenerationA],
+      );
       const [recorded] = await t.unsafe(
         "select public.record_codex_history_transfer_acknowledgment($1::uuid, $2::bigint) as value",
         [ctx.convA, ctx.engineAuthModeGenerationA],
@@ -267,9 +271,9 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
         "select public.codex_history_transfer_acknowledged($1::uuid, $2::bigint) as value",
         [ctx.convA, ctx.engineAuthModeGenerationA],
       );
-      return [recorded.value, acknowledged.value];
+      return [issued.value, recorded.value, acknowledged.value];
     });
-    expect(values, "fixture must prove both RPCs accept A's valid current-generation acknowledgment").toEqual([true, true]);
+    expect(values, "fixture must prove issuance, acknowledgment, and lookup accept A's valid current generation").toEqual([true, true, true]);
   });
 
   // authorize_template bespoke attack (#6307 Item 2). founder-scoped write: the

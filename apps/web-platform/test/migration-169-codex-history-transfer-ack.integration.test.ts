@@ -10,6 +10,8 @@ const container = isCi
 const migration = path.join(__dirname, "../supabase/migrations/169_codex_history_transfer_ack.sql");
 const ownershipHardening = path.join(__dirname, "../supabase/migrations/170_codex_history_ack_owner_scope.sql");
 const ownershipRollback = path.join(__dirname, "../supabase/migrations/170_codex_history_ack_owner_scope.down.sql");
+const noticeIssuance = path.join(__dirname, "../supabase/migrations/173_codex_history_notice_issuance.sql");
+const noticeIssuanceRollback = path.join(__dirname, "../supabase/migrations/173_codex_history_notice_issuance.down.sql");
 const docker = (args: string[], input?: string, timeout = 10_000) => spawnSync("docker", args, {
   encoding: "utf8",
   input,
@@ -67,6 +69,8 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
       const migrationSql = readFileSync(migration, "utf8");
       const ownershipHardeningSql = readFileSync(ownershipHardening, "utf8");
       const ownershipRollbackSql = readFileSync(ownershipRollback, "utf8");
+      const noticeIssuanceSql = readFileSync(noticeIssuance, "utf8");
+      const noticeIssuanceRollbackSql = readFileSync(noticeIssuanceRollback, "utf8");
       const output = runSql(database, `
         CREATE SCHEMA auth;
         CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
@@ -104,6 +108,9 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         SELECT has_table_privilege('service_role', 'public.codex_history_transfer_acknowledgments', 'SELECT');
         SELECT has_table_privilege('authenticated', 'public.codex_history_transfer_acknowledgments', 'SELECT');
         SELECT has_table_privilege('anon', 'public.codex_history_transfer_acknowledgments', 'SELECT');
+        SELECT coalesce(bool_or(has_function_privilege('authenticated', p.oid, 'EXECUTE')), false)
+          FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.proname = 'issue_codex_history_transfer_notice';
         INSERT INTO public.users VALUES
           ('30000000-0000-4000-8000-000000000001'),
           ('30000000-0000-4000-8000-000000000002');
@@ -126,6 +133,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         VALUES ('40000000-0000-4000-8000-000000000001',
           '30000000-0000-4000-8000-000000000002', 3, '2026-09-01T00:00:00Z');
         ${ownershipHardeningSql}
+        ${noticeIssuanceSql}
         SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
         -- Another member of the SAME workspace cannot acknowledge the owner's conversation.
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
@@ -139,9 +147,27 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         SELECT public.record_codex_history_transfer_acknowledgment(
           '40000000-0000-4000-8000-000000000001', 3
         );
+        SET ROLE service_role;
+        SELECT public.issue_codex_history_transfer_notice(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001'
+        );
+        RESET ROLE;
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3
+        );
         SELECT public.codex_history_transfer_acknowledged(
           '40000000-0000-4000-8000-000000000001', 3
         );
+        SELECT public.record_codex_history_transfer_acknowledgment(
+          '40000000-0000-4000-8000-000000000001', 3
+        );
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
+        SET ROLE service_role;
+        SELECT public.issue_codex_history_transfer_notice(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000002'
+        );
+        RESET ROLE;
+        SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000001';
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
         SELECT public.record_codex_history_transfer_acknowledgment(
           '40000000-0000-4000-8000-000000000001', 3
@@ -167,6 +193,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         DELETE FROM public.workspace_members WHERE user_id = '30000000-0000-4000-8000-000000000001';
         DELETE FROM public.users WHERE id = '30000000-0000-4000-8000-000000000001';
         SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
+        ${noticeIssuanceRollbackSql}
         -- Migration 170 rollback must not restore workspace-only acknowledgment scope.
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
         ${ownershipRollbackSql}
@@ -178,7 +205,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         );
       `);
 
-      expect(output.split("\n")).toEqual(["t", "f", "f", "0", "f", "f", "t", "t", "f", "0", "f", "t", "f", "t", "0", "f", "f"]);
+      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "0", "f", "f", "f", "t", "t", "t", "f", "f", "f", "0", "f", "f", "f", "f", "0", "f", "f"]);
     } finally {
       if (databaseCreated) {
         const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);

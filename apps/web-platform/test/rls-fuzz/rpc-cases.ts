@@ -58,6 +58,8 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   count_codex_conversation_rebinds: (c) => `select count_codex_conversation_rebinds('${c.wsA}','api-key')`,
   record_codex_history_transfer_acknowledgment: (c) =>
     `select record_codex_history_transfer_acknowledgment('${c.convA}',${c.engineAuthModeGenerationA})`,
+  issue_codex_history_transfer_notice: (c) =>
+    `select issue_codex_history_transfer_notice('${c.convA}',${c.engineAuthModeGenerationA},auth.uid())`,
   codex_history_transfer_acknowledged: (c) =>
     `select codex_history_transfer_acknowledged('${c.convA}',${c.engineAuthModeGenerationA})`,
   set_workspace_default_engine: (c) => `select set_workspace_default_engine('${c.wsA}','claude-code','managed')`,

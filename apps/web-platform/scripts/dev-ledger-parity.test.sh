@@ -4199,7 +4199,8 @@ set_of() { awk -F'\t' -v c="$1" '{ n = split($2, a, ","); for (i = 1; i <= n; i+
 got_txn=$(set_of transaction-control); got_nontx=$(set_of non-transactional); got_later=$(set_of later-row-sensitive)
 got_bs=$(set_of backslash); got_unp=$(set_of unparseable)
 # The pinned sets (the stored value of this guard). Main's baseline was measured 2026-09-29 over 102 files;
-# the later-row-sensitive set below includes this PR's shared-object redefinition downs:
+# the later-row-sensitive set below includes this PR's shared-object redefinition downs,
+# including the acknowledgment-contract rollback introduced by this change:
 # every top-level BEGIN;/COMMIT; on main is ONE wrapping pair, which the writer
 # normalizes away, so no file is transaction-control; 132_drop_unused_indexes.down.sql
 # mentions CONCURRENTLY only in a comment, so no file is non-transactional; the
@@ -4272,6 +4273,7 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 168_codex_lifecycle_lock_order.down.sql
 170_codex_history_ack_owner_scope.down.sql
 172_agent_engine_erasure_lock_order.down.sql
+173_codex_history_notice_issuance.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \

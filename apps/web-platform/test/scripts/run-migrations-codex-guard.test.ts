@@ -118,6 +118,25 @@ esac
     expect(result.sql).toBe("");
   });
 
+  it("checks latest auth-mode ties while migration 165 excludes run writers", () => {
+    const migrationPath = path.resolve(__dirname, "../../supabase/migrations/165_codex_auth_mode_rebind.sql");
+    const migrationSql = readFileSync(migrationPath, "utf8");
+    const result = captureApply("165_codex_auth_mode_rebind.sql", false, [], { "165_codex_auth_mode_rebind.sql": migrationSql });
+    expect(result.status, result.output).toBe(0);
+    const settingsLock = result.sql.search(/^LOCK TABLE public\.workspace_engine_settings IN ACCESS EXCLUSIVE MODE;$/m);
+    const runsLock = result.sql.search(/^LOCK TABLE public\.agent_engine_runs IN SHARE MODE;$/m);
+    const tieGuard = result.sql.search(/^DO \$codex_auth_mode_tie_guard\$$/m);
+    const tiePredicate = result.sql.search(/^\s+HAVING count\(DISTINCT r\.auth_mode\) > 1$/m);
+    const migrationBody = result.sql.search(/^ALTER TABLE public\.agent_engine_attempts$/m);
+    expect(settingsLock).toBeGreaterThan(0);
+    expect(runsLock).toBeGreaterThan(settingsLock);
+    expect(tieGuard).toBeGreaterThan(runsLock);
+    expect(tiePredicate).toBeGreaterThan(tieGuard);
+    expect(migrationBody).toBeGreaterThan(tiePredicate);
+    expect(result.sql).toMatch(/^\s+AND r\.created_at = \(\s*$/m);
+    expect(result.sql).toMatch(/^\s+SELECT max\(latest\.created_at\)$/m);
+  });
+
   it("keeps authenticated RPC execution closed across migrations 169 and 170", () => {
     const migrations = path.resolve(__dirname, "../../supabase/migrations");
     const migrationBodies = Object.fromEntries([
