@@ -11,6 +11,7 @@ tags:
   - methodology
   - solo-founder
   - build-in-public
+  - pillar
 ---
 
 If you use AI tools to run parts of your business, you have already made a quiet bargain: you stopped checking every line, because checking every line is the job you were trying to stop doing. The leverage is real. So is the question underneath it — what if it's wrong?
