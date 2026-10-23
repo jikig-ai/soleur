@@ -34,3 +34,6 @@ dedup: ~40 raw -> 20 unique. structural-cause roll-up: W9 asserts the PRESENCE o
 | stubs name no subsection / preamble lacks ### contract / long lines | relocation pointer wording | architecture, codequality, githistory | review: stubs + preamble |
 | battery floor 66 vs 67; G18b id | battery floor | pattern | review: floor 67, id G26 |
 | runbook relocated block "here"; "names rotation" stale in gate header, ADR-169, recut runbook; "Six codes" count; restore-suite header count | stale prose siblings | pattern, githistory, codequality | review: sweep |
+
+## Review fix round 1 (fix commit 017c22e838) and CTO amendment
+Round 1 (7 targeted seats over the fix diff) closed the original P2s and found new defects in the W9 rewrite (nested arm, extra command inside an arm, exit-1 comment false, thin control coverage, text parse unable to prove the chain). The CTO agent amended F3 (see decision-challenges.md): W9 is now a behavioural run of the step body. Battery floor is 70 (G26-G29). Accepted/not fixed: engine line 657 "Nothing was copied" and workflow arm 3 "The store is EMPTY" are pre-existing wording about exits the engine/arm 3 own (engine unchanged by ruling); shell-level codes (126/127/137/143) reach `*)` which prints the number; computed `die "$x"` codes are invisible to the regex-read population (W9 comment states the limit).

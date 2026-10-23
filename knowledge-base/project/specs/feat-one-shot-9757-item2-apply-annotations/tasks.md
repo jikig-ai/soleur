@@ -11,8 +11,8 @@ Branch: `feat-one-shot-9757-item2-apply-annotations` | Umbrella: #9757 (Ref only
 
 ## Phase 1: Failing tests first
 
-- 1.1 In `tests/scripts/test-registry-d10-workflow-wiring.sh` add W9 as one aggregate assertion with a shared arm-extraction helper: header-derived codes (pattern `^#[[:space:]]+[0-9]+[[:space:]]+[A-Za-z]` up to the first non-comment line, floor >= 7, code 0 included), explicit arm line per code before `*)`, tokens (`locally` in arms 2 and 5, `trace` in arm 78, no `unenumerated` in an explicit arm). Add the comment that exit 1 is outside the population (#10932). Bump `EXPECTED_ASSERTIONS` to the measured count (expected 24).
-- 1.2 In `tests/scripts/test-registry-pull-path-health.sh` change the A2 loop to `2 3 4 5 6 78` and assert the output contains `exit $code` and does not contain `unenumerated`.
+- 1.1 In `tests/scripts/test-registry-d10-workflow-wiring.sh` add W9 as one aggregate assertion (amended in review to a behavioural run of the step body, see decision-challenges.md): header-derived codes (pattern `^#[[:space:]]+[0-9]+[[:space:]]+[A-Za-z]` up to the first non-comment line, floor >= 7, code 0 included), explicit arm line per code before `*)`, tokens (`locally` in arms 2 and 5, `trace` in arm 78, no `unenumerated` in an explicit arm). Add the comment that exit 1 is outside the population (#10932). Bump `EXPECTED_ASSERTIONS` to the measured count (expected 24).
+- 1.2 In `tests/scripts/test-registry-pull-path-health.sh` derive the A2 loop's codes from the shared header extractor plus 1 and assert the output contains `exit $code` and does not contain `unenumerated`.
 - 1.3 Run both against the unmodified workflow and gate; capture the RED output (W9 names 78 missing; the loop fails for 78) for the PR body.
 
 ## Phase 2: Core implementation
@@ -21,7 +21,7 @@ Branch: `feat-one-shot-9757-item2-apply-annotations` | Umbrella: #9757 (Ref only
 - 2.2 Workflow restore step: rewrite arms `2)` and `5)` (read the engine's `::error::` line first; keep the rotate guard and the measure-first command scoped to the rejected-credential cause), add one-line `78)` (no `BASH_XTRACEFD`), keep every arm a single `::error::restore FAILED exit N` echo line, reword the three stale count comments.
 - 2.3 Byte funding: move the `DO NOT reinstate "rotate ZOT_PUSH_*"` comment to a `###` subsection under `## registry_store_restore` in `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md`, leaving a one-line stub with the exact `DO NOT reinstate` text and NO `# Rationale:` prefix. If net bytes are still above the Phase 0 figure, move the DOPPLER_TOKEN history comment the same way; then shorten arms. Never raise the gate.
 - 2.4 Runbook `registry-luks-recut-6929.md`: rewrite only the 78 row's last sentence.
-- 2.5 Battery: add row G18b (anchor `78) abort A2 "the rehearsal failed with exit 78`, replacement renumbering to 77) to `tests/scripts/test-registry-gate-mutation-battery.sh`.
+- 2.5 Battery: add rows G26-G29 (renamed from the planned G18b; anchors `78) abort A2 "the rehearsal failed with exit 78`, replacement renumbering to 77) to `tests/scripts/test-registry-gate-mutation-battery.sh`.
 
 ## Phase 3: Verification
 

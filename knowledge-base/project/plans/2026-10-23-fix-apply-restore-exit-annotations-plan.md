@@ -366,3 +366,8 @@ Run rows 1, 3 and 6 in a scratch copy of the tree and paste the result; rows 2, 
 - `_step_body` matches the step by name prefix with an apostrophe in it; confirm the awk `index()` match returns non-empty before trusting W9 (the vacuity floor).
 - `EXPECTED_ASSERTIONS` must be re-measured after adding rows, never guessed (`2026-08-09` learning recorded a guessed floor that was wrong).
 - Comments sit between `case` arms in this step already; moving the `DO NOT reinstate` comment must leave the stub with the exact `DO NOT reinstate "rotate ZOT_PUSH_*"` text so the guard stays visible at the edit site.
+
+
+## Amendment 2026-10-23 (review fix round 1)
+
+The shipped W9 is a BEHAVIOURAL guard, not the text parse this plan describes: it runs the restore step's real `run:` body with the tools and the engine stubbed, once per code, and asserts step status, emitted annotation and engine call count. Reason and ruling: `decision-challenges.md` row "F3 amended". Consequences for the text above: EXPECTED_ASSERTIONS is 34 (W9 plus nine step-mutation controls plus one engine control), the battery rows are G26-G29 (not G18b) with dispatch floor 70, the gate suite and W9 share `tests/scripts/lib/restore-engine-header.sh`, and exit 1 is always exercised but never compared (header-vs-emit comparison drops 1 on both sides).

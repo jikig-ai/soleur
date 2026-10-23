@@ -40,6 +40,8 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/../.." && pwd)"
 GATE="${ROOT}/scripts/registry-pull-path-health.sh"
+# shellcheck source=tests/scripts/lib/restore-engine-header.sh
+source "${DIR}/lib/restore-engine-header.sh"
 
 TMP="$(mktemp -d)" || { echo "harness: mktemp -d failed — refusing to report a verdict" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
@@ -287,11 +289,12 @@ fi
 # The assertions read the gate's own `::error::` line only, anchored at column 0: the restore
 # stub's output is printed too, indented, and must neither satisfy nor poison them.
 #
-# The code list is DERIVED from the engine's header table (the same rows the workflow suite's W9
-# reads), plus 1: the gate has an arm for the engine's input fault that the header does not list
-# (the workflow side of exit 1 is tracked in #10932). Code 0 is the success row, not a failure.
+# The code list is DERIVED from the engine's header table by the extractor the workflow suite's W9
+# also reads (tests/scripts/lib/restore-engine-header.sh), with that lib's exit-1 rule: the header's
+# non-zero codes UNION {1}, deduped, so exit 1 is exercised whether or not the header lists it (the
+# gate has an arm for the engine's input fault; the workflow side is tracked in #10932).
 ENGINE="${ROOT}/scripts/registry-restore-from-ghcr.sh"
-a2_codes="1 $(awk '/^[^#]/ { exit } /^#[[:space:]]+[0-9]+[[:space:]][[:space:]]+[A-Za-z]/ { if ($2 != 0) print $2 }' "$ENGINE" | tr '\n' ' ')"
+a2_codes="$({ echo 1; restore_header_codes < "$ENGINE"; } | sort -un | tr '\n' ' ')"
 a2_n=$(wc -w <<<"$a2_codes")
 if [[ "$a2_n" -ge 7 ]]; then
   pass "A2: the exit-code list is derived from the engine header ($a2_n codes: $a2_codes)"
@@ -318,7 +321,7 @@ for code in $a2_codes; do
   fi
 done
 
-# The per-code operator action must be reachable from the gate's own output, or the six
+# The per-code operator action must be reachable from the gate's own output, or the
 # enumerated codes are a contract nobody can act on.
 W="$(world "$TMP/w-a2-msg")"
 restore_stub "$W/restore" 3

@@ -144,8 +144,8 @@ remedy was the dispatch you were already running.
 What still covers each half: the **Cloudflare Access edge** credential survives the destroy and is
 graded pre-destroy by A4, which ABORTS on a measured dead count. The **htpasswd** credential does
 not survive the destroy, and is exercised post-destroy by `registry_store_restore` against the host
-it actually applies to — with a non-retryable exit `5` that routes to the measure-first section and says not to rotate first (see the
-restore exit-code table below).
+it actually applies to — with a non-retryable exit `5` that routes to the measure-first section
+and says not to rotate first (see the restore exit-code table below).
 
 ---
 
@@ -481,14 +481,15 @@ doppler run -p soleur -c prd_terraform -- \
 
 #### Restore exit codes — one operator action each
 
-`scripts/registry-restore-from-ghcr.sh` enumerates every failure it can have. Codes consumed
+`scripts/registry-restore-from-ghcr.sh` enumerates every failure it can have except exit 1 (input
+faults, #10932). Codes consumed
 as a single boolean would be a contract nobody can act on, so each maps to exactly one action.
 The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 
 | Code | Meaning | What to do |
 |---|---|---|
 | `0` | Every required reference restored **and** blob-verified, signature present. | Nothing. The window is closed. |
-| `2` | **Source unavailable** — GHCR could not be read. | Treat the store as unverified: a signature-read failure comes after the copy, so earlier entries may already be in it. Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. A message beginning *the crane login command for ghcr.io ... failed locally* means the login COMMAND failed on the runner (e.g. a crane without `--password-stdin`, a missing crane, an unwritable `DOCKER_CONFIG`); it is not a statement about the images. |
+| `2` | **Source unavailable** — GHCR could not be read. | Treat the store as unverified: exit 2 can fire after earlier entries were copied (while resolving a later entry's source, or reading a signature). Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. A message beginning *the crane login command for ghcr.io ... failed locally* means the login COMMAND failed on the runner (e.g. a crane without `--password-stdin`, a missing crane, an unwritable `DOCKER_CONFIG`); it is not a statement about the images. |
 | `3` | **Sink unavailable** — the registry did not accept the write. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
 | `4` | **Verification failed OR the engine could not verify the shape** — a digest mismatched (including the new GHCR↔sink *signature* digest parity check), a blob is missing (including an *attestation* or *signature-bundle* child's blob), a **layer's content does not match its declared mediaType**, a signature is absent, or the engine met an artifact shape it declines to walk (see the ENGINE-CAPABILITY note below). | **Read the message before deploying anything — exit 4 now covers two different situations.** If the message names a digest mismatch, a missing blob or an absent signature, the store contents are not trustworthy: do not deploy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format failure names **two causes the engine cannot tell apart**: the bytes really do disagree with the declared mediaType (corruption), OR the layer is legitimately not gzip (an uncompressed/zstd layer, or a child this engine failed to classify as an attestation) — a validator artifact. The message carries the discriminating command: re-run the identical `crane validate --remote` against `ghcr.io/<repo>@<child-digest>`; if GHCR fails the same way the store is fine. Also reaches exit 4: an index whose child list is empty, a child with no digest, a **nested** index child, an index with no platform child at all, an attestation manifest declaring no blobs, a sink manifest whose `.manifests` is not an array, and a sink manifest that is not JSON. For those SHAPE failures "re-run the job" is the wrong advice — they reproduce identically; capture the per-entry line and file it. |
 | `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not** retryable. | Retrying only burns the window. **Do NOT start by rotating anything** — see "If the sink rejects the credential" immediately below. A message beginning *the crane login command for the sink ... failed locally* means the login COMMAND failed on the runner (e.g. a crane without `--password-stdin`, a missing crane, an unwritable `DOCKER_CONFIG`); read the quoted crane line before rotating anything. |
@@ -522,8 +523,8 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 **Read this before touching Doppler.** The obvious move — rotate `ZOT_PUSH_*` — is the one that can
 make this permanent. `/etc/zot/htpasswd` is baked **once, at boot**, from the Doppler tokens
 (`cloud-init-registry.yml` §2g). A rotation therefore leaves the running host authenticating
-against a value no client still presents: it converts a possibly-transient rejection into a
-guaranteed one, until the host is replaced again. Hand-editing Doppler does **not** re-bake a
+against a value no client still presents: it makes the rejection permanent, until the
+host is replaced again. Hand-editing Doppler does **not** re-bake a
 running host — and note the exit-5 message names `soleur/prd` while the host bakes from the
 isolated `soleur-registry/prd`.
 
