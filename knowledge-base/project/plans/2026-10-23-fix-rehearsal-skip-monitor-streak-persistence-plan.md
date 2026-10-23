@@ -608,12 +608,12 @@ operations, sales and support: no implications (internal CI monitor). No user-fa
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `grep -c 'actions/cache' .github/workflows/scheduled-rehearsal-skip-monitor.yml` prints `0`; the suite's wiring section reports the "no evictable store" property green.
-- [ ] AC2: `bash scripts/monitor-streak-state.test.sh` (script cases and wiring section) exits 0; each mutation row in Guard Contract 1 and 2 turns its guarding case RED when applied to a sandbox copy (the suites run the rows themselves).
-- [ ] AC3: `actionlint .github/workflows/scheduled-rehearsal-skip-monitor.yml`, `python3 scripts/lint-workflow-step-env-refs.py`, `python3 scripts/lint-workflow-issue-write-scope.py`, `python3 scripts/lint-gh-argv-arg.py`, `python3 -I scripts/lint-shell-trace-credential-refusal.py scripts/monitor-streak-state.sh`, `bash scripts/alarm-issue-filing-guard.test.sh`, `bash scripts/lint-orphan-test-suites.sh`, `shellcheck` on the new shell files, and `bash plugins/soleur/test/c4-count-parity.test.sh` all pass.
-- [ ] AC4: the unit suite's end-to-end chain row passes: a restored value `2` reaches the real probe (broken `gh`), which prints `consecutive transient runs: 3/3` and exits 1; with no restored state the same probe exits 2 at `1/3`.
-- [ ] AC5: `fetch` against a fake listing that fails returns exit 1 and never writes `matched=false` (the unreadable-store versus empty-store distinction is pinned).
-- [ ] AC6: `grep -rn 'monitor-streak-cache-roundtrip' --include='*' . | grep -v 'knowledge-base/project/\(plans\|specs\)/archive'` shows only the past-tense comment in `git-data-boot-poll-8178.sh`; the baseline row is gone.
+- [x] AC1: `grep -c 'actions/cache' .github/workflows/scheduled-rehearsal-skip-monitor.yml` prints `0`; the suite's wiring section reports the "no evictable store" property green.
+- [x] AC2: `bash scripts/monitor-streak-state.test.sh` (script cases and wiring section) exits 0; each mutation row in Guard Contract 1 and 2 turns its guarding case RED when applied to a sandbox copy (the suites run the rows themselves).
+- [x] AC3: `actionlint .github/workflows/scheduled-rehearsal-skip-monitor.yml`, `python3 scripts/lint-workflow-step-env-refs.py`, `python3 scripts/lint-workflow-issue-write-scope.py`, `python3 scripts/lint-gh-argv-arg.py`, `python3 -I scripts/lint-shell-trace-credential-refusal.py scripts/monitor-streak-state.sh`, `bash scripts/alarm-issue-filing-guard.test.sh`, `bash scripts/lint-orphan-test-suites.sh`, `shellcheck` on the new shell files, and `bash plugins/soleur/test/c4-count-parity.test.sh` all pass.
+- [x] AC4: the unit suite's end-to-end chain row passes: a restored value `2` reaches the real probe (broken `gh`), which prints `consecutive transient runs: 3/3` and exits 1; with no restored state the same probe exits 2 at `1/3`.
+- [x] AC5: `fetch` against a fake listing that fails returns exit 1 and never writes `matched=false` (the unreadable-store versus empty-store distinction is pinned).
+- [x] AC6: `grep -rn 'monitor-streak-cache-roundtrip' --include='*' . | grep -v 'knowledge-base/project/\(plans\|specs\)/archive'` shows only the past-tense comment in `git-data-boot-poll-8178.sh`; the baseline row is gone.
 - [ ] AC7: ADR-296 exists (ordinal re-verified against `origin/main`), ADR-188's carrier note points to it, and `decision-challenges.md` is rendered into the PR body; #10917 is referenced with `Ref`, not `Closes`.
 
 ### Post-merge (agent-run, Phase 5)
