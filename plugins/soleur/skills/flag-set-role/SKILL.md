@@ -210,7 +210,7 @@ This is the migration verb (#4617), not a routine flip — it moves a feature of
 
 ## Sharp edges
 
-- Agent-runnable regression for the existing-override update arm: `bash plugins/soleur/test/flip-update-existing-override.test.sh` (no TTY, stubbed network). The pty-driven suites (`flag-detach-shared`, `flag-org-scoping-pr2`) cannot run inside an agent session because the ack guard refuses a typed `yes` there. The stubbed run proves the request body shape; only the operator's typed-yes run followed by the `soleur:flag-list` read-back proves Flagsmith accepts it live.
+- Agent-runnable regression for the existing-override update arm: `bash "${CLAUDE_PLUGIN_ROOT}/test/flip-update-existing-override.test.sh"` (no TTY, stubbed network). The pty-driven suites (`flag-detach-shared`, `flag-org-scoping-pr2`) cannot run inside an agent session because the ack guard refuses a typed `yes` there. The stubbed run proves the request body shape; only the operator's typed-yes run followed by the `soleur:flag-list` read-back proves Flagsmith accepts it live.
 - The cache TTL in `apps/web-platform/lib/feature-flags/server.ts` is 30s per role. After a flip, the new state propagates per replica within 30s. Skill prints this hint after a successful flip.
 - The `dev off` rejection (Step 4) catches the case where prd is currently on AND you want to remove the dev cohort's preview. The correct sequence is: flip `prd off` first (which auto-flips both segments off via env-var mirror semantics, sort of), then leave dev where you want it. The plan's `dev off / prd on` case is intentionally unreachable.
 - Doppler mirror writes (Step 8) happen sequentially: dev first, then prd. If dev write fails, prd is not attempted (avoids cross-config divergence). Exit code 4.
