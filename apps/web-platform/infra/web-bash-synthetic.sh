@@ -362,10 +362,11 @@ _psel=""
 if [ -n "${SBV_JSON:-}" ]; then
   _psel="$(printf '%s' "$SBV_JSON" | jq -r '.selector // ""' 2>/dev/null || true)"
   _m="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_missing // "-") | tostring' 2>/dev/null || echo -)"
-  case "$_m" in ''|*[!0-9]*) MASKS="-" ;; *) MASKS="$_m" ;; esac
-  # masks_created: one digit 0-4 (the probe's closed set has four dirs). masks_note: a WHOLE-string match against the closed enum, so
-  # an embedded newline (command substitution strips only a trailing one) or any other text is `-`; never derived from errno text or a
-  # path and never fed to detail=. An old probe emits neither field: both read `-`.
+  # masks_missing and masks_created: one digit 0-4 (the probe's closed set has four dirs), whole-string; anything else is `-`.
+  # masks_note: a WHOLE-string match against the closed enum, so an embedded newline (command substitution strips only a trailing one)
+  # or any other text is `-`; never derived from errno text or a path and never fed to detail=. An old probe emits neither
+  # masks_created nor masks_note: both read `-`.
+  case "$_m" in [0-4]) MASKS="$_m" ;; *) MASKS="-" ;; esac
   _c="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_created // "-") | tostring' 2>/dev/null || echo -)"
   case "$_c" in [0-4]) MCREATED="$_c" ;; *) MCREATED="-" ;; esac
   _n="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_note // "-") | tostring' 2>/dev/null || echo -)"

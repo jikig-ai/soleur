@@ -121,7 +121,12 @@ const CHILD_KILLED_SIGNATURE = /exited with code (137|143)\b|\bSIGKILL\b|\bSIGTE
  *  CLAUDE_CODE_TMPDIR / TMPDIR: `/tmp/cc-socks`, the CLI's `/tmp/cc-socks-<uid>` fallback and the shared-HOME transcript
  *  dir (server/agent-runner-sandbox-config.ts `peerMessagingSocketDirs` / `sessionTranscriptDirs`). */
 export function maskedDirs(uid, home) {
-  return ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${home}/.claude/projects`];
+  return ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, transcriptDir(home)];
+}
+
+/** The shared-HOME transcript dir: the one masked dir whose path derives from HOME. */
+export function transcriptDir(home) {
+  return `${home}/.claude/projects`;
 }
 
 /** The CLI temp base the builder pre-creates and denies (server/agent-session-tmp.ts `AGENT_SESSION_TMP_ROOT`), a literal pinned to it
@@ -135,20 +140,25 @@ export function precreateDirs(uid, home) {
 }
 
 // ---- PID 1 (the uid and HOME guards of ensureMaskedDirs) ------------------------------------------------------------------------
-// The synthetic execs as the container's own user (no `-u`), and the production app is PID 1. A dir the probe creates must be one the
-// app can use, so creation happens only when the probe's uid is PID 1's REAL uid. `/proc/1/environ` holds every app secret, so it is
-// read narrowly: capped, only five names looked at, only two booleans come out, the buffer is zero-filled, nothing is logged.
+// The synthetic execs as the container's own user (no `-u`). PID 1 is the container's init (`docker --init` / tini) running as that same
+// user, and the app is its child, so PID 1's uid and HOME stand in for the app's. A dir the probe creates must be one the app can use,
+// so creation happens only when the probe's uid is PID 1's REAL and EFFECTIVE uid. `/proc/1/environ` holds every app secret, so it is
+// read narrowly: capped, only five names looked at, only two booleans come out, the buffer is zero-filled (on every path, including a
+// throw mid-read), nothing is logged.
 
-/** Largest `/proc/1/environ` read accepted; a read that reaches it is unreadable, never parsed. */
+/** Largest `/proc/1/environ` read accepted. A read of exactly this many bytes is parsed; a read of MORE is unreadable and never parsed.
+ *  readPid1 asks for PID1_ENV_CAP + 1 bytes, so a file that fits is distinguishable from one that was cut. */
 export const PID1_ENV_CAP = 256 * 1024;
 
-/** PID 1's REAL uid: the FIRST field of the `Uid:` line of /proc/1/status text. undefined when it cannot be read. */
-export function parsePid1Uid(text) {
+/** PID 1's REAL and EFFECTIVE uid: the FIRST two fields of the `Uid:` line of /proc/1/status text (`Uid: real effective saved fs`).
+ *  undefined when either cannot be read. */
+export function parsePid1Uids(text) {
   if (typeof text !== "string") return undefined;
-  const m = /^Uid:[ \t]+(\d+)(?=[ \t\n]|$)/m.exec(text);
+  const m = /^Uid:[ \t]+(\d+)[ \t]+(\d+)(?=[ \t\n]|$)/m.exec(text);
   if (!m) return undefined;
-  const n = Number(m[1]);
-  return Number.isSafeInteger(n) ? n : undefined;
+  const uid = Number(m[1]);
+  const euid = Number(m[2]);
+  return Number.isSafeInteger(uid) && Number.isSafeInteger(euid) ? { uid, euid } : undefined;
 }
 
 const PID1_BASE_NAMES = ["CLAUDE_CONFIG_DIR", "XDG_RUNTIME_DIR", "CLAUDE_CODE_TMPDIR", "TMPDIR"];
@@ -156,7 +166,7 @@ const PID1_BASE_NAMES = ["CLAUDE_CONFIG_DIR", "XDG_RUNTIME_DIR", "CLAUDE_CODE_TM
 /** What the HOME guard needs from PID 1's environ (a Buffer of NUL-separated NAME=value entries): `homeMatches` (its HOME is exactly
  *  `probeHome`, both absolute) and `divergent` (any of the four other base variables is an absolute path, a base the probe does not
  *  model). Values are compared as bytes and never turned into strings; only the NAME of an entry is ever decoded. null when the read is
- *  unusable (not a buffer, empty, or at/over the cap: a possibly partial entry is never parsed). */
+ *  unusable (not a buffer, empty, or over the cap: a possibly partial entry is never parsed). */
 export function parsePid1Environ(buf, probeHome) {
   if (!Buffer.isBuffer(buf) || buf.length === 0 || buf.length > PID1_ENV_CAP) return null;
   const want = Buffer.from(String(probeHome), "utf8");
@@ -186,31 +196,39 @@ export function parsePid1Environ(buf, probeHome) {
   return { homeMatches, divergent };
 }
 
-function readProcCapped(path, cap) {
+/** Read at most `cap` bytes of `path` (a /proc file, or a fixture in the unit tests; `read` is the injectable readSync). The returned
+ *  Buffer is a view of the bytes read, which the CALLER zero-fills after use (readPid1 does). If the read throws part-way the allocated
+ *  buffer is zero-filled here before the error propagates, so no half-read environment outlives the call. */
+export function readProcCapped(path, cap, read = readSync) {
   const fd = openSync(path, "r");
+  const buf = Buffer.alloc(cap);
+  let done = false;
   try {
-    const buf = Buffer.alloc(cap);
     let n = 0;
     for (;;) {
-      const got = readSync(fd, buf, n, cap - n, null);
+      const got = read(fd, buf, n, cap - n, null);
       if (got <= 0) break;
       n += got;
       if (n >= cap) break;
     }
+    done = true;
     return buf.subarray(0, n);
   } finally {
+    if (!done) buf.fill(0);
     closeSync(fd);
   }
 }
 
-/** PID 1's `{ uid, env }` for the guards: uid is undefined and env is null when the file cannot be read. The readers are injected for the
- *  unit tests; the defaults are the two /proc/1 files, the environ one bounded to `cap` bytes (cap = PID1_ENV_CAP + 1, so a full read is
- *  distinguishable from a read that fit). The environ buffer is zero-filled before returning. */
+/** PID 1's `{ uid, euid, env }` for the guards: uid and euid are undefined and env is null when the file cannot be read. The readers
+ *  (`readStatus`, `readEnviron`) or the two file paths (`statusPath`, `environPath`, so a unit test can run the REAL readers against fixture
+ *  files) are injectable; the defaults are the two /proc/1 files, the environ one bounded to `cap` bytes (cap = PID1_ENV_CAP + 1, so an
+ *  over-cap file is distinguishable from one that fit). The environ buffer is zero-filled before returning. */
 export function readPid1(probeHome, io = {}) {
-  const readStatus = io.readStatus ?? (() => readFileSync("/proc/1/status", "utf8"));
-  const readEnviron = io.readEnviron ?? ((cap) => readProcCapped("/proc/1/environ", cap));
+  const readStatus = io.readStatus ?? (() => readFileSync(io.statusPath ?? "/proc/1/status", "utf8"));
+  const readEnviron = io.readEnviron ?? ((cap) => readProcCapped(io.environPath ?? "/proc/1/environ", cap));
   let uid;
-  try { uid = parsePid1Uid(readStatus()); } catch { uid = undefined; }
+  let euid;
+  try { ({ uid, euid } = parsePid1Uids(readStatus()) ?? {}); } catch { uid = undefined; euid = undefined; }
   let env = null;
   let raw = null;
   try {
@@ -221,13 +239,13 @@ export function readPid1(probeHome, io = {}) {
   } finally {
     if (Buffer.isBuffer(raw)) raw.fill(0);
   }
-  return { uid, env };
+  return { uid, euid, env };
 }
 
 /** Create the missing members of `dirs` the way production does (`buildAgentSandboxConfig`: `mkdirSync(dir, { recursive: true, mode: 0o700 })`)
  *  and report which are not usable afterwards. Pure: every effect is the injected `lstat` / `mkdir` (lstat, never stat: a symlink is not a
  *  directory). Guards, in precedence order, one note at most:
- *    uid_mismatch        the probe's uid is not PID 1's real uid: NO creation (a dir owned by another uid is one the app cannot use)
+ *    uid_mismatch        the probe's uid is not PID 1's real AND effective uid: NO creation (a dir owned by another uid is one the app cannot use)
  *    pid1_unreadable     PID 1's uid is unknown: NO creation
  *    pid1_env_unreadable PID 1's environ is unreadable: the HOME-derived dirs (`homeDirs`) are not created, the rest are
  *    home_mismatch       PID 1's HOME is not the probe's: same
@@ -236,13 +254,12 @@ export function readPid1(probeHome, io = {}) {
  *  fails THAT dir and the loop carries on. A dir is FAILED iff after the pass it is not a real directory, is owned by another uid, or is
  *  still absent. Mode is not asserted. Returns `{ created, failed, note }`. */
 export function ensureMaskedDirs({ dirs, homeDirs = [], uid, pid1, lstat, mkdir }) {
-  const pid1Uid = pid1?.uid;
   const env = pid1?.env;
   let note = null;
   let createAll = true;
   let refuseHome = false;
-  if (pid1Uid !== undefined && pid1Uid !== null && pid1Uid !== uid) { note = "uid_mismatch"; createAll = false; }
-  else if (pid1Uid === undefined || pid1Uid === null) { note = "pid1_unreadable"; createAll = false; }
+  if (typeof pid1?.uid !== "number") { note = "pid1_unreadable"; createAll = false; }
+  else if (pid1.uid !== uid || pid1.euid !== uid) { note = "uid_mismatch"; createAll = false; }
   else if (!env) { note = "pid1_env_unreadable"; refuseHome = true; }
   else if (env.homeMatches !== true) { note = "home_mismatch"; refuseHome = true; }
   else if (env.divergent === true) note = "env_divergence";
@@ -252,7 +269,7 @@ export function ensureMaskedDirs({ dirs, homeDirs = [], uid, pid1, lstat, mkdir 
       const st = lstat(dir);
       return { present: true, ok: st.isDirectory() && st.uid === uid };
     } catch (e) {
-      return e && e.code === "ENOENT" ? { present: false, ok: false } : { present: true, ok: false, unknown: true };
+      return e && e.code === "ENOENT" ? { present: false, ok: false } : { present: true, ok: false };
     }
   };
   let created = 0;
@@ -269,6 +286,13 @@ export function ensureMaskedDirs({ dirs, homeDirs = [], uid, pid1, lstat, mkdir 
     else if (attempted) created++;
   }
   return { created, failed, note };
+}
+
+/** Runtime mode's one creation step, as a function so the unit tests can drive the SAME call runSmoke makes: the closed `plan.precreate` set
+ *  goes in as `dirs`, and the transcript dir (the only one derived from HOME) as `homeDirs`, so the HOME guard can refuse it alone.
+ *  `pid1` is `readPid1(home)`'s value. */
+export function applyRuntimeMasks({ plan, home, uid, pid1, lstat, mkdir }) {
+  return ensureMaskedDirs({ dirs: plan.precreate, homeDirs: [transcriptDir(home)], uid, pid1, lstat, mkdir });
 }
 
 /** The runtime result-JSON fields for an ensureMaskedDirs result (counts and a closed-enum note only; never a path or an errno). */
@@ -546,8 +570,8 @@ async function runSmoke() {
   // Every mode decision lives in planSmoke (pure, unit-tested for both modes). Runtime mode: the host passes the selector NAME it
   // got from the dispatcher's resolver; deploy mode always runs unixdeny. Each masked dir must exist before the namespace is built
   // (the SDK skips a deny landing that does not exist): the deploy smoke runs in a canary that has none, so it creates them; the
-  // runtime synthetic runs in the production container, where `plan.mkdir` is empty and ensureMaskedDirs (below) creates what a real
-  // session has not yet, under the PID-1 uid and HOME guards.
+  // runtime synthetic runs in the production container, where `plan.mkdir` is empty and ensureMaskedDirs (via applyRuntimeMasks, below)
+  // creates what a real session has not yet, under the PID-1 uid and HOME guards.
   const plan = planSmoke({ env: process.env, uid, home });
   if (plan.selectedPath === null) infra("selector_invalid");
   const { runtime, selectorName, selectedPath, masked } = plan;
@@ -598,7 +622,7 @@ async function runSmoke() {
   // Runtime mode: the one creation site. A failed create is DATA (masks_missing), never an infra exit; the sandbox below still gets every
   // masked dir, like production (which keeps an entry in denyRead whether or not its pre-create worked).
   const masksResult = runtime
-    ? ensureMaskedDirs({ dirs: plan.precreate, homeDirs: [`${home}/.claude/projects`], uid, pid1: readPid1(home), lstat: lstatSync, mkdir: mkdirSync })
+    ? applyRuntimeMasks({ plan, home, uid, pid1: readPid1(home), lstat: lstatSync, mkdir: mkdirSync })
     : null;
   // SDK_BASH_PROBE_BPF is a TEST-ONLY override (a dev machine has no /app/infra); ci-deploy.sh never sets it. Any value
   // other than the pinned path reports coverage replay_only, which the verdict treats as a hold, never a pass.
