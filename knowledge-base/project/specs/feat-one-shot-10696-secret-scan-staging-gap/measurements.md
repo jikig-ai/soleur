@@ -34,6 +34,31 @@ Non-gating runs (new hook, same worktree):
 | 5,000 small untracked files | 1319, 1326, 1334 ms (old hook: 913 ms) | cap 5 s: PASS |
 | one 5.3 MB high-entropy untracked text file | 2919, 3624 ms (old hook: 1082 ms) | about 7 s expected: better |
 
+
+## AC13 re-measure on the review-round tree (final tree, short run)
+
+The review round changed the hook (bound prefix, the lexer on every strict commit where perl exists, plan-once,
+fallback-only roots scanned against the real index, sanitised deny text), so AC13 was re-measured with the same method
+as above (`ac13.sh`: scratch worktree of this repo, 5 modified tracked files and 3 untracked files, interleaved
+iterations, order of (b) and (c) alternated), shortened to 16 iterations because the host was busy (load average
+18.8 at the start and 12.7 at the end, gitleaks 8.30.1). The p95 is the 16th of 16 sorted samples (the maximum).
+
+| Series | p50 ms | p95 ms | min ms | max ms | decisions |
+|---|---|---|---|---|---|
+| (a) old hook, staged commit | 1520 | 2232 | 1189 | 2232 | 16 allow |
+| (b) new hook, chained | 1599 | 2570 | 1320 | 2570 | 16 allow |
+| (c) old hook, chained, unstaged | 1477 | 2087 | 1244 | 2087 | 16 allow |
+
+| Statistic | Value |
+|---|---|
+| p95(b) - p95(a) | +338 ms (gate: <= 1500 ms): PASS |
+| paired p50 difference (b - a) | +86 ms (p95 of the paired differences: +367 ms) |
+| p95(b) - p95(c) | +483 ms |
+
+Liveness check in the same worktree with one untracked synthetic PEM file: the new hook denies in 1504 ms and the old
+hook allows in 1483 ms, so (b) really builds and scans the simulated index. The lexer now runs on every strict commit
+where perl exists; the earlier measurement put it at about 13 ms.
+
 ## AC14: lexer-failure ceiling (counts only; limit 0.5 percent) and multi-root frequency
 
 Source: read-only extraction of the Bash command text and cwd of `git commit` tool calls from the local session
