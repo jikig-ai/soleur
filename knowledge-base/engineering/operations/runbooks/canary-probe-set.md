@@ -736,6 +736,8 @@ second, journal-only witness.
   This change does not touch the deploy mode of the probe or that ledger, so the soak clock does not restart and the flag `agent-sandbox-unix-deny`
   stays an operator-typed step (ADR-236).
 
+**Rollback (PR-B).** Revert the squash commit (`git revert --no-commit <sha>`, then a normal PR). Simulated on 2026-10-23 by reverting the branch's whole commit range in a scratch worktree: it applies with no conflicts. Effects of the revert: the Sentry rule `masked-dir-precreate-failed` is destroyed on the next infra apply (the destroy guard will ask for an ack), the synthetic returns to counting dirs without creating them (`masks_missing=3` on a quiet container again), the apt fixture helper goes back to a private cache per container. Dirs the probe already created persist and are harmless.
+
 **Arming.** The beats are born paused. `arm-heartbeats.sh` unpauses each host's beat after a measured ping with a 300 s window and a soft landing.
 Arming is PROBABILISTIC: the cadence is 900 s against a 300 s window, so a healthy synthetic lands a beat inside one apply's window with p ~ 1/3 per
 host, and an unlanded beat is a `::warning::` that is not a fault on its own. The journal separates the cases: `reason=probe_absent` means the image
