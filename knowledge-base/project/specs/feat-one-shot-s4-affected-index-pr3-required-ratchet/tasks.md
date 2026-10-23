@@ -40,7 +40,7 @@ Plan: `knowledge-base/project/plans/2026-10-22-feat-s4-affected-index-pr3-requir
 - 3.2 Add job `affected-index-ratchet` to `.github/workflows/ci.yml` (positive `if:`, `continue-on-error`, `timeout-minutes: 5` alone, `fetch-depth: 2`, select timeout 200, annotation from the step) and update the header sentence.
 - 3.3 Classify the job in `UNGATED_PINNED`, `LIGHT_PINNED`, `ALWAYS_RUN_JOBS`; edit the `scripts/pr-fanout-ledger.txt` ci.yml row (27 to 28); run the consumer suites including the kb-consumers and fixture-relative censuses.
 - 3.4 CI-shape rehearsal: `git clone --depth 2` of a merge-shaped commit, `CI=true`, no `origin/main`.
-- 3.5 Record the first real run (`exit=0 reason=pass`, wall time at most 270 s; the ceilings are provisional) and read the throwaway DRAFT PR canary (one deliberate unbaselined pair in a tracked fixture) for the failing-`continue-on-error` conclusion and its job duration; close it afterwards. PENDING, lead-owned: until it runs, ci.yml, ADR item 6, the runbook and the probe header say the rendering is UNMEASURED; replace those four in one commit.
+- 3.5 Record the first real run (`exit=0 reason=pass`, wall time at most 270 s; the ceilings are provisional) and read the throwaway DRAFT PR canary (one deliberate unbaselined pair in a tracked fixture) for the failing-`continue-on-error` conclusion and its job duration; close it afterwards. DONE 2026-10-23: first run 162 s `exit=0 reason=pass`; canary PR #10899 job `failure` after 110 s (run-level conclusion not isolated); the four wording sites carry the measurement.
 
 ## Follow-through enrollment
 
@@ -73,4 +73,4 @@ Plan: `knowledge-base/project/plans/2026-10-22-feat-s4-affected-index-pr3-requir
 
 - R.1 DONE (docs): ADR-276 amendment items 3 to 6, 8, new 9; runbook sections of part 7; decision-challenges rows 34 to 41; `.gitattributes`; drafted issue bodies for #10865, #10859, #10861 (not posted).
 - R.2 Code (other agent): row-grammar validation (`floor-bad-row`), `floor-unreadable`, `accept-unreadable`, notice list, merge-base helper load, `no-marker` annotation, probe exit codes and read budget.
-- R.3 PENDING, lead-owned: 3.5 canary, 5.4 squash-shaped re-simulation, E.2 enrollment, E.3 label; replace the UNMEASURED wording after the canary.
+- R.3 3.5 canary DONE (wording replaced). PENDING, lead-owned: 5.4 squash-shaped re-simulation, E.2 enrollment, E.3 label.

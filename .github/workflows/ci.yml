@@ -405,9 +405,10 @@ jobs:
   # owner's go-ahead. It runs on pull_request and merge_group only, written positively (the form scripts/probe-merge-group-coverage.sh accepts):
   # a push run would spend about 3.4 billed minutes re-proving a tree the merge_group run of the same SHA already proved. The job is always on for
   # pull_request (drafts, docs-only and bot PRs included): the observation window needs those shapes, and its cost is bounded by the 30-day review trigger.
-  # continue-on-error keeps the pull_request and merge_group RUN conclusions green while the context is not required. How a failing job-level
-  # continue-on-error job renders on the PR check list and in the jobs API is UNMEASURED until the throwaway canary (task 3.5; the result goes in the
-  # runbook observation log); the harness-discovery job below states its own view of that rendering and nothing here relies on it. The deploy coupling
+  # continue-on-error is meant to keep the pull_request and merge_group RUN conclusions green while the context is not required; that is GitHub's documented
+  # behaviour and it is NOT confirmed here (the canary run was red from other jobs). Measured on the throwaway canary (PR 10899, run 39937846319): a failing
+  # job-level continue-on-error job still concludes `failure` in the jobs API and shows as a red check on the PR check list, with its ::error annotation
+  # (runbook observation log); nothing here relies on the run conclusion, and the harness-discovery job below states its own view. The deploy coupling
   # (web-platform-release.yml acts on a PUSH run and refuses a non-success `CI` conclusion) is not live today because this job never runs on push; adding
   # `push` to the `if:` re-activates it. PR3b MUST remove the continue-on-error line in the commit that makes the context required (#8574 says the same
   # for harness-discovery).

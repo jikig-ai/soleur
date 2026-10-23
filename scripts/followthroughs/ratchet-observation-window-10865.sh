@@ -16,8 +16,8 @@
 #       (head branch `canary-*`), a fork PR (head repository is not this repository) and a PR whose file list touches an oracle input (ORACLE below, the
 #       SUT's RATCHET_ORACLE) are excluded from every count, as is a PR run that names no PR;
 #   (b) at least MIN_MG (3) green merge_group units on 3 distinct head SHAs;
-#   (c) green = job `success`... and the marker `exit=0 reason=pass` (the jobs-API conclusion of a failing job-level continue-on-error job is
-#       unsettled in-repo until the canary is read, so the marker is the evidence and the job must have RUN); a genuine `exit=1` (a real new
+#   (c) green = job `success`... and the marker `exit=0 reason=pass` (measured on the PR3a canary: a failing job-level continue-on-error job concludes
+#       `failure` in the jobs API, so both the conclusion and the marker are evidence and the job must have RUN); a genuine `exit=1` (a real new
 #       pair) is NOT green and does NOT restart the window, bot PR or not;
 #   (d) job wall time (completed_at - started_at) over EVERY unit that ran and is not an incident, red and timed-out units included (a ceiling must see the
 #       tail): p95 (nearest rank) at most P95_MAX (210) s and the maximum at most MAX_MAX (270) s. These two ceilings are PROVISIONAL: the only prior
