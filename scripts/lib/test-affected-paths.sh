@@ -2402,6 +2402,13 @@ AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/diagnose-inngest-verify-workflow — the parsed-YAML gate reads its workflow.
+AFFECTED_PLUGINS_SOLEUR_TEST_DIAGNOSE_INNGEST_VERIFY_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/diagnose-inngest-verify.yml"
+  "plugins/soleur/test/diagnose-inngest-verify-workflow.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # Offline qualification contract reads every committed runtime/plugin input.
 AFFECTED_SCRIPTS_LIB_CODEX_QUALIFICATION_TEST_SH_PATHS=(
   "scripts/codex-qualification/"
