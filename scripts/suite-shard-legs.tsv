@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1204
-# generated-at=2026-10-21T08:47:41Z
+# generated-at=2026-10-23T11:42:06Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -390,6 +390,7 @@ scripts/generate-kb-index-live	7
 scripts/ghcr-read-retired-8036	3
 scripts/git-data-boot-poll-8178	4
 scripts/git-data-reboot-evidence-landed-8210	6
+scripts/git-data-rehearsal-evidence-8211	1
 scripts/guard-vacuity-floor	7
 scripts/hosted-destroy-ask-window-9776	8
 scripts/hostname-mislabel-web1-6616	6
@@ -493,6 +494,7 @@ scripts/marketplace-drift-check	7
 scripts/marketplace-manifest-validate	6
 scripts/md-to-mrkdwn	3
 scripts/measure-plan-sharp-edges-turns	3
+scripts/monitor-streak-state	1
 scripts/no-dangling-committed-symlinks	5
 scripts/orphan-process-reaper	4
 scripts/orphan-process-reaper-mutations	5
@@ -644,6 +646,7 @@ tests/scripts/supabase-advisor-scan	7
 tests/scripts/supabase-logs-query	3
 tests/scripts/tenant-integration-gate-verdict	5
 tests/scripts/tmp-purge	7
+tests/scripts/trio-baseline-census	1
 tests/scripts/vector-redeliver-gate	8
 tests/scripts/vector-redeliver-wiring	3
 tests/scripts/vendor-pin-gate-verdict	4
