@@ -204,12 +204,13 @@ This is the migration verb (#4617), not a routine flip — it moves a feature of
 - `0` — success (or `--dry-run` clean).
 - `1` — fallback-fidelity rule violated (caller error), or the operator did not type `yes` (`SOLEUR_BOOTSTRAP_ABORTED stage=ack`; nothing written).
 - `2` — prerequisite missing (Doppler not authed, FLAGSMITH_MANAGEMENT_API_KEY unset, flag not in RUNTIME_FLAGS), a usage error, or an unknown flag (including the removed prompt-skip flag).
-- `3` — Flagsmith API error (network, 5xx, auth).
+- `3` — Flagsmith API error (network, 5xx, auth). On a write run this can fire AFTER the WORM audit row was appended (append-before-flip), so a failed write leaves an audit row with no matching change, and the dev env may already be flipped when the prd call fails: read the state back with `soleur:flag-list --json`, then re-run the same command (a retry appends a second, later audit row) and record the orphan row (what, when, why) in the issue. A `feature_states_to_update … segment: This field is required` response on an existing-override flip means a checkout older than the 2026-10-23 fix: update the branch and re-run.
 - `4` — Doppler write failed (skill aborts — Flagsmith state is now ahead of Doppler; operator must reconcile), or the WORM audit append failed before any write.
 - `64` — a write run with no TTY (`SOLEUR_BOOTSTRAP_INPUT_REQUIRED`): nothing was fetched or changed; hand the command to the operator (above).
 
 ## Sharp edges
 
+- Agent-runnable regression for the existing-override update arm: `bash plugins/soleur/test/flip-update-existing-override.test.sh` (no TTY, stubbed network). The pty-driven suites (`flag-detach-shared`, `flag-org-scoping-pr2`) cannot run inside an agent session because the ack guard refuses a typed `yes` there. The stubbed run proves the request body shape; only the operator's typed-yes run followed by the `soleur:flag-list` read-back proves Flagsmith accepts it live.
 - The cache TTL in `apps/web-platform/lib/feature-flags/server.ts` is 30s per role. After a flip, the new state propagates per replica within 30s. Skill prints this hint after a successful flip.
 - The `dev off` rejection (Step 4) catches the case where prd is currently on AND you want to remove the dev cohort's preview. The correct sequence is: flip `prd off` first (which auto-flips both segments off via env-var mirror semantics, sort of), then leave dev where you want it. The plan's `dev off / prd on` case is intentionally unreachable.
 - Doppler mirror writes (Step 8) happen sequentially: dev first, then prd. If dev write fails, prd is not attempted (avoids cross-config divergence). Exit code 4.

@@ -309,6 +309,8 @@ print('missing')
 flip_segment_in_env() {
   local env_id="$1" feature_id="$2" segment_id="$3" enabled="$4"
   [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
+  [[ "$segment_id" =~ ^[0-9]+$ ]] || { echo "invalid segment id (expected an integer)" >&2; return 1; }
+  [[ "$enabled" == "true" || "$enabled" == "false" ]] || { echo "invalid enabled value (expected true or false)" >&2; return 1; }
 
   local existing_fs_id
   existing_fs_id=$(read_feature_segment_id "$env_id" "$feature_id" "$segment_id")
@@ -319,8 +321,8 @@ flip_segment_in_env() {
     body=$(printf '{"feature_states_to_create":[{"feature_segment":{"segment":%d},"enabled":%s,"feature_state_value":{"type":"unicode","string_value":null,"integer_value":null,"boolean_value":null}}],"feature_states_to_update":[],"segment_ids_to_delete_overrides":[],"publish_immediately":true}' "$segment_id" "$enabled")
   else
     # Existing override: feature_states_to_update referencing the fs_id. Flagsmith requires BOTH
-    # feature_segment.id and feature_segment.segment here (the same object its featurestates read
-    # returns); an {id}-only body is rejected with "segment: This field is required.".
+    # feature_segment.id and feature_segment.segment here: an {id}-only body was rejected live on
+    # 2026-10-23 with "segment: This field is required.".
     body=$(printf '{"feature_states_to_create":[],"feature_states_to_update":[{"feature_segment":{"id":%d,"segment":%d},"enabled":%s,"feature_state_value":{"type":"unicode","string_value":null,"integer_value":null,"boolean_value":null}}],"segment_ids_to_delete_overrides":[],"publish_immediately":true}' "$existing_fs_id" "$segment_id" "$enabled")
   fi
 

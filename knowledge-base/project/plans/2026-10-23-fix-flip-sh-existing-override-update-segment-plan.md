@@ -89,6 +89,8 @@ hazard); this PR adds one declared-edge array to that file and does not touch th
 ## Files to Edit
 
 - `plugins/soleur/skills/flag-set-role/scripts/flip.sh` — update arm of `flip_segment_in_env`: add `"segment":%d` next to `"id":%d` and pass `"$segment_id"`.
+- `plugins/soleur/skills/flag-set-role/SKILL.md` — (review round) exit-3 entry gains the orphan-audit-row recovery and the pre-fix hint; Sharp edges gains the agent-runnable regression pointer.
+- `plugins/soleur/skills/flag-set-role/scripts/flip.sh` — (review round) integer guard on `segment_id` and a `true|false` guard on `enabled` in `flip_segment_in_env`, next to the existing `feature_id` guard; comment reworded to cite the live rejection only.
 - `scripts/lib/test-affected-paths.sh` — declare the new suite's edge to `flip.sh` (same pattern as the `flag-detach-shared` entry, lines around 1375-1379). Unconditional: the suite guards `flip.sh`, so it must run whenever `flip.sh` changes.
 - `scripts/suite-shard-legs.tsv` — add the new suite's shard line (same pattern as `flag-detach-shared.test.sh	5`). Unconditional; the work phase confirms the leg is one CI runs.
 

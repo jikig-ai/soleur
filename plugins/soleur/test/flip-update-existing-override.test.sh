@@ -3,14 +3,16 @@
 #
 # flip_segment_in_env has two arms. The first-time arm creates the override
 # (feature_states_to_create, feature_segment {segment}). The existing-override arm updates it
-# (feature_states_to_update). On 2026-10-23 the update arm sent feature_segment {id} only and
-# Flagsmith answered {"feature_states_to_update":[{"feature_segment":{"segment":["This field is
-# required."]}}]}, so a real flip of an existing override exited 3 with nothing written.
+# (feature_states_to_update). Since the original flag-set-role feature (#4341) the update arm sent
+# feature_segment {id} only; on 2026-10-23 Flagsmith answered {"feature_states_to_update":
+# [{"feature_segment":{"segment":["This field is required."]}}]}, so a real flip of an existing
+# override exited 3 with nothing written.
 #
 # The curl stub below REJECTS an update item whose feature_segment lacks `segment` with that exact
 # JSON, so reverting the fix turns this suite red (a stub that answers 200 to everything cannot).
-# It also parses each accepted body as JSON and requires BOTH ids to equal the stubbed row and
-# segment, so a fix that hard-codes numbers or swaps the two fields fails too.
+# Each accepted body is compared WHOLE against the expected body, with a different feature-segment
+# row id per environment and a non-matching sibling row served first, so a hard-coded id, a
+# first-row read, a cached row id, a dropped field or a wrong `enabled` all fail.
 #
 # The function is extracted from the script by CONTENT (flip.sh runs its main flow when sourced and
 # its write path needs a typed `yes`, which the ack guard refuses inside an agent session by
@@ -21,9 +23,10 @@
 # FLIP may be overridden to test a mutated copy; the copy can sit anywhere (nothing is sourced
 # relative to it).
 set -euo pipefail
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-FLIP="${FLIP:-$REPO_ROOT/plugins/soleur/skills/flag-set-role/scripts/flip.sh}"
-MIN_CHECKS=20
+if [[ -z "${FLIP:-}" ]]; then
+  FLIP="$(git rev-parse --show-toplevel)/plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+fi
+SKILL_SCRIPTS="${SKILL_SCRIPTS:-$(git rev-parse --show-toplevel)/plugins/soleur/skills}"
 fail=0
 checks=0
 
@@ -31,15 +34,18 @@ assert() { # <description> <command...>
   local desc="$1"; shift
   checks=$((checks + 1))
   if ! "$@"; then
-    echo "update-override: FAIL — $desc" >&2
+    echo "flip-update-existing-override: FAIL — $desc" >&2
     fail=1
   fi
 }
 
 STUB_DIR="$(mktemp -d)"; trap 'rm -rf "$STUB_DIR"' EXIT
 
-# Flagsmith stub. Knobs: STUB_DEV_SEG (the segment id served for the override row), STUB_ROW_ID (the
-# existing feature-segment row id), STUB_NO_OVERRIDE=1 (no existing row -> create arm).
+# Flagsmith stub. Knobs: STUB_DEV_SEG (segment id of the override), STUB_ROW_ID (the dev env's
+# feature-segment row id; the prd env's is +1000), STUB_NO_OVERRIDE=1 (no existing row -> create
+# arm), STUB_FORCE_REJECT=1 (reject every version POST with the live error).
+# The feature-segments read answers only the exact query flip.sh must send, and serves a
+# non-matching sibling row FIRST, so a wrong query or a first-row read cannot pass.
 cat > "$STUB_DIR/curl" <<'STUB'
 #!/usr/bin/env bash
 url=""; method="GET"; data=""; prev=""
@@ -50,13 +56,17 @@ for a in "$@"; do
 done
 echo "$method $url" >> "${CURL_LOG:?CURL_LOG not set}"
 SEG="${STUB_DEV_SEG:-102}"; ROW="${STUB_ROW_ID:-555}"
+REJECT='{"feature_states_to_update": [{"feature_segment": {"segment": ["This field is required."]}}]}'
 case "$url" in
   *"/feature-segments/"*)
-    if [[ "${STUB_NO_OVERRIDE:-0}" == "1" ]]; then echo '{"results":[]}'
-    else printf '{"results":[{"id":%s,"segment":%s,"priority":1}]}' "$ROW" "$SEG"; fi
+    re='environment=(90722|90721)&feature=777'
+    if [[ "${STUB_NO_OVERRIDE:-0}" == "1" || ! "$url" =~ $re ]]; then echo '{"results":[]}'; exit 0; fi
+    row="$ROW"; [[ "${BASH_REMATCH[1]}" == "90721" ]] && row=$((ROW + 1000))
+    printf '{"results":[{"id":9999,"segment":%s,"priority":2},{"id":%s,"segment":%s,"priority":1}]}' "$((SEG + 5000))" "$row" "$SEG"
     exit 0 ;;
   *"/versions/"*)
-    if [[ "$method" != "POST" ]]; then echo '{"results":[{"uuid":"v-uuid","is_live":true}]}'; exit 0; fi
+    if [[ "$method" != "POST" ]]; then echo '{"detail":"stub: unexpected non-POST versions request"}'; exit 0; fi
+    if [[ "${STUB_FORCE_REJECT:-0}" == "1" ]]; then echo "$REJECT"; exit 0; fi
     verdict="$(DATA="$data" python3 -c '
 import json, os, sys
 try:
@@ -79,7 +89,7 @@ print(json.dumps({"feature_states_to_update": errs}) if errs else "OK")
       echo "$verdict"
     fi
     exit 0 ;;
-  *) echo '{}'; exit 0 ;;
+  *) echo '{"detail":"stub: unexpected request"}'; exit 0 ;;
 esac
 STUB
 chmod +x "$STUB_DIR/curl"
@@ -93,8 +103,8 @@ extract_fn() { # <name>: from the line "name() {" through the first line that is
 has_construct() { [[ "$(extract_fn "$1")" == *"$2"* ]]; }
 assert "extracted fs_api carries the curl call" has_construct fs_api 'curl'
 assert "extracted read_feature_segment_id carries the feature-segments read" has_construct read_feature_segment_id 'feature-segments'
-assert "extracted flip_segment_in_env carries the update arm" has_construct flip_segment_in_env 'feature_states_to_update'
-assert "extracted flip_segment_in_env carries the create arm" has_construct flip_segment_in_env 'feature_states_to_create'
+assert "extracted flip_segment_in_env carries the existing-row selector" has_construct flip_segment_in_env 'existing_fs_id'
+assert "extracted flip_segment_in_env carries the version POST" has_construct flip_segment_in_env 'versions/'
 
 DRIVER="$STUB_DIR/driver.sh"
 {
@@ -103,52 +113,90 @@ DRIVER="$STUB_DIR/driver.sh"
   extract_fn read_feature_segment_id
   extract_fn flip_segment_in_env
 } > "$DRIVER"
+assert "the extracted driver parses" bash -n "$DRIVER"
 
-new_logs() { CURL_LOG="$(mktemp)"; BODY_LOG="$(mktemp)"; }
+new_logs() { CURL_LOG="$(mktemp "$STUB_DIR/curl.XXXXXX")"; BODY_LOG="$(mktemp "$STUB_DIR/body.XXXXXX")"; }
 
-# One flip per environment, exactly as the role path does (dev env first, then prd env).
+# One flip per environment, exactly as the role path does (dev env first, then prd env), under
+# the same shell options as flip.sh.
 run_flips() { # caller sets STUB_* knobs; <segment-id> <enabled>
   PATH="$STUB_DIR:$PATH" CURL_LOG="$CURL_LOG" BODY_LOG="$BODY_LOG" \
     STUB_DEV_SEG="${STUB_DEV_SEG:-}" STUB_ROW_ID="${STUB_ROW_ID:-}" STUB_NO_OVERRIDE="${STUB_NO_OVERRIDE:-0}" \
-    bash -c 'source "$1"; flip_segment_in_env 90722 777 "$2" "$3" >/dev/null; flip_segment_in_env 90721 777 "$2" "$3" >/dev/null' \
+    STUB_FORCE_REJECT="${STUB_FORCE_REJECT:-0}" \
+    bash -c 'set -euo pipefail; source "$1"; flip_segment_in_env 90722 777 "$2" "$3" >/dev/null; flip_segment_in_env 90721 777 "$2" "$3" >/dev/null' \
     _ "$DRIVER" "$1" "$2"
 }
 
-bodies_ok() { # <expected-count> <row-id> <segment-id>; every captured body is ONE valid JSON object
-  python3 - "$BODY_LOG" "$1" "$2" "$3" <<'PY'
+# Every captured body is ONE valid JSON object equal to the whole expected body (dev env first).
+bodies_ok() { # <dev-row-id> <prd-row-id> <segment-id> <true|false>
+  python3 - "$BODY_LOG" "$1" "$2" "$3" "$4" <<'PY'
 import json, sys
 lines = [l for l in open(sys.argv[1]).read().splitlines() if l.strip()]
-want, row, seg = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
-if len(lines) != want:
-    sys.exit(1)
-for l in lines:
-    d = json.loads(l)
-    ups = d["feature_states_to_update"]
-    if d["feature_states_to_create"] != [] or len(ups) != 1 or ups[0]["feature_segment"] != {"id": row, "segment": seg}:
-        sys.exit(1)
+rows, seg, en = [int(sys.argv[2]), int(sys.argv[3])], int(sys.argv[4]), sys.argv[5] == "true"
+def want(row):
+    return {
+        "feature_states_to_create": [],
+        "feature_states_to_update": [{
+            "feature_segment": {"id": row, "segment": seg},
+            "enabled": en,
+            "feature_state_value": {"type": "unicode", "string_value": None, "integer_value": None, "boolean_value": None},
+        }],
+        "segment_ids_to_delete_overrides": [],
+        "publish_immediately": True,
+    }
+if len(lines) != 2:
+    print("expected 2 bodies, got %d" % len(lines), file=sys.stderr); sys.exit(1)
+for l, row in zip(lines, rows):
+    if json.loads(l) != want(row):
+        print("body mismatch:\n  got  %s\n  want %s" % (l, json.dumps(want(row))), file=sys.stderr); sys.exit(1)
 PY
 }
 
-create_bodies_ok() { # <expected-count> <segment-id>: the create arm still sends {segment} only
+create_bodies_ok() { # <segment-id> <true|false>: the create arm still sends {segment} only
   python3 - "$BODY_LOG" "$1" "$2" <<'PY'
 import json, sys
 lines = [l for l in open(sys.argv[1]).read().splitlines() if l.strip()]
-want, seg = int(sys.argv[2]), int(sys.argv[3])
-if len(lines) != want:
-    sys.exit(1)
+seg, en = int(sys.argv[2]), sys.argv[3] == "true"
+want = {
+    "feature_states_to_create": [{
+        "feature_segment": {"segment": seg},
+        "enabled": en,
+        "feature_state_value": {"type": "unicode", "string_value": None, "integer_value": None, "boolean_value": None},
+    }],
+    "feature_states_to_update": [],
+    "segment_ids_to_delete_overrides": [],
+    "publish_immediately": True,
+}
+if len(lines) != 2:
+    print("expected 2 bodies, got %d" % len(lines), file=sys.stderr); sys.exit(1)
 for l in lines:
-    d = json.loads(l)
-    cr = d["feature_states_to_create"]
-    if d["feature_states_to_update"] != [] or len(cr) != 1 or cr[0]["feature_segment"] != {"segment": seg}:
-        sys.exit(1)
+    if json.loads(l) != want:
+        print("create body mismatch:\n  got  %s\n  want %s" % (l, json.dumps(want)), file=sys.stderr); sys.exit(1)
 PY
 }
 
 is_equal() { [[ "$1" == "$2" ]]; }
 contains() { [[ "$1" == *"$2"* ]]; }
-only_stubbed_hosts() { ! grep -vE '^(GET|POST) https://api\.flagsmith\.com/' "$CURL_LOG"; }
+only_stubbed_hosts() {
+  [[ -s "$CURL_LOG" ]] || return 1
+  ! grep -qvE '^(GET|POST) https://api\.flagsmith\.com/' "$CURL_LOG"
+}
+# No id-only feature_segment printf body survives anywhere in the skill scripts (a second builder
+# of the rejected shape would be outside the extracted window), and the fixed shape is present
+# (so the sweep cannot pass vacuously).
+no_id_only_builder() { ! grep -rqE --include='*.sh' 'feature_segment":\{"id":%d\}' "$SKILL_SCRIPTS"; }
+fixed_builder_present() { grep -rqE --include='*.sh' 'feature_segment":\{"id":%d,"segment":%d\}' "$SKILL_SCRIPTS"; }
+# assert must be able to go red: run it on a failing command and require its failure flag to move.
+assert_can_fail() { local fail=0 checks=0; assert "control" false 2>/dev/null; [[ "$fail" -eq 1 ]]; }
 
 # --- 0. instrument: the stub must be in force, and must be able to return the bad answer ------
+# Reported without the assert helper it guards: a neutered assert would otherwise report this
+# control's own failure through itself and leave the suite green.
+checks=$((checks + 1))
+if ! assert_can_fail; then
+  printf 'flip-update-existing-override: FAIL — assert cannot go red (its failure flag never moved)\n' >&2
+  exit 1
+fi
 assert "curl resolves to the stub dir" is_equal "$(PATH="$STUB_DIR:$PATH" command -v curl)" "$STUB_DIR/curl"
 new_logs
 seg_less='{"feature_states_to_create":[],"feature_states_to_update":[{"feature_segment":{"id":555},"enabled":true}],"segment_ids_to_delete_overrides":[],"publish_immediately":true}'
@@ -161,42 +209,62 @@ full='{"feature_states_to_create":[],"feature_states_to_update":[{"feature_segme
 accept="$(CURL_LOG="$CURL_LOG" BODY_LOG="$BODY_LOG" \
   "$STUB_DIR/curl" -X POST -d "$full" "https://example.invalid/environments/90722/features/777/versions/")"
 assert "stub accepts the id+segment body" contains "$accept" '"uuid":"v-uuid"'
+new_logs
+sibling="$(CURL_LOG="$CURL_LOG" BODY_LOG="$BODY_LOG" STUB_DEV_SEG=102 STUB_ROW_ID=555 \
+  "$STUB_DIR/curl" "https://api.flagsmith.com/api/v1/features/feature-segments/?environment=90721&feature=777")"
+assert "stub serves a non-matching sibling row first and a per-env row id second" \
+  contains "$sibling" '{"id":9999,"segment":5102,"priority":2},{"id":1555,"segment":102,"priority":1}'
+wrong_query="$(CURL_LOG="$CURL_LOG" BODY_LOG="$BODY_LOG" \
+  "$STUB_DIR/curl" "https://api.flagsmith.com/api/v1/features/feature-segments/?environment=0&feature=0")"
+assert "stub answers an empty result for a query flip.sh must not send" is_equal "$wrong_query" '{"results":[]}'
 
-# --- 1. override exists in both envs: update arm, two POSTs, both ids correct ----------------
+# --- 1. override exists in both envs: update arm, two POSTs, whole body correct -------------
 new_logs
 rc=0; STUB_DEV_SEG=102 STUB_ROW_ID=555 run_flips 102 true || rc=$?
 assert "existing-override flip exits 0 (pre-fix this exits 3 on the live 400)" is_equal "$rc" 0
-assert "two update POSTs, one per environment, each one valid JSON with id=555 segment=102" bodies_ok 2 555 102
+assert "two update bodies equal the expected whole body: dev row 555, prd row 1555, segment 102, enabled" bodies_ok 555 1555 102 true
 assert "dev env 90722 got a version POST" grep -q 'POST .*/environments/90722/features/777/versions/' "$CURL_LOG"
 assert "prd env 90721 got a version POST" grep -q 'POST .*/environments/90721/features/777/versions/' "$CURL_LOG"
 assert "only the stubbed Flagsmith host was contacted" only_stubbed_hosts
 
-# --- 2. H2: different ids -> the bodies carry THOSE ids (no hard-coded canonical numbers) ------
+# --- 2. different ids -> the bodies carry THOSE ids (no hard-coded canonical numbers) --------
 new_logs
 rc=0; STUB_DEV_SEG=202 STUB_ROW_ID=777 run_flips 202 true || rc=$?
 assert "flip with other ids exits 0" is_equal "$rc" 0
-assert "bodies carry id=777 segment=202" bodies_ok 2 777 202
+assert "bodies carry dev row 777, prd row 1777, segment 202" bodies_ok 777 1777 202 true
 
-# --- 3. disabling goes through the same arm with the same ids -------------------------------
+# --- 3. disabling goes through the same arm with the same ids --------------------------------
 new_logs
 rc=0; STUB_DEV_SEG=102 STUB_ROW_ID=555 run_flips 102 false || rc=$?
 assert "disable flip exits 0" is_equal "$rc" 0
-assert "disable bodies carry id=555 segment=102" bodies_ok 2 555 102
-assert "disable bodies set enabled=false" grep -q '"enabled":false' "$BODY_LOG"
+assert "disable bodies equal the expected whole body with enabled=false in both" bodies_ok 555 1555 102 false
 
 # --- 4. no existing override: the create arm is unchanged ({segment} only, no update item) ----
 new_logs
 rc=0; STUB_NO_OVERRIDE=1 STUB_DEV_SEG=102 run_flips 102 true || rc=$?
 assert "first-time override flip exits 0" is_equal "$rc" 0
-assert "create arm sends feature_segment {segment:102} and no update item" create_bodies_ok 2 102
+assert "create arm sends the whole expected create body (feature_segment {segment:102})" create_bodies_ok 102 true
 
-# anti-vacuity: the floor is reported without the assert helper it backstops
-if (( checks < MIN_CHECKS )); then
-  printf 'update-override: FAIL — only %d checks ran (floor %d)\n' "$checks" "$MIN_CHECKS" >&2
+# --- 5. a rejected version POST surfaces as exit 3 and records no accepted body --------------
+new_logs
+rc=0; STUB_FORCE_REJECT=1 STUB_DEV_SEG=102 STUB_ROW_ID=555 run_flips 102 true || rc=$?
+assert "a rejected version POST exits 3 (the 2026-10-23 symptom)" is_equal "$rc" 3
+assert "a rejected version POST leaves no accepted body" test ! -s "$BODY_LOG"
+
+# --- 6. census: no second builder of the rejected shape in the skill scripts -----------------
+assert "no id-only feature_segment body is built anywhere in the skill scripts" no_id_only_builder
+assert "the fixed id+segment body is present in the skill scripts (census is not vacuous)" fixed_builder_present
+
+# anti-vacuity: the floor is reported without the assert helper it backstops. Its bound is a
+# literal directly above the test (an exact count, no slack): raise it in the same edit that adds
+# a check.
+MIN_CHECKS=27
+if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
+  printf 'flip-update-existing-override: FAIL — only %d assertions ran (anti-vacuity floor %d)\n' "$checks" "$MIN_CHECKS" >&2
   exit 1
 fi
 if (( fail != 0 )); then
-  printf 'update-override: FAILED (%d checks)\n' "$checks" >&2
+  printf 'flip-update-existing-override: FAILED (%d checks)\n' "$checks" >&2
   exit 1
 fi
-printf 'update-override: %d checks passed\n' "$checks"
+printf 'flip-update-existing-override: %d checks passed\n' "$checks"
