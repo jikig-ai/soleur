@@ -3806,7 +3806,8 @@ _inngest_link_time_nonzero() { # <t>
 #   request    TLS completed and verified, no HTTP status came back. It does NOT prove a cause: it means only that the certificate is
 #              not the problem and the terminator or whatever sits behind it is to be checked. Classified by the timers, never by an
 #              rc list, because one wire event prints rc 52 on one curl build and rc 56 on another.
-# The rc tests are string compares on purpose (`${1-}` may be empty, where `-eq` would abort): do not turn them into `-eq`.
+# The rc tests are string compares on purpose (`${1-}` may be empty or a bare word, which `-eq` would evaluate as an arithmetic
+# variable name and abort on under `set -u`): keep them string compares.
 _inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
   local rc="${1-}" code="${2-}" tc="${3-}" ta="${4-}" tcr=0 tar=0
   local c3='^[0-9]{3}$'

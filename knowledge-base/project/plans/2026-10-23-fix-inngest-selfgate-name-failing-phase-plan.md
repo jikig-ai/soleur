@@ -155,7 +155,7 @@ zero tested by `^[0.,]*$` after the shape check, no float math). The phase is th
 
 Rules 5 to 7 classify by times, not by an rc list (ratified by the CTO, rows F2a and R3a of `decision-challenges.md`) because the measured rc for one wire event differs across curl builds (52 on 8.5.0 vs 56 on 7.81 and 8.23).
 `phase=request` means only "TLS verified, no HTTP status came back"; the runbook and the ADR addendum word it as "check the terminator and its upstream, not the certificate" and never assert a root cause.
-An attempt whose time fields are unparsable adds nothing to `tcp` or `tls`, so `phase=unknown tcp=0 tls=0` does not mean "connect failed": the runbook decode says so (rc 124 = the `timeout 20` wrapper killed curl, a hang; rc 2 = an unreadable CA file on curl 8.23; rc 0 with `unknown` = the curl output format changed).
+An attempt whose time fields are unparsable adds nothing to `tcp` or `tls`, so `phase=unknown tcp=0 tls=0` does not mean "connect failed": the runbook decode says so (rc 124 = the `timeout 20` wrapper killed curl, a hang; rc 2 = a MISSING CA file on curl 8.23 (an empty or garbage file gives rc 77); rc 0 with `unknown` = the curl output format changed).
 
 ### What stays out
 
@@ -359,7 +359,7 @@ failure_modes:
     detection: phase=unknown with tcp=0 tls=0 does NOT mean connect failed (unparsable attempts count nothing); rc=124 is the timeout wrapper killing curl, rc=2 a MISSING CA file on curl 8.23 (an empty or garbage file reads rc 77), rc=0 a changed curl output format; http=none (layer 3)
     alert_route: none (read after the next flip)
   - mode: the new deploy-state key itself is absent, stale or wrong
-    detection: an ABSENT inngest_link_selfgate_phase is ambiguous and never a pass: the gate did not fail, or the host does not yet run the upgraded ci-deploy.sh, or a later deploy (for a failed flip, its own revert redeploy about two minutes later) overwrote the frame; `invalid` means a value outside the seven-token enum was written (layer 6: release run state dump, /hooks/deploy-status; web-2's body is under .peers["<ip>"] in web-1's body); the Better Stack event is the record to read for a flip
+    detection: an ABSENT inngest_link_selfgate_phase is ambiguous and never a pass: the gate did not fail, or the host does not yet run the upgraded ci-deploy.sh, or a later deploy (for a failed flip, its own best-effort revert redeploy normally about two minutes later) overwrote the frame; `invalid` means a value outside the seven-token enum was written (layer 6: release run state dump, /hooks/deploy-status; web-2's body is under .peers["<ip>"] in web-1's body); the Better Stack event is the record to read for a flip
     alert_route: none today (#10556); a failed flip with an empty Better Stack read means STOP and ask the owner for the shipper check, not read the state key instead
   - mode: the event line leaks a value
     detection: the anchored-regex row S5 (CI) is the prevention; a leak would ride layer 3 and Sentry extra.detail, so the post-flip read checks that every field after attempts= is a token from the set or an integer
