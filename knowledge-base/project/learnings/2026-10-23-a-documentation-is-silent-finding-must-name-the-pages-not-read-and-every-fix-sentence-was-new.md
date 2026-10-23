@@ -45,5 +45,5 @@ An absence claim quantifies over everything NOT read, so its honest form carries
 
 ## References
 
-- ADR-282 addendum 2026-10-23 (#9927 item 7) and the plan `knowledge-base/project/plans/2026-10-23-docs-adr-282-hetzner-project-deletion-residual-plan.md`
+- ADR-282 addendum 2026-10-23 (#9927 item 7) and the plan `knowledge-base/project/plans/archive/20261023-115032-2026-10-23-docs-adr-282-hetzner-project-deletion-residual-plan.md`
 - Related: `knowledge-base/project/learnings/2026-08-06-i-shipped-two-unmeasured-causal-claims-inside-the-lint-that-forbids-them.md`
