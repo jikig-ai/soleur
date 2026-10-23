@@ -141,7 +141,9 @@ export function ruleProblems(hclRaw: string, allHclRaw = hclRaw): string[] {
 const tfFiles = readdirSync(sentryDir).filter((f) => f.endsWith(".tf"));
 const allTf = tfFiles.map((f) => readFileSync(join(sentryDir, f), "utf8")).join("\n");
 const issueAlertsTf = readFileSync(join(sentryDir, "issue-alerts.tf"), "utf8");
-const serverSources = () => walk(serverDir).map((file) => ({ file, src: stripTsComments(readFileSync(file, "utf8"), file) }));
+// Walked and comment-stripped ONCE per file (the strip is the slow part, and six cases read the result).
+let serverSourcesCache: Array<{ file: string; src: string }> | undefined;
+const serverSources = () => (serverSourcesCache ??= walk(serverDir).map((file) => ({ file, src: stripTsComments(readFileSync(file, "utf8"), file) })));
 const emitSites = () => serverSources().flatMap(({ file, src }) => emitSitesIn(file, src));
 const sandboxConfig = () => serverSources().find((s) => s.file.endsWith("agent-runner-sandbox-config.ts"))!;
 
@@ -222,9 +224,20 @@ describe("masked-dir-precreate — harness self-tests (mutation rows)", () => {
     expect(ruleProblems(RULE_FIXTURE)).toEqual([]);
   });
 
-  it("MUST-PASS non-canonical: conditions in the opposite order and a different frequency still pass", () => {
-    const swapped = RULE_FIXTURE.replace("frequency_minutes = 71", "frequency_minutes = 99");
-    expect(ruleProblems(swapped)).toEqual([]);
+  it("MUST-PASS non-canonical: the two tag conditions in the opposite order still pass", () => {
+    const opLine = `        { tagged_event = { key = "op", match = "eq", value = "${OP}" } },\n`;
+    const featureLine = `        { tagged_event = { key = "feature", match = "eq", value = "${FEATURE}" } },\n`;
+    expect(RULE_FIXTURE).toContain(opLine + featureLine);
+    const reordered = RULE_FIXTURE.replace(opLine + featureLine, featureLine + opLine);
+    expect(reordered).not.toBe(RULE_FIXTURE);
+    expect(reordered.indexOf('key = "feature"')).toBeLessThan(reordered.indexOf('key = "op"'));
+    expect(ruleProblems(reordered)).toEqual([]);
+  });
+
+  it("MUST-PASS non-canonical: a different (unique) frequency still passes", () => {
+    const other = RULE_FIXTURE.replace("frequency_minutes = 71", "frequency_minutes = 99");
+    expect(other).not.toBe(RULE_FIXTURE);
+    expect(ruleProblems(other)).toEqual([]);
   });
 
   it("a commented-out rule is not live", () => {

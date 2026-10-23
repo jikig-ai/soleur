@@ -48,6 +48,7 @@ vi.mock("fs", async (orig) => {
 });
 
 import { AGENT_SESSION_TMP_ROOT } from "@/server/agent-session-tmp";
+import { c4RenderStagingRoot } from "@/server/c4-staging-root";
 import {
   buildAgentSandboxConfig,
   peerMessagingSocketDirs,
@@ -142,8 +143,9 @@ describe("masked-dir pre-create failure (#10445, #10455)", () => {
 });
 
 // Guard 2 (builder-versus-reality): the set the production builder pre-creates under the default container env is
-// exactly four dirs, the builder really creates every one of them (recursive, 0700), and removing any list from
-// its pre-create loop turns this red. The probe's `precreateDirs` is compared to the same set in
+// exactly four dirs, the builder really creates every one of them (recursive, 0700), nothing ELSE is created that
+// way (a fifth dir added inside an existing kind turns this red), and removing any list from its pre-create loop
+// turns this red. The probe's `precreateDirs` is compared to the same set in
 // sdk-bash-probe-parity.test.ts.
 describe("builder-versus-reality (Guard 2)", () => {
   let root: string;
@@ -178,6 +180,23 @@ describe("builder-versus-reality (Guard 2)", () => {
     expect([...expected].sort()).toEqual(
       ["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, join(root, ".claude", "projects"), "/tmp/.cs"].sort(),
     );
+  });
+
+  it("the set of dirs the builder creates (recursive, mode 0700) IS the expected four: a fifth dir inside an existing kind must be mirrored in the probe", () => {
+    const expected = defaultEnvBuild();
+    // The one other recursive-0700 mkdir a default-env build makes is the C4 staging root (best-effort, its own contract, not a masked
+    // dir). Any OTHER dir the builder starts creating this way has to be classified here, and a masked one in the probe's precreateDirs.
+    const c4Root = c4RenderStagingRoot();
+    const created = [
+      ...new Set(
+        mkdirCalls
+          .filter((c) => (c.opts as { recursive?: boolean; mode?: number } | undefined)?.recursive === true && (c.opts as { mode?: number }).mode === 0o700)
+          .map((c) => c.dir)
+          .filter((d) => d !== c4Root),
+      ),
+    ].sort();
+    expect(created).toEqual([...expected].sort());
+    expect(created).toHaveLength(4);
   });
 
   it("the builder attempts mkdir (recursive, mode 0700) for every member and each is a real directory", () => {
