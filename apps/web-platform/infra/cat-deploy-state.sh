@@ -15,6 +15,8 @@ set -euo pipefail
 # #8609: github_app_key_source / _fetch / _probe (and _probe_reason, on a rejected probe) ride the
 # base state verbatim (write_state adds them only once the GitHub App key overlay ran, each checked
 # against its closed enum; an absent key = it never ran).
+# #10934: inngest_link_selfgate_phase rides the base state verbatim the same way (write_state adds it only when the https
+# self-gate failed, checked against its seven-token closed enum, else `invalid`; absent = the gate did not fail).
 
 # Identify the host that answered this read (#6425). Today the `deploy.` ingress is
 # origin-relative to web-1's private IP (#6594), so every status read already answers
