@@ -141,8 +141,8 @@ run's stderr.
 Nothing was written in any of these cases. The anchor reads `HCLOUD_TOKEN_READONLY` alone: since
 #10664 (2026-10-23) there is no fallback to the read/write `HCLOUD_TOKEN`, which no longer exists in
 `prd_terraform` (names-only listing, 2026-10-20). A missing or unusable read-only token is
-`unreadable`; re-dispatching does nothing until it is restored (`infra-credential-tiers-8209.md` step
-O5). The same generation scope applies to op=arm G3.7's
+`unreadable`. A transient Doppler auth or network failure clears on re-dispatch; a secret that is truly absent
+is restored by the owner (`infra-credential-tiers-8209.md` step O5) before a re-dispatch can pass. The same generation scope applies to op=arm G3.7's
 liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops now also refuse
 while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback (retired by #8285 PR B,
 so three ops today; the sentence is kept as written).

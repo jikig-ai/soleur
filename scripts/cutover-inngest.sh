@@ -548,11 +548,13 @@ _hcloud_created_epoch() {
 # __UNREADABLE__) and ALWAYS returns 0; every non-epoch outcome is preceded by one ::warning:: on
 # stderr naming its cause. Public-log hygiene, each rule pinned by the suite:
 #   - Tier A only (ADR-241 D4, #10664): HCLOUD_TOKEN_READONLY, read alone. There is NO fallback to
-#     the read/write HCLOUD_TOKEN: operator steps O5 and O10 are done (names-only listing of
-#     soleur/prd_terraform, 2026-10-20: the read-only name listed, the read/write name absent), and a
-#     reader that can reach the destroy-capable token stops being read-only the day the read-only
-#     secret goes missing. An absent, empty or unusable read-only token is `__UNREADABLE__` with one
-#     warning naming it; restore it per infra-credential-tiers-8209.md step O5. Guarded by
+#     the read/write HCLOUD_TOKEN. O10 (the read/write name absent from prd_terraform) was measured
+#     done by a names-only listing of soleur/prd_terraform on 2026-10-20 (the read-only name listed,
+#     the read/write name absent); the O5 write-probe (the read-only property) was last recorded
+#     2026-09-29 and has not been re-run. A reader that can reach the destroy-capable token stops
+#     being read-only the day the read-only secret goes missing. An absent, empty or unusable
+#     read-only token is `__UNREADABLE__` with one warning naming it; restore it per
+#     infra-credential-tiers-8209.md step O5. Guarded by
 #     scripts/lint-hcloud-token-readonly-no-fallback.sh;
 #   - the token is ::add-mask::ed on STDERR (stdout is the caller's $(…) token) and travels on
 #     curl's stdin (-H @-), never argv;
@@ -566,7 +568,7 @@ _inngest_server_created_epoch() {
   local tok resp rc=0 code body epoch now
   tok="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain 2>/dev/null || true)"
   if [[ -z "$tok" ]]; then
-    echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written; restore the token (step O5 of infra-credential-tiers-8209.md) and re-dispatch." >&2
+    echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written. Check the Doppler read first (auth or network) and re-dispatch if that was transient; only if the secret is genuinely absent, restore it (the owner mints it in the Hetzner console, step O5 of infra-credential-tiers-8209.md)." >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
@@ -1890,6 +1892,10 @@ case "$OP" in
     # whole root disk (incl. /var/lib/inngest SQLite). No webhook, no SSH —
     # pure hcloud API. HCLOUD_TOKEN read from the prd_terraform-scoped
     # DOPPLER_TOKEN (never echoed). server id 123931471 = soleur-web-platform.
+    # ALLOWLISTED READ: scripts/lint-hcloud-token-readonly-no-fallback.sh allows exactly one read of the
+    # read/write HCLOUD_TOKEN, this line (its exact text, count 1). The allowlist entry expires
+    # 2026-12-15 (warning-only; trackers #9755 / #10664). Reformatting the line below turns that scan red
+    # (`F-allowlist ... found 0`); the scanner drops whole-line comments, so this comment cannot disturb the match.
     HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)
     # #8767: shape-check, THEN mask, BEFORE the first request. The check comes first so a value
     # holding a newline can never inject a second `::` workflow command through the mask line (and an

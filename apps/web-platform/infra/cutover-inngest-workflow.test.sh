@@ -1184,9 +1184,11 @@ lv_mocks() {
         echo HCLOUD_TOKEN_READONLY >> "$FLV_HC_READS"
         case "$LV_TOK" in both|ro) printf '%s\n' 'RO-TOKEN-SENTINEL' ;; esac
         return 0 ;;
-      "secrets get HCLOUD_TOKEN "*)
-        # BAIT, keyed on the NAME and not the argv: any bare read of the read/write name, with any flags in
-        # any order, is recorded and answered, so a respelled fallback cannot slip into the generic miss arm.
+      "secrets get HCLOUD_TOKEN"|"secrets get HCLOUD_TOKEN "*|"secrets get "*" HCLOUD_TOKEN"|"secrets get "*" HCLOUD_TOKEN "*)
+        # BAIT, keyed on the NAME and not the argv: any read of the bare read/write name `HCLOUD_TOKEN`, at ANY argv
+        # position (first, middle or last) and with any flags, is recorded and answered, so a respelled fallback cannot
+        # slip into the generic miss arm. Ordered after the HCLOUD_TOKEN_READONLY arm, and every form needs a space or
+        # the end of the argv after the name, so `HCLOUD_TOKEN_READONLY` in any spelling can never match here.
         echo HCLOUD_TOKEN >> "$FLV_HC_READS"
         case "$LV_TOK" in both|rw) printf '%s\n' 'RW-TOKEN-SENTINEL' ;; esac
         return 0 ;;
@@ -1448,8 +1450,20 @@ call_flip_liveness_count no-ts ok
 assert "G3 generation: counted=0 with malformed>0 warns of a schema change, which a replace will not fix" \
   "grep -qF 'carried no parseable __REALTIME_TIMESTAMP or dt' '$FLV_ERR' && ! grep -qF 'WAIT and re-dispatch' '$FLV_ERR'"
 call_flip_liveness_count current ok rw
-assert "G3 generation anchor: read-only empty and read/write present -> __UNREADABLE__, zero requests, only the read-only name read, the read/write token never seen" \
-  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' && \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' && -z \"\$(cat '$FLV_STUB_MISS' 2>/dev/null)\" ]] && ! grep -qF 'RW-TOKEN-SENTINEL' '$FLV_ERR' '$FLV_CURL_ARGV' '$FLV_CURL_STDIN' '$FLV_CURL_CALLS' && [[ '$FLV_OUT' != *RW-TOKEN* ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> only HCLOUD_TOKEN_READONLY is read (HC_READS exact)" \
+  "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> zero curl calls and the result is __UNREADABLE__" \
+  "[[ ! -s '$FLV_CURL_CALLS' && '$FLV_OUT' == '__UNREADABLE__' ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> no doppler/curl request deviated from the contract (STUB_MISS empty)" \
+  "[[ -z \"\$(cat '$FLV_STUB_MISS' 2>/dev/null)\" ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> the read/write sentinel is absent from stdout, stderr, curl argv, curl stdin and curl calls" \
+  "! grep -qF 'RW-TOKEN-SENTINEL' '$FLV_ERR' '$FLV_CURL_ARGV' '$FLV_CURL_STDIN' '$FLV_CURL_CALLS' && [[ '$FLV_OUT' != *RW-TOKEN* ]]"
+# An ENVIRONMENT fallback (a read/write HCLOUD_TOKEN already exported into the reader's environment, read-only secret empty) must be caught too.
+HCLOUD_TOKEN=RW-ENV-SENTINEL call_flip_liveness_count current ok none
+assert "G3 generation anchor: read-only empty and HCLOUD_TOKEN exported into the environment -> __UNREADABLE__, zero curl calls, only the read-only name read" \
+  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' && \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
+assert "G3 generation anchor: read-only empty and HCLOUD_TOKEN exported into the environment -> RW-ENV-SENTINEL never reaches stdout, stderr, curl argv, curl stdin or curl calls" \
+  "! grep -qF 'RW-ENV-SENTINEL' '$FLV_ERR' '$FLV_CURL_ARGV' '$FLV_CURL_STDIN' '$FLV_CURL_CALLS' && [[ '$FLV_OUT' != *RW-ENV* ]]"
 call_flip_liveness_count current http401 both
 assert "G3 generation anchor: a rejected token names the variable that was sent" \
   "grep -qF 'the one sent was HCLOUD_TOKEN_READONLY;' '$FLV_ERR'"
@@ -1497,7 +1511,7 @@ assert "G3 generation: the flush latch body never reaches the generation anchor 
 
 # Guard 2 — token hygiene and transport, on a successful read.
 call_flip_liveness_count current ok both
-assert "G3 generation anchor: Tier A first — only HCLOUD_TOKEN_READONLY is read when it resolves" \
+assert "G3 generation anchor: only HCLOUD_TOKEN_READONLY is read" \
   "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
 assert "G3 generation anchor: the token travels on curl's stdin as the Authorization header" \
   "grep -qxF 'Authorization: Bearer RO-TOKEN-SENTINEL' '$FLV_CURL_STDIN'"
@@ -4947,7 +4961,10 @@ _DISPATCHED=$((PASS + FAIL))
 # 1131 -> 1129 (-2) at #10664 Site C (the generation anchor has no read/write fallback), measured: the "fallback is announced by
 #   NAME", "read/write token is masked too" and "falls back only after an empty read-only read" assertions are removed (-3) and
 #   one block asserting the read/write token is never read, sent or printed replaces them (+1); the 401 row keeps its place.
-_EXACT_FLOOR=1129
+# 1129 -> 1134 (+5) at the #10891 review round, measured: the compound "read-only empty, read/write present" assertion is split into
+#   four named ones (HC_READS exact, zero curl calls + verdict, STUB_MISS empty, read/write sentinel absent from every stream) (+3), and an
+#   exported-HCLOUD_TOKEN environment row adds two (verdict + zero curl + reads, sentinel absent) (+2): +5 in total.
+_EXACT_FLOOR=1134
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

@@ -135,8 +135,11 @@ amendment, not a rewrite of the ADR body).
 - **If this lands broken, the user experiences:** a refused (never a mis-run) Inngest cutover op: the
   generation anchor returns `__UNREADABLE__` and `op=resume` / `op=arm` / `op=luks-cutover` stop at G3
   with a `::warning::` naming `HCLOUD_TOKEN_READONLY`. Worst case is a delayed cutover dispatch by the
-  owner; no end-user session, data or scheduled run is touched, because the ops are dispatch-only and
-  run only when the owner dispatches them.
+  owner. The ops are dispatch-only, so no end-user session or data is touched while the Inngest host is
+  healthy; but `op=resume` / `op=arm` are the recovery verbs for a parked or flushed Inngest host, so if the
+  owner dispatches one during an incident and the read-only secret is missing, recovery is blocked until
+  the owner restores it, and the queued Inngest jobs and crons keep stalling for that time (review
+  2026-10-23, user-impact P2-2). Merging also rolls out a release of unchanged code to the web hosts.
 - **If this leaks, the user's workflow is exposed via:** nothing new. The change removes a code path
   that could read the destroy-capable token; no new credential, log field or egress is added. The
   token still travels on curl's stdin, is masked first, and no response byte is printed.
@@ -636,7 +639,9 @@ cloud-init), no persistent store or new network connection (the Encryption Postu
   confirms its preflight output is `skip=true` (a names-only run read, no secrets). Do not rely on "a
   test-file edit plans to a no-op" (known state drift, ADR-241 M9). It also reads the
   `web-platform-release.yml` run for the merge commit and records that it was an unchanged-code
-  rebuild with no Tier-B or version-bump side effect beyond the normal release.
+  rebuild with no Tier-B or version-bump side effect beyond the normal release. It also confirms, by a
+  names-only listing (`doppler secrets --only-names -p soleur -c prd_terraform`), that
+  `HCLOUD_TOKEN_READONLY` is present, since the anchor now has no fallback (review 2026-10-23).
 - [ ] AC10. Tracker #10664: the Site C checkbox text is split so the flip-guard retention-comment
   sub-item stays unticked; done by the shipping agent with `gh issue edit` (no owner step).
 
@@ -667,9 +672,9 @@ cloud-init), no persistent store or new network connection (the Encryption Postu
   `cutover-inngest.yml` (its push trigger lists only its own file). Mitigation (CTO R9a): the kill switch
   in AC8 and the read in AC9; sibling precedent is #10652, which edited this same suite. If the owner
   rejects the conflict, the fallback removal cannot ship, because the suite pins the old behaviour.
-- **Time bomb by design, bounded.** After 2026-12-15 the scanner is RED on pull requests that touch the
-  guarded files until the `op=backup` allowlist entry is deleted or renewed with a stated reason; on
-  other events it is a warning (the trio model, CTO R9b). Owner: the #9755 work; trackers: #9755 and
+- **Time bomb by design, bounded.** From 2026-11-24 the scanner prints a `::warning::`, and after 2026-12-15
+  an `expired` warning, until the `op=backup` allowlist entry is deleted or renewed with a new dated ADR-241
+  entry; the date never turns the scan red (warning-only, CTO R10, which replaced the R9b trio model). Owner: the #9755 work; trackers: #9755 and
   #10664, named in the scanner header and the ADR-241 entry. The 21-day warning starts 2026-11-24.
 - **Line-keyed text.** The allowlist keys on normalized line text, so reformatting l.1900 reddens the
   scanner on purpose; the failure message prints the expected and the found text.
