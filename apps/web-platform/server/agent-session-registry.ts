@@ -457,6 +457,65 @@ export function abortAllSessionsForWorkspace(workspaceId: string): void {
   }
 }
 
+/** True while ANY registered session exists for `userId` (legacy lineage). */
+export function hasRegisteredSessionForUser(userId: string): boolean {
+  const prefix = `${userId}:`;
+  for (const key of activeSessions.keys()) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/** True while ANY registered session is bound to `workspaceId` (any member). */
+export function hasRegisteredSessionForWorkspace(workspaceId: string): boolean {
+  for (const key of activeSessions.keys()) {
+    if (userWorkspaces.get(key.split(":")[0]) === workspaceId) return true;
+  }
+  return false;
+}
+
+export const SESSION_DRAIN_MAX_MS = 5_000;
+export const SESSION_DRAIN_STEP_MS = 100;
+
+/**
+ * Bounded wait for the aborted sessions of a user / workspace to deregister.
+ *
+ * `abortAllUserSessions` / `abortAllSessionsForWorkspace` only SIGNAL an
+ * AbortController; the session's child can still be writing under the tree for
+ * a moment. A rm that races it sees ENOENT/ENOTEMPTY and falls into the
+ * permission-repair and move-aside phases. Callers abort first, then call this,
+ * then reap. Polls `isLive` every `stepMs` up to `maxMs` and ALWAYS returns
+ * (never blocks an erasure on a stuck session): `drained: false` means the
+ * bound elapsed with sessions still registered, and the caller proceeds anyway
+ * after logging a hashed breadcrumb.
+ *
+ * Scope: the legacy `activeSessions` lineage only (the cc-soleur-go lineage is
+ * not enumerable by user or workspace; see the `abortSession` note on the
+ * dual-lineage trap).
+ */
+export async function waitForSessionsToDeregister(
+  isLive: () => boolean,
+  opts: { maxMs?: number; stepMs?: number } = {},
+): Promise<{ drained: boolean; waitedMs: number }> {
+  const maxMs = opts.maxMs ?? SESSION_DRAIN_MAX_MS;
+  const stepMs = opts.stepMs ?? SESSION_DRAIN_STEP_MS;
+  let waitedMs = 0;
+  while (isLive()) {
+    if (waitedMs >= maxMs) return { drained: false, waitedMs };
+    await new Promise<void>((r) => setTimeout(r, stepMs));
+    waitedMs += stepMs;
+  }
+  return { drained: true, waitedMs };
+}
+
+export function waitForUserSessionsToDeregister(userId: string, opts?: { maxMs?: number; stepMs?: number }) {
+  return waitForSessionsToDeregister(() => hasRegisteredSessionForUser(userId), opts);
+}
+
+export function waitForWorkspaceSessionsToDeregister(workspaceId: string, opts?: { maxMs?: number; stepMs?: number }) {
+  return waitForSessionsToDeregister(() => hasRegisteredSessionForWorkspace(workspaceId), opts);
+}
+
 /** Abort every session in the process. Called during server shutdown. */
 export function abortAllSessions(): void {
   for (const [, session] of activeSessions) {

@@ -868,10 +868,36 @@ export function workspacePathForWorkspaceId(workspaceId: string): string {
  */
 export function workspaceTenantDenyRoots(): string[] {
   const roots = new Set<string>();
-  for (const root of [
-    process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT,
-    process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT,
-  ]) {
+  for (const { root: norm, raw: root } of rawTenantRoots()) {
+    roots.add(norm);
+    // A symlinked (or partially-symlinked) root masks the LINK path while the
+    // target stays visible under `--ro-bind / /` — deny the canonical path
+    // too (see canonicalizeRoot). A root that resolves to `/` THROWS.
+    const canon = canonicalizeRoot(norm);
+    if (canon === "/") {
+      throw new Error(
+        `workspaceTenantDenyRoots: tenant root '${root}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
+      );
+    }
+    if (canon !== null) roots.add(canon);
+  }
+  return [...roots];
+}
+
+/**
+ * The two raw tenant roots, validated and normalized (trailing slashes
+ * stripped): `WORKSPACES_ROOT` then `WORKTREE_ROOT`, each falling back to its
+ * default when unset OR empty. Shared by the sandbox deny set
+ * ({@link workspaceTenantDenyRoots}) and the erasure reap set
+ * ({@link workspaceReapRoots}) so the two can never disagree about what a
+ * "tenant root" is. THROWS on `/`, a non-absolute root, or a `..` segment.
+ */
+function rawTenantRoots(): { label: ReapRootLabel; root: string; raw: string }[] {
+  const out: { label: ReapRootLabel; root: string; raw: string }[] = [];
+  for (const [label, root] of [
+    ["workspaces", process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT],
+    ["worktree", process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT],
+  ] as const) {
     const norm = root.replace(/\/+$/, "");
     if (norm === "" || norm === "/") {
       // A "/" deny root masks the whole rootfs — but dropping it silently is
@@ -886,35 +912,67 @@ export function workspaceTenantDenyRoots(): string[] {
         `workspaceTenantDenyRoots: tenant root '${root}' is not an absolute normalized path — refusing a deny set that masks the wrong tree`,
       );
     }
-    roots.add(norm);
-    // A symlinked (or partially-symlinked) root masks the LINK path while the
-    // target stays visible under `--ro-bind / /` — deny the canonical path
-    // too. Canonicalize via the longest existing PREFIX: realpathSync itself
-    // throws on absent leaves AND on dangling links, and skipping either
-    // silently leaves the target unmasked — same fail-open class as a
-    // stat error. ENOENT/ENOTDIR during the prefix walk just climbs; any
-    // other error throws (fail loud over silently unmasked).
-    let probe = norm;
-    const tail: string[] = [];
-    while (true) {
-      try {
-        const canon = realpathSync(probe);
-        if (tail.length === 0 && canon === "/") {
-          throw new Error(
-            `workspaceTenantDenyRoots: tenant root '${root}' resolves to the filesystem root — refusing a deny set that is either catastrophic or absent`,
-          );
-        }
-        roots.add(tail.length === 0 ? canon : join(canon, ...tail.reverse()));
-        break;
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException)?.code;
-        if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
-        const parent = dirname(probe);
-        if (parent === probe) break; // climbed to / — no canonical prefix exists
-        tail.push(basename(probe));
-        probe = parent;
-      }
+    out.push({ label, root: norm, raw: root });
+  }
+  return out;
+}
+
+/**
+ * Canonical form of a (possibly absent, possibly symlinked) root: realpath of
+ * the longest EXISTING prefix plus the absent tail. realpathSync itself throws
+ * on absent leaves AND on dangling links, and skipping either silently leaves
+ * the target unresolved — same fail-open class as a stat error. ENOENT/ENOTDIR
+ * during the prefix walk just climbs; any other error throws (fail loud over
+ * silently unmasked). `null` when the walk climbs to `/` without finding any
+ * existing prefix.
+ */
+export function canonicalizeRoot(norm: string): string | null {
+  let probe = norm;
+  const tail: string[] = [];
+  while (true) {
+    try {
+      const canon = realpathSync(probe);
+      return tail.length === 0 ? canon : join(canon, ...tail.reverse());
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+      const parent = dirname(probe);
+      if (parent === probe) return null; // climbed to / — no canonical prefix exists
+      tail.push(basename(probe));
+      probe = parent;
     }
   }
-  return [...roots];
+}
+
+export type ReapRootLabel = "workspaces" | "worktree";
+
+/**
+ * Roots an Art. 17 erasure must reap `<root>/<workspaceId>` under (#8211):
+ * `WORKSPACES_ROOT` and `WORKTREE_ROOT`, raw and FLAG-INDEPENDENT (a tree left
+ * under the NVMe root after a rollback is erased too), deduped by CANONICAL
+ * target so one symlinked directory is reaped, counted and reported once.
+ * Each entry carries a stable LABEL for log/Sentry (never the path, which
+ * embeds ids at the leaf and host layout above it).
+ *
+ * Deliberately separate from {@link workspaceTenantDenyRoots}: that is a
+ * sandbox-masking contract (canonical aliases included, may add entries a
+ * delete must not), this is the delete list. Both share `rawTenantRoots`.
+ * THROWS like the deny set on a `/` / relative / `..` root; the caller must
+ * not let that skip the legacy volume reap.
+ */
+export function workspaceReapRoots(): { label: ReapRootLabel; root: string }[] {
+  const seen = new Set<string>();
+  const out: { label: ReapRootLabel; root: string }[] = [];
+  for (const { label, root, raw } of rawTenantRoots()) {
+    const canon = canonicalizeRoot(root) ?? root;
+    if (canon === "/") {
+      throw new Error(
+        `workspaceReapRoots: tenant root '${raw}' resolves to the filesystem root — refusing to reap under it`,
+      );
+    }
+    if (seen.has(canon)) continue;
+    seen.add(canon);
+    out.push({ label, root });
+  }
+  return out;
 }

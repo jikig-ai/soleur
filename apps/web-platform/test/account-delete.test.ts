@@ -60,7 +60,13 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 // Import the module under test
 // ---------------------------------------------------------------------------
 
-import { ART17_ERASURE_FEATURE, ART17_ERASURE_OP, deleteAccount } from "../server/account-delete";
+import {
+  ART17_ERASURE_FEATURE,
+  ART17_ERASURE_OP,
+  ART17_WORKSPACE_TREE_ERASURE_OP,
+  deleteAccount,
+} from "../server/account-delete";
+import { registerSession, unregisterSession, __test_only__ } from "../server/agent-session-registry";
 import type { GitDataErasureOutcome } from "../server/git-data-replication";
 
 // ---------------------------------------------------------------------------
@@ -271,7 +277,15 @@ describe("deleteAccount", () => {
     setupSupabaseMocks();
     const raw = "11111111-2222-4333-8444-555555555555";
     mockDeleteWorkspace.mockRejectedValue(
-      new AggregateError([new Error(`rm failed for /var/lib/soleur/worktrees/${raw}`)], `could not reap ${raw}`),
+      Object.assign(
+        new AggregateError([new Error(`rm failed for /var/lib/soleur/worktrees/${raw}`)], `could not reap ${raw}`),
+        {
+          failures: [
+            { root: "worktree", kind: "moved-aside" },
+            { root: "workspaces", kind: "error", code: "EACCES" },
+          ],
+        },
+      ),
     );
 
     const result = await deleteAccount("user-123", "test@example.com");
@@ -282,17 +296,87 @@ describe("deleteAccount", () => {
     expect(result.success).toBe(true);
 
     const call = mockReportSilentFallback.mock.calls.find(
-      ([, opts]) => (opts as { op?: string }).op === "workspace-tree-erasure",
+      ([, opts]) => (opts as { op?: string }).op === ART17_WORKSPACE_TREE_ERASURE_OP,
     );
     expect(call).toBeDefined();
     const [errArg, opts] = call as [unknown, Record<string, unknown>];
     expect(opts.feature).toBe(ART17_ERASURE_FEATURE);
+    expect(ART17_WORKSPACE_TREE_ERASURE_OP).toBe("workspace-tree-erasure");
     // MESSAGE path with no Error object, and no raw path/id anywhere in the payload.
     expect(errArg).toBeNull();
     expect(JSON.stringify(opts)).not.toContain(raw);
     expect(JSON.stringify(opts)).not.toContain("/var/lib/soleur");
-    expect((opts.extra as Record<string, unknown>).errorName).toBe("AggregateError");
-    expect((opts.extra as Record<string, unknown>).failedRoots).toBe(1);
+    // Which root failed (label), why, and the errno code: not just "AggregateError".
+    expect(opts.extra).toMatchObject({
+      errorName: "AggregateError",
+      failedRoots: ["worktree", "workspaces"],
+      failureKinds: ["moved-aside", "error"],
+      errorCodes: ["EACCES"],
+    });
+  });
+
+  test("order: sessions aborted, THEN the tree is reaped, THEN the bare repo, THEN the auth user (#8211)", async () => {
+    setupSupabaseMocks();
+    const order: string[] = [];
+    mockAbortAllUserSessions.mockImplementation(() => void order.push("abort"));
+    mockDeleteWorkspace.mockImplementation(async () => void order.push("reap"));
+    mockRemoveGitDataRepo.mockImplementation(async () => {
+      order.push("removeGitDataRepo");
+      return { status: "erased" };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      order.push("deleteUser");
+      return { data: {}, error: null };
+    });
+
+    await deleteAccount("user-123", "test@example.com");
+
+    expect(order).toEqual(["abort", "reap", "removeGitDataRepo", "deleteUser"]);
+  });
+
+  describe("bounded wait for aborted sessions before the reap (#8211)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      __test_only__.clear();
+    });
+
+    test("the reap waits for the user's registered session to deregister", async () => {
+      vi.useFakeTimers();
+      setupSupabaseMocks();
+      registerSession("user-123", "conv-1", {
+        abort: new AbortController(),
+        reviewGateResolvers: new Map(),
+        sessionId: null,
+      });
+
+      const p = deleteAccount("user-123", "test@example.com");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mockDeleteWorkspace).not.toHaveBeenCalled();
+
+      unregisterSession("user-123", "conv-1");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect((await p).success).toBe(true);
+    });
+
+    test("a session that never deregisters does not block the erasure past the bound", async () => {
+      vi.useFakeTimers();
+      setupSupabaseMocks();
+      registerSession("user-123", "conv-stuck", {
+        abort: new AbortController(),
+        reviewGateResolvers: new Map(),
+        sessionId: null,
+      });
+
+      const p = deleteAccount("user-123", "test@example.com");
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(mockDeleteWorkspace).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect((await p).success).toBe(true);
+    });
   });
 
   test("erases the shared git-data bare repo for the deleted user (Art. 17 / AC9)", async () => {

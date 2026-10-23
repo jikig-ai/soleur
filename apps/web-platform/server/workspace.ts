@@ -6,7 +6,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "fs";
-import { join, resolve } from "path";
+import { basename, join, resolve } from "path";
 import { execFileSync } from "child_process";
 import { createChildLogger } from "./logger";
 import {
@@ -17,10 +17,14 @@ import {
 } from "./git-auth";
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
 import { getPluginPath } from "./plugin-path";
-import { reportSilentFallback } from "./observability";
+import { hashUserId, reportSilentFallback } from "./observability";
 import { seedWorktreeConfig } from "./worktree-config-seed";
 import { atomicGitConfig } from "./git-config-atomic";
-import { workspaceTenantDenyRoots } from "./workspace-resolver";
+import {
+  canonicalizeRoot,
+  workspaceReapRoots,
+  type ReapRootLabel,
+} from "./workspace-resolver";
 
 // Minimal structural type for the Storage remove path — avoids dragging the
 // full SupabaseClient generic into this FS/git-focused module.
@@ -270,19 +274,59 @@ export async function provisionWorkspaceWithRepo(
   return workspacePath;
 }
 
+/** Which leg of the reap failed. `resolver` = the root list itself could not be built. */
+export type ReapFailureRoot = ReapRootLabel | "resolver";
+/**
+ * Why. `moved-aside`: the tree was only RENAMED to `<id>.orphaned-<ts>` (still on
+ * disk, nothing under WORKTREE_ROOT ever sweeps it). `survived`: the path is still
+ * there after the removal. `recreated`: it was gone, then reappeared (a straggling
+ * writer). `error`: a removal/stat call threw.
+ */
+export type ReapFailureKind = "moved-aside" | "survived" | "recreated" | "error";
+export interface ReapFailure {
+  root: ReapFailureRoot;
+  kind: ReapFailureKind;
+  code?: string;
+}
+
+/**
+ * Thrown by {@link deleteWorkspace} after EVERY root was attempted. Carries
+ * path-free, id-free summaries only (root LABEL, kind, errno code): the raw
+ * errors from rm/unlink/lstat embed `<root>/<uuid>`, and this object is handed
+ * to Sentry by callers.
+ */
+export class WorkspaceReapError extends AggregateError {
+  readonly failures: ReadonlyArray<ReapFailure>;
+  constructor(failures: ReapFailure[], errors: Error[], total: number) {
+    super(
+      errors,
+      `deleteWorkspace: ${failures.length} of ${total} tenant roots could not be reaped`,
+    );
+    this.name = "WorkspaceReapError";
+    this.failures = failures;
+  }
+}
+
+/** Pause before the final re-verification, so a straggling writer's file is caught. */
+export const REAP_RECHECK_DELAY_MS = 250;
+
 /**
  * Deletes a workspace's directories (Art. 17 erasure of the local working tree).
  *
- * Reaps `<root>/<workspaceId>` under EVERY tenant root returned by
- * {@link workspaceTenantDenyRoots} — the raw, flag-independent set
- * (`WORKSPACES_ROOT` and `WORKTREE_ROOT`, plus canonical forms of symlinked
- * roots), NOT the flag-collapsed worktree root — so the live clone under
- * `WORKTREE_ROOT/<id>` (git-data split on) and any tree left behind after a
- * rollback (flag off) are both erased (#8211). Every root is attempted even if an
- * earlier one fails; failures are thrown together as one AggregateError after the
- * loop. A `/` or non-absolute root makes `workspaceTenantDenyRoots` throw before
- * any removal. Uses execFileSync to avoid shell injection via the workspace
- * identifier.
+ * Reaps `<root>/<workspaceId>` under `getWorkspacesRoot()` FIRST and independently
+ * of the resolver, then under every root from {@link workspaceReapRoots}
+ * (`WORKTREE_ROOT`, raw and flag-independent, so the live clone with the git-data
+ * split on AND a tree left behind after a rollback are both erased, #8211). A
+ * resolver throw (a `/` or relative root) is recorded as a failure and never skips
+ * the legacy reap. Every root is attempted; failures are thrown together as one
+ * {@link WorkspaceReapError} after the loop.
+ *
+ * "Erased" is decided by the tree being GONE, not by the original path being
+ * absent: a move-aside (`removeWorkspaceDir` phase 3) counts as a FAILURE, the
+ * path is re-checked after a short delay, and a symlink at the path is unlinked,
+ * never followed. Uses execFileSync to avoid shell injection via the workspace
+ * identifier; the id is lowercased before any path is built (the UUID check is
+ * case-insensitive, the filesystem is not).
  *
  * @param workspaceId Workspace UUID. For solo account deletion this equals
  *   `user.id` per the N2 invariant; the caller (account-delete.ts) passes
@@ -295,34 +339,82 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
+  const id = workspaceId.toLowerCase();
+  const idHash = hashUserId(id);
 
-  // Resolve ALL roots before removing anything: a catastrophic root ('/') throws
-  // here, so no partial reap happens under a poisoned configuration. The Map
-  // dedupes equal roots (WORKSPACES_ROOT === WORKTREE_ROOT) by their target path.
-  const targets = new Map<string, string>();
-  for (const root of workspaceTenantDenyRoots()) {
-    targets.set(join(root, workspaceId), root);
+  const failures: ReapFailure[] = [];
+  const errors: Error[] = [];
+  const fail = (root: ReapFailureRoot, kind: ReapFailureKind, err?: unknown) => {
+    const code =
+      err && typeof (err as NodeJS.ErrnoException).code === "string"
+        ? (err as NodeJS.ErrnoException).code
+        : undefined;
+    failures.push({ root, kind, ...(code ? { code } : {}) });
+    // Path-free summary: the raw error's message embeds `<root>/<uuid>`.
+    const summary = Object.assign(
+      new Error(`reap ${root} ${kind}${code ? ` (${code})` : err instanceof Error ? ` (${err.name})` : ""}`),
+      code ? { code } : {},
+    );
+    errors.push(summary);
+    log.error({ workspaceIdHash: idHash, root, kind, code }, "Workspace root reap failed");
+  };
+
+  // Equal-by-canonical-target roots (one symlinked dir, WORKTREE_ROOT ==
+  // WORKSPACES_ROOT) are reaped and counted once; the legacy root is added first.
+  const targets: { label: ReapRootLabel; root: string; path: string }[] = [];
+  const seen = new Set<string>();
+  const addRoot = (label: ReapRootLabel, root: string) => {
+    let key = root;
+    try {
+      key = canonicalizeRoot(root) ?? root;
+    } catch {
+      // Unresolvable prefix: fall back to the lexical root; removal reports the real fault.
+    }
+    if (seen.has(key)) return;
+    seen.add(key);
+    targets.push({ label, root, path: join(root, id) });
+  };
+  addRoot("workspaces", getWorkspacesRoot());
+  let resolverFailed = 0;
+  try {
+    for (const r of workspaceReapRoots()) addRoot(r.label, r.root);
+  } catch (err) {
+    resolverFailed = 1;
+    fail("resolver", "error", err);
   }
 
-  const failures: unknown[] = [];
-  for (const [workspacePath, root] of targets) {
+  const removed: typeof targets = [];
+  for (const t of targets) {
     try {
-      removeWorkspaceDir(workspacePath, [root]);
-      // Verify, don't assume: lstat (never follows a link) must now report ENOENT.
-      if (lstatOrNull(workspacePath)) {
-        throw new Error("Workspace directory still present after removal");
+      const existed = lstatOrNull(t.path) !== null;
+      const outcome = removeWorkspaceDir(t.path, [t.root]);
+      if (outcome === "moved-aside") {
+        fail(t.label, "moved-aside");
+      } else if (lstatOrNull(t.path)) {
+        // Verify, don't assume: lstat (never follows a link) must now report ENOENT.
+        fail(t.label, "survived");
+      } else if (existed) {
+        removed.push(t);
+        log.info({ workspaceIdHash: idHash, root: t.label }, "Workspace deleted");
       }
-      log.info({ workspaceId, root }, "Workspace deleted");
     } catch (err) {
-      log.error({ workspaceId, root, err }, "Workspace root reap failed");
-      failures.push(err);
+      fail(t.label, "error", err);
     }
   }
+
+  if (removed.length > 0) {
+    await new Promise<void>((r) => setTimeout(r, REAP_RECHECK_DELAY_MS));
+    for (const t of removed) {
+      try {
+        if (lstatOrNull(t.path)) fail(t.label, "recreated");
+      } catch (err) {
+        fail(t.label, "error", err);
+      }
+    }
+  }
+
   if (failures.length > 0) {
-    throw new AggregateError(
-      failures,
-      `deleteWorkspace: ${failures.length} of ${targets.size} tenant roots could not be reaped`,
-    );
+    throw new WorkspaceReapError(failures, errors, targets.length + resolverFailed);
   }
 }
 
@@ -334,6 +426,18 @@ function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
     throw err;
   }
 }
+
+/**
+ * Log fields for a workspace path: the leaf is a workspace UUID (= a user id for
+ * solo workspaces), and these logs reach Sentry through the pino mirror, so the
+ * raw path never travels, only the hashed leaf.
+ */
+function pathFields(workspacePath: string): { workspaceIdHash: string } {
+  return { workspaceIdHash: hashUserId(basename(workspacePath)) };
+}
+
+/** What {@link removeWorkspaceDir} did to the path. */
+export type RemoveOutcome = "removed" | "unlinked" | "absent" | "moved-aside";
 
 /**
  * Removes a workspace directory, handling permission-denied errors from
@@ -350,11 +454,16 @@ function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
  * DEFAULTS to the single workspaces root, so existing callers keep the exact
  * guard. A `/` root never matches. A symlink at the path is unlinked, never
  * followed.
+ *
+ * Returns what happened. `"moved-aside"` means the tree was only RENAMED to
+ * `<path>.orphaned-<ts>` (undeletable files remain on disk): the path is free for
+ * re-provisioning, which is all the provision caller needs and why it ignores the
+ * return, but it is NOT an erasure, so `deleteWorkspace` treats it as a failure.
  */
 export function removeWorkspaceDir(
   workspacePath: string,
   allowedRoots: string[] = [getWorkspacesRoot()],
-): void {
+): RemoveOutcome {
   const resolved = resolve(workspacePath);
   const allowed = allowedRoots.some((r) => {
     // A "/" root can never match: resolve("/") + "/" is "//", which no resolved path starts with.
@@ -369,17 +478,17 @@ export function removeWorkspaceDir(
   // absent, and a link to a directory would be treated as the directory itself.
   if (lstatOrNull(workspacePath)?.isSymbolicLink()) {
     unlinkSync(workspacePath);
-    return;
+    return "unlinked";
   }
 
-  if (!existsSync(workspacePath)) return;
+  if (!existsSync(workspacePath)) return "absent";
 
   // Phase 1: Direct removal (works when all files owned by current user)
   try {
     execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
-    return;
+    return "removed";
   } catch {
-    log.warn({ workspacePath }, "Direct rm -rf failed, attempting partial cleanup");
+    log.warn({ ...pathFields(workspacePath) }, "Direct rm -rf failed, attempting partial cleanup");
   }
 
   // Phase 2: Fix permission bits on user-owned files, then delete individually.
@@ -402,7 +511,7 @@ export function removeWorkspaceDir(
   // Check if workspace dir is now empty
   try {
     execFileSync("rmdir", [workspacePath], { stdio: "pipe" });
-    return; // fully cleaned
+    return "removed"; // fully cleaned
   } catch {
     // Directory not empty -- root-owned files remain
   }
@@ -414,12 +523,15 @@ export function removeWorkspaceDir(
   try {
     execFileSync("mv", [workspacePath, orphanedPath], { stdio: "pipe" });
     log.warn(
-      { workspacePath, orphanedPath },
+      { ...pathFields(workspacePath), orphanedAt: orphanedPath.slice(workspacePath.length) },
       "Workspace contained undeletable files; moved aside for background cleanup",
     );
-    return;
+    return "moved-aside";
   } catch (err) {
-    log.error({ workspacePath, err }, "Workspace cleanup failed: cannot move aside");
+    log.error(
+      { ...pathFields(workspacePath), errCode: (err as NodeJS.ErrnoException)?.code },
+      "Workspace cleanup failed: cannot move aside",
+    );
     throw new Error(
       "Workspace cleanup failed \u2014 please try again or contact support",
     );

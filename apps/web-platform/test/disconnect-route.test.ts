@@ -14,6 +14,7 @@ const {
   mockResolveActiveWorkspace,
   mockWriteRepoColsToWorkspace,
   mockAbortAllSessionsForWorkspace,
+  mockWaitForWorkspaceSessions,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
@@ -23,6 +24,7 @@ const {
   mockResolveActiveWorkspace: vi.fn(),
   mockWriteRepoColsToWorkspace: vi.fn(),
   mockAbortAllSessionsForWorkspace: vi.fn(),
+  mockWaitForWorkspaceSessions: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -56,6 +58,7 @@ vi.mock("@/server/workspace-repo-mirror", () => ({
 // ADR-044 PR-2 / P0-6: live member agent sessions are aborted before teardown.
 vi.mock("@/server/agent-session-registry", () => ({
   abortAllSessionsForWorkspace: mockAbortAllSessionsForWorkspace,
+  waitForWorkspaceSessionsToDeregister: mockWaitForWorkspaceSessions,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -90,6 +93,8 @@ vi.mock("@sentry/nextjs", () => ({
 
 import { DELETE } from "@/app/api/repo/disconnect/route";
 import { validateOrigin } from "@/lib/auth/validate-origin";
+import * as Sentry from "@sentry/nextjs";
+import logger from "@/server/logger";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -155,6 +160,7 @@ describe("DELETE /api/repo/disconnect", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsAllowed.mockReturnValue(true);
+    mockWaitForWorkspaceSessions.mockResolvedValue({ drained: true, waitedMs: 0 });
     // ADR-044 PR-1 owner-gate: default to owner. The non-owner case overrides.
     mockRpc.mockResolvedValue({ data: true, error: null });
     // ADR-044 PR-2: default the resolver to SOLO (active == caller), so every
@@ -430,6 +436,66 @@ describe("DELETE /api/repo/disconnect", () => {
 
     // The credential WAS cleared before the best-effort teardown failed.
     expect(mockWriteRepoColsToWorkspace).toHaveBeenCalled();
+  });
+
+  test("a reap failure is captured to Sentry with TAGS and no raw ids, and still returns 200 (#8211)", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: TEAM_WORKSPACE_ID });
+    setupServiceMocks({ repoStatus: "ready" });
+    mockDeleteWorkspace.mockRejectedValue(
+      Object.assign(new AggregateError([], "deleteWorkspace: 1 of 2 tenant roots could not be reaped"), {
+        failures: [{ root: "worktree", kind: "moved-aside" }],
+      }),
+    );
+
+    const res = await DELETE(makeRequest());
+
+    expect(res.status).toBe(200);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    const [, ctx] = vi.mocked(Sentry.captureException).mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(ctx).toMatchObject({
+      tags: { feature: "repo-disconnect", op: "workspace-cleanup" },
+      extra: { failures: [{ root: "worktree", kind: "moved-aside" }] },
+    });
+    expect(JSON.stringify([ctx, vi.mocked(logger.warn).mock.calls])).not.toContain(TEAM_WORKSPACE_ID);
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain(TEST_USER_ID);
+  });
+
+  test("order: abort sessions, wait for them to deregister, THEN reap (#8211)", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: TEAM_WORKSPACE_ID });
+    setupServiceMocks({ repoStatus: "ready" });
+    const order: string[] = [];
+    mockAbortAllSessionsForWorkspace.mockImplementation(() => void order.push("abort"));
+    mockWaitForWorkspaceSessions.mockImplementation(async () => {
+      order.push("wait");
+      return { drained: true, waitedMs: 0 };
+    });
+    mockDeleteWorkspace.mockImplementation(async () => void order.push("reap"));
+
+    await DELETE(makeRequest());
+
+    expect(order).toEqual(["abort", "wait", "reap"]);
+    expect(mockWaitForWorkspaceSessions).toHaveBeenCalledWith(TEAM_WORKSPACE_ID);
+  });
+
+  test("the drain bound elapsing logs a HASHED breadcrumb and still reaps", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: TEAM_WORKSPACE_ID });
+    setupServiceMocks({ repoStatus: "ready" });
+    mockWaitForWorkspaceSessions.mockResolvedValue({ drained: false, waitedMs: 5000 });
+
+    const res = await DELETE(makeRequest());
+
+    expect(res.status).toBe(200);
+    expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEAM_WORKSPACE_ID);
+    const crumb = vi
+      .mocked(logger.warn)
+      .mock.calls.find(([, m]) => /drain bound/.test(String(m))) as [Record<string, unknown>, string];
+    expect(crumb).toBeDefined();
+    expect(crumb[0]).toMatchObject({ waitedMs: 5000 });
+    expect(crumb[0]).toHaveProperty("workspaceIdHash");
+    expect(JSON.stringify(crumb)).not.toContain(TEAM_WORKSPACE_ID);
   });
 
   test("returns 200 idempotently when the active workspace has no connected repo", async () => {

@@ -4,7 +4,11 @@ import { dirname, join, relative, sep } from "node:path";
 import { describe, it, expect } from "vitest";
 
 import { GIT_DATA_PIN_FAULT_REASONS } from "@/server/git-data-pin-fault";
-import { ART17_ERASURE_FEATURE, ART17_ERASURE_OP } from "@/server/account-delete";
+import {
+  ART17_ERASURE_FEATURE,
+  ART17_ERASURE_OP,
+  ART17_WORKSPACE_TREE_ERASURE_OP,
+} from "@/server/account-delete";
 import { stripComments } from "./helpers/strip-comments";
 
 // #8572 — cross-artifact contracts between two emitters and the rules that page on them.
@@ -255,5 +259,72 @@ describe("art17_erasure_incomplete — stays unnarrowed and re-paging (#8572, Gu
   it("is enabled and keeps its 5-minute throttle", () => {
     expect(attr(block(), "enabled")).toBe("true");
     expect(attr(block(), "frequency_minutes")).toBe("5");
+  });
+});
+
+// ── Guard 2b (#8211) ───────────────────────────────────────────────────────────────────
+// The LOCAL working-tree leg of the same Art. 17 erasure. account-delete mirrors a failed
+// or moved-aside reap as feature=account-delete op=workspace-tree-erasure while the user is
+// told the deletion succeeded; art17_erasure_incomplete filters on the bare-repo op ONLY, so
+// without this sibling that event pages nobody.
+
+describe("art17_workspace_tree_erasure_incomplete — sibling pager for the working-tree leg (#8211)", () => {
+  const block = () => ruleBlock("art17_workspace_tree_erasure_incomplete");
+
+  it("the two ops are distinct literals (a shared op would double-page one refusal)", () => {
+    expect(ART17_WORKSPACE_TREE_ERASURE_OP).toBe("workspace-tree-erasure");
+    expect(ART17_WORKSPACE_TREE_ERASURE_OP).not.toBe(ART17_ERASURE_OP);
+  });
+
+  it("has exactly two conditions, feature and op, both `eq` on the emitter's literals, under `all`", () => {
+    const c = conditions(block());
+    expect(c).toHaveLength(2);
+    const feature = c.map((l) => l.match(TAGGED("feature"))).find(Boolean);
+    const op = c.map((l) => l.match(TAGGED("op"))).find(Boolean);
+    if (!feature || !op) throw new Error(`fixture: expected feature and op filters, read: ${c.join(" | ")}`);
+    expect([feature[1], feature[2]]).toEqual(["eq", ART17_ERASURE_FEATURE]);
+    expect([op[1], op[2]]).toEqual(["eq", ART17_WORKSPACE_TREE_ERASURE_OP]);
+    expect(logicTypes(block())).toEqual(["all"]);
+  });
+
+  it("pages on the transitions AND re-pages per event, same as its sibling", () => {
+    expect(triggers(block())).toEqual([...TRANSITIONS, RE_PAGING].sort());
+  });
+
+  it("is enabled and emails a person (issue_owners → ActiveMembers, never NoOne)", () => {
+    expect(attr(block(), "enabled")).toBe("true");
+    expect(block()).toMatch(
+      /email\s*=\s*\{\s*target_type\s*=\s*"issue_owners"\s*,\s*fallthrough_type\s*=\s*"ActiveMembers"\s*\}/,
+    );
+    expect(block()).not.toMatch(/fallthrough_type\s*=\s*"NoOne"/);
+  });
+
+  it("uses a frequency_minutes no other rule uses (Sentry dedups on action shape + frequency)", () => {
+    const { own, count } = ownFrequencyIsUnique(block());
+    expect(own).toBe(6);
+    expect(count).toBe(1);
+  });
+
+  it("is attached to the web-platform issue stream", () => {
+    expect(block()).toMatch(/^\s*monitor_ids\s*=\s*\[data\.sentry_project_issue_stream_monitor\.web_platform\.id\]/m);
+  });
+
+  it("the reference entry mirrors it", () => {
+    const ref = reference["art17-workspace-tree-erasure-incomplete"];
+    if (!ref) throw new Error("fixture: art17-workspace-tree-erasure-incomplete missing from alert-reference.json");
+    expect(ref.actionFilters).toHaveLength(1);
+    expect(ref.actionFilters[0].logicType).toBe("all");
+    expect(ref.actionFilters[0].conditions.map((c) => [c.comparison.key, c.comparison.match, c.comparison.value])).toEqual([
+      ["feature", "eq", ART17_ERASURE_FEATURE],
+      ["op", "eq", ART17_WORKSPACE_TREE_ERASURE_OP],
+    ]);
+    expect(ref.triggerConditions.filter((t) => t.type === "event_frequency_count")).toEqual([
+      { type: "event_frequency_count", comparison: { interval: "1h", value: 0 } },
+    ]);
+    expect(ref.enabled).toBe(true);
+    expect(ref.frequency).toBe(6);
+    expect(ref.actionFilters[0].actions.map((a) => [a.type, a.targetType, a.fallthroughType])).toEqual([
+      ["email", "issue_owners", "ActiveMembers"],
+    ]);
   });
 });

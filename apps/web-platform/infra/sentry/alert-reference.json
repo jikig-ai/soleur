@@ -175,6 +175,67 @@
     ],
     "triggerLogicType": "any-short"
   },
+  "art17-workspace-tree-erasure-incomplete": {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "fallthroughType": "ActiveMembers",
+            "targetIdentifier": null,
+            "targetType": "issue_owners",
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "account-delete"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "workspace-tree-erasure"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "frequency": 6,
+    "name": "art17-workspace-tree-erasure-incomplete",
+    "triggerConditions": [
+      {
+        "comparison": true,
+        "type": "first_seen_event"
+      },
+      {
+        "comparison": true,
+        "type": "reappeared_event"
+      },
+      {
+        "comparison": true,
+        "type": "regression_event"
+      },
+      {
+        "comparison": {
+          "interval": "1h",
+          "value": 0
+        },
+        "type": "event_frequency_count"
+      }
+    ],
+    "triggerLogicType": "any-short"
+  },
   "auth-callback-no-code-burst": {
     "actionFilters": [
       {
