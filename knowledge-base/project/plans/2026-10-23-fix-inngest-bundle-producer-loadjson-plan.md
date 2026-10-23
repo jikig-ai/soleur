@@ -32,8 +32,9 @@ sequential-fallback: no Task/Agent tool on this harness, fan-outs executed inlin
    the consumer's pinned loader (`sign.Bundle` in-process validate skips when TrustedRoot is nil,
    and in-memory validate ≠ the on-disk load path). The new step hard-fails pre-push.
 4. **Floor-bump ordering hazard made explicit:** floor 6 merged while `INNGEST_CONFIG_DIGEST` is
-   still absent FATALs the next boot — merge→promote must ride the same window; no host-replace
-   dispatch between them.
+   still absent FATALs the next boot — merge→promote must ride the same window; NO dispatch that
+   renders and boots merged cloud-init between them (replace, rehearsal, cutover, any
+   `hcloud_server.inngest` target — CTO ruling).
 
 ### New Considerations Discovered
 
@@ -276,8 +277,12 @@ verbatim-error capture (`LoadJSONFromPath` error text) + the extended field dump
 `cloud-init-inngest.yml`: the isolation self-check `-lt 5` → `-lt 6` + update the surrounding
 "floor stays 5 ON PURPOSE" comment to record that `INNGEST_CONFIG_DIGEST` materializes in this
 arc's promotion apply. `inngest-host.test.sh` floor assertions 5→6. Ordering hazard documented in
-the PR body + a PR merge comment: no `inngest-host-replace` dispatch may run between merge and the
-promotion apply (a 5-name live set under floor 6 FATALs boot).
+the PR body + a PR merge comment: between merge and the promotion apply, NO dispatch that renders
+and boots merged cloud-init may run — `inngest-host-replace`, `inngest-provision-rehearsal.yml`,
+`cutover-inngest.yml`, or any apply whose `-target` set carries `hcloud_server.inngest` (a 5-name
+live set under floor 6 FATALs boot). If the promotion cannot be scheduled in the merge window, the
+bump degrades to a follow-up PR merged only after the secret exists (floor 5 vs 6 names is benign;
+deferral always safe, precedence is not — CTO ruling).
 
 ### Phase 4 — post-merge follow-through (dispatch + promote; normal gates apply)
 
