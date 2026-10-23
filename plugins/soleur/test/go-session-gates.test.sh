@@ -1172,8 +1172,41 @@ if [ -z "$H3_SKIP_REASON" ]; then
   h3_ws="$(fresh_ws h3)"
   h3_out="$(cd "$h3_ws" && printf '%s\n' "/soleur:go run ONLY the Step 0.0, Step 0.5 and Step 0 bash blocks exactly as delivered, then print their combined raw stdout verbatim inside one fenced code block with no summary, then STOP - do not classify, do not route, do not invoke any skill" \
     | timeout 420 claude -p --plugin-dir "${REPO_ROOT}/plugins/soleur" --allowedTools "Bash" 2>&1 || true)"
-  for g in readiness cloud-detect session-start; do
-    want_in "$h3_out" "gate=${g} source=plugin-root-token verified=true" "H3: real harness resolved ${g}"
+  # (#10714) The property under test is real-harness contact ending
+  # `verified=true`; WHICH verified arm resolved is environment data, not a
+  # defect. On a Devin-CLI host arm 3 supplies the root
+  # (`source=devin-cache verified=true` — go.md documents it as "the healthy
+  # Devin path"), so pinning `plugin-root-token` reds the suite on exactly the
+  # hosts arm 3 (#8401) was built for. The allowlist is the resolver's own
+  # verified arm set; an unlisted arm, `verified=false`, or a missing line all
+  # still fail — a future arm fails closed until a reviewer adds it here.
+  h3_classify() {
+    case "$1" in
+      *" source=plugin-root-token verified=true"|\
+      *" source=grok-env verified=true"|\
+      *" source=devin-cache verified=true") return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  # Drive the new decider both directions (suite doctrine: a verdict-owning
+  # construct must be proven to take each arm).
+  ck; if h3_classify "SOLEUR_PLUGIN_ROOT_RESOLVE gate=readiness source=devin-cache verified=true"; then
+    pass "H3-decider: allowlisted arm passes"; else fail "H3-decider: allowlisted arm rejected"; fi
+  ck; if h3_classify "SOLEUR_PLUGIN_ROOT_RESOLVE gate=readiness source=none verified=false"; then
+    fail "H3-decider: verified=false accepted"; else pass "H3-decider: verified=false rejected"; fi
+  ck; if h3_classify "SOLEUR_PLUGIN_ROOT_RESOLVE gate=readiness source=future-arm verified=true"; then
+    fail "H3-decider: unlisted arm accepted"; else pass "H3-decider: unlisted arm rejected"; fi
+  for g in "${GATE_NAMES[@]}"; do
+    # Exactly one RESOLVE line per gate is itself pinned (R9): a count other
+    # than 1 — absent or duplicated — fails rather than silently classifying.
+    h3_n="$(printf '%s\n' "$h3_out" | grep -cF "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${g} " || true)"
+    h3_line="$(printf '%s\n' "$h3_out" | grep -F "SOLEUR_PLUGIN_ROOT_RESOLVE gate=${g} " | tail -1 || true)"
+    ck
+    if [ "$h3_n" = "1" ] && h3_classify "$h3_line"; then
+      pass "H3: real harness resolved ${g} (verified=true on allowlisted arm)"
+    else
+      fail "H3: real harness ${g}: lines=${h3_n} line=${h3_line:-<absent>}"
+    fi
   done
 else
   # The reason must be TRUE, not merely printed. A skip claiming the binary is absent while
@@ -1335,7 +1368,7 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 239 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (241), so the
+# 239 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds five more (244), so the
 # floor holds on both paths. MEASURE IT WITH `SOLEUR_GO_GATES_SKIP_H3=1`, never from a local run
 # where the harness is present: #8418 raised it four times from local counts and CI reddened on
 # `194 < 196` — the same floor this comment already said to derive from the skipped path.
