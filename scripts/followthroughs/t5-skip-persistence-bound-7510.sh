@@ -84,9 +84,10 @@ esac
 # this whole file exists to close, one level up.
 #
 # The counter lives in a file the CARRIER is responsible for persisting across
-# runs (the workflow restores/saves it). If it is not persisted the counter
-# resets every run and escalation simply never fires: that DEGRADES OPEN, so it
-# is stated here rather than assumed, and the workflow asserts the round-trip.
+# runs (the workflow fetches it from, and uploads it to, a workflow artifact; ADR-296).
+# If it is not persisted the counter resets every run and escalation simply never
+# fires: that DEGRADES OPEN, so it is stated here rather than assumed, and the
+# workflow asserts the round-trip.
 T5_PROBE_STATE="${T5_PROBE_STATE:-${TMPDIR:-/tmp}/t5-skip-probe-transient-streak}"
 T5_TRANSIENT_ESCALATE_AFTER="${T5_TRANSIENT_ESCALATE_AFTER:-3}"
 
