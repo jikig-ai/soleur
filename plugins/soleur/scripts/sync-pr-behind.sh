@@ -181,6 +181,23 @@ if [[ "$NMODE" -gt 1 ]]; then usage_err "at most one of --step, --queue-state, -
 if [[ "$FENCE" == 1 && "$MODE" != step ]]; then usage_err "--fence is only valid with --step"; fi
 if [[ "$MODE" != loop && "$MAX_ATTEMPTS" != 1 ]]; then usage_err "--step, --queue-state and --queue-wait take no --max-attempts"; fi
 
+# The env bounds and the stderr sanitiser, once each (#10832; before this they were pasted into four readers and three sanitised
+# strings, so a change to a bound or to the sanitiser had to be made in every copy). qb_bounds sets QB_TIMEOUT / QB_ATTEMPTS / QB_NAP
+# from PR_QUEUE_TIMEOUT / PR_QUEUE_ATTEMPTS / PR_QUEUE_RETRY_SLEEP, each clamped to its documented range (anything else is the
+# default); EVERY reader (queue_state_read, queue_read_settled, queue_wait_eval, qw_snapshot) calls it itself first and reads the
+# QB_* globals directly, because a reader that relied on another's earlier call would abort under `set -u` on the --queue-wait path,
+# which runs qw_snapshot before anything else. It is called directly, never inside `$( )`, so the globals survive. qb_clean is a stdin
+# filter for gh's raw stderr, which reaches a model-visible `kind=gh` line: only [:alnum:] and ._:/=- and space survive (ESC, CR and a
+# forged tag line cannot); LC_ALL=C because BSD tr (macOS) is locale-aware. Neither helper exits.
+QB_TIMEOUT=10; QB_ATTEMPTS=2; QB_NAP=2
+qb_bounds() {
+  QB_TIMEOUT="${PR_QUEUE_TIMEOUT:-10}"; QB_ATTEMPTS="${PR_QUEUE_ATTEMPTS:-2}"; QB_NAP="${PR_QUEUE_RETRY_SLEEP:-2}"
+  [[ "$QB_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || QB_TIMEOUT=10
+  [[ "$QB_ATTEMPTS" =~ ^[1-9]$ ]] || QB_ATTEMPTS=2
+  [[ "$QB_NAP" =~ ^[0-9]{1,3}$ ]] || QB_NAP=2
+}
+qb_clean() { LC_ALL=C tr -c '[:alnum:] ._:/=-' '?'; }
+
 # queue_state_read — THE ONE copy of the merge-queue GraphQL read and its jq verdict program (the
 # pre-merge hook and monitor-pr-checks.sh reach it through --queue-state). Sets QS_OUT to
 # `<queued|not_queued> <state> <armed|disarmed> removal=<reason|none>` (`-` for a field the answer lacks;
@@ -192,15 +209,12 @@ if [[ "$MODE" != loop && "$MAX_ATTEMPTS" != 1 ]]; then usage_err "--step, --queu
 # `bash -c` so a gh that is a shell function (an exported test mock) is still reached, and under
 # timeout/gtimeout when present so a hung call cannot hang a poll tick or a hook.
 queue_state_read() {
-  local to_s="${PR_QUEUE_TIMEOUT:-10}" attempts="${PR_QUEUE_ATTEMPTS:-2}" nap="${PR_QUEUE_RETRY_SLEEP:-2}"
+  qb_bounds
   local owner='{owner}' repo='{repo}' n=0 rc out errf query jqp
-  [[ "$to_s" =~ ^[1-9][0-9]{0,3}$ ]] || to_s=10
-  [[ "$attempts" =~ ^[1-9]$ ]] || attempts=2
-  [[ "$nap" =~ ^[0-9]{1,3}$ ]] || nap=2
   if [[ "${PR_QUEUE_REPO:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then owner="${PR_QUEUE_REPO%%/*}"; repo="${PR_QUEUE_REPO#*/}"; fi
   local to=()
-  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$to_s")
-  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$to_s"); fi
+  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$QB_TIMEOUT")
+  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$QB_TIMEOUT"); fi
   # shellcheck disable=SC2016  # the GraphQL `$owner`/`$name`/`$number` are variables of the query, not shell
   query='
 query($owner: String!, $name: String!, $number: Int!) {
@@ -229,7 +243,7 @@ query($owner: String!, $name: String!, $number: Int!) {
            else "-" end)
     end'
   errf="$(mktemp)" || { QS_CAUSE=gh_error; QS_DETAIL="mktemp failed"; return 1; }  # lint-trap-ownership: ok — removed by rm -f on every return path of queue_state_read; a kill leaves one tiny file
-  while [[ "$n" -lt "$attempts" ]]; do
+  while [[ "$n" -lt "$QB_ATTEMPTS" ]]; do
     n=$((n + 1)); rc=0
     # shellcheck disable=SC2016  # $1..$5 are bash -c's own positional parameters, not this shell's
     out="$(${to[@]+"${to[@]}"} bash -c 'gh api graphql -F owner="$4" -F name="$5" -F number="$1" -f query="$2" --jq "$3"' \
@@ -237,7 +251,7 @@ query($owner: String!, $name: String!, $number: Int!) {
     if [[ "$rc" -ne 0 ]]; then
       case "$rc" in 124|137|143) QS_CAUSE=timeout ;; *) QS_CAUSE=gh_error ;; esac
       # gh's raw stderr reaches the `kind=gh rc=4` line a Monitor streams to the model: ESC, CR and a forged tag line must not.
-      QS_DETAIL="$(printf '%s' "rc=$rc $(head -c 200 "$errf")" | tr -c '[:alnum:] ._:/=-' '?')"
+      QS_DETAIL="$(printf '%s' "rc=$rc $(head -c 200 "$errf")" | qb_clean)"
     else
       out="${out%%$'\n'*}"
       case "${out%% *}" in
@@ -245,7 +259,7 @@ query($owner: String!, $name: String!, $number: Int!) {
         *) QS_CAUSE=unparseable; QS_DETAIL="read returned '${out:0:80}' (want queued or not_queued)" ;;
       esac
     fi
-    if [[ "$n" -lt "$attempts" ]]; then sleep "$nap"; fi
+    if [[ "$n" -lt "$QB_ATTEMPTS" ]]; then sleep "$QB_NAP"; fi
   done
   rm -f "$errf"
   return 1
@@ -267,10 +281,9 @@ dq_candidate() {
 # dequeue candidate, so the instant the queue's own merge lands (not queued, OPEN, about to read MERGED) is never
 # reported as a dequeue. Returns 1 (QS_CAUSE set) when either read fails: a failed read is never a verdict.
 queue_read_settled() {
-  local nap="${PR_QUEUE_RETRY_SLEEP:-2}"
-  [[ "$nap" =~ ^[0-9]{1,3}$ ]] || nap=2
+  qb_bounds
   queue_state_read || return 1
-  if dq_candidate "$1"; then sleep "$nap"; queue_state_read || return 1; fi
+  if dq_candidate "$1"; then sleep "$QB_NAP"; queue_state_read || return 1; fi
   return 0
 }
 
@@ -286,20 +299,17 @@ queue_read_settled() {
 # queue_state_read), or answers empty or non-numeric, is `unreadable`: the one place this script fails CLOSED on an unreadable
 # rules answer (ADR-270 addendum 2026-10-09) — an unknown answer is not a yes. The cause is in QW_DETAIL. Base is `main`.
 queue_wait_eval() {  # <state_line: "<STATE> <MERGESTATE>"> <armed|disarmed|->
-  local am="$2" out="" rc=0 n=0 detail="" errf owner='{owner}' repo='{repo}'
-  local to_s="${PR_QUEUE_TIMEOUT:-10}" attempts="${PR_QUEUE_ATTEMPTS:-2}" nap="${PR_QUEUE_RETRY_SLEEP:-2}" to=()
+  qb_bounds
+  local am="$2" out="" rc=0 n=0 detail="" errf owner='{owner}' repo='{repo}' to=()
   QW_VERDICT=proceed; QW_DETAIL=""
   [[ "$1" == OPEN\ * ]] || return 0
   [[ ( "$1" == *BEHIND* || "$1" == *UNKNOWN* ) && "$1" != *DIRTY* ]] || return 0
   [[ "$am" == armed ]] || return 0
-  [[ "$to_s" =~ ^[1-9][0-9]{0,3}$ ]] || to_s=10
-  [[ "$attempts" =~ ^[1-9]$ ]] || attempts=2
-  [[ "$nap" =~ ^[0-9]{1,3}$ ]] || nap=2
   if [[ "${PR_QUEUE_REPO:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then owner="${PR_QUEUE_REPO%%/*}"; repo="${PR_QUEUE_REPO#*/}"; fi
-  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$to_s")
-  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$to_s"); fi
+  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$QB_TIMEOUT")
+  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$QB_TIMEOUT"); fi
   errf="$(mktemp)" || { QW_VERDICT=unreadable; QW_DETAIL="rule read not attempted (mktemp failed)"; return 0; }  # lint-trap-ownership: ok — removed by rm -f on every return path of queue_wait_eval; a kill leaves one tiny file
-  while [[ "$n" -lt "$attempts" ]]; do
+  while [[ "$n" -lt "$QB_ATTEMPTS" ]]; do
     n=$((n + 1)); rc=0
     # shellcheck disable=SC2016  # $1..$3 are bash -c's own positional parameters, not this shell's
     out="$(${to[@]+"${to[@]}"} bash -c 'gh api "repos/$1/$2/rules/branches/main?per_page=100" --jq "$3"' \
@@ -307,14 +317,14 @@ queue_wait_eval() {  # <state_line: "<STATE> <MERGESTATE>"> <armed|disarmed|->
     out="${out%%$'\n'*}"
     if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then break; fi
     detail="rc=$rc answered=${out:0:40} $(head -c 160 "$errf" | tr '\n' ' ')"
-    if [[ "$n" -lt "$attempts" ]]; then sleep "$nap"; fi
+    if [[ "$n" -lt "$QB_ATTEMPTS" ]]; then sleep "$QB_NAP"; fi
   done
   rm -f "$errf"
   if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then
     if (( 10#$out >= 1 )); then QW_VERDICT="wait"; QW_DETAIL="rules=$out"; fi
     return 0
   fi
-  detail="$(printf '%s' "$detail" | tr -c '[:alnum:] ._:/=-' '?')"
+  detail="$(printf '%s' "$detail" | qb_clean)"
   QW_VERDICT=unreadable; QW_DETAIL="rule read failed after $n attempt(s) ($detail)"
   return 0
 }
@@ -334,11 +344,11 @@ qw_unreadable() {  # <detail>
 # the same timeout wrapper and PR_QUEUE_REPO handling as the other reads, with gh's stderr kept OUT of the string the match
 # tests, and a strict match on the answer. ANY failure — non-zero, hung, empty, garbage — is `kind=gh` exit 4: never read as "not armed".
 qw_snapshot() {
-  local to_s="${PR_QUEUE_TIMEOUT:-10}" out="" rc=0 errf pvd repo_arg="" to=()
-  [[ "$to_s" =~ ^[1-9][0-9]{0,3}$ ]] || to_s=10
+  qb_bounds
+  local out="" rc=0 errf pvd repo_arg="" to=()
   if [[ "${PR_QUEUE_REPO:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then repo_arg="$PR_QUEUE_REPO"; fi
-  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$to_s")
-  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$to_s"); fi
+  if command -v timeout >/dev/null 2>&1; then to=(timeout -k 2 "$QB_TIMEOUT")
+  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout -k 2 "$QB_TIMEOUT"); fi
   errf="$(mktemp)" || { tag gh 4 "pr view snapshot not attempted (mktemp failed) — not syncing; retry the poll"; exit 4; }  # lint-trap-ownership: ok — removed by rm -f on every path of qw_snapshot; a kill leaves one tiny file
   # shellcheck disable=SC2016  # $1..$3 are bash -c's own positional parameters, not this shell's
   out="$(${to[@]+"${to[@]}"} bash -c 'if [[ -n "$3" ]]; then gh pr view "$1" --repo "$3" --json state,mergeStateStatus,autoMergeRequest --jq "$2"; else gh pr view "$1" --json state,mergeStateStatus,autoMergeRequest --jq "$2"; fi' \
@@ -349,7 +359,7 @@ qw_snapshot() {
     QW_STATE="${out% *}"; QW_ARMED="${out##* }"
     return 0
   fi
-  pvd="$(printf '%s' "rc=$rc answered=${out:0:40} $(head -c 160 "$errf")" | tr -c '[:alnum:] ._:/=-' '?')"
+  pvd="$(printf '%s' "rc=$rc answered=${out:0:40} $(head -c 160 "$errf")" | qb_clean)"
   rm -f "$errf"
   tag gh 4 "pr view snapshot read failed ($pvd) — not syncing: whether this PR is armed and BEHIND decides if a resync is allowed, and an unknown answer is not a yes. Retry."
   exit 4

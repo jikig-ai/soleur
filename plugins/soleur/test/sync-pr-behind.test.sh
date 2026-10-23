@@ -1664,7 +1664,7 @@ qw_mutant "drop the armed condition (rule only)" r3 $'  [[ "$am" == armed ]] || 
 qw_mutant "read the first rule instead of selecting .type == merge_queue" q1 '[.[] | select(.type == "merge_queue")]' '[.[0] | select(.type == "merge_queue")]'
 qw_mutant "read the second rule instead of selecting .type == merge_queue" q1f '[.[] | select(.type == "merge_queue")]' '[.[1] | select(.type == "merge_queue")]'
 qw_mutant "drop the timeout wrapper on the rules read" hang $'    out="$(${to[@]+"${to[@]}"} bash -c \'gh api "repos/' $'    out="$(bash -c \'gh api "repos/'
-qw_mutant "echo the rules-read cause unsanitised" ctl $'  detail="$(printf \'%s\' "$detail" | tr -c \'[:alnum:] ._:/=-\' \'?\')"\n' ''
+qw_mutant "echo the rules-read cause unsanitised" ctl $'  detail="$(printf \'%s\' "$detail" | qb_clean)"\n' ''
 qw_mutant "grade the rules read on stdout alone (drop the rc clause)" numfail $'  if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then\n    if (( 10#$out' $'  if [[ "$out" =~ ^[0-9]{1,6}$ ]]; then\n    if (( 10#$out'
 if qw_scenario f1 && qw_scenario f1b && qw_scenario f3 && qw_scenario f4 && qw_scenario f5r && qw_scenario f5v && qw_scenario f6 && qw_scenario r6 && qw_scenario f7; then
   pass "mutation control: the real SUT satisfies the flagless --step scenarios (F1, F1b, F3, F4, F5 rules/pr view, F6, R6, F7)"
