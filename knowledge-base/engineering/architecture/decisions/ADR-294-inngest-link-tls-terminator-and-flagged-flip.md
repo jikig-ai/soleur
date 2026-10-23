@@ -180,3 +180,12 @@ Accepted residuals: the first-boot tuple in `cloud-init.yml` keeps its duplicate
 prod container is not inspected (the canary's proof transfers to it only for these two names, through the shared env-file), the image's own `ENV`
 was not measured, a plainly spelled `NODE_EXTRA_CA_CERTS` never reaches the scrub (the key overlay refuses it first; a no-break-space or BOM prefixed spelling can), and the overlay's `grep` weakness
 is tracked separately (#10855).
+
+## Addendum (2026-10-23, the second flip attempt)
+
+The second `flip` (workflow run 39977793262) failed at the host-side self-gate on web-1 with `INNGEST_LINK: class=selfgate_failed level=error rc=56 http=000 attempts=3`
+(run-log reason `inngest_link_selfgate_failed`), before any canary ran, and the fleet reverted to http. That event named only the last attempt's curl exit code and HTTP code, so the stage that failed was
+unreadable, and its cause is still not established. #10934 appends `phase=<connect|handshake|verify|ca_file|request|status|unknown> tcp= tls= verify=` after `attempts=`, derived from one curl `-w` line; the pass predicate (curl exit 0 and HTTP 200
+against the pinned file) is unchanged. Measured on local servers (`curl-w-measurements.md`: curl 7.81.0, 8.5.0, 8.23.0): a real stunnel 5.72 whose upstream `127.0.0.1:8288` refused printed `rc=56 http=000` with TLS completed and verified
+(curl 8.5.0 only), the shape of the incident event and not a cause. `phase=request` therefore means only that TLS verified and no HTTP response came back: check the terminator and its upstream, not the certificate; the terminator's journald is not
+shipped (#10880). Not measured: the hosts' curl version, and the hang phases, a TCP reset, an empty CA file and a truncated body beyond the evidence file.

@@ -1352,7 +1352,7 @@ is printed beside it). `--grep` is an unanchored substring match on the double-e
 | `https_to_http` | warning | Emitted at resolve time when this host's `last-scheme` file says its last deploy started https and it now resolves http **with a verified scope**. Expected after an intentional `off` or a lapsed lease; otherwise the flag disappeared (hand delete, Doppler restore) and the fleet is moving to plaintext. It never fails the deploy, and an intentional `off` is a warning event only, not a page. **No alert rule routes it** (#10556), so read it after every `off` and on a routine schedule while the flag is on. `last-scheme` is written only after the **production** `docker run` succeeds, never at resolve time, so a failed flip canary and its revert leave it alone, and a scope-unverified run never records one. |
 | `ca_unavailable` | error | https resolved but the CA could not be read from the snapshot or Doppler after three tries. The deploy fails. |
 | `ca_invalid` | error | `why=<tool\|decode\|size\|empty\|key\|count\|parse\|expired\|ca>` names the first failed validator check. The deploy fails. |
-| `selfgate_failed` | error | `rc=` and `http=` of the last of three host-side `curl --cacert <candidate>` attempts. The listener is down, the CA does not match the served certificate, or the host-to-host path is blocked. The deploy fails; the old CA file is untouched. |
+| `selfgate_failed` | error | `rc=<n> http=<ddd\|none> attempts=<n> phase=<token> tcp=<n> tls=<n> verify=<n>`: the last of the host-side `curl --cacert <candidate>` attempts (three by default) and the stage it reached. Never read it from `rc` alone: see "Reading `selfgate_failed`" below for every field and token, a first read per token and the retry rule. The deploy fails with the run-log reason `inngest_link_selfgate_failed` (the stage is only in this event); the old CA file is untouched. An event without `phase=` is from before the fix: it cannot be decoded further. |
 | `write_failed` | error | `file=ca_candidate\|ca\|link_env`: installing under `/mnt/data/inngest-link` failed with https. See "CA on web hosts" for what can and cannot be repaired. |
 | `ca_unwritable`, `link_env_unwritable`, `last_scheme_unwritable` | warning | The same directory was not writable on a flag-**off** deploy (the placeholder could not be installed) or for the downgrade memory: the deploy continues. |
 | `ca_reset_failed` | warning | Flag-**off** deploy, after the new container started: resetting the stale pinned CA to an empty placeholder failed (`dir=`). The deploy is fine; the pinned CA stays on disk and a later container start would mount it. Same ownership check and the same no-no-SSH-remedy caveat as "CA on web hosts" (#10557). |
@@ -1642,6 +1642,78 @@ empty `served_sha256`, or `served_sha256` different from `cert_sha256`); and a *
 is a certificate that was never installed, not an expiry. The refusal-marker page route (`monitor_send_failed` reading Vector
 Source 2 on the Inngest host) is asserted by source-text guards only; no PRIORITY-2 row from that host has been read back, so treat
 the first one as the proof and read it after A1 (`JSONExtractString(raw,'PRIORITY') = '2'` for the Inngest host's `host`).
+
+### Reading `selfgate_failed`
+
+One failed host-side gate is one line (the read is the `INNGEST_LINK: class=` query above with `--grep 'class=selfgate_failed'`):
+
+```
+INNGEST_LINK: class=selfgate_failed level=error rc=<n> http=<ddd|none> attempts=<n> phase=<token> tcp=<n> tls=<n> verify=<n>
+```
+
+Every field is a fixed token or an integer; the event never carries a URL, an address, certificate text or curl's own error message. The gate makes
+`attempts` tries of one curl each (three by default) and passes only on curl exit code 0 with HTTP 200 against the pinned file; nothing here changes that.
+
+| Field | Meaning | Reading rule |
+|---|---|---|
+| `rc` | curl's exit code on the LAST attempt | The same wire event can print a different `rc` on a different curl build (52 on curl 8.5.0, 56 on 7.81 and 8.23), so decide the stage from `phase`, not from `rc`. `rc` is needed only to tell 7 (refused) from 28 (a drop) when `tcp=0`, and for the `unknown` decode below. |
+| `http` | the HTTP code of the LAST attempt, only when it was a three-digit number, else `none` | `000` means curl got no HTTP status. `http=200` with `phase=request` is a 200 header whose body was cut short (curl exit code 18, measured): not healthy. |
+| `attempts` | how many attempts ran | The denominator for `tcp` and `tls`. |
+| `phase` | the stage the LAST attempt reached, one of seven tokens below | Describes the last attempt only. |
+| `tcp` | how many of ALL attempts connected TCP, 0 to 99 | Compare it with `attempts`; an attempt whose timer field could not be read adds nothing. |
+| `tls` | how many of ALL attempts completed the TLS handshake, 0 to 99 | Compare it with `attempts` and `tcp`. |
+| `verify` | 0 unless `phase=verify`; then curl's certificate verification result of the last attempt, clamped to 99 | See the `verify` reading rule below. |
+
+| `phase` | The last attempt | Typical `rc` | First read with no SSH (below) | Retry |
+|---|---|---|---|---|
+| `connect` | no TCP connection: the listener refused, a firewall dropped the packets, or nothing answers | 7 (refused), 28 (a drop; `tcp=0`) | the Inngest host's `tls-health` rows for the window: `listener`, `nrestarts`, `bind` | Transient if the listener is restarting; read `tls-health` first. A deterministic cause fails the same way on a re-flip. |
+| `handshake` | TCP connected, the TLS handshake did not complete (a terminator crash loop, plaintext on the TLS port, a stalled handshake) | 35, 28 | the same rows: `unit`, `nrestarts`, `listener` | As `connect`. |
+| `verify` | the handshake completed but the served certificate does not verify against the pinned file | 60 | `tls-health` `served_sha256` against `cert_sha256`, then the `verify=` value | Deterministic until the certificate or the pinned CA changes; a re-flip repeats it. |
+| `ca_file` | curl could not use the candidate CA file it was handed | 77 | the same deploy's `class=ca_invalid` and `class=write_failed` rows; this is not a listener problem | Deterministic until the CA file is right. |
+| `request` | TLS completed and verified, no HTTP response came back | 56, 52, 28, 1, 18 | the same `tls-health` rows (`unit`, `nrestarts`, `listener`), and the read-only `/hooks/inngest-tls-handshake` call (see "Calling the handshake hook (A2)" above) | May pass on a re-flip if the terminator or its upstream was restarting; each retry costs two host swaps. |
+| `status` | TLS verified and an HTTP status other than 200 came back | 0, 18 | the `http=` value | Depends on what answers behind the terminator; read the status first. |
+| `unknown` | the attempt's output could not be read (see the `unknown` decode) | 124, 2, 0 | none: the line carries no stage | Read the `unknown` decode before retrying. |
+
+**`phase=request` means: TLS verified, no HTTP response: check the terminator and its upstream, not the certificate. No cause is readable until
+#10880 ships the Inngest host's journald.** The event does not say whether the terminator, its upstream on `127.0.0.1:8288` or the app failed.
+A real stunnel whose upstream refused printed exactly `rc=56 http=000` with TLS completed (curl 8.5.0, one measurement): a match for the shape of the
+2026-10-23 event, not a cause for it.
+
+**First read with no SSH.** The Inngest host phones its `tls-health` row home every 5 minutes, independent of the journald shipper
+(see "Reading `tls-health` without SSH" above for the fields). Take the failed deploy's time, widen it by 15 minutes each way and read:
+
+```
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since <T-15m, ISO-Z> --until <T+15m, ISO-Z> --grep stage=tls-health --limit 10 \
+  | jq -R -r 'fromjson? | .raw | fromjson? | select(.stage == "tls-health") | .detail'
+```
+
+`listener=1` with `nrestarts` unchanged across the window says the terminator was up and stable at the 5-minute samples; it does not say it was up at the
+gate's second. An empty result is not a pass: confirm the query returned rows for the host first.
+
+**The `verify` reading rule.** `verify=` is meaningful only with `phase=verify`, because curl prints 1 for several unrelated failures; the line suppresses it elsewhere.
+`18`: the served certificate is a different self-signed certificate than the pinned file (the pinned file is a self-signed leaf by design, so a re-mint without a re-publish reads 18). `10`: the served certificate
+expired. `1`: a name mismatch (no matching IP in the served certificate); on curl 8.23 a different certificate WITHOUT the matching IP also reads 1, because the
+name check is reported first (measured), so 1 does not exclude a re-mint. `19`, `20`, `21` and any other value are unexpected: the served chain is not the designed single self-signed
+certificate (a leaf issued by a CA that is not pinned read 20 on curl 8.23, measured); do not guess, compare `served_sha256` with `cert_sha256`.
+
+**The flapping rule.** `phase` is the last attempt; `tcp` and `tls` cover all of them. When `tcp` or `tls` is below `attempts` while `tls` is at least 1, or when `phase` contradicts the counts
+(for example `phase=handshake` with `tls` at least 1), the listener changed state between tries (a restart): read it as an unstable listener, not as the last token alone. Three worked lines
+(each is pinned by the suite's flapping fixture, row S4):
+
+- `rc=56 http=000 attempts=3 phase=request tcp=2 tls=2 verify=0`: two attempts completed TLS and got no HTTP response, one did not even connect.
+- `rc=7 http=000 attempts=3 phase=connect tcp=1 tls=1 verify=0`: the last attempt was refused, but an earlier one got through TLS: the listener went away after a good attempt.
+- `rc=35 http=000 attempts=3 phase=handshake tcp=2 tls=1 verify=0`: TCP connected twice, TLS completed once, and the last attempt stalled before TLS.
+
+A steady line has `tcp`, `tls` equal to `attempts` (for `request` and `status`), `tcp=attempts tls=0` (`handshake`) or both 0 (`connect`).
+
+**The `unknown` decode.** `unknown` is never a stage and `tcp=0 tls=0` beside it does NOT mean connect failed: an attempt whose output was unreadable counts nothing.
+`rc=124`: the `timeout 20` wrapper killed curl, so curl printed nothing (a hang; this wins over any good timers). `rc=2`: curl 8.23 with an unusable CA file prints a usage
+error and no output (measured; other builds print `rc=77`, read as `ca_file`). `rc=0` with `phase=unknown`: the write-out line was not in the expected four-field shape,
+which means the curl output format changed; file it, do not retry.
+
+**Proof limits.** The profiles were measured against local servers on curl 7.81, 8.5.0 and 8.23 (evidence: `knowledge-base/project/specs/feat-one-shot-inngest-selfgate-phase/curl-w-measurements.md`);
+the real stunnel result is from curl 8.5.0 only; the host's own curl was not read. The suite compares the double with real curl for six cases (closed port, accept and close, a pinned-certificate mismatch,
+TLS then a clean close, 200, 502). The hang phases (5 s and 10 s timers), a TCP reset, an empty CA file and a truncated body are stub-only and rest on the evidence file.
 
 ### Certificate expiry and rotation
 

@@ -67,3 +67,9 @@ and 8.5.0), so a misspelled variable is silent: the test stub must refuse any va
    cause for that signature. This is a measured match, not proof of the 2026-10-23 cause (the terminator's journald is not shipped, #10880).
 5. **Empty `-w` output happens**: rc 124 (the `timeout 20` wrapper fired) and, on curl 8.23, a missing `--cacert` file (rc 2). Parsing must treat
    an empty or malformed line as `phase=unknown`, never as an error.
+
+## Added during implementation (2026-10-23, curl 8.23.0 on the dev host only)
+
+- A served self-signed certificate that is NOT the pinned one and ALSO has no matching IP SAN printed `000 0.000109 0.000000 1` with rc 60: the name check is reported before the untrusted chain, so `ssl_verify_result` reads 1, not 18. The same certificate pair with a matching `IP:127.0.0.1` SAN printed `000 0.000159 0.000000 18`, rc 60. The 18 row of the table above therefore needs a served certificate that carries the matching address (the real-curl differential row H6 `mismatch` serves one: `loopalt`). Not run on 7.81 or 8.5.0 in this form.
+- A served leaf issued by a CA that is not pinned (matching IP SAN) printed `000 0.000145 0.000000 20`, rc 60.
+- `curl --cacert /nonexistent/ca.pem` printed a usage error (`option --cacert: is badly used here`), no `-w` output and exited 2.
