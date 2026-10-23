@@ -34,6 +34,9 @@ delete process.env.FLAG_NEW_SESSIONS_PAUSED;
 // the (now cleared) env mirror answers "allowed". A test that exercises the Flagsmith path mocks the
 // client or sets the key itself, after this setup.
 delete process.env.FLAGSMITH_ENVIRONMENT_KEY;
+// The rehearsal's exempt synthetic account id (#8211) must never leak in from an ambient Doppler config:
+// a suite that needs it sets it itself, after this setup.
+delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
 
 // #5796 — raise vitest's `vi.waitFor` default timeout floor (1s → 10s) for the
 // node/unit project. Must mirror the identical install in setup-dom.ts: a

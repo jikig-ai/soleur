@@ -32,6 +32,7 @@ import {
   CREDENTIAL_RE,
   EDIT_TARGET_MAX_BYTES,
   PII_REGEX,
+  PROMOTION_QUORUM,
   agentsPointerNote,
   skillConflictDiffBody,
   buildAdditiveEditDiff,
@@ -525,14 +526,22 @@ describe("isAdditiveDiff -- the in-code assertion that a derived diff removes no
 });
 
 describe("draftAdditiveEdit -- the model call", () => {
-  const summaries = new Map<string, string>([
-    ["knowledge-base/project/learnings/a.md", "SUMMARY-A the first learning"],
-    ["knowledge-base/project/learnings/b.md", "SUMMARY-B the second learning"],
-  ]);
+  // Sized from the constant, never a literal 5: a fixture that hard-codes the quorum would
+  // keep passing if the constant were lowered. The corpus holds two more than the quorum so
+  // a cluster can be at, over and under it.
+  const letter = (i: number) => String.fromCharCode(97 + i);
+  const learningPath = (i: number) => `knowledge-base/project/learnings/${letter(i)}.md`;
+  const summaries = new Map<string, string>(
+    Array.from({ length: PROMOTION_QUORUM + 2 }, (_, i) => [
+      learningPath(i),
+      `SUMMARY-${letter(i).toUpperCase()} the learning number ${i}`,
+    ]),
+  );
+  const quorumSources = Array.from({ length: PROMOTION_QUORUM }, (_, i) => learningPath(i));
   const cluster = {
     target_path: AGENTS,
     rationale: "Recurring failure RATIONALE-TEXT",
-    source_learnings: ["knowledge-base/project/learnings/a.md", "knowledge-base/project/learnings/b.md"],
+    source_learnings: quorumSources,
   };
   const answer = (obj: unknown, stopReason = "end_turn") =>
     vi.fn(async (..._a: unknown[]) => ({ text: JSON.stringify(obj), stopReason }));
@@ -616,13 +625,92 @@ describe("draftAdditiveEdit -- the model call", () => {
     expect(prompt).toContain("SUMMARY-A");
   });
 
-  it("T20: when NO source learning resolves the draft is edit-invalid/no-source and the model is NOT called", async () => {
-    const post = answer(good);
-    const r = await draftAdditiveEdit(
-      args(post, { cluster: { ...cluster, source_learnings: ["../../x", "knowledge-base/project/learnings/unknown.md"] } }),
-    );
-    expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "no-source" });
-    expect(post).not.toHaveBeenCalled();
+  describe("the server-enforced quorum (PROMOTION_QUORUM distinct corpus-resolved sources)", () => {
+    it("PROMOTION_QUORUM is 5: raising or lowering it needs an ADR-092 Amendment and the runbook line", () => {
+      // The one row that pins the VALUE. Every fixture is built from the constant, so a
+      // diff that lowers it passes the rest of the battery; this row makes it a visible diff.
+      expect(PROMOTION_QUORUM).toBe(5);
+    });
+
+    it("Q1: one source short of the quorum, and zero, are refused quorum-not-met and the model is NOT called", async () => {
+      for (const n of [PROMOTION_QUORUM - 1, 0]) {
+        const post = answer(good);
+        const r = await draftAdditiveEdit(
+          args(post, { cluster: { ...cluster, source_learnings: quorumSources.slice(0, n) } }),
+        );
+        expect(r, `n=${n}`).toEqual({ ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: n });
+        expect(post, `n=${n}`).not.toHaveBeenCalled();
+      }
+    });
+
+    it("Q1b: the refusal is unconditional -- empty rationale, every target class and runId set or unset all refuse", async () => {
+      // A gate skipped for a SUBSET of clusters (an extra `&&` operand) passes every row that
+      // varies nothing but the source count; vary the other inputs the cluster and call carry.
+      const sub = quorumSources.slice(0, PROMOTION_QUORUM - 1);
+      for (const target of [AGENTS, SKILL_ALPHA, SKILL_HYPHEN, SKILL_LINK, "not/allowlisted.md"]) {
+        for (const rationale of ["", "r", "x".repeat(5000)]) {
+          for (const runId of ["RUN-1", undefined]) {
+            const post = answer(good);
+            const r = await draftAdditiveEdit(
+              args(post, { runId, cluster: { target_path: target, rationale, source_learnings: sub } }),
+            );
+            const label = `${target} / ${rationale.length} / ${String(runId)}`;
+            expect(r, label).toEqual({ ok: false, reason: "quorum-not-met", cause: "below-quorum", sourceCount: sub.length });
+            expect(post, label).not.toHaveBeenCalled();
+          }
+        }
+      }
+    });
+
+    it("Q2: exactly the quorum proceeds to the model call and derives an applying diff", async () => {
+      const post = answer(good);
+      const r = await draftAdditiveEdit(args(post));
+      expect(r.ok).toBe(true);
+      if (r.ok) await expectApplies(AGENTS, r.diff);
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it("Q3: the count is DISTINCT RESOLVED sources, not the raw list length", async () => {
+      const post = answer(good);
+      // 2 * (quorum - 2) + 3 entries listed: (quorum - 2) distinct in-corpus paths, each
+      // duplicated, plus three unknown paths. The raw length is above the quorum; the resolved set is not.
+      const distinct = quorumSources.slice(0, PROMOTION_QUORUM - 2);
+      const listed = [
+        ...distinct,
+        ...distinct,
+        "knowledge-base/project/learnings/unknown-1.md",
+        "knowledge-base/project/learnings/unknown-2.md",
+        "../../etc/passwd",
+      ];
+      expect(listed.length).toBeGreaterThanOrEqual(PROMOTION_QUORUM);
+      const r = await draftAdditiveEdit(args(post, { cluster: { ...cluster, source_learnings: listed } }));
+      expect(r).toMatchObject({ ok: false, reason: "quorum-not-met", sourceCount: PROMOTION_QUORUM - 2 });
+      expect(post).not.toHaveBeenCalled();
+      // ...and the same raw length collapsing to exactly the quorum still proceeds.
+      const ok = answer(good);
+      const r2 = await draftAdditiveEdit(
+        args(ok, { cluster: { ...cluster, source_learnings: [...quorumSources, ...quorumSources, "../../x"] } }),
+      );
+      expect(r2.ok).toBe(true);
+      expect(ok).toHaveBeenCalledTimes(1);
+    });
+
+    it("Q4: the check precedes every git read (a missing repoRoot and an unreadable target do not win)", async () => {
+      const sub = quorumSources.slice(0, PROMOTION_QUORUM - 1);
+      const noRoot = answer(good);
+      const r1 = await draftAdditiveEdit(
+        args(noRoot, { repoRoot: "/nonexistent/compound-repo", cluster: { ...cluster, source_learnings: sub } }),
+      );
+      expect(r1).toMatchObject({ ok: false, reason: "quorum-not-met" });
+      for (const target of [SKILL_LINK, SKILL_BIG]) {
+        const post = answer(good);
+        const r = await draftAdditiveEdit(
+          args(post, { cluster: { ...cluster, target_path: target, source_learnings: sub } }),
+        );
+        expect(r, target).toMatchObject({ ok: false, reason: "quorum-not-met" });
+        expect(post, target).not.toHaveBeenCalled();
+      }
+    });
   });
 
   it("T10/T11/T12: an unreadable, oversized or disallowed target never reaches the model", async () => {
@@ -847,12 +935,13 @@ describe("round 2: grammar boundaries, content classes and the PR/comment sinks"
       text: JSON.stringify({ insert_after_line: "- Keep it small [id: cq-keep-small]. Because.", new_lines: [RULE_LINE] }),
       stopReason: "end_turn",
     }));
+    const paths = Array.from({ length: PROMOTION_QUORUM }, (_, i) => `knowledge-base/project/learnings/q${i}.md`);
     await draftAdditiveEdit({
-      cluster: { target_path: AGENTS, rationale: "r", source_learnings: ["knowledge-base/project/learnings/a.md"] },
+      cluster: { target_path: AGENTS, rationale: "r", source_learnings: paths },
       repoRoot,
       apiKey: "k",
       runId: "R",
-      corpusSummaries: new Map([["knowledge-base/project/learnings/a.md", "S"]]),
+      corpusSummaries: new Map(paths.map((p) => [p, "S"] as const)),
       headroomBytes: 10,
       post: post as unknown as Parameters<typeof draftAdditiveEdit>[0]["post"],
     });
