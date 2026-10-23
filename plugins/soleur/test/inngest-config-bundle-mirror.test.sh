@@ -151,6 +151,8 @@ v(not re.search(r"--output-signature\b|--output-certificate\b", sbody),
   "sign-blob carries no removed cosign-2.x --output-signature/--output-certificate flags")
 v(re.search(r"--signing-config\s+apps/web-platform/infra/inngest-signing-config\.json", sbody) is not None,
   "sign-blob pins the emit surface via --signing-config apps/web-platform/infra/inngest-signing-config.json (#10390 defect 3)")
+v(re.search(r'chmod\s+0?644\s+"\$\{MANIFEST\}\.sigstore\.json"', sbody) is not None,
+  "the sign step normalizes the emitted bundle to mode 0644 — cosign writes it 0600 (sign_blob.go:132) and the nonroot verifier container reads it EACCES (#10390 defect 3 measured cause)")
 
 # Verify-before-publish gate (#10390 defect 3): the producer never self-verified its
 # artifact against the consumer's pinned loader — sign-time in-process validate() is
@@ -180,6 +182,8 @@ for _tok in ("verify-blob", "--trusted-root",
     v(_tok in gbody, "the verify-before-publish run body carries `%s`" % _tok)
 v(bool(gate_hits) and gate_hits[0].get("continue-on-error") is not True,
   "the verify-before-publish step is a HARD fail (no continue-on-error) — it must block the push steps")
+v("57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" in gbody,
+  "the verify gate runs the PINNED cosign image — the consumer's own nonroot verifier, which is the only arm that sees EACCES-class member-mode defects")
 v(not re.search(r"--insecure-ignore-tlog|--insecure-ignore-sct|--new-bundle-format|--key[\s=]",
                 sbody + "\n" + gbody),
   "neither the sign nor the verify argv carries a verification-weakening flag (AC10)")
@@ -713,6 +717,8 @@ elif name == "sign-step-deleted":
                  "      - name: Assemble", s)
 elif name == "sign-drops-signing-config":
     s = must_sub(r'\n            --signing-config apps/web-platform/infra/inngest-signing-config\.json \\', "", s)
+elif name == "sign-drops-chmod":
+    s = must_sub(r'\n          chmod 0644 "\$\{MANIFEST\}\.sigstore\.json"', "", s)
 elif name == "verify-step-deleted":
     s = must_sub(r"      - name: Verify[^\n]*\n.*?(?=      - name: Assemble)",
                  "", s)
@@ -720,7 +726,8 @@ elif name == "verify-soft-fail":
     s = must_sub(r"(      - name: Verify[^\n]*\n)",
                  r"\1        continue-on-error: true\n", s)
 elif name == "verify-adds-insecure-flag":
-    s = must_sub(r"(cosign verify-blob)", r"\1 --insecure-ignore-tlog", s)
+    s = must_sub(r'verify-blob \\\n',
+                 lambda m: 'verify-blob --insecure-ignore-tlog \\\n', s)
 elif name == "dockerfile-cmd-dropped":
     s = must_sub(r'CMD \["true"\]\\n', "", s)
 elif name == "cosign-copy-dropped":
@@ -833,6 +840,7 @@ else
     "sign-adds-output-certificate|struct|no removed cosign-2.x"
     "sign-step-deleted|struct|exactly one step invokes cosign sign-blob"
     "sign-drops-signing-config|struct|emit surface via --signing-config"
+    "sign-drops-chmod|struct|mode 0644"
     "verify-step-deleted|struct|verify-before-publish step"
     "verify-soft-fail|struct|HARD fail"
     "verify-adds-insecure-flag|struct|verification-weakening flag"
@@ -897,7 +905,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=108
+MIN_ASSERTIONS=134
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1

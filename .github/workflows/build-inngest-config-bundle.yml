@@ -87,10 +87,68 @@ jobs:
           # the tarball so the host `verify-blob --bundle` stays fully offline against the
           # baked trusted root. The Assemble step tars $RUNNER_TEMP/bundle wholesale, so the
           # bundle file lands in the tarball with no pack-script change.
+          # --signing-config pins the emit surface (#10390 defect 3): the committed
+          # apps/web-platform/infra/inngest-signing-config.json is signingconfig v0.2
+          # modeled on sigstore/root-signing targets/signing_config.v0.2.json (captured
+          # 2026-10-23), minus tsaUrls — Rekor v1 only and no TSA, so the emitted envelope
+          # stays inside the shape the host's pinned sigstore-go v1.2.0
+          # LoadJSONFromPath accepts (the TUF-default config let the emit surface drift).
           cosign sign-blob --yes \
             --bundle "${MANIFEST}.sigstore.json" \
+            --signing-config apps/web-platform/infra/inngest-signing-config.json \
             "${MANIFEST}"
+          # cosign writes the bundle file mode 0600 (sign_blob.go:132 at v3.1.1) —
+          # measured root cause of defect 3: the consumer verify runs inside the
+          # pinned NONROOT cosign image over a bind mount, so a 0600 member reads
+          # EACCES in-container, sgbundle.LoadJSONFromPath fails, checkNewBundle
+          # returns false and the host reports detail=flag-newbundle — even though
+          # the envelope bytes load cleanly (the Phase-0 Go probe prints LOAD_OK
+          # reading the same file as its owner). Normalize the member mode so the
+          # tarball lands world-readable.
+          chmod 0644 "${MANIFEST}.sigstore.json"
           echo "Signed ${MANIFEST}: wrote ${MANIFEST}.sigstore.json"
+
+      - name: Verify produced bundle before publish (never-again gate)
+        env:
+          MANIFEST: ${{ steps.pack.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          # DEFECT-3 NEVER-AGAIN GATE (#10390): the producer must verify its own
+          # artifact against the CONSUMER's pinned contract BEFORE any push —
+          # sign-time in-process validate() is not the on-disk LoadJSONFromPath
+          # path, and a verify run as the file's OWNER would sail past the 0600
+          # EACCES defect that killed the real channel. So this runs the PINNED
+          # cosign image (same digest the host runs, same nonroot UID) over a
+          # bind-mounted bundle dir — the exact consumer load path. The step
+          # hard-fails on non-zero rc or a missing 'Verified OK', so an unloadable,
+          # unreadable or unverifiable bundle can never reach the push steps again.
+          # The identity regexp is derived from THIS run's ref (branch dispatches
+          # sign under their own ref — Fulcio binds the true ref into the cert);
+          # ref regexp metacharacters are escaped before assembling the pattern.
+          COSIGN="gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870"
+          REF_ESCAPED="$(printf '%s' "$GITHUB_REF" | sed 's/[.[\*^$()+?{|\\]/\\&/g')"
+          IDENTITY_REGEXP="^https://github\.com/jikig-ai/soleur/\.github/workflows/build-inngest-config-bundle\.yml@${REF_ESCAPED}$"
+          docker pull "$COSIGN"
+          out="$(docker run --rm --network none \
+            -v "$(dirname "$MANIFEST"):/bundle:ro" \
+            -v "$GITHUB_WORKSPACE/apps/web-platform/infra/cosign-trusted-root.json:/etc/cosign/trusted_root.json:ro" \
+            "$COSIGN" verify-blob \
+            --trusted-root /etc/cosign/trusted_root.json \
+            --bundle "/bundle/$(basename "$MANIFEST").sigstore.json" \
+            --certificate-identity-regexp "$IDENTITY_REGEXP" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "/bundle/$(basename "$MANIFEST")" 2>&1)" || {
+            rc=$?
+            echo "$out"
+            echo "::error::produced bundle failed the consumer verify contract (rc=$rc) — refusing to publish; see knowledge-base/engineering/operations/runbooks/inngest-config-refresh.md"
+            exit 1
+          }
+          echo "$out"
+          grep -q 'Verified OK' <<<"$out" || {
+            echo "::error::verify-blob exited 0 but did not print 'Verified OK' — refusing to publish"
+            exit 1
+          }
+          echo "Produced bundle verified in the pinned nonroot verifier image: ${MANIFEST}.sigstore.json"
 
       - name: Assemble bundle tarball + minimal OCI context
         run: |

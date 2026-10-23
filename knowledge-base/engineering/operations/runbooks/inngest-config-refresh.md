@@ -53,6 +53,18 @@ from the applied digest.
    `cosign sign-blob`s the manifest (VERSION is a signed field — HARD-2) and dual-publishes to GHCR +
    zot. Its job summary prints `IMAGE@DIGEST`.
 
+   Producer contract (#10390 defect 3): the sign step pins the emit surface via
+   `--signing-config apps/web-platform/infra/inngest-signing-config.json` — a committed
+   signingconfig v0.2 document (Fulcio v1 + oauth2.sigstore.dev v1 + Rekor v1 only, **no
+   `tsaUrls`**; shape-pinned by `inngest-config-bundle-mirror.test.sh`'s jq rows) — and
+   normalizes the emitted `.sigstore.json` to mode 0644, because cosign writes it 0600
+   and the consumer's nonroot verifier container reads the bind-mounted member EACCES
+   (the measured defect-3 root cause, not an envelope defect). A "Verify produced
+   bundle before publish" step then runs the PINNED cosign image over a bind mount and
+   hard-fails unless it prints `Verified OK`; if that step is red the artifact never
+   reaches GHCR/zot — read the step log's cosign error and fix the producer, never
+   re-dispatch past it.
+
 3. **Promote the pointer (separate principal — HARD-6).** The interim route is a MANUAL targeted
    apply in an authorized window — set `TF_VAR_inngest_config_digest=<IMAGE@DIGEST sha256>` for a
    `soleur/prd_terraform` apply of `doppler_secret.inngest_config_digest` (the `count`-gated
