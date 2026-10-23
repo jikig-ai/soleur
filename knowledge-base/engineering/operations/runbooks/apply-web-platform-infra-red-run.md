@@ -107,7 +107,7 @@ outlasted that budget — re-running once Cloudflare settles is the documented r
 `Apply Delivery Gap Follower` workflow (`scripts/apply-delivery-gap.sh`). Both apply workflows share one concurrency
 group that keeps a single pending run, so a second push can evict the first: the evicted run ends `cancelled`, usually
 with zero jobs, and no email is sent. The issue lists every such push from the last 7 days that no later run of the
-**same** workflow applied (table: workflow, push SHA, run, class, minutes since cancel, later run of this workflow). It
+**same** workflow applied (table: workflow, push SHA, run, class, minutes since cancel, latest later run of this workflow, any outcome, which is not proof of delivery). It
 is detection only: it applies nothing and starts nothing. The body prints one dispatch command per workflow that has rows.
 
 **Decision table** (same shape as "Do NOT fire this on these" above):
@@ -116,7 +116,7 @@ is detection only: it applies nothing and starts nothing. The body prints one di
 |---|---|
 | class `evicted-before-start` | Run the printed command from `main`. It applies `main` HEAD, which covers every listed SHA of that workflow. |
 | class `cancelled-mid-run` | Read the cancelled run first: state is possibly partial (the follower over-classifies a preflight-only run as mid-run). If the re-dispatch then goes red, use the heartbeat sweep section above before re-running. |
-| "Later run" column shows a FAILED run | Read that run first. A failed run after an eviction is a different problem and `notify-apply-failure` already owns it. |
+| "Latest later run" column shows a FAILED run | Read that run first. A failed run after an eviction is a different problem and `notify-apply-failure` already owns it. |
 | a kill-switch commit sits between the row and HEAD | The printed dispatch applies HEAD **including** the change that commit deliberately skipped. Decide about that change first. |
 | you cancelled the push on purpose because it was bad | A revert commit touching the trigger paths delivers it by descendant and the row clears itself. An operator-cancelled mid-run push correctly stays `cancelled-mid-run`. |
 

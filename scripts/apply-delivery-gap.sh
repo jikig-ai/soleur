@@ -480,7 +480,8 @@ reconcile_workflow() { # key file ks-function cap
       | if . == null then "" else [.id, ((if .status == "completed" then .conclusion else .status end) | en)] | @tsv end' "$nf")"
     lid=""; llabel=""
     if [[ -n "$later" ]]; then IFS=$'\t' read -r lid llabel <<<"$later"; fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$id" "$sha" "$class" "$(mins_between "$ue" "$NOW_EPOCH")" "$lid" "$llabel" "$ce" >>"$ROWS"
+    # an empty field is written as the sentinel `-`: tab is IFS whitespace, so adjacent tabs would collapse on read
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$id" "$sha" "$class" "$(mins_between "$ue" "$NOW_EPOCH")" "${lid:--}" "${llabel:--}" "$ce" >>"$ROWS"
     N_ROWS=$((N_ROWS + 1))
     if [[ "$class" == "cancelled-mid-run" ]]; then N_MID=$((N_MID + 1)); fi
     printf '::notice title=apply-delivery-gap::row workflow=%s sha=%s class=%s\n' "$key" "$sha" "$class"
@@ -545,8 +546,9 @@ render_body() {
     printf -- '- Closing this issue is not an acknowledgement - a new one is filed while rows remain.\n'
     printf -- '- Comment, do not edit - the body is rewritten on every refresh.\n\n'
     printf '## Undelivered pushes\n\n'
-    printf '| Workflow | Push SHA | Run | Class | Minutes since cancel | Later run of this workflow |\n|---|---|---|---|---|---|\n'
+    printf '| Workflow | Push SHA | Run | Class | Minutes since cancel | Latest later run (any outcome; not proof of delivery) |\n|---|---|---|---|---|---|\n'
     while IFS=$'\t' read -r row_key id sha class mins lid llabel ce; do
+      if [[ "$lid" == "-" ]]; then lid=""; fi
       if [[ -n "$lid" ]]; then
         printf '| %s | `%s` | [%s](https://github.com/%s/actions/runs/%s) | %s | %s | [%s](https://github.com/%s/actions/runs/%s) %s |\n' \
           "$(watched_field "$row_key" 3)" "$sha" "$id" "$GH_REPO" "$id" "$class" "$mins" "$lid" "$GH_REPO" "$lid" "$llabel"
@@ -564,6 +566,9 @@ render_body() {
     printf '. Window: last %s days. Minutes are approximate.\n\n' "$WINDOW_DAYS"
     printf -- '- A row listed for more than 60 minutes warrants escalation.\n'
     printf -- '- A push carrying its own workflow skip marker never appears here.\n'
+    if [[ "$N_DROPPED" -gt 0 ]]; then
+      printf -- '- Dropped by kill switch (not a gap): %s\n' "$N_DROPPED"
+    fi
     printf -- '- Runbook: `%s`. The 12 h scheduled drift check remains the backstop.\n' "$RUNBOOK"
   } >"$body"
   if [[ "$(wc -c <"$body")" -ge 60000 ]]; then fail_loud issue_write_failed; fi

@@ -271,6 +271,10 @@ issue-list author=github-actions[bot] state=open limit=500 json=number,title,lab
   has "S1 body carries the run URL" "$B" "https://github.com/$REPO_SLUG/actions/runs/101"
   has "S1 body carries the class" "$B" "evicted-before-start"
   has "S1 body minutes since cancel" "$B" "| 179 |"
+  has "S1 a row with no later run renders the none cell after the minutes cell" "$B" "| evicted-before-start | 179 | none |"
+  tn "S1 no created-epoch digits land in the later-run cell" grep -E 'actions/runs/[0-9]{10}\)' "$B"
+  has "S1 the later-run column header says it is not proof of delivery" "$B" "| Latest later run (any outcome; not proof of delivery) |"
+  lacks "S1 no dropped-by-kill-switch line when nothing was dropped" "$B" "Dropped by kill switch"
   cmdline="$(grep '^gh workflow run ' "$B")"
   hasre "S1 printed command shape" <(printf '%s\n' "$cmdline") "^gh workflow run [a-z0-9.-]+\.yml --ref main( -f [a-z_]+=[a-z-]+)* -f reason='apply-delivery-gap [0-9a-f]{7}'$"
   has "S1 printed command names the deploy-fix file and sha7" <(printf '%s\n' "$cmdline") "gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason='apply-delivery-gap 0000101'"
@@ -382,6 +386,7 @@ if want S4; then
   has "S4 middle-line marker dropped" "$ST/all.txt" "dropped killswitch workflow=deploy-fix sha=0000402"
   has "S4 infra own marker dropped" "$ST/all.txt" "dropped killswitch workflow=infra sha=0000410"
   has "S4 summary dropped=3" <(summary) "dropped=3"
+  eq "S4 the dropped count is rendered right after the skip-marker footer line" "$(grep -A1 'never appears here' "$(body 1)" | tail -n 1)" "- Dropped by kill switch (not a gap): 3"
   # table completeness: every WATCHED row names a kill-switch function that the script defines
   ok=1; n=0
   while IFS='|' read -r _ _ _ ks _; do
@@ -956,6 +961,8 @@ if want R; then
     eq "R[$id] exactly one row" "$(rows)" 1
     has "R[$id] workflow deploy-fix, class evicted-before-start, recorded sha" "$ST/all.txt" "row workflow=deploy-fix sha=$rsha class=evicted-before-start"
     has "R[$id] URL carries the run id" "$(body 1)" "https://github.com/$REPO_SLUG/actions/runs/$id"
+    hasre "R[$id] and ends in none, not an epoch" "$(body 1)" '\| [0-9]+ \| none \|$'
+    tn "R[$id] no created-epoch digits in the later-run cell" grep -E 'actions/runs/[0-9]{10}\)' "$(body 1)"
   done
   mk_case r4 replay-incident-delivered
   run_sut
