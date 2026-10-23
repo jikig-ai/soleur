@@ -1150,6 +1150,205 @@ row_L8_scrub_names_match_the_tuple_census_and_the_canary_counts() {
   need "the scrub regex names [$re] but the canary's inspect counts name [$cnt]" "$([ "$re" = "$cnt" ] && echo 0 || echo 1)" || return 1
 }
 
+# --- #10934: the self-gate failure event names the stage the LAST attempt reached --------------------------------------------------
+# Event grammar (ruled by the CTO, decision-challenges.md F1/F2/R3a-R3e):
+#   INNGEST_LINK: class=selfgate_failed level=error rc=<n> http=<ddd|none> attempts=<n> phase=<token> tcp=<0-99> tls=<0-99> verify=<0-99>
+# Every row below compares the WHOLE logged line to an expected string (never a substring), pins SG_ATTEMPTS (scenario() defaults it
+# to 2) and answers the self-gate from named profiles of the shared measured table (CURL_PROFILES=p1,p2,..: the Nth curl call prints pN,
+# the last repeats; <name>@<rc> overrides the exit code). tcp/tls count the attempts (of all) whose time_connect / time_appconnect was
+# a well-formed NON-zero number, each field judged on its own; phase describes the LAST attempt only. Every row is also checked by
+# run_rows for the printer sentinel (an unknown variable or profile).
+sg_line() { grep -F 'class=selfgate_failed' "$RUN/logger.log" | head -n1 | sed -E 's/^-t [^ ]+ //'; }
+sg_count() { grep -cF 'class=selfgate_failed' "$RUN/logger.log" || true; }
+sg_want() { # rc http attempts phase tcp tls verify
+  printf 'INNGEST_LINK: class=selfgate_failed level=error rc=%s http=%s attempts=%s phase=%s tcp=%s tls=%s verify=%s' "$@"
+}
+sg_expect() { # <block> <tag> <profiles> <rc> <http> <attempts> <phase> <tcp> <tls> <verify>: a failing gate, the whole event line pinned
+  local got want
+  want="$(sg_want "$4" "$5" "$6" "$7" "$8" "$9" "${10}")"
+  CURL_PROFILES="$3" SG_ATTEMPTS="$6" SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID-$2"
+  got="$(sg_line)"
+  need "[$2] the gate did not fail closed (rc=$(val rc) reason=$(val reason))" "$([ "$(val rc)" != 0 ] && [ "$(val reason)" = inngest_link_selfgate_failed ] && echo 0 || echo 1)" || return 1
+  need "[$2] no CA may be installed after a failed gate" "$([ ! -s "$(caf)" ] && echo 0 || echo 1)" || return 1
+  need "[$2] exactly one selfgate_failed event expected, found $(sg_count)" "$([ "$(sg_count)" = 1 ] && echo 0 || echo 1)" || return 1
+  need "[$2] the event line is [$got], want [$want]" "$([ "$got" = "$want" ] && echo 0 || echo 1)" || return 1
+  need "[$2] curl calls=$(curl_calls), want $6 attempts" "$([ "$(curl_calls)" = "$6" ] && echo 0 || echo 1)" || return 1
+}
+sg_table() { # <block> <label> <table>: one sg_expect per line `profile|rc|http|phase|tcp|tls|verify` (a single attempt each)
+  local line prof rc http phase tcp tls ver
+  while IFS='|' read -r prof rc http phase tcp tls ver; do
+    [ -n "$prof" ] || continue
+    sg_expect "$1" "$2-$prof" "$prof" "$rc" "$http" 1 "$phase" "$tcp" "$tls" "$ver" || { WHY="$prof: ${WHY:-}"; return 1; }
+  done <<< "$3"
+}
+# the named profile sets (one table per scenario family; H7a asserts that these four sets plus ok200 are EXACTLY the measured table)
+SG_S1='refused|7|000|connect|0|0|0
+fw_drop|28|000|connect|0|0|0
+ca_file|77|000|ca_file|1|0|0'
+SG_S2='hs_close|35|000|handshake|1|0|0
+hs_rst|35|000|handshake|1|0|0
+hs_plain|35|000|handshake|1|0|0
+hs_hang|28|000|handshake|1|0|0
+verify18|60|000|verify|1|0|18
+verify10|60|000|verify|1|0|10
+verify1_san|60|000|verify|1|0|1'
+SG_S3='req_reset|56|000|request|1|1|0
+req_empty|52|000|request|1|1|0
+req_hang|28|000|request|1|1|0
+req_http09|1|000|request|1|1|0
+req_partial|18|200|request|1|1|0
+status_partial|18|502|status|1|1|0
+status502|0|502|status|1|1|0'
+SG_NAMED_SETS='refused fw_drop ca_file hs_close hs_rst hs_plain hs_hang verify18 verify10 verify1_san req_reset req_empty req_hang req_http09 req_partial status_partial status502 ok200'
+
+row_S1_connect_and_ca_file() { sg_table "$1" s1 "$SG_S1"; }
+row_S2_handshake_and_verify() { sg_table "$1" s2 "$SG_S2"; }
+row_S3_request_and_status() {
+  # req_partial (rc 18, a 200 header then a short body) is NOT status: it reads request with http=200, which the runbook decodes as
+  # "a 200 header, body cut short", never healthy; status_partial (rc 18 with a 502 header) stays status
+  sg_table "$1" s3 "$SG_S3"
+}
+row_S3b_same_times_any_rc_reads_request() {
+  # the SAME times (the incident's 0.000138 / 0.004360, verify 0, code 000) with rc 52, 56 and 1: one wire event prints 52 on curl 8.5.0
+  # and 56 on 7.81 and 8.23, so the phase comes from the times, never from an rc list
+  local rc
+  for rc in 52 56 1; do
+    sg_expect "$1" "rc$rc" "req_reset@$rc" "$rc" 000 1 request 1 1 0 || { WHY="rc $rc: ${WHY:-}"; return 1; }
+  done
+}
+row_S3c_tls_complete_but_not_200_fails_with_phase_status() {
+  # the default stub path (no profile list): a verified TLS session answering 502 is not a pass, rc 0 or not
+  CURL_CODE=502 SG_ATTEMPTS=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID"
+  need "rc=$(val rc) reason=$(val reason), want a failed gate" "$([ "$(val rc)" != 0 ] && [ "$(val reason)" = inngest_link_selfgate_failed ] && echo 0 || echo 1)" || return 1
+  need "the event is [$(sg_line)], want [$(sg_want 0 502 1 status 1 1 0)]" "$([ "$(sg_line)" = "$(sg_want 0 502 1 status 1 1 0)" ] && echo 0 || echo 1)" || return 1
+  need "a 502 answer installed a CA" "$([ ! -s "$(caf)" ] && echo 0 || echo 1)" || return 1
+}
+row_S4_sequence_counts_and_last_phase() {
+  # connect, handshake, request across three attempts: the phase is the LAST attempt's, the counters cover all three
+  sg_expect "$1" seq 'refused,hs_close,req_reset' 56 000 3 request 2 1 0 || return 1
+  # flapping fixtures (the worked lines the runbook quotes): a restart between tries shows up as a phase the counters contradict
+  sg_expect "$1" flap1 'req_reset,refused,req_reset' 56 000 3 request 2 2 0 || return 1
+  sg_expect "$1" flap2 'req_reset,refused,refused' 7 000 3 connect 1 1 0 || return 1
+  sg_expect "$1" flap3 'refused,req_reset,hs_close' 35 000 3 handshake 2 1 0 || return 1
+}
+row_S4b_counters_clamp() {
+  # 120 attempts: the counters are clamped to 99 like the canary's integers (attempts= is the denominator and prints as is)
+  sg_expect "$1" clamp req_reset 56 000 120 request 99 99 0
+}
+row_S5_event_grammar_on_both_sinks() {
+  local p line re detail jd n
+  re='^INNGEST_LINK: class=selfgate_failed level=error rc=[0-9]{1,3} http=([0-9]{3}|none) attempts=[0-9]{1,3} phase=(connect|handshake|verify|ca_file|request|status|unknown) tcp=[0-9]{1,2} tls=[0-9]{1,2} verify=[0-9]{1,2}$'
+  # every failing profile, the raw ones included: the whole event is a fixed grammar and never a URL, an address or curl text
+  for p in refused fw_drop ca_file hs_close hs_rst hs_plain hs_hang verify18 verify10 verify1_san req_reset req_empty req_hang req_http09 req_partial \
+           status_partial status502 raw_empty raw_garbage raw_short3 raw_nonnum raw_nonnum502 req_reset_comma req_reset@124 raw_empty@2; do
+    CURL_PROFILES="$p" SG_ATTEMPTS=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID-${p//@/_}"
+    line="$(sg_line)"
+    need "[$p] no selfgate_failed event was logged (rc=$(val rc) reason=$(val reason))" "$([ -n "$line" ] && echo 0 || echo 1)" || return 1
+    need "[$p] the event is not the anchored grammar: [$line]" "$(grep -qE "$re" <<< "$line" && echo 0 || echo 1)" || return 1
+    need "[$p] the event carries a value (an address, a scheme or curl text): [$line]" "$(grep -qE '10\.0\.1\.|https?://|leak\.invalid|garbage' <<< "$line" && echo 1 || echo 0)" || return 1
+  done
+  # the same detail string reaches Sentry (extra.detail), with the classification tag: "no value in the event" covers the whole event
+  for p in req_reset verify18 raw_garbage; do
+    CURL_PROFILES="$p" KEEP_SENTRY=1 SG_ATTEMPTS=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID-sentry-$p"
+    line="$(sg_line)"; jd="${line#INNGEST_LINK: class=selfgate_failed level=error }"
+    n="$(grep -c 'api/7/store/' "$RUN/curl.argv" || true)"
+    detail="$(grep 'api/7/store/' "$RUN/curl.argv" | grep -o '"detail":"[^"]*"' | head -n1 | sed -e 's/^"detail":"//' -e 's/"$//')"
+    need "[$p] exactly one Sentry POST expected for the selfgate_failed error, found $n" "$([ "$n" = 1 ] && echo 0 || echo 1)" || return 1
+    need "[$p] the Sentry extra.detail is [$detail], want the journald detail [$jd]" "$([ -n "$jd" ] && [ "$detail" = "$jd" ] && echo 0 || echo 1)" || return 1
+    need "[$p] the Sentry event does not carry classification=selfgate_failed" "$(grep 'api/7/store/' "$RUN/curl.argv" | grep -q '"classification":"selfgate_failed"' && echo 0 || echo 1)" || return 1
+    need "[$p] the Sentry body carries a value: $(grep 'api/7/store/' "$RUN/curl.argv" | grep -oE '10\.0\.1\.[0-9]+|leak\.invalid' | head -n1)" "$(grep 'api/7/store/' "$RUN/curl.argv" | grep -qE 'leak\.invalid|garbage|8443' && echo 1 || echo 0)" || return 1
+  done
+}
+SG_S6='raw_empty@124|124|none|unknown|0|0|0
+raw_empty@2|2|none|unknown|0|0|0
+raw_garbage@56|56|none|unknown|0|0|0
+raw_short3@56|56|200|unknown|1|0|0
+raw_nonnum@56|56|000|unknown|0|0|0
+raw_nonnum@60|60|000|verify|0|0|18
+raw_nonnum502@56|56|502|status|0|0|0
+req_reset@124|124|000|unknown|1|1|0'
+row_S6_unknown_arms_and_validated_values() {
+  # an empty line (rc 124: the timeout wrapper killed curl; rc 2: curl 8.23 with an unreadable CA file), a garbage first token (http=none, never
+  # the raw token), a short line, non-numeric times (an rc-only arm still reads verify, a validated non-200 code still reads status), and
+  # rc 124 beating perfectly good times (req_reset@124 reads unknown, never request): every row states its rc and its whole line
+  sg_table "$1" s6 "$SG_S6"
+}
+row_S7_wflags_allowlist_is_the_four_names() {
+  local names want n
+  names="$(sed -n '/^_inngest_link_selfgate/,/^}/p' "$1" | grep -vE '^[[:space:]]*#' | grep -oE '%\{[a-z_]+\}' | sort -u | tr -d '%{}' | paste -sd' ')"
+  want="http_code ssl_verify_result time_appconnect time_connect"
+  need "the write-out variables in the self-gate text are [$names], want exactly [$want] (equality, not a subset: a dropped variable must red too)" "$([ "$names" = "$want" ] && echo 0 || echo 1)" || return 1
+  n="$(sed -n '/^_inngest_link_selfgate/,/^}/p' "$1" | grep -vE '^[[:space:]]*#' | grep -cE -- "-w '[^']*'" || true)"
+  need "the self-gate text carries $n -w options, want exactly 1 (one curl per attempt, no second probe)" "$([ "$n" = 1 ] && echo 0 || echo 1)" || return 1
+}
+row_S8_noncanonical_input_and_success_first() {
+  local p
+  # a healthy listener whose -w line is non-canonical still passes the gate: a comma decimal separator plus an extra trailing token, and a SHORT
+  # line (rc 0, code 200, the later fields missing): the verdict is decided from the exit code and the first token before any other field
+  for p in ok200_comma_extra raw_short3@0; do
+    CURL_PROFILES="$p" SG_ATTEMPTS=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$1" "$ROW_ID-${p//@/_}"
+    ok_https || { WHY="[$p] ${WHY:-}"; return 1; }
+    need "[$p] a passing gate emitted a selfgate_failed event: $(sg_line)" "$([ "$(sg_count)" = 0 ] && echo 0 || echo 1)" || return 1
+    need "[$p] calls=$(curl_calls), want 1" "$([ "$(curl_calls)" = 1 ] && echo 0 || echo 1)" || return 1
+  done
+  # a FAILING profile with commas maps to its phase just like the dotted one
+  sg_expect "$1" comma req_reset_comma 56 000 1 request 1 1 0
+}
+row_S8b_no_trailing_newline_parses_last_field() {
+  # curl prints no trailing newline after -w; the double does not either (the last field, ssl_verify_result, still has to be read)
+  local f="$RUNS/s8b.out"
+  ( export RUN_DIR="$RUNS/s8b-run" FX_CURL_PROFILES=verify18; mkdir -p "$RUN_DIR"; "$BIN/curl" -w '%{http_code} %{time_connect} %{time_appconnect} %{ssl_verify_result}' https://127.0.0.1:1/health > "$f" 2>/dev/null )
+  need "the double printed a trailing newline (curl does not): $(od -c "$f" | tail -n2 | head -n1)" "$([ "$(tail -c1 "$f" | od -An -c | tr -d ' ')" != '\n' ] && echo 0 || echo 1)" || return 1
+  need "the double printed [$(cat "$f")], want the four verify18 fields" "$([ "$(cat "$f")" = '000 0.000119 0.000000 18' ] && echo 0 || echo 1)" || return 1
+  sg_expect "$1" nonl verify18 60 000 1 verify 1 0 18
+}
+
+# S9: the runbook decode table names every token and every field of the grammar. The checker is proved against a synthetic good doc and a
+# copy with one token removed (kill_mut mutates the block and cannot reach a doc); the helper is run, not grepped, so a token that exists
+# only in a comment cannot count.
+RUNBOOK="${INNGEST_LINK_TEST_RUNBOOK:-$SCRIPT_DIR/../../../knowledge-base/engineering/operations/runbooks/inngest-server.md}"
+SG_TOKENS='ca_file connect handshake request status unknown verify'
+SG_FIELDS='attempts http phase rc tcp tls verify'
+sg_decode_check() { # <doc file>: the "Reading `selfgate_failed`" section names every token and field; prints the first miss, returns 1
+  local doc="$1" sec t
+  sec="$(awk '/^#+ .*Reading `selfgate_failed`/ {on=1; next} on && /^#+ / {exit} on {print}' "$doc")"
+  [ -n "$sec" ] || { printf 'no "Reading `selfgate_failed`" section'; return 1; }
+  for t in $SG_TOKENS $SG_FIELDS; do
+    grep -qw -- "$t" <<< "$sec" || { printf 'the section never names %s' "$t"; return 1; }
+  done
+  return 0
+}
+row_S9_decode_names_every_token_and_field() {
+  local tokens n miss
+  # the helper prints exactly seven tokens: one input per branch, run under the real block (an absent helper reads an empty set)
+  tokens="$( ( # shellcheck disable=SC1090
+      source "$1" >/dev/null 2>&1 || exit 99
+      declare -F _inngest_link_selfgate_phase >/dev/null || exit 98
+      _inngest_link_selfgate_phase 124 '' '' ''; echo
+      _inngest_link_selfgate_phase 77 000 0.000452 0.000000; echo
+      _inngest_link_selfgate_phase 60 000 0.000119 0.000000; echo
+      _inngest_link_selfgate_phase 0 502 0.000235 0.010363; echo
+      _inngest_link_selfgate_phase 7 000 0.000000 0.000000; echo
+      _inngest_link_selfgate_phase 35 000 0.000198 0.000000; echo
+      _inngest_link_selfgate_phase 56 000 0.000138 0.004360; echo
+    ) 2>/dev/null | grep -v '^$' | sort -u | paste -sd' ')"
+  n="$(wc -w <<< "$tokens" | tr -d ' ')"
+  need "the phase helper produced $n distinct tokens [$tokens], want exactly the seven of the grammar [$SG_TOKENS]" "$([ "$n" = 7 ] && [ "$tokens" = "$SG_TOKENS" ] && echo 0 || echo 1)" || return 1
+  miss="$(sg_decode_check "$RUNBOOK")"
+  need "the runbook decode table does not cover the grammar: $miss" "$([ -z "$miss" ] && echo 0 || echo 1)" || return 1
+}
+row_S9b_decode_checker_can_go_red() {
+  local good="$RUNS/s9-good.md" bad="$RUNS/s9-bad.md" t
+  { printf '# Runbook\n\n## Reading `selfgate_failed`\n\n'; for t in $SG_TOKENS $SG_FIELDS; do printf '| `%s` | text |\n' "$t"; done; printf '\n## Next section\n\nhandshake mentioned outside the section only\n'; } > "$good"
+  need "the checker rejected a complete synthetic section: $(sg_decode_check "$good")" "$(sg_decode_check "$good" >/dev/null && echo 0 || echo 1)" || return 1
+  # the token is removed INSIDE the section only: it is still spelled after the section, so only a section-scoped checker sees it missing
+  sed '/^## Reading/,/^## Next/ s/handshake/h_s/' "$good" > "$bad"
+  grep -q 'handshake mentioned outside' "$bad" || { WHY="the synthetic bad doc lost its out-of-section token (the harness edit did not land)"; return 1; }
+  need "the checker accepted a section with a token removed (it cannot go red)" "$(sg_decode_check "$bad" >/dev/null && echo 1 || echo 0)" || return 1
+  sed 's/`tcp`/`t_p`/' "$good" > "$bad"
+  need "the checker accepted a section with a field removed (it cannot go red)" "$(sg_decode_check "$bad" >/dev/null && echo 1 || echo 0)" || return 1
+}
+
 ROW_IDS=(
   A1_unset_http A1b_unset_with_ca_never_installed A1c_unset_empty_value_is_absent
   A2_flag_on_https A3_pending_live_https A3b_pending_honoured_boundaries
@@ -1171,6 +1370,9 @@ ROW_IDS=(
   L1_scrub_removes_pinned_names_and_keeps_the_rest L2_scrub_no_match_is_a_noop_and_idempotent L3_scrub_read_and_write_failures_leave_the_file_untouched
   L4_scrub_recount_failure_leaves_the_file_untouched L5_scrub_conservation_failure_leaves_the_file_untouched L6_scrub_all_lines_matching_yields_an_empty_file
   L7_scrub_holds_under_a_utf8_locale L8_scrub_names_match_the_tuple_census_and_the_canary_counts
+  S1_connect_and_ca_file S2_handshake_and_verify S3_request_and_status S3b_same_times_any_rc_reads_request S3c_tls_complete_but_not_200_fails_with_phase_status
+  S4_sequence_counts_and_last_phase S4b_counters_clamp S5_event_grammar_on_both_sinks S6_unknown_arms_and_validated_values S7_wflags_allowlist_is_the_four_names
+  S8_noncanonical_input_and_success_first S8b_no_trailing_newline_parses_last_field S9_decode_names_every_token_and_field S9b_decode_checker_can_go_red
 )
 
 ROW_ID=""; ROW_WHY=""
@@ -1238,6 +1440,10 @@ for id in "${ROW_IDS[@]}"; do
   ROWS=$((ROWS + 1))
   if [ "${RES[$id]:-1}" = 0 ]; then ok "row $id holds"; else bad "row $id VIOLATED: ${ROW_WHYS[$id]:-unknown}"; fi
 done
+# the verdicts of the pristine run: kill_mut re-runs rows on a mutated block and overwrites RES, so the mutation rows that need "the named rows
+# are GREEN on the pristine block" read this snapshot
+declare -A PRISTINE
+for id in "${ROW_IDS[@]}"; do PRISTINE[$id]="${RES[$id]:-1}"; done
 
 # ---------------------------------------------------------------------------------------
 # H1: the curl stub always succeeds -> the CA-withheld rows MUST go RED. A suite that stays green here
@@ -1247,6 +1453,245 @@ h1_rc=0
 ( CURL_ALWAYS_OK=1; export CURL_ALWAYS_OK; ROW_ID=A4_wrong_server_fails_closed; WHY=""; row_A4_wrong_server_fails_closed "$BLOCK_REAL" ) >/dev/null 2>&1 || h1_rc=$?
 ROWS=$((ROWS + 1))
 if [ "$h1_rc" -ne 0 ]; then ok "H1 an always-succeeding curl turns the wrong-server row RED (the suite can see a vacuous self-gate)"; else bad "H1 the wrong-server row stayed GREEN with an always-succeeding curl (vacuous self-gate not detectable)"; fi
+
+# ---------------------------------------------------------------------------------------
+# H1b (#10934): an always-succeeding curl turns the new phase rows RED too, and H8: a stub that IGNORES the profile list (it answers like a
+# healthy server) turns S1 to S4 RED. A suite that cannot see either proves nothing about the phases.
+# ---------------------------------------------------------------------------------------
+h_reds() { # <env assignment> <row id>... : prints the rows that stayed GREEN under the harness edit (empty = every row went RED)
+  local env="$1" id stayed=""; shift
+  for id in "$@"; do
+    ( export "${env?}"; ROW_ID="$id"; WHY=""; "row_$id" "$BLOCK_REAL" ) >/dev/null 2>&1 && stayed="$stayed $id"
+  done
+  printf '%s' "${stayed# }"
+}
+h1b_stayed="$(h_reds CURL_ALWAYS_OK=1 S1_connect_and_ca_file S2_handshake_and_verify S3_request_and_status S3b_same_times_any_rc_reads_request S4_sequence_counts_and_last_phase S6_unknown_arms_and_validated_values)"
+ROWS=$((ROWS + 1))
+if [ -z "$h1b_stayed" ]; then ok "H1b an always-succeeding curl turns the phase rows RED (S1, S2, S3, S3b, S4, S6)"; else bad "H1b these phase rows stayed GREEN with an always-succeeding curl: $h1b_stayed"; fi
+h8_stayed="$(h_reds CURL_PROFILES_IGNORED=1 S1_connect_and_ca_file S2_handshake_and_verify S3_request_and_status S4_sequence_counts_and_last_phase)"
+ROWS=$((ROWS + 1))
+if [ -z "$h8_stayed" ]; then ok "H8 a stub that ignores the profile list turns S1 to S4 RED (the profiles are what the rows are answered from)"; else bad "H8 these rows stayed GREEN with the profile list ignored: $h8_stayed"; fi
+rm -f "$CURLW_SENTINEL"
+
+# ---------------------------------------------------------------------------------------
+# H7: printer fidelity and refusal. (a) the measured table is EXACTLY the named set (a profile cannot be added or renamed unseen) and every
+# measured profile prints the canonical four-field line with no trailing newline; (b) the double refuses an unknown variable and an unknown
+# profile (rc 99 and the sentinel) and a missing fixture (rc 98); (c) through the REAL function: a -w naming an unknown variable drops the
+# sentinel (the function swallows curl's exit and stderr, so the sentinel is the only evidence).
+# ---------------------------------------------------------------------------------------
+h7a_why=""
+h7a_names="$(printf '%s\n' "$CURLW_MEASURED" | cut -d'|' -f1 | sort | paste -sd' ')"
+# shellcheck disable=SC2086
+h7a_want="$(printf '%s\n' $SG_NAMED_SETS | sort | paste -sd' ')"
+[ "$h7a_names" = "$h7a_want" ] || h7a_why="the measured table names [$h7a_names] are not exactly the named sets [$h7a_want]"
+h7a_in="$(printf '%s\n%s\n%s\n' "$SG_S1" "$SG_S2" "$SG_S3" | cut -d'|' -f1 | sort | paste -sd' ') ok200"
+# shellcheck disable=SC2086
+[ -n "$h7a_why" ] || [ "$(printf '%s\n' $h7a_in | sort | paste -sd' ')" = "$h7a_want" ] || h7a_why="the S1 to S3 tables do not iterate exactly the named sets: [$h7a_in]"
+h7a_re='^[0-9]{3} [0-9]+\.[0-9]{6} [0-9]+\.[0-9]{6} [0-9]+$'
+while IFS='|' read -r h7a_n _; do
+  [ -n "$h7a_why" ] && break
+  h7a_out="$( ( source "$CURLW_FIXTURE"; curlw_print "$h7a_n" '%{http_code} %{time_connect} %{time_appconnect} %{ssl_verify_result}' ) 2>&1; printf x )"
+  h7a_out="${h7a_out%x}"
+  grep -qE "$h7a_re" <<< "$h7a_out" && [ "${h7a_out%$'\n'}" = "$h7a_out" ] || h7a_why="profile $h7a_n printed [$h7a_out] (want the canonical four fields, no trailing newline)"
+done <<< "$CURLW_MEASURED"
+ROWS=$((ROWS + 1))
+if [ -z "$h7a_why" ]; then ok "H7a the measured table is exactly the named set and every profile prints the canonical four-field line without a trailing newline"; else bad "H7a $h7a_why"; fi
+
+h7b_why=""
+h7b_run() { # <profile> <fmt> [profiles file]: runs the resolver suite's stub directly; prints its rc; the sentinel is left for the caller
+  ( export RUN_DIR="$RUNS/h7b-run" FX_CURL_PROFILES="$1" ${3:+CURL_W_PROFILES_FILE="$3"}; mkdir -p "$RUN_DIR"; "$BIN/curl" -s -o /dev/null -w "$2" https://127.0.0.1:1/health >/dev/null 2>&1; printf '%s' "$?" )
+}
+rm -f "$CURLW_SENTINEL"
+[ "$(h7b_run ok200 '%{errormsg}')" = 99 ] && [ -s "$CURLW_SENTINEL" ] || h7b_why="an unknown write-out variable (%{errormsg}) did not exit 99 with the sentinel"
+rm -f "$CURLW_SENTINEL"
+[ -n "$h7b_why" ] || { [ "$(h7b_run no_such_profile '%{http_code}')" = 99 ] && [ -s "$CURLW_SENTINEL" ] || h7b_why="an unknown profile did not exit 99 with the sentinel"; }
+rm -f "$CURLW_SENTINEL"
+[ -n "$h7b_why" ] || { [ "$(h7b_run ok200 '%{http_code}' "$RUNS/no-such-fixture.sh")" = 98 ] || h7b_why="a missing profile file did not exit 98"; }
+[ -n "$h7b_why" ] || { [ ! -e "$CURLW_SENTINEL" ] || h7b_why="a missing fixture dropped the printer sentinel (it never reached the printer)"; }
+rm -f "$CURLW_SENTINEL"
+[ -n "$h7b_why" ] || { [ "$(h7b_run ok200 '%{http_code}')" = 0 ] && [ ! -e "$CURLW_SENTINEL" ] || h7b_why="a valid profile and variable did not print cleanly (control)"; }
+ROWS=$((ROWS + 1))
+if [ -z "$h7b_why" ]; then ok "H7b the double refuses an unknown variable and an unknown profile (exit 99 plus the sentinel) and a missing fixture (exit 98)"; else bad "H7b $h7b_why"; fi
+rm -f "$CURLW_SENTINEL"
+
+# (c) through the real function: the first -w option of the self-gate text is rewritten to name %{errormsg}; the function swallows curl's exit
+# and stderr, so only the sentinel can show the double refused it
+h7c_blk="$WORK/block.h7c.sh"
+python3 -I - "$BLOCK_REAL" "$h7c_blk" <<'PY' || die "H7c: could not build the control block"
+import re, sys
+s = open(sys.argv[1]).read()
+n = len(re.findall(r"-w '[^']*'", s))
+if n < 1:
+    sys.exit(3)
+open(sys.argv[2], "w").write(re.sub(r"-w '[^']*'", "-w '%{errormsg}'", s))
+PY
+CURL_PROFILES=ok200 SG_ATTEMPTS=1 SNAP_EXTRA="$ONFLAG" CA_MODE=ok CA_FILE="$FX/v-good.pem" scenario "$h7c_blk" "H7c"
+ROWS=$((ROWS + 1))
+if [ -s "$CURLW_SENTINEL" ] && grep -q 'errormsg' "$CURLW_SENTINEL"; then ok "H7c through the real function an unknown write-out variable drops the printer sentinel (the control the per-row sentinel check relies on)"; else bad "H7c a -w naming %{errormsg} did not drop the sentinel through the real function (rc=$(val rc))"; fi
+rm -f "$CURLW_SENTINEL"
+
+# ---------------------------------------------------------------------------------------
+# H6: the REAL self-gate against REAL curl and local python `ssl` listeners, six scenarios; H9: the comparison against a COPY of the profile
+# file with one value flipped goes RED. The comparison is on (exit-code class, http code, whether time_connect and time_appconnect are zero,
+# ssl_verify_result), not on the phase alone, and 52 and 56 form ONE class (one wire event prints 52 on curl 8.5.0, 56 on 7.81 and 8.23).
+# The function swallows curl's stdout and exit code, so a passthrough shim around real curl logs both. RST, the empty-CA-file case, the
+# truncated body and the hang phases (5 s and 10 s timers) are stub-only and rest on the evidence file. Under CI a missing curl is a
+# failure, not a skip; locally the skip is counted so the exact MIN_ROWS stays consistent (ROWS and SKIP both move by N, as H3 does).
+# ---------------------------------------------------------------------------------------
+H6_SCENARIOS='closed|refused|closed|loop.crt
+plainclose|hs_close|plain_close|loop.crt
+mismatch|verify18|tls_mismatch|loop.crt
+tlsclose|req_empty|tls_clean_close|loop.crt
+tls200|ok200|tls_200|loop.crt
+tls502|status502|tls_502|loop.crt'
+H6_N=7   # six scenarios plus H9
+H6_DIR="$WORK/h6"; H6_PID=""
+h6_class() { case "$1" in 52|56) printf '52or56' ;; *) printf '%s' "$1" ;; esac; }
+h6_tstate() { # <time field>: missing | zero | nonzero
+  if [[ ! "$1" =~ ^[0-9]+[.,][0-9]+$ ]]; then printf missing; elif [[ "$1" =~ ^[0.,]*$ ]]; then printf zero; else printf nonzero; fi
+}
+h6_compare() { # <label> <profile>: real curl's logged output against the profile of $CURL_W_PROFILES_FILE (default: the fixture); sets H6_WHY
+  local label="$1" rrc rout rcode rtc rta rver prof pc pco ptc pta pver
+  H6_WHY=""
+  rrc="$(cat "$H6_DIR/$label.rc" 2>/dev/null)"; rout="$(cat "$H6_DIR/$label.out" 2>/dev/null)"
+  [ -n "$rrc" ] || { H6_WHY="the self-gate made no curl call"; return 1; }
+  read -r rcode rtc rta rver <<< "$rout"
+  prof="$( ( source "${CURL_W_PROFILES_FILE:-$CURLW_FIXTURE}" || exit 98; curlw_lookup "$2" || exit 97
+             printf '%s|%s|%s|%s|%s' "$CURLW_RC" "$CURLW_CODE" "$CURLW_TC" "$CURLW_TA" "$CURLW_VER" ) 2>/dev/null )" || { H6_WHY="profile $2 unreadable"; return 1; }
+  IFS='|' read -r pc pco ptc pta pver <<< "$prof"
+  [ "$(h6_class "$rrc")" = "$(h6_class "$pc")" ] || H6_WHY="rc class: real curl exited $rrc, profile $2 says $pc"
+  [ -n "$H6_WHY" ] || [ "$rcode" = "$pco" ] || H6_WHY="http_code: real curl printed [$rcode], profile $2 says [$pco] (stdout was [$rout])"
+  [ -n "$H6_WHY" ] || [ "$(h6_tstate "$rtc")" = "$(h6_tstate "$ptc")" ] || H6_WHY="time_connect: real curl printed [$rtc] ($(h6_tstate "$rtc")), profile $2 says [$ptc] ($(h6_tstate "$ptc"))"
+  [ -n "$H6_WHY" ] || [ "$(h6_tstate "$rta")" = "$(h6_tstate "$pta")" ] || H6_WHY="time_appconnect: real curl printed [$rta] ($(h6_tstate "$rta")), profile $2 says [$pta] ($(h6_tstate "$pta"))"
+  [ -n "$H6_WHY" ] || [ "$rver" = "$pver" ] || H6_WHY="ssl_verify_result: real curl printed [$rver], profile $2 says [$pver]"
+  [ -z "$H6_WHY" ]
+}
+h6_all() { # compares every scenario; sets H6_ALL_WHY to the first miss
+  local label prof _l _c
+  H6_ALL_WHY=""
+  while IFS='|' read -r label prof _l _c; do
+    h6_compare "$label" "$prof" || { H6_ALL_WHY="$label: $H6_WHY"; return 1; }
+  done <<< "$H6_SCENARIOS"
+}
+h6_tools_ok() { [ -n "$(command -v curl)" ] && command -v python3 >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1; }
+h6_setup() { # starts the listeners, runs the six scenarios; returns 1 (and sets H6_SETUP_WHY) when the harness itself failed
+  local i port label prof lis ca REAL_CURL REAL_SLEEP
+  H6_SETUP_WHY=""
+  REAL_CURL="$(command -v curl)"; REAL_SLEEP="$(command -v sleep)"
+  mkdir -p "$H6_DIR/bin"
+  {
+    printf '#!/bin/bash\nREAL_CURL=%q\n' "$REAL_CURL"
+    cat <<'SHIM'
+# passthrough shim around REAL curl: the self-gate swallows curl's stdout and exit code, so log both
+out="$("$REAL_CURL" "$@" 2>>"${H6_OUT_PREFIX:?}.err")"; rc=$?
+printf '%s' "$out" > "$H6_OUT_PREFIX.out"; printf '%s' "$rc" > "$H6_OUT_PREFIX.rc"
+printf '%s' "$out"; exit "$rc"
+SHIM
+  } > "$H6_DIR/bin/curl"
+  printf '#!/bin/bash\nexit 0\n' > "$H6_DIR/bin/sleep"; printf '#!/bin/bash\nexit 0\n' > "$H6_DIR/bin/logger"
+  chmod +x "$H6_DIR/bin/curl" "$H6_DIR/bin/sleep" "$H6_DIR/bin/logger"
+  cat > "$H6_DIR/server.py" <<'PY'
+import os, signal, socket, ssl, sys, threading, time
+signal.alarm(240)  # never outlive the suite by more than this, whatever happens to the parent
+good_crt, good_key, other_crt, other_key, portfile = sys.argv[1:6]
+def listener():
+    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", 0)); s.listen(16); return s
+def ctx(crt, key):
+    c = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain(crt, key); return c
+good, other = ctx(good_crt, good_key), ctx(other_crt, other_key)
+def read_request(t):
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = t.recv(4096)
+        if not chunk: break
+        data += chunk
+    return data
+def handle(mode, conn):
+    try:
+        conn.settimeout(8)
+        if mode == "plain_close":
+            conn.close(); return
+        t = (other if mode == "tls_mismatch" else good).wrap_socket(conn, server_side=True)
+        read_request(t)
+        if mode == "tls_clean_close":
+            t.unwrap(); t.close(); return
+        status = b"200 OK" if mode == "tls_200" else b"502 Bad Gateway"
+        t.sendall(b"HTTP/1.1 " + status + b"\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        t.close()
+    except Exception:
+        try: conn.close()
+        except Exception: pass
+def serve(mode, srv):
+    while True:
+        try: conn, _ = srv.accept()
+        except Exception: return
+        threading.Thread(target=handle, args=(mode, conn), daemon=True).start()
+ports = {}
+for mode in ("plain_close", "tls_mismatch", "tls_clean_close", "tls_200", "tls_502"):
+    srv = listener(); ports[mode] = srv.getsockname()[1]
+    threading.Thread(target=serve, args=(mode, srv), daemon=True).start()
+c = listener(); ports["closed"] = c.getsockname()[1]; c.close()  # a port nothing listens on
+with open(portfile + ".tmp", "w") as f:
+    for k, v in ports.items(): f.write("%s %s\n" % (k, v))
+os.rename(portfile + ".tmp", portfile)
+while True: time.sleep(1)
+PY
+  rm -f "$H6_DIR/ports"
+  python3 -I "$H6_DIR/server.py" "$FX/loop.crt" "$FX/loop.key" "$FX/other.crt" "$FX/other.key" "$H6_DIR/ports" > "$H6_DIR/server.log" 2>&1 &
+  H6_PID=$!
+  i=0
+  while [ ! -s "$H6_DIR/ports" ] && [ "$i" -lt 100 ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done   # readiness poll on the port file (bounded, no fixed sleep)
+  [ -s "$H6_DIR/ports" ] || { H6_SETUP_WHY="the local listeners did not come up: $(head -c 300 "$H6_DIR/server.log")"; return 1; }
+  while IFS='|' read -r label prof lis ca; do
+    port="$(awk -v k="$lis" '$1 == k {print $2}' "$H6_DIR/ports")"
+    [ -n "$port" ] || { H6_SETUP_WHY="no port for listener $lis"; return 1; }
+    rm -f "$H6_DIR/$label.out" "$H6_DIR/$label.rc" "$H6_DIR/$label.err"
+    (
+      unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy NO_PROXY no_proxy SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY
+      export PATH="$H6_DIR/bin:$PATH" H6_OUT_PREFIX="$H6_DIR/$label"
+      LOG_TAG=ci-deploy
+      # shellcheck disable=SC1090
+      source "$BLOCK_REAL" || exit 99
+      # shellcheck disable=SC2034
+      INNGEST_LINK_HTTPS_URL="https://127.0.0.1:$port"   # overridden AFTER sourcing: the block fixes it to the production address
+      INNGEST_LINK_SELFGATE_ATTEMPTS=1
+      _inngest_link_selfgate "$FX/$ca"
+    ) > "$H6_DIR/$label.stdout" 2>&1
+  done <<< "$H6_SCENARIOS"
+  return 0
+}
+if h6_tools_ok; then
+  h6_setup_rc=0; h6_setup || h6_setup_rc=$?
+  if [ "$h6_setup_rc" -ne 0 ]; then
+    for _i in $(seq 1 "$H6_N"); do ROWS=$((ROWS + 1)); bad "H6 the real-curl harness failed to start: $H6_SETUP_WHY"; done
+  else
+    while IFS='|' read -r h6_label h6_prof h6_lis _; do
+      ROWS=$((ROWS + 1))
+      if h6_compare "$h6_label" "$h6_prof"; then ok "H6 real curl against a local listener ($h6_lis): profile $h6_prof matches (rc class, code, zero-ness of the times, verify)"; else bad "H6 $h6_lis vs profile $h6_prof: $H6_WHY"; fi
+    done <<< "$H6_SCENARIOS"
+    # H9: the same comparison against a copy of the profile file with ONE value flipped (verify18's ssl_verify_result 18 -> 1) must go RED,
+    # and the pristine comparison must be GREEN first (a comparison that is red for every profile proves nothing about the flip)
+    h9_copy="$WORK/curl-w-profiles.flipped.sh"
+    sed 's/^verify18|60|000|0\.000119|0\.000000|18$/verify18|60|000|0.000119|0.000000|1/' "$CURLW_FIXTURE" > "$h9_copy"
+    ROWS=$((ROWS + 1))
+    if cmp -s "$CURLW_FIXTURE" "$h9_copy"; then
+      bad "H9 the profile flip did not land in the copy (the verify18 row of the table changed shape)"
+    elif ! h6_all; then
+      bad "H9 precondition: the pristine real-curl comparison is not GREEN ($H6_ALL_WHY)"
+    elif ( CURL_W_PROFILES_FILE="$h9_copy"; export CURL_W_PROFILES_FILE; h6_all ); then
+      bad "H9 the real-curl comparison stayed GREEN against a profile file with verify18's ssl_verify_result flipped (a drifting table is not detected)"
+    else
+      ok "H9 the real-curl comparison goes RED against a profile file with one value flipped (and is GREEN against the real one)"
+    fi
+  fi
+  if [ -n "$H6_PID" ]; then kill "$H6_PID" 2>/dev/null; wait "$H6_PID" 2>/dev/null; fi
+elif [ -n "${CI:-}" ]; then
+  for _i in $(seq 1 "$H6_N"); do ROWS=$((ROWS + 1)); bad "H6 curl, python3 or openssl is missing under CI: the real-curl differential is mandatory there"; done
+else
+  ROWS=$((ROWS + H6_N)); SKIP=$((SKIP + H6_N)); printf '[skip] H6/H9 curl, python3 or openssl is not installed: the real-curl differential did not run (a failure under CI)\n'
+fi
+rm -f "$CURLW_SENTINEL"
 
 # ---------------------------------------------------------------------------------------
 # H3: Node. A CA:FALSE self-signed certificate is accepted as an extra root; a leaf signed with its key is not.
@@ -1636,6 +2081,99 @@ kill_mut M21j-no-binary-as-text-on-the-first-count "L1_scrub_removes_pinned_name
 kill_mut M21i-no-c-locale-on-the-write "L7_scrub_holds_under_a_utf8_locale" \
   'LC_ALL=C grep -a -v -E' 'grep -a -v -E'
 
+# ---------------------------------------------------------------------------------------
+# #10934: the self-gate's phase derivation and event (Guard Contract, mutation matrix M22a-M22t). Rows M22a to M22c, M22j and M22m are derived
+# from the design (the seven-token map, the order of attempts, the verdict), not from the code's current shape.
+#
+# Every row is proven in THREE steps by kill_mut_sg: (1) the named rows are GREEN on the pristine block (the PRISTINE snapshot of the first run),
+# (2) the mutation kills them (kill_mut), (3) every anchor occurs EXACTLY ONCE inside the `_inngest_link_selfgate*` text AND once in the whole
+# block (the block also holds canary code with similar tokens; mut_block edits the first occurrence). An anchor that is absent or repeated
+# is reported as its own [FAIL], never as a kill.
+#
+# The anchors are written against this shape of the fix (inside the self-gate text, the helper being pure and every test inlined with the
+# regexes held in the variables num='^[0-9]+[.,][0-9]+$', zero='^[0.,]*$', c3='^[0-9]{3}$'); when the fix text differs, move the anchor, not the row:
+#   _inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
+#     if [[ "$rc" == 124 || -z "$code$tc$ta" ]]; then printf unknown; return 0; fi
+#     if [[ "$rc" == 77 ]]; then printf ca_file; return 0; fi
+#     if [[ "$rc" == 60 ]]; then printf verify; return 0; fi
+#     if [[ "$code" =~ $c3 && "$code" != 000 && "$code" != 200 ]]; then printf status; return 0; fi
+#     if [[ ! "$tc" =~ $num || ! "$ta" =~ $num ]]; then printf unknown; return 0; fi
+#     if [[ "$tc" =~ $zero ]]; then printf connect; return 0; fi
+#     if [[ "$ta" =~ $zero ]]; then printf handshake; return 0; fi
+#     printf request
+#   }
+# and, in the attempt loop of _inngest_link_selfgate (the verdict first, then the phase and the two counters from each attempt):
+#     read -r code tc ta ver <<< "$out" || true
+#     if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi
+#     phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"
+#     if [[ "$tc" =~ $num && ! "$tc" =~ $zero ]]; then tcpn=$((tcpn + 1)); fi
+#     if [[ "$ta" =~ $num && ! "$ta" =~ $zero ]]; then tlsn=$((tlsn + 1)); fi
+# and the event: "rc=$rc http=$http attempts=$i phase=$phase tcp=$(_inngest_link_count99 "$tcpn") tls=$(_inngest_link_count99 "$tlsn") verify=$vv".
+# ---------------------------------------------------------------------------------------
+SG_TEXT="$WORK/selfgate.text"
+sed -n '/^_inngest_link_selfgate/,/^}/p' "$BLOCK_REAL" > "$SG_TEXT"
+sg_anchor_count() { # <file> <anchor>: how many times the anchor occurs in the file
+  python3 -I - "$1" "$2" <<'PY'
+import sys
+print(open(sys.argv[1]).read().count(sys.argv[2]))
+PY
+}
+kill_mut_sg() { # <mutation id> "<row id> ..." <old> <new> [<old> <new>]...   (kill_mut plus the pristine-green and anchor-unique steps)
+  local mid="$1" rows="$2" id i a n_sg n_blk why=""
+  shift 2
+  for ((i = 1; i <= $#; i += 2)); do
+    a="${!i}"
+    n_sg="$(sg_anchor_count "$SG_TEXT" "$a")"; n_blk="$(sg_anchor_count "$BLOCK_REAL" "$a")"
+    if [ "$n_sg" != 1 ] || [ "$n_blk" != 1 ]; then why="the anchor [${a:0:70}] occurs $n_sg time(s) in the self-gate text and $n_blk in the block, want exactly 1 in both"; break; fi
+  done
+  if [ -z "$why" ]; then for id in $rows; do if [ "${PRISTINE[$id]:-1}" != 0 ]; then why="named row $id is not GREEN on the pristine block"; break; fi; done; fi
+  if [ -n "$why" ]; then ROWS=$((ROWS + 1)); bad "mutation $mid: $why"; return 0; fi
+  kill_mut "$mid" "$rows" "$@"
+}
+A_RC77='if [[ "$rc" == 77 ]]; then printf ca_file; return 0; fi'
+A_RC60='if [[ "$rc" == 60 ]]; then printf verify; return 0; fi'
+A_STATUS='if [[ "$code" =~ $c3 && "$code" != 000 && "$code" != 200 ]]; then printf status; return 0; fi'
+A_SHAPE='if [[ ! "$tc" =~ $num || ! "$ta" =~ $num ]]; then printf unknown; return 0; fi'
+A_UNK124='if [[ "$rc" == 124 || -z "$code$tc$ta" ]]; then printf unknown; return 0; fi'
+A_CONNECT='if [[ "$tc" =~ $zero ]]; then printf connect; return 0; fi'
+A_VERDICT='if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi'
+A_STATUS_TAIL=' && "$code" != 200 ]]; then printf status'
+kill_mut_sg M22a-appconnect-zero-tested-before-the-verify-arm "S2_handshake_and_verify" \
+  "$A_RC60" "if [[ \"\$ta\" =~ \$zero ]]; then printf handshake; return 0; fi; $A_RC60"
+kill_mut_sg M22b-connect-zero-test-dropped "S1_connect_and_ca_file" "$A_CONNECT" ':'
+kill_mut_sg M22c-status-branch-dropped "S3_request_and_status" "$A_STATUS" ':'
+kill_mut_sg M22d-unparsable-arm-defaults-to-request "S6_unknown_arms_and_validated_values" \
+  "$A_SHAPE" 'if [[ ! "$tc" =~ $num || ! "$ta" =~ $num ]]; then printf request; return 0; fi'
+kill_mut_sg M22e-rc124-and-empty-output-arm-dropped "S6_unknown_arms_and_validated_values" "$A_UNK124" ':'
+kill_mut_sg M22f-time-shape-check-dropped "S6_unknown_arms_and_validated_values" "$A_SHAPE" ':'
+kill_mut_sg M22g-rc77-arm-dropped "S1_connect_and_ca_file" "$A_RC77" ':'
+kill_mut_sg M22h-rc60-arm-dropped "S2_handshake_and_verify" "$A_RC60" ':'
+kill_mut_sg M22i-time-zero-tests-inverted "S1_connect_and_ca_file S2_handshake_and_verify S3_request_and_status" \
+  'if [[ "$tc" =~ $zero ]]; then printf connect' 'if [[ ! "$tc" =~ $zero ]]; then printf connect' \
+  'if [[ "$ta" =~ $zero ]]; then printf handshake' 'if [[ ! "$ta" =~ $zero ]]; then printf handshake'
+kill_mut_sg M22j-phase-taken-from-the-first-attempt "S4_sequence_counts_and_last_phase" \
+  'phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"' 'if [[ "$i" -eq 1 ]]; then phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"; fi'
+kill_mut_sg M22k-tls-counter-counts-tcp "S4_sequence_counts_and_last_phase" \
+  'if [[ "$ta" =~ $num && ! "$ta" =~ $zero ]]; then tlsn=$((tlsn + 1)); fi' 'if [[ "$tc" =~ $num && ! "$tc" =~ $zero ]]; then tlsn=$((tlsn + 1)); fi'
+kill_mut_sg M22l-counter-clamp-removed "S4b_counters_clamp" \
+  'tcp=$(_inngest_link_count99 "$tcpn") tls=$(_inngest_link_count99 "$tlsn")' 'tcp=$tcpn tls=$tlsn'
+kill_mut_sg M22m-success-decided-on-the-whole-output "A2_flag_on_https S8_noncanonical_input_and_success_first" \
+  "$A_VERDICT" 'if [[ "$rc" -eq 0 && "$out" == 200 ]]; then return 0; fi'
+kill_mut_sg M22n-success-gated-on-the-full-shape-check "S8_noncanonical_input_and_success_first" \
+  "$A_VERDICT" 'if [[ "$rc" -eq 0 && "$code" == 200 && "$tc" =~ $num && "$ta" =~ $num && "$ver" =~ ^[0-9]+$ ]]; then return 0; fi'
+kill_mut_sg M22o-event-appends-the-url "S5_event_grammar_on_both_sinks" \
+  'verify=$vv"' 'verify=$vv url=$INNGEST_LINK_HTTPS_URL"'
+kill_mut_sg M22p-request-arm-keyed-on-the-exit-code "S3b_same_times_any_rc_reads_request" \
+  'printf request' 'case "$rc" in 52 | 28) printf request ;; *) printf unknown ;; esac'
+kill_mut_sg M22q-verify-printed-raw "S2_handshake_and_verify" \
+  'verify=$vv"' 'verify=$(_inngest_link_count99 "$ver")"'
+kill_mut_sg M22r-http-printed-from-the-raw-token "S6_unknown_arms_and_validated_values" \
+  'http=$http attempts=$i' 'http=${code:-none} attempts=$i'
+kill_mut_sg M22s-status-for-any-code-but-000 "S3_request_and_status" \
+  "$A_STATUS_TAIL" ' ]]; then printf status'
+kill_mut_sg M22t-status-gated-on-a-zero-exit-code "S3_request_and_status" \
+  "$A_STATUS_TAIL" ' && "$code" != 200 && "$rc" == 0 ]]; then printf status'
+
 
 # ---------------------------------------------------------------------------------------
 # LEDGER
@@ -1643,7 +2181,9 @@ kill_mut M21i-no-c-locale-on-the-write "L7_scrub_holds_under_a_utf8_locale" \
 printf '\n=== inngest-link-resolver: %d passed, %d failed, %d skipped (%d rows) ===\n' "$PASS" "$FAIL" "$SKIP" "$ROWS"
 # The anti-vacuity floor comes FIRST: scripts/guard-vacuity-floor.test.sh neuters every counter and runs the first floor it
 # finds, which must be this one (the accounting identity below holds trivially at zero).
-MIN_ROWS=203
+# #10934: 203 -> 249 (+46: S1 to S9b = 14 rows, H1b, H8, H7a to H7c, H6 x6, H9 = 12, M22a to M22t = 20), measured from the RED run on the unmodified block;
+# the post-fix run must re-measure it (Phase 5)
+MIN_ROWS=249
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1
