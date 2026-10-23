@@ -19,8 +19,9 @@
 # A stalled attempt is killed at GD_APT_ATTEMPT_CAP (default 90 s) and retried, up to 3 attempts, all
 # inside the shared budget. Measured: about one apt cycle in three stalled for the full allotted time and a
 # fresh attempt succeeded in about 15 s. NO apt Acquire timeout is set (only Acquire::Retries=5): apt's
-# default HTTP timeout is 120 s, longer than the 90 s attempt cap, so apt's own timeouts and retries can never
-# act inside a cap; the cap is the only bound on a stall.
+# default HTTP timeout is 120 s, longer than the 90 s attempt cap, so apt's own HTTP timeout can never fire inside
+# a cap; the cap is the only bound on a STALL. Acquire::Retries=5 still acts on fast failures (a refused or reset
+# connection is retried inside the attempt).
 #
 # SHARED LISTS + ARCHIVES (#10781). Every container of one suite used to run a full `apt-get update` + `install`
 # into its own empty /var/lib/apt/lists and /var/cache/apt/archives, so a suite with ~12 containers paid ~12
@@ -43,10 +44,18 @@
 #             gd_apt_state_summary                            one `GD_APT: spent=..` line for the log
 #   container . /work/apt/apt-bounded.sh || exit 97
 #             gd_apt_install_bounded <pkg>... || exit $?
-#             On EVERY exit path (success, decline, apt rc) it ends with a container-side `chmod -R a+rwX` of the
-#             state dir: container root creates the cache files, and apt chowns lists/partial and archives/partial
-#             to its download user with mode 0700, so without it the host user could not remove the state dir.
-#             (A container killed from OUTSIDE, for example by the suite's host-side `timeout`, skips it.)
+#             On EVERY RETURN path (success, decline, apt rc, the 98 unarmed case) it ends with a container-side `chmod -R a+rwX` of
+#             the state dir: container root creates the cache files, and apt chowns lists/partial and archives/partial
+#             to its download user (`_apt`) with mode 0700 or stricter, so without it the host user could not remove the
+#             state dir. It then clears group/other write on `<state>/apt-bounded.sh` again (the host `rm -rf` needs
+#             DIRECTORY permissions, not that file's): the next container sources that file as root.
+#             Two paths do NOT reach the chmod, by construction and not changed here:
+#               - `assert_fixture_dir`'s `exit 2` (an empty/relative/synthetic state or log path ends the shell before
+#                 any state exists to open);
+#               - a container killed from OUTSIDE (for example by the suite's host-side `timeout`, or a docker rm -f).
+#                 It leaves root- and `_apt`-owned 0700 partial dirs the host `rm -rf` cannot remove: debris under the
+#                 suite's temp dir on a persistent dev machine (ephemeral CI runners are unaffected), and an orphaned
+#                 container can still hold the lists/lock files until it is reaped.
 #
 # CONTRACT (return codes of gd_apt_install_bounded).
 #   0    installed
@@ -100,7 +109,7 @@ gd_apt_state_arm() {
   cp "$_GD_APT_LIB_SELF" "$dir/apt-bounded.sh" || return 2
   printf '%s\n' "$budget" > "$dir/budget" || return 2
   : > "$dir/spent" || return 2
-  chmod -R a+rwX "$dir"
+  _gd_apt_open_state "$dir"
   GD_APT_STATE="$dir"; export GD_APT_STATE
   echo "GD_APT: armed budget=${budget}s of apt time, shared across every apt-bearing container" >&2
 }
@@ -111,16 +120,57 @@ gd_apt_state_summary() {
     "$(_gd_apt_spent "$GD_APT_STATE")" "$(cat "$GD_APT_STATE/budget")" "$(wc -l < "$GD_APT_STATE/spent" | tr -d ' ')"
 }
 
-# Container: the 20-line credential-scrubbed tail (apt error text can embed proxy user:pass@host), then a cause
+# THE SCRUBBED-TAIL LENGTH: the one place the number lives. The container prints this many lines of the apt log; the host
+# excerpt (gd_apt_out_tail) never shows more than this many lines of it. Plain assignment, so sourcing twice is harmless.
+GD_APT_TAIL_LINES=20
+
+# Make the state dir removable by the host user whatever uid container root and `_apt` left files under, WITHOUT leaving the
+# script the next container sources as root writable by anyone else: chmod -R a+rwX gives the file 0666, so clear go-w on it.
+_gd_apt_open_state() {
+  local rc=0
+  chmod -R a+rwX "$1" || rc=$?
+  chmod go-w "$1/apt-bounded.sh" 2>/dev/null || true   # also when the recursive chmod only partly succeeded
+  return "$rc"
+}
+
+# Container: the GD_APT_TAIL_LINES-line credential-scrubbed tail (apt error text can embed proxy user:pass@host), then a cause
 # line, then (decline only) the bare marker. All on stderr: docker demuxes the two streams, so a marker on
 # stdout could land BEFORE the diagnostics it follows (measured, #8744). The scrub cuts a URL authority at its
 # LAST `@` (a password may itself contain `@` or `/`), also masks scheme-less `user:pass@host` and
 # Authorization headers; a retention row in the unit suite pins that an ordinary archive URL survives.
+# Sets _GD_APT_TAIL_N to the number of lines it actually printed (the cause line carries it as tail_lines=, so the host
+# excerpt takes exactly the scrubbed block and never reaches into the unscrubbed container stdout above it).
 _gd_apt_scrubbed_tail() {
-  tail -n 20 "$1" 2>/dev/null | sed -E \
+  local out
+  _GD_APT_TAIL_N=0
+  out="$(tail -n "$GD_APT_TAIL_LINES" "$1" 2>/dev/null | sed -E \
     -e 's#//[^[:space:]]*@#//***@#g' \
     -e 's#(^|[[:space:]])[A-Za-z0-9._~%-]+:[^[:space:]@/]+@#\1***:***@#g' \
-    -e 's#([Aa]uthorization:[[:space:]]*[A-Za-z]+)[[:space:]]+[^[:space:]]+#\1 ***#g' >&2
+    -e 's#([Aa]uthorization:[[:space:]]*[A-Za-z]+)[[:space:]]+[^[:space:]]+#\1 ***#g')"
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out" >&2
+  _GD_APT_TAIL_N="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
+}
+
+# HOST: the excerpt of a captured container log for a failure or skip message. gd_apt_out_tail <file> [fallback-lines]
+# With a FIXTURE_APT_CAUSE line in the file it prints that line FIRST, then exactly the scrubbed block that precedes it (the
+# tail_lines= count the cause carries, never more than GD_APT_TAIL_LINES): at most 1 + GD_APT_TAIL_LINES lines, and nothing
+# from the unscrubbed container stdout around the block. Cause first because every consumer truncates from the END: the
+# runner keeps grep -A3 around the first FAIL marker, 40 lines and 2000 chars per line, and the one-line consumers join the
+# lines with `tr`. With no cause line (an arm with no apt, a container that died earlier) it is the plain `tail -n`.
+gd_apt_out_tail() {
+  local f="${1:?gd_apt_out_tail needs a captured log}" n="${2:-5}" hit ln cause k start
+  hit="$(grep -an '^FIXTURE_APT_CAUSE:' "$f" 2>/dev/null | tail -n 1)"
+  if [ -z "$hit" ]; then tail -n "$n" "$f" 2>/dev/null; return 0; fi
+  ln="${hit%%:*}"; cause="${hit#*:}"
+  k="$GD_APT_TAIL_LINES"
+  case "$cause" in *" tail_lines="[0-9]*) k="${cause##* tail_lines=}"; k="${k%%[!0-9]*}" ;; esac
+  case "$k" in ''|*[!0-9]*) k="$GD_APT_TAIL_LINES" ;; esac
+  k=$(( 10#$k )); [ "$k" -gt "$GD_APT_TAIL_LINES" ] && k="$GD_APT_TAIL_LINES"
+  printf '%s\n' "$cause"
+  [ "$k" -gt 0 ] || return 0
+  start=$(( ln - k )); [ "$start" -lt 1 ] && start=1
+  sed -n "${start},$(( ln - 1 ))p" "$f" 2>/dev/null
 }
 
 # The public entry: runs the bounded cycle and then makes the state dir removable by the host user whatever the
@@ -128,7 +178,7 @@ _gd_apt_scrubbed_tail() {
 gd_apt_install_bounded() {
   local rc=0 dir="${GD_APT_STATE_DIR:-/work/apt}"
   _gd_apt_install_bounded_cycle "$@" || rc=$?
-  [ -d "$dir" ] && chmod -R a+rwX "$dir" 2>/dev/null
+  [ -d "$dir" ] && _gd_apt_open_state "$dir" 2>/dev/null
   return "$rc"
 }
 
@@ -187,7 +237,7 @@ _gd_apt_install_bounded_cycle() {
     try=$(( try + 1 ))
   done
   _gd_apt_scrubbed_tail "$log"
-  echo "FIXTURE_APT_CAUSE: ${cause} stage=${stage} attempt=${try} attempt_secs=${dt} spent_before=${spent_before}s budget=${budget}s rc=${rc}" >&2
+  echo "FIXTURE_APT_CAUSE: ${cause} stage=${stage} attempt=${try} attempt_secs=${dt} spent_before=${spent_before}s budget=${budget}s rc=${rc} tail_lines=${_GD_APT_TAIL_N}" >&2
   case "$cause" in
     timeout|apt-error) echo FIXTURE_APT_FAILED >&2; return 100 ;;
   esac

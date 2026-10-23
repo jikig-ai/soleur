@@ -133,10 +133,8 @@ if grep -qE '^httpd:2\.4-alpine@sha256:[0-9a-f]{64}$' <<<"$HTTPD_IMAGE"; then pa
 else fail "P2: HTTPD_IMAGE is not a tag@sha256:<64-hex> pin" "$HTTPD_IMAGE"; fi
 
 # ── DOCKER GATE (fail closed under CI) ───────────────────────────────────────────────
-# The apt-bearing container's output holds the helper's 20-line credential-scrubbed apt tail plus the FIXTURE_APT_CAUSE
-# line (lib/apt-bounded.sh scrubs it before it is printed). A 2-5 line tail shows only the cause and drops the stalled
-# phase (#10781); when the cause line is present show the whole block, otherwise the usual short tail.
-_out_tail() { if grep -q '^FIXTURE_APT_CAUSE:' "$1" 2>/dev/null; then tail -n 24 "$1"; else tail -n "$2" "$1"; fi; }
+# Failure and skip excerpts of an apt-bearing container's capture go through gd_apt_out_tail (lib/apt-bounded.sh): with a
+# FIXTURE_APT_CAUSE line it prints the cause FIRST and then only the scrubbed apt block, otherwise the plain short tail.
 _in_ci() { [ -n "${GITHUB_ACTIONS:-}" ] || [ "${CI:-}" = "1" ] || [ "${CI:-}" = "true" ]; }
 # A skip DECLARES the rows it did not run. Under CI it is a failure and the suite ends here, loudly.
 _arm_skip() { # <rows> <reason>
@@ -345,14 +343,14 @@ BDRV
     if [ "$ARM_DONE" = 1 ]; then
       _contract_rows "ubuntu:24.04+apache2-utils" "$TMP/ubuntu/rows"
       if [ "$BOOT_OK" = 1 ] && grep -qx BOOT_DRIVER_DONE "$TMP/ubuntu/stdout"; then _boot_rows "$TMP/ubuntu/boot-rows"
-      elif [ "$BOOT_OK" = 1 ]; then fail "boot rows: the boot driver did not complete" "$(_out_tail "$TMP/ubuntu/stdout" 5 | tr '\n' ' ')"; SKIPPED=$((SKIPPED + BOOT_ROWS - 1))
+      elif [ "$BOOT_OK" = 1 ]; then fail "boot rows: the boot driver did not complete" "$(gd_apt_out_tail "$TMP/ubuntu/stdout" 5 | tr '\n' ' ')"; SKIPPED=$((SKIPPED + BOOT_ROWS - 1))
       elif [ "$BOOT_RENDERED" = 1 ]; then fail "boot rows: the registry user_data rendered, but its boot block no longer has the stdin htpasswd form (set -euo pipefail, htpasswd -Bin, the doppler wrapper line): the conversion regressed, whatever the environment"; SKIPPED=$((SKIPPED + BOOT_ROWS - 1))
       elif _in_ci; then fail "boot rows: the registry render failed, and this is CI (terraform and the offline render are required)"; SKIPPED=$((SKIPPED + BOOT_ROWS - 1))
       else _arm_skip "$BOOT_ROWS" "terraform is absent or the offline render/extraction failed (the boot-block rows need the same render registry-userdata-budget.sh makes)"; fi
     elif grep -qx FIXTURE_APT_FAILED "$TMP/ubuntu/stdout" || [ "$ARM_RC" = 125 ]; then
-      _arm_skip $((IMAGE_ROWS + BOOT_ROWS)) "the ubuntu fixture did not reach the driver (docker rc=$ARM_RC): $(_out_tail "$TMP/ubuntu/stdout" 2 | tr '\n' ' ')"
+      _arm_skip $((IMAGE_ROWS + BOOT_ROWS)) "the ubuntu fixture did not reach the driver (docker rc=$ARM_RC): $(gd_apt_out_tail "$TMP/ubuntu/stdout" 2 | tr '\n' ' ')"
     else
-      fail "ubuntu arm: the driver did not complete (docker rc=$ARM_RC)" "$(_out_tail "$TMP/ubuntu/stdout" 5 | tr '\n' ' ')"
+      fail "ubuntu arm: the driver did not complete (docker rc=$ARM_RC)" "$(gd_apt_out_tail "$TMP/ubuntu/stdout" 5 | tr '\n' ' ')"
       SKIPPED=$((SKIPPED + IMAGE_ROWS + BOOT_ROWS - 1))
     fi
   fi
@@ -365,7 +363,7 @@ BDRV
     ARM_RC=$?; _arm_done "$TMP/httpd"
     if [ "$ARM_DONE" = 1 ]; then _contract_rows "httpd:2.4-alpine" "$TMP/httpd/rows"
     else
-      fail "httpd arm: the driver did not complete (docker rc=$ARM_RC)" "$(_out_tail "$TMP/httpd/stdout" 5 | tr '\n' ' ')"
+      fail "httpd arm: the driver did not complete (docker rc=$ARM_RC)" "$(gd_apt_out_tail "$TMP/httpd/stdout" 5 | tr '\n' ' ')"
       SKIPPED=$((SKIPPED + IMAGE_ROWS - 1))
     fi
 
