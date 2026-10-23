@@ -21,11 +21,14 @@ fails, this ADR is amended rather than left standing.
 
 `.github/workflows/scheduled-rehearsal-skip-monitor.yml` carries a consecutive-TRANSIENT counter
 across daily runs (ADR-188's carrier). It persisted that counter in the GitHub Actions cache, and its
-round-trip assertion exits non-zero when no prior generation is restored. Of the last 30 daily runs
-the assertion was green on 4.
+round-trip assertion exits non-zero when no prior generation is restored. Counted on 2026-10-23 from
+the per-run step conclusions of `Assert the streak state round-trips` (`gh run view <id> --json jobs`),
+the step was red on 24 of the last 30 daily runs.
 
 Measured 2026-10-23 (read-only `gh api repos/jikig-ai/soleur/actions/cache/usage` and
-`actions/caches`): the repository holds 10.23 GB across 178 entries, every one on `refs/heads/main`.
+`gh api --paginate 'repos/jikig-ai/soleur/actions/caches?per_page=100'`; the figures are a snapshot and
+drift upward within a day, a later re-count read 206 entries and 11.83 GB, same direction): the repository
+held 10.23 GB across 178 entries, every one on `refs/heads/main`.
 160 entries (9.6 GB) are `buildkit-blob-1-sha256:*`, written by the release workflow's
 `cache-to: type=gha,mode=min` (`reusable-release.yml`); seven release exports on that day wrote about
 1.17 GB each. GitHub evicts least-recently-accessed first, so a 192-byte entry read once per 24 hours
@@ -52,9 +55,16 @@ hosted runner, and its suite also parses the workflow's wiring.
   replaces the old `RUN_NUMBER > 1` test, which would have fired a guaranteed false red on the first
   scheduled run after merge. It is the only way to reseed, and a BOOTSTRAP run discards a corrupt
   newest artifact so a poisoned artifact cannot wedge the monitor.
-- `seal` is verdict-aware: a real verdict clears the probe's file, so absence becomes `0`, but a
-  TRANSIENT verdict must have left a value of at least 1, because the probe's own write is
-  `2>/dev/null || true` and a lost increment would otherwise be sealed as a reset.
+- `seal` is verdict-aware and compares against the value `fetch` restored (`restored=` in its output): a
+  TRANSIENT verdict must have moved the streak to exactly `restored + 1`, because the probe's own write
+  is `2>/dev/null || true` and a lost increment would otherwise be sealed silently; a PASS forces `0`; a
+  FAIL keeps what an escalation left (absent means `0`); a `broken` probe keeps the restored value.
+- The artifact is read through a bounded pipe (the 4096-byte limit is on the compressed archive), and a
+  failed listing, a hung listing or a failed download is fatal even under `bootstrap`; only corrupt
+  CONTENT is discarded by a bootstrap run.
+- A failed state step (`fetch`, `seal`, `assert`, `upload`) also files an alert issue with its own title,
+  because a red scheduled run has no watcher: the old assertion was red on 24 of 30 days without anyone
+  acting.
 
 ## Alternatives Considered
 
@@ -76,6 +86,14 @@ hosted runner, and its suite also parses the workflow's wiring.
   which `fetch` fails leaves the stored value stale; there is no age bound. The release cache export
   churn that caused the eviction remains until its own tracking issue lands, so the other caches (npm,
   CodeQL) continue to be evicted daily.
-- `GITHUB_TOKEN` listing and download of artifacts from a hosted runner is unproven until the post-merge
-  dispatch pair; the fallback inside this same design is the repository's existing App-token mint for
-  the two read calls, never the cache.
+- Listing and downloading artifacts with the default token and `actions: read` is already done in this
+  repository (`web-platform-release.yml` lists a run's artifacts and downloads the zip; the cross-run
+  download in `fix-constraints-stage-b.yml` documents the `actions: read` need), both under
+  `workflow_run`. This monitor runs under `schedule`, the same token class, but that exact trigger is
+  unproven until the post-merge dispatch pair; the fallback inside this design is the repository's
+  App-token mint for the two read calls, never the cache.
+- Accepted residuals (also in the workflow header): a stale value after a day on which the upload was
+  skipped or failed; no age bound; selection by run id rather than execution order; `overwrite` is
+  delete-then-upload; and any actor with write access can plant a same-named artifact from a run on
+  `main`, the same trust level as editing the workflow. A scheduled run that fires before the first
+  `bootstrap` dispatch after merge goes red once, by design, and files one alert issue.
