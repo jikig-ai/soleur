@@ -825,7 +825,9 @@ export async function resolveWorkspacePathForUser(
     // a crafted/corrupted id would otherwise open (#5344).
     throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
   }
-  return join(getWorkspaceWorktreeRoot(), workspaceId);
+  // Lowercase AFTER the (case-insensitive) shape check: the filesystem is case-sensitive,
+  // so an upper-case id would otherwise name a different directory than provision/delete use.
+  return join(getWorkspaceWorktreeRoot(), workspaceId.toLowerCase());
 }
 
 /**
@@ -839,7 +841,7 @@ export function workspacePathForWorkspaceId(workspaceId: string): string {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error(`Invalid workspaceId format: ${JSON.stringify(workspaceId)}`);
   }
-  return join(getWorkspaceWorktreeRoot(), workspaceId);
+  return join(getWorkspaceWorktreeRoot(), workspaceId.toLowerCase());
 }
 
 /**
@@ -917,4 +919,134 @@ export function workspaceTenantDenyRoots(): string[] {
     }
   }
   return [...roots];
+}
+
+/**
+ * The two raw tenant roots for the ERASURE reap ({@link workspaceReapRoots}):
+ * `WORKSPACES_ROOT` then `WORKTREE_ROOT`, each falling back to its default when unset
+ * OR empty, trailing slashes stripped, each VALIDATED on its own. A bad root carries its
+ * `error` instead of throwing, so the reap can keep going per root. Rejects `/`, a
+ * non-absolute root and a `..` segment.
+ *
+ * KEEP IN SYNC with the validation inside {@link workspaceTenantDenyRoots} (the sandbox
+ * deny set, which throws on the first bad root and must stay byte-identical to main: the
+ * git-data flag precheck reads `process.env.WORKTREE_ROOT` inside its body). The two
+ * copies of the `/` and non-absolute/`..` rules are pinned against each other by
+ * `workspace-reap-roots.test.ts` (parity test over the same bad roots).
+ */
+function rawTenantRootEntries(): {
+  label: ReapRootLabel;
+  raw: string;
+  root: string;
+  error?: Error;
+}[] {
+  return (
+    [
+      ["workspaces", process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT],
+      ["worktree", process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT],
+    ] as const
+  ).map(([label, raw]) => {
+    const root = raw.replace(/\/+$/, "");
+    let error: Error | undefined;
+    // (`/` strips to "" here, so one comparison covers `/`, `//`, and the empty string.)
+    if (root === "") {
+      // Same rule as workspaceTenantDenyRoots: a `/` root is catastrophic (a reap under it
+      // would address `/<uuid>`), and dropping it silently is worse. Refuse loudly.
+      error = new Error(
+        `workspaceReapRoots: tenant root '${raw}' resolves to the filesystem root — refusing to reap under it`,
+      );
+    } else if (!isAbsolute(root) || root.split("/").includes("..")) {
+      error = new Error(
+        `workspaceReapRoots: tenant root '${raw}' is not an absolute normalized path — refusing to reap under it`,
+      );
+    }
+    return { label, raw, root, ...(error ? { error } : {}) };
+  });
+}
+
+/**
+ * Canonical form of a (possibly absent, possibly symlinked) root: realpath of
+ * the longest EXISTING prefix plus the absent tail. realpathSync itself throws
+ * on absent leaves AND on dangling links, and skipping either silently leaves
+ * the target unresolved — same fail-open class as a stat error. ENOENT/ENOTDIR
+ * during the prefix walk just climbs; any other error throws (fail loud over
+ * silently unmasked). `null` when the walk climbs to `/` without finding any
+ * existing prefix.
+ */
+export function canonicalizeRoot(norm: string): string | null {
+  let probe = norm;
+  const tail: string[] = [];
+  while (true) {
+    try {
+      const canon = realpathSync(probe);
+      return tail.length === 0 ? canon : join(canon, ...tail.reverse());
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+      const parent = dirname(probe);
+      if (parent === probe) return null; // climbed to / — no canonical prefix exists
+      tail.push(basename(probe));
+      probe = parent;
+    }
+  }
+}
+
+export type ReapRootLabel = "workspaces" | "worktree";
+
+/** One tenant root that could not be resolved for the reap, kept per root. */
+export interface ReapRootFault {
+  label: ReapRootLabel;
+  err: unknown;
+}
+
+/**
+ * Roots an Art. 17 erasure must reap `<root>/<workspaceId>` under (#8211):
+ * `WORKSPACES_ROOT` (first) and `WORKTREE_ROOT`, raw and FLAG-INDEPENDENT (a tree
+ * left under the NVMe root after a rollback is erased too), deduped by CANONICAL
+ * target so one symlinked directory is reaped, counted and reported once. Each
+ * entry carries a stable LABEL for log/Sentry (never the path).
+ *
+ * Resolution is PER ROOT: a root that is invalid (`/`, relative, `..`) or whose
+ * canonicalization fails (EACCES, ELOOP) is returned in `faults` and skipped, and
+ * never prevents the other root from being attempted. Nothing here ever resolves a
+ * root against the cwd: a relative root is a fault, not a path.
+ *
+ * Deliberately separate from {@link workspaceTenantDenyRoots}: that is a
+ * sandbox-masking contract (canonical aliases included, throws on any bad root),
+ * this is the delete list. Their root validation is duplicated on purpose (keep in sync with
+ * `workspaceTenantDenyRoots`; parity-tested), because that function must not change.
+ */
+export function workspaceReapRoots(): {
+  roots: { label: ReapRootLabel; root: string }[];
+  faults: ReapRootFault[];
+} {
+  const seen = new Set<string>();
+  const roots: { label: ReapRootLabel; root: string }[] = [];
+  const faults: ReapRootFault[] = [];
+  for (const { label, root, raw, error } of rawTenantRootEntries()) {
+    if (error) {
+      faults.push({ label, err: error });
+      continue;
+    }
+    let canon: string;
+    try {
+      canon = canonicalizeRoot(root) ?? root;
+    } catch (err) {
+      faults.push({ label, err });
+      continue;
+    }
+    if (canon === "/") {
+      faults.push({
+        label,
+        err: new Error(
+          `workspaceReapRoots: tenant root '${raw}' resolves to the filesystem root — refusing to reap under it`,
+        ),
+      });
+      continue;
+    }
+    if (seen.has(canon)) continue;
+    seen.add(canon);
+    roots.push({ label, root });
+  }
+  return { roots, faults };
 }

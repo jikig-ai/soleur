@@ -710,6 +710,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "knowledge-base/marketing/brand-guide.md"
   "knowledge-base/overview/vision.md"
   "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
+  "packages/opencode-plugin/"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
@@ -1357,6 +1358,17 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/infra-validation-detect.test.sh — walks a corpus (the
+# TS13b sentinel census `find`s under apps/ + infra/) and pins the workflow's
+# run-block structurally; declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_INFRA_VALIDATION_DETECT_TEST_SH_PATHS=(
+  ".github/workflows/infra-validation.yml"
+  "apps/"
+  "infra/"
+  "plugins/soleur/test/infra-validation-detect.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/concurrent-ship.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(
@@ -1969,6 +1981,7 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
   "lefthook.yml"
   "package-lock.json"
   "package.json"
+  "packages/"
   "plugins/"
   "pricing-wireframe.pen"
   "ruff.toml"
@@ -2160,6 +2173,7 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "glob:docs/**.test.sh"
   "glob:infra/**.test.sh"
   "glob:knowledge-base/**.test.sh"
+  "glob:packages/**.test.sh"
   "glob:spike/**.test.sh"
   "glob:todos/**.test.sh"
   "scripts/test-all.sh"
@@ -2223,6 +2237,7 @@ AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
   "glob:docs/**.test.sh"
   "glob:infra/**.test.sh"
   "glob:knowledge-base/**.test.sh"
+  "glob:packages/**.test.sh"
   "glob:spike/**.test.sh"
   "glob:todos/**.test.sh"
   "scripts/test-all.sh"
@@ -2416,6 +2431,7 @@ AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
   "glob:docs/**.sh"
   "glob:infra/**.sh"
   "glob:knowledge-base/**.sh"
+  "glob:packages/**.sh"
   "glob:plugins/**.sh"
   "glob:scripts/**.sh"
   "glob:spike/**.sh"
@@ -2458,6 +2474,16 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "scripts/suite-durations.tsv"
   "scripts/suite-shard-legs.tsv"
+)
+
+# scripts/monitor-streak-state.test.sh — the rehearsal skip monitor's streak-store suite. Its Section B parses the
+# monitor workflow with PyYAML (wiring properties and the mutation rows) and Section C runs the alert step's shell
+# body out of it; Section A drives the t5 skip-persistence probe, whose streak write the store's `seal` step
+# checks. Both are reads through $REPO_ROOT-built paths, which no derivation channel reaches.
+AFFECTED_SCRIPTS_MONITOR_STREAK_STATE_PATHS=(
+  ".github/workflows/scheduled-rehearsal-skip-monitor.yml"
+  "scripts/followthroughs/t5-skip-persistence-bound-7510.sh"
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
 
 # plugins/soleur/scripts/affected-tests.test.sh — the #9307 plugin-gate contract suite. The

@@ -1,0 +1,38 @@
+{
+  "name": "@soleur/opencode",
+  "version": "1.0.0",
+  "description": "Soleur AI organization plugin for OpenCode",
+  "type": "module",
+  "bin": {
+    "soleur-opencode": "bin/soleur-opencode.js"
+  },
+  "files": [
+    "install.js",
+    "bin",
+    "opencode",
+    "skills",
+    "agents",
+    "commands",
+    "scripts",
+    "hooks",
+    "lib",
+    ".claude-plugin"
+  ],
+  "dependencies": {
+    "yaml": "^2.8.3"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "ai-agents",
+    "soleur"
+  ],
+  "author": "Jean Deruelle <jean.deruelle@jikigai.com>",
+  "license": "BUSL-1.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jikig-ai/soleur.git",
+    "directory": "packages/opencode-plugin"
+  },
+  "homepage": "https://soleur.ai"
+}

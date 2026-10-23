@@ -683,7 +683,7 @@ Expected on a healthy host: `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass reason=ok â€
 `consecutive_no_ping=<n>` in the journal separates a long deploy lock from a dead host: the beat goes dark after about 45 minutes either way,
 and the journal tells which. `selector=` is the artifact the dispatcher's resolver chose (`base` until the `agent-sandbox-unix-deny` flag is on);
 `masks_missing=<n>` counts the masked dirs (of the four the app pre-creates) that are not a usable directory after the probe's own attempt to create them:
-absent, not a real directory (a symlink or a file), or owned by another uid. A `pass` with `masks_missing>0` journals `coverage=prodtuple_partial`
+absent, not a real directory (a symlink or a file), or owned by another uid. A value above 4 (the app pre-creates four) journals as `5+`, never as `-`, and downgrades coverage the same way. A `pass` with `masks_missing>0` journals `coverage=prodtuple_partial`
 because it tested a weaker config than production; the ping is unchanged on purpose (the run makes a claim, and withholding the beat would read as a
 dead host). `masks_created=<0-4>` is how many of those dirs THIS run created. On a FRESH container (a redeploy) it is `4`; after a plain restart
 `~/.claude/projects` survives in the writable layer and only the three tmpfs `/tmp` dirs are recreated, so it is `3`; it is `0` on every run after that.

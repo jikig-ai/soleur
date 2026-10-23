@@ -784,3 +784,4 @@ exist and are unchanged.
   deploy; that was wrong. The container stop that ends live sessions happens after a bounded drain.
 - **Shared apt state directory.** It is world-writable with the sticky bit, and the sourced script is `go-w`; both are needed (sticky stops a
   rename-over by another uid). Root inside the container is not stopped (it is the uid that sources the script).
+- **Frequency value (found at the second merge of `origin/main`).** Phase 0.3 and Phase 1.2 say `frequency_minutes = 38` is free. It was free at plan time; `origin/main` then took 38 for `art17_workspace_tree_erasure_incomplete` (#10898), so the rule ships with `frequency_minutes = 39` (and `"frequency": 39` in `alert-reference.json`). Re-verified with `grep -n 'frequency_minutes *= *' apps/web-platform/infra/sentry/*.tf` after the merge; README counts are now 47 / 45 / 44.
