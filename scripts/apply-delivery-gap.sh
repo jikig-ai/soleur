@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # apply-delivery-gap.sh -- make a silently cancelled, path-filtered production apply run loud
 # (issue #9454 tracker; CTO ruling of 2026-10-22 on #10033 and #8167; plan
-# knowledge-base/project/plans/2026-10-23-feat-apply-delivery-gap-follower-plan.md).
+# knowledge-base/project/plans/archive/20261023-180340-2026-10-23-feat-apply-delivery-gap-follower-plan.md).
 #
 # WHY. Both apply workflows share ONE concurrency group (the apply group; the R2 state backend has no lock, so that
 # group is the sole serializer). A group keeps one pending run, so a second push evicts the first: the evicted run is

@@ -807,7 +807,7 @@ cannot tell which push was missed, and does not watch the follower.
 > (`apps/web-platform/infra/server.tf`) is Terraform state whose trigger hash changes with the script, and the drift workflow runs
 > a full-root plan with no `-target`, so a missed `deploy-fix` apply does surface in drift. The close comment likewise no longer
 > says the drift check covers pushes older than the window. See decision row F29 in
-> `knowledge-base/project/specs/feat-one-shot-apply-delivery-gap-follower/decision-challenges.md`.
+> `knowledge-base/project/specs/archive/20261023-180340-feat-one-shot-apply-delivery-gap-follower/decision-challenges.md`.
 
 Accepted residuals: an untouched gap older than 7 days ages out and the issue is left open with one marker comment (the
 follower never closes without having seen a delivery); the close comment claims only the 7-day horizon ("Every cancelled push

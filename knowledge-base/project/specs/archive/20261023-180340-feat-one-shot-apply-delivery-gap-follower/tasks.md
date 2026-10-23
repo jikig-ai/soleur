@@ -39,7 +39,7 @@ Branch: `feat-one-shot-apply-delivery-gap-follower` | Draft PR: #10879 | Refs: #
 
 - [x] 5.1 Run the full Phase 5 command list from the plan, the Check-10-shaped `--self-test` run and the uncommitted live read-only rehearsal; `git diff --name-only origin/main...HEAD` must not list CODEOWNERS, `test-affected-paths.sh`, `suite-shard-legs.tsv`, `suite-durations.tsv`, an apply workflow, an AGENTS file or the acks file.
 - [x] 5.2 Merge-time check: any cancelled push inside the 7-day window will page on the first reconcile. (checked 2026-10-23: no cancelled push inside the 7-day window of either workflow; the live-snapshot first reconcile yields candidates=0)
-- [ ] 5.3 PR body: `Ref #9454`, `Ref #10033`, `Ref #8167`; no closing keyword; merge only through the merge queue.
+- [x] 5.3 PR body: `Ref #9454`, `Ref #10033`, `Ref #8167`; no closing keyword; merge only through the merge queue.
 
 ## Phase 6 - review fix round 1 (decision rows F21-F28)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2015,SC2034 # SC2016: mutation anchors and grep patterns are literal; SC2015: pass/fail pairs; SC2034: tuple reads
 # Suite for scripts/apply-delivery-gap.sh and .github/workflows/apply-delivery-gap-follower.yml
-# (plan knowledge-base/project/plans/2026-10-23-feat-apply-delivery-gap-follower-plan.md; tracker #9454).
+# (plan knowledge-base/project/plans/archive/20261023-180340-2026-10-23-feat-apply-delivery-gap-follower-plan.md; tracker #9454).
 #
 # PROPERTY UNDER TEST. A push to main that matched one of the two apply workflows' path filters and was cancelled
 # (never applied) is reported in ONE deduplicated `apply-delivery-gap` issue naming each undelivered push, until a later
