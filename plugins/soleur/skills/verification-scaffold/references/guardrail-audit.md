@@ -4,7 +4,7 @@ Census date: 2026-10-21. Corpus definition (enforced by `test/manifest.test.sh`,
 which re-derives this set from `git ls-files` — a new member with no row here is a
 CI failure):
 
-- `.claude/hooks/**/*.sh`, excluding `*.test.sh` and files under `/test/` — **56 files**.
+- `.claude/hooks/**/*.sh`, excluding `*.test.sh` and files under `/test/` — **57 files**.
 - `scripts/lint-*`, excluding `*.test.sh`, `*.baseline.txt`, `*.highwater*` — **46 files**.
 
 ## Verdicts
@@ -15,7 +15,7 @@ CI failure):
 | `generic-after-extraction` | The *guard idea* is repo-generic but the file carries couplings (incident machinery, shared libs, Soleur paths or rule ids) that dead-reference in a user repo. Shippable only as a template. |
 | `soleur-coupled` | The guard's *purpose* is Soleur's: it enforces a Soleur rule id, a Soleur corpus path, a vendor in Soleur's stack, or Soleur telemetry/workflow machinery. Not shipped. |
 
-**Counts:** hooks — 0 generic / 10 generic-after-extraction / 47 soleur-coupled.
+**Counts:** hooks — 0 generic / 10 generic-after-extraction / 48 soleur-coupled.
 lints — 9 generic / 8 generic-after-extraction / 29 soleur-coupled.
 
 The canonical emit pair `plugins/soleur/scripts/precommit-guard.sh` +
@@ -26,7 +26,7 @@ source the v1 `commit-on-main` guard emits near-verbatim. Likewise
 guard extracts its `block-stash-in-worktrees` arm (guardrails.sh:471) as a
 template rather than shipping the monolith.
 
-## Census — `.claude/hooks/` (56)
+## Census — `.claude/hooks/` (57)
 
 | File | Verdict | Rationale |
 |---|---|---|
@@ -41,7 +41,7 @@ template rather than shipping the monolith.
 | `doppler-secrets-delete-redirect.sh` | soleur-coupled | Doppler vendor redirect. |
 | `durable-reminder-prefer-inngest.sh` | soleur-coupled | Inngest vendor preference in Soleur's app stack. |
 | `follow-through-directive-gate.sh` | soleur-coupled | Soleur follow-through directive machinery. |
-| `git-commit-secret-scan.sh` | generic-after-extraction | **v1 `secret-scan` source.** Couplings: `lib/hook-input.sh`, `incidents.sh` emits, `jq`, the repo `.gitleaks.toml`; the staged-scan predicate and colour pins are repo-generic. |
+| `git-commit-secret-scan.sh` | generic-after-extraction | **v1 `secret-scan` source.** Couplings: `lib/hook-input.sh`, `incidents.sh` emits, `jq`, the repo `.gitleaks.toml`; the staged-scan predicate and colour pins are repo-generic. **Known divergences from source (the emitted template self-contains its parse and will not follow the source):** it lacks the #10609 commit-target resolution and the #10696 would-be index (`lib/commit-index-sim.sh`), so a chained `git add ... && git commit` in ONE command is not covered in a user repo; stage in a separate call. Porting both is tracked in the #10696 follow-up. |
 | `grep-rewrite.sh` | soleur-coupled | Neutralizes one observed ugrep `grep` shim — environment remediation, not a general guard (ADR-162). |
 | `guardrails.sh` | soleur-coupled | Monolith wired to `lib/freeze-lock.sh` + `incidents.sh` + the Soleur rule corpus. Its `block-stash-in-worktrees` arm (:471) is extracted as v1 `block-stash`; its `block-commit-on-main` arm delegates to `precommit-guard.sh`, which v1 emits instead. `block-rm-rf` arms (:185, :200) stay v2 — they read `lib/freeze-lock.sh` state and are not self-contained. |
 | `iac-plan-write-guard.sh` | soleur-coupled | Enforces `hr-all-infrastructure-provisioning` on Soleur plan/spec files. |
@@ -52,7 +52,8 @@ template rather than shipping the monolith.
 | `lib/hook-tool-kind.sh` | generic-after-extraction | Devin→Claude tool-kind map (#8205) — harness-generic, not Soleur-domain (v2). |
 | `lib/incidents.sh` | soleur-coupled | The `emit_incident` sink — the corpus's named coupling; emitted guards strip its calls. |
 | `lib/log-rotation.sh` | generic-after-extraction | `.claude/*.jsonl` rotation util; logic portable, callers Soleur telemetry sinks (v2). |
-| `lib/commit-target-roots.sh` | soleur-coupled | Commit-target argv walker for `git-commit-secret-scan.sh` (#10609) — depends on `plugins/soleur/hooks/lib/shell-argv.pl`, the repo's hardened lexer; the emitted `secret-scan` template self-contains its parse instead. |
+| `lib/commit-target-roots.sh` | soleur-coupled | Commit-target argv walker for `git-commit-secret-scan.sh` (#10609) — depends on `plugins/soleur/hooks/lib/shell-argv.pl`, the repo's hardened lexer; the emitted `secret-scan` template self-contains its parse instead. Since #10696 it also outputs the staging facts `CTR_COMMIT_STAGES`, `CTR_STAGE_OPAQUE`, `CTR_STAGE_REFUSE`, `CTR_STAGE_PRODUCER`, `CTR_ADD_META` / `CTR_ADD_ARGV`, `CTR_COMMIT_ALL`, `CTR_COMMIT_PATHS`, `CTR_COMMIT_OWN_C`, `CTR_STAGE_CD_FIRST` and `ctr_stage_dump`. |
+| `lib/commit-index-sim.sh` | soleur-coupled | Builds the would-be index (a temp copy of the real index with the command's own staging replayed) for `git-commit-secret-scan.sh` (#10696); depends on the `CTR_*` facts from `lib/commit-target-roots.sh`, which depend on `plugins/soleur/hooks/lib/shell-argv.pl`. Policy-free, so the brand-hex gate can reuse it (#10793). Not shipped. |
 | `lib/monitor-sig.sh` | soleur-coupled | Monitor-ledger signature shared by the two monitor hooks. |
 | `lib/technical-fork-cues.sh` | soleur-coupled | Cue vocabulary for `hr-technical-fork-is-not-an-operator-question`. |
 | `lib/test-incident-sandbox.sh` | soleur-coupled | Test sandbox for `incidents.sh`. |

@@ -49,7 +49,9 @@ is pruned (a file that held only this block is removed).
   `gitleaks/gitleaks-action`.
 - The secret-scan hook needs `gitleaks` on PATH to run locally (8.24.x
   recommended); without it the hook warns and allows (advisory) — the CI job
-  still scans every PR.
+  still scans every PR. The hook scans the staged index as it is before the
+  command runs, so a chained `git add ... && git commit` in one command is not
+  covered: stage in a separate call.
 - `.claude/settings.json` hook entries serve Claude-Code-compatible agent
   sessions; the workflow is the floor for everyone else.
 <!-- verification-scaffold:readme:end -->
