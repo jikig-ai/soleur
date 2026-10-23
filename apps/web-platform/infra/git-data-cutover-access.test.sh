@@ -259,7 +259,7 @@ case "$c" in
       residue)  exit 17 ;;
       r*)    exit "${SHIM_PROBE#r}" ;;
     esac ;;
-  "env -i "*)   # the probe's residue-cleanup retry — always exits 0 (idempotent remove)
+  "env -i "*|"cd / && env -i "*)   # the probe's residue-cleanup retry — always exits 0 (idempotent remove)
     exit 0 ;;
 esac
 exit "${SHIM_REMOTE_RC:-1}"
@@ -1664,7 +1664,7 @@ run_mode mz-p2-pushfail probe SHIM_PROBE=pushfail
 # grep would satisfy without the retry ever running, so count >= 2 remove-bearing
 # lines AND require a line whose remote segment begins env -i after the host:port).
 remove_lines="$(grep -c 'git-data-remove.sh' "$TLF" || true)"
-if [ "$RC" = 5 ] && has_store probe fenced_push_failed    && [ "$remove_lines" -ge 2 ]    && grep -qE ' 10\.0\.1\.20 env -i PATH=' "$TLF"; then
+if [ "$RC" = 5 ] && has_store probe fenced_push_failed    && [ "$remove_lines" -ge 2 ]    && grep -qE ' 10\.0\.1\.20 (cd / && )?env -i PATH=' "$TLF"; then
   pass "MZ-P2: a refused push -> fenced_push_failed, cleanup retry attempted"
 else fail "MZ-P2: a refused push was not attributed" "$(ctx)"; fi
 
@@ -1691,12 +1691,32 @@ else fail "MZ-P9: the probe refspec is outside the worktree namespace (the fence
 # ssh shim logs the remote bytes instead of executing them, so no row above can see a bare
 # `runuser` fail to resolve: on the git-data host runuser lives in /usr/sbin, which env -i's
 # PATH omits, and the live flip died at probe_failed reason=provision (run 39805041138).
-# Comment-stripped; the count pins the container (three sites: provision, remove, residue retry).
-_p14_all="$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep -c 'env -i PATH=/usr/bin:/bin .*runuser' || true)"
-_p14_bare="$(grep -v '^[[:space:]]*#' "$SCRIPT" | grep 'env -i PATH=/usr/bin:/bin .*runuser' | grep -vc '/usr/sbin/runuser' || true)"
-if [ "$_p14_all" = 3 ] && [ "$_p14_bare" = 0 ]; then
+# A TEXTUAL pin: no row resolves runuser. Comment-stripped; it pins the exact per-site prefix (the
+# surrounding spaces and the payload tie each match to a real site, so a substring such as
+# runuser2 or /opt/usr/sbin/runuser, or a trailing comment, cannot satisfy it) and the TOTAL
+# number of env -i occurrences, so a fourth site on a continuation line is counted too. The
+# three sites are provision, remove and the residue retry; a legitimate fourth one edits this row.
+_p14_src="$(grep -v '^[[:space:]]*#' "$SCRIPT")"
+_p14_tot="$(printf '%s\n' "$_p14_src" | grep -o 'env -i' | wc -l | tr -d ' ')"
+_p14_ok="$(printf '%s\n' "$_p14_src" | grep -oE 'env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=(\\"\\\$id\\"|\$qp) /usr/sbin/runuser -u git -- /usr/local/bin/git-data-(provision|remove)\.sh' | wc -l | tr -d ' ')"
+if [ "$_p14_tot" = 3 ] && [ "$_p14_ok" = 3 ]; then
   pass "MZ-P14: the probe's three env -i remote calls name /usr/sbin/runuser — a bare runuser is not on env -i's PATH"
-else fail "MZ-P14: an env -i call reaches a bare runuser (sites=$_p14_all bare=$_p14_bare; want 3 and 0)"; fi
+else fail "MZ-P14: an env -i call does not carry the exact /usr/sbin/runuser prefix (env -i=$_p14_tot exact=$_p14_ok; want 3 and 3)"; fi
+
+# MZ-P15: the probe runs its wrappers from /. The ssh session starts in a directory only root can
+# enter, and the wrappers' `stat -c %m` must return to its starting directory, so run as git from
+# there it exits non-zero with "failed to return to initial working directory: Permission denied"
+# and the on-store check fails closed (live flip run 39844703839, reason=provision). The shim logs
+# the remote bytes instead of running them, so this is a source assertion, comment-stripped: the
+# probe session changes directory BEFORE its first wrapper call, and the retry leads with it.
+_p15_src="$(grep -v '^[[:space:]]*#' "$SCRIPT")"
+_p15_cd="$(printf '%s\n' "$_p15_src" | grep -n 'cd / || exit 13' | head -1 | cut -d: -f1)"
+_p15_prov="$(printf '%s\n' "$_p15_src" | grep -n 'git-data-provision.sh || exit 11' | head -1 | cut -d: -f1)"
+_p15_retry="$(printf '%s\n' "$_p15_src" | grep -c 'gd_exec "cd / && env -i PATH=/usr/bin:/bin .*git-data-remove.sh"' || true)"
+_p15_cdn="$(printf '%s\n' "$_p15_src" | grep -c 'cd / || exit 13' || true)"
+if [ -n "$_p15_cd" ] && [ -n "$_p15_prov" ] && [ "$_p15_cd" -lt "$_p15_prov" ] && [ "$_p15_cdn" = 1 ] && [ "$_p15_retry" = 1 ]; then
+  pass "MZ-P15: the probe session cd's to / before its first wrapper call and the cleanup retry leads with cd /"
+else fail "MZ-P15: a probe wrapper call runs from root's cwd (cd line=$_p15_cd provision line=$_p15_prov cd count=$_p15_cdn retry count=$_p15_retry)"; fi
 
 # MZ-P5: provision failure -> probe_failed reason=provision.
 run_mode mz-p5-provfail probe SHIM_PROBE=provfail
@@ -3687,8 +3707,9 @@ fi
 # Review round 2 (#10138): 148 mutants x 2 = 296 (+10 over 143 x 2); no new standalone row (the G5 census, N-body and N-exprs were restated in place): 635.
 # Pin-fault read (#8211): WF-pinfault (1) and the executed FP1-FP3 rows (3): 636 -> 639 (the workflow verdict count 56 -> 57 moves with WF-pinfault).
 # #10297: 151 mutants x 2 = 302 (+6 over 148 x 2); one new standalone workflow verdict (WF-rbclear), which also moves the workflow verdict count 57 -> 58: 639 -> 646.
-# Probe runuser path (flip run 39805041138): one new standalone row (MZ-P14): 646 -> 647.
-FLOOR=647
+# Probe runuser path (#8211): one new standalone row (MZ-P14): 646 -> 647.
+# Probe cwd (flip run 39844703839): one new standalone row (MZ-P15): 647 -> 648.
+FLOOR=648
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

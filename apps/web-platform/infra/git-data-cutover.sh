@@ -858,8 +858,14 @@ mode_probe() {
   printf -v qp '%q' "$probe_id"
   printf -v qd '%q' "$OLD_REPOS"
   local rc=0
+  # The three stripped-PATH calls below (provision, remove, and the residue retry) name runuser
+  # by absolute path: the minimal PATH omits /usr/sbin, where util-linux puts it, as the boot
+  # erasure probe in git-data-bootstrap.sh also does. The push line between them is not under
+  # that PATH (it runs in root's ssh session), so it stays bare on purpose. The wrappers must
+  # use /usr/bin tools only: an sbin tool inside one fails this probe (closed, not open).
   gd_exec "id=$qp; d=$qd
     repo=\"\$d/\$id.git\"
+    cd / || exit 13
     env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=\"\$id\" /usr/sbin/runuser -u git -- /usr/local/bin/git-data-provision.sh || exit 11
     [ -d \"\$repo\" ] || exit 12
     t=\$(mktemp -d) && chown git:git \"\$t\" || exit 13
@@ -870,7 +876,7 @@ mode_probe() {
     [ ! -e \"\$repo\" ] || exit 17" || rc=$?
   if [ "$rc" -ne 0 ]; then
     # Zero-residue: try the remove once more (idempotent) before reporting.
-    gd_exec "env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=$qp /usr/sbin/runuser -u git -- /usr/local/bin/git-data-remove.sh" || true
+    gd_exec "cd / && env -i PATH=/usr/bin:/bin SSH_ORIGINAL_COMMAND=$qp /usr/sbin/runuser -u git -- /usr/local/bin/git-data-remove.sh" || true
     case "$rc" in
       11) _store_refuse probe probe_failed "" provision ;;
       12) _store_refuse probe probe_failed "" repo_absent_after_provision ;;

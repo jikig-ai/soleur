@@ -56,6 +56,27 @@ describe("normalizeRepoUrl — idempotency (property)", () => {
   });
 });
 
+describe("normalizeRepoUrl — flake counterexample pins (#10732, #10713)", () => {
+  // regression fixture: counterexample from CI run 39506606768 (#10732), fast-check seed not recorded
+  // regression fixture: counterexample from CI run 39462075257 (#10713), fast-check seed not recorded
+  // Four of these fail on the pre-fixpoint code (commit 91594324ef): `.git` strip exposes a
+  // dot-segment or an unparseable first pass keeps case the next pass lowers. The two
+  // issue-named values (`http://a.aa/.` and `a://A`) are non-discriminating: they pass there
+  // in isolation, because their failing contexts depended on the shrink path.
+  it.each<[input: string, expected: string, discriminating: boolean]>([
+    ["http://a.aa/.", "http://a.aa", false],
+    ["http://a.aa/..git", "http://a.aa", true],
+    ["a://A", "a://a", false],
+    [" a://A .git", "a://a", true],
+    ["a://A /", "a://a", true],
+    [" a://A/..git", "a://a", true],
+  ])("pinned: %j -> %j is a fixpoint (discriminating: %s)", (input, expected) => {
+    const once = normalizeRepoUrl(input);
+    expect(once).toBe(expected);
+    expect(normalizeRepoUrl(once)).toBe(once);
+  });
+});
+
 describe("normalizeRepoUrl — output contract (property)", () => {
   it("output is trim-stable and carries no stripped suffix residue", () => {
     fc.assert(
