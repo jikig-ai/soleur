@@ -1184,7 +1184,9 @@ lv_mocks() {
         echo HCLOUD_TOKEN_READONLY >> "$FLV_HC_READS"
         case "$LV_TOK" in both|ro) printf '%s\n' 'RO-TOKEN-SENTINEL' ;; esac
         return 0 ;;
-      "secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain")
+      "secrets get HCLOUD_TOKEN "*)
+        # BAIT, keyed on the NAME and not the argv: any bare read of the read/write name, with any flags in
+        # any order, is recorded and answered, so a respelled fallback cannot slip into the generic miss arm.
         echo HCLOUD_TOKEN >> "$FLV_HC_READS"
         case "$LV_TOK" in both|rw) printf '%s\n' 'RW-TOKEN-SENTINEL' ;; esac
         return 0 ;;
@@ -1436,7 +1438,7 @@ call_flip_liveness_count current rc6
 assert "G3 generation anchor: a DNS/connect failure names that class" "grep -qF 'unreachable from the runner (transport rc=6' '$FLV_ERR'"
 call_flip_liveness_count current ok none
 assert "G3 generation anchor: no token resolved -> __UNREADABLE__, curl never called" \
-  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' ]] && grep -qF 'doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN' '$FLV_ERR'"
+  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' ]] && grep -qF 'doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform' '$FLV_ERR' && grep -qF 'step O5 of infra-credential-tiers-8209.md' '$FLV_ERR'"
 
 lv_case "a timestamp with a trailing newline is excluded, not fatal to the count" nlts+2cur ok 2
 call_flip_liveness_count late-ingest ok
@@ -1446,13 +1448,11 @@ call_flip_liveness_count no-ts ok
 assert "G3 generation: counted=0 with malformed>0 warns of a schema change, which a replace will not fix" \
   "grep -qF 'carried no parseable __REALTIME_TIMESTAMP or dt' '$FLV_ERR' && ! grep -qF 'WAIT and re-dispatch' '$FLV_ERR'"
 call_flip_liveness_count current ok rw
-assert "G3 generation anchor: the read/write fallback is announced by NAME (never value)" \
-  "grep -qF '::notice::G3 generation anchor: using the read/write HCLOUD_TOKEN' '$FLV_ERR'"
-assert "G3 generation anchor: the read/write token is masked too, and reaches stderr only as the mask" \
-  "grep -qxF '::add-mask::RW-TOKEN-SENTINEL' '$FLV_ERR' && [[ \"\$(grep -c 'RW-TOKEN-SENTINEL' '$FLV_ERR')\" -eq 1 ]]"
-call_flip_liveness_count current http401 rw
+assert "G3 generation anchor: read-only empty and read/write present -> __UNREADABLE__, zero requests, only the read-only name read, the read/write token never seen" \
+  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' && \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' && -z \"\$(cat '$FLV_STUB_MISS' 2>/dev/null)\" ]] && ! grep -qF 'RW-TOKEN-SENTINEL' '$FLV_ERR' '$FLV_CURL_ARGV' '$FLV_CURL_STDIN' '$FLV_CURL_CALLS' && [[ '$FLV_OUT' != *RW-TOKEN* ]]"
+call_flip_liveness_count current http401 both
 assert "G3 generation anchor: a rejected token names the variable that was sent" \
-  "grep -qF 'the one sent was HCLOUD_TOKEN;' '$FLV_ERR'"
+  "grep -qF 'the one sent was HCLOUD_TOKEN_READONLY;' '$FLV_ERR'"
 # A local filter fault must warn, so the `unreadable` refusal never points at a warning that is absent.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' 'garbage'; }
@@ -1508,9 +1508,6 @@ assert "G3 generation anchor: transport pins (--disable first, --noproxy, --prot
   "[[ \"\$(head -1 '$FLV_CURL_ARGV')\" == '--disable' ]] && grep -qxF -- '--noproxy' '$FLV_CURL_ARGV' && grep -qxF -- '=https' '$FLV_CURL_ARGV' && grep -qxF -- '--max-time' '$FLV_CURL_ARGV' && grep -qxF -- '@-' '$FLV_CURL_ARGV' && grep -qxF -- 'name=soleur-inngest' '$FLV_CURL_ARGV' && grep -qxF -- 'https://api.hetzner.cloud/v1/servers' '$FLV_CURL_ARGV'"
 assert "G3 generation anchor: no --retry, no -f/--fail, no -S (the HTTP class must stay readable; curl's error text is not an egress path)" \
   "! grep -qxE -- '--retry.*|-f|--fail.*|-S|-sS|-fsS|--show-error' '$FLV_CURL_ARGV'"
-call_flip_liveness_count current ok rw
-assert "G3 generation anchor: falls back to HCLOUD_TOKEN only after an empty read-only read" \
-  "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY HCLOUD_TOKEN ' && '$FLV_OUT' == '2' ]] && grep -qxF 'Authorization: Bearer RW-TOKEN-SENTINEL' '$FLV_CURL_STDIN'"
 # The wrapper returns 0 on every failure, so a caller's `x="$(…)"` under set -e never dies mute.
 AR_REACHED=0
 for _am in rc28 http503 absent nonjson; do
@@ -1597,9 +1594,9 @@ assert "G3 generation: no curl/doppler request in this section deviated from the
   "[[ ! -s '$FLV_STUB_MISS' ]]"
 # Positive controls: the stubs must be able to REJECT, or the ledger above proves nothing.
 ( lv_mocks current ok both; printf 'x' | curl --disable --noproxy '*' -s --proto =https --max-time 20 -H @- -w '\n%{http_code}' https://api.hetzner.cloud/v1/servers >/dev/null ) || true
-( lv_mocks current ok both; doppler secrets get HCLOUD_TOKEN -p soleur -c prd --plain >/dev/null ) || true
+( lv_mocks current ok both; doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd --plain >/dev/null ) || true
 assert "G3 generation: stub control — curl without --get and doppler with the wrong config are both recorded as misses" \
-  "grep -qF 'unexpected-curl: w=1 get=0' '$FLV_STUB_MISS' && grep -qF 'unexpected-doppler: secrets get HCLOUD_TOKEN -p soleur -c prd --plain' '$FLV_STUB_MISS'"
+  "grep -qF 'unexpected-curl: w=1 get=0' '$FLV_STUB_MISS' && grep -qF 'unexpected-doppler: secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd --plain' '$FLV_STUB_MISS'"
 
 # --- (b3) op=resume's G3 HOST-AUDIBILITY GATE (#7674, CTO ruling) -----------------------------
 # `flushed` is acted on ONLY by the on-host 30s timer. Writing it to a dark host recovers nothing

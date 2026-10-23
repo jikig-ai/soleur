@@ -547,10 +547,13 @@ _hcloud_created_epoch() {
 # _inngest_server_created_epoch — I/O. Prints exactly one token (<epoch> | __ABSENT__ |
 # __UNREADABLE__) and ALWAYS returns 0; every non-epoch outcome is preceded by one ::warning:: on
 # stderr naming its cause. Public-log hygiene, each rule pinned by the suite:
-#   - Tier A first (ADR-241 D4, #8209): HCLOUD_TOKEN_READONLY, falling back to the read/write
-#     HCLOUD_TOKEN when that read returns nothing. Measured 2026-09-24: prd_terraform holds only
-#     HCLOUD_TOKEN, so the fallback is the live path until the read-only token is minted
-#     (infra-credential-tiers-8209.md step O5). A ::notice:: names which variable was used;
+#   - Tier A only (ADR-241 D4, #10664): HCLOUD_TOKEN_READONLY, read alone. There is NO fallback to
+#     the read/write HCLOUD_TOKEN: operator steps O5 and O10 are done (names-only listing of
+#     soleur/prd_terraform, 2026-10-20: the read-only name listed, the read/write name absent), and a
+#     reader that can reach the destroy-capable token stops being read-only the day the read-only
+#     secret goes missing. An absent, empty or unusable read-only token is `__UNREADABLE__` with one
+#     warning naming it; restore it per infra-credential-tiers-8209.md step O5. Guarded by
+#     scripts/lint-hcloud-token-readonly-no-fallback.sh;
 #   - the token is ::add-mask::ed on STDERR (stdout is the caller's $(…) token) and travels on
 #     curl's stdin (-H @-), never argv;
 #   - no -f (the HTTP class must be readable), no -S (curl's error text is not a sanctioned egress
@@ -560,15 +563,10 @@ _hcloud_created_epoch() {
 #   - no response byte is ever printed — warnings are built from the rc, the HTTP code and
 #     $INNGEST_HOST only.
 _inngest_server_created_epoch() {
-  local tok tokvar resp rc=0 code body epoch now
-  tokvar=HCLOUD_TOKEN_READONLY
+  local tok resp rc=0 code body epoch now
   tok="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain 2>/dev/null || true)"
   if [[ -z "$tok" ]]; then
-    tokvar=HCLOUD_TOKEN
-    tok="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null || true)"
-  fi
-  if [[ -z "$tok" ]]; then
-    echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written; re-dispatch once the token read works." >&2
+    echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written; restore the token (step O5 of infra-credential-tiers-8209.md) and re-dispatch." >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
@@ -577,16 +575,11 @@ _inngest_server_created_epoch() {
   # the way the other arms do; nothing about the value reaches any stream.
   if ! _bearer_ok "$tok"; then
     echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
-    echo "::warning::G3 generation anchor: the $tokvar read from prd_terraform has an unusable shape (a quote, backslash, control character, space or other character no Hetzner token carries), so it was neither masked nor sent. Nothing was written; re-mint the token in Doppler and re-dispatch." >&2
+    echo "::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read from prd_terraform has an unusable shape (a quote, backslash, control character, space or other character no Hetzner token carries), so it was neither masked nor sent. Nothing was written; re-mint the token in Doppler and re-dispatch." >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
   printf '::add-mask::%s\n' "$tok" >&2
-  if [[ "$tokvar" == HCLOUD_TOKEN ]]; then
-    echo "::notice::G3 generation anchor: using the read/write HCLOUD_TOKEN (HCLOUD_TOKEN_READONLY returned nothing; ADR-241 D4 fallback until it is minted)" >&2
-  else
-    echo "::notice::G3 generation anchor: using HCLOUD_TOKEN_READONLY" >&2
-  fi
   resp="$(printf 'Authorization: Bearer %s\n' "$tok" \
     | ( unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME
         curl --disable --noproxy '*' -s --proto =https --max-time 20 \
@@ -611,7 +604,7 @@ _inngest_server_created_epoch() {
   fi
   case "$code" in
     200) : ;;
-    401|403) echo "::warning::G3 generation anchor: the Hetzner API REJECTED the token (HTTP $code) — the one sent was $tokvar; verify it in prd_terraform. Nothing was written, and a re-dispatch will refuse the same way until the token is fixed." >&2
+    401|403) echo "::warning::G3 generation anchor: the Hetzner API REJECTED the token (HTTP $code) — the one sent was HCLOUD_TOKEN_READONLY; verify it in prd_terraform. Nothing was written, and a re-dispatch will refuse the same way until the token is fixed." >&2
              printf '%s' '__UNREADABLE__'; return 0 ;;
     429)     echo "::warning::G3 generation anchor: the Hetzner API rate-limited this read (HTTP 429). Nothing was written; re-dispatch later is safe." >&2
              printf '%s' '__UNREADABLE__'; return 0 ;;

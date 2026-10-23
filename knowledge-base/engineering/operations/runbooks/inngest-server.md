@@ -130,7 +130,7 @@ filter (a jq fault — file an issue). The anchor's classes:
   server named `soleur-inngest` in the token's project (a replace in flight — re-dispatch once it
   exists);
 - **re-dispatching does nothing until the cause is fixed:** the Doppler token read returned nothing,
-  the token was rejected (HTTP 401/403 — the warning names which variable was sent), or `created` is
+  the token was rejected (HTTP 401/403 — the warning names `HCLOUD_TOKEN_READONLY`), or `created` is
   out of bounds.
 
 When G4 refuses, the `::error::` names which outcome the provisioning probe reported
@@ -138,9 +138,11 @@ When G4 refuses, the `::error::` names which outcome the provisioning probe repo
 provision unit means replace, not resume) and the probe's per-stage detail lines sit on the same
 run's stderr.
 
-Nothing was written in any of these cases. The anchor also prints which token it used: today that is
-the read/write `HCLOUD_TOKEN`, because `HCLOUD_TOKEN_READONLY` is not yet minted
-(`infra-credential-tiers-8209.md` step O5). The same generation scope applies to op=arm G3.7's
+Nothing was written in any of these cases. The anchor reads `HCLOUD_TOKEN_READONLY` alone: since
+#10664 (2026-10-23) there is no fallback to the read/write `HCLOUD_TOKEN`, which no longer exists in
+`prd_terraform` (names-only listing, 2026-10-20). A missing or unusable read-only token is
+`unreadable`; re-dispatching does nothing until it is restored (`infra-credential-tiers-8209.md` step
+O5). The same generation scope applies to op=arm G3.7's
 liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops now also refuse
 while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback (retired by #8285 PR B,
 so three ops today; the sentence is kept as written).
