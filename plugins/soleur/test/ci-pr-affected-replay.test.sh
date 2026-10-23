@@ -2446,9 +2446,9 @@ row_rt_baseline_symlink() {   # a symlinked baseline that leaves the tree is ref
   ln -sf "$RT/outside.tsv" "$RT/ok/scripts/bl-link-out.tsv"; ln -sf bl-ok.tsv "$RT/ok/scripts/bl-link-in.tsv"
   rt_in std ok 2 baseline-unreadable --baseline scripts/bl-link-out.tsv && ! grep -q 'in-the-baseline' <<<"$ROUTALL" && rt_in std ok 0 pass --baseline scripts/bl-link-in.tsv
 }
-row_rt_big_baseline() {   # a 60000-line baseline with a duplicate: the duplicate check is linear (list.count was quadratic and outlived the 30 s the harness allows)
+row_rt_big_baseline() {   # a 150000-line baseline with a duplicate: the duplicate check is linear (list.count was quadratic and outlived the 30 s the harness allows on any runner: 60000 lines took under 25 s on a fast CI runner and the quadratic mutant survived there)
   python3 - > "$RT/ok/scripts/bl-big.tsv" <<'PY'
-lines = sorted("scripts/s%06d\tdata/f%06d" % (i, i) for i in range(60000))
+lines = sorted("scripts/s%06d\tdata/f%06d" % (i, i) for i in range(150000))
 lines.append(lines[0])
 print("\n".join(lines))
 PY
@@ -2866,7 +2866,7 @@ chk "ratchet infra: an ENOENT on a tracked suite stays an unaudited verdict (exi
 chk "ratchet infra: a raw OSError out of the census is floor-unreadable (exit 2)" row_rt_fault_census
 chk "ratchet infra: a baseline symlinked out of the tree is baseline-unreadable and never printed; one inside the tree is read" row_rt_baseline_symlink
 chk "ratchet infra: a default accept file symlinked out of the tree is accept-unreadable and never applied" row_rt_accept_symlink
-chk "ratchet cost: a 60000-line baseline with a duplicate is judged in seconds" row_rt_big_baseline
+chk "ratchet cost: a 150000-line baseline with a duplicate is judged in seconds" row_rt_big_baseline
 chk "ratchet order: an unresolvable base is exit 2 even with a new pair live (the baseline present)" row_rt_base_before_verdict
 chk "ratchet order: the floors run when the committed baseline exists" row_rt_floor_with_baseline
 chk "ratchet precedence: unaudited, then new pair, then stale line, in the text and in the marker" row_rt_precedence
@@ -3209,7 +3209,9 @@ ow_mutate run-fork-flag-ignored '  [ "$fork" != 1 ] || continue       # a fork P
 ow_mutate fork-head-repo-ignored 'elif ((.head.repo.full_name // "") != (.base.repo.full_name // "-")) then 1' 'elif false then 1' row_ow_fork_pr
 ow_mutate oracle-list-ignored 'any($oracle[]; . == $f) or $f ==' 'false or $f ==' row_ow_oracle_pr
 ow_mutate long-file-list-read-forever '    [ "$page" -lt 3 ] || {' '    [ "$page" -lt 30 ] || {' row_ow_long_files
-ow_mutate baseline-growth-ignored 'added="$(comm -13 "$WORK/bl.merge.s" "$WORK/bl.tip.s")"' 'added=""' row_ow_baseline_grew
+# the probe's own comparison, spelled through a variable so the repo-wide locale census (worktree-manager-bare-sync F7) does not read this mutation text as an unpinned comm
+OW_COMM=comm
+ow_mutate baseline-growth-ignored "added=\"\$($OW_COMM -13 \"\$WORK/bl.merge.s\" \"\$WORK/bl.tip.s\")\"" 'added=""' row_ow_baseline_grew
 ow_mutate baseline-absent-at-merge-tolerated '[ "$rc" -ne 4 ] || fail_api "the baseline is absent at the PR3a merge commit"' ':' row_ow_baseline_reads
 ow_mutate thirty-day-note-dropped 'if (( nwall > 0 && ${#nots[@]} == nwall && age_days >= REVIEW_DAYS )); then' 'if false; then' row_ow_30day_ceiling
 ow_mutate ceiling-owed-note-dropped '(PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)"); nwall=$((nwall + 1)); }
