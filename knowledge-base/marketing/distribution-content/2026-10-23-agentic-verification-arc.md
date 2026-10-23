@@ -1,8 +1,8 @@
 ---
 title: "A Checklist for Trusting AI Work Was Just Published. We Shipped All of It."
-type: feature-tweet
+type: pillar
 publish_date: 2026-10-23
-channels: x, bluesky, discord, linkedin
+channels: discord, x, bluesky, linkedin-personal
 status: draft
 issue_reference: "#10902"
 ---
