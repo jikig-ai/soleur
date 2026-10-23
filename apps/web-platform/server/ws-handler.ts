@@ -393,6 +393,15 @@ const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
 const codexTurnAbortControllers = new Map<string, AbortController>();
 const codexTurnClientTurnIds = new Map<string, string>();
 const codexPendingTurnAbortControllers = new Map<string, Set<AbortController>>();
+type CodexNoticeDelivery = {
+  conversationId: string;
+  authModeGeneration: number;
+  nonceHash: string;
+  completion: Promise<boolean>;
+};
+// One latest notice per socket session. A replaced/disconnected session can be
+// collected; retain no plaintext nonce or unbounded per-turn collection.
+const codexNoticeDeliveries = new WeakMap<ClientSession, CodexNoticeDelivery>();
 
 function codexTurnKey(userId: string, conversationId: string): string {
   return `${userId}:${conversationId}`;
@@ -1278,6 +1287,36 @@ async function resolveConversationEngineRun(
   return { run, binding: assertConversationEngineBinding(binding, conversationId, workspaceId) };
 }
 
+async function persistCodexNoticeDelivery(userId: string, notice: Omit<CodexNoticeDelivery, "completion">): Promise<boolean> {
+  // Retrying the same nonce is safe even when the first write committed but its
+  // response was lost. Bound each wait so a fast acknowledgment cannot hang.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        createServiceClient().rpc("mark_codex_history_transfer_notice_delivered", {
+          p_conversation_id: notice.conversationId,
+          p_auth_mode_generation: notice.authModeGeneration,
+          p_member_user_id: userId,
+          p_nonce_hash: notice.nonceHash,
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error("Codex notice delivery persistence timed out")), 5_000);
+        }),
+      ]);
+      if (result.error || result.data !== true) {
+        throw result.error ?? new Error("Codex history-transfer notice delivery could not be recorded");
+      }
+      return true;
+    } catch (error) {
+      reportSilentFallback(error, { feature: "codex-history-transfer", op: "mark-notice-delivered" });
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+  }
+  return false;
+}
+
 async function dispatchCodexChatTurn(
   userId: string,
   conversationId: string,
@@ -1348,31 +1387,45 @@ async function dispatchCodexChatTurn(
         throw new Error("Codex history-transfer notice could not be recorded");
       }
       if (!controller.signal.aborted && sessions.get(userId) === sourceSession && sourceSession.conversationId === conversationId) {
-        const delivered = sendToClient(userId, {
-          type: "codex_history_transfer_required",
-          conversationId,
-          authModeGeneration,
-          noticeNonce,
-          authMode: binding.authMode === "api-key" || binding.authMode === "managed" ? binding.authMode : undefined,
-          clientTurnId,
-        });
-        if (delivered) {
-          const { data, error } = await createServiceClient().rpc("mark_codex_history_transfer_notice_delivered", {
-            p_conversation_id: conversationId,
-            p_auth_mode_generation: authModeGeneration,
-            p_member_user_id: userId,
-            p_nonce_hash: noticeNonceHash,
+        let completeDelivery!: (delivered: boolean) => void;
+        const notice: CodexNoticeDelivery = {
+          conversationId, authModeGeneration, nonceHash: noticeNonceHash,
+          completion: new Promise<boolean>((resolve) => { completeDelivery = resolve; }),
+        };
+        // Register before sending: the client can acknowledge while the marker
+        // write is pending. That acknowledgment must await this exact nonce.
+        codexNoticeDeliveries.set(sourceSession, notice);
+        let delivered = false;
+        try {
+          delivered = sendToClient(userId, {
+            type: "codex_history_transfer_required",
+            conversationId,
+            authModeGeneration,
+            noticeNonce,
+            authMode: binding.authMode === "api-key" || binding.authMode === "managed" ? binding.authMode : undefined,
+            clientTurnId,
           });
-          assertCurrent();
-          if (error || data !== true) throw new Error("Codex history-transfer notice delivery could not be recorded");
-        } else {
-          await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
-            p_conversation_id: conversationId,
-            p_auth_mode_generation: authModeGeneration,
-            p_member_user_id: userId,
-            p_nonce_hash: noticeNonceHash,
-          });
+          if (delivered) {
+            completeDelivery(await persistCodexNoticeDelivery(userId, notice));
+          }
+        } finally {
+          // Persistent marker failure leaves the notice actionable. The next
+          // explicit acknowledgment retries persistence before consuming it.
+          completeDelivery(false);
+          if (!delivered && codexNoticeDeliveries.get(sourceSession) === notice) {
+            codexNoticeDeliveries.delete(sourceSession);
+          }
+          if (!delivered) {
+            const { error } = await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
+              p_conversation_id: conversationId,
+              p_auth_mode_generation: authModeGeneration,
+              p_member_user_id: userId,
+              p_nonce_hash: noticeNonceHash,
+            });
+            if (error) reportSilentFallback(error, { feature: "codex-history-transfer", op: "discard-unsent-notice" });
+          }
         }
+        if (delivered) assertCurrent();
       } else {
         await createServiceClient().rpc("delete_codex_history_transfer_notice_issuance", {
           p_conversation_id: conversationId,
@@ -3196,12 +3249,31 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       }
 
       try {
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+        const nonceHash = createHash("sha256").update(msg.noticeNonce).digest("hex");
+        const notice = codexNoticeDeliveries.get(session);
+        if (notice?.conversationId === msg.conversationId
+          && notice.authModeGeneration === msg.authModeGeneration
+          && notice.nonceHash === nonceHash) {
+          const pending = notice.completion;
+          const delivered = await pending;
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (!delivered) {
+            // Share a retry with acknowledgments that arrived together.
+            if (notice.completion === pending) {
+              notice.completion = persistCodexNoticeDelivery(userId, notice);
+            }
+            if (!await notice.completion) throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
+          }
+        }
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
         const { data, error } = await tenant.rpc("record_codex_history_transfer_acknowledgment", {
           p_conversation_id: msg.conversationId,
           p_auth_mode_generation: msg.authModeGeneration,
-          p_nonce_hash: createHash("sha256").update(msg.noticeNonce).digest("hex"),
+          p_nonce_hash: nonceHash,
         });
         if (error) throw error;
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
         if (data !== true) {
           sendToClient(userId, {
             type: "error",
@@ -3210,6 +3282,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           });
           break;
         }
+        if (codexNoticeDeliveries.get(session) === notice) codexNoticeDeliveries.delete(session);
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
         sendToClient(userId, {
           type: "codex_history_transfer_acknowledged",
           conversationId: msg.conversationId,
@@ -3220,6 +3294,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           feature: "codex-history-transfer",
           op: "record-member-acknowledgment",
         });
+        if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
         sendToClient(userId, {
           type: "error",
           message: "The Codex history acknowledgment could not be recorded. Please reconnect and try again.",

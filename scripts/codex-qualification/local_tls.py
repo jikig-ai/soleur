@@ -141,10 +141,15 @@ class _TLSProxy:
         require(isinstance(target, str) and target.startswith('/') and not target.startswith('//') and
                 '#' not in target and
                 not any(ord(char) < 33 or char == '\\' for char in target), 'Only unambiguous origin-form target admitted')
+        # Validate the complete original target so parsing/encoding cannot hide
+        # invalid query bytes. A direct control-flow guard exposes the boundary to
+        # the partial-SSRF analysis; the private destination stays fixed below.
+        if not re.fullmatch(
+                r'/(?:auth|rest|storage|functions)/v1(?:/[\w-]+)+'
+                r'(?:\?(?:[^%\x00-\x20\x7f\\#]|%[0-9A-Fa-f]{2})*)?', target):
+            raise Refused('Only admitted Supabase API routes and well-formed queries are forwarded')
         parsed = urlsplit(target)
         require(not parsed.scheme and not parsed.netloc and not parsed.fragment, 'Forward proxy target refused')
-        require(re.fullmatch(r'/(?:auth|rest|storage|functions)/v1(?:/[\w-]+)+', parsed.path),
-                'Only admitted Supabase API routes are forwarded')
         values = {}
         for name, value in headers:
             require(re.fullmatch(r'[!#$%&\'*+.^_`|~0-9A-Za-z-]+', name) and

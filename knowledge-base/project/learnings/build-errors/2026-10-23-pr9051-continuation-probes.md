@@ -32,3 +32,36 @@ When the commit guard's harness CWD resolves to the bare root's `main` overlay,
 use `git -C <feature-worktree> commit` so the guard checks the actual worktree
 branch. Rerun the focused suite after correcting a copy expectation; do not treat
 a failed run as a verification result.
+
+## Addendum — continuation tool boundaries
+
+The resumed workflow tally could read its ledger but could not acquire its lock
+under the sandbox's read-only shared Git metadata. Rerunning that exact operation
+with harness approval succeeded. GitHub log reads through the mise `gh` shim
+attempted an unavailable cache update; the installed binary avoided that update,
+but network access still required escalation. Cleanup kept branches whose GitHub
+state it could not query; it was rerun with approved network access. Treat each
+refusal as unmeasured, rather than interpreting an exit-zero wrapper as success.
+
+Resolve migration and workflow filenames with `rg --files` before reading them:
+the actual paths here are `173_codex_history_notice_issuance.sql` and
+`rls-authz-fuzz.yml`. Focused proxy tests create only synthetic loopback listeners;
+the sandbox refused those sockets, and the exact tests passed with harness
+approval. No provider or shared database access is implied by that local test.
+
+The FK linter is an app-level shell script, not a root-level Python module.
+Vitest's app configuration still resolves relative test globs from the caller's
+working directory: invoking it at repository root with `--config` found zero
+tests. Run the pinned app binary from `apps/web-platform`; the corrected run
+executed 28 tests. A delivery mock's `calls` records attempted sends, including
+throws; use `results` to distinguish accepted sends from the failed-send cleanup
+case. Docker sandbox denial can produce a skipped integration case; rerun with
+approval and verify an executed case before claiming SQL evidence. The first
+fresh-container attempt timed out downloading its image; a separately created
+and dropped synthetic database in the existing local test container passed.
+The observed Node deprecation originates in `@tailwindcss/node`; scoped ESLint's
+three fallthrough warnings match HEAD. An agent-owned exec session cannot be
+polled from the lead's tool session; ask the owning agent for its final verdict.
+An anchored hook-name probe used the wrong indentation and matched nothing;
+the corrected key-name lookup found the hooks. The installed plugin lacks the
+CI-only hook-exclusion reference present in this worktree; no exclusion was used.

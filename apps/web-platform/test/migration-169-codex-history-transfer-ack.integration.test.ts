@@ -153,7 +153,18 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
           '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
         );
         RESET ROLE;
+        -- The fixture owns a real issuance; tenant denial below cannot pass
+        -- merely because the private ledger is empty.
+        SELECT count(*) FROM public.codex_history_transfer_notice_issuances;
+        SELECT has_table_privilege('anon', 'public.codex_history_transfer_notice_issuances', 'SELECT,INSERT,UPDATE,DELETE');
+        SELECT has_table_privilege('authenticated', 'public.codex_history_transfer_notice_issuances', 'SELECT,INSERT,UPDATE,DELETE');
+        SELECT has_table_privilege('service_role', 'public.codex_history_transfer_notice_issuances', 'SELECT,INSERT,UPDATE,DELETE');
         SET ROLE authenticated;
+        DO $$ BEGIN
+          PERFORM 1 FROM public.codex_history_transfer_notice_issuances;
+          RAISE EXCEPTION 'authenticated unexpectedly read notice issuance ledger';
+        EXCEPTION WHEN insufficient_privilege THEN NULL;
+        END $$;
         -- A valid token cannot be consumed until the server confirms send acceptance.
         SELECT public.record_codex_history_transfer_acknowledgment(
           '40000000-0000-4000-8000-000000000001', 3, repeat('0', 64)
@@ -163,6 +174,14 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         SELECT public.mark_codex_history_transfer_notice_delivered(
           '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
         );
+        -- A committed marker whose response was lost can be retried without
+        -- changing the nonce or granting an acknowledgment before delivery.
+        SELECT public.mark_codex_history_transfer_notice_delivered(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('0', 64)
+        );
+        SELECT public.mark_codex_history_transfer_notice_delivered(
+          '40000000-0000-4000-8000-000000000001', 3, '30000000-0000-4000-8000-000000000001', repeat('1', 64)
+        ) IS NOT TRUE;
         RESET ROLE;
         SET ROLE authenticated;
         SELECT public.record_codex_history_transfer_acknowledgment(
@@ -227,7 +246,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         );
       `);
 
-      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "t", "0", "f", "f", "f", "t", "f", "t", "t", "t", "f", "f", "f", "0", "f", "f", "t", "f", "f", "0", "0", "f", "f"]);
+      expect(output.split("\n")).toEqual(["t", "f", "f", "f", "t", "0", "f", "f", "f", "t", "1", "f", "f", "f", "f", "t", "t", "t", "t", "t", "f", "f", "f", "0", "f", "f", "t", "f", "f", "0", "0", "f", "f"]);
     } finally {
       if (databaseCreated) {
         const drop = docker(["exec", container, "dropdb", "--if-exists", "-U", dbUser, database]);

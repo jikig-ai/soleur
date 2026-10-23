@@ -69,3 +69,12 @@ Plan: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wirin
 
 - [ ] 6.1 Merge only after review and QA; verify main CI, release, deploy, served SHA and authenticated synthetic path separately.
 - [ ] 6.2 Report code, API-key Web qualification, managed Web qualification, CLO disposition, internal/customer enablement and deployment as distinct statuses.
+
+## October 23 continuation: proxy and notice delivery
+
+- [x] RED(unit): reproduce malformed complete proxy targets, fast acknowledgment, ambiguous marker failure, and persistent marker failure before changing implementation.
+- [ ] GREEN: guard the complete origin-form proxy target and verify exact-head CodeQL; depends on the proxy RED cases.
+- [ ] GREEN: serialize acknowledgment with delivery marking and recover same-nonce marker failures; depends on the delivery RED cases.
+- [ ] Register the private issuance ledger in the RLS coverage registry with disposable PostgreSQL direct-access denial evidence; CI already reproduces the missing registry entry.
+- [ ] Run touched suites, lint and TypeScript, obtain scoped independent review, resync main, push, and measure exact-head CI.
+- [ ] Preserve shared-ledger, data, qualification, recovery, legal, authenticated QA, preflight and final ship holds until their own evidence and authorization clear.

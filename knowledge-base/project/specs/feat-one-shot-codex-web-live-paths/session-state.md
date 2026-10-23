@@ -2765,3 +2765,45 @@
 - Exact-head tenant integration then failed the FK-precondition lint because migration 173 referenced `conversations`, `users`, and `workspace_members` without explicit `to_regclass` guards. Commit `e52b315c26208537d4f623f03094407d3e2fe483` adds those preconditions and records the root-relative script path correction in the workflow learning. The lint passed for 11 migration files, migration integration passed, TypeScript and diff checks passed, and dev-ledger parity passed 269/269.
 - CI on superseded `ee989fbe96` reported the expected FK-precondition failure and a separate critical CodeQL partial-SSRF alert at `scripts/codex-qualification/local_tls.py:196` (`connection.request(self.command, target, ...)`). The CodeQL alert is not fixed or dismissed. Fresh CI is running on `e52b315c`; PR #9051 remains OPEN/draft/BEHIND with auto-merge off.
 - Keep shared-ledger parity/reconciliation, shared database access or migration, provider requests, recovery, authenticated QA, runtime/profile qualification, CLO/legal, preflight, full review, readiness, merge, and shipping held. No production or shared-data action occurred.
+
+### Continuation — complete proxy targets and recoverable notice delivery — 2026-10-23
+
+- Rechecked remote head `92f46566c0246c4c33476ede2ac48fec1b3eda1c`: OPEN/draft/BEHIND,
+  auto-merge off, no pending checks. CodeQL failed; RLS fuzz failed because the
+  private notice-issuance table was absent from the coverage registry. Tenant
+  integration failed before apply at shared-dev ledger parity (10 violations).
+  The CI aggregate refused the intentionally skipped draft-light test legs.
+- Proxy RED cases reproduced malformed query escapes and raw DEL bytes reaching
+  upstream construction. The complete origin-form target now passes a direct
+  `re.fullmatch` control-flow guard before parsing. Eleven synthetic TLS tests
+  pass; no upstream request is made in those tests. Exact-head CodeQL must still
+  judge the pushed fix; no alert was suppressed or dismissed.
+- Delivery RED cases reproduced a fast acknowledgment racing the marker and
+  marker errors replacing the usable notice with a generic error. A session-
+  and nonce-scoped barrier now waits for the marker; two bounded marker attempts
+  tolerate ambiguous responses. The same-nonce marker is idempotent, and a
+  persistent failure retains the notice for explicit acknowledgment retry.
+  Wrong nonces, replacement sessions and failed socket sends remain closed.
+  Acknowledgment remains one-use and does not dispatch or resend content.
+- Added the private ledger's explicit RLS exclusion rationale. Disposable SQL
+  integration verifies a nonempty issuance, no direct table privileges for
+  anonymous/authenticated/service roles, authenticated read denial, idempotent
+  marking, wrong-nonce denial, membership/generation fencing and one-use ack.
+  No shared database was queried: the test created and dropped its own database
+  in the local test container after a separate fresh-container image download
+  timed out before creation.
+- Local validation: 20 handler cases pass; the combined handler/schema/census
+  run passes 28 tests in 3 files; disposable SQL integration passes; pinned app
+  TypeScript passes; scoped ESLint has zero errors and the same three existing
+  fallthrough warnings; FK-precondition lint, client-PII, fixture and diff checks
+  pass. `core.hooksPath` is `/dev/null`, so these are direct checks, not hook
+  evidence. The lint ratchet reports not adopted; no adoption was performed.
+- The affected-test gate first failed before execution on sandbox `/var/tmp`
+  access; its approved rerun refused (rc 4) because branch-level runner changes
+  degrade selection to full while sibling suites are active. It is not green.
+  The offline qualification wrapper passes preceding fixtures and stops on the
+  two runner-admission identity assertions already recorded above. Independent
+  review is required before changing those pins. Local Bun is 1.4.3 while this
+  branch pins 1.4.2; exact-head CI uses the pinned version. All source pairing,
+  qualification, legal, recovery, authenticated QA, data and final ship holds
+  remain; no shared-data or production action occurred.

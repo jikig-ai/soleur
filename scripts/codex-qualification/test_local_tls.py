@@ -157,6 +157,26 @@ class LocalTLS(unittest.TestCase):
         self.assertEqual(payload, b'')
         upstream.assert_not_called()
 
+    def test_complete_target_requires_well_formed_query_escapes(self):
+        proxy = TLSProxy(self.hostname, '172.28.5.3', 8000)
+        for query in ('name=%', 'name=%2', 'name=%GG', 'name=value\x7f'):
+            with self.subTest(query=repr(query)), self.assertRaises(Refused):
+                proxy.admit('GET', '/auth/v1/settings?' + query, [('Host', self.hostname)])
+        for query in ('name=a%20b', 'name=%252f', 'next=/rest/v1/fixture?limit=1', 'name='):
+            target = '/auth/v1/settings?' + query
+            with self.subTest(query=query):
+                self.assertEqual(proxy.admit('GET', target, [('Host', self.hostname)]), target)
+
+    def test_actual_https_listener_refuses_invalid_target_before_upstream(self):
+        for target in ('/auth/v1/settings?name=%GG', '/auth/v1/settings?name=value\x7f'):
+            upstream = Mock(side_effect=OSError('Fixture forbids every upstream connection'))
+            with self.subTest(target=repr(target)):
+                status, payload, _headers = self.https_response(
+                    ('GET ' + target + ' HTTP/1.0\r\nHost: ' + self.hostname + '\r\n\r\n').encode(), upstream)
+                self.assertEqual(status, 502)
+                self.assertEqual(payload, b'')
+                upstream.assert_not_called()
+
     def test_actual_https_listener_forwards_valid_host_to_strict_synthetic_response(self):
         payload = b'owned-synthetic-upstream-response'
         response = Mock(status=200)

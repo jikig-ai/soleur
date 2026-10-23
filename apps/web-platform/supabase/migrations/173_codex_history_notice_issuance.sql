@@ -105,12 +105,11 @@ LANGUAGE sql SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
   UPDATE public.codex_history_transfer_notice_issuances AS i
-     SET delivered_at = now()
+     SET delivered_at = coalesce(i.delivered_at, now())
    WHERE i.conversation_id = p_conversation_id
      AND i.member_user_id = p_member_user_id
      AND i.auth_mode_generation = p_auth_mode_generation
      AND i.nonce_hash = p_nonce_hash
-     AND i.delivered_at IS NULL
   RETURNING true
 $$;
 
