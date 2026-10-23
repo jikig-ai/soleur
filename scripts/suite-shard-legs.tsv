@@ -201,6 +201,7 @@ plugins/soleur/test/flag-detach-shared.test.sh	5
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	7
 plugins/soleur/test/flagsmith-stdin-config.test.sh	1
 plugins/soleur/test/flip-flag-map-parity.test.sh	1
+plugins/soleur/test/flip-update-existing-override.test.sh	1
 plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	1
 plugins/soleur/test/gdpr-gate-self-test.test.sh	6
 plugins/soleur/test/generate-kb-index.test.sh	6

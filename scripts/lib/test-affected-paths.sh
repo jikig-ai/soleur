@@ -1400,6 +1400,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_FLAG_DETACH_SHARED_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/flip-update-existing-override.test.sh — extracts fs_api, read_feature_segment_id and
+# flip_segment_in_env out of flip.sh by content at run time, so no derived import edge reaches its subject;
+# declared from the script it names.
+AFFECTED_PLUGINS_SOLEUR_TEST_FLIP_UPDATE_EXISTING_OVERRIDE_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+  "plugins/soleur/test/flip-update-existing-override.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/flagsmith-stdin-config.test.sh — extracts the shipped `_bearer_ok` + `fs_api` text out of each
 # Flagsmith operator script at run time, so no derived import edge reaches its subjects; declared from the four
 # scripts it names.
