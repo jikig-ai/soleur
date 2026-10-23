@@ -64,6 +64,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/live-verify/gate.test.ts",
   "test/legal-doc-consistency.test.ts",
   "test/legal-doc-shas-guard.test.ts",
+  "test/masked-dir-alert-discoverability.test.ts",
   "test/no-network-fonts.test.ts",
   "test/phase-surface-hint-shell-parity.test.ts",
   "test/phase-surface-map-parity.test.ts",
