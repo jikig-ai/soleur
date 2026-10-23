@@ -64,6 +64,13 @@ done
 # shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
 source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
 
+# The corrupt-ancestry construction chokepoint (#10921): deterministic
+# never-written-object fixtures plus the counted SKIP verdict the corrupt-walk
+# rows take when a runner's git cannot exhibit the walk contract — ONE spelling
+# shared with test-bump-inngest-bootstrap-pin.sh (#7849).
+# shellcheck source=../../../plugins/soleur/test/lib/git-corrupt-graph.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-corrupt-graph.sh"
+
 # Canonical copy — fixture-dir-operand-assert.test.sh asserts every inline
 # definition is byte-identical to plugins/soleur/test/test-helpers.sh.
 assert_fixture_dir() {
@@ -83,7 +90,13 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=665   # anti-vacuity floor = the green run's exact count (665 on 2026-10-04, +3 for the lowercase Tier-A row); raise when adding rows, never lower it silently
+# Counted-skip plumbing (#10921, ADR-188): a corrupt-walk row whose runner
+# cannot exhibit the walk contract it validates reports ONE named SKIP charged
+# at its declared assertion cost, folded into TOTAL at the tail — never a
+# broken-fixture FAIL, and never free coverage. Construction-invariant checks
+# are fail-only, ZERO counted, so a skipped row charges exactly its cost.
+SKIPPED_ASSERTIONS=0
+MIN_ASSERTIONS=673   # anti-vacuity floor = the green run's exact count (665 nominal on 2026-10-04, +3 for the lowercase Tier-A row — the floor had drifted 8 below the real count as rows were added without a bump; re-derived 2026-10-23 at 673 with #10921: fl.walk's precondition became fail-only/zero-counted (−1) and the skip-machinery selftest added one row (+1) — net 0); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -424,7 +437,7 @@ gout_has() { # gout_has <id> <line> — GITHUB_OUTPUT carries exactly this line
 # failure is reported with printf + exit 2, never through the helpers under test;
 # the counters are unwound afterwards, so no self-test verdict reaches the total.
 # ---------------------------------------------------------------------------
-st_p0=$PASS st_f0=$FAIL st_mp=$PASS st_mf=$FAIL
+st_p0=$PASS st_f0=$FAIL st_s0=$SKIPPED_ASSERTIONS st_mp=$PASS st_mf=$FAIL
 st_die() { printf 'FATAL [selftest:%s]: %s\n' "$1" "$2"; exit 2; }
 st_moved() { # st_moved <label> <want-pass-delta> <want-fail-delta> — since the last mark
   local dp=$((PASS - st_mp)) df=$((FAIL - st_mf))
@@ -452,7 +465,7 @@ report st < <(printf 'neither ok nor bad\n') >/dev/null; st_moved report-unparse
 printf 'result=a\nresult=b\n' > "$LAST_OUT"
 [[ "$(field result)" == '<2 result= lines>' ]] || st_die field-duplicate "field result gave '$(field result)'"
 [[ "$(field absent)" == '<0 absent= lines>' ]] || st_die field-missing "field absent gave '$(field absent)'"
-PASS=$st_p0 FAIL=$st_f0
+PASS=$st_p0 FAIL=$st_f0 SKIPPED_ASSERTIONS=$st_s0
 unset LAST_OUT LAST_ERR LAST_GOUT REPORTED
 
 # ===========================================================================
@@ -1124,18 +1137,59 @@ a_eq 'fl.shallow:rc' "$LAST_RC" 1
 a_eq 'fl.shallow:stage' "$(field stage)" ancestry
 a_out_has 'fl.shallow:wording' 'is-shallow-repository='
 
-# Ancestry — an unreadable mid-history object (the walk reports on stderr only).
+# Ancestry — an unreadable mid-history object (the walk reports on stderr
+# only). Deterministic construction (#10921): a forged tip whose parent was
+# never written, the tag ON the forged tip — the rm -f spelling this replaces
+# silently no-opped when the object lived in a pack.
 mf_new fl-walk
-mf_commit c2; c2=$(git -C "$F_REPO" rev-parse HEAD)
-mf_commit c3
+mf_commit c2   # a real commit below the break — the break stays mid-history
+corrupt_walk_break "$F_REPO" refs/heads/main
 git -C "$F_REPO" tag -a vinngest-v1.1.41 -m r HEAD
-rm -f "$F_REPO/.git/objects/${c2:0:2}/${c2:2}"
-if git -C "$F_REPO" cat-file -e "$c2" 2>/dev/null; then fail 'fl.walk:precondition' 'fixture broken: c2 still readable'
-else pass 'fl.walk:precondition'; fi
-run_mint fl-walk --dry-run
-a_eq 'fl.walk:rc' "$LAST_RC" 1
-a_eq 'fl.walk:stage' "$(field stage)" ancestry
-a_out_has 'fl.walk:wording' 'unreadable history'
+# Branch order is load-bearing (ADR-188): the construction invariant first —
+# fail-only, ZERO counted, a harness defect that can never route to the skip —
+# then the walk-contract probe, then the row.
+if corrupt_invariant_dead_absent 'fl.walk' "$F_REPO"; then
+  # The probe contract is the SUT's own acceptance: NON-EMPTY walk stderr (the
+  # mint refuses on ANY walk_err text, not on 'Could not read' specifically).
+  walk_err=$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null)
+  if corrupt_probe_forced_skip || [[ -z "$walk_err" ]]; then
+    corrupt_skip 'fl.walk' 3 "runner git does not exhibit the non-empty-stderr corrupt-walk contract (walk stderr: '${walk_err:-<empty>}')"
+  else
+    run_mint fl-walk --dry-run
+    a_eq 'fl.walk:rc' "$LAST_RC" 1
+    a_eq 'fl.walk:stage' "$(field stage)" ancestry
+    a_out_has 'fl.walk:wording' 'unreadable history'
+  fi
+fi
+
+# Skip-machinery selftest (#10921, Guard-1 row 8 / Guard-2 row 3) — st_moved
+# can't reach this machinery (it runs before fixtures exist), so a minimal
+# snapshot driver does here what st_run does in the bump suite. Every exercised
+# `SKIP (loud):`/`::warning::` line is CAPTURED into a file, never the suite's
+# streams — an uncaptured marker would poison the standing skip monitor.
+mf_new fl-skip-selftest
+fl_p0=$PASS fl_f0=$FAIL fl_s0=$SKIPPED_ASSERTIONS
+# (a) A dead oid that turns out READABLE is a construction-invariant FAIL,
+# never a skip: write the nonce blob for real and drive the check.
+printf 'soleur-corrupt-graph dead-parent\n' | git -C "$F_REPO" hash-object -w --stdin >/dev/null
+{ corrupt_invariant_dead_absent 'fl.selftest' "$F_REPO"; } > "$TMP/skip.st1" 2>&1 || true
+# (b) Forced-skip: exactly one captured SKIP (loud): + one ::warning::, and the
+# charge moves SKIPPED_ASSERTIONS by exactly the declared cost.
+{ CORRUPT_WALK_PROBE_FORCE=skip
+  corrupt_probe_forced_skip && corrupt_skip 'fl.selftest-forced-skip' 5 'selftest: forced-divergence exercise'
+} > "$TMP/skip.st2" 2>&1
+# (c) An unwired CORRUPT_WALK_PROBE_FORCE value is flagged — only 'skip' is a
+# defined arm.
+{ CORRUPT_WALK_PROBE_FORCE=present corrupt_probe_forced_skip; } > "$TMP/skip.st3" 2>&1 || true
+fl_fd=$((FAIL - fl_f0))
+fl_sd=$((SKIPPED_ASSERTIONS - fl_s0))
+[[ "$fl_fd" == 2 && "$fl_sd" == 5 \
+   && "$(grep -cF 'SKIP (loud): fl.selftest-forced-skip' "$TMP/skip.st2")" == 1 \
+   && "$(grep -c '^::warning::' "$TMP/skip.st2")" == 1 ]] \
+  && pass 'selftest:skip-machinery-both-directions' \
+  || fail 'selftest:skip-machinery-both-directions' \
+       "FAIL moved $fl_fd (want 2), SKIPPED moved $fl_sd (want 5); captured: $(paste -sd'|' "$TMP/skip.st2")"
+PASS=$fl_p0 FAIL=$fl_f0 SKIPPED_ASSERTIONS=$fl_s0
 
 # xtrace refusal: `bash -x` with either credential set exits 78 BEFORE any traced
 # command, and the canary value never appears in any output.
@@ -1948,12 +2002,31 @@ mut_row m.g2-reorder-reread stage_tag \
 
 cmp -s "$SCRIPT" "$PRISTINE" && pass 'm.sut-untouched' || fail 'm.sut-untouched' "the real script was modified by the battery"
 
+# Roster parity (Guard-1 row 7, AC8b): every corrupt_skip call-site name must
+# open with the prefix the standing skip-persistence probe enumerates for this
+# suite — fl. — or the skip is invisible to the monitor. Fail-only, zero
+# counted (self-check, like the bump suite's census).
+_roster_bad=$(grep -oE "corrupt_skip[[:space:]]+'[^']+'" "$0" \
+  | sed -E "s/corrupt_skip[[:space:]]+'([^']+)'.*/\1/" \
+  | grep -vE '^fl\.' || true)
+[[ -z "$_roster_bad" ]] \
+  || fail 'roster:skip-names-registered' \
+       "corrupt_skip call-site name(s) outside the probe-registered prefix (fl.): $_roster_bad — the monitor would never see this skip"
+
 # ---------------------------------------------------------------------------
 echo ""
-TOTAL=$((PASS + FAIL))
+TOTAL=$((PASS + FAIL + SKIPPED_ASSERTIONS))
 if (( TOTAL < MIN_ASSERTIONS )); then
   printf 'FAIL [anti-vacuity]: only %s assertions ran (floor %s) - the suite itself has been weakened.\n' "$TOTAL" "$MIN_ASSERTIONS"
   exit 1
 fi
-echo "Results: $PASS pass, $FAIL fail ($TOTAL assertions, floor $MIN_ASSERTIONS)"
+# The counted ceiling (ADR-188 property 4): skips may never exceed the declared
+# cost of this suite's skip-eligible rows (fl.walk = 3). Beyond the cap, a skip
+# is eroding coverage, not reporting a bounded environment decline.
+SKIP_CAP=3
+if (( SKIPPED_ASSERTIONS > SKIP_CAP )); then
+  printf 'FAIL [skip-ceiling]: %s skipped assertions exceeds the cap %s — skips are bounded by the skip-eligible rows'\'' declared cost.\n' "$SKIPPED_ASSERTIONS" "$SKIP_CAP"
+  exit 1
+fi
+echo "Results: $PASS pass, $FAIL fail, $SKIPPED_ASSERTIONS skipped ($TOTAL assertions, floor $MIN_ASSERTIONS)"
 [[ "$FAIL" -eq 0 ]]
