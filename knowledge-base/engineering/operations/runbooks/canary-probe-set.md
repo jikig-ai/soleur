@@ -776,9 +776,8 @@ accumulation `write_sandbox_canary_state` performs, so the promotion probe is a 
 (the Better Stack query shape in the bwrap-probe section applies verbatim — grep on the decoded
 `message` after `fromjson`, filter `SYSLOG_IDENTIFIER == "ci-deploy"`).
 
-**Promotion contract.** The committed soak checker
-`scripts/followthroughs/workspace-isolation-verdict-2640.sh` reads `.workspace_isolation` off
-`/hooks/deploy-status` and reports PASS only when `consecutive_pass >= 5` AND the span since
+**Promotion contract.** The soak checker (retired by G1 PR-4a, #10937; history in git) read
+`.workspace_isolation` off `/hooks/deploy-status` and reported PASS only when `consecutive_pass >= 5` AND the span since
 `first_pass_at` is >= 3 days; a recorded `workspace_isolation_failed` or
 `workspace_isolation_timeout` verdict is a FAIL (investigate before promoting — do not flip the
 call site to blocking while either stands).

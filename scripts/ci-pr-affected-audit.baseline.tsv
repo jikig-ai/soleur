@@ -1106,7 +1106,6 @@ scripts/git-data-rehearsal-evidence-8211	scripts/lib/bearer-curl.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-read-classify.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-sources.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/git-data-rotate-stamp.sh
-scripts/infra-config-activation-7220	scripts/betterstack-query.sh
 scripts/infra-drift-autoclose	.github/workflows/apply-deploy-pipeline-fix.yml
 scripts/inngest-probe-heartbeat-feeder	.github/workflows/scheduled-inngest-probe-heartbeat.yml
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/sentry/cron-monitors.tf

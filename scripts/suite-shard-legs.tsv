@@ -395,7 +395,6 @@ scripts/hosted-destroy-ask-window-9776	8
 scripts/hostname-mislabel-web1-6616	6
 scripts/image-cve-scan	3
 scripts/image-cve-scan-window-9826	2
-scripts/infra-config-activation-7220	5
 scripts/infra-config-red-alert	6
 scripts/infra-credentials-loader	8
 scripts/infra-drift-autoclose	4

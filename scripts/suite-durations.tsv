@@ -392,7 +392,6 @@ scripts/hosted-destroy-ask-window-9776	1194	floor
 scripts/hostname-mislabel-web1-6616	221	measured
 scripts/image-cve-scan	3823	measured
 scripts/image-cve-scan-window-9826	3457	measured
-scripts/infra-config-activation-7220	1347	measured
 scripts/infra-config-red-alert	768	measured
 scripts/infra-credentials-loader	1742	measured
 scripts/infra-drift-autoclose	10115	measured
