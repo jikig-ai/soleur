@@ -703,12 +703,13 @@ soleur_op_barrier() {
 
 # soleur_op_in_agent_harness
 #   True when this process runs under an agent harness (Claude Code sets CLAUDECODE
-#   and CLAUDE_CODE_ENTRYPOINT in every tool call's environment). A typed `yes` on a
-#   pseudo-terminal is accepted only when this is false. HONEST LIMIT: an agent that
-#   deliberately unsets these names and opens a pty defeats it; that is the
-#   hijacked-agent case the receipt threshold already excludes (ADR-264).
+#   and CLAUDE_CODE_ENTRYPOINT, and OpenCode sets OPENCODE, in every tool call's
+#   environment). A typed `yes` on a pseudo-terminal is accepted only when this is
+#   false. HONEST LIMIT: an agent that deliberately unsets these names and opens a
+#   pty defeats it; that is the hijacked-agent case the receipt threshold already
+#   excludes (ADR-264).
 soleur_op_in_agent_harness() {
-  [[ -n "${CLAUDECODE:-}" || -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]
+  [[ -n "${CLAUDECODE:-}" || -n "${CLAUDE_CODE_ENTRYPOINT:-}" || -n "${OPENCODE:-}" ]]
 }
 
 # soleur_op_ack_or_die <prompt>                       [class 2]
