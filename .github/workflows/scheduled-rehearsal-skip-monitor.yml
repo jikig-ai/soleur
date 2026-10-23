@@ -259,6 +259,7 @@ jobs:
               printf '%s\n\n' "The rehearsal skip-persistence probe returned FAIL."
             fi
             printf 'Run: %s\n\n' "$RUN_URL"
+            # shellcheck disable=SC2016  # the backticks are a literal markdown fence
             printf '```\n%s\n```\n\n' "$SUMMARY"
             printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. A sustained skip means the deferred pre-baked image (#7535) is owed."
           } > "$body_file"
