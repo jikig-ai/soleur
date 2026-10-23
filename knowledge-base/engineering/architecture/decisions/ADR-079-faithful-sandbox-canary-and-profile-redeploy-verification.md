@@ -827,7 +827,7 @@ host the container's cap is the whole host, so only the host number protects the
 re-sampled immediately before the probe exec, and the exec'd tree runs at `oom_score_adj` 1000 so that, if memory does run out, the kernel picks the
 probe before the server. They are time-of-check guards, not caps. The heartbeat URL is pinned to the Better Stack heartbeat host and path (no query);
 the unit runs the script as `bash -p` with a scrubbed environment and a 0700 runtime directory. The probe creates nothing outside its own scratch dirs in
-runtime mode: the masked dirs belong to real sessions, so the ones that exist are masked and the rest are counted as `masks_missing`. In-container
+runtime mode: the masked dirs belong to real sessions, so the ones that exist are masked and the rest are counted as `masks_missing`. *(Superseded 2026-10-23, #10455: see the addendum below; the runtime probe now creates the closed set of production masked dirs when absent.)* In-container
 `timeout -k` (130 s) sits between the probe's 120 s cap and the host's 150 s cap so a hang cannot leave orphan node trees. The script's test seams
 are inert unless started with `--fixture-seams` (it runs as root with the whole prd root injected).
 
@@ -851,3 +851,15 @@ reason is journaled and ledgered, and a ci-deploy.test.sh row pins the branch. A
 silently without the detector: `soleur-host-bootstrap.sh` installs `web-bash-synthetic.sh` and `sdk-bash-verdict.sh` under `set -e` with an EXIT trap that
 emits a fatal Sentry event naming `failed_file=`, and cloud-init's fail-closed gate powers the host off before the `systemctl enable --now
 web-bash-synthetic.timer` line is reached (so no `|| soleur-boot-emit` was added to that line: it also has no spare bytes under the user_data budget).
+
+## Addendum — 2026-10-23 (#10455 PR-B): the runtime probe creates the production masked set
+
+**Status:** `adopting`. Reverses one sentence of the 2026-10-22 addendum ("the probe creates nothing outside its own scratch dirs in runtime mode").
+
+**Why.** All 85 passing runtime synthetic runs on both web hosts since the last deploy read `masks_missing=3`, so the synthetic could never claim the full production tuple. The production builder creates the masked dirs only at the first real dispatch, and a quiet container has had none; a Sentry query for `op:masked-dir-precreate` was empty over 14 days, so this is a probe coverage gap, not a pre-create defect (strongest hypothesis; the first post-merge run on a cold container confirms or refutes it). A fourth production dir, `/tmp/.cs`, was invisible to the probe.
+
+**Decision.** In runtime mode only, the probe creates the closed set `precreateDirs(uid, home)` (the three masked dirs plus `/tmp/.cs`), only when its uid equals PID 1's real uid, only when the path is absent, with production's own `mkdir` call (recursive, 0700; no chmod, no chown, never replacing an existing non-directory). A HOME guard refuses the HOME-derived dir when PID 1's `HOME` differs. `masks_created` and `masks_note` are journaled apart from production's behaviour: the synthetic proves the namespace can mount over the dirs, not that the app created them.
+
+**Alternatives.** Never create (permanently partial coverage under alpha traffic). Create at app boot (changes production for a monitoring need and hides the builder's own mkdir path, the one that now has a routed Sentry alert). Both rejected on the CTO's ruling.
+
+**Accepted limits.** After the first probe run the synthetic can no longer observe a cold-start mkdir failure; the Sentry rule `masked-dir-precreate-failed` is the detector for that. The app's env subset (`CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR`, `TMPDIR`) is not modelled. Probe-created dirs persist after a revert and are harmless. The #10548 soak reads the deploy-time ledger, which this change does not alter.

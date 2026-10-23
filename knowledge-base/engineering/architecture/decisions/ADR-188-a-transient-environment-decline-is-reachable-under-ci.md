@@ -538,3 +538,11 @@ time-boxed, issue-tracked, human-approved edit, never an `arm_skip` and never a 
 Article 30 register row PA-36 (declared, not live) lists `git-data-ownership.test.sh` as backing the ownership control;
 keep that wording at "suite exists" and do not extend it to claim CI enforcement while that arm can be declined
 locally.
+
+## Amendment — 2026-10-23 (#10781): the apt helper shares its lists and archives across a suite's containers
+
+**Why.** On 2026-10-22 `git-data-runcmd-rehearsal` exhausted its 420 s apt budget on three runs (7 to 11 attempts, budget gone before the last container started). Each of its ~12 containers ran a full `apt-get update` plus `install`, so a slow-mirror day multiplied the cost by 12. Two other suites (`git-data-ownership`, `htpasswd-stdin`) stalled twice on the very first `update`; that signature is a different one.
+
+**The decision.** `lib/apt-bounded.sh` passes the same `Dir::State::lists` and `Dir::Cache::archives` under the shared `/work/apt` state directory on both `update` and `install`, creates the `partial/` dirs at arm time, and makes the state directory removable by the host on every exit path. `update` still runs in every container (a conditional GET that proves the mirror is reachable). Measured on the digest-pinned image: cold 102 s, warm 19 s. No budget, cap, backoff or exit-code contract changes, no arm becomes skip-eligible, and no `Acquire::http::Timeout` is added (unproven; #9379 saw stalls with it set).
+
+**Known limit.** The first-container stall is not fixed: a mirror outage during the first container still fails closed. The stalled phase is now visible because the scrubbed apt tail reaches the consumer suites' failure lines. #10781 stays open until three consecutive green runs.
