@@ -330,7 +330,10 @@ if want S2; then
   eq "S2 no create" "$(acts issue-create)" 0
   eq "S2 no edit" "$(acts issue-edit)" 0
   has "S2 the earlier non-descendant was compared" "$ST/out/reads.log" "compare/$(sha 0x201)...$(sha 0x202)"
-  lacks "S2 jobs of a non-descendant are never read" "$ST/out/reads.log" "runs/202/jobs"
+  # F26 (amends F11): the apply-job read comes BEFORE the ancestry test, so the non-descendant's jobs ARE read (once) and its
+  # ancestry then rejects it; what must still hold is that it is never what delivers.
+  has "S2 the non-descendant's apply job is read first (jobs before ancestry)" "$ST/out/reads.log" "runs/202/jobs?per_page=100"
+  eq "S2 jobs read of the earlier success comes before its compare" "$(grep -nE 'runs/202/jobs|compare/'"$(sha 0x201)"'\.\.\.'"$(sha 0x202)" "$ST/out/reads.log" | cut -d: -f2 | sed 's|.*/\(runs/202/jobs\).*|jobs|; s|.*compare/.*|compare|' | paste -sd' ')" "jobs compare"
   has "S2 apply-job leg read for the delivering run" "$ST/out/reads.log" "runs/203/jobs?per_page=100"
   has "S2 summary delivered=1 issue=closed" <(summary) "delivered=1 dropped=0 mid_run=0 inflight=0 issue=closed"
   gend
@@ -627,20 +630,41 @@ if want S8:retry; then
 fi
 if want S8:budget; then
   grp S8u
+  # F26: each success costs one jobs read (apply leg first) and, if its apply passed, one compare: 76 passing successes exceed 150 reads.
   mk_case s8-budget
-  objs=(); { for i in $(seq 1 151); do objs+=("$(mkrun $((2000 + i)) push main completed success $((0x3000 + i)) "$(ago $((200 - i)))" "$(ago $((199 - i)))")"); mkcmp 0x2000 $((0x3000 + i)) behind; done; }
+  objs=(); { for i in $(seq 1 76); do objs+=("$(mkrun $((2000 + i)) push main completed success $((0x3000 + i)) "$(ago $((200 - i)))" "$(ago $((199 - i)))")"); mkcmp 0x2000 $((0x3000 + i)) behind; mkjobs $((2000 + i)) 2 preflight:success apply:success; done; }
   objs+=("$(mkrun 2000 push main completed cancelled 0x2000 "$(ago 300)" "$(ago 299)")")
   runs_file "$ST/runs.deploy-fix.json" "${objs[@]}"; mkjobs 2000 0
   issues_file "$(gap_issue 7)"
   run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=1000
   expect_fail api_budget_exceeded read
-  # 150 reads is within the budget
+  # exactly 150 reads is within the budget: 74 passing successes (148 reads), one skipped-apply success (1 read), one classify read
   mk_case s8-budget-ok
-  objs=(); for i in $(seq 1 149); do objs+=("$(mkrun $((2000 + i)) push main completed success $((0x3000 + i)) "$(ago $((200 - i)))" "$(ago $((199 - i)))")"); mkcmp 0x2000 $((0x3000 + i)) behind; done
+  objs=(); for i in $(seq 1 74); do objs+=("$(mkrun $((2000 + i)) push main completed success $((0x3000 + i)) "$(ago $((200 - i)))" "$(ago $((199 - i)))")"); mkcmp 0x2000 $((0x3000 + i)) behind; mkjobs $((2000 + i)) 2 preflight:success apply:success; done
+  objs+=("$(mkrun 2075 push main completed success 0x3075 "$(ago 120)" "$(ago 119)")"); mkjobs 2075 2 preflight:success apply:skipped
   objs+=("$(mkrun 2000 push main completed cancelled 0x2000 "$(ago 300)" "$(ago 299)")")
   runs_file "$ST/runs.deploy-fix.json" "${objs[@]}"; mkjobs 2000 0
   run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=1000
-  eq "S8 149 compares plus one jobs read (150 reads) is within budget" "$SUT_RC" 0
+  eq "S8 exactly 150 compare and jobs reads is within budget" "$SUT_RC" 0
+  eq "S8 and it really was 150 reads" "$(grep -cE '/compare/|/jobs[?]' "$ST/out/reads.log")" 150
+  gend
+fi
+if want S8:order; then
+  grp S8o
+  # F26: 60 cancelled candidates and 3 later successes whose apply was SKIPPED. Jobs-before-ancestry costs 60 classify reads and
+  # 3 memoised jobs reads (63); the old ancestry-first order costs 60 x 3 compares on top and would exceed the 150-read budget.
+  mk_case s8-order
+  objs=(); for i in $(seq 1 60); do objs+=("$(mkrun $((7000 + i)) push main completed cancelled $((0x7000 + i)) "$(ago $((900 - i)))" "$(ago $((899 - i)))")"); mkjobs $((7000 + i)) 0; done
+  for i in 1 2 3; do objs+=("$(mkrun $((7900 + i)) workflow_dispatch main completed success $((0x7900 + i)) "$(ago $((100 - i)))" "$(ago $((99 - i)))")"); mkjobs $((7900 + i)) 2 preflight:success apply:skipped
+    for c in $(seq 1 60); do mkcmp $((0x7000 + c)) $((0x7900 + i)) behind; done; done
+  runs_file "$ST/runs.deploy-fix.json" "${objs[@]}"
+  run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=1000
+  eq "S8 many candidates with skipped-apply successes: rc 0" "$SUT_RC" 0
+  lacks "S8 and no api_budget_exceeded" "$ST/all.txt" "api_budget_exceeded"
+  eq "S8 all 60 stay rows" "$(rows)" 60
+  eq "S8 no compare read at all (a skipped apply is rejected before ancestry)" "$(grep -c '/compare/' "$ST/out/reads.log")" 0
+  eq "S8 exactly 3 memoised apply-job reads" "$(grep -c 'jobs?per_page=100' "$ST/out/reads.log")" 3
+  eq "S8 63 compare and jobs reads in total" "$(grep -cE '/compare/|/jobs[?]' "$ST/out/reads.log")" 63
   gend
 fi
 if want S8:trigger; then
@@ -903,7 +927,7 @@ if want S13:boundary; then
   runs_file "$ST/runs.deploy-fix.json" "$(mkrun 1411 push main completed success 0x1411 "$(ago 20)" "$(ago 19)")" "$(mkrun 1410 push main completed cancelled 0x1410 "$(ago 60)" "$(ago 59)")"
   runs_file "$ST/runs.deploy-fix.p2.json" "$(mkrun 1410 push main completed cancelled 0x1410 "$(ago 60)" "$(ago 59)")" "$(mkrun 1409 push main completed failure 0x1409 "$(ago 60)" "$(ago 50)")"
   runs_file "$ST/runs.deploy-fix.p3.json" "$(mkrun 1408 push main completed failure 0x1408 "$(ago 20000)" "$(ago 19999)")"
-  mkcmp 0x1410 0x1411 behind; mkjobs 1410 0
+  mkcmp 0x1410 0x1411 behind; mkjobs 1410 0; mkjobs 1411 2 preflight:success apply:success
   run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=2 APPLY_DELIVERY_GAP_MAX_PAGES=3
   eq "S13 a run repeated across pages 1 and 2 (page shift) yields one row" "$(rows)" 1
   gend
@@ -1013,7 +1037,7 @@ if want H3; then
   runs_file "$ST/runs.infra.json" "$(mkrun 1801 push main completed success 0x1801 "$(ago 20)" "$(ago 19)")" "$(mkrun 1802 push main completed success 0x1802 "$(ago 30)" "$(ago 29)")"
   runs_file "$ST/runs.infra.p2.json" "$(mkrun 1803 push main completed cancelled 0x1803 "$(ago 60)" "$(ago 59)")" "$(mkrun 1804 push main completed success 0x1804 "$(ago 70)" "$(ago 69)")"
   runs_file "$ST/runs.infra.p3.json" "$(mkrun 1805 push main completed success 0x1805 "$(ago 80)" "$(ago 79)")"
-  mkcmp 0x1803 0x1801 behind; mkcmp 0x1803 0x1802 behind; mkjobs 1803 0
+  mkcmp 0x1803 0x1801 behind; mkcmp 0x1803 0x1802 behind; mkjobs 1803 0; mkjobs 1801 2 preflight:success apply:success:success; mkjobs 1802 2 preflight:success apply:success:success
   run_sut APPLY_DELIVERY_GAP_PAGE_SIZE=2 APPLY_DELIVERY_GAP_MAX_PAGES=5
   eq "H3 a candidate on page 2 of 3, on the SECOND listed workflow, is found" "$(rows)" 1
   has "H3 the row is the infra one" "$ST/all.txt" "row workflow=infra sha=$(sha 0x1803) "
@@ -1146,7 +1170,7 @@ mut M2 script reconcile_workflow '| .[] | [.id, .sha, .ue] | @tsv'"'"' "$nf")"' 
 mut M3 script fail_loud 'apply_delivery_gap_%s\n'"'"' "$reason"<NL>  exit 1' 'apply_delivery_gap_%s\n'"'"' "$reason"<NL>  return 0' 'S8:malformed'
 mut M4 script reconcile_workflow 'if "$ks" "$msg"; then' 'if false; then' 'S4'
 mut M5 script - '|Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)|ks_infra|' '|Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)|ks_deploy_fix|' 'S4'
-mut M6 script reconcile_workflow 'if is_descendant "$sha" "$rsha" && apply_job_ok "$rid" "$req"; then' 'if is_descendant "$sha" "$rsha"; then' 'S11:skipped'
+mut M6 script reconcile_workflow 'if apply_job_ok "$rid" "$req" && is_descendant "$sha" "$rsha"; then' 'if is_descendant "$sha" "$rsha"; then' 'S11:skipped'
 mut M7 script jobs_have_apply_success '.name == "apply" and .conclusion == "success"' '.name == "apply" and (.conclusion == "success" or .conclusion == "skipped")' 'S11:skipped,S4:later-marker'
 mut M8 script reconcile_issue 'if [[ "$N_INFLIGHT" -gt 0 ]]; then' 'if false; then' 'S7:otherwf,S12:inflight'
 mut M9 script read_runs 'if [[ "$p" -eq "$MAX_PAGES" ]]; then fail_loud run_window_truncated; fi' ':' 'S13:trunc'

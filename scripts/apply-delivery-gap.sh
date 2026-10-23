@@ -402,7 +402,9 @@ is_descendant() {
 }
 
 # apply_job_ok <run id> [required step]: the run's job named `apply` concluded success and, when a step name is given, that
-# step did too (memoised per run id; jobs read only after ancestry; the steps[] come from the same response).
+# step did too (memoised per run id; the steps[] come from the same response). The delivery loop calls this BEFORE the
+# ancestry test: a success whose apply was skipped (a kill-switched or plan-only run) then costs one memoised jobs read and
+# no compare, so a flood of such successes cannot exhaust the read budget on compares.
 apply_job_ok() {
   local id="$1" step="${2-}" ok=1
   if [[ -z "${JOBOK[$id]+x}" ]]; then
@@ -462,7 +464,7 @@ reconcile_workflow() { # key file ks-function cap
       | sort_by([.ce, .id]) | .[] | [.id, .sha, .ue] | @tsv' "$nf")"
     if [[ -n "$runs" ]]; then
       while IFS=$'\t' read -r rid rsha rue; do
-        if is_descendant "$sha" "$rsha" && apply_job_ok "$rid" "$req"; then
+        if apply_job_ok "$rid" "$req" && is_descendant "$sha" "$rsha"; then
           state=delivered; dmin="$(mins_between "$ue" "$rue")"
           break
         fi
