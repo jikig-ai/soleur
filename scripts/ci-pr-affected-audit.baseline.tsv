@@ -55,7 +55,6 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	.gitignore
 .claude/hooks/grep-q-pipe-guard.test.sh	AGENTS.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md
-.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/canary-probe-set.md
@@ -1101,7 +1100,6 @@ scripts/git-data-rehearsal-evidence-8211	scripts/lib/bearer-curl.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-read-classify.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-sources.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/git-data-rotate-stamp.sh
-scripts/infra-config-activation-7220	scripts/betterstack-query.sh
 scripts/infra-drift-autoclose	.github/workflows/apply-deploy-pipeline-fix.yml
 scripts/inngest-probe-heartbeat-feeder	.github/workflows/scheduled-inngest-probe-heartbeat.yml
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/sentry/cron-monitors.tf
