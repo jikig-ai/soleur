@@ -161,17 +161,19 @@ removed {
 }
 
 # The ids the deploy application's policy admits. Not secret (a service-token id is a UUID, the
-# client_secret is the credential), but it is an AUTHORIZATION boundary, so it is a committed value
-# reviewed in a PR rather than a tfvars file or a Doppler secret. Rotation is two PRs: add the new
-# id (both tokens admitted), then remove the old one (Ruled by CTO agent, 2026-10-15, Fork 2).
-variable "deploy_service_token_ids" {
-  description = "Cloudflare Access service-token ids admitted by the deploy webhook policy (ids only, never client_id/client_secret)."
-  type        = list(string)
-
-  validation {
-    condition     = length(var.deploy_service_token_ids) > 0 && alltrue([for id in var.deploy_service_token_ids : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))])
-    error_message = "deploy_service_token_ids must be a non-empty list of Cloudflare service-token ids (UUIDs). An empty include would lock the deploy webhook out."
-  }
+# client_secret is the credential), but it is an AUTHORIZATION boundary, so it is a committed CONSTANT
+# reviewed in a PR. It is a `locals` value and not a variable on purpose (Ruled by CTO agent, 2026-10-23,
+# amending 2026-10-15 Fork 2 on the mechanism only): a root variable can be overridden from the
+# environment, and the web-platform plan runs under `doppler run --name-transformer tf-var` against
+# prd_terraform, so a planted DEPLOY_SERVICE_TOKEN_IDS key would silently replace a committed default.
+# A local cannot be set from outside the repository. Rotation stays two PRs: add the new id (both tokens
+# admitted), then remove the old one; each carries `[ack-deploy-policy]` because the policy changes in place.
+#
+# OWNER: replace the empty list with the live token id (read-only: terraform state show on the deploy
+# token, id line only) BEFORE this change merges. The policy's precondition refuses an empty or malformed
+# list, so a plan of this root fails loudly until then rather than locking the deploy webhook out.
+locals {
+  deploy_service_token_ids = []
 }
 
 resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
@@ -182,7 +184,14 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
   precedence     = 1
 
   include {
-    service_token = var.deploy_service_token_ids
+    service_token = local.deploy_service_token_ids
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.deploy_service_token_ids) > 0 && alltrue([for id in local.deploy_service_token_ids : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))])
+      error_message = "local.deploy_service_token_ids must be a non-empty list of Cloudflare service-token ids (UUIDs). An empty include would lock the deploy webhook out."
+    }
   }
 }
 

@@ -54,9 +54,9 @@
 # Credentials, each bound in exactly one step's env (the credential census suite pins this):
 #   - secrets.DOPPLER_TOKEN_PRD             `prd` read — the flag precheck steps (the cutover job's; the wipe job's precheck and flag re-read)
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_FLAG   `prd` write — the flag WRITE steps ONLY (#8573); the rollback's soak-anchor delete (#10297) rides the same step
-#   - secrets.DOPPLER_TOKEN                 prd_terraform read — bridge + webhook creds
+#   - secrets.DOPPLER_TOKEN                 prd_terraform read — the bridge and the Better Stack reads (the webhook trio is the Tier-B loader's export since #9294)
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_ROOT   soleur-git-data-root/prd read — the key fetch
-#   - secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED the Tier-B read token — the `wipe` job's loader step (the Hetzner write token), and the cutover flip's reachability check
+#   - secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED the Tier-B read token — the loader step of BOTH jobs: `wipe` (the Hetzner write token) and `cutover` in the flip/rollback/redeploy modes (the webhook trio, #9294), plus the cutover flip's reachability check
 #   - secrets.SENTRY_ACTIONS_RO_TOKEN       read-only Sentry — the live pin-fault rule check
 #   - secrets.RESEND_API_KEY                send-only ops email — the notify-failure job ONLY (ADR-241, Tier A)
 #   - secrets.GITHUB_TOKEN                  notify-failure: issues:write; the precondition step: actions:read
@@ -187,7 +187,7 @@ jobs:
           # Progress markers the if:always() finalizer reconciles from. freeze_held is touched BEFORE the
           # freeze runs ("a freeze may have run"); flag_write_attempted BEFORE the flag write ("a write may
           # have landed"; it is also touched in a rollback and is inert there, the flip arm alone reads it);
-          # flag_written after the write verified; cutover_at_written only when the flip fully concluded.
+          # flag_written after the write verified; redeploy_confirmed after the same-version redeploy; cutover_at_written only when the flip fully concluded.
           mkdir -p "$RUNNER_TEMP/cutover-progress"
           echo "progress dir ready."
 
@@ -249,15 +249,40 @@ jobs:
           fi
           echo "required secrets present."
 
-      # #9294 G1: the webhook trio (the redeploy's HMAC key and Access pair) is a Tier-B read now. This
-      # step runs before the first flag write, so the finalizer's unwind redeploy always has it in env; a
-      # job without the Tier-B token exports none and the redeploy step refuses (no prd_terraform fallback).
+      # #9294 G1: the webhook trio (the redeploy's HMAC key and Access pair) is a Tier-B read now. Only the modes
+      # that dispatch a redeploy (flip, rollback, redeploy) load it: proof and unfreeze never reach track.sh, so a
+      # revoked Tier-B token must not stop an unfreeze. The loader runs before the preflight below and before the
+      # first flag write, so the finalizer's unwind redeploy always has the trio in env.
       - name: Load infra credentials (tiered)
-        if: steps.flag_precheck.outputs.nothing_to_rollback != '1'
+        id: tiered_creds
+        if: steps.flag_precheck.outputs.nothing_to_rollback != '1' && (steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback' || steps.confirm.outputs.mode == 'redeploy')
         uses: ./.github/actions/infra-credentials
         with:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # Fail closed BEFORE any production write: the loader's legacy arm (no Tier-B token) exits 0 and exports no
+      # trio, and a Tier-B project that lacks the names exports a green `source=tier_b`. Either way the redeploy
+      # (and the finalizer's unwind of a flipped store) would be refused only AFTER the freeze and the flag write,
+      # leaving the fleet on the flag-on env with a red run. track.sh in preflight mode applies its own credential
+      # checks (present, and the Access pair token-shaped) without sending anything.
+      - name: Webhook trio preflight (fail closed before the freeze and any flag write)
+        if: steps.flag_precheck.outputs.nothing_to_rollback != '1' && (steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback' || steps.confirm.outputs.mode == 'redeploy')
+        env:
+          LOADER_SOURCE: ${{ steps.tiered_creds.outputs.source }}
+        run: |
+          set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          if [[ "$LOADER_SOURCE" != "tier_b" ]]; then
+            echo "::error title=git-data-cutover preconditions::verdict=precondition_trio_absent source=${LOADER_SOURCE:-none}"
+            echo "remedy: this job did not load soleur-infra-privileged/prd (the Load infra credentials step reports source=legacy). Seed DOPPLER_TOKEN_INFRA_PRIVILEGED on the web-platform-infra-apply environment (ADR-241 R7), then re-dispatch."
+            exit 1
+          fi
+          if ! TRACK_PREFLIGHT=1 bash .github/actions/dispatch-web-redeploy/track.sh; then
+            echo "::error title=git-data-cutover preconditions::verdict=precondition_trio_absent source=tier_b"
+            echo "remedy: soleur-infra-privileged/prd lacks a usable webhook HMAC key or Cloudflare Access pair. The owner-run hash-equal copy (plan: Owner-named command chain, step 1) has not landed; re-dispatch after it. Nothing was frozen or written."
+            exit 1
+          fi
 
       # --- flip preconditions (precondition chain, flip only) ------------------------
       - name: Flip preconditions (live-rule / d6 freshness / deploy-in-flight)
@@ -542,7 +567,6 @@ jobs:
         if: (steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback' || steps.confirm.outputs.mode == 'redeploy') && steps.flag_precheck.outputs.nothing_to_rollback != '1'
         env:
           MODE: ${{ steps.confirm.outputs.mode }}
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: ${{ env.WEB_HOST_PRIVATE_IPS }}
           # The webhook swap is minutes; a 2400 s bound leaves finalizer headroom inside
           # the 120-min job timeout and converts a wedged poll into a timed verdict.
@@ -553,6 +577,7 @@ jobs:
           # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
           # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
+          touch "$RUNNER_TEMP/cutover-progress/redeploy_confirmed"
 
       # --- per-host git_data_store= readback via Better Stack (host_name keyed) -------
       - name: Per-host git_data_store= assertion (Better Stack)
@@ -759,10 +784,17 @@ jobs:
               if REDEPLOY_TIMEOUT_S=900 bash .github/actions/dispatch-web-redeploy/track.sh; then
                 echo "finalizer: off-line redeploy confirmed"
               else
-                echo "::error::finalizer: unwind redeploy did not confirm (verdict=redeploy_credential_absent above means the Tier-B loader step exported no trio) — verify git_data_store=disabled per host via Better Stack"
+                echo "::error::finalizer: flag-off written but the unwind redeploy did NOT confirm — the fleet may still run the flag-on env. Page on-call and verify git_data_store=disabled per host via Better Stack (track.sh's verdict line above names why; redeploy_credential_absent means the trio was not in the job env)."
                 unwind_failed=1
               fi
             fi
+          fi
+          # A rollback's flag-off is the write itself, but the fleet only leaves the flag-on env at the same-version
+          # redeploy: a rollback that wrote the flag and never confirmed that redeploy leaves production on the
+          # flipped env while Doppler says off, and a second rollback would exit as nothing_to_rollback.
+          if [[ "$MODE" == "rollback" && -f "$prog/flag_written" && ! -f "$prog/redeploy_confirmed" ]]; then
+            echo "::error::finalizer: the rollback wrote the flag off but its same-version redeploy never confirmed — the fleet may still run the flag-on env. Read the redeploy step's track.sh verdict, then dispatch mode=redeploy and verify git_data_store=disabled per host via Better Stack."
+            unwind_failed=1
           fi
           if [[ -f "$prog/freeze_held" ]]; then
             run_unfreeze unfreeze

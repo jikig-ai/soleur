@@ -1212,9 +1212,7 @@ case "${1:-}" in
       CF_API_TOKEN) printf '%s' "${VT_CF_API_TOKEN:-}" ;;
       CF_ACCOUNT_ID) printf 'acct0001' ;;
       APP_DOMAIN_BASE) printf 'soleur.example' ;;
-      WEBHOOK_DEPLOY_SECRET) printf 'webhook-secret-0001' ;;
-      CF_ACCESS_CLIENT_ID) printf '%s' "${VT_CF_ACCESS_ID:-cfid0001}" ;;
-      CF_ACCESS_CLIENT_SECRET) printf '%s' "${VT_CF_ACCESS_SECRET:-cfsecret0001}" ;;
+      # (#9294: the webhook trio is the caller's env, not a doppler answer; a store read of it exits 1 here.)
       *) exit 1 ;;
     esac ;;
   *) exit 1 ;;
@@ -4188,11 +4186,13 @@ s4_run() {
   # #9294 G1: the webhook trio reaches a step as the Tier-B loader composite's env export, not as a doppler read. A row that sets the
   # trio's D_<NAME> (the doppler stub's answer) therefore ALSO sets <NAME> itself, with the same value (set-but-empty stays empty,
   # no D_<NAME> stays unset), so the existing rows keep driving the same credential states through the new source.
-  local -a trio_env=(); local ta
+  # The D_<NAME> twin is then DROPPED, so the doppler shim answers none of the trio: a step (or a script it calls) that read the
+  # trio from a store again would find nothing and the row would go red, instead of passing on the stub's answer.
+  local -a trio_env=() rest=(); local ta
   for ta in "$@"; do
-    case "${ta%%=*}" in D_WEBHOOK_DEPLOY_SECRET|D_CF_ACCESS_CLIENT_ID|D_CF_ACCESS_CLIENT_SECRET) trio_env+=("${ta#D_}") ;; esac
+    case "${ta%%=*}" in D_WEBHOOK_DEPLOY_SECRET|D_CF_ACCESS_CLIENT_ID|D_CF_ACCESS_CLIENT_SECRET) trio_env+=("${ta#D_}") ;; *) rest+=("$ta") ;; esac
   done
-  set -- "$@" ${trio_env[@]+"${trio_env[@]}"}
+  set -- ${rest[@]+"${rest[@]}"} ${trio_env[@]+"${trio_env[@]}"}
   S4_RC=0
   ( cd "${S4_CWD:-$REPO_ROOT}" && env -i PATH="$S4_SHIM:$realdir" HOME="$r" TMPDIR="$r" RUNNER_TEMP="$r/rt" GITHUB_OUTPUT="$r/gho" GITHUB_ENV="$r/genv" \
       GITHUB_STEP_SUMMARY="$r/summary" GITHUB_WORKSPACE="$REPO_ROOT" CALLS_DIR="$r/calls" TOOLS_DIR="$r/tools" "$@" \

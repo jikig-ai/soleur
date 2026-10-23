@@ -133,9 +133,9 @@ done
 # catches a correct-looking pin at a dead address.
 APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || echo "soleur.ai")
 # The trio comes from the caller's env (the Tier-B loader step, #9294), never from prd_terraform.
-WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
-CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
-CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
+WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
+CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}"
+CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
 [[ -n "$WEBHOOK_SECRET" ]] && echo "::add-mask::$WEBHOOK_SECRET"
 [[ -n "$CF_ACCESS_SECRET" ]] && echo "::add-mask::$CF_ACCESS_SECRET"
 

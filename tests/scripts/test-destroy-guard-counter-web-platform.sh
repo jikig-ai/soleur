@@ -1177,6 +1177,12 @@ t_luks_passphrase_first_create_halts() {
 # is needed: the password create ALONE halts; the Doppler copy create ALONE stays legal (the documented recovery for a
 # lost Doppler copy, restoring the same state-held value); an UPDATE of either member still halts; and the pair as
 # no-op (the per-merge plan shape, Phase 0 evidence plan: no creates) reads 0.
+# #9294 PR-2: the web-platform apply's deploy-policy gate treats a plan WITHOUT the deploy Access policy entry as a changed policy
+# (the policy is always in the -target list, so a real plan always carries it as a no-op). A synthetic plan driven through the REAL
+# apply step must therefore carry it, or the step halts on the policy gate and never reaches the case under test.
+_with_deploy_policy() { # stdin plan JSON -> stdin plus the policy no-op entry
+  jq 'if any(.resource_changes[]?; .address == "cloudflare_zero_trust_access_policy.deploy_service_token") then . else .resource_changes += [{"address":"cloudflare_zero_trust_access_policy.deploy_service_token","mode":"managed","type":"cloudflare_zero_trust_access_policy","name":"deploy_service_token","change":{"actions":["no-op"],"before":{"include":[{"service_token":["00000000-0000-4000-8000-000000000001"]}]},"after":{"include":[{"service_token":["00000000-0000-4000-8000-000000000001"]}]}}}] end'
+}
 _inngest_pair_plan() { # <password-actions-json|null> <key-actions-json|null> -> plan JSON on stdout (a `null` omits that entry)
   jq --argjson p "${1:-null}" --argjson k "${2:-null}" '
     .resource_changes |= [ .[]
@@ -1682,7 +1688,7 @@ _run_apply_halt_span() { # <fixture> <tfplan.txt> [mutate-sed-expr]
   printf '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n' > "$w/bin/doppler"
   printf '#!/bin/sh\ncase "$1 $2" in\n  "plan -no-color") : > tfplan ;;\n  "show -no-color") cat "$STUB_TXT" ;;\n  "show -json") cat "$STUB_JSON" ;;\n  *) echo "stub terraform: unexpected: $*" >&2; exit 97 ;;\nesac\n' > "$w/bin/terraform"
   chmod +x "$w/bin/doppler" "$w/bin/terraform"
-  cp "$fixture" "$w/plan.json"; cp "$txt" "$w/plan.txt"
+  _with_deploy_policy < "$fixture" > "$w/plan.json"; cp "$txt" "$w/plan.txt"
   printf '%s\n' "$span" > "$w/span.sh"
   APPLY_SPAN_RC=0
   APPLY_SPAN_OUT="$( cd "$w" && env -i PATH="$w/bin:$PATH" HOME="$w" GITHUB_WORKSPACE="$REPO_ROOT" INFRA_DIR="$w" \
@@ -1716,7 +1722,7 @@ t_apply_job_luks_halt_executes() {
   _run_apply_halt_span "$FIXTURES/tfplan-inngest-luks-passphrase-first-create.json" "$txt"
   [[ "$APPLY_SPAN_RC" == "1" ]] || detail="${detail} inngest-create-pair-rc=${APPLY_SPAN_RC}(want 1):${APPLY_SPAN_OUT:0:200};"
   grep -q 'LUKS passphrase resource' <<<"$APPLY_SPAN_OUT" || detail="${detail} inngest-create-pair-halt-message-missing;"
-  local keyplan; keyplan="$(mktemp)"; _inngest_pair_plan null '["create"]' > "$keyplan"
+  local keyplan; keyplan="$(mktemp)"; _inngest_pair_plan null '["create"]' | _with_deploy_policy > "$keyplan"
   _run_apply_halt_span "$keyplan" "$txt"
   [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} inngest-key-copy-create-alone-rc=${APPLY_SPAN_RC}(want 0):${APPLY_SPAN_OUT:0:200};"
   rm -f "$keyplan"

@@ -17,70 +17,32 @@ Two layers of monitoring are in place:
 
 ## Rotation Procedures
 
-### Option 1: Refresh (extend expiry, no credential change)
+> **#9294 / ADR-241 D10 — the token is no longer a Terraform resource.** `cloudflare_zero_trust_access_service_token.deploy`
+> was forgotten from state (`removed { destroy = false }`) so its `client_secret` leaves the Tier-A-readable state, and the
+> two root outputs that carried the pair are deleted. The older procedures that edited the resource (`duration`,
+> `client_secret_version`) or ran `terraform apply -replace=...service_token.deploy` and piped `terraform output -raw
+> access_service_token_client_*` into `gh secret set` NO LONGER APPLY and are removed: re-declaring the resource mints a
+> brand-new token whose secret is in no Doppler project, and `-replace` of it is forbidden (tests/scripts/test-deploy-access-token-forget.sh
+> pins both). Rotation is the two-PR sequence below. Each step is OWNER-NAMED: an agent runs a step only after the owner names
+> the exact command; a menu answer is not authorization. Full chain and rationale: the archived plan
+> `knowledge-base/project/plans/archive/20261019-163644-2026-10-15-feat-g1-webhook-trio-tier-b-plan.md`, §Owner-named command chain.
 
-Add or update the `duration` attribute on the service token resource:
+Where the pair lives: Doppler `soleur-infra-privileged/prd` (`CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`), exported to every Tier-B job
+by the loader (`.github/actions/infra-credentials`). The token's id (not secret) is the committed constant
+`local.deploy_service_token_ids` in `apps/web-platform/infra/tunnel.tf`; the deploy application's policy admits exactly those ids.
 
-```hcl
-resource "cloudflare_zero_trust_access_service_token" "deploy" {
-  account_id = var.cf_account_id
-  name       = "github-actions-deploy"
-  duration   = "8760h"  # resets expiry from now
-}
-```
+1. **Mint** a new Access service token in Cloudflare, outside Terraform. Keep its id (a UUID); write the client id and secret straight into
+   `soleur-infra-privileged/prd` without printing them. Do not delete the old token yet.
+2. **PR-A — admit both.** Add the new id to `local.deploy_service_token_ids` (old and new, in one list). The apply changes the policy in
+   place, so the merge commit message carries a line containing exactly `[ack-deploy-policy]` (`[ack-destroy]` does not count). The
+   web-platform apply's deploy-policy gate (`tests/scripts/lib/deploy-policy-gate.sh`) refuses any other policy change.
+3. **Switch the secrets.** Update both Tier-B copies (the privileged project and, once it exists, the narrow deploy-channel project) and verify
+   them hash-equal. Then canary through the deploy path (a `mode=redeploy` dispatch of `git-data-cutover.yml` is its own named command).
+4. **PR-B — drop the old id.** Remove the old id from the list, again with `[ack-deploy-policy]`, then delete the old token in Cloudflare.
+5. **Probe.** The old pair must now be denied at Access (HTTP 403) and the new pair must deploy.
 
-Then apply:
-
-> **#8209 / ADR-241 — the single-loader form in this runbook is the PRE-cutover one.** After the
-> Tier-B cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the
-> inner `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
-> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
-> invocation. This note covers every occurrence below.
-
-```bash
-cd apps/web-platform/infra
-doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform apply
-```
-
-No secret rotation needed. The `expires_at` output updates automatically.
-
-### Option 2: Rotate credentials (zero-downtime)
-
-Use `client_secret_version` to generate a new secret while keeping the old one valid during a transition window:
-
-```hcl
-resource "cloudflare_zero_trust_access_service_token" "deploy" {
-  account_id                      = var.cf_account_id
-  name                            = "github-actions-deploy"
-  client_secret_version           = 2  # increment to trigger rotation
-  previous_client_secret_expires_at = "2027-03-22T00:00:00Z"  # 24h grace period
-}
-```
-
-Then:
-
-```bash
-cd apps/web-platform/infra
-doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform apply
-terraform output -raw access_service_token_client_id | gh secret set CF_ACCESS_CLIENT_ID
-terraform output -raw access_service_token_client_secret | gh secret set CF_ACCESS_CLIENT_SECRET
-```
-
-The old secret remains valid until `previous_client_secret_expires_at` passes.
-
-### Option 3: Rotate credentials (hard cut)
-
-Replace the entire resource. The old secret stops working immediately.
-
-```bash
-cd apps/web-platform/infra
-doppler run --project soleur --config prd_terraform --name-transformer tf-var -- \
-  terraform apply -replace=cloudflare_zero_trust_access_service_token.deploy
-terraform output -raw access_service_token_client_id | gh secret set CF_ACCESS_CLIENT_ID
-terraform output -raw access_service_token_client_secret | gh secret set CF_ACCESS_CLIENT_SECRET
-```
-
-Uses `terraform apply -replace=` instead of deprecated `terraform taint` (deprecated since Terraform 0.15.2).
+Standing hazards: never `-replace` or `destroy` the token, and never re-declare it; the deleted outputs may still sit in state after the
+targeted apply (the apply job warns when they do — treat the old token as exposed and rotate it first).
 
 ## Verification
 
@@ -95,13 +57,13 @@ Confirm the deploy step completes with HTTP 200 (not 403).
 ## Key Details
 
 - **Token name:** `github-actions-deploy`
-- **Resource:** `cloudflare_zero_trust_access_service_token.deploy`
-- **Location:** `apps/web-platform/infra/tunnel.tf`
-- **GitHub secrets:** `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`
+- **Resource:** none (forgotten from Terraform state by #9294; the token itself lives in Cloudflare)
+- **Admitted ids:** `local.deploy_service_token_ids` in `apps/web-platform/infra/tunnel.tf`
+- **Secrets:** Doppler `soleur-infra-privileged/prd` `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` (the Tier-A and repo-secret copies are deleted in a later owner-named step)
 - **Default lifetime:** 8760h (~1 year)
 - **Created:** 2026-03-21
 - **Expected expiry:** ~2027-03-21
-- **Parent issue:** #974
+- **Parent issue:** #974; **re-homed by:** #9294
 - **Originating PR:** #971 / #967
 
 ## Related: CLA Evidence R2 token rotation

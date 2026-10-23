@@ -662,10 +662,11 @@ jobs:
           if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
             # Its OWN token, not the generic `error`. The step ran and measured a specific
             # cause; collapsing that into "no result recorded" would name a cause nobody
-            # measured (AP-021), and a prd credential read failing on the workflow that
-            # delivers /etc/default/soleur-doppler-token is its own incident.
+            # measured (AP-021). The trio is the Tier-B loader's env export (#9294), so the cause is
+            # "the loader step exported none": its source= line says whether the job lacked the Tier-B
+            # token (legacy) or soleur-infra-privileged/prd lacks the name (the owner-run copy).
             PRE_STATUS="secret_unavailable"
-            echo "::warning::Pre-apply frame capture could not read WEBHOOK_DEPLOY_SECRET from Doppler; recording pre_frame_status=secret_unavailable. The apply proceeds — this reading is corroborating evidence, not the verification."
+            echo "::warning::Pre-apply frame capture did not find WEBHOOK_DEPLOY_SECRET in the job env (the Tier-B loader step exported none: its source= line says whether this job lacked the Tier-B token or soleur-infra-privileged/prd lacks the name); recording pre_frame_status=secret_unavailable. The apply proceeds — this reading is corroborating evidence, not the verification."
           else
             # `|| HMAC=""`: an empty key or a missing python3 reaches the check below and lands in
             # the credential-unusable class, not a mute abort and not `unreachable`.
@@ -846,11 +847,11 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
+          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
+          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
+          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
 
           for attempt in 1 2 3; do
             # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
@@ -892,7 +893,7 @@ jobs:
           set -euo pipefail
           export APP_DOMAIN_BASE
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-          : "${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}" "${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}" "${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
+          : "${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}" "${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}" "${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
           bash scripts/check-deploy-script-parity.sh --status-only
 
       - name: Export rendered credential digest (activates the gate's byte compare)
@@ -1227,12 +1228,11 @@ jobs:
           # production, an unverifiable channel is not an all-clear -- but they are now
           # DISTINGUISHABLE, and the consumers can stop asserting a cause nobody measured.
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-          cf_rc=0
           CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID:-}"
           CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
-          if [[ "$cf_rc" -ne 0 || -z "${CF_ACCESS_ID:-}" || -z "${CF_ACCESS_SECRET:-}" ]]; then
+          if [[ -z "${CF_ACCESS_ID:-}" || -z "${CF_ACCESS_SECRET:-}" ]]; then
             echo "listener_state=probe_error" >> "$GITHUB_OUTPUT"
-            echo "::error::The post-re-push liveness probe COULD NOT RUN: the CF Access credentials could not be read from Doppler (rc=$cf_rc). This says NOTHING about the webhook listener — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Re-run the workflow once Doppler is reachable; if it recurs, check CF_ACCESS_CLIENT_ID/SECRET in the prd_terraform config."
+            echo "::error::The post-re-push liveness probe COULD NOT RUN: the CF Access pair is absent from the job env (the Tier-B loader step exported none). This says NOTHING about the webhook listener — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Re-running cannot help: read the Load infra credentials step's source= line (legacy = this job lacks the Tier-B token; tier_b = soleur-infra-privileged/prd lacks the pair, which needs the owner-run copy)."
             exit 1
           fi
           # The Cloudflare Access pair reaches curl on its stdin config, never its argument list
@@ -1248,7 +1248,7 @@ jobs:
             if ! bc_ok_var "$_v"; then
               bc_refuse apply-deploy-pipeline-fix "$_v" || true
               echo "listener_state=probe_error" >> "$GITHUB_OUTPUT"
-              echo "::error::The post-re-push liveness probe COULD NOT RUN: a CF Access credential failed the request-header shape check (SOLEUR_CREDENTIAL_REFUSED above names the variable, never the value) and no request was made. This says NOTHING about the webhook listener — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Re-check CF_ACCESS_CLIENT_ID/SECRET in the prd_terraform config and re-run."
+              echo "::error::The post-re-push liveness probe COULD NOT RUN: a CF Access credential failed the request-header shape check (SOLEUR_CREDENTIAL_REFUSED above names the variable, never the value) and no request was made. This says NOTHING about the webhook listener — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. The pair lives in soleur-infra-privileged/prd (Tier B): check it there, not in prd_terraform."
               exit 1
             fi
           done
@@ -1263,7 +1263,7 @@ jobs:
               ;;
             401|403)
               echo "listener_state=probe_error" >> "$GITHUB_OUTPUT"
-              echo "::error::The post-re-push liveness probe was REJECTED BY CF ACCESS (HTTP $code). That is our credential, not the host's health — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Rotate or re-check CF_ACCESS_CLIENT_ID/SECRET and re-run."
+              echo "::error::The post-re-push liveness probe was REJECTED BY CF ACCESS (HTTP $code). That is our credential, not the host's health — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Check the pair in soleur-infra-privileged/prd (Tier B) and the Access policy include, then re-run."
               exit 1
               ;;
             *)
@@ -2165,11 +2165,11 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
+          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
+          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
+          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
 
           # #6512 Fix 2a: source the actionable-alert emitter (fail-open) called at every terminal
           # failure below that leaves the running container's seccomp profile UNENFORCED.
@@ -2461,11 +2461,11 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET}"
+          WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID}"
+          CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
-          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET}"
+          CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
 
           PERSISTENT=""
           for attempt in 1 2 3; do

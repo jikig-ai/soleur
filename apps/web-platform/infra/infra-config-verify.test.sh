@@ -536,7 +536,7 @@ EOS
 # `--noproxy '*'`) is missing.
 out=""
 prev=""
-have_w=0; have_maxtime=0; have_sig=0; have_url=0; have_cfg=0; have_noproxy=0; sigval=""; url=""
+have_w=0; have_maxtime=0; have_sig=0; have_url=0; have_cfg=0; have_noproxy=0; sigval=""; url=""; idval=""; secval=""
 first="${1:-}"
 for a in "$@"; do
   [[ "$prev" == "-o" ]] && out="$a"
@@ -557,6 +557,8 @@ while IFS= read -r line; do
   if [[ "$line" == 'header = "X-Signature-256: '* ]]; then
     have_sig=1; sigval="${line#header = \"X-Signature-256: }"; sigval="${sigval%\"}"
   fi
+  [[ "$line" == 'header = "CF-Access-Client-Id: '* ]] && { idval="${line#header = \"CF-Access-Client-Id: }"; idval="${idval%\"}"; }
+  [[ "$line" == 'header = "CF-Access-Client-Secret: '* ]] && { secval="${line#header = \"CF-Access-Client-Secret: }"; secval="${secval%\"}"; }
 done <<<"$cfg"
 if [[ "$first" != "--disable" || "$have_noproxy" -ne 1 || "$have_cfg" -ne 1 ]]; then
   echo "curl-stub: transport confinement missing (first='${first}' noproxy=$have_noproxy config-stdin=$have_cfg)" >&2
@@ -585,6 +587,9 @@ fi
 # Logged rather than refused, so only the row that names this property (I6c) reds on a mismatch.
 expsig="$(printf '' | HMAC_KEY="${WEBHOOK_DEPLOY_SECRET:-}" python3 -I -c 'import hashlib,hmac,os,sys;sys.stdout.write(hmac.new(os.environb.get(b"HMAC_KEY"),sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')"
 if [[ "${sigval#sha256=}" == "$expsig" ]]; then echo "sig=match" >> "${STUB_SIG_LOG:-/dev/null}"; else echo "sig=mismatch" >> "${STUB_SIG_LOG:-/dev/null}"; fi
+# The Access pair must arrive as the id header carrying CF_ACCESS_CLIENT_ID and the secret header carrying CF_ACCESS_CLIENT_SECRET
+# (distinct stub values: a swapped pair, or one header dropped, is otherwise invisible). Logged for I6c.
+echo "cfid=${idval} cfsec=${secval}" >> "${STUB_CF_LOG:-/dev/null}"
 printf '%s\n' "$url" >> "${STUB_CURL_LOG:-/dev/null}"
 [[ -n "${STUB_FRAME:-}" ]] && cp "$STUB_FRAME" "$out"
 printf '%s' "${STUB_HTTP_CODE:-200}"
@@ -659,7 +664,7 @@ drive_pass2() { # $1 frame, $2 GITHUB_OUTPUT, $3 baseline, $4 apply_start_epoch,
 }
 
 # The Tier-B loader step's job: the trio arrives as env. A case makes one unusable by overriding it.
-export WEBHOOK_DEPLOY_SECRET="stub-webhook-key" CF_ACCESS_CLIENT_ID="stub-secret-value" CF_ACCESS_CLIENT_SECRET="stub-secret-value"
+export WEBHOOK_DEPLOY_SECRET="stub-webhook-key" CF_ACCESS_CLIENT_ID="stub-cf-id-value" CF_ACCESS_CLIENT_SECRET="stub-cf-secret-value"
 
 mkstubs
 STALE="$I_TMP/stale.json"; MOVED="$I_TMP/moved.json"
@@ -809,12 +814,12 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   # the stub contract is enforced only by `exit 64`, which proves the required flags were
   # PRESENT and says nothing about whether the host, the secret names or the retry budget were
   # the intended ones.
-  SL="$I_TMP/sleep.log"; DL="$I_TMP/doppler.log"; CL="$I_TMP/curl.log"; SIGL="$I_TMP/sig.log"
-  : > "$SL"; : > "$DL"; : > "$CL"; : > "$SIGL"
+  SL="$I_TMP/sleep.log"; DL="$I_TMP/doppler.log"; CL="$I_TMP/curl.log"; SIGL="$I_TMP/sig.log"; CFL="$I_TMP/cf.log"
+  : > "$SL"; : > "$DL"; : > "$CL"; : > "$SIGL"; : > "$CFL"
   o9="$I_TMP/o9"; : > "$o9"
   ( cd "$SCRIPT_DIR" || exit 99
     export PATH="$I_TMP/bin:$PATH" STUB_FRAME="$MOVED" STUB_HTTP_CODE=200
-    export STUB_SLEEP_LOG="$SL" STUB_DOPPLER_LOG="$DL" STUB_CURL_LOG="$CL" STUB_SIG_LOG="$SIGL"
+    export STUB_SLEEP_LOG="$SL" STUB_DOPPLER_LOG="$DL" STUB_CURL_LOG="$CL" STUB_SIG_LOG="$SIGL" STUB_CF_LOG="$CFL"
     export INFRA_CONFIG_STATUS_RESPONSE="$I_TMP/status-argv-$$.json"
     export GITHUB_OUTPUT="$o9" VERIFY_PASS=1 ALLOW_MISSING_STATUS=false
     export DPF_REPLACED=true APPLY_START_EPOCH=1
@@ -836,9 +841,10 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   fi
   # The trio is the loader's env, never a doppler read (#9294): the only secret the body may request
   # from doppler is APP_DOMAIN_BASE (and it must, or the host would be hardcoded), and the request is
-  # signed with WEBHOOK_DEPLOY_SECRET itself, not another trio member (a wrong-but-real key 401s in
+  # signed with WEBHOOK_DEPLOY_SECRET itself and carries the Access pair id-as-id / secret-as-secret, not another trio member (a wrong-but-real key 401s in
   # production while every presence-only check stays green).
-  if [[ -s "$DL" ]] && ! grep -qvx 'APP_DOMAIN_BASE' "$DL" && [[ -s "$SIGL" ]] && ! grep -qvx 'sig=match' "$SIGL"; then
+  if [[ -s "$DL" ]] && ! grep -qvx 'APP_DOMAIN_BASE' "$DL" && [[ -s "$SIGL" ]] && ! grep -qvx 'sig=match' "$SIGL" \
+     && [[ -s "$CFL" ]] && ! grep -qvx 'cfid=stub-cf-id-value cfsec=stub-cf-secret-value' "$CFL"; then
     pass "#7104 I6c: doppler is asked only for APP_DOMAIN_BASE and the request is signed with WEBHOOK_DEPLOY_SECRET (the signing key is pinned by value, not just 'some secret')"
   else
     fail "#7104 I6c: doppler read: $(tr '\n' ' ' < "$DL"); signature checks: $(tr '\n' ' ' < "$SIGL"). The trio must come from the Tier-B loader's env and the HMAC must use WEBHOOK_DEPLOY_SECRET."

@@ -2523,6 +2523,9 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
         const loaderIdx = steps.findIndex((x) => String(x.uses ?? "") === "./.github/actions/infra-credentials");
         expect(loaderIdx, `${job}: the Tier-B loader step`).toBeGreaterThanOrEqual(0);
         expect(loaderIdx, `${job}: the loader runs before the pin-load`).toBeLessThan(steps.indexOf(s));
+        // A disabled or unprivileged loader exports no trio: the step must run unconditionally and be fed the Tier-B read token.
+        expect(steps[loaderIdx].if, `${job}: the loader step has no if:`).toBeUndefined();
+        expect(String(steps[loaderIdx].with?.["doppler-token-infra-privileged"] ?? ""), `${job}: the loader is fed the Tier-B token`).toContain("secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED");
         expect(run).not.toContain("prd_terraform");
         expect(run).not.toContain("doppler secrets get");
         expect(run).not.toContain("CI_SSH_ACCESS_TOKEN");
