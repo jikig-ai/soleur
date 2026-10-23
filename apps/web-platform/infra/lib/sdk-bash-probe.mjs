@@ -258,7 +258,8 @@ export const MASKS_NOTES = Object.freeze(["uid_mismatch", "pid1_unreadable", "pi
  *    env_divergence      informational only (PID 1 has a base the probe does not model): nothing refused, nothing counted
  *  A dir is created only when lstat says it is absent (ENOENT); an existing path is never chmod'ed, chown'ed or replaced. A mkdir error
  *  fails THAT dir and the loop carries on. A dir is FAILED iff after the pass it is not a real directory, is owned by another uid, or is
- *  still absent. Mode is not asserted. Returns `{ created, failed, note }`. */
+ *  still absent. Mode is not asserted. Returns `{ created, failed, note }`.
+ *  @param {{ dirs: string[], homeDirs?: string[], uid: number, euid?: number, pid1: any, lstat: any, mkdir: any }} o */
 export function ensureMaskedDirs({ dirs, homeDirs = [], uid, euid = uid, pid1, lstat, mkdir }) {
   const env = pid1?.env;
   let note = null;

@@ -14,6 +14,8 @@ import { afterAll, describe, expect, it } from "vitest";
 
 const APP = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = join(APP, "..", "..", "scripts", "masked-dir-alert-discoverability.sh");
+// spawnSync wants a full ProcessEnv; the script under test needs only PATH and its seams.
+const asEnv = (e: Record<string, string | undefined>): NodeJS.ProcessEnv => e as NodeJS.ProcessEnv;
 const EMIT_FILE = "agent-runner-sandbox-config.ts";
 const REAL_EMIT = readFileSync(join(APP, "server", EMIT_FILE), "utf8");
 const REAL_TF = readFileSync(join(APP, "infra", "sentry", "issue-alerts.tf"), "utf8");
@@ -38,7 +40,7 @@ function run(emit: { name: string; src: string }, tf: string) {
   mkdirSync(sentry);
   writeFileSync(join(server, "lib", emit.name), emit.src);
   writeFileSync(join(sentry, "issue-alerts.tf"), tf);
-  const r = spawnSync("bash", [SCRIPT], { env: { PATH: process.env.PATH ?? "", MASKED_DIR_ALERT_SERVER_DIR: server, MASKED_DIR_ALERT_SENTRY_DIR: sentry }, encoding: "utf8", timeout: 20000 });
+  const r = spawnSync("bash", [SCRIPT], { env: asEnv({ PATH: process.env.PATH ?? "", MASKED_DIR_ALERT_SERVER_DIR: server, MASKED_DIR_ALERT_SENTRY_DIR: sentry }), encoding: "utf8", timeout: 20000 });
   return { rc: r.status, out: r.stdout };
 }
 const canonical = () => run({ name: EMIT_FILE, src: REAL_EMIT }, REAL_TF);
@@ -65,7 +67,7 @@ describe("masked-dir-alert-discoverability.sh", () => {
   });
 
   it("CONTROL: the real repo (no override) prints OK, no override line and no seam token", () => {
-    const r = spawnSync("bash", [SCRIPT], { env: { PATH: process.env.PATH ?? "" }, encoding: "utf8", timeout: 60000 });
+    const r = spawnSync("bash", [SCRIPT], { env: asEnv({ PATH: process.env.PATH ?? "" }), encoding: "utf8", timeout: 60000 });
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(OK);
     expect(r.stdout).not.toContain("MASKED_DIR_ALERT_OVERRIDE");
@@ -82,7 +84,7 @@ describe("masked-dir-alert-discoverability.sh", () => {
       ["server dir set empty", { MASKED_DIR_ALERT_SERVER_DIR: "" }],
       ["sentry dir set empty", { MASKED_DIR_ALERT_SENTRY_DIR: "" }],
     ] as const) {
-      const r = spawnSync("bash", [SCRIPT], { env: { ...base, ...env }, encoding: "utf8", timeout: 60000 });
+      const r = spawnSync("bash", [SCRIPT], { env: asEnv({ ...base, ...env }), encoding: "utf8", timeout: 60000 });
       expect(r.status, label).toBe(0);
       expect(r.stdout, label).toContain("MASKED_DIR_ALERT_OVERRIDE");
       expect(r.stdout, label).toContain(SEAM_PASS);
@@ -193,10 +195,10 @@ describe("masked-dir-alert-discoverability.sh", () => {
     mkdirSync(join(root, "sentry"));
     mkdirSync(join(root, "server"));
     copyFileSync(join(APP, "server", EMIT_FILE), join(root, "server", EMIT_FILE));
-    const r = spawnSync("bash", [SCRIPT], { env: { PATH: process.env.PATH ?? "", MASKED_DIR_ALERT_SERVER_DIR: join(root, "server"), MASKED_DIR_ALERT_SENTRY_DIR: join(root, "sentry") }, encoding: "utf8" });
+    const r = spawnSync("bash", [SCRIPT], { env: asEnv({ PATH: process.env.PATH ?? "", MASKED_DIR_ALERT_SERVER_DIR: join(root, "server"), MASKED_DIR_ALERT_SENTRY_DIR: join(root, "sentry") }), encoding: "utf8" });
     expect(r.status).toBe(1);
     expect(r.stdout).not.toContain(OK);
-    const r2 = spawnSync("bash", [SCRIPT], { env: { PATH: process.env.PATH ?? "", MASKED_DIR_ALERT_SERVER_DIR: join(root, "no-such"), MASKED_DIR_ALERT_SENTRY_DIR: join(root, "sentry") }, encoding: "utf8" });
+    const r2 = spawnSync("bash", [SCRIPT], { env: asEnv({ PATH: process.env.PATH ?? "", MASKED_DIR_ALERT_SERVER_DIR: join(root, "no-such"), MASKED_DIR_ALERT_SENTRY_DIR: join(root, "sentry") }), encoding: "utf8" });
     expect(r2.status).toBe(1);
     expect(r2.stdout).not.toContain(OK);
   });
