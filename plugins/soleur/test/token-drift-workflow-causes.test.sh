@@ -2101,6 +2101,8 @@ LOADER_JOBS = {"drift-check", "heartbeat-live-reconcile"}   # the Tier-B jobs: t
 LISTERS = {"sole-copy-protection-check"}                    # non-sweep jobs that may name the Hetzner API
 SWEEP_JOB_KEYS = {"name", "if", "runs-on", "steps", "timeout-minutes"}
 MAIN_ONLY = "github.ref == 'refs/heads/main'"
+SWEEP_SECRETS = {"DOPPLER_TOKEN", "RESEND_API_KEY", "GITHUB_TOKEN"}   # the only secrets a sweep job may be handed
+SECRET_REF = re.compile(r"secrets\.([A-Za-z0-9_]+)")
 
 def leaves(x):
     if isinstance(x, str):
@@ -2115,7 +2117,9 @@ def leaves(x):
             yield from leaves(v)
 
 def code(run):
-    return "\n".join(l for l in str(run).splitlines() if not l.lstrip().startswith("#"))
+    """comment lines dropped, backslash-newline continuations joined (a continued command is one command)"""
+    body = "\n".join(l for l in str(run).splitlines() if not l.lstrip().startswith("#"))
+    return re.sub(r"\\\n[ \t]*", " ", body)
 
 def is_email(s):
     return str(s.get("uses", "")).rstrip("/").endswith(EMAIL)
@@ -2139,15 +2143,15 @@ def r7(wf):
         out.append("the sole-copy job has no doppler_cli step to compare the installs against")
     for jid, job in wf["jobs"].items():
         uses = [str(s.get("uses", "")).rstrip("/") for s in job.get("steps") or []]
-        if LOADER in uses and jid not in LOADER_JOBS:
-            out.append("%s calls the credential loader but is not a Tier-B job" % jid)
+        if any("infra-credentials" in u for u in uses) and jid not in LOADER_JOBS:
+            out.append("%s calls the credential loader but is not a Tier-B job (a new Tier-B job is added to LOADER_JOBS in this suite, with the runbook row)" % jid)
         if "environment" in job and jid not in LOADER_JOBS:
-            out.append("%s declares an environment but is not a Tier-B job" % jid)
+            out.append("%s declares an environment but is not a Tier-B job (a new Tier-B job is added to LOADER_JOBS in this suite, with the runbook row)" % jid)
         if jid.endswith("-orphan-sweep") or jid in LISTERS or jid in LOADER_JOBS:
             continue
         jt = "\n".join(leaves(job))
         if "api.hetzner.cloud" in jt or RO in jt:
-            out.append("%s lists Hetzner or reads the read-only token but is outside the guarded population" % jid)
+            out.append("%s lists Hetzner or reads the read-only token but is outside the guarded population (name it *-orphan-sweep, or add it to LISTERS in this suite with its own pin)" % jid)
     for jid, job in allj:
         extra = sorted(set(job) - SWEEP_JOB_KEYS)
         if extra:
@@ -2162,6 +2166,8 @@ def r7(wf):
             elif u and not (u.startswith("actions/checkout@") or u.endswith(EMAIL)):
                 out.append("%s uses %s outside the allowed actions" % (jid, u))
         text = "\n".join(leaves(job))
+        for sec in sorted(set(SECRET_REF.findall(text)) - SWEEP_SECRETS):
+            out.append("%s is handed secret %s outside %s" % (jid, sec, "/".join(sorted(SWEEP_SECRETS))))
         if BARE.search(text):
             out.append("%s names the read/write token" % jid)
         if PRIV.search(text):
@@ -2176,6 +2182,11 @@ def r7(wf):
                         out.append("%s reads secret %s" % (jid, m.group(3)))
                 elif pair != ("configs", "list"):
                     out.append("%s runs doppler %s %s" % (jid, pair[0], pair[1] or ""))
+            for ln in code(s.get("run", "")).splitlines():
+                if DOPPLER_CALL.search(ln) and DOPPLER_CALL.search(ln).group(1) in DOPPLER_SUBS:
+                    for proj in re.findall(r"(?:^|\s)(?:-p|--project)[ \t=]+(\S+)", ln):
+                        if proj.strip("\"'") != "soleur":
+                            out.append("%s runs doppler against project %s" % (jid, proj))
         st = step_by_id(job, "sweep")
         if st is None:
             out.append("%s has no sweep step" % jid)
@@ -2192,13 +2203,27 @@ def r7(wf):
                 for k in ("DOPPLER_CLI_VERSION", "DOPPLER_CLI_SHA256"):
                     if (inst.get("env") or {}).get(k) != (ref.get("env") or {}).get(k):
                         out.append("%s Doppler install %s differs from the sole-copy job's" % (jid, k))
+            if ref is not None and code(inst.get("run", "")) != code(ref.get("run", "")):
+                out.append("%s Doppler install body differs from the sole-copy job's (the checksum and PATH hand-off are part of it)" % jid)
             if "sha256sum -c" not in code(inst.get("run", "")):
                 out.append("%s Doppler install is not checksum-verified" % jid)
         total = sum(s["timeout-minutes"] for s in steps if isinstance(s.get("timeout-minutes"), int))
+        for s in steps:
+            if not isinstance(s.get("timeout-minutes"), int):
+                out.append("%s step %r has no timeout-minutes (an unbounded step counts as zero in the cap)" % (jid, s.get("name") or s.get("uses")))
         for sid in ("sweep", "doppler_cli"):
             s = step_by_id(job, sid)
-            if s is not None and not isinstance(s.get("timeout-minutes"), int):
-                out.append("%s step %s has no timeout" % (jid, sid))
+            if s is not None:
+                if "if" in s:
+                    out.append("%s step %s carries an `if`, so it can be skipped" % (jid, sid))
+                first = next((l.strip() for l in code(s.get("run", "")).splitlines() if l.strip()), "")
+                if first != "set -euo pipefail":
+                    out.append("%s step %s does not start with `set -euo pipefail`" % (jid, sid))
+        for s in steps:
+            g = str(s.get("if", ""))
+            if "steps.sweep.outputs.orphans" in g:
+                if "!= '0'" not in g or ("always()" in g and "!= ''" not in g):
+                    out.append("%s orphan filer gate %r fires on an unset `orphans` or hides a real find" % (jid, g.strip()))
         cap = job.get("timeout-minutes")
         if not isinstance(cap, int) or cap < total:
             out.append("%s job cap %r is below the sum of its step bounds %d" % (jid, cap, total))
@@ -2224,6 +2249,8 @@ def r8(wf):
         f = fails[0]
         if si is not None and steps.index(f) < si:
             out.append("%s failure email precedes the sweep step" % jid)
+        if steps.index(f) != len(steps) - 1:
+            out.append("%s failure email is not the last step, so a later step's failure is not covered by it" % jid)
         if f.get("continue-on-error") is not True:
             out.append("%s failure email is not continue-on-error" % jid)
         t = f.get("timeout-minutes")
@@ -2291,6 +2318,20 @@ def m_dtoken_removed(m): step_by_id(jobs(m)[RUNG], "sweep")["env"].pop("DOPPLER_
 def m_cap_low(m): jobs(m)[RUNG]["timeout-minutes"] = 10
 def m_sweep_no_timeout(m): step_by_id(jobs(m)[INN], "sweep").pop("timeout-minutes")
 
+def m_secret_extra(m): jobs(m)[INN]["steps"][0].setdefault("with", {})["token"] = "${{ secrets.SENTRY_IAC_AUTH_TOKEN }}"
+def m_loader_other_path(m): jobs(m)["sole-copy-protection-check"]["steps"].insert(1, {"name": "x", "uses": "jikig-ai/soleur/.github/actions/infra-credentials@main"})
+def m_doppler_other_project(m): step_by_id(jobs(m)[INN], "sweep")["run"] += "\ndoppler configs list -p other --json\n"
+def m_doppler_continued(m): step_by_id(jobs(m)[RUNG], "sweep")["run"] += "\ndoppler \\\n  run -- env\n"
+def m_install_extra(m): sub_run(jobs(m)[INN], "doppler_cli", "| sha256sum -c -", "| sha256sum -c - || true")
+def m_step_unbounded(m): jobs(m)[RUNG]["steps"][0].pop("timeout-minutes")
+def m_no_strict_mode(m): sub_run(jobs(m)[INN], "sweep", "set -euo pipefail", "set -u")
+def m_sweep_if(m): step_by_id(jobs(m)[RUNG], "sweep")["if"] = "false"
+def m_filer_gate_unset(m):
+    j = jobs(m)[RUNG]; i = [k for k, s in enumerate(j["steps"]) if "steps.sweep.outputs.orphans" in str(s.get("if", ""))][0]
+    j["steps"][i]["if"] = "always() && steps.sweep.outputs.orphans != '0'"
+def m_email_not_last(m):
+    j = jobs(m)[INN]; e = fail_email(j); j["steps"].remove(e); j["steps"].insert(len(j["steps"]) - 1, e)
+
 def m_no_email_inn(m): no_email(jobs(m)[INN])
 def m_if_success(m): fail_email(jobs(m)[INN])["if"] = "success()"
 def m_if_always(m): fail_email(jobs(m)[INN])["if"] = "always()"
@@ -2350,7 +2391,17 @@ ROWS = [
     ("r7-job-cap-below-step-bounds",   r7, m_cap_low,           "red"),
     ("r7-sweep-step-unbounded",        r7, m_sweep_no_timeout,  "red"),
     ("r7-must-pass-filer-timeout-changed", r7, m_filer_timeout_changed, "clean"),
+    ("r7-secret-outside-the-allowed-set", r7, m_secret_extra,      "red"),
+    ("r7-loader-by-other-path-elsewhere", r7, m_loader_other_path,  "red"),
+    ("r7-doppler-other-project",       r7, m_doppler_other_project, "red"),
+    ("r7-doppler-continued-line",      r7, m_doppler_continued,     "red"),
+    ("r7-install-checksum-neutralised", r7, m_install_extra,        "red"),
+    ("r7-step-without-timeout",        r7, m_step_unbounded,        "red"),
+    ("r7-strict-mode-dropped",         r7, m_no_strict_mode,        "red"),
+    ("r7-sweep-step-gated-by-if",      r7, m_sweep_if,              "red"),
+    ("r7-orphan-filer-gate-fires-on-unset", r7, m_filer_gate_unset, "red"),
     ("r8-email-deleted",               r8, m_no_email_inn,      "red"),
+    ("r8-email-not-last-step",         r8, m_email_not_last,    "red"),
     ("r8-if-success",                  r8, m_if_success,        "red"),
     ("r8-if-always",                   r8, m_if_always,         "red"),
     ("r8-if-always-and-failure",       r8, m_if_always_failure, "red"),
@@ -2385,7 +2436,7 @@ if __name__ == "__main__":
                 mut(m)
             except Exception as e:
                 print("FAIL\t%s\tmutation could not be applied: %s %s" % (name, type(e).__name__, e)); res.append(False); continue
-            if expect == "red" and m == wf:
+            if m == wf:
                 print("FAIL\t%s\tthe mutation did not change the workflow" % name); res.append(False); continue
             v = chk(m)
             ok = bool(v) if expect == "red" else not v
@@ -2416,7 +2467,7 @@ else
 fi
 
 # The floor is the table's CURRENT size, so a removed row is visible in the diff that removes it.
-R78_MIN=51
+R78_MIN=61
 echo "R7/R8: mutation rows — every spelling that re-opens the read/write credential or drops the failure email is RED, legitimate variants GREEN"
 R78_OUT=$(python3 -c "$SWEEP_PY" mutate "$WF") || { echo "FATAL: the R7/R8 mutation runner crashed" >&2; exit 2; }
 r78_line() { if [[ "$1" == "PASS" ]]; then pass "R78/$2: $3"; else fail "R78/$2: $3"; fi; }
@@ -2428,6 +2479,7 @@ while IFS=$'\t' read -r _verdict _row _msg; do
 done <<<"$R78_OUT"
 [[ -n "$_r78res" ]] || { echo "FATAL: the R7/R8 mutation runner printed no RESULT line" >&2; exit 2; }
 (( _r78n >= R78_MIN )) || { echo "FATAL: the R7/R8 mutation runner produced only ${_r78n} verdict lines" >&2; exit 2; }
+[[ "$_r78res" == "${_r78n}/"* ]] || { echo "FATAL: the runner reports ${_r78res} rows but ${_r78n} verdict lines were judged" >&2; exit 2; }
 
 # ---------------------------------------------------------------------------
 # R9 -- the converted `sweep` steps BEHAVE as prescribed. R7/R8 pin the workflow's shape; this runs each job's
@@ -2450,22 +2502,33 @@ cat > "$R9_DIR/bin/doppler" <<'SHIM'
 echo "doppler $*" >> "$R9_CALLS"
 case "$1 $2" in
   "secrets get")
+    # the reviewed argv, exactly: any other spelling is refused so a drifted read cannot be judged against a lenient shim
+    [[ "$*" == "secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform" ]] || { echo "BADARGV doppler $*" >> "$R9_CALLS"; exit 64; }
     case "$R9_MODE" in
       empty) exit 0 ;;
+      unauth) exit 1 ;;
       timeout) exit 124 ;;
       killed) exit 137 ;;
       badshape) printf 'abc def\n' ;;
       *) printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' ;;
     esac ;;
-  "configs list") printf '[{"name":"c1"},{"name":"c2"},{"name":"c3"},{"name":"c4"},{"name":"c5"},{"name":"c6"},{"name":"c7"},{"name":"c8"},{"name":"c9"},{"name":"c10"},{"name":"c11"},{"name":"c12"},{"name":"c13"}]\n' ;;
+  "configs list")
+    [[ "$*" == "configs list -p soleur --json" ]] || { echo "BADARGV doppler $*" >> "$R9_CALLS"; exit 64; }
+    printf '[{"name":"c1"},{"name":"c2"},{"name":"c3"},{"name":"c4"},{"name":"c5"},{"name":"c6"},{"name":"c7"},{"name":"c8"},{"name":"c9"},{"name":"c10"},{"name":"c11"},{"name":"c12"},{"name":"c13"}]\n' ;;
 esac
 SHIM
 cat > "$R9_DIR/bin/curl" <<'SHIM'
 #!/usr/bin/env bash
-cat > /dev/null
+# stands in for curl: the stdin config is recorded, and -f is honoured (an HTTP error exits 22 only when -f was passed)
+cfg="$(cat)"
 echo "curl $*" >> "$R9_CALLS"
+printf '%s\n' "$cfg" >> "$R9_CALLS.stdin"
+has_f=0; for a in "$@"; do [[ "$a" == -f || "$a" == -sSf || "$a" == -fsS ]] && has_f=1; done
 if [[ "$R9_MODE" == apifail ]]; then
-  exit 22
+  if (( has_f )); then exit 22; fi
+  printf '{"message":"unauthorized"}'
+elif [[ "$R9_MODE" == paginated ]]; then
+  printf '{"servers":[],"volumes":[],"ssh_keys":[],"firewalls":[],"meta":{"pagination":{"next_page":2}}}'
 elif [[ "$R9_MODE" == orphan ]]; then
   printf '{"servers":[{"name":"soleur-rehearsal-x","id":1}],"volumes":[],"ssh_keys":[],"firewalls":[],"meta":{"pagination":{"next_page":null}}}'
 else
@@ -2489,10 +2552,23 @@ r9_case() {
     clean)
       [[ "$rc" == 0 ]] || { echo "BAD:clean listing rc=$rc"; return; }
       grep -q '^orphans=0$' "$gho" || { echo "BAD:no orphans=0 output"; return; }
-      grep -qF 'doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform' "$calls" || { echo "BAD:the read-only secret was not read with the pinned project and config"; return; }
+      grep -qxF 'doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform' "$calls" || { echo "BAD:the read-only secret was not read with the pinned project and config"; return; }
       grep -qE 'secrets get HCLOUD_TOKEN( |$)' "$calls" && { echo "BAD:the bare read/write name was read"; return; }
       grep -q '^::add-mask::AAAA' <<<"$out" || { echo "BAD:the token was not masked"; return; }
-      (( ncurl >= 4 )) || { echo "BAD:only $ncurl listing calls"; return; } ;;
+      (( ncurl >= 4 )) || { echo "BAD:only $ncurl listing calls"; return; }
+      grep -q '^BADARGV' "$calls" && { echo "BAD:a doppler call used an unreviewed argv"; return; }
+      local nbound; nbound=$(grep '^curl ' "$calls" | grep -c -- '--max-time 30') || nbound=0
+      (( nbound == ncurl )) || { echo "BAD:$((ncurl - nbound)) of $ncurl requests carry no --max-time 30"; return; }
+      local nf; nf=$(grep '^curl ' "$calls" | grep -cE -- '(^| )-(sS)?f( |$)|-sSf') || nf=0
+      (( nf == ncurl )) || { echo "BAD:$((ncurl - nf)) of $ncurl requests lack -f"; return; }
+      grep -q 'AAAAAAAA' "$calls.stdin" || { echo "BAD:the token did not reach curl on its stdin config"; return; } ;;
+    unauth)
+      [[ "$rc" != 0 ]] || { echo "BAD:a rejected secret read exited 0"; return; }
+      grep -q 'secret-store exit status 1' <<<"$out" || { echo "BAD:the no-token error does not carry exit status 1"; return; }
+      (( ncurl == 0 )) || { echo "BAD:a request left with no token"; return; } ;;
+    paginated)
+      [[ "$rc" != 0 ]] || { echo "BAD:a truncated listing exited 0"; return; }
+      grep -q 'paginated beyond page 1' <<<"$out" || { echo "BAD:no named pagination error"; return; } ;;
     empty)
       [[ "$rc" != 0 ]] || { echo "BAD:empty token exited 0"; return; }
       grep -q 'orphan_sweep_no_token' <<<"$out" || { echo "BAD:no named no-token error"; return; }
@@ -2522,7 +2598,7 @@ r9_case() {
 echo "R9: each converted sweep step decides correctly (clean, absent token, timed-out or killed read, shape-invalid token, rejected listing, found orphan)"
 _r9_ok=1
 for _job in rung2-rehearsal-orphan-sweep inngest-rehearsal-orphan-sweep; do
-  for _mode in clean empty timeout killed badshape apifail orphan; do
+  for _mode in clean empty unauth timeout killed badshape apifail paginated orphan; do
     _v=$(r9_case "$R9_DIR/$_job.sh" "$_mode")
     if [[ "$_v" == OK ]]; then pass "R9/$_job/$_mode"; else fail "R9/$_job/$_mode: ${_v#BAD:}"; _r9_ok=0; fi
   done
@@ -2561,7 +2637,7 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Then 168 -> 172 with R6a-c (the listing blocks load the read-only Hetzner token, no read/write fallback, #9927 item 8b) and the g-doppler-ro
 # classifier row, 172 is the REALIZED `PASS + FAIL`. (R7a-c, three rows pinning the spelling of ten empty-token guards, were added and then removed in the same
 # PR: every one of those ten steps pre-binds HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" so the guard could never hit `unbound variable`; CTO ruling 2026-10-22.)
-# Then 172 -> 241 with R7 and R8 (the orphan sweeps hold the read-only Hetzner token only, and email on failure; NOT the retired R7a-c above, which are different rows) with their 51 mutation rows (the review round hardened the guard from the sweeps' spelling to the property: loader/environment population, closed job shape, pinned install, bounds, fail-propagating sweep), and R9 (the converted sweep steps run under the runner's shell with shimmed doppler and curl: 14 case rows and 2 mutation rows) (#10664 follow-up): 69 added, 241 is the REALIZED `PASS + FAIL`.
+# Then 172 -> 255 with R7 and R8 (the orphan sweeps hold the read-only Hetzner token only, and email on failure; NOT the retired R7a-c above, which are different rows) with their 61 mutation rows (the review round hardened the guard from the sweeps' spelling to the property: loader/environment population, closed job shape, pinned install, bounds, fail-propagating sweep), and R9 (the converted sweep steps run under the runner's shell with shimmed doppler and curl: 18 case rows and 2 mutation rows) (#10664 follow-up): 83 added, 255 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -2577,8 +2653,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 241 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 241." >&2
+if [[ "$((PASS + FAIL))" -lt 255 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 255." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

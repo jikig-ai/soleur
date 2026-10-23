@@ -2467,11 +2467,11 @@ jobs:
   # sole-copy-protection-check job above does. The token's project is NOT checked here: the sole-copy job pins the
   # Inngest store volume by name and id and pages on `volume-not-found`, so a token for another project reaches a
   # person through that job, while this sweep would only list nothing. An absent, malformed, timed-out or rejected
-  # read ends this job red (never a clean sweep), and the failure email below is what turns that red into a message.
+  # TOKEN read ends this job red (never a clean sweep), and the failure email below is what turns that red into a message.
   rung2-rehearsal-orphan-sweep:
     runs-on: ubuntu-24.04
-    # Above the sum of the step bounds (2 + 3 + 6 + 2 + 2 + 2): a job-level cancel skips `failure()`, so the cap must never fire first.
-    timeout-minutes: 20
+    # Above the sum of the step bounds (2 + 3 + 6 + 2 + 2 + 2 + 2 = 19): a job-level cancel skips `failure()`, so the cap must never fire first.
+    timeout-minutes: 25
     # Hygiene only, NOT a security boundary (the dropped environment carried the main-only policy): it stops a branch
     # dispatch from filing issues on an accidental run.
     if: github.ref == 'refs/heads/main'
@@ -2907,6 +2907,7 @@ jobs:
       # `failure`) for a skipped step, so this leg preserves the positive polarity that keeps a
       # skipped filer — the steady-state `performed` run — from firing the email.
       - name: Email notification (rung-2 sweep — the scratch-config finding could not reach its issue channel)
+        timeout-minutes: 2
         if: >-
           always()
           && (steps.scratch_cfg_issue.outputs.channel_failed == 'true'
@@ -2955,8 +2956,8 @@ jobs:
   # job is what turns that red into a message.
   inngest-rehearsal-orphan-sweep:
     runs-on: ubuntu-24.04
-    # Above the sum of the step bounds (2 + 3 + 6 + 2 + 2): a job-level cancel skips `failure()`, so the cap must never fire first.
-    timeout-minutes: 20
+    # Above the sum of the step bounds (2 + 3 + 6 + 2 + 2 = 15): a job-level cancel skips `failure()`, so the cap must never fire first.
+    timeout-minutes: 25
     # Hygiene only, NOT a security boundary (the dropped environment carried the main-only policy).
     if: github.ref == 'refs/heads/main'
     steps:
@@ -2998,6 +2999,7 @@ jobs:
           doppler_rc=0
           TOKEN="$(timeout -k 5 60 doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform 2>/dev/null)" || doppler_rc=$?
           unset DOPPLER_TOKEN
+          TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"  # the masked, checked and sent value is this one
           if [[ "$doppler_rc" == 124 || "$doppler_rc" == 137 ]]; then
             echo "::error::orphan_sweep_doppler_timeout — the secret store was killed or did not answer within 60 s; this sweep has no verdict (this is not a missing credential)."
             exit 1
@@ -3013,8 +3015,6 @@ jobs:
             bc_refuse scheduled-terraform-drift TOKEN
             exit 1
           fi
-          # bc_ok_var judged the value with trailing whitespace trimmed; send exactly that value.
-          TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
           # PAGINATION IS CHECKED, not assumed: 50 is Hetzner's per_page MAXIMUM, so a
           # truncated first page would produce a clean verdict from an incomplete list.
           # Fail CLOSED: an unreachable API is not evidence that nothing leaked.
