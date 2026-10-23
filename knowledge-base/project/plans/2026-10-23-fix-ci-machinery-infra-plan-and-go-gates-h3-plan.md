@@ -14,6 +14,41 @@ brand_survival_threshold: none
 
 # fix(ci): skip data-read-only infra roots in the PR terraform-plan matrix; tolerate verified resolver arms in go-session-gates H3
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23
+**Sections enhanced:** gates verified + observability probe corrected + self-demonstration AC sharpened
+**Research agents used:** none — this harness has no Task/spawn tool; repo research, learnings scan, ADR check, and all deepen halt-gates were run inline by the planning agent
+
+### Key Improvements (deepen pass)
+
+1. `discoverability_test.command` rewritten after the sharp-edges pass — the first draft used `bash -c '… && …'` which Check 10's shell-active byte reject (`&`) would have failed at ship; now `rg -l . <sentinel>` proving existence AND non-emptiness in one probe.
+2. AC7/AC8 sharpened to note this PR's own run is the end-to-end proof: the sentinel lands under `apps/cla-evidence/infra/**`, so `validate` runs and the `plan` leg is absent by construction on this very PR.
+3. Verified every cited issue/PR number live: #10715 + #10714 OPEN (no closing PRs), #10679 MERGED 2026-10-20, #8401/#7624/#4012/#7299/#6454 CLOSED, #8209 OPEN, #8919 MERGED. Rule-id citations verified against `AGENTS.md` (`wg-use-closes-n-in-pr-body-not-title-to` active).
+4. Confirmed merge-blast-radius: no `apply-*.yml` workflow targets `apps/cla-evidence/infra` — merging mutates no production; the workflow's `paths:` filter does re-trigger Infra Validation on this diff (self-demonstrating).
+
+### New Considerations Discovered
+
+- `detect-changes`' `dirs` step output `has-doppler-token` vs `plan_directories` naming style differs (`kebab` output name vs `snake` step key) — the plan mirrors the existing `outputs:` indirection rather than inventing a new convention.
+- The `plan` job's `if:` retains `github.event_name == 'pull_request'` and the `check-secrets` conjunct unchanged; only the directories conjunct is repointed — the push/dispatch arms still derive `plan_directories` but nothing consumes it there.
+- H3's allowlist deliberately rejects a hypothetical `verified=true` on `none`/`devin-cache-nomatch` (structurally impossible today) so a future resolver bug surfaces as a test failure, not a silent pass.
+
+### Deepen gate ledger
+
+| Gate | Result |
+|------|--------|
+| 4.4 precedent-diff | pass — jq/sed/jq-aggregation pipeline is the repo's own precedent (`detect_infra_dirs`); no SQL/atomic-write/lock pattern |
+| 4.45 verify-the-negative | pass — negative claims (`no consumer reads`, `fails identically on main`, `cannot ever succeed`) each grepped during research |
+| 4.5 network-outage | n/a — no trigger tokens |
+| 4.55 downtime & cutover | n/a — no serving surface touched |
+| 4.6 User-Brand Impact | pass — `none` + scope-out reason for the two sensitive paths |
+| 4.7 Observability | pass — 5 fields, `rg` allowlisted, literal `expected_output`, <15s |
+| 4.8 PAT-shape | pass — grep clean after Sharp-Edge rewording |
+| 4.9 UI-wireframe | n/a — no UI-surface paths |
+| 4.10 Encryption posture | n/a — no `.tf`, store, or new connection |
+| 4.11 Guard Contract | pass — `lint-guard-contract.py` green (2 entries, structural assemblies) |
+| 4.12 Scope Check | pass — 1 unfenced section, all rows mapped/justified, `Recommendation: single PR` |
+
 Two small CI/test-machinery defects in one PR — both `meta/machinery`,
 `domain/engineering`, `type/bug`, both surfaced 2026-10-20, both
 "Fix-Size: small" per their issues. Spec lacks valid `lane:` — defaulted to
@@ -161,7 +196,8 @@ and the provider docs are not load-bearing for the chosen mechanism.
 Replace the three `want_in "$h3_out" "gate=${g} source=plugin-root-token
 verified=true"` rows with a per-gate extract-then-classify:
 
-- extract the `SOLEUR_PLUGIN_ROOT_RESOLVE gate=${g} ` line from `h3_out`;
+- extract the `SOLEUR_PLUGIN_ROOT_RESOLVE` line for `gate=${g}` (trailing
+  space in the grep) from `h3_out`;
 - one `ck` per gate (3 total — floor arithmetic unchanged): PASS iff the line
   ends `verified=true` AND `source` is one of the healthy arms
   `{plugin-root-token, grok-env, devin-cache}`; FAIL on a missing line,
@@ -316,8 +352,8 @@ or an unlisted arm fails.
 **Assembly.** The per-gate loop in `plugins/soleur/test/go-session-gates.test.sh`'s
 H3 block over `GATE_NAMES=(readiness cloud-detect session-start)` — the members
 are the three delivered gate fences in `plugins/soleur/commands/go.md`, and the
-extraction greps `SOLEUR_PLUGIN_ROOT_RESOLVE gate=<name> ` (trailing space) per
-member. The allowlist is the resolver's own verified arm set; the guard's
+extraction greps `SOLEUR_PLUGIN_ROOT_RESOLVE gate=<name>` with a trailing
+space (exact prefix, not a partial gate name) per member. The allowlist is the resolver's own verified arm set; the guard's
 dispatch is the `claude -p` spawn plus the extraction, which fails loudly (no
 line → FAIL, never SKIP).
 

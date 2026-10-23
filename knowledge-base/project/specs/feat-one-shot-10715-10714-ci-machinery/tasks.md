@@ -13,7 +13,7 @@ Closes #10715, Closes #10714.
 
 ## Phase 2 — #10714: H3 verified-arm tolerance
 
-- [ ] 2.1 In `plugins/soleur/test/go-session-gates.test.sh` H3 block: per gate, extract the `SOLEUR_PLUGIN_ROOT_RESOLVE gate=${g} ` line; PASS iff it ends `verified=true` and `source` ∈ `{plugin-root-token, grok-env, devin-cache}`; FAIL on missing line / `verified=false` / unlisted arm. Exactly 3 `ck` (floor arithmetic preserved); pass message carries the captured line
+- [ ] 2.1 In `plugins/soleur/test/go-session-gates.test.sh` H3 block: per gate, extract the `SOLEUR_PLUGIN_ROOT_RESOLVE` line for `gate=${g}`; PASS iff it ends `verified=true` and `source` ∈ `{plugin-root-token, grok-env, devin-cache}`; FAIL on missing line / `verified=false` / unlisted arm. Exactly 3 `ck` (floor arithmetic preserved); pass message carries the captured line
 - [ ] 2.2 Update the H3 comment block: arm is environment-dependent; `verified=true` is the invariant; `devin-cache` is the healthy Devin path per go.md
 - [ ] 2.3 `SOLEUR_GO_GATES_SKIP_H3=1 bash plugins/soleur/test/go-session-gates.test.sh` green at ≥239 assertions; unskipped run on a `claude`-carrying host if available (≥241)
 
