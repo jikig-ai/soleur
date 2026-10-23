@@ -15,7 +15,7 @@ tags:
 
 If you use AI tools to run parts of your business, you have already made a quiet bargain: you stopped checking every line, because checking every line is the job you were trying to stop doing. The leverage is real. So is the question underneath it — what if it's wrong?
 
-That question is the number-one hesitation founders have about delegating to AI, and it deserves a better answer than "trust me." Last week it got a much better answer. Addy Osmani — an engineering leader whose writing on AI-assisted development is among the most followed in the industry — published [a checklist for agentic verification](https://addyo.substack.com/p/agentic-verification): the practice of giving an AI system ways to check its own work, so a human reviews evidence instead of re-doing the work.
+That question is the number-one hesitation founders have about delegating to AI, and it deserves a better answer than "trust me." It just got a much better answer. Addy Osmani — an engineering leader whose writing on AI-assisted development is among the most followed in the industry — published [a checklist for agentic verification](https://addyo.substack.com/p/agentic-verification): the practice of giving an AI system ways to check its own work, so a human reviews evidence instead of re-doing the work.
 
 We read it the day it came out, measured ourselves against every row, and shipped what was missing. Seven changes in four days — some in our own codebase, most in the workflows we hand to the founders who use Soleur. But the speed is not the story worth telling. The story is that almost every piece of verification machinery we shipped arrived with a real defect in the machinery itself — caught by reviewers before a single user saw it. A checklist for trusting AI work turns out to be the easy half. The hard half is trusting the verifiers.
 
@@ -88,7 +88,7 @@ The reason our four days produced something trustworthy is not that we built fas
 
 You cannot personally check everything your AI tools produce. Nobody running a company alone can — that is the whole reason for the tools. So the question was never whether to trust; it is what trustworthy looks like.
 
-It looks like this: checks that behave like a real user, rules tested against thousands of cases you would never think to try, a map of the product that cannot quietly drift, proof when new replaces old, and flakes quarantined instead of retried into silence. And then — the part this week taught us — reviewers who grade the checks themselves, so a green light means something was actually tested, not merely run.
+It looks like this: checks that behave like a real user, rules tested against thousands of cases you would never think to try, a map of the product that cannot quietly drift, proof when new replaces old, and flakes quarantined instead of retried into silence. And then — the part those four days taught us — reviewers who grade the checks themselves, so a green light means something was actually tested, not merely run.
 
 You stay the decision-maker. What changes is what deciding costs: evidence arrives already examined, and the examiners were examined too. If "what if it's wrong?" is the question keeping you from delegating real work to AI, [join the waitlist](https://soleur.ai/pricing/#waitlist) — this is the system we built to answer it.
 

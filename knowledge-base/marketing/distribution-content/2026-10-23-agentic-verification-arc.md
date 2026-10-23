@@ -10,7 +10,7 @@ issue_reference: "#10902"
 ## X/Twitter Thread
 
 **Tweet 1 (Hook):**
-A checklist for trusting AI work was published last week by one of the most-read voices in engineering.
+A checklist for trusting AI work was just published by one of the most-read voices in engineering.
 
 We shipped all of it in four days.
 
@@ -50,7 +50,7 @@ https://soleur.ai/blog/agentic-verification-checklist-shipped/?utm_source=x&utm_
 
 ## Bluesky
 
-A checklist for trusting AI work was published last week. We shipped all of it in four days — and the reviews found real bugs in the verifiers themselves.
+A checklist for trusting AI work was just published. We shipped all of it in four days — and the reviews found real bugs in the verifiers themselves.
 
 Build log, defects and all: https://soleur.ai/blog/agentic-verification-checklist-shipped/
 
@@ -77,7 +77,7 @@ Full post: https://soleur.ai/blog/agentic-verification-checklist-shipped/?utm_so
 
 ## LinkedIn Personal
 
-A checklist for trusting AI work was published last week. We shipped all of it in four days — and the reviews found real bugs in the verifiers.
+A checklist for trusting AI work was just published. We shipped all of it in four days — and the reviews found real bugs in the verifiers.
 
 Addy Osmani's agentic-verification essay is the clearest answer I've seen to the question every founder asks about AI: "what if it's wrong?" Property-based testing. A maintained feature map. Old-versus-new differential testing. Flake quarantine. Guardrails you can install.
 
