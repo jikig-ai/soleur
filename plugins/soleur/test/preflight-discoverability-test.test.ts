@@ -3004,7 +3004,21 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // through the Doppler soleur/prd_terraform BETTERSTACK_QUERY_* connection; the warehouse has no unauthenticated read path.
   // NO SUBSTITUTE: the offline suite drives the synthetic against a mock docker and proves the verdict logic, not that a live
   // host emitted the line. Genuine.
-  const BASELINE_DECLARED_PROBES = 74;
+  // #10786 (2026-10-22): +1 (74 -> 75) for `2026-10-22-fix-rehearsal-skip-persistence-probe-marker-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/t5-skip-persistence-bound-7510.sh`) downloads the Actions run logs of the
+  // last 20 successful main `infra-validation.yml` runs through `gh run view --log` and prints PASS, FAIL or TRANSIENT. NO
+  // SUBSTITUTE: run logs are retrievable only through the authenticated GitHub API (GH_TOKEN with actions:read), so no
+  // unauthenticated probe verifies the same property; the offline suite drives the probe against stubs and the real runner's
+  // stdout, and proves the contract, not that the live logs carry the relayed lines. Genuine.
+  // #10136 (2026-10-22): +1 (75 -> 76) for `2026-10-22-fix-inngest-canary-inspect-duplicate-env-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep 'INNGEST_LINK: class=' --limit 1`)
+  // reads the web hosts' `ci-deploy` journald rows through the ClickHouse HTTP connection credential
+  // (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the rows are shipped by the host's own
+  // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the hosts are no-SSH, and
+  // the offline suites drive the canary check and the scrub against stubs and prove the event grammar, not that the stored stream carries it. Genuine.
+  const BASELINE_DECLARED_PROBES = 76;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
