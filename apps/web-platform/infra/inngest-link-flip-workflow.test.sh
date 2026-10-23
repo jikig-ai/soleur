@@ -742,8 +742,15 @@ if mutate offguard 's/^  flip_load_bearer; flip_require_peers$/  flip_load_beare
   [[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "C9 with an idle guard on off, a running apply blocks the release valve (so B16c can see its absence)" || bad "C9 rc=$RC dispatched=$(dispatched "$D")"
 fi
 
+# A-readline: the closing sentence names the canary_ok row only for an https verdict (a flag-off deploy runs no canary layer, so the OFF and
+# REVERTED verdicts must not ask for a row that cannot exist); both variants keep the resolved-row query.
+RL_HTTPS="$( source "$BODY"; FLIP_T0=1760000000; flip_read_line 'state=https_pending scheme=https' )"
+RL_HTTP="$( source "$BODY"; FLIP_T0=1760000000; flip_read_line 'state=http_default scheme=http' )"
+[[ "$RL_HTTPS" == *"class=canary_ok"* && "$RL_HTTPS" == *"class=resolved"* ]] && ok "A-readline-1 the https verdict's closing sentence asks for the canary_ok row beside the resolved row" || bad "A-readline-1 https sentence" "$RL_HTTPS"
+[[ "$RL_HTTP" != *"canary_ok"* && "$RL_HTTP" == *"class=resolved"* ]] && ok "A-readline-2 a flag-off verdict's closing sentence never asks for a canary_ok row" || bad "A-readline-2 http sentence" "$RL_HTTP"
+
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=153
+FLOOR=155
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1
