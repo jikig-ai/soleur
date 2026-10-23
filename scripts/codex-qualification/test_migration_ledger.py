@@ -10,7 +10,7 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / 'apps/web-platform/scripts'
 
 class MigrationLedger(unittest.TestCase):
-    def capture(self, bodies, fail=False, producer_failure=None, partial_output=False):
+    def capture(self, bodies, fail=False, producer_failure=None, partial_output=False, fail_barrier=False):
         with tempfile.TemporaryDirectory(prefix='codex9051-ledger-') as name:
             root = Path(name)
             for path in ('scripts/sql', 'supabase/migrations', 'bin'):
@@ -40,6 +40,7 @@ else:
 with open(os.environ['CAPTURE'], 'a') as handle:
     handle.write(json.dumps({'argv':args,'sql':text})+'\\n')
 if '-f' in args and os.environ['FAIL_APPLY']=='1': sys.exit(1)
+if '-c' in args and os.environ['FAIL_BARRIER']=='1' and 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment' in text: sys.exit(1)
 ''')
             for path in ('git', 'psql'):
                 (root/'bin'/path).chmod(0o755)
@@ -58,7 +59,8 @@ os.execv('/usr/bin/COMMAND', ['COMMAND', *sys.argv[1:]])
                    'DATABASE_URL': 'postgres://synthetic.invalid/never-contacted',
                    'CAPTURE': str(root/'capture.jsonl'), 'FAIL_APPLY': '1' if fail else '0',
                    'FAIL_PRODUCER_TARGET': producer_failure[1] if producer_failure else '',
-                   'PARTIAL_OUTPUT': '1' if partial_output else '0'}
+                   'PARTIAL_OUTPUT': '1' if partial_output else '0',
+                   'FAIL_BARRIER': '1' if fail_barrier else '0'}
             result = subprocess.run(['bash', str(root/'scripts/run-migrations.sh'), '--bootstrap=skip'],
                                     cwd=root, env=env, capture_output=True, text=True, timeout=15)
             captures = [json.loads(line) for line in (root/'capture.jsonl').read_text().splitlines()]
@@ -130,6 +132,16 @@ os.execv('/usr/bin/COMMAND', ['COMMAND', *sys.argv[1:]])
                         barriers = [call for call in calls if '-c' in call['argv'] and 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment' in call['sql']]
                         self.assertEqual(len(barriers), 1, 'the legacy grant barrier must commit before fallible assembly')
                         self.assertIn('REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged', barriers[0]['sql'])
+
+    def test_failed_legacy_grant_barrier_refuses_before_assembly_or_apply(self):
+        result, applies, calls = self.capture(
+            {'170_codex_history_ack_owner_scope.sql': 'SELECT 170;\n'}, fail_barrier=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Could not close Codex acknowledgment RPC grants before migration 170', result.stdout)
+        self.assertEqual(applies, [], 'failed revoke barrier must prevent every migration apply')
+        barriers = [call for call in calls if '-c' in call['argv'] and 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment' in call['sql']]
+        self.assertEqual(len(barriers), 1)
+        self.assertEqual(calls[-1], barriers[0], 'runner must stop immediately after the failed barrier')
 
     def test_existing_schema_probe_assertions_with_networkless_git(self):
         # Existing suite hardcodes inner PATH via env -i. Preserve its test

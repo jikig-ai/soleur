@@ -519,6 +519,10 @@ describe("Codex real production handler boundary", () => {
     const nonce = original.frames()[0].noticeNonce;
     await acknowledgeNotice(nonce);
     expect(original.frames()).toContainEqual(expect.objectContaining({ type: "codex_history_transfer_acknowledged" }));
+    expect(original.frames().filter((frame) => frame.type === "error")).toHaveLength(0);
+    expect(fixture.reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), {
+      feature: "codex-history-transfer", op: "reconcile-member-acknowledgment",
+    });
 
     const reconnected = noticeSession();
     await acknowledgeNotice(nonce);
@@ -527,6 +531,30 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
     expect(fixture.from).not.toHaveBeenCalledWith("messages");
     expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when acknowledgment commit and tenant read-back both fail", async () => {
+    fixture.generation = 1;
+    const client = noticeSession();
+    let acknowledgmentReads = 0;
+    fixture.rpc.mockImplementation(async (name: string) => {
+      if (name === "codex_history_transfer_acknowledged") {
+        acknowledgmentReads += 1;
+        return acknowledgmentReads === 1
+          ? { data: false, error: null }
+          : { data: null, error: new Error("Synthetic read-back failure") };
+      }
+      if (name === "mark_codex_history_transfer_notice_delivered") return { data: true, error: null };
+      if (name === "record_codex_history_transfer_acknowledgment") return { data: false, error: null };
+      return { data: true, error: null };
+    });
+
+    await noticeChat();
+    await acknowledgeNotice(client.frames()[0].noticeNonce);
+
+    expect(client.frames()).not.toContainEqual(expect.objectContaining({ type: "codex_history_transfer_acknowledged" }));
+    expect(client.frames().filter((frame) => frame.type === "error")).toHaveLength(1);
+    expect(fixture.rpc).toHaveBeenCalledWith("record_codex_history_transfer_acknowledgment", expect.anything());
   });
 
   it("does not acknowledge into a replacement session after waiting for delivery", async () => {

@@ -3325,10 +3325,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         if (!delivered && notice) {
           // Share a retry with acknowledgments that arrived together.
           const pending = notice.completion;
-          if (!await pending && notice.completion === pending) {
+          const priorDeliveryFailed = !await pending;
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (priorDeliveryFailed && notice.completion === pending) {
             notice.completion = persistCodexNoticeDelivery(userId, notice);
           }
-          if (!await notice.completion) {
+          const retryDelivered = await notice.completion;
+          if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
+          if (!retryDelivered) {
             acknowledgmentRecorded = await readAcknowledgment();
             if (sessions.get(userId) !== session || session.conversationId !== msg.conversationId) break;
             if (!acknowledgmentRecorded) throw new Error("Codex notice delivery is not yet recorded; retry acknowledgment");
