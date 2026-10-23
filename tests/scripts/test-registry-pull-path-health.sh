@@ -281,15 +281,21 @@ else
 fi
 
 # Every restore exit code must abort the gate — the rehearsal is the PASS condition, so any
-# failure of it is a failure to establish authorisation.
-for code in 2 3 4 5 6; do
+# failure of it is a failure to establish authorisation. Each code must also be ENUMERATED: the
+# gate's own `A2 ABORT` line names `exit <code>` and is not the `unenumerated` fallthrough. The
+# assertions read that one line only, because the restore stub's output is printed too and must
+# neither satisfy nor poison them. Exit 1 is deliberately absent from this list (it has its own
+# arm, and the workflow-side gap for it is tracked in #10932); 78 is the xtrace refusal.
+for code in 2 3 4 5 6 78; do
   W="$(world "$TMP/w-a2-$code")"
   restore_stub "$W/restore" "$code"
   out="$(run_gate "$W")"; rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    pass "A2: rehearsal exit $code => ABORT (no authorisation without a proven restore)"
+  abort_line="$(printf '%s\n' "$out" | grep -F 'A2 ABORT' | head -1)"
+  if [[ "$rc" -ne 0 ]] && grep -qE "exit ${code}[^0-9]" <<<"$abort_line" \
+     && ! grep -qF "unenumerated" <<<"$abort_line"; then
+    pass "A2: rehearsal exit $code => ABORT, enumerated (no authorisation without a proven restore)"
   else
-    fail "a failed rehearsal (exit $code) must abort the gate" "$rc" "$out"
+    fail "a failed rehearsal (exit $code) must abort the gate with an enumerated message" "$rc" "$out"
   fi
 done
 

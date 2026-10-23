@@ -323,11 +323,77 @@ else
   _report "W8 every doppler-calling step supplies a token (${_dop_seen} steps inspected)" ok
 fi
 
+# ── W9: every exit code the restore engine documents has its OWN arm in the restore step. ────
+# The restore step maps the engine's exit code to one operator-facing `::error::` line. Exit 78
+# (the engine refusing to run traced) had no arm and fell into the `*)` text that calls it "a
+# defect worth filing", and the arms for 2 and 5 kept describing only the older meaning. Nothing
+# pinned the enumeration: the gate suite's loop asserts only `rc != 0`, which the fallthrough
+# also satisfies. So the population is DERIVED from the engine's own header table, and every
+# member must have one explicit arm before `*)`.
+#
+# Exit 1 is deliberately OUTSIDE this population: the engine header does not list it, and its
+# workflow arm is tracked in #10932. Do not "fix" a failure here by adding 1 to the list.
+RESTORE_ENGINE="${ROOT}/scripts/registry-restore-from-ghcr.sh"
+RESTORE_BODY="$(_step_body "Restore production's pinned image set from GHCR")"
+_w9_codes() {
+  # The header table runs from the shebang to the first non-comment line. The pattern needs
+  # whitespace AFTER the digits and a letter after that, so prose such as `#   1. as a REHEARSAL`
+  # (digit then a dot) is not a table row.
+  awk '/^[^#]/ { exit } /^#[[:space:]]+[0-9]+[[:space:]]+[A-Za-z]/ { print $2 }' "$RESTORE_ENGINE"
+}
+w9_problems=""
+w9_codes="$(_w9_codes)"
+w9_count="$(printf '%s\n' "$w9_codes" | grep -c '^[0-9][0-9]*$')"
+if [[ ! -f "$RESTORE_ENGINE" ]]; then
+  w9_problems="the restore engine is missing at ${RESTORE_ENGINE}"
+elif [[ -z "$RESTORE_BODY" ]]; then
+  w9_problems="the restore step body extracted empty (step renamed?)"
+elif [[ "$w9_count" -lt 7 ]]; then
+  w9_problems="the engine header table yielded ${w9_count} codes, expected at least 7 (header reshaped?)"
+else
+  w9_star="$(grep -nE '^[[:space:]]*\*\)[[:space:]]' <<<"$RESTORE_BODY" | head -1 | cut -d: -f1)"
+  if [[ -z "$w9_star" ]]; then
+    w9_problems="the restore step has no *) fallthrough arm"
+  fi
+  for w9_code in $w9_codes; do
+    if [[ "$w9_code" == 0 ]]; then
+      # The success arm prints a plain `restore:` line and can carry no ::error:: text.
+      w9_pat='^[[:space:]]*0\)[[:space:]]+echo '
+    else
+      w9_pat="^[[:space:]]*${w9_code}\\)[[:space:]]+echo .*::error::restore FAILED exit ${w9_code}[^0-9]"
+    fi
+    w9_hit="$(grep -nE -- "$w9_pat" <<<"$RESTORE_BODY" | head -1)"
+    w9_line="${w9_hit%%:*}"
+    w9_arm="${w9_hit#*:}"
+    if [[ -z "$w9_hit" ]]; then
+      w9_problems="${w9_problems}${w9_problems:+; }no explicit arm for exit ${w9_code}"
+      continue
+    fi
+    if [[ -n "$w9_star" && "$w9_line" -ge "$w9_star" ]]; then
+      w9_problems="${w9_problems}${w9_problems:+; }the arm for exit ${w9_code} is after *) so it is unreachable"
+    fi
+    if grep -qiF 'unenumerated' <<<"$w9_arm"; then
+      w9_problems="${w9_problems}${w9_problems:+; }the arm for exit ${w9_code} uses the unenumerated wording"
+    fi
+    case "$w9_code" in
+      2|5) grep -qiF 'failed locally' <<<"$w9_arm" \
+             || w9_problems="${w9_problems}${w9_problems:+; }the arm for exit ${w9_code} does not name the local login failure" ;;
+      78)  grep -qiF 'traced invocation' <<<"$w9_arm" \
+             || w9_problems="${w9_problems}${w9_problems:+; }the arm for exit 78 does not say traced invocation" ;;
+    esac
+  done
+fi
+if [[ -z "$w9_problems" ]]; then
+  _report "W9 every engine exit code (${w9_count} from the header) has its own arm in the restore step" ok
+else
+  _report "W9 every engine exit code has its own arm in the restore step" fail "$w9_problems"
+fi
+
 # ── Anti-vacuity assertion floor ────────────────────────────────────────────────────────────
 # Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
 # suite asserting nothing is byte-indistinguishable from one that passed, because `fails` is a
 # single unguarded integer. Pinned EXACTLY: a `>=` re-opens the hole on the next added row.
-EXPECTED_ASSERTIONS=23
+EXPECTED_ASSERTIONS=24
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"
