@@ -20,7 +20,8 @@
 #
 # Hook stdin: JSON payload from Claude Code with tool_name + tool_input.
 # Hook stdout: JSON {hookSpecificOutput: {hookEventName, permissionDecision, permissionDecisionReason}}.
-# Hook exit code: 0 always (JSON output controls the gate).
+# Hook exit code: 0 (JSON output controls the gate); the one exception is the canonical fixture-dir guard, which
+# exits 2 on an empty or relative temp path.
 #
 # Fail-open conditions (the hook allows the commit + emits a warn):
 #   - gitleaks binary not installed on PATH          (bypass "gitleaks not installed")
@@ -41,42 +42,47 @@
 # `gitleaks-staged` step can still block the same commit (and, with an
 # unrunnable gitleaks, fail it — see #8271).
 #
-# THE WOULD-BE INDEX (#10696). This hook runs BEFORE the Bash command it guards, so for a command that stages
+# THE WOULD-BE INDEX (#10696, ADR-296). This hook runs BEFORE the Bash command it guards, so for a command that stages
 # AND commits (`git add -A && git commit`, `git commit -a`, `git commit -am`, `git commit -- <path>`) the index
 # on disk does not yet hold what the commit will record. When the command's own staging is visible to the
 # walker (lib/commit-target-roots.sh sets CTR_COMMIT_STAGES), lib/commit-index-sim.sh copies the real index to
 # a temp file inside a 0700 directory this hook allocates, replays the staging onto the COPY (exact replay of
 # the literal `git add` words when the directory is proven, else the superset `git add -A`), exports the copy
-# plus a quarantined object directory, and scan_root runs inside that window (its gitleaks calls bounded). Nothing in the real
-# index, real object store, real git directory or working tree is touched. A plain `git commit -m x` reaches
-# none of this (no simulation, no new git call). gitleaks resolves to a generated wrapper first on PATH in sim
-# mode: it applies the time left of ONE 30 s deadline and, on expiry, the hook DENIES (expiry never bypasses).
+# plus a quarantined object directory, and scan_root runs inside that window with its gitleaks calls bounded by
+# ONE 30 s deadline for the whole simulation (expiry DENIES; it never bypasses). With a proven directory only the
+# root that directory belongs to is simulated; every other root is scanned against its real index. Nothing in
+# the real index content, listing or git directory and nothing in the working tree is written (the mtime of an
+# existing object may be refreshed). A plain `git commit -m x` is lexed where perl exists but needs no
+# simulation: no new git call.
 #
-#   Situation                                                          Result
-#   benign missing pathspec (trusted git error), no earlier producer   superset scanned; bypass row
-#                                                                      git-commit-secret-scan-sim-failed
-#                                                                      (cause pathspec-missing); allow if clean
-#   missing pathspec and the same command may create it                DENY (the `create` repair)
-#   any other replay failure                                           rebuild with the superset
-#   failed superset / non-literal force-add / temp dir, index copy or
-#   ':' in the objects path / deadline or gitleaks timeout / no bound
-#   tool / batched check-attr failure / config-transforming staging
-#   argument (-c core.*, filter.*, --namespace, GIT_* prefix ...)      DENY (rule id
-#                                                                      git-commit-secret-scan-sim-deny, row text
-#                                                                      mode=... cause=...); repair: run git add as
-#                                                                      its own call, then commit
-#   sim library missing or unreadable                                  DENY every strict commit (lib repair)
+#   Situation                                                           Result
+#   a finding in the would-be index                                     DENY, rule id git-commit-secret-scan, row
+#                                                                       text mode=<exact|superset> cause=finding
+#   a staged path that does not exist (git's own trusted error)         DENY cause=pathspec-missing
+#   any other replay failure                                            rebuild from a fresh copy with the superset
+#   failed superset, force-add with no literal path or in a directory
+#   the command does not prove, temp dir / index copy / ':' in the
+#   objects path, deadline or gitleaks timeout (sim-timeout), gitleaks
+#   error, check-attr failure, an unexpected error (ERR trap),
+#   config-transforming staging or an environment outside the
+#   allowlist (config-refused), content from outside the working tree
+#   (stage-unsimulable)                                                 DENY, rule id
+#                                                                       git-commit-secret-scan-sim-deny, row text
+#                                                                       mode=... cause=...; the repair text is
+#                                                                       chosen from the command's staging style
+#   sim library or walker missing, unreadable or mismatched             DENY every strict commit (lib repair)
 #
-# NAMED RESIDUALS (covered by one follow-up issue; the sim scans the working tree as it is NOW):
-#   - a script or wrapper that runs `git add` inside (the walker sees only the command's own argv);
-#   - content created or changed EARLIER in the same command is denied only when a producer is detected;
-#     `sed -i` / `prettier --write` before `commit -a` or `add -u` is invisible (pre-execution state);
-#   - on a host WITHOUT perl a positional pathspec after `-m "..."` (`git commit -m x tracked.json`) is not seen (perl
-#     hosts lex every strict commit, so it is scanned there);
+# NAMED RESIDUALS (the sim scans the working tree as it is NOW; the contract, the cause table and every residual
+# are indexed once, with their reasons, in knowledge-base/engineering/architecture/decisions/ADR-296-*.md):
+#   - what an EARLIER command in the same call changes (a producer, `sed -i`, `prettier --write`, an edit of
+#     .gitignore, config or attributes) is not seen: the walker reads the command's argv, not its effects;
+#   - a script or wrapper that runs `git add` inside, and user-config aliases;
+#   - on a host WITHOUT perl a positional pathspec after `-m "..."` is not seen (perl hosts lex every strict commit);
 #   - the sim scans RAW bytes (clean filters are pinned off): a clean filter / Git LFS may record other bytes;
-#   - content a verb brings from OUTSIDE the working tree (`apply --index`, `cherry-pick -n`, `stash pop`,
-#     `merge`, `checkout <ref> --`) is not covered: those verbs force the superset, which scans the working tree;
-#   - other tools that stage (an IDE, a git alias), and a configured core.fsmonitor daemon (not started by the sim).
+#   - checkout, stash, read-tree, cherry-pick, merge, revert, am, restore, mv and rm: history-sourced or removal-only
+#     content; those verbs force the superset, which scans the working tree;
+#   - other tools that stage (an IDE), a configured core.fsmonitor daemon (not started by the sim), a SIGKILL that
+#     leaves a 0700 temp directory behind, and a harness that sends no payload cwd (Devin: always the superset).
 
 set -euo pipefail
 
@@ -93,33 +99,69 @@ allow() {
   exit 0
 }
 
-# sim_recovery — the recovery text for a finding in a WOULD-BE index (#10696). The file is not staged yet, so
-# the separate-call advice ('git restore --staged <path>') would loop; the advice that works differs for a
-# file the command would ADD and for a tracked file it would take through -a or a pathspec.
-sim_recovery() {
-  local why=""
-  if [ "${CIS_MODE:-}" = superset ] && [ -n "${CIS_WHY:-}" ]; then
-    why=" The simulation used a full 'git add -A' (${CIS_WHY}), so unrelated untracked files are scanned too."
+# sim_split_advice — the retry that works for THIS command's own staging style (CTO row 34). "Run git add as its own
+# call" has no `git add` to run for `commit -a` or a pathspec commit, and the translation changes meaning for a
+# pathspec (a plain commit after `git add x` records everything already staged, not only x).
+sim_split_advice() {
+  if [ "${CTR_COMMIT_ALL:-0}" -eq 1 ]; then
+    printf '%s' "run 'git add -u' (or 'git add <paths>') as its own call, then run the commit again WITHOUT -a (-a / -p / --all stage by themselves)"
+  elif [ "${_CTR_PATHSMODE:-0}" -eq 1 ] || [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then
+    printf '%s' "run 'git add <paths>' as its own call, check that 'git diff --cached --name-only' lists exactly those files, then run the commit WITHOUT the paths (a plain commit records what is staged)"
+  else
+    printf '%s' "run 'git add <paths>' as its own call, then run the commit as a second call"
   fi
-  if [ "${CTR_COMMIT_ALL:-0}" -eq 1 ] || [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then
-    if [ "${#CTR_ADD_EXACT[@]}" -eq 0 ] && [ "${CIS_MODE:-}" = exact ]; then
-      printf '%s' "The finding is in a TRACKED file that this commit's own -a / pathspec would record; nothing is staged yet. Recovery: scrub the secret bytes in place (never commit-then-rotate); a .gitignore entry does not help for a tracked file. Then retry.${why}"
-      return 0
-    fi
-  fi
-  printf '%s' "Nothing is staged yet: this same command's own git add / commit flags would stage the file. Recovery: scrub the secret bytes (never commit-then-rotate), or delete the file, or add it to .gitignore; or stage only the intended paths in a separate call (git add <path>) and run the commit in the next call.${why}"
 }
 
-# deny <reason> [rule id] [ledger row text]. Under a would-be index (CIS_ACTIVE=1) a finding is a SIM deny: the
-# reason is cut at the stable anchor that opens the staged-index recovery advice and the sim advice replaces it,
-# and the ledger row is a distinct rule id carrying only enumerated words (mode and cause), never git's text.
-deny() {
-  local reason="$1" rule="${2:-git-commit-secret-scan}" row="${3-}" anchor='The default action is to scrub'
-  if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
-    rule=git-commit-secret-scan-sim-deny
-    case "$reason" in
-      *"$anchor"*) reason="${reason%%"$anchor"*}$(sim_recovery)" ;;
+# _san <text> — a file or directory name as it may appear in a deny reason: control characters (C0, DEL, C1), the
+# Unicode line and paragraph separators and the bidi overrides become '?', and the text is capped at 160 characters.
+_SAN_JQ='gsub("[\u0001-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]"; "?")'
+_san() {
+  printf '%s' "$1" | jq -Rrs "$_SAN_JQ | .[0:160]" 2>/dev/null || printf '%s' '(unprintable name)'
+}
+
+# sim_recovery <root> <first finding file> — the recovery text for a finding in a WOULD-BE index (#10696), chosen from
+# facts, not from the shape of the command: is the root one the command names, is the file already staged in the REAL
+# index, is it tracked, and why the superset was used. The real repository is read with the sim variables unset.
+sim_recovery() {
+  local root="$1" f="$2" state=untracked named=0 r tgt="" cause="" root_s tgt_s lead
+  local g=(env -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_LITERAL_PATHSPECS=1 GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C "$root")
+  if [ -n "$f" ]; then
+    if [ -n "$("${g[@]}" diff --cached --name-only -- "$f" 2>/dev/null)" ]; then state=staged
+    elif "${g[@]}" cat-file -e "HEAD:$f" 2>/dev/null; then state=tracked
+    fi
+  fi
+  if [ "${#CTR_ROOTS[@]}" -eq 0 ]; then named=1; fi
+  for r in ${CTR_ROOTS[@]+"${CTR_ROOTS[@]}"}; do if [ "$r" = "$root" ]; then named=1; fi; done
+  tgt="${CTR_ROOTS[0]-}"
+  root_s=$(_san "$root"); tgt_s=$(_san "$tgt")
+  if [ "${CIS_MODE:-}" = superset ]; then
+    case "${CIS_WHY:-}" in
+      inexact-word) cause=" The simulation used a full 'git add -A' because a word of the staging command cannot be replayed literally (a glob, a variable, an option or a launcher): write literal paths (git add clean.txt) and the scan covers only those." ;;
+      unproven-dir|dir-not-root) cause=" The simulation used a full 'git add -A' because the hook cannot prove which directory the command stages in: start the command with 'cd /abs/path &&', or put the same '-C /abs/path' on every git add and on the commit." ;;
+      loop|opaque|replay-failed) cause=" The simulation used a full 'git add -A' because the command stages in a way the hook cannot replay (a loop, a function, or a verb such as stash, merge or checkout): run 'git add <paths>' as its own call and the commit in the next call." ;;
     esac
+  fi
+  lead="The default action is to scrub the secrets — never commit-then-rotate."
+  if [ "$named" -eq 0 ]; then
+    printf '%s' "$lead This command does not name ${root_s}: that repository is scanned only because the shell (or the harness cwd) sits there, and the simulated staging reached the file. Recovery: run 'cd ${tgt_s}' as its own call so that directory is the only repository, then run the same command; or scrub the file.${cause}"
+    return 0
+  fi
+  case "$state" in
+    staged)
+      printf '%s' "$lead The file is already staged in ${root_s}. Recovery: (1) run 'git restore --staged <path>' as its OWN call (chained with the commit it is not simulated and the commit is denied again); (2) scrub the secret bytes in place; (3) re-stage the scrubbed file and retry.${cause}" ;;
+    tracked)
+      printf '%s' "$lead The file is TRACKED and changed, and this command's own staging would record it. Recovery: scrub the secret bytes in place (do not delete a tracked file; a .gitignore entry does not help for a tracked file), then run the same command again.${cause}" ;;
+    *)
+      printf '%s' "$lead The file is untracked and this command's own staging would add it. Recovery: scrub the secret bytes, or delete the file, or add it to .gitignore; or stage only the intended files in a separate call: $(sim_split_advice).${cause}" ;;
+  esac
+}
+
+# deny <reason> [rule id] [ledger row text]. A finding keeps the rule id git-commit-secret-scan; under a would-be index
+# (CIS_ACTIVE=1) its row carries the plan mode and cause=finding. Only a simulation FAILURE is the sim-deny rule id
+# (sim_deny), so a counter keyed on the base id still counts every leak denial.
+deny() {
+  local reason="$1" rule="${2:-git-commit-secret-scan}" row="${3-}"
+  if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
     : "${row:=mode=${CIS_MODE:-unknown} cause=finding}"
   fi
   emit "$rule" deny "${row:-git-commit-secret-scan: $reason}"
@@ -440,10 +482,10 @@ sim_deny() {
 }
 
 sim_timeout_deny() {  # <root>
-  sim_deny sim-timeout "BLOCKED: the gitleaks scan of the simulated index of $1 did not finish within the simulation's time limit, so the content the commit would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+  sim_deny sim-timeout "BLOCKED: the gitleaks scan of the simulated index of $1 did not finish within the simulation's time limit (30 s for the whole simulation and the scan together; a very large working tree can overrun it every time, a busy machine can too), so the content the commit would record was NOT scanned and the commit is blocked. Repair: $(sim_split_advice) (the scan then reads the real index)."
 }
 sim_scan_error() {  # <root> <what>
-  sim_deny scan-error "BLOCKED: the scan of the simulated index of $1 did not complete ($2), so the content the commit would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+  sim_deny scan-error "BLOCKED: the scan of the simulated index of $1 did not complete ($2), so the content the commit would record was NOT scanned and the commit is blocked. Repair: $(sim_split_advice)."
 }
 
 # ERRORS. An unguarded failing command under `set -e` exits 1, which the harness treats as NON-blocking: the commit
@@ -454,7 +496,7 @@ sim_err_trap() {
   local rc=$? line="${1-?}"
   trap - ERR
   if [ "$sim_on" -eq 1 ]; then
-    sim_deny internal-error "BLOCKED: the scan of the commit's own staging hit an unexpected error (exit $rc near line $line of the hook), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+    sim_deny internal-error "BLOCKED: the scan of the commit's own staging hit an unexpected error (exit $rc near line $line of the hook), so the content it would record was NOT scanned and the commit is blocked. Repair: $(sim_split_advice)."
   fi
 }
 trap cleanup EXIT
@@ -464,7 +506,7 @@ trap 'sim_err_trap $LINENO' ERR
 # The three report temp files are allocated under the same rule: a failed mktemp must not slide out as exit 1.
 tmp_fail() {
   if [ "$sim_on" -eq 1 ]; then
-    sim_deny temp-dir "BLOCKED: the commit's own staging could not be scanned (a temporary file could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: free space in TMPDIR, then run the same command again."
+    sim_deny temp-dir "BLOCKED: the commit's own staging could not be scanned (a temporary file could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: free space in TMPDIR, then run the same command again; if it keeps failing, $(sim_split_advice)."
   fi
   exit 1
 }
@@ -479,7 +521,7 @@ case "$nodiff_dir" in /*) : ;; *) nodiff_dir="$PWD/$nodiff_dir" ;; esac
 # NEVER allows or exits the hook: only a finding denies. All state is per call, so a root
 # that errors cannot leak into, or end the scan of, the next.
 scan_root() {
-  local repo_root="$1" _p _a _v ca_rc co_rc gl_nodiff=() gl_bound=() gl_cfg_n scan_rc=0 nodiff_rc nd_count nd_files
+  local repo_root="$1" _p _a _v ca_rc co_rc gl_nodiff=() gl_bound=() gl_cfg_n scan_rc=0 nodiff_rc nd_count nd_files nd_i repo_s first_file
   local findings_count=0 findings_summary="" reason
   : > "$report_file"; : > "$nodiff_report"
   assert_fixture_dir "$nodiff_dir"
@@ -514,7 +556,7 @@ scan_root() {
       if [ "$_v" = "unset" ]; then gl_nodiff+=("$_p"); fi
     done < "$nodiff_report"
   elif [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
-    sim_deny check-attr-failed "BLOCKED: the \`-diff\` attribute guard could not run on the simulated index of ${repo_root}, so the content the commit would record was NOT verified and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+    sim_deny check-attr-failed "BLOCKED: the \`-diff\` attribute guard could not run on the simulated index of ${repo_root}, so the content the commit would record was NOT verified and the commit is blocked. Repair: $(sim_split_advice)."
   else
     echo "[git-commit-secret-scan] WARN: the \`-diff\` attribute check failed in $repo_root; files carrying a \`-diff\` attribute were NOT re-scanned." >&2
   fi
@@ -612,8 +654,13 @@ scan_root() {
     fi
     if [ "$nodiff_rc" -eq 1 ] && [ -s "$nodiff_report" ] && grep -q '"RuleID"' "$nodiff_report" 2>/dev/null; then
       nd_count="$(jq -r 'length' "$nodiff_report" 2>/dev/null || echo 0)"
-      nd_files="$(printf '%s, ' "${gl_nodiff[@]}")"
-      deny "BLOCKED: gitleaks found ${nd_count} secret-shaped string(s) in staged file(s) of ${repo_root} carrying a \`-diff\` gitattribute: ${nd_files%, }. A \`-diff\` attribute makes git emit \"Binary files … differ\" with no added lines, so the normal staged scan sees NOTHING in these files — they were re-scanned from their staged blobs. Recovery: (1) scrub the secret bytes (never commit-then-rotate); (2) if the \`-diff\` attribute is not deliberate, remove it from .gitattributes / .git/info/attributes."
+      nd_files=""; nd_i=0
+      for _p in "${gl_nodiff[@]}"; do
+        nd_i=$((nd_i + 1))
+        if [ "$nd_i" -le 5 ]; then nd_files="${nd_files}$(_san "$_p"), "; fi
+      done
+      if [ "$nd_i" -gt 5 ]; then nd_files="${nd_files}and $((nd_i - 5)) more, "; fi
+      deny "BLOCKED: gitleaks found ${nd_count} secret-shaped string(s) in staged file(s) of $(_san "$repo_root") carrying a \`-diff\` gitattribute: ${nd_files%, }. A \`-diff\` attribute makes git emit \"Binary files … differ\" with no added lines, so the normal staged scan sees NOTHING in these files — they were re-scanned from their staged blobs. Recovery: (1) scrub the secret bytes (never commit-then-rotate); (2) if the \`-diff\` attribute is not deliberate, remove it from .gitattributes / .git/info/attributes."
     fi
     if [ "$nodiff_rc" -eq 1 ] && [ "${CIS_ACTIVE:-0}" -eq 1 ]; then sim_scan_error "$repo_root" "the \`-diff\` re-scan reported a failure and no findings"; fi
     if [ "$nodiff_rc" -ne 0 ] && [ "$nodiff_rc" -ne 1 ]; then
@@ -633,7 +680,7 @@ scan_root() {
     # Each finding: {RuleID, File, StartLine}. Cap at 5 to keep the deny
     # reason terse; the operator can re-run gitleaks locally to see the rest.
     findings_summary="$(jq -r '
-      [.[] | "\(.File):\(.StartLine) (\(.RuleID))"] | .[0:5] | join("; ")
+      [.[] | "\(.File | '"$_SAN_JQ"' | .[0:120]):\(.StartLine) (\(.RuleID | '"$_SAN_JQ"' | .[0:60]))"] | .[0:5] | join("; ")
     ' "$report_file" 2>/dev/null || echo "")"
   fi
 
@@ -648,7 +695,15 @@ scan_root() {
     return 0
   fi
 
-  reason="BLOCKED: gitleaks found ${findings_count} secret-shaped string(s) in the staged index of ${repo_root}. Locations: ${findings_summary}. The default action is to scrub the secrets — never commit-then-rotate. Recovery: (1) unstage the offending file(s) in ${repo_root} with 'git restore --staged <path>'; (2) redact the secret bytes in place; (3) re-stage and retry. If the staged content is a captured-real fixture from 'terraform show -json' or similar, strip the '.variables' block — terraform-show-json embeds sensitive HCL variables verbatim regardless of sensitive=true. See knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md."
+  repo_s=$(_san "$repo_root")
+  if [ "${CIS_ACTIVE:-0}" -eq 1 ]; then
+    # the recovery is built from facts about THIS finding and THIS command (sim_recovery), not cut from a fixed text
+    first_file=""
+    first_file=$(jq -r '.[0].File // ""' "$report_file" 2>/dev/null | head -n 1) || first_file=""
+    reason="BLOCKED: gitleaks found ${findings_count} secret-shaped string(s) in the staged index of ${repo_s} (the index this command would record). Locations: ${findings_summary}. $(sim_recovery "$repo_root" "$first_file")"
+  else
+    reason="BLOCKED: gitleaks found ${findings_count} secret-shaped string(s) in the staged index of ${repo_s}. Locations: ${findings_summary}. The default action is to scrub the secrets — never commit-then-rotate. Recovery: (1) unstage the offending file(s) in ${repo_s} with 'git restore --staged <path>'; (2) redact the secret bytes in place; (3) re-stage and retry. If the staged content is a captured-real fixture from 'terraform show -json' or similar, strip the '.variables' block — terraform-show-json embeds sensitive HCL variables verbatim regardless of sensitive=true. See knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md."
+  fi
   deny "$reason"
 }
 
@@ -668,12 +723,12 @@ if [ "${CTR_STAGE_UNSIMULABLE:-0}" -eq 1 ]; then
   sim_deny stage-unsimulable "BLOCKED: this command puts content in the index that comes from outside the working tree (git update-index --add / --cacheinfo / --index-info, or git apply --index / --cached / --3way), so what the commit would record cannot be scanned and the commit is blocked. Repair: run that staging command as its own call, then run the commit as a second call (the scan then reads the real index)."
 fi
 if [ "${CTR_STAGE_REFUSE:-0}" -eq 1 ]; then
-  sim_deny config-refused "BLOCKED: the commit's own staging cannot be simulated safely (${CTR_STAGE_REFUSE_WHY}), so the content it would record was NOT scanned and the commit is blocked. Repair: stage in its own call: run 'git add <paths>' as its own command first (the scan then reads the real index), then run the commit as a second call."
+  sim_deny config-refused "BLOCKED: the commit's own staging cannot be simulated safely (${CTR_STAGE_REFUSE_WHY}), so the content it would record was NOT scanned and the commit is blocked. Repair: $(sim_split_advice) (the scan then reads the real index)."
 fi
 
 if ! sim_dir="$(mktemp -d -t commit-sim-XXXXXX)"; then
   sim_dir=""
-  sim_deny temp-dir "BLOCKED: the commit's own staging could not be simulated (a temporary directory could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+  sim_deny temp-dir "BLOCKED: the commit's own staging could not be simulated (a temporary directory could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: $(sim_split_advice)."
 fi
 # a relative TMPDIR makes mktemp -t return a relative path: canonicalise it once
 case "$sim_dir" in /*) : ;; *) sim_dir="$PWD/$sim_dir" ;; esac
@@ -698,7 +753,7 @@ for _r in "${toml_roots[@]}"; do
   fi
   sim_i=$((sim_i + 1))
   sim_work="$sim_dir/r$sim_i"
-  mkdir -m 700 "$sim_work" 2>/dev/null || sim_deny temp-dir "BLOCKED: the commit's own staging could not be simulated (a temporary directory could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."
+  mkdir -m 700 "$sim_work" 2>/dev/null || sim_deny temp-dir "BLOCKED: the commit's own staging could not be simulated (a temporary directory could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: $(sim_split_advice)."
   sim_brc=0
   cis_build "$_r" "$payload_cwd" "$sim_work" || sim_brc=$?
   case "$sim_brc" in
@@ -710,9 +765,9 @@ for _r in "${toml_roots[@]}"; do
         force-nonliteral|force-unproven-dir)
           sim_deny "$CIS_WHY" "BLOCKED: this command force-adds (git add -f) a path the hook cannot read literally, so the ignored content it would record was NOT scanned and the commit is blocked. Repair: run the force-add as its own call, then run the commit in the next call." ;;
         sim-timeout)
-          sim_deny "$CIS_WHY" "BLOCKED: the commit's own staging could not be simulated within its time limit${CIS_ERR:+ ($CIS_ERR)}, so the content it would record was NOT scanned and the commit is blocked. This is a load condition: re-run when the machine is quieter, or run git add as its own call, then run the commit in the next call." ;;
+          sim_deny "$CIS_WHY" "BLOCKED: the commit's own staging could not be simulated within its time limit${CIS_ERR:+ ($CIS_ERR)}, so the content it would record was NOT scanned and the commit is blocked. The limit is 30 s for the whole simulation and the scan together: a very large working tree can overrun it every time, and a busy machine can too. Repair: $(sim_split_advice) (the scan then reads the real index)." ;;
         *)
-          sim_deny "${CIS_WHY:-superset-failed}" "BLOCKED: the commit's own staging could not be simulated (${CIS_WHY:-failure}${CIS_ERR:+: $CIS_ERR}), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call (the scan then reads the real index)." ;;
+          sim_deny "${CIS_WHY:-superset-failed}" "BLOCKED: the commit's own staging could not be simulated (${CIS_WHY:-failure}${CIS_ERR:+: $CIS_ERR}), so the content it would record was NOT scanned and the commit is blocked. Repair: $(sim_split_advice) (the scan then reads the real index)." ;;
       esac ;;
   esac
   scan_root "$_r"
