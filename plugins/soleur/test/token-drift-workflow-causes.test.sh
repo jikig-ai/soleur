@@ -2060,6 +2060,358 @@ done <<<"$R5_OUT"
 [[ -n "$_r5res" ]] || { echo "FATAL: the mutation runner printed no RESULT line" >&2; exit 2; }
 (( _r5n >= R5_MIN )) || { echo "FATAL: the mutation runner produced only ${_r5n} verdict lines" >&2; exit 2; }
 
+# ---------------------------------------------------------------------------
+# R7 / R8 (orphan sweeps hold the read-only Hetzner token only, and a red sweep reaches a person)
+#
+# R7. Property: no job whose id ends in `-orphan-sweep` calls the infra-credentials loader, declares an
+# `environment:`, reads a Tier-B secret name, or names the read/write Hetzner token (whole word, so the
+# read-only name is not matched); its `sweep` step reads the read-only name with a bounded, rc-checked,
+# shape-checked secret read. The population is DERIVED from the parsed workflow by job-id suffix, never a
+# hard-coded pair, and has a floor of 2 so a rename cannot empty it. The positive checks read ONLY the
+# `sweep` step: the issue filers print a read-only listing recipe that names the same secret, so a
+# whole-job positive check would pass with the real read deleted.
+# R8. Property: each sweep job has a notify-ops-email step gated on `failure()` alone (no always()/success()),
+# continue-on-error, with a step timeout; where a job has a second email step, the failure email is
+# de-duplicated against it by naming that step's id.
+# New prose in the sweep jobs must not spell the read/write token name, or R7 fires on its own text.
+# ---------------------------------------------------------------------------
+SWEEP_PY=$(cat <<'PYD'
+import copy, re, sys, yaml
+
+LOADER = "./.github/actions/infra-credentials"
+EMAIL = "actions/notify-ops-email"
+BARE = re.compile(r"\bHCLOUD_TOKEN(?![A-Za-z0-9_])")
+PRIV = re.compile(r"DOPPLER_TOKEN_INFRA_PRIVILEGED")
+GETN = re.compile(r"doppler\s+secrets\s+get\s+([A-Za-z0-9_]+)")
+RC_CAPTURE = re.compile(r"\|\|\s*doppler_rc=\$\?")
+RO = "HCLOUD_TOKEN_READONLY"
+
+def leaves(x, skip=()):
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            if k in skip:
+                continue
+            if isinstance(k, str):
+                yield k
+            yield from leaves(v, skip)
+    elif isinstance(x, list):
+        for v in x:
+            yield from leaves(v, skip)
+
+def sweeps(wf, first_only=False):
+    js = [(k, v) for k, v in wf["jobs"].items() if k.endswith("-orphan-sweep")]
+    return js[:1] if first_only else js
+
+def sweep_step(job):
+    return next((s for s in job.get("steps") or [] if s.get("id") == "sweep"), None)
+
+def r7(wf, first_only=False):
+    out = []
+    allj = sweeps(wf)
+    if len(allj) < 2:
+        out.append("population %d < 2" % len(allj))
+    for jid, job in sweeps(wf, first_only):
+        if "environment" in job:
+            out.append("%s declares an environment" % jid)
+        steps = job.get("steps") or []
+        for s in steps:
+            if str(s.get("uses", "")).rstrip("/") == LOADER:
+                out.append("%s calls the credential loader" % jid)
+        text = "\n".join(leaves({k: v for k, v in job.items() if k != "name"}, skip=("name", "id")))
+        if BARE.search(text):
+            out.append("%s names the read/write token" % jid)
+        if PRIV.search(text):
+            out.append("%s names a Tier-B secret" % jid)
+        for m in GETN.finditer(text):
+            if m.group(1) != RO:
+                out.append("%s reads secret %s" % (jid, m.group(1)))
+        st = sweep_step(job)
+        run = str((st or {}).get("run", ""))
+        if st is None:
+            out.append("%s has no sweep step" % jid)
+            continue
+        for what, ok in (("the read-only secret read", ("doppler secrets get " + RO) in run),
+                         ("--project soleur", "--project soleur" in run),
+                         ("--config prd_terraform", "--config prd_terraform" in run),
+                         ("the 60 s bound", "timeout -k 5 60" in run),
+                         ("the rc capture", bool(RC_CAPTURE.search(run))),
+                         ("the shape check", "bc_ok_var TOKEN" in run)):
+            if not ok:
+                out.append("%s sweep step lacks %s" % (jid, what))
+    return out
+
+def r8(wf, first_only=False):
+    out = []
+    allj = sweeps(wf)
+    if len(allj) < 2:
+        out.append("population %d < 2" % len(allj))
+    for jid, job in sweeps(wf, first_only):
+        steps = job.get("steps") or []
+        emails = [s for s in steps if str(s.get("uses", "")).rstrip("/").endswith(EMAIL)]
+        fails = [e for e in emails if "failure()" in str(e.get("if", ""))]
+        if not fails:
+            out.append("%s has no failure email" % jid)
+            continue
+        f = fails[0]
+        if re.search(r"\b(always|success)\(\)", str(f.get("if", ""))):
+            out.append("%s failure email is gated on always()/success()" % jid)
+        if f.get("continue-on-error") is not True:
+            out.append("%s failure email is not continue-on-error" % jid)
+        if "timeout-minutes" not in f:
+            out.append("%s failure email has no timeout" % jid)
+        for o in emails:
+            if o is f:
+                continue
+            if not o.get("id") or ("steps.%s." % o.get("id")) not in str(f.get("if", "")):
+                out.append("%s failure email is not de-duplicated against another email step" % jid)
+    return out
+
+def jobs(m):
+    return m["jobs"]
+
+def sub_run(job, old, new):
+    st = sweep_step(job)
+    assert old in st["run"], "mutation did not land: %r" % old
+    st["run"] = st["run"].replace(old, new)
+
+def add_loader(job):
+    job["steps"].insert(1, {"name": "Load infra credentials (tiered)", "uses": LOADER, "with": {}})
+
+def no_email(job):
+    job["steps"] = [s for s in job["steps"] if not str(s.get("uses", "")).rstrip("/").endswith(EMAIL)]
+
+def fail_email(job):
+    return next(s for s in job["steps"] if str(s.get("uses", "")).rstrip("/").endswith(EMAIL) and "failure()" in str(s.get("if", "")))
+
+RUNG, INN = "rung2-rehearsal-orphan-sweep", "inngest-rehearsal-orphan-sweep"
+
+def m_loader_inn(m): add_loader(jobs(m)[INN])
+def m_env_rung(m): jobs(m)[RUNG]["environment"] = "infra-privileged"
+def m_bare_get(m): sub_run(jobs(m)[INN], "doppler secrets get " + RO, "doppler secrets get HCLOUD_TOKEN")
+def m_third_loader(m):
+    j = copy.deepcopy(jobs(m)[INN]); add_loader(j); jobs(m)["rehearsal-x-orphan-sweep"] = j
+def m_rename(m):
+    m["jobs"] = {("rung2-rehearsal-sweep" if k == RUNG else "inngest-rehearsal-sweep" if k == INN else k): v for k, v in m["jobs"].items()}
+def m_env_read(m): jobs(m)[INN]["steps"][-1].setdefault("env", {})["HCLOUD_TOKEN"] = "x"
+def m_bare_line(m):
+    st = sweep_step(jobs(m)[INN]); st["run"] = st["run"] + "\nTOKEN=\"${HCLOUD_TOKEN:-}\"\n"
+def m_no_capture(m): sub_run(jobs(m)[RUNG], "|| doppler_rc=$?", "|| true")
+def m_no_timeout(m): sub_run(jobs(m)[INN], "timeout -k 5 60 ", "")
+def m_no_shape(m): sub_run(jobs(m)[RUNG], "bc_ok_var TOKEN", "true TOKEN")
+def m_priv(m): jobs(m)[INN]["steps"][1].setdefault("env", {})["T"] = "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}"
+def m_flags_swapped(m): sub_run(jobs(m)[INN], "--project soleur --config prd_terraform", "--config prd_terraform --project soleur")
+def m_loopvar(m):
+    st = sweep_step(jobs(m)[RUNG]); assert "_line" in st["run"], "mutation did not land"; st["run"] = st["run"].replace("_line", "_ln")
+
+def m_no_email_inn(m): no_email(jobs(m)[INN])
+def m_if_success(m): fail_email(jobs(m)[INN])["if"] = "success()"
+def m_if_always(m): fail_email(jobs(m)[INN])["if"] = "always()"
+def m_no_coe(m): fail_email(jobs(m)[INN]).pop("continue-on-error")
+def m_no_email_timeout(m): fail_email(jobs(m)[INN]).pop("timeout-minutes")
+def m_third_noemail(m):
+    j = copy.deepcopy(jobs(m)[INN]); no_email(j); jobs(m)["rehearsal-x-orphan-sweep"] = j
+def m_no_dedup(m): fail_email(jobs(m)[RUNG])["if"] = "failure()"
+def m_dedup_spelled(m):
+    e = fail_email(jobs(m)[RUNG]); assert "steps.notify_channel.outcome != 'success'" in e["if"], "mutation did not land"
+    e["if"] = e["if"].replace("steps.notify_channel.outcome != 'success'", "(steps.notify_channel.outcome == 'skipped' || steps.notify_channel.outcome == 'failure')")
+def m_other_action(m): fail_email(jobs(m)[INN])["uses"] = "./.github/actions/other"
+
+# (name, checker, mutator, expect) -- expect "red" means the checker must report >= 1 violation
+ROWS = [
+    ("r7-loader-added",        r7, m_loader_inn,   "red"),
+    ("r7-environment-added",   r7, m_env_rung,     "red"),
+    ("r7-bare-name-read",      r7, m_bare_get,     "red"),
+    ("r7-third-job-with-loader", r7, m_third_loader, "red"),
+    ("r7-jobs-renamed-population-zero", r7, m_rename, "red"),
+    ("r7-env-key-names-rw-token", r7, m_env_read,  "red"),
+    ("r7-default-read-line",   r7, m_bare_line,    "red"),
+    ("r7-rc-capture-removed",  r7, m_no_capture,   "red"),
+    ("r7-timeout-removed",     r7, m_no_timeout,   "red"),
+    ("r7-shape-check-removed", r7, m_no_shape,     "red"),
+    ("r7-tier-b-secret-named", r7, m_priv,         "red"),
+    ("r7-must-pass-flags-swapped", r7, m_flags_swapped, "clean"),
+    ("r7-must-pass-loop-var-renamed", r7, m_loopvar, "clean"),
+    ("r8-email-deleted",       r8, m_no_email_inn, "red"),
+    ("r8-if-success",          r8, m_if_success,   "red"),
+    ("r8-if-always",           r8, m_if_always,    "red"),
+    ("r8-continue-on-error-removed", r8, m_no_coe, "red"),
+    ("r8-email-timeout-removed", r8, m_no_email_timeout, "red"),
+    ("r8-third-job-without-email", r8, m_third_noemail, "red"),
+    ("r8-dedup-removed",       r8, m_no_dedup,     "red"),
+    ("r8-other-action",        r8, m_other_action, "red"),
+    ("r8-must-pass-dedup-spelled-differently", r8, m_dedup_spelled, "clean"),
+]
+
+if __name__ == "__main__":
+    mode, path = sys.argv[1], sys.argv[2]
+    wf = yaml.safe_load(open(path))
+    if mode in ("r7", "r8"):
+        v = (r7 if mode == "r7" else r8)(wf)
+        print("population=%d" % len(sweeps(wf)))
+        for x in v:
+            print("violation\t%s" % x)
+    else:
+        # control: the verdict rule can fail in both directions, on the real workflow's own shape
+        probe = copy.deepcopy(wf); m_loader_inn(probe); probe2 = copy.deepcopy(wf); m_no_email_inn(probe2)
+        ctl = bool(r7(probe)) and bool(r8(probe2))
+        print("%s\tcontrol\tthe checkers can report a violation in both directions" % ("PASS" if ctl else "FAIL"))
+        print("%s\trows\t%d mutation rows (table intact)" % ("PASS" if len(ROWS) >= 22 else "FAIL", len(ROWS)))
+        res = []
+        for name, chk, mut, expect in ROWS:
+            m = copy.deepcopy(wf)
+            try:
+                mut(m)
+            except Exception as e:
+                print("FAIL\t%s\tmutation could not be applied: %s %s" % (name, type(e).__name__, e)); res.append(False); continue
+            if m == wf:
+                print("FAIL\t%s\tthe mutation did not change the workflow" % name); res.append(False); continue
+            v = chk(m)
+            ok = bool(v) if expect == "red" else not v
+            print("%s\t%s\t%s" % ("PASS" if ok else "FAIL", name,
+                  ("flagged: " + v[0]) if (ok and expect == "red") else "legitimate variant is not flagged" if ok else "wrong verdict (expect %s, got %s)" % (expect, v[:2] or "no violation")))
+            res.append(ok)
+        # harness rows: a checker that stops at the first member must miss a violation placed in the second
+        m = copy.deepcopy(wf); m_loader_inn(m)
+        ok = bool(r7(m)) and not r7(m, first_only=True)
+        print("%s\tharness-first-member-only\ta first-member-only checker misses the second member; the real one does not" % ("PASS" if ok else "FAIL")); res.append(ok)
+        print("RESULT\t%d\t%d" % (len(res), len([r for r in res if not r])))
+PYD
+)
+
+echo "R7: no orphan-sweep job holds the read/write Hetzner credential; each reads the read-only token (bounded, rc-checked, shape-checked)"
+_r7=$(python3 -c "$SWEEP_PY" r7 "$WF") || { echo "FATAL: the R7 scan crashed" >&2; exit 2; }
+_r7_pop=$(sed -n 's/^population=//p' <<<"$_r7")
+_r7_bad=$(grep -c '^violation' <<<"$_r7") || _r7_bad=0
+if [[ "$_r7_pop" =~ ^[0-9]+$ ]] && (( _r7_pop >= 2 )) && [[ "$_r7_bad" == "0" ]]; then
+  pass "R7 ${_r7_pop} orphan-sweep jobs, none holds the read/write credential, each reads HCLOUD_TOKEN_READONLY with the bounded read"
+else
+  fail "R7 (${_r7_pop:-?} jobs, ${_r7_bad} violation(s)): $(grep '^violation' <<<"$_r7" | cut -f2 | tr '\n' ';')"
+fi
+
+echo "R8: each orphan-sweep job emails on failure (failure()-gated, continue-on-error, bounded, de-duplicated)"
+_r8=$(python3 -c "$SWEEP_PY" r8 "$WF") || { echo "FATAL: the R8 scan crashed" >&2; exit 2; }
+_r8_bad=$(grep -c '^violation' <<<"$_r8") || _r8_bad=0
+if [[ "$_r8_bad" == "0" ]]; then
+  pass "R8 every orphan-sweep job has a failure()-gated, bounded, non-blocking email step"
+else
+  fail "R8 ${_r8_bad} violation(s): $(grep '^violation' <<<"$_r8" | cut -f2 | tr '\n' ';')"
+fi
+
+R78_MIN=24
+echo "R7/R8: mutation rows — every spelling that re-opens the read/write credential or drops the failure email is RED, legitimate variants GREEN"
+R78_OUT=$(python3 -c "$SWEEP_PY" mutate "$WF") || { echo "FATAL: the R7/R8 mutation runner crashed" >&2; exit 2; }
+_r78n=0; _r78res=""
+while IFS=$'\t' read -r _verdict _row _msg; do
+  if [[ "$_verdict" == "RESULT" ]]; then _r78res="$_row/$_msg"; continue; fi
+  _r78n=$((_r78n + 1))
+  r5_line "$_verdict" "R78-$_row" "$_msg"
+done <<<"$R78_OUT"
+[[ -n "$_r78res" ]] || { echo "FATAL: the R7/R8 mutation runner printed no RESULT line" >&2; exit 2; }
+(( _r78n >= R78_MIN )) || { echo "FATAL: the R7/R8 mutation runner produced only ${_r78n} verdict lines" >&2; exit 2; }
+
+# ---------------------------------------------------------------------------
+# R9 -- the converted `sweep` steps BEHAVE as prescribed. R7/R8 pin the workflow's shape; this runs each job's
+# real `run:` body (extracted with PyYAML, never a copy) under the runner's shell with a PATH-shimmed `doppler` and
+# `curl`, and judges what each arm DECIDES: a clean listing, an absent token, a timed-out read, a shape-invalid
+# token (no request may leave), and a found orphan. The `doppler` shim records its argv so the read-only name,
+# project and config are asserted on the call actually made. Two mutation rows prove the case judge can fail.
+# ---------------------------------------------------------------------------
+R9_DIR="$TMP/r9"
+mkdir -p "$R9_DIR/bin"
+python3 - "$WF" "$R9_DIR" <<'PYD'
+import sys, yaml, os
+wf = yaml.safe_load(open(sys.argv[1]))
+for job in ("rung2-rehearsal-orphan-sweep", "inngest-rehearsal-orphan-sweep"):
+    st = next(s for s in wf["jobs"][job]["steps"] if s.get("id") == "sweep")
+    open(os.path.join(sys.argv[2], job + ".sh"), "w").write(st["run"])
+PYD
+cat > "$R9_DIR/bin/doppler" <<'SHIM'
+#!/usr/bin/env bash
+echo "doppler $*" >> "$R9_CALLS"
+case "$1 $2" in
+  "secrets get")
+    case "$R9_MODE" in
+      empty) exit 0 ;;
+      timeout) exit 124 ;;
+      badshape) printf 'abc def\n' ;;
+      *) printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' ;;
+    esac ;;
+  "configs list") printf '[{"name":"c1"},{"name":"c2"},{"name":"c3"},{"name":"c4"},{"name":"c5"},{"name":"c6"},{"name":"c7"},{"name":"c8"},{"name":"c9"},{"name":"c10"},{"name":"c11"},{"name":"c12"},{"name":"c13"}]\n' ;;
+esac
+SHIM
+cat > "$R9_DIR/bin/curl" <<'SHIM'
+#!/usr/bin/env bash
+cat > /dev/null
+echo "curl $*" >> "$R9_CALLS"
+if [[ "$R9_MODE" == orphan ]]; then
+  printf '{"servers":[{"name":"soleur-rehearsal-x","id":1}],"volumes":[],"ssh_keys":[],"firewalls":[],"meta":{"pagination":{"next_page":null}}}'
+else
+  printf '{"servers":[],"volumes":[],"ssh_keys":[],"firewalls":[],"meta":{"pagination":{"next_page":null}}}'
+fi
+SHIM
+chmod +x "$R9_DIR/bin/doppler" "$R9_DIR/bin/curl"
+
+# r9_case <script> <mode>: prints OK or BAD:<reason>; one fresh run directory per call
+r9_case() {
+  local script="$1" mode="$2" d rc out calls gho
+  d=$(mktemp -d "$R9_DIR/run.XXXXXX") || { echo "BAD:no run dir"; return; }
+  calls="$d/calls"; gho="$d/gho"; : > "$calls"; : > "$gho"
+  out=$(env -i PATH="$R9_DIR/bin:/usr/bin:/bin" HOME="$d" GITHUB_WORKSPACE="$REPO_ROOT" GITHUB_OUTPUT="$gho" \
+          RUNNER_TEMP="$d" DOPPLER_TOKEN=x R9_CALLS="$calls" R9_MODE="$mode" \
+          REHEARSAL_PREFIX=soleur-rehearsal- RUNG2_CONFIGS_FLOOR=13 \
+          bash --noprofile --norc -eo pipefail "$script" 2>&1)
+  rc=$?
+  local ncurl; ncurl=$(grep -c '^curl ' "$calls") || ncurl=0
+  case "$mode" in
+    clean)
+      [[ "$rc" == 0 ]] || { echo "BAD:clean listing rc=$rc"; return; }
+      grep -q '^orphans=0$' "$gho" || { echo "BAD:no orphans=0 output"; return; }
+      grep -qF 'doppler secrets get HCLOUD_TOKEN_READONLY --plain --project soleur --config prd_terraform' "$calls" || { echo "BAD:the read-only secret was not read with the pinned project and config"; return; }
+      grep -qE 'secrets get HCLOUD_TOKEN( |$)' "$calls" && { echo "BAD:the bare read/write name was read"; return; }
+      grep -q '^::add-mask::AAAA' <<<"$out" || { echo "BAD:the token was not masked"; return; }
+      (( ncurl >= 4 )) || { echo "BAD:only $ncurl listing calls"; return; } ;;
+    empty)
+      [[ "$rc" != 0 ]] || { echo "BAD:empty token exited 0"; return; }
+      grep -q 'orphan_sweep_no_token' <<<"$out" || { echo "BAD:no named no-token error"; return; }
+      (( ncurl == 0 )) || { echo "BAD:a request left with no token"; return; } ;;
+    timeout)
+      [[ "$rc" != 0 ]] || { echo "BAD:timed-out read exited 0"; return; }
+      grep -q 'orphan_sweep_doppler_timeout' <<<"$out" || { echo "BAD:no named timeout error"; return; }
+      (( ncurl == 0 )) || { echo "BAD:a request left after a timed-out read"; return; } ;;
+    badshape)
+      [[ "$rc" != 0 ]] || { echo "BAD:shape-invalid token exited 0"; return; }
+      (( ncurl == 0 )) || { echo "BAD:a request left with a shape-invalid token"; return; }
+      # the runner consumes ::add-mask:: directives (the masking itself), so only the visible log is judged
+      local visible; visible=$(grep -v '^::add-mask::' <<<"$out" || true)
+      grep -q 'abc def' <<<"$visible" && { echo "BAD:the shape-invalid value was printed"; return; } ;;
+    orphan)
+      [[ "$rc" == 0 ]] || { echo "BAD:orphan listing rc=$rc"; return; }
+      grep -qE '^orphans=[1-9]' "$gho" || { echo "BAD:an orphan was not counted"; return; } ;;
+  esac
+  echo OK
+}
+
+echo "R9: each converted sweep step decides correctly (clean, absent token, timed-out read, shape-invalid token, found orphan)"
+_r9_ok=1
+for _job in rung2-rehearsal-orphan-sweep inngest-rehearsal-orphan-sweep; do
+  for _mode in clean empty timeout badshape orphan; do
+    _v=$(r9_case "$R9_DIR/$_job.sh" "$_mode")
+    if [[ "$_v" == OK ]]; then pass "R9/$_job/$_mode"; else fail "R9/$_job/$_mode: ${_v#BAD:}"; _r9_ok=0; fi
+  done
+done
+
+# the case judge must be able to fail: remove the named no-token error, then the shape check, from a copy
+sed 's/orphan_sweep_no_token/renamed_error/' "$R9_DIR/rung2-rehearsal-orphan-sweep.sh" > "$R9_DIR/mut-notoken.sh"
+sed 's/if ! bc_ok_var TOKEN; then/if false; then/' "$R9_DIR/inngest-rehearsal-orphan-sweep.sh" > "$R9_DIR/mut-noshape.sh"
+cmp -s "$R9_DIR/mut-notoken.sh" "$R9_DIR/rung2-rehearsal-orphan-sweep.sh" && fail "R9/mutation: the no-token mutation did not change the script"
+cmp -s "$R9_DIR/mut-noshape.sh" "$R9_DIR/inngest-rehearsal-orphan-sweep.sh" && fail "R9/mutation: the shape-check mutation did not change the script"
+_v=$(r9_case "$R9_DIR/mut-notoken.sh" empty)
+if [[ "$_v" == BAD:* ]]; then pass "R9/mutation: a script without the named no-token error fails the empty-token case"; else fail "R9/mutation: the empty-token case passed over a script with its named error removed"; fi
+_v=$(r9_case "$R9_DIR/mut-noshape.sh" badshape)
+if [[ "$_v" == BAD:* ]]; then pass "R9/mutation: a script without the shape check fails the shape-invalid case"; else fail "R9/mutation: the shape-invalid case passed over a script with its shape check removed"; fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Deleting every assertion call yields "0/0 passed" and exit 0,
@@ -2083,6 +2435,7 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Then 168 -> 172 with R6a-c (the listing blocks load the read-only Hetzner token, no read/write fallback, #9927 item 8b) and the g-doppler-ro
 # classifier row, 172 is the REALIZED `PASS + FAIL`. (R7a-c, three rows pinning the spelling of ten empty-token guards, were added and then removed in the same
 # PR: every one of those ten steps pre-binds HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" so the guard could never hit `unbound variable`; CTO ruling 2026-10-22.)
+# Then 172 -> 211 with R7 and R8 (the orphan sweeps hold the read-only Hetzner token only, and email on failure) with their 22 mutation rows, 1 harness row, 1 control and 1 row-count row, and R9 (the converted sweep steps run under the runner's shell with shimmed doppler and curl: 10 case rows and 2 mutation rows) (#10664 follow-up): 39 added, 211 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -2098,8 +2451,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 172 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 172." >&2
+if [[ "$((PASS + FAIL))" -lt 211 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 211." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

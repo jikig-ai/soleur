@@ -134,7 +134,8 @@ operator authorizes the change in the App or installation settings
 |---|---|---|---|---|---|
 | `scheduled-terraform-drift.yml::drift-check` | **`workflow_dispatch` only** — the file carries no `schedule:`; the twice-daily fire is Inngest-dispatched (ADR-033) | (none) | `DOPPLER_TOKEN` tf-var, R2 state `AWS_*` | **read** — the only Terraform call is `terraform plan -detailed-exitcode` | **B** by the rule (it plans a Tier-B root), but read-only: a **read**-scoped Tier-B token is sufficient, and that is what `DOPPLER_TOKEN_INFRA_PRIVILEGED` is |
 | `scheduled-terraform-drift.yml::heartbeat-live-reconcile` | workflow_dispatch | (none) | `DOPPLER_TOKEN` → `BETTERSTACK_API_TOKEN_READONLY` | **read** — no Terraform at all | **A** |
-| `scheduled-terraform-drift.yml::rung2-rehearsal-orphan-sweep` | workflow_dispatch | (none) | `DOPPLER_TOKEN` → `HCLOUD_TOKEN`, `api.hetzner.cloud` GETs, a Doppler config listing | **read** — no write is executed or printed (the echoed `DELETE` recipe was removed, #9927 item 8c) | **A** → `HCLOUD_TOKEN_READONLY` |
+| `scheduled-terraform-drift.yml::rung2-rehearsal-orphan-sweep` | workflow_dispatch; job-gated `github.ref == 'refs/heads/main'` | (none) — no `environment:` and no `infra-credentials` loader step (both removed 2026-10-23, Ref #10664) | `DOPPLER_TOKEN` → `HCLOUD_TOKEN_READONLY` from `soleur/prd_terraform` (no fallback to the read/write name), `api.hetzner.cloud` GETs, a Doppler config listing; `notify-ops-email` on failure | **read** — no write is executed or printed (the echoed `DELETE` recipe was removed, #9927 item 8c) | **A** — reads the Hetzner Read-permission token only. An absent, timed-out or shape-invalid read ends the job red with a named error and a failure email; project identity of the token is checked by `sole-copy-protection-check`, not here |
+| `scheduled-terraform-drift.yml::inngest-rehearsal-orphan-sweep` (row added 2026-10-23, Ref #10664) | workflow_dispatch; job-gated `github.ref == 'refs/heads/main'` | (none) — no `environment:` and no `infra-credentials` loader step | `DOPPLER_TOKEN` → `HCLOUD_TOKEN_READONLY` from `soleur/prd_terraform` (no fallback to the read/write name), `api.hetzner.cloud` GETs only; `notify-ops-email` on failure | **read** — GETs only; the filer prints a read-only listing recipe | **A** — same shape as the rung-2 sweep |
 | `scheduled-terraform-drift.yml::sole-copy-protection-check` (added 2026-10-16, #9927 item 9) | workflow_dispatch; job-gated `github.ref == 'refs/heads/main'` | (none) — no `environment:` and no `infra-credentials` loader step | `DOPPLER_TOKEN` → `HCLOUD_TOKEN_READONLY` from `soleur/prd_terraform` (no fallback to the read/write `HCLOUD_TOKEN`), one `api.hetzner.cloud` GET of the Inngest store volume by name; `github.token` (workflow-level `contents: read` and `issues: write`; the filers need `issues: write`) for the issue filers and the commit-time read | **read** — one GET per attempt, up to three attempts per run; the job spells no write and prints no command ([ADR-282](../../architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md), addendum 2026-10-16) | **A** — reads the Hetzner Read-permission token only. If step O5 was never done or `HCLOUD_TOKEN_READONLY` is absent, the job reports `no-token` and files its own could-not-perform issue instead of reading the read/write token |
 | `infra-validation.yml::check-secrets` | push, pull_request, workflow_dispatch | (none) | `DOPPLER_TOKEN` presence probe — never reads a value | **read** | **A** |
 | `infra-validation.yml::plan` | **pull_request only**, deliberately | (none) | `DOPPLER_TOKEN` tf-var, R2 state `AWS_*` | **read** — plan only | **A.** This is the job the whole Tier-A design is built around: `-refresh=false`, a read-only Hetzner token, placeholders for the Doppler and R2 providers, and the workflow's own `github.token` for the GitHub provider (measured, plan M8) |
@@ -199,6 +200,7 @@ Phase 4 binds each to a member of the Tier-B environment set; the census row is 
 cover them; census row G7f pins their call shape. *Dated note, 2026-10-22 (#9927 item 8b review): the list above is the
 pre-Phase-4 state and is historical. Every one of the 32 jobs that call the loader now declares a Tier-B `environment:`
 (census G1j, which derives the set from the workflow files, so a count written here would go stale).*
+*Dated note, 2026-10-23 (Ref #10664): the two orphan sweeps in `scheduled-terraform-drift.yml` left the loader and the `infra-privileged` environment (see their rows in Group 3); census G1j, run on the branch, reports 30 loader jobs, two fewer than the 32 above.*
 
 `infra-privileged` exists: O0's push apply created it with its `main` policy, and it is referenced
 by `apply-web-platform-infra.yml`, `apply-github-infra.yml`, `apply-sentry-infra.yml`,
@@ -262,8 +264,11 @@ Tier-B name from `prd_terraform` that the scanner can see: a literal name in a `
 `DOPPLER_CONFIG` env; quoted names, variable names, `doppler run -- printenv` and `secrets download` forms are not scanned) and G1j
 (every job that calls the loader declares a Tier-B `environment:`, so the legacy arm is reachable only in the degraded state of a
 missing environment secret; G1j does not prove each job takes the Tier-B arm). The orphan sweeps in
-`scheduled-terraform-drift.yml` (`rung2-rehearsal-orphan-sweep`, `inngest-rehearsal-orphan-sweep`) have no notification path: if the
-legacy arm ran there they fail red with no issue and no email, so a red scheduled run of those two jobs is the only signal.
+`scheduled-terraform-drift.yml` (`rung2-rehearsal-orphan-sweep`, `inngest-rehearsal-orphan-sweep`) no longer use the loader (changed
+2026-10-23, Ref #10664): each reads `HCLOUD_TOKEN_READONLY` alone, and each sends a `notify-ops-email` message on any failed step, so a
+red sweep (an unreadable secret, an unreachable API, a filer that could not file) reaches a person. The email channel is itself
+unmonitored (no Sentry check-in covers these jobs, #10430), and the project identity of the read-only token is checked by
+`sole-copy-protection-check` and not by the sweeps; both are stated residuals.
 
 ## Operator Sequence (canonical copy — verbatim from the plan)
 
