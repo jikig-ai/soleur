@@ -547,12 +547,14 @@ logs:
   where: "workflow run logs + $GITHUB_STEP_SUMMARY (producer/diagnose); host journald -> Better Stack (consumer)"
   retention: "Actions log retention; Better Stack source retention"
 discoverability_test:
-  command: "grep -c 'signing-config' .github/workflows/build-inngest-config-bundle.yml"
+  command: "grep -cF -- '--signing-config apps/web-platform/infra/inngest-signing-config.json' .github/workflows/build-inngest-config-bundle.yml"
   expected_output: "1"
 ```
 
-The grep is the pre-merge signal (the sign step carries exactly one `--signing-config`
-occurrence); the post-deploy signal is AC8's off-box APPLIED row.
+The grep is the pre-merge signal (the sign step carries exactly one `--signing-config
+<repo-file>` flag occurrence — anchored on the flag+path pair so emit-surface comments
+naming the pin cannot inflate the count); the post-deploy signal is AC8's off-box
+APPLIED row.
 
 ## Encryption Posture
 
