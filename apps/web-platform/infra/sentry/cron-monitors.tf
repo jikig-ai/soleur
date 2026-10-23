@@ -1595,3 +1595,25 @@ resource "sentry_cron_monitor" "scheduled_supabase_watchdog" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# 2026-10-23 (#8211 PR-B2): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-git-data-erasure-redrive.ts`.
+# Re-drives the durable git-data pending-erasure ledger (migration 164) every 15 minutes. A MISSED
+# check-in means the re-drive stopped (scheduler dead / function dropped) while owed Art. 17
+# erasures sit in the ledger with only the 20/28-day age escalation left to notice them. The
+# handler heartbeats ok:true when the run completed its bookkeeping (a host refusal is the
+# ledger's normal state, not a cron failure) and ?status=error when the claim or the age read
+# itself failed. 15-min crontab matches the handler; the 30-min margin and 10-min runtime mirror
+# the small pure-TS Inngest-fired cohort (scheduled-workspace-gc). Slug MUST match
+# SENTRY_MONITOR_SLUG in the handler.
+resource "sentry_cron_monitor" "scheduled_git_data_erasure_redrive" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-git-data-erasure-redrive"
+  schedule                = { crontab = "*/15 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

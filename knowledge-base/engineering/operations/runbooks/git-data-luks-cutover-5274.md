@@ -165,9 +165,22 @@ Account request is refused by the store wrappers, the account deletion itself st
 refusal is a logged Art. 17 event (`op:git-data-bare-repo-erasure`). Before the first flip nothing is
 lost, because the store is empty. After a flip the claim weakens: the app deliberately does not gate
 erasure on the flag, so a re-flip or a freeze stranded after the first window can leave real repositories
-behind, and the per-id re-erasure path for a populated store is not built (the CPO condition on #8211,
-recorded in the plan). The refused ids are swept from Sentry (`op:git-data-bare-repo-erasure`, from the
-start of the window) and re-driven afterwards, and the Art. 12(3) one-month clock runs from the request,
+behind, and the per-id re-erasure path for a populated store is the durable pending ledger plus the
+`cron-git-data-erasure-redrive` cron (#8211, the CPO condition): every non-erased outcome is recorded at
+deletion; the cron runs every 15 minutes and retries each row at most once an hour until the host reports
+`erased`. It erases only an id whose account is really gone (`git_data_erasure_owner_gone`): a row whose
+owner still exists, such as an aborted deletion or a wrong seeded id, is kept, never erased, and warned once
+per run as `owner_still_exists`. Ids refused before the ledger was live, or whose ledger write failed, are
+swept from Sentry (`op:git-data-bare-repo-erasure`, from the start of the window) and seeded into it with the
+cron's manual event (`data.ids` plus `data.requested_at`, the original request time, so the Art. 12(3) clock
+is not restarted). The ledger itself is Sentry-visible only through that cron: the oldest pending age of
+rows whose owner is gone is gauged every run (a row whose owner still exists is an aborted deletion: it is never
+erased and warns separately after 3 days), and at 20 and 28 days the cron raises Sentry **error issues** (`escalation=20d`, `28d`),
+with **no paging rule yet**. A paging rule on `feature=cron-git-data-erasure-redrive` AND `tags.escalation`
+(#10914) is a hard precondition of the real flip, together with routing the cron's Sentry monitor. Unmeasured
+residuals, for the Art. 30 entry: the manual event's `data.ids` are persisted in Inngest's event store and run
+state (the cron's own steps keep ids inside the step and return counts only), and deleted ledger rows may
+persist in Supabase backups. The Art. 12(3) one-month clock runs from the request,
 not from the re-drive; see #9153 for starting that clock automatically. During a `flip`, the freeze window is bounded by the finalizer: a stranded
 sentinel pages through the notify channel below.
 
@@ -319,7 +332,8 @@ from that account's own session. An agent cannot drive any of these steps and do
   with the flag off and no store-enabled window since, the emptiness discharge of host-key step 5 remains available until the real
   flip, although "`GIT_DATA_STORE_ENABLED` has never been on" is no longer literally true. This exception covers the rehearsal flip
   only: the per-id re-erasure path, and a `deleteWorkspace` that also reaps `WORKTREE_ROOT/<id>` (it does not today), stay hard
-  preconditions of the first REAL flip (Ruled by CTO agent, 2026-10-19). Neither is built.
+  preconditions of the first REAL flip (Ruled by CTO agent, 2026-10-19). Of the two, the per-id re-erasure path is built
+  (the ledger and `cron-git-data-erasure-redrive`, #8211) but its paging rule is not (#10914), and the `deleteWorkspace` reap is not.
 **Preconditions for R1.** Every item of "Preconditions for the flip" above holds, except that the per-id re-erasure item is narrowed
 for the rehearsal flip by the Art. 17 rule above; the workflow enforces part of them and the owner holds the rest. The `Verify required secrets present` step refuses `flag_write_credential_absent`. The `Flip preconditions`
 step refuses `precondition_8209_open`, `pin_fault_paging_absent`, `d6_replace_stale`, `d6_last_rotate_failed`,
@@ -979,7 +993,7 @@ and in the app. It publishes no git-data pin by itself: the pin is created by th
       `host_key_mismatch`) and the `removeGitDataRepo threw` arm. Follow its verdict-map row. Then,
       while `GIT_DATA_STORE_ENABLED` has never been on, discharge it by running 5.2 again: a fresh
       proof, fresh reads of (b) to (d), and a new record. After the first flip, emptiness is no
-      longer evidence, so the flip must not happen until a per-id re-erasure path exists (#8211; the rehearsal flip is excepted, see the rehearsal run sheet's Art. 17 rule).
+      longer evidence, so the flip must not happen until the per-id re-erasure path is live and paging (built in #8211: the ledger and `cron-git-data-erasure-redrive`; its paging rule is #10914; the rehearsal flip is excepted, see the rehearsal run sheet's Art. 17 rule).
    3. Any verdict other than `clear` follows its verdict-map row; only `clear` discharges. After
       the row's remedy, re-dispatch **once**. A repeat of the same verdict opens an incident
       instead of a loop, and step 5 resumes with one re-dispatch after the incident closes. If the
