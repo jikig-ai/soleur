@@ -16,22 +16,25 @@ gate_verdict: fail-stop
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-23. **Evidence used:** a five-seat plan-review panel (DHH, Kieran, code
-simplicity, architecture, spec-flow), two CTO rulings (the second withdrew a proposed
-neutral-refactor mode), a learnings search, and the deepen halts run mechanically. A full
+simplicity, architecture, spec-flow), CTO rulings T1 to T6 (T2 was ruled twice; the second
+withdrew a proposed neutral-refactor mode), a learnings search, and the deepen halts run mechanically. A full
 all-agent fan-out was not run: this plan edits only planning artifacts and its claims were each
 re-derived from source by two independent seats.
 
 Key improvements from review and deepen:
 
-1. The "smallest change" shrank: no `verdict.cjs` or `eval-gate.cjs` change, because the existing
-   `--target-task` flag accepts a retention case (verified in code by the CTO and the simplicity seat).
-2. A measurable discrimination bar replaced the undefined "bar" (T2b).
+1. The "smallest change" shrank: no new gate flag and no neutral-refactor mode. Review then showed the
+   `--target-task` flag is only a 0.5 floor on the candidate's own rate and the gate CLI passes no
+   epsilon, so retention cases go in the corpus and the probes read `per_task` by script (T7).
+2. A measurable discrimination bar replaced the undefined "bar", restated at review so every item has
+   a reachable instrument (T2b, T7b).
 3. The #10551 comment is self-contained, posted once with a dedupe marker, and cites draft PR #10947.
 4. The wrong "hardcoded extract-block loop" claim was corrected: the third hardcoded place is the
    `expected_set` literal in `registry-completeness.test.sh`.
 
 New considerations: the `ship` ceiling in `plugins/soleur/test/skill-body-budget.json` ratchets down
-only, so M should lower it in the same PR; harness evidence is slice-only and M must say so.
+only, so M should lower it in the same PR; harness evidence is slice-only and M must say so and
+attach a rationale-only-diff lint as well (T5, T8).
 
 Halts run: 4.6 user-brand impact (pass), 4.7 observability (skip, pure docs), 4.8 PAT sweep (0 hits),
 4.9 UI wireframe (skip), 4.10 encryption (skip, no store), 4.11 guard contract (skip, no guard in
@@ -64,11 +67,13 @@ named the Capability PR (C) and the Move PR (M), so it is not confused with Wiki
   `knowledge-base/project/brainstorms/archive/` and `knowledge-base/project/specs/archive/`, prefix
   `20260918-160549-`). The issue's "2,833 lines" is now 3,023 lines and 273,135 bytes.
 - No ADR mentions `PURPOSE.md`; `git ls-files 'plugins/soleur/skills/*/PURPOSE.md'` returns 0 rows,
-  so Move PR (M) introduces the convention. The governing ADR for the gate is ADR-069.
+  so Move PR (M) introduces the convention. The governing ADR for the gate is ADR-069, which is scoped to classifier-skill
+  edits (its Context names the `/go` routing table and the ticket-triage rubric), so gating a slice
+  of a procedural skill extends its scope and C owns an amendment.
 - Spec TR1 (archived spec) said procedural skills use "human-merged draft PR + deterministic lints +
   FR17's lagging gate", not the eval gate, while #10551 names the harness. They disagree. This run
-  follows the issue and the brief; relaxing the criterion is a scope call for the operator and is not
-  needed to stop.
+  follows the issue and the brief: lint-only evidence is rejected (T3, T5) unless the operator
+  explicitly accepts it for procedural skills.
 
 ### Property List and Cut List
 
@@ -82,12 +87,18 @@ bought by the 21 test files that cite `skills/ship/SKILL.md`
 (`grep -rIl "skills/ship/SKILL.md" plugins/soleur/test`).
 
 Cut: a whole-skill LLM-judge target over all of `ship` (about 70k tokens per call by a bytes-over-4
-estimate, one Opus arm, $100 per month CI cap, B5 #8290 returned INCONCLUSIVE and was archived).
+estimate, one Opus arm, $100 per month CI cap). B5 (#8290) is the cautionary precedent for instrument
+validity, not for a whole-skill judge: it was a four-rule phrasing study that returned INCONCLUSIVE
+after 648 calls, and its post-verdict audit found the scorer counted empty or truncated answers as
+compliant, which is the lesson for C's discrimination bar.
 
 ### Value measured
 
 `grep -c '\*\*Why' ship/SKILL.md` is 54 lines, 35,239 of 273,135 bytes (12.9 percent, about 8.8k
-tokens per invocation by bytes over 4). The brainstorm framed Phase 3 as a token and clarity cleanup,
+tokens per invocation by bytes over 4). The share depends on where a Why span is taken to end: 5.1
+percent from the first `**Why` to end of line (about 3.5k tokens), 12.9 percent for whole lines,
+16.1 percent to the next blank line (about 11k tokens). Measured at `origin/main` `6b8f7fcaf5` on
+2026-10-23; main moves quickly, so M re-derives every count. The brainstorm framed Phase 3 as a token and clarity cleanup,
 not a quality win.
 
 ### Capability probes (zero API, from `plugins/soleur/skills/eval-harness`)
@@ -135,18 +146,23 @@ behaves no worse, today? **Answer: no.** Ruled by CTO agent, 2026-10-23 (`decisi
 |---|---|---|
 | 1 | One sentinel-wrapped slice of `ship/SKILL.md`: a closed-enum decision an LLM applies, with its Why paragraphs inside the span, and a `gated-skills.json` row | `--check` returns `gated:false` |
 | 2 | A `ship-<decision>` target wired in all three hardcoded places (structural finding 2), plus enum, skill and baseline prompts, synthesized golden tasks and a promptfoo config | `--dry-run --target ship` exits 1 |
-| 3 | Coverage of the rest of `ship`: the harness can only speak for the slice; the other moved paragraphs rest on the existing anchor tests and review | single-label harness covers one decision |
+| 3 | Coverage of the rest of `ship`: the harness can only speak for the slice; the other moved paragraphs rest on the existing anchor tests, review and, per T5, a rationale-only-diff lint | single-label harness covers one decision |
 
 ### Smallest change
 
 Ruled by CTO agent, 2026-10-23 (`decision-challenges.md` T2, re-ruled after plan review). Capability
 PR (C) is: the sentinel wrap (a zero-text-change `ship/SKILL.md` edit, kept as its own small commit
 so it can be rebased or reverted alone) and the `ship-<decision>` target, run with a representative
-retention case passed through the existing `--target-task` flag and without `--append-on-accept`.
-`verdict.cjs` and `eval-gate.cjs` need no change: `computeVerdict` excludes the target task id from
-the corpus and needs the candidate's pooled rate on it to be at least 0.5, so no neutral-refactor
-mode is built (it would also be a bypass of the shared gate used by heal-skill and compound-capture).
-Medium effort, days.
+retention cases in the new ship-decision corpus and run without `--append-on-accept`. Amended at
+review (`decision-challenges.md` T7): `accept` needs no new logic, but C must not rely on an epsilon
+passed through the CLI (`eval-gate.cjs` calls `computeVerdict` with empty options, so epsilon is fixed
+at one task-equivalent) and must not use `--target-task` as the retention check (it decides on the
+candidate's own rate on that task, a 0.5 floor, and never consults the baseline). C adds no flag to the
+shared gate (it is also used by heal-skill and compound-capture), and builds no neutral-refactor mode.
+The pooled `accept` cannot see a one-task regression, so probes and M assert on the `per_task` array,
+parsed by a script. Medium effort, days. No qualifying closed-enum `ship` decision has been identified yet: finding one
+is C's first step (many `ship` gates are script- or hook-enforced and fail the executor litmus), and
+the days estimate assumes one exists.
 
 **Claim limit.** The evidence may only say "rationale removal inside the wrapped slice did not
 regress classification of decision X". It says nothing about the other roughly 50 Why paragraphs,
@@ -154,15 +170,23 @@ of which 14 sit in Phase 7 and the rest are spread over 23 other headings (24 di
 awk heading tally). Any that a script or hook enforces fail the executor litmus and cannot be in a
 slice; M's plan must count how many that is rather than assume. Move PR (M) must label those "not
 harness-evaluated". Whether that satisfies "attach the eval
-comparison" is an evidence-bar question, ruled by the CTO agent, 2026-10-23 (`decision-challenges.md` T5): slice-only harness evidence is necessary but not sufficient, and the Move PR attaches the harness verdict AND a rationale-only-diff lint.
+comparison" is an evidence-bar question, ruled by the CTO agent, 2026-10-23 (`decision-challenges.md`
+T5, extended by T8): slice-only harness evidence is necessary but not sufficient, and the Move PR
+attaches the harness verdict AND a rationale-only-diff lint. M's moved paragraphs must sit inside the
+wrapped span (a "no gated-block change" accept is no evidence), the lint must not pattern-match the
+rationale marker, no assertion in the 21 citing test files is removed or relaxed, and rationale beside
+a hard-stop or LLM-applied gate step stays in SKILL.md.
 
-**Discrimination bar** (T2b; the gate counts as able only when all hold, each measured by running it):
-a degraded candidate (decision-bearing rule text dropped or flipped) returns `accept:false` while a
-rationale-removed one returns `accept:true`; the skill-arm rate beats the baseline-arm rate by at
-least one task-equivalent; a one-task flip is caught, either by reading `per_task` or by passing an
-explicit epsilon below one task-equivalent (the default epsilon is exactly one task and the check is
-a strict less-than); the 0.5 trust floor is only a floor; every decision-bearing rule in the slice has
-at least one case. No corpus-size number is set because the code does not justify one.
+**Discrimination bar** (T2b as restated by T7b; the gate counts as able only when all hold, each
+measured by running it through a reachable instrument): a degraded candidate returns `accept:false`
+when the degradation is two or more task-equivalents (any lesser degradation shows as a `per_task`
+drop); a rationale-removed candidate shows no task with a lower candidate rate than current, at repeat
+5 or more with one re-run on a miss; a one-task flip is a per-task finding read by script, never via an
+epsilon flag; the skill arm beats the control arm by at least 1/N from the harness's own per-arm
+output (a missing readout is a C deliverable); the 0.5 floor and the trusted-corpus floor are never
+cited as no-regression evidence; every decision-bearing rule in the slice maps to at least one corpus
+case through a listing a test computes from the slice text, and the test fails on an empty mapping. No
+corpus-size number is set because the code does not justify one.
 
 ### Alternatives considered
 
@@ -170,7 +194,7 @@ at least one case. No corpus-size number is set because the code does not justif
 |---|---|
 | Slice-bounded `ship-<decision>` target (chosen) | accepted: keeps the harness the gate |
 | Whole-skill LLM-judge over all of `ship` | rejected: cost and the B5 precedent |
-| Anchor tests plus a lint alone, no harness | not in this run: relaxes the issue criterion, a scope call for the operator |
+| Anchor tests plus a lint alone, no harness | rejected (T3, T5); flips only if the operator explicitly accepts lint-only evidence for procedural skills |
 | Move now, guarded by existing tests only | rejected: violates the brief's stop instruction |
 
 ## Work in this run
@@ -188,17 +212,10 @@ and no Capability PR (C) or Move PR (M) work.
    and say the post failed. Never file a new issue as a fallback. Text (self-contained, no file
    links that archival will break):
 
-   > Gate check for `ship` (2026-10-23, PR #10947): the eval harness cannot show a moved-rationale
-   > `ship` behaves no worse than baseline today, so `ship` was not shortened. Missing: (1) a
-   > sentinel-wrapped slice of `ship/SKILL.md` plus a registry row (`eval-gate.cjs --check` returns
-   > `gated:false`); (2) a `ship-<decision>` target wired in `TARGET_RESOURCES`, `TARGET_CONFIG` and
-   > the `expected_set` literal in `registry-completeness.test.sh` (`--dry-run --target ship` exits
-   > 1); (3) evidence covers one decision only, so the other moved paragraphs rest on the anchor
-   > tests and review. Smallest closure: a capability PR (no content moved), then the first move PR.
-   > Cost against saving: days of harness work against about 8.8k tokens (12.9 percent of the file)
-   > per `ship` run, so the saving is modest. Note for whoever picks this up: spec TR1 expected
-   > procedural skills to use lints plus human review rather than this gate, while this issue names
-   > the harness.
+   The text covers the two missing pieces, the slice-only limit, the smallest closure, the cost against
+   saving, and the spec TR1 note. It was amended in place on 2026-10-23 per T10 (marker line kept
+   byte-identical, count still 1) to add the T5, T7 and T8 conditions, the corrected figure range (T9)
+   and the lossless TR1 and FR16 wording; the live comment on #10551 is the source of record.
 
 3. **Verify the comment landed** right after posting: `gh issue view 10551 --json comments` contains
    the marker. No later check is needed.
@@ -210,14 +227,16 @@ and no Capability PR (C) or Move PR (M) work.
 
 ## Follow-ups (not authorized in this run)
 
-Tracked by #10551, which stays open and unedited. These are pointers; the next planner re-derives
+Tracked by #10551, which stays open; its body is unedited and it carries one comment, amended in place. These are pointers; the next planner re-derives
 details from main, which moves quickly (`ship/SKILL.md` took 40 commits in 30 days).
 
-- **Capability PR (C):** closes missing pieces 1 and 2. Owns: the ADR-069 amendment, if any gate
-  semantics change; a corpus of synthesized, discriminating cases; the discrimination bar
+- **Capability PR (C):** closes missing pieces 1 and 2. Owns: the ADR-069 amendment (required: ADR-069
+  is scoped to classifier skills); a corpus of synthesized, discriminating cases; the discrimination bar
   above (`decision-challenges.md` T2b); an AC running `node scripts/eval-gate.cjs --dry-run --target <t>`
   (exit 0) and the registry-completeness test so the gate cannot ship dormant; a smoke run first
-  (`--filter-first-n 1 --repeat 1 --no-cache`) with each row's output read. A rationale-only-diff
+  (`--filter-first-n 1 --repeat 1 --no-cache`) with each row's output read, and the README
+  thinking-budget warning heeded (a small `ANTHROPIC_MAX_TOKENS` returns empty text that a lexical
+  scorer reads as compliant; #8290 needed 3000). A rationale-only-diff
   lint (non-Why lines byte-preserved, `[id: ]` tokens and gate headings set-equal, every moved
   paragraph present in PURPOSE.md by heading) is required evidence for M (`decision-challenges.md`
   T5), to be scoped and Guard-Contract'd in C's own plan.
@@ -225,8 +244,10 @@ details from main, which moves quickly (`ship/SKILL.md` took 40 commits in 30 da
   paragraphs keyed by heading into `ship/PURPOSE.md`, keeps every step, fence, `[id: ]`, marker and
   `references/` link in SKILL.md, links PURPOSE.md once, edits no `description:`, lowers the `ship`
   ceiling in `plugins/soleur/test/skill-body-budget.json` (ratchets down only) in the same PR, reviews
-  each moved paragraph clause by clause for scope-limiting conditions, and attaches the eval verdict
-  to the PR body worded as slice-only evidence. One skill per PR, `Ref #10551`.
+  each moved paragraph clause by clause for scope-limiting conditions, and attaches BOTH the eval
+  verdict (worded as slice-only evidence) and the rationale-only-diff lint result (T5). M's plan
+  reconciles spec FR16, which also names learning citations moving to PURPOSE.md, with the brief's
+  rationale/Why wording. One skill per PR, `Ref #10551`.
 
 ## Scope Check
 
@@ -257,7 +278,7 @@ details from main, which moves quickly (`ship/SKILL.md` took 40 commits in 30 da
 ### Split Assessment
 
 - Subsystems touched: 1 - `knowledge-base`
-- Planned files: 3 | Estimated changed lines: about 330
+- Planned files: 3 | Estimated changed lines: about 400
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR. C and M are separate later PRs by design.
 
@@ -294,8 +315,8 @@ changes no product surface. `soleur:engineering:review:user-impact-reviewer` app
 ### Engineering (CTO)
 
 **Status:** reviewed
-**Assessment:** the CTO ruled on the gate verdict, the smallest closure and where to record the gap
-(`decision-challenges.md`). The brainstorm CTO assessment is carried forward: Phase 3 is a token and
+**Assessment:** the CTO ruled on the gate verdict, the smallest closure, where to record the gap, the evidence
+bar for M and the run's next action (`decision-challenges.md` T1 to T6, plus the review-time rows). The brainstorm CTO assessment is carried forward: Phase 3 is a token and
 clarity cleanup, not a claimed quality win, and procedural skills have no train and validation split.
 No other domain is relevant (internal harness tooling, no UI surface, no retained traces).
 
@@ -308,7 +329,7 @@ No other domain is relevant (internal harness tooling, no UI surface, no retaine
   after the commit (the files are untracked until then).
 - [ ] `git diff --quiet origin/main...HEAD -- plugins/` exits 0 (no `ship/SKILL.md` or PURPOSE.md
   change, no harness change).
-- [ ] `test "$(grep -c '| technical |' knowledge-base/project/specs/feat-one-shot-10551-ship-purpose-md/decision-challenges.md)" -eq 7`
+- [ ] `! grep -q '| operator' knowledge-base/project/specs/feat-one-shot-10551-ship-purpose-md/decision-challenges.md`
   and `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` exits 0.
 - [ ] The PR body matches `Ref #10551` and does not match `(Closes|Fixes|Resolves) #`
   (`gh pr view --json body -q .body | grep -E 'Ref #10551'`, then the negative grep).
@@ -337,6 +358,8 @@ Re-runnable, zero-API, from `plugins/soleur/skills/eval-harness`:
   script computes makes it meaningless. Check the executor first.
 - Ship Phase 6 renders `decision-challenges.md` and files an issue only for `operator (...)` rows;
   this plan has none, so ship files none and the existing decision-challenge issue stays untouched.
+  The one operator-class question (whether and when to fund C, a priority call) is raised in the run's
+  closing message, not filed.
 - Ship archives the plan and specs in the PR, so no artifact should cite their live paths; the
   comment text above is self-contained for that reason.
 - A plan whose `## User-Brand Impact` is empty or omits the threshold fails deepen-plan Phase 4.6;

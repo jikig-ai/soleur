@@ -10,7 +10,7 @@ after the finding. Do not edit `plugins/soleur/skills/ship/SKILL.md` and do not 
 - 1.1 From `plugins/soleur/skills/eval-harness` run the three probes in the plan's Test Scenarios
   (`--check ../ship/SKILL.md`, `--dry-run --target ship --repeat 3`, and the `incident-threshold`
   control), each with its exit code.
-- 1.2 Outcome unchanged: continue. Control fails or errors: post no comment, report the broken probe.
+- 1.2 Outcome unchanged: continue. Control fails or errors: post no comment, leave the PR draft, report the broken probe.
   A negative probe flipped: note "gate flipped" in the PR body, post no "cannot" comment, report it.
 
 ## Phase 2: Record the finding
@@ -27,4 +27,5 @@ after the finding. Do not edit `plugins/soleur/skills/ship/SKILL.md` and do not 
   `Ref #10551` and no closing keyword.
 - 3.2 Run the plan's Acceptance Criteria commands, including
   `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` and markdownlint.
-- 3.3 Stop. Capability PR (C) and Move PR (M) are not part of this run.
+- 3.3 Hand off to review and ship (T6 merges this docs-only PR). Capability PR (C) and Move PR (M) are
+  not part of this run.
