@@ -3,8 +3,8 @@ title: "Keep worktree commands explicit and match CLI flags to the command"
 date: 2026-10-23
 category: workflow-patterns
 tags: [codex, worktree, shell, gitleaks, github-api, git-transport, process-monitoring]
-symptom: "A chained shell command ended in a syntax error; gitleaks was passed Git's -C flag; GitHub reads timed out; a push hit an HTTP/2 framing error; the local RLS harness reached a stale schema; polling an already-finished shell session lost its exit status; a commit hook saw the session's main-branch context and an unscoped status ran from the bare root; cleanup using `rm -f` was rejected by the command guard."
-root_cause: "A trailing && left an incomplete shell command, gitleaks git accepts the repository as a positional argument rather than -C, transient HTTPS connections failed during TLS setup or HTTP/2 framing, the existing local Postgres lacked the Codex generation column, completed exec sessions cannot be resumed for a final status, Git commands without explicit -C can inherit the harness CWD instead of the selected worktree, and the command guard rejects `rm -f` patterns."
+symptom: "A chained shell command ended in a syntax error; gitleaks was passed Git's -C flag; GitHub reads timed out; a push hit an HTTP/2 framing error; the local RLS harness reached a stale schema; polling an already-finished shell session lost its exit status; a commit hook saw the session's main-branch context and an unscoped status ran from the bare root; cleanup using `rm -f` was rejected by the command guard; `gh api --slurp --jq` printed usage and exited non-zero."
+root_cause: "A trailing && left an incomplete shell command, gitleaks git accepts the repository as a positional argument rather than -C, transient HTTPS connections failed during TLS setup or HTTP/2 framing, the existing local Postgres lacked the Codex generation column, completed exec sessions cannot be resumed for a final status, Git commands without explicit -C can inherit the harness CWD instead of the selected worktree, the command guard rejects `rm -f` patterns, and gh api does not support `--slurp` together with `--jq`."
 ---
 
 # Keep worktree commands explicit and match CLI flags to the command
@@ -28,3 +28,4 @@ root_cause: "A trailing && left an incomplete shell command, gitleaks git accept
 - Do not migrate a local database whose disposable status is unknown. Run live RLS cases only against a disposable database with the required migration set.
 - In Codex, use `git -C <absolute-worktree>` for every Git operation that depends on the selected worktree, including commits and follow-up status checks; a shell `workdir` alone did not satisfy the commit guard's branch context in this session.
 - For a known temporary file when `rm -f` is rejected, use an existence-checked `Path.unlink(missing_ok=True)` rather than retrying a force-removal command.
+- To aggregate paginated `gh api` JSON with jq, pipe the paginated response to `jq -s`; `gh api --slurp --jq` is an unsupported flag combination.
