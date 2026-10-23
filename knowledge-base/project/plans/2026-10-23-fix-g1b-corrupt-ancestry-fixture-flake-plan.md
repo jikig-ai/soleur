@@ -88,7 +88,10 @@ contradicting any ADR — the mechanism-grep found no rejected-alternative colli
   (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`), so only binary defaults vary.
 - Arm C (forged commit object, `git hash-object -w -t commit --stdin` with a parent that was never
   written, `update-ref`): identical refusal shape — rc 0, empty list, same `Could not read`
-  stderr — and **survives `git repack -ad`**. Deterministic.
+  stderr — on loose AND packed stores. Deterministic. CTO ruling correction (2026-10-23): a
+  `git repack -ad` issued AFTER forging fails (`Failed to traverse parents` on git 2.56), so the
+  packed-store arm repacks the healthy graph FIRST (fixture setup) and forges second — which is
+  what AC4 and mutation row 6 already prescribe.
 - Arm D (forged tag object, `git hash-object -w -t tag --stdin` targeting a never-written commit):
   tag listed by `git tag --list`, `^{commit}` peel fails, `--merged` returns exactly the healthy
   tag — the B7a shape, deterministic.
@@ -211,8 +214,10 @@ row — the same "one spelling of one idea" chokepoint `git-fixture-env.sh` was 
 because the defect census found FIVE sites across TWO suites spelling it independently:
 
 - `dead_oid <repo>` — compute a sha that is guaranteed absent from the object store:
-  `printf 'soleur-corrupt-graph %s\n' "<nonce>" | git -C <repo> hash-object -t commit --stdin`
-  (NO `-w` — computed, never persisted; absence is a construction invariant, not a race).
+  `printf 'soleur-corrupt-graph %s\n' "<nonce>" | git -C <repo> hash-object --stdin`
+  (NO `-w`, and **blob type** — a `-t commit` hash of nonce bytes is refused by format fsck on
+  git 2.56, `missingTree: invalid format`, even without `-w`; measured by the CTO ruling.
+  Computed, never persisted; absence is a construction invariant, not a race).
 - `corrupt_walk_break <repo> <ref>` — write a commit object via `hash-object -w -t commit`
   whose parent is a `dead_oid`, then `update-ref <ref>` to it. The ref's ancestry now traverses a
   never-written object; `git tag --merged`/`merge-base` emit `error: Could not read` on stderr
@@ -259,7 +264,10 @@ ADR-188's four properties, ported:
 2. **Harness-bug rung above the skip.** A construction invariant failing (a `dead_oid` that
    `cat-file -e` can read, a forge whose `update-ref` did not take) is a harness defect and FAILs
    — never a skip. Only the enumerated environment class (walk-contract divergence) is
-   skip-eligible.
+   skip-eligible. Per the CTO ruling, the **B7a peel precondition classifies here**: peel failure
+   is guaranteed by the never-written construction, so a dead tag that still `^{commit}`-peels is
+   a construction-invariant FAIL — carry an explicit comment at the site so a future editor does
+   not route it to the skip rung.
 3. **Branch order is load-bearing and commented:** construction-invariant check → walk-contract
    probe (skip) → run row, evaluated once.
 4. **Counted and capped.** Each suite declares `SKIPPED_ASSERTIONS=0`; the tail floor becomes
@@ -274,13 +282,21 @@ ADR-188's four properties, ported:
 (`scripts/followthroughs/t5-skip-persistence-bound-7510.sh`) samples only
 `infra-validation.yml` runs gated on the rehearsal suite's terminal line. Extend it so the new
 producers are observed: add `SKIP (loud): g1b.`, `SKIP (loud): g2b.`, and `SKIP (loud): fl.`
-markers plus a second run-source (`pr-quality-guards.yml` runs — sampled across events since the
-suite runs identically on PR and merge_group legs) with its own positive-control discriminator (a
-line unique to these suites' output, e.g. the `Results: N pass` terminal emitted inside the
-fixture-tests step — verified at implement time that `gh run view --log` carries it unrelayed).
+markers plus a second run-source (`pr-quality-guards.yml` runs) with its own positive-control
+discriminator (a line unique to these suites' output, e.g. the `Results: N pass` terminal emitted
+inside the fixture-tests step — verified at implement time that `gh run view --log` carries it
+unrelayed). CTO ruling corrections (2026-10-23): `pr-quality-guards.yml` has **no post-merge
+leg** — its triggers are `pull_request` + `merge_group` only, and merge_group runs land on
+`gh-readonly-queue/*` refs, so the new source CANNOT reuse the `--branch main`/
+`conclusion==success` sampling of `infra-validation.yml` verbatim; it must sample by event. If
+only one event is sampled, prefer `merge_group` legs — they are the runs that gate landing to
+main.
 Mirror the marker additions in `t5-skip-persistence-bound-7510.test.sh`'s fed-log rows.
-`scheduled-rehearsal-skip-monitor.yml` needs no edit if the probe's invocation stays unchanged —
-the workflow calls the script; only its internals widen.
+`scheduled-rehearsal-skip-monitor.yml` DOES need edits (CTO correction — the "needs no edit"
+claim was false): its alert title/body ("git-data rehearsal suite is skipping arms across runs",
+~lines 234-236) and pre-bake remediation text (~line 286) are rehearsal-specific, so a g1b skip
+would file a mislabeled issue; generalize them or make them per-source, and give the probe's
+FAIL remediation lines (~221-223) a per-source line as well.
 
 ## Technical Considerations
 
@@ -465,8 +481,12 @@ own test file re-derives from the suite's emitted lines.
 - [ ] AC7 — Tail accounting: `TOTAL=$((PASS + FAIL + SKIPPED_ASSERTIONS))` and a
   `SKIPPED_ASSERTIONS <= <cap>` ceiling assertion exist in both suites; a skip beyond cap reds.
 - [ ] AC8 — `SKIP_MARKERS`/run-source coverage: the standing probe (or a sibling it invokes)
-  samples `pr-quality-guards.yml` runs and greps `SKIP (loud): g1b.`/`g2b.`/`fl.` markers, with a
-  suite-level positive-control discriminator so marker-absence can never read as clean.
+  samples `pr-quality-guards.yml` runs by EVENT (`pull_request` and/or `merge_group` —
+  merge_group preferred if one) — never the `--branch main`/`conclusion==success` sampling used
+  for `infra-validation.yml` — and greps `SKIP (loud): g1b.`/`g2b.`/`fl.` markers, with a
+  suite-level positive-control discriminator so marker-absence can never read as clean; and
+  `scheduled-rehearsal-skip-monitor.yml`'s alert/remediation text is generalized or per-source so
+  a g1b/g2b/fl marker never files a rehearsal-labeled issue.
 - [ ] AC9 — `MIN_ASSERTIONS` floor comments carry re-derived counts where assertion rows moved;
   floors were not lowered silently.
 - [ ] AC10 — `git diff origin/main` touches no file under `.github/scripts/` outside
@@ -565,6 +585,9 @@ None — queried 95 open `code-review` issues for both
   producers; add the suite-scoped positive-control discriminator.
 - `scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh` — fed-log rows covering the
   new markers and the second workflow source.
+- `.github/workflows/scheduled-rehearsal-skip-monitor.yml` — generalize (or make per-source) the
+  alert title/body and remediation text so non-rehearsal skip markers file correctly labeled
+  issues.
 
 ## Implementation Phases
 
@@ -587,10 +610,11 @@ None — queried 95 open `code-review` issues for both
 
 ### Phase 3 — cross-run observer
 
-6. Extend `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` (second workflow source,
-   new markers, suite-scoped discriminator) and its `.test.sh` fed-log rows.
-7. Re-check `scheduled-rehearsal-skip-monitor.yml` — confirm the probe invocation needs no
-   change; edit only if the contract moved.
+6. Extend `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` (second workflow source
+   sampled by event — merge_group preferred — new markers, suite-scoped discriminator) and its
+   `.test.sh` fed-log rows.
+7. Edit `scheduled-rehearsal-skip-monitor.yml` — generalize/per-source the alert title/body and
+   remediation lines so g1b/g2b/fl markers never file rehearsal-labeled issues (CTO ruling).
 
 ### Phase 4 — verification
 

@@ -20,3 +20,8 @@
 
 ### Components Invoked
 - soleur:plan (inline), soleur:deepen-plan (inline), cloud-detect.sh, gh CLI, lint-guard-contract.py, lint-infra-no-human-steps.py, markdownlint-cli2
+
+## Technical-Ruling Gate
+- cto_spawns=1 (batched, 5 rows ruled 2026-10-23 — see decision-challenges.md)
+- Plan + tasks.md amended for ruling corrections: blob-type dead_oid, repack-before-forge ordering, B7a peel = construction-invariant FAIL, monitor-workflow alert/remediation edits required, merge_group event sampling
+- Item 5 ruling: plan-review re-run as a real subagent before work

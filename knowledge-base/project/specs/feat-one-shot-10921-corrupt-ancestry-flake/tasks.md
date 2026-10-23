@@ -6,8 +6,9 @@ Issue: #10921 · closes #10921
 ## Phase 1 — Setup + shared lib
 
 - [ ] 1.1 Write `plugins/soleur/test/lib/git-corrupt-graph.sh`: `dead_oid <repo>` (hash-object
-  WITHOUT `-w` — computed, never persisted), `corrupt_walk_break <repo> <ref>` (forged commit,
-  parent = dead oid, `update-ref`), `corrupt_dead_tag <repo> <tag>` (forged tag object targeting
+  WITHOUT `-w`, BLOB type — `-t commit` on nonce bytes is fsck-refused on git 2.56, CTO ruling),
+  `corrupt_walk_break <repo> <ref>` (forged commit, well-formed 40-hex parent = dead oid,
+  `update-ref`), `corrupt_dead_tag <repo> <tag>` (forged tag object targeting
   a dead oid), `corrupt_skip <row> <reason>` (`SKIP (loud):` + `::warning::` with `%`/CR/LF
   sanitization + `SKIPPED_ASSERTIONS` charge). Header cites #10921 + the Arm-B reproduction.
 - [ ] 1.2 `bash -n` + shellcheck per suite conventions; fixture-env adoption stays clean.
@@ -43,8 +44,10 @@ Issue: #10921 · closes #10921
   positive-control discriminator per source (per-source `observed` — never one shared counter).
 - [ ] 4.2 `scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh`: fed-log rows — marker
   present → hit; discriminator present + no markers → PASS; neither → TRANSIENT.
-- [ ] 4.3 Verify `scheduled-rehearsal-skip-monitor.yml` invocation unchanged (edit only if the
-  probe's contract moved).
+- [ ] 4.3 Edit `scheduled-rehearsal-skip-monitor.yml`: generalize or make per-source the alert
+  title/body and remediation lines (currently rehearsal-specific) so g1b/g2b/fl markers file
+  correctly labeled issues (CTO ruling; probe's second source samples by event — merge_group
+  preferred, never `--branch main`/`conclusion==success` on `gh-readonly-queue/*` refs).
 
 ## Phase 5 — Verification
 
