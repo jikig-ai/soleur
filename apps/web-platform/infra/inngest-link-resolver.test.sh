@@ -61,6 +61,16 @@ trap 'rm -rf "$WORK"' EXIT
 FX="$WORK/fx"; BIN="$WORK/bin"; RUNS="$WORK/runs"
 mkdir -p "$FX" "$BIN" "$RUNS" || die "mkdir failed"
 
+# The shared curl profile table and `-w` printer (#10934): both curl doubles of the two suites and the H6/H7 rows use ONE file. The stub
+# bakes the absolute fixture and sentinel paths in at creation (a quoted heredoc cannot expand them) and exits 98 when the source fails,
+# so an unset variable or a missing file cannot read as one more failed curl attempt. CURL_W_PROFILES_FILE overrides the fixture path
+# at run time (H9 runs the comparison against a copy with one value flipped). Every row asserts the sentinel absent afterwards.
+CURLW_FIXTURE="$SCRIPT_DIR/test-fixtures/curl-w-profiles.sh"
+CURLW_SENTINEL="$WORK/curlw.sentinel"
+[ -r "$CURLW_FIXTURE" ] || die "the shared curl profile fixture is missing: $CURLW_FIXTURE"
+# shellcheck source=test-fixtures/curl-w-profiles.sh
+source "$CURLW_FIXTURE" || die "could not source $CURLW_FIXTURE"
+
 # ---------------------------------------------------------------------------------------
 # FIXTURES: throwaway certificates (ECDSA P-256), generated here, never committed.
 # ---------------------------------------------------------------------------------------
@@ -149,30 +159,52 @@ cat > "$BIN/logger" <<'STUB'
 printf '%s\n' "$*" >> "${RUN_DIR:?}/logger.log"
 exit 0
 STUB
-cat > "$BIN/curl" <<'STUB'
-#!/bin/bash
-# Records argv; behaves like curl --cacert against a server that presents $FX_SERVER_CERT:
-#   -k / --insecure                  -> accepted (this is exactly what the resolver must never pass)
-#   --cacert F, F fingerprint match  -> 200
-#   no --cacert / mismatch / no PEM  -> exit 60 (certificate verification failed)
+{
+  printf '#!/bin/bash\nCURLW_FIXTURE=%q\nCURL_W_SENTINEL=%q\n' "$CURLW_FIXTURE" "$CURLW_SENTINEL"
+  cat <<'STUB'
+# Records argv; behaves like curl --cacert against a server that presents $FX_SERVER_CERT. EVERY self-gate outcome (a call with -w) is
+# printed by the shared printer (test-fixtures/curl-w-profiles.sh) as a named profile: what real curl prints for the phase, never an
+# empty stdout with a bare exit code. A call without -w (the Sentry POST) passes through silently.
+#   -k / --insecure                  -> ok200 (this is exactly what the resolver must never pass)
+#   --cacert F, F fingerprint match  -> ok200 (status502 when FX_CURL_CODE=502)
+#   no --cacert / mismatch / no PEM  -> verify18 (rc 60: certificate verification failed)
+#   FX_CURL_FAIL_FIRST=N             -> the first N calls print verify18 (rc 60)
+#   FX_CURL_ALWAYS_OK=1              -> ok200 (status502 for FX_CURL_CODE=502) whatever the server presents
+#   FX_CURL_PROFILES=p1,p2,...       -> the Nth -w call prints profile pN (the last repeats); <name>@<rc> overrides the exit code;
+#                                       FX_CURL_PROFILES_IGNORED=1 disables the list (harness row H8: the stub then answers like a healthy server)
 printf '%s\n' "$*" >> "${RUN_DIR:?}/curl.argv"
 n=$(( $(cat "$RUN_DIR/curl.count" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$RUN_DIR/curl.count"
-# FX_CURL_FAIL_FIRST=N: the first N calls fail verification (exit 60); FX_CURL_CODE: the HTTP code a TLS-verified call reports
-if [ -n "${FX_CURL_FAIL_FIRST:-}" ] && [ "$n" -le "$FX_CURL_FAIL_FIRST" ]; then exit 60; fi
-if [ "${FX_CURL_ALWAYS_OK:-}" = 1 ]; then printf '%s' "${FX_CURL_CODE:-200}"; exit 0; fi
-cacert=""; insecure=0; prev=""
+cacert=""; insecure=0; prev=""; fmt=""; have_w=0
 for a in "$@"; do
   case "$a" in -k|--insecure|-sk|-ks) insecure=1 ;; esac
   if [ "$prev" = "--cacert" ]; then cacert="$a"; fi
+  if [ "$prev" = "-w" ]; then fmt="$a"; have_w=1; fi
   prev="$a"
 done
-if [ "$insecure" = 1 ]; then printf '200'; exit 0; fi
-[ -n "$cacert" ] || exit 60
-want="$(openssl x509 -in "$FX_SERVER_CERT" -noout -fingerprint -sha256 2>/dev/null)"
-got="$(openssl x509 -in "$cacert" -noout -fingerprint -sha256 2>/dev/null)"
-if [ -n "$got" ] && [ "$got" = "$want" ]; then printf '%s' "${FX_CURL_CODE:-200}"; exit 0; fi
-exit 60
+if [ "$have_w" != 1 ]; then exit 0; fi
+# shellcheck disable=SC1090
+source "${CURL_W_PROFILES_FILE:-$CURLW_FIXTURE}" || exit 98
+wn=$(( $(cat "$RUN_DIR/curl.wcount" 2>/dev/null || echo 0) + 1 )); printf '%s' "$wn" > "$RUN_DIR/curl.wcount"
+okspec=ok200
+case "${FX_CURL_CODE:-200}" in 200) okspec=ok200 ;; 502) okspec=status502 ;; *) okspec="unmodelled-code-${FX_CURL_CODE}" ;; esac
+spec=""
+if [ -n "${FX_CURL_FAIL_FIRST:-}" ] && [ "$n" -le "$FX_CURL_FAIL_FIRST" ]; then spec=verify18
+elif [ "${FX_CURL_ALWAYS_OK:-}" = 1 ]; then spec="$okspec"
+elif [ -n "${FX_CURL_PROFILES:-}" ] && [ "${FX_CURL_PROFILES_IGNORED:-}" != 1 ]; then
+  IFS=, read -r -a plist <<< "$FX_CURL_PROFILES"
+  idx=$(( wn - 1 )); if [ "$idx" -ge "${#plist[@]}" ]; then idx=$(( ${#plist[@]} - 1 )); fi
+  spec="${plist[$idx]}"
+elif [ "$insecure" = 1 ]; then spec=ok200
+elif [ -z "$cacert" ]; then spec=verify18
+else
+  want="$(openssl x509 -in "$FX_SERVER_CERT" -noout -fingerprint -sha256 2>/dev/null)"
+  got="$(openssl x509 -in "$cacert" -noout -fingerprint -sha256 2>/dev/null)"
+  if [ -n "$got" ] && [ "$got" = "$want" ]; then spec="$okspec"; else spec=verify18; fi
+fi
+curlw_print "$spec" "$fmt"
+exit $?
 STUB
+} > "$BIN/curl"
 cat > "$BIN/sleep" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "${RUN_DIR:?}/sleep.log"
@@ -260,7 +292,7 @@ scenario() { # <block file> <run id>
   [ -n "${PRE:-}" ] && ( cd "$LINKDIR" && eval "$PRE" )
   (
     export FX_NOW="$NOW"
-    export RUN_DIR="$RUN" FX_SERVER_CERT="${SERVER_CERT:-$FX/good.crt}" FX_CURL_ALWAYS_OK="${CURL_ALWAYS_OK:-}" FX_CURL_FAIL_FIRST="${CURL_FAIL_FIRST:-}" FX_CURL_CODE="${CURL_CODE:-}"
+    export RUN_DIR="$RUN" FX_SERVER_CERT="${SERVER_CERT:-$FX/good.crt}" FX_CURL_ALWAYS_OK="${CURL_ALWAYS_OK:-}" FX_CURL_FAIL_FIRST="${CURL_FAIL_FIRST:-}" FX_CURL_CODE="${CURL_CODE:-}" FX_CURL_PROFILES="${CURL_PROFILES:-}" FX_CURL_PROFILES_IGNORED="${CURL_PROFILES_IGNORED:-}"
     export PATH="$BIN:${PATH_OVERRIDE:-$PATH}"
     LOG_TAG=ci-deploy
     unset SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY
@@ -1147,8 +1179,11 @@ declare -A RES ROW_WHYS
 run_rows() {
   local block="$1" id; shift
   for id in "$@"; do
-    ROW_ID="$id"; WHY=""
+    ROW_ID="$id"; WHY=""; rm -f "$CURLW_SENTINEL"
     if "row_$id" "$block"; then RES[$id]=0; else RES[$id]=1; ROW_WHYS[$id]="$WHY"; fi
+    # the shared printer refused an unknown variable or profile during this row (the function under test swallows curl's exit and
+    # stderr, so the exit alone would read as one more failed attempt): the row is violated whatever else it said
+    if [ -e "$CURLW_SENTINEL" ]; then RES[$id]=1; ROW_WHYS[$id]="${ROW_WHYS[$id]:+${ROW_WHYS[$id]}; }the curl profile printer refused: $(head -n1 "$CURLW_SENTINEL")"; rm -f "$CURLW_SENTINEL"; fi
   done
 }
 
