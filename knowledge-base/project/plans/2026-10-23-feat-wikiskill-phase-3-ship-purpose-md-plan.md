@@ -13,6 +13,32 @@ gate_verdict: fail-stop
 
 # feat(harness): WikiSkill Phase 3 - shorten ship SKILL.md into PURPOSE.md (eval-gate first)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23. **Evidence used:** a five-seat plan-review panel (DHH, Kieran, code
+simplicity, architecture, spec-flow), two CTO rulings (the second withdrew a proposed
+neutral-refactor mode), a learnings search, and the deepen halts run mechanically. A full
+all-agent fan-out was not run: this plan edits only planning artifacts and its claims were each
+re-derived from source by two independent seats.
+
+Key improvements from review and deepen:
+
+1. The "smallest change" shrank: no `verdict.cjs` or `eval-gate.cjs` change, because the existing
+   `--target-task` flag accepts a retention case (verified in code by the CTO and the simplicity seat).
+2. A measurable discrimination bar replaced the undefined "bar" (T2b).
+3. The #10551 comment is self-contained, posted once with a dedupe marker, and cites draft PR #10947.
+4. The wrong "hardcoded extract-block loop" claim was corrected: the third hardcoded place is the
+   `expected_set` literal in `registry-completeness.test.sh`.
+
+New considerations: the `ship` ceiling in `plugins/soleur/test/skill-body-budget.json` ratchets down
+only, so M should lower it in the same PR; harness evidence is slice-only and M must say so.
+
+Halts run: 4.6 user-brand impact (pass), 4.7 observability (skip, pure docs), 4.8 PAT sweep (0 hits),
+4.9 UI wireframe (skip), 4.10 encryption (skip, no store), 4.11 guard contract (skip, no guard in
+this deliverable; the optional lint gets its Guard Contract in C's plan), 4.12 scope check (pass:
+one unfenced section, three subsections, a `Recommendation:` line, no `unmapped` or `BLOCKED`).
+Cited issue and PR numbers and the one cited rule id were verified live.
+
 ## Overview
 
 Phase 3 of the WikiSkill work (issue #10551, `Ref` only, never `Closes`) asks for the rationale
@@ -124,8 +150,10 @@ Medium effort, days.
 
 **Claim limit.** The evidence may only say "rationale removal inside the wrapped slice did not
 regress classification of decision X". It says nothing about the other roughly 50 Why paragraphs,
-which sit in Phase 7 and elsewhere and are mostly script-enforced, so the executor litmus excludes
-them. Move PR (M) must label those "not harness-evaluated". Whether that satisfies "attach the eval
+of which 14 sit in Phase 7 and the rest are spread over 23 other headings (24 distinct headings in all, counted with an
+awk heading tally). Any that a script or hook enforces fail the executor litmus and cannot be in a
+slice; M's plan must count how many that is rather than assume. Move PR (M) must label those "not
+harness-evaluated". Whether that satisfies "attach the eval
 comparison" is a scope question for the operator, so this plan does not assume it does.
 
 **Discrimination bar** (T2b; the gate counts as able only when all hold, each measured by running it):
