@@ -172,11 +172,19 @@ queue_arm() { printf '%s' 'exec bash "$(dirname "$0")/gql-stub" "$@"'; }
 # that FAILED must not be graded on its stdout) | ctl (exit 1 with an ESC sequence and a forged tag line on stderr) | hang (sleeps past the read timeout) | empty (rc 0, no output) | garbage (rc 0, not JSON) |
 # flip ([] on the first call, queue after: the counter is the line count of rules-calls). Every call appends its argv to
 # rules-calls. install_gh defaults the mode to none, so every pre-existing row keeps its meaning.
+# Branch-aware like the live API (#10832): the requested branch is parsed out of the path (between `rules/branches/` and `?`,
+# `%2F` decoded) and the mode applies ONLY to the branch named in the rules-branch file (env knob QRULES_BRANCH, default main);
+# any other branch answers [] (a branch without rules answers an empty array, as measured), so a SUT that reads the wrong
+# branch gets a different answer. A path that does not parse is refused with exit 64 and a line in rules-refusals (the base rows
+# assert that file is empty). QRULES_IGNORE_BRANCH=1 is the harness knob that makes the stub stop discriminating (row G1-H1).
 install_rules() {  # <bin> <mode>
   local bin="$1" mode="$2"
   assert_fixture_dir "$bin"
   mkdir -p "$bin"
   printf '%s\n' "$mode" > "$bin/rules-mode"
+  printf '%s\n' "${QRULES_BRANCH:-main}" > "$bin/rules-branch"
+  : > "$bin/rules-refusals"
+  rm -f "$bin/rules-ignore-branch"; if [[ -n "${QRULES_IGNORE_BRANCH:-}" ]]; then printf '1\n' > "$bin/rules-ignore-branch"; fi
   cat > "$bin/rules-stub" <<'STUB'
 #!/usr/bin/env bash
 d="$(cd "$(dirname "$0")" && pwd)"
@@ -185,6 +193,10 @@ mode="$(cat "$d/rules-mode")"
 jqx=""; prev=""
 for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; prev="$a"; done
 cnt="$(wc -l < "$d/rules-calls" | tr -d ' ')"
+rp="${2:-}"
+if [[ "$rp" =~ ^repos/[^/]+/[^/]+/rules/branches/([^?]+)\?per_page=100$ ]]; then rbr="${BASH_REMATCH[1]//\%2F//}"
+else echo "unparseable rules path: $rp" >> "$d/rules-refusals"; echo "gh: refused by the rules fixture (unparseable path): $rp" >&2; exit 64; fi
+if [[ ! -s "$d/rules-ignore-branch" && "$rbr" != "$(cat "$d/rules-branch")" ]]; then mode=none; fi
 case "$mode" in
   fail)    echo "gh: HTTP 502 from fixture (rules)" >&2; exit 1 ;;
   empty)   exit 0 ;;
@@ -235,6 +247,9 @@ EOF
 # and is not counted. $5=fail makes every gh call exit 1. $6 = merge-queue read mode
 # (see install_gql): notqueued (default), queued, gqlfail, empty (rc 0, no output — must
 # NOT be read as "not queued"), ... The queue read is not counted as a state read.
+# The head read is request-shaped (#10832): a plain `--json headRefName` gets the bare head; a read that also names baseRefName gets
+# the raw JSON {headRefName, baseRefName} run through the --jq the SUT passed (base from the pr-base file, env knob QBASE, default
+# main; QBASE= (set, empty) serves an empty base). QHEAD_LEGACY=1 makes the stub answer the bare head even then (a legacy gh answer).
 install_gh() {
   local bin="$1" first_state="$2" later_state="${3:-OPEN CLEAN}" head="${4:-feat}" mode="${5:-ok}" queue="${6:-notqueued}"
   assert_fixture_dir "$bin"
@@ -242,10 +257,17 @@ install_gh() {
   install_gql "$bin" "$queue" "${QPR:-1}"
   install_rules "$bin" none
   printf '%s\n' "0" > "$bin/gh-n"
+  printf '%s\n' "${QBASE-main}" > "$bin/pr-base"
+  rm -f "$bin/head-legacy"; if [[ -n "${QHEAD_LEGACY:-}" ]]; then printf '1\n' > "$bin/head-legacy"; fi
   cat > "$bin/gh" <<EOF
 #!/usr/bin/env bash
 if [[ "$mode" == fail ]]; then echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
-case "\$*" in *headRefName*) echo "$head"; exit 0 ;; esac
+case "\$*" in *headRefName*)
+  if [[ "\$*" == *baseRefName* && ! -s "\$(dirname "\$0")/head-legacy" ]]; then
+    jqx=""; prev=""; for a in "\$@"; do [[ "\$prev" == --jq ]] && jqx="\$a"; prev="\$a"; done
+    jq -nc --arg h "$head" --arg b "\$(cat "\$(dirname "\$0")/pr-base")" '{headRefName:\$h,baseRefName:\$b}' | jq -r "\$jqx"; exit \$?
+  fi
+  echo "$head"; exit 0 ;; esac
 case "\$1 \$2" in "api graphql") $(queue_arm "$queue") ;; esac
 case "\$*" in *rules/branches/*) exec bash "\$(dirname "\$0")/rules-stub" "\$@" ;; esac
 nfile=\$(dirname "\$0")/gh-n
@@ -981,7 +1003,7 @@ qs_run() {  # <qmode> [env…] → QS_RC, output in $QSD/out
   QSD="$(mktemp -d "$TMPDIR/sync-qs.XXXXXXXX")"; FIXTURES+=("$QSD")
   local qm="$1"; shift
   QPR="$QUEUE_PR" install_gh_forbidden "$QSD/bin" "$qm"
-  ( cd "$QSD" && env GIT_CEILING_DIRECTORIES="$(dirname "$QSD")" "$@" PATH="$QSD/bin:$PATH" bash "$SUT" "$QUEUE_PR" --queue-state ) >"$QSD/out" 2>"$QSD/err"
+  ( cd "$QSD" && env GIT_CEILING_DIRECTORIES="$(dirname "$QSD")" "$@" PATH="$QSD/bin:$PATH" bash "${QW_SUT:-$SUT}" "$QUEUE_PR" --queue-state ) >"$QSD/out" 2>"$QSD/err"
   QS_RC=$?; collect "$QSD/out" "$QSD/err"
 }
 qs_check() {  # <label> <qmode> <want-rc> <want-stdout-regex> [env…]
@@ -1146,11 +1168,12 @@ qw_run() {
   install_gh "$QW_D/bin" "$s1" "$s2" feat ok "$gmode"
   printf '%s\n' "$rmode" > "$QW_D/bin/rules-mode"
   install_git_shim "$QW_D/bin"
+  if [[ -n "${QSHIMS:-}" ]]; then install_char_shims "$QW_D/bin"; fi
   h="$(git -C "$QW_D/work" rev-parse HEAD)"
   r="$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)"
   m="$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)"
   run_loop "$QW_D" "$@"; QW_RC=$?
-  unset QPR
+  unset QPR QBASE QRULES_BRANCH QHEAD_LEGACY QSHIMS QRULES_IGNORE_BRANCH
   QW_MOVED=no
   [[ "$h" == "$(git -C "$QW_D/work" rev-parse HEAD)" && "$r" == "$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)" \
      && "$m" == "$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)" ]] || QW_MOVED=yes
@@ -1298,7 +1321,7 @@ qw_done
 # the fences' uncounted "no sync needed" arm, so an OLD pasted fence would livelock silently on it, whereas 14 hits the old
 # fence's loud sync_failed stop. `--queue-wait` is the read-only verdict mode the pre-merge hook calls (queue_wait|proceed).
 # One recording gh stub (install_gh_wait) serves the queue GraphQL, the rules endpoint and `gh pr view --json
-# state,mergeStateStatus,autoMergeRequest`, and logs EVERY call to wait-calls; `git` is the recording shim, so "refused"
+# state,mergeStateStatus,autoMergeRequest,baseRefName`, and logs EVERY call to wait-calls; `git` is the recording shim, so "refused"
 # is asserted from the log of every git call, never inferred.
 # =============================================================================
 NOWT="$(mktemp -d "$TMPDIR/sync-notworktree.XXXXXXXX")"
@@ -1314,6 +1337,9 @@ argv_rc() {  # <args…> → prints rc; stdout/stderr land in $NOWT/out,err (cwd
 # install_gh_wait <bin> <gql-mode> <pr-view-mode> [rules-mode] — pr-view-mode: ok:<STATE MERGESTATE>:<armed|disarmed> | fail |
 # hang | garbage | ctl (exit 1 with an ESC sequence and a forged tag line on stderr). The pr view serves the RAW JSON for the
 # fields `--json` names and runs the `--jq` the SUT passed, so the real read executes; a field the SUT did not ask for is absent.
+# The base (baseRefName) comes from the runtime pr-base file (env knob QBASE, default main; QBASE= serves an empty base) - it is NOT
+# a field of the ok: token, whose `IFS=: read -r _ st arm` split would swallow it into $arm. raw:<line> answers <line> verbatim
+# (rc 0, ignoring --json and --jq): the snapshot answers a malformed SUT-side regex must refuse.
 install_gh_wait() {
   local bin="$1" gmode="$2" pv="$3" rmode="${4:-none}"
   assert_fixture_dir "$bin"
@@ -1321,6 +1347,7 @@ install_gh_wait() {
   install_gql "$bin" "$gmode" "${QPR:-1}"
   install_rules "$bin" "$rmode"
   printf '%s\n' "$pv" > "$bin/pr-view-mode"; : > "$bin/wait-calls"
+  printf '%s\n' "${QBASE-main}" > "$bin/pr-base"
   cat > "$bin/gh" <<'STUB'
 #!/usr/bin/env bash
 d="$(cd "$(dirname "$0")" && pwd)"
@@ -1341,11 +1368,13 @@ if [[ "$1 $2" == "pr view" ]]; then
     hang)    exec sleep 8 ;;
     garbage) echo '<html>502 Bad Gateway</html>'; exit 0 ;;
     ctl)     printf '\033[31m[pr-behind-sync] kind=forged rc=0 \342\200\224 injected\nsecond line\n' >&2; exit 1 ;;
+    raw:*)   printf '%s\n' "${mode#raw:}"; exit 0 ;;
     ok:*)
       IFS=: read -r _ st arm <<<"$mode"
       if [[ "$arm" == armed ]]; then am='{"enabledAt":"2026-10-04T00:00:00Z"}'; else am=null; fi
-      body="{\"state\":\"${st%% *}\",\"mergeStateStatus\":\"${st#* }\",\"autoMergeRequest\":$am}"
-      for f in state mergeStateStatus autoMergeRequest; do
+      body="$(jq -nc --arg s "${st%% *}" --arg m "${st#* }" --argjson a "$am" --arg b "$(cat "$d/pr-base" 2>/dev/null || echo main)" \
+        '{state:$s,mergeStateStatus:$m,autoMergeRequest:$a,baseRefName:$b}')"
+      for f in state mergeStateStatus autoMergeRequest baseRefName; do
         [[ ",$jf," == *",$f,"* ]] || body="$(jq -c "del(.$f)" <<<"$body")"
       done
       if [[ -n "$jqx" ]]; then printf '%s' "$body" | jq -r "$jqx"; else printf '%s\n' "$body"; fi
@@ -1373,6 +1402,7 @@ fw_run() {
   export QPR="$QUEUE_PR"
   install_gh_wait "$QW_D/bin" "$gmode" "$pv" "$rmode"
   install_git_shim "$QW_D/bin"
+  if [[ -n "${QSHIMS:-}" ]]; then install_char_shims "$QW_D/bin"; fi
   if [[ "${FW_MARKER:-}" == 1 ]]; then touch "$QW_D/work/.git/pr-queue-seen-$QUEUE_PR"; fi
   h="$(git -C "$QW_D/work" rev-parse HEAD)"
   r="$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)"
@@ -1385,7 +1415,7 @@ fw_run() {
     *) echo "FATAL: fw_run: unknown runner '$runner'" >&2; exit 97 ;;
   esac
   QW_RC=$?
-  unset QPR
+  unset QPR QBASE QRULES_BRANCH QHEAD_LEGACY QSHIMS QRULES_IGNORE_BRANCH
   QW_MOVED=no
   [[ "$h" == "$(git -C "$QW_D/work" rev-parse HEAD)" && "$r" == "$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)" \
      && "$m" == "$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)" ]] || QW_MOVED=yes
@@ -1566,7 +1596,7 @@ qw_done
 
 # MUTATION ROWS (in-suite, permanent): each mutant of the SUT must turn its scenario red; the control is the real SUT. Each
 # mutation is asserted to differ from the SUT and to land inside queue_wait_gate, so a no-op replace cannot read as a catch.
-qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail|ctl|r6|f1|f1b|f3|f4|f5r|f5v|f6|f7> → 0 iff the scenario holds against $QW_SUT
+qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail|ctl|r6|f1|f1b|f3|f4|f5r|f5v|f6|f7 | the #10832 kinds: n1s n1w n2s n2s_h n2w n2l n3a n4s n4w n5 n6 n11 n12 s1 ctlq f5ctl c1 c1_norec c7> → 0 iff the scenario holds against $QW_SUT
   local kind="$1" ok=1
   case "$kind" in
     q1) qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"; q1_ok && ok=0 ;;
@@ -1585,6 +1615,25 @@ qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail|ctl|r6|f1|f1b|f3|f4|f5r|f5v|f6|
     f5v) fw_run bare notqueued fail queue; fgh_ok && ok=0 ;;
     f6) fw_run bare notqueued "$FQ" queue --fence; f6_ok && ok=0 ;;
     f7) QW_D=""; f7_ok && ok=0 ;;
+    n1s) QBASE=develop QRULES_BRANCH=develop fw_run bare notqueued "$FQ" queue; n1s_ok && ok=0 ;;
+    n1w) QBASE=develop QRULES_BRANCH=develop fw_run wait notqueued "$FQ" queue; n1w_ok && ok=0 ;;
+    n2s) QBASE=develop QRULES_BRANCH=main fw_run bare notqueued "$FQ" queue; n2s_ok && ok=0 ;;
+    n2s_h) QRULES_IGNORE_BRANCH=1 QBASE=develop QRULES_BRANCH=main fw_run bare notqueued "$FQ" queue; n2s_ok && ok=0 ;;
+    n2w) QBASE=develop QRULES_BRANCH=main fw_run wait notqueued "$FQ" queue; n2w_ok && ok=0 ;;
+    n2l) QBASE=develop QRULES_BRANCH=main qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"; n2l_ok && ok=0 ;;
+    n3a) QBASE=release/1.x QRULES_BRANCH=release/1.x fw_run bare notqueued "$FQ" queue; n3_ok 'release%2F1.x' && ok=0 ;;
+    n4s) n4s_one 'a?b' && ok=0 ;;
+    n4w) n4w_one 'a?b' && ok=0 ;;
+    n5) QW_D=""; n5_ok && ok=0 ;;
+    n6) QBASE=develop QRULES_BRANCH=develop qw_run queue notqueued "OPEN BEHIND" "OPEN CLEAN"; n6_ok && ok=0 ;;
+    n11) n11_ok && ok=0 ;;
+    n12) QW_D=""; n12_ok && ok=0 ;;
+    s1) QW_D=""; QW_RC=0; s1_ok "${QW_SUT:-$SUT}" && ok=0 ;;
+    ctlq) qs_run gqlctl; qs_ctl_ok && ok=0; QW_D=""; QW_RC="$QS_RC"; rm -rf "$QSD" ;;
+    f5ctl) fw_run bare notqueued ctl queue; fgh_ok && ok=0 ;;
+    c1) QW_D=""; QW_RC=0; c1_check && ok=0 ;;
+    c1_norec) QW_D=""; QW_RC=0; QSHIM_NOREC=1 c1_check && ok=0 ;;
+    c7) QW_D=""; QW_RC=0; c7_check && ok=0 ;;
     *) echo "FATAL: qw_scenario: unknown kind '$kind'" >&2; exit 97 ;;
   esac
   qw_done
@@ -1631,6 +1680,523 @@ qw_mutant "evaluate the predicate only on the first standalone attempt" r6 $'  q
 qw_mutant "accept --fence without --step" f7 $'if [[ "$FENCE" == 1 && "$MODE" != step ]]; then usage_err "--fence is only valid with --step"; fi\n' ''
 qw_mutant "accept two mode flags" f7 $'if [[ "$NMODE" -gt 1 ]]; then usage_err "at most one of --step, --queue-state, --queue-wait"; fi\n' ''
 qw_mutant "drop UNKNOWN from the predicate" f1b ' || "$1" == *UNKNOWN* )' ' )'
+# =============================================================================
+# #10832 (epic #9454, ADR-270 residual 6): the merge-queue rules read judges the PR against its OWN base branch, and the
+# PR_QUEUE_* clamps and the stderr sanitiser each exist once. Written tests-first: the rows below that the unchanged script cannot
+# satisfy fail on a BEHAVIOURAL message (the request path it sent, the exit code it returned, the text it printed); the
+# green-before guard rows and the characterization rows pass before and after. Row ids (one pass() each):
+#   characterization  C1-C7                      (timeout / attempts / nap clamps, one site each, boundary values)
+#   sentinels         S1 (one sanitiser, one env read per variable, one qb_bounds call per reader), S2 (no literal main base)
+#   RED base rows     N1s N1w N2s N2w N2l N2u N3a N3b N4s N4w N4l N6 N6b N7c N11 N12
+#   green-before      N5a N5b N5c N5d N7a N7b N8 N9 N10
+#   mutants/harness   G1-1..G1-14, G1-H1, G2-1, G2-3..G2-8, G2-H2, and two controls (the real script satisfies the scenarios)
+# Stub knobs (request-shape-compatible, unset after every run): QBASE (the PR's base, default main; QBASE= is the empty base),
+# QRULES_BRANCH (the branch whose rules carry the merge_queue rule, default main; any other branch reads []), QHEAD_LEGACY=1 (the
+# head read answers the bare head even when baseRefName is asked), QSHIMS=1 (recording timeout/sleep shims, characterization only).
+# =============================================================================
+# Recording shims. `timeout` logs the numeric bound and WHICH gh call it wrapped, then execs the REAL timeout/gtimeout (resolved to an
+# absolute path before the shim dir leads PATH); `sleep` only logs (nine seconds of dead wall-clock otherwise). They are installed
+# only into characterization fixtures: the hang stubs `exec sleep N` through PATH and a log-only sleep would defeat them.
+CHAR_TO="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+CHAR_OK=1
+if [[ "$CHAR_TO" != /* ]]; then
+  CHAR_OK=0
+  echo "  SKIP (loud): neither timeout nor gtimeout is installed, so the recording shim cannot wrap the real one: rows C1-C7, G2-8 and G2-H2 are SKIPPED, not verified" >&2
+fi
+install_char_shims() {  # <bin>
+  local bin="$1" rec
+  assert_fixture_dir "$bin"
+  mkdir -p "$bin"
+  : > "$bin/shim-calls"
+  rec='echo "timeout $3 $site" >> "$(cd "$(dirname "$0")" && pwd)/shim-calls"'
+  if [[ -n "${QSHIM_NOREC:-}" ]]; then rec=':'; fi
+  cat > "$bin/timeout" <<EOF
+#!/usr/bin/env bash
+# argv: -k 2 <secs> bash -c '<script>' _ ...   (the SUT's wrapper shape)
+site=other
+case "\${6:-}" in
+  *"gh api graphql"*) site="gh api graphql" ;;
+  *'gh api "repos'*) site="gh api repos" ;;
+  *"gh pr view"*) site="gh pr view" ;;
+esac
+$rec
+exec "$CHAR_TO" "\$@"
+EOF
+  cat > "$bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+echo "sleep $*" >> "$(cd "$(dirname "$0")" && pwd)/shim-calls"
+EOF
+  chmod +x "$bin/timeout" "$bin/sleep"
+}
+with_unset() {  # <VAR> <cmd…> — run <cmd…> with VAR unset, then restore it
+  local v="$1" had=0 sv="" r; shift
+  if [[ -n "${!v+x}" ]]; then had=1; sv="${!v}"; fi
+  unset "$v"; "$@"; r=$?
+  if [[ "$had" == 1 ]]; then export "$v=$sv"; fi
+  return "$r"
+}
+shim_vals() {  # <dir> <line-regex> → the numeric argument of every matching shim line, space-joined (empty when none)
+  { grep -E -e "$2" "$1/bin/shim-calls" 2>/dev/null || true; } | awk '{printf "%s%s", (n++ ? " " : ""), $2}'
+}
+# ch_qs <gql-mode> [VAR=val…] — one `--queue-state` run from outside any repository with the shims; the three PR_QUEUE_* variables are
+# unset unless given. Leaves the fixture in CH_D and the exit code in CH_RC. QW_SUT overrides the script (mutant rows).
+ch_qs() {
+  local gm="$1"; shift
+  CH_D="$(mktemp -d "$TMPDIR/sync-ch.XXXXXXXX")"; FIXTURES+=("$CH_D")
+  QPR="$QUEUE_PR" install_gh_forbidden "$CH_D/bin" "$gm"
+  install_char_shims "$CH_D/bin"
+  ( cd "$CH_D" && env -u PR_QUEUE_TIMEOUT -u PR_QUEUE_ATTEMPTS -u PR_QUEUE_RETRY_SLEEP GIT_CEILING_DIRECTORIES="$(dirname "$CH_D")" "$@" PATH="$CH_D/bin:$PATH" \
+      bash "${QW_SUT:-$SUT}" "$QUEUE_PR" --queue-state ) >"$CH_D/out" 2>"$CH_D/err"
+  CH_RC=$?; collect "$CH_D/out" "$CH_D/err"
+}
+# ch_settled [VAR=val…] — a marker-dequeue `--queue-state` run INSIDE a worktree (the pre-seeded seen-queued marker plus a not-queued
+# answer makes the first read a dequeue candidate, so queue_read_settled naps and re-reads).
+ch_settled() {
+  CH_D="$(mktemp -d "$TMPDIR/sync-ch.XXXXXXXX")"; FIXTURES+=("$CH_D")
+  make_pair "$CH_D"
+  QPR="$QUEUE_PR" install_gh_forbidden "$CH_D/bin" notqueued
+  install_char_shims "$CH_D/bin"
+  touch "$CH_D/work/.git/pr-queue-seen-$QUEUE_PR"
+  ( cd "$CH_D/work" && assert_in_fixture "$CH_D/work" && env -u PR_QUEUE_TIMEOUT -u PR_QUEUE_ATTEMPTS -u PR_QUEUE_RETRY_SLEEP "$@" PATH="$CH_D/bin:$PATH" \
+      bash "${QW_SUT:-$SUT}" "$QUEUE_PR" --queue-state ) >"$CH_D/out" 2>"$CH_D/err"
+  CH_RC=$?; collect "$CH_D/out" "$CH_D/err"
+}
+# The characterization predicates (each returns 0 iff the table holds; CH_WHY names the bad cases). They are shared by the rows C1-C7 and
+# by the mutant / harness scenarios, so a row and its scenario can never disagree.
+c1_check() {  # timeout via --queue-state: the numeric bound the wrapper ran under
+  local v want got bad=""
+  while read -r v want; do
+    if [[ "$v" == unset ]]; then ch_qs notqueued </dev/null; else ch_qs notqueued "PR_QUEUE_TIMEOUT=$v" </dev/null; fi
+    got="$(shim_vals "$CH_D" '^timeout [0-9a-z]+ gh api graphql$')"
+    [[ "$got" == "$want" ]] || bad+="[$v: ran under '${got:-no recorded call}', want $want] "
+    rm -rf "$CH_D"
+  done <<'EOT'
+unset 10
+7 7
+0 10
+00 10
+07 10
+abc 10
+9999 9999
+10000 10
+EOT
+  CH_WHY="$bad"; [[ -z "$bad" ]]
+}
+c2_check() {  # attempts via a failing rules read: the number of rules calls
+  local v want got bad=""
+  while read -r v want; do
+    if [[ "$v" == unset ]]; then fw_run wait notqueued "$FQ" fail </dev/null; else PR_QUEUE_ATTEMPTS="$v" fw_run wait notqueued "$FQ" fail </dev/null; fi
+    got="$(fw_n 'rules/branches')"
+    [[ "$got" == "$want" ]] || bad+="[$v: $got rules call(s), want $want] "
+    qw_done
+  done <<'EOT'
+unset 2
+1 1
+3 3
+0 2
+abc 2
+9 9
+10 2
+EOT
+  CH_WHY="$bad"; [[ -z "$bad" ]]
+}
+c3_check() {  # nap via queue_wait_eval on a failing rules read: the sleep argument between the attempts
+  local v want got bad=""
+  while read -r v want; do
+    if [[ "$v" == unset ]]; then QSHIMS=1 with_unset PR_QUEUE_RETRY_SLEEP fw_run wait notqueued "$FQ" fail </dev/null
+    else QSHIMS=1 PR_QUEUE_RETRY_SLEEP="$v" fw_run wait notqueued "$FQ" fail </dev/null; fi
+    got="$(shim_vals "$QW_D" '^sleep ')"
+    [[ "$got" == "$want" ]] || bad+="[$v: slept '${got:-never}', want $want] "
+    qw_done
+  done <<'EOT'
+unset 2
+5 5
+0 0
+abc 2
+999 999
+1000 2
+-1 2
+EOT
+  CH_WHY="$bad"; [[ -z "$bad" ]]
+}
+c4_check() {  # timeout through --queue-wait's pr view (a disarmed run: the snapshot is the only read)
+  QSHIMS=1 PR_QUEUE_TIMEOUT=7 fw_run wait notqueued "ok:OPEN BEHIND:disarmed" queue </dev/null
+  CH_WHY="timeouts=$(shim_vals "$QW_D" '^timeout ')"
+  [[ "$(shim_vals "$QW_D" '^timeout [0-9]+ gh pr view$')" == 7 && "$(shim_vals "$QW_D" '^timeout ')" == 7 ]]
+}
+c5_check() {  # timeout through the rules read (armed BEHIND: the snapshot AND the rules read are wrapped)
+  QSHIMS=1 PR_QUEUE_TIMEOUT=7 fw_run wait notqueued "$FQ" queue </dev/null
+  CH_WHY="timeouts=$(shim_vals "$QW_D" '^timeout ')"
+  [[ "$(shim_vals "$QW_D" '^timeout [0-9]+ gh api repos$')" == 7 && "$(shim_vals "$QW_D" '^timeout [0-9]+ gh pr view$')" == 7 ]]
+}
+c6_check() {  # attempts through queue_state_read (a failing GraphQL read)
+  ch_qs gqlfail PR_QUEUE_ATTEMPTS=3 </dev/null
+  CH_WHY="rc=$CH_RC reads=$(cat "$CH_D/bin/gql-count" 2>/dev/null || echo 0)"
+  [[ "$CH_RC" -eq 4 && "$(cat "$CH_D/bin/gql-count" 2>/dev/null || echo 0)" == 3 ]]
+}
+c7_check() {  # nap through queue_read_settled (the marker-dequeue run): a set value and an invalid one
+  local v want got bad=""
+  while read -r v want; do
+    ch_settled "PR_QUEUE_RETRY_SLEEP=$v" </dev/null
+    got="$(shim_vals "$CH_D" '^sleep ')"
+    [[ "$got" == "$want" && "$(head -c 8 "$CH_D/out")" == dequeued ]] || bad+="[$v: slept '${got:-never}' out='$(head -c 40 "$CH_D/out")', want $want then dequeued] "
+    rm -rf "$CH_D"
+  done <<'EOT'
+7 7
+abc 2
+EOT
+  CH_WHY="$bad"; [[ -z "$bad" ]]
+}
+char_row() {  # <id> <check-fn> <what>
+  if [[ "$CHAR_OK" -ne 1 ]]; then pass "$1 SKIPPED (no timeout/gtimeout): $3"; return; fi
+  if "$2"; then pass "$1 $3"; else fail "$1 $3 — ${CH_WHY:-}"; fi
+}
+char_row C1 c1_check "timeout clamp via --queue-state (unset, 7, 0, 00, 07, abc, 9999, 10000 run under 10, 7, 10, 10, 10, 10, 9999, 10)"
+char_row C2 c2_check "attempts clamp via a failing rules read (unset, 1, 3, 0, abc, 9, 10 make 2, 1, 3, 2, 2, 9, 2 reads)"
+char_row C3 c3_check "nap clamp via queue_wait_eval (unset, 5, 0, abc, 999, 1000, -1 sleep 2, 5, 0, 2, 999, 2, 2)"
+char_row C4 c4_check "timeout reaches the pr view of --queue-wait (PR_QUEUE_TIMEOUT=7 wraps exactly one read in 7)"
+char_row C5 c5_check "timeout reaches the rules read (PR_QUEUE_TIMEOUT=7 wraps the pr view and the rules read in 7)"
+char_row C6 c6_check "attempts reach queue_state_read (PR_QUEUE_ATTEMPTS=3 on a failing GraphQL read makes 3 reads)"
+char_row C7 c7_check "nap reaches queue_read_settled (7 sleeps 7, abc sleeps 2, then the dequeue is reported)"
+
+# --- S1 / S2: one helper, one sanitiser, and no literal main base (counted over the code: comments and the USAGE heredoc stripped) ---
+strip_sut() { { awk '/<<.USAGE.$/{doc=1; next} doc&&/^USAGE$/{doc=0; next} doc{next} {print}' "$1" | grep -vE '^[[:space:]]*#'; } || true; }
+sen_count() { strip_sut "$1" | { grep -oF -- "$2" || true; } | wc -l | tr -d ' '; }   # exact count: grep -oF (one hit per occurrence), tr -d ' ' (macOS wc pads), never `|| echo 0`
+fn_code() { awk -v fn="$2" '$0 ~ "^" fn "\\(\\) \\{" {f=1} f{print} f && /^\}/ {exit}' "$1" | grep -vE '^[[:space:]]*#' || true; }   # the code of one function (comments stripped)
+sen_fn_count() { fn_code "$1" "$2" | { grep -oF -- "$3" || true; } | wc -l | tr -d ' '; }
+s1_ok() {  # <file> → 0 iff exactly one sanitiser, one env read per variable, no $VAR spelling, one qb_bounds call in each of the four readers
+  local f="$1" v n fn bad=""
+  n="$(sen_count "$f" "tr -c '[:alnum:] ._:/=-'")"; [[ "$n" == 1 ]] || bad+="[sanitiser x$n] "
+  for v in PR_QUEUE_TIMEOUT PR_QUEUE_ATTEMPTS PR_QUEUE_RETRY_SLEEP; do
+    n="$(sen_count "$f" "{$v")"; [[ "$n" == 1 ]] || bad+="[\${$v x$n] "
+    n="$(sen_count "$f" "\$$v")"; [[ "$n" == 0 ]] || bad+="[\$$v x$n] "
+  done
+  for fn in queue_state_read queue_read_settled queue_wait_eval qw_snapshot; do
+    n="$(sen_fn_count "$f" "$fn" qb_bounds)"; [[ "$n" == 1 ]] || bad+="[qb_bounds in $fn x$n] "
+  done
+  S1_WHY="$bad"; [[ -z "$bad" ]]
+}
+s2_ok() {  # <file> → 0 iff no rules/branches/main literal and exactly one rules/branches/ read
+  local f="$1" a b
+  a="$(sen_count "$f" 'rules/branches/main')"; b="$(sen_count "$f" 'rules/branches/')"
+  S2_WHY="rules/branches/main x$a (want 0), rules/branches/ x$b (want 1)"
+  [[ "$a" == 0 && "$b" == 1 ]]
+}
+S_EMPTY="$(mktemp "$TMPDIR/sync-empty.XXXXXXXX")"; FIXTURES+=("$S_EMPTY")
+if s1_ok "$SUT" && ! s1_ok "$S_EMPTY"; then
+  pass "S1 one sanitiser, one env read per PR_QUEUE_* variable and one qb_bounds call in each reader (and the census fails on an empty file)"
+else
+  fail "S1 helper census on the real script: ${S1_WHY:-ok} (the census must also FAIL on an empty file: empty-file verdict=$(s1_ok "$S_EMPTY" && echo PASSED || echo failed))"
+fi
+if s2_ok "$SUT"; then pass "S2 the rules read has no literal main base (0 rules/branches/main, 1 rules/branches/)"
+else fail "S2 literal base: $S2_WHY"; fi
+
+# --- the base rows -----------------------------------------------------------------------------------------------------------
+# Every row builds one fresh fixture per run (fw_run: flagless --step / --queue-wait; qw_run: the standalone loop) and asserts the exact
+# request in rules-calls, never an echoed string. NB_WHY-style messages name what was OBSERVED (path, rc, text), not that an anchor is absent.
+nb_why() { echo "rc=${QW_RC:-?} moved=${QW_MOVED:-?} rules=$(qw_rulescalls) paths=$({ cat "$QW_D/bin/rules-calls" 2>/dev/null || true; } | tr '\n' ',' | sed -E 's/api //g; s/ --jq [^,]*//g' | cut -c1-120) out=$(tr '\n' ' ' < "$QW_D/out" 2>/dev/null | cut -c1-200 | cat -v)"; }
+nb_gitrec() { grep -q '^rev-parse' "$QW_D/bin/git-calls" 2>/dev/null; }   # the recording shim provably recorded (the queue gate always runs rev-parse)
+nb_rules_clean() { [[ ! -s "$QW_D/bin/rules-refusals" ]]; }               # the rules stub never refused an unparseable path
+nb_path() { [[ "$(qw_rulescalls)" == 1 ]] && grep -qF "repos/o/r/rules/branches/$1?per_page=100" "$QW_D/bin/rules-calls" 2>/dev/null; }   # exactly one read, of this request
+nb_noesc() { ! grep -q $'\033' "$QW_D/out" "$QW_D/err" 2>/dev/null; }
+nb_tagline() { grep -m1 '^\[pr-behind-sync\] kind=gh rc=4 — ' "$QW_D/out" 2>/dev/null || true; }
+nb_foreign_text() {  # <base> → the kind=gh line is the non-main refusal: names the base, NOT A TRANSIENT ERROR, origin/main, no disarm-first advice
+  local line; line="$(nb_tagline)"
+  [[ "$line" == *"base '$1'"* && "$line" == *"NOT A TRANSIENT ERROR"* && "$line" == *"origin/main"* && "$line" != *[Dd]isarm\ first* \
+     && "$line" != *"pr view snapshot read failed"* && "$line" != *"merge-queue rule read failed"* ]]
+}
+nb_cause_ok() {  # <raw base> → the kind=gh line names the badbase cause and the SANITISED, 60-character-truncated base
+  local b="$1" clean line; line="$(nb_tagline)"
+  [[ "$line" == *"base branch"* && "$line" != *"pr view snapshot read failed"* && "$line" != *"merge-queue rule read failed"* ]] || return 1
+  if [[ -n "$b" ]]; then
+    clean="$(printf '%s' "$b" | LC_ALL=C tr -c '[:alnum:] ._:/=-' '?' | cut -c1-60)"
+    [[ "${line#*base branch}" == *"$clean"* ]] || return 1
+    if [[ "${#b}" -gt 60 && "$line" == *"${clean}a"* ]]; then return 1; fi   # the base was not truncated to 60 characters
+  fi
+  return 0
+}
+n1s_ok() { f1_ok && [[ "$(fw_n '^pr view')" == 1 ]] && nb_path develop && nb_rules_clean; }
+n1w_ok() { [[ "$QW_RC" -eq 0 && "$(cat "$QW_D/out")" == queue_wait && ! -s "$QW_D/err" && "$(fw_n '^pr view')" == 1 && "$(fw_n '^api graphql')" == 0 ]] && nb_path develop && nb_rules_clean; }
+n2s_ok() { [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && nb_foreign_text develop && ! qw_wrote && nb_gitrec && nb_noesc && [[ "$(fw_n '^pr view')" == 1 ]] && nb_path develop && nb_rules_clean; }
+n2w_ok() { n1w_ok; }
+n2l_ok() { [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && nb_foreign_text develop && ! qw_wrote && nb_gitrec && ! grep -q 'auto-sync [0-9]* pushed' "$QW_D/out" && nb_path develop && nb_rules_clean; }
+n3_ok() { f1_ok && nb_path "$1" && nb_rules_clean; }   # <encoded base>
+n6_ok() { [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no ]] && grep -qE "$QW_LINE" "$QW_D/out" && ! qw_wrote && nb_gitrec && nb_path develop && nb_rules_clean; }
+n6b_ok() { [[ "$QW_RC" -eq 0 ]] && grep -qE "$QW_LINE" "$QW_D/out" && [[ "$(grep -c 'auto-sync [0-9]* pushed' "$QW_D/out")" == 1 ]] && nb_path develop && nb_rules_clean; }
+n4s_one() {  # <raw base> → the flagless --step answers kind=gh rc=4 NAMING the cause, zero rules calls, nothing moved, no ESC byte
+  QBASE="$1" fw_run bare notqueued "$FQ" none </dev/null
+  [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && nb_cause_ok "$1" && [[ "$(qw_rulescalls)" == 0 ]] && ! qw_wrote && nb_noesc && nb_rules_clean
+}
+n4w_one() {  # <raw base> → --queue-wait prints exactly one line, queue_wait (never kind=gh: the hook would sync anyway), zero rules calls
+  QBASE="$1" fw_run wait notqueued "$FQ" none </dev/null
+  [[ "$QW_RC" -eq 0 && "$(cat "$QW_D/out")" == queue_wait && ! -s "$QW_D/err" && "$(qw_rulescalls)" == 0 && "$(fw_n '^pr view')" == 1 ]] && nb_rules_clean
+}
+n4l_one() {  # <empty|legacy> → the standalone loop with an empty base (or a legacy single-token head read) answers kind=gh rc=4 with the cause
+  if [[ "$1" == empty ]]; then QBASE='' qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"; else QHEAD_LEGACY=1 qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"; fi
+  [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && nb_cause_ok '' && [[ "$(qw_rulescalls)" == 0 ]] && ! qw_wrote && ! grep -q 'auto-sync [0-9]* pushed' "$QW_D/out" && nb_rules_clean
+}
+HAVE_UTF8=0; if locale -a 2>/dev/null | grep -qiE '^en_US\.utf-?8$'; then HAVE_UTF8=1; fi
+n11_ok() {  # an accented base is rejected under a UTF-8 locale (the LC_ALL=C pin is load-bearing: [A-Za-z] accepts it there)
+  [[ "$HAVE_UTF8" == 1 ]] || return 0
+  LC_ALL=en_US.UTF-8 QBASE='é' fw_run bare notqueued "$FQ" none </dev/null
+  [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && nb_cause_ok 'é' && [[ "$(qw_rulescalls)" == 0 ]] && ! qw_wrote
+}
+n12_ok() {  # legal base names that read like the armed bit are still judged armed; the legacy three-token snapshot answer fails closed
+  local b bad=""
+  for b in armed disarmed OPEN BEHIND; do
+    QBASE="$b" QRULES_BRANCH="$b" fw_run bare notqueued "$FQ" queue </dev/null
+    n3_ok "$b" || bad+="[base $b: $(nb_why | cut -c1-110)] "
+    qw_done
+  done
+  fw_run bare notqueued "raw:OPEN BEHIND armed" queue </dev/null
+  { fgh_ok && grep -q 'pr view snapshot read failed' "$QW_D/out"; } || bad+="[legacy three-token answer accepted: $(nb_why | cut -c1-110)] "
+  qw_done
+  N12_WHY="$bad"; [[ -z "$bad" ]]
+}
+n5ab_one() {  # <base> → a disarmed PR syncs at flagless --step and --queue-wait prints proceed, with zero rules calls
+  QBASE="$1" fw_run bare dequeued "ok:OPEN BEHIND:disarmed" queue </dev/null
+  if ! { fsync_ok && [[ "$(qw_rulescalls)" == 0 ]]; }; then N5_WHY="step: $(nb_why)"; qw_done; return 1; fi
+  qw_done
+  QBASE="$1" fw_run wait notqueued "ok:OPEN BEHIND:disarmed" queue </dev/null
+  if ! { [[ "$QW_RC" -eq 0 && "$(cat "$QW_D/out")" == proceed && "$(qw_rulescalls)" == 0 ]]; }; then N5_WHY="wait: $(nb_why)"; qw_done; return 1; fi
+  qw_done; return 0
+}
+n5c_one() {  # a CLEAN armed PR with an odd base syncs with zero rules calls (the base is never read outside the armed BEHIND predicate)
+  QBASE='rel+1' fw_run bare notqueued "ok:OPEN CLEAN:armed" queue </dev/null
+  if fsync_ok && [[ "$(qw_rulescalls)" == 0 ]]; then qw_done; return 0; fi
+  N5_WHY="$(nb_why)"; qw_done; return 1
+}
+n5_ok() { n5ab_one 'rel+1' && n5c_one; }
+n8_ok() {  # snapshot answers with extra tokens or whitespace in the base fail closed (both runners)
+  local raw bad=""
+  for raw in 'OPEN BEHIND armed develop extra' 'OPEN BEHIND armed a b'; do
+    fw_run bare notqueued "raw:$raw" queue </dev/null
+    { fgh_ok && grep -q 'pr view snapshot read failed' "$QW_D/out"; } || bad+="[step '$raw': $(nb_why | cut -c1-100)] "
+    qw_done
+    fw_run wait notqueued "raw:$raw" queue </dev/null
+    { [[ "$QW_RC" -eq 4 ]] && grep -qE '^\[pr-behind-sync\] kind=gh rc=4 — ' "$QW_D/out" && ! grep -qxE 'queue_wait|proceed' "$QW_D/out"; } || bad+="[wait '$raw': $(nb_why | cut -c1-100)] "
+    qw_done
+  done
+  N8_WHY="$bad"; [[ -z "$bad" ]]
+}
+qs_ctl_ok() { [[ "$QS_RC" -eq 4 ]] && grep -q 'kind=gh rc=4' "$QSD/out" && ! grep -q $'\033' "$QSD/out" "$QSD/err" && [[ "$(grep -c '^\[pr-behind-sync\]' "$QSD/out")" -eq 1 ]]; }
+N4_BASES=('feat%2Fx' 'a?b' 'a..b' 'x.lock' 'a.lock/b' 'a//b' 'a/./b' 'a/' '-x' 'rel+1' 'a@b' '{branch}' $'esc\033[31mx' "$(printf 'a%.0s' $(seq 1 70))?" "$(printf 'a%.0s' $(seq 1 300))" '')
+
+# RED before the change (each fails on a behavioural message against the unchanged script):
+# N1: base develop with the queue on develop only. The rules read must name develop.
+QBASE=develop QRULES_BRANCH=develop fw_run bare notqueued "$FQ" queue
+if n1s_ok; then pass "N1s flagless --step, base develop, queue on develop only: exit 14 kind=queue_wait, one pr view, one rules read of repos/o/r/rules/branches/develop?per_page=100"
+else fail "N1s base develop: want exit 14 and one rules read of .../rules/branches/develop?per_page=100; $(nb_why)"; fi
+qw_done
+QBASE=develop QRULES_BRANCH=develop fw_run wait notqueued "$FQ" queue
+if n1w_ok; then pass "N1w --queue-wait, base develop, queue on develop only: prints exactly queue_wait after one rules read of develop"
+else fail "N1w --queue-wait base develop: want queue_wait after a rules read of develop; $(nb_why)"; fi
+qw_done
+# N2: base develop with the queue on main only (the rules the old script reads): the PR is judged against develop, which has no queue, and is refused.
+QBASE=develop QRULES_BRANCH=main fw_run bare notqueued "$FQ" queue
+if n2s_ok; then pass "N2s flagless --step, base develop, queue on main only: exit 4 kind=gh with the non-main refusal text, nothing fetched, merged or pushed"
+else fail "N2s base develop, queue on main only: want exit 4 kind=gh (qw_foreign text naming base 'develop') after a develop read; $(nb_why)"; fi
+qw_done
+QBASE=develop QRULES_BRANCH=main fw_run wait notqueued "$FQ" queue
+if n2w_ok; then pass "N2w --queue-wait, base develop, queue on main only: exactly one line queue_wait, after a rules read of develop (not main)"
+else fail "N2w --queue-wait base develop, queue on main only: want exactly queue_wait after a rules read of develop; $(nb_why)"; fi
+qw_done
+QBASE=develop QRULES_BRANCH=main qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"
+if n2l_ok; then pass "N2l standalone loop, base develop, queue on main only: exit 4 kind=gh with the non-main refusal text, nothing fetched, merged or pushed"
+else fail "N2l loop base develop, queue on main only: want exit 4 kind=gh (qw_foreign text naming base 'develop'); $(nb_why)"; fi
+qw_done
+QBASE=develop QRULES_BRANCH=main fw_run bare notqueued "ok:OPEN UNKNOWN:armed" queue
+if n2s_ok; then pass "N2u flagless --step, OPEN UNKNOWN armed, base develop, queue on main only: exit 4 kind=gh like BEHIND"
+else fail "N2u UNKNOWN, base develop, queue on main only: want exit 4 kind=gh with the non-main text; $(nb_why)"; fi
+qw_done
+# N3: slash bases are encoded once (%2F); both are also the must-PASS non-canonical inputs.
+QBASE=release/1.x QRULES_BRANCH=release/1.x fw_run bare notqueued "$FQ" queue
+if n3_ok 'release%2F1.x'; then pass "N3a base release/1.x with the queue on that branch: refused (14), request path release%2F1.x?per_page=100"
+else fail "N3a base release/1.x: want exit 14 and a read of .../rules/branches/release%2F1.x?per_page=100; $(nb_why)"; fi
+qw_done
+QBASE=feat/x/y QRULES_BRANCH=feat/x/y fw_run bare notqueued "$FQ" queue
+if n3_ok 'feat%2Fx%2Fy'; then pass "N3b base feat/x/y (three components) with the queue on that branch: refused (14), request path feat%2Fx%2Fy?per_page=100"
+else fail "N3b base feat/x/y: want exit 14 and a read of .../rules/branches/feat%2Fx%2Fy?per_page=100; $(nb_why)"; fi
+qw_done
+# N4: an unsupported or empty base never reaches a rules request; the cause is named (never a generic pr view failure).
+n4_bad=""
+for b in "${N4_BASES[@]}"; do n4s_one "$b" || n4_bad+="[${b:0:14}: $(nb_why | cut -c1-120)] "; qw_done; done
+if [[ -z "$n4_bad" ]]; then pass "N4s flagless --step, armed BEHIND, ${#N4_BASES[@]} unsupported bases (%, ?, .., .lock, //, /./, trailing /, leading -, +, @, braces, ESC, over 60, over 255, empty): kind=gh rc=4 naming 'base branch', zero rules calls, nothing moved"
+else fail "N4s unsupported bases reached the sync or lost the cause: ${n4_bad:0:700}"; fi
+n4_bad=""
+for b in "${N4_BASES[@]}"; do n4w_one "$b" || n4_bad+="[${b:0:14}: $(nb_why | cut -c1-120)] "; qw_done; done
+if [[ -z "$n4_bad" ]]; then pass "N4w --queue-wait, ${#N4_BASES[@]} unsupported bases: exactly one line queue_wait, rc 0, zero rules calls (kind=gh would make the hook sync anyway)"
+else fail "N4w unsupported bases through --queue-wait: want exactly queue_wait and zero rules calls: ${n4_bad:0:700}"; fi
+n4_bad=""
+for b in empty legacy; do n4l_one "$b" || n4_bad+="[$b: $(nb_why | cut -c1-140)] "; qw_done; done
+if [[ -z "$n4_bad" ]]; then pass "N4l standalone loop with an empty base and with a legacy single-token head read: kind=gh rc=4 naming 'base branch', zero rules calls, nothing moved"
+else fail "N4l loop with an empty base: want kind=gh rc=4 naming 'base branch' and zero rules calls: $n4_bad"; fi
+# N6: the standalone loop gets its base from the widened head read ('feat develop').
+QBASE=develop QRULES_BRANCH=develop qw_run queue notqueued "OPEN BEHIND" "OPEN CLEAN"
+if n6_ok; then pass "N6 standalone loop, head read 'feat develop', armed BEHIND, queue on develop: kind=queue_wait rc=0, one rules read of develop, nothing moved"
+else fail "N6 loop, base develop, queue on develop: want kind=queue_wait rc=0 after a rules read of develop; $(nb_why)"; fi
+qw_done
+# N6b: --max-attempts 2 documents that the base is resolved ONCE: attempt 1 is a DIRTY non-main PR (syncs, pinned known-wrong, no rules read),
+# attempt 2 is armed BEHIND and reads the rules of the same develop base.
+QBASE=develop QRULES_BRANCH=develop qw_run queue notqueued "OPEN DIRTY" "OPEN BEHIND" --max-attempts 2
+if n6b_ok; then pass "N6b loop --max-attempts 2: attempt 1 (DIRTY) syncs without a rules read, attempt 2 (BEHIND armed) reads develop and answers kind=queue_wait"
+else fail "N6b loop second attempt: want one push, then kind=queue_wait after one rules read of develop; $(nb_why)"; fi
+qw_done
+# N7c: the refusal text names the base where the main text says main.
+QBASE=develop QRULES_BRANCH=develop fw_run bare notqueued "$FQ" queue
+if f1_ok && grep -q 'and develop has a merge queue' "$QW_D/out" && ! grep -q 'and main has a merge queue' "$QW_D/out"; then
+  pass "N7c the queue_wait refusal for base develop says 'and develop has a merge queue' (where the main text says main)"
+else fail "N7c refusal text for base develop: want 'and develop has a merge queue'; $(nb_why)"; fi
+qw_done
+# N11 / N12
+if [[ "$HAVE_UTF8" -ne 1 ]]; then
+  echo "  SKIP (loud): locale en_US.UTF-8 is not installed; N11 and G1-13 cannot discriminate and are SKIPPED, not verified" >&2
+  pass "N11 SKIPPED (locale en_US.UTF-8 unavailable): an accented base is rejected under a UTF-8 locale"
+elif n11_ok; then pass "N11 an accented base under LC_ALL=en_US.UTF-8 is rejected (kind=gh rc=4 naming 'base branch', zero rules calls): the LC_ALL=C pin is not dead"
+else fail "N11 accented base under en_US.UTF-8: want kind=gh rc=4 naming 'base branch' and zero rules calls; $(nb_why)"; fi
+qw_done
+if n12_ok; then pass "N12 bases named armed, disarmed, OPEN, BEHIND are still judged armed (refused 14 after a read of that very branch), and the legacy three-token snapshot answer fails closed"
+else fail "N12 armed-bit parse: ${N12_WHY:0:600}"; fi
+
+# Green before the change (guard rows: they pass against the unchanged script and must keep passing):
+if n5ab_one develop; then pass "N5a base develop, PR disarmed: flagless --step syncs, --queue-wait prints proceed, zero rules calls"
+else fail "N5a disarmed develop: ${N5_WHY:-}"; fi
+if n5ab_one 'rel+1'; then pass "N5b base rel+1, PR disarmed: flagless --step syncs, --queue-wait prints proceed, zero rules calls (an odd base is never read outside the armed predicate)"
+else fail "N5b disarmed rel+1: ${N5_WHY:-}"; fi
+if n5c_one; then pass "N5c OPEN CLEAN armed with an odd base (rel+1): syncs with zero rules calls (validation never precedes the BEHIND and armed checks)"
+else fail "N5c CLEAN armed odd base: ${N5_WHY:-}"; fi
+QBASE=develop fw_run bare notqueued "ok:OPEN DIRTY:armed" queue </dev/null
+n5d_step=0; { fsync_ok && [[ "$(qw_rulescalls)" == 0 ]]; } && n5d_step=1
+n5d_why="step: $(nb_why)"; qw_done
+QBASE=develop qw_run queue notqueued "OPEN DIRTY" "OPEN CLEAN"
+if [[ "$n5d_step" == 1 ]] && r3_ok; then pass "N5d a DIRTY non-main PR still syncs origin/main at flagless --step and in the loop, with zero rules calls (pinned as known-wrong, not intended; tracked)"
+else fail "N5d DIRTY non-main: step_ok=$n5d_step ($n5d_why) loop: $(nb_why)"; fi
+qw_done
+# N7: byte-exact golden texts for a main-based PR, captured from the PRE-change script's own output (PR number 4242, rules stub, fixture stderr).
+# Golden literals (quoted heredocs: the texts hold single quotes and em dashes), captured from the PRE-change script's own output on 2026-10-24.
+GOLD_REFUSAL="$(cat <<'GOLD_EOF'
+PR #4242 is BEHIND, auto-merge is armed (not in the queue yet) and main has a merge queue: not syncing — a resync alone restarts every required check and the queue makes the PR current. Wait for MERGED or a dequeue; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync. Red required check? Push the fix itself, not a resync. Truly need a hand sync? Disarm first (gh pr merge 4242 --disable-auto), sync, then re-arm. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md ('Armed and green but never enqueued').
+GOLD_EOF
+)"
+GOLD_UNREADABLE_LINE="$(cat <<'GOLD_EOF'
+[pr-behind-sync] kind=gh rc=4 — merge-queue rule read failed after 2 attempt(s) (rc=1 answered= gh: HTTP 502 from fixture ?rules? ) — not syncing: that read decides whether this armed BEHIND PR may be resynced and an unknown answer is not a yes. Retry the poll; a persistent failure means the token cannot read repository rules (raise PR_QUEUE_ATTEMPTS, or resync by hand only after confirming main has no merge queue).
+GOLD_EOF
+)"
+qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"
+n7a_loop="$(grep -m1 "$QW_LINE" "$QW_D/out" || true)"
+qw_done
+fw_run bare notqueued "$FQ" queue
+n7a_step="$(grep -m1 '^\[pr-behind-sync\] kind=queue_wait rc=14 — ' "$QW_D/out" || true)"
+qw_done
+if [[ "$n7a_loop" == "[pr-behind-sync] kind=queue_wait rc=0 — $GOLD_REFUSAL" && "$n7a_step" == *"$GOLD_REFUSAL" ]]; then
+  pass "N7a the main-based refusal text (standalone loop line and flagless --step line) equals the golden literal captured from the pre-change script"
+else fail "N7a main refusal text drifted: loop=${n7a_loop:0:200} step-tail=${n7a_step: -120}"; fi
+qw_run fail notqueued "OPEN BEHIND" "OPEN CLEAN"
+n7b="$(grep -m1 '^\[pr-behind-sync\] kind=gh rc=4 — ' "$QW_D/out" || true)"
+if [[ "$n7b" == "$GOLD_UNREADABLE_LINE" ]]; then pass "N7b the main-based unreadable-rules line equals the golden literal captured from the pre-change script"
+else fail "N7b main unreadable text drifted: ${n7b:0:300}"; fi
+qw_done
+if n8_ok; then pass "N8 snapshot answers with extra tokens or whitespace in the base fail closed (kind=gh rc=4 'pr view snapshot read failed') at flagless --step and --queue-wait"
+else fail "N8 malformed snapshot answers: ${N8_WHY:0:500}"; fi
+QBASE=develop QRULES_BRANCH=main fw_run bare notqueued "$FQ" queue --fence
+if f6_ok; then pass "N9 --step --fence with a foreign base skips the guard entirely (syncs, no pr view, no rules read): the documented bypass cannot regress silently"
+else fail "N9 fenced --step, base develop: $(nb_why)"; fi
+qw_done
+QBASE=develop fw_run bare queued "$FQ" queue
+if [[ "$QW_RC" -eq 11 && "$QW_MOVED" == no ]] && grep -q '^\[pr-behind-sync\] kind=queued rc=11 — ' "$QW_D/out" && [[ "$(fw_n '^pr view')" == 0 && "$(qw_rulescalls)" == 0 ]]; then
+  pass "N10 a queued PR with a foreign base: unchanged kind=queued rc=11, no pr view, zero rules calls"
+else fail "N10 queued foreign base: $(nb_why)"; fi
+qw_done
+
+# --- mutation and harness rows for the base binding and the helper (controls first). Each anchor is a fragment of the post-change script that
+# occurs exactly once; before the change an anchor is absent and the row reports that (an instrument message, NOT RED evidence). ---
+CTL_GREEN=" "; CTL_RED=" "
+qw_judge() {  # <label> <scenario> <mutant-file> → the shared verdict of the new mutation rows (same rules as qw_mutant)
+  local label="$1" kind="$2" mut="$3"
+  # A mutant is only evidence when its scenario holds on the UNMUTATED script (memoised per kind): against a red control every mutant is
+  # "caught", which proves nothing, so the row fails with that instrument message instead of passing vacuously.
+  if [[ "$CTL_GREEN" != *" $kind "* ]]; then
+    if [[ "$CTL_RED" == *" $kind "* ]]; then fail "mutation '$label': the unmutated control for the '$kind' scenario is red, so 'caught' would prove nothing"; return; fi
+    QW_SUT=""
+    if qw_scenario "$kind"; then CTL_GREEN+="$kind "; else CTL_RED+="$kind "; fail "mutation '$label': the unmutated control for the '$kind' scenario is red, so 'caught' would prove nothing"; return; fi
+  fi
+  QW_SUT="$mut"
+  if qw_scenario "$kind"; then fail "mutation '$label' SURVIVED: the '$kind' scenario stayed green"
+  elif [[ "$QW_RC" -eq 2 || "$QW_RC" -eq 127 ]]; then fail "mutation '$label': the mutant does not RUN (rc $QW_RC), so 'caught' would be an instrument error"
+  else pass "mutation '$label' caught by the '$kind' scenario"; fi
+  QW_SUT=""
+}
+qw_mutant_multi() {  # <label> <scenario> <old1> <new1> [<old2> <new2> …] → every anchor occurs exactly once; all replacements land in one mutant
+  local label="$1" kind="$2" md mut src="$SUT_SRC" old new rest; shift 2
+  while [[ $# -ge 2 ]]; do
+    old="$1"; new="$2"; shift 2
+    [[ "$src" == *"$old"* ]] || { fail "mutation '$label': the anchor text is absent from the SUT (fix the row): ${old:0:70}"; return; }
+    rest="${src//"$old"/}"
+    [[ $(( (${#src} - ${#rest}) / ${#old} )) -eq 1 ]] || { fail "mutation '$label': the anchor occurs more than once in the SUT (fix the row): ${old:0:70}"; return; }
+    src="${src/"$old"/"$new"}"
+  done
+  md="$(mktemp -d "$TMPDIR/sync-qwmut.XXXXXXXX")"; FIXTURES+=("$md"); assert_fixture_dir "$md"
+  mut="$md/sync-pr-behind.sh"; printf '%s\n' "$src" > "$mut"
+  if cmp -s "$mut" "$SUT"; then fail "mutation '$label': the mutant equals the SUT"; rm -rf "$md"; return; fi
+  qw_judge "$label" "$kind" "$mut"
+  rm -rf "$md"
+}
+qw_mutfile() {  # <label> <scenario> <sed -E script> → a mutant built by a function-range sed (the anchor is a function body, not one line)
+  local label="$1" kind="$2" script="$3" md mut
+  md="$(mktemp -d "$TMPDIR/sync-qwmut.XXXXXXXX")"; FIXTURES+=("$md"); assert_fixture_dir "$md"
+  mut="$md/sync-pr-behind.sh"; sed -E "$script" "$SUT" > "$mut"
+  if cmp -s "$mut" "$SUT"; then fail "mutation '$label': the sed script changed nothing (the function or the text is absent: fix the row)"; rm -rf "$md"; return; fi
+  qw_judge "$label" "$kind" "$mut"
+  rm -rf "$md"
+}
+ctl_chain() {  # <kind…> → 0 iff every scenario holds against the real script; CTL_FAILED names the ones that do not
+  local k; CTL_FAILED=""
+  QW_SUT=""
+  for k in "$@"; do qw_scenario "$k" || CTL_FAILED+="$k "; done
+  [[ -z "$CTL_FAILED" ]]
+}
+if ctl_chain n1s n1w n2s n2w n2l n3a n4s n4w n5 n6 n11 n12; then
+  pass "mutation control: the real SUT satisfies the base scenarios (N1s N1w N2s N2w N2l N3a N4s N4w N5 N6 N11 N12)"
+else fail "mutation control: the real SUT fails the base scenarios: $CTL_FAILED"; fi
+if ctl_chain s1 ctlq ctl f5ctl c7 c1; then
+  pass "mutation control: the real SUT satisfies the helper scenarios (S1 census, the three sanitiser sites, nap through queue_read_settled, timeout characterization)"
+else fail "mutation control: the real SUT fails the helper scenarios: $CTL_FAILED"; fi
+# Guard 1: base-branch binding of the rules read, and the per-caller non-main refusal
+qw_mutant_multi "G1-1 the rules URL names main instead of the PR's base" n1s 'rules/branches/$4?per_page=100' 'rules/branches/main?per_page=100'
+qw_mutant_multi "G1-2 every caller passes an empty base (the rules read is never reached)" q1 \
+  'queue_wait_eval "$QW_STATE" "$QW_ARMED" "$QW_BASEREF"' 'queue_wait_eval "$QW_STATE" "$QW_ARMED" ""' \
+  'queue_wait_eval "$1" "$am" "$LOOP_BASEREF"' 'queue_wait_eval "$1" "$am" ""'
+qw_mutant_multi "G1-3 the standalone loop passes the literal main" n6 'queue_wait_eval "$1" "$am" "$LOOP_BASEREF"' 'queue_wait_eval "$1" "$am" main'
+qw_mutant_multi "G1-4 the snapshot probe (flagless --step and --queue-wait) passes an empty base" n1w 'queue_wait_eval "$QW_STATE" "$QW_ARMED" "$QW_BASEREF"' 'queue_wait_eval "$QW_STATE" "$QW_ARMED" ""'
+qw_mutant_multi "G1-5 the slash is not encoded as %2F" n3a $'printf \'%s\' "${b//\\//%2F}"' $'printf \'%s\' "$b"'
+qw_mutant_multi "G1-6 the base-name allowlist is dropped" n4s '[[ ${#b} -le 255 && "$b" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$ ]] || exit 1' ':'
+qw_mutant_multi "G1-7 the base is validated before the OPEN, BEHIND and armed checks" n5 \
+  $'  [[ "$1" == OPEN\\ * ]] || return 0\n' $'  qw_base_path "$3" >/dev/null || { QW_VERDICT=badbase; QW_DETAIL="base branch $3"; return 0; }\n  [[ "$1" == OPEN\\ * ]] || return 0\n'
+qw_mutant_multi "G1-8 the foreign arm at step_guard is shadowed (flagless --step syncs)" n2s $'exit 14 ;;\n' $'exit 14 ;;\n    foreign) : ;;\n'
+qw_mutant_multi "G1-9 the foreign arm at queue_wait_gate is shadowed (the loop syncs)" n2l $'wait) tag queue_wait 0 "$(qw_refusal)"; exit 0 ;;\n' $'wait) tag queue_wait 0 "$(qw_refusal)"; exit 0 ;;\n    foreign) : ;;\n'
+qw_mutant_multi "G1-10 the foreign arm in the --queue-wait mode is shadowed (prints proceed)" n2w $'wait) echo queue_wait; exit 0 ;;\n' $'wait) echo queue_wait; exit 0 ;;\n    foreign) : ;;\n'
+qw_mutant_multi "G1-11 the badbase arm in the --queue-wait mode is shadowed (the hook would see proceed)" n4w $'wait) echo queue_wait; exit 0 ;;\n' $'wait) echo queue_wait; exit 0 ;;\n    badbase) : ;;\n'
+qw_mutant_multi "G1-12 the head-read jq swaps its fields" n6 '\(.headRefName) \(.baseRefName // "")' '\(.baseRefName // "") \(.headRefName)'
+if [[ "$HAVE_UTF8" -ne 1 ]]; then pass "G1-13 SKIPPED (locale en_US.UTF-8 unavailable): the LC_ALL=C pin deletion cannot be discriminated"
+else qw_mutant_multi "G1-13 the LC_ALL=C pin in qw_base_path is deleted" n11 'LC_ALL=C; b="${1:-}"' 'b="${1:-}"'; fi
+qw_mutant_multi "G1-14 the armed bit is read by suffix expansion" n12 'read -r st ms am base <<<"$out"' 'read -r st ms am base <<<"$out"; am="${out##* }"'
+if qw_scenario n2s && ! qw_scenario n2s_h; then
+  pass "G1-H1 harness: a rules stub that ignores the requested branch turns the N2s scenario red (the suite notices the stub stopped discriminating)"
+else fail "G1-H1 harness: n2s must hold with the real stub and fail when the stub ignores the branch (real=$(qw_scenario n2s && echo held || echo FAILED))"; fi
+# Guard 2: single bounds helper and single sanitiser
+qw_mutant_multi "G2-1 an inline copy of the three env reads is pasted back into queue_wait_eval" s1 'queue_wait_eval() {' 'queue_wait_eval() { : "${PR_QUEUE_TIMEOUT:-10}${PR_QUEUE_ATTEMPTS:-2}${PR_QUEUE_RETRY_SLEEP:-2}";'
+qw_mutant_multi "G2-3 a fourth function reads PR_QUEUE_TIMEOUT directly" s1 'qb_clean() {' $'extra_reader() { printf \'%s\' "${PR_QUEUE_TIMEOUT:-10}"; }\nqb_clean() {'
+qw_mutant_multi "G2-4 the sanitiser is dropped at the queue_state_read site" ctlq 'head -c 200 "$errf")" | qb_clean)"' 'head -c 200 "$errf")")"'
+qw_mutant_multi "G2-5 the sanitiser is dropped at the queue_wait_eval site" ctl $'detail="$(printf \'%s\' "$detail" | qb_clean)"' $'detail="$(printf \'%s\' "$detail")"'
+qw_mutant_multi "G2-6 the sanitiser is dropped at the qw_snapshot site" f5ctl 'head -c 160 "$errf")" | qb_clean)"' 'head -c 160 "$errf")")"'
+qw_mutfile "G2-7 the qb_bounds call is deleted from queue_wait_eval" s1 '/^queue_wait_eval\(\) \{/,/^\}/ s/qb_bounds/:/'
+if [[ "$CHAR_OK" -ne 1 ]]; then pass "G2-8 SKIPPED (no timeout/gtimeout): the nap characterization cannot run"
+else qw_mutfile "G2-8 queue_read_settled reads the raw env nap instead of QB_NAP" c7 '/^queue_read_settled\(\) \{/,/^\}/ s/\$\{?QB_NAP\}?/${PR_QUEUE_RETRY_SLEEP:-2}/g'; fi
+if [[ "$CHAR_OK" -ne 1 ]]; then pass "G2-H2 SKIPPED (no timeout/gtimeout): the non-recording timeout shim harness"
+elif qw_scenario c1 && ! qw_scenario c1_norec; then
+  pass "G2-H2 harness: a non-recording timeout shim turns the timeout characterization red (the rows report no recorded calls)"
+else fail "G2-H2 harness: c1 must hold with the recording shim and fail with a non-recording one"; fi
+
 unset PR_QUEUE_REPO
 
 # --- argv strictness and --help (no fixture needed: neither touches git) ---------
@@ -1706,5 +2272,7 @@ else
 fi
 
 echo "=== $PASS passed, $FAIL failed ==="
+# PHASE 0 (#10832): the pin stays 172 until the GREEN phases land; it is moved deliberately to 172 plus the 59 new row ids (231) in the
+# change that makes them pass, never here. The RED rows above fail now, so this suite exits non-zero by design.
 [[ "$FAIL" -eq 0 && "$PASS" -eq 172 ]]
 exit $?
