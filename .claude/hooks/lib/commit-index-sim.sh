@@ -66,7 +66,9 @@
 # calls (rev-parse, config) are not pinned and not bounded: they write nothing and run no filter.
 #
 # RULES THIS FILE FOLLOWS (a hook that dies here fails OPEN): it calls no mktemp (the caller allocates the
-# temp directory and owns its trap), sets no trap, never calls `exit`, and is never called inside `$(...)` (a
+# temp directory and owns its trap), sets no trap, never calls `exit` (one exception: the canonical
+# assert_fixture_dir guard below `exit 2`s on an empty or relative directory, which is a BLOCKING hook error, so it
+# fails closed, and cannot fire on a workdir this file has just made absolute), and is never called inside `$(...)` (a
 # call there loses the exports). Every step ends in `|| return` / an explicit check, because a bare failing
 # command under the hook's `set -e` exits 1, which the harness treats as non-blocking. bash 3.2: no mapfile,
 # no declare -n, no associative arrays; an empty array is read as ${a[@]+"${a[@]}"}. It needs `cp`, `mkdir`,
@@ -101,6 +103,20 @@ _CIS_WD=""
 _CIS_ROOT=""
 _CIS_PCWD=""
 _CIS_REAL_IDX=""
+
+# The canonical fixture-dir guard (byte-identical to plugins/soleur/test/test-helpers.sh; asserted by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh), called before every recursive remove and every write
+# under the workdir so an empty or relative path can never retarget it at the caller's directory. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 
 # ---- the clock and the bound --------------------------------------------------------------------
 
@@ -144,7 +160,12 @@ cis_bound_init() {
 _cis_git_run() {
   local rc=0
   cis_remaining
-  if [ "$CIS_REMAINING" -le 0 ]; then _CIS_RC=124; : > "$_CIS_ERRF"; return 124; fi
+  if [ "$CIS_REMAINING" -le 0 ]; then
+    _CIS_RC=124
+    assert_fixture_dir "$_CIS_ERRF"
+    : > "$_CIS_ERRF"
+    return 124
+  fi
   case "$CIS_BOUND_KIND" in
     timeout) LC_ALL=C timeout -k 2 "$CIS_REMAINING" git "$@" >/dev/null 2>"$_CIS_ERRF" || rc=$? ;;
     gtimeout) LC_ALL=C gtimeout -k 2 "$CIS_REMAINING" git "$@" >/dev/null 2>"$_CIS_ERRF" || rc=$? ;;
@@ -255,12 +276,16 @@ _cis_err_line() {
 _cis_fail() {
   CIS_WHY="$1"
   cis_unexport
-  if [ -n "$_CIS_WD" ] && [ "$_CIS_WD" != / ] && [ -d "$_CIS_WD" ]; then rm -rf "$_CIS_WD" 2>/dev/null || true; fi
+  if [ -n "$_CIS_WD" ] && [ "$_CIS_WD" != / ] && [ -d "$_CIS_WD" ]; then
+    assert_fixture_dir "$_CIS_WD"
+    rm -rf "$_CIS_WD" 2>/dev/null || true
+  fi
   return 0
 }
 
 # _cis_fresh — a pristine copy of the real index and an empty quarantine, for a rebuild.
 _cis_fresh() {
+  assert_fixture_dir "$_CIS_WD"
   rm -rf "$_CIS_WD/objs" "$_CIS_WD/index" 2>/dev/null || return 1
   mkdir -m 700 "$_CIS_WD/objs" || return 1
   if [ -f "$_CIS_REAL_IDX" ]; then cp -p "$_CIS_REAL_IDX" "$_CIS_WD/index" 2>"$_CIS_ERRF" || return 1; fi
@@ -277,7 +302,7 @@ _cis_pins_build() {
     case "$seen" in *" $name "*) continue ;; esac
     seen="$seen$name "
     _CIS_PINS+=(-c "$name.clean=" -c "$name.process=" -c "$name.smudge=" -c "$name.required=false")
-  done < <(git -C "$1" config --get-regexp '^filter\..*\.(clean|process|smudge|required)$' 2>/dev/null || true)
+  done < <(git -C "${1:?}" config --get-regexp '^filter\..*\.(clean|process|smudge|required)$' 2>/dev/null || true)
   return 0
 }
 
@@ -394,6 +419,7 @@ cis_build() {
   case "$wd" in /*) ;; *) wd="$PWD/$wd" ;; esac
   _CIS_WD="$wd"
   _CIS_ERRF="$wd/err"
+  assert_fixture_dir "$_CIS_ERRF"
   if ! : > "$_CIS_ERRF" 2>/dev/null; then _cis_fail prepare-failed; return 20; fi
   cis_bound_init
   if [ "$CIS_BOUND_KIND" = none ]; then _cis_fail no-bound; return 20; fi
@@ -417,6 +443,7 @@ cis_build() {
   fi
   _cis_pins_build "$root"
   if ! mkdir -m 700 "$wd/objs" 2>/dev/null; then _cis_fail prepare-failed; return 20; fi
+  assert_fixture_dir "$wd"
   if [ -f "$idx" ]; then
     if ! cp -p "$idx" "$wd/index" 2>"$_CIS_ERRF"; then
       _cis_err_line; err="$CIS_ERR"; _cis_fail copy-failed; CIS_ERR="$err"; return 20
