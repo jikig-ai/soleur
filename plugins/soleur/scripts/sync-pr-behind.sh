@@ -635,7 +635,7 @@ fi
 # that is not exactly `<head> <base>` on one line (a single token, or a multi-line answer because stderr is merged by 2>&1) leaves head_ref
 # as the whole answer, as before, and LOOP_BASEREF empty; an empty base is fatal only where queue_wait_eval reaches the rules read.
 rc=0; head_ref="$(gh pr view "$PR" --json headRefName,baseRefName --jq '"\(.headRefName) \(.baseRefName // "")"' 2>&1)" || rc=$?
-if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $head_ref"; exit 4; fi
+if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $(printf '%s' "$head_ref" | head -c 200 | qb_clean)"; exit 4; fi
 if [[ "$head_ref" =~ ^([^[:space:]]+)\ ([^[:space:]]*)$ ]]; then head_ref="${BASH_REMATCH[1]}"; LOOP_BASEREF="${BASH_REMATCH[2]}"; fi
 if [[ "$head_ref" != "$BRANCH" ]]; then
   tag wrong_branch 12 "PR #$PR's head branch is '$head_ref' but this worktree is on '$BRANCH' — cd to that PR's worktree (or pass the right PR number); not syncing."
@@ -647,7 +647,7 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
   attempt=$((attempt + 1))
   rc=0; state_line="$(gh pr view "$PR" --json state,mergeStateStatus \
     --jq '"\(.state) \(.mergeStateStatus)"' 2>&1)" || rc=$?
-  if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $state_line"; exit 4; fi
+  if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $(printf '%s' "$state_line" | head -c 200 | qb_clean)"; exit 4; fi
 
   tag state 0 "PR #$PR state: $state_line (branch: $BRANCH)"
 
@@ -705,7 +705,7 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
 
   rc=0; state_line="$(gh pr view "$PR" --json state,mergeStateStatus \
     --jq '"\(.state) \(.mergeStateStatus)"' 2>&1)" || rc=$?
-  if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "post-push gh pr view failed: $state_line"; exit 4; fi
+  if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "post-push gh pr view failed: $(printf '%s' "$state_line" | head -c 200 | qb_clean)"; exit 4; fi
   tag state 0 "post-sync state: $state_line"
 
   if [[ "$state_line" != *BEHIND* ]]; then
