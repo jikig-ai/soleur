@@ -548,6 +548,10 @@ TAG=""
 # #8609: the probe's closed `rejected` sub-reason (github-app-key-probe.mjs REJECT_REASONS, plus
 # no_verdict when the exec produced no verdict line, unspecified for a bare `rejected` line). Reset like the three fields at the top.
 GITHUB_APP_KEY_PROBE_REASON=""
+# #10934 (CTO R2): the stage the Inngest https self-gate's LAST attempt reached (_inngest_link_selfgate_phase's closed set). Assigned ONLY
+# by the self-gate's failure tail, reset at the top of resolve_inngest_link, and written by write_state as the closed-enum deploy-state key
+# `inngest_link_selfgate_phase` (ABSENT when empty). The run-log reason stays the constant inngest_link_selfgate_failed.
+INNGEST_LINK_SELFGATE_PHASE=""
 
 # _gak_enum <value> <a|b|…>: <value> when it is one of the alternatives, else `invalid`. write_state
 # splices these fields into JSON unescaped, so only a closed-enum value may reach it.
@@ -578,6 +582,12 @@ write_state() {
     if [[ -n "${GITHUB_APP_KEY_PROBE_REASON:-}" ]]; then
       gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
     fi
+  fi
+  # #10934: the self-gate's stage rides ONLY a deploy whose https self-gate failed (ABSENT otherwise, the same convention), as a
+  # closed-enum value checked here like the fields above, so an unexpected value is written as `invalid`, never spliced into the JSON.
+  local sgp=""
+  if [[ -n "${INNGEST_LINK_SELFGATE_PHASE:-}" ]]; then
+    sgp=",\"inngest_link_selfgate_phase\":\"$(_gak_enum "$INNGEST_LINK_SELFGATE_PHASE" 'connect|handshake|verify|ca_file|request|status|unknown')\""
   fi
   # #8743 Phase 2 (ADR-068 constraint (c)): persist `fanout_peers` — the
   # EFFECTIVE SOLEUR_DEPLOY_PEERS list (blank-stripped, minus this host's own
@@ -614,8 +624,8 @@ write_state() {
   fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" "$sgp" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -3848,6 +3858,7 @@ _inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verifie
     sleep 2
     i=$((i + 1))
   done
+  INNGEST_LINK_SELFGATE_PHASE="$phase"
   inngest_link_event selfgate_failed error "rc=$rc http=$http attempts=$i phase=$phase tcp=$(_inngest_link_count99 "$tcpn") tls=$(_inngest_link_count99 "$tlsn") verify=$vv"
   return 1
 }
@@ -3868,6 +3879,7 @@ resolve_inngest_link() {
   local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
   local proj_n proj_v cfg_n cfg_v scope_verified=1
   INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0; INNGEST_LINK_PENDING_SCHEME=""; INNGEST_LINK_PENDING_CA_RESET=0
+  INNGEST_LINK_SELFGATE_PHASE=""
   ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
   ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
 

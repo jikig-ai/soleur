@@ -45,6 +45,8 @@ export INNGEST_LINK_DIR="$INNGEST_LINK_TEST_DIR/inngest-link"
 # (removed by the EXIT trap below): no new mktemp.
 CURLW_FIXTURE="$SCRIPT_DIR/test-fixtures/curl-w-profiles.sh"
 CURL_W_SENTINEL="$INNGEST_LINK_TEST_DIR/curlw.sentinel"
+# an ambient override of the profile file would be sourced by the curl mock of every deploy in this suite
+unset CURL_W_PROFILES_FILE
 
 # #6665: the sleep mock's invocation cap has to be able to REPORT itself, and its own stderr
 # cannot. `run_deploy` merges the deploy script's stderr into the subshell's stdout
@@ -3432,11 +3434,13 @@ else
   [[ "$(jq -r '.reason' "$IL_STATE" 2>/dev/null)" == inngest_link_selfgate_failed ]] || IL_OK=0
   [[ "$(printf '%s\n' "$IL_SG_LINE" | grep -c '^')" -eq 1 ]] || IL_OK=0
   [[ "$IL_SG_LINE" == 'INNGEST_LINK: class=selfgate_failed level=error rc=56 http=000 attempts=3 phase=request tcp=3 tls=3 verify=0' ]] || IL_OK=0
+  # CTO R2: the stage is ALSO a closed-enum key of the deploy state (the run-log reason stays the constant token above)
+  [[ "$(jq -r '.inngest_link_selfgate_phase' "$IL_STATE" 2>/dev/null)" == request ]] || IL_OK=0
   [[ ! -e "$CURL_W_SENTINEL" ]] || IL_OK=0
   if [[ "$IL_OK" -eq 1 ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: flag on + the incident signature (TLS verified, rc 56): deploy fails (reason=inngest_link_selfgate_failed), no docker run, the event reads phase=request tcp=3 tls=3 verify=0"
+    PASS=$((PASS + 1)); echo "  PASS: flag on + the incident signature (TLS verified, rc 56): deploy fails (reason=inngest_link_selfgate_failed), no docker run, the event reads phase=request tcp=3 tls=3 verify=0, and the deploy state carries inngest_link_selfgate_phase=request"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: self-gate failure event (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null)) line=[$IL_SG_LINE] sentinel=$(head -n1 "$CURL_W_SENTINEL" 2>/dev/null)"
+    FAIL=$((FAIL + 1)); echo "  FAIL: self-gate failure event (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null) state_phase=$(jq -r '.inngest_link_selfgate_phase' "$IL_STATE" 2>/dev/null)) line=[$IL_SG_LINE] sentinel=$(head -n1 "$CURL_W_SENTINEL" 2>/dev/null)"
   fi
 
   # a healthy listener whose -w line is SHORT (rc 0, code 200, the later fields missing) still passes the gate: the verdict is decided
@@ -3449,9 +3453,11 @@ else
   [[ "$(il_runs)" -eq 2 ]] || IL_OK=0   # the canary and the production container were started: the gate passed
   il_url_clean "https://10.0.1.40:8443" || IL_OK=0
   grep -qF 'class=selfgate_failed' "$IL_LOG" && IL_OK=0
+  # a passing gate leaves no phase key in the deploy state (ABSENT, the cat-deploy-state convention)
+  [[ "$(jq 'has("inngest_link_selfgate_phase")' "$IL_STATE" 2>/dev/null)" == false ]] || IL_OK=0
   [[ ! -e "$CURL_W_SENTINEL" ]] || IL_OK=0
   if [[ "$IL_OK" -eq 1 ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: flag on + a healthy listener with a short -w line (rc 0, code 200): the gate passes and both containers start"
+    PASS=$((PASS + 1)); echo "  PASS: flag on + a healthy listener with a short -w line (rc 0, code 200): the gate passes, both containers start, and the deploy state has no inngest_link_selfgate_phase key"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: a short -w line from a healthy listener (rc=$IL_RC runs=$(il_runs) reason=$(jq -r '.reason' "$IL_STATE" 2>/dev/null))"; grep -E 'selfgate' "$IL_LOG" | head -3
   fi
@@ -12423,6 +12429,37 @@ if cmp -s "$DEPLOY_SCRIPT" "$_s1m"; then _s1_bad="$_s1_bad [mutant did not land]
 rm -f "$_s1m"
 if [[ -z "$_s1_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s1 write_state enum-checks the key fields (a JSON-breaking value is written as 'invalid'); the unchecked mutant is RED"
 else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s1 write_state enum —$_s1_bad"; fi
+# 7.s3 (#10934, CTO R2): write_state's inngest_link_selfgate_phase key is a closed enum, present only when set, and the printf still emits one
+# valid JSON object with the new field and the old ones; the unchecked mutant is RED
+_sgp_ws_harness() {  # <ci-file> → 0 when request is written as request, a hostile value as `invalid`, an empty value not at all
+  local f="$1" t v rc=0 want
+  t="$(mktemp -d)"
+  { awk '/^_gak_enum\(\) \{/,/^\}/' "$f"; awk '/^write_state\(\) \{/,/^\}/' "$f"; } > "$t/fn.sh"
+  for v in request 'request","exit_code":0,"y":"' ''; do
+    # shellcheck disable=SC2034,SC2329  # consumed by the sourced write_state; logger shadows the binary
+    ( set -euo pipefail
+      logger() { :; }
+      LOG_TAG=ci-deploy STATE_FILE="$t/state" START_TS=0 COMPONENT=web-platform IMAGE=x TAG=v1.0.0 INNGEST_LINK_SELFGATE_PHASE="$v"
+      # shellcheck source=/dev/null
+      . "$t/fn.sh"
+      write_state 7 "inngest_link_selfgate_failed" ) >/dev/null 2>&1 || rc=1
+    case "$v" in
+      request) want='.exit_code == 7 and .reason == "inngest_link_selfgate_failed" and .inngest_link_selfgate_phase == "request" and .tag == "v1.0.0"' ;;
+      '') want='.exit_code == 7 and (has("inngest_link_selfgate_phase") | not)' ;;
+      *) want='.exit_code == 7 and .inngest_link_selfgate_phase == "invalid" and (has("y") | not)' ;;
+    esac
+    jq -e "$want" "$t/state" >/dev/null 2>&1 || { GAK_WHY="value [$v]: state=[$(head -c 240 "$t/state" 2>/dev/null)]"; rm -rf "$t"; return 1; }
+  done
+  rm -rf "$t"; (( rc == 0 ))
+}
+TOTAL=$((TOTAL + 1))
+_s3_bad=""; _sgp_ws_harness "$DEPLOY_SCRIPT" || _s3_bad=" [control: $GAK_WHY]"
+_s3m="$(mktemp)"
+gak_mut "$DEPLOY_SCRIPT" "$_s3m" "\$(_gak_enum \"\$INNGEST_LINK_SELFGATE_PHASE\" 'connect|handshake|verify|ca_file|request|status|unknown')" "\$INNGEST_LINK_SELFGATE_PHASE"
+if cmp -s "$DEPLOY_SCRIPT" "$_s3m"; then _s3_bad="$_s3_bad [mutant did not land]"; elif _sgp_ws_harness "$_s3m"; then _s3_bad="$_s3_bad [an unchecked phase value stayed GREEN]"; fi
+rm -f "$_s3m"
+if [[ -z "$_s3_bad" ]]; then PASS=$((PASS + 1)); echo "  PASS: 7.s3 write_state writes inngest_link_selfgate_phase as a closed enum (request as request, a JSON-breaking value as 'invalid', empty as ABSENT); the unchecked mutant is RED"
+else FAIL=$((FAIL + 1)); echo "  FAIL: 7.s3 write_state selfgate phase —$_s3_bad"; fi
 gak_row 7.s2 "inherited GITHUB_APP_KEY_* values reach deploy state (the top-of-script reset is gone)" inherit ci \
   $'GITHUB_APP_KEY_SOURCE=""\nGITHUB_APP_KEY_FETCH=""\nGITHUB_APP_KEY_PROBE=""\n' ''
 
@@ -12834,7 +12871,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # record and one not older than the run) and SBS-12a2 (the pre-exec cap pinned in comment-stripped source).
 # Merged with main (#10136/#10501 and siblings): main's own rows took the bound 622 -> 649 (+27), so the combined bound is 692 + 27 = 719, confirmed against the measured total.
 # #10934 (the selfgate phase fields): raised 719 -> 732, the measured total of the green run (732/732) after the https self-gate route moved onto the shared curl profile table and two end-to-end rows (raw_short3 passes the gate, req_reset fails it with the phase event) were added.
-CI_DEPLOY_ASSERT_FLOOR=732
+# review round 1 (#10934, CTO R2): raised 732 -> 733 (+1 PASS row, 7.s3: write_state's inngest_link_selfgate_phase closed enum); the incident-signature and the short-line rows
+# gained assertions (the key reads request / is ABSENT) without becoming rows. Measured from the green run (733/733).
+CI_DEPLOY_ASSERT_FLOOR=733
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
