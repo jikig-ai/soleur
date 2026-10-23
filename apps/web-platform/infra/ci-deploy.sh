@@ -3667,7 +3667,8 @@ github_app_key_canary_check() {
 # $INNGEST_LINK_DIR/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
 # probes parse it with a key allowlist and never source it. Sets: INNGEST_BASE_URL_RESOLVED, INNGEST_LINK_STATE
 # (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure; inngest_link_scrub_env_file also sets it),
-# INNGEST_LINK_CA_STRICT. Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
+# INNGEST_LINK_CA_STRICT, INNGEST_LINK_SELFGATE_PHASE (reset to empty on every call; one of the seven stage tokens only when the https
+# self-gate failed, which write_state records as the deploy-state key inngest_link_selfgate_phase). Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
 # `|| rc=$?` (set -e is OFF inside), so every step below handles its own failure.
 INNGEST_LINK_HTTP_URL="http://10.0.1.40:8288"
 INNGEST_LINK_HTTPS_URL="https://10.0.1.40:8443"
@@ -3776,7 +3777,8 @@ _inngest_link_install() {
 
 # _inngest_link_time_nonzero <t>: classifies ONE curl timer field (time_connect or time_appconnect). Pure: no I/O, never aborts. The ONE
 # place a timer is interpreted: the phase helper below and the tcp/tls counters of the attempt loop both call it, so the two can never
-# disagree about what a zero or an unreadable timer is (resolver-suite rows S1, S4 and S8 pin the comma-decimal zero and the counters).
+# disagree about what a zero or an unreadable timer is (resolver-suite row S6b pins the comma-decimal zero, through mutants M22ab and M22ac;
+# row S4 pins the counters, S6 and S6c the unreadable timer).
 #   returns 0  a decimal number that is not zero (the stage happened)
 #   returns 1  a decimal number that is zero, dot or comma separated, `0.000000` or `0,000000` (the stage never happened)
 #   returns 2  not a decimal number (empty, text, an exponent): it says nothing about the stage
@@ -3828,9 +3830,10 @@ _inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
 #   rc, http  the LAST attempt's curl exit code and HTTP code (http from the validated three-digit token, else none).
 #   phase     the stage the LAST attempt reached (see _inngest_link_selfgate_phase). Read it together with rc: when tcp=0 only rc tells
 #             rc 7 (refused) from rc 28 (a drop).
-#   tcp, tls  how many of ALL attempts connected TCP and completed TLS, each clamped to 0-99; attempts= is the denominator. They show
-#             a listener that changed state between tries, which phase (last attempt only) hides. An attempt whose own timer field is
-#             not a decimal number adds nothing, so unknown with tcp=0 tls=0 is not "connect failed".
+#   tcp, tls  how many of ALL attempts printed a non-zero TCP connect time and a non-zero TLS handshake time, each clamped to 0-99;
+#             attempts= is the denominator. They show a listener that changed state between tries, which phase (last attempt only)
+#             hides. An attempt whose own timer field is not a decimal number adds nothing, so unknown with tcp=0 tls=0 is not
+#             "connect failed".
 #   verify    0 unless phase=verify, then the last attempt's verification result clamped to 0-99 (18 the served certificate is not the
 #             pinned one, 10 expired, 1 name mismatch; the raw value is 1 after a handshake or CA file failure, so it is suppressed).
 # Reading rule: phase=request means only that TLS verified and no HTTP response came back; check the terminator and its upstream, not

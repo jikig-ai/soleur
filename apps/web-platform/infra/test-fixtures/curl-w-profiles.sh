@@ -12,8 +12,9 @@
 # measured 2026-10-23 on curl 7.81.0, 8.5.0 and 8.23.0 against real local listeners (a python `ssl` server and real stunnel 5.72);
 # the values printed here are the curl 8.5.0 column. `req_partial` and `status_partial` (rc 18) were measured on 8.5.0 in the deepen
 # pass. Only the four variables that exist since curl 7.19 are modelled: http_code time_connect time_appconnect ssl_verify_result.
-# There is deliberately NO num_connects column (it is never printed) and NO default profile inside the printer (the callers pick ok200 themselves when their row names none): an unknown profile or an unknown
-# write-out variable is refused (stderr, exit 99, a sentinel file), because a double that "helpfully" answers 200 is how #10874 hid.
+# There is deliberately NO num_connects column (it is never printed) and NO default profile inside the printer (the callers pick ok200
+# themselves when their row names none): an unknown profile or an unknown write-out variable is refused (stderr, exit 99, a sentinel
+# file), because a double that "helpfully" answers 200 is how #10874 hid.
 #
 # PROFILE SPEC: <name> or <name>@<rc> (the rc override is for rows that pin the SAME times under a different exit code, or that pair a
 # raw output with the code a failing curl would exit with). The caller exports CURL_W_SENTINEL (the sentinel path) before calling
@@ -53,7 +54,7 @@ ok200|0|200|0.000503|0.009276|0'
 #   raw_verify_nonnum   rc 60 whose verification-result field is text, not an integer (the event must print verify=0)
 #   raw_status204       rc 0 with HTTP 204 and good timers: a gate that accepts "any 2xx" passes it, the real one must fail closed
 #   raw_code2000        rc 0 with the four-digit code 2000: a gate that matches "200*" passes it, the real one must fail closed
-#   raw_tc_bad          rc 56 whose time_connect is text and whose time_appconnect is a readable non-zero number (one unreadable timer beside a good one)
+#   raw_tc_bad          rc 56, time_connect text, time_appconnect a readable non-zero number (one unreadable timer beside a good one)
 CURLW_RAW='raw_empty|124|
 raw_garbage|56|https://leak.invalid/x 10.0.1.40 garbage 0
 raw_short3|56|200 0.000503

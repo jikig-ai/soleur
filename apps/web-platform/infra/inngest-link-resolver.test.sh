@@ -1321,7 +1321,7 @@ SG_S6B='raw_refused_comma|7|000|connect|0|0|0
 raw_hs_comma|35|000|handshake|1|0|0'
 row_S6b_comma_decimal_zero_is_zero() { sg_table "$1" s6b "$SG_S6B"; }
 row_S6_unknown_arms_and_validated_values() {
-  # an empty line (rc 124: the timeout wrapper killed curl; rc 2: curl 8.23 with an unreadable CA file), a garbage first token (http=none, never
+  # an empty line (rc 124: the timeout wrapper killed curl; rc 2: curl 8.23 with a MISSING CA file; an empty or garbage file is rc 77), a garbage first token (http=none, never
   # the raw token), a short line, non-numeric times (an rc-only arm still reads verify, a validated non-200 code still reads status), and
   # rc 124 beating perfectly good times (req_reset@124 reads unknown, never request), and a verification result that is text (raw_verify_nonnum
   # reads verify=0: the one field a curl line could inject text through is clamped to an integer): every row states its rc and its whole line
