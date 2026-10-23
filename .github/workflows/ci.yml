@@ -17,7 +17,8 @@ on:
   # them or that required context never reports → the queue entry stalls pending
   # forever. Since ADR-276 S2 (#9512) the heavy jobs, incl. `test` and `e2e`, DO carry an event-aware `if:` whose
   # condition names merge_group positively and is true on every event except an elided push (see `push-dedupe`);
-  # all others run unconditionally. The example list above is non-exhaustive and not the authority;
+  # all others run unconditionally, except `affected-index-ratchet` (S4 index completion PR3a, #10448), the one ADVISORY job with a positive
+  # `pull_request || merge_group` `if:` (it never runs on push, see its own comment). The example list above is non-exhaustive and not the authority;
   # required-checks.txt is.
   # ADR-276 S3 (#9728): while the repository variable CI_DRAFT_LIGHT is exactly `on`, a push to a DRAFT pull request skips the four
   # heavy families (see `draft-light`) and the `test` aggregator then concludes RED by design (Option R), so a light run can never
@@ -395,6 +396,71 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
           PR_SELECTION_STAGE2_TIMEOUT: "90"
         run: bash scripts/ci-pr-selection.sh
+
+  # ADVISORY (S4 index completion PR3a, #10448; ADR-276 amendment): the affected-index audit as a ratchet. `ratchet` compares the live set of
+  # (suite, undeclared tracked path) pairs with the committed shrink-only baseline scripts/ci-pr-affected-audit.baseline.tsv, so it is green on a tree
+  # whose audit exits 1 and red the moment a suite names a path that is neither declared, accepted nor already baselined. Runbook:
+  # knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md#ratchet-red-on-a-pr-or-queue-entry. NOT in scripts/required-checks.txt,
+  # the canonical ruleset JSON or infra/github: making it a required context is PR3b (#10859) and waits for an observation window and the budget
+  # owner's go-ahead. It runs on pull_request and merge_group only, written positively (the form scripts/probe-merge-group-coverage.sh accepts):
+  # a push run would spend about 3.4 billed minutes re-proving a tree the merge_group run of the same SHA already proved. The job is always on for
+  # pull_request (drafts, docs-only and bot PRs included): the observation window needs those shapes, and its cost is bounded by the 30-day review trigger.
+  # continue-on-error is meant to keep the pull_request and merge_group RUN conclusions green while the context is not required; that is GitHub's documented
+  # behaviour and it is NOT confirmed here (the canary run was red from other jobs). Measured on the throwaway canary (PR 10899, run 39937846319): a failing
+  # job-level continue-on-error job still concludes `failure` in the jobs API and shows as a red check on the PR check list, with its ::error annotation
+  # (runbook observation log); nothing here relies on the run conclusion, and the harness-discovery job below states its own view. The deploy coupling
+  # (web-platform-release.yml acts on a PUSH run and refuses a non-success `CI` conclusion) is not live today because this job never runs on push; adding
+  # `push` to the `if:` re-activates it. PR3b MUST remove the continue-on-error line in the commit that makes the context required (#8574 says the same
+  # for harness-discovery).
+  # fetch-depth: 2 is what the growth rule needs (HEAD^1 on a merge ref); 200 s of selector timeout leaves a hung selector an exit 2 with an
+  # annotation, well inside the 300 s job timeout (the pre-pass alone is about 146 s cold). No secrets, and no ${{ }} inside run:.
+  affected-index-ratchet:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Ratchet the audit against the committed baseline
+        shell: bash
+        env:
+          PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "200"
+        run: |
+          out="$RUNNER_TEMP/affected-index-ratchet.out"
+          full="$RUNNER_TEMP/affected-index-ratchet.full"
+          rc=0
+          python3 -I scripts/ci-pr-affected-replay.py ratchet --report "$full" > "$out" || rc=$?
+          cat "$out"
+          reason="$(sed -n 's/^SOLEUR_PR_AFFECTED_RATCHET exit=[0-9]* reason=\([a-z0-9-]*\) .*/\1/p' "$out" | tail -n 1)"
+          if [ -z "$reason" ]; then
+            rc=2
+            reason=no-marker
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=affected-index-ratchet::exit=$rc reason=$reason"
+          fi
+          if grep -q '^oracle-inputs-changed:' "$out"; then
+            echo "::warning title=affected-index-ratchet::oracle-inputs-changed: the check's own oracle changed in this diff (files in the log line and the summary); review it as the oracle, see the runbook"
+          fi
+          src="$full"
+          [ -s "$src" ] || src="$out"
+          sed 's/^/    /' "$src" > "$RUNNER_TEMP/affected-index-ratchet.summary"
+          {
+            echo "### affected-index-ratchet"
+            echo
+            head -c 900000 "$RUNNER_TEMP/affected-index-ratchet.summary"
+            if [ "$(wc -c < "$RUNNER_TEMP/affected-index-ratchet.summary")" -gt 900000 ]; then
+              echo
+              echo "(truncated at 900000 bytes: the first 25 entries of every class are in the job log above)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
 
   # BLOCKING required check (#6882). Registered in scripts/required-checks.txt,
   # scripts/ci-required-ruleset-canonical-required-status-checks.json, and

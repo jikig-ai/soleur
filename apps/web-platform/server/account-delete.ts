@@ -3,6 +3,12 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { abortAllUserSessions } from "@/server/agent-runner";
 import { deleteWorkspace, purgeWorkspaceLogoObjects } from "@/server/workspace";
 import { removeGitDataRepo } from "@/server/git-data-replication";
+import { drainBeforeReap, waitForUserSessionsToDeregister } from "@/server/agent-session-registry";
+import {
+  WORKSPACE_TREE_ERASURE_OP,
+  WorkspaceReapError,
+  type ReapFailure,
+} from "@/server/workspace-reap-error";
 import { createChildLogger } from "./logger";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
@@ -13,6 +19,8 @@ import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/o
  */
 export const ART17_ERASURE_FEATURE = "account-delete";
 export const ART17_ERASURE_OP = "git-data-bare-repo-erasure";
+// The LOCAL working-tree leg of the same erasure; paged by its own sibling alert rule.
+export const ART17_WORKSPACE_TREE_ERASURE_OP = WORKSPACE_TREE_ERASURE_OP;
 
 const log = createChildLogger("account-delete");
 
@@ -220,10 +228,37 @@ export async function deleteAccount(
   // ON this clone, so removing the directory reaps them with no extra step. The
   // unreferenced git objects they pointed at are reclaimed by the clone's normal
   // gc — moot here since the whole directory is removed.
+  // Abort only SIGNALS: wait (bounded) for the user's sessions to deregister before the rm.
+  const userIdHash = hashUserId(userId);
+  await drainBeforeReap(() => waitForUserSessionsToDeregister(userId), log, { userIdHash });
+
+  // deleteWorkspace reaps EVERY tenant root (WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>,
+  // #8211) on THIS host, attempts them all, and throws a WorkspaceReapError. A move-aside
+  // (tree renamed, not erased) counts as a failure. A failure is an Art. 17 compliance event
+  // but must NEVER block the cascade (removeGitDataRepo and the user delete still run), so
+  // it is mirrored to Sentry instead of thrown; the `art17_workspace_tree_erasure_incomplete`
+  // rule pages on it. MESSAGE path (err === null): only path-free summaries travel (root
+  // LABEL, failure kind, errno code). WorkspaceReapError's own messages carry no id; the
+  // raw rm/unlink/lstat errors do embed `<root>/<uuid>`, so they are never forwarded.
+  // `extra.userId` is pseudonymized at the emit boundary.
   try {
     await deleteWorkspace(userId);
   } catch (err) {
-    log.warn({ userId, err }, "Failed to delete workspace during deletion (non-fatal)");
+    const failures: readonly ReapFailure[] = err instanceof WorkspaceReapError ? err.failures : [];
+    reportSilentFallback(null, {
+      feature: ART17_ERASURE_FEATURE,
+      op: ART17_WORKSPACE_TREE_ERASURE_OP,
+      extra: {
+        userId,
+        errorName: err instanceof Error ? err.name : typeof err,
+        failedRoots: failures.map((f) => (f.label ? `${f.root}:${f.label}` : f.root)),
+        failureKinds: failures.map((f) => f.kind),
+        errorCodes: [...new Set(failures.flatMap((f) => (f.code ? [f.code] : [])))],
+      },
+      message:
+        "workspace tree erasure failed: deleteWorkspace did not reap every working tree during " +
+        "Art. 17 deletion; the cascade continued",
+    });
   }
 
   // 3.01 Art. 17 erasure of the SHARED git-data bare repo (#5274 Sub-PR 3.D, DL-1/AC9).

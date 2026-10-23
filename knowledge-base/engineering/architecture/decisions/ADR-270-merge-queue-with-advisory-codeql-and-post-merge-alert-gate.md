@@ -4,7 +4,7 @@ status: accepted
 date: 2026-10-03
 supersedes: ADR-032 (the 2026-07-01 "keep CodeQL required, no queue" decision and the 2026-09-14 capacity rejection, in part)
 issue: 9454
-related: [4856, 5840, 5780, 5800, 5811, 8149, 8450]
+related: [4856, 5840, 5780, 5800, 5811, 8149, 8450, 10033, 8167]
 related_adrs: [ADR-032, ADR-033, ADR-216]
 tags: [github, ruleset, merge-queue, codeql, terraform, ci]
 brand_survival_threshold: aggregate pattern
@@ -754,6 +754,75 @@ no-queue update path is retained although this repository's `main` carries the r
 the verdict is a runtime read and the rule has been reverted once before (the 2026-06-30 deadlock kill-switch). The
 `sync-pr-behind.sh` residuals (hard-coded base, triplicated helpers) are tracked on #10832. No C4 change: no new actor,
 system, container or data store.
+
+### Addendum 2026-10-23 (#9454; Ref #10033, #8167): the apply delivery gap follower is detection only
+
+The merge queue raises the push rate to `main`, and the two apply workflows share one concurrency group that keeps a
+single pending run, so a second push evicts the first: the evicted run ends `cancelled` (usually with zero jobs) and nothing
+pages. The R2 state backend has no lock (ADR-006), so that group is the sole serializer of production applies. The sibling
+workflow's `-target` set excludes the deploy-fix resources, so a success of the other workflow is not delivery.
+
+Decision: ship a detect-and-file follower (`.github/workflows/apply-delivery-gap-follower.yml`, `scripts/apply-delivery-gap.sh`)
+and nothing else. It runs on `workflow_run: completed` of either apply workflow (main only), holds `contents: read`,
+`actions: read`, `issues: write`, no secret, no environment, applies nothing and dispatches nothing, and files one
+deduplicated `apply-delivery-gap` issue (a table keyed by workflow and push SHA, with the printed dispatch command). A gap is
+a green run (the issue is the page); a failed or partial read is a red run plus an `apply-delivery-gap-degraded` issue,
+because a run triggered by a queue-made push has no human actor.
+
+Why the two fixes stay deferred (tracked by the still-open #10033 and #8167): merging the two workflows would change the sole
+serializer of lock-less R2 state; a re-dispatch follower writes production and would have to honour two kill switches;
+"poll for the sibling" (the second option on #8167) is rejected because evicted runs have zero jobs and so carry no signal
+to poll; a `schedule:` trigger as a second detection path is rejected because it would duplicate the 12 h
+`scheduled-terraform-drift` cron, which separately detects unapplied Terraform-managed changes (it neither examines individual pushes nor monitors the follower).
+
+Flip evidence bar: build a deferred fix when there are 3 or more distinct undelivered SHAs in 30 days, or one row aged past
+1 hour with real deploy impact, plus a green operator-reviewed rehearsal on a disposable concurrency group and state key.
+The evidence unit is the SHA (the same SHA is re-printed by every reconcile while it stays undelivered): the recipe counts
+distinct 40-hex SHAs over 30 days from the follower's `row` notices in `gh run view --log` (which renders the notice as
+`##[notice]row workflow=<key> sha=<40hex> ...`, title dropped, so the grep anchors on `row workflow=[a-z-]+ sha=[0-9a-f]{40}`, not on
+the `::` spelling; decision row F30), falls back to the close comments
+of past gap issues beyond the 90-day log retention (they list delivered pushes only), and reads the "more than 1 hour" half of
+the bar from the live open issue, never retroactively; issue bodies hold no history. The recipe is in the runbook
+`apply-web-platform-infra-red-run.md`, section "An apply delivery gap issue".
+
+Refinements to the 2026-10-22 ruling, each pinned by the suite: the "last ~50 runs" read became an unfiltered paged read to a
+7-day cutoff with a 10-page ceiling (`run_window_truncated`), because the search parameters were measured stale against the
+unfiltered list; a push is delivered only when a later run of the same workflow succeeded at the push or a descendant AND its
+`apply` job succeeded (a skipped apply, a kill-switched push or another dispatch target are not delivery; for the infra
+workflow the job's step `Terraform apply (SSH-provisioned resources, over the bridge)` must also have concluded `success`,
+because that job can end green with the SSH-provisioned stage skipped, and a missing step fails closed); the infra workflow
+carries its own skip marker, so each candidate is dropped by its own workflow's marker; per-workflow stale caps for
+in-flight deferral (deploy-fix 150 min, infra 120 min, `waiting` 60 min), each above the workflow's `apply` timeout; the open
+issue is identified by bot author plus exact title, never by label alone; `priority/p1-high` is added at create only and
+`priority/p0-critical` is add-only; and a degraded issue pages a blind follower.
+
+A follower failure is a red run only (plus the degraded issue for read-class failures): nothing monitors the follower itself.
+The drift check is a separate detector, not a follower monitor: `scheduled-terraform-drift.yml` is dispatched by Inngest at
+06:00/18:00 UTC and runs an untargeted `terraform plan` (about 12 h latency). It detects unapplied Terraform-managed changes
+(including the `deploy-fix` trigger, `terraform_data.deploy_pipeline_fix`), but it does not examine individual cancelled pushes,
+cannot tell which push was missed, and does not watch the follower.
+
+> **Corrected 2026-10-23 (#10879 review):** the text above first said the drift check "does not catch a missed delivery that is
+> not Terraform state (a `deploy-fix` host copy)". That premise was false: `terraform_data.deploy_pipeline_fix`
+> (`apps/web-platform/infra/server.tf`) is Terraform state whose trigger hash changes with the script, and the drift workflow runs
+> a full-root plan with no `-target`, so a missed `deploy-fix` apply does surface in drift. The close comment likewise no longer
+> says the drift check covers pushes older than the window. See decision row F29 in
+> `knowledge-base/project/specs/archive/20261023-180340-feat-one-shot-apply-delivery-gap-follower/decision-challenges.md`.
+
+Accepted residuals: an untouched gap older than 7 days ages out and the issue is left open with one marker comment (the
+follower never closes without having seen a delivery); the close comment claims only the 7-day horizon ("Every cancelled push
+seen in the last 7 days now has a delivering run, other than any dropped by a workflow skip marker. Pushes older than 7 days are
+not examined by this check."), so a close never asserts anything about older pushes; `failure`, `timed_out` and `startup_failure` runs are not follower
+candidates: when they have jobs `notify-apply-failure` mails, but a run with zero jobs (a refused workflow file) fires no
+email and is caught only by the drift check (up to 12 h) and runbook triage (the runbook's "Zero jobs and no email" section);
+a preflight-only cancelled run is classed
+`cancelled-mid-run` (conservative); a disabled follower workflow is silent (its cadence is per apply run, so absence is
+undetectable); detection can be delayed to the completion of the evicting run if the platform does not emit
+`workflow_run` for a run cancelled while pending (undocumented; the design does not depend on it); the lookup of the open
+issue is bounded by the 500 most recent open bot-authored issues and warns when it reaches that bound; CODEOWNERS rows for
+the script, suite and fixtures, and a suite-affected-paths declaration if the orphan census needs one, follow after the
+PRs that currently edit those files merge. No C4 change: the follower is GitHub-internal, adds no actor, system, container
+or data store, and no monitor.
 
 ## Cost Impacts
 
