@@ -255,3 +255,9 @@ example, `apps/web-platform/scripts/dev-ledger-parity.test.sh`).
 When a commit hook misidentifies a feature worktree as main/master, verify the
 branch and `git status` explicitly, then retry with `git -C <absolute-worktree>
 commit ...` rather than trusting the hook's current-directory resolution.
+
+## Addendum — 2026-10-23 review helper arguments
+
+Use `pipeline-tally.sh show` to read counts; `status` is unsupported. The
+fix-round seat resolver accepts canonical seat names, so use
+`code-simplicity-reviewer`, not the informal `simplicity` label.
