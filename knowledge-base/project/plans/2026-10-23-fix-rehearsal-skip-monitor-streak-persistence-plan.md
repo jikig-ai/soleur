@@ -7,7 +7,7 @@ branch: feat-one-shot-rehearsal-skip-monitor-streak-cache
 issue: none
 pr: 10916
 closes: none
-related_issues: [10917, 8856, 7574, 7672]
+related_issues: [10917, 10918, 8856, 7574, 7672]
 lane: cross-domain
 brand_survival_threshold: none
 ---
@@ -29,6 +29,35 @@ problem and is tracked in #10917 rather than patched here.
 
 Spec lane: no `spec.md` exists for this one-shot branch, so `lane:` defaulted to `cross-domain` (fail-closed
 default per the plan skill).
+
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23. **Agents/sources:** CTO (architecture ruling), learnings-researcher, plan-review
+panel (DHH, Kieran, code-simplicity), SpecFlow analyzer, security-sentinel, Context7
+(`actions/upload-artifact`), live `gh api` measurements, deepen-plan gates 4.6-4.12 (all pass).
+
+### Key improvements from deepening
+1. **Fork-safe selection (security P0).** Artifacts are repository-scoped, not ref-scoped; a fork PR run is
+   listed with a fork-controlled `head_branch`. `fetch` now also requires `head_repository_id ==
+   repository_id == $GITHUB_REPOSITORY_ID`, size at most 4096 bytes, exact member name `streak`, and never
+   logs raw artifact content (workflow-command injection).
+2. **No permanent wedge (SpecFlow P0).** A corrupt or poisoned newest artifact is discarded under
+   `bootstrap=true` (restoring the reseed path the simplicity pass had cut); a failed LISTING is never masked.
+3. **Re-run correctness.** Selection is by `workflow_run.id` below the current run, so a re-run of an older
+   run reads its predecessor and cannot outrank a newer run's state; pagination added.
+4. **Verdict-aware `seal`, upload gated on `seal`, `fetch` and the main ref; probe wrapped in `timeout 600`.**
+5. Verified: `actions/upload-artifact` v4.4+ excludes hidden files by default (hence the non-hidden state
+   path), a single-file `path` yields an archive member named by basename (`streak`), `overwrite: true`
+   replaces the same-name artifact, `retention-days` maximum is 90 unless the repo setting differs.
+
+### New considerations discovered
+- The existing probe suite asserts the probe CLEARS the streak file on a real verdict
+  (`t5-skip-persistence-bound-7510.test.sh` lines 215-227), which is why the clearing stays in the probe and
+  `seal` normalises afterwards.
+- The first reliable escalation will be filed under the real-skip alert title (pre-existing); follow-up issue
+  #10918 filed.
+- Residuals accepted and recorded under Dependencies and Risks (cancelled run, stale value after a red fetch
+  day, no age bound).
 
 ## Research Reconciliation — Brief vs. Codebase and Measurement
 
@@ -181,7 +210,7 @@ Subcommands (all start with the repo's xtrace credential refusal, #7797, and `se
 
 | Subcommand | Reads | Does |
 |---|---|---|
-| `fetch` | `GH_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, `STREAK_ARTIFACT_NAME`, `STREAK_BRANCH`, `STREAK_FILE`, `BOOTSTRAP`, `GITHUB_OUTPUT` (all read as `${X:-}` or `${X:?}` under `set -u`) | `mkdir -p "$(dirname "$STREAK_FILE")"`; write the listing `gh api "repos/$REPO/actions/artifacts?name=$NAME&per_page=100"` to a temp FILE, check the `gh` rc, then `jq -e '.artifacts \| type == "array"'` (never read `$?` through a pipe); jq-select `.expired == false`, `(.workflow_run.head_branch // "") == $b`, `((.workflow_run.id // 0) \| tostring) != $rid` (the API returns a JSON number, `$GITHUB_RUN_ID` is a string: compare as strings), newest `created_at`; download `…/artifacts/<id>/zip` to a temp file, require `unzip -Z1` to list exactly one member, `unzip -p … streak`, strip a trailing newline, validate `^[0-9]{1,6}$` (the cap only keeps shell arithmetic from overflowing), force base 10 (`$((10#$v))`), write `$STREAK_FILE`, emit ONLY `matched=true\|false` to `$GITHUB_OUTPUT`, and print the source run id to the log. |
+| `fetch` | `GH_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_REPOSITORY_ID`, `GITHUB_RUN_ID`, `GITHUB_REF_NAME`, `GITHUB_ACTOR`, `STREAK_ARTIFACT_NAME`, `STREAK_BRANCH`, `STREAK_FILE`, `BOOTSTRAP`, `GITHUB_OUTPUT` (all read as `${X:-}` or `${X:?}` under `set -u`) | (1) `mkdir -p "$(dirname "$STREAK_FILE")"`. (2) List: `gh api --paginate "repos/$REPO/actions/artifacts?name=$NAME&per_page=100"` to a temp FILE (pagination: ~90 daily artifacts plus dispatch and spam rows can exceed one page), check the `gh` rc, then `jq -s '[.[].artifacts[]]'` and require an array (never read `$?` through a pipe). (3) Select with `jq --arg`/`--argjson` (never interpolation), all fail-closed: `.expired == false`; `(.size_in_bytes // 1e9) <= 4096`; `(.workflow_run.head_branch // "") == $STREAK_BRANCH`; `(.workflow_run.head_repository_id // 0) == (.workflow_run.repository_id // -1)` and `(.workflow_run.repository_id // -1) == $GITHUB_REPOSITORY_ID` (artifacts are repository-scoped, not ref-scoped: a FORK pull_request run lists under this repository with a fork-controlled `head_branch`, even `main`, but its `head_repository_id` is the fork's); `(.workflow_run.id // 0) < $GITHUB_RUN_ID` as NUMBERS (the API returns a JSON number; this both excludes the run's own earlier attempt and makes a re-run of an OLDER run read its predecessor, not a newer run's state); newest by `workflow_run.id` (monotonic with schedule order, unlike `created_at`, which a re-run's overwrite would advance). (4) Validate the artifact id with `^[0-9]+$` before it enters a URL; download `…/artifacts/<id>/zip` to a temp file under `timeout 60` with stderr to a temp file (print only the exit code); require `unzip -Z1` output to be EXACTLY the line `streak` (rejects `../streak`, `streak/`, multi-member archives); read with `unzip -p … streak \| head -c 32` (never extract to disk); strip a trailing newline; validate with bash `[[ $v =~ ^[0-9]{1,6}$ ]]` (not `grep -E`, which passes `1\nabc`; the 6-digit cap only keeps shell arithmetic from overflowing); force base 10 (`$((10#$v))`). (5) Write `$STREAK_FILE`, emit ONLY `matched=true\|false` to `$GITHUB_OUTPUT`, print the source run id to the log. A non-`STREAK_BRANCH` ref (a feature-branch dispatch) prints `::notice::` that state is read from `main` and NOT written. A bootstrap run prints `::notice::bootstrap by ${GITHUB_ACTOR}`. The log NEVER carries the raw artifact value, member name or `unzip`/`gh` stderr (a line beginning `::stop-commands::`, `::add-mask::` or `::error::` is interpreted by the runner): on a malformed value it prints the length and `printf '%s' "$v" \| LC_ALL=C tr -c '[:alnum:]' '?' \| head -c 16`. |
 | `seal` | `STREAK_FILE`, `VERDICT` (from `steps.probe.outputs.verdict`) | After the probe. For `pass`/`fail`/`broken`: a missing or empty file (the probe cleared it) becomes `0`. For `transient`: the probe MUST have written a numeric value of at least 1 — a missing, empty, non-numeric or zero file exits 1 (`_transient` writes with `2>/dev/null \|\| true`, so a lost increment would otherwise be sealed as `0` and silently reset the streak). Any other verdict exits 1. |
 | `assert` | `MATCHED`, `BOOTSTRAP`, `STREAK_FILE` (`${X:-}` defaults) | Exit 1 unless `MATCHED == true` or `BOOTSTRAP == true` (literal string; unset, `false`, `1`, `True` are all "not bootstrap"); also exits 1 if the sealed file is not numeric. Prints `streak state: restored=<matched> value=<n>`. |
 
@@ -190,12 +219,11 @@ Subcommands (all start with the repo's xtrace credential refusal, #7797, and `se
 | Situation | `BOOTSTRAP` != true | `BOOTSTRAP` == true |
 |---|---|---|
 | listing call fails, or response is not JSON with an `artifacts` array | exit 1 (`::error::`) | exit 1 (a bootstrap never masks an unreadable store) |
-| no eligible artifact (none, all expired, all on other branches, only this run's own) | `matched=false`, exit 0 (the assert step turns it red) | `matched=false`, exit 0 |
-| eligible artifact, download or `unzip` fails, member `streak` missing, or more than one member | exit 1 | exit 1 |
-| eligible artifact, value malformed (non-numeric, empty, over 6 digits, embedded space or newline mid-value) | exit 1 | exit 1 (a poisoned newest artifact is removed by deleting it through the REST API, after which the no-artifact row applies; our own writer cannot produce one because `seal` validates and the upload is gated on `seal`) |
+| no eligible artifact (none, all expired, all on other branches, only runs at or after this run's id) | `matched=false`, exit 0 (the assert step turns it red) | `matched=false`, exit 0 |
+| eligible artifact, download or `unzip` fails, member list is not exactly `streak`, or value malformed (non-numeric, empty, over 6 digits, embedded space or newline) | exit 1 | `::warning::` (sanitized), discard it, `matched=false`, exit 0 (the documented reseed path: a poisoned or corrupt NEWEST artifact must never wedge the monitor red with no recovery; the upload then writes a fresh, newer artifact) |
 | eligible artifact, valid | `matched=true` | `matched=true` (value honoured) |
 
-No age-based warning or failure: consecutive runs can be 2 days apart under scheduler load, a red daily job
+Listing failures are never masked by `bootstrap`. No age-based warning or failure: consecutive runs can be 2 days apart under scheduler load, a red daily job
 already carries the loud signal, and plan review (DHH, code-simplicity) found no consumer for a warning.
 
 ### Workflow: `.github/workflows/scheduled-rehearsal-skip-monitor.yml` (edit)
@@ -209,13 +237,18 @@ already carries the loud signal, and plan review (DHH, code-simplicity) found no
   contract; `T5_PROBE_STATE` moves to `${{ runner.temp }}/monitor-state/streak`, a NON-hidden absolute path:
   `actions/upload-artifact` v4.4+ excludes dot-directories by default, and `.monitor-state` is one) > `seal`
   > `assert` (replaces "Assert the streak state round-trips"; keep the step name so history is searchable) >
-  `upload` (`actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2`, the pin used in 20
-  workflows; `name: ${{ env.STREAK_ARTIFACT_NAME }}`, `path: ${{ runner.temp }}/monitor-state/streak`,
+  `upload` (`actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2`, the pin used by 20
+  `uses:` sites across 12 workflows, 40-char SHA verified; `name: ${{ env.STREAK_ARTIFACT_NAME }}`, `path: ${{ runner.temp }}/monitor-state/streak`,
   `retention-days: 90`, `if-no-files-found: error`, `overwrite: true`; condition
-  `!cancelled() && steps.fetch.outcome == 'success' && steps.seal.outcome == 'success'` so neither an
-  unreadable store nor an unsealable (non-numeric or lost-increment) file is ever published) > alert issue
+  `!cancelled() && github.ref == format('refs/heads/{0}', env.STREAK_BRANCH) && steps.fetch.outcome == 'success' && steps.seal.outcome == 'success'`
+  so neither an unreadable store, an unsealable (non-numeric or lost-increment) file, nor a non-main dispatch
+  (whose artifact `fetch` would never read, silently dropping its increment) is ever published) > alert issue
   (unchanged) > report verdict (unchanged). The alert and report steps depend only on
   `steps.probe.outputs.verdict`, so a failed fetch or upload cannot suppress them.
+- The probe invocation is wrapped in `timeout 600` so a hang becomes rc 124, which the existing
+  `case` maps to `broken` and the alert step files (otherwise the 15-minute job timeout cancels `seal`,
+  `upload`, the alert and the report, leaving a red job with no issue and no counter advance; plan deepening
+  found this adjacent fail-open).
 - `STREAK_FILE` (`${{ runner.temp }}/monitor-state/streak`) is set per step, in five places (probe as
   `T5_PROBE_STATE`, fetch, seal, assert, and the upload `path`), because `runner.*` is not available in
   workflow- or job-level `env`; the probe step and `fetch` both `mkdir -p` its directory (the old
@@ -288,11 +321,11 @@ only the archived plans/specs and the past-tense comment. 4.2 Probe header comme
 
 ### Phase 5: Post-merge verification (agent-run, no human step)
 
-5.0 Read the stored value first (the last run's artifact); dispatch only while it is `0`: the streak counts
+5.0 All dispatches use `--ref main` (a non-main dispatch reads main's state but writes nothing). Read the stored value first (the last run's artifact); dispatch only while it is `0`: the streak counts
 consecutive TRANSIENT RUNS, not days, so each dispatch counts like a scheduled run and two dispatches on a
 streak of 2 would escalate it.
-5.1 Dispatch once with `bootstrap=true`: `gh workflow run scheduled-rehearsal-skip-monitor.yml -f bootstrap=true`,
-arm a Monitor watch on the run (never a background poll), assert the `fetch`, `assert` and `upload` steps
+5.1 Dispatch once with `bootstrap=true`: `gh workflow run scheduled-rehearsal-skip-monitor.yml --ref main -f bootstrap=true`,
+arm a Monitor watch on THAT run id (the concurrency group drops an older pending dispatch, so assert the dispatched run itself concluded, not merely that a dispatch was accepted), assert the `fetch`, `assert` and `upload` steps
 concluded `success`, and list the artifact unauthenticated:
 `curl -s 'https://api.github.com/repos/jikig-ai/soleur/actions/artifacts?name=rehearsal-skip-monitor-streak&per_page=1' | jq -r '.artifacts[0].expired'` prints `false`.
 5.2 Dispatch again with `bootstrap=false`: the `Assert the streak state round-trips` step must conclude
@@ -388,9 +421,9 @@ shape failure, malformed value). More than one chokepoint exists on purpose: the
 |---|---|---|
 | 1 | `fetch` treats a listing failure as "no eligible artifact" (`gh api … \|\| true` or ignoring the rc) | RED: unit case "listing exits 1" expects exit 1 and no `matched=false` line |
 | 2 | `assert` accepts any non-empty `BOOTSTRAP` (`-n`) instead of the literal `true` | RED: cases `BOOTSTRAP=false`, `1`, `True`, `yes`, unset all expect exit 1 |
-| 3 | `fetch` drops the `head_branch` filter | RED: decoy artifact on `feature/x` with a higher value, newest by time, must be ignored |
-| 4 | `fetch` stops at the first artifact instead of sorting by `created_at` (second, newer eligible member after a compliant first) | RED: two eligible artifacts, older listed first, newest value must win |
-| 5 | `fetch` drops the run-id exclusion, or compares the numeric `workflow_run.id` to the string `$GITHUB_RUN_ID` without `tostring` (never matches) | RED: an artifact whose numeric `workflow_run.id` equals the current run id must not be restored |
+| 3 | `fetch` drops the `head_branch` filter, or the `head_repository_id == repository_id` equality | RED: (a) decoy on `feature/x`, (b) decoy with `head_branch=main` but a different `head_repository_id` and a newer timestamp, (c) a null `workflow_run`, (d) `size_in_bytes` over 4096 — each with a higher value, newest by time, must be ignored |
+| 4 | `fetch` stops at the first artifact, or sorts by `created_at` instead of `workflow_run.id` (second, newer eligible member after a compliant first) | RED: two eligible artifacts, older listed first, newest run id must win; and a re-uploaded OLDER run's artifact with a later `created_at` must not outrank a newer run's |
+| 5 | `fetch` drops the `workflow_run.id < $GITHUB_RUN_ID` bound, or compares the JSON-number id to the string `$GITHUB_RUN_ID` (never matches) | RED: an artifact with the current run id, and one with a HIGHER run id (a re-run of an older run), must not be restored; numeric fixture ids |
 | 6 | `seal` writes `0` for a missing file regardless of `VERDICT` (a lost TRANSIENT increment reads as a cleared streak) | RED: `VERDICT=transient` with a missing/empty/`0` file exits 1; `VERDICT=pass` with a missing file seals `0` |
 | 7 | `fetch` accepts leading zeros as octal (`$((v+1))`-style) or skips the numeric shape check | RED: `08`, `007`, `abc`, empty, `12 34`, 7-digit values |
 | 8 | The guard's own dispatch: `assert` (or `seal`, or `fetch`) subcommand unrecognized or a no-op exiting 0 | RED: the suite requires an exact assertion-count floor and at least one case per subcommand |
@@ -403,7 +436,7 @@ suite's exit status reads an append-only failure ledger, not `fails == 0` alone.
 
 **Anchor.** The guard compares presence and shape, not a stored value against the thing it protects, so no
 anchor is needed for integrity. The residual (a user with write access can upload a decoy artifact on `main`)
-is the same exposure the Actions cache has and is bounded by the branch filter plus numeric validation.
+is residual and bounded: the selection admits only same-repository artifacts from branch `main` with size at most 4096 bytes and a numeric payload, so a decoy needs write access to this repository. Plan deepening (security review) corrected an earlier claim that this equals the cache's exposure: caches are ref-scoped, artifacts are not, and a FORK pull_request run lists under this repository with a fork-controlled `head_branch`; the `head_repository_id` equality is what excludes it.
 
 ### Guard 2 — Workflow wiring section
 
@@ -424,7 +457,8 @@ them to the probe env and to `env.STREAK_ARTIFACT_NAME`. Single chokepoint: the 
 | 3 | Remove `!cancelled()` from `assert`, `seal` or `fetch` (after a compliant first) | RED: status-function property, reported per step |
 | 4 | Point the probe at `.monitor-state/streak` (hidden directory) while the upload path stays | RED: path-equality and non-hidden properties |
 | 5 | Make `bootstrap` default `true`, or drop the `github.event_name == 'workflow_dispatch'` guard | RED: bootstrap property (a scheduled run must be able to reach `BOOTSTRAP=true` in no way) |
-| 6 | Drop `steps.seal.outcome == 'success'` (or the fetch condition) from the upload `if:`, or add `continue-on-error: true` / `if-no-files-found: warn` to it | RED: upload-gating property |
+| 6 | Drop `steps.seal.outcome == 'success'`, the fetch condition, or the `github.ref == refs/heads/<STREAK_BRANCH>` condition from the upload `if:`, or add `continue-on-error: true` / `if-no-files-found: warn` to it | RED: upload-gating property |
+| 6b | Remove `timeout 600` from the probe invocation | RED: probe-bounded property |
 | 7 | Delete the `upload` step | RED: the suite requires exactly the expected number of property lines, and the order property fails |
 
 Properties (parsed YAML, five plus the equality check): no `actions/cache`; step order
@@ -499,7 +533,7 @@ at_rest:
     mechanism: plaintext-exception
     evidence: scripts/monitor-streak-state.sh (writes only a validated 1 to 6 digit decimal)
     defends_against: nothing is claimed; confidentiality is not a property of this store
-    does_not_defend: any authenticated GitHub user can download the artifact from this public repository; a user with write access can upload a decoy named identically on the default branch
+    does_not_defend: any authenticated GitHub user can download the artifact from this public repository; a user with write access to this repository can upload a decoy named identically from a run on the default branch (fork pull_request runs are excluded by the head_repository_id equality, artifacts being repository-scoped rather than ref-scoped)
     disclosed_as: not-publicly-claimed
     live_verification: unavailable:GitHub does not expose per-artifact encryption state
 in_transit:
@@ -555,12 +589,15 @@ operations, sales and support: no implications (internal CI monitor). No user-fa
 | Delete `monitor-streak-cache-roundtrip-7574.sh` and its baseline row | — | inferred — justification: its log anchor is removed by this change; keeping it would leave a probe that can only report FAIL or TRANSIENT |
 | Comment-only edit of the probe header | — | inferred — justification: the header states the workflow "restores/saves" the file and would be false after this change |
 | Filing #10917 | "where it was deferred and no issue was filed" | asked |
+| Filing #10918 (escalation FAIL mislabelled by the alert step) | "where it was deferred and no issue was filed" | inferred — justification: the fix makes the escalation reachable for the first time, and the pre-existing alert title would mislabel it; deferral without a tracking issue is invisible |
 | Post-merge double dispatch (Phase 5) | "stops being red" | asked |
+| `timeout 600` around the probe | — | inferred — justification: deepening (SpecFlow) found that a hung probe is cancelled by the 15-minute job timeout with no verdict, no alert and no counter advance; one token turns it into the existing `broken` path |
+| Fork-safe artifact selection (`head_repository_id`, repository id, size bound) and sanitized logging | — | inferred — justification: deepening (security review, P0) found artifacts are repository-scoped, so a fork PR run could plant a decoy that resets or forces the streak |
 
 ### Split Assessment
 
 - Subsystems touched: 3 — `.github/workflows`, `scripts`, `knowledge-base`
-- Planned files: 10 | Estimated changed lines: about 560 after plan review (script about 120, one suite about 280, workflow net about 90, short ADR about 40, registration and baseline about 30)
+- Planned files: 10 | Estimated changed lines: about 620 after plan review and deepening (script about 160, one suite about 280, workflow net about 90, short ADR about 40, registration and baseline about 30)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR. Under every threshold; production-code lines (workflow plus script) are about 210, and a split would land an artifact store without its guard.
 
@@ -591,13 +628,15 @@ Pyramid layer labels: `unit` unless stated. Fixtures are synthesized; the fake `
 | T1 | empty artifact list | `matched=false`, exit 0 |
 | T2 | only expired artifacts | `matched=false`, exit 0 |
 | T3 | only artifacts whose `head_branch` is not `main` | `matched=false` |
-| T4 | only an artifact from the current `GITHUB_RUN_ID` | `matched=false` |
-| T5 | two eligible artifacts, older listed first | newest by `created_at` wins, value read from it |
+| T4 | only artifacts with run id equal to or higher than `GITHUB_RUN_ID` | `matched=false` |
+| T5 | two eligible artifacts, older listed first; and an older run's re-uploaded artifact with a later `created_at` | highest `workflow_run.id` below the current run wins, value read from it |
 | T6 | newest artifact is a decoy on another branch with a larger value | decoy ignored |
 | T7 | value `3`, `0`, `12`, `3\n` | `matched=true`, file holds the base-10 value |
 | T8 | value `08`, `007` | restored as `8`, `7` (never octal) |
 | T9 | value `abc`, empty, `1 2`, `1234567`, `-1`, `  4 `; also a zip with two members | exit 1, both `BOOTSTRAP` values |
 | T10 | listing returns exit 1 / HTML / `{}` | exit 1, both `BOOTSTRAP` values |
+| T10b | decoys: other branch; `head_branch=main` with a different `head_repository_id`; null `workflow_run`; `size_in_bytes` 5000; each newer and larger than the real artifact | all ignored, real artifact restored |
+| T10c | zip members `../streak`, `streak/`, `streak\nx`; value `::error::x`; value `1\nabc` | exit 1; the captured log contains no `::error::x` and no raw member name |
 | T11 | download exits 1, or the zip lacks member `streak` | exit 1, both `BOOTSTRAP` values |
 | T13 | `seal`: `VERDICT=pass` with file missing / empty / `5` / `x`; `VERDICT=transient` with file missing / empty / `0` / `2`; `VERDICT=weird` | `0` / `0` / `5` / exit 1; exit 1 / exit 1 / exit 1 / `2`; exit 1 |
 | T14 | `assert` with `MATCHED` true / false / unset and `BOOTSTRAP` true / false / `1` / `True` / unset | pass only for `MATCHED=true` or `BOOTSTRAP=true` (literal) |
@@ -629,7 +668,10 @@ followed by the red assert; T1/T14 reproduce that input and now require an expli
   directory is therefore `${RUNNER_TEMP}/monitor-state`, and the wiring section fails any hidden path segment.
 - **Retention.** 90 days exceeds the 60-day scheduled-workflow auto-disable; org policy can cap retention
   lower, so Phase 5.1 reads `expires_at` from the listing and records it in the PR.
-- **Cancelled run under-counts by one** (upload skipped); accepted and documented.
+- **Cancelled run under-counts by one and can skip its alert** (upload and alert are `!cancelled()`-gated); the next daily run re-detects a real FAIL, so this self-heals. Accepted and documented in the workflow header.
+- **A red fetch day leaves the stored value stale** (upload is skipped when fetch fails): if the verdict that day was a clearing `pass`, the store keeps its old `N`, and a later TRANSIENT then reads `N+1`. Needs a red fetch day AND a nonzero stored value AND a later transient; accepted, recorded in the header.
+- **No age bound:** after the scheduler is auto-disabled for 60 days and re-enabled, a stored `2` plus one transient escalates. Accepted (the CTO ruled no age-based failure); a `bootstrap` dispatch resets.
+- **The first reliable escalation is mislabelled by the existing alert step:** the probe's "unable to reach a verdict for N consecutive runs" FAIL files under the title for real skips. Pre-existing and out of scope here; tracked as #10918.
 - **A real FAIL keeps the job red** (open alert issue #8856); intentional and outside this fix.
 - **The release export churn remains** until #10917 lands; the other caches (npm, CodeQL) continue to be
   evicted daily.
