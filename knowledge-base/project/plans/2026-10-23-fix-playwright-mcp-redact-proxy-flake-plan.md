@@ -13,6 +13,25 @@ brand_survival_threshold: none
 
 # fix: de-flake playwright-mcp-redact-proxy G1 row — deadline-mapped rc and opaque assert
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23
+**Sections enhanced:** gates 4.6–4.12 all pass (see below); Network-Outage Deep-Dive emitted under Technical Considerations
+**Research agents used:** sequential inline fallback — no subagent spawn exists in this harness (`Reviewed-Coverage: sequential-fallback`); lenses applied inline: CTO Rule interface (fix-shape ruling → `specs/…/decision-challenges.md`), plan-review eng panel (DHH overengineering / Kieran correctness / code-simplicity per-mechanism), spec-flow walk, determinism-checklist convention, Sharp-Edges catalogue
+
+### Key Improvements (deepen-pass)
+
+1. Gate verification: `lint-guard-contract.py` rc=0; Scope Check unfenced count=1; PAT sweep clean; Observability 5-field block validates (probe verb `grep`, literal `ok`); User-Brand Impact threshold `none` with no sensitive-path match.
+2. Network-Outage Deep-Dive added (gate 4.5 fired on the `timeout` keyword — documented as a local-process deadline, all four layers N/A with the artifact cited).
+3. Literal-command verification of the plan's census greps run on current state (65 `assert_refused_start`, 108 `session --timeout 3`, 0 `--expect-death` — the expected pre-implementation census).
+4. Verify-the-negative pass (inline): every mutant row's assert type checked — all are `started`/`delivered_ok`/file-fact live-session asserts, none a startup-exit rc; the synthetic helper-control `assert_refused_start` confirmed to pair with no `session(` call; `B1` rows confirmed direct-run with no driver involvement.
+5. Precedent-diff (gate 4.4): deadline-free startup-exit assertion precedent exists in-suite — the `B1` usage rows (`python3 "$PROXY" … </dev/null` direct, ~lines 675-678); the chosen driver-flag mechanism keeps refusal rows inside the driver's env/stdin plumbing, which `B1` does not exercise.
+
+### New Considerations Discovered
+
+- `expect_death` must be initialized `False` inside `parse()`'s options literal — an arm-only store produces `KeyError` on the ~110 sessions that never pass the flag (folded into FR-1).
+- The sweep-completeness check is a structural pairing (each `assert_refused_start` ↔ nearest preceding `session(`), not a count equality — the synthetic helper-control row has no session and would break a naive count (folded into AC-3).
+
 ## Overview
 
 The agent-browser guard-contract suite (`plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh`, 499 cases) flaked the same single case in three observed CI attempts — run 39874186208 attempt 1 (PR #10881, the run that blocked the armed merge queue ~10h) and run 39937573660 attempts 1 and 2 (PR #10896, tracked as #10919): `FAIL - G1: a BaseException subclass outside the narrowed tuple at import → rc 1, nothing relayed, no child spawned`. The suite is green on main and locally (~0.23s for the row vs a ~6.07s elapsed gap on every failed CI run). The ~6.07s signature equals the session driver's two 3s deadline windows almost exactly, and the driver maps "proxy still alive when the post-eof deadline lapses" to `rc=TIMEOUT` — so a proxy whose startup was stalled on the runner past the deadline records TIMEOUT instead of its real exit 1, and the four-conjunct `assert_true` reports the failure with no per-observable detail. The fix removes the deadline from the verdict path for the startup-death class (~66 rows share the same coupling) and makes every surviving failure line self-explaining.
@@ -81,6 +100,15 @@ The agent-browser guard-contract suite (`plugins/soleur/skills/agent-browser/tes
 - **What the sweep cannot change:** `assert_refused_start` checks rc==2, the refusal reason needle, zero stdout lines, empty child_pgid — all file-based reads unaffected by the deadline semantics. Sessions that serve replies (`want` satisfied) never reach the death path.
 - **Masking risk:** under `--expect-death`, a proxy that *serves* instead of dying still lands stdout lines → `lines != 0` → RED. A proxy that refuses with the wrong rc → `assert_rc`/`assert_refused_start` RED. Nothing is weakened.
 - **Python-version safety:** the driver is stdlib-only; the flag adds no dependency.
+
+### Network-Outage Deep-Dive
+
+Gate 4.5 fired on the `timeout` keyword. The word in this plan names `proxy-session-driver.py`'s wall-clock deadline on a **local subprocess** (`subprocess.Popen` + `start_new_session`, stdio pipes to a repo fixture stub) — there is no SSH, DNS, TLS, or remote-service hypothesis anywhere in the change surface. Per-layer status, each with its opt-out artifact:
+
+- **L3 firewall allow-list — N/A.** Opt-out: no host or firewall enters the path; the failing case is a `python3` subprocess on the runner itself. Artifact: suite source — the session launches `[sys.executable, proxy] + args + ["--"] + server` with stdio pipes, no sockets.
+- **L3 DNS/routing — N/A.** Opt-out: no hostname is resolved on the flaked path; the "server" is `fake-playwright-mcp.py` spoken to over stdin/stdout.
+- **L7 TLS/proxy — N/A.** Opt-out: no HTTPS surface; the protocol under test is newline-delimited JSON-RPC over stdio.
+- **L7 application — verified (local analogue).** The service-side analogue is the proxy's own stderr/exit trace, already inspected from the failed job logs: row elapsed ~6.07s ≈ the driver's two 3s deadline windows, `rc` file would read `TIMEOUT` (the driver's only producer of that string is the `p.kill()` arm at ~line 121) — process-level evidence the proxy was still alive at the deadline, not evidence of any network fault.
 
 ## Files to Edit
 
