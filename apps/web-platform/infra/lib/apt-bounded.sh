@@ -183,6 +183,9 @@ _gd_apt_out_tail_raw() {
   if [ -z "$hit" ]; then tail -n "$n" "$f" 2>/dev/null; return 0; fi
   ln="${hit%%:*}"; cause="${hit#*:}"
   case "$cause" in *" tail_lines="[0-9]*) k="${cause##* tail_lines=}"; k="${k%%[!0-9]*}" ;; esac
+  # More than 3 digits is a forged count (the real one is at most GD_APT_TAIL_LINES): clamp BEFORE the arithmetic, because $(( 10#N ))
+  # wraps a 20-digit N to a small number (18446744073709551617 reads as 1) and would then be honoured as an honest count.
+  [ "${#k}" -gt 3 ] && k="$GD_APT_TAIL_LINES"
   k=$(( 10#$k )); [ "$k" -gt "$GD_APT_TAIL_LINES" ] && k="$GD_APT_TAIL_LINES"
   printf '%s\n' "$cause"
   [ "$k" -gt 0 ] || return 0

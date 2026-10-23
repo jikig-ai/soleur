@@ -546,13 +546,14 @@ _h6_abc="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=a
 _h6_empty="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=')"
 _h6_forged="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=999')"
 _h6_huge="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=99999999999999999999999')"
+_h6_wrap="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=18446744073709551617')"
 _h6_three="$(_h6_n 'FIXTURE_APT_CAUSE: timeout stage=update attempt=1 tail_lines=3')"
 _h6_cap=$(( $( . "$LIB"; printf '%s' "$GD_APT_TAIL_LINES" ) + 1 ))
 _h6_leak="$( { printf 'UNSCRUBBED-1 secret\n'; printf 'FIXTURE_APT_CAUSE: x\n'; } > "$_ct"; ( . "$LIB"; gd_apt_out_tail "$_ct" 5 ) 2>&1 | grep -c UNSCRUBBED || true )"
-if [ "$_h6_bare" -eq 1 ] && [ "$_h6_none" -eq 1 ] && [ "$_h6_abc" -eq 1 ] && [ "$_h6_empty" -eq 1 ] && [ "$_h6_forged" -eq "$_h6_cap" ] && [ "$_h6_huge" -eq "$_h6_cap" ] \
+if [ "$_h6_bare" -eq 1 ] && [ "$_h6_none" -eq 1 ] && [ "$_h6_abc" -eq 1 ] && [ "$_h6_empty" -eq 1 ] && [ "$_h6_forged" -eq "$_h6_cap" ] && [ "$_h6_huge" -eq "$_h6_cap" ] && [ "$_h6_wrap" -eq "$_h6_cap" ] \
    && [ "$_h6_three" -eq 4 ] && [ "$_h6_leak" -eq 0 ]; then
-  pass "gd_apt_out_tail H6: a cause line with no valid tail_lines= prints itself alone (bare, absent, abc, empty), a forged 999 or 23-digit count is clamped to ${_h6_cap} lines, an honest 3 gives 4"
-else fail "gd_apt_out_tail H6: tail_lines trust" "bare=$_h6_bare absent=$_h6_none abc=$_h6_abc empty=$_h6_empty forged999=$_h6_forged (want $_h6_cap) huge=$_h6_huge (want $_h6_cap) three=$_h6_three (want 4) unscrubbed-leak=$_h6_leak"; fi
+  pass "gd_apt_out_tail H6: a cause line with no valid tail_lines= prints itself alone (bare, absent, abc, empty), a forged 999, 23-digit or 2^64+1 (wraps to 1 in shell arithmetic) count is clamped to ${_h6_cap} lines, an honest 3 gives 4"
+else fail "gd_apt_out_tail H6: tail_lines trust" "bare=$_h6_bare absent=$_h6_none abc=$_h6_abc empty=$_h6_empty forged999=$_h6_forged (want $_h6_cap) huge=$_h6_huge (want $_h6_cap) wrap2^64+1=$_h6_wrap (want $_h6_cap) three=$_h6_three (want 4) unscrubbed-leak=$_h6_leak"; fi
 
 # H7 — a skip message must carry its apt cause inside the first 400 bytes, because run-registered-suites.sh relays every
 # `SKIP (loud): ` line through `cut -b1-400` (relay_grep). gd_apt_skip_field gives the short `apt=<cause> stage=<s> attempt=<n>`
@@ -777,7 +778,12 @@ for spec in "${SPECS[@]}"; do
     # tails sed's output, and `grep ... "$cp" | tail -1` tails grep's, neither is a raw tail of the capture.
     while IFS= read -r ln; do
       seg="${ln%%"$cp"*}"; seg="${seg##*[|;&]}"
-      if [[ "$seg" =~ (^|[^A-Za-z0-9_])tail[[:space:]]+- ]]; then raw="${raw} {${cp}: ${ln:0:90}}"; fi
+      # tail or head as the command that READS the capture (any argument shape: `tail -n 5 f`, `tail -5 f`, bare `tail f`, `head -c N f`), or
+      # `cat <capture> | tail|head ...` (cat's output is the capture itself).
+      after="${ln#*"$cp"}"; after="${after#\"}"
+      if [[ "$seg" =~ (^|[^A-Za-z0-9_])(tail|head)[[:space:]] ]] \
+         || { [[ "$seg" =~ (^|[^A-Za-z0-9_])cat[[:space:]]+([^[:space:]|;&]+[[:space:]]+)*\"?$ ]] && [[ "$after" =~ ^[[:space:]]*\|[[:space:]]*(tail|head)([[:space:]]|$) ]]; }; then
+        raw="${raw} {${cp}: ${ln:0:90}}"; fi
     done < <(printf '%s\n' "$u" | grep -F -- "$cp" || true)
   done <<< "$caps"
   if [ "$ncall" -lt "$((10#$want_mounted))" ] || [ "$ncap" -lt "$((10#$want_mounted))" ] || [ -n "$raw" ]; then

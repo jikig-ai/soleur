@@ -63,7 +63,7 @@ tfs=("$SENTRY_DIR"/*.tf)
 #   entry:    logic_type "all", feature eq agent-sandbox, op eq masked-dir-precreate, and an email action on ONE line whose target_type is
 #     "issue_owners" (the only value this file uses) and whose fallthrough_type is not NoOne
 # An email in a different entry, or in an entry conditioned on another feature, cannot satisfy the op entry. Multi-line `email = {` actions
-# and `event_frequency_count = {` entries fail closed (they do not match), as do two filter entries written on one line (their lines merge).
+# and `event_frequency_count = {` entries fail closed (they do not match), while two filter entries written on ONE physical line are not separated (they merge and can false-pass); `terraform fmt` never produces that shape and the contract test pins the real chain.
 rule="$(awk -v op="$OP" "$STRIP"'
   function blank(t) { gsub(/"[^"]*"/, "", t); return t }
   function reset_entry() { ef = eo = ee = el = ebad = 0 }
