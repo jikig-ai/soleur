@@ -1893,9 +1893,12 @@ case "$OP" in
     # pure hcloud API. HCLOUD_TOKEN read from the prd_terraform-scoped
     # DOPPLER_TOKEN (never echoed). server id 123931471 = soleur-web-platform.
     # ALLOWLISTED READ: scripts/lint-hcloud-token-readonly-no-fallback.sh allows exactly one read of the
-    # read/write HCLOUD_TOKEN, this line (its exact text, count 1). The allowlist entry expires
-    # 2026-12-15 (warning-only; trackers #9755 / #10664). Reformatting the line below turns that scan red
-    # (`F-allowlist ... found 0`); the scanner drops whole-line comments, so this comment cannot disturb the match.
+    # read/write HCLOUD_TOKEN, this line (its whitespace-normalised text, exact count 1). The allowlist entry
+    # expires 2026-12-15 (warning-only; trackers #9755 / #10664). The scan keys on the whitespace-normalised
+    # logical line, so re-indenting, doubled inner spaces or a backslash-newline split stay green; editing the
+    # text beyond whitespace (a `2>/dev/null`, a trailing `# why`, quotes, a trailing `;`) turns the scan red
+    # with two findings: an `F-literal` for the new spelling plus `F-allowlist ... found 0`. The scanner
+    # drops whole-line comments, so this comment cannot disturb the match.
     HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)
     # #8767: shape-check, THEN mask, BEFORE the first request. The check comes first so a value
     # holding a newline can never inject a second `::` workflow command through the mask line (and an

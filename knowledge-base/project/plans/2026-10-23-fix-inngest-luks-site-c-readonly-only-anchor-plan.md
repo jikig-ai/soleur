@@ -11,6 +11,8 @@ brand_survival_threshold: aggregate pattern
 
 # fix: Inngest generation anchor reads the read-only Hetzner token only (Site C)
 
+> **Superseded in part, 2026-10-23 (review round):** the scanner's expiry is warning-only, with no event or diff decision (CTO R10, `decision-challenges.md`); the one-hop arm, the tokenizer, `--emit-candidates`, counters and the trio-model wording below are historical. The shipped design is described in the scanner header and the ADR-241 2026-10-23 entry.
+
 `Ref #10664` (never a closing keyword: the tracker has other open items). Epic #10390. Draft PR #10891.
 Spec lacks a valid `lane:` (no `spec.md` exists for this branch), so `lane: cross-domain` is the
 fail-closed default.

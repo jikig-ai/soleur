@@ -229,7 +229,7 @@ What each reader does when the read-only secret is absent, empty or not a plain 
 | Loader legacy arm | `::error` `verdict=legacy_hcloud_readonly_absent` (names `privileged_source_missing` as the likelier root cause) or `legacy_hcloud_readonly_unusable` | exit 0, **nothing exported**; each Hetzner consumer fails closed on its own empty token, and the three callers that never touch Hetzner (`apply-github-infra`, `apply-sentry-infra`, `web-host-escrow-diagnose`) are unaffected |
 | PR-plan step | `::error` `verdict=pr_plan_hcloud_readonly_absent` or `pr_plan_hcloud_readonly_unusable` | the step fails; nothing reaches `$GITHUB_ENV` |
 | `workspaces-luks-cutover` volume lookup | `SOLEUR_CREDENTIAL_REFUSED script=workspaces-luks-cutover reason=readonly_absent` (or `token_shape`) | the step stops before any request and before anything is delivered to web-1 |
-| `cutover-inngest.sh` generation anchor (job `DOPPLER_TOKEN`, `prd_terraform`) | `::warning::` `doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform` (empty), the value-free `unusable shape` warning plus marker, or the 401/403 warning naming the variable sent | the anchor is `__UNREADABLE__`; `op=resume`, `op=arm`, `op=reflush` and `op=luks-*` refuse (exit 1) and write nothing. Check the Doppler read (auth or network) first and re-dispatch if that was transient; restore the secret (owner, step O5) only when it is truly absent |
+| `cutover-inngest.sh` generation anchor (job `DOPPLER_TOKEN`, `prd_terraform`) | `::warning::` `doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform` (empty), the value-free `unusable shape` warning plus marker, or the 401/403 warning naming the variable sent | the anchor is `__UNREADABLE__`; `op=resume`, `op=arm`, `op=reflush` and `op=luks-cutover` refuse (exit 1) and write nothing. Empty read: check the Doppler read (auth or network) first and re-dispatch if that was transient; restore the secret (owner, step O5) only when it is truly absent. Unusable shape: the stored value is not a plain one-line bearer token, so re-mint it (owner, step O5). 401/403: the read-only token was rejected, so verify the stored token is still valid before re-dispatching |
 
 **Break-glass: an incident PR needs a plan, or a rollback needs the lookup, and a verdict above fired.** Find the first
 column of the row for the reader that fired, then do the steps in order. The verdicts are `::error` annotations on the run, not only log
@@ -254,7 +254,7 @@ The loader legacy arm exits 0, so the job can stay green until a consumer fails:
 4. There is no path that substitutes the read/write token, and none should be added in an incident: a destroy-capable token on a
    read path is exactly what this change removes. No read/write Hetzner token exists in Tier A at all now (O10 done), so
    a legacy-arm job cannot write to Hetzner; a Hetzner-writing job depends solely on its Tier-B environment secret. The one
-   place that still reads the old read/write name through `doppler secrets get` is `scripts/cutover-inngest.sh`'s `op=backup` path (`git-data-wipe.sh` `rw)` reads it through the Tier-B loader, a named blind spot of the scan), which refuses since O10 (no
+   place in executable code that still reads the old read/write name through `doppler secrets get` is `scripts/cutover-inngest.sh`'s `op=backup` path (`git-data-cutover.yml` reads the loader-delivered `$HCLOUD_TOKEN` env, a named blind spot of the scan), which refuses since O10 (no
    pre-snapshot recovery point can be taken by that op), tracked in #10664 and #9755; `scripts/lint-hcloud-token-readonly-no-fallback.sh` (ADR-241, 2026-10-23 entry) allowlists exactly
    that read, with a warning from 2026-11-24 and an expiry date of 2026-12-15.
 
@@ -312,7 +312,7 @@ Reproduced verbatim from `knowledge-base/project/plans/archive/20261013-051752-2
   `doppler_secret.github_app_*` address, or a changed `prd` hash, halts the sequence at O0.**
 - O3 and O4 precede O5b, O10 and every later step.
 - **O4b precedes O10.** Between O3 and O10 the legacy fallback hides a broken recovery path, and
-  O10 is what removes the fallback (done 2026-10-20; the fallback is removed). Rehearsing both host-replace paths after O10 would be
+  O10 is what removes the fallback. *(Added note 2026-10-23: O10 done 2026-10-20; the fallback is removed. The bullet itself is the plan's verbatim text.)* Rehearsing both host-replace paths after O10 would be
   rehearsing them for the first time during an incident.
 - **O12b precedes O13's `DOPPLER_TOKEN_TF` revocation.** If the vendor answer or the negative
   control shows a cascade, the host boot tokens are re-minted by a surviving identity first.

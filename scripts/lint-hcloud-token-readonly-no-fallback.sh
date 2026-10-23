@@ -3,7 +3,8 @@
 # reads the read/write Hetzner credential through a Doppler secrets-get call except the one tracked,
 # expiring `op=backup` read. This is a DRIFT RATCHET against re-introducing the removed copy-paste,
 # NOT an adversarial defense; the runtime backstop is that the bare name is absent from
-# prd_terraform (names-only listing, 2026-10-20), so a stray read returns empty and fails closed.
+# prd_terraform (names-only listing, 2026-10-20; the bare name lives in soleur-infra-privileged/prd),
+# so a stray prd_terraform read returns empty and fails closed.
 #
 # This file is the SCANNER (live scan only). Its battery is
 # tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh (mutation matrix over synthetic
@@ -13,8 +14,12 @@
 # reviewer-visible anchor is the ADR-241 2026-10-23 entry (it names the entry and its expiry).
 #
 # PROPERTY. No scanned file reads the bare name through `doppler secrets get`. Per LOGICAL line
-# (backslash-newline DELETED as bash does, odd backslash runs only; whole-line comments dropped),
-# split into segments on ; | |& && || (a single & is NOT a boundary: 2>&1, &>/dev/null, >&2). In a
+# (backslash-newline DELETED as bash does, odd backslash runs only; whole-line comments dropped; a
+# physical line holding a comment start `(^|[ \t])#` ends its logical line there, because bash does not
+# continue a comment and the deletion join would glue `#a` onto the next line's `doppler`), split into
+# segments on ; | |& && || (a single & is NOT a boundary: 2>&1, &>/dev/null, >&2; so a lone `&` stays
+# inside a segment and `doppler secrets get X_READONLY & echo HCLOUD_TOKEN` is an ACCEPTED false
+# positive). The continuation and comment handling ignores quoting (a `#` inside a string counts). In a
 # segment find the earliest word `doppler`, the earliest `secrets` after it, the earliest `get`
 # after that; the tail is the rest of the segment (the earliest triple has the widest tail). Rule A
 # (F-literal): the bare name is in the tail. Rule B (F-sameline): a `$` is in the tail AND the bare
@@ -24,7 +29,7 @@
 #
 # POPULATION. `git ls-files -z --cached --others --exclude-standard`, MINUS a pinned exclusion list:
 # test-class paths (a directory segment in {test, tests, __tests__, fixtures} unless a `lib`
-# directory segment is also on the path, because tests/scripts/lib/ is sourced by CI at runtime; a
+# path is under tests/scripts/lib/, because CI sources it at runtime; a
 # `.test.` / `.spec.` infix, a `.tftest.hcl` suffix, a `test-*` basename), knowledge-base/, docs (a
 # `docs` directory segment), *.md / *.mdx, lockfiles, *.likec4.json and this scanner and its suite.
 # .github/workflows/** IS scanned: measured at commit time, removing the old exclusion kept the live
@@ -33,8 +38,9 @@
 # `*.service`, cloud-init*.yml, *.tf, workflows and extensionless files in.
 # A path that is not a regular file (directory, submodule, symlink, dangling symlink), is deleted
 # from disk, or is over 5 MB is skipped. NUL bytes are stripped (bash drops them) and the rest is
-# scanned. FAIL SETUP (rc 2) is only: git failure, root not the top of a work tree, a bad or
-# non-absolute root, a bad date, an unreadable regular file.
+# scanned. Files skipped for size are counted: `::warning::skipped N file(s) over 5 MB (not scanned)`.
+# FAIL SETUP (rc 2) is: git failure, root not the top of a work tree, a bad or non-absolute root, a bad
+# date, the GITHUB_ACTIONS+HCLOUD_SCAN_ROOT refusal, an unreadable regular file, a non-ENOENT stat error.
 #
 # ALLOWLIST. Keyed on (file, whitespace-normalized logical line text, exact count): exactly one
 # entry, the `op=backup` read in scripts/cutover-inngest.sh (#9755, #10664). It must match EXACTLY
@@ -53,14 +59,16 @@
 #  - Name before the command (`xargs`, here-string, heredoc) or on another physical line (multi-line
 #    argv lists, folded YAML, newline for-loops, a variable assigned on another line).
 #  - Quote splicing or ANSI-C quoting of the name; a name from env or argv at runtime; multi-hop
-#    indirection; a name assembled from variables; rule B recognises `$` only (no Python/Make interpolation).
+#    indirection; a name assembled from variables; rule B recognises `$` only (no Python or f-string interpolation).
 #  - Reads that are not `secrets get`: `doppler run -- terraform|hcloud` (env-injected), bare
 #    `secrets --json`, `substitute`, `secrets download`, `run -- printenv`, the Doppler REST API,
 #    Terraform `data "doppler_secrets"`, and the loader-delivered `$HCLOUD_TOKEN` env
-#    (`rw)` in apps/web-platform/infra/git-data-wipe.sh).
-#  - Excluded classes production can execute: *.md (agents and runbooks copy-paste; 3 live bare reads
-#    exist in knowledge-base runbooks), test-class files CI runs (`test-*`, `*.test.*`, a test dir
-#    without a `lib` segment). Files over 5 MB. The allowlist is not positional (above).
+#    (`<<<"${HCLOUD_TOKEN:-}"` in .github/workflows/git-data-cutover.yml; git-data-wipe.sh `rw)`
+#    reads a stdin line).
+#  - Excluded classes production can execute: *.md (agents and runbooks copy-paste; 4 live bare reads
+#    exist in knowledge-base runbooks: grok-build-hetzner-dogfood.md:20, registry-luks-recut-6929.md:346
+#    and :408, the infra-credential-tiers-8209.md O2 row), test-class files CI runs (`test-*`, `*.test.*`, a test dir
+#    outside tests/scripts/lib/). Files over 5 MB. The allowlist is not positional (above).
 #  - It cannot tell that a read/write token was stored UNDER the read-only name; that control is the
 #    O5 write-probe of knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md.
 #
@@ -109,10 +117,12 @@ root, today_s = sys.argv[1:3]
 NAME_BARE = "HCLOUD_" + "TOKEN"
 BARE_RE = re.compile(r"(?<![A-Za-z0-9_])" + NAME_BARE + r"(?![A-Za-z0-9_])")
 DOP_RE = re.compile(r"(?<![A-Za-z0-9_.\-])dopp" + r"ler\b")
+COMMENT_RE = re.compile(r"(^|[ \t])#")
 SECRETS_RE = re.compile(r"\bsecrets\b")
 GET_RE = re.compile(r"\bget\b")
 BOUNDARY_RE = re.compile(r";|\|&?|&&")
-DOP_BYTES = b"dopp" + b"ler"
+DOP_STR = "dopp" + "ler"
+DOP_BYTES = DOP_STR.encode()
 
 # The allowlist: (file, whitespace-normalized logical line text, exact count) with an expiry.
 # SOLEUR-DEBT: one expiring allowlist entry for the op=backup read (#9755); delete when op=backup is re-plumbed to a Tier-B environment
@@ -129,6 +139,7 @@ SELF_PATHS = {
     "tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh",
 }
 TEST_DIRS = {"test", "tests", "__tests__", "fixtures"}
+LIB_PREFIX = "tests/scripts/lib/"
 LOCK_NAMES = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "uv.lock",
               "Cargo.lock", "Gemfile.lock", "poetry.lock", ".terraform.lock.hcl", "composer.lock"}
 
@@ -175,20 +186,21 @@ def scan(rel):
         return False
     if base.endswith((".md", ".mdx", ".markdown", ".lock", ".tftest.hcl", ".likec4.json")) or base in LOCK_NAMES:
         return False
-    if base.startswith("test-") or (any(s in TEST_DIRS for s in segs[:-1]) and "lib" not in segs[:-1]):
+    if base.startswith("test-") or (any(s in TEST_DIRS for s in segs[:-1]) and not rel.startswith(LIB_PREFIX)):
         return False
     return not re.search(r"\.(?:test|spec)\.[^/]+$", base)
 
 
 def logical_lines(text):
-    """(start_line_no, text) with bash-style continuations (backslash+newline deleted) and whole-line comments dropped."""
+    """(start_line_no, text): bash-style continuations (backslash+newline deleted, except after a comment start,
+    where the logical line ends: bash does not continue a comment; quoting is ignored) and whole-line comments dropped."""
     out, parts, start = [], [], 0
     for no, line in enumerate(text.split("\n"), 1):
         if not parts:
             if line.lstrip().startswith("#"):
                 continue
             start = no
-        if (len(line) - len(line.rstrip("\\"))) % 2 == 1:
+        if (len(line) - len(line.rstrip("\\"))) % 2 == 1 and not COMMENT_RE.search(line):
             parts.append(line[:-1])
             continue
         parts.append(line)
@@ -215,7 +227,7 @@ def classify(lt):
 
 findings = []
 allow_hits = 0
-scanned = 0
+scanned = skipped_big = 0
 for rel in paths:
     if not scan(rel):
         continue
@@ -226,7 +238,10 @@ for rel in paths:
         continue
     except OSError as e:
         setup_fail("cannot stat %s: %s" % (rel, e))
-    if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_BYTES:
+    if not stat.S_ISREG(st.st_mode):
+        continue
+    if st.st_size > MAX_BYTES:
+        skipped_big += 1
         continue
     try:
         with open(full, "rb") as fh:
@@ -238,6 +253,8 @@ for rel in paths:
     if DOP_BYTES not in data.replace(b"\\\n", b""):
         continue
     for no, lt in logical_lines(data.decode("utf-8", "replace")):
+        if DOP_STR not in lt:
+            continue
         rule_a, rule_b = classify(lt)
         if not (rule_a or rule_b):
             continue
@@ -263,6 +280,8 @@ if days_left <= WARN_DAYS:
           "with the op=backup read, or renew per the ADR (renewal = edit ALLOW_EXPIRY and append a NEW dated "
           "ADR-241 entry citing the 2026-10-23 one; an existing entry is never edited) (#9755, #10664)"
           % (ALLOW_FILE, when))
+if skipped_big:
+    print("::warning::skipped %d file(s) over 5 MB (not scanned)" % skipped_big)
 print("live: findings=%d allowlisted=%d scanned=%d" % (len(findings), allow_hits, scanned))
 if findings:
     print("see ADR-241 2026-10-23 entry: read HCLOUD_TOKEN_READONLY only, or update ALLOW_TEXT/ALLOW_COUNT "

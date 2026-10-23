@@ -6,7 +6,7 @@
 # rows (dates DERIVED from the scanner's ALLOW_EXPIRY, so renewing it never turns this suite red),
 # then L1: the scanner against the REAL tree (findings=0, one allowlisted read). The live row is
 # embedded here, not a separate -live suite. M2 is the RED proof of the pre-change fallback shape.
-# Row ids are non-contiguous by design (M4 and M5 were cut). Fixtures live under ONE mktemp -d (EXIT
+# Row ids are non-contiguous by design (M4, M5 and M10b-d were cut; J2 never existed). Fixtures live under ONE mktemp -d (EXIT
 # trap first); git runs under git_fixture_env; fixture rows pin HCLOUD_SCAN_TODAY before the expiry
 # window. The case-count floor is enforced with printf+exit, never through the fail() counter it
 # audits. No xtrace refusal here on purpose: a red suite must be debuggable with `bash -x`.
@@ -30,6 +30,7 @@ FX="$T/fx"
 mkdir -p "$FX" "$T/out" && assert_fixture_dir "$FX" && git_fixture_env "$FX" || { printf 'FAIL SETUP: fixture root\n' >&2; exit 2; }
 
 PASSES=0 FAILS=0 CASES=0
+skip() { CASES=$((CASES + 1)); printf '[skip] %s\n' "$1"; } # counted toward the floor, not a pass
 pass() { PASSES=$((PASSES + 1)); CASES=$((CASES + 1)); printf '[ok] %s\n' "$1"; }
 fail() { FAILS=$((FAILS + 1)); CASES=$((CASES + 1)); printf '[FAIL] %s\n' "$1"; [ -n "${2-}" ] && printf '       %s\n' "$2"; }
 abort_setup() { printf 'FAIL SETUP (instrument control): %s\n' "$1" >&2; [ -n "${2-}" ] && printf '%s\n' "$2" >&2; exit 2; }
@@ -85,6 +86,7 @@ canary() {
   { [ "$PASSES" -eq $((pb + 1)) ] && [ "$FAILS" -eq $((fb + 1)) ]; } || bad="$bad pass()/fail() counters did not move;"
   PASSES=$p0 FAILS=$f0 CASES=$c0
   [ -z "$bad" ] || { printf 'FAIL SETUP (harness canary):%s\n' "$bad" >&2; exit 2; }
+  pass "T1: the harness canary ran (verdict, expect_all, pass and fail can each fail or count); it is counted so the floor sees a deleted or neutered canary"
 }
 canary
 
@@ -145,8 +147,17 @@ e_j1() { printf 'a=$(%s HCLOUD_\\\nTOKEN --plain)\nb=$(dopp\\\nler secrets get %
 e_j3() { printf '%s\\\nHCLOUD_TOKEN --plain\n' "$DSG" > "$1/scripts/j3.sh"; } # bash sees getHCLOUD_TOKEN: not a read
 e_n1() { printf '#!/usr/bin/env bash\n\000\n%s %s --plain\n' "$DSG" "$BARE" > "$1/scripts/nul.sh"; }
 e_big() { { readbare; head -c 5300000 /dev/zero | tr '\0' ' '; printf '\n'; } > "$1/scripts/big.sh"; }
-e_p1() { { printf 'doppler'; for ((i = 0; i < 8000; i++)); do printf ' secrets get'; done; printf '\n'; } > "$1/scripts/patho.sh"; SCAN_WRAP=(timeout 20); }
+e_bigok() { { readbare; head -c 4900000 /dev/zero | tr '\0' ' '; printf '\n'; } > "$1/scripts/bigok.sh"; } # under the 5 MB cap: scanned
+e_o1() { printf '%s=$(%s %s -p soleur -c prd_terraform --plain)\n' "$BARE" "$DSG" "$RO" > "$1/scripts/o1.sh"; } # the bare name BEFORE doppler is not a read
+e_l1() { printf 'x-%s %s --plain\n.%s %s --plain\n%sx %s --plain\n' "$DSG" "$BARE" "$DSG" "$BARE" "$DSG" "$BARE" > "$1/scripts/l1.sh"; } # lookbehind and \bget\b
+e_k1() { printf '%s \\\\\n%s --plain\n' "$DSG" "$BARE" > "$1/scripts/k1.sh"; } # an EVEN backslash run is not a continuation
+e_k2() { printf 'dop\000pler secrets get %s --plain\n' "$BARE" > "$1/scripts/k2.sh"; } # NUL stripped mid-token
+e_j4() { printf 'true #a\\\n%s %s --plain\n%s a#b HCLOUD_\\\nTOKEN --plain\n' "$DSG" "$BARE" "$DSG" > "$1/scripts/j4.sh"; } # comment ends the line; a# in a word joins
+e_g1() { printf 'hidden.sh\n' > "$1/.gitignore" && readbare > "$1/scripts/hidden.sh" && git -C "$1" add -f scripts/hidden.sh .gitignore; } # tracked AND ignored
+e_u1() { chmod 000 "$1/scripts/ck.sh"; }
+e_p1() { { printf 'doppler'; for ((i = 0; i < 8000; i++)); do printf ' secrets get'; done; printf ' %s --plain\n' "$BARE"; } > "$1/scripts/patho.sh"; SCAN_WRAP=(timeout 3); }
 e_d1() { mkdir -p "$1/tests/scripts/lib" && readbare > "$1/tests/scripts/lib/gate.sh"; }
+e_d3() { mkdir -p "$1/tests/fixtures/lib" "$1/tests/lib" && readbare > "$1/tests/fixtures/lib/x.sh" && readbare > "$1/tests/lib/y.sh"; }
 e_d2() { # test-class, docs and markdown paths with a violating read each: none is scanned
   local f
   for f in tests/other/x.sh fixtures/x.sh scripts/fixtures/y.sh docs/z.sh scripts/docs/w.sh scripts/foo.spec.sh README.md scripts/runbook.md; do
@@ -155,7 +166,7 @@ e_d2() { # test-class, docs and markdown paths with a violating read each: none 
 }
 e_t2() { # the population is by selection, not by extension
   local f
-  for f in x/deep/cloud-init.yml a.service main.tf .claude/hooks/h bin/runner; do
+  for f in x/deep/cloud-init.yml a.service main.tf .claude/hooks/h bin/runner .github/workflows/w.yml; do
     mkdir -p "$1/$(dirname "$f")" && readbare > "$1/$f" || return 1
   done
 }
@@ -183,14 +194,23 @@ MATRIX=(
 "J1|a name split mid-word by a continuation, and a split command word, are findings|e_j1|1|F-literal scripts/j1.sh:1:~F-literal scripts/j1.sh:3:~live: findings=2 allowlisted=1"
 "J3|a continuation between get and the name joins them as bash does (getHCLOUD_TOKEN): no read|e_j3|0|!FINDING~$GREEN"
 "N1|a NUL byte on line 2 does not skip the file: the bare read below it is a finding|e_n1|1|F-literal scripts/nul.sh:3:~live: findings=1 allowlisted=1"
-"BIG|a file over 5 MB is skipped (named blind spot), not read|e_big|0|!FINDING~$GREEN2"
-"P1|a pathological ~100 KB line of secrets/get tokens stays GREEN and fast (no backtracking) under timeout 20|e_p1|0|!FINDING~$GREEN"
+"BIG|a 5.3 MB file is skipped (named blind spot), counted in a warning, not read|e_big|0|!FINDING~::warning::skipped 1 file(s) over 5 MB (not scanned)~$GREEN2"
+"BIGOK|a 4.9 MB file with a real read is under the cap and IS scanned, with no skip warning|e_bigok|1|FINDING F-literal scripts/bigok.sh:1:~!skipped~live: findings=1 allowlisted=1 scanned=3"
+"P1|a pathological ~100 KB line of secrets/get tokens ending in a real read is still found, in time (timeout 3)|e_p1|1|FINDING F-literal scripts/patho.sh:1:~live: findings=1 allowlisted=1"
+"O1b|the bare name BEFORE doppler on the line (an assignment capturing the read-only get) is not a read|e_o1|0|!FINDING~$GREEN scanned=3"
+"L1b|x-doppler, .doppler and getx are not the command (lookbehind and word-bounded get)|e_l1|0|!FINDING~$GREEN scanned=3"
+"K1|an EVEN backslash run before the newline is not a continuation|e_k1|0|!FINDING~$GREEN scanned=3"
+"K2|a NUL byte inside the command word is stripped as bash does: dop<NUL>pler is a finding|e_k2|1|FINDING F-literal scripts/k2.sh:1:~live: findings=1 allowlisted=1"
+"J4|a comment start ends the logical line (bash keeps no comment continuation), a# inside a word still joins|e_j4|1|FINDING F-literal scripts/j4.sh:2:~FINDING F-literal scripts/j4.sh:3:~live: findings=2 allowlisted=1"
 "D1|a violating read under tests/scripts/lib/ (sourced at runtime) is scanned|e_d1|1|FINDING F-literal tests/scripts/lib/gate.sh:1:~live: findings=1 allowlisted=1 scanned=3"
+"D3|a lib segment outside tests/scripts/lib/ (tests/fixtures/lib, tests/lib) does not un-exclude|e_d3|0|!FINDING~$GREEN2"
 "D2|tests/other, fixtures, docs, a .spec. infix and *.md are not scanned|e_d2|0|!FINDING~$GREEN2"
-"T2|population by selection: yml, .service, .tf, .claude/hooks and an extensionless file are each scanned|e_t2|1|F-literal x/deep/cloud-init.yml:1:~F-literal a.service:1:~F-literal main.tf:1:~F-literal .claude/hooks/h:1:~F-literal bin/runner:1:~live: findings=5 allowlisted=1 scanned=7"
+"T2|population by selection: yml, .service, .tf, .claude/hooks, an extensionless file and .github/workflows are each scanned|e_t2|1|F-literal x/deep/cloud-init.yml:1:~F-literal a.service:1:~F-literal main.tf:1:~F-literal .claude/hooks/h:1:~F-literal bin/runner:1:~F-literal .github/workflows/w.yml:1:~live: findings=6 allowlisted=1 scanned=8"
 "T3a|the allowlisted text in another file is a finding; the real entry still counts once|e_t3a|1|FINDING F-literal scripts/other.sh:1:~live: findings=1 allowlisted=1"
 "T3b|the allowlist is keyed on the file: the text in scripts/other.sh does not satisfy it|e_t3b|1|FINDING F-literal scripts/other.sh:1:~FINDING F-allowlist scripts/cutover-inngest.sh~found 0~live: findings=2 allowlisted=0"
 )
+if [ "$(id -u)" -eq 0 ]; then skip "E1: an unreadable regular file is FAIL SETUP (skipped: root reads any file)"
+else MATRIX+=("E1|an unreadable regular file is FAIL SETUP (rc 2), never skipped silently|e_u1|2|FAIL SETUP: cannot read scripts/ck.sh~!live:"); fi
 for row in "${MATRIX[@]}"; do
   IFS='|' read -r id desc edit erc exps <<< "$row"
   d="$FX/$id"
@@ -209,6 +229,14 @@ mkdir -p "$FX/nogit" && printf 'x\n' > "$FX/nogit/file.sh"
 scan_in "$FX/nogit" "$T/out/M10a" "HCLOUD_SCAN_TODAY=$TODAY_PIN"
 verdict M10a "a root that is not a git work tree is FAIL SETUP (rc 2), never 'no findings'" 2 'FAIL SETUP~!live:' "$T/out/M10a"
 
+# R1: a subdirectory of a work tree is not a root
+scan_in "$PRISTINE/scripts" "$T/out/R1" "HCLOUD_SCAN_TODAY=$TODAY_PIN"
+verdict R1 "a root that is a subdirectory of a work tree is FAIL SETUP (rc 2)" 2 'FAIL SETUP: root~is not the top of a git work tree~!live:' "$T/out/R1"
+# G1: an exported GIT_INDEX_FILE must not change the verdict (a tracked-and-ignored file is only listed via the real index)
+cp -a "$PRISTINE" "$FX/G1" && e_g1 "$FX/G1" || abort_setup "cannot build G1"
+scan_in "$FX/G1" "$T/out/G1" "HCLOUD_SCAN_TODAY=$TODAY_PIN" "GIT_INDEX_FILE=$FX/no-such.idx"
+verdict G1 "an exported GIT_INDEX_FILE does not hide a tracked-but-ignored file (GIT_DROP)" 1 'FINDING F-literal scripts/hidden.sh:1:' "$T/out/G1"
+
 # S2: the root seam is refused from a workflow environment (it could point the gate at an empty tree)
 scan_in "$PRISTINE" "$T/out/S2" "HCLOUD_SCAN_TODAY=$TODAY_PIN" GITHUB_ACTIONS=true
 verdict S2 "HCLOUD_SCAN_ROOT under GITHUB_ACTIONS is refused (rc 2), never honoured" 2 'FAIL SETUP: GITHUB_ACTIONS is set~!live:' "$T/out/S2"
@@ -226,17 +254,25 @@ shift_days() { python3 -I -c 'import datetime, sys; print((datetime.date.fromiso
 D_BEFORE="$(shift_days -22)" D_START="$(shift_days -21)" D_AFTER="$(shift_days 31)"
 # id | today | rc | expectations
 C3=(
-"c3-before-window|$D_BEFORE|0|!::warning::~!see ADR-241~$GREEN2"
+"c3-before-window|$D_BEFORE|0|!::warning::~!see ADR-241~scan: HCLOUD_SCAN_ROOT override active: $PRISTINE~$GREEN2"
 "c3-window-start|$D_START|0|::warning::~expires $EXPIRY (21 days left)~$GREEN2"
 "c3-expiry-day|$EXPIRY|0|::warning::~expires $EXPIRY (0 days left)~$GREEN2"
 "c3-after-expiry|$D_AFTER|0|::warning::~expired $EXPIRY~!expires~!FINDING~$GREEN2"
 "c3-bad-date|2026-02-30|2|FAIL SETUP~!live:"
+"c3-bad-format|20261023|2|FAIL SETUP~!live:"
 )
 for row in "${C3[@]}"; do
   IFS='|' read -r id today erc exps <<< "$row"
   scan_in "$PRISTINE" "$T/out/$id" "HCLOUD_SCAN_TODAY=$today"
   verdict "C3 $id" "today=$today -> rc $erc" "$erc" "$exps" "$T/out/$id"
 done
+
+# X2 / X3: expiry parity. A silent edit of ALLOW_EXPIRY (say to 2099) must be noticed: the date is also in the ADR entry and the allowlisted line's comment.
+ADR="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md"
+sed -n '/^### 2026-10-23 (#10664 Site C)/,/^### /p' "$ADR" 2>/dev/null > "$T/out/X2"
+SCAN_RC=0; verdict X2 "the scanner's ALLOW_EXPIRY ($EXPIRY) appears in the ADR-241 2026-10-23 entry" 0 "$EXPIRY" "$T/out/X2"
+grep -B10 -F -- "$BARE=\$($DSG $BARE --plain)" "$REPO_ROOT/scripts/cutover-inngest.sh" 2>/dev/null > "$T/out/X3"
+SCAN_RC=0; verdict X3 "the scanner's ALLOW_EXPIRY ($EXPIRY) appears in the comment above the allowlisted line in scripts/cutover-inngest.sh" 0 "$EXPIRY" "$T/out/X3"
 
 # O1: output order is FINDING lines, the expiry warning, the live: summary, then the remedy line last
 scan_in "$ONE" "$T/out/O1" "HCLOUD_SCAN_TODAY=$EXPIRY"
@@ -256,6 +292,6 @@ verdict L1 "the scanner against the real tree is GREEN: exactly one allowlisted 
 grep '^::warning::' "$T/out/L1" || true # re-emit so the expiry warning reaches the CI log and annotations
 
 printf '\n%s passed, %s failed\n' "$PASSES" "$FAILS"
-if [ "$CASES" -lt 39 ]; then printf 'FATAL: only %s cases ran; floor is 39 (the suite went quiet)\n' "$CASES" >&2; exit 1; fi
+if [ "$CASES" -lt 53 ]; then printf 'FATAL: only %s cases ran; floor is 53 (the suite went quiet)\n' "$CASES" >&2; exit 1; fi
 [ "$FAILS" -eq 0 ] || exit 1
 exit 0

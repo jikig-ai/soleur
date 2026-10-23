@@ -1441,6 +1441,8 @@ assert "G3 generation anchor: a DNS/connect failure names that class" "grep -qF 
 call_flip_liveness_count current ok none
 assert "G3 generation anchor: no token resolved -> __UNREADABLE__, curl never called" \
   "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' ]] && grep -qF 'doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform' '$FLV_ERR' && grep -qF 'step O5 of infra-credential-tiers-8209.md' '$FLV_ERR'"
+assert "G3 generation anchor: the empty-token warning restores the secret only if it is genuinely absent (auth/network checked first)" \
+  "grep -qF 'only if the secret is genuinely absent' '$FLV_ERR'"
 
 lv_case "a timestamp with a trailing newline is excluded, not fatal to the count" nlts+2cur ok 2
 call_flip_liveness_count late-ingest ok
@@ -4964,7 +4966,9 @@ _DISPATCHED=$((PASS + FAIL))
 # 1129 -> 1134 (+5) at the #10891 review round, measured: the compound "read-only empty, read/write present" assertion is split into
 #   four named ones (HC_READS exact, zero curl calls + verdict, STUB_MISS empty, read/write sentinel absent from every stream) (+3), and an
 #   exported-HCLOUD_TOKEN environment row adds two (verdict + zero curl + reads, sentinel absent) (+2): +5 in total.
-_EXACT_FLOOR=1134
+# 1134 -> 1135 (+1) at the #10664 review round 2, measured: one pin on the empty-token warning's remedy tail (`only if the secret is
+#   genuinely absent`, so a reword cannot drop the auth/network-first ordering).
+_EXACT_FLOOR=1135
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
