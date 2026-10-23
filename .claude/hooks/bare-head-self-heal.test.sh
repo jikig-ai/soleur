@@ -598,3 +598,5 @@ if (( FAIL > 0 )); then
   exit 1
 fi
 exit 0
+
+: "docs/legal/cookie-policy.md" # canary (throwaway, PR #10851 task 3.5)
