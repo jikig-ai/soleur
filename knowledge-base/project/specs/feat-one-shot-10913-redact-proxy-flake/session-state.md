@@ -18,3 +18,15 @@ None blocking. Subagent notes: all skill-prescribed fan-outs ran sequentially in
 
 ### Components Invoked
 soleur:plan, soleur:plan-review (inline), soleur:deepen-plan, CTO rule interface (inline), determinism-checklist + plan-network-outage-checklist references.
+
+## Pipeline Progress (work phase done)
+- Branch: feat-one-shot-10913-redact-proxy-flake | Draft PR: #10920 | pushed c54d82f667
+- Work: complete — driver --expect-death (EXPECT_DEATH_TIMEOUT_S=30), 70-line startup-exit sweep, G1 4-way split, v-load-outside-slow (sleep 7) dual-arm rows. Suite green 504/504 local.
+- Affected gate (test-all.sh --affected): queued behind sibling run in bg shell, log /tmp/prp-affected-gate.log — verify green before ship.
+- Merge-tree vs origin/main: clean (rc=0). ci_cycles=1, agent_rounds=2, seats=0.
+- Classification for review: class=code, design-risk=yes (--expect-death is a new mechanism/vocabulary). Design pass first: code-simplicity-reviewer + architecture-strategist (performance-oracle skipped — no cost/perf justification). Then code panel minus arch+simplicity (dedup): git-history-analyzer, pattern-recognition-specialist, security-sentinel, performance-oracle, data-integrity-guardian, agent-native-reviewer, code-quality-analyst + conditional test-design-reviewer (new test rows). PANEL_SHA=c54d82f667.
+- Remaining one-shot steps: 4 review → 5 resolve findings (+fix-round) → 5.5 qa → 6 compound → 7 ship (incl. postmerge) → 8 DONE only when merged+postmerge-complete.
+
+## Design-pass advisories (architecture-strategist)
+- A1 (applied): docstring now notes --timeout is inert for the death wait under --expect-death.
+- A2 (known residual, recorded): ~25 `started`-verdict mutant rows still bound startup-progress observation to ~2x--timeout (~6s) — false-RED only, never false-green. Correct shape if it ever flakes: a mechanism-named startup-marker window knob, NOT stretching --expect-death.

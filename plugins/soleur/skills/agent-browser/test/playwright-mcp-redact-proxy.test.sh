@@ -740,13 +740,14 @@ assert_true 'G1: … nothing relayed (zero stdout lines)' bash -c '[[ "$(fact "$
 assert_true 'G1: … no child spawned' bash -c '[[ -z "$(cat "$1/child_pgid" 2>/dev/null)" ]]' _ "$r"
 assert_true 'G1: … _OutsideBase named on stderr' bash -c 'stderr_has "$1" "_OutsideBase"' _ "$r"
 # Mechanism proof for the deadline→verdict decoupling (AC-2): a redactor whose
-# module top sleeps past BOTH 3s deadline windows (>6s — the measured stall was
-# 6.07s) then raises _OutsideBase must still record TIMEOUT under --timeout 3
+# module top sleeps well past BOTH 3s deadline windows (10s — the measured stall
+# was 6.07s; margin covers driver descheduling between the phase-A deadline and
+# computing t_end) then raises _OutsideBase must still record TIMEOUT under --timeout 3
 # (negative control pinning the deadline arm) and the real rc 1 under
 # --expect-death.
-mk_variant "$WORK/v-load-outside-slow" "$PROXY" 'def main() -> None:' "import time\ntime.sleep(7)\n\n\nclass _OutsideBase(BaseException):\n    pass\n\n\nraise _OutsideBase()\n\n\ndef main() -> None:"
+mk_variant "$WORK/v-load-outside-slow" "$PROXY" 'def main() -> None:' "import time\ntime.sleep(10)\n\n\nclass _OutsideBase(BaseException):\n    pass\n\n\nraise _OutsideBase()\n\n\ndef main() -> None:"
 r="$(session v-load-outside-slow-deadline "$WORK/v-load-outside-slow/proxy.py" --send "$INIT" --end eof --timeout 3)"
-assert_rc 'G1b: negative control — a >6s slow death still records TIMEOUT under --timeout 3' "$r" TIMEOUT
+assert_rc 'G1b: negative control — a >6s-window slow death (10s for margin) still records TIMEOUT under --timeout 3' "$r" TIMEOUT
 r="$(session v-load-outside-slow "$WORK/v-load-outside-slow/proxy.py" --send "$INIT" --end eof --expect-death)"
 assert_rc 'G1b: the same slow death under --expect-death records the real exit 1' "$r" 1
 # FR13 behavioural: a SPY redactor tags every string it is handed. Every text block

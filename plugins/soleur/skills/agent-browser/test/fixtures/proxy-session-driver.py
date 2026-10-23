@@ -11,7 +11,8 @@ lapses, then ends the session per --end and waits. With --expect-death the proxy
 expected to die at startup: the reply-wait phase is skipped (a stalled startup must
 not burn a deadline window waiting for a reply that never comes) and the post---end
 wait is bounded by EXPECT_DEATH_TIMEOUT_S, so a slow-but-correct death records its real
-exit code instead of "TIMEOUT". Writes into <out>:
+exit code instead of "TIMEOUT". Under --expect-death, --timeout still applies to the
+reply drain and the group_after poll but is inert for the death wait. Writes into <out>:
   stdout.bin   every byte the proxy wrote          responses.json  parsed objects
   stderr.txt   proxy + server stderr               rc              proxy exit code
   child_pgid   the pgid the proxy logged (or "")
