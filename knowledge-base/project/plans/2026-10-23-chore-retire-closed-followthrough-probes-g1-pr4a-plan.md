@@ -102,7 +102,7 @@ P5 No dangling pointer to a deleted script remains in a file this PR is permitte
 | 4 | "update tests/scripts/trio-baseline.tsv and any census/ratchet rows so tests/scripts/test-trio-baseline-census.sh stays green (shrink-only baseline)" [brief] | Files to Edit table; Phases 2-3; AC3-AC5 | mapped |
 | 5 | "the diff must NOT touch ci-deploy.sh, the webhook secret, .github/workflows/git-data-cutover.yml, track.sh, the Tier-B loader or the bridge" [brief] | HARD BOUNDARY compliance section; AC1 | mapped |
 | 6 | "No production write, terraform apply or workflow dispatch." [brief] | Does merging this alone mutate production?; no `gh issue edit` (CTO F2) | mapped |
-| 7 | "this PR must not be armed until the operator confirms" [brief] | Phase 5; decision-challenges.md operator row | mapped |
+| 7 | "Merge queue currently holds other PRs; this PR must not be armed" [brief] | Phase 5; the hold is recorded in decision-challenges.md | mapped |
 | 8 | "Do not touch .mcp.json, git-data-gc.sh, .gc-cursor, .worktrees/feat-one-shot-10138-git-data-wipe-body, .worktrees/feat-git-data-cutover-resume-8211, or the worktree .worktrees/feat-feat-g1-pr2-terraform-fed-group. Do not edit AGENTS.rules.md or any legal document." [brief] | HARD BOUNDARY compliance section; AC1 | mapped |
 | 9 | "Technical forks: spawn soleur:engineering:cto and record 'Ruled by CTO agent'" [brief] | decision-challenges.md rows F1-F6 | mapped |
 
