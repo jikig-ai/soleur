@@ -123,7 +123,11 @@ is detection only: it applies nothing and starts nothing. The body prints one di
 Always dispatch with `--ref main`. A dispatch from another ref applies that branch to production and leaves the gap open.
 
 **Verification.** The issue closes itself on the next reconcile that sees every listed push delivered (a later run of the
-same workflow, at the push or a descendant, whose `apply` job succeeded) with nothing in flight. For `deploy-fix` rows
+same workflow, at the push or a descendant, whose `apply` job succeeded) with nothing in flight. For the infra workflow
+the `apply` job alone is not enough: it can end `success` with the SSH-provisioned stage skipped, so delivery also needs
+the step `Terraform apply (SSH-provisioned resources, over the bridge)` to have concluded `success` (read from the same
+jobs response; a missing step counts as not delivered, so a rename of that step leaves rows open and the suite fails
+until the script is updated). `deploy-fix` has no such skip and needs the `apply` job only. For `deploy-fix` rows
 also run `scripts/check-deploy-script-parity.sh` to confirm the host copy matches.
 
 **Closing is not an acknowledgement.** The follower is stateless: while a row remains inside the 7-day window a new

@@ -41,7 +41,7 @@ INFRA_WF="$ROOT/$INFRA_WF_REL"
 FIX="$SCRIPT_DIR/fixtures/apply-delivery-gap"
 SELF="$SCRIPT_DIR/apply-delivery-gap-follower.test.sh"
 
-MUTANT_FLOOR=22
+MUTANT_FLOOR=23
 # Per-group assertion floors, recorded from the first green full run (ADG_PRINT_COUNTS=1 prints the counts to re-derive
 # them). Enforced only on a full run: a group that silently stops asserting reds the suite.
 declare -A FLOOR=(
@@ -145,8 +145,15 @@ mkrun() { # id event branch status conclusion|- shaN created updated [started] [
     '{id:$id,event:$ev,head_branch:$br,status:$st,conclusion:(if $co=="-" then null else $co end),head_sha:$sha,created_at:$cr,run_started_at:$sd,updated_at:$up,run_attempt:1,head_commit:(if $msg=="@null" then null else {message:$msg} end)}'
 }
 runs_file() { local f="$1"; shift; printf '%s\n' "$@" | jq -cs '{total_count: length, workflow_runs: .}' >"$f"; }
-mkjobs() { local f="$ST/jobs.$1.json" total="$2" x; shift 2; local j=()
-  for x in "$@"; do j+=("{\"name\":\"${x%%:*}\",\"conclusion\":\"${x#*:}\"}"); done
+# mkjobs <run id> <total> [name:conclusion[:ssh-step-conclusion] ...]: a third field gives the job a steps[] holding the infra
+# workflow's SSH-provisioned stage (SSH_STEP_NAME) with that conclusion.
+SSH_STEP_NAME='Terraform apply (SSH-provisioned resources, over the bridge)'
+mkjobs() { local f="$ST/jobs.$1.json" total="$2" x rest; shift 2; local j=()
+  for x in "$@"; do
+    rest="${x#*:}"
+    if [[ "$rest" == *:* ]]; then j+=("{\"name\":\"${x%%:*}\",\"conclusion\":\"${rest%%:*}\",\"steps\":[{\"name\":\"$SSH_STEP_NAME\",\"conclusion\":\"${rest#*:}\"}]}")
+    else j+=("{\"name\":\"${x%%:*}\",\"conclusion\":\"$rest\"}"); fi
+  done
   if ((${#j[@]})); then printf '%s\n' "${j[@]}" | jq -cs --argjson t "$total" '{total_count:$t,jobs:.}' >"$f"; else printf '{"total_count":%s,"jobs":[]}\n' "$total" >"$f"; fi; }
 mkcmp() { printf '{"status":"%s"}\n' "$3" >"$ST/compare.$(sha "$1").$(sha "$2").json"; }
 mkissue() { # number title labels-csv login is_bot [state] [body]
@@ -808,10 +815,33 @@ if want S11:delivers; then
     "$(mkrun 1103 workflow_dispatch main completed success 0x1103 2026-10-23T08:00:00Z 2026-10-23T08:05:00Z)" \
     "$(mkrun 1102 push main completed success 0x1102 2026-10-23T07:00:00Z 2026-10-23T07:10:00Z 2026-10-23T07:00:00Z '[skip-web-platform-apply]')" \
     "$(mkrun 1101 push main completed cancelled 0x1101 2026-10-23T06:00:00Z 2026-10-23T06:00:02Z)"
-  mkcmp 0x1101 0x1104 ahead; mkjobs 1104 2 preflight:success apply:success
+  mkcmp 0x1101 0x1104 ahead; mkjobs 1104 2 preflight:success apply:success:success
   run_sut
-  eq "S11 a dispatch success with [preflight, apply] success delivers" "$(rows)" 0
+  eq "S11 a dispatch success with [preflight, apply] success and the SSH-provisioned step success delivers" "$(rows)" 0
   has "S11 delivered=1" <(summary) "delivered=1"
+  gend
+fi
+# D1 / F21: an infra `apply` job can end success with its SSH-provisioned stage SKIPPED; that is not delivery. Fail closed: a
+# jobs response with no steps[] at all does not deliver either.
+if want S11:ssh-step; then
+  grp S11e
+  for variant in skipped failure absent; do
+    mk_case "s11-ssh-$variant" delivery-requires-apply-job
+    runs_file "$ST/runs.infra.json" \
+      "$(mkrun 1104 workflow_dispatch main completed success 0x1104 2026-10-23T09:00:00Z 2026-10-23T09:06:00Z)" \
+      "$(mkrun 1101 push main completed cancelled 0x1101 2026-10-23T06:00:00Z 2026-10-23T06:00:02Z)"
+    mkcmp 0x1101 0x1104 ahead
+    if [[ "$variant" == absent ]]; then mkjobs 1104 2 preflight:success apply:success; else mkjobs 1104 2 preflight:success "apply:success:$variant"; fi
+    run_sut
+    eq "S11 [$variant] an infra apply success whose SSH-provisioned step is $variant does not deliver" "$(rows)" 1
+    eq "S11 [$variant] and the issue is not closed" "$(acts issue-close)" 0
+  done
+  gend
+fi
+if want S11:ssh-literal; then
+  grp S11f
+  has "S11 the infra workflow still names the SSH-provisioned step the script requires (a rename must red here, not go silent)" "$INFRA_WF" "      - name: $SSH_STEP_NAME"
+  has "S11 the script requires exactly that step name" "$SUT" "INFRA_SSH_STEP='$SSH_STEP_NAME'"
   gend
 fi
 
@@ -991,7 +1021,7 @@ if want H3; then
   mk_case h3b
   runs_file "$ST/runs.deploy-fix.json" "$(mkrun 1811 push main completed success 0x1811 "$(ago 20)" "$(ago 19)" "$(ago 20)" 'a different commit message')"
   runs_file "$ST/runs.infra.json" "$(mkrun 1812 push main completed success 0x1803 "$(ago 20)" "$(ago 10)")" "$(mkrun 1813 push main completed cancelled 0x1803 "$(ago 60)" "$(ago 59)")"
-  mkjobs 1812 2 preflight:success apply:success; mkjobs 1813 0
+  mkjobs 1812 2 preflight:success apply:success:success; mkjobs 1813 0
   run_sut
   eq "H3 a success whose head EQUALS the candidate delivers (no compare needed)" "$(rows)" 0
   tn "H3 and made no compare call" grep -q compare "$ST/out/reads.log"
@@ -1115,8 +1145,8 @@ mut M2 script reconcile_workflow '| .[] | [.id, .sha, .ue] | @tsv'"'"' "$nf")"' 
 mut M3 script fail_loud 'apply_delivery_gap_%s\n'"'"' "$reason"<NL>  exit 1' 'apply_delivery_gap_%s\n'"'"' "$reason"<NL>  return 0' 'S8:malformed'
 mut M4 script reconcile_workflow 'if "$ks" "$msg"; then' 'if false; then' 'S4'
 mut M5 script - '|Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)|ks_infra|' '|Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)|ks_deploy_fix|' 'S4'
-mut M6 script reconcile_workflow 'if is_descendant "$sha" "$rsha" && apply_job_ok "$rid"; then' 'if is_descendant "$sha" "$rsha"; then' 'S11:skipped'
-mut M7 script jobs_have_apply_success '.conclusion == "success")'"'" '.conclusion == "success" or .conclusion == "skipped")'"'" 'S11:skipped'
+mut M6 script reconcile_workflow 'if is_descendant "$sha" "$rsha" && apply_job_ok "$rid" "$req"; then' 'if is_descendant "$sha" "$rsha"; then' 'S11:skipped'
+mut M7 script jobs_have_apply_success '.name == "apply" and .conclusion == "success"' '.name == "apply" and (.conclusion == "success" or .conclusion == "skipped")' 'S11:skipped,S4:later-marker'
 mut M8 script reconcile_issue 'if [[ "$N_INFLIGHT" -gt 0 ]]; then' 'if false; then' 'S7:otherwf,S12:inflight'
 mut M9 script read_runs 'if [[ "$p" -eq "$MAX_PAGES" ]]; then fail_loud run_window_truncated; fi' ':' 'S13:trunc'
 mut M10 script reconcile_issue 'lbls="${LABEL},action-required"' 'lbls="${LABEL}"' 'S9'
@@ -1130,6 +1160,7 @@ mut M17 script reconcile_issue 'elif [[ "$N_DELIVERED" -ge 1 ]]; then' 'elif tru
 mut M18 script render_body 'total="$(wc -l <"$ROWS")"' 'total="$(wc -l <"$WORK/rows.shown")"' 'S14'
 mut M19 script degraded_upsert 'nums="$(issue_numbers "$DEGRADED_TITLE")"' 'nums="$(issue_numbers "$TITLE")"' 'S8:degraded'
 mut M20 script issue_numbers ' and (.title == $t))' ')' 'S9:foreign-title'
+mut M21 script reconcile_workflow 'if [[ "$key" == "infra" ]]; then req="$INFRA_SSH_STEP"; fi' 'if false; then req="$INFRA_SSH_STEP"; fi' 'S11:ssh-step'
 mut Y1 workflow - '    timeout-minutes: 10<NL>' '    timeout-minutes: 10<NL>    permissions:<NL>      contents: write<NL>' 'W'
 mut Y2 workflow - 'group: apply-delivery-gap-follower' 'group: terraform-apply-web-platform-host' 'W'
 

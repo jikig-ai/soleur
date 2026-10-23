@@ -17,7 +17,9 @@
 # DELIVERED (all legs, same workflow W): a run of W that completed with `success`, on main, created at or after the
 # candidate, whose head is the candidate or a git descendant (compare status identical|ahead), AND whose job named
 # `apply` concluded `success` (a skipped apply is not delivery: a kill-switched push, a plan-only or other dispatch
-# target all end `success` without applying). A success of the OTHER workflow never counts.
+# target all end `success` without applying). For the infra workflow the `apply` job must also show its SSH-provisioned
+# Terraform step (INFRA_SSH_STEP) as `success`: that job ends green with that stage skipped. A success of the OTHER
+# workflow never counts.
 #
 # OUTPUT HYGIENE. No value from jq reaches echo, printf, an annotation or the issue body unless it passed a validator
 # (^[0-9a-f]{40}$, ^[0-9]+$, an ISO timestamp, or membership in a closed enum). Branch names, titles, actors and commit
@@ -48,6 +50,10 @@ TITLE='infra: apply delivery gap - trigger-file change not applied'
 DEGRADED_TITLE='infra: apply delivery gap follower degraded'
 AGED_MARKER='<!-- apply-delivery-gap:aged-out -->'
 RUNBOOK='knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md'
+# The infra workflow's `apply` job can end `success` with its SSH-provisioned stage SKIPPED (the bridge or the host was not
+# reachable), so for infra a delivery also needs this step (copied verbatim from the workflow; the suite greps the live
+# file for it) to have concluded `success`. The deploy-fix workflow has no such skip and requires no step.
+INFRA_SSH_STEP='Terraform apply (SSH-provisioned resources, over the bridge)'
 
 # key|workflow file|display name (must equal the workflow `name:`)|kill-switch function|stale cap in minutes
 # (cap > the workflow's `apply` job timeout: deploy-fix 90 min + a web-1-swap queue, infra 53 min).
@@ -75,7 +81,12 @@ ks_deploy_fix() { [[ "${1-}" =~ (^|$'\n')\[skip-deploy-fix-apply\]($|$'\n') ]]; 
 ks_infra() { [[ "${1-}" =~ (^|$'\n')\[skip-web-platform-apply\]($|$'\n') ]]; }
 descendant_status() { case "${1-}" in identical|ahead) return 0 ;; *) return 1 ;; esac; }
 class_for_total() { if [[ "${1-}" == "0" ]]; then printf 'evicted-before-start'; else printf 'cancelled-mid-run'; fi; }
-jobs_have_apply_success() { jq -e '(.jobs // []) | any(.name == "apply" and .conclusion == "success")' >/dev/null; }
+# jobs_have_apply_success [required step name]: stdin is a jobs response. Fail closed: a required step that is absent
+# from steps[] (or whose conclusion is not `success`) means not delivered.
+jobs_have_apply_success() {
+  jq -e --arg step "${1-}" '(.jobs // []) | any(.name == "apply" and .conclusion == "success"
+    and ($step == "" or ((.steps // []) | any(.name == $step and .conclusion == "success"))))' >/dev/null
+}
 
 self_test() {
   local bad=0 nl=$'\n' j
@@ -97,6 +108,13 @@ self_test() {
   printf '%s' "$j" | jobs_have_apply_success || bad=1
   j='{"jobs":[{"name":"apply","conclusion":"skipped"},{"name":"notify-apply-failure","conclusion":"success"}]}'
   printf '%s' "$j" | jobs_have_apply_success && bad=1
+  j='{"jobs":[{"name":"apply","conclusion":"success","steps":[{"name":"'"$INFRA_SSH_STEP"'","conclusion":"success"}]}]}'
+  printf '%s' "$j" | jobs_have_apply_success "$INFRA_SSH_STEP" || bad=1
+  printf '%s' "$j" | jobs_have_apply_success || bad=1
+  j='{"jobs":[{"name":"apply","conclusion":"success","steps":[{"name":"'"$INFRA_SSH_STEP"'","conclusion":"skipped"}]}]}'
+  printf '%s' "$j" | jobs_have_apply_success "$INFRA_SSH_STEP" && bad=1
+  j='{"jobs":[{"name":"apply","conclusion":"success"}]}'
+  printf '%s' "$j" | jobs_have_apply_success "$INFRA_SSH_STEP" && bad=1
   if [[ "$bad" -ne 0 ]]; then
     printf '::error::apply_delivery_gap_self_test_failed\n'
     exit 1
@@ -383,14 +401,15 @@ is_descendant() {
   descendant_status "${CMP[$k]}"
 }
 
-# apply_job_ok <run id>: the run's job named `apply` concluded success (memoised; jobs read only after ancestry).
+# apply_job_ok <run id> [required step]: the run's job named `apply` concluded success and, when a step name is given, that
+# step did too (memoised per run id; jobs read only after ancestry; the steps[] come from the same response).
 apply_job_ok() {
-  local id="$1" ok=1
+  local id="$1" step="${2-}" ok=1
   if [[ -z "${JOBOK[$id]+x}" ]]; then
     budget_tick
     api_get jobs_read_failed 0 api "repos/${GH_REPO}/actions/runs/${id}/jobs?per_page=100"
     jq -e '(.total_count | type) == "number" and (.jobs | type) == "array"' "$API_OUT" >/dev/null 2>/dev/null || fail_loud malformed_response
-    if jobs_have_apply_success <"$API_OUT"; then ok=0; fi
+    if jobs_have_apply_success "$step" <"$API_OUT"; then ok=0; fi
     JOBOK[$id]="$ok"
   fi
   [[ "${JOBOK[$id]}" == "0" ]]
@@ -421,7 +440,8 @@ N_CAND=0; N_DROPPED=0; N_DEFERRED=0; N_DELIVERED=0; N_ROWS=0; N_MID=0; N_INFLIGH
 
 reconcile_workflow() { # key file ks-function cap
   local key="$1" ks="$3" cap="$4" nf="$WORK/n.$1.json" raw="$WORK/raw.$1.json"
-  local cands id sha ce ue msg state rid rsha rue dmin class later lid llabel runs infl
+  local cands id sha ce ue msg state rid rsha rue dmin class later lid llabel runs infl req=""
+  if [[ "$key" == "infra" ]]; then req="$INFRA_SSH_STEP"; fi
   cands="$(jq -c --argjson cutoff "$CUTOFF" '
     [ .[] | select(.event == "push" and .branch == "main" and .status == "completed" and .conclusion == "cancelled" and .ce >= $cutoff) ]
     | group_by(.sha) | map(min_by(.ce)) | sort_by([.ce, .id]) | .[]' "$nf")"
@@ -442,7 +462,7 @@ reconcile_workflow() { # key file ks-function cap
       | sort_by([.ce, .id]) | .[] | [.id, .sha, .ue] | @tsv' "$nf")"
     if [[ -n "$runs" ]]; then
       while IFS=$'\t' read -r rid rsha rue; do
-        if is_descendant "$sha" "$rsha" && apply_job_ok "$rid"; then
+        if is_descendant "$sha" "$rsha" && apply_job_ok "$rid" "$req"; then
           state=delivered; dmin="$(mins_between "$ue" "$rue")"
           break
         fi

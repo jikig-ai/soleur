@@ -783,7 +783,9 @@ The evidence unit is the SHA (the same SHA can appear in several issues); the co
 Refinements to the 2026-10-22 ruling, each pinned by the suite: the "last ~50 runs" read became an unfiltered paged read to a
 7-day cutoff with a 10-page ceiling (`run_window_truncated`), because the search parameters were measured stale against the
 unfiltered list; a push is delivered only when a later run of the same workflow succeeded at the push or a descendant AND its
-`apply` job succeeded (a skipped apply, a kill-switched push or another dispatch target are not delivery); the infra workflow
+`apply` job succeeded (a skipped apply, a kill-switched push or another dispatch target are not delivery; for the infra
+workflow the job's step `Terraform apply (SSH-provisioned resources, over the bridge)` must also have concluded `success`,
+because that job can end green with the SSH-provisioned stage skipped, and a missing step fails closed); the infra workflow
 carries its own skip marker, so each candidate is dropped by its own workflow's marker; per-workflow stale caps for
 in-flight deferral (deploy-fix 150 min, infra 120 min, `waiting` 60 min), each above the workflow's `apply` timeout; the open
 issue is identified by bot author plus exact title, never by label alone; `priority/p1-high` is added at create only and
