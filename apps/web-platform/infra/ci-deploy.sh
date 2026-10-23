@@ -3764,19 +3764,73 @@ _inngest_link_install() {
   return 1
 }
 
+# _inngest_link_selfgate_phase <rc> <code> <time_connect> <time_appconnect>: prints ONE fixed token naming the stage the LAST attempt
+# reached (#10934). Pure: no I/O, no side effect, never aborts. The input is what one curl attempt printed, split into fields; this is
+# the only code that interprets those fields. Order matters (rc 124 or an empty line first, then the two exit codes that are certain
+# without any timer, then a received HTTP status, then the timers):
+#   unknown    rc 124 (the timeout wrapper killed curl: a hang), an empty line, or a timer that is not a decimal number. Never a
+#              success-looking token: an unparsable attempt must not read as a stage.
+#   ca_file    rc 77 (curl could not use the pinned CA file).
+#   verify     rc 60 (the handshake completed but the served certificate does not verify against the pinned file).
+#   status     a validated three-digit code other than 000 and 200 (TLS verified and an HTTP status other than 200 came back). A 200
+#              code with a non-zero rc is a body cut short: it is NOT status, it falls through to the timers and reads request.
+#   connect    time_connect is zero (no TCP connection: refused, firewall drop, unreachable).
+#   handshake  TCP connected, time_appconnect is zero (the TLS handshake did not complete).
+#   request    TLS completed and verified, no HTTP status came back. It does NOT prove a cause: it means only that the certificate is
+#              not the problem and the terminator or whatever sits behind it is to be checked. Classified by the timers, never by an
+#              rc list, because one wire event prints rc 52 on one curl build and rc 56 on another.
+_inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
+  local rc="${1-}" code="${2-}" tc="${3-}" ta="${4-}"
+  local num='^[0-9]+[.,][0-9]+$' zero='^[0.,]*$' c3='^[0-9]{3}$'
+  if [[ "$rc" == 124 || -z "$code$tc$ta" ]]; then printf unknown; return 0; fi
+  if [[ "$rc" == 77 ]]; then printf ca_file; return 0; fi
+  if [[ "$rc" == 60 ]]; then printf verify; return 0; fi
+  if [[ "$code" =~ $c3 && "$code" != 000 && "$code" != 200 ]]; then printf status; return 0; fi
+  if [[ ! "$tc" =~ $num || ! "$ta" =~ $num ]]; then printf unknown; return 0; fi
+  if [[ "$tc" =~ $zero ]]; then printf connect; return 0; fi
+  if [[ "$ta" =~ $zero ]]; then printf handshake; return 0; fi
+  printf request
+}
+
+# _inngest_link_selfgate <cafile>: success = TLS verified against the pinned file AND a 200, decided from curl's exit code and the first
+# token of its write-out line alone, before any other field is looked at (a short or odd line from a healthy listener can never fail the
+# gate). Every attempt prints one line of four space-separated fields: the HTTP code, the TCP connect time, the TLS handshake time and
+# curl's certificate verification result. They feed ONE failure event, never a value of their own:
+#   INNGEST_LINK: class=selfgate_failed level=error rc=<n> http=<ddd|none> attempts=<n> phase=<token> tcp=<n> tls=<n> verify=<n>
+#   rc, http  the LAST attempt's curl exit code and HTTP code (http from the validated three-digit token, else none).
+#   phase     the stage the LAST attempt reached (see _inngest_link_selfgate_phase). Read it together with rc: when tcp=0 only rc tells
+#             rc 7 (refused) from rc 28 (a drop).
+#   tcp, tls  how many of ALL attempts connected TCP and completed TLS, each clamped to 0-99; attempts= is the denominator. They show
+#             a listener that changed state between tries, which phase (last attempt only) hides. An attempt whose own timer field is
+#             not a decimal number adds nothing, so unknown with tcp=0 tls=0 is not "connect failed".
+#   verify    0 unless phase=verify, then the last attempt's verification result clamped to 0-99 (18 the served certificate is not the
+#             pinned one, 10 expired, 1 name mismatch; the raw value is 1 after a handshake or CA file failure, so it is suppressed).
+# Reading rule: phase=request means only that TLS verified and no HTTP response came back; check the terminator and its upstream, not
+# the certificate. It does not establish which of them failed. No -k and no second probe: the verdict path is the same one curl.
 _inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verified against the pinned file AND 200
-  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" code rc=0
+  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" out code tc ta ver rc=0
+  local phase=unknown http=none vv=0 tcpn=0 tlsn=0
+  local num='^[0-9]+[.,][0-9]+$' zero='^[0.,]*$' c3='^[0-9]{3}$'
   case "$max" in '' | *[!0-9]*) max=3 ;; esac
   while :; do
     rc=0
-    code="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+    out="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code} %{time_connect} %{time_appconnect} %{ssl_verify_result}' --connect-timeout 5 --max-time 10 \
       --cacert "$1" "$INNGEST_LINK_HTTPS_URL/health" 2>/dev/null)" || rc=$?
+    code=""; tc=""; ta=""; ver=""
+    read -r code tc ta ver <<< "$out" || true
     if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi
+    phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"
+    if [[ "$tc" =~ $num && ! "$tc" =~ $zero ]]; then tcpn=$((tcpn + 1)); fi
+    if [[ "$ta" =~ $num && ! "$ta" =~ $zero ]]; then tlsn=$((tlsn + 1)); fi
+    http=none
+    if [[ "$code" =~ $c3 ]]; then http="$code"; fi
+    vv=0
+    if [[ "$phase" == verify ]]; then vv="$(_inngest_link_count99 "${ver%% *}")"; fi
     if [[ "$i" -ge "$max" ]]; then break; fi
     sleep 2
     i=$((i + 1))
   done
-  inngest_link_event selfgate_failed error "rc=$rc http=${code:-none} attempts=$i"
+  inngest_link_event selfgate_failed error "rc=$rc http=$http attempts=$i phase=$phase tcp=$(_inngest_link_count99 "$tcpn") tls=$(_inngest_link_count99 "$tlsn") verify=$vv"
   return 1
 }
 

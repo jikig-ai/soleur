@@ -85,6 +85,9 @@ gen_cert good  "IP:10.0.1.40"            "CA:FALSE" "serverAuth"
 gen_cert other "IP:10.0.1.40"            "CA:FALSE" "serverAuth" "/CN=another-server"
 gen_cert catrue "IP:10.0.1.40"           "CA:TRUE"  "serverAuth"
 gen_cert loop  "IP:127.0.0.1"            "CA:FALSE" "serverAuth" "/CN=loopback-anchor"
+# loopalt: a DIFFERENT self-signed certificate that DOES carry the loopback IP SAN (H6 pinned-certificate mismatch: with a non-matching SAN real
+# curl 8.23 reports the name mismatch, ssl_verify_result 1, before the untrusted chain, 18; measured, see the H6 comment)
+gen_cert loopalt "IP:127.0.0.1"          "CA:FALSE" "serverAuth" "/CN=loopback-other"
 
 # An expired self-signed certificate (openssl ca -selfsign with an explicit validity window).
 make_expired() { # [name] [IP SAN]: FX/<name>.crt + .key, an expired self-signed CA:FALSE certificate
@@ -1638,7 +1641,7 @@ os.rename(portfile + ".tmp", portfile)
 while True: time.sleep(1)
 PY
   rm -f "$H6_DIR/ports"
-  python3 -I "$H6_DIR/server.py" "$FX/loop.crt" "$FX/loop.key" "$FX/other.crt" "$FX/other.key" "$H6_DIR/ports" > "$H6_DIR/server.log" 2>&1 &
+  python3 -I "$H6_DIR/server.py" "$FX/loop.crt" "$FX/loop.key" "$FX/loopalt.crt" "$FX/loopalt.key" "$H6_DIR/ports" > "$H6_DIR/server.log" 2>&1 &
   H6_PID=$!
   i=0
   while [ ! -s "$H6_DIR/ports" ] && [ "$i" -lt 100 ]; do "$REAL_SLEEP" 0.1; i=$((i + 1)); done   # readiness poll on the port file (bounded, no fixed sleep)
@@ -1988,7 +1991,7 @@ kill_mut M17d-unverified-scope-fails-every-flag-off-deploy "H5b_unverified_scope
 kill_mut M17e-commit-never-records "G1_https_to_http_emits G4_last_scheme_is_atomic_and_world_readable" \
   '  [[ "$INNGEST_LINK_PENDING_SCHEME" == https || "$INNGEST_LINK_PENDING_SCHEME" == http ]] || return 0' '  return 0'
 kill_mut M18a-selfgate-curl-without-disable "A7_selfgate_leads_with_disable_and_requires_200" \
-  'code="$(timeout 20 curl --disable --noproxy' 'code="$(timeout 20 curl --noproxy'
+  'out="$(timeout 20 curl --disable --noproxy' 'out="$(timeout 20 curl --noproxy'
 kill_mut M18b-selfgate-accepts-any-http-code "A7_selfgate_leads_with_disable_and_requires_200" \
   'if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi' 'if [[ "$rc" -eq 0 ]]; then return 0; fi'
 kill_mut M18c-selfgate-never-retries "A8_selfgate_retries_with_a_pause" \
