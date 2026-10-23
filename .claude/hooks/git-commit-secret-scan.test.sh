@@ -1549,11 +1549,11 @@ done
 sim=0
 if [ -n "${GIT_INDEX_FILE-}" ] && [ "${GIT_INDEX_FILE}" != "${SHIM_REAL_INDEX-}" ]; then sim=1; fi
 if [ -n "${SHIM_LOG-}" ]; then
-  {
-    printf 'SIM=%s VERB=%s LC_ALL=%s OPTLOCKS=%s IDX=%s OBJ=%s ALT=%s ARGS=' "$sim" "$verb" "${LC_ALL-<unset>}" "${GIT_OPTIONAL_LOCKS-<unset>}" \
-      "${GIT_INDEX_FILE-<unset>}" "${GIT_OBJECT_DIRECTORY-<unset>}" "${GIT_ALTERNATE_OBJECT_DIRECTORIES-<unset>}"
-    printf '%q ' "$@"; printf '\n'
-  } >> "$SHIM_LOG" 2>/dev/null
+  # ONE write per call: the two ends of a pipeline (`git diff | git check-attr`) log concurrently, and a log line
+  # written in pieces interleaved under load (a flake that hid the pin on one of the two lines).
+  qargs=$(printf '%q ' "$@")
+  printf 'SIM=%s VERB=%s LC_ALL=%s OPTLOCKS=%s IDX=%s OBJ=%s ALT=%s ARGS=%s\n' "$sim" "$verb" "${LC_ALL-<unset>}" "${GIT_OPTIONAL_LOCKS-<unset>}" \
+    "${GIT_INDEX_FILE-<unset>}" "${GIT_OBJECT_DIRECTORY-<unset>}" "${GIT_ALTERNATE_OBJECT_DIRECTORIES-<unset>}" "$qargs" >> "$SHIM_LOG" 2>/dev/null
 fi
 if [ -n "${SHIM_FAILV-}" ] && [ "$verb" = "$SHIM_FAILV" ]; then
   printf 'fatal: shim-injected %s failure\n' "$verb" >&2
@@ -1869,8 +1869,8 @@ _t_sim_prefilter() {
 # child shells that source the walker can call it.
 ctr_stage_dump() {
   local i=0 n="${#CTR_ADD_EXACT[@]}" k
-  printf 'stage stages=%s opaque=%s refuse=%s all=%s paths_n=%s paths_literal=%s cd_first=%s\n' \
-    "${CTR_COMMIT_STAGES:-0}" "${CTR_STAGE_OPAQUE:-0}" "${CTR_STAGE_REFUSE:-0}" \
+  printf 'stage stages=%s opaque=%s refuse=%s unsim=%s all=%s paths_n=%s paths_literal=%s cd_first=%s\n' \
+    "${CTR_COMMIT_STAGES:-0}" "${CTR_STAGE_OPAQUE:-0}" "${CTR_STAGE_REFUSE:-0}" "${CTR_STAGE_UNSIMULABLE:-0}" \
     "${CTR_COMMIT_ALL:-0}" "${#CTR_COMMIT_PATHS[@]}" "${CTR_COMMIT_PATHS_LITERAL:-1}" "${CTR_STAGE_CD_FIRST:-0}"
   printf 'refuse_why: %s\n' "${CTR_STAGE_REFUSE_WHY:-}"
   while [ "$i" -lt "$n" ]; do
@@ -1894,6 +1894,7 @@ _sd_check() {
   out=$(env HOME=/h bash -c '
     source "$1" || { echo "@@SOURCEFAIL@@"; exit 0; }
     shift
+    UNEXP_VAR=plain   # a shell variable that is set and NOT exported (the bare-assignment rows)
     for c in "$@"; do
       ctr_collect "$c"
       if declare -f ctr_stage_dump >/dev/null 2>&1; then ctr_stage_dump; else echo "@@NODUMP@@"; fi
@@ -1922,6 +1923,93 @@ _benign_operand() {
     --unified) echo 3 ;; --inter-hunk-context) echo 1 ;; --cleanup) echo strip ;; --date) echo '2020-01-01 00:00' ;;
     --author) echo 'A <a@b.c>' ;; --file|--template) echo /dev/null ;; --trailer) echo 'k=v' ;; --message) echo m ;; *) echo HEAD ;;
   esac
+}
+
+# ---- unit C rows (CTO rows 22 to 26): the closed world, the environment allowlist, the commit record --------------
+_sd_unit_c_rows() {
+  local b64 b65 a64 a65 k
+  # row 22: unknown is opaque
+  _sd_add 'an expanded subcommand is opaque' 'git "$S" f.txt && git commit -m x' 'stages=1' 'opaque=1'
+  _sd_add 'a dashed git-add is opaque' 'git-add f.txt && git commit -m x' 'stages=1' 'opaque=1'
+  _sd_add 'a dashed git-add by full path is opaque' '/usr/lib/git-core/git-add f.txt && git commit -m x' 'opaque=1'
+  _sd_add 'a dashed verb hidden in an expanded command word is opaque' '$(git --exec-path)/git-add f.txt && git commit -m x' 'opaque=1'
+  _sd_add 'a dashed git-commit is a commit that reads its flags (-a)' 'git-commit -a -m x' 'stages=1' 'all=1'
+  _sd_add 'a staging verb in a non-git record is opaque (make add)' 'make add && git commit -m x' 'stages=1' 'opaque=1'
+  _sd_add 'a staging verb in a non-git record is opaque (npm add)' 'npm add left-pad && git commit -m x' 'opaque=1'
+  _sd_add 'a non-git record without a staging verb is not opaque' 'echo hello && git commit -m x' 'stages=0' 'opaque=0'
+  _sd_add 'a launcher with git behind it is walked, not opaque (timeout)' 'timeout 5 git add f.txt && git commit -m x' 'opaque=0' 'exact=1'
+  _sd_add 'an inline alias.* key is REFUSED on a staging record' 'git -c alias.add=x add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'an inline alias.* key via --config-env is REFUSED' 'git --config-env=alias.add=V add f.txt && git commit -m x' 'refuse=1'
+  # row 23: the environment allowlist
+  _sd_add 'HOME= on a staging record is refused' 'HOME=/x git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'GIT_EDITOR= is on the allowlist' 'GIT_EDITOR=true git add f.txt && git commit -m x' 'refuse=0' 'exact=1'
+  _sd_add 'LC_ALL= is on the allowlist' 'LC_ALL=C git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'CI= GIT_AUTHOR_NAME= are on the allowlist' 'CI=1 GIT_AUTHOR_NAME=x git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'GIT_PAGER= TERM= NO_COLOR= TZ= LANG= are on the allowlist' 'GIT_PAGER=cat TERM=dumb NO_COLOR=1 TZ=UTC LANG=C git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'a name outside the allowlist among allowed ones is refused' 'LC_ALL=C PATH=/x git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'PATH+= is an assignment too' 'PATH+=:/x git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env NAME= outside the allowlist is refused' 'env HOME=/x git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env CI= is allowed' 'env CI=1 git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'env -i is refused' 'env -i git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env -u is refused' 'env -u HOME git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env -uHOME is refused' 'env -uHOME git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env --unset=HOME is refused' 'env --unset=HOME git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env --unset HOME is refused' 'env --unset HOME git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env --ignore-environment is refused' 'env --ignore-environment git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env - is refused' 'env - git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'env -iC <dir> is refused (a bundle)' 'env -iC /a git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'sudo on a staging record is refused' 'sudo git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'doas on a staging record is refused' 'doas git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'runuser on a staging record is refused' 'runuser -u x git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'a launcher that keeps the environment is not refused (nice)' 'nice git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'export of a name outside the allowlist before a staging command is refused' 'export HOME=/x; git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'unset of a name outside the allowlist is refused' 'unset HOME; git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'a bare assignment before a staging command is refused' 'HOME=/x; git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'a plain shell variable assignment is not in git environment (not refused)' 'F=1; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'a bare assignment of a set but unexported name is not refused (git cannot see it)' 'UNEXP_VAR=1; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'a bare GIT_* assignment is refused' 'GIT_CONFIG_COUNT=1; git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'declare -x of an outside name is refused' 'declare -x HOME=/x; git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'export of an allowlisted name is not refused' 'export LC_ALL=C; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'an export in a command that stages nothing is not refused' 'export HOME=/x; git commit -m x' 'stages=0' 'refuse=0'
+  # row 24: a commit record that stages
+  _sd_add 'a commit -a under an outside env prefix is refused' 'HOME=/x git commit -a -m x' 'stages=1' 'refuse=1'
+  _sd_add 'a commit that stages nothing under an outside env prefix is untouched' 'HOME=/x git commit -m x' 'stages=0' 'refuse=0'
+  _sd_add 'a commit -a with a refused -c key is refused' 'git -c core.hooksPath=/x commit -a -m x' 'refuse=1'
+  _sd_add 'a commit with a refused -c key that stages nothing is untouched' 'git -c core.hooksPath=/x commit -m x' 'stages=0' 'refuse=0'
+  _sd_add 'a commit with a pathspec and --config-env=core.* is refused' 'git --config-env=core.fsmonitor=V commit -m x -- f.txt' 'refuse=1'
+  _sd_add 'a commit -a with --namespace is refused' 'git --namespace n commit -a -m x' 'refuse=1'
+  _sd_add 'a staging commit whose subcommand an unknown option hid is refused under an outside env prefix' 'HOME=/x git --exec foo commit -a -m x' 'stages=1' 'refuse=1'
+  _sd_add 'a staging commit whose subcommand an unknown option hid is refused under a refused -c key' 'git -c core.hooksPath=/x --exec foo commit -a -m x' 'refuse=1'
+  _sd_add 'a commit -o under sudo is refused' 'sudo git commit -o f.txt -m x' 'refuse=1'
+  _sd_add 'a commit --all under env -i is refused' 'env -i git commit --all -m x' 'refuse=1'
+  # commit flags: the known set, the bundle cap
+  _sd_add 'an unknown short option makes the stage opaque (-N)' 'git commit -N -m x' 'stages=1' 'opaque=1'
+  _sd_add 'an unknown short option inside a bundle is opaque (-nZ)' 'git commit -nZ -m x' 'opaque=1'
+  for k in s n v q e z h; do _sd_add "the known short option -$k stages nothing" "git commit -$k -m x" 'stages=0' 'opaque=0'; done
+  _sd_add 'a bundle of known options stages nothing' 'git commit -nsvqez -m x' 'stages=0' 'opaque=0'
+  printf -v b64 '%64s' ''; b64="${b64// /n}"; b65="${b64}n"
+  printf -v a64 '%64s' ''; a64="${a64// /A}"; a65="${a64}A"
+  _sd_add 'a 64-character option bundle is read' "git commit -$b64 -m x" 'stages=0' 'opaque=0'
+  _sd_add 'a 65-character option bundle is opaque' "git commit -$b65 -m x" 'opaque=1'
+  _sd_add 'a long -m<message> attached operand is not a bundle' "git commit -m$(printf '%80s' '' | tr ' ' x)" 'stages=0' 'opaque=0'
+  _sd_add 'a 64-character add bundle is read' "git add -$a64 f.txt && git commit -m x" 'exact=1'
+  _sd_add 'a 65-character add bundle is non-exact' "git add -$a65 f.txt && git commit -m x" 'exact=0'
+  # row 26: content from outside the working tree
+  _sd_add 'update-index --add --cacheinfo is unsimulable' 'git update-index --add --cacheinfo 100644,0123456789012345678901234567890123456789,f.txt && git commit -m x' 'stages=1' 'unsim=1'
+  _sd_add 'update-index --index-info is unsimulable' 'git update-index --index-info && git commit -m x' 'unsim=1'
+  _sd_add 'update-index --add alone is unsimulable' 'git update-index --add f.txt && git commit -m x' 'unsim=1'
+  _sd_add 'an abbreviated update-index --cacheinfo (--cac) is unsimulable' 'git update-index --cac 100644,0123456789012345678901234567890123456789,f.txt && git commit -m x' 'unsim=1'
+  _sd_add 'update-index --refresh is opaque, not unsimulable' 'git update-index --refresh && git commit -m x' 'stages=1' 'opaque=1' 'unsim=0'
+  _sd_add 'apply --index is unsimulable' 'git apply --index p.diff && git commit -m x' 'unsim=1'
+  _sd_add 'apply --cached is unsimulable' 'git apply --cached p.diff && git commit -m x' 'unsim=1'
+  _sd_add 'apply --3way is unsimulable' 'git apply --3way p.diff && git commit -m x' 'unsim=1'
+  _sd_add 'apply -3 is unsimulable' 'git apply -3 p.diff && git commit -m x' 'unsim=1'
+  _sd_add 'an abbreviated apply --cac is unsimulable' 'git apply --cac p.diff && git commit -m x' 'unsim=1'
+  _sd_add 'a plain apply is opaque, not unsimulable' 'git apply p.diff && git commit -m x' 'stages=1' 'opaque=1' 'unsim=0'
+  _sd_add 'apply --check is opaque, not unsimulable' 'git apply --check p.diff && git commit -m x' 'opaque=1' 'unsim=0'
+  _sd_add 'an unknown global option that hid the verb still finds update-index --add' 'git --exec foo update-index --add f.txt && git commit -m x' 'unsim=1'
+  _sd_add 'an unknown global option that hid the verb still finds apply --cached' 'git --exec foo apply --cached p.diff && git commit -m x' 'unsim=1'
+  _sd_add 'a command without them has unsim=0' 'git add f.txt && git commit -m x' 'unsim=0'
 }
 
 _t_sim_dump() {
@@ -1997,7 +2085,7 @@ _t_sim_dump() {
   _sd_add '--config-env=core.* is REFUSED' 'git --config-env=core.fsmonitor=V add f.txt && git commit -m x' 'refuse=1'
   _sd_add '--namespace is REFUSED' 'git --namespace n add f.txt && git commit -m x' 'refuse=1'
   _sd_add '--attr-source is REFUSED' 'git --attr-source HEAD add f.txt && git commit -m x' 'refuse=1'
-  _sd_add 'a GIT_* env prefix is REFUSED' 'GIT_EDITOR=true git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'a GIT_* env prefix outside the allowlist is REFUSED' 'GIT_CONFIG_COUNT=0 git add f.txt && git commit -m x' 'refuse=1'
   _sd_add 'a plain add is not refused' 'git add f.txt && git commit -m x' 'refuse=0'
   # --- the directory facts ---
   _sd_add 'git -C <abs> carries own_C on the record' 'git -C /abs/wt add f.txt && git -C /abs/wt commit -m x' 'own_C=/abs/wt'
@@ -2064,6 +2152,7 @@ _t_sim_dump() {
     if [[ "$gerr" == *"unknown option"* ]]; then _report "benign-table: installed git accepts $o" fail "git rejected the option: the table is stale for $(git --version)"
     else _report "benign-table: installed git accepts $o" ok; fi
   done
+  _sd_unit_c_rows
   _sd_check
   # The lexer-skipped plain-commit path never calls ctr_collect: the facts must read as zero, not unbound, under set -u.
   local zero
@@ -2481,9 +2570,13 @@ _t_sim_pins() {
              "git --config-env=core.fsmonitor=V add clean.txt && git commit -m x" \
              "git --namespace n add clean.txt && git commit -m x" \
              "git --attr-source HEAD add clean.txt && git commit -m x" \
-             "GIT_EDITOR=true git add clean.txt && git commit -m x"; do
+             "HOME=/x git add clean.txt && git commit -m x"; do
     _sx "G12a3 refused (stage in its own call): $cmd" "$U" "$cmd" deny "its own call"
   done
+  # GIT_EDITOR is on the environment allowlist: an exact replay, no refusal.
+  _sx "G12a4 'GIT_EDITOR=true git add clean.txt && git commit' is replayed exactly, not refused -> allow" "$U" \
+    "GIT_EDITOR=true git add clean.txt && git commit -m x" allow
+  _t "G12a5 ... an exact add of clean.txt" "adds=$(_sim_adds)" _exact_add clean.txt
 
   # A configured clean filter must never run at hook time: git add on the temp index would execute it.
   F=$(_mk_leaky_repo untracked); fm="$SUITE_TMP/filter.mark"; rm -f "$fm"
@@ -2575,13 +2668,20 @@ _t_sim_extra() {
   _sx "X1d mixed directories: 'git -C docs add f.txt && git add clean.txt && git commit' -> superset -> deny" "$U" \
     "git -C docs add f.txt && git add clean.txt && git commit -m x" deny "leak.json"
   _t "X1e ... every sim add is the superset" "adds=$(_sim_adds)" _all_adds_superset
-  # Two roots with NO cd / -C: the process cwd is repo B (the untracked leak), the payload cwd is repo A (clean).
-  # The directory proof (i) names A; a replay in A must never stand in for B. (Two independent defences hold
-  # this: the one-root rule and the replay-directory-belongs-to-the-root check; dropping either alone is an
-  # equivalent mutant, dropping both is not.)
-  PAYLOAD_CWD="$A" _sx "X1f process cwd = leaky repo B, payload cwd = clean repo A, 'git add clean.txt && git commit' -> deny naming B" "$B" \
-    "git add clean.txt && git commit -m x" deny "leak.json" "$B"
-  _t "X1g ... B was scanned from a superset, never from a replay made in A" "adds=$(_sim_adds)" _all_adds_superset
+  # Two roots with NO cd / -C: the process cwd is repo B (an untracked leak), the payload cwd is repo A (clean). The
+  # directory proof (i) names A, so the command stages in A only (CTO row 33): A is replayed exactly and B, a fallback
+  # root the command cannot stage into, is scanned against its REAL index (the untracked leak is not staged: allow).
+  PAYLOAD_CWD="$A" _sx "X1f process cwd = repo B (untracked leak), payload cwd = clean repo A, 'git add clean.txt && git commit' -> allow (B is not staged)" "$B" \
+    "git add clean.txt && git commit -m x" allow
+  _t "X1g ... A was replayed exactly (add clean.txt) and B received no sim add at all" "adds=$(_sim_adds)" test "$(_sim_add_n)" = 1 -a "$(_exact_add clean.txt && echo y)" = y
+  # ... and a fallback root's REAL staged content is still scanned
+  S=$(_mk_staged_repo)
+  PAYLOAD_CWD="$A" _sx "X1h process cwd = repo with a STAGED leak, payload cwd = clean repo A -> deny naming the staged repo (real-index scan)" "$S" \
+    "git add clean.txt && git commit -m x" deny "leak.json" "$S"
+  # the hole row 33 must not open: a -C in a non-commit segment names A, the add runs in the process cwd B
+  PAYLOAD_CWD="$A" _sx "X1i hole closure: 'git -C B status; git add -A && git commit' with the shell in clean repo A and B holding an untracked leak -> deny (the directory is unproven: superset in every root)" "$A" \
+    "git -C $B status; git add -A && git commit -m x" deny "leak.json" "$B"
+  _t "X1j ... every sim add is the superset" "adds=$(_sim_adds)" _all_adds_superset
 
   # force-add: add -A never sees an ignored file
   I=$(_mk_leaky_repo ignored)
@@ -2610,7 +2710,7 @@ _t_sim_extra() {
   T=$(_mk_leaky_repo tracked-modified); Cn=$(_mk_leaky_repo clean)
   _sx "X4 residual: 'sed -i' before 'commit -a' is invisible (the scan sees the pre-execution state) -> allow" "$Cn" \
     "sed -i s/v1/v2/ tracked.json && git commit -am x" allow
-  _sx "X4b residual: a positional pathspec AFTER -m is not covered -> allow (documented, not claimed)" "$T" "git commit -m x tracked.json" allow
+  _sx "X4b a positional pathspec AFTER -m is covered now (perl lexes every strict commit) -> deny" "$T" "git commit -m x tracked.json" deny "tracked.json"
 }
 
 # ---- fidelity: the replay must read what the COMMAND reads (review round, rows 26 and 27) ---------
@@ -2856,6 +2956,85 @@ _make_dirty_submodule_repo() {
   SM_IDX_MT=$(_mtime "$SM_IDX")
 }
 
+# ---- unit C through the hook: unknown is opaque, refused environments, content from outside the tree -------------
+_t_sim_walkc() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local Cn U T cmd lib="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" long
+  Cn=$(_mk_leaky_repo clean); U=$(_mk_leaky_repo untracked); T=$(_mk_leaky_repo tracked-modified)
+
+  # row 26: content that comes from outside the working tree cannot be scanned: deny, with no simulation at all
+  for cmd in "git update-index --add --cacheinfo 100644,0123456789012345678901234567890123456789,clean.txt && git commit -m x" \
+             "git apply --cached p.diff && git commit -m x" \
+             "git apply --index p.diff && git commit -m x"; do
+    _sx "W1 content from outside the tree is denied (stage-unsimulable): $cmd" "$Cn" "$cmd" deny "outside the working tree" "its own call"
+  done
+  _t "W1b ... no simulation ran" "adds=$(_sim_adds)" test "$(_sim_add_n)" = 0
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "W1c ... a sim-deny row with cause stage-unsimulable" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=stage-unsimulable"
+  _sx "W1d a plain update-index --refresh is opaque, not denied: the superset finds the untracked leak" "$U" "git update-index --refresh && git commit -m x" deny "leak.json"
+  _sx "W1e ... and a clean repo allows" "$Cn" "git update-index --refresh && git commit -m x" allow
+
+  # row 22: an unknown staging form is the superset, never an exact replay or nothing
+  for cmd in "make add && git commit -m x" \
+             "git-add clean.txt && git commit -m x" \
+             "/usr/lib/git-core/git-add clean.txt && git commit -m x" \
+             'git "$S" clean.txt && git commit -m x' \
+             "git commit -N -m x"; do
+    _sx "W2 unknown staging form -> the superset: $cmd" "$U" "$cmd" deny "leak.json"
+    _t "W2b ... a full add -A ran" "adds=$(_sim_adds)" _superset_add
+  done
+  _sx "W2c a dashed git-commit is a commit: 'git-commit -a -m x' with a modified tracked leak -> deny" "$T" "git-commit -a -m x" deny "tracked.json"
+  _sx "W2d a non-git command without a staging verb stays exact: 'echo hi && git add clean.txt && git commit' (an unrelated untracked leak) -> allow" "$U" \
+    "echo hi && git add clean.txt && git commit -m x" allow
+  _t "W2e ... an exact replay" "adds=$(_sim_adds)" _exact_add clean.txt
+  _sx "W2f an inline alias.* key on the staging record is refused" "$U" "git -c alias.add=status add clean.txt && git commit -m x" deny "its own call"
+
+  # row 23: the environment allowlist
+  for cmd in "HOME=/x git add clean.txt && git commit -m x" \
+             "env HOME=/x git add clean.txt && git commit -m x" \
+             "env -i git add clean.txt && git commit -m x" \
+             "env -u HOME git add clean.txt && git commit -m x" \
+             "sudo git add clean.txt && git commit -m x" \
+             "export HOME=/x; git add clean.txt && git commit -m x" \
+             "unset HOME; git add clean.txt && git commit -m x" \
+             "HOME=/x; git add clean.txt && git commit -m x"; do
+    _sx "W3 an environment the replay cannot reproduce is refused (stage in its own call): $cmd" "$U" "$cmd" deny "its own call"
+  done
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "W3b ... the last one is a sim-deny row with cause config-refused" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=config-refused"
+  for cmd in "LC_ALL=C git add clean.txt && git commit -m x" \
+             "export LC_ALL=C; git add clean.txt && git commit -m x" \
+             "env CI=1 git add clean.txt && git commit -m x" \
+             "GIT_AUTHOR_NAME=a GIT_COMMITTER_NAME=b git add clean.txt && git commit -m x"; do
+    _sx "W3c an allowlisted environment is replayed exactly -> allow: $cmd" "$U" "$cmd" allow
+    _t "W3d ... an exact add of clean.txt" "adds=$(_sim_adds)" _exact_add clean.txt
+  done
+  _sx "W3e an export in a command that stages nothing is untouched" "$Cn" "export HOME=/x; git commit -m x" allow
+  _t "W3f ... no simulation" "adds=$(_sim_adds)" test "$(_sim_add_n)" = 0
+
+  # row 24: a commit record that stages is refused under the same conditions
+  for cmd in "HOME=/x git commit -a -m x" \
+             "git -c core.hooksPath=/x commit -a -m x" \
+             "git --namespace n commit -a -m x" \
+             "sudo git commit -o tracked.json -m x"; do
+    _sx "W4 a staging commit under a config or environment the replay cannot honour is refused: $cmd" "$T" "$cmd" deny "its own call"
+  done
+  _sx "W4b a commit that stages nothing is untouched by the same prefix" "$Cn" "HOME=/x git commit -m x" allow
+  _t "W4c ... no simulation" "adds=$(_sim_adds)" test "$(_sim_add_n)" = 0
+
+  # row 22: the perl-less pre-filter is capped
+  long=$(printf 'x%.0s' $(seq 1 16400))
+  # a payload cwd that is in no work tree cannot hold the replay: the superset, not an unscanned command
+  PAYLOAD_CWD="$SUITE_TMP" _sx "W6 payload cwd outside any work tree, process cwd = repo with an untracked leak: 'git add -A && git commit' -> deny (dir-not-root superset)" "$U" \
+    "git add -A && git commit -m x" deny "leak.json" "$U"
+  _t "W6b ... a superset add ran" "adds=$(_sim_adds)" _superset_add
+  _t "W5 ctr_wants_lex: a command over 16384 characters is always lexed (perl-less hosts)" "returned false" \
+    bash -c 'source "$1" && ctr_wants_lex "git commit -m $2"' _ "$lib" "$long"
+  _t "W5b ... and a short plain commit is still not" "returned true" \
+    bash -c 'source "$1" && ! ctr_wants_lex "git commit -m x"' _ "$lib"
+}
+
 # ---- the library's clock and bound, driven directly --------------------------------------------------------
 _t_sim_lib_unit() {
   local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" v out rc t0
@@ -2894,6 +3073,7 @@ _t_sim_consumer() {
     source "$1" || exit 90
     source "$2" || exit 91
     ctr_collect "git add -A && git commit -m x"
+    cis_plan "$3"
     cis_clock_start
     rc=0; cis_build "$3" "$3" "$4" || rc=$?
     echo "build-rc=$rc"
@@ -2908,10 +3088,36 @@ _t_sim_consumer() {
     source "$1" || exit 90
     source "$2" || exit 91
     ctr_collect "git add -A && git commit -m x"
+    cis_plan "$3"
     rc=0; cis_build "$3" "$3" "$4" || rc=$?
     echo "build-rc=$rc why=$CIS_WHY"
   ' _ "$ctr" "$lib" "$U" "$wd" 2>&1) || true
   _t "X5e a consumer that never started the clock fails closed (rc 20, sim-timeout), not unbounded" "out=${out2:0:200}" _contains "$out2" "build-rc=20 why=sim-timeout"
+  # A consumer that never planned must fail closed too: it cannot assume the replay is valid for this root.
+  wd=$(mktemp -d "$SUITE_TMP/cis.XXXXXX")
+  out2=$(env -u GIT_DIR -u GIT_INDEX_FILE bash -c '
+    source "$1" || exit 90
+    source "$2" || exit 91
+    ctr_collect "git add -A && git commit -m x"
+    cis_clock_start
+    rc=0; cis_build "$3" "$3" "$4" || rc=$?
+    echo "build-rc=$rc why=$CIS_WHY"
+  ' _ "$ctr" "$lib" "$U" "$wd" 2>&1) || true
+  _t "X5f a consumer that never called cis_plan fails closed (rc 20, not-planned)" "out=${out2:0:200}" _contains "$out2" "build-rc=20 why=not-planned"
+  # The plan is made once: a root other than the one the proven directory belongs to is never replayed in that directory.
+  wd=$(mktemp -d "$SUITE_TMP/cis.XXXXXX")
+  out2=$(env -u GIT_DIR -u GIT_INDEX_FILE bash -c '
+    source "$1" || exit 90
+    source "$2" || exit 91
+    ctr_collect "git add clean.txt && git commit -m x"
+    cis_plan "$3"
+    echo "plan=$CIS_MODE top=$CIS_TOP"
+    cis_clock_start
+    rc=0; cis_build "$5" "$3" "$4" || rc=$?
+    echo "build-rc=$rc mode=$CIS_MODE why=$CIS_WHY"
+  ' _ "$ctr" "$lib" "$U" "$wd" "$(_mk_leaky_repo clean)" 2>&1) || true
+  _t "X5g a plan that is exact for one toplevel is not trusted for another root (superset, dir-not-root)" "out=${out2:0:300}" \
+    test "$([[ "$out2" == *"plan=exact top=$U"* && "$out2" == *"mode=superset why=dir-not-root"* ]] && echo y)" = y
   _t "X5d ... while the REAL index still holds nothing new (no secret-scan code ran here)" "build/real: ${out:0:120} / $(git -C "$U" diff --cached --name-only)" \
     test -z "$(git -C "$U" diff --cached --name-only)" -a "$([[ "$out" == *build-rc=0* ]] && echo y)" = y
 }
@@ -3104,6 +3310,7 @@ _t_sim_worktree
 _t_sim_extra
 _t_sim_fidelity
 _t_sim_seams
+_t_sim_walkc
 _t_sim_lib_unit
 _t_sim_consumer
 _t_sim_oracle
@@ -3119,7 +3326,7 @@ _t_floor_contract
 # a host with no runnable gitleaks skips whole arms (reported, and failed under CI=true by the
 # epilogue), so the floor only binds when nothing was skipped. Reported by printf + exit,
 # never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=961
+MIN_ASSERTIONS=1099
 if (( ${#SKIPPED_ARMS[@]} == 0 )) && (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

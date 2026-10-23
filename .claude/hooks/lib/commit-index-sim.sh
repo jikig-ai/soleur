@@ -15,9 +15,14 @@
 # and it says how it went; the CALLER maps the codes to a decision.
 #
 # CONTRACT
-#   cis_plan <payload-cwd>            pure over the CTR_* facts (commit-target-roots.sh) plus CIS_ROOT_COUNT.
-#                                     Sets CIS_MODE (exact | superset), CIS_WHY (why the superset, else empty)
-#                                     and, for exact, CIS_DIR (the directory the replay runs in).
+#   cis_plan <payload-cwd>            pure over the CTR_* facts (commit-target-roots.sh), called ONCE per command before
+#                                     any cis_build. Sets CIS_MODE (exact | superset), CIS_WHY (why the superset, else
+#                                     empty) and, for exact, CIS_DIR (the directory the replay runs in) and CIS_TOP (the
+#                                     git toplevel of CIS_DIR: the ONE root the replay is valid for; CTO row 33).
+#                                     With exact, a caller simulates only the root whose toplevel is CIS_TOP and scans
+#                                     every other root (a fallback-only root the command cannot stage into) against its
+#                                     real index; with superset it builds every root. cis_build needs the plan: without
+#                                     one it fails closed (CIS_WHY not-planned).
 #   cis_build <root> <cwd> <workdir>  prepare, export, replay, commit step. Returns EXACTLY 0 (built), 10
 #                                     (built, after a trusted pathspec-missing error: the exact replay hit a path
 #                                     that does not exist yet and the superset was built instead) or 20 (failure;
@@ -43,8 +48,8 @@
 #                                     simulated index must carry (below).
 #   CIS_API=1                         the contract version a caller can test before it trusts this file.
 #
-# DOCUMENTED INPUTS (read, never written): the CTR_* staging facts, _CTR_TEXT (the command text), CIS_ROOT_COUNT
-# (how many repositories the caller scans; the replay is exact only for exactly one), and CIS_DEADLINE_SECONDS.
+# DOCUMENTED INPUTS (read, never written): the CTR_* staging facts, _CTR_TEXT (the command text) and
+# CIS_DEADLINE_SECONDS.
 #
 # CIS_DEADLINE_SECONDS is a TEST-ONLY knob and can only LOWER the ceiling: a plain non-negative integer below 30
 # becomes the limit; anything else (a larger number, a negative or non-number) is ignored; 0 means no time remains,
@@ -53,8 +58,7 @@
 #
 # THE REPLAY. Exact replay runs the command's own add records, in text order, as `git -C <dir> add <validated
 # options> -- <paths>` and then the commit's own flags (`-a`/`-p` -> add -u; a pathspec -> add -u -- <literal
-# paths>, then add -u, then add -A only if both fail). It is used only when ALL of these hold: exactly one
-# scanned root; every add record exact; nothing opaque; no loop or function in the text; and the directory is
+# paths>, then add -u, then add -A only if both fail). It is used only when ALL of these hold: every add record exact; nothing opaque; no loop or function in the text; and the directory is
 # PROVEN: (i) the command names no cd / pushd / -C and the payload cwd is an absolute existing directory, or
 # (ii) every add record and the commit carry the same absolute existing -C, or (iii) `cd <abs>` is the first
 # record followed only by &&-joined git records. Everything else uses the SUPERSET: `git add -A`, plus
@@ -100,11 +104,13 @@ CIS_ERR=""
 CIS_DIR=""
 CIS_ENV=()
 CIS_API=1
-CIS_ROOT_COUNT=1
+CIS_TOP=""
 CIS_REMAINING=0
 CIS_BOUND_ARGV=()
 CIS_PINS=()
 _CIS_T0=""
+_CIS_PLANNED=0
+_CIS_PLAN_MODE=superset; _CIS_PLAN_WHY=""; _CIS_PLAN_DIR=""
 _CIS_LIMIT=30
 _CIS_ERRF=""
 _CIS_RC=0
@@ -224,12 +230,18 @@ _cis_abs_dir() {
   return 0
 }
 
-# cis_plan <payload-cwd> — exact only when every condition holds; the first that fails names the cause.
+# cis_plan <payload-cwd> — exact only when every condition holds; the first that fails names the cause. The result is
+# kept for every later cis_build of the same command.
 cis_plan() {
+  _cis_plan_decide "${1-}"
+  _CIS_PLAN_MODE="$CIS_MODE"; _CIS_PLAN_WHY="$CIS_WHY"; _CIS_PLAN_DIR="$CIS_DIR"; _CIS_PLANNED=1
+  return 0
+}
+
+_cis_plan_decide() {
   local pcwd="${1-}" i n own t0 nt any_own=0 all_t0=1
-  CIS_MODE=superset; CIS_WHY=""; CIS_DIR=""
+  CIS_MODE=superset; CIS_WHY=""; CIS_DIR=""; CIS_TOP=""
   if [ "${CTR_STAGE_OPAQUE:-0}" -eq 1 ]; then CIS_WHY=opaque; return 0; fi
-  if [ "${CIS_ROOT_COUNT:-1}" -ne 1 ]; then CIS_WHY=roots; return 0; fi
   if _ctr_has_loop "${_CTR_TEXT-}"; then CIS_WHY=loop; return 0; fi
   nt="${#CTR_TARGETS[@]}"
   t0="${CTR_TARGETS[0]-}"
@@ -243,19 +255,28 @@ cis_plan() {
   done
   # (i) nothing in the command moves the directory and the payload cwd is a real absolute directory
   if [ "$nt" -eq 0 ] && [ "$any_own" -eq 0 ] && [ -z "${CTR_COMMIT_OWN_C-}" ] && _cis_abs_dir "$pcwd"; then
-    CIS_MODE=exact; CIS_DIR="$pcwd"; return 0
+    _cis_plan_exact "$pcwd"; return 0
   fi
   if [ "$nt" -eq 1 ] && _cis_abs_dir "$t0"; then
     # (ii) every add record and the commit carry the same absolute -C
     if [ -n "${CTR_COMMIT_OWN_C-}" ] && [ "$CTR_COMMIT_OWN_C" = "$t0" ] && [ "$all_t0" -eq 1 ]; then
-      CIS_MODE=exact; CIS_DIR="$t0"; return 0
+      _cis_plan_exact "$t0"; return 0
     fi
     # (iii) `cd <abs>` first, && joined, nothing else
     if [ "${CTR_STAGE_CD_FIRST:-0}" -eq 1 ] && [ "$any_own" -eq 0 ] && [ -z "${CTR_COMMIT_OWN_C-}" ]; then
-      CIS_MODE=exact; CIS_DIR="$t0"; return 0
+      _cis_plan_exact "$t0"; return 0
     fi
   fi
   CIS_WHY=unproven-dir
+  return 0
+}
+
+# _cis_plan_exact <dir> — the proven directory, and the toplevel the replay is valid for. A directory that is in no
+# work tree cannot be replayed in: the superset.
+_cis_plan_exact() {
+  CIS_TOP=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || CIS_TOP=""
+  if [ -z "$CIS_TOP" ]; then CIS_WHY=dir-not-root; return 0; fi
+  CIS_MODE=exact; CIS_DIR="$1"
   return 0
 }
 
@@ -419,6 +440,8 @@ cis_build() {
   local root="$1" pcwd="${2-}" wd="${3-}" idx objs top r=0 why err
   CIS_ERR=""; CIS_WHY=""; CIS_MODE=superset; CIS_DIR=""
   _CIS_WD=""; _CIS_ROOT="$root"; _CIS_PCWD="$pcwd"
+  # the plan is made once per command by the caller; without one nothing may be assumed
+  if [ "$_CIS_PLANNED" -ne 1 ]; then CIS_WHY=not-planned; return 20; fi
   if [ -z "$wd" ] || [ ! -d "$wd" ]; then CIS_WHY=prepare-failed; return 20; fi
   case "$wd" in /*) ;; *) wd="$PWD/$wd" ;; esac
   _CIS_WD="$wd"
@@ -428,7 +451,7 @@ cis_build() {
   cis_remaining
   if [ "$CIS_REMAINING" -le 0 ]; then _cis_fail sim-timeout; return 20; fi
 
-  cis_plan "$pcwd"
+  CIS_MODE="$_CIS_PLAN_MODE"; CIS_WHY="$_CIS_PLAN_WHY"; CIS_DIR="$_CIS_PLAN_DIR"
 
   idx=$(git -C "$root" rev-parse --git-path index 2>/dev/null) || idx=""
   objs=$(git -C "$root" rev-parse --git-path objects 2>/dev/null) || objs=""

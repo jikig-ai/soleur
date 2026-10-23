@@ -47,7 +47,7 @@
 # walker (lib/commit-target-roots.sh sets CTR_COMMIT_STAGES), lib/commit-index-sim.sh copies the real index to
 # a temp file inside a 0700 directory this hook allocates, replays the staging onto the COPY (exact replay of
 # the literal `git add` words when the directory is proven, else the superset `git add -A`), exports the copy
-# plus a quarantined object directory, and scan_root runs unchanged inside that window. Nothing in the real
+# plus a quarantined object directory, and scan_root runs inside that window (its gitleaks calls bounded). Nothing in the real
 # index, real object store, real git directory or working tree is touched. A plain `git commit -m x` reaches
 # none of this (no simulation, no new git call). gitleaks resolves to a generated wrapper first on PATH in sim
 # mode: it applies the time left of ONE 30 s deadline and, on expiry, the hook DENIES (expiry never bypasses).
@@ -71,7 +71,8 @@
 #   - a script or wrapper that runs `git add` inside (the walker sees only the command's own argv);
 #   - content created or changed EARLIER in the same command is denied only when a producer is detected;
 #     `sed -i` / `prettier --write` before `commit -a` or `add -u` is invisible (pre-execution state);
-#   - a positional pathspec AFTER a `-m "..."` (`git commit -m x tracked.json`) never reaches the walker;
+#   - on a host WITHOUT perl a positional pathspec after `-m "..."` (`git commit -m x tracked.json`) is not seen (perl
+#     hosts lex every strict commit, so it is scanned there);
 #   - the sim scans RAW bytes (clean filters are pinned off): a clean filter / Git LFS may record other bytes;
 #   - content a verb brings from OUTSIDE the working tree (`apply --index`, `cherry-pick -n`, `stash pop`,
 #     `merge`, `checkout <ref> --`) is not covered: those verbs force the superset, which scans the working tree;
@@ -205,12 +206,13 @@ if [ -r "$ctr_lib" ] && . "$ctr_lib" 2>/dev/null && declare -f ctr_collect >/dev
   ctr_ok=1
 fi
 
-# Which commands go to the lexer: every loose-only match (always), and a strict match only
-# when it carries a directory-affecting token or a same-command staging form (#10696), so a plain
-# `git commit -m x` never spawns perl.
+# Which commands go to the lexer: every loose-only match, and every strict match where perl exists (CTO row 22: a
+# pre-filter is an open-world list of the forms that matter, and one ~13 ms lex per commit closes it). Without perl
+# the lexer cannot run and a commit that needs it is denied, so only a strict match that carries a directory-affecting
+# token or a same-command staging form (ctr_wants_lex) goes there and a plain `git commit -m x` still works.
 need_lex=0
 if [ "$ctr_ok" -eq 1 ]; then
-  if [ "$strict_match" -eq 0 ] || ctr_wants_lex "$command"; then need_lex=1; fi
+  if [ "$strict_match" -eq 0 ] || command -v perl >/dev/null 2>&1 || ctr_wants_lex "$command"; then need_lex=1; fi
 elif [ "$strict_match" -eq 0 ]; then
   # Library unavailable: this is a broken install, so lean toward the deny. A loose-only match
   # is kept when it carries an option-bearing `git -...` form or any quoting / expansion
@@ -662,6 +664,9 @@ if [ "$sim_on" -ne 1 ]; then
 fi
 
 # From here the policy: refuse, allocate, build per root, scan inside the export window, unexport, clean.
+if [ "${CTR_STAGE_UNSIMULABLE:-0}" -eq 1 ]; then
+  sim_deny stage-unsimulable "BLOCKED: this command puts content in the index that comes from outside the working tree (git update-index --add / --cacheinfo / --index-info, or git apply --index / --cached / --3way), so what the commit would record cannot be scanned and the commit is blocked. Repair: run that staging command as its own call, then run the commit as a second call (the scan then reads the real index)."
+fi
 if [ "${CTR_STAGE_REFUSE:-0}" -eq 1 ]; then
   sim_deny config-refused "BLOCKED: the commit's own staging cannot be simulated safely (${CTR_STAGE_REFUSE_WHY}), so the content it would record was NOT scanned and the commit is blocked. Repair: stage in its own call: run 'git add <paths>' as its own command first (the scan then reads the real index), then run the commit as a second call."
 fi
@@ -679,11 +684,18 @@ cis_clock_start
 # exact replay trusts only a directory the payload itself names.
 payload_cwd=""
 payload_cwd="$(printf '%s' "$__HI_RAW" | jq -r 'if (.cwd | type) == "string" then .cwd else "" end' 2>/dev/null)" || payload_cwd=""
-# shellcheck disable=SC2034  # read by cis_plan in lib/commit-index-sim.sh
-CIS_ROOT_COUNT="${#scan_roots[@]}"
+# ONE plan for the whole command (CTO row 33). Proof of the command's directory (exact) means the staging lands in ONE
+# repository, the toplevel of CIS_DIR: that root is simulated, and every other root is a fallback root (the hook's cwd,
+# the payload cwd) the command cannot stage into, so it is scanned against its real index. Without proof every root is
+# simulated with the superset, which is what keeps `git -C A status; git add -A && git commit` closed.
+cis_plan "$payload_cwd"
 
 sim_i=0
 for _r in "${toml_roots[@]}"; do
+  if [ "$CIS_MODE" = exact ] && [ "$_r" != "$CIS_TOP" ]; then
+    scan_root "$_r"
+    continue
+  fi
   sim_i=$((sim_i + 1))
   sim_work="$sim_dir/r$sim_i"
   mkdir -m 700 "$sim_work" 2>/dev/null || sim_deny temp-dir "BLOCKED: the commit's own staging could not be simulated (a temporary directory could not be created), so the content it would record was NOT scanned and the commit is blocked. Repair: run git add as its own call, then run the commit in the next call."

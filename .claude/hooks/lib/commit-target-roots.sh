@@ -56,11 +56,20 @@
 #   CTR_STAGE_OPAQUE         1 when staging happens that the walker cannot replay (a stage-unknown verb:
 #                            apply update-index checkout cherry-pick merge revert stash am read-tree
 #                            restore pull switch rebase submodule sparse-checkout; an expansion command
-#                            word followed by a staging word; an unknown or abbreviated `commit --long`
-#                            option; --interactive / --pathspec-from-file) -> the caller uses the superset
-#   CTR_STAGE_REFUSE(_WHY)   1 when a staging record carries something that makes git execute configuration
-#                            (-c / --config-env keys core. filter. diff. attr. include. includeif. add.
-#                            apply. submodule., --namespace, --attr-source, a GIT_* env prefix) -> DENY
+#                            word or subcommand; a dashed git-<verb>; a staging verb among the words of a
+#                            non-git command; an unknown short commit option, a bundle longer than 64
+#                            characters, or an unknown or abbreviated `commit --long` option;
+#                            --interactive / --pathspec-from-file) -> the caller uses the superset
+#   CTR_STAGE_UNSIMULABLE    1 for `update-index --add|--cacheinfo|--index-info` and `apply --index|--cached|
+#                            --3way`: they put content in the index from OUTSIDE the working tree -> DENY
+#   CTR_STAGE_REFUSE(_WHY)   1 when a staging record (add / stage, or a commit that stages) carries something
+#                            that makes git execute configuration or read other files: -c / --config-env keys
+#                            core. filter. diff. attr. include. includeif. add. apply. submodule. alias.,
+#                            --namespace, --attr-source; an environment name outside the allowlist (LC_* LANG
+#                            LANGUAGE TZ TERM NO_COLOR CI GIT_AUTHOR_* GIT_COMMITTER_* GIT_EDITOR GIT_PAGER
+#                            GIT_TERMINAL_PROMPT) as a prefix, after `env`, or exported / unset / assigned
+#                            earlier in the command (a bare assignment only when the name is exported here or
+#                            is a GIT_* name); `env -i|-u|-`; sudo doas su runuser chroot nsenter -> DENY
 #   CTR_ADD_EXACT / _FORCE / _LIT / _NW / _OFF / _OWNC   six parallel arrays, one entry per add/stage record
 #                            (OFF = the record's first word in CTR_ADD_ARGV, NW = how many words), and
 #                            CTR_ADD_ARGV: every record's words, verb first, appended. exact=0 when any word is
@@ -113,6 +122,7 @@ _ctr_reset_stage() {
   CTR_STAGE_OPAQUE=0
   CTR_STAGE_REFUSE=0
   CTR_STAGE_REFUSE_WHY=""
+  CTR_STAGE_UNSIMULABLE=0
   CTR_ADD_EXACT=(); CTR_ADD_FORCE=(); CTR_ADD_LIT=(); CTR_ADD_NW=(); CTR_ADD_OFF=(); CTR_ADD_OWNC=()
   CTR_ADD_ARGV=()
   CTR_COMMIT_ALL=0
@@ -122,7 +132,9 @@ _ctr_reset_stage() {
   CTR_STAGE_CD_FIRST=0
   _CTR_PATHSMODE=0
   _CTR_REC_NONEXACT=0
-  _CTR_REC_GITENV=0
+  _CTR_REC_ENVBAD=""
+  _CTR_CMD_ENVBAD=""
+  _CTR_CF_STAGES=0
   _CTR_NREC=0
   _CTR_FIRST_IS_CD=0
   _CTR_FIRST_NW=0
@@ -141,13 +153,15 @@ _ctr_is_stage_verb() {
   return 1
 }
 
-# ctr_wants_lex <command> — cheap pre-filter for the STRICT-match path (`git commit` with
-# nothing between the words): true when the text contains a token that can change which
-# directory a commit lands in, so a plain `git commit -m x` never spawns perl. Over-matching
-# is safe (it only runs the lexer); UNDER-matching is the incident, so the suite pins that
-# every form the walker handles matches. A loose-only match (`git -C x commit`, a wrapper,
-# quoting) does not consult this: it always runs the lexer.
+# ctr_wants_lex <command> — the pre-filter of the PERL-LESS path only (CTO row 22). Where perl exists the hook lexes
+# every strict commit (a plain `git commit -m x` pays one ~13 ms lex), because a pre-filter is an open-world list of
+# the forms that matter and the lexer is already on for almost every commit. On a host without perl the lexer cannot
+# run and a commit it must read is denied, so this keeps a plain `git commit -m x` working there: true when the text
+# contains a token that can change which directory a commit lands in or which content it records. A command longer
+# than 16384 characters is always true (the regexes below are not bounded). Over-matching is safe; UNDER-matching is
+# the incident, so the suite pins that every form the walker handles matches.
 ctr_wants_lex() {
+  [ "${#1}" -gt 16384 ] && return 0
   local c="$1" re='(^|[^[:alnum:]_.-])(cd|pushd|env|e[v]al|bash|sh|zsh|dash|ksh|sudo|doas|chroot|nsenter|export|declare|typeset)([^[:alnum:]_.-]|$)'
   # #10696: same-command staging. Detecting it needs the lexer's argv, so every form that can stage is
   # pinned must-match by the suite; a form this misses never reaches the walker.
@@ -201,6 +215,39 @@ _ctr_add_path() {
 }
 _ctr_add_idx() { _ctr_add_path "${_CTR_W[$1]}" "${_CTR_F[$1]}"; }
 
+# _ctr_env_ok <NAME> — an environment variable a staging command may set without changing what `git add` reads (CTO
+# row 23). Anything else (HOME, PATH, XDG_*, GIT_CONFIG_*, GIT_ATTR_*, GIT_EXTERNAL_DIFF, ...) can point git at other
+# configuration, attributes, hooks or an index, which the replay cannot reproduce.
+_ctr_env_ok() {
+  case "$1" in
+    LC_*|LANG|LANGUAGE|TZ|TERM|NO_COLOR|CI|GIT_AUTHOR_*|GIT_COMMITTER_*|GIT_EDITOR|GIT_PAGER|GIT_TERMINAL_PROMPT) return 0 ;;
+  esac
+  return 1
+}
+
+# _ctr_env_live <NAME> — a bare `NAME=value` reaches git's environment: the name is already exported here (the hook runs
+# in the environment the shell it guards inherits) or begins with GIT_.
+_ctr_env_live() {
+  local d
+  case "$1" in GIT_*) return 0 ;; esac
+  d=$(declare -p "$1" 2>/dev/null) || return 1
+  [[ "$d" =~ ^declare\ -[a-zA-Z]*x ]]
+}
+
+# _ctr_env_poison_rec <what> — the CURRENT RECORD runs with an environment the replay cannot reproduce. Only a staging
+# record (add / stage, or a commit that stages) refuses on it; the first reason wins.
+_ctr_env_poison_rec() {
+  if [ -z "$_CTR_REC_ENVBAD" ]; then _CTR_REC_ENVBAD="$1"; fi
+  return 0
+}
+
+# _ctr_env_poison_cmd <what> — an earlier record (export / unset / a bare assignment) changed the shell's environment
+# for every later record. It refuses only when the command stages at all, once the whole stream is read.
+_ctr_env_poison_cmd() {
+  if [ -z "$_CTR_CMD_ENVBAD" ]; then _CTR_CMD_ENVBAD="$1"; fi
+  return 0
+}
+
 # _ctr_is_gitenv <word> — a repository-location variable assignment.
 _ctr_is_gitenv() {
   case "$1" in
@@ -232,8 +279,12 @@ _ctr_env_walk() {
         if [ $((k + 1)) -lt "$n" ]; then _ctr_add_idx $((k + 1)); else _ctr_bad "env $w has no operand"; fi
         k=$((k + 2)) ;;
       --s|--sp|--spl|--spli|--split*) _ctr_bad "env --split-string runs a string the walker cannot read"; _ctr_mark_commit; k=$((k + 1)) ;;
-      --unset|--argv0) k=$((k + 2)) ;;
+      --u*=*) _ctr_env_poison_rec "env --unset removes variables from the staging command's environment"; k=$((k + 1)) ;;
+      --u*) _ctr_env_poison_rec "env --unset removes variables from the staging command's environment"; k=$((k + 2)) ;;
+      --i*) _ctr_env_poison_rec "env --ignore-environment empties the staging command's environment"; k=$((k + 1)) ;;
+      --argv0) k=$((k + 2)) ;;
       --*) k=$((k + 1)) ;;
+      -) _ctr_env_poison_rec "env - empties the staging command's environment"; k=$((k + 1)) ;;
       -?*)
         s="${w#-}"; k=$((k + 1))
         while [ -n "$s" ]; do
@@ -245,13 +296,15 @@ _ctr_env_walk() {
               else _ctr_bad "env -C has no operand"; fi
               break ;;
             S) _ctr_bad "env -S runs a string the walker cannot read"; _ctr_mark_commit; break ;;
-            u|a|P) [ -z "$rest" ] && k=$((k + 1)); break ;;
+            i) _ctr_env_poison_rec "env -i empties the staging command's environment" ;;
+            u) _ctr_env_poison_rec "env -u removes variables from the staging command's environment"; [ -z "$rest" ] && k=$((k + 1)); break ;;
+            a|P) [ -z "$rest" ] && k=$((k + 1)); break ;;
           esac
           s="$rest"
         done ;;
       *=*)
         if _ctr_is_gitenv "$w"; then _ctr_bad "the command sets ${w%%=*}= (the repository is not named by a path)"; fi
-        case "$w" in GIT_*) _CTR_REC_GITENV=1 ;; esac
+        _ctr_env_ok "${w%%=*}" || _ctr_env_poison_rec "the staging command sets ${w%%=*} in its environment (git may read a hook, editor, config, attributes or index from it)"
         k=$((k + 1)) ;;
       *) break ;;
     esac
@@ -284,7 +337,7 @@ _ctr_cfg_refuses() {
   local k="${1%%=*}"
   k=$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')
   case "$k" in
-    core.*|filter.*|diff.*|attr.*|include.*|includeif.*|add.*|apply.*|submodule.*) return 0 ;;
+    core.*|filter.*|diff.*|attr.*|include.*|includeif.*|add.*|apply.*|submodule.*|alias.*) return 0 ;;
   esac
   return 1
 }
@@ -318,6 +371,7 @@ _ctr_stage_add() {
         -) exact=0 ;;
         -?*)
           s="${w#-}"
+          if [ "${#s}" -gt 64 ]; then exact=0; s=""; fi
           while [ -n "$s" ]; do
             ch="${s:0:1}"; s="${s:1}"
             case "$ch" in
@@ -336,20 +390,23 @@ _ctr_stage_add() {
   while [ "$k" -lt "$n" ]; do CTR_ADD_ARGV+=("${_CTR_W[$k]}"); k=$((k + 1)); done
   if [ -n "$g_refuse" ]; then
     _ctr_refuse "$g_refuse"
-  elif [ "$_CTR_REC_GITENV" -eq 1 ]; then
-    _ctr_refuse "a GIT_* environment variable is set on the staging command (git may read a hook, editor, config or index from it)"
+  elif [ -n "$_CTR_REC_ENVBAD" ]; then
+    _ctr_refuse "$_CTR_REC_ENVBAD"
   fi
   return 0
 }
 
 # _ctr_commit_flags <idx-of-commit-word> — what the commit's own flags stage. Short bundles are read character
 # by character; m F C c t take the rest of the word as their operand, or the next word if nothing is attached
-# (so `-malpha` is a message, not -a); S and u take only an attached remainder and end the bundle. Long options
-# are an EXACT table: the staging ones, and the benign ones from `git commit -h`; anything else, including a
-# unique-prefix abbreviation git would accept, makes the stage opaque (superset). `--` starts the pathspec and
-# a bare word is a path.
+# (so `-malpha` is a message, not -a); S and u take only an attached remainder and end the bundle. A short option
+# character outside the known set (a p o i m F C c t S u s n v q e z h) makes the stage opaque, and so does a bundle
+# whose first 64 characters do not end it (CTO rows 22 and 35: unknown means superset, and the scan is bounded).
+# Long options are an EXACT table: the staging ones, and the benign ones from `git commit -h`; anything else,
+# including a unique-prefix abbreviation git would accept, makes the stage opaque (superset). `--` starts the
+# pathspec and a bare word is a path. _CTR_CF_STAGES = this commit record stages something by itself.
 _ctr_commit_flags() {
-  local j="$1" n="${#_CTR_W[@]}" k w fl s ch rest dd=0 pm=0
+  local j="$1" n="${#_CTR_W[@]}" k w fl s ch rest dd=0 pm=0 st=0 ci len
+  _CTR_CF_STAGES=0
   k=$((j + 1))
   while [ "$k" -lt "$n" ]; do
     w="${_CTR_W[$k]}"; fl="${_CTR_F[$k]}"
@@ -358,34 +415,49 @@ _ctr_commit_flags() {
     fi
     case "$w" in
       --) dd=1; pm=1; k=$((k + 1)) ;;
-      --all|--patch) CTR_COMMIT_ALL=1; k=$((k + 1)) ;;
+      --all|--patch) CTR_COMMIT_ALL=1; st=1; k=$((k + 1)) ;;
       --no-all|--no-patch) CTR_COMMIT_ALL=0; k=$((k + 1)) ;;
       --only|--include) pm=1; k=$((k + 1)) ;;
       --no-only|--no-include) pm=0; k=$((k + 1)) ;;
-      --interactive|--pathspec-from-file|--pathspec-from-file=*|--pathspec-file-nul) CTR_STAGE_OPAQUE=1; k=$((k + 1)) ;;
+      --interactive|--pathspec-from-file|--pathspec-from-file=*|--pathspec-file-nul) CTR_STAGE_OPAQUE=1; st=1; k=$((k + 1)) ;;
       --message|--file|--author|--date|--reuse-message|--reedit-message|--fixup|--squash|--trailer|--template|--cleanup|--unified|--inter-hunk-context)
         k=$((k + 2)) ;;
       --message=*|--file=*|--author=*|--date=*|--reuse-message=*|--reedit-message=*|--fixup=*|--squash=*|--trailer=*|--template=*|--cleanup=*|--unified=*|--inter-hunk-context=*|--untracked-files=*|--gpg-sign=*)
         k=$((k + 1)) ;;
       --amend|--no-edit|--edit|--signoff|--no-verify|--verbose|--quiet|--dry-run|--short|--branch|--porcelain|--long|--null|--allow-empty|--allow-empty-message|--reset-author|--status|--no-status|--no-post-rewrite|--untracked-files|--gpg-sign|--no-gpg-sign|--no-signoff|--no-reset-author)
         k=$((k + 1)) ;;
-      --*) CTR_STAGE_OPAQUE=1; k=$((k + 1)) ;;
+      --*) CTR_STAGE_OPAQUE=1; st=1; k=$((k + 1)) ;;
       -?*)
-        s="${w#-}"; k=$((k + 1))
-        while [ -n "$s" ]; do
-          ch="${s:0:1}"; rest="${s:1}"
+        s="${w#-}"; k=$((k + 1)); ci=0; len="${#s}"
+        while [ "$ci" -lt "$len" ]; do
+          if [ "$ci" -ge 64 ]; then CTR_STAGE_OPAQUE=1; st=1; break; fi
+          ch="${s:$ci:1}"
           case "$ch" in
-            a|p) CTR_COMMIT_ALL=1 ;;
+            a|p) CTR_COMMIT_ALL=1; st=1 ;;
             o|i) pm=1 ;;
-            m|F|C|c|t) if [ -z "$rest" ]; then k=$((k + 1)); fi; break ;;
+            m|F|C|c|t) if [ "$((ci + 1))" -ge "$len" ]; then k=$((k + 1)); fi; break ;;
             S|u) break ;;
+            s|n|v|q|e|z|h) : ;;
+            *) CTR_STAGE_OPAQUE=1; st=1 ;;
           esac
-          s="$rest"
+          ci=$((ci + 1))
         done ;;
       *) pm=1; _ctr_commit_path "$w" "$fl"; k=$((k + 1)) ;;
     esac
   done
-  if [ "$pm" -eq 1 ]; then _CTR_PATHSMODE=1; fi
+  if [ "$pm" -eq 1 ]; then _CTR_PATHSMODE=1; st=1; fi
+  if [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then st=1; fi
+  _CTR_CF_STAGES=$st
+  return 0
+}
+
+# _ctr_commit_refuse <g_refuse> — row 24: a commit record that stages is refused when it carries a config key the replay
+# cannot honour, or an environment it cannot reproduce. A commit that stages nothing is untouched.
+_ctr_commit_refuse() {
+  if [ "$_CTR_CF_STAGES" -ne 1 ]; then return 0; fi
+  if [ -n "$1" ]; then _ctr_refuse "$1"
+  elif [ -n "$_CTR_REC_ENVBAD" ]; then _ctr_refuse "$_CTR_REC_ENVBAD"
+  fi
   return 0
 }
 
@@ -403,6 +475,24 @@ _ctr_note_commit_c() {
   elif [ "$CTR_COMMIT_OWN_C" != "$c" ]; then CTR_COMMIT_OWN_C="<several>"
   fi
   _CTR_COMMIT_N=$((_CTR_COMMIT_N + 1))
+  return 0
+}
+
+# _ctr_unsim_check <idx-of-verb> — `update-index --add|--cacheinfo|--index-info` and `apply --index|--cached|--3way`
+# put content in the index that comes from OUTSIDE the working tree (a given object id, a patch): no replay and no
+# `add -A` of the working tree can scan it, so the caller DENIES (CTO row 26). Abbreviations git accepts are matched
+# by their unique prefix. Every other form of either verb stays opaque (superset).
+_ctr_unsim_check() {
+  local k=$(($1 + 1)) n="${#_CTR_W[@]}" verb="${_CTR_W[$1]}" w
+  while [ "$k" -lt "$n" ]; do
+    w="${_CTR_W[$k]}"
+    if [ "$verb" = update-index ]; then
+      case "$w" in --ad*|--cac*|--ind*) CTR_STAGE_UNSIMULABLE=1 ;; esac
+    else
+      case "$w" in --ca*|--ind*|--3*|-3) CTR_STAGE_UNSIMULABLE=1 ;; esac
+    fi
+    k=$((k + 1))
+  done
   return 0
 }
 
@@ -457,13 +547,16 @@ _ctr_git_walk() {
   # subcommand's own option, never a global one, because this loop stopped at it.
   if [ "$j" -lt "$n" ]; then
     sub="${_CTR_W[$j]}"
+    # An expanded subcommand (`git "$S" ...`) may be any staging verb: the superset.
+    case "${_CTR_F[$j]}" in *x*) CTR_STAGE_OPAQUE=1 ;; esac
     case "$sub" in
-      commit) _ctr_mark_commit; _ctr_commit_flags "$j"; _ctr_note_commit_c "$g_ownc" ;;
+      commit) _ctr_mark_commit; _ctr_commit_flags "$j"; _ctr_note_commit_c "$g_ownc"; _ctr_commit_refuse "$g_refuse" ;;
       add|stage) _ctr_stage_add "$j" ;;
       # rm and mv act on the WORKING TREE and add no new blob content: recognised, ignored, never replayed.
       rm|mv) : ;;
       submodule) _CTR_CREATOR=1; CTR_STAGE_OPAQUE=1 ;;
       worktree|clone|init) _CTR_CREATOR=1 ;;
+      update-index|apply) CTR_STAGE_OPAQUE=1; _ctr_unsim_check "$j" ;;
       *)
         # Verbs that change the index in ways the walker cannot replay: the caller scans the superset.
         if _ctr_is_stage_verb "$sub"; then CTR_STAGE_OPAQUE=1; fi
@@ -471,8 +564,11 @@ _ctr_git_walk() {
         # operand; if a `commit` word follows, treat it as a commit rather than guess.
         if [ "$unknown" -eq 1 ]; then
           m=$((j + 1))
+          q=$j
           for v in "${_CTR_W[@]:$j}"; do
             if _ctr_is_stage_verb "$v"; then CTR_STAGE_OPAQUE=1; fi
+            case "$v" in update-index|apply) _ctr_unsim_check "$q" ;; esac
+            q=$((q + 1))
           done
           while [ "$m" -lt "$n" ]; do
             if [ "${_CTR_W[$m]}" = commit ]; then
@@ -483,7 +579,7 @@ _ctr_git_walk() {
                 if [ "${_CTR_W[$q]}" = -C ] && [ $((q + 1)) -lt "$m" ]; then _ctr_add_idx $((q + 1)); fi
                 q=$((q + 1))
               done
-              _ctr_mark_commit; _ctr_commit_flags "$m"; _ctr_note_commit_c "-"; break
+              _ctr_mark_commit; _ctr_commit_flags "$m"; _ctr_note_commit_c "-"; _ctr_commit_refuse "$g_refuse"; break
             fi
             m=$((m + 1))
           done
@@ -555,25 +651,37 @@ _ctr_walk_from() {
 }
 
 _ctr_walk_body() {
-  local i="$1" n="${#_CTR_W[@]}" j w b k hits h
-  # Leading NAME=value assignments.
+  local i="$1" n="${#_CTR_W[@]}" j w b k hits h envbad=""
+  # Leading NAME=value assignments (NAME+=value too).
   while [ "$i" -lt "$n" ]; do
     w="${_CTR_W[$i]}"
     case "$w" in
       [A-Za-z_]*=*)
-        k="${w%%=*}"
+        k="${w%%=*}"; k="${k%+}"
         case "$k" in *[!A-Za-z0-9_]*) break ;; esac
         if _ctr_is_gitenv "$w"; then _ctr_bad "the command sets $k= (the repository is not named by a path)"; fi
-        case "$k" in GIT_*) _CTR_REC_GITENV=1 ;; esac
+        if ! _ctr_env_ok "$k" && [ -z "$envbad" ]; then envbad="$k"; fi
         i=$((i + 1)) ;;
       *) break ;;
     esac
   done
+  if [ -n "$envbad" ]; then
+    if [ "$i" -lt "$n" ]; then
+      _ctr_env_poison_rec "the staging command sets $envbad in its environment (git may read a hook, editor, config, attributes or index from it)"
+    elif _ctr_env_live "$envbad"; then
+      # a bare assignment (`HOME=/x; git add`) changes the environment of every later record when the name is one git
+      # can see: already exported (HOME, PATH, XDG_*), or a GIT_* name. A plain shell variable (`F=a.txt; git add $F`)
+      # is not in git's environment and is left alone.
+      _ctr_env_poison_cmd "the command sets $envbad in the shell's environment before it stages (git may read a hook, editor, config, attributes or index from it)"
+    fi
+  fi
   [ "$i" -lt "$n" ] || return 0
 
   # A command word that is itself an expansion ("$GIT" -C x commit) cannot be read.
   case "${_CTR_F[$i]}" in
     *x*)
+      # a dashed git-<verb> hidden in the expansion (`$(git --exec-path)/git-add`) is a staging verb too
+      case "${_CTR_W[$i]}" in *git-*) CTR_STAGE_OPAQUE=1 ;; esac
       j=$((i + 1))
       while [ "$j" -lt "$n" ]; do
         if _ctr_is_stage_verb "${_CTR_W[$j]}"; then CTR_STAGE_OPAQUE=1; fi
@@ -612,6 +720,10 @@ _ctr_walk_body() {
       fi ;;
     env) _ctr_env_walk "$i" ;;
     git) _ctr_git_walk "$i" ;;
+    # The dashed forms (`git-commit`, `git-add`) run the same programs without the `git` word (CTO row 22): a
+    # commit is a commit, and any other dashed verb is a staging verb the walker does not replay.
+    git-commit) _ctr_mark_commit; _ctr_commit_flags "$i"; _ctr_note_commit_c "-"; _ctr_commit_refuse "" ;;
+    git-*) CTR_STAGE_OPAQUE=1 ;;
     bash|sh|zsh|dash|ksh) _ctr_runner_walk "$i" ;;
     # Spelled e[v]al: this arm only MATCHES the word in argv, nothing here ever runs it.
     e[v]al)
@@ -622,10 +734,21 @@ _ctr_walk_body() {
         esac
         j=$((j + 1))
       done ;;
-    export|declare|typeset|readonly|local)
+    export|declare|typeset|readonly|local|unset)
       j=$((i + 1))
       while [ "$j" -lt "$n" ]; do
-        if _ctr_is_gitenv "${_CTR_W[$j]}"; then _ctr_bad "$b ${_CTR_W[$j]%%=*}= moves the repository without a path the walker may trust"; fi
+        w="${_CTR_W[$j]}"
+        if _ctr_is_gitenv "$w"; then _ctr_bad "$b ${w%%=*}= moves the repository without a path the walker may trust"; fi
+        # a name outside the allowlist changes what a later `git add` reads (CTO row 23); options are skipped
+        case "$w" in
+          -*) : ;;
+          *)
+            k="${w%%=*}"; k="${k%+}"
+            case "$k" in
+              ''|*[!A-Za-z0-9_]*) : ;;
+              *) _ctr_env_ok "$k" || _ctr_env_poison_cmd "the command changes $k in the shell's environment before it stages (git may read a hook, editor, config, attributes or index from it)" ;;
+            esac ;;
+        esac
         j=$((j + 1))
       done ;;
     mkdir|mv|cp|ln|install|rsync|tar|unzip) _CTR_CREATOR=1 ;;
@@ -636,6 +759,11 @@ _ctr_walk_body() {
       # launcher's own chdir option (sudo -D, --chdir, --working-directory) on the way.
       # A staging record reached through anything but the pass-through allowlist is not replayed exactly.
       case "$b" in rtk|timeout|nice|sudo|command|exec|flock) : ;; *) _CTR_REC_NONEXACT=1 ;; esac
+      # A launcher that changes the user, root, namespace or environment runs git with configuration the replay cannot
+      # reproduce (CTO row 23): a staging record behind one is refused ("stage in its own call").
+      case "$b" in
+        sudo|doas|su|runuser|chroot|nsenter) _ctr_env_poison_rec "the staging command runs through $b, which changes the user, root or environment git reads its configuration from" ;;
+      esac
       case "$b" in
         chroot|nsenter|unshare)
           j=$((i + 1))
@@ -666,6 +794,15 @@ _ctr_walk_body() {
         esac
         j=$((j + 1))
       done
+      if [ "${#hits[@]}" -eq 0 ]; then
+        # No git, cd, env or shell word behind this command, but a staging verb among its words (`make add`,
+        # `npm add`, `cargo add`): it may stage through a program the walker cannot read, so the superset (CTO row 22).
+        j=$((i + 1))
+        while [ "$j" -lt "$n" ]; do
+          if _ctr_is_stage_verb "${_CTR_W[$j]}"; then CTR_STAGE_OPAQUE=1; break; fi
+          j=$((j + 1))
+        done
+      fi
       if [ "${#hits[@]}" -gt 0 ]; then
         k="${hits[$((${#hits[@]} - 1))]}"
         j=$((i + 1))
@@ -700,7 +837,7 @@ _ctr_has_loop() {
 # keep what the cd-first shape needs (the first record is `cd <one word>`; every other record is a git).
 _ctr_rec_note() {
   local i=0 n="${#_CTR_W[@]}" w k b=""
-  _CTR_REC_NONEXACT=0; _CTR_REC_GITENV=0
+  _CTR_REC_NONEXACT=0; _CTR_REC_ENVBAD=""
   while [ "$i" -lt "$n" ]; do
     w="${_CTR_W[$i]}"
     case "$w" in
@@ -725,6 +862,8 @@ _ctr_stage_finish() {
   if [ "${#CTR_ADD_EXACT[@]}" -gt 0 ] || [ "$CTR_STAGE_OPAQUE" -eq 1 ] || [ "$CTR_STAGE_REFUSE" -eq 1 ] \
      || [ "$CTR_COMMIT_ALL" -eq 1 ] || [ "$_CTR_PATHSMODE" -eq 1 ] || [ "${#CTR_COMMIT_PATHS[@]}" -gt 0 ]; then
     CTR_COMMIT_STAGES=1
+    # an export / unset / bare assignment earlier in the command changed the environment of the staging that follows
+    if [ -n "$_CTR_CMD_ENVBAD" ]; then _ctr_refuse "$_CTR_CMD_ENVBAD"; fi
   fi
   # `cd <abs> && git ... && git ...` and nothing else: a ; || | ( { pushd popd or substitution anywhere in the
   # text defeats the proof (a subshell or a failing cd would not move the commit).
