@@ -2148,7 +2148,6 @@ row_rc_dsw() { raudit "$SANDBOX/r-reach2.rows" --all-refs; has_ref "$AOUT" dsw d
 row_rc_ce() { local x; raudit "$SANDBOX/r-reach2.rows" --all-refs; for x in "${CE_EXT[@]}"; do has_ref "$AOUT" scripts/ce "data/ce_$x.txt" || return 1; done; }
 row_rc_rt() { raudit "$SANDBOX/r-reach2.rows"; grep -qxF -- "$(printf 'unaudited\tscripts/rt\t^scripts/test-all.sh')" <<<"$AOUT" && grep -qxF -- "$(printf 'unaudited\tscripts/rt2\t^scripts/lib/test-affected-paths.sh')" <<<"$AOUT"; }
 # --- end of the reach rows; the mutation rows for them are at the end of the mutation section
-# <ratchet-section>
 # ---------------------------------------------------------------------------------------------------------------------
 # == ratchet (PR3a): `ratchet` subcommand, the advisory CI job and its follow-through probe (S4 index completion, #10448; ADR-276 amendment) ==
 # Every ratchet row builds its own scratch repository under $RT (never the shared audit fixtures), asserts the EXIT CODE and a distinct
@@ -2157,6 +2156,7 @@ row_rc_rt() { raudit "$SANDBOX/r-reach2.rows"; grep -qxF -- "$(printf 'unaudited
 # exit 1, so every floor row doubles as an ORDER row (infrastructure is never a verdict).
 echo "== ratchet (PR3a): the baseline compare, the floors, the growth rule, the failure text, --print-baseline and the job wiring"
 RT="$SANDBOX/rt"; mkdir -p "$RT"
+GT='>'   # a redirect character spelled in the quoted program text of the workflow and probe rows (the fixture-relative scanner reads a bare one inside a string as a redirect)
 RT_LINT="$SCRIPT_DIR/../scripts/lint-ratchet.py"
 [[ -s "$RT_LINT" ]] || { echo "[FATAL] $RT_LINT missing" >&2; exit 1; }
 cat > "$BIN/sel-rt.sh" <<'SEL'
@@ -2740,7 +2740,7 @@ row_wf_run_summary_cap() {   # the step summary is capped (the runner drops a su
 }
 row_wf_run_shape() {   # the lines the executable rows cannot see: the capture is `|| rc=$?` and the last command is exit "$rc"
   local b; b="$(wf_run_body "${1:-$RT/wf/ci.yml}")"
-  grep -qxF 'python3 -I scripts/ci-pr-affected-replay.py ratchet --report "$full" > "$out" || rc=$?' <<<"$b" && [[ "$(grep -v '^[[:space:]]*$' <<<"$b" | tail -n 1)" == 'exit "$rc"' ]]
+  grep -qxF 'python3 -I scripts/ci-pr-affected-replay.py ratchet --report "$full" '"$GT"' "$out" || rc=$?' <<<"$b" && [[ "$(grep -v '^[[:space:]]*$' <<<"$b" | tail -n 1)" == 'exit "$rc"' ]]
 }
 row_wf_perms() {   # contents: read and nothing else; the checkout is pinned to a commit with credentials not persisted; the runner is a hosted one
   local w="${1:-$RT/wf/ci.yml}" b perms; b="$(wf_block "$w" $RJOB)"
@@ -2948,7 +2948,7 @@ chk "job wiring: the step summary is capped under 1 MiB with a pointer when cut,
 chk "job wiring: the capture is || rc=\$? and the last command is exit \"\$rc\"" row_wf_run_shape
 chk "job wiring: permissions are contents: read alone, the only action is the SHA-pinned checkout, the runner is ubuntu-latest" row_wf_perms
 chk "job wiring mutant: exit \"\$rc\" replaced by exit 0 reds the exit-code row" wf_mut exit-zero $'\n          exit "$rc"\n' $'\n          exit 0\n' row_wf_run_exit_code
-chk "job wiring mutant: || rc=\$? replaced by || true reds the exit-code row" wf_mut capture-true '> "$out" || rc=$?' '> "$out" || true' row_wf_run_exit_code
+chk "job wiring mutant: || rc=\$? replaced by || true reds the exit-code row" wf_mut capture-true "$GT"' "$out" || rc=$?' "$GT"' "$out" || true' row_wf_run_exit_code
 chk "job wiring mutant: --report dropped reds the pass row" wf_mut no-report ' --report "$full"' '' row_wf_run_pass
 chk "job wiring mutant: cat \"\$out\" dropped reds the pass row" wf_mut no-cat $'\n          cat "$out"\n' $'\n' row_wf_run_pass
 chk "job wiring mutant: contents: write reds the permissions row" wf_mut contents-write '      contents: read' '      contents: write' row_wf_perms
@@ -2995,7 +2995,7 @@ ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> 
 }
 ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a merge and the baseline at the merge commit and at main) under the stub
   local u id ev sha br created att prn ex wall pr_list="" mg_list="" item f1 i dummy="" runconc fork
-  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event* "$GHFIX"/ERR*_*contents* 2>/dev/null
+  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* 2>/dev/null
   for u in "${OW_UNITS[@]}"; do
     read -r id ev sha br created att prn ex wall <<<"$u"
     runconc=success; [[ "$ex" != cancelrun ]] || runconc=cancelled
@@ -3194,8 +3194,8 @@ ow_mutate not-yet-is-exit-1 'printf '"'"'NOT YET: %s\n'"'"' "${nots[@]}"
   exit 2' 'printf '"'"'NOT YET: %s\n'"'"' "${nots[@]}"
   exit 1' row_ow_few_prs
 ow_mutate unmerged-is-exit-1 'the window has not opened"; exit 2' 'the window has not opened"; exit 1' row_ow_notmerged
-ow_mutate units-read-newest-first 'head -n "$MAX_UNITS" "$WORK/readable.tsv" > "$WORK/read.tsv"' 'tail -n "$MAX_UNITS" "$WORK/readable.tsv" > "$WORK/read.tsv"' row_ow_unit_cap
-ow_mutate newest-merge-group-not-forced 'tail -n "$NEWEST_MG" >> "$WORK/read.tsv"' 'tail -n 0 >> "$WORK/read.tsv"' row_ow_unit_cap
+ow_mutate units-read-newest-first 'head -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/read.tsv"' 'tail -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/read.tsv"' row_ow_unit_cap
+ow_mutate newest-merge-group-not-forced 'tail -n "$NEWEST_MG" '"$GT$GT"' "$WORK/read.tsv"' 'tail -n 0 '"$GT$GT"' "$WORK/read.tsv"' row_ow_unit_cap
 ow_mutate cancelled-run-read 'awk -F'"'"'\t'"'"' '"'"'$8 != "cancelled"'"'"' "$RUNS"' 'awk -F'"'"'\t'"'"' '"'"'1'"'"' "$RUNS"' row_ow_cancel_run
 ow_mutate one-page-only '    [ "$n" -ge 100 ] || break' '    break' row_ow_pages
 ow_mutate page-cap-ignored '    if [ "$page" -ge "$MAX_PAGES" ]; then TRUNC=1; break; fi' '    :' row_ow_one_page
@@ -3218,7 +3218,6 @@ ow_mutate ceiling-owed-note-dropped '(PROVISIONAL ceiling; ceiling re-rule owed:
 ow_mutate merged-at-spliced 'jq -r --arg m "$merged_at" --arg ev "$ev" '"'"'.workflow_runs[]? | select(.created_at > $m)' 'jq -r --arg ev "$ev" '"'"'.workflow_runs[]? | select(.created_at > "'"'"'"$merged_at"'"'"'")' row_ow_static
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
-# </ratchet-section>
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== mutation rows (each edit lands once, leaves valid python, leaves the row GREEN on the pristine SUT, and the named row must then FAIL)"
 MUT_RUN=0; MUT_KILLED=0
@@ -3800,7 +3799,7 @@ mutate ratchet-floor-extra-dropped '    if others:' '    if False:' row_rt_fl_hr
 mutate ratchet-floor-extra-hazard-list-only '    others = [x for x in c.extra if not x.startswith("AFFECTED_SUMMARY ")]' '    others = [x for x in c.extra if x.split("\t")[0] in ("AFFECTED_FALLBACK", "AFFECTED_UNRESOLVED", "AFFECTED_RUNNER_IN_SCOPE", "AFFECTED_DIVERGENT")]' row_rt_fl_unknown
 mutate ratchet-floor-extra-ignores-space-prefixed-rows '    others = [x for x in c.extra if not x.startswith("AFFECTED_SUMMARY ")]' '    others = [x for x in c.extra if not x.startswith(("AFFECTED_SUMMARY ", " AFFECTED_SELECTED"))]' row_rt_fl_spacerow
 mutate ratchet-floor-short-row-dropped '    if c.short_rows:' '    if False:' row_rt_fl_shortrow
-mutate ratchet-floor-zero-suites-dropped '    if c.suites == 0:
+mutate ratchet-floor-zero-suites-dropped '    if not c.suites:
         raise RatchetInfra("floor-no-suites"' '    if False:
         raise RatchetInfra("floor-no-suites"' row_rt_zero_msg
 mutate ratchet-floor-no-files-read-dropped '    if c.files_read == 0:' '    if False:' row_rt_fl_allon
@@ -3964,6 +3963,10 @@ mutate ratchet-refs-cap-raised '    for anchor, ordinal, rel, no, text in refs[:
 mutate ratchet-git-diff-without-timeout 'sha, "HEAD", "--"], cwd=root, binary=True, timeout=GIT_TIMEOUT)' 'sha, "HEAD", "--"], cwd=root, binary=True)' row_rt_git_timeout
 mutate ratchet-stale-line-remedy-without-confirm '        if "stale-line" in names:' '        if False:' row_rt_text_stale
 mutate ratchet-deleted-baseline-remedy-regenerates '                         ["remedy: restore it from main: git checkout origin/main -- %s" % rel]))' '                         ["remedy: regenerate it: python3 -I scripts/ci-pr-affected-replay.py ratchet --print-baseline > %s" % rel]))' row_rt_deleted
+# the harness sees a crash in this block: a NameError in ratchet_floors exits 2 (internal) and prints `replay: internal error`, which rt_go logs as rc 4
+mutant_outcome ctl-ratchet-floors-crash 'def ratchet_floors(c):' 'def ratchet_floors(c):
+    raise NameError("boom")' row_rt_floor_control
+[[ "$MUT_RESULT" = crashed ]] && pass "control: a NameError inside the ratchet (exit 2 internal, not rc 4) is CRASHED, not killed" || fail "control: a ratchet crash scored as '$MUT_RESULT'"
 
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== controls: the harness reports a survivor, an unparseable mutant, a red row and an edit that did not land"
@@ -3997,7 +4000,7 @@ mutant_outcome ctl-cp-crash 'def cp_upper(k, n, conf=0.95):' 'def cp_upper(k, n,
 [[ "$MUT_RESULT" = crashed ]] && pass "control: a cp_upper() that raises is CRASHED, not killed" || fail "control: cp_upper crash scored as '$MUT_RESULT'"
 mutant_outcome ctl-ambiguous-old 'import ' 'import  ' row_verdict_fail
 [[ "$MUT_RESULT" = edit-failed ]] && pass "control: an edit whose 'old' text occurs more than once does not land (edit-failed), it is never applied to the first occurrence" || fail "control: ambiguous edit scored as '$MUT_RESULT'"
-mutant_outcome ctl-load-accept-nameerror 'def load_accept(path):' 'def load_accept(path):
+mutant_outcome ctl-load-accept-nameerror 'def load_accept(path, base=None):' 'def load_accept(path, base=None):
     raise NameError("boom")' row_acc_isdir
 [[ "$MUT_RESULT" = crashed ]] && pass "control: a NameError in load_accept is CRASHED, not killed (row_acc_isdir only allows the one unmapped-OSError mutant to crash)" || fail "control: load_accept NameError scored as '$MUT_RESULT'"
 mutant_outcome ctl-cp-nameerror 'def cp_upper(k, n, conf=0.95):' 'def cp_upper(k, n, conf=0.95):
@@ -4021,7 +4024,9 @@ ctl_duplicate_refused() {  # a renamed duplicate of an earlier mutant (same edit
   local p0=$passes f0=$fails n0=${#FAILED[@]} m0=$MUT_RUN k0=$MUT_KILLED last
   mutate ctl-dup-a 'import argparse' 'import argparse  # dup' row_verdict_fail >/dev/null 2>&1
   mutate ctl-dup-b 'import argparse
+import errno
 import hashlib' 'import argparse  # dup
+import errno
 import hashlib' row_verdict_fail >/dev/null 2>&1   # spelled differently, the same mutated file
   last="${FAILED[${#FAILED[@]}-1]}"
   passes=$p0; fails=$f0; MUT_RUN=$m0; MUT_KILLED=$k0
@@ -4037,12 +4042,12 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=901   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 3 mutant-killed passes for the collection-materialization spellings (#10724) (measured below)
+FLOOR_ASSERTIONS=1069   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) (measured below)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=357   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 + 56 added by the S4 ratchet PR3a + 3 scan-hidden collection-materialization spellings (#10724)
+FLOOR_MUTANTS=420   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 + 56 added by the S4 ratchet PR3a + 63 added by its review fix round A + 3 scan-hidden collection-materialization spellings (#10724)
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi

@@ -1821,7 +1821,7 @@ def ratchet_floors(c):
         raise RatchetInfra("floor-rows-vs-of", "the selector printed %d AFFECTED_SELECTED row(s) but its summary says of=%s" % (c.suites, of.group(1)))
     if c.index.faults:
         raise RatchetInfra("floor-unreadable", "%d tracked input(s) could not be read (a permission or I/O error, not a missing file): the census is incomplete" % len(c.index.faults))
-    if c.suites == 0:
+    if not c.suites:
         raise RatchetInfra("floor-no-suites", "a census over zero suites proves nothing")
     if c.files_read == 0:
         raise RatchetInfra("floor-no-suites", "a census that read zero files proves nothing")
