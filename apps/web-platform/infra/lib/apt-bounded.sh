@@ -47,8 +47,13 @@
 #             On EVERY RETURN path (success, decline, apt rc, the 98 unarmed case) it ends with a container-side `chmod -R a+rwX` of
 #             the state dir: container root creates the cache files, and apt chowns lists/partial and archives/partial
 #             to its download user (`_apt`) with mode 0700 or stricter, so without it the host user could not remove the
-#             state dir. It then clears group/other write on `<state>/apt-bounded.sh` again (the host `rm -rf` needs
-#             DIRECTORY permissions, not that file's): the next container sources that file as root.
+#             state dir. It then protects `<state>/apt-bounded.sh`, which the next container sources as root, in TWO ways
+#             (the host `rm -rf` needs DIRECTORY permissions, not that file's): group/other write is cleared on the file
+#             (so it cannot be edited in place), AND the state dir carries the sticky bit (chmod +t, after the recursive
+#             chmod, which would otherwise leave a 0777 dir that any uid can rename over). With the sticky bit only the
+#             file's owner, the dir's owner or root can rename or remove an entry, so the download user `_apt` (uid 42), which
+#             runs inside the same container and can write the dir, cannot `mv` a replacement over the script or `rm` it. It
+#             can still create its own files in the dir, and the host user (the owner) can still `rm -rf` the whole tree.
 #             Two paths do NOT reach the chmod, by construction and not changed here:
 #               - `assert_fixture_dir`'s `exit 2` (an empty/relative/synthetic state or log path ends the shell before
 #                 any state exists to open);
@@ -125,11 +130,16 @@ gd_apt_state_summary() {
 GD_APT_TAIL_LINES=20
 
 # Make the state dir removable by the host user whatever uid container root and `_apt` left files under, WITHOUT leaving the
-# script the next container sources as root writable by anyone else: chmod -R a+rwX gives the file 0666, so clear go-w on it.
+# script the next container sources as root replaceable by anyone else. Two separate holes, two separate fixes:
+#   - edit in place: chmod -R a+rwX gives the file 0666, so clear go-w on it;
+#   - rename/remove over it: the dir is a+rwX (0777), where any uid with write on the DIR can `mv new apt-bounded.sh` over a file it
+#     cannot write, so set the sticky bit on the dir AFTER the recursive chmod (a recursive a+rwX preserves an existing t, but this
+#     order does not depend on that). Only the file's owner, the dir's owner or root can then rename or remove entries.
 _gd_apt_open_state() {
   local rc=0
   chmod -R a+rwX "$1" || rc=$?
-  chmod go-w "$1/apt-bounded.sh" 2>/dev/null || true   # also when the recursive chmod only partly succeeded
+  chmod +t "$1" || rc=$?   # also when the recursive chmod only partly succeeded
+  chmod go-w "$1/apt-bounded.sh" 2>/dev/null || true
   return "$rc"
 }
 
@@ -155,22 +165,40 @@ _gd_apt_scrubbed_tail() {
 # HOST: the excerpt of a captured container log for a failure or skip message. gd_apt_out_tail <file> [fallback-lines]
 # With a FIXTURE_APT_CAUSE line in the file it prints that line FIRST, then exactly the scrubbed block that precedes it (the
 # tail_lines= count the cause carries, never more than GD_APT_TAIL_LINES): at most 1 + GD_APT_TAIL_LINES lines, and nothing
-# from the unscrubbed container stdout around the block. Cause first because every consumer truncates from the END: the
+# from the unscrubbed container stdout around the block. A cause line WITHOUT a valid tail_lines= (absent, empty, non-numeric,
+# or absurdly long) shows the cause line ALONE: the count is what proves the lines above it are the scrubbed block, so without
+# it nothing above the cause may be trusted. Cause first because every consumer truncates from the END: the
 # runner keeps grep -A3 around the first FAIL marker, 40 lines and 2000 chars per line, and the one-line consumers join the
 # lines with `tr`. With no cause line (an arm with no apt, a container that died earlier) it is the plain `tail -n`.
+# EVERY line it prints has the workflow-command openers defused (`::` -> `: :`, `##[` -> `#-#[`): the captured text is container
+# output and a consumer's failure/skip message lands in a CI log, where a line starting `::error::` would be parsed as a command.
 gd_apt_out_tail() {
-  local f="${1:?gd_apt_out_tail needs a captured log}" n="${2:-5}" hit ln cause k start
+  _gd_apt_out_tail_raw "$@" | sed -e 's/::/: :/g' -e 's/##\[/#-#[/g'
+  return 0
+}
+
+_gd_apt_out_tail_raw() {
+  local f="${1:?gd_apt_out_tail needs a captured log}" n="${2:-5}" hit ln cause k=0 start
   hit="$(grep -an '^FIXTURE_APT_CAUSE:' "$f" 2>/dev/null | tail -n 1)"
   if [ -z "$hit" ]; then tail -n "$n" "$f" 2>/dev/null; return 0; fi
   ln="${hit%%:*}"; cause="${hit#*:}"
-  k="$GD_APT_TAIL_LINES"
   case "$cause" in *" tail_lines="[0-9]*) k="${cause##* tail_lines=}"; k="${k%%[!0-9]*}" ;; esac
-  case "$k" in ''|*[!0-9]*) k="$GD_APT_TAIL_LINES" ;; esac
   k=$(( 10#$k )); [ "$k" -gt "$GD_APT_TAIL_LINES" ] && k="$GD_APT_TAIL_LINES"
   printf '%s\n' "$cause"
   [ "$k" -gt 0 ] || return 0
   start=$(( ln - k )); [ "$start" -lt 1 ] && start=1
   sed -n "${start},$(( ln - 1 ))p" "$f" 2>/dev/null
+}
+
+# HOST: the SHORT cause field for a skip message, so it survives the runner's `cut -b1-400` of every `SKIP (loud): ` line (the
+# excerpt above is far longer). gd_apt_skip_field <captured-log> prints one token run, `apt=<cause> stage=<s> attempt=<n>`, or
+# `apt=none` when the log carries no (parseable) FIXTURE_APT_CAUSE line. Callers put it FIRST in the message, before any prose.
+# Reduced to [A-Za-z0-9=_. -] and capped at 80 bytes: it is container output going into a CI log.
+gd_apt_skip_field() {
+  local f="${1:?gd_apt_skip_field needs a captured log}" c
+  c="$(grep -a '^FIXTURE_APT_CAUSE: ' "$f" 2>/dev/null | tail -n 1)"
+  c="$(printf '%s\n' "$c" | sed -nE 's/^FIXTURE_APT_CAUSE: ([A-Za-z0-9_-]+) stage=([A-Za-z0-9_-]+) attempt=([0-9]+)( .*)?$/apt=\1 stage=\2 attempt=\3/p' | head -c 80)"
+  printf '%s' "${c:-apt=none}"
 }
 
 # The public entry: runs the bounded cycle and then makes the state dir removable by the host user whatever the

@@ -1394,6 +1394,8 @@ else
   # there look safe, and any inserted command silently clobbers `$?`. NOT `local` — this arm is
   # top-level, where `local` errors, leaves the variable unset, and `set -u` kills the suite.
   _t5m_tail="$(gd_apt_out_tail "$TMP/out/stdout" 5)"
+  _t5m_apt="$(gd_apt_skip_field "$TMP/out/stdout")"   # short, and FIRST in the skip string: the runner relays only its first 400 bytes
+  _t5m_tail_1="${_t5m_tail%%$'\n'*}"   # the skip string carries ONE line (the cause line when there is one): a multi-line tail would split the relayed SKIP line
   # AP-021/ADR-166: the verdict is derived from MARKER ABSENCE, which is not itself a cause.
   # The rc is therefore OFFERED with its measured classes and never asserted as the reason —
   # this arm did not measure why a download failed and does not claim to.
@@ -1484,7 +1486,7 @@ else
   case "$_t5m_state" in
     did-not-run)
       # 2: the premise and the result, neither of which the taken branch got to make.
-      arm_skip "T5 MUTATION did not run: the driver never reached the download block, so this arm demonstrated neither that the wrong digest was rejected nor that CHMOD_RAN is reachable. ${_t5m_rc_note}; T5 primary reached the driver: ${_t5_primary_reached}; tail: ${_t5m_tail:-<empty: an apt failure now prints a scrubbed tail plus FIXTURE_APT_FAILED into this capture, so empty means the run died before the driver script even started — see the deferred /out/setup.log item>}" 2
+      arm_skip "T5 MUTATION did not run: ${_t5m_apt}; the driver never reached the download block, so this arm demonstrated neither that the wrong digest was rejected nor that CHMOD_RAN is reachable. ${_t5m_rc_note}; T5 primary reached the driver: ${_t5_primary_reached}; tail (first line): ${_t5m_tail_1:-<empty: an apt failure now prints a scrubbed tail plus FIXTURE_APT_FAILED into this capture, so empty means the run died before the driver script even started — see the deferred /out/setup.log item>}" 2
       ;;
     harness-defect)
       fail "T5 MUTATION: docker exited 0 but the driver's execution marker never printed — harness defect, not an environment skip; the checksum-rejection premise is undemonstrated" \
@@ -1623,6 +1625,7 @@ _t17m_rc_note="docker rc=${_t17m_rc} (measured classes: 125 docker CLI/image pul
 # Tail captured into a variable BEFORE the branch, not substituted inline in a `fail` argument:
 # same construction as _t5m_tail, and it keeps the arm clear of the shell-capture-exit lint.
 _t17m_tail="$(gd_apt_out_tail "$TMP/out/t17m.stdout" 3)"
+_t17m_apt="$(gd_apt_skip_field "$TMP/out/t17m.stdout")"   # FIRST in the skip string (the runner relays only its first 400 bytes)
 if [ -s "$TMP/out/capture.log" ]; then pass
 elif grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null; then
   # FIXTURE RUNG, ABOVE BOTH MARKER RUNGS AND ABOVE THE VACUITY ELSE (review). The capture
@@ -1637,7 +1640,7 @@ elif grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null; then
 elif ! grep -qx "$_T17M_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null \
      && printf '%s\n' $_T17M_ENV_RCS | grep -cx "$_t17m_rc" >/dev/null; then
   # 1: the vacuity check itself, which the taken branch never got to make.
-  arm_skip "T17 MUTATION did not run: apt starved before the mutant executed, so this arm demonstrated nothing about whether removing the rc guard makes a healthy run emit. This is a FIXTURE decline, NOT the vacuity finding. ${_t17m_rc_note}" 1
+  arm_skip "T17 MUTATION did not run: ${_t17m_apt}; apt starved before the mutant executed, so this arm demonstrated nothing about whether removing the rc guard makes a healthy run emit. This is a FIXTURE decline, NOT the vacuity finding. ${_t17m_rc_note}" 1
 elif ! grep -qx "$_T17M_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null; then
   # rc OUTSIDE the allowlist with no marker is a defect in THIS file (a mistyped -v source makes
   # docker exit 125 with no marker, but 125 is allowlisted; anything else is ours). Reading every
@@ -1911,7 +1914,8 @@ S1DRV
     S1_FIXTURE_SEEN=no
     grep -qx "$_S1_FIXTURE_MARKER" "$TMP/s1out/stdout" 2>/dev/null && S1_FIXTURE_SEEN=yes
     S1_STATE="$(_s1_classify "$S1_DOCKER_RC" "$S1_MARKER_SEEN" "$S1_FIXTURE_SEEN" "$S1_MARKER_SEEN")"
-    S1_NOTE="docker rc=${S1_DOCKER_RC} (measured classes: 125 docker CLI/image pull, 100 apt under the container's outer set -e — offered as classification, not asserted as cause); stage rc=${S1_RC:-<no marker>}; execution marker seen: ${S1_MARKER_SEEN}; fixture marker seen: ${S1_FIXTURE_SEEN}; tail: $(gd_apt_out_tail "$TMP/s1out/stdout" 3 | tr '\n' ' ')"
+    S1_APT="$(gd_apt_skip_field "$TMP/s1out/stdout")"
+    S1_NOTE="${S1_APT}; docker rc=${S1_DOCKER_RC} (measured classes: 125 docker CLI/image pull, 100 apt under the container's outer set -e — offered as classification, not asserted as cause); stage rc=${S1_RC:-<no marker>}; execution marker seen: ${S1_MARKER_SEEN}; fixture marker seen: ${S1_FIXTURE_SEEN}; tail: $(gd_apt_out_tail "$TMP/s1out/stdout" 3 | tr '\n' ' ')"
   }
 
   # ERREXIT ORDERING IS S1's LOAD-BEARING PRECONDITION, so assert it rather than assume it.
@@ -2016,7 +2020,7 @@ S1DRV
   case "$S1_STATE" in
     did-not-run)
       # 2: the stage's own exit status, and the emptiness of its capture.
-      arm_skip "S1 healthy run did not run: the container never reached the stage, so this arm demonstrated neither that the sshd_config stage survives a fresh 24.04 nor that a healthy stage emits nothing. ${S1_NOTE}" 2
+      arm_skip "S1 healthy run did not run: ${S1_APT}; the container never reached the stage, so this arm demonstrated neither that the sshd_config stage survives a fresh 24.04 nor that a healthy stage emits nothing. ${S1_NOTE}" 2
       ;;
     harness-defect)
       fail "S1: docker exited ${S1_DOCKER_RC} with no execution marker and an rc outside _S1_ENV_RCS — harness defect, not an environment skip; the fresh-boot survival premise is undemonstrated" \
@@ -2113,7 +2117,7 @@ S1DRV
       did-not-run)
         # 3: the mutant's exit status, the fatal it should have emitted, and the privsep
         # string that ties this arm to the measured production failure.
-        arm_skip "S1 MUTATION did not run: the container never reached the stage, so this arm demonstrated neither that the missing mkdir aborts the stage nor that it reproduces the measured privsep failure. ${S1_NOTE}" 3
+        arm_skip "S1 MUTATION did not run: ${S1_APT}; the container never reached the stage, so this arm demonstrated neither that the missing mkdir aborts the stage nor that it reproduces the measured privsep failure. ${S1_NOTE}" 3
         ;;
       harness-defect)
         fail "S1 MUTATION: docker exited ${S1_DOCKER_RC} with no execution marker and an rc outside _S1_ENV_RCS — harness defect, not an environment skip" \
@@ -3254,7 +3258,7 @@ if [ "$_r4_live" -eq 0 ]; then
   echo "FIXTURE-FAIL: the R4/R3 capture fixture was starved — the three arms below make NO claim about the emitter."
   echo "FIXTURE-FAIL: docker rc=${_r4_rc}; sentinel.ok $( [ -f "$TMP/r4out/sentinel.ok" ] && echo present || echo absent )"
   echo "FIXTURE-FAIL: container stdout tail follows"
-  tail -n 25 "$TMP/r4out/stdout" 2>/dev/null | sed 's/^/FIXTURE-FAIL: /'
+  gd_apt_out_tail "$TMP/r4out/stdout" 25 | sed 's/^/FIXTURE-FAIL: /'
   fail "R4/R3 fixture liveness gate: the capture path was not proven live for this container run" \
        "docker rc=${_r4_rc}; sentinel.ok $( [ -f "$TMP/r4out/sentinel.ok" ] && echo present || echo absent ). See the FIXTURE-FAIL lines above."
 else
