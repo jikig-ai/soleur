@@ -2391,6 +2391,17 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/apply-delivery-gap-follower — the synthetic suite reads both apply
+# workflows and the shared infra runbook; keep those edits on its test path.
+AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
+  ".github/workflows/apply-delivery-gap-follower.yml"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
+  "knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md"
+  "plugins/soleur/test/apply-delivery-gap-follower.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # Offline qualification contract reads every committed runtime/plugin input.
 AFFECTED_SCRIPTS_LIB_CODEX_QUALIFICATION_TEST_SH_PATHS=(
   "scripts/codex-qualification/"
