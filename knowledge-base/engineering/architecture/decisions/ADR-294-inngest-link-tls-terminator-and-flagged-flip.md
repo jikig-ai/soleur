@@ -149,3 +149,34 @@ because `delegation-verify.sh` denies `confirm=`, so no valid recorded Standing 
 form, before A5 (the signing-key rotation): after A5 the new key would travel over plaintext `:8288` if the link were turned off, so
 `action=off` after A5 is form (b) only. See "Production Envelope for the post-merge acts" in the Inngest server runbook. The dated go
 quoted in the Consequences sentence "The owner's go is procedural" is superseded by the runbook's authority wording.
+
+## Addendum (2026-10-22, the first flip attempt)
+
+The first `flip` (workflow run 39817708732) failed at the canary's `inspect` check with `cause=none` on web-1. The flip's revert step
+(its flag write ran as apply run 39817975968) redeployed both hosts; its own verdict did not verify web-2's canary and swap or the scheme the running containers resolved, and both
+hosts' `class=resolved ... state=http_default scheme=http` rows were read afterwards.
+
+**What is established and what is not.** Reproduced locally (Docker 29.9, `docker-evidence.md`): `docker run` keeps an `--env-file` entry **and** a
+`-e` entry for the same key, `docker inspect` lists both, and the `-e` value wins when the process starts. The canary requires exactly one
+`INNGEST_BASE_URL=` and one `NODE_EXTRA_CA_CERTS=` line, so a Doppler snapshot that pins `INNGEST_BASE_URL` would fail it, which is consistent with the failed run (`cause=none`, no count recorded) and not proven by it. The
+old check printed no counts (`cause=none`), so no production run has measured the line count, and the Doppler key set was never read: the pin is
+the **most likely** cause, not an observed one. The first measurement is the next flip's `check=inspect cause=<token> url_lines= ...` row, and
+the `-e`-wins behaviour was measured on one Docker version (the hosts' own is unknown). The mock docker reported the `-e` pairs only, so no
+test could show the duplicate.
+
+New invariant: **the `-e` flags are the only source of `INNGEST_BASE_URL` and `NODE_EXTRA_CA_CERTS` in the canary and prod containers.**
+`ci-deploy.sh` scrubs both names from the env-file once per deploy (`inngest_link_scrub_env_file`, after the resolver, before the first
+`docker run`). The `inspect` check stays strict and names its first failing condition
+(`cause=inspect_failed|url_count|url_value|ca_count|ca_value` with four fixed counts) with its own deploy-state reason
+`canary_inngest_link_inspect_failed`. A scrub fault aborts a strict (flag on) deploy with `inngest_env_scrub_failed` and is logged and continued
+otherwise, so `action=off`, the flip's revert and any flag-off deploy are never blocked by it (with the flag on it blocks like a resolver fault).
+Ruled by the CTO agent, 2026-10-22. Rejected alternatives: putting both names on `-e` for every variable (every Doppler secret would sit on the
+docker argv); an `--env-file` allowlist (the prd key set is open-ended and owned by Doppler, so an allowlist silently drops new secrets);
+de-duplicating at inspect time with last-wins (the proof would then depend on merge order and the Docker version, and a real duplicate would pass).
+The scrub regex, `REQUIRED_ENV` in `lib/docker-run-tuple.py` and the two counts in `inngest_link_canary_check` name the same two variables; a
+resolver-suite row pins that they agree.
+
+Accepted residuals: the first-boot tuple in `cloud-init.yml` keeps its duplicate (no inspect check runs there; the next deploy replaces it), the
+prod container is not inspected (the canary's proof transfers to it only for these two names, through the shared env-file), the image's own `ENV`
+was not measured, a plainly spelled `NODE_EXTRA_CA_CERTS` never reaches the scrub (the key overlay refuses it first; a no-break-space or BOM prefixed spelling can), and the overlay's `grep` weakness
+is tracked separately (#10855).
