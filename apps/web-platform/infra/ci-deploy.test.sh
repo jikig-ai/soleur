@@ -12833,7 +12833,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # SBS-8d2 (the ledger-write stale wording), SBS-8f2 (the failed-verdict + failed-write stale row), SBS-8f3/8f4 (the guarded removal keeps a foreign-stamped
 # record and one not older than the run) and SBS-12a2 (the pre-exec cap pinned in comment-stripped source).
 # Merged with main (#10136/#10501 and siblings): main's own rows took the bound 622 -> 649 (+27), so the combined bound is 692 + 27 = 719, confirmed against the measured total.
-CI_DEPLOY_ASSERT_FLOOR=719
+# #10934 (the selfgate phase fields): raised 719 -> 732, the measured total of the green run (732/732) after the https self-gate route moved onto the shared curl profile table and two end-to-end rows (raw_short3 passes the gate, req_reset fails it with the phase event) were added.
+CI_DEPLOY_ASSERT_FLOOR=732
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

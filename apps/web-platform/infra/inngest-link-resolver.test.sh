@@ -1258,8 +1258,9 @@ row_S5_event_grammar_on_both_sinks() {
     detail="$(grep 'api/7/store/' "$RUN/curl.argv" | grep -o '"detail":"[^"]*"' | head -n1 | sed -e 's/^"detail":"//' -e 's/"$//')"
     need "[$p] exactly one Sentry POST expected for the selfgate_failed error, found $n" "$([ "$n" = 1 ] && echo 0 || echo 1)" || return 1
     need "[$p] the Sentry extra.detail is [$detail], want the journald detail [$jd]" "$([ -n "$jd" ] && [ "$detail" = "$jd" ] && echo 0 || echo 1)" || return 1
-    need "[$p] the Sentry event does not carry classification=selfgate_failed" "$(grep 'api/7/store/' "$RUN/curl.argv" | grep -q '"classification":"selfgate_failed"' && echo 0 || echo 1)" || return 1
-    need "[$p] the Sentry body carries a value: $(grep 'api/7/store/' "$RUN/curl.argv" | grep -oE '10\.0\.1\.[0-9]+|leak\.invalid' | head -n1)" "$(grep 'api/7/store/' "$RUN/curl.argv" | grep -qE 'leak\.invalid|garbage|8443' && echo 1 || echo 0)" || return 1
+    sentry_body="$(grep 'api/7/store/' "$RUN/curl.argv" || true)"
+    need "[$p] the Sentry event does not carry classification=selfgate_failed" "$(grep -q '"classification":"selfgate_failed"' <<< "$sentry_body" && echo 0 || echo 1)" || return 1
+    need "[$p] the Sentry body carries a value: $(grep -oE '10\.0\.1\.[0-9]+|leak\.invalid' <<< "$sentry_body" | head -n1)" "$(grep -qE 'leak\.invalid|garbage|8443' <<< "$sentry_body" && echo 1 || echo 0)" || return 1
   done
 }
 SG_S6='raw_empty@124|124|none|unknown|0|0|0
@@ -2185,7 +2186,7 @@ printf '\n=== inngest-link-resolver: %d passed, %d failed, %d skipped (%d rows) 
 # The anti-vacuity floor comes FIRST: scripts/guard-vacuity-floor.test.sh neuters every counter and runs the first floor it
 # finds, which must be this one (the accounting identity below holds trivially at zero).
 # #10934: 203 -> 249 (+46: S1 to S9b = 14 rows, H1b, H8, H7a to H7c, H6 x6, H9 = 12, M22a to M22t = 20), measured from the RED run on the unmodified block;
-# the post-fix run must re-measure it (Phase 5)
+# re-measured from the GREEN run after the fix: 249 rows ran (252 passes, 0 failures, 0 skips; the H6 harness row was changed, no row was added)
 MIN_ROWS=249
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
