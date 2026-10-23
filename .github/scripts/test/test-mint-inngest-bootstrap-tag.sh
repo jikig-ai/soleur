@@ -96,7 +96,7 @@ FAIL=0
 # broken-fixture FAIL, and never free coverage. Construction-invariant checks
 # are fail-only, ZERO counted, so a skipped row charges exactly its cost.
 SKIPPED_ASSERTIONS=0
-MIN_ASSERTIONS=673   # anti-vacuity floor = the green run's exact count (665 nominal on 2026-10-04, +3 for the lowercase Tier-A row — the floor had drifted 8 below the real count as rows were added without a bump; re-derived 2026-10-23 at 673 with #10921: fl.walk's precondition became fail-only/zero-counted (−1) and the skip-machinery selftest added one row (+1) — net 0); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=674   # anti-vacuity floor = the green run's exact count (665 nominal on 2026-10-04, +3 for the lowercase Tier-A row — the floor had drifted below the real count as rows were added without a bump; re-derived 2026-10-23 at 673 with #10921, re-measured 674 in the fix round: fl.walk's precondition became fail-only/zero-counted (−1) and the skip-machinery selftest's verdict now LANDS on live counters (+1 — it was previously emitted inside the snapshot window and erased, contributing 0); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -437,12 +437,12 @@ gout_has() { # gout_has <id> <line> — GITHUB_OUTPUT carries exactly this line
 # failure is reported with printf + exit 2, never through the helpers under test;
 # the counters are unwound afterwards, so no self-test verdict reaches the total.
 # ---------------------------------------------------------------------------
-st_p0=$PASS st_f0=$FAIL st_s0=$SKIPPED_ASSERTIONS st_mp=$PASS st_mf=$FAIL
+st_p0=$PASS st_f0=$FAIL st_s0=$SKIPPED_ASSERTIONS st_mp=$PASS st_mf=$FAIL st_ms=$SKIPPED_ASSERTIONS
 st_die() { printf 'FATAL [selftest:%s]: %s\n' "$1" "$2"; exit 2; }
 st_moved() { # st_moved <label> <want-pass-delta> <want-fail-delta> — since the last mark
-  local dp=$((PASS - st_mp)) df=$((FAIL - st_mf))
-  (( dp == $2 && df == $3 )) || st_die "$1" "counters moved +${dp}/+${df}, want +$2/+$3"
-  st_mp=$PASS st_mf=$FAIL
+  local dp=$((PASS - st_mp)) df=$((FAIL - st_mf)) ds=$((SKIPPED_ASSERTIONS - st_ms))
+  (( dp == $2 && df == $3 && ds == 0 )) || st_die "$1" "counters moved +${dp}/+${df}/+${ds}skip, want +$2/+$3/+0"
+  st_mp=$PASS st_mf=$FAIL st_ms=$SKIPPED_ASSERTIONS
 }
 LAST_OUT="$TMP/selftest.out"; LAST_ERR="$TMP/selftest.err"; LAST_GOUT="$TMP/selftest.gout"
 printf 'result=selftest-value\n' > "$LAST_OUT"
@@ -1143,16 +1143,24 @@ a_out_has 'fl.shallow:wording' 'is-shallow-repository='
 # silently no-opped when the object lived in a pack.
 mf_new fl-walk
 mf_commit c2   # a real commit below the break — the break stays mid-history
-corrupt_walk_break "$F_REPO" refs/heads/main
+flw_ok=1
+# The forge's rc is a construction invariant too: an unchecked failure leaves a
+# HEALTHY graph the walk-contract probe reads as "contract absent" → a counted
+# SKIP — charging a harness defect into the bounded skip budget (#10921 fix
+# round). fail-only, zero counted, never routes to corrupt_skip.
+corrupt_walk_break "$F_REPO" refs/heads/main \
+  || { fail 'fl.walk:invariant-forge-applied' "corrupt_walk_break failed — a harness defect, never a skip"; flw_ok=0; }
 git -C "$F_REPO" tag -a vinngest-v1.1.41 -m r HEAD
 # Branch order is load-bearing (ADR-188): the construction invariant first —
 # fail-only, ZERO counted, a harness defect that can never route to the skip —
 # then the walk-contract probe, then the row.
-if corrupt_invariant_dead_absent 'fl.walk' "$F_REPO"; then
+if (( flw_ok )) && corrupt_invariant_dead_absent 'fl.walk' "$F_REPO"; then
   # The probe contract is the SUT's own acceptance: NON-EMPTY walk stderr (the
   # mint refuses on ANY walk_err text, not on 'Could not read' specifically).
   walk_err=$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null)
-  if corrupt_probe_forced_skip || [[ -z "$walk_err" ]]; then
+  if corrupt_probe_forced_skip; then
+    corrupt_skip 'fl.walk' 3 "forced-divergence exercise (CORRUPT_WALK_PROBE_FORCE=skip) — an AC5 arm, not an environment measurement"
+  elif [[ -z "$walk_err" ]]; then
     corrupt_skip 'fl.walk' 3 "runner git does not exhibit the non-empty-stderr corrupt-walk contract (walk stderr: '${walk_err:-<empty>}')"
   else
     run_mint fl-walk --dry-run
@@ -1171,25 +1179,34 @@ mf_new fl-skip-selftest
 fl_p0=$PASS fl_f0=$FAIL fl_s0=$SKIPPED_ASSERTIONS
 # (a) A dead oid that turns out READABLE is a construction-invariant FAIL,
 # never a skip: write the nonce blob for real and drive the check.
-printf 'soleur-corrupt-graph dead-parent\n' | git -C "$F_REPO" hash-object -w --stdin >/dev/null
+printf '%s\n' "$CORRUPT_DEAD_NONCE" | git -C "$F_REPO" hash-object -w --stdin >/dev/null
 { corrupt_invariant_dead_absent 'fl.selftest' "$F_REPO"; } > "$TMP/skip.st1" 2>&1 || true
 # (b) Forced-skip: exactly one captured SKIP (loud): + one ::warning::, and the
-# charge moves SKIPPED_ASSERTIONS by exactly the declared cost.
-{ CORRUPT_WALK_PROBE_FORCE=skip
-  corrupt_probe_forced_skip && corrupt_skip 'fl.selftest-forced-skip' 5 'selftest: forced-divergence exercise'
+# charge moves SKIPPED_ASSERTIONS by exactly the declared cost. ENV-PREFIX the
+# knob, never a standalone assignment — `{ VAR=skip ...; }` would persist the
+# force in the suite's shell past the block and arm a force-skip for every
+# later corrupt-walk row.
+{ CORRUPT_WALK_PROBE_FORCE=skip corrupt_probe_forced_skip \
+    && corrupt_skip 'fl.selftest-forced-skip' 5 'selftest: forced-divergence exercise'
 } > "$TMP/skip.st2" 2>&1
 # (c) An unwired CORRUPT_WALK_PROBE_FORCE value is flagged — only 'skip' is a
 # defined arm.
 { CORRUPT_WALK_PROBE_FORCE=present corrupt_probe_forced_skip; } > "$TMP/skip.st3" 2>&1 || true
 fl_fd=$((FAIL - fl_f0))
 fl_sd=$((SKIPPED_ASSERTIONS - fl_s0))
+fl_pass=0
 [[ "$fl_fd" == 2 && "$fl_sd" == 5 \
    && "$(grep -cF 'SKIP (loud): fl.selftest-forced-skip' "$TMP/skip.st2")" == 1 \
-   && "$(grep -c '^::warning::' "$TMP/skip.st2")" == 1 ]] \
+   && "$(grep -c '^::warning::' "$TMP/skip.st2")" == 1 ]] && fl_pass=1
+# Restore the pre-block counters BEFORE emitting the verdict — the exercised
+# (a)+(c) FAIL/(b) SKIP pollution is unwound, but the verdict itself must land
+# on live counters (the bump suite's shape): emitting inside the snapshot
+# window printed a FAIL line and exited 0, and counted a PASS row at 0.
+PASS=$fl_p0 FAIL=$fl_f0 SKIPPED_ASSERTIONS=$fl_s0
+[[ "$fl_pass" == 1 ]] \
   && pass 'selftest:skip-machinery-both-directions' \
   || fail 'selftest:skip-machinery-both-directions' \
        "FAIL moved $fl_fd (want 2), SKIPPED moved $fl_sd (want 5); captured: $(paste -sd'|' "$TMP/skip.st2")"
-PASS=$fl_p0 FAIL=$fl_f0 SKIPPED_ASSERTIONS=$fl_s0
 
 # xtrace refusal: `bash -x` with either credential set exits 78 BEFORE any traced
 # command, and the canary value never appears in any output.
@@ -2002,16 +2019,30 @@ mut_row m.g2-reorder-reread stage_tag \
 
 cmp -s "$SCRIPT" "$PRISTINE" && pass 'm.sut-untouched' || fail 'm.sut-untouched' "the real script was modified by the battery"
 
-# Roster parity (Guard-1 row 7, AC8b): every corrupt_skip call-site name must
+# Roster parity (Guard-1 row 7, AC8b): every counted-skip call-site name must
 # open with the prefix the standing skip-persistence probe enumerates for this
 # suite — fl. — or the skip is invisible to the monitor. Fail-only, zero
-# counted (self-check, like the bump suite's census).
-_roster_bad=$(grep -oE "corrupt_skip[[:space:]]+'[^']+'" "$0" \
-  | sed -E "s/corrupt_skip[[:space:]]+'([^']+)'.*/\1/" \
-  | grep -vE '^fl\.' || true)
+# counted (self-check, like the bump suite's census). The operand is extracted
+# in EVERY quoting form ('name', "name", bare word, $var): a differently-spelled
+# producer must not sail past the audit; a non-literal first operand fails the
+# prefix check — deliberately, since an unauditable name is an unregistered
+# producer. A bare operand only counts when it carries a dot (every registered
+# name does); comments and messages mentioning the helper + an undotted word
+# are ignored. Third-suite call sites outside $0 are a documented residual —
+# the bump suite's directory-scoped census is the analogous construction-side
+# guard.
+_roster_names=$(grep -oE "corrupt_skip[[:space:]]+('[^']*'|\"[^\"]*\"|\\\$[A-Za-z_{][^[:space:]#]*|[A-Za-z0-9_.-]*\.[A-Za-z0-9_.-]*)" "$0" \
+  | sed -E 's/^corrupt_skip[[:space:]]+//; s/^["'"'"']//; s/["'"'"']$//' || true)
+_roster_bad=$(grep -vE '^fl\.' <<<"$_roster_names" || true)
 [[ -z "$_roster_bad" ]] \
   || fail 'roster:skip-names-registered' \
-       "corrupt_skip call-site name(s) outside the probe-registered prefix (fl.): $_roster_bad — the monitor would never see this skip"
+       "counted-skip call-site name(s) outside the probe-registered prefix (fl.): $_roster_bad — the monitor would never see this skip"
+# ...and fl. needs ≥1 NON-selftest producer: captured exercises (the
+# *.selftest-* rows above emit only into files) satisfy the first check while
+# producing nothing the monitor can ever see.
+{ grep -E '^fl\.' <<<"$_roster_names" | grep -vF 'selftest' | grep -q .; } \
+  || fail 'roster:fl-needs-live-producer' \
+       "probe-registered prefix fl. is satisfied only by captured selftest producers — a real corrupt_skip row must carry it"
 
 # ---------------------------------------------------------------------------
 echo ""

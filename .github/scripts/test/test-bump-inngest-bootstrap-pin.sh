@@ -1616,11 +1616,16 @@ base_fixture anc-b7
 s=$(side_commit pr-corrupt main 'off the healthy base')
 seed_tag_at vinngest-v1.1.38 "$s" --annotate
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
-corrupt_walk_break "$F_REPO" refs/heads/main
+b7_ok=1
+# The forge's rc is a construction invariant too: an unchecked failure leaves a
+# HEALTHY graph the walk-contract probe reads as "contract absent" → a counted
+# SKIP — charging a harness defect into the bounded skip budget (#10921 fix
+# round). fail-only, zero counted, never routes to corrupt_skip.
+corrupt_walk_break "$F_REPO" refs/heads/main \
+  || { fail 'g1b.B7:invariant-forge-applied' "corrupt_walk_break failed — a harness defect, never a skip"; b7_ok=0; }
 # Branch order is load-bearing (ADR-188): construction invariants first —
 # fail-only, ZERO counted, and a violation is a harness defect that can never
 # route to the skip — then the walk-contract probe, then the row.
-b7_ok=1
 corrupt_invariant_dead_absent 'g1b.B7' "$F_REPO" || b7_ok=0
 [[ "$(git -C "$F_REPO" rev-parse -q --verify 'refs/tags/vinngest-v1.1.38^{commit}' 2>/dev/null)" == "$s" ]] \
   || { fail 'g1b.B7:invariant-tag-resolves' "the side tag must still peel to $s — a construction guarantee"; b7_ok=0; }
@@ -1628,7 +1633,9 @@ if (( b7_ok )); then
   # The probe contract is the SUT's own acceptance: NON-EMPTY walk stderr (the
   # bump refuses on ANY walk_err text, not on 'Could not read' specifically).
   walk_err=$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null)
-  if corrupt_probe_forced_skip || [[ -z "$walk_err" ]]; then
+  if corrupt_probe_forced_skip; then
+    corrupt_skip 'g1b.B7' 8 "forced-divergence exercise (CORRUPT_WALK_PROBE_FORCE=skip) — an AC5 arm, not an environment measurement"
+  elif [[ -z "$walk_err" ]]; then
     corrupt_skip 'g1b.B7' 8 "runner git does not exhibit the non-empty-stderr corrupt-walk contract (walk stderr: '${walk_err:-<empty>}')"
   else
     [[ -z "$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null)" ]] \
@@ -1656,14 +1663,17 @@ assert_out_has 'g1b.B7b:remediation' 'fetch-tags: true'
 # base_fixture seeds vinngest-v1.1.37 on the healthy base BEFORE the forge —
 # below-break objects are unreachable from the forged tip afterwards.
 base_fixture anc-b7c
-corrupt_walk_break "$F_REPO" refs/heads/main
+b7c_ok=1
+corrupt_walk_break "$F_REPO" refs/heads/main \
+  || { fail 'g1b.B7c:invariant-forge-applied' "corrupt_walk_break failed — a harness defect, never a skip"; b7c_ok=0; }
 seed_tag_at vinngest-v1.1.38 HEAD --annotate   # tag the forged tip
 printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
-b7c_ok=1
 corrupt_invariant_dead_absent 'g1b.B7c' "$F_REPO" || b7c_ok=0
 if (( b7c_ok )); then
   walk_err=$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null)
-  if corrupt_probe_forced_skip || [[ -z "$walk_err" ]]; then
+  if corrupt_probe_forced_skip; then
+    corrupt_skip 'g1b.B7c' 8 "forced-divergence exercise (CORRUPT_WALK_PROBE_FORCE=skip) — an AC5 arm, not an environment measurement"
+  elif [[ -z "$walk_err" ]]; then
     corrupt_skip 'g1b.B7c' 8 "runner git does not exhibit the non-empty-stderr corrupt-walk contract (walk stderr: '${walk_err:-<empty>}')"
   else
     [[ "$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null)" == vinngest-v1.1.38 ]] \
@@ -1680,13 +1690,14 @@ fi
 # about it. The dead-tag construction (Arm D) is deterministic — no object is
 # deleted anywhere.
 base_fixture anc-b7a
-corrupt_dead_tag "$F_REPO" vinngest-v1.1.38
+b7a_ok=1
+corrupt_dead_tag "$F_REPO" vinngest-v1.1.38 \
+  || { fail 'g1b.B7a:invariant-forge-applied' "corrupt_dead_tag failed — a harness defect, never a skip"; b7a_ok=0; }
 printf 'v1.1.38\t%s\nv1.1.37\t%s\n' "$DIG_NEW" "$DIG_OLD" >> "$MOCK_CRANE_MAP"
 # Construction invariants — fail-only, ZERO counted. The PEEL FAILURE is one:
 # guaranteed by the never-written construction, so a dead tag that still
 # `^{commit}`-peels is a harness-defect FAIL — NEVER the skip rung; do not
 # re-route it (CTO ruling). B7a's graph is otherwise HEALTHY.
-b7a_ok=1
 corrupt_invariant_dead_absent 'g1b.B7a' "$F_REPO" || b7a_ok=0
 [[ "$(git -C "$F_REPO" tag --list 'vinngest-v1.1.38')" == vinngest-v1.1.38 ]] \
   || { fail 'g1b.B7a:invariant-tag-listed' "the dead tag object must still be listed"; b7a_ok=0; }
@@ -1699,7 +1710,9 @@ if (( b7a_ok )); then
   # set is exactly {v1.1.37} AND the walk's stderr is clean.
   b7a_set=$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>/dev/null)
   b7a_err=$(git -C "$F_REPO" tag --merged HEAD --list 'vinngest-v*' 2>&1 >/dev/null)
-  if corrupt_probe_forced_skip || [[ "$b7a_set" != vinngest-v1.1.37 || -n "$b7a_err" ]]; then
+  if corrupt_probe_forced_skip; then
+    corrupt_skip 'g1b.B7a' 9 "forced-divergence exercise (CORRUPT_WALK_PROBE_FORCE=skip) — an AC5 arm, not an environment measurement"
+  elif [[ "$b7a_set" != vinngest-v1.1.37 || -n "$b7a_err" ]]; then
     corrupt_skip 'g1b.B7a' 9 "runner git does not exhibit the healthy-walk silent-drop contract (merged='${b7a_set:-<empty>}' walk stderr='${b7a_err:-<empty>}')"
   else
     NO_AUTO_SIGNED_COMMIT=1 run_bump anc-b7a --signed-commit "$(git -C "$F_REPO" rev-parse HEAD)" \
@@ -2653,12 +2666,18 @@ step_has 'g2b.I5:shallow-msg' 'shallow'
 # construction (#10921); the rm -f spelling no-opped on packed stores.
 harness_repo i6
 s=$(h_side refs/remotes/origin/main~1 i6); git -C "$H" tag -a vinngest-v1.2.0 -m r "$s"
-corrupt_walk_break "$H" refs/remotes/origin/main
-if corrupt_invariant_dead_absent 'g2b.I6' "$H"; then
+i6_ok=1
+corrupt_walk_break "$H" refs/remotes/origin/main \
+  || { fail 'g2b.I6:invariant-forge-applied' "corrupt_walk_break failed — a harness defect, never a skip"; i6_ok=0; }
+if (( i6_ok )) && corrupt_invariant_dead_absent 'g2b.I6' "$H"; then
   # The shipped body keys its "could not decide" arm on merge-base rc OUTSIDE
-  # {0,1}; the corrupt-walk contract is that rc plus non-empty walk stderr.
+  # {0,1} alone (stderr discarded); the corrupt-walk contract is rc∉{0,1} OR
+  # non-empty walk stderr — a git that fails the walk silently still refuses,
+  # so requiring stderr would over-skip a fully exercisable row.
   i6_err=$(git -C "$H" merge-base --is-ancestor "$s" refs/remotes/origin/main 2>&1 >/dev/null); i6_rc=$?
-  if corrupt_probe_forced_skip || [[ "$i6_rc" == 0 || "$i6_rc" == 1 || -z "$i6_err" ]]; then
+  if corrupt_probe_forced_skip; then
+    corrupt_skip 'g2b.I6' 3 "forced-divergence exercise (CORRUPT_WALK_PROBE_FORCE=skip) — an AC5 arm, not an environment measurement"
+  elif [[ "$i6_rc" == 0 || "$i6_rc" == 1 ]] && [[ -z "$i6_err" ]]; then
     corrupt_skip 'g2b.I6' 3 "runner git does not exhibit the merge-base corrupt-walk contract (rc=$i6_rc stderr='${i6_err:-<empty>}')"
   else
     run_step i6 "$H" v1.2.0 "$s"
@@ -2938,8 +2957,11 @@ pass 'selftest:gh-out-result-helpers-both-directions'
 # a charge omission drops TOTAL below the floor.
 LAST_OUT="$TMP/selftest.skip.out"; : > "$LAST_OUT"
 _sk0=$SKIPPED_ASSERTIONS
-{ CORRUPT_WALK_PROBE_FORCE=skip
-  corrupt_probe_forced_skip && corrupt_skip 'g1b.selftest-forced-skip' 5 'selftest: forced-divergence exercise'
+# ENV-PREFIX, never a standalone `{ VAR=skip ...; }` assignment: the standalone
+# form persists the force knob in the suite's shell past the block, arming a
+# force-skip for every later corrupt-walk row on every runner.
+{ CORRUPT_WALK_PROBE_FORCE=skip corrupt_probe_forced_skip \
+    && corrupt_skip 'g1b.selftest-forced-skip' 5 'selftest: forced-divergence exercise'
 } > "$LAST_OUT" 2>&1
 [[ "$(grep -cF 'SKIP (loud): g1b.selftest-forced-skip' "$LAST_OUT")" == 1 \
    && "$(grep -c '^::warning::' "$LAST_OUT")" == 1 \
@@ -2951,7 +2973,7 @@ SKIPPED_ASSERTIONS=$_sk0
 # A dead oid that turns out READABLE is a construction-invariant FAIL, never a
 # skip (Guard-2 row 3): write the nonce blob for real and drive the check.
 base_fixture selftest-c
-printf 'soleur-corrupt-graph dead-parent\n' | git -C "$F_REPO" hash-object -w --stdin >/dev/null
+printf '%s\n' "$CORRUPT_DEAD_NONCE" | git -C "$F_REPO" hash-object -w --stdin >/dev/null
 st_run 1 readable-dead-oid-is-fail-not-skip corrupt_invariant_dead_absent 'selftest.st' "$F_REPO"
 # corrupt_skip's own validation (arm_skip parity): a missing or non-numeric
 # cost FAILS loudly rather than silently charging nothing.
@@ -2969,27 +2991,56 @@ grep -qF 'TOTAL=$((PASS + FAIL + SKIPPED_ASSERTIONS))' "$0" \
   || fail 'selftest:skip-charged-in-total' "the tail TOTAL no longer folds SKIPPED_ASSERTIONS into the anti-vacuity floor"
 pass 'selftest:skip-machinery-both-directions'
 
-# Standing census (Guard-1 row 3, #10921): NO suite under .github/scripts/test/
-# may delete an object-store file by path — the forge helpers are the only
-# spelling of a corrupt graph. Fail-only, zero counted. Scope: this directory
-# only; two same-construction sites outside it are tracked in #10956. The
-# object-store literal lives in a variable so this check's own source line
+# Standing census (Guard-1 row 3, #10921): NO file under .github/scripts/test/
+# or plugins/soleur/test/lib/ may delete an object-store file by path or by
+# store-level prune — the forge helpers are the only spelling of a corrupt
+# graph. Fail-only, zero counted. The verb set covers the measured bypass
+# spellings: rm/unlink/mv/chmod/truncate ahead of the literal (which also
+# matches a bare `.git` or `.git/objects` operand, not only the slashed form),
+# find's -delete/-exec on either side, and store-level prune verbs
+# (`gc --prune`, prune). A mid-line `#` no longer stops the scan (an `rm -f "$f"
+# <hash> note <obj-literal>` shape must trip), so a comment that mentions a
+# deletion spelling false-positives — fail-safe direction, deliberate. `-I` is
+# dropped so a NUL byte can't exempt a whole file from the sweep. RESIDUAL
+# (accepted): the census is a per-line literal grep — a path assembled by
+# indirection (`P=<obj-dir>; rm -f "$R/$P/…"`), a quote-split literal, or a
+# non-deletion corrupt construction (update-ref to a hardcoded absent sha)
+# evades it: this is a deletion-spelling census, not a construction census.
+# Two same-construction sites outside the swept dirs are tracked in #10956.
+# The object-store literal lives in a variable so this check's own source line
 # cannot satisfy the pattern it greps for.
-_census_obj='.git/objects/'
-_census_hits=$(grep -rInE "(rm|unlink)[[:space:]][^#]*${_census_obj}|rm -rf[^#]*${_census_obj}|find[^#]*-delete[^#]*${_census_obj}|find[^#]*${_census_obj}[^#]*-delete|${_census_obj}[^#]*-delete" \
-  "$REPO_ROOT/.github/scripts/test/" 2>/dev/null || true)
+_census_obj='\.git(/objects)?(/|[^[:alnum:]_.-]|$)'
+_census_hits=$(grep -rnE "(rm|unlink|mv|chmod|truncate)[[:space:]].*${_census_obj}|find[[:space:]].*${_census_obj}.*(-delete|-exec)|find[[:space:]].*(-delete|-exec).*${_census_obj}|git[[:space:]].*prune" \
+  "$REPO_ROOT/.github/scripts/test/" "$REPO_ROOT/plugins/soleur/test/lib/" 2>/dev/null || true)
 [[ -z "$_census_hits" ]] \
   || fail 'census:no-object-store-deletion' \
-       "under-object-store deletion(s) inside .github/scripts/test/: $_census_hits — a corrupt-walk site bypassed git-corrupt-graph.sh"
-# Roster parity (Guard-1 row 7, AC8b): every corrupt_skip call-site name must
+       "under-object-store deletion(s) inside .github/scripts/test/ or plugins/soleur/test/lib/: $_census_hits — a corrupt-walk site bypassed git-corrupt-graph.sh"
+# Roster parity (Guard-1 row 7, AC8b): every counted-skip call-site name must
 # open with a prefix the standing skip-persistence probe enumerates for this
-# suite — g1b./g2b. — or the skip is invisible to the monitor.
-_roster_bad=$(grep -oE "corrupt_skip[[:space:]]+'[^']+'" "$0" \
-  | sed -E "s/corrupt_skip[[:space:]]+'([^']+)'.*/\1/" \
-  | grep -vE '^(g1b\.|g2b\.)' || true)
+# suite — g1b./g2b. — or the skip is invisible to the monitor. The operand is
+# extracted in EVERY quoting form ('name', "name", bare word, $var): a
+# differently-spelled producer must not sail past the audit; a non-literal
+# first operand fails the prefix check — deliberately, since an unauditable
+# name is an unregistered producer. A bare operand only counts when it carries
+# a dot (every registered name does); comments and messages mentioning the
+# helper + an undotted word are ignored. Third-suite call sites outside $0
+# are a documented residual — the directory-scoped census above is the
+# analogous guard for the construction side.
+_roster_names=$(grep -oE "corrupt_skip[[:space:]]+('[^']*'|\"[^\"]*\"|\\\$[A-Za-z_{][^[:space:]#]*|[A-Za-z0-9_.-]*\.[A-Za-z0-9_.-]*)" "$0" \
+  | sed -E 's/^corrupt_skip[[:space:]]+//; s/^["'"'"']//; s/["'"'"']$//' || true)
+_roster_bad=$(grep -vE '^(g1b\.|g2b\.)' <<<"$_roster_names" || true)
 [[ -z "$_roster_bad" ]] \
   || fail 'roster:skip-names-registered' \
-       "corrupt_skip call-site name(s) outside the probe-registered prefixes (g1b.|g2b.): $_roster_bad — the monitor would never see this skip"
+       "counted-skip call-site name(s) outside the probe-registered prefixes (g1b.|g2b.): $_roster_bad — the monitor would never see this skip"
+# ...and each registered prefix needs ≥1 NON-selftest producer: captured
+# exercises (the *.selftest-* rows above emit only into files) satisfy the
+# first check while producing nothing the monitor can ever see — parity held
+# green by captured-only names is the empty-coverage hole.
+for _rpfx in 'g1b\.' 'g2b\.'; do
+  { grep -E "^${_rpfx}" <<<"$_roster_names" | grep -vF 'selftest' | grep -q .; } \
+    || fail "roster:${_rpfx%.}-needs-live-producer" \
+         "probe-registered prefix ${_rpfx%.} is satisfied only by captured selftest producers — a real corrupt_skip row must carry it"
+done
 
 # ---------------------------------------------------------------------------
 echo ""
