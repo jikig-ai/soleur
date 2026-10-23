@@ -846,6 +846,8 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **Trigger:** PR matches ANY of: (a) touches files in `knowledge-base/product/research/`, `knowledge-base/marketing/`, or adds new workflow patterns (new AGENTS.md rules, new skill phases); (b) has a `semver:minor` or `semver:major` label; (c) title matches `^feat(\(.*\))?:` pattern.
 
+**A resumed or manually-driven ship tail still runs this gate.** When ship is resumed after a dead runner, a context reset, or any path where the merge is driven by hand rather than by an uninterrupted Phase 5.5→Phase 7 flow, run this gate's detection BEFORE arming merge — the gate fires on diff state, not on session continuity, and a partial tail that skips it produces a merged PR with no content disposition (epic #10397's #10404 child shipped this way — retroactive brief filed as #10903).
+
 **Detection:** Run `git diff --name-only origin/main...HEAD` and check file paths against trigger (a). Run `gh pr view --json labels,title` and check against triggers (b) and (c). If any trigger matches, proceed to "If triggered."
 
 **If triggered:**
@@ -2993,6 +2995,18 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    If postmerge reports any FAILED phase (production health, Sentry warning, browser regression), display the failures prominently but do NOT block cleanup — the deploy has already happened; the signal is for immediate operator attention, not rollback.
 
    **Do NOT skip this step.** Do NOT proceed to Step 4 (cleanup) without invoking postmerge. The rationalization "the PR merged, we're done" is exactly the failure mode this gate prevents — a merged PR is not a deployed PR, and a deployed PR is not a healthy deployment. **Why:** PR #4512 — the agent jumped from merge confirmation directly to cleanup, skipping release workflow monitoring (Step 2) and postmerge verification (Step 3.8). The release was still in progress and could have failed silently.
+
+3.9. **Epic-Close Domain-Leader Sweep (conditional — reconcile before cleanup).** Phase 5.5's CMO Content-Opportunity Gate is PR-scoped: it asks "what is content-worthy in *this* diff?" Three classes of opportunity exist only at epic scope and are invisible to any per-PR prompt: (a) **aggregate claims** ("we shipped the whole checklist in four days" lives in no single diff); (b) **cross-child meta-findings** (the pattern across children — e.g. review kept finding defects in the verification machinery itself — is the arc's strongest differentiating claim); (c) **deadline-shaped timing** (a synthesis piece pegged to an external article or launch decays on a calendar no per-PR "merge +5–7d" slotting asks about).
+
+   **Trigger:** the just-closed issue (from the PR body's `Closes #N`) is one of ≥2 children of a tracked epic, and every sibling child is now CLOSED — i.e. this merge completed the epic. Detection: read the epic's body via `gh issue view <epic> --json body`, extract its child task-list rows (`- [ ] #N` / `- [x] #N`), and if all rows are `[x]` the epic just completed. When the closing issue's epic is not identifiable from a parent link, grep the issue's `Tracked by #N` / epic mentions before concluding no epic exists.
+
+   **If triggered:**
+
+   1. **Per-child disposition census.** For each child issue, confirm a Phase 5.5 content disposition exists — a filed brief, a strategy row, or an explicit skip-with-reason — using the issue's own comments and `knowledge-base/marketing/content-strategy.md` rows. A child whose ship tail was resumed manually or after a runner failure silently skips Phase 5.5; the census is the safety net that catches that.
+   2. **Arc-level CMO assessment.** Spawn the CMO agent: "Assess content and distribution opportunities from the COMPLETED epic, not any single PR: aggregate claims, cross-child meta-findings, any external news pegs the epic cites (an article, a launch, a deadline), and whether a synthesis piece complements or supersedes the per-child briefs. For each child with no disposition, produce a retroactive brief."
+   3. **Present recommendations** (interactive) or, **headless mode:** auto-file the arc brief + any retroactive child briefs as GitHub issues (same Phase 5.5 headless contract — do not block), and update `knowledge-base/marketing/content-strategy.md` rows for each scheduled piece — an issue without a strategy row is an orphan (#1173).
+
+   **Why:** Epic #10397 (the Agentic Verification arc, 7 children × 7 PRs) closed with 5/7 per-PR briefs filed and no arc-level assessment — the synthesis opportunity (an external authority's verification checklist shipped end-to-end) was raised only because the operator asked. The two missed children (#10400, #10404) were both partial-ship tails: a dead runner's merge driven by hand, and a sibling session — exactly the paths a per-PR gate cannot cover. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done (see `SKILL.md` §CMO gate Why).
 
 4. Clean up worktree and local branch:
 
