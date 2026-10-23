@@ -337,6 +337,26 @@ describe("agent-runner leader — quiet-window kill-switch (#8211)", () => {
     expect(quietWindowEmits()).toHaveLength(1);
   });
 
+  test("flag ON + the configured exempt account: the start gate admits it (a different account is still refused)", async () => {
+    setupSupabaseMock();
+    createQueryMock(mockQuery);
+    process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
+    process.env.QUIET_WINDOW_EXEMPT_USER_ID = MEMBER_ID;
+    __resetFeatureFlagsForTests();
+    try {
+      await startAgentSession(MEMBER_ID, "conv-1", "cpo");
+      expect(quietWindowEmits()).toHaveLength(0);
+      expect(mockGetCurrentRepoStatus).toHaveBeenCalled();
+
+      vi.clearAllMocks();
+      await startAgentSession("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "conv-2", "cpo");
+      expect(quietWindowEmits()).toHaveLength(1);
+      expect(mockGetCurrentRepoStatus).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
+    }
+  });
+
   test("flag absent: no maintenance frame, the session proceeds past the gate", async () => {
     setupSupabaseMock();
     createQueryMock(mockQuery);

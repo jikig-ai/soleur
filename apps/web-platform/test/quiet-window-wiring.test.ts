@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 // #8211 — the reporter must be started at boot and cleared at shutdown, and
@@ -111,6 +111,28 @@ describe("quiet-window gate ordering and coverage (review P2)", () => {
     expect(code("server/auto-sync-trigger.ts")).not.toMatch(/newAgentSessionsRefused\([^)]/);
     expect(code("app/api/repo/setup/route.ts")).toMatch(/quietWindowRefusal\("repo-setup", user\.id\)/);
     expect(code("app/api/repo/create/route.ts")).toMatch(/quietWindowRefusal\("repo-create", userId\)/);
+  });
+
+  it("no refusal gate exists outside the pinned set: every newAgentSessionsRefused( call site in the app, per file", () => {
+    // A new gate (or a moved one) shows up here as a changed count, whatever argument it passes, so it cannot
+    // join the fleet without a reviewer deciding whether it passes the caller's id.
+    const expected: Record<string, number> = {
+      "server/agent-runner.ts": 2,
+      "server/auto-sync-trigger.ts": 1,
+      "server/cc-dispatcher.ts": 1,
+      "server/quiet-window-http.ts": 1,
+      "server/quiet-window.ts": 2, // the definition and the reporter's own observe read
+      "server/ws-handler.ts": 2,
+    };
+    const found: Record<string, number> = {};
+    for (const dir of ["server", "app", "lib", "components", "hooks"]) {
+      for (const rel of readdirSync(join(root, dir), { recursive: true }) as string[]) {
+        if (!/\.(ts|tsx)$/.test(rel) || rel.includes("node_modules")) continue;
+        const n = (code(join(dir, rel)).match(/newAgentSessionsRefused\(/g) ?? []).length;
+        if (n > 0) found[join(dir, rel)] = n;
+      }
+    }
+    expect(found).toEqual(expected);
   });
 
   it("a first message is refused BEFORE createConversation (no empty active row, no held slot)", () => {

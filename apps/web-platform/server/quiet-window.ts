@@ -7,8 +7,11 @@
 //     It is consulted ONLY where NEW work starts on a host: cc-dispatcher
 //     `dispatchSoleurGo` on a conversation with no live Query, agent-runner
 //     `startAgentSession` before its supersede-abort, `POST /api/repo/setup` (a clone
-//     writes a working tree) and `triggerHeadlessSync` (the auto-sync agent). It never
-//     reads or touches a live session, so a refusal cannot drop or corrupt one.
+//     writes a working tree) and `triggerHeadlessSync` (the auto-sync agent), plus `POST
+//     /api/repo/create` and the first-message check in ws-handler. It never reads or touches
+//     a live session, so a refusal cannot drop or corrupt one. Exactly one configured
+//     synthetic account (QUIET_WINDOW_EXEMPT_USER_ID, below) passes every gate except
+//     auto-sync, which passes no id and so refuses everyone.
 //
 //  2. A counts-only read of live agent sessions per web host
 //     (`startQuietWindowReporter`): one fixed-grammar log line, shipped to Better
@@ -30,13 +33,21 @@ const FEATURE = "quiet-window";
 export const QUIET_WINDOW_MESSAGE =
   "Soleur is in a short maintenance window and is not starting new sessions right now. Your existing work is safe, but this message was not sent. Please try again in a few minutes.";
 
-// #8211 rehearsal (CTO ruling 2026-10-23): ONE named Soleur-owned synthetic account may run its single
-// Level 2 session while the pause is on. The id is a lowercase UUID in Doppler `prd` (not a secret, not
-// PII; logged only as a hash). Anything else (absent, empty, whitespace, uppercase, a list, two ids)
-// exempts nobody, so a typo can only keep the window closed. Exact match, no normalisation of the
-// caller's id.
+// #8211 rehearsal (CTO ruling 2026-10-23): ONE named Soleur-owned synthetic account may run its Level 2
+// session while the pause is on. The id is a lowercase UUID in Doppler `prd` (not a secret; logged only
+// as a hash). Anything malformed (absent, empty, whitespace, uppercase, a list, two ids) exempts nobody.
+// That makes a malformed value safe, NOT a wrong one: a well-formed UUID that is not the synthetic
+// account exempts whichever account owns it, so the owner verifies the id before setting it (runbook).
+// Exact match, no normalisation of the caller's id. The variable is read on each call; the container's
+// environment is fixed at its `docker run`, so only a redeploy changes what a host sees.
 const EXEMPT_USER_ENV = "QUIET_WINDOW_EXEMPT_USER_ID";
 const EXEMPT_USER_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// An exempt pass is mirrored to Sentry at most once per interval with the passes it covers: the gates run
+// two or three times per message, and the owner needs "it happened", not a per-message stream.
+const EXEMPT_MIRROR_INTERVAL_MS = 60_000;
+let lastExemptMirrorAt = 0;
+let exemptPassesSinceMirror = 0;
+let warnedInvalidExemptConfig = false;
 
 function configuredExemptId(): string | null {
   const raw = process.env[EXEMPT_USER_ENV];
@@ -44,26 +55,55 @@ function configuredExemptId(): string | null {
 }
 
 /**
+ * True when the exemption variable holds a well-formed id (the reporter publishes it per host, so the
+ * owner can read "loaded" before the window opens). A non-empty value that does not parse warns ONCE
+ * per process with its length only: the value could be a pasted secret.
+ */
+export function exemptionConfigured(): boolean {
+  const raw = process.env[EXEMPT_USER_ENV];
+  const ok = configuredExemptId() !== null;
+  if (!ok && typeof raw === "string" && raw !== "" && !warnedInvalidExemptConfig) {
+    warnedInvalidExemptConfig = true;
+    warnSilentFallback(null, {
+      feature: FEATURE,
+      op: "exempt-config-invalid",
+      message: "QUIET_WINDOW_EXEMPT_USER_ID is set but is not one lowercase UUID; nobody is exempt",
+      extra: { length: raw.length },
+    });
+  }
+  return ok;
+}
+
+/**
  * True when a NEW agent session must be refused. Anything other than a strict
  * `true` from the flag read (absent, off, a thrown read) allows the session.
  *
  * `userId` is the caller's raw id: only the one configured exempt account passes while the pause is
- * on. A call without a `userId` (the reporter's read, auto-sync) is never exempt. An exempt pass is
- * mirrored to Sentry (hashed id) and is not counted in `refused_since_last`.
+ * on. A call without a string `userId` (the reporter's read, auto-sync, a runtime null) is never
+ * exempt. An exempt pass is mirrored to Sentry (hashed id, at most once per interval) and is not
+ * counted in `refused_since_last`.
  */
 export async function newAgentSessionsRefused(
   opts: { observe?: boolean; userId?: string } = {},
 ): Promise<boolean> {
   try {
     const refused = (await isNewAgentSessionsPaused()) === true;
-    if (refused && opts.userId !== undefined && opts.userId === configuredExemptId()) {
+    const exempt = refused ? configuredExemptId() : null;
+    if (exempt !== null && typeof opts.userId === "string" && opts.userId === exempt) {
       if (opts.observe !== true) {
-        infoSilentFallback(null, {
-          feature: FEATURE,
-          op: "exempt-pass",
-          message: "quiet-window: the exempt synthetic account passed the pause",
-          extra: { userId: opts.userId },
-        });
+        exemptPassesSinceMirror += 1;
+        const now = Date.now();
+        if (now - lastExemptMirrorAt >= EXEMPT_MIRROR_INTERVAL_MS) {
+          const passes = exemptPassesSinceMirror;
+          lastExemptMirrorAt = now;
+          exemptPassesSinceMirror = 0;
+          infoSilentFallback(null, {
+            feature: FEATURE,
+            op: "exempt-pass",
+            message: "quiet-window: the exempt synthetic account passed the pause",
+            extra: { userId: opts.userId, passes },
+          });
+        }
       }
       return false;
     }
@@ -111,6 +151,9 @@ export function inFlightStartCount(): number {
 export function __resetQuietWindowCountersForTests(): void {
   inFlightStarts = 0;
   refusedSinceLastEmit = 0;
+  lastExemptMirrorAt = 0;
+  exemptPassesSinceMirror = 0;
+  warnedInvalidExemptConfig = false;
 }
 
 export interface LiveAgentSessionCounts {
@@ -191,6 +234,8 @@ async function emitOnce(readCounts: () => LiveAgentSessionCounts): Promise<void>
       startingSessions: starting,
       newSessionsPaused: paused,
       refusedSinceLast: safeCount(counts.refusedSinceLast ?? 0),
+      // A boolean, never the id: the owner reads "the exemption loaded on this host" before the window.
+      exemptConfigured: exemptionConfigured(),
     },
     formatLiveSessionsLine(counts, paused),
   );

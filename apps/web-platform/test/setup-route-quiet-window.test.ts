@@ -58,7 +58,11 @@ vi.mock("@/server/git-auth", () => ({
 vi.mock("@/server/logger", () => ({
   default: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
-vi.mock("@/server/observability", () => ({ reportSilentFallback: vi.fn() }));
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  warnSilentFallback: vi.fn(),
+  infoSilentFallback: vi.fn(),
+}));
 vi.mock("@/server/userid-pseudonymize", () => ({
   hashUserIdValue: (id: string) => id,
 }));
@@ -164,6 +168,28 @@ describe("POST /api/repo/setup — quiet-window kill-switch (#8211)", () => {
     expect(cloningFlipCalled).toBe(false);
     expect(mockProvisionWorkspaceWithRepo).not.toHaveBeenCalled();
     expect(mockServiceFrom).not.toHaveBeenCalled();
+  });
+
+  test("flag ON + the configured exempt account proceeds (200); another account is still 503", async () => {
+    const EXEMPT = "0b8f6f1e-3c1d-4a53-9a55-5b6f7c8d9e01";
+    const OTHER = "1c9a7a2f-4d2e-4b64-8b66-6c7a8d9e0f12";
+    process.env.FLAG_NEW_SESSIONS_PAUSED = "1";
+    process.env.QUIET_WINDOW_EXEMPT_USER_ID = EXEMPT;
+    __resetFeatureFlagsForTests();
+    try {
+      mockGetUser.mockResolvedValue({ data: { user: { id: EXEMPT, email: "s@example.com" } } });
+      mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: EXEMPT });
+      const ok = await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
+      expect(ok.status).toBe(200);
+
+      vi.clearAllMocks();
+      mockGetUser.mockResolvedValue({ data: { user: { id: OTHER, email: "o@example.com" } } });
+      const refused = await POST(makeRequest({ repoUrl: "https://github.com/octo/repo" }));
+      expect(refused.status).toBe(503);
+      expect(mockResolveActiveWorkspace).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
+    }
   });
 
   test("unauthenticated still 401 (the gate does not precede auth)", async () => {

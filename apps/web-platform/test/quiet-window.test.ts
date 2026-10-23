@@ -39,6 +39,7 @@ import {
   newAgentSessionsRefused,
   formatLiveSessionsLine,
   startQuietWindowReporter,
+  exemptionConfigured,
   trackSessionStart,
   inFlightStartCount,
   __resetQuietWindowCountersForTests,
@@ -123,18 +124,68 @@ describe("newAgentSessionsRefused: the single exempt synthetic account", () => {
     expect(await newAgentSessionsRefused({ userId: id })).toBe(true);
   });
 
+  // The caller's id EQUALS the configured string in every row: a refusal then comes from the pattern, not
+  // from plain inequality, so removing or loosening EXEMPT_USER_PATTERN reds these.
   it.each([
-    ["absent", undefined],
     ["empty", ""],
     ["whitespace around the id", ` ${EXEMPT} `],
+    ["trailing newline", `${EXEMPT}\n`],
     ["uppercase id", EXEMPT.toUpperCase()],
     ["a list of two", `${EXEMPT},${OTHER}`],
     ["not a uuid", "synthetic"],
-  ])("malformed or absent config (%s) exempts nobody, not even the id it names", async (_n, cfg) => {
-    if (cfg === undefined) delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
-    else process.env.QUIET_WINDOW_EXEMPT_USER_ID = cfg;
+    ["a prefix of a uuid", EXEMPT.slice(0, 35)],
+  ])("malformed config (%s) exempts nobody, even a caller whose id equals it", async (_n, cfg) => {
+    process.env.QUIET_WINDOW_EXEMPT_USER_ID = cfg;
+    expect(await newAgentSessionsRefused({ userId: cfg })).toBe(true);
     expect(await newAgentSessionsRefused({ userId: EXEMPT })).toBe(true);
     expect(await newAgentSessionsRefused({ userId: OTHER })).toBe(true);
+  });
+
+  it("config absent exempts nobody: undefined, null and a real id are all refused", async () => {
+    delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
+    expect(await newAgentSessionsRefused({ userId: EXEMPT })).toBe(true);
+    expect(await newAgentSessionsRefused({ userId: undefined })).toBe(true);
+    expect(await newAgentSessionsRefused({ userId: null as unknown as string })).toBe(true);
+    expect(await newAgentSessionsRefused()).toBe(true);
+  });
+
+  it("config valid + a runtime null/non-string userId is refused", async () => {
+    expect(await newAgentSessionsRefused({ userId: null as unknown as string })).toBe(true);
+    expect(await newAgentSessionsRefused({ userId: 5 as unknown as string })).toBe(true);
+    expect(mockInfoSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("the exempt-pass mirror is rate-limited: one event per interval carrying the passes it covers", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-23T10:00:00Z"));
+    try {
+      await newAgentSessionsRefused({ userId: EXEMPT });
+      await newAgentSessionsRefused({ userId: EXEMPT });
+      await newAgentSessionsRefused({ userId: EXEMPT });
+      expect(mockInfoSilentFallback).toHaveBeenCalledTimes(1);
+      expect(mockInfoSilentFallback.mock.calls[0][1].extra).toMatchObject({ passes: 1 });
+      vi.setSystemTime(new Date("2026-10-23T10:01:01Z"));
+      await newAgentSessionsRefused({ userId: EXEMPT });
+      expect(mockInfoSilentFallback).toHaveBeenCalledTimes(2);
+      expect(mockInfoSilentFallback.mock.calls[1][1].extra).toMatchObject({ passes: 3 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("exemptionConfigured: true for a well-formed id, false otherwise, and a non-empty malformed value warns ONCE with its length only", () => {
+    expect(exemptionConfigured()).toBe(true);
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+    delete process.env.QUIET_WINDOW_EXEMPT_USER_ID;
+    expect(exemptionConfigured()).toBe(false);
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled(); // unset is the normal state, not a warning
+    process.env.QUIET_WINDOW_EXEMPT_USER_ID = "not-a-uuid-secret-looking-value";
+    expect(exemptionConfigured()).toBe(false);
+    expect(exemptionConfigured()).toBe(false);
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+    const opts = mockWarnSilentFallback.mock.calls[0][1];
+    expect(opts).toMatchObject({ feature: "quiet-window", op: "exempt-config-invalid", extra: { length: 31 } });
+    expect(JSON.stringify(opts)).not.toContain("secret-looking");
   });
 
   it("pause off: allowed with no exemption event", async () => {
@@ -158,6 +209,35 @@ describe("newAgentSessionsRefused: the single exempt synthetic account", () => {
       await newAgentSessionsRefused({ userId: OTHER });
       await vi.advanceTimersByTimeAsync(60_000);
       expect(mockLogWarn.mock.calls.at(-1)?.[1]).toMatch(/new_sessions_paused=1 refused_since_last=1$/);
+      clearInterval(timer);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an allowed call (pause off) is never counted as a refusal", async () => {
+    mockIsPaused.mockResolvedValue(false);
+    await newAgentSessionsRefused({ userId: OTHER });
+    await newAgentSessionsRefused();
+    vi.useFakeTimers();
+    try {
+      const timer = startQuietWindowReporter({ readCounts: () => ({ ccQueries: 0, legacySessions: 0 }) });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockLogWarn.mock.calls.at(-1)?.[1]).toMatch(/new_sessions_paused=0 refused_since_last=0$/);
+      clearInterval(timer);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the reporter publishes exemptConfigured=true (a boolean, never the id) when the variable holds a well-formed id", async () => {
+    vi.useFakeTimers();
+    try {
+      const timer = startQuietWindowReporter({ readCounts: () => ({ ccQueries: 0, legacySessions: 0 }) });
+      await vi.advanceTimersByTimeAsync(0);
+      const payload = mockLogWarn.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      expect(payload.exemptConfigured).toBe(true);
+      expect(JSON.stringify(mockLogWarn.mock.calls.at(-1))).not.toContain(EXEMPT);
       clearInterval(timer);
     } finally {
       vi.useRealTimers();
@@ -255,6 +335,7 @@ describe("startQuietWindowReporter", () => {
     expect(Object.keys(payload).sort()).toEqual([
       "agentSessionsLive",
       "ccQueries",
+      "exemptConfigured",
       "legacySessions",
       "newSessionsPaused",
       "refusedSinceLast",
@@ -380,6 +461,7 @@ describe("payload values and line grammar (review P2)", () => {
       startingSessions: 1,
       newSessionsPaused: true,
       refusedSinceLast: 0,
+      exemptConfigured: false,
     });
     expect(mockLogWarn.mock.calls[0][1]).toBe(
       "agent_sessions_live=4 cc_queries=2 legacy_sessions=1 starting=1 new_sessions_paused=1 refused_since_last=0",
