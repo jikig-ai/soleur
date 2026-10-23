@@ -4,6 +4,7 @@
 - Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-10913-redact-proxy-flake/knowledge-base/project/plans/2026-10-23-fix-playwright-mcp-redact-proxy-flake-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
+- cto_spawns=1 (technical-ruling gate batch — 4 rows ruled; plan + tasks amended for m63 false-green row, ~103 runtime rows, widened AC-3 pairing)
 
 ### Errors
 None blocking. Subagent notes: all skill-prescribed fan-outs ran sequentially inline (no run_subagent available inside the subagent) — disclosed as `Reviewed-Coverage: sequential-fallback`; `gh` flag misuse corrected during evidence gathering; Network-Outage gate (4.5) fired on the `timeout` keyword and resolved as a local-process deadline.
