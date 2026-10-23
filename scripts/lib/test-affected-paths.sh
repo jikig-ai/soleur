@@ -1358,6 +1358,17 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/infra-validation-detect.test.sh — walks a corpus (the
+# TS13b sentinel census `find`s under apps/ + infra/) and pins the workflow's
+# run-block structurally; declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_INFRA_VALIDATION_DETECT_TEST_SH_PATHS=(
+  ".github/workflows/infra-validation.yml"
+  "apps/"
+  "infra/"
+  "plugins/soleur/test/infra-validation-detect.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/concurrent-ship.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CONCURRENT_SHIP_TEST_SH_PATHS=(
