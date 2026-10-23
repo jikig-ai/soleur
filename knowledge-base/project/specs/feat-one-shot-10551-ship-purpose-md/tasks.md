@@ -15,7 +15,7 @@ after the finding. Do not edit `plugins/soleur/skills/ship/SKILL.md` and do not 
 
 ## Phase 2: Record the finding
 
-- 2.1 Post the self-contained comment from the plan on #10551 (marker
+- 2.1 Post the self-contained comment on #10551 (its text is the live comment; marker
   `<!-- wikiskill-p3-gate:2026-10-23 -->`, skip if already present, retry once, fallback is a
   `## Gate Finding` section in the PR body; never a new issue).
 - 2.2 Verify the marker with `gh issue view 10551 --json comments`.

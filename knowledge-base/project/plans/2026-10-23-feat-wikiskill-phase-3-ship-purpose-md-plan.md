@@ -16,7 +16,7 @@ gate_verdict: fail-stop
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-23. **Evidence used:** a five-seat plan-review panel (DHH, Kieran, code
-simplicity, architecture, spec-flow), CTO rulings T1 to T6 (T2 was ruled twice; the second
+simplicity, architecture, spec-flow), CTO rulings T1 to T10 (T2 was ruled twice; the second
 withdrew a proposed neutral-refactor mode), a learnings search, and the deepen halts run mechanically. A full
 all-agent fan-out was not run: this plan edits only planning artifacts and its claims were each
 re-derived from source by two independent seats.
@@ -152,7 +152,7 @@ behaves no worse, today? **Answer: no.** Ruled by CTO agent, 2026-10-23 (`decisi
 
 Ruled by CTO agent, 2026-10-23 (`decision-challenges.md` T2, re-ruled after plan review). Capability
 PR (C) is: the sentinel wrap (a zero-text-change `ship/SKILL.md` edit, kept as its own small commit
-so it can be rebased or reverted alone) and the `ship-<decision>` target, run with a representative
+so it can be rebased or reverted alone) and the `ship-<decision>` target, run with representative
 retention cases in the new ship-decision corpus and run without `--append-on-accept`. Amended at
 review (`decision-challenges.md` T7): `accept` needs no new logic, but C must not rely on an epsilon
 passed through the CLI (`eval-gate.cjs` calls `computeVerdict` with empty options, so epsilon is fixed
@@ -208,7 +208,7 @@ and no Capability PR (C) or Move PR (M) work.
    note in the PR body, post no "cannot" comment, and report it for re-planning.
 2. **Post one comment on #10551** (a draft PR, #10947, already exists to cite). Start with the marker
    line `<!-- wikiskill-p3-gate:2026-10-23 -->` and skip the post if a comment with the marker exists.
-   Retry once on failure; if it still fails, put the same text under `## Gate Finding` in the PR body
+   Retry once on failure; if it still fails, put the finding (the problem, the two missing pieces and the smallest closure) under `## Gate Finding` in the PR body
    and say the post failed. Never file a new issue as a fallback. Text (self-contained, no file
    links that archival will break):
 
@@ -237,15 +237,23 @@ details from main, which moves quickly (`ship/SKILL.md` took 40 commits in 30 da
   (`--filter-first-n 1 --repeat 1 --no-cache`) with each row's output read, and the README
   thinking-budget warning heeded (a small `ANTHROPIC_MAX_TOKENS` returns empty text that a lexical
   scorer reads as compliant; #8290 needed 3000). A rationale-only-diff
-  lint (non-Why lines byte-preserved, `[id: ]` tokens and gate headings set-equal, every moved
-  paragraph present in PURPOSE.md by heading) is required evidence for M (`decision-challenges.md`
-  T5), to be scoped and Guard-Contract'd in C's own plan.
+  lint is required evidence for M (`decision-challenges.md` T5, T8), to be scoped and
+  Guard-Contract'd in C's own plan. Binding for C (T8): the lint is non-circular (exemptions come from
+  an explicit span-level delimiter pair plus a pointer left in SKILL.md, never from matching the
+  rationale marker; the proof is reconstruction identity, re-splicing the PURPOSE.md sections at their
+  pointers reproduces the base blob byte for byte, with `[id: ]` tokens and gate headings
+  set-equal); it runs as a CI test under `plugins/soleur/test`; and the gate check requires a
+  non-empty gated-block diff. Delimiter syntax, file layout and test wiring are left to C's planner.
 - **Move PR (M):** only after C merges and the gate-flip checks pass against main. Moves Why
   paragraphs keyed by heading into `ship/PURPOSE.md`, keeps every step, fence, `[id: ]`, marker and
   `references/` link in SKILL.md, links PURPOSE.md once, edits no `description:`, lowers the `ship`
   ceiling in `plugins/soleur/test/skill-body-budget.json` (ratchets down only) in the same PR, reviews
-  each moved paragraph clause by clause for scope-limiting conditions, and attaches BOTH the eval
-  verdict (worded as slice-only evidence) and the rationale-only-diff lint result (T5). M's plan
+  each moved paragraph clause by clause for scope-limiting conditions, and attaches the eval verdict
+  (worded as slice-only evidence, with a non-empty gated-block diff and in-span versus out-of-span
+  paragraph counts) while the lint runs as a CI test (T5, T8). M's PR body lists every Why paragraph as
+  move or stay with a reason (rationale beside a hard-stop, never-skip or LLM-applied gate step stays),
+  and removes or relaxes no assertion in the 21 citing test files (references may only be retargeted,
+  per-file assertion count unchanged and listed). M's plan
   reconciles spec FR16, which also names learning citations moving to PURPOSE.md, with the brief's
   rationale/Why wording. One skill per PR, `Ref #10551`.
 
@@ -263,7 +271,7 @@ details from main, which moves quickly (`ship/SKILL.md` took 40 commits in 30 da
 | 6 | "the PR body uses `Ref #10551`, never Closes, until the sweeper closes it" [brief] | Work task 4, Acceptance Criteria | mapped |
 | 7 | "Do not comment on, edit or close any other WikiSkills-related issue" [brief] | Work task 2, Acceptance Criteria | mapped |
 | 8 | "Merge-queue PRs are never synced or pushed to. ... One `gh pr merge` per call. No secrets in argv." [brief] | Work task 4 | mapped |
-| 9 | "Technical forks go to the CTO agent, not the operator." and "Persist every decision as a row of the `| Item | Class | Ruling |` table" [brief] | `decision-challenges.md` T1 to T6 (with T2b) | mapped |
+| 9 | "Technical forks go to the CTO agent, not the operator." and "Persist every decision as a row of the `| Item | Class | Ruling |` table" [brief] | `decision-challenges.md` T1 to T10 (with T2b and T7b) | mapped |
 
 ### Plan-Item Provenance
 
@@ -316,7 +324,7 @@ changes no product surface. `soleur:engineering:review:user-impact-reviewer` app
 
 **Status:** reviewed
 **Assessment:** the CTO ruled on the gate verdict, the smallest closure, where to record the gap, the evidence
-bar for M and the run's next action (`decision-challenges.md` T1 to T6, plus the review-time rows). The brainstorm CTO assessment is carried forward: Phase 3 is a token and
+bar for M and the run's next action (`decision-challenges.md` T1 to T10). The brainstorm CTO assessment is carried forward: Phase 3 is a token and
 clarity cleanup, not a claimed quality win, and procedural skills have no train and validation split.
 No other domain is relevant (internal harness tooling, no UI surface, no retained traces).
 
