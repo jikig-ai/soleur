@@ -16,7 +16,7 @@ set -uo pipefail
 T=""
 cleanup() { if [ -n "$T" ]; then rm -rf -- "$T"; fi; }
 trap cleanup EXIT
-T="$(mktemp -d "${TMPDIR:-/tmp}/hcloud-ro-scan.XXXXXX")" || { printf 'FAIL SETUP: mktemp -d failed\n' >&2; exit 2; }
+T="$(mktemp -d -t hcloud-ro-scan.XXXXXX)" || { printf 'FAIL SETUP: mktemp -d failed\n' >&2; exit 2; }
 
 SUITE_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -P "$SUITE_DIR/../.." && pwd -P)"
@@ -46,6 +46,7 @@ SCAN_WRAP=()
 # scan_in <dir> <outfile> [ENV=VAL ...]; sets SCAN_RC; stdout+stderr land in <outfile>
 scan_in() {
   local d="$1" out="$2"; shift 2
+  assert_fixture_dir "$out"
   env -u GITHUB_ACTIONS -u HCLOUD_SCAN_ROOT -u HCLOUD_SCAN_TODAY HCLOUD_SCAN_ROOT="$d" "$@" ${SCAN_WRAP[@]+"${SCAN_WRAP[@]}"} bash "$SCANNER" > "$out" 2>&1; SCAN_RC=$?
 }
 tree_md5() { assert_fixture_dir "$1" && (cd "$1" && find . -path ./.git -prune -o \( -type f -o -type l \) -print0 | LC_ALL=C sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1); }
@@ -153,7 +154,7 @@ e_l1() { printf 'x-%s %s --plain\n.%s %s --plain\n%sx %s --plain\n' "$DSG" "$BAR
 e_k1() { printf '%s \\\\\n%s --plain\n' "$DSG" "$BARE" > "$1/scripts/k1.sh"; } # an EVEN backslash run is not a continuation
 e_k2() { printf 'dop\000pler secrets get %s --plain\n' "$BARE" > "$1/scripts/k2.sh"; } # NUL stripped mid-token
 e_j4() { printf 'true #a\\\n%s %s --plain\n%s a#b HCLOUD_\\\nTOKEN --plain\n' "$DSG" "$BARE" "$DSG" > "$1/scripts/j4.sh"; } # comment ends the line; a# in a word joins
-e_g1() { printf 'hidden.sh\n' > "$1/.gitignore" && readbare > "$1/scripts/hidden.sh" && git -C "$1" add -f scripts/hidden.sh .gitignore; } # tracked AND ignored
+e_g1() { assert_fixture_dir "$1" && printf 'hidden.sh\n' > "$1/.gitignore" && readbare > "$1/scripts/hidden.sh" && git -C "$1" add -f scripts/hidden.sh .gitignore; } # tracked AND ignored
 e_u1() { chmod 000 "$1/scripts/ck.sh"; }
 e_p1() { { printf 'doppler'; for ((i = 0; i < 8000; i++)); do printf ' secrets get'; done; printf ' %s --plain\n' "$BARE"; } > "$1/scripts/patho.sh"; SCAN_WRAP=(timeout 3); }
 e_d1() { mkdir -p "$1/tests/scripts/lib" && readbare > "$1/tests/scripts/lib/gate.sh"; }
