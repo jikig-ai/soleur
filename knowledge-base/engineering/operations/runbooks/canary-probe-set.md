@@ -852,15 +852,14 @@ verbatim in incident notes.
 `/mnt/data/ci-deploy-workspace-isolation.json` (atomic, always returns 0) and accumulates the soak
 fields `consecutive_pass` (increments on `pass`, resets on `workspace_isolation_failed` /
 `workspace_isolation_timeout`, **holds** on `canary_infra_error`) and `first_pass_at` — the same
-accumulation `write_sandbox_canary_state` performs, so the promotion probe is a stateless GET.
+accumulation `write_sandbox_canary_state` performs, so a promotion read is a stateless GET.
 `cat-deploy-state.sh` merges the file into the `/hooks/deploy-status` payload as
 `.workspace_isolation`, and every run logs a `WORKSPACE_ISOLATION:` line under `logger -t ci-deploy`
 (the Better Stack query shape in the bwrap-probe section applies verbatim — grep on the decoded
 `message` after `fromjson`, filter `SYSLOG_IDENTIFIER == "ci-deploy"`).
 
-**Promotion contract.** The committed soak checker
-`scripts/followthroughs/workspace-isolation-verdict-2640.sh` reads `.workspace_isolation` off
-`/hooks/deploy-status` and reports PASS only when `consecutive_pass >= 5` AND the span since
+**Promotion contract.** The soak checker (retired by G1 PR-4a, #10937; history in git) read
+`.workspace_isolation` off `/hooks/deploy-status` and reported PASS only when `consecutive_pass >= 5` AND the span since
 `first_pass_at` is >= 3 days; a recorded `workspace_isolation_failed` or
 `workspace_isolation_timeout` verdict is a FAIL (investigate before promoting — do not flip the
 call site to blocking while either stands).
