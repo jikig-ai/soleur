@@ -43,8 +43,10 @@ esac
 # by `timeout -k` (120 s probe cap < 130 s here < 150 s host cap) so a hang cannot leave orphan node trees behind a killed
 # `docker exec` client. The tree runs at oom_score_adj=1000, so the OOM killer picks the probe, not the Next server that serves
 # tenants. No `-u` (the container's own user; a root pass would not prove uid 1001, recorded in the ADR addendum).
-# The probe writes only its own scratch dirs (runtime mode creates no masked dir, and the SDK CLI's temp base is inside its scratch
-# dir; it sweeps its own day-old leftovers); this script writes only STATE_DIR (mode 0700, umask 077).
+# The probe writes its own scratch dirs (the SDK CLI's temp base is inside them; it sweeps its own day-old leftovers) and, in runtime
+# mode, creates the missing members of the closed production masked set (ADR-079 "Addendum — 2026-10-23 (#10455 PR-B)"): only as the
+# uid of PID 1, only when absent, with production's own mkdir call. It reports masks_missing / masks_created / masks_note, journaled
+# below; this script writes only STATE_DIR (mode 0700, umask 077).
 #
 # SEAMS (SOLEUR_WBS_*) exist for web-bash-synthetic.test.sh and are NEVER set by the unit. They are honored ONLY when the script is
 # started with `--fixture-seams` (the unit passes no argument): otherwise every one is unset below, so a stray secret of that name
@@ -87,7 +89,7 @@ INSPECT_TIMEOUT=20
 STATS_TIMEOUT=30
 RESOLVER_HOST_TIMEOUT=30
 
-SEL="-"; COV="-"; MASKS="-"
+SEL="-"; COV="-"; MASKS="-"; MCREATED="-"; MNOTE="-"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 ERRF="$STATE_DIR/.docker-err"
 [ -w "$STATE_DIR" ] || ERRF=/dev/null
@@ -165,7 +167,7 @@ finish() {  # <pass|fail|no_ping> <reason> [detail]
   # stray `08` is a number, not an invalid octal that aborts the run before it journals anything.
   if [ "$verdict" = no_ping ]; then n=$((10#$prev + 1)); fi
   if [ -w "$STATE_DIR" ]; then printf '%s\n' "$n" | tee "$cnt" >/dev/null 2>&1 || true; fi
-  echo "SOLEUR_WEB_BASH_SYNTHETIC verdict=$verdict reason=$reason selector=$SEL coverage=$COV masks_missing=$MASKS consecutive_no_ping=$n detail=${detail:--}" >&2
+  echo "SOLEUR_WEB_BASH_SYNTHETIC verdict=$verdict reason=$reason selector=$SEL coverage=$COV masks_missing=$MASKS masks_created=$MCREATED masks_note=$MNOTE consecutive_no_ping=$n detail=${detail:--}" >&2
   case "$verdict" in
     pass) ping_heartbeat ok ;;
     fail) ping_heartbeat fail ;;
@@ -361,14 +363,23 @@ if [ -n "${SBV_JSON:-}" ]; then
   _psel="$(printf '%s' "$SBV_JSON" | jq -r '.selector // ""' 2>/dev/null || true)"
   _m="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_missing // "-") | tostring' 2>/dev/null || echo -)"
   case "$_m" in ''|*[!0-9]*) MASKS="-" ;; *) MASKS="$_m" ;; esac
+  # masks_created: one digit 0-4 (the probe's closed set has four dirs). masks_note: a WHOLE-string match against the closed enum, so
+  # an embedded newline (command substitution strips only a trailing one) or any other text is `-`; never derived from errno text or a
+  # path and never fed to detail=. An old probe emits neither field: both read `-`.
+  _c="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_created // "-") | tostring' 2>/dev/null || echo -)"
+  case "$_c" in [0-4]) MCREATED="$_c" ;; *) MCREATED="-" ;; esac
+  _n="$(printf '%s' "$SBV_JSON" | jq -r '(.masks_note // "-") | tostring' 2>/dev/null || echo -)"
+  case "$_n" in uid_mismatch|pid1_unreadable|pid1_env_unreadable|home_mismatch|env_divergence) MNOTE="$_n" ;; *) MNOTE="-" ;; esac
 fi
 # The probe echoes the selector it ran under. A pass must carry exactly the one this host asked for (a stale probe that ignores the
 # selector env would otherwise ping green for whatever artifact it defaulted to); any other verdict only when it names one.
 if [ "$_psel" != "$SEL" ] && { [ "$SBV_VERDICT" = pass ] || [ -n "$_psel" ]; }; then
   finish no_ping selector_mismatch "asked $SEL probe reported ${_psel:-none}"
 fi
-# Runtime mode masks only the dirs a real session already created; a fresh container has none until its first session, so a pass
-# with masks_missing > 0 tested a weaker config than production and does not claim the full tuple (the ping is unchanged).
+# Runtime mode creates the missing masked dirs itself (ensureMaskedDirs) and counts the ones it could not create or validate as
+# masks_missing; a pass with masks_missing > 0 tested a weaker config than production and does not claim the full tuple. The ping is
+# unchanged on purpose: a run that says it created 3 of 4 dirs makes a claim, and withholding the beat would read as a dead host.
+# masks_created / masks_note are diagnostic only and never change the verdict, the coverage or the ping.
 if [ "$SBV_VERDICT" = pass ]; then
   case "$MASKS" in -|0) : ;; *) COV=prodtuple_partial ;; esac
 fi
