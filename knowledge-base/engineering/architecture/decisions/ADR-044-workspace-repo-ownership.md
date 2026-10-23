@@ -1362,3 +1362,7 @@ No C4 impact. The fix tightens the **pre-condition on the existing `api -> claud
 "Spawns agent sessions"` edge** (`model.c4:249`), not the topology — no actors,
 external systems, containers, data-stores, or access relationships added or
 changed. Consistent with this ADR's prior no-C4-impact readiness amendments.
+
+## Amendment 2026-10-23 — the SQL half of the normalizeRepoUrl contract is migration 163 (#10633)
+
+Decision 1 above names migration 031 as the SQL half of the `normalizeRepoUrl` parity contract. 031 is merged and immutable and its chain lacks the TS re-trim, so the live SQL chain is now `163_renormalize_repo_url.sql` (stored-row re-normalization of `conversations.repo_url` and `workspaces.repo_url`, with a strict `verify/163` sentinel). The parity gate stays a hard merge gate; its sync-sites registry is in `apps/web-platform/test/repo-url-sql-parity.test.ts`, and a future change to the contract ships as a new migration plus verify file rather than an edit of 163.
