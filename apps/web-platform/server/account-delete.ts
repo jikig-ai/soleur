@@ -220,10 +220,28 @@ export async function deleteAccount(
   // ON this clone, so removing the directory reaps them with no extra step. The
   // unreferenced git objects they pointed at are reclaimed by the clone's normal
   // gc — moot here since the whole directory is removed.
+  // deleteWorkspace reaps EVERY tenant root (WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>,
+  // #8211) and throws an aggregate after attempting them all. A failure is an Art. 17
+  // compliance event but must NEVER block the cascade (removeGitDataRepo and the user
+  // delete still run), so it is mirrored to Sentry instead of thrown. MESSAGE path
+  // (err === null): the thrown messages embed the workspace path, i.e. the raw user id;
+  // only the error's name and the failed-root count travel. `extra.userId` is
+  // pseudonymized at the emit boundary.
   try {
     await deleteWorkspace(userId);
   } catch (err) {
-    log.warn({ userId, err }, "Failed to delete workspace during deletion (non-fatal)");
+    reportSilentFallback(null, {
+      feature: ART17_ERASURE_FEATURE,
+      op: "workspace-tree-erasure",
+      extra: {
+        userId,
+        errorName: err instanceof Error ? err.name : typeof err,
+        failedRoots: err instanceof AggregateError ? err.errors.length : undefined,
+      },
+      message:
+        "workspace tree erasure failed: deleteWorkspace did not reap every working tree during " +
+        "Art. 17 deletion; the cascade continued",
+    });
   }
 
   // 3.01 Art. 17 erasure of the SHARED git-data bare repo (#5274 Sub-PR 3.D, DL-1/AC9).

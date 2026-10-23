@@ -267,6 +267,34 @@ describe("deleteAccount", () => {
     expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
   });
 
+  test("a deleteWorkspace throw is Sentry-mirrored (workspace-tree-erasure) and NEVER blocks the cascade (#8211)", async () => {
+    setupSupabaseMocks();
+    const raw = "11111111-2222-4333-8444-555555555555";
+    mockDeleteWorkspace.mockRejectedValue(
+      new AggregateError([new Error(`rm failed for /var/lib/soleur/worktrees/${raw}`)], `could not reap ${raw}`),
+    );
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    // The cascade completes: git-data erasure and the auth-user delete both still run.
+    expect(mockRemoveGitDataRepo).toHaveBeenCalledWith("user-123");
+    expect(mockAuth.admin.deleteUser).toHaveBeenCalledWith("user-123");
+    expect(result.success).toBe(true);
+
+    const call = mockReportSilentFallback.mock.calls.find(
+      ([, opts]) => (opts as { op?: string }).op === "workspace-tree-erasure",
+    );
+    expect(call).toBeDefined();
+    const [errArg, opts] = call as [unknown, Record<string, unknown>];
+    expect(opts.feature).toBe(ART17_ERASURE_FEATURE);
+    // MESSAGE path with no Error object, and no raw path/id anywhere in the payload.
+    expect(errArg).toBeNull();
+    expect(JSON.stringify(opts)).not.toContain(raw);
+    expect(JSON.stringify(opts)).not.toContain("/var/lib/soleur");
+    expect((opts.extra as Record<string, unknown>).errorName).toBe("AggregateError");
+    expect((opts.extra as Record<string, unknown>).failedRoots).toBe(1);
+  });
+
   test("erases the shared git-data bare repo for the deleted user (Art. 17 / AC9)", async () => {
     setupSupabaseMocks();
 

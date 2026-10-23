@@ -3,6 +3,7 @@ import {
   lstatSync,
   mkdirSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "fs";
 import { join, resolve } from "path";
@@ -19,6 +20,7 @@ import { getPluginPath } from "./plugin-path";
 import { reportSilentFallback } from "./observability";
 import { seedWorktreeConfig } from "./worktree-config-seed";
 import { atomicGitConfig } from "./git-config-atomic";
+import { workspaceTenantDenyRoots } from "./workspace-resolver";
 
 // Minimal structural type for the Storage remove path — avoids dragging the
 // full SupabaseClient generic into this FS/git-focused module.
@@ -269,10 +271,18 @@ export async function provisionWorkspaceWithRepo(
 }
 
 /**
- * Deletes a workspace directory.
+ * Deletes a workspace's directories (Art. 17 erasure of the local working tree).
  *
- * Used during account deletion (GDPR Art. 17) to remove all local files.
- * Uses execFileSync to avoid shell injection via the workspace identifier.
+ * Reaps `<root>/<workspaceId>` under EVERY tenant root returned by
+ * {@link workspaceTenantDenyRoots} — the raw, flag-independent set
+ * (`WORKSPACES_ROOT` and `WORKTREE_ROOT`, plus canonical forms of symlinked
+ * roots), NOT the flag-collapsed worktree root — so the live clone under
+ * `WORKTREE_ROOT/<id>` (git-data split on) and any tree left behind after a
+ * rollback (flag off) are both erased (#8211). Every root is attempted even if an
+ * earlier one fails; failures are thrown together as one AggregateError after the
+ * loop. A `/` or non-absolute root makes `workspaceTenantDenyRoots` throw before
+ * any removal. Uses execFileSync to avoid shell injection via the workspace
+ * identifier.
  *
  * @param workspaceId Workspace UUID. For solo account deletion this equals
  *   `user.id` per the N2 invariant; the caller (account-delete.ts) passes
@@ -285,11 +295,43 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
   if (!UUID_RE.test(workspaceId)) {
     throw new Error(`Invalid workspaceId format: ${workspaceId}`);
   }
-  const workspacePath = join(getWorkspacesRoot(), workspaceId);
 
-  if (existsSync(workspacePath)) {
-    removeWorkspaceDir(workspacePath);
-    log.info({ workspaceId }, "Workspace deleted");
+  // Resolve ALL roots before removing anything: a catastrophic root ('/') throws
+  // here, so no partial reap happens under a poisoned configuration. The Map
+  // dedupes equal roots (WORKSPACES_ROOT === WORKTREE_ROOT) by their target path.
+  const targets = new Map<string, string>();
+  for (const root of workspaceTenantDenyRoots()) {
+    targets.set(join(root, workspaceId), root);
+  }
+
+  const failures: unknown[] = [];
+  for (const [workspacePath, root] of targets) {
+    try {
+      removeWorkspaceDir(workspacePath, [root]);
+      // Verify, don't assume: lstat (never follows a link) must now report ENOENT.
+      if (lstatOrNull(workspacePath)) {
+        throw new Error("Workspace directory still present after removal");
+      }
+      log.info({ workspaceId, root }, "Workspace deleted");
+    } catch (err) {
+      log.error({ workspaceId, root, err }, "Workspace root reap failed");
+      failures.push(err);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `deleteWorkspace: ${failures.length} of ${targets.size} tenant roots could not be reaped`,
+    );
+  }
+}
+
+function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
+  try {
+    return lstatSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    throw err;
   }
 }
 
@@ -303,12 +345,31 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
  *
  * Throws with manual cleanup instructions if the directory cannot be
  * fully removed (e.g., root-owned files that require sudo).
+ *
+ * `allowedRoots` is the set of roots the path must be a strict child of; it
+ * DEFAULTS to the single workspaces root, so existing callers keep the exact
+ * guard. A `/` root never matches. A symlink at the path is unlinked, never
+ * followed.
  */
-export function removeWorkspaceDir(workspacePath: string): void {
-  const root = resolve(getWorkspacesRoot());
+export function removeWorkspaceDir(
+  workspacePath: string,
+  allowedRoots: string[] = [getWorkspacesRoot()],
+): void {
   const resolved = resolve(workspacePath);
-  if (resolved === root || !resolved.startsWith(root + "/")) {
+  const allowed = allowedRoots.some((r) => {
+    // A "/" root can never match: resolve("/") + "/" is "//", which no resolved path starts with.
+    const root = resolve(r);
+    return resolved !== root && resolved.startsWith(root + "/");
+  });
+  if (!allowed) {
     throw new Error("Refusing to remove path outside workspace root");
+  }
+
+  // lstat (not existsSync): existsSync follows links, so a dangling link looks
+  // absent, and a link to a directory would be treated as the directory itself.
+  if (lstatOrNull(workspacePath)?.isSymbolicLink()) {
+    unlinkSync(workspacePath);
+    return;
   }
 
   if (!existsSync(workspacePath)) return;

@@ -189,9 +189,10 @@ export async function DELETE(request: Request) {
     );
   }
 
-  // Best-effort workspace cleanup — deleteWorkspace derives the path from
-  // getWorkspacesRoot() + the workspace identifier and handles non-existent
-  // directories. Tears down `/workspaces/<activeWorkspaceId>` (team or solo).
+  // Best-effort workspace cleanup — deleteWorkspace derives the paths from every
+  // tenant root + the workspace identifier and handles non-existent directories.
+  // Tears down `/workspaces/<activeWorkspaceId>` AND the live clone under
+  // `WORKTREE_ROOT/<activeWorkspaceId>` (team or solo; #8211).
   try {
     await deleteWorkspace(activeWorkspaceId);
   } catch (err) {
