@@ -399,6 +399,11 @@ Accounting rules the extension MUST satisfy (review findings):
   money — realized harm requires BOTH this change weakening coverage AND a subsequent real tag
   anomaly; that is a coverage-regression pattern across runs, not a single merge's breach (see
   decision-challenges.md for the pending-assumed ruling).
+- **Scope-out residual:** two same-construction `rm -f .git/objects/` sites outside
+  `.github/scripts/test/` — `scripts/ci-pr-selection.test.sh` (the `test` required check)
+  and `apps/web-platform/infra/workspaces-luks-loopback.test.sh` — keep the flake class
+  live; scope-outed to #10956. Worst case is CI friction, not silent coverage loss: a
+  healthy-graph fixture FAILs loudly.
 
 ## Observability
 

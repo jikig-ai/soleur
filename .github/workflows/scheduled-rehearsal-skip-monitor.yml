@@ -81,7 +81,9 @@ env:
 
 jobs:
   monitor:
-    # `gh run view --log` over 20 multi-MB logs otherwise inherits the 6h default.
+    # Two run-sources now: up to ~43 calls (~20 infra-validation + ~20
+    # pr-quality-guards `gh run view --log` fetches + 3 `gh run list`) —
+    # measured ~305 s of the `timeout 600` wrap on 2026-10-23, ~51% consumed.
     timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
@@ -122,6 +124,8 @@ jobs:
           # `timeout 600`: a hung probe becomes rc 124, which the case below maps to `broken`
           # (and the alert step files). Otherwise the 15-minute job timeout cancels seal,
           # upload, the alert and the report, leaving a red job with no issue and no advance.
+          # Budget measured 2026-10-23: ~305 s for ~43 network calls across the
+          # two run-sources — roughly half the wrap, headroom for log growth.
           timeout 600 bash scripts/followthroughs/t5-skip-persistence-bound-7510.sh \
             > "${RUNNER_TEMP}/probe.out" 2> "${RUNNER_TEMP}/probe.err" || rc=$?
           cat "${RUNNER_TEMP}/probe.out"
@@ -252,22 +256,45 @@ jobs:
           #
           # --limit is load-bearing: `gh issue list` silently caps at 30, and a truncated page
           # that drops the one OPEN alert reads as "none found" -> a duplicate every morning.
-          # The phrase is QUOTED: unquoted, the leading `monitor:` token can be read as a
-          # search QUALIFIER and the remaining words AND-match loosely, so the probe degrades
-          # toward "none found" -- the same defect one layer up. Same escaping ship's own
-          # Signal 3 uses, for the same reason.
           # A gh FAILURE stays fatal rather than falling through to create: `|| existing=""`
           # turned any search error into "none found" -> duplicate.
+          #
+          # DEDUPE ON A STABLE BODY MARKER, not the title: titles get renamed
+          # when the alert's scope generalizes (the #10921 rename would have
+          # filed a duplicate beside any still-open old-titled alert). Every
+          # alert body carries the fixed marker below; issues filed BEFORE the
+          # marker existed are matched by their known legacy titles so the
+          # one-time transition cannot double-file.
+          ALERT_MARK='soleur-skip-persistence-monitor-alert'
           ls_rc=0
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --state open --search "\"$title\" in:title" --limit 200 --json number,state \
+            --state open --search "\"$ALERT_MARK\" in:body" --limit 200 --json number,state \
             --jq '.[0].number // empty') || ls_rc=$?
           if [ "$ls_rc" -ne 0 ]; then
             echo "::error::gh issue list failed (exit $ls_rc); refusing to file a possibly-duplicate alert."
             exit 1
           fi
+          if [ -z "$existing" ]; then
+            # Legacy-title transition check: every title this monitor has used,
+            # today's included — a renamed title must not spawn a sibling.
+            for _t in "$title" \
+              "monitor: the rehearsal skip-persistence probe is not running to a verdict" \
+              "monitor: git-data rehearsal suite is skipping arms across runs" \
+              "monitor: the rehearsal skip monitor streak store failed"; do
+              ls_rc=0
+              existing=$(gh issue list --repo "${{ github.repository }}" \
+                --state open --search "\"$_t\" in:title" --limit 200 --json number,state \
+                --jq '.[0].number // empty') || ls_rc=$?
+              if [ "$ls_rc" -ne 0 ]; then
+                echo "::error::gh issue list failed (exit $ls_rc); refusing to file a possibly-duplicate alert."
+                exit 1
+              fi
+              [ -n "$existing" ] && break
+            done
+          fi
           body_file="${RUNNER_TEMP}/body.md"
           {
+            printf '<!-- %s -->\n\n' "$ALERT_MARK"
             case "$VERDICT" in
               broken)
                 printf '%s\n\n' "The skip-persistence probe exited OUTSIDE its declared 0/1/2 contract -- it did not run to a verdict. This is a BROKEN INSTRUMENT, not evidence that the arms are healthy." ;;
