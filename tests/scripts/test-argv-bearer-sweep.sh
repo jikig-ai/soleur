@@ -921,8 +921,8 @@ betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-late
 git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh'
 
 # HMAC (S2-C): the probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
-# config channel: name | kind | hosts (regex) | min_calls | canned 200 body | owning test (delegated only). `delegated` probes keep
-# their own suite, and the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot
+# config channel: name | kind | hosts | min_calls | body | owning test. Only `delegated` rows remain, so the hosts, min_calls and
+# body columns are reserved and stay empty (the loop below still reads them). `delegated` probes keep their own suite, and the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot
 # pass while sending no credential). The `dynamic` kind (no owning suite, run under the `hmac-cf` shim profile) was retired with the
 # last probe that used it (G1 PR-4a, #10937; history in git).
 HMAC_MANIFEST='inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
@@ -3140,7 +3140,7 @@ echo "=== stage S2-B: Better Stack reader (basic auth off argv) done ==="
 # cutover copies (key on the python3 child's ENVIRONMENT only), `_bearer_ok` (a copy of the cutover function) on both
 # Cloudflare Access values, `--disable --noproxy '*'` first, `--config -` with three `header = "..."` lines on a
 # process substitution. A refusal sends nothing and prints the value-free marker; the exit code is the SURFACE'S
-# non-verdict code (2 for the parity script and the two probes whose contract reads 2 as TRANSIENT; 3 for the soak
+# non-verdict code (2 for the parity script and the 10548 probe, whose contract reads 2 as TRANSIENT; 3 for the soak
 # probe, whose contract reserves 2 for a reading), never 1 (a FAIL verdict, a tracker reopen).
 #
 # The instrument is the `hmac-cf` auth profile of the shared curl shim. It is NOT shape-only: it RECOMPUTES the digest
@@ -3211,15 +3211,16 @@ hm5_audit() { # <file>
   [[ "$(grep -cF -e 'case "$-" in' <<< "$code" || true)" -ge 1 ]] || HM5_BAD+=" preamble"
   return 0
 }
+# DERIVED from HMAC_MANIFEST (plus the parity script), never hand-listed: a hand-written list let a manifest probe (10548) sit unaudited, and a
+# swapped entry kept the row count while dropping a probe's audit.
 HM5_FILES="scripts/check-deploy-script-parity.sh
-scripts/followthroughs/inngest-soak-6178.sh
-scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh"
+$(printf '%s\n' "$HMAC_MANIFEST" | cut -d'|' -f1 | sed 's|^|scripts/followthroughs/|; s|$|.sh|')"
 while IFS= read -r hf; do
   hm5_audit "$hf"
   if [[ -z "$HM5_BAD" ]]; then row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" ok
   else row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" fail "failed facets:$HM5_BAD"; fi
 done <<< "$HM5_FILES"
-hm_hmacflag="$(git grep -nE -- '-hmac' -- scripts/check-deploy-script-parity.sh scripts/followthroughs/inngest-soak-6178.sh scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -c . || true)"
+hm_hmacflag="$(git grep -nE -- '-hmac' -- $HM5_FILES | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -c . || true)"
 if [[ "$hm_hmacflag" == 0 ]]; then row "census: no -hmac operand remains in the parity script or the two probes (the key is on no openssl argv)" ok
 else row "census: no -hmac operand remains in the parity script or the two probes (the key is on no openssl argv)" fail "$hm_hmacflag non-comment -hmac lines"; fi
 
@@ -3278,23 +3279,24 @@ hm5_facet_mut() { # <file> <facet> -> HM5_MUT
   return 0
 }
 while IFS= read -r hf; do
-  base="$(basename "$hf" .sh)"; hm5_fbad=""
+  base="$(basename "$hf" .sh)"; hm5_fbad=""; hm5_fn=0
   for hm5_facet in guard openssl config config-hdr-cf config-nodisable config-barecurl config-noprintf config-twoprintf preamble; do
-    hm5_facet_mut "$hf" "$hm5_facet"; hm5_audit "$HM5_MUT"
+    hm5_facet_mut "$hf" "$hm5_facet"; hm5_audit "$HM5_MUT"; hm5_fn=$((hm5_fn + 1))
     [[ "$HM5_BAD" == " ${hm5_facet%%-*}" ]] || hm5_fbad+=" [$hm5_facet:${HM5_BAD:-none}]"
   done
+  # a facet deleted from the list above and from hm5_audit together leaves every remaining mutant green: count the facets driven
+  [[ "$hm5_fn" -eq 9 ]] || hm5_fbad+=" [facet count $hm5_fn, expected 9]"
   if [[ -z "$hm5_fbad" ]]; then row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, adding a second bare curl command, dropping the header printf and repeating it each fail exactly their own facet" ok
   else row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, adding a second bare curl command, dropping the header printf and repeating it each fail exactly their own facet" fail "facets that did not fire alone:$hm5_fbad"; fi
 done <<< "$HM5_FILES"
 
-# ---- running the probes under the hmac-cf profile ------------------------------------------------------------
-PARBIN="$HMX/parbin"; PYSEL="$HMX/pysel"; PYBAD="$HMX/pybad"; PYGARB="$HMX/pygarb"
-for d in "$PARBIN" "$PYSEL" "$PYBAD" "$PYGARB"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+# ---- running the parity script under the hmac-cf profile ------------------------------------------------------------
+PARBIN="$HMX/parbin"; PYSEL="$HMX/pysel"; PYGARB="$HMX/pygarb"
+for d in "$PARBIN" "$PYSEL" "$PYGARB"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
 ln -s "$(type -P sha256sum)" "$PARBIN/sha256sum"                        # the parity script hashes ci-deploy.sh; not added to REALBIN
-printf '#!%s\nexit 1\n' "$BASH_BIN" > "$PYBAD/python3"                                # python3 that fails
 printf '#!%s\nprintf "not-a-digest"\n' "$BASH_BIN" > "$PYGARB/python3"                # python3 that prints a non-digest
 printf '#!%s\n[[ "${1:-}" == "-I" ]] && exit 1\nexec "%s" "$@"\n' "$BASH_BIN" "$REAL_PY" > "$PYSEL/python3"   # fails ONLY the HMAC call (-I -c), runs the host-key parse
-chmod +x "$PYBAD/python3" "$PYGARB/python3" "$PYSEL/python3"
+chmod +x "$PYGARB/python3" "$PYSEL/python3"
 HMX_ENV=("WEBHOOK_DEPLOY_SECRET=$HMX_KEY" "CF_ACCESS_CLIENT_ID=$HMX_CFID" "CF_ACCESS_CLIENT_SECRET=$HMX_CFSEC"
   "BETTERSTACK_QUERY_HOST=bs.example.test" "BETTERSTACK_QUERY_USERNAME=bsu" "BETTERSTACK_QUERY_PASSWORD=bsp"
   "SHIM_AUTH=hmac-cf" "SHIM_HMAC_KEY=$HMX_KEY" "SHIM_CF_ID=$HMX_CFID" "SHIM_CF_SECRET=$HMX_CFSEC")
@@ -4536,9 +4538,9 @@ for f in files:
 print(n_ok, n_sig, n_brr, ",".join(bad))
 '
 read -r S4_G_OK S4_G_SIG S4_G_BRR S4_G_BAD < <(cd "$REPO_ROOT" && python3 -I -c "$s4_guard_py" "$BEARER_FN" "$CUT" $S4_OK_DERIVED)
-# BOTH operands are literals above the `if`: 76 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
-# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3; #10546 retired two of those probes, the outer-wrap soak and the sandbox readback, taking the count from 77 to 76; G1 PR-4a, #10937, retired four more, the canary-promotion, infra-config activation, infra-config fatal-channel and workspace-isolation soaks, taking it from 76 to 72, so the floor keeps its two definitions of slack against the 74 measured), 6 `_sig_curl`, 2 `_bearer_curl`.
-S4_GUARD_FLOOR=72
+# BOTH operands are literals above the `if`: 74 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
+# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3; #10546 retired two of those probes, the outer-wrap soak and the sandbox readback, taking the count from 77 to 76, after which later definition changes left it at 78 against this floor of 76; G1 PR-4a, #10937, retired four more, the canary-promotion, infra-config activation, infra-config fatal-channel and workspace-isolation soaks, taking the measured count from 78 to 74, and the floor now equals it), 6 `_sig_curl`, 2 `_bearer_curl`.
+S4_GUARD_FLOOR=74
 if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 6 && "$S4_G_BRR" == 2 ]]; then
   row "S4 inline guard pin: all $S4_G_OK _bearer_ok definitions of the $(printf '%s\n' "$S4_OK_DERIVED" | grep -c .) tracked files that define one equal the canonical text byte for byte (the count equals git grep's), and the $S4_G_SIG _sig_curl and $S4_G_BRR _bearer_curl wrappers equal the cutover script's (marker name and its --max-time normalized); floor $S4_GUARD_FLOOR"  ok
 else row "S4 inline guard pin: an inline guard or wrapper differs from the canonical text" fail "ok=$S4_G_OK defs=$S4_OK_DEFS sig=$S4_G_SIG brr=$S4_G_BRR bad=$S4_G_BAD"; fi
@@ -7442,7 +7444,7 @@ for v in good rc curl-called marker-line marker-count value-in-output value-in-o
 done
 ctl_row "hmx_refused: a compliant refusal is green, and each of its clauses fails ALONE when only its fact is doctored: the rc, zero calls, the marker line, one marker, nothing echoed (EACH alternative of the echo test alone: the SYNTHMARK0001 hostile-token marker, the webhook key, the Cloudflare Access id, the Cloudflare Access secret, and the same marker on stdout rather than stderr), no stub (an unexpected tool and an unmodelled flag each), no bash error"
 
-# --- evaluate_hmac (the full-contract judge of the HMAC probes) ---
+# --- evaluate_hmac (the full-contract judge of the parity script's live status arm) ---
 EHM_DIG="$(printf '%064d' 7)"
 ehm_stdin() { printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$1" "$2" "$3"; }
 ehm_mk() { # <variant> -> row dir
@@ -8258,7 +8260,7 @@ SELFTEST_PASSES=0
 # 841 -> 874 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 33 S9 rows. The tree measured 841 after merging main (the floor said 840, so it had 1 row of slack), so the new floor is the measured total (874 passed, 0 failed).
 # 874 -> 875 at the second merge of main: #10566 added one S4 manifest row (git-data-rehearsal-evidence), so the base is 842 and the total is the measured 875 (875 passed, 0 failed).
 # 875 -> 880 at the #10697 fix round (rebased onto the 875 above; was 842 -> 847 on its own base) (#10455): web-bash-synthetic.sh joins S6H_CONVERTED (1 row), its _hb_url_ok digest and _hb_curl line pins (2 rows) and one mutation row each (2): measured (847 passed, 0 failed). S6H_FILE_FLOOR stays 7: it detects a mis-resolved directory (the derived population is 17 files), and the S6-HB scratch tree holds only the converted scripts plus two controls.
-# 880 -> 824 at G1 PR-4a (#10937): the four retired followthrough probes take their per-probe HMAC rows (the dynamic rows of three, the delegated row of the fourth, their hm5_audit and mutation rows and the manifest rows) with them; the parity block gains one E4 row and HM5_FILES gains sdk-bash-smoke-verdict-10548.sh (its audit and mutation rows): measured (824 passed, 0 failed).
+# 880 -> 824 at G1 PR-4a (#10937; S4_GUARD_FLOOR 76 -> 74, the measured count): the four retired followthrough probes take their per-probe HMAC rows (the dynamic rows of three, the delegated row of the fourth, their hm5_audit and mutation rows and the manifest rows) with them; the parity block gains one E4 row and HM5_FILES gains sdk-bash-smoke-verdict-10548.sh (its audit and mutation rows): measured (824 passed, 0 failed).
 EXPECTED_TESTS=824
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then

@@ -2045,7 +2045,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=289   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples (294 -> 289 at G1 PR-4a, #10937: seven triples of the four retired probes leave, two of sdk-bash-smoke-verdict-10548.sh join)
+PJ_TRIPLES=286   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples (294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh)
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2210,7 +2210,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-argv-bearer-sweep.sh | fatal | exempt | not-a-command a word in a case-pattern alternation (cloud-init-registry:1759), prose (reach T1; t1:rc124/301s; hits 0)'
   'tests/scripts/test-argv-bearer-sweep.sh | htpasswd | exempt | text-only every htpasswd word is registry-template site text or mutation text; the executable arm stubs docker, never htpasswd, so no piped call reaches an htpasswd stub'
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'
-  'tests/scripts/test-argv-bearer-sweep.sh | python3 | exempt | deliberate-fault never: defs 2973/2974/2975/3235 exit 1 / print a non-digest / fail only `-I` (fault stubs for the HMAC rows) (reach T1; t1:rc124/301s; hits 13)'
+  'tests/scripts/test-argv-bearer-sweep.sh | python3 | exempt | deliberate-fault never: the PYSEL and PYGARB fault stubs fail only `-I` / print a non-digest (fault stubs for the parity E1b rows) (reach T1; t1:rc124/301s; hits 13)'
   'tests/scripts/test-destroy-guard-counter-web-platform.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/41s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | curl | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (2 non-test producers) (reach T1; t1:rc124/300s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210, so no pipe reaches it'
