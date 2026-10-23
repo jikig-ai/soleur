@@ -309,7 +309,7 @@ print('missing')
 flip_segment_in_env() {
   local env_id="$1" feature_id="$2" segment_id="$3" enabled="$4"
   [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
-  [[ "$segment_id" =~ ^[0-9]+$ ]] || { echo "invalid segment id (expected an integer)" >&2; return 1; }
+  [[ "$segment_id" =~ ^[1-9][0-9]*$ ]] || { echo "invalid segment id (expected an integer)" >&2; return 1; }
   [[ "$enabled" == "true" || "$enabled" == "false" ]] || { echo "invalid enabled value (expected true or false)" >&2; return 1; }
 
   local existing_fs_id

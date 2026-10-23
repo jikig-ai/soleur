@@ -20,13 +20,14 @@
 # network: PATH is shadowed by a stub curl. The typed-yes plumbing around it stays covered by
 # operator-ack-guard.test.sh and audit-flag-flip.test.sh.
 #
-# FLIP may be overridden to test a mutated copy; the copy can sit anywhere (nothing is sourced
-# relative to it).
+# Overrides (used by the one-time mutation evidence recorded in the PR body, not by the suite):
+# FLIP points at a mutated copy of flip.sh (it can sit anywhere, nothing is sourced relative to
+# it); SKILLS_DIR is the tree the census scans and does NOT follow FLIP.
 set -euo pipefail
 if [[ -z "${FLIP:-}" ]]; then
   FLIP="$(git rev-parse --show-toplevel)/plugins/soleur/skills/flag-set-role/scripts/flip.sh"
 fi
-SKILL_SCRIPTS="${SKILL_SCRIPTS:-$(git rev-parse --show-toplevel)/plugins/soleur/skills}"
+SKILLS_DIR="${SKILLS_DIR:-$(git rev-parse --show-toplevel)/plugins/soleur/skills}"
 fail=0
 checks=0
 
@@ -39,6 +40,7 @@ assert() { # <description> <command...>
   fi
 }
 
+unset STUB_NO_OVERRIDE STUB_FORCE_REJECT STUB_DEV_SEG STUB_ROW_ID
 STUB_DIR="$(mktemp -d)"; trap 'rm -rf "$STUB_DIR"' EXIT
 
 # Flagsmith stub. Knobs: STUB_DEV_SEG (segment id of the override), STUB_ROW_ID (the dev env's
@@ -73,6 +75,8 @@ try:
     d = json.loads(os.environ["DATA"])
 except Exception:
     print("BADJSON"); sys.exit(0)
+if not isinstance(d, dict):
+    print("BADJSON"); sys.exit(0)
 errs = []
 for item in d.get("feature_states_to_update", []):
     fs = item.get("feature_segment") or {}
@@ -101,7 +105,7 @@ extract_fn() { # <name>: from the line "name() {" through the first line that is
 # Content anchors: refuse an extraction that lacks the constructs that define the function. A
 # truncated or empty extraction still parses and answers, which is worse than an absent one.
 has_construct() { [[ "$(extract_fn "$1")" == *"$2"* ]]; }
-assert "extracted fs_api carries the curl call" has_construct fs_api 'curl'
+assert "extracted fs_api carries the curl call" has_construct fs_api 'curl --'
 assert "extracted read_feature_segment_id carries the feature-segments read" has_construct read_feature_segment_id 'feature-segments'
 assert "extracted flip_segment_in_env carries the existing-row selector" has_construct flip_segment_in_env 'existing_fs_id'
 assert "extracted flip_segment_in_env carries the version POST" has_construct flip_segment_in_env 'versions/'
@@ -181,11 +185,11 @@ only_stubbed_hosts() {
   [[ -s "$CURL_LOG" ]] || return 1
   ! grep -qvE '^(GET|POST) https://api\.flagsmith\.com/' "$CURL_LOG"
 }
-# No id-only feature_segment printf body survives anywhere in the skill scripts (a second builder
+# Best-effort sweep for the printf spelling only (a jq/python builder would not match it). No id-only feature_segment printf body survives anywhere in the skill scripts (a second builder
 # of the rejected shape would be outside the extracted window), and the fixed shape is present
 # (so the sweep cannot pass vacuously).
-no_id_only_builder() { ! grep -rqE --include='*.sh' 'feature_segment":\{"id":%d\}' "$SKILL_SCRIPTS"; }
-fixed_builder_present() { grep -rqE --include='*.sh' 'feature_segment":\{"id":%d,"segment":%d\}' "$SKILL_SCRIPTS"; }
+no_id_only_builder() { ! grep -rqE --include='*.sh' 'feature_segment":\{"id":%d\}' "$SKILLS_DIR"; }
+fixed_builder_present() { grep -rqE --include='*.sh' 'feature_segment":\{"id":%d,"segment":%d\}' "$SKILLS_DIR"; }
 # assert must be able to go red: run it on a failing command and require its failure flag to move.
 assert_can_fail() { local fail=0 checks=0; assert "control" false 2>/dev/null; [[ "$fail" -eq 1 ]]; }
 
@@ -247,18 +251,28 @@ assert "create arm sends the whole expected create body (feature_segment {segmen
 
 # --- 5. a rejected version POST surfaces as exit 3 and records no accepted body --------------
 new_logs
-rc=0; STUB_FORCE_REJECT=1 STUB_DEV_SEG=102 STUB_ROW_ID=555 run_flips 102 true || rc=$?
+rc=0; STUB_FORCE_REJECT=1 STUB_DEV_SEG=102 STUB_ROW_ID=555 run_flips 102 true 2>/dev/null || rc=$?
 assert "a rejected version POST exits 3 (the 2026-10-23 symptom)" is_equal "$rc" 3
 assert "a rejected version POST leaves no accepted body" test ! -s "$BODY_LOG"
 
-# --- 6. census: no second builder of the rejected shape in the skill scripts -----------------
+# --- 6. the input guards refuse before any request is sent ---------------------------------
+new_logs
+rc=0; STUB_DEV_SEG=102 STUB_ROW_ID=555 run_flips abc true 2>/dev/null || rc=$?
+assert "a non-integer segment id is refused with exit 1" is_equal "$rc" 1
+assert "a refused segment id sends no request" test ! -s "$CURL_LOG"
+new_logs
+rc=0; STUB_DEV_SEG=102 STUB_ROW_ID=555 run_flips 102 maybe 2>/dev/null || rc=$?
+assert "a non-boolean enabled value is refused with exit 1" is_equal "$rc" 1
+assert "a refused enabled value sends no request" test ! -s "$CURL_LOG"
+
+# --- 7. census: no second builder of the rejected shape in the skill scripts -----------------
 assert "no id-only feature_segment body is built anywhere in the skill scripts" no_id_only_builder
 assert "the fixed id+segment body is present in the skill scripts (census is not vacuous)" fixed_builder_present
 
 # anti-vacuity: the floor is reported without the assert helper it backstops. Its bound is a
-# literal directly above the test (an exact count, no slack): raise it in the same edit that adds
-# a check.
-MIN_CHECKS=27
+# literal directly above the test, set to the current count: raise it in the same edit that adds a
+# check (the meta-guard requires a `-lt` floor, so adding one without raising it passes silently).
+MIN_CHECKS=31
 if [[ "$checks" -lt "$MIN_CHECKS" ]]; then
   printf 'flip-update-existing-override: FAIL — only %d assertions ran (anti-vacuity floor %d)\n' "$checks" "$MIN_CHECKS" >&2
   exit 1
