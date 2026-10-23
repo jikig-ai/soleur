@@ -2522,7 +2522,7 @@ ie_check() { # <row> <mode: ok|bad|empty> <token>
       [[ "$(bk_count "$o" '::add-mask::')" == 0 ]] || LD_BAD+=" mask-line"
       [[ "$(bk_calls "$row")" == 0 ]] || LD_BAD+=" calls=$(bk_calls "$row")"
       [[ "$(bk_count "$o" "$LD_MARK")" == 0 ]] || LD_BAD+=" marker-on-empty"
-      [[ "$(bk_count "$o" 'doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN')" == 1 ]] || LD_BAD+=" empty-warning"
+      [[ "$(bk_count "$o" 'doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform')" == 1 ]] || LD_BAD+=" empty-warning"
       [[ "$(grep -cxF 'DRV-OUT=__UNREADABLE__' "$o" || true)" == 1 ]] || LD_BAD+=" verdict-class" ;;
   esac
 }
@@ -2551,7 +2551,7 @@ while IFS='|' read -r ld_name ld_mode ld_cls ld_from ld_to ld_must; do
 done <<'IE_MUTANTS'
 check-removed|bad|quote-newline-url|  if ! _bearer_ok "$tok"; then|  if false; then|mask-line
 marker-dropped|bad|quote|    echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|    : "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|marker-count
-warning-dropped|bad|quote|    echo "::warning::G3 generation anchor: the $tokvar read|    : "::warning::G3 generation anchor: the $tokvar read|shape-warning
+warning-dropped|bad|quote|    echo "::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read|    : "::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read|shape-warning
 check-inverted|ok||  if ! _bearer_ok "$tok"; then|  if _bearer_ok "$tok"; then|calls=0
 mask-dropped|ok||  printf '::add-mask::%s\n' "$tok" >&2|  : '::add-mask::%s\n' "$tok" >&2|mask-line
 IE_MUTANTS
