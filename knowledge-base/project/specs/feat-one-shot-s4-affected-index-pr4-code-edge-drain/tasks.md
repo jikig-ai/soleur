@@ -6,15 +6,16 @@ Process: run long commands detached (script file, `setsid nohup bash <file>`, rc
 
 ## Phase 0 - claim, base, calibrate
 
-- [ ] 0.1 `gh pr list --label s4-drain --state open` returns only #10945; mirror comment on #10448 present; rebase on `origin/main`.
+- [ ] 0.1 `gh pr list --label s4-drain --state open` returns only #10945; mirror comment on #10448 present (a lost or duplicated claim: STOP and report); rebase on `origin/main`.
 - [ ] 0.2 Re-measure: detached worktree of the base, `audit --all-refs` (about 5 minutes), record the audit line and the code / non-code split with `CODE_EXT`; assert `gap_refs` equals the baseline line count.
-- [ ] 0.3 Calibration trial (throwaway, reverted): about 10 heavy edges plus one new block plus one shared-array spread; run the census, `test-all-affected.test.sh` and one `ratchet --report`; record the census rules and the reveal rate; decide batch order / early split before building the table.
+- [ ] 0.3 Calibration trial (throwaway, reverted): about 10 heavy edges plus one new block plus one shared-array spread; run the census, `test-all-affected.test.sh` and one `ratchet --report`; record the census rules (arrays must contain the lib, not the suite file), the paths each candidate shared helper names (reveal multiplicity), the `_aff_label_map` injectivity result, and the reveal rate; decide batch order / early split before building the table.
 - [ ] 0.4 Scratch heuristic triage (not committed) writes `candidates.tsv`; the human read decides.
 - [ ] 0.5 Recorder trial: one timeboxed attempt on one non-runner label; else write `recorder: not run, <reason>`.
 
 ## Phase 1 - decision table (`pairs-decisions.tsv`)
 
-- [ ] 1.1 One row per code pair: `suite, path, class (a, b, c, d or mention), file:line, decision`; plus a revealed / held-back section; no class means no declaration.
+- [ ] 1.0 Environment receipt: `CI_PR_AFFECTED` unset in every shell used (count 0).
+- [ ] 1.1 One row per code pair: `suite, path, class (a, b, c, d, mention or deferred-real), file:line, decision, touches_90d, suites_selected`; plus a revealed / held-back section; no class means no declaration.
 - [ ] 1.2 Cluster pairs that share a consumer; quote the consumer loop for every class (d) row; the 271 `test-relevance-paths.sh` pairs are read once per consumer suite.
 - [ ] 1.3 Order: batch A (17 suites with more than 10 code pairs), batch B (cross-suite library clusters), batch C (long tail).
 - [ ] 1.4 Recorder cross-check (best-effort): top 12 suites plus 15 random; compare the full per-window opened set restricted to table pairs; flip any opened-but-mention pair.
@@ -23,12 +24,14 @@ Process: run long commands detached (script file, `setsid nohup bash <file>`, rc
 ## Phase 2 - one commit per batch
 
 - [ ] 2.1 RED: edit the index only; `ratchet --base origin/main --report <file>` lists `stale-line` for exactly the declared pairs (set equality); counts come from the report, not stdout.
+- [ ] 2.1b Per batch: census, `test-all-affected.test.sh`, shellcheck, and suites reading the baseline content (hold back a pair that would turn `scripts/lib/inngest-probe-row.test.sh` STALE; PR4 edits no test file).
 - [ ] 2.2 GREEN: prune-only `--print-baseline` to a `.new` file, move it, `ratchet` exits 0.
-- [ ] 2.3 Reveal count: every revealed pair (real plus mention) counts PR-wide; stop line 60 / 30 / 4 rounds / 150, strictly decreasing; a revealed mention holds the revealing edge back; no accept file.
+- [ ] 2.3 Reveal count: first-report `new-pair` total per cycle (real plus mention, before any hold-back); caps 60 / 30 / 4 rounds strictly decreasing PER CHAIN (each batch opens a chain resolved before its commit), 150 cumulative PR-wide; over the cap means bisect and the other half is PR4b; a revealed mention holds the revealing edge back; no accept file.
 - [ ] 2.4 Commit batch with baseline in the same commit (real versus held-back counts and running totals in the message), push; the HEAD-pin check runs once on the final HEAD and after rebases.
 
 ## Phase 3 - fixpoint and verification
 
+- [ ] 3.0 Write the runbook edit (4.1) first so the verified HEAD is the merged HEAD.
 - [ ] 3.1 Post-final audit equals the last cycle (`refs`, `files_read`, `gap_refs`, `stale`), `gap_refs` equals `wc -l` of the baseline, last ratchet marker `exit=0 reason=pass`; final reveal 0.
 - [ ] 3.2 Breadth check: prefixes at least 3 segments and at most 25 tracked files; no baseline added line (`grep -c '^+[^+]' < <(git diff origin/main...HEAD -- <baseline>)` prints 0).
 - [ ] 3.3 Selection canary for prefix / glob edges only.
