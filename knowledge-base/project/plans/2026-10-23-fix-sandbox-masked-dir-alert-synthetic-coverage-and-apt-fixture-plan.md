@@ -17,6 +17,21 @@ pr: 10892
 
 # sandbox: routed alert for masked-dir-precreate, synthetic mask coverage, and the deploy-script-tests apt fixture
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-23. **Agents and rulings used:** CTO (7 forks, 6 follow-up rulings), CPO sign-off, a 5-agent plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow), then security-sentinel, observability-coverage-reviewer, user-impact-reviewer and a best-practices apt researcher; mechanical gates 4.6 to 4.12 run.
+
+### Key improvements
+
+1. **P0 caught by the observability pass and verified in code:** the planned `reportSilentFallback(err, ...)` emit would have been deduplicated behind the pino mirror's `feature=pino-mirror` capture (#8629), so the new Sentry rule could never have fired. The emit now uses the message path (`null` first argument), carries `extra.code`, and has a real-path test.
+2. The apt claim was narrowed: the shared cache fixes the multi-container exhaustion signature only; the two first-`update` stall signatures are instrumented, not fixed; `Closes #10781` became `Ref`.
+3. The probe's PID-1 reads were hardened (narrow `/proc/1/environ` filter, closed-enum journal fields) and a HOME guard added against a false-green.
+
+### New considerations
+
+- The merge alone mutates production in three ways (Sentry apply, synthetic re-delivery to both web hosts, release restart); see the new section.
+- The #10548 soak reads the deploy-time ledger, which this PR does not change.
+
 Spec lane note: no `spec.md` exists for this branch, so `lane:` defaulted to `cross-domain` (fail-closed).
 
 ## Overview
@@ -200,6 +215,12 @@ Per-artifact pairs for `soleur:engineering:review:user-impact-reviewer` (CPO con
 4. Probe `mkdir` as the wrong uid -> a root-owned dir the app cannot use; mitigated by the PID-1 uid guard (Guard 3).
 5. Probe-created dirs hide an app-side regression that stops pre-creating -> mitigated by the builder-vs-reality row and set-equality parity (Guard 2); accepted residual below.
 
+Accepted residuals (deepen-plan user-impact pass, recorded rather than silently scoped out):
+
+- A post-creation swap of a masked dir for a symlink or file is seen only by the probe's `lstat` (journal-only, 15-minute cadence, CTO ruling D), because the app's recursive `mkdir` succeeds on an existing symlink-to-directory. The tenant's Bash cannot write `/tmp` or `~/.claude` (`allowWrite` is the workspace), so this needs a same-uid actor outside the sandbox; no alert route is added in this PR.
+- One tenant's writable session tmp dir lives inside the shared 256 MB `/tmp` tmpfs; filling it makes later pre-creates fail with ENOSPC for every session in the container. The new alert then fires (desired, `extra.code` says ENOSPC) while the masks stay fail-open, the existing posture. Bounding per-session usage is the open #10455 item on per-session flooding and `--pids-limit`, not this PR.
+- A persistent fault re-emails every `frequency_minutes` to the same inbox as the other rules; the runbook names the ack/resolve step. A group acknowledged for one kind does not silence the other two (three Sentry issues, one per kind).
+
 CPO sign-off (plan time, 2026-10-23): ACCEPT, with conditions folded in: probe creation is journaled apart from production's (`masks_created`, verdict docs say the synthetic proves the namespace can mount over the dirs, not that the app created them); the alert acceptance is restated as the proven chain (Guard 1); a follow-up issue verifies the Slack wake path (Phase 5); `user-impact-reviewer` runs at review; the PR text must not claim "paged" (email-only until ADR-260's Slack path is verified) and must not imply the isolation gap closes (#10548 is untouched).
 
 ## Open Code-Review Overlap
@@ -221,11 +242,21 @@ Order is RED first (`cq-write-failing-tests-before`). Every new test below is wr
 1.1 `apps/web-platform/server/agent-runner-sandbox-config.ts`: the existing pre-create loop iterates three named
 lists; iterate them with a local kind label instead of one flat array:
 `[["peer-socket", peerSocketDirs], ["transcript", transcriptDirs], ["session-tmp", [AGENT_SESSION_TMP_ROOT]]]`.
-On a `mkdirSync` failure pass `tags: { dir_kind: kind }` to `reportSilentFallback` (keeps `feature: "agent-sandbox"`,
-`op: "masked-dir-precreate"`, `extra: { dir }`). No new exported chokepoint (CTO ruling, plan review): the parity
-test calls `peerMessagingSocketDirs()`, `sessionTranscriptDirs()` and `AGENT_SESSION_TMP_ROOT` directly. The
-`denyRead` assembly is untouched (order pinned). Replace the stale comment "no dedicated alert routes it yet,
-#10455". Tag values are a closed three-value set; never the raw path (env-derived, unbounded).
+**Emit on the MESSAGE path (deepen-plan P0, #8629 class).** `reportSilentFallback(err, ...)` with an `Error` first
+runs `logger.error({ err })`, whose pino mirror (`server/logger.ts` `mirrorToSentry`, lines ~73-79) calls
+`Sentry.captureException(err, { tags: { feature: "pino-mirror" } })`; Sentry then drops the second capture that
+carries `feature`/`op`, so a tag-filtered rule could never match. Therefore the emit's first argument is the
+LITERAL `null`: `reportSilentFallback(null, { feature: "agent-sandbox", op: "masked-dir-precreate", tags: { dir_kind: kind },
+extra: { dir, code, syscall }, message })`, with the `mkdirSync` error's `code` and `syscall` read from the caught
+error (the errno discriminator: EACCES, EEXIST for a file in the way, ENOSPC for a full tmpfs, EROFS, ENOTDIR) and
+never passed as `err`. The `message` is a constant per kind that names the kind and no path, e.g.
+`agent-sandbox: <kind> masked dir could not be created; its read-deny may not apply`, which gives three Sentry
+issues, so an acknowledged benign `peer-socket` issue cannot silence a later `transcript` failure. Same pattern
+already documented at `server/account-delete.ts` (~lines 273 and 314) and used by
+`reportAnthropicCreditExhausted`. No new exported chokepoint (CTO ruling, plan review): the parity test calls
+`peerMessagingSocketDirs()`, `sessionTranscriptDirs()` and `AGENT_SESSION_TMP_ROOT` directly. The `denyRead`
+assembly is untouched (order pinned). Replace the stale comment "no dedicated alert routes it yet, #10455". Tag
+values are a closed three-value set; never the raw path (env-derived, unbounded).
 1.2 `apps/web-platform/infra/sentry/issue-alerts.tf`: new `resource "sentry_alert" "masked_dir_precreate_failed"`
 (name `masked-dir-precreate-failed`), copied from `seccomp_remediation_failed` (the two-`tagged_event` shape
 (`feature` + `op`) is in `sandbox_startup_failure`), carrying `monitor_ids = [data.sentry_project_issue_stream_monitor.web_platform.id]`: `trigger_conditions =
@@ -244,9 +275,14 @@ counts (T25 pins the README strings ``**46 `sentry_alert` rules**`` and `(46 ale
 `issue-alerts.tf`, and add the issue to the history list).
 1.4 Create `apps/web-platform/test/sentry-masked-dir-precreate-alert-op-contract.test.ts`
 (mirror of `sentry-no-text-block-alert-op-contract.test.ts`; Guard 1).
-1.5 Extend `apps/web-platform/test/agent-sandbox-precreate-failure.test.ts`: assert `feature === "agent-sandbox"`
-and `tags.dir_kind` for each of the three kinds (force each to fail with a file as base), and the dir stays in
-`denyRead`.
+1.5 Extend `apps/web-platform/test/agent-sandbox-precreate-failure.test.ts` (keeps its mock of
+`reportSilentFallback`): assert `feature === "agent-sandbox"`, `tags.dir_kind`, `extra.code` and that the first
+argument is `null`, for each of the three kinds (force each to fail with a file as base), and the dir stays in
+`denyRead`. Create `apps/web-platform/test/agent-sandbox-precreate-sentry-path.test.ts`: the same forced failure
+over the REAL logger and the REAL `reportSilentFallback`, mocking only the Sentry SDK (spy on `captureMessage` and
+`captureException`); assert `captureMessage` is called exactly once with tags `feature=agent-sandbox`,
+`op=masked-dir-precreate` and the `dir_kind`, and that `captureException` is NOT called with
+`feature=pino-mirror`. The mocked test cannot see the dedup defect; this one can.
 1.6 Create `scripts/masked-dir-alert-discoverability.sh`: pure bash with grep/awk (about 20 lines; a vitest run
 cannot be guaranteed inside Check 10's 15 s cap with `PATH=/usr/local/bin:/usr/bin:/bin` and no `node_modules`),
 no credentials, and no logic the contract test has beyond three checks: (1) the literal op in a non-test file
@@ -274,7 +310,14 @@ carrying `feature` eq `agent-sandbox`, that op and an email action, (3) prints `
   `/proc/1/status` `Uid:` first field, not `stat`) > `pid1_unreadable` > `pid1_env_unreadable` > `home_mismatch`
   > `env_divergence`. The first two stop ALL creation. `home_mismatch` / `pid1_env_unreadable`: PID 1's `HOME`
   (from `/proc/1/environ`, NUL-separated; readability in this image is unverified, so the unreadable fallback is
-  mandatory) must equal the probe's `HOME` by exact string, both absolute; otherwise refuse ONLY the HOME-derived
+  mandatory) must equal the probe's `HOME` by exact string, both absolute. Hardening (CTO ruling E2: `/proc/1/environ`
+  holds every app secret, so it is read narrowly): cap the read at 256 KiB and treat a hit cap as
+  `pid1_env_unreadable` without parsing a partial entry; split on NUL and keep ONLY the exact names `HOME`,
+  `CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR`, `TMPDIR`; keep `HOME`'s value only for the
+  comparison and only a set-to-an-absolute-path boolean for the other four; discard every other entry at once;
+  never log, return or interpolate any value (nothing from environ reaches the result JSON, `detail=` or stderr;
+  a test seeds a sentinel secret in a fake PID-1 environ and asserts it never appears on stdout, stderr or in the
+  JSON). `/etc/passwd` was considered and rejected: it answers the default HOME, not the HOME the app has. On mismatch refuse ONLY the HOME-derived
   dir (`${home}/.claude/projects`), count it missing, and still create the other three. `env_divergence` is
   informational and NOT counted missing: PID 1 has an absolute `CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`,
   `CLAUDE_CODE_TMPDIR` or `TMPDIR`, bases the probe does not model (surfaces the accepted residual).
@@ -288,8 +331,11 @@ carrying `feature` eq `agent-sandbox`, that op and an email action, (3) prints `
 - The `runSmoke` `masked_dir_precreate_failed` infra exit stays for deploy mode only; in runtime mode a failed
   create is data (`masks_missing`), not an infra error.
 
-2.2 `apps/web-platform/infra/web-bash-synthetic.sh`: parse `masks_created` (`^[0-9]+$`) and `masks_note`
-(closed charset `^[a-z_]{0,24}$`), else `-`, with the same guards as `masks_missing`; journal them after
+2.2 `apps/web-platform/infra/web-bash-synthetic.sh`: parse `masks_created` (`^[0-4]$`) and `masks_note` (whole-string
+`case` match against the closed enum `uid_mismatch`, `pid1_unreadable`, `pid1_env_unreadable`, `home_mismatch`,
+`env_divergence`, else `-`; never derived from errno text or a path, never fed to `detail=`; a test row with an
+EMBEDDED newline such as `uid_mismatch` newline `forged=1` yields `-`, because command substitution strips only a
+trailing newline), with the same guards as `masks_missing`; journal them after
 `masks_missing=`. Keep the `prodtuple_partial` downgrade for `masks_missing > 0` only and the ping unchanged: a
 run that says it created 3 of 4 dirs makes a claim, so the heartbeat is NOT withheld (CTO ruling D; withholding
 would also be misread as a dead host). An old probe (apply lands before the release) emits no `masks_created`:
@@ -312,8 +358,11 @@ persistent `masks_missing>0` means expect a `masked-dir-precreate` Sentry email 
 alert-response section for the Sentry rule `masked-dir-precreate-failed`: decode by `dir_kind`
 (`peer-socket` -> a sibling can reach another session's bridge socket; `transcript` -> a sibling can read a
 transcript; `session-tmp` -> a sibling can read persisted CLI output), the existing fail-open posture stated
-as such (the builder keeps the entry in `denyRead` and carries on), containment (restart the container, which
-re-runs the pre-create on the next dispatch), the ack/resolve step, and that a persistent fault re-notifies every
+as such (the builder keeps the entry in `denyRead` and carries on), containment (redeploy through the existing `deploy` webhook, which starts a fresh container: a plain
+restart keeps the writable layer, so `~/.claude/projects` survives it and only the tmpfs `/tmp` dirs reset; a
+fault that persists after a redeploy needs a code fix), decode of `extra.code` (EACCES permissions, EEXIST a file in
+the way, ENOSPC the 256 MB `/tmp` tmpfs is full, EROFS, ENOTDIR), and the sentence that the first probe run after a
+container start hides the cold-start state, so an email proves the app's own pre-create failed, the ack/resolve step, and that a persistent fault re-notifies every
 `frequency_minutes`; (c) the proof limits: the synthetic proves the namespace can mount over the dirs, not that
 the app created them; the app's env subset is not modelled; after the first probe run the synthetic can no
 longer observe a cold-start mkdir failure (the Sentry rule is the detector); probe-created dirs persist after a
@@ -330,9 +379,12 @@ clock does not restart.
   is per suite (`$TMP/aptstate`), not shared across suites; containers of one suite run serially (verify in the
   work phase for every consumer; `git-data-cutover-access` is the one to check).
 - Root-owned cache files: container root creates `lists/` and `archives/` content the host user cannot delete,
-  and `gd_apt_state_arm` returns early when already armed. The helper ends each call with a
-  `chmod -R a+rwX` of the state dir (inside the container, so the host-side `rm -rf "$TMP"` of the suites'
-  traps succeeds), with a host-side test row.
+  and `gd_apt_state_arm` returns early when already armed; apt also chowns `lists/partial` and `archives/partial`
+  to `_apt` with mode 0700 inside the container, so a non-root host user can fail to clean the state dir. The
+  helper runs a container-side `chmod -R a+rwX "$dir"` on EVERY exit path of `gd_apt_install_bounded` (success and
+  failure; GNU `chmod -R` does not follow symlinks met during traversal, so no `find ! -type l` is needed), with a
+  unit check that the host can remove the state dir after a run. Check how each suite tears the state dir down
+  today before relying on it (unverified at plan time).
 - `gd_apt_install_bounded` passes the same `-o Dir::State::lists=/work/apt/lists -o Dir::Cache::archives=/work/apt/archives`
   on BOTH `update` and `install` (derived from `GD_APT_STATE_DIR`, not a second literal). `update` still runs in
   every container (a conditional GET; it proves the mirror is reachable). No budget, cap, backoff or rc contract
@@ -439,6 +491,7 @@ the gates the revert PR must pass) and written into the runbook, not trusted fro
 ## Files to Create
 
 - `apps/web-platform/test/sentry-masked-dir-precreate-alert-op-contract.test.ts`
+- `apps/web-platform/test/agent-sandbox-precreate-sentry-path.test.ts`
 - `scripts/masked-dir-alert-discoverability.sh`
 
 Glob/path check (`hr-when-a-plan-specifies-relative-paths-e-g`): every path above was verified present on
@@ -480,19 +533,19 @@ liveness_signal:
   configured_in: apps/web-platform/infra/sentry/issue-alerts.tf; apps/web-platform/infra/web-bash-synthetic.service and web-bash-synthetic.timer; apps/web-platform/infra/web-probe.tf
 
 error_reporting:
-  destination: Sentry project web-platform via SENTRY_DSN (reportSilentFallback, tags feature=agent-sandbox op=masked-dir-precreate dir_kind=peer-socket|transcript|session-tmp), mirrored to container stdout by pino
-  fail_loud: the Sentry email on the first occurrence in an hour; the pino line "agent-sandbox: a masked dir could not be created; its read-deny may not apply" in the container log
+  destination: Sentry project web-platform via SENTRY_DSN (reportSilentFallback(null, ...) message path, tags feature=agent-sandbox op=masked-dir-precreate dir_kind=peer-socket|transcript|session-tmp, extra code and syscall and dir), mirrored to container stdout by pino
+  fail_loud: the Sentry email on the first occurrence in an hour; the pino line "agent-sandbox: <kind> masked dir could not be created; its read-deny may not apply" in the container log
 
 failure_modes:
   - mode: a masked dir cannot be pre-created in the app (one cross-tenant channel fails open)
-    detection: in-surface emit from the dispatcher (reportSilentFallback in buildAgentSandboxConfig, layer 2 pino to Sentry capture with layer 5 release context); dir_kind discriminates which channel in one event; the deny entry stays in denyRead so the discriminating field is the tag
-    alert_route: Sentry rule masked-dir-precreate-failed, email (layer 2 and layer 5)
+    detection: in-surface emit from the dispatcher (reportSilentFallback(null, ...) in buildAgentSandboxConfig; layer 2 is the pino breadcrumb mirror and the tagged captureMessage goes direct, because passing an Error would be deduplicated behind the feature=pino-mirror capture); dir_kind discriminates which channel and extra.code (errno) which cause in one event
+    alert_route: Sentry rule masked-dir-precreate-failed, email to issue owners (one Sentry issue per kind)
   - mode: the app stops pre-creating a dir (regression in the loop) while the probe has created it
     detection: builder-versus-reality unit row and probe/builder set-equality parity in CI, not a runtime signal (accepted residual: the probe hides it at runtime)
     alert_route: CI red on the PR (layer 6, workflow-run log)
   - mode: the synthetic cannot create or validate a masked dir (non-directory, foreign owner, uid mismatch, mkdir error)
-    detection: journal line SOLEUR_WEB_BASH_SYNTHETIC with masks_missing greater than 0 and masks_note, shipped by Vector (layer 3 journald to Better Stack), coverage=prodtuple_partial
-    alert_route: informational, queryable with scripts/betterstack-query.sh; the app-side failure pages through the Sentry rule
+    detection: journal line SOLEUR_WEB_BASH_SYNTHETIC with masks_missing greater than 0 and masks_note, shipped by Vector (layer 3 journald to Better Stack, SYSLOG_IDENTIFIER web-bash-synthetic is in the vector.toml allowlist), coverage=prodtuple_partial
+    alert_route: informational only, no human is paged (CTO ruling D); the reader runs the runbook Better Stack Logs query; the app-side failure pages through the Sentry rule on the next dispatch
   - mode: the apt fixture stalls or the shared budget is spent
     detection: GD_APT spent line, FIXTURE_APT_CAUSE line and the surfaced scrubbed apt tail in the suite output
     alert_route: red deploy-script-tests job (layer 6, workflow-run log and the infra-suite-logs artifact)
@@ -507,9 +560,11 @@ discoverability_test:
 ```
 
 Layer note (`hr-observability-layer-citation`): the layer list is `observability-coverage-reviewer.md` "The
-seven observability layers"; this block cites layers 2, 3, 5 and 6. Affected-surface rule (§2.9.2): the agent
+seven observability layers"; this block cites layers 2, 3 and 6. Affected-surface rule (§2.9.2): the agent
 sandbox is a blind surface; the emit comes FROM the dispatcher, and one event's `dir_kind` plus the retained
-`extra.dir` discriminates the competing causes (peer socket vs transcript vs session tmp).
+`extra.dir` plus `extra.code` discriminate the competing causes (which channel, and EACCES vs EEXIST vs ENOSPC vs EROFS).
+The offline discoverability command proves the committed emit-to-rule chain only; the live proof is the post-merge
+`workflows/` read in Acceptance Criteria.
 
 ## Guard Contract
 
@@ -529,6 +584,7 @@ sandbox is a blind surface; the emit comes FROM the dispatcher, and one event's 
 | 4 | Drop the `op` `tagged_event` (or the `feature` one) from the rule | RED |
 | 5 | Remove the email action | RED |
 | 6 | Emit `dir_kind` with a fourth value or the raw path | RED |
+| 6b | Pass the caught `Error` as the first argument of `reportSilentFallback` instead of `null` (the pino-mirror dedup defect) | RED (contract test asserts the literal `null`; the real-path test sees `pino-mirror`) |
 | 7 | Harness: disable the comment-strip step in the test helper; a fixture where the rule is commented out must then be seen as live, so the harness self-test row goes RED | RED |
 | 8 | Must-PASS non-canonical: the same rule with conditions in the opposite order and a different `frequency_minutes` | GREEN |
 
@@ -567,6 +623,7 @@ sandbox is a blind surface; the emit comes FROM the dispatcher, and one event's 
 | 2 | Add a `chmod` after `mkdir` | RED |
 | 3 | `lstat` replaced by `stat` (a symlink counts as a directory) | RED |
 | 4 | Stop the loop at the first failed dir (second dir not attempted) | RED |
+| 4c | Read `/proc/1/environ` without the narrow filter (a sentinel secret in a fake PID-1 environ reaches stdout, stderr or the JSON) | RED |
 | 4b | Drop the HOME comparison (create `~/.claude/projects` although PID 1's HOME differs, or `/proc/1/environ` is unreadable) | RED |
 | 5 | Dispatch: `pid1Uid` reader returns `undefined` and creation still happens | RED |
 | 6 | Add a fifth path to `precreateDirs` without a test row | RED (set-equality, Guard 2) |
@@ -652,6 +709,21 @@ sandbox is a blind surface; the emit comes FROM the dispatcher, and one event's 
 - Given the rule is commented out, a filter is dropped, the email action is removed, or a second emit site appears, then the contract test is RED (unit).
 - Given a warm apt state dir, then a second `gd_apt_install_bounded` for the same packages performs zero fetches; given a stalled first fetch, then the cap fires and the retry succeeds within budget (unit with a stub `apt-get`).
 - Integration (`soleur:qa`): after merge, `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_WEB_BASH_SYNTHETIC --limit 20 | jq -r '.raw|fromjson|.message'` shows `masks_created=4` once per container then `masks_created=0`, `masks_missing=0`, `coverage=prodtuple_partial` gone, and Sentry shows the live rule (`organizations/jikigai-eu/workflows/`).
+
+## Encryption Posture
+
+Skipped per plan Phase 2.11: this plan introduces no persistent data store and no new cross-component or network
+connection. The only `.tf` addition is one `sentry_alert` rule inside the existing Sentry root (a notification
+route, not a store); the probe writes empty directories on the container's own tmpfs and writable layer; the apt
+cache lives in a per-suite CI temp dir that is destroyed with the runner. The Sentry and Better Stack edges already
+exist and are unchanged.
+
+## Precedent-diff (deepen-plan 4.4)
+
+- Alert rule: precedent `seccomp_remediation_failed` (`issue-alerts.tf`, trigger `event_frequency_count` value 0 over 1h, email `issue_owners` + `ActiveMembers`, `ignore_changes = [environment]`) and the two-filter `feature` + `op` shape of `sandbox_startup_failure`. Differences: this rule carries both filters and omits the frozen `legacy_trigger_conditions`.
+- Message-path emit: precedent `reportAnthropicCreditExhausted` (`server/anthropic-credit.ts`) and `server/account-delete.ts`; difference: the kind is in the message to get one Sentry issue per kind.
+- Probe creation: precedent is the production `mkdirSync(dir, { recursive: true, mode: 0o700 })` in `buildAgentSandboxConfig`, reused verbatim; guards (PID-1 uid and HOME) are new and have no precedent in the repo.
+- Shared apt state: precedent is the existing `GD_APT_STATE` host-owned dir mounted at `/work/apt`; the lock pattern is apt's own `lock` files in `archives/` and `lists/`, with containers of one suite run serially.
 
 ## Risks and Sharp Edges
 
