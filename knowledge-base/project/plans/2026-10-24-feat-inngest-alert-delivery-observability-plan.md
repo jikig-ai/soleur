@@ -710,51 +710,51 @@ Adjacent (non-code-review) context issues the brief names, with dispositions:
 
 ### Functional Requirements
 
-- [ ] FR-1: `scripts/betterstack-incident-mirror.sh --selftest` prints
+- [x] FR-1: `scripts/betterstack-incident-mirror.sh --selftest` prints
   `betterstack-incident-mirror selftest: ok` (the discoverability probe;
   no network, no credentials).
-- [ ] FR-2: With a fixture open incident on `soleur-inngest-consumer-prd`,
+- [x] FR-2: With a fixture open incident on `soleur-inngest-consumer-prd`,
   the mirror creates exactly one `[ci/betterstack-incident]` issue carrying
   labels `ci/betterstack-incident`, `action-required`, `priority/p1-high`
   and an incident-id marker in the body; a second run comments instead of
   duplicating.
-- [ ] FR-3: A mirror-filed issue whose incident leaves the open set gets a
+- [x] FR-3: A mirror-filed issue whose incident leaves the open set gets a
   resolved comment; a human-filed same-title issue without the marker is
   untouched.
-- [ ] FR-4: `scheduled-betterstack-incident-mirror.yml` carries `schedule:`
+- [x] FR-4: `scheduled-betterstack-incident-mirror.yml` carries `schedule:`
   fallback + `workflow_dispatch` only, `cancel-in-progress: false`, a
   `WATCHDOG_DISPATCH_TABLE` row (`intervalMinutes: 15`, non-empty
   eligibility), and a terminal `sentry-heartbeat` step naming
   `scheduled-betterstack-incident-mirror`.
-- [ ] FR-5: `sentry_cron_monitor.scheduled_betterstack_incident_mirror`
+- [x] FR-5: `sentry_cron_monitor.scheduled_betterstack_incident_mirror`
   exists in `cron-monitors.tf` with margin ≤ the parity ceiling and the
   unrouted landing noted.
-- [ ] FR-6: The feeder beats `<url>/fail` (and only that) when the newest
+- [x] FR-6: The feeder beats `<url>/fail` (and only that) when the newest
   fresh dedicated row classifies `not-serving`; normal beat on
   `healthy`/`stopped-by-brake`; exit 3 withhold on `probe-unavailable`.
-- [ ] FR-7: `inngest.tf` flips `push = true` on `inngest_prd` and
+- [x] FR-7: `inngest.tf` flips `push = true` on `inngest_prd` and
   `inngest_consumer` with the measured-flip comment (revert path named).
-- [ ] FR-8: `postmerge` documents Phase 3.9 with both report lines
+- [x] FR-8: `postmerge` documents Phase 3.9 with both report lines
   (`Alert-channel sweep: …`) in the Phase-6 comment template and Phase-7
   report block.
-- [ ] FR-9: `post-deploy-incident-soak.sh` exits 0 iff zero new incidents and
+- [x] FR-9: `post-deploy-incident-soak.sh` exits 0 iff zero new incidents and
   zero new `ci/` issues in `[deploy_ts, +Nh]`; TRANSIENT on read failure;
   registered in `scripts/test-all.sh` + the two TSVs.
-- [ ] FR-10: ADR-297 (provisional) exists and `model.c4`/`views.c4` carry the
+- [x] FR-10: ADR-297 (provisional) exists and `model.c4`/`views.c4` carry the
   mirror edges; `c4-code-syntax` + `c4-render` suites green.
 
 ### Non-Functional Requirements
 
-- [ ] NFR-1: No file inside sibling #10966's diff surface is edited
+- [x] NFR-1: No file inside sibling #10966's diff surface is edited
   (`inngest-bootstrap.sh`, `betterstack-logs-alerts.tf`, `server.tf`,
   `ship/SKILL.md`, `inngest-luks-cutover.*`, `scripts/lib/inngest-probe-row.test.sh`,
   `inngest.test.sh`, `journald-config.test.sh`, `ci-deploy.test.sh`,
   `build-inngest-*.yml`, `apply-deploy-pipeline-fix.yml`).
-- [ ] NFR-2: No new secrets or Doppler writes; the mirror consumes the
+- [x] NFR-2: No new secrets or Doppler writes; the mirror consumes the
   existing `BETTERSTACK_API_TOKEN_READONLY` repo secret.
-- [ ] NFR-3: Every credentialed curl keeps the repo shape — `--config -`
+- [x] NFR-3: Every credentialed curl keeps the repo shape — `--config -`
   stdin, `--disable --noproxy '*'`, xtrace refusal, no token on argv.
-- [ ] NFR-4: No `betteruptime_policy` or paid-tier resource is created;
+- [x] NFR-4: No `betteruptime_policy` or paid-tier resource is created;
   `var.betterstack_paid_tier` is untouched.
 
 ### Quality Gates
