@@ -22,7 +22,7 @@ That faith deserves a receipt. So before we shipped any safety checks into the r
 
 ## The audit: count your own first
 
-Our own codebase has been accumulating automated checks for over a year — every mistake that ever got through left a check behind to stop it from happening twice. Before we told founders which of these belong in their repositories, we had to answer an uncomfortable question ourselves: how many of ours actually would?
+Our own codebase has been accumulating automated checks for months — every mistake that ever got through left a check behind to stop it from happening twice. Before we told founders which of these belong in their repositories, we had to answer an uncomfortable question ourselves: how many of ours actually would?
 
 On October 21 we counted the whole corpus: 102 automated checks, in two families. Fifty-six of them are tripwires — they fire in the moment work is about to be saved, the last instant a mistake can still be stopped cheaply. The other forty-six are sweeps — they read the whole repository and flag anything that has drifted out of line.
 
