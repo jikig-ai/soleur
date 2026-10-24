@@ -314,3 +314,49 @@ visible. No verification-relaxing flag (`--insecure-ignore-tlog`, `--insecure-ig
 `--key`, `--new-bundle-format`) was added — adopting one is a posture change requiring an
 amendment here, not a patch (HARD-10's spirit extended: diagnosability must not cost
 fail-closed).
+
+## Addendum 2026-10-23 — defect 3 closure: the producer-side root cause was a 0600 member mode, not the envelope
+
+The defect-3 addendum left the failing locus as "bundle-load or host-state divergence".
+The verbatim-error probe added to `diagnose-inngest-verify.yml` (sigstore-go v1.2.0
+`LoadJSONFromPath` — the version cosign v3.1.1 vendors, same function `checkNewBundle`
+calls) measured it on the real promoted digest (diagnose run 40035816173):
+**`LOAD_OK version=v0.3`** — the emitted envelope parses AND validates cleanly. The
+failing arm is therefore the READ, not the parse: cosign `sign_blob.go:132` writes the
+`--bundle` file mode 0600, `tar -czf` preserves that member mode into the OCI image,
+and the consumer verify runs inside the pinned NONROOT cosign image over a bind mount —
+EACCES on open → `LoadJSONFromPath` errors → `checkNewBundle` returns false → the
+`--trusted-root only supported with --new-bundle-format` reject the host reports as
+`detail=flag-newbundle`. The probe loads the identical bytes only because it reads the
+file as its owner. The diagnose workflow's TLE census closed the envelope hypotheses in
+parallel (Rekor v1 `hashedrekord/0.0.1` canonicalizedBody, non-empty checkpoint
+envelope, all mandatory TLE scalars present) and the stage0700 arm reproduced the
+EACCES class verbatim (`open /bundle/manifest.txt: permission denied`).
+
+Producer-side fix (this arc, three moves):
+
+1. **Emitter-side correction**: the sign step `chmod 0644`s the emitted
+   `.sigstore.json` so the tarball lands world-readable — the correction the
+   measurement names.
+2. **Emit-surface pin** (defense in depth; the envelope proved innocent this time but
+   the TUF-published default CAN still drift it under the producer — Rekor-v2 service
+   selection would force a TSA and change the emitted TLE shape): `--signing-config
+   apps/web-platform/infra/inngest-signing-config.json`, a committed signingconfig
+   v0.2 document modeled on sigstore/root-signing `targets/signing_config.v0.2.json`
+   (captured 2026-10-23) with Fulcio v1 + oauth2.sigstore.dev v1 + `rekor.sigstore.dev`
+   majorApiVersion 1 ONLY and `tsaUrls` omitted. Rekor-v1 sunset is a bounded tail
+   risk — re-evaluate on sigstore's public v1 deprecation announcements.
+3. **Verify-before-publish never-again gate**: a step between sign and assemble/push
+   runs the PINNED cosign image (same digest, same nonroot UID) over a bind-mounted
+   bundle dir — the consumer's own load path, not the runner binary, because a verify
+   run as the file's OWNER would sail past the EACCES class this defect proved. It
+   hard-fails unless `verify-blob` prints `Verified OK` under the ref-derived
+   `--certificate-identity-regexp` (ref metacharacters escaped; the host-side baked
+   `main` regexp is unchanged). An unloadable, unreadable or unverifiable bundle can
+   no longer reach GHCR/zot.
+
+Lesson: "sign-time `validate()` ≠ the on-disk load path" — and neither equals the
+CONSUMER's read path. A bundle can validate in-process and load as its owner and still
+fail the verifier that matters because WHO reads the file is part of the contract.
+Producer self-checks must run the consumer's own verifier image against the artifact
+as shipped. No verification-weakening flag was added (AC10 carries).

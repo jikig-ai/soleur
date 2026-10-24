@@ -1588,7 +1588,17 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_ZOT_MIRROR_RETRY_TEST_SH_PATHS=(
 # workflow, so a workflow-only diff must select it; derived edges cannot reach a YAML subject.
 AFFECTED_PLUGINS_SOLEUR_TEST_INNGEST_CONFIG_BUNDLE_MIRROR_TEST_SH_PATHS=(
   ".github/workflows/build-inngest-config-bundle.yml"
+  "apps/web-platform/infra/cosign-trusted-root.json"
+  "apps/web-platform/infra/inngest-signing-config.json"
   "plugins/soleur/test/inngest-config-bundle-mirror.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/diagnose-inngest-verify-workflow.test.sh — executes probe steps extracted from the
+# diagnose workflow, so a workflow-only diff must select it; derived edges cannot reach a YAML subject.
+AFFECTED_PLUGINS_SOLEUR_TEST_DIAGNOSE_INNGEST_VERIFY_WORKFLOW_TEST_SH_PATHS=(
+  ".github/workflows/diagnose-inngest-verify.yml"
+  "plugins/soleur/test/diagnose-inngest-verify-workflow.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -2565,4 +2575,16 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_VERIFICATION_SCAFFOLD_TEST_MANIFEST_TEST_SH_PATHS
   "plugins/soleur/skills/verification-scaffold/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
+)
+
+# plugins/soleur/test/apply-delivery-gap-follower.test.sh — reads the apply workflow and the
+# red-run runbook it asserts against; derived edges cannot reach the file subjects.
+AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
+  ".github/workflows/apply-delivery-gap-follower.yml"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
+  ".github/workflows/apply-web-platform-infra.yml"
+  "knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md"
+  "plugins/soleur/test/apply-delivery-gap-follower.test.sh"
+  "scripts/apply-delivery-gap.sh"
+  "scripts/lib/test-affected-paths.sh"
 )
