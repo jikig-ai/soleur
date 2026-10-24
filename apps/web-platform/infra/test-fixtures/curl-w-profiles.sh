@@ -8,7 +8,7 @@
 # The old stubs printed the HTTP code only (or nothing) and exited 0, 60 or N, so the self-gate's `-w` line could never be shown to
 # say anything about the stage that failed. Both doubles now route EVERY outcome through the one printer below.
 #
-# THE VALUES (the measured table) are copied from knowledge-base/project/specs/feat-one-shot-inngest-selfgate-phase/curl-w-measurements.md,
+# THE VALUES (the measured table) are copied from knowledge-base/project/specs/archive/20261024-023954-feat-one-shot-inngest-selfgate-phase/curl-w-measurements.md,
 # measured 2026-10-23 on curl 7.81.0, 8.5.0 and 8.23.0 against real local listeners (a python `ssl` server and real stunnel 5.72);
 # the values printed here are the curl 8.5.0 column. `req_partial` and `status_partial` (rc 18) were measured on 8.5.0 in the deepen
 # pass. Only the four variables that exist since curl 7.19 are modelled: http_code time_connect time_appconnect ssl_verify_result.
