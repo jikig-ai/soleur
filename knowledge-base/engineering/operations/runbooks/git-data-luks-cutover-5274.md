@@ -391,7 +391,7 @@ The workflow does not enforce the following, so the owner holds them:
 | R5 | R | `gh run view <rollback id> --json jobs`, then `--log` | `host web-1: git_data_store=disabled observed` and the web-2 line; `unfreeze` success; `Positive replication probe` success with `STORE probe=probe verdict=ok` | a missing `disabled` line means the fleet may be on the old env: `mode=redeploy` converges it |
 | R6 | R then D then O | Level 1 reads timed after the rollback redeploy (below); then Level 2: `gh workflow run git-data-cutover.yml --ref main -f mode=proof -f confirm=CUTOVER-GIT-DATA` BEFORE the deletion (EXPECTED red, below); then the owner deletes the synthetic account through `POST /api/account/delete` from that account's own session | the Level 1 lines are as below; the proof before the deletion reads `store_not_empty` | a proof before the deletion that reads `clear` means the session never replicated (Level 2 did not run as designed); a Level 1 line missing means the container is not armed |
 | R7 | D | the exit read, after the deletion: `gh workflow run git-data-cutover.yml --ref main -f mode=proof -f confirm=CUTOVER-GIT-DATA` | verdict `clear` | `store_not_empty` is the incident ([Store not empty](#store-not-empty-store_not_empty), steps 1 to 4): run the Sentry sweep in step 3 to separate a failed erase of the synthetic account from a real repository, route to the CLO, keep the first real flip blocked, do not replace the host and do not wipe either volume |
-| R8 | R then O | read `GIT_DATA_LUKS_CUTOVER_AT` in `prd` (name listing) | the stamp is absent, or the owner records that it was left in place | present: the rollback does not clear it (#10297 is open, and the delete permission of the flag-write token is unverified). The real flip overwrites a stale stamp, but until then a present stamp with the flag off makes `wipe` and `wipe_check` refuse (`flip_chained`, `wipe_precondition_flag_not_true`): delete it as an owner-gated step with a read-back, or merge #10297 first |
+| R8 | R then O | read `GIT_DATA_LUKS_CUTOVER_AT` in `prd` (name listing) | the stamp is absent, or the owner records that it was left in place | present: the rollback clears it since #10297 (measured 2026-10-24: rollback log line `cutover_at=cleared`), so a present stamp after a rollback means the clear failed or the stamp predates the fix. The real flip overwrites a stale stamp, but until then a present stamp with the flag off makes `wipe` and `wipe_check` refuse (`flip_chained`, `wipe_precondition_flag_not_true`): delete it as an owner-gated step with a read-back, or investigate the failed clear first |
 | R9 | PR | write the evidence block under the rehearsal record below | the links resolve | review |
 
 **The expected red `proof` before the Level 2 deletion.** After R5 the synthetic repository is on the store by design, so the
@@ -416,7 +416,7 @@ only ever be a failure signal.
 
 **Abort.** Stop and do not proceed to the next step at: `FREEZE_HELD`, `RECOVERY_FAILED`, `PROBE_FAILED` or `STATE UNKNOWN`; a
 missing per-host `enabled` or `disabled` line; the exit read `store_not_empty`; a non-zero session count at R0, R1 or R4
-(the synthetic session must have ended before R4: the cc query can stay live up to the idle reaper's ~10 min after the user's last activity, so end the session and wait for `0` before R4), or no session count at all. A rehearsal whose exit read is `store_not_empty` is
+(the synthetic session must have ended before R4: the cc query can stay live up to ~15 min (10 min idle threshold plus the 5 min sweep interval in `cc-dispatcher.ts`) after the user's last activity, so end the session and wait for `0` before R4), or no session count at all. A rehearsal whose exit read is `store_not_empty` is
 recorded as "mechanics passed, store populated", and the first real flip is blocked until the incident is decided. Nobody
 reclaims or erases `WORKTREE_ROOT` without the owner and the CLO: that is the incident's decision, never the rehearsal's.
 
@@ -444,6 +444,12 @@ not covered:   real-user replication load, web-2 behaviour beyond the log line, 
                runbook), working trees under WORKTREE_ROOT (not readable: web-2 has no SSH ingress)
 ```
 
+**What the rehearsal cannot prove.** Behaviour under real replication load; web-2 beyond its log line; that a rollback restores
+every user-visible path; Art. 17 completeness for requests that arrived during the freeze windows; that a second flip after a
+rehearsal is clean (the `store_not_empty` read is the check, not an assumption); and a session that starts between two count
+reads, which only the session-refusal control (not a count) covers. Any user who opens a workspace or starts a session while the
+window is open is exposed; the abort criteria bound that exposure and do not remove it.
+
 ### Rehearsal 1 record (2026-10-24)
 
 Sources per line: `gh run view` (GH), a Better Stack read (BS), Sentry, a Doppler name listing (DP), owner attestation (OA).
@@ -458,40 +464,41 @@ rollback run:  https://github.com/jikig-ai/soleur/actions/runs/40076165647   con
 window:        flip per-host enabled 2026-10-24T07:29:56Z to rollback per-host disabled 08:02:41Z = about 33 minutes   [GH]
 per-host:      web-1 git_data_store=enabled 07:29:56Z (attempt 1) / disabled 08:02:40Z (attempt 2);  web-2 enabled 07:30:58Z (attempt 2) / disabled 08:02:41Z (attempt 1)   [GH]
 extra redeploys inside the window: 40075036827 (success, 07:40Z, loads a Doppler WORKTREE_ROOT override)   [GH]
-               earlier, before the flip: 40020553589 (20:37Z on 2026-10-23, loads the exemption variable)   [GH]
+               earlier, before the flip: 40020553589 (dispatched 2026-10-23T20:36:40Z, loads the exemption variable)   [GH]
 app path:      level 2 NOT EXERCISED ("app-path erasure NOT exercised end to end"; the Art. 17 condition is NOT discharged)
                - first session ~07:34:46Z failed `EACCES: permission denied, mkdir`: the container user (uid 1001) cannot create the default
                  WORKTREE_ROOT /var/lib/soleur/worktrees (the image never creates it); the user saw "Dashboard router is unavailable"   [BS, Sentry]
                - a Doppler override WORKTREE_ROOT=/home/soleur/worktrees plus a same-version redeploy (CTO ruling 2026-10-24) let the retry start the
                  sandbox; the agent then returned "Not logged in - Please run /login" (the throwaway account's Claude credential is invalid:
-                 a separate account repair)   [OA]
+                 a separate account repair)   [OA: owner attestation; no Better Stack hit]
                - at 07:44:43Z the container's `git fetch` to the store was killed by SIGTERM with empty stderr (`ensure-workspace-repo
                  op=git-data-overlay`): the container egress firewall (cron-egress-nftables.sh, default-drop SOLEUR-EGRESS chain) admits no
                  10.0.1.20:22 and the app's ssh has no ConnectTimeout (CTO diagnosis, about 90% confidence, 2026-10-24)   [BS]
                - so the exempt session almost certainly did not replicate; the proof before deletion was NOT taken
-exit read:     mode=proof NOT yet taken
-stamp:         before R1 absent, after the flip present, after rollback ABSENT; flag false after; WORKTREE_ROOT override unset before the rollback   [DP]
-predecessor:   rotate run 38583657167 (d6 index 18 of 100 at dispatch); no rotate dispatched since   [GH]
-session ctl:   new_sessions_paused=1 and agent_sessions_live=0 on both hosts at every sample (one row per host per minute) from before R1 until 07:59Z;
+exit read:     run https://github.com/jikig-ai/soleur/actions/runs/40077030535 (dispatched 2026-10-24T08:10:57Z) verdict clear (store-empty ok, access gate ok)   [GH]
+               This is NOT Art. 17 evidence: the synthetic account was never deleted and nothing replicated, so clear here is vacuous;
+               Level 2 stays NOT exercised and the first real flip stays BLOCKED
+stamp:         before R1: not read in the logs (UNVERIFIED); after the flip present; after the rollback ABSENT (rollback log line `cutover_at=cleared`)   [GH]
+               flag false after; WORKTREE_ROOT override unset before the rollback   [DP]
+predecessor:   rotate run 38583657167 (d6: 19th newest (index 18, 0-based) of 100 at dispatch); no rotate dispatched since   [GH]
+session ctl:   new_sessions_paused=1 on both hosts at every sample (one row per host per minute) from before R1 through 07:59Z;
+               agent_sessions_live=0 on both hosts except web-1 =1 from 07:44Z to 07:56Z (the exempt session's cc query);
                exemptConfigured=true on both from 20:38Z on 2026-10-23   [BS]
-               live count 1 on web-1 (the exempt session's cc query) from ~07:45Z to ~07:56Z; the rollback was held until both hosts read 0
-               (dispatched 07:57:39Z)   [BS]
-               the pause flag turned off at ~08:00Z (Doppler mirror FLAG_NEW_SESSIONS_PAUSED=0 in prd and dev), during the rollback run: owner action unconfirmed   [DP]
-real users:    no real-user session started inside the window (conversation rows read by count only: the only non-exempt conversation after 07:55Z
-               was created 08:03:27Z, after both hosts read disabled)
+               the rollback was held until both hosts read 0 (dispatched 07:57:39Z)   [BS]
+               the pause flag turned off at 08:00:05Z (web-1) / 08:00:32Z (web-2), BEFORE the rollback's flag write (08:00:59Z) and the per-host
+               disabled readbacks (08:02:41Z): the control was off for the last ~2.5 minutes of the window; refused_since_last was 0 in every row,
+               so the control never refused anyone; who turned it off is UNCONFIRMED (owner action not established)   [BS] [DP mirror FLAG_NEW_SESSIONS_PAUSED=0]
+exemption:     QUIET_WINDOW_EXEMPT_USER_ID was deliberately LEFT SET in Doppler prd after the rollback (the rehearsal is to be re-run);
+               exemptConfigured=true was still reported on both hosts afterwards. The runbook step says unset before R4: this run did not, by choice   [DP name listing] [BS]
+real users:    no real-user session started in the window: by conversation-row count the only non-exempt conversation after 07:55Z was created
+               08:03:27Z (after both hosts read disabled); refused_since_last=0 throughout; NOTE the pause was off 08:00:05Z-08:02:41Z
 not covered:   as in the template above, plus everything in the app path lines
 verdict:       mechanics passed (flip and rollback clean), Level 2 NOT exercised, two flag-on defects found:
                (1) WORKTREE_ROOT not creatable by the container user; (2) the app container cannot reach the git-data store over SSH
 ```
 
-The first real flip stays BLOCKED until a second rehearsal reaches Level 2 and its exit read (`mode=proof`) is clear. Fixes in flight: a
+The first real flip stays BLOCKED until a second rehearsal reaches Level 2 and a non-vacuous exit read (`mode=proof` after the account deletion) is clear. Fixes in flight: a
 container egress rule plus an ssh bound, and a worktree directory plus flip preflights.
-
-**What the rehearsal cannot prove.** Behaviour under real replication load; web-2 beyond its log line; that a rollback restores
-every user-visible path; Art. 17 completeness for requests that arrived during the freeze windows; that a second flip after a
-rehearsal is clean (the `store_not_empty` read is the check, not an assumption); and a session that starts between two count
-reads, which only the session-refusal control (not a count) covers. Any user who opens a workspace or starts a session while the
-window is open is exposed; the abort criteria bound that exposure and do not remove it.
 
 ### The D6 rotate (dispatch BEFORE the flip)
 
