@@ -43,7 +43,7 @@ function denylistHits(text: string): string[] {
 
 function trackedLearnings(): Set<string> {
   const out = execFileSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "knowledge-base/project/learnings"], {
-    env: gitCleanEnv(),
+    env: gitCleanEnv() as NodeJS.ProcessEnv,
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024,
   });
