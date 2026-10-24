@@ -178,18 +178,18 @@ fi
 - If any monitor reports `error` or `missed`: flag with monitor name and status. This is a WARNING, not a blocker — the monitor may have been unhealthy before this deploy.
 - If Sentry API is unreachable or returns non-200: warn and skip (do not block on Sentry outages).
 
-**Graceful degradation:** This check is advisory. A Sentry API failure does not block the postmerge pipeline.
+**Graceful degradation:** advisory; a Sentry API failure does not block the pipeline.
 
 ### Inngest liveness awareness (#6374)
 
-Surface any OPEN inngest-down alarm so the operator is never told "prod is healthy" while the durable trigger layer (armed reminders + all `server/inngest/functions/` crons) is dark. The external watchdog (`scheduled-inngest-health.yml`) files `[ci/inngest-down]` on a confirmed down; this is a cheap read that needs no Sentry token:
+Surface any OPEN inngest-down alarm so the operator is never told "prod is healthy" while the durable trigger layer (armed reminders + all `server/inngest/functions/` crons) is dark. The external watchdog (`scheduled-inngest-health.yml`) files `[ci/inngest-down]` on a confirmed down (deeper probe: `/hooks/inngest-liveness`); this is a cheap read needing no Sentry token:
 
 ```bash
 gh issue list --label ci/inngest-down --state open \
   --json number,title,createdAt --jq '.[] | "#\(.number) \(.title) (opened \(.createdAt))"'
 ```
 
-- If it prints an open issue: surface a one-line advisory — "ADVISORY: inngest reports down (`#<n>`) — armed reminders and scheduled crons may not be firing; the external watchdog is auto-restarting / escalating. Do not assume scheduled work ran." Include it prominently in the Phase 7 report.
+- If it prints an open issue: surface a one-line advisory — "ADVISORY: inngest reports down (`#<n>`) — armed reminders and scheduled crons may not be firing; the external watchdog is auto-restarting / escalating. Do not assume scheduled work ran." Include in the Phase 7 report.
 - If empty: silent.
 
 **Advisory only — never hard-block the turn.** inngest-down does not block all work; the operator retains agency.
