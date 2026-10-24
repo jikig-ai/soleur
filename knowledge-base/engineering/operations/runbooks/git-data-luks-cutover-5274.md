@@ -226,6 +226,12 @@ Proceed only when, for EACH host: the newest row is under 2 minutes old (a stopp
 
 Treat any row with `new_sessions_paused=0` from the moment of the pre-flip read until after the exit read (`mode=proof`) or the rollback as an **abort**, and read both hosts again immediately before and immediately after the `mode=flip` dispatch. Refusal reaches a host within the 30 s flag cache TTL. A host that emits no row at all is not quiet; it is unread.
 
+### Flag-on rehearsal finding: the container egress rule (#8211, 2026-10-24)
+
+With `GIT_DATA_STORE_ENABLED=true` the app container's git fetch over `ssh://git@10.0.1.20/...` hung until its timeout (Better Stack `op=git-data-overlay`, `killed:true`, `signal:SIGTERM`, empty stderr). Cause: the container egress chain (`SOLEUR-EGRESS`, default drop) admitted no rule for the git-data host, while the host's own `web-git-data-probe` leaves through host OUTPUT, never that chain, and stayed green. The fix adds one accept (`ip daddr 10.0.1.20 tcp dport 22`) and bounds the app's connect (`ConnectTimeout=10`, `ServerAliveInterval=10`, `ServerAliveCountMax=3`), so a blackhole now reads `Connection timed out` inside the budget.
+
+Required after the merge, before the next `mode=flip` dispatch: the rule reaches both running web hosts through the infra-apply workflow (web-1) and the deploy-pipeline apply workflow (web-2), both fired by the merge itself, with no host replace. Treat the flip as blocked until both runs are green: the post-apply assertion `dedicated-git-data-22-accept` is what proves the rule is live on each host. After the flip, `op=git-data-overlay` must show no `killed:true` rows.
+
 ### Before the first `flip`: the rollback rehearsal
 
 The first `flip` is not authorized until a flip-then-rollback rehearsal has run once with the erasure

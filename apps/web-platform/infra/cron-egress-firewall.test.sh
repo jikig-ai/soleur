@@ -350,6 +350,37 @@ if ! cmp -s "$LOADER" "$LOADER_NO8443" && grep -qE 'ip daddr \$\{EGRESS_GW_IP\} 
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: mutation: the 10.0.1.40:8443 pin cannot see its own deletion (vacuous)"
 fi
+# #8211 PR-D: the git-data transport (ssh, tcp/22) needs ITS OWN accept in the container egress chain. The Inngest rules above are the
+# precedent (a bash literal, not a templated value); the destination is the git-data private IP, git-data.tf local.git_data_private_ip.
+PIN_GD='ip daddr 10\.0\.1\.20 tcp dport 22 accept comment "soleur-egress: git-data transport"'
+assert_grep "git-data transport tcp/22 accept (#8211)" "$PIN_GD" "$LOADER"
+GD_TF_IP="$(sed -nE 's/^[[:space:]]*git_data_private_ip[[:space:]]*=[[:space:]]*"([0-9.]+)".*/\1/p' "$SCRIPT_DIR/git-data.tf" | sed -n '1p')"
+if [[ -n "$GD_TF_IP" ]] && grep -qF -- "ip daddr $GD_TF_IP tcp dport 22 accept" "$LOADER"; then
+  PASS=$((PASS + 1)); echo "  PASS: the loader's git-data accept names the address git-data.tf publishes ($GD_TF_IP)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the loader's git-data accept does not name local.git_data_private_ip from git-data.tf (got '${GD_TF_IP:-unparsed}')"
+fi
+GD_LINE="$(grep -n 'ip daddr 10\.0\.1\.20 tcp dport 22 accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
+if [[ -n "$GD_LINE" && -n "$DROP_RULE_LINE" && "$GD_LINE" -lt "$DROP_RULE_LINE" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: git-data accept precedes the default drop (line $GD_LINE < $DROP_RULE_LINE)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: git-data accept must precede the default drop (gd=$GD_LINE drop=$DROP_RULE_LINE)"
+fi
+# Scope: exactly one accept names the git-data host and exactly one non-comment loader line matches `dport 22`: no wider ssh accept.
+if [[ "$(grep -vE '^[[:space:]]*#' "$LOADER" | grep -c '10\.0\.1\.20')" -eq 1 && "$(grep -vE '^[[:space:]]*#' "$LOADER" | grep -cE 'dport[[:space:]]+22([^0-9]|$)')" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: the git-data accept is the only rule naming 10.0.1.20 and the only dport-22 rule (one address, one port)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the loader carries a second 10.0.1.20 rule or a second dport-22 rule (scope widened)"
+fi
+# Mutation: delete the git-data accept from a COPY; the pin must go RED on it (and the Inngest accepts that stay must not mask it).
+LOADER_NOGD="$SUITE_SCRATCH/loader-no-gd.sh"
+grep -v 'ip daddr 10\.0\.1\.20 tcp dport 22 accept' "$LOADER" > "$LOADER_NOGD"
+if ! cmp -s "$LOADER" "$LOADER_NOGD" && grep -qE 'ip daddr 10\.0\.1\.40 tcp dport 8443 accept' "$LOADER_NOGD" \
+   && grep -qE -- "$PIN_GD" "$LOADER" && ! grep -qE -- "$PIN_GD" "$LOADER_NOGD"; then
+  PASS=$((PASS + 1)); echo "  PASS: mutation: deleting the git-data accept is visible to the pin"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: mutation: the git-data pin cannot see its own deletion (vacuous)"
+fi
 assert_grep "bridge gateway derived, not hardcoded" 'docker network inspect bridge' "$LOADER"
 assert_grep "IPv6 bypass guard" 'EnableIPv6' "$LOADER"
 assert_grep "jump rule scoped to the bridge interface" 'iifname "\$BRIDGE_IF" counter jump SOLEUR-EGRESS' "$LOADER"
@@ -1833,9 +1864,12 @@ case "$*" in
       echo 'log prefix "egress-blocked: " comment "soleur-egress: default drop log" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; cidr allowlist'; exit 0
     fi
     if [[ -n "${GA_NO8443:-}" ]]; then
-      echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.9.9.9 tcp dport 8443 accept ; cidr allowlist'; exit 0
+      echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.9.9.9 tcp dport 8443 accept ; ip daddr 10.0.1.20 tcp dport 22 accept ; cidr allowlist'; exit 0
     fi
-    echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; cidr allowlist'; exit 0 ;;
+    if [[ -n "${GA_NOGD:-}" ]]; then
+      echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.21 tcp dport 22 accept ; ip daddr 10.0.1.20 tcp dport 2222 accept ; cidr allowlist'; exit 0
+    fi
+    echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8443 accept ; ip daddr 10.0.1.20 tcp dport 22 accept ; cidr allowlist'; exit 0 ;;
   "list set ip filter soleur_egress_allow") echo "elements = { 104.18.24.159 }"; exit 0 ;;
   "list set ip filter soleur_egress_allow_cidr") echo "elements = { 140.82.112.0/22, 20.1.2.3, 4.5.6.7 }"; exit 0 ;;
 esac
@@ -2015,6 +2049,15 @@ GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
 grep -q 'ASSERT-FAILED: dedicated-inngest-8443-accept' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: no 10.0.1.40 :8443 accept (another daddr's 8443 accept does not count) -> ASSERT-FAILED: dedicated-inngest-8443-accept, non-zero exit" "$GA_OK"
+
+# Row B2c (#8211 PR-D): no tcp/22 accept for the git-data host (a different host's :22 accept and the git-data host's other port do not
+# count) -> its own sentinel, non-zero. Every other accept is intact, so only the new assert can see it.
+GA_D="$(ga_setup nogd)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_NOGD=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+grep -q 'ASSERT-FAILED: dedicated-git-data-22-accept' <<<"$GA_OUT" || GA_OK=0
+ga_row "post-apply assert: no 10.0.1.20 :22 accept (another host's :22 and the same host's other port do not count) -> ASSERT-FAILED: dedicated-git-data-22-accept, non-zero exit" "$GA_OK"
 
 # Row B3: a jump to a similarly named chain is not our jump -> docker-user-jump sentinel (the target token is matched, not a prefix).
 GA_D="$(ga_setup jumpold)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
