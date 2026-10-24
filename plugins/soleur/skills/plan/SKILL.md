@@ -709,6 +709,37 @@ If the plan's Files-to-Edit touch a surface the operator/agent CANNOT directly i
 
 This is the affected-surface extension of `hr-observability-as-plan-quality-gate` — the diagnosis-first discipline for blind surfaces, enforced at review by `soleur:engineering:review:observability-coverage-reviewer` §Step 4.6. **Why:** #5733 — 6 blind server-side fixes over ~2 weeks because the failing agent-sandbox surface emitted no discriminating telemetry; one in-sandbox event decided the root cause the moment it shipped. See `knowledge-base/project/learnings/best-practices/2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md`.
 
+#### 2.9.3. Task-Design Gate (Conditional)
+
+[skill-enforced: plan Phase 2.9.3 + deepen-plan Phase 4.13]
+
+Every plan that creates a NEW autonomous-task surface MUST emit a `## Task Design` section using the field set below — one block per created task. The requirement is **create-time only**: it never retrofits onto existing `scheduled-*.yml` workflows or Inngest functions.
+
+**Detection** (a `## Files to Create` entry matching, OR the plan creates a new registered check):
+
+- `\.github/workflows/scheduled-.*\.yml`
+- `apps/*/server/inngest/functions/(cron|oneshot)-.*\.ts`
+- a new registered reminder/sweeper check (a `CHECK_REGISTRY` entry or an armed named-check)
+
+**Required schema (verbatim from `plan-issue-templates.md`):**
+
+```yaml
+task:              # name/slug of the autonomous task being created (one block per created task)
+trigger:           # what fires it — cron / event / label / dispatch / upstream run
+services:          # services or data surfaces it reads from and writes to
+next:              # what it triggers next ("nothing" is a valid answer)
+human_reentry:     # how a human resumes, redirects or stops it mid-run
+dedupe:            # mechanism preventing semantic double-work — MUST name something beyond
+                   # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
+source_dedupe:     # how the ticket source dedupes this task, or the literal "not a ticket source"
+```
+
+**Reject conditions** (enforced at deepen-plan Phase 4.13 — see `deepen-plan/SKILL.md`): section missing entirely while detection fires; a created task with no `task:` block of its own; a field absent, empty, or matching `^\s*<field>:\s*(TODO|TBD|N/A|placeholder)\s*$`; a `dedupe` answer that names ONLY `concurrency: group:` / workflow-level concurrency with no semantic mechanism.
+
+**Skip silently** when the plan creates no new autonomous-task surface — pure-docs plans, edits to existing tasks, bug fixes. Detection is Files-to-**Create**-scoped, never prose-scoped: a plan that merely mentions `scheduled-*.yml` does not fire.
+
+**Why:** #11015 — every answer to the six task-design questions exists somewhere in the machinery (`concurrency: group:`, idempotency prechecks, `action-required` re-entry, dedupe markers), but none was required at design time; a new autonomous task needed no declared answers to ship.
+
 ### 2.10. Architecture Decision (ADR / C4) Gate
 
 > **Rule `wg-architecture-decision-is-a-plan-deliverable` — migrated out of `AGENTS.rules.md` on 2026-09-10 (PR #8034).**

@@ -11,7 +11,7 @@ description: "This skill should be used when enhancing an existing plan with par
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. **Known divergence:** the port's `GATES` covers §§4.6–4.9 only; §4.10–4.12 are prose-only — a workflow run never enforces them. See [`knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md).
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. **Known divergence:** the port's `GATES` covers §§4.6–4.9 plus the §4.13 taskDesign mirror; §4.10–4.12 are prose-only — a workflow run never enforces them. See [`knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md).
 
 # Deepen Plan - Power Enhancement Mode
 
@@ -650,6 +650,42 @@ No telemetry on pass — the gate only records when it activates.
 **Step 6 — Pass-through.** Section present, mechanically compliant, adequate → proceed normally.
 
 **Why:** #9398 — on PR #9339 a brief listing tasks a–f grew a destructive `--attest` rung nobody asked for; the catch cost an 11-seat review and ~8 CI cycles. The deepen halt is what makes "an unmapped item blocks the plan unless justified" load-bearing rather than advisory.
+
+### 4.13. Task-Design Halt (Conditional)
+
+Symmetric to Phase 4.10 above; this gate is what makes plan Phase 2.9.3 load-bearing. Fires only when the plan creates a NEW autonomous-task surface.
+
+**Step 1 — Trigger.** Fires when the plan's `## Files to Create` contains an entry matching `\.github/workflows/scheduled-.*\.yml`, `apps/*/server/inngest/functions/(cron|oneshot)-.*\.ts`, OR the plan creates a new registered reminder/sweeper check (a `CHECK_REGISTRY` entry or an armed named-check). No match → skip silently (pass-through). Detection is Files-to-Create-scoped — a docs-only plan never fires.
+
+**Step 2 — Locate the section.**
+
+```bash
+grep -q '^## Task Design' <plan-file>
+```
+
+If absent, HALT with:
+
+> Error: Plan creates a new autonomous-task surface but is missing `## Task Design` section.
+> See `plan-issue-templates.md` for the schema.
+> Every new autonomous task must answer the six task-design questions at design time.
+
+**Step 3 — Validate field values.** Extract the section body (between `^## Task Design` and the next `^## ` heading). Reject if ANY of:
+
+- **A created task has no `task:` block** — one block per created autonomous task.
+- **Field key absent, empty, or placeholder** — any of `trigger`, `services`, `next`, `human_reentry`, `dedupe`, `source_dedupe` missing or matching `^\s*<field>:\s*(TODO|TBD|N/A|placeholder)\s*$`.
+- **`dedupe` names only workflow-level concurrency** — an answer citing `concurrency: group:` (or equivalent) with no semantic mechanism (idempotency precheck, marker dedupe, immutable ticket key). `concurrency:` serializes overlapping RUNS; it does not stop the same work being done twice.
+
+On rejection, HALT with a message naming the specific field and its failure mode (e.g., `"Phase 4.13 reject: task[0].dedupe names only concurrency: group:"`).
+
+**Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
+
+```bash
+echo 'SOLEUR_RULE_APPLIED rule=task-design-design-time-default note=Every new autonomous task MUST answer the six task-design questions at plan time'
+```
+
+**Step 5 — Pass-through.** Section present, every created task has a block, all fields non-placeholder, and `dedupe` names a semantic mechanism → proceed normally. No telemetry on pass.
+
+**Why:** #11015 — the six answers all exist somewhere in the machinery but none was required at design time; this halt is the independent verifier that a plan-authored autonomous task reaches `soleur:work` with written answers.
 
 ### 5. Discover and Run ALL Review Agents
 
