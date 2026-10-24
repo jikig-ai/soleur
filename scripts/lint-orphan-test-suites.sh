@@ -1157,8 +1157,12 @@ else
               # arm's blob carries `M`/`R100`-shaped phantom lines after the TAB
               # split, so e.g. `glob:*`/`glob:R*` would be a disguised
               # always-match (safe direction, but defeats the narrowing).
-              local _st
-              for _st in M A D R100 C075; do
+              # Every --name-status letter (M A D T U X B) plus every emitted
+              # score token (R000-R100 today; C mirrored so a future -C flag
+              # can't re-open the class) — a sample leaks digit-position shapes
+              # like R*6 or *7, so the check iterates the full emitted set; all
+              # [[ == ]] are builtin, ~210 evaluations.
+              for _st in M A D T U X B R{000..100} C{000..100}; do
                 [[ "$_st" == $_cg ]] && { _cg_why="its pattern matches the name-status token $_st — a disguised always-match over the diff blob"; break; }
               done ;;
             malformed)

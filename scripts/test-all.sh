@@ -5473,14 +5473,14 @@ if want_scripts; then
   # a DECLARED_TOTAL bump in the battery needs all four edited together, and the shard-totality suites
   # pin both halves (plugins/soleur/test/scripts-shard-totality*.sh).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-29
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-15
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 16-30
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-13"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-15"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 14-29"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 16-30"
   fi
   # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
   # working tree; the battery builds synthetic fixture repos and proves each

@@ -46,7 +46,10 @@
 #                 root               — the class above (well-formed)
 #                 root-tail-slash    — a / in a root-anchored tail (unmatchable)
 #                 charset            — a byte outside the grammar charset
-#                                      [-A-Za-z0-9_./:*-] (but not ? or [)
+#                                      [-A-Za-z0-9_./*-] (but not ? or [;
+#                                      `:` is deliberately OUT — the verbatim-
+#                                      mint degrade relies on ^glob:glob:<p>
+#                                      classifying malformed on it)
 #                 qbracket           — a ? or [ (outside the grammar)
 #                 head-not-reporel   — head absolute / ./ ../ / holds // /./ /../
 #                 head-mid-slash     — head is not /-terminated

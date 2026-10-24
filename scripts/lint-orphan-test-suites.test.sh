@@ -81,7 +81,7 @@ export LC_ALL=C
 # the two `run_suite … --rows A-B` registrations in scripts/test-all.sh (see ROWS-SPLIT above).
 # One deliberate divergence from the copied loop: a REPEATED --rows exits 2 rather than letting
 # the last flag win — the tiling extractor would then assert a coverage the battery ignores.
-DECLARED_TOTAL=29   # the gated mutation rows M1..M29; C0/R1/R1b are unconditional
+DECLARED_TOTAL=30   # the gated mutation rows M1..M30; C0/R1/R1b are unconditional
 ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared rows
 _seen_rows_flag=0
 while (( $# )); do
@@ -874,6 +874,25 @@ assert_has "M29 — names the entry and the root-tail-slash reason" \
   "declares glob: edge 'glob:x*/y', its tail carries a / under a root-anchored head"
 }
 
+run_M30() {
+EXPECTED_ASSERTIONS=4   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M30 "Guard 3: a root glob matching a --name-status token is declined — a disguised always-match (#10198)"
+new_sandbox m30
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'M*'
+run_lint "$SB"; rc=$?
+assert_red "M30" "$rc"
+assert_has "M30 — names the disguised always-match reason" \
+  "declares glob: edge 'glob:M*', its pattern matches the name-status token M"
+new_sandbox m30b
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'R0*'
+run_lint "$SB"; rc=$?
+assert_red "M30b" "$rc"
+assert_has "M30b — names the disguised always-match reason" \
+  "declares glob: edge 'glob:R0*', its pattern matches the name-status token R000"
+}
+
 run_M23() {
 EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
 row M23 "Guard 3: a declared glob: with a dead head dir is a dead edge — static RED"
@@ -971,7 +990,7 @@ assert_has "M27c — a /-terminated tail is well-formed but unmatchable" \
 #   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
 #     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
 #     the ordered replay below, so the floors and the summary see exactly the serial numbers.
-ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29"
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29 M30"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
 # JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
 # the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit
