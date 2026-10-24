@@ -112,6 +112,12 @@ const NON_INNGEST_MONITORS = new Set([
   // recorded `cancelled` (not `failure`) and `| tee` discarded the suite's exit
   // code. See sentry_cron_monitor.main_health_monitor in cron-monitors.tf.
   "main-health-monitor",
+  // #10390 WS1: GHA-executed, watchdog-dispatched (WATCHDOG_DISPATCH_TABLE); the native
+  // `schedule:` is the fallback trigger only. It deliberately has no Inngest cron function —
+  // the mirror reads the Better Stack paging substrate the Inngest fleet's own outages report
+  // through, so an Inngest-scheduled mirror goes dark exactly when the incidents it mirrors are
+  // firing (ADR-033 anti-circularity). The terminal sentry-heartbeat step posts the check-in.
+  "scheduled-betterstack-incident-mirror",
   // The weekly machinery drain: cron-machinery-drain.ts only DISPATCHES
   // scheduled-machinery-drain.yml and declares no SENTRY_MONITOR_SLUG, because
   // the work runs in the ephemeral GitHub runner rather than the app process.
