@@ -439,6 +439,40 @@ Peer-attribution: MIT — vocabulary and checklist structure adopted, no prose p
 Upstream PR `mattpocock/skills#1316` is OPEN/unmerged — the map documents Soleur's own system;
 the peer terms are a translation layer, not a dependency.
 
+## Deepen Pass (soleur:deepen-plan — in-process)
+
+This harness has no Task/Agent tool, so the per-section research fan-out, the
+review-agent fan-out (Phase 5) and the domain-leader spawns could not run;
+gate checks were applied in-process. Residual recorded in
+`specs/feat-one-shot-11014-11015-factory-map-task-design/decision-challenges.md`
+(review-stage `soleur:plan-review` remains available to the pipeline).
+
+**Gate results (applied in-process):**
+
+- Phase 4.6 User-Brand Impact halt — PASS (`## User-Brand Impact` present,
+  `none` threshold with decision sentence; no sensitive-path match on the
+  `SENSITIVE_PATH_RE` set — all edits are `.md`/`.sh` under `plugins/`,
+  `knowledge-base/`, `scripts/lib/`).
+- Phase 4.7 Observability gate — PASS: the diff's only executable surface is a
+  test suite + a bash path-index lib, outside the §2.9 code roots; a compliant
+  block is emitted anyway (`bash plugins/soleur/test/schedule-task-design.test.sh`,
+  literal `Failed: 0`).
+- Phase 4.8 PAT-shaped variable halt — PASS (no token-shaped variables).
+- Phase 4.9 UI-wireframe halt — PASS/skip (no UI-surface file in Files lists).
+- Phase 4.10 Encryption Posture halt — PASS/skip (no store or new connection).
+- Phase 4.11 Guard Contract halt — PASS (`scripts/lint-guard-contract.py` on this
+  file: 1 guard entry, matrix ≥3 rows incl. own-dispatch + harness rows).
+- Phase 4.12 Scope Check halt — PASS (all asks mapped; two `inferred` items each
+  carry a justification; split assessment under every threshold → single PR).
+- Phase 4.5 network-outage / 4.55 downtime-cutover — not triggered.
+- Precedent-diff (Phase 4.4): the `## Task Design` section byte-mirrors the
+  `## Encryption Posture` conditional-section pattern (schema in all three
+  templates, emit rule in plan, halt in deepen-plan, mirror in workflow.js).
+
+**Corrections applied during the pass:** none needed — verification greps for
+every named artifact were run before freezing Files lists (all paths exist);
+the one open code-review overlap (#4133) is acknowledged with rationale.
+
 ## References
 
 - Issues: #11014, #11015 (parent audit #11000)
