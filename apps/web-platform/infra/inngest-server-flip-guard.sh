@@ -30,8 +30,11 @@
 # OUTSIDE the allowlist below, so this guard refuses EVERY prod-URI start on the dedicated host.
 # That is correct — but it also means a REPLACED host can never attempt a bind, so every
 # hypothesis about why :8288 was never bound stays UNKNOWN forever and the replace teaches us
-# nothing. The original boot trace is unrecoverable (Better Stack retention is ~3 days against a
-# 12-day-old boot), so a boot that can actually try is the only remaining way to decide it.
+# nothing. The original boot trace was treated as unrecoverable (when this was written in 2026-08
+# Better Stack retention was taken to be ~3 days, a FREE-TIER figure, against a 12-day-old boot).
+# Better Stack retention is now 90 days: source soleur-inngest-vector-prd reports logs_retention=90
+# (betterstack-log-query.md, measured 2026-09-04, #7772). The decision below does not depend on it:
+# a boot that can actually try is the way to decide why :8288 was never bound.
 #
 # INNGEST_DIAGNOSTIC_BOOT=1 lets the host start against a NON-DURABLE backend, where a second
 # prod scheduler is impossible, so it can bind :8288 and emit a discriminating `net-health` row.
