@@ -13,9 +13,11 @@
 - Elevated a 9th edit: `infra-credential-tiers-8209.md` §Local Terraform invocation is silent on the ambient `AWS_*` leg — every annotation-note pointer resolves to a recipe that still 403s on writes without it.
 - `inngest-luks-cutover-6894.md` `tf()` wrapper needs the Tier-B annotation (`state push` = write; `--only-secrets` `state pull` = correct read).
 - All four dated learnings get `Superseded in part` notes scoped to writes (old recipe still works for read-only invocations).
-- Adjacent stale sites outside `runbooks/` (`infra/github/README.md` ×6, `apps/web-platform/infra/sentry/README.md`, `apps/cla-evidence/infra/bootstrap.sh`, `apps/web-platform/scripts/bootstrap-live-verify.sh`) descoped — follow-up issue recommended in decision-challenges.md.
+- Adjacent stale sites (CTO ruling Item B): `infra/github/README.md` widened INTO this PR (same defect class, same bucket); the two `.sh` scripts descoped to mandatory follow-up **#10990** (filed — ship gate); `sentry/README.md` reads-only, no fix.
 
 ### Components Invoked
 - `soleur:plan` (all phases, inline research)
 - `soleur:deepen-plan` (all halt gates mechanical: 4.5–4.12 pass/skip)
-- Commits `4e9288b087`, `b4f8d758db` (plan + tasks.md + decision-challenges.md)
+- `soleur:engineering:cto` ×1 batched Rule spawn (`cto_spawns=1`) — five rows ruled; gate re-run PASS
+- Commits `4e9288b087`, `b4f8d758db` (plan + tasks.md + decision-challenges.md), `9276fb06dd` (rulings folded in)
+- Follow-up issue filed per CTO Item B mandatory gate: #10990 (two armed `.sh` scripts)
