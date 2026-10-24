@@ -33,7 +33,6 @@ merge queue with `gh pr merge <N> --squash --auto`, never `--admin`. The PR edit
 `scripts/registry-restore-from-ghcr.sh` and the apply-workflow restore-step annotations alone, so no
 production apply is fired by this merge and no operator authorization is needed.
 
-
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-24
