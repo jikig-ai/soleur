@@ -152,7 +152,7 @@ Runs after premise validation and before the Phase 1 fan-out, for the same reaso
 
 **3. Cut before researching.** Any mechanism that buys no property in the list, or buys one an existing mechanism already covers, is removed here — not researched, not designed, not reviewed. Record each cut in one line (mechanism → property → what already covers it) as the **Cut List**. Emit both lists into the research-insights scratch, exactly as Phase 0.6 emits its Premise Validation note; Phase 1.7 persists them into `## Research Insights`, which is where `plan-review` reads them. A mechanism the ask did not name but the plan later invents is caught by Step 2's re-read of this list, not here.
 
-**Why:** #7418 / ADR-176 — the plan delivered a five-value cursor vocabulary, two decision tables, a resume cap with a strict-advance rule, a bounded-deletion rule, and a branch selector with a tiebreak. The second property was already free: `## Acceptance Criteria` appears in all three detail-level templates, is written last, and `soleur:one-shot` was already asserting on it. The plan never compared its new mechanism against the one already in the codebase; a twelve-agent review then found twelve blocking defects behind a 285/285 green suite, and **nine of them dissolved with the machinery** when the redesign landed. See `knowledge-base/project/learnings/2026-08-10-i-fixed-the-guard-twice-and-my-test-could-not-see-either-fix.md`.
+**Why:** #7418 / ADR-176 — the plan never compared its new mechanism against the one already in the codebase; a twelve-agent review then found twelve blocking defects behind a 285/285 green suite, and **nine of them dissolved with the machinery** when the redesign landed. See `knowledge-base/project/learnings/2026-08-10-i-fixed-the-guard-twice-and-my-test-could-not-see-either-fix.md`.
 
 ### 0.6c. Value-Proposition Measurement (Conditional)
 
@@ -709,36 +709,9 @@ If the plan's Files-to-Edit touch a surface the operator/agent CANNOT directly i
 
 This is the affected-surface extension of `hr-observability-as-plan-quality-gate` — the diagnosis-first discipline for blind surfaces, enforced at review by `soleur:engineering:review:observability-coverage-reviewer` §Step 4.6. **Why:** #5733 — 6 blind server-side fixes over ~2 weeks because the failing agent-sandbox surface emitted no discriminating telemetry; one in-sandbox event decided the root cause the moment it shipped. See `knowledge-base/project/learnings/best-practices/2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md`.
 
-#### 2.9.3. Task-Design Gate (Conditional)
+#### 2.9.3. Task-Design Gate
 
-[skill-enforced: plan Phase 2.9.3 + deepen-plan Phase 4.13]
-
-Every plan that creates a NEW autonomous-task surface MUST emit a `## Task Design` section using the field set below — one block per created task. The requirement is **create-time only**: it never retrofits onto existing `scheduled-*.yml` workflows or Inngest functions.
-
-**Detection** (a `## Files to Create` entry matching, OR the plan creates a new registered check):
-
-- `\.github/workflows/scheduled-.*\.yml`
-- `apps/*/server/inngest/functions/(cron|oneshot)-.*\.ts`
-- a new registered reminder/sweeper check (a `CHECK_REGISTRY` entry or an armed named-check)
-
-**Required schema (verbatim from `plan-issue-templates.md`):**
-
-```yaml
-task:              # name/slug of the autonomous task being created (one block per created task)
-trigger:           # what fires it — cron / event / label / dispatch / upstream run
-services:          # services or data surfaces it reads from and writes to
-next:              # what it triggers next ("nothing" is a valid answer)
-human_reentry:     # how a human resumes, redirects or stops it mid-run
-dedupe:            # mechanism preventing semantic double-work — MUST name something beyond
-                   # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
-source_dedupe:     # how the ticket source dedupes this task, or the literal "not a ticket source"
-```
-
-**Reject conditions** (enforced at deepen-plan Phase 4.13 — see `deepen-plan/SKILL.md`): section missing entirely while detection fires; a created task with no `task:` block of its own; a field absent, empty, or matching `^\s*<field>:\s*(TODO|TBD|N/A|placeholder)\s*$`; a `dedupe` answer that names ONLY `concurrency: group:` / workflow-level concurrency with no semantic mechanism.
-
-**Skip silently** when the plan creates no new autonomous-task surface — pure-docs plans, edits to existing tasks, bug fixes. Detection is Files-to-**Create**-scoped, never prose-scoped: a plan that merely mentions `scheduled-*.yml` does not fire.
-
-**Why:** #11015 — every answer to the six task-design questions exists somewhere in the machinery (`concurrency: group:`, idempotency prechecks, `action-required` re-entry, dedupe markers), but none was required at design time; a new autonomous task needed no declared answers to ship.
+[skill-enforced: plan §2.9.3 + deepen-plan §4.13] NEW autonomous-task surfaces (`## Files to Create`) emit `## Task Design`: [references/task-design-gate.md](./references/task-design-gate.md).
 
 ### 2.10. Architecture Decision (ADR / C4) Gate
 

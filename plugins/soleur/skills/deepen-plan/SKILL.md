@@ -571,10 +571,6 @@ echo 'SOLEUR_RULE_APPLIED rule=encryption-posture-design-time-default note=Every
 
 **Why:** ADR-140 and `knowledge-base/project/plans/archive/20261013-041741-2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11). A declaration-only gate without Layer A (`lint-encryption-posture.py`, repo-root `scripts/`, resolving every citation against real code) and Layer B (live provider/host reconciliation) reproduces #6588 exactly — legal docs declared LUKS while the volume was plaintext ext4. This deepen-plan halt is the design-time half; it stops an underspecified or boilerplate posture from ever reaching `soleur:work`.
 
-**Step 5 — Pass-through.** Non-UI plan, or a committed `.pen` present → proceed normally. No telemetry on pass.
-
-**Why:** #4819 — the one-shot path skips brainstorm, so plan Phase 2.5 is the sole producer; this halt is the independent verifier that a UI feature did not reach implementation with zero wireframes (the silent-skip class the feature kills).
-
 ### 4.11. Guard Contract Halt (Conditional)
 
 Fires when the plan's deliverable includes a **guard, gate, lint, drift-check or anti-vacuity control** (plan Phase 2.12). This is the design-time verifier that a guard-shaped plan carries a usable Guard Contract before `soleur:work` writes any guard code.
@@ -651,41 +647,9 @@ No telemetry on pass — the gate only records when it activates.
 
 **Why:** #9398 — on PR #9339 a brief listing tasks a–f grew a destructive `--attest` rung nobody asked for; the catch cost an 11-seat review and ~8 CI cycles. The deepen halt is what makes "an unmapped item blocks the plan unless justified" load-bearing rather than advisory.
 
-### 4.13. Task-Design Halt (Conditional)
+### 4.13. Task-Design Halt
 
-Symmetric to Phase 4.10 above; this gate is what makes plan Phase 2.9.3 load-bearing. Fires only when the plan creates a NEW autonomous-task surface.
-
-**Step 1 — Trigger.** Fires when the plan's `## Files to Create` contains an entry matching `\.github/workflows/scheduled-.*\.yml`, `apps/*/server/inngest/functions/(cron|oneshot)-.*\.ts`, OR the plan creates a new registered reminder/sweeper check (a `CHECK_REGISTRY` entry or an armed named-check). No match → skip silently (pass-through). Detection is Files-to-Create-scoped — a docs-only plan never fires.
-
-**Step 2 — Locate the section.**
-
-```bash
-grep -q '^## Task Design' <plan-file>
-```
-
-If absent, HALT with:
-
-> Error: Plan creates a new autonomous-task surface but is missing `## Task Design` section.
-> See `plan-issue-templates.md` for the schema.
-> Every new autonomous task must answer the six task-design questions at design time.
-
-**Step 3 — Validate field values.** Extract the section body (between `^## Task Design` and the next `^## ` heading). Reject if ANY of:
-
-- **A created task has no `task:` block** — one block per created autonomous task.
-- **Field key absent, empty, or placeholder** — any of `trigger`, `services`, `next`, `human_reentry`, `dedupe`, `source_dedupe` missing or matching `^\s*<field>:\s*(TODO|TBD|N/A|placeholder)\s*$`.
-- **`dedupe` names only workflow-level concurrency** — an answer citing `concurrency: group:` (or equivalent) with no semantic mechanism (idempotency precheck, marker dedupe, immutable ticket key). `concurrency:` serializes overlapping RUNS; it does not stop the same work being done twice.
-
-On rejection, HALT with a message naming the specific field and its failure mode (e.g., `"Phase 4.13 reject: task[0].dedupe names only concurrency: group:"`).
-
-**Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
-
-```bash
-echo 'SOLEUR_RULE_APPLIED rule=task-design-design-time-default note=Every new autonomous task MUST answer the six task-design questions at plan time'
-```
-
-**Step 5 — Pass-through.** Section present, every created task has a block, all fields non-placeholder, and `dedupe` names a semantic mechanism → proceed normally. No telemetry on pass.
-
-**Why:** #11015 — the six answers all exist somewhere in the machinery but none was required at design time; this halt is the independent verifier that a plan-authored autonomous task reaches `soleur:work` with written answers.
+Makes plan §2.9.3 load-bearing. Trigger + reject contract: [plan/references/task-design-gate.md](../plan/references/task-design-gate.md). On trigger HALT on a missing `## Task Design` or any contract reject; emit `SOLEUR_RULE_APPLIED rule=task-design-design-time-default` on halt; pass silent otherwise. **Why:** #11015.
 
 ### 5. Discover and Run ALL Review Agents
 
