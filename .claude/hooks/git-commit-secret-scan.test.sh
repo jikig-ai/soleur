@@ -36,6 +36,10 @@ SUITE_TMP=$(mktemp -d); _TMP_DIRS+=("$SUITE_TMP")
 # The operator's global and system git configuration must not leak into any fixture: a global core.splitIndex or
 # feature.manyFiles changed what the simulation saw (review round, test-design). Fixtures set their identity locally.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# ... nor the ambient excludes file ($XDG_CONFIG_HOME/git/ignore, $HOME/.config/git/ignore): a `*.txt` there stopped the
+# suite at its first fixture (review round 2).
+mkdir -p "$SUITE_TMP/xdg" "$SUITE_TMP/home"
+export XDG_CONFIG_HOME="$SUITE_TMP/xdg" HOME="$SUITE_TMP/home"
 
 # The canonical fixture-dir guard (byte-identical to plugins/soleur/test/test-helpers.sh; asserted by
 # plugins/soleur/test/fixture-dir-operand-assert.test.sh): refuse an empty, relative or synthetic-fs directory
@@ -192,6 +196,7 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$sub" "${GIT_INDEX_FILE-<unset>}" "${GIT
 env | grep -E '^GIT_CONFIG_(COUNT|KEY_|VALUE_|PARAMETERS)' > "$d/env.$n" 2>/dev/null
 if [ "$sub" = detect ]; then
   if [ -n "$src" ] && [ -d "$src" ]; then (cd "$src" && find . -type f -print0 | sort -z | tr '\000' '|') > "$d/nodiff.$n"; fi
+  if [ -n "${GL_REC_SLEEP_DETECT-}" ]; then sleep "$GL_REC_SLEEP_DETECT" & echo "$!" > "$d/sleep.pid"; wait "$!"; fi
   exit "${GL_REC_DETECT_RC:-0}"
 fi
 [ "$sub" = git ] || exit 0
@@ -202,7 +207,7 @@ if [ -n "${GIT_INDEX_FILE-}" ]; then
   p=$(dirname "$GIT_INDEX_FILE")
   while [ "$p" != / ] && [ "$p" != . ]; do
     case "$(basename "$p")" in
-      commit-sim-*) echo "$p" > "$d/simdir.$n"; ls -ld "$p" | cut -c1-10 > "$d/simperm.$n"; break ;;
+      commit-sim-*) echo "$p" > "$d/simdir.$n"; ls -ld "$p" | cut -c1-10 > "$d/simperm.$n"; [ -f "$p/.soleur-sim-marker" ] && echo yes > "$d/simmarker.$n"; break ;;
     esac
     p=$(dirname "$p")
   done
@@ -214,7 +219,7 @@ if [ -n "${GL_REC_HOLD-}" ]; then
   k=0
   while [ ! -e "${GL_REC_RELEASE-/nonexistent}" ] && [ "$k" -lt 100 ]; do sleep 0.1; k=$((k + 1)); done
 fi
-[ -n "${GL_REC_SLEEP-}" ] && sleep "$GL_REC_SLEEP"
+if [ -n "${GL_REC_SLEEP-}" ]; then sleep "$GL_REC_SLEEP" & echo "$!" > "$d/sleep.pid"; wait "$!"; fi
 if [ -n "${GL_REC_RC-}" ] && [ -z "${GL_REC_RC_REPORT-}" ]; then exit "$GL_REC_RC"; fi
 if [ -n "${GL_REC_MARK-}" ]; then
   hit=$(g grep --cached -l -F -e "$GL_REC_MARK" 2>/dev/null | head -n 1)
@@ -957,7 +962,7 @@ _t_target_resolution2() {
   # T53: a lexer failure on a loose-only match is denied for ITS cause, with the right repair.
   _expect "T53a unbalanced quote on a loose-only form → deny (parse)" "$R" "git -C \"$W commit -m x" deny "cannot determine" "not parseable" "balanced quotes" "!install perl"
   pd=$(_mk_stub_path findings)
-  EXPECT_PD="$pd" _expect "T53b no perl on a loose-only form → deny (tooling)" "$R" "git -C $W commit -m x" deny "cannot determine" "perl" "perl is on PATH" "plain 'git commit'" "!No rewrite" "!private-key"
+  EXPECT_PD="$pd" _expect "T53b no perl on a loose-only form → deny (tooling)" "$R" "git -C $W commit -m x" deny "cannot determine" "perl" "perl is on PATH" "plain 'git commit -m" "!No rewrite" "!private-key"
 
   # T54: a broken library denies a commit and leaves a non-commit alone.
   cp=$(mktemp -d "$SUITE_TMP/hookcopy2.XXXXXX")
@@ -1443,7 +1448,7 @@ _t_walker() {
   done
   # #10696: 'git add -A && git commit -m "fix: tidy"' was a must-skip row here; detecting same-command
   # staging needs the lexer's argv, so it FLIPPED to must-match (see _t_sim_prefilter).
-  for w in 'git commit -m x' 'git commit --amend --no-edit' 'git status && git commit -m x'; do
+  for w in 'git commit -m x' 'git commit --amend --no-edit'; do
     if bash -c 'source "$1" && ctr_wants_lex "$2"' _ "$lib" "$w"; then _report "pre-filter skips: $w" fail "ctr_wants_lex returned true (a perl spawn on the no-token path)"
     else _report "pre-filter skips: $w" ok; fi
   done
@@ -1531,8 +1536,8 @@ _t() {
 # the verb after `-C <dir>` / `-c k=v`. "SIM=1" = GIT_INDEX_FILE is set and is not $SHIM_REAL_INDEX,
 # i.e. a would-be-index call (fixture and gitleaks-internal calls pass through). Failure modes are
 # read at CALL time: SHIM_FAIL=addA (a sim `add` carrying -A/--all), replay (a sim `add` carrying
-# neither -A/--all nor -u: the exact replay), anyadd; SHIM_MSG / SHIM_RC choose the output. SHIM_FAILV=<verb> fails
-# every call of that verb (check-attr, checkout-index, ...) with rc 128.
+# neither -A/--all nor -u: the exact replay), addu (a sim `add -u` without -A: the commit -a / pathspec rungs), anyadd; SHIM_MSG / SHIM_RC choose the output. SHIM_FAILV=<verb> fails
+# every call of that verb (check-attr, cat-file, ...) with rc 128. SHIM_SLEEP_VERB=<verb> SHIM_SLEEP=<s> sleeps first; SHIM_EMPTY_VERB=<verb> drains stdin and prints nothing (rc 0).
 _sim_init() {
   [[ -n "$SIM_SHIM" ]] && return 0
   SIM_REAL_GIT=$(command -v git)
@@ -1557,6 +1562,8 @@ if [ -n "${SHIM_LOG-}" ]; then
   printf 'SIM=%s VERB=%s LC_ALL=%s OPTLOCKS=%s IDX=%s OBJ=%s ALT=%s ARGS=%s\n' "$sim" "$verb" "${LC_ALL-<unset>}" "${GIT_OPTIONAL_LOCKS-<unset>}" \
     "${GIT_INDEX_FILE-<unset>}" "${GIT_OBJECT_DIRECTORY-<unset>}" "${GIT_ALTERNATE_OBJECT_DIRECTORIES-<unset>}" "$qargs" >> "$SHIM_LOG" 2>/dev/null
 fi
+if [ -n "${SHIM_SLEEP_VERB-}" ] && [ "$verb" = "$SHIM_SLEEP_VERB" ]; then sleep "${SHIM_SLEEP:-3}"; fi
+if [ -n "${SHIM_EMPTY_VERB-}" ] && [ "$verb" = "$SHIM_EMPTY_VERB" ]; then cat >/dev/null; exit 0; fi
 if [ -n "${SHIM_FAILV-}" ] && [ "$verb" = "$SHIM_FAILV" ]; then
   printf 'fatal: shim-injected %s failure\n' "$verb" >&2
   exit 128
@@ -1570,6 +1577,7 @@ if [ "$sim" = 1 ] && [ "$verb" = add ] && [ -n "${SHIM_FAIL-}" ]; then
   case "$SHIM_FAIL" in
     addA) [ "$broad" = 1 ] && fail=1 ;;
     replay) [ "$broad" = 0 ] && [ "$upd" = 0 ] && fail=1 ;;
+    addu) [ "$upd" = 1 ] && [ "$broad" = 0 ] && fail=1 ;;
     anyadd) fail=1 ;;
   esac
   if [ "$fail" = 1 ]; then
@@ -1871,8 +1879,14 @@ _t_sim_prefilter() {
     if bash -c 'source "$1" && ctr_wants_lex "$2"' _ "$lib" "$w"; then _report "G-pf must-match: ${w//$'\n'/ / }" ok
     else _report "G-pf must-match: ${w//$'\n'/ / }" fail "ctr_wants_lex returned false (the walker would never see this staging form)"; fi
   done
-  for w in 'git commit -m x' 'git commit -n -m x' 'git status && git commit -m x' 'git log --oneline && git commit -m x' \
-           'git log --grep=commit' 'git commit -m "fix the commit scan"' 'git addr' 'git commit --amend --no-edit'; do
+  # (row 46) ONLY a single simple commit with plain flags may skip the lexer on a perl-less host; the chained and
+  # non-commit forms that used to be "skips" want the lexer now (they are denied there, which is the fail-closed answer)
+  for w in 'git status && git commit -m x' 'git log --oneline && git commit -m x' 'git log --grep=commit' 'git addr' 'git commit -m x tracked.json' \
+           'git commit -m "$(cat <<EOF' 'git commit -m "a\\b"' 'git commit -m x -- f.txt'; do
+    if bash -c 'source "$1" && ctr_wants_lex "$2"' _ "$lib" "$w"; then _report "G-pf row 46 wants the lexer: $w" ok
+    else _report "G-pf row 46 wants the lexer: $w" fail "ctr_wants_lex returned false (a perl-less host would scan it unread)"; fi
+  done
+  for w in 'git commit -m x' 'git commit -n -m x' 'git commit -m "fix the commit scan"' 'git commit --amend --no-edit' 'git commit -F msg.txt' 'git commit -s -v -m ok' 'git commit'; do
     if bash -c 'source "$1" && ctr_wants_lex "$2"' _ "$lib" "$w"; then
       _report "G-pf must-skip: $w" fail "ctr_wants_lex returned true (a perl spawn on the no-staging path)"
     else _report "G-pf must-skip: $w" ok; fi
@@ -1886,8 +1900,8 @@ _t_sim_prefilter() {
 # child shells that source the walker can call it.
 ctr_stage_dump() {
   local i=0 n="${#CTR_ADD_EXACT[@]}" k
-  printf 'stage stages=%s opaque=%s refuse=%s unsim=%s all=%s paths_n=%s paths_literal=%s cd_first=%s\n' \
-    "${CTR_COMMIT_STAGES:-0}" "${CTR_STAGE_OPAQUE:-0}" "${CTR_STAGE_REFUSE:-0}" "${CTR_STAGE_UNSIMULABLE:-0}" \
+  printf 'stage lex=%s stages=%s opaque=%s refuse=%s unsim=%s all=%s paths_n=%s paths_literal=%s cd_first=%s\n' \
+    "${CTR_LEX_STATE:-unset}" "${CTR_COMMIT_STAGES:-0}" "${CTR_STAGE_OPAQUE:-0}" "${CTR_STAGE_REFUSE:-0}" "${CTR_STAGE_UNSIMULABLE:-0}" \
     "${CTR_COMMIT_ALL:-0}" "${#CTR_COMMIT_PATHS[@]}" "${CTR_COMMIT_PATHS_LITERAL:-1}" "${CTR_STAGE_CD_FIRST:-0}"
   printf 'refuse_why: %s\n' "${CTR_STAGE_REFUSE_WHY:-}"
   while [ "$i" -lt "$n" ]; do
@@ -1901,9 +1915,9 @@ ctr_stage_dump() {
 }
 export -f ctr_stage_dump
 SD_L=(); SD_C=(); SD_T=()
-_sd_add() {  # <label> <command> <token>...
+_sd_add() {  # <label> <command> <token>...  (every row also asserts lex=ok: a zero-token row would otherwise equal the dump of an unparsed command)
   local label="$1" cmd="$2" IFS=$'\037'; shift 2
-  SD_L+=("$label"); SD_C+=("$cmd"); SD_T+=("$*")
+  SD_L+=("$label"); SD_C+=("$cmd"); SD_T+=("$*${*:+$IFS}lex=ok")
 }
 _sd_check() {
   local lib="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" out i=0 cur="" line tok miss row n="${#SD_C[@]}"
@@ -1955,8 +1969,8 @@ _sd_unit_c_rows() {
   _sd_add 'a staging verb in a non-git record is opaque (npm add)' 'npm add left-pad && git commit -m x' 'opaque=1'
   _sd_add 'a non-git record without a staging verb is not opaque' 'echo hello && git commit -m x' 'stages=0' 'opaque=0'
   _sd_add 'a launcher with git behind it is walked, not opaque (timeout)' 'timeout 5 git add f.txt && git commit -m x' 'opaque=0' 'exact=1'
-  _sd_add 'an inline alias.* key is REFUSED on a staging record' 'git -c alias.add=x add f.txt && git commit -m x' 'refuse=1'
-  _sd_add 'an inline alias.* key via --config-env is REFUSED' 'git --config-env=alias.add=V add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'an inline alias.* key is REFUSED on a staging record (a real alias name: git ignores aliases named like builtins)' 'git -c alias.a=add a f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'an inline alias.* key via --config-env is REFUSED' 'git --config-env=alias.a=V a f.txt && git commit -m x' 'refuse=1'
   # row 23: the environment allowlist
   _sd_add 'HOME= on a staging record is refused' 'HOME=/x git add f.txt && git commit -m x' 'refuse=1'
   _sd_add 'GIT_EDITOR= is on the allowlist' 'GIT_EDITOR=true git add f.txt && git commit -m x' 'refuse=0' 'exact=1'
@@ -2170,6 +2184,7 @@ _t_sim_dump() {
     else _report "benign-table: installed git accepts $o" ok; fi
   done
   _sd_unit_c_rows
+  _sd_fr2_rows
   _sd_check
   # The lexer-skipped plain-commit path never calls ctr_collect: the facts must read as zero, not unbound, under set -u.
   local zero
@@ -2326,7 +2341,7 @@ _t_sim_canary() {
   _sxr "G8 [gitleaks] -diff attribute + 'git add leak.json && git commit -m x' -> deny with the -diff message" "$D" \
     "git add leak.json && git commit -m x" deny "-diff"
   local v
-  for v in diff check-attr checkout-index; do
+  for v in diff check-attr cat-file; do
     _t "G8b the shim env log shows the sim variables on '$v' (one export covers all four injection sites)" "log=$(grep "VERB=$v " "$SIM_LOG" | head -c 300)" \
       grep -q -E "^SIM=1 VERB=$v .* IDX=/.* OBJ=/.* ALT=/" "$SIM_LOG"
   done
@@ -2421,7 +2436,9 @@ _with_pd() { local keep="$SIM_PD"; SIM_PD="$1"; shift; "$@"; SIM_PD="$keep"; }
 _distinct_idx() {  # <n>: the recording stub saw n distinct sim indexes (one per scanned root)
   [[ "$(awk -F'\t' '$2 == "git" { print $3 }' "$SIM_REC/calls.log" | sort -u | wc -l | tr -d ' ')" -eq "$1" ]]
 }
-_no_sleep61() { [[ -z "$(ps -eo args= | awk '$1 == "sleep" && $2 == "61"')" ]]; }
+# A process counted as gone when it does not exist or is a zombie (a killed orphan awaiting its reaper).
+_pid_gone() { local st; st=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ') || st=""; [[ -z "$st" || "$st" == Z* ]]; }
+_no_sleep61() { local pf="$SIM_REC/sleep.pid"; if [[ -s "$pf" ]]; then _pid_gone "$(cat "$pf")"; else return 1; fi; }
 
 # ---- group 10: the directory the replay may trust (CTO row 15) ----------------------------------
 _t_sim_dirproof() {
@@ -2499,8 +2516,6 @@ _t_sim_failures() {
     "git add clean.txt && git commit -m x" deny "leak.json"
   r=$(_sim_adds)
   _t "G11c2 ... the failed exact add (clean.txt) was followed by add -A" "adds=$r" _contains "$r" " -A "
-  _rows_since_mark git-commit-secret-scan-sim-failed
-  _t "G11c3 ... and no sim-failed bypass row exists any more" "n=$ROWS_N" _row_has 0
   _sx "G11c4 twin on a clean repo -> allow after the superset" "$C" "git add clean.txt && git commit -m x" allow
   _t "G11c5 ... the superset ran" "adds=$(_sim_adds)" _superset_add
   SIM_ENV=()
@@ -2509,17 +2524,29 @@ _t_sim_failures() {
   SIM_ENV=("SHIM_FAIL=addA")
   _sx "G11d a failed superset ('add -A' fails) -> deny with 'run git add as its own call' and the git error" "$C" \
     "git add -A && git commit -m x" deny "its own call" "shim-injected"
+  _cause_is "G11d2 ... cause superset-failed" superset-failed
   SIM_ENV=()
 
   # e. temp dir / index copy / ':' in the objects path
   pd2=$(_mk_sim_path); assert_fixture_dir "$pd2"; rm -f "$pd2/cp"; printf '#!/bin/sh\nexit 1\n' > "$pd2/cp"; chmod +x "$pd2/cp"
   _with_pd "$pd2" _sx "G11e the index copy fails (cp fails) -> deny" "$C" "git add -A && git commit -m x" deny "its own call"
+  _cause_is "G11e2 ... cause copy-failed" copy-failed
   pd3=$(_mk_sim_path); assert_fixture_dir "$pd3"; rm -f "$pd3/mktemp"
   printf '#!/bin/sh\nfor a in "$@"; do case "$a" in *commit-sim-*) exit 1 ;; esac; done\nexec %s "$@"\n' "$(command -v mktemp)" > "$pd3/mktemp"
   chmod +x "$pd3/mktemp"
   _with_pd "$pd3" _sx "G11f the sim directory cannot be allocated (mktemp fails for commit-sim-*) -> deny" "$C" "git add -A && git commit -m x" deny "its own call"
+  _cause_is "G11f2 ... cause temp-dir" temp-dir
   Cc="$SUITE_TMP/co:lon.repo"; rm -rf "$Cc"; mv "$(_mk_leaky_repo clean)" "$Cc"
-  _sx "G11g a ':' in the objects path (GIT_ALTERNATE_OBJECT_DIRECTORIES is colon separated) -> deny" "$Cc" "git add -A && git commit -m x" deny "its own call"
+  _sx "G11g a ':' in the objects path (GIT_ALTERNATE_OBJECT_DIRECTORIES is colon separated) -> deny, naming the colon and the way out" "$Cc" "git add -A && git commit -m x" deny "its own call" "contains a ':'" "move the checkout"
+  _cause_is "G11g2 ... cause colon-path" colon-path
+  # a failed rebuild (the second quarantine mkdir) is fresh-failed and does NOT quote the previous replay's stale error
+  pd2=$(_mk_sim_path); assert_fixture_dir "$pd2"; rm -f "$pd2/mkdir"; rm -f "$SUITE_TMP/mk.count"
+  printf '#!/bin/sh\ncase "$*" in */objs) n=$(cat %s 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > %s; [ "$n" -ge 2 ] && exit 1 ;; esac\nexec %s "$@"\n' \
+    "$SUITE_TMP/mk.count" "$SUITE_TMP/mk.count" "$(command -v mkdir)" > "$pd2/mkdir"; chmod +x "$pd2/mkdir"
+  SIM_ENV=("SHIM_FAIL=replay" "SHIM_RC=128" "SHIM_MSG=fatal: shim-injected replay failure")
+  _with_pd "$pd2" _sx "G11g3 the exact replay fails and the REBUILD cannot make its quarantine -> deny fresh-failed" "$C" "git add clean.txt && git commit -m x" deny "could not be simulated" "!shim-injected"
+  _cause_is "G11g4 ... cause fresh-failed, and the stale replay error is not quoted as its cause" fresh-failed
+  SIM_ENV=()
 
   # f. the deadline: expiry always DENIES, never bypasses (CIS_DEADLINE_SECONDS can only LOWER the 30 s ceiling).
   # The bound is one perl fork/waitpid/kill program on every host; the default stub PATH has no timeout(1) at all.
@@ -2532,7 +2559,7 @@ _t_sim_failures() {
   _rows_since_mark git-commit-secret-scan-sim-deny
   _t "G11h3 ... one sim-deny row, cause sim-timeout" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=sim-timeout"
   _t "G11h4 ... and no gitleaks child (the stub's sleep) is left running: the whole process group was killed" \
-    "left: $(ps -eo args= | awk '$1 == "sleep" && $2 == "61"' | head -c 100)" _no_sleep61
+    "stub sleep pid file: '$(cat "$SIM_REC/sleep.pid" 2>/dev/null)'" _no_sleep61
   SIM_ENV=("CIS_DEADLINE_SECONDS=0")
   _sx "G11i no time remaining (deadline 0) before the first call -> deny" "$C" "git add -A && git commit -m x" deny
   SIM_ENV=()
@@ -2578,6 +2605,10 @@ _t_sim_pins() {
   _sx "G12a '-c core.fsmonitor=<command> add' is REFUSED (stage in its own call)" "$U" \
     "git -c 'core.fsmonitor=touch $mk' add clean.txt && git commit -m x" deny "its own call"
   _t "G12a2 ... and the command never ran (the marker file does not exist)" "marker $mk exists" test ! -e "$mk"
+  # positive control: the SAME config on a plain `git add` in a copy DOES run the command, so the marker can appear
+  local ctl; ctl=$(mktemp -d "$SUITE_TMP/fsmctl.XXXXXX"); assert_fixture_dir "$ctl"; cp -a "$U/." "$ctl/"
+  ( cd "$ctl" && git -c "core.fsmonitor=touch $mk.ctl" add clean.txt ) >/dev/null 2>&1 || true
+  _t "G12a2b positive control: a plain 'git add' with that config runs the command (the marker appears), so G12a2 can fail" "no marker at $mk.ctl" test -e "$mk.ctl"
   for cmd in "git -c filter.x.clean=cat add clean.txt && git commit -m x" \
              "git --config-env=core.fsmonitor=V add clean.txt && git commit -m x" \
              "git --namespace n add clean.txt && git commit -m x" \
@@ -2655,8 +2686,6 @@ _t_sim_worktree() {
     "linkdir=$(_rec_mode_of linkdir) linkfile=$(_rec_mode_of linkfile)" test "$(_rec_mode_of linkdir)" = 120000 -a "$(_rec_mode_of linkfile)" = 120000
   _sx "G12k 'git add linkdir/f.txt' is beyond a symbolic link: not the trusted error -> superset -> allow" "$L" "git add linkdir/f.txt && git commit -m x" allow
   _t "G12k2 ... the superset ran" "adds=$(_sim_adds)" _superset_add
-  _rows_since_mark git-commit-secret-scan-sim-failed
-  _t "G12k3 ... and it is NOT recorded as the benign pathspec-missing bypass" "n=$ROWS_N txt=$ROWS_TXT" _row_has 0
   # a symlinked .gitleaks.toml still configures the scan
   SL=$(_mk_leaky_repo untracked); tomlreal="$SUITE_TMP/toml.real.$SIM_N"
   mv "$SL/.gitleaks.toml" "$tomlreal"; ln -s "$tomlreal" "$SL/.gitleaks.toml"
@@ -2749,40 +2778,12 @@ _t_sim_repair() {
   _t "R4b ... the ledger row is the base rule id with cause=finding" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=finding"
   _sx "R5 a file ALREADY staged in the real index (chained add -A) -> restore --staged as its OWN call, never 'nothing is staged'" "$S" "git add -A && git commit -m x" deny \
     "already staged" "git restore --staged <path>' as its OWN call" "!Nothing is staged yet"
-  _sx "R6 the finding root is one the command does not name -> the 'cd <target>' recipe" "$B" "git -C $A status; git add -A && git commit -m x" deny \
-    "leak.json" "does not name" "run 'cd $A' as its own call"
+  _sx "R6 the finding root is not the one the command names -> both directions offered, '-C <target>' on BOTH calls, never a bare cd" "$B" "git -C $A status; git add -A && git commit -m x" deny \
+    "leak.json" "also names $A" "put '-C $A' on BOTH the git add and the git commit" "!run 'cd "
   _sx "R7 inexact-word cause (glob) -> say why the full tree was scanned and ask for literal paths" "$U" "git add *.txt && git commit -m x" deny "leak.json" "write literal paths" "!this same command"
   _sx "R7b loop cause -> the command cannot be replayed: split it" "$U" "for f in clean.txt; do git add \$f; done; git commit -m x" deny "leak.json" "cannot replay"
   _sx "R7c unproven-dir cause -> name the directory" "$U" "git -C docs add f.txt && git add clean.txt && git commit -m x" deny "leak.json" "cd /abs/path &&"
   _sx "R7d untracked finding -> the .gitignore / separate-call recovery" "$U" "git add -A && git commit -m x" deny "leak.json" "untracked" ".gitignore" "separate call" "!restore --staged"
-
-  # file names are data: control characters, line separators and bidi overrides are replaced and the length is capped
-  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"
-  name=$'bad\nname\xe2\x80\xa8\xe2\x80\xaeevil\xc2\x85.json'
-  cp "$U/leak.json" "$U/$name"; rm -f "$U/leak.json"
-  _sxr "R8 a hostile file name in a finding (newline, U+2028, U+202E) is sanitised in the deny text" "$U" "git add -A && git commit -m x" deny "Locations: bad?name"
-  r="$SIM_R"
-  _t "R8b ... no raw newline, U+0085, U+2028 or U+202E reaches the reason" "reason=${r:0:200}" test "$([[ "$r" != *$'\n'* && "$r" != *$'\xe2\x80\xa8'* && "$r" != *$'\xe2\x80\xae'* && "$r" != *$'\xc2\x85'* ]] && echo y)" = y
-  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"
-  long=$(printf 'n%.0s' $(seq 1 250))
-  cp "$U/leak.json" "$U/$long.json"; rm -f "$U/leak.json"
-  _sxr "R8c a 250-character file name is cut" "$U" "git add -A && git commit -m x" deny "Locations: nnnn"
-  r="$SIM_R"
-  _t "R8d ... the full name is not in the reason" "len=${#r}" test "$([[ "$r" != *"${long:0:130}"* ]] && echo y)" = y
-
-  # the same for the `-diff` re-scan list: a hostile name there is sanitised too
-  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"
-  printf '*.dat -diff\n' > "$U/.gitattributes"
-  name=$'ev\nil\xe2\x80\xa8.dat'
-  cp "$U/leak.json" "$U/$name"; rm -f "$U/leak.json"
-  _sxr "R8e a hostile name in the -diff re-scan list is sanitised" "$U" "git add -A && git commit -m x" deny "carrying a \`-diff\` gitattribute: ev?il?.dat"
-  r="$SIM_R"
-  _t "R8f ... no raw newline or U+2028 reaches that reason either" "reason=${r:0:200}" test "$([[ "$r" != *$'\n'* && "$r" != *$'\xe2\x80\xa8'* ]] && echo y)" = y
-
-  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"
-  printf '*.dat -diff\n' > "$U/.gitattributes"
-  for name in 1 2 3 4 5 6 7; do cp "$U/leak.json" "$U/f$name.dat"; done; rm -f "$U/leak.json"
-  _sxr "R8g seven -diff files: the deny text names five and counts the rest" "$U" "git add -A && git commit -m x" deny "and 2 more" "f1.dat" "f5.dat" "!f6.dat" "!f7.dat"
 
   # every recipe above is replayed: its first step is applied to the fixture, then the hook judges the second step
   Cn=$(_mk_leaky_repo tracked-modified); assert_fixture_dir "$Cn"
@@ -2800,7 +2801,7 @@ _t_sim_repair() {
   Cn=$(_mk_staged_repo); assert_fixture_dir "$Cn"
   git -C "$Cn" restore --staged leak.json; rm -f "$Cn/leak.json"
   _sx "R9e recipe (staged): 'git restore --staged' as its own call, scrub, then 'git commit -m x' -> allow" "$Cn" "git commit -m x" allow
-  _sx "R9f recipe (cd <target>): the payload cwd is the target, the same command -> allow" "$A" "git -C $A status; git add -A && git commit -m x" allow
+  _sx "R9f recipe (-C <target> on BOTH): the add and the commit name the target, so B is a fallback root scanned on its real index -> allow" "$B" "git -C $A add -A && git -C $A commit -m x" allow
   Cn=$(_mk_leaky_repo tracked-modified); assert_fixture_dir "$Cn"
   printf '{"k":"v2"}\n' > "$Cn/tracked.json"   # scrubbed: a clean change
   _sx "R9g recipe (tracked): scrub in place, then the SAME command again -> allow" "$Cn" "git add tracked.json && git commit -m x" allow
@@ -2846,7 +2847,7 @@ x
 EOF
 )\"" deny
   _sx "L1f a relative -C: 'git -C sub add -f .env && git commit' -> deny (the directory is not proven)" "$F" \
-    "git -C sub add -f .env && git commit -m x" deny "force-add"
+    "git -C sub add -f .env && git commit -m x" deny "force-add" "cannot be proven" "!cannot read literally"
   _rows_since_mark git-commit-secret-scan-sim-deny
   _t "L1f2 ... one sim-deny row, cause force-unproven-dir" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=force-unproven-dir"
 
@@ -2865,7 +2866,7 @@ EOF
   done
   # A force-add whose paths come from stdin or a file has no literal path word to re-run: deny, never skip.
   _sx "L1g force-add with its paths on stdin ('xargs git add -f') -> deny force-add (no literal path to scan)" "$I" \
-    "printf 'ignored.pem\\n' | xargs git add -f && git commit -m x" deny "force-add" "its own call"
+    "printf 'ignored.pem\\n' | xargs git add -f && git commit -m x" deny "force-add" "its own call" "cannot read literally" "!cannot be proven"
   _sx "L1h force-add with --pathspec-from-file -> deny force-add" "$I" \
     "git add -f --pathspec-from-file=paths.txt && git commit -m x" deny "force-add" "its own call"
   _rows_since_mark git-commit-secret-scan-sim-deny
@@ -2927,7 +2928,7 @@ _t_sim_seams() {
 
   # --- a gitleaks that errors in sim mode is a deny (row 31); the plain-mode bypass is unchanged ---
   SIM_ENV=("GL_REC_RC=2")
-  _sx "S4 gitleaks exits 2 on the simulated index -> deny scan-error" "$C" "git add -A && git commit -m x" deny "did not complete"
+  _sx "S4 gitleaks exits 2 on the simulated index -> deny scan-error, whose repair is to fix gitleaks (not a recipe that fail-opens)" "$C" "git add -A && git commit -m x" deny "did not complete" "tooling fault" "!own call"
   _rows_since_mark git-commit-secret-scan-sim-deny
   _t "S4b ... cause scan-error" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=scan-error"
   SIM_ENV=("GL_REC_RC=2" "GL_REC_RC_REPORT=1")
@@ -2945,8 +2946,8 @@ _t_sim_seams() {
   _sx "S5 the -diff re-scan (detect --no-git) exits 2 in sim mode -> deny scan-error" "$D" "git add clean.txt && git commit -m x" deny "did not complete"
   SIM_ENV=("GL_REC_DETECT_RC=0")
   _sx "S5b control: the same fixture with a healthy re-scan -> allow" "$D" "git add clean.txt && git commit -m x" allow
-  _t "S5c ... and the re-scan really saw clean.txt (checkout-index wrote the blob)" "nodiff=$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" _contains "$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" "clean.txt"
-  SIM_ENV=("SHIM_FAILV=checkout-index")
+  _t "S5c ... and the re-scan really saw clean.txt (its raw blob was written)" "nodiff=$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" _contains "$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" "clean.txt"
+  SIM_ENV=("SHIM_FAILV=cat-file")
   _sx "S5d a blob that cannot be read for the -diff re-scan -> deny scan-error (never an empty file read as clean)" "$D" "git add clean.txt && git commit -m x" deny "did not complete"
   SIM_ENV=("SHIM_FAILV=check-attr")
   _sx "S6 the batched check-attr fails in sim mode -> deny check-attr-failed" "$C" "git add -A && git commit -m x" deny "attribute guard could not run"
@@ -3091,7 +3092,7 @@ _t_sim_walkc() {
   _sx "W2d a non-git command without a staging verb stays exact: 'echo hi && git add clean.txt && git commit' (an unrelated untracked leak) -> allow" "$U" \
     "echo hi && git add clean.txt && git commit -m x" allow
   _t "W2e ... an exact replay" "adds=$(_sim_adds)" _exact_add clean.txt
-  _sx "W2f an inline alias.* key on the staging record is refused" "$U" "git -c alias.add=status add clean.txt && git commit -m x" deny "its own call"
+  _sx "W2f an inline alias.* key on the staging record is refused" "$U" "git -c alias.a=add a clean.txt && git commit -m x" deny "alias"
 
   # row 23: the environment allowlist
   for cmd in "HOME=/x git add clean.txt && git commit -m x" \
@@ -3139,6 +3140,613 @@ _t_sim_walkc() {
     bash -c 'source "$1" && ! ctr_wants_lex "git commit -m x"' _ "$lib"
 }
 
+# ---- review round 2 (fix round): raw -diff blobs, the bound, plan snapshot, walker gaps, sweeps --------------------
+_cause_is() {  # <label> <cause>: exactly one sim-deny row since the mark, carrying cause=<cause>
+  _rows_since_mark git-commit-secret-scan-sim-deny
+  _t "$1" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=$2"
+}
+_finding_row() {  # <label>: exactly one BASE-id row, cause=finding
+  _rows_since_mark git-commit-secret-scan
+  _t "$1" "n=$ROWS_N txt=$ROWS_TXT" _row_has 1 "cause=finding"
+}
+
+# A1 (security N1/N7): the -diff re-scan reads RAW blobs, and re-scans every path whose diff attribute is not unspecified/set.
+_t_fr2_raw() {
+  _needs_gl "A1 raw -diff re-scan (real gitleaks)" || return 0
+  _sim_init
+  local U D W T16 drv
+  # UTF-16LE without iconv (the suite already needs perl): decode UTF-8, encode UTF-16LE, no BOM
+  _to_utf16le() { perl -MEncode -e 'binmode STDIN; binmode STDOUT; local $/; my $s = <STDIN>; print Encode::encode("UTF-16LE", Encode::decode("UTF-8", $s))'; }
+  # a UTF-16LE working-tree file whose staged blob is UTF-8 (git decodes it on add) - checkout-index would hand the
+  # re-scan the UTF-16LE form and gitleaks would see nothing
+  T16=$(_mk_leaky_repo clean); assert_fixture_dir "$T16"
+  printf '*.leak -diff working-tree-encoding=UTF-16LE\n' > "$T16/.gitattributes"
+  U=$(_mk_leaky_repo untracked); _to_utf16le < "$U/leak.json" > "$T16/a.leak"
+  git -C "$T16" add .gitattributes a.leak
+  _t "A1 precondition: the staged blob is UTF-8 (git decoded the UTF-16LE file)" "blob head: $(git -C "$T16" cat-file -p :a.leak | head -c 4)" \
+    test "$(git -C "$T16" cat-file -p :a.leak | head -c 1)" = '{'
+  _sxr "A1a [gitleaks] -diff working-tree-encoding=UTF-16LE + a STAGED PEM, plain commit -> deny (raw blob re-scanned)" "$T16" "git commit -m x" deny "a.leak" "diff driver"
+  W=$(_mk_leaky_repo clean); assert_fixture_dir "$W"
+  printf '*.leak -diff working-tree-encoding=UTF-16LE\n' > "$W/.gitattributes"; _to_utf16le < "$U/leak.json" > "$W/a.leak"
+  _sxr "A1b ... and 'git add -A && git commit' with the same files untracked (sim) -> deny" "$W" "git add -A && git commit -m x" deny "a.leak" "diff driver"
+  # a diff DRIVER configured binary: check-attr reports the driver name, not unset
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"
+  printf '*.leak diff=bin\n' > "$D/.gitattributes"; cp "$U/leak.json" "$D/a.leak"; git -C "$D" config diff.bin.binary true
+  git -C "$D" add .gitattributes a.leak
+  _sxr "A1c [gitleaks] '*.leak diff=bin' + diff.bin.binary=true + a STAGED PEM, plain commit -> deny (a driver name is not 'unspecified')" "$D" "git commit -m x" deny "a.leak" "diff driver"
+  drv=$(_mk_leaky_repo clean); assert_fixture_dir "$drv"
+  printf '*.leak diff=bin\n' > "$drv/.gitattributes"; cp "$U/leak.json" "$drv/a.leak"; git -C "$drv" config diff.bin.binary true
+  _sxr "A1d ... and the sim form ('git add -A && git commit') -> deny" "$drv" "git add -A && git commit -m x" deny "a.leak" "diff driver"
+  _sxr "A1e control: a clean repo with the same attribute and driver config -> allow" "$(_mk_leaky_repo clean)" "git commit -m x" allow
+}
+
+# A1 (no perl): one cat-file per path, raw blobs, still written under their paths
+_t_fr2_noperl_rescan() {
+  _sim_init
+  local D pd
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"
+  printf '*.dat -diff\n' > "$D/.gitattributes"; mkdir -p "$D/sub"; echo one > "$D/x.dat"; echo two > "$D/sub/y.dat"
+  git -C "$D" add .gitattributes x.dat sub/y.dat
+  pd=$(_mk_stub_path record); assert_fixture_dir "$pd"; rm -f "$pd/git"; cp "$SIM_SHIM" "$pd/git"; chmod +x "$pd/git"
+  if [[ -e "$pd/perl" ]]; then _report "A1f fixture PATH has no perl" fail "the stub PATH carries perl"; return 0; fi
+  _with_pd "$pd" _sx "A1f no perl, plain commit with -diff staged files -> allow (clean stub)" "$D" "git commit -m x" allow
+  _t "A1g ... and the re-scan directory holds both files under their paths (the perl-less loop wrote raw blobs)" "nodiff=$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" \
+    test "$([[ "$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" == *"./x.dat"* && "$(cat "$SIM_REC"/nodiff.* 2>/dev/null)" == *"./sub/y.dat"* ]] && echo y)" = y
+}
+
+# the blob splitter, driven directly
+_t_fr2_splitter() {
+  local pl d out rc names
+  pl=$(sed -n "/^read -r -d '' NODIFF_PL <<'PL'/,/^PL\$/p" "$HOOK")
+  if [[ -z "$pl" ]]; then _report "A1h splitter extracted from the hook" fail "NODIFF_PL not found"; return 0; fi
+  d=$(mktemp -d "$SUITE_TMP/split.XXXXXX"); assert_fixture_dir "$d"
+  names="$d.names"
+  _split() {  # <names (printf format)> <stream (printf format)> -> rc in SPLIT_RC
+    eval "$pl"
+    assert_fixture_dir "$names"
+    printf "$1" > "$names"; SPLIT_RC=0
+    printf "$2" | perl -e "$NODIFF_PL" "$names" "$d" >/dev/null 2>&1 || SPLIT_RC=$?
+  }
+  _split 'a/b.txt\0c.txt\0' 'o blob 5\nhello\no blob 3\nabc\n'
+  _t "A1h the splitter writes blobs under their paths (rc 0)" "rc=$SPLIT_RC" test "$SPLIT_RC" -eq 0 -a "$(cat "$d/a/b.txt" 2>/dev/null)" = hello -a "$(cat "$d/c.txt" 2>/dev/null)" = abc
+  rm -rf "${d:?}"/*
+  assert_fixture_dir "$names"
+  : > "$names"
+  _split 'bin.dat\0' 'o blob 4\n\001\000\377\n\n'
+  _t "A1i ... binary content (a NUL, a high byte) is preserved byte for byte" "size=$(wc -c < "$d/bin.dat" 2>/dev/null)" test "$(wc -c < "$d/bin.dat" 2>/dev/null | tr -d ' ')" = 4
+  _split '../escape.txt\0' 'o blob 1\nx\n'
+  _t "A1j a name with a .. component is refused (rc 5), nothing written outside" "rc=$SPLIT_RC" test "$SPLIT_RC" -eq 5 -a ! -e "$d/../escape.txt"
+  _split 'a/../b.txt\0' 'o blob 1\nx\n'
+  _t "A1k ... also in the middle of a path (rc 5)" "rc=$SPLIT_RC" test "$SPLIT_RC" -eq 5
+  _split '/abs.txt\0' 'o blob 1\nx\n'
+  _t "A1l an absolute name is refused (rc 5)" "rc=$SPLIT_RC" test "$SPLIT_RC" -eq 5
+  _split 'm.txt\0' 'o missing\n'
+  _t "A1m a blob git could not give is rc 3" "rc=$SPLIT_RC" test "$SPLIT_RC" -eq 3
+  _split 'm.txt\0' 'o blob 10\nabc\n'
+  _t "A1n a short stream is rc 4" "rc=$SPLIT_RC" test "$SPLIT_RC" -eq 4
+  _split 'm.txt\0n.txt\0' 'o blob 1\nx\n'
+  _t "A1o a stream with fewer blobs than names is rc 4" "rc=$SPLIT_RC" test "$SPLIT_RC" -eq 4
+  : > "$d/blocker"; _split 'blocker/f.txt\0' 'o blob 1\nx\n'
+  _t "A1p a path whose parent cannot be made is a non-zero status" "rc=$SPLIT_RC" test "$SPLIT_RC" -ne 0
+  mkdir "$d/adir"; _split 'adir\0' 'o blob 1\nx\n'
+  _t "A1q a file that cannot be opened for writing (the name is a directory) is rc 6" "rc=$SPLIT_RC" test "$SPLIT_RC" -eq 6
+  unset -f _split
+}
+
+# A2: the timeout classifier exists, a slow add is a sim-timeout, and no called function is undefined
+_t_fr2_timeout() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" U start id miss="" n=0
+  local files=("$HOOK" "$walk" "$lib")
+  _t "A2 _cis_is_timeout is defined and true for 124" "" bash -c 'source "$1" || exit 9; source "$2" || exit 9; _cis_is_timeout 124' _ "$walk" "$lib"
+  _t "A2b ... and false for any other status" "" bash -c 'source "$1" || exit 9; source "$2" || exit 9; ! _cis_is_timeout 1 && ! _cis_is_timeout 0 && ! _cis_is_timeout 137' _ "$walk" "$lib"
+  U=$(_mk_leaky_repo untracked)
+  SIM_ENV=("SHIM_SLEEP_VERB=add" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
+  _sx "A2c a git add that outlives the deadline inside the build -> deny, sim-timeout text" "$U" "git add -A && git commit -m x" deny "very large working tree"
+  _t "A2d ... bounded: the slow add was killed near the deadline, not after its 20 s" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  _cause_is "A2e ... cause sim-timeout (not superset-failed)" sim-timeout
+  _t "A2f ... and stderr carries no 'command not found'" "err=${ERR:0:200}" _nlacks "x${ERR}" "command not found"
+  SIM_ENV=()
+  # every function called in command position by the three production files is defined in them
+  for id in $(cat "${files[@]}" | grep -vE '^[[:space:]]*#' \
+      | grep -oE '(^|[;&|(]|then|do|else|!)[[:space:]]*(_?(cis|ctr|sim)_[a-z0-9_]+|_san|text_advice|tmp_fail|hook_exit|cleanup|scan_root|add_root|gitleaks_runnable|deny_undeterminable)([[:space:]]|;|$)' \
+      | grep -oE '_?(cis|ctr|sim)_[a-z0-9_]+|_san|text_advice|tmp_fail|hook_exit|cleanup|scan_root|add_root|gitleaks_runnable|deny_undeterminable' | grep -vxE 'sim_i|sim_on|sim_dir|sim_work|sim_brc' | sort -u); do
+    n=$((n + 1))
+    grep -qE "^[[:space:]]*(function[[:space:]]+)?${id}[[:space:]]*\\(\\)" "${files[@]}" || miss="$miss $id"
+  done
+  _t "A2g every function the production files call is defined ($n names checked)" "undefined:$miss" test -z "$miss" -a "$n" -ge 40
+}
+
+# A3: the plan is read once - a replay fallback in the simulated root never turns a fallback-only root into a simulated one
+_t_fr2_plan() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local I B Cn
+  I=$(_mk_leaky_repo ignored); B=$(_mk_leaky_repo untracked); Cn=$(_mk_leaky_repo clean)
+  # I holds an ignored ignored.pem: 'git add ignored.pem' without -f exits 1 -> replay-failed -> the superset for I only
+  _sx "A3 'cd I && git add ignored.pem && git commit' from repo B (untracked leak): I's replay falls back, B is still a fallback root -> allow" "$B" \
+    "cd $I && git add ignored.pem && git commit -m x" allow
+  _t "A3b ... I really fell back (an exact add, then add -A) and B received no sim add (two adds in total)" "adds=$(_sim_adds)" test "$(_sim_add_n)" = 2 -a "$(_superset_add && echo y)" = y
+  PAYLOAD_CWD="$I" _sx "A3d order twin: the fallback root listed FIRST (process cwd B, payload cwd I) -> allow" "$B" "git add ignored.pem && git commit -m x" allow
+  _sx "A3e must-deny twin: the same shape when the fallback root holds a STAGED leak -> deny naming it" "$(_mk_staged_repo)" "cd $I && git add ignored.pem && git commit -m x" deny "leak.json"
+  _sx "A3f a fallback root scanned AFTER a simulated root still sees its real index (clean) -> allow" "$Cn" "cd $I && git add ignored.pem && git commit -m x" allow
+}
+
+# A4: the 'does not act here' text never prescribes a bare cd, and its recipe works end to end
+_t_fr2_recipe() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local M W
+  M=$(_mk_leaky_repo untracked); W=$(_mk_leaky_repo clean)
+  _sx "A4 'git -C W log -1 && git add -A && git commit' from M (untracked leak): M is where the add acts -> deny, no bare cd prescribed" "$M" \
+    "git -C $W log -1 --oneline && git add -A && git commit -m x" deny "leak.json" "also names $W" "put '-C $W' on BOTH" "!run 'cd "
+  _sx "A4b recipe 1 (-C <target> on BOTH): the add and the commit name W, M is a fallback root -> allow" "$M" "git -C $W add -A && git -C $W commit -m x" allow
+  _t "A4c ... and W is the only repository simulated (one exact replay)" "adds=$(_sim_adds)" test "$(_sim_add_n)" = 1
+  _sx "A4d recipe 2 (scrub in the cwd root): stage literal paths in M -> allow" "$M" "git add clean.txt && git commit -m x" allow
+}
+
+# A5 / B1 / B2 / B3 / B4 / B5 through the hook (stub tier): what the walker now refuses or makes opaque, end to end
+_t_fr2_hook() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local U T I Cn S cmd n
+  U=$(_mk_leaky_repo untracked); T=$(_mk_leaky_repo tracked-modified); I=$(_mk_leaky_repo ignored); Cn=$(_mk_leaky_repo clean)
+  # A5: abbreviations of --force and an over-long bundle ending in f force-add an IGNORED secret
+  for cmd in "git add --f ignored.pem" "git add --fo ignored.pem" "git add --for ignored.pem" "git add --forc ignored.pem" "git add --force ignored.pem" \
+             "git add -$(printf 'A%.0s' $(seq 1 70))f ignored.pem" "git add -AAf ignored.pem"; do
+    _sx "A5 an ignored secret force-added by '${cmd:0:40}' is scanned -> deny" "$I" "$cmd && git commit -m x" deny "ignored.pem"
+  done
+  _sx "A5b control: a 70-letter bundle WITHOUT f adds nothing ignored -> allow" "$I" "git add -$(printf 'A%.0s' $(seq 1 70)) ignored.pem && git commit -m x" allow
+  # B1: an alias definition on any git record of a command that commits
+  for cmd in "git -c alias.a=add a -A && git commit -m x" \
+             "git --config-env=alias.a=SOMEVAR a -A && git commit -m x" \
+             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.a GIT_CONFIG_VALUE_0=add git a -A && git commit -m x" \
+             "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.a GIT_CONFIG_VALUE_0=add git a -A && git commit -m x" \
+             "git -c 'alias.a=!git add -A' a && git commit -m x"; do
+    _sx "B1 an inline alias is refused (config-refused): ${cmd:0:60}" "$U" "$cmd" deny "alias"
+    _cause_is "B1b ... cause config-refused" config-refused
+  done
+  _sx "B1c scope (row 40): an alias on a NON-staging record of a committing command is refused too" "$Cn" "git -c alias.a=status a && git commit -m x" deny "alias"
+  _cause_is "B1d ... cause config-refused" config-refused
+  _sx "B1e control: a non-alias -c on a non-staging record is not refused -> allow" "$Cn" "git -c user.name=x status && git commit -m x" allow
+  # B2: a brace, glob or tilde word in the subcommand position
+  for cmd in "git ad{d,} -A" "git {add,} -A" "git [a]dd -A" "git ~add -A"; do
+    _sx "B2 a subcommand that is not literal is the superset: ${cmd}" "$U" "$cmd && git commit -m x" deny "leak.json"
+  done
+  _sx "B2b control: a QUOTED literal subcommand is still the exact replay" "$U" "git \"add\" clean.txt && git commit -m x" allow
+  # B3: staging inside a string-operand launcher
+  for cmd in 'su -c "git add -A"' 'ssh host "git add -A"' 'flock /tmp/l -c "git add -A"' 'sg staff -c "git add -A"' 'script -c "git add -A"' \
+             'fish -c "git add -A"' 'watch "git add -A"' 'runuser -c "git add -A" nobody'; do
+    _sx "B3 staging inside a launcher's string operand is the superset: ${cmd:0:40}" "$U" "$cmd && git commit -m x" deny "leak.json"
+  done
+  _sx "B3b control: a launcher string with no staging verb leaves the plain commit alone -> allow" "$U" 'ssh host "ls -la" && git commit -m x' allow
+  # B4: apply short bundles
+  for cmd in "git apply -v3 p.diff" "git apply -3v p.diff" "git apply --3way p.diff"; do
+    _sx "B4 '${cmd}' puts patch content in the index -> stage-unsimulable" "$Cn" "$cmd && git commit -m x" deny "outside the working tree"
+    _cause_is "B4b ... cause stage-unsimulable" stage-unsimulable
+    _t "B4b2 ... recorded with mode=none" "txt=$ROWS_TXT" _row_has 1 "mode=none"
+  done
+  _sx "B4c control: 'apply -p3' is a strip count, not --3way -> the plain opaque superset -> allow" "$Cn" "git apply -p3 p.diff && git commit -m x" allow
+  # B5: environment-rewriting wrappers and allexport
+  for cmd in "set -a; FR2_UNEXPORTED=/x; git add clean.txt" "set -o allexport; FR2_UNEXPORTED=/x; git add clean.txt" \
+             "exec -c git add clean.txt" "setpriv --reset-env git add clean.txt" "bwrap --bind / / git add clean.txt" \
+             "systemd-run -E X=y git add clean.txt"; do
+    _sx "B5 refused (config-refused): ${cmd:0:50}" "$U" "$cmd && git commit -m x" deny "cannot be simulated safely"
+    _cause_is "B5b ... cause config-refused" config-refused
+  done
+  _sx "B5g unshare already moves the commit to a namespace the walker cannot see: an undeterminable-target deny (older rule, still first)" "$U" "unshare -r git add clean.txt && git commit -m x" deny "cannot determine"
+  _sx "B5c control: 'set -euo pipefail' exports nothing -> exact replay -> allow" "$U" "set -euo pipefail; git add clean.txt && git commit -m x" allow
+  _sx "B5d row 39: 'HUSKY=0 git commit -am x' on a tracked leak is a FINDING, not a refusal" "$T" "HUSKY=0 git commit -am x" deny "tracked.json" "!cannot be simulated safely"
+  _finding_row "B5e ... the base-id finding row"
+  _sx "B5f row 39: a tool-switch name on an add record is replayed exactly -> allow" "$U" "SKIP=1 LEFTHOOK=0 git add clean.txt && git commit -m x" allow
+  # A6 / A8 / A9 / B8 live in _t_fr2_hardening
+}
+
+# A6, A8, A9, B6, B8 and the sweep: the hook's own envelope
+_t_fr2_hardening() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local U T Cn S D hk keep tmpd d fresh other old new link target
+  U=$(_mk_leaky_repo untracked); T=$(_mk_leaky_repo tracked-modified); Cn=$(_mk_leaky_repo clean); S=$(_mk_staged_repo)
+
+  # A6: the ERR trap in a substitution, a `set -u` abort and a crash before the decision all DENY when a simulation is due
+  hk=$(_mk_hooks_copy '/^  : > "\$report_file"; : > "\$nodiff_report"$/a\
+  _sw="$(echo a; false)"' git-commit-secret-scan.sh)
+  _t "A6 fixture: the injected substitution is in the hook copy" "" grep -q '_sw="\$(echo a; false)"' "$hk"
+  HOOK_OVERRIDE="$hk" _sx "A6a a failing command inside \$( ) in scan_root: the subshell's trap fails the substitution, the parent denies" "$Cn" "git add -A && git commit -m x" deny "unexpected error"
+  _cause_is "A6b ... cause internal-error" internal-error
+  hk=$(_mk_hooks_copy '/^  : > "\$report_file"; : > "\$nodiff_report"$/a\
+  : "$FR2_UNSET_VARIABLE"' git-commit-secret-scan.sh)
+  HOOK_OVERRIDE="$hk" _sx "A6c a set -u abort (unbound variable) in scan_root: the exit latch denies" "$Cn" "git add -A && git commit -m x" deny "without reaching a decision"
+  _cause_is "A6d ... cause internal-error" internal-error
+  hk=$(_mk_hooks_copy '/^  ctr_collect "\$command"$/a\
+  false' git-commit-secret-scan.sh)
+  HOOK_OVERRIDE="$hk" _sx "A6e a crash BEFORE the simulation decision (right after the lexer) denies instead of exiting 1" "$Cn" "git add -A && git commit -m x" deny "unexpected error"
+  hk=$(_mk_hooks_copy '/^latch_on=\$sim_on$/a\
+exit 1' git-commit-secret-scan.sh)
+  HOOK_OVERRIDE="$hk" _sx "A6f the latch alone (no ERR): an exit 1 after sim_on=1 is turned into a deny" "$Cn" "git add -A && git commit -m x" deny "without reaching a decision"
+  HOOK_OVERRIDE="$hk" _sim_run "$Cn" "git commit -m x"
+  _t "A6g control: the same injected exit 1 under a PLAIN commit (latch off) keeps the old behaviour (exit 1, no JSON)" "out=${OUT:0:100}" _no_json
+
+  # A9: a walker cut off after ctr_collect (before ctr_resolve_roots) is a torn install
+  hk=$(_mk_hooks_copy '/^ctr_resolve_roots() {$/,/^}$/d' lib/commit-target-roots.sh)
+  _t "A9 fixture: the walker copy really lacks ctr_resolve_roots" "" bash -c '! grep -q "^ctr_resolve_roots()" "$1"' _ "$(dirname "$hk")/lib/commit-target-roots.sh"
+  HOOK_OVERRIDE="$hk" _sx "A9a a walker without ctr_resolve_roots: a chained commit is denied through the lib repair" "$Cn" "git add -A && git commit -m x" deny "git checkout -- .claude/hooks/lib"
+
+  # A8: command-sourced text in a deny is sanitised
+  _sx "A8 a CTR_BAD text carrying a left-to-right mark" "$Cn" "cd \"\$X/$(printf '\xe2\x80\x8e')d\" && git commit -m x" deny "cannot determine"
+  _t "A8b ... no U+200E reaches the reason" "reason=${SIM_R:0:160}" test "$([[ "$SIM_R" != *$'\xe2\x80\x8e'* ]] && echo y)" = y
+  _sx "A8c a refusal text carrying a tag character in the config key" "$U" "git -c core.$(printf '\xf3\xa0\x80\xa1')x=1 add clean.txt && git commit -m x" deny "cannot be simulated safely"
+  _t "A8d ... no U+E0021 tag character reaches the reason" "reason=${SIM_R:0:160}" test "$([[ "$SIM_R" != *$'\xf3\xa0\x80\xa1'* ]] && echo y)" = y
+
+  # B6: a failed mktemp denies on the PLAIN path too, and a relative TMPDIR does not hide a staged secret
+  SIM_ENV=("TMPDIR=$SUITE_TMP/no/such/dir")
+  _sx "B6 a plain commit with a TMPDIR that does not exist is denied (temp file), never an exit 1" "$S" "git commit -m x" deny "temporary file"
+  SIM_ENV=()
+  tmpd="$S/rel-tmp"; mkdir -p "$tmpd"
+  SIM_ENV=("TMPDIR=rel-tmp")
+  _sx "B6b a plain commit of a STAGED leak with a RELATIVE TMPDIR is denied with the finding (the report files were relative)" "$S" "git commit -m x" deny "leak.json"
+  # the hook's cwd is NOT the repository (the scan cd's into it): a relative report path would resolve somewhere else
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"; mkdir -p "$D/rel-tmp"
+  SIM_ENV=("TMPDIR=rel-tmp")
+  _sx "B6c a staged leak in ANOTHER repository (cd <S>) with a relative TMPDIR is denied with the finding" "$D" "cd $S && git commit -m x" deny "leak.json"
+  SIM_ENV=()
+
+  # B8 / row 44: the outer gate's seam, pinned so it stays visible
+  _sx "B8 residual (row 44): a quote-split commit word after staging is not seen -> allow" "$U" "git add -A && git com\"\"mit -m x" allow
+  _sx "B8b residual: a variable-built commit word is not seen -> allow" "$U" 'c=commit; git add -A; git $c -m x' allow
+
+  # row 45: the marker-gated sweep of leaked simulation directories
+  tmpd="$SUITE_TMP/sweep-tmp"
+  assert_fixture_dir "$tmpd"
+  rm -rf "$tmpd"; mkdir -p "$tmpd"
+  old="$tmpd/commit-sim-oldmark"; mkdir "$old" && : > "$old/.soleur-sim-marker" && touch -t 200101010000 "$old"
+  other="$tmpd/commit-sim-nomark"; mkdir "$other" && touch -t 200101010000 "$other"
+  fresh="$tmpd/commit-sim-fresh"; mkdir "$fresh" && : > "$fresh/.soleur-sim-marker"
+  target="$SUITE_TMP/sweep-target"; rm -rf "$target"; mkdir "$target" && : > "$target/.soleur-sim-marker" && touch -t 200101010000 "$target"
+  link="$tmpd/commit-sim-link"; ln -s "$target" "$link"
+  new="$tmpd/not-a-sim-dir"; mkdir "$new" && : > "$new/.soleur-sim-marker" && touch -t 200101010000 "$new"
+  SIM_TMP_FIXED="$tmpd"
+  _sx "S17 a chained commit on a clean repo with leaked simulation directories in TMPDIR -> allow" "$Cn" "git add -A && git commit -m x" allow
+  SIM_TMP_FIXED=""
+  _t "S17b ... an OLD directory carrying the marker was removed" "left: $(ls -A "$tmpd")" test ! -e "$old"
+  _t "S17c ... an old directory WITHOUT the marker was kept" "" test -d "$other"
+  _t "S17d ... a recent directory with the marker was kept" "" test -d "$fresh"
+  _t "S17e ... a symlink named commit-sim-* and its target were kept" "" test -L "$link" -a -d "$target"
+  _t "S17f ... a directory outside the prefix was kept" "" test -d "$new"
+  _t "S17g ... the LIVE simulation directory carried the marker while the scan ran" "marker rows: $(ls "$SIM_REC" | tr '\n' ' ')" _cat_has simmarker yes
+}
+
+# C (test gaps): fail-open seams in the return-code plumbing, the bound at every call site, cardinality, causes, branches
+# C1 and C3: the return-code plumbing and the cardinality survivors
+_t_fr2_failbranch() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local U T I Cn
+  U=$(_mk_leaky_repo untracked); T=$(_mk_leaky_repo tracked-modified); I=$(_mk_leaky_repo ignored); Cn=$(_mk_leaky_repo clean)
+  # C1: both `add -u` failure branches fall to the superset (never to an allow)
+  SIM_ENV=("SHIM_FAIL=addu" "SHIM_MSG=fatal: shim-injected add -u failure")
+  _sx "C1a 'git commit -am x': the replay's 'add -u' fails -> the superset finds the tracked leak -> deny" "$T" "git commit -am x" deny "tracked.json"
+  _t "C1b ... the superset ran after the failed add -u" "adds=$(_sim_adds)" _superset_add
+  _sx "C1c 'git commit -m x -- tracked.json': the pathspec ladder's last rung fails -> the superset -> deny" "$T" "git commit -m x -- tracked.json" deny "tracked.json"
+  _t "C1d ... the superset ran" "adds=$(_sim_adds)" _superset_add
+  SIM_ENV=()
+  # a staged GITLINK whose path carries a -diff attribute is not re-scanned (its blob id is a commit): the build still ends clean
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"; mkdir -p "$D/.git/info"; echo 'sm -diff' > "$D/.git/info/attributes"
+  git -C "$D" update-index --add --cacheinfo "160000,$(git -C "$D" rev-parse HEAD),sm"
+  _sx "C1e a gitlink with a -diff attribute is skipped by the re-scan -> allow (a commit id is not a blob)" "$D" "git add clean.txt && git commit -m x" allow
+  # C3: cardinality - every record, every force record, every path, every loop keyword counts
+  _fr2_card
+}
+
+# C2: the time bound at every call site
+_t_fr2_bound() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local U Cn D start hk
+  U=$(_mk_leaky_repo untracked); Cn=$(_mk_leaky_repo clean)
+  SIM_ENV=("SHIM_SLEEP_VERB=add" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
+  _sx "C2a the replay add is bounded: a 20 s add under a 2 s deadline -> sim-timeout, not after 20 s" "$U" "git add clean.txt && git commit -m x" deny "time limit"
+  _t "C2b ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  SIM_ENV=("SHIM_SLEEP_VERB=diff" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
+  _sx "C2c the scan's diff --cached is bounded -> sim-timeout" "$Cn" "git add -A && git commit -m x" deny "time limit"
+  _t "C2d ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  _cause_is "C2e ... cause sim-timeout" sim-timeout
+  SIM_ENV=("SHIM_SLEEP_VERB=check-attr" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
+  _sx "C2f the scan's check-attr is bounded -> sim-timeout" "$Cn" "git add -A && git commit -m x" deny "time limit"
+  _t "C2g ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"; mkdir -p "$D/.git/info"; echo 'clean.txt -diff' > "$D/.git/info/attributes"
+  SIM_ENV=("SHIM_SLEEP_VERB=cat-file" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
+  _sx "C2h the -diff blob read (cat-file --batch) is bounded -> sim-timeout" "$D" "git add clean.txt && git commit -m x" deny "time limit"
+  _t "C2i ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  SIM_ENV=("GL_REC_SLEEP_DETECT=61" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
+  _sx "C2j the -diff re-scan (detect --no-git) is bounded -> sim-timeout" "$D" "git add clean.txt && git commit -m x" deny "time limit"
+  _t "C2k ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 20
+  _cause_is "C2l ... the exit-124 label is sim-timeout, not scan-error" sim-timeout
+  _t "C2m ... and the stub's sleep was killed with its group" "pid file: '$(cat "$SIM_REC/sleep.pid" 2>/dev/null)'" _no_sleep61
+  SIM_ENV=("SHIM_EMPTY_VERB=check-attr")
+  _sx "C2s a check-attr that answers NOTHING (a short answer) is a guard that did not run -> deny check-attr-failed" "$Cn" "git add -A && git commit -m x" deny "attribute guard could not run"
+  _cause_is "C2t ... cause check-attr-failed" check-attr-failed
+  SIM_ENV=("GL_REC_DETECT_RC=1")
+  _sx "C2n the -diff re-scan exits 1 with NO findings in sim mode -> deny scan-error" "$D" "git add clean.txt && git commit -m x" deny "did not complete"
+  _cause_is "C2o ... cause scan-error" scan-error
+  SIM_ENV=()
+  # the check before the scan: the clock is gone when the build ends (SECONDS pushed past the limit in a sandbox copy)
+  hk=$(_mk_hooks_copy '/^  cis_build "\$_r" "\$payload_cwd" "\$sim_work" || sim_brc=\$?$/a\
+  SECONDS=$((SECONDS + 1000))' git-commit-secret-scan.sh)
+  _t "C2p fixture: the clock injection is in the hook copy" "" grep -q 'SECONDS=\$((SECONDS + 1000))' "$hk"
+  HOOK_OVERRIDE="$hk" _sx "C2q no time left when the build ends -> deny sim-timeout before gitleaks starts" "$Cn" "git add -A && git commit -m x" deny "time limit"
+  _t "C2r ... gitleaks was never started" "calls=$(cat "$SIM_REC/calls.log" 2>/dev/null | head -c 200)" test ! -s "$SIM_REC/calls.log"
+
+}
+
+_fr2_card() {
+  local U T I
+  U=$(_mk_leaky_repo untracked); T=$(_mk_leaky_repo tracked-modified); I=$(_mk_leaky_repo ignored)
+  _sx "C3a the SECOND add record is not exact ('| xargs git add'): the whole stage is the superset -> deny" "$U" \
+    "git add clean.txt && printf 'leak.json\\n' | xargs git add && git commit -m x" deny "leak.json"
+  _sx "C3b a SECOND force-add record behind an unknown launcher is replayed too -> deny" "$I" \
+    "mise exec -- git add -f clean.txt && mise exec -- git add -f ignored.pem && git commit -m x" deny "ignored.pem"
+  _sx "C3c a pathspec commit with TWO paths: both are replayed -> deny" "$T" "git commit -m x -- other.json tracked.json" deny "tracked.json"
+  _sx "C3d a 'while' loop is a loop (superset) -> deny" "$U" "while true; do git add clean.txt; break; done && git commit -m x" deny "leak.json"
+  _sx "C3e an 'until' loop is a loop -> deny" "$U" "until false; do git add clean.txt; break; done && git commit -m x" deny "leak.json"
+  _sx "C3f a 'select' loop is a loop -> deny" "$U" "select x in a; do git add clean.txt; break; done && git commit -m x" deny "leak.json"
+  _sx "C3g allow twin: the same chain without the loop is the exact replay -> allow" "$U" "git add clean.txt && git add clean.txt && git commit -m x" allow
+
+}
+
+# C6, C7, C11: causes, recovery branches and the guards that had no row
+_t_fr2_misc() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local U S A B D C2 Cn cmd
+  U=$(_mk_leaky_repo untracked); S=$(_mk_staged_repo); Cn=$(_mk_leaky_repo clean)
+  # C6: the refusal rows assert the refusal cause, not a phrase the finding text shares
+  for cmd in "git -c filter.x.clean=cat add clean.txt" "git --config-env=core.fsmonitor=V add clean.txt" "git --namespace n add clean.txt" \
+             "git --attr-source HEAD add clean.txt" "HOME=/x git add clean.txt" "git -c core.fsmonitor=true add clean.txt"; do
+    _sx "C6 refused: ${cmd:0:44}" "$U" "$cmd && git commit -m x" deny "cannot be simulated safely"
+    _cause_is "C6b ... cause config-refused" config-refused
+    _t "C6c ... recorded with mode=none (the plan had not run)" "txt=$ROWS_TXT" _row_has 1 "mode=none"
+  done
+
+  # C7: the sim-deny causes and the recovery branches that had no assertion
+  D=$(_mk_leaky_repo clean)
+  SIM_ENV=("SHIM_FAIL=anyadd" "SHIM_MSG=fatal: shim-injected add failure")
+  _sx "C7a every sim add fails (the superset too) -> deny superset-failed" "$D" "git add -A && git commit -m x" deny "could not be simulated"
+  _cause_is "C7b ... cause superset-failed" superset-failed
+  SIM_ENV=()
+  SIM_ENV=("SHIM_FAIL=replay" "SHIM_RC=128" "SHIM_MSG=fatal: shim-injected replay failure")
+  _sx "C7c a failed exact replay is rebuilt (replay-failed) and its recovery names git's line when the superset then finds a leak" "$U" "git add clean.txt && git commit -m x" deny "leak.json" "replaying the command's own git add failed"
+  SIM_ENV=()
+  _sx "C7d the opaque recovery branch (stash pop) names the verb to run first" "$U" "git stash pop && git commit -m x" deny "leak.json" "ITSELF as its own call first"
+  C2=$(_mk_leaky_repo untracked)
+  PAYLOAD_CWD="$SUITE_TMP" _sx "C7e the dir-not-root recovery branch (payload cwd in no work tree)" "$C2" "git add -A && git commit -m x" deny "leak.json" "could not prove which directory"
+
+  # C11: individual guards that had no row
+  _sx "C11a a repository with NO index file yet ('git init', untracked leak) -> the simulation copes -> deny the leak" "$(_mk_fresh_repo_noindex)" "git add -A && git commit -m x" deny "leak.json"
+  A=$(_mk_leaky_repo clean); B=$(_mk_leaky_repo clean)
+  _sx "C11b a force-add record whose -C names a DIFFERENT repository than the root being built (B is built first) -> force-unproven-dir" "$B" \
+    "git -C $B commit -m x; git -C $A add -f clean.txt" deny "force-adds"
+  _cause_is "C11c ... cause force-unproven-dir" force-unproven-dir
+  _sx "C11d a fallback root scanned AFTER a simulated root still sees its real STAGED content -> deny" "$S" "cd $B && git add clean.txt && git commit -m x" deny "leak.json"
+  _sx "C11e ... and a clean fallback root -> allow" "$(_mk_leaky_repo clean)" "cd $B && git add clean.txt && git commit -m x" allow
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"; printf 'x\n' > "$D/-p"
+  _sx "C11f a path literally named -p after '--' is a PATH, replayed behind ONE '--' (a second '--' would be read as a path)" "$D" "git add -- -p clean.txt && git commit -m x" allow
+  _t "C11g ... the replay add carried '-- -p clean.txt'" "adds=$(_sim_adds)" test "$([[ "$(_sim_adds)" == *" -- -p clean.txt "* ]] && echo y)" = y
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"
+  printf '{"k":1}\n' > "$D/g*.json"; git -C "$D" add -- 'g*.json'
+  git -C "$D" -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m glob
+  jq -n --arg p "$(_mk_pem "$_SIM_BODY")" '{variables: {private_key: {value: $p}}}' > "$D/g*.json"
+  printf 'y\n' > "$D/gx.json"; git -C "$D" add gx.json
+  _sx "C11h a TRACKED file named 'g*.json' is judged by a LITERAL pathspec: the staged gx.json does not make it 'already staged'" "$D" "git commit -am x" deny "g*.json" "TRACKED" "!already staged"
+}
+
+_mk_fresh_repo_noindex() {  # a repository with no index file and an untracked leak (and the scan config)
+  local d; d=$(mktemp -d "$SUITE_TMP/noidx.XXXXXX"); assert_fixture_dir "$d"
+  ( cd "$d" && git init -q -b main && cp "$GITLEAKS_TOML" .gitleaks.toml && jq -n --arg p "$(_mk_pem "$_SIM_BODY")" '{variables: {private_key: {value: $p}}}' > leak.json )
+  rm -f "$d/.git/index"
+  printf '%s\n' "$d"
+}
+
+# the rebuild's fresh state: a stale lock and a stale error line are not carried over
+_t_fr2_fresh() {
+  local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" wd out
+  wd=$(mktemp -d "$SUITE_TMP/fresh.XXXXXX"); assert_fixture_dir "$wd"
+  mkdir "$wd/objs"; echo old > "$wd/index"; : > "$wd/index.lock"; echo "fatal: a stale replay error" > "$wd/err"; echo real > "$wd/real-index"
+  out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; _CIS_WD="$3"; _CIS_ERRF="$3/err"; _CIS_REAL_IDX="$3/real-index"; _cis_fresh; echo "rc=$?"' _ "$walk" "$lib" "$wd" 2>&1) || out="ERR"
+  _t "A2h _cis_fresh succeeds" "got $out" _contains "$out" "rc=0"
+  _t "A2i ... removed a leftover index.lock" "" test ! -e "$wd/index.lock"
+  _t "A2j ... emptied the previous error line (it is not the cause of the next failure)" "err=$(cat "$wd/err")" test ! -s "$wd/err"
+  _t "A2k ... and the index is a fresh copy of the real one" "index=$(cat "$wd/index")" test "$(cat "$wd/index")" = real
+}
+
+# row 46 and the lexer-less repair texts: a perl-less host reads only a single simple commit unread
+_t_fr2_noperl() {
+  _sim_init
+  local R pd
+  R=$(_mk_leaky_repo tracked-modified); pd=$(_mk_stub_path record)
+  if [[ -e "$pd/perl" ]]; then _report "row 46 fixture PATH has no perl" fail "the stub PATH carries perl"; return 0; fi
+  # (rows R46*) ... and where perl EXISTS the lexer runs even for a plain commit (row 22): a perl wrapper counts its calls
+  local plog="$SUITE_TMP/perl.calls" ppd
+  : > "$plog"; ppd=$(_mk_stub_path record perl); assert_fixture_dir "$ppd"
+  rm -f "$ppd/perl"; printf '#!/bin/sh\necho call >> %s\nexec %s "$@"\n' "$plog" "$(command -v perl)" > "$ppd/perl"; chmod +x "$ppd/perl"
+  EXPECT_PD="$ppd" _expect "R46i perl present: a plain commit is still lexed (one lexer run) -> allow" "$R" "git commit -m x" allow
+  _t "R46j ... the lexer really ran (the perl wrapper was called)" "calls=$(wc -l < "$plog" | tr -d ' ')" test -s "$plog"
+  EXPECT_PD="$pd" _expect "R46a no perl: a single simple commit is scanned unread (staged index) -> allow" "$R" "git commit -m x" allow
+  EXPECT_PD="$pd" _expect "R46b no perl: a positional pathspec after -m needs the lexer -> tooling deny" "$R" "git commit -m x tracked.json" deny "perl is not installed"
+  EXPECT_PD="$pd" _expect "R46c no perl: a chained commit needs the lexer -> tooling deny" "$R" "git status && git commit -m x" deny "perl is not installed"
+  EXPECT_PD="$pd" _expect "R46d no perl: a heredoc message (a \$) needs the lexer -> tooling deny" "$R" 'git commit -m "$(cat <<EOF
+x
+EOF
+)"' deny "perl is not installed"
+  EXPECT_PD="$pd" _expect "R46e no perl: a quoted verb in front of the commit needs the lexer -> tooling deny" "$R" 'git "add" -A && git commit -m x' deny "perl is not installed"
+  EXPECT_PD="$pd" _expect "R46f no perl: 'commit -am' -> the repair names git add -u and WITHOUT -a" "$R" "git commit -am x" deny "git add -u" "WITHOUT -a"
+  EXPECT_PD="$pd" _expect "R46f2 no perl: 'commit --all' -> the same -a repair" "$R" "git commit --all -m x" deny "git add -u" "WITHOUT -a"
+  EXPECT_PD="$pd" _expect "R46g no perl: 'commit -m x -- path' -> the repair names the staged-list check and WITHOUT the paths" "$R" "git commit -m x -- tracked.json" deny "git diff --cached --name-only" "WITHOUT the paths"
+  EXPECT_PD="$pd" _expect "R46h no perl: a chained add -> the plain repair" "$R" "git add -A && git commit -m x" deny "run git add in one call, the commit in the next"
+}
+
+# A7: a signal sent to the hook's whole process group must not orphan the scanner
+_t_fr2_groupterm() {
+  _sim_init
+  local U pd rec tmpd hp n=0 rc=0 outf payload pidf
+  U=$(_mk_leaky_repo untracked); pd=$(_mk_sim_path)
+  rec="$SUITE_TMP/rec.grp"; mkdir -p "$rec"; tmpd="$SUITE_TMP/tmp.grp"; mkdir -p "$tmpd"; outf="$SUITE_TMP/grp.out"; : > "$outf"
+  payload=$(jq -nc --arg w "$U" '{tool_name: "Bash", cwd: $w, tool_input: {command: "git add -A && git commit -m x"}}')
+  ( cd "$U" && exec env PATH="$pd" TMPDIR="$tmpd" CLAUDE_PROJECT_DIR="$REPO_ROOT" SHIM_REAL_GIT="$SIM_REAL_GIT" \
+      SHIM_LOG="$SUITE_TMP/shim.grp.log" GL_REC_DIR="$rec" GL_REC_SLEEP=61 \
+      perl -e 'use POSIX qw(setsid); setsid(); $SIG{INT} = "DEFAULT"; $SIG{TERM} = "DEFAULT"; exec @ARGV or exit 127' "$pd/bash" "$HOOK" <<<"$payload" >"$outf" 2>/dev/null ) &
+  hp=$!
+  pidf="$rec/sleep.pid"
+  while [[ ! -s "$pidf" && "$n" -lt 100 ]]; do sleep 0.1; n=$((n + 1)); done
+  if [[ ! -s "$pidf" ]]; then
+    kill -KILL -- "-$hp" 2>/dev/null || kill -KILL "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true
+    _report "A7 group TERM arm: the gitleaks stub started its sleep" fail "no sleep.pid within 10 s"; return 0
+  fi
+  kill -TERM -- "-$hp" 2>/dev/null || true
+  wait "$hp" || rc=$?
+  n=0; while ! _pid_gone "$(cat "$pidf")" && [[ "$n" -lt 80 ]]; do sleep 0.1; n=$((n + 1)); done
+  _t "A7 a TERM to the hook's whole process group: the bound wrapper kills the scanner's group (no orphan left running)" "sleep pid $(cat "$pidf") still alive after 8 s" _pid_gone "$(cat "$pidf")"
+  _t "A7b ... and the hook ended with 143 and printed no decision" "rc=$rc out=$(head -c 100 "$outf")" test "$rc" -eq 143 -a ! -s "$outf"
+}
+
+# ---- walker rows of the review round 2 (A5, B1 to B5, the allowlist tables) -------------------------------------
+_sd_fr2_rows() {
+  local n k
+  # A5: force abbreviations and an over-cap bundle
+  for n in --f --fo --for --forc; do
+    _sd_add "A5 'add $n' is a force-add the walker must see" "git add $n .env && git commit -m x" 'force=1' 'exact=0'
+  done
+  _sd_add 'A5 --force stays exact' 'git add --force .env && git commit -m x' 'force=1' 'exact=1'
+  _sd_add 'A5 a prefix that is not --force is not a force-add (--fx)' 'git add --fx .env && git commit -m x' 'force=0' 'exact=0'
+  _sd_add 'A5 an over-cap bundle ending in f carries force=1' "git add -$(printf 'A%.0s' $(seq 1 70))f .env && git commit -m x" 'force=1' 'exact=0'
+  _sd_add 'A5 an over-cap bundle without f carries force=0' "git add -$(printf 'A%.0s' $(seq 1 70)) .env && git commit -m x" 'force=0' 'exact=0'
+  # B1: aliases
+  _sd_add 'B1 -c alias.a=add on an add-shaped record' 'git -c alias.a=add a f.txt && git commit -m x' 'refuse=1' 'opaque=1'
+  _sd_add 'B1 --config-env=alias.a=V' 'git --config-env=alias.a=V a f.txt && git commit -m x' 'refuse=1' 'opaque=1'
+  _sd_add 'B1 a GIT_CONFIG_KEY alias prefix' 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.a GIT_CONFIG_VALUE_0=add git a f.txt && git commit -m x' 'refuse=1' 'opaque=1'
+  _sd_add 'B1 an alias on a NON-staging record of a committing command (row 40)' 'git -c alias.a=status a && git commit -m x' 'refuse=1'
+  _sd_add 'B1 the string form of an alias' 'git -c "alias.a=!git add -A" a && git commit -m x' 'refuse=1'
+  _sd_add 'B1 the key is case-insensitive' 'git -c Alias.A=add a f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'B1 env GIT_CONFIG_COUNT in front of any git record' 'env GIT_CONFIG_COUNT=1 git status && git commit -m x' 'refuse=1'
+  _sd_add 'B1 control: -c user.name on a non-staging record is not refused' 'git -c user.name=x status && git commit -m x' 'refuse=0' 'stages=0'
+  # B2: a subcommand that is not a literal word
+  for k in 'ad{d,}' '{add,}' '[a]dd' '~add'; do
+    _sd_add "B2 subcommand $k is opaque" "git $k -A && git commit -m x" 'opaque=1' 'stages=1'
+  done
+  _sd_add 'B2 control: a QUOTED literal subcommand stays exact' 'git "add" -A && git commit -m x' 'opaque=0' 'exact=1'
+  # B3: staging verbs inside a string operand
+  for k in 'su -c "git add -A"' 'ssh host "git add -A"' 'flock /l -c "git add -A"' 'sg staff -c "git add f"' 'script -c "git add -A"' \
+           'fish -c "git add -A"' 'watch "git add -A"' 'runuser -c "git add -A" nobody' 'parallel "git add {}" ::: a' 'su -c "git-add -A"'; do
+    _sd_add "B3 ${k:0:30} makes the stage opaque" "$k && git commit -m x" 'opaque=1' 'stages=1'
+  done
+  _sd_add 'B3 ash -c "git add -A" makes the stage opaque' 'ash -c "git add -A" && git commit -m x' 'opaque=1' 'stages=1'
+  _sd_add 'B3 control: a string with no staging verb' 'ssh host "ls -la" && git commit -m x' 'opaque=0' 'stages=0'
+  _sd_add 'B3 control: a string that only reads (git status)' 'ssh host "git status" && git commit -m x' 'opaque=0' 'stages=0'
+  # B4: apply bundles
+  _sd_add 'B4 apply -v3 is --3way' 'git apply -v3 p.diff && git commit -m x' 'unsim=1'
+  _sd_add 'B4 apply -3v is --3way' 'git apply -3v p.diff && git commit -m x' 'unsim=1'
+  _sd_add 'B4 apply -p3 is a strip count' 'git apply -p3 p.diff && git commit -m x' 'unsim=0' 'opaque=1'
+  _sd_add 'B4 apply -vp3: the 3 belongs to -p' 'git apply -vp3 p.diff && git commit -m x' 'unsim=0'
+  _sd_add 'B4 apply -v alone' 'git apply -v p.diff && git commit -m x' 'unsim=0'
+  # B5: wrappers and allexport
+  _sd_add 'B5 set -a then an assignment of a name that is NOT exported here' 'set -a; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'B5 control: the same assignment WITHOUT set -a is a plain shell variable' 'FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'B5 set -o allexport' 'set -o allexport; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'B5 set -ae (a bundle containing a)' 'set -ae; git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'B5 set -euo pipefail exports nothing' 'set -euo pipefail; git add f.txt && git commit -m x' 'refuse=0' 'exact=1'
+  _sd_add 'B5 set +a exports nothing' 'set +a; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'B5 exec -c' 'exec -c git add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'B5 plain exec keeps the environment' 'exec git add f.txt && git commit -m x' 'refuse=0'
+  for k in 'setpriv --reset-env' 'bwrap --bind / /' 'systemd-run -E X=y' 'unshare -r'; do
+    _sd_add "B5 $k in front of a staging record" "$k git add f.txt && git commit -m x" 'refuse=1'
+  done
+  # row 39: tool-switch names, by exact name only
+  for k in HUSKY HUSKY_SKIP_HOOKS LEFTHOOK LEFTHOOK_EXCLUDE SKIP PRE_COMMIT_ALLOW_NO_CONFIG; do
+    _sd_add "row 39 $k=0 on a staging record is allowed" "$k=0 git add f.txt && git commit -m x" 'refuse=0' 'exact=1'
+  done
+  _sd_add 'row 39 a staging commit under HUSKY=0' 'HUSKY=0 git commit -am x' 'stages=1' 'refuse=0'
+  _sd_add 'row 39 no prefix wildcard: HUSKY_X is refused' 'HUSKY_X=0 git add f.txt && git commit -m x' 'refuse=1'
+  # the refused table (the allowlist was tested from one side only)
+  for k in XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_EXTERNAL_DIFF GIT_ATTR_NOSYSTEM GIT_EXEC_PATH GIT_TEMPLATE_DIR LD_PRELOAD BASH_ENV; do
+    _sd_add "refused prefix $k" "$k=/x git add f.txt && git commit -m x" 'refuse=1'
+  done
+  # every refused -c prefix, one row each (narrowing _ctr_cfg_refuses must red)
+  for k in core.autocrlf diff.algorithm attr.tree include.path includeif.gitdir:/x.path add.ignoreErrors apply.whitespace submodule.recurse filter.x.clean alias.zz; do
+    _sd_add "refused -c key $k" "git -c $k=v add f.txt && git commit -m x" 'refuse=1'
+  done
+  _sd_add 'control -c color.ui is not refused' 'git -c color.ui=never add f.txt && git commit -m x' 'refuse=0'
+}
+
+# A8: the sanitiser, class by class (the function is lifted out of the hook and run alone)
+_t_fr2_sanitiser() {
+  local def lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" row label bytes got ef
+  def=$(sed -n '/^_SAN_JQ=/,/^}/p' "$HOOK")
+  if [[ -z "$def" ]]; then _report "A8 sanitiser extracted from the hook" fail "_SAN_JQ / _san not found"; return 0; fi
+  _san_t() { bash -c "$def"$'\n''if [ -n "${2-}" ]; then _san "$1" "$2"; else _san "$1"; fi' _ "$1" "${2-}"; }
+  local rows=(
+    'U+200E LRM|\xe2\x80\x8e' 'U+200F RLM|\xe2\x80\x8f' 'U+061C ALM|\xd8\x9c' 'U+200B ZWSP|\xe2\x80\x8b' 'U+200C ZWNJ|\xe2\x80\x8c' 'U+200D ZWJ|\xe2\x80\x8d'
+    'U+2060 word joiner|\xe2\x81\xa0' 'U+00AD soft hyphen|\xc2\xad' 'U+FEFF BOM|\xef\xbb\xbf' 'U+E0041 tag A|\xf3\xa0\x81\x81' 'U+E007F cancel tag|\xf3\xa0\x81\xbf'
+    'U+202A LRE|\xe2\x80\xaa' 'U+202B RLE|\xe2\x80\xab' 'U+202C PDF|\xe2\x80\xac' 'U+202D LRO|\xe2\x80\xad' 'U+202E RLO|\xe2\x80\xae'
+    'U+2066 LRI|\xe2\x81\xa6' 'U+2067 RLI|\xe2\x81\xa7' 'U+2068 FSI|\xe2\x81\xa8' 'U+2069 PDI|\xe2\x81\xa9'
+    'U+0080 C1|\xc2\x80' 'U+0085 NEL|\xc2\x85' 'U+009F C1|\xc2\x9f' 'U+2028 LS|\xe2\x80\xa8' 'U+2029 PS|\xe2\x80\xa9'
+    'U+E000 private use|\xee\x80\x80' 'U+0378 unassigned|\xcd\xb8' 'ESC|\x1b' 'DEL|\x7f' 'newline|\n' 'tab|\t' 'CR|\r'
+  )
+  for row in "${rows[@]}"; do
+    label="${row%%|*}"; bytes="${row#*|}"
+    got=$(_san_t "$(printf "a${bytes}b")")
+    _t "A8 the sanitiser replaces $label" "got: $(printf '%s' "$got" | od -c | head -2 | tr -s ' ' | head -c 120)" test "$got" = "a?b"
+  done
+  for row in 'CJK|\xe4\xb8\xad' 'e + combining acute|e\xcc\x81' 'u-umlaut|\xc3\xbc' 'ASCII|plain-name_1.json'; do
+    label="${row%%|*}"; bytes="${row#*|}"
+    got=$(_san_t "$(printf "a${bytes}b")")
+    _t "A8b the sanitiser keeps $label" "got: $got" test "$got" = "$(printf "a${bytes}b")"
+  done
+  got=$(_san_t "$(printf 'n%.0s' $(seq 1 300))")
+  _t "A8c the default cap is 160 characters" "len=${#got}" test "${#got}" -eq 160
+  got=$(_san_t "$(printf 'n%.0s' $(seq 1 300))" 40)
+  _t "A8d an explicit cap is honoured" "len=${#got}" test "${#got}" -eq 40
+  # the git error line the pathspec-missing deny quotes is printable ASCII only
+  ef="$SUITE_TMP/errline.txt"; printf "fatal: pathspec 'a\xf3\xa0\x81\x81b\xe2\x80\xaec' did not match any files\n" > "$ef"
+  got=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; _CIS_ERRF="$3"; _cis_err_line; printf %s "$CIS_ERR"' _ "$walk" "$lib" "$ef")
+  _t "A8e CIS_ERR keeps no tag character and no bidi override" "got: $got" test "$got" = "fatal: pathspec 'abc' did not match any files"
+}
+
+# R8: hostile file names in a finding and in the -diff list (real gitleaks: the stub's names go through git's quoting)
+_t_fr2_names() {
+  _needs_gl "R8 hostile-name rows (real gitleaks)" || return 0
+  _sim_init
+  local U name long r
+  # file names are data: control characters, line separators and bidi overrides are replaced and the length is capped
+  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"
+  name=$'bad\nname\xe2\x80\xa8\xe2\x80\xaeevil\xc2\x85.json'
+  cp "$U/leak.json" "$U/$name"; rm -f "$U/leak.json"
+  _sxr "R8 a hostile file name in a finding (newline, U+2028, U+202E) is sanitised in the deny text" "$U" "git add -A && git commit -m x" deny "Locations: bad?name"
+  r="$SIM_R"
+  _t "R8b ... no raw newline, U+0085, U+2028 or U+202E reaches the reason" "reason=${r:0:200}" test "$([[ "$r" != *$'\n'* && "$r" != *$'\xe2\x80\xa8'* && "$r" != *$'\xe2\x80\xae'* && "$r" != *$'\xc2\x85'* ]] && echo y)" = y
+  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"
+  long=$(printf 'n%.0s' $(seq 1 250))
+  cp "$U/leak.json" "$U/$long.json"; rm -f "$U/leak.json"
+  _sxr "R8c a 250-character file name is cut" "$U" "git add -A && git commit -m x" deny "Locations: nnnn"
+  r="$SIM_R"
+  _t "R8d ... the full name is not in the reason" "len=${#r}" test "$([[ "$r" != *"${long:0:130}"* ]] && echo y)" = y
+
+  # the same for the `-diff` re-scan list: a hostile name there is sanitised too
+  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"
+  printf '*.dat -diff\n' > "$U/.gitattributes"
+  name=$'ev\nil\xe2\x80\xa8.dat'
+  cp "$U/leak.json" "$U/$name"; rm -f "$U/leak.json"
+  _sxr "R8e a hostile name in the -diff re-scan list is sanitised" "$U" "git add -A && git commit -m x" deny "carrying a \`-diff\` gitattribute or a diff driver: ev?il?.dat"
+  r="$SIM_R"
+  _t "R8f ... no raw newline or U+2028 reaches that reason either" "reason=${r:0:200}" test "$([[ "$r" != *$'\n'* && "$r" != *$'\xe2\x80\xa8'* ]] && echo y)" = y
+
+  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"
+  printf '*.dat -diff\n' > "$U/.gitattributes"
+  for name in 1 2 3 4 5 6 7; do cp "$U/leak.json" "$U/f$name.dat"; done; rm -f "$U/leak.json"
+  _sxr "R8g seven -diff files: the deny text names five and counts the rest" "$U" "git add -A && git commit -m x" deny "and 2 more" "f1.dat" "f5.dat" "!f6.dat" "!f7.dat"
+}
+
 # ---- the library's clock and bound, driven directly --------------------------------------------------------
 _t_sim_lib_unit() {
   local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" v out rc t0
@@ -3155,9 +3763,10 @@ _t_sim_lib_unit() {
   _t "U2 a consumer that never started the clock has no time left (fail closed), and cis_bound_argv says so" "got $out" _contains "$out" "rc=1"
   # the bound program: expiry kills the WHOLE group (rc 124), a child's own status passes through, a signal death is 128+n
   t0=$SECONDS
-  out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 1 sh -c "sleep 62 >/dev/null 2>&1 & wait"; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || out="ERR"
+  rm -f "$SUITE_TMP/u3.pid"
+  out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 1 sh -c "sleep 62 >/dev/null 2>&1 & echo \$! > $3; wait"; echo "rc=$?"' _ "$walk" "$lib" "$SUITE_TMP/u3.pid" 2>&1) || out="ERR"
   _t "U3 the bound program ends a command that outlives it: rc 124, within a few seconds" "got $out after $((SECONDS - t0)) s" _contains "$out" "rc=124"
-  _t "U3b ... and its grandchild (the sleep) is gone too" "left: $(ps -eo args= | awk '$1 == "sleep" && $2 == "62"' | head -c 100)" _no_sleep62
+  _t "U3b ... and its grandchild (the sleep) is gone too" "pid file: '$(cat "$SUITE_TMP/u3.pid" 2>/dev/null)'" _no_sleep62
   out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 5 sh -c "exit 7"; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || out="ERR"
   _t "U3c the child's own exit status passes through" "got $out" _contains "$out" "rc=7"
   out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 5 sh -c "kill -9 \$\$"; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || out="ERR"
@@ -3165,7 +3774,7 @@ _t_sim_lib_unit() {
   rc=0; out=$(bash -c 'source "$1" || exit 9; source "$2" || exit 9; perl -e "$CIS_BOUND_PL" 5 /no/such/program-xyz; echo "rc=$?"' _ "$walk" "$lib" 2>&1) || rc=$?
   _t "U3e a command that cannot be executed is a non-zero status, never a silent 0" "got $out" _contains "$out" "rc=127"
 }
-_no_sleep62() { [[ -z "$(ps -eo args= | awk '$1 == "sleep" && $2 == "62"')" ]]; }
+_no_sleep62() { if [[ -s "$SUITE_TMP/u3.pid" ]]; then _pid_gone "$(cat "$SUITE_TMP/u3.pid")"; else return 1; fi; }
 
 # ---- consumer stub: proves property 5 (the brand-hex gate, #10793, reuses construction) ----------
 _t_sim_consumer() {
@@ -3304,8 +3913,8 @@ _t_sim_checkattr() {
   if [[ -n "$bad" ]]; then _report "X6 check-attr fixture control" fail "FIXTURE BROKEN: attribute states are not what the arm assumes:$bad"; return 0; fi
   _sx "X6 plain staged commit with -diff paths (spaces, quote, newline) -> allow" "$R" "git commit -m x" allow
   got=$(cat "$SIM_REC"/nodiff.* 2>/dev/null || true)
-  exp=$(printf '%s\0' './nl'$'\n''name.txt' './qu"ote.txt' './sp ace.txt' './unset.txt' | sort -z | tr '\0' '|')
-  _t "X6b exactly the four -diff (unset) paths were re-scanned from their staged blobs; set / valued / unspecified were not" \
+  exp=$(printf '%s\0' './nl'$'\n''name.txt' './qu"ote.txt' './sp ace.txt' './unset.txt' './valued.txt' | sort -z | tr '\0' '|')
+  _t "X6b exactly the four -diff (unset) paths and the valued diff-driver path were re-scanned from their raw staged blobs; set / unspecified were not (row 42)" \
     "got='${got//$'\n'/\\n}' want='${exp//$'\n'/\\n}'" test "$got" = "$exp"
 }
 
@@ -3419,6 +4028,22 @@ _t_sim_fidelity
 _t_sim_repair
 _t_sim_seams
 _t_sim_walkc
+_t_fr2_raw
+_t_fr2_noperl_rescan
+_t_fr2_splitter
+_t_fr2_timeout
+_t_fr2_plan
+_t_fr2_recipe
+_t_fr2_hook
+_t_fr2_hardening
+_t_fr2_failbranch
+_t_fr2_bound
+_t_fr2_misc
+_t_fr2_fresh
+_t_fr2_noperl
+_t_fr2_groupterm
+_t_fr2_sanitiser
+_t_fr2_names
 _t_sim_lib_unit
 _t_sim_consumer
 _t_sim_oracle
@@ -3434,7 +4059,7 @@ _t_floor_contract
 # a host with no runnable gitleaks skips whole arms (reported, and failed under CI=true by the
 # epilogue), so the floor only binds when nothing was skipped. Reported by printf + exit,
 # never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=1128
+MIN_ASSERTIONS=1459
 if (( ${#SKIPPED_ARMS[@]} == 0 )) && (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

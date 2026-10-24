@@ -8,29 +8,31 @@
 # run, so `git add -A && git commit`, `git commit -a` and `git commit -- <path>` were scanned against an index
 # that did not yet hold the content the commit records. This library copies the real index to a temp file,
 # replays the command's staging onto the COPY, and exports the copy (plus a quarantined object directory) so
-# any git or gitleaks child reads the would-be index. The real index, the real object store, the real git
-# directory and the working tree are never written.
+# any git or gitleaks child reads the would-be index. No content, listing or index change reaches the real
+# repository or the working tree (the mtime of an existing object may be refreshed).
 #
 # POLICY-FREE BY DESIGN (so the brand-hex gate, #10793, can reuse construction without inheriting the secret-
 # scan policy). This file never denies, never allows, never emits a ledger row, never runs gitleaks. It builds,
 # and it says how it went; the CALLER maps the codes to a decision.
 #
 # CONTRACT
-#   cis_plan <payload-cwd>            pure over the CTR_* facts (commit-target-roots.sh), called ONCE per command before
-#                                     any cis_build. Sets CIS_MODE (exact | superset), CIS_WHY (why the superset, else
+#   cis_plan <payload-cwd>            reads the CTR_* facts (commit-target-roots.sh) and probes the directory (`[ -d ]`,
+#                                     one `git rev-parse --show-toplevel`) but writes nothing; called ONCE per command
+#                                     before any cis_build. Sets CIS_MODE (exact | superset), CIS_WHY (why the superset, else
 #                                     empty) and, for exact, CIS_DIR (the directory the replay runs in) and CIS_TOP (the
 #                                     git toplevel of CIS_DIR: the ONE root the replay is valid for; CTO row 33).
 #                                     With exact, a caller simulates only the root whose toplevel is CIS_TOP and scans
 #                                     every other root (a fallback-only root the command cannot stage into) against its
 #                                     real index; with superset it builds every root. cis_build needs the plan: without
 #                                     one it fails closed (CIS_WHY not-planned).
-#   cis_build <root> <cwd> <workdir>  prepare, export, replay, commit step. Returns EXACTLY 0 (built), 10
-#                                     (built, after a trusted pathspec-missing error: the exact replay hit a path
-#                                     that does not exist yet and the superset was built instead) or 20 (failure;
-#                                     any other non-zero maps to 20; CIS_WHY names the cause, CIS_ERR holds a
-#                                     SANITISED first error line). On 0 and 10 the three variables are exported
-#                                     and CIS_ACTIVE=1; on 20 they are restored and <workdir> is removed.
-#                                     <workdir> must exist and be private (the caller makes it, mode 700).
+#   cis_build <root> <cwd> <workdir>  prepare, export, replay, commit step. Returns EXACTLY 0 (built) or 20 (failure;
+#                                     CIS_WHY names the cause from a closed set - plan reasons opaque loop inexact-word
+#                                     unproven-dir dir-not-root, failure reasons not-planned prepare-failed colon-path
+#                                     copy-failed fresh-failed superset-failed replay-failed pathspec-missing
+#                                     force-nonliteral force-unproven-dir sim-timeout - and CIS_ERR holds a SANITISED
+#                                     first error line). On 0 the three variables are exported and CIS_ACTIVE=1; on 20
+#                                     they are restored and <workdir> is removed. A caller must treat ANY non-zero as a
+#                                     deny. <workdir> must exist and be private (the caller makes it, mode 700).
 #   cis_export / cis_unexport         export / restore GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY and
 #                                     GIT_ALTERNATE_OBJECT_DIRECTORIES, restoring a prior value or unsetting it
 #                                     (unset and empty are different), and set / clear CIS_ACTIVE so the flag
@@ -42,7 +44,10 @@
 #                                     consumer that never started the clock has no time left (fail closed).
 #   cis_bound_argv                    CIS_BOUND_ARGV=(perl -e "$CIS_BOUND_PL" <seconds left>): a prefix that runs
 #                                     its command in its own process group and, when the time is up, TERMs then
-#                                     KILLs the whole group and exits 124 (the child's own status otherwise).
+#                                     KILLs the whole group and exits 124 (the child's own status otherwise); a TERM / INT /
+#                                     HUP sent to the caller's process group runs the same sequence and exits 143.
+#                                     The replay adds and whatever the caller wraps are bounded; the read-only prepare calls
+#                                     inside cis_plan / cis_build (rev-parse, config, cp) are NOT.
 #                                     Returns 1 when no time is left. perl is on every host that gets this far
 #                                     (the lexer needs it), so there is no fallback tool ladder.
 #   cis_pins_build <root>             CIS_PINS=(-c ... ): the pin arguments every git call that reads or writes the
@@ -143,10 +148,15 @@ assert_fixture_dir() {
 # The bound (CTO row 30): one fork/waitpid/kill program for every host. A perl `alarm` + exec does NOT stop gitleaks
 # (a Go program: measured, still running 30 s after a 2 s alarm), and `timeout` is absent on a stock macOS. The
 # child runs in its own process group so the TERM (then KILL, 2 s later) reaches its grandchildren too.
+# A signal sent to the hook's process group reaches this wrapper too (it stays in that group): the TERM / INT / HUP
+# handler runs the same kill sequence and exits 143, so the child group is not orphaned unbounded.
 read -r -d '' CIS_BOUND_PL <<'PL' || true
-my $t = shift; my $p = fork(); defined $p or exit 125;
+my $t = shift; my $p;
+my $stop = sub { my $rc = shift; if (defined $p) { kill 'TERM', -$p; select(undef,undef,undef,2); kill 'KILL', -$p; waitpid($p,0) } exit $rc };
+$SIG{ALRM} = sub { $stop->(124) };
+$SIG{$_} = sub { $stop->(143) } for qw(TERM INT HUP);
+$p = fork(); defined $p or exit 125;
 if (!$p) { setpgrp(0,0); exec @ARGV or exit 127 }
-$SIG{ALRM} = sub { kill 'TERM', -$p; select(undef,undef,undef,2); kill 'KILL', -$p; waitpid($p,0); exit 124 };
 alarm $t; waitpid($p,0); alarm 0;
 exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
 PL
@@ -312,7 +322,10 @@ _cis_fail() {
 # _cis_fresh — a pristine copy of the real index and an empty quarantine, for a rebuild.
 _cis_fresh() {
   assert_fixture_dir "$_CIS_WD"
-  rm -rf "$_CIS_WD/objs" "$_CIS_WD/index" 2>/dev/null || return 1
+  # the previous replay's error line is not this step's cause; a replay add killed mid-run may leave its lock
+  assert_fixture_dir "$_CIS_ERRF"
+  : > "$_CIS_ERRF"
+  rm -rf "$_CIS_WD/objs" "$_CIS_WD/index" "$_CIS_WD/index.lock" 2>/dev/null || return 1
   mkdir -m 700 "$_CIS_WD/objs" || return 1
   if [ -f "$_CIS_REAL_IDX" ]; then cp -p "$_CIS_REAL_IDX" "$_CIS_WD/index" 2>"$_CIS_ERRF" || return 1; fi
   return 0
@@ -375,6 +388,9 @@ _cis_force_dir() {
   if [ "$top" != "$_CIS_ROOT" ]; then return 1; fi
   return 0
 }
+
+# _cis_is_timeout <rc> — the bound program's expiry status.
+_cis_is_timeout() { [ "${1:-0}" -eq 124 ]; }
 
 # _cis_fail_run — a pinned git call failed: name the cause (a bound that fired is a timeout) and keep git's line.
 _cis_fail_run() {

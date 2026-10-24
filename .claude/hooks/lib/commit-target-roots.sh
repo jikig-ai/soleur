@@ -56,8 +56,9 @@
 #   CTR_STAGE_OPAQUE         1 when staging happens that the walker cannot replay (a stage-unknown verb:
 #                            apply update-index checkout cherry-pick merge revert stash am read-tree
 #                            restore pull switch rebase submodule sparse-checkout; an expansion command
-#                            word or subcommand; a dashed git-<verb>; a staging verb among the words of a
-#                            non-git command; an unknown short commit option, a bundle longer than 64
+#                            or brace/glob/tilde word or subcommand; a dashed git-<verb>; a staging verb among
+#                            the words of a non-git command or inside a launcher's string operand (su -c, ssh,
+#                            flock -c, sg -c, script -c, fish -c, watch, runuser -c, parallel); an unknown short commit option, a bundle longer than 64
 #                            characters, or an unknown or abbreviated `commit --long` option;
 #                            --interactive / --pathspec-from-file) -> the caller uses the superset
 #   CTR_STAGE_UNSIMULABLE    1 for `update-index --add|--cacheinfo|--index-info` and `apply --index|--cached|
@@ -69,7 +70,9 @@
 #                            LANGUAGE TZ TERM NO_COLOR CI GIT_AUTHOR_* GIT_COMMITTER_* GIT_EDITOR GIT_PAGER
 #                            GIT_TERMINAL_PROMPT) as a prefix, after `env`, or exported / unset / assigned
 #                            earlier in the command (a bare assignment only when the name is exported here or
-#                            is a GIT_* name); `env -i|-u|-`; sudo doas su runuser chroot nsenter -> DENY
+#                            is a GIT_* name), `set -a` / `set -o allexport`; `env -i|-u|-`, `exec -c`; sudo doas su
+#                            runuser chroot nsenter setpriv bwrap systemd-run unshare; and an inline alias definition
+#                            (-c alias.*, --config-env=alias.*, a GIT_CONFIG_* prefix) on ANY git record -> DENY
 #   CTR_ADD_EXACT / _FORCE / _LIT / _NW / _OFF / _OWNC   six parallel arrays, one entry per add/stage record
 #                            (OFF = the record's first word in CTR_ADD_ARGV, NW = how many words), and
 #                            CTR_ADD_ARGV: every record's words, verb first, appended. exact=0 when any word is
@@ -133,6 +136,7 @@ _ctr_reset_stage() {
   _CTR_PATHSMODE=0
   _CTR_REC_NONEXACT=0
   _CTR_REC_ENVBAD=""
+  _CTR_REC_GITCFG=0
   _CTR_CMD_ENVBAD=""
   _CTR_CF_STAGES=0
   _CTR_NREC=0
@@ -153,40 +157,24 @@ _ctr_is_stage_verb() {
   return 1
 }
 
-# ctr_wants_lex <command> — the pre-filter of the PERL-LESS path only (CTO row 22). Where perl exists the hook lexes
-# every strict commit (a plain `git commit -m x` pays one ~13 ms lex), because a pre-filter is an open-world list of
-# the forms that matter and the lexer is already on for almost every commit. On a host without perl the lexer cannot
-# run and a commit it must read is denied, so this keeps a plain `git commit -m x` working there: true when the text
-# contains a token that can change which directory a commit lands in or which content it records. A command longer
-# than 16384 characters is always true (the regexes below are not bounded). Over-matching is safe; UNDER-matching is
-# the incident, so the suite pins that every form the walker handles matches.
+# ctr_wants_lex <command> — the pre-filter of the PERL-LESS path only, and a POSITIVE allowlist (CTO row 46): false
+# (no lexer needed) only when the whole command is ONE simple `git commit` with plain flags (-m "<text without $,
+# backtick or backslash>", -m <bare word>, -F <file>, --amend, --no-edit, -v, -s, --signoff, --no-verify, -n, -q),
+# no pathspec, no separator and no quoted flag. Everything else needs the lexer, and on a host without perl that is
+# a `tooling` deny (the repair: install perl, or run git add in one call and the commit in the next). Where perl
+# exists the hook lexes every strict commit and never asks. A denylist of staging-looking text would be open-world
+# (a quoted verb, `git-add`, `$a add` all slip through it); the false-deny cost of the allowlist falls only on
+# minimal containers. A command longer than 16384 characters always wants the lexer (the regex is not bounded).
 ctr_wants_lex() {
-  [ "${#1}" -gt 16384 ] && return 0
-  local c="$1" re='(^|[^[:alnum:]_.-])(cd|pushd|env|e[v]al|bash|sh|zsh|dash|ksh|sudo|doas|chroot|nsenter|export|declare|typeset)([^[:alnum:]_.-]|$)'
-  # #10696: same-command staging. Detecting it needs the lexer's argv, so every form that can stage is
-  # pinned must-match by the suite; a form this misses never reaches the walker.
-  local verbs="${_CTR_STAGE_VERBS# }" stage_re
-  verbs="${verbs% }"; verbs="${verbs// /|}"
-  stage_re="git[[:space:]]+(${verbs})([[:space:]]|\$)"
-  local bundle_re='[[:space:]]-[^-[:space:]]*[aoip]' long_re='[[:space:]]--(al|o|in|pa)' dd_re='[[:space:]]--([[:space:]]|$)'
-  # Anchored to git: a bare non-option first word right after `commit` is a pathspec. A positional after a
-  # `-m "..."` is NOT detected (a named residual: putting perl on every commit is the worse trade).
-  local pos_re='git[[:space:]]+commit[[:space:]]+[^-"'"'"'$&|;)[:space:]]' after
-  case "$c" in
-    *GIT_DIR*|*GIT_WORK_TREE*|*GIT_INDEX_FILE*|*GIT_COMMON_DIR*|*--git-dir*|*--work-tree*|*core.worktree*|*--chdir*|*--wd*|*--working-directory*) return 0 ;;
-  esac
-  [[ "$c" =~ $re ]] && return 0
-  [[ "$c" =~ git[[:space:]]+- ]] && return 0
-  [[ "$c" =~ $stage_re ]] && return 0
-  [[ "$c" =~ $pos_re ]] && return 0
-  case "$c" in
-    *commit*)
-      after="${c#*commit}"
-      [[ "$after" =~ $bundle_re ]] && return 0
-      [[ "$after" =~ $long_re ]] && return 0
-      [[ "$after" =~ $dd_re ]] && return 0 ;;
-  esac
-  return 1
+  local c="$1" flag msg bare file re
+  [ "${#c}" -gt 16384 ] && return 0
+  flag='-n|-q|-v|-s|--no-verify|--signoff|--amend|--no-edit|--quiet|--verbose'
+  msg='-m[[:space:]]+("[^"$`\\]*"|'"'"'[^'"'"']*'"'"')'
+  bare='-m[[:space:]]+[A-Za-z0-9_.,:/@%+=-]+'
+  file='-F[[:space:]]+[A-Za-z0-9_./-]+'
+  re="^[[:space:]]*git[[:space:]]+commit([[:space:]]+(${flag}|${msg}|${bare}|${file}))*[[:space:]]*\$"
+  [[ "$c" =~ $re ]] && return 1
+  return 0
 }
 
 _ctr_unavail() { CTR_LEX_STATE=unavailable; CTR_LEX_KIND="$1"; CTR_LEX_WHY="$2"; }
@@ -215,12 +203,28 @@ _ctr_add_path() {
 }
 _ctr_add_idx() { _ctr_add_path "${_CTR_W[$1]}" "${_CTR_F[$1]}"; }
 
+# _ctr_str_stage_verb <string> — a string operand (`su -c "git add -A"`) that names a staging verb or a dashed git-<verb>
+# as one of its words. Over-matches on purpose (`ssh host "make add"`): the cost is the superset.
+_ctr_str_stage_verb() {
+  local t="$1" v hit=1 noglob=0
+  case "$-" in *f*) noglob=1 ;; esac
+  t="${t//[;&|()<>\`\"\']/ }"
+  set -f
+  for v in $t; do
+    case "$v" in git-*) hit=0; break ;; esac
+    if _ctr_is_stage_verb "$v"; then hit=0; break; fi
+  done
+  if [ "$noglob" -eq 0 ]; then set +f; fi
+  return "$hit"
+}
+
 # _ctr_env_ok <NAME> — an environment variable a staging command may set without changing what `git add` reads (CTO
 # row 23). Anything else (HOME, PATH, XDG_*, GIT_CONFIG_*, GIT_ATTR_*, GIT_EXTERNAL_DIFF, ...) can point git at other
 # configuration, attributes, hooks or an index, which the replay cannot reproduce.
 _ctr_env_ok() {
   case "$1" in
     LC_*|LANG|LANGUAGE|TZ|TERM|NO_COLOR|CI|GIT_AUTHOR_*|GIT_COMMITTER_*|GIT_EDITOR|GIT_PAGER|GIT_TERMINAL_PROMPT) return 0 ;;
+    HUSKY|HUSKY_SKIP_HOOKS|LEFTHOOK|LEFTHOOK_EXCLUDE|SKIP|PRE_COMMIT_ALLOW_NO_CONFIG) return 0 ;;
   esac
   return 1
 }
@@ -304,6 +308,7 @@ _ctr_env_walk() {
         done ;;
       *=*)
         if _ctr_is_gitenv "$w"; then _ctr_bad "the command sets ${w%%=*}= (the repository is not named by a path)"; fi
+        case "${w%%=*}" in GIT_CONFIG_*) _CTR_REC_GITCFG=1 ;; esac
         _ctr_env_ok "${w%%=*}" || _ctr_env_poison_rec "the staging command sets ${w%%=*} in its environment (git may read a hook, editor, config, attributes or index from it)"
         k=$((k + 1)) ;;
       *) break ;;
@@ -332,13 +337,23 @@ _ctr_path_literal() {
 }
 
 # _ctr_cfg_refuses <key[=value]> — a git config key that makes `git add` EXECUTE configuration (a filter, an
-# fsmonitor command, a diff driver, an include) or read attributes / files from somewhere else (CTO row 17).
+# fsmonitor command, a diff driver, an include) or read attributes / files from somewhere else (CTO row 17). An alias key is
+# NOT here: _ctr_alias_key refuses it on any git record (row 40).
 _ctr_cfg_refuses() {
   local k="${1%%=*}"
   k=$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')
   case "$k" in
-    core.*|filter.*|diff.*|attr.*|include.*|includeif.*|add.*|apply.*|submodule.*|alias.*) return 0 ;;
+    core.*|filter.*|diff.*|attr.*|include.*|includeif.*|add.*|apply.*|submodule.*) return 0 ;;
   esac
+  return 1
+}
+
+# _ctr_alias_key <key[=value]> — an inline alias definition: the aliased name can run any staging under a word the
+# walker does not read (CTO row 40).
+_ctr_alias_key() {
+  local k="${1%%=*}"
+  k=$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')
+  case "$k" in alias.*) return 0 ;; esac
   return 1
 }
 
@@ -365,13 +380,18 @@ _ctr_stage_add() {
       case "$w" in
         --) dd=1 ;;
         --force) force=1 ;;
+        --f|--fo|--for|--forc) force=1; exact=0 ;;
         --all|--update|--verbose|--dry-run) : ;;
         --pathspec-from-file|--pathspec-from-file=*|--pathspec-file-nul) exact=0; lit=0 ;;
         --*) exact=0 ;;
         -) exact=0 ;;
         -?*)
           s="${w#-}"
-          if [ "${#s}" -gt 64 ]; then exact=0; s=""; fi
+          if [ "${#s}" -gt 64 ]; then
+            # over the cap: not read per character, so a force letter anywhere in it is assumed (the superset re-adds
+            # the literal words with -f; over-scanning is the safe direction)
+            exact=0; case "$s" in *f*) force=1 ;; esac; s=""
+          fi
           while [ -n "$s" ]; do
             ch="${s:0:1}"; s="${s:1}"
             case "$ch" in
@@ -483,13 +503,22 @@ _ctr_note_commit_c() {
 # `add -A` of the working tree can scan it, so the caller DENIES (CTO row 26). Abbreviations git accepts are matched
 # by their unique prefix. Every other form of either verb stays opaque (superset).
 _ctr_unsim_check() {
-  local k=$(($1 + 1)) n="${#_CTR_W[@]}" verb="${_CTR_W[$1]}" w
+  local k=$(($1 + 1)) n="${#_CTR_W[@]}" verb="${_CTR_W[$1]}" w s ch
   while [ "$k" -lt "$n" ]; do
     w="${_CTR_W[$k]}"
     if [ "$verb" = update-index ]; then
       case "$w" in --ad*|--cac*|--ind*) CTR_STAGE_UNSIMULABLE=1 ;; esac
     else
-      case "$w" in --ca*|--ind*|--3*|-3) CTR_STAGE_UNSIMULABLE=1 ;; esac
+      case "$w" in
+        --ca*|--ind*|--3*) CTR_STAGE_UNSIMULABLE=1 ;;
+        -[!-]*)
+          # a short bundle (`-v3`, `-3v`): the 3 is --3way unless an earlier p / C took the rest as its operand
+          s="${w#-}"
+          while [ -n "$s" ]; do
+            ch="${s:0:1}"; s="${s:1}"
+            case "$ch" in 3) CTR_STAGE_UNSIMULABLE=1; break ;; p|C) break ;; esac
+          done ;;
+      esac
     fi
     k=$((k + 1))
   done
@@ -499,7 +528,7 @@ _ctr_unsim_check() {
 # _ctr_git_walk <idx-of-git-word> — git's global options, then the subcommand.
 _ctr_git_walk() {
   local j=$(($1 + 1)) n="${#_CTR_W[@]}" w unknown=0 sub m q v
-  local g_nonexact=0 g_refuse="" g_ownc="-" g_ncs=0
+  local g_nonexact=0 g_refuse="" g_ownc="-" g_ncs=0 g_alias=0
   while [ "$j" -lt "$n" ]; do
     w="${_CTR_W[$j]}"
     case "$w" in
@@ -513,6 +542,7 @@ _ctr_git_walk() {
         j=$((j + 2)) ;;
       -c|--config-env)
         g_nonexact=1
+        if [ $((j + 1)) -lt "$n" ] && _ctr_alias_key "${_CTR_W[$((j + 1))]}"; then g_alias=1; fi
         if [ $((j + 1)) -lt "$n" ] && _ctr_cfg_moves_worktree "${_CTR_W[$((j + 1))]}"; then
           _ctr_bad "git $w ${_CTR_W[$((j + 1))]%%=*} moves the work tree without a path the walker may trust"
         fi
@@ -522,6 +552,7 @@ _ctr_git_walk() {
         j=$((j + 2)) ;;
       --config-env=*)
         g_nonexact=1
+        if _ctr_alias_key "${w#--config-env=}"; then g_alias=1; fi
         if _ctr_cfg_moves_worktree "${w#--config-env=}"; then
           _ctr_bad "git --config-env ${w#--config-env=} moves the work tree without a path the walker may trust"
         fi
@@ -543,12 +574,18 @@ _ctr_git_walk() {
       *) break ;;
     esac
   done
+  # An inline alias definition on ANY git record (a key, --config-env, or a GIT_CONFIG_* prefix) of a command that stages
+  # or commits is refused: the aliased name runs the staging and the walker does not read it (CTO row 40).
+  if [ "$g_alias" -eq 1 ] || [ "$_CTR_REC_GITCFG" -eq 1 ]; then
+    CTR_STAGE_OPAQUE=1
+    _ctr_refuse "this git call defines an alias (-c alias.*, --config-env=alias.*, or a GIT_CONFIG_* variable), and an aliased name can run any staging under a word the hook does not read"
+  fi
   # The first non-option word is the subcommand; a -C AFTER it (commit -C HEAD) is the
   # subcommand's own option, never a global one, because this loop stopped at it.
   if [ "$j" -lt "$n" ]; then
     sub="${_CTR_W[$j]}"
-    # An expanded subcommand (`git "$S" ...`) may be any staging verb: the superset.
-    case "${_CTR_F[$j]}" in *x*) CTR_STAGE_OPAQUE=1 ;; esac
+    # An expanded, glob, brace or tilde subcommand (`git "$S" ...`, `git ad{d,} -A`) may be any staging verb: the superset.
+    _ctr_word_literal "$sub" "${_CTR_F[$j]}" || CTR_STAGE_OPAQUE=1
     case "$sub" in
       commit) _ctr_mark_commit; _ctr_commit_flags "$j"; _ctr_note_commit_c "$g_ownc"; _ctr_commit_refuse "$g_refuse" ;;
       add|stage) _ctr_stage_add "$j" ;;
@@ -661,6 +698,7 @@ _ctr_walk_body() {
         case "$k" in *[!A-Za-z0-9_]*) break ;; esac
         if _ctr_is_gitenv "$w"; then _ctr_bad "the command sets $k= (the repository is not named by a path)"; fi
         if ! _ctr_env_ok "$k" && [ -z "$envbad" ]; then envbad="$k"; fi
+        case "$k" in GIT_CONFIG_*) _CTR_REC_GITCFG=1 ;; esac
         i=$((i + 1)) ;;
       *) break ;;
     esac
@@ -751,6 +789,19 @@ _ctr_walk_body() {
         esac
         j=$((j + 1))
       done ;;
+    # `set -a` / `set -o allexport` exports every later assignment, so a following bare `XDG_CONFIG_HOME=x` reaches git
+    # (CTO row 41); treated like an export of an outside name.
+    set)
+      j=$((i + 1))
+      while [ "$j" -lt "$n" ]; do
+        w="${_CTR_W[$j]}"
+        case "$w" in
+          -[!-]*)
+            case "${w#-}" in *a*) _ctr_env_poison_cmd "the command runs set -a, which exports every later assignment (git may read a hook, editor, config, attributes or index from it)" ;; esac
+            case "${w#-}" in *o) j=$((j + 1)); case "${_CTR_W[$j]-}" in allexport) _ctr_env_poison_cmd "the command runs set -o allexport, which exports every later assignment (git may read a hook, editor, config, attributes or index from it)" ;; esac ;; esac ;;
+        esac
+        j=$((j + 1))
+      done ;;
     mkdir|mv|cp|ln|install|rsync|tar|unzip) _CTR_CREATOR=1 ;;
     *)
       # Not a command the walker models: it may be a launcher (timeout, sudo, nice, xargs,
@@ -760,9 +811,21 @@ _ctr_walk_body() {
       # A staging record reached through anything but the pass-through allowlist is not replayed exactly.
       case "$b" in rtk|timeout|nice|sudo|command|exec|flock) : ;; *) _CTR_REC_NONEXACT=1 ;; esac
       # A launcher that changes the user, root, namespace or environment runs git with configuration the replay cannot
-      # reproduce (CTO row 23): a staging record behind one is refused ("stage in its own call").
+      # reproduce (CTO rows 23 and 41): a staging record behind one is refused ("stage in its own call"). `exec -c`
+      # empties the environment like `env -i`.
+      if [ "$b" = exec ]; then
+        j=$((i + 1))
+        while [ "$j" -lt "$n" ]; do
+          case "${_CTR_W[$j]}" in
+            --*) : ;;
+            -*) case "${_CTR_W[$j]#-}" in *c*) _ctr_env_poison_rec "the staging command runs through exec -c, which empties its environment" ;; esac ;;
+            *) break ;;
+          esac
+          j=$((j + 1))
+        done
+      fi
       case "$b" in
-        sudo|doas|su|runuser|chroot|nsenter) _ctr_env_poison_rec "the staging command runs through $b, which changes the user, root or environment git reads its configuration from" ;;
+        sudo|doas|su|runuser|chroot|nsenter|setpriv|bwrap|systemd-run|unshare) _ctr_env_poison_rec "the staging command runs through $b, which changes the user, root or environment git reads its configuration from" ;;
       esac
       case "$b" in
         chroot|nsenter|unshare)
@@ -773,13 +836,15 @@ _ctr_walk_body() {
             fi
             j=$((j + 1))
           done ;;
-        su|flock|ssh|watch|script|runuser|parallel|fish|ash)
-          # These take the command as ONE string operand.
+        su|flock|ssh|watch|script|runuser|parallel|fish|ash|sg)
+          # These take the command as ONE string operand: a commit inside is refused, and a staging verb inside makes the
+          # stage opaque (CTO row 22).
           j=$((i + 1))
           while [ "$j" -lt "$n" ]; do
             case "${_CTR_W[$j]}" in
               *git*[[:space:]]*commit*) _ctr_bad "$b runs a command string the walker cannot read"; _ctr_mark_commit; break ;;
             esac
+            _ctr_str_stage_verb "${_CTR_W[$j]}" && CTR_STAGE_OPAQUE=1
             j=$((j + 1))
           done ;;
       esac
@@ -837,7 +902,7 @@ _ctr_has_loop() {
 # keep what the cd-first shape needs (the first record is `cd <one word>`; every other record is a git).
 _ctr_rec_note() {
   local i=0 n="${#_CTR_W[@]}" w k b=""
-  _CTR_REC_NONEXACT=0; _CTR_REC_ENVBAD=""
+  _CTR_REC_NONEXACT=0; _CTR_REC_ENVBAD=""; _CTR_REC_GITCFG=0
   while [ "$i" -lt "$n" ]; do
     w="${_CTR_W[$i]}"
     case "$w" in
