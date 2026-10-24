@@ -2501,6 +2501,18 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/test-all.sh"
 )
 
+# scripts/inngest-probe-heartbeat-feeder — the dead-probe/serving-verdict feeder battery.
+# WS2 (#10390) made it SOURCE the shared classifier (INNGEST_CLASSIFY_LIB seam, census load)
+# and READ the workflow run block for seam/wf_check rows — reads no name-stem derives.
+AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
+  ".github/workflows/scheduled-inngest-probe-heartbeat.yml"
+  "scripts/inngest-dedicated-host-classify.sh"
+  "scripts/inngest-probe-heartbeat-feeder.sh"
+  "scripts/inngest-probe-heartbeat-feeder.test.sh"
+  "scripts/lib/inngest-probe-row.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/betterstack-incident-mirror — the #10390 incident-mirror battery. Beyond the SUT
 # it READS the shipping workflow (parsed-YAML wiring rows + the verbatim run-block replay),
 # the watchdog dispatch table (the row pin), cron-monitors.tf (the monitor declaration row)
