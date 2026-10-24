@@ -256,7 +256,7 @@ Open PRs touching the same files (measured with `gh pr list --state open --json 
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** nothing today, because the lever (`CI_PR_AFFECTED`) is unset and locked and the ratchet job is advisory; after a later, separately authorized flip, a pull request that changes a file a test suite reads could merge without that suite having run (an omitted real read), or every PR could pay for suites it does not need (an over-declared edge).
+**If this lands broken, the user experiences:** nothing today, because the lever (`CI_PR_AFFECTED`) is unset and locked and the ratchet job is advisory; after a later, separately authorized flip, a pull request that changes a file a test suite reads could merge without that suite having run (an omitted real read), or every PR could pay for suites it does not need (an over-declared edge). Review (2026-10-24) named the end-user surfaces whose suites carry `mention` rows that were line-read only, never recorded: the GDPR-gate path regex over the account-delete route and `lib/auth/dev-mode.ts`, the sandbox credential gate over `agent-auth-env-vars.ts`, and the Stripe and billing deny-paths. Those rows are string-only on the lines read, but a flip must wait until the held-back edges and the whole-tree reads are declared or accepted, and the recorder cross-check is a PR5 entry condition for the accept rows.
 **If this leaks, the user's [data / workflow / money] is exposed via:** no data path: the work reads tracked repository text and runs local suites under a scrubbed environment with no network namespace; the exposure is CI minutes (money) if edges are over-declared once the lever flips.
 **Brand-survival threshold:** aggregate pattern
 

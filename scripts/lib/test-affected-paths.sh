@@ -102,7 +102,10 @@ _CLOSURE_LEAF_RT_HOOKS=(
   ".github/scripts/test/run-all.sh"
   "scripts/lib/scratch-root.sh"
 )
-# S4 PR4 (#10860) drain: runtime reads the derive cannot resolve, one shared set per sourcing helper (CTO ruling 3).
+# S4 PR4 (#10860) drain: runtime reads the derive cannot resolve, one shared set per sourcing helper (CTO ruling 3), same family as
+# the _CLOSURE_LEAF_RT_* arrays of the A5 block above (leading underscore: not an edge array, the census linter scans only AFFECTED_*_PATHS).
+# Known audit blind spot, not declared: .claude/hooks/lib/test-incident-sandbox.sh:117-121 also sources scripts/lib/scratch-root.sh
+# (best effort, relative path); the audit does not see it, so no pair existed to drain (PR4b may spread this array into those arrays).
 # Spread only into labels whose suite really sources the helper. plugins/soleur/test/test-helpers.sh:58 computes
 # the path of scripts/lib/scratch-root.sh and sources it in a subshell whose failure is swallowed.
 _CLOSURE_LEAF_SCRATCH_ROOT=(
@@ -739,6 +742,9 @@ AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
 # directory operand, so a knowledge-base-only diff never selected it. Found by the ratchet's
 # directory-operand form (scripts/test-affected-kb-consumers.test.sh); the remaining
 # knowledge-base strings in those files are fixtures or message text, classified in the baseline.
+# S4 PR4 (#10860) added exact-file runtime reads of the bun suites that are not knowledge-base content: the TRIGGER_FILES
+# loop of ship-deploy-pipeline-fix-gate.test.ts (existsSync per file at :233, so a delete or rename selects the suite and an
+# edit cannot change its verdict) and the files the other bun tests open. Per-pair evidence: pairs-decisions.tsv.
 AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
@@ -1809,6 +1815,10 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 
 # .claude/hooks/grep-q-pipe-guard.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
+# S4 PR4 (#10860): this list is PARTIAL on purpose. The suite also walks every tracked .sh and .ts (pj_join_pairs over
+# git ls-files, :2520-2526), which no exact-file list can express, so it names only the files its PRODUCER_JOIN,
+# SWEEP_DEFERRALS and SWEEP_TEST_CANARIES tables key on (each row's consumer loop is quoted in pairs-decisions.tsv). The
+# whole-tree read is a selection-policy call (criterion (c)), and the edges whose declaration reveals mentions stay held back (#10959).
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
   ".github/scripts/test/fixtures-validate-infra-templates.sh"
@@ -2002,6 +2012,8 @@ AFFECTED_TESTS_SCRIPTS_SOLEUR_SANDBOX_PATHS=(
 
 # tests/scripts/scratch-residue — direct-run residue canary over the runner
 # chokepoints (ADR-250 Amendment 1); declared from the repo paths it names.
+# S4 PR4 (#10860): the add_leaf rows of tests/scripts/test-scratch-residue.sh, each run by run_leaf (:399); evidence in
+# pairs-decisions.tsv. A leaf test that names many other paths was held back (#10959).
 AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
   ".claude/hooks/cla-signed-author-gate.test.sh"
   ".claude/hooks/context-reviewed-gate.test.sh"
@@ -2609,6 +2621,9 @@ AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
 # over git-init'd fixture trees, not the repo corpus; the `git ls-files` text that tripped
 # the corpus-walk arm is a comment naming the GUARD's producer. Declared from the repo paths
 # its suite file names.
+# S4 PR4 (#10860): the exact files in the guard's candidate, ALLOW and MUST_FIND sets (lint-betterstack-emitter-read.sh :279,
+# :322, :350), declared from the suite's live arm (scripts/betterstack-emitter-read.test.sh:347). A followthrough script that
+# names more paths was held back (#10959). Per-pair evidence: pairs-decisions.tsv.
 AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "apps/web-platform/infra/infra-config-gate.sh"
   "scripts/betterstack-assert-absence.sh"
@@ -2746,7 +2761,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
 # AFFECTED_*_PATHS block, the files the suite really executes, sources or opens. Rubric:
 # knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md section 7, "The drain rubric"; per-pair
 # evidence: knowledge-base/project/specs/feat-one-shot-s4-affected-index-pr4-code-edge-drain/pairs-decisions.tsv.
-# Exact files only. An edge whose declaration reveals more mentions was held back (#10959).
+# Exact files only, grouped by edge kind (scratch-root spreads, incidents-lib spreads, single-edge arrays), then by suite path.
+# An edge whose declaration reveals more mentions was held back (#10959).
 # ---------------------------------------------------------------------------
 AFFECTED_PLUGINS_SOLEUR_SCRIPTS_ALPHA_METRICS_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
@@ -2915,6 +2931,8 @@ AFFECTED_CLAUDE_HOOKS_PRE_CLOSING_TECHNICAL_FORK_GATE_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# The next two hook suites list session-state.sh and rule-metrics-constants.sh literally: the audit's baseline names only these
+# two libs for them (wrapper-boundary.sh is not reached from their closure), so they do not spread _CLOSURE_LEAF_INCIDENTS_LIBS.
 AFFECTED_CLAUDE_HOOKS_SHIP_OPERATOR_STEP_GATE_TEST_SH_PATHS=(
   "plugins/soleur/scripts/lib/session-state.sh"
   "scripts/lib/rule-metrics-constants.sh"
