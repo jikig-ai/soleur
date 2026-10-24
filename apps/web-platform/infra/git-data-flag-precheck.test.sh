@@ -243,6 +243,50 @@ mkdir -p "$T/deny-collapsed" || { printf 'FAIL SETUP: deny-collapsed fixture\n' 
 printf 'function getWorkspaceWorktreeRoot() { return process.env.WORKTREE_ROOT || "/x"; }\nexport function workspaceTenantDenyRoots() { return [getWorkspaceWorktreeRoot()]; }\n' > "$T/deny-collapsed/workspace-resolver.ts"
 printf 'const denyRoots = workspaceTenantDenyRoots();\n' > "$T/deny-collapsed/agent-runner-sandbox-config.ts"
 
+# WORKTREE_ROOT_WRITABLE fixtures (#8211 PR-E): a resolver declaring the default, and Dockerfiles in the shapes the detector must
+# separate. Every Dockerfile fixture is a complete multi-stage file with ONE variable part, so a verdict change is that part's.
+WT="$T/wt"; mkdir -p "$WT" || { printf 'FAIL SETUP: wt fixtures\n' >&2; exit 1; }
+printf 'const WORKTREE_ROOT_DEFAULT = "/var/lib/soleur/worktrees";\n' > "$WT/resolver-ok.ts"
+printf 'const SOMETHING_ELSE = "/var/lib/soleur/worktrees";\n' > "$WT/resolver-noconst.ts"
+mk_wt() { # <name> <runner-stage-body, printed verbatim between FROM runner and the end>
+  printf 'FROM node:22-slim AS deps\nRUN npm ci\nFROM deps AS runner\n%s\n' "$2" > "$WT/$1.Dockerfile"
+}
+WT_USER='USER soleur
+CMD ["node", "x"]'
+mk_wt ok "RUN useradd --uid 1001 -m soleur \\
+    && chown -R soleur:soleur .next \\
+    && mkdir -p /var/lib/soleur/worktrees \\
+    && chown 1001:1001 /var/lib/soleur/worktrees
+$WT_USER"
+mk_wt ok-split "RUN mkdir -p /var/lib/soleur/worktrees
+# a comment between the two instructions
+RUN chown -R 1001 /var/lib/soleur/worktrees
+$WT_USER"
+mk_wt ok-comment-in-continuation "RUN mkdir -p /var/lib/soleur/worktrees \\
+    # a continued RUN may carry a whole-line comment
+    && chown 1001:1001 /var/lib/soleur/worktrees
+$WT_USER"
+mk_wt no-mkdir "RUN chown 1001:1001 /var/lib/soleur/worktrees
+$WT_USER"
+mk_wt no-chown "RUN mkdir -p /var/lib/soleur/worktrees
+$WT_USER"
+mk_wt comment-only "# RUN mkdir -p /var/lib/soleur/worktrees && chown 1001:1001 /var/lib/soleur/worktrees
+RUN mkdir -p /var/lib/soleur/worktrees \\
+    && echo made \\
+    # && chown 1001:1001 /var/lib/soleur/worktrees
+RUN echo nothing
+$WT_USER"
+mk_wt wrong-owner "RUN mkdir -p /var/lib/soleur/worktrees && chown 1000:1000 /var/lib/soleur/worktrees
+$WT_USER"
+mk_wt after-user "$WT_USER
+RUN mkdir -p /var/lib/soleur/worktrees && chown 1001:1001 /var/lib/soleur/worktrees"
+mk_wt wrong-dir "RUN mkdir -p /var/lib/soleur/worktree && chown 1001:1001 /var/lib/soleur/worktree
+$WT_USER"
+mk_wt name-mention "RUN echo /var/lib/soleur/worktrees mkdir chown 1001:1001
+$WT_USER"
+# The directory is made in an EARLIER stage only: the final stage ships none of it.
+printf 'FROM node:22-slim AS deps\nRUN mkdir -p /var/lib/soleur/worktrees && chown 1001:1001 /var/lib/soleur/worktrees\nFROM deps AS runner\nRUN echo runner\nUSER soleur\n' > "$WT/earlier-stage.Dockerfile"
+
 # run_case <name> <value|ABSENT> [VAR=value ...] — the flag's stored value (printf, no newline
 # unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG, CTMP
 # (the case's own TMPDIR, so a leaked tempfile is visible) and RT (its RUNNER_TEMP). A store also
@@ -268,6 +312,7 @@ run_case() {
   timeout -k 3 30 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$CTMP" DOPPLER_STORE="$store" DOPPLER_LOG="$DLOG" \
     RUNNER_TEMP="$RT" "${gat[@]}" \
     SANDBOX_SRC_DIR="$(dirname "$PRECHECK")/../server" \
+    WORKTREE_DOCKERFILE="$DIR/../Dockerfile" WORKTREE_RESOLVER="$DIR/../server/workspace-resolver.ts" \
     DOPPLER_TOKEN=fixture-prd-read "$@" bash "${CASE_SCRIPT:-$PRECHECK}" > "$OUT" 2>&1
   RC=$?
 }
@@ -281,7 +326,8 @@ refusal() { # <verdict-detail> — the exact two-line output of a refusal
 TOFU_PRESENT='TOFU_ARM present
 ::warning title=git-data-flag-precheck::TOFU_ARM present - the app still carries the unpinned git-data fallback (#5914); it must be deleted before GIT_DATA_STORE_ENABLED is ever set'
 # ok_out <flag-line> — the exact output of a clear run with the default fixtures.
-DENY_LINE='SANDBOX_DENY_ROOTS present'
+# The two source-level probe lines every clear read run prints, in order: SANDBOX_DENY_ROOTS (#9725) then WORKTREE_ROOT_WRITABLE (#8211 PR-E).
+DENY_LINE=$'SANDBOX_DENY_ROOTS present\nWORKTREE_ROOT_WRITABLE present'
 ok_out() { printf '%s\n%s\ngit_data_pin=present fp=%s\n%s' "$TOFU_PRESENT" "$DENY_LINE" "$PIN_FP" "$1"; }
 detail() { printf 'rc=%s out=[%s]' "$RC" "$(tr '\n' '|' < "$OUT" | sed 's/::/: :/g')"; }
 
@@ -1189,6 +1235,101 @@ if case_deny collapsed-flip "$T/deny-collapsed" flip   && [ "$RC" = 5 ] && grep 
   pass "D7: the flag-COLLAPSED helper shape (env read outside the deny fn) -> sandbox_deny_coverage_absent — the function-scope needle catches the #9725 form"
 else fail "D7: flag-collapsed helper shape was not detected as absent" "$(detail)"; fi
 
+# ── WORKTREE_ROOT_WRITABLE arm (#8211 PR-E): the image owns the worktree root for uid 1001 ───────────
+case_wt() { # <label> <dockerfile|-> <mode> [resolver] — -> run_case with the fixture Dockerfile and resolver
+  local label="$1" df="$2" mode="$3" rs="${4:-$WT/resolver-ok.ts}"
+  run_case "wt-$label" false FLAG_MODE="$mode" WORKTREE_DOCKERFILE="$df" WORKTREE_RESOLVER="$rs"
+}
+case_wt_refused() { # <label> <dockerfile> <state> — a flip is refused as worktree_root_writable_<state>
+  case_wt "$1" "$2" flip "${4:-$WT/resolver-ok.ts}"
+  [ "$RC" = 5 ] && grep -qF "verdict=worktree_root_writable_$3" "$OUT" && ! grep -qF 'git_data_pin=' "$OUT"
+}
+case_wt_info() { # <label> <dockerfile> <state> — under proof the line is informational: exit 0, the state named
+  case_wt "$1" "$2" proof "${4:-$WT/resolver-ok.ts}"
+  [ "$RC" = 0 ] && grep -qxF "WORKTREE_ROOT_WRITABLE $3" "$OUT"
+}
+if run_case wt-real false FLAG_MODE=flip && [ "$RC" = 0 ] && grep -qxF 'WORKTREE_ROOT_WRITABLE present' "$OUT" && grep -qF 'flag=off' "$OUT"; then
+  pass "WT1: the REAL Dockerfile and resolver under flip -> WORKTREE_ROOT_WRITABLE present, proceeds to the pin (the committed image owns the worktree root)"
+else fail "WT1: the committed Dockerfile does not own the worktree root, or the line is missing" "$(detail)"; fi
+if case_wt_info ok "$WT/ok.Dockerfile" present && case_wt_info ok-split "$WT/ok-split.Dockerfile" present && case_wt_info ok-comment "$WT/ok-comment-in-continuation.Dockerfile" present; then
+  pass "WT2: mkdir -p + chown to 1001 in one RUN, across two RUNs, and with a whole-line comment inside a continued RUN -> present"
+else fail "WT2: a correct Dockerfile shape was not present" "$(detail)"; fi
+if case_wt_refused no-mkdir "$WT/no-mkdir.Dockerfile" absent && case_wt_refused no-chown "$WT/no-chown.Dockerfile" absent; then
+  pass "WT3: chown without mkdir, and mkdir without chown -> flip refused verdict=worktree_root_writable_absent, exit 5, before the pin"
+else fail "WT3: a half-made directory was accepted" "$(detail)"; fi
+if case_wt_refused comment-only "$WT/comment-only.Dockerfile" absent && case_wt_refused name-mention "$WT/name-mention.Dockerfile" absent; then
+  pass "WT4: the markers only in a comment, or only as echoed words (no mkdir/chown command) -> absent (code-shaped, not name-mentions)"
+else fail "WT4: a comment or a name mention counted as the image fix" "$(detail)"; fi
+if case_wt_refused wrong-owner "$WT/wrong-owner.Dockerfile" absent && case_wt_refused after-user "$WT/after-user.Dockerfile" absent; then
+  pass "WT5: chown to a uid other than 1001, and the RUNs placed after USER -> absent"
+else fail "WT5: a wrong owner or a post-USER RUN was accepted" "$(detail)"; fi
+if case_wt_refused wrong-dir "$WT/wrong-dir.Dockerfile" absent && case_wt_refused earlier-stage "$WT/earlier-stage.Dockerfile" absent; then
+  pass "WT6: a directory other than the resolver's default, and a directory made only in an earlier build stage -> absent"
+else fail "WT6: a directory the app does not use (or one the final stage does not ship) was accepted" "$(detail)"; fi
+if case_wt_refused no-dockerfile "$T/no-such.Dockerfile" unknown && case_wt_refused no-resolver "$WT/ok.Dockerfile" unknown "$T/no-such-resolver.ts" \
+  && case_wt_refused no-const "$WT/ok.Dockerfile" unknown "$WT/resolver-noconst.ts"; then
+  pass "WT7: an unreadable Dockerfile, an unreadable resolver and a resolver whose default is unparseable -> worktree_root_writable_unknown, exit 5 (fail closed, never absent)"
+else fail "WT7: an unreadable input was not unknown" "$(detail)"; fi
+if case_wt_info absent-proof "$WT/no-chown.Dockerfile" absent && case_wt_info unknown-proof "$T/no-such.Dockerfile" unknown; then
+  pass "WT8: under proof an absent or unknown state is informational (exit 0): only the flip and the true write block"
+else fail "WT8: proof mode blocked on the worktree root line" "$(detail)"; fi
+case_wt_write() { # <label> <dockerfile> <value> — the write arm; a `true` write over a bad image must reach no doppler call
+  case_write "wt-$1" ABSENT "$3" DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write WORKTREE_DOCKERFILE="$2" WORKTREE_RESOLVER="$WT/resolver-ok.ts"
+}
+case_wt_write_true_refused() {
+  case_wt_write badtrue "$WT/no-chown.Dockerfile" true && [ "$RC" = 5 ] && grep -qF 'verdict=worktree_root_writable_absent' "$OUT" && [ ! -s "$DLOG" ]
+}
+if case_wt_write_true_refused; then
+  pass "WT9: a true write over an image that does not own the worktree root -> verdict=worktree_root_writable_absent, exit 5, doppler never called"
+else fail "WT9: the write arm let a true write through over a bad image" "$(detail)"; fi
+if case_wt_write badfalse "$WT/no-chown.Dockerfile" false && [ "$RC" = 0 ] && [ "$(cat "$OUT")" = "flag_write=ok value=false" ]; then
+  pass "WT10: a FALSE write (the rollback's) is not gated on the worktree root: rolling back must work whatever the image is"
+else fail "WT10: a false write was blocked by the worktree gate" "$(detail)"; fi
+case_wt_unknown_flip() { case_wt_refused m-unknown "$T/no-such.Dockerfile" unknown; }
+case_wt_flip_refused() { case_wt_refused m-flip "$WT/no-chown.Dockerfile" absent; }
+case_wt_comment_refused() { case_wt_refused m-comment "$WT/comment-only.Dockerfile" absent; }
+case_wt_user_refused() { case_wt_refused m-user "$WT/after-user.Dockerfile" absent; }
+case_wt_owner_refused() { case_wt_refused m-owner "$WT/wrong-owner.Dockerfile" absent; }
+case_wt_dir_refused() { case_wt_refused m-dir "$WT/wrong-dir.Dockerfile" absent; }
+case_wt_stage_refused() { case_wt_refused m-stage "$WT/earlier-stage.Dockerfile" absent; }
+case_wt_chown_refused() { case_wt_refused m-chown "$WT/no-chown.Dockerfile" absent; }
+# shellcheck disable=SC2016  # sed programs are data
+if mutate wt-flip-gate "$PRECHECK" 2 's#"\$\{FLAG_MODE\}" = flip#"${FLAG_MODE}" = flip_never#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-flip-gate case_wt_flip_refused
+fi
+# shellcheck disable=SC2016
+if mutate wt-write-gate "$PRECHECK" 2 's#"\$\{FLAG_WRITE_VALUE\}" = true#"${FLAG_WRITE_VALUE}" = never#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-write-gate case_wt_write_true_refused
+fi
+# the unreadable-input arm answers `absent`: an unreadable Dockerfile would then read as a missing marker
+if mutate wt-unknown-as-absent "$PRECHECK" 2 '0,/echo unknown; return 0/s//echo absent; return 0/'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-unknown-as-absent case_wt_unknown_flip
+fi
+# comment stripping removed: a commented-out fix then counts
+if mutate wt-comments-count "$PRECHECK" 2 's|^    /\^\[\[:space:\]\]\*#/ \{ next \}$|    /^$/ { next }|'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-comments-count case_wt_comment_refused
+fi
+# the USER ordering dropped: a RUN after USER (which would fail the build) counts
+if mutate wt-user-ignored "$PRECHECK" 2 's#\{ user = 1; return \}#{ return }#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-user-ignored case_wt_user_refused
+fi
+# any numeric owner accepted
+if mutate wt-any-owner "$PRECHECK" 2 's#\^1001\(:1001\)\?\$/#^[0-9]+(:[0-9]+)?$/#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-any-owner case_wt_owner_refused
+fi
+# the directory no longer compared with the resolver's default (both the mkdir and the chown operand)
+if mutate wt-dir-untied "$PRECHECK" 4 's#f\[j\+2\] == root#f[j+2] != ""#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-dir-untied case_wt_dir_refused
+fi
+# the stage reset dropped: a fix made in an earlier build stage counts
+if mutate wt-stage-ignored "$PRECHECK" 2 's#\{ sm = 0; sc = 0; user = 0; return \}#{ return }#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-stage-ignored case_wt_stage_refused
+fi
+# the chown requirement dropped: mkdir alone then counts
+if mutate wt-chown-optional "$PRECHECK" 2 's#\(sm && sc\)#(sm)#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-chown-optional case_wt_chown_refused
+fi
+
 # ── pin_only (review of #10352): snapshot_clear needs the host-key pin and nothing else from this script ────────────
 # The REAL script, a doppler shim for the store: the pin is written and fingerprinted, no variant line, no flag verdict.
 case_pin_only_ok() { # <flag value>
@@ -1208,13 +1349,14 @@ if mutate pin-only-dropped "$PRECHECK" 2 's#\|wipe_reread\|pin_only\) : ;;#|wipe
 fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=48  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5), stamp-clear rows (14, #10297)
+MUTANT_FLOOR=57  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5), stamp-clear rows (14, #10297), worktree-root rows (9, #8211 PR-E)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
 # Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + census mutants 2 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 146, plus the A1 (2026-10-15) variant rows WV1-WV14 (14) and 5 A1 mutants x 2 (10) = 170 (exact).
 # #10297 stamp-clear: RB1-RB10, RB11a/b, RB12-RB14 (15) + 14 mutants x 2 (28) = 43 more, so the count is 175 + 43 = 218 (a -lt floor: scripts/guard-vacuity-floor.test.sh only recognises -lt/-le/-ge, so this suite stays out of -ne).
-FLOOR=218
+# #8211 PR-E worktree root: WT1-WT10 (10) + 9 mutants x 2 (18) = 28 more, so the count is 218 + 28 = 246.
+FLOOR=246
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

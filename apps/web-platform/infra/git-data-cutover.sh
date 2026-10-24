@@ -171,7 +171,8 @@ trap cleanup EXIT
 # ============================================================================
 # MODE selects one host-side verb; the flag write, the fleet redeploy and the flag
 # read-back are WORKFLOW steps (this script reads no secret store — the contract stands).
-#   proof     (default, DRY_RUN=1): the read-only probe chain above.
+#   proof     (default, DRY_RUN=1): the read-only probe chain above, ending (#8211 PR-E) with the container probe: from INSIDE the
+#             app container, the worktree root is writable by uid 1001 and the git-data transport answers (git-data-container-probe.sh).
 #   freeze    assert git-data-gc.service inactive -> stop git-data-gc.timer -> write
 #             $OLD_ROOT/.cutover-freeze with `writer=<lineage> at=<epoch>` provenance ->
 #             purge legacy .<id>.init.lock residue inside the freeze window.
@@ -243,6 +244,26 @@ gd_exec() {
   return "$rc"
 }
 
+# --- web_exec: one bounded remote exec on a WEB host, a script on stdin (#8211 PR-E) ------------------
+# web_exec <host> <remote-cmd> <stdin-file> <timeout-seconds>: runs the command over WEB_HOST_SSH (the bridge's pinned
+# invocation, the one the access gate proves), stdin the file, stdout to capture.out and stderr to capture.err in
+# CAPTURE_TMP; returns ssh's own rc. The caller decides what to print: a mapped exit code is a fixed word, and only an
+# unmapped one dumps the (filtered) stderr. The host is a roster member (resolve_roster validated it dotted-numeric).
+web_exec() {
+  local h="$1" cmd="$2" sin="$3" tmo="$4" rc=0
+  local -a inv
+  read -ra inv <<< "${WEB_HOST_SSH:-}"
+  [ "${#inv[@]}" -gt 0 ] || return 97
+  [ -f "$sin" ] || return 95
+  [[ "$tmo" =~ ^[1-9][0-9]{0,2}$ ]] || return 95
+  if [ -z "$CAPTURE_TMP" ]; then CAPTURE_TMP="$(mktemp -d)" || return 95; fi
+  : > "$CAPTURE_TMP/capture.err" || return 95
+  : > "$CAPTURE_TMP/capture.out" || return 95
+  timeout "$tmo" "${inv[@]}" -o BatchMode=yes -o ConnectTimeout=20 "$h" "$cmd" \
+    <"$sin" >"$CAPTURE_TMP/capture.out" 2>"$CAPTURE_TMP/capture.err" || rc=$?
+  return "$rc"
+}
+
 # --- freeze provenance (host-side; the sentinel's only writer/reader) -----------
 # freeze_probe: ONE ssh session answers existence + provenance. Remote exits:
 #   0 absent | 2 present+unparseable (frozen_unattributed) | 3 present+UNREADABLE
@@ -290,7 +311,7 @@ probe_freeze() {
 # positive integer of at most three digits. A malformed one is a local failure (95), never a default.
 _capture_tmp_drop() {
   [ -n "$CAPTURE_TMP" ] || return 0
-  rm -f "$CAPTURE_TMP/capture.err"
+  rm -f "$CAPTURE_TMP/capture.err" "$CAPTURE_TMP/capture.out"
   rmdir "$CAPTURE_TMP" || return 1
   CAPTURE_TMP=""
 }
@@ -713,6 +734,63 @@ refuse_if_fence_not_intact() {
 }
 
 # ============================================================================
+# container probe — the flag-on properties only the running container can show (#8211 PR-E)
+# ============================================================================
+# The flag-on rehearsal (2026-10-24) failed twice on things no runner-side check could see: the worktree root
+# was not writable by uid 1001 (EACCES at mkdir, every session), and the container's egress to git-data was a
+# blackhole that a host-side ssh does not share. This runs git-data-container-probe.sh INSIDE the app container,
+# as its own user, from web-1's SSH session (`docker exec -i -u 1001:1001 ... sh -s`, the script on stdin), for each
+# roster host. The container is read, never changed: the probe makes and removes one empty directory in the worktree
+# root and asks the transport wrapper for a repository that cannot exist (a `remote: git-data transport:` answer
+# proves reachability, key, pin and wrapper; a timeout is the blackhole). No key material is printed: the body keeps
+# the key in a 0600 file under a 0700 scratch directory it removes, and this verb prints only the words below.
+# The static twin is git-data-flag-precheck.sh WORKTREE_ROOT_WRITABLE (the Dockerfile owns the directory).
+# The body's exit code names the stage (its header is the table):
+#   21  worktree root absent / not writable by uid 1001   worktree_root_not_writable
+#   24  the dial timed out                                container_egress_blackhole reason=timeout
+#   25  refused / no route / unreachable / reset          container_egress_blackhole reason=refused
+#   22  no scratch directory                              probe_failed reason=scratch
+#   23  the transport env is empty in the container       probe_failed reason=transport_env_absent
+#   26  the endpoint refused the transport key            probe_failed reason=auth_refused
+#   27  the pinned host key did not verify                probe_failed reason=host_key
+#   28  anything else                                     probe_failed reason=unclassified
+# Any other rc (docker exec itself failing: no such container, a stopped one; ssh's 255; the bound's 124) is
+# probe_failed rc=<n>. rc 0 counts only with the body's exact one-line answer: an exit that ran nothing is not a pass.
+CONTAINER_PROBE_ANSWER='container_probe ok worktree_root=writable transport=answered'
+refuse_if_container_unready() {
+  # The app container's name, spelled in two pieces so this file carries no literal of the retired cutover body's container names
+  # (the A12 census in git-data-luks.test.sh greps for them): ci-deploy.sh starts the app container under this name.
+  local ctr=soleur-"web-platform" h rc body here qr cmd
+  step "container probe: the worktree root is writable by uid 1001 and git-data answers, both from inside the app container"
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || _store_refuse container-probe probe_failed "" arg_body
+  body="$here/git-data-container-probe.sh"
+  [ -f "$body" ] && [ -s "$body" ] || _store_refuse container-probe probe_failed "" arg_body
+  printf -v qr '%q' "$OLD_REPOS"
+  cmd="docker exec -i -u 1001:1001 -e GDCP_REPO_ROOT=$qr $ctr sh -s"
+  for h in "${WEB_HOST_LIST[@]}"; do
+    rc=0
+    web_exec "$h" "$cmd" "$body" 90 || rc=$?
+    case "$rc" in
+      0) ;;
+      21) _store_refuse container-probe worktree_root_not_writable ;;
+      22) _store_refuse container-probe probe_failed "" scratch ;;
+      23) _store_refuse container-probe probe_failed "" transport_env_absent ;;
+      24) _store_refuse container-probe container_egress_blackhole "" timeout ;;
+      25) _store_refuse container-probe container_egress_blackhole "" refused ;;
+      26) _store_refuse container-probe probe_failed "" auth_refused ;;
+      27) _store_refuse container-probe probe_failed "" host_key ;;
+      28) _store_refuse container-probe probe_failed "" unclassified ;;
+      *) _access_stderr "$CAPTURE_TMP/capture.err"
+         _store_refuse container-probe probe_failed "$rc" ;;
+    esac
+    [ "$(head -c 200 "$CAPTURE_TMP/capture.out")" = "$CONTAINER_PROBE_ANSWER" ] \
+      || _store_refuse container-probe probe_failed "" bad_answer
+    log "container probe: host $h ok"
+  done
+  _store_emit container-probe ok
+}
+
+# ============================================================================
 # freeze / unfreeze / probe — the host-side verbs (#8211 PR2)
 # ============================================================================
 # Every write runs through gd_exec (bounded, stdout discarded); every read through
@@ -1027,7 +1105,8 @@ main() {
       refuse_if_not_on_mapper
       refuse_if_store_unverified_or_not_empty
       refuse_if_fence_not_intact
-      log "read-only proof clear: access ok, served by the LUKS mapper, the bootstrap's store marker bound to its filesystem, not frozen, no entry in the repositories directory, fence in place for pushes"
+      refuse_if_container_unready
+      log "read-only proof clear: access ok, served by the LUKS mapper, the bootstrap's store marker bound to its filesystem, not frozen, no entry in the repositories directory, fence in place for pushes, and the app container owns its worktree root and reaches git-data"
       echo "::notice title=git-data-cutover store::verdict=clear"
       ;;
     freeze)   mode_freeze ;;
