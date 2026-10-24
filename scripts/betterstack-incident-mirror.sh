@@ -200,7 +200,7 @@ read_open_issues() {
 sanitize() { printf '%s' "$1" | tr -d '\000-\037\177' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g' | tr '\n' ' '; }
 
 file_one() { # <projected incident object>
-  local inc="$1" id name cause started url title num bodyf
+  local inc="$1" id name cause started title num bodyf
   id="$(printf '%s' "$inc" | jq -r '.id')"
   name="$(printf '%s' "$inc" | jq -r '.name // "unnamed monitor"')"
   name="$(sanitize "$name" | head -c 120)"
