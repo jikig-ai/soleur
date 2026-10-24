@@ -180,3 +180,14 @@ Accepted residuals: the first-boot tuple in `cloud-init.yml` keeps its duplicate
 prod container is not inspected (the canary's proof transfers to it only for these two names, through the shared env-file), the image's own `ENV`
 was not measured, a plainly spelled `NODE_EXTRA_CA_CERTS` never reaches the scrub (the key overlay refuses it first; a no-break-space or BOM prefixed spelling can), and the overlay's `grep` weakness
 is tracked separately (#10855).
+
+## Addendum (2026-10-23, the second flip attempt)
+
+The second `flip` (run 39977793262) failed at the host-side self-gate on web-1: `INNGEST_LINK: class=selfgate_failed level=error rc=56 http=000 attempts=3` (Better Stack row 15:24:42Z, run-log reason `inngest_link_selfgate_failed`), before any canary ran.
+The revert redeployed both hosts: Better Stack rows show `class=env_scrubbed level=info removed=1` and `class=resolved level=info state=http_default scheme=http` at 15:26:10Z (web-1, `soleur-web-platform`) and 15:26:44Z (web-2, `soleur-web-2`); the revert run itself did not verify the scheme.
+That event named only the last attempt's curl exit code and HTTP code, so the failed stage was unreadable and its cause is not established. #10934 appends `phase= tcp= tls= verify=` after `attempts=` from one curl `-w` line; the pass predicate (curl exit 0, HTTP 200, pinned file) is unchanged.
+The phase is also written to the deploy state as the closed-enum key `inngest_link_selfgate_phase`, visible only in the release run's state dump and `/hooks/deploy-status` until the next deploy; the flip run log prints only the reason and the revert's redeploy normally erases the key, so for a flip the event row is the only record.
+Measured on local servers (`curl-w-measurements.md`; not every row on every build): a real stunnel whose upstream refused printed `rc=56 http=000` with TLS completed (curl 8.5.0), the incident's shape and not a cause. `phase=request` means only TLS verified and no HTTP response came back.
+The terminator's own journald is not shipped (stunnel logs at priority 6; `vector.toml` Source 1 admits only `inngest-server.service` or priority 3-4) and no issue tracks it; #10880 is a `vector.toml` carrier-drift CI guard. The runbook records the exit from this gap.
+Not measured: the hosts' curl version; the suite's real-curl comparison omits the hang phases, a TCP reset, an empty CA file and a truncated body.
+Rejected alternatives (CTO F1-F3, `decision-challenges.md`): a second `-k` or handshake-hook probe (a new unverified path beside the trust anchor), raw millisecond timings (cardinality, timing side channel), `%{errormsg}` (free text, curl 7.75+).

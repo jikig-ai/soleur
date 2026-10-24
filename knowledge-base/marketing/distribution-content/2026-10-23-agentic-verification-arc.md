@@ -1,9 +1,9 @@
 ---
 title: "A Checklist for Trusting AI Work Was Just Published. We Shipped All of It."
 type: pillar
-publish_date: 2026-10-23
+publish_date: 2026-10-24
 channels: discord, x, bluesky, linkedin-personal
-status: draft
+status: scheduled
 issue_reference: "#10902"
 ---
 

@@ -631,7 +631,7 @@ else
   # left the linter green and the harness green at one assertion fewer. The floor makes a deliberate
   # removal an explicit, reviewable edit to this number instead of a silent narrowing.
   RELEVANCE_ARRAYS=(
-    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|14"
+    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|15"
     "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|17"
     "LINT_ORPHAN_BATTERY_PATHS|scripts/lint-orphan-test-suites.test.sh|11"
     "TAG_AUTHORSHIP_BATTERY_PATHS|scripts/battery-tag-authorship-mutations.test.sh|15"

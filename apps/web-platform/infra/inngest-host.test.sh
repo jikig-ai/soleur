@@ -473,18 +473,21 @@ fi
 # 9. Boot isolation self-check admits BETTERSTACK_LOGS_TOKEN as a TOP-LEVEL alternation
 #    member (#6197). A NESTED member would match INNGEST_BETTERSTACK_LOGS_TOKEN and fail to
 #    match a bare BETTERSTACK_LOGS_TOKEN → boot-brick. The HEARTBEAT_URL)|BETTERSTACK anchor
-#    proves the token is a sibling of the INNGEST_ group, not inside it. Floor rose 4->5.
+#    proves the token is a sibling of the INNGEST_ group, not inside it. Floor rose 4->5,
+#    then 5->6 (#10390 defect 3 — INNGEST_CONFIG_DIGEST materializes in that arc's
+#    promotion apply; the bump and the doppler_secret write ride the same merge->promote
+#    window, per the ordering gate in cloud-init-inngest.yml).
 #    SOURCE LOCATION (#8562): the check moved out of runcmd into the provision script
 #    (/usr/local/bin/soleur-inngest-provision, a write_files entry), so §9-§9c read THAT entry's
 #    body, not the whole file — a copy of the regex anywhere else cannot satisfy them.
 ISO_SRC="${_G1_TMP}/provision-script.sh"
 awk '/^  - path: \/usr\/local\/bin\/soleur-inngest-provision$/{f=1;next} f&&/^  - path: /{f=0} f&&/^[^[:space:]]/{f=0} f' "$CLOUD_INIT" > "$ISO_SRC"
 grep -qF 'HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)' "$ISO_SRC" \
-  && grep -qF '"$n_inngest" -lt 5' "$ISO_SRC" \
-  && pass || fail "isolation self-check admits BETTERSTACK_LOGS_TOKEN (top-level) and the floor is -lt 5"
+  && grep -qF '"$n_inngest" -lt 6' "$ISO_SRC" \
+  && pass || fail "isolation self-check admits BETTERSTACK_LOGS_TOKEN (top-level) and the floor is -lt 6"
 # The old floor must be gone.
-if grep -qF '"$n_inngest" -lt 4' "$ISO_SRC"; then
-  fail "isolation floor must be -lt 5, not the old -lt 4"
+if grep -qF '"$n_inngest" -lt 5' "$ISO_SRC"; then
+  fail "isolation floor must be -lt 6, not the old -lt 5"
 else
   pass
 fi
@@ -503,7 +506,7 @@ FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$ISO_SRC" | grep -oE '[0-9]+
 # Non-vacuity: a failed extraction must NOT silently pass every case below. An empty GUARD_RE
 # makes `grep -Ec ""` match every line, which would fake a clean replay.
 [[ -n "$GUARD_RE" ]] && pass || fail "could not extract the admit-regex from the provision script in $CLOUD_INIT (the replay below would be vacuous)"
-[[ "$FLOOR" == "5" ]] && pass || fail "could not extract the cardinality floor, or it is not 5 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
+[[ "$FLOOR" == "6" ]] && pass || fail "could not extract the cardinality floor, or it is not 6 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
 
 # Replays the file's exact predicate: strip DOPPLER_ builtins, then FATAL unless the visible
 # non-DOPPLER set is a SUBSET of the allowlist (n_total == n_inngest) AND meets the floor.
@@ -519,8 +522,14 @@ isolation_decision() {
 DARK5=(INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI BETTERSTACK_LOGS_TOKEN)
 LIVE7=("${DARK5[@]}" INNGEST_CUTOVER_FLIP INNGEST_HEARTBEAT_URL)
 
-# Dark boot (pre-arm) must PASS — the host has to bootstrap before any cutover.
-[[ "$(isolation_decision "${DARK5[@]}")" == PASS ]] && pass || fail "dark 5-secret boot must PASS the isolation self-check"
+# Dark boot must PASS — the host has to bootstrap. Under floor 6 the minimal bootable set is
+# the dark five + INNGEST_CONFIG_DIGEST, which this arc's promotion apply materializes (#10390
+# defect 3 — the bump and the doppler_secret write ride the same merge->promote window).
+DARK6=("${DARK5[@]}" INNGEST_CONFIG_DIGEST)
+[[ "$(isolation_decision "${DARK6[@]}")" == PASS ]] && pass || fail "dark 6-secret boot (incl. INNGEST_CONFIG_DIGEST) must PASS the isolation self-check"
+# And a 5-name read post-materialization means the digest was deleted — FATAL, a loud brick,
+# never a silent under-floor boot.
+[[ "$(isolation_decision "${DARK5[@]}")" == FATAL ]] && pass || fail "a 5-name set without INNGEST_CONFIG_DIGEST must FATAL under floor 6 — a deleted digest bricks loudly"
 # THE #6178 REGRESSION, behaviorally: op=arm adds CUTOVER_FLIP + HEARTBEAT_URL. Before the fix
 # this FATALed (n_total=7 vs n_inngest=6), bricking every provision while the flip was armed.
 [[ "$(isolation_decision "${LIVE7[@]}")" == PASS ]] && pass || fail "armed 7-secret set must PASS — op=arm writes INNGEST_CUTOVER_FLIP; rejecting it boot-bricks the dedicated host (#6178)"
@@ -561,7 +570,7 @@ LIVE7=("${DARK5[@]}" INNGEST_CUTOVER_FLIP INNGEST_HEARTBEAT_URL)
 # so the INNGEST_-prefixed spelling must NOT be admitted.
 [[ "$(isolation_decision INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI INNGEST_BETTERSTACK_LOGS_TOKEN)" == FATAL ]] && pass || fail "INNGEST_BETTERSTACK_LOGS_TOKEN must FATAL — BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL member, not nested (#6197)"
 # DOPPLER_* builtins are stripped before counting.
-[[ "$(isolation_decision "${DARK5[@]}" DOPPLER_PROJECT DOPPLER_CONFIG)" == PASS ]] && pass || fail "DOPPLER_* builtins must be stripped before counting"
+[[ "$(isolation_decision "${DARK6[@]}" DOPPLER_PROJECT DOPPLER_CONFIG)" == PASS ]] && pass || fail "DOPPLER_* builtins must be stripped before counting"
 
 # 9c. Pin the COMPARISON OPERATOR. The replay above re-derives the predicate, so it cannot see
 #     an inversion in the file itself: flipping -ne to -eq makes an isolated host FATAL and a
@@ -857,7 +866,8 @@ fi
 
 # 12b. Isolation: INNGEST_TLS_KEY / INNGEST_TLS_CERT are admitted (Terraform mints both into
 #      soleur-inngest/prd at merge; an unadmitted name boot-bricks the next re-provision), the floor
-#      stays 5, and neither a bare nor a suffixed look-alike is.
+#      is now 6 (#10390 defect 3 — INNGEST_CONFIG_DIGEST materialized), and neither a bare nor a
+#      suffixed look-alike is.
 [[ "$(isolation_decision "${DARK5[@]}" INNGEST_TLS_KEY INNGEST_TLS_CERT)" == PASS ]] && pass || fail "DARK5 + INNGEST_TLS_KEY + INNGEST_TLS_CERT must PASS — the TLS key and cert are minted into soleur-inngest/prd (#10136)"
 [[ "$(isolation_decision "${LIVE7[@]}" INNGEST_CONFIG_DIGEST INNGEST_REDIS_LUKS_KEY INNGEST_LUKS_CUTOVER INNGEST_LUKS_ACTIVE_VOLUME_ID INNGEST_TLS_KEY INNGEST_TLS_CERT)" == PASS ]] && pass || fail "the full 13-name set incl. the TLS pair must PASS"
 [[ "$(isolation_decision "${DARK5[@]}" INNGEST_TLS_KEY)" == PASS ]] && pass || fail "INNGEST_TLS_KEY alone must PASS (the pair is written by one apply but each name stands alone)"
@@ -1078,7 +1088,10 @@ rm -rf "$TLS_T"
 # 105 -> 183 (#10136): the TLS block (nft order/pins, isolation rows, write_files shape, fetch and health
 # behaviour) adds 78 unconditional assertions (197 passing measured locally, which includes the one
 # `nft -c` row that only runs where nft and unprivileged user namespaces exist).
-INNGEST_HOST_MIN_ASSERTIONS=183
+# 183 -> 184 (#10390 defect 3, floor 5->6): the dark-boot replay splits into a DARK6 PASS row and a
+# 5-name FATAL row (+1 net new) and the DOPPLER_* strip row rides DARK6 (+0) — 203 passing measured
+# locally with the conditional nft row.
+INNGEST_HOST_MIN_ASSERTIONS=184
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1
