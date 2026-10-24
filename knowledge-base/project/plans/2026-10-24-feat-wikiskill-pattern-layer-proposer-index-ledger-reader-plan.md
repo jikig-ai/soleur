@@ -201,8 +201,8 @@ patterns prompt has **no** unfenced `Corpus:` JSON tail (a test asserts it). Evi
 otherwise the same first-10-lines entries the corpus path sends, so `corpusSummaries` and the quorum are
 unchanged. The scheduled path keeps its existing unfenced tail until the flip (tracked in 7.1).
 
-**Parsing.** Use `gray-matter` with `engines: {}` called directly (as `cron-content-publisher.ts:24` and
-`cron-strategy-review.ts:46` do), not `kb-reader.ts`'s `parseFrontmatter` (it swallows YAML errors into `{}`,
+**Parsing.** Use `gray-matter` with `engines: {}` called directly (precedent: `kb-reader.ts:119`; `cron-content-publisher.ts` and
+`cron-strategy-review.ts` call plain `matter()`, so do not copy them), not `kb-reader.ts`'s `parseFrontmatter` (it swallows YAML errors into `{}`,
 fail-open for a validator), and never import `scripts/lib/frontmatter-strip` (a cross-root import breaks the
 containerized build, per the comment above the handler's `stripFrontmatter`). Quote `opened_on`/`closed_on`
 or accept `Date` (gray-matter parses an unquoted date to a `Date`). Export `stripFrontmatter` (or inject it)
@@ -263,7 +263,7 @@ must be as strict as the corpus keys.
 ### Marker additions (patterns path only; numbers and closed enums)
 
 `input_source: "corpus"|"patterns"`, `patterns_open`, `ledger_read: "ok"|"failed"`, `ledger_suppressed`,
-`ledger_prs_scanned` (the RAW search hit count). The existing `no-qualifying-clusters` emit passes `refusals` /
+`ledger_prs_scanned` (the RAW search hit count). CTO 2026-10-24: a sixth field `ledger_title_skipped` counts bot-authored search items skipped for a title that does not match `PROMOTE_PR_TITLE_RE` (a human-retitled PR stops suppressing); it is warn-level and never fails the read, and the runbook documents it. The existing `no-qualifying-clusters` emit passes `refusals` /
 `refusal_detail` as `undefined` (not `[]`) when empty, so the scheduled-path row is unchanged. `CompoundPromoteStatus` stays at 8; `ledger-suppressed` is a per-cluster refusal
 reason with a `refusal_detail` entry `{cluster_hash, reason}`. On the scheduled path the field set is
 byte-identical to today (pinned by a test).
