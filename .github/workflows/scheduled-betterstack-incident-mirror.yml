@@ -102,7 +102,7 @@ jobs:
                esac ;;
             3) echo "::error::betterstack incident mirror could not READ its inputs (${verdict}); nothing was mirrored — a dark mirror is the failure this workflow exists to report." ;;
             4) echo "::error::betterstack incident mirror could not FILE (${verdict}): a gh write failed mid-run." ;;
-            *) echo "::warning::betterstack incident mirror returned unexpected status ${rc} (${verdict})" ;;
+            *) echo "::error::betterstack incident mirror returned unexpected status ${rc} (${verdict}) — the mirror is dark regardless of which guard tripped." ;;
           esac
 
       - name: Sentry check-in (final)

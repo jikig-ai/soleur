@@ -102,7 +102,7 @@ TOKEN_RE='^[A-Za-z0-9._~+/=-]{20,}$'
 if [[ "$#" -ne 0 ]]; then
   if [[ "$#" -eq 1 && "$1" == "--selftest" ]]; then
     # Hermetic: no network, no credentials — proves the projection jq compiles.
-    jq -en '{data: [], pagination: {next: null}} | [.data[] | {id: (.id | tostring), name: .attributes.name, cause: .attributes.cause, started_at: .attributes.started_at, url: .attributes.url}] | length == 0' >/dev/null \
+    jq -en '{data: [], pagination: {next: null}} | [.data[] | {id: (.id | tostring), name: .attributes.name, cause: .attributes.cause, started_at: .attributes.started_at}] | length == 0' >/dev/null \
       || { marker read_failed "reason=selftest_jq"; echo "CANNOT MIRROR: jq could not run the projection."; exit 3; }
     echo "betterstack-incident-mirror selftest: ok"
     DECIDED=1
@@ -168,7 +168,7 @@ read_open_incidents() {
   if ! jq -e '.data | type == "array"' "$WORK/api.json" >/dev/null 2>&1; then
     fail_read api_malformed "the incidents answer carried no data array."
   fi
-  projected="$(jq -c '[.data[] | {id: (.id | tostring), name: .attributes.name, cause: .attributes.cause, started_at: .attributes.started_at, url: .attributes.url}]' "$WORK/api.json" 2>/dev/null)" \
+  projected="$(jq -c '[.data[] | {id: (.id | tostring), name: .attributes.name, cause: .attributes.cause, started_at: .attributes.started_at}]' "$WORK/api.json" 2>/dev/null)" \
     || fail_read api_malformed "the incidents list could not be projected."
   OPEN_COUNT="$(printf '%s' "$projected" | jq 'length')"
   PAGED=0
@@ -183,6 +183,12 @@ read_open_issues() {
   if ! jq -e 'type == "array"' "$WORK/issues.json" >/dev/null 2>&1; then
     fail_read issues_malformed "gh issue list did not return a JSON array."
   fi
+  # A saturated --limit reads as a COMPLETE open set while the tail is silently missing:
+  # dedupe then double-files and resolve never sees the survivors. Same contract the
+  # sibling soak applies (issues-truncated -> CANNOT ESTABLISH).
+  if [[ "$(jq 'length' "$WORK/issues.json")" -ge 200 ]]; then
+    fail_read issues_truncated "the open $ISSUE_LABEL issue list hit the --limit 200 bound; a partial dedupe map would double-file, so nothing was filed or closed."
+  fi
   jq -r '.[] | ((.body // "") | [scan("betterstack-incident id=[A-Za-z0-9_-]+")] | first // "") as $m
        | select($m != "") | "\($m | sub("betterstack-incident id=";""))\t\(.number)"' \
        "$WORK/issues.json" > "$WORK/issue_map" \
@@ -191,7 +197,7 @@ read_open_issues() {
 }
 
 # ── FILING PASS: one issue per open incident, keyed on the body marker ─────────────────
-sanitize() { printf '%s' "$1" | tr -d '\000-\037\177' | tr '\n' ' '; }
+sanitize() { printf '%s' "$1" | tr -d '\000-\037\177' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g' | tr '\n' ' '; }
 
 file_one() { # <projected incident object>
   local inc="$1" id name cause started url title num bodyf
@@ -201,8 +207,12 @@ file_one() { # <projected incident object>
   cause="$(printf '%s' "$inc" | jq -r '.cause // "n/a"')"
   cause="$(sanitize "$cause" | head -c 300)"
   started="$(printf '%s' "$inc" | jq -r '.started_at // "n/a"')"
-  url="$(printf '%s' "$inc" | jq -r '.url // ""')"
-  case "$url" in https://*) ;; *) url="n/a" ;; esac
+  # id lands in the dedupe marker, the touched ledger and awk -v — it must match the
+  # charset the resolve pass scans for. A non-conforming id is vendor corruption:
+  # fail loud rather than file a marker that can never re-scan.
+  if [[ ! "$id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    fail_write "id_shape" "incident id failed the [A-Za-z0-9_-] shape the dedupe marker assumes; refusing to file an un-dedupable marker."
+  fi
   title="$TITLE_PREFIX $name"
   num="$(awk -F'\t' -v id="$id" '$1 == id {print $2}' "$WORK/issue_map" | head -1)"
   if [[ -n "$num" ]]; then
@@ -211,10 +221,6 @@ file_one() { # <projected incident object>
       || fail_write "issue_comment id=$id" "the dedupe comment on issue #$num failed mid-run."
     commented=$((commented + 1))
   else
-    local l
-    for l in "$ISSUE_LABEL" action-required priority/p1-high; do
-      gh label create "$l" --repo "$GH_REPO" --description "Better Stack incident mirror filing" --color B60205 2>/dev/null || true
-    done
     bodyf="$WORK/body.$id.md"
     {
       printf '## Better Stack incident is open\n\n'
@@ -222,7 +228,6 @@ file_one() { # <projected incident object>
       printf -- '- **Incident id:** `%s`\n' "$id"
       printf -- '- **Cause:** `%s`\n' "$cause"
       printf -- '- **Started:** `%s`\n' "$started"
-      printf -- '- **Vendor incident:** %s\n' "$url"
       printf -- '- **Detected:** %s\n' "$NOW"
       printf -- '- **Run log:** %s\n\n' "$RUN_URL"
       printf 'Filed by `scripts/betterstack-incident-mirror.sh` (scheduled-betterstack-incident-mirror.yml); it auto-resolves when the incident leaves the vendor open list. A same-titled issue filed by a human is a different issue — dedupe keys on the marker below, never the title (#10918).\n\n'
@@ -288,6 +293,13 @@ resolve_stale_issues() {
   done < "$WORK/issue_map"
 }
 
+ensure_labels() {
+  local l
+  for l in "$ISSUE_LABEL" action-required priority/p1-high priority/p2-medium; do
+    gh label create "$l" --repo "$GH_REPO" --description "Better Stack incident mirror filing" --color B60205 2>/dev/null || true
+  done
+}
+
 emit_verdict() {
   if (( created + commented + resolved > 0 )) || [[ "$degraded_action" != "none" ]]; then
     marker mirrored "created=$created commented=$commented resolved=$resolved paged=$PAGED degraded=$degraded_action"
@@ -305,8 +317,12 @@ projected="[]"; OPEN_COUNT=0; PAGED=0; DEGRADED_NUM=""
 created=0; commented=0; resolved=0; degraded_action="none"
 read_open_incidents
 read_open_issues
+ensure_labels
 : > "$WORK/touched"
 file_open_incidents
 handle_paged
-resolve_stale_issues
+# PAGED=1 means page 1 is a PROVABLE subset only: an untouched mirror issue may still be
+# live on page 2+. Resolving here would close live incidents' issues with a false
+# "resolved upstream" comment — the silent-page class this file exists to close.
+if [[ "$PAGED" -eq 0 ]]; then resolve_stale_issues; fi
 emit_verdict

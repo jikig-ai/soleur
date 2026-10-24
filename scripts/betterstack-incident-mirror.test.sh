@@ -508,6 +508,17 @@ cases=$((cases + 1))
 if grep -qF 'betterstack-incident-mirror kind=paged' "$WORK/root/bodies/create_42.md" 2>/dev/null; then
   pass "row 6: the degraded issue carries the kind=paged marker"
 else fail "row 6: degraded body lacks the kind=paged marker"; fi
+# P1 regression (review seat): a paged read is a PROVABLE subset only — a mirror issue for a
+# page-2 incident must survive the run (resolve is gated on PAGED=0).
+reset_case; C_API="$(inc 900006 soleur-inngest-consumer-prd | api_paged | fx paged_live)" \
+  C_ISSUES="$(printf '[{"number":77,"title":"[ci/betterstack-incident] soleur-other-prd","body":"<!-- betterstack-incident id=900099 -->"}]' | fx iss_page2)" \
+  C_CREATES=2; C_LISTS=1; C_CLOSES=0
+expect "paged read: page-2 mirror issue is NOT closed" 0 mirrored "paged=1"
+cases=$((cases + 1))
+if grep -qF 'issue close 77' "$CALLS" 2>/dev/null || grep -qF '"77"' <(grep 'close' "$CALLS") 2>/dev/null; then
+  fail "P1: resolve ran under PAGED=1 and closed a live page-2 mirror issue"; sed 's/^/        | /' "$CALLS" >&2
+else pass "P1: page-2 mirror issue survives a paged run"; fi
+
 # pagination cleared -> the degraded issue auto-resolves.
 reset_case; C_API="$(printf '' | api_ok | fx clear)" \
   C_ISSUES="$(degraded_issue 44 | issues_json | fx iss5)" \
@@ -613,8 +624,8 @@ expect_red M1 "projection yields an empty list" 0 mirrored 0 no_incidents
 # Guard 1 row 3 (order/lifetime): resolve moved BEFORE the filing pass — the touched-ledger is
 # empty, so the still-open incident's mirror issue is closed alongside the stale one. The
 # mutant keeps rc 0 + verdict=mirrored, so the RED evidence is the wrongly-closed live issue.
-M="$WORK/mut/m3.sh"; sed -e '/^resolve_stale_issues$/d' -e 's/^file_open_incidents$/resolve_stale_issues\nfile_open_incidents/' "$MIRROR_SRC" > "$M"
-FILE_LINE="$(line_of "$MIRROR_SRC" 'file_open_incidents')"; RES_LINE="$(line_of "$MIRROR_SRC" 'resolve_stale_issues')"
+M="$WORK/mut/m3.sh"; sed -e '/resolve_stale_issues; fi$/d' -e 's/^file_open_incidents$/resolve_stale_issues\nfile_open_incidents/' "$MIRROR_SRC" > "$M"
+FILE_LINE="$(line_of "$MIRROR_SRC" 'file_open_incidents')"; RES_LINE="$(line_of "$MIRROR_SRC" 'if [[ "$PAGED" -eq 0 ]]; then resolve_stale_issues; fi')"
 cases=$((cases + 1))
 if [[ -n "$FILE_LINE" && -n "$RES_LINE" ]] && ! cmp -s "$MIRROR_SRC" "$M" \
    && [[ "$(grep -nxF 'resolve_stale_issues' "$M" | head -1 | cut -d: -f1)" -lt "$(grep -nxF 'file_open_incidents' "$M" | head -1 | cut -d: -f1)" ]]; then

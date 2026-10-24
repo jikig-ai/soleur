@@ -37,7 +37,7 @@ BS_TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN_READONLY -p soleur -c prd_t
 if ! (LC_ALL=C; case "$BS_TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then
   echo "WARNING: BETTERSTACK_API_TOKEN_READONLY (Doppler prd_terraform) unset or not [A-Za-z0-9._~+/=-] (refused, not sent). Better Stack incidents: SKIPPED."
 else
-  curl --disable --proto '=https' -m 30 -fsS --config - \
+  curl --disable --noproxy '*' -g --proto '=https' --max-redirs 0 -m 30 -fsS --config - \
     "https://uptime.betterstack.com/api/v2/incidents?resolved=false&per_page=50" \
     < <(printf 'header = "Authorization: Bearer %s"\n' "$BS_TOKEN") \
     | jq '[.data[] | {id, name: .attributes.name, started_at: .attributes.started_at}]'

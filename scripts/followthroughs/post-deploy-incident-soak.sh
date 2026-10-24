@@ -212,7 +212,7 @@ if ! _bearer_ok "$BETTERSTACK_API_TOKEN"; then
 fi
 
 WORK="$(mktemp -d -t pdis.XXXXXXXX)" || { emit unknown "mktemp-failed"; exit 3; }
-trap 'rm -rf "$WORK"' EXIT INT TERM HUP
+trap 'rm -rf "$WORK"' EXIT
 
 redact() { # scrub the bearer from any text about to be printed
   local s="$1"
@@ -301,8 +301,8 @@ if [[ "$returned_n" -eq "$ISSUE_LIMIT" ]]; then
   emit unknown "issues-truncated limit=${ISSUE_LIMIT}"
   exit 3
 fi
-ci_issues="$(printf '%s' "$issues_raw" | jq -c --arg e "$WINDOW_END" '
-  [.[] | select(.createdAt <= $e
+ci_issues="$(printf '%s' "$issues_raw" | jq -c --arg d "$DEPLOY_TS" --arg e "$WINDOW_END" '
+  [.[] | select(.createdAt >= $d and .createdAt <= $e
        and (((.labels // []) | map(.name) | map(select(startswith("ci/"))) | length) > 0))
      | {number, title, createdAt}]')"
 
@@ -312,8 +312,9 @@ issue_n="$(printf '%s' "$ci_issues" | jq 'length')"
 if [[ "$incident_n" -gt 0 || "$issue_n" -gt 0 ]]; then
   printf 'FAIL: %s Better Stack incident(s) and %s ci/ issue(s) in the soak window [%s .. %s]:\n' \
     "$incident_n" "$issue_n" "$DEPLOY_TS" "$WINDOW_END" >&2
-  printf '%s\n' "$in_window" | jq -r '.[] | "  incident #\(.id) \(.name) (cause=\(.cause // "n/a"), started \(.started_at))"' | head -10 >&2
-  printf '%s\n' "$ci_issues" | jq -r '.[] | "  issue #\(.number) \(.title) (opened \(.createdAt))"' | head -10 >&2
+  strip() { tr -d '\000-\037\177' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g' | tr '\n' ' '; }
+  printf '%s\n' "$in_window" | jq -r '.[] | "  incident #\(.id) \(.name) (cause=\(.cause // "n/a"), started \(.started_at))"' | strip | head -10 >&2
+  printf '%s\n' "$ci_issues" | jq -r '.[] | "  issue #\(.number) \(.title) (opened \(.createdAt))"' | strip | head -10 >&2
   emit fail "incidents=${incident_n} ci_issues=${issue_n} deploy=${DEPLOY_TS} end=${WINDOW_END}"
   exit 1
 fi
@@ -321,6 +322,7 @@ fi
 # ── (3) Liveness gate — zero findings only PASS on a proven-live substrate ────
 armed=0
 tolerated=0
+other=0
 for endpoint in heartbeats monitors; do
   if ! members="$(paged_get "/api/v2/${endpoint}?per_page=50" "" 2>"$WORK/err")"; then
     transient "${endpoint} read did not answer: $(redact "$(tr '\n' ' ' < "$WORK/err")")"
@@ -339,13 +341,13 @@ for endpoint in heartbeats monitors; do
     emit unknown "${endpoint}-parse-failed"
     exit 3
   fi
-  read -r a t o <<<"$counts"
+  read -r a t o <<<"$counts"; other=$(( other + o ))
   armed=$(( armed + a ))
   tolerated=$(( tolerated + t ))
 done
 if [[ "$armed" -lt 1 ]]; then
   transient "no heartbeat or monitor member is ARMED (status up|down); ${tolerated} member(s) read paused/pending — born-but-not-yet-armed is not liveness evidence, so 'zero incidents' proves nothing (2026-07-24 learning)."
-  emit unknown "substrate-unarmed tolerated=${tolerated}"
+  emit unknown "substrate-unarmed tolerated=${tolerated} other=${other}"
   exit 3
 fi
 
