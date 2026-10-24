@@ -908,9 +908,10 @@ case "${1:-} ${2:-}" in
       case "$1" in --json) json="${2:-}"; shift 2 || shift ;; --jq) jqx="${2:-}"; shift 2 || shift ;; *) shift ;; esac
     done
     if [[ ",$json," == *",mergeStateStatus,"* ]]; then
-      # `sync-pr-behind.sh <N> --queue-wait`'s snapshot (state, mergeStateStatus, autoMergeRequest): served from mss-<N>
-      # ("<STATE> <MERGESTATE> <armed|disarmed>", default `OPEN BEHIND armed`; or fail | hang | garbage | empty), with the
-      # --jq the SUT passed applied to the raw JSON. qw-env records the bound the caller ran this read under.
+      # `sync-pr-behind.sh <N> --queue-wait`'s snapshot (state, mergeStateStatus, autoMergeRequest, baseRefName): served from mss-<N>
+      # ("<STATE> <MERGESTATE> <armed|disarmed> [<base>]", default `OPEN BEHIND armed main`; or fail | hang | garbage | empty), with the
+      # --jq the SUT passed applied to the raw JSON. qw-env records the bound the caller ran this read under. A field the --json
+      # list did not name is absent from the body, so a SUT that does not ask for baseRefName gets no base (request-shape-compatible).
       printf 'ATTEMPTS=%s TIMEOUT=%s\n' "${PR_QUEUE_ATTEMPTS:-}" "${PR_QUEUE_TIMEOUT:-}" >> "$d/qw-env"
       if [[ "$mode" == "fail" ]]; then echo "HTTP 502" >&2; exit 1; fi
       mss="$(cat "$d/mss-$n" 2>/dev/null || echo 'OPEN BEHIND armed')"
@@ -920,10 +921,11 @@ case "${1:-} ${2:-}" in
         garbage) echo '<html>502 Bad Gateway</html>'; exit 0 ;;
         empty)   exit 0 ;;
       esac
-      read -r st mm arm <<<"$mss"
+      read -r st mm arm base <<<"$mss"
       if [[ "$arm" == armed ]]; then am='{"enabledAt":"2026-10-04T00:00:00Z"}'; else am=null; fi
-      body="{\"state\":\"$st\",\"mergeStateStatus\":\"$mm\",\"autoMergeRequest\":$am}"
-      for f in state mergeStateStatus autoMergeRequest; do
+      body="$(jq -nc --arg st "$st" --arg mm "$mm" --argjson am "$am" --arg base "${base:-main}" \
+        '{state:$st,mergeStateStatus:$mm,autoMergeRequest:$am,baseRefName:$base}')"
+      for f in state mergeStateStatus autoMergeRequest baseRefName; do
         [[ ",$json," == *",$f,"* ]] || body="$(jq -c "del(.$f)" <<<"$body")"
       done
       if [[ -n "$jqx" ]]; then printf '%s' "$body" | jq -r "$jqx"; else printf '%s\n' "$body"; fi
@@ -945,13 +947,19 @@ case "${1:-} ${2:-}" in
       cat "$d/issue-${BASH_REMATCH[1]}"
     fi
     exit 0 ;;
-  "api repos/"*"/rules/branches/main"*)
+  "api repos/"*"/rules/branches/"*)
     # The merge_queue rule read of `--queue-wait`: the count comes from rules-merge-queue (default 0; or fail | hang | garbage |
     # empty). The stub serves a RAW rules array (that many merge_queue entries beside an unrelated rule) and runs the --jq the SUT passed.
+    # Branch-aware like the live API: the requested branch is parsed out of the path (between rules/branches/ and `?`, %2F decoded) and
+    # the mode applies only to the branch in rules-branch (default main); any other branch answers [] (a branch without rules, as
+    # measured). An unparseable path is a STUB-MISS (exit 64), never a silent answer.
     printf 'ATTEMPTS=%s TIMEOUT=%s\n' "${PR_QUEUE_ATTEMPTS:-}" "${PR_QUEUE_TIMEOUT:-}" >> "$d/qw-env"
+    rpath="${2:-}"; rbr="${rpath#*/rules/branches/}"; rbr="${rbr%%\?*}"; rbr="${rbr//\%2F//}"
+    [[ -n "$rbr" && "$rbr" != "$rpath" ]] || { echo "STUB-MISS rules path $rpath" >&2; exit 64; }
     jqx=""; prev=""
     for a in "$@"; do [[ "$prev" == --jq ]] && jqx="$a"; prev="$a"; done
     rq="$(cat "$d/rules-merge-queue" 2>/dev/null || echo 0)"
+    if [[ "$rbr" != "$(cat "$d/rules-branch" 2>/dev/null || echo main)" ]]; then rq=0; fi
     case "$rq" in
       fail)    echo "HTTP 502" >&2; exit 1 ;;
       hang)    exec sleep 8 ;;
@@ -2114,12 +2122,14 @@ t_q16_note_on_deny_exits() {
 # `not_queued OPEN armed`, under PR_QUEUE_ATTEMPTS=1 and a bounded PR_QUEUE_TIMEOUT, inside a 20 s outer wrapper (two reads of
 # at most 5 s each plus the kill grace). `queue_wait` skips the sync; `proceed` syncs silently; ANY unreadable answer falls
 # through to today's sync with a named note (cause=queue_wait_unreadable), never a block. The stub answers the --queue-wait
-# reads from mss-<N> ("<STATE> <MERGESTATE> <armed|disarmed>", default `OPEN BEHIND armed`, or fail|hang|garbage|empty) and
-# rules-merge-queue (a merge_queue rule count, default 0, or fail|hang|garbage|empty), so every existing armed not_queued row
-# keeps "syncs, no warn". The stub's qw-env records PR_QUEUE_ATTEMPTS / PR_QUEUE_TIMEOUT of those reads.
+# reads from mss-<N> ("<STATE> <MERGESTATE> <armed|disarmed> [<base>]", default `OPEN BEHIND armed main`, or fail|hang|garbage|empty) and
+# rules-merge-queue (a merge_queue rule count for the branch in rules-branch, default main; 0, or fail|hang|garbage|empty), so every
+# existing armed not_queued row keeps "syncs, no warn". The stub's qw-env records PR_QUEUE_ATTEMPTS / PR_QUEUE_TIMEOUT of those reads.
 # =============================================================================
 _prf_mss() { assert_fixture_dir "$1"; printf '%s\n' "$3" > "$1/stub/mss-$2"; }
 _prf_rules() { assert_fixture_dir "$1"; printf '%s\n' "$2" > "$1/stub/rules-merge-queue"; }
+# _prf_rules_branch <tmp> <branch> → the branch whose rules endpoint carries the rules-merge-queue count (default main; any other branch reads [])
+_prf_rules_branch() { assert_fixture_dir "$1"; printf '%s\n' "$2" > "$1/stub/rules-branch"; }
 # _qw_env_ok <tmp> <attempts> <timeout> → every recorded --queue-wait read ran under exactly that bound.
 _qw_env_ok() { [[ -s "$1/stub/qw-env" ]] && [[ "$(sort -u "$1/stub/qw-env")" == "ATTEMPTS=$2 TIMEOUT=$3" ]]; }
 # the resolvable spellings of T-Q8, shared with T-Q17 (a skip that handled only the bare-number form must be caught)
@@ -2398,6 +2408,68 @@ t_q21_queue_answer_changes_between_reads() {
   _q_skipped "$tmp" || ok=0
   [[ "$(wc -l < "$tmp/stub/gql-number" | tr -d ' ')" == "1" ]] || ok=0
   _verdict "T-Q21 queue answer not_queued then queued: exactly one GraphQL read, --queue-wait (armed) skips the sync, nothing pushed" "$ok" "ctx=$(_prf_context) reads=$(wc -l < "$tmp/stub/gql-number")"
+}
+
+# T-Q23 / T-Q24 (#10832): the hook is the one real consumer of `--queue-wait` and the only caller that merges origin/main after a
+# `proceed`. An armed BEHIND PR whose base the script cannot use (T-Q23) or whose base is not main and has no merge queue (T-Q24)
+# must come back as `queue_wait` (NOT `kind=gh` rc 4: the hook treats any non-zero rc as "sync anyway" and would then merge
+# origin/main into a foreign base). The hook skips its sync: no merge commit, no push. The stub is branch-aware, so the old
+# script's literal `main` rules read answers `proceed` here (main has no queue rule in these fixtures) and the hook syncs.
+t_q23_unsupported_base_skips_sync() {
+  local tmp ok base wt
+  for base in 'a?b' 'a..b' 'x.lock' 'rel+1'; do
+    tmp=$(mktemp -d)
+    _prf_q_fixture "$tmp"
+    wt="$tmp/wt-feat-x"
+    _q_snap "$tmp"
+    _prf_queue "$tmp" 4242 not_queued; _prf_rules "$tmp" 0; _prf_mss "$tmp" 4242 "OPEN BEHIND armed $base"
+    _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+    ok=1
+    _q_skipped "$tmp" || ok=0
+    [[ "$(_prf_context)" != *"unreadable"* && "$(_q_warns "$tmp")" == "0" ]] || ok=0
+    _gh_logged_any "$tmp" "mergeStateStatus" || ok=0
+    _verdict "T-Q23 armed BEHIND, unsupported base '$base': --queue-wait answers queue_wait, the hook skips its sync (no merge, no push, no unreadable note)" "$ok" "rc=$PRF_RC ctx=$(_prf_context) reason=${PRF_REASON:0:200}"
+    rm -rf "$tmp"
+  done
+}
+t_q24_foreign_base_without_queue_skips_sync() {
+  local tmp ok wt
+  # base develop, no merge_queue rule anywhere: the script refuses to hand the PR to a sync that merges origin/main (queue_wait).
+  tmp=$(mktemp -d)
+  _prf_q_fixture "$tmp"
+  wt="$tmp/wt-feat-x"
+  _q_snap "$tmp"
+  _prf_queue "$tmp" 4242 not_queued; _prf_rules "$tmp" 0; _prf_mss "$tmp" 4242 "OPEN BEHIND armed develop"
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  ok=1
+  _q_skipped "$tmp" || ok=0
+  [[ "$(_prf_context)" != *"unreadable"* && "$(_q_warns "$tmp")" == "0" ]] || ok=0
+  _gh_logged_any "$tmp" "rules/branches/develop" || ok=0
+  # The hook cannot tell `wait` from `foreign`/`badbase` (all print queue_wait), so the ONE skip text must LEAD with the refusal reading and name
+  # the safe action for a base with no queue, and must scope the disarm / sync / re-arm recipe to a main-based PR: for a develop-based PR that
+  # recipe walks into the hook's own origin/main merge (the re-arm finds the PR disarmed, so the queue-wait check is not asked). Order matters.
+  local _ctx _i_ref _i_hand _i_main _i_dis
+  _ctx="$(_prf_context)"
+  [[ "$_ctx" == *"This skip is ALSO a refusal when the PR's base branch has no merge queue"* && "$_ctx" == *"sync by hand against its own base"* \
+     && "$_ctx" == *"do NOT disarm and re-arm"* && "$_ctx" == *"only for a main-based PR, if you truly need a hand sync, disarm first"* ]] || ok=0
+  _i_ref="${_ctx%%This skip is ALSO a refusal*}"; _i_hand="${_ctx%%sync by hand against its own base*}"
+  _i_main="${_ctx%%If the PR is based on main*}"; _i_dis="${_ctx%%disarm first*}"
+  [[ "${#_i_ref}" -lt "${#_i_hand}" && "${#_i_hand}" -lt "${#_i_main}" && "${#_i_main}" -lt "${#_i_dis}" ]] || ok=0
+  _verdict "T-Q24 armed BEHIND, base develop with no merge_queue rule: the hook skips its sync (no merge, no push), the rules read named develop, and the text leads with the refusal reading and scopes disarm-first to a main-based PR" "$ok" "rc=$PRF_RC ctx=$(_prf_context) log=$(tr '\n' ';' < "$tmp/stub/gh.log" | cut -c1-300)"
+  rm -rf "$tmp"
+  # base develop WITH the merge_queue rule on develop (and none on main): judged against its own base, skipped.
+  tmp=$(mktemp -d)
+  _prf_q_fixture "$tmp"
+  wt="$tmp/wt-feat-x"
+  _q_snap "$tmp"
+  _prf_queue "$tmp" 4242 not_queued; _prf_rules "$tmp" 1; _prf_rules_branch "$tmp" develop; _prf_mss "$tmp" 4242 "OPEN BEHIND armed develop"
+  _prf_run_e "$tmp" "$wt" "gh pr merge 4242 --squash"
+  ok=1
+  _q_skipped "$tmp" || ok=0
+  _gh_logged_any "$tmp" "rules/branches/develop" || ok=0
+  ! _gh_logged_any "$tmp" "rules/branches/main" || ok=0
+  _verdict "T-Q24 armed BEHIND, base develop WITH the queue rule on develop only: skipped, judged against develop's rules (never main's)" "$ok" "rc=$PRF_RC ctx=$(_prf_context) log=$(tr '\n' ';' < "$tmp/stub/gh.log" | cut -c1-300)"
+  rm -rf "$tmp"
 }
 
 # T-Q22b: the instrument rows. The stub records PR_QUEUE_ATTEMPTS / PR_QUEUE_TIMEOUT of every --queue-wait read: ONE attempt and the
@@ -2772,6 +2844,8 @@ for _case in \
   t_q20_unreadable_queue_wait_syncs_with_note \
   t_q21_queue_answer_changes_between_reads \
   t_q22_proceed_syncs_silently \
+  t_q23_unsupported_base_skips_sync \
+  t_q24_foreign_base_without_queue_skips_sync \
   t_q22b_instrument_bounds \
   t_dj1_disjoint_skip \
   t_dj2_overlap_syncs \
@@ -2801,7 +2875,7 @@ echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
 # Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
 # and the report is printf + exit, not a helper the floor exists to backstop.
-EXPECTED_CASES=77
+EXPECTED_CASES=80
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
     "$CASES" "$EXPECTED_CASES" >&2
