@@ -168,7 +168,7 @@ run_case "clean window + armed substrate (paused member tolerated) -> PASS" 0 $E
 # The PASS line should name the counts and the liveness arm.
 out="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" GH_TOKEN=t BETTERSTACK_API_TOKEN=t \
   $ENV bash "$SUT" 2>&1)"
-if printf '%s' "$out" | grep -q "PASS: zero new Better Stack incidents and zero new ci/ issues"; then
+if grep -q "PASS: zero new Better Stack incidents and zero new ci/ issues" <<<"$out"; then
   pass "PASS line names both zero counts"
 else
   fail "PASS line names both zero counts (out: $(printf '%s' "$out" | tail -2))"
