@@ -2257,7 +2257,10 @@ _diff_edge_hit() {
           done <<< "$_DEH_N"
           return 1
           ;;
-        *) return 0 ;;   # literal + every malformed shape → match (widen-only)
+        # `literal|malformed|*)` — the `*)` is piped, never space-led: the
+        # killed-classification battery's budget arms rewrite the substring
+        # `    *) return 0 ;;` (4-space lead) exactly once and assert on that.
+        literal|malformed|*) return 0 ;;   # literal + every malformed shape → match (widen-only)
       esac
       ;;
     */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
@@ -2910,7 +2913,11 @@ _affected_add_edge() {
       # malformed → always-match (widen-only by design); a metachar-free one
       # takes the literal-path recursion above — a real edge if the path exists,
       # nothing otherwise.
-      _affected_glob_split "$_g"
+      # Fail-wide guard (symmetric with the hit arm): the receipt path
+      # (_affected_emit_receipt → _affected_classify → _affected_derive) reaches
+      # this arm outside the _AFF_LIB_OK gate, so a missing helper mints the
+      # verbatim always-match — never an rc-127 silent narrow under `set -e`.
+      declare -F _affected_glob_split >/dev/null && _affected_glob_split "$_g" || _AGS_CLASS=malformed
       case "$_AGS_CLASS" in
         dir)
           # Well-formed: probe the head dir — present mints `^glob:<pattern>`,

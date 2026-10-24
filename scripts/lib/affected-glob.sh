@@ -53,7 +53,9 @@
 #                 tail-trailing-slash— tail ends in / (no path can match it)
 #                 tail-no-star       — tail carries no *
 #   _AGS_HEAD   the leading metachar-free run (`${payload%%[*?[]*}`)
-#   _AGS_TAIL   the rest of the payload ("" for literal)
+#   _AGS_TAIL   the rest of the payload ("" for literal) — internal to the
+#               dispatch today; retained in the contract for the census's
+#               reason-map and any future tail-aware consumer
 #
 # rc is ALWAYS 0: malformed is data, never a failure arm — callers run under
 # `set -e`/`&&` chains and an rc-1 classifier would read as a crash, not a
