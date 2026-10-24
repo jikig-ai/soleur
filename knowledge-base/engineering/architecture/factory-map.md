@@ -52,6 +52,6 @@ source dedupe.
 
 ---
 
-*Attribution: the factory-slot ontology vocabulary and the question-every-task checklist are
+_Attribution: the factory-slot ontology vocabulary and the question-every-task checklist are
 adapted from `mattpocock/skills` `software-factory` (MIT) — vocabulary/methodology only, no
-prose ported. See `plugins/soleur/NOTICE`.*
+prose ported. See `plugins/soleur/NOTICE`._
