@@ -1,0 +1,28 @@
+# merge-effect-class ci-only list (ADR-297). Columns: workflow file name, TAB, reason.
+#
+# MEANING. A row says the workflow is "not directly gated by the merged file list as a production act":
+# it can run when a pull request merges to main (an unfiltered push, a workflow_run arm, a release, or a
+# pull_request closed arm), but it does not, on its own, change production as a function of WHICH files
+# the merge touched. It does NOT say the workflow is harmless. A valid reason can read "fires on release
+# publication, downstream of the path-gated release workflow, covered by that row".
+#
+# USE. This file is test data plus the --pr applicability sentinel (it must be tracked at HEAD). The
+# classifier never consults it for a verdict. plugins/soleur/test/merge-effect-class-parity.test.sh reads it:
+# an enumerated workflow that is NOT listed here is treated as production, and the test then demands that
+# its path filter cannot fire from an allowlisted path. Every row needs a non-empty reason; a row naming
+# a workflow that is deleted, or no longer enumerated, fails the test. The list is review-owned: a
+# mislabel only matters if the workflow fires on an allowlisted path, which the parity test's witness and
+# real-tree directions cover.
+ci.yml	checks only (build, test, lint); its workflow_run followers are listed or path-gated on their own rows
+codeql-main-alert-gate.yml	scanner gate that reads code-scanning alerts after a push; mutates nothing in production
+secret-scan.yml	scanner run on every push and pull request; read-only
+skill-security-scan-corpus.yml	scanner calibration on every push; read-only
+skill-security-scan-postmerge.yml	scanner audit after a merge; read-only
+tenant-integration.yml	integration tests against the dev Supabase project only; production is not reachable from it
+vendor-pin-verify.yml	verifies pinned vendor digests; read-only
+post-merge-monitor.yml	follows CI on main and only acts on bot-fix commits; any revert it pushes is a new push judged by its own file list
+fix-constraints-stage-b.yml	follows the fix-constraints stage A pull_request run and opens a draft follow-up pull request; it never runs from a merge's file list
+npm-publish.yml	fires on release publication and after Version Bump and Release, which is itself path-gated; covered by that row's trigger
+board-status-sync.yml	moves a project-board card when a pull request closes; bookkeeping, fires on every close, deploys nothing
+cleanup-unmerged-bot-branches.yml	deletes the head ref of a closed unmerged bot pull request; repository hygiene, deploys nothing
+dev-ledger-reconcile.yml	discards a closed pull request's applied-but-unmerged migrations from the dev ledger only; production is not touched

@@ -1352,6 +1352,27 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_CONCURRENCY_KEY_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/merge-effect-class-parity.test.sh — derived edges could not reach its subject (the workflows' trigger
+# blocks); declared from the repo paths its suite file names. Editing the classifier's allowlist is the exact weakening it catches.
+AFFECTED_PLUGINS_SOLEUR_TEST_MERGE_EFFECT_CLASS_PARITY_TEST_SH_PATHS=(
+  ".github/workflows"
+  "plugins/soleur/scripts/merge-effect-class.sh"
+  "plugins/soleur/scripts/merge-effect-class.ci-only.tsv"
+  "plugins/soleur/test/merge-effect-class-parity.test.sh"
+  "plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/scripts/merge-effect-class.test.sh — reads the consumer sentence in operator-holds.md and the parity suite.
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_MERGE_EFFECT_CLASS_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/merge-effect-class.sh"
+  "plugins/soleur/scripts/merge-effect-class.ci-only.tsv"
+  "plugins/soleur/scripts/merge-effect-class.test.sh"
+  "plugins/soleur/skills/ship/references/operator-holds.md"
+  "plugins/soleur/test/merge-effect-class-parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
