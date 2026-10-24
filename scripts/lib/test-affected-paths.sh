@@ -34,10 +34,15 @@
 #
 # AN ENTRY IS A PATH, A DIRECTORY PREFIX, OR A `glob:` PATTERN. A trailing "/"
 # denotes a directory prefix match; anything else is a literal path — except
-# `glob:<literal-head>/<glob-tail>` (#9813), the extension-aware edge for
-# corpus walkers: a diff line under <literal-head> matching <glob-tail> under
-# bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers
-# `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike). `glob:` is
+# `glob:<literal-head>/<glob-tail>` (#9813) or `glob:<root-pattern>` (#10198), the
+# extension-aware edges for corpus walkers: a dir-anchored edge matches a diff
+# line under <literal-head> matching <glob-tail> under bash `[[ == ]]` semantics
+# (`*` crosses `/`, so `knowledge-base/**.sh` covers `knowledge-base/x.sh` and
+# `knowledge-base/a/b/c.sh` alike); a ROOT-ANCHORED member — a `/`-free head
+# (empty allowed), a `/`-free tail carrying `*` — matches only DIR-LESS diff
+# lines (repo-root corpus files like `x.test.sh`). All `glob:` members classify
+# through scripts/lib/affected-glob.sh's `_affected_glob_split`; a `/`-bearing
+# tail under a `/`-free head is malformed (root-tail-slash). `glob:` is
 # DECLARED-ARRAY-ONLY: the token extractors never emit it on purpose (a
 # `glob:`-spelled literal in scanned content still hits the same mint arm —
 # widen-only). The relevance arrays DO stay verbatim substring edges — a
@@ -2192,12 +2197,11 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # under EVERY top-level root — plus fixture scripts/fixtures/vacuity-contract-control.sh
 # and its own file (covered by the scripts/ prefix). The glob: entries below cover the
 # 13 roots that lacked a declared prefix; the dir prefixes stay because converting them
-# would narrow coverage the suite already had (the #9945 precedent). Residual: a
-# dir-less `x.test.sh` at repo root is corpus yet inexpressible in this `dir/`
-# grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
-# re-derives the live root set to catch NEW top-level dirs, and its th8 row
-# (#10117) REDs the battery on any dir-less corpus member — grammar extension
-# deferred to #10198.
+# would narrow coverage the suite already had (the #9945 precedent). A dir-less `x.test.sh`
+# at repo root is corpus too — root-anchored `glob:` members (#10198) cover it;
+# the th6 row in scripts/test-all-affected.test.sh re-derives the live root
+# set to catch NEW top-level dirs, and its th8 row (#10117) REDs the battery
+# on any dir-less corpus member no declared edge covers.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
 
   "apps/"
@@ -2257,11 +2261,10 @@ AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
 # `.github/workflows/*.yml` surfaces and the REQUIRED_RUNNERS files — the non-corpus
 # reads are already covered by the .github/, scripts/ and apps/ prefixes, so only the
 # *.test.sh corpus needed glob: coverage for the 13 roots without a declared prefix.
-# Residual: a dir-less `x.test.sh` at repo root is corpus yet inexpressible in this
-# `dir/` grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
-# re-derives the live root set to catch NEW top-level dirs, and its th8 row
-# (#10117) REDs the battery on any dir-less corpus member — grammar extension
-# deferred to #10198.
+# A dir-less `x.test.sh` at repo root is corpus too — root-anchored `glob:` members
+# (#10198) cover it; the th6 row in scripts/test-all-affected.test.sh re-derives the
+# live root set to catch NEW top-level dirs, and its th8 row (#10117) REDs the
+# battery on any dir-less corpus member no declared edge covers.
 AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
 
   "apps/"
@@ -2457,10 +2460,10 @@ AFFECTED_SCRIPTS_AUDIT_DEV_SCHEDULED_SHAPES_PATHS=(
 # scripts/lib/repo-write-boundary.sh, and its own file. Uniformly glob:-scoped: a dir
 # prefix over a doc-heavy root would over-select on non-.sh churn, and there is no
 # legacy prefix set to preserve. Residual: a dir-less `x.sh` at repo root is
-# inexpressible in this `dir/` grammar (no head to mint); the th6 row in
+# coverable by a root-anchored `glob:` member (#10198); the th6 row in
 # scripts/test-all-affected.test.sh re-derives the live root set for NEW dirs,
-# and its th8 row (#10117) REDs the battery on any dir-less corpus member —
-# grammar extension deferred to #10198.
+# and its th8 row (#10117) REDs the battery on any dir-less corpus member no
+# declared edge covers.
 AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
   "glob:.agents/**.sh"
   "glob:.claude/**.sh"
