@@ -35,3 +35,9 @@
 - Design pass findings: no P1; 3 P2 (detection under-covered non-_ Inngest fns / CHECK_REGISTRY Edit-clause contradiction / flat schema multi-task), 6 P3 — ALL FIXED in d5bce7aab2
 - Panel spawned (8): git-history, pattern-recognition, security, performance, data-integrity, agent-native, structural-enumeration (replaces code-quality-analyst), test-design — on d5bce7aab2
 - Verification at panel spawn: schedule-task-design.test.sh 51/0, lint-skill-body-budget OK, schedule-skill-once green, lint-orphan green
+
+## QA
+- soleur:qa Step 1: Test Scenarios are Given/When/Then prose with no Browser:/API verify:/Cleanup: steps → auto-skip (covered by schedule-task-design.test.sh 67/0 + schedule-skill-once.test.sh 42/0 + bun suites 38/0). No dev server started.
+
+## Compound (pending)
+## Ship (pending)
