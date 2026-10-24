@@ -23,3 +23,8 @@
 
 - cto_spawns=1 (pre-work technical-ruling gate: 6 rows ruled + 1 seventh-consumer amendment)
 - context-reviewed-gate misfire: bare-root shared index carried a sibling session's staged `last_reviewed` deltas; hook resolved cwd to bare root, not the worktree — workaround `cd <worktree> && git commit`
+
+## Fix-Round (resume session 2026-10-24)
+- Seats: shellcheck + security-sentinel + test-design (3/3, path-mapped; no dedup ledger persisted from the panel — degraded to path-map only, reported).
+- Resolved: P1 top-level `local` census crash (M28/M28b red on resume); status-token decline completed to full emitted set + M30/M30b rows; totality `--rows` re-anchors to 1-15/16-30 (also repaired stale `14-27` anchors from 4912809dae); t16 pins dormant mint-arm `declare -F` guard; `affected-glob.sh` doc charset `:` fix.
+- Deferred (latent, no current defect): cache_run `source` pin (no fixture carries glob: tokens today) and materialise() confinement pin (census already REDs the same declarations). Coverage wishes, not defects.
