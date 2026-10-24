@@ -743,7 +743,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
 # directory-operand form (scripts/test-affected-kb-consumers.test.sh); the remaining
 # knowledge-base strings in those files are fixtures or message text, classified in the baseline.
 # S4 PR4 (#10860) added exact-file runtime reads of the bun suites that are not knowledge-base content: the TRIGGER_FILES
-# loop of ship-deploy-pipeline-fix-gate.test.ts (existsSync per file at :233, so a delete or rename selects the suite and an
+# loop of ship-deploy-pipeline-fix-gate.test.ts (test.each at :233, existsSync per file at :234, so a delete or rename selects the suite and an
 # edit cannot change its verdict) and the files the other bun tests open. Per-pair evidence: pairs-decisions.tsv.
 AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
@@ -1815,8 +1815,8 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 
 # .claude/hooks/grep-q-pipe-guard.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
-# S4 PR4 (#10860): this list is PARTIAL on purpose. The suite also walks every tracked .sh and .ts (pj_join_pairs over
-# git ls-files, :2520-2526), which no exact-file list can express, so it names only the files its PRODUCER_JOIN,
+# S4 PR4 (#10860): this list is PARTIAL on purpose. The suite also walks every tracked file whose extension is in PJ_EXTS (sh bash yml yaml tf tftpl template
+# service tmpl; pj_join_pairs over git ls-files, :2521-2527), which no exact-file list can express, so it names only the files its PRODUCER_JOIN,
 # SWEEP_DEFERRALS and SWEEP_TEST_CANARIES tables key on (each row's consumer loop is quoted in pairs-decisions.tsv). The
 # whole-tree read is a selection-policy call (criterion (c)), and the edges whose declaration reveals mentions stay held back (#10959).
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
@@ -2622,7 +2622,7 @@ AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
 # the corpus-walk arm is a comment naming the GUARD's producer. Declared from the repo paths
 # its suite file names.
 # S4 PR4 (#10860): the exact files in the guard's candidate, ALLOW and MUST_FIND sets (lint-betterstack-emitter-read.sh :279,
-# :322, :350), declared from the suite's live arm (scripts/betterstack-emitter-read.test.sh:347). A followthrough script that
+# :322, :350), declared from the suite's live arm (scripts/lint-betterstack-emitter-read.test.sh:347). A followthrough script that
 # names more paths was held back (#10959). Per-pair evidence: pairs-decisions.tsv.
 AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "apps/web-platform/infra/infra-config-gate.sh"

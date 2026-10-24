@@ -240,7 +240,7 @@ python3 -I scripts/ci-pr-affected-replay.py ratchet --print-baseline > scripts/c
 python3 -I scripts/ci-pr-affected-replay.py ratchet --base origin/main     # on a developer checkout pass the base: HEAD^1 is only the previous local commit
 ```
 
-The baseline must be tracked on the tree the tool runs on (a worktree of `HEAD`), or the suites that name the baseline's own path gain a pair. If the pruned file is still not equal to the live set, the difference is a new pair: declare it or accept it (above). In a drain PR a new pair from main is declared when the suite really reads the file; if it is a mention, the accept row is a PR5 artefact, so hold the pair for PR5 and say so in the PR body.
+The baseline must be tracked on the tree the tool runs on (a worktree of `HEAD`), or the suites that name the baseline's own path gain a pair. If the pruned file is still not equal to the live set, the difference is a new pair: declare it or accept it (above). In a drain PR a new pair from main is declared when the suite really reads the file; if it is a mention, the accept row is a PR5 artefact, so hold the pair for PR5 and say so in the PR body; the PR stays advisory-red on that pair until PR5.
 
 ### The drain claim
 
