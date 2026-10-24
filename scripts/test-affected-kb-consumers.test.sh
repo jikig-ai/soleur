@@ -757,7 +757,15 @@ tests = [
     ("^glob:../x/*.sh", KB + "/x.sh"),              # ../-head → always-cover
     ("^glob:" + KB + "/x", KB + "/x"),              # *-less tail → always-cover
     ("^glob:" + KB + "/x*/", "anywhere/file"),      # /-ending tail → always-cover
-    ("^glob:foo*.sh", KB + "/legal"),               # non-/ head → always-cover
+    ("^glob:foo*.sh", KB + "/legal"),               # root edge + dir ref → decline (#10198)
+    ("^glob:*.sh", "a.sh"),                         # root arm: dir-less match → cover
+    ("^glob:*.sh", "a/b.sh"),                       # root arm: dir-bearing line → decline
+    ("^glob:*.sh", "x.md"),                         # root arm: dir-less non-match → decline
+    ("^glob:*.sh", "docs"),                         # root arm: dir ref → decline
+    ("^glob:x*.sh", "x.sh"),                        # root arm, non-empty head → cover
+    ("^glob:x*.sh", "y.sh"),                        # root arm, non-empty head miss → decline
+    ("^glob:x*/y", "x"),                            # root-tail-slash malformed → always-cover
+    ("^glob:*.test.sh", "z.test.sh"),               # root arm: dir-less corpus match → cover
     ("^glob:" + KB + "/**.md", KB + "/legal/art-22-assessments"),  # single-member dir → accept
     ("^glob:" + KB + "/legal/audits/**.md", KB + "/legal"),        # head ⊋ ref: members outside head decline
     ("^glob:" + KB + "/project/**.md", KB),                        # same at root scale → decline
@@ -766,10 +774,10 @@ tests = [
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in tests))
 COVPY
 )
-if [[ "$_k5" == "1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 1 1 0 0 1" ]]; then
-  pass "k5: ^glob: covers .sh at any depth, declines .md/out-of-head/mixed-or-memberless dir refs, always-covers malformed mints"
+if [[ "$_k5" == "1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 0 1 0 0 1 1 0 0 0 1 0 1 1" ]]; then
+  pass "k5: ^glob: covers .sh at any depth, declines .md/out-of-head/mixed-or-memberless dir refs + dir-bearing root lines, always-covers malformed mints"
 else
-  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 1 1 0 0 1)"
+  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 0 1 0 0 1 1 0 0 0 1 0 1 1)"
 fi
 
 # k6 (Guard 3, #10117) — mutation dispatch over the dir-ref all-containment arm.
@@ -849,10 +857,10 @@ fi
 #        vacuously ("" would merely fail the ==, but a malformed vector passing
 #        this row would mean the probe machinery itself is lying).
 cases=$((cases + 1))
-if [[ "$_k5" =~ ^([01]\ ){22}[01]$ ]]; then
-  pass "k6-m4: the k5 vector emits 23 binary cells (a crashed probe cannot satisfy the shape)"
+if [[ "$_k5" =~ ^([01]\ ){30}[01]$ ]]; then
+  pass "k6-m4: the k5 vector emits 31 binary cells (a crashed probe cannot satisfy the shape)"
 else
-  fail "k6-m4: k5 vector '${_k5:0:60}' is not 23 0/1 cells — the comparison may be vacuous"
+  fail "k6-m4: k5 vector '${_k5:0:60}' is not 31 0/1 cells — the comparison may be vacuous"
 fi
 
 # k6-m5: member-boundary mutant — dropping the trailing slash from the member
@@ -966,6 +974,28 @@ else
   fail "k6-m7: landed=$_k6m7_n mutant='${_k6m7}' real='${_k6m7_real}' (want landed=1 mutant='0 1' real='1 1')"
 fi
 
+# k7 (#10198): the root arm's dir-less conjunct — a dir-bearing line must NOT
+#        cover under a root edge; dropping `"/" in p` re-covers a/b.sh the way
+#        fnmatch alone would (the *-crosses-/ hole the conjunct closes).
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k7.py"
+_k7_n=$(grep -cF 'if "/" in p or p in _tracked()[1] or os.path.isdir(p):' "$TESTROOT/oracle-k7.py")
+sed -i 's|if "/" in p or p in _tracked()\[1\] or os.path.isdir(p):|if p in _tracked()[1] or os.path.isdir(p):|' "$TESTROOT/oracle-k7.py"
+_k7=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k7.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:*.sh", "a/b.sh"),   # dir-less conjunct dropped: fnmatch crosses / → 1
+    ("^glob:*.sh", "a.sh"),     # dir-less match: stays 1
+]))
+COVPY
+)
+if [[ "$_k7_n" == "1" && "$_k7" == "1 1" ]]; then
+  pass "k7: dropping the dir-less conjunct re-covers a dir-bearing line (the conjunct binds)"
+else
+  fail "k7: landed=$_k7_n mutant='${_k7}' (want landed=1 mutant='1 1')"
+fi
+
 # u1: the c1 predicate (the SAME function) flags UNCLASSIFIED, empty, unprefixed and reason-less classifications, and accepts a
 # reasoned one and a two-column (argv-code) row. The shape test (`!~ /^false-positive: ./`) is the clause that carries the weight:
 # the unprefixed and reason-less rows are flagged by it alone, so weakening it changes the count.
@@ -980,7 +1010,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=30
+MIN_CASES=31
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2

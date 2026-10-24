@@ -1865,8 +1865,16 @@ er '^glob:a//*/x.sh' 'lib/z.sh' 'mal-head-doubleslash'
 er '^glob:a/./*/x.sh' 'lib/z.sh' 'mal-head-slashdotslash'
 er '^glob:a/../*/x.sh' 'lib/z.sh' 'mal-head-slashdotdotslash'
 er '^glob:scripts/a*/x.sh' 'lib/z.sh' 'mal-head-not-slash'
-er '^glob:*.sh' 'lib/z.txt' 'mal-head-not-slash-empty'
-er '^glob:' 'lib/z.sh' 'mal-head-not-slash-bare'
+er '^glob:*.sh' 'lib/z.txt' 'root-empty-head-declines-dir'
+er '^glob:*.sh' 'x.sh' 'root-matches-dirless'
+er '^glob:*.sh' 'a/x.sh' 'root-declines-dir'
+er '^glob:*.test.sh' 'x.test.sh' 'root-corpus-match'
+er '^glob:*.test.sh' 'a/x.test.sh' 'root-corpus-declines-dir'
+er '^glob:x*.sh' 'x.sh' 'root-head-match'
+er '^glob:x*.sh' 'y.sh' 'root-head-miss'
+er '^glob:**.sh' 'x.sh' 'root-double-star'
+er '^glob:x*/y' 'lib/z.sh' 'mal-root-tail-slash'
+er '^glob:' 'lib/z.sh' 'mal-literal-bare'
 er '^glob:scripts/*/' 'lib/z.sh' 'mal-tail-slash'
 er '^glob:scripts/' 'lib/z.sh' 'mal-tail-no-star'
 er 'lib/x' 'a/lib/x.sh' 'noncaret-substring'
@@ -1938,6 +1946,7 @@ row_edge_charset() { row_edge mal-charset; }; row_edge_head_abs() { row_edge mal
 row_edge_head_dotdot() { row_edge mal-head-parent; }; row_edge_head_dslash() { row_edge mal-head-doubleslash; }; row_edge_head_sds() { row_edge mal-head-slashdotslash; }
 row_edge_head_sddsl() { row_edge mal-head-slashdotdotslash; }; row_edge_head_notslash() { row_edge mal-head-not-slash; }; row_edge_tail_slash() { row_edge mal-tail-slash; }
 row_edge_tail_nostar() { row_edge mal-tail-no-star; }; row_edge_noncaret() { row_edge noncaret-; }; row_edge_cross() { row_edge wf-; }
+row_edge_root() { row_edge root-; }; row_edge_roottail() { row_edge mal-root-tail-slash; }
 row_edge_exact() { row_edge exact; }; row_edge_dir() { row_edge dir-; }
 edge_oracle_missing_fn() {   # the harness row: an oracle extractor pointed at a copy whose _diff_edge_hit was renamed must FAIL with a named reason, never skip
   sed 's/^_diff_edge_hit() {/_diff_edge_hit_renamed() {/' "$EDGE_SRC" > "$SANDBOX/test-all-renamed.sh"

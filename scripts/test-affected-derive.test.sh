@@ -1139,11 +1139,11 @@ fi
 # which Rg4 drives.
 cases=$((cases + 1))
 _rg3="$(derive_run "$FXG" '_affected_reset_edges
-  for _e in "glob:a*/b" "glob:*.sh" "glob:'"${_KB}"'/?a" "glob:'"${_KB}"'/[a]" \
+  for _e in "glob:a*/b" "glob:x*/y" "glob:*/x" "glob:'"${_KB}"'/?a" "glob:'"${_KB}"'/[a]" \
             "glob:../x/*.sh" "glob:/x/*.sh" "glob:a//b/*.sh" "glob:a/./b/*.sh" "glob:a/../b/*.sh" \
             "glob:a\\b/*.sh" "glob:a b/*.sh" "glob:x:y/*.sh" "glob:a/b/*/"; do _affected_add_edge "$_e"; done
   printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
-if [[ "$_rg3" == "^glob:glob:a*/b ^glob:glob:*.sh ^glob:glob:${_KB}/?a ^glob:glob:${_KB}/[a] ^glob:glob:../x/*.sh ^glob:glob:/x/*.sh ^glob:glob:a//b/*.sh ^glob:glob:a/./b/*.sh ^glob:glob:a/../b/*.sh ^glob:glob:a\\b/*.sh ^glob:glob:a b/*.sh ^glob:glob:x:y/*.sh ^glob:glob:a/b/*/" ]]; then
+if [[ "$_rg3" == "^glob:glob:a*/b ^glob:glob:x*/y ^glob:glob:*/x ^glob:glob:${_KB}/?a ^glob:glob:${_KB}/[a] ^glob:glob:../x/*.sh ^glob:glob:/x/*.sh ^glob:glob:a//b/*.sh ^glob:glob:a/./b/*.sh ^glob:glob:a/../b/*.sh ^glob:glob:a\\b/*.sh ^glob:glob:a b/*.sh ^glob:glob:x:y/*.sh ^glob:glob:a/b/*/" ]]; then
   pass "Rg3: every metachar-bearing malformed shape mints ^glob:<entry verbatim> (charset + repo-relative head)"
 else
   fail "Rg3: got '${_rg3:0:600}'"
@@ -1169,13 +1169,27 @@ else
   fail "Rg5: got '${_rg5:0:200}'"
 fi
 
+# Rg6 (must-PASS, #10198): a /-free metachar-free head is ROOT-ANCHORED — empty
+# (glob:*.test.sh), a `**` tail spelling, and a non-empty file-prefix head
+# (glob:x*.sh) all mint `^glob:<pattern>` with no -d probe (the root is always
+# present). glob:*.sh moved OUT of Rg3 for this: it mints the real edge now.
+cases=$((cases + 1))
+_rg6="$(derive_run "$FXG" '_affected_reset_edges
+  for _e in "glob:*.test.sh" "glob:**.test.sh" "glob:x*.sh"; do _affected_add_edge "$_e"; done
+  printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
+if [[ "$_rg6" == "^glob:*.test.sh ^glob:**.test.sh ^glob:x*.sh" ]]; then
+  pass "Rg6: a root-anchored glob mints ^glob:<pattern> directly (empty and non-empty /-free heads)"
+else
+  fail "Rg6: got '${_rg6:0:200}'"
+fi
+
 # ---- verdict accounting -----------------------------------------------------------------------------
 echo ""
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=116
+MIN_CASES=117
 if (( cases + SKIPPED < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran (+$SKIPPED skipped) — below the $MIN_CASES floor" >&2
   exit 2

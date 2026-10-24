@@ -81,7 +81,7 @@ export LC_ALL=C
 # the two `run_suite … --rows A-B` registrations in scripts/test-all.sh (see ROWS-SPLIT above).
 # One deliberate divergence from the copied loop: a REPEATED --rows exits 2 rather than letting
 # the last flag win — the tiling extractor would then assert a coverage the battery ignores.
-DECLARED_TOTAL=27   # the gated mutation rows M1..M27; C0/R1/R1b are unconditional
+DECLARED_TOTAL=29   # the gated mutation rows M1..M29; C0/R1/R1b are unconditional
 ROWS_LO=1; ROWS_HI=0   # ROWS_HI=0 = unset = all declared rows
 _seen_rows_flag=0
 while (( $# )); do
@@ -833,11 +833,42 @@ EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a
 row M22 "Guard 3: a declared glob: whose head does not end in / is malformed — static RED"
 new_sandbox m22
 mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
-  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'a*/b'
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'a/b*c'
 run_lint "$SB"; rc=$?
 assert_red "M22" "$rc"
 assert_has "M22 — names the malformed entry and the grammar reason" \
-  "declares glob: edge 'glob:a*/b', its head does not end in /"
+  "declares glob: edge 'glob:a/b*c', its head does not end in /"
+}
+
+run_M28() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M28 "Guard 3: a root-anchored glob: member is VALID — the census accepts it (#10198)"
+new_sandbox m28
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' '*.test.sh'
+run_lint "$SB"; rc=$?
+if (( rc == 0 )); then pass "M28 — glob:*.test.sh accepted (exit 0)"; else
+  fail "M28 — a root-anchored member was REJECTED (exit ${rc})"; sed 's/^/    /' "$OUT" | head -10
+fi
+new_sandbox m28b
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'x*.sh'
+run_lint "$SB"; rc=$?
+if (( rc == 0 )); then pass "M28b — glob:x*.sh (non-empty root head) accepted"; else
+  fail "M28b — a non-empty root head was REJECTED (exit ${rc})"; sed 's/^/    /' "$OUT" | head -10
+fi
+}
+
+run_M29() {
+EXPECTED_ASSERTIONS=2   # declared floor — aggregated per-row at .rc replay; a hollowed row FATALs
+row M29 "Guard 3: a /-bearing tail under a root-anchored head is malformed — static RED (#10198)"
+new_sandbox m29
+mutate_glob_entry "$SB/scripts/lib/test-affected-paths.sh" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS' 'x*/y'
+run_lint "$SB"; rc=$?
+assert_red "M29" "$rc"
+assert_has "M29 — names the entry and the root-tail-slash reason" \
+  "declares glob: edge 'glob:x*/y', its tail carries a / under a root-anchored head"
 }
 
 run_M23() {
@@ -937,7 +968,7 @@ assert_has "M27c — a /-terminated tail is well-formed but unmatchable" \
 #   * PASS/FAIL/ROWS live in the worker's subshell; each row writes its counters
 #     to $TMP/rows/<id>.rc (PASS FAIL DECLARED ELAPSED) and the parent aggregates them during
 #     the ordered replay below, so the floors and the summary see exactly the serial numbers.
-ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27"
+ROW_IDS="C0 M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16 M17 M18 M19 M20 M21 M22 M23 M24 M25 M26 M27 M28 M29"
 JOBS="${SOLEUR_ORPHAN_MUT_JOBS:-8}"
 # JOBS feeds arithmetic in the pool gate — an unsettable-to-0 or non-numeric value would spin
 # the `running >= JOBS` wait forever, and the arithmetic context must never see a non-digit
