@@ -4,7 +4,7 @@ Host: Linux 7.2.8, 16 cores, git 2.56.0, `/tmp` is tmpfs (the scratch worktree l
 PATH except where stated. The host was shared and never idle (load average 7 to 29 during the runs; values are
 stated per table). All timings use `date +%s%N` and are Linux-only.
 
-## AC13: latency (gate: p95(b) - p95(a) at most 1.5 s)
+## AC13: latency (gate: p95(b) - p95(a) at most 1.5 s; first run, the p95 rows are tripwire-only)
 
 Scratch worktree of this repo (19,855 tracked files), 5 modified tracked files and 3 untracked files, 30 interleaved
 iterations (order of the (b) and (c) runs alternated per iteration), load 7.7 at start and 9.9 at end.
@@ -35,29 +35,29 @@ Non-gating runs (new hook, same worktree):
 | one 5.3 MB high-entropy untracked text file | 2919, 3624 ms (old hook: 1082 ms) | about 7 s expected: better |
 
 
-## AC13 re-measure on the review-round tree (final tree, short run)
+## AC13 re-measure on the fix-round-2 tree (paired statistics; the max-based rows above are tripwire-only)
 
-The review round changed the hook (bound prefix, the lexer on every strict commit where perl exists, plan-once,
-fallback-only roots scanned against the real index, sanitised deny text), so AC13 was re-measured with the same method
-as above (`ac13.sh`: scratch worktree of this repo, 5 modified tracked files and 3 untracked files, interleaved
-iterations, order of (b) and (c) alternated), shortened to 16 iterations because the host was busy (load average
-18.8 at the start and 12.7 at the end, gitleaks 8.30.1). The p95 is the 16th of 16 sorted samples (the maximum).
+Evidence quality, stated plainly: the p95 rows of the earlier tables are the 29th of 30 (first run) and the MAXIMUM of
+16 (second run) samples, so they bound a worst case under host load and carry no precision; they stay as a tripwire for
+the 1.5 s gate. The felt cost is the paired difference between the NEW hook and the OLD hook on the SAME chained
+command, so that is the headline here. Same method as above (`ac13.sh`: scratch worktree of this repo, 5 modified
+tracked files and 3 untracked files, interleaved iterations with the (b) and (c) order alternated), 20 iterations, load
+average 17.1 at the start and 12.6 at the end (the host was never idle; absolute milliseconds are upper bounds),
+gitleaks 8.30.1, 95% bootstrap confidence intervals of the median of the paired differences (4,000 resamples).
 
-| Series | p50 ms | p95 ms | min ms | max ms | decisions |
-|---|---|---|---|---|---|
-| (a) old hook, staged commit | 1520 | 2232 | 1189 | 2232 | 16 allow |
-| (b) new hook, chained | 1599 | 2570 | 1320 | 2570 | 16 allow |
-| (c) old hook, chained, unstaged | 1477 | 2087 | 1244 | 2087 | 16 allow |
+| Paired difference | median ms | 95% CI ms |
+|---|---|---|
+| **(b) new chained - (c) old chained (the headline: what a user feels)** | +146 | [+81, +278] |
+| (b) new chained - (a) old staged commit | +80 | [-29, +182] |
+| (c) old chained - (a) old staged commit | -49 | [-178, +28] |
 
-| Statistic | Value |
-|---|---|
-| p95(b) - p95(a) | +338 ms (gate: <= 1500 ms): PASS |
-| paired p50 difference (b - a) | +86 ms (p95 of the paired differences: +367 ms) |
-| p95(b) - p95(c) | +483 ms |
+Series medians: (a) 1180 ms, (b) 1263 ms, (c) 1119 ms; maxima 1701 / 1954 / 1666 ms (all 20 decisions in each series
+were allow). Tripwire: the maximum of (b) minus the maximum of (a) is +156 ms against the 1.5 s gate: PASS. An
+independent seat measured +47 ms [+28, +65] for the same (b)-(c) pair at load 4.5 to 5.2, so the figure above is
+inflated by the load; the gate has a margin of about 10x under either reading.
 
-Liveness check in the same worktree with one untracked synthetic PEM file: the new hook denies in 1504 ms and the old
-hook allows in 1483 ms, so (b) really builds and scans the simulated index. The lexer now runs on every strict commit
-where perl exists; the earlier measurement put it at about 13 ms.
+Liveness check in the same worktree with one untracked synthetic PEM file: the new hook denies in 1288 ms and the old
+hook allows in 1238 ms, so (b) really builds and scans the simulated index.
 
 ## AC14: lexer-failure ceiling (counts only; limit 0.5 percent) and multi-root frequency
 

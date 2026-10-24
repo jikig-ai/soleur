@@ -97,6 +97,15 @@ Measured motivation (ruling evidence): about 77 percent of roughly 2,900 sampled
 
 ## Proposed Solution
 
+> **Superseded by the review-round rulings (decision rows 22 to 46); ADR-296 is the shipped contract.** There is no
+> producer detection (`CTR_STAGE_PRODUCER`), no return code 10 and no `git-commit-secret-scan-sim-failed` bypass row: a
+> trusted `pathspec-missing` always DENIES (`cause=pathspec-missing`, row 25). `CTR_ADD_META` is six parallel arrays plus
+> `CTR_ADD_ARGV`; `ctr_stage_dump` lives in the test suite (row 38). There is no `timeout`/`gtimeout` ladder, wrapper
+> or stale sweep: one perl fork/waitpid/kill bound (row 30) and a marker-gated sweep (row 45). Every strict commit is
+> lexed where perl exists and a perl-less host reads only a single simple commit unread (rows 22, 46). With a proven
+> directory only the root of `CIS_TOP` is simulated and the other roots are scanned on their real index (row 33). A
+> finding keeps the rule id `git-commit-secret-scan`; only a simulation failure is `-sim-deny` (row 34).
+
 ### Design (CTO-ruled; refinements are in the decision rows)
 
 1. **Walker records staging** (`.claude/hooks/lib/commit-target-roots.sh`). `_ctr_git_walk` learns:
@@ -123,8 +132,7 @@ Measured motivation (ruling evidence): about 77 percent of roughly 2,900 sampled
 
    | Situation | Result |
    |---|---|
-   | Trusted `pathspec-missing` in a proven directory, no earlier producer | superset rebuild; scan; bypass row `git-commit-secret-scan-sim-failed` (cause `pathspec-missing`); allow if clean |
-   | Trusted `pathspec-missing` and an earlier producer exists | DENY with the existing `create` repair ("run the file-creating command as its own call") |
+   | Trusted `pathspec-missing` in a proven directory | DENY `cause=pathspec-missing`, naming the path and git's line (row 25 deleted the producer rule and the bypass row) |
    | Any other replay failure | rebuild with the superset; a failed superset denies |
    | Failed superset, non-literal force-add, temp dir / index copy / `:`-in-path failure, deadline or gitleaks timeout, no bounding tool available, `check-attr` batch failure | DENY, repair "run git add as its own call, then commit" (sanitised first error line where there is one) |
    | Config-transforming staging argument | DENY "stage in its own call" |
@@ -147,7 +155,7 @@ Measured motivation (ruling evidence): about 77 percent of roughly 2,900 sampled
 ## Technical Considerations
 
 - **Portability**: bash 3.2 (no `mapfile`, no `declare -n`, no associative arrays; empty arrays read as `${a[@]+"${a[@]}"}`; truncation guarded like the existing `[ "$_CTR_BAD_MARK" -eq 0 ]`); `timeout` -> `gtimeout` -> perl `alarm`; `cp` is needed (add it to the stub PATH); no `sha256sum`, `stat -c`, `setsid` or `date +%s%N` in the suite arms (use `cmp`, `ls -ld`/`find -perm`, bash `kill`, and label the Linux-only timing command as such).
-- **Telemetry**: ledger ids `git-commit-secret-scan-sim-failed` (bypass) and `git-commit-secret-scan-sim-deny` (deny), emitted through the existing `emit`; no registry lists the sibling ids. Treat both ids as permanent once emitted. Layer: the local incident ledger `.claude/.rule-incidents.jsonl` (a dev-machine hook, not a server surface).
+- **Telemetry**: ledger ids `git-commit-secret-scan` (a finding, `cause=finding`) and `git-commit-secret-scan-sim-deny` (a simulation failure); `sim-failed` was retired, emitted through the existing `emit`; no registry lists the sibling ids. Treat both ids as permanent once emitted. Layer: the local incident ledger `.claude/.rule-incidents.jsonl` (a dev-machine hook, not a server surface).
 - **Secret residue**: the quarantined object directory holds blobs of working-tree files that may be secrets. `mktemp -d` is 0700, per-root dirs use `mkdir -m 700`, the EXIT trap removes it, INT/TERM exit through the trap, and a stale-directory sweep bounds the SIGKILL case.
 - **Residuals named in the hook header** (rows 5, 11, 18; one follow-up issue lists them all): a script that runs `git add` inside; content created or changed earlier in the same command is denied only when a producer is detected, and `sed -i` / `prettier --write` before `commit -a` or `add -u` is invisible (the scan sees pre-execution state); a positional pathspec after a `-m "..."`; the pinned sim scans raw bytes, so a clean filter / Git LFS may record bytes the sim never saw; content a verb brings from outside the working tree (`apply --index`, `cherry-pick -n`, `stash pop`, `merge`, `checkout <ref> --`) is NOT covered (the superset scans the working tree only - Property 1 is scoped accordingly); other tools that stage (an IDE, a git alias); a configured `core.fsmonitor` daemon is not started by the sim (pinned off); the pre-existing gitleaks textconv / external-diff execution is unchanged.
 - **Superset trade-offs**: `add -A` scans unrelated untracked, non-ignored files, so an unrelated finding (or a 5 MB untracked JSON dump, about 7 s) in the cwd repo can deny or slow a commit aimed elsewhere; a stray unreadable file or an unborn nested repo makes `add -A` fail and the real `git add -A` would fail the same way. The exact replay and the `-u`-based paths avoid this. Two scanned roots (a main-checkout session that `cd`s into a worktree) force the superset; Phase 5 tabulates how often.
@@ -161,22 +169,22 @@ Included because deepen-plan Phase 4.7 gates any plan whose files are not pure d
 
 ```yaml
 liveness_signal:
-  what: "one ledger row per deny or bypass the hook emits (rule ids git-commit-secret-scan, git-commit-secret-scan-sim-deny, git-commit-secret-scan-sim-failed); a hook that never fires leaves no row, so liveness is the suite's real-gitleaks canary arms plus the CI secret-scan workflow"
+  what: "one ledger row per deny or bypass the hook emits (rule ids git-commit-secret-scan and git-commit-secret-scan-sim-deny); a hook that never fires leaves no row, so liveness is the suite's real-gitleaks canary arms plus the CI secret-scan workflow"
   cadence: "per git commit Bash call"
   alert_target: "the local ledger .claude/.rule-incidents.jsonl read by the weekly rule-utility aggregator; CI secret-scan on push is the paging backstop"
   configured_in: ".claude/hooks/git-commit-secret-scan.sh (emit calls) and .claude/hooks/lib/incidents.sh"
 
 error_reporting:
   destination: "the local ledger via emit_incident; the deny JSON reason on stdout for the agent; stderr WARN lines for bypasses"
-  fail_loud: "permissionDecision deny with a repair message for every unscanned-commit case except the provably benign missing pathspec, which warns on stderr and writes a sim-failed bypass row"
+  fail_loud: "permissionDecision deny with a repair message for every unscanned-commit case (a missing pathspec included, row 25)"
 
 failure_modes:
   - mode: "simulation cannot be built, is not boundable, or the superset fails (temp dir, index copy, add -A, deadline, gitleaks timeout)"
     detection: "deny returned to the agent with a sanitised git error line; a git-commit-secret-scan-sim-deny ledger row with mode and cause (local incident ledger, not a server layer)"
     alert_route: "the agent sees the deny immediately; the aggregator reads the ledger"
-  - mode: "exact replay hits a missing pathspec with no earlier producer and the commit is allowed"
-    detection: "git-commit-secret-scan-sim-failed bypass row with cause pathspec-missing"
-    alert_route: "local ledger; CI secret-scan on push"
+  - mode: "exact replay hits a path that does not exist (superseded: this is a deny since row 25)"
+    detection: "git-commit-secret-scan-sim-deny row with cause pathspec-missing"
+    alert_route: "the agent sees the deny immediately; the local ledger"
   - mode: "a staging form the walker does not recognise is scanned as before (silent gap)"
     detection: "named residuals in the hook header; the lexer-failure and form census run in Phase 5; CI secret-scan on push"
     alert_route: "CI secret-scan workflow failure on the pushed branch"
@@ -186,8 +194,8 @@ logs:
   retention: "the rotation policy of lib/log-rotation.sh"
 
 discoverability_test:
-  command: "grep -m1 -o git-commit-secret-scan-sim-failed .claude/hooks/git-commit-secret-scan.sh"
-  expected_output: "git-commit-secret-scan-sim-failed"
+  command: "grep -m1 -o git-commit-secret-scan-sim-deny .claude/hooks/git-commit-secret-scan.sh"
+  expected_output: "git-commit-secret-scan-sim-deny"
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -445,11 +453,11 @@ Panel: code-simplicity, strict-correctness (Kieran lens on shell), spec-flow; th
 - [ ] AC8 (group 9): for plain `git commit -m x` and `git commit -n -m x` the PATH shim logs lines (> 0) and no sim call, the lexer-skipped path still allows with the new `CTR_*` variables unset, and `ctr_wants_lex 'git commit -m x'`, `'git status && git commit -m x'` and `'git commit -m "fix the commit scan"'` return false.
 - [ ] AC9: the diff of the `scan_root` bodies (extracted with `awk '/^scan_root\(\) \{/,/^}/'` from `origin/main` and from the working file) shows only the batched-`check-attr` hunk; the old-vs-new equivalence test passes (spaces, quotes, newlines, attribute values); the exported variables reach `gitleaks`, `git diff --cached`, `git check-attr` and `git show` (per-invocation env log in the shim plus a recording gitleaks stub capturing `$GIT_INDEX_FILE` inside the call). **Amended by the review-round rulings 29 to 31:** the `scan_root` diff is the batched-`check-attr` hunk plus the `core.fsmonitor` pin, the one-call `-diff` re-scan, the bound prefix on the two gitleaks calls, and the sim-mode failure denies.
 - [ ] AC10 (group 12): in a linked worktree the sim copies `.git/worktrees/<name>/index` and resolves blobs that exist only in the common object store; the index and objects paths are absolute; symlinked directory / file / `.gitleaks.toml` rows behave as designed.
-- [ ] AC11 (group 11): the benign missing pathspec (no producer) -> superset scan, exactly one `git-commit-secret-scan-sim-failed` row (cause `pathspec-missing`), allow; with a producer -> deny with the `create` repair; any other replay failure -> superset; failed superset, `mktemp` / `cp` failure, `:` in the objects path, deadline, gitleaks timeout, no bounding tool, `check-attr` batch failure -> deny with "run git add as its own call, then commit" and a sanitised error line; a missing sim lib denies chained and plain strict commits; perl absent denies a chained commit with the `tooling` text.
+- [ ] AC11 (group 11; as shipped, rows 25 and 34): a path that does not exist -> DENY `cause=pathspec-missing` naming the path and git's line (no producer rule, no bypass row, no `sim-failed` id); any other replay failure -> superset; failed superset, `mktemp` / `cp` failure, `:` in the objects path, deadline, gitleaks timeout, `check-attr` batch failure -> deny with the retry that fits the command's staging style (`git add -u` and WITHOUT `-a`; the staged-list check and WITHOUT the paths; or add then commit as a second call) and a sanitised error line; a missing, mismatched or truncated sim lib or walker denies chained and plain strict commits; perl absent denies everything but a single simple commit with the `tooling` text.
 - [ ] AC12: `git rm a.txt && git mv b.txt c.txt && git commit -m x` leaves both working-tree files in place and runs no sim; a stage-unknown verb, a loop in the text, a relative single target, a mixed-directory command, a payload without `cwd`, an unknown launcher and two scanned roots each force the superset (shim log); a config-transforming staging argument is refused and its canary marker is never created; a configured filter marker never runs at hook time; a force-added ignored file is covered by the exact replay and denied-with-repair when its words are non-literal.
 - [ ] AC13 (group 13): at least 30 interleaved pairs on a scratch worktree of this repo (about 19.9k tracked files); `p95(b) - p95(a)` at most 1.5 s (p95 = the 29th of 30 sorted samples); the paired p50 difference, `uptime` load, filesystem, the unstaged-baseline figure, the 5,000-untracked figure (cap 5 s) and the 5 MB figure are in the PR body. If the gate fails: STOP, decision flips to KEEP-OPEN, not shipped, reported to the operator.
 - [ ] AC14: suite green with `MIN_ASSERTIONS` raised to the measured total (nothing skipped); added suite wall time at most about 60 s; the canary arms also pass against gitleaks 8.24.2; `shellcheck` clean on the four shell files; `python3 scripts/lint-trap-tempfile-ownership.py` clean on the changed files; `bash plugins/soleur/skills/verification-scaffold/test/manifest.test.sh` green; markdownlint clean on the plan and tasks; the lexer-failure ceiling measured and under 0.5 percent, with the count in the PR body.
-- [ ] AC15: PR body contains `Closes #10696` and a separate `Ref #10331` line with no closing keyword, ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; every commit ends with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`; `plugins/soleur/skills/work/SKILL.md` is absent from `git diff --name-only origin/main...HEAD`; `knowledge-base/project/specs/feat-one-shot-10696-secret-scan-staging-gap/decision-challenges.md` has the thirty-eight rows (rows 1-21 plus the review-round rows 22-38; `grep -c '^| [0-9]' ...` returns 38).
+- [ ] AC15: PR body contains `Closes #10696` and a separate `Ref #10331` line with no closing keyword, ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; every commit ends with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`; `plugins/soleur/skills/work/SKILL.md` is absent from `git diff --name-only origin/main...HEAD`; `knowledge-base/project/specs/feat-one-shot-10696-secret-scan-staging-gap/decision-challenges.md` has the forty-seven rows (rows 1-21 plus the review-round rows 22-47; `grep -c '^| [0-9]' ...` returns 47).
 - [ ] AC16 (diff scope): the final diff is a subset of the Files to Edit / Create above plus the files the pipeline itself writes (`knowledge-base/INDEX.md` if regenerated, `specs/<branch>/session-state.md`, the plan and tasks).
 - [ ] AC17 (reuse): the consumer stub test passes (about 15 lines, sources the lib, `cis_build`, `env "${CIS_ENV[@]}" git diff --cached --name-only`, no secret-scan code); the follow-up issue exists and is linked from the PR body.
 

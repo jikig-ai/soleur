@@ -201,9 +201,12 @@ helper library denies every strict `git commit` and every loose form that carrie
 quoting character; a missing perl or lexer denies a command that names a directory (`cd`, `-C`,
 `env`, ...), that stages and commits in one call (`git add ... && git commit`, `commit -a`, a pathspec
 commit) or is a loose `git ... commit` form, while a plain `git commit -m x` with none of those
-tokens is still scanned against the real index (without perl a positional pathspec after `-m "..."`
-is not seen: write `git commit -m x -- <path>`). Where perl exists every strict commit is lexed. There is
-no override variable.
+tokens is still scanned against the real index. Without perl the lexer cannot run, so ONLY a single simple
+`git commit` (plain flags, `-m "<text without a dollar sign, backtick or backslash>"`, no pathspec, no chaining) is
+scanned unread; anything else is a `tooling` deny (so a heredoc message or a pathspec commit is denied there until perl
+is installed, and the repair names `git add -u` / the staged-list check for `-a` and `--` commits). Where perl exists
+every strict commit is lexed, and a message the lexer cannot parse now denies a plain commit too. There is no
+override variable.
 
 Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one): a
 `git` or `commit` word spelled with quoting inside the word (`g''it`, `git com''mit`) or built
@@ -239,22 +242,29 @@ text names a retry that fits the command: for `commit -a`, run `git add -u` as i
 again WITHOUT `-a`; for a pathspec commit, `git add <paths>`, check `git diff --cached --name-only`, and
 commit WITHOUT the paths; otherwise `git add <paths>` as its own call, then the commit. A real finding keeps
 the rule id `git-commit-secret-scan` (row `mode=... cause=finding`). Staging the replay cannot reproduce is
-refused (`config-refused`): `-c` keys under `core. filter. diff. attr. include. add. apply. submodule.
+refused (`config-refused`): `-c` keys under `core. filter. diff. attr. include. includeif. add. apply. submodule.
 alias.`, `--namespace`, `--attr-source`, an environment variable outside the allowlist (`LC_*`, `LANG`, `LANGUAGE`,
-`TZ`, `TERM`, `NO_COLOR`, `CI`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_EDITOR`, `GIT_PAGER`, `GIT_TERMINAL_PROMPT`) on a staging
-command or exported earlier, `env -i`, `sudo`; and content from outside the working tree
-(`update-index --add/--cacheinfo/--index-info`, `apply --index/--cached`) is denied `stage-unsimulable`.
+`TZ`, `TERM`, `NO_COLOR`, `CI`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_EDITOR`, `GIT_PAGER`, `GIT_TERMINAL_PROMPT`,
+and by exact name `HUSKY`, `HUSKY_SKIP_HOOKS`, `LEFTHOOK`, `LEFTHOOK_EXCLUDE`, `SKIP`, `PRE_COMMIT_ALLOW_NO_CONFIG`) on a
+staging command or exported earlier (also `set -a`), `env -i`, `exec -c`, `sudo` / `setpriv` / `bwrap` / `systemd-run`
+in front of it, and an inline alias definition on any git record of a committing command; content from outside the
+working tree (`update-index --add/--cacheinfo/--index-info`, `apply --index/--cached/--3way`) is denied
+`stage-unsimulable`. A path whose `diff` attribute hides its added lines (`-diff`, or a driver name) is re-scanned
+from its raw staged blob.
 The contract, the cause table and the residuals are indexed in
 [ADR-296](../../knowledge-base/engineering/architecture/decisions/ADR-296-scan-the-would-be-index-of-a-chained-git-commit.md).
 
 Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one): what an
 EARLIER command in the same call changes (a producer, `sed -i` or `prettier --write` before `commit -a`,
-an edit of `.gitignore`, config or attributes); a script or wrapper that runs `git add` inside, and
-user-config aliases; a host without perl (`git commit -m x <path>` is not seen there); the raw-byte scan (a clean
-filter or Git LFS may record bytes the simulation never saw); checkout, stash, read-tree, cherry-pick,
-merge, revert, am, restore, mv and rm (they take the superset); a SIGKILL that leaves a 0700 temp
-directory behind; other tools that stage (an IDE); and a harness that sends no payload cwd (Devin), which
-never has proof of the directory and always takes the superset.
+an edit of `.gitignore`, config or attributes, a `git mv` that moves a modified file out of a path-keyed allowlist,
+a `git stash pop` that brings never-committed content); a script or wrapper that runs `git add` inside, and
+user-config aliases; the raw-byte scan (a clean filter or Git LFS may record bytes the simulation never saw);
+checkout, stash, read-tree, cherry-pick, merge, revert, am, restore, mv and rm (they take the superset);
+a SIGKILL that leaves a 0700 temp directory behind (swept by the next simulation when it carries the marker and is
+older than 60 minutes); a concealed commit word (`git com""mit`, `c=commit; git $c`) after a staging command; a hung
+read-only git call outside the deadline; other tools that stage (an IDE); and a harness that sends no payload cwd
+(Devin), where a bare `git add a && git commit` takes the superset (a `cd /abs &&` or the same absolute `-C` still
+proves the directory). INT / TERM end the hook with 130 / 143, which the harness treats as non-blocking.
 
 ### Scope of the mandate
 
