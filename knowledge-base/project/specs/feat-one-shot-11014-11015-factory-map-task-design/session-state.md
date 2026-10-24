@@ -29,3 +29,9 @@
 - Verification: schedule-task-design.test.sh 27/0 green; schedule-skill-once green; bun tests 38 pass; fixture ratchets green; lint-shell-capture-exit clean; lint-orphan green; lint-skill-body-budget OK
 - Note: task-design gate contract lives in plugins/soleur/skills/plan/references/task-design-gate.md (§2.9.3/§4.13 stubs point at it) — skill-body ceilings forced the extraction
 - Remaining: Step 4 review → 5 resolve findings → 5.5 qa → 6 compound → 7 ship → 8 DONE
+
+## Review Phase (in progress)
+- Classification: code (sh files in diff) → 8-agent panel; design-risk=yes → design-validity pass ran first (2 seats: code-simplicity + architecture-strategist)
+- Design pass findings: no P1; 3 P2 (detection under-covered non-_ Inngest fns / CHECK_REGISTRY Edit-clause contradiction / flat schema multi-task), 6 P3 — ALL FIXED in d5bce7aab2
+- Panel spawned (8): git-history, pattern-recognition, security, performance, data-integrity, agent-native, structural-enumeration (replaces code-quality-analyst), test-design — on d5bce7aab2
+- Verification at panel spawn: schedule-task-design.test.sh 51/0, lint-skill-body-budget OK, schedule-skill-once green, lint-orphan green
