@@ -40,7 +40,7 @@ Shard rules (the full convention lives in plugins/soleur/skills/competitive-anal
 
 - Shards live under knowledge-base/product/competitive-intelligence/: audits/<owner>-<repo>.md for peer-plugin audits, tier-<N>-<slug>.md for per-competitor detail, audit-log.md for non-audit outcomes. Never create INDEX.md.
 - A competitor gets a tier-* shard iff it has a dated record (intake block, audit, or detail exceeding a slim cell). Slim that row's Differentiation cell to the key differentiator + a `→ detail` link; keep fuller cells where no shard exists.
-- Shard frontmatter is minimal: title, last_updated, publishable: internal|external, plus competitor on tier-* and target on audits/*. Never review_cadence/owner/depends_on on a shard -- review machinery stays on the index.
+- Shard frontmatter is minimal: title, last_updated, publishable: internal|external, plus `competitor` on `tier-*` and `target` on `audits/*`. Never review_cadence/owner/depends_on on a shard -- review machinery stays on the index.
 - Qualifier severance is forbidden: every unverified/marketing flag and source URL moves WITH the claim it qualifies.
 - Orphan policy: index links are the live set; shards are append-only dated records, never deleted by a run.
 - This layout is the mandated output shape for ALL installs: on a repo whose CI doc was never split, the run migrates it (writes the index + creates the needed shards) -- never produce write-only orphan shards.

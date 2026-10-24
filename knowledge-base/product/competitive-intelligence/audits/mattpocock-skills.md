@@ -9,7 +9,7 @@ publishable: internal
 
 Part of the [Competitive Intelligence index](../../competitive-intelligence.md). Dated record — index links are the live set; this shard is append-only.
 
-### mattpocock/skills
+## mattpocock/skills
 
 **Repo:** [mattpocock/skills](https://github.com/mattpocock/skills)
 **License:** MIT (Copyright (c) 2026 Matt Pocock) — permissive; ports may adapt `SKILL.md` prose **with** the attribution comment in §Attribution
@@ -20,7 +20,7 @@ Part of the [Competitive Intelligence index](../../competitive-intelligence.md).
 **Fork note:** not a fork.
 **Reconciled:** 2026-09-23 against origin/main; updated 2026-09-24.
 
-#### Reconciliation status (2026-09-23)
+### Reconciliation status (2026-09-23)
 
 Every section below this one describes the tree on 2026-09-18 and is kept as dated evidence. This table records what shipped afterwards, re-derived against origin/main on 2026-09-23. Issue states and the rows marked "founder decision 2026-09-23" were updated on 2026-09-24. Upstream is still at the audited SHA (0 commits ahead). G1 to G5 are the §2 capability gaps; B1 to B12 are the §4 improvements to existing Soleur skills.
 
@@ -52,7 +52,7 @@ What each bundle deliberately did not adopt is recorded per bundle in `plugins/s
 - `to-tickets` expand–contract sequencing: declined, no observed failure it would have prevented. Revisit if a wide-refactor plan goes wrong (for example, one lands as a single PR and breaks `main`).
 - Self-contained HTML report for `agent-native-audit`: declined as a separate item. Fold it into open `#5994` if wanted.
 
-#### 1. Inventory Summary
+### 1. Inventory Summary
 
 - **Total `SKILL.md`: 38 — all 38 read, no sampling** (≤50 threshold). Verified independently: `find skills -name SKILL.md | wc -l` = 38.
 - **Category buckets:** `engineering/` 18, `in-progress/` 9, `productivity/` 7, `misc/` 4. Only `engineering/` + `productivity/` (25) are **promoted** — those alone ship in the Claude Code plugin and carry a public docs page; `misc/`, `in-progress/`, `deprecated/` ship in neither.
@@ -62,7 +62,7 @@ What each bundle deliberately did not adopt is recorded per bundle in `plugins/s
 - **Stars / forks (GitHub API, point-in-time snapshots):** 264,914 / 22,339 on 2026-09-18; 268,223 / 22,623 on 2026-09-23; repo created 2026-02-03. Stars measure attention, not installs or active use, so read them as a reach signal alongside the Distribution note under Convergence risk, not as a usage count. Internal context only: not for citation in public or marketing content, which does not quote competitor metrics.
 - **Two defects found in Soleur while mapping** (repo findings, not ports): four sites under `plugins/soleur/skills/skill-creator/` point at `references/use-xml-tags.md`, **which does not exist** — `workflows/audit-skill.md`, `workflows/create-new-skill.md` and `workflows/create-domain-expertise-skill.md` all list it as `<required_reading>`, and `references/skill-structure.md` links it as "detailed guidance on each tag"; and `references/core-principles.md` ("Use markdown headings for structure, not XML tags") **directly contradicts** `references/skill-structure.md` ("Remove ALL markdown headings … Replace with semantic XML tags"), with `audit-skill.md` auditing against the XML side while every shipped Soleur skill is markdown-headed. *[Fixed 2026-09-21 by `#8484`.]*
 
-#### 2. High-Value Gaps
+### 2. High-Value Gaps
 
 Five gaps: G1 implements two existing hard rules; G2 to G5 are new capabilities. The rest of this repo's value is in §4 as mechanics for skills Soleur already has — that is deliberate, not a thin harvest.
 
@@ -85,7 +85,7 @@ Five gaps: G1 implements two existing hard rules; G2 to G5 are new capabilities.
 - `teach` — a stateful multi-session personal-learning workspace. Well-built and off-mission. **Inspire only** (its *fluency vs storage strength* framing is a good lens for `operator-digest`, nothing more).
 - `setup-pre-commit`, `git-guardrails-claude-code` — Husky/lint-staged and a PreToolUse git blocker. Soleur runs lefthook plus a purpose-built hooks fleet (`precommit-guard.sh`, `kb-domain-allowlist-guard.sh`, `pre-ask-technical-fork-gate.sh`, incident logging to `.rule-incidents.jsonl`). **Reject — already covered by the hooks listed above.**
 
-#### 3. Overlap Table
+### 3. Overlap Table
 
 Semantic mapping, not name mapping. These are **overlap, not gaps**.
 
@@ -113,9 +113,9 @@ Semantic mapping, not name mapping. These are **overlap, not gaps**.
 | `handoff` / `claude-handoff` | `compound` + session-state + `wg-end-of-work-emit-resume-prompt` | **ours** | Soleur's resume-prompt discipline and `session-state.md` are deeper, including the rule that a `### Decisions` entry is *intent, not accomplishment*. |
 | `grill-with-docs`, `grill-me`, `loop-me`, `improve-codebase-architecture` | `brainstorm`, `harvest-debt`, `resolve-debt`, `agent-native-audit` | **ours** | Dispatcher/wrapper skills over `grilling`. `improve-codebase-architecture`'s self-contained **HTML report opened in the browser** with before/after diagrams is a presentation idea worth noting for `agent-native-audit`, which currently emits markdown scores. |
 
-#### 4. Architectural Patterns + Recommendations
+### 4. Architectural Patterns + Recommendations
 
-##### Patterns worth examining
+#### Patterns worth examining
 
 *[Reconciled 2026-09-23 — cells below describe the tree on 2026-09-18; see §Reconciliation status for what shipped.]*
 
@@ -139,7 +139,7 @@ Semantic mapping, not name mapping. These are **overlap, not gaps**.
 | Docs page 4-section contract | Every promoted skill gets *What it does / When to reach for it / Common questions / **It's working if*** | `plugins/soleur/docs/` | **inspire only** — "It's working if" is the missing section |
 | Implementation vs review context pressure | Standards belong on the *review* agent, which has no exploration burden; the implementation agent is context-starved | ADR-151 injects the full ~37 kB corpus into **every** session | **inspire only — record as a challenge, do not act** (see Convergence risk) |
 
-##### Existing Soleur skills improved by a peer mechanic (half **b** — the higher-value half)
+#### Existing Soleur skills improved by a peer mechanic (half **b** — the higher-value half)
 
 Each row names **the exact file to edit** and **the exact mechanic to import**. Every row carries a founder outcome per the CPO gate.
 
@@ -160,7 +160,7 @@ Each row names **the exact file to edit** and **the exact mechanic to import**. 
 | B11 | `plugins/soleur/skills/triage/SKILL.md` + `plugins/soleur/agents/support/ticket-triage.md` | **Two intake pre-checks** (`skills/engineering/triage/SKILL.md` step 1): **redundancy** — search for an existing implementation *by domain concept, not by the request's wording, and report where you looked*; and **prior rejection** — read the rejected-request KB and surface anything resembling this request. Plus the **built ≠ rejected** distinction: an already-implemented `wontfix` must **not** be written to the rejection store, or it poisons dedup with false rejections | Confirmed absent: zero hits for `dedup`/`duplicate`/`reject`/`declin` in Soleur's triage surfaces. "Report where you looked" is the part that makes the check auditable rather than performative — the same discipline as Soleur's own `hr-no-dashboard-eyeball-pull-data-yourself`. Pairs with and depends on G2. | The founder stops paying twice for the same decision, and stops re-building something they already shipped. |
 | B12 | `plugins/soleur/commands/go.md` + `plugins/soleur/skills/help/SKILL.md` | **`ask-matt`'s flow map** (main flow / on-ramps / standalone / vocabulary-underneath) and **`PHASE-BOUNDARIES.md`'s ordered 5-option tree** — Continue → `/clear` → handoff → subagent → `/compact`, first *yes* wins, with "rule out **Continue** first because it costs nothing and loses nothing", `/compact` placed **last** as the default-but-not-first-reach, and the primary-vs-secondary-source table explaining why | `/go` is a deeper *dispatcher* (eval-gated intent table, harness adapters) but it does not tell the founder how 99 skills **relate**; `/help` lists components without explaining composition. Soleur has `cm-when-proposing-to-clear-context-or` and `cm-delegate-verbose-exploration-3-file` as two unrelated one-liners — the **ordered tree** is the missing shape, and it is exactly the kind of judgement the peer correctly flags as belonging to a human. At 99 skills vs their 38, Soleur's cognitive-load problem is 2.6× theirs. | The founder learns *when* to reach for each capability, which is the difference between owning 99 skills and owning the 6 they can remember. |
 
-##### Recommendations (ICP-expansion framing per CMO)
+#### Recommendations (ICP-expansion framing per CMO)
 
 Grouped by narrative, not announced as individual skill-adds. *[Reconciled 2026-09-23 — bullets below describe the tree on 2026-09-18; they were filed as five bundles plus a sixth (PR `#8647`); see §Reconciliation status.]*
 
@@ -170,7 +170,7 @@ Grouped by narrative, not announced as individual skill-adds. *[Reconciled 2026-
 - **"Write once, load less"** — bundles B5 + B6 + the user-invoked/model-invoked pattern. Soleur measures its always-loaded budget better than this peer does (`B_ALWAYS ≤ 46000` pre-commit, a 600-byte per-rule cap, `rules_unused_over_8w`), yet ADR-151 records only ~1,453 bytes of headroom to warn — "roughly four average-sized rules to the warn tier and nine to hard reject" — and its own addendum concedes that telemetry-driven retirement is structurally unavailable, leaving *migration* as the only live shrink lever. The peer supplies a **second** lever Soleur has not considered: the invocation axis. Marking genuinely human-only skills user-invoked (candidates: `flag-*`, `cron-*`, `provision-*`, `invoice`, `admin-ip-refresh`) returns their descriptions to the budget **entirely** rather than trimming them word by word. Pair with the negation rewrite, A/B'd through `eval-harness`. Founder outcome: the assistant stays sharp as the product grows, instead of degrading under its own instructions. Suggested landing PR: **"refactor(skills): invocation-axis budget relief + positive-phrasing rule rewrite (eval-gated)"**.
 - **"Work too big to hold in one head"** — B8 alone, lowest priority and smallest scope. Deliberately narrow: import fog-of-war into `product-roadmap` and native blocking edges into the `plan`/`roadmap`/`drain` triangle. Do **not** import `wayfinder` wholesale — it is the peer's own most cognitively demanding flow, aimed at a senior engineer charting a greenfield build, and Soleur's `plan`→`work`→`ship` pipeline with its anti-bypass rule is the better default for this ICP. Founder outcome: the founder sees the known-unknowns in their own roadmap. Suggested landing PR: **"feat(product-roadmap): Not-Yet-Specified section + native issue blocking"**.
 
-##### Attribution
+#### Attribution
 
 Any Soleur target file that takes prose from this repo MUST carry:
 
@@ -180,7 +180,7 @@ The authoritative per-file record of what took peer prose is the mattpocock/skil
 
 `pr/SKILL.md`'s Summary section is itself reproduced from Dex Horthy's `show-me` (see their `pr/CREDITS.md`); a Soleur port of the **Merge Danger** block takes only Pocock's own material, but any port of the diagram/diff-sketch guidance must credit **both**.
 
-#### Convergence risk
+### Convergence risk
 
 - **Low.** Different ICP by the author's own framing ("Skills for Real Engineers … not vibe coding"), different product shape (small composable primitives you fork and hack vs. an integrated opinionated CaaS), and structurally not a competitor: **zero business-domain agents**, no knowledge base, no compounding memory, no lifecycle product, no hosted offering. Nothing here contests Soleur's positioning; the entire value of this audit is methodology transfer, which is why §4 carries more weight than §2.
 - **Watch items** — signals that would raise the risk:
@@ -192,7 +192,7 @@ The authoritative per-file record of what took peer prose is the mattpocock/skil
 
 **Scope note.** Targeted single-repo peer-plugin audit. No full six-tier rescan and **no specialist cascade** was run (consistent with the Cofounder / Multica / Omnigent precedent for targeted additions); `last_reviewed` deliberately left at 2026-07-04 so this does not reset the full-scan clock. The audit itself filed nothing; five bundles were filed afterwards and all five closed by 2026-09-22, with B5 not applied, B9 in part and B12's first half only; a sixth, PR `#8647` (2026-09-24), shipped B4, B10 and B12's second half (see §Reconciliation status).
 
-#### Addendum 2026-10-24 — `software-factory` (open PR `#1316`)
+### Addendum 2026-10-24 — `software-factory` (open PR `#1316`)
 
 **Delta since audit.** Upstream `main` carries no new skills: still 38 `SKILL.md` (HEAD `5beb35b040e3`, 2026-10-19), so the §Reconciliation "0 commits ahead" note no longer holds on the clock but the skill inventory is identical. The only new material is **open, unmerged** PR `#1316` — a `software-factory` reference skill under `skills/in-progress/`, a bucket that ships in **neither** their plugin nor their top-level README, so nothing here reaches their installs yet even if it merges. Frontmatter carries `disable-model-invocation: true` — the invocation-axis pattern B6 already imported. Stars/forks re-snapshot per the watch item: **302,383 / 25,428** on 2026-10-24 (internal context only).
 

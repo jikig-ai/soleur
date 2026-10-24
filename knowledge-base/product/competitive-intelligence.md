@@ -209,7 +209,6 @@ business-validation.md is read as context and was **only** updated by this PR fo
 
 *Report generated 2026-06-08 (first full six-tier scan). Next scheduled scan: 2026-07-08 (monthly cadence).*
 
-
 ## Detail files
 
 Point-in-time records and per-competitor detail live under `knowledge-base/product/competitive-intelligence/` — this file is the living synthesis; shards are dated, append-only records (index links = the live set).

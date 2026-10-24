@@ -128,7 +128,7 @@ Write the audit body to knowledge-base/product/competitive-intelligence/audits/<
 (minimal shard frontmatter: title, target, last_updated, publishable) AND upsert
 a new or updated Overlap Matrix row in the appropriate existing tier of the
 index knowledge-base/product/competitive-intelligence.md with a
-→ [audit](competitive-intelligence/audits/<owner>-<repo>.md) link — usually
+`→ audit` link to the shard — usually
 Tier 3 (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library
 peers. If the audited repo does not fit any current tier, flag this in the
 report and request taxonomy guidance from the CI team — do not invent a new
@@ -204,7 +204,7 @@ When porting concrete SKILL.md text, the Soleur target file MUST include:
 
 ## Output routing
 
-- Write the audit body to `knowledge-base/product/competitive-intelligence/audits/<owner>-<repo>.md` (minimal shard frontmatter: `title`, `target`, `last_updated`, `publishable`), AND upsert **a new or updated Overlap Matrix entry** in the appropriate existing tier of the index `knowledge-base/product/competitive-intelligence.md` linking `→ [audit](competitive-intelligence/audits/<owner>-<repo>.md)`. Usually **Tier 3** (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library peers. Use Tier 0 only for platform-native peers (model/IDE-level).
+- Write the audit body to `knowledge-base/product/competitive-intelligence/audits/<owner>-<repo>.md` (minimal shard frontmatter: `title`, `target`, `last_updated`, `publishable`), AND upsert **a new or updated Overlap Matrix entry** in the appropriate existing tier of the index `knowledge-base/product/competitive-intelligence.md` with a `→ audit` link to the shard. Usually **Tier 3** (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library peers. Use Tier 0 only for platform-native peers (model/IDE-level).
 - If an entry for the same repo already exists in any tier, **update it in place** — do not duplicate.
 - If the audited repo does not fit any existing tier, **flag this in the report** and request taxonomy guidance from the CI team. Do not invent new tiers in this sub-mode — tier taxonomy is a CI-team decision, not a per-audit one.
 - Update only the index's `last_updated: <today>` — its `last_reviewed` is scanner-owned and must NOT be bumped by an audit write (ADR-094); the shard carries its own `last_updated`.
