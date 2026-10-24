@@ -64,6 +64,7 @@ undetected (learning
 | Backend creds must come from `soleur-infra-privileged/prd` `TF_STATE_AWS_*` | Holds — `doppler secrets -p soleur-infra-privileged -c prd --only-names` lists both names (measured 2026-10-24); `infra-credentials` action aliases them onto `AWS_*` for CI; runbook §Local Terraform invocation prescribes the export form | Canonical fix applied |
 | Workflows mirror the same recipe | Partially — apply workflows still contain `doppler secrets get AWS_* -p soleur -c prd_terraform` strings but only as the documented legacy-fallback arm inside `./.github/actions/infra-credentials` jobs, gated by AC7b limbs of `tests/scripts/test-infra-privileged-tier-census.sh` | No workflow edit needed; the gap is `.sh` writers outside that census's assembly |
 | Only two armed sites | Confirmed by sweep — `git grep`-style scan of every tracked `*.sh` combining an `AWS_*` reference with a state-writing terraform invocation returns exactly these two files | Sweep evidence in Research Insights; census limb makes the zero a maintained invariant |
+| Script header's negative AC: `grep -rl "bootstrap-live-verify\|seed-live-verify" .github/workflows/` → zero | **Stale** — `web-platform-release.yml:2207` runs `seed-live-verify-user.sh` under `doppler run -c prd` for principal refresh (no terraform apply; the wiring is deliberate). The property that matters — the terraform-apply half never in CI — still holds: `bootstrap-live-verify` has zero workflow hits | AC7 rescoped to `bootstrap-live-verify` only; Edit 2 also corrects the header's negative-AC comment at `:5-7` |
 
 ## Research Insights
 
@@ -207,7 +208,11 @@ inner loader would overwrite the outer Tier-B `TF_VAR_*` values with
 the header's step-1 description (`:11-12`) to name the Tier-B source and the
 nested loader; the "Mirrors apply-web-platform-infra.yml" sentence stays true
 (the workflow's loader aliases `TF_STATE_AWS_*` onto `AWS_*` in
-`infra-credentials/action.yml`).
+`infra-credentials/action.yml`). Also fix the header's negative-AC comment at
+`:5-7`: it claims zero `.github/workflows/` hits for
+`bootstrap-live-verify\|seed-live-verify`, but `seed-live-verify-user.sh` is
+legitimately wired into `web-platform-release.yml` — rescope the comment to
+`bootstrap-live-verify` (the terraform-apply half) only.
 
 **Edit 3 — `plugins/soleur/skills/plan/references/plan-sharp-edges.md:140`**:
 split the prescribed triplet into read vs write invocations — keep the
@@ -396,7 +401,7 @@ sees.
 - [ ] AC4 — `bash tests/scripts/test-infra-privileged-tier-census.sh` exits 0 and its output contains the new limb's `ok` row naming the `.sh` state-writer check.
 - [ ] AC5 — the limb's mutation battery rows all report their expected verdicts (RED rows driven red, control rows green) — asserted by the suite's own battery output.
 - [ ] AC6 — `grep -n 'apply' plugins/soleur/skills/plan/references/plan-sharp-edges.md` shows the line-140 entry's triplet split into read vs write invocations (the write arm names `TF_STATE_AWS_` + `soleur-infra-privileged`), and `grep -c 'secrets get AWS_ACCESS_KEY_ID'` on that file no longer counts the unqualified write recipe.
-- [ ] AC7 — `grep -rl 'bootstrap-live-verify\|seed-live-verify' .github/workflows/` returns zero (the script's own standing negative AC — the fix must not wire it into CI).
+- [ ] AC7 — `grep -rl 'bootstrap-live-verify' .github/workflows/` returns zero (the terraform-apply half is never wired into CI; `seed-live-verify-user.sh` is legitimately referenced by `web-platform-release.yml` for principal refresh — see Research Reconciliation — and the script header's negative-AC comment is rescoped accordingly).
 - [ ] AC8 — `bash -n apps/cla-evidence/infra/bootstrap.sh && bash -n apps/web-platform/scripts/bootstrap-live-verify.sh` both pass.
 - [ ] AC9 — full suite gate: the diff triggers the affected runner's selection of `tests/scripts/infra-privileged-tier-census` (the limb's host), verified by `bash scripts/test-all.sh --print-selection` listing it, or the full `scripts` group run green.
 
@@ -420,13 +425,13 @@ the owning domain and the whole scope.
   `prd_terraform` pair for `terraform plan` only, when the limb runs, then it
   stays green — the property is about state writes. (Row 6.)
 - **Scripts — post-fix shape (static):** ACs 1-3, 6-8 above.
-- **Live spot-check (manual, operator-run — not an AC):** the next real
-  invocation of either script performs `terraform apply` against
-  `soleur-terraform-state` without a `PutObject` 403. Not automated: it
-  requires the real R2 write credential and mutates prod state — deliberately
-  out of CI per the script's own negative-AC design. `doppler secrets
-  --only-names` evidence that the pair exists is already captured in Research
-  Insights.
+- **Live spot-check (not an AC — verification only):** after merge, the next
+  real invocation of either script is expected to complete `terraform apply`
+  against `soleur-terraform-state` with no `PutObject` 403. Deliberately not
+  automated: it requires the real R2 write credential and mutates prod state,
+  so it stays out of CI per the script's own negative-AC design. The
+  `doppler secrets --only-names` evidence that the pair exists is already
+  captured in Research Insights.
 - **Property that must never break (unit, pinned by the limb):** no tracked
   `.sh` may combine a state-writing terraform invocation with a
   `secrets get AWS_*` read resolved against `prd_terraform`.
@@ -471,3 +476,68 @@ the owning domain and the whole scope.
 - Sequencing note for `soleur:work`: scripts first, then the sharp-edges prose
   and the census limb; the limb's fixture mutants prove the new check before
   it gates the fixed tree.
+
+## Enhancement Summary
+
+`soleur:deepen-plan` ran 2026-10-24 in **sequential-fallback** mode — this
+harness has no Task/subagent spawn, so per-section research agents, the §5
+review-agent fan-out, and the §4.45 realism passes all ran inline and
+sequentially. `Reviewed-Coverage: sequential-fallback` — no independent review
+seat ran.
+
+**Gates verified mechanically at deepen time:**
+
+- Phase 4.6 User-Brand Impact — section present, all required lines populated,
+  `none` threshold carries the sensitive-path scope-out reason.
+- Phase 4.7 Observability — all five schema fields non-placeholder;
+  `discoverability_test.command` is `grep`-first-token (allowlisted), no
+  `ssh`, no shell metacharacters (`| ; & < > $`), under the 15 s cap;
+  `expected_output` carries literal paths; no `credentials_required` (avoids
+  the `BASELINE_DECLARED_PROBES` ratchet).
+- Phase 4.8 PAT halt — no PAT-shaped variable or token introduced.
+- Phase 4.9 UI wireframe — not triggered (no UI-surface file).
+- Phase 4.10 Encryption Posture — not triggered (no `.tf`, `.sql`,
+  `cloud-init`, or `docker-compose` in Files to Edit/Create).
+- Phase 4.11 Guard Contract — `lint-guard-contract.py` PASSES (1 guard entry,
+  7-row matrix); adequacy read: the Assembly is structural (filesystem walk +
+  invocation-token classification + population floor), not a member list.
+- Phase 4.12 Scope Check — exactly one unfenced `## Scope Check`; all asks
+  mapped; the two `inferred` items carry justifications; no BLOCKED marker.
+- `lint-infra-no-human-steps.py` — PASS (the live spot-check was reworded to
+  drop the actor+apply co-occurrence).
+- `markdownlint-cli2` — clean on the plan, `tasks.md`, and
+  `decision-challenges.md`.
+
+**Deepen-pass findings applied:**
+
+- **§4.45 verify-the-negative caught one contradiction:** the plan had
+  asserted the script's header negative-AC (`grep -rl
+  'bootstrap-live-verify\|seed-live-verify' .github/workflows/` → zero) as
+  still-true. It is not — `web-platform-release.yml:2207` legitimately invokes
+  `seed-live-verify-user.sh`. AC7 was rescoped to `bootstrap-live-verify` (the
+  terraform-apply half, still zero) and Edit 2 now includes correcting the
+  stale header comment at `bootstrap-live-verify.sh:5-7`.
+- **§4.4 precedent-diff:** the nested-loader shape is not novel — it is the
+  runbook's canonical local invocation and the `infra-credentials` action's
+  `--preserve-env` contract; both cited in Proposed Solution.
+- **§4.5 / §4.55:** not triggered (no SSH/network keywords; the apply targets
+  carry only a `local-exec` provisioner — verified by grep — and no
+  reboot/replace, locking-DDL, or deploy/router operation is in the diff).
+- **Post-edit self-audit:** the plan renames no symbols and drops no
+  infrastructure, so there are no dangling references to sweep.
+
+### Key Improvements
+
+- Census-limb placement makes the defect un-regressable rather than once-fixed
+  (AC4/AC5), closing the assembly gap in the AC7b property.
+- The `doppler_token_tf` analysis (provider at `main.tf:86-88` +
+  Tier-B-name-list measurement) is what justifies the nested-loader arm —
+  recorded in `decision-challenges.md` as a pending-assumed technical ruling.
+
+### New Considerations Discovered
+
+- `seed-live-verify-user.sh` is CI-wired by design (release pipeline principal
+  refresh); only the bootstrap half must never reach CI.
+- The stale recipe also lives in the shipped skill reference
+  `plan-sharp-edges.md:140` — folded in as Edit 3 so the defect cannot be
+  re-prescribed into future drift-remediation plans.
