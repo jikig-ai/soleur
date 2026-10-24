@@ -124,12 +124,16 @@ of report body. Wrap every #NNNN GitHub reference in backticks so CommonMark
 does not parse it as a heading.
 
 # Output destination
-Write the report as a new or updated Overlap Matrix entry in the appropriate
-existing tier of knowledge-base/product/competitive-intelligence.md — usually
+Write the audit body to knowledge-base/product/competitive-intelligence/audits/<owner>-<repo>.md
+(minimal shard frontmatter: title, target, last_updated, publishable) AND upsert
+a new or updated Overlap Matrix row in the appropriate existing tier of the
+index knowledge-base/product/competitive-intelligence.md with a
+→ [audit](competitive-intelligence/audits/<owner>-<repo>.md) link — usually
 Tier 3 (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library
 peers. If the audited repo does not fit any current tier, flag this in the
 report and request taxonomy guidance from the CI team — do not invent a new
-tier in this sub-mode. Do not create parallel files under research/.
+tier in this sub-mode. Exactly ONE audit file per repo: audits/<owner>-<repo>.md;
+never write research/ or a second shard copy.
 ```
 
 ### Output-size guard

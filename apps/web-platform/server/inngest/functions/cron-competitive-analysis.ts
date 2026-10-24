@@ -102,7 +102,7 @@ const SENTRY_MONITOR_SLUG = "scheduled-competitive-analysis";
 // 50-min wall-clock budget + 10-min slack for setup + teardown + retry.
 const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 
-// 50 min wall-clock budget. Math: 50min / 45turns = ~1.1 min/turn,
+// 50 min wall-clock budget. Math: 50min / 60turns = ~1.1 min/turn,
 // above the 0.75 min/turn floor. Exported for test parity
 // (cron-competitive-analysis.test.ts imports to avoid hard-coded timing
 // drift across SUT tuning).
@@ -116,7 +116,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // HISTORICAL GHA contract (scheduled-competitive-analysis.yml, removed by the
 // TR9 Inngest migration — this file is now authoritative, there is no mirror):
 //   --model claude-opus-5-5
-//   --max-turns 60
+//   --max-turns 45
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task
 const CLAUDE_CODE_FLAGS = [
   "--print",
