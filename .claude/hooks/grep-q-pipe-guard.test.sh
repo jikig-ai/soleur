@@ -2045,7 +2045,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=287   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples (294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub)
+PJ_TRIPLES=288   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples (286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub)
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2219,6 +2219,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-git-data-rung2-evidence-capture.sh | curl | exempt | text-only reach probe: suite ran green and no piped call reached the stub (2 non-test producers) (reach T1; t1:rc1/92s red3:rc0/38s; hits 0 (stdin-flag))'
   'tests/scripts/test-registry-d10-workflow-wiring.sh | doppler | exempt | text-only the suite runs only the restore step body, which calls doppler bare in a command substitution with no stdin; the text piped into doppler lives in other steps of the workflow file it names, and none of those steps runs (1 non-test producers)'
   'tests/scripts/test-sentry-alert-live-fidelity.sh | curl | drains | 2 | *'
+  'plugins/soleur/test/token-drift-workflow-causes.test.sh | curl | drains | 1 | *'
   'tests/scripts/test-supabase-advisor-scan.sh | curl | drains | 1 | --header @-'
   'tests/scripts/test-workspaces-luks-cutover-gate.sh | cryptsetup | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/5s; hits 0)'
   'tests/scripts/test-zot-log-channel-probe.sh | awk | drains | 2 | *'
