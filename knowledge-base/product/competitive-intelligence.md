@@ -368,7 +368,7 @@ Apache-2.0 → concrete SKILL.md prose may be ported with:
   - `humanlayer/fold` (their own agent runtime) reaching the skills/plugin layer — would make them a harness, not just a plane
   - enterprise "factory control plane" messaging colliding with any Soleur "agentic software factory" marketing claim — position on *autonomous org + enforced process*, never on "first" (Factory AI, Devin, Warp all claim the factory metaphor)
 
-**Scope note.** Targeted single-repo peer-plugin audit. No full six-tier rescan and no specialist cascade (consistent with Cofounder/Multica/Omnigent/Sutra precedent); `last_reviewed` deliberately left at 2026-07-04 so this does not reset the full-scan clock. Operator's three questions answered in-session 2026-10-24; disposition recommendations are listed in §4 — none filed as issues yet (operator decides which bundles to pursue).
+**Scope note.** Targeted single-repo peer-plugin audit. No full six-tier rescan and no specialist cascade (consistent with Cofounder/Multica/Omnigent/Sutra precedent); `last_reviewed` deliberately left at 2026-07-04 so this does not reset the full-scan clock. Operator's three questions answered in-session 2026-10-24; disposition recommendations are listed in §4 — filed 2026-10-24 as epic `#11018` with sub-issues `#11019`–`#11026` (Wave 1 mechanic ports, artifact comment queue design, remote-session brainstorm, positioning brief + battlecards, blank-repo packaging audit, scan-roster watch items).
 
 ---
 
