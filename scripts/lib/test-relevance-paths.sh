@@ -122,6 +122,7 @@ REGISTRY_BATTERY_PATHS=(
   "scripts/registry-restore-from-ghcr.sh"                   # SUT_ENGINE
   "tests/scripts/test-registry-pull-path-health.sh"         # SUITE_GATE (the oracle)
   "tests/scripts/test-registry-restore-from-ghcr.sh"        # SUITE_ENGINE (the oracle)
+  "tests/scripts/lib/restore-engine-header.sh"              # shared exit-code extractor, copied into the sandbox
   "scripts/zot-mirror-diagnosis.sh"                         # sourced companion; absence changes which arm runs
   "scripts/check-cloudflare-token-drift.sh"                 # copied, but seam-overridden on every run
   "apps/web-platform/infra/cloud-init.yml"                  # copied fixture

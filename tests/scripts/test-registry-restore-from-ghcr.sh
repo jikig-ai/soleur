@@ -6,7 +6,7 @@
 # copy. A false GREEN here authorises an irreversible destroy against a restore that does not
 # work. So the suite's contract is the same one the D10 gate's suite carries, in both directions:
 #
-#   1. prove the engine CAN fail, once per enumerated exit code (2/3/4/5/6); and
+#   1. prove the engine CAN fail, once per enumerated exit code (2/3/4/5/6/78); and
 #   2. prove it CAN succeed (the green row) — the criterion whose absence let an unpassable gate
 #      ship with 23 green assertions in the sibling suite.
 #
