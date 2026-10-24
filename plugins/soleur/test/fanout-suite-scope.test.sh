@@ -751,6 +751,11 @@ if ! build_sandbox "$SANDBOX_AFF"; then
 else
   cp "$REPO_ROOT/scripts/lib/test-affected-paths.sh" "$TMP/aff/lib/" \
     || { CASES=$((CASES + 1)); fail "could not copy test-affected-paths.sh into the aff sandbox"; }
+  # The glob classifier lib is a second runtime dependency of the selector as
+  # of #10198 — absent, the affected walk degrades to index-missing (full) and
+  # the exemption arms measure a degraded-full refusal, not the exemption.
+  cp "$REPO_ROOT/scripts/lib/affected-glob.sh" "$TMP/aff/lib/" \
+    || { CASES=$((CASES + 1)); fail "could not copy affected-glob.sh into the aff sandbox"; }
 
   # The runner-changed self-edge is legitimately LIVE on any branch editing
   # test-all.sh or the index — including this suite's own. Leaving it armed
