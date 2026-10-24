@@ -3646,12 +3646,12 @@ findmnt -no SOURCE -T /mnt/git-data/hooks/pre-receive" ] \
     { [ "$(_rv rvm2_rc)" = 0 ] && _sto rvm2 store-verified ok; } \
       && pass "RVM2: the canonical host right after RVM clears — the trap restored the marker" || fail "RVM2: the canonical host did not clear after RVM" "rc=$(_rv rvm2_rc) $(_rctx rvm2)"
   elif grep -qx FIXTURE_PIN_FAILED "$T/rt/stdout"; then
-    fail "runtime arm: the fixture host-key pins could not be written by write-known-hosts.sh" "$(tail -5 "$T/rt/stdout" | tr '\n' ' ' | sed 's/::/: :/g')"
+    fail "runtime arm: the fixture host-key pins could not be written by write-known-hosts.sh" "$(gd_apt_out_tail "$T/rt/stdout" 5 | tr '\n' ' ' | sed 's/::/: :/g')"
     SKIPPED=$((SKIPPED + RUNTIME_ROWS - 1))
   elif grep -qx FIXTURE_APT_FAILED "$T/rt/stdout" || [ "$DRC" = 125 ]; then
-    _runtime_skip "container did not reach the fixture (docker rc=$DRC): $(tail -2 "$T/rt/stdout" | tr '\n' ' ')"
+    _runtime_skip "container did not reach the fixture (docker rc=$DRC): $(gd_apt_out_tail "$T/rt/stdout" 2 | tr '\n' ' ')"
   else
-    fail "runtime arm: the driver did not complete (docker rc=$DRC)" "$(tail -5 "$T/rt/stdout" | tr '\n' ' ' | sed 's/::/: :/g')"
+    fail "runtime arm: the driver did not complete (docker rc=$DRC)" "$(gd_apt_out_tail "$T/rt/stdout" 5 | tr '\n' ' ' | sed 's/::/: :/g')"
     SKIPPED=$((SKIPPED + RUNTIME_ROWS - 1))
   fi
 fi

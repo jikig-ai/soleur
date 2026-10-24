@@ -1520,13 +1520,13 @@ tierb() {
       docker rm -f "$ctr-build" >/dev/null 2>&1
       if [ "$(tb_build_verdict "$rc" "$W/tierb-apt.log")" = skip ]; then
         if [ "$rc" -eq 125 ]; then
-          tb_skip "ADR-188 arm_skip: docker could not create the image-build container (rc=125: $(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 200))"
+          tb_skip "ADR-188 arm_skip: docker could not create the image-build container (rc=125: $(gd_apt_out_tail "$W/tierb-apt.log" 2 | tr '\n' ' ' | head -c 200))"
         else
           tb_skip "ADR-188 arm_skip: the ubuntu apt archive did not serve systemd/jq ($(grep -a FIXTURE_APT_CAUSE "$W/tierb-apt.log" | tail -1 | head -c 200))"
         fi
         return
       fi
-      echo "  FAIL: Tier B: image build failed rc=$rc, not the apt decline ($(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 300))"
+      echo "  FAIL: Tier B: image build failed rc=$rc, not the apt decline ($(gd_apt_out_tail "$W/tierb-apt.log" 2 | tr '\n' ' ' | head -c 300))"
       TB_FAIL=$((TB_FAIL + 1)); TIERB_RESULT="FAIL: image build rc=$rc"; return
     fi
     docker commit "$ctr-build" "$img_tag" >/dev/null && docker rm "$ctr-build" >/dev/null
