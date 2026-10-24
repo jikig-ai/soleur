@@ -2040,7 +2040,7 @@ _roster_bad=$(grep -vE '^fl\.' <<<"$_roster_names" || true)
 # ...and fl. needs ≥1 NON-selftest producer: captured exercises (the
 # *.selftest-* rows above emit only into files) satisfy the first check while
 # producing nothing the monitor can ever see.
-{ grep -E '^fl\.' <<<"$_roster_names" | grep -vF 'selftest' | grep -q .; } \
+{ grep -qE '^fl\.' < <(grep -vF 'selftest' <<<"$_roster_names"); } \
   || fail 'roster:fl-needs-live-producer' \
        "probe-registered prefix fl. is satisfied only by captured selftest producers — a real corrupt_skip row must carry it"
 

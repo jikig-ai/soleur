@@ -3037,7 +3037,7 @@ _roster_bad=$(grep -vE '^(g1b\.|g2b\.)' <<<"$_roster_names" || true)
 # first check while producing nothing the monitor can ever see — parity held
 # green by captured-only names is the empty-coverage hole.
 for _rpfx in 'g1b\.' 'g2b\.'; do
-  { grep -E "^${_rpfx}" <<<"$_roster_names" | grep -vF 'selftest' | grep -q .; } \
+  { grep -qE "^${_rpfx}" < <(grep -vF 'selftest' <<<"$_roster_names"); } \
     || fail "roster:${_rpfx%.}-needs-live-producer" \
          "probe-registered prefix ${_rpfx%.} is satisfied only by captured selftest producers — a real corrupt_skip row must carry it"
 done
