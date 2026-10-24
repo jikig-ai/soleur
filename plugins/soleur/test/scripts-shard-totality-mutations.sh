@@ -996,8 +996,8 @@ export DECLARED_TOTAL=2' \
 # resolve 20, so the guard must stay GREEN end-to-end. A RED-only matrix
 # cannot see over-tightness; this is the tolerance proof.
 in_range && row "DECL-PREFIX-READER" "$REPO_ROOT/scripts/lint-orphan-test-suites.test.sh" \
-  'DECLARED_TOTAL=27   # the gated mutation rows M1..M27; C0/R1/R1b are unconditional' \
-  'export DECLARED_TOTAL=27   # the gated mutation rows M1..M27; C0/R1/R1b are unconditional' \
+  'DECLARED_TOTAL=30   # the gated mutation rows M1..M30; C0/R1/R1b are unconditional' \
+  'export DECLARED_TOTAL=30   # the gated mutation rows M1..M30; C0/R1/R1b are unconditional' \
   GREEN "an export-prefixed DECLARED_TOTAL resolves identically on the registered battery"
 
 # --- RANGE ACCOUNTING + ASSERTION FLOOR ----------------------------------------------------------
