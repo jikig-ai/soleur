@@ -433,13 +433,28 @@ AFFECTED_CLAUDE_HOOKS_HOOK_INPUT_CONTRACT_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # .claude/hooks/hook-suite-dep-unresolved.test.sh (#8616) — runs every guarded hook suite
-# with one tool off PATH; its population is derived from the `.claude/hooks/` roots of
-# test-all.sh's SUITE_GLOBS, so any hook-directory change (a suite, a guard, a hook it
-# exercises) is its subject. A directory entry is a prefix edge under the substring match.
+# with one tool off PATH; its pair population is derived from the `.claude/hooks/` roots of
+# test-all.sh's SUITE_GLOBS plus its own EXTRA_PAIRED_SUITES list, and its static sweep greps
+# every non-hook runner glob plus scripts/*.test.sh, scripts/followthroughs/*.test.sh,
+# tests/scripts/*.sh and the discoverability probes for SKIP+exit 0 (#8773 widened it).
+# A directory entry is a prefix edge under the substring match.
 AFFECTED_CLAUDE_HOOKS_HOOK_SUITE_DEP_UNRESOLVED_TEST_SH_PATHS=(
   ".claude/hooks/"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
+  "glob:plugins/soleur/test/*.test.sh"
+  "glob:plugins/soleur/skills/*/test/*.test.sh"
+  "glob:plugins/soleur/scripts/*.test.sh"
+  "glob:apps/cla-evidence/scripts/*.test.sh"
+  "glob:apps/web-platform/scripts/*.test.sh"
+  "glob:apps/web-platform/scripts/lib/*.test.sh"
+  "glob:scripts/lib/*.test.sh"
+  "glob:scripts/*.test.sh"
+  "glob:scripts/followthroughs/*.test.sh"
+  "glob:tests/scripts/*.sh"
+  "scripts/context-reviewed-gate-discoverability.sh"
+  "scripts/hook-input-fault-discoverability-probe.sh"
+  "scripts/resend-alert-path-discoverability.sh"
 )
 AFFECTED_CLAUDE_HOOKS_PKILL_SELF_MATCH_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/pkill-self-match-guard.sh"
