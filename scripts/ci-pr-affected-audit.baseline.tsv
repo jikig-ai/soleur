@@ -1,4 +1,3 @@
-oracle-inputs-changed: scripts/lib/test-affected-paths.sh scripts/ci-pr-affected-audit.baseline.tsv
 .claude/hooks/bare-head-self-heal.test.sh	AGENTS.md
 .claude/hooks/bare-head-self-heal.test.sh	AGENTS.rules.md
 .claude/hooks/brand-hex-commit-gate.test.sh	.claude/hooks/lib/incidents.sh
@@ -1879,4 +1878,3 @@ tests/scripts/zot-inventory-assert-marker	scripts/zot-inventory.sh
 tests/scripts/zot-log-channel-probe	apps/web-platform/infra/cloud-init-registry.yml
 tests/scripts/zot-log-channel-probe	scripts/betterstack-query.sh
 tests/scripts/zot-log-channel-probe	scripts/lib/trusted-verdict.sh
-SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=1885 baseline=1880
