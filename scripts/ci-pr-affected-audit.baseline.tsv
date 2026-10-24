@@ -349,7 +349,6 @@ plugins/soleur	apps/web-platform/infra/inngest-cutover-flip.sh
 plugins/soleur	apps/web-platform/infra/inngest-doublefire-probe.sh
 plugins/soleur	apps/web-platform/infra/inngest-enumerate-reminders.sh
 plugins/soleur	apps/web-platform/infra/inngest-inventory.sh
-plugins/soleur	apps/web-platform/infra/inngest-luks-cutover.sh
 plugins/soleur	apps/web-platform/infra/inngest-rearm-reminders.sh
 plugins/soleur	apps/web-platform/infra/inngest-redis-bootstrap.sh
 plugins/soleur	apps/web-platform/infra/inngest-redis-luks.tf

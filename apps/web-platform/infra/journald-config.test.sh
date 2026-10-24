@@ -356,18 +356,11 @@ assert "emitter side: the cloud-init LUKS stage logs under the same tag" \
 assert "vector side: Source 4 allowlists \"inngest-luks-stage\"" \
   "grep -qE '^[[:space:]]*\"inngest-luks-stage\",\$' <<<\"\$HSJ\""
 
-# --- #6894: the LUKS cutover unit's tag — DERIVED from the unit, then required on both sides -----
-# Equality against the unit's OWN value rather than a literal repeated here: renaming the tag in one
-# file and not the other is the silent-drop this block exists to catch, and a literal in the test
-# would have to be renamed too — i.e. it would be a third copy, not a check.
-CUTOVER_UNIT="$SCRIPT_DIR/inngest-luks-cutover.service"
-CUTOVER_TAG="$(sed -n 's/^SyslogIdentifier=\([A-Za-z0-9._-]*\)$/\1/p' "$CUTOVER_UNIT" 2>/dev/null | sed -n '1p')"
-assert "unit side: inngest-luks-cutover.service declares exactly one SyslogIdentifier (read: '$CUTOVER_TAG')" \
-  "[[ -n \"\$CUTOVER_TAG\" && \$(grep -c '^SyslogIdentifier=' '$CUTOVER_UNIT') -eq 1 ]]"
-assert "vector side: Source 4 allowlists the cutover unit's own SyslogIdentifier" \
-  "[[ -n \"\$CUTOVER_TAG\" ]] && grep -qxF \"  \\\"\$CUTOVER_TAG\\\",\" <<<\"\$HSJ\""
-assert "emitter side: inngest-luks-cutover.sh logs under the unit's tag (LOG_TAG)" \
-  "[[ -n \"\$CUTOVER_TAG\" ]] && grep -qxF \"readonly LOG_TAG=\\\"\$CUTOVER_TAG\\\"\" '$SCRIPT_DIR/inngest-luks-cutover.sh'"
+# --- #6894 (RETIRED, #10112): the LUKS cutover unit's tag --------------------------------------
+# The cutover unit and script are deleted, so their three lockstep rows (unit declares one tag, Source 4
+# allowlists it, the script logs under it) went with them. Source 4 still names "inngest-luks-cutover" in
+# vector.toml: the stale entry is a harmless no-op that keeps the historical rows readable, and removing it
+# is a tracked follow-up (CTO D13), not part of the carrier retirement.
 
 # CF-4 (#7228): INVERTED from a negative pair to a POSITIVE one, in the direction the EMITTER
 # dictates. It used to assert that "inngest-boot-phone-home" was ABSENT from the allowlist, on
@@ -814,7 +807,8 @@ echo ""
 # Ratcheted 101 -> 110 by #6551 (the 9963m/9963m-bis exclude-direction pins);
 # -> 113 here (the #7596 CF-4e..g restage lockstep adds 3 rows over 110).
 # -> 116 (#10455 b: WBS-1..3, the runtime Bash synthetic's identifier on both sides of the join and in all three arrays).
-MIN_TOTAL=116
+# -> 113 (#10112: the three LUKS cutover unit-tag rows went with the retired trio; measured 113/113).
+MIN_TOTAL=113
 if (( TOTAL < MIN_TOTAL )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_TOTAL" >&2
   exit 1

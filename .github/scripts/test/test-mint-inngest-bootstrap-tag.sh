@@ -224,7 +224,7 @@ swap_sed=s#cp apps/web-platform/infra/carrier-13.sh "\$BUILD_DIR/carrier-13.sh"#
 added_cp=          cp apps/web-platform/infra/carrier-14.sh "$BUILD_DIR/carrier-14.sh"
 sel_anchor=BASE=$(git -C "$REPO_DIR" tag
 sel_renamed=BASE_SEL=$(git -C "$REPO_DIR" tag
-luks_cp=          cp apps/web-platform/infra/inngest-luks-cutover.timer
+last_cp=          cp apps/web-platform/infra/inngest-cutover-flip.timer
 FXTEXT
 )
 fxt() { # fxt <key> — the literal stored under <key> in FX_TEXT
@@ -1454,7 +1454,7 @@ fi
 g3_mut g3.m1-sort 'mint' '  | sort -V | tail -1 || true)' '  | sort | tail -1 || true)'
 g3_mut g3.m2-guarda-regex 'ga' "cp apps/web-platform/infra/[A-Za-z0-9._-]+ '" "cp apps/web-platform/infra/[A-Za-z0-9._]+ '"
 g3_mut g3.m3-no-selector 'mint' "$(fxt sel_anchor)" "$(fxt sel_renamed)"
-g3_mut g3.m4-uncovered-cp 'bwf' "$(fxt luks_cp)" "$(fxt outside_cp)"$'\n'"$(fxt luks_cp)"
+g3_mut g3.m4-uncovered-cp 'bwf' "$(fxt last_cp)" "$(fxt outside_cp)"$'\n'"$(fxt last_cp)"
 g3_mut g3.m5-tag-token-from-app 'mwf' 'MINT_TAG_TOKEN: ${{ github.token }}' 'MINT_TAG_TOKEN: ${{ steps.app.outputs.token }}'
 g3_mut g3.m6-pat 'mwf' 'MINT_TAG_TOKEN: ${{ github.token }}' 'MINT_TAG_TOKEN: ${{ secrets.RELEASE_PAT }}'
 g3_mut g3.m7a-tag-step-sees-dispatch 'mwf' 'MINT_TAG_TOKEN: ${{ github.token }}' $'MINT_TAG_TOKEN: ${{ github.token }}\n          MINT_DISPATCH_TOKEN: ${{ steps.app.outputs.token }}'

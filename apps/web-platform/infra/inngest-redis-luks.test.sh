@@ -679,26 +679,31 @@ done < <(cd "$_REPO" && git grep -nF 'INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web
 if [ "$_g4_total" -ge 5 ]; then ok "G4.a found ${_g4_total} pointer sites in delivered artifacts (floor 5)"; else no "G4.a found only ${_g4_total} pointer sites — the walk is not reaching the tree"; fi
 if [ -z "$_g4_bad" ]; then ok "G4.b every pointer site in a delivered artifact is classified (no reader the guard has never seen)"; else no "G4.b unclassified pointer sites:${_g4_bad} — classify each, or it is a reader nothing grades"; fi
 if [ "$_g4_reads_stage" -eq 1 ] && [ "$_g4_reads_reopen" -eq 1 ]; then ok "G4.c the pointer is read by BOTH device readers exactly once (first-boot resolver and boot-reopen)"; else no "G4.c pointer reads: first-boot=${_g4_reads_stage} reopen=${_g4_reads_reopen} — each reader must apply it exactly once (mutation row 4)"; fi
-# G4.g THE POINTER HAS EXACTLY ONE WRITER, and it is the on-host FSM. Two writers on a value that
+# G4.g THE POINTER HAS NO WRITER since #10112 (it had exactly one, the on-host FSM; the history below stays). Two writers on a value that
 # decides which device holds the store is the shape where a race decides where user data lives — and
 # the dispatch deliberately does not write it, so its only pointer contact is a READ.
-if [ "$_g4_write_set" -eq 1 ] && [ "$_g4_write_clear" -eq 1 ]; then ok "G4.g1 the pointer has exactly one set site and one clear site, both in the on-host FSM"; else no "G4.g1 pointer writers: set=${_g4_write_set} clear=${_g4_write_clear} — expected exactly one of each"; fi
+# RETIRED WRITER (#10112): the on-host FSM was the pointer's only writer and was deleted with the cutover trio,
+# so the population now holds ZERO writers. The property tightens from "exactly one" to "none": a writer that
+# reappears in any delivered artifact (a second FSM, a new script) lands in a role below and REDS here.
+if [ "$_g4_write_set" -eq 0 ] && [ "$_g4_write_clear" -eq 0 ]; then ok "G4.g1 the pointer has no writer in any delivered artifact (the on-host FSM that set and cleared it is retired, #10112)"; else no "G4.g1 pointer writers: set=${_g4_write_set} clear=${_g4_write_clear} — expected none since the FSM was retired"; fi
 _g4_disp_write="$(cd "$_REPO" && git grep -nE 'secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' -- scripts .github/workflows 2>/dev/null || true)"
 if [ -z "$_g4_disp_write" ]; then ok "G4.g2 no dispatch-side writer: the operator verbs read the pointer and never set it"; else no "G4.g2 a dispatch-side pointer WRITE exists (${_g4_disp_write}) — two writers decide where the store lives"; fi
-# G4.g3 the FSM's own writes go through the pointer_cmd seam, never a bare doppler call in a phase.
-# Scoped by the FUNCTION BODY, never by a line range (cq-cite-content-anchor-not-line-number): a
-# range pins where the seam sits today, which is the one thing a refactor is allowed to change.
-_g4_seam="$(awk '/^pointer_cmd\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$_REPO/apps/web-platform/infra/inngest-luks-cutover.sh")"
-_g4_outside="$(awk '/^pointer_cmd\(\) \{/{f=1} f&&/^\}$/{f=0;next} !f' "$_REPO/apps/web-platform/infra/inngest-luks-cutover.sh" | grep -nE '^[^#]*doppler secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' || true)"
-_g4_inside="$(printf '%s\n' "$_g4_seam" | grep -cE '^[^#]*doppler secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' || true)"
-_g4_bare="$_g4_outside"
-if [ -z "$_g4_bare" ] && [ "$_g4_inside" -eq 2 ]; then ok "G4.g3 both FSM pointer writes are inside the pointer_cmd seam, and no phase body writes it directly"; else no "G4.g3 seam writes=${_g4_inside} (expected 2); writes outside the seam: ${_g4_bare:-none}"; fi
+# G4.g3 (was: the FSM's writes go through the pointer_cmd seam) — with no writer left there is no seam to scope.
+# The census over every non-test file under apps/web-platform/infra, scripts and .github/workflows is the
+# whole property: a direct `doppler secrets set|delete` of the pointer anywhere is a writer.
+_g4_any_write="$(cd "$_REPO" && git grep -nE '^[^#]*doppler secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github/workflows ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null || true)"
+if [ -z "$_g4_any_write" ]; then ok "G4.g3 no delivered artifact writes the pointer with a direct doppler set or delete"; else no "G4.g3 a direct pointer write exists: ${_g4_any_write}"; fi
 # G4.h the pointer is INJECTED into the unit, and the FSM reads the injected value rather than
 # shelling out — a read that needed its own credential would be a second failure mode mid-swap.
-if [ "$_g4_unit_inject" -ge 1 ] && [ "$_g4_fsm_read" -eq 1 ]; then ok "G4.h the unit injects the pointer and the FSM reads it exactly once, from the environment"; else no "G4.h unit injection=${_g4_unit_inject} FSM reads=${_g4_fsm_read} — the FSM must read the injected value once"; fi
+# RETIRED (#10112): the injecting unit and the FSM that read the injected value are deleted. The reader roles that
+# remain are the two device readers (G4.c) and the dispatch's name-list gate (G4.i); an injection or an FSM read
+# that reappears is a new reader of the pointer and must be classified and graded here, not allowlisted.
+if [ "$_g4_unit_inject" -eq 0 ] && [ "$_g4_fsm_read" -eq 0 ]; then ok "G4.h no unit injects the pointer and no FSM reads it from the environment (the cutover unit is retired, #10112)"; else no "G4.h unit injection=${_g4_unit_inject} FSM reads=${_g4_fsm_read} — a pointer reader reappeared; grade it before it ships"; fi
 # The stager COUNTS rather than merely checking presence: systemd's EnvironmentFile is last-wins, so
 # a second pointer line would silently decide which volume the boot-reopen unit opens.
-if [ "$_g4_stager_count" -eq 1 ]; then ok "G4.j the envfile stager asserts pointer CARDINALITY, not presence (EnvironmentFile is last-wins)"; else no "G4.j the envfile stager no longer counts its pointer lines (sites=${_g4_stager_count})"; fi
+# RETIRED (#10112): the cutover FSM's envfile stager (the only site that rewrote the pointer line) is deleted. No
+# delivered artifact stages the pointer line any more; one that reappears must assert CARDINALITY (last-wins).
+if [ "$_g4_stager_count" -eq 0 ]; then ok "G4.j no delivered artifact rewrites the pointer envfile line (the FSM stager is retired, #10112)"; else no "G4.j a pointer envfile stager reappeared (sites=${_g4_stager_count}) — it must assert CARDINALITY, not presence"; fi
 if [ "$_g4_dispatch_read" -eq 1 ]; then ok "G4.i the dispatch's pointer gate reads presence from the NAME LIST (an absent name and a dead token are not the same answer)"; else no "G4.i dispatch pointer reads=${_g4_dispatch_read} — expected exactly one, via the name list"; fi
 
 # G4.d the pointer arm REFUSES; it never formats and never falls back to the other volume.

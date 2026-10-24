@@ -435,11 +435,15 @@ fsm_tag() { # <fsm script> -> its readonly LOG_TAG value
   sed -nE 's/^[[:space:]]*readonly[[:space:]]+LOG_TAG="([^"]+)".*/\1/p' "$1" | head -1
 }
 FLIP_TAG="$(fsm_tag "$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh")"
-LUKS_TAG="$(fsm_tag "$REPO_ROOT/apps/web-platform/infra/inngest-luks-cutover.sh")"
-if [[ "$FLIP_TAG" == "inngest-cutover-flip" && "$LUKS_TAG" == "inngest-luks-cutover" ]]; then
-  pass "FSM LOG_TAGs read: $FLIP_TAG / $LUKS_TAG"
+# The LUKS cutover emitter (inngest-luks-cutover.sh) was retired with the cutover trio (#10112), so its LOG_TAG can no
+# longer be DERIVED from the script. The tag stays a literal here on purpose: the dispatcher's inert op=luks-cutover
+# arm (scripts/cutover-inngest.sh) and the followthrough still count rows under it, and the caller census below must
+# keep accepting exactly that literal until the dispatcher arm is retired (tracked follow-up).
+LUKS_TAG="inngest-luks-cutover"
+if [[ "$FLIP_TAG" == "inngest-cutover-flip" ]]; then
+  pass "FSM LOG_TAGs read: flip=$FLIP_TAG (derived from the script), luks=$LUKS_TAG (literal; emitter retired, #10112)"
 else
-  fail "FSM LOG_TAGs drifted: flip='$FLIP_TAG' luks='$LUKS_TAG'"
+  fail "FSM LOG_TAGs drifted: flip='$FLIP_TAG' (luks literal '$LUKS_TAG')"
 fi
 
 CALLS="$(cd "$REPO_ROOT" && git grep -n '_generation_scoped_count' -- ':!*.test.sh' ':!knowledge-base' ':!*.md' \

@@ -7561,14 +7561,7 @@ declare -A QI_PIN_B=(
   [apps/web-platform/infra/inngest-cutover-flip.sh]=1
   [apps/web-platform/infra/inngest-redis-bootstrap.sh]=1
   [apps/web-platform/infra/workspaces-cutover.sh]=2
-  # #6894 inngest-luks-cutover.sh — ONE variable-unit start, in resume_writers. Its gate is
-  # stronger than a quiesce-state predicate: the freeze RECORDS which units were active before it
-  # stopped them (into the FSM's own state dir, because the run that resumes may be a later tick or
-  # a later boot) and the resume starts exactly that set. With no record — a reboot mid-cutover —
-  # it falls back to the ENABLED set, so a unit an operator disabled is still never started.
-  # Behavioural rows: inngest-luks-cutover.test.sh "a unit that was NOT running before the freeze
-  # is not started by it" and "with no record … a disabled unit is still not started".
-  [apps/web-platform/infra/inngest-luks-cutover.sh]=1
+  # (#6894 inngest-luks-cutover.sh's single variable-unit resume was pinned here until the script was retired, #10112.)
   [apps/web-platform/infra/git-data-luks-reopen.sh]=1
   # #8562 cloud-init-inngest.yml — ONE variable-unit start, in soleur-inngest-provision's on_exit.
   # It restores the cutover-FSM timers the provision attempt paused. `_fsm_timers_stopped` is
@@ -7623,11 +7616,12 @@ TOTAL=$((TOTAL + 1))
 # 16 -> 17 at #8210: git-data-luks-reopen.sh's mount-unit start (see QI_PIN_B).
 # 17 -> 18 at #8562: cloud-init-inngest.yml's FSM-timer restore (see QI_PIN_B).
 # 18 -> 19 at #9123: workspaces-luks-reopen.sh's mount-unit start (see QI_PIN_B).
-if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 19 ]]; then
+# 19 -> 18 at #10112: inngest-luks-cutover.sh (the 15 -> 16 line above) is retired with the cutover trio.
+if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 18 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 10 files) (Guard 2 #6c)"
+  echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 9 files) (Guard 2 #6c)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 19):${QI_BAD:- <per-file counts match but the total does not>}"
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 18):${QI_BAD:- <per-file counts match but the total does not>}"
 fi
 # Positive control: the inventory regex still MATCHES the flag-bearing forms it claims to cover
 # (a regex that silently matched nothing would pin an empty inventory as green).
