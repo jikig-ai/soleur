@@ -116,7 +116,7 @@ If `$ARGUMENTS` contains `--name`, `--skill`, `--cron`, and `--model` flags, ext
 - `--design-dedupe <text>` — the mechanism preventing semantic double-work. MUST name something beyond `concurrency: group:` (e.g. an idempotency precheck, a marker dedupe, an immutable ticket key) — `concurrency:` only serializes overlapping RUNS, it does not stop the same work being done twice.
 - `--design-source-dedupe <text>` — how the ticket source dedupes the task, or the literal `not a ticket source`.
 
-In a non-interactive context (flags supplied, no operator answering Step 1), a **missing design answer is a hard error** — emit `ERROR: missing task-design answer for <question> (pass --design-<flag> or run interactively)` and stop. This mirrors `--once`'s no-fallback posture: a task must never be created with unwritten design answers. The requirement applies to **newly created** tasks only — existing `.github/workflows/scheduled-*.yml` files are not retroactively gated.
+In a non-interactive context (flags supplied, no operator answering Step 1), a **missing, placeholder (`TODO`/`TBD`/`N/A`), or concurrency-only `dedupe` design answer is a hard error** — emit `ERROR: missing or invalid task-design answer for <question> (pass --design-<flag> or run interactively)` and stop. This mirrors `--once`'s no-fallback posture: a task must never be created with unwritten design answers. The requirement applies to **newly created** tasks only — existing `.github/workflows/scheduled-*.yml` files are not retroactively gated.
 
 **Step 0c: Check arguments (one-time mode)**
 

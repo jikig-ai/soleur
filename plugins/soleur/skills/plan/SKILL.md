@@ -711,7 +711,7 @@ This is the affected-surface extension of `hr-observability-as-plan-quality-gate
 
 #### 2.9.3. Task-Design Gate
 
-[skill-enforced: plan §2.9.3 + deepen-plan §4.13] NEW autonomous-task surfaces (`## Files to Create`) emit `## Task Design`: [references/task-design-gate.md](./references/task-design-gate.md).
+[skill-enforced: plan §2.9.3 + deepen-plan §4.13] A `## Files to Create` entry adding a `scheduled-*.yml` or any new non-`_`-prefixed Inngest function — or a `## Files to Edit` entry adding a `CHECK_REGISTRY` key — emits `## Task Design`: [references/task-design-gate.md](./references/task-design-gate.md).
 
 ### 2.10. Architecture Decision (ADR / C4) Gate
 

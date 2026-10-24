@@ -114,4 +114,57 @@ assert_contains "$SKILL_CONTENT" 'newly created' \
   "skill text scopes the task-design requirement to newly created tasks"
 echo ""
 
+# --- TD5: plan-side schema parity — all 4 schema copies carry the six keys ---
+echo "TD5: plan-side '## Task Design' schema parity (gate reference + 3 template copies)"
+
+GATE_FILE="$REPO_ROOT/plugins/soleur/skills/plan/references/task-design-gate.md"
+TEMPLATES_FILE="$REPO_ROOT/plugins/soleur/skills/plan/references/plan-issue-templates.md"
+
+assert_file_exists "$GATE_FILE" "canonical gate contract exists"
+GATE_CONTENT="$(cat "$GATE_FILE")"
+assert_contains "$GATE_CONTENT" 'CANONICAL' \
+  "task-design-gate.md declares itself the canonical copy"
+assert_contains "$GATE_CONTENT" 'non-`_`-prefixed' \
+  "detection covers any new non-underscore-prefixed Inngest function file"
+assert_contains "$GATE_CONTENT" 'CHECK_REGISTRY' \
+  "detection covers a new registered check via Files-to-Edit"
+assert_contains "$GATE_CONTENT" 'UNFENCED' \
+  "reject notes fence-blindness (a fenced quote is not the section)"
+for key in "${SIX_KEYS[@]}"; do
+  assert_contains "$GATE_CONTENT" "    ${key}:" \
+    "gate canonical schema carries key '${key}:'"
+done
+
+# Exactly 3 `## Task Design` blocks in the templates file, each a verbatim copy.
+TD_COUNT="$(grep -c '^## Task Design' "$TEMPLATES_FILE" || true)"
+assert_eq "$TD_COUNT" "3" "plan-issue-templates.md carries exactly 3 '## Task Design' blocks"
+TEMPLATES_CONTENT="$(cat "$TEMPLATES_FILE")"
+assert_contains "$TEMPLATES_CONTENT" 'task-design-gate.md' \
+  "template blocks point at the canonical contract"
+for key in "${SIX_KEYS[@]}"; do
+  assert_contains "$TEMPLATES_CONTENT" "    ${key}:" \
+    "template schema copies carry key '${key}:'"
+done
+assert_contains "$TEMPLATES_CONTENT" 'one `- task:` list item per created task' \
+  "schema documents the one-item-per-created-task shape"
+echo ""
+
+# --- TD6: plan/deepen-plan/workflow gate wiring ---
+echo "TD6: gate wiring (plan §2.9.3, deepen-plan §4.13, workflow.js taskDesign)"
+
+PLAN_SKILL="$(cat "$REPO_ROOT/plugins/soleur/skills/plan/SKILL.md")"
+DEEPEN_SKILL="$(cat "$REPO_ROOT/plugins/soleur/skills/deepen-plan/SKILL.md")"
+WORKFLOW_JS="$(cat "$REPO_ROOT/plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js")"
+
+assert_contains "$PLAN_SKILL" '#### 2.9.3. Task-Design Gate' \
+  "plan skill carries the §2.9.3 Task-Design Gate"
+assert_contains "$DEEPEN_SKILL" '### 4.13. Task-Design Halt' \
+  "deepen-plan skill carries the §4.13 Task-Design Halt"
+assert_contains "$WORKFLOW_JS" 'taskDesign' \
+  "deepen-plan.workflow.js GATES mirror carries taskDesign"
+assert_contains "$(cat "$REPO_ROOT/scripts/lib/test-affected-paths.sh")" \
+  'AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS' \
+  "suite is registered in test-affected-paths.sh"
+echo ""
+
 print_results

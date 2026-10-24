@@ -198,16 +198,6 @@ mattpocock/skills
     (references/boundary-readme.template) carries the attribution
     comment; the emitter strips that first line.
 
-    Bundle 4 (#11014 + #11015, from skills/in-progress/software-factory/
-    SKILL.md at HEAD c55ee46) adopts the factory-slot ontology vocabulary
-    (ticket tracker / ticket source / git host / orchestrator / runner /
-    observability platform, mapped onto Soleur's own terms in
-    knowledge-base/engineering/architecture/factory-map.md) and the
-    question-every-task checklist (six design-time answers stamped into
-    every new autonomous task's `# Task design:` header in
-    skills/schedule/SKILL.md and required by the plan-side Task Design
-    gate). Vocabulary and methodology only -- no prose ported.
-
     Bundle 3 (#8289, from skills/engineering/domain-modeling/SKILL.md
     and CONTEXT-FORMAT.md, skills/engineering/triage/OUT-OF-SCOPE.md and
     SKILL.md step 1, and skills/productivity/to-questionnaire/SKILL.md at
@@ -307,6 +297,16 @@ mattpocock/skills
     compound/SKILL.md carries no inline attribution comment because it
     sits at its lifecycle byte ceiling (plugins/soleur/test/
     skill-body-budget.json); this entry is its attribution.
+
+    Bundle 7 (#11014 + #11015, from skills/in-progress/software-factory/
+    SKILL.md at HEAD c55ee46) adopts the factory-slot ontology vocabulary
+    (ticket tracker / ticket source / git host / orchestrator / runner /
+    observability platform, mapped onto Soleur's own terms in
+    knowledge-base/engineering/architecture/factory-map.md) and the
+    question-every-task checklist (six design-time answers stamped into
+    every new autonomous task's `# Task design:` header in
+    skills/schedule/SKILL.md and required by the plan-side Task Design
+    gate). Vocabulary and methodology only -- no prose ported.
 
   MIT License (upstream)
 

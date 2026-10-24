@@ -147,18 +147,21 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
 
 ```yaml
 # Required when the plan creates a NEW autonomous-task surface — a Files-to-Create entry
-# matching .github/workflows/scheduled-*.yml, an Inngest cron-*/oneshot-* function under
-# apps/*/server/inngest/functions/, or a new registered reminder/sweeper check. Pure-docs
-# plans and edits to existing tasks skip — the requirement is create-time only, never a
-# retrofit onto the ~21 existing scheduled-*.yml.
-task:              # name/slug of the autonomous task being created (one block per created task)
-trigger:           # what fires it — cron / event / label / dispatch / upstream run
-services:          # services or data surfaces it reads from and writes to
-next:              # what it triggers next ("nothing" is a valid answer)
-human_reentry:     # how a human resumes, redirects or stops it mid-run
-dedupe:            # mechanism preventing semantic double-work — MUST name something beyond
-                   # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
-source_dedupe:     # how the ticket source dedupes this task, or the literal "not a ticket source"
+# matching .github/workflows/scheduled-*.yml or ANY new non-`_`-prefixed .ts file under
+# apps/*/server/inngest/functions/ (shared code is `_`-prefixed; a new non-`_` file IS a
+# function), or a Files-to-Edit entry adding a CHECK_REGISTRY key / arming record.
+# Create-time only — no retrofit onto existing tasks. Canonical contract:
+# plugins/soleur/skills/plan/references/task-design-gate.md
+tasks:
+  - task:            # name/slug of the autonomous task being created
+    trigger:         # what fires it — cron / event / label / dispatch / upstream run
+    services:        # services or data surfaces it reads from and writes to
+    next:            # what it triggers next ("nothing" is a valid answer)
+    human_reentry:   # how a human resumes, redirects or stops it mid-run
+    dedupe:          # mechanism preventing semantic double-work — MUST name something beyond
+                     # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
+    source_dedupe:   # how the ticket source dedupes this task, or the literal "not a ticket source"
+  # one `- task:` list item per created task
 ```
 
 ## Guard Contract
@@ -400,18 +403,21 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
 
 ```yaml
 # Required when the plan creates a NEW autonomous-task surface — a Files-to-Create entry
-# matching .github/workflows/scheduled-*.yml, an Inngest cron-*/oneshot-* function under
-# apps/*/server/inngest/functions/, or a new registered reminder/sweeper check. Pure-docs
-# plans and edits to existing tasks skip — the requirement is create-time only, never a
-# retrofit onto the ~21 existing scheduled-*.yml.
-task:              # name/slug of the autonomous task being created (one block per created task)
-trigger:           # what fires it — cron / event / label / dispatch / upstream run
-services:          # services or data surfaces it reads from and writes to
-next:              # what it triggers next ("nothing" is a valid answer)
-human_reentry:     # how a human resumes, redirects or stops it mid-run
-dedupe:            # mechanism preventing semantic double-work — MUST name something beyond
-                   # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
-source_dedupe:     # how the ticket source dedupes this task, or the literal "not a ticket source"
+# matching .github/workflows/scheduled-*.yml or ANY new non-`_`-prefixed .ts file under
+# apps/*/server/inngest/functions/ (shared code is `_`-prefixed; a new non-`_` file IS a
+# function), or a Files-to-Edit entry adding a CHECK_REGISTRY key / arming record.
+# Create-time only — no retrofit onto existing tasks. Canonical contract:
+# plugins/soleur/skills/plan/references/task-design-gate.md
+tasks:
+  - task:            # name/slug of the autonomous task being created
+    trigger:         # what fires it — cron / event / label / dispatch / upstream run
+    services:        # services or data surfaces it reads from and writes to
+    next:            # what it triggers next ("nothing" is a valid answer)
+    human_reentry:   # how a human resumes, redirects or stops it mid-run
+    dedupe:          # mechanism preventing semantic double-work — MUST name something beyond
+                     # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
+    source_dedupe:   # how the ticket source dedupes this task, or the literal "not a ticket source"
+  # one `- task:` list item per created task
 ```
 
 ## Guard Contract
@@ -668,18 +674,21 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
 
 ```yaml
 # Required when the plan creates a NEW autonomous-task surface — a Files-to-Create entry
-# matching .github/workflows/scheduled-*.yml, an Inngest cron-*/oneshot-* function under
-# apps/*/server/inngest/functions/, or a new registered reminder/sweeper check. Pure-docs
-# plans and edits to existing tasks skip — the requirement is create-time only, never a
-# retrofit onto the ~21 existing scheduled-*.yml.
-task:              # name/slug of the autonomous task being created (one block per created task)
-trigger:           # what fires it — cron / event / label / dispatch / upstream run
-services:          # services or data surfaces it reads from and writes to
-next:              # what it triggers next ("nothing" is a valid answer)
-human_reentry:     # how a human resumes, redirects or stops it mid-run
-dedupe:            # mechanism preventing semantic double-work — MUST name something beyond
-                   # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
-source_dedupe:     # how the ticket source dedupes this task, or the literal "not a ticket source"
+# matching .github/workflows/scheduled-*.yml or ANY new non-`_`-prefixed .ts file under
+# apps/*/server/inngest/functions/ (shared code is `_`-prefixed; a new non-`_` file IS a
+# function), or a Files-to-Edit entry adding a CHECK_REGISTRY key / arming record.
+# Create-time only — no retrofit onto existing tasks. Canonical contract:
+# plugins/soleur/skills/plan/references/task-design-gate.md
+tasks:
+  - task:            # name/slug of the autonomous task being created
+    trigger:         # what fires it — cron / event / label / dispatch / upstream run
+    services:        # services or data surfaces it reads from and writes to
+    next:            # what it triggers next ("nothing" is a valid answer)
+    human_reentry:   # how a human resumes, redirects or stops it mid-run
+    dedupe:          # mechanism preventing semantic double-work — MUST name something beyond
+                     # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
+    source_dedupe:   # how the ticket source dedupes this task, or the literal "not a ticket source"
+  # one `- task:` list item per created task
 ```
 
 ## Guard Contract

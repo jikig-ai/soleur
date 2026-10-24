@@ -150,8 +150,10 @@ with a **future `ts`** (Inngest natively schedules the delayed delivery — no
 
 ## Task-design answers for new autonomous work (#11015)
 
-Every NEW autonomous task on this substrate — a new `oneshot-*`/`cron-*` Inngest
-function, or a new registered reminder/sweeper check — MUST carry written answers
+Every NEW autonomous task on this substrate — ANY new non-`_`-prefixed `.ts`
+function file under `apps/*/server/inngest/functions/` (`oneshot-*`, `cron-*`,
+`event-*`, or future prefixes; shared code like `_cron-shared.ts` is
+`_`-prefixed), or a new registered reminder/sweeper check — MUST carry written answers
 to the six task-design questions **before** it is armed or merged. Record them in
 the design issue or the plan's `## Task Design` section (plan §2.9.3 / deepen-plan
 §4.13); for a registered check, record them in the arming record.

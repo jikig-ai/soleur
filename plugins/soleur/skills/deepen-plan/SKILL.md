@@ -11,7 +11,7 @@ description: "This skill should be used when enhancing an existing plan with par
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. **Known divergence:** the port's `GATES` covers §§4.6–4.9 plus the §4.13 taskDesign mirror; §4.10–4.12 are prose-only — a workflow run never enforces them. See [`knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md).
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. **Known divergence:** the port's `GATES` covers §§4.6–4.9 + the §4.13 mirror; §4.10–4.12 are prose-only — a workflow run never enforces them. See [`knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md).
 
 # Deepen Plan - Power Enhancement Mode
 
@@ -329,7 +329,7 @@ Tier advisory (ADR-053 / ADR-110): spawn both passes with semantic tier `standar
 
 If the plan's Overview, Problem Statement, or Hypotheses contain any of the trigger patterns `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case-insensitive), read `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` and spawn a dedicated "Network-Outage Deep-Dive" research agent in parallel with the other deepen agents.
 
-**Resource-shape trigger (implicit SSH dependency).** Also fire this gate when the plan drives `terraform apply` (with or without `-target=`) on any resource whose definition contains `provisioner "file"`, `provisioner "remote-exec"`, or a `connection { type = "ssh" ... }` block. The provisioner block makes SSH a hard apply-time dependency that the prose-only keyword scan won't detect — the plan body need not mention SSH at all and apply still fails on `connection reset by peer` if the operator's egress IP has drifted out of the firewall allowlist. **Why:** #3061 — plan body had zero SSH keywords; apply on `terraform_data.deploy_pipeline_fix` (file+remote-exec provisioners) still hit a handshake reset because Phase 4.5 didn't fire.
+**Resource-shape trigger (implicit SSH dependency).** Also fire this gate when the plan drives `terraform apply` (with or without `-target=`) on any resource whose definition contains `provisioner "file"`, `provisioner "remote-exec"`, or a `connection { type = "ssh" ... }` block. The provisioner block makes SSH a hard apply-time dependency the prose-only keyword scan won't detect — the plan body need not mention SSH for apply to hit `connection reset by peer` on a drifted egress IP. **Why:** #3061 — plan body had zero SSH keywords; apply on `terraform_data.deploy_pipeline_fix` (file+remote-exec provisioners) still hit a handshake reset because Phase 4.5 didn't fire.
 
 The deep-dive agent's task:
 
@@ -534,11 +534,13 @@ Halt deepen-plan; do NOT proceed to Phase 5.
 echo 'SOLEUR_RULE_APPLIED rule=wg-ui-feature-requires-pen-wireframe note=UI feature must ship a committed .pen wireframe, never skipped'
 ```
 
+**Step 5 — Pass-through.** Non-UI plan, or `.pen` committed → proceed. **Why:** #4819 — verifies a UI feature did not reach implementation with zero wireframes.
+
 ### 4.10. Encryption Posture Halt (Conditional)
 
 Symmetric to Phase 4.7 above; this gate is what makes plan Phase 2.11 load-bearing. Fires only when the plan introduces a persistent data store or a new cross-component/network connection.
 
-**Step 1 — Trigger.** Fires when the plan's `## Files to Edit` / `## Files to Create` match one of `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$`, OR the plan prose names a store class (volume, database, bucket, queue, cache, backup target, log sink) or a new cross-component connection. No match on any of the above → skip silently (pass-through).
+**Step 1 — Trigger.** Fires when the plan's `## Files to Edit` / `## Files to Create` match one of `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$`, OR the plan prose names a store class (volume, database, bucket, queue, cache, backup target, log sink) or a new cross-component connection. No match → skip silently.
 
 **Step 2 — Locate the section.** Grep the target plan file:
 
@@ -620,10 +622,8 @@ awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f' "$PLAN_FILE" | grep -c '^## S
 Read the printed COUNT, not the exit code — `grep -c` exits 1 on `0`, which is a verdict, not a command failure. `0` → absent → HALT; `>1` → malformed → HALT ("plan carries N duplicate live `## Scope Check` sections — keep one"). On `0`, halt with:
 
 > Error: Plan has no compliant `## Scope Check` section. Per plan Phase 2.4 every plan emits
-> one (see `plugins/soleur/skills/plan/references/plan-scope-check.md`; the schema ships in
-> `plan-issue-templates.md`). Re-run
-> `soleur:plan`, or add the section by hand — it maps asks the plan already
-> contains — then re-run deepen-plan.
+> one (see `plan-scope-check.md`; schema in `plan-issue-templates.md`). Re-run `soleur:plan`,
+> or add the section by hand — it maps asks the plan already contains — then re-run deepen-plan.
 
 **Step 3 — Verify it mechanically.** Reject and HALT (same message shape; first line names the failing row; recovery: fix it in the plan file, then re-run) when ANY of:
 
@@ -643,13 +643,13 @@ echo 'SOLEUR_RULE_APPLIED rule=plan-scope-check-blocks-unmapped-asks note=deepen
 
 No telemetry on pass — the gate only records when it activates.
 
-**Step 6 — Pass-through.** Section present, mechanically compliant, adequate → proceed normally.
+**Step 6 — Pass-through.** Compliant → proceed.
 
 **Why:** #9398 — on PR #9339 a brief listing tasks a–f grew a destructive `--attest` rung nobody asked for; the catch cost an 11-seat review and ~8 CI cycles. The deepen halt is what makes "an unmapped item blocks the plan unless justified" load-bearing rather than advisory.
 
 ### 4.13. Task-Design Halt
 
-Makes plan §2.9.3 load-bearing. Trigger + reject contract: [plan/references/task-design-gate.md](../plan/references/task-design-gate.md). On trigger HALT on a missing `## Task Design` or any contract reject; emit `SOLEUR_RULE_APPLIED rule=task-design-design-time-default` on halt; pass silent otherwise. **Why:** #11015.
+Trigger + contract: [plan/references/task-design-gate.md](../plan/references/task-design-gate.md) — `## Files to Create` `scheduled-*.yml` / new non-`_` Inngest function, or `## Files to Edit` `CHECK_REGISTRY` add; count UNFENCED `## Task Design`. On trigger HALT on a missing section or any reject; emit `SOLEUR_RULE_APPLIED rule=task-design-design-time-default`; else pass silent. **Why:** #11015.
 
 ### 5. Discover and Run ALL Review Agents
 
