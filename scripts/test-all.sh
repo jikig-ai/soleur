@@ -5564,6 +5564,11 @@ if want_scripts; then
   # .test.sh is the mutation battery over fixture git trees.
   run_suite "scripts/betterstack-emitter-read-live" bash scripts/lint-betterstack-emitter-read.sh
   run_suite "scripts/betterstack-emitter-read" bash scripts/lint-betterstack-emitter-read.test.sh
+  # #10390 (WS1): filing/dedupe/resolve harness for the Better Stack incident mirror — the
+  # watched-channel half of the Oct-22 email-only alert gap. Registered EXPLICITLY
+  # (scripts/*.test.sh is not in SUITE_GLOBS). Its exit code is the only gate proving the
+  # mirror's dedupe keys on the incident-id body marker, never title (the #10918 class).
+  run_suite "scripts/betterstack-incident-mirror" bash scripts/betterstack-incident-mirror.test.sh
   # The differential oracle over every executable reader of the directive (#7490). Four copies
   # of the fence predicate cannot share code (two are prose an agent pastes; one is a hook that
   # must not `source` a repo file), so they are held in agreement by a walker instead.
@@ -5602,6 +5607,11 @@ if want_scripts; then
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
   # the soak tracker — an undetailed reason=pull row must not read as FAIL.
   run_suite "scripts/followthroughs/inngest-verify-clean-10390" bash scripts/followthroughs/inngest-verify-clean-10390.test.sh
+  # #10390 (WS3): exit-code harness for the generic post-deploy alert-channel soak — zero new
+  # Better Stack incidents AND zero new ci/ issues in [deploy_ts, +Nh], TRANSIENT on read failure.
+  # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code
+  # decides whether a soak tracker closes, so a vacuous PASS must redden CI.
+  run_suite "scripts/followthroughs/post-deploy-incident-soak" bash scripts/followthroughs/post-deploy-incident-soak.test.sh
   # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
