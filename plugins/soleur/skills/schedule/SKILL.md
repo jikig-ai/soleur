@@ -106,7 +106,7 @@ Inspect `$ARGUMENTS`:
 
 **Step 0b: Check arguments (recurring mode)**
 
-If `$ARGUMENTS` contains `--name`, `--skill`, `--cron`, and `--model` flags, extract values directly and skip to Step 2. Validate each value using the same rules below. If any required flag is missing, proceed to Step 1 for the missing parameters only. Optional flags: `--timeout` (minutes, default 30) and `--max-turns` (default 30).
+If `$ARGUMENTS` contains `--name`, `--skill`, `--cron`, and `--model` flags, extract values directly, run the task-design check below, then skip to Step 2. Validate each value using the same rules below. If any required flag is missing, proceed to Step 1 for the missing parameters only. Optional flags: `--timeout` (minutes, default 30) and `--max-turns` (default 30).
 
 **Task-design flags (recurring mode).** Every generated workflow stamps a `# Task design:` header (Step 3a) carrying answers to the six task-design questions. `trigger` is derived from the collected `--cron` + `workflow_dispatch`; the other five come from Step 1's questions or these flags:
 
@@ -115,6 +115,8 @@ If `$ARGUMENTS` contains `--name`, `--skill`, `--cron`, and `--model` flags, ext
 - `--design-reentry <text>` — how a human resumes, redirects or stops it mid-run
 - `--design-dedupe <text>` — the mechanism preventing semantic double-work. MUST name something beyond `concurrency: group:` (e.g. an idempotency precheck, a marker dedupe, an immutable ticket key) — `concurrency:` only serializes overlapping RUNS, it does not stop the same work being done twice.
 - `--design-source-dedupe <text>` — how the ticket source dedupes the task, or the literal `not a ticket source`.
+
+Every `--design-*` value and every Step 1 design answer MUST match `^[\x20-\x7e]{1,400}$` — single printable line, no CR/LF. A newline escapes the `# Task design:` comment into raw workflow YAML; this regex is the same class of load-bearing injection defense as Step 0c's flag regexes.
 
 In a non-interactive context (flags supplied, no operator answering Step 1), a **missing, placeholder (`TODO`/`TBD`/`N/A`), or concurrency-only `dedupe` design answer is a hard error** — emit `ERROR: missing or invalid task-design answer for <question> (pass --design-<flag> or run interactively)` and stop. This mirrors `--once`'s no-fallback posture: a task must never be created with unwritten design answers. The requirement applies to **newly created** tasks only — existing `.github/workflows/scheduled-*.yml` files are not retroactively gated.
 
@@ -218,7 +220,7 @@ One-time mode does not pass through Step 1 — all flags are mandatory at the co
 
 11. **Source dedupe** — How the ticket source dedupes this task if it files tickets, or the literal `not a ticket source` when the task never creates tickets.
 
-Items 7-11 may be skipped when the corresponding `--design-*` flags (Step 0b) already carry answers.
+Validate: items 7-11 each MUST be a single printable line (`^[\x20-\x7e]{1,400}$`) — a newline escapes the `# Task design:` comment into raw workflow YAML. Items 7-11 may be skipped when the corresponding `--design-*` flags (Step 0b) already carry answers.
 
 **Step 2: Resolve action SHAs**
 

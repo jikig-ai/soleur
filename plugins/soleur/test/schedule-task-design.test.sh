@@ -68,6 +68,17 @@ for block_name in RECURRING ONCE; do
       "${block_name} template '# Task design:' block carries key '${key}:'"
   done
 done
+
+# The recurring block's values are the Step 0b substitution tokens, not literals.
+for token in DESIGN_SERVICES DESIGN_NEXT DESIGN_REENTRY DESIGN_DEDUPE DESIGN_SOURCE_DEDUPE; do
+  assert_contains "$RECURRING_BLOCK" "<${token}>" \
+    "RECURRING header substitutes <${token}> from --design-* / Step 1"
+done
+# The once block's answers are derived from D1–D5 — pin distinguishing literals.
+assert_contains "$ONCE_BLOCK" 'not a ticket source — fires once' \
+  "ONCE header derives source_dedupe from D1–D5"
+assert_contains "$ONCE_BLOCK" 'D3 date guard' \
+  "ONCE header derives dedupe/trigger from the D3 guard"
 echo ""
 
 # --- TD2: Step 1 collects the five non-derived answers (recurring mode) ---
@@ -90,10 +101,14 @@ assert_contains "$STEP1_BLOCK" 'Triggers next' \
   "Step 1 collects the what-it-triggers-next answer"
 assert_contains "$STEP1_BLOCK" 'Human re-entry' \
   "Step 1 collects the human re-entry answer"
-assert_contains "$STEP1_BLOCK" 'concurrency: group:' \
+assert_contains "$STEP1_BLOCK" 'MUST name something beyond' \
   "Step 1 requires the dedupe answer to name a mechanism beyond concurrency: group:"
 assert_contains "$STEP1_BLOCK" 'not a ticket source' \
   "Step 1 collects a source-dedupe answer or an explicit 'not a ticket source'"
+assert_contains "$STEP1_BLOCK" 'may be skipped when the corresponding `--design-*` flags' \
+  "Step 1 items 7-11 are skippable only when --design-* flags carry answers"
+assert_contains "$STEP1_BLOCK" 'single printable line' \
+  "Step 1 design answers carry the single-line injection validation"
 echo ""
 
 # --- TD3: Step 0b documents the --design-* flag contract ---
@@ -103,8 +118,12 @@ for flag in --design-services --design-next --design-reentry --design-dedupe --d
   assert_contains "$SKILL_CONTENT" "$flag" \
     "Step 0b documents flag ${flag}"
 done
-assert_contains "$SKILL_CONTENT" 'hard error' \
-  "a missing design answer in a non-interactive context is a hard error"
+assert_contains "$SKILL_CONTENT" 'ERROR: missing or invalid task-design answer for <question>' \
+  "non-interactive missing/invalid design answer is a hard error with the recovery message"
+assert_contains "$SKILL_CONTENT" '^[\x20-\x7e]{1,400}$' \
+  "Step 0b pins the single-line regex for --design-* values"
+assert_contains "$SKILL_CONTENT" 'run the task-design check below, then skip to Step 2' \
+  "Step 0b fast path runs the design check BEFORE skipping to Step 2"
 echo ""
 
 # --- TD4: create-time-only scoping (P5 — no retrofit onto existing workflows) ---
@@ -124,27 +143,32 @@ assert_file_exists "$GATE_FILE" "canonical gate contract exists"
 GATE_CONTENT="$(cat "$GATE_FILE")"
 assert_contains "$GATE_CONTENT" 'CANONICAL' \
   "task-design-gate.md declares itself the canonical copy"
-assert_contains "$GATE_CONTENT" 'non-`_`-prefixed' \
-  "detection covers any new non-underscore-prefixed Inngest function file"
+assert_contains "$GATE_CONTENT" 'non-`_`' \
+  "detection covers non-underscore-prefixed Inngest function files"
 assert_contains "$GATE_CONTENT" 'CHECK_REGISTRY' \
   "detection covers a new registered check via Files-to-Edit"
 assert_contains "$GATE_CONTENT" 'UNFENCED' \
   "reject notes fence-blindness (a fenced quote is not the section)"
+assert_contains "$GATE_CONTENT" '.github/workflows/*.yml' \
+  "detection covers ANY new workflow file, not only scheduled-*"
+assert_contains "$GATE_CONTENT" 'cron.schedule(' \
+  "detection covers pg_cron migrations"
 for key in "${SIX_KEYS[@]}"; do
   assert_contains "$GATE_CONTENT" "    ${key}:" \
     "gate canonical schema carries key '${key}:'"
 done
 
-# Exactly 3 `## Task Design` blocks in the templates file, each a verbatim copy.
+# Exactly 3 `## Task Design` blocks in the templates file, each a verbatim schema copy —
+# count-assert so deleting a key from ONE copy reds.
 TD_COUNT="$(grep -c '^## Task Design' "$TEMPLATES_FILE" || true)"
 assert_eq "$TD_COUNT" "3" "plan-issue-templates.md carries exactly 3 '## Task Design' blocks"
 TEMPLATES_CONTENT="$(cat "$TEMPLATES_FILE")"
-assert_contains "$TEMPLATES_CONTENT" 'task-design-gate.md' \
-  "template blocks point at the canonical contract"
 for key in "${SIX_KEYS[@]}"; do
-  assert_contains "$TEMPLATES_CONTENT" "    ${key}:" \
-    "template schema copies carry key '${key}:'"
+  assert_eq "$(grep -cF "    ${key}:" "$TEMPLATES_FILE" || true)" "3" \
+    "all 3 template schema copies carry key '${key}:'"
 done
+assert_eq "$(grep -cF 'task-design-gate.md' "$TEMPLATES_FILE" || true)" "3" \
+  "all 3 template blocks point at the canonical contract"
 assert_contains "$TEMPLATES_CONTENT" 'one `- task:` list item per created task' \
   "schema documents the one-item-per-created-task shape"
 echo ""
@@ -158,10 +182,16 @@ WORKFLOW_JS="$(cat "$REPO_ROOT/plugins/soleur/skills/deepen-plan/workflows/deepe
 
 assert_contains "$PLAN_SKILL" '#### 2.9.3. Task-Design Gate' \
   "plan skill carries the §2.9.3 Task-Design Gate"
+assert_contains "$PLAN_SKILL" '[skill-enforced: plan Phase 2.9.3 + deepen-plan Phase 4.13]' \
+  "§2.9.3 carries its enforcement marker, not just the heading"
 assert_contains "$DEEPEN_SKILL" '### 4.13. Task-Design Halt' \
   "deepen-plan skill carries the §4.13 Task-Design Halt"
-assert_contains "$WORKFLOW_JS" 'taskDesign' \
-  "deepen-plan.workflow.js GATES mirror carries taskDesign"
+assert_contains "$DEEPEN_SKILL" 'rule=task-design-design-time-default' \
+  "§4.13 pins the halt telemetry emission"
+assert_contains "$WORKFLOW_JS" 'taskDesign: {' \
+  "workflow.js GATES carries the taskDesign entry"
+assert_contains "$WORKFLOW_JS" 'taskDesign: GATE_VERDICT' \
+  "workflow.js verdict schema requires taskDesign"
 assert_contains "$(cat "$REPO_ROOT/scripts/lib/test-affected-paths.sh")" \
   'AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS' \
   "suite is registered in test-affected-paths.sh"

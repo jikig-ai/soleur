@@ -34,10 +34,10 @@ Plan: `knowledge-base/project/plans/2026-10-24-feat-factory-map-task-design-plan
 ## Phase 3: plan-time gate + Inngest runbook (#11015, surface b)
 
 - [x] 3.1 `plugins/soleur/skills/plan/references/plan-issue-templates.md`: add conditional
-      `## Task Design` schema to all three templates (after `## Observability`).
+      `## Task Design` schema to all three templates (after `## Encryption Posture`).
 - [x] 3.2 `plugins/soleur/skills/plan/SKILL.md`: new `#### 2.9.3. Task-Design Gate
       (Conditional)` — Files-to-Create detection (new `scheduled-*.yml`, new
-      `cron-*/oneshot-*` Inngest function, new registered check); emit + reject rules
+      any new non-`_` Inngest function file, new registered check, pg_cron/host/daemon substrates per the Detection table); emit + reject rules
       incl. concurrency-only dedupe reject.
 - [x] 3.3 `plugins/soleur/skills/deepen-plan/SKILL.md`: new `### 4.13. Task-Design Halt
       (Conditional)` mirroring §4.10's shape.

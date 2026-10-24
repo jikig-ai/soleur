@@ -146,12 +146,11 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
 ## Task Design
 
 ```yaml
-# Required when the plan creates a NEW autonomous-task surface — a Files-to-Create entry
-# matching .github/workflows/scheduled-*.yml or ANY new non-`_`-prefixed .ts file under
-# apps/*/server/inngest/functions/ (shared code is `_`-prefixed; a new non-`_` file IS a
-# function), or a Files-to-Edit entry adding a CHECK_REGISTRY key / arming record.
-# Create-time only — no retrofit onto existing tasks. Canonical contract:
-# plugins/soleur/skills/plan/references/task-design-gate.md
+# Required when the plan creates a NEW autonomous-task surface — see the Detection table
+# in plugins/soleur/skills/plan/references/task-design-gate.md (any new
+# .github/workflows/*.yml, new Inngest function file/registration, CHECK_REGISTRY or
+# reminder arm, pg_cron, host cron.d/.timer, setInterval daemon, TF-emitted workflow).
+# Create-time only — no retrofit onto existing tasks.
 tasks:
   - task:            # name/slug of the autonomous task being created
     trigger:         # what fires it — cron / event / label / dispatch / upstream run
@@ -402,12 +401,11 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
 ## Task Design
 
 ```yaml
-# Required when the plan creates a NEW autonomous-task surface — a Files-to-Create entry
-# matching .github/workflows/scheduled-*.yml or ANY new non-`_`-prefixed .ts file under
-# apps/*/server/inngest/functions/ (shared code is `_`-prefixed; a new non-`_` file IS a
-# function), or a Files-to-Edit entry adding a CHECK_REGISTRY key / arming record.
-# Create-time only — no retrofit onto existing tasks. Canonical contract:
-# plugins/soleur/skills/plan/references/task-design-gate.md
+# Required when the plan creates a NEW autonomous-task surface — see the Detection table
+# in plugins/soleur/skills/plan/references/task-design-gate.md (any new
+# .github/workflows/*.yml, new Inngest function file/registration, CHECK_REGISTRY or
+# reminder arm, pg_cron, host cron.d/.timer, setInterval daemon, TF-emitted workflow).
+# Create-time only — no retrofit onto existing tasks.
 tasks:
   - task:            # name/slug of the autonomous task being created
     trigger:         # what fires it — cron / event / label / dispatch / upstream run
@@ -673,12 +671,11 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
 ## Task Design
 
 ```yaml
-# Required when the plan creates a NEW autonomous-task surface — a Files-to-Create entry
-# matching .github/workflows/scheduled-*.yml or ANY new non-`_`-prefixed .ts file under
-# apps/*/server/inngest/functions/ (shared code is `_`-prefixed; a new non-`_` file IS a
-# function), or a Files-to-Edit entry adding a CHECK_REGISTRY key / arming record.
-# Create-time only — no retrofit onto existing tasks. Canonical contract:
-# plugins/soleur/skills/plan/references/task-design-gate.md
+# Required when the plan creates a NEW autonomous-task surface — see the Detection table
+# in plugins/soleur/skills/plan/references/task-design-gate.md (any new
+# .github/workflows/*.yml, new Inngest function file/registration, CHECK_REGISTRY or
+# reminder arm, pg_cron, host cron.d/.timer, setInterval daemon, TF-emitted workflow).
+# Create-time only — no retrofit onto existing tasks.
 tasks:
   - task:            # name/slug of the autonomous task being created
     trigger:         # what fires it — cron / event / label / dispatch / upstream run

@@ -21,7 +21,7 @@ here.
 | Git host | GitHub (PRs, rulesets, merge queue, `gh` CLI + GitHub App auth — never PAT) |
 | Orchestrator | GHA `schedule:`/`workflow_dispatch` workflows + Inngest (cron functions, self-armed oneshots per ADR-046, the reminder primitive's `CHECK_REGISTRY`) |
 | Runner | The disposable execution surface: GHA hosted runners, Devin cloud sessions, local git worktrees, the agent bwrap sandbox |
-| Observability platform | The seven enforced layers (Sentry, Better Stack `SOLEUR_*` markers, Inngest dashboard, `gh run` logs, journald→vector, follow-through sweeper, `action-required` issues) — see `agents/engineering/review/observability-coverage-reviewer.md` §The seven observability layers |
+| Observability platform | The seven enforced layers — see `plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md` §The seven observability layers |
 
 ## Vocabulary map
 

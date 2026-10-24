@@ -534,7 +534,7 @@ Halt deepen-plan; do NOT proceed to Phase 5.
 echo 'SOLEUR_RULE_APPLIED rule=wg-ui-feature-requires-pen-wireframe note=UI feature must ship a committed .pen wireframe, never skipped'
 ```
 
-**Step 5 — Pass-through.** Non-UI plan, or `.pen` committed → proceed. **Why:** #4819 — verifies a UI feature did not reach implementation with zero wireframes.
+**Step 5 — Pass-through.** Non-UI plan, or `.pen` committed → proceed. No telemetry on pass. **Why:** #4819.
 
 ### 4.10. Encryption Posture Halt (Conditional)
 
@@ -622,8 +622,8 @@ awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f' "$PLAN_FILE" | grep -c '^## S
 Read the printed COUNT, not the exit code — `grep -c` exits 1 on `0`, which is a verdict, not a command failure. `0` → absent → HALT; `>1` → malformed → HALT ("plan carries N duplicate live `## Scope Check` sections — keep one"). On `0`, halt with:
 
 > Error: Plan has no compliant `## Scope Check` section. Per plan Phase 2.4 every plan emits
-> one (see `plan-scope-check.md`; schema in `plan-issue-templates.md`). Re-run `soleur:plan`,
-> or add the section by hand — it maps asks the plan already contains — then re-run deepen-plan.
+> one (see `plugins/soleur/skills/plan/references/plan-scope-check.md`; schema in
+> `plan-issue-templates.md`). Re-run `soleur:plan` or add the section by hand, then re-run.
 
 **Step 3 — Verify it mechanically.** Reject and HALT (same message shape; first line names the failing row; recovery: fix it in the plan file, then re-run) when ANY of:
 
@@ -647,9 +647,9 @@ No telemetry on pass — the gate only records when it activates.
 
 **Why:** #9398 — on PR #9339 a brief listing tasks a–f grew a destructive `--attest` rung nobody asked for; the catch cost an 11-seat review and ~8 CI cycles. The deepen halt is what makes "an unmapped item blocks the plan unless justified" load-bearing rather than advisory.
 
-### 4.13. Task-Design Halt
+### 4.13. Task-Design Halt (Conditional)
 
-Trigger + contract: [plan/references/task-design-gate.md](../plan/references/task-design-gate.md) — `## Files to Create` `scheduled-*.yml` / new non-`_` Inngest function, or `## Files to Edit` `CHECK_REGISTRY` add; count UNFENCED `## Task Design`. On trigger HALT on a missing section or any reject; emit `SOLEUR_RULE_APPLIED rule=task-design-design-time-default`; else pass silent. **Why:** #11015.
+Trigger + reject contract: [plan/references/task-design-gate.md](../plan/references/task-design-gate.md) (Detection table, UNFENCED count). On trigger HALT `"Phase 4.13 reject: <field/section> — <failure mode>"`; emit `SOLEUR_RULE_APPLIED rule=task-design-design-time-default note=Every new autonomous task MUST answer the six task-design questions at plan time`; else pass silent. **Why:** #11015.
 
 ### 5. Discover and Run ALL Review Agents
 

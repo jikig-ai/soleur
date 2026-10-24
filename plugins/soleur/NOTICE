@@ -299,14 +299,17 @@ mattpocock/skills
     skill-body-budget.json); this entry is its attribution.
 
     Bundle 7 (#11014 + #11015, from skills/in-progress/software-factory/
-    SKILL.md at HEAD c55ee46) adopts the factory-slot ontology vocabulary
-    (ticket tracker / ticket source / git host / orchestrator / runner /
-    observability platform, mapped onto Soleur's own terms in
-    knowledge-base/engineering/architecture/factory-map.md) and the
-    question-every-task checklist (six design-time answers stamped into
-    every new autonomous task's `# Task design:` header in
+    SKILL.md on the open, unmerged PR #1316, branch software-factory-skill
+    @ b59cab42bf1206e1363eafc37f71b21c3bcaa12f) adopts the factory-slot
+    ontology vocabulary (ticket tracker / ticket source / git host /
+    orchestrator / runner / observability platform, mapped onto Soleur's
+    own terms in knowledge-base/engineering/architecture/factory-map.md)
+    and the question-every-task checklist (six design-time answers stamped
+    into every new autonomous task's `# Task design:` header in
     skills/schedule/SKILL.md and required by the plan-side Task Design
-    gate). Vocabulary and methodology only -- no prose ported.
+    gate in skills/plan/references/task-design-gate.md +
+    skills/plan/references/plan-issue-templates.md). Vocabulary and
+    methodology only -- no prose ported.
 
   MIT License (upstream)
 

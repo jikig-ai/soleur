@@ -684,12 +684,13 @@ AFFECTED_PLUGINS_SOLEUR_TEST_TEST_PYRAMID_FIXTURES_TEST_SH_PATHS=(
 )
 # plugins/soleur/test/schedule-task-design.test.sh — pins the `# Task design:` header
 # contract in both generated workflow templates + the Step 0b/Step 1 collection text in
-# schedule/SKILL.md; name-stem derivation reaches the suite itself, so the edited
-# surfaces and this index are declared edges.
+# schedule/SKILL.md. The other asserted-on files (task-design-gate.md, templates,
+# plan/deepen-plan SKILLs, workflow.js) are covered by content-reference derivation
+# ($REPO_ROOT tokens in the suite); declared edges here are the SUT, self, and index.
 AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
   "plugins/soleur/skills/schedule/SKILL.md"
-  "plugins/soleur/test/schedule-task-design.test.sh"
-  "scripts/lib/test-affected-paths.sh"
+  "plugins/soleur/test/schedule-task-design.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"

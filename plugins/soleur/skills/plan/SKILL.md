@@ -709,9 +709,9 @@ If the plan's Files-to-Edit touch a surface the operator/agent CANNOT directly i
 
 This is the affected-surface extension of `hr-observability-as-plan-quality-gate` — the diagnosis-first discipline for blind surfaces, enforced at review by `soleur:engineering:review:observability-coverage-reviewer` §Step 4.6. **Why:** #5733 — 6 blind server-side fixes over ~2 weeks because the failing agent-sandbox surface emitted no discriminating telemetry; one in-sandbox event decided the root cause the moment it shipped. See `knowledge-base/project/learnings/best-practices/2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md`.
 
-#### 2.9.3. Task-Design Gate
+#### 2.9.3. Task-Design Gate (Conditional)
 
-[skill-enforced: plan §2.9.3 + deepen-plan §4.13] A `## Files to Create` entry adding a `scheduled-*.yml` or any new non-`_`-prefixed Inngest function — or a `## Files to Edit` entry adding a `CHECK_REGISTRY` key — emits `## Task Design`: [references/task-design-gate.md](./references/task-design-gate.md).
+[skill-enforced: plan Phase 2.9.3 + deepen-plan Phase 4.13] A `## Files to Create`/`## Files to Edit` entry creating a NEW autonomous-task surface (any new `.github/workflows/*.yml`, Inngest function, registered check, pg_cron, host timer, daemon) emits `## Task Design`: [references/task-design-gate.md](./references/task-design-gate.md).
 
 ### 2.10. Architecture Decision (ADR / C4) Gate
 

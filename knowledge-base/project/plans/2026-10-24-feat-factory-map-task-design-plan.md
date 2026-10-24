@@ -184,11 +184,11 @@ harness anyway; noted.)
 ### Phase 3: plan-time gate (#11015, surface b) + Inngest runbook
 
 - `plugins/soleur/skills/plan/references/plan-issue-templates.md`: add the conditional
-  `## Task Design` schema to all three templates (after `## Observability`), gated "required
+  `## Task Design` schema to all three templates (after `## Encryption Posture`), gated "required
   when the plan creates a new autonomous-task surface".
 - `plugins/soleur/skills/plan/SKILL.md`: new `#### 2.9.3. Task-Design Gate (Conditional)` —
   detection = a `## Files to Create` path matching `\.github/workflows/scheduled-.*\.yml`,
-  `apps/*/server/inngest/functions/(cron|oneshot)-.*\.ts`, or a new registered reminder/sweeper
+  any new `.ts` under `apps/*/server/inngest/functions/` (shared code is `_`-prefixed), or a new registered reminder/sweeper
   check; emit `## Task Design` with the six fields; reject on missing/placeholder answers and on
   a `dedupe` answer that names only workflow-level concurrency.
 - `plugins/soleur/skills/deepen-plan/SKILL.md`: new `### 4.13. Task-Design Halt (Conditional)`,
@@ -287,7 +287,7 @@ task-design questions — in the generated workflow's header, or in the creating
 concurrency.
 
 **Assembly.** The detection predicate (a `## Files to Create` entry matching the
-autonomous-task path set — `scheduled-*.yml`, `cron-*/oneshot-*` Inngest functions, new
+autonomous-task path set — any new `.github/workflows/*.yml`, new Inngest function files/registrations, new
 registered checks) at both enforcement surfaces (plan emit §2.9.3, deepen-plan halt §4.13, plus
 the workflow.js mirror); the `schedule` Step-1 collection + flag contract; and both generated
 YAML templates that stamp `# Task design:`. The chokepoints are the create flow and the plan
