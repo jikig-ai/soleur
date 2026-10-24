@@ -130,6 +130,13 @@ STATE_KEY=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID    -p soleur-infra-pr
   || { echo "::error::TF_STATE_AWS_ACCESS_KEY_ID unreadable in soleur-infra-privileged/prd" >&2; exit 1; }
 STATE_SEC=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain) \
   || { echo "::error::TF_STATE_AWS_SECRET_ACCESS_KEY unreadable in soleur-infra-privileged/prd" >&2; exit 1; }
+# Present-but-empty is the other half of all-or-none (mirrors bootstrap-live-verify.sh's
+# -z check and apply-web-platform-infra.yml's empty-pair abort): `get --plain` on an empty
+# secret exits 0, and an empty pair fails the backend auth as a bare 403, not a named error.
+if [[ -z "$STATE_KEY" || -z "$STATE_SEC" ]]; then
+  echo "::error::TF_STATE_AWS_* pair is empty in soleur-infra-privileged/prd" >&2
+  exit 1
+fi
 
 # Common TF env (reused across init/apply/output calls).
 tf_env() {

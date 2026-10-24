@@ -797,27 +797,39 @@ check("G1i-rk: apply-git-data-root-key.yml's extract step reads GIT_DATA_ROOT_ST
 # so an untracked script is censused too.
 #
 # A file is a STATE-WRITER when a `terraform` word on a code line is followed, inside its own
-# command, by a write verb — `apply`, `import`, `taint`, or `state push|mv`; a file whose only
-# terraform verbs are plan/init/state pull is a read and exempt. `terraform` is matched wherever
-# an argv word can sit — command position, the `doppler run --` target, or a wrapper's argument
+# command, by a write verb — `apply`, `import`, `taint`, `untaint`, `destroy`, `refresh`,
+# `state push|mv|rm|replace-provider`, or `workspace new|delete`; a file whose only terraform
+# verbs are plan/init/state pull is a read and exempt. `terraform` is matched wherever an argv
+# word can sit — command position, the `doppler run --` target, or a wrapper's argument
 # (`tf_env terraform apply`, the cla-evidence bootstrap's shape). Comments, heredoc bodies and
 # echo/printf arguments are data, not invocations (the same carve-out as cmd_sites); every other
 # quoting context counts — `sh -c 'terraform apply'` IS an invocation.
 #
-# Scope (the contract's stated limit): the limb asserts over writers carrying a `doppler secrets
-# get` leg that names an AWS backend name — the bare `AWS_*` pair or either Tier-B pair. A writer
-# sourcing `AWS_*` purely from caller env, with no Doppler read, is out of scope. For each
-# in-scope writer: BOTH ambient legs must come from a Tier-B name (`TF_STATE_AWS_*` or
-# `GIT_DATA_ROOT_STATE_AWS_*` for each half — all-or-none: a half-set pair authenticates as
-# nobody), and no `secrets get` of the bare pair may resolve against `prd_terraform` (`-c`/
-# `--config`, or a `DOPPLER_CONFIG` the file sets): that pair is read-only since O5b and 403s
-# the apply's state PutObject mid-run.
+# Scope (the contract's stated limits, honestly): the limb asserts over writers carrying a
+# Doppler leg that can supply the backend pair — a `doppler secrets get`/`export` naming a
+# backend AWS name (the bare `AWS_*` pair or either Tier-B pair), a `doppler secrets download`
+# resolving to `prd_terraform`, or a `doppler run` leg resolving to `prd_terraform` without
+# `--name-transformer` (which env-injects the bare pair into the state-writing terraform it
+# wraps). Out of scope, by construction: a writer sourcing `AWS_*` purely from caller env with
+# no Doppler leg at all, and invocation indirection the literal-token classifier cannot see
+# (`terraform "$@"`, `TF=terraform; $TF apply`) — both are residual windows the verb sets below
+# cannot close. For each in-scope writer: BOTH ambient legs must come from a Tier-B name
+# (`TF_STATE_AWS_*` or `GIT_DATA_ROOT_STATE_AWS_*` for each half — all-or-none: a half-set pair
+# authenticates as nobody), and nothing may feed terraform the read-only `prd_terraform` `AWS_*`
+# pair (`-c`/`--config` on the leg — in EITHER position — or a `DOPPLER_CONFIG` the file sets):
+# that pair is read-only since O5b and 403s the apply's state PutObject mid-run.
 #
 # The population floor is the two known armed files, verbatim — both must land in the checked
 # set on every tree this census runs on, so a "0 checked" run can never exit green.
 SH_TF = re.compile(r"(?<![\w./-])terraform(?![\w-])")
-SH_WRITE_VERBS = {"apply", "import", "taint"}
-SH_STATE_WRITE_VERBS = {"push", "mv"}
+# The write-verb set is the limb's WINDOW and must name every invocation that lands a PutObject
+# on the state bucket: `destroy` is apply-shaped (the rehearsal workflows run it against a Tier-B
+# root for exactly that reason), `untaint` un-marks in state, `refresh` writes refreshed state,
+# and the `state`/`workspace` sub-verbs below each rewrite or replace a remote object. A verb left
+# out is a `.sh` writer the census never sees — the guarded set must equal the property's set.
+SH_WRITE_VERBS = {"apply", "import", "taint", "untaint", "destroy", "refresh"}
+SH_STATE_WRITE_VERBS = {"push", "mv", "rm", "replace-provider"}
+SH_WS_WRITE_VERBS = {"new", "delete"}  # `workspace select` writes only .terraform/environment — local
 SH_BARE_AWS = re.compile(r"\bAWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)\b")
 # The two Tier-B pairs are TIER_B_NAMES members (the cross-pinned names): `TF_STATE_AWS_*` for the
 # shared `soleur-terraform-state` roots, `GIT_DATA_ROOT_STATE_AWS_*` for the root-key root.
@@ -825,6 +837,12 @@ SH_TIERB_AWS = {"ACCESS_KEY_ID": ("TF_STATE_AWS_ACCESS_KEY_ID", "GIT_DATA_ROOT_S
                 "SECRET_ACCESS_KEY": ("TF_STATE_AWS_SECRET_ACCESS_KEY", "GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY")}
 SH_GET = re.compile(r"doppler\s+(?:[^\s;|&)]+\s+)*?secrets\s+(?:get|export)\b")
 SH_CFG_PRD = re.compile(r"\bDOPPLER_CONFIG\s*=\s*[\"']?prd_terraform\b")
+# Reads of the pair that are NOT `secrets get`: a `doppler run` leg resolving to prd_terraform
+# WITHOUT --name-transformer env-injects the bare pair into its child (a state-writing terraform
+# wrapped in it gets the read-only pair with no get leg to find), and `doppler secrets download`
+# of prd_terraform emits the whole config — the pair included.
+SH_RUN = re.compile(r"doppler\s+run\b")
+SH_DOWNLOAD = re.compile(r"doppler\s+(?:[^\s;|&)]+\s+)*?secrets\s+download\b")
 SH_KNOWN_WRITERS = (os.path.join("apps", "cla-evidence", "infra", "bootstrap.sh"),
                     os.path.join("apps", "web-platform", "scripts", "bootstrap-live-verify.sh"))
 SH_SKIP_DIRS = {".git", ".worktrees", ".terraform", "node_modules"}
@@ -846,6 +864,24 @@ def sh_code_lines(body):
         if h:
             pending = h.group(1)
 
+def _sh_tf_write_after(text, end):
+    """True when the words after a `terraform` token ending at `end` carry a state-write verb —
+    a bare write verb, `state <write>`, or `workspace <new|delete>`."""
+    words = [w.strip("\"'") for w in
+             re.split(r"[;|&)]", text[end:], maxsplit=1)[0].split()]
+    if any(w in SH_WRITE_VERBS for w in words):
+        return True
+    return any(words[i] in ("state", "workspace") and i + 1 < len(words)
+               and words[i + 1] in (SH_STATE_WRITE_VERBS if words[i] == "state"
+                                    else SH_WS_WRITE_VERBS)
+               for i in range(len(words) - 1))
+
+
+def sh_tf_write_text(text):
+    """The write-verb check over a bare command segment (e.g. a `doppler run`'s `--` payload)."""
+    return any(_sh_tf_write_after(text, m.end()) for m in SH_TF.finditer(text))
+
+
 def sh_is_state_writer(body):
     for line in sh_code_lines(body):
         printing = PRINTS.match(line.lstrip()) is not None
@@ -854,12 +890,7 @@ def sh_is_state_writer(body):
             # argument is a string being printed, not a command being run.
             if printing and in_quotes(line, m.start()):
                 continue
-            words = [w.strip("\"'") for w in
-                     re.split(r"[;|&)]", line[m.end():], maxsplit=1)[0].split()]
-            if any(w in SH_WRITE_VERBS for w in words):
-                return True
-            if any(words[i] == "state" and i + 1 < len(words) and words[i + 1] in SH_STATE_WRITE_VERBS
-                   for i in range(len(words) - 1)):
+            if _sh_tf_write_after(line, m.end()):
                 return True
     return False
 
@@ -876,25 +907,59 @@ for dp, dn, fn in os.walk(REPO):
             continue
         rel = os.path.relpath(p, REPO)
         sh_writers.append(rel)
+        cfg_prd = any(SH_CFG_PRD.search(cl) for cl in sh_code_lines(body))
         get_sites = list(cmd_sites(body, SH_GET))
         tails = [re.split(r"[;|&)]", line[m.end():], maxsplit=1)[0] for line, m in get_sites]
         aws_names = SH_TIERB_AWS["ACCESS_KEY_ID"] + SH_TIERB_AWS["SECRET_ACCESS_KEY"]
-        if not any(SH_BARE_AWS.search(t) or any(n in t for n in aws_names) for t in tails):
-            continue  # stated limit: AWS_* from caller env with no Doppler read — out of scope
+
+        def _prd_tf_resolve(seg):
+            """A doppler leg's flag segment resolves to prd_terraform when its own -c/--config
+            says so (BEFORE or AFTER the subcommand — the config flag can sit inside the SH_GET
+            match itself, where a post-match tail never sees it) or, with no config flag at all,
+            when the file's ambient DOPPLER_CONFIG is prd_terraform."""
+            return bool(PRD_TF.search(seg)) or \
+                (cfg_prd and not re.search(r"(?:-c|--config)[= ]\s*\S+", seg))
+
+        # `doppler run` legs are judged per invocation: the flag segment is everything up to the
+        # standalone `--` separator token, the wrapped payload after it. The split must key on
+        # the WORD `--` — a substring partition finds the leading dashes of `--name-transformer`
+        # or `--preserve-env` first and reads a transformed leg as transformer-less. Nested
+        # loaders evaluate leg-by-leg — the outer leg's flags never decide the inner's risk.
+        bad_run = bad_dl = False
+        for line, m in cmd_sites(body, SH_RUN):
+            seg = re.split(r"[;|&)]", line[m.end():], maxsplit=1)[0]
+            msep = re.search(r"(?<!\S)--(?!\S)", seg)
+            flags, wrapped = (seg[:msep.start()], seg[msep.end():]) if msep else (seg, "")
+            if (msep and _prd_tf_resolve(flags) and "--name-transformer" not in flags
+                    and sh_tf_write_text(wrapped)):
+                bad_run = True
+        for line, m in cmd_sites(body, SH_DOWNLOAD):
+            if _prd_tf_resolve(re.split(r"[;|&)]", line[m.start():], maxsplit=1)[0]):
+                bad_dl = True
+        if not (any(SH_BARE_AWS.search(t) or any(n in t for n in aws_names) for t in tails)
+                or bad_run or bad_dl):
+            continue  # stated limit: AWS_* from caller env / a clean loader — out of scope
         sh_scoped.append(rel)
         for half, names in SH_TIERB_AWS.items():
             if not any(any(n in t for n in names) for t in tails):
                 sh_bad.append("%s: no Tier-B leg for AWS_%s" % (rel, half))
-        cfg_prd = any(SH_CFG_PRD.search(cl) for cl in sh_code_lines(body))
+        if bad_run:
+            sh_bad.append("%s: `doppler run` resolving to prd_terraform without "
+                          "--name-transformer env-injects the read-only AWS_* pair into a "
+                          "state-writing terraform" % rel)
+        if bad_dl:
+            sh_bad.append("%s: `doppler secrets download` of prd_terraform emits the read-only "
+                          "AWS_* pair wholesale" % rel)
         for (line, m), tail in zip(get_sites, tails):
             if (SH_BARE_AWS.search(tail)
-                    and (PRD_TF.search(tail) or cfg_prd or SH_CFG_PRD.search(line[:m.start()]))):
+                    and _prd_tf_resolve(re.split(r"[;|&)]", line[m.start():], maxsplit=1)[0])):
                 sh_bad.append("%s: reads the read-only prd_terraform AWS_* pair" % rel)
 sh_floor = [k for k in SH_KNOWN_WRITERS if k not in sh_scoped]
 check("G1k: every `.sh` terraform state-writer that reads its backend AWS_* pair from Doppler "
       "sources BOTH legs from a Tier-B name (TF_STATE_AWS_* or GIT_DATA_ROOT_STATE_AWS_*), and "
-      "none reads the read-only prd_terraform AWS_* pair [AC7b; %d .sh scanned, %d writers, "
-      "%d checked]" % (sh_scanned, len(sh_writers), len(sh_scoped)),
+      "none feeds terraform the read-only prd_terraform AWS_* pair — by `secrets get`/`export`, "
+      "a `secrets download`, or a transformer-less `doppler run` leg [AC7b; %d .sh scanned, "
+      "%d writers, %d checked]" % (sh_scanned, len(sh_writers), len(sh_scoped)),
       not sh_floor and not sh_bad,
       "floor_missing=%s bad=%s" % (sh_floor, sorted(set(sh_bad))[:8]))
 
@@ -3239,6 +3304,35 @@ if grep -q "^ok$(printf '\t')G1k: " "$T/control.tsv"; then
 else
   fail "M-g1-k7-compliant-writers: G1k refused the compliant fixture scripts" "$(grep G1k "$T/control.tsv" | cut -c1-240)"
 fi
+# Row k8 — VERB-SET WINDOW: the same buggy pair shape but the write invocation is
+# `terraform destroy` — a state write (the rehearsal workflows run destroy against a Tier-B root
+# for exactly that reason) that a verb set of apply/import/taint does not classify.
+MUTDIR="$(fixcopy g1-k8)"; assert_fixture_dir "$MUTDIR"
+printf '#!/usr/bin/env bash\nset -euo pipefail\nexport AWS_ACCESS_KEY_ID="$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)"\nexport AWS_SECRET_ACCESS_KEY="$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)"\nterraform destroy -auto-approve -input=false\n' > "$MUTDIR/tree/scripts/zz-destroy.sh"
+if fixture_written g1-k8-destroy-verb "$MUTDIR/tree/scripts/zz-destroy.sh"; then
+  fixcensus "$MUTDIR" "$T/mut/g1-k8.tsv" ""
+  mutant_red g1-k8-destroy-verb wf_row "$T/mut/g1-k8.tsv" "G1k:"
+  g1k_cause g1-k8-destroy-verb "$T/mut/g1-k8.tsv" "scripts/zz-destroy.sh"
+fi
+# Row k9 — RUN-INJECTION: the pair never touches a `secrets get`; a `doppler run` leg resolving
+# to prd_terraform with no --name-transformer env-injects the bare read-only pair into the
+# state-writing terraform it wraps.
+MUTDIR="$(fixcopy g1-k9)"; assert_fixture_dir "$MUTDIR"
+printf '#!/usr/bin/env bash\nset -euo pipefail\ndoppler run -p soleur -c prd_terraform -- terraform apply -input=false -auto-approve\n' > "$MUTDIR/tree/scripts/zz-run-inject.sh"
+if fixture_written g1-k9-run-inject-prd-tf "$MUTDIR/tree/scripts/zz-run-inject.sh"; then
+  fixcensus "$MUTDIR" "$T/mut/g1-k9.tsv" ""
+  mutant_red g1-k9-run-inject-prd-tf wf_row "$T/mut/g1-k9.tsv" "G1k:"
+  g1k_cause g1-k9-run-inject-prd-tf "$T/mut/g1-k9.tsv" "env-injects the read-only"
+fi
+# Row k10 — DOWNLOAD: `doppler secrets download` emits the whole config — pair included — into a
+# file the writer then sources; no per-name `secrets get` leg exists for the name check to see.
+MUTDIR="$(fixcopy g1-k10)"; assert_fixture_dir "$MUTDIR"
+printf '#!/usr/bin/env bash\nset -euo pipefail\ndoppler secrets download -p soleur -c prd_terraform --format env > .tfenv\nset -a; . ./.tfenv; set +a\nterraform apply -input=false -auto-approve\n' > "$MUTDIR/tree/scripts/zz-download.sh"
+if fixture_written g1-k10-secrets-download "$MUTDIR/tree/scripts/zz-download.sh"; then
+  fixcensus "$MUTDIR" "$T/mut/g1-k10.tsv" ""
+  mutant_red g1-k10-secrets-download wf_row "$T/mut/g1-k10.tsv" "G1k:"
+  g1k_cause g1-k10-secrets-download "$T/mut/g1-k10.tsv" "emits the read-only"
+fi
 
 # Each G4e row also asserts its CAUSE on the detail line (#9360 review): a later fixture edit
 # that reds the row for a different reason (YAML that no longer parses, a deleted read) would
@@ -4543,10 +4637,12 @@ fi
 # 142 -> 145 (#9927 8b): g1-g2 inverted (the read-only-first allowance is deleted; still 1 landing, same fixture), g1-g3 (a step
 #   `env:` DOPPLER_CONFIG read, 1 landing), g1-j1 (drop a loader job's environment key, 1 landing) and g1-j2 (zero loader jobs,
 #   one landing per removed call, counted once). Measured: 145 ran.
+# 151 -> 154 (#10990 review): g1-k8 (destroy-verb fixture writer, 1), g1-k9 (doppler-run env
+#   injection fixture, 1), g1-k10 (secrets-download fixture, 1). Measured: 154 ran.
 # 145 -> 151 (#10990, AC7b limb 3): g1-k1 (fixture .sh writer, 1), g1-k2 (checker write-token set, 1),
 #   g1-k3 (second-member fixture .sh writer, 1), g1-k4 (half-set pair, 1), g1-k5 (checker
 #   classification key, 1), g1-k6 (read-only fixture .sh, 1). Measured: 151 ran.
-MUTANT_FLOOR=151
+MUTANT_FLOOR=154
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4592,11 +4688,13 @@ _ran=$((passes + fails))
 #   'base unavailable' end-to-end. Measured: 365 ran.
 # 365 -> 368 (#10136): D8-flag (live) and D8-flag-m1/m2 (environment and --preserve-env mutants; 1 verdict each). Measured: 368 ran.
 # 368 -> 369 (#10136 round 4): D8-flag-m3 (the flag job without its write-scoped Doppler token). Measured: 369 ran.
+# 393 -> 402 (#10990 review): g1-k8/k9/k10 (3 landings + 3 verdicts + 3 named-cause checks).
+#   Measured: 402 ran.
 # 376 -> 393 (#10990, AC7b limb 3): live G1k (1), g1-k1..k6 (6 landings + 6 verdicts), the three
 #   named-cause checks on k1/k3/k4 (3), the read-only and compliant controls (2). The pre-change
 #   suite measured 376 on this branch — the recorded 369 above is stale by 7 (the floor asserts
 #   only `-lt`, so upward drift never trips it). Measured: 393 ran.
-FLOOR=393
+FLOOR=402
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

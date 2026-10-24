@@ -31,6 +31,14 @@
 
 set -euo pipefail
 
+# Refuse to run under xtrace: -x prints a variable's value the moment it is bound (see #7797),
+# and this script binds the Tier-B R2 state pair. There is no legitimate traced run, so the
+# refusal is unconditional and sits before anything is bound (same guard as
+# apps/cla-evidence/infra/bootstrap.sh).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 if [[ "${DOPPLER_CONFIG:-}" != "prd" ]]; then
   echo "::error::DOPPLER_CONFIG=\"${DOPPLER_CONFIG:-<unset>}\" — run via:" >&2
   echo "::error::  doppler run -p soleur -c prd -- bash $0" >&2
@@ -49,10 +57,11 @@ SEED="$REPO_ROOT/apps/web-platform/scripts/seed-live-verify-user.sh"
 
 echo "==> Step 1: terraform apply (-target the two live-verify resources)"
 
-# The infra root authenticates via the prd_terraform config (NOT prd): it reads
-# doppler_token_tf + betterstack/github-app TF vars (~12 TF_VAR_* inputs). Under
-# -c prd the apply fails immediately with "No value for required variable". So
-# Step 1 runs under prd_terraform; Step 2 (the seed) stays under prd.
+# The infra root's ~12 TF_VAR_* inputs come from the prd_terraform config (NOT prd) — under
+# -c prd alone the apply fails immediately with "No value for required variable". The provider
+# write token `doppler_token_tf` lives only in Tier B post-O5b, so Step 1 runs under the nested
+# loader below (outer soleur-infra-privileged/prd wrapping inner prd_terraform), not a bare
+# prd_terraform read; Step 2 (the seed) stays under prd.
 #
 # The Cloudflare-R2 S3 backend reads its creds during `terraform init`, BEFORE any
 # provider/variable evaluates — and it wants RAW AWS_ACCESS_KEY_ID /
