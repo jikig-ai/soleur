@@ -366,6 +366,7 @@
 4	plugins/soleur/test/go-session-gates.test.sh
 4	plugins/soleur/test/harvest-debt.test.sh
 3	plugins/soleur/test/hook-git-env-coverage.mutation.sh
+4	plugins/soleur/test/lib/git-corrupt-graph.sh
 1	plugins/soleur/test/lint-bot-synthetic-completeness.test.sh
 11	plugins/soleur/test/lint-questionnaire-identity.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh
@@ -387,7 +388,7 @@
 2	scripts/actions-queue-health.test.sh
 1	scripts/audit-bot-codeql-coverage.sh
 1	scripts/audit-dev-scheduled-shapes.sh
-1	scripts/battery-tag-authorship.test.sh
+2	scripts/battery-tag-authorship.test.sh
 1	scripts/capture-web-2-host-key.sh
 1	scripts/check-backstop-revision.sh
 6	scripts/check-backstop-revision.test.sh
