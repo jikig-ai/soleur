@@ -2741,6 +2741,13 @@ AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
   "scripts/apply-delivery-gap.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# ---------------------------------------------------------------------------
+# S4 PR4 (#10860) code-edge drain. The arrays from here to the end of the file declare, for suites that had no
+# AFFECTED_*_PATHS block, the files the suite really executes, sources or opens. Rubric:
+# knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md section 7, "The drain rubric"; per-pair
+# evidence: knowledge-base/project/specs/feat-one-shot-s4-affected-index-pr4-code-edge-drain/pairs-decisions.tsv.
+# Exact files only. An edge whose declaration reveals more mentions was held back (#10959).
+# ---------------------------------------------------------------------------
 AFFECTED_PLUGINS_SOLEUR_SCRIPTS_ALPHA_METRICS_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
