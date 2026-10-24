@@ -2258,8 +2258,8 @@ _diff_edge_hit() {
           return 1
           ;;
         # `literal|malformed|*)` — the `*)` is piped, never space-led: the
-        # killed-classification battery's budget arms rewrite the substring
-        # `    *) return 0 ;;` (4-space lead) exactly once and assert on that.
+        # killed-classification battery's budget arms rewrite a space-led
+        # default-case substring exactly once and assert on its uniqueness.
         literal|malformed|*) return 0 ;;   # literal + every malformed shape → match (widen-only)
       esac
       ;;
