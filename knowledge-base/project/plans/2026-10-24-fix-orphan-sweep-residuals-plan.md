@@ -14,12 +14,32 @@ lane: single-domain
 
 # review: orphan-sweep residuals — monitored signal, project-identity proof, ADR-241 entry, filer labels
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-24
+**Agents used:** soleur:engineering:research:best-practices-researcher (Hetzner API facts), soleur:engineering:research:framework-docs-researcher (Sentry provider, Sentry Crons, GitHub Actions semantics), soleur:engineering:review:architecture-strategist, soleur:engineering:review:observability-coverage-reviewer, soleur:engineering:review:security-sentinel, soleur:product:spec-flow-analyzer, soleur:engineering:cto (rulings D1, D2). Mechanical gates run: guard-contract lint, probe-verb gate, technical-ruling gate, markdownlint, infra-human-step lint, PAT sweep, KB citation check, self-audit grep for references to cut mechanisms.
+
+### Key improvements
+
+1. The headline property was not true as planned: an unrouted Sentry monitor emails nobody and the routed alert never re-pages, so the aggregator now carries a permanent per-slot `notify-ops-email` step and the monitor is routed right after PR 1's apply instead of waiting on the dead scheduler (D1).
+2. Hetzner facts verified from the official OpenAPI spec (404 `not_found`, 401, 403, 429 with `RateLimit-*`, a Read token may GET, no endpoint returns a token's project); the cross-project 404 stays undocumented, so the page text names both causes and Phase 0.2 measures it.
+3. The pinned Sentry provider has no mute attribute, so the monitor ships unmuted; "MISSED for a never-checked-in monitor" is unverified and every statement is hedged.
+4. The identity anchor is hardened: `bc_curl` in both sweeps, a closed-vocabulary `jq` with stderr discarded, `EXIT` trap, validated HTTP code, a body-canary harness row, classification-only error text, comment-stripped exact-count pin row.
+5. The aggregator gets `permissions: contents: read` (the workflow grants `issues: write`) with a guard row; the pin-bump procedure is now owned (ADR-282 addendum and a runbook checklist generated from `git grep`).
+
+### New considerations discovered
+
+- A 404 day produces up to three emails per slot; the sole-copy p1 issue is named as primary.
+- A concurrency-dropped pending run looks identical to a dead scheduler (runbook triage row).
+- A deliberate manual cancel posts `error` and emails (accepted noise).
+- The suite has two ratchets (`R78_MIN` and a hard floor with a prose ledger).
+
 ## Overview
 
 Issue #10952 bundles four follow-ups left after the two Hetzner orphan sweeps in `.github/workflows/scheduled-terraform-drift.yml` (`rung2-rehearsal-orphan-sweep`, `inngest-rehearsal-orphan-sweep`) moved to the read-only token with a failure email (PR #10936, merged 2026-10-23). This plan covers only those four items, in their smallest form after plan review and two CTO rulings rounds (2026-10-24):
 
-1. **A monitored signal for the sweeps themselves** — one aggregator job posts a Sentry Crons check-in on a new slug, `ok` only when both sweeps' job results are `success`, so a sweep that never ran (failed checkout, cancel, timeout, rejected email) reaches Sentry.
-2. **A project-identity proof inside each sweep** — before any listing, each sweep proves the token can see the pinned production volume; an unproven identity ends the sweep red with a named error slug, a distinct failure-email subject and an `error` check-in.
+1. **A monitored signal for the sweeps themselves** — one aggregator job posts a Sentry Crons check-in on a new slug, `ok` only when both sweeps' job results are `success`, and emails ops on every slot where either sweep is not `success`. A failed sweep (failed checkout, cancel, timeout, rejected email) therefore reaches a person through the aggregator's email on every failed slot, and through Sentry email once the monitor is routed (routing follows immediately after this PR's apply). Whether Sentry reports MISSED for a monitor that has never checked in is unverified, so this plan does not rely on it.
+2. **A project-identity proof inside each sweep** — before any listing, each sweep proves the token can see the pinned production volume; an unproven identity ends the sweep red with a named error slug, a distinct failure-email subject and an `error` check-in. The orphan listing is suppressed for that run (accepted residual, recorded in the ADR-241 entry).
 3. **The ADR-241 amendment entry** for the two jobs that left the Tier-B environment set, plus the runbook true-up.
 4. **The harvested labels on the two orphan filers** (labels on create).
 
@@ -44,7 +64,7 @@ Checked: #9927 OPEN, #10112 OPEN, #10430 OPEN (sole-copy check-in; not closed by
 
 ### Property List (Phase 0.6b)
 
-- P1. A sweep job that did not run to a verdict reaches a person without depending on Resend or on the job's own steps.
+- P1. A sweep job that did not run to a verdict reaches a person on every failed slot, through a path that does not depend on the sweep's own steps (the aggregator email) and, after routing, through a second one that does not depend on Resend (Sentry).
 - P2. A sweep that ran and produced no verdict (token unreadable, listing unreachable, issue filer dead) reaches a person (already true by email; P1 adds a second channel).
 - P3. A clean sweep verdict is only possible when the token can see the pinned production volume.
 - P4. A sweep that cannot prove that has its own named reason (error slug, email subject, check-in), distinct from "an orphan was found", and the text names both possible causes.
@@ -65,7 +85,10 @@ Checked: #9927 OPEN, #10112 OPEN, #10430 OPEN (sole-copy check-in; not closed by
 | ADR-031 amendment | P6 | Cut (C4): the rule goes in the comment block above the aggregator, next to the #8630 citation. |
 | Follow-through enrollment script and directive | none in scope | Cut (C5): a plain dated issue. |
 | Label re-assert on the existing-issue path | P5 | Cut (C6): no orphan issue has ever been filed. |
-| Exporting a `sent` output from the email steps | P1 | Cut: a failed sweep job already turns the aggregator `error`. |
+| Exporting a `sent` output from the email steps | P1 | Cut: a failed sweep job already turns the aggregator `error`, and the aggregator email fires on any non-success result. |
+| "Ship the monitor muted" (Phase 0.3c branch) | P1 | Cut: the pinned provider (jianyuan/sentry 0.15.7) has no mute attribute (only `enabled`, a pause whose effect on issue creation is undocumented); a mute would also remove the Sentry issue. |
+| Waiting for the first measured `ok` check-in before routing | P1 | Cut (D1): it depends on the dead scheduler (#10854); the two-PR rule needs only PR 1's apply. |
+| Listing-then-fail on an unproven identity | P3 | Cut (D2): reworks the sweep step's control flow and could file an issue from a token whose project is unproven; suppression stays, recorded as a residual. |
 | Folding the sole-copy job into the aggregator | none in scope | Cut: #10430 owns it. |
 
 ### Institutional learnings that bind this plan
@@ -87,7 +110,7 @@ None of the open `code-review` issues names a file this plan edits (checked 2026
 
 The two sweeps guard against paying Hetzner boxes (one with a live LUKS key in its scratch Doppler config) that Terraform state forgot. Since #10936 they send a failure email, but:
 
-- the email step cannot run when checkout fails (the local action is not on disk), a job-level cancel or timeout leaves `failure()` false, and a Resend rejection leaves a warning, so a sweep that never ran produces no message and no Sentry signal;
+- the email step cannot run when checkout fails (the local action is not on disk), a job-level cancel or timeout leaves `failure()` false, and a Resend rejection leaves a warning, so a sweep that never ran produces no message and no Sentry signal. The Sentry route alone would not fix that: the repo's own text says issues from unrouted cron monitors emailed nobody, and the routed alert emails once per incident and never re-pages, so a per-slot email is needed too;
 - a read-only token that cannot see the production project would list nothing and report a clean sweep; only the sole-copy job notices, and its page is worded for a lost volume;
 - a real orphan files an issue labelled `infra-drift` only, which the weekly operator digest does not harvest;
 - ADR-241 does not record that the two jobs left the Tier-B set, and the runbook prose says project identity is "checked only indirectly" and that no Sentry check-in covers these jobs.
@@ -98,9 +121,9 @@ The two sweeps guard against paying Hetzner boxes (one with a live LUKS key in i
 
 New job `orphan-sweeps-checkin` in the same workflow:
 
-- `needs: [rung2-rehearsal-orphan-sweep, inngest-rehearsal-orphan-sweep]`, `if: always() && github.ref == 'refs/heads/main'`, `runs-on: ubuntu-24.04`, `timeout-minutes: 5`. `always()` is kept deliberately (CTO ruling C7): a manual cancel posts `error`, which is accurate (that slot's sweeps did not complete) and only costs noise on a deliberate cancel.
-- Steps: `actions/checkout` (same pinned sha, `persist-credentials: false`, step timeout 2) then `./.github/actions/sentry-heartbeat` with `continue-on-error: true`, `monitor-slug: scheduled-orphan-sweeps`, and the three `SENTRY_*` secrets only. If the aggregator's own checkout fails, no check-in is sent and Sentry reports MISSED, which is the intended property.
-- It must not name `api.hetzner.cloud`, the read-only token name, or any secret other than the three `SENTRY_*` ones (otherwise the R7 population rule pulls it into the Hetzner-lister set). It carries no job-level `outputs:` and the sweeps gain none.
+- `needs: [rung2-rehearsal-orphan-sweep, inngest-rehearsal-orphan-sweep]`, `if: always() && github.ref == 'refs/heads/main'`, `runs-on: ubuntu-24.04`, `timeout-minutes: 8`, job-level `permissions: contents: read` (the workflow-level block also grants `issues: write`, which this job does not need). `always()` is kept deliberately (CTO ruling C7): a manual cancel posts `error`, which is accurate (that slot's sweeps did not complete) and only costs noise on a deliberate cancel.
+- Steps, in this order: `actions/checkout` (same pinned sha, `persist-credentials: false`, step timeout 2); `./.github/actions/sentry-heartbeat` with `continue-on-error: true`, `monitor-slug: scheduled-orphan-sweeps` and the three `SENTRY_*` secrets; then `./.github/actions/notify-ops-email` (step id `notify`, `continue-on-error: true`, `timeout-minutes: 2`) gated `if: always() && (needs.rung2-rehearsal-orphan-sweep.result != 'success' || needs.inngest-rehearsal-orphan-sweep.result != 'success')`, with `RESEND_API_KEY` only. The email subject is `[INFRA DRIFT] Orphan sweep did not complete (rung-2 <result>, inngest <result>)` and the body links the run and names both results; it is permanent, not a stopgap (CTO ruling D1): the Sentry route emails once per incident and never re-pages, so only this step reaches a person on every failed slot (failed checkout, cancel, timeout, Resend rejection). A duplicate next to a sweep's own failure email is accepted. If the aggregator's own checkout fails, no check-in or email is sent; whether Sentry then reports MISSED for a monitor that has never checked in is unverified, and the plan does not rely on it.
+- It must not name `api.hetzner.cloud`, the read-only token name, or any secret other than the three `SENTRY_*` ones and `RESEND_API_KEY` (otherwise the R7 population rule pulls it into the Hetzner-lister set; R10 allows exactly those four and never `DOPPLER_TOKEN` or a Hetzner name). It carries no job-level `outputs:` and the sweeps gain none.
 - Status expression (positive evidence only):
 
 ```yaml
@@ -111,9 +134,9 @@ status: >-
 ```
 
 - Orphans found and filed is `ok` (drift-check precedent: "ran and found something" is not "could not run"; the issue is the signal). An identity failure, a failed listing, a dead filer or a cancel all end the sweep job non-success and so post `error`.
-- A comment block above the job records the rule (CTO ruling C4): one slug per job group, `ok` only on `needs` results, a shared slug cannot do per-job liveness (the #8630 amendment cited at the drift-check check-in), and that the sole-copy job joins later by adding itself to `needs` (#10430).
-- New monitor `sentry_cron_monitor.scheduled_orphan_sweeps` in `apps/web-platform/infra/sentry/cron-monitors.tf`: `name = "scheduled-orphan-sweeps"`, `schedule = { crontab = "0 6,18 * * *" }`, `checkin_margin_minutes = 60`, `max_runtime_minutes = 30`, `failure_issue_threshold = 1`, `recovery_threshold = 1`, `timezone = "UTC"`. The 25-minute job cap puts a worst-case check-in about 30 minutes after the slot, inside the margin. `max_runtime_minutes` has no effect (single check-in).
-- Created unrouted: add `scheduled_orphan_sweeps = "failure emails and filed issues are the primary channels; route after the first measured check-in (#<routing issue>)"` to `local.cron_monitor_alert_unrouted` in `cron-monitor-alerts.tf` (two-PR rule, precedent `workspaces_luks_verify_web2`). The routing follow-up issue is filed FIRST (Phase 0) so the reason cites a real number; the routing-parity test requires it.
+- A comment block above the job records the rule (CTO ruling C4): one slug per job group, `ok` only on `needs` results, a shared slug cannot do per-job liveness (the #8630 amendment cited at the drift-check check-in), that `ok` means job success and not delivery (a dead scratch-config filer plus a rejected email still reads `ok`; the residual is in the ADR-241 entry), that the check-in key is a public write-only ingest key so anyone holding it can post `ok` (already true of all 65 monitors), that the email step is permanent, and that the sole-copy job joins later by adding itself to `needs` (#10430).
+- New monitor `sentry_cron_monitor.scheduled_orphan_sweeps` in `apps/web-platform/infra/sentry/cron-monitors.tf`: `name = "scheduled-orphan-sweeps"`, `schedule = { crontab = "0 6,18 * * *" }`, `checkin_margin_minutes = 60`, `max_runtime_minutes = 30`, `failure_issue_threshold = 1`, `recovery_threshold = 1`, `timezone = "UTC"`. The 25-minute job cap puts a worst-case check-in about 30 minutes after the slot, inside the margin; a run queued behind another run in the concurrency group can land later, and a dropped pending run (cancel-in-progress is false but a newer pending run replaces an older one) runs no job at all, which looks identical to a dead scheduler (runbook triage row below). `max_runtime_minutes` has no effect (single check-in).
+- Created unrouted in this PR (two-PR rule, precedent `workspaces_luks_verify_web2`): add `scheduled_orphan_sweeps = "the aggregator's per-slot email and the sweeps' own failure emails are the cover until routed; routing PR due by 2026-10-27 (#<routing issue>)"` to `local.cron_monitor_alert_unrouted` in `cron-monitor-alerts.tf`. The routing follow-up issue is filed FIRST (Phase 0) so the reason cites a real number; the routing-parity test requires it. PR 2 (routing) happens right after this PR's apply and needs no check-in and no scheduler (CTO ruling D1): it moves the label into `sentry_alert.cron_monitor_failure.monitor_ids` and regenerates `alert-reference.json`.
 - Ledgers: `README.md` counts (monitor total 65 -> 66, including the two literals test T25 reads, the "66 resource sentry_cron_monitor blocks" sentence in the audit script and the bold "66 cron monitors" in the README; re-derive the exact strings from the test, do not trust this paraphrase), `NON_INNGEST_MONITORS` in `function-registry-count.test.ts`, the count prose in `apps/web-platform/scripts/sentry-monitors-audit.sh`, `model.c4` (`Of 65 cron monitors` -> 66; `20 check in from here` -> 21), `model.likec4.json` regenerated with `scripts/regenerate-c4-model.sh` (the parity test names it), and the header of `.github/actions/sentry-heartbeat/action.yml` ("13 steps across 12 workflow files — scheduled-terraform-drift.yml carries two" -> 14 steps, three). Unchanged by derivation: C1 (18 workflows), C6/C9 (45 webapp), C7.
 
 ### 2. Project-identity proof inside each sweep (item 2)
@@ -121,15 +144,15 @@ status: >-
 Inline in both sweeps' `sweep` step, after the token shape check and BEFORE any listing, mirroring the sole-copy probe's call shape:
 
 - `readonly VOLUME_ID_PIN=106903269` in each sweep step (the constant name is reused on purpose so one grep covers every copy; CTO ruling C3).
-- One GET: `bc_curl ... -- -sS --max-time 30 -o "$body_file" -w '%{http_code}' "https://api.hetzner.cloud/v1/volumes/${VOLUME_ID_PIN}"`. No `-f` (the code is read). The inngest sweep keeps its stdin-config curl form already used by that job; the request shape (no `-f`, `-o`, `-w`, `--max-time`) is the same. Two attempts, 5 s apart, retried only on transport error, 429 and 5xx (worst case about 285 s for the whole step, under the unchanged 6-minute `timeout-minutes`).
-- Pass requires HTTP 200 and `.volume.id == pin` (numeric), read with `jq` guarded as `|| id=""` (an unguarded `jq` under `set -e` would abort with `identity` unpublished). No name check, no new credential, GET only.
-- Outcomes. The step publishes `identity=proven|unproven|unreachable` to `$GITHUB_OUTPUT` BEFORE it exits, prints the named slug as `::error::`, and `exit 1`s:
+- One GET through `bc_curl` in BOTH sweeps (the library's shape check, `--disable --noproxy`, environment scrub and xtrace refusal; the inngest sweep keeps its existing listings in the stdin-config form but its anchor uses `bc_curl`, which also removes a per-sweep divergence the R9 shims would have to model): `bc_curl ... -- -sS --max-time 30 -o "$body_file" -w '%{http_code}' "https://api.hetzner.cloud/v1/volumes/${VOLUME_ID_PIN}"`. No `-f` (the code is read). Two attempts, 5 s apart, retried only on transport error, 429 and 5xx (worst case about 285 s for the whole step, under the unchanged 6-minute `timeout-minutes`; Hetzner's budget is 3600 requests per hour per project with a 1 request per second refill, so a 5 s retry restores about five requests). `$body_file` is `mktemp "${RUNNER_TEMP:?}/..."` (mode 0600) removed by an `EXIT` trap that covers every `exit 1` path (copy the sole-copy probe's `on_exit`).
+- Pass requires HTTP 200 and `.volume.id == pin` (numeric). The body is read by ONE `jq` call that reads `"$body_file"` with `2>/dev/null`, compares the id inside jq (`--argjson pin`) and emits a closed vocabulary (`ok`, `other-id`, `bad-body`); `http` is validated against `^[0-9]{3}$` before it appears anywhere; the observed `.volume.id` and any body field are never printed (the repo is public, so run logs and annotations are public). An unguarded `jq` under `set -e` would abort with `identity` unpublished, so the call is guarded. No name check, no new credential, GET only. Documented behaviour (checked 2026-10-24 against the Hetzner OpenAPI spec, `https://docs.hetzner.cloud/cloud.spec.json`): 404 `not_found` for an unknown id, 401 `unauthorized`, 403 `forbidden`, 429 `rate_limit_exceeded`; a Read token may call GET; `volume.id` is an integer; no endpoint returns the token's project. What a volume of ANOTHER project returns is undocumented (Phase 0.2 measures it).
+- Outcomes. The step publishes `identity=proven|unproven|unreachable`, `identity_http=<3 digits or none>` and `identity_reason=http|id_mismatch|malformed|transport` to `$GITHUB_OUTPUT` BEFORE it exits (every write comes from a `case` branch with a literal, never from `$http` or the body), prints the named slug as `::error::` with the code and reason class (classification only, never body bytes), and `exit 1`s:
   - `proven`: continue to the listings.
   - `unproven` (401, 403, 404, 200 with a wrong id or a malformed body): `orphan_sweep_project_identity_unproven`.
   - `unreachable` (transport error, 429, 5xx after the attempts): `orphan_sweep_project_identity_unreachable` — an unreachable Hetzner is not an unproven identity and the text must not claim it is.
-- Identity failure suppresses the orphan listing for that run (a blind sweep must not read as clean; stricter side wins).
-- The page is the named slug, the red job, the failure email and the `error` check-in. The failure email stays the LAST step of each job with `if: failure()`; its subject becomes conditional: `[INFRA DRIFT] <rung-2|inngest> orphan sweep: cannot prove the production volume is visible to this token` when `steps.sweep.outputs.identity == 'unproven'`, else the current subject; the body adds the `identity` value and the sweep name next to the step outcomes. The text names both causes (the volume is gone, or the token belongs to another project) and gives the first read-only action (list server names with the read-only token); it never says "wrong project" as a detection. No second issue filer: `sole-copy-protection-check` already files a p1 for the same underlying condition (CTO ruling C2).
-- Pin equality: extend row N1 of `plugins/soleur/test/sole-copy-drift-check.test.sh`: extract every `readonly VOLUME_ID_PIN=` from the workflow file, assert the count is exactly 3 (sole-copy probe plus the two sweeps), assert all three are equal, and keep the existing equality to ADR-282, the postmerge skill's section-5c one-liner and the runbook one-liner. The exact count stops a deleted copy from passing silently. The sole-copy probe's own `readonly VOLUME_ID_PIN=` line is not moved (the suite reads it with `sed`).
+- Identity failure suppresses the orphan listing for that run, for every unproven identity (CTO ruling D2): the run is red with the email and an `error` check-in on every slot so it can never read as clean; the cost is that during a sanctioned volume recreate (when the pin is stale) rehearsal-orphan detection is blind until the bump lands, which is recorded as an accepted residual in the ADR-241 entry. A stale pin lasting more than one slot because the checklist was missed flips this to list-then-fail in a follow-up.
+- The page is the named slug, the red job, the failure email and the `error` check-in. The failure email stays the LAST step of each job with `if: failure()`; its subject becomes conditional: `[INFRA DRIFT] <rung-2|inngest> orphan sweep: cannot prove the production volume is visible to this token` when `steps.sweep.outputs.identity == 'unproven'`, else the current subject; the body adds the `identity`, HTTP code and reason class next to the step outcomes (an empty `identity`, from a failure before the proof, selects the standard subject and renders honestly), and names the `sole-copy-protection-check` p1 issue as the PRIMARY page for a gone volume (this email is the backstop, because the sole-copy job has no check-in, #10430; a missing sole-copy issue means that job is broken). The text names both causes (the volume is gone, or the token belongs to another project) and gives the first read-only action (list server names with the read-only token); it never says "wrong project" as a detection. No second issue filer: `sole-copy-protection-check` already files a p1 for the same underlying condition (CTO ruling C2).
+- Pin equality: extend row N1 of `plugins/soleur/test/sole-copy-drift-check.test.sh`: extract every `readonly VOLUME_ID_PIN=` from the workflow file, assert the count is exactly 3 (sole-copy probe plus the two sweeps), assert all three are equal, and keep the existing equality to ADR-282, the postmerge skill's section-5c one-liner and the runbook one-liner. The exact count stops a deleted copy from passing silently. The count is taken over comment-stripped text, `^[[:space:]]*readonly VOLUME_ID_PIN=[0-9]+`, so a comment quoting the name does not count. The sole-copy probe's own `readonly VOLUME_ID_PIN=` line is not moved (the suite reads it with `sed`).
 
 ### 3. Labels on the orphan filers (item 4)
 
@@ -139,8 +162,10 @@ Inline in both sweeps' `sweep` step, after the token shape check and BEFORE any 
 
 ### 4. Documentation (item 3 and P6)
 
-- ADR-241: append `### 2026-10-24 (#10952; the move itself landed in #10936 on 2026-10-23): the two orphan sweeps leave the Tier-B environment set` after the Site C entry. Body: the sweeps hold the read-only token only, send a failure email, now prove they can see the pinned production volume before listing, and are monitored through the aggregator (one sentence pointing at the comment block above the job); no status change; D4's body and the Statuses table are not edited. Residuals recorded (CTO ruling C1): the scratch-config issue filer failing AND Resend rejecting its email in the same run, on a standing condition tracked by #10829 and #7233, reaches no one; there is no second pinned anchor; the sole-copy job is out of scope (#10430). Line-anchored edit with a single-match assertion and a deletion-count check (learning 2026-10-09).
-- Runbook `infra-credential-tiers-8209.md`: fix the two sweep rows (project identity is now checked in the sweep, as "can the token see the pinned volume"), the residuals paragraph ("no Sentry check-in covers these jobs"), and add a row for `orphan-sweeps-checkin`.
+- ADR-241: append `### 2026-10-24 (#10952; the move itself landed in #10936 on 2026-10-23): the two orphan sweeps leave the Tier-B environment set` after the Site C entry. Body: the sweeps hold the read-only token only, send a failure email, now prove they can see the pinned production volume before listing, and are monitored through the aggregator (one sentence pointing at the comment block above the job); no status change; D4's body and the Statuses table are not edited. Residuals recorded (CTO rulings C1 and D2): the scratch-config issue filer failing AND Resend rejecting its email in the same run, on a standing condition tracked by #10829 and #7233, reaches no one; the orphan listing is suppressed while the identity is unproven, so during a sanctioned volume recreate rehearsal-orphan detection is blind until the pin bump lands; there is no second pinned anchor; the sole-copy job is out of scope (#10430). Line-anchored edit with a single-match assertion and a deletion-count check (learning 2026-10-09).
+- ADR-282: a dated addendum (after its last entry; line-anchored, zero deleted lines) saying the id pin now has two more consumers (the two sweeps), N1 pins the three workflow copies, who owns a bump (the founder as incident owner) and that a red sweep during a sanctioned volume recreate is expected, not a regression.
+- Runbook `inngest-luks-cutover-6894.md` (break-glass section): a "volume recreated" checklist for the pin bump. Generate its list from `git grep -n 106903269` at implementation time (do not hard-code a count) and split it into pins enforced by N1 (the three workflow copies, the ADR-282 text, the postmerge section-5c one-liner, the runbook one-liner, and the `VOL_ID` constant in `sole-copy-drift-check.test.sh`) and record-only places updated by hand (`scripts/encryption-posture-ledger.json`, `knowledge-base/legal/compliance-posture.md`, `inngest-provision-rehearsal.md`, ADR-142, the audit records). State that the bump PR merges in the same cycle as the `.tf` change.
+- Runbook `infra-credential-tiers-8209.md`: add a triage row: all three of `scheduled-terraform-drift`, `scheduled-heartbeat-reconcile` and `scheduled-orphan-sweeps` show the same slot missed together with a zero-job cancelled run in Actions means a pending run was replaced in the concurrency group and no sweep ran: re-dispatch from main; a 404 day produces up to three emails per slot (two sweep subjects plus the sole-copy p1 issue, which is primary). Also in this file: fix the two sweep rows (project identity is now checked in the sweep, as "can the token see the pinned volume"), the residuals paragraph ("no Sentry check-in covers these jobs"), and add a row for `orphan-sweeps-checkin`.
 
 ## Scope Check
 
@@ -169,13 +194,15 @@ Inline in both sweeps' `sweep` step, after the token shape check and BEFORE any 
 | Ledger edits (README, audit script, `function-registry-count.test.ts`, `model.c4`, `model.likec4.json`, heartbeat `action.yml` header) | "a monitored signal" | inferred — justification: a new monitor moves these ledgers and `c4-count-parity` and T25 redden main otherwise |
 | Unrouted entry in `cron-monitor-alerts.tf` | — | inferred — justification: the routing-parity guard fails any monitor in neither list; the two-PR rule forbids routing in the same PR |
 | Runbook row and prose fixes | "ADR-241 amendment entry ... (the change is recorded in the runbook ... rows)" | inferred — justification: two sentences in the runbook become false when this ships |
+| Aggregator email step, `permissions: contents: read` | "so a sweep that never ran reaches a person" | asked (the Sentry route alone emails once per incident and nobody while unrouted, CTO ruling D1) |
+| ADR-282 addendum and the pin-bump runbook checklist | — | inferred — justification: the pin gains two consumers and a stale pin turns both sweeps red with no stated owner or procedure (architecture review P1) |
 | New guards R10, R9 anchor rows, label rows, N1 count extension | — | inferred — justification: the new mechanisms need guards or they rot (the 2026-10-23 learning) |
 | Follow-up issues (routing, sole-copy `zero` ambiguity and join, duplicate scratch-config issues) | "Re-eval by: date 2026-11-23" | inferred — justification: wg-when-deferring-a-capability-create-a requires a tracked issue per deferral |
 
 ### Split Assessment
 
 - Subsystems touched: 4 — `.github/workflows` (+ the heartbeat action header), `apps/web-platform` (sentry infra, audit script, registry test), `plugins/soleur/test`, `knowledge-base/engineering` (ADR, C4, runbook). The items share one mechanism chain (the monitor needs the ledgers; the identity proof needs the guard), and the CTO ruled one PR.
-- Planned files: about 14 | Estimated changed lines: about 350 (workflow ~120, tests ~150, docs ~60, tf ~20)
+- Planned files: about 16 | Estimated changed lines: about 420 (workflow ~150, tests ~170, docs ~80, tf ~20)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR. The Sentry routing PR 2 is the one forced split (two-PR rule) and is a tracked follow-up.
 
@@ -183,11 +210,11 @@ Inline in both sweeps' `sweep` step, after the token shape check and BEFORE any 
 
 **If this lands broken, the user experiences:** nothing directly — no end-user surface. The operator experiences a monitor that reports `error` on every run (noise that hides a real one), or a sweep step that reds on a healthy token and suppresses the orphan listing until fixed.
 
-**If this leaks, the user's data is exposed via:** no new exposure vector. The identity step is a GET with the existing read-only token on the same stdin-config path; the aggregator holds only the three Sentry ingest secrets and no Hetzner or Doppler credential; the email body carries no token, API body or volume identifier.
+**If this leaks, the user's data is exposed via:** no new exposure vector. The identity step is a GET with the existing read-only token on the same stdin-config path; the aggregator holds only the three Sentry ingest secrets and the Resend key (the same key every `notify-ops-email` step already uses) and no Hetzner or Doppler credential, and carries `permissions: contents: read`; the email body carries no token, API body or volume identifier.
 
 **Brand-survival threshold:** none
 
-*Scope-out (threshold none, sensitive-path check): the diff touches `.github/workflows/` and `apps/web-platform/infra/` paths; reason: operator-facing monitoring of two scheduled infrastructure sweeps, no tenant data, no credential widened, no write capability added.*
+- threshold: none, reason: the diff touches `.github/workflows/` and `apps/web-platform/infra/` paths, but it only adds operator-facing monitoring of two scheduled infrastructure sweeps; no tenant data, no credential widened, no write capability added.
 
 ## Domain Review
 
@@ -196,13 +223,13 @@ Inline in both sweeps' `sweep` step, after the token shape check and BEFORE any 
 ### Engineering (CTO)
 
 **Status:** reviewed
-**Assessment:** Five forks ruled by the CTO agent on 2026-10-24, then seven simplification cuts (C1 to C7) after plan review (see `knowledge-base/project/specs/feat-one-shot-10952-orphan-sweep-residuals/decision-challenges.md`): aggregator on one new Sentry slug with a results-only status, an inline identity anchor on the pinned volume id, p1/p2 labels on create, an ADR-241 entry, single PR with the alert created unrouted. No Product/UX, legal, finance or marketing implication: no user-facing surface and no regulated data.
+**Assessment:** Five forks ruled by the CTO agent on 2026-10-24, then seven simplification cuts (C1 to C7) after plan review, then two deepen-plan forks (D1 routing and the aggregator email, D2 listing suppression) (see `knowledge-base/project/specs/feat-one-shot-10952-orphan-sweep-residuals/decision-challenges.md`): aggregator on one new Sentry slug with a results-only status, an inline identity anchor on the pinned volume id, p1/p2 labels on create, an ADR-241 entry, a permanent per-slot aggregator email, single PR with the alert created unrouted and routed immediately after the apply. No Product/UX, legal, finance or marketing implication: no user-facing surface and no regulated data.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
 
-- Amend ADR-241 (dated entry, Phase 5). No new ADR and no ADR-031 amendment (CTO ruling C4): the aggregator rule extends the #8630 check-in topology rule already cited in the workflow and is recorded in the comment block above the job; the identity pin extends ADR-282 and reverses nothing.
+- Amend ADR-241 (dated entry, Phase 5) and add a dated ADR-282 addendum (the id pin gains two consumers; bump ownership). No new ADR and no ADR-031 amendment (CTO ruling C4): the aggregator rule extends the #8630 check-in topology rule already cited in the workflow and is recorded in the comment block above the job; the identity pin extends ADR-282 and reverses nothing.
 
 ### C4 views
 
@@ -220,7 +247,7 @@ The ADR entry describes the state after this PR; the monitor's routing is the on
 
 ### Apply path
 
-Existing automated path (cloud-init and host replace do not apply): `apply-sentry-infra.yml` on push to main. No downtime, no blast radius beyond one new monitor in the Sentry project; a monitor with no check-in yet shows MISSED once its first slot passes.
+Existing automated path (cloud-init and host replace do not apply): `apply-sentry-infra.yml` on push to main. No downtime, no blast radius beyond one new monitor in the Sentry project; whether a monitor that has never checked in is reported MISSED is unverified (Phase 0.3c measures it after the apply), so nothing here depends on it.
 
 ### Host fan-out
 
@@ -232,7 +259,38 @@ The drift workflow's own Sentry leg plans this root; a monitor declared but not 
 
 ### Vendor-tier reality check
 
-Sentry Crons monitor count is not a tier-gated resource here (65 declared today). Whether an unrouted MISSED monitor emails anyone by default, and whether `sentry_cron_monitor` supports a muted flag, are unverified: Phase 0 measures both and the PR body states the result.
+Sentry Crons monitor count is not a tier-gated resource here (65 declared today). The pinned provider (jianyuan/sentry 0.15.7, `.terraform.lock.hcl`) has no mute attribute, only `enabled`; the repo states an unrouted monitor's issues email nobody. Whether a never-checked-in monitor can go MISSED is unverified; Phase 0.3c measures it and the PR body states the result.
+
+## Encryption Posture
+
+No persistent data store is introduced: the only new durable object is a Sentry Crons monitor definition (configuration, no tenant or credential data). Two request paths are new at the call-site level, both over existing HTTPS connection classes.
+
+```yaml
+at_rest:
+  - store: "none introduced"
+    mechanism: "not applicable, no volume, bucket, table, queue, cache, backup target or log sink is added; the Sentry monitor definition holds a name, a crontab and a margin"
+    evidence: "the diff adds one sentry_cron_monitor resource and workflow YAML; the anchor response body is read from a runner temp file that the step removes and never echoes"
+    defends_against: "nothing is stored, so there is nothing to defend at rest"
+    does_not_defend: "the anchor body temp file lives briefly on the runner disk, which GitHub-hosted runners do not encrypt separately from the VM image; the body holds one volume record and no secret"
+    disclosed_as: "this section and the step's no-echo rule"
+    live_verification: "none needed, no store exists"
+in_transit:
+  - connection: "sweep step to api.hetzner.cloud (GET /v1/volumes/<pinned id>)"
+    tls: "HTTPS, the same host and the same stdin-config token path as the existing listings"
+    cert_verification: "on (no -k, no --insecure)"
+    does_not_defend: "a compromised runner or a trusted-CA misissuance; the read-only token is visible to the step process"
+    disclosed_as: "ADR-280 (credentials reach curl on stdin config) and this section"
+  - connection: "aggregator job to the Resend API through notify-ops-email (POST, only when a sweep did not succeed)"
+    tls: "HTTPS through the existing notify-ops-email composite action"
+    cert_verification: "on"
+    does_not_defend: "the email body carries run links and job results, no secret; mail transport beyond Resend is outside this repo"
+    disclosed_as: "the composite action and this section"
+  - connection: "aggregator job to the Sentry ingest host (POST check-in)"
+    tls: "HTTPS through the existing sentry-heartbeat composite action"
+    cert_verification: "on"
+    does_not_defend: "the check-in URL carries the public ingest key by design; it is a write-only liveness endpoint"
+    disclosed_as: "the composite action header (property 4) and this section"
+```
 
 ## Observability
 
@@ -240,39 +298,39 @@ Sentry Crons monitor count is not a tier-gated resource here (65 declared today)
 liveness_signal:
   what: "Sentry Crons check-in on slug scheduled-orphan-sweeps, status ok only when both sweep jobs concluded success"
   cadence: "twice daily, 06:00 and 18:00 UTC, Inngest-dispatched workflow_dispatch; margin 60 minutes"
-  alert_target: "Sentry issue on missed or error check-in (unrouted at first, so a Sentry issue only until the routing follow-up); failure emails and filed issues remain the primary channels"
+  alert_target: "the aggregator's own notify-ops-email on every slot where a sweep did not succeed (permanent); Sentry monitor email once routed (routing PR due 2026-10-27, right after this PR's apply); the sweeps' own failure emails and filed issues remain"
   configured_in: "apps/web-platform/infra/sentry/cron-monitors.tf and .github/workflows/scheduled-terraform-drift.yml (job orphan-sweeps-checkin)"
 error_reporting:
   destination: "Sentry Crons (error status), the sweeps' own failure email via notify-ops-email, and the infra-drift/action-required GitHub issues"
-  fail_loud: "any non-success sweep result posts status error; a job that never ran posts nothing and Sentry reports MISSED"
+  fail_loud: "any non-success sweep result posts status error to the Sentry monitor and sends the aggregator email; if the aggregator itself never runs nothing is sent (a MISSED report for a never-checked-in monitor is unverified and not relied on)"
 failure_modes:
   - mode: "checkout fails in a sweep job"
-    detection: "needs.<sweep>.result is failure, aggregator posts error"
-    alert_route: "Sentry issue (unrouted); no sweep email in this mode (known gap, closed by Sentry only)"
+    detection: "workflow run log: needs.<sweep>.result is failure, so the aggregator posts a Sentry monitor error check-in and sends its email"
+    alert_route: "aggregator notify-ops-email on that slot, plus Sentry monitor email after routing; no sweep email in this mode"
   - mode: "sweep job cancelled or killed by its 25 minute cap"
-    detection: "needs.<sweep>.result is cancelled or failure"
-    alert_route: "Sentry issue (unrouted)"
-  - mode: "Resend rejects the failure email"
-    detection: "the failed sweep already makes the aggregator post error; Sentry does not depend on Resend"
-    alert_route: "Sentry issue (unrouted)"
+    detection: "workflow run log: needs.<sweep>.result is cancelled or failure; Sentry monitor error check-in"
+    alert_route: "aggregator notify-ops-email, plus Sentry monitor email after routing"
+  - mode: "Resend rejects a sweep's failure email"
+    detection: "the failed sweep already makes the aggregator post a Sentry monitor error check-in and send its own email"
+    alert_route: "aggregator notify-ops-email (a separate send) and Sentry monitor email after routing, so one Resend rejection does not silence both"
   - mode: "aggregator job itself never runs or its checkout fails"
-    detection: "no check-in, Sentry reports MISSED after the 60 minute margin"
-    alert_route: "Sentry issue (unrouted)"
+    detection: "workflow run log shows the job failed or absent; no check-in is sent (a MISSED report for a monitor that never checked in is unverified)"
+    alert_route: "none from this PR for that exact mode; the sweeps' own emails still fire; recorded as a residual"
   - mode: "token cannot see the pinned production volume (volume gone, or token of another project)"
-    detection: "identity step: orphan_sweep_project_identity_unproven slug, identity=unproven, job red"
-    alert_route: "distinct failure-email subject plus aggregator error plus the sole-copy job's own p1 issue"
+    detection: "workflow run log ::error:: slug orphan_sweep_project_identity_unproven with identity_http and identity_reason, identity=unproven, job red, Sentry monitor error check-in"
+    alert_route: "distinct failure-email subject from the sweep plus the aggregator email plus the sole-copy job's p1 issue (primary)"
   - mode: "Hetzner unreachable during the identity proof"
-    detection: "orphan_sweep_project_identity_unreachable slug, identity=unreachable, job red"
-    alert_route: "standard failure-email subject (body names the value) plus aggregator error"
+    detection: "workflow run log ::error:: slug orphan_sweep_project_identity_unreachable, identity=unreachable, job red, Sentry monitor error check-in"
+    alert_route: "standard failure-email subject (body names the value) plus the aggregator email"
 logs:
   where: "GitHub Actions run logs of scheduled-terraform-drift.yml (named ::error:: slugs); Sentry monitor check-in history"
   retention: "GitHub Actions default run-log retention; Sentry Crons check-in history per plan retention"
 discoverability_test:
-  command: grep -c "monitor-slug: scheduled-orphan-sweeps" .github/workflows/scheduled-terraform-drift.yml
+  command: grep -c "^ *monitor-slug: scheduled-orphan-sweeps" .github/workflows/scheduled-terraform-drift.yml
   expected_output: "1"
 ```
 
-Run before the change this command prints 0; Phase 0.3b records that and Phase 1 flips it. Live verification after deploy is the first `ok` check-in, which waits on the scheduler (#10854) and is tracked by the routing follow-up issue.
+Run before the change this command prints 0; Phase 0.3b records that and Phase 1 flips it. The anchored pattern counts the live `monitor-slug:` line only, not comments. Live verification after deploy (the first `ok` check-in, read from the monitor's check-in history with the repository's read-only Sentry token) waits on the scheduler (#10854) and is the second line of the routing follow-up issue, not this PR's test.
 
 ## Guard Contract
 
@@ -296,8 +354,11 @@ Run before the change this command prints 0; Phase 0.3b records that and Phase 1
 | 8 | Delete the guard's own dispatch (population derived as zero jobs) | the guard must fail on `0 checked`, not pass |
 | 9 | Swap `&&` and `\|\|` in the expression, or compare with `!=` | the evaluator itself must be able to fail |
 | 10 | Move the aggregator checkout after the heartbeat step | the local action must resolve before use |
+| 11 | Remove the aggregator's job-level `permissions: contents: read` (or widen it) | least privilege: the workflow-level block also grants `issues: write` |
+| 12 | Remove the aggregator email step, or drop its `always()`, or change its condition to test only one sweep | per-slot human channel must cover every sweep and every non-success result |
+| 13 | Add `DOPPLER_TOKEN` or any Hetzner name to the aggregator, or an unlisted secret | secret allow-list is exactly the three `SENTRY_*` plus `RESEND_API_KEY` |
 
-**Harness rows.** (a) Break the suite instead of the workflow: a stub extractor that returns an empty jobs map must fail the suite on its population floor. (b) Must-PASS inputs that are not the canonical: the aggregator renamed (any name without the `-orphan-sweep` suffix), comments inserted, and the sweeps' step order otherwise reshuffled all pass. (c) A behavioural table drives the extracted status expression through an evaluator with GitHub semantics (case-insensitive `==`, unset coerces to `''`): both success -> ok; either of failure, cancelled, skipped -> error; a result missing from `needs` -> error; orphans found and filed (sweep result success) -> ok. Rows 9 above prove the evaluator can fail.
+**Harness rows.** (a) Break the suite instead of the workflow: a stub extractor that returns an empty jobs map must fail the suite on its population floor. (b) Must-PASS inputs that are not the canonical: the aggregator renamed (any name without the `-orphan-sweep` suffix), comments inserted, and the sweeps' step order otherwise reshuffled all pass. (c) A behavioural table drives the extracted status expression through an evaluator with GitHub semantics (case-insensitive `==`, unset coerces to `''`): both success -> ok; either of failure, cancelled, skipped -> error; a result missing from `needs` -> error; orphans found and filed (sweep result success) -> ok. Mutation 9 proves the evaluator can fail; one more row proves the email condition is evaluated by the same evaluator (both success -> no email; either not success -> email).
 
 **Anchor.** The slug is compared against `cron-monitors.tf` at the same commit, and `c4-count-parity` moves with it (C4 and C5), so a weakening needs the tf, the workflow and the C4 prose to move together in one reviewed diff; the monitor-name set is also read by the existing `function-registry-count.test.ts` `(c2)`/`(c3)` guards. Set identity (superset of all `*-orphan-sweep` jobs), not a count floor.
 
@@ -305,7 +366,7 @@ Run before the change this command prints 0; Phase 0.3b records that and Phase 1
 
 **Property.** A sweep cannot report a clean verdict unless the anchor GET returned HTTP 200 with the pinned id, and no listing runs after a failed proof.
 
-**Assembly.** Both sweeps' `sweep` steps (extracted from the workflow and executed by the R9 harness against PATH shims; mutations are applied to a copy of the workflow the harness reads), the three `readonly VOLUME_ID_PIN=` copies, ADR-282, the postmerge skill and the runbook one-liner; the `identity` step output and the conditional email subject.
+**Assembly.** Both sweeps' `sweep` steps (extracted from the workflow and executed by the R9 harness against PATH shims; mutations are applied to a copy of the workflow the harness reads), the three `readonly VOLUME_ID_PIN=` copies, ADR-282, the postmerge skill and the runbook one-liner; the `identity`, `identity_http` and `identity_reason` step outputs and the conditional email subject.
 
 **Mutation matrix.**
 
@@ -321,8 +382,12 @@ Run before the change this command prints 0; Phase 0.3b records that and Phase 1
 | 8 | Drop the `identity=` publish before `exit 1` | the email subject loses the discriminator |
 | 9 | Add `-f` to the anchor request | the HTTP code could no longer be read; 401/403/404 would collapse into transport failure |
 | 10 | Remove `--max-time` from the anchor request, or retry on 404 | every request is bounded; retry only on transport, 429, 5xx |
+| 11 | Print the body, the observed id or the raw code in an `::error::` or `$GITHUB_OUTPUT` | the repo is public: classification only; a canary string planted in the shim body must appear in no stdout, stderr or output file |
+| 12 | Remove the `EXIT` trap or leave the temp body file on an `exit 1` path | the file is gone after every exit path |
+| 13 | Write `identity=` from `$http` or the body instead of a literal `case` branch | the output is a closed set |
+| 14 | An empty `identity` (failure before the proof) selects the identity subject | empty must select the standard subject |
 
-**Harness rows.** (a) A shim that ignores credentials must fail: assert the shim saw the Authorization header on the stdin config for the anchor request. (b) Must-PASS inputs: 200 with the pin; 200 with extra unknown fields; a retried 503 then 200; a 429 then 200. (c) Suite-level: removing the new anchor branch from the curl shim must fail the suite, not skip it; the shim honours `-o` and `-w`; a `sleep` shim on `PATH` keeps the 5 s retry sleep out of the run. (d) The required row (CTO ruling C1): listing clean while the anchor answers 404, 200 with a wrong id, or 401/403 -> the step exits 1 with the named slug and `identity=unproven`; this row is what catches a future edit that deletes the proof.
+**Harness rows.** (a) A shim that ignores credentials must fail: assert the shim saw the Authorization header on the stdin config for the anchor request. (b) Must-PASS inputs: 200 with the pin; 200 with extra unknown fields; a retried 503 then 200; a 429 then 200. (c) Suite-level: removing the new anchor branch from the curl shim must fail the suite, not skip it; the shim honours `-o` and `-w`; a `sleep` shim on `PATH` keeps the 5 s retry sleep out of the run. (d) The required row (CTO ruling C1): listing clean while the anchor answers 404, 200 with a wrong id, or 401/403 -> the step exits 1 with the named slug and `identity=unproven`; this row is what catches a future edit that deletes the proof. (e) The shim returns a body containing a unique canary string for every status; the suite asserts the canary appears nowhere in captured stdout, stderr or `$GITHUB_OUTPUT`, and that the temp file is absent after each exit path.
 
 **Anchor.** The pin literal appears in the three workflow copies (N1 exact count) and in ADR-282, the postmerge skill and the runbook one-liner (existing N1 equality); a weakening needs all of them to move in one diff, and ADR-282 and the postmerge skill are independent documents. The literal also appears in other files (encryption-posture ledger, compliance posture, runbooks) that are not pinned by N1 and are named as residual copies.
 
@@ -353,20 +418,20 @@ Run before the change this command prints 0; Phase 0.3b records that and Phase 1
 - 0.2 Verify, with documentation or one names-only measurement, what a by-id volume GET returns from a token that cannot see the volume (404 expected) and whether any Hetzner project-identity endpoint exists. Record date and source in the PR body; if unverifiable, keep "any non-200 is red".
 - 0.3 Confirm labels exist: `gh label list` for `infra-drift`, `action-required`, `priority/p1-high`, `priority/p2-medium`.
 - 0.3b Run once, before relying on them, every literal command this plan prescribes: the `discoverability_test` grep (0 now, 1 after Phase 1), the count derivations, the `git ls-files` path checks, `lint-guard-contract.py` and `technical-ruling-gate.sh` (both green on this plan, 2026-10-24).
-- 0.3c Measure whether an unrouted MISSED monitor emails anyone and whether `sentry_cron_monitor` supports a muted flag (`is_muted` is not used in this root); if it does, ship the monitor muted and make un-muting part of the routing follow-up; if not, the PR body states that one open Sentry issue will exist until the scheduler returns.
-- 0.3d File follow-up issues (a) and (b) now, so the unrouted reason and the PR body cite real numbers: (a) route `scheduled-orphan-sweeps` — a plain dated issue, re-eval 2026-11-07 or seven days after the first `ok` check-in, whichever is later, explicit close-or-route criterion, repo milestone; if no `ok` check-in exists by 2026-11-21, comment on #10854 and move the date by 14 days with the monitor left unrouted; (b) the sole-copy follow-ups (reason `zero` ambiguity of `volume-not-found`; add the sole-copy job to the aggregator `needs`), as a comment on #10430 plus its own issue. Follow-up (c): close the duplicate scratch-config issue (#7233 vs #10829), fix its three priority labels, and find why exact-title dedupe let both exist (Phase 6.2).
+- 0.3c After the apply, read the monitor's status and environments by name with the read-only Sentry token to learn whether a never-checked-in monitor can be MISSED; until measured, every MISSED statement stays hedged. (Already answered from the repo and the provider schema, 2026-10-24: the pinned provider has no mute attribute, so the monitor ships unmuted; an unrouted monitor's issues email nobody.)
+- 0.3d File follow-up issues (a) and (b) now, so the unrouted reason and the PR body cite real numbers: (a) route `scheduled-orphan-sweeps` — a plain dated issue due 2026-10-27 (three days after this PR's apply at the latest), done when the monitor is listed in `monitor_ids` in the regenerated `alert-reference.json`; its second line: when #10854 closes, confirm the first `ok` check-in, read the Sentry issue state and the aggregator step list (and the `sentry-heartbeat:` 202 line), with a 14-day look; also comment on #10854 so its closure checklist carries those reads; repo milestone; (b) the sole-copy follow-ups (reason `zero` ambiguity of `volume-not-found`; add the sole-copy job to the aggregator `needs`), as a comment on #10430 plus its own issue. Follow-up (c): close the duplicate scratch-config issue (#7233 vs #10829), fix its three priority labels, and find why exact-title dedupe let both exist (Phase 6.2).
 - 0.4 Measure the current derived counts (`grep -cF 'resource "sentry_cron_monitor"'`, distinct `monitor-slug:`), then compare after edits.
 
 ### Phase 1 — Tests first, aggregator (item 1)
 
 - 1.1 (RED) Add R10 rows and the evaluator-backed status table to `token-drift-workflow-causes.test.sh`; add the mutation rows and raise BOTH ratchets: `R78_MIN` and the hard floor at the end of the suite (plus its prose ledger; the comment says the floor must equal the realised count).
-- 1.2 (GREEN) Add the `orphan-sweeps-checkin` job and its comment block to the workflow.
+- 1.2 (GREEN) Add the `orphan-sweeps-checkin` job (permissions, checkout, check-in, email step) and its comment block to the workflow.
 - 1.3 Add the `sentry_cron_monitor` resource and the unrouted entry; update the ledgers (README, audit-script literals, `NON_INNGEST_MONITORS`, `model.c4`, regenerate `model.likec4.json`, heartbeat `action.yml` header); run `c4-count-parity.test.sh`, `sentry-cron-monitor-routing-parity.test.ts`, `function-registry-count.test.ts`, `sentry-monitors-audit.test.sh`, `tests/scripts/test-sentry-alert-reference-gate.sh` (the unrouted entry needs no `alert-reference.json` change in this PR).
 
 ### Phase 2 — Tests first, identity proof (item 2)
 
-- 2.1 (RED) Extend the R9 harness: a `curl` shim branch for `/v1/volumes/<pin>` honouring `-o` and `-w '%{http_code}'` with a per-mode anchor answer (default 200 with the pin); scope the existing "every request carries `-f`" assertion to the listing requests; add a `sleep` shim; add the cases (200 match, 200 other id, 404, 401/403, 5xx after two attempts, transport error, 429 retry), each asserting the exact slug, the `identity` value and zero listing calls after a failed proof; the required row (d); extend N1 (exact count of 3, equality across copies).
-- 2.2 (GREEN) Add the inline anchor block to both `sweep` steps (function-free; the step itself owns the publish, the `::error::` slug and the `exit 1`; every `jq` guarded; the temp body file created and removed under the step's traps) and the conditional failure-email subject and body.
+- 2.1 (RED) Extend the R9 harness: a `curl` shim branch for `/v1/volumes/<pin>` honouring `-o` and `-w '%{http_code}'` with a per-mode anchor answer (default 200 with the pin); scope the existing "every request carries `-f`" assertion to the listing requests; add a `sleep` shim; add the cases (200 match, 200 other id, 404, 401/403, 5xx after two attempts, transport error, 429 retry), each asserting the exact slug, the `identity` value and zero listing calls after a failed proof; the required row (d); extend N1 (exact count of 3 over comment-stripped text, equality across copies).
+- 2.2 (GREEN) Add the inline anchor block to both `sweep` steps (function-free; the step itself owns the publish, the `::error::` slug and the `exit 1`; one closed-vocabulary `jq` with stderr discarded; `bc_curl` in both sweeps; the temp body file under `mktemp` in `RUNNER_TEMP` and an `EXIT` trap) and the conditional failure-email subject and body.
 - 2.3 Confirm R7/R8 stay green: the failure email is still the last step with `if: failure()`, step sets are unchanged, the sweep step's worst case (about 285 s) is under its unchanged 6-minute bound and the job-cap sum is unchanged.
 
 ### Phase 3 — Labels (item 4)
@@ -376,22 +441,22 @@ Run before the change this command prints 0; Phase 0.3b records that and Phase 1
 
 ### Phase 4 — Runbook
 
-- 4.1 Runbook rows and prose (two sweep rows, the residuals paragraph, the new aggregator row).
+- 4.1 `infra-credential-tiers-8209.md`: two sweep rows, the residuals paragraph, the new aggregator row, the concurrency-drop and 404-day triage rows. 4.2 `inngest-luks-cutover-6894.md`: the "volume recreated" pin-bump checklist generated from `git grep -n 106903269`, split into pins enforced by N1 and record-only places.
 
 ### Phase 5 — ADR (item 3)
 
-- 5.1 ADR-241 entry (line-anchored, single-match assertion, zero deleted lines, the C1 residual recorded).
+- 5.1 ADR-241 entry (line-anchored, single-match assertion, zero deleted lines, the C1 and D2 residuals recorded). 5.2 ADR-282 dated addendum (line-anchored, zero deleted lines).
 
 ### Phase 6 — Gate and ship
 
 - 6.1 Run the local affected gate before marking the PR ready: the suites above, `lint-workflow-local-action-checkout.py`, `lint-orphan-test-suites.sh` (no new suite is created, so no registration step), actionlint if present, markdownlint on touched docs, and the sentry parity tests. The affected gate may degrade to the full battery for a workflow-YAML-subject suite change; name the substitute in the PR body.
 - 6.2 Finish the follow-up issues from Phase 0.3d (dates in the body, milestone `Post-MVP / Later` unless a more specific roadmap phase applies).
-- 6.3 PR body: `Closes #10952`, `Ref #9927`, `Ref #10112`; a "Measured / Not measured" table with dates (counts, labels existence, anchor behaviour and unrouted-monitor email behaviour measured or not; the first live run is NOT measured because the scheduler is dead, #10854); the statement that the new monitor is unrouted, opens a Sentry issue only on a missed or error check-in and will report MISSED until the scheduler fires again; the p2 digest-visibility statement for the inngest filer.
-- 6.4 After merge: the Sentry apply must converge before the next drift run; read the live monitor by name (names and metadata only). The first live run of the new job is not measured here; check its step list once the scheduler returns.
+- 6.3 PR body: `Closes #10952`, `Ref #9927`, `Ref #10112`; a "Measured / Not measured" table with dates (counts, labels existence, anchor behaviour and unrouted-monitor email behaviour measured or not; the first live run is NOT measured because the scheduler is dead, #10854); the statement that the new monitor is created unrouted (its issues email nobody) with routing due 2026-10-27, that the aggregator's per-slot email is the cover meanwhile, that whether a never-checked-in monitor reports MISSED is unverified, and that during an identity failure up to three emails per slot can arrive (two sweep subjects plus the aggregator, with the sole-copy p1 issue primary); the p2 digest-visibility statement for the inngest filer.
+- 6.4 After merge: the Sentry apply must converge before the scheduler returns (a check-in to a slug whose monitor does not exist yet gets a non-2xx that `continue-on-error` hides); read the live monitor by name (names and metadata only) and the `sentry-heartbeat:` HTTP line, not just a green step. The first live run of the new job is not measured here; follow-up (a)'s second line owns it.
 
 ## Files to Edit
 
-- `.github/workflows/scheduled-terraform-drift.yml` — aggregator job and comment block, inline identity anchor in both sweeps, label edits, conditional email subject
+- `.github/workflows/scheduled-terraform-drift.yml` — aggregator job (check-in and email) and comment block, inline identity anchor in both sweeps, label edits, conditional email subject
 - `.github/actions/sentry-heartbeat/action.yml` — header count line only
 - `apps/web-platform/infra/sentry/cron-monitors.tf` — new `sentry_cron_monitor`
 - `apps/web-platform/infra/sentry/cron-monitor-alerts.tf` — unrouted map entry
@@ -400,7 +465,9 @@ Run before the change this command prints 0; Phase 0.3b records that and Phase 1
 - `apps/web-platform/test/server/inngest/function-registry-count.test.ts` — `NON_INNGEST_MONITORS`
 - `knowledge-base/engineering/architecture/diagrams/model.c4` and `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (regenerated) — C4 and C5 counts
 - `knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md` — dated entry
-- `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md` — rows and residuals paragraph
+- `knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md` — dated addendum
+- `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md` — rows, residuals paragraph, triage rows
+- `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` — pin-bump checklist
 - `plugins/soleur/test/token-drift-workflow-causes.test.sh` — R9 anchor shim and cases, R10, label rows, ratchets
 - `plugins/soleur/test/sole-copy-drift-check.test.sh` — N1 exact-count extension
 
@@ -422,22 +489,22 @@ All paths verified against the tree with `git ls-files` on 2026-10-24.
 
 ### Pre-merge (PR)
 
-- [ ] AC1. `orphan-sweeps-checkin` exists with `needs` covering every `*-orphan-sweep` job, `if` beginning `always()` plus the main-only guard, a checkout with a step timeout before the local action, and only the three `SENTRY_*` secrets; it names neither `api.hetzner.cloud` nor the read-only token; no job in the workflow declares `outputs:` (`token-drift-workflow-causes.test.sh` R10; `scripts/lint-workflow-local-action-checkout.py` green).
+- [ ] AC1. `orphan-sweeps-checkin` exists with `needs` covering every `*-orphan-sweep` job, `if` beginning `always()` plus the main-only guard, job-level `permissions` exactly `contents: read`, a checkout with a step timeout before the local actions, and only the three `SENTRY_*` secrets plus `RESEND_API_KEY` (never `DOPPLER_TOKEN` or a Hetzner name); it names neither `api.hetzner.cloud` nor the read-only token; no job in the workflow declares `outputs:` (`token-drift-workflow-causes.test.sh` R10; `scripts/lint-workflow-local-action-checkout.py` green).
 - [ ] AC2. The status expression is `ok` only when both sweeps' results are `success`; every other combination, including `cancelled`, `skipped` and a result missing from `needs`, is `error`; orphans found and filed is `ok` (evaluator-backed behavioural table, R10, with the evaluator-can-fail row).
-- [ ] AC3. The failure email remains the last step of each sweep with `if` exactly `failure()`; no step follows it (R8).
-- [ ] AC4. `sentry_cron_monitor.scheduled_orphan_sweeps` is declared with crontab `0 6,18 * * *`, margin 60, UTC; `scheduled_orphan_sweeps` appears in `cron_monitor_alert_unrouted` with a reason citing the real follow-up issue number, and NOT in `monitor_ids` (routing-parity test green).
+- [ ] AC3. The failure email remains the last step of each sweep with `if` exactly `failure()`; no step follows it (R8). The aggregator's email step is gated on either sweep result being not `success` (evaluated by the same R10 evaluator), is `continue-on-error`, has its own timeout and is permanent (stated in the comment block above the job).
+- [ ] AC4. `sentry_cron_monitor.scheduled_orphan_sweeps` is declared with crontab `0 6,18 * * *`, margin 60, UTC; `scheduled_orphan_sweeps` appears in `cron_monitor_alert_unrouted` with a reason that names the real cover (the aggregator's per-slot email and the sweeps' own failure emails) and cites the real routing follow-up number and the 2026-10-27 date, and NOT in `monitor_ids` (routing-parity test green).
 - [ ] AC5. `c4-count-parity.test.sh` is green with C4 = 66 and C5 = 21; C1, C6, C7, C9 unchanged; README, audit-script literals (T25), `NON_INNGEST_MONITORS`, `model.c4`, regenerated `model.likec4.json` and the heartbeat `action.yml` header all agree (derivation commands quoted in the PR).
-- [ ] AC6. Each sweep runs the anchor GET before any listing; R9 cases cover 200 match, 200 other id, 404, 401/403, 5xx after two attempts, transport error and 429 retry, each asserting the exact slug (`..._unproven` or `..._unreachable`), the `identity` value and zero listing calls after a failed proof; the reorder mutation (listings before the anchor) reddens a case that observes inside the window; the required row (listing clean, anchor 404 / wrong id / 401 / 403 -> exit 1 with the slug) passes.
-- [ ] AC7. N1 extracts every `readonly VOLUME_ID_PIN=` from the workflow, asserts exactly 3 copies, all equal, and equal to ADR-282, the postmerge skill one-liner and the runbook one-liner.
-- [ ] AC8. The anchor request carries no `-f`, carries `--max-time`, retries only on transport error, 429 and 5xx with two attempts, and the sweep step's worst case stays under its unchanged 6-minute bound (R7 job-cap sum unchanged).
-- [ ] AC9. The failure-email subject is conditional on `identity == 'unproven'`; the text says "cannot prove the production volume is visible to this token", names both causes (volume gone, token of another project), never claims "wrong project" as a detection, and carries no token, API body or volume identifier; an `unreachable` identity keeps the standard subject and names the value in the body.
+- [ ] AC6. Each sweep runs the anchor GET before any listing; R9 cases cover 200 match, 200 other id, 404, 401/403, 5xx after two attempts, transport error and 429 retry, each asserting the exact slug (`..._unproven` or `..._unreachable`), the `identity`, `identity_http` and `identity_reason` values and zero listing calls after a failed proof; a canary string planted in the shim body appears in no stdout, stderr or `$GITHUB_OUTPUT` and the temp file is gone after every exit path; the reorder mutation (listings before the anchor) reddens a case that observes inside the window; the required row (listing clean, anchor 404 / wrong id / 401 / 403 -> exit 1 with the slug) passes.
+- [ ] AC7. N1 extracts every `^[[:space:]]*readonly VOLUME_ID_PIN=[0-9]+` from the comment-stripped workflow, asserts exactly 3 copies, all equal, and equal to ADR-282, the postmerge skill one-liner and the runbook one-liner.
+- [ ] AC8. The anchor request goes through `bc_curl` in both sweeps, carries no `-f`, carries `--max-time`, retries only on transport error, 429 and 5xx with two attempts, and the sweep step's worst case stays under its unchanged 6-minute bound (R7 job-cap sum unchanged).
+- [ ] AC9. The failure-email subject is conditional on `identity == 'unproven'` (an empty `identity` selects the standard subject); the text says "cannot prove the production volume is visible to this token", names both causes (volume gone, token of another project), never claims "wrong project" as a detection, names the sole-copy p1 issue as the primary page for a gone volume, and carries no token, API body or volume identifier; an `unreachable` identity keeps the standard subject and names the value in the body.
 - [ ] AC10. Rung-2 orphan filer creates with `infra-drift`, `action-required`, `priority/p1-high`; inngest orphan filer with `infra-drift`, `action-required`, `priority/p2-medium`; verified by a stubbed-`gh` argv recorder over the extracted step, not by a grep (Guard 3 rows); no re-assert path exists.
-- [ ] AC11. ADR-241 has exactly one new entry dated 2026-10-24 after the Site C entry, `git diff --numstat` shows zero deleted lines in the ADR, no status row changed, the C1 residual and the pointer to the aggregator comment block are present; no ADR-031 edit.
-- [ ] AC12. The runbook's two sweep rows no longer say identity is checked only indirectly; the residuals paragraph no longer says no Sentry check-in covers these jobs; a row for `orphan-sweeps-checkin` exists.
+- [ ] AC11. ADR-241 has exactly one new entry dated 2026-10-24 after the Site C entry, `git diff --numstat` shows zero deleted lines in the ADR, no status row changed, the C1 and D2 residuals and the pointer to the aggregator comment block are present; ADR-282 has one dated addendum (zero deleted lines) on the two new pin consumers and bump ownership; no ADR-031 edit.
+- [ ] AC12. The runbook's two sweep rows no longer say identity is checked only indirectly; the residuals paragraph no longer says no Sentry check-in covers these jobs; a row for `orphan-sweeps-checkin`, the concurrency-drop triage row and the 404-day triage row exist; `inngest-luks-cutover-6894.md` carries a "volume recreated" checklist generated from `git grep -n 106903269` (not a hard-coded count) split into N1-enforced pins and record-only places.
 - [ ] AC13. Both suite ratchets (`R78_MIN` and the hard floor with its prose ledger) are raised to the realised counts.
 - [ ] AC14. The local affected gate ran green before the PR was marked ready (suites in Phase 6.1 listed in the PR body with results).
-- [ ] AC15. Follow-up issues (a), (b) and (c) exist with dates and a milestone before the PR is marked ready; the unrouted reason cites (a).
-- [ ] AC16. PR body: `Closes #10952`, `Ref #9927`, `Ref #10112`, no closing keyword for the epics; a Measured / Not measured table with dates; the unrouted-monitor, MISSED-until-scheduler and inngest-p2 statements; the result of the Phase 0.2 and 0.3c measurements or "not measured".
+- [ ] AC15. Follow-up issues (a), (b) and (c) exist with dates and a milestone before the PR is marked ready; the unrouted reason cites (a); (a) is due 2026-10-27 with the `monitor_ids` criterion and a second line for the first `ok` check-in once #10854 closes; #10854 carries a comment pointing at those reads.
+- [ ] AC16. PR body: `Closes #10952`, `Ref #9927`, `Ref #10112`, no closing keyword for the epics; a Measured / Not measured table with dates; the unrouted-monitor (issues email nobody until routed), aggregator-email, hedged-MISSED and inngest-p2 statements and the up-to-three-emails-per-slot statement for an identity failure; the result of the Phase 0.2 and 0.3c measurements or "not measured".
 
 ### Post-merge (automated or read-only)
 
@@ -447,19 +514,25 @@ All paths verified against the tree with `git ls-files` on 2026-10-24.
 
 - Both sweeps succeed, identity proven, no orphans -> aggregator `ok`.
 - Rung-2 sweep finds an orphan and files the issue (labelled) -> aggregator `ok`; the issue appears in the digest at p1.
-- Inngest sweep checkout fails -> its result `failure`, aggregator `error`; no sweep email (the known gap) but a Sentry issue.
+- Inngest sweep checkout fails -> its result `failure`, aggregator `error` and the aggregator email fires; no sweep email (the known gap).
 - A sweep cancelled (manual cancel or the 25-minute cap) -> `cancelled`/`failure` -> `error`.
-- Resend rejects the failure email -> the sweep job is already `failure` -> `error`.
+- Resend rejects the sweep's failure email -> the sweep job is already `failure` -> `error`; the aggregator email is a separate send.
 - Token cannot see the pinned volume -> anchor 404 -> `..._unproven` slug, `identity=unproven`, distinct email subject, no orphan listing, aggregator `error`.
 - Hetzner unreachable -> `..._unreachable` slug, standard subject (not an identity claim), aggregator `error`.
 - Standing rung-2 scratch-config `unsatisfiable` state with a healthy sweep -> aggregator `ok` (the condition keeps its own create-only issue).
 - Branch dispatch (not main) -> sweeps and aggregator skipped; no check-in.
-- Scheduler dead (today) -> no dispatch -> Sentry MISSED on the new monitor, unrouted: a Sentry issue only.
+- Scheduler dead (today) -> no dispatch -> nothing runs; whether Sentry reports MISSED for a never-checked-in monitor is unverified and not relied on; once routed, any MISSED or error group emails once per incident.
+- A cancelled or timed-out sweep, including a deliberate manual cancel -> `error` and the aggregator email (accepted noise on a manual cancel).
+- Concurrency drop: a pending run replaced in the group runs no job; all three twice-daily monitors miss the same slot (runbook triage row).
+- A 404 day: per slot up to three emails (two sweep subjects, the aggregator) plus the sole-copy p1 issue, which is primary.
+- The first-ever aggregator check-in is `error` (for example a misbehaving pin) -> routed Sentry email plus the aggregator email.
 
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, a placeholder, or omits the threshold fails `deepen-plan` Phase 4.6; this one declares `none` with the sensitive-path scope-out bullet.
-- `outcome == 'success'` of the notify action proves nothing about delivery; the aggregator does not read it.
+- `outcome == 'success'` of the notify action proves nothing about delivery; the aggregator status does not read it. `ok` means job success, not delivery.
+- The routing-parity test requires the unrouted reason to cite a real `#N`: file the routing follow-up before editing `cron-monitor-alerts.tf`.
+- The anchor body, the observed volume id and the raw HTTP code never go into an annotation or email; the repo is public.
 - A status expression comparing against a literal reads an unset value as `error`; keep every clause a positive equality against `'success'`.
 - The aggregator is named without the `-orphan-sweep` suffix on purpose; R10 (not R7) guards it, and R10's population must still be derived by behaviour.
 - Do not move the sole-copy probe's `readonly VOLUME_ID_PIN=` line; the pin-equality suite reads it with `sed`. The two sweep copies reuse the name on purpose.
