@@ -643,6 +643,19 @@ complete), `refusal_detail[]` (capped at 20 — see below; #8427 widened it past
 row carries `component: "compound-promote"` (emitter:
 `server/compound-promote-marker.ts`, PR #8344).
 
+Six further fields appear **only on a manual run with `input:"patterns"`** (ADR-297);
+the scheduled row's field set is unchanged, so their absence is the normal shape for
+`trigger: "cron"`: `input_source` (`corpus` | `patterns`), `patterns_open` (count of open
+pattern pages loaded), `ledger_read` (`ok` | `failed`; `failed` rides a `status: "error"`
+row), `ledger_suppressed` (clusters dropped because the same recomputed hash was already
+proposed, each also a `ledger-suppressed` entry in `refusals[]` / `refusal_detail[]`),
+`ledger_prs_scanned` (the raw GitHub search hit count, before title and author filtering)
+and `ledger_title_skipped` (bot-authored search items skipped because the title did not
+match the anchored promote-cluster title pattern; warn-level, never fails the read; a
+human-retitled PR stops suppressing). All six are numbers or closed enums. How to read
+them: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The `input`
+option and the patterns-path marker fields".
+
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \

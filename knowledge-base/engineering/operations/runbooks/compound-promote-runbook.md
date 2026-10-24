@@ -2,7 +2,7 @@
 title: "Compound Promotion Loop — operator runbook"
 type: runbook
 issue: "#2720"
-last_updated: 2026-10-20
+last_updated: 2026-10-24
 ---
 
 # Compound Promotion Loop — operator runbook
@@ -111,9 +111,12 @@ clicking **Ready for review**:
    Reject if the body quotes anything that looks like PII.
 
 If any of the five fail, **close the PR**. The append-only audit log
-(`knowledge-base/project/learnings/promotion-log.md`) preserves the proposal
-record; the close acts as the rejection signal — the loop's per-week cap
-counts open PRs only, so a closed proposal won't block next week's run.
+(`knowledge-base/project/learnings/promotion-log.md`) records accepted-or-pending
+proposals only; the close acts as the rejection signal, and rejection state is read
+from GitHub PR state through Octokit (ADR-297), not from the log. The loop's
+per-week cap counts open PRs only, so a closed proposal won't block next week's run.
+On the patterns path a closed-unmerged proposal also suppresses its exact cluster for
+60 days from `closed_at` (see the `input` option section below).
 
 ## Reverting a promoted rule
 
@@ -171,6 +174,64 @@ What a streak means when you read the weekly marker:
 - **`edit-derive-failed` or `diff-underivable-apply`**: a SERVER defect (a derived diff is additive by
   construction). Both go to Sentry; the follow-through probe exits 1.
 
+## The `input` option and the patterns-path marker fields (ADR-297)
+
+Recorded 2026-10-24. The manual-trigger event accepts an optional `data.input`:
+
+- **`corpus`** (default, and the only behaviour of the scheduled cron): the learnings-directory
+  path described above. The scheduled run ignores `data.input` entirely.
+- **`patterns`**: the proposer reads the open pages under `knowledge-base/project/patterns/`
+  (index plus the first 10 lines of each page's evidence learnings) instead of the whole
+  learnings directory, and runs the PR-state ledger reader before the model call.
+- Any other value on a **manual** trigger ends the run `status=error` with an `invalid-run-option`
+  `error_class`, before any Anthropic call (a typo is never silently treated as `corpus`). A
+  Sentry message with op `invalid-run-option` accompanies it; the raw value is not logged.
+
+```bash
+# Patterns-path manual run (read the INTERIM OPERATING RULE below first):
+curl -s -X POST https://soleur.ai/api/inngest \
+  -H "content-type: application/json" \
+  -d '{"name":"cron/compound-promote.manual-trigger","data":{"input":"patterns"}}'
+```
+
+Prefer `soleur:trigger-cron` (reads the secret read-only from Doppler, supports a dry run of the
+request) over a hand-built request.
+
+### INTERIM OPERATING RULE
+
+`dry_run` is deferred, so a real `input:"patterns"` run opens real draft PRs from an unproven
+seed and consumes the week's `week-cap` slots. Until the flip tracker ships a dry run:
+
+1. **Do not trigger a manual `input:"patterns"` run before the 2026-10-25 scheduled run's marker is
+   recorded.** That run is the clean baseline; the first post-fix run that can reach the gates.
+2. **Do not trigger one while any `self-healing/auto` PR is open** (it would stack drafts on the
+   week-cap and on an unreviewed proposal).
+
+### Marker fields (patterns path only)
+
+Present on the `SOLEUR_COMPOUND_PROMOTE_OUTCOME` row only when `input_source` is `patterns`; the
+scheduled row's field set is byte-identical to before. All are numbers or closed enums. Query
+recipe and the full field list: `betterstack-log-query.md`.
+
+| Field | Meaning | How to read it |
+|---|---|---|
+| `input_source` | `corpus` or `patterns` | Confirms which arm ran. A manual run you meant as `patterns` that reads `corpus` means the option did not reach the handler |
+| `patterns_open` | open pattern pages loaded (after the runtime PII, path and schema drops) | `0` ends the run `empty-corpus` (no fallback to the corpus, Sentry op `patterns-empty`): the seed is broken or every page is closed. Compare with the page count in the repo: fewer than expected means pages were dropped (Sentry op `pattern-page-dropped`, tag `cause`) |
+| `ledger_read` | `ok` or `failed` | `failed` is a loud `status=error`, no Anthropic call. Read the Sentry message `ledger-read-failed` and its `cause` tag (`http-5xx`, `rate-limit`, `page-cap`, `incomplete`, `unparseable`, `drift`). `drift` means bot PRs were found but none matched the expected title or author: the title format or bot login changed, so fix the contract, do not retry blindly |
+| `ledger_suppressed` | clusters dropped because the same recomputed hash is already proposed (open, merged, or closed unmerged within 60 days) | Each also appears as `ledger-suppressed` in `refusals[]` and `refusal_detail[]` (`{cluster_hash, reason}`). `status=no-qualifying-clusters` with `ledger_suppressed > 0` means every cluster was suppressed. `clusters_proposed` stays pre-suppression |
+| `ledger_prs_scanned` | raw GitHub search hit count for `self-healing/auto-` PRs | A count near the 1,000-result search ceiling fails the read (`page-cap` / `incomplete`); plan state-split queries before then |
+| `ledger_title_skipped` | bot-authored search items skipped because the title did not match the anchored promote-cluster title regex | Warn-level, never fails the read. A human-retitled bot PR stops suppressing its cluster, so a non-zero value explains a re-proposal. Restore the title (`self-healing(auto): promote cluster <64-hex> <YYYY-MM-DD>`) to restore suppression |
+
+### Escape hatch: a permanently-suppressed merged cluster
+
+A **merged** proposal suppresses its exact cluster hash permanently. On the patterns path a
+page's evidence set is fixed, so a reverted merged edit does not re-cluster to a new hash and
+stays suppressed. To let such a cluster be proposed again, a human either **changes the page's
+evidence** (a different evidence set is a different hash) or **closes the page and reopens it
+under a new slug**. An **open** proposal suppresses for as long as it is open (merge or close it);
+a **closed unmerged** one stops suppressing at 60 days from `closed_at` (at exactly 60 days it
+lapses).
+
 ## Sharp edges
 
 - **`.claude/.rule-incidents.jsonl` is gitignored.** The cron CANNOT read it.
@@ -205,7 +266,9 @@ What a streak means when you read the weekly marker:
 
 - Driver: `scripts/compound-promote.sh`
 - Tests: `scripts/compound-promote.test.sh`
-- Workflow: `.github/workflows/scheduled-compound-promote.yml`
+- Handler: `apps/web-platform/server/inngest/functions/cron-compound-promote.ts` (the former
+  `scheduled-compound-promote.yml` workflow no longer exists; the Inngest function replaced it)
+- Pattern wiki and ledger decision: `knowledge-base/engineering/architecture/decisions/ADR-297-pattern-wiki-and-pr-state-proposal-ledger.md`
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-021-stateless-self-modifying-cron.md`
 - Audit log: `knowledge-base/project/learnings/promotion-log.md`
 - Plan: `knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md`

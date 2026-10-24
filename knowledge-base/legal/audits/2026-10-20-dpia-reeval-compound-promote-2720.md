@@ -143,6 +143,8 @@ the marker is a PA-8 operation), is pinned by the marker's own test suite (Guard
 was not re-run for this memo. #10553 added new refusal reason names to the list; the field set
 is unchanged. The phase-2 prompt and the proposed insertion are not written to the marker.
 
+> **Superseded 2026-10-24 (#8293, ADR-297; conditioned on the merge of the pattern-layer PR):** the statement that the marker field set is unchanged is superseded for manual runs with `input:"patterns"`, which add six fields; see the Addendum of 2026-10-24 at the end of this memo. The text above stays as the record of 2026-10-20.
+
 **Other sinks, which the marker statement does not cover.** (i) When the allowlist refuses a
 model-supplied target path, the path is written to the function log and to Sentry after
 `redactGithubSourcedText` and a 200-character cap; that is model-chosen text, redacted by
@@ -424,6 +426,22 @@ Additional triggers:
   fleet screening.
 - **No public claim.** Nothing in this memo supports a statement about the loop's privacy
   properties in any public or marketing material.
+
+---
+
+## Addendum 2026-10-24 (#8293, ADR-297): the patterns path
+
+*Dated, append-only. Conditioned on the merge of the pattern-layer PR: until then none of this describes a deployed state. Nothing above is rewritten.*
+
+**What changes.** The handler gains a manual-trigger option `input:"patterns"` (default `corpus`; the scheduled cron ignores it). On that path the model is sent the open pattern pages under `knowledge-base/project/patterns/` (title, summary, tags, evidence keys) and the first 10 lines of each page's evidence learnings, in place of the whole prefiltered learnings corpus. The input is a curated subset of text of the kind already sent; the same prefilter (`PII_REGEX`, retired-rule list) applies to the pages and to every evidence learning, and the pages are screened for names and handles. Before the model call the handler reads prior proposal outcomes from GitHub (PR state of `self-healing/auto-*` branches, through Octokit search). It reads titles, states and timestamps of the bot's own PRs and no PR comment or body text. GitHub is already a recipient. No new processor, key, endpoint, category, purpose or retention is introduced.
+
+**Trigger 15 fires.** The marker field set changes on the patterns path: `input_source`, `patterns_open`, `ledger_read`, `ledger_suppressed`, `ledger_prs_scanned` and `ledger_title_skipped`. All six are numbers or closed enums; none carries model-supplied or third-party free text, so trigger 7 does not fire. On the scheduled path the field set is unchanged. This is the change the memo anticipated when it listed any outcome of the open decision challenge #8443 under trigger 15; this addendum does not resolve #8443.
+
+**Trigger 2 arguably fires.** "What is sent to a processor" changes in selection (a curated subset instead of the whole corpus), not in kind. The better reading is that the exposure shrinks; the conservative reading counts any change to the input set. This addendum records it as arguably fired and does not rely on the narrower reading.
+
+**What this addendum does not do.** This addendum does not cure the unmet 2026-10-25 and 2026-11-19 conditions the memo records in section 7 (the publication-limb balancing, practically due before 2026-10-25, and the balancing for persons merely named in a learning, due 2026-11-19). Both remain unmet at the date of this addendum, so the acceptance of residuals (a) and (b) remains conditional and not yet earned. It also does not verify the Commercial Terms premise (trigger 14), does not sample the pattern pages or their evidence for identifying prose beyond the deterministic prefilter, and makes no statement about the effect of the layer on proposal yield. The determination in the memo (a draft position, pending counsel review) is neither confirmed nor changed by this addendum; counsel review of both is still required.
+
+**Publication surface.** Pattern pages are persistent derived text in a public repository (Art. 5(1)(e) storage limitation). The mitigations are the seed cap (at most 8 pages), the no-names-or-handles rule, the PII and handle-shape screen over the whole page text in CI and at runtime, and a close state that removes a page from the prompt. They are a curation control, not a guarantee.
 
 ---
 
