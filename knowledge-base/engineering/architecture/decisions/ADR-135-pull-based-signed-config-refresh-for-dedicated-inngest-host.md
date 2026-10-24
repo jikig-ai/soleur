@@ -334,6 +334,7 @@ envelope, all mandatory TLE scalars present) and the stage0700 arm reproduced th
 EACCES class verbatim (`open /bundle/manifest.txt: permission denied`).
 
 Producer-side fix (this arc, three moves):
+
 1. **Emitter-side correction**: the sign step `chmod 0644`s the emitted
    `.sigstore.json` so the tarball lands world-readable — the correction the
    measurement names.
