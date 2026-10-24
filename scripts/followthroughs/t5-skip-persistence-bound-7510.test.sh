@@ -492,27 +492,20 @@ run_probe "$_r"
 expect "(o) guard hit + rehearsal unobserved" 1 "a marker in one observed source is a real verdict; the other source's unreadability cannot downgrade it"
 unset PG_HEAD_FILE
 
-# ── (p) roster parity: every enumerated guard prefix has a producer ──────────
-# (AC8b) For each `SKIP (loud): <prefix>` the probe enumerates for the guard
-# suites, at least one `corrupt_skip '<prefix>...' call site must exist in
-# .github/scripts/test/ — a prefix with no producer is dead enumeration, and a
-# producer with no prefix is invisible to the monitor (the suites' own
-# roster-parity self-checks cover the other direction).
+# ── (p) roster parity: probe enumeration == lib's registered prefix set ──────
+# (AC8b) Naming the two guard suite files here pulled them into the
+# tag-authorship battery's closure (35 pre-existing `git tag` call sites became
+# undeclared offenders — the suites live outside the closure because run-all.sh
+# collects them by glob). Parity is therefore asserted at the lib↔probe seam:
+# CORRUPT_SKIP_PRODUCER_PREFIXES in git-corrupt-graph.sh is the single
+# registration point; the suites' own in-file roster checks enforce
+# call-site↔prefix parity per suite, so probe↔lib agreement closes the chain.
+CORRUPT_LIB="$REPO_ROOT/plugins/soleur/test/lib/git-corrupt-graph.sh"
 _guard_prefixes=$(grep -oE "SKIP \(loud\): [a-z0-9]+\." "$PROBE" | sed 's/SKIP (loud): //' | sort -u)
-_p_missing=""
-for _pfx in $_guard_prefixes; do
-  # EXCLUDING captured-selftest producers: the suites' own selftest rows name
-  # *.selftest-* and emit only into files — a prefix satisfied only by them
-  # produces nothing the monitor can ever see (the suites' own roster checks
-  # assert the same exclusion the other direction).
-  grep -hE "corrupt_skip[[:space:]]+'${_pfx//./\\.}[^']*'" \
-    "$REPO_ROOT/.github/scripts/test/test-bump-inngest-bootstrap-pin.sh" \
-    "$REPO_ROOT/.github/scripts/test/test-mint-inngest-bootstrap-tag.sh" \
-    | grep -v 'selftest' | grep -q . \
-    || _p_missing="$_p_missing $_pfx"
-done
-if [ -z "$_p_missing" ]; then pass; else
-  fail "(p) roster parity: probe-enumerated prefix(es) with no non-selftest corrupt_skip producer in .github/scripts/test/:$_p_missing"
+_registered=$(grep -oE "^CORRUPT_SKIP_PRODUCER_PREFIXES='[^']+'" "$CORRUPT_LIB" \
+  | sed "s/^CORRUPT_SKIP_PRODUCER_PREFIXES='//; s/'$//" | tr ' ' '\n' | sort -u)
+if [ -n "$_guard_prefixes" ] && [ "$_guard_prefixes" = "$_registered" ]; then pass; else
+  fail "(p) roster parity: probe-enumerated guard prefixes ($_guard_prefixes) != lib-registered set ($_registered) — a producer prefix is dead enumeration, or an enumeration has no registered producer"
 fi
 
 # ── (q) the lib's emitted marker literal is pinned to the probe's literals ──
@@ -520,7 +513,6 @@ fi
 # NOTHING else pins that literal for the guard source — one printf edit in
 # git-corrupt-graph.sh silently unobserves every guard-suite skip while the
 # done-line discriminators keep the source "observed" → green unobservation.
-CORRUPT_LIB="$REPO_ROOT/plugins/soleur/test/lib/git-corrupt-graph.sh"
 if grep -qF "printf 'SKIP (loud): %s %s\\n'" "$CORRUPT_LIB"; then pass; else
   fail "(q) marker literal: git-corrupt-graph.sh no longer emits the exact 'SKIP (loud): %s %s\\n' the probe greps — an edit to the literal is a RED here, not silent unobservation"
 fi

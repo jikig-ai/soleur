@@ -40,6 +40,8 @@
 #     enumerates (`SKIP (loud): g1b.` / `g2b.` in the bump suite, `SKIP (loud):
 #     fl.` in the mint suite) — an unregistered name is a skip the monitor can
 #     never see, and the suites' roster-parity self-checks fail on one;
+#     the registered set is machine-readable below as CORRUPT_SKIP_PRODUCER_PREFIXES
+#     (the probe's fed-log test asserts its enumerated set equals it);
 #   * declare the EXACT assertion cost of the row's taken branch (the floor
 #     under-counts by whatever it omits);
 #   * stay under the suite's SKIPPED_ASSERTIONS ceiling;
@@ -108,6 +110,12 @@ _corrupt_assert_repo() {
 # nonce bytes is refused by format fsck on git 2.56 (`missingTree: invalid
 # format`) even without -w — measured by the CTO ruling.
 CORRUPT_DEAD_NONCE='soleur-corrupt-graph dead-parent'
+
+# Machine-readable registration of the producer prefixes the standing
+# skip-persistence probe enumerates for this mechanism. Keeping it here makes
+# the lib the single registration point: a probe enumerated prefix missing from
+# this set (or vice versa) is a parity failure in the probe's fed-log test.
+CORRUPT_SKIP_PRODUCER_PREFIXES='g1b. g2b. fl.'
 dead_oid() {
   _corrupt_assert_repo "${1:-}" || return
   printf '%s\n' "$CORRUPT_DEAD_NONCE" | git -C "$1" hash-object --stdin
@@ -200,6 +208,8 @@ corrupt_dead_tag() {
     printf 'tagger %s\n' "$tagger"
     printf '\ncorrupt_dead_tag (#10921): object is a never-written commit\n'
   } | git -C "$repo" hash-object -w -t tag --stdin) || return
+  # repo-boundary-tag-exempt: authors refs/tags/<tag> inside the caller's
+  # mktemp fixture repo only — never the live store (ADR-207 cell 6 class).
   git -C "$repo" update-ref "refs/tags/$tag" "$tagobj" || return
   [[ "$(git -C "$repo" rev-parse -q --verify "refs/tags/$tag" 2>/dev/null)" == "$tagobj" ]] || {
     printf 'FATAL: corrupt_dead_tag: update-ref refs/tags/%s did not take in %s\n' "$tag" "$repo" >&2
