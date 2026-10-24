@@ -2410,10 +2410,6 @@ t_q21_queue_answer_changes_between_reads() {
   _verdict "T-Q21 queue answer not_queued then queued: exactly one GraphQL read, --queue-wait (armed) skips the sync, nothing pushed" "$ok" "ctx=$(_prf_context) reads=$(wc -l < "$tmp/stub/gql-number")"
 }
 
-# T-Q22b: the instrument rows. The stub records PR_QUEUE_ATTEMPTS / PR_QUEUE_TIMEOUT of every --queue-wait read: ONE attempt and the
-# 5 s default bound (the test's PR_QUEUE_TIMEOUT, when set, is passed through). The outer wrapper is exercised with a helper COPY
-# whose --queue-wait never returns: the hook must stop waiting at ~20 s (longer than the two bounded reads, shorter than forever)
-# and fall through with the note. Assert a range, never equality.
 # T-Q23 / T-Q24 (#10832): the hook is the one real consumer of `--queue-wait` and the only caller that merges origin/main after a
 # `proceed`. An armed BEHIND PR whose base the script cannot use (T-Q23) or whose base is not main and has no merge queue (T-Q24)
 # must come back as `queue_wait` (NOT `kind=gh` rc 4: the hook treats any non-zero rc as "sync anyway" and would then merge
@@ -2449,7 +2445,17 @@ t_q24_foreign_base_without_queue_skips_sync() {
   _q_skipped "$tmp" || ok=0
   [[ "$(_prf_context)" != *"unreadable"* && "$(_q_warns "$tmp")" == "0" ]] || ok=0
   _gh_logged_any "$tmp" "rules/branches/develop" || ok=0
-  _verdict "T-Q24 armed BEHIND, base develop with no merge_queue rule: the hook skips its sync (no merge, no push), and the rules read named develop" "$ok" "rc=$PRF_RC ctx=$(_prf_context) log=$(tr '\n' ';' < "$tmp/stub/gh.log" | cut -c1-300)"
+  # The hook cannot tell `wait` from `foreign`/`badbase` (all print queue_wait), so the ONE skip text must LEAD with the refusal reading and name
+  # the safe action for a base with no queue, and must scope the disarm / sync / re-arm recipe to a main-based PR: for a develop-based PR that
+  # recipe walks into the hook's own origin/main merge (the re-arm finds the PR disarmed, so the queue-wait check is not asked). Order matters.
+  local _ctx _i_ref _i_hand _i_main _i_dis
+  _ctx="$(_prf_context)"
+  [[ "$_ctx" == *"This skip is ALSO a refusal when the PR's base branch has no merge queue"* && "$_ctx" == *"sync by hand against its own base"* \
+     && "$_ctx" == *"do NOT disarm and re-arm"* && "$_ctx" == *"only for a main-based PR, if you truly need a hand sync, disarm first"* ]] || ok=0
+  _i_ref="${_ctx%%This skip is ALSO a refusal*}"; _i_hand="${_ctx%%sync by hand against its own base*}"
+  _i_main="${_ctx%%If the PR is based on main*}"; _i_dis="${_ctx%%disarm first*}"
+  [[ "${#_i_ref}" -lt "${#_i_hand}" && "${#_i_hand}" -lt "${#_i_main}" && "${#_i_main}" -lt "${#_i_dis}" ]] || ok=0
+  _verdict "T-Q24 armed BEHIND, base develop with no merge_queue rule: the hook skips its sync (no merge, no push), the rules read named develop, and the text leads with the refusal reading and scopes disarm-first to a main-based PR" "$ok" "rc=$PRF_RC ctx=$(_prf_context) log=$(tr '\n' ';' < "$tmp/stub/gh.log" | cut -c1-300)"
   rm -rf "$tmp"
   # base develop WITH the merge_queue rule on develop (and none on main): judged against its own base, skipped.
   tmp=$(mktemp -d)
@@ -2466,6 +2472,10 @@ t_q24_foreign_base_without_queue_skips_sync() {
   rm -rf "$tmp"
 }
 
+# T-Q22b: the instrument rows. The stub records PR_QUEUE_ATTEMPTS / PR_QUEUE_TIMEOUT of every --queue-wait read: ONE attempt and the
+# 5 s default bound (the test's PR_QUEUE_TIMEOUT, when set, is passed through). The outer wrapper is exercised with a helper COPY
+# whose --queue-wait never returns: the hook must stop waiting at ~20 s (longer than the two bounded reads, shorter than forever)
+# and fall through with the note. Assert a range, never equality.
 t_q22b_instrument_bounds() {
   local tmp; tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"; trap - RETURN' RETURN
@@ -2865,7 +2875,7 @@ echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL CASES=$CASES"
 # Anti-vacuity floor (ADR-193): the bound is a literal directly above its `if`,
 # and the report is printf + exit, not a helper the floor exists to backstop.
-EXPECTED_CASES=79
+EXPECTED_CASES=80
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: anti-vacuity: %d case(s) executed, floor is %d. The suite ran but did not assert what it claims to.\n' \
     "$CASES" "$EXPECTED_CASES" >&2
