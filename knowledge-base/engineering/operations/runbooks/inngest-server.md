@@ -2452,10 +2452,14 @@ setting).
    (set out-of-band, see inngest.tf). From the repo root:
 
    ```bash
-   export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID  -p soleur -c prd_terraform --plain)
-   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+   # Backend creds — post-O5b the prd_terraform AWS_* pair is read-only; a state
+   # write (apply) needs the Tier-B pair exported ambiently (the tf-var
+   # transformer renames injected secrets, so no loader sets bare AWS_*):
+   export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
    terraform -chdir=apps/web-platform/infra init -input=false
-   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+   doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+     doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
      terraform -chdir=apps/web-platform/infra apply \
        -target=random_password.inngest_redis_password_prd \
        -target=doppler_secret.inngest_redis_password_prd

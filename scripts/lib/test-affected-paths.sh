@@ -2065,7 +2065,9 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
 
 # scripts/battery-tag-authorship — census of tag-authoring git commands reachable from the battery:
 # the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
+# The exemption-ledger bijection greps the forge lib verbatim for the ledgered command (#10921).
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
+  "plugins/soleur/test/lib/git-corrupt-graph.sh"
   "scripts/battery-tag-authorship.test.sh"
   "scripts/battery-tag-authorship-mutations.test.sh"
   "scripts/lib/repo-write-boundary.sh"
@@ -2517,6 +2519,15 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "scripts/suite-durations.tsv"
   "scripts/suite-shard-legs.tsv"
+)
+
+# scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh — the probe's fed-log
+# battery. Beyond the probe it READS the shared forge lib (marker-literal pin, row q);
+# its other live-repo references are name-greps carried as accept rows (each suite's own
+# in-file roster check is the selecting self-check for producer edits).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
+  "plugins/soleur/test/lib/git-corrupt-graph.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
 # scripts/monitor-streak-state.test.sh — the rehearsal skip monitor's streak-store suite. Its Section B parses the
