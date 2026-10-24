@@ -2481,6 +2481,22 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
   "scripts/suite-shard-legs.tsv"
 )
 
+# scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh — the probe's fed-log
+# battery. Beyond the probe it READS the guard-script fixtures it asserts against: the
+# two corrupt-graph suites (roster parity row), the shared forge lib (marker-literal pin),
+# and the rehearsal runner+SUITE_SRC pair it feeds logs from (#10921's second run-source).
+# Its producer-grep is file-scoped (two named suite files), not a corpus walk.
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
+  ".github/scripts/test/test-bump-inngest-bootstrap-pin.sh"
+  ".github/scripts/test/test-mint-inngest-bootstrap-tag.sh"
+  "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
+  "apps/web-platform/infra/run-registered-suites.sh"
+  "plugins/soleur/test/lib/git-corrupt-graph.sh"
+  "scripts/followthroughs/t5-skip-persistence-bound-7510.sh"
+  "scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
 # scripts/monitor-streak-state.test.sh — the rehearsal skip monitor's streak-store suite. Its Section B parses the
 # monitor workflow with PyYAML (wiring properties and the mutation rows) and Section C runs the alert step's shell
 # body out of it; Section A drives the t5 skip-persistence probe, whose streak write the store's `seal` step

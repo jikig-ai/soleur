@@ -505,7 +505,9 @@ for _pfx in $_guard_prefixes; do
   # *.selftest-* and emit only into files — a prefix satisfied only by them
   # produces nothing the monitor can ever see (the suites' own roster checks
   # assert the same exclusion the other direction).
-  grep -rE "corrupt_skip[[:space:]]+'${_pfx//./\\.}[^']*'" "$REPO_ROOT/.github/scripts/test/" \
+  grep -hE "corrupt_skip[[:space:]]+'${_pfx//./\\.}[^']*'" \
+    "$REPO_ROOT/.github/scripts/test/test-bump-inngest-bootstrap-pin.sh" \
+    "$REPO_ROOT/.github/scripts/test/test-mint-inngest-bootstrap-tag.sh" \
     | grep -v 'selftest' | grep -q . \
     || _p_missing="$_p_missing $_pfx"
 done
