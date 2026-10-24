@@ -1,8 +1,7 @@
 # Decision challenges: feat-one-shot-10923-merge-effect-class
 
 Headless plan run (2026-10-24). Every technical fork was ruled by the CTO agent and is recorded below; no operator
-authorization is required because nothing in this change grants new authority. One taste item is recorded for `ship`
-to surface.
+authorization is required because nothing in this change grants new authority.
 
 ## Decision Classes
 
@@ -26,4 +25,9 @@ to surface.
 | R6 C4 edit | technical | Ruled by CTO agent, 2026-10-24: cut, conditional on a cited no-impact check - the plugin to github edge description already covers authenticated read-only gh reads of the user's own repository, verified against model.c4 by the planner |
 | R7 tracking issues | technical | Ruled by CTO agent, 2026-10-24: keep both - the adopting to accepted flip citing the two receipts and the scope-class revisit with the four flip conditions, as no open issue tracks either |
 | R8 simulated revert and ADR trim | technical | Ruled by CTO agent, 2026-10-24: cut the simulated revert, drop the trigger table from the ADR body and fold two alternatives to one line each - the PR holds no state and a copied table drifts |
-| Operator-facing wording when the check cannot run versus when it ran and found a production effect: one sentence or two plain variants | taste | The plan keeps the single sentence that the change may change production, as the CTO devex seat suggested two variants (could not check versus will go live) and the choice is operator-visible copy, for ship to surface |
+| T1 trigger population for the parity test | technical | Ruled by CTO agent, 2026-10-24: closed-world over trigger keys - push, workflow_run, release and pull_request closed are enumerated and classified, a named inert list is skipped, any other key fails; the ci-only meaning is not directly gated by the merged file list as a production act and the verdict means no path-gated production workflow fires from this file list - a narrow enumeration would report green while a merge-time workflow went unclassified |
+| T2 allowlist content for agent-steering files | technical | Ruled by CTO agent, 2026-10-24: a path whose basename is AGENTS star dot md or CLAUDE.md is production-effecting at any depth, root README and CHANGELOG stay non-effecting - these files steer every agent session including scheduled agents that hold secrets, and basename matching closes the nested case |
+| T3 executable mutant set | technical | Ruled by CTO agent, 2026-10-24: replace the exit-mapping-inverted mutant with dropping previous_filename in the PR collection, still exactly six mutants, with a gh fake that accepts only the modelled argv and exit 64 otherwise - the two exit mutants perturbed the same axis and the rename hazard is the costlier miss |
+| T4 PR-mode applicability sentinel | technical | Ruled by CTO agent, 2026-10-24: applicable only when the repo root carries the repo-owned web-platform-release workflow file and the ci-only list is tracked at HEAD and the repo option equals the cwd repo, otherwise exit 2 not-applicable; supersedes R-c - a plugin-owned file is forgeable by any install that vendors the plugin and the repo option would bypass it |
+| T5 PR-mode state and head binding | technical | Ruled by CTO agent, 2026-10-24: read state, base and head sha, exit 2 for not-open, base-mismatch and head-moved, print the sha, and the consumer merges with match-head-commit - a verdict for sha A must not cover a merge of sha B |
+| T6 operator wording and verdict record | technical | Ruled by CTO agent, 2026-10-24: two plain sentences, this change can go live on its own for exit 1 and I could not check whether this changes production so I am treating it as if it does for everything else, and the consumer records the verdict line in the PR body - same fail direction, only the explanation differs, and the recorded line is the durable artifact |
