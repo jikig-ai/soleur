@@ -455,11 +455,6 @@ AFFECTED_CLAUDE_HOOKS_HOOK_SUITE_DEP_UNRESOLVED_TEST_SH_PATHS=(
   "scripts/context-reviewed-gate-discoverability.sh"
   "scripts/hook-input-fault-discoverability-probe.sh"
   "scripts/resend-alert-path-discoverability.sh"
-  "AGENTS.md"
-  "AGENTS.rules.md"
-  "scripts/rule-metrics-aggregate.sh"
-  "apps/web-platform/infra/sentry/issue-alerts.tf"
-  "apps/web-platform/test/resend-sender-domain.test.ts"
 )
 AFFECTED_CLAUDE_HOOKS_PKILL_SELF_MATCH_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/pkill-self-match-guard.sh"
