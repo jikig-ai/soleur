@@ -1945,7 +1945,7 @@ done
 row_edge_charset() { row_edge mal-charset; }; row_edge_head_abs() { row_edge mal-head-absolute; }; row_edge_head_dot() { row_edge mal-head-curdir; }
 row_edge_head_dotdot() { row_edge mal-head-parent; }; row_edge_head_dslash() { row_edge mal-head-doubleslash; }; row_edge_head_sds() { row_edge mal-head-slashdotslash; }
 row_edge_head_sddsl() { row_edge mal-head-slashdotdotslash; }; row_edge_head_notslash() { row_edge mal-head-not-slash; }; row_edge_tail_slash() { row_edge mal-tail-slash; }
-row_edge_tail_nostar() { row_edge mal-tail-no-star; }; row_edge_noncaret() { row_edge noncaret-; }; row_edge_cross() { row_edge wf-; }
+row_edge_noncaret() { row_edge noncaret-; }; row_edge_cross() { row_edge wf-; }
 row_edge_root() { row_edge root-; }; row_edge_roottail() { row_edge mal-root-tail-slash; }
 row_edge_exact() { row_edge exact; }; row_edge_dir() { row_edge dir-; }
 edge_oracle_missing_fn() {   # the harness row: an oracle extractor pointed at a copy whose _diff_edge_hit was renamed must FAIL with a named reason, never skip
@@ -3767,9 +3767,10 @@ mutate edge-head-parent-arm-dropped 'if head.startswith("../"):' 'if False:' row
 mutate edge-head-doubleslash-arm-dropped 'if "//" in head:' 'if False:' row_edge_head_dslash
 mutate edge-head-slashdotslash-arm-dropped 'if "/./" in head:' 'if False:' row_edge_head_sds
 mutate edge-head-slashdotdotslash-arm-dropped 'if "/../" in head:' 'if False:' row_edge_head_sddsl
-mutate edge-head-not-slash-terminated-arm-dropped 'if not head.endswith("/"):' 'if False:' row_edge_head_notslash
+mutate edge-head-not-slash-terminated-arm-dropped 'if "/" in head and not head.endswith("/"):' 'if False:' row_edge_head_notslash
+mutate edge-root-tail-slash-arm-dropped '        if "/" in tail:' '        if False:' row_edge_roottail
+mutate edge-root-dirless-conjunct-dropped '            return "/" not in path and fnmatch.fnmatchcase(path, g)' '            return fnmatch.fnmatchcase(path, g)' row_edge_root
 mutate edge-tail-slash-arm-dropped 'if tail.endswith("/"):' 'if False:' row_edge_tail_slash
-mutate edge-tail-without-star-arm-dropped 'if "*" not in tail:' 'if False:' row_edge_tail_nostar
 mutate edge-noncaret-compared-by-equality '        return pt in path' '        return pt == path' row_edge_noncaret
 mutate edge-noncaret-glob-is-live '    if not pt.startswith("^"):
         return pt in path
@@ -4038,9 +4039,9 @@ ctl_duplicate_refused() {  # a renamed duplicate of an earlier mutant (same edit
   mutate ctl-dup-a 'import argparse' 'import argparse  # dup' row_verdict_fail >/dev/null 2>&1
   mutate ctl-dup-b 'import argparse
 import errno
-import hashlib' 'import argparse  # dup
+import fnmatch' 'import argparse  # dup
 import errno
-import hashlib' row_verdict_fail >/dev/null 2>&1   # spelled differently, the same mutated file
+import fnmatch' row_verdict_fail >/dev/null 2>&1   # spelled differently, the same mutated file
   last="${FAILED[${#FAILED[@]}-1]}"
   passes=$p0; fails=$f0; MUT_RUN=$m0; MUT_KILLED=$k0
   if (( n0 == 0 )); then FAILED=(); else FAILED=("${FAILED[@]:0:n0}"); fi

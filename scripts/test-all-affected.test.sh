@@ -2638,9 +2638,12 @@ fi
 #      carry them). x.test.sh selects the carriers; a/x.test.sh and x.md
 #      decline — the dir-less narrowing IS the feature (bash [[ == ]] lets *
 #      cross /, so the != */* conjunct is load-bearing).
-_root_lib="$TESTROOT/aff-lib-root.sh"
+# The mutated lib MUST carry the real basename — build_sandbox copies
+# "$AFF_LIB" under its own name and the runner sources lib/test-affected-paths.sh.
+mkdir -p "$TESTROOT/affroot" "$TESTROOT/affroot2"
+_root_lib="$TESTROOT/affroot/test-affected-paths.sh"
 sed 's|"glob:knowledge-base/\*\*\.test\.sh"|"glob:*.test.sh"|g' "$AFF_LIB" > "$_root_lib"
-_root_lib2="$TESTROOT/aff-lib-root2.sh"
+_root_lib2="$TESTROOT/affroot2/test-affected-paths.sh"
 sed 's|"glob:knowledge-base/\*\*\.test\.sh"|"glob:**.test.sh"|g' "$AFF_LIB" > "$_root_lib2"
 _root_n=$(grep -c '"glob:\*\.test\.sh"' "$_root_lib" || true)
 cases=$((cases + 1))
@@ -3472,8 +3475,8 @@ fi
 #       and require every root covered by each corpus suite (dir prefix or a
 #       glob head). A NEW top-level dir added without an edge entry reopens
 #       the #9969 hole; this row REDs it in CI, where the full gate runs.
-#       Root-level dir-less files have no head to mint — the grammar residual
-#       the th8 row below detects loudly (#10117; extension deferred to #10198).
+#       Root-level dir-less files take root-anchored glob: members now (#10198);
+#       the th8 row below REDs any dir-less corpus member no edge covers.
 #       -c core.quotePath=false so the
 #       C-quoted Cyrillic fixture paths emit their real root, not `"…`.
 # Members anchored at <root> that did NOT certify coverage — the decline
@@ -3683,14 +3686,66 @@ else
   fail "th6m-d: mutant declined or did not land (rc=$?)"
 fi
 
+# The four corpus suites' edge arrays, walked by the th8 census. A row can
+# rebind the array set (like _TH_REPO) to drive the census over fixtures.
+_TH8_ARRAYS=(
+  AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS
+  AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS
+  AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS
+  AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS
+)
+
+# _th8_corpus_covered <array-name> <dir-less member> — minted-edge truth
+# (#10198): covered iff the array carries a literal member equal to it, a
+# metachar-free glob: literal (mint parity — glob:x.test.sh mints ^x.test.sh),
+# or a well-formed ROOT-ANCHORED glob member matching under [[ == ]] with the
+# dir-less conjunct (the hit arm's != */* — [[ == ]] lets `*` cross `/`). Dir
+# members, dir-anchored globs and malformed members cannot cover a dir-less
+# file; the census REDs malformed members through lint-orphan-test-suites.sh
+# independently, so they do not certify coverage here.
+_th8_corpus_covered() {
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  [[ -z "${_TH_REPO+set}" || -n "$_TH_REPO" ]] || return 1
+  local _n=0 _i _m
+  eval "_n=\"\${$1[@]+\"\${#$1[@]}\"}\""
+  _n="${_n:-0}"
+  for ((_i=0; _i<_n; _i++)); do
+    eval "_m=\"\${$1[$_i]}\""
+    case "$_m" in
+      glob:*)
+        _affected_glob_split "${_m#glob:}"
+        case "$_AGS_CLASS" in
+          literal) [[ "$2" == "${_m#glob:}" ]] && return 0 ;;
+          root) [[ "$2" != */* && "$2" == ${_m#glob:} ]] && return 0 ;;
+        esac
+        ;;
+      *) [[ "$2" == "$_m" ]] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # _th8_eval — the detection row's evaluation, callable under a row-local
-# _TH_REPO. Liveness floor binds the PRODUCER output (an empty complement is
-# legitimately green today; an empty listing is a dead producer).
+# _TH_REPO (and _TH8_ARRAYS). Liveness floor binds the PRODUCER output (an
+# empty complement is legitimately green today; an empty listing is a dead
+# producer). Emits <array>:<member> for every dir-less corpus member the
+# array's declared edges do not cover — per-suite pairs, no stop-at-first.
 _th8_eval() {
-  local _list
+  local _list _member _arr _corpus
   _list=$(_th_ls_files) || { echo "TH8-PRODUCER-FAILED"; return 0; }
   [[ -n "$_list" ]] || { echo "EMPTY-ROOT-DERIVATION"; return 0; }
-  _th_root_corpus <<<"$_list"
+  _corpus="$(_th_root_corpus <<<"$_list")"
+  [[ -n "$_corpus" ]] || return 0
+  # shellcheck source=scripts/lib/test-affected-paths.sh
+  source "$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+  # shellcheck source=scripts/lib/affected-glob.sh
+  source "$REPO_ROOT/scripts/lib/affected-glob.sh"
+  while IFS= read -r _member; do
+    [[ -n "$_member" ]] || continue
+    for _arr in "${_TH8_ARRAYS[@]}"; do
+      _th8_corpus_covered "$_arr" "$_member" || printf '%s:%s\n' "$_arr" "$_member"
+    done
+  done <<<"$_corpus"
 }
 
 # th8 fixture repo: a bare git init under TESTROOT carrying the named root
@@ -3713,23 +3768,24 @@ _th8_fix_repo() { # <name> [root-file...]
   if (($#)); then ( cd "$_d" && rc_g add -f -- "$@" ) || return 1; fi
 }
 
-# th8 (FR3, #10117) — dir-less repo-root corpus detection. The `glob:` grammar
-#     needs a `<dir>/` head — a root-level x.test.sh/x.sh has none, so no
-#     declared edge can cover it and its diff would select no corpus suite: a
-#     silent hole. The row REDs on EXISTENCE (the grammar-extension trigger,
-#     deferred to #10198 — ADR-242 decision 27) and stays red while any dir-less
-#     corpus member exists; a literal edge or ALWAYS_ON covers the file's
-#     SELECTION but does not clear this row — the exits are moving the file
-#     under a covered root or landing #10198. Latency note (ADR-262): this suite
-#     is pr-gated, so a diff that adds only the dir-less file declines it — the
-#     row fires on the merge-SHA push run, same doctrine as th6.
+# th8 (FR3, #10117; reworked #10198) — dir-less repo-root corpus COVERAGE
+#     census. A root-level x.test.sh/x.sh is representable now (root-anchored
+#     glob: members, ADR-242 decision 28) — so the row's question changed from
+#     existence to coverage: every dir-less corpus member must be covered by a
+#     declared edge of each corpus suite (a literal member, a metachar-free
+#     glob: literal, or a well-formed root-anchored glob). Uncovered members
+#     RED per suite — the exits are adding a covering member (the grammar's
+#     point) or moving the file under a covered root.
+#     Latency note (ADR-262): this suite is pr-gated, so a diff that adds only
+#     the dir-less file declines it — the row fires on the merge-SHA push run,
+#     same doctrine as th6.
 cases=$((cases + 1))
 _th8=$(_th8_eval)
 case "$_th8" in
   "") pass "th8: no dir-less repo-root corpus file exists" ;;
   EMPTY-ROOT-DERIVATION|TH8-PRODUCER-FAILED)
     fail "th8: producer floor fired (${_th8}) — a dead listing must not read as a clean complement" ;;
-  *)  fail "th8: dir-less repo-root corpus file(s) — the glob: grammar has no head to mint and this row stays RED while any exist; exits: move the file under a covered root, or land the deferred grammar extension #10198 (a literal edge or ALWAYS_ON covers the file's selection but does not clear this row): ${_th8//$'\n'/ }" ;;
+  *)  fail "th8: dir-less repo-root corpus member(s) no declared edge covers (array:member pairs — exits: declare a literal or root-anchored glob: member covering them, or move the file under a covered root): ${_th8//$'\n'/ }" ;;
 esac
 
 # th8-m1: a fixture repo carrying a dir-less x.test.sh → the detector flags it
@@ -3905,8 +3961,8 @@ cases=$((cases + 1))
 if _th_fn_mut _th8_corpus_covered _th8_mut_globdead \
     'root)' \
     'root_disabled)' \
-  && ( _fx8=('glob:*.test.sh'); ! _th8_mut_globdead _fx8 x.test.sh ) \
-  && ( _fx8=('x.test.sh'); _th8_mut_globdead _fx8 x.test.sh ); then
+  && ( source "$REPO_ROOT/scripts/lib/affected-glob.sh"; _fx8=('glob:*.test.sh'); ! _th8_mut_globdead _fx8 x.test.sh ) \
+  && ( source "$REPO_ROOT/scripts/lib/affected-glob.sh"; _fx8=('x.test.sh'); _th8_mut_globdead _fx8 x.test.sh ); then
   pass "th8m-g: deadening the root-glob channel drops the coverage (the channel binds)"
 else
   fail "th8m-g: mutant did not land or coverage survived"

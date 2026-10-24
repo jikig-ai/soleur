@@ -2215,12 +2215,16 @@ _diff_edge_hit() {
       # _affected_add_edge. A diff line under <literal-head> matching <glob-tail>
       # (bash [[ == ]] semantics — `*` crosses `/`, so `knowledge-base/**.sh`
       # covers `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike).
-      # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm in
+      # malformed-shape invariant — ONE doctrine, ONE classifier: every bash
+      # site classifies through _affected_glob_split (the mint arm in
       # _affected_add_edge, this in-flight revalidation, the census arm in
-      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
-      # scripts/test-affected-kb-consumers.test.sh must classify a shape
-      # identically; GLOBENT (registration-only classifier) is a deliberate
-      # superset — admission can only widen, never narrow (see the mint arm).
+      # scripts/lint-orphan-test-suites.sh, and materialise() in
+      # scripts/lint-orphan-test-suites.test.sh); the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh and edge_hit() in
+      # scripts/ci-pr-affected-replay.py are Python mirrors pinned by
+      # differential fixtures; GLOBENT (registration-only classifier) is a
+      # deliberate superset — admission can only widen, never narrow (see the
+      # mint arm).
       # Every malformed shape returns MATCH here — a glob edge can only widen a
       # selection, never narrow it. The deeper arms (non-repo-relative head,
       # non-`/` head, `*`-less tail) are unreachable from minted edges (their
@@ -2239,6 +2243,17 @@ _diff_edge_hit() {
           [[ "$_n" == *"${_NL}${_AGS_HEAD}"* ]] || return 1
           while IFS= read -r _line; do
             [[ -n "$_line" && "$_line" == "$_AGS_HEAD"* && "$_line" == $_g ]] && return 0
+          done <<< "$_DEH_N"
+          return 1
+          ;;
+        root)
+          # Root-anchored (#10198): only DIR-LESS diff lines can match — [[ == ]]
+          # lets `*` cross `/`, so the `!= */*` conjunct is the load-bearing
+          # narrowing, not a belt. An empty head degenerates the pre-check to
+          # always-true — keep it conditional on a non-empty head.
+          [[ -z "$_AGS_HEAD" || "$_n" == *"${_NL}${_AGS_HEAD}"* ]] || return 1
+          while IFS= read -r _line; do
+            [[ -n "$_line" && "$_line" != */* && "$_line" == $_g ]] && return 0
           done <<< "$_DEH_N"
           return 1
           ;;
@@ -2420,6 +2435,11 @@ _aff_classify_runner_diff() {
             # metachar-free head ending in /, a tail carrying * and no ?/[.
             # Anything outside this shape stays semantic — the closed grammar.
             GLOBENT = "^  \"glob:[A-Za-z0-9_.\\/-]+\\/[A-Za-z0-9_.\\/*-]*\\*[A-Za-z0-9_.\\/*-]*\"( +#.*)?$"
+            # GLOBROOT (#10198): the root-anchored form — a slash-free head
+            # (empty allowed) and a slash-free tail carrying `*`. Deliberate
+            # superset like the dir arm: admission can only widen, never
+            # narrow; a /-bearing tail (glob:x*/y) stays semantic.
+            GLOBROOT = "^  \"glob:[A-Za-z0-9_.*-]*\\*[A-Za-z0-9_.*-]*\"( +#.*)?$"
             load(RUNNER, post); load(INDEX, post) }
     {
       line = $0
@@ -2439,17 +2459,17 @@ _aff_classify_runner_diff() {
             # label added in the same diff, and the injectivity rules, are checked by the caller.
             if (body ~ /\r/) { viol("G2-cr", file, cur) }
             else if (blk == 1) {
-              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ GLOBENT || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
+              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ GLOBENT || body ~ GLOBROOT || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
               else if (body == ")") { blk = 0 }
               else { viol("INDEX-SHAPE", file, cur); blk = 0 }
             } else if (body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) {
               j = cur - 1
               while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
-              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT))) viol("INDEX-ANCHOR", file, cur)
+              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT || post[file, j] ~ GLOBROOT))) viol("INDEX-ANCHOR", file, cur)
             } else if (body ~ /^AFFECTED_[A-Z0-9_]+_PATHS=\($/) {
               j = cur - 1
               while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
-              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT)) {
+              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT || post[file, j] ~ GLOBROOT)) {
                 blk = 1; nm = body; sub(/=\($/, "", nm); printf "R\t%s\n", nm
               } else viol("INDEX-ANCHOR", file, cur)
             } else if (body ~ /^  "[A-Za-z0-9_.\/-]+"( +#.*)?$/) {
@@ -2870,12 +2890,15 @@ _affected_add_edge() {
         *[\*?[]*) : ;;                      # a metachar is present — the glob grammar applies
         *) _affected_add_edge "$_g"; return 0 ;;   # none: a literal path entry
       esac
-      # malformed-shape invariant — ONE doctrine, FIVE sites: this mint arm, the
+      # malformed-shape invariant — ONE doctrine, ONE classifier: every bash
+      # site classifies through _affected_glob_split (this mint arm, the
       # in-flight revalidation in _diff_edge_hit's glob:* arm, the census arm in
-      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
-      # scripts/test-affected-kb-consumers.test.sh must classify a shape
-      # identically. Site five — the GLOBENT line shape in the registration-only
-      # classifier — is a DELIBERATE SUPERSET (admits e.g. `../` heads): admission
+      # scripts/lint-orphan-test-suites.sh, and materialise() in
+      # scripts/lint-orphan-test-suites.test.sh); the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh and edge_hit() in
+      # scripts/ci-pr-affected-replay.py are Python mirrors pinned by
+      # differential fixtures. The GLOBENT line shape in the registration-only
+      # classifier is a DELIBERATE SUPERSET (admits e.g. `../` heads): admission
       # only marks a diff registration-only, a malformed member still mints
       # always-match here, and the census REDs it — the superset can never narrow.
       # The grammar is a CLOSED charset (any byte outside [-A-Za-z0-9_./:*]'s
@@ -2894,6 +2917,10 @@ _affected_add_edge() {
           # absent degrades to `^<head>/` (the dir-prefix edge the entry
           # replaced, never narrower).
           if _affected_probe d "$_AGS_HEAD"; then _p="^glob:${_g}"; else _p="^${_AGS_HEAD}"; fi ;;
+        root)
+          # Root-anchored (#10198): no -d probe — the repo root is always
+          # present, so the entry mints its real edge unconditionally.
+          _p="^glob:${_g}" ;;
         *) _p="^glob:${_p}" ;;          # malformed (every why) → verbatim always-match
       esac
       ;;

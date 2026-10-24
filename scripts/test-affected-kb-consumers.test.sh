@@ -290,11 +290,20 @@ def covers(edge, p):
             head = re.match(r'[^*?\[\]]*', g).group(0)
             tail = g[len(head):]
             if (re.search(r'[^A-Za-z0-9_./*-]', g)
-                    or not head.endswith("/")
                     or head.startswith(("/", "./", "../"))
                     or "//" in head or "/./" in head or "/../" in head
+                    or ("/" in head and not head.endswith("/"))
+                    or ("/" not in head and "/" in tail)
                     or "*" not in tail or tail.endswith("/")):
                 return True
+            if "/" not in head:
+                # Root-anchored (#10198): covers only a dir-less non-dir ref
+                # matching the whole pattern — fnmatch's `*` crosses `/`, so
+                # the dir-less conjunct is load-bearing here too (mirrors the
+                # hit arm's `!= */*` in _diff_edge_hit).
+                if "/" in p or p in _tracked()[1] or os.path.isdir(p):
+                    return False
+                return fnmatch.fnmatchcase(p, g)
             if p in _tracked()[1] or os.path.isdir(p):
                 # A dir ref is covered iff EVERY tracked member beneath it
                 # matches the minted glob — path nesting alone certifies
@@ -774,10 +783,10 @@ tests = [
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in tests))
 COVPY
 )
-if [[ "$_k5" == "1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 0 1 0 0 1 1 0 0 0 1 0 1 1" ]]; then
+if [[ "$_k5" == "1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 0 1 0 0 0 1 0 1 1 1 0 0 1" ]]; then
   pass "k5: ^glob: covers .sh at any depth, declines .md/out-of-head/mixed-or-memberless dir refs + dir-bearing root lines, always-covers malformed mints"
 else
-  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 0 1 0 0 1 1 0 0 0 1 0 1 1)"
+  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 0 1 0 0 0 1 0 1 1 1 0 0 1)"
 fi
 
 # k6 (Guard 3, #10117) — mutation dispatch over the dir-ref all-containment arm.

@@ -1122,7 +1122,7 @@ else
       case "$p" in
         glob:*)
           # Third declared kind (#9813): glob:<literal-head>/<glob-tail>.
-          # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm
+          # malformed-shape invariant — ONE doctrine, ONE classifier: the mint arm
           # in _affected_add_edge, the in-flight revalidation in _diff_edge_hit,
           # this census arm, and the covers() oracle in
           # scripts/test-affected-kb-consumers.test.sh must classify a shape
@@ -1150,6 +1150,10 @@ else
               ;;
             dir)
               [[ -d "$REPO_ROOT/${_AGS_HEAD%/}" ]] || _cg_why="its head dir ${_AGS_HEAD} does not exist" ;;
+            root)
+              # Root-anchored (#10198): valid — no -d probe; the repo root is
+              # always present and the tail is already `*`-carrying and /-free.
+              : ;;
             malformed)
               # The _AGS_WHY → message map is the single reason vocabulary.
               case "$_AGS_WHY" in
@@ -1159,6 +1163,7 @@ else
                 head-mid-slash) _cg_why="its head does not end in /" ;;
                 tail-trailing-slash) _cg_why="its tail ends in / — no path can match it" ;;
                 tail-no-star) _cg_why="its tail carries no *" ;;
+                root-tail-slash) _cg_why="its tail carries a / under a root-anchored head — no dir-less diff line can match it" ;;
                 *) _cg_why="its shape is malformed" ;;
               esac
               ;;

@@ -12,12 +12,16 @@
 #               clean repo-relative prefix ending in `/`, and a tail that carries
 #               `*` and never ends in `/`. Mints `^glob:<pattern>` (or degrades
 #               to `^<head>/` when the head dir is absent on disk).
+#   root      — well-formed, root-anchored (#10198): a metachar-free head with
+#               no `/` at all (empty heads allowed), and a tail with `*` and no
+#               `/`. Mints `^glob:<pattern>` with no `-d` probe — the repo root
+#               is always present. Matches only DIR-LESS diff lines.
 #   malformed — every other shape: degrades WIDER (the mint's `^glob:<verbatim>`
 #               always-match edge, the hit arm's return-0, the covers() oracle's
 #               always-cover) except at the census, where it is a static RED —
 #               and at GLOBENT, where it stays `semantic` (the closed grammar).
 #
-# malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm
+# malformed-shape invariant — ONE doctrine, ONE classifier: the mint arm
 # `_affected_add_edge` and the hit arm `_diff_edge_hit` in scripts/test-all.sh,
 # the census arm in scripts/lint-orphan-test-suites.sh, and the covers() oracle
 # in scripts/test-affected-kb-consumers.test.sh must classify a shape
@@ -35,10 +39,12 @@
 # stdout (the _NP idiom — a command-substitution call would fork once per
 # edge):
 #
-#   _AGS_CLASS  literal | dir | malformed
+#   _AGS_CLASS  literal | dir | root | malformed
 #   _AGS_WHY    the verdict's reason token:
 #                 literal            — the class above (no metachar)
 #                 dir                — the class above (well-formed)
+#                 root               — the class above (well-formed)
+#                 root-tail-slash    — a / in a root-anchored tail (unmatchable)
 #                 charset            — a byte outside the grammar charset
 #                                      [-A-Za-z0-9_./:*-] (but not ? or [)
 #                 qbracket           — a ? or [ (outside the grammar)
@@ -77,6 +83,15 @@ _affected_glob_split() { # <payload> — classify the text AFTER `glob:`
         *) _AGS_CLASS=malformed; _AGS_WHY=tail-no-star; return 0 ;;
       esac
       ;;
-    *) _AGS_CLASS=malformed; _AGS_WHY=head-mid-slash; return 0 ;;
+    */*) _AGS_CLASS=malformed; _AGS_WHY=head-mid-slash; return 0 ;;
+    *)
+      # /-free head (empty included) — ROOT-ANCHORED (#10198): the pattern
+      # matches only dir-less diff lines. A /-bearing tail can never match one.
+      case "$_AGS_TAIL" in
+        */*) _AGS_CLASS=malformed; _AGS_WHY=root-tail-slash; return 0 ;;
+        *\**) _AGS_CLASS=root; _AGS_WHY=root; return 0 ;;
+        *) _AGS_CLASS=malformed; _AGS_WHY=tail-no-star; return 0 ;;
+      esac
+      ;;
   esac
 }
