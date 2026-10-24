@@ -2045,7 +2045,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=294   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=287   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples (286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh)
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2187,7 +2187,6 @@ PRODUCER_JOIN=(
   'scripts/check-web-host-escrow-config.test.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc124/301s; hits 0 (stdin-flag))'
   'scripts/ci-demand-census.test.sh | jq | exempt | text-only no piped jq in scripts/ci-demand-census.sh (every jq reads a file operand); the ci.yml sites in sites.txt are fixture names, not exercised'
   'scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh | tr | exempt | deliberate-fault never: `printf #!/usr/bin/env bash\nexit 5\n` at 334 (failing tr, "a failing CR strip is never read as no marker")'
-  'scripts/followthroughs/infra-config-activation-7220.test.sh | python3 | exempt | deliberate-fault never: `printf #!/usr/bin/env bash\nexit 1\n` at 305 (failing python3, "uncomputable signature refused") (reach T2; t2:rc0/6s; hits 1)'
   'scripts/followthroughs/inngest-soak-6178.test.sh | python3 | exempt | deliberate-fault python3 stubs exit 1 or print a non-digest to drive the refused-signature rows, and the producer is printf with an empty write (no EPIPE possible) of the followthrough script (reach: not probed, found by the final configuration, read by hand)'
   'scripts/followthroughs/web2-luks-live-6931.test.sh | ready | exempt | not-a-command a word in a usage comment of betterstack-query:110; the suite stubs a ready function and no non-test pipe feeds it (reach T2; t2:rc0/169s; hits 324)'
   'scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh | jq | drains | 1 | *'
@@ -2211,7 +2210,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-argv-bearer-sweep.sh | fatal | exempt | not-a-command a word in a case-pattern alternation (cloud-init-registry:1759), prose (reach T1; t1:rc124/301s; hits 0)'
   'tests/scripts/test-argv-bearer-sweep.sh | htpasswd | exempt | text-only every htpasswd word is registry-template site text or mutation text; the executable arm stubs docker, never htpasswd, so no piped call reaches an htpasswd stub'
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'
-  'tests/scripts/test-argv-bearer-sweep.sh | python3 | exempt | deliberate-fault never: defs 2973/2974/2975/3235 exit 1 / print a non-digest / fail only `-I` (fault stubs for the HMAC rows) (reach T1; t1:rc124/301s; hits 13)'
+  'tests/scripts/test-argv-bearer-sweep.sh | python3 | exempt | deliberate-fault never: the PYSEL and PYGARB fault stubs fail only `-I` / print a non-digest (fault stubs for the parity E1b rows) (reach T1; t1:rc124/301s; hits 13)'
   'tests/scripts/test-destroy-guard-counter-web-platform.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/41s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | curl | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (2 non-test producers) (reach T1; t1:rc124/300s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210, so no pipe reaches it'
@@ -2219,6 +2218,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-git-data-boot-signal-poll.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/21s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-rung2-evidence-capture.sh | curl | exempt | text-only reach probe: suite ran green and no piped call reached the stub (2 non-test producers) (reach T1; t1:rc1/92s red3:rc0/38s; hits 0 (stdin-flag))'
   'tests/scripts/test-sentry-alert-live-fidelity.sh | curl | drains | 2 | *'
+  'plugins/soleur/test/token-drift-workflow-causes.test.sh | curl | drains | 1 | *'
   'tests/scripts/test-supabase-advisor-scan.sh | curl | drains | 1 | --header @-'
   'tests/scripts/test-workspaces-luks-cutover-gate.sh | cryptsetup | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/5s; hits 0)'
   'tests/scripts/test-zot-log-channel-probe.sh | awk | drains | 2 | *'

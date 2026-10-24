@@ -84,6 +84,13 @@ at 180 s (was killed at 300 s), rehearsal ends in its own verdict at 429 s (was 
 12. **The stop hook flagged turns that were waiting on background jobs** — Recovery: `<stop>` tags —
     Prevention: end such turns with the explicit BLOCKED form from the start.
 
+## Correction (2026-10-23, #10781)
+
+Key Insight 1 above says a measurement "falsified apt's own `Acquire::http::Timeout=20`". That option was the uncommitted first-cut experiment of #9383
+(its plan, this learning and its decision-challenges record about one apt cycle in three stalling while it was set), not a shipped setting:
+`git log --all -S"Acquire::http::Timeout" -- apps scripts` returns nothing, and only `Acquire::Retries=5` shipped. The experiment is not reproduced
+(ADR-188, 2026-10-01 amendment and its 2026-10-23 correction). The text above is left as written.
+
 ## Tags
 category: test-failures
 module: apps/web-platform/infra
