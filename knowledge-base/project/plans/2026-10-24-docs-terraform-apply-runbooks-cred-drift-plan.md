@@ -94,6 +94,7 @@ doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
 - `knowledge-base/project/learnings/integration-issues/2026-04-05-terraform-doppler-dual-credential-pattern.md` — same partial-supersession note at its recipe block.
 - `knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md` — same note on the :93 "Canonical pattern" bullet (drift reads remain valid; the operator-manual apply ritual's export source moved).
 - `knowledge-base/project/learnings/workflow-patterns/2026-07-07-agent-runs-terraform-apply-never-route-to-operator.md` — same note at its cred-pattern block (an apply is a write; the `AWS_*` source is Tier B).
+- `infra/github/README.md` — (CTO ruling 2026-10-24, Item B: widened into this PR — same defect class on the same `soleur-terraform-state` bucket, `infra/github/main.tf:5-6`; still `*.md`, still docs-only.) Six `export AWS_*=…prd_terraform…` blocks (`:57,:333,:367,:443,:627,:675`) feed write-path prescriptions — `import` (`:314,:338,:372,:452,:636`), `apply` (`:318,:641`), `state push` (`:691`) — and the existing `Superseded 2026-10-01 (#9360)` notes (`:272,:347,:500,:621`) cover only the App-key leg while the `AWS_*` leg still routes to the 403. Rewrite each write-path block to the canonical recipe (Tier-B `AWS_*` ambient export from `TF_STATE_AWS_*` + loaders per §Local Terraform invocation) and amend each #9360 note to name the `AWS_*` leg. Read-only `plan` blocks may keep either pair — normalize to the write pair for consistency.
 
 ## Files to Create
 
@@ -154,14 +155,16 @@ No cross-domain implications detected — docs-only change to internal ops runbo
 
 ## Acceptance Criteria
 
-- [ ] AC-1: `git grep 'secrets get AWS_ACCESS_KEY_ID' -- 'knowledge-base/engineering/operations/runbooks/'` returns zero hits.
+- [ ] AC-1: `git grep 'secrets get AWS_ACCESS_KEY_ID' -- 'knowledge-base/engineering/operations/runbooks/' infra/github/README.md` returns zero hits.
 - [ ] AC-2: `inngest-server.md` Cutover step 0 contains no `export AWS_` sourced from `prd_terraform`; its terraform apply is wrapped per the canonical post-cutover form (Tier-B `AWS_*` export + loader with `--preserve-env` on the inner `prd_terraform` pass).
 - [ ] AC-3: `grok-build-hetzner-dogfood.md`'s operator-local apply block uses the canonical wrapped-loader form and the caveat note no longer calls the block "the PRE-cutover one".
 - [ ] AC-4: `inngest-config-refresh.md` step 3 names `INNGEST_CONFIG_DIGEST` in `soleur/prd_terraform` explicitly and warns that a literal `TF_VAR_`-prefixed secret name lands as `TF_VAR_tf_var_inngest_config_digest`.
 - [ ] AC-5: `inngest-luks-cutover-6894.md`'s `tf()` wrapper carries a Tier-B `AWS_*` annotation distinguishing the step-5 `state push` (write) from the Route-B `state pull` (read, read-only pair correct).
 - [ ] AC-6: `infra-credential-tiers-8209.md` §Local Terraform invocation documents that the loaders inject `TF_VAR_*` only and the backend's bare `AWS_*` must be exported from `TF_STATE_AWS_*` for state-writing invocations.
 - [ ] AC-7: each of the four dated learnings carries a `Superseded in part (2026-10-24, #10979)` note scoped to state-writing invocations.
-- [ ] AC-8: `git diff --name-only origin/main...HEAD` touches only `*.md` files under `knowledge-base/` (the runbooks, the learnings, and this feature's `specs/`+`plans/` pipeline artifacts) — no product code, no workflow files, no `apps/` or `.github/` paths.
+- [ ] AC-8: `git diff --name-only origin/main...HEAD` touches only `*.md` files under `knowledge-base/` (the runbooks, the learnings, and this feature's `specs/`+`plans/` pipeline artifacts) plus `infra/github/README.md` — no product code, no workflow files, no `apps/` or `.github/` paths.
+- [ ] AC-9: every `secrets get AWS_ACCESS_KEY_ID` block in `infra/github/README.md` feeding a state-writing invocation (`import`/`apply`/`state push`) prescribes the canonical recipe, and each pre-existing `Superseded 2026-10-01 (#9360)` note is amended to name the `AWS_*` leg alongside the App-key leg.
+- [ ] AC-10: a follow-up issue covering `apps/cla-evidence/infra/bootstrap.sh` and `apps/web-platform/scripts/bootstrap-live-verify.sh` (both export `prd_terraform` `AWS_*` then run `terraform apply -auto-approve` — executable code, live 403-armed; `bootstrap-live-verify.sh` is the documented leak-rotation path) is filed before the PR ships (CTO ruling: mandatory ship gate). **Filed: #10990.**
 
 ## Test Scenarios
 
@@ -179,7 +182,7 @@ Zero remaining runbook prescriptions of `prd_terraform` `AWS_*` for writing invo
 ## Dependencies & Risks
 
 - No code or CI changes; risk is prose accuracy — mitigated by quoting the operator-verified recipe and anchoring to `infra-credential-tiers-8209.md` §Local Terraform invocation.
-- Adjacent stale sites (`infra/github/README.md` ×6, `apps/cla-evidence/infra/bootstrap.sh`, `apps/web-platform/scripts/bootstrap-live-verify.sh`) remain until a follow-up — a reader there can still hit the same 403. Recommended follow-up issue recorded in `decision-challenges.md`.
+- Adjacent stale sites: `infra/github/README.md` was widened into this PR by CTO ruling (Item B). The two scripts remain: `apps/cla-evidence/infra/bootstrap.sh` (`:127-141` — exports the read-only pair then `terraform apply -auto-approve`) and `apps/web-platform/scripts/bootstrap-live-verify.sh` (`:62-70` export + `:84-87` `terraform apply -auto-approve`; the documented leak-rotation path) are both state-WRITING — the earlier "likely reads" characterization was wrong — and stay descoped as executable code; their fix is a follow-up issue that MUST be filed before this PR ships (AC-10). `apps/web-platform/infra/sentry/README.md` is init+plan only — still works, no fix.
 - Plan-review panel and domain leaders were not spawned (no Task-capable subagent available in this planning context) — a sequential self-review was performed instead (`Reviewed-Coverage: sequential-fallback`).
 
 ## References & Research
