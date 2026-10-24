@@ -2065,7 +2065,9 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
 
 # scripts/battery-tag-authorship — census of tag-authoring git commands reachable from the battery:
 # the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
+# The exemption-ledger bijection greps the forge lib verbatim for the ledgered command (#10921).
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
+  "plugins/soleur/test/lib/git-corrupt-graph.sh"
   "scripts/battery-tag-authorship.test.sh"
   "scripts/battery-tag-authorship-mutations.test.sh"
   "scripts/lib/repo-write-boundary.sh"
