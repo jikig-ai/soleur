@@ -1153,7 +1153,14 @@ else
             root)
               # Root-anchored (#10198): valid — no -d probe; the repo root is
               # always present and the tail is already `*`-carrying and /-free.
-              : ;;
+              # Decline a pattern that matches a --name-status token: the hit
+              # arm's blob carries `M`/`R100`-shaped phantom lines after the TAB
+              # split, so e.g. `glob:*`/`glob:R*` would be a disguised
+              # always-match (safe direction, but defeats the narrowing).
+              local _st
+              for _st in M A D R100 C075; do
+                [[ "$_st" == $_cg ]] && { _cg_why="its pattern matches the name-status token $_st — a disguised always-match over the diff blob"; break; }
+              done ;;
             malformed)
               # The _AGS_WHY → message map is the single reason vocabulary.
               case "$_AGS_WHY" in

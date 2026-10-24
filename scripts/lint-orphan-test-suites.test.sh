@@ -168,7 +168,10 @@ materialise() {
         # dir; every other class materialises nothing.
         _mp="${p#glob:}"
         _affected_glob_split "$_mp"
-        [[ "$_AGS_HEAD" == */ ]] || continue
+        # Repo-relative confinement (P2, review): a `..`-headed or absolute head
+        # must never reach mkdir — it would escape $PRISTINE.
+        case "$_AGS_CLASS" in dir|literal) ;; *) continue ;; esac
+        [[ "$_AGS_HEAD" == */ && "$_AGS_HEAD" != /* && "$_AGS_HEAD" != ../* && "$_AGS_HEAD" != */../* ]] || continue
         mkdir -p "$PRISTINE/${_AGS_HEAD%/}" || return 1
         : > "$PRISTINE/${_AGS_HEAD%/}/.keep" || return 1
         continue
