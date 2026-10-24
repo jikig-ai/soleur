@@ -41,3 +41,8 @@
 
 ## Compound (done — learning: best-practices/2026-10-24-gate-detection-substrate-map-before-glob-and-notice-unmerged-pin.md)
 ## Ship (pending)
+
+## Ship (in progress)
+- PR #11016 marked ready; body has Changelog + Closes #11014/#11015; review trailer emitted (full 10/10)
+- CI polling: 1 FAILURE = affected-index-ratchet (advisory continue-on-error, oracle-inputs-changed expected — diff edits its oracle test-affected-paths.sh); rest green/pending
+- Remaining: wait CI → gh pr merge → postmerge verify → DONE
