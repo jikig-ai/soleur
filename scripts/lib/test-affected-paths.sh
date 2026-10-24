@@ -2501,6 +2501,22 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/test-all.sh"
 )
 
+# scripts/betterstack-incident-mirror — the #10390 incident-mirror battery. Beyond the SUT
+# it READS the shipping workflow (parsed-YAML wiring rows + the verbatim run-block replay),
+# the watchdog dispatch table (the row pin), cron-monitors.tf (the monitor declaration row)
+# and the two suite-registry TSVs — reads no name-stem derivation reaches.
+AFFECTED_SCRIPTS_BETTERSTACK_INCIDENT_MIRROR_PATHS=(
+  ".github/workflows/scheduled-betterstack-incident-mirror.yml"
+  "apps/web-platform/infra/sentry/cron-monitors.tf"
+  "apps/web-platform/server/watchdog-dispatch-table.ts"
+  "scripts/betterstack-incident-mirror.sh"
+  "scripts/betterstack-incident-mirror.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/suite-durations.tsv"
+  "scripts/suite-shard-legs.tsv"
+  "scripts/test-all.sh"
+)
+
 # scripts/followthroughs/registry-clientip-alert-7530.test.sh — the #7530 post-merge probe's
 # exit-code battery. Beyond the probe itself it READS the committed alert file at runtime (the suite
 # compares the SQL the probe sends against that text, and the probe extracts its predicate from it),
