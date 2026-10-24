@@ -18,6 +18,24 @@ requires_cpo_signoff: true
 > narrowed at plan review), so `lane:` defaulted to `cross-domain` (fail-closed).
 > PR body wording: `Ref #8293` (never `Closes`); `Ref #10552` only where relevant, never `Closes`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-24. **Gates run:** 4.6 User-Brand Impact, 4.7 Observability, 4.8 PAT sweep (no hits), 4.9 UI wireframe (no UI surface, skipped), 4.10 Encryption Posture (no store or connection, skipped), 4.11 Guard Contract (`lint-guard-contract.py` green, 3 guards), 4.12 Scope Check (one live section, no block marker). **Verification sweeps:** cited PR/issue states live (`#10553`, `#10673`, `#8344` merged; `#8427`, `#8281`, `#2723`, `#5292` closed; `#3321`, `#2231` open); cited rule ids resolve (`wg-architecture-decision-is-a-plan-deliverable` is migrated-but-active, `scripts/migrated-rule-ids.txt` L76); cited `knowledge-base/` paths resolve except the ADR to be created.
+**Agents used (targeted, not the full roster - the plan is a small server change plus content):** security-sentinel, test-design-reviewer, observability-coverage-reviewer, user-impact-reviewer, framework-docs-researcher (GitHub Search API, live probes), pattern-recognition-specialist, on top of the plan-review panel (DHH, Kieran, simplicity, architecture, spec-flow, CTO devex) and two CTO rulings.
+
+### Key improvements applied
+1. **Prompt injection:** the patterns arm fences BOTH the index and the evidence excerpts with a shared nonce helper extracted from `draftAdditiveEdit`; the pre-existing unfenced `Corpus:` tail on the scheduled path is tracked for the flip.
+2. **Reader fails closed on more shapes:** `incomplete_results`, `total_count > 1000`, an unparseable `closed_at`, and "raw hits > 0 but matched == 0" (title or login drift) are all failed reads.
+3. **Publication surface:** `PII_REGEX` runs over the whole page text (bodies included) plus a handle/UUID/host-shape denylist test; runtime evidence-path validation (charset, prefix, no `..`, not a symlink).
+4. **Observability made reachable:** the discoverability command now actually surfaces the weekly marker (dropped `--no-archive`, added `--grep`); every new Sentry op uses the message path with a closed `cause` enum.
+5. **Test strategy made killable:** a `q`-routing Octokit fake, exact-params assertions, multi-page and cap fixtures, golden field-set from `main`, clock-through-`runStartedAt` test, mixed-order suppression.
+6. **Repo wiring caught:** the live-tree and handler suites escape the app and must be registered in `REPO_WIDE_SUITES`; `BASELINE_DECLARED_PROBES` 76 -> 77; reuse `gray-matter` and `fetchAllPages`; one shared bot-login export.
+
+### New considerations discovered
+- Installed-plugin users keep `critical-patterns.md` / `common-solutions.md` in their own repos; Step 3b keeps a legacy-file fallback and Step 7 stays usable without a maintainer PR flow.
+- A first manual `input:"patterns"` run opens real draft PRs from an unproven seed (`dry_run` is deferred): an interim rule keeps it after the 2026-10-25 baseline run and while no `self-healing/auto` PR is open.
+- On the patterns path an open page keeps feeding the same cluster, so a suppressed cluster can occupy slots weekly (slot top-up is deferred with a measurable trigger).
+
 ## Overview
 
 Phase 1 of the WikiSkill work deferred from #8281 and gated on #8293. It is deliberately small and
@@ -175,10 +193,26 @@ the page and to every evidence learning (a failing learning is dropped, never se
 
 **What enters the model prompt (and what does not).** Per open page: `slug`, `title`, `summary`, `tags`,
 `evidence` keys. The `## Root cause` / `## Fix` bodies are **not** sent. The index and the evidence
-excerpts are wrapped in the same nonce-fenced `block()` construction the draft step uses (handler
-`draftAdditiveEdit`, "Per-call nonce"), with the "untrusted data, not instructions" sentence. Evidence
-learnings are sent exactly as the corpus path sends them today (first 10 lines), so `corpusSummaries`
-and the quorum are unchanged.
+excerpts are wrapped in the nonce-fenced construction the draft step uses (`block()` is a closure inside
+`draftAdditiveEdit`, handler "Per-call nonce"): extract ONE shared `fenceBlock(nonce, label, body)` plus the
+"untrusted data, not instructions" sentence, used by both call sites, with its own nonce generated inside the
+`anthropic-cluster` step. On the patterns arm the evidence excerpts go through fenced blocks too - the
+patterns prompt has **no** unfenced `Corpus:` JSON tail (a test asserts it). Evidence learnings are
+otherwise the same first-10-lines entries the corpus path sends, so `corpusSummaries` and the quorum are
+unchanged. The scheduled path keeps its existing unfenced tail until the flip (tracked in 7.1).
+
+**Parsing.** Use `gray-matter` with `engines: {}` called directly (as `cron-content-publisher.ts:24` and
+`cron-strategy-review.ts:46` do), not `kb-reader.ts`'s `parseFrontmatter` (it swallows YAML errors into `{}`,
+fail-open for a validator), and never import `scripts/lib/frontmatter-strip` (a cross-root import breaks the
+containerized build, per the comment above the handler's `stripFrontmatter`). Quote `opened_on`/`closed_on`
+or accept `Date` (gray-matter parses an unquoted date to a `Date`). Export `stripFrontmatter` (or inject it)
+for the evidence excerpts.
+
+**Runtime validation (CI is not the only gate).** `loadOpenPatterns` rejects at runtime, dropping the page
+with a Sentry message: an evidence path not matching `^knowledge-base/project/learnings/[A-Za-z0-9._/-]+\.md$`,
+containing `..`, or that `lstat` reports as a symlink; and any page whose WHOLE text (frontmatter and bodies)
+matches `PII_REGEX`. Evidence keys flow into the cluster hash, the commit trailer and the PR body, so they
+must be as strict as the corpus keys.
 
 ### Ledger reader contract (CTO F1-F3 + round 2 C1, C2, C5)
 
@@ -186,10 +220,13 @@ and the quorum are unchanged.
 - **Where it runs:** its own `step.run("ledger-read")`, **only when `inputSource === "patterns"`**. The
   scheduled path has no new step, no new error path and no new marker fields.
 - **Query:** `octokit.request("GET /search/issues", { q: "repo:<o>/<r> is:pr head:self-healing/auto-", per_page: 100, page })`
-  in a manual loop, hard stop at `LEDGER_MAX_SEARCH_PAGES = 5`; exceeding the cap (decided from
-  `total_count`, not from an iterator) counts as a failed read. `head:` prefix matching was verified live:
-  `head:ci/` returned 279 PRs, `head:ci/content-publisher` returned 64. No per-hit detail fetch: the search
-  item already carries `user.login`, `state`, `closed_at`, `title`, and `pull_request.merged_at`.
+  through the existing exported `fetchAllPages` (`cron-content-vendor-drift.ts:555`; `maxPages: 5`; it throws
+  on a full final page, which is the fail-closed shape wanted here - if importing it drags that module's
+  graph into the handler, move it to `_cron-shared.ts`). `bare @octokit/core` has no `paginate`. Verified live
+  by the research pass (GitHub Search API; rate limit 30/min; max 1,000 retrievable results, page 11 is a 422;
+  `per_page` clamps to 100): `head:` is a branch-name prefix match (`head:ci/` 279, `head:ci/content-publisher`
+  64, `head:ci-` 4). No per-hit detail fetch: the search item carries `user.login`, `state`, `closed_at`,
+  `title`, and `pull_request.merged_at` (merged #10951: `merged_at` set; closed-unmerged #10944: `null`).
 - **Identity binding (a name-only match never suppresses):** server-side `repo:` and `head:` qualifiers
   plus `user.login === LEDGER_BOT_LOGIN` (`"soleur-ai[bot]"`, verified live on the other app-authored
   PRs; a test pins it equal to `BOT_LOGIN` in `cron-bot-pr-reaper.ts`). The `self-healing/auto` label is
@@ -198,12 +235,24 @@ and the quorum are unchanged.
   `promotePrTitle(hash, date)` the apply step uses (`self-healing(auto): promote cluster <64-hex> <YYYY-MM-DD>`);
   an item that does not match is skipped. A test builds a title with the real builder and parses it.
 - **Suppression rule (exact hash only):** open -> suppress; merged (`merged_at` set) -> suppress
-  permanently (documented; a changed learnings set changes the hash, so a reverted target re-clusters
-  naturally); closed unmerged -> suppress while `now - closed_at < 60 days` where
+  permanently (documented). **Correction to the round-2 wording:** on the patterns path a page's evidence set is
+  fixed, so a reverted merged edit does NOT re-cluster to a new hash and stays suppressed; the escape hatch is a
+  human changing the page's evidence (new hash) or closing and reopening it under a new slug, documented in the
+  runbook and listed as a flip-tracker trigger. Open PRs likewise suppress for as long as they are open
+  (an unreviewed draft blocks its cluster; tracker trigger). The `closed` path assumes no bot closes a
+  `self-healing/auto-*` PR: at plan time `git grep` over `server/inngest/functions` finds only issue closes
+  (reaper report issue, stale scope-outs, etc.) and `update-branch`; re-grep at work time. Closed unmerged -> suppress while `now - closed_at < 60 days` where
   `now = new Date(runStartedAt)` (the memoized run start, never a fresh `Date`); at exactly 60 days it
   lapses (pinned by a test).
-- **Failure path:** API error, rate limit, or a page-cap overrun -> the step throws -> the existing
-  `status=error` marker with `ledger_read:"failed"` + `reportSilentFallback` (op `ledger-read-failed`).
+- **Failure path:** a failed read is ANY of: API/network error, rate limit, `fetchAllPages` page-cap overrun,
+  `incomplete_results === true` on any page, `total_count > 1000`, a `closed` item whose `closed_at` does not
+  parse to a valid `Date`, or raw hits > 0 with zero items matching `PROMOTE_PR_TITLE_RE` + the bot login
+  (format or login drift must not read as "nothing to suppress"). The step throws -> the existing
+  `status=error` marker with `ledger_read:"failed"` + `reportSilentFallback(null, { feature, op:
+  "ledger-read-failed", tags: { cause } })` on the MESSAGE path (a `cause` closed enum: `http-5xx`,
+  `rate-limit`, `page-cap`, `incomplete`, `unparseable`, `drift`; the outer catch's Error-path capture would
+  drop the tagged `op`, #8629). The Octokit error is mapped to `cause` BEFORE it reaches `extra`; no response
+  body is echoed. `ledger_read` is reset to `"ok"` after the step, so a later-stage error reports it truthfully.
   Inngest's single retry (`retries: 1`) applies. A stage variable (not a nested catch) tells the outer
   catch which stage died, so no `return { ok` is added.
 - **Placement:** normalisation of the model's clusters is hoisted above the existing empty/truncated
@@ -214,7 +263,8 @@ and the quorum are unchanged.
 ### Marker additions (patterns path only; numbers and closed enums)
 
 `input_source: "corpus"|"patterns"`, `patterns_open`, `ledger_read: "ok"|"failed"`, `ledger_suppressed`,
-`ledger_prs_scanned`. `CompoundPromoteStatus` stays at 8; `ledger-suppressed` is a per-cluster refusal
+`ledger_prs_scanned` (the RAW search hit count). The existing `no-qualifying-clusters` emit passes `refusals` /
+`refusal_detail` as `undefined` (not `[]`) when empty, so the scheduled-path row is unchanged. `CompoundPromoteStatus` stays at 8; `ledger-suppressed` is a per-cluster refusal
 reason with a `refusal_detail` entry `{cluster_hash, reason}`. On the scheduled path the field set is
 byte-identical to today (pinned by a test).
 
@@ -232,8 +282,10 @@ fields (`app/api/internal/trigger-cron/route.ts`, #4742), so no route change is 
 - **Quorum unchanged.** `corpusSummaries` is keyed by evidence learning paths in the patterns arm.
 - **Census.** `cron-compound-promote-outcome-census.test.ts` pins one marker emit before each terminal
   return (the handler has 7 `return { ok:` sites; this plan adds none) and requires `return { kind: ...}`
-  at least 9 times (16 today). It also pins exactly **two** `TARGET_ALLOW_RE.test(` sites in the handler,
-  so the ledger and patterns modules take injected inputs and add no third site. `PII_REGEX` and
+  at least 9 times (16 today). It also pins exactly **two** `TARGET_ALLOW_RE.test(` sites in the handler (counted after slicing from the
+  handler export and stripping comment lines; `grep` finds five in the whole file), so the ledger and patterns
+  modules take injected inputs and add no third site, and the patterns-side containment check is an
+  assertion on `allowedPaths`, not a new `.test(` site. `PII_REGEX` and
   `TARGET_ALLOW_RE` are exported from the handler file, so the patterns module receives `piiRegex` by
   injection (no import cycle).
 - **No third-party free text.** Per #8427 the marker carries no model- or reviewer-authored text. The
@@ -273,6 +325,7 @@ fields (`app/api/internal/trigger-cron/route.ts`, #4742), so no route change is 
 - **If this lands broken, the user experiences:** the weekly proposer opens a draft PR proposing an
   edit to `AGENTS.rules.md` or a `SKILL.md` that the maintainer would have rejected last week, or opens
   none while reporting success, so recurring failure classes keep costing review rounds.
+- **Roles reached:** the plugin maintainer who reviews proposer drafts; and installed-plugin users whose repos run `compound-capture` / `learnings-researcher` (Phase 6 changes both, so their legacy `critical-patterns.md` / `common-solutions.md` paths must keep working or degrade gracefully).
 - **If this leaks, the user's workflow is exposed via:** pattern-page text or evidence excerpts that
   carry a name, handle, credential shape or tester/tenant detail into the Anthropic prompt and a public
   repo, then into proposer-authored edits shipped in every installed copy of the plugin.
@@ -296,25 +349,25 @@ liveness_signal:
   configured_in: "apps/web-platform/server/compound-promote-marker.ts and apps/web-platform/server/inngest/functions/cron-compound-promote.ts"
 error_reporting:
   destination: "Sentry web-platform via reportSilentFallback (feature cron-compound-promote), mirrored to pino/Better Stack"
-  fail_loud: "status=error marker with ledger_read=failed and Sentry op ledger-read-failed; invalid-run-option error on a malformed manual trigger; one Sentry message per dropped pattern page (op pattern-page-dropped)"
+  fail_loud: "status=error marker with ledger_read=failed and Sentry message op ledger-read-failed; a malformed manual trigger ends status=error with a Sentry message op invalid-run-option (the raw value is never put in extra); one Sentry message per dropped pattern page (op pattern-page-dropped). All use reportSilentFallback(null, { feature, op, tags: { cause } }) on the message path with a closed cause enum, because the Error path loses the op (#8629)"
 failure_modes:
   - mode: "GitHub search fails, rate-limits, or exceeds the page cap during ledger-read (patterns path)"
     detection: "marker status=error with ledger_read=failed; Sentry op ledger-read-failed"
-    alert_route: "Sentry cron-monitor failure plus the 8281 outcome probe counting an error week"
+    alert_route: "none automatic: this failure occurs only on manual patterns runs, whose consumer is the soleur:trigger-cron caller reading the marker (Layer 2 pino WARN to Better Stack: status=error, ledger_read=failed) and the Layer 1 Sentry message with tag cause; the 8281 probe filters trigger=cron and does not see it"
   - mode: "patterns path finds zero open pages (broken seed, all closed)"
     detection: "marker status=empty-corpus with input_source=patterns and patterns_open=0; Sentry op patterns-empty"
-    alert_route: "Sentry issue"
+    alert_route: "Sentry message (feature cron-compound-promote, op patterns-empty) plus the Layer 2 pino marker row; observation-only, no alert rule"
   - mode: "suppression swallows every cluster (rejected top cluster inside its 60 days)"
     detection: "marker status=no-qualifying-clusters with ledger_suppressed greater than 0"
-    alert_route: "visible on the next manual patterns run; reviewed in the flip tracker"
+    alert_route: "observation-only: Layer 2 pino marker row (ledger_suppressed, status); no page. A message-path Sentry event is a flip-tracker deliverable if two consecutive manual runs show it"
   - mode: "a pattern page or evidence learning matches PII_REGEX or violates the schema"
-    detection: "CI live-tree test fails before merge; at runtime the page is dropped and Sentry op pattern-page-dropped fires"
-    alert_route: "CI (vitest) before merge; Sentry at runtime"
+    detection: "CI live-tree test fails before merge; at runtime the page is dropped and a Layer 1 Sentry message (op pattern-page-dropped, tag cause pii or schema) fires"
+    alert_route: "CI (vitest) before merge; Sentry message at runtime"
 logs:
   where: "Better Stack source reached by the pino WARN path (component compound-promote)"
   retention: "per the Better Stack source retention already used by the 8281 probe"
 discoverability_test:
-  command: "bash scripts/betterstack-query.sh --since 7d --no-archive --limit 1"
+  command: "bash scripts/betterstack-query.sh --since 14d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 1"
   expected_output: "SOLEUR_COMPOUND_PROMOTE_OUTCOME"
   credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD read-only - no unauthenticated substitute exposes production log rows (same declaration as the 8281 probe)"
 ```
@@ -441,6 +494,7 @@ Commit order inside the single PR follows the CTO ruling (C13). Test-first throu
 
 - 0.1 Re-verify at work time: `gh issue view 10552 --json state` (read only; do not comment), `git ls-files knowledge-base/project/learnings | grep -v /archive/ | wc -l`, ADR next free ordinal, and that `apps/web-platform` vitest for `test/server/inngest/cron-compound-promote*` is green before edits. Confirm the PR author login of an app-authored PR is `soleur-ai[bot]` and which container hosts the handler (for the C4 edge).
 - 0.2 Run `bash plugins/soleur/test/c4-count-parity.test.sh` and record green.
+- 0.3 Capture the scheduled-path golden: run the existing handler harness on `main` for a cron event with a mocked cluster response and record the exact marker key set and value types (used by the Guard 3 / scheduled-path-invariance test).
 
 ### Phase 1 - ADR, C4, docs (commit 1)
 
@@ -448,13 +502,13 @@ Commit order inside the single PR follows the CTO ruling (C13). Test-first throu
 
 ### Phase 2 - Pattern module, schema, lint (commit 2; RED then GREEN)
 
-- 2.1 `apps/web-platform/server/compound-promote-patterns.ts`: `parsePatternPage(text, path)`, `loadOpenPatterns({repoRoot, piiRegex, retiredPaths})` -> `{patterns[], evidenceEntries[], open, dropped[]}`, `renderPatternIndex()` (fenced block). Pure fs reads; no writes, no network, no `safeCommitAndPr` import.
-- 2.2 `apps/web-platform/test/server/compound-promote-patterns.test.ts` and `...-patterns-live-tree.test.ts` (validator over the real `knowledge-base/project/patterns/`): schema, filename = slug, `summary` length and charset, `evidence[]` in `git ls-files` and not archived, closed pages carry `closed_on` and `closed_by`, open pages carry neither, `PII_REGEX` on title/summary/tags/evidence, `required_reading` boolean.
+- 2.1 `apps/web-platform/server/compound-promote-patterns.ts`: `parsePatternPage(text, path)` (`gray-matter`, `engines: {}`), `loadOpenPatterns({repoRoot, piiRegex, retiredPaths, stripFrontmatter})` -> `{patterns[], evidenceEntries[], open, dropped[]}` with the runtime evidence-path checks, `renderPatternIndex(patterns, nonce)` (uses the shared `fenceBlock`). Pure fs reads; no writes, no network, no `safeCommitAndPr` import. Extract `fenceBlock` from `draftAdditiveEdit` in this commit (behaviour-identical for the draft prompt, pinned by the existing draft tests).
+- 2.2 `apps/web-platform/test/server/compound-promote-patterns.test.ts` and `...-patterns-live-tree.test.ts` (validator over the real `knowledge-base/project/patterns/`): schema, filename = slug, `summary` length and charset, `evidence[]` in `git ls-files` and not archived, closed pages carry `closed_on` and `closed_by`, open pages carry neither, `PII_REGEX` over the WHOLE file text (bodies included) plus a handle/UUID/host-shape denylist (`@handle`, UUID v4, `*.internal`/`*.local` hosts, tenant or project refs) with a body-PII fixture, `required_reading` boolean. Register both new repo-escaping suites (this one and the handler suite) in `apps/web-platform/test/repo-wide-suites.ts` - `repo-wide-containment.test.ts` fails otherwise. Run gitleaks over `knowledge-base/project/patterns/` (it is scanned in full, not allowlisted).
 - 2.3 `plugins/soleur/skills/compound-capture/assets/pattern-page-template.md` (linked from SKILL.md).
 
 ### Phase 3 - Ledger reader (commit 3; RED then GREEN)
 
-- 3.1 `apps/web-platform/server/compound-promote-ledger.ts`: `promotePrTitle(hash, date)`, `PROMOTE_PR_TITLE_RE`, `LEDGER_BOT_LOGIN`, `LEDGER_TTL_DAYS = 60`, `LEDGER_MAX_SEARCH_PAGES = 5`, `readLedger({octokit, owner, repo})` (manual `request` loop), `decideSuppression({entries, hash, now})`. No imports from the handler file.
+- 3.1 `apps/web-platform/server/compound-promote-ledger.ts`: `promotePrTitle(hash, date)`, `PROMOTE_PR_TITLE_RE`, `LEDGER_BOT_LOGIN`, `LEDGER_TTL_DAYS = 60`, `LEDGER_MAX_SEARCH_PAGES = 5`, `readLedger({octokit, owner, repo})` (via `fetchAllPages`, plus the `incomplete_results` / `total_count` / `closed_at` / drift checks), `decideSuppression({entries, hash, now})`; `LEDGER_BOT_LOGIN` is imported from a single new export in `_cron-shared.ts` (`SOLEUR_BOT_LOGIN = "soleur-ai[bot]"`), with a source-read pin that `cron-bot-pr-reaper.ts`'s `BOT_LOGIN` literal equals it (the reaper itself is not edited). No imports from the handler file. Placement note: `server/compound-promote-ledger.ts` (pure logic over an injected `octokit`, beside the marker module) rather than a `_cron-*.ts` helper; the `_cron-*` placement is the alternative the pattern review raised.
 - 3.2 `apps/web-platform/test/server/compound-promote-ledger.test.ts` (see Test Scenarios; mock only `Octokit.request`).
 
 ### Phase 4 - Handler wiring (commit 4)
@@ -462,10 +516,11 @@ Commit order inside the single PR follows the CTO ruling (C13). Test-first throu
 - 4.1 `cron-compound-promote.ts`: `readRunOptions(event, trigger)` (`input` enum; invalid manual value -> `invalid-run-option` error); hoisted `inputSource`, `patternsOpen`, `ledgerRead`, `ledgerScanned`, `ledgerSuppressed`, `stage` (above the `try`, so the error marker carries them).
 - 4.2 `step.run("ledger-read")` after `week-cap`, only when `inputSource === "patterns"`; sets `stage` before, `ledgerRead = "ok"` after; the outer catch maps `stage === "ledger-read"` to `ledgerRead = "failed"`.
 - 4.3 `collect-patterns` replaces `collect-corpus` on the patterns path (same `entries` shape); zero open pages -> `empty-corpus` with `input_source:"patterns"` and Sentry `patterns-empty`; no fallback.
-- 4.4 `anthropic-cluster`: patterns arm sends the fenced index plus the evidence entries; the call shape and `remaining` slice are unchanged.
-- 4.5 Hoist cluster normalisation above the empty/truncated check; on the patterns path run `decideSuppression` per proposal (`record(hash, {kind:"refused", reason:"ledger-suppressed"})`, `ledgerSuppressed++`); `kept` replaces `proposals` downstream; the existing `no-qualifying-clusters` emit gains `refusals`, `refusal_detail` and the ledger fields. No new return.
-- 4.6 `apply-and-pr`: title built with `promotePrTitle` (behaviour-identical string). `allowedPaths` unchanged.
-- 4.7 `compound-promote-marker.ts`: the five fields as typed literal unions/numbers; the emitter picks them explicitly; a marker test asserts an emitted row contains no key outside an allowlist. Update `cron-compound-promote-outcome-marker.test.ts` and the census.
+- 4.4 `anthropic-cluster`: patterns arm sends the fenced index AND fenced evidence entries (no unfenced `Corpus:` tail, "untrusted data" sentence added); the call shape and `remaining` slice are unchanged. Known consequence, accepted with a tracker trigger: the slice happens before suppression and top-up is deferred, so a repeatedly suppressed cluster can occupy a slot (visible as `ledger_suppressed >= 1` with `clusters_opened == 0`).
+- 4.5 Hoist cluster normalisation above the empty/truncated check; on the patterns path run `decideSuppression` per proposal (`record(hash, {kind:"refused", reason:"ledger-suppressed"})`, `ledgerSuppressed++`); `kept` replaces `proposals` downstream; the existing `no-qualifying-clusters` emit gains `refusals`, `refusal_detail` (both `undefined` when empty) and the ledger fields. No new return. A suppression is checked after the target-path allowlist refusal, so for an off-allowlist target `target-path-refused` wins (precedence pinned by a test).
+- 4.6 `apply-and-pr`: replace ONLY the `prTitle` literal (`self-healing(auto): promote cluster ...`) with `promotePrTitle`; the commit `titleLine` (`chore(self-healing): ...`) is a different string and stays. `allowedPaths` unchanged.
+- 4.7 `compound-promote-marker.ts`: the five fields as typed literal unions/numbers, listed in the outcome type; the emitter already spreads `...outcome`, so the marker test asserts an emitted row's keys AND value types (number or closed enum) against an allowlist, and that a manual run with no `input` equals the pre-change golden. Export a runtime `COMPOUND_PROMOTE_STATUSES` array (the union cannot be counted at runtime) for the status-count pin. Capture the golden field set from `main` in Phase 0 BEFORE the handler edit. Update `cron-compound-promote-outcome-marker.test.ts` and the census.
+- 4.8 Interim operating rule (runbook, 1.4): no manual `input:"patterns"` run before the 2026-10-25 scheduled run's marker is recorded, and none while any `self-healing/auto` PR is open (a real run opens drafts from an unproven seed and consumes `week-cap`; `dry_run` is deferred).
 
 ### Phase 5 - Seed (commit 5; <= 8 pages)
 
@@ -475,14 +530,14 @@ Commit order inside the single PR follows the CTO ruling (C13). Test-first throu
 
 ### Phase 6 - Retarget the three concepts (commit 6; read-only)
 
-- 6.1 `compound-capture/SKILL.md` Step 7: replace the `common-solutions.md` heredoc with "point the maintainer to `assets/pattern-page-template.md`; a pattern page is added or extended by a reviewed PR". Replace "Add to Required Reading" (three menu copies) with "propose a pattern page with `required_reading: true` in a reviewed PR". Net word count must not grow; no `description:` edit, so no skill-description budget impact.
+- 6.1 `compound-capture/SKILL.md` Step 7: replace the `common-solutions.md` heredoc with "if this repo keeps `knowledge-base/project/patterns/`, point to `assets/pattern-page-template.md`; a pattern page is added or extended by a reviewed PR; otherwise skip" (the skill also runs in installed users' repos that have no maintainer PR flow, so the step must stay usable there). Replace "Add to Required Reading" (three menu copies) with "propose a pattern page with `required_reading: true`, or - in a repo without a patterns directory - append the entry to a local required-reading file of the repo's choosing". Net word count must not grow; no `description:` edit, so no skill-description budget impact.
 - 6.2 Delete `assets/critical-pattern-template.md`; sweep its one reference (SKILL.md L291).
-- 6.3 `learnings-researcher.md` Step 3b: glob `knowledge-base/project/patterns/*.md`, read frontmatter, report pages with `status: open` and `required_reading: true`; guard for an absent directory; rename the output heading.
+- 6.3 `learnings-researcher.md` Step 3b: glob `knowledge-base/project/patterns/*.md`, read frontmatter, report pages with `status: open` and `required_reading: true`; guard for an absent directory; **keep a legacy fallback**: if `knowledge-base/project/learnings/patterns/critical-patterns.md` exists in the user's repo, read it as before (installed users' repos may carry one); rename the output heading.
 - 6.4 `grep -rn 'critical-patterns\|common-solutions' plugins/ scripts/ AGENTS.md AGENTS.rules.md knowledge-base/project/constitution.md` returns zero live hits (archive and learnings prose excluded).
 
 ### Phase 7 - Measurement prose and tracker issues (commit 7)
 
-- 7.1 File **one flip-tracker issue** (label `follow-through` only if a probe is later enrolled; milestone from the roadmap), `Ref #8293`, carrying `## Effect Measurement Plan` below and these deferred deliverables with their re-evaluation triggers: `dry_run` (manual-only, stops after a successful draft, `dry_run:true`, every probe filters `dry_run != true`), `clusters_drafted`, `patterns_digest`, the notify-only comparison probe, the cron-default flip, applying the ledger to the scheduled path, slot top-up (trigger: marker shows suppression eating a week's slots), near-duplicate overlap (trigger: an observed one-learning evasion), a rejection label and a PR-body convention footer (trigger: TTL proves too blunt), state-split search queries (trigger: >400 bot PRs), a CODEOWNERS line. `gh issue edit --add-blocked-by` is not applicable (no blocker issue); cite #10552 in the body as context only (`Ref #10552`, never `Closes`).
+- 7.1 File **one flip-tracker issue** (label `follow-through` only if a probe is later enrolled; milestone from the roadmap), `Ref #8293`, carrying `## Effect Measurement Plan` below and these deferred deliverables with their re-evaluation triggers: `dry_run` (manual-only, stops after a successful draft, `dry_run:true`, every probe filters `dry_run != true`), `clusters_drafted`, `patterns_digest`, the notify-only comparison probe, the cron-default flip, applying the ledger to the scheduled path, slot top-up (trigger: marker shows suppression eating a week's slots), near-duplicate overlap (trigger: an observed one-learning evasion), a rejection label and a PR-body convention footer (trigger: TTL proves too blunt), state-split search queries (trigger: >400 bot PRs), an open-PR suppression TTL (trigger: an unreviewed draft blocks its cluster for more than 4 weeks), a revert path for a merged-then-reverted edit (trigger: first revert), suppress-before-slice or top-up (trigger: two consecutive weeks of `ledger_suppressed >= 1` with `clusters_opened == 0`), a message-path Sentry event for an all-suppressed week, fencing the scheduled-path `Corpus:` tail before the flip, a page-staleness lint, and an evidence-diversity requirement for the quorum (one curated page's list can satisfy `PROMOTION_QUORUM`, which was meant to mean five independent sessions). A CODEOWNERS line for `patterns/` is NOT proposed: `.github/CODEOWNERS` already assigns `*` to the same sole owner, so a line adds nothing. `gh issue edit --add-blocked-by` is not applicable (no blocker issue); cite #10552 in the body as context only (`Ref #10552`, never `Closes`).
 - 7.2 File a second issue: "`/compound` upsert of pattern pages" (deferral of FR7), milestone from the roadmap, with the spec-flow gaps as its design inputs (closed-page recurrence, slug collision, archived evidence breaking CI).
 
 ## Effect Measurement Plan
@@ -534,6 +589,8 @@ flip tracker (7.1) owns the build of the machinery.
 - `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`
 - `apps/web-platform/server/compound-promote-marker.ts`
 - `apps/web-platform/test/server/inngest/cron-compound-promote-outcome-census.test.ts`
+- `apps/web-platform/server/inngest/functions/_cron-shared.ts` (one export: `SOLEUR_BOT_LOGIN`)
+- `apps/web-platform/test/repo-wide-suites.ts` (register the live-tree and patterns-handler suites; guarded by `repo-wide-containment.test.ts`)
 - `apps/web-platform/test/server/inngest/cron-compound-promote-outcome-marker.test.ts`
 - `plugins/soleur/skills/compound-capture/SKILL.md`
 - `plugins/soleur/agents/engineering/research/learnings-researcher.md`
@@ -566,37 +623,44 @@ Two open `code-review` issues name planned or adjacent files:
 Pyramid layer in brackets; all `unit` unless stated.
 
 **Patterns module**
-- Given a valid open page, when loaded, then it appears in the index with `title`, `summary`, `tags`, evidence keys and **not** its Root cause/Fix bodies. [unit]
+- Given a valid open page, when loaded, then it appears in the index with `title`, `summary`, `tags`, evidence keys and **not** its Root cause/Fix bodies (sentinel strings absent from the prompt). [unit]
+- Given a page whose BODY contains an email, an `@handle`, a UUID or an internal hostname, then the page is dropped (body-PII fixture); given an evidence path with `..`, a disallowed character, or a symlink, then the page is dropped. [unit]
+- Given an unquoted `opened_on` (gray-matter yields a `Date`), then the page still validates. [unit]
 - Given `status: closed` with `closed_on` and `closed_by`, then it is excluded from the prompt but valid; given `closed` missing `closed_by`, or `open` carrying `closed_on`, then the live-tree test fails. [unit]
 - Given an evidence path that is archived, untracked or absent, then the page is invalid. [unit]
 - Given an evidence learning matching `PII_REGEX` (synthesized email), then that learning is dropped, the page loads with fewer keys, and a page left under 5 keys is dropped with `pattern-page-dropped`. [unit]
 - Given a `summary` over 200 chars or containing a control character, then the page is invalid. [unit]
-- Given the real tree, then every committed page passes. [integration - reads the repo]
+- Given the real tree, then every committed page passes (a learning archived by an unrelated PR turns this red; that is intended: the page must be updated in the same PR). [unit - reads the repo; registered in `REPO_WIDE_SUITES`]
 
-**Ledger reader** (mock only `Octokit.request`)
+**Ledger reader** (mock only `Octokit.request`, with a `q`-routing fake that asserts the exact params `q`, `per_page`, `page`; item shapes recorded from a real search response)
 - Given zero hits -> entries = [], `ledger_prs_scanned = 0`, no suppression. [unit]
 - Given an open PR with the same hash -> suppress. Given merged -> suppress at +400 days. [unit]
 - Given closed-unmerged at +59 d -> suppress; at **exactly 60 d** -> not suppressed (pins `<`); at +61 d -> not suppressed. [unit]
 - Given the same hash from a different author (`user.login` human) or a title not matching `PROMOTE_PR_TITLE_RE` -> never suppresses. [unit]
 - Given a title built by the real `promotePrTitle` -> `PROMOTE_PR_TITLE_RE` parses the same hash and date (builder/parser pin). [unit]
 - Given search 502, rate limit (403), or `total_count` implying a 6th page -> `readLedger` throws a typed error. [unit]
-- Property: for any entries and any hash, `decideSuppression` returns suppress only when an entry has that exact hash and (open | merged | closed within TTL). [unit, property-based]
+- Given a 2-page result with the matching hash only on page 2 -> suppressed; given 500 items -> passes, given a full 5th page -> throws; given `incomplete_results: true`, `total_count > 1000`, an unparseable `closed_at`, or raw hits > 0 with zero matched -> each throws a typed error with its own `cause`. [unit]
+- Table-driven (not a restatement of the implementation): rows of (state, merged_at, closed_at offset, author, title) -> expected verdict, including the exact-60-day row. [unit]
 - `LEDGER_BOT_LOGIN` equals the `BOT_LOGIN` literal in `cron-bot-pr-reaper.ts` (source-read pin). [unit]
 
 **Handler** (extends the `draft-handler` real-git harness: mocked `Octokit` class, mocked `postAnthropicMessage`, real cloned repo)
-- Given a cron event with `data.input = "patterns"` -> ignored: `corpus` path, marker field set identical to today (no `input_source`, no ledger fields), **no `ledger-read` step**. [integration]
-- Given manual `{input:"patterns"}` and 3 open seeded pages -> prompt contains the fenced index, `entries` are evidence keys, quorum 5 passes, `corpus_input_bytes` < 10% of the same fixture's corpus arm, `input_source:"patterns"`, `ledger_read:"ok"`. [integration]
-- Given manual `{input:"patterns"}` and zero open pages -> `empty-corpus`, no corpus fallback. [integration]
-- Given manual `{input:"pattern"}` (typo) -> `status:"error"`, `error_class` names `invalid-run-option`, no Anthropic call. [integration]
-- Given the ledger read throws -> `status:"error"`, `ledger_read:"failed"`, no Anthropic call. [integration]
-- Given the top proposed cluster's hash was proposed (open PR) -> `refusals` contains `ledger-suppressed`, `ledger_suppressed:1`, no `draft-edit` step for it; given every cluster suppressed -> status `no-qualifying-clusters` carrying the refusals and ledger fields. [integration]
-- Given a whole-handler replay with memoized steps -> counts identical (accumulation in the handler body). [integration]
+- Given a cron event with `data.input = "patterns"` -> ignored: `corpus` path, marker field set identical to today (no `input_source`, no ledger fields), **no `ledger-read` step**. [unit - real-git harness]
+- Given manual `{input:"patterns"}` and 3 open seeded pages plus non-evidence learnings -> the prompt contains the fenced index and fenced evidence (injected nonce), `entries` equal the union of evidence keys (non-evidence learnings absent), quorum 5 passes, `input_source:"patterns"`, `ledger_read:"ok"`. The byte ratio is measured on the first live run, not asserted on a 12-file fixture. [unit - real-git harness]
+- Given manual `{input:"patterns"}` and zero open pages -> `empty-corpus`, no corpus fallback. [unit - real-git harness]
+- Given manual `{input:"pattern"}` (typo) -> `status:"error"`, `error_class` names `invalid-run-option`, no Anthropic call. [unit - real-git harness]
+- Given the ledger read throws -> `status:"error"`, `ledger_read:"failed"`, no Anthropic call. [unit - real-git harness]
+- Given two clusters, the suppressed one in position 2 and again in position 1 -> the unsuppressed one is drafted either way, `clusters_proposed` stays pre-suppression, `ledger_suppressed:1`, no `draft-edit` step for the suppressed one; given every cluster suppressed -> status `no-qualifying-clusters` carrying the refusals and ledger fields; given an off-allowlist target that is also suppressed -> `target-path-refused` wins. [unit - real-git harness]
+- Given the ledger step runs, then the clock is `runStartedAt`: with `vi.setSystemTime` advanced inside the Anthropic stub, a PR closed 59.9 days before `runStartedAt` still suppresses. [unit]
+- Given an Anthropic-stage error after a successful ledger read -> the error marker reports `ledger_read:"ok"`; given the ledger step fails -> `reportSilentFallback` is called with `err === null` and `tags.cause`. [unit]
+- Given a corpus-arm fixture containing `knowledge-base/project/patterns/x.md` -> that file is absent from the corpus prompt. [unit]
+- Given `safeCommitAndPr` is called -> its `prTitle` equals the previous literal title format. [unit]
+- Given a whole-handler replay with memoized steps -> counts identical (accumulation in the handler body). [unit - real-git harness]
 - Given `allowedPaths` of any `safeCommitAndPr` call -> never contains `knowledge-base/project/patterns/`; `TARGET_ALLOW_RE` rejects such a target. [unit]
 - Given pattern text containing a closing fence marker -> the nonce fence is not closable. [unit]
 
 **Readers and plugin**
 - Given a `patterns/` fixture with a unique tag -> `kb-tags.txt` and `kb-categories.txt` from `generate-kb-index.sh` do not contain it. [integration - `generate-kb-index.test.sh`]
-- `grep` for `critical-patterns|common-solutions` over live plugin/script paths returns nothing. [integration]
+- `grep` for `critical-patterns|common-solutions` over live plugin/script paths returns nothing. [unit - real-git harness]
 - `learnings-researcher` Step 3b text handles an absent `patterns/` directory (string test on the agent file). [unit]
 
 ## Guard Contract
@@ -727,11 +791,16 @@ moves with it by convention (stated, not claimed as enforced).
 | Legal notes (PA-31, DPIA addendum, compliance-posture) | — | inferred - justification: the DPIA memo's trigger 15 fires on a marker-field change and the CLO found the register note due on merge; deferring it would leave the Art. 30 record stale |
 | `pattern-page-template.md`, deletion of `critical-pattern-template.md` | "resolve the three overlapping common-solutions/critical-patterns concepts together" | asked |
 | Containment pins (Guard 2) | "excluded from all four corpus readers" | asked |
+| `fenceBlock` extraction from `draftAdditiveEdit`; fenced evidence on the patterns arm | — | inferred - justification: pattern text and evidence excerpts are untrusted data entering a model call at `single-user incident` threshold; the existing nonce construction is a closure that cannot be shared without extraction |
+| `_cron-shared.ts` export `SOLEUR_BOT_LOGIN` | "read prior outcomes via Octokit not gh with a defined failure path" | inferred - justification: identity binding needs one login constant; a second literal beside the reaper's would drift |
+| `repo-wide-suites.ts` registration, `BASELINE_DECLARED_PROBES` bump | — | inferred - justification: both are repo-global ratchets that go red the moment the new suites and the declared probe are committed (`repo-wide-containment.test.ts`, preflight-discoverability G1) |
+| Runtime evidence-path validation and whole-file PII scan | "excluded from all four corpus readers" | inferred - justification: evidence keys flow into the cluster hash, commit trailer and PR body, and pattern bodies are a public-repo publication surface (security-sentinel, CLO) |
+| Interim rule for the first manual patterns run (Phase 4.8) | "the plan must state how the layer's effect will be measured after #10552 clears" | inferred - justification: `dry_run` is deferred, so an unguarded first manual run would open drafts from an unproven seed and skew the 2026-10-25 baseline |
 
 ### Split Assessment
 
 - Subsystems touched: 4 - `apps/web-platform`, `plugins/soleur`, `knowledge-base`, `scripts` (the `scripts` root is touched only through the existing `generate-kb-index` test under `plugins/soleur/test`, so effectively 3)
-- Planned files: ~29 (11 create incl. up to 8 seed data pages counted as 8 -> 18, 13 edit, 1 delete) | Estimated changed lines: ~1,300 (code+tests ~750, seed pages ~350, docs ~200)
+- Planned files: ~33 (11 create incl. up to 8 seed data pages counted as 8 -> 18, 16 edit, 1 delete; counts derived from `## Files to Create` and `## Files to Edit`) | Estimated changed lines: ~1,400 (code+tests ~850, seed pages ~350, docs ~200)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR - over the file and line thresholds, kept single by CTO ruling C13: one plan is one pipeline PR, the handler change is dark and independently revertible, and a fixed commit order (ADR/C4/docs, patterns module, ledger, handler, seed, retarget, trackers) makes it reviewable. If review capacity objects, the cut line is PR A = commits 1-4 (needs no seed pages) and PR B = commits 5-7.
 
@@ -751,6 +820,8 @@ moves with it by convention (stated, not claimed as enforced).
 - [ ] No `promotion-log.md` column and no PR-body change; `promotePrTitle` yields the same string as the previous literal title (test against the old format).
 - [ ] `scripts/generate-kb-index.sh`, `.gitleaks.toml`, `_cron-safe-commit.ts` and `cron-bot-pr-reaper.ts` are unmodified: `git diff --quiet origin/main...HEAD -- scripts/generate-kb-index.sh .gitleaks.toml apps/web-platform/server/inngest/functions/_cron-safe-commit.ts apps/web-platform/server/inngest/functions/cron-bot-pr-reaper.ts` exits 0 (merge-base form, measured rc 0 at plan time); `allowedPaths` never includes `patterns/` (test).
 - [ ] The five marker fields are in the marker type, the allowed-keys test, `compound-promote-runbook.md` and `betterstack-log-query.md`.
+- [ ] The patterns prompt has no unfenced `Corpus:` tail; the index and the evidence are fenced with one shared `fenceBlock`; every new Sentry op uses `reportSilentFallback(null, ...)` with a closed `cause` enum (test asserts `err === null` and the tags).
+- [ ] `apps/web-platform/test/repo-wide-suites.ts` lists the live-tree and patterns-handler suites and `repo-wide-containment.test.ts` is green; `BASELINE_DECLARED_PROBES` is bumped with its comment.
 - [ ] ADR-297 written (provisional ordinal re-verified at ship) incl. the reader classification table; `model.c4` `kb` description and the `api -> github` edge added; `c4-code-syntax`, `c4-render` and `c4-count-parity` tests green.
 - [ ] Legal notes landed (PA-31 §(c) dated note, DPIA addendum with the `does not cure` sentence, `Superseded` markers); `soleur:gdpr-gate` run over the diff at ship.
 - [ ] `soleur:engineering:review:user-impact-reviewer` invoked at review (threshold `single-user incident`); the observability-coverage reviewer run (server code touched).
@@ -779,7 +850,7 @@ moves with it by convention (stated, not claimed as enforced).
 - The `Cluster-Hash:` line the CTO ruling cited is a commit trailer; the identity contract is the PR title.
 - Confirm at implementation which container hosts the handler before writing the C4 edge.
 - A scripted edit of this plan must anchor headings at line start and re-count sections afterwards (a heading literal also appears in prose).
-- The `discoverability_test` was not executed at plan time (it needs the Better Stack credential); it is a literal copy of the form `scripts/followthroughs/compound-promote-outcome-8281.sh` already runs. Run it once at work time and paste the output into the PR.
+- The `discoverability_test` was not executed at plan time (it needs the Better Stack credential). `--no-archive` was removed from it after review: that flag limits the query to the ~40-minute hot window, so a weekly marker is almost never in it. Run it once at work time and paste the output into the PR.
 
 ## References
 

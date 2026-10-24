@@ -9,6 +9,7 @@ One PR, seven commits in the order below. Tests first inside every phase.
 - [ ] 0.1 Read-only re-verification: `gh issue view 10552 --json state` (no comment), tracked learnings count, ADR next free ordinal, green baseline for `apps/web-platform/test/server/inngest/cron-compound-promote*`
 - [ ] 0.2 Confirm the PR author login of an app-authored PR is `soleur-ai[bot]`; confirm which container hosts the handler (for the C4 edge)
 - [ ] 0.3 `bash plugins/soleur/test/c4-count-parity.test.sh` green
+- [ ] 0.4 Capture the scheduled-path golden marker key set and value types on `main` before editing the handler
 
 ## Phase 1: ADR, C4, docs (commit 1)
 
@@ -24,11 +25,13 @@ One PR, seven commits in the order below. Tests first inside every phase.
 - [ ] 2.1 RED: `compound-promote-patterns.test.ts` and `compound-promote-patterns-live-tree.test.ts`
 - [ ] 2.2 `compound-promote-patterns.ts`: `parsePatternPage`, `loadOpenPatterns` (injected `piiRegex`), `renderPatternIndex` (nonce-fenced block; title/summary/tags/evidence keys only)
 - [ ] 2.3 `compound-capture/assets/pattern-page-template.md`
+- [ ] 2.4 Extract the shared `fenceBlock` from `draftAdditiveEdit`; use `gray-matter` (`engines: {}`); runtime evidence-path validation; whole-file PII scan + handle/UUID/host denylist
+- [ ] 2.5 Register the live-tree and patterns-handler suites in `apps/web-platform/test/repo-wide-suites.ts`; bump `BASELINE_DECLARED_PROBES` (76 -> 77, re-read at work time) with its comment
 
 ## Phase 3: Ledger reader (commit 3)
 
 - [ ] 3.1 RED: `compound-promote-ledger.test.ts` (+59 / exactly 60 / +61 days, human author, title builder/parser pin, 502 / 403 / page-cap, property test, bot-login pin vs the reaper literal)
-- [ ] 3.2 `compound-promote-ledger.ts`: `promotePrTitle`, `PROMOTE_PR_TITLE_RE`, `LEDGER_BOT_LOGIN`, `readLedger` (manual `request` loop, cap 5 pages), `decideSuppression`
+- [ ] 3.2 `compound-promote-ledger.ts`: `promotePrTitle`, `PROMOTE_PR_TITLE_RE`, `readLedger` (via `fetchAllPages`, cap 5 pages, `incomplete_results` / `total_count` / `closed_at` / drift fail closed), `decideSuppression`; `SOLEUR_BOT_LOGIN` export in `_cron-shared.ts`
 
 ## Phase 4: Handler wiring (commit 4)
 
@@ -37,6 +40,7 @@ One PR, seven commits in the order below. Tests first inside every phase.
 - [ ] 4.3 `collect-patterns` step; `empty-corpus` with `input_source:"patterns"`
 - [ ] 4.4 Hoist normalisation above the empty/truncated check; suppression on the patterns path; extend the existing `no-qualifying-clusters` emit; no new return
 - [ ] 4.5 Title built with `promotePrTitle` (same string as before)
+- [ ] 4.7 Document the interim operating rule (no manual patterns run before the 2026-10-25 marker or while a `self-healing/auto` PR is open) in the runbook
 - [ ] 4.6 `compound-promote-marker.ts`: five typed fields; update marker test (allowed-keys) and census (return count, `TARGET_ALLOW_RE.test(` count stays 2)
 
 ## Phase 5: Seed (commit 5)
@@ -47,9 +51,9 @@ One PR, seven commits in the order below. Tests first inside every phase.
 
 ## Phase 6: Retarget the three concepts (commit 6)
 
-- [ ] 6.1 `compound-capture/SKILL.md` Step 7 and the three "Required Reading" menu copies -> read-only pointer to the template and a reviewed PR
+- [ ] 6.1 `compound-capture/SKILL.md` Step 7 and the three "Required Reading" menu copies -> read-only pointer to the template and a reviewed PR, still usable in repos without a patterns directory
 - [ ] 6.2 Delete `assets/critical-pattern-template.md`; sweep its reference
-- [ ] 6.3 `learnings-researcher.md` Step 3b -> `required_reading` pages, guard for an absent directory
+- [ ] 6.3 `learnings-researcher.md` Step 3b -> `required_reading` pages, guard for an absent directory, legacy `critical-patterns.md` fallback
 - [ ] 6.4 Zero live hits for `critical-patterns|common-solutions`; add the `generate-kb-index.test.sh` pinning case (script itself untouched)
 
 ## Phase 7: Trackers (commit 7)
