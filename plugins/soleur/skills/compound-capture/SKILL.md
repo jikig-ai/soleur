@@ -251,24 +251,7 @@ Already includes cross-reference from Step 6.
 
 **Update patterns if applicable:**
 
-If this represents a common pattern (3+ similar issues):
-
-```bash
-# Add to knowledge-base/project/learnings/patterns/common-solutions.md
-cat >> knowledge-base/project/learnings/patterns/common-solutions.md << 'EOF'
-
-## [Pattern Name]
-
-**Common symptom:** [Description]
-**Root cause:** [Technical explanation]
-**Solution pattern:** [General approach]
-
-**Examples:**
-- [Link to doc 1]
-- [Link to doc 2]
-- [Link to doc 3]
-EOF
-```
+If this represents a common pattern (3+ similar issues) and this repo keeps `knowledge-base/project/patterns/`, structure the page with [pattern-page-template.md](./assets/pattern-page-template.md). A pattern page is added or extended by a reviewed PR, never written directly. Otherwise skip.
 
 **Critical Pattern Detection (Optional Proactive Suggestion):**
 
@@ -286,9 +269,9 @@ Then in the decision menu, add a note:
 
 But **NEVER auto-promote**. User decides via decision menu (Option 2).
 
-**Template for critical pattern addition:**
+**Required-reading entries:**
 
-When user selects Option 3 (Add to Required Reading), use the template from [critical-pattern-template.md](./assets/critical-pattern-template.md) to structure the pattern entry. Number it sequentially based on existing patterns in `knowledge-base/project/learnings/patterns/critical-patterns.md`.
+When user selects Option 2, propose a pattern page with `required_reading: true`. In a repo without a patterns directory, append the entry to a local required-reading file of the repo's choosing.
 </step>
 
 <step number="8" required="false" depends_on="6">
@@ -538,7 +521,7 @@ File created:
 
 What's next?
 1. Continue workflow (recommended)
-2. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
+2. Add to Required Reading - Propose a pattern page (`required_reading: true`)
 3. Link related issues - Connect to similar problems
 4. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
 5. Create new skill - Extract into new learning skill
@@ -567,9 +550,9 @@ Action:
 
 1. Extract pattern from the documentation
 2. Format as ❌ WRONG vs ✅ CORRECT with code examples
-3. Add to `knowledge-base/project/learnings/patterns/critical-patterns.md`
+3. Propose a pattern page with `required_reading: true` (or, without a patterns directory, append to the repo's local required-reading file)
 4. Add cross-reference back to this doc
-5. Confirm: "✓ Added to Required Reading. All subagents will see this pattern before code generation."
+5. Confirm: "✓ Required-reading entry proposed."
 
 **Option 3: Link related issues**
 
@@ -769,7 +752,7 @@ File created:
 
 What's next?
 1. Continue workflow (recommended)
-2. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
+2. Add to Required Reading - Propose a pattern page (`required_reading: true`)
 3. Link related issues - Connect to similar problems
 4. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
 5. Create new skill - Extract into new learning skill

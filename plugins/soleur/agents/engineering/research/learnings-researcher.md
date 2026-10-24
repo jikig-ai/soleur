@@ -90,15 +90,17 @@ Grep: pattern="component:.*background_job" path=knowledge-base/project/learnings
 Grep: pattern="email" path=knowledge-base/project/learnings/ output_mode=files_with_matches -i=true
 ```
 
-### Step 3b: Always Check Critical Patterns
+### Step 3b: Always Check Required-Reading Patterns
 
-**Regardless of Grep results**, always read the critical patterns file:
+**Regardless of Grep results**, check the pattern pages:
 
 ```bash
-Read: knowledge-base/project/learnings/patterns/critical-patterns.md
+Glob: knowledge-base/project/patterns/*.md
 ```
 
-This file contains must-know patterns that apply across all work - high-severity issues promoted to required reading. Scan for patterns relevant to the current feature/task.
+If `knowledge-base/project/patterns/` does not exist or the glob matches nothing, say so explicitly in the output ("no patterns directory in this repo") and continue; this is a normal state, not an error. Otherwise read each page's frontmatter (limit:30) and report pages with `status: open` and `required_reading: true`. Scan them for relevance to the current feature/task.
+
+**Legacy fallback:** if the repo carries a legacy required-reading file under `knowledge-base/project/learnings/patterns/` (older installs keep one named for critical patterns), read it as before and merge its relevant entries into the same output section.
 
 ### Step 4: Read Frontmatter of Candidates Only
 
@@ -219,8 +221,8 @@ Structure your findings as:
 - **Files Scanned**: [X total files]
 - **Relevant Matches**: [Y files]
 
-### Critical Patterns (Always Check)
-[Any matching patterns from critical-patterns.md]
+### Required-Reading Patterns (Always Check)
+[Matching open pattern pages with `required_reading: true`, plus any legacy required-reading entries; state if no patterns directory exists]
 
 ### Relevant Learnings
 
