@@ -221,10 +221,27 @@ else
   log "key read failed: config=$KEY_CONFIG source=$KEY_CONFIG_SRC"
   emit_and_die doppler_unreachable
 fi
-if printf '%s' "$key" | cryptsetup luksOpen --test-passphrase --key-file - "$real_dev" >/dev/null 2>&1; then
+# (#9325) stderr is CAPTURED, not /dev/null'd: on a non-zero rc it is the only discriminator
+# between "cryptsetup tested every keyslot and none matched" (the escrow secret really is
+# wrong — at-rest, p0) and "cryptsetup never reached a keyslot verdict" (an early
+# device/tooling error, or this pipeline's producer taking SIGPIPE under pipefail when the
+# reader exits early — the exact fake-verdict mechanism #9325 chased in the test stubs;
+# a producer EPIPE arrives here with rc 141 and EMPTY stderr). The `printf |` producer
+# stays deliberately: a `<<<"$key"` here-string is a bash TMPDIR tempfile under the hood,
+# a filesystem-backed copy of the live passphrase this file refuses xtrace to protect —
+# capturing stderr removes the misattribution without that regression. The match fails
+# TOWARD the integrity class: a cryptsetup whose rejection wording drifts reports
+# escrow_check_failed (unavailable — still alarms) rather than filing the p0 at-rest
+# Article-32 verdict on a fault it cannot prove.
+_luks_open_err="$(printf '%s' "$key" | cryptsetup luksOpen --test-passphrase --key-file - "$real_dev" 2>&1 >/dev/null)" \
+  && _luks_open_rc=0 || _luks_open_rc=$?
+if [ "$_luks_open_rc" -eq 0 ]; then
   WL_LUKS_OPEN_RESULT=ok
-else
+elif [[ "$_luks_open_err" == *"No key available"* || "$_luks_open_err" == *"No usable keyslot"* ]]; then
   WL_LUKS_OPEN_RESULT=fail; emit_and_die escrow_passphrase_mismatch
+else
+  log "escrow check failed (cryptsetup rc=$_luks_open_rc): ${_luks_open_err:0:160}"
+  WL_LUKS_OPEN_RESULT=fail; emit_and_die escrow_check_failed
 fi
 
 # 5. Header-UUID match: the live mapper's UUID must equal the device header's UUID (a swapped
