@@ -17,3 +17,9 @@
 
 ### Components Invoked
 - soleur:plan (all phases inline), soleur:deepen-plan (halt gates recorded)
+
+### Rulings
+- cto_spawns=1 (batched, 4 technical rows — all assumed defaults confirmed with verified evidence; dissents recorded in decision-challenges.md).
+- Row 5 (operator scope): ruled by operator brief — single PR.
+- Context citations #10853/#10854 auto-CLOSED mid-pipeline by the watchdog (host serving again, run 40123434064) — context cites, not work targets; #9703 + #10390 remain OPEN.
+- Post-planning re-probe: overlap exit=13 (name-shared registry files only — test-all.sh, suite-*.tsv, cron-monitors.tf across 7 open PRs; carry-on per contract).
