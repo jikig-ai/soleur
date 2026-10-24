@@ -39,5 +39,5 @@
 ## QA
 - soleur:qa Step 1: Test Scenarios are Given/When/Then prose with no Browser:/API verify:/Cleanup: steps → auto-skip (covered by schedule-task-design.test.sh 67/0 + schedule-skill-once.test.sh 42/0 + bun suites 38/0). No dev server started.
 
-## Compound (pending)
+## Compound (done — learning: best-practices/2026-10-24-gate-detection-substrate-map-before-glob-and-notice-unmerged-pin.md)
 ## Ship (pending)
