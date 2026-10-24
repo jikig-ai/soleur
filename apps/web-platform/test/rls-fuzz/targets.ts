@@ -94,6 +94,8 @@ export const EXCLUDED_ISOLATION: Record<string, string> = {
     "GDPR DSAR export jobs, user-keyed (auth.uid()=user_id), SELECT-only policy → now fuzzed on SELECT-USING (owner sees, co-member denied) in rls-excluded-deepened; INSERT default-denied (no INSERT policy) so no write-forge",
   workspace_egress_audit_rollup:
     "egress audit rollup (mig 162, #9545 PR1): RLS ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated (service-role RPC writes only, nothing reads in PR1) -> every authenticated read or write is denied by grant, fuzzed in egress-audit-rollup.integration.test.ts (members of both workspaces denied 42501 with a service-role positive control). PR2 adds the is_workspace_member SELECT policy and converts this to a base-matrix target.",
+  git_data_erasure_pending:
+    "git-data erasure ledger (mig 164, #8211 PR-B1): carries workspace_id (no FK) but RLS is ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated/service_role (access only through service_role-only SECURITY DEFINER RPCs) -> every direct authenticated read or write is denied by grant, so a co-member positive control is schema-impossible; fuzzed in git-data-erasure-pending.integration.test.ts (anon/authenticated/service_role denied 42501 on the tables and on every RPC, with a service_role RPC positive control).",
   workspace_member_actions:
     "member-action audit; authenticated has NO table grant at all (SELECT+INSERT both revoked) → direct base-table access is grant-blocked for every tenant; cross-tenant read is fuzzed via the list_workspace_member_actions RPC attack (AC8)",
   action_sends:
