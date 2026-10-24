@@ -2520,18 +2520,11 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
 )
 
 # scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh — the probe's fed-log
-# battery. Beyond the probe it READS the guard-script fixtures it asserts against: the
-# two corrupt-graph suites (roster parity row), the shared forge lib (marker-literal pin),
-# and the rehearsal runner+SUITE_SRC pair it feeds logs from (#10921's second run-source).
-# Its producer-grep is file-scoped (two named suite files), not a corpus walk.
+# battery. Beyond the probe it READS the shared forge lib (marker-literal pin, row q);
+# its other live-repo references are name-greps carried as accept rows (each suite's own
+# in-file roster check is the selecting self-check for producer edits).
 AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
-  ".github/scripts/test/test-bump-inngest-bootstrap-pin.sh"
-  ".github/scripts/test/test-mint-inngest-bootstrap-tag.sh"
-  "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
-  "apps/web-platform/infra/run-registered-suites.sh"
   "plugins/soleur/test/lib/git-corrupt-graph.sh"
-  "scripts/followthroughs/t5-skip-persistence-bound-7510.sh"
-  "scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
