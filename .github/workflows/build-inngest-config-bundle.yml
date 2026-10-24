@@ -148,12 +148,12 @@ jobs:
             --bundle "/bundle/$(basename "$MANIFEST").sigstore.json" \
             --certificate-identity-regexp "$IDENTITY_REGEXP" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            "/bundle/$(basename "$MANIFEST")" 2>&1)" || {
-            rc=$?
+            "/bundle/$(basename "$MANIFEST")" 2>&1)" || rc=$?
+          if [[ ${rc:-0} -ne 0 ]]; then
             echo "$out"
             echo "::error::produced bundle failed the consumer verify contract (rc=$rc) — refusing to publish; see knowledge-base/engineering/operations/runbooks/inngest-config-refresh.md"
             exit 1
-          }
+          fi
           echo "$out"
           grep -q 'Verified OK' <<<"$out" || {
             echo "::error::verify-blob exited 0 but did not print 'Verified OK' — refusing to publish"

@@ -1,0 +1,1 @@
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/token-drift-workflow-causes.test.sh	f5d7cce0b0e6	1	false-positive: fixture table row names the suite as grep-q-pipe-guard test data; the hook test never reads or executes the file
