@@ -2617,6 +2617,20 @@ else
   fail "m9: landed=$([[ "$_mut_src" != "$_edge_src" ]] && echo yes || echo no) dir='${_m9_dir}'"
 fi
 
+# t16: the mint arm's `declare -F` guard fails WIDE when the glob lib is absent —
+# a verbatim `^glob:glob:<payload>` always-match, never an rc-127 silent narrow.
+# Reachable today only through argv (declared arrays and the receipts walk exit
+# earlier on _AFF_LIB_OK/index-missing), so the pin drives _affected_add_edge
+# directly with the source line omitted — without the guard this subshell dies
+# on 'command not found' and the capture comes back empty/non-zero.
+cases=$((cases + 1))
+_t16_mint=$( ( cd "$REPO_ROOT" && eval "$_edge_src" && _AC_EDGES=() && _affected_add_edge 'glob:x*.sh' && printf '%s' "${_AC_EDGES[*]}" ) 2>/dev/null )
+if [[ "$_t16_mint" == "^glob:glob:x*.sh" ]]; then
+  pass "t16: a missing glob lib mints the verbatim always-match edge (fail-wide, never rc-127)"
+else
+  fail "t16: mint='${_t16_mint}' (want ^glob:glob:x*.sh — the declare -F guard regressed)"
+fi
+
 # t12: root-anchored mint — a /-free metachar-free head mints ^glob:<pattern>
 #      directly (no -d probe; the root is always present). A /-bearing tail
 #      under that head stays malformed-verbatim (#10198).

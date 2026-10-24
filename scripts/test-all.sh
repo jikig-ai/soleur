@@ -2917,6 +2917,10 @@ _affected_add_edge() {
       # (_affected_emit_receipt → _affected_classify → _affected_derive) reaches
       # this arm outside the _AFF_LIB_OK gate, so a missing helper mints the
       # verbatim always-match — never an rc-127 silent narrow under `set -e`.
+      # Dormant today: the declared-array walk exits at index-missing under
+      # _AFF_LIB_OK==0 and file-content glob: tokens die at the -e probe, so
+      # only a direct argv token reaches it — pinned by t16 in
+      # test-all-affected.test.sh, which drives _affected_add_edge unsourced.
       declare -F _affected_glob_split >/dev/null && _affected_glob_split "$_g" || _AGS_CLASS=malformed
       case "$_AGS_CLASS" in
         dir)
