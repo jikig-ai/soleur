@@ -23,3 +23,9 @@
 - `soleur:deepen-plan` (skill run in-process — all halt gates 4.5–4.12 verified, results recorded in the plan's `## Deepen Pass` section)
 - Tools: `gh` (issue/PR views, upstream PR `#1316` fetch via `gh api`), grep/glob/read of ~25 repo surfaces, `scripts/lint-guard-contract.py` (passed)
 - Artifacts written: plan file, `specs/.../tasks.md`, `specs/.../decision-challenges.md`; pushed to `origin/feat-one-shot-11014-11015-factory-map-task-design`
+
+## Work Phase
+- Status: complete — all 4 phases implemented and committed (b7dae5dd2a + 2485aeb3ad)
+- Verification: schedule-task-design.test.sh 27/0 green; schedule-skill-once green; bun tests 38 pass; fixture ratchets green; lint-shell-capture-exit clean; lint-orphan green; lint-skill-body-budget OK
+- Note: task-design gate contract lives in plugins/soleur/skills/plan/references/task-design-gate.md (§2.9.3/§4.13 stubs point at it) — skill-body ceilings forced the extraction
+- Remaining: Step 4 review → 5 resolve findings → 5.5 qa → 6 compound → 7 ship → 8 DONE
