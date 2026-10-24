@@ -126,6 +126,10 @@ const NON_INNGEST_MONITORS = new Set([
   // sentry-heartbeat step pings the check-in; there is no Inngest cron function, so
   // it maps to no SENTRY_MONITOR_SLUG — same class as scheduled-terraform-drift.
   "scheduled-heartbeat-reconcile",
+  // #10952: GHA-fired (scheduled-terraform-drift.yml -> orphan-sweeps-checkin job) -- the one check-in for
+  // the rung-2 and inngest orphan sweeps, `ok` only when both sweep jobs succeeded. There is no Inngest cron
+  // function for it, so it maps to no SENTRY_MONITOR_SLUG -- same class as scheduled-terraform-drift.
+  "scheduled-orphan-sweeps",
   // #7834: GHA-fired executor (scheduled-sentry-alert-drift.yml) posts the terminal
   // heartbeat; cron-sentry-alert-drift.ts only DISPATCHES the workflow and declares no
   // SENTRY_MONITOR_SLUG (the probe runs in the ephemeral runner, not the app process), so

@@ -1203,8 +1203,8 @@ done < "$class_c_out"
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
 #
-# Addendum 2026-09-17 (extended 2026-09-30, 2026-10-01, 2026-10-04 and 2026-10-11): the tf root now declares
-# 65 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
+# Addendum 2026-09-17 (extended 2026-09-30, 2026-10-01, 2026-10-04, 2026-10-11 and 2026-10-24): the tf root now declares
+# 66 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
 # one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, the
 # #8450 scheduled-actions-queue-health probe a third, the #9168
 # scheduled-supabase-watchdog monitor a fourth, and the #9274
@@ -1212,10 +1212,10 @@ done < "$class_c_out"
 # scheduled-merge-queue-stall-dispatch monitor a sixth, and the W3 (#9826)
 # image-cve-scan monitor a seventh, and the #9855 scheduled-integration-suites
 # monitor an eighth, and the #9703 scheduled-inngest-probe-heartbeat feeder
-# monitor a ninth; #9304 deleted the
+# monitor a ninth, and the #10952 scheduled-orphan-sweeps aggregator monitor a tenth; #9304 deleted the
 # retired scheduled-gh-pages-cert-state monitor. This list names the additions
 # made since the 2026-08-19 live figure and is not a complete ledger, so the
-# declared count above (65) is the figure of record.
+# declared count above (66) is the figure of record.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
