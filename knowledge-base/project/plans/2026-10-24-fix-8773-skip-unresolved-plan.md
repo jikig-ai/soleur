@@ -178,7 +178,7 @@ touches `test-all.sh`'s `SUITE_GLOBS`:
    (automatic once the loop collects them), plus checker-declared globs `scripts/*.test.sh`,
    `scripts/followthroughs/*.test.sh`, `tests/scripts/*.sh`, plus the three probe files. Each
    declared root gets the same `FATAL`-when-empty discipline the runner roots already have.
-   `MIN_PAIRS` moves 45 → **67** (45 + 22 new pairs, the measured values).
+   `MIN_PAIRS` moves 54 → **76** (54 hook pairs + 22 new pairs, the measured values).
 
 **Named exclusions (documented in the checker header):**
 - `apps/web-platform/infra/` — ADR-188 domain: a *local* exit-0 `SKIP:` is the contract there, so the
@@ -198,7 +198,7 @@ CI shards" deferral intends.
 ## Files to Edit
 
 - `.claude/hooks/hook-suite-dep-unresolved.test.sh` — `EXTRA_PAIRED_SUITES` + sweep-only roots +
-  `MIN_PAIRS` 45→67 + header taxonomy/coverage notes.
+  `MIN_PAIRS` 54→76 + header taxonomy/coverage notes.
 - `scripts/`: `check-backstop-revision.test.sh`, `expenses-verify-by-check.test.sh`,
   `review-reminder-liveness.test.sh`, `lint-workflow-issue-write-scope.test.sh`,
   `lint-workflow-local-action-checkout.test.sh`, `sweep-followthroughs.test.sh`,
