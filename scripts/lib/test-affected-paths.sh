@@ -455,6 +455,11 @@ AFFECTED_CLAUDE_HOOKS_HOOK_SUITE_DEP_UNRESOLVED_TEST_SH_PATHS=(
   "scripts/context-reviewed-gate-discoverability.sh"
   "scripts/hook-input-fault-discoverability-probe.sh"
   "scripts/resend-alert-path-discoverability.sh"
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "scripts/rule-metrics-aggregate.sh"
+  "apps/web-platform/infra/sentry/issue-alerts.tf"
+  "apps/web-platform/test/resend-sender-domain.test.ts"
 )
 AFFECTED_CLAUDE_HOOKS_PKILL_SELF_MATCH_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/pkill-self-match-guard.sh"
@@ -619,6 +624,17 @@ AFFECTED_APPS_WEB_PLATFORM_TEST_VITEST_RELATED_PATHS=(
   "apps/web-platform/scripts/vitest-related.sh"
   "apps/web-platform/test/vitest-related.test.sh"
   "apps/web-platform/vitest.config.ts"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/affected-glob.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+# scripts/followthroughs/pr-battery-gate-saving-9323 — reads scripts/lib/affected-glob.sh
+# (named via test-relevance-paths.sh:110).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PR_BATTERY_GATE_SAVING_9323_PATHS=(
+  "scripts/followthroughs/pr-battery-gate-saving-9323.sh"
+  "scripts/followthroughs/pr-battery-gate-saving-9323.test.sh"
+  "scripts/lib/affected-glob.sh"
   "scripts/lib/test-relevance-paths.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
