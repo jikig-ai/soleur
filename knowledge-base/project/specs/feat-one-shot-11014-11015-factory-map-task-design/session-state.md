@@ -1,0 +1,25 @@
+# Session State
+
+## Plan Phase
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-11014-11015-factory-map-task-design/knowledge-base/project/plans/2026-10-24-feat-factory-map-task-design-plan.md
+- Status: complete
+- cto_spawns=1 (batched ruling replaced 8 pending-assumed rows; gate PASS)
+- Plan artifact: complete (selector=branch)
+
+### Errors
+- No Skill/Task/Agent tool exists in this harness — `/soleur:plan` and `/soleur:deepen-plan` were run by reading their SKILL.md files in-process. Research agents, domain leaders, spec-flow-analyzer, the scoped advisor consult, and the plan-review panel could not be spawned; equivalents were run inline and residuals recorded in `specs/feat-one-shot-11014-11015-factory-map-task-design/decision-challenges.md` (nine `pending - assumed:` rows awaiting the pipeline's batched CTO consult).
+- `markdownlint` not installed in this environment — lint pass skipped (plan authored lint-clean).
+- No functional errors; plan, tasks.md, and decision-challenges.md committed and pushed.
+
+### Decisions
+- **#11015 landing: both options** (pending-CTO) — the `schedule` create flow and the plan-side gate guard disjoint creation paths; plus the Inngest runbook for the Step-0-routed substrate.
+- **`## Task Design` as a new conditional section** (not a 6th Observability field) — Encryption-Posture precedent; avoids rippling the parity-pinned 5-field schema across 7 restater surfaces.
+- **No new AGENTS.rules.md rule and no ADR** — tier-gate precedent (domain-scoped gate lives in enforcing skills) and process-gate precedent (plan §2.9.3 / deepen-plan §4.13 / workflow.js mirror).
+- **`--once` answers are template-derived** from the D1–D5 machinery — zero new operator-facing flags; recurring mode collects the five non-derived answers (trigger derives from cron + workflow_dispatch).
+- **Cut:** a CI lint on new `scheduled-*.yml` headers, `cron-list`/`trigger-cron` extensions, per-new-skill questions — recorded in the Cut List.
+
+### Components Invoked
+- `soleur:plan` (skill run in-process from SKILL.md — full phase sequence 0→6 incl. skeleton checkpoint, premise validation, mechanism-minimality, scope check, guard contract, domain sweep, sharp-edges pass)
+- `soleur:deepen-plan` (skill run in-process — all halt gates 4.5–4.12 verified, results recorded in the plan's `## Deepen Pass` section)
+- Tools: `gh` (issue/PR views, upstream PR `#1316` fetch via `gh api`), grep/glob/read of ~25 repo surfaces, `scripts/lint-guard-contract.py` (passed)
+- Artifacts written: plan file, `specs/.../tasks.md`, `specs/.../decision-challenges.md`; pushed to `origin/feat-one-shot-11014-11015-factory-map-task-design`
