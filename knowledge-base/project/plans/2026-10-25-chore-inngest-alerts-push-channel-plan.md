@@ -251,6 +251,22 @@ in_transit:
 - The GitHub-issue mirror (`scheduled-betterstack-incident-mirror.yml`, #10390 WS1 / ADR-248) is the guaranteed read channel for uptime-surface incidents; push adds the real-time channel. Telemetry-sourced (logtail) incident visibility in the uptime incidents API is unverified — the flip is independent of that answer.
 - `inngest-server-probe-heartbeat.test.sh` EXPECTED_PASSES=21 is an anti-vacuity count: the update keeps the count and flips the expectation — do not add or delete assertions.
 
+## Deepen Pass (soleur:deepen-plan, 2026-10-25)
+
+Halt-gate results (inline run — no Task/subagent surface in this harness; research fan-out agents unavailable, gates run mechanically in-process):
+
+- 4.6 User-Brand Impact: PASS — section present, threshold `none` with scope-out reason (internal observability surfaces only).
+- 4.7 Observability: PASS — all 5 fields populated; `discoverability_test.command` = `bun plugins/soleur/scripts/inngest-alerts-push-probe.ts` (verb `bun` on the Check-10 allowlist, no ssh, no shell-active tokens); `expected_output: PUSH_ARMED` is a matchable literal; the probe script ships in the same PR so the command exists in this tree.
+- 4.8 PAT-shaped variable: PASS — no PAT tokens referenced.
+- 4.9 UI wireframe: N/A — no UI-surface files in Files to Create/Edit.
+- 4.10 Encryption Posture: PASS — section present; `does_not_defend` populated on every row; no plaintext-exception / cert_verification-off rows, so no `exception` block required.
+- 4.11 Guard Contract: N/A — the deliverable carries no guard/gate/lint; `inngest-alerts-push-probe.ts` is a Phase 2.9 discoverability probe (read-only verifier), not a standing gate. The updated `inngest-server-probe-heartbeat.test.sh` row (d) is an existing assertion whose expectation flips with the intended state — its assembly and count (21) are unchanged.
+- 4.12 Scope Check: PASS — exactly one unfenced `## Scope Check`; all four asks mapped or descoped with justification; three `inferred` items each carry a justification.
+- 4.13 Task Design: N/A — no new autonomous-task surface.
+- 4.5 network-outage / 4.55 downtime-cutover / 4.4 precedent-diff: N/A — no SSH patterns; in-place attribute update with zero downtime; the change pattern is itself the repo precedent (app_health #9168, inngest_prd/inngest_consumer #11001), cited inline.
+
+Deepen findings applied at plan time (folded in before this pass): third Inngest-serving alert `inngest_step_524` folded into scope; `Ref #11068` semantics over `Closes` (ADR-218 precedent for apply-verified alert changes); pre/post-merge AC split; merge-mutates-production statement; mirror-coverage nuance recorded in Premise Validation.
+
 ## References
 
 - Issue: #11068
