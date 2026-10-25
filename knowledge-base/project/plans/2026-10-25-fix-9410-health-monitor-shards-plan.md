@@ -83,6 +83,12 @@ min → 1.5× = 65); webplat p90 4.37 → floor 10; bun p90 <2 → floor 10; inf
   no-JOBS-anywhere, all-six-jobs runner parity, new S1–S6 shard guards
   (manifest n == matrix, SCRIPTS_SHARD binding, EXPECTED_LEGS == derived 15,
   single heartbeat, per-leg notice), leg-dir behavioural harness, floor 155.
+- Review follow-ups in the same PR: `actions/checkout` added to `report`
+  (the local `sentry-heartbeat` composite resolves from the workspace);
+  `watchdog-debounce-soak-9686.sh` re-anchored off `health-check` onto the
+  union of the five leg jobs' logs (+ fixtures); `jobs1-stopgap-7432`'s pin
+  gate re-derived to `>= 1` (zero-pin baseline) and its test fixtures moved
+  to the `test-infra` job name.
 
 ## Non-Goals
 

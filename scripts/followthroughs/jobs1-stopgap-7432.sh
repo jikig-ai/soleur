@@ -7,8 +7,9 @@
 # The sweeper hands `earliest` to the probe as SOLEUR_FT_EARLIEST. It is the window start and nothing else: not a constant
 # here, and not the workflow file's last commit (a commit-time anchor would let an unrelated edit restart the soak).
 #
-# What it decides: the infra step runs at the runner's default width (Item I of #9217 removed its pin; the tests step keeps
-# one, because it nests the runner on a branch diff touching apps/web-platform/infra/). The soak is the 12 OLDEST completed,
+# What it decides: the infra step runs at the runner's default width (Item I of #9217 removed its pin; #9410 then removed
+# the last remaining pin — the tests step's — when it sharded the monitor, since no leg runs `all` and so nothing nests
+# the runner). The soak is the 12 OLDEST completed,
 # non-cancelled monitor runs on `main` (any event; a manual dry_run=true dispatch is a valid infra sample) created at or
 # after the window start. Once 12 exist a later bad run cannot change the verdict, so PASS is monotone and the sweeper's
 # re-check of a closed issue cannot reopen #7432. 12 runs at 4 a day is about 3 days. WIDTH IS PROVEN PER RUN, not assumed
@@ -102,8 +103,10 @@ PIN_RE="(^|[^A-Za-z0-9_])[\"']?JOBS[\"']?[[:space:]]*[:=]"
 WIDTH_RE='^[0-9TZ:.-]+ +Running [0-9]+ registered infra suite\(s\)[^|]* with -P [0-9]+'
 SUMMARY_RE='^[0-9TZ:.-]+ +=== registered infra suites: [0-9]+ passed, [0-9]+ failed, [0-9]+ unaccounted \(of [0-9]+\) ===$'
 pins="$(grep -vE '^[[:space:]]*#' <<<"$body" | grep -cE "$PIN_RE")" || pins=0
-if [ "$pins" -ge 2 ]; then
-  echo "NOT YET: $pins JOBS assignments on main (the tests-step pin plus another); the infra-step pin has not been removed."
+# #9410 removed the last pin, so the baseline is ZERO: any assignment on main is a
+# restored pin, not the pre-soak state the >=2 threshold once distinguished.
+if [ "$pins" -ge 1 ]; then
+  echo "NOT YET: $pins JOBS assignment(s) on main — a pin has been restored (post-#9410 baseline is zero)."
   exit 2
 fi
 

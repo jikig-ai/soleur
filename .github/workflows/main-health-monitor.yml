@@ -660,6 +660,19 @@ jobs:
       # here is a RED, not a drift.
       EXPECTED_LEGS: "webplat-0 webplat-1 bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2 infra"
     steps:
+      # `actions/checkout` is required ONLY for the sentry-heartbeat composite —
+      # a local `uses: ./` action resolves from the runner's workspace, which a
+      # job that never checks out leaves empty: the step fails "Can't find
+      # 'action.yml'" and its continue-on-error swallows that, so NO check-in
+      # ever posts and every healthy run pages as missed (the exact failure
+      # mode measured on run 35333427096, documented in
+      # scheduled-devin-docs-drift.yml). persist-credentials: false — the
+      # report's API calls all ride the GH_TOKEN env, never the checkout token.
+      - name: Check out this repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
       # Legs upload `monitor-leg-<id>` artifacts carrying capture.txt +
       # status.env. A leg whose JOB was killed or cancelled uploads nothing, so
       # a missing dir means "no leg report", not "green". continue-on-error:
