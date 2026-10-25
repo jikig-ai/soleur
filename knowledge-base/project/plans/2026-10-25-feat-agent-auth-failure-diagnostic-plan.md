@@ -14,6 +14,25 @@ requires_cpo_signoff: true
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-25
+**Passes:** halt gates 4.6-4.13 run mechanically (user-brand, observability incl. probe-verb gate, PAT, UI skip, encryption posture, guard contract lint, scope check); security-sentinel, user-impact-reviewer, observability-coverage-reviewer, test-design-reviewer, pattern-recognition-specialist; a local SDK source read (`sdk.mjs`); CTO rulings F13-F15; a credential-free local run of the bundled CLI (earlier).
+
+### Key improvements
+
+1. **Closed a P0 forgery path** (security + user-impact): the text arm required nothing the model cannot produce, so a tenant could page the operator and mute the real outage's email. The text arm now needs the CLI-set `<synthetic>` model or `is_api_error_message`; the structured arm stays alone sufficient (CTO F13).
+2. **The tap now matches the measured SDK shape**: the real Query returns an internal single-use Stream from its iterator method; the wrapper delegates to that object and never re-enters its iterator method. The earlier "iterator returns `this`" assumption was wrong.
+3. **Emit isolation and flood bounds**: `withIsolationScope` with breadcrumbs and user cleared, a process-wide cap, `.catch(noop)` on every fire-and-forget branch (the process exits on `unhandledRejection`) (CTO F14, F15).
+4. **`match_kind` keeps its variants** (text classified before the always-present structured code) and the decode key documents `has_egress` as configured-not-reachable and `cli_key_source` project/user/apiKeyHelper/org as tenant-influenced.
+5. **Tests that can actually go RED**: the pino line is observed through the logger's breadcrumb mirror with a positive control, the real `scrubSentryEvent` and Vector drop-list names are in the mutation set, latch/debounce/cap each get their own row, and the wiring cases assert the context is not `unknown`.
+
+### New considerations
+
+- `auth_env_present` cannot separate "reached the options, not the process" (the variable is set last whenever the lease value is non-empty); only `cli_key_source` can, and its non-`none` values have no local fixture yet.
+- A warm cc Query serves many turns: the latch resets per `result` and the debounce is the rate limit.
+- Open for the operator (schedule): the date on which Issue B ships the friendly error alone.
+
 ## Overview
 
 The hosted Concierge currently answers every request with the CLI text "Not logged in" plus a
@@ -59,7 +78,7 @@ text is consumed "in `server/cc-dispatcher.ts`"; it is consumed in `server/soleu
 | Thread `authMode` from `ws-handler` into both runners | P1 | Lazy failure-path lookup through an injected resolver; zero cost on the happy path. CTO ruling F2. |
 | Replace the user-visible CLI text with a friendly error | (product) | Separate, tracked follow-up (CPO advisory, 2026-10-25): bundling adds a user-visible change to an invisible PR. |
 | Other structured codes (`oauth_org_not_allowed`, `account_on_hold`, `verification_required`, `billing_error`) | P1 | Out of the "not logged in / invalid credential" family; billing already has `anthropic_credit_exhausted`. |
-| Refactor `sentry-masked-dir-precreate-alert-op-contract.test.ts` into a shared helper | (hygiene) | Two instances; the new contract test carries its own ~50 lines, the old test stays untouched. |
+| Refactor `sentry-masked-dir-precreate-alert-op-contract.test.ts` into a shared helper | (hygiene) | About 26 sibling `sentry-*-alert-op-contract.test.ts` files exist, each embedding its own rule parser by convention; the new test follows that convention (reusing only the shared TypeScript `test/helpers/strip-comments`), and the old tests stay untouched. A shared HCL helper is a separate cleanup across the family, not this PR. |
 
 ### Research Reconciliation — Spec vs. Codebase
 
@@ -122,10 +141,19 @@ apart. The diagnostic's one event is designed to separate them.
 
 ## Proposed Solution
 
-1. **Matcher** (pure): `matchAgentAuthFailure(message)` returns a closed `match_kind` or `null`. Fires on
-   the structured `assistant.error === "authentication_failed"` (alone sufficient) OR an anchored FULL-message text
-   pattern (single text block, no `tool_use`, length <= 200; or a `result` with `is_error === true`);
-   `is_api_error_message === true` and `message.model === "<synthetic>"` are corroboration only, never required.
+1. **Matcher** (pure): `matchAgentAuthFailure(message)` returns a closed `match_kind` or `null`. Check order is
+   cheap-first: `typeof text === "string"`, then `length <= 200`, then the anchored regex (no nested or overlapping
+   quantifiers). Fires on (a) an anchored FULL-message text pattern in a single text block with no `tool_use`
+   (or a `result` with `is_error === true`), AND, for the assistant text arm, `message.model === "<synthetic>"` OR
+   `is_api_error_message === true` - both are set by the CLI in the captured real stream and cannot be set by the model,
+   which closes the forgery path where a tenant makes the model reply with the exact CLI string (CTO F13); or (b) the
+   structured `assistant.error === "authentication_failed"` (alone sufficient, observed in the real stream). Text is
+   classified FIRST and `structured` is the fallback, so `match_kind` keeps its variants (`not_logged_in`,
+   `invalid_api_key`, `oauth_token_revoked`, `session_expired`), which separate "the CLI saw no credential" from "the API
+   rejected one". If the SDK ever renames the two CLI-set fields the text arm goes silent and only the structured arm
+   fires; that degradation is accepted and recorded here. The `authentication_failed` literal is one exported const in
+   `claude-error-signatures.ts` (the message translator in `claude-code-message-translator.ts` carries its own copy of the
+   code set; it is not touched in this PR, and a comment on each names the other).
 2. **Context** (pure): `deriveAgentAuthContext(runner, scheme, options)` reads the FINAL SDK options object
    (after the cc seccomp recorder) and returns only enums/booleans: credential scheme, `auth_env_present`
    (the scheme's env var is a non-empty string; truthiness only, the value is never read into anything
@@ -142,14 +170,31 @@ apart. The diagnostic's one event is designed to separate them.
    synchronously (the tuple is complete at claim time because `init` precedes the failure message, which is the CTO F10
    condition for including `cli_key_source`), then resolves `auth_mode` (injected, 1.5 s bound; values `managed`,
    `api-key`, `unbound` for a conversation with no engine-run row, `unknown` for a failed or slow lookup), then emits
-   fire-and-forget. If the emit throws, the claim is released so a burned window cannot swallow the next event.
+   fire-and-forget. If the emit throws, the claim is released so a burned window cannot swallow the next event. A process-wide cap of
+   10 events per 5 minutes (a `global` key in the same local map) is checked FIRST, so a flood cannot evict per-user entries;
+   suppressed events are counted in a bounded in-memory counter and never logged at warn (CTO F14). The whole `observe`
+   body is inside try/catch and every fire-and-forget branch ends in `.catch(noop)` (the project's `crash-handlers.ts`
+   exits the process on `unhandledRejection`, so one stray async throw would end every tenant's session).
 4. **Emit** (single chokepoint): `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure",
    message: <constant>, tags: payload, extra: { ...payload } })` where `payload` is ONE object of closed-enum
    strings (`runner`, `credential_scheme`, `auth_env_present`, `auth_mode`, `cli_key_source`, `seccomp_artifact`,
    `has_egress`, `sandbox`, `outer_wrap`, `match_kind`). `extra` duplicates the tags because only `extra` reaches the pino
-   line (Better Stack), the second sink that still works if Sentry capture is the broken part.
+   line (Better Stack), the second sink that still works if Sentry capture is the broken part. With a `null` first
+   argument the helper sends `extra: { err: null, ...payload }` and the pino object `{ err: null, feature, op, ...payload }`,
+   so the contract is "extra equals payload plus `err: null`", nothing else. The call runs inside
+   `Sentry.withIsolationScope(scope => { scope.clearBreadcrumbs(); scope.setUser(null); ... })` (CTO F15): the logger mirrors
+   every warn+ line from every tenant into the process-wide scope, and those breadcrumbs would otherwise ride on this event.
+   The capture is synchronous inside the callback; the work phase confirms the installed `@sentry/nextjs` exports
+   `withIsolationScope` and that the async-context strategy is active.
 5. **Tap** (cc path): `tapAgentAuthFailure(query, probe)` captures `orig = query[Symbol.asyncIterator].bind(query)` ONCE
    and overrides `[Symbol.asyncIterator]` in place (identity preserved; a re-entry never double-wraps or recurses).
+   Measured shape of the real SDK Query (`sdk.mjs`, installed 0.3.283; the repo pins 0.3.284, re-check at work time):
+   the Query class has its own `next`, `return`, `throw` that delegate to an internal Stream `this.sdkMessages`, and its
+   `[Symbol.asyncIterator]()` returns that Stream, whose own `[Symbol.asyncIterator]()` throws `Stream can only be iterated once`.
+   So `for await` (which calls `query[Symbol.asyncIterator]()` once and then the returned object's `next`/`return`)
+   never touches `Query.next`. The wrapper therefore returns a thin object whose `next`/`return`/`throw` delegate to the
+   object `orig()` returned, and it must NEVER call that object's `[Symbol.asyncIterator]`. The tap test fixture models this exact
+   shape (a Query-like with its own `next`, and an iterator method that returns a separate single-use stream object).
    Its `next()` returns the ORIGINAL promise unchanged and observes on a side branch (`p.then(r => safeObserve(r.value), noop)`),
    so it adds no `await` to the consumer's path and cannot reorder against `state.closed` / `close()` in
    `consumeStream`; `return`/`throw`, `.close()` and `.interrupt()` are untouched. A frozen, non-writable or
@@ -215,7 +260,9 @@ have to reconstruct the hypotheses:
 | `cli_key_source=unknown` | The `init` message was not seen or carried a value outside the closed list: no conclusion from this field. |
 | `auth_mode=unbound` / `unknown` | No engine-run row for the conversation (an old or unbound conversation) / the lookup failed or timed out: no conclusion from this field. |
 | `seccomp_artifact`, `sandbox`, `has_egress` | Posture dimensions for comparing runs where the failure appears and where it does not (for example the `agent-sandbox-unix-deny` flag OFF vs ON). |
-| `match_kind` | Which closed pattern matched; `structured` means the SDK's own `authentication_failed` code. |
+| `match_kind` | Which closed pattern matched: `not_logged_in` (the CLI saw no credential), `invalid_api_key` / `oauth_token_revoked` / `session_expired` (a credential was presented and refused or lapsed), `structured` (the SDK's own `authentication_failed` code with no recognised text; it fires in every real stream, which is why text is classified first). |
+| `has_egress` | A build-time flag (a GitHub token or web-egress handle was configured), not a reachability result: do not read it as proof of network access. |
+| `cli_key_source` of `project`, `user`, `apiKeyHelper` or `org` | Tenant-influenced: a workspace's own settings can select the credential source, so a single tenant can legitimately trigger this event; the process-wide cap bounds the volume. |
 
 Limitation, accepted (CTO F12): a spawn-time throw (the CLI never starts, or the SDK iterator throws instead of yielding
 the synthetic message) is invisible to this probe. Trigger to add a `thrown` arm: the outage persists and no event
@@ -237,17 +284,35 @@ Write all of the following against the not-yet-existing modules; each must fail 
    U+00B7 separator and its variants, plus `error: "authentication_failed"` with arbitrary text), negative near-misses
    (the "Invalid API key format" sentence, model prose, lower-case variant, text inside a multi-block message, text
    beside a `tool_use`, text > 200 chars, a successful `result` quoting the text, `stream_event` partials, non-object
-   inputs), and the no-leak property (the returned value is always a member of the closed enum or `null`; never a
-   substring of the input).
+   inputs), the FORGERY row (a plain assistant block with a real model id, no `is_api_error_message`, carrying the exact
+   CLI text, must be `null`; the same block with `model: "<synthetic>"` or `is_api_error_message: true` matches), the
+   text-first ordering (a real-stream message with both the text and `error: "authentication_failed"` reports the text
+   variant, not `structured`), a 200-character adversarial-whitespace timing row, and the no-leak property (the returned
+   value is always a member of the closed enum or `null`; never a substring of the input).
 2. `test/agent-auth-failure-probe.test.ts` - context derivation from real `buildAgentQueryOptions` output (both
    schemes, egress on/off, flag on/off, sandbox present/absent, outer wrap on/off, a mocked builder returning
-   `undefined`), probe semantics (one event per probe, debounce per user x tuple, a different tuple re-emits, authMode
-   normalisation and 1.5 s timeout via an injected clock/timer, resolver throw -> `unknown`), tap semantics (identity,
-   order, `break` runs the underlying `finally`, underlying throw propagates, observer throw swallowed, non-writable and
-   non-iterable objects untouched).
+   `undefined`; `has_egress` and `seccomp_artifact` both read from `sandboxPostureOf` and `usesUnixDenyArtifact`, the single
+   predicate, not a fourth hand-written spelling), probe semantics (one event per probe, debounce per user x tuple, a
+   different tuple re-emits, the process-wide cap, authMode normalisation and 1.5 s timeout via an injected clock/timer,
+   resolver throw -> `unknown`, and a test that no resolver call happens without a claimed match).
+2b. `test/agent-auth-failure-tap.test.ts` - tap semantics against a fixture that models the REAL Query shape (own
+   `next`/`return`/`throw`; an iterator method returning a separate single-use stream object that throws on a second
+   `[Symbol.asyncIterator]` call): identity, order, `break` runs the underlying `finally`, underlying throw propagates,
+   observer throw swallowed, non-writable and non-iterable objects untouched, no double-wrap on re-entry.
 3. `test/agent-auth-failure-sentry-path.test.ts` - REAL path: real logger, real `reportSilentFallback`, real probe, real
    `buildAgentQueryOptions`; only `@sentry/nextjs` is replaced by spies (precedent:
-   `agent-sandbox-precreate-sentry-path.test.ts`). Includes the secret canary (below).
+   `agent-sandbox-precreate-sentry-path.test.ts`, whose mock spreads the real module so `withIsolationScope` stays real).
+   Includes the secret canary: canaries are fake key, fake OAuth token, fake workspace path, fake user id, the CLI body
+   and a canary-shaped authMode, in whole AND derived forms (a key prefix, a length) over `JSON.stringify` of every spy
+   call. The pino line is observed through the logger's own Sentry breadcrumb mirror (`mirrorToSentry` hands the same
+   redacted args to `Sentry.addBreadcrumb`), with `LOG_LEVEL` set so the line exists, plus a POSITIVE control asserting a
+   breadcrumb carrying `feature`, `op` and all ten keys is present (a canary over an empty capture proves nothing);
+   leak mutants use non-sensitive key names so the logger's redaction cannot mask them. The captured tags and extra are
+   also passed through the REAL `scrubSentryEvent` (control: a payload key named `tag` is redacted there), and every
+   payload key is asserted absent from `SENSITIVE_LOWER` and from the Vector drop-list names. The isolation-scope case
+   pre-seeds an outer `setUser` and breadcrumb, then asserts they are absent from the captured event and the outer scope
+   is unchanged. The wiring cases additionally assert the context tags are not `unknown` (a runner that skips
+   `bindOptions` would otherwise still pass).
 4. `test/sentry-agent-auth-failure-alert-op-contract.test.ts` - emit site <-> rule <-> reference (Guard 1).
 5. Wiring: extend `test/agent-runner-unix-deny-wire.test.ts` (legacy, drives `startAgentSession`) and
    `test/cc-dispatcher-real-factory.test.ts` (cc, mocked `sdkQuery`) with one auth-failure stream case each, asserting
@@ -261,16 +326,22 @@ Write all of the following against the not-yet-existing modules; each must fail 
    debounce window and not before; the latch resets on `result`; a throwing `bindOptions`/probe construction/tap in the
    cc factory falls back to a working untapped Query and is not mirrored as a sandbox failure; the tap adds no microtask
    to the consumer path (observe a `for await` over a tapped generator and an untapped one: identical resolution order
-   against a concurrent `close()`); the probe holds no reference to `options` (a `WeakRef` check after the options object
-   is released, or a structural check that nothing on the probe is the options object); a failing emit releases the claim;
+   against a concurrent `close()`); the probe holds no reference to `options` (a structural check only - nothing reachable from the probe is the options
+   object or its `env`; no GC-timing `WeakRef` check); a failing emit releases the claim;
    the REAL `makeAuthModeResolver` against a fake `PersistenceClient` (row present -> `managed`/`api-key`, no row ->
    `unbound`, client throws -> `unknown`); and one case that feeds a tapped Query through the real
    `createSoleurGoRunner` `consumeStream` path (a `state.query`-shaped fake), so a later switch from `for await` to direct
-   `.next()` consumption fails loudly.
+   `.next()` consumption fails loudly; and a no-unhandled-rejection case (resolver rejecting after the timeout, the race
+   loser rejecting late, the emit throwing: a `process.on("unhandledRejection")` listener never fires).
 
 #### Phase 2: Implement the leaf modules
 
-`claude-error-signatures.ts` edit, `agent-auth-failure.ts`, `agent-auth-mode.ts`. Hot path: `observe` checks
+`claude-error-signatures.ts` edit, `agent-auth-failure.ts`, `agent-auth-mode.ts`. The seccomp artifact comes from the
+single predicate `usesUnixDenyArtifact(posture.hasEgress, posture.unixDenyFlag)`; the two existing ternaries that spell the
+same expression (`recordCcSeccompArtifact`, `agent-runner-sandbox-config.ts`) are NOT refactored here (non-goal; a shared
+`seccompArtifactKindOf` is a separate cleanup). The local TTL map is deliberate (partial-mock safety, and
+`conversation-writer.ts` has a local-map precedent); a lazily built `TtlDedupMap` created on first claim inside the try is
+the accepted alternative if the work phase prefers one fewer copy of the sweep bookkeeping. Hot path: `observe` checks
 `type`/`error` first and only regex-tests a single-text-block message of <= 200 chars; no allocation otherwise.
 
 #### Phase 3: Wire the runners and widen one pin
@@ -291,7 +362,9 @@ Write all of the following against the not-yet-existing modules; each must fail 
 
 #### Phase 4: Alert rule, reference, counts
 
-- `infra/sentry/issue-alerts.tf`: new `sentry_alert.agent_auth_failure` after `masked_dir_precreate_failed`, with a
+- `infra/sentry/issue-alerts.tf`: new `sentry_alert.agent_auth_failure` after `masked_dir_precreate_failed`, cloned from it
+  verbatim except the name, `frequency_minutes`, the `feature`/`op` values and the comment block (so `monitor_ids` and
+  `lifecycle { ignore_changes = [environment] }` carry over), with a
   comment block naming the emit site, the `null`-first-argument reason (#8629), the constant message / one-issue
   grouping, the temporary-diagnostic status, and the updated "taken" list (5, 10-40, 60-63, 120, 240, 1440-1442).
 - `infra/sentry/alert-reference.json`: new `agent-auth-failure` entry, key-sorted (`jq -S`), `detectorIds` identical to the
@@ -327,7 +400,8 @@ body (requirements below). File the two follow-up issues before merge.
 - `apps/web-platform/server/agent-auth-failure.ts` - matcher, context derivation, payload builder, probe, tap, local TTL dedupe.
 - `apps/web-platform/server/agent-auth-mode.ts` - `makeAuthModeResolver(userId, conversationId)`.
 - `apps/web-platform/test/agent-auth-failure-matcher.test.ts` - positive family, negative near-misses, no body leak.
-- `apps/web-platform/test/agent-auth-failure-probe.test.ts` - context derivation, probe, resolver normalisation, tap.
+- `apps/web-platform/test/agent-auth-failure-probe.test.ts` - context derivation, probe, cap, resolver normalisation.
+- `apps/web-platform/test/agent-auth-failure-tap.test.ts` - the Query tap against the measured real shape.
 - `apps/web-platform/test/agent-auth-failure-sentry-path.test.ts` - real logger + real `reportSilentFallback`, Sentry SDK spied, secret canary.
 - `apps/web-platform/test/sentry-agent-auth-failure-alert-op-contract.test.ts` - Guard 1.
 - `knowledge-base/project/specs/feat-one-shot-agent-auth-failure-diagnostic/tasks.md` (and the existing `decision-challenges.md`).
@@ -353,9 +427,13 @@ Glob/path check (`hr-when-a-plan-specifies-relative-paths-e-g`): every path abov
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** nothing new - the observer swallows its own errors and runs
-  beside the stream; the Concierge keeps showing the CLI text it shows today until the follow-up fix. The one
-  visible regression class is a stream delay or reorder from the tap, which the tap tests pin out.
+- **If this lands broken, the user experiences:** (a) a Concierge turn that arrives late, out of order, or never
+  completes - the tap sits on the stream every cc turn flows through - pinned out by the order/completion/no-added-microtask
+  tests; (b) a crashed server session for every concurrent user if a fire-and-forget branch rejects unhandled (the
+  process exits on `unhandledRejection`), pinned out by the try/catch plus `.catch(noop)` rule and a no-unhandled-rejection
+  test; (c) unchanged status quo otherwise: BYOK customers who paid for a working Concierge keep seeing the raw CLI line
+  "Not logged in" with no recovery path (a month-old failure) until Issue B ships - this PR does not fix it and its Issue B
+  carries a proposed escalation date.
 - **If this leaks, the user's workflow and credential is exposed via:** a later edit that serialises the leased
   key, the env value, the CLI message body, a user/workspace id or a workspace path into the Sentry event or the
   pino line (a third-party subprocessor and the log pipeline), e.g. `extra: { env }` or `tags: { match: text }`.
@@ -394,18 +472,18 @@ failure_modes:
     detection: "Residual blind spot, bounded: the structured arm is independent of wording and fires in the real stream (captured locally: error authentication_failed). Post-merge check reads Sentry for tag feature:agent-auth within 15 minutes of any Concierge request while the outage persists; absence while the outage persists reopens this plan (pino layer 2 absence check)"
     alert_route: "none by design (absence cannot page); caught by the post-merge read-only Sentry query"
   - mode: "Sentry capture is dropped or the SDK is uninitialised"
-    detection: "pino layer 2: the same call writes logger.error with feature, op and the ten keys (extra), shipped to Better Stack at level >= 40"
+    detection: "pino layer 2: the same call writes logger.error with feature, op and the ten keys (extra); Vector Source 3 app_container_journald feeds app_container_warn_filter (keeps level >= 40, none of the ten keys is on the drop list or in the sensitive-key set), then the scrub stages, then Better Stack"
     alert_route: "none (Better Stack log search by feature=agent-auth); the first-sink loss is itself visible because the pino line exists without a Sentry issue"
   - mode: "authMode lookup fails or times out"
     detection: "pino layer 2 / Sentry tag auth_mode=unknown on the event; the emit is never skipped"
     alert_route: "none (degrades to unknown, event still routed)"
   - mode: "The observer itself throws inside a runner loop"
-    detection: "Swallowed by design (try/catch in observe and in the tap); pinned by the tap and wiring tests, no user-visible effect"
-    alert_route: "none (test-time detection only)"
+    detection: "Swallowed by design (try/catch in observe and in the tap) but NOT silent: each catch emits one constant-text logger.warn per probe (pino layer 2, no err, no payload) so a defect in the diagnostic is visible in Better Stack; it deliberately does not use reportSilentFallback with a second op, because Guard 1 pins the op set to cli-auth-failure"
+    alert_route: "none (Better Stack log search on the constant warn text); pinned by the tap and wiring tests"
 
 logs:
   where: "Sentry web-platform project (issue + tags + extra); container stdout pino -> Vector -> Better Stack web source (filter feature=agent-auth)"
-  retention: "Sentry project event retention (plan default); Better Stack 90d on the provisioned sources (apps/web-platform/infra/variables.tf documents 90d for the git-data source; the web source is declared beside it)"
+  retention: "Sentry project event retention (plan default); Better Stack retention as configured for the web source (not asserted here; the git-data source documents 90d in apps/web-platform/infra/variables.tf)"
 
 discoverability_test:
   command: "jq -r '.[\"agent-auth-failure\"].enabled' apps/web-platform/infra/sentry/alert-reference.json"
@@ -416,6 +494,19 @@ Layer citations (`hr-observability-layer-citation`): pino layer 2 (`server/logge
 the Sentry release-context layer 5. Affected-surface rule (2.9.2): the dispatch/stream surface is
 `agent-runner.ts` / `cc-dispatcher.ts`; the probe's fields discriminate all competing hypotheses in one event, and the
 emit comes from the process that actually observes the CLI's reply, not from a host-side gate.
+
+## Encryption Posture
+
+Triggered by the `.tf` glob only (the Sentry rule file); the plan introduces no persistent store and no new
+cross-component or network connection, so there is nothing to declare per store or per connection.
+
+```yaml
+at_rest: []        # no store introduced: a Sentry alert rule is configuration of the existing vendor project, not a data store
+in_transit: []     # no new connection: the event rides the existing app -> Sentry SDK transport that reportSilentFallback already uses
+```
+
+Evidence: `sentry_alert` is already classified in the ledger's non-store types, and
+`python3 scripts/lint-encryption-posture.py --repo-sweep` reports `21 stores, 10 connections, 0 unledgered, 0 failing checks -> PASS` on this tree (re-run after the rule lands; the new resource is an existing type).
 
 ## Guard Contract
 
@@ -436,6 +527,7 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 | 5 | Dispatch of the guard itself: make the server walk find zero files, or hide the emit behind a constant so the literal count is 0 while the token count is 1 | RED |
 | 6 | Give another rule `frequency_minutes = 40` | RED |
 | 7 | Remove the `alert-reference.json` entry, or change its `frequency`/`tagged_event` values | RED |
+| 8 | Change the emit's level to warning, or make its `message` variable (interpolated), or drop the `op` condition from the rule (the extractor requires exactly `feature` and `op`) | RED |
 
 **Harness rows.** (a) Suite edit that must go RED: make the emit-site extractor stop after the first site - the self-test fixture with two sites then fails; (b) must-PASS inputs that are NOT the canonical: the two tag conditions in the opposite order, and a different unique `frequency_minutes`, both still pass; a fixture emit with `extra` keys in another order passes.
 
@@ -458,8 +550,12 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 | 5 | Make `matchAgentAuthFailure` return a kind for every input (the negative corpus must be non-empty and every entry asserted `null`; a floor on the corpus size) | RED |
 | 6 | Make `tags` and `extra` diverge | RED |
 | 7 | Let the authMode resolver's raw return flow through un-normalised (resolver returns a workspace-path-shaped string) | RED |
-| 8 | Reorder: emit before the debounce claim, so a burst produces N events | RED |
-| 9 | Rename a payload key to a name in `SENSITIVE_KEY_NAMES` (for example `match_kind` -> `tag`): the real `scrubSentryEvent` redacts the value | RED |
+| 8a | Neuter the per-probe once-latch with the cross-probe debounce intact: two probes, same user and tuple, one emit | RED if two |
+| 8b | Neuter the debounce with the latch intact: two probes, same user and tuple, one emit | RED if two |
+| 8c | Neuter the process-wide cap: eleven distinct users inside the window emit at most ten | RED if eleven |
+| 8d | Forgery: a plain assistant block (model id `claude-...`, no `is_api_error_message`) with the exact CLI text | RED if it emits |
+| 9 | Rename a payload key to a name in `SENSITIVE_KEY_NAMES` or to a name on the Vector drop list (for example `match_kind` -> `tag` or `message`): the real `scrubSentryEvent` redacts it / the Better Stack path deletes it | RED |
+| 9b | Emit outside `withIsolationScope`: a pre-seeded other-tenant breadcrumb or `setUser` appears on the captured event | RED |
 | 10 | Let a value outside the closed `ApiKeySource` list (a path- or key-shaped string in the init message) reach `cli_key_source` | RED |
 
 **Harness rows.** (a) Suite edit that must go RED: remove the seeded canary strings from the fixtures - a non-vacuity assertion that each canary appears in the INPUTS (env, message, cwd, resolver return, dedupe token) fails first; (b) must-PASS non-canonical: a run with `oauth_token` + `auth_mode=managed` + `sandbox=off` + `outer_wrap=true` (different enum values) passes; an input message containing a canary only inside a multi-block message (so it never matches) passes with zero events.
@@ -493,6 +589,7 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 | `server/claude-error-signatures.ts` edit | "the message body beyond a fixed enum of which pattern matched" | asked |
 | Structured `error === "authentication_failed"` arm | — | inferred - justification: the SDK types a wording-independent discriminator; text-only matching goes blind on a CLI wording change (CTO F4) |
 | `cli_key_source` tag (the init message's `apiKeySource`) | — | inferred - justification: the CLI's own statement of which credential source it resolved is the single field that separates "our env var never reached the process" from "it reached it and was rejected" (CTO F10) |
+| Tenant-forgery guard on the text arm, process-wide cap, `withIsolationScope` emit, try/catch plus `.catch(noop)`, constant warn on swallowed throw, the tap test file, structural-only retention check | — | inferred - justification: the deepen security and user-impact passes found a forgeable text arm that could mute the real outage's email, a flood and eviction path, other tenants' breadcrumbs riding on the event, and a process exit on a stray rejection; each is a safety property of the brief's "ONE routed event" with no user-visible scope change (CTO F13-F15) |
 | `unbound` auth_mode value, decode-key table, removal checklist, factory-throw isolation, latch reset per `result` | — | inferred - justification: plan-review (spec-flow, devex, architecture) found each is needed for the event to be readable or safe: old conversations have no engine-run row, the reader needs the hypothesis mapping, and a diagnostic bug must not be reported as a sandbox failure or stall a warm Query's later turns |
 | `outer_wrap` tag | — | inferred - justification: the outer wrap changes how env reaches the CLI, so it separates a competing hypothesis the listed fields cannot (CTO F6) |
 | `extra` duplicating the tags | — | inferred - justification: only `extra` reaches the pino line / Better Stack, the second sink if Sentry capture is the broken part (CTO F6b) |
@@ -509,7 +606,7 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 ### Split Assessment
 
 - Subsystems touched: 1 - `apps/web-platform`
-- Planned files: 17 | Estimated changed lines: ~1,100 (about 650 are tests; production code about 350)
+- Planned files: 18 | Estimated changed lines: ~1,250 (about 750 are tests; production code about 400)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR - the line count crosses the threshold on test volume only; a split would have to separate the emit from its rule, and an emit with no rule is exactly the #10455 defect class (an event with nobody behind it).
 
@@ -518,7 +615,7 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 ### Functional Requirements
 
 - [ ] A fake SDK stream with an assistant message whose `error` is `authentication_failed`, and one with the exact `Not logged in · Please run /login` single text block, each produce exactly ONE `Sentry.captureMessage` (level error, `tags.feature = agent-auth`, `tags.op = cli-auth-failure`) in BOTH runner paths (legacy loop; cc tap), and zero `captureException` calls tagged `pino-mirror`.
-- [ ] The ten tag keys are exactly `runner, credential_scheme, auth_env_present, auth_mode, cli_key_source, seccomp_artifact, has_egress, sandbox, outer_wrap, match_kind`, every value a member of its closed enum, and `extra` equals the tags (after stringification) with no other key.
+- [ ] The ten tag keys are exactly `runner, credential_scheme, auth_env_present, auth_mode, cli_key_source, seccomp_artifact, has_egress, sandbox, outer_wrap, match_kind`, every value a member of its closed enum, and `extra` equals the tags (after stringification) plus `err: null` and nothing else (the helper's `null` path always sends `err`), pinned on the Sentry call AND the pino object.
 - [ ] `auth_env_present` is `false` when the scheme's env var is missing or the empty string, `true` for a non-empty value, and the value is never stored anywhere reachable by the emit.
 - [ ] `auth_mode` is `managed`, `api-key`, `unbound` (no engine-run row) or `unknown`; a failing or slow (> 1.5 s) resolver yields `unknown` and the event is still emitted; the real resolver is exercised against a fake `PersistenceClient`, not only injected.
 - [ ] A warm Query that fails again on a later turn emits again once the 5-minute window has passed (the latch resets on every `result`), and not before it.
@@ -534,16 +631,17 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 - [ ] Secret canary (CPO condition, blocking CI): seeded fake key, fake OAuth token, fake workspace path, fake user id, the CLI message body and a canary-shaped authMode string appear in NONE of: the serialised `captureMessage` arguments, the pino line, the mirrored breadcrumb; each canary is asserted present in the inputs first.
 - [ ] `server/agent-auth-failure.ts` accesses nothing from `./observability` at import time (partial `vi.mock` factories in the runner tests must keep working).
 - [ ] The client/server boundary gate (`bash scripts/constraint-gates.sh` in `apps/web-platform`) shows no new violation; `agent-auth-failure.ts` is imported only from `server/`.
-- [ ] CLO conditions: no user/workspace identifier (raw or hashed), IP, text or env content in the event; no `setUser`/`user` on this path; `sendDefaultPii` unset.
+- [ ] CLO conditions: no user/workspace identifier (raw or hashed), IP, text or env content in the event; no `setUser`/`user` on this path; `sendDefaultPii` unset. The dedupe key holds the raw user id in an in-process map only (never emitted, never logged, asserted by a canary on every `logger.*` call); hashing it was considered and rejected because the BYOK lease already holds the raw id in the same heap.
+- [ ] Tenant-forgery and flood bounds hold: a forged plain-assistant block with the exact CLI text emits nothing; the eleventh distinct-user event inside five minutes is suppressed; the emit runs inside `withIsolationScope` with breadcrumbs and user cleared.
 
 ### Quality Gates (run BY NAME on the combined tree; read exit codes and `[FAIL]` lines, not tail lines)
 
 - [ ] `cd apps/web-platform && npx tsc --noEmit` (vitest does not type-check; spawn-env literals and empty-array defaults are the known traps)
-- [ ] `bash scripts/guard-vacuity-floor.test.sh`
+- [ ] `bash scripts/guard-vacuity-floor.test.sh` (smoke: the plan adds no shell suite, so this cannot fail on this diff; it is run because the brief names it, and each new vitest contract test carries its own anti-vacuity floor - the walk finds more than zero files, the negative corpus has at least N entries)
 - [ ] `bash .claude/hooks/grep-q-pipe-guard.test.sh`
 - [ ] `bash plugins/soleur/test/fixture-relative-assert.test.sh`
 - [ ] `cd apps/web-platform && npx vitest run test/repo-wide-containment.test.ts` (any new test that reads outside the app is registered in `test/repo-wide-suites.ts`; none is planned)
-- [ ] `cd apps/web-platform && npx vitest run test/agent-sandbox-seccomp-selector.test.ts test/sdk-query-sites.test.ts test/server/cc-dispatcher-bash-sandbox-mirror.test.ts test/cc-dispatcher-real-factory.test.ts test/agent-runner-unix-deny-wire.test.ts test/sentry-masked-dir-precreate-alert-op-contract.test.ts test/agent-auth-failure-matcher.test.ts test/agent-auth-failure-probe.test.ts test/agent-auth-failure-sentry-path.test.ts test/sentry-agent-auth-failure-alert-op-contract.test.ts` exits 0 (ten explicit files; a bare `npx vitest run` would run the whole suite)
+- [ ] `cd apps/web-platform && npx vitest run test/agent-sandbox-seccomp-selector.test.ts test/sdk-query-sites.test.ts test/server/cc-dispatcher-bash-sandbox-mirror.test.ts test/cc-dispatcher-real-factory.test.ts test/agent-runner-unix-deny-wire.test.ts test/sentry-masked-dir-precreate-alert-op-contract.test.ts test/agent-auth-failure-matcher.test.ts test/agent-auth-failure-probe.test.ts test/agent-auth-failure-tap.test.ts test/agent-auth-failure-sentry-path.test.ts test/sentry-agent-auth-failure-alert-op-contract.test.ts` exits 0 (eleven explicit files; a bare `npx vitest run` would run the whole suite)
 - [ ] `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` from the repo root (T25 pins `**48 \`sentry_alert\` rules**` and `(48 alert rules total)`)
 - [ ] `cd apps/web-platform && bash scripts/constraint-gates.sh` (client/server boundary: no new violation)
 - [ ] From the repo root: `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-25-feat-agent-auth-failure-diagnostic-plan.md` reports 2 guard entries, exit 0
@@ -557,9 +655,9 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 ### Follow-ups and PR body (CPO conditions)
 
 - [ ] Issue A (before merge): "downgrade, then remove, the agent-auth-failure diagnostic alert" (CTO F11). Step 1: within 48 hours of the first recorded real event (its tag tuple recorded on #10455), a PR drops the rule's email action and keeps the Sentry issue and the pino line. Step 2: the rule, its `alert-reference.json` entry, the README counts and entry, both guard tests, the wiring pins, the widened regex and the module header checklist are removed when Issue B merges or 30 days after the first event, whichever comes first. Milestone from `knowledge-base/product/roadmap.md`; labels verified with `gh label list --limit 200` before filing.
-- [ ] Issue B (before merge): root-cause fix and a friendly user-visible error as one P1 pair with a named owner; the matcher must keep running on the raw text before any rewrite.
+- [ ] Issue B (before merge): root-cause fix and a friendly user-visible error as one P1 pair with a named owner; the matcher must keep running on the raw text before any rewrite. The body proposes an escalation for the operator to confirm: if the cause fix has not merged 14 days after the first recorded event, ship the friendly error alone (a schedule call, recorded as an operator row in `decision-challenges.md`, not decided here).
 - [ ] PR body states this does not resolve the outage; includes a "Hypothesis (not a finding)" paragraph: dozens of web-container egress drops to AWS IPs (e.g. 98.91.39.95) and Flagsmith `getIdentityFlags` failures appear in Sentry at the same time; issue WEB-PLATFORM-2K is old noise since 2026-06-10; no causal claim is made.
-- [ ] Post-merge, read-only: while the outage persists, a Sentry query for `feature:agent-auth` within 15 minutes of a Concierge request returns the event; the tuple is recorded on #10455.
+- [ ] Post-merge, read-only, BLOCKING (not advisory): while the outage persists, a Sentry query for `feature:agent-auth` within 15 minutes of a Concierge request returns the event; the tuple is recorded on #10455.
 
 ## Test Scenarios
 
@@ -568,6 +666,9 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 - unit - Given `{type:"assistant", error:"authentication_failed", message:{content:[{type:"text",text:"anything"}]}}`, when matched, then `structured`.
 - unit - Given a single text block `Not logged in · Please run /login`, when matched, then `not_logged_in`; likewise each family member and the `Not logged in. Run claude auth login to authenticate.` variant.
 - unit - Given `Invalid API key format. API key must contain only alphanumeric characters, dashes, and underscores.`, `You are not logged in to GitHub; run gh auth login`, `not logged in · please run /login`, a 300-char message starting with `Not logged in`, a two-block message, a text+`tool_use` message, a `result` with `is_error:false` quoting the text, a `stream_event`, `null`, `42`, then `null` for each.
+- unit - Given a plain assistant block (`model: "claude-sonnet-5-5"`, no `is_api_error_message`) with the exact text `Not logged in · Please run /login`, then `null` and zero emits (forgery); given the same text with `model: "<synthetic>"`, then `not_logged_in`; given the real message with both the text and `error: "authentication_failed"`, then `not_logged_in` (text first).
+- unit - Given eleven distinct users failing inside five minutes, then ten emits and a suppressed counter of one, with no warn log.
+- integration - Given a pre-seeded outer scope (`setUser`, another tenant's breadcrumb), when the probe emits, then the captured event carries neither and the outer scope is unchanged.
 - unit - Given the captured real stream (init with `apiKeySource: "none"`, then the synthetic assistant message, then the result), when observed, then one emit with `cli_key_source = none` and `match_kind = structured`; given init values `ANTHROPIC_API_KEY`, `oauth`, a value outside the list, and no init at all, then `ANTHROPIC_API_KEY`, `oauth`, `unknown`, `unknown`.
 - unit - Given options with `env.ANTHROPIC_API_KEY = ""`, when the context is derived with scheme `api_key`, then `auth_env_present = "false"`; with a non-empty value, `"true"`; the OAuth scheme reads only `CLAUDE_CODE_OAUTH_TOKEN`.
 - unit - Given a `ghToken` or `webEgress` build, then `has_egress = "true"`; Given `sandboxUnixDeny: true` and no egress, then `seccomp_artifact = "unixdeny"`; Given a builder that returned `undefined`, then every derived field is `unknown` and nothing throws.
@@ -588,6 +689,8 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 **Assessment:** Technical forks F1-F9 (including F6b) ruled by the CTO agent on 2026-10-25 and recorded in `knowledge-base/project/specs/feat-one-shot-agent-auth-failure-diagnostic/decision-challenges.md`. CPO advisory: sign-off yes with conditions (carried above). CLO advisory: closed-enum payload is not personal data; no gdpr-gate run needed; conditions carried above. No UI surface (Product/UX gate: none); no ADR or C4 change - the only new edge is the runner-to-Sentry emit that already exists, and no new store, substrate or trust boundary is introduced. No infrastructure beyond one rule in the existing Sentry root (applied by the existing push-to-main workflow, same path as #10892).
 
 **gdpr-gate (plan Phase 2.7, trigger (b) single-user incident threshold; advisory):** this is not legal review. The five v1 checks do not fire: no schema column or migration (Art. 6, Art. 5(1)(e)), no FK to `users` (Art. 17), no new vendor or SDK (Chapter V: Sentry is the existing subprocessor), no special-category column (Art. 9). Nothing Critical, nothing Important. Suggestion only: keep the event free of any identifier (raw or hashed), which is also the CLO condition above.
+
+**Deepen passes recorded:** security-sentinel (1 P0 forgery path, 3 P1), user-impact-reviewer (5 P1), observability-coverage-reviewer (1 P1 layer citation, 3 P2), test-design-reviewer (2 P1 vacuity risks), pattern-recognition-specialist (3 P2 reuse points); each folded in above or recorded as a taste row in `decision-challenges.md`.
 
 **Brainstorm-recommended specialists:** none (no brainstorm preceded this plan).
 
@@ -611,6 +714,7 @@ emit comes from the process that actually observes the CLI's reply, not from a h
 | `frequency_minutes = 40` collides after a sibling merge | Re-check after the last `origin/main` merge; the contract test asserts uniqueness across all root files. |
 | A hand-built `alert-reference.json` entry differs by a byte | `plan_pr` gate prints the expected file; copy it from the `sentry-alert-reference-expected-<run-id>` artifact. |
 | Pino-mirror dedupe drops the tagged capture | Literal `null` first argument on every path, asserted by source parse and by a spy in the real-path test. |
+| The authMode lookup mints a JWT against the user's own `precheck_jwt_mint` ceiling (60/hour) while the user is retrying through an outage | The lookup runs only after a claimed match: at most one per user per tuple per 5 minutes, so at most 12 per hour per user against the 60 ceiling, plus the process-wide cap; the race loser gets `.catch(noop)`; a test pins "no lookup without a claimed match". |
 | Hot-path cost | Fast path checks `type`/`error` only; regex only on single-text-block messages <= 200 chars; DB read only after a claimed slot, at most one per tuple per 5 minutes per user. |
 | Worktree lacks `node_modules` | Phase 0 installs before any `tsc`/`vitest`. |
 
