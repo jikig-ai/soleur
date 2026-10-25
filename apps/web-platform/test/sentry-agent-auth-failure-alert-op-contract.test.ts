@@ -291,7 +291,7 @@ describe("agent-auth-failure — emit site / rule contract", () => {
 
   it("the README is the one decode copy: it names every payload key, cli_key_source value and match_kind, and the .tf points at it", () => {
     const readme = readFileSync(join(sentryDir, "README.md"), "utf8");
-    const section = readme.slice(readme.indexOf("### Diagnostic rule: `agent-auth-failure`"), readme.indexOf("ADR: [ADR-031"));
+    const section = readme.slice(readme.indexOf("## Diagnostic rule: `agent-auth-failure`"), readme.indexOf("ADR: [ADR-031"));
     expect(section.length, "README diagnostic section").toBeGreaterThan(1000);
     const keys = ["runner", "credential_scheme", "auth_env_present", "auth_mode", "cli_key_source", "seccomp_artifact", "has_egress", "sandbox", "outer_wrap", "match_kind"];
     for (const k of keys) expect(section, `payload key ${k}`).toContain(`\`${k}`);

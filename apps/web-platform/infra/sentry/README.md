@@ -49,7 +49,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 - **4 uptime monitors** — vendor-hosted HTTP checks, auto-applied on the same
   push-to-main path.
 
-### Diagnostic rule: `agent-auth-failure` (temporary, #10455 / #10548)
+## Diagnostic rule: `agent-auth-failure` (temporary, #10455 / #10548)
 
 `sentry_alert.agent_auth_failure` (`issue-alerts.tf`, `frequency_minutes = 40`) emails `issue_owners` →
 `ActiveMembers` when the server observes the Claude CLI's auth-failure reply (`Not logged in · Please run /login`)
