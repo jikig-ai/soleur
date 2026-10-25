@@ -3109,8 +3109,9 @@ r9_case() {
       (( nf == nlist )) || { echo "BAD:$((nlist - nf)) of $nlist listing requests lack -f"; return; }
       local nanc; nanc=$(grep '^curl ' "$calls" | grep -c 'v1/volumes/106903269') || nanc=0
       (( nanc == 1 )) || { echo "BAD:$nanc project-identity requests, want exactly 1"; return; }
-      grep '^curl ' "$calls" | grep 'v1/volumes/106903269' | grep -qE -- '(^| )-[A-Za-z]*f[A-Za-z]*( |$)' && { echo "BAD:the project-identity request carries -f, so its HTTP code could not be read"; return; }
-      grep '^curl ' "$calls" | grep 'v1/volumes/106903269' | grep -q -- '--max-time 30' || { echo "BAD:the project-identity request is unbounded"; return; }
+      local anc_req; anc_req=$(grep '^curl ' "$calls" | grep 'v1/volumes/106903269') || anc_req=""
+      grep -qE -- '(^| )-[A-Za-z]*f[A-Za-z]*( |$)' <<<"$anc_req" && { echo "BAD:the project-identity request carries -f, so its HTTP code could not be read"; return; }
+      grep -q -- '--max-time 30' <<<"$anc_req" || { echo "BAD:the project-identity request is unbounded"; return; }
       grep -q '^identity=proven$' "$gho" || { echo "BAD:no identity=proven output"; return; }
       local ntok; ntok=$(grep -c 'AAAAAAAA' "$calls.stdin") || ntok=0
       (( ntok == ncurl )) || { echo "BAD:the token reached curl's stdin config on $ntok of $ncurl requests"; return; }
