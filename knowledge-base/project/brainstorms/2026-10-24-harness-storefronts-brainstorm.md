@@ -77,7 +77,7 @@ Override the hold and write a listing spec for one product. The operator did not
 
 Parked. The operator chose to stop, so these are not research tasks for a listing.
 
-- **(out of scope)** Which sentence may fail in public: "the OS you run inside the coding agent you already use" or "a teammate that runs the company while you are away." The homepage currently says both. The smallest honest copy change (one negative line on getting-started, equal denial, no vendor account) was not chosen.
+- **(out of scope)** Which sentence may fail in public: "the OS you run inside the coding agent you already use" or "a teammate that runs the company while you are away." Neither quoted sentence is on the docs homepage. The smallest honest copy change (one negative line on getting-started, equal denial, no vendor account) was not chosen.
 - **(out of scope)** Whether a skill drop onto a user's Dot or Grok Bot, with no directory submission, is already "creating an App" or "submitting a Plugin".
 - **(out of scope)** Soleur's license against Cursor Marketplace Publisher Terms §3.3 (GPL, AGPL, and LGPL). Unread.
 - **(out of scope)** The SpaceXSI data-processing addendum in full, and which agreement Grok Bot Terms incorporate for consumer X, Teams, and Enterprise.
@@ -92,7 +92,7 @@ Parked. The operator chose to stop, so these are not research tasks for a listin
 
 ### Product
 
-**Summary:** Park Grok Bot and the OpenAI Dot. No-go on "Gemini Duets", on the Gemini Agent Gallery, and on treating Claude Duet as a substitute. A listing does not answer the Phase 4 demand question.
+**Summary:** No-go on a Grok Bot and on the OpenAI Dot. No-go on "Gemini Duets", on the Gemini Agent Gallery, and on treating Claude Duet as a substitute. A listing does not answer the Phase 4 demand question.
 
 ### Legal
 
@@ -106,19 +106,19 @@ Facts the CLO fetched, kept short:
 - Grok Bot Terms (12 October 2026) put agentic actions, including actions the bot starts on its own, on the customer. Human review is required before external communications, financial transactions, data deletion, permission changes, production systems, or material effects on third parties. Bots on one user share one environment. That environment is not a security boundary.
 - OpenAI App Developer Terms (28 September 2026) treat the publisher and OpenAI as separate independent controllers. The publisher is not an OpenAI customer for the published app, so the customer DPA does not attach. The publisher warrants no HIPAA and no PCI, indemnifies OpenAI, and faces a $100 cap. Disconnecting an app does not delete information the dot already obtained.
 - Help Center article 20001530: Pro dots are unavailable in the EEA, Switzerland, and the UK. That is a product limit, not a transfer solution.
-- Relying on `x.ai/bot` or the Dots launch post as a contract or a DPA is prohibited. A Jikigai-operated machine, credential, or purpose for any of these vendors is prohibited. The published corpus gives Jikigai no role only for a provider-operated session on the user's own credentials and purposes. The named example is a Devin Cloud VM. The 13 September 2026 amendment says xAI is not a Jikigai processor. The 16 September 2026 amendment disables Codex customer-content execution pending a later qualification.
+- Relying on `x.ai/bot` or the Dots launch post as a contract or a DPA is prohibited. A Jikigai-operated machine, credential, or purpose for any of these vendors is prohibited. The published corpus gives Jikigai no role only for a provider-operated session on the user's own credentials and purposes. The named example is a Devin Cloud VM. The 13 September 2026 amendment says xAI is not a Jikigai processor. The 16 September 2026 Web Platform amendment keeps Codex customer-content execution disabled on the migration 138 path. It does not change the Codex adapter, and it does not authorize a Dot.
 
 ### Engineering
 
-**Summary:** Park overall. A Grok Bot listing is a no-go. A public Dot ZIP is hookless, so it cannot carry Soleur's PreToolUse ask or defer. A Gemini harness port is a no-go. Do not revive `.gemini/`. Complexity order: a Dot ZIP, then a Grok Bot listing, then a Gemini agent. A Grok Build catalog pull request is smaller than all three and is a different product. `git grep` of these product names in the tree returned no package.
+**Summary:** No-go overall. A Grok Bot listing is a no-go. A public Dot ZIP is hookless, so it cannot carry Soleur's PreToolUse ask or defer. A Gemini harness port is a no-go. Do not revive `.gemini/`. Among options the operator did not choose, a Dot ZIP is smaller than a Grok Bot listing, which is smaller than a Gemini agent. That order is a comparison, not a backlog. A Grok Build catalog pull request is smaller than all three and is a different product, and it was not chosen. `git grep` of these product names in the tree returned no package.
 
 ### Marketing
 
-**Summary:** Public listing is a no-go on all three shelves. A Codex plugin card, which is not a Dot, stays parked until every real harness can have the same plain install card and external use is measured. ADR-274 already forbids announcing support ahead of measurement.
+**Summary:** Public listing is a no-go on all three shelves. A Codex plugin card, which is not a Dot, was not chosen. ADR-274 already forbids announcing support ahead of measurement.
 
 ### Operations
 
-**Summary:** Nothing is submitted. A Gemini partner-sales motion remains a no-go. A $0 listing is still a bad use of founder time when it creates an inbox only the founder reads. Do not open a publisher account. Burden order: Gemini, then an OpenAI ZIP resubmitted on every skill change, then a Grok Bot review form.
+**Summary:** Nothing is submitted. A Gemini partner-sales motion remains a no-go. A $0 listing is still a bad use of founder time when it creates an inbox only the founder reads. Do not open a publisher account. Among options the operator did not choose, a Gemini motion is heavier than an OpenAI ZIP resubmitted on every skill change, which is heavier than a Grok Bot review form. That order is a comparison, not a backlog.
 
 ## Next Steps
 

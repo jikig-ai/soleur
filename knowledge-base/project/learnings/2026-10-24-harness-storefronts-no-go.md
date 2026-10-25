@@ -9,11 +9,11 @@ tags: [brainstorm, no-go, grok-bot, openai-dots, gemini, marketplace]
 
 ## Problem
 
-A brainstorm asked whether Soleur should be published as a Grok Bot, an OpenAI Dot, or a "Gemini Duet" so a customer could run it as an always-on teammate. Those products hold the customer's logins on a vendor computer. Soleur's review gates assume an interactive coding session.
+A brainstorm asked whether Soleur should be published as a Grok Bot, an OpenAI Dot, or "Gemini Duets" so a customer could run it as an always-on teammate. Those products hold the customer's logins on a vendor computer. Soleur's review gates assume an interactive coding session.
 
 ## Solution
 
-The operator chose to record the no-go and stop. The record is `knowledge-base/project/brainstorms/2026-10-24-harness-storefronts-brainstorm.md` and `knowledge-base/project/specs/feat-harness-storefronts/spec.md` (issue #11035, draft PR #11033). No listing, no adapter, and no publisher account.
+The operator chose to record the no-go and stop. The record is `knowledge-base/project/brainstorms/2026-10-24-harness-storefronts-brainstorm.md` and `knowledge-base/project/specs/feat-harness-storefronts/spec.md` (issue #11035, draft PR #11033). No listing, no new adapter, and no publisher account.
 
 The product pattern was already written down. Do not open a new skill for it.
 

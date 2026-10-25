@@ -44,7 +44,7 @@ Those products are always-on teammates with a cloud computer and the customer's 
 
 ### FR1: No Grok Bot listing
 
-Publish no plugin through the Grok Bot submit form or the Cursor marketplace. ADR-274 already rejects that listing as a separate contract.
+Publish no plugin through the Grok Bot submit form. That form is this operator no-go. Publish no plugin through the Cursor marketplace. ADR-274 already rejects that listing as a separate contract.
 
 ### FR2: No OpenAI Dot listing
 
@@ -66,7 +66,7 @@ Cursor Marketplace Publisher Terms and OpenAI App Developer Terms are not accept
 
 ### TR2: No new Jikigai processing role
 
-Add no vendor SDK, no environment variable, and no Soleur endpoint whose purpose is executing these skills inside a customer's Grok Bot, Dot, or Gemini agent. The draft CLO ruling (2026-10-24, not legal advice) prohibits that limb.
+Add no vendor SDK, no environment variable, and no Soleur endpoint whose purpose is executing these skills inside a customer's Grok Bot, Dot, or Gemini agent. The draft CLO ruling (2026-10-24, not legal advice) prohibits the Grok Bot and Dot limb. A Gemini listing is not yet knowable: do not list.
 
 ### TR3: Supported-configuration pages stay silent on these vendors
 
