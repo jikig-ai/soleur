@@ -27,6 +27,21 @@ the row volume bounded, pins in three tests, a new `vector test` suite and two d
 web-2 receive it automatically when the PR merges (existing SSH provisioners), and the Inngest host receives it only through a new bootstrap
 image and a host replace that is a production act needing the owner's typed go. This pipeline stops before merge; it dispatches nothing.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-25. **Agents and gates used:** the Phase 4.6 to 4.13 halts run mechanically (user-brand impact, observability, PAT shapes, encryption posture, guard contract, scope check; downtime and cutover); `soleur:engineering:review:security-sentinel`, `soleur:engineering:review:observability-coverage-reviewer`, `soleur:engineering:review:user-impact-reviewer`; `soleur:gdpr-gate` (advisory, inline); the CTO re-ruling and CPO sign-off from the plan pass.
+
+### Key improvements
+1. Added `## Encryption Posture` (citing the existing `betterstack.logs` ledger row) and `## Downtime & Cutover` (blue-green refused by ADR-100; the config-refresh channel admits only host-executed scripts, so no in-place delivery exists).
+2. The security pass found the terminator's ExecStartPre stderr is unredirected at the env-file source: added a Doppler-token scrub rule and fixture (zero `user_data` bytes), a pin that the stunnel config has no `debug` key, and two admission rows that pin the #7898 refusal path (the `inngest-tls-health` crit row still ships through Source 2).
+3. The user-impact pass tightened the replace go: #10543 fixed is the only hard precondition (the quiesce op does not stop a dashboard send), the replay and loss checks are listed, the margin is re-read on current `main` at dispatch, and the G3 audibility refusal is a named failure branch.
+4. The observability pass: failure modes now cite layers (vector, workflow run log), the discoverability probe is unit-scoped, the host's own 5-minute probe is measured (a both-counts-above-0 `Connection closed` row every 5 minutes is baseline, not a fault), and the runbook decode gains the `tls_8443_packets` delta.
+
+### New considerations discovered
+- vector.toml is also a baked carrier of the web app image: a web host born between this merge and the next app image publish fails its boot-time hash verify (existing hosts unaffected).
+- The live Inngest host runs image v1.1.57 and the next replace carries three `cloud-init-inngest.yml` commits and two image generations; `user_data` headroom is 256 B offline.
+- No synchronous verb reads the terminator unit's state: recorded as an accepted residual.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Brief or runbook claim | Reality (verified 2026-10-25) | Plan response |
@@ -76,7 +91,7 @@ buy property 1. The `/hooks/inngest-tls-handshake` call repeats the gate's reque
   127.0.0.1:8288: Connection refused (111)`, `LOG3 No more addresses to connect`, `LOG5 Connection reset: 0 byte(s) sent to TLS, 0 byte(s) sent to
   socket`. Upstream accepts then closes with no reply (curl rc 52) logs `LOG5 Connection closed: 0 byte(s) sent to TLS, 78 byte(s) sent to socket`.
   A plain-HTTP client logs `LOG3 SSL_accept ... http request`; a client rejecting the certificate logs `LOG3 SSL_accept ... tlsv1 alert unknown ca`.
-  Startup logs 7 `LOG5` lines. The level is in the message text only. The container has no journald, so the line shapes are measured but the journald PRIORITY is derived (above). Not measured: the host's stunnel build (Ubuntu package), so the filter fails open.
+  The host's own 5-minute `tls-health` probe (`echo | openssl s_client` to its own private IP; measured in the same container, scratch `stunnel-probe.out`) logs the same four-line shape as a healthy request, ending in `LOG5 Connection closed: <n> byte(s) sent to TLS, 1 byte(s) sent to socket` (both counts above 0, the one byte being the echoed newline), and with the upstream down logs the `LOG3` refusal lines; so a healthy host emits one both-counts-above-0 `Connection closed` row every 5 minutes, which the runbook must name as baseline, not as a fault. Startup logs 7 `LOG5` lines. The level is in the message text only. The container has no journald, so the line shapes are measured but the journald PRIORITY is derived (above). Not measured: the host's stunnel build (Ubuntu package), so the filter fails open.
 - `tls-health` rows, Better Stack, 2026-10-24T13:33Z to 2026-10-25T13:27Z: one boot (`94b7cf33`), `unit=active nrestarts=0 listener=1`, served and
   Terraform certificate fingerprints equal, `legacy_8288_packets` 10,867 to 47,235, `tls_8443_packets` constant at 21. All rows show `fetch_rc=93`
   (the Doppler key fetch in the unit's ExecStartPre failed at the last start; `die()` falls back to existing material and exits 0). Observed, not
@@ -98,7 +113,7 @@ buy property 1. The `/hooks/inngest-tls-handshake` call repeats the gate's reque
 
 **Sweep of what the unit can emit (leak check, per the off-box journal learning).** `stunnel4` lines carry timestamps, the config path, peer
 addresses (the web hosts' private IPs and the host's own), byte counts and TLS error strings; startup at `LOG5` prints no key or certificate material.
-The ExecStartPre script `soleur-inngest-tls fetch` writes its return code to a file and discards only doppler's stderr; stderr from its other commands (`openssl`, `mktemp`, `chgrp`, `chown`, `mv`) does reach the journal and carries paths and openssl error text, not secret values (the sourced env file's token charset is validated, `cloud-init-inngest.yml` around line 2346). The shipped rows
+The ExecStartPre script `soleur-inngest-tls fetch` writes its return code to a file and discards only doppler's stderr (the `. /etc/default/inngest-doppler` source in its `get()` is not redirected, unlike the same source in the host's other script at `cloud-init-inngest.yml` line 603 which carries `2>/dev/null`; a malformed env line would echo the offending text, and the Doppler token is in that file, so the plan adds a scrub rule for the Doppler token shape); stderr from its other commands (`openssl`, `mktemp`, `chgrp`, `chown`, `mv`) does reach the journal and carries paths and openssl error text, not secret values (the sourced env file's token charset is validated, `cloud-init-inngest.yml` around line 2346). The shipped rows
 traverse `pii_scrub_drop_userdata`, `pii_scrub_structured` and `pii_scrub_string` like every other journald row.
 
 ## Hypotheses
@@ -132,7 +147,8 @@ by the decode table's `connect` row and the `tls=3 verify=0` fields, which place
 | Files to Edit 1: `apps/web-platform/infra/vector.toml` (Source 1/2 unit match, filter transform, wiring) | "a `vector.toml` Source 1/2 change" | asked |
 | The fail-open message-text filter inside Files to Edit 1 | asks 1 and 2 | inferred - justification: with the bare unit match every stunnel line ships (all PRIORITY 6, measured), which could re-trigger the 2026-08-14 ingest refusal that blinded the whole fleet; CTO T2 rules the filter |
 | Files to Edit 2: `apps/web-platform/test/infra/vector-admission.test.sh` | "update `apps/web-platform/test/infra/vector-admission.test.sh`, which pins both lists" (runbook, quoted in the brief's reading) and ask 2 | inferred - justification: the suite pins both lists, so the edit reds it; the partition contract rots without the rows |
-| Files to Edit 3: `apps/web-platform/test/infra/inngest-step-524-alert.test.sh` | ask 2 | inferred - justification: it pins `include_units = ["inngest-server.service"]` and the `inputs` list verbatim (line 275) and would red on the change |
+| Files to Edit 3: `apps/web-platform/test/infra/vector-pii-scrub.test.sh` and the Doppler-token scrub rule in `vector.toml` | ask 1 | inferred - justification: shipping the terminator unit's journal for the first time exposes its ExecStartPre stderr (an unredirected source of the env file that holds the Doppler token) to a sink, and the repo's own `hr-weigh-every-decision-against-target-user-impact` framing makes a credential reaching Better Stack a brand-level exposure; the rule costs no `user_data` bytes |
+| Files to Edit 3b: `apps/web-platform/test/infra/inngest-step-524-alert.test.sh` | ask 2 | inferred - justification: it pins `include_units = ["inngest-server.service"]` and the `inputs` list verbatim (line 275) and would red on the change |
 | Files to Create 1 and 2: `scripts/vector-terminator-filter.test.sh` and `apps/web-platform/infra/vector-terminator-filter.test.toml` | ask 1 | inferred - justification: `vector validate --no-environment` accepts VRL that does not compile (the workflow header says so), and a bad filter would first reach the web hosts at merge |
 | Files to Edit 4: `.github/workflows/validate-vector-config.yml` | ask 1 | inferred - justification: the new `vector test` suite is only blocking if this workflow runs it and its path filter covers the new files |
 | Files to Edit 5: `knowledge-base/engineering/architecture/diagrams/model.c4` (one clause on the `inngest -> betterstack` edge) | ask 4 | inferred - justification: the edge description enumerates what is shipped from the Inngest node and would be incomplete; the C4 mandate makes the edit part of this lifecycle |
@@ -143,7 +159,7 @@ by the decode table's `connect` row and the `tls=3 verify=0` fields, which place
 ### Split Assessment
 
 - Subsystems touched: 3 - `apps/web-platform` (infra config and tests), `.github` (one workflow path filter), `knowledge-base` (runbook, ADR, C4)
-- Planned files: 10 | Estimated changed lines: 380
+- Planned files: 11 | Estimated changed lines: 420
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR. The two sequencing items the CTO rules out of scope (the `user_data` trim and the `fetch_rc=93` fix) are separate PRs because they edit `cloud-init-inngest.yml`.
 
@@ -151,7 +167,8 @@ by the decode table's `connect` row and the `tls=3 verify=0` fields, which place
 
 1. `apps/web-platform/infra/vector.toml` - Source 1 `include_units`, Source 2 `exclude_units`, new `inngest_terminator_filter` transform, `pii_scrub_drop_userdata` `inputs`, header comments (no dollar-variable text).
 2. `apps/web-platform/test/infra/vector-admission.test.sh` - the S1 and S2 unit pins (lines ~294 to 299, which also carry text naming `inngest-server.service` alone; sweep the mirror and `sinks.betterstack` pins in the same block), and literal terminator corpus rows at PRIORITY 0, 3, 4, 5 and 6, plus two rows that pin the #7898 refusal path: the health unit's refusal record (identifier `inngest-tls-health`, unit `soleur-inngest-tls-health.service`, PRIORITY 2) must be admitted by exactly Source 2, because `exclude_units` matches the exact unit name and the health unit is a different unit from the terminator (verified: `logger -p user.crit -t inngest-tls-health` runs only from `soleur-inngest-tls-health.service`, `cloud-init-inngest.yml` lines 425 to 443 and 472 to 479, and `inngest-host.test.sh` line 916 pins that there is no other `logger` call), and the terminator unit's own PRIORITY 2 record must be admitted by exactly Source 1.
-3. `apps/web-platform/test/infra/inngest-step-524-alert.test.sh` - the line-275 shape pin (two units) and the `inputs` regex, which must become a `tomllib` parse that asserts the filter's `inputs` and `pii_scrub_drop_userdata`'s `inputs` separately (the old regex would pass vacuously on the filter's own `inputs = ["inngest_journald"]` line), plus its mutation row V1 (the 524 rows still ship through Source 1; re-run `scripts/probe-inngest-524-count.sh` through Better Stack per the comment at that pin and record `unit_rows`).
+3. `apps/web-platform/test/infra/vector-pii-scrub.test.sh` - one fixture for the Doppler-token scrub rule (the suite already runs `pii_scrub_string` fixtures).
+3b. `apps/web-platform/test/infra/inngest-step-524-alert.test.sh` - the line-275 shape pin (two units) and the `inputs` regex, which must become a `tomllib` parse that asserts the filter's `inputs` and `pii_scrub_drop_userdata`'s `inputs` separately (the old regex would pass vacuously on the filter's own `inputs = ["inngest_journald"]` line), plus its mutation row V1 (the 524 rows still ship through Source 1; re-run `scripts/probe-inngest-524-count.sh` through Better Stack per the comment at that pin and record `unit_rows`).
 4. `.github/workflows/validate-vector-config.yml` - run the new suite (blocking, `REQUIRE_VECTOR_TEST=1`), add the two new files to both `paths:` filters (they list files, not globs), and check the job's `timeout-minutes: 5` still fits the added step.
 5. `knowledge-base/engineering/architecture/diagrams/model.c4` - one clause on the `inngest -> betterstack` edge.
 6. `knowledge-base/engineering/operations/runbooks/inngest-server.md` - the `request` row and the paragraph under the decode table.
@@ -331,24 +348,24 @@ error_reporting:
   fail_loud: LOG3 rows (s_connect refused, No more addresses to connect, SSL_accept errors) and Connection reset rows are always kept by the filter
 failure_modes:
   - mode: the filter's wording does not match the host's stunnel build and over-ships
-    detection: a group-by-message-prefix read over the first hour after the resume (a dropped class present means the wording differs), then the unit row count over the first 24 hours before any flip, both through betterstack-query.sh, compared with the 400 per day budget; the 24-hour clock starts at the first startup row of the new boot_id and its baseline excludes that boot's startup rows
+    detection: layer 3 (vector, the journald shipper) is the producer: a group-by-message-prefix read over the first hour after the resume (a dropped class present means the wording differs), then the unit row count over the first 24 hours before any flip, both through betterstack-query.sh, compared with the 400 per day budget; the 24-hour clock starts at the first startup row of the new boot_id and its baseline excludes that boot's startup rows
     alert_route: the executing session reads it after the replace and fixes the filter before the flip go is asked
   - mode: vector rejects the new config on web-1 or web-2 at merge
-    detection: the provisioner prints FATAL and restores vector.toml.prev (the apply fails loudly); Better Stack shows no rows for that host_name after the apply
-    alert_route: the failed merge apply run and the existing host-dark Better Stack checks
+    detection: workflow run log of the merge apply (the provisioner prints FATAL and restores vector.toml.prev, so the apply fails loudly), then vector rows for that host_name resume after the apply
+    alert_route: the failed merge apply run (workflow run log) and the existing host-dark Better Stack checks on the vector stream
   - mode: no terminator rows after the replace
-    detection: zero startup row for the new boot_id within 30 minutes of bootstrap-done, read through betterstack-query.sh
-    alert_route: the executing session; the stop rule in the runbook stays in force
+    detection: vector rows of the new boot_id (the host's tls-health stage rows ride the phone-home path and not vector, and say the unit is up; no soleur-inngest-tls.service vector row within 30 minutes of bootstrap-done then means vector or the filter, not the unit); no synchronous verb reads the terminator unit's state (the inngest-tls-handshake webhook response only repeats the gate's request), recorded as an accepted residual in the runbook
+    alert_route: the executing session reads the vector rows and the tls-health rows and hands off to the owner; the stop rule in the runbook stays in force
   - mode: Better Stack ingest refused for quota (HTTP 402) after a flip
-    detection: the existing ingest-402 detection, an independent signal that does not ride the blocked sink (the self-gate and deploy-state side of the flip, and the host-dark Better Stack checks), and the unit row count over 10,000 per day
+    detection: an independent signal that does not ride the blocked sink: the workflow run log of scheduled-zot-restart-loop.yml, which runs scripts/betterstack-ingest-probe.sh and is read for an ::error:: line when ingest is refused (confirm the exact line at work time by reading that script), plus the unit row count over 10,000 per day from vector
     alert_route: the second drop in the CTO ruling (Connection closed lines with both byte counts above 0), never the 0-byte shapes
 logs:
   where: Better Stack Logs source 2457081 (host_name soleur-inngest-prd, unit soleur-inngest-tls.service)
   retention: 90 days (measured on the source 2026-09-04 per the expenses ledger)
 discoverability_test:
-  command: bash -c 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep "Connection closed" --limit 3'
-  expected_output: Connection closed
-  credentials_required: BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD in Doppler soleur/prd_terraform (read-only ClickHouse connection) - no unauthenticated probe verifies that rows reached the warehouse
+  command: bash -c 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep soleur-inngest-tls.service --limit 3'
+  expected_output: soleur-inngest-tls.service
+  credentials_required: BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD in Doppler soleur/prd_terraform (read-only ClickHouse connection) - no unauthenticated probe verifies that rows reached the warehouse; before the replace the command prints nothing by design (the live host runs image v1.1.57), so preflight skips it as declared
 ```
 
 ## Encryption Posture
@@ -453,7 +470,8 @@ Run each suite alone with stdin from `/dev/null`; each must go RED for the inten
 2. Source 2: `exclude_units` carries the same two units (excludes win; the two lists move together; `vector.service`'s CRIT path is unchanged).
 3. New transform `[transforms.inngest_terminator_filter]`: `type = "filter"`, `inputs = ["inngest_journald"]`, `condition` an INFALLIBLE VRL drop-list that fails open. A Vector filter treats a runtime error in its condition as false and DROPS the event, and `vector validate --no-environment` does not compile VRL, so every field read carries a fallback: `unit = string(._SYSTEMD_UNIT) ?? ""` and `msg = string(.message) ?? ""`, then a pure boolean: pass when `unit` is not `soleur-inngest-tls.service`; pass when `msg` is empty (absent or not a string); otherwise drop only when `msg` contains (via `contains()` with literal strings, so `[inngest]` needs no escaping) `Service [inngest] accepted connection from`, `s_connect: connected 127.0.0.1:8288` or `Service [inngest] connected remote server from`. Everything else passes. No `$VAR` text in comments.
 4. Rewire `pii_scrub_drop_userdata` `inputs`: replace `"inngest_journald"` with `"inngest_terminator_filter"`.
-5. Comments: record the budget (400 per day before a flip, 8,000 after), the second-drop rule, that PRIORITY cannot split the lines (all PRIORITY 6) and that the stunnel wording is measured on 5.72 only.
+5. `pii_scrub_string` gains one rule for the Doppler token shape (`dp.` followed by a two-to-five letter kind, a dot and a long token body, replaced with a redaction marker), with a fixture in `vector-pii-scrub.test.sh`: the first time this unit's `ExecStartPre` stderr reaches a sink, a parse error of the env file that holds `DOPPLER_TOKEN` would otherwise ship it (the token charset guard at `cloud-init-inngest.yml` around line 2346 makes this unlikely, not impossible, and the rule costs no `user_data` bytes). No `$VAR` text in the rule's comment.
+6. Comments: record the budget (400 per day before a flip, 8,000 after), the second-drop rule, that PRIORITY cannot split the lines (all PRIORITY 6) and that the stunnel wording is measured on 5.72 only.
 
 ### Phase 3: validate
 
@@ -465,7 +483,7 @@ through Better Stack and record `unit_rows` (the 524 rows must still ship).
 
 ### Phase 4: docs
 
-1. Runbook, `request` row and the paragraph under the decode table (and one line: the A1 row and "Replace duration" still say #10542 blocks the replace go; #10542 is closed, so correct that line): conditional wording keyed to the image tag, the three decodes (upstream refused; closed with no reply; no per-connection row), the line "healthy `accepted connection`, `s_connect: connected` and `connected remote server` lines are omitted by design", the budget and the 24-hour check. Keep the stop rule: never re-flip on `phase=request` alone, every flip needs the owner's per-command go. Do NOT write "no stunnel line means it never reached the terminator" (P1 in `decision-challenges.md`). Replace "No issue tracks it" with the tracker number only once one exists; reword "no cause is readable" only after the first post-replace row shows terminator lines.
+1. Runbook, `request` row and the paragraph under the decode table (and one line: the A1 row and "Replace duration" still say #10542 blocks the replace go; #10542 is closed, so correct that line): conditional wording keyed to the image tag, the three decodes (upstream refused; closed with no reply; no per-connection row), the line "healthy `accepted connection`, `s_connect: connected` and `connected remote server` lines are omitted by design", the 5-minute baseline `Connection closed` row with both counts above 0 (the host's own health probe: not a fault), the `tls_8443_packets` delta across the gate window from the shipped `tls-health` rows (separates "never reached :8443 from outside" from "reached and still open"), that the dropped `accepted connection` line was the peer-bearing one so a kept close or reset row is attributed by timestamp, the budget and the 24-hour check, and the accepted residual that no synchronous verb reads the terminator unit's state. Keep the stop rule: never re-flip on `phase=request` alone, every flip needs the owner's per-command go. Do NOT write "no stunnel line means it never reached the terminator" (P1 in `decision-challenges.md`). Replace "No issue tracks it" with the tracker number only once one exists; reword "no cause is readable" only after the first post-replace row shows terminator lines.
 2. ADR-294 addendum (dated 2026-10-25, one paragraph).
 3. `model.c4`: one clause on the `inngest -> betterstack` edge; run the three C4 tests.
 4. Run `python3 scripts/lint-infra-no-human-steps.py` over the changed docs and plan.

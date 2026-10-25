@@ -24,7 +24,8 @@ Constraints in force: rebase onto `origin/main`, never merge main in; no git sta
 - 2.2 Source 2 `exclude_units` gains the same unit.
 - 2.3 Add `[transforms.inngest_terminator_filter]` (infallible VRL, fail-open drop-list on the three healthy-request prefixes: `string(.message) ?? ""`, `string(._SYSTEMD_UNIT) ?? ""`, `contains()` with literal strings).
 - 2.4 Rewire `pii_scrub_drop_userdata` `inputs` to the filter output.
-- 2.5 Comments: budget (400 per day before a flip, 8,000 after), second-drop rule, PRIORITY cannot split the lines, wording measured on stunnel 5.72 only; no dollar-variable text.
+- 2.5 `pii_scrub_string`: one rule for the Doppler token shape, with a fixture in `vector-pii-scrub.test.sh` (the terminator's ExecStartPre stderr is unredirected at its env-file source).
+- 2.6 Comments: budget (400 per day before a flip, 8,000 after), second-drop rule, PRIORITY cannot split the lines, wording measured on stunnel 5.72 only; no dollar-variable text.
 
 ## Phase 3: validate (each alone)
 
@@ -37,7 +38,7 @@ Constraints in force: rebase onto `origin/main`, never merge main in; no git sta
 
 ## Phase 4: docs
 
-- 4.1 Runbook: the `request` row and the paragraph under the decode table (conditional on image tag; three decodes; omitted lines; budget; 24-hour check; stop rule kept).
+- 4.1 Runbook: the `request` row and the paragraph under the decode table (conditional on image tag; three decodes; omitted lines; the 5-minute baseline `Connection closed` row; the `tls_8443_packets` delta; budget; 24-hour check; stop rule kept; accepted residual: no synchronous verb reads the unit's state).
 - 4.2 ADR-294 addendum (dated 2026-10-25, one paragraph).
 - 4.3 `model.c4`: one clause on the `inngest -> betterstack` edge; run `c4-code-syntax`, `c4-render` and `c4-count-parity`.
 - 4.4 `python3 scripts/lint-infra-no-human-steps.py` over the changed docs.
