@@ -835,6 +835,7 @@ describe("Watchdog dispatch clock parity (#8495)", () => {
         "scheduled-inngest-health",
         "scheduled-zot-restart-loop",
         "scheduled-inngest-probe-heartbeat",
+        "scheduled-betterstack-incident-mirror",
       ]),
     );
     expect(checked).toBe(WATCHDOG_DISPATCH_TABLE.length);
