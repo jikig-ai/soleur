@@ -204,11 +204,15 @@ if [ "$sub" = detect ]; then
     (cd "$src" && find . -type f ! -name .soleur-sim-marker -print0 | sort -z | tr '\000' '|') > "$d/nodiff.$n"
     # the directory and every file in it, as modes (the re-scan blobs are private)
     { ls -ld "$src" | cut -c1-10; find "$src" -type f -exec ls -l {} + | cut -c1-10; } > "$d/nodiffperm.$n" 2>/dev/null
+    [ -f "$src/.soleur-sim-marker" ] && echo yes > "$d/nodiffmarker.$n"
   fi
+  if [ -n "${GL_REC_PRINT_DETECT-}" ]; then printf '%s\n' "$GL_REC_PRINT_DETECT" >&2; fi
   if [ -n "${GL_REC_SLEEP_DETECT-}" ]; then sleep "$GL_REC_SLEEP_DETECT" & echo "$!" > "$d/sleep.pid"; wait "$!"; fi
   exit "${GL_REC_DETECT_RC:-0}"
 fi
 [ "$sub" = git ] || exit 0
+# GL_REC_PRINT: a line the real gitleaks would log to stderr (the "stderr is not empty" signature, an ERR line, a WRN line)
+if [ -n "${GL_REC_PRINT-}" ]; then printf '%s\n' "$GL_REC_PRINT" >&2; fi
 if [ -n "${GIT_INDEX_FILE-}" ]; then
   [ -f "$GIT_INDEX_FILE" ] && { cp "$GIT_INDEX_FILE" "$d/idx.$n"; echo yes > "$d/idxexists.$n"; }
   [ -d "${GIT_OBJECT_DIRECTORY-/nonexistent}" ] && echo yes > "$d/objexists.$n"
@@ -3965,6 +3969,15 @@ _t_sim_checkattr() {
   got=$(cat "$SIM_REC"/nodiff.* 2>/dev/null || true)
   exp=$(printf '%s\0' './nl'$'\n''name.txt' './qu"ote.txt' './sp ace.txt' './unset.txt' | sort -z | tr '\0' '|')
   _t "X6f ... the driver path is not re-scanned" "got='${got//$'\n'/\\n}'" test "$got" = "$exp"
+  git -C "$R" config --unset diff.foo.cachetextconv
+  for k in command binary; do
+    git -C "$R" config "diff.foo.$k" true
+    _sx "X6g the driver foo configured $k -> allow" "$R" "git commit -m x" allow
+    got=$(cat "$SIM_REC"/nodiff.* 2>/dev/null || true)
+    exp=$(printf '%s\0' './nl'$'\n''name.txt' './qu"ote.txt' './sp ace.txt' './unset.txt' './valued.txt' | sort -z | tr '\0' '|')
+    _t "X6h ... the driver path is re-scanned ($k)" "got='${got//$'\n'/\\n}'" test "$got" = "$exp"
+    git -C "$R" config --unset "diff.foo.$k"
+  done
 }
 
 # T19: the CI fail-on-skip contract, asserted against the epilogue's REAL BYTES.
@@ -4097,6 +4110,16 @@ _t_fr3_hook() {
   v=$(cat "$SIM_REC"/nodiffperm.* 2>/dev/null || true)
   _t "R3 A6b ... the re-scan directory and every blob in it were private (0700 / 0600): '$v'" "perm=$v" \
     test -n "$v" -a "$(printf '%s' "$v" | tr ' ' '\n' | grep -vcE '^(drwx------|-rw-------|)$')" = 0
+  _t "R3 A6a2 ... the re-scan directory carried the sweep marker while it existed" "" _cat_has nodiffmarker yes
+  d=$(mktemp -d /dev/shm/fr3t.XXXXXX 2>/dev/null) || d=""
+  if [[ -n "$d" ]]; then
+    SIM_ENV=("TMPDIR=$d")
+    _sx "R3 A7i a PLAIN commit with -diff staged files (the re-scan directory is made) and TMPDIR under /dev/shm -> allow" "$D" "git commit -m x" allow
+    _t "R3 A7j ... no FATAL, exit status 0, and the re-scan really ran" "rc=$RC err=${ERR:0:100}" test "$RC" -eq 0 -a -n "$(ls "$SIM_REC"/nodiff.* 2>/dev/null)" -a "$([[ "$ERR" != *FATAL* ]] && echo y)" = y
+    SIM_ENV=(); rmdir "$d" 2>/dev/null || true
+  else
+    _report "R3 A7i (n/a: no writable /dev/shm on this host)" ok; _report "R3 A7j (n/a)" ok
+  fi
   hk="$SUITE_TMP/sweep2"; assert_fixture_dir "$hk"; rm -rf "$hk"; mkdir -p "$hk"
   mkdir "$hk/gitleaks-nodiff-oldmark"; : > "$hk/gitleaks-nodiff-oldmark/.soleur-sim-marker"; touch -t 200101010000 "$hk/gitleaks-nodiff-oldmark"
   mkdir "$hk/gitleaks-nodiff-nomark"; touch -t 200101010000 "$hk/gitleaks-nodiff-nomark"
@@ -4105,6 +4128,25 @@ _t_fr3_hook() {
   SIM_TMP_FIXED=""
   _t "R3 A6d ... an OLD gitleaks-nodiff-* directory carrying the marker was swept" "left: $(ls -A "$hk")" test ! -e "$hk/gitleaks-nodiff-oldmark"
   _t "R3 A6e ... one without the marker was kept" "" test -d "$hk/gitleaks-nodiff-nomark"
+
+  # A2 (stub tier, CTO row 48): what gitleaks logs decides, not only what it exits with
+  SIM_ENV=("GL_REC_PRINT=2:34PM ERR failed to scan Git repository error=\"stderr is not empty\"")
+  _sx "R3 A2k a gitleaks that logs the 'stderr is not empty' signature and exits 0 -> deny, nothing was scanned (plain)" "$Cn" "git commit -m x" deny "nothing was scanned"
+  _cause_is "R3 A2l ... cause scan-error" scan-error
+  _sx "R3 A2m ... and the simulated form" "$Cn" "git add -A && git commit -m x" deny "nothing was scanned"
+  SIM_ENV=("GL_REC_PRINT=2:34PM stderr is not empty (the signature without an ERR level)")
+  _sx "R3 A2n the signature alone, without an ERR line -> deny" "$Cn" "git commit -m x" deny "nothing was scanned"
+  SIM_ENV=("GL_REC_PRINT=2:34PM ERR [git] fatal: bad numeric config value 'x' for 'core.abbrev'")
+  _sx "R3 A2o an ERR line alone, without the signature -> deny" "$Cn" "git commit -m x" deny "nothing was scanned"
+  SIM_ENV=("GL_REC_PRINT=2:34PM WRN scanned ~0 bytes (0)")
+  _sx "R3 A2p control: a WRN line only is no failure -> allow" "$Cn" "git commit -m x" allow
+  SIM_ENV=("GL_REC_PRINT_DETECT=2:34PM ERR failed to scan error=\"stderr is not empty\"")
+  _sx "R3 A2q the -diff re-scan logging an ERR -> deny nothing was scanned" "$D" "git commit -m x" deny "nothing was scanned"
+  SIM_ENV=()
+  # an unreadable repository named by the COMMAND (cd <bad repo> && git commit) is a deny even when the hook's own cwd is fine
+  local Bad
+  Bad=$(_mk_leaky_repo clean); git -C "$Bad" config core.abbrev bogus
+  _sx "R3 A2r 'cd <repository git cannot read> && git commit' from a clean repository -> deny" "$Cn" "cd $Bad && git commit --allow-empty -m x" deny "nothing was scanned"
 
   # A8: the perl bound's child resets the wrapper's handlers before exec and the kill is guarded (bounded, not a group kill)
   bound=$(sed -n "/^read -r -d '' CIS_BOUND_PL <<'PL'/,/^PL\$/p" "$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh")
