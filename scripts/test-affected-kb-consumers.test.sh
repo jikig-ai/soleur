@@ -281,7 +281,8 @@ def covers(edge, p):
         e = edge[1:]
         if e.startswith("glob:"):
             # Third edge kind (#9813) — malformed-shape invariant: this predicate
-            # classifies the same shapes as the mint arm in _affected_add_edge, the
+            # classifies the same shapes as the mint arms in _affected_add_edge and
+            # _affected_add_declared_edge, the
             # in-flight revalidation in _diff_edge_hit, and the census arm in
             # lint-orphan-test-suites.sh (GLOBENT in the registration-only
             # classifier is a deliberate superset — admission can only widen). A
