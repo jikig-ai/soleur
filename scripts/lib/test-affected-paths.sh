@@ -2715,6 +2715,7 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
 # and READ the workflow run block for seam/wf_check rows — reads no name-stem derives.
 AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
   ".github/workflows/scheduled-inngest-probe-heartbeat.yml"
+  "apps/web-platform/server/watchdog-dispatch-table.ts"
   "scripts/inngest-dedicated-host-classify.sh"
   "scripts/inngest-probe-heartbeat-feeder.sh"
   "scripts/inngest-probe-heartbeat-feeder.test.sh"
@@ -2763,6 +2764,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
 # its other live-repo references are name-greps carried as accept rows (each suite's own
 # in-file roster check is the selecting self-check for producer edits).
 AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
+  "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
   "plugins/soleur/test/lib/git-corrupt-graph.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
@@ -3023,10 +3025,6 @@ AFFECTED_CLAUDE_HOOKS_SHIP_RUNBOOK_SSH_GATE_TEST_SH_PATHS=(
   "scripts/lib/rule-metrics-constants.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
-AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PR_BATTERY_GATE_SAVING_9323_PATHS=(
-  "scripts/lib/test-affected-paths.sh"               # THIS FILE
-  "scripts/lib/test-relevance-paths.sh"
-)
 AFFECTED_CLAUDE_HOOKS_BROWSER_SNAPSHOT_CREDENTIAL_GUARD_TEST_SH_PATHS=(
   "plugins/soleur/hooks/browser-snapshot-credential-guard.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
@@ -3095,10 +3093,6 @@ AFFECTED_SCRIPTS_CONTENT_PUBLISHER_PATHS=(
   "plugins/soleur/skills/community/scripts/linkedin-community.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
-AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
-  "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
-  "scripts/lib/test-affected-paths.sh"               # THIS FILE
-)
 AFFECTED_SCRIPTS_GIT_DATA_REBOOT_EVIDENCE_LANDED_8210_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
@@ -3108,10 +3102,6 @@ AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
   "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/betterstack-sources.sh"
   "scripts/lib/git-data-rotate-stamp.sh"
-  "scripts/lib/test-affected-paths.sh"               # THIS FILE
-)
-AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
-  "apps/web-platform/server/watchdog-dispatch-table.ts"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
