@@ -1762,7 +1762,7 @@ resource "sentry_alert" "masked_dir_precreate_failed" {
 # TEMPORARY DIAGNOSTIC. It exists to find the cause of the outage, not to page on a steady state. Lifecycle: the
 # email action is dropped within 48 hours of the first recorded real event (tag tuple recorded on #10455) and the
 # rule is removed when the root-cause fix merges or 30 days after the first event, whichever comes first. The
-# removal checklist is in the header of server/agent-auth-failure.ts.
+# removal checklist is in the header of server/agent-auth-mode.ts.
 #
 # GROUPING: the message is constant, so every event shares ONE Sentry issue and the 40-minute re-notify bounds the
 # email volume; the per-user 5-minute debounce and the process-wide cap (10 events per 5 minutes) bound the events.
@@ -1770,31 +1770,11 @@ resource "sentry_alert" "masked_dir_precreate_failed" {
 # resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
 # are carried so a later diagnostic op under feature=agent-auth cannot notify by accident.
 #
-# DECODE KEY (read the tags of the event; this table is also in README.md):
-#   auth_env_present=false                         the built agent env had no usable credential variable: look at the
-#                                                  lease value or scheme, not at the CLI.
-#   auth_env_present=true, cli_key_source=none     the variable was in the options but the CLI process resolved no
-#                                                  credential: a spawn or env hand-off problem (read outer_wrap,
-#                                                  sandbox, seccomp_artifact next).
-#   cli_key_source=ANTHROPIC_API_KEY or oauth      the CLI saw a credential and the API refused it: invalid or revoked
-#                                                  key, or an account state. UNVERIFIED locally: only `none` has a
-#                                                  captured fixture.
-#   cli_key_source=unknown                         the init message was not seen or carried a value outside the closed
-#                                                  list: no conclusion from this field.
-#   cli_key_source=project|user|apiKeyHelper|org   tenant-influenced (a workspace setting selects the source): one
-#                                                  tenant can legitimately trigger this event.
-#   auth_mode=unbound | unknown                    no engine-run row for the conversation / the lookup failed or timed
-#                                                  out: no conclusion from this field.
-#   seccomp_artifact, sandbox, has_egress          posture dimensions for comparing runs where the failure appears and
-#                                                  where it does not (for example the agent-sandbox-unix-deny flag OFF
-#                                                  vs ON). has_egress is a build-time flag, not a reachability result.
-#   match_kind                                     not_logged_in = the CLI saw no credential; invalid_api_key,
-#                                                  oauth_token_revoked, session_expired = a credential was presented
-#                                                  and refused or lapsed; structured = the SDK's own
-#                                                  `authentication_failed` code with no recognised text.
-# Distinct frequency_minutes = 40 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-39,60-63,120,240,
-# 1440-1442; 39 is masked_dir_precreate_failed); dedup keys on action shape + action_match + filter_match +
-# frequency, not conditions. The value is provisional until the last merge of origin/main: re-check it then.
+# DECODE KEY: README.md ("Diagnostic rule: agent-auth-failure") is the one copy of the tag decode table, the responder
+# steps and the read commands.
+# Distinct frequency_minutes = 40 avoids Sentry POST-time exact-duplicate dedup (`grep -h frequency_minutes *.tf` lists
+# the values in use); dedup keys on action shape + action_match + filter_match + frequency, not conditions. The value is
+# provisional until the last merge of origin/main: re-check it then.
 # Events carry only ten closed-enum values: no key material, env value, message body, user or workspace id, or path.
 resource "sentry_alert" "agent_auth_failure" {
   organization      = var.sentry_org
