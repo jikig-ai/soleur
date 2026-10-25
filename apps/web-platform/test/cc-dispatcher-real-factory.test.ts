@@ -373,7 +373,23 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@/server/notifications", () => ({ notifyOfflineUser: vi.fn() }));
 
+// Agent auth-failure diagnostic: the authMode resolver module pulls the Supabase graph, so it is stubbed here (the real
+// resolver has its own test). The probe factory is wrapped in a spy that defaults to the REAL implementation so one case
+// can make construction throw.
+const authDiag = vi.hoisted(() => ({
+  makeResolver: vi.fn(),
+  createProbe: vi.fn(),
+}));
+vi.mock("@/server/agent-auth-mode", () => ({ makeAuthModeResolver: authDiag.makeResolver }));
+vi.mock("@/server/agent-auth-failure", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/agent-auth-failure")>();
+  authDiag.createProbe.mockImplementation(actual.createAgentAuthFailureProbe as never);
+  return { ...actual, createAgentAuthFailureProbe: authDiag.createProbe };
+});
+
 import { realSdkQueryFactory } from "@/server/cc-dispatcher";
+import { recordSandboxPosture } from "@/server/agent-sandbox-seccomp";
+import { __resetAgentAuthDedupeForTests } from "@/server/agent-auth-failure";
 import { createCanUseTool } from "@/server/permission-callback";
 
 // Helper: build a fake Query that the SDK mock returns.
@@ -1976,6 +1992,112 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       });
       await realSdkQueryFactory(makeArgs({ persona: "support" }));
       expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+    });
+  });
+
+  // Agent auth-failure diagnostic (plan Phase 1 items 5 and 6): the cc factory taps the Query it returns and feeds the shared
+  // probe. The probe, matcher, tap, context derivation and the real buildAgentQueryOptions are real; the emit is the
+  // mocked observability seam; `sdkQuery` is the mock.
+  describe("agent auth-failure diagnostic wiring", () => {
+    const SEP = "\u00B7";
+    const authEmits = () =>
+      mockReportSilentFallback.mock.calls.filter((c) => (c[1] as { feature?: string })?.feature === "agent-auth");
+    const failureStream = () => [
+      { type: "system", subtype: "init", apiKeySource: "none", session_id: "sess-1" },
+      {
+        type: "assistant",
+        message: { model: "<synthetic>", content: [{ type: "text", text: `Not logged in ${SEP} Please run /login` }] },
+        error: "authentication_failed",
+        is_api_error_message: true,
+        session_id: "sess-1",
+      },
+      { type: "result", subtype: "success", is_error: true, result: `Not logged in ${SEP} Please run /login`, session_id: "sess-1" },
+    ];
+    const queryStreaming = (messages: unknown[]) => {
+      const q = makeFakeQuery();
+      q[Symbol.asyncIterator] = async function* () {
+        for (const m of messages) yield m;
+      };
+      return q;
+    };
+    const drain = async (q: AsyncIterable<unknown>) => {
+      const out: unknown[] = [];
+      for await (const m of q) out.push(m);
+      return out;
+    };
+
+    beforeEach(() => {
+      __resetAgentAuthDedupeForTests();
+      authDiag.makeResolver.mockImplementation(() => async () => "managed");
+      // The posture the REAL buildAgentSandboxConfig would record (this file mocks the builder).
+      mockBuildAgentSandboxConfig.mockReturnValue(
+        recordSandboxPosture(
+          { enabled: true, filesystem: { allowWrite: [WORKSPACE_PATH], denyRead: ["/workspaces", "/proc"] } },
+          { hasEgress: false, unixDenyFlag: false },
+        ),
+      );
+    });
+
+    it("an auth-failure stream emits exactly ONE reportSilentFallback(null, ...) with the cc runner and real context tags", async () => {
+      const fake = queryStreaming(failureStream());
+      mockQuery.mockReturnValue(fake);
+      const q = await realSdkQueryFactory(makeArgs());
+      expect(q).toBe(fake); // the tap preserves identity
+      expect(await drain(q as unknown as AsyncIterable<unknown>)).toHaveLength(3);
+
+      await vi.waitFor(() => expect(authEmits()).toHaveLength(1));
+      const [first, opts] = authEmits()[0] as [unknown, { feature: string; op: string; tags: Record<string, string> }];
+      expect(first).toBeNull();
+      expect(opts).toMatchObject({ feature: "agent-auth", op: "cli-auth-failure" });
+      expect(opts.tags).toMatchObject({
+        runner: "cc-soleur-go",
+        credential_scheme: "api_key",
+        auth_env_present: "true",
+        auth_mode: "managed",
+        cli_key_source: "none",
+        seccomp_artifact: "base",
+        has_egress: "false",
+        sandbox: "on",
+        outer_wrap: "false",
+        match_kind: "not_logged_in",
+      });
+      expect(authDiag.makeResolver).toHaveBeenCalledWith("user-1", "conv-1");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(authEmits()).toHaveLength(1);
+    });
+
+    it("a clean stream emits nothing", async () => {
+      mockQuery.mockReturnValue(queryStreaming([{ type: "system", subtype: "init", apiKeySource: "ANTHROPIC_API_KEY" }, { type: "result", subtype: "success", is_error: false, result: "ok" }]));
+      const q = await realSdkQueryFactory(makeArgs());
+      await drain(q as unknown as AsyncIterable<unknown>);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(authEmits()).toHaveLength(0);
+    });
+
+    it("a throwing probe construction falls back to a working untapped Query and is NOT mirrored as a sandbox failure", async () => {
+      authDiag.createProbe.mockImplementationOnce(() => {
+        throw new Error("bwrap: Operation not permitted (the diagnostic must not be misreported as this)");
+      });
+      const fake = queryStreaming(failureStream());
+      mockQuery.mockReturnValue(fake);
+      const q = await realSdkQueryFactory(makeArgs());
+      expect(q).toBe(fake);
+      expect(await drain(q as unknown as AsyncIterable<unknown>)).toHaveLength(3);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(authEmits()).toHaveLength(0);
+      const sandboxMirrors = mockReportSilentFallback.mock.calls.filter(
+        (c) => (c[1] as { feature?: string; op?: string })?.feature === "agent-sandbox" && (c[1] as { op?: string })?.op === "sdk-startup",
+      );
+      expect(sandboxMirrors).toHaveLength(0);
+    });
+
+    it("source pins: the factory imports the module, creates the probe, wraps the option expression, and returns the tapped Query", async () => {
+      const { readFileSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      const src = readFileSync(new URL("../server/cc-dispatcher.ts", import.meta.url), "utf8");
+      expect(src).toMatch(/from "\.\/agent-auth-failure"/);
+      expect(src).toContain("createAgentAuthFailureProbe(");
+      expect(src).toMatch(/options: authProbe\.bindOptions\(recordCcSeccompArtifact\(/);
+      expect(src).toMatch(/return tapAgentAuthFailure\(\s*sdkQuery\(\{/);
     });
   });
 });
