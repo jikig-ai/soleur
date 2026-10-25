@@ -20,6 +20,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${PG_TMP:-}" ]] || rm -rf "$PG_TMP"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -163,7 +169,6 @@ rm -f /tmp/bp-failsoft.$$
 # scripts/lib/ the fragment's home instead of .claude/hooks/lib/.
 GUARD="$SCRIPTS_DIR/precommit-guard.sh"
 PG_TMP="$(mktemp -d)"; assert_fixture_dir "$PG_TMP"
-trap 'rm -rf "$PG_TMP"' EXIT
 ( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" \
   && git_fixture_env "$PG_TMP" || exit 1
   git -C "$PG_TMP" init -q -b main && git -C "$PG_TMP" commit -q --allow-empty -m init ) || exit 2

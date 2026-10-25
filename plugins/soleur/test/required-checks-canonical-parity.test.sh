@@ -47,6 +47,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./test-helpers.sh
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMP:-}" ]] || rm -rf "$TMP"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 # Pin C collation so `sort` and `comm` agree on byte order — without this,
@@ -184,7 +190,6 @@ echo ""
 
 echo "Test 2: adding a canonical-15368 context not in required-checks.txt FAILS (⊇)"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
 jq '. + [{"context": "z-fake-context", "integration_id": 15368}]' "$CANONICAL" > "$TMP/canon-extra.json"
 mut_diff=$(diff_sets "$CONFIG_FILE" "$TMP/canon-extra.json")
 mut_missing=$(only_in_canon "$mut_diff" | sed '/^$/d')
