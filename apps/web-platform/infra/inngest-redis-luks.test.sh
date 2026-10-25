@@ -672,7 +672,7 @@ if [ "$_g4_reads_stage" -eq 1 ] && [ "$_g4_reads_reopen" -eq 1 ]; then ok "G4.c 
 # G4.g3 THE POINTER HAS NO WRITER since #10112 (its only writer was the on-host FSM, retired with the cutover trio). Two writers on a
 # value that decides which device holds the store is the shape where a race decides where user data lives, so the property is
 # "none": a direct secrets set or delete of the literal pointer name in any non-test file under apps/web-platform/infra, scripts or
-# .github/workflows. It sees a LITERAL name only; a write through a variable name or after a `--` is not matched, but any other
+# .github (flags may sit between the verb and the name). It sees a LITERAL name only; a write through a variable name is not matched, but any other
 # line naming the pointer literal is UNCLASSIFIED (G4.b), which is what bounds a respelled writer.
 _g4_any_write="$(cd "$_REPO" && git grep -nE '^[^#]*doppler[^#]*secrets[^#]*(set|delete)[^#]*INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null || true)"
 if [ -z "$_g4_any_write" ]; then ok "G4.g3 no delivered artifact writes the pointer with a direct doppler set or delete"; else no "G4.g3 a direct pointer write exists: ${_g4_any_write}"; fi
