@@ -28,6 +28,7 @@ import {
   AGENT_AUTH_DEBOUNCE_MS,
   AGENT_AUTH_GLOBAL_CAP,
   AGENT_AUTH_MODE_TIMEOUT_MS,
+  __agentAuthClaimCountForTests,
   __resetAgentAuthDedupeForTests,
   agentAuthSuppressedCount,
   buildAgentAuthPayload,
@@ -435,12 +436,52 @@ describe("probe: failure isolation", () => {
       },
     });
     await expect(probe.observe(failure())).resolves.toBeUndefined();
+    // A result resets the latch, so the second failure reaches the throwing clock again: without the warn-once guard this
+    // would be a second warn (the first failure alone cannot tell, because the latch is set before the clock runs).
+    await probe.observe(resultOk());
     await expect(probe.observe(failure())).resolves.toBeUndefined();
     expect(h.log.warn).toHaveBeenCalledTimes(1);
     const args = h.log.warn.mock.calls[0];
     expect(args).toHaveLength(1);
     expect(typeof args[0]).toBe("string");
     expect(emits()).toHaveLength(0);
+  });
+
+  it("a failed emit gives its process-wide slot back: after nine emits and one failed tenth, an eleventh still gets through", async () => {
+    for (let i = 0; i < 9; i++) await mk({ dedupeToken: `ok-${i}` }).observe(failure());
+    h.report.mockImplementationOnce(() => {
+      throw new Error("sink down");
+    });
+    await mk({ dedupeToken: "failing" }).observe(failure());
+    await mk({ dedupeToken: "after-release" }).observe(failure());
+    expect(emits()).toHaveLength(11); // nine, the failed attempt, and the one the freed slot admitted
+    await mk({ dedupeToken: "over-cap" }).observe(failure());
+    expect(emits()).toHaveLength(11);
+    expect(agentAuthSuppressedCount()).toBe(1);
+  });
+
+  it("a release after the window rolled over does not debit the NEW window", async () => {
+    let finish: (v: string) => void = () => undefined;
+    const slow = () => new Promise<string>((res) => { finish = res; });
+    const pa = mk({ dedupeToken: "slow", resolveAuthMode: slow }).observe(failure()); // claims in window 1
+    clock += AGENT_AUTH_DEBOUNCE_MS + 1;
+    await mk({ dedupeToken: "new-window-first" }).observe(failure()); // window 2, count 1
+    h.report.mockImplementationOnce(() => {
+      throw new Error("sink down");
+    });
+    finish("managed");
+    await pa; // the emit throws, the claim is released against window 1
+    for (let i = 0; i < 9; i++) await mk({ dedupeToken: `w2-${i}` }).observe(failure());
+    await mk({ dedupeToken: "w2-over" }).observe(failure());
+    expect(agentAuthSuppressedCount()).toBe(1); // window 2 held exactly ten: the stale release took nothing from it
+  });
+
+  it("the debounce map stays bounded across many windows (expired entries are pruned when it is full)", async () => {
+    for (let w = 0; w < 110; w++) {
+      clock += AGENT_AUTH_DEBOUNCE_MS + 1;
+      for (let i = 0; i < AGENT_AUTH_GLOBAL_CAP; i++) await mk({ dedupeToken: `w${w}-u${i}` }).observe(failure());
+    }
+    expect(__agentAuthClaimCountForTests()).toBeLessThanOrEqual(1024 + AGENT_AUTH_GLOBAL_CAP);
   });
 
   it("no logger call (any level) ever carries the dedupe token, the key or the matched text", async () => {

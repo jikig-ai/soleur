@@ -1,8 +1,24 @@
-// Agent auth-failure diagnostic: the in-place Query tap, against a fixture that models the REAL SDK Query shape
-// (measured from sdk.mjs, 0.3.28x): the Query class has its OWN next/return/throw that delegate to an internal Stream,
-// and its [Symbol.asyncIterator]() returns that Stream, whose own [Symbol.asyncIterator]() throws "Stream can only be
-// iterated once". `for await` therefore never touches Query.next. Plan Phase 1 items 2b and 6 (consumeStream case).
-import { describe, expect, it, vi } from "vitest";
+// Agent auth-failure diagnostic: the in-place Query tap, against fixtures that model the REAL SDK Query shape
+// (measured from sdk.mjs, 0.3.284): the Query class has its OWN next/return/throw that delegate to an internal generator,
+// and its [Symbol.asyncIterator]() is `return this.sdkMessages` (an AsyncGenerator, so it READS `this`). `for await`
+// therefore never touches Query.next. Two fixtures: a hand-written stream with call counters (makeRealShapeQuery), and one
+// built from a real `async function*` (makeGeneratorQuery) whose `return()` queues behind a pending `next()`.
+// Plan Phase 1 items 2b and 6 (consumeStream case).
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const h = vi.hoisted(() => ({ warn: vi.fn() }));
+// Only the diagnostic's own child logger is replaced; the real logger serves everything else (the runner under test).
+vi.mock("@/server/logger", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/logger")>();
+  return {
+    ...real,
+    createChildLogger: vi.fn((name: string, ...rest: unknown[]) =>
+      name === "auth-failure-probe"
+        ? { info: vi.fn(), warn: h.warn, error: vi.fn(), debug: vi.fn() }
+        : (real.createChildLogger as (...a: unknown[]) => unknown)(name, ...rest),
+    ),
+  };
+});
 
 import { createSoleurGoRunner, type QueryFactory } from "@/server/soleur-go-runner";
 import { tapAgentAuthFailure } from "@/server/agent-auth-failure";
@@ -38,12 +54,51 @@ function makeRealShapeQuery(messages: Array<{ n: number }>, opts: { failAt?: num
     async throw(e: unknown) {
       return stream.throw(e);
     }
+    // As in the SDK this reads `this`: calling it unbound throws, which is why the tap binds it to the query.
+    sdkMessages = stream;
     [Symbol.asyncIterator]() {
-      return stream;
+      return this.sdkMessages;
     }
   }
   return { query: new FakeQuery(), stream };
 }
+
+/** A Query whose iterator is a REAL async generator: `return()` queues behind a pending `next()` and runs `finally`. */
+function makeGeneratorQuery(messages: Array<{ n: number }>, gate?: Promise<void>) {
+  const state = { cleaned: 0 };
+  async function* generate() {
+    try {
+      if (gate) await gate;
+      for (const m of messages) {
+        await Promise.resolve();
+        yield m;
+      }
+    } finally {
+      state.cleaned += 1;
+    }
+  }
+  class GeneratorQuery {
+    sdkMessages = generate();
+    [Symbol.asyncIterator]() {
+      return this.sdkMessages;
+    }
+  }
+  return { query: new GeneratorQuery(), state };
+}
+
+let unhandled: unknown[];
+const onUnhandled = (reason: unknown) => {
+  unhandled.push(reason);
+};
+beforeEach(() => {
+  unhandled = [];
+  h.warn.mockClear();
+  process.on("unhandledRejection", onUnhandled);
+});
+afterEach(() => {
+  process.off("unhandledRejection", onUnhandled);
+});
+const settle = () => new Promise<void>((r) => setTimeout(r, 20));
 
 const msgs = (k: number) => Array.from({ length: k }, (_, n) => ({ n }));
 const collect = async (q: AsyncIterable<unknown>) => {
@@ -96,6 +151,8 @@ describe("tapAgentAuthFailure against the measured Query shape", () => {
     expect(failure).toBe(boom);
     expect(seen).toEqual(msgs(2));
     expect(probe.observe).toHaveBeenCalledTimes(2);
+    await settle();
+    expect(unhandled).toEqual([]); // the side branch must not surface the underlying rejection a second time
   });
 
   it("an observer that throws synchronously, or returns a rejected promise, never alters the stream", async () => {
@@ -110,6 +167,90 @@ describe("tapAgentAuthFailure against the measured Query shape", () => {
       expect(await collect(tapped)).toEqual(msgs(3));
       expect(observe).toHaveBeenCalledTimes(3);
     }
+    await settle();
+    expect(unhandled).toEqual([]);
+  });
+
+  it("a result whose done/value getter throws is swallowed: no unhandled rejection, and ONE tap-specific warn", async () => {
+    let calls = 0;
+    const hostileResult = {
+      get done(): boolean {
+        calls += 1;
+        throw new Error("CANARY-GETTER-9c1e");
+      },
+      value: { n: 1 },
+    };
+    const query = {
+      [Symbol.asyncIterator]() {
+        return { next: async () => hostileResult };
+      },
+    };
+    const probe = { observe: vi.fn() };
+    const it = (tapAgentAuthFailure(query, probe) as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    void it.next();
+    void it.next();
+    await settle();
+    expect(calls).toBeGreaterThan(0);
+    expect(unhandled).toEqual([]);
+    expect(probe.observe).not.toHaveBeenCalled();
+    expect(h.warn).toHaveBeenCalledTimes(1);
+    expect(h.warn.mock.calls[0]).toHaveLength(1);
+    expect(String(h.warn.mock.calls[0][0])).toMatch(/tap/);
+    expect(String(h.warn.mock.calls[0][0])).not.toMatch(/CANARY/);
+  });
+
+  it("an observer that throws is visible as a tap warn whose text differs from the probe's", async () => {
+    const { query } = makeRealShapeQuery(msgs(2));
+    const tapped = tapAgentAuthFailure(query, {
+      observe: () => {
+        throw new Error("observer");
+      },
+    });
+    expect(await collect(tapped)).toEqual(msgs(2));
+    expect(h.warn).toHaveBeenCalledTimes(1);
+    expect(String(h.warn.mock.calls[0][0])).toMatch(/tap/);
+    expect(String(h.warn.mock.calls[0][0])).not.toMatch(/probe/);
+  });
+
+  it("`throw` is delegated untouched: the injected error comes back and reaches the underlying stream", async () => {
+    const { query, stream } = makeRealShapeQuery(msgs(2));
+    const it = (tapAgentAuthFailure(query, { observe: vi.fn() }) as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    const boom = new Error("injected");
+    await expect(it.throw!(boom)).rejects.toBe(boom);
+    expect(stream.throw).toHaveBeenCalledWith(boom);
+  });
+
+  it("a REAL async generator: every message is observed in order, and `break` runs its cleanup exactly once", async () => {
+    const full = makeGeneratorQuery(msgs(3));
+    const probe = { observe: vi.fn() };
+    expect(await collect(tapAgentAuthFailure(full.query, probe))).toEqual(msgs(3));
+    expect(probe.observe.mock.calls.map((c) => c[0])).toEqual(msgs(3));
+    expect(full.state.cleaned).toBe(1);
+
+    const early = makeGeneratorQuery(msgs(5));
+    for await (const m of tapAgentAuthFailure(early.query, { observe: vi.fn() }) as AsyncIterable<{ n: number }>) {
+      if (m.n === 1) break;
+    }
+    expect(early.state.cleaned).toBe(1);
+  });
+
+  it("a REAL async generator: `return()` issued while a `next()` is pending queues behind it and still cleans up once", async () => {
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((res) => { open = res; });
+    const { query, state } = makeGeneratorQuery(msgs(3), gate);
+    const probe = { observe: vi.fn() };
+    const it = (tapAgentAuthFailure(query, probe) as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    const pendingNext = it.next();
+    const returned = it.return!();
+    let returnedSettled = false;
+    void returned.then(() => { returnedSettled = true; });
+    await settle();
+    expect(returnedSettled).toBe(false); // queued behind the pending next, as for the untapped generator
+    open();
+    expect(await pendingNext).toEqual({ value: { n: 0 }, done: false });
+    expect((await returned).done).toBe(true);
+    expect(state.cleaned).toBe(1);
+    expect(probe.observe.mock.calls.map((c) => c[0])).toEqual([{ n: 0 }]);
   });
 
   it("a frozen, non-extensible, non-writable or non-iterable object is returned untouched and still iterates", async () => {

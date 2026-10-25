@@ -102,6 +102,7 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   NOOP_AGENT_AUTH_PROBE,
   createAgentAuthFailureProbe,
+  warnAgentAuthProbeUnavailable,
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
 import { makeAuthModeResolver } from "./agent-auth-mode";
@@ -2165,7 +2166,8 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         resolveAuthMode: makeAuthModeResolver(userId, conversationId),
       });
     } catch {
-      // A defect in the diagnostic must never break a dispatch: fall back to a probe that observes nothing.
+      // A defect in the diagnostic must never break a dispatch: fall back to a probe that observes nothing, visibly.
+      warnAgentAuthProbeUnavailable();
     }
     const q = query({
       prompt,

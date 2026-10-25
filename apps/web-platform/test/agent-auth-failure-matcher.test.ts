@@ -2,10 +2,31 @@
 // timing, no-leak). Plan: knowledge-base/project/plans/2026-10-25-feat-agent-auth-failure-diagnostic-plan.md (Phase 1, item 1;
 // Guard 2 rows 2, 5, 8d). Fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only): the CLI wording is public product text,
 // the ids are fake. The separator is written as the \u00B7 escape (cq-regex-unicode-separators-escape-only).
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CLI_AUTH_FAILURE_REPLIES, SDK_AUTHENTICATION_FAILED } from "@/server/claude-error-signatures";
-import { matchAgentAuthFailure } from "@/server/agent-auth-failure";
+const h = vi.hoisted(() => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
+vi.mock("@/server/logger", () => ({ default: h.log, createChildLogger: vi.fn(() => h.log) }));
+
+import type { ApiKeySource } from "@anthropic-ai/claude-agent-sdk";
+
+import {
+  CLI_AUTH_FAILURE_REPLIES,
+  SDK_API_KEY_SOURCES,
+  SDK_AUTHENTICATION_FAILED,
+} from "@/server/claude-error-signatures";
+import {
+  __resetAgentAuthMatcherWarnForTests,
+  buildAgentAuthPayload,
+  deriveAgentAuthContext,
+  matchAgentAuthFailure,
+} from "@/server/agent-auth-failure";
+
+// Compile-time parity with the SDK's `ApiKeySource` union, both directions: a value added or removed by an SDK bump
+// reds `tsc --noEmit` here instead of silently falling out of the closed `cli_key_source` list.
+type Mirrored = (typeof SDK_API_KEY_SOURCES)[number];
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+const _sdkParity: Equal<Mirrored, ApiKeySource> = true;
+void _sdkParity;
 
 const SEP = "\u00B7";
 const KINDS = ["not_logged_in", "invalid_api_key", "oauth_token_revoked", "session_expired", "structured"] as const;
@@ -28,6 +49,11 @@ const FAMILY: Array<[string, string]> = [
   ["session_expired", "Session expired. Please run /login to sign in again."],
   ["session_expired", "Your session has expired. Please run /login to sign in again."],
 ];
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  __resetAgentAuthMatcherWarnForTests();
+});
 
 describe("matchAgentAuthFailure: positive family", () => {
   it("the family covers every CLI_AUTH_FAILURE_REPLIES kind (a new kind must get a fixture here)", () => {
@@ -65,6 +91,14 @@ describe("matchAgentAuthFailure: positive family", () => {
   it("text is classified FIRST: the real stream message (text AND the structured code) reports the text variant, not structured", () => {
     const real = synthetic(`Not logged in ${SEP} Please run /login`, { error: "authentication_failed", is_api_error_message: true });
     expect(matchAgentAuthFailure(real)).toBe("not_logged_in");
+  });
+
+  it("every reply kind survives the payload's closed match_kind list (a new kind cannot be matched and then reported as unknown)", () => {
+    const context = deriveAgentAuthContext("legacy", "api_key", {});
+    for (const { kind } of CLI_AUTH_FAILURE_REPLIES) {
+      expect(buildAgentAuthPayload({ context, authMode: "managed", cliKeySource: "none", matchKind: kind }).match_kind).toBe(kind);
+    }
+    expect(buildAgentAuthPayload({ context, authMode: "managed", cliKeySource: "none", matchKind: "structured" }).match_kind).toBe("structured");
   });
 
   it("other structured codes are out of the family", () => {
@@ -123,6 +157,21 @@ describe("matchAgentAuthFailure: negative near-misses and the forgery row", () =
     expect(matchAgentAuthFailure({ ...forged, is_api_error_message: true })).toBe("not_logged_in");
   });
 
+  it("the length gate and the trim are observable: padded text over 200 chars is null, padded text under 200 matches", () => {
+    expect(matchAgentAuthFailure(synthetic(`${TEXT}${" ".repeat(200)}`))).toBeNull();
+    expect(matchAgentAuthFailure(synthetic(`  ${TEXT}\n `))).toBe("not_logged_in");
+  });
+
+  it("the CLI-set flag must be exactly true and the model exactly <synthetic>: truthy look-alikes do not unlock the text arm", () => {
+    const real = { type: "assistant", message: { model: "claude-sonnet-5-5", content: [{ type: "text", text: TEXT }] } };
+    for (const flag of ["true", 1, {}, [true]]) {
+      expect(matchAgentAuthFailure({ ...real, is_api_error_message: flag }), String(flag)).toBeNull();
+    }
+    for (const model of ["<other>", "<synthetic> ", "synthetic", "<SYNTHETIC>"]) {
+      expect(matchAgentAuthFailure({ ...real, message: { ...real.message, model } }), model).toBeNull();
+    }
+  });
+
   it("a throwing getter on the input yields null instead of an exception", () => {
     const hostile = {
       type: "assistant",
@@ -132,6 +181,20 @@ describe("matchAgentAuthFailure: negative near-misses and the forgery row", () =
     };
     expect(() => matchAgentAuthFailure(hostile)).not.toThrow();
     expect(matchAgentAuthFailure(hostile)).toBeNull();
+  });
+
+  it("the swallowed fault is visible: ONE constant-text warn per process, no payload, never an event", () => {
+    const hostile = {
+      type: "assistant",
+      get message(): never {
+        throw new Error("CANARY-GETTER-7f3a");
+      },
+    };
+    matchAgentAuthFailure(hostile);
+    matchAgentAuthFailure(hostile);
+    expect(h.log.warn).toHaveBeenCalledTimes(1);
+    expect(h.log.warn.mock.calls[0]).toHaveLength(1);
+    expect(JSON.stringify(h.log.warn.mock.calls)).not.toContain("CANARY");
   });
 });
 

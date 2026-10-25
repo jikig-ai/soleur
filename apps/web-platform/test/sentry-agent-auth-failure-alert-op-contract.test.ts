@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { stripComments as stripTsComments } from "./helpers/strip-comments";
+import { CLI_AUTH_FAILURE_REPLIES, SDK_API_KEY_SOURCES } from "../server/claude-error-signatures";
 
 // Cross-artifact contract (Guard 1) between the auth-failure emit in server/agent-auth-failure.ts and the Sentry
 // rule `agent_auth_failure` that routes it. Before this rule the Claude CLI's "Not logged in · Please run /login"
@@ -26,7 +27,8 @@ const REFERENCE_KEY = "agent-auth-failure";
 const RULE_NAME = "agent-auth-failure";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const serverDir = join(here, "../server");
+// Every root that can call the server-side reporter: `reportSilentFallback` is also called from app/ route handlers and lib/.
+const sourceRoots = ["server", "lib", "app"].map((d) => join(here, "..", d));
 const sentryDir = join(here, "../infra/sentry");
 
 /** HCL: block comments and whole-line `#` / `//` comments removed before any match. */
@@ -37,7 +39,7 @@ export const stripHcl = (s: string) =>
     .filter((l) => !/^\s*(#|\/\/)/.test(l))
     .join("\n");
 
-const SOURCE_RE = /\.(?:ts|tsx|mts)$/;
+const SOURCE_RE = /\.(?:ts|tsx|mts|js|jsx|mjs|cjs)$/;
 const TEST_RE = /\.(?:test|spec)\.[a-z]+$/;
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -68,6 +70,11 @@ function enclosingObject(src: string, index: number): { text: string; start: num
     else if (src[i] === "}" && --depth === 0) return { text: src.slice(open, i + 1), start: open };
   }
   throw new Error("fixture: unterminated object literal around a literal op/feature");
+}
+
+/** Occurrences of the feature value as a whole quoted string, in any position (value, constant, quoted key's value, array). */
+export function featureTokenCount(src: string): number {
+  return [...src.matchAll(new RegExp(`(["'\`])${FEATURE}\\1`, "g"))].length;
 }
 
 export interface EmitSite {
@@ -178,7 +185,8 @@ const issueAlertsTf = readFileSync(join(sentryDir, "issue-alerts.tf"), "utf8");
 const reference = JSON.parse(readFileSync(join(sentryDir, "alert-reference.json"), "utf8")) as Record<string, unknown>;
 // Walked and comment-stripped ONCE per file (the strip is the slow part, and several cases read the result).
 let serverSourcesCache: Array<{ file: string; src: string }> | undefined;
-const serverSources = () => (serverSourcesCache ??= walk(serverDir).map((file) => ({ file, src: stripTsComments(readFileSync(file, "utf8"), file) })));
+const serverSources = () =>
+  (serverSourcesCache ??= sourceRoots.flatMap((root) => walk(root)).map((file) => ({ file, src: stripTsComments(readFileSync(file, "utf8"), file) })));
 const featureSites = () => serverSources().flatMap(({ file, src }) => featureSitesIn(file, src));
 
 const RULE_FIXTURE = `
@@ -212,7 +220,9 @@ resource "sentry_alert" "${RULE}" {
 describe("agent-auth-failure — emit site / rule contract", () => {
   it("the server walk is non-vacuous and the emit is found by scanning it (floors)", () => {
     // A walk that found nothing would make every later case pass over an empty set.
-    expect(serverSources().length).toBeGreaterThanOrEqual(50);
+    expect(serverSources().length).toBeGreaterThanOrEqual(200);
+    expect(serverSources().some(({ file }) => /[\\/]app[\\/]/.test(file)), "app/ is walked").toBe(true);
+    expect(serverSources().some(({ file }) => /[\\/]lib[\\/]/.test(file)), "lib/ is walked").toBe(true);
     expect(featureSites().length).toBeGreaterThanOrEqual(1);
   });
 
@@ -236,6 +246,18 @@ describe("agent-auth-failure — emit site / rule contract", () => {
     expect(tokens, `token counts per file: ${perFile.join(", ")}`).toBe(literal);
   });
 
+  it("every quoted occurrence of the feature token is a literal emit site (no constant, quoted key or other file hides one)", () => {
+    const literal = featureSites().length;
+    const perFile: string[] = [];
+    let tokens = 0;
+    for (const { file, src } of serverSources()) {
+      const n = featureTokenCount(src);
+      tokens += n;
+      if (n > 0) perFile.push(`${file}=${n}`);
+    }
+    expect(tokens, `quoted "${FEATURE}" counts per file: ${perFile.join(", ")}`).toBe(literal);
+  });
+
   it("every emit site is reportSilentFallback(null, ...) (message path, level error) with a constant message", () => {
     for (const s of featureSites()) {
       // An Error first argument is deduplicated behind the pino mirror capture (#8629 class); warnSilentFallback is level warning.
@@ -257,6 +279,34 @@ describe("agent-auth-failure — emit site / rule contract", () => {
     const freq = ruleFrequency(issueAlertsTf);
     expect(freq, "rule frequency_minutes").not.toBeNull();
     expect(reference[REFERENCE_KEY]).toEqual(expectedReferenceEntry(freq!, masked!.detectorIds));
+  });
+
+  it("the README is the one decode copy: it names every payload key, cli_key_source value and match_kind, and the .tf points at it", () => {
+    const readme = readFileSync(join(sentryDir, "README.md"), "utf8");
+    const section = readme.slice(readme.indexOf("### Diagnostic rule: `agent-auth-failure`"), readme.indexOf("ADR: [ADR-031"));
+    expect(section.length, "README diagnostic section").toBeGreaterThan(1000);
+    const keys = ["runner", "credential_scheme", "auth_env_present", "auth_mode", "cli_key_source", "seccomp_artifact", "has_egress", "sandbox", "outer_wrap", "match_kind"];
+    for (const k of keys) expect(section, `payload key ${k}`).toContain(`\`${k}`);
+    for (const v of SDK_API_KEY_SOURCES) expect(section, `cli_key_source ${v}`).toContain(v === "none" ? "cli_key_source=none" : `\`${v}\``);
+    for (const { kind } of CLI_AUTH_FAILURE_REPLIES) expect(section, `match_kind ${kind}`).toContain(`\`${kind}\``);
+    expect(section).toContain("`structured`");
+    // The table is not restated in the .tf (a second copy is how the two disagreed).
+    expect(issueAlertsTf).not.toMatch(/DECODE KEY \(read the tags/);
+    expect(issueAlertsTf).toMatch(/README\.md[^\n]*one copy of the tag decode table/);
+  });
+
+  it("the removal checklist lives where the README and the .tf say it does", () => {
+    const owner = readFileSync(join(here, "../server/agent-auth-mode.ts"), "utf8");
+    expect(owner).toContain("REMOVAL CHECKLIST");
+    const readme = readFileSync(join(sentryDir, "README.md"), "utf8");
+    expect(readme).toMatch(/removal checklist in the header of `server\/agent-auth-mode\.ts`/);
+    expect(issueAlertsTf).toMatch(/removal checklist is in the header of server\/agent-auth-mode\.ts/);
+    for (const text of [readme, issueAlertsTf]) expect(text).not.toMatch(/checklist (?:is )?in the header of (?:`)?server\/agent-auth-failure\.ts/);
+    // Every file the checklist names exists (a rename leaves a dangling item).
+    for (const f of ["server/agent-auth-failure.ts", "server/claude-code-message-translator.ts", "test/agent-sandbox-seccomp-selector.test.ts"]) {
+      expect(owner, f).toContain(f.split("/").pop());
+      expect(() => readFileSync(join(here, "..", f), "utf8"), f).not.toThrow();
+    }
   });
 
   it("the reference file stays key-sorted (jq -S) so the plan-projection gate diff is a no-op", () => {
@@ -356,6 +406,19 @@ describe("agent-auth-failure — harness self-tests (mutation rows)", () => {
     const hidden = `const OPNAME = "${OP}"; function f() { reportSilentFallback(null, { feature: "${FEATURE}", op: OPNAME, message: "m" }); }`;
     expect(() => featureSitesIn("a.ts", hidden)).toThrow(/exactly one literal op/);
     expect([...hidden.matchAll(new RegExp(OP, "g"))].length).toBe(1);
+  });
+
+  it("the feature token is counted wherever it hides: a constant, a quoted key and a computed spread each exceed the literal sites", () => {
+    const viaConst = `const F = "${FEATURE}"; function f() { reportSilentFallback(null, { feature: F, op: "${OP}", message: "m" }); }`;
+    expect(featureSitesIn("a.ts", viaConst)).toHaveLength(0);
+    expect(featureTokenCount(viaConst)).toBe(1);
+    const quotedKey = `function f() { reportSilentFallback(null, { "feature": "${FEATURE}", op: "${OP}", message: "m" }); }`;
+    expect(featureSitesIn("a.ts", quotedKey)).toHaveLength(0);
+    expect(featureTokenCount(quotedKey)).toBe(1);
+    const spread = `const base = { feature: "${FEATURE}", op: "${OP}", message: "m" }; function f() { reportSilentFallback(null, { ...base }); }`;
+    expect(featureSitesIn("a.ts", spread)).toHaveLength(1);
+    expect(featureTokenCount(spread)).toBe(1);
+    expect(featureTokenCount(`import x from "./${FEATURE}-env-vars";`)).toBe(0);
   });
 
   it("the reference expectation is sensitive: a changed frequency, op value or enabled flag differs", () => {

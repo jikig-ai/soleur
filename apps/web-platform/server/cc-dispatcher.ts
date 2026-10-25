@@ -243,6 +243,7 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   NOOP_AGENT_AUTH_PROBE,
   createAgentAuthFailureProbe,
+  warnAgentAuthProbeUnavailable,
   tapAgentAuthFailure,
   type AgentAuthFailureProbe,
 } from "./agent-auth-failure";
@@ -3152,7 +3153,8 @@ export const realSdkQueryFactory: QueryFactory = async (
         resolveAuthMode: makeAuthModeResolver(args.userId, args.conversationId),
       });
     } catch {
-      // Intentionally swallowed: see above.
+      // Not rethrown (see above); the constant warn keeps a broken diagnostic visible.
+      warnAgentAuthProbeUnavailable();
     }
 
     return tapAgentAuthFailure(sdkQuery({

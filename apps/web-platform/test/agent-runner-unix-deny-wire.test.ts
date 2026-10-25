@@ -263,6 +263,33 @@ describe("startAgentSession — agent auth-failure diagnostic wiring", () => {
     expect(authEmits()).toHaveLength(1);
   });
 
+  test("the leased scheme reaches the probe: an oauth_token lease reports credential_scheme=oauth_token and reads the OAuth variable", async () => {
+    vi.stubEnv("CC_OAUTH_ENABLED", "1");
+    try {
+      mockBuildAgentEnv.mockReturnValue({ CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth" });
+      streamOf(authFailureStream());
+      await startAgentSession(USER, "conv-oauth", "cpo", "session-s");
+      await vi.waitFor(() => expect(authEmits()).toHaveLength(1));
+      const opts = authEmits()[0][1] as { tags: Record<string, string> };
+      // A hard-coded api_key scheme would read ANTHROPIC_API_KEY (absent here) and report auth_env_present=false.
+      expect(opts.tags).toMatchObject({ credential_scheme: "oauth_token", auth_env_present: "true" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test("the debounce is per USER: two users with the same tuple each emit once", async () => {
+    const OTHER = "33333333-3333-4333-8333-333333333333";
+    streamOf(authFailureStream());
+    await startAgentSession(USER, "conv-user-a", "cpo", "session-s");
+    await vi.waitFor(() => expect(authEmits()).toHaveLength(1));
+    streamOf(authFailureStream());
+    await startAgentSession(OTHER, "conv-user-b", "cpo", "session-s");
+    await vi.waitFor(() => expect(authEmits()).toHaveLength(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(authEmits()).toHaveLength(2);
+  });
+
   test("a clean stream emits nothing and never builds a lookup", async () => {
     streamOf([{ type: "system", subtype: "init", apiKeySource: "ANTHROPIC_API_KEY" }, { type: "result", session_id: "sess-1" }]);
     await startAgentSession(USER, "conv-clean", "cpo", "session-s");
@@ -277,5 +304,7 @@ describe("startAgentSession — agent auth-failure diagnostic wiring", () => {
     expect(src).toContain("createAgentAuthFailureProbe(");
     expect(src).toMatch(/options: authProbe\.bindOptions\(buildAgentQueryOptions\(/);
     expect(src).toMatch(/for await \(const message of q\) \{\s*if \(controller\.signal\.aborted\) break;\s*void authProbe\.observe\(message\);/);
+    // The construction-failure fallback is visible, not silent.
+    expect(src).toMatch(/\} catch \{[^}]*warnAgentAuthProbeUnavailable\(\);/);
   });
 });

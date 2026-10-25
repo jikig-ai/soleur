@@ -12,7 +12,7 @@
 // See plan §"Test Scenarios" — T1–T19. The Bash review-gate E2E (T12–T14)
 // lives in a sibling file (`cc-dispatcher-bash-gate.test.ts`).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
@@ -331,7 +331,7 @@ vi.mock("@/server/byok-lease", async () => {
           getRestApiKey: () => mockGetUserApiKey(),
           getAgentCredential: async () => ({
             value: await mockGetUserApiKey(),
-            scheme: "api_key" as const,
+            scheme: authDiag.scheme,
           }),
         }),
     ),
@@ -379,6 +379,8 @@ vi.mock("@/server/notifications", () => ({ notifyOfflineUser: vi.fn() }));
 const authDiag = vi.hoisted(() => ({
   makeResolver: vi.fn(),
   createProbe: vi.fn(),
+  // The scheme the bridged lease reports; one case flips it to oauth_token to pin the wiring of `credentialScheme`.
+  scheme: "api_key" as "api_key" | "oauth_token",
 }));
 vi.mock("@/server/agent-auth-mode", () => ({ makeAuthModeResolver: authDiag.makeResolver }));
 vi.mock("@/server/agent-auth-failure", async (importOriginal) => {
@@ -2026,6 +2028,10 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       return out;
     };
 
+    afterEach(() => {
+      authDiag.scheme = "api_key";
+    });
+
     beforeEach(() => {
       __resetAgentAuthDedupeForTests();
       authDiag.makeResolver.mockImplementation(() => async () => "managed");
@@ -2066,6 +2072,29 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(authEmits()).toHaveLength(1);
     });
 
+    it("the leased scheme reaches the probe: an oauth_token lease reports credential_scheme=oauth_token and reads the OAuth variable", async () => {
+      authDiag.scheme = "oauth_token";
+      mockBuildAgentEnv.mockReturnValue({ CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth" });
+      mockQuery.mockReturnValue(queryStreaming(failureStream()));
+      const q = await realSdkQueryFactory(makeArgs());
+      await drain(q as unknown as AsyncIterable<unknown>);
+      await vi.waitFor(() => expect(authEmits()).toHaveLength(1));
+      const opts = authEmits()[0][1] as { tags: Record<string, string> };
+      // A hard-coded api_key scheme would read ANTHROPIC_API_KEY (absent here) and report auth_env_present=false.
+      expect(opts.tags).toMatchObject({ credential_scheme: "oauth_token", auth_env_present: "true" });
+    });
+
+    it("the debounce is per USER: two users with the same tuple each emit once", async () => {
+      for (const userId of ["user-a", "user-b"]) {
+        mockQuery.mockReturnValue(queryStreaming(failureStream()));
+        const q = await realSdkQueryFactory(makeArgs({ userId, conversationId: `conv-${userId}` }));
+        await drain(q as unknown as AsyncIterable<unknown>);
+      }
+      await vi.waitFor(() => expect(authEmits()).toHaveLength(2));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(authEmits()).toHaveLength(2);
+    });
+
     it("a clean stream emits nothing", async () => {
       mockQuery.mockReturnValue(queryStreaming([{ type: "system", subtype: "init", apiKeySource: "ANTHROPIC_API_KEY" }, { type: "result", subtype: "success", is_error: false, result: "ok" }]));
       const q = await realSdkQueryFactory(makeArgs());
@@ -2098,6 +2127,8 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(src).toContain("createAgentAuthFailureProbe(");
       expect(src).toMatch(/options: authProbe\.bindOptions\(recordCcSeccompArtifact\(/);
       expect(src).toMatch(/return tapAgentAuthFailure\(\s*sdkQuery\(\{/);
+      // The construction-failure fallback is visible, not silent.
+      expect(src).toMatch(/\} catch \{[^}]*warnAgentAuthProbeUnavailable\(\);/);
     });
   });
 });

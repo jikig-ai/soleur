@@ -23,7 +23,14 @@ vi.mock("@sentry/nextjs", async (orig) => {
   const real = await orig<typeof import("@sentry/nextjs")>();
   // The namespace spread does not copy every export (re-exports are not enumerable); name the functions the emit and this
   // test depend on so a missing one is a loud mock error, not a silent unscoped fallback.
-  return { ...real, init: real.init, getIsolationScope: real.getIsolationScope, withIsolationScope: real.withIsolationScope, ...sentry };
+  return {
+    ...real,
+    init: real.init,
+    getIsolationScope: real.getIsolationScope,
+    getCurrentScope: real.getCurrentScope,
+    withIsolationScope: real.withIsolationScope,
+    ...sentry,
+  };
 });
 
 import * as Sentry from "@sentry/nextjs";
@@ -105,8 +112,12 @@ async function runStream(over: { credential?: { value: string; scheme: "api_key"
   return opts;
 }
 
+const consoleSpies = (["log", "info", "warn", "error", "debug"] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => undefined));
+const consoleOutput = () => JSON.stringify(consoleSpies.map((spy) => spy.mock.calls));
+
 beforeEach(() => {
   for (const f of Object.values(sentry)) f.mockReset();
+  for (const spy of consoleSpies) spy.mockClear();
   __resetAgentAuthDedupeForTests();
 });
 afterEach(() => {
@@ -200,12 +211,31 @@ describe("secret canary (blocking): nothing sensitive reaches any sink, in whole
     expect(all).not.toMatch(/user(Id|_id)/i);
   });
 
+  it("the swallowed-fault paths leak nothing either: a resolver that throws the key, an emit that throws the key, any console output", async () => {
+    await runStream({ resolver: async () => { throw new Error(CANARY_KEY); } });
+    sentry.captureMessage.mockImplementationOnce(() => {
+      throw new Error(CANARY_KEY);
+    });
+    await runStream({ user: `${CANARY_USER}-fault`, resolver: async () => CANARY_AUTHMODE });
+    const all = surfaces() + consoleOutput();
+    for (const c of [CANARY_KEY, CANARY_KEY.slice(0, 10), CANARY_USER, CANARY_USER.slice(0, 12), CANARY_AUTHMODE, CANARY_WORKSPACE, "CANARY"]) {
+      expect(all, c).not.toContain(c);
+    }
+  });
+
   it("CONTROL: the detector sees a leak on a non-sensitive key name (the logger's redaction cannot mask it)", () => {
     reportSilentFallback(null, { feature: "canary-control", op: "leak", extra: { note: CANARY_KEY, observed: CANARY_WORKSPACE } });
     const all = surfaces();
     expect(all).toContain(CANARY_KEY);
     expect(all).toContain(CANARY_WORKSPACE);
     expect(agentMessages()).toHaveLength(0);
+  });
+
+  it("CONTROL: the derived-form detector sees a prefix and a user-id slice on a sink OUTSIDE the exact-shape check", () => {
+    reportSilentFallback(null, { feature: "canary-control", op: "leak", extra: { note: CANARY_KEY.slice(0, 10), who: CANARY_USER.slice(0, 12) } });
+    const all = surfaces();
+    expect(all).toContain(CANARY_KEY.slice(0, 10));
+    expect(all).toContain(CANARY_USER.slice(0, 12));
   });
 });
 
@@ -243,17 +273,29 @@ describe("isolation: the emit carries no other tenant's breadcrumbs or user", ()
     const outer = Sentry.getIsolationScope();
     outer.setUser({ id: "OUTER-TENANT-USER" });
     outer.addBreadcrumb({ category: "pino", message: "OUTER-TENANT-CRUMB" });
+    outer.setTag("tenant", "OUTER-TENANT-TAG");
+    outer.setExtra("note", "OUTER-TENANT-EXTRA");
+    outer.setContext("req", { who: "OUTER-TENANT-CONTEXT" });
     return outer;
+  };
+  const clearOuter = (outer: ReturnType<typeof Sentry.getIsolationScope>) => {
+    outer.clear();
   };
   const outerUntouched = () => {
     expect(Sentry.getIsolationScope().getUser()?.id).toBe("OUTER-TENANT-USER");
     expect(JSON.stringify(Sentry.getIsolationScope().getScopeData().breadcrumbs)).toContain("OUTER-TENANT-CRUMB");
+    expect(Sentry.getIsolationScope().getScopeData().tags.tenant).toBe("OUTER-TENANT-TAG");
   };
+  // Everything both scopes carry at the moment of capture (user, breadcrumbs, tags, extra, contexts), not one field of one scope.
   const observeScopeAtCapture = () => {
-    const seen: { user: unknown; crumbs: unknown }[] = [];
+    const seen: { user: unknown; everything: string }[] = [];
     sentry.captureMessage.mockImplementation(() => {
-      const scope = Sentry.getIsolationScope();
-      seen.push({ user: scope.getUser(), crumbs: scope.getScopeData().breadcrumbs });
+      const isolation = Sentry.getIsolationScope();
+      const carried = (scope: ReturnType<typeof Sentry.getIsolationScope>) => {
+        const { user, tags, extra, contexts, breadcrumbs } = scope.getScopeData();
+        return { user, tags, extra, contexts, breadcrumbs };
+      };
+      seen.push({ user: isolation.getUser(), everything: JSON.stringify([carried(isolation), carried(Sentry.getCurrentScope())]) });
     });
     return seen;
   };
@@ -261,14 +303,19 @@ describe("isolation: the emit carries no other tenant's breadcrumbs or user", ()
   it("without an isolating async-context strategy (the SDK default) the emit never wipes the process-wide scope", async () => {
     // Runs BEFORE Sentry.init below: under the default stack strategy withIsolationScope hands back the SAME scope, and
     // clearing it would destroy every tenant's breadcrumbs globally. The emit must detect that and leave it alone.
+    // Precondition (not a silent ordering assumption): the default strategy returns the SAME scope, so Sentry.init has not run.
+    expect(Sentry.withIsolationScope((s) => s)).toBe(Sentry.getIsolationScope());
     const outer = seed();
+    const seen = observeScopeAtCapture();
     try {
       await runStream();
       expect(agentMessages()).toHaveLength(1);
+      expect(seen, "captureMessage was not observed").toHaveLength(1);
+      // Nothing of the DEDUPE TOKEN rides the scope on the unscoped branch either (its own user/tag/extra writes would show here).
+      expect(seen[0].everything).not.toContain(CANARY_USER);
       outerUntouched();
     } finally {
-      outer.setUser(null);
-      outer.clearBreadcrumbs();
+      clearOuter(outer);
     }
   });
 
@@ -282,14 +329,15 @@ describe("isolation: the emit carries no other tenant's breadcrumbs or user", ()
       await runStream();
       expect(agentMessages()).toHaveLength(1);
       expect(seen, "captureMessage was not observed").toHaveLength(1);
+      // user, breadcrumbs, tags, extra and contexts of both scopes at capture time: no tenant data, and no dedupe token.
       expect(JSON.stringify(seen[0].user ?? {})).not.toContain("OUTER-TENANT");
-      expect(JSON.stringify(seen[0].crumbs)).not.toContain("OUTER-TENANT");
+      expect(seen[0].everything).not.toContain("OUTER-TENANT");
+      expect(seen[0].everything).not.toContain(CANARY_USER);
       // The user passed to captureMessage is not an identity either.
       expect(JSON.stringify(agentMessages()[0][1].user ?? null)).not.toContain("OUTER-TENANT");
       outerUntouched();
     } finally {
-      outer.setUser(null);
-      outer.clearBreadcrumbs();
+      clearOuter(outer);
     }
   });
 });

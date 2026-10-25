@@ -49,12 +49,15 @@ export type CliAuthFailureKind =
  *  (cq-regex-unicode-separators-escape-only). No nested or overlapping quantifiers: every pattern is a literal with at
  *  most one alternation, so matching is linear in the (<= 200 char) input.
  *
- *  Wording read from the bundled `claude` binary of @anthropic-ai/claude-agent-sdk 0.3.283 on 2026-10-25 (`strings` over the
- *  binary, read-only, no credentials), spot-checked against the pinned 0.3.284 binary the same day: the "Invalid API key",
- *  "Session expired. Please run /login to sign in again." and "Not logged in. Run claude auth login" strings are present;
- *  "Your session has expired. Please run /login to sign in again." was NOT found verbatim in 0.3.284 (it carries "Your session
- *  has expired. Please reauthenticate." instead), so that alternative is kept only as a harmless spare. RE-DERIVE ON EVERY SDK BUMP: the structured
- *  `SDK_AUTHENTICATION_FAILED` arm covers most of a wording change, but nothing else re-checks this list. */
+ *  Wording read from the bundled `claude` binary of @anthropic-ai/claude-agent-sdk 0.3.284 on 2026-10-25 (`grep -a` over the
+ *  binary, read-only, no credentials): "Invalid API key", "Session expired. Please run /login to sign in again." and
+ *  "Not logged in. Run claude auth login" are present. "Your session has expired. Please run /login to sign in again." is
+ *  also present (three hits), but only in the remote-session fetch paths, where it is THROWN or returned as an error and not
+ *  printed as a stream reply, so that alternative is kept as a spare whose stream reachability is unverified. A further
+ *  wording, "Not logged in. This session uses a Cloud gateway; start `claude` and sign in with /login.", sits in what looks
+ *  like interactive render code and is not matched here (unverified whether it can reach the SDK stream). RE-DERIVE ON EVERY
+ *  SDK BUMP: the structured `SDK_AUTHENTICATION_FAILED` arm covers most of a wording change, but nothing else re-checks
+ *  this list. */
 export const CLI_AUTH_FAILURE_REPLIES: ReadonlyArray<{ kind: CliAuthFailureKind; pattern: RegExp }> = [
   {
     kind: "not_logged_in",
