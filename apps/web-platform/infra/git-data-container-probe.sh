@@ -34,6 +34,14 @@
 #
 # Seams (suite only): GDCP_SSH (ssh binary), GDCP_TIMEOUT (outer bound, seconds), GDCP_REPO_ROOT (the wrapper's repo root).
 set -u
+case "$-" in
+  *x*)
+    if [ -n "${GIT_DATA_SSH_HOST_KEY:+x}${GIT_TRANSPORT_SSH_PRIVATE_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 umask 077
 
 wr="${WORKTREE_ROOT:-/var/lib/soleur/worktrees}"
