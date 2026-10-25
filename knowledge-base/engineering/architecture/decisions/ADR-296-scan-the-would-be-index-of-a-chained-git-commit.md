@@ -219,6 +219,9 @@ own call first for a loop, stash, merge or checkout).
 14. `LEFTHOOK=0` / `HUSKY=0` (and `--no-verify`, which this hook ignores) disable the repository's own pre-commit hooks:
     on a host that sets them this PreToolUse hook is the ONLY local gitleaks gate, so a bypass row here (gitleaks absent or
     unrunnable) is a real hole there, not a second line of defence.
+15. A gitignored file force-added inside a launcher or interpreter string (`su -c 'git add -f k.pem' && git commit`) is
+    covered only by the superset scan, which skips ignored files. The pre-#10696 hook allowed it too (not a regression).
+    A chained commit under a `TMPDIR` below `/dev`, `/proc` or `/sys` (e.g. tmpfs) denies as `temp-dir` (row 53).
 
 ## Consequences
 
