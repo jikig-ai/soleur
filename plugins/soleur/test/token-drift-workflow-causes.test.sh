@@ -2359,6 +2359,10 @@ def agg_population(wf):
             out.append((k, v))
     return out
 
+RES = ("success", "failure", "cancelled", "skipped")
+RES_PAIRS = [(a, b) for a in RES for b in RES]
+RES_PAIRS_N = [(a, b) for a in RES + (None,) for b in RES + (None,)]
+
 def r10(wf):
     out = []
     swj = sorted(k for k, _ in sweeps(wf))
@@ -2387,11 +2391,15 @@ def r10(wf):
         try:
             if not job_runs(job, needs_ctx(swj, res)):
                 out.append("%s does not run on main when the sweeps are %s" % (jid, res))
-            for off in ("refs/heads/feature", "refs/heads/dev", "refs/tags/v1"):
+            for off in ("refs/heads/feature", "refs/heads/dev", "refs/tags/v1", "refs/heads/release", "refs/heads/main-x", "refs/pull/1/merge"):
                 if job_runs(job, needs_ctx(swj, res, ref=off)):
                     out.append("%s runs off main (%s)" % (jid, off))
         except Exception as e:
             out.append("%s if cannot be evaluated: %s" % (jid, e))
+    # the job-level condition is pinned to its exact shape too: the evaluated probes above only sample ref names
+    if_norm = re.sub(r"\s+", " ", re.sub(r"^\$\{\{|\}\}$", "", str(job.get("if", "")).strip()).strip())
+    if if_norm != "always() && github.ref == 'refs/heads/main'":
+        out.append("%s if is %r, not exactly always() && github.ref == 'refs/heads/main'" % (jid, if_norm))
     steps = job.get("steps") or []
     ck = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/checkout@")]
     hb = [i for i, s in enumerate(steps) if str(s.get("uses", "")).rstrip("/") == HEARTBEAT]
@@ -2404,7 +2412,8 @@ def r10(wf):
         out.append("%s checkout has no step timeout" % jid)
     h = steps[hb[0]]
     slug = (h.get("with") or {}).get("monitor-slug")
-    tf_live = "\n".join(l for l in TF_TEXT.splitlines() if not re.match(r"\s*(?:#|//)", l))
+    tf_live = re.sub(r"/\*.*?\*/", "", TF_TEXT, flags=re.S)
+    tf_live = "\n".join(l for l in tf_live.splitlines() if not re.match(r"\s*(?:#|//)", l))
     if not (isinstance(slug, str) and re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{(?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"%s"' % re.escape(slug), tf_live)):
         out.append("%s monitor-slug %r is not a monitor name in cron-monitors.tf" % (jid, slug))
     else:
@@ -2412,13 +2421,26 @@ def r10(wf):
                     if str(s.get("uses", "")).rstrip("/") == HEARTBEAT and (s.get("with") or {}).get("monitor-slug") == slug)
         if nslug != 1:
             out.append("slug %s has %d check-in steps in the workflow (want 1)" % (slug, nslug))
+    if slug != "scheduled-orphan-sweeps":
+        out.append("%s heartbeat posts to %r, not the monitor scheduled-orphan-sweeps" % (jid, slug))
+    mon = re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{((?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"scheduled-orphan-sweeps"(?:(?!\nresource\s)[\s\S])*)', tf_live)
+    if mon:
+        blk = mon.group(1).split("\n}", 1)[0]
+        for key, want in (("failure_issue_threshold", "1"), ("recovery_threshold", "1")):
+            if not re.search(r"\b%s\s*=\s*%s\b" % (key, want), blk):
+                out.append("monitor scheduled-orphan-sweeps does not set %s = %s" % (key, want))
+        m2 = re.search(r"\bcheckin_margin_minutes\s*=\s*(\d+)", blk)
+        if not (m2 and int(m2.group(1)) >= 30):
+            out.append("monitor scheduled-orphan-sweeps checkin_margin_minutes is below 30 or unset")
+        if not re.search(r'crontab\s*=\s*"0 6,18 \* \* \*"', blk):
+            out.append("monitor scheduled-orphan-sweeps crontab is not the two drift slots 0 6,18 * * *")
     if h.get("continue-on-error") is not True:
         out.append("%s heartbeat step is not continue-on-error" % jid)
     # the heartbeat step must run on EVERY outcome (a check-in that only fires on success never reports `error`), and carry all three ingest inputs
     try:
         if "always()" not in gh_tokens(h.get("if", "")):
             out.append("%s heartbeat step does not use always()" % jid)
-        for res in [(a, b) for a in ("success", "failure", "cancelled", "skipped") for b in ("success", "failure", "cancelled", "skipped")]:
+        for res in RES_PAIRS:
             if not gh_eval(h.get("if", ""), needs_ctx(swj, res)):
                 out.append("%s heartbeat step is skipped for %s" % (jid, res)); break
     except Exception as ex:
@@ -2427,7 +2449,7 @@ def r10(wf):
         if (h.get("with") or {}).get(inp) != "${{ secrets.%s }}" % sec:
             out.append("%s heartbeat input %s is not secrets.%s" % (jid, inp, sec))
     # the status expression, evaluated over every result pair: ok only when both are success
-    for res in [(a, b) for a in ("success", "failure", "cancelled", "skipped", None) for b in ("success", "failure", "cancelled", "skipped", None)]:
+    for res in RES_PAIRS_N:
         try:
             got = gh_eval((h.get("with") or {}).get("status", ""), needs_ctx(swj, res))
         except Exception as e:
@@ -2442,7 +2464,7 @@ def r10(wf):
         e = mails[0]
         if "always()" not in str(e.get("if", "")):
             out.append("%s email step does not use always()" % jid)
-        for res in [(a, b) for a in ("success", "failure", "cancelled", "skipped", None) for b in ("success", "failure", "cancelled", "skipped", None)]:
+        for res in RES_PAIRS_N:
             try:
                 got = gh_eval(e.get("if", ""), needs_ctx(swj, res))
             except Exception as ex:
@@ -2461,6 +2483,12 @@ def r10(wf):
             v = (e.get("with") or {}).get(fld)
             if not (isinstance(v, str) and v.strip()):
                 out.append("%s email step has no %s" % (jid, fld))
+        subj = str((e.get("with") or {}).get("subject", ""))
+        rung_k, inn_k = next((k for k in swj if "rung2" in k), ""), next((k for k in swj if "inngest" in k), "")
+        ia, ib = subj.find("needs.%s.result" % rung_k), subj.find("needs.%s.result" % inn_k)
+        ra, rb = subj.find("rung-2"), subj.find("inngest")
+        if not (0 <= ia and 0 <= ib and 0 <= ra < ia < rb < ib):
+            out.append("%s email subject does not name the rung-2 result then the inngest result in order" % jid)
     # the job bound must cover the sum of its step bounds, or a hung step is cut by the job instead of by its own timeout
     step_sum = sum(s.get("timeout-minutes") for s in steps if isinstance(s.get("timeout-minutes"), int))
     jt = job.get("timeout-minutes")
@@ -2483,6 +2511,12 @@ def r10(wf):
         for fld in ("identity", "identity_http", "identity_reason"):
             if not re.search(r"steps\.sweep\.outputs\.%s(?![\w])" % fld, body):
                 out.append("%s email body does not render %s" % (sid, fld))
+        # a sweep that failed before the proof ran leaves the outputs empty: each field must fall back to a stated word, never render blank
+        for fld, fb in (("identity", "not reached"), ("identity_http", "none"), ("identity_reason", "none")):
+            if not re.search(r"steps\.sweep\.outputs\.%s\s*\|\|\s*'%s'" % (fld, fb), body):
+                out.append("%s email body renders %s without the '%s' fallback" % (sid, fld, fb))
+        if "HTTP 401 or 403 means Hetzner refused the token" not in body:
+            out.append("%s email body does not tell a refused token (401/403) from a 404" % sid)
     text = "\n".join(leaves(job))
     for sec in sorted(set(SECRET_REF.findall(text)) - AGG_SECRETS):
         out.append("%s is handed secret %s outside %s" % (jid, sec, "/".join(sorted(AGG_SECRETS))))
@@ -2673,6 +2707,33 @@ def r10_tf_commented(m):
         return r10(m)
     finally:
         TF_TEXT = old
+def m10_agg_if_release(m): agg(m)["if"] = "always() && github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release'"
+def m10_agg_if_prmerge(m): agg(m)["if"] = "always() && github.ref == 'refs/heads/main' || github.ref == 'refs/pull/1/merge'"
+def m10_slug_other_monitor(m): agg_step(m, is_hb)["with"]["monitor-slug"] = "scheduled-oauth-probe"
+def m10_agg_subject_swapped(m):
+    w = agg_step(m, is_email)["with"]; a, b = "needs.%s.result" % RUNG, "needs.%s.result" % INN
+    w["subject"] = w["subject"].replace(a, "@@").replace(b, a).replace("@@", b)
+def m10_agg_subject_no_results(m): agg_step(m, is_email)["with"]["subject"] = "[INFRA DRIFT] Orphan sweep did not complete"
+def m10_sweep_body_fb_removed(m):
+    w = fail_email(jobs(m)[RUNG])["with"]; w["body"] = w["body"].replace("steps.sweep.outputs.identity || 'not reached'", "steps.sweep.outputs.identity")
+def m10_sweep_body_fb_wrong(m):
+    w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("|| 'not reached'", "|| 'proven'")
+def m10_sweep_body_http_fb_removed(m):
+    w = fail_email(jobs(m)[RUNG])["with"]; w["body"] = w["body"].replace("steps.sweep.outputs.identity_http || 'none'", "steps.sweep.outputs.identity_http")
+def m10_sweep_body_401_removed(m):
+    w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("HTTP 401 or 403 means Hetzner refused the token", "HTTP 401 or 403 means something")
+def r10_tf_sub(old, new):
+    def chk(m):
+        global TF_TEXT
+        keep = TF_TEXT
+        i = TF_TEXT.index('resource "sentry_cron_monitor" "scheduled_orphan_sweeps"')
+        assert old in TF_TEXT[i:], "tf mutation target not found"
+        TF_TEXT = TF_TEXT[:i] + TF_TEXT[i:].replace(old, new, 1)
+        try:
+            return r10(m)
+        finally:
+            TF_TEXT = keep
+    return chk
 def m10_sweep_subject_static(m): fail_email(jobs(m)[RUNG])["with"]["subject"] = "[INFRA DRIFT] The rung-2 rehearsal orphan sweep failed"
 def m10_sweep_subject_inverted(m):
     w = fail_email(jobs(m)[RUNG])["with"]; w["subject"] = w["subject"].replace("== 'unproven'", "== 'proven'")
@@ -2802,6 +2863,18 @@ ROWS = [
     ("r10-sweep-subject-inverted",     r10, m10_sweep_subject_inverted, "red"),
     ("r10-sweep-subject-wrong-output", r10, m10_sweep_subject_reason, "red"),
     ("r10-sweep-body-identity-dropped", r10, m10_sweep_body_identity_removed, "red"),
+    ("r10-agg-if-or-release-branch",  r10, m10_agg_if_release, "red"),
+    ("r10-agg-if-or-pr-merge-ref",     r10, m10_agg_if_prmerge, "red"),
+    ("r10-slug-other-monitor",         r10, m10_slug_other_monitor, "red"),
+    ("r10-agg-subject-results-swapped", r10, m10_agg_subject_swapped, "red"),
+    ("r10-agg-subject-drops-results",  r10, m10_agg_subject_no_results, "red"),
+    ("r10-sweep-body-identity-fallback-removed", r10, m10_sweep_body_fb_removed, "red"),
+    ("r10-sweep-body-identity-fallback-wrong-word", r10, m10_sweep_body_fb_wrong, "red"),
+    ("r10-sweep-body-http-fallback-removed", r10, m10_sweep_body_http_fb_removed, "red"),
+    ("r10-sweep-body-401-403-sentence-removed", r10, m10_sweep_body_401_removed, "red"),
+    ("r10-tf-margin-lowered",          r10_tf_sub("checkin_margin_minutes  = 60", "checkin_margin_minutes  = 5"), m10_tf_commented, "red"),
+    ("r10-tf-crontab-changed",         r10_tf_sub('crontab = "0 6,18 * * *"', 'crontab = "0 6 * * *"'), m10_tf_commented, "red"),
+    ("r10-tf-failure-threshold-changed", r10_tf_sub("failure_issue_threshold = 1", "failure_issue_threshold = 3"), m10_tf_commented, "red"),
     ("r10-must-pass-aggregator-renamed", r10, m10_renamed,        "clean"),
     ("r10-must-pass-email-body-reworded", r10, m10_email_body_reworded, "clean"),
     ("r10-must-pass-heartbeat-timeout-changed", r10, m10_hb_timeout, "clean"),
@@ -2880,8 +2953,9 @@ fi
 
 # The floor is the table's CURRENT size, so a removed row is visible in the diff that removes it.
 # 61 -> 91 with R10 (22 red rows and 3 must-pass rows) and R11 (4 red rows and 1 must-pass row): 30 added.
-# 91 -> 108 with the review round's 17 R10 mutation rows (all red).
-R78_MIN=108
+# 91 -> 108 with the review round's 17 R10 mutation rows (all red), then 108 -> 120 with the fix-round's 12 (aggregator `if` pinned exactly,
+# slug pinned, subject order, TF monitor values, the sweep email's identity fallbacks and its 401/403 sentence).
+R78_MIN=120
 echo "R7/R8: mutation rows — every spelling that re-opens the read/write credential or drops the failure email is RED, legitimate variants GREEN"
 R78_OUT=$(python3 -c "$SWEEP_PY" mutate "$WF") || { echo "FATAL: the R7/R8 mutation runner crashed" >&2; exit 2; }
 r78_line() { if [[ "$1" == "PASS" ]]; then pass "R78/$2: $3"; else fail "R78/$2: $3"; fi; }
@@ -3076,8 +3150,10 @@ r9_case() {
 
 echo "R9: each converted sweep step decides correctly (clean, absent token, timed-out or killed read, shape-invalid token, rejected listing, found orphan)"
 _r9_ok=1
+_R9_SEEN=()
 for _job in rung2-rehearsal-orphan-sweep inngest-rehearsal-orphan-sweep; do
   for _mode in clean empty unauth trailws timeout killed badshape apifail paginated orphan; do
+    _R9_SEEN+=("beh $_job $_mode")
     _v=$(r9_case "$R9_DIR/$_job.sh" "$_mode")
     if [[ "$_v" == OK ]]; then pass "R9/$_job/$_mode"; else fail "R9/$_job/$_mode: ${_v#BAD:}"; _r9_ok=0; fi
   done
@@ -3133,6 +3209,21 @@ r9_anchor_case() {
     grep -q "orphan_sweep_project_identity_${state}" <<<"$out" || { echo "BAD:no named orphan_sweep_project_identity_${state} error"; return; }
     (( nlist == 0 )) || { echo "BAD:$nlist listing request(s) ran after a failed proof"; return; }
     grep -q '^orphans=' "$gho" && { echo "BAD:a verdict was published after a failed proof"; return; }
+    # the operator-facing sentence is a claim too: each cause carries its own wording and none carries another's
+    local must="" mustnot=""
+    case "$anchor" in
+      unauth) must="Hetzner refused the token (HTTP 401)"; mustnot="volume is gone" ;;
+      forbidden) must="Hetzner refused the token (HTTP 403)"; mustnot="volume is gone" ;;
+      notfound) must="a 404 is not measured to tell them apart"; mustnot="refused the token" ;;
+      e400) must="did not match the pinned volume or could not be read (HTTP 400, reason http)"; mustnot="volume is gone" ;;
+      other_id|other_id_hi|other_id_lo|nested_id) must="did not match the pinned volume or could not be read (HTTP 200, reason id_mismatch)"; mustnot="refused the token" ;;
+      badbody|null_volume|empty_object|string_id|wrong_key) must="did not match the pinned volume or could not be read (HTTP 200, reason malformed)"; mustnot="refused the token" ;;
+      e503|e500|transport) must="This is not a statement about the token's project"; mustnot="refused the token" ;;
+    esac
+    if [[ -n "$must" ]]; then
+      grep -qF -- "$must" <<<"$out" || { echo "BAD:the error text lacks: $must"; return; }
+      if grep -qF -- "$mustnot" <<<"$out"; then echo "BAD:the error text wrongly carries: $mustnot"; return; fi
+    fi
   fi
   echo OK
 }
@@ -3140,6 +3231,7 @@ r9_anchor_case() {
 echo "R9: the project-identity proof (volume the token must see) — proven, wrong id, 404, 401, 403, malformed body, 5xx, transport, retried 429 and 503"
 for _job in rung2-rehearsal-orphan-sweep inngest-rehearsal-orphan-sweep; do
   while read -r _anchor _want _n; do
+    _R9_SEEN+=("id $_job $_anchor")
     _v=$(r9_anchor_case "$R9_DIR/$_job.sh" "$_anchor" "$_want" "$_n")
     if [[ "$_v" == OK ]]; then pass "R9/$_job/identity-$_anchor"; else fail "R9/$_job/identity-$_anchor: ${_v#BAD:}"; fi
   done <<'CASES'
@@ -3168,6 +3260,16 @@ string_id unproven:malformed:200 1
 wrong_key unproven:malformed:200 1
 CASES
 done
+
+# the dispatch loops must name BOTH sweeps once each: a loop naming one job twice keeps the assertion count and silently skips the other
+_dupn=$(printf '%s\n' "${_R9_SEEN[@]}" | sort | uniq -d | wc -l)
+if (( _dupn == 0 )); then pass "R9/dispatch: no (job, case) pair ran twice"; else fail "R9/dispatch: ${_dupn} (job, case) pair(s) ran twice, so another pair did not run"; fi
+for _job in rung2-rehearsal-orphan-sweep inngest-rehearsal-orphan-sweep; do
+  _nb=$(printf '%s\n' "${_R9_SEEN[@]}" | grep -c "^beh $_job ") || _nb=0
+  _ni=$(printf '%s\n' "${_R9_SEEN[@]}" | grep -c "^id $_job ") || _ni=0
+  if (( _nb == 10 && _ni == 23 )); then pass "R9/dispatch/$_job: 10 behaviour modes and 23 identity cases ran"; else fail "R9/dispatch/$_job: ran ${_nb} behaviour modes and ${_ni} identity cases, want 10 and 23"; fi
+done
+if (( $(printf 'a\na\nb\n' | sort | uniq -d | wc -l) == 1 )); then pass "R9/dispatch/control: the duplicate detector sees a repeated pair"; else fail "R9/dispatch/control: the duplicate detector missed a repeated pair"; fi
 
 # the two sweeps carry ONE proof: the blocks between the markers must be byte-identical (a fix applied to one copy only is a defect in the other)
 _blk() { sed -n '/# IDENTITY-PROOF-BEGIN/,/# IDENTITY-PROOF-END/p' "$1"; }
@@ -3219,6 +3321,10 @@ r9_identity_mut sleep-long 's#then sleep 5; fi#then sleep 5000; fi#' e503_then_o
 r9_identity_mut sleep-trailing 's#^if (( id_fetched != 1 )); then#sleep 5\n&#' e503 unreachable:http:503 2
 r9_identity_mut retry-narrowed 's#429|5??) ;;#429|503) ;;#' e500_then_ok proven:none:200 2
 r9_identity_mut retry-widened 's#429|5??) ;;#429|5??|4??) ;;#' e400 unproven:http:400 1
+r9_identity_mut refused-403-narrowed 's#401|403) id_cause=#401) id_cause=#' forbidden unproven:http:403 1
+r9_identity_mut cause-dropped-from-error 's# \${id_cause}##' unauth unproven:http:401 1
+r9_identity_mut notfound-arm-retargeted 's#404) id_cause=#999) id_cause=#' notfound unproven:http:404 1
+r9_identity_mut unreachable-sentence-dropped 's# This is not a statement about the token.s project\.##' e503 unreachable:http:503 2
 r9_identity_mut zero-as-status 's#\[\[ "\$id_http" == 000 \]\] \&\& id_http=""##' transport unreachable:transport:none 2
 
 # ---------------------------------------------------------------------------
@@ -3293,11 +3399,11 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Then 257 -> 317 with #10952: R10 (the sweeps' aggregator: 1 row plus 25 mutation rows), R11 (the label population: 1 row plus 5 mutation rows), the project-identity
 # proof in R9 (11 cases for each of the two sweeps, 22 rows, and 3 mutation rows), and R12 (the labels recorded from a real run of each orphan filer: 3 rows):
 # 60 added, 317 was the REALIZED `PASS + FAIL` before the review round.
-# Then 317 -> 380 with the #10952 review round: R10 gains 17 mutation rows (the heartbeat step's own condition and inputs, the email subject and
+# Then 317 -> 404 with the #10952 review round: R10 gains 17 mutation rows (the heartbeat step's own condition and inputs, the email subject and
 # body, the job bound, a job-level `if` the evaluator used to mis-model, a slug that is only a comment, and each sweep's distinct subject and
 # body fields), 12 more identity cases for each of the two sweeps (24 rows: the 5xx class, a 4xx that is not retried, ids either side of the
 # pin, a nested id, a null or empty or mistyped volume, and the back-off sleep now asserted on every case), and 10 identity mutation rows for each of
-# the two sweeps (20 rows): 63 added (two more: the byte-identity of the two proof blocks, and its mutation), 380 is the REALIZED `PASS + FAIL`.
+# the two sweeps (20 rows): 87 added (two more: the byte-identity of the two proof blocks, and its mutation; then 24 from the fix round: 12 R10 mutation rows, 8 wording mutation rows across the two sweeps, 4 dispatch-ledger rows), 404 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -3313,8 +3419,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 380 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 380." >&2
+if [[ "$((PASS + FAIL))" -lt 404 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 404." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
