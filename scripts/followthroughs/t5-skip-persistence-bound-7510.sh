@@ -22,13 +22,17 @@
 # banners and markers reach the job log directly.
 #
 # Exit semantics (per sweep-followthroughs.sh contract):
-#   0 = PASS       (no skip observed in the sampled window; the residual has not materialised)
-#   1 = FAIL       (>= 1 skip observed in either source; for rehearsal-arm hits the deferred
-#                  pre-bake / S1 extension is now owed, for g1b./g2b./fl. hits a runner git no
-#                  longer exhibits the walk contract the corrupt-walk rows validate — the
-#                  per-source lines name which)
+#   0 = PASS       (rehearsal arms: no more than 1 skipping run in 20 observed runs, ADR-188's
+#                  bound; guard suites: no skip observed)
+#   1 = FAIL       (rehearsal arms: MORE than 1 skipping run in 20 observed runs, i.e. a recurring
+#                  rather than transient apt / docker-pull decline; guard suites: >= 1 skip, because
+#                  a runner git that no longer exhibits the walk contract the corrupt-walk rows
+#                  validate is a deterministic degradation — the per-source lines name which)
 #   2 = TRANSIENT  (gh unreachable, auth failure, no runs to sample, or a source's
 #                  positive-control discriminator absent in every sampled log)
+#   3 = ESCALATED  (the consecutive-TRANSIENT counter reached its threshold: the probe itself is
+#                  broken, which is NOT evidence about the arms. It exits 3, not 1, so the monitor
+#                  files it under its `broken` title instead of the skip title -- #10918)
 #  78 = REFUSED    (running under `set -x` with a live GH_TOKEN -- see the guard below, #7797)
 #
 # 78 IS A FOURTH ROW, ADDED AT REVIEW (#7535 Phase 2). It is deliberately NOT folded into
@@ -38,7 +42,7 @@
 # the script did not run to a verdict, and an unamended list would have made that claim false for
 # the one exit that is most obviously deliberate.
 #
-# Beyond those four there is no `*` row. Any OTHER code means the script did not run to a verdict
+# Beyond those five there is no `*` row. Any OTHER code means the script did not run to a verdict
 # (127 missing, 126 not executable, 2-from-bash on a syntax error). The standing monitor treats that as its own RED rather
 # than folding it into TRANSIENT -- see scheduled-rehearsal-skip-monitor.yml. Note that
 # sweep-followthroughs.sh maps any other exit to TRANSIENT by ITS documented contract; that
@@ -59,9 +63,11 @@
 #     once used, which made the probe blind to the S1 arm #7572 makes skip-eligible
 #     and would equally have missed the T17 arm #7535 Phase 2 makes skip-eligible —
 #     and for every per-suite marker set in GUARD_UNITS (source 2)
-#   - 0 occurrences  => PASS (the skip is not persistent)
-#   - >=1 occurrence => FAIL (the deferred pre-bake / S1 extension is owed for
-#     rehearsal-arm hits; a degraded runner-git walk contract for guard hits)
+#   - Source 1 counts RUNS that carried a marker (a run on which two arms skipped is one run), over
+#     the first OBSERVE_TARGET (20) runs that carry the suite's terminal line, taken from up to
+#     LIST_LIMIT (40) listed runs. FAIL when skip_runs * BOUND_DENOM > observed (ADR-188: "more
+#     than 1 in 20"); PASS otherwise, saying so when a skip was seen but is within the bound.
+#   - Source 2 (guard hits) is any-hit FAIL: a degraded runner-git walk contract is deterministic
 #
 # CARRIER (#7574). This probe is NOT enrolled as a `<!-- soleur:followthrough -->`
 # directive. The sweeper closes a follow-through on its first PASS and
@@ -129,7 +135,9 @@ _transient() {  # $1 = human reason -- ALWAYS exits, never returns
     echo "      This is no longer a transient condition. A probe that cannot measure is not" >&2
     echo "      evidence that there is nothing to measure -- treat this as a broken instrument," >&2
     echo "      not as a quiet window." >&2
-    exit 1
+    # rc 3, not 1: this is a broken instrument, and rc 1 files under the "arms are skipping" title
+    # of the monitor (#10918). The monitor maps any code outside 0/1/2 to its `broken` verdict.
+    exit 3
   fi
   exit 2
 }
@@ -139,7 +147,17 @@ _clear_transient_streak() { rm -f "$T5_PROBE_STATE" 2>/dev/null || true; }
 if [[ -z "${GH_TOKEN:-}" ]]; then _transient "GH_TOKEN not set"; fi
 
 REPO="jikig-ai/soleur"
-SAMPLE=20   # ADR-188's declared window: "more than 1 in 20 post-merge runs"
+SAMPLE=20   # source 2's window (guard-suite runs, sampled by event)
+
+# SOURCE 1's WINDOW, ADR-188's bound: "more than 1 in 20 post-merge runs". The bound is a RATE over
+# OBSERVED runs, so the sample has to be able to reach the denominator it is measured against:
+# listing only 20 runs (failures included) left `observed` at 13 to 15 (measured 2026-10-25), and
+# one skip in 13 is 7.7% -- so one transient apt decline could never be shown to be inside the
+# bound and the monitor stayed red for as long as it stayed in the window. List more, and stop
+# once OBSERVE_TARGET runs have been observed.
+LIST_LIMIT=40
+OBSERVE_TARGET=20
+BOUND_DENOM=20   # 1 skipping run per BOUND_DENOM observed runs is the bound; more than that FAILs
 
 # THE POSITIVE CONTROL, added at review. Counting occurrences of a marker and reporting PASS on
 # zero cannot distinguish "the arm did not skip" from "this probe can no longer see the arm at
@@ -216,11 +234,12 @@ transient_reasons=""
 sampled=0
 observed=0
 hits=0
+skip_runs=0
 declare -A per_arm=()
 for _m in "${SKIP_MARKERS[@]}"; do per_arm["$_m"]=0; done
 
 if ! runs=$(gh run list --repo "$REPO" --workflow infra-validation.yml --branch main \
-         --limit "$SAMPLE" --json databaseId,conclusion 2>/dev/null); then
+         --limit "$LIST_LIMIT" --json databaseId,conclusion 2>/dev/null); then
   echo "TRANSIENT: infra-validation.yml — gh run list failed" >&2
   transient_reasons="infra-validation gh run list failed"
 else
@@ -244,6 +263,7 @@ else
       # second process, so there is nothing to break.
       grep -qF "$SUITE_TERMINAL" <<<"$log" || continue
       observed=$((observed + 1))
+      run_hits=0
       for _m in "${SKIP_MARKERS[@]}"; do
         # `grep -c` reads to EOF and never breaks the pipe, so this line was not
         # affected. Converted anyway so the file has ONE form and the next reader
@@ -251,7 +271,13 @@ else
         n=$(grep -cF "$_m" <<<"$log" || true)
         per_arm["$_m"]=$(( ${per_arm["$_m"]} + n ))
         hits=$((hits + n))
+        run_hits=$((run_hits + n))
       done
+      # ADR-188's bound is over RUNS: one apt outage that skips two arms is one bad run.
+      if [[ "$run_hits" -gt 0 ]]; then skip_runs=$((skip_runs + 1)); fi
+      # Stop at the window's size. The listing is larger than the window on purpose (failed runs
+      # carry no suite line), so without this a quiet stretch would cost LIST_LIMIT log fetches.
+      if [[ "$observed" -ge "$OBSERVE_TARGET" ]]; then break; fi
     done <<< "$ids"
     if [[ "$sampled" -lt 1 ]]; then
       echo "TRANSIENT: infra-validation.yml — no run logs could be fetched" >&2
@@ -259,12 +285,14 @@ else
     elif [[ "$observed" -lt 1 ]]; then
       echo "TRANSIENT: infra-validation.yml — fetched ${sampled} run log(s), none containing '${SUITE_TERMINAL}' — the suite did not run in this window, or its output moved. A zero skip-count here would be an un-run instrument reporting a clean bill of health." >&2
       transient_reasons="rehearsal suite unobserved in sampled logs"
-    elif [[ "$hits" -eq 0 ]]; then
+    elif [[ "$skip_runs" -eq 0 ]]; then
       echo "PASS: infra-validation.yml — 0 loud rehearsal skips (arms: ${SKIP_MARKERS[*]}) across ${observed} observed post-merge run(s) (${sampled} sampled)"
+    elif [[ $((skip_runs * BOUND_DENOM)) -le "$observed" ]]; then
+      echo "PASS: infra-validation.yml — ${skip_runs} of ${observed} observed post-merge run(s) carried a loud rehearsal skip, within ADR-188's bound of 1 in ${BOUND_DENOM} (arms: ${SKIP_MARKERS[*]}; ${sampled} sampled)"
     else
       # DENOMINATOR: `observed`, not `sampled` — the two verdicts describe
       # different populations and reporting FAIL over sampled understates the rate.
-      echo "FAIL: infra-validation.yml — ${hits} loud rehearsal skip(s) across ${observed} observed post-merge run(s) (${sampled} sampled)." >&2
+      echo "FAIL: infra-validation.yml — ${skip_runs} of ${observed} observed post-merge run(s) carried a loud rehearsal skip (${hits} marker line(s)), past ADR-188's bound of 1 in ${BOUND_DENOM} (${sampled} sampled)." >&2
       for _m in "${SKIP_MARKERS[@]}"; do
         echo "        ${_m}=${per_arm["$_m"]}" >&2
       done
@@ -371,12 +399,13 @@ fi
 # read); otherwise any unreadable source is TRANSIENT — never a clean bill.
 if [[ "$any_fail" -eq 1 ]]; then
   _clear_transient_streak
-  echo "      ADR-188's declared observation window has fired: a skip is masking a persistent" >&2
-  echo "      condition rather than a transient one. For rehearsal-arm hits the deferred" >&2
-  echo "      pre-baked image (#7535) is owed and the S1 extension (#7572) becomes the same" >&2
-  echo "      class of problem; for g1b./g2b./fl. hits a runner git no longer exhibits the" >&2
-  echo "      walk contract the guard-suite rows validate (#10921) — refusal coverage is" >&2
-  echo "      degraded until the runner image or the rows change." >&2
+  echo "      ADR-188's declared observation window has fired: a skip is masking a recurring" >&2
+  echo "      condition rather than a transient one. For rehearsal-arm hits the apt or docker-pull" >&2
+  echo "      decline (rc 100 / 125) is recurring: diagnose the mirror or runner cause from the" >&2
+  echo "      skip lines (the pre-baked image was evaluated and cut on measurement in #7535); for" >&2
+  echo "      g1b./g2b./fl. hits a runner git no longer exhibits the walk contract the guard-suite" >&2
+  echo "      rows validate (#10921) — refusal coverage is degraded until the runner image or the" >&2
+  echo "      rows change." >&2
   exit 1
 fi
 

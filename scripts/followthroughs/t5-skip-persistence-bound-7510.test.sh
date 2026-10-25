@@ -109,9 +109,9 @@ mkcase() {
   if [ "$mode" != "missing" ]; then
     {
       printf '#!/usr/bin/env bash\n'
-      printf 'wf=""; pos=""; prev=""\n'
+      printf 'wf=""; pos=""; prev=""; lim=""\n'
       printf 'for a in "$@"; do\n'
-      printf '  case "$prev" in --workflow) wf="$a";; esac\n'
+      printf '  case "$prev" in --workflow) wf="$a";; --limit) lim="$a";; esac\n'
       printf '  case "$a" in [0-9]*) pos="$a";; esac\n'
       printf '  prev="$a"\n'
       printf 'done\n'
@@ -122,6 +122,9 @@ mkcase() {
       printf '      *pr-quality-guards*) base=7000; n=$(cat %s 2>/dev/null || echo 0) ;;\n' "$root/pg.n"
       printf '      *) n=0 ;;\n'
       printf '    esac\n'
+      # Honour --limit like the real `gh run list`: a stub that ignores it cannot express a
+      # listing larger than the probe asked for, nor a probe that asks for more than it needs.
+      printf '    if [ -n "$lim" ] && [ "$n" -gt "$lim" ]; then n="$lim"; fi\n'
       printf '    printf "["\n'
       printf '    for i in $(seq 1 "$n"); do\n'
       printf '      [ "$i" -gt 1 ] && printf ","\n'
@@ -129,7 +132,16 @@ mkcase() {
       printf '    done\n'
       printf '    printf "]"\n'
       printf '    ;;\n'
-      printf '  view) case "$pos" in 9*) cat %s ;; 7*) cat %s ;; *) exit 1 ;; esac ;;\n' "$root/log.iv.txt" "$root/log.pg.txt"
+      # Per-run logs: ids listed in iv.skip.ids return log.iv.skip.txt, every other run the case's
+      # default log. Every infra-validation fetch is appended to view.calls so a test can count
+      # how many logs the probe actually read (the early stop is otherwise unobservable).
+      printf '  view) case "$pos" in\n'
+      printf '    9*) echo "$pos" >> %s\n' "$root/view.calls"
+      printf '        if [ -f %s ] && grep -qx "$pos" %s 2>/dev/null; then cat %s; else cat %s; fi ;;\n' \
+        "$root/iv.skip.ids" "$root/iv.skip.ids" "$root/log.iv.skip.txt" "$root/log.iv.txt"
+      printf '    7*) cat %s ;;\n' "$root/log.pg.txt"
+      printf '    *) exit 1 ;;\n'
+      printf '  esac ;;\n'
       printf '  *) exit 1 ;;\n'
       printf 'esac\n'
     } > "$root/bin/gh"
@@ -239,10 +251,10 @@ for _i in 1 2 3; do
   ( PATH="$_r/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$_esc_state" T5_TRANSIENT_ESCALATE_AFTER=3 bash "$PROBE" ) >"$OUT" 2>&1
   _esc_rc=$?
 done
-if [ "$_esc_rc" -eq 1 ]; then
+if [ "$_esc_rc" -eq 3 ]; then
   pass
 else
-  fail "(h) transient escalation: the 3rd consecutive TRANSIENT exited $_esc_rc, expected 1 — a probe that cannot reach a verdict must stop being indistinguishable from one that keeps reaching a clean one. Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
+  fail "(h) transient escalation: the 3rd consecutive TRANSIENT exited $_esc_rc, expected 3 (escalated) — 1 is the skip FAIL, and an escalation filed under the skip title reads as arms skipping when the instrument is what is broken (#10918). Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
 fi
 
 # (h.ii) a real verdict must CLEAR the streak, or one bad window poisons the
@@ -517,7 +529,82 @@ if grep -qF "printf 'SKIP (loud): %s %s\\n'" "$CORRUPT_LIB"; then pass; else
   fail "(q) marker literal: git-corrupt-graph.sh no longer emits the exact 'SKIP (loud): %s %s\\n' the probe greps — an edit to the literal is a RED here, not silent unobservation"
 fi
 
+# ── (r)-(v) the ADR-188 RATE: "more than 1 in 20 post-merge runs" (#8856) ────
+# Until this change the rehearsal source FAILed on any single marker line, so one transient apt
+# decline kept the monitor red for as long as that run stayed in the sample (measured 2026-10-25:
+# one S1 docker rc=100 run among the 12 newest, the ten newest clean). ADR-188's bound is a RATE
+# over RUNS, so these rows give individual runs their own logs (mkcase serves one log to every
+# run, which cannot express "one run in twenty") and count how many logs the probe read.
+# skip_runs <root> <id>... — stdin is the skip log those run ids return.
+skip_runs() {
+  local root="$1"; shift
+  { cat; awk -v n="$PIPE_PAD_LINES" 'BEGIN{for(i=0;i<n;i++) print "2026-08-19T00:00:00Z filler log line to push this fixture past the 64KiB pipe buffer " i}'; } > "$root/log.iv.skip.txt"
+  printf '%s\n' "$@" > "$root/iv.skip.ids"
+}
+iv_calls() {  # number of infra-validation logs the probe fetched in case root $1
+  local n=0
+  [ -f "$1/view.calls" ] && n=$(grep -c . "$1/view.calls" || true)
+  printf '%s' "$n"
+}
+CLEAN_LOG="everything healthy here
+$TERMINAL_LINE"
+
+# (r) ONE skipping run among 20 observed is WITHIN the bound, on an arm other than the canonical
+# T5 (non-canonical must-PASS input), from a listing larger than the probe needs.
+_r=$(mkcase r 25 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9003 <<EOF
+SKIP (loud): T17 MUTATION did not run: apt starved before the mutant executed
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(r) 1 skipping run in 20 observed" 0 "ADR-188 bounds skips at MORE than 1 in 20 runs; exactly 1 in 20 is inside the bound and must not keep the monitor red"
+if grep -qF "within ADR-188" "$OUT"; then pass; else
+  fail "(r) the PASS line must say a skip was seen and was within the bound, not claim '0 loud rehearsal skips'. Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
+fi
+
+# (s) TWO skipping runs in 20 observed exceeds the bound.
+_r=$(mkcase s 25 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9003 9007 <<EOF
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(s) 2 skipping runs in 20 observed" 1 "2 in 20 is 10%, past ADR-188's bound; a probe that stops after the first skipping run would pass this"
+
+# (t) with fewer than 20 observed runs the rate cannot be shown to be inside the bound.
+_r=$(mkcase t 13 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9005 <<EOF
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(t) 1 skipping run in 13 observed" 1 "1 in 13 is 7.7%, past 1 in 20; only a sample that reaches 20 observed runs can show one skip is inside the bound"
+
+# (u) ONE run in which TWO arms skipped counts once: the bound is over runs, not marker lines.
+_r=$(mkcase u 25 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9002 <<EOF
+SKIP (loud): T5 MUTATION did not run: the driver never reached the download block
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(u) one run, two arms skipped" 0 "an apt outage that skips two arms in ONE run is one bad run in 20, not two; counting marker lines inflates the rate"
+
+# (v) sampling stops at 20 OBSERVED runs: 40 are listed, a skip sits beyond the stop and must not
+# be read, and the call log shows exactly 20 fetches.
+_r=$(mkcase v 40 <<<"$CLEAN_LOG")
+skip_runs "$_r" 9030 <<EOF
+SKIP (loud): S1 G6 verdict-append mutation did not run: docker rc=100
+$TERMINAL_LINE
+EOF
+run_probe "$_r"
+expect "(v) sampling stops at 20 observed" 0 "ADR-188's window is 20 runs; a skip in the 30th listed run is outside it"
+if [ "$(iv_calls "$_r")" -eq 20 ]; then pass; else
+  fail "(v) the probe fetched $(iv_calls "$_r") infra-validation logs from a 40-run listing, expected exactly 20 — the early stop is what keeps a window in which the suite did not run from costing 40 fetches"
+fi
+
 # ── Assertion floor (not routed through fail(), deliberately) ────────────────
+# RAISED 28 -> 35 (#8856), ITEMISED: (r) rate pass + message, (s), (t), (u), (v) verdict + fetch count.
 # RAISED 9 -> 12 (#7535 Phase 2), ITEMISED: (i) the T17 marker registration, plus
 # (j) and (j.ii), the two directions of the xtrace credential refusal.
 # RAISED 12 -> 20 (#10786), ITEMISED: (k) has 8 assertions: the relay-line precondition, three real-runner
@@ -533,7 +620,7 @@ fi
 # printf literal is pinned by value — an edit to it unobserves every guard-suite
 # skip while banners keep the source "observed". Measured on the green run: 28.
 _total=$((passes + fails))
-_FLOOR=28
+_FLOOR=35
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

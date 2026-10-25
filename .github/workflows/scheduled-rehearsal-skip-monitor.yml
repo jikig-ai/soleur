@@ -135,7 +135,7 @@ jobs:
           # an UNSET output is null and `null == '0'` is TRUE -- a step gated on
           # a numeric literal alone fires on a producer that wrote nothing at
           # all, which is exactly what a crashed step looks like.
-          # THE PROBE'S CONTRACT IS 0/1/2 AND NOTHING ELSE. `*) transient` mapped every
+          # THE PROBE'S CONTRACT IS 0/1/2, PLUS 3 (ESCALATED, #10918), AND NOTHING ELSE. `*) transient` mapped every
           # OTHER rc -- 127 from a renamed or missing script, 2-from-bash for a syntax error,
           # 126 for a non-executable path -- onto the one verdict the report step treats as
           # GREEN. The consecutive-transient escalation cannot rescue that: its counter is
@@ -149,6 +149,11 @@ jobs:
           # is "comment TRANSIENT and leave open on any other exit". That is safe THERE because
           # leaving an issue open is the conservative direction; here `transient` means green,
           # so the identical rc carries the opposite safety semantics.
+          # rc 3 (the probe's consecutive-TRANSIENT escalation: "unable to reach a verdict for N
+          # consecutive runs") is deliberately NOT given an arm of its own: `*)` maps it to `broken`,
+          # which is the right verdict -- a probe that cannot measure is a broken instrument, not
+          # evidence about the arms -- and the right title. It used to exit 1 and so was filed as
+          # "arms are skipping". scripts/monitor-streak-state.test.sh pins rc 0/1/2/3/127.
           case "$rc" in
             0) verdict=pass ;;
             1) verdict=fail ;;
@@ -297,7 +302,7 @@ jobs:
             printf '<!-- %s -->\n\n' "$ALERT_MARK"
             case "$VERDICT" in
               broken)
-                printf '%s\n\n' "The skip-persistence probe exited OUTSIDE its declared 0/1/2 contract -- it did not run to a verdict. This is a BROKEN INSTRUMENT, not evidence that the arms are healthy." ;;
+                printf '%s\n\n' "The skip-persistence probe did not run to a verdict: it either escalated after repeated TRANSIENT runs (rc 3, 'unable to reach a verdict for N consecutive runs' in the summary below) or exited OUTSIDE its declared 0/1/2/3 contract (a missing, non-executable or crashed script). This is a BROKEN INSTRUMENT, not evidence that the arms are healthy." ;;
               fail)
                 printf '%s\n\n' "The skip-persistence probe returned FAIL -- one or more sampled run-sources carry loud SKIP markers (the probe's per-source lines name which)." ;;
               *)
@@ -312,7 +317,7 @@ jobs:
             esac
             # shellcheck disable=SC2016  # the backticks are a literal markdown fence
             printf '```\n%s\n```\n\n' "$SUMMARY"
-            printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. The probe's per-source FAIL lines name the arm family: rehearsal-arm hits mean the deferred pre-baked image (#7535) is owed; guard-suite (g1b./g2b./fl.) hits mean a runner git no longer exhibits the walk contract the corrupt-walk rows validate (#10921) -- refusal coverage is degraded until the runner image or the rows change."
+            printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. The probe's per-source FAIL lines name the arm family: rehearsal-arm hits mean the apt or docker-pull decline (rc 100 / 125) is recurring, so diagnose the mirror or runner cause from the skip lines (the pre-baked image was evaluated and cut on measurement in #7535); guard-suite (g1b./g2b./fl.) hits mean a runner git no longer exhibits the walk contract the corrupt-walk rows validate (#10921) -- refusal coverage is degraded until the runner image or the rows change."
           } > "$body_file"
           # Report a FAILED filing rather than letting a red run stand for both outcomes --
           # the same treatment the postmerge job gets in this PR. Without it, "alert filed"
@@ -346,6 +351,6 @@ jobs:
           case "$VERDICT" in
             pass|transient) echo "probe verdict: $VERDICT (rc=$RC)" ;;
             fail)           echo "probe verdict: fail (rc=$RC)"; exit 1 ;;
-            broken)         echo "::error::the probe exited $RC, outside its declared 0/1/2 contract -- it did not run to a verdict. The consecutive-transient escalation cannot catch this, because that counter lives inside the probe's own _transient(), which never ran. A broken instrument is not a quiet window."; exit 1 ;;
+            broken)         echo "::error::the probe exited $RC (3 = escalated after repeated TRANSIENT runs; anything else is outside its declared 0/1/2/3 contract) -- it did not run to a verdict. For an exit outside the contract the consecutive-transient escalation cannot catch this, because that counter lives inside the probe's own _transient(), which never ran. A broken instrument is not a quiet window."; exit 1 ;;
             *)              echo "::error::the probe produced no verdict ('$VERDICT', rc='$RC'). A monitor that did not run is not a clean window."; exit 1 ;;
           esac

@@ -473,11 +473,12 @@ chain() { # restored-value|@none  ->  CHAIN_RC of the probe, log in $C/probe.log
 chain 2
 PRIOR=$(out_value prior)
 eq "T15 fetch reports the restored 2 as prior" "$PRIOR" "2"
-eq "T15 restored 2 escalates (rc)" "$CHAIN_RC" "1"
+eq "T15 restored 2 escalates (rc 3: escalated, not the skip FAIL's 1; #10918)" "$CHAIN_RC" "3"
 has "T15 restored 2 reaches the real probe as 3/3" "$C/probe.log" "consecutive transient runs: 3/3"
-runsut_seal fail "$(cat "$C/state/dir/streak")" "$PRIOR"
-eq "T15 seal accepts the escalation FAIL (rc)" "$RC" "0"
-eq "T15 the escalation FAIL keeps its streak through seal" "$(streakfile)" "3"
+# The workflow maps the probe's rc 3 to the `broken` verdict, whose seal keeps the streak the probe left.
+runsut_seal broken "$(cat "$C/state/dir/streak")" "$PRIOR"
+eq "T15 seal accepts the escalation (rc)" "$RC" "0"
+eq "T15 the escalation keeps its streak through seal" "$(streakfile)" "3"
 chain @none
 PRIOR=$(out_value prior)
 eq "T15 an empty store reports prior 0" "$PRIOR" "0"
@@ -857,11 +858,43 @@ alert_case "C3 probe FAIL + failed fetch (the store failure must still show)" fa
 alert_case "C4 probe FAIL, store healthy" fail success success success success "skipping arms across runs" no
 alert_case "C5 probe broken + failed assert" broken success success failure success "not running to a verdict" yes
 
+# ── rc -> verdict, driven through the workflow's REAL `case "$rc"` block (#10918) ────────────────
+# The probe's consecutive-TRANSIENT escalation exits 3, not 1, so it reaches the `broken` verdict
+# (and therefore the "not running to a verdict" title) instead of the "arms are skipping" one.
+# The block is EXTRACTED from the workflow, not re-implemented here: a copy would keep passing
+# after the workflow's mapping changed.
+RC_CASE="$SANDBOX/rc-case.sh"
+python3 -I - "$WF" "$RC_CASE" <<'PYC'
+import re, sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+runs = [s["run"] for s in d["jobs"]["monitor"]["steps"] if 'case "$rc" in' in s.get("run", "")]
+m = re.search(r'case "\$rc" in.*?\n\s*esac', runs[0], re.S) if len(runs) == 1 else None
+open(sys.argv[2], "w").write(("verdict=none\n" + m.group(0) + "\nprintf '%s' \"$verdict\"\n") if m else "")
+PYC
+if [ -s "$RC_CASE" ]; then
+  pass
+else
+  fail "rc->verdict: could not extract exactly one case \"\$rc\" block from the workflow, so the rows below measure nothing"
+fi
+for _pair in 0:pass 1:fail 2:transient 3:broken 127:broken; do
+  _rc=${_pair%%:*}; _want=${_pair#*:}
+  _got=$(rc="$_rc" bash --noprofile --norc -eo pipefail "$RC_CASE" 2>/dev/null || true)
+  eq "rc->verdict: probe rc $_rc" "$_got" "$_want"
+done
+# The title for the escalation verdict must differ from the skip title, or the split proves nothing.
+_t_broken=$(sed -n 's/^ *broken) *title="\(.*\)" ;;$/\1/p' "$WF" | sed -n '1p')
+_t_fail=$(sed -n 's/^ *fail) *title="\(.*\)" ;;$/\1/p' "$WF" | sed -n '1p')
+if [ -n "$_t_broken" ] && [ -n "$_t_fail" ] && [ "$_t_broken" != "$_t_fail" ]; then
+  pass
+else
+  fail "rc->verdict: the broken title ('$_t_broken') and the fail title ('$_t_fail') must both exist and differ"
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # verdict
 # ─────────────────────────────────────────────────────────────────────────────
 printf 'monitor-streak-state: %s passed, %s failed\n' "$passes" "$fails"
-EXPECTED_MIN_PASSES=733
+EXPECTED_MIN_PASSES=740
 if [ "$passes" -lt "$EXPECTED_MIN_PASSES" ]; then
   printf 'FAIL: only %s assertions ran (floor %s): a suite that stopped asserting is not green\n' "$passes" "$EXPECTED_MIN_PASSES" >&2
   exit 1
