@@ -20,8 +20,10 @@
 #
 # Hook stdin: JSON payload from Claude Code with tool_name + tool_input.
 # Hook stdout: JSON {hookSpecificOutput: {hookEventName, permissionDecision, permissionDecisionReason}}.
-# Hook exit code: 0 (JSON output controls the gate); the one exception is the canonical fixture-dir guard, which
-# exits 2 on an empty or relative temp path.
+# Hook exit code: 0 (JSON output controls the gate). An internal error is a DENY with exit 0 (the exit latch, below), for a
+# plain commit as for a simulated one; only a failure before the traps are installed (hook-input parsing, the cheap gate)
+# still exits 1. The simulation library's canonical fixture-dir guard exits 2, so a simulated commit with a TMPDIR it would
+# refuse (/dev, /proc, /sys, a `..`) is denied up front (cause temp-dir); a plain commit never looks at that shape.
 #
 # Fail-open conditions (the hook allows the commit + emits a warn):
 #   - gitleaks binary not installed on PATH          (bypass "gitleaks not installed")
@@ -34,6 +36,10 @@
 # These are operator-environment issues, not secret-leak signals — the
 # user should fix their tooling but a missing binary should not block
 # every commit. CI re-scans on every push as the load-bearing gate.
+# NOT among them, in either mode: a gitleaks run that scanned NOTHING. git writing to stderr while gitleaks reads the diff
+# (a bad diff.* or core.abbrev value) makes it log "stderr is not empty" and exit 0 (or 1) with an empty report; that log
+# line, or any ERR line, DENIES (scan-error), core.bigFileThreshold is pinned to its default, and a repository git cannot
+# read at all (every git call dies on a bad config value) DENIES instead of reading as "not a repository" (CTO row 48).
 # The unrunnable case is split out because it is PERMANENT and machine-wide
 # (#8266): folded into the "transient" branch it silently bypassed every
 # commit on such a host under a reason that said otherwise.
@@ -72,17 +78,21 @@
 #                                                                       is chosen from the command's staging style
 #   sim library or walker missing, unreadable, mismatched or truncated DENY every strict commit (lib repair; rule id
 #                                                                       git-commit-secret-scan-undeterminable)
-#   perl absent and the command is more than one simple commit          DENY (tooling)
+#   an inline git alias definition (-c alias.*, --config-env=alias.*,  DENY (undeterminable target, with or without staging)
+#   GIT_CONFIG_KEY_n / GIT_CONFIG_PARAMETERS, an earlier git config
+#   alias write in the same call)
+#   perl absent and the command is more than one simple commit, or     DENY (tooling)
+#   perl absent and more than 500 staged -diff files
 #
-# The unexpected-error denies hold from the line where the traps are installed (right after the cheap non-commit
-# gate); a failure before it, and a plain-path failure once sim_on is 0, still exit 1 (non-blocking). The read-only
-# prepare calls and sim_recovery's git calls are not under the deadline.
+# The unexpected-error denies (the ERR trap and the exit latch) hold from the line where the traps are installed (right
+# after the cheap non-commit gate), for a plain commit too (CTO row 55); a failure before it still exits 1 (non-blocking).
+# The read-only prepare calls and sim_recovery's git calls are not under the deadline.
 #
 # NAMED RESIDUALS (the sim scans the working tree as it is NOW; the contract, the cause table and every residual
 # are indexed once, with their reasons, in knowledge-base/engineering/architecture/decisions/ADR-296-*.md):
 #   - what an EARLIER command in the same call changes is not seen: a producer, `sed -i`, `prettier --write`, an edit
 #     of .gitignore, config or attributes, a `git mv` out of a path-keyed allowlist, a `git stash pop`;
-#   - a script or wrapper that runs `git add` inside, and user-config aliases;
+#   - a script or wrapper that runs `git add` inside, and user-config aliases (an INLINE alias is a deny);
 #   - the sim scans RAW bytes (clean filters are pinned off): a clean filter / Git LFS may record other bytes;
 #   - checkout, stash, read-tree, cherry-pick, merge, revert, am, restore, mv and rm take the superset, which scans
 #     the working tree as it is now;
@@ -160,7 +170,7 @@ sim_recovery() {
   if [ "${CIS_MODE:-}" = superset ]; then
     case "${CIS_WHY:-}" in
       inexact-word) cause=" The simulation used a full 'git add -A' because a word of the staging command cannot be replayed literally (for example a glob, a variable, an option or a launcher): write literal paths (git add clean.txt) and the scan covers only those." ;;
-      unproven-dir|dir-not-root) cause=" The simulation used a full 'git add -A' because the hook could not prove which directory the command stages in (for example a relative cd or -C, a '\$', ';' or '|' in the command text, a second directory, or no payload cwd): start the command with 'cd /abs/path &&' or put the same '-C /abs/path' on every git add and on the commit, or run the git add as its own call." ;;
+      unproven-dir|dir-not-root) cause=" The simulation used a full 'git add -A' because the hook could not prove which directory the command stages in (for example a relative cd or -C, an unquoted ';' or '|' or an expansion (\$x, \$(...)) in the command text, a second directory, or no payload cwd): start the command with 'cd /abs/path &&' or put the same '-C /abs/path' on every git add and on the commit, or run the git add as its own call." ;;
       opaque|loop) cause=" The simulation used a full 'git add -A' because the command stages in a way the hook cannot replay (a loop or function, or a verb such as stash, merge, checkout or cherry-pick): run that loop or verb ITSELF as its own call first, then 'git add <paths>' as its own call, then the commit." ;;
       replay-failed) cause=" The simulation used a full 'git add -A' because replaying the command's own git add failed${CIS_ERR:+ (git said: $CIS_ERR)}: fix that add (a path that is ignored needs -f, a missing path needs creating), or run it as its own call first." ;;
     esac
@@ -265,11 +275,13 @@ if [ "$strict_match" -eq 0 ]; then
 fi
 
 # From here the hook may not end without a decision. TRAPS: EXIT cleans up and turns a hook that ended without calling
-# allow or deny (a `set -u` abort, a failed expansion, an unguarded failure) into a DENY, for a plain commit too (CTO row
+# allow or deny (a `set -u` abort, an unguarded failure) into a DENY, for a plain commit too (CTO row
 # 55: an exit 1 is NON-blocking, i.e. an unscanned commit); INT and TERM must END the hook - bash runs a signal handler
 # and then CONTINUES the script (measured), so the handlers `exit` (130 / 143, marked done: a killed hook prints nothing)
 # and the exit runs the EXIT trap; ERR (with `set -E`, so it also fires in functions) denies instead of letting errexit
-# exit 1. A failure BEFORE this line (hook-input parsing, the cheap gate) still exits 1; a SIGKILL can still leave a 0700
+# exit 1. NOT covered: an arithmetic-expansion error (`$((08))`), which bash does not treat as fatal - it abandons the
+# enclosing command and carries on, with no ERR and no non-zero exit - so no arithmetic in this hook may take command-sourced
+# text unchecked (the GIT_CONFIG_COUNT clamp reads decimal and caps its length). A failure BEFORE this line (hook-input parsing, the cheap gate) still exits 1; a SIGKILL can still leave a 0700
 # temp directory behind (the next simulation sweeps marker-bearing ones older than 60 minutes).
 latch_on=1
 
@@ -1035,7 +1047,7 @@ for _r in "${toml_roots[@]}"; do
         force-nonliteral)
           sim_deny "$CIS_WHY" "BLOCKED: this command force-adds (git add -f) a path the hook cannot read literally (a variable, a glob, paths from stdin or --pathspec-from-file), so the ignored content it would record was NOT scanned and the commit is blocked. Repair: run the force-add as its own call, then run the commit in the next call." ;;
         force-unproven-dir)
-          sim_deny "$CIS_WHY" "BLOCKED: this command force-adds (git add -f), but the directory the add runs in cannot be proven (for example a relative cd or -C, a '\$', ';' or '|' in the command text such as a heredoc commit message, or a second directory), so the ignored content it would record was NOT scanned and the commit is blocked. Repair: put 'cd /abs/path &&' or '-C /abs/path' on the add and keep expansions out of the command, or run the force-add as its own call, then run the commit in the next call." ;;
+          sim_deny "$CIS_WHY" "BLOCKED: this command force-adds (git add -f), but the directory the add runs in cannot be proven (for example a relative cd or -C, an unquoted ';' or '|' or an expansion (\$x, \$(...)) in the command text such as a heredoc commit message, or a second directory), so the ignored content it would record was NOT scanned and the commit is blocked. Repair: put 'cd /abs/path &&' or '-C /abs/path' on the add and keep expansions out of the command, or run the force-add as its own call, then run the commit in the next call." ;;
         colon-path)
           sim_deny "$CIS_WHY" "BLOCKED: this repository's object directory path contains a ':' (git cannot name it in GIT_ALTERNATE_OBJECT_DIRECTORIES), so the commit's own staging cannot be simulated in this checkout and the commit is blocked. Repair: stage in its own call ($(sim_split_advice)) so the scan reads the real index, or move the checkout to a path without ':'." ;;
         sim-timeout)

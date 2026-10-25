@@ -25,7 +25,10 @@
 #
 # WHAT IT COLLECTS (CTR_TARGETS): every literal path named by `cd` / `pushd`, `git -C`,
 # `env -C|--chdir` and a launcher's `-D|--chdir`. It is a UNION, not a simulation of the
-# shell's cwd. WHAT IT REFUSES (CTR_BAD): any target that cannot be read statically — an
+# shell's cwd. WHAT IT REFUSES (CTR_BAD): an inline git alias definition (-c alias.*,
+# --config-env=alias.*, GIT_CONFIG_KEY_n or GIT_CONFIG_PARAMETERS carrying one, or one set earlier in the command by export,
+# a bare assignment or `git config alias.x v`), which also counts as a commit record because an alias can hide a commit
+# (CTO row 49); a string operand of a launcher or interpreter that spells a git commit; any target that cannot be read statically — an
 # expansion ($VAR, $(..), backticks), `~`, `cd -`, a glob, more than _CTR_MAX_TARGETS
 # targets, GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE / GIT_COMMON_DIR (inline, after `env`, or
 # via export/declare), `git --git-dir|--work-tree` and `-c core.worktree=` (which move the
@@ -41,6 +44,8 @@
 #   CTR_BAD          one reason string per target that could not be determined
 #   CTR_COMMIT_SEEN  1 when a `git ... commit` record exists, or when a runner operand with
 #                    an expansion may hide one; else 0
+#   CTR_ROOT_ERR     the first git error (not "not a git repository") ctr_resolve_roots met probing a target: a
+#                    repository git cannot read; the caller denies it
 #   CTR_LEX_STATE    ok | unavailable (perl / lexer missing, lexer error, truncated stream)
 #   CTR_LEX_WHY      the cause when unavailable
 #   CTR_LEX_KIND     tooling | parse | bound — which repair applies when unavailable
@@ -55,24 +60,29 @@
 #                            stage, or a commit flag (-a -p -o -i --all --only --include a pathspec)
 #   CTR_STAGE_OPAQUE         1 when staging happens that the walker cannot replay (a stage-unknown verb:
 #                            apply update-index checkout cherry-pick merge revert stash am read-tree
-#                            restore pull switch rebase submodule sparse-checkout; an expansion command
+#                            restore pull switch rebase submodule sparse-checkout mergetool subtree svn quiltimport lfs;
+#                            an expansion command
 #                            or brace/glob/tilde word or subcommand; a dashed git-<verb>; a staging verb among
-#                            the words of a non-git command or inside a launcher's string operand (su -c, ssh,
-#                            flock -c, sg -c, script -c, fish -c, watch, runuser -c, parallel); an unknown short commit option, a bundle longer than 64
+#                            the words of a non-git command, or a string operand of a listed launcher or interpreter
+#                            that carries the word git (su -c, ssh, flock -c, sg -c, script -c, fish -c, watch, runuser
+#                            -c, parallel, csh/tcsh -c, tmux, screen, python -c, perl -e, node -e, ruby -e, php -r, awk;
+#                            CTO row 50); an unknown short commit option, a bundle longer than 64
 #                            characters, or an unknown or abbreviated `commit --long` option;
 #                            --interactive / --pathspec-from-file) -> the caller uses the superset
 #   CTR_STAGE_UNSIMULABLE    1 for `update-index --add|--cacheinfo|--index-info` and `apply --index|--cached|
 #                            --3way`: they put content in the index from OUTSIDE the working tree -> DENY
 #   CTR_STAGE_REFUSE(_WHY)   1 when a staging record (add / stage, or a commit that stages) carries something
 #                            that makes git execute configuration or read other files: -c / --config-env keys
-#                            core. filter. diff. attr. include. includeif. add. apply. submodule. alias.,
+#                            core. filter. diff. attr. include. includeif. add. apply. submodule.,
 #                            --namespace, --attr-source; an environment name outside the allowlist (LC_* LANG
 #                            LANGUAGE TZ TERM NO_COLOR CI GIT_AUTHOR_* GIT_COMMITTER_* GIT_EDITOR GIT_PAGER
-#                            GIT_TERMINAL_PROMPT) as a prefix, after `env`, or exported / unset / assigned
+#                            GIT_TERMINAL_PROMPT, and by exact name HUSKY HUSKY_SKIP_HOOKS LEFTHOOK LEFTHOOK_EXCLUDE
+#                            SKIP PRE_COMMIT_ALLOW_NO_CONFIG) as a prefix, after `env`, or exported / unset / assigned
 #                            earlier in the command (a bare assignment only when the name is exported here or
-#                            is a GIT_* name), `set -a` / `set -o allexport`; `env -i|-u|-`, `exec -c`; sudo doas su
-#                            runuser chroot nsenter setpriv bwrap systemd-run unshare; and an inline alias definition
-#                            (-c alias.*, --config-env=alias.*, a GIT_CONFIG_* prefix) on ANY git record -> DENY
+#                            is a GIT_* name), `set -a` / `set -o allexport` / `shopt -so allexport`; `env -i|-u|-`,
+#                            `exec -c`; sudo doas su runuser chroot nsenter setpriv bwrap systemd-run unshare -> DENY.
+#                            An inline ALIAS definition is not a staging-record key: it is a CTR_BAD (above), on ANY
+#                            git record, staging or not (CTO row 49).
 #   CTR_ADD_EXACT / _FORCE / _LIT / _NW / _OFF / _OWNC   six parallel arrays, one entry per add/stage record
 #                            (OFF = the record's first word in CTR_ADD_ARGV, NW = how many words), and
 #                            CTR_ADD_ARGV: every record's words, verb first, appended. exact=0 when any word is
@@ -83,7 +93,8 @@
 #   CTR_COMMIT_ALL           1 for -a -p --all --patch (add -u covers them); --no-all / --no-patch clear it
 #   CTR_COMMIT_PATHS(_LITERAL)  the commit's pathspec words; literal = no expansion, quoting or glob
 #   CTR_COMMIT_OWN_C         the commit's own `git -C <dir>` word (empty when none)
-#   CTR_STAGE_CD_FIRST       1 for `cd <dir> && git ... && git ...` and nothing else (no ; || ( { | pushd)
+#   CTR_STAGE_CD_FIRST       1 for `cd <dir> && git ... && git ...` and nothing else (no ; || ( { | pushd in the UNQUOTED
+#                            text; inside double quotes only a live expansion counts: CTO row 54)
 # The test suite carries its own ctr_stage_dump (a canonical text form of these facts); production never prints them.
 #
 # PORTABILITY: bash 3.2 (stock macOS /bin/bash): no mapfile, no declare -n, no associative
@@ -629,12 +640,12 @@ _ctr_git_walk() {
     sub="${_CTR_W[$j]}"
     # An expanded, glob, brace or tilde subcommand (`git "$S" ...`, `git ad{d,} -A`) may be any staging verb: the superset.
     _ctr_word_literal "$sub" "${_CTR_F[$j]}" || CTR_STAGE_OPAQUE=1
+    if [ "$sub" = config ]; then _ctr_config_write_alias "$j"; fi
     case "$sub" in
       commit) _ctr_mark_commit; _ctr_commit_flags "$j"; _ctr_note_commit_c "$g_ownc"; _ctr_commit_refuse "$g_refuse" ;;
       add|stage) _ctr_stage_add "$j" ;;
       # rm and mv act on the WORKING TREE and add no new blob content: recognised, ignored, never replayed.
       rm|mv) : ;;
-      config) _ctr_config_write_alias "$j" ;;
       submodule) _CTR_CREATOR=1; CTR_STAGE_OPAQUE=1 ;;
       worktree|clone|init) _CTR_CREATOR=1 ;;
       update-index|apply) CTR_STAGE_OPAQUE=1; _ctr_unsim_check "$j" ;;

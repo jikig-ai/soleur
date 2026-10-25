@@ -4187,16 +4187,25 @@ _t_fr3_gl() {
   _sxr "R3 A2g a CLEAN tree with a bad value in the config: a decision, not a hang" "$U" "git commit --allow-empty -m x" deny
   _t "R3 A2h ... within the bound" "elapsed=$((SECONDS - start))" test $((SECONDS - start)) -lt 20
 
+  # an inherited GIT_CONFIG_COUNT that is not a plain decimal (08 is not an octal number to git) must not abort the pin arithmetic
+  # (bash abandons the command on an arithmetic error: no ERR, no non-zero exit - the scanner would simply not run)
+  S=$(_mk_staged_repo)
+  SIM_ENV=("GIT_CONFIG_COUNT=08")
+  _sxr "R3 A2i [gitleaks] GIT_CONFIG_COUNT=08 in the hook's environment + a staged PEM -> deny (never an allow)" "$S" "git commit -m x" deny
+  SIM_ENV=("GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=user.name" "GIT_CONFIG_VALUE_0=zed")
+  _sxr "R3 A2j [gitleaks] a valid inherited GIT_CONFIG_COUNT=1 is kept and the pins follow it: the staged PEM is found" "$S" "git commit -m x" deny "leak.json" "!nothing was scanned"
+  SIM_ENV=()
+
   # C3: THREE staged -diff files with different clean blobs and the leak LAST: every path is read from its OWN blob (a loop that
   # reads the first blob for each path re-scans a.dat three times and sees no leak)
-  local D3
-  D3=$(_mk_leaky_repo clean); assert_fixture_dir "$D3"
-  printf '*.dat -diff\n' > "$D3/.gitattributes"; printf 'one\n' > "$D3/a.dat"; printf 'two\n' > "$D3/b.dat"; cp "$U/leak.json" "$D3/c.dat"
+  local D3 L3
+  L3=$(_mk_leaky_repo untracked); D3=$(_mk_leaky_repo clean); assert_fixture_dir "$D3"
+  printf '*.dat -diff\n' > "$D3/.gitattributes"; printf 'one\n' > "$D3/a.dat"; printf 'two\n' > "$D3/b.dat"; cp "$L3/leak.json" "$D3/c.dat"
   git -C "$D3" add .gitattributes a.dat b.dat c.dat
   _sxr "R3 C3 [gitleaks] three staged -diff files, differing clean blobs, the leak in the LAST -> deny naming c.dat" "$D3" "git commit -m x" deny "c.dat" "diff driver"
   printf 'three\n' > "$D3/c.dat"; git -C "$D3" add c.dat
   _sxr "R3 C3b twin: the third file clean too -> allow" "$D3" "git commit -m x" allow
-  printf 'one\n' > "$D3/a.dat"; printf 'two\n' > "$D3/b.dat"; cp "$U/leak.json" "$D3/c.dat"
+  printf 'one\n' > "$D3/a.dat"; printf 'two\n' > "$D3/b.dat"; cp "$L3/leak.json" "$D3/c.dat"
   _sxr "R3 C3c the same three files unstaged in the working tree: 'git add -A && git commit' -> deny naming c.dat" "$D3" "git add -A && git commit -m x" deny "c.dat"
 }
 
