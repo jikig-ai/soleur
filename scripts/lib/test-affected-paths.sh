@@ -1402,7 +1402,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_CONCURRENCY_KEY_TEST_SH_PATHS=(
 # plugins/soleur/test/merge-effect-class-parity.test.sh — derived edges could not reach its subject (the workflows' trigger
 # blocks); declared from the repo paths its suite file names. Editing the classifier's allowlist is the exact weakening it catches.
 AFFECTED_PLUGINS_SOLEUR_TEST_MERGE_EFFECT_CLASS_PARITY_TEST_SH_PATHS=(
-  ".github/workflows"
+  ".github/workflows/"
   "plugins/soleur/scripts/merge-effect-class.sh"
   "plugins/soleur/scripts/merge-effect-class.ci-only.tsv"
   "plugins/soleur/test/merge-effect-class-parity.test.sh"
