@@ -2164,6 +2164,12 @@ paused the verifier reports `verdict=fresh_heartbeat_paused` and sends nothing, 
 (clock-dispatched) each reported `verdict=beat http=200`. That is a dated record: read the live state from
 Better Stack, not from this paragraph.
 
+Since #10390 the beat also certifies the **serving verdict**, not just row freshness: the feeder grades
+the same freshest row's `server_active`/`http_code`/`cutover_flag` through the shared
+`classify_dedicated_host` def and beats `<url>/fail` on `not-serving` (verdict `fail_beat` — an intended
+immediate incident), beats normally on `healthy` and `stopped-by-brake`, and withholds
+(`verdict=serving_unavailable`, exit 3) when the fields do not grade to a verdict.
+
 **Reading the feeder (no SSH).** Each run prints one `inngest-probe-feeder: verdict=<v> ...` line. Once
 the warehouse has answered it carries `rows_total rows_probe rows_host rows_dedicated newest_dt lines
 dt_rejected` (and `age_s`), so an empty warehouse, a host or role filter dropping rows, rows that arrived
@@ -2175,20 +2181,22 @@ shape (for example it carries a zone offset); `newest_dt` ignores them, so `prod
 `no_rows` form carry no complete funnel. `heartbeat_not_unique` carries `paged=1` when the API reports a
 further page (the feeder then refuses to trust a page-1 answer). A run that died before printing any marker
 (the script missing, a parse error) prints `verdict=no_marker rc=<n>`.
-Exit 0 means exactly `beat` or `fresh_heartbeat_paused` (`--selftest` is the one other zero and is never
+Exit 0 means exactly `beat`, `fail_beat` or `fresh_heartbeat_paused` (`--selftest` is the one other zero and is never
 run by the workflow). Verdicts: `no_rows` / `producer_silent` (no fresh dedicated probe row; the probe
 pipeline is dark, which is what this heartbeat exists to report), `row_unusable` (no readable timestamp
 among the dedicated rows, or the newest is future-dated; a data fault, not proof the pipeline is dark),
 `query_failed` (warehouse unreadable; says nothing about the store), `beat_failed` (a fresh row existed
-but the heartbeat could not be resolved or delivered). The Sentry monitor
-`scheduled-inngest-probe-heartbeat` checks in `ok` only for the two exit-0 verdicts; `error` means
+but the heartbeat could not be resolved or delivered), `serving_unavailable` (a fresh row existed but its
+serving fields did not grade to a verdict — withheld, never a false beat either way). The Sentry monitor
+`scheduled-inngest-probe-heartbeat` checks in `ok` only for the three exit-0 verdicts (including `fail_beat`,
+whose 2xx /fail POST IS the delivered incident); `error` means
 "withheld or failed", not "feeder broken". `bash scripts/inngest-probe-heartbeat-feeder.sh --selftest`
 prints `selftest=ok` with no network or credentials. A local run sends nothing ONLY while the heartbeat
 is paused; once armed, the same command beats the heartbeat, which is a production write. It needs the
 four secrets `BETTERSTACK_QUERY_HOST`, `BETTERSTACK_QUERY_USERNAME`, `BETTERSTACK_QUERY_PASSWORD` and
 `BETTERSTACK_API_TOKEN_READONLY` (all in Doppler `prd_terraform`):
-`doppler run -p soleur -c prd_terraform -- env -u INNGEST_FEEDER_NOW -u INNGEST_PROBE_ROW_LIB bash scripts/inngest-probe-heartbeat-feeder.sh`
-(the two `env -u` seals keep a stale exported test seam from deciding the verdict). Exit codes are 0 beat
+`doppler run -p soleur -c prd_terraform -- env -u INNGEST_FEEDER_NOW -u INNGEST_PROBE_ROW_LIB -u INNGEST_CLASSIFY_LIB bash scripts/inngest-probe-heartbeat-feeder.sh`
+(the three `env -u` seals keep a stale exported test seam from deciding the verdict). Exit codes are 0 beat
 or paused, 3 withheld, 4 beat could not be delivered, 64 usage, 78 tracing refused.
 
 **Arming is a production write to Better Stack.** Run the command below only after the operator has
