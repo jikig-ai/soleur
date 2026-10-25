@@ -40,7 +40,7 @@ views {
       // (betterstack, founder) are already in this view so the
       // betterstack -> slack -> founder wake path renders (#7332).
       slack,
-      // #10390/ADR-297: the incident mirror's betterstack -> github read edge
+      // #10390/ADR-298: the incident mirror's betterstack -> github read edge
       // and github -> founder delivery edge render without further includes —
       // all three endpoints are already listed above. (The mirror's issue
       // WRITE is github-internal; LikeC4 rejects self-relations, so it lives
@@ -74,7 +74,7 @@ views {
       // #9168/ADR-260: slack renders the betterstack -> slack -> founder wake path
       // here too — both endpoints are already included (#7332).
       slack,
-      // #10390/ADR-297: betterstack -> github and github -> founder (the
+      // #10390/ADR-298: betterstack -> github and github -> founder (the
       // incident mirror) render here as well — all endpoints included (#7332).
       connectedRepoPlugin, connectedRepoKb,
       // #8205: devin -> platform.plugin delivery edge needs both endpoints in

@@ -26,6 +26,6 @@ Issues: epic #10390; Ref #9703, #9705, #6645, #10918, #10584, #10914, #6472.
 - [x] 3.1 `plugins/soleur/skills/postmerge/SKILL.md`: Phase 3.9 alert-channel sweep + Phase-6/7 report lines.
 - [x] 3.2 `scripts/followthroughs/post-deploy-incident-soak.sh` + `.test.sh` (TRANSIENT on read failure; paused/pending tolerated; window pinned past deploy).
 - [x] 3.3 `followthrough-convention.md` soak-trigger row.
-- [x] 3.4 ADR-297 (provisional — renumber per ship's collision gate + sweep refs) + `model.c4`/`views.c4` mirror edges; run `c4-code-syntax` + `c4-render` suites.
+- [x] 3.4 ADR-298 (provisional — renumber per ship's collision gate + sweep refs) + `model.c4`/`views.c4` mirror edges; run `c4-code-syntax` + `c4-render` suites.
 - [x] 3.5 Register new suites: `scripts/test-all.sh`, `scripts/suite-durations.tsv`, `scripts/suite-shard-legs.tsv`.
 - [x] 3.6 Cross-reference comments on #6645, #10584 (deferral note: Telemetry-alerts mirroring), #9705.

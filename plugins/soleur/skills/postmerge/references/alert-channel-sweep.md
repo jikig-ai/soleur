@@ -3,7 +3,7 @@
 A green deploy verdict says production serves the merge; it says nothing about what the alert
 channels reported while it landed. On 2026-10-22 the two inngest heartbeat monitors paged
 correctly into an unwatched email inbox — detection was timely, notice was late (epic #10390,
-ADR-297). This phase reads the two watched alert surfaces once, after the deploy verdict — the
+ADR-298). This phase reads the two watched alert surfaces once, after the deploy verdict — the
 same advisory idiom as the Phase-3.5 inngest-down read: report, never hard-block. The always-on
 arm is `scheduled-betterstack-incident-mirror.yml`; this phase is the merge-time point read, and
 `scripts/followthroughs/post-deploy-incident-soak.sh` is the enrollable time-windowed

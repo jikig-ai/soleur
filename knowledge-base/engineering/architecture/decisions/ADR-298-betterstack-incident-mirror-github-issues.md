@@ -1,5 +1,5 @@
 ---
-title: "ADR-297: Better Stack incidents mirror to deduplicated GitHub issues via a repo-side watchdog workflow; Responder-tier escalation deferred (operator-reserved); push=true measured on the two inngest heartbeats"
+title: "ADR-298: Better Stack incidents mirror to deduplicated GitHub issues via a repo-side watchdog workflow; Responder-tier escalation deferred (operator-reserved); push=true measured on the two inngest heartbeats"
 status: accepted
 date: 2026-10-24
 supersedes: none
@@ -11,7 +11,7 @@ tags: [observability, better-stack, alert-routing, github-issues, watchdog, inng
 brand_survival_threshold: none
 ---
 
-# ADR-297: Better Stack incidents mirror to deduplicated GitHub issues via a repo-side watchdog workflow
+# ADR-298: Better Stack incidents mirror to deduplicated GitHub issues via a repo-side watchdog workflow
 
 > **Ordinal note — PROVISIONAL.** `297` was the next free ordinal when this
 > record was authored (highest on the branch base: ADR-296). It is re-verified

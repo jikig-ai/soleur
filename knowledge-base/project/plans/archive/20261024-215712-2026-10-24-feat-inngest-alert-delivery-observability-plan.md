@@ -403,7 +403,7 @@ private-repo issue.
 | `.github/workflows/scheduled-betterstack-incident-mirror.yml` | 15-min runner: watchdog-dispatch primary + `schedule:` fallback + `workflow_dispatch`, `cancel-in-progress: false`, terminal sentry-heartbeat step, gate-override comment per ADR-248 |
 | `scripts/followthroughs/post-deploy-incident-soak.sh` | WS3 generic soak verifier for the followthrough sweeper |
 | `scripts/followthroughs/post-deploy-incident-soak.test.sh` | Harness for the soak script (TRANSIENT on read failure, `paused`/`pending` tolerated, window pinned past deploy) |
-| `knowledge-base/engineering/architecture/decisions/ADR-297-betterstack-incident-mirror-github-issues.md` | **Provisional ordinal** — the channel-choice decision record (GitHub-issue mirror over paid escalation / outgoing webhook); renumber per ship's ADR-Ordinal Collision Gate and sweep all planning refs |
+| `knowledge-base/engineering/architecture/decisions/ADR-298-betterstack-incident-mirror-github-issues.md` | **Provisional ordinal** — the channel-choice decision record (GitHub-issue mirror over paid escalation / outgoing webhook); renumber per ship's ADR-Ordinal Collision Gate and sweep all planning refs |
 
 ## Files to Edit
 
@@ -448,7 +448,7 @@ private-repo issue.
 | feeder `/fail` verdict arm | "report serving verdicts so a serving-dead-but-probe-alive state alerts" | asked |
 | postmerge Phase 3.9 | "postmerge phases … an active observability soak" | asked |
 | `post-deploy-incident-soak.sh` | "an active observability soak" | asked |
-| ADR-297 + C4 views | "alert routing" is a channel-boundary decision a future engineer would be surprised to find undocumented (ADR-260 precedent) | inferred — `wg-architecture-decision-is-a-plan-deliverable` |
+| ADR-298 + C4 views | "alert routing" is a channel-boundary decision a future engineer would be surprised to find undocumented (ADR-260 precedent) | inferred — `wg-architecture-decision-is-a-plan-deliverable` |
 | heartbeat-manifest.ts comment update | — | inferred — keeps the executable manifest's semantics honest after the beat's meaning changes (the manifest is the repo's anti-fiction device, #6537) |
 | followthrough-convention.md row | — | inferred — the convention file is the registry a generic soak script must land in to be discoverable |
 | suite registration rows (test-all.sh, suite-durations.tsv, suite-shard-legs.tsv) | — | inferred — unregistered suites never run; the registration set is the repo's suite-discovery contract |
@@ -579,14 +579,14 @@ None — no `terraform_data` SSH provisioners touched.
 
 ## Architecture Decision (ADR/C4)
 
-- `### ADR` — create **ADR-297 (provisional)** via `soleur:architecture`:
+- `### ADR` — create **ADR-298 (provisional)** via `soleur:architecture`:
   "Better Stack incidents mirror to deduplicated GitHub issues via a
   repo-side watchdog workflow; Responder-tier escalation deferred
   (operator-reserved); `push = true` measured on the two inngest heartbeats."
   Alternatives to record: paid escalation policy, outgoing webhook → Slack
   (ADR-260's rejection stands), in-place mirror inside an existing watchdog.
   Renumber per `soleur:ship`'s ADR-Ordinal Collision Gate; on renumber,
-  `grep -rn 'ADR-297' knowledge-base/project/{plans,specs}/` and sweep all
+  `grep -rn 'ADR-298' knowledge-base/project/{plans,specs}/` and sweep all
   planning refs in the same edit.
 - `### C4 views` — Container view: the mirror adds a
   `betterstack -> github actions` read edge and a
@@ -703,7 +703,7 @@ Adjacent (non-code-review) context issues the brief names, with dispositions:
 
 7. `postmerge` Phase 3.9 + report lines.
 8. `post-deploy-incident-soak.sh` + harness + followthrough-convention row.
-9. ADR-297 (provisional) + `model.c4`/`views.c4` edges.
+9. ADR-298 (provisional) + `model.c4`/`views.c4` edges.
 10. Comments: cross-reference notes on #6645/#10584/#9705.
 
 ## Acceptance Criteria
@@ -740,7 +740,7 @@ Adjacent (non-code-review) context issues the brief names, with dispositions:
 - [x] FR-9: `post-deploy-incident-soak.sh` exits 0 iff zero new incidents and
   zero new `ci/` issues in `[deploy_ts, +Nh]`; TRANSIENT on read failure;
   registered in `scripts/test-all.sh` + the two TSVs.
-- [x] FR-10: ADR-297 (provisional) exists and `model.c4`/`views.c4` carry the
+- [x] FR-10: ADR-298 (provisional) exists and `model.c4`/`views.c4` carry the
   mirror edges; `c4-code-syntax` + `c4-render` suites green.
 
 ### Non-Functional Requirements
@@ -908,7 +908,7 @@ no paid features.
 - `inngest-server.md` runbook: "Arming the probe heartbeat" gains the
   serving-verdict sentence + `/fail` semantics.
 - `followthrough-convention.md`: soak-trigger row for the new script.
-- ADR-297 (provisional) + C4 model/views updates (in-scope deliverables).
+- ADR-298 (provisional) + C4 model/views updates (in-scope deliverables).
 - Mirror workflow header comment carries the ADR-248 gate-override
   justification (the `new-scheduled-cron-prefer-inngest` lint shape).
 

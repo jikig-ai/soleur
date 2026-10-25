@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # post-deploy-incident-soak.sh — GENERIC post-merge alert-channel soak for the
-# follow-through sweeper (epic #10390, WS3; ADR-297). No issue number is baked
+# follow-through sweeper (epic #10390, WS3; ADR-298). No issue number is baked
 # in: one copy serves every enrollment, so no tracker's identity appears here.
 #
 # WHAT IT PROVES. In the window [deploy_ts, deploy_ts + SOAK_HOURS] BOTH watched

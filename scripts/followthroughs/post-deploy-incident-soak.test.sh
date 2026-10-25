@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exit-code harness for post-deploy-incident-soak.sh (generic post-merge
-# alert-channel soak; epic #10390 WS3, ADR-297).
+# alert-channel soak; epic #10390 WS3, ADR-298).
 #
 # The probe's exit code IS its authorization artifact: sweep-followthroughs.sh
 # closes the tracker on 0, comments FAIL on 1, and retries on anything else.

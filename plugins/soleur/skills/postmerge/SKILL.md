@@ -310,7 +310,7 @@ recovery is standalone `soleur:feature-tweet #N`.
 
 ## Phase 3.9: Alert-Channel Sweep (advisory)
 
-After the deploy verdict, read [references/alert-channel-sweep.md](./references/alert-channel-sweep.md) and run it — a point read of `ci/` issues opened since the merge commit plus Better Stack open incidents, in the Phase-3.5 advisory idiom: report, never hard-block (epic #10390; the always-on arm is `scheduled-betterstack-incident-mirror.yml`, ADR-297). Report vocabulary: `Alert-channel sweep: <clean|verbatim rows|SKIPPED (<cause>)>`.
+After the deploy verdict, read [references/alert-channel-sweep.md](./references/alert-channel-sweep.md) and run it — a point read of `ci/` issues opened since the merge commit plus Better Stack open incidents, in the Phase-3.5 advisory idiom: report, never hard-block (epic #10390; the always-on arm is `scheduled-betterstack-incident-mirror.yml`, ADR-298). Report vocabulary: `Alert-channel sweep: <clean|verbatim rows|SKIPPED (<cause>)>`.
 
 ## Phase 4: Verify File Freshness
 
