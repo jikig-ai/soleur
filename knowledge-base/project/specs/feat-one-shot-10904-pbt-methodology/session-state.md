@@ -18,3 +18,7 @@
 - soleur:plan (in-process run to completion)
 - soleur:deepen-plan (in-process run to completion)
 - Mechanical: gh issue/pr view, blog-jargon-scan.sh, validate-tweet-draft.sh, validate-blog-links.sh probe, markdownlint-cli2, technical-ruling-gate.sh --branch, git -C add/commit
+
+## Ruling Phase
+- technical-ruling-gate.sh --branch: PASS (4 rows) after one batched soleur:engineering:cto spawn
+- cto_spawns=1
