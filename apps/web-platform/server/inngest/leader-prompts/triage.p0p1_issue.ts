@@ -12,7 +12,7 @@ import {
   LEADER_MAX_TOKENS,
   type AnthropicToolDef,
 } from "./constants";
-import { assemblePromptText } from "./prompt-assembly";
+import { assembleEnvelopedPromptText } from "./prompt-assembly";
 
 const TOOLS: AnthropicToolDef[] = [
   {
@@ -63,7 +63,7 @@ export const triageP0p1Issue: LeaderPromptModule = {
     const owner = input.owner ?? "<unknown-owner>";
     const repo = input.repo ?? "<unknown-repo>";
     const num = input.number ?? 0;
-    const content = assemblePromptText(input.scrubbedContent ?? "", null);
+    const content = assembleEnvelopedPromptText(input.scrubbedContent ?? "", null);
     return [
       `Issue: ${owner}/${repo}#${num}`,
       "",
@@ -75,5 +75,5 @@ export const triageP0p1Issue: LeaderPromptModule = {
   model: HAIKU_MODEL,
   maxTurns: LEADER_MAX_TURNS,
   maxTokens: LEADER_MAX_TOKENS,
-  promptVersion: "v1.0.0",
+  promptVersion: "v1.1.0",
 };

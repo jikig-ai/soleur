@@ -3026,7 +3026,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the hosts are no-SSH, and
   // the offline suites drive the self-gate against a shared curl profile table and real curl and prove the event grammar, not that the stored
   // stream carries the new phase fields. Genuine.
-  const BASELINE_DECLARED_PROBES = 77;
+  // #8293 (2026-10-24): +1 (77 -> 78) for `2026-10-24-feat-wikiskill-pattern-layer-proposer-index-ledger-reader-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 14d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 1`) reads the weekly
+  // marker row through the ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}). NO SUBSTITUTE: the marker is
+  // shipped by the web host's pino WARN path and the warehouse has no unauthenticated read path; the offline suites drive the handler and the
+  // emitter against stubs and prove the field set, not that the stored stream carries it (same declaration as the #8281 probe). Genuine.
+  const BASELINE_DECLARED_PROBES = 78;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

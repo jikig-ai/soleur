@@ -21,6 +21,7 @@ import {
 import { triggerWorkflow, type createRateLimiter } from "./trigger-workflow";
 import { pushBranch } from "./push-branch";
 import { validateBranchFormat } from "./branch-validation";
+import { untrustedRowsResponse, type UntrustedSource } from "./untrusted-content";
 
 interface BuildGithubToolsOpts {
   installationId: number;
@@ -57,9 +58,19 @@ async function wrapToolHandler<T>(
   errorPrefix: string,
   fn: () => Promise<T>,
   pretty = true,
+  source?: UntrustedSource,
 ): Promise<ToolTextResponse> {
   try {
     const result = await fn();
+    if (source) {
+      // Third-party text (issue/PR/comment/CI-log): the source's untrusted-data preamble
+      // goes in its own block ahead of the JSON, which is COMPACT here (`pretty` applies to
+      // the unframed path only). Stringify runs inside this try, so a cyclic value lands in
+      // the catch as a bare isError; an `undefined` result would stringify to nothing and
+      // leave a malformed block, so it is refused explicitly.
+      if (result === undefined) throw new Error("reader returned no result");
+      return untrustedRowsResponse(source, result);
+    }
     const indent = pretty ? 2 : undefined;
     return { content: [{ type: "text", text: JSON.stringify(result, null, indent) }] };
   } catch (err) {
@@ -69,6 +80,10 @@ async function wrapToolHandler<T>(
     };
   }
 }
+
+/** Read-tool variant: results carry third-party text, so frame them as untrusted data. */
+const wrapGithubRead = <T>(errorPrefix: string, fn: () => Promise<T>): Promise<ToolTextResponse> =>
+  wrapToolHandler(errorPrefix, fn, true, "github");
 
 export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsResult {
   const { installationId, owner, repo, defaultBranch, workspacePath, workflowRateLimiter } = opts;
@@ -120,7 +135,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
       branch: z.string().optional().describe("Filter runs by branch name"),
       per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
     },
-    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading CI status", () =>
+    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading CI status", () =>
       readCiStatus(
         installationId, owner, repo,
         { branch: args.branch, per_page: Math.min(args.per_page, 30) },
@@ -136,7 +151,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     {
       run_id: z.number().describe("The workflow run ID to inspect"),
     },
-    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading workflow logs", () =>
+    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading workflow logs", () =>
       readWorkflowLogs(installationId, owner, repo, args.run_id),
     ),
   );
@@ -196,7 +211,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     {
       issue_number: z.number().int().positive().describe("The issue number to read"),
     },
-    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading issue", () =>
+    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading issue", () =>
       readIssue(installationId, owner, repo, args.issue_number),
     ),
   );
@@ -210,7 +225,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
       issue_number: z.number().int().positive().describe("The issue number to read comments from"),
       per_page: z.number().int().min(1).max(50).default(10).describe("Number of comments to return (max 50)"),
     },
-    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading issue comments", () =>
+    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading issue comments", () =>
       readIssueComments(
         installationId, owner, repo, args.issue_number, { per_page: args.per_page },
       ),
@@ -226,7 +241,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     {
       pull_number: z.number().int().positive().describe("The pull request number to read"),
     },
-    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading PR", () =>
+    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading PR", () =>
       readPullRequest(installationId, owner, repo, args.pull_number),
     ),
   );
@@ -241,7 +256,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
       pull_number: z.number().int().positive().describe("The pull request number to list comments for"),
       per_page: z.number().int().min(1).max(50).default(10).describe("Number of comments per kind to return (max 50)"),
     },
-    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error listing PR comments", () =>
+    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error listing PR comments", () =>
       listPullRequestComments(
         installationId, owner, repo, args.pull_number, { per_page: args.per_page },
       ),

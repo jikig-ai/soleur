@@ -96,6 +96,7 @@ locals {
     "2026-10-23-agentic-verification-checklist-shipped"             = "agentic-verification-checklist-shipped"
     "2026-10-27-audited-102-guardrails-four-portable"               = "audited-102-guardrails-four-portable"
     "2026-10-29-property-test-cannot-fail-teaches-nothing"          = "property-test-cannot-fail-teaches-nothing"
+    "2026-11-04-before-your-ai-team-takes-a-recurring-job"          = "before-your-ai-team-takes-a-recurring-job"
   }
 
   # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs
