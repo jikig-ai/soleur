@@ -34,3 +34,10 @@
 - Class: code (9 seats spawned, background): git-history-analyzer=b4804ac3, pattern-recognition=f5e8c3a7, architecture-strategist=78878603, security-sentinel=3574b6ac, performance-oracle=c3f92072, data-integrity=e5a440d1, agent-native=2931bf33, code-quality=1ca1bdad, test-design=a0004095.
 - Design-risk: no (applies #10637 mechanism). PANEL_SHA=d71329846860e42d3fbbff0067af79b334458061. merge-tree rc=0. Semgrep seat: engine crashed twice locally (Core_scan error) — recorded as failed seat in summary.
 - Remaining: synthesize findings, resolve (one-shot step 5 + fix-round), qa (5.5), compound (6), ship (7), DONE (8). PR #11097 draft. Issues #10093+#10363.
+
+## Review Fix Round (Step 5) — done
+- 9 seats all returned, 0 P1. Convergent P2 (4 seats): third _key_ok copy unpinned + body clause undiscriminated → fixed (body-clause key table, 3-way byte-parity assert, unset-var row, ALLEXEC sweep, envdump+export-mutant rows; floor 158→169). Security P2 residual → filed issue #11103 (redis/signing-key wrapper expansions, meta/machinery, Post-MVP).
+- P3 fixes applied: probe.sh:70 + inngest.tf:450 stale comments, probe.sh:51 anchor, tasks.md checkboxes (9/10), ADR-202 addendum, sh -x leak control (floor 555→557), wip commit restructured → 71ca3e6acc proper fix commit (force-pushed).
+- P3 accepted/documented: KEY_BAD WARN volume, PS4 vector, var= name.
+- Green post-fix: probe 169/169, inngest 557/557, bound 61/61, gate 134/134, lint clean. Affected-umbrella running (log /tmp/affected-log-path). fix_rounds=1, seats=9.
+- Remaining: affected umbrella result, qa (5.5), compound (6), ship (7). PR #11097.
