@@ -3037,7 +3037,15 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the command reads the repository's Actions cache usage (`gh api repos/jikig-ai/soleur/actions/cache/usage`) with a GH_TOKEN that
   // has actions:read. NO SUBSTITUTE: the endpoint has no unauthenticated form, and the property being verified is the repo's own cache bytes,
   // which only that endpoint reports; the offline suite proves the probe's exit-code table, not the live number. Genuine.
-  const BASELINE_DECLARED_PROBES = 79;
+  // #10975 (2026-10-25): +1 (79 -> 80) for `2026-10-25-feat-ship-terminator-journald-to-better-stack-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash -c 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep soleur-inngest-tls.service --limit 3'`)
+  // reads the Inngest host's terminator journal rows through the ClickHouse HTTP connection credential
+  // (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the rows are shipped by the host's own
+  // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the host is no-SSH, and
+  // the offline suites drive the drop-list against `vector test` fixtures and prove the filter's behaviour, not that the stored stream
+  // carries the unit's rows. Genuine.
+  const BASELINE_DECLARED_PROBES = 80;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
