@@ -3624,6 +3624,7 @@ EOF
   EXPECT_PD="$pd" _expect "R46l no perl: -F \"\$(...)\" needs the lexer -> tooling deny" "$R" 'git commit -F "$(mktemp)"' deny "perl is not installed"
   EXPECT_PD="$pd" _expect "R46m no perl: a bare -F <file> is a plain flag -> allow" "$R" "git commit -F msg.txt" allow
   EXPECT_PD="$pd" _expect "R46n no perl: -m with a single-quoted message -> allow" "$R" "git commit -m 'fix the thing'" allow
+  EXPECT_PD="$pd" _expect "R46p no perl: a call with alias text and no commit word is allowed (there is no lexer to ask; the alias-hidden commit is a perl-less residual)" "$R" "git config alias.st status" allow
   for cmd in "git commit --allow-empty -m x" "git commit -S -m x" "git commit --author=a -m x" "git commit -nm x" "git commit -m x 2>&1" "git commit -m x | tail -1" "git commit -m x && git push" "git commit -m x # note"; do
     EXPECT_PD="$pd" _expect "R46o no perl: '$cmd' is NOT on the allowlist -> tooling deny that says so" "$R" "$cmd" deny "perl is not installed" "NOT read without perl" "git commit -F <file>"
   done
@@ -4134,7 +4135,7 @@ _t_fr3_hook() {
   _sx "R3 A2k a gitleaks that logs the 'stderr is not empty' signature and exits 0 -> deny, nothing was scanned (plain)" "$Cn" "git commit -m x" deny "nothing was scanned"
   _cause_is "R3 A2l ... cause scan-error" scan-error
   _sx "R3 A2m ... and the simulated form" "$Cn" "git add -A && git commit -m x" deny "nothing was scanned"
-  SIM_ENV=("GL_REC_PRINT=2:34PM stderr is not empty (the signature without an ERR level)")
+  SIM_ENV=("GL_REC_PRINT=2:34PM the log says: stderr is not empty, and nothing else")
   _sx "R3 A2n the signature alone, without an ERR line -> deny" "$Cn" "git commit -m x" deny "nothing was scanned"
   SIM_ENV=("GL_REC_PRINT=2:34PM ERR [git] fatal: bad numeric config value 'x' for 'core.abbrev'")
   _sx "R3 A2o an ERR line alone, without the signature -> deny" "$Cn" "git commit -m x" deny "nothing was scanned"
@@ -4191,6 +4192,13 @@ _t_fr3_hook() {
   SIM_ENV=("SHIM_FAILV=cat-file")
   _sx "R3 C2 a plain commit whose -diff blobs cannot be read -> deny, scan-error" "$D" "git commit -m x" deny "could not all be read back"
   _cause_is "R3 C2b ... cause scan-error" scan-error
+  SIM_ENV=()
+  # a staged -diff path equal to the hook's own marker file in the re-scan directory is a name collision: a deny, in both read paths
+  D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"
+  printf '.soleur-sim-marker -diff\n' > "$D/.gitattributes"; echo one > "$D/.soleur-sim-marker"; git -C "$D" add .gitattributes .soleur-sim-marker
+  _sx "R3 C2c [perl] a staged -diff file named like the hook's marker -> deny, the names collide" "$D" "git commit -m x" deny "land on one file name"
+  _cause_is "R3 C2d ... cause scan-error" scan-error
+  _with_pd "$tpl" _sx "R3 C2e [no perl] the same collision -> deny" "$D" "git commit -m x" deny "land on one file name"
   SIM_ENV=()
 
   _t_fr3_gl
@@ -4271,6 +4279,9 @@ _t_fr3_walk() {
   _sd_add 'R3 A3 git config alias.ci writes an alias a later git call runs' 'git config alias.ci commit && git ci -m x' 'bad_n=1'
   _sd_add 'R3 A3 twin: git config alias.ci alone (no later git call) is not refused' 'git config alias.ci commit' 'bad_n=0'
   _sd_add 'R3 A3 twin: git config --get alias.ci is a read' 'git config --get alias.ci && git status' 'bad_n=0'
+  _sd_add 'R3 A3 twin: git config --get with a value-regex has two words and is still a read' 'git config --get alias.ci "^c" && git status' 'bad_n=0'
+  _sd_add 'R3 A3 twin: git config --get-all alias.ci x is a read' 'git config --get-all alias.ci x && git status' 'bad_n=0'
+  _sd_add 'R3 A3 twin: git config alias.ci with no value is a read of one key' 'git config alias.ci && git status' 'bad_n=0'
   _sd_add 'R3 A3 twin: -c color.ui=false commit' 'git -c color.ui=false commit -m x' 'bad_n=0'
   _sd_add 'R3 A3 twin: GIT_CONFIG_NOSYSTEM is not an alias' 'GIT_CONFIG_NOSYSTEM=1 git commit -m x' 'bad_n=0'
   _sd_add 'R3 A3 a bare assignment of the alias key, exported later, reaches the git call' 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit; export GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; git ci -m x' 'bad_n=1'
@@ -4287,6 +4298,7 @@ _t_fr3_walk() {
   done
   _sd_add 'R3 A4 su -c "git add -A && git commit -m x" is a commit the walker cannot read' 'su -c "git add -A && git commit -m x"' 'bad_n=1'
   _sd_add 'R3 A4 a quote-split commit word in a launcher string is refused' $'su -c "git com\'\'mit -m x"' 'bad_n=1'
+  _sd_add 'R3 A4 an argv-list commit in an interpreter string is refused (git and commit are not adjacent)' "python3 -c \"import subprocess; subprocess.run(['git','commit','-m','x'])\"" 'bad_n=1'
   _sd_add 'R3 A4 twin: ssh host "git pull" is opaque when a commit follows, not refused' 'ssh host "git pull" && git commit -m x' 'opaque=1' 'bad_n=0'
   _sd_add 'R3 A4 twin: a launcher string without git is left alone' 'python3 -c "print(1)" && git commit -m x' 'opaque=0' 'stages=0' 'bad_n=0'
   for k in mergetool subtree svn quiltimport lfs; do
@@ -4321,8 +4333,12 @@ _t_fr3_walk() {
   _sd_add 'R3 F2 twin: a backtick in double quotes defeats the proof' 'cd /a && git add f.txt && git commit -m "a `id`"' 'cd_first=0'
   _sd_add 'R3 F2 twin: an unquoted ; defeats the proof' 'cd /a && git add f.txt; git commit -m x' 'cd_first=0'
   _sd_add 'R3 F2 twin: a ${x} expansion in double quotes defeats the proof' 'cd /a && git add f.txt && git commit -m "a ${x}"' 'cd_first=0'
+  _sd_add 'R3 F2 twin: a $(git ...) substitution in double quotes (a git record, so the record check alone would pass) defeats the proof' 'cd /a && git add f.txt && git commit -m "a $(git rev-parse HEAD)"' 'cd_first=0'
+  _sd_add 'R3 F2 twin: a backtick git substitution in double quotes defeats the proof' 'cd /a && git add f.txt && git commit -m "a `git rev-parse HEAD`"' 'cd_first=0'
   _sd_add 'R3 F2 an over-long command (past 4096 characters) is not scanned: no proof' "cd /a && git add f.txt && git commit -m \"$(printf 'y%.0s' $(seq 1 4200))\"" 'cd_first=0'
   _sd_add 'R3 F2 control: a 100-character message keeps the proof' "cd /a && git add f.txt && git commit -m \"$(printf 'y%.0s' $(seq 1 100))\"" 'cd_first=1'
+  _sd_add 'R3 F2 past 64 quoted regions the proof is not granted (each region re-reads the rest of the text)' "cd /a && git add f.txt && git commit$(printf " -m 'x'%.0s" $(seq 1 70))" 'cd_first=0'
+  _sd_add 'R3 F2 control: 20 quoted regions keep the proof' "cd /a && git add f.txt && git commit$(printf " -m 'x'%.0s" $(seq 1 20))" 'cd_first=1'
   _sd_add 'R3 F2 twin: an unquoted redirect 2>&1 defeats the proof (a lone &)' 'cd /a && git add f.txt && git commit -m x 2>&1' 'cd_first=0'
   _sd_add 'R3 F2 twin: an unquoted | defeats the proof' 'cd /a && git add f.txt && git commit -m x | cat' 'cd_first=0'
   _sd_add 'R3 F2 twin: a heredoc body (newline outside quotes) defeats the proof' $'cd /a && git add f.txt && git commit -F - <<EOF\nmsg\nEOF' 'cd_first=0'
@@ -4338,6 +4354,8 @@ _t_fr3_walk() {
   _sx "R3 A3d twin: a commit MESSAGE that says alias. is not a definition -> allow" "$Cn" 'git commit --allow-empty -m "see alias.ci docs"' allow
   _sx "R3 A3e twin: git config --get alias.ci, then a commit -> allow" "$Cn" 'git config --get alias.ci; git commit --allow-empty -m x' allow
   _sx "R3 A3f GIT_CONFIG_NOSYSTEM on a staging record: the reason names that variable, not an alias" "$U" 'GIT_CONFIG_NOSYSTEM=1 git add clean.txt && git commit -m x' deny "GIT_CONFIG_NOSYSTEM" "!alias"
+  _sx "R3 A3g an alias key spelled with quotes (no 'alias.' and no 'commit' in the TEXT) behind a GIT_CONFIG_ prefix still reaches the lexer -> deny" "$Cn" "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=a'l'ias.ci GIT_CONFIG_VALUE_0=ab git ci -m x" deny "defines a git alias"
+  _sx "R3 A3h ... and behind --config-env" "$Cn" "git --config-env=a'l'ias.ci=CIV ci -m x" deny "defines a git alias"
 
   # A4 (hook): the launcher string stages through a quote-split word -> the superset finds the untracked leak
   _sx "R3 A4 su -c \"git ad''d -A\" then a commit: the superset scan finds the untracked leak -> deny" "$U" $'su -c "git ad\'\'d -A" && git commit -m x' deny "leak.json"

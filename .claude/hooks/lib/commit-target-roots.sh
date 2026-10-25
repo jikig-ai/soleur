@@ -914,7 +914,7 @@ _ctr_walk_body() {
         su|flock|ssh|watch|script|runuser|parallel|fish|ash|sg|csh|tcsh|tmux|screen|python|python2|python3|perl|node|nodejs|ruby|php|lua|awk|gawk|mawk)
           # These take a program or a command as a STRING operand. One that carries the word git is opaque (CTO row 50: the
           # superset; matching literal verbs is defeated by quoting and variables). It is also refused when the string, with
-          # quotes, backslashes and $ taken out, spells a git commit (`su -c "git add -A && git commit"`, `git com''mit`). A
+          # quotes, backslashes and $ taken out, says `commit` as well (`su -c "git add -A && git commit"`, `git com''mit`). A
           # plain `ssh host "git pull"` is opaque but is no commit: it is denied only when a commit record follows or precedes
           # it, by the same superset every other opaque staging gets.
           j=$((i + 1))
@@ -925,7 +925,7 @@ _ctr_walk_body() {
                 CTR_STAGE_OPAQUE=1
                 k="${w//[\'\"\\$]/}"
                 case "$k" in
-                  *git*[[:space:]]*commit*|*git-commit*) _ctr_bad "$b runs a command string the walker cannot read"; _ctr_mark_commit; break ;;
+                  *commit*) _ctr_bad "$b runs a command string the walker cannot read"; _ctr_mark_commit; break ;;
                 esac ;;
               *) if _ctr_str_stage_verb "$w"; then CTR_STAGE_OPAQUE=1; fi ;;
             esac
@@ -1018,7 +1018,7 @@ _ctr_stage_finish() {
   # `cd <abs> && git ... && git ...` and nothing else: a ; || | ( { pushd popd or substitution in the UNQUOTED text defeats
   # the proof (a subshell or a failing cd would not move the commit). Quoted text is judged by what it can DO (CTO row 54):
   # inside single quotes nothing is live; inside double quotes only an expansion ($name, ${, $(, a backtick) is, so a commit
-  # message such as "fix(x): y" or one with a newline keeps the proof. Past 4096 characters the text is not scanned.
+  # message such as "fix(x): y" or one with a newline keeps the proof. Past 4096 characters, or 64 quoted regions, the proof is not granted.
   if [ "$_CTR_FIRST_IS_CD" -eq 1 ] && [ "$_CTR_FIRST_NW" -eq 2 ] && [ "$_CTR_CD_N" -eq 1 ] && [ "$_CTR_CD_BAD" -eq 0 ] \
      && [ "${#cmd}" -le 4096 ] && _ctr_unquoted "$cmd"; then
     t="${_CTR_UQ//&&/}"
@@ -1034,10 +1034,12 @@ _ctr_stage_finish() {
 # a double-quoted region carries a live expansion or the quoting is not balanced. In a double-quoted region a backslash
 # escapes the next character, so `\$x` is inert.
 _ctr_unquoted() {
-  local t="$1" dq
+  local t="$1" dq nq=0
   local re_head='^(([^'"'"'"\\]|\\.)*)' re_sq="^'([^']*)'" re_dq='^"(([^"\\]|\\.)*)"'
   _CTR_UQ=""
   while [ -n "$t" ]; do
+    # each region re-reads the rest of the text: past 64 regions the proof is simply not granted
+    nq=$((nq + 1)); if [ "$nq" -gt 64 ]; then return 1; fi
     [[ "$t" =~ $re_head ]] || return 1
     _CTR_UQ="$_CTR_UQ${BASH_REMATCH[1]}"; t="${t:${#BASH_REMATCH[0]}}"
     [ -n "$t" ] || break

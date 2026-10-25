@@ -267,8 +267,10 @@ if [ "$strict_match" -eq 0 ]; then
   if [[ "$command" != *git* ]]; then
     allow
   elif [[ "$command" != *commit* ]]; then
+    # (Without perl there is no lexer to ask: such a call is allowed rather than denied as "tooling", so that
+    # `git config alias.st status` is not blocked on a minimal container; the alias-hidden commit is a perl-less residual.)
     case "$command" in
-      *[Aa][Ll][Ii][Aa][Ss].*|*GIT_CONFIG_*|*--config-env*) : ;;
+      *[Aa][Ll][Ii][Aa][Ss].*|*GIT_CONFIG_*|*--config-env*) command -v perl >/dev/null 2>&1 || allow ;;
       *) allow ;;
     esac
   fi

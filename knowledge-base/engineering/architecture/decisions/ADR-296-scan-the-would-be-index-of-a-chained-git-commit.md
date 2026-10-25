@@ -61,9 +61,10 @@ operand of a listed launcher or interpreter that carries the word `git` (`su -c`
 `perl -e`, `node -e`, `ruby -e`, `php -r`, `awk`; row 50 - matching literal verbs is defeated by quoting and variables),
 an unknown short commit option, a bundle longer than 64 characters and the verbs checkout / cherry-pick / merge / revert /
 stash / am / read-tree / restore / pull / switch / rebase / submodule / sparse-checkout / apply / update-index /
-mergetool / subtree / svn / quiltimport / lfs make the stage opaque and take the superset. A launcher string whose text,
-with quotes, backslashes and `$` taken out, spells a git commit (`su -c "git add -A && git commit"`, `git com''mit`) is
-refused as undeterminable; a plain `ssh host "git pull"` is opaque but is no commit and stays allowed. `update-index
+mergetool / subtree / svn / quiltimport / lfs make the stage opaque and take the superset. A launcher string that carries
+`git` and whose text, with quotes, backslashes and `$` taken out, also says `commit` (`su -c "git add -A && git commit"`,
+`git com''mit`, `subprocess.run(['git','commit'])`) is refused as undeterminable; a plain `ssh host "git pull"` is opaque
+(the superset scans the working tree) but is no commit and stays allowed, with or without a commit record after it. `update-index
 --add|--cacheinfo|--index-info` and `apply --index|--cached|--3way` (also in a short bundle such as `-v3`) bring
 content from outside the working tree: they are denied (`stage-unsimulable`). An abbreviation git accepts is read as
 the option it abbreviates: `add --f|--fo|--for|--forc` is a force-add, and so is a bundle past the 64-character cap
