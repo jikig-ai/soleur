@@ -163,7 +163,7 @@ by the decode table's `connect` row and the `tls=3 verify=0` fields, which place
 2. `apps/web-platform/infra/vector-terminator-filter.test.toml` - `vector test` cases: the measured stunnel lines (verbatim), a line of another unit that matches a drop prefix, a row with no `.message`, an unknown-wording stunnel line.
 3. `knowledge-base/project/specs/feat-one-shot-terminator-journald-shipping/tasks.md` - the work breakdown.
 
-Glob check (`hr-when-a-plan-specifies-relative-paths`): every path above was resolved against the tree (`git ls-files`) or is marked create. The new suite must be registered where `lint-orphan-test-suites` looks (the workflow step above is the registration; verify at work time that the lint accepts it).
+Glob check (`hr-when-a-plan-specifies-relative-paths-e-g`): every path above was resolved against the tree (`git ls-files`) or is marked create. The new suite must be registered where `lint-orphan-test-suites` looks (the workflow step above is the registration; verify at work time that the lint accepts it).
 
 ## Open Code-Review Overlap
 
@@ -287,6 +287,18 @@ until the bump lands (one mint, build and bump cycle); `deploy-script-tests` is 
 Better Stack is on a paid tier of unverified limit; the vendor exposes no usage endpoint (expenses ledger). The terminator budget is stated per unit and measured
 from rows (below), not from a plan limit.
 
+## Downtime & Cutover
+
+**The offline-inducing operation.** The Inngest host replace (TJ-3): `hcloud_server.inngest` is destroyed and recreated, so the sole scheduler (cron-fired agent runs, reminder arming and firing) is unavailable until `bootstrap-done` and the resume. The merge itself restarts journald and vector on web-1 and web-2, which takes no serving surface offline (the app container keeps serving; only log shipping pauses for seconds, and `.prev` is restored on a rejected config).
+
+**Zero-downtime paths evaluated, and why none applies to the Inngest host.**
+- Blue-green (a second Inngest host, cut over, old one retired): refused by design. ADR-100 and `inngest-server-flip-guard.sh` enforce exactly one prod scheduler (the guard prints `BLOCK: cutover flag='done' but this host carries no done-owner marker` for a second start), so two hosts cannot run together.
+- In-place delivery of `vector.toml` without a replace: not available. The signed config-refresh channel (`inngest-config-refresh-set.txt`) admits only host-executed `*.sh` scripts and its membership rules bind (a config file is not a member, and the engine itself is never a member), so `vector.toml` rides the image and an image edit reaches the host only through a replace (runbook, "Refresh-channel cross-ref").
+- Drain-then-act: partly available and used. The `cutover-inngest.yml` quiesce op covers reminder arming for the window and the replay check follows (TJ-3a); a clean replace is 79 seconds from server creation to `bootstrap-done` and the queue and run state survive on the retained Redis AOF volume.
+- Defer to a replace that is needed anyway: the CPO's suggestion, recorded as a scheduling option the owner may take. The only costs of waiting are that the next self-gate failure stays as hard to diagnose as the last one and that a user_data trim is needed before any replace.
+
+**Residual downtime accepted with a bounded window and owner sign-off.** Plan for up to about 80 minutes (measured: 59 and 76 minutes in incidents, 34 minutes 49 seconds on the clean 2026-09-27 path of which about 30 were approval latency). The window is chosen by the owner, low-traffic, with the quiesce op set, and begins only on the owner's typed go naming the replace. Per-stage verification and rollback: the runbook's A1 success evidence (boot event with the private NIC up, `bootstrap-done` for the new `iid`, `tls-health` rows with `listener=1`), the abort thresholds (10 minutes, 2 hours, 30 minutes) and, for a failed replace, a fresh owner go; there is no rollback of a replace (the link stays http, so nothing needs reverting on the web side).
+
 ## Architecture Decision (ADR/C4)
 
 ### ADR
@@ -338,6 +350,27 @@ discoverability_test:
   command: bash -c 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep "Connection closed" --limit 3'
   expected_output: Connection closed
   credentials_required: BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD in Doppler soleur/prd_terraform (read-only ClickHouse connection) - no unauthenticated probe verifies that rows reached the warehouse
+```
+
+## Encryption Posture
+
+No persistent store and no new cross-component connection is introduced; the terminator's rows reuse the one existing store and the one existing connection below, both already declared. This section exists so the gate reads a posture, not an absence.
+
+```yaml
+at_rest:
+  - store: betterstack.logs (existing; scripts/encryption-posture-ledger.json, source 2457081)
+    mechanism: provider-managed:betterstack-encrypted-at-rest
+    evidence: the ledger row names the vendor security documentation (attestation_url https://betterstack.com/security, retrieved_on 2026-07-24); this PR adds rows to the same source and changes no store property
+    defends_against: physical-media compromise of the log store
+    does_not_defend: a leaked Better Stack API token; log sanitization at the emitter (the three pii_scrub transforms and the fail-open filter's drop-list) is the primary control against sensitive data reaching the sink
+    disclosed_as: not-publicly-claimed
+    live_verification: unavailable - named SOC 2 attestation formalization pending, tracked #6911 (inherited from the ledger row)
+in_transit:
+  - connection: Vector on the Inngest host to the Better Stack ingest sink (sinks.betterstack in vector.toml, existing)
+    tls: HTTPS to https://s2457081.eu-fsn-3.betterstackdata.com/ with a bearer token
+    cert_verification: on (the sink block sets no tls override; verified by reading the block, vector.toml lines 800 to 812)
+    does_not_defend: a compromised Vector process or host (it holds the token), and Better Stack-side access
+    disclosed_as: not-publicly-claimed
 ```
 
 ## Guard Contract
