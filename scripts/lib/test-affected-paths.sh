@@ -52,8 +52,13 @@
 # repo-relative head — in scripts/test-all.sh _affected_add_edge), and the
 # census linter flags them statically. Keep entries repo-relative. Matching is ANCHORED (#9307): a directory entry
 # selects a suite only when a diff path STARTS with it, a file entry only
-# when a diff path EQUALS it, and a directory written without the trailing
-# "/" is normalised to one. So `test/` does not match
+# when a diff path EQUALS it, and a LIVE directory written without the
+# trailing "/" is normalised to one. WRITE the slash anyway (#9441): declared
+# entries mint through _affected_add_declared_edge, which carries no `-e`
+# filter, so a deleted `dir/` still mints the `^dir/` prefix that selects the
+# suite on the deleting diff — while a deleted slash-less `dir` mints `^dir`,
+# an exact line a diff can never produce. The census linter rejects the
+# slash-less form for exactly that reason. So `test/` does not match
 # `apps/web-platform/test/x.ts` or `specs/feat-x-test-y/spec.md`. Entries
 # rooted at `.` or `..` keep the legacy substring match.
 #
@@ -902,7 +907,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REGENERATE_SHARD_MANIFEST_TEST_SH_PATHS=(
 # tests/hooks/incidents — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_HOOKS_INCIDENTS_PATHS=(
-  ".claude/hooks/lib"
+  ".claude/hooks/lib/"
   ".claude/hooks/lib/incidents.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
@@ -920,7 +925,7 @@ AFFECTED_SCRIPTS_SENTRY_ISSUE_DISCOVER_PATHS=(
 # scripts/orphan-process-reaper-mutations — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS=(
-  "scripts/lib"
+  "scripts/lib/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lib/test-contention.sh"
   "scripts/orphan-process-reaper-mutation.test.sh"
@@ -933,7 +938,7 @@ AFFECTED_SCRIPTS_ORPHAN_PROCESS_REAPER_MUTATIONS_PATHS=(
 # repo paths its suite file names.
 AFFECTED_SCRIPTS_LINT_WORKFLOW_LOCAL_ACTION_CHECKOUT_LIVE_PATHS=(
   ".github/actions/"
-  ".github/workflows"
+  ".github/workflows/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-workflow-local-action-checkout.py"
   "scripts/test-all.sh"
@@ -1117,10 +1122,9 @@ AFFECTED_TESTS_COMMANDS_SYNC_DOMAIN_MODEL_PATHS=(
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_GITHUB_PATHS=(
   ".github/workflows/apply-github-infra.yml"
-  "infra/github"
   "infra/github/"
   "scripts/lib/test-affected-paths.sh"
-  "tests/scripts/fixtures"
+  "tests/scripts/fixtures/"
   "tests/scripts/fixtures/tfplan-real-ruleset-baseline.json"
   "tests/scripts/lib/destroy-guard-filter.jq"
   "tests/scripts/test-destroy-guard-counter.sh"
@@ -1130,11 +1134,11 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_GITHUB_PATHS=(
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_SENTRY_PATHS=(
   ".github/workflows/apply-sentry-infra.yml"
-  "apps/web-platform/infra/sentry"
+  "apps/web-platform/infra/sentry/"
   "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-destroy-counts.sh"
-  "tests/scripts/fixtures"
+  "tests/scripts/fixtures/"
   "tests/scripts/fixtures/tfplan-sentry-real-baseline.json"
   "tests/scripts/lib/destroy-guard-filter-sentry.jq"
   "tests/scripts/test-destroy-guard-counter-sentry.sh"
@@ -1151,7 +1155,7 @@ AFFECTED_TESTS_SCRIPTS_HOST_IMAGE_COHERENCE_PREFLIGHT_PATHS=(
 # tests/scripts/vector-redeliver-wiring — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_VECTOR_REDELIVER_WIRING_PATHS=(
-  ".github/actions/cf-tunnel-ssh-bridge"
+  ".github/actions/cf-tunnel-ssh-bridge/"
   ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/lib/vector-redeliver-gate.sh"
@@ -1217,7 +1221,7 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_ROOT_KEY_ARM_PATHS=(
 # tests/scripts/destroy-guard-sentry-scope-guard — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_SENTRY_SCOPE_GUARD_PATHS=(
-  "apps/web-platform/infra/sentry"
+  "apps/web-platform/infra/sentry/"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/lib/destroy-guard-filter-sentry.jq"
   "tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
@@ -1230,7 +1234,7 @@ AFFECTED_TESTS_SCRIPTS_SENTRY_FULL_ROOT_APPLY_PATHS=(
   "knowledge-base/project/learnings/2026-07-15-narrowing-is-not-anchoring-and-a-documented-class-recurred-four-times-in-one-pr.md"
   "knowledge-base/project/learnings/test-failures/2026-06-17-grep-assertion-over-script-body-false-matches-own-comments.md"
   "scripts/lib/test-affected-paths.sh"
-  "tests/scripts/fixtures"
+  "tests/scripts/fixtures/"
   "tests/scripts/lib/destroy-guard-filter-sentry.jq"
   "tests/scripts/test-destroy-guard-sentry-scope-guard.sh"
   "tests/scripts/test-sentry-full-root-apply.sh"
@@ -1369,7 +1373,7 @@ AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
 # ci.yml, executes the classifier script, and sweeps every workflow for the falsy-middle ternary shape, so the one corpus it walks
 # is .github/workflows. Declared from the repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_SHARD_TOTALITY_SKIP_TEST_SH_PATHS=(
-  ".github/workflows"
+  ".github/workflows/"
   "plugins/soleur/test/ci-shard-totality-skip.test.sh"
   "scripts/ci-e2e-classify.sh"
   "scripts/ci-shard-totality-classify.sh"
@@ -1389,7 +1393,7 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_RESOLVE_REGENERABLE_CONFLICTS_TEST_SH_PATHS=(
 # plugins/soleur/test/ci-concurrency-key.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_CONCURRENCY_KEY_TEST_SH_PATHS=(
-  ".github/workflows"
+  ".github/workflows/"
   ".github/workflows/ci.yml"
   "plugins/soleur/test/ci-concurrency-key.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1419,7 +1423,7 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_MERGE_EFFECT_CLASS_TEST_SH_PATHS=(
 # plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
-  ".github/workflows"
+  ".github/workflows/"
   ".github/workflows/ci.yml"
   "plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1428,7 +1432,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
 # plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh — same class as
 # the ci.yml sibling above; declared from the repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_SCRIPT_TESTS_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
-  ".github/workflows"
+  ".github/workflows/"
   ".github/workflows/infra-validation.yml"
   "plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1437,7 +1441,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_SCRIPT_TESTS_AGGREGATOR_DIAGNOSIS_TEST_SH_PA
 # plugins/soleur/test/ci-path-gating.test.sh — #8897 path-gating pins; derived edges could
 # not reach its two workflow subjects; declared from the repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
-  ".github/workflows"
+  ".github/workflows/"
   ".github/workflows/pr-quality-guards.yml"
   ".github/scripts/check-client-pii-sentry.sh"
   ".github/scripts/check-settings-integrity.sh"
@@ -1678,7 +1682,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_UNKEPT_PROMISE_HOOK_TEST_SH_PATHS=(
 # plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_BOUNDARY_TEST_SH_PATHS=(
-  "apps/web-platform"
+  "apps/web-platform/"
   "apps/web-platform/scripts/constraint-gates.sh"
   "plugins/soleur/skills/"
   "plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh"
@@ -1689,7 +1693,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_BOUNDARY_TEST_SH_PATHS=(
 # plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_EMIT_FIX_CONSTRAINTS_TEST_SH_PATHS=(
-  "apps/web-platform"
+  "apps/web-platform/"
   "apps/web-platform/scripts/constraint-gates.sh"
   "plugins/soleur/skills/"
   "plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh"
@@ -1701,7 +1705,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_EMIT_FIX_CONSTRAINTS_TES
 # plugins/soleur/skills/constraint-scaffold/test/generator.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_GENERATOR_TEST_SH_PATHS=(
-  "apps/web-platform"
+  "apps/web-platform/"
   "plugins/soleur/skills/"
   "plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh"
   "plugins/soleur/skills/constraint-scaffold/test/generator.test.sh"
@@ -1715,9 +1719,9 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
   ".github/workflows/pr-quality-guards.yml"
   ".github/workflows/fix-constraints-stage-a.yml"
   ".github/workflows/fix-constraints-stage-b.yml"
-  "apps/web-platform"
+  "apps/web-platform/"
   "plugins/soleur/skills/"
-  "plugins/soleur/skills/constraint-scaffold/references"
+  "plugins/soleur/skills/constraint-scaffold/references/"
   "plugins/soleur/skills/constraint-scaffold/test/parity.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
@@ -1738,9 +1742,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_LEASE_PROTECTS_ACTIVE_TEST_SH_P
   ".claude/hooks/lib/"
   "knowledge-base/project/learnings/2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md"
   "knowledge-base/project/plans/2026-05-12-feat-bg-readiness-concurrency-hardening-plan.md"
-  "plugins/soleur/."
   "plugins/soleur/scripts/lib/session-state.sh"
-  "plugins/soleur/skills/."
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1804,7 +1806,6 @@ AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   "apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh"
   ".claude/hooks/grep-q-pipe-guard.test.sh"
   ".claude/hooks/lib/"
-  "plugins/."
   "plugins/soleur/skills/compound/test/phase-16.test.sh"
   "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
   "scripts/lib/test-affected-paths.sh"

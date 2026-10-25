@@ -21,8 +21,9 @@
 #               always-cover) except at the census, where it is a static RED —
 #               and at GLOBENT, where it stays `semantic` (the closed grammar).
 #
-# malformed-shape invariant — ONE doctrine, ONE classifier: the mint arm
-# `_affected_add_edge` and the hit arm `_diff_edge_hit` in scripts/test-all.sh,
+# malformed-shape invariant — ONE doctrine, ONE classifier: the mint arms
+# `_affected_add_edge`/`_affected_add_declared_edge` (#9441's -e-less declared
+# twin) and the hit arm `_diff_edge_hit` in scripts/test-all.sh,
 # the census arm in scripts/lint-orphan-test-suites.sh, and the covers() oracle
 # in scripts/test-affected-kb-consumers.test.sh must classify a shape
 # identically; GLOBENT (the registration-only classifier's awk regex) is a
@@ -30,7 +31,7 @@
 # count is wider: scripts/ci-pr-affected-replay.py's edge_hit() is a Python
 # MIRROR of the hit arm (bash-vs-python parity pinned by a differential row),
 # and materialise() in scripts/lint-orphan-test-suites.test.sh splits payloads
-# test-side. The three bash sites plus materialise() classify through THIS
+# test-side. The four bash sites plus materialise() classify through THIS
 # function; the Python and awk mirrors keep the same verdicts by inspection —
 # a drift there is what the differential and k5/Rg fixtures exist to catch.
 #
