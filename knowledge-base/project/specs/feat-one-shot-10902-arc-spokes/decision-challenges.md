@@ -1,0 +1,20 @@
+# Decision challenges — feat-one-shot-10902-arc-spokes
+
+Plan: `knowledge-base/project/plans/2026-10-25-content-agentic-verification-arc-spokes-plan.md`
+Context: one-shot pipeline plan phase on Devin CLI subagent — no Agent/Task tool, so
+technical rulings are recorded as `pending - assumed:` defaults per the pipeline's
+technical-ruling convention, and no named review panel could be spawned (self-review only).
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Publish dates / filename dates for the five spokes — the directive fixes the Tue/Thu convention and the occupied 2026-10-27/10-29 slots but names no dates | operator (schedule) | 2026-11-03, 2026-11-05, 2026-11-10, 2026-11-12, 2026-11-17 stand as the recorded defaults (the next five free Tue/Thu slots; the two feature-map posts separated by a week). All five go live on merge regardless of `date:` — the dates are canonical-URL/calendar labels. If the operator wants different slots, filename + frontmatter date + distribution filename + redirect key move together per post (plan AC11) |
+| Spoke ordering — which issue claims which slot | operator (schedule) | Narrative order assumed: #10636 (day-one bug — the origin story) → #10694 (map guard) → #10730 (migration) → #10737 (map convention) → #10739 (flake quarantine); also separates the two map posts by a week |
+| Final titles — strategy-row working titles vs founder-first re-angles per the Blog note | taste | Keep the five strategy-row titles as defaults; the content-writer step may re-angle per the Blog note; slugs are pinned either way |
+| Slug for #10739 — the strategy title "A Flaky Test Passed on Retry and the Loop Called It Fixed" has no clean kebab form | taste | `flaky-test-passed-on-retry-quarantine` — carries both the hook (passed-on-retry) and the thesis (quarantine); re-derivable if the title re-angles |
+| Closing technical links per spoke — learning post-mortem vs shipped artifact doc | taste | #10636 → the repo-url-retrim learning (bug post-mortem of record); #10694 → the census-guard learning; #10730 → the shipped differential-migration-testing.md reference; #10737 → the shipped feature-map convention doc; #10739 → the shipped determinism-checklist.md. Mixed rule: link the artifact a reader can act on when the post is convention-shaped, the post-mortem when it is incident-shaped |
+| Two spoke links in the hub's map section — combined sentence vs two sentences | taste | Two sentences at section end (one per spoke, distinct companions: our map's guard vs the founder-codebase convention) — keeps the each-child-exactly-once contract readable; a merged sentence linking both remains acceptable at draft time |
+| #10739 shipped as a full spoke vs its own brief's "queue as a methodology candidate, not a standalone piece" | operator (scope) | The operator directive ("write all five remaining arc spoke posts ... in one PR") overrides the brief's channel suggestion — recorded so the intent is on record |
+| #10736 open citation-scope challenge could narrow the convention's consumer set post-publish | technical | pending - assumed: describe the convention document's contract (seed-only-exercised, field-scoped refresh, entry schema) without pinning a consumer count — the post stays true under either #10736 resolution |
+| Scoped advisor consult (plan Step 4.5) and the plan-review panel — both require Task/agent spawns unavailable in this subagent context | technical | pending - assumed: accept the skip — proceed to work/review; plan Step 4.5 is advisory by contract ("do not block"), no `status: BLOCKED` rows remain, every factual claim is pinned to a verified source, no downstream step consumes a panel artifact, and the soleur:review stage re-runs a heavier multi-agent pass on the diff (same default the sibling plan #10904 recorded) |
