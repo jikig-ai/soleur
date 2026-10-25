@@ -802,7 +802,8 @@ case_verb_census() { # <script>
   # strings (systemctl/rm/flock/runuser run on git-data via gd_exec, never on this host).
   # The census exempts those function bodies; a mutating verb anywhere else — or a
   # resurrected deleted-function name ANYWHERE — still trips it.
-  code="$(sed -E 's/^[[:space:]]*#.*$//; s/[[:space:]]+# .*$//' "$1" | awk '
+  # The one exact line naming the app container (#8211 PR-E container probe constant) is exempt, as in git-data-luks.test.sh's A12 census.
+  code="$(sed -E 's/^[[:space:]]*#.*$//; s/[[:space:]]+# .*$//' "$1" | grep -vxF 'CONTAINER_PROBE_APP_NAME="soleur-web-platform"' | awk '
     /^(mode_freeze|mode_unfreeze|mode_probe|probe_freeze|require_lineage|gd_exec)\(\) \{/ {skip=1; next}
     skip && /^\}/ {skip=0; next}
     !skip' | grep -vE '^[[:space:]]*$')"
@@ -2819,6 +2820,10 @@ case "${CP_INNER:-answer}" in
   denied)   echo "git@10.0.1.20: Permission denied (publickey)." >&2; exit 255 ;;
   hostkey)  echo "Host key verification failed." >&2; exit 255 ;;
   other)    echo "ssh: something nobody classified" >&2; exit 255 ;;
+  closed)   echo "Connection closed by 10.0.1.20 port 22" >&2; exit 255 ;;
+  reset)    echo "kex_exchange_identification: read: Connection reset by peer" >&2; exit 255 ;;
+  optiontext) echo "command-line: line 0: Bad configuration option: ConnectTimeoutX" >&2; exit 255 ;;
+  optimedout) echo "ssh: connect to host 10.0.1.20 port 22: Operation timed out" >&2; exit 255 ;;
   hang)     exec sleep 30 ;;
 esac
 SHIM
@@ -2846,6 +2851,7 @@ for spec in "r21|worktree_root_not_writable" \
             "r24|container_egress_blackhole reason=timeout" "r25|container_egress_blackhole reason=refused" \
             "r22|probe_failed reason=scratch" "r23|probe_failed reason=transport_env_absent" "r26|probe_failed reason=auth_refused" \
             "r27|probe_failed reason=host_key" "r28|probe_failed reason=unclassified" \
+            "r29|probe_failed reason=ssh_unrunnable" "r30|probe_failed reason=ssh_closed" \
             "r1|probe_failed rc=1" "r255|probe_failed rc=255" "r124|probe_failed rc=124" \
             "silent|probe_failed reason=bad_answer" "badline|probe_failed reason=bad_answer"; do
   IFS='|' read -r _mode _want <<< "$spec"
@@ -2923,6 +2929,7 @@ if case_cpx_via frozen ok CP_INNER=frozen; then pass "CPX2: a frozen-store wrapp
 else fail "CPX2: a frozen-store answer was not accepted as reachable" "$(ctx)"; fi
 if case_cpx_via realwrapper ok CP_INNER=wrapper; then pass "CPX3: the REAL transport wrapper's own refusal text (a store that is not mounted) is recognised as the wrapper answering -> ok"
 else fail "CPX3: the real wrapper's refusal text was not recognised" "$(ctx)"; fi
+printf '#!/bin/sh\nexit 0\n' > "$CP/not-executable" && chmod 644 "$CP/not-executable" || { printf 'FAIL SETUP: not-executable\n' >&2; exit 1; }
 for spec in "noroot|CP_WT_ROOT=$CP/does-not-exist|worktree_root_not_writable" \
             "relroot|CP_WT_ROOT=relative/dir|worktree_root_not_writable" \
             "procroot|CP_WT_ROOT=/proc/self|worktree_root_not_writable" \
@@ -2937,12 +2944,36 @@ for spec in "noroot|CP_WT_ROOT=$CP/does-not-exist|worktree_root_not_writable" \
             "denied|CP_INNER=denied|probe_failed reason=auth_refused" \
             "hostkey|CP_INNER=hostkey|probe_failed reason=host_key" \
             "other|CP_INNER=other|probe_failed reason=unclassified" \
-            "hang|CP_INNER=hang CP_TIMEOUT=2|container_egress_blackhole reason=timeout"; do
+            "hang|CP_INNER=hang CP_TIMEOUT=2|container_egress_blackhole reason=timeout" \
+            "optimedout|CP_INNER=optimedout|container_egress_blackhole reason=timeout" \
+            "closed|CP_INNER=closed|probe_failed reason=ssh_closed" \
+            "reset|CP_INNER=reset|probe_failed reason=ssh_closed" \
+            "optiontext|CP_INNER=optiontext|probe_failed reason=unclassified" \
+            "nossh|CP_SSH=/nonexistent/ssh|probe_failed reason=ssh_unrunnable" \
+            "notexec|CP_SSH=$CP/not-executable|probe_failed reason=ssh_unrunnable"; do
   IFS='|' read -r _id _kv _want <<< "$spec"
   # shellcheck disable=SC2086  # _kv is one or two VAR=value words, split on purpose
   if case_cpx_via "$_id" "$_want" $_kv; then pass "CPX4 ($_id): the executed body -> $_want, no key text printed, scratch removed"
   else fail "CPX4 ($_id): expected $_want" "$(ctx)"; fi
 done
+# The container's sh is dash (debian), which, unlike bash, does NOT run an EXIT trap when a signal kills it: the signal traps are what this row proves.
+CP_DASH="$(command -v dash || command -v sh)"
+case_cpx_term() { # SIGTERM while the dial is in flight: the key file must not outlive the body
+  local bp k=0 rcw
+  rm -rf "$CP/tmp" "$CP/wt"; mkdir -p "$CP/tmp" "$CP/wt"; : > "$CP/log-term"
+  env -i PATH=/usr/bin:/bin TMPDIR="$CP/tmp" WORKTREE_ROOT="$CP/wt" GIT_TRANSPORT_SSH_PRIVATE_KEY="$CP_KEYCANARY" GIT_DATA_SSH_HOST_KEY="$CP_PINV" \
+    GIT_DATA_SSH_HOST=10.0.1.20 GDCP_SSH="$CP/inner-ssh" GDCP_TIMEOUT=30 CP_INNER=hang CP_LOG="$CP/log-term" CP_KEY="$CP_KEYCANARY" CP_PIN="$CP_PINV" \
+    "$CP_DASH" "${CASE_BODY:-$CPBODY}" </dev/null > "$CP/term.out" 2>&1 &
+  bp=$!
+  while [ "$k" -lt 100 ] && [ -z "$(find "$CP/tmp" -name k -type f 2>/dev/null)" ]; do sleep 0.1; k=$((k + 1)); done
+  [ -n "$(find "$CP/tmp" -name k -type f 2>/dev/null)" ] || { kill -KILL "$bp" 2>/dev/null; return 1; }
+  sleep 0.3
+  kill -TERM "$bp" 2>/dev/null
+  rcw=0; wait "$bp" || rcw=$?
+  [ "$rcw" = 143 ] && [ -z "$(ls -A "$CP/tmp")" ] && ! grep -qF CANARY-CP-KEY "$CP/term.out" && [ -z "$(ls -A "$CP/wt")" ]
+}
+if case_cpx_term; then pass "CPX6: SIGTERM while the dial is in flight -> the body exits 143 and no scratch directory (so no key file) is left, no key text printed"
+else fail "CPX6: a signal left the key file behind (or the body did not exit 143)" "tmp=[$(ls -A "$CP/tmp" 2>/dev/null | tr '\n' ' ')] out=[$(head -c 200 "$CP/term.out" 2>/dev/null)]"; fi
 if grep -qF 'echo "remote: git-data transport: $1" >&2' "$WRAPPER_SRC" && grep -qF 'reject "repo does not exist (provision it first)' "$WRAPPER_SRC" \
    && grep -qF "grep -qF 'remote: git-data transport:'" "$CPBODY"; then
   pass "CPX5: the transport wrapper still prefixes every refusal with 'remote: git-data transport:' and still rejects an absent repo, and the probe body keys on exactly that prefix"
@@ -2992,17 +3023,24 @@ case_cpx_refused() { case_cpx_via m-refused 'container_egress_blackhole reason=r
 case_cpx_hostkey() { case_cpx_via m-hostkey 'probe_failed reason=host_key' CP_INNER=hostkey; }
 cp_body_row() { # <name> <diff-lines> <sed program> <case-fn>
   if mutate "$1" "$CPBODY" "$2" "$3"; then
-    CASE_SCRIPT="$(cp_mutdir "$1" "$SCRIPT" "$MUTANT")" mutant_red "$1" "$4"
+    CASE_BODY="$MUTANT" CASE_SCRIPT="$(cp_mutdir "$1" "$SCRIPT" "$MUTANT")" mutant_red "$1" "$4"
   fi
 }
 cp_body_row cpb-probe-dir-skipped 4 's#^(mkdir|rmdir) "\$probe_dir" 2>/dev/null \|\| exit 21$#:#' case_cpx_proc
-cp_body_row cpb-timeout-blind 2 's#^if \[ "\$rc" -eq 124 \] \|\| grep -qiE .timed out\|timeout. "\$d/err"; then exit 24; fi$#if grep -qiE "timed out|timeout" "$d/err"; then exit 24; fi#' case_cpx_timeout_hang
+cp_body_row cpb-timeout-blind 2 's#^if \[ "\$rc" -eq 124 \] \|\| grep#if grep#' case_cpx_timeout_hang
 cp_body_row cpb-env-unchecked 2 's#^if \[ -z "\$key" \] \|\| \[ -z "\$pin" \] \|\| \[ -z "\$host" \]; then exit 23; fi$#if false; then exit 23; fi#' case_cpx_nokey
 cp_body_row cpb-host-unchecked 2 's#^  \*\[!0-9\.\]\*\) exit 23 ;;$#  never) exit 23 ;;#' case_cpx_badhost
 cp_body_row cpb-denied-unclassified 2 "s#grep -qiF 'permission denied'#grep -qiF 'zzz-never'#" case_cpx_denied
 cp_body_row cpb-refused-unclassified 2 's#connection refused\|no route to host#zzz-never#' case_cpx_refused
 cp_body_row cpb-hostkey-unclassified 2 's#host key verification failed\|no matching host key#zzz-never#' case_cpx_hostkey
-cp_body_row cpb-scratch-kept 2 "s#^trap 'rm -rf \"\\\$d\"' EXIT\$#:#" case_cpx_ok
+cp_body_row cpb-scratch-kept 2 's#^trap cleanup EXIT$#:#' case_cpx_ok
+case_cpx_unrunnable() { case_cpx_via m-unrunnable 'probe_failed reason=ssh_unrunnable' CP_SSH=/nonexistent/ssh; }
+case_cpx_optiontext() { case_cpx_via m-optiontext 'probe_failed reason=unclassified' CP_INNER=optiontext; }
+case_cpx_closed() { case_cpx_via m-closed 'probe_failed reason=ssh_closed' CP_INNER=closed; }
+cp_body_row cpb-unrunnable-unclassified 2 's#^if \[ "\$rc" -eq 126 \] \|\| \[ "\$rc" -eq 127 \]; then exit 29; fi$#:#' case_cpx_unrunnable
+cp_body_row cpb-bare-timeout 2 's#Operation timed out#Operation timed out|timeout#' case_cpx_optiontext
+cp_body_row cpb-closed-as-blackhole 2 's#then exit 30; fi$#then exit 25; fi#' case_cpx_closed
+cp_body_row cpb-term-trap-dropped 2 "s#^trap 'exit 143' TERM\$#:#" case_cpx_term
 cp_body_row cpb-needle-changed 2 "s#grep -qF 'remote: git-data transport:'#grep -qF 'remote: NEVER'#" case_cpx_ok
 
 # ── RB — every store-probe word has a runbook row, and every verdict-map row names a live word ──
@@ -3931,7 +3969,8 @@ fi
 # #10297: plus wf-rbclear-no-flag-mode and wf-rbclear-value-inverted (the flag_write binding the precheck's stamp clear depends on) = 2, so exactly 150; review round: plus wf-rbclear-no-nothing-to-rollback (the flag_write `if:` keeps its nothing_to_rollback clause) = 151.
 # #8211 PR-E: plus the container probe's 5 host rows (cp-call-dropped, cp-answer-unchecked, cp-blackhole-unmapped, cp-worktree-unmapped, cp-user-dropped) and 9 body rows (cpb-*) = 14, so exactly 165.
 # Review round (#11072) group A: plus cpa-skip-neutered and cpa-wf-always = 2, so exactly 167.
-MUTANT_FLOOR=167
+# Group B (#11072): plus cpb-unrunnable-unclassified, cpb-bare-timeout, cpb-closed-as-blackhole and cpb-term-trap-dropped = 4, so exactly 171.
+MUTANT_FLOOR=171
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3962,7 +4001,8 @@ fi
 # Probe cwd (flip run 39844703839): one new standalone row (MZ-P15): 647 -> 648.
 # #8211 PR-E (container probe): CP1, CP2 x13, CP3-CP5 (3), CPX1-CPX3 (3), CPX4 x15, CPX5 = 36 standalone rows, plus 14 mutants x 2 (28) = 64: 648 -> 712. The AC2 and R5 rows were restated in place (no new row).
 # Review round (#11072) group A: CPA1-CPA3 (3) + 2 mutants x 2 (4) = 7 more: 712 -> 719 (WF6 restated in place).
-FLOOR=719
+# Group B (#11072): CP2 r29/r30 (2), CPX4 +6, CPX6 (1) = 9 standalone, plus 4 mutants x 2 (8) = 17 more: 719 -> 736.
+FLOOR=736
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

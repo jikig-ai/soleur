@@ -18,6 +18,8 @@
 #   26  the endpoint answered and refused the transport key                                                  -> probe_failed reason=auth_refused
 #   27  the pinned host key did not verify                                                                   -> probe_failed reason=host_key
 #   28  anything else                                                                                        -> probe_failed reason=unclassified
+#   29  ssh (or timeout) could not be run at all: rc 126 / 127                                               -> probe_failed reason=ssh_unrunnable
+#   30  the endpoint closed or reset the connection (it answered at the TCP level, so not a blackhole)       -> probe_failed reason=ssh_closed
 #    0  the transport wrapper answered
 #
 # The egress read dials the git-data endpoint with the TRANSPORT key and the same pinned options the app uses, asking
@@ -56,7 +58,18 @@ case "$host" in
 esac
 
 d="$(mktemp -d)" || exit 22
-trap 'rm -rf "$d"' EXIT
+pid=""
+# The key sits in $d until the end: remove it on EVERY way out, including a signal (a TERM from the docker exec being killed, or
+# from the host's bound). The signal traps exit, so the EXIT trap runs; the dial runs in the background so `wait` returns at once
+# on a trapped signal instead of after the dial, and the dial is stopped first.
+cleanup() {
+  if [ -n "$pid" ]; then kill "$pid" 2>/dev/null; fi
+  rm -rf "$d"
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap 'exit 130' INT
 printf '%s\n' "$key" > "$d/k" || exit 22
 printf 'git-data %s\n' "$pin" > "$d/kh" || exit 22
 
@@ -68,14 +81,20 @@ timeout "${GDCP_TIMEOUT:-15}" "${GDCP_SSH:-ssh}" \
   -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -o "UserKnownHostsFile=$d/kh" \
   -o BatchMode=yes -o ConnectTimeout=5 \
   "git@$host" "git-upload-pack '$repo_root/cutover-container-probe-absent.git'" \
-  </dev/null >/dev/null 2>"$d/err" || rc=$?
+  </dev/null >/dev/null 2>"$d/err" &
+pid=$!
+wait "$pid" || rc=$?
+pid=""
 
 if grep -qF 'remote: git-data transport:' "$d/err"; then
   printf 'container_probe ok worktree_root=writable transport=answered\n'
   exit 0
 fi
-if [ "$rc" -eq 124 ] || grep -qiE 'timed out|timeout' "$d/err"; then exit 24; fi
-if grep -qiE 'connection refused|no route to host|network is unreachable|connection reset|connection closed' "$d/err"; then exit 25; fi
+# Classify what could not run BEFORE any text match: `timeout: failed to run command` says nothing about the network.
+if [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ]; then exit 29; fi
+if [ "$rc" -eq 124 ] || grep -qiE 'Connection timed out|timed out during banner|Operation timed out' "$d/err"; then exit 24; fi
+if grep -qiE 'connection refused|no route to host|network is unreachable' "$d/err"; then exit 25; fi
+if grep -qiE 'connection closed|connection reset' "$d/err"; then exit 30; fi
 if grep -qiF 'permission denied' "$d/err"; then exit 26; fi
 if grep -qiE 'host key verification failed|no matching host key|remote host identification' "$d/err"; then exit 27; fi
 exit 28

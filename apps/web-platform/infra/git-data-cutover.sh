@@ -790,6 +790,8 @@ refuse_if_container_unready() {
       26) _store_refuse container-probe probe_failed "" auth_refused ;;
       27) _store_refuse container-probe probe_failed "" host_key ;;
       28) _store_refuse container-probe probe_failed "" unclassified ;;
+      29) _store_refuse container-probe probe_failed "" ssh_unrunnable ;;
+      30) _store_refuse container-probe probe_failed "" ssh_closed ;;
       *) _access_stderr "$CAPTURE_TMP/capture.err"
          _store_refuse container-probe probe_failed "$rc" ;;
     esac
