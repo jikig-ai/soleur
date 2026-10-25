@@ -5,6 +5,9 @@
 // every direct caller of the two builders is accounted for.
 // Census residual (accepted, A6a): the spawn-site scan finds `query({` / `sdkQuery({` object literals. A site written as
 // `sdkQuery(variable)`, where the variable carries its own `env`, is not caught.
+// Wrapper note: both runners write `options: authProbe.bindOptions(buildAgentQueryOptions({...}))` (the cc factory with
+// `recordCcSeccompArtifact(...)` between them). The identity wrapper keeps `buildAgentQueryOptions(` INSIDE the `query({...})`
+// literal, which is what the `routed` scan below needs; extracting the options into a variable first would red it.
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
