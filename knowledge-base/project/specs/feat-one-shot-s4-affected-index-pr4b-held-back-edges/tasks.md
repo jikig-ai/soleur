@@ -10,7 +10,7 @@ Process: run long commands detached (script file, `setsid nohup bash <file>` or 
 - [ ] 0.2 Re-measure (ratchet `--report` and `audit --all-refs --accept <main's accept file>`) only if `origin/main` moved past `45fe23b767`; otherwise cite `receipts/ratchet-baseline-45fe23b767.out`.
 - [ ] 0.3 Build `receipts/edges-decisions.tsv` from `receipts/worklist-edges.tsv`: `kept-for-census` (inngest-host-dark-gate -> inngest-probe-row.sh), `already-undrained` (heartbeat-feeder -> same lib); `grep -Fxcf` equals 116; `commits_90d` per F; array names via `_aff_label_map`; 11 new-array labels registered, no label-map collision.
 - [ ] 0.4 Cut the slice (cumulative round-1 at most 130) into `receipts/slice.tsv`; chains of at most 59 (trial: 25 rows, then through `redact-sentinel`, then `compound-promote`).
-- [ ] 0.5 Record for the PR body: CI run 40223185 conclusion and the first hosted `affected-index-ratchet` wall time (or `not yet observed, <date>`).
+- [x] 0.5 Record for the PR body: CI run 40223185 conclusion and the first hosted `affected-index-ratchet` wall time (or `not yet observed, <date>`).
 
 ## Phase 1 - per chain: declare, first report, pre-classify
 
@@ -44,7 +44,7 @@ Process: run long commands detached (script file, `setsid nohup bash <file>` or 
 ## Phase 4 - docs and handoff
 
 - [ ] 4.1 Done in 2.0: runbook section 7, six edits (Never-in-a-drain-PR bullet, Reveal-and-hold-back additions, replace the stale 5-path hold, and the three PR5-only accept-row statements); `grep` for the stale phrases prints nothing.
-- [ ] 4.2 Update #10959 body (remaining edges, row-3 cases, PR4c vehicle; as soon as a chain is held); comment on #10861 (PR5 inherits the 152-pair edge, the 43 sweeps with the row-6 policy, `grep-q-pipe-guard`, the brittleness measurement); comment on #10859 with accept-row count before and after plus a line-kind histogram (data only).
+- [x] 4.2 Update #10959 body (remaining edges, row-3 cases, PR4c vehicle; as soon as a chain is held); comment on #10861 (PR5 inherits the 152-pair edge, the 43 sweeps with the row-6 policy, `grep-q-pipe-guard`, the brittleness measurement); comment on #10859 with accept-row count before and after plus a line-kind histogram (data only).
 - [ ] 4.3 PR body: `Ref #10959` / `Ref #10448` / `Ref #9729` only; counts via `wc -l`; stop-line outcome; accept rows by line kind; held edges by reason; recorder result; window consequence; the two parent-recorded results; holds.
 
 ## Phase 5 - ship
