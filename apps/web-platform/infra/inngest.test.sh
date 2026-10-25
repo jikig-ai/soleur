@@ -435,6 +435,34 @@ assert "no unrendered @@DARK_ARM@@ sentinel LINE survives either render" \
 assert "rendered dark arm calls logger via \"\$LOG_TAG\", not an inlined tag literal" \
   "! grep -qE '^[[:space:]]*logger[[:space:]]+-t[[:space:]]+[a-z]' '$DEDICATED_PING'"
 
+# --- #10363: a traced launch of the rendered body exits 78 before any URL expansion --------------
+echo "--- #10363 xtrace refusal: sh -x on the rendered heartbeat body ---"
+for _render in "$WEB_PING" "$DEDICATED_PING"; do
+  XT_LOG="$PING_TMP/logger-xt-$(basename "$_render").txt"; : > "$XT_LOG"
+  XT_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$XT_LOG" \
+    INNGEST_HEARTBEAT_URL='https://uptime.betterstack.test/api/v1/heartbeat/XT_SENTINEL' \
+    sh -x "$_render" 2>&1)" && XT_RC=0 || XT_RC=$?
+  assert "xtrace refusal ($(basename "$_render")): sh -x exits 78 before any expansion" \
+    "[[ '$XT_RC' -eq 78 ]]"
+  assert "xtrace refusal ($(basename "$_render")): refusal text on a non-trace line" \
+    "[[ \$(printf '%s' \"\$XT_OUT\" | grep -v '^+' | grep -c 'refusing to run under xtrace') -ge 1 ]]"
+  assert "xtrace refusal ($(basename "$_render")): the sentinel URL is in neither the output nor the logger sink" \
+    "[[ \$(printf '%s' \"\$XT_OUT\" | grep -c XT_SENTINEL) -eq 0 && \$(grep -c XT_SENTINEL '$XT_LOG' || true) -eq 0 ]]"
+done
+# Positive leak control: a render with the case $- block REMOVED must print the sentinel under
+# sh -x — otherwise the rows above discriminate nothing (a refusal-free SUT would pass them).
+XT_MUT="$PING_TMP/ping-web-noguard.sh"
+sed '/^case \$- in$/,/^esac$/d' "$WEB_PING" > "$XT_MUT"
+assert "xtrace control: the guard-removed render differs from the real one" \
+  "! cmp -s '$WEB_PING' '$XT_MUT'"
+XT_LOG="$PING_TMP/logger-xt-mut.txt"; : > "$XT_LOG"
+XT_MUT_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$XT_LOG" \
+  INNGEST_HEARTBEAT_URL='https://uptime.betterstack.test/api/v1/heartbeat/XT_SENTINEL' \
+  INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" \
+  sh -x "$XT_MUT" 2>&1)" && XT_MUT_RC=0 || XT_MUT_RC=$?
+assert "xtrace control: the guard-free render under sh -x DOES trace the sentinel (the refusal rows can see a leak)" \
+  "[[ \$(printf '%s' \"\$XT_MUT_OUT\" | grep -c XT_SENTINEL) -ge 1 ]]"
+
 # AC5b case 1 -- dedicated render, URL absent: exit 0 + exactly one url_present=no row.
 DED_LOG="$PING_TMP/logger-dedicated-absent.txt"
 DED_ABSENT_OUT=$(run_ping "$DEDICATED_PING" "" "$DED_LOG") && DED_ABSENT_RC=0 || DED_ABSENT_RC=$?
@@ -3101,7 +3129,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # absent. Under CI a skipped or failed dash row is itself a FAILURE (see the dash block above).
 # Accounting: DASH_SKIPPED is 0 or DASH_ROWS, never a partial count, so a half-skipped block cannot read as a tier.
 if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 'FAIL: dash accounting: DASH_SKIPPED=%s is neither 0 nor DASH_ROWS=%s.\n' "$DASH_SKIPPED" "$DASH_ROWS" >&2; exit 1; fi
-INNGEST_MIN_ASSERTIONS_FULL=549
+# #10363: 549 -> 557 (the sh -x refusal rows over both rendered bodies plus the guard-removed leak
+# control — review fix-round; a refusal-free render must visibly trace the sentinel).
+INNGEST_MIN_ASSERTIONS_FULL=557
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \

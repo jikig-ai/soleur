@@ -788,7 +788,7 @@
 },
 "technology": "Markdown + YAML",
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "title": "Knowledge Base",
 "kind": "database",
@@ -2337,7 +2337,18 @@
 },
 "id": "1mfkjc4"
 },
-"ge7rkf": {
+"6tmxl3": {
+"title": "cron-compound-promote reads bot-PR state through Octokit search (patterns path): GET /search/issues for is:pr head:self-healing/auto- PRs, bound to the App bot author and the anchored promote-cluster title, to suppress an already-proposed cluster (ADR-300). Read-only; fail-closed-loud (status=error, ledger_read=failed) and run only when the manual trigger sets input=patterns. The Inngest layer opens no git workspace and the model has no inngest -> github edge, so the read is attributed to the container that executes the function",
+"technology": "HTTPS (GitHub REST search API, App installation token)",
+"source": {
+"model": "platform.webapp.api"
+},
+"target": {
+"model": "github"
+},
+"id": "6tmxl3"
+},
+"z3z08e": {
 "title": "cron-gh-pages-cert-reissue (ADR-125, AP-019): transiently PATCHes the apex+www dns_records proxied flag false→true to open a DNS-only window so GitHub/LE can validate the Pages cert origin, then restores proxied=true. A distinct Zone.DNS:Edit-only token (CF_API_TOKEN_DNS_EDIT), separate from the broad cf_api_token. This is the sanctioned narrow AP-001 exception — transient, self-reverting, single-attempt, human-gated (v1). GATED ON APEX TOPOLOGY since #7640/ADR-194 (plan Design Decision D2): the routine now reads the live apex record type in `checkReissuePreconditions` and refuses with a non-benign terminal outcome unless it is `A`, and its detector routine (`cron-gh-pages-cert-state`, a daily poll of the abandoned origin certificate) is deleted (ADR-194 addendum, 2026-09-30). Without that gate this edge is a LIVE HAZARD post-cutover, not a dormant one: `listToggleRecords()` queries `[apex, A]` and `[www, CNAME]`, so against a CNAME apex it flips `www` ALONE to proxied=false — dropping HSTS, Rule 10 HTTPS upgrade, WAF and bot management on a host domains.md mandates be proxied — and `restoreStateInner` then refuses to restore a subset (fewer than EXPECTED_TOGGLE_RECORDS=5 records come back), making the de-proxying ONE-WAY. Probe-only mode does not make it read-only: `setRecordsProxied(deps, records, false)` runs unconditionally. AP-019 records this edge as SUSPENDED until the precondition is live.",
 "technology": "HTTPS (CF API v4 dns_records PATCH)",
 "source": {
@@ -2346,22 +2357,11 @@
 "target": {
 "model": "cloudflare"
 },
-"id": "ge7rkf"
-},
-"1amybls": {
-"title": "scheduled-terraform-drift's token-drift scan reads token-shaped keys across the soleur project's configs using per-config read-only service tokens delivered as ONE Actions secret holding a config-keyed JSON map; the config list comes from the committed inventory, never from a live listing, because no credential here can enumerate the project (ADR-168, #7234). SCOPE, since #8209/ADR-241 — READ THIS AS THE AUDIT PATH, NOT THE CREDENTIAL PATH. This scan's own credential is unchanged and is Tier A by construction: a config-keyed map of read-ONLY tokens whose disclosure is bounded. It is NOT how a job obtains the credentials Terraform then writes infrastructure with — that is the second github -> doppler edge below, and reading the two as one is exactly the conflation that let prd_terraform hold a Hetzner read/write token, an account-wide R2 token, a workplace PERSONAL Doppler token and a GitHub App key while looking like 'the Terraform config'. What DOES change here is the vantage: the enclosing drift-check job is Tier B under ADR-241 D1 (it plans and applies), so it now declares a main-only environment and this scan can no longer be dispatched from a branch ref (residual R3, accepted)",
-"technology": "doppler CLI (config-scoped read service tokens)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "doppler"
-},
-"id": "1amybls"
+"id": "z3z08e"
 },
 "1rnkjs7": {
-"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main",
-"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
+"title": "scheduled-terraform-drift's token-drift scan reads token-shaped keys across the soleur project's configs using per-config read-only service tokens delivered as ONE Actions secret holding a config-keyed JSON map; the config list comes from the committed inventory, never from a live listing, because no credential here can enumerate the project (ADR-168, #7234). SCOPE, since #8209/ADR-241 — READ THIS AS THE AUDIT PATH, NOT THE CREDENTIAL PATH. This scan's own credential is unchanged and is Tier A by construction: a config-keyed map of read-ONLY tokens whose disclosure is bounded. It is NOT how a job obtains the credentials Terraform then writes infrastructure with — that is the second github -> doppler edge below, and reading the two as one is exactly the conflation that let prd_terraform hold a Hetzner read/write token, an account-wide R2 token, a workplace PERSONAL Doppler token and a GitHub App key while looking like 'the Terraform config'. What DOES change here is the vantage: the enclosing drift-check job is Tier B under ADR-241 D1 (it plans and applies), so it now declares a main-only environment and this scan can no longer be dispatched from a branch ref (residual R3, accepted)",
+"technology": "doppler CLI (config-scoped read service tokens)",
 "source": {
 "model": "github"
 },
@@ -2371,8 +2371,8 @@
 "id": "1rnkjs7"
 },
 "18bte9y": {
-"title": "workspaces-luks-verify.yml's `web2_marker` job (ADR-263 D5, #6931) WRITES and DELETES the one key WORKSPACES_LUKS_CUTOVER_AT in the DEDICATED Doppler config prd_workspaces_luks_marker, with a service token scoped to that one config (workspaces-luks-fresh-boot.tf) delivered as a repo-level Actions secret. The dedicated config exists so this unattended daily cron never holds a write token on shared prd; the config inherits prd, so the token also reads the inherited names. A present marker is kept while the probe verdict is GREEN and removed on a non-GREEN run, and its value is advisory and shape-only to lb-weight-gate.sh (sourcing it there is #9358).",
-"technology": "doppler CLI (config-scoped read/write service token, repo Actions secret)",
+"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main",
+"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
 "source": {
 "model": "github"
 },
@@ -2381,7 +2381,18 @@
 },
 "id": "18bte9y"
 },
-"a7lm9k": {
+"x2x4dh": {
+"title": "workspaces-luks-verify.yml's `web2_marker` job (ADR-263 D5, #6931) WRITES and DELETES the one key WORKSPACES_LUKS_CUTOVER_AT in the DEDICATED Doppler config prd_workspaces_luks_marker, with a service token scoped to that one config (workspaces-luks-fresh-boot.tf) delivered as a repo-level Actions secret. The dedicated config exists so this unattended daily cron never holds a write token on shared prd; the config inherits prd, so the token also reads the inherited names. A present marker is kept while the probe verdict is GREEN and removed on a non-GREEN run, and its value is advisory and shape-only to lb-weight-gate.sh (sourcing it there is #9358).",
+"technology": "doppler CLI (config-scoped read/write service token, repo Actions secret)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "doppler"
+},
+"id": "x2x4dh"
+},
+"1dreu2h": {
 "title": "apply-web-platform-infra.yml issues READ-ONLY GETs to the Cloudflare rulesets API (ADR-136, #6767): the pre-apply entrypoint gate (a step AFTER `terraform plan` and BEFORE the main `terraform apply`) and the guarded entrypoint-audit dispatch both enumerate a `kind=zone`/`kind=root` ruleset's phase entrypoint via CF_API_TOKEN_RULESETS and FAIL-CLOSED if a whole-list create-from-absent would clobber live dashboard-created rules. GETs only — no writes ride this edge; the ruleset APPLY itself goes through Terraform's cloudflare provider. Distinct from the api -> cloudflare DNS-edit edge (different token, different concern). NOT ON THIS EDGE, AND RECORDED HERE BECAUSE THE MODEL CARRIES NO SEPARATE ONE: every CI Terraform run also reaches Cloudflare R2 as its S3-compatible STATE BACKEND, with an AWS_* key pair that is neither CF_API_TOKEN_RULESETS nor the DNS-edit token. Since #8209/ADR-241 that path is TIERED and there are TWO state buckets, not one. (a) soleur-terraform-state keeps the web-platform, infra/github, sentry and the other roots' objects; its Tier-A key pair in prd_terraform becomes READ-ONLY, and the read/write pair moves to Tier B as TF_STATE_AWS_* — before that split a branch actor could FORGE state a later main run acts on, for example by swapping a doppler_service_token.key that a main run then publishes (ADR-241 residual R7, closed at the runbook's state-key step). Every backend-credential extraction in a Tier-B job therefore prefers the Tier-B pair and falls back to the prd_terraform pair, which is what makes the change work in both the before and after states. (b) soleur-terraform-state-privileged is a SECOND bucket (cloudflare_r2_bucket.terraform_state_privileged in infra-privileged-environment.tf) holding exactly one object, the git-data root-key state — the state that contains the private key that is root on the host storing every connected user's repositories. Only a bucket-scoped Tier-B token reads it, and that token is operator-minted because no credential here can mint one programmatically (ADR-130). The separation is real rather than nominal because the prd_terraform keys are BUCKET-SCOPED, measured: ListBuckets returns AccessDenied while ListObjectsV2 returned all seven objects of the shared bucket — so a bucket they are not scoped to is genuinely out of reach, which is what reverses ADR-220's D2.1 shared-bucket amendment. The root's backend is now PARTIAL (no literal bucket; -backend-config=bucket=$BUCKET), and the legacy bucket is refused once the repo variable GIT_DATA_ROOT_STATE_MIGRATED=1 is set.",
 "technology": "HTTPS (CF API v4 rulesets phase entrypoint GET, curl --max-time)",
 "source": {
@@ -2390,9 +2401,9 @@
 "target": {
 "model": "cloudflare"
 },
-"id": "a7lm9k"
+"id": "1dreu2h"
 },
-"j1bf5v": {
+"l7ccgc": {
 "title": "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY alone, with no fall-back to the write token (ADR-241 D4, #9927 item 8b, #10664). During #6604 step 7 (2026-10-08) workspaces-luks-cutover.yml ALSO WRITES through this edge, once: its environment-gated `wipe` job, holding the Tier-B token from the infra-credentials loader, proves write capability with an idempotent labels PUT, then DETACHES and DELETES the retired plaintext volume (105149570) — only after the host zeroed and read it back, and only for the pinned id — while its preflight and the single-use workspaces-plaintext-forget.yml read the volume and web-1 (a presence proof: a 404 counted as gone only from a token that could see web-1 holding the LUKS volume 106443278). The `wipe` job and the forget workflow run from main, where they exist until PR #9348 merges (only after both have run), and that PR deletes them; the cutover workflow's remaining Hetzner calls through this edge are reads. Since #10138 git-data-cutover.yml's environment-gated `wipe` job (ADR-239 DL-2) READS through this edge (the server and volume identity, the volume's action history and the read-back, all with HCLOUD_TOKEN_READONLY and never a fall-back to the write token) and WRITES through it in two modes only: mode=wipe makes one detach and one DELETE, and mode=wipe_finish makes no detach call and at most one DELETE (none when the volume is already absent), each of the allow-listed plaintext volume soleur-git-data-store, named by the owner by id and checked against the API, with the Tier-B token from the infra-credentials loader reaching only those two steps; owner-named, environment-approved, and the only claim it makes about the end state is that the device was deleted at the provider API (a wipe_finish that finds the volume already absent claims only that it is absent, with the delete outcome in the origin run). From 2026-10-07 until its retirement on 2026-10-12 (#9372) web-host-reboot.yml's environment-gated `reboot` job also WROTE through this edge: one soft-reboot request (POST /servers/{id}/actions/reboot) for the allow-listed web-2 server only, never web-1, with the Tier-B token from the loader, dispatch-only; the workflow is deleted. Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), the #9175 inngest-provision forced-race rehearsal (Phase A births a NIC-less throwaway host, Phase B attaches it to the prod private net at 10.0.1.60, and a soft-reboot action proves the provisioning latch), drift and apply workflows, and every Terraform apply through the hcloud provider.",
 "technology": "HTTPS (Hetzner Cloud API)",
 "source": {
@@ -2401,9 +2412,9 @@
 "target": {
 "model": "platform.infra.hetzner"
 },
-"id": "j1bf5v"
+"id": "l7ccgc"
 },
-"nhep6c": {
+"3s091x": {
 "title": "Management API health probe + bounded auto-restart (scheduled-supabase-watchdog.yml, #9168): GET /v1/projects/{ref}/health?services=… every ~5 min classifies the proven hang signature ({db,auth,rest} UNHEALTHY ∧ pooler ACTIVE_HEALTHY, sustained ≥3 reads + independent /health corroboration) and — only while the vars.WATCHDOG_ARMED dark-launch gate is set — issues POST /v1/projects/{ref}/restart, a pre-authorized prod-write delegation recorded in ADR-260 (deviation from hr-menu-option-ack-not-prod-write-auth; 30-min cooldown, attempt-counted give-up, audit issue + sentinel, concurrency-group mutex). Bearer-on-stdin transport per supabase-logs-query.sh",
 "technology": "HTTPS (Supabase Management API)",
 "source": {
@@ -2412,9 +2423,9 @@
 "target": {
 "model": "platform.infra.supabase"
 },
-"id": "nhep6c"
+"id": "3s091x"
 },
-"3s091x": {
+"pm3mgr": {
 "title": "live-verify harness (web-platform-release.yml job live-verify, ADR-064) signs in as the single synthetic prod principal with the anon key and, through its own RLS session and never the service role, first reads its own api_keys rows (every one must equal the decrypt-poisoned sentinel) and its un-revoked byok_delegations rows (none may exist) before the browser launches (I-cannot-spend, ADR-064 amendment 2026-10-18); it then stamps its own conversations with a session marker and archives and deletes them (by conversation id, and orphans by user plus marker), which is I-teardown. The seed step in the same job is the separate service-role actor.",
 "technology": "HTTPS (GoTrue, PostgREST)",
 "source": {
@@ -2423,9 +2434,9 @@
 "target": {
 "model": "platform.infra.supabase"
 },
-"id": "3s091x"
+"id": "pm3mgr"
 },
-"e2yj2a": {
+"1fh5s8z": {
 "title": "Page view events",
 "technology": "JS snippet",
 "source": {
@@ -2434,9 +2445,9 @@
 "target": {
 "model": "plausible"
 },
-"id": "e2yj2a"
+"id": "1fh5s8z"
 },
-"11o932f": {
+"djd9es": {
 "title": "LEGACY (retired after the TLS soak, ADR-294): sends events, run-list reads and GraphQL probes in plaintext",
 "technology": "HTTP private-net :8288",
 "source": {
@@ -2445,9 +2456,9 @@
 "target": {
 "model": "platform.infra.inngest"
 },
-"id": "11o932f"
+"id": "djd9es"
 },
-"djd9es": {
+"1x0kb9h": {
 "title": "ADOPTING #10136 (ADR-294): the same sends over TLS 1.2+ to a host-local stunnel terminator that forwards to 127.0.0.1:8288; Node verifies a Terraform-minted pinned cert through NODE_EXTRA_CA_CERTS, selected per deploy by the INNGEST_LINK_TLS flag (absent means the legacy edge). Inert until the host replace and the flag flip",
 "technology": "HTTPS private-net :8443 (stunnel, pinned CA)",
 "source": {
@@ -2456,9 +2467,9 @@
 "target": {
 "model": "platform.infra.inngest"
 },
-"id": "djd9es"
+"id": "1x0kb9h"
 },
-"lv8t51": {
+"8sbd0i": {
 "title": "Invokes function steps at the registered serve URL (Cloudflare-proxied; responses stream — 201 + 3 s heartbeat, ADR-243). Every Inngest function executes on the one step-executing host, web-1: serveHost is app.soleur.ai and cloudflare_record.app resolves to web-1 only. Each served function carries a placement class (portable, host-affine, volume-bound) in server/inngest/execution-placement.ts, defined by the ADR-033 amendment (#7230; placement-aware execution is #9137). The dedicated host's --sdk-url (http://10.0.1.10:3000/api/inngest) is the registration poll only, not the step path",
 "technology": "HTTPS via Cloudflare (app.soleur.ai/api/inngest)",
 "source": {
@@ -2467,9 +2478,9 @@
 "target": {
 "model": "platform.webapp.api"
 },
-"id": "lv8t51"
+"id": "8sbd0i"
 },
-"h6tzxk": {
+"ha6j7t": {
 "title": "Inbound email webhook (svix-verified) → email-triage ingress",
 "technology": "HTTPS",
 "source": {
@@ -2478,9 +2489,9 @@
 "target": {
 "model": "platform.webapp.api"
 },
-"id": "h6tzxk"
+"id": "ha6j7t"
 },
-"13qzhhl": {
+"jf850q": {
 "title": "Statutory triage notifications (to the claimed row's owner, today always the configured operator — ADR-269; reads are Owner-shared per ADR-066). Also the push-failure fallback: the cron falls back here when a statutory push reaches fewer than all devices (ADR-136)",
 "technology": "HTTPS",
 "source": {
@@ -2489,9 +2500,9 @@
 "target": {
 "model": "resend"
 },
-"id": "13qzhhl"
+"id": "jf850q"
 },
-"sntzya": {
+"89yjlv": {
 "title": "Web Push delivery (VAPID) for statutory deadline reminders; transport-accepted, not receipt (ADR-136)",
 "technology": "HTTPS (Web Push / VAPID)",
 "source": {
@@ -2500,9 +2511,9 @@
 "target": {
 "model": "pushService"
 },
-"id": "sntzya"
+"id": "89yjlv"
 },
-"f42uof": {
+"1dgn1mo": {
 "title": "Email-triage claim/finalize writes (email-on-received) (Inngest-fired function, executed on web-1); resolves the inbound recipient address through email_inbox_routes inside the claim step (ADR-269)",
 "technology": "HTTPS (supabase-js service client)",
 "source": {
@@ -2511,9 +2522,9 @@
 "target": {
 "model": "platform.infra.supabase"
 },
-"id": "f42uof"
+"id": "1dgn1mo"
 },
-"lk1wn6": {
+"43bg77": {
 "title": "Config + run history",
 "technology": "PostgreSQL session pooler :5432",
 "source": {
@@ -2522,9 +2533,9 @@
 "target": {
 "model": "platform.infra.inngestPostgres"
 },
-"id": "lk1wn6"
+"id": "43bg77"
 },
-"8i8xg1": {
+"190fkvt": {
 "title": "Durable queue + run-state",
 "technology": "Redis (AOF)",
 "source": {
@@ -2533,9 +2544,9 @@
 "target": {
 "model": "platform.infra.inngestRedis"
 },
-"id": "8i8xg1"
+"id": "190fkvt"
 },
-"rqefc7": {
+"pj94ue": {
 "title": "Bootstrap downloads the pinned inngest CLI tarball (inngest_<ver>_linux_<arch>.tar.gz, arch from local.inngest_arch) and sha256-verifies it against the committed inngest_cli_sha256{,_arm64} before extracting/running — live edge on first boot, host replace, and version bump (the version file short-circuits same-version reboots) (#7463). Trust anchor is the reviewed embed in inngest.tf, not upstream's checksums.txt (release-shipped, unsigned). Anonymous GET, no credential",
 "technology": "HTTPS GET + sha256 verify",
 "source": {
@@ -2544,9 +2555,9 @@
 "target": {
 "model": "inngestReleases"
 },
-"id": "rqefc7"
+"id": "pj94ue"
 },
-"158wy1u": {
+"n1qzpd": {
 "title": "CI reaches upstream releases twice: build-inngest-bootstrap-image.yml downloads the same pinned tarball (with the checksums-file verify) when the bootstrap image is rebuilt, and the `Detect inngest CLI pin drift` step in rule-audit.yml reads releases on the 1st + 15th to measure the pinned-version delta and file one idempotent `inngest-pin-drift` issue (#7463). Read-only; no credential",
 "technology": "HTTPS (GitHub Releases API + asset download)",
 "source": {
@@ -2555,9 +2566,9 @@
 "target": {
 "model": "inngestReleases"
 },
-"id": "158wy1u"
+"id": "n1qzpd"
 },
-"ub9pci": {
+"13ipt1v": {
 "title": "image-cve-scan.yml (W3, epic #9601, ADVISORY — nothing in the release or deploy path depends on it) downloads the pinned Grype release tarball (SHA256-literal verify) and lets the scanner fetch its vulnerability DB from grype.anchore.io over TLS",
 "technology": "HTTPS (release tarball + vulnerability DB)",
 "source": {
@@ -2566,9 +2577,9 @@
 "target": {
 "model": "anchoreGrype"
 },
-"id": "ub9pci"
+"id": "13ipt1v"
 },
-"1mohp9k": {
+"aumf3j": {
 "title": "image-cve-scan.yml pulls the DEPLOYED image by its :<sha> tag (packages: read, the job GITHUB_TOKEN; scanner registry source, no container runtime) to scan it — distinct from the publish and restore edges. Whether the job token can read the private package is verified by the first post-merge dispatch, not assumed",
 "technology": "OCI registry pull (GITHUB_TOKEN)",
 "source": {
@@ -2577,9 +2588,9 @@
 "target": {
 "model": "ghcr"
 },
-"id": "1mohp9k"
+"id": "aumf3j"
 },
-"1byhfpt": {
+"9dmjcg": {
 "title": "image-cve-scan.yml reads the public unauthenticated /health `build_sha` (validated as 40 lowercase hex; the response is untrusted input) to learn which commit is deployed, then scans that commit's image",
 "technology": "HTTPS GET /health",
 "source": {
@@ -2588,9 +2599,9 @@
 "target": {
 "model": "platform.webapp"
 },
-"id": "1byhfpt"
+"id": "9dmjcg"
 },
-"9dmjcg": {
+"1ta2tjn": {
 "title": "Post-deploy live-verify harness (web-platform-release.yml job live-verify, ADR-064): headless Chromium drives the DEPLOYED app as the synthetic principal live-verify@soleur.ai, asserts a fresh conversation appears in the Recent Conversations rail, then tears it down. Runs after the deploy job; the harness step is diff-gated on trigger-paths.txt. BLOCK=1 (FAIL, no result line, cannot-spend-violated) reddens the release run but cannot roll back the shipped image.",
 "technology": "HTTPS, WebSocket (Playwright)",
 "source": {
@@ -2599,9 +2610,9 @@
 "target": {
 "model": "platform.webapp"
 },
-"id": "9dmjcg"
+"id": "1ta2tjn"
 },
-"8kwd4d": {
+"nzu6oc": {
 "title": "image-cve-scan.yml ships one SOLEUR_IMAGE_CVE_SCAN marker per run to the pinned Logs ingest URL (per-finding detail lives ONLY in this private sink; the public job log carries counts only because the repository is public)",
 "technology": "HTTPS (Logs ingest, bearer token)",
 "source": {
@@ -2610,9 +2621,9 @@
 "target": {
 "model": "betterstack"
 },
-"id": "8kwd4d"
+"id": "nzu6oc"
 },
-"45zw14": {
+"18hdt6v": {
 "title": "Ships journald + host_metrics via Vector (arm64, aarch64 build) to Logs source 2457081 -- SINCE #8054 the inngest-cutover-flip heartbeat on this edge (one JSON STRING per 30 s FSM tick via logger -t, on EVERY flag including terminal ones, carrying the journald _BOOT_ID envelope; Vector ships the message as a STRING and it is Better Stack's ingest-side parse that yields the .message.{flag,reason,guard,exit_code,start_ts} object the consumer selects on) is a SAFETY-CRITICAL INPUT to cutover-inngest.yml op=execute step 2.0 (E13 of inngest_execute_registry_gate: the newest same-boot heartbeat within 15 min is the freshness bridge that lets a <=90-min-old dark probe row authorize the pre-flight). A producer-side change to the FSM's emit shape (the flag key, pinned by inngest-cutover-flip.test.sh), the timer cadence, or the vector.toml allowlist for that tag is a change to the cutover's own gate, and a warehouse-side change to the ingest parse surfaces there as fsm_unreadable — read the github -> betterstack edge for the consumer. Separately, this edge does NOT carry the user-serving application container's pino stream, which reaches the same source over the `hetzner -> betterstack` Vector edge instead; the two multiplex into one source and are distinguished only by host_name, so do not read this edge as accounting for the source's user-data-bearing content; token in soleur-inngest/prd (ADR-100 Phase-1 caveat resolved, #6197). Source 2457081 is NOT isolated to this node — the web hosts ship to the SAME source (see the hetzner edge), and the two are told apart only by the per-host host_name discriminator, which web-1 currently POISONS: web-1 wears this node's host_name=soleur-inngest-prd until its recreate clears the stale label (#6616). The dedicated node's telemetry host (auto OS hostname) is soleur-inngest, which equals its hcloud_server.inngest name (inngest-host.tf) — NOT soleur-inngest-server-prd, which is a Better Stack heartbeat monitor name (inngest.tf), never a telemetry value. host_metrics rows on this edge are the bare Vector metric and carry the host in tags.host, not host_name (#9372: confirmed 2026-10-06 for the web hosts; this node runs the same vector.toml)",
 "technology": "Vector → Better Stack Logs (HTTPS)",
 "source": {
@@ -2621,9 +2632,9 @@
 "target": {
 "model": "betterstack"
 },
-"id": "45zw14"
+"id": "18hdt6v"
 },
-"1b8h781": {
+"abone8": {
 "title": "Ships journald + host_metrics via Vector to the shared Logs source 2457081 -- AND, since #4786 / 2026-06-02, the user-serving `soleur-web-platform` application container's pino stdout at severity WARN and above (`level_int >= 40`), which is the HIGHEST-SENSITIVITY payload on this edge: it carries `userIdHash`, conversation identifiers, request metadata and error stack traces. That stream was absent from this description until #7786, in exactly the way the legal corpus understated it -- naming the host telemetry plane and omitting the user-serving container. Its `userIdHash` is computed in the APPLICATION's pino logger before the line reaches journald, not by Vector's HMAC transform (which short-circuits for this stream) (per-host host_name discriminator; token BETTERSTACK_LOGS_TOKEN in soleur/prd); ungated from web_colocate_inngest so every web host ships logs post-ADR-100 (#6396). CREATE-TIME-RENDER CAVEAT (#6616, same class as the tunnel-connector coin-flip): the per-host host_name is a construction-time render, so web-1 — which predates #6396 and, under lifecycle{ignore_changes=[user_data]}, never re-ran cloud-init — still ships host_name=soleur-inngest-prd (its inngest-owned vector.service from the co-located era), colliding on source 2457081 with the dedicated Inngest node until web-1's next recreate. The invariant is enforced by the #6616 follow-through, not by the render alone. host_metrics rows are stored as the bare Vector metric (host in tags.host, value in gauge.value, no host_name), which is the shape the web-2 emptiness gate reads (#9372, confirmed 2026-10-06)",
 "technology": "Vector → Better Stack Logs (HTTPS)",
 "source": {
@@ -2632,9 +2643,9 @@
 "target": {
 "model": "betterstack"
 },
-"id": "1b8h781"
+"id": "abone8"
 },
-"5mjtnz": {
+"120wikl": {
 "title": "Hosts (dedicated single-host node, private-net 10.0.1.40; removed from web cloud-init — ADR-100, #6178)",
 "technology": "systemd",
 "source": {
@@ -2643,9 +2654,9 @@
 "target": {
 "model": "platform.infra.inngest"
 },
-"id": "5mjtnz"
+"id": "120wikl"
 },
-"17o38tg": {
+"1rjzqbp": {
 "title": "Vector on the web host posts closed 15-minute egress-audit buckets (workspace, host, allowed/denied, best-effort counts; no IP, user or path) to POST /api/internal/egress-audit-ingest -- loopback Host only, forwarded requests rejected, bearer token compared in constant time (current + previous for rotation). The route evaluates the egress-audit-collection flag per organisation and writes through ingest_egress_audit_rollup; the table is dark until PR2 (no member read policy). ADR-288.",
 "technology": "HTTP (same-host loopback), bearer",
 "source": {
@@ -2654,9 +2665,9 @@
 "target": {
 "model": "platform.webapp"
 },
-"id": "17o38tg"
+"id": "1rjzqbp"
 },
-"ygxeup": {
+"cm6l5e": {
 "title": "Pulls app image + baked bootstrap scripts/hooks + the cosign .sig (verified on the deploy path only) +, for the inngest host, the jikig-ai/cosign verifier image itself (mirrored from gcr by the bundle producer's zot_mirror leg — #10390 defect 2, 2026-10-21; the inngest host is deny-all-public so its config-refresh verify pulls cosign @sha256-pinned from zot, the same pinned digest as the gcr ref the web deploy path uses) — at fresh boot from the baked endpoint + baked pull credential, zot-only for digest-pinned (integrity) refs after a bounded private-NIC wait (a tag-only ref is never sent to zot and fails the boot as cause=unpinned), no Doppler read and no /v2/ probe on the app-image path (#8651; the earlier Doppler-gated form was tokenless and never selected zot, #6985); the SAME @sha256 digest dual-pushed from CI; verify is offline against the unchanged pinned root, no live sigstore call (ADR-096, #6122). NO LONGER 'zot-primary' ON THE DEPLOY PATH — SOLE, since #8036 1c (2026-09-23): the deploy path's private-package `hetzner -> ghcr` fallback is deleted, so when this edge does not serve a deploy there is no second registry to attempt. SOLE AT FRESH BOOT TOO since #8036 1d (2026-09-24): the seed pull's login-gated GHCR leg is deleted, so a zot miss ends the boot with the stage=pull fatal (paged by web_terminal_boot_fatal). A deploy whose zot pull fails now has exactly one tier left (the #6512 local-cache reload, which rescues ONLY a same-version reload of the RUNNING image) and then ends image_pull_failed with the old container live. Read the earlier 'zot-primary' framing as retired, not as a synonym: it implied a secondary that has not been able to authenticate since 2026-07-29 and no longer exists in code. The bounded transient retry (#6525) moved onto THIS edge in the same change — it used to live inside the deleted GHCR leg",
 "technology": "Docker/zot (private-net, plain-HTTP + insecure-registries)",
 "source": {
@@ -2665,9 +2676,9 @@
 "target": {
 "model": "zotRegistry"
 },
-"id": "ygxeup"
+"id": "cm6l5e"
 },
-"j5q3z8": {
+"1x0akdh": {
 "title": "Anonymous public pull of the @sha256-pinned cosign VERIFIER IMAGE from gcr.io/projectsigstore/cosign (Google-hosted, published by the Sigstore project) on every deploy — pruned before each verify, so each deploy re-pulls it. WEB DEPLOY PATH ONLY: the dedicated inngest host never uses this edge — it is deny-all-public and pulls the same pinned verifier image from zot (the `hetzner -> zotRegistry` edge above; #10390 defect 2, 2026-10-21). This is an IMAGE-DISTRIBUTION edge, not a verification call: verify itself stays offline against the pinned trusted root (the former verify edge stays removed, see the note below). Same manifest digest as the ghcr.io ref it replaced (#8714 5.3b-iii), under the isolated anonymous docker config of #8036 1a; the digest pin, not the registry, is the trust anchor. A pull failure classifies as IMAGE_VERIFY_FAIL result=cosign_absent and, in warn mode, the deploy proceeds unverified (ADR-096 amendment 2026-09-28)",
 "technology": "Docker/HTTPS (anonymous, digest-pinned, gcr.io)",
 "source": {
@@ -2676,9 +2687,9 @@
 "target": {
 "model": "sigstore"
 },
-"id": "j5q3z8"
+"id": "1x0akdh"
 },
-"133p9kj": {
+"5nef2s": {
 "title": "CONSUMER serviceability probe (#6438 §1): web-zot-consumer-probe.sh GETs /v2/<repo>/tags/list over the private net (authenticated htpasswd Basic auth) for EACH platform repository (the web image and the inngest bootstrap image, #7258) and pings the per-host web_zot_consumer heartbeat only when EVERY repository answers 200 AND, on web-1, every pinned manifest HEAD answers 200 (#10004: today only the inngest bootstrap image has a committed digest pin, the ZIREF line; a pin evicted by retention suppresses the ping while tags/list still answers 200; the web image is unpinned, #10044, and a host born later keeps the bare list); 404 (empty/detached store) suppresses the ping so absence alarms; 401 is a HARD auth failure, not 'alive'; 000 (no HTTP answer: the private-net path is down) suppresses it as `UNREACHABLE` (#7262; before that fix curl's doubled 000000 mislabelled every such run `unexpected code`). Distinct from the pull edge above — this proves the store SERVES, not just that the auth gate answers",
 "technology": "curl -u (private-net, plain-HTTP GET /v2/<repo>/tags/list; web-1 also HEAD /v2/<repo>/manifests/<digest>)",
 "source": {
@@ -2687,9 +2698,9 @@
 "target": {
 "model": "zotRegistry"
 },
-"id": "133p9kj"
+"id": "5nef2s"
 },
-"ux33lt": {
+"gku6v4": {
 "title": "CONSUMER serviceability probe (#7228): inngest-consumer-probe.sh sources inngest-registry-probe.sh and sends its functions-id GQL query to 10.0.1.40:8288/v0/gql over the private net, pinging the inngest_consumer heartbeat ONLY on a non-empty registry; a transport failure, a GraphQL error envelope, an unrecognised shape, and — decisively — a well-formed but EMPTY registry all SUPPRESS the ping so absence alarms. The response SHAPE is the discriminator, not the HTTP code: a GraphQL server answers 200 with an errors envelope, and a host serving an empty registry passes every reachability check while owning nothing. Distinct from the api -> inngest dispatch edge — this proves the scheduler SERVES, not that the app can reach it",
 "technology": "curl POST (private-net, plain-HTTP /v0/gql)",
 "source": {
@@ -2698,9 +2709,9 @@
 "target": {
 "model": "platform.infra.inngest"
 },
-"id": "ux33lt"
+"id": "gku6v4"
 },
-"bnxxqx": {
+"1dgipx6": {
 "title": "CONSUMER reachability probe (#6548): web-git-data-probe.sh does a bounded SSH connect-and-close to 10.0.1.20:22 over the private net and pings the git_data_prd heartbeat on success. Fail-soft (connect-and-close, not a git ls-remote — the accepted reachability-vs-serviceability tradeoff for a v1 overlay); this is what finally FEEDS git_data_prd, previously unfed. The target host is born (ADR-149); its store is empty until the LUKS cutover (#5274)",
 "technology": "SSH connect-and-close (private-net, BatchMode ConnectTimeout)",
 "source": {
@@ -2709,9 +2720,9 @@
 "target": {
 "model": "platform.infra.gitDataStore"
 },
-"id": "bnxxqx"
+"id": "1dgipx6"
 },
-"11l0cp4": {
+"1iirn6x": {
 "title": "Transport and root authentication LIVE (ADR-220 D1b accepted 2026-09-27). Reviewer-gated root SSH from git-data-cutover.yml (job `cutover`, environment web-platform-infra-apply, main only, serialized on git-data-state): through the ssh. tunnel to web-1 (10.0.1.10 via the bridge NAT rule), then a web-1 direct-tcpip channel (-W 10.0.1.20:22, literal target), authenticating end-to-end with the dedicated root key so no key or agent socket lands on web-1. The key is Terraform-minted in its own root (git-data-root-key), read at run time from the separate Doppler project soleur-git-data-root, and reaches the host only through a create of hcloud_server.git_data checked against a committed fingerprint. After the access gate the proof mode only reads the store (served by the LUKS mapper with its store marker bound, not frozen, empty) and the shape of its pre-receive fence, and exits. The flip, rollback, unfreeze and redeploy modes (#8211 PR2) write the freeze sentinel and clear it, write the prd flag through a windowed write token and redeploy the web fleet through the deploy webhook; the flip and the rollback end with a transactional probe over the same SSH path (provision, fenced push and remove with a synthetic id, zero residue) that proves erasure still works. None of those five modes copies or mounts a volume: the store is born on LUKS (ADR-239) and rollback is flag-off only. Since #10138 the same environment, bridge and root key also serve a second root-SSH consumer, the `wipe` job (modes wipe_check, wipe, wipe_finish, snapshot_clear; the cutover job is skipped for them): its host verb (MODE=wipe_assert, one ssh session) writes nothing to the store or to the retired plaintext volume and prints fixed words and per-type counts only, never a name; wipe_finish and the post-detach read create nothing on the host, but in mode=wipe_check and mode=wipe the pre-detach read creates and removes one transient host-local device-mapper snapshot of the kernel read-only plaintext device (its copy-on-write file in RAM) and mounts that snapshot read-only to count top-level entry types, and mode=snapshot_clear removes a leftover one of those (no volume operation). No mode copies a volume, and the retired plaintext volume is deleted through the Hetzner API edge, never through the host. A failed, stranded or cancelled run is reported by the separate notify-failure job (an issue plus an ops email) and never by this edge. Host keys PINNED on both hops (ADR-237, accepted 2026-09-27): web-1 by its committed ECDSA-P256 pin, git-data by its Terraform-minted ED25519 key, rotated on every replace and published as the TF-owned prd secret GIT_DATA_SSH_HOST_KEY, which the flag precheck reads with the prd token it already holds. web-1 can no longer impersonate git-data; a pinned key authenticates the host, not its answers (ADR-220 amendment log). THE READ CREDENTIAL'S SCOPE CHANGES (#8209, ADR-241 D7), and it is the half ADR-220 explicitly deferred: DOPPLER_TOKEN_GIT_DATA_ROOT stops being a REPO secret — which any workflow on any branch of this PUBLIC repo could name, so 'reviewer-gated, main only' described the cutover JOB and never the credential — and becomes an ENVIRONMENT secret on web-platform-infra-apply under the SAME NAME. Same name deliberately: this workflow is #8211-owned and needs no edit, because its cutover job already declares that environment and an environment secret overrides a repo secret of the same name. The Terraform-minted token and the repo secret are FORGOTTEN by Terraform (removed blocks carrying lifecycle destroy = false, so both live objects keep serving until they are replaced — that is what makes the change safe to merge ahead of any out-of-band step), then revoked. The second path to the same key moves too: web-platform/git-data-root-key/terraform.tfstate, which the prd_terraform backend keys could read, relocates to the soleur-terraform-state-privileged bucket that only a bucket-scoped Tier-B token reads (see the github -> cloudflare edge). Both paths ADR-220's D4 'repo-secret reach' residual named are therefore closed AS TO BRANCH-WORKFLOW REACH, and NOT as to a prd repo-secret holder: that holder still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can rewrite the very deployment-branch policy the new carrier rests on. That is ADR-241 residual R1, filed at p1, and it is why ADR-241 D2 is `proposed` rather than `accepted` and why ADR-220's D4 residual is addressed but not closed",
 "technology": "SSH",
 "source": {
@@ -2720,9 +2731,9 @@
 "target": {
 "model": "platform.infra.gitDataStore"
 },
-"id": "11l0cp4"
+"id": "1iirn6x"
 },
-"14x1s8t": {
+"1isu32q": {
 "title": "Ships SOLEUR_PRIVATE_NIC from web-1 (the §3 private-NIC guard, #6438 §3/ADR-123) to the shared Logs source 2457081 — detect + emit + alarm, NO reboot (unlike the registry's self-converging guard). ALSO pings the web_nic_guard liveness heartbeat every healthy run so the fault-emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC that never fires is indistinguishable from a dead guard). Distinct from the Vector journald edge above",
 "technology": "curl → Better Stack Logs + heartbeat (HTTPS)",
 "source": {
@@ -2731,9 +2742,9 @@
 "target": {
 "model": "betterstack"
 },
-"id": "14x1s8t"
+"id": "1isu32q"
 },
-"eewoeq": {
+"195f2er": {
 "title": "Origin uptime probe at the LB-fronted app.soleur.ai surface (betteruptime_monitor.app/soleur_apex) — covers web-1 (the app A-record → web-1, dns.tf); the #5933 per-host web-<n> probe was RETIRED (CF 521, no per-host origin vhost). web-2 (the fsn1 warm standby) was retired 2026-07-17 (#6538/#6463). var.web_hosts has two keys again: the cattle web-2 (10.0.1.11, #6969) is a serving-weight-0 standby outside the app A record, so this probe does not cover it. SINCE #7884/ADR-222 a THIRD probe on this surface reads database readiness: betteruptime_monitor.app_health ('soleur app database readiness', the adopted hand-made monitor 4226366) is a KEYWORD monitor on https://app.soleur.ai/health requiring the compact-JSON pair supabase:connected, JSON quotes included and no space (180 s checks, 180 s confirmation). /health answers HTTP 200 in every database state, so only the body tells a database outage apart; the keyword is coupled to the /health serialization and pinned by health-keyword-monitor-contract.test.ts. The monitor never calls Supabase itself — it reads the app's own service-role REST check",
 "technology": "HTTPS via CF edge",
 "source": {
@@ -2742,9 +2753,9 @@
 "target": {
 "model": "platform.infra.hetzner"
 },
-"id": "eewoeq"
+"id": "195f2er"
 },
-"5k1tlp": {
+"84aqb9": {
 "title": "Keyless-signs the released app image digest (cosign, OIDC→Fulcio→Rekor) (#5933 Item 4)",
 "technology": "HTTPS (cosign)",
 "source": {
@@ -2753,9 +2764,9 @@
 "target": {
 "model": "sigstore"
 },
-"id": "5k1tlp"
+"id": "84aqb9"
 },
-"hdqyw2": {
+"54lfnn": {
 "title": "CI installs a pinned CLI (npm @openai/codex) and asserts it registers the manifest's declared skill set (harness-discovery, ADR-245)",
 "technology": "HTTPS (npm) + CLI",
 "source": {
@@ -2764,9 +2775,9 @@
 "target": {
 "model": "codex"
 },
-"id": "hdqyw2"
+"id": "54lfnn"
 },
-"56kime": {
+"hrh3tx": {
 "title": "CI installs a pinned CLI (versioned static.devin.ai setup script) and asserts it registers the manifest's declared skill set (harness-discovery, ADR-245)",
 "technology": "HTTPS (curl) + CLI",
 "source": {
@@ -2775,9 +2786,9 @@
 "target": {
 "model": "devin"
 },
-"id": "56kime"
+"id": "hrh3tx"
 },
-"1ob93qb": {
+"1qamzs2": {
 "title": "CI installs a pinned Grok CLI (versioned x.ai binary, sha256 content pin) and runs the inspect-contract + golden-path eval (grok-fidelity, ADR-245)",
 "technology": "HTTPS (curl) + CLI",
 "source": {
@@ -2786,9 +2797,9 @@
 "target": {
 "model": "platform.grokBuild"
 },
-"id": "1ob93qb"
+"id": "1qamzs2"
 },
-"yfv0fq": {
+"yk8be9": {
 "title": "Keyless-signs the config-refresh bundle manifest (cosign sign-blob, OIDC→Fulcio→Rekor) — the *.sh in-place refresh channel for the sole Inngest scheduler (ADR-136, #6780)",
 "technology": "HTTPS (cosign sign-blob)",
 "source": {
@@ -2797,9 +2808,9 @@
 "target": {
 "model": "sigstore"
 },
-"id": "yfv0fq"
+"id": "yk8be9"
 },
-"1ixbvl9": {
+"qr52k": {
 "title": "READ path, added 2026-08-05 (#7277/ADR-169) and distinct from the config-bundle publish edge below. CI resolves production's pinned image digests and copies them (image + cosign sha256-<hex> signature tag) OUT of GHCR to re-materialise the zot store after a registry-luks-recut. This is the edge the whole recut authorization rests on, and it is deliberately NOT the failing component: the release pipeline's failing half is the PUSH into prod zot, while this READ half is measurably working. Runs under the job's GITHUB_TOKEN with packages: read — a different credential class from the host App-installation token ADR-088 arm-b rules out.",
 "technology": "crane digest + crane copy (GHCR read, packages: read)",
 "source": {
@@ -2808,9 +2819,9 @@
 "target": {
 "model": "ghcr"
 },
-"id": "1ixbvl9"
+"id": "qr52k"
 },
-"noe7k6": {
+"17nopyd": {
 "title": "RESTORE path, added 2026-08-05 (#7277/ADR-169). After the recut destroys the store, a needs:-chained job copies the required pin set GHCR -> zot over the CF Tunnel bridge and verifies each reference's BLOBS with crane validate --remote, not just its manifest — zot gc can evict a layer, so a digest-only check goes green on an image no host can pull (measured). Rehearsed against a throwaway zot in the runner BEFORE the destroy; that rehearsal is what authorizes the destroy at all. Fail-loud with one operator action per enumerated exit code; resumable, so a partial pass is recovered by re-running. SECOND, INDEPENDENT TRAVERSAL added 2026-08-06 (#7278/ADR-172) — the READ-ONLY INVENTORY sweep: registry-zot-inventory.yml walks GET /v2/ -> /v2/_catalog -> /v2/<repo>/tags/list -> /v2/<repo>/manifests/<ref> (+ index recursion and the referrers API) over the SAME cloudflared access tcp bridge, as the PULL user, with curl+jq and NOT crane (crane collapses every failure to exit 1, so the verdict taxonomy could not key on status codes, and it would move egress into a second binary). GET/HEAD only, asserted at the wire by a recording origin in the tests. It accumulates blob sizes DEDUPLICATED BY DIGEST — a naive per-tag sum multiplies every shared base layer and yields a number with no relationship to the disk. It reaches the bridge with skip-docker-login: true, so ZOT_PUSH_* is never materialized into the runner; the guarantee is NON-MATERIALIZATION, not non-possession (the job still holds a soleur/prd-root Doppler token that COULD read them — Doppler tokens are config-scoped, not secret-scoped — so the script asserts at entry that ZOT_PUSH_USER/ZOT_PUSH_TOKEN are unset and exits non-zero otherwise). The WRITE half of this surface is NOT reachable and must not be re-proposed as though it were: the deny-by-default accessControl grants the pull user ['read'] and the push user ['read','create','update'], so NO user holds 'delete' (measured) and manifest DELETE is refused whatever the pinned build implements. The INVENTORY is fired by workflow_dispatch only: manually, or (since #7377) by scheduled-zot-restart-loop.yml when it opens a NEW non-OOM restart-loop tracker. The label-triggered route that preceded it could never fire (a label applied with GITHUB_TOKEN starts no workflow run) and was deleted. After the walk the enumerator reads one SOLEUR_ZOT_DISK heartbeat newer than its START row through betterstack-query.sh, so a restart or host replace during the sweep reaches the durable marker as reason=restart_during_sweep.",
 "technology": "crane copy + crane validate --remote (RESTORE); curl + jq GET/HEAD over /v2/ (INVENTORY) — both via cloudflared access tcp",
 "source": {
@@ -2819,9 +2830,9 @@
 "target": {
 "model": "zotRegistry"
 },
-"id": "noe7k6"
+"id": "17nopyd"
 },
-"7l2fcf": {
+"oflqsu": {
 "title": "Publishes the keyless-signed config-refresh bundle (host-executed *.sh set + per-file sha256 manifest + signed monotonic VERSION) to GHCR (authoritative) + a best-effort zot mirror (continue-on-error, GHCR-direct host pull in v1); a Terraform-promoted INNGEST_CONFIG_DIGEST pointer in soleur-inngest/prd names the digest (ADR-136/ADR-128/ADR-096, #6780)",
 "technology": "docker buildx push (GHCR) + crane copy (zot mirror, best-effort)",
 "source": {
@@ -2830,9 +2841,9 @@
 "target": {
 "model": "ghcr"
 },
-"id": "7l2fcf"
+"id": "oflqsu"
 },
-"103stsa": {
+"yo0hxh": {
 "title": "ADOPTING (rides #6178 cutover, PR #6348): the config-refresh timer resolves INNGEST_CONFIG_DIGEST, pulls the signed bundle @sha256 GHCR-direct, cosign-verify-blob OFFLINE against the baked trusted root + config-workflow identity regexp (ADR-087), checks per-file sha256 + monotonic VERSION, and applies atomically via infra-config-install.sh — no host replace, outbound-only, no new inbound (ADR-136, #6780)",
 "technology": "Docker/GHCR pull + cosign verify-blob (offline)",
 "source": {
@@ -2841,9 +2852,9 @@
 "target": {
 "model": "ghcr"
 },
-"id": "103stsa"
+"id": "yo0hxh"
 },
-"4wuk0b": {
+"9or04q": {
 "title": "Injects secrets — dedicated host's boot credential is scoped to the SEPARATE Doppler project `soleur-inngest` (its own `prd` root holds only inngest secrets: Postgres URI, freshly-rotated signing/event keys, Redis pw), NOT a `prd` branch config that would inherit all ~116 soleur/prd secrets (ADR-100, #6178; mirrors the soleur-registry isolation #6122). PROJECT ISOLATION IS NOT THE SAFETY PROPERTY FOR THIS EDGE, and reading it as one was the #7761 defect: isolation bounds WHICH secrets exist, never what a writer to that project can cause the host to DO. A bare `doppler run` injects the whole config into a ROOT unit, so a Doppler config is an untrusted NAME-space and not only an untrusted value-space — the cutover-flip unit's fixture seams read command names straight from that environment, making config-write access equivalent to arbitrary command execution as root at the next 30s poll, inside the same unit that performs the irreversible FLUSHALL. Bounded 2026-09-03 (#7761): the unit enumerates its injected set with --only-secrets (measured 10 names -> 2, dropping the production Postgres URI), and the script gates its seams on argv, which the secrets store cannot supply. STATED LIMIT: --only-secrets cannot bound a unit whose secret NAME is per-host, because a tracked unit cannot name it and the flag is fail-closed on an absent name — the four indirect-name probe units are a known exemption class needing a different mechanism",
 "technology": "CLI (doppler run soleur-inngest; the cutover-flip unit bounded --only-secrets, the rest not yet)",
 "source": {
@@ -2852,9 +2863,9 @@
 "target": {
 "model": "platform.infra.inngest"
 },
-"id": "4wuk0b"
+"id": "9or04q"
 },
-"ai2ryi": {
+"1sj8z1o": {
 "title": "Fetches its OWN zot image at first boot as the pinned release asset zot-image-<version>-<D12> (a prerelease of this repo) - NEVER from itself (bootstrap paradox) and NEVER from ghcr.io, which the first runcmd entry name-resolution-denies (heartbeat ghcr_blocked). zot-image-fetch.sh runs under env -i and refuses unless the tarball sha256 is the pinned T, its manifest is D naming config C, and the loaded image ID is C or D; zot runs by that verified ID (heartbeat zot_image_fetch). Every route that creates the host runs preflight P6 on the asset first; rule-audit probes it on its cron. amd64 only. Detail: ADR-096 amendment 2026-09-28 (part 2)",
 "technology": "HTTPS release-asset download (github.com, sha256-pinned, anonymous)",
 "source": {
@@ -2863,9 +2874,9 @@
 "target": {
 "model": "github"
 },
-"id": "ai2ryi"
+"id": "1sj8z1o"
 },
-"la13kc": {
+"zs9qz1": {
 "title": "zot-image-mirror.yml builds the boot asset from upstream: fetches manifest D and every blob anonymously, verifies each digest, packages them reproducibly and publishes the immutable prerelease (never clobbered, never deleted); its PR rehearsal rebuilds and requires the pinned T and C. The only path by which upstream zot reaches production (#8714)",
 "technology": "OCI distribution API over HTTPS (public ghcr.io, digest-pinned, anonymous)",
 "source": {
@@ -2874,9 +2885,9 @@
 "target": {
 "model": "projectZot"
 },
-"id": "la13kc"
+"id": "zs9qz1"
 },
-"xa5z5k": {
+"1iejltn": {
 "title": "Injects the registry-host boot credential (scoped to the isolated soleur-registry project's prd root — the 4 admitted secrets ZOT_PULL/PUSH_TOKEN + BETTERSTACK_LOGS_TOKEN + REGISTRY_LUKS_KEY, no soleur/prd inheritance)",
 "technology": "CLI (doppler run soleur-registry)",
 "source": {
@@ -2885,9 +2896,9 @@
 "target": {
 "model": "zotRegistry"
 },
-"id": "xa5z5k"
+"id": "1iejltn"
 },
-"1xiw3ed": {
+"wcxgac": {
 "title": "Ships disk-state observability — df% of /var/lib/zot + resize2fs before/after + zot health — as one SOLEUR_ZOT_DISK event, plus a SOLEUR_PRIVATE_NIC private-NIC convergence event (#6415), to the SHARED Logs source 2457081; token in soleur-registry/prd, queried via betterstack-query.sh --grep SOLEUR_ZOT_DISK|SOLEUR_PRIVATE_NIC (#6244/#6415). SOURCE 2457081 IS NOT ISOLATED TO THIS HOST — the web hosts and the Inngest node ship to the SAME source (see the hetzner and inngest edges), and an earlier version of this description called it 'the isolated Logs source', contradicting those edges. Rows are told apart only by a per-host discriminator, and on THIS edge that discriminator is an IN-MESSAGE host= token, never the host_name FIELD: host_name is Vector-populated and this host runs no Vector, so a direct curl POST carries none. SINCE #7440/ADR-184 THIS EDGE ALSO CARRIES THE ZOT CONTAINER LOG STREAM. a 5-minute /etc/cron.d/zot-log-shipper one-shot (NOT a daemon — ADR-184 §4 rejects Restart=always on this host because it has no in-place execution path, so every daemon failure mode costs a destructive replace) reads journald CONTAINER_NAME=zot (the container already runs --log-driver journald, so this was a SHIPPING gap, not an instrumentation one) and POSTs each line envelope-stamped as `SOLEUR_ZOT_LOG shipper=zot-log-shipper host=<hostname> <sanitized line>`, plus SOLEUR_ZOT_LOG_DROPPED rate-cap accounting rows and a one-shot SOLEUR_ZOT_LOG_BOOT delivery marker. Before it, the ONLY registry observability was the 5-min heartbeat, which samples one log line per interval — so every count derived from it was a LOWER BOUND, and a 6h measurement on 2026-08-11 found 72 rows for this host, all 72 heartbeats, with ZERO genuine zot log lines ever having reached the warehouse. ALSO pushes two distinct absence-based heartbeats, whose scopes must not be conflated: the 900s disk beat pings on df alone, so it alarms HOST death but stays green with zot dead; the 60s liveness beat (zot-liveness-heartbeat.timer, #6537) pings ONLY while zot answers on the host's own PRIVATE IP — never loopback, since zot binds 0.0.0.0 and loopback answers on a NIC-less host (#6400). That 60s beat doubles as the container-log channel's free positive control: zot logs every request at info, so a genuine zot line lands every minute BY CONSTRUCTION (~1,440/day), traversing the whole path a shipper-emitted canary would skip. The liveness beat's monitor is armed (#6537's feeder shipped; up/unpaused, re-measured 2026-09-24); consumer-perspective reachability is BUILT (#6438 §1): each web host runs web-zot-consumer-probe against its own per-host heartbeat (see the hetzner -> zotRegistry edge). SINCE #7270 THE HEARTBEAT ALSO SAYS WHY THE LIVENESS BEAT WAS WITHHELD: the feeder keeps per-boot counters in tmpfs after every beat, and SOLEUR_ZOT_DISK carries them in its trusted region as liveness_miss_cum, liveness_ping_fail_cum, liveness_ok_cum, liveness_late_ok_cum and liveness_last_miss_code, with no new token or egress on the feeder. It reaches the host through the registry-host replace that registry-host-replace-dispatch fires on the merge (#8361, the size-limit blocker named below, closed 2026-09-20). DO NOT LOOK FOR A HOST-SIDE SOLEUR_ZOT_INVENTORY EMITTER — THERE IS NONE. That marker lands on the same source 2457081 but is emitted by GITHUB ACTIONS (see the github -> betterstack edge), not by this host, and it reads the token from soleur/prd rather than this host's isolated soleur-registry/prd copy. Note what that does NOT imply any more: the reason USED to be that a host-side emitter needs a REPLACE and no safe replace existed while the LUKS recut was unfired, but the recut HAS fired (pcent 100 -> 8 across 2026-08-04 -> 2026-08-10) and ADR-184 §6 retires that blocker, so CI-side emission is no longer the only near side of the deadlock. The inventory marker stays CI-side because a runner can compute a catalog-wide enumeration the host cannot, not because the host is uninstrumentable. A host-side change still applies NOTHING at merge (cloud-init-only, ADR-096) and waits for the next provisioning event — that rule is unchanged and still governs the NEXT such change. This shipper, however, is no longer waiting: DELIVERED 2026-08-12T20:54:12Z by a DEDICATED registry-host-replace (run 31639782781), and the earlier wording here — that delivery rides the step-6 registry-host-replace of the zot-pin ordered path — is RETRACTED 2026-08-12 (#7455) as falsified by ORDERING rather than by being wrong when written. That step-6 replace had already fired atomically inside registry-luks-recut on 2026-08-10T22:08Z, ~45h BEFORE this shipper merged (2026-08-12T19:38Z), so it carried nothing and the shipper sat inert on a host born before it existed. A rider is only valid while its vehicle is still pending. First PASS was read back OUT of the warehouse at 2026-08-12T21:03:51Z (37 envelope rows against a floor of 7, boot_marker present), which flipped ADR-184 adopting -> accepted. SINCE #8386 THE HEARTBEAT ALSO CARRIES THE STORE'S AT-REST POSTURE: store_mount_src, store_backing_dev, store_mount_devid, store_expected_devid and store_luks, all placed AHEAD of the free-text zot_last_err tail so they sit in the trusted region a consumer may parse. This is what makes hcloud_volume.registry's LUKS claim measurable off-box — before it, the claim rested on one 2026-08-10 registry_luks_recut job log and nothing observed whether the mapper reopened after any later replace. UNDELIVERED AT MERGE: it reaches the host only through a registry-host replace, blocked while #8361 keeps apply-web-platform-infra.yml over the workflow-file size limit.",
 "technology": "curl → Better Stack Logs + heartbeats (HTTPS, eu-fsn-3)",
 "source": {
@@ -2896,9 +2907,9 @@
 "target": {
 "model": "betterstack"
 },
-"id": "1xiw3ed"
+"id": "wcxgac"
 },
-"1c7b4w5": {
+"yaiko2": {
 "title": "Polls the SOLEUR_ZOT_DISK + SOLEUR_PRIVATE_NIC Logs sources (ClickHouse SQL via betterstack-query.sh) for the zot restart-loop recurrence alarm, the private-NIC convergence alarm (#6415), and follow-through soak probes, and reads the Uptime API read-only (GET /api/v2/monitors + GET /api/v2/heartbeats) for the live reconcile. SINCE #8178 it also polls git-data's OWN Logs source 2734275 (t520508_soleur_git_data_prd_logs) for stage:boot_complete, from both the birth job (since #6982) and the replace job; that read pins the source rather than taking betterstack-query.sh's default (the shared 2457081, which holds no git-data rows) and resolves its credentials through doppler run -c prd_terraform, because the repository-secret connection does not cover this source (#7867). The heartbeats read (GET /api/v2/heartbeats) comes from the scheduled-terraform-drift.yml heartbeat-live-reconcile job (#6549 item 2): it reconciles the LIVE paused/existence of each monitored heartbeat against the executable MANIFEST (heartbeat-manifest.ts) and flags fed-but-paused (the #6537 shape) or non-count-gated-absent-live (the #6548 git-data shape) — the live-state layer ADR-117's static guard cannot see. SINCE #7884/ADR-222 the same job also reads GET /api/v2/monitors and reconciles every live monitor (by literal declared url) and heartbeat (by declared name, for_each/count resolved from literal variable defaults) against the apps/web-platform/infra declarations: reason=unmanaged-live for a live object no declaration accounts for (issue also labeled infra-drift), reason=monitor-config-drift when a declared monitor's live monitor_type, required_keyword or paused differs, or a declared alerting/cadence attribute (email, call, sms, push, confirmation_period, check_frequency, request_timeout, recovery_period, verify_ssl, follow_redirects) differs, or a maintenance window is live (the vendor-side disarm of the database-readiness alarm; emails every run), and a SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n> line every run in which both reads succeed — a measured object count in place of an asserted vendor cap. Distinct surface from the Logs poll above. SINCE #6178/ADR-146 this edge also carries a SAFETY-CRITICAL read: cutover-inngest.yml op=verify derives the double-fire scan window's trust anchor from the on-host flip-FSM transition row via the same Logs query path, so a retention miss or query failure degrades the anchor and ultimately FAILS the verify closed. SINCE #8054 (ADR-100 addendum 2026-09-11) op=execute step 2.0 is a SECOND safety-critical read on this edge: when the webhook's GQL forward returns non-200 (the EXPECTED pre-arm state under P1-5), 2.0 reads the dedicated host's SOLEUR_INNGEST_SERVER_PROBE row and the inngest-cutover-flip heartbeat as TWO separate --grep reads (an OR-combined read was measured starving the hourly probe row out of a 500-row window) and grades a POSITIVELY dark host through tests/scripts/lib/inngest-host-dark-gate.sh's inngest_execute_registry_gate; a retention miss, a query failure, an absent row or a stale boot each REFUSE 2.0 closed, exactly as they fail verify closed. Both reads go through scripts/betterstack-query.sh, so the --disable/--noproxy obligation below is inherited, not re-implemented. SINCE #7278/ADR-172 THIS EDGE IS NO LONGER READ-ONLY: registry-zot-inventory.yml POSTs a SOLEUR_ZOT_INVENTORY marker to the Logs INGEST endpoint (https://s2457081.eu-fsn-3.betterstackdata.com/, Authorization: Bearer BETTERSTACK_LOGS_TOKEN). READ THE CONFIG NAME: CI reads that token from the **soleur/prd** root via secrets.DOPPLER_TOKEN_PRD — NOT from soleur-registry/prd, which is what the zotRegistry -> betterstack edge names for the HOST's copy. A reader who takes the isolated project's credential as CI's requirement will conclude, wrongly, that this needs a new Doppler grant; it needs none, and that is why the design is zero-Terraform (the soleur/prd copy is out-of-band and deliberately NOT Terraform-declared — ADR-172 §6). The POST is measured, not assumed: 202 on ingest, ~17 s POST->queryable, and the run is green only after the SAME ClickHouse read path returns the line carrying this run's run_id with enumeration_complete=true. AND THE ADR-172 WRITE IS NOT THE ONLY ONE — an older one goes unnamed above: apply-web-platform-infra.yml's measured-beat ARM gate PATCHes /api/v2/heartbeats/<id> with {paused:false} to begin arming and {paused:true} to roll back, from apps/web-platform/infra/arm-heartbeats.sh (extracted out of the workflow in #7587) and from the if: always() re-pause sweep step beside it. It authenticates with a DEDICATED write credential — BETTERSTACK_API_TOKEN read via secrets.DOPPLER_TOKEN_WEB_ARM (doppler_service_token.web_arm_write) — NOT the DOPPLER_TOKEN_PRD path the ingest write above names, and its blast radius is account-wide and recorded in ADR-117. Zero SOLEUR_ZOT_DISK control rows in the poll window means channel_dark, never marker_absent. SINCE #7873 every credentialed curl on this edge is REQUIRED to be TRANSPORT-CONFINED (--disable first, --noproxy '*'): a pinned URL alone does not pin a destination, because curl honours ALL_PROXY/HTTPS_PROXY and ~/.curlrc before the host it was given. Stated as an OBLIGATION, not as an accomplished fact (ADR-202): Rule D of lint-shell-trace-credential-refusal.py blocks on any file the PR touches (--changed bypasses the baseline), but repo-wide it carries a baselined remainder of 65 files (measured 2026-09-11; #8054 drew scripts/cutover-inngest.sh, the cutover orchestrator with 24 credentialed curls, down to zero) -- including arm-heartbeats.sh, a writer named on THIS edge. Drawdown tracked in #7898. SINCE #8386 a further follow-through probe reads this source: scripts/followthroughs/registry-luks-live-8386.sh polls SOLEUR_ZOT_DISK for the store_luks / store_mount_devid posture fields. Treat it as a SAFETY-CRITICAL INPUT in the ADR-146 sense — its verdict gates an encryption-posture LEDGER ROW (hcloud_volume.registry), so a retention miss, a query failure or an absent row must degrade to ACTION REQUIRED rather than to a pass. It is deliberately NOT auto-closing: source 2457081 is shared and multi-tenant with one ingest token and host=/boot_id are producer-controlled inside the message, so three producer-shaped rows are forgeable and that is not adequate authority to close a security tracker unattended (its V7 exits 5). It uses the BETTERSTACK_QUERY_* credentials the sweeper already holds and issues no GitHub Actions call, because the sweeper has no actions: read. ENROLMENT IS NOT AUTOMATIC: the sweeper selects on `--label follow-through --state open` plus a column-0 `<!-- soleur:followthrough -->` directive in #8386's body, so this read begins only once that label and that directive land — at merge it polls nothing. From 2026-10-07 until its retirement on 2026-10-12 (#9372) the `observe` job of web-host-reboot.yml also polled web-2's journald boot, probe and readiness rows through scripts/web-host-reboot-evidence.sh (read-only, rows only, no statement about the volume). SINCE #6931/ADR-263 the daily workspaces-luks-verify.yml `web2_marker` leg and the web2-luks-live-6931 follow-through also read web-2's `luks-monitor` probe row (host_name soleur-web-2) and its once-per-instance SOLEUR_FRESH_BOOT_READY row through scripts/lib/web2-luks-rows.sh (a raw SELECT with an explicit host predicate; the readiness row has no host dimension, only a host= token in its message). Both rows are producer-shaped and host-forgeable, so the verdict is advisory evidence for the soak marker, not an authority.",
 "technology": "HTTPS (ClickHouse SQL Logs read + Logs INGEST write + Uptime monitors + heartbeats API, eu-fsn-3; --disable/--noproxy confined)",
 "source": {
@@ -2907,9 +2918,9 @@
 "target": {
 "model": "betterstack"
 },
-"id": "1c7b4w5"
+"id": "yaiko2"
 },
-"648ixk": {
+"1tcnhnd": {
 "title": "Publishes the zot restart-loop alarm verdict, and since #8038 the weekly issue-flow measurement, which updates one standing public issue with aggregate counts (find-or-update, never re-filed) into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — DELIVERED 2026-09-18, see its Amendment 2026-09-18; the denylist here is the backstop, not the only guard).",
 "source": {
 "model": "github"
@@ -2917,9 +2928,9 @@
 "target": {
 "model": "publicReader"
 },
-"id": "648ixk"
+"id": "1tcnhnd"
 },
-"1la7xb2": {
+"8uaasd": {
 "title": "Fresh-boot bootstrap-pull outcome (stage inngest_zot at info / inngest_pull_fatal at fatal — a zot miss ends the attempt; soleur-inngest-provision.service retries (120 s at first, backing off to 15 min) until one succeeds (#8562; a host replaced before this change still ends the boot), each failed attempt also emitting provision_attempt_failed at warning; renamed from inngest_ghcr_fallback by #8036 1d because no GHCR fallback exists — host_name soleur-inngest) and the private-NIC boot outcome (stage family private_nic_*, #8539) POSTed to the Sentry store API by the host-local soleur-boot-emit with the baked ${sentry_dsn}; no Doppler dependency. zot-soak-6122.sh counts these (#6500). The Vector log sink is NOT on this edge — it stays on betterstack",
 "technology": "HTTPS (Sentry store API, X-Sentry-Auth sentry_version=7)",
 "source": {
@@ -2928,9 +2939,9 @@
 "target": {
 "model": "sentry"
 },
-"id": "1la7xb2"
+"id": "8uaasd"
 },
-"1oyflsb": {
+"kpktze": {
 "title": "Host-side fatal + deploy telemetry, POSTed straight to the store API with the baked ${sentry_dsn} — the boot fatal-emit trap armed at the TOP of `runcmd:` in cloud-init.yml (before Doppler exists), ci-deploy.sh's deploy/sandbox-canary/cosign-verify/zot-fallback events, and container-restart-monitor.sh. Fail-open and SSH-free by construction: this is how a host that never finished booting still pages",
 "technology": "HTTPS (Sentry store API, X-Sentry-Auth sentry_version=7)",
 "source": {
@@ -2939,9 +2950,9 @@
 "target": {
 "model": "sentry"
 },
-"id": "1oyflsb"
+"id": "kpktze"
 },
-"18gjgrh": {
+"1mo6fjm": {
 "title": "Exceptions + debounced warns via the @sentry/nextjs SDK (sentry.client.config.ts / sentry.server.config.ts / instrumentation.ts, SENTRY_DSN) — the stack-keyed capture shape the issue alerts group on; AND — since #9178/ADR-260 — field Core Web Vitals RUM: sampled pageload/navigation transactions from browserTracingIntegration carrying LCP/CLS/INP/FCP/TTFB measurements (tracesSampler 0.1 real sessions, 1.0 under the soleur.perf-probe marker; the standalone webVitalsIntegration path was rejected — it covers only cls/inp/lcp, never FCP/TTFB), scrubbed by the same beforeSend* PII chain extended to transaction and span payloads; AND the Inngest-fired crons' end-of-run check-ins (`postSentryHeartbeat` in _cron-shared.ts → /api/{id}/cron/{slug}/{key}/?status=ok|error, bounded retry #5728) that satisfy the 45 Inngest-substrate sentry_cron_monitors",
 "technology": "HTTPS (Sentry SDK envelope + cron check-in API)",
 "source": {
@@ -2950,9 +2961,9 @@
 "target": {
 "model": "sentry"
 },
-"id": "18gjgrh"
+"id": "1mo6fjm"
 },
-"z59cqf": {
+"3ju75i": {
 "title": "CI is both an emitter and the applier: the ./.github/actions/sentry-heartbeat composite posts ok|error check-ins from 19 workflows, in two groups — 13 GHA-`schedule:`-fired (image-cve-scan (W3, epic #9601 — the advisory runtime-image vulnerability scan; it keeps a native daily `schedule:` because no Inngest dispatch exists for it in this advisory phase, and exit 3 = unmeasured posts `error`), scheduled-inngest-health, -zot-restart-loop [both also fired by a fourth substrate since #8495: web-server-scheduled, GHA-executed — the dispatch clock, ADR-248], -inngest-probe-heartbeat (#9703 — the feeder for the dead-probe heartbeat; also fired by the dispatch clock), -betterstack-incident-mirror (#10390 — mirrors Better Stack's open incidents to GitHub issues; also fired by the dispatch clock — never by Inngest, since the incidents it mirrors include Inngest's own outages), -realtime-probe, -prod-version-drift, -marketplace-drift (#7471 — it carries every control on the published distribution manifest, which lives in a repo with no CI, so its own liveness had to be monitored from here; since #7490 that is two jobs, the manifest check and the delivery canary, and this monitor's status expression consumes BOTH verdicts, since gating it on the manifest job alone would check in ok on a canary-only failure), -devin-docs-drift (#8160 — a disposable per-issue watcher on Cognition's public docs; its native schedule is deliberate: an Inngest dispatch would spend a queue slot daily on a surface that changes on a human release cadence, and the watcher's teardown deletes this entry with it), -actions-queue-health (#8578, dispatch-primary since #9273 — the earlier anti-circularity premise conflated trigger delivery with execution substrate: the Inngest dispatch only POSTs workflow_dispatch (no runner needed to FIRE) while the executor still lands in the measured runner queue, so the self-referential starvation signal is preserved; its native `schedule:` was demoted to FALLBACK after GHA schedule deferral (~4 fires/day under org load) paged ~47 missed check-ins/day on a healthy queue), and scheduled-supabase-watchdog (#9168 — the bounded auto-restart watchdog; its native `schedule:` is the FALLBACK trigger, the primary being the Inngest dispatch cron cron-supabase-watchdog-dispatch — the third substrate below — so it lives in this group by parsed `on:` shape while its cadence is really dispatch-driven), scheduled-integration-suites (#9855 — the nightly env-gated integration leg; the monitor is the dead-man arm for a wholly-dropped cron, and its check-in is producer-outcome-first via the run's aggregate step), and workspaces-luks-verify, whose native schedule is deliberate rather than incidental: it verifies web-1's own LUKS mount, and although the Inngest SCHEDULER moved to its own dedicated host at the #6178 cutover (ADR-100 — which supersedes the #5450 same-host durable-backend framing), Inngest still EXECUTES functions on web-1 (step requests go to the Cloudflare-proxied serve URL, whose `app` A record is web-1 only; sdk_url 10.0.1.10:3000 is the registration poll — ADR-243), so an Inngest-dispatched verifier would die with its own subject — ADR-033's anti-circularity corollary, #6808) and 6 `workflow_dispatch`-only ones that Inngest DISPATCHES per ADR-033 (scheduled-terraform-drift, -machinery-drain, -domain-model-drift, -supabase-advisor-scan, -sentry-alert-drift (#7650 §2.9, dispatched by cron-sentry-alert-drift), and main-health-monitor — the fourth added by #7307, which REVERSED that workflow's documented Design-A posture of having no own Sentry monitor: Design A rested end-to-end liveness on a broken main going un-issued being a readable signal, and #7307 is the counterexample, since the executor filed nothing for four months). That second group is the third substrate: Inngest-scheduled but GHA-executed, so their check-in rides this edge, not webapp's. Of 67 cron monitors, 22 check in from here and 45 from webapp — these counts are parity-gated against their live derivations by plugins/soleur/test/c4-count-parity.test.sh (#7209), so a new emitter or monitor fails loudly here instead of staling this prose. apply-sentry-infra.yml also auto-applies the sentry root on push to main via the jianyuan/sentry provider (ADR-031 — no dashboard step; its `paths:` filter covers the WHOLE infra/sentry/ tree, per that workflow's own header). scheduled-terraform-drift.yml's sentry leg plans the same root READ-ONLY twice daily with the same SENTRY_IAC_AUTH_TOKEN binding (#6612). SEPARATELY, web-platform-release.yml POSTs directly to the store API from two inline curls — live-verify's emit, and the release-outcome job's mirror when the operator email does not deliver (tags gate=release-outcome, op=release-alert-undelivered, classifier=ok|failed) — an inline curl from the runner, on no SDK and no composite (#7138)",
 "technology": "HTTPS (cron check-in API + Terraform provider, SENTRY_AUTH_TOKEN)",
 "source": {
@@ -2961,9 +2972,9 @@
 "target": {
 "model": "sentry"
 },
-"id": "z59cqf"
+"id": "3ju75i"
 },
-"2tz7ui": {
+"xhswlu": {
 "title": "The release-outcome operator email: an inline `curl` to the Resend API from the runner (NOT via webapp/api, which carry the statutory-triage edges), one of fourteen Resend emitters under .github/ (#8211 added the fourteenth, git-data-cutover.yml's notify-failure job, which emails a failed, stranded or cancelled cutover through the notify-ops-email composite and files a ci/git-data-cutover issue as the primary channel; before it, #7539 added the thirteenth: apply-web-platform-infra.yml's SSH-stage-skipped arm, which gives the ssh_token_gate green-skip a consumer — a green apply that delivered nothing is the failure mode that PR exists to close; #8189 added a fourteenth: apply-git-data-root-key.yml's notify-root-key-apply job, which emails on any non-success root-key apply; #8377 then removed one, taking the count back to thirteen — rule-metrics-aggregate.yml was deleted when rule-metrics.json became an untracked cache under ADR-235; #8511 added a fourteenth, git-data-pin-redeploy.yml, and #8211 PR2 removed it again, taking the count back to thirteen — the pin load is now the apply job's inline pin_load step, which needs no email arm because a skipped/failed pin_load reds the job itself) and the only one that fires regardless of which job in the release graph failed — `deploy`'s inline email and `reusable-release.yml`'s `notify-ops-email` step are job-scoped, so they are structurally silent for a failure outside their own job (#7138)",
 "technology": "HTTPS (Resend API, inline curl from the runner)",
 "source": {
@@ -2972,9 +2983,9 @@
 "target": {
 "model": "resend"
 },
-"id": "2tz7ui"
+"id": "xhswlu"
 },
-"r238a": {
+"yvypvf": {
 "title": "Pages the operator — the LARGER of two independent exits (betterstack is the other; a Sentry outage is survivable BY DESIGN). Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers; a few rules set fallthrough_type NoOne instead (issue-alerts.tf is the authoritative list). Every rule is a `sentry_alert` carrying the route as `action_filters[].actions[].email` with a lowercase `target_type = issue_owners`; since #8451 the two rules whose `event_unique_user_frequency_count` trigger the pinned provider cannot express (`auth_per_user_loop` and `sandbox_startup_failure`) are FROZEN `sentry_alert` blocks (`legacy_trigger_conditions`, `ignore_changes = all`), no longer `sentry_issue_alert`. `scripts/sentry-alert-live-fidelity.sh` checks every `sentry_alert` field-for-field against the plan-derived reference (#8050) after each apply and daily. One further rule is live in the project and ABSENT FROM IaC: the Sentry-default `Send a notification for high priority issues` — empty filters, null environment, NotifyEmailAction with target_type IssueOwners and fallthrough_type ActiveMembers. Its conditions are New/ExistingHighPriorityIssueCondition, i.e. FIRST-SEEN and ESCALATED-TO — NOT a recurrence of an issue that is already high priority. Since Sentry derives high priority from level, it is what actually routes a level=error event carrying no matching tag filter (the release-outcome mirror among them), and a repeat of an identical event is silent on this route. It is UI-managed, so ADR-031's IaC-is-the-source-of-truth posture does not cover it; tracked as #7142. NB IssueOwners has no ownership rule on this project, so the fallthrough is what actually reaches a human: a NoOne rule fires and pages nobody, by design only where issue-alerts.tf says so and a defect anywhere else. The cron monitors open an issue on a missed/failed check-in (per-monitor failure_issue_threshold). Since #8630 those issues reach email through one more `sentry_alert`, `cron_monitor_failure` in cron-monitor-alerts.tf, which binds every routed cron detector in `monitor_ids` (first-seen, reappeared and regression triggers; at most one email per monitor per 24 h) with the same issue_owners → ActiveMembers route. A MUTED monitor environment creates no issue, so it pages nobody even though it is routed; mute is not expressible in the provider. The uptime monitors open an issue on downtime, but their detectors are bound to no workflow, so this edge claims no route for them",
 "technology": "Sentry issue alert → email notification",
 "source": {
@@ -2983,9 +2994,9 @@
 "target": {
 "model": "founder"
 },
-"id": "r238a"
+"id": "yvypvf"
 },
-"16amk5e": {
+"oh3w81": {
 "title": "Boot-stage fatals and stage markers from a BAKED DSN, with NO Doppler fallback — so the channel still works when Doppler is itself the broken stage, which on this host is the most likely one. This is the interlock's sentinel: the deny-all host has no SSH, no console and no log shipper, so before #6982 a failed boot was readable only from on-host /var/log/cloud-init-output.log, i.e. by nobody. LIVE — observed: the 2026-09-24 production git_data_host_replace's stage=bootstrap FATAL (host_name=soleur-git-data) reached Sentry (WEB-PLATFORM-8E)",
 "technology": "curl -> Sentry store API (HTTPS)",
 "source": {
@@ -2994,9 +3005,9 @@
 "target": {
 "model": "sentry"
 },
-"id": "16amk5e"
+"id": "oh3w81"
 },
-"sobgag": {
+"1qqfit5": {
 "title": "A queryable second copy of the boot-completion signal and gc-fault events, posted by direct curl (NOT a Vector agent — git-data ships no host_metrics and so structurally cannot reopen the 3 GB/mo quota breach of 2026-06-10). Since #7460 (ADR-198) the ingest token is baked into user_data at 0600, so EIGHT of the nine boot stages post here, not just the post-Doppler ones; `bootcmd_start` alone stays Sentry-only, because it fires before write_files and the emitter does not exist yet. Since #9438 (ADR-283) the host also pushes a recurring heartbeat to a dedicated monitor from a 60 s timer, only while its own checks pass, and says why it withheld one at level info (TARGET state until the replace and the measured arm). The birth and replace jobs POLL this channel for stage:boot_complete. The read needs a SQL API connection that covers this source, which only the one in Doppler prd_terraform does (#7867); the repository-secret connection that scheduled-followthrough-sweeper.yml binds does not. The poll is anchored on a per-run BOOT_TRAIL_SINCE epoch, so a destroyed host generation cannot answer for a live one, and reports received / silent / unreadable (ADR-149 #8178 amendment). The pre-#8178 read never succeeded (20/20 rc=22 on runs 34822248580 and 34836141887). Post-#8178 read path: TARGET state, unobserved until the first post-merge git-data dispatch (judged by scripts/followthroughs/git-data-boot-poll-8178.sh)",
 "technology": "curl -> Better Stack Logs (HTTPS)",
 "source": {
@@ -3005,9 +3016,9 @@
 "target": {
 "model": "betterstack"
 },
-"id": "sobgag"
+"id": "1qqfit5"
 },
-"jzby7r": {
+"iqsuk0": {
 "title": "Incident alerts (native integration)",
 "technology": "Better Stack → Slack (vendor OAuth)",
 "source": {
@@ -3016,9 +3027,9 @@
 "target": {
 "model": "slack"
 },
-"id": "jzby7r"
+"id": "iqsuk0"
 },
-"hsolnz": {
+"1jbch66": {
 "title": "Mobile push notification",
 "technology": "Slack push",
 "source": {
@@ -3027,9 +3038,9 @@
 "target": {
 "model": "founder"
 },
-"id": "hsolnz"
+"id": "1jbch66"
 },
-"osqdom": {
+"pn58lh": {
 "title": "Pages the operator INDEPENDENTLY of Sentry — the second source. The apex uptime monitor, the database-readiness keyword monitor on app.soleur.ai/health (#7884/ADR-222: pages when the /health body stops reporting supabase connected, the 2026-09-15 outage shape that paged nobody for ~89 min and the 2026-09-28 shape that detected at +7 min but reached nobody because delivery was email-only) and the inngest + registry-disk heartbeats alert on downtime/missed beats (the git-data heartbeat does NOT — its FEEDER shipped (the web-host reachability probe, #6548) but the monitor itself is absent from live Better Stack and ships paused, so the beat has nowhere to land; #6548 alone owns arming it — #6982 examined and DECLINED to, see the betterstack element description; the registry LIVENESS heartbeat DOES — its #6537 feeder shipped and the monitor reads up/unpaused, re-measured 2026-09-24). DELIVERY since #9168/ADR-260: Slack via the native integration (betterstack -> slack -> founder, primary wake path) + push = true on the app_health monitor, with email to the managed recipient still on; Responder-tier policy escalation stays gated on var.betterstack_paid_tier, which is unset (the expenses.md deferral trigger fired twice; declined — revisit if Slack proves insufficient). This is the exit that survives a Sentry-side outage, which is the entire reason the vendor is duplicated",
 "technology": "Better Stack monitor/heartbeat → Slack + push + email (+ policy escalation on paid tier)",
 "source": {
@@ -3038,9 +3049,9 @@
 "target": {
 "model": "founder"
 },
-"id": "osqdom"
+"id": "pn58lh"
 },
-"12u5ish": {
+"19ou9ts": {
 "title": "Incident mirror (ADR-298, epic #10390): scheduled-betterstack-incident-mirror.yml runs every 15 min (watchdog-dispatch primary — it watches the paging substrate, so it cannot be Inngest-scheduled — plus schedule: fallback), reads GET /api/v2/incidents?resolved=false with BETTERSTACK_API_TOKEN_READONLY (GET-only; bearer on curl stdin config, never argv; projected {id,name,cause,started_at} — ping URLs never echo) and files/dedupes/resolves [ci/betterstack-incident] issues on jikig-ai/soleur keyed on a <!-- betterstack-incident id= --> body marker, never title alone (the #10918 title-confusion class). Read failures are fail-loud: error Sentry check-in on sentry_cron_monitor.scheduled_betterstack_incident_mirror (unrouted at first apply, two-PR rule) + ::error::. The issue WRITE is github-internal (github.token, issues:write) — a github -> github self-relation LikeC4 refuses, recorded here per the #8359/ADR-232 convention",
 "technology": "HTTPS (Better Stack Uptime API GET → gh issue create/comment)",
 "source": {
@@ -3049,9 +3060,9 @@
 "target": {
 "model": "github"
 },
-"id": "12u5ish"
+"id": "19ou9ts"
 },
-"1pg40rj": {
+"14o7oz4": {
 "title": "GitHub issue notifications — the delivery hop the incident mirror lands pages on: [ci/betterstack-incident] issues filed by scheduled-betterstack-incident-mirror.yml reach the operator through the repo's issue surface, the channel the 2026-10-22 outage proved is watched (the health watchdog's ci/inngest-down filings were seen while the unwatched email inbox was not). Same hop carries every other ci/* watchdog filing",
 "technology": "GitHub issues + notifications",
 "source": {
@@ -3060,9 +3071,9 @@
 "target": {
 "model": "founder"
 },
-"id": "1pg40rj"
+"id": "14o7oz4"
 },
-"aok9j0": {
+"x4u73x": {
 "title": "Reads GIT_DATA_LUKS_KEY on EVERY BOOT (git-data-luks-reopen.service, #8210) as well as at birth and at the weekly gc, under the baked read-only prd_git_data service token, always with --only-secrets and --no-fallback (the fallback cache would write the passphrase to the root disk — ADR-198 amendment). This makes a Doppler read a STORE-AVAILABILITY dependency of every boot: the mapper is opened once per instance by cloud-init runcmd, so without this unit a reboot left /mnt without its backing device, silently (ADR-115's first normative blocker, cleared 2026-09-18). A failure at any phase is reported once, off-host, at level:fatal on stage luks_reopen. Since #9438 (ADR-283) the host also reads GIT_DATA_HOST_HEARTBEAT_URL from the same config at runtime, for its liveness feeder: cached on tmpfs after the first successful read, retried every tick while the secret is absent, and re-read after a rejected ping (never baked into user_data)",
 "technology": "HTTPS (Doppler CLI)",
 "source": {
@@ -3071,9 +3082,9 @@
 "target": {
 "model": "doppler"
 },
-"id": "aok9j0"
+"id": "x4u73x"
 },
-"1qbq3c9": {
+"1wiwqdm": {
 "title": "Places/routes sessions (lease-keyed)",
 "technology": "HTTPS (private net)",
 "source": {
@@ -3082,9 +3093,9 @@
 "target": {
 "model": "platform.engine.claude"
 },
-"id": "1qbq3c9"
+"id": "1wiwqdm"
 },
-"1gvru3y": {
+"9jnyz3": {
 "title": "Reads worktree lease",
 "technology": "PostgreSQL",
 "source": {
@@ -3093,9 +3104,9 @@
 "target": {
 "model": "platform.infra.supabase"
 },
-"id": "1gvru3y"
+"id": "9jnyz3"
 },
-"xxpdhp": {
+"yjew3y": {
 "title": "Session/replay state",
 "technology": "Redis (TLS)",
 "source": {
@@ -3104,9 +3115,9 @@
 "target": {
 "model": "platform.infra.sessionStore"
 },
-"id": "xxpdhp"
+"id": "yjew3y"
 },
-"16to4fn": {
+"1q6jbbm": {
 "title": "Replay buffer + control state",
 "technology": "Redis (TLS)",
 "source": {
@@ -3115,9 +3126,9 @@
 "target": {
 "model": "platform.infra.sessionStore"
 },
-"id": "16to4fn"
+"id": "1q6jbbm"
 },
-"123yd0m": {
+"qscsht": {
 "title": "Bare repo data; worktrees local (TARGET state — the host is born but the store is empty until the LUKS cutover, #5274). Host key pinned via GIT_DATA_SSH_HOST_KEY (ADR-237), loaded at deploy; an absent or malformed pin refuses the dial (#5914)",
 "technology": "git over private net",
 "source": {
@@ -3126,9 +3137,9 @@
 "target": {
 "model": "platform.infra.gitDataStore"
 },
-"id": "123yd0m"
+"id": "qscsht"
 },
-"nupyws": {
+"18vty0t": {
 "title": "Art. 17 erasure of the user's bare repo over the REMOVE key's forced command (git-data-remove.sh), reached from account deletion (the API route and the agent's account tool, both via server/account-delete.ts); NOT gated on GIT_DATA_STORE_ENABLED, so a repo left by a flag-on window is still erased. Host key pinned (ADR-237); an absent or malformed pin returns `unconfigured` without dialing (#5914)",
 "technology": "SSH over private net",
 "source": {
@@ -3137,9 +3148,9 @@
 "target": {
 "model": "platform.infra.gitDataStore"
 },
-"id": "nupyws"
+"id": "18vty0t"
 },
-"vdz7zy": {
+"1e5okl9": {
 "title": "Schedules",
 "technology": "Nomad",
 "source": {
@@ -3148,9 +3159,9 @@
 "target": {
 "model": "platform.infra.hetzner"
 },
-"id": "vdz7zy"
+"id": "1e5okl9"
 },
-"1nud3y1": {
+"4ebqyg": {
 "title": "Routes explore/generate",
 "source": {
 "model": "platform.plugin.go"
@@ -3158,9 +3169,9 @@
 "target": {
 "model": "platform.plugin.brainstorm"
 },
-"id": "1nud3y1"
+"id": "4ebqyg"
 },
-"wp421p": {
+"1i4r5de": {
 "title": "Routes build",
 "source": {
 "model": "platform.plugin.go"
@@ -3168,9 +3179,9 @@
 "target": {
 "model": "platform.plugin.oneshot"
 },
-"id": "wp421p"
+"id": "1i4r5de"
 },
-"1advdpl": {
+"10z9jd4": {
 "title": "Step 1",
 "source": {
 "model": "platform.plugin.oneshot"
@@ -3178,9 +3189,9 @@
 "target": {
 "model": "platform.plugin.plan"
 },
-"id": "1advdpl"
+"id": "10z9jd4"
 },
-"10z8km2": {
+"okdaia": {
 "title": "Step 2",
 "source": {
 "model": "platform.plugin.oneshot"
@@ -3188,9 +3199,9 @@
 "target": {
 "model": "platform.plugin.work"
 },
-"id": "10z8km2"
+"id": "okdaia"
 },
-"159s9d5": {
+"12rbcjs": {
 "title": "Step 3",
 "source": {
 "model": "platform.plugin.oneshot"
@@ -3198,9 +3209,9 @@
 "target": {
 "model": "platform.plugin.review"
 },
-"id": "159s9d5"
+"id": "12rbcjs"
 },
-"1nn905v": {
+"vbee0g": {
 "title": "Step 4",
 "source": {
 "model": "platform.plugin.oneshot"
@@ -3208,9 +3219,9 @@
 "target": {
 "model": "platform.plugin.compound"
 },
-"id": "1nn905v"
+"id": "vbee0g"
 },
-"qc82qb": {
+"1dvrysy": {
 "title": "Step 5",
 "source": {
 "model": "platform.plugin.oneshot"
@@ -3218,9 +3229,9 @@
 "target": {
 "model": "platform.plugin.ship"
 },
-"id": "qc82qb"
+"id": "1dvrysy"
 },
-"48jdl9": {
+"1uukxka": {
 "title": "Phase 0.5 assessment",
 "source": {
 "model": "platform.plugin.brainstorm"
@@ -3228,9 +3239,9 @@
 "target": {
 "model": "platform.plugin.cto"
 },
-"id": "48jdl9"
+"id": "1uukxka"
 },
-"1uukxzn": {
+"1qtb06q": {
 "title": "Phase 0.5 assessment",
 "source": {
 "model": "platform.plugin.brainstorm"
@@ -3238,9 +3249,9 @@
 "target": {
 "model": "platform.plugin.cmo"
 },
-"id": "1uukxzn"
+"id": "1qtb06q"
 },
-"1qtazin": {
+"1hdnnos": {
 "title": "Phase 0.5 assessment",
 "source": {
 "model": "platform.plugin.brainstorm"
@@ -3248,9 +3259,9 @@
 "target": {
 "model": "platform.plugin.cpo"
 },
-"id": "1qtazin"
+"id": "1hdnnos"
 },
-"mnqpa2": {
+"slb97f": {
 "title": "Phase 2.5 domain review",
 "source": {
 "model": "platform.plugin.plan"
@@ -3258,9 +3269,9 @@
 "target": {
 "model": "platform.plugin.cto"
 },
-"id": "mnqpa2"
+"id": "slb97f"
 },
-"18p2wj6": {
+"8p6hul": {
 "title": "Parallel review agent",
 "source": {
 "model": "platform.plugin.review"
@@ -3268,9 +3279,9 @@
 "target": {
 "model": "platform.plugin.archstrat"
 },
-"id": "18p2wj6"
+"id": "8p6hul"
 },
-"11dt53m": {
+"1v9ylv7": {
 "title": "Recommends ADR creation",
 "source": {
 "model": "platform.plugin.cto"
@@ -3278,9 +3289,9 @@
 "target": {
 "model": "platform.plugin.architecture"
 },
-"id": "11dt53m"
+"id": "1v9ylv7"
 },
-"1x6ezpv": {
+"5cn5x5": {
 "title": "Checks ADR coverage",
 "source": {
 "model": "platform.plugin.archstrat"
@@ -3288,9 +3299,9 @@
 "target": {
 "model": "platform.plugin.architecture"
 },
-"id": "1x6ezpv"
+"id": "5cn5x5"
 },
-"91jri9": {
+"wtgds0": {
 "title": "User invokes /soleur:go",
 "source": {
 "model": "platform.engine.claude"
@@ -3298,9 +3309,9 @@
 "target": {
 "model": "platform.plugin.go"
 },
-"id": "91jri9"
+"id": "wtgds0"
 },
-"97q21p": {
+"1aw20bi": {
 "title": "Writes brainstorms",
 "source": {
 "model": "platform.plugin.brainstorm"
@@ -3308,9 +3319,9 @@
 "target": {
 "model": "platform.plugin.kb"
 },
-"id": "97q21p"
+"id": "1aw20bi"
 },
-"go8umk": {
+"elbpe5": {
 "title": "Writes plans and specs",
 "source": {
 "model": "platform.plugin.plan"
@@ -3318,9 +3329,9 @@
 "target": {
 "model": "platform.plugin.kb"
 },
-"id": "go8umk"
+"id": "elbpe5"
 },
-"2yzlen": {
+"1nvjt20": {
 "title": "Reads plans, writes code",
 "source": {
 "model": "platform.plugin.work"
@@ -3328,9 +3339,9 @@
 "target": {
 "model": "platform.plugin.kb"
 },
-"id": "2yzlen"
+"id": "1nvjt20"
 },
-"1h5tgk8": {
+"es41nd": {
 "title": "Writes learnings, promotes to constitution",
 "source": {
 "model": "platform.plugin.compound"
@@ -3338,9 +3349,9 @@
 "target": {
 "model": "platform.plugin.kb"
 },
-"id": "1h5tgk8"
+"id": "es41nd"
 },
-"1cdii7h": {
+"n1ui6": {
 "title": "Writes ADRs and diagrams",
 "source": {
 "model": "platform.plugin.architecture"
@@ -3348,9 +3359,9 @@
 "target": {
 "model": "platform.plugin.kb"
 },
-"id": "1cdii7h"
+"id": "n1ui6"
 },
-"1n4z18d": {
+"1hvr0v0": {
 "title": "Writes conventions, learnings, component docs, generated C4 (generated-components.c4 + model.likec4.json + c4-model.md), domain-model rows, and kb-coverage.md",
 "technology": "File I/O + local git commit",
 "source": {
@@ -3359,9 +3370,9 @@
 "target": {
 "model": "connectedRepoKb"
 },
-"id": "1n4z18d"
+"id": "1hvr0v0"
 },
-"1uz7dv2": {
+"9h7zgh": {
 "title": "Writes spec.c4 / model.c4 / views.c4 cwd-relative — same directory sync generates into (ADR-171 two-writer precedence)",
 "technology": "File I/O",
 "source": {
@@ -3370,9 +3381,9 @@
 "target": {
 "model": "connectedRepoKb"
 },
-"id": "1uz7dv2"
+"id": "9h7zgh"
 },
-"1snf31v": {
+"194ug5u": {
 "title": "Validates classifier-skill edits before applying",
 "source": {
 "model": "platform.plugin.compound"
@@ -3380,9 +3391,9 @@
 "target": {
 "model": "platform.plugin.evalharness"
 },
-"id": "1snf31v"
+"id": "194ug5u"
 },
-"6xcjtk": {
+"1usdj3k": {
 "title": "Generates L1 import-boundary gate (CI)",
 "source": {
 "model": "platform.plugin.constraintscaffold"
@@ -3390,9 +3401,9 @@
 "target": {
 "model": "platform.webapp"
 },
-"id": "6xcjtk"
+"id": "1usdj3k"
 },
-"1pel8q4": {
+"1qr7gi5": {
 "title": "Generates generic guardrail set into user-repo hooks + CI",
 "source": {
 "model": "platform.plugin.verificationscaffold"
@@ -3400,9 +3411,9 @@
 "target": {
 "model": "platform.webapp"
 },
-"id": "1pel8q4"
+"id": "1qr7gi5"
 },
-"rx0mdc": {
+"tvm6n7": {
 "title": "MCP tools/call over stdio; every tool result's text passes the credential predicate before the model reads it",
 "technology": "stdio JSON-RPC (newline-delimited)",
 "source": {
@@ -3411,9 +3422,9 @@
 "target": {
 "model": "platform.plugin.snapshotGuard"
 },
-"id": "rx0mdc"
+"id": "tvm6n7"
 },
-"1ls656t": {
+"1blee6c": {
 "title": "Relays JSON-RPC lines; appends --snapshot-mode none (and, opt-in via --chromium-fallback, --browser chromium --sandbox); refuses filename",
 "technology": "stdio JSON-RPC over pipes (child process group)",
 "source": {
@@ -3422,9 +3433,9 @@
 "target": {
 "model": "playwrightMcp"
 },
-"id": "1ls656t"
+"id": "1blee6c"
 },
-"12f1txk": {
+"7gnr4f": {
 "title": "Bash-path deny routes agent-browser snapshot through the same predicate",
 "technology": "PreToolUse hook (deny disposition, ADR-162)",
 "source": {
@@ -3433,9 +3444,9 @@
 "target": {
 "model": "platform.plugin.snapshotGuard"
 },
-"id": "12f1txk"
+"id": "7gnr4f"
 },
-"kx5ui7": {
+"1y8po9a": {
 "title": "PreToolUse ask/deny on destructive commands; no egress",
 "technology": "PreToolUse hook (ask/deny dispositions, ADR-277)",
 "source": {
@@ -3444,9 +3455,9 @@
 "target": {
 "model": "platform.plugin.destructiveGuard"
 },
-"id": "kx5ui7"
+"id": "1y8po9a"
 },
-"161sjjf": {
+"1jhb0x4": {
 "title": "cron-ux-audit per-fire overlay: UNWRAPPED @playwright/mcp@0.0.75, --snapshot-mode none only; holds no tree- or value-returning tool (PA-31 §(g))",
 "technology": "stdio JSON-RPC (claude -p child)",
 "source": {
@@ -3455,7 +3466,7 @@
 "target": {
 "model": "playwrightMcp"
 },
-"id": "161sjjf"
+"id": "1jhb0x4"
 }
 },
 "globals": {
@@ -5176,7 +5187,7 @@
 },
 "parent": null,
 "relations": [
-"hdqyw2"
+"54lfnn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -5361,7 +5372,7 @@
 },
 "parent": null,
 "relations": [
-"56kime"
+"hrh3tx"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6029,7 +6040,7 @@
 },
 "parent": null,
 "relations": [
-"1pg40rj"
+"14o7oz4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6103,7 +6114,7 @@
 },
 "parent": null,
 "relations": [
-"osqdom"
+"pn58lh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6189,7 +6200,7 @@
 },
 "parent": null,
 "relations": [
-"hsolnz"
+"1jbch66"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6263,7 +6274,7 @@
 },
 "parent": null,
 "relations": [
-"r238a"
+"yvypvf"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6375,7 +6386,7 @@
 },
 "parent": null,
 "relations": [
-"648ixk"
+"1tcnhnd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6680,7 +6691,8 @@
 "1cn6cfg",
 "1c0zh24",
 "qhe9j9",
-"1mfkjc4"
+"1mfkjc4",
+"6tmxl3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6766,7 +6778,7 @@
 "parent": null,
 "relations": [
 "1x158q0",
-"ge7rkf"
+"z3z08e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6851,7 +6863,7 @@
 },
 "parent": null,
 "relations": [
-"aok9j0"
+"x4u73x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7088,8 +7100,8 @@
 },
 "parent": null,
 "relations": [
-"1ls656t",
-"161sjjf"
+"1blee6c",
+"1jhb0x4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7139,7 +7151,7 @@
 "parent": null,
 "relations": [
 "1cwasan",
-"e2yj2a"
+"1fh5s8z"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7202,7 +7214,7 @@
 "parent": null,
 "relations": [
 "15uvu3k",
-"13qzhhl"
+"jf850q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7264,7 +7276,7 @@
 "parent": null,
 "relations": [
 "1r8v1wt",
-"sntzya"
+"89yjlv"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7338,7 +7350,7 @@
 },
 "parent": null,
 "relations": [
-"103stsa"
+"yo0hxh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7412,7 +7424,7 @@
 },
 "parent": null,
 "relations": [
-"rqefc7"
+"pj94ue"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7463,8 +7475,8 @@
 "parent": null,
 "relations": [
 "mwfmjw",
-"ygxeup",
-"133p9kj"
+"cm6l5e",
+"5nef2s"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7575,10 +7587,10 @@
 },
 "parent": null,
 "relations": [
-"45zw14",
-"1b8h781",
-"14x1s8t",
-"sobgag"
+"18hdt6v",
+"abone8",
+"1isu32q",
+"1qqfit5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7639,10 +7651,10 @@
 },
 "parent": null,
 "relations": [
-"1la7xb2",
-"1oyflsb",
-"18gjgrh",
-"16amk5e"
+"8uaasd",
+"kpktze",
+"1mo6fjm",
+"oh3w81"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7765,7 +7777,7 @@
 },
 "parent": null,
 "relations": [
-"j5q3z8"
+"1x0akdh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7839,8 +7851,8 @@
 },
 "parent": null,
 "relations": [
-"1n4z18d",
-"1uz7dv2"
+"1hvr0v0",
+"9h7zgh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -7928,13 +7940,13 @@
 "1l1lmhs",
 "tg66a0",
 "1jklrfb",
-"j1bf5v",
-"nhep6c",
+"l7ccgc",
 "3s091x",
-"1byhfpt",
+"pm3mgr",
 "9dmjcg",
-"11l0cp4",
-"1ob93qb"
+"1ta2tjn",
+"1iirn6x",
+"1qamzs2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -8146,7 +8158,7 @@
 "8s3bzc",
 "r68tas",
 "j7djwq",
-"4wuk0b"
+"9or04q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -8344,7 +8356,7 @@
 "parent": null,
 "relations": [
 "j7oqbz",
-"h6tzxk"
+"ha6j7t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -8405,7 +8417,7 @@
 },
 "parent": null,
 "relations": [
-"eewoeq"
+"195f2er"
 ],
 "color": "gray",
 "line": "dashed",
@@ -8725,7 +8737,7 @@
 },
 "parent": null,
 "relations": [
-"a7lm9k"
+"1dreu2h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -8787,9 +8799,9 @@
 },
 "parent": null,
 "relations": [
-"1amybls",
 "1rnkjs7",
-"18bte9y"
+"18bte9y",
+"x2x4dh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -8862,7 +8874,7 @@
 },
 "parent": null,
 "relations": [
-"2tz7ui"
+"xhswlu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -8936,9 +8948,9 @@
 },
 "parent": null,
 "relations": [
-"1mohp9k",
-"1ixbvl9",
-"7l2fcf"
+"aumf3j",
+"qr52k",
+"oflqsu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9011,7 +9023,7 @@
 },
 "parent": null,
 "relations": [
-"158wy1u"
+"n1qzpd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9061,7 +9073,7 @@
 },
 "parent": null,
 "relations": [
-"ub9pci"
+"13ipt1v"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9123,7 +9135,7 @@
 },
 "parent": null,
 "relations": [
-"la13kc"
+"zs9qz1"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9173,7 +9185,7 @@
 },
 "parent": null,
 "relations": [
-"noe7k6"
+"17nopyd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9309,8 +9321,8 @@
 },
 "parent": null,
 "relations": [
-"8kwd4d",
-"1c7b4w5"
+"nzu6oc",
+"yaiko2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9371,7 +9383,7 @@
 },
 "parent": null,
 "relations": [
-"z59cqf"
+"3ju75i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9457,8 +9469,8 @@
 },
 "parent": null,
 "relations": [
-"5k1tlp",
-"yfv0fq"
+"84aqb9",
+"yk8be9"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9519,7 +9531,7 @@
 },
 "parent": null,
 "relations": [
-"ai2ryi"
+"1sj8z1o"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9631,7 +9643,7 @@
 },
 "parent": null,
 "relations": [
-"12u5ish"
+"19ou9ts"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9705,7 +9717,7 @@
 },
 "parent": null,
 "relations": [
-"xa5z5k"
+"1iejltn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9755,7 +9767,7 @@
 },
 "parent": null,
 "relations": [
-"1xiw3ed"
+"wcxgac"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9793,7 +9805,7 @@
 },
 "parent": null,
 "relations": [
-"jzby7r"
+"iqsuk0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -11956,7 +11968,7 @@
 "1em1n1r",
 "v6yvot",
 "1gl228p",
-"f42uof"
+"1dgn1mo"
 ],
 "color": "gray",
 "line": "dashed",
@@ -12099,10 +12111,10 @@
 "1waqtaf",
 "ttq3vz",
 "1svglou",
-"91jri9",
-"rx0mdc",
-"12f1txk",
-"kx5ui7"
+"wtgds0",
+"tvm6n7",
+"7gnr4f",
+"1y8po9a"
 ],
 "color": "gray",
 "line": "dashed",
@@ -12225,8 +12237,8 @@
 },
 "parent": "platform",
 "relations": [
-"6xcjtk",
-"1pel8q4"
+"1usdj3k",
+"1qr7gi5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13006,7 +13018,8 @@
 "relations": [
 "2g4dwi",
 "qhe9j9",
-"1mfkjc4"
+"1mfkjc4",
+"6tmxl3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13277,7 +13290,7 @@
 },
 "parent": null,
 "relations": [
-"1pg40rj"
+"14o7oz4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13327,7 +13340,7 @@
 },
 "parent": null,
 "relations": [
-"648ixk"
+"1tcnhnd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13378,8 +13391,8 @@
 "relations": [
 "1l1lmhs",
 "tg66a0",
-"1byhfpt",
-"9dmjcg"
+"9dmjcg",
+"1ta2tjn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13452,7 +13465,7 @@
 },
 "parent": null,
 "relations": [
-"1ob93qb"
+"1qamzs2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13550,8 +13563,8 @@
 },
 "parent": null,
 "relations": [
-"nhep6c",
-"3s091x"
+"3s091x",
+"pm3mgr"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13710,7 +13723,7 @@
 },
 "parent": null,
 "relations": [
-"56kime"
+"hrh3tx"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13894,7 +13907,7 @@
 },
 "parent": null,
 "relations": [
-"ge7rkf"
+"z3z08e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13932,7 +13945,7 @@
 },
 "parent": null,
 "relations": [
-"a7lm9k"
+"1dreu2h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14130,9 +14143,9 @@
 },
 "parent": null,
 "relations": [
-"1amybls",
 "1rnkjs7",
-"18bte9y"
+"18bte9y",
+"x2x4dh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14566,7 +14579,7 @@
 "parent": null,
 "relations": [
 "1cwasan",
-"e2yj2a"
+"1fh5s8z"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14643,7 +14656,7 @@
 "parent": null,
 "relations": [
 "15uvu3k",
-"13qzhhl"
+"jf850q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14717,7 +14730,7 @@
 },
 "parent": null,
 "relations": [
-"2tz7ui"
+"xhswlu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14756,7 +14769,7 @@
 "parent": null,
 "relations": [
 "j7oqbz",
-"h6tzxk"
+"ha6j7t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14831,7 +14844,7 @@
 "parent": null,
 "relations": [
 "1r8v1wt",
-"sntzya"
+"89yjlv"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14881,9 +14894,9 @@
 },
 "parent": null,
 "relations": [
-"1mohp9k",
-"1ixbvl9",
-"7l2fcf"
+"aumf3j",
+"qr52k",
+"oflqsu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14944,7 +14957,7 @@
 },
 "parent": null,
 "relations": [
-"la13kc"
+"zs9qz1"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14994,7 +15007,7 @@
 },
 "parent": null,
 "relations": [
-"158wy1u"
+"n1qzpd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15044,7 +15057,7 @@
 },
 "parent": null,
 "relations": [
-"ub9pci"
+"13ipt1v"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15118,7 +15131,7 @@
 },
 "parent": null,
 "relations": [
-"noe7k6"
+"17nopyd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15180,7 +15193,7 @@
 },
 "parent": null,
 "relations": [
-"xa5z5k"
+"1iejltn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15254,7 +15267,7 @@
 },
 "parent": null,
 "relations": [
-"ai2ryi"
+"1sj8z1o"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15328,8 +15341,8 @@
 },
 "parent": null,
 "relations": [
-"8kwd4d",
-"1c7b4w5"
+"nzu6oc",
+"yaiko2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15366,7 +15379,7 @@
 },
 "parent": null,
 "relations": [
-"1xiw3ed"
+"wcxgac"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15428,7 +15441,7 @@
 },
 "parent": null,
 "relations": [
-"osqdom"
+"pn58lh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15514,7 +15527,7 @@
 },
 "parent": null,
 "relations": [
-"12u5ish"
+"19ou9ts"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15588,7 +15601,7 @@
 },
 "parent": null,
 "relations": [
-"18gjgrh"
+"1mo6fjm"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15638,7 +15651,7 @@
 },
 "parent": null,
 "relations": [
-"z59cqf"
+"3ju75i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15700,7 +15713,7 @@
 },
 "parent": null,
 "relations": [
-"r238a"
+"yvypvf"
 ],
 "color": "gray",
 "line": "dashed",
@@ -15874,8 +15887,8 @@
 },
 "parent": null,
 "relations": [
-"5k1tlp",
-"yfv0fq"
+"84aqb9",
+"yk8be9"
 ],
 "color": "gray",
 "line": "dashed",
@@ -16308,7 +16321,7 @@
 },
 "parent": null,
 "relations": [
-"jzby7r"
+"iqsuk0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -16370,7 +16383,7 @@
 },
 "parent": null,
 "relations": [
-"hsolnz"
+"1jbch66"
 ],
 "color": "gray",
 "line": "dashed",
@@ -16504,7 +16517,7 @@
 },
 "parent": null,
 "relations": [
-"161sjjf"
+"1jhb0x4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -16554,7 +16567,7 @@
 },
 "parent": null,
 "relations": [
-"1ls656t"
+"1blee6c"
 ],
 "color": "gray",
 "line": "dashed",
@@ -18543,7 +18556,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -20236,7 +20249,7 @@
 "parent": null,
 "relations": [
 "v6yvot",
-"f42uof"
+"1dgn1mo"
 ],
 "color": "gray",
 "line": "dashed",
@@ -20715,8 +20728,8 @@
 },
 "parent": null,
 "relations": [
-"11o932f",
-"djd9es"
+"djd9es",
+"1x0kb9h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -20777,8 +20790,8 @@
 },
 "parent": "platform.infra",
 "relations": [
-"5mjtnz",
-"ux33lt"
+"120wikl",
+"gku6v4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -20863,7 +20876,7 @@
 },
 "parent": null,
 "relations": [
-"lv8t51"
+"8sbd0i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -20913,7 +20926,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"lk1wn6"
+"43bg77"
 ],
 "color": "gray",
 "line": "dashed",
@@ -20951,7 +20964,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"8i8xg1"
+"190fkvt"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21075,7 +21088,7 @@
 },
 "parent": null,
 "relations": [
-"1qbq3c9"
+"1wiwqdm"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21137,7 +21150,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"1gvru3y"
+"9jnyz3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21199,7 +21212,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"vdz7zy"
+"1e5okl9"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21297,7 +21310,7 @@
 },
 "parent": null,
 "relations": [
-"nupyws"
+"18vty0t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21359,7 +21372,7 @@
 },
 "parent": null,
 "relations": [
-"123yd0m"
+"qscsht"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21421,7 +21434,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"bnxxqx"
+"1dgipx6"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21495,7 +21508,7 @@
 },
 "parent": null,
 "relations": [
-"xxpdhp"
+"yjew3y"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21569,7 +21582,7 @@
 },
 "parent": null,
 "relations": [
-"16to4fn"
+"1q6jbbm"
 ],
 "color": "gray",
 "line": "dashed",
@@ -21942,7 +21955,8 @@
 "parent": null,
 "relations": [
 "qhe9j9",
-"1mfkjc4"
+"1mfkjc4",
+"6tmxl3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22089,7 +22103,7 @@
 },
 "parent": null,
 "relations": [
-"1pg40rj"
+"14o7oz4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22139,7 +22153,7 @@
 },
 "parent": null,
 "relations": [
-"648ixk"
+"1tcnhnd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22224,7 +22238,7 @@
 },
 "parent": null,
 "relations": [
-"1ob93qb"
+"1qamzs2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22322,8 +22336,8 @@
 },
 "parent": null,
 "relations": [
-"nhep6c",
-"3s091x"
+"3s091x",
+"pm3mgr"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22482,7 +22496,7 @@
 },
 "parent": null,
 "relations": [
-"j1bf5v"
+"l7ccgc"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22568,7 +22582,7 @@
 },
 "parent": null,
 "relations": [
-"11l0cp4"
+"1iirn6x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22716,7 +22730,7 @@
 },
 "parent": null,
 "relations": [
-"ge7rkf"
+"z3z08e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22852,7 +22866,7 @@
 },
 "parent": null,
 "relations": [
-"a7lm9k"
+"1dreu2h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22988,7 +23002,7 @@
 },
 "parent": null,
 "relations": [
-"aok9j0"
+"x4u73x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -23086,9 +23100,9 @@
 },
 "parent": null,
 "relations": [
-"1amybls",
 "1rnkjs7",
-"18bte9y"
+"18bte9y",
+"x2x4dh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -23357,7 +23371,7 @@
 },
 "parent": null,
 "relations": [
-"4wuk0b"
+"9or04q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -23615,7 +23629,7 @@
 },
 "parent": null,
 "relations": [
-"e2yj2a"
+"1fh5s8z"
 ],
 "color": "gray",
 "line": "dashed",
@@ -23727,7 +23741,7 @@
 },
 "parent": null,
 "relations": [
-"13qzhhl"
+"jf850q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -23801,7 +23815,7 @@
 },
 "parent": null,
 "relations": [
-"2tz7ui"
+"xhswlu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -23863,7 +23877,7 @@
 },
 "parent": null,
 "relations": [
-"h6tzxk"
+"ha6j7t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -23937,7 +23951,7 @@
 },
 "parent": null,
 "relations": [
-"sntzya"
+"89yjlv"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24023,7 +24037,7 @@
 },
 "parent": null,
 "relations": [
-"103stsa"
+"yo0hxh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24145,9 +24159,9 @@
 },
 "parent": null,
 "relations": [
-"1mohp9k",
-"1ixbvl9",
-"7l2fcf"
+"aumf3j",
+"qr52k",
+"oflqsu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24196,7 +24210,7 @@
 },
 "parent": null,
 "relations": [
-"la13kc"
+"zs9qz1"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24282,7 +24296,7 @@
 },
 "parent": null,
 "relations": [
-"rqefc7"
+"pj94ue"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24392,7 +24406,7 @@
 },
 "parent": null,
 "relations": [
-"158wy1u"
+"n1qzpd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24442,7 +24456,7 @@
 },
 "parent": null,
 "relations": [
-"ub9pci"
+"13ipt1v"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24698,8 +24712,8 @@
 },
 "parent": null,
 "relations": [
-"ygxeup",
-"133p9kj"
+"cm6l5e",
+"5nef2s"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24808,7 +24822,7 @@
 },
 "parent": null,
 "relations": [
-"noe7k6"
+"17nopyd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24858,7 +24872,7 @@
 },
 "parent": null,
 "relations": [
-"xa5z5k"
+"1iejltn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24956,7 +24970,7 @@
 },
 "parent": null,
 "relations": [
-"ai2ryi"
+"1sj8z1o"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25090,8 +25104,8 @@
 },
 "parent": null,
 "relations": [
-"1b8h781",
-"14x1s8t"
+"abone8",
+"1isu32q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25164,7 +25178,7 @@
 },
 "parent": null,
 "relations": [
-"45zw14"
+"18hdt6v"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25214,7 +25228,7 @@
 },
 "parent": null,
 "relations": [
-"sobgag"
+"1qqfit5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25324,8 +25338,8 @@
 },
 "parent": null,
 "relations": [
-"8kwd4d",
-"1c7b4w5"
+"nzu6oc",
+"yaiko2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25374,7 +25388,7 @@
 },
 "parent": null,
 "relations": [
-"1xiw3ed"
+"wcxgac"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25412,7 +25426,7 @@
 },
 "parent": null,
 "relations": [
-"osqdom"
+"pn58lh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25522,7 +25536,7 @@
 },
 "parent": null,
 "relations": [
-"eewoeq"
+"195f2er"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25632,7 +25646,7 @@
 },
 "parent": null,
 "relations": [
-"12u5ish"
+"19ou9ts"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25706,7 +25720,7 @@
 },
 "parent": null,
 "relations": [
-"1oyflsb"
+"kpktze"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25768,7 +25782,7 @@
 },
 "parent": null,
 "relations": [
-"1la7xb2"
+"8uaasd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25806,7 +25820,7 @@
 },
 "parent": null,
 "relations": [
-"16amk5e"
+"oh3w81"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25868,7 +25882,7 @@
 },
 "parent": null,
 "relations": [
-"z59cqf"
+"3ju75i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -25954,7 +25968,7 @@
 },
 "parent": null,
 "relations": [
-"r238a"
+"yvypvf"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26226,7 +26240,7 @@
 },
 "parent": null,
 "relations": [
-"jzby7r"
+"iqsuk0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26288,7 +26302,7 @@
 },
 "parent": null,
 "relations": [
-"hsolnz"
+"1jbch66"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26473,7 +26487,7 @@
 },
 "parent": null,
 "relations": [
-"56kime"
+"hrh3tx"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26656,7 +26670,7 @@
 },
 "parent": null,
 "relations": [
-"rx0mdc"
+"tvm6n7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26766,7 +26780,7 @@
 },
 "parent": null,
 "relations": [
-"12f1txk"
+"7gnr4f"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26900,7 +26914,7 @@
 },
 "parent": null,
 "relations": [
-"161sjjf"
+"1jhb0x4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26938,7 +26952,7 @@
 },
 "parent": null,
 "relations": [
-"1ls656t"
+"1blee6c"
 ],
 "color": "gray",
 "line": "dashed",
@@ -27036,7 +27050,7 @@
 },
 "parent": null,
 "relations": [
-"kx5ui7"
+"1y8po9a"
 ],
 "color": "gray",
 "line": "dashed",
@@ -27456,7 +27470,7 @@
 },
 "parent": null,
 "relations": [
-"17o38tg"
+"1rjzqbp"
 ],
 "color": "gray",
 "line": "dashed",
@@ -27640,7 +27654,7 @@
 },
 "parent": null,
 "relations": [
-"18gjgrh"
+"1mo6fjm"
 ],
 "color": "gray",
 "line": "dashed",
@@ -28998,7 +29012,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -29087,7 +29101,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1nud3y1"
+"4ebqyg"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29124,7 +29138,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"wp421p"
+"1i4r5de"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29161,7 +29175,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1advdpl"
+"10z9jd4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29258,7 +29272,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"10z8km2"
+"okdaia"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29295,7 +29309,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"159s9d5"
+"12rbcjs"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29392,7 +29406,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1nn905v"
+"vbee0g"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29453,7 +29467,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"qc82qb"
+"1dvrysy"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29526,7 +29540,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"48jdl9"
+"1uukxka"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29563,7 +29577,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"mnqpa2"
+"slb97f"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29600,7 +29614,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"11dt53m"
+"1v9ylv7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29637,7 +29651,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1uukxzn"
+"1qtb06q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29674,7 +29688,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1qtazin"
+"1hdnnos"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29723,7 +29737,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"18p2wj6"
+"8p6hul"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29760,7 +29774,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1x6ezpv"
+"5cn5x5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29797,7 +29811,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1snf31v"
+"194ug5u"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29884,7 +29898,7 @@
 },
 "parent": null,
 "relations": [
-"1ls656t"
+"1blee6c"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29922,7 +29936,7 @@
 },
 "parent": null,
 "relations": [
-"12f1txk"
+"7gnr4f"
 ],
 "color": "gray",
 "line": "dashed",
@@ -29984,7 +29998,7 @@
 },
 "parent": null,
 "relations": [
-"kx5ui7"
+"1y8po9a"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30058,7 +30072,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"97q21p"
+"1aw20bi"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30143,7 +30157,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"go8umk"
+"elbpe5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30180,7 +30194,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"2yzlen"
+"1nvjt20"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30229,7 +30243,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1h5tgk8"
+"es41nd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30266,7 +30280,7 @@
 },
 "parent": "platform.plugin",
 "relations": [
-"1cdii7h"
+"n1ui6"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30598,7 +30612,7 @@
 },
 "parent": null,
 "relations": [
-"1n4z18d"
+"1hvr0v0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30660,7 +30674,7 @@
 },
 "parent": null,
 "relations": [
-"1uz7dv2"
+"9h7zgh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30698,7 +30712,7 @@
 },
 "parent": null,
 "relations": [
-"91jri9"
+"wtgds0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -30821,7 +30835,7 @@
 },
 "parent": null,
 "relations": [
-"rx0mdc"
+"tvm6n7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -31205,7 +31219,7 @@
 },
 "parent": null,
 "relations": [
-"hdqyw2"
+"54lfnn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -31526,7 +31540,7 @@
 },
 "parent": null,
 "relations": [
-"56kime"
+"hrh3tx"
 ],
 "color": "gray",
 "line": "dashed",
@@ -32454,7 +32468,7 @@
 },
 "parent": null,
 "relations": [
-"1pg40rj"
+"14o7oz4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -32504,7 +32518,7 @@
 },
 "parent": null,
 "relations": [
-"osqdom"
+"pn58lh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -32554,7 +32568,7 @@
 },
 "parent": null,
 "relations": [
-"hsolnz"
+"1jbch66"
 ],
 "color": "gray",
 "line": "dashed",
@@ -32604,7 +32618,7 @@
 },
 "parent": null,
 "relations": [
-"r238a"
+"yvypvf"
 ],
 "color": "gray",
 "line": "dashed",
@@ -33346,7 +33360,7 @@
 },
 "parent": null,
 "relations": [
-"648ixk"
+"1tcnhnd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35161,7 +35175,8 @@
 "1cn6cfg",
 "1c0zh24",
 "qhe9j9",
-"1mfkjc4"
+"1mfkjc4",
+"6tmxl3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35210,7 +35225,7 @@
 },
 "parent": null,
 "relations": [
-"ai2ryi"
+"1sj8z1o"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35334,7 +35349,7 @@
 },
 "parent": null,
 "relations": [
-"12u5ish"
+"19ou9ts"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35396,7 +35411,7 @@
 },
 "parent": null,
 "relations": [
-"hdqyw2"
+"54lfnn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35446,7 +35461,7 @@
 },
 "parent": null,
 "relations": [
-"56kime"
+"hrh3tx"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35496,7 +35511,7 @@
 },
 "parent": null,
 "relations": [
-"1pg40rj"
+"14o7oz4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35546,7 +35561,7 @@
 },
 "parent": null,
 "relations": [
-"648ixk"
+"1tcnhnd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35598,13 +35613,13 @@
 "1l1lmhs",
 "tg66a0",
 "1jklrfb",
-"j1bf5v",
-"nhep6c",
+"l7ccgc",
 "3s091x",
-"1byhfpt",
+"pm3mgr",
 "9dmjcg",
-"11l0cp4",
-"1ob93qb"
+"1ta2tjn",
+"1iirn6x",
+"1qamzs2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35753,7 +35768,7 @@
 },
 "parent": null,
 "relations": [
-"a7lm9k"
+"1dreu2h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35803,9 +35818,9 @@
 },
 "parent": null,
 "relations": [
-"1amybls",
 "1rnkjs7",
-"18bte9y"
+"18bte9y",
+"x2x4dh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35854,7 +35869,7 @@
 },
 "parent": null,
 "relations": [
-"2tz7ui"
+"xhswlu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35904,9 +35919,9 @@
 },
 "parent": null,
 "relations": [
-"1mohp9k",
-"1ixbvl9",
-"7l2fcf"
+"aumf3j",
+"qr52k",
+"oflqsu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -35955,7 +35970,7 @@
 },
 "parent": null,
 "relations": [
-"158wy1u"
+"n1qzpd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -36005,7 +36020,7 @@
 },
 "parent": null,
 "relations": [
-"ub9pci"
+"13ipt1v"
 ],
 "color": "gray",
 "line": "dashed",
@@ -36055,7 +36070,7 @@
 },
 "parent": null,
 "relations": [
-"la13kc"
+"zs9qz1"
 ],
 "color": "gray",
 "line": "dashed",
@@ -36117,7 +36132,7 @@
 },
 "parent": null,
 "relations": [
-"noe7k6"
+"17nopyd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -36229,8 +36244,8 @@
 },
 "parent": null,
 "relations": [
-"8kwd4d",
-"1c7b4w5"
+"nzu6oc",
+"yaiko2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -36279,7 +36294,7 @@
 },
 "parent": null,
 "relations": [
-"z59cqf"
+"3ju75i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -36329,8 +36344,8 @@
 },
 "parent": null,
 "relations": [
-"5k1tlp",
-"yfv0fq"
+"84aqb9",
+"yk8be9"
 ],
 "color": "gray",
 "line": "dashed",
@@ -36847,7 +36862,7 @@
 "parent": null,
 "relations": [
 "1x158q0",
-"ge7rkf"
+"z3z08e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -36884,7 +36899,7 @@
 },
 "parent": null,
 "relations": [
-"a7lm9k"
+"1dreu2h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -37236,7 +37251,7 @@
 },
 "parent": null,
 "relations": [
-"aok9j0"
+"x4u73x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -37286,9 +37301,9 @@
 },
 "parent": null,
 "relations": [
-"1amybls",
 "1rnkjs7",
-"18bte9y"
+"18bte9y",
+"x2x4dh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -37340,7 +37355,7 @@
 "8s3bzc",
 "r68tas",
 "j7djwq",
-"4wuk0b"
+"9or04q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -37389,7 +37404,7 @@
 },
 "parent": null,
 "relations": [
-"xa5z5k"
+"1iejltn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -38176,8 +38191,8 @@
 },
 "parent": null,
 "relations": [
-"1ls656t",
-"161sjjf"
+"1blee6c",
+"1jhb0x4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -38317,7 +38332,7 @@
 "parent": null,
 "relations": [
 "1cwasan",
-"e2yj2a"
+"1fh5s8z"
 ],
 "color": "gray",
 "line": "dashed",
@@ -38596,7 +38611,7 @@
 "parent": null,
 "relations": [
 "15uvu3k",
-"13qzhhl"
+"jf850q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -38645,7 +38660,7 @@
 },
 "parent": null,
 "relations": [
-"2tz7ui"
+"xhswlu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -38696,7 +38711,7 @@
 "parent": null,
 "relations": [
 "j7oqbz",
-"h6tzxk"
+"ha6j7t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -38836,7 +38851,7 @@
 "parent": null,
 "relations": [
 "1r8v1wt",
-"sntzya"
+"89yjlv"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39026,7 +39041,7 @@
 },
 "parent": null,
 "relations": [
-"103stsa"
+"yo0hxh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39076,9 +39091,9 @@
 },
 "parent": null,
 "relations": [
-"1mohp9k",
-"1ixbvl9",
-"7l2fcf"
+"aumf3j",
+"qr52k",
+"oflqsu"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39267,7 +39282,7 @@
 },
 "parent": null,
 "relations": [
-"rqefc7"
+"pj94ue"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39317,7 +39332,7 @@
 },
 "parent": null,
 "relations": [
-"158wy1u"
+"n1qzpd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39462,7 +39477,7 @@
 },
 "parent": null,
 "relations": [
-"ub9pci"
+"13ipt1v"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39607,7 +39622,7 @@
 },
 "parent": null,
 "relations": [
-"la13kc"
+"zs9qz1"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39866,8 +39881,8 @@
 "parent": null,
 "relations": [
 "mwfmjw",
-"ygxeup",
-"133p9kj"
+"cm6l5e",
+"5nef2s"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39916,7 +39931,7 @@
 },
 "parent": null,
 "relations": [
-"noe7k6"
+"17nopyd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -39954,7 +39969,7 @@
 },
 "parent": null,
 "relations": [
-"xa5z5k"
+"1iejltn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40016,7 +40031,7 @@
 },
 "parent": null,
 "relations": [
-"ai2ryi"
+"1sj8z1o"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40066,7 +40081,7 @@
 },
 "parent": null,
 "relations": [
-"1xiw3ed"
+"wcxgac"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40734,10 +40749,10 @@
 },
 "parent": null,
 "relations": [
-"45zw14",
-"1b8h781",
-"14x1s8t",
-"sobgag"
+"18hdt6v",
+"abone8",
+"1isu32q",
+"1qqfit5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40786,8 +40801,8 @@
 },
 "parent": null,
 "relations": [
-"8kwd4d",
-"1c7b4w5"
+"nzu6oc",
+"yaiko2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40836,7 +40851,7 @@
 },
 "parent": null,
 "relations": [
-"1xiw3ed"
+"wcxgac"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40874,7 +40889,7 @@
 },
 "parent": null,
 "relations": [
-"osqdom"
+"pn58lh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40912,7 +40927,7 @@
 },
 "parent": null,
 "relations": [
-"eewoeq"
+"195f2er"
 ],
 "color": "gray",
 "line": "dashed",
@@ -40962,7 +40977,7 @@
 },
 "parent": null,
 "relations": [
-"12u5ish"
+"19ou9ts"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41012,7 +41027,7 @@
 },
 "parent": null,
 "relations": [
-"jzby7r"
+"iqsuk0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41202,7 +41217,7 @@
 },
 "parent": null,
 "relations": [
-"jzby7r"
+"iqsuk0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41240,7 +41255,7 @@
 },
 "parent": null,
 "relations": [
-"hsolnz"
+"1jbch66"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41463,10 +41478,10 @@
 },
 "parent": null,
 "relations": [
-"1la7xb2",
-"1oyflsb",
-"18gjgrh",
-"16amk5e"
+"8uaasd",
+"kpktze",
+"1mo6fjm",
+"oh3w81"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41503,7 +41518,7 @@
 },
 "parent": null,
 "relations": [
-"z59cqf"
+"3ju75i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41541,7 +41556,7 @@
 },
 "parent": null,
 "relations": [
-"r238a"
+"yvypvf"
 ],
 "color": "gray",
 "line": "dashed",
@@ -41977,7 +41992,7 @@
 },
 "parent": null,
 "relations": [
-"j5q3z8"
+"1x0akdh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -42027,8 +42042,8 @@
 },
 "parent": null,
 "relations": [
-"5k1tlp",
-"yfv0fq"
+"84aqb9",
+"yk8be9"
 ],
 "color": "gray",
 "line": "dashed",
@@ -42315,8 +42330,8 @@
 },
 "parent": null,
 "relations": [
-"1n4z18d",
-"1uz7dv2"
+"1hvr0v0",
+"9h7zgh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43183,7 +43198,7 @@
 },
 "parent": null,
 "relations": [
-"h6tzxk"
+"ha6j7t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43295,7 +43310,7 @@
 },
 "parent": null,
 "relations": [
-"lv8t51"
+"8sbd0i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43407,7 +43422,7 @@
 },
 "parent": null,
 "relations": [
-"e2yj2a"
+"1fh5s8z"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43520,7 +43535,8 @@
 "parent": null,
 "relations": [
 "qhe9j9",
-"1mfkjc4"
+"1mfkjc4",
+"6tmxl3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43569,7 +43585,7 @@
 },
 "parent": null,
 "relations": [
-"ge7rkf"
+"z3z08e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43669,7 +43685,7 @@
 },
 "parent": null,
 "relations": [
-"161sjjf"
+"1jhb0x4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43719,7 +43735,7 @@
 },
 "parent": null,
 "relations": [
-"13qzhhl"
+"jf850q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43769,7 +43785,7 @@
 },
 "parent": null,
 "relations": [
-"sntzya"
+"89yjlv"
 ],
 "color": "gray",
 "line": "dashed",
@@ -43996,11 +44012,11 @@
 "parent": null,
 "relations": [
 "v6yvot",
-"11o932f",
 "djd9es",
-"f42uof",
-"xxpdhp",
-"nupyws"
+"1x0kb9h",
+"1dgn1mo",
+"yjew3y",
+"18vty0t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -44946,7 +44962,7 @@
 "parent": null,
 "relations": [
 "x6pikp",
-"1qbq3c9"
+"1wiwqdm"
 ],
 "color": "gray",
 "line": "dashed",
@@ -45405,8 +45421,8 @@
 },
 "parent": null,
 "relations": [
-"91jri9",
-"rx0mdc"
+"wtgds0",
+"tvm6n7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -45457,8 +45473,8 @@
 "parent": null,
 "relations": [
 "1jhax0x",
-"16to4fn",
-"123yd0m"
+"1q6jbbm",
+"qscsht"
 ],
 "color": "gray",
 "line": "dashed",
@@ -45609,8 +45625,8 @@
 "relations": [
 "ttq3vz",
 "1svglou",
-"12f1txk",
-"kx5ui7"
+"7gnr4f",
+"1y8po9a"
 ],
 "color": "gray",
 "line": "dashed",
@@ -45884,7 +45900,7 @@
 },
 "parent": null,
 "relations": [
-"1ob93qb"
+"1qamzs2"
 ],
 "color": "gray",
 "line": "dashed",
@@ -47155,8 +47171,8 @@
 },
 "parent": null,
 "relations": [
-"nhep6c",
-"3s091x"
+"3s091x",
+"pm3mgr"
 ],
 "color": "gray",
 "line": "dashed",
@@ -47291,7 +47307,7 @@
 },
 "parent": null,
 "relations": [
-"j1bf5v"
+"l7ccgc"
 ],
 "color": "gray",
 "line": "dashed",
@@ -47365,7 +47381,7 @@
 },
 "parent": null,
 "relations": [
-"11l0cp4"
+"1iirn6x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -47489,7 +47505,7 @@
 },
 "parent": null,
 "relations": [
-"4wuk0b"
+"9or04q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -47563,7 +47579,7 @@
 },
 "parent": null,
 "relations": [
-"eewoeq"
+"195f2er"
 ],
 "color": "gray",
 "line": "dashed",
@@ -47664,7 +47680,7 @@
 "1em1n1r",
 "v6yvot",
 "1gl228p",
-"f42uof"
+"1dgn1mo"
 ],
 "color": "gray",
 "line": "dashed",
@@ -47862,8 +47878,8 @@
 },
 "parent": null,
 "relations": [
-"11o932f",
-"djd9es"
+"djd9es",
+"1x0kb9h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48034,7 +48050,7 @@
 },
 "parent": null,
 "relations": [
-"nupyws"
+"18vty0t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48072,7 +48088,7 @@
 },
 "parent": null,
 "relations": [
-"xxpdhp"
+"yjew3y"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48345,7 +48361,7 @@
 },
 "parent": null,
 "relations": [
-"123yd0m"
+"qscsht"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48395,7 +48411,7 @@
 },
 "parent": null,
 "relations": [
-"16to4fn"
+"1q6jbbm"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48445,7 +48461,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"1gvru3y"
+"9jnyz3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48743,8 +48759,8 @@
 },
 "parent": "platform.infra",
 "relations": [
-"5mjtnz",
-"ux33lt"
+"120wikl",
+"gku6v4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48793,7 +48809,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"bnxxqx"
+"1dgipx6"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48843,7 +48859,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"vdz7zy"
+"1e5okl9"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48893,7 +48909,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"lk1wn6"
+"43bg77"
 ],
 "color": "gray",
 "line": "dashed",
@@ -48943,7 +48959,7 @@
 },
 "parent": "platform.infra",
 "relations": [
-"8i8xg1"
+"190fkvt"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49165,8 +49181,8 @@
 },
 "parent": null,
 "relations": [
-"ygxeup",
-"133p9kj"
+"cm6l5e",
+"5nef2s"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49215,8 +49231,8 @@
 },
 "parent": null,
 "relations": [
-"1b8h781",
-"14x1s8t"
+"abone8",
+"1isu32q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49301,7 +49317,7 @@
 },
 "parent": null,
 "relations": [
-"1oyflsb"
+"kpktze"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49363,7 +49379,7 @@
 },
 "parent": null,
 "relations": [
-"j5q3z8"
+"1x0akdh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49437,7 +49453,7 @@
 },
 "parent": null,
 "relations": [
-"17o38tg"
+"1rjzqbp"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49573,7 +49589,7 @@
 },
 "parent": null,
 "relations": [
-"103stsa"
+"yo0hxh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49635,7 +49651,7 @@
 },
 "parent": null,
 "relations": [
-"rqefc7"
+"pj94ue"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49721,7 +49737,7 @@
 },
 "parent": null,
 "relations": [
-"45zw14"
+"18hdt6v"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49783,7 +49799,7 @@
 },
 "parent": null,
 "relations": [
-"1la7xb2"
+"8uaasd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -49893,7 +49909,7 @@
 },
 "parent": null,
 "relations": [
-"lv8t51"
+"8sbd0i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -50017,7 +50033,7 @@
 },
 "parent": null,
 "relations": [
-"1qbq3c9"
+"1wiwqdm"
 ],
 "color": "gray",
 "line": "dashed",
@@ -50091,7 +50107,7 @@
 },
 "parent": null,
 "relations": [
-"aok9j0"
+"x4u73x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -50165,7 +50181,7 @@
 },
 "parent": null,
 "relations": [
-"sobgag"
+"1qqfit5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -50251,7 +50267,7 @@
 },
 "parent": null,
 "relations": [
-"16amk5e"
+"oh3w81"
 ],
 "color": "gray",
 "line": "dashed",
@@ -50531,7 +50547,7 @@
 },
 "parent": null,
 "relations": [
-"e2yj2a"
+"1fh5s8z"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51171,7 +51187,7 @@
 },
 "parent": null,
 "relations": [
-"h6tzxk"
+"ha6j7t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51221,7 +51237,7 @@
 },
 "parent": null,
 "relations": [
-"lv8t51"
+"8sbd0i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51360,7 +51376,8 @@
 "parent": null,
 "relations": [
 "qhe9j9",
-"1mfkjc4"
+"1mfkjc4",
+"6tmxl3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51409,7 +51426,7 @@
 },
 "parent": null,
 "relations": [
-"ge7rkf"
+"z3z08e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51497,7 +51514,7 @@
 },
 "parent": null,
 "relations": [
-"161sjjf"
+"1jhb0x4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51547,7 +51564,7 @@
 },
 "parent": null,
 "relations": [
-"13qzhhl"
+"jf850q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51597,7 +51614,7 @@
 },
 "parent": null,
 "relations": [
-"sntzya"
+"89yjlv"
 ],
 "color": "gray",
 "line": "dashed",
@@ -51800,11 +51817,11 @@
 "parent": null,
 "relations": [
 "v6yvot",
-"11o932f",
 "djd9es",
-"f42uof",
-"xxpdhp",
-"nupyws"
+"1x0kb9h",
+"1dgn1mo",
+"yjew3y",
+"18vty0t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -53564,8 +53581,8 @@
 "relations": [
 "ttq3vz",
 "1svglou",
-"12f1txk",
-"kx5ui7"
+"7gnr4f",
+"1y8po9a"
 ],
 "color": "gray",
 "line": "dashed",
@@ -53772,7 +53789,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -54006,7 +54023,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -54506,7 +54523,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -54756,7 +54773,7 @@
 },
 "parent": null,
 "relations": [
-"97q21p"
+"1aw20bi"
 ],
 "color": "gray",
 "line": "dashed",
@@ -54793,7 +54810,7 @@
 },
 "parent": null,
 "relations": [
-"go8umk"
+"elbpe5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -54842,7 +54859,7 @@
 },
 "parent": null,
 "relations": [
-"2yzlen"
+"1nvjt20"
 ],
 "color": "gray",
 "line": "dashed",
@@ -54903,7 +54920,7 @@
 },
 "parent": null,
 "relations": [
-"1h5tgk8"
+"es41nd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -54964,7 +54981,7 @@
 },
 "parent": null,
 "relations": [
-"1cdii7h"
+"n1ui6"
 ],
 "color": "gray",
 "line": "dashed",
@@ -55188,7 +55205,7 @@
 },
 "parent": null,
 "relations": [
-"91jri9"
+"wtgds0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -55225,7 +55242,7 @@
 },
 "parent": null,
 "relations": [
-"1nud3y1"
+"4ebqyg"
 ],
 "color": "gray",
 "line": "dashed",
@@ -55262,7 +55279,7 @@
 },
 "parent": null,
 "relations": [
-"wp421p"
+"1i4r5de"
 ],
 "color": "gray",
 "line": "dashed",
@@ -55459,7 +55476,7 @@
 },
 "parent": null,
 "relations": [
-"1n4z18d"
+"1hvr0v0"
 ],
 "color": "gray",
 "line": "dashed",
@@ -55710,7 +55727,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -55869,7 +55886,7 @@
 },
 "parent": null,
 "relations": [
-"1nud3y1"
+"4ebqyg"
 ],
 "color": "gray",
 "line": "dashed",
@@ -55906,7 +55923,7 @@
 },
 "parent": null,
 "relations": [
-"97q21p"
+"1aw20bi"
 ],
 "color": "gray",
 "line": "dashed",
@@ -55943,7 +55960,7 @@
 },
 "parent": null,
 "relations": [
-"48jdl9"
+"1uukxka"
 ],
 "color": "gray",
 "line": "dashed",
@@ -55980,7 +55997,7 @@
 },
 "parent": null,
 "relations": [
-"1uukxzn"
+"1qtb06q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56017,7 +56034,7 @@
 },
 "parent": null,
 "relations": [
-"1qtazin"
+"1hdnnos"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56155,7 +56172,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -56242,7 +56259,7 @@
 },
 "parent": null,
 "relations": [
-"1advdpl"
+"10z9jd4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56279,7 +56296,7 @@
 },
 "parent": null,
 "relations": [
-"go8umk"
+"elbpe5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56316,7 +56333,7 @@
 },
 "parent": null,
 "relations": [
-"mnqpa2"
+"slb97f"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56453,7 +56470,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -56504,7 +56521,7 @@
 },
 "parent": null,
 "relations": [
-"10z8km2"
+"okdaia"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56541,7 +56558,7 @@
 },
 "parent": null,
 "relations": [
-"2yzlen"
+"1nvjt20"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56721,7 +56738,7 @@
 },
 "parent": null,
 "relations": [
-"159s9d5"
+"12rbcjs"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56758,7 +56775,7 @@
 },
 "parent": null,
 "relations": [
-"18p2wj6"
+"8p6hul"
 ],
 "color": "gray",
 "line": "dashed",
@@ -56896,7 +56913,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -56983,7 +57000,7 @@
 },
 "parent": null,
 "relations": [
-"1nn905v"
+"vbee0g"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57020,7 +57037,7 @@
 },
 "parent": null,
 "relations": [
-"1h5tgk8"
+"es41nd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57069,7 +57086,7 @@
 },
 "parent": null,
 "relations": [
-"1snf31v"
+"194ug5u"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57211,7 +57228,7 @@
 },
 "parent": null,
 "relations": [
-"qc82qb"
+"1dvrysy"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57539,7 +57556,7 @@
 },
 "parent": null,
 "relations": [
-"wp421p"
+"1i4r5de"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57588,7 +57605,7 @@
 },
 "parent": null,
 "relations": [
-"1advdpl"
+"10z9jd4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57625,7 +57642,7 @@
 },
 "parent": null,
 "relations": [
-"10z8km2"
+"okdaia"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57662,7 +57679,7 @@
 },
 "parent": null,
 "relations": [
-"159s9d5"
+"12rbcjs"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57699,7 +57716,7 @@
 },
 "parent": null,
 "relations": [
-"1nn905v"
+"vbee0g"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57748,7 +57765,7 @@
 },
 "parent": null,
 "relations": [
-"qc82qb"
+"1dvrysy"
 ],
 "color": "gray",
 "line": "dashed",
@@ -57960,7 +57977,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Conventions, learnings, ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
+"txt": "Conventions, learnings, the pattern wiki (project/patterns), ADRs, specs, plans, brainstorms, C4 diagrams (spec/model/views .c4 + the layouted model.likec4.json), the domain-model business-rules register, and the sync coverage summary"
 },
 "tags": [],
 "notation": "Data store",
@@ -58011,7 +58028,7 @@
 },
 "parent": null,
 "relations": [
-"11dt53m"
+"1v9ylv7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58048,7 +58065,7 @@
 },
 "parent": null,
 "relations": [
-"1x6ezpv"
+"5cn5x5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58097,7 +58114,7 @@
 },
 "parent": null,
 "relations": [
-"1uz7dv2"
+"9h7zgh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58135,7 +58152,7 @@
 },
 "parent": null,
 "relations": [
-"1cdii7h"
+"n1ui6"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58352,7 +58369,7 @@
 },
 "parent": null,
 "relations": [
-"48jdl9"
+"1uukxka"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58389,7 +58406,7 @@
 },
 "parent": null,
 "relations": [
-"mnqpa2"
+"slb97f"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58426,7 +58443,7 @@
 },
 "parent": null,
 "relations": [
-"11dt53m"
+"1v9ylv7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58568,7 +58585,7 @@
 },
 "parent": null,
 "relations": [
-"1uukxzn"
+"1qtb06q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58710,7 +58727,7 @@
 },
 "parent": null,
 "relations": [
-"1qtazin"
+"1hdnnos"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58890,7 +58907,7 @@
 },
 "parent": null,
 "relations": [
-"18p2wj6"
+"8p6hul"
 ],
 "color": "gray",
 "line": "dashed",
@@ -58927,7 +58944,7 @@
 },
 "parent": null,
 "relations": [
-"1x6ezpv"
+"5cn5x5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -59116,7 +59133,7 @@
 },
 "parent": null,
 "relations": [
-"1snf31v"
+"194ug5u"
 ],
 "color": "gray",
 "line": "dashed",
@@ -59341,7 +59358,7 @@
 },
 "parent": null,
 "relations": [
-"6xcjtk"
+"1usdj3k"
 ],
 "color": "gray",
 "line": "dashed",
@@ -59528,7 +59545,7 @@
 },
 "parent": null,
 "relations": [
-"1pel8q4"
+"1qr7gi5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -59756,8 +59773,8 @@
 },
 "parent": null,
 "relations": [
-"rx0mdc",
-"12f1txk"
+"tvm6n7",
+"7gnr4f"
 ],
 "color": "gray",
 "line": "dashed",
@@ -59794,7 +59811,7 @@
 },
 "parent": null,
 "relations": [
-"1ls656t"
+"1blee6c"
 ],
 "color": "gray",
 "line": "dashed",
@@ -59982,7 +59999,7 @@
 },
 "parent": null,
 "relations": [
-"kx5ui7"
+"1y8po9a"
 ],
 "color": "gray",
 "line": "dashed",
@@ -60251,8 +60268,8 @@
 },
 "parent": null,
 "relations": [
-"nhep6c",
-"3s091x"
+"3s091x",
+"pm3mgr"
 ],
 "color": "gray",
 "line": "dashed",
@@ -60292,7 +60309,7 @@
 "1em1n1r",
 "v6yvot",
 "1gl228p",
-"f42uof"
+"1dgn1mo"
 ],
 "color": "gray",
 "line": "dashed",
@@ -60381,7 +60398,7 @@
 },
 "parent": null,
 "relations": [
-"1gvru3y"
+"9jnyz3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62087,7 +62104,7 @@
 },
 "parent": null,
 "relations": [
-"j1bf5v"
+"l7ccgc"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62187,7 +62204,7 @@
 },
 "parent": null,
 "relations": [
-"eewoeq"
+"195f2er"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62287,7 +62304,7 @@
 },
 "parent": null,
 "relations": [
-"vdz7zy"
+"1e5okl9"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62387,8 +62404,8 @@
 },
 "parent": null,
 "relations": [
-"ygxeup",
-"133p9kj"
+"cm6l5e",
+"5nef2s"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62437,8 +62454,8 @@
 },
 "parent": null,
 "relations": [
-"1b8h781",
-"14x1s8t"
+"abone8",
+"1isu32q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62487,7 +62504,7 @@
 },
 "parent": null,
 "relations": [
-"1oyflsb"
+"kpktze"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62537,7 +62554,7 @@
 },
 "parent": null,
 "relations": [
-"j5q3z8"
+"1x0akdh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62587,7 +62604,7 @@
 },
 "parent": null,
 "relations": [
-"17o38tg"
+"1rjzqbp"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62763,8 +62780,8 @@
 },
 "parent": null,
 "relations": [
-"5mjtnz",
-"ux33lt"
+"120wikl",
+"gku6v4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -62813,7 +62830,7 @@
 },
 "parent": null,
 "relations": [
-"bnxxqx"
+"1dgipx6"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63439,7 +63456,7 @@
 },
 "parent": null,
 "relations": [
-"4wuk0b"
+"9or04q"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63489,8 +63506,8 @@
 },
 "parent": null,
 "relations": [
-"11o932f",
-"djd9es"
+"djd9es",
+"1x0kb9h"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63527,8 +63544,8 @@
 },
 "parent": null,
 "relations": [
-"5mjtnz",
-"ux33lt"
+"120wikl",
+"gku6v4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63577,7 +63594,7 @@
 },
 "parent": null,
 "relations": [
-"103stsa"
+"yo0hxh"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63627,7 +63644,7 @@
 },
 "parent": null,
 "relations": [
-"rqefc7"
+"pj94ue"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63677,7 +63694,7 @@
 },
 "parent": null,
 "relations": [
-"45zw14"
+"18hdt6v"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63727,7 +63744,7 @@
 },
 "parent": null,
 "relations": [
-"1la7xb2"
+"8uaasd"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63777,7 +63794,7 @@
 },
 "parent": null,
 "relations": [
-"lv8t51"
+"8sbd0i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63827,7 +63844,7 @@
 },
 "parent": null,
 "relations": [
-"lk1wn6"
+"43bg77"
 ],
 "color": "gray",
 "line": "dashed",
@@ -63877,7 +63894,7 @@
 },
 "parent": null,
 "relations": [
-"8i8xg1"
+"190fkvt"
 ],
 "color": "gray",
 "line": "dashed",
@@ -64028,7 +64045,7 @@
 },
 "parent": null,
 "relations": [
-"lk1wn6"
+"43bg77"
 ],
 "color": "gray",
 "line": "dashed",
@@ -64438,7 +64455,7 @@
 },
 "parent": null,
 "relations": [
-"8i8xg1"
+"190fkvt"
 ],
 "color": "gray",
 "line": "dashed",
@@ -64721,7 +64738,7 @@
 },
 "parent": null,
 "relations": [
-"1qbq3c9"
+"1wiwqdm"
 ],
 "color": "gray",
 "line": "dashed",
@@ -64759,7 +64776,7 @@
 },
 "parent": null,
 "relations": [
-"1gvru3y"
+"9jnyz3"
 ],
 "color": "gray",
 "line": "dashed",
@@ -64902,7 +64919,7 @@
 },
 "parent": null,
 "relations": [
-"vdz7zy"
+"1e5okl9"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65298,7 +65315,7 @@
 },
 "parent": null,
 "relations": [
-"11l0cp4"
+"1iirn6x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65348,7 +65365,7 @@
 },
 "parent": null,
 "relations": [
-"nupyws"
+"18vty0t"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65410,7 +65427,7 @@
 },
 "parent": null,
 "relations": [
-"123yd0m"
+"qscsht"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65460,7 +65477,7 @@
 },
 "parent": null,
 "relations": [
-"bnxxqx"
+"1dgipx6"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65510,7 +65527,7 @@
 },
 "parent": null,
 "relations": [
-"aok9j0"
+"x4u73x"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65548,7 +65565,7 @@
 },
 "parent": null,
 "relations": [
-"sobgag"
+"1qqfit5"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65598,7 +65615,7 @@
 },
 "parent": null,
 "relations": [
-"16amk5e"
+"oh3w81"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65823,7 +65840,7 @@
 },
 "parent": null,
 "relations": [
-"xxpdhp"
+"yjew3y"
 ],
 "color": "gray",
 "line": "dashed",
@@ -65861,7 +65878,7 @@
 },
 "parent": null,
 "relations": [
-"16to4fn"
+"1q6jbbm"
 ],
 "color": "gray",
 "line": "dashed",

@@ -2045,7 +2045,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=289   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples (286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub)
+PJ_TRIPLES=291   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples (289 -> 291 with the access suite's docker stub for the container probe, #8211 PR-E: two producer files; 286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub)
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2084,6 +2084,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/fresh-boot-ready.test.sh | doppler | exempt | text-only the derived producer apps/cla-evidence/infra/bootstrap.sh matches by basename only; the suite says bootstrap.sh only in assertion messages about the host bootstrap script and never runs the cla-evidence script'
   'apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh | cryptsetup | exempt | text-only luksOpen pipe site (the `cryptsetup luksOpen --key-file -` line in git-data-bootstrap.sh section 1) is outside the extracted store-verify unit; stub answers isLuks only'
   'apps/web-platform/infra/git-data-cutover-access.test.sh | doppler | exempt | arm-drain the finalizer stub (def 2450) drains stdin as the first act of its secrets set arm (S7c edit, wire assert FZ1); the other three doppler stubs refuse or serve get only and receive no piped set (3 non-test producers)'
+  'apps/web-platform/infra/git-data-cutover-access.test.sh | docker | drains | 1 | *'
   'apps/web-platform/infra/git-data-flag-precheck.test.sh | doppler | drains | 1 | = set'
   'apps/web-platform/infra/git-data-liveness.test.sh | curl | exempt | arm-drain def 180 drains in its --config arm at opener+4 and def 859 is a one-line printf stub whose body is cat >/dev/null (the finder reads the newline escape before cat as a word, so it cannot credit it); 122 piped --config - calls (reach T1)'
   'apps/web-platform/infra/git-data-luks-reopen.test.sh | cryptsetup | exempt | arm-drain the luksOpen arm reads the key (cat to key_seen) before any exit; keyed on the subcommand, not the flag'

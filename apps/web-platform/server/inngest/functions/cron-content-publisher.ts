@@ -21,7 +21,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import matter from "gray-matter";
+import { parseFrontMatterSafe } from "@/server/front-matter-guard";
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import {
@@ -636,10 +636,18 @@ export async function cronContentPublisherHandler({
           if (!name.endsWith(".md")) continue;
           const filePath = join(contentDir, name);
           const raw = await readFile(filePath, "utf-8");
-          let parsed: ReturnType<typeof matter>;
+          let parsed: ReturnType<typeof parseFrontMatterSafe>;
           try {
-            parsed = matter(raw);
-          } catch {
+            parsed = parseFrontMatterSafe(raw);
+          } catch (err) {
+            // Malformed YAML and a refused opener (a language tag, `----`) look alike here: either way the
+            // file's stale-scheduled alert is skipped, so say so instead of dropping it silently.
+            reportSilentFallback(err, {
+              feature: "cron-content-publisher",
+              op: "stale-content-frontmatter",
+              message: `Skipped ${name}: front matter could not be parsed`,
+              extra: { name },
+            });
             continue;
           }
           const status = parsed.data.status as string | undefined;
