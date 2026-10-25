@@ -105,7 +105,7 @@ Findings that changed the plan after implementation:
 
 **If this leaks, the user's workflow and credentials are exposed via:** an attacker-written issue or PR comment steering an unattended agent that holds `GH_TOKEN` and push/PR tools. Static framing lowers this; it does not remove it (annotate-only; no capability downgrade until #4672/#10196), and hosted Concierge `gh` output stays unframed.
 
-**Brand-survival threshold:** single-user incident
+- **Brand-survival threshold:** single-user incident
 
 `requires_cpo_signoff: true`. The CPO assessed this scope during the brainstorm. `soleur:engineering:review:user-impact-reviewer` runs at review time.
 
@@ -268,7 +268,7 @@ logs:
   retention: 90 days (PA-8)
 discoverability_test:
   command: git grep -c "subagent" -- apps/web-platform/server/untrusted-content.ts
-  expected_output: a non-zero count
+  expected_output: "untrusted-content.ts:"
 ```
 
 The discoverability command checks only that the field exists in source; static framing has no runtime emit, so this is the honest minimum.
