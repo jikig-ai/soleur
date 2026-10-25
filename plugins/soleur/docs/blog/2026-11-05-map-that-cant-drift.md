@@ -64,7 +64,7 @@ Enforcement that reports is still enforcement: the finding prints, names the pag
 
 The same idea also exists for a founder's own codebase — a companion post tells that story: [the map that only records what the agent saw]({{ site.url }}/blog/map-that-only-records-what-the-agent-saw/).
 
-This post expands one thread of [the four days we spent shipping a trust checklist]({{ site.url }}/blog/agentic-verification-checklist-shipped/) — the day-by-day account this story is a spoke of.
+This story is one spoke of [the four days we spent shipping a trust checklist]({{ site.url }}/blog/agentic-verification-checklist-shipped/), the day-by-day account of the whole arc.
 
 ## What a founder takes from this
 

@@ -16,7 +16,7 @@ tags:
 
 Every check guarding your company's work is a list of cases somebody remembered to write down. That is true of the checklist your assistant follows, the spot-checks you run before shipping, and the tests your AI writes for its own output. The list is only as good as the imagination behind it — and the imagination doing the listing has the same blind spots the rest of you does.
 
-We found out how much that costs the day we stopped writing lists and started writing rules. The very first run caught a real bug — one that had been sitting in production for months, behind a documented promise and a dedicated check that had never once seen it.
+We found out how much that costs the day we stopped writing lists and started writing rules. The very first run caught a real bug — one that had already survived two earlier fixes to the same drift, behind a documented promise and a dedicated check that had never once seen it.
 
 ## Your test list is your imagination
 
@@ -36,7 +36,7 @@ The first generated test we aimed was at a small utility that tidies repository 
 
 The generator's first run disagreed. It produced an address with a space sitting just in front of the suffix — an input no human picks, because no human thinks an address looks like that. The cleanup trimmed the ends first, then stripped the suffix — and the space the suffix had been hiding stepped out into the open, left behind at the end of the result, invisible to the eye. Run the tidy-up once, get one answer. Feed that answer back in, and the leading trim moves it again: a third answer. The documented contract said that was impossible. The code did it anyway.
 
-And the dedicated check we already had — a separate comparison built specifically to keep that cleanup honest — had never seen it either, because its own hand-picked list of cases contained nothing shaped like the offending input. The bug was months old. Every example we had ever written had walked around it.
+And the dedicated check we already had — a separate comparison built specifically to keep that cleanup honest — had never seen it either, because its own hand-picked list of cases contained nothing shaped like the offending input. It was the third time the same cleanup had drifted. Every example we had ever written had walked around it.
 
 ## The twin
 
@@ -58,7 +58,7 @@ All three are fixed: the watcher now counts the rules independently and demands 
 
 ## What the first day bought
 
-Example tests sample the cases you remembered. Rules plus generation find the one you didn't. That is the whole trade, and the first run already paid for the practice: the defect it caught was months old, living in code that carried a written promise and a purpose-built comparison check, and neither had ever seen the input that broke it.
+Example tests sample the cases you remembered. Rules plus generation find the one you didn't. That is the whole trade, and the first run already paid for the practice: the defect it caught had already lived through two fixes, sitting in code that carried a written promise and a purpose-built comparison check, and neither had ever seen the input that broke it.
 
 That is also the honest way to read any green light your tools show you. The value of a check is measured by what it can still find, not by how long it has stayed green — a check that never goes red might mean the work is good, or it might mean the check cannot see. This post expands one thread of [the four days we spent shipping a trust checklist]({{ site.url }}/blog/agentic-verification-checklist-shipped/) — and when we later wrote the guide that teaches this practice, reviewers caught that its own worked example could never fail, which is [a post-mortem of its own]({{ site.url }}/blog/property-test-cannot-fail-teaches-nothing/).
 
@@ -76,7 +76,7 @@ It is a check built from a rule instead of a list. Instead of writing "this inpu
 
 ### How is a rule better than a list of examples?
 
-A list only covers the cases someone imagined. Our own result is the cleanest proof: a documented cleanup utility passed every hand-picked test for months, then a generator's first run produced an input nobody would have chosen — an address with a space hiding before its suffix — and exposed a real defect. A rule covers the whole space, including the corners your imagination skips.
+A list only covers the cases someone imagined. Our own result is the cleanest proof: a documented cleanup utility passed every hand-picked test we had ever written, then a generator's first run produced an input nobody would have chosen — an address with a space hiding before its suffix — and exposed a real defect. A rule covers the whole space, including the corners your imagination skips.
 
 ### Do I need this if my AI writes my tests?
 
@@ -100,7 +100,7 @@ You need it especially then. An AI writes the same kind of list a person does �
       "name": "How is a rule better than a list of examples?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "A list only covers the cases someone imagined. Our own result is the cleanest proof: a documented cleanup utility passed every hand-picked test for months, then a generator's first run produced an input nobody would have chosen — an address with a space hiding before its suffix — and exposed a real defect. A rule covers the whole space, including the corners your imagination skips."
+        "text": "A list only covers the cases someone imagined. Our own result is the cleanest proof: a documented cleanup utility passed every hand-picked test we had ever written, then a generator's first run produced an input nobody would have chosen — an address with a space hiding before its suffix — and exposed a real defect. A rule covers the whole space, including the corners your imagination skips."
       }
     },
     {

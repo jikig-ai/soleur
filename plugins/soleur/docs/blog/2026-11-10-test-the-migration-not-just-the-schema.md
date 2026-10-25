@@ -69,7 +69,7 @@ But the part worth stealing came next. The plan claimed that existing checks alr
 
 The same plan escalated a placement question — full reference document or slimmed-down summary page — to an explicit ruling instead of a guess, and the ruling kept the full version. A decision the agent could not settle locally got decided in the plan, in writing.
 
-This post expands one thread of [the four days we spent shipping a trust checklist]({{ site.url }}/blog/agentic-verification-checklist-shipped/) — the day-by-day account this story is a spoke of.
+This post tells one thread of [the four days we spent shipping a trust checklist]({{ site.url }}/blog/agentic-verification-checklist-shipped/), the arc's day-by-day account.
 
 ## What to demand before you retire the old thing
 

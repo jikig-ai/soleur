@@ -21,12 +21,27 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 ## Draft
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
+| A 'healthy' server can lie — new deep-readiness check proves a host can actually serve you | feature-launch | 2026-08-25 | x, bluesky | stale |
 | A Flaky Test Passed on Retry and the Loop Called It Fixed | pillar |  | x, bluesky, discord, linkedin-personal | draft |
 | A Map That Can't Drift | pillar |  | x, bluesky, discord, linkedin-personal | draft |
 | A Property Test That Cannot Fail Teaches Nothing | pillar |  | x, bluesky, discord, linkedin-personal | draft |
+| AI Agents for Solo Founders: The Definitive Guide | pillar | 2026-09-08 | discord, x, bluesky, linkedin-company | stale |
+| Agents That Use APIs, Not Browsers | milestone-announcement | 2026-07-09 | discord, x, bluesky, linkedin-personal, linkedin-company | stale |
+| Before Your AI Team Takes a Recurring Job, It Answers Six Questions | spoke | 2026-11-04 | x, bluesky, discord, linkedin-personal | draft |
+| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-07-07 | discord, x, bluesky, linkedin-company | stale |
+| How We Let AI Agents Run Cron Jobs Without Letting Them Exfiltrate Secrets | engineering-deep-dive |  | blog, hackernews, x, linkedin-personal | parked |
+| Jump anywhere in the app with two keystrokes | feature-launch | 2026-08-13 | x, bluesky | stale |
+| Sidebar grip goes gold on grab + double-click to collapse | feature-launch | 2026-08-04 | x, bluesky | stale |
+| Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders? | comparison | 2026-05-21 | discord, x, bluesky, linkedin-company | stale |
+| Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Automation | comparison | 2026-06-05 | discord, x, bluesky, linkedin-company | stale |
+| Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | 2026-09-10 | discord, x, bluesky, linkedin-company | stale |
 | Test the Migration, Not Just the Schema | pillar |  | x, bluesky, discord, linkedin-personal | draft |
 | The First Property Test We Wrote Found a Real Bug | pillar |  | x, bluesky, discord, linkedin-personal | draft |
 | The Map That Only Records What the Agent Saw | pillar |  | x, bluesky, discord, linkedin-personal | draft |
+| The One-Person Billion-Dollar Company: Why It's an Engineering Problem | pillar | 2026-04-21 | discord, x, bluesky, linkedin-company | stale |
+| What Is Company-as-a-Service? | pillar | 2026-05-12 | discord, x, bluesky, linkedin-company | stale |
+| Your brand context now auto-loads in the web AI agent, not just the CLI | feature-launch | 2026-08-27 | x, bluesky | stale |
+| Your knowledge base is now actually usable on a phone | feature-launch | 2026-09-03 | x, bluesky | stale |
 
 ## Published
 | Title | Type | Publish Date | Channels | Status |

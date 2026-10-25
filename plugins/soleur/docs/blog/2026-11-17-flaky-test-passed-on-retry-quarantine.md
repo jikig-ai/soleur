@@ -61,7 +61,7 @@ When a filed flake needs a root cause, the protocol points at a checklist — si
 - **Output terseness** — quiet on green, loud on red. A chatty suite buries the failure line in noise, and anything reading the summary needs the last line to be the verdict.
 - **Contention** — the one axis an isolated re-run cannot see: a check that fails only under load, when siblings race for the same resource. For that class the honest fix is determinism work on the check itself, not another retry.
 
-This post expands one thread of [the four days we spent shipping a trust checklist]({{ site.url }}/blog/agentic-verification-checklist-shipped/) — the day-by-day account this story is a spoke of.
+This post is a spoke of [the four days we spent shipping a trust checklist]({{ site.url }}/blog/agentic-verification-checklist-shipped/) — the arc's day-by-day account.
 
 ## What a pass is worth
 
