@@ -18,6 +18,10 @@ exit 0
 Claude Code reads that JSON from stdout and blocks the tool call. Any deviation
 from this shape is treated as a pass-through.
 
+A hook that decides on the TEXT of a git message (`case "$out" in *"not a git repository"*`) runs that
+git call under `LC_ALL=C`: a translated git otherwise reports a non-repository cwd in its own language,
+the English match misses, and a routine commit is denied (#10696, found by the final verification pass).
+
 ### The third disposition: rewrite (ADR-162)
 
 The two sentences above described the contract completely until #7165. A
