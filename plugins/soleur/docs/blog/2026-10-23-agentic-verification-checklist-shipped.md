@@ -75,7 +75,7 @@ The last row is the one closest to the founder's version of the problem. We run 
 
 We audited all 102 of our automated checks one by one. The answer: four. Four were generic enough to belong in any repository — a scan for accidentally committed secrets, a check that work never lands straight on the main line, a check against stashing away unfinished work, and a check that catches tests abandoned with nothing left to run. Nearly everything a mature verification system accumulates turns out to be welded to the machinery around it. The audit is the honest part of the story — most teams would have promised a hundred and shipped four quietly.
 
-The four that shipped each have to prove themselves before they are allowed to guard anything. Installing one triggers a rehearsal on a throwaway copy of the repository: the check must catch a real planted violation, then go quiet when the violation is removed. A guard that cannot be proven to fire is a document, not a guard — and it installs nothing if something already sits where it would go, rather than quietly overwriting what you have.
+The four that shipped each have to prove themselves before they are allowed to guard anything. Installing one triggers a rehearsal on a throwaway copy of the repository: the check must catch a real planted violation, then go quiet when the violation is removed. A guard that cannot be proven to fire is a document, not a guard — and it installs nothing if something already sits where it would go, rather than quietly overwriting what you have. We wrote up [the audit's full story]({{ site.url }}/blog/audited-102-guardrails-four-portable/) — every check classified, every verdict explained — as a companion to this post.
 
 ## The real lesson: verify the verifiers
 

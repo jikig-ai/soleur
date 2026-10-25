@@ -973,12 +973,20 @@ fi
 # The classification is read from `test-all.sh --print-affected-set` receipts,
 # NOT recomputed here -- a second classifier would certify its own drift.
 AFF_LIB="$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+GLOB_LIB="$REPO_ROOT/scripts/lib/affected-glob.sh"
 if [[ ! -f "$AFF_LIB" ]]; then
   echo "ERROR: $AFF_LIB is missing -- test-all.sh degrades to full without it, so no classification is trustworthy." >&2
+  fails=$((fails + 1))
+elif [[ ! -f "$GLOB_LIB" ]]; then
+  # Fail CLOSED (the REL_LIB class): without the shared glob: classifier the
+  # census arm below cannot classify, and a skipped check reads as green.
+  echo "ERROR: $GLOB_LIB is missing -- the glob: declared-member census cannot run, so every glob: check below would certify nothing." >&2
   fails=$((fails + 1))
 else
   # shellcheck source=scripts/lib/test-affected-paths.sh
   source "$AFF_LIB"
+  # shellcheck source=scripts/lib/affected-glob.sh
+  source "$GLOB_LIB"
 
   # The live registration stream. Same env-scrubbing as the --print-suite-globs
   # call above and for the same reasons: this runs INSIDE test-all.sh as a
@@ -1114,7 +1122,7 @@ else
       case "$p" in
         glob:*)
           # Third declared kind (#9813): glob:<literal-head>/<glob-tail>.
-          # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm
+          # malformed-shape invariant — ONE doctrine, ONE classifier: the mint arm
           # in _affected_add_edge, the in-flight revalidation in _diff_edge_hit,
           # this census arm, and the covers() oracle in
           # scripts/test-affected-kb-consumers.test.sh must classify a shape
@@ -1127,29 +1135,9 @@ else
           # repo-relative diff line ever (a dead edge that narrows).
           _cg="${p#glob:}"
           _cg_why=""
-          case "$_cg" in
-            *[\*?[]*)
-              case "$_cg" in
-                *[?[]*) _cg_why="contains ? or [ (outside the grammar)" ;;
-                *[!A-Za-z0-9_./*-]*) _cg_why="contains a byte outside the grammar charset" ;;
-                *)
-                  _cgh="${_cg%%[*?[]*}"
-                  case "$_cgh" in
-                    /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _cg_why="its head is not a repo-relative prefix" ;;
-                    */)
-                      _cgt="${_cg#$_cgh}"
-                      case "$_cgt" in
-                        */) _cg_why="its tail ends in / — no path can match it" ;;
-                        *\**) [[ -d "$REPO_ROOT/${_cgh%/}" ]] || _cg_why="its head dir ${_cgh} does not exist" ;;
-                        *) _cg_why="its tail carries no *" ;;
-                      esac
-                      ;;
-                    *) _cg_why="its head does not end in /" ;;
-                  esac
-                  ;;
-              esac
-              ;;
-            *)
+          _affected_glob_split "$_cg"
+          case "$_AGS_CLASS" in
+            literal)
               # No metachar: the mint recurses it as a literal path entry —
               # the census checks it as one. A miss here mints NOTHING — the
               # entry is dead, which narrows (the opposite direction from the
@@ -1159,6 +1147,36 @@ else
               elif ! _tracked_member "$_cg"; then
                 _cg_why="a literal entry that is not a tracked file -- a dead edge that can never match a diff"
               fi
+              ;;
+            dir)
+              [[ -d "$REPO_ROOT/${_AGS_HEAD%/}" ]] || _cg_why="its head dir ${_AGS_HEAD} does not exist" ;;
+            root)
+              # Root-anchored (#10198): valid — no -d probe; the repo root is
+              # always present and the tail is already `*`-carrying and /-free.
+              # Decline a pattern that matches a --name-status token: the hit
+              # arm's blob carries `M`/`R100`-shaped phantom lines after the TAB
+              # split, so e.g. `glob:*`/`glob:R*` would be a disguised
+              # always-match (safe direction, but defeats the narrowing).
+              # Every --name-status letter (M A D T U X B) plus every emitted
+              # score token (R000-R100 today; C mirrored so a future -C flag
+              # can't re-open the class) — a sample leaks digit-position shapes
+              # like R*6 or *7, so the check iterates the full emitted set; all
+              # [[ == ]] are builtin, ~210 evaluations.
+              for _st in M A D T U X B R{000..100} C{000..100}; do
+                [[ "$_st" == $_cg ]] && { _cg_why="its pattern matches the name-status token $_st — a disguised always-match over the diff blob"; break; }
+              done ;;
+            malformed)
+              # The _AGS_WHY → message map is the single reason vocabulary.
+              case "$_AGS_WHY" in
+                qbracket) _cg_why="contains ? or [ (outside the grammar)" ;;
+                charset) _cg_why="contains a byte outside the grammar charset" ;;
+                head-not-reporel) _cg_why="its head is not a repo-relative prefix" ;;
+                head-mid-slash) _cg_why="its head does not end in /" ;;
+                tail-trailing-slash) _cg_why="its tail ends in / — no path can match it" ;;
+                tail-no-star) _cg_why="its tail carries no *" ;;
+                root-tail-slash) _cg_why="its tail carries a / under a root-anchored head — no dir-less diff line can match it" ;;
+                *) _cg_why="its shape is malformed" ;;
+              esac
               ;;
           esac
           if [[ -n "$_cg_why" ]]; then
