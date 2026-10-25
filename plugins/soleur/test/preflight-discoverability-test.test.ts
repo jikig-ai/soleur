@@ -3026,7 +3026,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the hosts are no-SSH, and
   // the offline suites drive the self-gate against a shared curl profile table and real curl and prove the event grammar, not that the stored
   // stream carries the new phase fields. Genuine.
-  const BASELINE_DECLARED_PROBES = 77;
+  // #9927 (2026-10-25): +1 (77 -> 78) for `2026-10-24-feat-inngest-host-replace-window-prework-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the post-replace check reads the keeper's host-emitted row through the Better Stack ClickHouse read connection
+  // (BETTERSTACK_QUERY_*, Doppler soleur/prd_terraform). NO SUBSTITUTE: the host is deny-all-public with no SSH and the ingest token is
+  // write-only; the offline suites prove the row grammar, not that the stored stream carries it. Genuine.
+  const BASELINE_DECLARED_PROBES = 78;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

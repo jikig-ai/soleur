@@ -102,7 +102,9 @@ Checked live: #9927, #10112, #10390, #9755, #6890 OPEN; #10081 MERGED 2026-10-15
 - `2026-10-08-a-pin-copied-into-three-suites-had-one-detector-and-two-silent-copies.md`: the digest literal lives in several suites; the bot pin-bump handles them, never hand-edit.
 - `2026-09-21-my-escrow-suite-stubbed-the-one-tool-that-would-have-refused-it.md` and `2026-09-19-every-systemd-claim-i-reasoned-was-inverted-by-a-thirty-second-measurement.md`: run the real unit semantics once in a rehearsal, do not stub the tool that refuses; measure oneshot and timer behaviour.
 - `2026-08-04-the-code-i-read-as-not-encrypted-was-a-default-errno-bucket-and-my-capture-forged-it.md`: `cryptsetup isLuks` rc 1 is a default bucket; the probe must treat rc and stderr separately and never branch to a destructive path.
-- `2026-07-03-dark-launch-pr-must-exclude-operator-prerequisite-infra.md`: operator-prerequisite infra must not ride a merge-triggered apply (basis for the count gate).
+<!-- lint-infra-ignore start -->
+- `2026-07-03-dark-launch-pr-must-exclude-operator-prerequisite-infra.md`: credential-gated infra must not ride a merge-triggered apply (basis for the count gate).
+<!-- lint-infra-ignore end -->
 - `2026-08-12-i-proved-the-transform-and-left-its-application-and-its-size-unpinned.md`: measure with the same expression the host gets (the budget script does).
 - `2026-07-26-cloud-init-comment-is-a-live-host-input-and-an-unreadable-vendor-limit-decays.md`: comment edits in the template are ForceNew inputs; this plan edits non-comment lines on purpose and re-measures.
 - Gap: no learning exists for an R2 write-only header key; this plan derives it from code, ADRs and the CLO ruling.

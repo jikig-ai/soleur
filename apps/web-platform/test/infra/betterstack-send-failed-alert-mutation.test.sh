@@ -169,7 +169,8 @@ expect_green_added() {
 # soleur-inngest-tls script emits SOLEUR_INNGEST_TLS_REFUSED through ONE multi-line crit emit_refusal call): +1 emitter-crit
 # check and +1 marker-matches-a-needle check. A second call line would add a second marker check, so the script keeps one.
 # 81 -> 82 at #10455: web-bash-synthetic.sh now emits SOLEUR_CREDENTIAL_REFUSED (non-paging), one stays-below-crit check; the case count is unchanged.
-BASELINE_PASSES=82
+# 82 -> 81 at the cutover-trio retirement (#10112): the retired script's SEAM_REFUSED non-paging marker row is gone; the case count is unchanged.
+BASELINE_PASSES=81
 BASELINE_CASES=10
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
