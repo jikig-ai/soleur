@@ -20,21 +20,21 @@ Here's why that turned out to matter more than it sounds.
 2/ The six questions every new recurring job must declare — trigger, what it reads and writes, what it hands off next, how a person steps back in, why it can't do the same work twice, and how the thing that assigns work avoids assigning it twice.
 
 **Tweet 3:**
-3/ The subtle one: making jobs wait their turn is not the same as making sure the work doesn't happen twice. A line at a bakery is orderly — it doesn't stop two customers ordering the same birthday cake. Order is a courtesy. Idempotence is a property.
+3/ The subtle one: jobs waiting their turn is not the same as work not happening twice. A line at a bakery is orderly — it doesn't stop two customers ordering the same cake. Order is a courtesy. Idempotence is a property.
 
 **Tweet 4:**
-4/ And the honest part: our first version watched the three doors we already knew about. Enumerating every way a background job can be born found seven — including API calls that leave no file behind at all. A gate that watches the doors you know is a gate that watches the doors you know.
+4/ The honest part: our first version watched three doors we knew about. Enumerating every way a background job is born found seven — including API calls that leave no file at all. A gate watches the doors it knows.
 
 **Tweet 5:**
 5/ Full post — the six questions written for a founder's automation pile, not just ours:
 
-https://soleur.dev/blog/before-your-ai-team-takes-a-recurring-job/
+https://soleur.ai/blog/before-your-ai-team-takes-a-recurring-job/
 
 ## Bluesky
 
 Before our AI team may create a new recurring job, it must answer six questions first — trigger, reads/writes, handoff, human re-entry, dedupe, source dedupe. A "jobs wait their turn" answer is a hard reject. And the honest part: our first gate watched 3 doors; enumeration found 7.
 
-https://soleur.dev/blog/before-your-ai-team-takes-a-recurring-job/
+https://soleur.ai/blog/before-your-ai-team-takes-a-recurring-job/
 
 ## Discord
 
@@ -42,7 +42,7 @@ New spoke in the agentic-verification arc: **Before Your AI Team Takes a Recurri
 
 Every NEW autonomous task now declares six answers at creation time — trigger, services, next, human re-entry, semantic dedupe, source dedupe. `concurrency: group:` alone is a hard reject (it serializes runs; it doesn't dedupe work). The structural-enumeration story: the gate's first detection watched three doors; a review seat found seven substrate families a background job can enter through — including API-armed reminders that leave no file behind.
 
-Post (founder register): https://soleur.dev/blog/before-your-ai-team-takes-a-recurring-job/
+Post (founder register): https://soleur.ai/blog/before-your-ai-team-takes-a-recurring-job/
 Technical write-up (the map of all seven doors): https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/factory-map.md
 
 ## LinkedIn Personal
@@ -59,4 +59,4 @@ Two of the six are subtler than they look:
 
 The post is written for the founder whose automation pile grew by accretion — the questions work for any system, not just ours:
 
-https://soleur.dev/blog/before-your-ai-team-takes-a-recurring-job/
+https://soleur.ai/blog/before-your-ai-team-takes-a-recurring-job/

@@ -70,7 +70,7 @@ If you run your own automations — in any system, not just ours — the same si
 - Why can't it do the same work twice — a real mechanism, not "it waits its turn"?
 - If it can file work for itself, what stops it filing the same work twice?
 
-If your automations have quietly become a system nobody fully remembers, that is the moment to get the answers out of your head and into a place they can be checked. [Try Soleur](https://soleur.dev) — we made the answers a condition of the job existing at all.
+If your automations have quietly become a system nobody fully remembers, that is the moment to get the answers out of your head and into a place they can be checked. [Try Soleur](https://soleur.ai) — we made the answers a condition of the job existing at all.
 
 For the technical write-up — the map that names every one of the seven doors a background job can enter through — see [our factory-map architecture note](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/factory-map.md).
 
