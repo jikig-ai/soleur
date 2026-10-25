@@ -133,7 +133,12 @@ build_sandbox() {
   cp "$RUNNER" "$out" || return 1
   cp "$REL_LIB" "$dir/lib/" || return 1
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$dir/lib/" || return 1
-  if [[ "$with_lib" == "with-lib" ]]; then
+  if [[ "$with_lib" != "no-lib" && "$with_lib" != "no-glob-lib" ]]; then
+    # no-glob-lib: the declarations lib loads but the classifier is absent —
+    # the _AFF_LIB_OK fold must degrade to index-missing, never rc-127 (#10198).
+    cp "$REPO_ROOT/scripts/lib/affected-glob.sh" "$dir/lib/" || return 1
+  fi
+  if [[ "$with_lib" != "no-lib" ]]; then
     cp "$AFF_LIB" "$dir/lib/" || return 1
   fi
   # Duration manifests the runner-changed banner sums. Absent by default (the banner
@@ -743,6 +748,11 @@ m_s_idx_glob_qmark() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PAT
 m_s_idx_glob_bracket() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x[y]"\n)'; }
 m_s_idx_glob_badhead() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:a*/b"\n)'; }
 m_s_idx_glob_nostar() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x"\n)'; }
+# GLOBENT's second arm (#10198): a slash-free root pattern containing `*` is the
+# same registration-only admit class; a /-bearing tail under a root head stays
+# semantic (the superset must never narrow a malformed shape into a bounded run).
+m_ok_idx_glob_root() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:*.test.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
+m_s_idx_glob_roottail() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:x*/y"\n)'; }
 m_s_idx_glob_always() { m_ok_single "$1"; rc_lib_ins "$1" '  "a/one"' '  "glob:knowledge-base/**.sh"'; }
 m_s_idx_comment_alone() { rc_lib_append "$1" '# a note'; }
 m_s_idx_removed()  { local d="$1"; assert_fixture_dir "$d"; grep -v 'THIS FILE' "$d/scripts/lib/test-affected-paths.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
@@ -813,6 +823,8 @@ RC_TABLE=(
   's_idx_glob_bracket|m_s_idx_glob_bracket|semantic:INDEX-SHAPE|'
   's_idx_glob_badhead|m_s_idx_glob_badhead|semantic:INDEX-SHAPE|'
   's_idx_glob_nostar|m_s_idx_glob_nostar|semantic:INDEX-SHAPE|'
+  'ok_idx_glob_root|m_ok_idx_glob_root|registration-only:x/new|'
+  's_idx_glob_roottail|m_s_idx_glob_roottail|semantic:INDEX-SHAPE|'
   'ok_idx_glob_dotdot|m_ok_idx_glob_dotdot|registration-only:x/new|'
   's_idx_glob_always|m_s_idx_glob_always|semantic:INDEX-SHAPE|'
   'ok_two_groups|m_ok_two_groups|registration-only:x/new,x/new3|'
@@ -885,7 +897,7 @@ rc_run_table() {
 cases=$((cases + 1))
 _rc_bad="$(RC_VERBOSE=1 rc_run_table "$_rc_src" 2>"$TESTROOT/rc-table.err")"
 # A floor on the table itself: deleting rows would otherwise read as a smaller green table.
-RC_TABLE_FLOOR=83
+RC_TABLE_FLOOR=85
 if [[ "$_rc_bad" == "0" ]] && (( ${#RC_TABLE[@]} >= RC_TABLE_FLOOR )); then
   pass "rc1: all ${#RC_TABLE[@]} classifier rows give the table's verdict (registration-only shapes pass, every semantic edit stays full)"
 else
@@ -2572,15 +2584,18 @@ else
   fail "m8: rc=$ARM_RC — $ARM_OUT"
 fi
 
-# t11 / m9: edge MINTING. A directory token written WITHOUT a trailing "/" (22 declared entries,
-#     `.github/workflows`, `scripts/lib`, ...) must become a prefix edge `^dir/`; a file stays an
+# t11 / m9 / t11b / m9b / t17 / m10: edge MINTING. A directory token written WITHOUT a trailing
+#     "/" must become a prefix edge `^dir/`; a file stays an
 #     exact `^file`; a `.`-rooted token keeps the legacy unanchored form. Driven on the runner's
-#     own `_affected_add_edge` (extracted verbatim, no sandbox), so the sandbox rows -- whose
+#     own `_affected_add_edge`/`_affected_add_declared_edge` (extracted verbatim, no sandbox), so
+#     the sandbox rows -- whose
 #     tokens all end in "/" -- cannot hide a dropped normalisation. m9 deletes the `-d`
-#     normalisation and must change t11's directory answer.
+#     normalisation and must change t11's directory answer; m9b is the same deletion scoped to
+#     the declared twin (#9441), and t17/m10 pin the D12 reversal end-to-end.
 cases=$((cases + 1))
 _edge_src=$(awk '/^_affected_in_list\(\) \{/{f=1} f{print} f && /^_affected_add_edge\(\) \{/{g=1} g && /^\}/{exit}' "$RUNNER")
-_edge_run() { ( cd "$REPO_ROOT" && eval "$1" && _AC_EDGES=() && _affected_add_edge "$2" && printf '%s' "${_AC_EDGES[*]}" ); }
+_edge_run() { ( cd "$REPO_ROOT" && source scripts/lib/affected-glob.sh && eval "$1" && _AC_EDGES=() && _affected_add_edge "$2" && printf '%s' "${_AC_EDGES[*]}" ); }
+_decl_edge_run() { ( cd "$REPO_ROOT" && source scripts/lib/affected-glob.sh && eval "$1" && _AC_EDGES=() && _affected_add_declared_edge "$2" && printf '%s' "${_AC_EDGES[*]}" ); }
 _t11_dir=$(_edge_run "$_edge_src" scripts/lib)
 _t11_file=$(_edge_run "$_edge_src" scripts/test-all.sh)
 _t11_dot=$(_edge_run "$_edge_src" ./scripts)
@@ -2591,18 +2606,212 @@ else
 fi
 
 cases=$((cases + 1))
+# t11b (#9441): the declared/consumed twin mints WITHOUT the -e filter — the
+# whole point of the D12 reversal. A deleted subject keeps its edge: `dir/`
+# mints the ^dir/ prefix (the deleting diff's lines still match), a deleted
+# file mints ^file; while _affected_add_edge mints NOTHING for the same
+# subjects (the -e filter still binds the derived channel). A slash-less
+# deleted dir mints ^dir — the exact-line dead edge the census now refuses.
+_t11b_ddir=$(_decl_edge_run "$_edge_src" 'zzz-no-such-dir-9441/')
+_t11b_dfile=$(_decl_edge_run "$_edge_src" 'zzz-no-such-file-9441.sh')
+_t11b_dflat=$(_decl_edge_run "$_edge_src" 'zzz-no-such-dir-9441')
+_t11b_live=$(_decl_edge_run "$_edge_src" 'scripts/lib')
+_t11b_filtdir=$(_edge_run "$_edge_src" 'zzz-no-such-dir-9441/')
+_t11b_filtfile=$(_edge_run "$_edge_src" 'zzz-no-such-file-9441.sh')
+if [[ "$_t11b_ddir" == "^zzz-no-such-dir-9441/" && "$_t11b_dfile" == "^zzz-no-such-file-9441.sh" \
+   && "$_t11b_dflat" == "^zzz-no-such-dir-9441" && "$_t11b_live" == "^scripts/lib/" \
+   && -z "$_t11b_filtdir" && -z "$_t11b_filtfile" ]]; then
+  pass "t11b: the declared twin mints ^dir//^file for deleted subjects; the -e filter still binds the derived mint"
+else
+  fail "t11b: ddir='${_t11b_ddir}' dfile='${_t11b_dfile}' dflat='${_t11b_dflat}' live='${_t11b_live}' filtered='${_t11b_filtdir}'/'${_t11b_filtfile}'"
+fi
+
+cases=$((cases + 1))
+# m9: drop the -d normalisation — scoped to _affected_add_edge's body (the
+# extraction's SECOND function; the declared twin carries the same line and
+# gets its own mutant at m9b).
 _mut_src=$(python3 -c '
 import sys
 s = sys.stdin.read()
 old = "if _affected_probe d \"$_p\"; then _p=\"${_p%/}/\"; fi"
-assert s.count(old) == 1, s.count(old)
-sys.stdout.write(s.replace(old, ":"))
+head, marker, tail = s.partition("_affected_add_edge() {")
+assert marker and tail.count(old) == 1, (bool(marker), tail.count(old))
+sys.stdout.write(head + marker + tail.replace(old, ":", 1))
 ' <<<"$_edge_src") || _mut_src=""
 _m9_dir=$(_edge_run "$_mut_src" scripts/lib)
 if [[ -n "$_mut_src" && "$_mut_src" != "$_edge_src" && "$_m9_dir" == "^scripts/lib" ]]; then
   pass "m9: dropping the directory normalisation mints ^scripts/lib (no slash), which t11 rejects"
 else
   fail "m9: landed=$([[ "$_mut_src" != "$_edge_src" ]] && echo yes || echo no) dir='${_m9_dir}'"
+fi
+
+cases=$((cases + 1))
+# m9b (#9441): the same mutation scoped to _affected_add_declared_edge's body
+# (the extraction's FIRST function) — the twin's -d normalisation is just as
+# load-bearing: without it a LIVE slash-less declared dir mints ^dir, an exact
+# line that selects nothing.
+_mut_src=$(python3 -c '
+import sys
+s = sys.stdin.read()
+old = "if _affected_probe d \"$_p\"; then _p=\"${_p%/}/\"; fi"
+head, marker, tail = s.partition("_affected_add_edge() {")
+assert marker and head.count(old) == 1, (bool(marker), head.count(old))
+sys.stdout.write(head.replace(old, ":", 1) + marker + tail)
+' <<<"$_edge_src") || _mut_src=""
+_m9b_dir=$(_decl_edge_run "$_mut_src" scripts/lib)
+if [[ -n "$_mut_src" && "$_mut_src" != "$_edge_src" && "$_m9b_dir" == "^scripts/lib" ]]; then
+  pass "m9b: dropping the twin's directory normalisation mints ^scripts/lib (no slash), which t11b rejects"
+else
+  fail "m9b: landed=$([[ "$_mut_src" != "$_edge_src" ]] && echo yes || echo no) dir='${_m9b_dir}'"
+fi
+
+# t17 / m10 (#9441, D12 reversal): a diff that DELETES a declared subject still
+#     selects the suite guarding it. The sandbox lib injects
+#     `zzz-deleted-subject/` — a path that does not exist in the real tree the
+#     probes run against — into guard-vacuity-floor's declared array; the diff
+#     names one file beneath it. guard-vacuity-floor passes _suite_affected on
+#     its own (signal 4's corpus-scan backstop), so the outcome reads the edge
+#     set alone: ^zzz-deleted-subject/ prefix-matches the deleted file's diff
+#     line. m10 re-points the declared re-add at the filtered mint, restoring
+#     the drop — t17's fixture must then decline.
+_del_lib="$TESTROOT/afflib-del/test-affected-paths.sh"
+mkdir -p "$(dirname "$_del_lib")"
+python3 - "$AFF_LIB" > "$_del_lib" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+anchor = 'AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(\n'
+assert s.count(anchor) == 1, s.count(anchor)
+i = s.index(anchor) + len(anchor)
+sys.stdout.write(s[:i] + '  "zzz-deleted-subject/"\n' + s[i:])
+PY
+cases=$((cases + 1))
+AFF_LIB="$_del_lib" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=zzz-deleted-subject/qzx9.sh' \
+  -- --affected
+if [[ "$ARM_RC" == "0" ]] \
+  && ran_exact 'scripts/guard-vacuity-floor' \
+  && ran_exact 'scripts/lint-dual-lockfile' \
+  && ! ran_exact 'scripts/lint-orphan-test-suites' \
+  && ! ran_exact 'test/x-community'; then
+  pass "t17: a deleted declared subject still selects its suite (guard-vacuity-floor on zzz-deleted-subject/)"
+else
+  fail "t17: rc=$ARM_RC ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='      for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_declared_edge "$_e"; done' \
+SANDBOX_MUT_NEW='      for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_edge "$_e"; done' \
+AFF_LIB="$_del_lib" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=zzz-deleted-subject/qzx9.sh' \
+  -- --affected
+if [[ "$ARM_RC" != "98" ]] \
+  && ran_exact 'scripts/lint-dual-lockfile' \
+  && ! ran_exact 'scripts/guard-vacuity-floor'; then
+  pass "m10: restoring the -e-filtered mint drops the deleted subject's edge (t17 detects it)"
+else
+  fail "m10: rc=$ARM_RC ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# t16: the mint arm's `declare -F` guard fails WIDE when the glob lib is absent —
+# a verbatim `^glob:glob:<payload>` always-match, never an rc-127 silent narrow.
+# Reachable today only through argv (declared arrays and the receipts walk exit
+# earlier on _AFF_LIB_OK/index-missing), so the pin drives _affected_add_edge
+# directly with the source line omitted — without the guard this subshell dies
+# on 'command not found' and the capture comes back empty/non-zero.
+cases=$((cases + 1))
+_t16_mint=$( ( cd "$REPO_ROOT" && eval "$_edge_src" && _AC_EDGES=() && _affected_add_edge 'glob:x*.sh' && printf '%s' "${_AC_EDGES[*]}" ) 2>/dev/null )
+if [[ "$_t16_mint" == "^glob:glob:x*.sh" ]]; then
+  pass "t16: a missing glob lib mints the verbatim always-match edge (fail-wide, never rc-127)"
+else
+  fail "t16: mint='${_t16_mint}' (want ^glob:glob:x*.sh — the declare -F guard regressed)"
+fi
+
+# t12: root-anchored mint — a /-free metachar-free head mints ^glob:<pattern>
+#      directly (no -d probe; the root is always present). A /-bearing tail
+#      under that head stays malformed-verbatim (#10198).
+cases=$((cases + 1))
+_t12a=$(_edge_run "$_edge_src" 'glob:*.test.sh')
+_t12b=$(_edge_run "$_edge_src" 'glob:**.test.sh')
+_t12c=$(_edge_run "$_edge_src" 'glob:x*.sh')
+_t12d=$(_edge_run "$_edge_src" 'glob:x*/y')
+_t12e=$(_edge_run "$_edge_src" 'glob:*/x')
+if [[ "$_t12a" == '^glob:*.test.sh' && "$_t12b" == '^glob:**.test.sh' && "$_t12c" == '^glob:x*.sh' \
+   && "$_t12d" == '^glob:glob:x*/y' && "$_t12e" == '^glob:glob:*/x' ]]; then
+  pass "t12: root-anchored mints accept without a -d probe; root-tail-slash stays verbatim"
+else
+  fail "t12: a='${_t12a}' b='${_t12b}' c='${_t12c}' d='${_t12d}' e='${_t12e}'"
+fi
+
+# t13-t15b: root-anchored HIT — the sandbox lib's knowledge-base/**.test.sh
+#      members mutated to glob:*.test.sh / glob:**.test.sh (the two arrays that
+#      carry them). x.test.sh selects the carriers; a/x.test.sh and x.md
+#      decline — the dir-less narrowing IS the feature (bash [[ == ]] lets *
+#      cross /, so the != */* conjunct is load-bearing).
+# The mutated lib MUST carry the real basename — build_sandbox copies
+# "$AFF_LIB" under its own name and the runner sources lib/test-affected-paths.sh.
+mkdir -p "$TESTROOT/affroot" "$TESTROOT/affroot2"
+_root_lib="$TESTROOT/affroot/test-affected-paths.sh"
+sed 's|"glob:knowledge-base/\*\*\.test\.sh"|"glob:*.test.sh"|g' "$AFF_LIB" > "$_root_lib"
+_root_lib2="$TESTROOT/affroot2/test-affected-paths.sh"
+sed 's|"glob:knowledge-base/\*\*\.test\.sh"|"glob:**.test.sh"|g' "$AFF_LIB" > "$_root_lib2"
+_root_n=$(grep -c '"glob:\*\.test\.sh"' "$_root_lib" || true)
+cases=$((cases + 1))
+AFF_LIB="$_root_lib" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=x.test.sh' \
+  -- --affected
+if [[ "$ARM_RC" == "0" && "$_root_n" -ge 2 ]] \
+  && ran_exact 'scripts/guard-vacuity-floor' \
+  && ran_exact 'scripts/lint-orphan-test-suites' \
+  && ! ran_exact 'scripts/lib/repo-write-boundary.test.sh'; then
+  pass "t13: a dir-less x.test.sh selects the root-glob carriers ($_root_n mutated members)"
+else
+  fail "t13: rc=$ARM_RC n=$_root_n ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+cases=$((cases + 1))
+AFF_LIB="$_root_lib" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=a/x.test.sh' \
+  -- --affected
+if [[ "$ARM_RC" == "0" ]] \
+  && ! ran_exact 'scripts/guard-vacuity-floor' \
+  && ! ran_exact 'scripts/lint-orphan-test-suites' \
+  && ! ran_exact 'scripts/lib/repo-write-boundary.test.sh'; then
+  pass "t14: a/x.test.sh declines the root edge (the *-crosses-/ hole is closed)"
+else
+  fail "t14: rc=$ARM_RC ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+cases=$((cases + 1))
+AFF_LIB="$_root_lib" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=x.md' \
+  -- --affected
+if [[ "$ARM_RC" == "0" ]] \
+  && ! ran_exact 'scripts/guard-vacuity-floor' \
+  && ! ran_exact 'scripts/lint-orphan-test-suites'; then
+  pass "t15: a dir-less non-corpus x.md declines the root edge"
+else
+  fail "t15: rc=$ARM_RC ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+cases=$((cases + 1))
+AFF_LIB="$_root_lib2" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=x.test.sh' \
+  -- --affected
+if [[ "$ARM_RC" == "0" ]] \
+  && ran_exact 'scripts/guard-vacuity-floor' \
+  && ran_exact 'scripts/lint-orphan-test-suites'; then
+  pass "t15b: the glob:**.test.sh tail spelling selects identically"
+else
+  fail "t15b: rc=$ARM_RC ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+# j2: the declarations lib loads but the glob classifier lib is absent —
+#     the _AFF_LIB_OK fold must degrade to index-missing select-all.
+cases=$((cases + 1))
+SANDBOX_LIB=no-glob-lib run_arm \
+  'SANDBOX_DIFF_NAMES=x.test.sh' \
+  -- --affected
+if [[ "$ARM_RC" == "0" ]] && grep -qF 'index-missing' <<<"$ARM_OUT" \
+  && ran_exact 'scripts/lint-dual-lockfile' && ran_exact 'scripts/guard-vacuity-floor'; then
+  pass "j2: a missing glob lib degrades to index-missing select-all (never rc-127)"
+else
+  fail "j2: rc=$ARM_RC — $(grep -E 'AFFECTED_FALLBACK|index-missing' <<<"$ARM_OUT" | head -3 | tr '\n' '|')"
 fi
 
 # f1: the always-on ratchet floor is a PINNED value, the declared list still meets it, and the floor has not fallen
@@ -3375,8 +3584,8 @@ fi
 #       and require every root covered by each corpus suite (dir prefix or a
 #       glob head). A NEW top-level dir added without an edge entry reopens
 #       the #9969 hole; this row REDs it in CI, where the full gate runs.
-#       Root-level dir-less files have no head to mint — the grammar residual
-#       the th8 row below detects loudly (#10117; extension deferred to #10198).
+#       Root-level dir-less files take root-anchored glob: members now (#10198);
+#       the th8 row below REDs any dir-less corpus member no edge covers.
 #       -c core.quotePath=false so the
 #       C-quoted Cyrillic fixture paths emit their real root, not `"…`.
 # Members anchored at <root> that did NOT certify coverage — the decline
@@ -3586,14 +3795,66 @@ else
   fail "th6m-d: mutant declined or did not land (rc=$?)"
 fi
 
+# The four corpus suites' edge arrays, walked by the th8 census. A row can
+# rebind the array set (like _TH_REPO) to drive the census over fixtures.
+_TH8_ARRAYS=(
+  AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS
+  AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS
+  AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS
+  AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS
+)
+
+# _th8_corpus_covered <array-name> <dir-less member> — minted-edge truth
+# (#10198): covered iff the array carries a literal member equal to it, a
+# metachar-free glob: literal (mint parity — glob:x.test.sh mints ^x.test.sh),
+# or a well-formed ROOT-ANCHORED glob member matching under [[ == ]] with the
+# dir-less conjunct (the hit arm's != */* — [[ == ]] lets `*` cross `/`). Dir
+# members, dir-anchored globs and malformed members cannot cover a dir-less
+# file; the census REDs malformed members through lint-orphan-test-suites.sh
+# independently, so they do not certify coverage here.
+_th8_corpus_covered() {
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  [[ -z "${_TH_REPO+set}" || -n "$_TH_REPO" ]] || return 1
+  local _n=0 _i _m
+  eval "_n=\"\${$1[@]+\"\${#$1[@]}\"}\""
+  _n="${_n:-0}"
+  for ((_i=0; _i<_n; _i++)); do
+    eval "_m=\"\${$1[$_i]}\""
+    case "$_m" in
+      glob:*)
+        _affected_glob_split "${_m#glob:}"
+        case "$_AGS_CLASS" in
+          literal) [[ "$2" == "${_m#glob:}" ]] && return 0 ;;
+          root) [[ "$2" != */* && "$2" == ${_m#glob:} ]] && return 0 ;;
+        esac
+        ;;
+      *) [[ "$2" == "$_m" ]] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # _th8_eval — the detection row's evaluation, callable under a row-local
-# _TH_REPO. Liveness floor binds the PRODUCER output (an empty complement is
-# legitimately green today; an empty listing is a dead producer).
+# _TH_REPO (and _TH8_ARRAYS). Liveness floor binds the PRODUCER output (an
+# empty complement is legitimately green today; an empty listing is a dead
+# producer). Emits <array>:<member> for every dir-less corpus member the
+# array's declared edges do not cover — per-suite pairs, no stop-at-first.
 _th8_eval() {
-  local _list
+  local _list _member _arr _corpus
   _list=$(_th_ls_files) || { echo "TH8-PRODUCER-FAILED"; return 0; }
   [[ -n "$_list" ]] || { echo "EMPTY-ROOT-DERIVATION"; return 0; }
-  _th_root_corpus <<<"$_list"
+  _corpus="$(_th_root_corpus <<<"$_list")"
+  [[ -n "$_corpus" ]] || return 0
+  # shellcheck source=scripts/lib/test-affected-paths.sh
+  source "$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+  # shellcheck source=scripts/lib/affected-glob.sh
+  source "$REPO_ROOT/scripts/lib/affected-glob.sh"
+  while IFS= read -r _member; do
+    [[ -n "$_member" ]] || continue
+    for _arr in "${_TH8_ARRAYS[@]}"; do
+      _th8_corpus_covered "$_arr" "$_member" || printf '%s:%s\n' "$_arr" "$_member"
+    done
+  done <<<"$_corpus"
 }
 
 # th8 fixture repo: a bare git init under TESTROOT carrying the named root
@@ -3616,23 +3877,24 @@ _th8_fix_repo() { # <name> [root-file...]
   if (($#)); then ( cd "$_d" && rc_g add -f -- "$@" ) || return 1; fi
 }
 
-# th8 (FR3, #10117) — dir-less repo-root corpus detection. The `glob:` grammar
-#     needs a `<dir>/` head — a root-level x.test.sh/x.sh has none, so no
-#     declared edge can cover it and its diff would select no corpus suite: a
-#     silent hole. The row REDs on EXISTENCE (the grammar-extension trigger,
-#     deferred to #10198 — ADR-242 decision 27) and stays red while any dir-less
-#     corpus member exists; a literal edge or ALWAYS_ON covers the file's
-#     SELECTION but does not clear this row — the exits are moving the file
-#     under a covered root or landing #10198. Latency note (ADR-262): this suite
-#     is pr-gated, so a diff that adds only the dir-less file declines it — the
-#     row fires on the merge-SHA push run, same doctrine as th6.
+# th8 (FR3, #10117; reworked #10198) — dir-less repo-root corpus COVERAGE
+#     census. A root-level x.test.sh/x.sh is representable now (root-anchored
+#     glob: members, ADR-242 decision 28) — so the row's question changed from
+#     existence to coverage: every dir-less corpus member must be covered by a
+#     declared edge of each corpus suite (a literal member, a metachar-free
+#     glob: literal, or a well-formed root-anchored glob). Uncovered members
+#     RED per suite — the exits are adding a covering member (the grammar's
+#     point) or moving the file under a covered root.
+#     Latency note (ADR-262): this suite is pr-gated, so a diff that adds only
+#     the dir-less file declines it — the row fires on the merge-SHA push run,
+#     same doctrine as th6.
 cases=$((cases + 1))
 _th8=$(_th8_eval)
 case "$_th8" in
   "") pass "th8: no dir-less repo-root corpus file exists" ;;
   EMPTY-ROOT-DERIVATION|TH8-PRODUCER-FAILED)
     fail "th8: producer floor fired (${_th8}) — a dead listing must not read as a clean complement" ;;
-  *)  fail "th8: dir-less repo-root corpus file(s) — the glob: grammar has no head to mint and this row stays RED while any exist; exits: move the file under a covered root, or land the deferred grammar extension #10198 (a literal edge or ALWAYS_ON covers the file's selection but does not clear this row): ${_th8//$'\n'/ }" ;;
+  *)  fail "th8: dir-less repo-root corpus member(s) no declared edge covers (array:member pairs — exits: declare a literal or root-anchored glob: member covering them, or move the file under a covered root): ${_th8//$'\n'/ }" ;;
 esac
 
 # th8-m1: a fixture repo carrying a dir-less x.test.sh → the detector flags it
@@ -3742,6 +4004,79 @@ else
   fail "th8-m8: mutant output='${_th8_m}' (want quoted .test.sh only)"
 fi
 
+# th8v — the coverage predicate's per-member truth table (#10198). A dir-less
+#        corpus member is covered by: a literal member, a metachar-free glob:
+#        literal (mint parity), or a well-formed root-anchored glob under
+#        [[ == ]] with the dir-less conjunct — minted-edge truth only.
+cases=$((cases + 1))
+_th8v_out=$(
+  source "$REPO_ROOT/scripts/lib/affected-glob.sh"
+  _t() { local _m="$1"; shift; local -a _fx=("$@"); _th8_corpus_covered _fx "$_m" && printf '1 ' || printf '0 '; }
+  _t x.test.sh 'x.test.sh'
+  _t x.test.sh 'glob:x.test.sh'
+  _t x.test.sh 'glob:*.test.sh'
+  _t y.test.sh 'glob:*.test.sh'
+  _t x.sh 'glob:*.test.sh'
+  _t x.md 'glob:*.test.sh'
+  _t a/x.test.sh 'glob:*.test.sh'
+  _t x.test.sh 'glob:**.test.sh'
+  _t x.sh 'glob:*.sh'
+  _t x.test.sh 'glob:x*.test.sh'
+  _t y.test.sh 'glob:x*.test.sh'
+  _t x.test.sh 'scripts/'
+  _t x.test.sh 'glob:scripts/*.test.sh'
+  _t x.test.sh 'glob:x*/y'
+  _t x.test.sh 'glob:../x/*.test.sh'
+  _t x.test.sh 'glob:*'
+)
+if [[ "$_th8v_out" == "1 1 1 1 0 0 0 1 1 1 0 0 0 0 0 1 " ]]; then
+  pass "th8v: the coverage predicate emits minted-edge truth over 16 fixture cells"
+else
+  fail "th8v: got '${_th8v_out}'"
+fi
+
+# th8c1: an uncovered dir-less member is named PER corpus suite (member:suite
+#        pairs, no stop-at-first) — the th8 census's report shape.
+cases=$((cases + 1))
+_th8_fix_repo c1 x.test.sh
+_th8_m=$(_TH_REPO="$TESTROOT/th8fx-c1" _th8_eval)
+if [[ "$_th8_m" == *"AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS:x.test.sh"* \
+   && "$_th8_m" == *"AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS:x.test.sh"* ]]; then
+  pass "th8c1: an uncovered dir-less member is named per corpus suite"
+else
+  fail "th8c1: output='${_th8_m}' (want per-suite uncovered pairs)"
+fi
+# th8c2: a root-anchored glob member covers the dir-less file — the grammar's
+#        exit (the census's point: representable now, so not a permanent RED).
+cases=$((cases + 1))
+_th8_fix_repo c2 x.test.sh
+_th8_m=$( _TH8_ARRAYS=(_fx8); _fx8=('glob:*.test.sh'); _TH_REPO="$TESTROOT/th8fx-c2" _th8_eval )
+if [[ -z "$_th8_m" ]]; then
+  pass "th8c2: a root-anchored glob member covers the dir-less file"
+else
+  fail "th8c2: output='${_th8_m}' (want empty — covered)"
+fi
+# th8c3: a dir-anchored glob does NOT cover a dir-less member (it never could).
+cases=$((cases + 1))
+_th8_fix_repo c3 x.test.sh
+_th8_m=$( _TH8_ARRAYS=(_fx8); _fx8=('glob:knowledge-base/**.test.sh'); _TH_REPO="$TESTROOT/th8fx-c3" _th8_eval )
+if [[ "$_th8_m" == "_fx8:x.test.sh" ]]; then
+  pass "th8c3: a dir-anchored glob does not cover the dir-less member"
+else
+  fail "th8c3: output='${_th8_m}' (want _fx8:x.test.sh)"
+fi
+# th8m-g: deadening the root-glob coverage channel drops it — the channel binds.
+cases=$((cases + 1))
+if _th_fn_mut _th8_corpus_covered _th8_mut_globdead \
+    'root)' \
+    'root_disabled)' \
+  && ( source "$REPO_ROOT/scripts/lib/affected-glob.sh"; _fx8=('glob:*.test.sh'); ! _th8_mut_globdead _fx8 x.test.sh ) \
+  && ( source "$REPO_ROOT/scripts/lib/affected-glob.sh"; _fx8=('x.test.sh'); _th8_mut_globdead _fx8 x.test.sh ); then
+  pass "th8m-g: deadening the root-glob channel drops the coverage (the channel binds)"
+else
+  fail "th8m-g: mutant did not land or coverage survived"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
@@ -3751,7 +4086,7 @@ fi
 # The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
 # dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
 # legitimately — recompute the literal rather than misdiagnosing truncation.
-MIN_CASES=228
+MIN_CASES=243
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2

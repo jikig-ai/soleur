@@ -32,16 +32,30 @@
 #
 #   Covered: every line-initial `command -v <tool>` / `which <tool>` guard spelled `… ||`,
 #   `if ! …` or `if … else …`, in a suite under the `.claude/hooks/` roots of
-#   `scripts/test-all.sh --print-suite-globs`, exits non-zero and prints
+#   `scripts/test-all.sh --print-suite-globs` OR listed in EXTRA_PAIRED_SUITES below (#8773:
+#   the converted files outside .claude/hooks/), exits non-zero and prints
 #   `UNRESOLVED: <tool> missing` when that one tool is removed from PATH — exactly 3 for a
 #   whole-suite guard — with the environment reduced to a fixed whitelist, so a guard cannot
 #   branch on CI markers. And no string literal carrying the skip token is followed by
-#   `exit 0` / `return 0` within one statement.
+#   `exit 0` / `return 0` within one statement — scanned over the paired population PLUS the
+#   sweep-only roots below (every non-hook runner glob, `scripts/*.test.sh`,
+#   `scripts/followthroughs/*.test.sh`, `tests/scripts/*.sh`, and the discoverability probes).
+#
+#   EXTRA_PAIRED_SUITES is a per-file list, not a directory glob, on purpose: siblings in
+#   those directories still carry `FAIL: <tool> missing; exit 1|2` guards — honest, but not
+#   the canonical 3 — and a directory glob would hold them to a contract nobody converted
+#   them to. Promote a directory to a glob root only after every guarded suite in it
+#   conforms (the issue's "directory by directory" instruction).
 #
 #   Not covered, named: a dependency the suite never guards; a guard spelled any other way
 #   (probing the tool by running it, an absolute path, a tool held in a variable, a guard in
 #   a SOURCED library — e.g. the gitleaks probe ADR-188 keeps as a local skip); a skip message
-#   built without the literal token; a tool that resolves but cannot run.
+#   built without the literal token; a tool that resolves but cannot run; everything under
+#   `apps/web-platform/infra/`, where ADR-188's `_skip()` makes a LOCAL exit-0 skip the
+#   contract (its CI half fails closed — a split the literal sweep cannot read, carried by
+#   infra-validation's own gates); the `.claude/hooks/*.sh` hooks themselves, where
+#   SKIPPED + exit 0 is allow-the-tool-call semantics; `apps/web-platform/test/` and
+#   `apps/cla-evidence/test/`, which are not runner globs.
 #
 # Bash 3.2 compatible: no mapfile, no declare -A, no ${var,,}; no realpath (it is one of the
 # tools under test and is missing before macOS 13).
@@ -380,21 +394,24 @@ if ! bash "$REPO_ROOT/scripts/test-all.sh" --print-suite-globs > "$GLOBS" 2> "$R
   exit 2
 fi
 SUITE_LIST=()
+SWEEP_ONLY=()
 roots_read=0
 shopt -s nullglob
 while IFS= read -r g; do
-  case "$g" in .claude/hooks/*) ;; *) continue ;; esac
-  roots_read=$((roots_read + 1))
   n_root=0
   for s in "$REPO_ROOT"/$g; do
     [[ -f "$s" ]] || continue
     n_root=$((n_root + 1))
-    [[ "$s" != "$SELF" ]] && SUITE_LIST+=("$s")
+    case "$g" in
+      .claude/hooks/*) [[ "$s" != "$SELF" ]] && SUITE_LIST+=("$s") ;;
+      *)               SWEEP_ONLY+=("$s") ;;
+    esac
   done
   if [[ "$n_root" -eq 0 ]]; then
     printf '[FATAL] runner glob %s matched no suite — a root that yields nothing cannot be checked\n' "$g" >&2
     exit 1
   fi
+  case "$g" in .claude/hooks/*) roots_read=$((roots_read + 1)) ;; esac
 done < "$GLOBS"
 shopt -u nullglob
 # Every hook root the runner declares must have been walked: a filtered read of the glob list
@@ -409,8 +426,91 @@ if [[ ${#SUITE_LIST[@]} -eq 0 ]]; then
   exit 2
 fi
 
+# EXTRA_PAIRED_SUITES (#8773): files OUTSIDE .claude/hooks/ whose `command -v` guards are
+# held to the same rc==3 + UNRESOLVED contract. Per file, not per directory (see the header).
+# Deliberately absent: scripts/sweep-followthroughs.test.sh (its `command -v mawk` arm is a
+# deliberate awk --traditional fallback — toggling mawk legitimately exits 0),
+# scripts/resend-alert-path-discoverability.sh (dig is absent on some dev hosts; the checker
+# holds itself to the same taxonomy and would exit 3 there), and suites whose guards are
+# functional probes or variable names (community-argv's `$dep` loop, stale-lock-sweep's
+# stat/touch probe, pencil-adapter's node-version probe, test-soleur-sandbox's fstype probe)
+# — all still swept below.
+EXTRA_PAIRED_SUITES=(
+  'plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh'
+  'plugins/soleur/skills/drain-prs/test/argv-ceiling.test.sh'
+  'plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh'
+  'plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh'
+  'plugins/soleur/test/fixture-relative-assert.test.sh'
+  'plugins/soleur/test/hook-input-classification-mutation.test.sh'
+  'plugins/soleur/test/ralph-loop.test.sh'
+  'plugins/soleur/test/render-c4-model.test.sh'
+  'scripts/check-backstop-revision.test.sh'
+  'scripts/context-reviewed-gate-discoverability.sh'
+  'scripts/expenses-verify-by-check.test.sh'
+  'scripts/hook-input-fault-discoverability-probe.sh'
+  'scripts/lib/frontmatter-strip.test.sh'
+  'scripts/lint-workflow-issue-write-scope.test.sh'
+  'scripts/lint-workflow-local-action-checkout.test.sh'
+  'scripts/review-reminder-liveness.test.sh'
+)
+for f in "${EXTRA_PAIRED_SUITES[@]}"; do
+  s="$REPO_ROOT/$f"
+  if [[ ! -f "$s" ]]; then
+    printf '[FATAL] paired suite %s is gone — a deleted file silently un-covers its guards; remove it from EXTRA_PAIRED_SUITES\n' "$f" >&2
+    exit 1
+  fi
+  SUITE_LIST+=("$s")
+done
+
+# Sweep-only coverage (#8773): static `SKIP`-literal-plus-`exit 0` scan with no rc==3 contract.
+# The non-hook runner globs already collected into SWEEP_ONLY above; these roots are declared
+# HERE because `scripts/*.test.sh`, `scripts/followthroughs/` and `tests/scripts/` are not
+# runner globs (they register explicitly in test-all.sh, and tests/scripts carries the legacy
+# non-.test.sh naming). The probes are individual files, not globs.
+SWEEP_GLOBS=(
+  'scripts/*.test.sh'
+  'scripts/followthroughs/*.test.sh'
+  'tests/scripts/*.sh'
+)
+SWEEP_FILES=(
+  'scripts/context-reviewed-gate-discoverability.sh'
+  'scripts/hook-input-fault-discoverability-probe.sh'
+  'scripts/resend-alert-path-discoverability.sh'
+)
+shopt -s nullglob
+for g in "${SWEEP_GLOBS[@]}"; do
+  n_root=0
+  for s in "$REPO_ROOT"/$g; do
+    [[ -f "$s" ]] || continue
+    n_root=$((n_root + 1))
+    SWEEP_ONLY+=("$s")
+  done
+  if [[ "$n_root" -eq 0 ]]; then
+    printf '[FATAL] declared sweep glob %s matched nothing — a root that yields nothing cannot be checked\n' "$g" >&2
+    exit 1
+  fi
+done
+shopt -u nullglob
+for f in "${SWEEP_FILES[@]}"; do
+  s="$REPO_ROOT/$f"
+  if [[ ! -f "$s" ]]; then
+    printf '[FATAL] declared sweep file %s is gone — remove it from SWEEP_FILES\n' "$f" >&2
+    exit 1
+  fi
+  SWEEP_ONLY+=("$s")
+done
+
 PAIRS="$ROOT/pairs"
 derive_pairs "${SUITE_LIST[@]}" > "$PAIRS"
+
+# A listed EXTRA_PAIRED_SUITES member that derives zero pairs is dead coverage — the file
+# exists (checked above) but no guard-shaped line remains in it to check.
+for f in "${EXTRA_PAIRED_SUITES[@]}"; do
+  if ! grep -qF -- "$REPO_ROOT/$f"$'\t' "$PAIRS"; then
+    printf '[FATAL] %s derived no (file, tool) pairs — its listing in EXTRA_PAIRED_SUITES is dead; restore the command -v guard or drop the listing\n' "$f" >&2
+    exit 1
+  fi
+done
 
 # The checker holds itself to its own taxonomy: a tool the host lacks cannot be toggled, so
 # every pair for it would be blamed for the host. That is UNRESOLVED, not RED.
@@ -423,7 +523,9 @@ done < <(cut -f2 "$PAIRS" | LC_ALL=C sort -u)
 
 runs0=$runs
 run_pairs "$PAIRS" "$REPO_ROOT"
-report_sweep "${SUITE_LIST[@]}"
+# awk keys line[] on FILENAME, so files present in both lists (paired suites that also live
+# under a swept glob) are scanned exactly once.
+report_sweep "${SUITE_LIST[@]}" "${SWEEP_ONLY[@]}"
 
 # Every counted pair must have been MEASURED: a loop that stops calling check_pair still
 # counts pairs, so the floor alone cannot see it.
@@ -434,7 +536,7 @@ fi
 
 # Anti-vacuity floor (ADR-193): printf + exit, never through pass()/fail(). If you removed a
 # guard or a guarded suite on purpose, lower MIN_PAIRS here and say why in the PR.
-MIN_PAIRS=45
+MIN_PAIRS=76
 if [[ "$pairs_checked" -lt "$MIN_PAIRS" ]]; then
   printf '[FATAL] anti-vacuity floor: found %s pairs < MIN_PAIRS=%s. If you deliberately removed a guard or a guarded suite, lower MIN_PAIRS to %s here and say why in the PR; otherwise the population regex or root derivation broke.\n' "$pairs_checked" "$MIN_PAIRS" "$pairs_checked" >&2
   exit 1

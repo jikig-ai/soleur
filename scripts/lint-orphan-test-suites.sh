@@ -13,14 +13,13 @@
 # asserts is about the REPOSITORY, and every directory-scoped version of it has eventually
 # been outgrown by a suite added one directory over. Scope note (deliberate, not an
 # oversight): the producer is keyed on the `*.test.sh` SUFFIX, so the `test-<name>.sh`
-# convention used under tests/scripts/ and tests/commands/ is outside it. tests/commands/ has
-# its own dedicated loop at the bottom of this file. tests/scripts/ (45 `test-*.sh`) is
-# currently registered in full by explicit `run_suite` lines, but NOTHING guards that
-# membership -- an earlier revision of this comment claimed it was "floored by
-# .github/scripts/test/run-all.sh's own MIN_SUITES", which is false: that runner globs
-# `$DIR/test-*.sh` with DIR=.github/scripts/test and never looks at tests/scripts/. Recorded
-# as a known gap rather than left as a false assurance; closing it needs a second producer
-# keyed on the `test-*.sh` convention.
+# convention used under tests/scripts/ and tests/commands/ is outside it. Each directory has
+# its own dedicated loop below: tests/commands/ since #7442, tests/scripts/ since #7718 --
+# a second producer keyed on the `test-*.sh`/`test_*.py` conventions, checking every
+# suite-named basename against the explicit `run_suite` lines that are that directory's ONLY
+# registration mechanism. (An earlier revision of this note claimed tests/scripts/ was
+# "floored by .github/scripts/test/run-all.sh's own MIN_SUITES" -- false: that runner globs
+# `$DIR/test-*.sh` with DIR=.github/scripts/test and never looks at tests/scripts/.)
 #
 # THE COVERED SET IS A UNION OF SIX REGISTRATION SURFACES, enumerated below at their point of
 # use. Six, not one: a linter that only knew test-all.sh would report all 98 infra suites as
@@ -935,8 +934,8 @@ fi
 # STILL NEEDED AFTER THE WHOLE-REPO WIDENING (#7402), and this is the reason: the naming
 # convention here is `test-<name>.sh`, not `<name>.test.sh`, so the producer's suffix does not
 # match it. Widening the walk to every directory does not widen it to every naming convention.
-# The same gap covers tests/scripts/, which is floored instead by
-# .github/scripts/test/run-all.sh's own MIN_SUITES.
+# The same gap covered tests/scripts/ until #7718 added the dedicated walk immediately
+# below.
 cmd_seen=0
 for f in "$REPO_ROOT"/tests/commands/*.sh; do
   [[ -e "$f" ]] || continue
@@ -960,6 +959,75 @@ if (( cmd_seen < 1 )); then
   fails=$((fails + 1))
 fi
 
+# --- tests/scripts/ suite-named files (#7718) --------------------------------------------
+# The same defect class as tests/commands/ above, one directory over, with ONE more naming
+# convention. Every suite under tests/scripts/ is registered by an explicit `run_suite`
+# line and NOTHING auto-discovers the directory: the producer's `*.test.sh` suffix cannot
+# match `test-<name>.sh`, and no SUITE_GLOBS entry reaches it — deliberately, because the
+# glob loop executes every match unconditionally under one group, which would strip the
+# per-suite relevance gating, shard legs and conditional registration these explicit lines
+# carry (and double-register all of them, which the disjointness check above would red).
+# Until #7718 the only thing between a suite here and silently gating nothing was nobody
+# forgetting the line — the same shape as #3366, and it was invisible to every check above.
+#
+# TWO suite conventions live in the directory: `test-*.sh` (anchored on
+# `run_suite … bash tests/scripts/<file>`, same command-anchored shape as tests/commands/)
+# and `test_*.py` (anchored on `run_suite … python3 -m unittest tests.scripts.<module>` —
+# the registration names the dotted MODULE, not the file path). Everything else —
+# `_git_fixture_env.py`, `trio-baseline.tsv`, `lib/` helpers, `fixtures/` data — is outside
+# both shapes on purpose and is never flagged.
+#
+# The producer is `git ls-files 'tests/scripts/'` filtered on the BASENAME, not a top-level
+# glob: a suite-shaped name placed under lib/ or fixtures/ is still checked, because those
+# subtrees hold helpers and data and a `test-*` basename there is either a misplaced suite
+# or a convention violation. Index-bound like every other producer in this file, which also
+# means a staged-but-uncommitted suite is inside the domain — the pre-commit shape of the
+# exact omission this exists to catch.
+ts_sh=0
+ts_py=0
+git -C "$REPO_ROOT" ls-files 'tests/scripts/' | LC_ALL=C sort -u > "$WORK/ts_all"
+while IFS= read -r ts_f; do
+  [[ -n "$ts_f" ]] || continue
+  ts_base="${ts_f##*/}"
+  case "$ts_base" in
+    test-*.sh)
+      ts_sh=$((ts_sh + 1))
+      ts_re="^[[:space:]]*run_suite .*[[:space:]]bash[[:space:]]+[\"']?${ts_f}[\"']?([[:space:]]|\$)"
+      ;;
+    test_*.py)
+      ts_py=$((ts_py + 1))
+      ts_mod="tests\\.scripts\\.${ts_base%.py}"
+      ts_re="^[[:space:]]*run_suite .*python3[[:space:]]+-m[[:space:]]+unittest[[:space:]]+${ts_mod}([[:space:]]|\$)"
+      ;;
+    *)
+      continue
+      ;;
+  esac
+  if ! grep -qE "$ts_re" "$RUNNER"; then
+    echo "ERROR: ${ts_f} is never run by test-all.sh -- tests/scripts/ is registered ONLY by explicit run_suite lines (no glob reaches the directory and no workflow step substitutes), so without one this suite gates nothing while reading as coverage. Add a run_suite line, or relocate the suite under a directory the *.test.sh walk reaches." >&2
+    fails=$((fails + 1))
+  fi
+done < "$WORK/ts_all"
+
+# PER-CONVENTION FLOORS, hand-ratcheted like MIN_TRACKED_SUITES and for the same stated
+# reason: there is no second producer to derive them from. A single combined count cannot
+# see one convention's arm going dark while the other keeps the total plausible — the
+# companion suite's M34 pair mutates each direction separately. 80 against 88 test-*.sh
+# measured 2026-10-25: slack for a real cleanup, not narrowing budget. The test_*.py arm
+# carries the tests/commands/ non-empty doctrine — four members today; zero is a finding to
+# record deliberately, never a silent green.
+if (( ts_sh < 80 )); then
+  echo "ERROR: the tests/scripts/ walk enumerated ${ts_sh} test-*.sh suite files, below the floor of 80 -- the producer or the basename filter narrowed, so every registration check above certified a SUBSET of the directory while reporting on all of it." >&2
+  fails=$((fails + 1))
+fi
+if (( ts_py < 1 )); then
+  echo "ERROR: the tests/scripts/ walk enumerated ZERO test_*.py suite files -- the basename filter dropped the second convention, or the suites were all deleted (a finding to record here, not absorb silently)." >&2
+  fails=$((fails + 1))
+fi
+# Printed on every run, pass or fail — same every-run evidence discipline as the main
+# `walked …` line above: a report with no numbers cannot be told from a report over nothing.
+echo "tests/scripts/: walked $((ts_sh + ts_py)) suite-named files (${ts_sh} test-*.sh, ${ts_py} test_*.py) -- each checked for a run_suite registration"
+
 # --- Affected-set census (#8322) ------------------------------------------------
 # test-all.sh's affected gate (the local default) classifies every registration
 # as ALWAYS_ON (verdict is a property of the whole tree), EDGE (verdict is a
@@ -973,12 +1041,20 @@ fi
 # The classification is read from `test-all.sh --print-affected-set` receipts,
 # NOT recomputed here -- a second classifier would certify its own drift.
 AFF_LIB="$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+GLOB_LIB="$REPO_ROOT/scripts/lib/affected-glob.sh"
 if [[ ! -f "$AFF_LIB" ]]; then
   echo "ERROR: $AFF_LIB is missing -- test-all.sh degrades to full without it, so no classification is trustworthy." >&2
+  fails=$((fails + 1))
+elif [[ ! -f "$GLOB_LIB" ]]; then
+  # Fail CLOSED (the REL_LIB class): without the shared glob: classifier the
+  # census arm below cannot classify, and a skipped check reads as green.
+  echo "ERROR: $GLOB_LIB is missing -- the glob: declared-member census cannot run, so every glob: check below would certify nothing." >&2
   fails=$((fails + 1))
 else
   # shellcheck source=scripts/lib/test-affected-paths.sh
   source "$AFF_LIB"
+  # shellcheck source=scripts/lib/affected-glob.sh
+  source "$GLOB_LIB"
 
   # The live registration stream. Same env-scrubbing as the --print-suite-globs
   # call above and for the same reasons: this runs INSIDE test-all.sh as a
@@ -1114,8 +1190,8 @@ else
       case "$p" in
         glob:*)
           # Third declared kind (#9813): glob:<literal-head>/<glob-tail>.
-          # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm
-          # in _affected_add_edge, the in-flight revalidation in _diff_edge_hit,
+          # malformed-shape invariant — ONE doctrine, ONE classifier: the mint arms
+          # in _affected_add_edge/_affected_add_declared_edge, the in-flight revalidation in _diff_edge_hit,
           # this census arm, and the covers() oracle in
           # scripts/test-affected-kb-consumers.test.sh must classify a shape
           # identically; GLOBENT (registration-only classifier) is a deliberate
@@ -1127,29 +1203,9 @@ else
           # repo-relative diff line ever (a dead edge that narrows).
           _cg="${p#glob:}"
           _cg_why=""
-          case "$_cg" in
-            *[\*?[]*)
-              case "$_cg" in
-                *[?[]*) _cg_why="contains ? or [ (outside the grammar)" ;;
-                *[!A-Za-z0-9_./*-]*) _cg_why="contains a byte outside the grammar charset" ;;
-                *)
-                  _cgh="${_cg%%[*?[]*}"
-                  case "$_cgh" in
-                    /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _cg_why="its head is not a repo-relative prefix" ;;
-                    */)
-                      _cgt="${_cg#$_cgh}"
-                      case "$_cgt" in
-                        */) _cg_why="its tail ends in / — no path can match it" ;;
-                        *\**) [[ -d "$REPO_ROOT/${_cgh%/}" ]] || _cg_why="its head dir ${_cgh} does not exist" ;;
-                        *) _cg_why="its tail carries no *" ;;
-                      esac
-                      ;;
-                    *) _cg_why="its head does not end in /" ;;
-                  esac
-                  ;;
-              esac
-              ;;
-            *)
+          _affected_glob_split "$_cg"
+          case "$_AGS_CLASS" in
+            literal)
               # No metachar: the mint recurses it as a literal path entry —
               # the census checks it as one. A miss here mints NOTHING — the
               # entry is dead, which narrows (the opposite direction from the
@@ -1159,6 +1215,36 @@ else
               elif ! _tracked_member "$_cg"; then
                 _cg_why="a literal entry that is not a tracked file -- a dead edge that can never match a diff"
               fi
+              ;;
+            dir)
+              [[ -d "$REPO_ROOT/${_AGS_HEAD%/}" ]] || _cg_why="its head dir ${_AGS_HEAD} does not exist" ;;
+            root)
+              # Root-anchored (#10198): valid — no -d probe; the repo root is
+              # always present and the tail is already `*`-carrying and /-free.
+              # Decline a pattern that matches a --name-status token: the hit
+              # arm's blob carries `M`/`R100`-shaped phantom lines after the TAB
+              # split, so e.g. `glob:*`/`glob:R*` would be a disguised
+              # always-match (safe direction, but defeats the narrowing).
+              # Every --name-status letter (M A D T U X B) plus every emitted
+              # score token (R000-R100 today; C mirrored so a future -C flag
+              # can't re-open the class) — a sample leaks digit-position shapes
+              # like R*6 or *7, so the check iterates the full emitted set; all
+              # [[ == ]] are builtin, ~210 evaluations.
+              for _st in M A D T U X B R{000..100} C{000..100}; do
+                [[ "$_st" == $_cg ]] && { _cg_why="its pattern matches the name-status token $_st — a disguised always-match over the diff blob"; break; }
+              done ;;
+            malformed)
+              # The _AGS_WHY → message map is the single reason vocabulary.
+              case "$_AGS_WHY" in
+                qbracket) _cg_why="contains ? or [ (outside the grammar)" ;;
+                charset) _cg_why="contains a byte outside the grammar charset" ;;
+                head-not-reporel) _cg_why="its head is not a repo-relative prefix" ;;
+                head-mid-slash) _cg_why="its head does not end in /" ;;
+                tail-trailing-slash) _cg_why="its tail ends in / — no path can match it" ;;
+                tail-no-star) _cg_why="its tail carries no *" ;;
+                root-tail-slash) _cg_why="its tail carries a / under a root-anchored head — no dir-less diff line can match it" ;;
+                *) _cg_why="its shape is malformed" ;;
+              esac
               ;;
           esac
           if [[ -n "$_cg_why" ]]; then
@@ -1177,10 +1263,22 @@ else
           }
           ;;
         *)
-          _tracked_member "$p" || {
+          # #9441: a slash-less entry that IS an existing directory must be
+          # written '<p>/'. Since #9441 declared/consumed edges mint through
+          # _affected_add_declared_edge, which carries no `-e` filter, the
+          # declared SPELLING is what carries dir-ness to a deleted subject:
+          # `dir/` mints the `^dir/` prefix on the deleting diff; `dir` mints
+          # `^dir` — an exact line a diff can never produce. `_tracked_member`
+          # cannot see the defect (its dir-prefix arm passes on any tracked
+          # member beneath the dir), so `-d` runs first. `.` is exempt: it is
+          # the whole-tree member, not a directory prefix.
+          if [[ "$p" != "." && -d "$REPO_ROOT/$p" ]]; then
+            echo "ERROR: ${aff_arr} declares '${p}', an existing directory written without a trailing '/' -- a deleted subject mints '^${p}' (an exact line no diff can produce): write it '${p}/'." >&2
+            fails=$((fails + 1))
+          elif ! _tracked_member "$p"; then
             echo "ERROR: ${aff_arr} declares '${p}', which is not a tracked file -- a dead edge can never match a diff." >&2
             fails=$((fails + 1))
-          }
+          fi
           ;;
       esac
     done

@@ -3,7 +3,7 @@ title: "A Checklist for Trusting AI Work Was Just Published. We Shipped All of I
 type: pillar
 publish_date: 2026-10-24
 channels: discord, x, bluesky, linkedin-personal
-status: scheduled
+status: published
 issue_reference: "#10902"
 ---
 

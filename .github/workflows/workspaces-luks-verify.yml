@@ -311,7 +311,7 @@ jobs:
           # future producer/consumer drift of exactly this kind.
           is_probe_integrity() {
             case "${1:-}" in
-              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable|heartbeat_url_absent|heartbeat_push_failed|covered_inode_peek_failed)
+              readyz_gate_regression|readyz_unparseable|readyz_unreachable|readiness_helper_unavailable|workspace_count_baseline_missing|workspace_count_unreadable|mapper_path_override_refused|doppler_unreachable|heartbeat_url_absent|heartbeat_push_failed|covered_inode_peek_failed|escrow_check_failed)
                 return 0 ;;
             esac
             return 1

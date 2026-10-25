@@ -98,8 +98,8 @@ if [[ -z "$DISK_BASE" ]]; then
     echo "FAIL: no non-tmpfs writable dir on CI — the sandbox allocator arms cannot run (a vacuous pass is the defect)" >&2
     exit 1
   fi
-  echo "SKIPPED: no non-tmpfs writable dir — 0 sandbox allocator cases ran (NOT a pass; run on a host with a disk-backed /var/tmp or ~/.cache)" >&2
-  exit 0
+  echo "UNRESOLVED: no non-tmpfs writable dir — 0 sandbox allocator cases ran; this suite asserted nothing (run on a host with a disk-backed /var/tmp or ~/.cache)" >&2
+  exit 3
 fi
 export SOLEUR_SANDBOX_BASES="$DISK_BASE"
 
@@ -503,13 +503,13 @@ for doc in plugins/soleur/skills/work/references/work-scratch-sandboxes.md plugi
 done
 bash "$CLI" rm "$RIS" >/dev/null 2>&1 || true
 
-echo "== skip policy: no disk-backed base FAILS on CI and skips loudly (rc 0, never silent) elsewhere =="
+echo "== skip policy: no disk-backed base FAILS on CI and is UNRESOLVED (rc 3, never silent/green) elsewhere =="
 cases=$((cases + 1)); rc=0
 env CI=1 SBX_TEST_CANDIDATES="$TESTROOT/no-such-dir" bash "${BASH_SOURCE[0]}" >/dev/null 2>"$TESTROOT/skip-ci.err" || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -q 'FAIL' "$TESTROOT/skip-ci.err"; then pass "CI + no non-tmpfs dir => rc 1 (a vacuous pass is the defect)"; else fail "CI skip policy rc=$rc (want 1)"; fi
 cases=$((cases + 1)); rc=0
 env -u CI SBX_TEST_CANDIDATES="$TESTROOT/no-such-dir" bash "${BASH_SOURCE[0]}" >/dev/null 2>"$TESTROOT/skip-local.err" || rc=$?
-if [[ "$rc" -eq 0 ]] && grep -q 'SKIPPED' "$TESTROOT/skip-local.err"; then pass "local + no non-tmpfs dir => rc 0 with a loud SKIPPED line"; else fail "local skip policy rc=$rc (want 0 + SKIPPED)"; fi
+if [[ "$rc" -eq 3 ]] && grep -q 'UNRESOLVED' "$TESTROOT/skip-local.err"; then pass "local + no non-tmpfs dir => rc 3 with a loud UNRESOLVED line (#8773: not measured is not green)"; else fail "local skip policy rc=$rc (want 3 + UNRESOLVED)"; fi
 
 echo
 # Case floor: the EXACT expected count, compared and exited on directly — deliberately NOT through
