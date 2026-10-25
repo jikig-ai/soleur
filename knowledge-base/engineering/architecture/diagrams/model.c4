@@ -3,12 +3,16 @@
 // C4 level (context / container / component) with clickable drill-down.
 // Migrated 1:1 from the former Mermaid C4 diagrams (system-context, container,
 // component-plugin) — union of all elements and relationships, nothing dropped.
-// last-verified: 2026-10-18
+// last-verified: 2026-10-25
 // 2026-10-18 audit: drift recorded as `//` comments next to the affected elements (api,
 // github -> tunnel, the L3 command components), NOT as description edits. Every
 // description/element change must ship with a regenerated model.likec4.json
 // (c4-model-freshness gate), and the scheduled audit cannot run
 // scripts/regenerate-c4-model.sh. Search this file for "DRIFT (2026-10-18" to find them.
+// 2026-10-25 audit: the one description edit (skills 103 -> 104) is a same-length string swap,
+// mirrored by hand at all four of its occurrences in model.likec4.json (view hashes are blanked,
+// so no digest changes). New structural drift (OpenCode / Antigravity harnesses) is recorded
+// as a comment: search "DRIFT (2026-10-25".
 model {
 
   codex = system "Codex" {
@@ -43,6 +47,20 @@ model {
 
   founder -> cursorCli "Runs Soleur from the local Cursor CLI"
   cursorCli -> platform.plugin "Loads generated skill and agent stubs from the plugin root" { technology "File I/O" }
+
+  // DRIFT (2026-10-25 audit): two more harnesses load the plugin and have no element here.
+  // (1) OpenCode V2 (ADR-291, accepted 2026-10-20, shipped v3.342.0 / PR #10571): `opencode` is a
+  // member of the Harness union in plugins/soleur/lib/harness.ts; the adapter is
+  // plugins/soleur/opencode/ (plugin.ts hook module binding the guards at permission.evaluate,
+  // opencode.json registering the CANONICAL skills tree via the `skills` config key, INSTRUCTIONS.md,
+  // generated agent and command stubs) plus the packages/opencode-plugin installer. No Stop hook,
+  // so <promise>DONE</promise> is advisory there. Model it as an #external `opencode` system with
+  // `founder -> opencode` and `opencode -> platform.plugin` (File I/O) edges, mirroring cursorCli,
+  // and add it to the context and containers views.
+  // (2) Antigravity CLI (`agy`): harness.ts detects it (ANTIGRAVITY_CLI / AGY_VERSION / GEMINI_CLI
+  // env markers) and ships plugins/soleur/antigravity/INSTRUCTIONS.md, but no ADR records its
+  // support status. Model it once that status is decided.
+  // Both need a model.likec4.json regeneration (new elements change the layout).
 
   founder = actor "Founder / Operator" {
     description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038, ADR-073 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
@@ -173,7 +191,7 @@ model {
 
       skills = container "Skills" {
         technology "Markdown SKILL.md"
-        description "103 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+        description "104 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
       }
       agents = container "Agents" {
         technology "Markdown Agent Defs"
@@ -185,7 +203,7 @@ model {
       }
 
       // C4 L3 — components inside the Soleur Plugin
-      // DRIFT (2026-10-18 audit): plugins/soleur/commands/ holds FOUR commands (go, sync, help,
+      // DRIFT (2026-10-18 audit, re-confirmed 2026-10-25): plugins/soleur/commands/ holds FOUR commands (go, sync, help,
       // version); only three are drawn here. /soleur:version is the explicit, user-started
       // installed-vs-latest compare named on the `plugin -> github` edge (#10064). Add a
       // `version` component (and its views.c4 include) with a model.likec4.json regeneration.
@@ -698,7 +716,7 @@ model {
   // pattern to generalize; the other two are connector-relative (`localhost:`) and therefore
   // resolve to whichever replica CF load-balanced onto, NOT to a chosen host.
   tunnel -> zotRegistry "registry. ingress → tcp://10.0.1.30:5000. ORIGIN-RELATIVE — whichever connector replica answers proxies to the correct zot host, but ONLY if that replica is a 10.0.1.0/24 member (ADR-114 I1). #6416 (historical): web-2 was not a subnet member, so CI's registry bridge failed and the zot mirror silently skipped (masked green by continue-on-error). web-2 was retired 2026-07-17 (#6538); the surviving web-1 connector is a subnet member, so this failure mode is closed. 2026-07-29 CAUSE CLASS (#7071) — a DIFFERENT failure on this same edge, recorded so the closed #6416 mode above is not re-derived as the explanation: CI's bridge failed with websocket: bad handshake, and THAT TIME the cause was the EDGE refusing the upgrade (CF Access rejecting a rotated service token), NOT a missing origin route — a missing route would handshake and fail origin-side. Root cause: every doppler_secret carrying a token declares lifecycle{ignore_changes=[value]}, so Terraform REPLACED the registry_push Access service token and could never propagate the new value; the stale one was still being served. Detected by scripts/check-cloudflare-token-drift.sh, now wired into scheduled-terraform-drift.yml + a release preflight. 2026-08-03 THIRD CAUSE CLASS (#7242) — this record's dichotomy (edge-refusal vs missing-route) was NOT exhaustive, and reading it as exhaustive is what misdirected the next investigation. A bad handshake means only that the tunnel could not complete an ORIGIN DIAL. Third case, measured: the route was present AND Access ADMITTED the request, but the origin was RESTARTING — zot crash-looping at ~4/min, which a tens-of-seconds docker login + three-tag crane copy is near-certain to straddle. The Access policy was intact and the connector had never dropped. So bad handshake is a SYMPTOM, never a cause: since #7242 the failing step branches on a verdict the job measured (scripts/zot-mirror-diagnosis.sh, ADR-166) rather than naming one. NOTE also that a plain HTTPS GET here returns an empty 200 BY DESIGN (tcp:// ingress is not a WS upgrade) and is not a health probe." { technology "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)" }
-  // DRIFT (2026-10-18 audit, re-measured 2026-10-22): the "25 terraform_data SSH provisioners" count below is stale. The
+  // DRIFT (2026-10-18 audit, re-measured 2026-10-22 and 2026-10-25 — still 28): the "25 terraform_data SSH provisioners" count below is stale. The
   // web-platform root now carries 28 terraform_data resources with an ssh connection{} block
   // (server.tf 24, workspaces-luks.tf 3, ci-ssh-key.tf 1; deploy_pipeline_fix is local-exec and
   // not counted; re-measure with a count of `resource "terraform_data"` blocks holding a
