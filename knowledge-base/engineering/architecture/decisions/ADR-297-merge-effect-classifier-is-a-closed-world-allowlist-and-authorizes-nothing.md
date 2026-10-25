@@ -55,14 +55,15 @@ for `production-effecting`; exit 2 for unusable input, with stdout still `produc
 only the exit status or only stdout can therefore never read "not" from a failure.
 
 **The meaning.** `not-production-effecting` means: no path-gated production workflow fires from this file list,
-where "fires" means performs a production act through a path filter. It does not mean "no runtime effect". Out of scope by design: scheduled crons that read `knowledge-base/`,
+where "fires" means performs a production act through a path filter. It does not mean "no runtime
+effect". Out of scope by design: scheduled crons that read `knowledge-base/`,
 agent-steering files outside the basename set below, content consumed at build time with no path trigger, and
 bookkeeping workflows that fire on every merge (ledger reconcile, board sync).
 
 **The allowlist.** The only way to read `not-production-effecting`: every changed path, both sides of a rename, is
-under `knowledge-base/` or is a root-level `*.md`, except that any path whose basename is `AGENTS*.md`, `CLAUDE*.md` or `GEMINI*.md`, in any letter
-case and at any depth, is effecting (these files steer every agent session, including scheduled agents that hold
-secrets). Everything else, including every unknown path and the classifier's own files, is effecting.
+under `knowledge-base/` or is a root-level `*.md`, except that any path whose basename is `AGENTS*.md`, `CLAUDE*.md` or `GEMINI*.md`, in any
+letter case and at any depth, is effecting (these files steer every agent session, including scheduled agents
+that hold secrets). Everything else, including every unknown path and the classifier's own files, is effecting.
 Malformed paths (empty line or segment, backslash, CR, tab, NUL, leading or trailing `/`, `.` or `..` segments,
 control characters, a git-quoted path) are exit 2. Only the two verdict modes (`--files-from`, `--pr`) carry the
 verdict contract; `--help`, `--print-witnesses`, `--filter-allowed` and `--self-check` print no verdict line.
@@ -111,9 +112,9 @@ needs the founder's authorization at that time. A tracking issue carries these c
 - The operator's merge question gets a machine-derived "may change production" clause instead of agent prose; a
   non-technical operator sees the same plain sentence every time.
 - `web-platform-release.yml`'s `workflow_run` arm runs after every main CI run, including docs-only merges; it is
-  accepted as gated because its inner path check decides whether to deploy. The parity test's coverage for that
-  one workflow is the executable P3 and P1 assertions in `workflow-run-deploy-invariants.test.sh`, not the path
-  matcher.
+  accepted because its inner path check decides whether it deploys. The parity test models that workflow by its
+  own `push.paths` and runs the path matcher over them; the executable P3 and P1 assertions in
+  `workflow-run-deploy-invariants.test.sh` are what pin that `push.paths` and the inner path filter agree.
 - `scripts/ci-e2e-classify.sh` carries a similar `knowledge-base/**` plus root `*.md` allowlist for a different
   purpose (skipping e2e). The two are not kept in step by any check; a change to one should be read against the
   other.

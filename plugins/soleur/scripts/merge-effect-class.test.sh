@@ -14,9 +14,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="${MEC_SUT:-$HERE/merge-effect-class.sh}"
 OPHOLDS="$HERE/../skills/ship/references/operator-holds.md"
 PARITY="$HERE/../test/merge-effect-class-parity.test.sh"
+PRISTINE_SUT="$HERE/merge-effect-class.sh"
 PASS=0
 FAIL=0
-FLOOR=190
+FLOOR=212
 
 ok() { PASS=$((PASS + 1)); }
 bad() {
@@ -91,6 +92,9 @@ expect "mixed-case Agents.md is effecting" 1 "$EFF" $'Agents.md\n'
 expect "nested lowercase claude.md is effecting" 1 "$EFF" $'knowledge-base/x/claude.md\n'
 expect "CLAUDE.local.md is effecting" 1 "$EFF" $'CLAUDE.local.md\n'
 expect "GEMINI.md is effecting" 1 "$EFF" $'GEMINI.md\n'
+expect "upper-case AGENTS.MD extension is effecting" 1 "$EFF" $'knowledge-base/x/AGENTS.MD\n'
+expect "upper-case CLAUDE.MD extension is effecting" 1 "$EFF" $'knowledge-base/x/CLAUDE.MD\n'
+expect "upper-case GEMINI.MD extension is effecting" 1 "$EFF" $'knowledge-base/x/GEMINI.MD\n'
 expect "unknown top-level path is effecting" 1 "$EFF" $'zzz-unknown\n'
 expect "LICENSE is effecting" 1 "$EFF" $'LICENSE\n'
 expect "root package.json is effecting" 1 "$EFF" $'package.json\n'
@@ -121,6 +125,7 @@ expect "backslash is unusable" 2 "$EFF" $'knowledge-base\\a.md\n'
 expect "CR is unusable" 2 "$EFF" $'knowledge-base/a.md\r\n'
 expect "tab is unusable" 2 "$EFF" $'knowledge-base/a\tb.md\n'
 expect "git-quoted path is unusable" 2 "$EFF" $'"knowledge-base/caf\\303\\251.md"\n'
+expect "quoted path without a backslash is unusable" 2 "$EFF" $'"knowledge-base/a.md"\n'
 expect "bad path after an effecting one still exits 2" 2 "$EFF" $'apps/x.ts\n\n'
 
 # a NUL byte would be dropped by `read` and join two paths into one; it is refused outright
@@ -181,6 +186,13 @@ printf 'knowledge-base/a.md\napps/x.ts\nREADME.md\nAGENTS.md\n\nknowledge-base/.
 run_sut "$SUT" --filter-allowed <"$TMP/list"
 check "filter-allowed: rc" "$R_RC" 0
 check "filter-allowed: admitted paths only" "$R_OUT" $'knowledge-base/a.md\nREADME.md\nknowledge-base/b.md'
+printf 'knowledge-base/a.md\nREADME.md' >"$TMP/list"
+run_sut "$SUT" --filter-allowed <"$TMP/list"
+check "filter-allowed: an unterminated last line is judged" "$R_OUT" $'knowledge-base/a.md\nREADME.md'
+printf 'knowledge-base/a\000../x\n' >"$TMP/list"
+run_sut "$SUT" --filter-allowed <"$TMP/list"
+check "filter-allowed refuses a NUL byte: rc" "$R_RC" 2
+check "filter-allowed refuses a NUL byte: prints no path" "$R_OUT" ""
 
 run_sut "$SUT" --self-check
 check "self-check: stdout" "$R_OUT" "self-check=ok"
@@ -194,6 +206,9 @@ MEC_CI_ONLY_LIST="$TMP/blank-reason.tsv" run_sut "$SUT" --self-check
 check "self-check with a whitespace reason: stdout" "$R_OUT" "self-check=FAILED"
 MEC_CI_ONLY_LIST="$TMP/missing.tsv" run_sut "$SUT" --self-check
 check "self-check with a missing list: stdout" "$R_OUT" "self-check=FAILED"
+printf '# only a comment\n' >"$TMP/comment-only.tsv"
+MEC_CI_ONLY_LIST="$TMP/comment-only.tsv" run_sut "$SUT" --self-check
+check "self-check with a comment-only list: stdout" "$R_OUT" "self-check=FAILED"
 
 # the section-1 and section-2 rows are all a nested stub-SUT run needs to turn red
 if [ -n "${MEC_NESTED:-}" ]; then
@@ -272,6 +287,9 @@ pr_expect() { # pr_expect <name> <rc> <stdout> <reason token> <repo> args...
   case "$R_ERR" in *"reason=$reason"*) ok ;; *) bad "$name: reason token [$R_ERR], want $reason" ;; esac
 }
 ONE_SAFE='[[{"filename":"README.md","status":"modified"}]]'
+fx OPEN main "$SHA_A" 1 "$ONE_SAFE"
+control "pr_expect (wrong rc)" pr_expect ctl 9 "$EFF" allowlisted "$TMP/repo-ok" --pr 7
+control "pr_expect (wrong reason)" pr_expect ctl 0 "$NOT" not-open "$TMP/repo-ok" --pr 7
 
 PAGE1='[{"filename":"knowledge-base/a.md","status":"modified"},{"filename":"README.md","status":"modified"}]'
 PAGE2='[{"filename":"knowledge-base/b.md","status":"added"}]'
@@ -291,6 +309,8 @@ fx OPEN main "$SHA_A" 1 '[[{"filename":"knowledge-base/x.md","status":"renamed"}
 pr_expect "--pr rename without previous_filename is unusable" 2 "$EFF" list-unreadable "$TMP/repo-ok" --pr 7
 fx OPEN main "$SHA_A" 1 '[[{"filename":"README.md","status":"modified","previous_filename":5}]]'
 pr_expect "--pr non-string previous_filename is unusable" 2 "$EFF" list-unreadable "$TMP/repo-ok" --pr 7
+fx OPEN main "$SHA_A" 1 '[[{"filename":"knowledge-base/x.md","status":"copied"}]]'
+pr_expect "--pr copy without previous_filename is unusable" 2 "$EFF" list-unreadable "$TMP/repo-ok" --pr 7
 
 fx MERGED main "$SHA_A" 1 "$ONE_SAFE"
 pr_expect "--pr merged" 2 "$EFF" not-open "$TMP/repo-ok" --pr 7
@@ -321,7 +341,7 @@ fx OPEN main "$SHA_A" 1 "[$PAGE1,$PAGE2]"
 pr_expect "--pr more entries than changedFiles" 2 "$EFF" incomplete-list "$TMP/repo-ok" --pr 7
 
 # a non-integer changedFiles must never skip the count guard
-for cf in '"x"' null '"1"' 1.5 -1; do
+for cf in '"x"' null '"1"' 1.5 -1 99999999999999999999; do
   fx OPEN main "$SHA_A" "$cf" "$ONE_SAFE"
   pr_expect "--pr changedFiles=$cf" 2 "$EFF" list-unreadable "$TMP/repo-ok" --pr 7
 done
@@ -362,6 +382,15 @@ R_RC=0
 (PATH="$TMP/bin:$PATH" MEC_FX="$TMP/fx" gh pr list >/dev/null 2>"$TMP/e") || R_RC=$?
 check "gh fake refuses unmodelled argv" "$R_RC" 64
 
+# tool-missing: with only bash and dirname on PATH the script cannot find gh/jq/git
+mkdir -p "$TMP/pathonly"
+ln -sf "$(command -v dirname)" "$TMP/pathonly/dirname"
+R_RC=0
+(cd "$TMP/repo-ok" && PATH="$TMP/pathonly" "$(command -v bash)" "$SUT" --pr 7) >"$TMP/o" 2>"$TMP/e" || R_RC=$?
+check "--pr without gh/jq/git: rc" "$R_RC" 2
+check "--pr without gh/jq/git: stdout" "$(cat "$TMP/o")" "$EFF"
+case "$(cat "$TMP/e")" in *"reason=tool-missing"*) ok ;; *) bad "--pr without gh/jq/git: reason token [$(cat "$TMP/e")]" ;; esac
+
 # ── 4. the consumer text (operator-holds.md section 3 step 2) ─────────────────────────────────
 anchor() { # anchor <literal> <what>: the literal must be present in the consumer text
   if grep -qF -- "$1" "$OPHOLDS"; then ok; else bad "operator-holds.md lacks: $2"; fi
@@ -387,6 +416,13 @@ if [ -f "$PARITY" ]; then
   MEC_PYTHON=false bash "$PARITY" >"$TMP/o" 2>"$TMP/e" || R_RC=$?
   if [ "$R_RC" -ne 0 ]; then ok; else bad "parity test must fail without PyYAML, not skip"; fi
   case "$(cat "$TMP/o" "$TMP/e")" in *PyYAML*) ok ;; *) bad "parity test names the missing PyYAML" ;; esac
+  # a failure that lands only in the synthetic matrix must still fail the gate: strip the `# mut:widen` marker
+  # from a copy of the script so the parity test's own harness row fails, and require a non-zero exit
+  sed 's/# mut:widen$//' "$PRISTINE_SUT" >"$TMP/nomarker.sh"
+  R_RC=0
+  MEC_SCRIPT="$TMP/nomarker.sh" bash "$PARITY" >"$TMP/o" 2>"$TMP/e" || R_RC=$?
+  if [ "$R_RC" -ne 0 ]; then ok; else bad "a matrix-only parity failure must fail the gate"; fi
+  case "$(cat "$TMP/e")" in *"PARITY-FAIL"*) ok ;; *) bad "a matrix-only parity failure must print PARITY-FAIL" ;; esac
 fi
 
 # ── 6. executable mutants (marker lines `# mut:<name>` in the script) ─────────────────────────
@@ -399,6 +435,11 @@ crashed() {
   return 1
 }
 
+# Accepted equivalent mutants (no fixture can distinguish them from the pristine script):
+#   - classify_file's second-pass `m -ne n` guard: both loops read the same private regular copy of the list,
+#     so the second read cannot fail without an I/O error between the two reads.
+#   - the redundant `/*`, `"*`, empty-path and `*/` arms of is_bad_path, and the individual changedFiles type
+#     clauses: each is backstopped by the segment loop or by another clause of the same check.
 mutate() { # mutate <name> <sed expression applied to the marker line>; sets MUTSUT
   local name="$1" expr="$2" n
   MUTSUT="$MUT/$name.sh"
@@ -426,6 +467,10 @@ if crashed; then bad "crashed() reports a healthy run as crashed"; else ok; fi
 # a mutant that changes nothing must be scored SURVIVED
 MUTSUT="$PRISTINE"
 control "killed (no-op mutant)" killed ctl 1 "$EFF" $'apps/x.ts\n'
+control "landed (identical files)" landed ctl
+n_markers="$(grep -c '# mut:nonexistent$' "$PRISTINE")"
+check "a mutant name with no marker has marker count 0" "$n_markers" 0
+control "mutate (missing marker)" mutate nonexistent 's/x/y/'
 
 if mutate widen 's/("knowledge-base\/")/("knowledge-base\/" "apps\/")/' && landed widen; then
   killed widen 1 "$EFF" $'apps/web-platform/x.ts\n'

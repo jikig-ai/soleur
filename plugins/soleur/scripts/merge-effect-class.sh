@@ -6,8 +6,8 @@
 # merge-effect-class.sh --self-check            liveness signal only, NOT proof of the property
 #
 # Decides, from the files a pull request changes, whether merging it can fire a path-gated production
-# workflow. Read-only: it writes only to a private temp directory, prints no file contents and echoes no
-# path (#10923, ADR-297).
+# workflow. Read-only: it writes only to a private temp directory, prints no file contents and, in the verdict
+# modes, echoes no path (#10923, ADR-297).
 #
 # VERDICT. In the two verdict modes (--files-from, --pr) exactly one stdout line: `production-effecting` or
 # `not-production-effecting`.
@@ -23,7 +23,8 @@
 # where "fires" means performs a production act through a path filter. It does NOT mean "no runtime effect"
 # (scheduled crons reading knowledge-base/, build-time reads of root files and per-merge bookkeeping
 # workflows are out of scope by design; see ADR-297). web-platform-release.yml's workflow_run arm runs after
-# every main CI run and is accepted as gated by its own inner path check (see the parity test). The verdict
+# every main CI run; it is accepted because its inner path check decides whether it deploys, and the parity
+# test models it by its own push.paths while pinning (via the P3/P1 assertions) that the two agree. The verdict
 # authorizes nothing and is never evidence in an envelope `Gate:` or a receipt.
 #
 # ALLOWLIST (closed world). Every path, both sides of a rename, must be under knowledge-base/ or be a
@@ -41,12 +42,13 @@
 # for an interactive merge or ready; the caller must merge with --match-head-commit and the sha printed on
 # stderr. Dispatches and not-yet-created revert PRs are out of scope. --self-check proves liveness only: its
 # probes and the allowlist live in this one file. Test seams: MEC_CI_ONLY_LIST (--self-check only). The
-# `# mut:<name>` markers are read by merge-effect-class.test.sh; keep each on its own single line.
+# `# mut:<name>` markers are read by merge-effect-class.test.sh (and `# mut:widen` by the parity test); keep each
+# on its own single line.
 #
 # --pr takes the fetch shape of admin-merge-ready.sh (`gh pr view`, then `gh api --paginate --slurp` of the
 # files, shape-checked with `jq -e`, the count compared with `changedFiles`; the API caps at 3000). That
-# script has no previous_filename or control-character check; this one does, so a fix in either belongs in
-# both.
+# script does not shape-validate previous_filename or scan for control characters; this one does, so a fix in
+# either belongs in both.
 #
 # stderr: `merge-effect-class: <verdict> reason=<token>[ sha=<head sha>]`. Tokens: allowlisted,
 # outside-allowlist, empty-list, bad-path, incomplete-list, list-unreadable, tool-missing, not-open,
@@ -138,12 +140,18 @@ is_allowed() {
 }
 
 # The chokepoint. Every input gate runs before is_allowed(); `emit` is the only exit.
+has_nul() { # $1 = file; 0 when it holds a NUL byte, 1 when not, 2 when the check itself failed
+  local total stripped
+  total="$(wc -c <"$1" | tr -d ' ')" || return 2
+  stripped="$(tr -d '\000' <"$1" | wc -c | tr -d ' ')" || return 2
+  [ "$total" != "$stripped" ]
+}
+
 classify_file() { # $1 = file holding one path per line
-  local l n=0 m=0 all_ok=1 total stripped
-  total="$(wc -c <"$1" | tr -d ' ')" || emit 2 list-unreadable
-  stripped="$(tr -d '\000' <"$1" | wc -c | tr -d ' ')" || emit 2 list-unreadable
+  local l n=0 m=0 all_ok=1 nul_rc=0
   # bash `read` drops NUL silently, so a NUL-joined pair of paths would be judged as one concatenated path.
-  if [ "$total" != "$stripped" ]; then emit 2 bad-path; fi
+  has_nul "$1" || nul_rc=$?
+  case "$nul_rc" in 0) emit 2 bad-path ;; 1) ;; *) emit 2 list-unreadable ;; esac
   while IFS= read -r l || [ -n "$l" ]; do
     n=$((n + 1))
     if is_bad_path "$l"; then emit 2 bad-path; fi
@@ -156,8 +164,8 @@ classify_file() { # $1 = file holding one path per line
   done <"$1"
   # The second pass must see every line the first pass saw; a pass that did not run (or stopped early) must
   # never default to "everything was allowed". Defensive: no fixture can make the second read of the same
-  # regular file fail (it needs an I/O error between the two reads), so the suite records this guard as an
-  # accepted equivalent mutant rather than a pinned one.
+  # regular file fail (it needs an I/O error between the two reads), so merge-effect-class.test.sh records this
+  # guard under "accepted equivalent mutants" instead of pinning it.
   if [ "$m" -ne "$n" ]; then emit 2 list-unreadable; fi
   if [ "$all_ok" -eq 1 ]; then emit 0 allowlisted; fi
   emit 1 outside-allowlist
@@ -209,6 +217,8 @@ cmd_pr() { # $1 = PR number, $2 = --repo value or empty
   head="$(jq -r '.headRefOid' <<<"$pr_json")" || emit 2 list-unreadable
   changed="$(jq -r '.changedFiles' <<<"$pr_json")" || emit 2 list-unreadable
   case "$changed" in '' | *[!0-9]*) emit 2 list-unreadable ;; esac
+  # a run of digits too long for the shell's integer tests would make `[ -ge ]` error and skip the guard
+  if [ "${#changed}" -gt 6 ]; then emit 2 list-unreadable; fi
   case "$head" in
     *[!0-9a-f]* | '') emit 2 list-unreadable ;;
   esac
@@ -253,11 +263,18 @@ cmd_print_witnesses() {
 }
 
 cmd_filter_allowed() {
-  local l
+  local l nul_rc=0
+  WORK="$(mktemp -d "${TMPDIR:-/tmp}/mec.XXXXXXXX")" || exit 2
+  cat >"$WORK/list" || exit 2
+  has_nul "$WORK/list" || nul_rc=$?
+  if [ "$nul_rc" -ne 1 ]; then
+    echo "merge-effect-class: --filter-allowed refused its input (NUL byte or unreadable)" >&2
+    exit 2
+  fi
   while IFS= read -r l || [ -n "$l" ]; do
     if is_bad_path "$l"; then continue; fi
     if is_allowed "$l"; then printf '%s\n' "$l"; fi
-  done
+  done <"$WORK/list"
   exit 0
 }
 

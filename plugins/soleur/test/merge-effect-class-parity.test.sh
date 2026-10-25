@@ -49,10 +49,11 @@ MEANING = 'ci-only means "not directly gated by the merged file list as a produc
 LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 # The one workflow whose unfiltered workflow_run arm is accepted: web-platform-release.yml runs after every main
 # CI run, and its inner path check (jobs.release.with.path_filter / resolve-target) decides whether to deploy.
-# The guard for that claim is the executable P3 and P1 assertions in workflow-run-deploy-invariants.test.sh.
+# The engine models it by its own push.paths; the executable P3 and P1 assertions in
+# workflow-run-deploy-invariants.test.sh are what pin that push.paths and the inner filter agree.
 DEEMED_GATED = "web-platform-release.yml"
 POPULATION_FLOOR = 25
-MATRIX_FLOOR = 30
+MATRIX_FLOOR = 66
 CHECKS = 0
 MATRIX_RUNS = 0
 MATRIX = []
@@ -396,7 +397,7 @@ GOOD = {
 GOOD_ROWS = "ci.yml\tchecks only\n"
 
 
-def synth(files, rows, script=None, inv=None):
+def synth(files, rows, script=None, inv=None, full=False):
     d = tempfile.mkdtemp(prefix="mec-parity-")
     try:
         os.makedirs(os.path.join(d, "wf"))
@@ -405,7 +406,7 @@ def synth(files, rows, script=None, inv=None):
                 fh.write(body)
         with open(os.path.join(d, "ci.tsv"), "w") as fh:
             fh.write(rows)
-        return "\n".join(run_checks(os.path.join(d, "wf"), os.path.join(d, "ci.tsv"), inv or INV, script or SCRIPT, full=False))
+        return "\n".join(run_checks(os.path.join(d, "wf"), os.path.join(d, "ci.tsv"), inv or INV, script or SCRIPT, full=full))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -421,6 +422,7 @@ def green(label, files, rows, **kw):
 
 
 green("the good fixture", GOOD, GOOD_ROWS)
+red("0 a full run below the population floor", GOOD, GOOD_ROWS, "population floor", full=True)
 red("1 new unfiltered push workflow with no row", dict(GOOD, **{"new.yml": wf("New", {"push": {"branches": ["main"]}})}), GOOD_ROWS, "unfiltered trigger")
 red("2 empty workflows directory", {}, GOOD_ROWS, "no workflows found")
 out = synth(dict(GOOD, **{"n1.yml": wf("N1", {"push": {"branches": ["main"]}}), "n2.yml": wf("N2", {"push": {"branches": ["main"]}})}), GOOD_ROWS)
@@ -449,10 +451,14 @@ red("9b paths together with paths-ignore", dict(GOOD, **{"prod.yml": wf("Prod", 
 red("9c unknown trigger key", dict(GOOD, **{"u.yml": wf("U", {"registry_package": {}})}), GOOD_ROWS, "unknown trigger key")
 red("9d a .yaml workflow is enumerated", dict(GOOD, **{"new.yaml": wf("NewY", {"push": {"branches": ["main"]}})}), GOOD_ROWS, "new.yaml")
 red("9e scalar paths value is one glob, not characters", dict(GOOD, **{"prod.yml": wf("Prod", {"push": {"branches": ["main"], "paths": "knowledge-base/**"}})}), GOOD_ROWS, "fires workflow prod.yml")
+red("9f a ci-only row for a workflow with no merge-time trigger", dict(GOOD, **{"s.yml": wf("S", {"schedule": [{"cron": "0 0 * * *"}]})}), GOOD_ROWS + "s.yml\tnot a merge trigger\n", "no longer enumerated")
+red("9g scalar paths naming one witness", dict(GOOD, **{"prod.yml": wf("Prod", {"push": {"branches": ["main"], "paths": "knowledge-base/witness/deep.md"}})}), GOOD_ROWS, "fires workflow prod.yml")
 red("10 a second workflow with its own push.paths and an unfiltered workflow_run arm", dict(GOOD, **{
     "two.yml": wf("Two", {"push": {"branches": ["main"], "paths": ["apps/**"]}, "workflow_run": {"workflows": ["CI"], "types": ["completed"], "branches": ["main"]}})}), GOOD_ROWS, "only web-platform-release.yml is deemed gated")
 green("must-pass: paths-ignore covering knowledge-base and markdown", dict(GOOD, **{"prod.yml": wf("Prod", {"push": {"branches": ["main"], "paths-ignore": ["knowledge-base/**", "*.md"]}})}), GOOD_ROWS)
 green("must-pass: negated glob after a positive one", dict(GOOD, **{"prod.yml": wf("Prod", {"push": {"branches": ["main"], "paths": ["**", "!knowledge-base/**", "!*.md"]}})}), GOOD_ROWS)
+green("must-pass: a push to a branch other than main is not enumerated", dict(GOOD, **{"dev.yml": wf("Dev", {"push": {"branches": ["develop"]}})}), GOOD_ROWS)
+green("must-pass: a workflow_run restricted to another branch is not enumerated", dict(GOOD, **{"dr.yml": wf("DR", {"workflow_run": {"workflows": ["CI"], "types": ["completed"], "branches": ["develop"]}})}), GOOD_ROWS)
 green("must-pass: tags-only push is not enumerated", dict(GOOD, **{"t.yml": wf("T", {"push": {"tags": ["v*"]}})}), GOOD_ROWS)
 green("must-pass: scalar on form with workflow_dispatch", dict(GOOD, **{"d.yml": "name: D\non: workflow_dispatch\njobs: {}\n"}), GOOD_ROWS)
 
@@ -461,13 +467,27 @@ scratch = tempfile.mkdtemp(prefix="mec-parity-script-")
 try:
     with open(SCRIPT) as fh:
         src = fh.read()
-    mcheck(src.count("# mut:widen") == 1, "the script must carry exactly one '# mut:widen' marker")
+    mcheck(len(re.findall(r"# mut:widen$", src, re.M)) == 1, "the script must carry exactly one '# mut:widen' marker")
     mut = re.sub(r'\("knowledge-base/"\)(\s+# mut:widen)', r'("knowledge-base/" "apps/")\1', src)
     mcheck(mut != src, "the widen mutation did not land")
     mut_path = os.path.join(scratch, "merge-effect-class.sh")
     with open(mut_path, "w") as fh:
         fh.write(mut)
     red("harness: a script with a widened allowlist", dict(GOOD), GOOD_ROWS, "fires workflow prod.yml", script=mut_path)
+
+    # stub scripts: each oracle failure the engine claims to notice must turn it red
+    def stub(name, body):
+        path = os.path.join(scratch, name)
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n" + body)
+        return path
+    two = "printf 'knowledge-base/witness/deep.md\\nWITNESS.md\\n'"
+    red("harness: a script printing one witness", dict(GOOD), GOOD_ROWS, "fewer than two witnesses",
+        script=stub("one-witness.sh", 'case "$1" in --print-witnesses) echo WITNESS.md ;; --filter-allowed) cat >/dev/null; echo knowledge-base/a.md ;; esac\n'))
+    red("harness: a script whose filter admits nothing", dict(GOOD), GOOD_ROWS, "admitted no tracked file",
+        script=stub("empty-filter.sh", 'case "$1" in --print-witnesses) %s ;; --filter-allowed) cat >/dev/null ;; esac\n' % two))
+    red("harness: --filter-allowed and --files-from disagree", dict(GOOD), GOOD_ROWS, "rejects a tracked file it admitted",
+        script=stub("disagree.sh", 'case "$1" in --print-witnesses) %s ;; --filter-allowed) cat >/dev/null; echo knowledge-base/a.md ;; --files-from) cat >/dev/null; echo production-effecting; exit 1 ;; esac\n' % two), full=True)
 
     # dropping the executable P3 or P1 assertion from the invariants test must redden the deemed-gated constant
     if os.path.isfile(INV):
@@ -491,7 +511,7 @@ for m in REAL + MATRIX:
 total_fail = len(REAL) + len(MATRIX)
 if total_fail:
     print("rerun: " + RERUN, file=sys.stderr)
-print("%d checks, %d failed, %d workflow files" % (CHECKS, total_fail, len(load(WFDIR))))
+print("%d checks, %d failed, %d matrix rows, %d workflow files" % (CHECKS, total_fail, MATRIX_RUNS, len(load(WFDIR))))
 sys.exit(1 if total_fail else 0)
 PYEOF
 exit "$R_RC"
