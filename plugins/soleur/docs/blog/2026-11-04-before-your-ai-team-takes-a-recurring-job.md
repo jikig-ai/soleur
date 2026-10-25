@@ -43,9 +43,9 @@ A line at a bakery is orderly. It does not stop two customers from ordering the 
 
 Our rule makes that distinction a hard requirement: an answer of "the jobs wait their turn" is rejected outright. The job has to name a real mechanism — checking whether the work was already done before starting, leaving a marker so the next run sees it, or keying the work to something that can't be created twice. Order is a courtesy. Idempotence is a property.
 
-## Two doors, or seven
+## Three doors, or seven
 
-When we built this rule, the first version watched the two doors we already knew about — the place we schedule automations and the place our background functions live. It would have caught every new job that entered through either one.
+When we built this rule, the first version watched the three doors we already knew about — the place we schedule automations, the place our background functions live, and our registered checks. It would have caught every new job that entered through any of the three.
 
 Then we did the boring thing, which turned out to be the important thing: we enumerated every way a recurring job can be born in our system. Not the ways we remembered — the ways that exist.
 
