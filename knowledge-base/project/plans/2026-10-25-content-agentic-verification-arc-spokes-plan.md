@@ -286,8 +286,8 @@ bumps; General register; markdown links not bare URLs.
   this PR. Recorded as an operator-scope note in `decision-challenges.md`.
 - #10736 (open decision-challenge) questions the convention's citation scope
   (four consumers vs the two #10402 named). The #10737 post describes the
-  convention doc as shipped (four consumers); a later revert would leave the
-  post's convention claims intact — it names no consumer count.
+  convention doc's contract and names no consumer count or roster, so its
+  claims stay true under either #10736 resolution (CTO ruling 2026-10-25).
 
 ### Open Code-Review Overlap
 
@@ -554,13 +554,13 @@ build-in-public` plus the spoke's topic tags.
   story (link `map-that-cant-drift`); (7) close — closing technical link
   (the shipped convention doc
   `plugins/soleur/skills/test-browser/references/feature-map.md`), CTA.
-- **Fact pins:** four consumer workflows read the convention today (name
-  them as "the workflows that browse, audit, and reproduce" in founder
-  terms — do NOT print skill names); the doc specifies the entry schema
+- **Fact pins:** the doc specifies the entry schema
   (route/entry/selectors/expects/auth/gotchas), the canonical
   `docs/feature-map.md` location, the seed contract, and the field-scoped
-  refresh; #10736 (open citation-scope question) does not change what the
-  convention doc says — the post describes the doc, not the citation spread.
+  refresh; the post names no consumer count or roster — #10736 (open
+  citation-scope question) does not change what the convention doc says;
+  the post describes the doc, not the citation spread (CTO ruling
+  2026-10-25: no consumer count, no capability enumeration).
 - **FAQ candidates:** "Why can't the agent write the whole map at once?",
   "What happens to notes I add to the map?", "Where does the map live in my
   repo?"
