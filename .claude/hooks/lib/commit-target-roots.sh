@@ -52,7 +52,7 @@
 #   CTR_LEXER        path of the lexer (resolved from this file's own location)
 # ctr_resolve_roots then maps CTR_TARGETS to git toplevels in CTR_ROOTS.
 #
-# STAGING FACTS (#10696, ADR-300). The same walk also records what the command's OWN staging verbs and commit
+# STAGING FACTS (#10696, ADR-301). The same walk also records what the command's OWN staging verbs and commit
 # flags will put in the index, so the caller can scan the index the commit WILL record, not the one
 # that exists before the command runs (commit-index-sim.sh builds that index from these facts):
 #   CTR_STAGE_API            1 (a consumer can test the library has the staging facts)

@@ -10,7 +10,7 @@ related_adrs: [ADR-157, ADR-165, ADR-256, ADR-295]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-300: Scan the would-be index of a chained git commit, on a copy, with a bounded no-bypass deadline
+# ADR-301: Scan the would-be index of a chained git commit, on a copy, with a bounded no-bypass deadline
 
 ## Status
 

@@ -97,7 +97,7 @@ Measured motivation (ruling evidence): about 77 percent of roughly 2,900 sampled
 
 ## Proposed Solution
 
-> **Superseded by the review-round rulings (decision rows 22 to 46); ADR-300 is the shipped contract.** There is no
+> **Superseded by the review-round rulings (decision rows 22 to 46); ADR-301 is the shipped contract.** There is no
 > producer detection (`CTR_STAGE_PRODUCER`), no return code 10 and no `git-commit-secret-scan-sim-failed` bypass row: a
 > trusted `pathspec-missing` always DENIES (`cause=pathspec-missing`, row 25). `CTR_ADD_META` is six parallel arrays plus
 > `CTR_ADD_ARGV`; `ctr_stage_dump` lives in the test suite (row 38). There is no `timeout`/`gtimeout` ladder, wrapper
@@ -286,7 +286,7 @@ The must-PASS controls that are NOT the canonical shape are group 3 (`git add cl
 ## Files to Create
 
 - `.claude/hooks/lib/commit-index-sim.sh` - the shared would-be-index library.
-- `knowledge-base/engineering/architecture/decisions/ADR-300-scan-the-would-be-index-of-a-chained-git-commit.md` - review round (row 36): the single index of the simulation contract, deny causes, the no-bypass deadline and the named residuals.
+- `knowledge-base/engineering/architecture/decisions/ADR-301-scan-the-would-be-index-of-a-chained-git-commit.md` - review round (row 36): the single index of the simulation contract, deny causes, the no-bypass deadline and the named residuals.
 - `knowledge-base/project/specs/feat-one-shot-10696-secret-scan-staging-gap/decision-challenges.md` - created at plan time (rows 1 to 21).
 - `knowledge-base/project/specs/feat-one-shot-10696-secret-scan-staging-gap/tasks.md` - derived from this plan.
 
