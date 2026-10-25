@@ -256,7 +256,7 @@ describe("front matter cannot execute code (#8293 review: engines:{} does not re
   it("a ---js block whose body is a VALID JS object literal is rejected and its payload never runs", () => {
     const g = globalThis as Record<string, unknown>;
     delete g.PATTERNS_PWNED;
-    const text = pageText().replace(/^---\n/, "---js\n(globalThis.PATTERNS_PWNED = 1, { title: 'x' })\n---\n").replace(/\n---\n## Root cause/, "\n---\n## Root cause");
+    const text = pageText().replace(/^---\n/, "---js\n(globalThis.PATTERNS_PWNED = 1, { title: 'x' })\n---\n");
     // Sanity: the fixture really is a js-engine page with a trailing body.
     expect(text.startsWith("---js\n")).toBe(true);
     expect(parsePatternPage(text, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "schema" });

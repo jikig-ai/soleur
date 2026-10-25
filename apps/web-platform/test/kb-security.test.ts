@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync, statSync, lstatSync } from "fs";
+import { readFileSync, readdirSync, statSync } from "fs";
 import { resolve, join } from "path";
 
 /**
@@ -64,12 +64,13 @@ describe("KB API security", () => {
         .join("\n");
     const importers: string[] = [];
     const walk = (dir: string) => {
-      for (const name of readdirSync(dir)) {
+      // Dirents carry the entry type, so no separate stat of the path precedes the read (no check-then-use race).
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const name = ent.name;
         if (SKIP.has(name) || (dir === root && SKIP_TOP.has(name))) continue;
         const full = join(dir, name);
-        const st = lstatSync(full);
-        if (st.isSymbolicLink()) continue;
-        if (st.isDirectory()) walk(full);
+        if (ent.isSymbolicLink()) continue;
+        if (ent.isDirectory()) walk(full);
         else if (CODE.test(name) && IMPORT_RE.test(withoutCommentLines(readFileSync(full, "utf-8")))) {
           importers.push(full.slice(root.length + 1));
         }

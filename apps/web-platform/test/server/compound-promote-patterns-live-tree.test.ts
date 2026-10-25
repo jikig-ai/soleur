@@ -7,7 +7,7 @@
 // (`repo-wide-containment.test.ts` fails otherwise).
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, lstatSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,14 +67,17 @@ function attritionProblems(p: string, root: string, retired: string): string[] {
   const out: string[] = [];
   if (retired.includes(p)) out.push(`evidence-retired:${p}`);
   const abs = join(root, p);
+  // One open with O_NOFOLLOW instead of lstat-then-read: a symlink is refused by the kernel (ELOOP) and the
+  // read goes through the same descriptor, so there is no window between the check and the use.
+  let fd: number | null = null;
   try {
-    if (lstatSync(abs).isSymbolicLink()) out.push(`evidence-symlink:${p}`);
-    else {
-      const excerpt = readFileSync(abs, "utf-8").split("\n").slice(0, 10).join("\n");
-      if (piiRegex.test(excerpt)) out.push(`evidence-pii:${p}`);
-    }
-  } catch {
-    out.push(`evidence-unreadable:${p}`);
+    fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const excerpt = readFileSync(fd, "utf-8").split("\n").slice(0, 10).join("\n");
+    if (piiRegex.test(excerpt)) out.push(`evidence-pii:${p}`);
+  } catch (e) {
+    out.push((e as NodeJS.ErrnoException).code === "ELOOP" ? `evidence-symlink:${p}` : `evidence-unreadable:${p}`);
+  } finally {
+    if (fd !== null) closeSync(fd);
   }
   return out;
 }
