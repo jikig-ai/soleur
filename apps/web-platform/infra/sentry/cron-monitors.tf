@@ -1413,8 +1413,13 @@ resource "sentry_cron_monitor" "main_health_monitor" {
   project                 = data.sentry_project.web_platform.slug
   name                    = "main-health-monitor"
   schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 210
-  max_runtime_minutes     = 185
+  # #9410 — the monitor is sharded: the envelope is the run's bounded wall
+  # clock, i.e. the SLOWEST leg's job ceiling plus the report job's, not a
+  # single job's. Currently max(85, 80, 35, 30, 30) + 15 = 100, margin = +25.
+  # The G2 row of plugins/soleur/test/main-health-monitor-workflow.test.sh
+  # keeps these two literals coupled to the workflow.
+  checkin_margin_minutes  = 125
+  max_runtime_minutes     = 100
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

@@ -125,7 +125,11 @@ killed=""; hard=""; unread=""; allowlisted=""; judged=""; strikes=""; nstrikes=0
 classify() {  # classify <run id>: appends to the lists above and returns; it never exits
   local rid="$1" jobs_json jid log slice nw k ann msg tmo toks infra_vals ni infra reds nred sumn sumline sf su s other n_other name
   jobs_json="$(gh api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" 2>/dev/null)" || { unread="$unread $rid(jobs)"; return; }
-  jid="$(jq -r '[.jobs[] | select(.name == "health-check")][0].id // empty' <<<"$jobs_json" 2>/dev/null)" || jid=""
+  # #9410 — the monitor is sharded: the infra run is the `test-infra` job (one
+  # leg, deliberately not a matrix, so this probe keeps reading ONE job's log
+  # and annotations: the `infra=`/`infra_elapsed_s=` notice, the `-P K` width
+  # line, the REDs and the single tally all stay on one check-run).
+  jid="$(jq -r '[.jobs[] | select(.name == "test-infra")][0].id // empty' <<<"$jobs_json" 2>/dev/null)" || jid=""
   [ -n "$jid" ] || { unread="$unread $rid(job)"; return; }
   # --allow-escape-sequences: gh refuses a log body carrying ESC bytes without it (every real monitor log does)
   log="$(gh api --allow-escape-sequences "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null)" || { unread="$unread $rid(log)"; return; }
