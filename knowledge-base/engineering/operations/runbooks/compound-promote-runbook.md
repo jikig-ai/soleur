@@ -113,7 +113,7 @@ clicking **Ready for review**:
 If any of the five fail, **close the PR**. The append-only audit log
 (`knowledge-base/project/learnings/promotion-log.md`) records accepted-or-pending
 proposals only; the close acts as the rejection signal, and rejection state is read
-from GitHub PR state through Octokit (ADR-297), not from the log. The loop's
+from GitHub PR state through Octokit (ADR-299), not from the log. The loop's
 per-week cap counts open PRs only, so a closed proposal won't block next week's run.
 On the patterns path a closed-unmerged proposal also suppresses its exact cluster for
 60 days from `closed_at` (see the `input` option section below).
@@ -174,7 +174,7 @@ What a streak means when you read the weekly marker:
 - **`edit-derive-failed` or `diff-underivable-apply`**: a SERVER defect (a derived diff is additive by
   construction). Both go to Sentry; the follow-through probe exits 1.
 
-## The `input` option and the patterns-path marker fields (ADR-297)
+## The `input` option and the patterns-path marker fields (ADR-299)
 
 Recorded 2026-10-24. The manual-trigger event accepts an optional `data.input`:
 
@@ -268,7 +268,7 @@ lapses).
 - Tests: `scripts/compound-promote.test.sh`
 - Handler: `apps/web-platform/server/inngest/functions/cron-compound-promote.ts` (the former
   `scheduled-compound-promote.yml` workflow no longer exists; the Inngest function replaced it)
-- Pattern wiki and ledger decision: `knowledge-base/engineering/architecture/decisions/ADR-297-pattern-wiki-and-pr-state-proposal-ledger.md`
+- Pattern wiki and ledger decision: `knowledge-base/engineering/architecture/decisions/ADR-299-pattern-wiki-and-pr-state-proposal-ledger.md`
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-021-stateless-self-modifying-cron.md`
 - Audit log: `knowledge-base/project/learnings/promotion-log.md`
 - Plan: `knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md`

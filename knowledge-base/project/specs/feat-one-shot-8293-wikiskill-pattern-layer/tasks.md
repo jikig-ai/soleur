@@ -13,7 +13,7 @@ One PR, seven commits in the order below. Tests first inside every phase.
 
 ## Phase 1: ADR, C4, docs (commit 1)
 
-- [x] 1.1 ADR-297 via `soleur:architecture create` (decision, reader contract, Alternatives = Cut List, reader classification table, WikiSkill CC BY 4.0 attribution, status adopting)
+- [x] 1.1 ADR-299 via `soleur:architecture create` (decision, reader contract, Alternatives = Cut List, reader classification table, WikiSkill CC BY 4.0 attribution, status adopting)
 - [x] 1.2 `model.c4`: `kb` description gains "pattern wiki (project/patterns)"; add the `api -> github` edge; regenerate `model.likec4.json` if required; run c4 tests
 - [x] 1.3 `promotion-log.md` header: accepted-or-pending only, Octokit lookup, drop the nonexistent workflow reference (no schema change)
 - [x] 1.4 `compound-promote-runbook.md`: `input` option, new marker fields, stale workflow reference (~L208)

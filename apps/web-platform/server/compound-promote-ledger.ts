@@ -1,5 +1,5 @@
 // #8293 -- the proposal ledger READER. GitHub PR state is the ledger of record for what the
-// weekly proposer already put in front of a human (ADR-297): `promotion-log.md` records accepted-or-
+// weekly proposer already put in front of a human (ADR-299): `promotion-log.md` records accepted-or-
 // pending proposals only, and a second row-landing write path is forbidden (ADR-054). So a rejected
 // cluster is recognised by reading the `self-healing/auto-*` PRs back, through Octokit (the runtime
 // image has no `gh`), and suppressing a cluster whose recomputed hash was already proposed.

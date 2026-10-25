@@ -2338,7 +2338,7 @@
 "id": "1mfkjc4"
 },
 "6tmxl3": {
-"title": "cron-compound-promote reads bot-PR state through Octokit search (patterns path): GET /search/issues for is:pr head:self-healing/auto- PRs, bound to the App bot author and the anchored promote-cluster title, to suppress an already-proposed cluster (ADR-297). Read-only; fail-closed-loud (status=error, ledger_read=failed) and run only when the manual trigger sets input=patterns. The Inngest layer opens no git workspace and the model has no inngest -> github edge, so the read is attributed to the container that executes the function",
+"title": "cron-compound-promote reads bot-PR state through Octokit search (patterns path): GET /search/issues for is:pr head:self-healing/auto- PRs, bound to the App bot author and the anchored promote-cluster title, to suppress an already-proposed cluster (ADR-299). Read-only; fail-closed-loud (status=error, ledger_read=failed) and run only when the manual trigger sets input=patterns. The Inngest layer opens no git workspace and the model has no inngest -> github edge, so the read is attributed to the container that executes the function",
 "technology": "HTTPS (GitHub REST search API, App installation token)",
 "source": {
 "model": "platform.webapp.api"

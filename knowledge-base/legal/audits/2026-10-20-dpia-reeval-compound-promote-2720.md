@@ -143,7 +143,7 @@ the marker is a PA-8 operation), is pinned by the marker's own test suite (Guard
 was not re-run for this memo. #10553 added new refusal reason names to the list; the field set
 is unchanged. The phase-2 prompt and the proposed insertion are not written to the marker.
 
-> **Superseded 2026-10-24 (#8293, ADR-297; conditioned on the merge of the pattern-layer PR):** the statement that the marker field set is unchanged is superseded for manual runs with `input:"patterns"`, which add six fields; see the Addendum of 2026-10-24 at the end of this memo. The text above stays as the record of 2026-10-20.
+> **Superseded 2026-10-24 (#8293, ADR-299; conditioned on the merge of the pattern-layer PR):** the statement that the marker field set is unchanged is superseded for manual runs with `input:"patterns"`, which add six fields; see the Addendum of 2026-10-24 at the end of this memo. The text above stays as the record of 2026-10-20.
 
 **Other sinks, which the marker statement does not cover.** (i) When the allowlist refuses a
 model-supplied target path, the path is written to the function log and to Sentry after
@@ -429,7 +429,7 @@ Additional triggers:
 
 ---
 
-## Addendum 2026-10-24 (#8293, ADR-297): the patterns path
+## Addendum 2026-10-24 (#8293, ADR-299): the patterns path
 
 *Dated, append-only. Conditioned on the merge of the pattern-layer PR: until then none of this describes a deployed state. Nothing above is rewritten.*
 

@@ -376,8 +376,8 @@ discoverability_test:
 
 ### ADR
 
-Create **ADR-297** (provisional ordinal - `soleur:ship` re-verifies the next free ordinal against
-`origin/main`; on renumber sweep `grep -rn 'ADR-297' knowledge-base/project/{plans,specs}/feat-one-shot-8293-wikiskill-pattern-layer/`)
+Create **ADR-299** (provisional ordinal - `soleur:ship` re-verifies the next free ordinal against
+`origin/main`; on renumber sweep `grep -rn 'ADR-299' knowledge-base/project/{plans,specs}/feat-one-shot-8293-wikiskill-pattern-layer/`)
 via `soleur:architecture create`: *"Pattern wiki as a sibling knowledge surface; GitHub PR state is the
 proposal ledger of record."* Decision: (1) `knowledge-base/project/patterns/` is the sole surface for
 pattern, required-reading and common-solution knowledge; (2) the ledger of record for proposal outcomes
@@ -478,7 +478,7 @@ Persisted in `knowledge-base/project/specs/feat-one-shot-8293-wikiskill-pattern-
 | C5 | technical | Ruled by CTO agent, 2026-10-24: ledger-read only on `input=patterns` |
 | C6 | technical | Ruled by CTO agent, 2026-10-24: repo-wide census cut; by-construction pins + classification table |
 | C9 | technical | Ruled by CTO agent, 2026-10-24: marker fields `input_source`, `patterns_open`, `ledger_read`, `ledger_suppressed`, `ledger_prs_scanned` |
-| C11 | technical | Ruled by CTO agent, 2026-10-24: ADR-297 yes; C4 = kb description + edge on the hosting container (plan resolves to `api -> github`) |
+| C11 | technical | Ruled by CTO agent, 2026-10-24: ADR-299 yes; C4 = kb description + edge on the hosting container (plan resolves to `api -> github`) |
 | C12 | technical | Ruled by CTO agent, 2026-10-24: merged suppression permanent, documented; vacuity fix in the flip tracker text |
 | C13 | technical | Ruled by CTO agent, 2026-10-24: one PR, commit order fixed (see Phases) |
 | Plan refinement | technical | Hash parsed from the anchored PR **title** via a shared builder/parser, because `Cluster-Hash:` is a commit trailer and not a PR-body line |
@@ -498,7 +498,7 @@ Commit order inside the single PR follows the CTO ruling (C13). Test-first throu
 
 ### Phase 1 - ADR, C4, docs (commit 1)
 
-- 1.1 ADR-297 via `soleur:architecture create`; 1.2 `model.c4` `kb` description + sibling `api -> github` edge (+ regenerate/validate); 1.3 `promotion-log.md` header (accepted-or-pending; Octokit lookup; drop the nonexistent workflow reference); 1.4 `compound-promote-runbook.md` (the `input` option, reading the new fields, the stale workflow reference at ~L208); 1.5 `betterstack-log-query.md` marker field list; 1.6 legal notes (PA-31 §(c) note, DPIA addendum, `Superseded` markers in `compliance-posture.md`).
+- 1.1 ADR-299 via `soleur:architecture create`; 1.2 `model.c4` `kb` description + sibling `api -> github` edge (+ regenerate/validate); 1.3 `promotion-log.md` header (accepted-or-pending; Octokit lookup; drop the nonexistent workflow reference); 1.4 `compound-promote-runbook.md` (the `input` option, reading the new fields, the stale workflow reference at ~L208); 1.5 `betterstack-log-query.md` marker field list; 1.6 legal notes (PA-31 §(c) note, DPIA addendum, `Superseded` markers in `compliance-posture.md`).
 
 ### Phase 2 - Pattern module, schema, lint (commit 2; RED then GREEN)
 
@@ -580,7 +580,7 @@ flip tracker (7.1) owns the build of the machinery.
 - `apps/web-platform/test/server/inngest/cron-compound-promote-patterns-handler.test.ts`
 - `knowledge-base/project/patterns/<slug>.md` x up to 8 (seed pages)
 - `plugins/soleur/skills/compound-capture/assets/pattern-page-template.md`
-- `knowledge-base/engineering/architecture/decisions/ADR-297-pattern-wiki-and-pr-state-proposal-ledger.md` (ordinal provisional)
+- `knowledge-base/engineering/architecture/decisions/ADR-299-pattern-wiki-and-pr-state-proposal-ledger.md` (ordinal provisional)
 - `knowledge-base/project/specs/feat-one-shot-8293-wikiskill-pattern-layer/tasks.md`
 - `knowledge-base/project/specs/feat-one-shot-8293-wikiskill-pattern-layer/decision-challenges.md`
 
@@ -709,7 +709,7 @@ tags never reach the facet files the clustering key reads.
 **Assembly.** The write side: the single `allowedPaths` literal in `apply-and-pr`, `TARGET_ALLOW_RE`
 (both handler sites) and `safeCommitAndPr`'s own allowlist. The read side: the facet pass of
 `generate-kb-index.sh` (`kb-tags.txt`, `kb-categories.txt`), the handler `walkDir` root, and the
-readers-above-`learnings/` classification table in ADR-297 (documented, not census-tested - a repo-wide
+readers-above-`learnings/` classification table in ADR-299 (documented, not census-tested - a repo-wide
 census was rejected as flaky, ~234 files name the learnings path).
 
 **Mutation matrix:**
@@ -787,7 +787,7 @@ moves with it by convention (stated, not claimed as enforced).
 | Title builder/parser pair (`promotePrTitle`, `PROMOTE_PR_TITLE_RE`) | "read prior outcomes via Octokit not gh with a defined failure path" | inferred - justification: `Cluster-Hash:` is a commit trailer, not a PR-body line, so the hash must be read from the title and the builder and parser must not drift |
 | Flip tracker with the deferred deliverables (Phase 7.1) | "the plan must state how the layer's effect will be measured after #10552 clears" | asked |
 | `/compound` upsert deferral issue (Phase 7.2) | "resolve the three overlapping common-solutions/critical-patterns concepts together" | inferred - justification: `wg-when-deferring-a-capability-create-a` requires a tracking issue for a deferred capability |
-| ADR-297, C4 `kb` description and `api -> github` edge | — | inferred - justification: `wg-architecture-decision-is-a-plan-deliverable` (plan Phase 2.10) makes the ADR and C4 update deliverables of the plan that makes the decision |
+| ADR-299, C4 `kb` description and `api -> github` edge | — | inferred - justification: `wg-architecture-decision-is-a-plan-deliverable` (plan Phase 2.10) makes the ADR and C4 update deliverables of the plan that makes the decision |
 | Legal notes (PA-31, DPIA addendum, compliance-posture) | — | inferred - justification: the DPIA memo's trigger 15 fires on a marker-field change and the CLO found the register note due on merge; deferring it would leave the Art. 30 record stale |
 | `pattern-page-template.md`, deletion of `critical-pattern-template.md` | "resolve the three overlapping common-solutions/critical-patterns concepts together" | asked |
 | Containment pins (Guard 2) | "excluded from all four corpus readers" | asked |
@@ -822,7 +822,7 @@ moves with it by convention (stated, not claimed as enforced).
 - [ ] The five marker fields are in the marker type, the allowed-keys test, `compound-promote-runbook.md` and `betterstack-log-query.md`.
 - [ ] The patterns prompt has no unfenced `Corpus:` tail; the index and the evidence are fenced with one shared `fenceBlock`; every new Sentry op uses `reportSilentFallback(null, ...)` with a closed `cause` enum (test asserts `err === null` and the tags).
 - [ ] `apps/web-platform/test/repo-wide-suites.ts` lists the live-tree and patterns-handler suites and `repo-wide-containment.test.ts` is green; `BASELINE_DECLARED_PROBES` is bumped with its comment.
-- [ ] ADR-297 written (provisional ordinal re-verified at ship) incl. the reader classification table; `model.c4` `kb` description and the `api -> github` edge added; `c4-code-syntax`, `c4-render` and `c4-count-parity` tests green.
+- [ ] ADR-299 written (provisional ordinal re-verified at ship) incl. the reader classification table; `model.c4` `kb` description and the `api -> github` edge added; `c4-code-syntax`, `c4-render` and `c4-count-parity` tests green.
 - [ ] Legal notes landed (PA-31 §(c) dated note, DPIA addendum with the `does not cure` sentence, `Superseded` markers); `soleur:gdpr-gate` run over the diff at ship.
 - [ ] `soleur:engineering:review:user-impact-reviewer` invoked at review (threshold `single-user incident`); the observability-coverage reviewer run (server code touched).
 - [ ] PR body: `Ref #8293`, no `Closes`; states the effect is unmeasured until #10552 clears and makes no claim that the dump caused the zero PRs; carries the `## Changelog` section and the seed-cluster provenance. #10552, #10550, #10551 untouched.

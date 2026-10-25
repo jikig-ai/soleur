@@ -10,7 +10,7 @@ related_adrs: [ADR-054, ADR-092, ADR-235]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-297: Pattern wiki as a sibling knowledge surface; GitHub PR state is the proposal ledger of record
+# ADR-299: Pattern wiki as a sibling knowledge surface; GitHub PR state is the proposal ledger of record
 
 ## Status
 

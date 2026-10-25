@@ -14,7 +14,7 @@ Inngest function (`apps/web-platform/server/inngest/functions/cron-compound-prom
 Each run that opens one or more draft PRs appends one row per PR below the
 `ROWS BELOW` marker. The row rides the proposal's own commit, so the log records
 accepted-or-pending proposals only: a rejected proposal is never recorded here.
-Rejection state is read from GitHub PR state through Octokit (ADR-297), not from
+Rejection state is read from GitHub PR state through Octokit (ADR-299), not from
 this log.
 
 **Schema:**
