@@ -4516,7 +4516,7 @@ _t_floor_contract
 # a host with no runnable gitleaks skips whole arms (reported, and failed under CI=true by the
 # epilogue), so the floor only binds when nothing was skipped. Reported by printf + exit,
 # never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=1459
+MIN_ASSERTIONS=1705
 if (( ${#SKIPPED_ARMS[@]} == 0 )) && (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
