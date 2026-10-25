@@ -69,7 +69,7 @@ production apply is fired by this merge and no operator authorization is needed.
   verifier-trust-base residuals. Nothing in it rejects a read-only path classifier, but its Option C is exactly
   the objection to the optional scope class. ADR-084's operator-only list is amended by ADR-289 and is not
   touched here.
-- Next free ordinal is ADR-300 (highest on `origin/main` is ADR-296; no `ADR-300..299` on any `origin/*` ref). It
+- Next free ordinal is ADR-302 (highest on `origin/main` is ADR-296; no `ADR-302..299` on any `origin/*` ref). It
   is provisional: ship's ADR-ordinal gate re-verifies it.
 - Git identity prints `Jean Deruelle` / `jean.deruelle@jikigai.com` (checked before planning).
 - Measured (PyYAML over `.github/workflows/*.yml`, 2026-10-24): 29 workflows have an `on.push` that can run on
@@ -94,7 +94,7 @@ production apply is fired by this merge and no operator authorization is needed.
 
 | Mechanism | Property it would buy | Disposition |
 |---|---|---|
-| Delegation Scope class "merge changes referencing epic #N", verifier row, edits to `standing-delegation.md` sections 1-2 | none of 1-4 (it widens authority; optional in the issue) | Cut (CTO F3). Rejected in ADR-300 with flip conditions. ADR-289 Option C already rejects the agent choosing its own class. |
+| Delegation Scope class "merge changes referencing epic #N", verifier row, edits to `standing-delegation.md` sections 1-2 | none of 1-4 (it widens authority; optional in the issue) | Cut (CTO F3). Rejected in ADR-302 with flip conditions. ADR-289 Option C already rejects the agent choosing its own class. |
 | Multi-valued class | 1 | Cut (CTO F2). Binary closed-world verdict. |
 | Run-time parse of `on.push.paths` in the shipped script | 3 | Cut (CTO F1). Static allowlist plus a CI parity test. |
 | `git show origin/main:` execution pin and self-edit rule | 1 | Cut (CTO R-a). `plugins/soleur/**` is off the allowlist and skills resolve the script via `${CLAUDE_PLUGIN_ROOT}`. |
@@ -102,9 +102,9 @@ production apply is fired by this merge and no operator authorization is needed.
 | Cross-check of ship's `Blast Radius:` label | 2 | Cut (CTO R-b). Revisit on a second consumer or a real label/verdict mismatch. |
 | Flip of ADR-289 `adopting -> accepted` | none | Not in this PR (CTO F4); tracked by an issue (task 4.3). |
 | Registry `gate` column with `runtime-pathspec:<file>#<anchor>` and `chained:` shapes | 3 | Cut (CTO R2, plan review). Flat ci-only list; the only deemed-gated case is a one-entry constant pinned by the existing P3 test. |
-| ci-only marker tripwire and exemption baseline | 3 | Cut (CTO R3). It false-reds on substrings, needs a baseline, and cannot loosen the shipped verdict. Every ci-only row carries a reason and ADR-300 names the list as review-owned. |
+| ci-only marker tripwire and exemption baseline | 3 | Cut (CTO R3). It false-reds on substrings, needs a baseline, and cannot loosen the shipped verdict. Every ci-only row carries a reason and ADR-302 names the list as review-owned. |
 | sha256 table id on stderr, path echo, `timeout`/`gtimeout` `tool-missing` branch | none | Cut (CTO R5). `sha256sum` is absent on stock macOS; admin-merge-ready.sh has no timeout branch; failure is already fail-closed. |
-| `model.c4` description edit and `model.likec4.json` regeneration | none | Cut (CTO R6): the existing `plugin -> github` edge already covers authenticated read-only `gh` reads of the user's own repository. ADR-300 records the cited no-impact check. |
+| `model.c4` description edit and `model.likec4.json` regeneration | none | Cut (CTO R6): the existing `plugin -> github` edge already covers authenticated read-only `gh` reads of the user's own repository. ADR-302 records the cited no-impact check. |
 | Phase 4.0 simulated-revert task | none | Cut (CTO R8). The PR holds no state; rollback is one `git revert`. |
 | Full ten-mutant executable harness | 3 | Reduced to at most six executable mutants (CTO R4); the rest are table rows. |
 
@@ -123,7 +123,7 @@ production apply is fired by this merge and no operator authorization is needed.
   script targets bash 3.2 and mawk.
 - `2026-10-05-a-reader-that-exits-early-flipped-three-suites-...`: avoid `| grep -q` pipes in the new tests (the
   pipe-guard table pins their count); capture `rc=$?` from a redirect.
-- `workflow-patterns/2026-07-05-adr-renumber-must-sweep-planning-docs-and-scripts-glob-orphan.md`: if ADR-300 is
+- `workflow-patterns/2026-07-05-adr-renumber-must-sweep-planning-docs-and-scripts-glob-orphan.md`: if ADR-302 is
   renumbered at ship, sweep this plan, `tasks.md` and any AC naming the ordinal.
 
 ### Open Code-Review Overlap
@@ -136,8 +136,8 @@ None. Checked the open `code-review` issues for `operator-holds.md`, ship `SKILL
 | Claim (issue / brief / earlier plan text) | Reality | Plan response |
 |---|---|---|
 | "infra, migration or main-push-triggered production workflow paths mean production-effecting" implies a path-to-class mapping | Migrations under `apps/web-platform/supabase/migrations/` are covered by `apps/web-platform/**` in `web-platform-release.yml`; infra by the apply workflows. The verdict needs only the complement: an allowlist of paths that fire nothing. | Closed-world allowlist (`knowledge-base/` prefix, root-level `*.md`); everything else, including unknown, is effecting. |
-| "Optionally add a delegation Scope class ... and edit sections 1-2 of standing-delegation.md" | Scope binding (V2) is a whole-token match on a PR number; a class keyed on "references epic #N" lets the agent that writes the PR body choose its own class (ADR-289 Option C). | Not built. ADR-300 records it rejected with four flip conditions. |
-| (earlier plan text) "a stale installed copy only over-warns" | False (Kieran P1-2): a lagging allowlist can under-warn after a later PR widens a trigger over an allowlisted path. | Withdrawn. ADR-300 states the true residual: that PR itself edits `plugins/soleur/**` or a workflow, so it is effecting and seen; the window is the plugin update lag, bounded and accepted. Flip: a lag actually observed adds skew detection. |
+| "Optionally add a delegation Scope class ... and edit sections 1-2 of standing-delegation.md" | Scope binding (V2) is a whole-token match on a PR number; a class keyed on "references epic #N" lets the agent that writes the PR body choose its own class (ADR-289 Option C). | Not built. ADR-302 records it rejected with four flip conditions. |
+| (earlier plan text) "a stale installed copy only over-warns" | False (Kieran P1-2): a lagging allowlist can under-warn after a later PR widens a trigger over an allowlisted path. | Withdrawn. ADR-302 states the true residual: that PR itself edits `plugins/soleur/**` or a workflow, so it is effecting and seen; the window is the plugin update lag, bounded and accepted. Flip: a lag actually observed adds skew detection. |
 | (earlier plan text) 25 listed push workflows | 29 enumerated, including `workflow_run` arms with no branch filter (npm-publish, post-merge-monitor, fix-constraints-stage-b, apply-delivery-gap-follower) | Enumeration rule widened; the test derives the population. |
 | (earlier plan text) "exit 0 means a verdict was produced" | `if script; then skip-warning` would then read an effecting verdict as safe | Exit 0 only for `not-production-effecting` (CTO R1). |
 | The directive says "ship Merge Danger outcome sentence" | `## Merge Danger` has only `Undo:` and `Blast Radius:`; the only outcome sentence is operator-holds.md section 3 step 2. | One consumer edit: operator-holds.md section 3 step 2 (CTO R-b). Ship `SKILL.md` untouched. |
@@ -145,7 +145,7 @@ None. Checked the open `code-review` issues for `operator-holds.md`, ship `SKILL
 | (earlier plan text) merge-time workflows are push + workflow_run | `release` (npm-publish, reusable-release), `pull_request`/`pull_request_target` with `closed` (dev-ledger-reconcile, follow-through-closure-guard, cleanup-unmerged-bot-branches, board-status-sync) and `merge_group` also fire around a merge (security seat measurement) | Closed-world trigger-key enumeration with a named inert list (CTO T1); the verdict's meaning narrows to "no path-gated production workflow fires from this file list". |
 | (earlier plan text) root `*.md` is harmless | `AGENTS.md`, `AGENTS.rules.md` and `CLAUDE.md` steer every agent session, including scheduled agents that hold secrets | Basename `AGENTS*.md` and `CLAUDE.md` are effecting at any depth (CTO T2). |
 | (earlier plan text) the `--pr` verdict stays valid until the merge | A push after classification, a closed/merged PR or a stacked base makes it stale or irrelevant (spec-flow and security seats) | `--pr` reads state, base and head sha (twice); the merge uses `--match-head-commit` with the printed sha (CTO T5). |
-| Other prose already states which merges apply production changes | ship `SKILL.md` Deploy Pipeline Fix Drift Gate (hand-maintained trigger array, "auto-fires on push to main"), the `Blast Radius:` label, the infra PRs' "merge-effect first line" convention, the CTO-authored `{OUTCOME}` sentence (architecture and spec-flow seats) | Left in place by design (CTO R-b); ADR-300 records the precedence: the classifier is a coarser, workflow-derived verdict that every `apps/web-platform/infra/**` path already trips, the clause is appended to the `{OUTCOME}` sentence and the stricter reading wins. |
+| Other prose already states which merges apply production changes | ship `SKILL.md` Deploy Pipeline Fix Drift Gate (hand-maintained trigger array, "auto-fires on push to main"), the `Blast Radius:` label, the infra PRs' "merge-effect first line" convention, the CTO-authored `{OUTCOME}` sentence (architecture and spec-flow seats) | Left in place by design (CTO R-b); ADR-302 records the precedence: the classifier is a coarser, workflow-derived verdict that every `apps/web-platform/infra/**` path already trips, the clause is appended to the `{OUTCOME}` sentence and the stricter reading wins. |
 
 ## Rulings
 
@@ -158,7 +158,7 @@ Persisted as rows in `knowledge-base/project/specs/feat-one-shot-10923-merge-eff
   contract amended by R1.
 - **F3** Ruled by CTO agent, 2026-10-24: ship ADR + script + tests + exactly one consumer; the epic-reference
   scope class is out (flip needs a separate ADR and the founder's authorization at that time).
-- **F4** Ruled by CTO agent, 2026-10-24: new ADR-300 extending, not amending, ADR-289; no status flip here.
+- **F4** Ruled by CTO agent, 2026-10-24: new ADR-302 extending, not amending, ADR-289; no status flip here.
 - **F5/R-a, R-b, R-c** Ruled by CTO agent, 2026-10-24: `--files-from` primary and `--pr` a thin wrapper; no
   `origin/main` pin; single consumer edit in operator-holds.md; `--pr` applicability sentinel.
 - **T1-T6** Ruled by CTO agent, 2026-10-24 (after the seven-seat deepen review): closed-world trigger enumeration (push, workflow_run, release, pull_request closed) with a named inert list and ci-only meaning "not directly gated by the merged file list as a production act"; `AGENTS*.md`/`CLAUDE.md` basename exclusion at any depth; executable mutant 6 replaced by "drop previous_filename" (still six); repo-owned `--pr` sentinel plus `--repo` equality (supersedes R-c); `--pr` binds state, base and head sha, merge uses `--match-head-commit`; two plain operator sentences and a recorded PR-body verdict line.
@@ -232,7 +232,7 @@ What the verdict means, and does not: "no path-gated production workflow fires f
 It is not "no runtime effect": scheduled crons that read `knowledge-base/`, agent-steering files outside the
 `AGENTS*.md`/`CLAUDE.md` basename set, content consumed at build time with no path trigger (Eleventy reading a
 root file), and bookkeeping workflows that fire on every merge (ledger reconcile, board sync) are out of scope by
-design. It judges the PR's file list, which equals the squash commit's unless main moved in the queue. ADR-300
+design. It judges the PR's file list, which equals the squash commit's unless main moved in the queue. ADR-302
 states these limits and that the classifier authorizes nothing and is never usable as evidence in an envelope
 `Gate:` or a receipt (a `Gate:` kind for it would need a CTO ruling, as ADR-289 R1 requires for new kinds).
 
@@ -317,7 +317,7 @@ the Merge Danger block stay).
 
 ### ADR
 
-Create `knowledge-base/engineering/architecture/decisions/ADR-300-merge-effect-classifier-is-a-closed-world-allowlist-and-authorizes-nothing.md`
+Create `knowledge-base/engineering/architecture/decisions/ADR-302-merge-effect-classifier-is-a-closed-world-allowlist-and-authorizes-nothing.md`
 via `soleur:architecture` (rich shape: trigger 5, teeth-bearing alternatives). `status: active` (stated in prose as "active, true on merge", not `adopting`),
 `related_adrs: [ADR-289, ADR-084, ADR-276, ADR-264]`; it extends ADR-289 in prose. Content: Context (the held-merge
 session, in a paragraph; no copied trigger table, the parity test is the live source); Considered Options (A
@@ -354,7 +354,7 @@ actor: the operator is `founder`, unchanged, no new access relationship; (b) ext
 the hold evaluator, the ship gate ... and the overlap preflight read the epic's Standing Delegation comment,
 receipts, workflow runs and open pull requests of the USER'S OWN repository through the user's own authenticated
 gh CLI, read-only; they run on the user's machine and Jikigai receives nothing" - a PR's changed-file list is the
-same read class, so the description is not falsified (CTO R6: no edit unless it were; the enumeration of readers there is illustrative, which ADR-300 says); (c) data store: the
+same read class, so the description is not falsified (CTO R6: no edit unless it were; the enumeration of readers there is illustrative, which ADR-302 says); (c) data store: the
 ci-only list is plugin-internal static data under `platform.plugin` (no new element); (d) actor-to-surface
 access: unchanged. `plugins/soleur/test/c4-count-parity.test.sh` is still run (counts do not move).
 
@@ -367,8 +367,8 @@ first and committed before code.
 
 ### Phase 0 - ADR first (no code)
 
-0.1 Re-verify ADR-300 is free (`git fetch origin main`; list `origin/*` refs). 0.2 Write the ADR via
-`soleur:architecture`. 0.3 Commit it alone (`docs(adr): ADR-300 ...`). Nothing under `plugins/soleur/scripts/`
+0.1 Re-verify ADR-302 is free (`git fetch origin main`; list `origin/*` refs). 0.2 Write the ADR via
+`soleur:architecture`. 0.3 Commit it alone (`docs(adr): ADR-302 ...`). Nothing under `plugins/soleur/scripts/`
 or `scripts/` is committed before this commit (AC1).
 
 ### Phase 1 - RED tests, then the guard (Guard Contract written before this phase)
@@ -425,7 +425,7 @@ on the plan, `tasks.md` and `decision-challenges.md` before the first commit of 
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-300-merge-effect-classifier-is-a-closed-world-allowlist-and-authorizes-nothing.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-302-merge-effect-classifier-is-a-closed-world-allowlist-and-authorizes-nothing.md`
 - `plugins/soleur/scripts/merge-effect-class.sh`
 - `plugins/soleur/scripts/merge-effect-class.test.sh`
 - `plugins/soleur/scripts/merge-effect-class.ci-only.tsv`
@@ -587,7 +587,7 @@ a negated glob `!knowledge-base/**` after a positive one, must read as NOT firin
 
 **Anchor.** The ci-only classification is human-reviewed registry data; every row needs a reason with the
 "not directly gated by the merged file list as a production act" meaning repeated in the ADR, the list header and
-the failure messages; ADR-300 names both the ci-only list and the inert list as review-owned and states the bound
+the failure messages; ADR-302 names both the ci-only list and the inert list as review-owned and states the bound
 (a mislabel matters only if the workflow fires on an allowlisted path, which the witness and real-tree directions
 cover). A population floor is paired with set identity, never a count alone.
 
@@ -598,7 +598,7 @@ cover). A population floor is paired with set identity, never a count alone.
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
 | 1 | "Add `merge-effect-class.sh`: infra, migration or main-push-triggered production workflow paths mean production-effecting; an unknown path means production-effecting (stricter default)." [issue #10923] | Phase 1.3, Guard 1, `plugins/soleur/scripts/merge-effect-class.sh` | mapped |
-| 2 | "Optionally add a delegation Scope class \"merge changes referencing epic #N\" with a verifier test row, and edit sections 1-2 of `standing-delegation.md`." [issue #10923] | ADR-300 Considered Options and flip conditions | descoped - justification: optional in the issue; CTO ruled F3 that it widens an irreversible production-mutating authorization and moves class choice to the PR author (ADR-289 Option C); recorded as rejected with four flip conditions |
+| 2 | "Optionally add a delegation Scope class \"merge changes referencing epic #N\" with a verifier test row, and edit sections 1-2 of `standing-delegation.md`." [issue #10923] | ADR-302 Considered Options and flip conditions | descoped - justification: optional in the issue; CTO ruled F3 that it widens an irreversible production-mutating authorization and moves class choice to the PR author (ADR-289 Option C); recorded as rejected with four flip conditions |
 | 3 | "needs an ADR first, then code" / "The plan must sequence the ADR before any code." [issue #10923, brief] | Phase 0, AC1 | mapped |
 | 4 | "the PR starts with a read of the existing delegation and classifier code ... and may re-scope" [issue #10923, brief] | Research Insights, Reconciliation table | mapped |
 | 5 | "Spawn soleur:engineering:cto for the design fork (technical ruling; record \"Ruled by CTO agent\")" [brief] | Rulings, decision-challenges.md | mapped |
@@ -612,7 +612,7 @@ cover). A population floor is paired with set identity, never a count alone.
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
 | `merge-effect-class.sh` closed-world verdict | "an unknown path means production-effecting (stricter default)" | asked |
-| ADR-300 | "needs an ADR first, then code" | asked |
+| ADR-302 | "needs an ADR first, then code" | asked |
 | operator-holds.md section 3 step 2 consumer | "Add `merge-effect-class.sh`" (a classifier needs a consumer or it is dead code) | inferred - justification: CTO F3(b) ruled exactly one read-only consumer so the verdict replaces agent prose in the operator question; without it the ADR's "informs the sentence" claim has no mechanism |
 | ci-only list and parity test | "main-push-triggered production workflow paths mean production-effecting" | asked |
 | `--pr` wrapper, applicability sentinel, `--print-witnesses`, `--self-check` | "Add `merge-effect-class.sh`" | inferred - justification: callers hold a PR number, not a list; the plugin ships to customer repos whose triggers the allowlist cannot know (CTO R-c); the parity test must derive its witnesses from the script or a new allowlist entry gets none; Check 10 forbids a piped probe |
@@ -634,7 +634,7 @@ and cannot be re-derived from `main` after the squash.
 
 ### Functional Requirements
 
-- [ ] AC1 (process): after `git fetch origin main`, on the PR branch, the commit that adds `ADR-300-*.md` precedes every commit that touches `plugins/soleur/scripts/merge-effect-class*` or `scripts/` (`git log --reverse --name-only --format=%H origin/main..HEAD`); re-run after any ship-time renumber or history rewrite.
+- [ ] AC1 (process): after `git fetch origin main`, on the PR branch, the commit that adds `ADR-302-*.md` precedes every commit that touches `plugins/soleur/scripts/merge-effect-class*` or `scripts/` (`git log --reverse --name-only --format=%H origin/main..HEAD`); re-run after any ship-time renumber or history rewrite.
 - [ ] AC2: `printf 'knowledge-base/a/b.md\nREADME.md\n' | bash plugins/soleur/scripts/merge-effect-class.sh --files-from -` prints exactly `not-production-effecting` and exits 0; the same with `apps/web-platform/x.ts` appended prints `production-effecting` and exits 1; `apps/x/README.md`, `docs/legal/terms.md`, `plugins/soleur/docs/x.md`, `AGENTS.md`, `AGENTS.rules.md`, `CLAUDE.md` and `knowledge-base/x/CLAUDE.md` each print `production-effecting`.
 - [ ] AC3: empty input, an unknown top-level path, a rename with one non-allowlisted side, a `..` path, an unterminated final line holding `apps/x.ts` and a 3000-entry `--pr` list each print `production-effecting`; the unusable-input cases (empty, bad-path, incomplete) exit 2, the rest exit 1.
 - [ ] AC4: in temp repos built by the suite (constructed git env), `--pr <N>` exits 2 with `reason=not-applicable` when the repo lacks `.github/workflows/web-platform-release.yml`, when the ci-only list is not tracked at HEAD, and when `--repo` names a different repository.
@@ -707,7 +707,7 @@ question returns to agent-judged wording. Nothing is deployed and no data is tou
 - **Closed-world trigger enumeration goes red the first time anyone adds a workflow or a new trigger type.** Intended; the message is paste-ready (row and columns). Both review-owned lists (ci-only, inert) need a reason on every entry, and the ci-only meaning ("not directly gated by the merged file list as a production act") must appear in the ADR, the list header and the failure messages, or the list drifts back to meaning "harmless".
 - **`--repo` equality needs a network call**: an offline run exits 2 (fail-closed, accepted).
 - **Exit-contract text:** R1 changed F2; no text may still say exit 0 means a verdict was produced (AC15).
-- **Queue-moved main:** the verdict judges the PR file list; ADR-300 says it does not claim more.
+- **Queue-moved main:** the verdict judges the PR file list; ADR-302 says it does not claim more.
 - **Stale installed copy can under-warn** (see Reconciliation); accepted, bounded by plugin update lag.
 - **Dependencies:** PyYAML in the test environment (precedent `ci-concurrency-key.test.sh`, fail loudly if absent); `gh`, `jq` at runtime.
 
@@ -715,7 +715,7 @@ question returns to agent-judged wording. Nothing is deployed and no data is tou
 
 - A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan` Phase 4.6; this
   plan fills it (`aggregate pattern`).
-- ADR-300 is provisional: if renumbered at ship, sweep this plan, `tasks.md` and `decision-challenges.md`.
+- ADR-302 is provisional: if renumbered at ship, sweep this plan, `tasks.md` and `decision-challenges.md`.
 - The consumer sentence must stay clear of the phrasing `.claude/hooks/ship-operator-step-gate.sh` and
   `ship-soak-followthrough-gate.sh` match (no bullet-prefixed operator verbs, no "post-deploy verify").
 - Do not claim the classifier authorizes anything; do not add a third verdict value.

@@ -124,7 +124,7 @@ merge. Record the instruction as a hold under `## Operator Holds` in the plan (s
    items name each pull request as `#N` and include a revert item, and the expiry is at most 7 days. When the merge triggers a
    production apply or deploy (any workflow that runs on push to main for the changed paths, such as
    `apply-web-platform-infra.yml` for `apps/web-platform/infra/**`), the outcome sentence says so. For the merge or ready of a
-   named open pull request in the Soleur repository, take that clause from the classifier (ADR-300) and not from your own
+   named open pull request in the Soleur repository, take that clause from the classifier (ADR-302) and not from your own
    reading of the paths:
 
    ```bash

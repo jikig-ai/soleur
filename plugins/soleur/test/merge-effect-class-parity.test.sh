@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# merge-effect-class-parity.test.sh - CI drift defence for merge-effect-class.sh (#10923, ADR-300).
+# merge-effect-class-parity.test.sh - CI drift defence for merge-effect-class.sh (#10923, ADR-302).
 #
 # The classifier keeps a static allowlist; this test is what keeps it true. It derives the population of
 # workflows that can run on a merge to main from .github/workflows/*.y{,a}ml, closed-world over trigger keys

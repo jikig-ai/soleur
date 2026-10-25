@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# merge-effect-class.test.sh - behavioural suite for merge-effect-class.sh (#10923, ADR-300).
+# merge-effect-class.test.sh - behavioural suite for merge-effect-class.sh (#10923, ADR-302).
 #
 # What it pins: the exit/stdout contract (exit 0 only for not-production-effecting; stdout is
 # production-effecting on exit 1 and exit 2), the closed-world allowlist, the --pr wrapper against a gh fake

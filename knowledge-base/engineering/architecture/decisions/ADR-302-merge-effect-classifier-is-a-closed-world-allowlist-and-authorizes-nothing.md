@@ -7,7 +7,7 @@ related_adrs: [ADR-289, ADR-084]
 tags: [authorization, delegation, merge, production, classifier, ci]
 ---
 
-# ADR-300: The merge-effect classifier is a closed-world allowlist and authorizes nothing
+# ADR-302: The merge-effect classifier is a closed-world allowlist and authorizes nothing
 
 ## Context
 
