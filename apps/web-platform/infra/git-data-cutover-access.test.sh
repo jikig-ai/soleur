@@ -262,11 +262,15 @@ case "$c" in
   "env -i "*|"cd / && env -i "*)   # the probe's residue-cleanup retry — always exits 0 (idempotent remove)
     exit 0 ;;
   "docker exec "*)   # the container probe (#8211 PR-E): a web-host command, the probe body on stdin
-    case "${SHIM_CONTAINER:-ok}" in
+    _cm="${SHIM_CONTAINER:-ok}"
+    # SHIM_CONTAINER_ONLY=<host>: only that host gets SHIM_CONTAINER; every other host answers ok (a roster with ONE failing host).
+    if [ -n "${SHIM_CONTAINER_ONLY:-}" ] && [ "$dest" != "$SHIM_CONTAINER_ONLY" ]; then _cm=ok; fi
+    case "$_cm" in
+      noctr)     cat >/dev/null; echo "Error response from daemon: No such container: soleur-web-platform" >&2; exit 1 ;;
       ok)        printf 'container_probe ok worktree_root=writable transport=answered\n'; exit 0 ;;
       silent)    exit 0 ;;
       badline)   printf 'container_probe ok worktree_root=writable transport=answered EXTRA\n'; exit 0 ;;
-      r*)        cat >/dev/null; exit "${SHIM_CONTAINER#r}" ;;
+      r*)        cat >/dev/null; exit "${_cm#r}" ;;
       exec)      # run the REAL body in a clean env, the way docker exec would: stdin is the body
                  exec env -i PATH=/usr/bin:/bin TMPDIR="${CP_TMP:-/tmp}" WORKTREE_ROOT="${CP_WT_ROOT-}" GIT_TRANSPORT_SSH_PRIVATE_KEY="${CP_KEY-}" \
                    GIT_DATA_SSH_HOST_KEY="${CP_PIN-}" GIT_DATA_SSH_HOST="${CP_HOST-}" GDCP_SSH="${CP_SSH:-ssh}" GDCP_TIMEOUT="${CP_TIMEOUT:-15}" \
@@ -2902,6 +2906,22 @@ case_cpa_wf() { python3 "$T/cpa-wf.py" "${1:-$WF}" > "$T/cpa-wf.out" 2>&1; }
 if case_cpa_wf; then pass "CPA3: the workflow binds CONTAINER_PROBE on the Host-side proof step ONLY, to the expression that is 1 exactly for mode=flip"
 else fail "CPA3: the workflow's CONTAINER_PROBE binding is wrong or bound elsewhere" "$(cat "$T/cpa-wf.out")"; fi
 
+# CP6 — an UNMAPPED rc (docker exec itself failing) goes out as probe_failed rc=<n> WITH the filtered stderr behind its fixed prefix.
+case_cp_unmapped_stderr() {
+  run_case cp-noctr "${KEYED[@]}" SHIM_CONTAINER=noctr
+  [ "$RC" = 5 ] && cp_word 'probe_failed rc=1' && grep -qxF '[git-data-cutover] probe-stderr: Error response from daemon: No such container: soleur-web-platform' "$OUT"
+}
+if case_cp_unmapped_stderr; then pass "CP6: docker exec failing (rc 1, no such container) -> probe_failed rc=1 with its stderr printed behind the fixed probe-stderr prefix"
+else fail "CP6: an unmapped rc lost its diagnostic stderr, or was not probe_failed" "$(ctx)"; fi
+# CP5b — ONE failing host in a two-host roster: host 1 passes, host 2 alone fails and must refuse.
+case_cp_second_host() {
+  run_case cp-host2 "${KEYED[@]}" WEB_HOSTS="10.0.1.10 10.0.1.11" SHIM_CONTAINER=r24 SHIM_CONTAINER_ONLY=10.0.1.11
+  [ "$RC" = 5 ] && cp_word 'container_egress_blackhole reason=timeout' && grep -qF 'container probe: host 10.0.1.10 ok' "$OUT" \
+    && [ "$(grep -c 'docker exec' "$TLF")" = 2 ] && ! grep -qF 'verdict=clear' "$OUT"
+}
+if case_cp_second_host; then pass "CP5b: a two-host roster where ONLY the second host's container fails -> host 1 ok, host 2 container_egress_blackhole, exit 5, no clear (a loop that stops caring after the first host is caught)"
+else fail "CP5b: the second host's failure was not refused" "$(ctx)"; fi
+
 # (2) the REAL body, executed. cpx <name> <SHIM-style VAR=value ...>: a good root, key, pin and host unless overridden (later wins).
 cpx() {
   local name="$1"; shift
@@ -2972,6 +2992,19 @@ case_cpx_term() { # SIGTERM while the dial is in flight: the key file must not o
   rcw=0; wait "$bp" || rcw=$?
   [ "$rcw" = 143 ] && [ -z "$(ls -A "$CP/tmp")" ] && ! grep -qF CANARY-CP-KEY "$CP/term.out" && [ -z "$(ls -A "$CP/wt")" ]
 }
+# CPX7 — the incident's shape without root: a worktree root the running user cannot create in (mode 0555 stands in for the incident's
+# root-owned directory: CI cannot chown to another uid). Root bypasses the mode, so a root run counts it as SKIPPED, never as a pass.
+case_cpx_readonly() {
+  local ro="$CP/ro" r=0
+  rm -rf "$ro"; mkdir -p "$ro" && chmod 555 "$ro" || return 1
+  case_cpx_via ro worktree_root_not_writable CP_WT_ROOT="$ro" || r=$?
+  chmod 755 "$ro"
+  return "$r"
+}
+if [ "$(id -u)" = 0 ]; then
+  SKIPPED=$((SKIPPED + 1)); printf '  SKIP CPX7: running as root, a 0555 directory is still writable\n'
+elif case_cpx_readonly; then pass "CPX7: an existing worktree root the container user cannot create in (the incident's shape; mode 0555, since CI cannot chown to another uid) -> worktree_root_not_writable"
+else fail "CPX7: a read-only worktree root was not worktree_root_not_writable" "$(ctx)"; fi
 if case_cpx_term; then pass "CPX6: SIGTERM while the dial is in flight -> the body exits 143 and no scratch directory (so no key file) is left, no key text printed"
 else fail "CPX6: a signal left the key file behind (or the body did not exit 143)" "tmp=[$(ls -A "$CP/tmp" 2>/dev/null | tr '\n' ' ')] out=[$(head -c 200 "$CP/term.out" 2>/dev/null)]"; fi
 if grep -qF 'echo "remote: git-data transport: $1" >&2' "$WRAPPER_SRC" && grep -qF 'reject "repo does not exist (provision it first)' "$WRAPPER_SRC" \
@@ -2992,6 +3025,14 @@ if mutate cpa-skip-neutered "$SCRIPT" 2 's#^  if \[ "\$\{CONTAINER_PROBE:-\}" !=
 fi
 if mutate cpa-wf-always "$WF" 2 "s#CONTAINER_PROBE: \\$\\{\\{ steps\\.confirm\\.outputs\\.mode == 'flip' && '1' \\|\\| '' \\}\\}#CONTAINER_PROBE: '1'#"; then
   mutant_red cpa-wf-always case_cpa_wf "$MUTANT"
+fi
+# the unmapped-rc arm no longer prints the container's stderr
+if mutate cp-stderr-dropped "$SCRIPT" 2 's#^      \*\) _access_stderr "\$CAPTURE_TMP/capture.err"$#      *) :#'; then
+  CASE_SCRIPT="$(cp_mutdir cp-stderr-dropped "$MUTANT" "$CPBODY")" mutant_red cp-stderr-dropped case_cp_unmapped_stderr
+fi
+# the roster loop only believes the first host
+if mutate cp-first-host-only "$SCRIPT" 2 's#^    web_exec "\$h" "\$cmd" "\$body" 90 \|\| rc=\$\?$#    web_exec "$h" "$cmd" "$body" 90 || rc=$?; [ "$h" = "${WEB_HOST_LIST[0]}" ] || rc=0#'; then
+  CASE_SCRIPT="$(cp_mutdir cp-first-host-only "$MUTANT" "$CPBODY")" mutant_red cp-first-host-only case_cp_second_host
 fi
 # the host: the call dropped from the proof chain
 if mutate cp-call-dropped "$SCRIPT" 2 's#^      refuse_if_container_unready$#      :#'; then
@@ -3970,7 +4011,8 @@ fi
 # #8211 PR-E: plus the container probe's 5 host rows (cp-call-dropped, cp-answer-unchecked, cp-blackhole-unmapped, cp-worktree-unmapped, cp-user-dropped) and 9 body rows (cpb-*) = 14, so exactly 165.
 # Review round (#11072) group A: plus cpa-skip-neutered and cpa-wf-always = 2, so exactly 167.
 # Group B (#11072): plus cpb-unrunnable-unclassified, cpb-bare-timeout, cpb-closed-as-blackhole and cpb-term-trap-dropped = 4, so exactly 171.
-MUTANT_FLOOR=171
+# Group C (#11072): plus cp-stderr-dropped and cp-first-host-only = 2, so exactly 173.
+MUTANT_FLOOR=173
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4002,7 +4044,8 @@ fi
 # #8211 PR-E (container probe): CP1, CP2 x13, CP3-CP5 (3), CPX1-CPX3 (3), CPX4 x15, CPX5 = 36 standalone rows, plus 14 mutants x 2 (28) = 64: 648 -> 712. The AC2 and R5 rows were restated in place (no new row).
 # Review round (#11072) group A: CPA1-CPA3 (3) + 2 mutants x 2 (4) = 7 more: 712 -> 719 (WF6 restated in place).
 # Group B (#11072): CP2 r29/r30 (2), CPX4 +6, CPX6 (1) = 9 standalone, plus 4 mutants x 2 (8) = 17 more: 719 -> 736.
-FLOOR=736
+# Group C (#11072): CP6, CP5b, CPX7 (3; CPX7 is a SKIP when run as root, still counted) + 2 mutants x 2 (4) = 7 more: 736 -> 743.
+FLOOR=743
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
