@@ -1,5 +1,5 @@
 // #8293 -- the proposal ledger READER. GitHub PR state is the ledger of record for what the
-// weekly proposer already put in front of a human (ADR-299): `promotion-log.md` records accepted-or-
+// weekly proposer already put in front of a human (ADR-300): `promotion-log.md` records accepted-or-
 // pending proposals only, and a second row-landing write path is forbidden (ADR-054). So a rejected
 // cluster is recognised by reading the `self-healing/auto-*` PRs back, through Octokit (the runtime
 // image has no `gh`), and suppressing a cluster whose recomputed hash was already proposed.
@@ -25,7 +25,7 @@
 //     branch; the author qualifier keeps them out of the response, so the login check is a second
 //     layer), are accepted as an empty ledger: the live search returns 0 today, search-index lag can
 //     briefly return 0 after a PR opens, and the consequence is at most one duplicate DRAFT PR,
-//     bounded by the week cap and human review (ADR-299, accepted residuals).
+//     bounded by the week cap and human review (ADR-300, accepted residuals).
 // The search response carries every matching PR's full issue object (body included; the Search API
 // has no field projection), so the process RECEIVES that text. The reader uses five fields, never
 // reads a body or comment, and returns no PR text: entries are `{hash, state, closed_at}`, and the

@@ -15,7 +15,7 @@ Each run that opens one or more draft PRs appends one row per PR below the
 `ROWS BELOW` marker. The row rides the proposal's own commit, so a `pending` row
 reaches `main` only when its proposal PR merges: a closed-unmerged proposal never
 lands a row here. Rejection state is read from GitHub PR state through Octokit
-(ADR-299), not from this log.
+(ADR-300), not from this log.
 
 **Schema:**
 

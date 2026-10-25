@@ -1,7 +1,7 @@
 // #8293 -- the pattern layer's reader: `knowledge-base/project/patterns/<slug>.md`, one page per
 // recurring failure class, loaded as a compact index for the weekly proposer instead of the
 // ~2,250-file learnings dump. Pure fs READS: no writes, no network, no commit helper. The cron
-// never writes a pattern page (only a human PR edit adds or closes one, ADR-299).
+// never writes a pattern page (only a human PR edit adds or closes one, ADR-300).
 //
 // Everything here is untrusted-text handling at a `single-user incident` threshold: the page text
 // and the evidence excerpts become model input, and the evidence KEYS flow into the cluster hash,

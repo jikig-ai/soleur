@@ -17,7 +17,7 @@ Records the binding `soleur:legal:clo` ruling on the legal and data-protection t
 - `knowledge-base/legal/article-30-register.md` (PA-31 (c) correction, PA-31 (f) retention marker)
 - `knowledge-base/legal/audits/2026-10-20-dpia-reeval-compound-promote-2720.md` (2026-10-24 addendum and 2026-10-25 correction)
 - `knowledge-base/legal/compliance-posture.md` (pointer comment)
-- ADR-299, `compound-promote-runbook.md`, `betterstack-log-query.md` and the pattern-page template (data-protection sentences only)
+- ADR-300, `compound-promote-runbook.md`, `betterstack-log-query.md` and the pattern-page template (data-protection sentences only)
 
 Every implementation claim was cross-checked by the auditor seats against `compound-promote-patterns.ts`, `compound-promote-ledger.ts` and `cron-compound-promote.ts`; their drift tables are in the PR's review record.
 
@@ -44,6 +44,6 @@ All four amendments were applied verbatim in `099293dbf6` (the ruling's pasted s
 
 ## Residuals
 
-- Names and bare handles remain a curation control only (stated in Art. 30 (c), the DPIA correction, ADR-299 and the template).
+- Names and bare handles remain a curation control only (stated in Art. 30 (c), the DPIA correction, ADR-300 and the template).
 - Pattern pages are a permanent surface in a public repository and its forks; no erasure routine is implementable (PA-32 (f)).
 - PA-32 (f) states "2 forks"; a live read shows 5. That text predates this PR and is outside its diff.

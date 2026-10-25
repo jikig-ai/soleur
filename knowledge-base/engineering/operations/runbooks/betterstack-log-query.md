@@ -643,7 +643,7 @@ complete), `refusal_detail[]` (capped at 20 — see below; #8427 widened it past
 row carries `component: "compound-promote"` (emitter:
 `server/compound-promote-marker.ts`, PR #8344).
 
-Six further fields appear **only on a manual run with `input:"patterns"`** (ADR-299);
+Six further fields appear **only on a manual run with `input:"patterns"`** (ADR-300);
 the scheduled row's field set is unchanged, so their absence is the normal shape for
 `trigger: "cron"`: `input_source` (`patterns`; never emitted on the corpus arm), `patterns_open` (count of open
 pattern pages loaded), `ledger_read` (`ok` | `failed`; `failed` rides a `status: "error"`
