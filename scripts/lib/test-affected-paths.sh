@@ -721,6 +721,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_TEST_PYRAMID_FIXTURES_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
   "plugins/soleur/skills/schedule/SKILL.md"
   "plugins/soleur/test/schedule-task-design.test.sh"  # self-inclusion
+  "plugins/soleur/test/test-helpers.sh"               # sourced shared harness
+  "scripts/lib/scratch-root.sh"                       # sourced by test-helpers.sh:58
   "scripts/lib/test-affected-paths.sh"                # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
