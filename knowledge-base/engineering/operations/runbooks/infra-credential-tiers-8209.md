@@ -922,6 +922,25 @@ shell held, which is the opposite of the intent.
 The same nesting applies to `infra/github` (`cd infra/github`). Every `doppler run` in a Tier-B CI
 job carries the same flag, asserted by the census (Guard 2).
 
+**The loaders inject `TF_VAR_*` only — the S3 backend's bare `AWS_*` is a separate, ambient leg.**
+The `--name-transformer tf-var` flag renames every injected secret to `TF_VAR_*`, so neither
+loader ever sets `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`; terraform reads the backend
+credentials from the already-exported shell env. For a state-**writing** invocation (`apply`,
+`import`, `destroy`, `untaint`, `refresh`, `taint`, `state push`, `state mv`, `state rm`,
+`state replace-provider`, `workspace new`, `workspace delete`) export the Tier-B read/write
+pair first — the
+`prd_terraform` pair is intentionally read-only post-O5b and its `PutObject` 403s mid-apply:
+
+```bash
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
+```
+
+For read-only invocations (`plan`, `init`, `state pull`, `refresh`) the `prd_terraform` `AWS_*`
+pair suffices. One wrinkle worth naming so it is not mistaken for the credential path: the inner
+loader also injects `prd_terraform`'s `AWS_*` as `TF_VAR_aws_access_key_id`/
+`TF_VAR_aws_secret_access_key` — undeclared-var noise the backend never reads.
+
 ### The `git-data-root-key` root now needs `-backend-config=bucket=…`
 
 That root's `backend "s3"` block no longer pins a bucket literal — it is a **partial** backend, so

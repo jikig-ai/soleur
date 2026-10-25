@@ -99,7 +99,17 @@ note() { printf '#      %s\n' "$1"; }
 # floor with headroom to spare.
 MIN_ASSERTIONS=29
 
-skip() { printf 'SKIP: %s\n' "$1"; exit 0; }
+# ADR-188: a skip is not a pass, and under CI it is not even a skip — the runner
+# is contracted to supply these capabilities (rsync, GNU stat/touch semantics),
+# so their absence in CI is a FAILURE. Locally the SKIP stays (#8773).
+skip() {
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    printf 'FAIL: %s — and CI is set, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success.\n' "$1" >&2
+    exit 1
+  fi
+  printf 'SKIP: %s\n' "$1"
+  exit 0
+}
 
 # --- C0: capability preflight -----------------------------------------------------------------
 # uutils/BSD hosts differ from prod (Debian GNU) on `stat -c %y` nanosecond fidelity and on

@@ -19,10 +19,9 @@
 set -euo pipefail
 
 # Portability: T1's realpath canonicalization assertion requires the
-# `--relative-to` flag (uutils 0.8.0 / GNU coreutils ≥8.23). Skip the
-# whole suite cleanly on minimal images that lack coreutils, matching
-# the convention from `scripts/compound-promote.test.sh`.
-command -v realpath >/dev/null 2>&1 || { echo "SKIP: realpath missing"; exit 0; }
+# `--relative-to` flag (uutils 0.8.0 / GNU coreutils ≥8.23). A missing tool is
+# UNRESOLVED (exit 3), never a green SKIP — the suite asserted nothing (#8773).
+command -v realpath >/dev/null 2>&1 || { echo "UNRESOLVED: realpath missing — this suite asserted nothing; install realpath"; exit 3; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/sweep-followthroughs.sh"
@@ -1341,7 +1340,10 @@ t_s2d_4_reserved_refused_before_any_read() {
 # --- S2D-5: python ignores SIGPIPE; an ignored signal survives exec, so the launcher must restore it ---
 t_s2d_5_sigpipe_disposition_restored() {
   if [[ ! -r /proc/self/status ]]; then
-    echo "SKIP: S2D-5 needs /proc/self/status"
+    # #8773: an arm the host cannot measure is UNRESOLVED + counted, never a silent
+    # skip — same shape as bare-head-self-heal.test.sh's missing-timeout arm.
+    echo "UNRESOLVED: /proc/self/status missing — S2D-5 arm not run"
+    TOTAL=$((TOTAL + 1)); fail "S2D-5 not run: /proc/self/status is unreadable on this host, so the SIGPIPE-disposition restore was not measured"
     return 0
   fi
   local root; root=$(s2d_root FOO_TOKEN)
