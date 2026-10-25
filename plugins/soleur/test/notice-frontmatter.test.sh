@@ -17,6 +17,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${RC_DIR:-}" ]] || rm -rf "$RC_DIR"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 # --- Instrument self-test -----------------------------------------------
@@ -447,7 +453,6 @@ echo "TS-RC: record-count and key-count over a registry with a dropped record"
 
 RC_DIR="$(mktemp -d -t notice-rc.XXXXXXXX)"
 assert_fixture_dir "$RC_DIR"
-trap 'rm -rf "$RC_DIR"' EXIT
 
 # 3 declared records. Record b is missing `upstream-blob-sha`, so the FILTERED
 # views drop it; record c is intact.

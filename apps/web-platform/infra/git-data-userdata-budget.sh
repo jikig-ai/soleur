@@ -42,8 +42,15 @@ JSON=0
 OUT="${1:-}"
 RAW_OUT="${2:-}"
 
+# FAIL CLOSED IN CI, matching both siblings (inngest/registry-userdata-budget):
+# a SKIP under CI is the only path that reports green without measuring. Local
+# dev keeps the SKIP so the script stays runnable without terraform (#8773).
 command -v terraform >/dev/null 2>&1 || {
-  echo "git-data-userdata-budget: SKIP — terraform not on PATH" >&2
+  if [ -n "${CI:-}" ]; then
+    echo "git-data-userdata-budget: terraform is REQUIRED in CI and is not on PATH — refusing to report a pass without measuring" >&2
+    exit 2
+  fi
+  echo "git-data-userdata-budget: SKIP — terraform not on PATH (local dev; fails closed in CI)" >&2
   exit 0
 }
 
