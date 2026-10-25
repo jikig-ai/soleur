@@ -135,7 +135,7 @@ outruns it lets the tool call proceed (<https://code.claude.com/docs/en/hooks>, 
 the same failure as a crash. The simulation is bounded far below that ceiling (30 s total; the unrelated gitleaks
 probe adds at most 70 s; the unbounded read-only calls above are residual 10), and its own expiry denies. The measured
 cost is recorded in
-`knowledge-base/project/specs/feat-one-shot-10696-secret-scan-staging-gap/measurements.md` (AC13: the p95 of a
+`knowledge-base/project/specs/archive/20261025-180557-feat-one-shot-10696-secret-scan-staging-gap/measurements.md` (AC13: the p95 of a
 chained commit against the same command on an unstaged tree under the old hook must differ by at most 1.5 s).
 
 ## Deny causes (the enumerated words of the ledger row `mode=... cause=...`)
