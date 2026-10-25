@@ -41,3 +41,7 @@
 - P3 accepted/documented: KEY_BAD WARN volume, PS4 vector, var= name.
 - Green post-fix: probe 169/169, inngest 557/557, bound 61/61, gate 134/134, lint clean. Affected-umbrella running (log /tmp/affected-log-path). fix_rounds=1, seats=9.
 - Remaining: affected umbrella result, qa (5.5), compound (6), ship (7). PR #11097.
+
+## QA (5.5) + Compound (6) — done
+- QA PASS: direct real-invocation checks — SHELLOPTS=xtrace and BASH_ENV launches exit 78 with refusal on non-trace lines and ZERO sentinel lines in output; untraced `${!KEY}` resolution delivers the URL. Learning: knowledge-base/project/learnings/2026-10-25-third-copy-of-a-security-guard-needs-a-parity-row.md.
+- Remaining: affected-umbrella verdict, then ship (7). PR #11097.
