@@ -22,3 +22,10 @@
 - `soleur:plan` SKILL.md — run to completion (all phases inline; halt gates, Scope Check, Observability, Encryption Posture, IaC section, sharp-edges verification pass read in full)
 - `soleur:deepen-plan` SKILL.md — halt gates run mechanically in-process; results recorded in the plan's `## Deepen Pass` section
 - cloud-detect.sh (not-local), gh issue/pr/run queries, markdownlint-cli2, commits `0e0d6301ad` + `3fbfef9066` on branch `feat-one-shot-11068-inngest-alerts-push`
+
+## Pipeline Progress (post-review fix round)
+- Branch: feat-one-shot-11068-inngest-alerts-push | Worktree: .worktrees/feat-one-shot-11068-inngest-alerts-push | PR: #11069 (draft) | Issue: #11068 (Ref, NOT Closes — closes after apply verdict)
+- HEAD: f5e4f68a9e pushed. Panel SHA (pre-fix): 036ba525f7.
+- Plan: knowledge-base/project/plans/2026-10-25-chore-inngest-alerts-push-channel-plan.md
+- DONE: plan+deepen (subagent), CTO batched ruling (5 rows, cto_spawns=1), implementation (3 push flips + probe + test pin), 5-seat review panel (security/pattern/code-quality/git-history/architecture), all findings fixed inline in f5e4f68a9e, verification green (probe PUSH_ARMED, bun test 2/2, heartbeat 21/0, fmt clean).
+- NEXT: fix-round seats over 036ba525f7..HEAD → qa (plan Test Scenarios already executed) → compound → ship (ready PR, wait CI, gh pr merge --squash --auto, poll MERGED, observe apply-web-platform-infra run, close #11068 w/ run link or revert push on 422, postmerge, worktree cleanup, <promise>DONE</promise> + resume prompt).
