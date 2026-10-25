@@ -227,7 +227,6 @@ _ctr_str_stage_verb() {
   t="${t//[;&|()<>\`\"\']/ }"
   set -f
   for v in $t; do
-    case "$v" in git-*) hit=0; break ;; esac
     if _ctr_is_stage_verb "$v"; then hit=0; break; fi
   done
   if [ "$noglob" -eq 0 ]; then set +f; fi
@@ -743,7 +742,7 @@ _ctr_walk_from() {
 }
 
 _ctr_walk_body() {
-  local i="$1" n="${#_CTR_W[@]}" j w b k hits h envbad="" so sm su sa
+  local i="$1" n="${#_CTR_W[@]}" j w b k hits h envbad="" so sm sa
   # Leading NAME=value assignments (NAME+=value too).
   while [ "$i" -lt "$n" ]; do
     w="${_CTR_W[$i]}"
@@ -862,16 +861,16 @@ _ctr_walk_body() {
       done ;;
     # `shopt -so allexport` / `shopt -o -s allexport` is `set -a` (the -o switches shopt to the set -o option names)
     shopt)
-      j=$((i + 1)); so=0; sm=0; su=0; sa=0
+      j=$((i + 1)); so=0; sm=0; sa=0
       while [ "$j" -lt "$n" ]; do
         w="${_CTR_W[$j]}"
         case "$w" in
-          -[!-]*) case "${w#-}" in *s*) sm=1 ;; esac; case "${w#-}" in *u*) su=1 ;; esac; case "${w#-}" in *o*) so=1 ;; esac ;;
+          -[!-]*) case "${w#-}" in *s*) sm=1 ;; esac; case "${w#-}" in *o*) so=1 ;; esac ;;
           allexport) sa=1 ;;
         esac
         j=$((j + 1))
       done
-      if [ "$so" -eq 1 ] && [ "$sa" -eq 1 ] && [ "$sm" -eq 1 ] && [ "$su" -eq 0 ]; then
+      if [ "$so" -eq 1 ] && [ "$sa" -eq 1 ] && [ "$sm" -eq 1 ]; then
         _ctr_env_poison_cmd "the command runs shopt -s -o allexport, which exports every later assignment (git may read a hook, editor, config, attributes or index from it)"
       fi ;;
     mkdir|mv|cp|ln|install|rsync|tar|unzip) _CTR_CREATOR=1 ;;

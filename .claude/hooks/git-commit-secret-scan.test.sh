@@ -4316,6 +4316,7 @@ _t_fr3_walk() {
   _sd_add 'R3 A11 shopt -o -s allexport' 'shopt -o -s allexport; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=1'
   _sd_add 'R3 A11 twin: shopt -s nullglob exports nothing' 'shopt -s nullglob; git add f.txt && git commit -m x' 'refuse=0' 'exact=1'
   _sd_add 'R3 A11 twin: shopt -u allexport exports nothing' 'shopt -u allexport; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'R3 A11 twin: shopt -so nullglob sets another set -o style name and exports nothing' 'shopt -so nullglob; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=0'
   _sd_add 'R3 A11 twin: shopt -uo allexport UNSETS the option' 'shopt -uo allexport; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=0'
   _sd_add 'R3 A11 twin: shopt -s allexport without -o is not the set -o option' 'shopt -s allexport; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=0'
   _sd_add 'R3 A5 the config key case: Core.Autocrlf is refused like core.autocrlf' 'git -c Core.Autocrlf=true add f.txt && git commit -m x' 'refuse=1'
