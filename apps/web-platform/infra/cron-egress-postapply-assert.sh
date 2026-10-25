@@ -61,8 +61,11 @@ nft list chain ip filter SOLEUR-EGRESS | grep -c '10.0.1.40 tcp dport 8288 accep
 # not satisfy this). Without it a flipped container's handshake dies in the egress chain while this script reports success.
 nft list chain ip filter SOLEUR-EGRESS | grep -c '10.0.1.40 tcp dport 8443 accept' >/dev/null || { echo 'ASSERT-FAILED: dedicated-inngest-8443-accept'; exit 1; }
 # #8211: the git-data transport's accept (ssh to the git-data host, tcp/22). Without it the container's git fetch/push is dropped by the
-# default drop while the host's own probe (host OUTPUT) stays green; a missing rule fails the apply loudly by name.
-nft list chain ip filter SOLEUR-EGRESS | grep -c '10.0.1.20 tcp dport 22 accept' >/dev/null || { echo 'ASSERT-FAILED: dedicated-git-data-22-accept'; exit 1; }
+# default drop while the host's own probe (host OUTPUT) stays green; a missing rule fails the apply loudly by name. Anchored on the rule's
+# line start (a `drop` rule for the same address, or a comment naming it, does not satisfy it) AND positional: the accept must be listed
+# BEFORE the terminal default drop, or it is a dead rule. awk reads the whole listing (no early exit, so no SIGPIPE flake). This proves the
+# rule TEXT is in the live chain in the right place, not that a container reaches the host; that is a container-originated probe's job.
+nft list chain ip filter SOLEUR-EGRESS | awk '/^[[:space:]]*ip daddr 10\.0\.1\.20 tcp dport 22 accept/ { a = NR } /comment "soleur-egress: default drop"/ { d = NR } END { exit !(a && d && a < d) }' || { echo 'ASSERT-FAILED: dedicated-git-data-22-accept'; exit 1; }
 nft list set ip filter soleur_egress_allow | grep -cE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+' >/dev/null || { echo 'ASSERT-FAILED: allow-set-populated'; exit 1; }
 nft list chain ip filter SOLEUR-EGRESS | grep -c 'cidr allowlist' >/dev/null || { echo 'ASSERT-FAILED: cidr-allowlist-rule'; exit 1; }
 # Match the GitHub octet, NOT the literal /20: nft renders an interval-set

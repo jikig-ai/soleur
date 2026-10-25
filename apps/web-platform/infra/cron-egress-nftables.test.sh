@@ -32,8 +32,8 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_STUB_NOLOG=1   the stub nft records nothing (the "0 calls checked" harness row).
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
-MUT_ROWS_EXPECTED=43 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=63 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+MUT_ROWS_EXPECTED=45 # the mutation rows of the outer run; also the floor's row term
+INNER_ASSERTIONS=65 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -213,6 +213,34 @@ r_gd=$(ridx "$GD_RULE_RE"); r_in8443=$(ridx '^ip daddr 10\.0\.1\.40 tcp dport 84
 expect "git-data: exactly one tcp/22 accept for the git-data host, rendered AFTER the dedicated-Inngest accepts and BEFORE the default-drop log and drop" all 'test -n "$r_gd"' 'test "$(chain | grep -cE -- "$GD_RULE_RE")" -eq 1' 'test -n "$r_in8443" -a "$r_gd" -gt "$r_in8443"' 'test "$r_gd" -lt "$r_log"'
 expect "git-data: scoped to ONE address and ONE port: no other rule names 10.0.1.20, no other rule matches dport 22, and the accept carries no prefix length or port set" all 'test "$(chain | grep -c "10\.0\.1\.20")" -eq 1' 'test "$(chain | grep -cE "dport[[:space:]]+(\{[^}]*)?22([^0-9]|$)")" -eq 1' 'test "$(chain | grep "10\.0\.1\.20" | sed "s/ comment .*//" | grep -cE "/[0-9]|\{|-")" -eq 0'
 expect "git-data: STATIC parity: the address the app dials (git-data.tf local.git_data_private_ip, which network.tf assigns to the NIC and Doppler GIT_DATA_SSH_HOST publishes) has a tcp/22 accept in the rendered chain" all 'test -n "$GD_IP"' '[[ "$GD_IP" =~ ^10\.0\.1\.[0-9]+$ ]]' 'test "$(chain | grep -cFx -- "ip daddr $GD_IP tcp dport 22 accept comment \"soleur-egress: git-data transport\"")" -eq 1' 'grep -qE "^[[:space:]]*ip[[:space:]]*=[[:space:]]*local\.git_data_private_ip[[:space:]]*$" "$DIR/network.tf"' 'grep -qE "^[[:space:]]*value[[:space:]]*=[[:space:]]*hcloud_server_network\.git_data\.ip[[:space:]]*$" "$GD_TF"'
+# #8211 review (test-design P2): a per-rule pin passes while a SIBLING rule widens the exposure (`ip daddr 10.0.1.0/24 accept` after the git-data
+# rule, or a shadowing drop ahead of it). So the WHOLE accept set of the rendered chain is pinned (normalised: the trailing comment is stripped,
+# the fixture's bridge is docker0 / 172.17.0.1, and the gateway accept is absent because the stub has no gateway container), and the only verdict
+# rules ahead of the git-data accept other than accepts are the link-local drop and the two port-53 exfil drops (which cannot match tcp/22).
+GD_ACCEPT_PIN="$(LC_ALL=C sort <<'PIN'
+ct state established,related accept
+oifname "docker0" accept
+udp dport 53 ip daddr @soleur_egress_dns accept
+tcp dport 53 ip daddr @soleur_egress_dns accept
+ip daddr 172.17.0.1 tcp dport 8288 accept
+ip daddr 10.0.1.40 tcp dport 8288 accept
+ip daddr 10.0.1.40 tcp dport 8443 accept
+ip daddr 10.0.1.20 tcp dport 22 accept
+ip daddr @soleur_egress_allow accept
+ip daddr @soleur_egress_allow_cidr accept
+PIN
+)"
+GD_EARLY_PIN="$(cat <<'PIN'
+ip daddr 169.254.0.0/16 counter drop
+udp dport 53 counter drop
+tcp dport 53 counter drop
+PIN
+)"
+chain_norm() { chain | sed -E 's/ comment "[^"]*"$//'; }
+chain_accepts() { chain_norm | grep -E '(^| )accept$' | LC_ALL=C sort; }
+chain_early_verdicts() { chain_norm | awk '$0 == "ip daddr 10.0.1.20 tcp dport 22 accept" { exit } { print }' | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
+expect "git-data: the WHOLE accept set of the rendered chain equals the reviewed pin (10 rules): a sibling accept after the git-data rule is RED" all 'test "$(chain_accepts)" = "$GD_ACCEPT_PIN"' 'test "$(chain_accepts | grep -c .)" -eq 10'
+expect "git-data: the only verdict rules (other than accept) ahead of the git-data accept are the pinned link-local drop and the two port-53 exfil drops: a shadowing drop is RED" all 'test "$(chain_early_verdicts)" = "$GD_EARLY_PIN"' 'test -n "$(chain_norm | grep -Fx "ip daddr 10.0.1.20 tcp dport 22 accept")"'
 expect "happy: the CIDR elements reached nft as one flush+add transaction before the rules" all 'test "$(elems | grep -c "^add element ip filter soleur_egress_allow_cidr { 203.0.113.0/24,198.51.100.7/32 }$")" -eq 1' 'grep -q "^flush set ip filter soleur_egress_allow_cidr$" "$HAPPY"/txn.2'
 expect "happy: census: exactly one DROP names 169.254 (before every accept) and exactly one LOG names it, immediately before that drop" ll_clean "$HAPPY"
 expect "happy: no add-element payload names a link-local address" test "$(elems | grep -c '169\.254')" -eq 0
@@ -526,6 +554,16 @@ new = s.replace(gd, "", 1).replace(dd, dd + gd, 1)'
   msub "10f the accept admits every port of the git-data host, not only tcp/22" caught \
     'ip daddr 10.0.1.20 tcp dport 22 accept comment "soleur-egress: git-data transport"' \
     'ip daddr 10.0.1.20 accept comment "soleur-egress: git-data transport"'
+  msub "11a a sibling accept for the whole private subnet is added right after the git-data accept (the per-rule pins cannot see it)" caught \
+    'add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.20 tcp dport 22 accept comment "soleur-egress: git-data transport"
+' 'add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.20 tcp dport 22 accept comment "soleur-egress: git-data transport"
+add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.0/24 accept comment "x"
+'
+  msub "11b a shadowing drop for the private subnet is inserted BEFORE the git-data accept" caught \
+    'add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.20 tcp dport 22 accept comment "soleur-egress: git-data transport"
+' 'add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.0/24 counter drop comment "x"
+add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.20 tcp dport 22 accept comment "soleur-egress: git-data transport"
+'
   mutate "9 harmless: a comment-only edit must stay green" survive \
     "s.replace('declare table/sets/chains', 'declare the table, sets and chains', 1)"
   # Guard 2 rows 2 and 6: the resolver's feeders (host answers, container view, grace pool, pin set).

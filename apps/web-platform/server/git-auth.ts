@@ -364,18 +364,21 @@ const PINNED_HOST_KEY_OPTS: readonly string[] = [
  * Connect/keepalive bound for every git-data ssh dial (#8211). Without it a SYN that the container
  * egress firewall (or any blackhole) drops is retried by the kernel for minutes: the caller's
  * execFile timeout SIGTERMs ssh first and the failure surfaces as `killed: true, stderr: ""`, which
- * names nothing. `ConnectTimeout` makes the dead dial fail in 10 s with ssh's own
- * `Connection timed out` line; `ServerAliveInterval x ServerAliveCountMax` (30 s) bounds a session
- * that connects and then goes quiet. Both stay under the shortest caller timeout (30 s).
+ * names nothing. `ConnectTimeout` makes the dead dial fail in 8 s with ssh's own
+ * `Connection timed out` line; `ServerAliveInterval x ServerAliveCountMax` (6 s x 2 = 12 s) bounds a
+ * session that connects and then goes quiet. The worst case a dead peer can hold ssh is the sum,
+ * 8 + 12 = 20 s, which is STRICTLY under the shortest caller timeout (30 s: the provision and remove
+ * dials in git-data-replication.ts; the git transport calls allow 60 s). The test reads those caller
+ * timeouts from source and enforces the strict inequality.
  * Spread into EVERY ssh option array in this file (test/git-data-ssh-connect-bound.test.ts pins it).
  */
 const GIT_DATA_SSH_BOUND_OPTS: readonly string[] = [
   "-o",
-  "ConnectTimeout=10",
+  "ConnectTimeout=8",
   "-o",
-  "ServerAliveInterval=10",
+  "ServerAliveInterval=6",
   "-o",
-  "ServerAliveCountMax=3",
+  "ServerAliveCountMax=2",
 ];
 
 /**

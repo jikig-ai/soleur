@@ -12,7 +12,7 @@
 process.env.HOME = process.env.HOME || "/tmp";
 
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync as realExecFileSync } from "child_process";
 import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
@@ -41,9 +41,9 @@ function mockExecFile(calls: Call[]) {
 }
 
 const BOUND = {
-  ConnectTimeout: "10",
-  ServerAliveInterval: "10",
-  ServerAliveCountMax: "3",
+  ConnectTimeout: "8",
+  ServerAliveInterval: "6",
+  ServerAliveCountMax: "2",
 } as const;
 const KEY =
   "-----BEGIN OPENSSH PRIVATE KEY-----\nc3ludGhldGljLWJvdW5k\n-----END OPENSSH PRIVATE KEY-----";
@@ -126,80 +126,165 @@ describe("git-data ssh dial is bounded at every site (#8211)", () => {
     }
   });
 
-  test("the worst-case dead-peer window fits inside the shortest caller timeout (30 s provision)", () => {
-    // connect: ConnectTimeout; stalled session: Interval x CountMax. Each is bounded on its own;
-    // the larger of the two must stay under the 30 s provision / remove timeout.
-    const connect = Number(BOUND.ConnectTimeout);
-    const stalled = Number(BOUND.ServerAliveInterval) * Number(BOUND.ServerAliveCountMax);
-    expect(Math.max(connect, stalled)).toBeLessThanOrEqual(30);
+  test("the dead-peer window (ConnectTimeout + ServerAliveInterval x CountMax) is STRICTLY under the shortest REAL caller timeout, read from source", () => {
+    const timeouts: number[] = [];
+    for (const f of ["git-data-replication.ts", "git-data-client.ts"]) {
+      const code = stripComments(readFileSync(join(__dirname, "..", "server", f), "utf8"));
+      for (const m of code.matchAll(/\bawait\s+(?:git|ssh)WithPrivateKeyAuth\s*\(/g)) {
+        const args = balanced(code, m.index! + m[0].length - 1, "(", ")");
+        const t = args.match(/\btimeout:\s*([\d_]+)/);
+        expect(t, `${f}: a git-data ssh dial with no explicit timeout`).not.toBeNull();
+        timeouts.push(Number(t![1].replace(/_/g, "")));
+      }
+    }
+    // Non-vacuity: provision + remove (30 s), the fetch and the push (60 s).
+    expect(timeouts.length).toBeGreaterThanOrEqual(4);
+    expect(Math.min(...timeouts)).toBe(30_000);
+    const windowMs =
+      (Number(BOUND.ConnectTimeout) + Number(BOUND.ServerAliveInterval) * Number(BOUND.ServerAliveCountMax)) * 1000;
+    expect(windowMs).toBeLessThan(Math.min(...timeouts));
   });
 });
 
-// WIRING (comment-stripped, anchored on the construct): no ssh option array that carries the
-// identity/batch options may survive without the shared bound spread. A third site added later
-// with a bare array is RED here even if its own unit test was never written.
-describe("no bare git-data ssh option array survives in server/git-auth.ts (#8211)", () => {
-  const src = readFileSync(join(__dirname, "..", "server", "git-auth.ts"), "utf8");
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+}
 
-  /** Each `[ ... ]` literal that contains the "IdentitiesOnly=yes" element (an ssh option array). */
-  function sshOptionArrays(text: string): string[] {
-    const arrays: string[] = [];
-    let from = 0;
-    for (;;) {
-      const at = text.indexOf('"IdentitiesOnly=yes"', from);
-      if (at < 0) break;
-      const open = text.lastIndexOf("[", at);
-      const close = text.indexOf("]", at);
-      arrays.push(text.slice(open, close + 1));
-      from = close + 1;
+/** The balanced `open ... close` span starting at text[at] (string literals skipped). */
+function balanced(text: string, at: number, open: string, close: string): string {
+  let depth = 0;
+  for (let i = at; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < text.length && text[i] !== c; i++) if (text[i] === "\\") i++;
+      continue;
     }
-    return arrays;
+    if (c === open) depth++;
+    else if (c === close && --depth === 0) return text.slice(at, i + 1);
   }
+  return text.slice(at);
+}
 
-  test("the bound option set is defined once with the exact values", () => {
-    const def = code.match(/const\s+(\w+)\s*:\s*readonly string\[\]\s*=\s*\[([\s\S]*?)\];/g) ?? [];
-    const bound = def.filter((d) => d.includes("ConnectTimeout="));
-    expect(bound).toHaveLength(1);
-    const body = bound[0];
-    for (const [k, v] of Object.entries(BOUND)) expect(body).toContain(`"${k}=${v}"`);
-    expect(code.match(/ConnectTimeout=/g)).toHaveLength(1);
-    expect(code.match(/ServerAliveInterval=/g)).toHaveLength(1);
-    expect(code.match(/ServerAliveCountMax=/g)).toHaveLength(1);
+/** The array or string literal a `const|let|var NAME = ...` binds, or null. */
+function definitionOf(code: string, name: string): string | null {
+  const m = new RegExp(`\\b(?:const|let|var)\\s+${name}\\b[^=;]*=\\s*`).exec(code);
+  if (!m) return null;
+  const at = m.index + m[0].length;
+  const c = code[at];
+  if (c === "[") return balanced(code, at, "[", "]");
+  if (c === '"' || c === "'" || c === "`") return code.slice(at, code.indexOf(c, at + 1) + 1);
+  return null;
+}
+
+/** Inline every `...IDENT` spread whose definition is a literal in this file (bounded depth). */
+function expand(code: string, literal: string, depth = 0): string {
+  if (depth > 4) return literal;
+  return literal.replace(/\.\.\.\s*([A-Za-z_$][\w$]*)\b(?!\s*[.(])/g, (all, id: string) => {
+    const def = definitionOf(code, id);
+    return def ? expand(code, def, depth + 1) : all;
+  });
+}
+
+const REQUIRED = ["ConnectTimeout=", "ServerAliveInterval=", "ServerAliveCountMax="];
+type Site = { form: string; set: string | null };
+
+/**
+ * Every ssh option set a source file builds, anchored on the CALL FORM (never on an option name, so a set
+ * that forgot IdentitiesOnly is still found): an exec/spawn-family call whose first argument is "ssh",
+ * a GIT_SSH_COMMAND assignment, and a string-form `ssh ... -o` command. `set === null` means the set
+ * could not be resolved to a literal in the file (itself a violation: it cannot be proven bounded).
+ */
+function sshSites(raw: string): Site[] {
+  const code = stripComments(raw);
+  const sites: Site[] = [];
+  const resolve = (at: number): string | null => {
+    const c = code[at];
+    if (c === "[") return expand(code, balanced(code, at, "[", "]"));
+    if (c === '"' || c === "'" || c === "`") return code.slice(at, code.indexOf(c, at + 1) + 1);
+    const id = /^[A-Za-z_$][\w$]*(?![\w$.(])/.exec(code.slice(at));
+    const def = id ? definitionOf(code, id[0]) : null;
+    return def ? expand(code, def) : null;
+  };
+  for (const m of code.matchAll(/\b\w*(?:execFile|spawn|exec|execa)\w*\s*\(\s*["'`]ssh["'`]\s*,\s*/g)) {
+    sites.push({ form: "spawn of ssh", set: resolve(m.index! + m[0].length) });
+  }
+  for (const m of code.matchAll(/\bGIT_SSH_COMMAND\s*[:=]\s*/g)) {
+    sites.push({ form: "GIT_SSH_COMMAND", set: resolve(m.index! + m[0].length) });
+  }
+  for (const m of code.matchAll(/(["'`])[^"'`\n]*\bssh(?=\s)[^"'`\n]*?\s-o\s[^"'`\n]*\1/g)) {
+    sites.push({ form: "string-form ssh -o", set: m[0] });
+  }
+  return sites;
+}
+
+function violations(file: string, raw: string): string[] {
+  const out: string[] = [];
+  for (const s of sshSites(raw)) {
+    if (s.set === null) out.push(`${file}: ${s.form}: option set cannot be resolved to a literal`);
+    else for (const r of REQUIRED) if (!s.set.includes(r)) out.push(`${file}: ${s.form}: missing ${r}`);
+  }
+  return out;
+}
+
+describe("every ssh option set under server/ carries the connect bound (#8211, call-form sweep)", () => {
+  const root = join(__dirname, "..");
+  const files: string[] = [];
+  const walk = (rel: string) => {
+    for (const e of readdirSync(join(root, rel))) {
+      if (e === "node_modules" || e.startsWith(".")) continue;
+      const r = join(rel, e);
+      if (statSync(join(root, r)).isDirectory()) walk(r);
+      else if (/\.(ts|tsx|js|mjs|cjs)$/.test(e) && !/\.test\./.test(e)) files.push(r);
+    }
+  };
+  for (const d of ["server", "lib", "app"]) walk(d);
+  const read = (f: string) => readFileSync(join(root, f), "utf8");
+
+  test("the sweep sees the source and finds the git-auth.ts sites (non-vacuity)", () => {
+    expect(files.length).toBeGreaterThan(200);
+    expect(files).toContain(join("server", "git-auth.ts"));
+    const found: Record<string, number> = {};
+    for (const f of files) {
+      const n = sshSites(read(f)).length;
+      if (n) found[f] = n;
+    }
+    expect(found).toEqual({ [join("server", "git-auth.ts")]: 2 });
   });
 
-  test("every ssh option array (the git transport and the provision/remove dial) spreads the bound set", () => {
-    const name = (code.match(/const\s+(\w+)\s*:\s*readonly string\[\]\s*=\s*\[[^\]]*ConnectTimeout=/) ?? [])[1];
-    expect(name, "bound const name").toBeTruthy();
-    const arrays = sshOptionArrays(code);
-    expect(arrays).toHaveLength(2);
-    for (const a of arrays) expect(a, a).toContain(`...${name}`);
+  test("no ssh option set in the app lacks ConnectTimeout, ServerAliveInterval or ServerAliveCountMax", () => {
+    const bad: string[] = [];
+    for (const f of files) bad.push(...violations(f, read(f)));
+    expect(bad).toEqual([]);
   });
 
-  test("the sweep is live: a bare array is detected", () => {
-    const bare = 'const x = ["-i", k, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes"];';
-    expect(sshOptionArrays(bare)).toHaveLength(1);
-    expect(sshOptionArrays(bare)[0]).not.toContain("...");
+  test("the bound option set is defined once, with the exact values, and spread at both git-auth.ts sites", () => {
+    const code = stripComments(read(join("server", "git-auth.ts")));
+    const def = definitionOf(code, "GIT_DATA_SSH_BOUND_OPTS");
+    expect(def).not.toBeNull();
+    for (const [k, v] of Object.entries(BOUND)) expect(def).toContain(`"${k}=${v}"`);
+    for (const k of Object.keys(BOUND)) expect(code.match(new RegExp(`${k}=`, "g"))).toHaveLength(1);
+    expect(code.match(/\.\.\.GIT_DATA_SSH_BOUND_OPTS/g)).toHaveLength(2);
   });
 
-  test("no other app source builds ssh options (BatchMode / ConnectTimeout live only in git-auth.ts)", async () => {
-    const { readdirSync, statSync } = await import("node:fs");
-    const root = join(__dirname, "..");
-    const hits: string[] = [];
-    const walk = (rel: string) => {
-      for (const e of readdirSync(join(root, rel))) {
-        if (e === "node_modules" || e.startsWith(".")) continue;
-        const r = join(rel, e);
-        if (statSync(join(root, r)).isDirectory()) walk(r);
-        else if (/\.(ts|tsx|js|mjs)$/.test(e) && !/\.test\./.test(e) && r !== join("server", "git-auth.ts")) {
-          const t = readFileSync(join(root, r), "utf8")
-            .replace(/\/\*[\s\S]*?\*\//g, "")
-            .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
-          if (/["'`](?:BatchMode|ConnectTimeout|ServerAliveInterval)=/.test(t)) hits.push(r);
-        }
-      }
-    };
-    for (const d of ["server", "lib", "app"]) walk(d);
-    expect(hits).toEqual([]);
+  // The detector must be able to fail: each planted shape is RED on its own.
+  test.each([
+    ["server/zz-extra.ts", 'await execFileAsync("ssh", ["-i", k, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", host, cmd]);', "spawn of ssh"],
+    ["server/zz-extra.ts", 'const a = ["-i", k, "-o", "BatchMode=yes"]; spawn("ssh", a);', "spawn of ssh"],
+    ["server/git-auth.ts", 'await execFileAsync("ssh", ["-i", k, "-o", "BatchMode=yes", host, cmd]);', "spawn of ssh"],
+    ["server/zz-extra.ts", 'const env = { GIT_SSH_COMMAND: "ssh -i k -o BatchMode=yes" };', "GIT_SSH_COMMAND"],
+    ["server/zz-extra.ts", "const env = { GIT_SSH_COMMAND: cmdFromElsewhere };", "GIT_SSH_COMMAND"],
+    ["server/zz-extra.ts", 'exec(`ssh -o BatchMode=yes -i ${k} ${host} true`);', "string-form ssh -o"],
+  ])("planted in %s: %s is RED (%s)", (file, line, form) => {
+    const v = violations(file, line);
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((x) => x.startsWith(`${file}: ${form}`))).toBe(true);
+  });
+
+  test("a bounded planted set is GREEN, and a comment naming ssh is not a site", () => {
+    const good =
+      'const B: readonly string[] = ["-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=6", "-o", "ServerAliveCountMax=2"]; ' +
+      'const o = ["-o", "IdentitiesOnly=yes", ...B]; await execFileAsync("ssh", o);';
+    expect(violations("server/zz-ok.ts", good)).toEqual([]);
+    expect(violations("server/zz-ok.ts", '// execFile("ssh", [...]) lives elsewhere\n/* GIT_SSH_COMMAND: x */')).toEqual([]);
   });
 });
