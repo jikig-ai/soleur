@@ -1,5 +1,5 @@
 // Agent auth-failure diagnostic: the pure matcher (positive family, negative near-misses, forgery, text-first ordering,
-// timing, no-leak). Plan: knowledge-base/project/plans/2026-10-25-feat-agent-auth-failure-diagnostic-plan.md (Phase 1, item 1;
+// timing, no-leak). Plan: knowledge-base/project/plans/archive/20261025-182244-2026-10-25-feat-agent-auth-failure-diagnostic-plan.md (Phase 1, item 1;
 // Guard 2 rows 2, 5, 8d). Fixtures are SYNTHESIZED (cq-test-fixtures-synthesized-only): the CLI wording is public product text,
 // the ids are fake. The separator is written as the \u00B7 escape (cq-regex-unicode-separators-escape-only).
 import { beforeEach, describe, expect, it, vi } from "vitest";

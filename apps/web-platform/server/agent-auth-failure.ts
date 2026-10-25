@@ -1,5 +1,5 @@
 // Server-side diagnostic for the Claude CLI "Not logged in" reply (#10455, #10548 refs; plan
-// knowledge-base/project/plans/2026-10-25-feat-agent-auth-failure-diagnostic-plan.md). A DIAGNOSTIC, not the fix: when the
+// knowledge-base/project/plans/archive/20261025-182244-2026-10-25-feat-agent-auth-failure-diagnostic-plan.md). A DIAGNOSTIC, not the fix: when the
 // CLI replies that it has no usable credential although a validated credential was leased, this module reports ONE routed
 // Sentry event (feature "agent-auth", constant message) whose ten closed-enum tags separate the competing root-cause
 // hypotheses, so the cause can be read from telemetry instead of guessed.
