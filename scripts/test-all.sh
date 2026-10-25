@@ -5475,16 +5475,19 @@ if want_scripts; then
   # equal to its RELEVANCE_ARRAYS rows. Two separate `if`s over one array would red that floor.
   # COUPLING: the --rows ranges below appear TWICE each (the run_suite line and the skip_suite re-run text);
   # a DECLARED_TOTAL bump in the battery needs all four edited together, and the shard-totality suites
-  # pin both halves (plugins/soleur/test/scripts-shard-totality*.sh).
+  # pin both halves (plugins/soleur/test/scripts-shard-totality*.sh). The same bump must also re-pin the
+  # VERBATIM anchors in plugins/soleur/test/scripts-shard-totality-mutations.sh — nine rows mutate these
+  # exact run_suite lines and the battery's DECLARED_TOTAL line, and an edit here without that re-pin
+  # leaves every one of them ANCHOR MISSING (measured on #7718: 9/42 rows red).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-15
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 16-30
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-18
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-15"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-18"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 16-30"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 19-35"
   fi
   # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
   # working tree; the battery builds synthetic fixture repos and proves each
