@@ -32,8 +32,8 @@ for candidate in \
 done
 
 if [[ -z "$NODE_BIN" ]]; then
-  echo "SKIP: Node >= 22.9.0 not found (tried ~/.local/node22, ~/.local/bin, PATH)"
-  exit 0
+  echo "UNRESOLVED: node>=22.9.0 missing — this suite asserted nothing; install node >= 22.9.0 (tried ~/.local/node22, ~/.local/bin, PATH)"
+  exit 3
 fi
 
 echo "=== pencil-adapter auth hard-fail ==="

@@ -11,21 +11,16 @@
 set -uo pipefail
 
 HERE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-# shellcheck source=./test-helpers.sh
-source "$HERE/test-helpers.sh"
-
-GATE="$HERE/../skills/ship/scripts/battery-owed.sh"
-[[ -r "$GATE" ]] || { printf 'FATAL: gate not readable at %s\n' "$GATE" >&2; exit 1; }
-
-OWED=0
-SKIPPABLE=42
-UNDECIDABLE=2
 
 # ONE owning trap, registered before the first allocation (ADR-129, rule (c)).
 # Each fixture root is appended as it is created, so a failed assertion, a
 # `set -u` abort or a signal between two allocations still removes every root
 # already made — a trailing `rm -rf` at the end of the file only runs on the
 # happy path, which is precisely the path that does not leak.
+#
+# Installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659).
 FIXTURE_ROOTS=()
 cleanup_fixture_roots() {
   local d
@@ -37,6 +32,16 @@ cleanup_fixture_roots() {
   return 0
 }
 trap cleanup_fixture_roots EXIT INT TERM
+
+# shellcheck source=./test-helpers.sh
+source "$HERE/test-helpers.sh"
+
+GATE="$HERE/../skills/ship/scripts/battery-owed.sh"
+[[ -r "$GATE" ]] || { printf 'FATAL: gate not readable at %s\n' "$GATE" >&2; exit 1; }
+
+OWED=0
+SKIPPABLE=42
+UNDECIDABLE=2
 
 # Allocate a fixture root and register it for cleanup in one step, so a new
 # fixture cannot be added without being owned.
