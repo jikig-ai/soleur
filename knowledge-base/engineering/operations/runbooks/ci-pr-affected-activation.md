@@ -250,7 +250,7 @@ changes the baseline, the live set and the runner oracle, so it is recorded on #
 
 ### The drain rubric
 
-One home for the bar PR4 applied, so PR4b, PR5 and later authors apply the same one (evidence for each pair: `knowledge-base/project/specs/feat-one-shot-s4-affected-index-pr4-code-edge-drain/pairs-decisions.tsv`).
+One home for the bar PR4 applied, so PR4b, PR5 and later authors apply the same one (evidence for each pair: `knowledge-base/project/specs/archive/20261025-151757-feat-one-shot-s4-affected-index-pr4-code-edge-drain/pairs-decisions.tsv`).
 
 - **Declare an exact-file edge** in `AFFECTED_<LABEL>_PATHS` only when, at run time, the suite or a library or script it runs (a) executes or sources the file (a computed path and a best-effort `source ... || true` count), (b) opens its content (cat, grep, jq, readFileSync, import, hash, diff, or copy-then-assert on a copy), (c) asserts its existence or mode where the verdict depends on it, or (d) the path is a data-table row that a quoted loop feeds to a read, exec or stat. No quoted loop means no declaration.
 - **A mention is not declared.** Messages, docstrings and comments, test-vector arguments to a predicate that never opens the path, fixture rows, files the suite writes into a scratch tree, allow-list, classification and relevance rows (a text-scanned data library is not a read), negative strings. Mentions move to PR5 as accept rows.
