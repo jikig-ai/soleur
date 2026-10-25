@@ -22,3 +22,12 @@
 - soleur:plan, soleur:deepen-plan (run to completion by planning subagent)
 - soleur:engineering:cto (1 batched spawn, 2 rulings)
 - cloud-detect.sh, blog-jargon-scan.sh, validate-tweet-draft.sh, technical-ruling-gate.sh, markdownlint-cli2, pr-overlap-preflight.sh (exit 13 — shared seo-bulk-redirects.tf with open PRs #10946, #11091; no scope collision)
+
+## Work Phase
+- Status: complete (Tier B fan-out — 5 parallel writer subagents, disjoint file scopes, report-only contract; lead held shared files + all commits)
+- Files: 15 created (5 posts, 5 OG PNGs, 5 distribution drafts) + 3 edited (seo-bulk-redirects.tf +5 pairs, hub post +5 spoke-link sentences, campaign-calendar regen)
+- Commits: 1831a3f737 (wiring) + 5 per-spoke content commits + 7edb16afbe (calendar)
+- Verifications (all rc 0): jargon-scan ×5, validate-tweet-draft ×5, lint-distribution-content, markdownlint per-file, docs:build (5 posts rendered), bun test 187/0 (seo-aeo-drift-guard, marketing-content-drift, distribution-content-format, blog-audience-contract), validate-blog-links Guard-1 PASS, word counts 1586–1824 ∈ [1500,2000], FAQ↔JSON-LD parity ×5
+- CTO ruling honored: #10737 post names no consumer count/roster (agent-verified 0 hits)
+- GDPR gate: skip — diff touches no regulated-data surface (content + .tf map lines only)
+- Notes: markdownlint-cli2 not installed; agents used repo-pinned `node_modules/.bin/markdownlint` (equivalent engine, CI uses it). distribution-content MD034 bare-URL hits expected (.markdownlintignore'd; publisher contract).
