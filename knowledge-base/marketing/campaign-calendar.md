@@ -2,15 +2,18 @@
 last_updated: 2026-10-25
 ---
 # Campaign Calendar
+
 Rolling view of content distributions. Auto-generated from `distribution-content/` frontmatter.
 
 ## Upcoming
+
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
 | Soleur on OpenCode: run your AI organization on open-weights models | feature-launch | 2026-10-27 | x, bluesky | scheduled |
 | We Audited 102 Guardrails. Only Four Belong in Every Repository. | pillar | 2026-10-29 | x, bluesky, discord, linkedin-personal | scheduled |
 
 ## Stale Draft — needs approval
+
 > Drafts older than 7 days still awaiting operator approval. The
 > publisher never ages these out — flip `publish_date` + `status: scheduled` to
 > release, or delete if abandoned.
@@ -19,6 +22,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 184 | unknown | draft |
 
 ## Draft
+
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
 | A 'healthy' server can lie — new deep-readiness check proves a host can actually serve you | feature-launch | 2026-08-25 | x, bluesky | stale |
@@ -44,6 +48,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Your knowledge base is now actually usable on a phone | feature-launch | 2026-09-03 | x, bluesky | stale |
 
 ## Published
+
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
 | A Checklist for Trusting AI Work Was Just Published. We Shipped All of It. | pillar | 2026-10-24 | discord, x, bluesky, linkedin-personal | published |
