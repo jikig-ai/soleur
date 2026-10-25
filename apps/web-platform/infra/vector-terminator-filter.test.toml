@@ -1,0 +1,289 @@
+# Vector unit tests for the TLS terminator's journal filter (transforms.inngest_terminator_filter).
+# Run against the REAL vector.toml:
+#   vector test apps/web-platform/infra/vector.toml apps/web-platform/infra/vector-terminator-filter.test.toml
+# (needs BETTERSTACK_LOGS_TOKEN and SENTRY_USERID_PEPPER set to dummies.)
+#
+# The message lines are the measured stunnel 5.72 output (alpine container, scratch run 2026-10-25): a healthy
+# request, an upstream that refuses, an upstream that accepts and closes with no reply, a plain-HTTP client and a
+# client that rejects the certificate. The host's own stunnel build is NOT measured, so the filter fails open: it
+# drops exactly three healthy-request line shapes of ONE unit and passes everything else. One case per class.
+# A case that expects a dropped line uses no_outputs_from (a test has one extract_from per output); every other
+# case extracts the same line from the filter's output.
+#
+# Field names follow what the journald source emits on the host (_SYSTEMD_UNIT, message); the host's own rows
+# are the check that the real field names match these fixtures (the plan records it as not yet measured).
+
+# ---- the three DROPPED shapes (healthy-request lines of soleur-inngest-tls.service) ----
+
+[[tests]]
+name = "drops the healthy accepted-connection line of the terminator unit"
+no_outputs_from = ["inngest_terminator_filter"]
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:13 LOG5[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
+
+[[tests]]
+name = "drops the healthy s_connect connected line of the terminator unit"
+no_outputs_from = ["inngest_terminator_filter"]
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:13 LOG5[2]: s_connect: connected 127.0.0.1:8288"
+
+[[tests]]
+name = "drops the healthy connected-remote-server line of the terminator unit"
+no_outputs_from = ["inngest_terminator_filter"]
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:13 LOG5[2]: Service [inngest] connected remote server from 127.0.0.1:43996"
+
+# ---- every KEPT class: the lines a diagnosis reads (never dropped) ----
+
+[[tests]]
+name = "keeps the LOG3 upstream-refused line"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:08 LOG3[0]: s_connect: connect 127.0.0.1:8288: Connection refused (111)"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:08 LOG3[0]: s_connect: connect 127.0.0.1:8288: Connection refused (111)"
+'''
+
+[[tests]]
+name = "keeps the LOG3 no-more-addresses line"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:08 LOG3[0]: No more addresses to connect"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:08 LOG3[0]: No more addresses to connect"
+'''
+
+[[tests]]
+name = "keeps the Connection reset line (upstream refused, 0 and 0 bytes)"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:08 LOG5[0]: Connection reset: 0 byte(s) sent to TLS, 0 byte(s) sent to socket"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:08 LOG5[0]: Connection reset: 0 byte(s) sent to TLS, 0 byte(s) sent to socket"
+'''
+
+[[tests]]
+name = "keeps the Connection reset/closed line (client rejected the certificate)"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:15 LOG5[4]: Connection reset/closed: 0 byte(s) sent to TLS, 0 byte(s) sent to socket"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:15 LOG5[4]: Connection reset/closed: 0 byte(s) sent to TLS, 0 byte(s) sent to socket"
+'''
+
+[[tests]]
+name = "keeps the healthy Connection closed line (both byte counts above zero; the host's own 5-minute probe emits one)"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:13 LOG5[2]: Connection closed: 59 byte(s) sent to TLS, 78 byte(s) sent to socket"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:13 LOG5[2]: Connection closed: 59 byte(s) sent to TLS, 78 byte(s) sent to socket"
+'''
+
+[[tests]]
+name = "keeps the 0-byte Connection closed line (upstream accepted then closed with no reply: the shape that must never be dropped)"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:11 LOG5[1]: Connection closed: 0 byte(s) sent to TLS, 78 byte(s) sent to socket"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:11 LOG5[1]: Connection closed: 0 byte(s) sent to TLS, 78 byte(s) sent to socket"
+'''
+
+[[tests]]
+name = "keeps the SSL_accept plain-HTTP-client line"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:14 LOG3[3]: SSL_accept: ssl/record/methods/tlsany_meth.c:68: error:0A00009C:SSL routines::http request"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:14 LOG3[3]: SSL_accept: ssl/record/methods/tlsany_meth.c:68: error:0A00009C:SSL routines::http request"
+'''
+
+[[tests]]
+name = "keeps the SSL_accept unknown-ca alert line"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:15 LOG3[4]: SSL_accept: ssl/record/rec_layer_s3.c:914: error:0A000418:SSL routines::tlsv1 alert unknown ca"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:15 LOG3[4]: SSL_accept: ssl/record/rec_layer_s3.c:914: error:0A000418:SSL routines::tlsv1 alert unknown ca"
+'''
+
+[[tests]]
+name = "keeps a startup line"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:07 LOG5[ui]: Configuration successful"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:07 LOG5[ui]: Configuration successful"
+'''
+
+# ---- fail-open: wording, unit and shape the filter does not know ----
+
+[[tests]]
+name = "keeps a differently worded stunnel line (LOG6, another service name)"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:40:00 LOG6[9]: Service [other] accepted connection from 127.0.0.1:1"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:40:00 LOG6[9]: Service [other] accepted connection from 127.0.0.1:1"
+'''
+
+[[tests]]
+name = "keeps another unit's line even when it carries a drop prefix (the unit check is part of the drop)"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "inngest-server.service"
+message = "Service [inngest] accepted connection from 127.0.0.1:55328"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "Service [inngest] accepted connection from 127.0.0.1:55328" && ._SYSTEMD_UNIT == "inngest-server.service"
+'''
+
+[[tests]]
+name = "keeps a row with no unit field even when it carries a drop prefix"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+message = "Service [inngest] accepted connection from 127.0.0.1:55328"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "Service [inngest] accepted connection from 127.0.0.1:55328"
+'''
+
+[[tests]]
+name = "keeps a terminator row with no message field"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+SYSLOG_IDENTIFIER = "stunnel4"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+(!exists(.message) || .message == "") && ._SYSTEMD_UNIT == "soleur-inngest-tls.service" && .SYSLOG_IDENTIFIER == "stunnel4"
+'''
+
+[[tests]]
+name = "keeps a terminator row whose message is not a string"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = 12345
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == 12345
+'''
+
+[[tests]]
+name = "keeps an inngest-server row (the rows the 524 alert reads) unchanged"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "inngest-server.service"
+message = '{"level":"error","error":"524 status code"}'
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "{\"level\":\"error\",\"error\":\"524 status code\"}" && ._SYSTEMD_UNIT == "inngest-server.service"
+'''

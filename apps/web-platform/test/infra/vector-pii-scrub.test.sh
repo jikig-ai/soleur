@@ -227,6 +227,29 @@ run_fixture "authorization-bearer-leak" \
   '(.message | test("Bearer \\[redacted\\]"))' \
   '(.message | test("eyJhbGc") | not)'
 
+# --- Doppler token shape (the TLS terminator's journal is shipped from the replaced Inngest host) ---
+# The terminator unit's ExecStartPre sources /etc/default/inngest-doppler without redirecting stderr, so
+# a malformed line in that file would echo the offending text, and that file holds the Doppler token.
+# The rule is value-shaped (dp. + a two-to-five letter kind + a dot + a long body, a service token also
+# carrying the config name) and costs no user_data bytes. The token literals are assembled at run time:
+# a contiguous token-shaped string in a committed file is what a secret scanner exists to flag.
+DP_BODY="$(printf 'k%.0s' $(seq 1 43))"
+DP_SERVICE="dp.""st.prd_terraform.${DP_BODY}"
+DP_PERSONAL="dp.""pt.${DP_BODY}"
+run_fixture "doppler-service-token-in-env-parse-error" \
+  "{\"message\":\"/etc/default/inngest-doppler: line 3: DOPPLER_TOKEN=${DP_SERVICE}: command not found\"}" \
+  '(.message | test("dp\\.\\[redacted\\]"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)' \
+  '(.message | test("prd_terraform") | not)' \
+  '(.message | test("DOPPLER_TOKEN="))'
+run_fixture "doppler-personal-token-bare-in-a-line" \
+  "{\"message\":\"fetch failed with ${DP_PERSONAL} rejected\"}" \
+  '(.message | test("dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+run_fixture "dp-prefix-ordinary-text-passes-through-intact" \
+  '{"message":"build output dp.dev.local started"}' \
+  '(.message == "build output dp.dev.local started")'
+
 # --- AC5(c): line-injection chars stripped ---
 run_fixture "line-injection-unicode" \
   '{"message":"foo bar bazqux"}' \
@@ -288,7 +311,7 @@ assert_grep() {
 assert_grep "app_container_journald source exists" '^\[sources\.app_container_journald\]'
 assert_grep "warn filter reads the app_container source" '^inputs = \["app_container_journald"\]'
 assert_grep "app container routed THROUGH pii_scrub (redaction path, not sink-direct)" \
-  '^inputs = \["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"\]'
+  '^inputs = \["inngest_terminator_filter", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"\]'
 # The marker chain is the ONLY addition (#9545): it carries a workspace id and a count, never a host.
 assert_grep "egress audit throttle marker is the only addition to the scrub inputs, built from vector's internal metrics" \
   '^inputs = \["egress_audit_throttled_filter"\]'
@@ -734,8 +757,8 @@ if [[ -z "$SRC2_BLOCK" ]]; then
   fail "Source 2 drift (#7898): [sources.system_journald] block not found in vector.toml"
 elif ! grep -qE '^include_matches\.PRIORITY = \["0", "1", "2"\]$' <<<"$SRC2_BLOCK"; then
   fail "Source 2 drift (#7898): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\"] — the host-script crit rows (logger -p user.crit = PRIORITY 2) would stop shipping"
-elif ! grep -qE '^exclude_units = \["inngest-server\.service"\]$' <<<"$SRC2_BLOCK"; then
-  fail "Source 2 drift (#7898): exclude_units widened/changed — a monitor unit added here would lose its off-box refusal path"
+elif ! grep -qE '^exclude_units = \["inngest-server\.service", "soleur-inngest-tls\.service"\]$' <<<"$SRC2_BLOCK"; then
+  fail "Source 2 drift (#7898): exclude_units widened/changed (it carries exactly the two units Source 1 includes) — a monitor unit added here would lose its off-box refusal path"
 elif ! grep -qE '^inputs = \[.*"system_journald".*\]' "$VECTOR_TOML"; then
   fail "Source 2 drift (#7898): system_journald is no longer an input of the pii_scrub chain"
 else
@@ -761,12 +784,14 @@ if [[ -z "$SRC1_BLOCK" ]]; then
   fail "Source 1 drift (#9963): [sources.inngest_journald] block not found in vector.toml"
 elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["3", "4"\]$' >/dev/null; then
   fail "Source 1 drift (#9963 + #6551 partition): include_matches.PRIORITY is no longer exactly [\"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping; PRIORITY 0-2 moved to Source 2 under the partition (untagged rows)"
-elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service"\]$' >/dev/null; then
+elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service", "soleur-inngest-tls\.service"\]$' >/dev/null; then
   fail "Source 1 drift (#9963): include_units changed — the unit's own rows at every priority stop shipping"
-elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_journald"')" = "0" ]; then
-  fail "Source 1 drift (#9963): inngest_journald is no longer an input of the pii_scrub chain (checked against the pii_scrub* transform block's own inputs line, not any inputs line)"
+elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_terminator_filter"')" = "0" ]; then
+  fail "Source 1 drift (#9963): the terminator filter (the only reader of inngest_journald) is no longer an input of the pii_scrub chain (checked against the pii_scrub* transform block's own inputs line, not any inputs line)"
+elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_journald"')" != "0" ]; then
+  fail "Source 1 drift (terminator filter): the raw inngest_journald is an input of the pii_scrub chain again, so the filter is bypassed"
 else
-  pass "Source 1 (inngest_journald) admits inngest-server.service OR PRIORITY {3,4} from any unit and feeds the scrub chain — the #9963+#6551 control-row arm holds"
+  pass "Source 1 (inngest_journald) admits the inngest-server and TLS terminator units OR PRIORITY {3,4} from any unit and feeds the scrub chain through the terminator filter — the #9963+#6551 control-row arm holds"
 fi
 
 echo
@@ -814,7 +839,8 @@ fi
 # multi-byte char), so the pin is the guaranteed-minimum run. Ratchet when adding fixtures, and
 # read a floor failure on an otherwise-green run as "you added rows, update this number".
 # Ratcheted 36 -> 39 by #9963 (AC3d-disjoint + AC3d-stale + the Source-1 arm pin).
-PII_SCRUB_MIN_CASES=39
+# Ratcheted 39 -> 42 by the terminator-journal change (the Doppler token shape: service token, personal token, ordinary dp. text).
+PII_SCRUB_MIN_CASES=42
 if (( CASES < PII_SCRUB_MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PII_SCRUB_MIN_CASES" >&2

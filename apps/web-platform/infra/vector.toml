@@ -44,7 +44,7 @@
 
 data_dir = "/var/lib/vector"
 
-# ---------------- Source 1: inngest-server journald (unit OR PRIORITY 3-4 arm) ----------------
+# ---------------- Source 1: inngest-server + TLS terminator journald (units OR PRIORITY 3-4 arm) ----------------
 # ADMISSION SEMANTICS (#9963 — verified against Vector 0.43.1 src/sources/journald.rs,
 # the version pinned at vector.tf:13): the journald source spawns
 # `journalctl --follow --all --show-cursor --output=json` with NO match arguments —
@@ -56,7 +56,7 @@ data_dir = "/var/lib/vector"
 # (excludes win over includes — `exclude_units` merges into
 # exclude_matches._SYSTEMD_UNIT). So this source admits a row iff:
 #
-#   ( _SYSTEMD_UNIT = inngest-server.service (ANY priority)
+#   ( _SYSTEMD_UNIT ∈ {inngest-server.service, soleur-inngest-tls.service} (ANY priority)
 #       OR
 #     PRIORITY ∈ {3,4} (ANY unit, ANY SYSLOG_IDENTIFIER) )
 #   AND NOT  SYSLOG_IDENTIFIER ∈ <Source 4's exact tag set>
@@ -86,6 +86,16 @@ data_dir = "/var/lib/vector"
 #     the path that shipped the #9939 storm (~1,240 rows/day) and the path #9963 pins;
 #     SOLEUR_SYSTEMD_JOURNALD_CONTROL (`/usr/bin/logger -t systemd -p err` in
 #     inngest-server-probe.sh, emitted by inngest-bootstrap.sh) is its positive control.
+#   - The TLS terminator (soleur-inngest-tls.service: stunnel4 in front of the :8288
+#     listener, and its ExecStartPre fetch script) rides the SAME unit arm, so its
+#     journal reaches Better Stack through this source only on a host whose image
+#     carries this file (the Inngest host, after a replace; web-1 and web-2 receive
+#     the file hot but run no such unit). Its lines carry no priority prefix and take
+#     systemd's default level, so a PRIORITY test cannot split its refusal lines from
+#     its healthy lines; inngest_terminator_filter below does that split by message
+#     text, fail-open. Unit membership is a PAIR: the unit joins this list AND
+#     Source 2's exclude_units (vector-admission.test.sh pins both lists equal), or its
+#     CRIT records would ship through both sources.
 #   - The `systemd` identifier must NEVER join ANY SYSLOG_IDENTIFIER match array in
 #     EITHER direction: an INCLUDE entry (Source 4's allowlist) would also ship
 #     every PID-1 PRIORITY-6 Started/Stopped line — the quota trap the Source 4
@@ -96,7 +106,7 @@ data_dir = "/var/lib/vector"
 # 0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARNING.
 [sources.inngest_journald]
 type = "journald"
-include_units = ["inngest-server.service"]
+include_units = ["inngest-server.service", "soleur-inngest-tls.service"]
 include_matches.PRIORITY = ["3", "4"]
 # #6551 partition mirrors: BOTH exclude sets keep this source's {3,4} arm disjoint
 # from the owners of the overlapping classes. SYSLOG_IDENTIFIER below must equal
@@ -173,7 +183,7 @@ batch_size = 16
 # header). vector-admission.test.sh asserts the tag-set mirror verbatim.
 [sources.system_journald]
 type = "journald"
-exclude_units = ["inngest-server.service"]
+exclude_units = ["inngest-server.service", "soleur-inngest-tls.service"]
 include_matches.PRIORITY = ["0", "1", "2"]
 # #6551 partition mirror — must equal Source 4's
 # include_matches.SYSLOG_IDENTIFIER EXACTLY (asserted tokenized by
@@ -573,6 +583,45 @@ devices.excludes = ["loop*", "dm-*"]
 devices.excludes = ["loop*", "dm-*"]
 mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]
 
+# ---------------- inngest_terminator_filter: bound the TLS terminator's row volume ----------------
+# Source 1's unit arm admits soleur-inngest-tls.service (stunnel4, the TLS terminator in front of the
+# Inngest listener) at EVERY priority, so without a filter all four lines of every healthy request ship.
+# stunnel's lines carry no priority prefix and take systemd's default level (PRIORITY 6 expected: derived
+# from that default, not measured on the host), so PRIORITY cannot split the healthy lines from the
+# refusal lines; the split is by message text.
+#
+# This is a DROP-LIST that FAILS OPEN. It drops exactly three healthy-request line shapes of that one unit
+# (measured on stunnel 5.72 only: "accepted connection from", "s_connect: connected 127.0.0.1:8288" and
+# "connected remote server from") and passes every other row: any other unit, a row with no message or a
+# message that is not a string, every LOG0 to LOG4 line, every Connection reset and Connection closed line,
+# startup lines and any wording this list does not know. A wording that differs on the host's stunnel build
+# therefore over-ships (visible in the row count) and never silences. Every inngest-server.service row passes
+# unchanged: the 524 alert and the cutover audibility checks read them.
+#
+# The condition is INFALLIBLE on purpose. A Vector filter treats a runtime error in its condition as false
+# and DROPS the event, and `vector validate --no-environment` does not compile VRL, so every field read
+# falls back with a coalescing default and only `vector test` (scripts/vector-terminator-filter.test.sh,
+# blocking in validate-vector-config.yml) proves the condition.
+#
+# Row budget, measured per unit after the host is replaced: at most 400 per day before any link flip (the
+# host's own 5-minute health probe emits one Connection closed row per probe, about 288 a day) and at most
+# 8,000 per day after one. If the first 24 hours exceed that, the lever is a SECOND drop (Connection closed
+# rows with both byte counts above 0, never the 0-byte shapes); it needs a new bootstrap image and another
+# host replace, so the 24-hour read decides it before the flip is asked for. The unit's debug level stays
+# untouched: a higher level is the one way this journal could start carrying more than peer addresses,
+# byte counts and error strings.
+[transforms.inngest_terminator_filter]
+type = "filter"
+inputs = ["inngest_journald"]
+condition = '''
+unit = string(._SYSTEMD_UNIT) ?? ""
+msg = string(.message) ?? ""
+healthy = contains(msg, "Service [inngest] accepted connection from") ||
+  contains(msg, "s_connect: connected 127.0.0.1:8288") ||
+  contains(msg, "Service [inngest] connected remote server from")
+!(unit == "soleur-inngest-tls.service" && healthy)
+'''
+
 # ---------------- Transform 1/3: drop user-content keys (Art-9) ----------------
 # Pino consumers may carry user-supplied content via `{body, content, message,
 # userMessage, prompt, chat_message, userInput, user_input}` keys (chat
@@ -587,7 +636,7 @@ type = "remap"
 # app_container_warn_filter (#4773) is wired here, NOT direct to the sink, so
 # the app container's pino lines traverse the full 3-stage redaction (Art-9 key
 # drop → userId HMAC → string backstop) like every other source.
-inputs = ["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
+inputs = ["inngest_terminator_filter", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
 source = '''
 .pii_scrub_applied = ""
 parsed, parse_err = parse_json(.message)
@@ -717,6 +766,11 @@ if contains(tag, "structured") {
   # a `://` ban would either mangle those or get muted. Scheme-agnostic so redis://, amqp://
   # and https:// DSNs are covered by the same rule.
   msg = replace(msg, r'([a-z][a-z0-9+.-]*://)[^:/@\s]+:[^@/\s]+@', "$${1}[redacted]@")
+  # Doppler token shape: dp. + a two-to-five letter kind + a dot + a long body (a service token also
+  # carries its config name). The TLS terminator unit's ExecStartPre sources the host's Doppler env
+  # file without redirecting stderr, so a malformed line in that file would echo the offending text,
+  # and that file holds the token. Value-shaped like the rules above; it costs no user_data bytes.
+  msg = replace(msg, r'\bdp\.[a-z]{2,5}\.[A-Za-z0-9_.-]{20,}', "dp.[redacted]")
   msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
   .message = msg
   .pii_scrub_applied = tag + "+string"
