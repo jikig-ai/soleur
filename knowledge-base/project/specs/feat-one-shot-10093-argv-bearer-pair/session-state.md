@@ -17,6 +17,9 @@
 - Real work is additive: unconditional xtrace refusal on inngest-consumer-probe.sh and POSIX `case $- in *x*)` refusal in inngest-bootstrap.sh's HEARTBEATSCRIPTEOF body, one behavioural test row each.
 - Tag mint is automatic on merge (mint-inngest-bootstrap-tag.yml path filter); plan is code + tests only — no production apply scheduled.
 
+### Technical Rulings
+- cto_spawns=1 (5 rows ruled, all assumed defaults confirmed)
+
 ### Components Invoked
 - soleur:plan SKILL.md (in-process)
 - soleur:deepen-plan SKILL.md (in-process)
