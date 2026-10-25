@@ -58,5 +58,6 @@ findings came out of the review fix round, neither about the feature itself.
    needed; the harness already fails loudly.
 
 ## Tags
+
 category: workflow-issues
 module: plugins/soleur/scripts/sync-pr-behind.sh
