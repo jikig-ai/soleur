@@ -2430,8 +2430,8 @@ def r10(wf):
             if not re.search(r"\b%s\s*=\s*%s\b" % (key, want), blk):
                 out.append("monitor scheduled-orphan-sweeps does not set %s = %s" % (key, want))
         m2 = re.search(r"\bcheckin_margin_minutes\s*=\s*(\d+)", blk)
-        if not (m2 and int(m2.group(1)) >= 30):
-            out.append("monitor scheduled-orphan-sweeps checkin_margin_minutes is below 30 or unset")
+        if not (m2 and int(m2.group(1)) >= 45):
+            out.append("monitor scheduled-orphan-sweeps checkin_margin_minutes is below 45 or unset")
         if not re.search(r'crontab\s*=\s*"0 6,18 \* \* \*"', blk):
             out.append("monitor scheduled-orphan-sweeps crontab is not the two drift slots 0 6,18 * * *")
     if h.get("continue-on-error") is not True:
@@ -2515,8 +2515,11 @@ def r10(wf):
         for fld, fb in (("identity", "not reached"), ("identity_http", "none"), ("identity_reason", "none")):
             if not re.search(r"steps\.sweep\.outputs\.%s\s*\|\|\s*'%s'" % (fld, fb), body):
                 out.append("%s email body renders %s without the '%s' fallback" % (sid, fld, fb))
-        if "HTTP 401 or 403 means Hetzner refused the token" not in body:
-            out.append("%s email body does not tell a refused token (401/403) from a 404" % sid)
+        for phrase in ("HTTP 401 or 403 means Hetzner refused the token",
+                       "HTTP 404 means either the volume is gone or the token belongs to another project",
+                       "any other answer means the reply did not match the pinned volume or could not be read"):
+            if phrase not in body:
+                out.append("%s email body lacks the cause sentence: %s" % (sid, phrase))
     text = "\n".join(leaves(job))
     for sec in sorted(set(SECRET_REF.findall(text)) - AGG_SECRETS):
         out.append("%s is handed secret %s outside %s" % (jid, sec, "/".join(sorted(AGG_SECRETS))))
@@ -2720,6 +2723,10 @@ def m10_sweep_body_fb_wrong(m):
     w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("|| 'not reached'", "|| 'proven'")
 def m10_sweep_body_http_fb_removed(m):
     w = fail_email(jobs(m)[RUNG])["with"]; w["body"] = w["body"].replace("steps.sweep.outputs.identity_http || 'none'", "steps.sweep.outputs.identity_http")
+def m10_sweep_body_404_removed(m):
+    w = fail_email(jobs(m)[RUNG])["with"]; w["body"] = w["body"].replace("HTTP 404 means either the volume is gone or the token belongs to another project", "HTTP 404 means something")
+def m10_sweep_body_other_removed(m):
+    w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("any other answer means the reply did not match the pinned volume or could not be read", "any other answer means something")
 def m10_sweep_body_401_removed(m):
     w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("HTTP 401 or 403 means Hetzner refused the token", "HTTP 401 or 403 means something")
 def r10_tf_sub(old, new):
@@ -2872,6 +2879,8 @@ ROWS = [
     ("r10-sweep-body-identity-fallback-wrong-word", r10, m10_sweep_body_fb_wrong, "red"),
     ("r10-sweep-body-http-fallback-removed", r10, m10_sweep_body_http_fb_removed, "red"),
     ("r10-sweep-body-401-403-sentence-removed", r10, m10_sweep_body_401_removed, "red"),
+    ("r10-sweep-body-404-sentence-removed", r10, m10_sweep_body_404_removed, "red"),
+    ("r10-sweep-body-other-answer-sentence-removed", r10, m10_sweep_body_other_removed, "red"),
     ("r10-tf-margin-lowered",          r10_tf_sub("checkin_margin_minutes  = 60", "checkin_margin_minutes  = 5"), m10_tf_commented, "red"),
     ("r10-tf-crontab-changed",         r10_tf_sub('crontab = "0 6,18 * * *"', 'crontab = "0 6 * * *"'), m10_tf_commented, "red"),
     ("r10-tf-failure-threshold-changed", r10_tf_sub("failure_issue_threshold = 1", "failure_issue_threshold = 3"), m10_tf_commented, "red"),
@@ -2953,9 +2962,9 @@ fi
 
 # The floor is the table's CURRENT size, so a removed row is visible in the diff that removes it.
 # 61 -> 91 with R10 (22 red rows and 3 must-pass rows) and R11 (4 red rows and 1 must-pass row): 30 added.
-# 91 -> 108 with the review round's 17 R10 mutation rows (all red), then 108 -> 120 with the fix-round's 12 (aggregator `if` pinned exactly,
+# 91 -> 108 with the review round's 17 R10 mutation rows (all red), then 108 -> 122 with the fix-round's 14 (aggregator `if` pinned exactly,
 # slug pinned, subject order, TF monitor values, the sweep email's identity fallbacks and its 401/403 sentence).
-R78_MIN=120
+R78_MIN=122
 echo "R7/R8: mutation rows — every spelling that re-opens the read/write credential or drops the failure email is RED, legitimate variants GREEN"
 R78_OUT=$(python3 -c "$SWEEP_PY" mutate "$WF") || { echo "FATAL: the R7/R8 mutation runner crashed" >&2; exit 2; }
 r78_line() { if [[ "$1" == "PASS" ]]; then pass "R78/$2: $3"; else fail "R78/$2: $3"; fi; }
@@ -3220,10 +3229,9 @@ r9_anchor_case() {
       badbody|null_volume|empty_object|string_id|wrong_key) must="did not match the pinned volume or could not be read (HTTP 200, reason malformed)"; mustnot="refused the token" ;;
       e503|e500|transport) must="This is not a statement about the token's project"; mustnot="refused the token" ;;
     esac
-    if [[ -n "$must" ]]; then
-      grep -qF -- "$must" <<<"$out" || { echo "BAD:the error text lacks: $must"; return; }
-      if grep -qF -- "$mustnot" <<<"$out"; then echo "BAD:the error text wrongly carries: $mustnot"; return; fi
-    fi
+    [[ -n "$must" ]] || { echo "BAD:no wording expectation exists for the failing anchor $anchor"; return; }
+    grep -qF -- "$must" <<<"$out" || { echo "BAD:the error text lacks: $must"; return; }
+    if grep -qF -- "$mustnot" <<<"$out"; then echo "BAD:the error text wrongly carries: $mustnot"; return; fi
   fi
   echo OK
 }
@@ -3399,11 +3407,11 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Then 257 -> 317 with #10952: R10 (the sweeps' aggregator: 1 row plus 25 mutation rows), R11 (the label population: 1 row plus 5 mutation rows), the project-identity
 # proof in R9 (11 cases for each of the two sweeps, 22 rows, and 3 mutation rows), and R12 (the labels recorded from a real run of each orphan filer: 3 rows):
 # 60 added, 317 was the REALIZED `PASS + FAIL` before the review round.
-# Then 317 -> 404 with the #10952 review round: R10 gains 17 mutation rows (the heartbeat step's own condition and inputs, the email subject and
+# Then 317 -> 406 with the #10952 review round: R10 gains 17 mutation rows (the heartbeat step's own condition and inputs, the email subject and
 # body, the job bound, a job-level `if` the evaluator used to mis-model, a slug that is only a comment, and each sweep's distinct subject and
 # body fields), 12 more identity cases for each of the two sweeps (24 rows: the 5xx class, a 4xx that is not retried, ids either side of the
 # pin, a nested id, a null or empty or mistyped volume, and the back-off sleep now asserted on every case), and 10 identity mutation rows for each of
-# the two sweeps (20 rows): 87 added (two more: the byte-identity of the two proof blocks, and its mutation; then 24 from the fix round: 12 R10 mutation rows, 8 wording mutation rows across the two sweeps, 4 dispatch-ledger rows), 404 is the REALIZED `PASS + FAIL`.
+# the two sweeps (20 rows): 89 added (two more: the byte-identity of the two proof blocks, and its mutation; then 26 from the fix round: 14 R10 mutation rows, 8 wording mutation rows across the two sweeps, 4 dispatch-ledger rows), 406 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -3419,8 +3427,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 404 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 404." >&2
+if [[ "$((PASS + FAIL))" -lt 406 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 406." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
