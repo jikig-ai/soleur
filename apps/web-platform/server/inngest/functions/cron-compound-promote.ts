@@ -1718,8 +1718,12 @@ export async function cronCompoundPromoteHandler({
       const ledger = await step.run("ledger-read", async () => {
         const octokit = new Octokit({ auth: installationToken });
         const adapter: LedgerOctokit = {
-          request: (route, params) =>
-            octokit.request(route as never, params as never) as unknown as Promise<{ data: unknown }>,
+          // The ledger asks for exactly one route. The call below stays a LITERAL template (the egress census
+          // in test/github-url.test.ts forbids a pass-through of a caller-supplied route), so anything else is refused.
+          request: (route, params) => {
+            if (route !== "GET /search/issues") throw new Error("ledger adapter: unexpected route");
+            return octokit.request("GET /search/issues", params as never) as unknown as Promise<{ data: unknown }>;
+          },
         };
         try {
           return await readLedger({ octokit: adapter, owner: REPO_OWNER, repo: REPO_NAME });
