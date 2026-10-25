@@ -21,7 +21,7 @@ vi.mock("@/server/logger", async (importOriginal) => {
 });
 
 import { createSoleurGoRunner, type QueryFactory } from "@/server/soleur-go-runner";
-import { tapAgentAuthFailure } from "@/server/agent-auth-failure";
+import { __resetAgentAuthMatcherWarnForTests, tapAgentAuthFailure } from "@/server/agent-auth-failure";
 import { createMockQueryLean, flushMicrotasks, makeResult } from "./helpers/soleur-go-fixtures";
 
 function makeRealShapeQuery(messages: Array<{ n: number }>, opts: { failAt?: number; error?: Error } = {}) {
@@ -93,6 +93,7 @@ const onUnhandled = (reason: unknown) => {
 beforeEach(() => {
   unhandled = [];
   h.warn.mockClear();
+  __resetAgentAuthMatcherWarnForTests();
   process.on("unhandledRejection", onUnhandled);
 });
 afterEach(() => {
@@ -275,6 +276,34 @@ describe("tapAgentAuthFailure against the measured Query shape", () => {
       expect(tapAgentAuthFailure(plain, probe)).toBe(plain);
     }
     expect(probe.observe).not.toHaveBeenCalled();
+  });
+
+  // Each scenario re-arms the process-wide latch and asserts its own warn: with one shared latch a single warning site
+  // would satisfy all three.
+  const NOT_INSTALLED = "auth-failure tap: not installed, this Query is not observed";
+  const installFailures: Array<[string, () => unknown]> = [
+    [
+      "a non-configurable iterator",
+      () => {
+        const fixed: Record<symbol, unknown> = {};
+        Object.defineProperty(fixed, Symbol.asyncIterator, { value: () => ({}), writable: false, configurable: false });
+        return fixed;
+      },
+    ],
+    ["an iterator that is not a function", () => ({ [Symbol.asyncIterator]: 7 })],
+    ["a hostile query", () => new Proxy({}, { get: () => { throw new Error("CANARY-PROXY-3d2a"); } })],
+  ];
+  it.each(installFailures)("an install that cannot happen is visible: %s -> ONE constant tap warn, query returned untouched", (_name, make) => {
+    const query = make();
+    expect(() => tapAgentAuthFailure(query, { observe: vi.fn() })).not.toThrow();
+    expect(tapAgentAuthFailure(query, { observe: vi.fn() })).toBe(query);
+    expect(h.warn.mock.calls).toEqual([[NOT_INSTALLED]]);
+  });
+
+  it("values that are not queries (null, a number, a plain object without an iterator) are not an install failure: no warn", () => {
+    const probe = { observe: vi.fn() };
+    for (const plain of [null, undefined, 42, "x"]) tapAgentAuthFailure(plain, probe);
+    expect(h.warn).not.toHaveBeenCalled();
   });
 
   it("a probe whose observe is missing, or a throwing getter on the query, returns the query untouched instead of throwing", () => {

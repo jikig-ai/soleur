@@ -28,13 +28,16 @@ import {
   AGENT_AUTH_DEBOUNCE_MS,
   AGENT_AUTH_GLOBAL_CAP,
   AGENT_AUTH_MODE_TIMEOUT_MS,
+  PROBE_UNAVAILABLE_WARNING,
   __agentAuthClaimCountForTests,
   __resetAgentAuthDedupeForTests,
+  __resetAgentAuthMatcherWarnForTests,
   agentAuthSuppressedCount,
   buildAgentAuthPayload,
   createAgentAuthFailureProbe,
   deriveAgentAuthContext,
   normalizeAuthMode,
+  warnAgentAuthProbeUnavailable,
 } from "@/server/agent-auth-failure";
 import { makeAuthModeResolver } from "@/server/agent-auth-mode";
 
@@ -99,6 +102,7 @@ const mk = (over: Record<string, unknown> = {}) =>
 beforeEach(() => {
   vi.clearAllMocks();
   __resetAgentAuthDedupeForTests();
+  __resetAgentAuthMatcherWarnForTests();
   clock = 1_000_000;
   n = 0;
 });
@@ -440,11 +444,16 @@ describe("probe: failure isolation", () => {
     // would be a second warn (the first failure alone cannot tell, because the latch is set before the clock runs).
     await probe.observe(resultOk());
     await expect(probe.observe(failure())).resolves.toBeUndefined();
-    expect(h.log.warn).toHaveBeenCalledTimes(1);
-    const args = h.log.warn.mock.calls[0];
-    expect(args).toHaveLength(1);
-    expect(typeof args[0]).toBe("string");
+    // The exact constant: any variant carrying a token, a slice of it or its length is a different string.
+    expect(h.log.warn.mock.calls).toEqual([["auth-failure probe: observer error swallowed"]]);
     expect(emits()).toHaveLength(0);
+  });
+
+  it("the runners' probe-construction fallback warns with ONE exact constant per process", () => {
+    warnAgentAuthProbeUnavailable();
+    warnAgentAuthProbeUnavailable();
+    expect(h.log.warn.mock.calls).toEqual([[PROBE_UNAVAILABLE_WARNING]]);
+    expect(PROBE_UNAVAILABLE_WARNING).toMatch(/^auth-failure probe: construction failed/);
   });
 
   it("a failed emit gives its process-wide slot back: after nine emits and one failed tenth, an eleventh still gets through", async () => {
@@ -476,12 +485,94 @@ describe("probe: failure isolation", () => {
     expect(agentAuthSuppressedCount()).toBe(1); // window 2 held exactly ten: the stale release took nothing from it
   });
 
+  it("a failed emit gives its slot back even when the clock has MOVED since the window opened (the credit goes to the claim's window)", async () => {
+    for (let i = 0; i < 8; i++) await mk({ dedupeToken: `early-${i}` }).observe(failure()); // window opens at the base clock
+    clock += 60_000;
+    h.report.mockImplementationOnce(() => {
+      throw new Error("sink down");
+    });
+    await mk({ dedupeToken: "failing-later" }).observe(failure()); // ninth, then released: back to eight
+    await mk({ dedupeToken: "ninth" }).observe(failure());
+    await mk({ dedupeToken: "tenth" }).observe(failure());
+    await mk({ dedupeToken: "eleventh" }).observe(failure());
+    expect(agentAuthSuppressedCount()).toBe(1); // ten slots held exactly: the release returned its slot
+  });
+
+  it("a window that reopens at the SAME start value is a different window: a stale release never debits it", async () => {
+    let finish: (v: string) => void = () => undefined;
+    const pa = mk({ dedupeToken: "slow", resolveAuthMode: () => new Promise<string>((res) => { finish = res; }) }).observe(failure());
+    const start = clock;
+    clock = start - AGENT_AUTH_DEBOUNCE_MS - 1; // the clock steps back: window 2 opens
+    await mk({ dedupeToken: "mid" }).observe(failure());
+    clock = start; // and returns to exactly the first start: window 3
+    await mk({ dedupeToken: "w3-first" }).observe(failure());
+    h.report.mockImplementationOnce(() => {
+      throw new Error("sink down");
+    });
+    finish("managed");
+    await pa; // the emit throws, the release targets window 1
+    for (let i = 0; i < 9; i++) await mk({ dedupeToken: `w3-${i}` }).observe(failure());
+    await mk({ dedupeToken: "w3-over" }).observe(failure());
+    expect(agentAuthSuppressedCount()).toBe(1);
+  });
+
+  it("a release erases only its OWN debounce entry: a newer claim for the same key keeps its debounce", async () => {
+    let finish: (v: string) => void = () => undefined;
+    const slow = () => new Promise<string>((res) => { finish = res; });
+    const pa = mk({ dedupeToken: "same", resolveAuthMode: slow }).observe(failure());
+    clock += AGENT_AUTH_DEBOUNCE_MS + 1; // the first claim has expired by the clock
+    await mk({ dedupeToken: "same" }).observe(failure()); // a newer claim for the same key emits
+    h.report.mockImplementationOnce(() => {
+      throw new Error("sink down");
+    });
+    finish("managed");
+    await pa; // the old emit fails and releases the old claim
+    await mk({ dedupeToken: "same" }).observe(failure()); // still inside the newer claim's debounce
+    expect(emits()).toHaveLength(2); // the newer claim and the old (failed) attempt; the third is debounced (3 if the release erased the newer entry)
+  });
+
+  it("the debounce tuple holds EVERY context field: varying any one of them for the same user emits again", async () => {
+    const base = build();
+    const sandboxOff = build();
+    sandboxOff.sandbox.enabled = false;
+    const cases: Array<[string, Record<string, unknown>, unknown, Record<string, unknown>, unknown]> = [
+      ["runner", { runner: "legacy" }, base, { runner: "cc-soleur-go" }, base],
+      ["credential_scheme", { credentialScheme: "api_key" }, undefined, { credentialScheme: "oauth_token" }, undefined],
+      ["auth_env_present", {}, { env: { ANTHROPIC_API_KEY: "x" } }, {}, { env: {} }],
+      ["seccomp_artifact", {}, build({ sandboxUnixDeny: true }), {}, build({ sandboxUnixDeny: false })],
+      ["has_egress", {}, build({ ghToken: "ghs_fake" }), {}, build()],
+      ["sandbox", {}, base, {}, sandboxOff],
+      ["outer_wrap", {}, base, {}, { ...base, spawnClaudeCodeProcess: () => undefined }],
+    ];
+    for (const [field, argsA, optsA, argsB, optsB] of cases) {
+      __resetAgentAuthDedupeForTests();
+      h.report.mockClear();
+      const a = mk({ dedupeToken: "same-user", ...argsA });
+      if (optsA !== undefined) a.bindOptions(optsA);
+      await a.observe(failure());
+      const b = mk({ dedupeToken: "same-user", ...argsB });
+      if (optsB !== undefined) b.bindOptions(optsB);
+      await b.observe(failure());
+      expect(emits(), `varying only ${field}`).toHaveLength(2);
+    }
+    // Control: the same tuple twice is debounced (the loop above is not vacuous).
+    __resetAgentAuthDedupeForTests();
+    h.report.mockClear();
+    for (let i = 0; i < 2; i++) {
+      const p = mk({ dedupeToken: "same-user" });
+      p.bindOptions(base);
+      await p.observe(failure());
+    }
+    expect(emits()).toHaveLength(1);
+  });
+
   it("the debounce map stays bounded across many windows (expired entries are pruned when it is full)", async () => {
     for (let w = 0; w < 110; w++) {
       clock += AGENT_AUTH_DEBOUNCE_MS + 1;
       for (let i = 0; i < AGENT_AUTH_GLOBAL_CAP; i++) await mk({ dedupeToken: `w${w}-u${i}` }).observe(failure());
     }
     expect(__agentAuthClaimCountForTests()).toBeLessThanOrEqual(1024 + AGENT_AUTH_GLOBAL_CAP);
+    expect(__agentAuthClaimCountForTests()).toBeGreaterThan(AGENT_AUTH_GLOBAL_CAP); // entries really are being held
   });
 
   it("no logger call (any level) ever carries the dedupe token, the key or the matched text", async () => {

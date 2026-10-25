@@ -5,13 +5,14 @@
 //   1. server/agent-auth-failure.ts and this file;
 //   2. the `claude-error-signatures.ts` additions (CLI_AUTH_FAILURE_REPLIES, SDK_AUTHENTICATION_FAILED, SDK_API_KEY_SOURCES,
 //      the `CliAuthFailureKind` type and the "REPLY signatures" paragraph of the file header);
-//   3. in agent-runner.ts and cc-dispatcher.ts: the import, `createAgentAuthFailureProbe`, `authProbe.bindOptions(` wrapper
-//      (re-indent the closing parens), the `observe` call, and `tapAgentAuthFailure(` around `sdkQuery(`;
+//   3. in agent-runner.ts and cc-dispatcher.ts: the import, `createAgentAuthFailureProbe` with its `let authProbe = NOOP_AGENT_AUTH_PROBE`
+//      try/catch and the `warnAgentAuthProbeUnavailable()` call, the `authProbe.bindOptions(` wrapper (re-indent the closing
+//      parens), the `observe` call, and `tapAgentAuthFailure(` around `sdkQuery(`;
 //   4. the comment in claude-code-message-translator.ts that names SDK_AUTHENTICATION_FAILED, and the "Wrapper note" comment
 //      in test/agent-sandbox-seccomp-selector.test.ts;
-//   5. the Sentry rule `agent_auth_failure`: delete it from issue-alerts.tf and run the Sentry apply FIRST, THEN remove its
-//      alert-reference.json entry and the infra/sentry README counts, entry and decode table (the reverse order trips the
-//      daily live-drift check);
+//   5. the Sentry rule `agent_auth_failure`: ONE PR deletes the rule from issue-alerts.tf, its alert-reference.json entry and the
+//      infra/sentry README counts, entry and decode table (the plan_pr gate requires the committed reference to equal the
+//      plan's projection in the same PR), with `[ack-destroy]` alone on a line in a commit BODY (infra/sentry/README.md);
 //   6. the tests: agent-auth-failure-{matcher,probe,tap,sentry-path}.test.ts, sentry-agent-auth-failure-alert-op-contract.test.ts,
 //      the wiring cases (and their hoisted mocks and imports) in agent-runner-unix-deny-wire.test.ts and
 //      cc-dispatcher-real-factory.test.ts, and the widened regex in test/server/cc-dispatcher-bash-sandbox-mirror.test.ts

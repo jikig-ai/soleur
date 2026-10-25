@@ -185,8 +185,16 @@ const issueAlertsTf = readFileSync(join(sentryDir, "issue-alerts.tf"), "utf8");
 const reference = JSON.parse(readFileSync(join(sentryDir, "alert-reference.json"), "utf8")) as Record<string, unknown>;
 // Walked and comment-stripped ONCE per file (the strip is the slow part, and several cases read the result).
 let serverSourcesCache: Array<{ file: string; src: string }> | undefined;
+// Comment-stripping parses every file (about 3 s for the roots); it only blanks characters, so it can never CREATE a token.
+// A file whose raw text has neither token therefore counts 0 stripped or not, and is kept unparsed (the floors still count it).
+const TOKEN_PREFILTER = new RegExp(`${FEATURE}|${OP}`);
 const serverSources = () =>
-  (serverSourcesCache ??= sourceRoots.flatMap((root) => walk(root)).map((file) => ({ file, src: stripTsComments(readFileSync(file, "utf8"), file) })));
+  (serverSourcesCache ??= sourceRoots
+    .flatMap((root) => walk(root))
+    .map((file) => {
+      const raw = readFileSync(file, "utf8");
+      return { file, src: TOKEN_PREFILTER.test(raw) ? stripTsComments(raw, file) : raw };
+    }));
 const featureSites = () => serverSources().flatMap(({ file, src }) => featureSitesIn(file, src));
 
 const RULE_FIXTURE = `
@@ -290,6 +298,9 @@ describe("agent-auth-failure — emit site / rule contract", () => {
     for (const v of SDK_API_KEY_SOURCES) expect(section, `cli_key_source ${v}`).toContain(v === "none" ? "cli_key_source=none" : `\`${v}\``);
     for (const { kind } of CLI_AUTH_FAILURE_REPLIES) expect(section, `match_kind ${kind}`).toContain(`\`${kind}\``);
     expect(section).toContain("`structured`");
+    // The responder contract: resolve (never archive) the shared issue, and the absolute fallback date.
+    expect(section).toMatch(/never archive or ignore it/);
+    expect(section).toContain("2026-11-30");
     // The table is not restated in the .tf (a second copy is how the two disagreed).
     expect(issueAlertsTf).not.toMatch(/DECODE KEY \(read the tags/);
     expect(issueAlertsTf).toMatch(/README\.md[^\n]*one copy of the tag decode table/);

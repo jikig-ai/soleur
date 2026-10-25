@@ -7,7 +7,7 @@
 // drop sets, and the emit does not carry another tenant's breadcrumbs or user. Plan Phase 1 item 3; Guard 2 rows 1-3, 6, 7, 9, 9b.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The pino line exists only if the level is enabled; the error line always is, the constant warn needs warn.
 vi.hoisted(() => {
@@ -19,6 +19,8 @@ const sentry = vi.hoisted(() => ({
   captureException: vi.fn(),
   addBreadcrumb: vi.fn(),
 }));
+// When set, the isolation wrapper throws AFTER its callback (and so the capture) ran: the event is already handed over.
+const faults = vi.hoisted(() => ({ throwAfterScope: false }));
 vi.mock("@sentry/nextjs", async (orig) => {
   const real = await orig<typeof import("@sentry/nextjs")>();
   // The namespace spread does not copy every export (re-exports are not enumerable); name the functions the emit and this
@@ -28,7 +30,11 @@ vi.mock("@sentry/nextjs", async (orig) => {
     init: real.init,
     getIsolationScope: real.getIsolationScope,
     getCurrentScope: real.getCurrentScope,
-    withIsolationScope: real.withIsolationScope,
+    withIsolationScope: ((...args: unknown[]) => {
+      const out = (real.withIsolationScope as (...a: unknown[]) => unknown)(...args);
+      if (faults.throwAfterScope) throw new Error("scope machinery failed after the capture");
+      return out;
+    }) as unknown as typeof real.withIsolationScope,
     ...sentry,
   };
 });
@@ -99,13 +105,14 @@ const crumbs = () => (sentry.addBreadcrumb.mock.calls as Array<[{ category?: str
 const agentCrumb = () => crumbs().find((c) => c.data?.feature === "agent-auth");
 const surfaces = () => JSON.stringify([sentry.captureMessage.mock.calls, sentry.captureException.mock.calls, sentry.addBreadcrumb.mock.calls]);
 
-async function runStream(over: { credential?: { value: string; scheme: "api_key" | "oauth_token" }; user?: string; resolver?: () => Promise<string | null>; runner?: "legacy" | "cc-soleur-go" } = {}) {
+async function runStream(over: { credential?: { value: string; scheme: "api_key" | "oauth_token" }; user?: string; resolver?: () => Promise<string | null>; runner?: "legacy" | "cc-soleur-go"; now?: () => number } = {}) {
   const credential = over.credential ?? { value: CANARY_KEY, scheme: "api_key" as const };
   const probe = createAgentAuthFailureProbe({
     runner: over.runner ?? "legacy",
     credentialScheme: credential.scheme,
     dedupeToken: over.user ?? CANARY_USER,
     resolveAuthMode: over.resolver ?? (async () => "managed"),
+    ...(over.now ? { now: over.now } : {}),
   });
   const opts = probe.bindOptions(optionsFor(credential));
   for (const message of realStream()) await probe.observe(message);
@@ -116,12 +123,16 @@ const consoleSpies = (["log", "info", "warn", "error", "debug"] as const).map((m
 const consoleOutput = () => JSON.stringify(consoleSpies.map((spy) => spy.mock.calls));
 
 beforeEach(() => {
+  faults.throwAfterScope = false;
   for (const f of Object.values(sentry)) f.mockReset();
   for (const spy of consoleSpies) spy.mockClear();
   __resetAgentAuthDedupeForTests();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+});
+afterAll(() => {
+  for (const spy of consoleSpies) spy.mockRestore();
 });
 
 describe("the real path: one tagged message-path capture", () => {
@@ -223,6 +234,29 @@ describe("secret canary (blocking): nothing sensitive reaches any sink, in whole
     }
   });
 
+  it("a fault inside the PROBE (a clock that throws the key and the user id) reaches the real warn path and leaks no slice of either", async () => {
+    await runStream({
+      user: `${CANARY_USER}-clock`,
+      now: () => {
+        throw new Error(`${CANARY_KEY} ${CANARY_USER}`);
+      },
+    });
+    const warns = crumbs().filter((c) => c.category === "pino" && /auth-failure probe/.test(String(c.message ?? "")));
+    expect(warns, "the probe's constant warn really went through the logger mirror").toHaveLength(1);
+    expect(warns[0].message).toBe("auth-failure probe: observer error swallowed");
+    const all = surfaces() + consoleOutput();
+    for (const c of [CANARY_KEY, CANARY_KEY.slice(0, 10), CANARY_KEY.slice(-4), CANARY_USER, CANARY_USER.slice(0, 12), CANARY_USER.slice(-8), [...CANARY_USER].reverse().join(""), "CANARY"]) {
+      expect(all, c).not.toContain(c);
+    }
+    expect(all).not.toMatch(new RegExp(`(^|[^0-9])${CANARY_USER.length}([^0-9]|$)`));
+    expect(agentMessages()).toHaveLength(0);
+  });
+
+  it("CONTROL: the console detector sees a line written to console", () => {
+    console.warn(CANARY_KEY);
+    expect(consoleOutput()).toContain(CANARY_KEY);
+  });
+
   it("CONTROL: the detector sees a leak on a non-sensitive key name (the logger's redaction cannot mask it)", () => {
     reportSilentFallback(null, { feature: "canary-control", op: "leak", extra: { note: CANARY_KEY, observed: CANARY_WORKSPACE } });
     const all = surfaces();
@@ -236,6 +270,17 @@ describe("secret canary (blocking): nothing sensitive reaches any sink, in whole
     const all = surfaces();
     expect(all).toContain(CANARY_KEY.slice(0, 10));
     expect(all).toContain(CANARY_USER.slice(0, 12));
+  });
+});
+
+describe("a failure after the event was handed over", () => {
+  it("keeps the claim: the capture happened once, and the next failure of the same user and tuple is debounced (no duplicate)", async () => {
+    faults.throwAfterScope = true;
+    await runStream({ user: `${CANARY_USER}-late` });
+    expect(agentMessages()).toHaveLength(1);
+    faults.throwAfterScope = false;
+    await runStream({ user: `${CANARY_USER}-late` });
+    expect(agentMessages()).toHaveLength(1);
   });
 });
 

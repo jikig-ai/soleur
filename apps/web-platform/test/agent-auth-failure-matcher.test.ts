@@ -14,6 +14,7 @@ import {
   SDK_API_KEY_SOURCES,
   SDK_AUTHENTICATION_FAILED,
 } from "@/server/claude-error-signatures";
+import type { AgentAuthMode, AgentAuthRunner } from "@/server/agent-auth-failure";
 import {
   __resetAgentAuthMatcherWarnForTests,
   buildAgentAuthPayload,
@@ -27,6 +28,11 @@ type Mirrored = (typeof SDK_API_KEY_SOURCES)[number];
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const _sdkParity: Equal<Mirrored, ApiKeySource> = true;
 void _sdkParity;
+
+// Both directions for the payload's own closed lists as well: a union member missing from (or extra in) `ENUMS` reds tsc here.
+// `buildAgentAuthPayload` echoes a value only when it is a member of the list, so a member round-trips iff it is listed.
+const RUNNERS = { legacy: 0, "cc-soleur-go": 0 } satisfies Record<AgentAuthRunner, 0>;
+const AUTH_MODES = { managed: 0, "api-key": 0, unbound: 0, unknown: 0 } satisfies Record<AgentAuthMode, 0>;
 
 const SEP = "\u00B7";
 const KINDS = ["not_logged_in", "invalid_api_key", "oauth_token_revoked", "session_expired", "structured"] as const;
@@ -99,6 +105,17 @@ describe("matchAgentAuthFailure: positive family", () => {
       expect(buildAgentAuthPayload({ context, authMode: "managed", cliKeySource: "none", matchKind: kind }).match_kind).toBe(kind);
     }
     expect(buildAgentAuthPayload({ context, authMode: "managed", cliKeySource: "none", matchKind: "structured" }).match_kind).toBe("structured");
+  });
+
+  it("every runner and auth_mode union member round-trips through the payload (an unlisted member would be reported as unknown)", () => {
+    const context = deriveAgentAuthContext("legacy", "api_key", {});
+    for (const runner of Object.keys(RUNNERS)) {
+      const payload = buildAgentAuthPayload({ context: { ...context, runner }, authMode: "managed", cliKeySource: "none", matchKind: "structured" });
+      expect(payload.runner, runner).toBe(runner);
+    }
+    for (const authMode of Object.keys(AUTH_MODES)) {
+      expect(buildAgentAuthPayload({ context, authMode, cliKeySource: "none", matchKind: "structured" }).auth_mode, authMode).toBe(authMode);
+    }
   });
 
   it("other structured codes are out of the family", () => {

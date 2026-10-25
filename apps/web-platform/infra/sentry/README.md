@@ -76,12 +76,13 @@ Email only: nobody is paged until the ADR-260 Slack path is verified.
 | Tags | Reading |
 |---|---|
 | `auth_env_present=false` | The built agent env had no usable credential variable: look at the lease value or scheme, not the CLI. |
-| `auth_env_present=true` and `cli_key_source=none` | The variable was in the options but the CLI process reports no credential source: a spawn or env hand-off problem (read `outer_wrap`, `sandbox`, `seccomp_artifact` next). |
-| `credential_scheme=api_key`, `auth_env_present=true` and `cli_key_source=ANTHROPIC_API_KEY` | The CLI saw the key and the API refused it: invalid or revoked key, or an account state. UNVERIFIED locally: only `none` has a captured fixture. |
+| `credential_scheme=api_key`, `auth_env_present=true` and `cli_key_source=none` | The key variable was in the options but the CLI process reports no credential source: a spawn or env hand-off problem (read `outer_wrap`, `sandbox`, `seccomp_artifact` next). |
+| `credential_scheme=api_key`, `auth_env_present=true` and `cli_key_source` is `ANTHROPIC_API_KEY` | The CLI saw the key and the API refused it: invalid or revoked key, or an account state. UNVERIFIED locally: only `none` has a captured fixture. |
 | `credential_scheme=oauth_token` | the SDK documents `cli_key_source=none` as "no API key in use, e.g. claude.ai OAuth login", so it does NOT mean "no credential" here: read `match_kind` instead (`oauth_token_revoked`, `session_expired`, or `not_logged_in`). |
-| `cli_key_source=/login managed key` | The CLI is using a key created by its own `/login` flow rather than the injected variable: unexpected for this server, record it. |
+| `cli_key_source` is `/login managed key` | The CLI is using a key created by its own `/login` flow rather than the injected variable: unexpected for this server, record it. |
 | `cli_key_source=unknown` | The `init` message was not seen or carried a value outside the closed list: no conclusion from this field. |
-| `cli_key_source` of `project`, `user`, `apiKeyHelper`, `org`, `temporary` or `oauth` | The SDK documents only `ANTHROPIC_API_KEY`, `apiKeyHelper`, `/login managed key` and `none`; the others are in its type but undocumented, so treat them as unexpected and record them. `project`, `user`, `apiKeyHelper` and `org` can be influenced by a workspace setting, so one tenant can legitimately trigger the event; the process-wide cap bounds the volume. |
+| `cli_key_source` of `user`, `project`, `org`, `temporary` or `oauth` | The SDK documents these as legacy members that current CLIs never emit: an unexpected value, record it. |
+| `cli_key_source` is `apiKeyHelper` | A configured helper command supplied the credential. The agent options set `settingSources: []` and nothing in this repo configures a helper, so this is unexpected too. |
 | `auth_mode=unbound` / `unknown` | No engine-run row for the conversation / the lookup failed or timed out: no conclusion from this field. |
 | `seccomp_artifact`, `sandbox`, `has_egress` | Posture dimensions for comparing runs where the failure appears and where it does not (for example the `agent-sandbox-unix-deny` flag OFF vs ON). |
 | `match_kind` | `not_logged_in` (the CLI saw no credential); `invalid_api_key`, `oauth_token_revoked`, `session_expired` (a credential was presented and refused or lapsed); `structured` (the SDK's own `authentication_failed` code with no recognised text). |
@@ -90,16 +91,20 @@ Email only: nobody is paged until the ADR-260 Slack path is verified.
 
 1. Open the event in Sentry and read the ten tags with the table above. Do not look for a message body, user or path: none is sent.
 2. Record the tag tuple as a comment on #10455 (the first real tuple starts the lifecycle clock below).
-3. The event is deduplicated, so its absence is not proof of health: at most one event per user and tuple per 5 minutes, at most
-   10 per 5 minutes process-wide (about ten accounts with a revoked key can fill that cap), and the pdf chapter router and
-   the scheduled Inngest agents are not observed. A cap-suppressed event leaves no trace.
-4. Hand the cause to #11086; do not extend this diagnostic with new tags without a new plan.
+3. **Resolve the issue after recording the tuple; never archive or ignore it.** Every event shares one Sentry issue, and a
+   benign one (a single tenant's own revoked key: `invalid_api_key` or `oauth_token_revoked`) groups with the real outage
+   signal, so an archived issue would also swallow the next real email.
+4. The event is deduplicated, so its absence is not proof of health: at most one event per user and tuple per 5 minutes, at most
+   10 per 5 minutes process-wide (a handful of accounts with a revoked key can fill that cap, because one account can hold
+   several tuples), and the pdf chapter router and the scheduled Inngest agents are not observed. A cap-suppressed event
+   leaves no trace.
+5. Hand the cause to #11086; do not extend this diagnostic with new tags without a new plan.
 
-**Read the events** (read-only; the token never appears in argv, and `field=` projections are needed because Discover
-returns nothing for tags you do not ask for):
+**Read the events** (read-only; the token never appears in argv, and the `field=` projections are needed for Discover to honour
+`query`; `scripts/sentry-issue.sh` is the hardened reader for issues and host events, this is the shape for these tags):
 
 ```bash
-doppler run -p soleur -c prd -- bash -c 'curl --disable --proto "=https" -m 30 -fsS --config - -G \
+doppler run -p soleur -c prd -- bash -c 'curl --disable --noproxy "*" --proto "=https" -m 30 -fsS --config - -G \
   "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/" \
   --data-urlencode "query=feature:agent-auth op:cli-auth-failure" --data-urlencode "statsPeriod=24h" \
   -d dataset=errors -d per_page=100 -d field=timestamp -d field=runner -d field=credential_scheme \
@@ -116,15 +121,18 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1
   | jq -r '.raw | fromjson | select(.feature == "agent-auth")'
 ```
 
-A fault inside the diagnostic itself is visible as one constant `logger.warn` line per probe or tap (`auth-failure probe:`,
-`auth-failure tap:`, `auth-failure matcher:`); these are breadcrumbs and never Sentry events, so search Better Stack for
-them by text.
+A fault inside the diagnostic itself is visible as one constant `logger.warn` line per probe, per tap or per process
+(`auth-failure probe:` observer error or construction failure, `auth-failure tap:` observer error or "not installed" (the
+diagnostic is blind for that Query, for example after an SDK change), `auth-failure matcher:` unreadable message); these are
+breadcrumbs and never Sentry events, so search Better Stack for them by text. A silent rule is therefore not proof of health
+until none of these lines is present.
 
 **Lifecycle.** This is a temporary diagnostic. Within 48 hours of the first recorded real event (its tag tuple is recorded on
 #10455) a PR drops the rule's email action and keeps the Sentry issue and the pino line. The rule, its
 `alert-reference.json` entry, these README lines, both guard tests, the wiring pins, the widened source-pin regex and the
 other items of the removal checklist in the header of `server/agent-auth-mode.ts` are removed when the root-cause fix merges
-or 30 days after the first event, whichever comes first (#11085 tracks both steps).
+or 30 days after the first event, whichever comes first (#11085 tracks both steps). If no real event has been recorded by
+2026-11-30, #11085 is reviewed on that date rather than waiting on the event-driven clock.
 
 ADR: [ADR-031 — Sentry alert and cron monitor configuration as IaC](../../../../knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md)
 

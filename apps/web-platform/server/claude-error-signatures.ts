@@ -53,7 +53,10 @@ export type CliAuthFailureKind =
  *  binary, read-only, no credentials): "Invalid API key", "Session expired. Please run /login to sign in again." and
  *  "Not logged in. Run claude auth login" are present. "Your session has expired. Please run /login to sign in again." is
  *  also present (three hits), but only in the remote-session fetch paths, where it is THROWN or returned as an error and not
- *  printed as a stream reply, so that alternative is kept as a spare whose stream reachability is unverified. A further
+ *  printed as a stream reply, so that alternative is kept as a spare whose stream reachability is unverified. The same holds
+ *  for "Session expired. Please run /login to sign in again.": it too sits in a throw path, so `session_expired` has no
+ *  stream-reply evidence yet. Real CLI strings not matched here (`Login expired`, `Authentication required`, `Invalid auth
+ *  token`, each followed by the /login hint) fall to the structured arm when the CLI also sets `authentication_failed`. A further
  *  wording, "Not logged in. This session uses a Cloud gateway; start `claude` and sign in with /login.", sits in what looks
  *  like interactive render code and is not matched here (unverified whether it can reach the SDK stream). RE-DERIVE ON EVERY
  *  SDK BUMP: the structured `SDK_AUTHENTICATION_FAILED` arm covers most of a wording change, but nothing else re-checks

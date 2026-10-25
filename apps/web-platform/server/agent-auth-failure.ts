@@ -15,7 +15,8 @@
 //     reach Sentry or the pino line: every value is picked from a fixed list or falls back to "unknown".
 //   - The observer never throws, never reorders or delays the stream, and every fire-and-forget branch ends in a swallowing
 //     catch (crash-handlers.ts exits the process on `unhandledRejection`, so one stray async throw would end every
-//     tenant's session). A swallowed fault is NOT silent: one constant-text logger.warn per probe, no err, no payload.
+//     tenant's session). A swallowed fault is NOT silent: one constant-text logger.warn per probe, per tap or per process
+//     (the matcher, the tap install and the runners' probe-construction fallback), no err, no payload.
 //   - The text arm of the matcher needs a CLI-set field (the `<synthetic>` model or `is_api_error_message`), which the model
 //     cannot set: a tenant who makes the model reply with the exact CLI string must not be able to page the operator or
 //     mute the real outage's email. The structured `authentication_failed` code is alone sufficient.
@@ -149,9 +150,11 @@ function warnMatcherFaultOnce(): void {
   }
 }
 
-/** Test seam: re-arm the process-wide matcher warn. */
+/** Test seam: re-arm the process-wide warns (matcher fault, runner probe-unavailable, tap not installed). */
 export function __resetAgentAuthMatcherWarnForTests(): void {
   matcherFaultWarned = false;
+  probeUnavailableWarned = false;
+  tapNotInstalledWarned = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +235,7 @@ export function buildAgentAuthPayload(input: {
 
 function emitAgentAuthFailure(payload: AgentAuthPayload): void {
   let ran = false;
+  let emitted = false;
   const emit = (): void => {
     ran = true;
     // First argument is the literal `null`: the message path (see the header, #8629). With a null first argument the helper
@@ -245,11 +249,15 @@ function emitAgentAuthFailure(payload: AgentAuthPayload): void {
       tags: payload,
       extra: { ...payload },
     });
+    emitted = true; // the helper returned: the event was handed to the sinks
   };
 
   // The logger mirrors every warn+ line from every tenant into the process-wide scope as breadcrumbs, and that scope may
-  // carry a user, tags, extra or contexts: run the capture on an isolated clone, fully cleared, so none of it rides on this
-  // event. Where the SDK does not expose withIsolationScope (partial mocks), the unscoped emit is the fallback.
+  // carry a user, tags, extra or contexts: run the capture on an isolated clone with those cleared (`clear()` resets user,
+  // tags, extra, contexts and breadcrumbs; it does NOT reset the SDK's internal processing metadata or event processors, and
+  // the current scope is not part of the clone, so nothing here may write tenant data to either: the dedupe token only ever
+  // lives in the in-memory claim key). Where the SDK does not expose withIsolationScope (partial mocks), the unscoped emit
+  // is the fallback.
   let withIsolationScope: unknown;
   try {
     withIsolationScope = Sentry.withIsolationScope;
@@ -278,6 +286,7 @@ function emitAgentAuthFailure(payload: AgentAuthPayload): void {
       emit();
     });
   } catch (err) {
+    if (emitted) return; // the event was already handed over; the scope machinery failed afterwards: keep the claim
     if (ran) throw err; // the emit itself failed: the caller releases the claim
     emit(); // the scope machinery failed before the emit: report unscoped rather than lose the event
   }
@@ -293,8 +302,9 @@ export const AGENT_AUTH_GLOBAL_CAP = 10;
 export const AGENT_AUTH_MODE_TIMEOUT_MS = 1500;
 const MAX_CLAIMS = 1024;
 
+type CapWindow = { start: number; count: number };
 const claims = new Map<string, number>(); // key -> expiry (ms)
-let globalWindow = { start: 0, count: 0 };
+let globalWindow: CapWindow = { start: 0, count: 0 };
 let suppressed = 0;
 
 function globalHasRoom(at: number): boolean {
@@ -302,28 +312,38 @@ function globalHasRoom(at: number): boolean {
   return globalWindow.count < AGENT_AUTH_GLOBAL_CAP;
 }
 
+/** What a claim holds so its release gives back exactly what it took: its cap window (by identity) and its own expiry. */
+interface Claim {
+  window: CapWindow;
+  expiry: number;
+}
+
 /**
- * Claim a debounce slot. Returns the cap window the slot was counted in (so a release can give the slot back to THAT
- * window), or null when the tuple is still inside its debounce. Only expired entries are pruned when the map is full: the
- * cap admits at most AGENT_AUTH_GLOBAL_CAP claims per window and a claim lives one window, so live entries stay far below
+ * Claim a debounce slot. Returns the claim (the cap window object the slot was counted in, and the expiry stored for the
+ * key), or null when the tuple is still inside its debounce. Only expired entries are pruned when the map is full: the cap
+ * admits at most AGENT_AUTH_GLOBAL_CAP claims per window and a claim lives one window, so live entries stay far below
  * MAX_CLAIMS and an oldest-first eviction could never run.
  */
-function claim(key: string, at: number): number | null {
-  const expiry = claims.get(key);
-  if (expiry !== undefined && expiry > at) return null;
+function claim(key: string, at: number): Claim | null {
+  const existing = claims.get(key);
+  if (existing !== undefined && existing > at) return null;
   if (claims.size >= MAX_CLAIMS) {
     for (const [k, exp] of claims) if (exp <= at) claims.delete(k);
   }
+  const expiry = at + AGENT_AUTH_DEBOUNCE_MS;
   claims.delete(key);
-  claims.set(key, at + AGENT_AUTH_DEBOUNCE_MS);
+  claims.set(key, expiry);
   globalWindow.count += 1;
-  return globalWindow.start;
+  return { window: globalWindow, expiry };
 }
 
-function release(key: string, window: number): void {
-  claims.delete(key);
-  // A rollover since the claim means the slot was counted in a window that no longer exists: do not debit the new one.
-  if (globalWindow.start === window) globalWindow.count = Math.max(0, globalWindow.count - 1);
+function release(key: string, taken: Claim): void {
+  // Only the entry this claim wrote: a newer claim for the same key (after a clock step) must keep its debounce.
+  if (claims.get(key) === taken.expiry) claims.delete(key);
+  // Credit the window object the slot was counted in, never "the current window" and never one found by its start value: a
+  // rollover (or a clock that returns to an earlier start) allocates a new object, so a stale release lands on a window
+  // nothing reads any more.
+  taken.window.count = Math.max(0, taken.window.count - 1);
 }
 
 /** Test seam: how many debounce entries are held (bounded by MAX_CLAIMS plus one window of claims). */
@@ -393,11 +413,15 @@ function makeWarnOnce(text: string): () => void {
 
 const PROBE_FAULT_WARNING = "auth-failure probe: observer error swallowed";
 const TAP_FAULT_WARNING = "auth-failure tap: stream observer error swallowed";
+const TAP_NOT_INSTALLED_WARNING = "auth-failure tap: not installed, this Query is not observed";
 /** For the runners: constructing the probe threw, so this turn runs with the no-op probe. */
-export const PROBE_UNAVAILABLE_WARNING = "auth-failure probe: construction failed, diagnostic disabled for this turn";
+export const PROBE_UNAVAILABLE_WARNING = "auth-failure probe: construction failed, diagnostic disabled for this Query";
 
-/** One constant-text warn for the runner's construction-failure fallback (no err, no payload). */
+let probeUnavailableWarned = false;
+/** One constant-text warn per process for the runners' construction-failure fallback (no err, no payload). */
 export function warnAgentAuthProbeUnavailable(): void {
+  if (probeUnavailableWarned) return;
+  probeUnavailableWarned = true;
   try {
     createChildLogger("auth-failure-probe").warn(PROBE_UNAVAILABLE_WARNING);
   } catch {
@@ -455,7 +479,7 @@ export function createAgentAuthFailureProbe(args: AgentAuthProbeArgs): AgentAuth
       context.outer_wrap,
     ].join("|");
 
-  const emitAfterLookup = (matchKind: AgentAuthMatchKind, key: string, window: number): Promise<void> => {
+  const emitAfterLookup = (matchKind: AgentAuthMatchKind, key: string, taken: Claim): Promise<void> => {
     // Snapshot: the slot is claimed on this tuple, so the event must report the same one.
     const ctx = context;
     const source = keySource;
@@ -464,7 +488,7 @@ export function createAgentAuthFailureProbe(args: AgentAuthProbeArgs): AgentAuth
         emitAgentAuthFailure(buildAgentAuthPayload({ context: ctx, authMode, cliKeySource: source, matchKind }));
       })
       .catch(() => {
-        release(key, window); // a burned window must not swallow the next event
+        release(key, taken); // a burned window must not swallow the next event
         warnOnce();
       });
   };
@@ -505,9 +529,9 @@ export function createAgentAuthFailureProbe(args: AgentAuthProbeArgs): AgentAuth
         // Claim the slot synchronously (the tuple is complete here: `init` precedes the failure message), THEN look up
         // authMode and emit: the claim caps the lookup at one per tuple per window.
         const key = tupleKey();
-        const window = claim(key, at);
-        if (window === null) return RESOLVED;
-        return emitAfterLookup(matchKind, key, window);
+        const taken = claim(key, at);
+        if (taken === null) return RESOLVED;
+        return emitAfterLookup(matchKind, key, taken);
       } catch {
         warnOnce();
         return RESOLVED;
@@ -544,7 +568,10 @@ export function tapAgentAuthFailure<T>(query: T, probe: { observe(message: unkno
     if (TAPPED.has(target)) return query;
     if (!probe || typeof probe.observe !== "function") return query;
     const original = target[Symbol.asyncIterator];
-    if (typeof original !== "function") return query;
+    if (typeof original !== "function") {
+      warnTapNotInstalledOnce(); // a query handed over without an iterator: the diagnostic is blind for it
+      return query;
+    }
     const bound = (original as () => AsyncIterator<unknown>).bind(query);
     const warnOnce = makeWarnOnce(TAP_FAULT_WARNING);
 
@@ -599,6 +626,19 @@ export function tapAgentAuthFailure<T>(query: T, probe: { observe(message: unkno
     TAPPED.add(target);
     return query;
   } catch {
+    warnTapNotInstalledOnce(); // a frozen or non-configurable query (an SDK change): the diagnostic is blind for it
     return query;
+  }
+}
+
+let tapNotInstalledWarned = false;
+/** One constant-text warn per process: an install failure is a property of the SDK build, not of one Query. */
+function warnTapNotInstalledOnce(): void {
+  if (tapNotInstalledWarned) return;
+  tapNotInstalledWarned = true;
+  try {
+    createChildLogger("auth-failure-probe").warn(TAP_NOT_INSTALLED_WARNING);
+  } catch {
+    // The logger is unavailable (a partial mock): nothing more to do.
   }
 }

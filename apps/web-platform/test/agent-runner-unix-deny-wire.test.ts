@@ -20,6 +20,7 @@ const {
   mockResolveUnixDeny,
   mockBuildAgentEnv,
   mockMakeAuthModeResolver,
+  mockLogWarn,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
@@ -30,6 +31,7 @@ const {
   mockResolveUnixDeny: vi.fn(),
   mockBuildAgentEnv: vi.fn(),
   mockMakeAuthModeResolver: vi.fn(),
+  mockLogWarn: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -74,7 +76,7 @@ vi.mock("../server/ws-handler", () => ({ sendToClient: mockSendToClient }));
 vi.mock("../server/logger", () => ({
   createChildLogger: () => ({
     info: vi.fn(),
-    warn: vi.fn(),
+    warn: mockLogWarn,
     error: vi.fn(),
   }),
 }));
@@ -147,7 +149,11 @@ vi.mock("../server/agent-auth-mode", () => ({ makeAuthModeResolver: mockMakeAuth
 
 import { startAgentSession } from "../server/agent-runner";
 import { reportSilentFallback } from "../server/observability";
-import { __resetAgentAuthDedupeForTests } from "../server/agent-auth-failure";
+import {
+  PROBE_UNAVAILABLE_WARNING,
+  __resetAgentAuthDedupeForTests,
+  __resetAgentAuthMatcherWarnForTests,
+} from "../server/agent-auth-failure";
 import {
   createSupabaseMockImpl,
   createQueryMock,
@@ -225,6 +231,7 @@ describe("startAgentSession — agent auth-failure diagnostic wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     __resetAgentAuthDedupeForTests();
+    __resetAgentAuthMatcherWarnForTests();
     mockReadFileSync.mockImplementation((filePath: string) => {
       if (String(filePath).includes("plugin.json")) return JSON.stringify({ mcpServers: {} });
       throw new Error(`ENOENT: no such file ${filePath}`);
@@ -288,6 +295,18 @@ describe("startAgentSession — agent auth-failure diagnostic wiring", () => {
     await vi.waitFor(() => expect(authEmits()).toHaveLength(2));
     await new Promise((r) => setTimeout(r, 20));
     expect(authEmits()).toHaveLength(2);
+  });
+
+  test("a probe that cannot be constructed leaves the dispatch working, emits nothing, and warns with ONE exact constant", async () => {
+    mockMakeAuthModeResolver.mockImplementation(() => {
+      throw new Error("resolver construction exploded");
+    });
+    streamOf(authFailureStream());
+    await startAgentSession(USER, "conv-no-probe", "cpo", "session-s");
+    await vi.waitFor(() => expect(mockQuery).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(authEmits()).toHaveLength(0);
+    expect(mockLogWarn.mock.calls.filter((c) => c[0] === PROBE_UNAVAILABLE_WARNING)).toHaveLength(1);
   });
 
   test("a clean stream emits nothing and never builds a lookup", async () => {
