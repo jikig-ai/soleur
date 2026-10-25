@@ -5,9 +5,11 @@
 // image has no `gh`), and suppressing a cluster whose recomputed hash was already proposed.
 //
 // Contract (CTO rulings F1-F3, C1, C2, C5 in the plan's decision record):
-//   - one search query, `head:self-healing/auto-`, paged through the shared `fetchAllPages`
-//     (cap 5 pages of 100); NO per-hit detail fetch and no `pulls?state=all` listing: the search
-//     item already carries state, closed_at, merged_at, user.login and title;
+//   - one search query, `head:<PROMOTE_BRANCH_PREFIX>`, paged through the shared `fetchAllPages`
+//     (cap 10 pages of 100; it throws on a full last page, so 999 hits is the usable ceiling and the
+//     Search API's own 1,000-result limit is never reached); NO per-hit detail fetch and no
+//     `pulls?state=all` listing: the search item already carries state, closed_at, merged_at,
+//     user.login and title;
 //   - identity: only a PR authored by the Soleur App ever suppresses (a name-only match never does);
 //   - the cluster hash is read from the anchored PR TITLE, built and parsed by ONE pair
 //     (`promotePrTitle` / `PROMOTE_PR_TITLE_RE`). `Cluster-Hash:` is a commit trailer, not a PR-body line;
@@ -15,20 +17,30 @@
 //     now - closed_at < 60 days (at exactly 60 days it lapses);
 //   - a read that cannot be proven complete THROWS a typed error (fail closed, loud): an API/network
 //     error, a rate limit, the page cap, `incomplete_results`, `total_count` over 1000 or over the items
-//     seen, a closed item with an unparseable `closed_at`, a malformed item, or raw hits with none
-//     matching (title or login drift must not read as "nothing to suppress").
+//     seen, a closed item with an unparseable `closed_at`, a malformed item, or bot-authored hits with
+//     none parsing as a promote title (title drift must not read as "nothing to suppress").
+//     A zero-hit read, and hits that are all foreign (a fork or human PR on a self-healing/auto-*
+//     branch), are accepted as an empty ledger: the live search returns 0 today, search-index lag can
+//     briefly return 0 after a PR opens, and the consequence is at most one duplicate DRAFT PR,
+//     bounded by the week cap and human review (ADR-299, accepted residuals).
 // The reader never reads a PR body or comment, and never returns PR text: entries are
 // `{hash, state, closed_at}` only, which is what `step.run` persists.
 import { SOLEUR_BOT_LOGIN, fetchAllPages } from "@/server/inngest/functions/_cron-shared";
 
 export const LEDGER_TTL_DAYS = 60;
-export const LEDGER_MAX_SEARCH_PAGES = 5;
+export const LEDGER_MAX_SEARCH_PAGES = 10;
 export const LEDGER_BOT_LOGIN = SOLEUR_BOT_LOGIN;
+
+/**
+ * The branch prefix every promotion PR is opened on. The ONE definition: the apply step builds the
+ * branch from it and the ledger query searches for it, so changing one cannot desync the other.
+ */
+export const PROMOTE_BRANCH_PREFIX = "self-healing/auto-";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SEARCH_PER_PAGE = 100;
-/** GitHub's Search API retrieves at most 1,000 results for a query. */
-const SEARCH_RESULT_CEILING = 1000;
+/** `closed_at` must look like an ISO timestamp; `new Date("2026")` or `new Date("1")` also parse. */
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T/;
 
 /** The PR title the apply step gives a promotion PR. The ONLY builder: the reader's parser is derived from the same shape. */
 export function promotePrTitle(hash: string, date: string): string {
@@ -93,12 +105,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function asSearchItem(v: unknown): SearchItem | null {
   if (!isRecord(v)) return null;
-  if (typeof v.title !== "string" || typeof v.state !== "string") return null;
+  if (typeof v.title !== "string" || (v.state !== "open" && v.state !== "closed")) return null;
+  // `is:pr` items always carry a `pull_request` object; without it `merged_at` is unreadable and a
+  // merged PR would degrade to a 60-day closed one, so a missing object is a malformed item.
+  if (!isRecord(v.pull_request)) return null;
   if (v.closed_at !== null && v.closed_at !== undefined && typeof v.closed_at !== "string") return null;
   const user = isRecord(v.user) ? { login: typeof v.user.login === "string" ? v.user.login : undefined } : null;
-  const pr = isRecord(v.pull_request)
-    ? { merged_at: typeof v.pull_request.merged_at === "string" ? v.pull_request.merged_at : null }
-    : undefined;
+  const pr = { merged_at: typeof v.pull_request.merged_at === "string" ? v.pull_request.merged_at : null };
   return { title: v.title, state: v.state, closed_at: (v.closed_at as string | null | undefined) ?? null, user, pull_request: pr };
 }
 
@@ -121,7 +134,7 @@ function classifyTransportError(err: unknown): LedgerReadError {
  */
 export async function readLedger(args: { octokit: LedgerOctokit; owner: string; repo: string }): Promise<LedgerResult> {
   const { octokit, owner, repo } = args;
-  const q = `repo:${owner}/${repo} is:pr head:self-healing/auto-`;
+  const q = `repo:${owner}/${repo} is:pr head:${PROMOTE_BRANCH_PREFIX}`;
   let totalCount = 0;
   let incomplete = false;
   let malformed = false;
@@ -148,16 +161,18 @@ export async function readLedger(args: { octokit: LedgerOctokit; owner: string; 
 
   if (malformed) throw new LedgerReadError("unparseable", "ledger search returned an unexpected shape");
   if (incomplete) throw new LedgerReadError("incomplete", "ledger search reported incomplete_results");
-  if (totalCount > SEARCH_RESULT_CEILING || totalCount > raw.length) {
+  if (totalCount > raw.length) {
     throw new LedgerReadError("incomplete", "ledger search total exceeds the items retrieved");
   }
 
   const entries: LedgerEntry[] = [];
   let titleSkipped = 0;
+  let botHits = 0;
   for (const rawItem of raw) {
     const item = asSearchItem(rawItem);
     if (item === null) throw new LedgerReadError("unparseable", "ledger search item has an unexpected shape");
     if (item.user?.login !== LEDGER_BOT_LOGIN) continue; // identity binding: a name-only match never suppresses
+    botHits++
     const m = PROMOTE_PR_TITLE_RE.exec(item.title);
     if (m === null) {
       titleSkipped++;
@@ -170,17 +185,18 @@ export async function readLedger(args: { octokit: LedgerOctokit; owner: string; 
       entries.push({ hash, state: "open" });
     } else {
       const closedAt = item.closed_at;
-      if (closedAt === null || Number.isNaN(new Date(closedAt).getTime())) {
+      if (closedAt === null || !ISO_TIMESTAMP_RE.test(closedAt) || Number.isNaN(new Date(closedAt).getTime())) {
         throw new LedgerReadError("unparseable", "a closed ledger entry has no parseable closed_at");
       }
       entries.push({ hash, state: "closed", closed_at: closedAt });
     }
   }
 
-  // Raw hits but nothing usable: the title format or the author login drifted. That must not read as
-  // "nothing to suppress".
-  if (raw.length > 0 && entries.length === 0) {
-    throw new LedgerReadError("drift", "ledger search returned hits but none matched the bot identity and title shape");
+  // Bot-authored hits but none parses as a promote title: the title format drifted (or a reviewer
+  // retitled every bot PR). That must not read as "nothing to suppress". Foreign-only hits do not
+  // reach here: they say nothing about the bot's own history.
+  if (botHits > 0 && entries.length === 0) {
+    throw new LedgerReadError("drift", "ledger search returned bot-authored hits but none matched the promote-title shape");
   }
   return { entries, scanned: raw.length, titleSkipped };
 }
@@ -192,6 +208,8 @@ export async function readLedger(args: { octokit: LedgerOctokit; owner: string; 
  */
 export function decideSuppression(args: { entries: readonly LedgerEntry[]; hash: string; now: Date }): boolean {
   const { entries, hash, now } = args;
+  // An unusable clock cannot prove any closed entry has aged out: fail closed (suppress).
+  if (Number.isNaN(now.getTime())) return entries.some((e) => e.hash === hash);
   for (const e of entries) {
     if (e.hash !== hash) continue;
     if (e.state === "open" || e.state === "merged") return true;

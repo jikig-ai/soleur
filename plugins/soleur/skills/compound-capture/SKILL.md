@@ -238,7 +238,7 @@ Replace `<category>` with the mapped category and `<filename>` with the generate
 </step>
 
 <step number="7" required="false" depends_on="6">
-### Step 7: Cross-Reference & Critical Pattern Detection
+### Step 7: Cross-Reference & Required-Reading Detection
 
 If similar issues found in Step 3:
 
@@ -251,9 +251,9 @@ Already includes cross-reference from Step 6.
 
 **Update patterns if applicable:**
 
-If this represents a common pattern (3+ similar issues) and this repo keeps `knowledge-base/project/patterns/`, structure the page with [pattern-page-template.md](./assets/pattern-page-template.md). A pattern page is added or extended by a reviewed PR, never written directly. Otherwise skip.
+If this repo keeps `knowledge-base/project/patterns/`: extend an existing page, or note it for a new page once 5 or more learnings share the class (a page needs 5+ evidence entries, so one learning cannot create one). Structure pages with [pattern-page-template.md](./assets/pattern-page-template.md). A pattern page is added or extended by a reviewed PR, never written directly. Otherwise emit one line: `skipped: no patterns directory`.
 
-**Critical Pattern Detection (Optional Proactive Suggestion):**
+**Required-Reading Detection (Optional Proactive Suggestion):**
 
 If this issue has automatic indicators suggesting it might be critical:
 
@@ -271,7 +271,7 @@ But **NEVER auto-promote**. User decides via decision menu (Option 2).
 
 **Required-reading entries:**
 
-When user selects Option 2, propose a pattern page with `required_reading: true`. In a repo without a patterns directory, append the entry to a local required-reading file of the repo's choosing.
+When user selects Option 2, propose a pattern page with `required_reading: true`. In a repo without a patterns directory, append the entry to `knowledge-base/project/learnings/patterns/required-reading.md`.
 </step>
 
 <step number="8" required="false" depends_on="6">
@@ -549,10 +549,10 @@ User selects this when:
 Action:
 
 1. Extract pattern from the documentation
-2. Format as ❌ WRONG vs ✅ CORRECT with code examples
-3. Propose a pattern page with `required_reading: true` (or, without a patterns directory, append to the repo's local required-reading file)
+2. Fill the template sections (root cause, fix with a short wrong-versus-correct example, evidence)
+3. Write the pattern page with `required_reading: true` (or, without a patterns directory, append the entry to `knowledge-base/project/learnings/patterns/required-reading.md`)
 4. Add cross-reference back to this doc
-5. Confirm: "✓ Required-reading entry proposed."
+5. Only after step 3 wrote the entry or page: confirm "✓ Required-reading entry proposed."
 
 **Option 3: Link related issues**
 

@@ -57,12 +57,14 @@ import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 import {
   fenceBlock,
   loadOpenPatterns,
+  patternsPayloadBytes,
   renderPatternIndex,
   untrustedDataSentence,
   type PatternPage,
 } from "@/server/compound-promote-patterns";
 import {
   LedgerReadError,
+  PROMOTE_BRANCH_PREFIX,
   decideSuppression,
   promotePrTitle,
   readLedger,
@@ -597,8 +599,11 @@ export async function checkDiffPaths(
   }
 }
 
-const BRANCH_SHAPE_RE =
-  /^self-healing\/auto-[0-9a-f]{64}-[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+// The prefix is the ledger module's constant, so the branch the apply step opens and the head: prefix
+// the ledger searches cannot drift apart.
+const BRANCH_SHAPE_RE = new RegExp(
+  `^${PROMOTE_BRANCH_PREFIX.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}[0-9a-f]{64}-[0-9]{4}-[0-9]{2}-[0-9]{2}$`,
+);
 
 export const ANTHROPIC_MODEL = EXECUTION_MODEL;
 export const ANTHROPIC_MAX_TOKENS = 16384;
@@ -1538,8 +1543,8 @@ export async function cronCompoundPromoteHandler({
   let clustersProposed: number | undefined;
   let clustersOpened = 0;
   // #8293: which input arm this run uses, and the patterns-path counters. Hoisted for the same
-  // reason as the counts above (the error marker must carry them). `runOptions` is read here,
-  // not in the try, so an invalid option is reported by the same catch as every other failure.
+  // reason as the counts above (the error marker must carry them). `readRunOptions` cannot throw; an
+  // invalid manual option is raised INSIDE the try below, so the one catch reports it like any failure.
   const runOptions = readRunOptions(event, trigger);
   const inputSource: RunInput = "input" in runOptions ? runOptions.input : "corpus";
   let patternsOpen: number | undefined;
@@ -1561,6 +1566,11 @@ export async function cronCompoundPromoteHandler({
           ledger_title_skipped: ledgerTitleSkipped,
         }
       : {};
+  // Early terminal rows (disabled / deduped / week-cap-reached) exit before the ledger or the pages are
+  // read, so they carry only the discriminator: without it a patterns request that exited there reads
+  // exactly like a corpus run. Empty on the corpus arm.
+  const inputMarker = (): Partial<CompoundPromoteOutcome> =>
+    inputSource === "patterns" ? { input_source: "patterns" } : {};
   // #8281: why a run produced nothing is the datum that was missing. One
   // entry per refusal that fired, plus a bounded per-cluster detail so a
   // cluster refused EVERY week is distinguishable from a quiet corpus.
@@ -1649,7 +1659,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-disabled", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker({ trigger, run_id: runId, status: "disabled" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "disabled", ...inputMarker() });
       return { ok: true, status: "disabled" };
     }
 
@@ -1676,7 +1686,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-dedup", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker({ trigger, run_id: runId, status: "deduped" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "deduped", ...inputMarker() });
       return { ok: true, status: "deduped" };
     }
 
@@ -1695,7 +1705,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-week-cap", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker({ trigger, run_id: runId, status: "week-cap-reached" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "week-cap-reached", ...inputMarker() });
       return { ok: true, status: "week-cap-reached" };
     }
 
@@ -1735,6 +1745,7 @@ export async function cronCompoundPromoteHandler({
     // FR5/FR6: collect corpus with PII + retired-rule pre-pass. On the patterns path the input is the open
     // pattern pages' evidence learnings instead (same `{path, summary}` shape), so the quorum is unchanged.
     let patternRows: PatternPage[] = [];
+    let patternsDirReadable = true;
     const collected = inputSource === "patterns"
       ? await step.run("collect-patterns", async () => {
       const loaded = await loadOpenPatterns({
@@ -1743,7 +1754,7 @@ export async function cronCompoundPromoteHandler({
         retiredPaths: await readRetiredPaths(repoRoot),
       });
       for (const d of loaded.dropped) {
-        // The slug is a file name (kebab, validated by the loader), not page text.
+        // The slug is validated by the loader (a kebab slug or the constant `invalid-slug`), never raw page text.
         reportSilentFallback(null, {
           feature: "cron-compound-promote",
           op: "pattern-page-dropped",
@@ -1752,7 +1763,17 @@ export async function cronCompoundPromoteHandler({
           extra: { slug: d.slug },
         });
       }
-      return { entries: loaded.evidenceEntries, patterns: loaded.patterns, open: loaded.open };
+      for (const d of loaded.droppedEvidence) {
+        // A page can survive with fewer evidence keys, which changes its cluster hash: make the attrition visible.
+        reportSilentFallback(null, {
+          feature: "cron-compound-promote",
+          op: "pattern-evidence-dropped",
+          message: "evidence learnings were dropped from open pattern pages",
+          tags: { cause: d.cause },
+          extra: { count: d.count },
+        });
+      }
+      return { entries: loaded.evidenceEntries, patterns: loaded.patterns, open: loaded.open, dirReadable: loaded.dirReadable };
     })
       : await step.run("collect-corpus", async () => {
       const learningsDir = join(repoRoot, "knowledge-base", "project", "learnings");
@@ -1791,9 +1812,10 @@ export async function cronCompoundPromoteHandler({
     });
     if (inputSource === "patterns") {
       // step.run's inferred return is a JSON projection of a union; the patterns arm is the only one with these keys.
-      const fromPatterns = collected as unknown as { patterns: PatternPage[]; open: number };
+      const fromPatterns = collected as unknown as { patterns: PatternPage[]; open: number; dirReadable: boolean };
       patternRows = fromPatterns.patterns;
       patternsOpen = fromPatterns.open;
+      patternsDirReadable = fromPatterns.dirReadable;
     }
     const corpus: { entries: { path: string; summary: string }[] } = { entries: collected.entries };
 
@@ -1801,24 +1823,26 @@ export async function cronCompoundPromoteHandler({
     // tokens and opened nothing; this is the term that made it so.
     // On the patterns arm the payload is the index plus the evidence entries.
     corpusInputBytes =
-      Buffer.byteLength(JSON.stringify(corpus.entries), "utf8") +
-      (inputSource === "patterns" ? Buffer.byteLength(JSON.stringify(patternRows), "utf8") : 0);
+      inputSource === "patterns"
+        ? patternsPayloadBytes(patternRows, corpus.entries)
+        : Buffer.byteLength(JSON.stringify(corpus.entries), "utf8");
     corpusCount = corpus.entries.length;
 
     if (corpus.entries.length === 0) {
-      if (inputSource === "patterns") {
-        // A broken seed or every page closed: say so, and never fall back to the legacy corpus
-        // (that would hide the broken seed and corrupt the comparison).
-        reportSilentFallback(null, {
-          feature: "cron-compound-promote",
-          op: "patterns-empty",
-          message: "the patterns arm found no open pattern with usable evidence",
-          tags: { cause: "no-open-patterns" },
-        });
-      }
-      await step.run("sentry-heartbeat-ok-empty", () =>
-        postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
-      );
+      // The patterns-empty report lives INSIDE the memoized heartbeat step so it fires once per run, not
+      // once per replay. A broken seed or every page closed: say so, and never fall back to the legacy
+      // corpus (that would hide the broken seed and corrupt the comparison).
+      await step.run("sentry-heartbeat-ok-empty", async () => {
+        if (inputSource === "patterns") {
+          reportSilentFallback(null, {
+            feature: "cron-compound-promote",
+            op: "patterns-empty",
+            message: "the patterns arm found no open pattern with usable evidence",
+            tags: { cause: patternsDirReadable ? "no-open-patterns" : "dir-unreadable" },
+          });
+        }
+        return postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger });
+      });
       emitOutcomeMarker({ trigger, run_id: runId, status: "empty-corpus", corpus_count: 0, ...patternsMarker() });
       return { ok: true, status: "empty-corpus" };
     }
@@ -1911,7 +1935,11 @@ export async function cronCompoundPromoteHandler({
       // normalisation below, so a cluster the server later refuses `quorum-not-met` still
       // occupies one of the `remaining` proposal slots. Moving the quorum filter ahead of
       // the slice would need the corpus-key check inside this step (replay risk) and would
-      // hide refusals from the marker, so it is documented, not fixed.
+      // hide refusals from the marker, so it is documented, not fixed. The same applies to #8293
+      // suppression on the patterns arm: a cluster that a prior PR already covers also occupies one of
+      // the (at most two) slots, and the model is not told which hashes are suppressed, so a repeatedly
+      // proposed rejected or merged cluster can end a week `no-qualifying-clusters` (ruling C3, slot
+      // top-up cut; trigger tracked in #10977).
       return { clusters: (parsed.clusters as ProposedCluster[]).slice(0, weekCapResult.remaining), truncated: false };
     }, MAX_RUN_DURATION_MS));
 
@@ -1950,17 +1978,30 @@ export async function cronCompoundPromoteHandler({
     // An off-allowlist target is NOT suppressed here: `target-path-refused` must win, and the draft step
     // is the site that raises it (`assertAllowedTarget` keeps the handler at two `TARGET_ALLOW_RE.test(` sites).
     const runNow = new Date(runStartedAt);
-    const proposals: ProposedCluster[] = inputSource === "patterns"
-      ? normalised.filter((proposed) => {
-          const h = computeClusterHash(proposed.source_learnings);
-          if (assertAllowedTarget(proposed.target_path) === null && decideSuppression({ entries: ledgerEntries, hash: h, now: runNow })) {
+    let proposals: ProposedCluster[] = normalised;
+    if (inputSource === "patterns") {
+      const kept: ProposedCluster[] = [];
+      const seenHashes = new Set<string>();
+      for (const proposed of normalised) {
+        const h = computeClusterHash(proposed.source_learnings);
+        if (assertAllowedTarget(proposed.target_path) === null) {
+          if (decideSuppression({ entries: ledgerEntries, hash: h, now: runNow })) {
             record(h, { kind: "refused", reason: "ledger-suppressed" });
             ledgerSuppressed++;
-            return false;
+            continue;
           }
-          return true;
-        })
-      : normalised;
+          // Two clusters citing the same evidence set build the same branch; the second push would be
+          // rejected non-fast-forward. Refuse it by name instead of relying on that.
+          if (seenHashes.has(h)) {
+            record(h, { kind: "refused", reason: "cluster-duplicate" });
+            continue;
+          }
+          seenHashes.add(h);
+        }
+        kept.push(proposed);
+      }
+      proposals = kept;
+    }
 
     if (clusterResult.clusters.length === 0 || clusterResult.truncated || (inputSource === "patterns" && proposals.length === 0)) {
       await step.run("sentry-heartbeat-ok-no-clusters", () =>
@@ -2176,7 +2217,7 @@ export async function cronCompoundPromoteHandler({
           }
         }
 
-        const branchName = `self-healing/auto-${clusterHash}-${dateSuffix}`;
+        const branchName = `${PROMOTE_BRANCH_PREFIX}${clusterHash}-${dateSuffix}`;
         if (!BRANCH_SHAPE_RE.test(branchName)) {
           logger.warn({ fn: "cron-compound-promote", branch: branchName }, "branch-name-shape-failed");
           return { kind: "refused", reason: "branch-name-shape-failed" };

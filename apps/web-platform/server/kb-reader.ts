@@ -114,9 +114,18 @@ export function parseFrontmatter(raw: string): {
   content: string;
 } {
   try {
-    // engines: {} disables custom YAML engines, preventing code injection
-    // via gray-matter's historical JS-in-frontmatter feature (CVE in <4.0.3).
-    const parsed = matter(raw, { engines: {} });
+    // gray-matter MERGES `engines` over its built-in engines, so `engines: {}` does NOT remove the
+    // `js` engine: a `---js` opener would evaluate the block as JavaScript. Two independent
+    // defences: only a plain `---` opener is parsed at all (the real one: a language tag such as
+    // `---js`, `---javascript` or `---JS` selects an engine), and both JS engine names are overridden
+    // to throw (caught below, which returns the raw content).
+    if (/^\uFEFF?---[^\r\n]*[\r\n]/.test(raw) && !/^\uFEFF?---[ \t]*\r?\n/.test(raw)) {
+      return { frontmatter: {}, content: raw.trim() };
+    }
+    const disabled = (): never => {
+      throw new Error("js front matter is disabled");
+    };
+    const parsed = matter(raw, { engines: { js: disabled, javascript: disabled } });
     return {
       frontmatter:
         parsed.data && Object.keys(parsed.data).length > 0

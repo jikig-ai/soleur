@@ -12,10 +12,10 @@ type: audit-log
 Append-only log of every promotion proposal opened by the `cron-compound-promote`
 Inngest function (`apps/web-platform/server/inngest/functions/cron-compound-promote.ts`).
 Each run that opens one or more draft PRs appends one row per PR below the
-`ROWS BELOW` marker. The row rides the proposal's own commit, so the log records
-accepted-or-pending proposals only: a rejected proposal is never recorded here.
-Rejection state is read from GitHub PR state through Octokit (ADR-299), not from
-this log.
+`ROWS BELOW` marker. The row rides the proposal's own commit, so a `pending` row
+reaches `main` only when its proposal PR merges: a closed-unmerged proposal never
+lands a row here. Rejection state is read from GitHub PR state through Octokit
+(ADR-299), not from this log.
 
 **Schema:**
 

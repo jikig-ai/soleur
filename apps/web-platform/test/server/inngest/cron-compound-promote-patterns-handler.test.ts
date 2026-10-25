@@ -25,6 +25,10 @@ const h = vi.hoisted(() => ({
   /** What the GitHub search returns for the ledger query; per-case. */
   ledger: { items: [] as unknown[], total: undefined as number | undefined, error: null as unknown, onRequest: null as null | (() => void) },
   searchQs: [] as string[],
+  /** Open `self-healing/auto` PR count returned for the week-cap query. */
+  openPrs: 0,
+  /** Whether the dedup query (recent "[Scheduled] Compound Promotion" issue) finds one. */
+  dedupHit: false,
 }));
 
 vi.mock("@/server/observability", async (importOriginal) => ({
@@ -41,6 +45,12 @@ vi.mock("@octokit/core", () => ({
         if (h.ledger.error) throw h.ledger.error;
         return { data: { total_count: h.ledger.total ?? h.ledger.items.length, incomplete_results: false, items: h.ledger.items } };
       }
+      if (q.includes("[Scheduled] Compound Promotion")) {
+        return h.dedupHit
+          ? { data: { total_count: 1, items: [{ created_at: new Date().toISOString() }] } }
+          : { data: { total_count: 0, items: [] } };
+      }
+      if (q.includes("is:pr is:open label:self-healing/auto")) return { data: { total_count: h.openPrs, items: [] } };
       return { data: { total_count: 0, items: [] } };
     };
   },
@@ -65,7 +75,7 @@ vi.mock("@/server/compound-promote-marker", async (importOriginal) => ({
 
 import { reportSilentFallback } from "@/server/observability";
 import { PROMOTION_QUORUM, TARGET_ALLOW_RE, cronCompoundPromoteHandler } from "@/server/inngest/functions/cron-compound-promote";
-import { LEDGER_BOT_LOGIN, promotePrTitle } from "@/server/compound-promote-ledger";
+import { LEDGER_BOT_LOGIN, PROMOTE_BRANCH_PREFIX, promotePrTitle } from "@/server/compound-promote-ledger";
 import { gitFixture } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 const Q = PROMOTION_QUORUM;
@@ -160,6 +170,8 @@ beforeEach(() => {
   h.ledger.total = undefined;
   h.ledger.error = null;
   h.ledger.onRequest = null;
+  h.openPrs = 0;
+  h.dedupHit = false;
   vi.mocked(reportSilentFallback).mockClear();
   h.safeCommit.mockResolvedValue({ status: "committed" });
 });
@@ -256,9 +268,14 @@ describe("the scheduled path is untouched", () => {
 
   it("the PR title is the literal the apply step used before", async () => {
     stubModel([AGENTS_CLUSTER], EDITS);
+    const before = new Date().toISOString().slice(0, 10);
     await run(CRON());
-    const cfg = h.safeCommit.mock.calls[0][0] as { prTitle: string; allowedPaths: string[] };
-    expect(cfg.prTitle).toBe(`self-healing(auto): promote cluster ${hashOf(AGENTS_CLUSTER.source_learnings)} ${new Date().toISOString().slice(0, 10)}`);
+    const after = new Date().toISOString().slice(0, 10);
+    const cfg = h.safeCommit.mock.calls[0][0] as { prTitle: string; allowedPaths: string[]; branchName: string };
+    const h8 = hashOf(AGENTS_CLUSTER.source_learnings);
+    // The run may straddle 00:00 UTC; the title carries the run-start date, which is one of the two.
+    expect([`self-healing(auto): promote cluster ${h8} ${before}`, `self-healing(auto): promote cluster ${h8} ${after}`]).toContain(cfg.prTitle);
+    expect(cfg.branchName.startsWith(`${PROMOTE_BRANCH_PREFIX}${h8}-`)).toBe(true);
   });
 });
 
@@ -475,6 +492,173 @@ describe("containment", () => {
     const handler = src.slice(src.indexOf("export async function cronCompoundPromoteHandler"));
     const stripped = handler.split("\n").map((l) => l.replace(/^\s*\/\/.*$/, "")).join("\n");
     expect(stripped.split("TARGET_ALLOW_RE.test(").length - 1).toBe(2);
+  });
+});
+
+const COMMON_KEYS = ["clusters_opened", "clusters_proposed", "corpus_count", "corpus_input_bytes", "run_id", "status", "trigger"];
+const PATTERNS_KEYS = ["input_source", "ledger_prs_scanned", "ledger_read", "ledger_suppressed", "ledger_title_skipped", "patterns_open"];
+
+describe("the marker rows the handler actually emits on the patterns arm (closed vocabulary, asserted on emitted rows)", () => {
+  const ALLOWED = new Set([...COMMON_KEYS, ...PATTERNS_KEYS, "refusals", "refusal_detail", "error_class", "error_message"]);
+  const assertClosed = (row: Record<string, unknown>) => {
+    for (const k of Object.keys(JSON.parse(JSON.stringify(row)) as object)) expect(ALLOWED.has(k), `unexpected marker key ${k}`).toBe(true);
+    for (const k of PATTERNS_KEYS) {
+      const v = row[k];
+      if (v === undefined) continue; // an unset field is omitted from the JSON row
+      expect(typeof v === "number" || v === "ok" || v === "failed" || v === "patterns", `${k} must be a number or closed enum`).toBe(true);
+    }
+  };
+
+  it("completed, no-qualifying-clusters (all suppressed), empty-corpus and error rows carry exactly the allowed keys", async () => {
+    stubModel([AGENTS_CLUSTER], EDITS);
+    const completed = await run(MANUAL("patterns"));
+    assertClosed(completed.last);
+    expect(keysOf(completed.last)).toEqual([...COMMON_KEYS, ...PATTERNS_KEYS, "refusal_detail", "refusals"].sort());
+
+    h.marker.mockReset();
+    h.ledger.items = [prior(hashOf(AGENTS_CLUSTER.source_learnings))];
+    stubModel([AGENTS_CLUSTER], EDITS);
+    const none = await run(MANUAL("patterns"));
+    assertClosed(none.last);
+    expect(keysOf(none.last)).toEqual([...COMMON_KEYS, ...PATTERNS_KEYS, "refusal_detail", "refusals"].sort());
+
+    h.marker.mockReset();
+    h.ledger.items = [];
+    h.ledger.error = Object.assign(new Error("boom"), { status: 502 });
+    const err = await run(MANUAL("patterns"));
+    assertClosed(err.last);
+    expect(keysOf(err.last)).toEqual(expect.arrayContaining(["error_class", "error_message", "input_source", "ledger_read"]));
+  });
+
+  it("early terminal rows (deduped, week-cap-reached) carry ONLY the input discriminator on a patterns run, and nothing extra on a corpus run", async () => {
+    h.dedupHit = true;
+    const deduped = await run(MANUAL("patterns"));
+    expect(deduped.last).toMatchObject({ status: "deduped", input_source: "patterns" });
+    for (const k of PATTERNS_KEYS.filter((k) => k !== "input_source")) expect(deduped.last).not.toHaveProperty(k);
+
+    h.marker.mockReset();
+    h.dedupHit = false;
+    h.openPrs = 2;
+    const capped = await run(MANUAL("patterns"));
+    expect(capped.last).toMatchObject({ status: "week-cap-reached", input_source: "patterns" });
+
+    h.marker.mockReset();
+    const corpusCapped = await run(MANUAL());
+    expect(corpusCapped.last).toMatchObject({ status: "week-cap-reached" });
+    expect(corpusCapped.last).not.toHaveProperty("input_source");
+    const cronCapped = await run(CRON({ input: "patterns" }));
+    expect(cronCapped.last).not.toHaveProperty("input_source");
+  });
+});
+
+describe("patterns-empty is reported once per run, with the right cause", () => {
+  it("fires exactly once even when the handler body re-executes over memoized steps, cause no-open-patterns", async () => {
+    const git = gitFixture(remoteDir);
+    for (const sl of ["page-one", "page-two", "page-three"]) {
+      writeFileSync(join(remoteDir, `knowledge-base/project/patterns/${sl}.md`), page(sl, Ls(1, Q), { status: "closed" }));
+    }
+    git(["commit", "-qam", "close all"]);
+    try {
+      stubModel([], EDITS);
+      const memo = new Map<string, unknown>();
+      await run(MANUAL("patterns"), memo);
+      await run(MANUAL("patterns"), memo);
+      const calls = vi.mocked(reportSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string }).op === "patterns-empty");
+      expect(calls).toHaveLength(1);
+      expect(calls[0][1]).toMatchObject({ tags: { cause: "no-open-patterns" } });
+    } finally {
+      git(["reset", "-q", "--hard", "HEAD~1"]);
+    }
+  });
+
+  it("an absent patterns directory is cause dir-unreadable", async () => {
+    const git = gitFixture(remoteDir);
+    git(["rm", "-rq", "knowledge-base/project/patterns"]);
+    git(["commit", "-qm", "remove patterns"]);
+    try {
+      stubModel([], EDITS);
+      const { last } = await run(MANUAL("patterns"));
+      expect(last).toMatchObject({ status: "empty-corpus", patterns_open: 0 });
+      expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "patterns-empty", tags: { cause: "dir-unreadable" } }));
+    } finally {
+      git(["reset", "-q", "--hard", "HEAD~1"]);
+    }
+  });
+});
+
+describe("hash identity, duplicates, retired/PII exclusion and nonce randomness on the patterns arm", () => {
+  it("suppression hashes the NORMALISED evidence set: a model answer with one invented extra path still matches the prior PR", async () => {
+    h.ledger.items = [prior(hashOf(AGENTS_CLUSTER.source_learnings))];
+    const noisy: Cl = { ...AGENTS_CLUSTER, source_learnings: [...AGENTS_CLUSTER.source_learnings, "knowledge-base/project/learnings/not-in-corpus.md"] };
+    stubModel([noisy], EDITS);
+    const { last } = await run(MANUAL("patterns"));
+    expect(last).toMatchObject({ ledger_suppressed: 1, clusters_opened: 0, refusals: ["ledger-suppressed"] });
+    expect(h.safeCommit).not.toHaveBeenCalled();
+  });
+
+  it("two clusters with the same evidence set: the second is refused cluster-duplicate and only one PR is attempted", async () => {
+    const dupe: Cl = { ...SKILL_CLUSTER, source_learnings: AGENTS_CLUSTER.source_learnings };
+    stubModel([AGENTS_CLUSTER, dupe], EDITS);
+    const { last } = await run(MANUAL("patterns"));
+    expect(last).toMatchObject({ clusters_proposed: 2, clusters_opened: 1, refusals: ["cluster-duplicate"] });
+    expect(h.safeCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("the branch and the ledger query share one prefix", async () => {
+    stubModel([AGENTS_CLUSTER], EDITS);
+    await run(MANUAL("patterns"));
+    expect(h.searchQs).toContain(`repo:jikig-ai/soleur is:pr head:${PROMOTE_BRANCH_PREFIX}`);
+    const cfg = h.safeCommit.mock.calls[0][0] as { branchName: string };
+    expect(cfg.branchName.startsWith(PROMOTE_BRANCH_PREFIX)).toBe(true);
+  });
+
+  it("a retired learning and a PII learning cited by an open page never reach the prompt, and the attrition is reported", async () => {
+    const git = gitFixture(remoteDir);
+    const put2 = (p: string, t: string) => { mkdirSync(join(remoteDir, p, ".."), { recursive: true }); writeFileSync(join(remoteDir, p), t); };
+    put2("scripts/retired-rule-ids.txt", `retired | ${L(16)}\n`);
+    put2(L(17), "# Learning 17\n\ncontact someone@example.test\n");
+    put2("knowledge-base/project/patterns/page-seven.md", page("page-seven", [L(1), L(2), L(3), L(4), L(5), L(16), L(17)]));
+    git(["add", "-A"]);
+    git(["commit", "-qm", "retired and pii evidence"]);
+    try {
+      stubModel([], EDITS);
+      await run(MANUAL("patterns"));
+      const p = clusterPrompt();
+      expect(p).not.toContain(`learning ${L(16)}`);
+      expect(p).not.toContain(`learning ${L(17)}`);
+      expect(p).not.toContain("someone@example.test");
+      const causes = vi.mocked(reportSilentFallback).mock.calls
+        .filter((c) => (c[1] as { op?: string }).op === "pattern-evidence-dropped")
+        .map((c) => (c[1] as unknown as { tags: { cause: string } }).tags.cause)
+        .sort();
+      expect(causes).toEqual(["pii", "retired"]);
+    } finally {
+      git(["reset", "-q", "--hard", "HEAD~1"]);
+    }
+  });
+
+  it("the fence nonce is random per run (two runs differ) and 16 hex characters", async () => {
+    stubModel([], EDITS);
+    await run(MANUAL("patterns"));
+    const n1 = /<<<BEGIN-([0-9a-f]{16}):pattern-index>>>/.exec(clusterPrompt())?.[1];
+    h.post.mockReset();
+    stubModel([], EDITS);
+    await run(MANUAL("patterns"));
+    const n2 = /<<<BEGIN-([0-9a-f]{16}):pattern-index>>>/.exec(clusterPrompt())?.[1];
+    expect(n1).toBeDefined();
+    expect(n2).toBeDefined();
+    expect(n1).not.toBe(n2);
+  });
+
+  it("corpus_input_bytes on the patterns arm measures the rendered tail (index + fenced evidence), not a JSON of page objects", async () => {
+    stubModel([], EDITS);
+    const { last } = await run(MANUAL("patterns"));
+    const p = clusterPrompt();
+    // The tail starts at the index fence (the earlier "untrusted data" sentence also names the nonce, so match the label);
+    // the 16-char nonce makes the measured size equal the sent size.
+    const start = /<<<BEGIN-[0-9a-f]{16}:pattern-index>>>/.exec(p)?.index ?? -1;
+    expect(start).toBeGreaterThan(0);
+    expect(last.corpus_input_bytes).toBe(Buffer.byteLength(p.slice(start), "utf8"));
   });
 });
 

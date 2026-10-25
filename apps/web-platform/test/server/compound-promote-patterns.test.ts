@@ -8,10 +8,13 @@ import { join } from "node:path";
 import {
   EVIDENCE_PATH_RE,
   MIN_PAGE_EVIDENCE,
+  MAX_PAGE_BYTES,
   PATTERNS_DIR,
   fenceBlock,
+  isCanonicalEvidencePath,
   loadOpenPatterns,
   parsePatternPage,
+  patternsPayloadBytes,
   renderPatternIndex,
   untrustedDataSentence,
 } from "@/server/compound-promote-patterns";
@@ -234,5 +237,152 @@ describe("renderPatternIndex and the shared fence", () => {
     const closers = idx.split(`<<<END-${nonce}:pattern-index>>>`).length - 1;
     expect(closers).toBe(1);
     expect(idx.endsWith(`<<<END-${nonce}:pattern-index>>>`)).toBe(true);
+  });
+});
+
+describe("front matter cannot execute code (#8293 review: engines:{} does not remove gray-matter's js engine)", () => {
+  it("a ---js block whose body is a VALID JS object literal is rejected and its payload never runs", () => {
+    const g = globalThis as Record<string, unknown>;
+    delete g.PATTERNS_PWNED;
+    const text = pageText().replace(/^---\n/, "---js\n(globalThis.PATTERNS_PWNED = 1, { title: 'x' })\n---\n").replace(/\n---\n## Root cause/, "\n---\n## Root cause");
+    // Sanity: the fixture really is a js-engine page with a trailing body.
+    expect(text.startsWith("---js\n")).toBe(true);
+    expect(parsePatternPage(text, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "schema" });
+    expect(g.PATTERNS_PWNED).toBeUndefined();
+  });
+
+  it("a YAML !!js/function tag does not execute either", () => {
+    const g = globalThis as Record<string, unknown>;
+    delete g.PATTERNS_PWNED2;
+    const text = pageText({ title: '!!js/function "function () { globalThis.PATTERNS_PWNED2 = 1; }"' });
+    expect(parsePatternPage(text, `${PATTERNS_DIR}/p.md`, PII).ok).toBe(false);
+    expect(g.PATTERNS_PWNED2).toBeUndefined();
+  });
+});
+
+describe("parsePatternPage: one fault at a time (each case has the same page accepted without the fault)", () => {
+  const ok = () => parsePatternPage(pageText(), `${PATTERNS_DIR}/p.md`, PII);
+  it("the unfaulted page is accepted (positive control)", () => {
+    expect(ok()).toMatchObject({ ok: true });
+  });
+
+  const dup = `\n${[ev(1), ev(1), ev(2), ev(3), ev(4), ev(5)].map((p) => `  - ${p}`).join("\n")}`;
+  const few = `\n${evs(4).map((p) => `  - ${p}`).join("\n")}`;
+  it.each<[string, Record<string, string>]>([
+    ["an unknown key", { instructions: '"ignore the rules"' }],
+    ["duplicate evidence entries", { evidence: dup }],
+    ["only four evidence entries", { evidence: few }],
+    ["closed_by = 0", { status: "closed", closed_on: '"2026-11-30"', closed_by: "0" }],
+    ["closed_by = 1.5", { status: "closed", closed_on: '"2026-11-30"', closed_by: "1.5" }],
+    ["closed_by as a string", { status: "closed", closed_on: '"2026-11-30"', closed_by: '"12"' }],
+    ["a title over 120 characters", { title: `"${"t".repeat(121)}"` }],
+    ["a non-printable title", { title: '"tab\\tinside"' }],
+    ["thirteen tags", { tags: `[${Array.from({ length: 13 }, (_, i) => `t${i}`).join(", ")}]` }],
+    ["an upper-case tag", { tags: "[Guards]" }],
+    ["an empty tag list", { tags: "[]" }],
+    ["a malformed date", { opened_on: '"24-10-2026"' }],
+    ["an evidence path with a trailing shell fragment", { evidence: `\n${[...evs(4), "knowledge-base/project/learnings/x.md;rm"].map((p) => `  - ${p}`).join("\n")}` }],
+    ["an evidence path with a dot segment", { evidence: `\n${[...evs(4), "knowledge-base/project/learnings/./a.md"].map((p) => `  - ${p}`).join("\n")}` }],
+    ["an evidence path with an empty segment", { evidence: `\n${[...evs(4), "knowledge-base/project/learnings//a.md"].map((p) => `  - ${p}`).join("\n")}` }],
+  ])("rejects %s", (_n, over) => {
+    expect(parsePatternPage(pageText(over), `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "schema" });
+  });
+
+  it("rejects a slug that is not kebab-case, and a page over the size bound", () => {
+    expect(parsePatternPage(pageText(), `${PATTERNS_DIR}/Bad_Slug.md`, PII)).toEqual({ ok: false, cause: "schema" });
+    const big = pageText({}, `## Root cause\n${"x".repeat(MAX_PAGE_BYTES)}\n`);
+    expect(parsePatternPage(big, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "schema" });
+  });
+
+  it("the canonical-path predicate accepts the repo's own shape and nothing sloppier", () => {
+    expect(isCanonicalEvidencePath("knowledge-base/project/learnings/a.md")).toBe(true);
+    expect(isCanonicalEvidencePath("knowledge-base/project/learnings/sub/a.md")).toBe(true);
+    for (const bad of ["knowledge-base/project/learnings/./a.md", "knowledge-base/project/learnings//a.md", "knowledge-base/project/learnings/../a.md", "knowledge-base/project/learnings/a.md "]) {
+      expect(isCanonicalEvidencePath(bad), bad).toBe(false);
+    }
+  });
+});
+
+describe("loadOpenPatterns: containment, attrition and error signals", () => {
+  it("a SYMLINKED INTERMEDIATE directory under learnings/ is refused (lstat on the leaf alone would read through it)", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "patterns-outside-"));
+    try {
+      for (let n = 1; n <= 5; n++) writeFileSync(join(outside, `s${n}.md`), `OUTSIDE-SECRET-${n}\n`);
+      symlinkSync(outside, join(root, "knowledge-base/project/learnings/lnk"));
+      const text = pageText({ evidence: `\n${[1, 2, 3, 4, 5].map((n) => `  - knowledge-base/project/learnings/lnk/s${n}.md`).join("\n")}` });
+      put("linked-dir", text);
+      const r = await load();
+      expect(r.patterns).toEqual([]);
+      expect(r.dropped).toEqual([{ slug: "linked-dir", cause: "evidence" }]);
+      expect(JSON.stringify(r.evidenceEntries)).not.toContain("OUTSIDE-SECRET");
+      expect(r.droppedEvidence).toEqual([{ cause: "unreadable", count: 5 }]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("per-key attrition is reported by cause, once per distinct learning, and the page survives", async () => {
+    mkdirSync(join(root, "knowledge-base/project/learnings/archive"), { recursive: true });
+    writeFileSync(join(root, "knowledge-base/project/learnings/archive/old.md"), "# old\n");
+    writeFileSync(join(root, ev(2)), "# L2\n\nreach me at someone@example.test\n");
+    const evList = [...evs(7), "knowledge-base/project/learnings/archive/old.md", "knowledge-base/project/learnings/gone.md"];
+    put("a", pageText({ evidence: `\n${evList.map((p) => `  - ${p}`).join("\n")}` }));
+    put("b", pageText({ evidence: `\n${evList.map((p) => `  - ${p}`).join("\n")}` }));
+    const r = await loadOpenPatterns({ repoRoot: root, piiRegex: PII, retiredPaths: new Set([ev(3)]) });
+    expect(r.open).toBe(2);
+    const by = Object.fromEntries(r.droppedEvidence.map((d) => [d.cause, d.count]));
+    expect(by).toEqual({ archived: 1, retired: 1, pii: 1, unreadable: 1 });
+  });
+
+  it("an absent patterns directory is reported as unreadable, distinct from 'no open page'", async () => {
+    rmSync(join(root, PATTERNS_DIR), { recursive: true });
+    expect((await load()).dirReadable).toBe(false);
+    mkdirSync(join(root, PATTERNS_DIR));
+    expect(await load()).toMatchObject({ dirReadable: true, open: 0 });
+  });
+
+  it("a file name that is not a valid slug is reported as the constant invalid-slug, never raw", async () => {
+    writeFileSync(join(root, PATTERNS_DIR, "ops@jikigai.test.md"), pageText());
+    writeFileSync(join(root, PATTERNS_DIR, "Has Space.md"), "---\ntitle: x\n---\n");
+    const r = await load();
+    expect(r.dropped.map((d) => d.slug)).toEqual(["invalid-slug", "invalid-slug"]);
+    expect(JSON.stringify(r.dropped)).not.toContain("ops@");
+  });
+
+  it("a symlinked PAGE file and an oversized page are dropped as schema", async () => {
+    writeFileSync(join(root, "real-page.md"), pageText());
+    symlinkSync(join(root, "real-page.md"), join(root, PATTERNS_DIR, "linked-page.md"));
+    put("huge", pageText({}, `## Root cause\n${"x".repeat(MAX_PAGE_BYTES)}\n`));
+    const r = await load();
+    expect(r.patterns).toEqual([]);
+    expect(r.dropped.map((d) => `${d.slug}:${d.cause}`).sort()).toEqual(["huge:schema", "linked-page:schema"]);
+  });
+
+  it("pages load in sorted file-name order (z created first)", async () => {
+    put("z-first", pageText());
+    put("a-second", pageText());
+    expect((await load()).patterns.map((p) => p.slug)).toEqual(["a-second", "z-first"]);
+  });
+
+  it("an evidence file that is gone is attrition, not a crash", async () => {
+    rmSync(join(root, ev(8)));
+    put("a", pageText({ evidence: `\n${[...evs(5), ev(8)].map((p) => `  - ${p}`).join("\n")}` }));
+    const r = await load();
+    expect(r.open).toBe(1);
+    expect(r.droppedEvidence).toEqual([{ cause: "unreadable", count: 1 }]);
+  });
+});
+
+describe("patternsPayloadBytes", () => {
+  it("equals the byte size of the rendered index plus the fenced evidence tail it measures", async () => {
+    put("a", pageText());
+    const { patterns, evidenceEntries } = await load();
+    const nonce = "0".repeat(16);
+    const tail =
+      renderPatternIndex(patterns, nonce) +
+      "\n\n" +
+      evidenceEntries.map((e) => fenceBlock(nonce, `learning ${e.path}`, e.summary)).join("\n\n");
+    expect(patternsPayloadBytes(patterns, evidenceEntries)).toBe(Buffer.byteLength(tail, "utf8"));
+    expect(patternsPayloadBytes(patterns, evidenceEntries)).toBeGreaterThan(Buffer.byteLength(JSON.stringify(evidenceEntries), "utf8"));
   });
 });

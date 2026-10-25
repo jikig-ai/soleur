@@ -16,6 +16,7 @@ import {
   LEDGER_BOT_LOGIN,
   LEDGER_MAX_SEARCH_PAGES,
   LEDGER_TTL_DAYS,
+  PROMOTE_BRANCH_PREFIX,
   LedgerReadError,
   PROMOTE_PR_TITLE_RE,
   decideSuppression,
@@ -35,6 +36,7 @@ const H2 = hex("b");
 const OWNER = "acme-org";
 const REPO = "widgets";
 const Q = `repo:${OWNER}/${REPO} is:pr head:self-healing/auto-`;
+const mkItems = (n: number) => Array.from({ length: n }, () => item({ hash: hex("0") }));
 
 type Item = {
   title: string;
@@ -163,13 +165,18 @@ describe("readLedger", () => {
     expect(decideSuppression({ entries: r.entries, hash: H2, now: NOW })).toBe(true);
   });
 
-  it("499 items pass; a full 5th page (500) throws page-cap", async () => {
-    const mk = (n: number) => Array.from({ length: n }, () => item({ hash: hex("0") }));
-    const ok = fakeOctokit([mk(100), mk(100), mk(100), mk(100), mk(99)]);
-    expect((await read(ok.octokit)).scanned).toBe(499);
-    const cap = fakeOctokit([mk(100), mk(100), mk(100), mk(100), mk(100)], { total_count: 500 });
+  it("999 items pass; a full 10th page (1,000) throws page-cap", async () => {
+    const nine = Array.from({ length: 9 }, () => mkItems(100));
+    const ok = fakeOctokit([...nine, mkItems(99)]);
+    expect((await read(ok.octokit)).scanned).toBe(999);
+    const cap = fakeOctokit([...nine, mkItems(100)], { total_count: 1000 });
     expect(await causeOf(read(cap.octokit))).toBe("page-cap");
-    expect(LEDGER_MAX_SEARCH_PAGES).toBe(5);
+    expect(LEDGER_MAX_SEARCH_PAGES).toBe(10);
+  });
+
+  it("the query's head: prefix is the shared branch prefix the apply step builds on", () => {
+    expect(PROMOTE_BRANCH_PREFIX).toBe("self-healing/auto-");
+    expect(Q).toContain(`head:${PROMOTE_BRANCH_PREFIX}`);
   });
 
   it.each([
@@ -199,14 +206,34 @@ describe("readLedger", () => {
     expect(await causeOf(read(fakeOctokit([[missing]]).octokit))).toBe("unparseable");
   });
 
+  it("an item without a pull_request object, or with a state other than open/closed -> unparseable (a merged PR must not degrade to a 60-day closed one)", async () => {
+    const noPr = { ...item({ state: "closed", closedAt: "2026-01-01T00:00:00Z" }) } as Partial<Item>;
+    delete noPr.pull_request;
+    expect(await causeOf(read(fakeOctokit([[noPr as Item]]).octokit))).toBe("unparseable");
+    const weird = { ...item({}), state: "merged" } as unknown as Item;
+    expect(await causeOf(read(fakeOctokit([[weird]]).octokit))).toBe("unparseable");
+  });
+
+  it("closed_at must look like an ISO timestamp, not merely parse", async () => {
+    for (const bad of ["2026", "1", "Jan 5 2026"]) {
+      expect(await causeOf(read(fakeOctokit([[item({ state: "closed", closedAt: bad })]]).octokit)), bad).toBe("unparseable");
+    }
+  });
+
   it("a malformed response or item -> unparseable", async () => {
     expect(await causeOf(read(fakeOctokit([[]], { data: { items: "nope" } }).octokit))).toBe("unparseable");
     expect(await causeOf(read(fakeOctokit([[]], { data: { items: [], total_count: "3" } }).octokit))).toBe("unparseable");
     expect(await causeOf(read(fakeOctokit([[{ nope: 1 } as unknown as Item]]).octokit))).toBe("unparseable");
   });
 
-  it("raw hits with none matching the bot identity and title shape -> drift", async () => {
-    expect(await causeOf(read(fakeOctokit([[item({ login: "a-human" })]]).octokit))).toBe("drift");
+  it("foreign-only hits (a fork or human PR on the branch prefix) read as an empty ledger, never as drift", async () => {
+    const r = await read(fakeOctokit([[item({ login: "a-human" }), item({ login: "another-bot[bot]", hash: H2 })]]).octokit);
+    expect(r).toEqual({ entries: [], scanned: 2, titleSkipped: 0 });
+  });
+
+  it("a foreign PR does not hide a real bot entry beside it", async () => {
+    const r = await read(fakeOctokit([[item({ login: "a-human", hash: H1 }), item({ hash: H2 })]]).octokit);
+    expect(r.entries).toEqual([{ hash: H2, state: "open" }]);
   });
 
   it("every bot PR carrying a drifted title -> drift (nothing usable is not 'nothing to suppress')", async () => {
@@ -224,6 +251,7 @@ describe("readLedger", () => {
     const { octokit } = fakeOctokit([[item({ hash: H1, login: "a-human" }), item({ hash: H2 })]]);
     const r = await read(octokit);
     expect(r.entries.map((e) => e.hash)).toEqual([H2]);
+    expect(r.scanned).toBe(2);
   });
 
   it("a title that differs only in case or by trailing whitespace is skipped, not matched", async () => {
@@ -264,6 +292,19 @@ describe("decideSuppression (table-driven)", () => {
     ["unparseable closed_at on a hand-built entry fails closed", [{ hash: H1, state: "closed", closed_at: "garbage" }], H1, true],
   ])("%s", (_n, entries, hash, expected) => {
     expect(decideSuppression({ entries, hash, now: NOW })).toBe(expected);
+  });
+
+  it("suppression is the EXACT hash: hashes differing only in the last character do not suppress each other", () => {
+    const near = H1.slice(0, 63) + "b";
+    expect(near).not.toBe(H1);
+    expect(decideSuppression({ entries: [{ hash: near, state: "open" }], hash: H1, now: NOW })).toBe(false);
+    expect(decideSuppression({ entries: [{ hash: H1, state: "open" }], hash: near, now: NOW })).toBe(false);
+  });
+
+  it("an unusable clock (Invalid Date) fails closed for a matching closed entry and never suppresses a non-matching one", () => {
+    const bad = new Date("not-a-date");
+    expect(decideSuppression({ entries: [closed(120)], hash: H1, now: bad })).toBe(true);
+    expect(decideSuppression({ entries: [closed(120)], hash: H2, now: bad })).toBe(false);
   });
 
   it("the TTL constant is 60 days", () => {

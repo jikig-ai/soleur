@@ -50,7 +50,9 @@ describe("KB API security", () => {
     const kbReader = resolve(__dirname, "../server/kb-reader.ts");
     const content = readFileSync(kbReader, "utf-8");
 
-    expect(content).toContain("engines: {}");
+    // `engines: {}` alone does not disable the js engine (gray-matter merges it over its defaults);
+    // the behavioural proof is in kb-reader.test.ts. Pin that the js engine is overridden here.
+    expect(content).toMatch(/engines:\s*\{\s*js:/);
   });
 
   it("no KB route handler exposes absolute paths in responses", () => {

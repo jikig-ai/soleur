@@ -645,14 +645,21 @@ row carries `component: "compound-promote"` (emitter:
 
 Six further fields appear **only on a manual run with `input:"patterns"`** (ADR-299);
 the scheduled row's field set is unchanged, so their absence is the normal shape for
-`trigger: "cron"`: `input_source` (`corpus` | `patterns`), `patterns_open` (count of open
+`trigger: "cron"`: `input_source` (`patterns`; never emitted on the corpus arm), `patterns_open` (count of open
 pattern pages loaded), `ledger_read` (`ok` | `failed`; `failed` rides a `status: "error"`
 row), `ledger_suppressed` (clusters dropped because the same recomputed hash was already
 proposed, each also a `ledger-suppressed` entry in `refusals[]` / `refusal_detail[]`),
 `ledger_prs_scanned` (the raw GitHub search hit count, before title and author filtering)
 and `ledger_title_skipped` (bot-authored search items skipped because the title did not
-match the anchored promote-cluster title pattern; warn-level, never fails the read; a
-human-retitled PR stops suppressing). All six are numbers or closed enums. How to read
+match the anchored promote-cluster title pattern; warn-level, does not fail by itself, but if
+every bot PR was retitled the read fails `drift`; a human-retitled PR stops suppressing). The
+early terminal rows `disabled`, `deduped` and `week-cap-reached` carry ONLY `input_source`. All six
+are numbers or closed enums. The ledger read has a usable ceiling of 999 search hits (10 pages of
+100, and a full last page throws `page-cap`). On a failed read the marker has no cause field:
+after Inngest retries (`retries:1`) it shows `status=error`, `ledger_read=failed`,
+`error_class=LedgerReadError` and a static `error_message`; the seven causes (`http-5xx`,
+`rate-limit`, `page-cap`, `incomplete`, `unparseable`, `drift`, `transport`) are the Sentry `cause`
+tag on op `ledger-read-failed`. How to read
 them: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The `input`
 option and the patterns-path marker fields".
 
@@ -670,6 +677,20 @@ doppler run -p soleur -c prd_terraform -- \
                           + ":hdr=\(if .diff_header_pair == null then "-" else .diff_header_pair end)"
                           + ":hunk=\(if .diff_hunk == null then "-" else .diff_hunk end)")
                     | join(" | "))] | @tsv'
+```
+
+The six patterns-path fields are top-level keys of the decoded `.message` object, so they need no
+extra decoding. Copy-paste recipe (rows from a manual `input:"patterns"` run only; a row with
+`-` in every column on a manual trigger means the option did not reach the handler):
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
+  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?).message
+              | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote" and .trigger == "manual")
+              | [$r.dt, .status, (.input_source//"-"), (.patterns_open//"-"), (.ledger_read//"-"),
+                 (.ledger_suppressed//"-"), (.ledger_prs_scanned//"-"), (.ledger_title_skipped//"-"),
+                 (.error_class//"-")] | @tsv'
 ```
 
 Reading it:
@@ -727,6 +748,8 @@ Reading it:
   | reason | what actually happened | probe class |
   |---|---|---|
   | `quorum-not-met` | the cluster had fewer than `PROMOTION_QUORUM` (5) distinct corpus-resolved source learnings; refused before the target file is read and before the phase-2 model call (the draft step's API-key check and always-loaded read still run first; ADR-092 Amendment 2026-10-20). Sentry tags `reason=quorum-not-met`, `cause=below-quorum`; `extra.source_count` (distinct resolved) and `extra.proposed_count` (the model's raw list length) are bare integers, also present on the mirrored error row (key `cluster_hash`), not on the `hash`-keyed warn line | N |
+  | `ledger-suppressed` | patterns arm only: the cluster's recomputed hash is already proposed (open, merged, or closed unmerged within 60 days). Counted in `ledger_suppressed`; `clusters_proposed` stays pre-suppression. The model's clusters are sliced to the week-cap `remaining` before suppression, so a repeated suppressed cluster can end a week `no-qualifying-clusters` (accepted) | N |
+  | `cluster-duplicate` | patterns arm only: a second cluster with the same source set in one run | N |
 
   `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` can no longer fire
   for a correct server derivation (the diff touches only the declared target, removes nothing, and cannot mint

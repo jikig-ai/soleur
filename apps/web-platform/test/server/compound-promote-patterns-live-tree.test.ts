@@ -105,7 +105,15 @@ describe("the real pattern tree", () => {
   const names = existsSync(dir) ? readdirSync(dir).filter((n) => n.endsWith(".md")).sort() : [];
   const tracked = trackedLearnings();
 
+  // The seeded pages, by name: an emptied or renamed tree must not read as a pass (`it.each([])` registers nothing).
+  const SEEDED = ["early-exit-reader-under-pipefail", "failure-signal-never-reaches-a-human", "fixture-cannot-distinguish-the-cases-it-claims", "guard-pins-artifact-not-wiring", "instrument-answers-instead-of-failing", "mutation-score-is-not-predicate-correctness", "verification-scaffolding-carries-the-defect"];
+
+  it("holds the seeded pages (a missing directory or a vanished page fails here, not silently)", () => {
+    for (const slug of SEEDED) expect(names, `missing seed page ${slug}`).toContain(`${slug}.md`);
+  });
+
   it("is within the seed cap and every file is markdown", () => {
+    expect(names.length).toBeGreaterThanOrEqual(3);
     expect(names.length).toBeLessThanOrEqual(SEED_CAP);
     const all = existsSync(dir) ? readdirSync(dir) : [];
     expect(all.filter((n) => !n.endsWith(".md"))).toEqual([]);
