@@ -70,7 +70,7 @@ build_fx() {
     actor="User"; (( i <= bots )) && actor="Bot"
     files='[{"filename":"docs/x.md"}]'; (( i > bots && i <= bots + mach )) && files='[{"filename":"scripts/test-all.sh"}]'
     printf '%s\n' "$files" > "$fx/files-$pr.json"
-    printf '{"merged_at":"2026-10-02T00:00:00Z","merge_commit_sha":"%s"}\n' "$sha" > "$fx/pr-$pr.json"
+    printf '{"merged_at":"2026-10-02T00:00:00Z","merge_commit_sha":"%s","state":"closed"}\n' "$sha" > "$fx/pr-$pr.json"
     conc="success"; [ "$esc" = "$pr" ] && conc="failure"
     printf '{"workflow_runs":[{"conclusion":"%s"}]}\n' "$conc" > "$fx/push-$sha.json"
     # one real job of $mins minutes, one skipped job carrying a huge duration that must NOT count,
@@ -150,7 +150,7 @@ build_fx "$TMP/c4" 0 40; add_light "$TMP/c4" 25 failure
 job40() { jq -n '{jobs:[{name:"test-scripts (1/7)", conclusion:"success", created_at:"2026-10-02T00:00:00Z", started_at:"2026-10-02T00:10:00Z", completed_at:"2026-10-02T00:50:00Z"}]}'; }
 mk_pr_files() {  # <fx> <pr>
   printf '[{"filename":"docs/x.md"}]\n' > "$1/files-$2.json"
-  printf '{"merged_at":"2026-10-02T00:00:00Z","merge_commit_sha":"psha%s"}\n' "$2" > "$1/pr-$2.json"
+  printf '{"merged_at":"2026-10-02T00:00:00Z","merge_commit_sha":"psha%s","state":"closed"}\n' "$2" > "$1/pr-$2.json"
   printf '{"workflow_runs":[{"conclusion":"success"}]}\n' > "$1/push-psha$2.json"
 }
 build_paged_fx() {  # <fx>
@@ -163,7 +163,7 @@ build_paged_fx() {  # <fx>
   for ((i = 1; i <= 10; i++)); do
     pr=$((300 + i)); mk_pr_files "$fx" "$pr"; job40 > "$fx/jobs-$((70000 + i)).json"
     printf '[{"number":%s}]\n' "$pr" > "$fx/head-pb$i.json"
-    runs="$runs{\"id\":$((70000 + i)),\"conclusion\":\"success\",\"actor\":{\"type\":\"User\"},\"pull_requests\":[],\"head_branch\":\"pb$i\"},"
+    runs="$runs{\"id\":$((70000 + i)),\"conclusion\":\"success\",\"actor\":{\"type\":\"User\"},\"pull_requests\":[],\"head_branch\":\"pb$i\",\"head_repository\":{\"full_name\":\"jikig-ai/soleur\"}},"
   done
   printf '{"workflow_runs":[%s]}\n' "${runs%,}" > "$fx/runs.json"
   runs=""
@@ -178,20 +178,29 @@ expect "pagination + head resolution: 10 head-resolved on page 1 + 15 direct on 
 if grep -q 'page=2' "$TMP/pg1/requests.log"; then pass "a full page 1 triggers a page-2 fetch"; else fail "the probe did not paginate past a full page 1"; fi
 if grep -q 'pulls?head=' "$TMP/pg1/requests.log"; then pass "merged-PR runs resolve through pulls?head="; else fail "no head-branch PR lookup was issued"; fi
 build_fx "$TMP/h1" 20 40
-jq '.workflow_runs += [{id:70001,conclusion:"success",actor:{type:"User"},pull_requests:[],head_branch:"merged-a"}]
-                   | .workflow_runs += [{id:70002,conclusion:"success",actor:{type:"User"},pull_requests:[],head_branch:"no-pr"}]' \
+jq '.workflow_runs += [{id:70001,conclusion:"success",actor:{type:"User"},pull_requests:[],head_branch:"merged-a",head_repository:{full_name:"jikig-ai/soleur"}}]
+                   | .workflow_runs += [{id:70002,conclusion:"success",actor:{type:"User"},pull_requests:[],head_branch:"no-pr",head_repository:{full_name:"jikig-ai/soleur"}}]
+                   | .workflow_runs += [{id:70003,conclusion:"success",actor:{type:"User"},pull_requests:[],head_branch:"fork-br",head_repository:{full_name:"ext-contrib/soleur"}}]' \
    "$TMP/h1/runs.json" > "$TMP/h1/runs.tmp" && mv "$TMP/h1/runs.tmp" "$TMP/h1/runs.json"
 printf '[{"number":555}]\n' > "$TMP/h1/head-merged-a.json"
 printf '[{"filename":"scripts/test-all.sh"}]\n' > "$TMP/h1/files-555.json"
 expect "head resolution: a machinery-touching PR found via head_branch is still excluded" 0 "qualifying_runs=20" "$TMP/h1"
 if grep -q 'pulls?head=jikig-ai:merged-a' "$TMP/h1/requests.log"; then pass "the head lookup names owner:branch"; else fail "no head lookup for merged-a: $(cat "$TMP/h1/requests.log")"; fi
 if grep -q 'pulls?head=jikig-ai:no-pr' "$TMP/h1/requests.log"; then pass "a branch with no PR gets a lookup, then is skipped"; else fail "no head lookup for no-pr"; fi
+if grep -q 'pulls?head=jikig-ai:fork-br' "$TMP/h1/requests.log"; then fail "a fork-head run must never be resolved — its head_branch can collide with a same-repo branch"; else pass "a run whose head_repository is a fork gets no head lookup"; fi
 build_fx "$TMP/d1" 20 40
 # a qualifying PR closed UNMERGED: no merge commit will ever exist, so it must drop out of the escape
 # check rather than pend forever (head-branch resolution makes this state reachable; pre-resolution it
-# was not — the association only existed on open PRs).
-printf '{"merged_at":null,"merge_commit_sha":null,"state":"closed"}\n' > "$TMP/d1/pr-105.json"
+# was not — the association only existed on open PRs). NB: the API still reports the TEST-merge sha in
+# merge_commit_sha on closed-unmerged PRs (verified on #11038) — the discriminator is merged_at=null.
+printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"closed"}\n' > "$TMP/d1/pr-105.json"
 expect "a closed-unmerged qualifying PR drops out of the escape check" 0 "closed unmerged" "$TMP/d1"
+build_fx "$TMP/d2" 20 40
+# the twin state that must NOT drop: an OPEN qualifying PR — its merge_commit_sha is the test merge, no
+# push run can exist for it yet, so it pends (it may merge) rather than disappearing from the arm.
+printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"open"}\n' > "$TMP/d2/pr-105.json"
+printf '{"workflow_runs":[]}\n' > "$TMP/d2/push-tms105.json"
+expect "an open qualifying PR still pends on its future merge-commit push run" 2 "no completed push run" "$TMP/d2"
 if grep -qE 'page=[2-9]' "$TMP/s1/requests.log"; then fail "a short page 1 must not trigger a second-page fetch"; else pass "a short page 1 (<100 runs) does not paginate"; fi
 out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi

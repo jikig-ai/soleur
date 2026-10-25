@@ -44,7 +44,9 @@
 # second PR resolves to the newer one, so the machinery filter reads the newer PR's file set — a touch
 # present only in the newer diff over-includes (conservative: the candidate drops out), a touch present
 # only in the older under-includes (a wrong-direction miss, priced as rare; the alternative — no
-# resolution — is the deadlock above).
+# resolution — is the deadlock above). Only runs whose head_repository is THIS repo are resolved:
+# a fork PR's run carries the fork's branch name, which can collide with a same-repo branch, and
+# head=<owner>:<branch> can never name the fork's own PR anyway.
 #
 # Exit semantics (sweep-followthroughs.sh contract):
 #   0 = PASS    soak holds        1 = FAIL   mean saving too small, or an escape was found
@@ -105,21 +107,24 @@ while (( pages < PAGE_CAP )); do
   raw_n="$(jq -r '.workflow_runs | length' <<<"$resp" 2>/dev/null)"
   [[ "$raw_n" =~ ^[0-9]+$ ]] || fail_api "ci.yml runs (page $pages, malformed body)"
   chunk="$(jq '[.workflow_runs[] | select(.conclusion == "success" and (.actor.type // "") != "Bot")
-               | {id, conclusion, pr: (.pull_requests[0].number // "-"), branch: (.head_branch // "-")}]' <<<"$resp")" \
+               | {id, conclusion, pr: (.pull_requests[0].number // "-"), branch: (.head_branch // "-"),
+                  hrepo: (.head_repository.full_name // "-")}]' <<<"$resp")" \
     || fail_api "ci.yml runs (page $pages, filter failed)"
   runs="$(jq --argjson c "$chunk" '. + $c' <<<"$runs")" || fail_api "ci.yml runs (page $pages, merge failed)"
   (( raw_n < 100 )) && break
 done
 
 n=0; sum_min=0; green_prs=""; qwait_sum=0; qwait_n=0; examined=0
-while read -r id _ pr branch; do
+while read -r id _ pr branch hrepo; do
   [ -n "$id" ] || continue
   (( n < MAX_RUNS && examined < EXAMINE_CAP )) || break
   examined=$((examined + 1))
   # `pull_requests` is empty once the PR merges (see HEAD-BRANCH RESOLUTION above): resolve the run's
   # head_branch back to its PR — `state=all`, because the merged set is exactly what the escape arm needs.
+  # Only same-repo heads: a fork run's head_branch can collide with a same-repo branch name and would
+  # misresolve to the wrong PR (head=<owner>:<branch> cannot see the fork's PR).
   if [[ "$pr" == "-" || -z "$pr" ]]; then
-    [[ "$branch" != "-" && -n "$branch" ]] || continue
+    [[ "$branch" != "-" && -n "$branch" && "$hrepo" == "$REPO" ]] || continue
     pr="$(api "repos/$REPO/pulls?head=${REPO%%/*}:$branch&state=all&per_page=1" --jq '.[0].number // empty')" \
       || fail_api "head-branch PR lookup ($branch)"
     [ -n "$pr" ] || continue
@@ -145,7 +150,7 @@ while read -r id _ pr branch; do
                   | ((.started_at | fromdateiso8601) - (.created_at | fromdateiso8601)) / 60' <<<"$jobs_json")
   n=$((n + 1))
   green_prs="$green_prs $pr"
-done < <(jq -r '.[] | "\(.id) \(.conclusion) \(.pr) \(.branch)"' <<<"$runs")
+done < <(jq -r '.[] | "\(.id) \(.conclusion) \(.pr) \(.branch) \(.hrepo)"' <<<"$runs")
 
 if (( n < MIN_RUNS )); then
   echo "NOT YET: $n qualifying run(s) in $examined candidate(s) across $pages page(s) since $merged_at (need >= $MIN_RUNS)"; exit 2
@@ -155,15 +160,18 @@ mean="$(awk -v s="$sum_min" -v n="$n" 'BEGIN { printf "%.1f", s / n }')"
 qmean="n/a"; (( qwait_n > 0 )) && qmean="$(awk -v s="$qwait_sum" -v n="$qwait_n" 'BEGIN { printf "%.1f", s / n }')"
 echo "qualifying_runs=$n mean_runner_min=$mean baseline=$BASELINE_RUNNER_MIN required_saving=$REQUIRED_SAVING_MIN test_scripts_mean_queue_wait_min=$qmean (queue wait is informational only) candidates_examined=$examined pages=$pages"
 
-# A qualifying PR in one of three states: merged (a merge commit exists — the escape arm checks its push
-# run), open (a merge commit may exist as a test merge, but no main-side push run can — pending, NOT YET),
-# or CLOSED UNMERGED (head-branch resolution admits these; no merge commit will ever exist — dropped,
-# never pending: the PR's verdict was never committed to main, so there is nothing to catch).
+# A qualifying PR in one of three states: merged (state closed + merged_at set — the escape arm checks
+# its push run), open (a merge commit may exist as a test merge, but no main-side push run can —
+# pending, NOT YET), or CLOSED UNMERGED (head-branch resolution admits these; no merge commit will ever
+# exist — dropped, never pending: the PR's verdict was never committed to main, so there is nothing to
+# catch). merge_commit_sha CANNOT be the discriminator: the API reports the TEST-merge sha there for
+# open and closed-unmerged PRs alike (verified on #11038: state=closed, merged_at=null, sha set) — it is
+# null only before the test merge is computed. state=closed + merged_at=null is the drop condition.
 escapes=0; pending=0; dropped=0
 for pr in $green_prs; do
-  meta="$(api "repos/$REPO/pulls/$pr" --jq '"\(.merge_commit_sha // "") \(.state // "")"')" || fail_api "pull $pr merge sha"
-  sha="${meta%% *}"; pstate="${meta##* }"
-  if [[ -z "$sha" && "$pstate" == "closed" ]]; then dropped=$((dropped + 1)); continue; fi
+  meta="$(api "repos/$REPO/pulls/$pr" --jq '"\(.merge_commit_sha // "") \(.state // "") \(.merged_at // "")"')" || fail_api "pull $pr merge sha"
+  sha="${meta%% *}"; rest="${meta#* }"; pstate="${rest%% *}"; pr_merged_at="${rest##* }"
+  if [[ "$pstate" == "closed" && -z "$pr_merged_at" ]]; then dropped=$((dropped + 1)); continue; fi
   [ -n "$sha" ] || { pending=$((pending + 1)); continue; }
   concl="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=push&head_sha=$sha" --jq '.workflow_runs[0].conclusion // empty')" || fail_api "push run for $sha"
   case "$concl" in

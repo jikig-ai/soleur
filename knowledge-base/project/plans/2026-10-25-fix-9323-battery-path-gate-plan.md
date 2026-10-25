@@ -69,9 +69,10 @@ fail. Live verification on 2026-10-25: `qualifying_runs=40 (MAX_RUNS) in 69 cand
    read always, jobs read when it clears the machinery filter) stays inside the sweeper's
    ~1000-requests/hour budget alongside the ≤80-call escape check and ≤6 list calls.
 5. The escape arm handles the third PR state head-branch resolution newly admits: a **closed-unmerged**
-   PR (`merge_commit_sha` null, `state: closed`) is *dropped* — no merge commit will ever exist, so
-   pending it would re-create the deadlock — while an open PR still pends (it may merge) and a merged
-   PR gets its push run checked. The drop count is printed.
+   PR (`state: closed`, `merged_at` null) is *dropped* — no merge commit will ever exist, so pending it
+   would re-create the deadlock — while an open PR still pends (it may merge) and a merged PR gets its
+   push run checked. The drop count is printed. (`merge_commit_sha` cannot be the discriminator: the API
+   reports the test-merge sha there for open and closed-unmerged PRs alike — verified on #11038.)
 6. Print `candidates_examined=$examined pages=$pages` on the `qualifying_runs=` line and in the
    `NOT YET` message, so a starved sweep is diagnosable from the sweeper comment alone.
 7. Header comments document the starvation measurement, the `pull_requests`-empty-on-merge quirk, and
