@@ -261,6 +261,22 @@ case "$c" in
     esac ;;
   "env -i "*|"cd / && env -i "*)   # the probe's residue-cleanup retry — always exits 0 (idempotent remove)
     exit 0 ;;
+  "docker exec "*)   # the container probe (#8211 PR-E): a web-host command, the probe body on stdin
+    _cm="${SHIM_CONTAINER:-ok}"
+    # SHIM_CONTAINER_ONLY=<host>: only that host gets SHIM_CONTAINER; every other host answers ok (a roster with ONE failing host).
+    if [ -n "${SHIM_CONTAINER_ONLY:-}" ] && [ "$dest" != "$SHIM_CONTAINER_ONLY" ]; then _cm=ok; fi
+    case "$_cm" in
+      noctr)     cat >/dev/null; echo "Error response from daemon: No such container: soleur-web-platform" >&2; exit 1 ;;
+      ok)        printf 'container_probe ok worktree_root=writable transport=answered\n'; exit 0 ;;
+      silent)    exit 0 ;;
+      badline)   printf 'container_probe ok worktree_root=writable transport=answered EXTRA\n'; exit 0 ;;
+      r*)        cat >/dev/null; exit "${_cm#r}" ;;
+      exec)      # run the REAL body in a clean env, the way docker exec would: stdin is the body
+                 exec env -i PATH=/usr/bin:/bin TMPDIR="${CP_TMP:-/tmp}" WORKTREE_ROOT="${CP_WT_ROOT-}" GIT_TRANSPORT_SSH_PRIVATE_KEY="${CP_KEY-}" \
+                   GIT_DATA_SSH_HOST_KEY="${CP_PIN-}" GIT_DATA_SSH_HOST="${CP_HOST-}" GDCP_SSH="${CP_SSH:-ssh}" GDCP_TIMEOUT="${CP_TIMEOUT:-15}" \
+                   GDCP_REPO_ROOT=/mnt/git-data/repositories CP_LOG="${CP_LOG-}" CP_INNER="${CP_INNER-}" CP_KEY="${CP_KEY-}" CP_PIN="${CP_PIN-}" \
+                   CP_NOMOUNT="${CP_NOMOUNT-}" CP_WRAPPER="${CP_WRAPPER-}" sh -s ;;
+    esac ;;
 esac
 exit "${SHIM_REMOTE_RC:-1}"
 SHIM
@@ -381,7 +397,8 @@ ctx() { printf 'rc=%s | out: %s | tl: %s' "$RC" "$(tail -c 600 "$OUT" | tr '\n' 
 
 WEB_PROBE='^ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1\.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20'
 JUMP_PROBE="$WEB_PROBE -W 10\\.0\\.1\\.20:22 10\\.0\\.1\\.10\$"
-KEYED=(WEB_HOST_SSH="$WEB_INV" GIT_DATA_SSH="$GD_INV")
+# CONTAINER_PROBE=1 is what the workflow sets on the flip's proof step only (the CPA rows run without it).
+KEYED=(WEB_HOST_SSH="$WEB_INV" GIT_DATA_SSH="$GD_INV" CONTAINER_PROBE=1)
 
 # mutate <name> <file> <expected-diff-lines> <sed -E program> — copies <file> to $T/mut/<name>,
 # applies the edit, and requires it to have landed on exactly the expected number of diff lines
@@ -716,6 +733,7 @@ ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 tr
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -n -o SOURCE --mountpoint /mnt/git-data
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 r=/mnt/git-data; src=/dev/mapper/git-data; mk=/etc/git-data/store-verified; d=/mnt/git-data/repositories; fz="$r/.cutover-freeze"; s=$(findmnt -n -o SOURCE --mountpoint "$r") || exit 5; [ "$s" = "$src" ] || exit 6; [ ! -e "$fz" ] || exit 23; fu=$(findmnt -n -o UUID --mountpoint "$r") || exit 5; [ -n "$fu" ] || exit 24; [ -f "$mk" ] && [ -s "$mk" ] || exit 21; m=$(head -n 1 "$mk") || exit 16; [ "$m" = "$fu" ] || exit 22; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; dr=$(readlink -f "$d") && rr=$(readlink -f "$r") && t=$(stat -c %m "$dr") || exit 9; [ "$t" = "$rr" ] || exit 8; n=$(find -H "$d" -mindepth 1 -maxdepth 1 ! -name '.*.init.lock' ! -name '.init.lock' ! -name lost+found -printf .) || exit 4; echo "${#n}"
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 h=/mnt/git-data/hooks; p="$h/pre-receive"; src=/dev/mapper/git-data; sp=/mnt/git-data/hooks; w=/usr/local/bin/git-data-transport-wrapper.sh; [ -L "$h" ] && exit 10; [ -d "$h" ] || exit 10; [ -L "$p" ] && exit 12; [ -f "$p" ] && [ -x "$p" ] || exit 12; oh=$(stat -c '%U:%G %a' "$h") || exit 16; op=$(stat -c '%U:%G %a' "$p") || exit 16; [ "$oh" = "root:git 750" ] || exit 11; [ "$op" = "root:root 755" ] || exit 13; pp=$(stat -c '%U %a' "${h%/*}") || exit 16; case "$pp" in "root "[0-7][0145][0145]|"root "[0-7][0-7][0145][0145]) ;; *) exit 19 ;; esac; runuser -u git -- true || exit 16; runuser -u git -- test -r "$p" && runuser -u git -- test -x "$p" || exit 17; v=$(env -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM git config --system --includes --get core.hooksPath); g=$?; [ "$g" -le 1 ] || exit 16; [ "$v" = "$sp" ] || exit 14; grep -qxF -- HOOKS_DIR=\"\$\{GIT_DATA_HOOKS_DIR:-/mnt/git-data/hooks\}\" "$w" && grep -qxF -- exec\ git\ -c\ \"core.hooksPath=\$\{HOOKS_DIR\}\"\ \"\$\{verb#git-\}\"\ \"\$repo_real\" "$w" || exit 18; s=$(findmnt -no SOURCE -T "$h") || exit 5; [ "$s" = "$src" ] || exit 15; s=$(findmnt -no SOURCE -T "$p") || exit 5; [ "$s" = "$src" ] || exit 15; echo ok
+ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 10.0.1.10 docker exec -i -u 1001:1001 -e GDCP_REPO_ROOT=/mnt/git-data/repositories soleur-web-platform sh -s
 EXP
 # case_ac2_timeline <run-name> — the recorded remote timeline equals the expected file exactly.
 case_ac2_timeline() {
@@ -728,7 +746,7 @@ _ac2_diff_rc=$?
 # exits 0 with every store probe ok. A function, so a harness mutant can re-run it.
 case_ac2_clear() {
   [ "$RC" = 0 ] && has_store store-mounted ok && has_store store-on-mapper ok && has_store store-verified ok \
-    && has_store store-empty ok && has_store fence-shape ok \
+    && has_store store-empty ok && has_store fence-shape ok && has_store container-probe ok \
     && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT"
 }
 if case_ac2_clear; then
@@ -737,9 +755,9 @@ else fail "AC2: the canonical read-only proof did not exit 0 clear" "$(ctx)"; fi
 if [ "$_ac2_diff_rc" = 0 ]; then
   pass "AC2: diff of the recorded remote timeline against the expected file is empty (web, jump, auth, findmnt, the store session, fence — nothing else)"
 else fail "AC2: the remote timeline differs from the expected file" "$(tr '\n' '|' < "$T/ac2.diff" | cut -c1-500)"; fi
-if [ "$(grep '^timeout ' "$TLF" | paste -sd' ' -)" = "timeout 30 timeout 25 timeout 30 timeout 30 timeout 30 timeout 30" ] \
-   && [ "$(grep -c '^ssh-stdin /dev/null$' "$TLF")" = 6 ] && [ "$(grep -c '^ssh-stdin ' "$TLF")" = 6 ]; then
-  pass "AC2/G5: every remote call is bounded (30/25/30/30/30/30) with stdin /dev/null"
+if [ "$(grep '^timeout ' "$TLF" | paste -sd' ' -)" = "timeout 30 timeout 25 timeout 30 timeout 30 timeout 30 timeout 30 timeout 90" ] \
+   && [ "$(grep -c '^ssh-stdin /dev/null$' "$TLF")" = 6 ] && [ "$(grep -c '^ssh-stdin ' "$TLF")" = 7 ]; then
+  pass "AC2/G5: every remote call is bounded (30/25/30/30/30/30, then the container probe's 90) and the six reads have stdin /dev/null; the one other call carries the probe body"
 else fail "AC2/G5: a remote call lost its bound or its /dev/null stdin" "$(tr '\n' '|' < "$TLF" | cut -c1-500)"; fi
 if [ "$(grep -E '^::' "$OUT")" = "::notice title=git-data-cutover access::role=web verdict=ok
 ::notice title=git-data-cutover access::role=git-data-jump verdict=ok
@@ -749,8 +767,9 @@ if [ "$(grep -E '^::' "$OUT")" = "::notice title=git-data-cutover access::role=w
 ::notice title=git-data-cutover store::probe=store-verified verdict=ok
 ::notice title=git-data-cutover store::probe=store-empty verdict=ok
 ::notice title=git-data-cutover store::probe=fence-shape verdict=ok
+::notice title=git-data-cutover store::probe=container-probe verdict=ok
 ::notice title=git-data-cutover store::verdict=clear" ] && ! grep -q '/dev/mapper' "$OUT"; then
-  pass "AC2: exactly nine ::notice annotations of fixed words; the captured device name is never printed"
+  pass "AC2: exactly ten ::notice annotations of fixed words; the captured device name is never printed"
 else fail "AC2: annotation set differs, or the captured value was printed" "$(grep -E '^::|/dev/mapper' "$OUT" | tr '\n' '|' | sed 's/::/: :/g')"; fi
 
 # ── GUARD 2 — store probes fail closed ────────────────────────────────────────────────
@@ -787,7 +806,8 @@ case_verb_census() { # <script>
   # strings (systemctl/rm/flock/runuser run on git-data via gd_exec, never on this host).
   # The census exempts those function bodies; a mutating verb anywhere else — or a
   # resurrected deleted-function name ANYWHERE — still trips it.
-  code="$(sed -E 's/^[[:space:]]*#.*$//; s/[[:space:]]+# .*$//' "$1" | awk '
+  # The one exact line naming the app container (#8211 PR-E container probe constant) is exempt, as in git-data-luks.test.sh's A12 census.
+  code="$(sed -E 's/^[[:space:]]*#.*$//; s/[[:space:]]+# .*$//' "$1" | grep -vxF 'CONTAINER_PROBE_APP_NAME="soleur-web-platform"' | awk '
     /^(mode_freeze|mode_unfreeze|mode_probe|probe_freeze|require_lineage|gd_exec)\(\) \{/ {skip=1; next}
     skip && /^\}/ {skip=0; next}
     !skip' | grep -vE '^[[:space:]]*$')"
@@ -1417,7 +1437,7 @@ case_capture_census() { # <script>
   # invocation. gd_exec (PR2) is the write twin of gd_capture — same bound, same pin, no
   # stdout acceptance — so it joins the allowlist.
   outside="$(printf '%s\n' "$code" | awk '
-    /^(access_gate|gd_capture|gd_exec|resolve_roster)\(\) \{/ {skip=1; next}
+    /^(access_gate|gd_capture|gd_exec|web_exec|resolve_roster)\(\) \{/ {skip=1; next}
     skip && /^\}/ {skip=0; next}
     !skip' | grep -nE '"\$\{(inv|gdinv)\[@\]\}"|\$\{?GIT_DATA_SSH|\$\{?WEB_HOST_SSH' || true)"
   # every call FORM in command position (line-leading, after ; & | ( { ! or $( , after if/then/do/else/while/until/elif, as in
@@ -1941,8 +1961,8 @@ check("AC9: key fetch binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_GIT_DA
 cf = step("ssh_config")
 check("WF-sshcfg: the ssh_config writer has no env: and is gated to host-touching modes", bool(cf) and "env" not in cf and "!= 'redeploy'" in str(cf.get("if")), cf.get("if"))
 r = step("host_proof")
-check("WF6: the host-side proof step binds {WEB_HOSTS, GIT_DATA_SSH, MODE=proof, CUTOVER_LINEAGE=cutover-<run_id>}",
-      r.get("env") == {"WEB_HOSTS": "${{ env.WEB_HOST_PRIVATE_IP }}", "GIT_DATA_SSH": "ssh -F ${{ runner.temp }}/gd-ssh-config", "MODE": "proof", "CUTOVER_LINEAGE": "cutover-${{ github.run_id }}"}, r.get("env"))
+check("WF6: the host-side proof step binds {WEB_HOSTS, GIT_DATA_SSH, MODE=proof, CUTOVER_LINEAGE=cutover-<run_id>, CONTAINER_PROBE=1 for the flip only}",
+      r.get("env") == {"WEB_HOSTS": "${{ env.WEB_HOST_PRIVATE_IP }}", "GIT_DATA_SSH": "ssh -F ${{ runner.temp }}/gd-ssh-config", "MODE": "proof", "CUTOVER_LINEAGE": "cutover-${{ github.run_id }}", "CONTAINER_PROBE": "${{ steps.confirm.outputs.mode == 'flip' && '1' || '' }}"}, r.get("env"))
 check("WF10: the proof step runs the script, mode-gated to proof|flip — unfreeze is EXCLUDED (the proof refuses a held sentinel, which is unfreeze's only reason to exist)",
       str(r.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh"
       and "proof" in str(r.get("if")) and "'unfreeze'" not in str(r.get("if")), (r.get("run"), r.get("if")))
@@ -2766,6 +2786,304 @@ elif case_fu "$T/steps/unfreeze.sh"; then
   pass "FU: the unfreeze step body, EXECUTED — exit 0 stays 0 with no output, exit 6 stays 6 and publishes gc_timer_failed=1, exit 5 stays 5 and publishes nothing"
 else fail "FU: the executed unfreeze step misreported the script's rc" "$FU_WHY"; fi
 
+# ── CP — the container probe (#8211 PR-E): the worktree root and the transport, read from INSIDE the app container ──
+# Two layers. (1) the host verb: a `docker exec` shim answers by exit code, so every rc -> verdict mapping, the bad-answer refusal
+# and the ordering (after the fence probe, never before) are driven alone. (2) the REAL container body (git-data-container-probe.sh)
+# EXECUTED through the same shim (SHIM_CONTAINER=exec), against a synthesized worktree root and an inner `ssh` shim, so the exit codes the
+# host maps are the ones the body really produces, and the key never leaves its 0600 scratch file.
+CPBODY="$DIR/git-data-container-probe.sh"
+WRAPPER_SRC="$DIR/git-data-transport-wrapper.sh"
+[ -s "$CPBODY" ] || { printf 'FAIL SETUP: %s not found\n' "$CPBODY" >&2; exit 1; }
+CP="$T/cp"; mkdir -p "$CP/wt" "$CP/tmp" || { printf 'FAIL SETUP: cp dirs\n' >&2; exit 1; }
+CP_KEYCANARY='-----BEGIN OPENSSH PRIVATE KEY-----CANARY-CP-KEY-7c1e'
+CP_PINV='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICPFIXTUREPINCPFIXTUREPINCPFIXTUREPIN00000'
+cat > "$CP/inner-ssh" <<'SHIM'
+#!/usr/bin/env bash
+# The inner ssh the container body dials: logs argv, checks the credential files it was handed, then answers per CP_INNER.
+printf 'inner %s\n' "$*" >> "$CP_LOG"
+[ "$(readlink /proc/$$/fd/0)" = /dev/null ] && printf 'inner-stdin devnull\n' >> "$CP_LOG"
+kf=""; kh=""
+for a in "$@"; do
+  case "$a" in
+    UserKnownHostsFile=*) kh="${a#UserKnownHostsFile=}" ;;
+  esac
+done
+while [ $# -gt 0 ]; do [ "$1" = -i ] && kf="$2"; shift; done
+if [ -n "$kf" ] && [ "$(stat -c %a "$kf")" = 600 ] && [ "$(head -n 1 "$kf")" = "$CP_KEY" ] && [ -n "$kh" ] && [ "$(cat "$kh")" = "git-data $CP_PIN" ]; then
+  printf 'inner-creds ok\n' >> "$CP_LOG"
+fi
+case "${CP_INNER:-answer}" in
+  answer)   echo "remote: git-data transport: repo does not exist (provision it first): '/mnt/git-data/repositories/cutover-container-probe-absent.git'" >&2; exit 1 ;;
+  frozen)   echo "remote: git-data transport: store is frozen for cutover (/mnt/git-data/.cutover-freeze present) — retry after the cutover (fail-closed)" >&2; exit 1 ;;
+  wrapper)  # the REAL transport wrapper, its mount root a path that is not a mount: its first refusal speaks
+            SSH_ORIGINAL_COMMAND="${!#}" GIT_DATA_MOUNT_ROOT="$CP_NOMOUNT" GIT_DATA_REPO_ROOT="$CP_NOMOUNT/repositories" bash "$CP_WRAPPER"; exit $? ;;
+  timeout)  echo "ssh: connect to host 10.0.1.20 port 22: Connection timed out" >&2; exit 255 ;;
+  banner)   echo "Connection timed out during banner exchange" >&2; exit 255 ;;
+  refused)  echo "ssh: connect to host 10.0.1.20 port 22: Connection refused" >&2; exit 255 ;;
+  noroute)  echo "ssh: connect to host 10.0.1.20 port 22: No route to host" >&2; exit 255 ;;
+  denied)   echo "git@10.0.1.20: Permission denied (publickey)." >&2; exit 255 ;;
+  hostkey)  echo "Host key verification failed." >&2; exit 255 ;;
+  other)    echo "ssh: something nobody classified" >&2; exit 255 ;;
+  closed)   echo "Connection closed by 10.0.1.20 port 22" >&2; exit 255 ;;
+  reset)    echo "kex_exchange_identification: read: Connection reset by peer" >&2; exit 255 ;;
+  optiontext) echo "command-line: line 0: Bad configuration option: ConnectTimeoutX" >&2; exit 255 ;;
+  optimedout) echo "ssh: connect to host 10.0.1.20 port 22: Operation timed out" >&2; exit 255 ;;
+  hang)     exec sleep 30 ;;
+esac
+SHIM
+chmod +x "$CP/inner-ssh" || { printf 'FAIL SETUP: chmod inner ssh\n' >&2; exit 1; }
+CP_DOCKER_LINE='^ssh .* -l root -o BatchMode=yes -o ConnectTimeout=20 10\.0\.1\.10 docker exec -i -u 1001:1001 -e GDCP_REPO_ROOT=/mnt/git-data/repositories soleur-web-platform sh -s$'
+cp_run() { # <name> [VAR=value ...] — the proof with every earlier probe clearing, the container probe answering per SHIM_CONTAINER
+  run_case "cp-$1" "${KEYED[@]}" "${@:2}"
+}
+cp_word() { grep -qxF "[git-data-cutover] STORE probe=container-probe verdict=$1" "$OUT"; }
+case_cp_ok() {
+  cp_run ok && [ "$RC" = 0 ] && cp_word ok && [ "$(grep -cE "$CP_DOCKER_LINE" "$TLF")" = 1 ] \
+    && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT" \
+    && [ "$(tl_line "$CP_DOCKER_LINE")" -gt "$(tl_line '^ssh .* 10\.0\.1\.20 h=/mnt/git-data/hooks')" ]
+}
+case_cp_refuses() { # <label> <SHIM_CONTAINER value> <verdict tail> — exit 5, the word, and no clear
+  run_case "cp-$1" "${KEYED[@]}" SHIM_CONTAINER="$2"
+  [ "$RC" = 5 ] && cp_word "$3" && ! grep -qF 'verdict=clear' "$OUT"
+}
+case_cp_nowrite() { case_cp_refuses nowrite r21 worktree_root_not_writable; }
+case_cp_blackhole() { case_cp_refuses blackhole r24 'container_egress_blackhole reason=timeout'; }
+case_cp_silent() { case_cp_refuses silent silent 'probe_failed reason=bad_answer'; }
+if case_cp_ok; then pass "CP1: the proof, all probes clearing -> probe=container-probe verdict=ok, exit 0; ONE docker exec on web-1 as uid 1001 with the repo root, dialed AFTER the fence probe"
+else fail "CP1: the container probe did not clear, or was not dialed once after the fence probe" "$(ctx)"; fi
+for spec in "r21|worktree_root_not_writable" \
+            "r24|container_egress_blackhole reason=timeout" "r25|container_egress_blackhole reason=refused" \
+            "r22|probe_failed reason=scratch" "r23|probe_failed reason=transport_env_absent" "r26|probe_failed reason=auth_refused" \
+            "r27|probe_failed reason=host_key" "r28|probe_failed reason=unclassified" \
+            "r29|probe_failed reason=ssh_unrunnable" "r30|probe_failed reason=ssh_closed" \
+            "r1|probe_failed rc=1" "r255|probe_failed rc=255" "r124|probe_failed rc=124" \
+            "silent|probe_failed reason=bad_answer" "badline|probe_failed reason=bad_answer"; do
+  IFS='|' read -r _mode _want <<< "$spec"
+  if case_cp_refuses "m-$_mode" "$_mode" "$_want"; then pass "CP2 ($_mode): the container body's answer -> $_want, exit 5, no clear"
+  else fail "CP2 ($_mode): expected $_want" "$(ctx)"; fi
+done
+run_case cp-early "${KEYED[@]}" SHIM_FINDMNT=rc1
+if [ "$RC" = 5 ] && ! grep -q 'probe=container-probe' "$OUT" && ! grep -q 'docker exec' "$TLF"; then
+  pass "CP3: an earlier refusal stops the proof before the container probe is dialed"
+else fail "CP3: the container probe ran after an earlier refusal" "$(ctx)"; fi
+mkdir -p "$T/cp/nobody" && cp "$SCRIPT" "$T/cp/nobody/git-data-cutover.sh" || { printf 'FAIL SETUP: nobody dir\n' >&2; exit 1; }
+CASE_SCRIPT="$T/cp/nobody/git-data-cutover.sh" cp_run nobody
+if [ "$RC" = 5 ] && cp_word 'probe_failed reason=arg_body' && ! grep -q 'docker exec' "$TLF"; then
+  pass "CP4: the probe body missing next to the script -> probe_failed reason=arg_body, exit 5, nothing dialed on the web host"
+else fail "CP4: a missing probe body was not refused" "$(ctx)"; fi
+cp_run roster WEB_HOSTS="10.0.1.10 10.0.1.11"
+if [ "$RC" = 0 ] && [ "$(grep -c 'docker exec' "$TLF")" = 2 ] && grep -qE '^ssh .* 10\.0\.1\.11 docker exec ' "$TLF"; then
+  pass "CP5: a two-host roster runs the container probe on each host (the loop is the roster, not web-1 alone)"
+else fail "CP5: the container probe did not cover the roster" "$(ctx)"; fi
+
+# CPA — scope (#8211 PR-E review): the probe runs only when the workflow sets CONTAINER_PROBE=1, on the flip's proof step alone. The proof
+# that reads a clear after a rollback redeploy (flag off, container possibly mid-recreate, egress intentionally unused) must not read the container.
+case_cpa_skip() { # a FAILING container shim must not refuse a proof that did not ask for the probe
+  run_case cpa-skip "${KEYED[@]}" CONTAINER_PROBE= SHIM_CONTAINER=r24
+  [ "$RC" = 0 ] && ! grep -q 'docker exec' "$TLF" && ! grep -q 'probe=container-probe' "$OUT" \
+    && grep -qF '[git-data-cutover] container probe: skipped (CONTAINER_PROBE is not 1' "$OUT" \
+    && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT"
+}
+if case_cpa_skip; then pass "CPA1: mode=proof without CONTAINER_PROBE=1 -> the failing container shim is never dialed, one line says it was skipped and why, the proof clears (exit 0)"
+else fail "CPA1: the container probe ran (or refused) on a proof that did not ask for it" "$(ctx)"; fi
+run_case cpa-other "${KEYED[@]}" CONTAINER_PROBE=true SHIM_CONTAINER=r24
+if [ "$RC" = 0 ] && ! grep -q 'docker exec' "$TLF"; then pass "CPA2: only the exact value 1 arms the probe (CONTAINER_PROBE=true is a skip, not a run)"
+else fail "CPA2: a value other than 1 armed the probe" "$(ctx)"; fi
+cat > "$T/cpa-wf.py" <<'PY'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+steps = [st for job in wf["jobs"].values() for st in job.get("steps", []) if st.get("name", "").startswith("Host-side proof")]
+if len(steps) != 1:
+    print("steps=%d" % len(steps)); sys.exit(1)
+env = steps[0].get("env", {})
+v = env.get("CONTAINER_PROBE")
+ok = v == "${{ steps.confirm.outputs.mode == 'flip' && '1' || '' }}" and env.get("MODE") == "proof"
+others = [st["name"] for job in wf["jobs"].values() for st in job.get("steps", []) if "CONTAINER_PROBE" in (st.get("env") or {}) and st is not steps[0]]
+print("value=%r others=%r" % (v, others))
+sys.exit(0 if ok and not others else 1)
+PY
+case_cpa_wf() { python3 "$T/cpa-wf.py" "${1:-$WF}" > "$T/cpa-wf.out" 2>&1; }
+if case_cpa_wf; then pass "CPA3: the workflow binds CONTAINER_PROBE on the Host-side proof step ONLY, to the expression that is 1 exactly for mode=flip"
+else fail "CPA3: the workflow's CONTAINER_PROBE binding is wrong or bound elsewhere" "$(cat "$T/cpa-wf.out")"; fi
+
+# CP6 — an UNMAPPED rc (docker exec itself failing) goes out as probe_failed rc=<n> WITH the filtered stderr behind its fixed prefix.
+case_cp_unmapped_stderr() {
+  run_case cp-noctr "${KEYED[@]}" SHIM_CONTAINER=noctr
+  [ "$RC" = 5 ] && cp_word 'probe_failed rc=1' && grep -qxF '[git-data-cutover] probe-stderr: Error response from daemon: No such container: soleur-web-platform' "$OUT"
+}
+if case_cp_unmapped_stderr; then pass "CP6: docker exec failing (rc 1, no such container) -> probe_failed rc=1 with its stderr printed behind the fixed probe-stderr prefix"
+else fail "CP6: an unmapped rc lost its diagnostic stderr, or was not probe_failed" "$(ctx)"; fi
+# CP5b — ONE failing host in a two-host roster: host 1 passes, host 2 alone fails and must refuse.
+case_cp_second_host() {
+  run_case cp-host2 "${KEYED[@]}" WEB_HOSTS="10.0.1.10 10.0.1.11" SHIM_CONTAINER=r24 SHIM_CONTAINER_ONLY=10.0.1.11
+  [ "$RC" = 5 ] && cp_word 'container_egress_blackhole reason=timeout' && grep -qF 'container probe: host 10.0.1.10 ok' "$OUT" \
+    && [ "$(grep -c 'docker exec' "$TLF")" = 2 ] && ! grep -qF 'verdict=clear' "$OUT"
+}
+if case_cp_second_host; then pass "CP5b: a two-host roster where ONLY the second host's container fails -> host 1 ok, host 2 container_egress_blackhole, exit 5, no clear (a loop that stops caring after the first host is caught)"
+else fail "CP5b: the second host's failure was not refused" "$(ctx)"; fi
+
+# (2) the REAL body, executed. cpx <name> <SHIM-style VAR=value ...>: a good root, key, pin and host unless overridden (later wins).
+cpx() {
+  local name="$1"; shift
+  rm -rf "$CP/tmp" "$CP/wt"; mkdir -p "$CP/tmp" "$CP/wt"; : > "$CP/log-$name"
+  CP_LOGF="$CP/log-$name"
+  run_case "cpx-$name" "${KEYED[@]}" SHIM_CONTAINER=exec CP_TMP="$CP/tmp" CP_WT_ROOT="$CP/wt" CP_KEY="$CP_KEYCANARY" CP_PIN="$CP_PINV" CP_HOST=10.0.1.20 \
+    CP_SSH="$CP/inner-ssh" CP_LOG="$CP_LOGF" CP_INNER=answer CP_TIMEOUT=15 CP_NOMOUNT="$CP/nomount" CP_WRAPPER="$WRAPPER_SRC" "$@"
+}
+cpx_word() { grep -qxF "[git-data-cutover] STORE probe=container-probe verdict=$1" "$OUT"; }
+case_cpx_ok() {
+  cpx ok && [ "$RC" = 0 ] && cpx_word ok && grep -qxF 'inner-creds ok' "$CP_LOGF" && grep -qxF 'inner-stdin devnull' "$CP_LOGF" \
+    && grep -qE "^inner -F /dev/null -i $CP/tmp/[A-Za-z0-9.]+/k -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o HostKeyAlias=git-data -o HostKeyAlgorithms=ssh-ed25519 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile=$CP/tmp/[A-Za-z0-9.]+/kh -o BatchMode=yes -o ConnectTimeout=5 git@10\.0\.1\.20 git-upload-pack '/mnt/git-data/repositories/cutover-container-probe-absent\.git'\$" "$CP_LOGF" \
+    && [ -z "$(ls -A "$CP/tmp")" ] && [ -z "$(ls -A "$CP/wt")" ] \
+    && ! grep -rqF CANARY-CP-KEY "$OUT" "$TLF" "$CP_LOGF"
+}
+case_cpx_via() { # <label> <expected verdict tail> [VAR=value ...] — the body's real exit code through the host's mapping
+  local label="$1" want="$2"; shift 2
+  cpx "$label" "$@"
+  local want_rc=5; [ "$want" = ok ] && want_rc=0
+  [ "$RC" = "$want_rc" ] && cpx_word "$want" && ! grep -rqF CANARY-CP-KEY "$OUT" "$TLF" "$CP_LOGF" && [ -z "$(ls -A "$CP/tmp")" ]
+}
+if case_cpx_ok; then pass "CPX1: the REAL body, a writable root and a wrapper answer -> ok; the key sat in a 0600 file beside the pinned known_hosts line, ssh got the pinned options, the absent-repo command and /dev/null stdin; the scratch dir and the probe dir are gone; the key text never reached any output"
+else fail "CPX1: the executed container body did not clear cleanly" "$(ctx) log=[$(tr '\n' '|' < "$CP/log-ok" | cut -c1-300)]"; fi
+if case_cpx_via frozen ok CP_INNER=frozen; then pass "CPX2: a frozen-store wrapper refusal also proves reachability, key, pin and wrapper -> ok"
+else fail "CPX2: a frozen-store answer was not accepted as reachable" "$(ctx)"; fi
+if case_cpx_via realwrapper ok CP_INNER=wrapper; then pass "CPX3: the REAL transport wrapper's own refusal text (a store that is not mounted) is recognised as the wrapper answering -> ok"
+else fail "CPX3: the real wrapper's refusal text was not recognised" "$(ctx)"; fi
+printf '#!/bin/sh\nexit 0\n' > "$CP/not-executable" && chmod 644 "$CP/not-executable" || { printf 'FAIL SETUP: not-executable\n' >&2; exit 1; }
+for spec in "noroot|CP_WT_ROOT=$CP/does-not-exist|worktree_root_not_writable" \
+            "relroot|CP_WT_ROOT=relative/dir|worktree_root_not_writable" \
+            "procroot|CP_WT_ROOT=/proc/self|worktree_root_not_writable" \
+            "nokey|CP_KEY=|probe_failed reason=transport_env_absent" \
+            "nopin|CP_PIN=|probe_failed reason=transport_env_absent" \
+            "nohost|CP_HOST=|probe_failed reason=transport_env_absent" \
+            "badhost|CP_HOST=-oProxyCommand=x|probe_failed reason=transport_env_absent" \
+            "timeout|CP_INNER=timeout|container_egress_blackhole reason=timeout" \
+            "banner|CP_INNER=banner|container_egress_blackhole reason=timeout" \
+            "refused|CP_INNER=refused|container_egress_blackhole reason=refused" \
+            "noroute|CP_INNER=noroute|container_egress_blackhole reason=refused" \
+            "denied|CP_INNER=denied|probe_failed reason=auth_refused" \
+            "hostkey|CP_INNER=hostkey|probe_failed reason=host_key" \
+            "other|CP_INNER=other|probe_failed reason=unclassified" \
+            "hang|CP_INNER=hang CP_TIMEOUT=2|container_egress_blackhole reason=timeout" \
+            "optimedout|CP_INNER=optimedout|container_egress_blackhole reason=timeout" \
+            "closed|CP_INNER=closed|probe_failed reason=ssh_closed" \
+            "reset|CP_INNER=reset|probe_failed reason=ssh_closed" \
+            "optiontext|CP_INNER=optiontext|probe_failed reason=unclassified" \
+            "nossh|CP_SSH=/nonexistent/ssh|probe_failed reason=ssh_unrunnable" \
+            "notexec|CP_SSH=$CP/not-executable|probe_failed reason=ssh_unrunnable"; do
+  IFS='|' read -r _id _kv _want <<< "$spec"
+  # shellcheck disable=SC2086  # _kv is one or two VAR=value words, split on purpose
+  if case_cpx_via "$_id" "$_want" $_kv; then pass "CPX4 ($_id): the executed body -> $_want, no key text printed, scratch removed"
+  else fail "CPX4 ($_id): expected $_want" "$(ctx)"; fi
+done
+# The container's sh is dash (debian), which, unlike bash, does NOT run an EXIT trap when a signal kills it: the signal traps are what this row proves.
+CP_DASH="$(command -v dash || command -v sh)"
+case_cpx_term() { # SIGTERM while the dial is in flight: the key file must not outlive the body
+  local bp k=0 rcw
+  rm -rf "$CP/tmp" "$CP/wt"; mkdir -p "$CP/tmp" "$CP/wt"; : > "$CP/log-term"
+  env -i PATH=/usr/bin:/bin TMPDIR="$CP/tmp" WORKTREE_ROOT="$CP/wt" GIT_TRANSPORT_SSH_PRIVATE_KEY="$CP_KEYCANARY" GIT_DATA_SSH_HOST_KEY="$CP_PINV" \
+    GIT_DATA_SSH_HOST=10.0.1.20 GDCP_SSH="$CP/inner-ssh" GDCP_TIMEOUT=30 CP_INNER=hang CP_LOG="$CP/log-term" CP_KEY="$CP_KEYCANARY" CP_PIN="$CP_PINV" \
+    "$CP_DASH" "${CASE_BODY:-$CPBODY}" </dev/null > "$CP/term.out" 2>&1 &
+  bp=$!
+  while [ "$k" -lt 100 ] && [ -z "$(find "$CP/tmp" -name k -type f 2>/dev/null)" ]; do sleep 0.1; k=$((k + 1)); done
+  [ -n "$(find "$CP/tmp" -name k -type f 2>/dev/null)" ] || { kill -KILL "$bp" 2>/dev/null; return 1; }
+  sleep 0.3
+  kill -TERM "$bp" 2>/dev/null
+  rcw=0; wait "$bp" || rcw=$?
+  [ "$rcw" = 143 ] && [ -z "$(ls -A "$CP/tmp")" ] && ! grep -qF CANARY-CP-KEY "$CP/term.out" && [ -z "$(ls -A "$CP/wt")" ]
+}
+# CPX7 — the incident's shape without root: a worktree root the running user cannot create in (mode 0555 stands in for the incident's
+# root-owned directory: CI cannot chown to another uid). Root bypasses the mode, so a root run counts it as SKIPPED, never as a pass.
+case_cpx_readonly() {
+  local ro="$CP/ro" r=0
+  rm -rf "$ro"; mkdir -p "$ro" && chmod 555 "$ro" || return 1
+  case_cpx_via ro worktree_root_not_writable CP_WT_ROOT="$ro" || r=$?
+  chmod 755 "$ro"
+  return "$r"
+}
+if [ "$(id -u)" = 0 ]; then
+  SKIPPED=$((SKIPPED + 1)); printf '  SKIP CPX7: running as root, a 0555 directory is still writable\n'
+elif case_cpx_readonly; then pass "CPX7: an existing worktree root the container user cannot create in (the incident's shape; mode 0555, since CI cannot chown to another uid) -> worktree_root_not_writable"
+else fail "CPX7: a read-only worktree root was not worktree_root_not_writable" "$(ctx)"; fi
+if case_cpx_term; then pass "CPX6: SIGTERM while the dial is in flight -> the body exits 143 and no scratch directory (so no key file) is left, no key text printed"
+else fail "CPX6: a signal left the key file behind (or the body did not exit 143)" "tmp=[$(ls -A "$CP/tmp" 2>/dev/null | tr '\n' ' ')] out=[$(head -c 200 "$CP/term.out" 2>/dev/null)]"; fi
+if grep -qF 'echo "remote: git-data transport: $1" >&2' "$WRAPPER_SRC" && grep -qF 'reject "repo does not exist (provision it first)' "$WRAPPER_SRC" \
+   && grep -qF "grep -qF 'remote: git-data transport:'" "$CPBODY"; then
+  pass "CPX5: the transport wrapper still prefixes every refusal with 'remote: git-data transport:' and still rejects an absent repo, and the probe body keys on exactly that prefix"
+else fail "CPX5: the wrapper's refusal prefix and the probe's needle have drifted apart" "wrapper or body text changed"; fi
+
+# CP mutants. A cutover-script mutant is placed beside a copy of the real body (the script finds its body next to itself); a body mutant is
+# placed beside a copy of the real script.
+cp_mutdir() { # <name> <script-file> <body-file> — prints the script path of a fresh two-file directory
+  local d="$T/mut/cpd-$1"
+  rm -rf "$d"; mkdir -p "$d" && cp "$2" "$d/git-data-cutover.sh" && cp "$3" "$d/git-data-container-probe.sh" || { printf 'FAIL SETUP: cp mutdir %s\n' "$1" >&2; exit 1; }
+  printf '%s/git-data-cutover.sh' "$d"
+}
+# CPA mutants: the skip neutered (the probe then runs on a proof that did not ask for it) and the workflow arming it for every mode.
+if mutate cpa-skip-neutered "$SCRIPT" 2 's#^  if \[ "\$\{CONTAINER_PROBE:-\}" != 1 \]; then$#  if [ "${CONTAINER_PROBE:-}" = never ]; then#'; then
+  CASE_SCRIPT="$(cp_mutdir cpa-skip-neutered "$MUTANT" "$CPBODY")" mutant_red cpa-skip-neutered case_cpa_skip
+fi
+if mutate cpa-wf-always "$WF" 2 "s#CONTAINER_PROBE: \\$\\{\\{ steps\\.confirm\\.outputs\\.mode == 'flip' && '1' \\|\\| '' \\}\\}#CONTAINER_PROBE: '1'#"; then
+  mutant_red cpa-wf-always case_cpa_wf "$MUTANT"
+fi
+# the unmapped-rc arm no longer prints the container's stderr
+if mutate cp-stderr-dropped "$SCRIPT" 2 's#^      \*\) _access_stderr "\$CAPTURE_TMP/capture.err"$#      *) :#'; then
+  CASE_SCRIPT="$(cp_mutdir cp-stderr-dropped "$MUTANT" "$CPBODY")" mutant_red cp-stderr-dropped case_cp_unmapped_stderr
+fi
+# the roster loop only believes the first host
+if mutate cp-first-host-only "$SCRIPT" 2 's#^    web_exec "\$h" "\$cmd" "\$body" 90 \|\| rc=\$\?$#    web_exec "$h" "$cmd" "$body" 90 || rc=$?; [ "$h" = "${WEB_HOST_LIST[0]}" ] || rc=0#'; then
+  CASE_SCRIPT="$(cp_mutdir cp-first-host-only "$MUTANT" "$CPBODY")" mutant_red cp-first-host-only case_cp_second_host
+fi
+# the host: the call dropped from the proof chain
+if mutate cp-call-dropped "$SCRIPT" 2 's#^      refuse_if_container_unready$#      :#'; then
+  CASE_SCRIPT="$(cp_mutdir call-dropped "$MUTANT" "$CPBODY")" mutant_red cp-call-dropped case_cp_nowrite
+fi
+# the answer no longer compared: a body that ran nothing and exited 0 passes
+if mutate cp-answer-unchecked "$SCRIPT" 2 's#^      \|\| _store_refuse container-probe probe_failed "" bad_answer$#      || true#'; then
+  CASE_SCRIPT="$(cp_mutdir answer-unchecked "$MUTANT" "$CPBODY")" mutant_red cp-answer-unchecked case_cp_silent
+fi
+# rc 24 read as an unclassified failure instead of the blackhole
+if mutate cp-blackhole-unmapped "$SCRIPT" 2 's#^      24\) _store_refuse container-probe container_egress_blackhole "" timeout ;;$#      24) _store_refuse container-probe probe_failed "" unclassified ;;#'; then
+  CASE_SCRIPT="$(cp_mutdir blackhole-unmapped "$MUTANT" "$CPBODY")" mutant_red cp-blackhole-unmapped case_cp_blackhole
+fi
+# rc 21 (the worktree root) read as a scratch failure
+if mutate cp-worktree-unmapped "$SCRIPT" 2 's#^      21\) _store_refuse container-probe worktree_root_not_writable ;;$#      21) _store_refuse container-probe probe_failed "" scratch ;;#'; then
+  CASE_SCRIPT="$(cp_mutdir worktree-unmapped "$MUTANT" "$CPBODY")" mutant_red cp-worktree-unmapped case_cp_nowrite
+fi
+# the exec runs as the image default user instead of uid 1001 explicitly
+if mutate cp-user-dropped "$SCRIPT" 2 's#docker exec -i -u 1001:1001 -e#docker exec -i -e#'; then
+  CASE_SCRIPT="$(cp_mutdir user-dropped "$MUTANT" "$CPBODY")" mutant_red cp-user-dropped case_cp_ok
+fi
+# the body: every one of these must turn a named executed row RED
+case_cpx_proc() { case_cpx_via m-proc worktree_root_not_writable CP_WT_ROOT=/proc/self; }
+case_cpx_timeout_hang() { case_cpx_via m-hang 'container_egress_blackhole reason=timeout' CP_INNER=hang CP_TIMEOUT=2; }
+case_cpx_nokey() { case_cpx_via m-nokey 'probe_failed reason=transport_env_absent' CP_KEY=; }
+case_cpx_badhost() { case_cpx_via m-badhost 'probe_failed reason=transport_env_absent' CP_HOST=-oProxyCommand=x; }
+case_cpx_denied() { case_cpx_via m-denied 'probe_failed reason=auth_refused' CP_INNER=denied; }
+case_cpx_refused() { case_cpx_via m-refused 'container_egress_blackhole reason=refused' CP_INNER=refused; }
+case_cpx_hostkey() { case_cpx_via m-hostkey 'probe_failed reason=host_key' CP_INNER=hostkey; }
+cp_body_row() { # <name> <diff-lines> <sed program> <case-fn>
+  if mutate "$1" "$CPBODY" "$2" "$3"; then
+    CASE_BODY="$MUTANT" CASE_SCRIPT="$(cp_mutdir "$1" "$SCRIPT" "$MUTANT")" mutant_red "$1" "$4"
+  fi
+}
+cp_body_row cpb-probe-dir-skipped 4 's#^(mkdir|rmdir) "\$probe_dir" 2>/dev/null \|\| exit 21$#:#' case_cpx_proc
+cp_body_row cpb-timeout-blind 2 's#^if \[ "\$rc" -eq 124 \] \|\| grep#if grep#' case_cpx_timeout_hang
+cp_body_row cpb-env-unchecked 2 's#^if \[ -z "\$key" \] \|\| \[ -z "\$pin" \] \|\| \[ -z "\$host" \]; then exit 23; fi$#if false; then exit 23; fi#' case_cpx_nokey
+cp_body_row cpb-host-unchecked 2 's#^  \*\[!0-9\.\]\*\) exit 23 ;;$#  never) exit 23 ;;#' case_cpx_badhost
+cp_body_row cpb-denied-unclassified 2 "s#grep -qiF 'permission denied'#grep -qiF 'zzz-never'#" case_cpx_denied
+cp_body_row cpb-refused-unclassified 2 's#connection refused\|no route to host#zzz-never#' case_cpx_refused
+cp_body_row cpb-hostkey-unclassified 2 's#host key verification failed\|no matching host key#zzz-never#' case_cpx_hostkey
+cp_body_row cpb-scratch-kept 2 's#^trap cleanup EXIT$#:#' case_cpx_ok
+case_cpx_unrunnable() { case_cpx_via m-unrunnable 'probe_failed reason=ssh_unrunnable' CP_SSH=/nonexistent/ssh; }
+case_cpx_optiontext() { case_cpx_via m-optiontext 'probe_failed reason=unclassified' CP_INNER=optiontext; }
+case_cpx_closed() { case_cpx_via m-closed 'probe_failed reason=ssh_closed' CP_INNER=closed; }
+cp_body_row cpb-unrunnable-unclassified 2 's#^if \[ "\$rc" -eq 126 \] \|\| \[ "\$rc" -eq 127 \]; then exit 29; fi$#:#' case_cpx_unrunnable
+cp_body_row cpb-bare-timeout 2 's#Operation timed out#Operation timed out|timeout#' case_cpx_optiontext
+cp_body_row cpb-closed-as-blackhole 2 's#then exit 30; fi$#then exit 25; fi#' case_cpx_closed
+cp_body_row cpb-term-trap-dropped 2 "s#^trap 'exit 143' TERM\$#:#" case_cpx_term
+cp_body_row cpb-needle-changed 2 "s#grep -qF 'remote: git-data transport:'#grep -qF 'remote: NEVER'#" case_cpx_ok
+
 # ── RB — every store-probe word has a runbook row, and every verdict-map row names a live word ──
 # Scope: the store and fence probes' verdict and reason words (everything through _store_*). The
 # access gate's words and real_cutover_unreconciled do not go through _store_*; they are held to the
@@ -3387,6 +3705,7 @@ elif ! docker info >/dev/null 2>&1; then _runtime_skip "docker daemon unreachabl
 else
   mkdir -p "$T/rt/out" || { printf 'FAIL SETUP: mkdir rt\n' >&2; exit 1; }
   cp "$SCRIPT" "$T/rt/git-data-cutover.sh" || { printf 'FAIL SETUP: cp script\n' >&2; exit 1; }
+  cp "$DIR/git-data-container-probe.sh" "$T/rt/git-data-container-probe.sh" || { printf 'FAIL SETUP: cp probe body\n' >&2; exit 1; }
   cp "$DIR/git-data-transport-wrapper.sh" "$T/rt/wrapper.sh" || { printf 'FAIL SETUP: cp wrapper\n' >&2; exit 1; }
   if [ -s "$T/steps/ssh_config.sh" ]; then cp "$T/steps/ssh_config.sh" "$T/rt/sshcfg.sh"; else : > "$T/rt/sshcfg.sh"; fi
   cp "$WKH" "$T/rt/wkh.sh" || { printf 'FAIL SETUP: cp write-known-hosts.sh\n' >&2; exit 1; }
@@ -3492,7 +3811,16 @@ cat > /usr/local/sbin/find <<'F'
 printf 'find %s\n' "$*" >> /out/remote.log
 exec /usr/bin/find "$@"
 F
-chmod 755 /usr/local/sbin/findmnt /usr/local/sbin/find
+# web-1's docker, for the container probe (#8211 PR-E): the probe body itself is exercised by the CPX rows (the real body, executed);
+# here only the SSH transport to web-1 is real, so this drains the body from stdin and gives the body's one answer line. It logs to
+# /out/docker.log, NOT remote.log: R5b pins remote.log to the git-data reads.
+cat > /usr/local/sbin/docker <<'F'
+#!/bin/bash
+printf '%s\n' "$*" >> /out/docker.log
+cat > /dev/null
+printf 'container_probe ok worktree_root=writable transport=answered\n'
+F
+chmod 755 /usr/local/sbin/findmnt /usr/local/sbin/find /usr/local/sbin/docker
 # The pre-receive fence as git-data-bootstrap.sh plants it (#8101): a root:git 0750 hooks dir, a
 # root:root 0755 hook, and the system core.hooksPath naming it. Re-planted after every rm -rf.
 groupadd -f git
@@ -3519,7 +3847,7 @@ drive2() { # label [runner-temp]
   local wb gb
   wb=$(accepted 10.0.1.10); gb=$(accepted 10.0.1.20)
   : > /out/remote.log
-  env -i PATH=/usr/sbin:/usr/bin:/bin HOME=/root WEB_HOSTS=10.0.1.10 \
+  env -i PATH=/usr/sbin:/usr/bin:/bin HOME=/root WEB_HOSTS=10.0.1.10 CONTAINER_PROBE=1 \
     WEB_HOST_SSH="$(pinned_web /tmp/ci /tmp/web.kh)" \
     GIT_DATA_SSH="ssh -F ${2:-/rt}/gd-ssh-config" bash /work/git-data-cutover.sh > "/out/$1.out" 2>&1
   row "$1_rc" "$?"
@@ -3573,7 +3901,7 @@ DRV
   case "$T" in *:*) echo "FIXTURE-FAIL: scratch dir $T contains ':' — the apt state mount spec would be invalid (docker rc 125 would read as the decline)" >&2; exit 2 ;; esac
   gd_apt_state_arm "$T/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
   timeout -k 10 480 docker run --rm --cap-add NET_ADMIN --name "$_cname" -v /mnt/git-data -v "$GD_APT_STATE:/work/apt" -v "$T/rt/drive.sh:/work/drive.sh:ro" \
-    -v "$T/rt/git-data-cutover.sh:/work/git-data-cutover.sh:ro" -v "$T/rt/sshcfg.sh:/work/sshcfg.sh:ro" -v "$T/rt/wrapper.sh:/work/wrapper.sh:ro" \
+    -v "$T/rt/git-data-cutover.sh:/work/git-data-cutover.sh:ro" -v "$T/rt/git-data-container-probe.sh:/work/git-data-container-probe.sh:ro" -v "$T/rt/sshcfg.sh:/work/sshcfg.sh:ro" -v "$T/rt/wrapper.sh:/work/wrapper.sh:ro" \
     -v "$T/rt/wkh.sh:/work/wkh.sh:ro" -v "$T/rt/web-inv.tmpl:/work/web-inv.tmpl:ro" \
     -v "$T/rt/out:/out" "$UBUNTU_BASE" bash /work/drive.sh > "$T/rt/stdout" 2>&1
   DRC=$?
@@ -3613,8 +3941,8 @@ DRV
       && pass "RHK4: the workflow's ssh_config with a WRONG git-data pin -> web ok, jump ok, git-data-auth host_key_mismatch reason=changed, and git-data never saw the root key" || fail "RHK4: a wrong git-data pin was not refused at git-data-auth" "sshcfg2=$(_rv sshcfg2_rc) rc=$(_rv rhkg_rc) gd=$(_rv rhkg_gd_accepted) $(_rctx rhkg)"
     { [ "$(_rv ip_ok)" = 1 ] && [ "$(_rv sshcfg_rc)" = 0 ]; } \
       && pass "R5-fixture: 10.0.1.10/10.0.1.20 bound in the container and the workflow's ssh_config writer ran (rc 0)" || fail "R5-fixture: address binding or the ssh_config writer failed" "ip=$(_rv ip_ok) sshcfg=$(_rv sshcfg_rc) $(tr '\n' '|' < "$T/rt/out/sshcfg.out" 2>/dev/null | sed 's/::/: :/g')"
-    { [ "$(_rv r5_rc)" = 0 ] && _acc r5 web ok && _acc r5 git-data-jump ok && _acc r5 git-data-auth ok && _sto r5 store-mounted ok && _sto r5 store-on-mapper ok && _sto r5 store-verified ok && _sto r5 store-empty ok && _sto r5 fence-shape ok; } \
-      && pass "R5a/AC2 runtime: real OpenSSH through the generated ssh_config, BOTH hops strictly pinned — access ok x3, store probes ok x4 (the mapper, a bound marker), fence ok on a real root:git 0750 tree, exit 0" || fail "R5a: the end-to-end read-only proof did not exit 0" "rc=$(_rv r5_rc) $(_rctx r5)"
+    { [ "$(_rv r5_rc)" = 0 ] && _acc r5 web ok && _acc r5 git-data-jump ok && _acc r5 git-data-auth ok && _sto r5 store-mounted ok && _sto r5 store-on-mapper ok && _sto r5 store-verified ok && _sto r5 store-empty ok && _sto r5 fence-shape ok && _sto r5 container-probe ok; } \
+      && pass "R5a/AC2 runtime: real OpenSSH through the generated ssh_config, BOTH hops strictly pinned — access ok x3, store probes ok x4 (the mapper, a bound marker), fence ok on a real root:git 0750 tree, the container probe's docker exec answered over the same pinned hop, exit 0" || fail "R5a: the end-to-end read-only proof did not exit 0" "rc=$(_rv r5_rc) $(_rctx r5)"
     [ "$(cat "$T/rt/out/r5.remote" 2>/dev/null)" = "findmnt -n -o SOURCE --mountpoint /mnt/git-data
 findmnt -n -o SOURCE --mountpoint /mnt/git-data
 findmnt -n -o UUID --mountpoint /mnt/git-data
@@ -3622,8 +3950,8 @@ find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! -name .*.init.lock 
 findmnt -no SOURCE -T /mnt/git-data/hooks
 findmnt -no SOURCE -T /mnt/git-data/hooks/pre-receive" ] \
       && pass "R5b: on git-data the commands observed are exactly the mount read, the store session's source and UUID reads and its count, and the fence's two findmnt -T reads" || fail "R5b: unexpected remote commands" "$(tr '\n' '|' < "$T/rt/out/r5.remote" 2>/dev/null)"
-    { [ "$(_rv r5_web_accepted)" = 6 ] && [ "$(_rv r5_gd_accepted)" = 4 ]; } \
-      && pass "R5c: web-1 accepted 6 CI-key logins (web, jump, and the ProxyCommand hop of auth/findmnt/store session/fence); git-data accepted 4 root-key logins" || fail "R5c: login counts differ" "web=$(_rv r5_web_accepted) gd=$(_rv r5_gd_accepted)"
+    { [ "$(_rv r5_web_accepted)" = 7 ] && [ "$(_rv r5_gd_accepted)" = 4 ] && [ "$(sort -u "$T/rt/out/docker.log" 2>/dev/null)" = "exec -i -u 1001:1001 -e GDCP_REPO_ROOT=/mnt/git-data/repositories soleur-web-platform sh -s" ]; } \
+      && pass "R5c: web-1 accepted 7 CI-key logins (web, jump, the ProxyCommand hop of auth/findmnt/store session/fence, and the container probe's docker exec, always as uid 1001 with the one argv); git-data accepted 4 root-key logins" || fail "R5c: login counts differ" "web=$(_rv r5_web_accepted) gd=$(_rv r5_gd_accepted)"
     { [ "$(_rv r6_rc)" = 5 ] && _sto r6 store-empty store_not_empty; } \
       && pass "R6a: a real ws-1.git under /mnt/git-data/repositories -> store_not_empty, exit 5" || fail "R6a: a non-empty store passed" "rc=$(_rv r6_rc) $(_rctx r6)"
     grep -qxF "find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 ! -name .*.init.lock ! -name .init.lock ! -name lost+found -printf ." "$T/rt/out/r6.remote" \
@@ -3680,7 +4008,11 @@ fi
 # form, and a second caller of the stdin-file and bound parameters) and g2n-15-wipe-volume-from-lineage and g2n-16-second-input-bound (the
 # notify body's one inputs.volume_id binding) = 5, so exactly 148; the G5 census row and the N-body / N-exprs verdicts were restated in place.
 # #10297: plus wf-rbclear-no-flag-mode and wf-rbclear-value-inverted (the flag_write binding the precheck's stamp clear depends on) = 2, so exactly 150; review round: plus wf-rbclear-no-nothing-to-rollback (the flag_write `if:` keeps its nothing_to_rollback clause) = 151.
-MUTANT_FLOOR=151
+# #8211 PR-E: plus the container probe's 5 host rows (cp-call-dropped, cp-answer-unchecked, cp-blackhole-unmapped, cp-worktree-unmapped, cp-user-dropped) and 9 body rows (cpb-*) = 14, so exactly 165.
+# Review round (#11072) group A: plus cpa-skip-neutered and cpa-wf-always = 2, so exactly 167.
+# Group B (#11072): plus cpb-unrunnable-unclassified, cpb-bare-timeout, cpb-closed-as-blackhole and cpb-term-trap-dropped = 4, so exactly 171.
+# Group C (#11072): plus cp-stderr-dropped and cp-first-host-only = 2, so exactly 173.
+MUTANT_FLOOR=173
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3709,7 +4041,11 @@ fi
 # #10297: 151 mutants x 2 = 302 (+6 over 148 x 2); one new standalone workflow verdict (WF-rbclear), which also moves the workflow verdict count 57 -> 58: 639 -> 646.
 # Probe runuser path (#8211): one new standalone row (MZ-P14): 646 -> 647.
 # Probe cwd (flip run 39844703839): one new standalone row (MZ-P15): 647 -> 648.
-FLOOR=648
+# #8211 PR-E (container probe): CP1, CP2 x13, CP3-CP5 (3), CPX1-CPX3 (3), CPX4 x15, CPX5 = 36 standalone rows, plus 14 mutants x 2 (28) = 64: 648 -> 712. The AC2 and R5 rows were restated in place (no new row).
+# Review round (#11072) group A: CPA1-CPA3 (3) + 2 mutants x 2 (4) = 7 more: 712 -> 719 (WF6 restated in place).
+# Group B (#11072): CP2 r29/r30 (2), CPX4 +6, CPX6 (1) = 9 standalone, plus 4 mutants x 2 (8) = 17 more: 719 -> 736.
+# Group C (#11072): CP6, CP5b, CPX7 (3; CPX7 is a SKIP when run as root, still counted) + 2 mutants x 2 (4) = 7 more: 736 -> 743.
+FLOOR=743
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
