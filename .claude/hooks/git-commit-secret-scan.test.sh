@@ -3633,7 +3633,7 @@ EOF
 # A7: a signal sent to the hook's whole process group must not orphan the scanner
 _t_fr2_groupterm() {
   _sim_init
-  local U pd rec tmpd hp n=0 rc=0 outf payload pidf
+  local U pd rec tmpd hp n=0 rc=0 outf payload pidf t0 el
   U=$(_mk_leaky_repo untracked); pd=$(_mk_sim_path)
   rec="$SUITE_TMP/rec.grp"; mkdir -p "$rec"; tmpd="$SUITE_TMP/tmp.grp"; mkdir -p "$tmpd"; outf="$SUITE_TMP/grp.out"; : > "$outf"
   payload=$(jq -nc --arg w "$U" '{tool_name: "Bash", cwd: $w, tool_input: {command: "git add -A && git commit -m x"}}')
@@ -3647,11 +3647,14 @@ _t_fr2_groupterm() {
     kill -KILL -- "-$hp" 2>/dev/null || kill -KILL "$hp" 2>/dev/null || true; wait "$hp" 2>/dev/null || true
     _report "A7 group TERM arm: the gitleaks stub started its sleep" fail "no sleep.pid within 10 s"; return 0
   fi
+  t0=$SECONDS
   kill -TERM -- "-$hp" 2>/dev/null || true
   wait "$hp" || rc=$?
+  el=$((SECONDS - t0))
   n=0; while ! _pid_gone "$(cat "$pidf")" && [[ "$n" -lt 80 ]]; do sleep 0.1; n=$((n + 1)); done
   _t "A7 a TERM to the hook's whole process group: the bound wrapper kills the scanner's group (no orphan left running)" "sleep pid $(cat "$pidf") still alive after 8 s" _pid_gone "$(cat "$pidf")"
   _t "A7b ... and the hook ended with 143 and printed no decision" "rc=$rc out=$(head -c 100 "$outf")" test "$rc" -eq 143 -a ! -s "$outf"
+  _t "A7c ... promptly: the scanner's group was KILLED, not waited for (the stub sleeps 61 s; a vacuous pass would take that long)" "elapsed=${el} s" test "$el" -lt 20
 }
 
 # ---- walker rows of the review round 2 (A5, B1 to B5, the allowlist tables) -------------------------------------
