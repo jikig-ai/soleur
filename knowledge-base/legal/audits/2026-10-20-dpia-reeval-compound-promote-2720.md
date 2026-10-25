@@ -143,6 +143,8 @@ the marker is a PA-8 operation), is pinned by the marker's own test suite (Guard
 was not re-run for this memo. #10553 added new refusal reason names to the list; the field set
 is unchanged. The phase-2 prompt and the proposed insertion are not written to the marker.
 
+> **Superseded 2026-10-24 (#8293, ADR-300; conditioned on the merge of the pattern-layer PR):** the statement that the marker field set is unchanged is superseded for manual runs with `input:"patterns"`, which add six fields; see the Addendum of 2026-10-24 at the end of this memo. The text above stays as the record of 2026-10-20.
+
 **Other sinks, which the marker statement does not cover.** (i) When the allowlist refuses a
 model-supplied target path, the path is written to the function log and to Sentry after
 `redactGithubSourcedText` and a 200-character cap; that is model-chosen text, redacted by
@@ -424,6 +426,32 @@ Additional triggers:
   fleet screening.
 - **No public claim.** Nothing in this memo supports a statement about the loop's privacy
   properties in any public or marketing material.
+
+---
+
+## Addendum 2026-10-24 (#8293, ADR-300): the patterns path
+
+*Dated, append-only. Conditioned on the merge of the pattern-layer PR: until then none of this describes a deployed state. Nothing above is rewritten.*
+
+**What changes.** The handler gains a manual-trigger option `input:"patterns"` (default `corpus`; the scheduled cron ignores it). On that path the model is sent the open pattern pages under `knowledge-base/project/patterns/` (title, summary, tags, evidence keys) and the first 10 lines of each page's evidence learnings, in place of the whole prefiltered learnings corpus. The input is a curated subset of text of the kind already sent; the same prefilter (`PII_REGEX`, retired-rule list) applies to the pages and to every evidence learning, and the pages are screened for names and handles. Before the model call the handler reads prior proposal outcomes from GitHub (PR state of `self-healing/auto-*` branches, through Octokit search). It reads titles, states and timestamps of the bot's own PRs and no PR comment or body text. GitHub is already a recipient. No new processor, key, endpoint, category, purpose or retention is introduced.
+
+**Trigger 15 fires.** The marker field set changes on the patterns path: `input_source`, `patterns_open`, `ledger_read`, `ledger_suppressed`, `ledger_prs_scanned` and `ledger_title_skipped`. All six are numbers or closed enums; none carries model-supplied or third-party free text, so trigger 7 does not fire. On the scheduled path the field set is unchanged. This is the change the memo anticipated when it listed any outcome of the open decision challenge #8443 under trigger 15; this addendum does not resolve #8443.
+
+**Trigger 2 arguably fires.** "What is sent to a processor" changes in selection (a curated subset instead of the whole corpus), not in kind. The better reading is that the exposure shrinks; the conservative reading counts any change to the input set. This addendum records it as arguably fired and does not rely on the narrower reading.
+
+**What this addendum does not do.** This addendum does not cure the unmet 2026-10-25 and 2026-11-19 conditions the memo records in section 7 (the publication-limb balancing, practically due before 2026-10-25, and the balancing for persons merely named in a learning, due 2026-11-19). Both remain unmet at the date of this addendum, so the acceptance of residuals (a) and (b) remains conditional and not yet earned. It also does not verify the Commercial Terms premise (trigger 14), does not sample the pattern pages or their evidence for identifying prose beyond the deterministic prefilter, and makes no statement about the effect of the layer on proposal yield. The determination in the memo (a draft position, pending counsel review) is neither confirmed nor changed by this addendum; counsel review of both is still required.
+
+**Publication surface.** Pattern pages are persistent derived text in a public repository (Art. 5(1)(e) storage limitation). The mitigations are the seed cap (at most 8 pages), the no-names-or-handles rule, the PII and handle-shape screen over the whole page text in CI and at runtime, and a close state that removes a page from the prompt. They are a curation control, not a guarantee.
+
+### Addendum correction 2026-10-25 (#8293 review)
+
+*Dated. Corrects statements in the 2026-10-24 addendum above; that text is not edited. Conditioned on the merge of the pattern-layer PR, like the addendum it corrects; until then none of it describes a deployed state. Both were written in the same unmerged PR, so this correction was itself revised before merge (the first draft overstated that the ledger read "receives only" five fields).*
+
+- **Runtime screen.** The runtime screen is `PII_REGEX` over the raw page text, over the decoded title, summary and tags, and over the first 10 lines of each cited evidence learning (the excerpt that is sent), plus schema, canonical-path, size (16 KiB per page and per excerpt) and symlink checks (a symlink anywhere on an evidence path drops that evidence file; an aliased patterns directory empties the whole patterns arm, cause `dir-unreadable`; an aliased learnings root drops every evidence file, so every page falls under five surviving entries and is dropped, and either case ends the run `empty-corpus` with no fallback to the corpus). The handle, UUID and host denylist runs in CI over the raw page text and over the decoded title, summary and tags, and its "handle" means an `@`-prefixed handle. This also supersedes the 2026-10-24 sentence that "the same prefilter applies to every evidence learning": on the patterns arm the scan covers the first 10 lines that are sent, not the whole file. Person names, and handles written without an `@`, are not machine-screened anywhere, in a page or in an evidence excerpt. The 2026-10-24 wording that pages are "screened for names and handles" and that the handle-shape screen applies "at runtime" is corrected accordingly; the no-names rule is a curation control only.
+- **Category.** The 2026-10-24 statements "changes in selection, not in kind" and "no new ... category" are corrected: the sent text includes pattern titles, summaries and tags, which are new derived text authored in the repository, besides evidence excerpts of the kind already sent.
+- **Ledger read.** The search response contains the full issue object of every matching PR, including its body and author object (the GitHub Search API has no field projection), so the process receives that text. The code uses only title, state, closed_at, merged_at and user.login, and neither reads, logs nor stores the rest; the query is bounded to the App's own PRs by an `author:` qualifier (`head:` alone is a prefix match on the branch name and would also match look-alike branches), and the code re-checks the author login as a second layer, so other authors' items are not expected in the response. The step output persisted by Inngest is {hash, state, closed_at} entries plus two counts (`scanned`, `titleSkipped`). The 2026-10-24 sentence "reads titles, states and timestamps ... and no PR comment or body text" is corrected to this.
+- **Retention.** Pattern pages are persistent derived text in a public repository. Closing a page removes it from the prompt, not from git history, forks or clones (PA-32 (f) records that no erasure routine is implementable). The earlier statement that no retention is introduced is corrected to except pattern pages. The `collect-patterns` and `ledger-read` steps also memoize titles, summaries, tags, 10-line excerpts and hashes in the Inngest run state, within the retention PA-31 (f) already records.
+- **Observability.** Dropped-page, dropped-evidence and ledger-failure signals are closed enums, counts and validated slugs; they reach Sentry and the pino error mirror shipped to Better Stack, not Sentry alone.
 
 ---
 

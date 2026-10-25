@@ -89,6 +89,21 @@ export interface RefusalDetailEntry {
   diff_hunk?: boolean;
 }
 
+/**
+ * Runtime copy of the status union (a type cannot be counted at runtime). A test pins its length
+ * to 8 and its members to the union, so the eight literals cannot silently become nine.
+ */
+export const COMPOUND_PROMOTE_STATUSES = [
+  "disabled",
+  "deduped",
+  "week-cap-reached",
+  "empty-corpus",
+  "anthropic-truncated",
+  "no-qualifying-clusters",
+  "completed",
+  "error",
+] as const satisfies readonly CompoundPromoteStatus[];
+
 export interface CompoundPromoteOutcome {
   status: CompoundPromoteStatus;
   corpus_count?: number;
@@ -110,6 +125,21 @@ export interface CompoundPromoteOutcome {
   refusal_detail?: RefusalDetailEntry[];
   /** Bytes of the corpus payload serialized into the Anthropic message. */
   corpus_input_bytes?: number;
+  /**
+   * PATTERNS PATH ONLY (#8293): numbers and closed enums, never text. They are absent from a
+   * scheduled-path row, which stays byte-identical to what it was before the layer existed.
+   */
+  input_source?: "corpus" | "patterns";
+  /** Open pattern pages that loaded and validated. */
+  patterns_open?: number;
+  /** `failed` when the prior-outcome read could not be proven complete. */
+  ledger_read?: "ok" | "failed";
+  /** Proposals dropped because the same cluster hash was already proposed (open, merged, or closed under 60 days). */
+  ledger_suppressed?: number;
+  /** RAW search hit count, before identity and title filtering. */
+  ledger_prs_scanned?: number;
+  /** Bot-authored hits skipped for a title that no longer matches the builder's shape (warn-level, never fails the read). */
+  ledger_title_skipped?: number;
   /**
    * Which trigger produced this run. BOTH triggers dispatch this same handler
    * (`{ cron: "0 0 * * 0" }` and `{ event: "...manual-trigger" }` are registered
