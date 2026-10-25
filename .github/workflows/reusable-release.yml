@@ -779,8 +779,10 @@ jobs:
           done < <(find "$DEST" -type l)
           echo "Vendored $(find "$DEST" -type f | wc -l) plugin files into $DEST"
 
-      # type=gha cache requires the docker-container driver (the default driver
-      # cannot export gha cache) — setup-buildx provides it.
+      # setup-buildx (docker-container driver) was added in #5051 for the old gha cache. It stays
+      # even though inline cache does not need it: moving back to the default driver changes how
+      # layers are produced, which forced a full multi-GB re-pull and a deploy timeout the last
+      # time the driver changed (v0116-1 post-mortem). The cache backend is a separate decision.
       - name: Set up Docker Buildx
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -792,19 +794,27 @@ jobs:
         with:
           context: ${{ inputs.docker_context }}
           push: true
-          # mode=min is secret-safe ONLY while no non-public secret ARG is consumed
-          # in the runner/final-image stage of apps/web-platform/Dockerfile (the
-          # builder-only SENTRY_AUTH_TOKEN must stay out of the runner stage). Do NOT
-          # flip to mode=max, and do NOT add a non-public secret build-arg to the
-          # runner stage — either would export a secret-bearing layer to the
-          # repo-readable gha cache. mode=min caches only runner-stage layers, which
-          # is where the heavy-install wins live (claude-code/likec4/apt/playwright).
-          cache-from: type=gha,scope=web-platform-release
-          cache-to: type=gha,mode=min,scope=web-platform-release
+          # Inline registry cache, NOT the Actions cache (#10917): the gha backend writes one cache
+          # entry per changed layer blob (~1.2 GB per release, mostly never reused), which churned the
+          # repo's shared 10 GB Actions cache and evicted every other workflow's caches (ADR-299).
+          # Inline cache carries only final-image layers (the heavy-install wins live there:
+          # claude-code/likec4/apt/playwright), so the builder-only SENTRY_AUTH_TOKEN layer stays out of
+          # it; still do NOT add a non-public secret build-arg to the runner stage. `provenance: false`
+          # stops the default attestation (mode=max on a public repo) from recording build-args, and
+          # SENTRY_AUTH_TOKEN is still passed as a build-arg: do NOT remove `provenance: false` while
+          # it is (#7389). No `type=gha` fallback: a second backend would keep exporting.
+          cache-from: type=registry,ref=${{ inputs.docker_image }}:latest
+          cache-to: type=inline
+          provenance: false
+          # `:latest` is also the cache source (cache-from above), so only a run on main may advance it.
+          # A workflow_dispatch from a branch used to push `:latest`; the old gha cache was ref-scoped, so
+          # that was harmless, but a global `:latest` would let a branch-built image's layers be imported
+          # by the next main release and signed as main (ci-deploy.sh pins the cosign identity to
+          # refs/heads/main). The blank line below on a non-main ref is ignored by build-push-action.
           tags: |
             ${{ inputs.docker_image }}:v${{ steps.version.outputs.next }}
             ${{ inputs.docker_image }}:${{ github.sha }}
-            ${{ inputs.docker_image }}:latest
+            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', inputs.docker_image) || '' }}
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
             NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}

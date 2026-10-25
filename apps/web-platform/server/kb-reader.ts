@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import matter from "gray-matter";
+import { parseFrontMatterSafe } from "./front-matter-guard";
 import { isPathInWorkspace } from "./sandbox";
 import {
   KB_MAX_FILE_SIZE,
@@ -114,9 +114,8 @@ export function parseFrontmatter(raw: string): {
   content: string;
 } {
   try {
-    // engines: {} disables custom YAML engines, preventing code injection
-    // via gray-matter's historical JS-in-frontmatter feature (CVE in <4.0.3).
-    const parsed = matter(raw, { engines: {} });
+    // Never evaluates front matter as code: see front-matter-guard.ts (a tagged opener or a js engine throws).
+    const parsed = parseFrontMatterSafe(raw);
     return {
       frontmatter:
         parsed.data && Object.keys(parsed.data).length > 0

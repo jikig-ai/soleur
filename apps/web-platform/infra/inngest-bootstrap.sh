@@ -183,6 +183,14 @@ fi  # end SKIP_BINARY_INSTALL guard — unit + heartbeat reconcile below always 
 # also `sensitive = true` in the TF output.
 cat > "$HEARTBEAT_SCRIPT" <<'HEARTBEATSCRIPTEOF'
 #!/bin/sh
+# Refuse to run under tracing (#7797, #10363): this body expands the heartbeat URL whose path is
+# the credential, and `sh -x`/`set -x` would print it to stderr, which journald ships off-box. The
+# guard tests the STATE ($-), works in dash (this script's interpreter), and stays above every
+# expansion below. The message must stay value-free AND name-free: inngest.test.sh bans any
+# logger/echo/printf line naming INNGEST_HEARTBEAT_URL.
+case $- in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 # Posted to Better Stack every 60s by inngest-heartbeat.timer.
 #
 # LOG_TAG is a REAL assignment, never an inline tag literal in the logger call: the drift

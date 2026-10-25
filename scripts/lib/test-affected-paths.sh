@@ -112,6 +112,22 @@ _CLOSURE_LEAF_RT_HOOKS=(
   ".github/scripts/test/run-all.sh"
   "scripts/lib/scratch-root.sh"
 )
+# S4 PR4 (#10860) drain: runtime reads the derive cannot resolve, one shared set per sourcing helper (CTO ruling 3), same family as
+# the _CLOSURE_LEAF_RT_* arrays of the A5 block above (leading underscore: not an edge array, the census linter scans only AFFECTED_*_PATHS).
+# Known audit blind spot, not declared: .claude/hooks/lib/test-incident-sandbox.sh:117-121 also sources scripts/lib/scratch-root.sh
+# (best effort, relative path); the audit does not see it, so no pair existed to drain (PR4b may spread this array into those arrays).
+# Spread only into labels whose suite really sources the helper. plugins/soleur/test/test-helpers.sh:58 computes
+# the path of scripts/lib/scratch-root.sh and sources it in a subshell whose failure is swallowed.
+_CLOSURE_LEAF_SCRATCH_ROOT=(
+  "scripts/lib/scratch-root.sh"
+)
+# .claude/hooks/lib/incidents.sh sources these three libs at runtime: session-state.sh at line 19 (best effort),
+# wrapper-boundary.sh at lines 34-37 and rule-metrics-constants.sh at lines 71-74 (both by computed path).
+_CLOSURE_LEAF_INCIDENTS_LIBS=(
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "plugins/soleur/scripts/lib/wrapper-boundary.sh"
+  "scripts/lib/rule-metrics-constants.sh"
+)
 
 ALWAYS_ON_SUITES=(
   # --- repo-global scanners: -live convention ----------------------------------
@@ -404,6 +420,7 @@ AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
 # there is its subject (the glob edge), not only the helper it is named for.
 AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS__R2_SIGV4_CURL_TEST_SH_PATHS=(
   "glob:apps/cla-evidence/**.sh"
+  "scripts/lib/bearer-curl.sh"
   "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
 
@@ -479,6 +496,7 @@ AFFECTED_CLAUDE_HOOKS_POST_DISPATCH_WATCH_GATE_TEST_SH_PATHS=(
 AFFECTED_CLAUDE_HOOKS_PRE_MERGE_REBASE_TEST_SH_PATHS=(
   ".claude/hooks/pre-merge-rebase.sh"
   ".claude/hooks/pre-merge-rebase.test.sh"
+  "scripts/lib/rule-metrics-constants.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_CLAUDE_HOOKS_RULE_INCIDENT_MARKER_CAPTURE_TEST_SH_PATHS=(
@@ -606,6 +624,7 @@ AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
 AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/followthroughs/web2-luks-live-6931.sh"
   "scripts/followthroughs/web2-luks-live-6931.test.sh"
+  "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/web2-luks-rows.sh"
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -708,6 +727,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_PROC_TEST_SH_PATHS=(
 # drift-pinned too, so their edits re-select this suite; test-helpers.sh is declared
 # explicitly even though derivation reaches it (chokepoint of the whole suite).
 AFFECTED_PLUGINS_SOLEUR_TEST_TEST_PYRAMID_FIXTURES_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "plugins/soleur/agents/engineering/review/test-design-reviewer.md"
   "plugins/soleur/skills/review/SKILL.md"
   "plugins/soleur/skills/review/workflows/review.workflow.js"
@@ -731,6 +751,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"                # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-battery-owed.test.sh"
@@ -756,6 +777,7 @@ AFFECTED_SCRIPTS_LIB_LEGAL_NORMALISE_TEST_SH_PATHS=(
 # plugins/soleur/test/c4-model-freshness.test.sh — re-renders the committed
 # LikeC4 artifact from the .c4 sources and byte-compares; both are data to it.
 AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "knowledge-base/engineering/architecture/diagrams/"
   "scripts/regenerate-c4-model.sh"
   "plugins/soleur/test/c4-model-freshness.test.sh"   # self-inclusion
@@ -768,7 +790,43 @@ AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
 # directory operand, so a knowledge-base-only diff never selected it. Found by the ratchet's
 # directory-operand form (scripts/test-affected-kb-consumers.test.sh); the remaining
 # knowledge-base strings in those files are fixtures or message text, classified in the baseline.
+# S4 PR4 (#10860) added exact-file runtime reads of the bun suites that are not knowledge-base content: the TRIGGER_FILES
+# loop of ship-deploy-pipeline-fix-gate.test.ts (test.each at :233, existsSync per file at :234, so a delete or rename selects the suite and an
+# edit cannot change its verdict) and the files the other bun tests open. Per-pair evidence: pairs-decisions.tsv.
 AFFECTED_PLUGINS_SOLEUR_PATHS=(
+  ".claude/hooks/lib/log-rotation.sh"
+  ".claude/hooks/memory-backstop-resolve.sh"
+  ".claude/hooks/memory-backstop.sh"
+  "apps/web-platform/app/layout.tsx"
+  "apps/web-platform/infra/canary-bundle-claim-check.sh"
+  "apps/web-platform/infra/cat-deploy-state.sh"
+  "apps/web-platform/infra/cat-infra-config-state.sh"
+  "apps/web-platform/infra/cat-inngest-cutover-state.sh"
+  "apps/web-platform/infra/cat-inngest-verify-state.sh"
+  "apps/web-platform/infra/ci-deploy-wrapper.sh"
+  "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
+  "apps/web-platform/infra/infra-config-apply.sh"
+  "apps/web-platform/infra/infra-config-install.sh"
+  "apps/web-platform/infra/inngest-bootstrap.sh"
+  "apps/web-platform/infra/inngest-cutover-flip.sh"
+  "apps/web-platform/infra/inngest-doublefire-probe.sh"
+  "apps/web-platform/infra/inngest-enumerate-reminders.sh"
+  "apps/web-platform/infra/inngest-inventory.sh"
+  "apps/web-platform/infra/inngest-luks-cutover.sh"
+  "apps/web-platform/infra/inngest-rearm-reminders.sh"
+  "apps/web-platform/infra/inngest-redis-bootstrap.sh"
+  "apps/web-platform/infra/inngest-registry-probe.sh"
+  "apps/web-platform/infra/inngest-server-flip-guard.sh"
+  "apps/web-platform/infra/inngest-wiped-volume-verify.sh"
+  "apps/web-platform/lib/c4-canonical.mjs"
+  "apps/web-platform/server/auto-sync-trigger.ts"
+  "apps/web-platform/server/c4-render.ts"
+  "apps/web-platform/server/inngest/cron-manifest.ts"
+  "apps/web-platform/server/notifications.ts"
+  "apps/web-platform/server/prompt-injection-wrap.ts"
+  "apps/web-platform/server/watchdog-dispatch-table.ts"
+  "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
   "knowledge-base/engineering/architecture/decisions/"
   "knowledge-base/engineering/architecture/diagrams/"
   "knowledge-base/engineering/operations/runbooks/"
@@ -778,7 +836,20 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "knowledge-base/overview/vision.md"
   "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
   "packages/opencode-plugin/"
+  "scripts/check-adr-ordinals.sh"
+  "scripts/lib/git-data-boot-signal-poll.sh"
+  "scripts/lib/git-data-rotate-stamp.sh"
+  "scripts/lib/git-data-store-dirty-scan.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/setup-codex.sh"
+  "scripts/setup-cursor.sh"
+  "scripts/setup-devin.sh"
+  "scripts/ship-incident-pir-gate.sh"
+  "tests/scripts/lib/git-data-host-birth-gate.sh"
+  "tests/scripts/lib/git-data-host-replace-gate.sh"
+  "tests/scripts/lib/inngest-host-shape-gate.sh"
+  "tests/scripts/lib/web-host-birth-gate.sh"
+  "tests/scripts/lib/web-host-replace-gate.sh"
 )
 
 # scripts/audit-suite-reads — the committed read recorder and its reader. Its verdict function
@@ -875,6 +946,7 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGH_PREDICATE_PARITY_PATHS=(
   "plugins/soleur/scripts/lib/session-state.sh"
   ".claude/hooks/lib/hook-tool-kind.sh"
   ".claude/hooks/lib/log-rotation.sh"
+  "plugins/soleur/scripts/lib/wrapper-boundary.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
@@ -907,6 +979,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REGENERATE_SHARD_MANIFEST_TEST_SH_PATHS=(
 # tests/hooks/incidents — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_HOOKS_INCIDENTS_PATHS=(
+  "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
   ".claude/hooks/lib/"
   ".claude/hooks/lib/incidents.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -972,9 +1045,13 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
 # tests/scripts/git-data-rung2-evidence-capture — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/betterstack-ingest-probe.sh"
   "scripts/compound-promote.test.sh"
+  "scripts/lib/betterstack-sources.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/sentry-issue.sh"
+  "tests/scripts/lib/git-data-birth-readiness-gate.sh"
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
 )
 
@@ -1034,6 +1111,7 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   # G1 PR-4a (#10937): the parity script is the one HMAC surface this suite still EXECUTES directly under the shim
   # (live status arm, hostile-credential, xtrace, big-secret and mutant rows); it used to be reached only through the retired probes.
   "scripts/check-deploy-script-parity.sh"
+  "scripts/inngest-link-flip.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
   # S2 (#9597): the suite pins the sentences these records carry about the converted surfaces.
@@ -1080,6 +1158,8 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   # lint row runs the checkout lint on the real tree; the redeploy row sources the seccomp alert emitter and hashes the profile.
   "scripts/cutover-inngest.sh"
   "scripts/lint-workflow-local-action-checkout.py"
+  "scripts/probe-github-app-mint.sh"
+  "scripts/registry-restore-from-ghcr.sh"
   "scripts/seccomp-unenforced-alert.sh"
   "apps/web-platform/infra/seccomp-bwrap.json"
   "scripts/inngest-liveness-classify.sh"
@@ -1454,6 +1534,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PATH_GATING_TEST_SH_PATHS=(
 # TS13b sentinel census `find`s under apps/ + infra/) and pins the workflow's
 # run-block structurally; declared from the repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_INFRA_VALIDATION_DETECT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   ".github/workflows/infra-validation.yml"
   "apps/"
   "infra/"
@@ -1553,6 +1634,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SOLE_COPY_DRIFT_CHECK_TEST_SH_PATHS=(
 # plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_HOSTED_SHIP_SHALLOW_MERGE_BASE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh"
   "plugins/soleur/test/test-helpers.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1614,6 +1696,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REGISTRY_HOST_REPLACE_DISPATCH_VERDICT_TEST_SH_PATH
 # plugins/soleur/test/resolve-target-decision.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_RESOLVE_TARGET_DECISION_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   ".github/workflows/web-platform-release.yml"
   "plugins/soleur/test/resolve-target-decision.test.sh"
   "scripts/guard-vacuity-floor.test.sh"
@@ -1798,17 +1881,37 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 
 # .claude/hooks/grep-q-pipe-guard.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
+# S4 PR4 (#10860): this list is PARTIAL on purpose. The suite also walks every tracked file whose extension is in PJ_EXTS (sh bash yml yaml tf tftpl template
+# service tmpl; pj_join_pairs over git ls-files, :2521-2527), which no exact-file list can express, so it names only the files its PRODUCER_JOIN,
+# SWEEP_DEFERRALS and SWEEP_TEST_CANARIES tables key on (each row's consumer loop is quoted in pairs-decisions.tsv). The
+# whole-tree read is a selection-policy call (criterion (c)), and the edges whose declaration reveals mentions stay held back (#10959).
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
+  ".github/scripts/test/fixtures-validate-infra-templates.sh"
   "apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh"
   "apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh"
   "apps/web-platform/infra/cron-egress-firewall.test.sh"
   "apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh"
   ".claude/hooks/grep-q-pipe-guard.test.sh"
   ".claude/hooks/lib/"
+  "plugins/soleur/scripts/delegation-verify.sh"
+  "plugins/soleur/scripts/emit-decision.test.sh"
+  "plugins/soleur/skills/community/test/community-argv.test.sh"
   "plugins/soleur/skills/compound/test/phase-16.test.sh"
   "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
+  "plugins/soleur/test/operator-digest-provision.test.sh"
+  "plugins/soleur/test/operator-script.test.sh"
+  "plugins/soleur/test/operator-stage-approval-hook.test.sh"
+  "plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh"
+  "scripts/check-cloudflare-token-drift.test.sh"
+  "scripts/check-web-host-escrow-config.test.sh"
+  "scripts/ci-demand-census.sh"
+  "scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh"
+  "scripts/followthroughs/zot-soak-6122.test.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-workflow-local-action-checkout.test.sh"
+  "scripts/rotate-supabase-db-credential.test.sh"
+  "scripts/sweep-followthroughs.test.sh"
   "tests/scripts/test-sentry-full-root-apply.sh"
 )
 
@@ -1913,6 +2016,9 @@ AFFECTED_TESTS_SCRIPTS_ASSERT_DEV_DOPPLER_SCOPE_WIRING_PATHS=(
 # guard (#7226/ADR-237); its SUT is the guard file itself plus its own harness,
 # the same shape as orphan-process-reaper-mutations above.
 AFFECTED_TESTS_SCRIPTS_NO_TOFU_SSH_MUTATION_PATHS=(
+  "apps/web-platform/infra/git-data-ownership.test.sh"
+  "apps/web-platform/server/git-auth.ts"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-no-tofu-ssh.sh"
   "tests/scripts/test-no-tofu-ssh-mutation.sh"
@@ -1962,6 +2068,7 @@ AFFECTED_TESTS_SCRIPTS_CLEANUP_MERGED_SPACE_PATHS=(
 # tests/scripts/soleur-sandbox — agent sandbox allocator (ADR-250 Amendment 1);
 # declared from the repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_SOLEUR_SANDBOX_PATHS=(
+  "plugins/soleur/scripts/run-in-pid-namespace.sh"
   "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/soleur-sandbox.sh"
@@ -1970,16 +2077,31 @@ AFFECTED_TESTS_SCRIPTS_SOLEUR_SANDBOX_PATHS=(
 
 # tests/scripts/scratch-residue — direct-run residue canary over the runner
 # chokepoints (ADR-250 Amendment 1); declared from the repo paths it names.
+# S4 PR4 (#10860): the add_leaf rows of tests/scripts/test-scratch-residue.sh, each run by run_leaf (:399); evidence in
+# pairs-decisions.tsv. A leaf test that names many other paths was held back (#10959).
 AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
+  ".claude/hooks/cla-signed-author-gate.test.sh"
+  ".claude/hooks/context-reviewed-gate.test.sh"
   ".claude/hooks/grep-rewrite.test.sh"
+  ".claude/hooks/incident-sandbox-coverage.test.sh"
+  ".claude/hooks/lib/freeze-lock.test.sh"
   ".claude/hooks/lib/test-incident-sandbox.sh"
+  ".claude/hooks/pencil-collapse-guard.test.sh"
+  ".github/scripts/validate-infra-templates.sh"
+  ".github/scripts/vinngest-digest-freshness.sh"
   "apps/web-platform/test/global-setup-git-tripwire.ts"
   "plugins/soleur/scripts/lib/tmp-classify.sh"
   "plugins/soleur/test/lib/git-tripwire.ts"
   "plugins/soleur/test/lib/scratch-session.ts"
   "plugins/soleur/test/test-helpers.sh"
+  "scripts/domain-model-drift.test.sh"
   "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/seccomp-unenforced-alert.test.sh"
+  "scripts/sentry-issue.test.sh"
+  "scripts/test-content-publisher.sh"
+  "scripts/watch-live-verify-pass.test.sh"
+  "scripts/weakness-miner.sh"
   "tests/conftest.py"
   "tests/scripts/_git_fixture_env.py"
   "tests/scripts/test-scratch-residue.sh"
@@ -2000,6 +2122,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_AGENT_BROWSER_TEST_PLAYWRIGHT_MCP_LIFETIME_TEST_S
   "plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py"
   "plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py"
   "plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh"
+  "scripts/ensure-kb-index.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -2011,6 +2134,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_AGENT_BROWSER_TEST_PLAYWRIGHT_MCP_LIFETIME_TEST_S
 # plugins/soleur/test/hook-input-classification-mutation — a mutation battery over the hook-input
 # classifier: it mutates the SUT and the contract suite under .claude/hooks/.
 AFFECTED_PLUGINS_SOLEUR_TEST_HOOK_INPUT_CLASSIFICATION_MUTATION_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
   ".claude/hooks/hook-input-contract.test.sh"
   ".claude/hooks/lib/hook-input.sh"
   "plugins/soleur/test/hook-input-classification-mutation.test.sh"
@@ -2036,6 +2160,7 @@ AFFECTED_TESTS_SCRIPTS_INFRA_PRIVILEGED_TIER_CENSUS_PATHS=(
   "apps/"
   "infra/"
   "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
   "tests/scripts/test-infra-privileged-tier-census.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -2132,12 +2257,17 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
 # the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
 # The exemption-ledger bijection greps the forge lib verbatim for the ledgered command (#10921).
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
+  ".github/scripts/test/run-all.sh"
   "plugins/soleur/test/lib/git-corrupt-graph.sh"
   "scripts/battery-tag-authorship.test.sh"
   "scripts/battery-tag-authorship-mutations.test.sh"
   "scripts/lib/repo-write-boundary.sh"
+  "scripts/suite-exit-class-parity.test.sh"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
+  "test/pre-merge-rebase.test.ts"
+  "tests/scripts/fixtures/battery-tag-bare-fetch.sh"
+  "tests/scripts/fixtures/battery-tag-marker-no-ledger.sh"
 )
 
 
@@ -2556,19 +2686,59 @@ AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
 # over git-init'd fixture trees, not the repo corpus; the `git ls-files` text that tripped
 # the corpus-walk arm is a comment naming the GUARD's producer. Declared from the repo paths
 # its suite file names.
+# S4 PR4 (#10860): the exact files in the guard's candidate, ALLOW and MUST_FIND sets (lint-betterstack-emitter-read.sh :279,
+# :322, :350), declared from the suite's live arm (scripts/lint-betterstack-emitter-read.test.sh:347). A followthrough script that
+# names more paths was held back (#10959). Per-pair evidence: pairs-decisions.tsv.
 AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
+  "apps/web-platform/infra/infra-config-gate.sh"
+  "scripts/betterstack-assert-absence.sh"
+  "scripts/egress-audit-retention-check.sh"
+  "scripts/ensure-doppler.sh"
+  "scripts/followthroughs/anthropic-admin-key-6297.sh"
+  "scripts/followthroughs/anthropic-double-bill-8611.sh"
+  "scripts/followthroughs/cert-reissue-markers-6698.sh"
+  "scripts/followthroughs/chardevice-wedge-nonrecurrence-5934.sh"
+  "scripts/followthroughs/compound-promote-draft-edit-10552.sh"
+  "scripts/followthroughs/compound-promote-outcome-8281.sh"
+  "scripts/followthroughs/git-data-birth-emitter-6982.sh"
+  "scripts/followthroughs/hosted-destroy-ask-window-9776.sh"
+  "scripts/followthroughs/hostname-mislabel-web1-6616.sh"
+  "scripts/followthroughs/image-cve-scan-window-9826.sh"
+  "scripts/followthroughs/inngest-provision-unit-8562.sh"
+  "scripts/followthroughs/inngest-tls-soak-10136.sh"
+  "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
+  "scripts/followthroughs/inngest-zot-boot-7462.sh"
+  "scripts/followthroughs/l3-probe-armed-6438.sh"
+  "scripts/followthroughs/private-nic-converged-6415.sh"
+  "scripts/followthroughs/run-report-exit-first-contact-8076.sh"
+  "scripts/followthroughs/ship-merge-mergebase-verdict-8151.sh"
+  "scripts/followthroughs/web2-standby-soak-6459.sh"
+  "scripts/followthroughs/zot-fill-rate-7341.sh"
+  "scripts/followthroughs/zot-last-err-redact-7500.sh"
+  "scripts/followthroughs/zot-login-gate-names-failure-6497.sh"
+  "scripts/followthroughs/zot-restart-plateau-6288.sh"
+  "scripts/followthroughs/zot-upload-ceiling-7556.sh"
+  "scripts/inngest-host-state.sh"
+  "scripts/lib/betterstack-absence.sh"
   "scripts/lib/bs-emitter-row.sh"
+  "scripts/lib/git-data-boot-signal-poll.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/lib/zot-telemetry-parse.sh"
   "scripts/lint-betterstack-emitter-read.sh"
   "scripts/lint-betterstack-emitter-read.test.sh"
+  "scripts/registry-heartbeat-poll.sh"
   "scripts/test-all.sh"
+  "scripts/zot-disk-sample.sh"
+  "scripts/zot-inventory-assert-marker.sh"
 )
 
 # scripts/inngest-probe-heartbeat-feeder — the dead-probe/serving-verdict feeder battery.
 # WS2 (#10390) made it SOURCE the shared classifier (INNGEST_CLASSIFY_LIB seam, census load)
-# and READ the workflow run block for seam/wf_check rows — reads no name-stem derives.
+# and READ the workflow run block for seam/wf_check rows, plus the watchdog dispatch table —
+# reads no name-stem derives.
 AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
   ".github/workflows/scheduled-inngest-probe-heartbeat.yml"
+  "apps/web-platform/server/watchdog-dispatch-table.ts"
   "scripts/inngest-dedicated-host-classify.sh"
   "scripts/inngest-probe-heartbeat-feeder.sh"
   "scripts/inngest-probe-heartbeat-feeder.test.sh"
@@ -2613,10 +2783,12 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
 )
 
 # scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh — the probe's fed-log
-# battery. Beyond the probe it READS the shared forge lib (marker-literal pin, row q);
-# its other live-repo references are name-greps carried as accept rows (each suite's own
-# in-file roster check is the selecting self-check for producer edits).
+# battery. Beyond the probe it READS the shared forge lib (marker-literal pin, row q) and
+# the git-data runcmd rehearsal suite; its other live-repo references are name-greps carried
+# as accept rows (each suite's own in-file roster check is the selecting self-check for
+# producer edits).
 AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
+  "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
   "plugins/soleur/test/lib/git-corrupt-graph.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
@@ -2689,4 +2861,305 @@ AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
   "plugins/soleur/test/apply-delivery-gap-follower.test.sh"
   "scripts/apply-delivery-gap.sh"
   "scripts/lib/test-affected-paths.sh"
+)
+# ---------------------------------------------------------------------------
+# S4 PR4 (#10860) code-edge drain. The arrays from here to the end of the file declare, for suites that had no
+# AFFECTED_*_PATHS block, the files the suite really executes, sources or opens. Rubric:
+# knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md section 7, "The drain rubric"; per-pair
+# evidence: knowledge-base/project/specs/archive/20261025-151757-feat-one-shot-s4-affected-index-pr4-code-edge-drain/pairs-decisions.tsv.
+# Exact files only, grouped by edge kind (scratch-root spreads, incidents-lib spreads, single-edge arrays), then by suite path.
+# An edge whose declaration reveals more mentions was held back (#10959).
+# ---------------------------------------------------------------------------
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_ALPHA_METRICS_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_EMIT_DECISION_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_PIPELINE_TALLY_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_PRECOMMIT_GUARD_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_RUN_IN_PID_NAMESPACE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST__BASE_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  ".claude/hooks/incidents.test.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_BRAND_WORKSHOP_PEN_COMMIT_AFTER_SAVE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_COMPACTION_STATE_HOOK_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_DOMAIN_MODEL_HEADLESS_APPEND_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_DOMAIN_MODEL_INIT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_DRAIN_LABELED_BACKLOG_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_DRAIN_PRS_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_EXT_FILTER_DETECT_HOOK_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_GENERATE_KB_INDEX_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_GO_SESSION_GATES_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HARVEST_DEBT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_KB_SEARCH_SUPPORT_PATH_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_LANE_FRONTMATTER_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_ADAPTER_AUTH_HARD_FAIL_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_PENCIL_SETUP_SKILL_CLI_FORM_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_PLUGIN_VERSION_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_PR_FANOUT_LEDGER_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_RALPH_LOOP_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_REQUIRED_CHECKS_CANONICAL_PARITY_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/lint-bot-synthetic-completeness.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_RESOLVE_DEBT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_RESOLVE_GIT_ROOT_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_ROADMAP_RECONCILE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_RTK_GRAMMAR_PARITY_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_SKILL_ONCE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_SYNC_PR_BEHIND_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_UX_DESIGN_LEAD_OPEN_DOCUMENT_SNAPSHOT_GUARD_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_UX_DESIGN_LEAD_OUTPUT_PATH_GUARD_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_VENDOR_BUNDLE_COVERAGE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_VENDOR_PIN_INTEGRITY_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_VERSION_BANNER_HOOK_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_BRAND_HEX_COMMIT_GATE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  ".claude/hooks/lib/incidents.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_GIT_COMMIT_SECRET_SCAN_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_GUARDRAILS_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_PRE_CLOSING_TECHNICAL_FORK_GATE_TEST_SH_PATHS=(
+  "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+# The next two hook suites list session-state.sh and rule-metrics-constants.sh literally: the audit's baseline names only these
+# two libs for them (wrapper-boundary.sh is not reached from their closure), so they do not spread _CLOSURE_LEAF_INCIDENTS_LIBS.
+AFFECTED_CLAUDE_HOOKS_SHIP_OPERATOR_STEP_GATE_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "scripts/lib/rule-metrics-constants.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_SHIP_RUNBOOK_SSH_GATE_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "scripts/lib/rule-metrics-constants.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_BROWSER_SNAPSHOT_CREDENTIAL_GUARD_TEST_SH_PATHS=(
+  "plugins/soleur/hooks/browser-snapshot-credential-guard.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_DEVIN_MATCHER_PARITY_TEST_SH_PATHS=(
+  "plugins/soleur/hooks/devin-session-start.sh"
+  "plugins/soleur/hooks/stop-hook.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_PRE_MERGE_AUTO_CLOSE_SCAN_TEST_SH_PATHS=(
+  "plugins/soleur/skills/ship/scripts/auto-close-scan.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_CLAUDE_HOOKS_SECURITY_REMINDER_HOOK_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/lib/session-state.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_APPS_CLA_EVIDENCE_TEST_CCLA_ADD_TEST_SH_PATHS=(
+  "apps/web-platform/scripts/cla-evidence/validate-roster.ts"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_SKILLS_EVAL_HARNESS_TEST_GEN_MODELS_TEST_SH_PATHS=(
+  "apps/web-platform/server/inngest/leader-prompts/constants.ts"
+  "apps/web-platform/server/inngest/model-tiers.ts"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_AUDIT_FLAG_FLIP_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+  "plugins/soleur/skills/user-set-role/scripts/set-role.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_CLASSIFY_STEP_EXEC_TEST_SH_PATHS=(
+  "scripts/ci-e2e-classify.sh"
+  "scripts/ci-shard-totality-classify.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_E2E_SKIP_ANCHORS_TEST_SH_PATHS=(
+  "scripts/ci-e2e-classify.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_GDPR_GATE_SELF_TEST_TEST_SH_PATHS=(
+  ".claude/hooks/lib/incidents.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_GIT_TRIPWIRE_TEST_SH_PATHS=(
+  "apps/web-platform/vitest.config.ts"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_ISSUE_FLOW_MEASURE_TEST_SH_PATHS=(
+  "apps/web-platform/server/inngest/functions/_cron-run-reports.ts"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_LINT_QUESTIONNAIRE_IDENTITY_TEST_SH_PATHS=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_LINT_SQUASH_CI_DIRECTIVES_TEST_SH_PATHS=(
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/lint-bot-synthetic-statuses.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_REQUIRED_CHECKS_MERGE_GROUP_COVERAGE_TEST_SH_PATHS=(
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/probe-merge-group-coverage.sh"
+)
+AFFECTED_SCRIPTS_CONTENT_PUBLISHER_PATHS=(
+  "plugins/soleur/skills/community/scripts/linkedin-community.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_SCRIPTS_GIT_DATA_REBOOT_EVIDENCE_LANDED_8210_PATHS=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_SCRIPTS_GIT_DATA_REHEARSAL_EVIDENCE_8211_PATHS=(
+  "scripts/lib/bearer-curl.sh"
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/betterstack-sources.sh"
+  "scripts/lib/git-data-rotate-stamp.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_BIRTH_READINESS_GATE_PATHS=(
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_HOST_BIRTH_GATE_PATHS=(
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "tests/scripts/lib/gate-suite-harness.sh"
+  "tests/scripts/lib/git-data-root-key-arm-gate.sh"
+  "tests/scripts/lib/plan-gate-preamble.sh"
+)
+AFFECTED_TESTS_SCRIPTS_INNGEST_HOST_DARK_GATE_PATHS=(
+  "apps/web-platform/infra/inngest-bootstrap.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_TESTS_SCRIPTS_LINT_RULE_IDS_PATHS=(
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/lint-rule-ids.py"
+)
+AFFECTED_TESTS_SCRIPTS_REGISTRY_PULL_PATH_HEALTH_PATHS=(
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/registry-restore-from-ghcr.sh"
+  "scripts/zot-mirror-diagnosis.sh"
+)
+AFFECTED_TESTS_SCRIPTS_REGISTRY_REPLACE_PREFLIGHT_PATHS=(
+  "apps/web-platform/infra/zot-image-oci-archive.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_TESTS_SCRIPTS_WEB_HOST_BIRTH_GATE_PATHS=(
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "tests/scripts/lib/plan-gate-preamble.sh"
+)
+AFFECTED_TESTS_SCRIPTS_ZOT_INVENTORY_ASSERT_MARKER_PATHS=(
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/zot-inventory.sh"
 )

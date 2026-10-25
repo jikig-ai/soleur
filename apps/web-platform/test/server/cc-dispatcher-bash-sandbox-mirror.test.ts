@@ -149,7 +149,11 @@ describe("mirrorBashSandboxFailure — helper_step_eperm (#10455 e)", () => {
 
   it("C3 wiring: the factory records the posture of the options it hands to the SDK, and the close paths drain the registry", () => {
     const src = readFileSync(resolve(__dirname, "../../server/cc-dispatcher.ts"), "utf8");
-    expect(src).toMatch(/options: recordCcSeccompArtifact\(args\.userId, args\.conversationId, buildAgentQueryOptions\(/);
+    // The auth-failure probe's identity wrapper is REQUIRED around the recorder (so this pin also proves the probe is bound to the
+    // FINAL options), and the recorder still wraps the builder.
+    expect(src).toMatch(
+      /options: authProbe\.bindOptions\(recordCcSeccompArtifact\(args\.userId, args\.conversationId, buildAgentQueryOptions\(/,
+    );
     expect(src.match(/_ccSeccompArtifact\.delete\(/g)?.length).toBeGreaterThanOrEqual(2);
   });
 

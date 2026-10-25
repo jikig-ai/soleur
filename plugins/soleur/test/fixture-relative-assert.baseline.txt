@@ -170,7 +170,7 @@
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
 1	apps/web-platform/infra/cron-egress-enforce-probe.sh
-8	apps/web-platform/infra/cron-egress-firewall.test.sh
+9	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-nftables.test.sh
 8	apps/web-platform/infra/cron-egress-resolve.sh
 1	apps/web-platform/infra/cutover-verify.sh
@@ -201,6 +201,7 @@
 2	apps/web-platform/infra/inngest-config-bundle-pack.sh
 1	apps/web-platform/infra/inngest-config-bundle-pack.test.sh
 2	apps/web-platform/infra/inngest-consumer-probe.sh
+1	apps/web-platform/infra/inngest-consumer-probe.test.sh
 5	apps/web-platform/infra/inngest-cutover-flip.sh
 2	apps/web-platform/infra/inngest-cutover-flip.test.sh
 6	apps/web-platform/infra/inngest-cutover-latch.test.sh
