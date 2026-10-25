@@ -3,7 +3,7 @@ title: The merge-effect classifier is a closed-world allowlist and authorizes no
 status: active
 date: 2026-10-24
 supersedes: none
-related_adrs: [ADR-289, ADR-084, ADR-276, ADR-264]
+related_adrs: [ADR-289, ADR-084]
 tags: [authorization, delegation, merge, production, classifier, ci]
 ---
 
@@ -54,17 +54,18 @@ one line: `production-effecting` or `not-production-effecting`. Exit 0 only for 
 for `production-effecting`; exit 2 for unusable input, with stdout still `production-effecting`. A caller reading
 only the exit status or only stdout can therefore never read "not" from a failure.
 
-**The meaning.** `not-production-effecting` means: no path-gated production workflow fires from this file list.
-It does not mean "no runtime effect". Out of scope by design: scheduled crons that read `knowledge-base/`,
+**The meaning.** `not-production-effecting` means: no path-gated production workflow fires from this file list,
+where "fires" means performs a production act through a path filter. It does not mean "no runtime effect". Out of scope by design: scheduled crons that read `knowledge-base/`,
 agent-steering files outside the basename set below, content consumed at build time with no path trigger, and
 bookkeeping workflows that fire on every merge (ledger reconcile, board sync).
 
 **The allowlist.** The only way to read `not-production-effecting`: every changed path, both sides of a rename, is
-under `knowledge-base/` or is a root-level `*.md`, except that any path whose basename is `AGENTS*.md` or
-`CLAUDE.md`, at any depth, is effecting (these files steer every agent session, including scheduled agents that
-hold secrets). Everything else, including every unknown path and the classifier's own files, is effecting.
-Malformed paths (empty line, backslash, CR, tab, leading `/`, `.` or `..` segments, control characters, a
-git-quoted path) are exit 2.
+under `knowledge-base/` or is a root-level `*.md`, except that any path whose basename is `AGENTS*.md`, `CLAUDE*.md` or `GEMINI*.md`, in any letter
+case and at any depth, is effecting (these files steer every agent session, including scheduled agents that hold
+secrets). Everything else, including every unknown path and the classifier's own files, is effecting.
+Malformed paths (empty line or segment, backslash, CR, tab, NUL, leading or trailing `/`, `.` or `..` segments,
+control characters, a git-quoted path) are exit 2. Only the two verdict modes (`--files-from`, `--pr`) carry the
+verdict contract; `--help`, `--print-witnesses`, `--filter-allowed` and `--self-check` print no verdict line.
 
 **Drift defence.** A CI parity test, `plugins/soleur/test/merge-effect-class-parity.test.sh`, derives the
 population of workflows that can run on a merge to main from `.github/workflows/*.yml`, closed-world over trigger
@@ -109,6 +110,16 @@ needs the founder's authorization at that time. A tracking issue carries these c
 
 - The operator's merge question gets a machine-derived "may change production" clause instead of agent prose; a
   non-technical operator sees the same plain sentence every time.
+- `web-platform-release.yml`'s `workflow_run` arm runs after every main CI run, including docs-only merges; it is
+  accepted as gated because its inner path check decides whether to deploy. The parity test's coverage for that
+  one workflow is the executable P3 and P1 assertions in `workflow-run-deploy-invariants.test.sh`, not the path
+  matcher.
+- `scripts/ci-e2e-classify.sh` carries a similar `knowledge-base/**` plus root `*.md` allowlist for a different
+  purpose (skipping e2e). The two are not kept in step by any check; a change to one should be read against the
+  other.
+- The consumer text keeps the earlier "production apply or deploy" obligation for every case the classifier does
+  not cover (dispatches, revert pull requests that do not exist yet, repositories where `--pr` is not applicable),
+  and omitting the classifier clause is not a claim of safety.
 - A new workflow, a new trigger kind, or a production trigger widened over an allowlisted path turns CI red on the
   pull request that does it, with a paste-ready fix. Cost: the first time anyone adds a workflow, they classify it.
 - Residuals, accepted:
