@@ -17,7 +17,6 @@ PARITY="$HERE/../test/merge-effect-class-parity.test.sh"
 PRISTINE_SUT="$HERE/merge-effect-class.sh"
 PASS=0
 FAIL=0
-FLOOR=212
 
 ok() { PASS=$((PASS + 1)); }
 bad() {
@@ -28,7 +27,7 @@ check() { # check <name> <got> <want>
   if [ "$2" = "$3" ]; then ok; else bad "$1 (got [$2], want [$3])"; fi
 }
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/mec-test.XXXXXXXX")" || exit 2
+TMP="$(mktemp -d)" || exit 2
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
@@ -498,6 +497,7 @@ fi
 
 # ── floor and the stub-SUT control ────────────────────────────────────────────────────────────
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
+FLOOR=212
 if [ "$PASS" -lt "$FLOOR" ]; then
   printf 'FATAL: only %s assertions passed; floor is %s (a stub or a gutted suite)\n' "$PASS" "$FLOOR" >&2
   exit 1

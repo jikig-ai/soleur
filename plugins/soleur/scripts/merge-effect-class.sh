@@ -72,7 +72,10 @@ readonly ALLOW_ROOT_EXT
 
 WORK=""
 SHA_OUT=""
-cleanup() { if [ -n "$WORK" ]; then rm -rf "$WORK"; fi; }
+cleanup() {
+  [[ -n "$WORK" ]] || return 0
+  rm -rf "${WORK:?}"
+}
 trap cleanup EXIT
 
 emit() { # emit <rc> <reason>
@@ -179,7 +182,7 @@ need() {
 }
 
 cmd_files_from() { # $1 = path or -
-  WORK="$(mktemp -d "${TMPDIR:-/tmp}/mec.XXXXXXXX")" || emit 2 list-unreadable
+  WORK="$(mktemp -d)" || emit 2 list-unreadable
   if [ "$1" = "-" ]; then
     cat >"$WORK/list" || emit 2 list-unreadable
   else
@@ -205,7 +208,7 @@ cmd_pr() { # $1 = PR number, $2 = --repo value or empty
     have="$(jq -r '.nameWithOwner // empty' <<<"$have" 2>/dev/null)" || emit 2 not-applicable
     if [ -z "$have" ] || [ "$have" != "$want_repo" ]; then emit 2 not-applicable; fi
   fi
-  WORK="$(mktemp -d "${TMPDIR:-/tmp}/mec.XXXXXXXX")" || emit 2 list-unreadable
+  WORK="$(mktemp -d)" || emit 2 list-unreadable
 
   pr_json="$(gh pr view "$n" --json state,baseRefName,headRefOid,changedFiles 2>/dev/null)" || emit 2 list-unreadable
   jq -e 'type == "object" and (.state | type) == "string" and (.baseRefName | type) == "string"
@@ -264,7 +267,7 @@ cmd_print_witnesses() {
 
 cmd_filter_allowed() {
   local l nul_rc=0
-  WORK="$(mktemp -d "${TMPDIR:-/tmp}/mec.XXXXXXXX")" || exit 2
+  WORK="$(mktemp -d)" || exit 2
   cat >"$WORK/list" || exit 2
   has_nul "$WORK/list" || nul_rc=$?
   if [ "$nul_rc" -ne 1 ]; then
@@ -287,7 +290,7 @@ probe_rc() { # $1 = newline-separated list text; prints the classify rc
 
 cmd_self_check() {
   local list="${MEC_CI_ONLY_LIST:-$HERE/merge-effect-class.ci-only.tsv}" bad=0 rows
-  WORK="$(mktemp -d "${TMPDIR:-/tmp}/mec.XXXXXXXX")" || { echo "self-check=FAILED"; exit 1; }
+  WORK="$(mktemp -d)" || { echo "self-check=FAILED"; exit 1; }
   [ "$(probe_rc $'knowledge-base/a.md\n')" = "0" ] || bad=1
   [ "$(probe_rc $'apps/web-platform/x.ts\n')" = "1" ] || bad=1
   [ "$(probe_rc $'zzz-unknown-path\n')" = "1" ] || bad=1
