@@ -547,8 +547,8 @@ elif [ "$lex_state" = ok ] && [ "${#CTR_BAD[@]}" -gt 0 ]; then
   [ "${#CTR_BAD[@]}" -gt 3 ] && undeterminable="$undeterminable; and $(( ${#CTR_BAD[@]} - 3 )) more"
   if [ "$undet_kind" = target ]; then
     case "$undeterminable" in
-      *"defines a git alias"*) undet_kind=alias ;;
-      *"changes the root or namespace"*|*"env -S runs"*|*"runs a command string"*) undet_kind=launcher ;;
+      *"defines a git alias"*) undet_kind="alias" ;;
+      *"changes the root or namespace"*|*"env -S runs"*|*"runs a command string"*) undet_kind="launcher" ;;
     esac
   fi
 fi

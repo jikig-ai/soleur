@@ -4145,7 +4145,7 @@ _t_fr3_hook() {
   SIM_ENV=()
   # an unreadable repository named by the COMMAND (cd <bad repo> && git commit) is a deny even when the hook's own cwd is fine
   local Bad
-  Bad=$(_mk_leaky_repo clean); git -C "$Bad" config core.abbrev bogus
+  Bad=$(_mk_leaky_repo clean); assert_fixture_dir "$Bad"; git -C "$Bad" config core.abbrev bogus
   _sx "R3 A2r 'cd <repository git cannot read> && git commit' from a clean repository -> deny" "$Cn" "cd $Bad && git commit --allow-empty -m x" deny "nothing was scanned"
 
   # A8: the perl bound's child resets the wrapper's handlers before exec and the kill is guarded (bounded, not a group kill)
@@ -4199,7 +4199,7 @@ _t_fr3_hook() {
 # rows that need a RUNNABLE gitleaks
 _t_fr3_gl() {
   _needs_gl "FR3 A1/A2 (real gitleaks)" || return 0
-  local T U S r kv start
+  local T U S r kv start k
   U=$(_mk_leaky_repo untracked)
   _fx_ctrl "R3 A1 control: the PEM fixture is flagged by the pinned rules" "$U/leak.json" 1
 
@@ -4213,27 +4213,27 @@ _t_fr3_gl() {
   # A2 (CTO row 48): git writing to stderr while gitleaks reads the staged diff makes gitleaks scan NOTHING and exit 0
   for kv in diff.dirstat=x diff.algorithm=bogus core.abbrev=bogus diff.renames=bogus diff.context=-1 diff.colorMoved=bogus \
             diff.wsErrorHighlight=bogus diff.noprefix=bogus diff.relative=bogus; do
-    S=$(_mk_staged_repo); git -C "$S" config "${kv%%=*}" "${kv#*=}"
+    S=$(_mk_staged_repo); assert_fixture_dir "$S"; git -C "$S" config "${kv%%=*}" "${kv#*=}"
     _sxr "R3 A2 [gitleaks] a STAGED PEM with ${kv} in the repository config, plain commit -> deny (never an allow)" "$S" "git commit -m x" deny
     _t "R3 A2b ... and the reason is the scan failure or the finding, never an empty verdict ($kv)" "reason=${SIM_R:0:200}" \
       test "$([[ "$SIM_R" == *"nothing was scanned"* || "$SIM_R" == *"leak.json"* ]] && echo y)" = y
   done
-  S=$(_mk_staged_repo); git -C "$S" config core.abbrev bogus
+  S=$(_mk_staged_repo); assert_fixture_dir "$S"; git -C "$S" config core.abbrev bogus
   _sxr "R3 A2c the failure text names the repair" "$S" "git commit -m x" deny "git config --show-origin --list"
   _cause_is "R3 A2d ... cause scan-error" scan-error
-  S=$(_mk_staged_repo); git -C "$S" config core.bigFileThreshold 10
+  S=$(_mk_staged_repo); assert_fixture_dir "$S"; git -C "$S" config core.bigFileThreshold 10
   _sxr "R3 A2e core.bigFileThreshold=10 (valid, but every file becomes 'Binary') + a staged PEM -> deny with the FINDING (the pin restores the default)" "$S" "git commit -m x" deny "leak.json" "!nothing was scanned"
-  U=$(_mk_leaky_repo untracked); git -C "$U" config core.abbrev bogus
+  U=$(_mk_leaky_repo untracked); assert_fixture_dir "$U"; git -C "$U" config core.abbrev bogus
   _sxr "R3 A2f the simulated form ('git add -A && git commit') with core.abbrev=bogus and an untracked PEM -> deny" "$U" "git add -A && git commit -m x" deny
-  U=$(_mk_leaky_repo clean); git -C "$U" config core.abbrev bogus; start=$SECONDS
+  U=$(_mk_leaky_repo clean); assert_fixture_dir "$U"; git -C "$U" config core.abbrev bogus; start=$SECONDS
   _sxr "R3 A2g a CLEAN tree with a bad value in the config: a decision, not a hang" "$U" "git commit --allow-empty -m x" deny
   _t "R3 A2h ... within the bound" "elapsed=$((SECONDS - start))" test $((SECONDS - start)) -lt 20
 
   # an inherited GIT_CONFIG_COUNT that is not a plain decimal (08 is not an octal number to git) must not abort the pin arithmetic
   # (bash abandons the command on an arithmetic error: no ERR, no non-zero exit - the scanner would simply not run)
   S=$(_mk_staged_repo)
-  SIM_ENV=("GIT_CONFIG_COUNT=08")
-  _sxr "R3 A2i [gitleaks] GIT_CONFIG_COUNT=08 in the hook's environment + a staged PEM -> deny (never an allow)" "$S" "git commit -m x" deny
+  SIM_ENV=("GIT_CONFIG_COUNT=08"); for k in 0 1 2 3 4 5 6 7; do SIM_ENV+=("GIT_CONFIG_KEY_$k=user.name" "GIT_CONFIG_VALUE_$k=zed"); done
+  _sxr "R3 A2i [gitleaks] GIT_CONFIG_COUNT=08 (eight valid entries; git reads it as 8) in the hook's environment + a staged PEM -> the PEM is found (an arithmetic error would have dropped the scanner)" "$S" "git commit -m x" deny "leak.json"
   SIM_ENV=("GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=user.name" "GIT_CONFIG_VALUE_0=zed")
   _sxr "R3 A2j [gitleaks] a valid inherited GIT_CONFIG_COUNT=1 is kept and the pins follow it: the staged PEM is found" "$S" "git commit -m x" deny "leak.json" "!nothing was scanned"
   SIM_ENV=()
@@ -4255,7 +4255,7 @@ _t_fr3_gl() {
 _t_fr3_walk() {
   _sim_init
   [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
-  local k U I Cn S pd R sq="'"
+  local k U I Cn S pd R
   U=$(_mk_leaky_repo untracked); I=$(_mk_leaky_repo ignored); Cn=$(_mk_leaky_repo clean); S=$(_mk_staged_repo)
 
   # A3 (dump): an inline alias definition is an unreadable commit word, with or without staging
@@ -4273,6 +4273,8 @@ _t_fr3_walk() {
   _sd_add 'R3 A3 twin: git config --get alias.ci is a read' 'git config --get alias.ci && git status' 'bad_n=0'
   _sd_add 'R3 A3 twin: -c color.ui=false commit' 'git -c color.ui=false commit -m x' 'bad_n=0'
   _sd_add 'R3 A3 twin: GIT_CONFIG_NOSYSTEM is not an alias' 'GIT_CONFIG_NOSYSTEM=1 git commit -m x' 'bad_n=0'
+  _sd_add 'R3 A3 a bare assignment of the alias key, exported later, reaches the git call' 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit; export GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; git ci -m x' 'bad_n=1'
+  _sd_add 'R3 A3 twin: git config alias.ci with a value, then no git call at all, is no alias for anyone' 'git config alias.ci commit; echo done' 'bad_n=0'
   _sd_add 'R3 A3 twin: a GIT_CONFIG key that is not an alias' 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=color.ui GIT_CONFIG_VALUE_0=never git commit -m x' 'bad_n=0'
   _sd_add 'R3 A3 twin: a message that says alias.' 'git commit -m "see alias.ci"' 'bad_n=0'
   _sd_add 'R3 A3 twin: a log pattern that says alias.' 'git log --grep=alias. && git commit -m x' 'bad_n=0'
@@ -4302,6 +4304,11 @@ _t_fr3_walk() {
   _sd_add 'R3 A11 shopt -o -s allexport' 'shopt -o -s allexport; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=1'
   _sd_add 'R3 A11 twin: shopt -s nullglob exports nothing' 'shopt -s nullglob; git add f.txt && git commit -m x' 'refuse=0' 'exact=1'
   _sd_add 'R3 A11 twin: shopt -u allexport exports nothing' 'shopt -u allexport; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'R3 A11 twin: shopt -uo allexport UNSETS the option' 'shopt -uo allexport; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'R3 A11 twin: shopt -s allexport without -o is not the set -o option' 'shopt -s allexport; FR2_UNEXPORTED=/x; git add f.txt && git commit -m x' 'refuse=0'
+  _sd_add 'R3 A5 the config key case: Core.Autocrlf is refused like core.autocrlf' 'git -c Core.Autocrlf=true add f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'R3 A4 an operand over 8 KB is not read word by word: opaque' "su -c \"$(printf 'x%.0s' $(seq 1 9000))\" && git commit -m x" 'opaque=1'
+  _sd_add 'R3 A4 twin: a short operand with no git and no staging verb is left alone' 'su -c "ls -la" && git commit -m x' 'opaque=0'
   _sd_add 'R3 A11 GIT_CONFIG_NOSYSTEM=1 on a staging record is refused, as an environment name' 'GIT_CONFIG_NOSYSTEM=1 git add f.txt && git commit -m x' 'refuse=1' 'GIT_CONFIG_NOSYSTEM'
 
   # F-2 (dump): the directory proof looks at UNQUOTED text only (CTO row 54)
@@ -4313,6 +4320,9 @@ _t_fr3_walk() {
   _sd_add 'R3 F2 twin: a live $name in double quotes defeats the proof' 'cd /a && git add f.txt && git commit -m "a $b"' 'cd_first=0'
   _sd_add 'R3 F2 twin: a backtick in double quotes defeats the proof' 'cd /a && git add f.txt && git commit -m "a `id`"' 'cd_first=0'
   _sd_add 'R3 F2 twin: an unquoted ; defeats the proof' 'cd /a && git add f.txt; git commit -m x' 'cd_first=0'
+  _sd_add 'R3 F2 twin: a ${x} expansion in double quotes defeats the proof' 'cd /a && git add f.txt && git commit -m "a ${x}"' 'cd_first=0'
+  _sd_add 'R3 F2 an over-long command (past 4096 characters) is not scanned: no proof' "cd /a && git add f.txt && git commit -m \"$(printf 'y%.0s' $(seq 1 4200))\"" 'cd_first=0'
+  _sd_add 'R3 F2 control: a 100-character message keeps the proof' "cd /a && git add f.txt && git commit -m \"$(printf 'y%.0s' $(seq 1 100))\"" 'cd_first=1'
   _sd_add 'R3 F2 twin: an unquoted redirect 2>&1 defeats the proof (a lone &)' 'cd /a && git add f.txt && git commit -m x 2>&1' 'cd_first=0'
   _sd_add 'R3 F2 twin: an unquoted | defeats the proof' 'cd /a && git add f.txt && git commit -m x | cat' 'cd_first=0'
   _sd_add 'R3 F2 twin: a heredoc body (newline outside quotes) defeats the proof' $'cd /a && git add f.txt && git commit -F - <<EOF\nmsg\nEOF' 'cd_first=0'
