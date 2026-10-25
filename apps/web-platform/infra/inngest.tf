@@ -447,7 +447,7 @@ resource "betteruptime_heartbeat" "inngest_consumer" {
 resource "doppler_secret" "inngest_consumer_url" {
   project = "soleur"
   config  = "prd"
-  # Consumed by inngest-consumer-probe.service via indirect expansion over
+  # Consumed by inngest-consumer-probe.sh via indirect expansion over
   # INNGEST_CONSUMER_URL_KEY (server.tf bakes the name into /etc/default/inngest-consumer-probe),
   # so this is a GENUINELY read secret, not the reserved-but-inert shape that
   # doppler_secret.zot_heartbeat_url_prd was deleted for (#6438 B3).
