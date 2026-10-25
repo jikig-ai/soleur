@@ -643,7 +643,7 @@ if [ "$_top" = "package_update packages groups users write_files runcmd " ]; the
 # stale — a draft that named two sites was written before the cutover became the pointer's writer.
 _REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 _g4_bad=""; _g4_reads_stage=0; _g4_reads_reopen=0; _g4_total=0
-_g4_dispatch_read=0
+_g4_dispatch_read=0; _g4_stager=0
 while IFS= read -r _hit; do
   _f="${_hit%%:*}"; _rest="${_hit#*:}"; _ln="${_rest%%:*}"; _txt="${_rest#*:}"
   [[ "$_txt" =~ ^[[:space:]]*# ]] && continue
@@ -654,16 +654,17 @@ while IFS= read -r _hit; do
       if awk -v n="$_ln" 'NR<n && /bash -s <<.LUKSEOF.$/{s=NR} NR<n && /^    LUKSEOF$/{s=0} END{exit !s}' "$_f"; then _g4_reads_stage=$((_g4_reads_stage + 1))
       elif awk -v n="$_ln" 'NR<n && /^  - path: \/usr\/local\/bin\/inngest-luks-open\.sh$/{s=NR} NR<n && /^  - path: / && !/inngest-luks-open\.sh/{s=0} END{exit !s}' "$_f"; then _g4_reads_reopen=$((_g4_reads_reopen + 1))
       else _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:read-outside-both-readers"; fi ;;
-    *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$POINTER\" >> /etc/default/inngest-luks"*) : ;;  # first-boot STAGER
+    *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$POINTER\" >> /etc/default/inngest-luks"*) _g4_stager=$((_g4_stager + 1)) ;;  # first-boot STAGER (counted: G4.j)
     *'grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks'*) : ;;      # stager's own check
     *'echo "FATAL: INNGEST_LUKS_ACTIVE_VOLUME_ID is set but is not a volume id'*) : ;;          # diagnostic text
     # The dispatch's pre-write READ is the only non-device reader. The pointer has NO writer, injector or stager since #10112:
     # a site that reappears is UNCLASSIFIED (G4.b) or a direct write (G4.g3), never silently allowlisted.
     *'jq -e '"'"'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")'"'"''*) _g4_dispatch_read=$((_g4_dispatch_read + 1)) ;; # dispatch pre-write READ
+    *'doppler'*'secrets'*) _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:secrets-verb-on-a-pointer-line" ;;   # never allowlisted by a text arm below
     *'::error::op='*'INNGEST_LUKS_ACTIVE_VOLUME_ID'*) : ;;                                        # operator-facing refusal text
     *) _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:UNCLASSIFIED" ;;
   esac
-done < <(cd "$_REPO" && git grep -nF 'INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github/workflows \
+done < <(cd "$_REPO" && git grep -nF 'INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github \
           ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null | sed "s|^|$_REPO/|")
 if [ "$_g4_total" -ge 5 ]; then ok "G4.a found ${_g4_total} pointer sites in delivered artifacts (floor 5)"; else no "G4.a found only ${_g4_total} pointer sites — the walk is not reaching the tree"; fi
 if [ -z "$_g4_bad" ]; then ok "G4.b every pointer site in a delivered artifact is classified (no reader the guard has never seen)"; else no "G4.b unclassified pointer sites:${_g4_bad} — classify each, or it is a reader nothing grades"; fi
@@ -673,9 +674,12 @@ if [ "$_g4_reads_stage" -eq 1 ] && [ "$_g4_reads_reopen" -eq 1 ]; then ok "G4.c 
 # "none": a direct secrets set or delete of the literal pointer name in any non-test file under apps/web-platform/infra, scripts or
 # .github/workflows. It sees a LITERAL name only; a write through a variable name or after a `--` is not matched, but any other
 # line naming the pointer literal is UNCLASSIFIED (G4.b), which is what bounds a respelled writer.
-_g4_any_write="$(cd "$_REPO" && git grep -nE '^[^#]*doppler secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github/workflows ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null || true)"
+_g4_any_write="$(cd "$_REPO" && git grep -nE '^[^#]*doppler[^#]*secrets[^#]*(set|delete)[^#]*INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null || true)"
 if [ -z "$_g4_any_write" ]; then ok "G4.g3 no delivered artifact writes the pointer with a direct doppler set or delete"; else no "G4.g3 a direct pointer write exists: ${_g4_any_write}"; fi
 if [ "$_g4_dispatch_read" -eq 1 ]; then ok "G4.i the dispatch's pointer gate reads presence from the NAME LIST (an absent name and a dead token are not the same answer)"; else no "G4.i dispatch pointer reads=${_g4_dispatch_read} — expected exactly one, via the name list"; fi
+# G4.j the first-boot stager writes the pointer line exactly ONCE: systemd's EnvironmentFile is last-wins, so a second stager line would
+# silently decide which volume the boot-reopen unit opens. (The cutover FSM's stager, which asserted cardinality itself, is retired, #10112.)
+if [ "$_g4_stager" -eq 1 ]; then ok "G4.j the first-boot stager appears exactly once in delivered artifacts"; else no "G4.j first-boot pointer stager sites=${_g4_stager} -- expected exactly one (EnvironmentFile is last-wins)"; fi
 
 # G4.d the pointer arm REFUSES; it never formats and never falls back to the other volume.
 _PTR_ARM="$(printf '%s\n' "$_G1_STAGE" | awk '/^    if \[ "\$MODE" = pointer \]; then$/{f=1;next} f&&/^    else$/{exit} f')"
@@ -862,13 +866,14 @@ if printf '%s\n' "$_EM" | grep -cF '_em_mount=0' >/dev/null && printf '%s\n' "$_
 # #10112 (cutover trio retired): 104 -> 100, exact. G4.g1 (no FSM writer counters), G4.g2 (a dispatch-side census that excluded no test files, superseded by G4.g3), G4.h (no unit
 # injection / FSM read) and G4.j (no envfile stager) asserted that counters of deleted roles are zero; the dead classifier arms and
 # counters went with them, so a reappearing site is UNCLASSIFIED (G4.b) or a direct write (G4.g3). Four assertions out.
+# Fix round (#10966): 100 -> 101, exact. G4.j returns as the first-boot stager cardinality pin (the FSM stager's own cardinality check retired with it).
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 100 ]; then
+if [ "$executed" -lt 101 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 100. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 101. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 100)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 101)\n' "$executed"
 fi
 
 echo ""
