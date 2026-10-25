@@ -110,7 +110,7 @@ RUN npm install -g vitest@4.1.11 --before=2026-08-19 --ignore-scripts
 # Stage 4: Production image with only runtime artifacts
 FROM cli-tools AS runner
 
-# CACHE-ORDERING INVARIANT (gha layer cache, reusable-release.yml cache-to=type=gha):
+# CACHE-ORDERING INVARIANT (registry layer cache, reusable-release.yml cache-to=type=inline):
 # the heavy installs (claude-code and likec4 in the `cli-tools` ancestor above, then
 # apt, gh and playwright below) MUST stay ABOVE the `ENV BUILD_VERSION`/`ENV BUILD_SHA`
 # block — BUILD_SHA changes every commit and busts every layer beneath it. Keeping
