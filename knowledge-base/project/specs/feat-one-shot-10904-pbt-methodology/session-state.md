@@ -84,3 +84,10 @@
 - Issues filed: none — finding is pr-introduced fix-inline class; report-only constraint routes it to the parent.
 - Trailer: NOT emitted — report-only constraint permits only this commit; the emit-review-trailer.sh `--allow-empty` commit is the parent's to run. Coverage for the trailer: `--agents-ran 7 --agents-expected 7 --mode sequential-fallback`.
 - Components invoked: soleur:review phases 0–6 inline (sequential-fallback); pipeline-tally init/incr.
+
+## QA Phase
+- Plan Test Scenarios all executable shell checks; all passed at work time, re-verified post-fix (fd82c7c29f): markdownlint 0 issues on both blog files; bun test 162/162 (seo-aeo-drift-guard, marketing-content-drift, distribution-content-format, blog-audience-contract); npm run docs:build renders _site/blog/property-test-cannot-fail-teaches-nothing/; validate-blog-links.sh All checks passed.
+- blog-jargon-scan.sh rc 0 and validate-tweet-draft.sh rc 0 unchanged by the hub-edit fix (files untouched by it).
+
+## Fix Resolution
+- Review P3 (hub→spoke anchor deviated from plan literal): fixed in fd82c7c29f to the plan literal verbatim; fix-round seats {code-simplicity-reviewer, agent-native-reviewer} ran inline, no findings; trailers emitted (Reviewed-By-Soleur 0d7b453d50, Reviewed-Fix-Round 5fe6164c81).
