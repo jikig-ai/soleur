@@ -263,6 +263,39 @@ for file in "${callers[@]}"; do
   done
 done
 
+# ---------------------------------------------------------------------------
+# 4. The release build's cache backend (#10917). It is parsed from the YAML, not grepped, so a
+#    comment that merely mentions type=gha cannot satisfy or trip it. The Actions cache is a shared
+#    10 GB store: a gha export (~1.2 GB per release, mostly never reused) evicted every other
+#    workflow's caches. The cache is an inline registry cache in the pushed image instead.
+# ---------------------------------------------------------------------------
+echo ""
+echo "4. The release docker build uses an inline registry cache, not the Actions cache (#10917)"
+cache_verdict="$(python3 -I - "$REUSABLE" <<'PY' 2>&1
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+steps = [s for j in doc["jobs"].values() for s in j.get("steps", []) if s.get("id") == "docker_build"]
+if len(steps) != 1:
+    print("BAD\tfound %d docker_build steps, expected exactly 1" % len(steps)); sys.exit(0)
+w = steps[0].get("with") or {}
+cf, ct, pv = str(w.get("cache-from", "")), str(w.get("cache-to", "")), w.get("provenance")
+problems = []
+if "type=gha" in cf or "type=gha" in ct:
+    problems.append("a type=gha cache backend is back (cache-from=%r cache-to=%r)" % (cf, ct))
+if ct.strip() != "type=inline":
+    problems.append("cache-to is %r, expected type=inline" % ct)
+if not cf.startswith("type=registry,ref=") or "docker_image" not in cf:
+    problems.append("cache-from is %r, expected type=registry,ref=<inputs.docker_image>:latest" % cf)
+if pv is not False:
+    problems.append("provenance is %r, expected an explicit false (the default records build-args in a public repo)" % (pv,))
+print("OK\tinline registry cache, provenance false" if not problems else "BAD\t" + "; ".join(problems))
+PY
+)"
+case "$cache_verdict" in
+  OK*) pass "docker_build: ${cache_verdict#OK$'\t'}" ;;
+  *)   fail "docker_build cache backend: ${cache_verdict#BAD$'\t'}" ;;
+esac
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
