@@ -1170,10 +1170,11 @@ jobs:
   # check, not a publish. Placeholder NEXT_PUBLIC_ args: client inlining is
   # irrelevant to "does it build". No SENTRY_AUTH_TOKEN: next.config.ts passes
   # `authToken: undefined` and the Sentry plugin skips source-map upload. No
-  # `cache-from`: the release exports `mode=min` (runner-stage layers only, so
-  # the SENTRY_AUTH_TOKEN-bearing builder layer never reaches the repo-readable
-  # cache), and a `cache-from` on that scope imported a manifest and hit
-  # nothing (measured on this job's first run, 34774037658: zero CACHED steps).
+  # `cache-from`: the release's cache is inline metadata in the pushed GHCR image
+  # (final-image layers only, so the SENTRY_AUTH_TOKEN-bearing builder layer never
+  # reaches it) and this check runs without registry credentials. Before #10917 a
+  # `cache-from` on the release's gha scope imported a manifest and hit nothing
+  # (measured on this job's first run, 34774037658: zero CACHED steps).
   # Every run is cold by construction.
   web-platform-build:
     needs: [push-dedupe]

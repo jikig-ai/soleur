@@ -438,7 +438,7 @@ export function stripComments(text: string): string {
 }
 
 /** The view every declaration parser reads: comments removed AND heredoc bodies blanked. */
-function codeView(text: string): string {
+export function codeView(text: string): string {
   return scanHcl(text, true);
 }
 
@@ -515,7 +515,7 @@ function expressionEnd(text: string, start: number, limit: number, stopAtComma =
  * (`lifecycle {…}`, `validation {…}`, `request_headers {…}`) are skipped whole, so an attribute
  * inside them is never read as the block's own.
  */
-function topLevelAttributes(body: string): Map<string, string> {
+export function topLevelAttributes(body: string): Map<string, string> {
   const out = new Map<string, string>();
   const limit = body.length - 1; // exclude the closing brace
   const attr = /[ \t\r\n]*([A-Za-z_][A-Za-z0-9_-]*)[ \t]*=(?!=)[ \t]*/y;
@@ -569,7 +569,7 @@ const LABEL = '(?:"([A-Za-z_][A-Za-z0-9_-]*)"|([A-Za-z_][A-Za-z0-9_-]*))';
 /** A block keyword only at the start of input or after whitespace / a brace (never mid-identifier). */
 const HEADER_START = "(?<![^\\s{}])";
 
-function resourceBlocks(code: string, type: string): { resourceName: string; body: string }[] {
+export function resourceBlocks(code: string, type: string): { resourceName: string; body: string }[] {
   const header = new RegExp(`${HEADER_START}resource\\s+(?:"${type}"|${type}(?![A-Za-z0-9_-]))\\s+${LABEL}\\s*\\{`, "g");
   return labeledBlocks(code, header, (m) => `${type}.${m[1] ?? m[2]}`).map(({ m, body }) => ({ resourceName: m[1] ?? m[2], body }));
 }

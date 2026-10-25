@@ -88,7 +88,7 @@
 #               a regex alternation that holds a bar). mawk's regex is quadratic too: a bar line carrying a 20 KB run of spaces takes about 5 s, and 40,000 backslash-continued
 #               lines 5 to 14 s; no line in the tree is near either. The split pass skips a line without a bar before any regex runs. A generated bundle that long needs an ignore entry, not a wider limit.
 #   reach       `test-all.sh --affected` selects this guard only for the paths its declared edge list names (apps/web-platform and tests/ paths, .claude/hooks); not
-#               plugins/ (the declared entry `plugins/.` matches nothing; two named plugin test files do select it), .github/, scripts/*.sh outside scripts/lib, scripts/*.py, lefthook.yml, knowledge-base code
+#               plugins/ (the `plugins/.` entry minted a dead `^plugins/./` edge and was deleted in #9441; two named plugin test files do select it), .github/, scripts/*.sh outside scripts/lib, scripts/*.py, lefthook.yml, knowledge-base code
 #               or markdown: the full battery in CI always runs it.
 # The named FILES_* passes below stay as they are: they pin the SUITES whose incidents made this class, and carry the
 # affected-paths wiring. The sweep is a line search, so a name in a comment is handled by the comment filter and the

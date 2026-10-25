@@ -2216,8 +2216,8 @@ _diff_edge_hit() {
       # (bash [[ == ]] semantics — `*` crosses `/`, so `knowledge-base/**.sh`
       # covers `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike).
       # malformed-shape invariant — ONE doctrine, ONE classifier: every bash
-      # site classifies through _affected_glob_split (the mint arm in
-      # _affected_add_edge, this in-flight revalidation, the census arm in
+      # site classifies through _affected_glob_split (the mint arms in
+      # _affected_add_edge and _affected_add_declared_edge, this in-flight revalidation, the census arm in
       # scripts/lint-orphan-test-suites.sh, and materialise() in
       # scripts/lint-orphan-test-suites.test.sh); the covers() oracle in
       # scripts/test-affected-kb-consumers.test.sh and edge_hit() in
@@ -2866,6 +2866,61 @@ _affected_rec_read() { # <path>
   return 0
 }
 
+# The declared/consumed twin of _affected_add_edge (#9441) — IDENTICAL minus
+# the `[[ -e ]]` filter. The `-e` probe exists for DERIVED tokens (argv words,
+# `-c` payload strings, resolved source paths) where a non-resolving token is
+# garbage that must never mint. A DECLARED entry is the opposite claim: it is
+# the operator's own statement of what the suite guards, so a subject the diff
+# DELETES must still mint its edge — that diff is exactly the one the suite
+# exists for (the ADR-242 D12 clause this reverses). Because the `-d`
+# normalisation can no longer prove dir-ness once the subject is gone, the
+# declared SPELLING carries it: `dir/` mints `^dir/` (a prefix a deleted
+# tree's diff lines still match) while slash-less `dir` mints `^dir` (an
+# exact line a diff can never produce) — which is why the census linter
+# rejects slash-less existing directories in declared arrays. Placed between
+# _affected_in_list() and _affected_add_edge() so the extraction span of
+# scripts/test-all-affected.test.sh rows t11/m9/m9b carries it verbatim.
+_affected_add_declared_edge() {
+  local _p="$1" _nl=$'\n' _g
+  # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
+  case "$_p" in *"$_nl"*) return 0 ;; esac
+  case "$_p" in
+    glob:*)
+      # Same glob arm as _affected_add_edge, one classifier: malformed mints
+      # the verbatim always-match (widen-only), a metachar-free payload
+      # recurses as a literal path — through THIS function, so a declared
+      # `glob:<literal>` naming a deleted path keeps its edge too.
+      _g="${_p#glob:}"
+      case "$_g" in
+        *[\*?[]*) : ;;                      # a metachar is present — the glob grammar applies
+        *) _affected_add_declared_edge "$_g"; return 0 ;;   # none: a literal path entry
+      esac
+      declare -F _affected_glob_split >/dev/null && _affected_glob_split "$_g" || _AGS_CLASS=malformed
+      case "$_AGS_CLASS" in
+        dir)
+          if _affected_probe d "$_AGS_HEAD"; then _p="^glob:${_g}"; else _p="^${_AGS_HEAD}"; fi ;;
+        root)
+          _p="^glob:${_g}" ;;
+        *) _p="^glob:${_p}" ;;          # malformed (every why) → verbatim always-match
+      esac
+      ;;
+    *)
+      # No `[[ -e ]]` — that is the whole difference from _affected_add_edge.
+      case "$_p" in
+        .|..|./*|../*) ;;
+        *)
+          if _affected_probe d "$_p"; then _p="${_p%/}/"; fi
+          _p="^$_p"
+          ;;
+      esac
+      ;;
+  esac
+  [[ "${_AC_ESET-}" == *"${_nl}${_p}${_nl}"* ]] && return 0
+  _AC_EDGES+=("$_p")
+  [[ -n "${_AC_ESET-}" ]] || _AC_ESET="$_nl"
+  _AC_ESET+="${_p}${_nl}"
+}
+
 # Append an edge if it resolves inside the repo and is not already present.
 # `[[ -e ]]` is the whole test: argv words, `-c` payload tokens and resolved
 # source/import paths are all filtered through it, so garbage never lands in
@@ -2875,6 +2930,8 @@ _affected_rec_read() { # <path>
 # Anything rooted at `.`/`..` keeps the legacy unanchored form:
 # `.` names the whole tree, and an anchored `^./` could never match a diff line,
 # which would turn a select-everything edge into a select-nothing one.
+# DECLARED and CONSUMED entries do NOT come through here (#9441): they re-enter
+# via _affected_add_declared_edge above — same function minus this filter.
 _affected_add_edge() {
   local _p="$1" _nl=$'\n' _g
   # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
@@ -2894,7 +2951,8 @@ _affected_add_edge() {
         *) _affected_add_edge "$_g"; return 0 ;;   # none: a literal path entry
       esac
       # malformed-shape invariant — ONE doctrine, ONE classifier: every bash
-      # site classifies through _affected_glob_split (this mint arm, the
+      # site classifies through _affected_glob_split (this mint arm and its
+      # declared/consumed twin _affected_add_declared_edge, the
       # in-flight revalidation in _diff_edge_hit's glob:* arm, the census arm in
       # scripts/lint-orphan-test-suites.sh, and materialise() in
       # scripts/lint-orphan-test-suites.test.sh); the covers() oracle in
@@ -3475,7 +3533,10 @@ _affected_classify() {
     if (( _PRINT_AFFECTED == 0 )); then
       local _decl=( ${_AC_EDGES[@]+"${_AC_EDGES[@]}"} ) _e
       _affected_derive "$_label" "$@"
-      for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_edge "$_e"; done
+      # Declared/consumed edges re-enter through the -e-less twin (#9441): a
+      # subject this diff deletes must still mint its edge — that diff is the
+      # one the suite exists for.
+      for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_declared_edge "$_e"; done
     fi
     return 0
   fi

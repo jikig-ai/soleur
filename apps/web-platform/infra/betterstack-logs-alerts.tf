@@ -294,8 +294,9 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   # this file whose paused state is a variable rather than a constant `false`.
   paused = !var.inngest_luks_cutover_complete
 
+  # #11068 — push armed under the #9168 measured-flip convention; revert to `push = false` if the apply refuses it.
   email          = true
-  push           = false
+  push           = true
   call           = false
   sms            = false
   critical_alert = false
@@ -739,8 +740,9 @@ resource "logtail_exploration_alert" "inngest_step_524" {
 
   paused = false
 
+  # #11068 — push armed under the #9168 measured-flip convention; revert to `push = false` if the apply refuses it.
   email          = true
-  push           = false
+  push           = true
   call           = false
   sms            = false
   critical_alert = false
