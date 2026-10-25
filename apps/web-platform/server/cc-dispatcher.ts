@@ -240,6 +240,14 @@ import type { PdfExtractErrorClass } from "./pdf-text-extract";
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import {
+  NOOP_AGENT_AUTH_PROBE,
+  createAgentAuthFailureProbe,
+  warnAgentAuthProbeUnavailable,
+  tapAgentAuthFailure,
+  type AgentAuthFailureProbe,
+} from "./agent-auth-failure";
+import { makeAuthModeResolver } from "./agent-auth-mode";
 import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
@@ -3130,9 +3138,28 @@ export const realSdkQueryFactory: QueryFactory = async (
     // (`sessionHasEgress` is the same predicate buildAgentEnv uses).
     const sandboxUnixDeny = sessionHasEgress(ghToken, webEgress) ? false : await resolveSandboxUnixDeny();
 
-    return sdkQuery({
+    // Agent auth-failure diagnostic (agent-auth-failure.ts): reports ONE routed event when the CLI replies that it has no
+    // usable credential although one was leased. This sits INSIDE the factory's try, whose catch mirrors a `sandbox
+    // sdk-startup` event, so the probe is individually guarded (a throw falls back to a probe that observes nothing) and
+    // `bindOptions` / `tapAgentAuthFailure` never throw by construction: a defect in the diagnostic can neither break a
+    // dispatch nor be misreported as a sandbox failure. `bindOptions` is an identity wrapper around the FINAL options
+    // (after the seccomp recorder) and must stay INSIDE the `sdkQuery({...})` literal (agent-sandbox-seccomp-selector.test.ts A6a).
+    let authProbe: AgentAuthFailureProbe = NOOP_AGENT_AUTH_PROBE;
+    try {
+      authProbe = createAgentAuthFailureProbe({
+        runner: "cc-soleur-go",
+        credentialScheme: credential.scheme,
+        dedupeToken: args.userId,
+        resolveAuthMode: makeAuthModeResolver(args.userId, args.conversationId),
+      });
+    } catch {
+      // Not rethrown (see above); the constant warn keeps a broken diagnostic visible.
+      warnAgentAuthProbeUnavailable();
+    }
+
+    return tapAgentAuthFailure(sdkQuery({
       prompt: args.prompt,
-      options: recordCcSeccompArtifact(args.userId, args.conversationId, buildAgentQueryOptions({
+      options: authProbe.bindOptions(recordCcSeccompArtifact(args.userId, args.conversationId, buildAgentQueryOptions({
         sandboxUnixDeny,
         // ADR-113 — agentWorkspacePath = pluginPath for support (sandbox +
         // file-tool containment target the corpus root), the user's workspace for
@@ -3271,8 +3298,8 @@ export const realSdkQueryFactory: QueryFactory = async (
         // as a separate matcher-less PreToolUse entry (full-surface capture).
         // Flushed once at `handleCcCloseQuery`. Observe-only + fail-open.
         toolAttemptPreToolUseHook: toolAttemptCollector.preToolUseHook,
-      })),
-    });
+      }))),
+    }), authProbe);
   } catch (err) {
     // #5274 PR B — release the write-lease if it was acquired just above before
     // `sdkQuery` threw. Without this, the lease's only release path

@@ -99,6 +99,13 @@ import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
 import { releaseSlot, SLOT_STALENESS_THRESHOLD_SECONDS } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import {
+  NOOP_AGENT_AUTH_PROBE,
+  createAgentAuthFailureProbe,
+  warnAgentAuthProbeUnavailable,
+  type AgentAuthFailureProbe,
+} from "./agent-auth-failure";
+import { makeAuthModeResolver } from "./agent-auth-mode";
 import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
 import {
   CREDENTIALS_PROMPT_DIRECTIVE,
@@ -2153,9 +2160,24 @@ are the requirements to implement.`;
     // #10455 (a): runtime flag for the AF_UNIX-deny seccomp artifact (no-egress sessions only; the legacy
     // runner never passes ghToken or webEgress, so every legacy session is no-egress). OFF on any error.
     const sandboxUnixDeny = await resolveSandboxUnixDeny();
+    // Agent auth-failure diagnostic (agent-auth-failure.ts): reports ONE routed event when the CLI replies that it has no
+    // usable credential although one was leased. `bindOptions` is an identity wrapper (it must stay INSIDE the `query({...})`
+    // literal: agent-sandbox-seccomp-selector.test.ts A6a), `observe` is fire-and-forget and never throws.
+    let authProbe: AgentAuthFailureProbe = NOOP_AGENT_AUTH_PROBE;
+    try {
+      authProbe = createAgentAuthFailureProbe({
+        runner: "legacy",
+        credentialScheme: credential.scheme,
+        dedupeToken: userId,
+        resolveAuthMode: makeAuthModeResolver(userId, conversationId),
+      });
+    } catch {
+      // A defect in the diagnostic must never break a dispatch: fall back to a probe that observes nothing, visibly.
+      warnAgentAuthProbeUnavailable();
+    }
     const q = query({
       prompt,
-      options: buildAgentQueryOptions({
+      options: authProbe.bindOptions(buildAgentQueryOptions({
         sandboxUnixDeny,
         workspacePath,
         // Outer-wrap cohort + log-correlation fields (#5863) — same identity
@@ -2208,7 +2230,7 @@ are the requirements to implement.`;
               updateConversationStatus(userId, convId, status as Conversation["status"]),
           },
         }),
-      }),
+      })),
     });
 
     // Stream messages to client with leader attribution.
@@ -2233,6 +2255,7 @@ are the requirements to implement.`;
 
     for await (const message of q) {
       if (controller.signal.aborted) break;
+      void authProbe.observe(message);
 
       // Capture session_id from the first message (available on every message)
       if (!session.sessionId && "session_id" in message && message.session_id) {
