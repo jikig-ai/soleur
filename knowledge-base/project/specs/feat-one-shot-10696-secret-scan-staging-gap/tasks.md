@@ -8,7 +8,7 @@ Decisions: `decision-challenges.md` rows 1 to 21 (CTO rulings; do not re-litigat
 
 - 0.1 Helpers: `cp` and `sleep` in `_mk_stub_path`; the `git` PATH shim (absolute real git, `printf %q` log, env-selected failure modes keyed on "sim index set and different from the real path", logs `LC_ALL` and the three sim variables); a recording gitleaks stub (copies `$GIT_INDEX_FILE`, logs `git ls-files -s`); `_rows_since_mark <rule_id>`; `_assert_repo_untouched <repo> -- <run>` (index `cmp`, object count, real gitdir listing, working tree) with a self-test; a private `TMPDIR` per hook run.
 - 0.2 Fixture modes `untracked` and `tracked-modified` for `_mk_leaky_repo` and `_mk_bare_root_with_worktree`; a fixture control (`gitleaks detect --no-git`, rc 1); a gap-witness control and a deny twin per group; explicit non-sequential `_mk_pem` bodies.
-- 0.3 Flip the pre-filter table row `git add -A && git commit -m "fix: tidy"` to must-match; state the expected result per form; keep `git commit -m x`, `-n -m x`, `git status && git commit -m x`, `git commit -m "fix the commit scan"`, `git addr` must-skip.
+- 0.3 (as built, rows 22 and 46) The pre-filter table asserts the PERL-LESS positive allowlist: a single simple `git commit` (`-m`, `-F <file>`, `--amend`, `--no-edit`, `-v`, `-s`, `-n`, `-q`) is a must-skip; `git add -A && git commit -m "fix: tidy"`, `git status && git commit -m x`, `git addr`-style and every other form need the lexer. Where perl exists every strict commit is lexed.
 - 0.4 Groups 1 to 12 from the plan (leak cases, must-PASS controls, directory-proof set 10b, `-diff` canary, invariants incl. `core.splitIndex=true`, bare-root, failures, pathspec-missing deny (producer rule removed, row 25), linked worktree and symlinks).
 - 0.5 Extra rows: walker output via `ctr_stage_dump`, commit-flag table, `rm`/`mv`, two roots, mixed directories, force-add, config-transforming refusal and pin canaries, fsmonitor, TERM arm (release-file contract), `deny()` anchor and no-`restore --staged` text, stale sweep, residual pins, `check-attr` equivalence test, consumer stub test.
 - 0.6 Run the suite against the unmodified hook; confirm each new arm is RED for the right reason.
@@ -18,7 +18,7 @@ Decisions: `decision-challenges.md` rows 1 to 21 (CTO rulings; do not re-litigat
 - 1.1 `_ctr_reset_stage` at top level and in `ctr_collect`; outputs `CTR_STAGE_API`, `CTR_COMMIT_STAGES`, `CTR_STAGE_OPAQUE`, `CTR_STAGE_REFUSE(_WHY)`, `CTR_STAGE_UNSIMULABLE`, the six parallel `CTR_ADD_*` arrays, `CTR_ADD_ARGV`, `CTR_COMMIT_ALL`, `CTR_COMMIT_PATHS(_LITERAL)`, `CTR_STAGE_CD_FIRST`; `ctr_stage_dump`.
 - 1.2 `_ctr_git_walk`: validated `add`/`stage` records (every word before `--`, control bytes, `x` flag, unquoted glob chars, launcher allowlist, `own_C`, `force`); `rm`/`mv` ignored; stage-unknown verbs and `x`-flagged command word -> opaque; config-transforming arguments -> refuse; producer facts.
 - 1.3 `_ctr_commit_flags`: short bundles with attached operands, optional-argument `S`/`u`, long-option tables (staging, benign, separate-operand, `--no-`), unknown long -> opaque, `--` pathspec.
-- 1.4 Widen and anchor `ctr_wants_lex`; leave refusal logic and `ctr_resolve_roots` untouched.
+- 1.4 (as built, rows 22 and 46) `ctr_wants_lex` became the positive allowlist of the perl-less path; the hook lexes every strict commit where perl exists; refusal logic and `ctr_resolve_roots` gained only the unreadable-repository report (`CTR_ROOT_ERR`) and the alias refusal.
 
 ## Phase 2: `.claude/hooks/lib/commit-index-sim.sh`
 
