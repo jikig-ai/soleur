@@ -3032,12 +3032,17 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // marker row through the ClickHouse HTTP connection credential (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}). NO SUBSTITUTE: the marker is
   // shipped by the web host's pino WARN path and the warehouse has no unauthenticated read path; the offline suites drive the handler and the
   // emitter against stubs and prove the field set, not that the stored stream carries it (same declaration as the #8281 probe). Genuine.
-  // #9927 (2026-10-25): +1 (78 -> 79) for `2026-10-24-feat-inngest-host-replace-window-prework-plan.md`.
+  // #11087/#10917 (2026-10-25): +1 (78 -> 79) for `2026-10-25-fix-release-cache-cap-and-skip-monitor-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command reads the repository's Actions cache usage (`gh api repos/jikig-ai/soleur/actions/cache/usage`) with a GH_TOKEN that
+  // has actions:read. NO SUBSTITUTE: the endpoint has no unauthenticated form, and the property being verified is the repo's own cache bytes,
+  // which only that endpoint reports; the offline suite proves the probe's exit-code table, not the live number. Genuine.
+  // #9927 (2026-10-25): +1 (79 -> 80) for `2026-10-24-feat-inngest-host-replace-window-prework-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the post-replace check reads the keeper's host-emitted row through the Better Stack ClickHouse read connection
   // (BETTERSTACK_QUERY_*, Doppler soleur/prd_terraform). NO SUBSTITUTE: the host is deny-all-public with no SSH and the ingest token is
   // write-only; the offline suites prove the row grammar, not that the stored stream carries it. Genuine.
-  const BASELINE_DECLARED_PROBES = 79;
+  const BASELINE_DECLARED_PROBES = 80;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
