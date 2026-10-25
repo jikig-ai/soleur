@@ -284,6 +284,20 @@ mk_wt wrong-dir "RUN mkdir -p /var/lib/soleur/worktree && chown 1001:1001 /var/l
 $WT_USER"
 mk_wt name-mention "RUN echo /var/lib/soleur/worktrees mkdir chown 1001:1001
 $WT_USER"
+R=/var/lib/soleur/worktrees
+mk_wt inline-comment "RUN true # && mkdir -p $R && chown 1001:1001 $R
+$WT_USER"
+mk_wt false-and "RUN false && mkdir -p $R && chown 1001:1001 $R
+$WT_USER"
+mk_wt rm-after "RUN mkdir -p $R && chown 1001:1001 $R && rm -rf $R
+$WT_USER"
+mk_wt rm-later-run "RUN mkdir -p $R && chown 1001:1001 $R
+RUN rm -rf $R
+$WT_USER"
+mk_wt chown-first "RUN chown 1001:1001 $R && mkdir -p $R
+$WT_USER"
+mk_wt quoted-hash "RUN echo \"a # b\" && mkdir -p $R && chown 1001:1001 $R
+$WT_USER"
 # The directory is made in an EARLIER stage only: the final stage ships none of it.
 printf 'FROM node:22-slim AS deps\nRUN mkdir -p /var/lib/soleur/worktrees && chown 1001:1001 /var/lib/soleur/worktrees\nFROM deps AS runner\nRUN echo runner\nUSER soleur\n' > "$WT/earlier-stage.Dockerfile"
 
@@ -1273,6 +1287,16 @@ else fail "WT7: an unreadable input was not unknown" "$(detail)"; fi
 if case_wt_info absent-proof "$WT/no-chown.Dockerfile" absent && case_wt_info unknown-proof "$T/no-such.Dockerfile" unknown; then
   pass "WT8: under proof an absent or unknown state is informational (exit 0): only the flip and the true write block"
 else fail "WT8: proof mode blocked on the worktree root line" "$(detail)"; fi
+if case_wt_refused inline-comment "$WT/inline-comment.Dockerfile" absent && case_wt_refused false-and "$WT/false-and.Dockerfile" absent; then
+  pass "WT11: the markers after an inline '# ...' shell comment, and behind a 'false &&' -> absent (an inline comment is not code; a dead chain does not run)"
+else fail "WT11: an inline comment or a dead chain counted as the image fix" "$(detail)"; fi
+if case_wt_refused rm-after "$WT/rm-after.Dockerfile" absent && case_wt_refused rm-later-run "$WT/rm-later-run.Dockerfile" absent \
+  && case_wt_refused chown-first "$WT/chown-first.Dockerfile" absent; then
+  pass "WT12: the directory removed in the same RUN or a later one, and a chown that runs BEFORE its mkdir -> absent"
+else fail "WT12: a removed directory or a chown-before-mkdir counted as the image fix" "$(detail)"; fi
+if case_wt_info quoted-hash "$WT/quoted-hash.Dockerfile" present; then
+  pass "WT13 (must-pass): a '#' inside quotes is not a comment -> the fix after it still reads present"
+else fail "WT13: a quoted # was treated as a comment" "$(detail)"; fi
 case_wt_write() { # <label> <dockerfile> <value> — the write arm; a `true` write over a bad image must reach no doppler call
   case_write "wt-$1" ABSENT "$3" DOPPLER_TOKEN_GIT_DATA_FLAG=fixture-prd-write WORKTREE_DOCKERFILE="$2" WORKTREE_RESOLVER="$WT/resolver-ok.ts"
 }
@@ -1287,6 +1311,7 @@ if case_wt_write badfalse "$WT/no-chown.Dockerfile" false && [ "$RC" = 0 ] && [ 
 else fail "WT10: a false write was blocked by the worktree gate" "$(detail)"; fi
 case_wt_unknown_flip() { case_wt_refused m-unknown "$T/no-such.Dockerfile" unknown; }
 case_wt_flip_refused() { case_wt_refused m-flip "$WT/no-chown.Dockerfile" absent; }
+case_wt_wholeline_present() { case_wt_info m-wholeline "$WT/ok-comment-in-continuation.Dockerfile" present; }
 case_wt_comment_refused() { case_wt_refused m-comment "$WT/comment-only.Dockerfile" absent; }
 case_wt_user_refused() { case_wt_refused m-user "$WT/after-user.Dockerfile" absent; }
 case_wt_owner_refused() { case_wt_refused m-owner "$WT/wrong-owner.Dockerfile" absent; }
@@ -1307,7 +1332,7 @@ if mutate wt-unknown-as-absent "$PRECHECK" 2 '0,/echo unknown; return 0/s//echo 
 fi
 # comment stripping removed: a commented-out fix then counts
 if mutate wt-comments-count "$PRECHECK" 2 's|^    /\^\[\[:space:\]\]\*#/ \{ next \}$|    /^$/ { next }|'; then
-  CASE_SCRIPT="$MUTANT" mutant_red wt-comments-count case_wt_comment_refused
+  CASE_SCRIPT="$MUTANT" mutant_red wt-comments-count case_wt_wholeline_present
 fi
 # the USER ordering dropped: a RUN after USER (which would fail the build) counts
 if mutate wt-user-ignored "$PRECHECK" 2 's#\{ user = 1; return \}#{ return }#'; then
@@ -1324,6 +1349,26 @@ fi
 # the stage reset dropped: a fix made in an earlier build stage counts
 if mutate wt-stage-ignored "$PRECHECK" 2 's#\{ sm = 0; sc = 0; user = 0; return \}#{ return }#'; then
   CASE_SCRIPT="$MUTANT" mutant_red wt-stage-ignored case_wt_stage_refused
+fi
+case_wt_inline_refused() { case_wt_refused m-inline "$WT/inline-comment.Dockerfile" absent; }
+case_wt_dead_refused() { case_wt_refused m-dead "$WT/false-and.Dockerfile" absent; }
+case_wt_rm_refused() { case_wt_refused m-rm "$WT/rm-after.Dockerfile" absent; }
+case_wt_order_refused() { case_wt_refused m-order "$WT/chown-first.Dockerfile" absent; }
+# the inline comment no longer cut
+if mutate wt-inline-comment-kept "$PRECHECK" 2 's#^      l = strip\(l\)$#      l = l#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-inline-comment-kept case_wt_inline_refused
+fi
+# the dead-chain rule dropped
+if mutate wt-dead-chain-ignored "$PRECHECK" 2 's#^        if \(f\[j\] == "false" \|\| f\[j\] == "exit"\) \{ dead = 1; continue \}$#        if (0) { dead = 1; continue }#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-dead-chain-ignored case_wt_dead_refused
+fi
+# the removal rule dropped
+if mutate wt-rm-ignored "$PRECHECK" 2 's#^          for \(k = j \+ 1; k <= nf; k\+\+\) if \(f\[k\] == root\) \{ sm = 0; sc = 0 \}$#          for (k = j + 1; k <= nf; k++) if (0) { sm = 0 }#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-rm-ignored case_wt_rm_refused
+fi
+# the chown no longer required to follow the mkdir
+if mutate wt-chown-order-ignored "$PRECHECK" 2 's#\{ sm = 1; sc = 0 \}#{ sm = 1 }#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red wt-chown-order-ignored case_wt_order_refused
 fi
 # the chown requirement dropped: mkdir alone then counts
 if mutate wt-chown-optional "$PRECHECK" 2 's#\(sm && sc\)#(sm)#'; then
@@ -1349,14 +1394,15 @@ if mutate pin-only-dropped "$PRECHECK" 2 's#\|wipe_reread\|pin_only\) : ;;#|wipe
 fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=57  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5), stamp-clear rows (14, #10297), worktree-root rows (9, #8211 PR-E)
+MUTANT_FLOOR=61  # Guard 1 matrix rows 1-8, pin rows 9-16 (with 10b), deny-refusal 17, wipe Guard 6 rows (7), census rows 3b and 3c, A1 variant rows (5), stamp-clear rows (14, #10297), worktree-root rows (13, #8211 PR-E and its review: +4)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
 # Assertion FLOOR: script cases 33 + pin/TOFU_ARM cases 15 (K1-K11 with K3b/K3c/K10b/K10c) + workflow rows 8 + deny-arm rows 7 + mutants 19 x 2 + census mutants 2 x 2 + wipe rows 26 + wipe mutants 7 x 2 + 1 must-refuse row = 146, plus the A1 (2026-10-15) variant rows WV1-WV14 (14) and 5 A1 mutants x 2 (10) = 170 (exact).
 # #10297 stamp-clear: RB1-RB10, RB11a/b, RB12-RB14 (15) + 14 mutants x 2 (28) = 43 more, so the count is 175 + 43 = 218 (a -lt floor: scripts/guard-vacuity-floor.test.sh only recognises -lt/-le/-ge, so this suite stays out of -ne).
 # #8211 PR-E worktree root: WT1-WT10 (10) + 9 mutants x 2 (18) = 28 more, so the count is 218 + 28 = 246.
-FLOOR=246
+# #11072 review (group C): WT11-WT13 (3) + 4 mutants x 2 (8) = 11 more: 246 -> 257.
+FLOOR=257
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1
