@@ -2712,7 +2712,8 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
 
 # scripts/inngest-probe-heartbeat-feeder — the dead-probe/serving-verdict feeder battery.
 # WS2 (#10390) made it SOURCE the shared classifier (INNGEST_CLASSIFY_LIB seam, census load)
-# and READ the workflow run block for seam/wf_check rows — reads no name-stem derives.
+# and READ the workflow run block for seam/wf_check rows, plus the watchdog dispatch table —
+# reads no name-stem derives.
 AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
   ".github/workflows/scheduled-inngest-probe-heartbeat.yml"
   "apps/web-platform/server/watchdog-dispatch-table.ts"
@@ -2760,9 +2761,10 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
 )
 
 # scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh — the probe's fed-log
-# battery. Beyond the probe it READS the shared forge lib (marker-literal pin, row q);
-# its other live-repo references are name-greps carried as accept rows (each suite's own
-# in-file roster check is the selecting self-check for producer edits).
+# battery. Beyond the probe it READS the shared forge lib (marker-literal pin, row q) and
+# the git-data runcmd rehearsal suite; its other live-repo references are name-greps carried
+# as accept rows (each suite's own in-file roster check is the selecting self-check for
+# producer edits).
 AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
   "apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
   "plugins/soleur/test/lib/git-corrupt-graph.sh"

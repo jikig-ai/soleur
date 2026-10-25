@@ -3982,6 +3982,22 @@ else
   fail "th8m-g: mutant did not land or coverage survived"
 fi
 
+# dup1: every AFFECTED_*_PATHS array is defined once. A later assignment of the same name silently
+# replaces the earlier one, so a conflict-free merge that adds a second definition drops the first
+# one's entries from the selector with no signal when they are selection-only (PR4 #10945: three
+# arrays shadowed; the ratchet noticed only because the lost entries were audited pairs). Two names
+# are defined twice on main today with identical entries; any other duplicate fails. Collapse those
+# two and the expected list becomes empty.
+cases=$((cases + 1))
+_dup_names=$(grep -oE '^AFFECTED_[A-Z0-9_]+_PATHS=\(' "$REPO_ROOT/scripts/lib/test-affected-paths.sh" \
+  | sort | uniq -d | tr -d '=(' | tr '\n' ' ')
+_dup_want='AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS AFFECTED_PLUGINS_SOLEUR_TEST_DIAGNOSE_INNGEST_VERIFY_WORKFLOW_TEST_SH_PATHS '
+if [[ "$_dup_names" == "$_dup_want" ]]; then
+  pass "dup1: only the two known identical-entry array names are defined twice"
+else
+  fail "dup1: duplicate AFFECTED_*_PATHS definitions differ from the known two: [${_dup_names}]"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
