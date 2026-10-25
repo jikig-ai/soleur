@@ -39,7 +39,7 @@ All technical rulings: **Ruled by CTO agent, 2026-10-25.**
 | Escalation (#10918) | Own title and body; keep the stable `soleur-skip-persistence-monitor-alert` marker so open-issue dedupe still works. Add a unit case and a wiring property. | n/a |
 | Dead-man's switch for the monitor | Out of scope; separate issue. | n/a |
 
-**Consequence to know:** 1 skip in 13 observed (7.7%) still exceeds 1-in-20, so the monitor stays red after the probe fix until the underlying skip cause is found or the rate drops. The probe fix makes the alert honest; it does not make it green.
+**[Updated 2026-10-25, plan phase] Measured skip history supersedes the earlier "stays red" note.** Of the 12 newest infra-validation main runs, exactly one (2026-10-23, S1, docker rc=100 apt decline) carries a probe marker; the ten newest are clean. With sampling extended to 20 observed runs, 1 skip passes the 1-in-20 bound. The remaining uncertainty is the live verdict, recorded at plan AC11.
 
 ## User-Brand Impact
 

@@ -29,10 +29,11 @@ The repo's Actions cache is over its 10 GB cap because each release exports ~1.2
 ## Functional Requirements
 
 - FR1 (PR A). `reusable-release.yml` uses `cache-to: type=inline` and `cache-from: type=registry,ref=<image>:latest`; no `type=gha` export remains. The secret-safety comment is kept.
-- FR2 (PR A). `chown -R` in the runner stage becomes `COPY --chown`.
-- FR3 (PR B). The probe counts runs with at least one skip and FAILs when `runs_with_skip * 20 > observed`, at both the rehearsal and guard sources.
+- FR2 (cut at plan, 2026-10-25). `chown -R` to `COPY --chown` buys no listed property (FR1 alone meets the cap) and changes production image ownership.
+- FR1b (PR A). `provenance: false` is set explicitly (CTO ruling, 2026-10-25).
+- FR3 (PR B). The rehearsal source counts runs with at least one skip, samples until 20 runs are observed (up to 40 listed), and FAILs when `runs_with_skip * 20 > observed`. The guard source (`g1b.`/`g2b.`/`fl.`) keeps any-hit FAIL.
 - FR4 (PR B). Alert text, probe comments, workflow text and ADR-188 no longer say the pre-baked image is owed; they point at diagnosing the rc 100/125 declines.
-- FR5 (PR B). The consecutive-TRANSIENT escalation gets its own title and body, keeps the `soleur-skip-persistence-monitor-alert` marker, and has a unit case plus a workflow wiring property.
+- FR5 (PR B). The consecutive-TRANSIENT escalation exits rc 3, which the workflow already maps to the `broken` title; the `broken` body and exit-code header describe rc 3 truthfully. The shared `soleur-skip-persistence-monitor-alert` marker is kept (CTO ruling). A unit case and a workflow wiring case cover it.
 
 ## Technical Requirements
 
