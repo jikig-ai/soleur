@@ -48,8 +48,8 @@
 #      indirect expansion over a per-host key name Terraform bakes in and the tracked unit never
 #      contains — `${!WEB_ZOT_CONSUMER_URL_KEY}` — where the key expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1
 #      (the `*_URL_KEY=%s` printf of each server.tf install provisioner builds it; the git-data and inngest
-#      keys are identity mappings today — see ACK_REASONS for the measured correction). Two of the four do
-#      it in their SCRIPT now and two still do it in the unit's own ExecStart (item 5). A literal
+#      keys are identity mappings today — see ACK_REASONS for the measured correction). Three of the four do
+#      it in their SCRIPT now and one still does it in the unit's own ExecStart (item 5). A literal
 #      `--only-secrets` list in a TRACKED unit cannot name a per-host secret — the unit contains a
 #      VARIABLE name, never the secret's name, so there is nothing to enumerate. That alone is the
 #      limit, and it is sufficient. An earlier revision also argued "the flag is fail-closed on a
@@ -59,14 +59,14 @@
 #      rationale using the exact flag this repo already uses. It is a real limit of the invariant,
 #      not a false positive to predicate away, so it is an ACK with a reason.
 #
-#   5. THE UNIT WRAPPER MUST NOT EXPAND THE SECRET (#9639). Two of those four probe units used to
+#   5. THE UNIT WRAPPER MUST NOT EXPAND THE SECRET (#9639). Three of those four probe units used to
 #      resolve the key in the unit's own ExecStart (`export URL="${!KEY}"`), which runs before the
 #      script's xtrace refusal and so prints the secret on a traced launch. They now run the
 #      script directly and the SCRIPT resolves the key after its refusal. Two consequences here:
 #      (a) the unit-side `${!` stopped being the reason they are in the population, so a script-side
 #      `${!<NAME>_KEY}` is a population reason too (bound to the `_KEY` convention, row G1.9);
 #      (b) a wrapper stage fails any doppler-run unit whose Exec directive still expands a secret,
-#      unless it is in WRAPPER_ACK_REASONS (the two unfixed siblings), whose pin can only ratchet down.
+#      unless it is in WRAPPER_ACK_REASONS (the surviving unfixed sibling), whose pin can only ratchet down.
 #
 # THE LISTS ARE AUTHORED AND COMMENTED, NEVER DERIVED. Two independent exhaustive derivations over
 # the same two sibling scripts produced DIFFERENT answers in both directions, and both misses are
@@ -269,9 +269,10 @@ ACK_REASONS = {
         'its SOLEUR_WBS_* fixture seams (container, PATH prefix, verdict lib) are unset unless it is started with --fixture-seams, '
         'which the unit never passes, so a stray name in the injected prd root steers nothing',
     'inngest-consumer-probe.service':
-        'indirect expansion of INNGEST_CONSUMER_URL_KEY; the INNGEST_CONSUMER_URL_KEY printf in server.tf maps it to the '
-        'identity name today (one dedicated inngest host), but the unit still never names the secret, so '
-        'the list would have to be authored against a variable rather than a name',
+        'the script resolves INNGEST_CONSUMER_URL_KEY by indirect expansion (${!INNGEST_CONSUMER_URL_KEY}), which '
+        'the INNGEST_CONSUMER_URL_KEY printf in server.tf maps to the identity name today (one dedicated inngest '
+        'host) — the unit never names the secret, so the list would have to be authored against a variable '
+        'rather than a name',
     'web-git-data-probe.service':
         'indirect expansion of GIT_DATA_HEARTBEAT_URL_KEY; the GIT_DATA_HEARTBEAT_URL_KEY printf in server.tf is an '
         'identity mapping today for the single git-data host, with the same never-named-in-the-unit limit',
@@ -312,23 +313,23 @@ ACK_CARDINALITY = 9
 
 # ── wrapper acks (#9639): units whose Exec directive STILL expands a secret by indirect expansion ─────────────────
 # An Exec directive that expands a doppler-injected secret runs that expansion before the target script can refuse to
-# run under xtrace, so the secret reaches the journal on a traced launch. web-private-nic-guard and
-# web-zot-consumer-probe were fixed (the script resolves the key after its refusal). These two have the same wrapper
-# shape and NO xtrace refusal to order a moved lookup against; adding one is a separate change, so they are recorded as
-# NOT fixed on #9639. This list can only ratchet DOWN: a fix removes the entry and lowers the pin, and an entry for a
-# unit that no longer expands anything is itself a failure. Each entry is (the EXACT set of names the unit expands, the
-# reason): an acked unit that gains a second expansion, or swaps the one it has, is a finding again.
+# run under xtrace, so the secret reaches the journal on a traced launch. web-private-nic-guard,
+# web-zot-consumer-probe and inngest-consumer-probe were fixed (the script resolves the key after its refusal).
+# The survivor has the same wrapper shape and NO xtrace refusal to order a moved lookup against; adding one is a
+# separate change, so it is recorded as NOT fixed on #9639. This list can only ratchet DOWN: a fix removes the entry
+# and lowers the pin, and an entry for a unit that no longer expands anything is itself a failure. Each entry is
+# (the EXACT set of names the unit expands, the reason): an acked unit that gains a second expansion, or swaps the
+# one it has, is a finding again.
 WRAPPER_ACK_REASONS = {
     'web-git-data-probe.service':
         (('GIT_DATA_HEARTBEAT_URL_KEY',),
          'NOT fixed (#9639): the unit expands GIT_DATA_HEARTBEAT_URL_KEY in its ExecStart wrapper and its script has no '
          'xtrace refusal for a moved lookup to follow; adding one is a separate change'),
-    'inngest-consumer-probe.service':
-        (('INNGEST_CONSUMER_URL_KEY',),
-         'NOT fixed (#9639): the unit expands INNGEST_CONSUMER_URL_KEY in its ExecStart wrapper, its script has no xtrace '
-         'refusal to order against, and it sources a file an open pull request edits'),
 }
-WRAPPER_ACK_CARDINALITY = 2
+# 2 -> 1 (#10363): inngest-consumer-probe.service fixed — the script resolves INNGEST_CONSUMER_URL_KEY after an
+# unconditional xtrace refusal and the unit's ExecStart expands nothing (the F6 block in
+# inngest-consumer-probe.test.sh replays the traced launch).
+WRAPPER_ACK_CARDINALITY = 1
 # The wrapper stage must examine at least this many doppler-run units; a stage that checks none reports no findings.
 # This is a COUNTER-PRESENCE check only: the stage counts once per doppler-run unit, so the number equals doppler_run_units
 # (itself floored by MIN_DOPPLER_UNITS) and cannot see a broken INDIRECT_RE. Rows G1.1-G1.3 and G1.10-G1.12 are the
