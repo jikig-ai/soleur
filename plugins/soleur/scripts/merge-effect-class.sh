@@ -7,7 +7,7 @@
 #
 # Decides, from the files a pull request changes, whether merging it can fire a path-gated production
 # workflow. Read-only: it writes only to a private temp directory, prints no file contents and, in the verdict
-# modes, echoes no path (#10923, ADR-297).
+# modes, echoes no path (#10923, ADR-300).
 #
 # VERDICT. In the two verdict modes (--files-from, --pr) exactly one stdout line: `production-effecting` or
 # `not-production-effecting`.
@@ -22,7 +22,7 @@
 # MEANING. `not-production-effecting` means "no path-gated production workflow fires from this file list",
 # where "fires" means performs a production act through a path filter. It does NOT mean "no runtime effect"
 # (scheduled crons reading knowledge-base/, build-time reads of root files and per-merge bookkeeping
-# workflows are out of scope by design; see ADR-297). web-platform-release.yml's workflow_run arm runs after
+# workflows are out of scope by design; see ADR-300). web-platform-release.yml's workflow_run arm runs after
 # every main CI run; it is accepted because its inner path check decides whether it deploys, and the parity
 # test models it by its own push.paths while pinning (via the P3/P1 assertions) that the two agree. The verdict
 # authorizes nothing and is never evidence in an envelope `Gate:` or a receipt.

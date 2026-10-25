@@ -10,10 +10,10 @@
 None blocking.
 
 ### Decisions
-- Re-scoped on CTO rulings: delegation Scope class "merge changes referencing epic #N" rejected for now; ADR-297 records four flip conditions.
+- Re-scoped on CTO rulings: delegation Scope class "merge changes referencing epic #N" rejected for now; ADR-300 records four flip conditions.
 - Binary closed-world verdict; allowlist knowledge-base/ plus root *.md; AGENTS*.md/CLAUDE.md effecting at any depth; exit 0 only for not-production-effecting.
 - Drift defence: CI parity test over .github/workflows (flat CI-only list, closed-world trigger enumeration).
-- ADR-297 first commit; extends ADR-289 without amending.
+- ADR-300 first commit; extends ADR-289 without amending.
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan, CTO and review/research agents.

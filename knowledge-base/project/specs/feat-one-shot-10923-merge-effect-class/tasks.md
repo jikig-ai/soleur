@@ -4,8 +4,8 @@ Plan: `knowledge-base/project/plans/2026-10-24-feat-merge-effect-class-classifie
 
 ## Phase 0: ADR first (no code before this commit)
 
-- 0.1 `git fetch origin main`; list `origin/*` refs; confirm ADR-297 is free.
-- 0.2 Write ADR-297 with `soleur:architecture` (rich shape, `status: active`): closed-world allowlist with the
+- 0.1 `git fetch origin main`; list `origin/*` refs; confirm ADR-300 is free.
+- 0.2 Write ADR-300 with `soleur:architecture` (rich shape, `status: active`): closed-world allowlist with the
   `AGENTS*.md`/`CLAUDE.md` basename exclusion, exit 0/1/2 contract, flat ci-only list plus parity test with
   closed-world trigger enumeration and derived witnesses, single consumer, repo-owned applicability sentinel,
   `--pr` state/base/head binding; the verdict meaning ("no path-gated production workflow fires from this file

@@ -1,4 +1,4 @@
-# merge-effect-class ci-only list (ADR-297). Columns: workflow file name, TAB, reason.
+# merge-effect-class ci-only list (ADR-300). Columns: workflow file name, TAB, reason.
 #
 # MEANING. A row says the workflow is "not directly gated by the merged file list as a production act":
 # it can run when a pull request merges to main (an unfiltered push, a workflow_run arm, a release, or a
