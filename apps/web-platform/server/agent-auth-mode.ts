@@ -17,6 +17,7 @@
 //      the wiring cases (and their hoisted mocks and imports) in agent-runner-unix-deny-wire.test.ts and
 //      cc-dispatcher-real-factory.test.ts, and the widened regex in test/server/cc-dispatcher-bash-sandbox-mirror.test.ts
 //      (back to `options: recordCcSeccompArtifact(`).
+//   7. the `AUTH_FAILURE_DIAGNOSTIC` entries in test/oauth-token-injection-site.test.ts (the CWE-526 identifier allowlist).
 //
 // Accepted cost: `getFreshTenantClient` may mint a JWT (about 750 ms, against the 60/hour `precheck_jwt_mint` ceiling), and the
 // probe's 1.5 s `Promise.race` leaves a slow mint running after the timeout. The probe claims its debounce slot BEFORE it

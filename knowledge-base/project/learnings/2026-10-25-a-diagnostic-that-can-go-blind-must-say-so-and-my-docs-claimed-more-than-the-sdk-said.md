@@ -78,6 +78,7 @@ fix commits themselves introduced three defects that a later round found, and tw
    rows. Prevention: a `technical` row needs a `Ruled by CTO|CLO agent, <date>:` cell; a note is not a ruling.
 8. **tsc failure on a new mock's typing found only by the final gate run** — Recovery: cast through `unknown`. Prevention:
    run `tsc --noEmit` after any test edit, not only vitest (the combined-tree gate did catch it).
+9. **A repo-global ratchet reddened CI and no file-selected suite saw it** — `oauth-token-injection-site.test.ts` pins which modules may reference the shared auth-name identifiers (CWE-526), and the new diagnostic module reads them. The 11 suites chosen by reference, the 12 named gates and 45 mutants were green; the local affected gate returned `budget-deferred` (queued behind sibling runs), so CI was the first full run. Recovery: a narrow, documented allowlist entry plus a removal-checklist item. Prevention: when a change imports a security-sensitive shared constant, grep `test/` for the identifier BEFORE the battery (`git grep -l '<IDENT>' -- apps/web-platform/test`), and treat a deferred affected gate as owing the web-platform unit shard by name, not as a pass.
 
 ## Tags
 category: logic-errors
