@@ -52,12 +52,67 @@ gitleaks 8.30.1, 95% bootstrap confidence intervals of the median of the paired 
 | (c) old chained - (a) old staged commit | -49 | [-178, +28] |
 
 Series medians: (a) 1180 ms, (b) 1263 ms, (c) 1119 ms; maxima 1701 / 1954 / 1666 ms (all 20 decisions in each series
-were allow). Tripwire: the maximum of (b) minus the maximum of (a) is +156 ms against the 1.5 s gate: PASS. An
-independent seat measured +47 ms [+28, +65] for the same (b)-(c) pair at load 4.5 to 5.2, so the figure above is
-inflated by the load; the gate has a margin of about 10x under either reading.
+were allow). Tripwire: the maximum of (b) minus the maximum of (a) is +156 ms against the 1.5 s gate: PASS.
+
+**The cost a user feels is +150 to +310 ms on a chained commit** (12 to 25 percent of a 1.25 s hook on a repository of
+about 20,000 tracked files; the two paired medians measured on this branch are +146 ms and +313 ms, see the fix-round-3
+re-measure below), and it is a real cost of the design, not load: the lexer now runs on every strict commit and a
+chained commit runs one bounded simulation (a copy of the index, `git add`, `git diff --cached --raw`, `check-attr`). An
+earlier sentence in this file attributed the +146 ms above to host load and cited a +47 ms figure from another seat as the
+independent reading; that attribution was not supported by a measurement of both trees under the same load, and it is withdrawn. The
+1.5 s gate holds with a margin of about 6x on a quiet host.
 
 Liveness check in the same worktree with one untracked synthetic PEM file: the new hook denies in 1288 ms and the old
 hook allows in 1238 ms, so (b) really builds and scans the simulated index.
+
+## AC13 re-measure on the fix-round-3 tree
+
+Same method (`ac13.sh`: a scratch copy of this repository's tree at the branch head, 19,837 tracked files, 5 modified tracked
+files and 3 untracked files, 20 interleaved iterations, the (b) and (c) order alternated; (a) = old staged commit, (b) = new
+hook on the chained command, (c) = old hook on the chained command; gitleaks 8.30.1; 95% bootstrap confidence intervals of
+the median of the paired differences, 4,000 resamples). **The host was never idle**: the load average was 19.9 at the start
+and 22.6 at the end (other agents' suites), so absolute milliseconds are upper bounds and the second column of each row pair
+(CPU time of the hook's children) is the less load-sensitive reading.
+
+| Paired difference | wall median ms | wall 95% CI | CPU median ms | CPU 95% CI |
+|---|---|---|---|---|
+| **(b) new chained - (c) old chained** | **+313** | [+198, +461] | +357 | [+278, +462] |
+| (b) new chained - (a) old staged commit | +312 | [+185, +473] | +305 | [+196, +434] |
+| (c) old chained - (a) old staged commit | -152 | [-250, +33] | -122 | [-274, +2] |
+
+Series medians (wall): (a) 1795 ms, (b) 2062 ms, (c) 1755 ms; maxima 2608 / 3403 / 2629 ms; all 60 decisions were allow. A first 20-iteration run at a
+load average of 20 to 53 gave +664 ms wall and +363 ms CPU for (b)-(c) and is not usable (the series climb from 1.2 s to 5 s
+as the host filled up); it is kept in the scratch record, not in these tables. The 1.5 s gate is on p95(b) - p95(a) and the
+paired difference above is well inside it under either load.
+
+Non-gating row, 5,000 small untracked files (a chained commit in the same copy; three runs each, load average 22 to 35):
+new hook 3372 / 2727 / 3547 ms, old hook 1949 / 2299 / 1770 ms; the plan's cap of 5 s holds (maximum 3.5 s). The earlier
+quieter row (new 1319 ms, old 913 ms) was measured at a lower load and is not comparable.
+
+## Fix round 3: verification record
+
+- Suite: 1,705 assertions, 0 failed, 0 skipped. Run on the final tree with `CI=1`, with `SOLEUR_SUBAGENT=1` and under the
+  pinned gitleaks 8.24.2 (the tarball of the "Canary arms" section above), and once by default (gitleaks 8.30.1) one commit
+  earlier, before `MIN_ASSERTIONS` was set to the exact count (1,705). Wall time was about 10 to 11 minutes alone and 17
+  minutes with three suites in parallel, at a load average of 20 to 50; no unloaded figure was obtained.
+- `scripts/suite-durations.tsv` line 20 still carries the weight 6938 ms for this suite (measured when it had 405 assertions):
+  it is stale by a factor of roughly 55 to 90 against the wall times above. It is left as is (the shard planner reads it,
+  and re-weighting is a separate change); it is named here so nobody reads 6.9 s as the suite's cost.
+- Mutation matrix of the round (89 mutants, each applied to a sandbox copy, landing confirmed by exact-count pattern match and
+  by `cmp` against the pristine copy, a green control first, the file restored and `cmp`-checked after every row): all 88
+  current mutants are RED. One mutant (`shopt -u` counting as set) survived because the branch it mutated was dead; the branch
+  was deleted. Surviving mutants found on the way were each answered with a test, then re-run RED: the `stderr is not empty`
+  signature alone (a stub test text contained the other signature), a perl-less name collision, the collision repair text, the
+  `GIT_CONFIG_` and `--config-env` gate patterns (rows with quoted spellings that carry neither `alias.` nor `commit`), the
+  `git config --get` read forms, `$(git ...)` and backtick git substitutions inside double quotes (a non-git substitution is
+  caught by the record check alone), the gitlink skip (the row sat in a different arm), and the group-TERM arm, which passed
+  vacuously after the stub's own 61 s sleep ended (it now asserts promptness).
+  The `if ($p)` guard of the perl bound was mutated to `defined $p` under `setsid` (a TERM to the whole process group would
+  otherwise end the run): RED (A8d, rc 137).
+- The round-2 matrix (274 rows) was re-run on the final tree: 201 RED, 66 no longer land (their patterns were rewritten by this
+  round and are replaced by the round-3 rows above), 4 survived: a dead check that was deleted, the group-TERM arm (fixed as
+  above), a perl-less backtick row that sat in an arm the old row did not name (re-run RED under its own arm), and the no-op
+  control, which is meant to stay green.
 
 ## AC14: lexer-failure ceiling (counts only; limit 0.5 percent) and multi-root frequency
 
