@@ -37,3 +37,7 @@
 - Findings: 1 P2 (calendar regen omitted 11-04 draft + stale/parked rows), 3 P3 (unpinned "months" claim ×4 spots, verbatim closing sentence ×3 posts) — all fixed inline, commit 298d69b698
 - Fix-round 1 verification: FAQ parity True ×4, word counts 1618–1821, jargon rc0, markdownlint rc0 — PASS
 - Rebase: resolved seo-bulk-redirects.tf conflict vs merged PR #11091 (both pair sets kept ascending); force-pushed; PR mergeable
+
+## QA + Compound
+- QA: all 5 plan scenarios PASS on final SHA (docs:build rc0, bun 192/0, validate-blog-links rc0, jargon/tweet/word-counts verified); Step 2.6 skipped (no dashboard/layout surface)
+- Compound: learning written — learnings/workflow-patterns/2026-10-25-rebase-continue-editor-hang-orphan-hooks.md
