@@ -276,6 +276,16 @@ run_fixture "doppler-token-directly-after-a-stripped-separator-is-redacted (the 
   "{\"message\":\"fetch failed with x${DP_SEP}dp.""pt.${DP_BODY} rejected\"}" \
   '(.message | test("xdp\\.\\[redacted\\] rejected"))' \
   '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+DP_MID="$(printf 'k%.0s' $(seq 1 25))"
+DP_REST="$(printf 'k%.0s' $(seq 1 18))"
+run_fixture "doppler-token-split-late-in-the-body-is-redacted-whole (the first pass tolerates stripped characters in the body)" \
+  "{\"message\":\"fetch failed with dp.""pt.${DP_MID}${DP_SEP}${DP_REST} rejected\"}" \
+  '(.message | test("dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkk") | not)'
+run_fixture "doppler-token-after-a-separator-and-split-early-is-redacted-whole" \
+  "{\"message\":\"fetch failed with x${DP_SEP}dp.""pt.kkkkkkkkkk${DP_SEP}${DP_TAIL} rejected\"}" \
+  '(.message | test("xdp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkk") | not)'
 run_fixture "dp-prefix-with-a-six-letter-kind-passes-through-intact (the kind is two to five letters)" \
   "{\"message\":\"fetch failed with dp.abcdef.${DP_BODY} rejected\"}" \
   "(.message == \"fetch failed with dp.abcdef.${DP_BODY} rejected\")"
@@ -892,8 +902,9 @@ fi
 # Ratcheted 39 -> 42 by the terminator-journal change (the Doppler token shape: service token, personal token,
 # ordinary dp. text; the floor was then 42 against 43 cases), then 51 and 53 by its review (body-length
 # boundary pair, underscore anchor, strip order both ways, six-letter kind, the documented DNS-label
-# over-redaction, and the three non-string-message cases): the full current count of 53.
-PII_SCRUB_MIN_CASES=53
+# over-redaction, a late split and a separator-plus-early-split, and the three non-string-message cases): the
+# full current count of 55.
+PII_SCRUB_MIN_CASES=55
 if (( CASES < PII_SCRUB_MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PII_SCRUB_MIN_CASES" >&2

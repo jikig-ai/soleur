@@ -155,7 +155,7 @@ row("stunnel config sets no output key (a file would pull the logs out of the jo
     not any(re.match(r"^output\s*=", l, re.I) for l in block))
 
 tests = tomllib.load(open(tests_path, "rb")).get("tests", [])
-row("fixture file carries at least 22 tests", len(tests) >= 22)
+row("fixture file carries at least 23 tests", len(tests) >= 23)
 row("fixture file carries exactly 4 drop cases (no_outputs_from: three shapes plus one variant) and every test inserts at the filter",
     sum(1 for x in tests if "no_outputs_from" in x) == 4
     and all(all(i.get("insert_at") == "inngest_terminator_filter" for i in x.get("inputs", [])) for x in tests)
@@ -342,7 +342,7 @@ fi
 if mutate empty_fixture; then
   structure_rows "$VECTOR_TOML" "$CLOUD_INIT" "$VT_DIR/m-empty_fixture/tests.toml" > "$VT_DIR/m-empty_fixture/rows.tsv"
   check_test "mutation 3: a fixture file with zero test cases goes RED on the case-count floor" \
-    row_failed "$VT_DIR/m-empty_fixture/rows.tsv" "fixture file carries at least 22 tests"
+    row_failed "$VT_DIR/m-empty_fixture/rows.tsv" "fixture file carries at least 23 tests"
 else
   fail "mutation 3: could not be applied or did not land (anchor drifted, so this row measured nothing)"
 fi

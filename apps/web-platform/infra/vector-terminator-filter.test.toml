@@ -346,3 +346,19 @@ type = "vrl"
 source = '''
 .message == "2026.10.25 13:34:13 LOG3[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
 '''
+
+[[tests]]
+name = "keeps a drop-shaped line at LOG4 (only LOG5 is dropped)"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:13 LOG4[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:13 LOG4[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
+'''

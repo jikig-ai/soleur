@@ -617,7 +617,7 @@ mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]
 # asked for. Refusal rows (LOG3, Connection reset, the 0-byte shapes) are outage evidence: they are never
 # dropped or throttled, so an outage or a restart loop (the unit restarts on failure with no start limit) can
 # exceed the budget without the filter being wrong. More than 7 startup rows (the LOG5 startup lines counted on
-# stunnel 5.72; the host's build is not measured) for one boot means the unit restarted: read nrestarts in
+# stunnel 5.7x; the host's build is not measured) for one boot means the unit restarted: read nrestarts in
 # tls-health before touching the filter. A SyslogIdentifier added to the unit
 # would route its rows through Source 4, past this filter; the row count is the detector. The unit's debug
 # level stays untouched: a higher level is the one way this journal could start carrying more than peer
@@ -784,12 +784,14 @@ if contains(tag, "structured") {
   # carries its config name). The TLS terminator unit's ExecStartPre sources the host's Doppler env
   # file without redirecting stderr, so a malformed line in that file would echo the offending text,
   # and that file holds the token. Value-shaped like the rules above; it costs no user_data bytes.
-  # Anchored on a non-alphanumeric (an underscore or a start counts) rather than on a word boundary.
-  # It runs TWICE around the control-character strip: before it, a newline, tab or carriage return
-  # directly ahead of the token still counts as the separator; after it, a token split by a stripped
-  # character has reassembled. Either position alone leaks the other case. (The older rules above still
-  # run before the strip only, so a value split by a stripped character can evade them: pre-existing.)
-  msg = replace(msg, r'(^|[^A-Za-z0-9])dp\.[a-z]{2,5}\.[A-Za-z0-9_.-]{20,}', "$${1}dp.[redacted]")
+  # Anchored on a non-alphanumeric (an underscore, a stripped character or a start counts) rather than on a
+  # word boundary. It runs TWICE around the control-character strip. The first pass sees the raw text: its
+  # body class also admits the stripped characters, so a token split anywhere in its body, or preceded by a
+  # newline, tab or carriage return, is redacted whole (a body that ends at a newline also swallows the next
+  # word, which over-redacts and never leaks). The second pass sees the stripped text and catches a split
+  # inside the dp. prefix itself. Either pass alone leaks the other case. (The older rules above run before
+  # the strip only, so a value split by a stripped character can evade them: pre-existing.)
+  msg = replace(msg, r'(^|[^A-Za-z0-9])dp\.[a-z]{2,5}\.[A-Za-z0-9_.\-\x00-\x1f\x7f\u{2028}\u{2029}]{20,}', "$${1}dp.[redacted]")
   msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
   msg = replace(msg, r'(^|[^A-Za-z0-9])dp\.[a-z]{2,5}\.[A-Za-z0-9_.-]{20,}', "$${1}dp.[redacted]")
   .message = msg
