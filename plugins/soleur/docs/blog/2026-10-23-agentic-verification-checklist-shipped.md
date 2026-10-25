@@ -55,7 +55,7 @@ The very first generated test we ran caught a real bug on day one. A small utili
 
 Then the row taught its own second lesson. When we wrote the guide that teaches our users' workflows to do the same thing, three reviewers independently flagged the guide's own worked example: it was written so that every possible answer — including a completely wrong one — would pass it. An example that cannot fail teaches a practice that cannot catch anything. And after we fixed that, the fix-round found a second layer: a do-nothing program still passed the improved example. Teaching material gets graded like code now, because to a reader it is code.
 
-We wrote up [the full story of that example]({{ site.url }}/blog/property-test-cannot-fail-teaches-nothing/) — how it shipped, what the reviewers caught, and what it changed — as a companion to this post.
+We wrote up [the full post-mortem]({{ site.url }}/blog/property-test-cannot-fail-teaches-nothing/) — how the example shipped, what the reviewers caught, and what it changed — as a companion to this post.
 
 ## Old versus new, side by side
 
