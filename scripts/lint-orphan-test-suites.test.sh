@@ -1246,6 +1246,36 @@ else
 fi
 ROWS=$(( ROWS + 1 ))
 
+# R2 (#9441) — a slash-less declared DIRECTORY is a static RED. Since #9441
+# declared/consumed edges mint through _affected_add_declared_edge (no `-e`
+# filter), the declared SPELLING is the only thing carrying dir-ness to a
+# deleted subject: `scripts/` mints `^scripts/` on the deleting diff, `scripts`
+# mints `^scripts` — an exact line a diff can never produce. `_tracked_member`
+# cannot see it (its dir-prefix arm passes on any tracked member beneath).
+#
+# A UNIT ROW, deliberately not an M row: it mutates DECLARATIONS in the
+# sandbox's edge-index copy, never the SUT — the mutation matrix is for
+# breaking the linter, and DECLARED_TOTAL plus the two registered --rows
+# ranges would have to re-tile for a fixture this small. `scripts` is a real
+# directory in PRISTINE (materialise() -d branch + the copied real inputs).
+new_sandbox r2
+python3 - "$SB/scripts/lib/test-affected-paths.sh" <<'PY' || harness_die "R2 fixture edit did not land"
+import sys
+p = sys.argv[1]; s = open(p).read()
+anchor = 'AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(\n'
+assert s.count(anchor) == 1, s.count(anchor)
+i = s.index(anchor) + len(anchor)
+s = s[:i] + '  "scripts"\n' + s[i:]
+open(p, 'w').write(s)
+PY
+run_lint "$SB"; rc=$?
+assert_red "R2" "$rc"
+assert_has "R2 — the slash-less-directory arm names the entry" \
+  "AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS declares 'scripts', an existing directory written without a trailing '/'"
+assert_lacks "R2 — the correctly-slashed twin stays unflagged" \
+  "declares 'scripts/'"
+ROWS=$(( ROWS + 1 ))
+
 
 # POSITIVE CONTROL on the dispatch. Measured at review: rewriting `fail()` to increment PASS
 # left this suite fully green (rc 0) while a real regression was live in the SUT. Every
@@ -1278,12 +1308,12 @@ if (( EXECUTED != _EXPECTED_EXECUTED )); then
   echo "FATAL: ${EXECUTED} rows dispatched, expected ${_EXPECTED_EXECUTED} for --rows ${ROWS_LO}-${ROWS_HI} — the gate mis-selected." >&2
   exit 1
 fi
-# Conservation over UNCONDITIONAL sites: ROWS counts C0 + executed gated rows + R1 + R1b. A
-# deleted R1/R1b/C0 drops ROWS below EXECUTED+3 — the check that makes removing an
+# Conservation over UNCONDITIONAL sites: ROWS counts C0 + executed gated rows + R1 + R1b + R2. A
+# deleted R1/R1b/R2/C0 drops ROWS below EXECUTED+4 — the check that makes removing an
 # unconditional row loud.
-_UNCONDITIONAL_SITES=3
+_UNCONDITIONAL_SITES=4
 if (( ROWS != EXECUTED + _UNCONDITIONAL_SITES )); then
-  echo "FATAL: ${ROWS} rows ran but EXECUTED+${_UNCONDITIONAL_SITES} = $((EXECUTED + _UNCONDITIONAL_SITES)) — an unconditional site (C0, R1, R1b) was deleted or double-counted." >&2
+  echo "FATAL: ${ROWS} rows ran but EXECUTED+${_UNCONDITIONAL_SITES} = $((EXECUTED + _UNCONDITIONAL_SITES)) — an unconditional site (C0, R1, R1b, R2) was deleted or double-counted." >&2
   exit 1
 fi
 # Parent-side assertion floor: assertions that live OUTSIDE workers — the enumeration pass,
