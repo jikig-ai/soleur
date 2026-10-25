@@ -3,7 +3,7 @@
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-10-25-ci-s4-affected-index-pr4b-held-back-edges-plan.md
 - Status: complete
-- cto_spawns=1
+- cto_spawns=2
 
 ### Errors
 None blocking.
