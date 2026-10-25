@@ -361,7 +361,7 @@ describe("the patterns arm", () => {
       expect(last).toMatchObject({ status: "empty-corpus", input_source: "patterns", patterns_open: 0, ledger_read: "ok", corpus_count: 0 });
       expect(h.post).not.toHaveBeenCalled();
       expect(names).not.toContain("collect-corpus");
-      expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "patterns-empty" }));
+      expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "patterns-empty", tags: { cause: "no-open-patterns" }, extra: { cause: "no-open-patterns" } }));
     } finally {
       git(["reset", "-q", "--hard", "HEAD~1"]);
     }
@@ -397,7 +397,7 @@ describe("the ledger reader on the patterns arm", () => {
     const { last } = await run(MANUAL("patterns"));
     expect(last).toMatchObject({ status: "error", input_source: "patterns", ledger_read: "failed" });
     expect(h.post).not.toHaveBeenCalled();
-    expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "ledger-read-failed", tags: { cause: "http-5xx" } }));
+    expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "ledger-read-failed", tags: { cause: "http-5xx" }, extra: { cause: "http-5xx" } }));
     expect(JSON.stringify(last)).not.toContain("boom with a body");
   });
 
@@ -635,7 +635,7 @@ describe("patterns-empty is reported once per run, with the right cause", () => 
       stubModel([], EDITS);
       const { last } = await run(MANUAL("patterns"));
       expect(last).toMatchObject({ status: "empty-corpus", patterns_open: 0 });
-      expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "patterns-empty", tags: { cause: "dir-unreadable" } }));
+      expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "patterns-empty", tags: { cause: "dir-unreadable" }, extra: { cause: "dir-unreadable" } }));
     } finally {
       git(["reset", "-q", "--hard", "HEAD~1"]);
     }

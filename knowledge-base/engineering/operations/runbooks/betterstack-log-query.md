@@ -576,7 +576,7 @@ means "the deny channel went dark", not "no denials").
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY \
-  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(.component == "cron-filing-deny") | [.fn, .run_id, .count, .capture_status] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(type == "object" and .component == "cron-filing-deny") | [.fn, .run_id, .count, .capture_status] | @tsv'
 ```
 
 Three caveats before reading a zero as clean:

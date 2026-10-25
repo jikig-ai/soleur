@@ -526,7 +526,9 @@ describe("patternsPayloadBytes", () => {
     const tail = renderPatternsTail(patterns, evidenceEntries, "0".repeat(16));
     expect(tail.startsWith("\n\n<<<BEGIN-0000000000000000:pattern-index>>>")).toBe(true);
     expect(tail).toContain("<<<BEGIN-0000000000000000:learning knowledge-base/project/learnings/ev-1.md>>>");
-    expect(tail).toContain(">>>\n\n<<<BEGIN-0000000000000000:learning ");
+    // Exact separators: index -> first learning, and learning -> learning (each pinned on its own END/BEGIN pair).
+    expect(tail).toContain("<<<END-0000000000000000:pattern-index>>>\n\n<<<BEGIN-0000000000000000:learning ");
+    expect(tail).toMatch(/<<<END-0000000000000000:learning [^>]+>>>\n\n<<<BEGIN-0000000000000000:learning /);
     expect(patternsPayloadBytes(patterns, evidenceEntries)).toBe(Buffer.byteLength(tail, "utf8"));
     expect(patternsPayloadBytes(patterns, evidenceEntries)).toBeGreaterThan(Buffer.byteLength(JSON.stringify(evidenceEntries), "utf8"));
   });

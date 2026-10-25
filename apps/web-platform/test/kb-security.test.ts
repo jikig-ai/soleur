@@ -51,16 +51,21 @@ describe("KB API security", () => {
     // this is the wire: a new importer that skips the guard re-opens the `---js` hole. It walks every
     // directory of the app (not a hand-picked list) and matches static, dynamic and require forms.
     const root = resolve(__dirname, "..");
-    const SKIP = new Set(["node_modules", ".next", "test", "tests", ".git", "coverage", ".turbo"]);
+    const SKIP = new Set(["node_modules", ".next", ".git", "coverage", ".turbo"]);
+    const SKIP_TOP = new Set(["test", "tests"]); // the app's own test dirs only, never a nested `app/api/**/test`
     const CODE = /\.[cm]?[jt]sx?$/;
-    const IMPORT_RE = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["']gray-matter(?:\/[^"']*)?["']/;
+    const IMPORT_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'`]gray-matter(?:\/[^"'`]*)?["'`]/;
     // Whole comment lines are dropped (no regex comment-stripper: one that mis-parses a string would hide an import).
     const withoutCommentLines = (t: string) =>
-      t.split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
+      t
+        .split("\n")
+        .map((l) => l.replace(/^\s*\/\*.*?\*\/\s*/, "")) // a leading one-line block comment must not hide code after it
+        .filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l))
+        .join("\n");
     const importers: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
-        if (SKIP.has(name)) continue;
+        if (SKIP.has(name) || (dir === root && SKIP_TOP.has(name))) continue;
         const full = join(dir, name);
         const st = lstatSync(full);
         if (st.isSymbolicLink()) continue;
