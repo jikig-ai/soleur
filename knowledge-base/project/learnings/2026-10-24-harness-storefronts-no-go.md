@@ -13,7 +13,7 @@ A brainstorm asked whether Soleur should be published as a Grok Bot, an OpenAI D
 
 ## Solution
 
-The operator chose to record the no-go and stop. The record is `knowledge-base/project/brainstorms/2026-10-24-harness-storefronts-brainstorm.md` and `knowledge-base/project/specs/feat-harness-storefronts/spec.md` (issue #11035, draft PR #11033). No listing, no new adapter, and no publisher account.
+The operator chose to record the no-go and stop. The record is `knowledge-base/project/brainstorms/archive/20261025-145459-2026-10-24-harness-storefronts-brainstorm.md` and `knowledge-base/project/specs/archive/20261025-145459-feat-harness-storefronts/spec.md` (issue #11035, draft PR #11033). No listing, no new adapter, and no publisher account.
 
 The product pattern was already written down. Do not open a new skill for it.
 

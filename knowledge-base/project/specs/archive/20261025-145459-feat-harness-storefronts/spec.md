@@ -3,7 +3,7 @@ feature: harness-storefronts
 issue: 11035
 lane: cross-domain
 brand_survival_threshold: single-user incident
-brainstorm: knowledge-base/project/brainstorms/2026-10-24-harness-storefronts-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261025-145459-2026-10-24-harness-storefronts-brainstorm.md
 status: no-go
 ---
 
@@ -74,7 +74,7 @@ Privacy, the Data Protection Disclosure, and the GDPR Policy move together, with
 
 ### TR4: Live record stays unarchived
 
-Archival of this spec dir must be deferred until the operator is done with the live path. `archive-kb.sh` must not `git mv` this directory, or the sibling brainstorm, during compound on draft PR #11033. The decision record is the deliverable.
+These files stayed on the live path until the operator asked to land the record. `archive-kb.sh` did not move this directory, or the sibling brainstorm, during compound on draft PR #11033. This ship archived both on 2026-10-25. The decision record is the deliverable.
 
 ## Verification
 

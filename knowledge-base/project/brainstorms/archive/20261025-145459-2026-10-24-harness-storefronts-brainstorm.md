@@ -124,4 +124,4 @@ Facts the CLO fetched, kept short:
 
 The no-go is the deliverable. Planning a listing, an adapter, or a publisher account is not the next step. The successor skills `soleur:plan` and `soleur:one-shot` stay unused unless the operator reopens the decision.
 
-Archival of this file and of `knowledge-base/project/specs/feat-harness-storefronts/` stays deferred while they are the live decision record on draft PR #11033. `archive-kb.sh` must not move them during compound. Archival of this spec dir must be deferred until the operator is done with the live path, which is after any later `soleur:ship` only if the operator first asks to land the record.
+These files stayed on the live path until the operator asked to land the record. Compound did not move them. This ship archived them on 2026-10-25: this file, and `knowledge-base/project/specs/archive/20261025-145459-feat-harness-storefronts/`.
