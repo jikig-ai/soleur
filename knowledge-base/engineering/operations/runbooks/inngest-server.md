@@ -1602,7 +1602,7 @@ Measured from the repository's own records on 2026-10-18 (no estimate is used wh
   the retryable 503 only for connection refusal today (this PR extends it to timeouts and TLS causes), and otherwise 502, so the
   caller must re-arm; the dashboard send path archives the draft with `degraded=enqueue_failed` and does **not** retry (the approved
   action is lost until re-sent); the Stripe `invoice.payment_failed` route swallows the failure and returns 200, so that finance
-  event can be lost permanently. The last two are pre-existing and tracked: the Stripe swallow as #10542 (P1, it **blocks the A1 go**: fix it or run the replace in a quiesced window with the replay check) and the dashboard send as #10543.
+  event can be lost permanently. The last two are pre-existing and tracked: the Stripe swallow as #10542 (closed 2026-10-20: it no longer blocks a replace go) and the dashboard send as #10543 (open: a draft archived on a failed enqueue is the one personal, visible loss, and the quiesce op below covers reminder arming only, so it does not stop a dashboard send; #10543 fixed is therefore a hard precondition of any replace go, as the terminator-journal change (PR #10975) records).
 - **Window controls:** a low-traffic dispatch; the `cutover-inngest.yml` quiesce op; and a replay check afterwards (rows in
   `action_sends` without a spawn, Stripe dedup rows without a CFO draft). Whether the quiesce flag reaches the container without a
   redeploy is unverified, so use the existing op and do not assume a mechanism.
@@ -1695,19 +1695,39 @@ Every field is a fixed token or an integer; the event never carries a URL, an ad
 | `handshake` | TCP connected and no TLS handshake time was printed (a terminator crash loop, plaintext on the TLS port, a stalled handshake; the rcs measured are 35 and 28). The classifier also files rc 58, 83 and 51 with a non-zero connect time here, not under `ca_file`: those were not measured, so `handshake` with an rc outside 35 and 28 is not evidence of a terminator fault | 35, 28 | the same rows: `unit`, `nrestarts`, `listener` | As `connect`. |
 | `verify` | TLS was rejected at certificate verification: the served certificate does not verify against the candidate CA file (curl printed no handshake time, so `tls=0`, measured on every rc 60 row) | 60 | the `verify=` value, then the `verify` reading rule below: the `tls-health` fingerprints are both Inngest-host values and cannot show the pinned side | Deterministic until the served certificate or the CA value Doppler holds changes; a re-flip repeats it. STOP: do not re-mint, re-publish or re-flip on this line alone. |
 | `ca_file` | curl could not use the candidate CA file it was handed | 77 | nothing earlier in the same deploy: `class=ca_invalid` and `class=write_failed file=ca_candidate` return before the gate runs, so a `ca_file` event means they did not fire and the validator already accepted the bytes (`write_failed file=ca` and `file=link_env` come AFTER the gate and say nothing about it). The CA value in Doppler `soleur/prd` is an owner read, not a no-SSH read; this is not a listener problem | Deterministic until the CA file is right; do not re-flip before the cause is read. |
-| `request` | TLS completed and verified, no HTTP response came back | 56, 52, 28, 1, 18 | the same `tls-health` rows (`unit`, `nrestarts`, `listener`), which describe the terminator only: no field shows its upstream on `127.0.0.1:8288`. The read-only `/hooks/inngest-tls-handshake` call (see "Calling the handshake hook (A2)" above) repeats the gate's own request against the INSTALLED CA file, so it adds nothing while the gate is failing, and after a failed gate it returns `verified_rc=77` only while the installed CA file is still the empty placeholder (a host that has never completed an https deploy; a host holding an older valid CA answers against that file): that is not a verdict on this event | Do not re-flip on `phase=request` alone: unchanged `tls-health` is not a reason to expect a different result, and no cause is readable. Every flip attempt needs the owner's in-session per-command go (A3). A failed gate aborts that host's deploy before any container swap; the workflow's revert step then flag-absent applies and redeploys the fleet (the A3 row counts that as one swap per host). |
+| `request` | TLS completed and verified, no HTTP response came back | 56, 52, 28, 1, 18 | the same `tls-health` rows (`unit`, `nrestarts`, `listener`), which describe the terminator only: no field shows its upstream on `127.0.0.1:8288`. The read-only `/hooks/inngest-tls-handshake` call (see "Calling the handshake hook (A2)" above) repeats the gate's own request against the INSTALLED CA file, so it adds nothing while the gate is failing, and after a failed gate it returns `verified_rc=77` only while the installed CA file is still the empty placeholder (a host that has never completed an https deploy; a host holding an older valid CA answers against that file): that is not a verdict on this event | Do not re-flip on `phase=request` alone: unchanged `tls-health` is not a reason to expect a different result, and whether a cause is readable depends on the host's image tag (the paragraph below). Every flip attempt needs the owner's in-session per-command go (A3). A failed gate aborts that host's deploy before any container swap; the workflow's revert step then flag-absent applies and redeploys the fleet (the A3 row counts that as one swap per host). |
 | `status` | TLS verified and an HTTP status other than 200 came back | 0, 18 | the `http=` value | Depends on what answers behind the terminator; read the status first. |
 | `unknown` | the attempt's output could not be read (see the `unknown` decode) | 124, 2, 0 | none: the line carries no stage | Read the `unknown` decode before retrying. |
 
-**`phase=request` means: TLS verified, no HTTP response: check the terminator and its upstream, not the certificate. No cause is readable today:
-the terminator's own journald is not shipped to Better Stack.** `soleur-inngest-tls.service` runs stunnel in the foreground with `syslog = no` and sets no priority, so its
-output takes systemd's default priority 6, and `vector.toml` Source 1 admits only `inngest-server.service` or priority 3-4 from other units (no `vector.toml` entry names the
-terminator). No issue tracks shipping it: #10880 is a different `vector.toml` item, a carrier-drift CI guard. The event does not say whether the terminator, its upstream on `127.0.0.1:8288` or the app failed.
-**Exit from the stop rule (the owner's decision, not made here).** Shipping the terminator's journald is a small `vector.toml` change by reading: add the unit to Source 1 `include_units`
-and to Source 2 `exclude_units` (excludes win, so the two lists move together), and update `apps/web-platform/test/infra/vector-admission.test.sh`, which pins both lists (rows S1 and S2). A `vector.toml`
-change reaches the Inngest host only through the bootstrap image (`IREF` digest in `cloud-init-inngest.yml`, which feeds `user_data`), and `hcloud_server.inngest` has no `ignore_changes` on
-`user_data` (`inngest-host.tf`), so the digest bump forces a host replace; it also touches the `vector.toml` carrier pin that #10880 guards. No issue tracks it. The owner chooses between shipping it before a
-third flip and a one-off SSH read of the terminator's journal under `hr-ssh-diagnosis-verify-firewall`.
+**`phase=request` means: TLS verified, no HTTP response: check the terminator and its upstream, not the certificate.** Whether the cause is readable depends on the bootstrap image
+the Inngest host was created from. Read the host's `pre-zot-pull` stage row for the `boot_id` in question: it names the image tag.
+
+- **An image cut after PR #10975 merged (v1.1.59 at the time of writing; any later tag also qualifies): the terminator's journal ships.** `vector.toml` Source 1 admits `soleur-inngest-tls.service` (stunnel in the foreground, `syslog = no`) and Source 2
+  excludes it, so each of its rows ships once; `inngest_terminator_filter` drops only three healthy-request lines (below). Read the unit's rows around T (the failing row's own `dt`):
+  `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 24h --grep soleur-inngest-tls.service --limit 200`, and place each row against the gate's second
+  by its timestamp. Three decodes, from the measured stunnel 5.72 line shapes (the host's own build is not yet measured):
+  1. **The upstream refused.** `LOG3 s_connect: connect 127.0.0.1:8288: Connection refused (111)`, `LOG3 No more addresses to connect` and `LOG5 Connection reset: 0 byte(s) sent to TLS, 0 byte(s) sent to socket`
+     (this is the shape a real stunnel printed as `rc=56 http=000` with TLS completed): nothing was listening on `127.0.0.1:8288`.
+  2. **The upstream accepted and closed with no reply.** `LOG5 Connection closed: 0 byte(s) sent to TLS, N byte(s) sent to socket` with N above 0 (the request reached the upstream, nothing came back).
+  3. **No per-connection close or reset row for the gate's window.** The connection was still open (a stall), or the rows were not shipped (an older image, Vector, or Better Stack ingest), or this host's wording differs
+     from the fixtures: read the unit's row count and its `boot_id` first, and compare the `tls_8443_packets` counter of the `tls-health` rows across the window (flat means the gate's connection never reached
+     `:8443` from outside; rising means it reached the terminator and the question is what happened after).
+  A `LOG3 SSL_accept ...` line is a handshake-class fault on the terminator and should not coexist with `tls=3 verify=0`; read it as a separate finding.
+  **Omitted by design:** the healthy `accepted connection`, `s_connect: connected` and `connected remote server` lines (the filter's three drop shapes). The dropped `accepted connection` line was the one that carried a
+  peer address, so a kept close or reset row is attributed by its timestamp, not by an address, and the absence of an `accepted connection` row never means the request did not reach the terminator.
+  **Baseline, not a fault:** the host's own 5-minute `tls-health` probe connects through the terminator too, so one `Connection closed` row with BOTH byte counts above 0 every 5 minutes is normal.
+  **Budget:** at most 400 rows per day for this unit before any link flip and at most 8,000 after one. The first read after a replace is a group-by-message-prefix over the first hour (a dropped class present
+  means the host's wording differs), then the unit's row count over the first 24 hours (the clock starts at the new boot's first startup row and its baseline excludes that boot's startup rows). Over budget, or a
+  dropped class present: fix the filter before the flip go is asked; that needs a new image and another host replace.
+- **An older image (the live host ran v1.1.57 on the 2026-10-25 read, and keeps it until its next replace): not shipped.** No cause is readable from Better Stack, and `phase=request` alone does not say whether the terminator, its upstream on
+  `127.0.0.1:8288` or the app failed. The owner chooses between waiting for the replace that delivers the change and a one-off SSH read of the terminator's journal under `hr-ssh-diagnosis-verify-firewall`.
+
+**Accepted residual.** No synchronous verb reads the terminator unit's state: the `/hooks/inngest-tls-handshake` response only repeats the gate's request, and the `tls-health` rows describe the unit, not its upstream.
+
+**Delivery, in order (each step is the owner's, except the automatic chain).** (1) The merge of PR #10975 re-delivers `vector.toml` to web-1 and web-2 (their journald and vector restart; the new unit match is inert there).
+(2) An automatic mint, build and bot pin-bump PR cut the next `vinngest-v1.x.y` tag (v1.1.59 at the time of writing); nothing deploys. (3) The Inngest host replace, which is a production act with a typed go naming it, after the `user_data` trim (#11080) has
+merged and a CI-rendered margin of at least 300 B on current `main` is read at dispatch, and #10543 is fixed. (4) The resume after the replace (an environment approval). It is the exit from the stop rule above, and
+the stop rule itself is unchanged: never re-flip on `phase=request` alone, and every flip needs the owner's per-command go (A3).
 A real stunnel whose upstream refused printed exactly `rc=56 http=000` with TLS completed (curl 8.5.0, one measurement): a match for the shape of the
 2026-10-23 event, not a cause for it.
 
@@ -1803,7 +1823,7 @@ window.
 | #10539 | bind `:8288` to loopback and drop the legacy accept at the next unrelated replace (also restricts the Connect ports) |
 | #10540 | the signing-key and event-key rotation apply route (blocks A5) |
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
-| #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1, blocks the A1 go) |
+| #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1; closed 2026-10-20) |
 | #10543 | the dashboard send archives the draft on a failed enqueue |
 | #10544 | `inngest-host-replace` has no confirm or id-pin input |
 | #10545 | the Inngest host's nft loader is not idempotent |
