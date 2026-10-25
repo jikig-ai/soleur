@@ -105,6 +105,11 @@ same dedicated walk `tests/commands/` already has, extended to both suite conven
 3. **`scripts/test-all.sh`** — `DECLARED_TOTAL` bump re-splits the two registered ranges
    (`--rows 1-15`/`16-30` → `1-18`/`19-35`) at all four coupled sites (two `run_suite` +
    two `skip_suite` re-run strings); the shard-totality tiling check enforces this.
+   The same bump re-pins the verbatim anchors in
+   `plugins/soleur/test/scripts-shard-totality-mutations.sh` — nine rows mutate these
+   exact `run_suite` lines and the battery's `DECLARED_TOTAL` line, so a re-split that
+   edits only the four runner sites leaves all nine `ANCHOR MISSING` (caught in review:
+   the first revision of this PR measured exactly that, 9/42 rows red).
 
 ## Guard Contract
 
