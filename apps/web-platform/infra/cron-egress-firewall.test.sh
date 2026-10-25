@@ -386,7 +386,7 @@ fi
 # line), and the only non-accept verdict rules ahead of the git-data accept are the link-local drop and the two port-53 exfil drops.
 gd_norm() { sed -E 's/.*add rule ip filter SOLEUR-EGRESS //; s/ comment .*//'; }
 gd_accept_set() { grep -vE '^[[:space:]]*#' "$1" | grep -F 'add rule ip filter SOLEUR-EGRESS ' | gd_norm | grep -E '(^| )accept$' | LC_ALL=C sort; }
-gd_early_verdicts() { grep -E '^add rule ip filter SOLEUR-EGRESS ' "$1" | awk '/ ip daddr 10\.0\.1\.20 tcp dport 22 accept/ { exit } { print }' | gd_norm | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
+gd_early_verdicts() { grep -E '^add rule ip filter SOLEUR-EGRESS ' "$1" | awk '/ ip daddr 10\.0\.1\.20 tcp dport 22 accept/ { seen=1 } !seen { print }' | gd_norm | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
 GD_ACCEPT_PIN="$(LC_ALL=C sort <<'PIN'
 ct state established,related accept
 oifname "$BRIDGE_IF" accept
