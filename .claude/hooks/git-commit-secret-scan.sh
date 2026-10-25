@@ -581,8 +581,9 @@ add_root() {
 repo_err="${CTR_ROOT_ERR-}"
 add_root_of() {
   local out rc=0
-  if [ -n "${1-}" ]; then out="$(git -C "$1" rev-parse --show-toplevel 2>&1)" || rc=$?
-  else out="$(git rev-parse --show-toplevel 2>&1)" || rc=$?; fi
+  # LC_ALL=C: the case below matches git's English wording; a translated git would read "not a repository" as unreadable.
+  if [ -n "${1-}" ]; then out="$(LC_ALL=C git -C "$1" rev-parse --show-toplevel 2>&1)" || rc=$?
+  else out="$(LC_ALL=C git rev-parse --show-toplevel 2>&1)" || rc=$?; fi
   if [ "$rc" -eq 0 ]; then
     add_root "${out##*$'\n'}"
   else

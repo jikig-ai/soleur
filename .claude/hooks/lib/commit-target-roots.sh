@@ -1153,7 +1153,7 @@ ctr_resolve_roots() {
       for d in ${seen[@]+"${seen[@]}"}; do if [ "$d" = "$cand" ]; then dup=1; fi; done
       [ "$dup" -eq 1 ] && continue
       seen+=("$cand")
-      top=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR git -C "$cand" rev-parse --show-toplevel 2>&1) || {
+      top=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR LC_ALL=C git -C "$cand" rev-parse --show-toplevel 2>&1) || {
         # a failure other than "not a repository" is a repository git cannot read (a bad config value): the caller denies it
         case "$top" in
           *"not a git repository"*|*"must be run in a work tree"*) : ;;

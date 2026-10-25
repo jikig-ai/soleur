@@ -4077,6 +4077,19 @@ _mk_typechange_repo() {  # <staged|unstaged>: a tracked SYMLINK a.dat replaced b
   printf '%s\n' "$T"
 }
 
+# Round-3 verification: the "not a repository" decision reads git's English wording, so a translated git must not turn a
+# non-repository hook cwd into "a repository git cannot read" (a false deny of a routine commit).
+_t_fr3_locale() {
+  _sim_init
+  [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
+  local Cn N; Cn=$(_mk_leaky_repo clean); N=$(mktemp -d "$SUITE_TMP/nogit.XXXXXX")
+  SIM_ENV=("LANG=en_US.utf8" "LANGUAGE=de")
+  _sx "R3 L1 translated git, non-repo hook cwd: 'git -C <repo> commit' -> allow" "$N" "git -C $Cn commit -m x" allow "!cannot read the repository"
+  _sx "R3 L2 ... 'cd <repo> && git commit' -> allow" "$N" "cd $Cn && git commit -m x" allow "!cannot read the repository"
+  _sx "R3 L3 ... 'cd <repo> && git add -A && git commit' (simulated) -> allow" "$N" "cd $Cn && git add -A && git commit -m x" allow "!cannot read the repository"
+  SIM_ENV=()
+}
+
 _t_fr3_hook() {
   _sim_init
   [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
@@ -4503,6 +4516,7 @@ _t_sim_consumer
 _t_sim_oracle
 _t_sim_checkattr
 _t_fr3_hook
+_t_fr3_locale
 _t_fr3_walk
 _t_fr3_cards
 
@@ -4516,7 +4530,7 @@ _t_floor_contract
 # a host with no runnable gitleaks skips whole arms (reported, and failed under CI=true by the
 # epilogue), so the floor only binds when nothing was skipped. Reported by printf + exit,
 # never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=1705
+MIN_ASSERTIONS=1708
 if (( ${#SKIPPED_ARMS[@]} == 0 )) && (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
