@@ -568,6 +568,57 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# TS11 — pattern pages never reach the facet files (Guard 2, #8293)
+#
+# knowledge-base/project/patterns/ is a sibling of learnings/, so the facet pass
+# (scoped to learnings/) must not index its tags or categories. The positive
+# control is a learnings fixture carrying the SAME tag: without it, "tag absent"
+# and "scanner broken" are the same observation. The patterns file must exist
+# and be listed in INDEX.md, so deleting the fixture reds instead of passing
+# vacuously.
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- TS11: patterns/ tags never reach the facet files ---"
+
+kb_ts11="$TMPDIR_BASE/kb-ts11"
+assert_fixture_dir "$kb_ts11"
+mkdir -p "$kb_ts11/project/patterns" "$kb_ts11/project/learnings"
+printf -- '---\ntitle: "Pattern Probe"\nsummary: "synthetic pattern fixture"\nstatus: open\ntags: [ts11-patterns-only-tag]\ncategory: ts11-patterns-only-cat\n---\n\nbody\n' \
+  > "$kb_ts11/project/patterns/ts11-probe.md"
+KB_DIR="$kb_ts11" bash "$GEN_SCRIPT" >/dev/null 2>&1
+
+CASES=$((CASES + 1)); assert_file_exists "$kb_ts11/project/patterns/ts11-probe.md" "TS11: self-check: the patterns fixture exists"
+CASES=$((CASES + 1)); assert_indexed "$kb_ts11" "project/patterns/ts11-probe.md" "TS11: self-check: the patterns fixture is listed in INDEX.md"
+
+ts11_tags="$(cat "$kb_ts11/kb-tags.txt")"
+ts11_cats="$(cat "$kb_ts11/kb-categories.txt")"
+CASES=$((CASES + 1))
+if [[ "$ts11_tags" == *"ts11-patterns-only-tag"* ]]; then
+  echo "  FAIL: TS11: a patterns/ tag leaked into kb-tags.txt"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: TS11: patterns/ tag absent from kb-tags.txt"
+  PASS=$((PASS + 1))
+fi
+CASES=$((CASES + 1))
+if [[ "$ts11_cats" == *"ts11-patterns-only-cat"* ]]; then
+  echo "  FAIL: TS11: a patterns/ category leaked into kb-categories.txt"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: TS11: patterns/ category absent from kb-categories.txt"
+  PASS=$((PASS + 1))
+fi
+
+# Positive control: the same tag and category under learnings/ IS extracted.
+printf -- '---\ntitle: "Learning Probe"\ntags: [ts11-patterns-only-tag]\ncategory: ts11-patterns-only-cat\n---\n\nbody\n' \
+  > "$kb_ts11/project/learnings/ts11-control.md"
+KB_DIR="$kb_ts11" bash "$GEN_SCRIPT" >/dev/null 2>&1
+ts11_tags="$(cat "$kb_ts11/kb-tags.txt")"
+ts11_cats="$(cat "$kb_ts11/kb-categories.txt")"
+CASES=$((CASES + 1)); assert_contains "$ts11_tags" "ts11-patterns-only-tag" "TS11: positive control: the same tag under learnings/ is present"
+CASES=$((CASES + 1)); assert_contains "$ts11_cats" "ts11-patterns-only-cat" "TS11: positive control: the same category under learnings/ is present"
+
+# ---------------------------------------------------------------------------
 # Anti-vacuity floor.
 #
 # Without this, deleting the whole TS7 block exits 0 with "ALL TESTS PASSED" —
@@ -586,7 +637,8 @@ fi
 # and its `learnings-researcher/SKILL.md` was one of the prose-parity consumers
 # iterated above — one fewer consumer, one fewer assertion. Measured on a green
 # run after the removal (61 dispatched), not subtracted from the old value.
-MIN_ASSERTIONS=61
+# 61 -> 67 (#8293): TS11 adds six assertions (patterns/ containment + positive control).
+MIN_ASSERTIONS=67
 total_assertions=$((PASS + FAIL))
 if [[ "$total_assertions" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
