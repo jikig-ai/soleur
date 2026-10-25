@@ -647,6 +647,13 @@ rm -f "$F6_ENVD"
 F6_SUT="$F6_MUT_EXP" run_unit "$F6_LINE" none F6_HB_ENVDUMP="$F6_ENVD"
 assert "F6 mutant[export]: an exported URL DOES ride the heartbeat curl's environment (the not-exported row can see it)" \
   '[[ -s "$F6_ENVD" && "$(grep -c "^URL=" "$F6_ENVD" || true)" -ge 1 && "$(grep "^URL=" "$F6_ENVD" | grep -cF -- "$F6_URL" || true)" -eq 1 ]]'
+# Preset URL: an exported `URL` inherited from the environment — `unset URL` is the load-bearing
+# line this row discriminates (deleting it ships green and exports the preset; the zot/nic suites
+# carry the same arm).
+rm -f "$F6_ENVD"
+run_unit "$F6_LINE" none URL='https://uptime.betterstack.test/api/v1/heartbeat/PRESET-10363' F6_HB_ENVDUMP="$F6_ENVD"
+assert "F6 preset URL: an exported URL inherited from the environment does not ride the heartbeat curl's environment (unset URL is load-bearing)" \
+  '[[ -s "$F6_ENVD" && "$(grep -c "^URL=" "$F6_ENVD" || true)" -eq 0 && "$N_HB" -eq 1 ]]'
 # Order: a mutant that resolves the URL above the refusal leaks it under SHELLOPTS=xtrace.
 F6_MUT="$TMP/f6-mut-hoist-inngest.sh"
 sed '/^set -u$/a\
@@ -708,7 +715,7 @@ echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a skipped block or a disarmed assert() must not read as green. Raise it in the SAME edit that adds
 # rows; it is reported with printf and exit, never through assert() (scripts/guard-vacuity-floor.test.sh builds its mutant
 # from the literal sitting directly above the `if`).
-MIN_ASSERTS=169
+MIN_ASSERTS=170
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
   exit 1
