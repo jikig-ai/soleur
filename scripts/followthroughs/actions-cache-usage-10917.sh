@@ -11,7 +11,14 @@
 #   1 = FAIL       still over the threshold: another writer, or entries have not aged out yet.
 #                  The next step is the explicit-authorization prune option recorded on #10917;
 #                  this probe never deletes anything.
-#   2 = TRANSIENT  gh unreachable, auth failure, or an unreadable response
+#   3 = CANNOT ESTABLISH  gh unreachable, no token, auth failure, or an unreadable response (the
+#                  sweeper heading reads CANNOT ESTABLISH; 2 would read NOT YET, which is wrong for a
+#                  probe that could not measure)
+#  78 = REFUSED    running under `set -x` with a live GH_TOKEN (#7797)
+#
+# Directive, added to #10917 after the merge (the merge date is not known until then):
+#   <!-- soleur:followthrough script=scripts/followthroughs/actions-cache-usage-10917.sh earliest=<merge date + 8d> secrets=GH_TOKEN -->
+# Keep #10917 open and labelled `follow-through` until this passes.
 #
 # Required env: GH_TOKEN with actions:read (declared via the directive's secrets= clause).
 set -uo pipefail
@@ -31,22 +38,22 @@ REPO="jikig-ai/soleur"
 THRESHOLD_BYTES=8000000000
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
-  echo "TRANSIENT: GH_TOKEN not set" >&2
-  exit 2
+  echo "CANNOT ESTABLISH: GH_TOKEN not set" >&2
+  exit 3
 fi
 
 usage_rc=0
 usage=$(gh api "repos/${REPO}/actions/cache/usage" 2>/dev/null) || usage_rc=$?
 if [[ "$usage_rc" -ne 0 ]]; then
-  echo "TRANSIENT: gh api actions/cache/usage failed (rc ${usage_rc})" >&2
-  exit 2
+  echo "CANNOT ESTABLISH: gh api actions/cache/usage failed (rc ${usage_rc})" >&2
+  exit 3
 fi
 
 bytes=$(jq -r '.active_caches_size_in_bytes' <<<"$usage" 2>/dev/null) || bytes=""
 count=$(jq -r '.active_caches_count' <<<"$usage" 2>/dev/null) || count=""
 if [[ ! "$bytes" =~ ^[0-9]+$ ]]; then
-  echo "TRANSIENT: actions/cache/usage returned no numeric active_caches_size_in_bytes" >&2
-  exit 2
+  echo "CANNOT ESTABLISH: actions/cache/usage returned no numeric active_caches_size_in_bytes" >&2
+  exit 3
 fi
 
 if [[ "$bytes" -lt "$THRESHOLD_BYTES" ]]; then

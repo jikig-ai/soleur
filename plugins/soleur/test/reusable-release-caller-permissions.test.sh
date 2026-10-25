@@ -271,30 +271,49 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo "4. The release docker build uses an inline registry cache, not the Actions cache (#10917)"
+if ! python3 -I -c 'import yaml' 2>/dev/null; then
+  fail "docker_build cache backend: python3 PyYAML is unavailable, so section 4 could not run"
+else
 cache_verdict="$(python3 -I - "$REUSABLE" <<'PY' 2>&1
-import sys, yaml
+import re, sys, yaml
 doc = yaml.safe_load(open(sys.argv[1]))
-steps = [s for j in doc["jobs"].values() for s in j.get("steps", []) if s.get("id") == "docker_build"]
-if len(steps) != 1:
-    print("BAD\tfound %d docker_build steps, expected exactly 1" % len(steps)); sys.exit(0)
-w = steps[0].get("with") or {}
+# Select by ACTION, across every job: a second build step without the docker_build id must not hide.
+steps = [s for j in doc["jobs"].values() for s in j.get("steps", [])
+         if str(s.get("uses", "")).startswith("docker/build-push-action@")]
+if len(steps) != 1 or steps[0].get("id") != "docker_build":
+    print("BAD\tfound %d docker/build-push-action step(s) (ids %r), expected exactly one with id docker_build"
+          % (len(steps), [s.get("id") for s in steps])); sys.exit(0)
+step = steps[0]
+w = step.get("with") or {}
 cf, ct, pv = str(w.get("cache-from", "")), str(w.get("cache-to", "")), w.get("provenance")
+tags = [t.strip() for t in str(w.get("tags", "")).splitlines() if t.strip()]
 problems = []
-if "type=gha" in cf or "type=gha" in ct:
-    problems.append("a type=gha cache backend is back (cache-from=%r cache-to=%r)" % (cf, ct))
+if any(re.search(r"type\s*=\s*gha", str(v), re.I) for v in w.values()):
+    problems.append("a type=gha cache backend is back in with: %r" % {k: v for k, v in w.items() if k.startswith("cache")})
 if ct.strip() != "type=inline":
-    problems.append("cache-to is %r, expected type=inline" % ct)
-if not cf.startswith("type=registry,ref=") or "docker_image" not in cf:
-    problems.append("cache-from is %r, expected type=registry,ref=<inputs.docker_image>:latest" % cf)
+    problems.append("cache-to is %r, expected exactly type=inline" % ct)
+if cf.strip() != "type=registry,ref=${{ inputs.docker_image }}:latest":
+    problems.append("cache-from is %r, expected exactly type=registry,ref=${{ inputs.docker_image }}:latest" % cf)
 if pv is not False:
     problems.append("provenance is %r, expected an explicit false (the default records build-args in a public repo)" % (pv,))
-print("OK\tinline registry cache, provenance false" if not problems else "BAD\t" + "; ".join(problems))
+# The step's gate is the one it has always had; an `if` that drifted (or `push: false`/`no-cache`)
+# would stop the cache being written or read while every other key here still looked right.
+if (w.get("push") is not True or w.get("no-cache") not in (None, False)
+        or step.get("if") != "steps.version.outputs.next != '' && inputs.docker_image != ''"):
+    problems.append("push/no-cache/if changed (push=%r no-cache=%r if=%r): the cache would never be written or used"
+                    % (w.get("push"), w.get("no-cache"), step.get("if")))
+latest = [t for t in tags if t.endswith(":latest") or "latest" in t]
+if len(latest) != 1 or "github.ref == 'refs/heads/main'" not in latest[0]:
+    problems.append(":latest must be pushed by exactly one tag line gated on github.ref == 'refs/heads/main' (it is the cache source): %r" % latest)
+print("OK\tinline registry cache, provenance false, :latest main-only" if not problems else "BAD\t" + "; ".join(problems))
 PY
 )"
 case "$cache_verdict" in
   OK*) pass "docker_build: ${cache_verdict#OK$'\t'}" ;;
-  *)   fail "docker_build cache backend: ${cache_verdict#BAD$'\t'}" ;;
+  BAD*) fail "docker_build cache backend: ${cache_verdict#BAD$'\t'}" ;;
+  *)   fail "docker_build cache backend: the check itself failed to run: $(printf '%s' "$cache_verdict" | tail -n 3 | tr '\n' ' ')" ;;
 esac
+fi
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="

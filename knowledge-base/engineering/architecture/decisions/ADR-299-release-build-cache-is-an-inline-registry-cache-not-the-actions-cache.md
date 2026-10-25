@@ -42,18 +42,33 @@ nothing in the repository consumes release-image attestations. The cosign, zot-c
 read the post-push digest, so the changed manifest (a single OCI image manifest instead of an index with
 attestations) does not affect them.
 
-Ruled by CTO agent (2026-10-25): `:latest` is the cache source. A dedicated `:buildcache` tag would add
-an ungated push with the same trust profile, since BuildKit cache keys are content-addressed and
-poisoning needs GHCR write access that already allows pushing the image. `:latest` is moved by the build
-step before the zot gate runs; the old gha scope had the same profile. This flips if a build that failed
-the zot gate is shown to have fed a later published build.
+Ruled by CTO agent (2026-10-25): `:latest` is the cache source, and only a run on `refs/heads/main` may
+push it (the `:latest` tag line in the build step is gated on `github.ref`). A dedicated `:buildcache` tag
+would add an ungated push with the same trust profile, since BuildKit cache keys are content-addressed and
+poisoning needs GHCR write access that already allows pushing the image. The gate exists because the old
+gha cache was ref-scoped and a global tag is not: `web-platform-release.yml` has a `workflow_dispatch` with
+no branch guard, so a branch-built image's layers could otherwise be imported by the next main release and
+signed as main (`ci-deploy.sh` pins the cosign identity to `reusable-release.yml@refs/heads/main`). A main
+run that fails the zot gate has already advanced `:latest`; that image is main-built, so the trust is the
+same, and the check that would flip this is a published release whose layers trace to a gate-failed build.
+The test in `plugins/soleur/test/reusable-release-caller-permissions.test.sh` (section 4) pins the gate.
 
 ## Consequences
 
-- The first release after merge builds cold once (the existing `:latest` carries no cache metadata).
+- The first release after merge builds cold once (the existing `:latest` carries no cache metadata). The
+  drift monitor's sustained threshold is 225 minutes, far above the worst measured cold build (~22 minutes).
 - Old `gha` entries are not deleted; unused entries are evicted by GitHub after 7 days.
 - Dockerfile layers below `ENV BUILD_SHA` still rebuild on every release. Moving them is #5055 and is not
   needed for the cap.
+- Layers above `ENV BUILD_VERSION` (apt, the gh apt repo, global npm tools, Playwright system packages) are
+  reused for as long as the lines above them do not change. The gha cache evicted them after 7 days idle, so
+  OS and security updates refreshed more often than a registry cache will; a base-image digest bump or an
+  edit above those lines refreshes them.
+- `provenance: false` ends new build-arg-bearing attestations (#7389: `SENTRY_AUTH_TOKEN` is a build-arg and
+  the default on a public repository is `mode=max`). It does not retract attestations already published, and
+  whether the token needs rotating is a decision outside this ADR. Nothing in the repository consumes
+  release-image attestations. The durable fix for the build-arg itself (a BuildKit secret mount, PR #7390)
+  is separate and, if it lands, must drop the `.SLSA` requirement of its verify step.
 
 ## Alternatives Considered
 
@@ -63,6 +78,7 @@ the zot gate is shown to have fed a later published build.
 | `mode=max` or a scope split on the gha backend | `mode=max` exports the secret-bearing builder layer; a scope split still exports about the same bytes. |
 | Reorder `ENV BUILD_SHA` below `npm ci --omit=dev` (#5055) | A build-speed win, not a cap fix: the gha export would still write the changed layers. |
 | Dedicated `:buildcache` tag | Ungated extra push with the same trust profile as `:latest` (see Decision). |
+| `provenance: mode=min` plus a BuildKit secret mount (#7389 / PR #7390) | The better long-term fix for the build-arg, but it keeps attestations that nothing reads and is an unmerged, separate change; `provenance: false` closes the forward leak now and does not preclude it. |
 
 ## Evidence
 
