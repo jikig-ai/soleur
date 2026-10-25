@@ -104,6 +104,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/inngest/cron-plausible-goals.test.ts",
   "test/server/inngest/cron-safe-commit-parity.test.ts",
   "test/server/inngest/cron-safe-commit.test.ts",
+  "test/server/inngest/cron-untrusted-preamble.test.ts",
   "test/server/inngest/cron-weekly-release-digest.test.ts",
   "test/server/inngest/execution-placement.test.ts",
   "test/server/inngest/filing-shape-corpus-parity.test.ts",
