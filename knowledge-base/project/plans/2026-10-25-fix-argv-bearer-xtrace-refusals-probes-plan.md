@@ -323,34 +323,36 @@ none is invented by this plan.
 
 ### Guard 1 — xtrace refusals on the two new surfaces
 
-- **Property.** No expansion of the heartbeat-URL credential can be traced
-  before the script exits: under any trace-armed launch (`-x`, `SHELLOPTS`,
-  `BASH_ENV`), each named script exits 78 emitting only a value-free,
-  name-free refusal.
-- **Assembly.** The launch paths the property quantifies over: (a) the
-  `inngest-consumer-probe.service` `ExecStart` chain (outer `bash -c` →
-  `doppler run` → target script) — the chokepoint is the FIRST executable
-  statement of `inngest-consumer-probe.sh`, which is reachable only if the
-  wrapper expands nothing, so the ExecStart is part of the assembly;
-  (b) the rendered `/usr/local/bin/inngest-heartbeat.sh` — chokepoint is the
-  first executable line inside the quoted `HEARTBEATSCRIPTEOF` heredoc;
-  (c) direct `bash -x`/`sh -x` invocation of either script by an operator.
+**Property.** No expansion of the heartbeat-URL credential can be traced
+before the script exits: under any trace-armed launch (`-x`, `SHELLOPTS`,
+`BASH_ENV`), each named script exits 78 emitting only a value-free,
+name-free refusal.
 
-  **Mutation matrix (designed before the guard):**
+**Assembly.** The launch paths the property quantifies over: (a) the
+`inngest-consumer-probe.service` `ExecStart` chain (outer `bash -c` →
+`doppler run` → target script) — the chokepoint is the FIRST executable
+statement of `inngest-consumer-probe.sh`, which is reachable only if the
+wrapper expands nothing, so the ExecStart is part of the assembly;
+(b) the rendered `/usr/local/bin/inngest-heartbeat.sh` — chokepoint is the
+first executable line inside the quoted `HEARTBEATSCRIPTEOF` heredoc;
+(c) direct `bash -x`/`sh -x` invocation of either script by an operator.
 
-  | Mutation | Must be RED because |
-  |---|---|
-  | Delete the `case $-` block from `inngest-consumer-probe.sh` | traced replay in T1 leaks the sentinel — row goes red |
-  | Keep the refusal but leave `export INNGEST_CONSUMER_URL="${!...}"` in the unit ExecStart | trace prints the export before the script runs — T1 red; also `doppler-injection-bound` wrapper stage flags it |
-  | Hoist the `URL="${!...}"` resolution above the refusal in the script | mutant[hoist] row T5 sees the sentinel in the trace |
-  | Emit the URL value or var name in the refusal message | T1/T6 stream-absence assertions red |
-  | Delete the body refusal inside `HEARTBEATSCRIPTEOF` | T6 leaks the sentinel under `sh -x` |
-  | Make the refusal conditional on `INNGEST_CONSUMER_URL` being set | a traced launch with the var unset-but-later-armed would pass — the unconditional form is required; a conditional-arm mutant must go red on a traced launch |
-  | Must-PASS: untraced healthy run (T4) and `sh -n` syntax rows (T7) | proves the guard rejects trace, not execution — catches a vacuous always-78 refusal |
-- **Anchor.** The refusals' correctness does not depend on a stored value in
-  the same diff; the assertion is behavioural (run the real artifact under
-  trace), and `doppler-injection-bound.test.sh` + S6-HB independently pin the
-  unit/script shapes.
+**Mutation matrix.**
+
+| Mutation | Must be RED because |
+|---|---|
+| Delete the `case $-` block from `inngest-consumer-probe.sh` | traced replay in T1 leaks the sentinel — row goes red |
+| Keep the refusal but leave `export INNGEST_CONSUMER_URL="${!...}"` in the unit ExecStart | trace prints the export before the script runs — T1 red; also `doppler-injection-bound` wrapper stage flags it |
+| Hoist the `URL="${!...}"` resolution above the refusal in the script | mutant[hoist] row T5 sees the sentinel in the trace |
+| Emit the URL value or var name in the refusal message | T1/T6 stream-absence assertions red |
+| Delete the body refusal inside `HEARTBEATSCRIPTEOF` | T6 leaks the sentinel under `sh -x` |
+| Make the refusal conditional on `INNGEST_CONSUMER_URL` being set | a traced launch with the var unset-but-later-armed would pass — the unconditional form is required; a conditional-arm mutant must go red on a traced launch |
+| Must-PASS: untraced healthy run (T4) and `sh -n` syntax rows (T7) | proves the guard rejects trace, not execution — catches a vacuous always-78 refusal |
+
+**Anchor.** The refusals' correctness does not depend on a stored value in
+the same diff; the assertion is behavioural (run the real artifact under
+trace), and `doppler-injection-bound.test.sh` + S6-HB independently pin the
+unit/script shapes.
 
 ## Observability
 
@@ -426,18 +428,34 @@ the `.service`/`.sh` files are inside an already-provisioned surface).
 
 ## Scope Check
 
-| Ask item (issue text) | Plan coverage |
-|---|---|
-| xtrace refusal on `inngest-consumer-probe.sh`, exit 78, value-free | Phase 1 items 1-2, AC1, T1-T5 |
-| xtrace refusal on `web-zot-consumer-probe.sh` URL gate | **already satisfied by #10637** — AC5 verifies |
-| xtrace refusal on `HEARTBEATSCRIPTEOF` body, POSIX `case $-` | Phase 2 items 6-7, AC4, T6-T7 |
-| one test row per script | T1-T3 (probe), T6 (heartbeat), existing zot F6 rows |
-| lint baseline unchanged or reduced | `WRAPPER_ACK` drops 2→1 (reduced); refusal-lint baselines unchanged — AC2/AC7 |
-| "the inngest body change mints a tag" — checked machinery | Premise Validation row 9 + AC9 merge-consequence note |
-| #10093: heartbeat URLs / bearers off argv at all named sites | verified already-converted on main — Phase 3, AC8 |
-| code + tests, not a production apply | AC9 records the auto-fired apply + tag chain; no apply step in the plan |
-| **Inferred** (not in ask): ExecStart wrapper fix for `inngest-consumer-probe.service` | **justification:** without it, `SHELLOPTS=xtrace` propagating through `doppler run` traces the inner `export` and prints the URL before the script's refusal runs — the literal acceptance ("script exits 78") would hold while the issue's stated property (the URL must not be printed) fails on the unit's real launch path. Mirrors #10637 byte-for-byte in shape; `doppler-injection-bound.test.sh` already acks it as pending work |
-| **Inferred**: `web-git-data-probe.service` same-class wrapper | **declined** — not one of the three scripts #10363 names; already tracked in `WRAPPER_ACK_REASONS` as a separate change; noted for follow-up |
+### Ask Mapping
+
+| Ask (quoted/paraphrased from issue text) | Status | Plan coverage |
+|---|---|---|
+| "add the xtrace refusal (exit 78 with a value-free message) to inngest-consumer-probe.sh" | mapped | Phase 1 items 1-2, AC1, T1-T5 |
+| "web-zot-consumer-probe.sh's URL gate (its existing refusal covers only the pull token)" | mapped — **already satisfied by #10637**; AC5 verifies, no code change |
+| "the HEARTBEATSCRIPTEOF body of apps/web-platform/infra/inngest-bootstrap.sh (a POSIX `case $- in *x*)` works in dash)" | mapped | Phase 2 items 6-7, AC4, T6-T7 |
+| "one test row per script" | mapped | T1-T3 (probe), T6 (heartbeat), existing zot F6 rows (AC5) |
+| "lint baseline unchanged or reduced" | mapped | `WRAPPER_ACK` drops 2→1 (reduced); refusal-lint baselines unchanged — AC2/AC7 |
+| "the inngest-bootstrap.sh body change mints a tag — check what that entails in the repo's release machinery" | mapped | Premise Validation row 9 (auto mint→build→pin-bump chain); AC9 merge-consequence note |
+| #10093 "take heartbeat URLs and bearer tokens off curl argv" at all named sites | mapped | verified already-converted on main — Phase 3, AC8; issue closes |
+| "plan for code + tests, not a production apply" | mapped | AC9 records the auto-fired apply + tag chain; no apply step in the plan |
+
+### Plan-Item Provenance
+
+| Plan item | Provenance | Justification |
+|---|---|---|
+| `inngest-consumer-probe.sh` refusal + test rows | asked | #10363 gap 1 |
+| heartbeat-body refusal + test row | asked | #10363 gap 3 |
+| zot URL-gate verification | asked | #10363 gap 2 — verified satisfied by #10637 |
+| `inngest-consumer-probe.service` ExecStart wrapper fix + `doppler-injection-bound.test.sh` ack removal | inferred | without it, `SHELLOPTS=xtrace` propagating through `doppler run` traces the inner `export` and prints the URL before the script's refusal runs — the literal acceptance ("script exits 78") would hold while the issue's stated property fails on the unit's real launch path; mirrors #10637; the `WRAPPER_ACK` entry already acks it as pending separate work |
+| `web-git-data-probe.service` same-class wrapper | inferred — declined | not one of the three scripts #10363 names; already tracked as the surviving `WRAPPER_ACK_REASONS` entry ("a separate change"); noted for follow-up, not silently dropped |
+
+### Split Assessment
+
+- Recommendation: single PR. The two issues share one fix shape, one test idiom, and one merge train (the same push-apply `-target` set and the same auto tag mint); splitting would land the heartbeat-body edit in one merge and the probe edits in another for no independent-rollback benefit — both are additive refusals + test rows.
+
+
 
 ## Merge consequences (operator-facing, no manual steps)
 
@@ -478,3 +496,31 @@ the `.service`/`.sh` files are inside an already-provisioned surface).
 ## Plan Review
 
 Pending — the plan-review panel runs next, per the skill's Plan Review phase.
+
+## Deepen-pass (2026-10-25)
+
+Gates evaluated in-line (subagent fan-out unavailable in this harness; each gate
+executed against the plan file directly):
+
+- 4.6 user-brand impact: present, `threshold: none` + non-empty scope-out reason
+  (diff touches `apps/*/infra/`, a sensitive path).
+- 4.7 observability: five fields present; `discoverability_test.command` first
+  token `bash` (probe-verb allowlist), no `ssh`, sub-15s, `expected_output: "1"`
+  is a matchable literal.
+- 4.8 PAT sweep: no match.
+- 4.9 UI wireframe: no UI-surface files — skipped.
+- 4.10 encryption posture: no `.tf` / `.sql` / `cloud-init.*` / `docker-compose`
+  edit and no new store or connection — recorded skip in plan.
+- 4.11 guard contract: `lint-guard-contract.py` green (1 entry; field format
+  corrected to the canonical `**Property.**`/`**Assembly.**`/`**Mutation
+  matrix.**` spans during this pass).
+- 4.12 scope check: `### Ask Mapping` / `### Plan-Item Provenance` / `### Split
+  Assessment` present; zero `unmapped`; one `inferred` item (ExecStart wrapper)
+  justified; `Recommendation: single PR` present.
+- 4.13 task design: no new autonomous-task surface — skipped.
+- 4.4 precedent-diff: pattern-bound behaviour verified against sibling
+  precedents read in-tree (`web-private-nic-guard.sh`, `web-zot-consumer-probe.sh`
+  refusal + `_key_ok`/`${!KEY}` resolution, the F6 test block shape).
+- Citations verified live: #10093, #10363, #9757 OPEN; #10356, #10637, #10185,
+  #10322, #10120 state checked via `gh`. Rule IDs cited (`hr-*`, `cq-*`) grep
+  active in `AGENTS.rules.md`.
