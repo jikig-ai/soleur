@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1204
-# generated-at=2026-10-21T08:47:41Z
+# default-weight-ms=1200
+# generated-at=2026-10-24T19:43:06Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -152,6 +152,7 @@ plugins/soleur/skills/verification-scaffold/test/generator.test.sh	1
 plugins/soleur/skills/verification-scaffold/test/manifest.test.sh	1
 plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
+plugins/soleur/test/apply-delivery-gap-follower.test.sh	1
 plugins/soleur/test/audit-flag-flip.test.sh	5
 plugins/soleur/test/auto-close-scanner.test.sh	7
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1
@@ -184,6 +185,7 @@ plugins/soleur/test/deploy-arm.test.sh	5
 plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh	5
 plugins/soleur/test/destructive-command-guard-hook.test.sh	4
 plugins/soleur/test/destructive-command-guard-mutation.test.sh	8
+plugins/soleur/test/diagnose-inngest-verify-workflow.test.sh	1
 plugins/soleur/test/digest-scrub.test.sh	4
 plugins/soleur/test/domain-model-headless-append.test.sh	1
 plugins/soleur/test/domain-model-init.test.sh	5
@@ -199,6 +201,7 @@ plugins/soleur/test/flag-detach-shared.test.sh	5
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	7
 plugins/soleur/test/flagsmith-stdin-config.test.sh	1
 plugins/soleur/test/flip-flag-map-parity.test.sh	1
+plugins/soleur/test/flip-update-existing-override.test.sh	1
 plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	1
 plugins/soleur/test/gdpr-gate-self-test.test.sh	6
 plugins/soleur/test/generate-kb-index.test.sh	6
@@ -330,6 +333,7 @@ scripts/bearer-curl-s4-first-runs-9905	6
 scripts/betterstack-assert-absence	7
 scripts/betterstack-emitter-read	1
 scripts/betterstack-emitter-read-live	1
+scripts/betterstack-incident-mirror	1
 scripts/betterstack-ingest-parity	4
 scripts/board/set-board-status	1
 scripts/capture-web-1-host-key	6
@@ -381,6 +385,8 @@ scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/ci-draft-light-soak-9728	3
 scripts/followthroughs/ci-push-dedupe-soak-9512	3
 scripts/followthroughs/inngest-provision-rehearsal-capture	8
+scripts/followthroughs/inngest-verify-clean-10390	1
+scripts/followthroughs/post-deploy-incident-soak	1
 scripts/followthroughs/pr-battery-gate-saving-9323	4
 scripts/followthroughs/registry-clientip-alert-7530	1
 scripts/followthroughs/sdk-bash-smoke-verdict-10548	1
@@ -390,12 +396,12 @@ scripts/generate-kb-index-live	7
 scripts/ghcr-read-retired-8036	3
 scripts/git-data-boot-poll-8178	4
 scripts/git-data-reboot-evidence-landed-8210	6
+scripts/git-data-rehearsal-evidence-8211	1
 scripts/guard-vacuity-floor	7
 scripts/hosted-destroy-ask-window-9776	8
 scripts/hostname-mislabel-web1-6616	6
 scripts/image-cve-scan	3
 scripts/image-cve-scan-window-9826	2
-scripts/infra-config-activation-7220	5
 scripts/infra-config-red-alert	6
 scripts/infra-credentials-loader	8
 scripts/infra-drift-autoclose	4
@@ -493,6 +499,7 @@ scripts/marketplace-drift-check	7
 scripts/marketplace-manifest-validate	6
 scripts/md-to-mrkdwn	3
 scripts/measure-plan-sharp-edges-turns	3
+scripts/monitor-streak-state	1
 scripts/no-dangling-committed-symlinks	5
 scripts/orphan-process-reaper	4
 scripts/orphan-process-reaper-mutations	5
@@ -598,6 +605,7 @@ tests/scripts/git-data-root-token-census	2
 tests/scripts/git-data-rung2-evidence-capture	6
 tests/scripts/git-data-rung2-plan-shape	7
 tests/scripts/git-data-wipe-wedge	1
+tests/scripts/hcloud-token-readonly-no-fallback-scan	1
 tests/scripts/host-image-coherence-preflight	5
 tests/scripts/infra-privileged-tier-census	3
 tests/scripts/inngest-host-dark-gate	8
@@ -644,6 +652,7 @@ tests/scripts/supabase-advisor-scan	7
 tests/scripts/supabase-logs-query	3
 tests/scripts/tenant-integration-gate-verdict	5
 tests/scripts/tmp-purge	7
+tests/scripts/trio-baseline-census	1
 tests/scripts/vector-redeliver-gate	8
 tests/scripts/vector-redeliver-wiring	3
 tests/scripts/vendor-pin-gate-verdict	4

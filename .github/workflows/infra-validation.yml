@@ -307,7 +307,12 @@ jobs:
       actions: read         # reads this workflow's own runs on the PR head
       pull-requests: read   # commits/{sha}/pulls association
     outputs:
+      # directories fans out every credential-free consumer (validate and the
+      # budget/guard jobs). Any job that plans under a credential-scoped token
+      # MUST consume plan_directories, which additionally drops .pr-plan-skip
+      # roots — see the filter in the dirs step below.
       directories: ${{ steps.dirs.outputs.directories }}
+      plan_directories: ${{ steps.dirs.outputs.plan_directories }}
       pr_duplicate: ${{ steps.dup.outputs.duplicate }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -381,6 +386,37 @@ jobs:
               | jq -R -s -c 'split("\n") | map(select(. != ""))')
           fi
           printf 'directories=%s\n' "$DIRS" >> "$GITHUB_OUTPUT"
+
+          # (#10715) plan_directories = DIRS minus roots carrying a
+          # `.pr-plan-skip` sentinel. `plan` runs on pull_request under the
+          # Tier-A bounded-substitute credential set (ADR-241); a root whose
+          # Terraform reads a data source outside that set's scope can never
+          # plan green — it only reds every PR that touches it. The sentinel
+          # lives at the root so the exclusion travels on rename; `::warning::`
+          # makes each exclusion attributable in the run log. `directories`
+          # stays unfiltered — `validate` still covers sentinel roots offline.
+          # Mirror unit test: plugins/soleur/test/infra-validation-detect.test.sh
+          # (TS9–TS16). `-f && -s`: the sentinel must be a regular file AND
+          # non-empty — a directory or special file satisfies `-s` but is not
+          # a regular file, and `-s` requires the justification content.
+          is_plan_skipped() { [ -f "$1/.pr-plan-skip" ] && [ -s "$1/.pr-plan-skip" ]; }
+          PLAN_DIRS=$(printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
+            is_plan_skipped "$d" || printf '%s\n' "$d"
+          done | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          printf 'plan_directories=%s\n' "$PLAN_DIRS" >> "$GITHUB_OUTPUT"
+          # Emit the exclusion on real stdout so it registers as a run
+          # annotation — inside the $() above it could only reach stderr.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
+              # `if`, not `A && B`: under `bash -e` a loop whose last iteration
+              # is a non-sentinel root would otherwise leave the pipeline (and
+              # the step) at exit 1 and red `detect-changes` for every PR whose
+              # last changed root carries no sentinel.
+              if is_plan_skipped "$d"; then
+                echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
+              fi
+            done
+          fi
 
       # (#8919, item 5) On push: if this run would byte-identically re-run what
       # the merged PR already proved green on the SAME tree, emit
@@ -1436,7 +1472,7 @@ jobs:
     # trigger must not widen a job that touches production.
     if: |
       github.event_name == 'pull_request' &&
-      needs.detect-changes.outputs.directories != '[]' &&
+      needs.detect-changes.outputs.plan_directories != '[]' &&
       needs.check-secrets.outputs.has-doppler-token == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -1450,7 +1486,7 @@ jobs:
       actions: read
     strategy:
       matrix:
-        directory: ${{ fromJSON(needs.detect-changes.outputs.directories) }}
+        directory: ${{ fromJSON(needs.detect-changes.outputs.plan_directories) }}
       fail-fast: false
     concurrency:
       group: terraform-plan-${{ github.event.number || github.run_id }}-${{ matrix.directory }}

@@ -1,0 +1,58 @@
+# Apply delivery gap follower (tracker #9454; Ref #10033, #8167).
+#
+# Both apply workflows share ONE concurrency group (the apply group; the state backend has no lock, so that group is
+# the only serializer). A group keeps a single pending run, so a second push evicts the first: the evicted run is
+# CANCELLED, usually with zero jobs, and nothing pages. This follower runs after every completed run of either apply
+# workflow, reads the Actions API, and files ONE deduplicated `apply-delivery-gap` issue naming each push that never
+# reached production. DETECTION ONLY: it holds no credential beyond the run token, enters no protected environment,
+# applies nothing and starts nothing. A read or write failure is a red run plus a distinct degraded issue.
+#
+# The logic and its contract live in scripts/apply-delivery-gap.sh (tests:
+# plugins/soleur/test/apply-delivery-gap-follower.test.sh, which also asserts the shape of THIS file on its parsed form
+# and on its raw text). A watched workflow renamed without updating `workflows:` below silently stops the follower; the
+# suite compares both names to the live files.
+#
+# Trigger scope: the watched workflows are started only by a push or a manual run, never by a pull request, so no
+# fork-controlled run can fire this follower. The single run id passed to the script is checked for digits there.
+# `workflow_run` workflows execute from the default branch's copy of this file: inert until it is merged.
+#
+# Runbook: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md
+
+name: Apply Delivery Gap Follower
+
+on:
+  workflow_run:
+    workflows:
+      - "Apply deploy-pipeline-fix"
+      - "Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)"
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: apply-delivery-gap-follower
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  follow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the follower script
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/apply-delivery-gap.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Reconcile undelivered apply pushes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: bash scripts/apply-delivery-gap.sh

@@ -63,11 +63,25 @@
 # five of the six fail closed on the same absence (the CI arm inside each gate);
 # only plugin-seed skips unconditionally, relying on the workflow assert step
 # ordered before it below. The skip is NOT visible
-# through this runner: the executor below captures each suite's output to a per-run log dir and
-# prints `PASS`, so a docker-less laptop reports PASS for all six — for the first two while
-# neither asserts anything (~50-65s of coverage, silently absent), and for the four partial
+# through this runner's PASS line: the executor below captures each suite's output to a per-run
+# log dir and prints `PASS`, so a docker-less laptop reports PASS for all six — for the first two
+# while neither asserts anything (~50-65s of coverage, silently absent), and for the four partial
 # declines while their docker arms never adjudicate. (An earlier version of this paragraph
 # called it a "visible SKIP", which was false in the one file where it mattered most.)
+#
+# EVIDENCE RELAY (#10786). One observer reads those captured lines from the Actions log: the
+# daily skip-persistence probe (scripts/followthroughs/t5-skip-persistence-bound-7510.sh). The
+# per-suite capture is older (#7423, 2026-08); it was harmless while the rehearsal suite ran as its own
+# workflow step with its output going straight to the log. #8763 (2026-09-25) moved that suite INSIDE
+# this captured runner, which hid its lines from the probe: TRANSIENT from 2026-09-28 on. After the
+# suites finish the parent now relays, as `SOLEUR| relay <basename>: <line>`,
+# (a) every column-0 `SKIP (loud): ` line of any suite's captured log (capped per suite) and (b) the
+# terminal summary line of the suite named in EVIDENCE_TERMINAL_SUITE. Coverage is exactly that:
+# an INDENTED skip line, or any other suite text, is not relayed. The probe's literals match the
+# relayed text unchanged; run-registered-suites.test.sh (T13) and the probe's own suite (k) pin the
+# suite-text / relay / probe-literal chain end to end. The relay is name-agnostic: ANY suite that
+# prints a column-0 `SKIP (loud): T5 `, `S1 ` or `T17 ` line is counted by the probe as a rehearsal
+# skip, exactly as the probe's own arm-name note says.
 #
 # DIAGNOSTICS ON RED (#7376). Until 2026-08-10 the executor was
 # `bash "{}" >/dev/null 2>&1` and printed only `PASS`/`RED`, so a CI failure carried no
@@ -1102,6 +1116,76 @@ dump_one() {
   esac
 }
 
+# ── Evidence relay (#10786) ───────────────────────────────────────────────────
+# What the probe needs from a suite's captured log (see the EVIDENCE RELAY note in the header).
+# EVIDENCE_TERMINAL_SUITE is a basename (unique across the infra dir, asserted at derive time) and
+# EVIDENCE_TERMINAL_ERE must match the terminal `echo` of that suite — pinned by value in the
+# probe's suite, which expands the real statement and matches it against this regex.
+# EVIDENCE_CAP binds the SKIP stream per suite (a suite printing 10,000 skips must not flood the
+# log); the terminal line is read by its own grep, so a long skip stream cannot push it out. The
+# rehearsal suite has nine arm_skip invocations (five at line start, four as case arms), so its own
+# stream cannot reach the cap in practice.
+EVIDENCE_SKIP_ERE='^SKIP \(loud\): '
+EVIDENCE_TERMINAL_SUITE='git-data-runcmd-rehearsal.test.sh'
+EVIDENCE_TERMINAL_ERE='^git-data-runcmd-rehearsal: [0-9]+ passed'
+EVIDENCE_CAP=50
+
+# Called inside the `SOLEUR| `-prefixing block below, from the PARENT, single-threaded, strictly
+# after xargs and strictly BEFORE the log dir is reaped. Runs for EVERY suite log, RED or not (the
+# probe samples only successful runs, so its verdict is the same, and a RED run keeps its context).
+# Nothing is written to $LOG, so the PASS/RED counts and the accounting assertion cannot move.
+#
+# grep's rc is inspected as dump_one does: 1 = nothing matched, 2 = an error (unreadable file, bad
+# regex) which is REPORTED — reading it as "no skip" would name a cause this runner did not measure.
+# `grep -a` so a NUL byte in a docker or apt log does not turn a match into "binary file matches".
+# The read is BOUNDED AT THE SOURCE (`-m` lines, `cut -b` bytes) before anything lands in a shell
+# variable, so one multi-hundred-MB line cannot balloon the parent, and control characters (a CR
+# included) become spaces so relayed text can never start a second log line. `mapfile -n`, never
+# `| head` (SIGPIPE under pipefail). The header line is opened lazily, so a run with nothing to
+# relay is byte-identical to one without this function.
+#
+# Scope, stated so the claim stays exact: the neutraliser removes ASCII control bytes (CR, ESC, DEL,
+# VT, FF and the rest below 0x20 except TAB), which is what lets a relayed line never start a second
+# log line for a line-oriented reader. C1 controls (U+0080-U+009F) and U+2028/U+2029 pass through
+# unchanged: no consumer in this pipeline reads them as a line break or command. The two rc>=2
+# "relay unavailable" arms mirror dump_one's and have no test row: the only way to make grep exit 2
+# is an unreadable capture, and a root CI user defeats chmod 000.
+relay_grep() {  # $1 = ERE, $2 = file; returns grep's own rc
+  grep -a -m "$EVIDENCE_CAP" -E -- "$1" "$2" 2>/dev/null | cut -b1-400 | tr '\000-\010\013-\037\177' ' '
+  return "${PIPESTATUS[0]}"
+}
+relay_evidence() {
+  local s key f base sel grc opened=0 line
+  local -a lines
+  for s in "${SUITES[@]}"; do
+    key="${s//\//_}"; f="$SOLEUR_SUITE_LOGDIR/$key.log"; base="${s##*/}"
+    [[ -e "$f" ]] || continue   # no capture: dump_one names that case for a RED/UNACCOUNTED suite
+    sel="$(relay_grep "$EVIDENCE_SKIP_ERE" "$f")"; grc=$?
+    case "$grc" in
+      0) mapfile -t -n "$EVIDENCE_CAP" lines <<<"$sel" ;;
+      1) lines=() ;;
+      *) lines=("[relay unavailable — grep exited ${grc} reading the capture]") ;;
+    esac
+    if [[ "$base" == "$EVIDENCE_TERMINAL_SUITE" ]]; then
+      sel="$(relay_grep "$EVIDENCE_TERMINAL_ERE" "$f")"; grc=$?
+      case "$grc" in
+        0) mapfile -t -n "$EVIDENCE_CAP" -O "${#lines[@]}" lines <<<"$sel" ;;
+        1) ;;
+        *) lines+=("[relay unavailable — grep exited ${grc} reading the capture]") ;;
+      esac
+    fi
+    (( ${#lines[@]} > 0 )) || continue
+    if (( opened == 0 )); then
+      echo ""
+      echo "evidence relayed from per-suite logs (skip lines capped at ${EVIDENCE_CAP} per suite):"
+      opened=1
+    fi
+    for line in "${lines[@]}"; do
+      printf 'relay %s: %s\n' "$base" "$line"
+    done
+  done
+}
+
 # ── Accounting. A child whose wrapping `bash -c` is KILLED (the OOM killer under -P 4) emits
 # NEITHER `PASS` nor `RED`. Before this assertion existed RED was then 0, the runner exited 0,
 # and the summary printed e.g. "91 passed, 0 failed (of 93)" — two numbers visibly disagreeing
@@ -1164,6 +1248,7 @@ emit_unaccounted_names() {
       dump_one "${SOLEUR_SUITE_LOGDIR}/${_s//\//_}.log"
     done
   fi
+  relay_evidence
   if (( RED > 0 || ${#UNACCOUNTED[@]} > 0 )); then
     echo ""
     echo "retained per-suite log dir: ${SOLEUR_SUITE_LOGDIR}"

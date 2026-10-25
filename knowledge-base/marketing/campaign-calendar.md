@@ -1,10 +1,16 @@
 ---
-last_updated: 2026-10-19
+last_updated: 2026-10-25
 ---
 
 # Campaign Calendar
 
 Rolling view of content distributions. Auto-generated from `distribution-content/` frontmatter.
+
+## Upcoming
+
+| Title | Type | Publish Date | Channels | Status |
+|-------|------|-------------|----------|--------|
+| Soleur on OpenCode: run your AI organization on open-weights models | feature-launch | 2026-10-27 | x, bluesky | scheduled |
 
 ## Stale Draft — needs approval
 
@@ -14,14 +20,16 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Age (days) | Channels | Status |
 |-------|------|-----------|----------|--------|
-| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 178 | | draft |
+| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 184 |   | draft |
 
 ## Draft
 
-Entries with a non-published, non-scheduled status (`stale`, `parked`).
+Entries with a non-published, non-scheduled status (`draft`, `stale`, `parked`).
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| A Property Test That Cannot Fail Teaches Nothing | pillar |   | x, bluesky, discord, linkedin-personal | draft |
+| We Audited 102 Guardrails. Only Four Belong in Every Repository. | pillar |   | x, bluesky, discord, linkedin-personal | draft |
 | Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | 2026-09-10 | discord, x, bluesky, linkedin-company | stale |
 | AI Agents for Solo Founders: The Definitive Guide | pillar | 2026-09-08 | discord, x, bluesky, linkedin-company | stale |
 | Your knowledge base is now actually usable on a phone | feature-launch | 2026-09-03 | x, bluesky | stale |
@@ -29,18 +37,22 @@ Entries with a non-published, non-scheduled status (`stale`, `parked`).
 | A 'healthy' server can lie — new deep-readiness check proves a host can actually serve you | feature-launch | 2026-08-25 | x, bluesky | stale |
 | Jump anywhere in the app with two keystrokes | feature-launch | 2026-08-13 | x, bluesky | stale |
 | Sidebar grip goes gold on grab + double-click to collapse | feature-launch | 2026-08-04 | x, bluesky | stale |
-| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-07-07 | discord, x, bluesky, linkedin-company | stale |
 | Agents That Use APIs, Not Browsers | milestone-announcement | 2026-07-09 | discord, x, bluesky, linkedin-personal, linkedin-company | stale |
+| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-07-07 | discord, x, bluesky, linkedin-company | stale |
 | Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Automation | comparison | 2026-06-05 | discord, x, bluesky, linkedin-company | stale |
 | Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders? | comparison | 2026-05-21 | discord, x, bluesky, linkedin-company | stale |
 | What Is Company-as-a-Service? | pillar | 2026-05-12 | discord, x, bluesky, linkedin-company | stale |
 | The One-Person Billion-Dollar Company: Why It's an Engineering Problem | pillar | 2026-04-21 | discord, x, bluesky, linkedin-company | stale |
-| How We Let AI Agents Run Cron Jobs Without Letting Them Exfiltrate Secrets | engineering-deep-dive | | blog, hackernews, x, linkedin-personal | parked |
+| How We Let AI Agents Run Cron Jobs Without Letting Them Exfiltrate Secrets | engineering-deep-dive |   | blog, hackernews, x, linkedin-personal | parked |
 
 ## Published
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| A Checklist for Trusting AI Work Was Just Published. We Shipped All of It. | pillar | 2026-10-24 | discord, x, bluesky, linkedin-personal | published |
+| Property-Based Testing Adopted — First Property Found a Real Bug | feature-tweet | 2026-10-22 | x, discord | published |
+| New heavy test suites now get flagged before they silently misprice CI | feature-launch | 2026-10-20 | x, bluesky | published |
+| Your bug investigator now refuses to guess | feature-launch | 2026-10-15 | x, bluesky | published |
 | Your AI agents can no longer sneak unjustified issues onto your backlog | feature-launch | 2026-10-06 | x, bluesky | published |
 | Background work now declares where it is allowed to run | feature-launch | 2026-10-01 | x, bluesky | published |
 | Start a new chat from the CRM board to enter a lead | feature-launch | 2026-09-28 | x, bluesky | published |
@@ -49,8 +61,8 @@ Entries with a non-published, non-scheduled status (`stale`, `parked`).
 | Soleur on Grok Build: /go runs the real workflow | feature-launch | 2026-09-15 | x, bluesky | published |
 | Soleur on Devin CLI: /soleur:go runs the real workflow | feature-launch | 2026-09-14 | x, bluesky | published |
 | My agent now audits its own governance rulesets daily | feature-launch | 2026-09-01 | x, bluesky | published |
-| Keyboard shortcuts now show the right key on every OS | feature-launch | 2026-08-18 | x, bluesky | published |
 | Hold ⌘ and jump anywhere in Soleur | feature-launch | 2026-08-20 | x, bluesky | published |
+| Keyboard shortcuts now show the right key on every OS | feature-launch | 2026-08-18 | x, bluesky | published |
 | Workstream board: empty columns collapse by default | feature-launch | 2026-08-11 | x, bluesky | published |
 | Filter, search, and refresh your Workstream board | feature-launch | 2026-08-06 | x, bluesky | published |
 | A real Inbox for your AI org's operator mail | feature-launch | 2026-07-30 | x, bluesky | published |
@@ -73,9 +85,9 @@ Entries with a non-published, non-scheduled status (`stale`, `parked`).
 | Platform Milestone: Soleur Is Now Installable on Any Device | milestone-announcement | 2026-04-10 | discord, x, bluesky, linkedin-personal, linkedin-company | published |
 | Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | pillar | 2026-04-07 | discord, x, bluesky, linkedin-company | published |
 | Running a Business Validation Workshop With AI Gates | case-study | 2026-03-26 | discord, x, bluesky, linkedin-company | published |
-| Tracking 17 Competitors in One Session -- With Battlecards | case-study | 2026-03-21 | bluesky, linkedin-company | published |
-| Why Most Agentic Engineering Tools Plateau | pillar | 2026-03-21 | bluesky, linkedin-company | published |
 | How We Generated 9 Legal Documents in Days, Not Months | case-study | 2026-03-21 | bluesky, linkedin-company | published |
 | Building an Operations Department for a One-Person Company | case-study | 2026-03-21 | bluesky, linkedin-company | published |
+| Tracking 17 Competitors in One Session -- With Battlecards | case-study | 2026-03-21 | bluesky, linkedin-company | published |
+| Why Most Agentic Engineering Tools Plateau | pillar | 2026-03-21 | bluesky, linkedin-company | published |
 | Soleur vs. Cursor: When an AI Coding Tool Becomes an Agent Platform | comparison | 2026-03-19 | discord, x | published |
 | Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Automation | comparison | 2026-03-17 | discord, x | published |

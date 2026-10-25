@@ -40,6 +40,17 @@ HELPERS="$SCRIPT_DIR/test-helpers.sh"
 [[ -f "$BASELINE" ]] || { echo "FATAL: missing $BASELINE" >&2; exit 2; }
 [[ -f "$HELPERS" ]]  || { echo "FATAL: missing $HELPERS" >&2; exit 2; }
 
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). This
+# suite sources through $HELPERS, so the follow-through probe's literal-source
+# match never saw it — the ordering rule applies all the same.
+TMP_ROOT=$(mktemp -d -t fixtureoperand.XXXXXXXX) || { echo "FATAL: no scratch root" >&2; exit 2; }
+: "${TMP_ROOT:?}"
+[[ "$TMP_ROOT" == /* && -d "$TMP_ROOT" ]] || { echo "FATAL: bad scratch root" >&2; exit 2; }
+readonly TMP_ROOT
+trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
+
 # Guard 3 (#7833) tripwire adoption, added at review. Measured under an inherited git-location
 # environment: probe_repo's `git -C "$d" init` + two config writes retargeted at the CALLER and
 # flipped its commit.gpgsign true -> false and its user.email -- the 2026-08-20 incident this
@@ -68,12 +79,6 @@ if [[ "${1:-}" == "--write-baseline" ]]; then
   echo "baseline rewritten: $(grep -vc '^#' "$BASELINE") files"
   exit 0
 fi
-
-TMP_ROOT=$(mktemp -d -t fixtureoperand.XXXXXXXX) || { echo "FATAL: no scratch root" >&2; exit 2; }
-: "${TMP_ROOT:?}"
-[[ "$TMP_ROOT" == /* && -d "$TMP_ROOT" ]] || { echo "FATAL: bad scratch root" >&2; exit 2; }
-readonly TMP_ROOT
-trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
 
 passes=0; fails=0; asserted=0
 # VERDICT_LOG is append-only and is what the accounting below reconciles against. The counters

@@ -52,7 +52,7 @@ trap 'rm -rf "$SB" "$PRISTINE"' EXIT
 # ── build the sandbox ────────────────────────────────────────────────────────────────────────
 # The suites resolve their SUT as "$(dirname $0)/../../scripts/<name>", so the sandbox must
 # reproduce that relative layout rather than flattening it.
-mkdir -p "$SB/scripts" "$SB/tests/scripts" "$SB/apps/web-platform/infra" \
+mkdir -p "$SB/scripts" "$SB/tests/scripts/lib" "$SB/apps/web-platform/infra" \
   || harness_die "could not create the sandbox layout"
 
 SUT_GATE="scripts/registry-pull-path-health.sh"
@@ -64,6 +64,9 @@ for f in "$SUT_GATE" "$SUT_ENGINE" "$SUITE_GATE" "$SUITE_ENGINE"; do
   [[ -r "${ROOT}/${f}" ]] || harness_die "required file is unreadable: ${ROOT}/${f}"
   cp "${ROOT}/${f}" "${SB}/${f}" || harness_die "could not copy ${f} into the sandbox"
 done
+# The gate suite sources this shared header extractor, so the sandbox must carry it at the same relative path.
+cp "${ROOT}/tests/scripts/lib/restore-engine-header.sh" "${SB}/tests/scripts/lib/restore-engine-header.sh" \
+  || harness_die "could not copy the shared header extractor into the sandbox"
 # Best-effort companions: the gate SOURCES these when no seam overrides them. Their absence
 # changes which arm runs, so copy them when present rather than letting the sandbox differ from
 # the real tree in a way no mutation asked for.
@@ -394,6 +397,22 @@ mutate "G18 A2 rehearsal failure ignored for every enumerated exit code" gate \
   'if (( restore_rc != 0 )); then' \
   'if (( restore_rc > 100 )); then'
 
+mutate "G26 A2 exit-78 arm renumbered so 78 falls into the unenumerated arm" gate \
+  '78) abort A2 "the rehearsal failed with exit 78' \
+  '77) abort A2 "the rehearsal failed with exit 78'
+
+mutate "G27 A2 exit-5 arm loses the local-login cause" gate \
+  'EITHER the throwaway rejected the rehearsal credential OR the sink login command failed locally on the runner;' \
+  'the throwaway rejected the rehearsal credential;'
+
+mutate "G28 A2 exit-2 arm loses the local-login cause" gate \
+  "or the runner's ghcr.io login command failed locally (the engine's own line above says which)" \
+  "or the runner's ghcr.io login command failed"
+
+mutate "G29 A2 exit-78 arm stops saying it was a traced invocation" gate \
+  'exit 78 (traced invocation)' \
+  'exit 78 (xtrace)'
+
 mutate "G19 A2 missing restore engine no longer aborts" gate \
   '[[ -x "$RESTORE" ]] || abort A2 ' ': # '
 
@@ -640,8 +659,8 @@ echo
 # equality: the count is developer-incremented, so `-eq` would turn every added mutation into a
 # spurious failure. Derived from a green run, not from an expected number.
 dispatched=$(( caught + survived + expected ))
-if (( dispatched < 66 )); then
-  echo "harness: only ${dispatched} mutations were dispatched, floor is 66. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
+if (( dispatched < 70 )); then
+  echo "harness: only ${dispatched} mutations were dispatched, floor is 70. Either mutations were removed without lowering this floor deliberately, or the dispatch itself is broken — in both cases the verdict below is not reportable." >&2
   exit 2
 fi
 

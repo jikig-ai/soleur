@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 // #8211 — the reporter must be started at boot and cleared at shutdown, and
@@ -30,7 +30,11 @@ describe("quiet-window wiring", () => {
     expect(src).toMatch(
       /agentSessionsLive:[\s\S]*ccQueries:[\s\S]*legacySessions:[\s\S]*newSessionsPaused:/,
     );
-    expect(src).not.toMatch(/userId|conversationId/);
+    // Scoped to the reporter half: the gate half above it takes the caller's id (exempt-account match)
+    // and never prints it. Nothing from the counts interface onward may name a user or conversation.
+    const reporter = src.slice(src.indexOf("export interface LiveAgentSessionCounts"));
+    expect(reporter.length).toBeGreaterThan(0);
+    expect(reporter).not.toMatch(/userId|conversationId/);
   });
 });
 
@@ -48,7 +52,7 @@ describe("quiet-window gate ordering and coverage (review P2)", () => {
     const src = code("server/agent-runner.ts");
     const start = idx(src, "async function sendUserMessageInner(");
     expect(start).toBeGreaterThan(0);
-    const gate = idx(src, "await newAgentSessionsRefused()", start);
+    const gate = idx(src, "await newAgentSessionsRefused({ userId })", start);
     const convRead = idx(src, 'getFreshTenantClient(userId)', start);
     const insert = idx(src, '.from("messages")', start);
     expect(gate).toBeGreaterThan(start);
@@ -78,6 +82,57 @@ describe("quiet-window gate ordering and coverage (review P2)", () => {
     const guarded = src.match(/await abortActiveSessionUnlessPaused\(userId, session\)/g) ?? [];
     expect(bare).toHaveLength(1); // inside abortActiveSessionUnlessPaused itself
     expect(guarded).toHaveLength(2); // start_session and resume_session
+  });
+
+  it("every refusal gate passes the raw userId (the exempt account is matched there); auto-sync and the reporter never do", () => {
+    const gates: Array<[string, RegExp, number]> = [
+      ["server/cc-dispatcher.ts", /await newAgentSessionsRefused\(\{ userId \}\)/g, 1],
+      ["server/agent-runner.ts", /await newAgentSessionsRefused\(\{ userId \}\)/g, 2],
+      ["server/ws-handler.ts", /await newAgentSessionsRefused\(\{ userId \}\)/g, 1],
+      ["server/ws-handler.ts", /await newAgentSessionsRefused\(\{ observe: true, userId \}\)/g, 1],
+      ["server/quiet-window-http.ts", /await newAgentSessionsRefused\(\{ userId \}\)/g, 1],
+    ];
+    for (const [f, re, n] of gates) {
+      expect(code(f).match(re) ?? [], `${f} ${re}`).toHaveLength(n);
+    }
+    // No bare call survives at any consumer, so a gate cannot silently lose the exemption or keep it
+    // while passing the wrong argument.
+    for (const f of [
+      "server/cc-dispatcher.ts",
+      "server/agent-runner.ts",
+      "server/ws-handler.ts",
+      "server/quiet-window-http.ts",
+    ]) {
+      expect(code(f), f).not.toMatch(/newAgentSessionsRefused\(\s*\)/);
+    }
+    // Auto-sync stays refused for everyone, the exempt account included (a sync agent would be a second
+    // session): its call takes no argument, and the route-level helpers pass the raw id, not a hash.
+    expect(code("server/auto-sync-trigger.ts")).toMatch(/\.newAgentSessionsRefused\(\)/);
+    expect(code("server/auto-sync-trigger.ts")).not.toMatch(/newAgentSessionsRefused\([^)]/);
+    expect(code("app/api/repo/setup/route.ts")).toMatch(/quietWindowRefusal\("repo-setup", user\.id\)/);
+    expect(code("app/api/repo/create/route.ts")).toMatch(/quietWindowRefusal\("repo-create", userId\)/);
+  });
+
+  it("no refusal gate exists outside the pinned set: every newAgentSessionsRefused( call site in the app, per file", () => {
+    // A new gate (or a moved one) shows up here as a changed count, whatever argument it passes, so it cannot
+    // join the fleet without a reviewer deciding whether it passes the caller's id.
+    const expected: Record<string, number> = {
+      "server/agent-runner.ts": 2,
+      "server/auto-sync-trigger.ts": 1,
+      "server/cc-dispatcher.ts": 1,
+      "server/quiet-window-http.ts": 1,
+      "server/quiet-window.ts": 2, // the definition and the reporter's own observe read
+      "server/ws-handler.ts": 2,
+    };
+    const found: Record<string, number> = {};
+    for (const dir of ["server", "app", "lib", "components", "hooks"]) {
+      for (const rel of readdirSync(join(root, dir), { recursive: true }) as string[]) {
+        if (!/\.(ts|tsx)$/.test(rel) || rel.includes("node_modules")) continue;
+        const n = (code(join(dir, rel)).match(/newAgentSessionsRefused\(/g) ?? []).length;
+        if (n > 0) found[join(dir, rel)] = n;
+      }
+    }
+    expect(found).toEqual(expected);
   });
 
   it("a first message is refused BEFORE createConversation (no empty active row, no held slot)", () => {

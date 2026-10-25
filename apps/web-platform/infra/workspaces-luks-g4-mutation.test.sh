@@ -88,7 +88,17 @@ record_unmeasured() { unmeasured=$((unmeasured + 1)); UNMEASURED_LOG+=("$1|$2");
 # headroom is a floor that lets a whole case silently stop running.
 MIN_ASSERTIONS=79
 
-skip() { printf 'SKIP: %s\n' "$1"; exit 0; }
+# ADR-188: a skip is not a pass, and under CI it is not even a skip — the runner
+# is contracted to supply these capabilities (rsync/lsof/python3, GNU stat/touch
+# semantics), so their absence in CI is a FAILURE. Locally the SKIP stays (#8773).
+skip() {
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    printf 'FAIL: %s — and CI is set, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success.\n' "$1" >&2
+    exit 1
+  fi
+  printf 'SKIP: %s\n' "$1"
+  exit 0
+}
 
 # =================================================================================================
 # C0 — capability preflight (task 5.7f).

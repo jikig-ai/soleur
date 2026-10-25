@@ -844,19 +844,15 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 ### CMO Content-Opportunity Gate
 
-**Trigger:** PR matches ANY of: (a) touches files in `knowledge-base/product/research/`, `knowledge-base/marketing/`, or adds new workflow patterns (new AGENTS.md rules, new skill phases); (b) has a `semver:minor` or `semver:major` label; (c) title matches `^feat(\(.*\))?:` pattern.
+**Trigger:** PR matches ANY of: (a) touches `knowledge-base/product/research/` or `knowledge-base/marketing/`, or adds a workflow pattern — a new `#{2,5}` heading or `references/` file under `plugins/soleur/skills/`, or new AGENTS.md rules; (b) would warrant `semver:minor`/`semver:major` by the Phase 6 diff analysis (new agents/skills/commands/components) — compute it from the diff, never read the label: Phase 6 applies it AFTER this gate, so a label read is structurally dead; (c) title normalized by stripping `^(WIP|Draft)[:\s-]*` matches `^feat\b`.
 
-**Detection:** Run `git diff --name-only origin/main...HEAD` and check file paths against trigger (a). Run `gh pr view --json labels,title` and check against triggers (b) and (c). If any trigger matches, proceed to "If triggered."
+**A resumed or manually-driven ship tail still runs this gate.** When ship is resumed after a dead runner, a context reset, or any path where the merge is driven by hand rather than by an uninterrupted Phase 5.5→Phase 7 flow, run detection BEFORE arming merge — the gate fires on diff state, not on session continuity (#10404 shipped disposition-less; retro brief #10903).
 
-**If triggered:**
+**Detection:** `git diff --name-only origin/main...HEAD` for the (a) paths, `git diff origin/main...HEAD -- plugins/soleur/skills/ | grep -qE '^\+#{2,5} '` for a new gate/section, and `gh pr view --json labels,title` for (c) after normalization.
 
-1. Spawn the CMO agent with a pre-ship content assessment prompt: "Assess content and distribution opportunities from this PR. What was produced, what data points are content-worthy, which channels should be used, and what's the recommended timing (ship with PR or schedule for later)? For any blog post, apply the brand guide's Channel Notes > Blog note."
-2. Present the CMO's recommendations to the user.
-3. **Interactive mode:** Ask "Create content now, schedule for later, or skip?" Options: Create now (invoke content-writer/social-distribute), Schedule (create a GitHub issue with content brief), Skip.
-4. **Headless mode:** Auto-create a GitHub issue with the CMO's content brief for later action. Do not block the ship.
-5. **Update content strategy (mandatory if content is scheduled or created).** When a content piece is identified (option 1 or 2 above), update `knowledge-base/marketing/content-strategy.md`: add the piece to the content pipeline table under the appropriate pillar AND insert it into the rolling quarterly calendar at the correct week. A GitHub issue without a content strategy entry is an orphan — it will be forgotten. **Why:** In #1173, a methodology blog post was created as issue #1176 but never added to the content strategy calendar, requiring a manual fix.
+**If triggered:** Spawn the CMO agent: "Assess content and distribution opportunities from this PR. What was produced, what data points are content-worthy, which channels, recommended timing? Return `DISPOSITION: create-now | schedule | skip` plus angle, format, channels, and a one-line rationale. For a blog post, apply the brand guide's Channel Notes > Blog note." **The CMO's disposition is the decision — do not ask the operator to choose.** Execute it: `skip` → emit `SOLEUR_RULE_APPLIED rule=cmo-content-opportunity-decision disposition=skip angle=<rationale>`, no issue. `schedule` → file a GitHub issue with the brief AND update `knowledge-base/marketing/content-strategy.md` (pipeline table + rolling calendar — an issue without a strategy entry is an orphan, #1173). `create-now` → invoke `soleur:content-writer`/`soleur:social-distribute` per the brief, plus the same strategy entry. Emit the `SOLEUR_RULE_APPLIED` line either way so the disposition is auditable; the operator overrides by commenting on the filed issue, never by being asked.
 
-**Why:** In #1173, a research sprint produced a novel methodology with compelling data, but no content was planned because the CMO was only consulted when the scope was "should we explore this?" — not when the actual content existed.
+**Why:** #1173 — a research sprint produced a novel methodology but no content was planned because the CMO was only consulted when the scope was "should we explore this?", not when the content existed. #11016 — a task-design-gate methodology PR shipped with no CMO consult at all: (a) read "new skill phases" but the diff added gate sections, (b) ran before the label existed, (c) failed on the `WIP:` title. A gate that silently never fires is worse than none.
 
 ### CMO Website Framing Review Gate
 
@@ -864,12 +860,7 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **Detection:** Run `git diff --name-only origin/main...HEAD` and check for `brand-guide.md`. If present, check `git diff origin/main...HEAD -- knowledge-base/marketing/brand-guide.md` for changes to positioning-related sections.
 
-**If triggered:**
-
-1. Spawn the CMO agent (or soleur:marketing:conversion-optimizer for landing page specifics) with a website framing audit prompt. **Read the site source templates directly from the repo** (e.g., `apps/web-platform/`, `docs/`, or the Eleventy source directory) — do NOT use Playwright to fetch the rendered site when the source files are local. Prompt: "The brand guide's value proposition framings have been updated. Audit the website source templates for alignment: does the hero headline, subheadline, feature descriptions, and pricing page messaging match the updated framing recommendations? Identify specific copy that needs updating and propose replacements with file paths and line numbers."
-2. Present the audit findings to the user.
-3. **Interactive mode:** Ask "Apply website copy updates now, create issue for later, or skip?" Options: Apply now (edit site templates), Schedule (create GitHub issue with copy changes), Skip.
-4. **Headless mode:** Auto-create a GitHub issue with the copy audit findings for later action.
+**If triggered:** Spawn the CMO agent (or soleur:marketing:conversion-optimizer for landing-page specifics) with a website framing audit prompt. **Read the site source templates directly from the repo** (e.g., `apps/web-platform/`, `docs/`, or the Eleventy source directory) — do NOT use Playwright to fetch the rendered site when the source files are local. Prompt: "The brand guide's value proposition framings have been updated. Audit the website source templates for alignment: does the hero headline, subheadline, feature descriptions, and pricing page messaging match the updated framing recommendations? Identify specific copy that needs updating, propose replacements with file paths and line numbers, and return `DISPOSITION: apply-now | schedule | skip` plus a one-line rationale." **The CMO's disposition is the decision — do not ask the operator to choose.** Execute it: `apply-now` → apply the copy updates to the site templates and commit. `schedule` → file a GitHub issue with the copy-audit findings. `skip` → no issue. Emit `SOLEUR_RULE_APPLIED rule=cmo-website-framing-decision disposition=<d>` either way.
 
 **Why:** In #1173, the brand guide was updated with a new primary framing ("Stop hiring, start delegating"), a memory-first A/B variant, and trust scaffolding recommendations — but the website still used the old framing. Brand guide changes that don't cascade to the website create a disconnect between strategy and execution.
 
@@ -1163,7 +1154,7 @@ Inform the operator: "PR touches `terraform_data.deploy_pipeline_fix` trigger fi
 Same as interactive — surface a tracking comment on the PR noting the auto-apply will fire on merge, then proceed. The comment also names the kill-switch and the fallback terminal command for the rare auto-apply failure case.
 
 ```bash
-TRACKING_MSG=$'[deploy_pipeline_fix-drift-gate] This PR touches a trigger file. `apply-deploy-pipeline-fix.yml` will auto-apply on merge — no action required. To skip the auto-apply, add `[skip-deploy-fix-apply]` to a commit message. If the auto-apply fails (transient outage), run the workflow manually from the Actions tab, or as a last resort: `doppler run -p soleur -c prd_terraform -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=true`.'
+TRACKING_MSG=$'[deploy_pipeline_fix-drift-gate] This PR touches a trigger file. `apply-deploy-pipeline-fix.yml` will auto-apply on merge — no action required. To skip the auto-apply, add `[skip-deploy-fix-apply]` to a commit message. If the auto-apply fails (transient outage), run the workflow manually from the Actions tab, or as a last resort the canonical Tier-B apply from `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md` §Local Terraform invocation — export `AWS_*` from `TF_STATE_AWS_*` (soleur-infra-privileged/prd; the `prd_terraform` pair is read-only post-O5b and a bare `doppler run -c prd_terraform -- terraform apply` 403s the state PutObject mid-run) then `doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=true`.'
 if ! gh pr comment "$PR_NUMBER" --body "$TRACKING_MSG" 2>/dev/null; then
   echo "$TRACKING_MSG" >&2
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
@@ -2994,20 +2985,15 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **Do NOT skip this step.** Do NOT proceed to Step 4 (cleanup) without invoking postmerge. The rationalization "the PR merged, we're done" is exactly the failure mode this gate prevents — a merged PR is not a deployed PR, and a deployed PR is not a healthy deployment. **Why:** PR #4512 — the agent jumped from merge confirmation directly to cleanup, skipping release workflow monitoring (Step 2) and postmerge verification (Step 3.8). The release was still in progress and could have failed silently.
 
+3.9. **Epic-Close Domain-Leader Sweep (conditional — reconcile before cleanup).** Phase 5.5's CMO gate is PR-scoped; aggregate claims, cross-child meta-findings, and deadline-shaped timing exist only at epic scope. **Trigger:** this merge completed a tracked epic — an issue it closed is a child of an epic whose other children are all CLOSED. When the trigger may hold, load [epic-close-sweep.md](./references/epic-close-sweep.md) for detection, the per-child Phase 5.5 disposition census, the arc-level CMO assessment, and the inconclusive-report rule. **If not triggered:** skip to Step 4. **Why:** epic #10397 closed 5/7 briefed with no arc-level assessment — the synthesis surfaced only because the operator asked; the two missed children were partial-ship tails a per-PR gate cannot cover.
+
 4. Clean up worktree and local branch:
 
    Navigate to the repository root directory, then run `bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged`.
 
 This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, deletes local branches, and pulls latest main so the next worktree branches from the current state.
 
-**It does NOT durably archive spec directories — do not defer archival to it.** `cleanup-merged` carries an archive step, but its own header scopes it: *"Backward-compat for legacy pre-#2815 worktrees that created specs at the bare root. New layout commits the spec inside the worktree (git history is the canonical archive); the `[[ -d ]]` guard silently skips when the bare-root dir does not exist."* Two independent reasons it cannot durably archive a modern spec dir:
-
-1. **It usually does not run at all.** The step guards on `[[ -d "$GIT_ROOT/knowledge-base/project/specs/<branch>" ]]` against the BARE ROOT's on-disk files, and it executes *before* the "Updated main to latest" step. On a just-merged branch the bare root is therefore still at the pre-merge commit, where the spec dir does not exist — it arrives only with the merge being cleaned up. Guard false, silent skip. Measured on PR #7240: the dir is ABSENT at `5133e3cb` (main at archival time) and PRESENT at `933635603` (the merge commit).
-2. **Even when it runs it commits nothing.** It is a plain `mv` of the bare root's working files, so it produces no commit and leaves the spec dir tracked at its LIVE path on `main`.
-
-The archives that actually exist under `specs/archive/` were committed by **compound's** automatic consolidation (`git mv` + commit on the feature branch), which is the only mechanism that persists.
-
-The practical consequence: **ship's Phase 6.45 (KB Artifact Archival) is now the in-PR archival point** — the named phase both PR arms run before any `gh pr ready` / `gh pr merge` site, backed by the `ship-kb-archive-gate.sh` PreToolUse hook. Compound's Step E archives eagerly when no live-path reader remains, but a deferred archival — the legitimate choice when `specs/<branch>/decision-challenges.md` must stay live for Phase 6 step 2.5's Model Dissents render or the plan file's `## Operator Holds` for step 5 — no longer strands the artifacts: Phase 6.45 runs `archive-kb.sh` AFTER those last reads and the `git mv` rides the same PR. A follow-up PR is never required for archival. **Why the ordering is load-bearing:** PR #7240 deferred compound's archival so Phase 6 step 2.5 could read `decision-challenges.md`, on the strength of `cleanup-merged` archiving post-merge — it did not, and the spec dir shipped unarchived; #9768 shipped unarchived the same way in 2026-10.
+**It does NOT durably archive spec directories — do not defer archival to it.** Its archive step is scoped to legacy bare-root specs, skips silently when the dir is absent, and commits nothing; the in-PR archival point is Phase 6.45. Full reasoning: [cleanup-merged-archival.md](./references/cleanup-merged-archival.md).
 
 **If working from a worktree:** Navigate to the main repo root first, then run cleanup.
 

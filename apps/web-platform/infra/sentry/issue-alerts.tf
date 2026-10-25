@@ -682,6 +682,45 @@ resource "sentry_alert" "art17_erasure_incomplete" {
   }
 }
 
+# (#8211) Sibling of art17_erasure_incomplete, for the LOCAL working-tree leg of the Art. 17
+# erasure. `deleteWorkspace` reaps WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>; a root it cannot
+# remove (or a tree only MOVED ASIDE to `<id>.orphaned-<ts>`) is mirrored as op=workspace-tree-
+# erasure by account-delete (feature=account-delete) AND repo/disconnect (feature=repo-disconnect)
+# while the caller still succeeds, so the filter is the OP ALONE. Triggers/actions copy the rule
+# above (re-pages per event). Distinct `frequency_minutes = 38` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10-37,60-63,120,240,1440-1442; keyed on action shape +
+# frequency, NOT conditions). Contract: test/sentry-git-data-pin-fault-alert-op-contract.test.ts.
+resource "sentry_alert" "art17_workspace_tree_erasure_incomplete" {
+  organization      = var.sentry_org
+  name              = "art17-workspace-tree-erasure-incomplete"
+  enabled           = true
+  frequency_minutes = 38
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "op", match = "eq", value = "workspace-tree-erasure" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # Rule 2 — BYOK delegation cap exceeded (hourly | daily). Lower urgency:
 # wider frequency + quieter `NoOne` fallthrough. Filters require
 # feature=byok-delegations AND op ∈ {hourly-cap-exceeded, daily-cap-exceeded}
@@ -1649,6 +1688,55 @@ resource "sentry_alert" "seccomp_remediation_failed" {
       logic_type = "all"
       conditions = [
         { tagged_event = { key = "op", match = "eq", value = "seccomp-remediation-failed" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# server/agent-runner-sandbox-config.ts (buildAgentSandboxConfig) pre-creates each masked dir (peer-socket,
+# transcript, session-tmp) before every dispatch (an ungated, idempotent mkdirSync on each build); the SDK skips a deny landing that does not exist, so a failed
+# mkdir leaves a cross-tenant read channel UNMASKED for that dir (the entry stays in denyRead: fail-open per dir).
+# Before this rule the failure was an error event with nobody behind it (#10455). The emit is
+# `reportSilentFallback(null, { feature: "agent-sandbox", op: "masked-dir-precreate", tags: { dir_kind } })`: the
+# literal `null` first argument keeps it on the MESSAGE path, because an Error would be mirrored by the pino
+# logger as feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never
+# match. Contract: test/sentry-masked-dir-precreate-alert-op-contract.test.ts (emit site <-> this block) and
+# test/agent-sandbox-precreate-sentry-path.test.ts (real logger, real helper).
+#
+# GROUPING: the message is constant per `dir_kind` (peer-socket | transcript | session-tmp) and carries no path, so
+# Sentry opens ONE issue per kind (an acknowledged benign kind cannot silence a later one); no per-dir fingerprint
+# (one persistent fault would otherwise page once per dir). value=0 notifies on the first event of a group within
+# the hour, and a persistent fault re-notifies every `frequency_minutes` (an acknowledged/resolved issue stops it).
+# Email only (issue owners, ActiveMembers fallthrough: the project has no ownership rule, so issue_owners alone
+# resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
+# are carried: `op` alone would also match any future emitter reusing the op name under another feature.
+# Distinct frequency_minutes = 39 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-38,60-63,120,240,
+# 1440-1442; re-verified free after merging main, which took 38 for art17_workspace_tree_erasure_incomplete); dedup keys on action shape + action_match + filter_match + frequency, not
+# conditions. Events carry only the kind, the errno (code/syscall) and the dir path: no user content.
+resource "sentry_alert" "masked_dir_precreate_failed" {
+  organization      = var.sentry_org
+  name              = "masked-dir-precreate-failed"
+  enabled           = true
+  frequency_minutes = 39
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-sandbox" } },
+        { tagged_event = { key = "op", match = "eq", value = "masked-dir-precreate" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },

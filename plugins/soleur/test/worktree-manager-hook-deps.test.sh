@@ -35,6 +35,12 @@ while IFS= read -r var; do
 done < <(env | grep -oP '^GIT_\w+' || true)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TEST_DIR:-}" ]] || rm -rf "$TEST_DIR"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 SCRIPT="$SCRIPT_DIR/../skills/git-worktree/scripts/worktree-manager.sh"
 
@@ -53,7 +59,6 @@ echo ""
 
 TEST_DIR=$(mktemp -d)
 assert_fixture_dir "$TEST_DIR"
-trap 'rm -rf "$TEST_DIR"' EXIT
 
 # Fixture-env builder (sourced via test-helpers.sh): ceiling + identity +
 # config hermeticity for every git spawn below. The fixture-env-adoption
