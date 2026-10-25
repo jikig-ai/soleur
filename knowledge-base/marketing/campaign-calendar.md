@@ -1,10 +1,16 @@
 ---
-last_updated: 2026-10-19
+last_updated: 2026-10-24
 ---
 
 # Campaign Calendar
 
 Rolling view of content distributions. Auto-generated from `distribution-content/` frontmatter.
+
+## Upcoming
+
+| Title | Type | Publish Date | Channels | Status |
+|-------|------|-------------|----------|--------|
+| A Checklist for Trusting AI Work Was Just Published. We Shipped All of It. | pillar | 2026-10-24 | discord, x, bluesky, linkedin-personal | scheduled |
 
 ## Stale Draft — needs approval
 
@@ -14,14 +20,16 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Age (days) | Channels | Status |
 |-------|------|-----------|----------|--------|
-| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 178 | | draft |
+| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 183 | | draft |
 
 ## Draft
 
-Entries with a non-published, non-scheduled status (`stale`, `parked`).
+Entries with a non-published, non-scheduled status (`draft`, `stale`, `parked`).
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| Soleur on OpenCode: run your AI organization on open-weights models | feature-launch | | x, bluesky | draft |
+| We Audited 102 Guardrails. Only Four Belong in Every Repository. | pillar | | x, bluesky, discord, linkedin-personal | draft |
 | Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | 2026-09-10 | discord, x, bluesky, linkedin-company | stale |
 | AI Agents for Solo Founders: The Definitive Guide | pillar | 2026-09-08 | discord, x, bluesky, linkedin-company | stale |
 | Your knowledge base is now actually usable on a phone | feature-launch | 2026-09-03 | x, bluesky | stale |
@@ -41,6 +49,8 @@ Entries with a non-published, non-scheduled status (`stale`, `parked`).
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| Property-Based Testing Adopted — First Property Found a Real Bug | feature-tweet | 2026-10-22 | x, discord | published |
+| New heavy test suites now get flagged before they silently misprice CI | feature-launch | 2026-10-20 | x, bluesky | published |
 | Your AI agents can no longer sneak unjustified issues onto your backlog | feature-launch | 2026-10-06 | x, bluesky | published |
 | Background work now declares where it is allowed to run | feature-launch | 2026-10-01 | x, bluesky | published |
 | Start a new chat from the CRM board to enter a lead | feature-launch | 2026-09-28 | x, bluesky | published |

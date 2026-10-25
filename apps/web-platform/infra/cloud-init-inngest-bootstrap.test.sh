@@ -2242,13 +2242,16 @@ STUB
   printf '#!/bin/sh\ncat\n' > "$G4_FX/bin/inngest-redact.sh"
   # #8562: the isolation self-check now runs in the same script, BEFORE the pull. The stub runs
   # the check's heredoc for real (`doppler run … -- bash -s`) and answers its name listing with
-  # the dark 5-name set, so the check PASSES and the pull arms are what these rows exercise.
+  # the dark 6-name set (floor raised 5→6 by #10390 defect 3: INNGEST_CONFIG_DIGEST is an
+  # admitted member, so the stub serves it — a 5-name set FATALs under the new floor and the
+  # pull arms would be scored for a reason that is not their row), so the check PASSES and the
+  # pull arms are what these rows exercise.
   cat > "$G4_FX/bin/doppler" <<'STUB'
 #!/bin/sh
 printf 'doppler %s\n' "$1" >> "$G4_LOG"
 case "$1" in
   run) while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; exec "$@" ;;
-  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{}}\n' ;;
+  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"INNGEST_CONFIG_DIGEST":{}}\n' ;;
 esac
 exit 0
 STUB

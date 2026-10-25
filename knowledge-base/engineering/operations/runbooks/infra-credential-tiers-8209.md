@@ -926,7 +926,9 @@ job carries the same flag, asserted by the census (Guard 2).
 The `--name-transformer tf-var` flag renames every injected secret to `TF_VAR_*`, so neither
 loader ever sets `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`; terraform reads the backend
 credentials from the already-exported shell env. For a state-**writing** invocation (`apply`,
-`import`, `state push`, `state mv`, `taint`) export the Tier-B read/write pair first — the
+`import`, `destroy`, `untaint`, `refresh`, `taint`, `state push`, `state mv`, `state rm`,
+`state replace-provider`, `workspace new`, `workspace delete`) export the Tier-B read/write
+pair first — the
 `prd_terraform` pair is intentionally read-only post-O5b and its `PutObject` 403s mid-apply:
 
 ```bash

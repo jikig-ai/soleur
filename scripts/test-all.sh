@@ -1060,7 +1060,20 @@ if [[ -f "$_AFF_LIB" ]]; then
   # shellcheck source=scripts/lib/test-affected-paths.sh
   source "$_AFF_LIB" || true
 fi
-if declare -p ALWAYS_ON_SUITES >/dev/null 2>&1; then
+# Same degrade-never-block class as _AFF_LIB (CTO ruling, #10198): the glob
+# shape classifier lives beside the declarations lib and is folded into the
+# same gate — a missing helper is `index-missing` (select-all), never a
+# rc-127 mid-run abort. The hit arm's `^glob:` branch additionally carries its
+# own `declare -F … || return 0` fail-wide guard, because `_diff_touches`
+# reaches `_diff_edge_hit` OUTSIDE the `_AFF_LIB_OK` gate for hand-placed
+# `^glob:` relevance entries.
+_AFF_GLOB_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/affected-glob.sh"
+if [[ -f "$_AFF_GLOB_LIB" ]]; then
+  # shellcheck source=scripts/lib/affected-glob.sh
+  source "$_AFF_GLOB_LIB" || true
+fi
+if declare -p ALWAYS_ON_SUITES >/dev/null 2>&1 \
+   && declare -F _affected_glob_split >/dev/null 2>&1; then
   _AFF_LIB_OK=1
 fi
 
@@ -2202,37 +2215,53 @@ _diff_edge_hit() {
       # _affected_add_edge. A diff line under <literal-head> matching <glob-tail>
       # (bash [[ == ]] semantics — `*` crosses `/`, so `knowledge-base/**.sh`
       # covers `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike).
-      # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm in
+      # malformed-shape invariant — ONE doctrine, ONE classifier: every bash
+      # site classifies through _affected_glob_split (the mint arm in
       # _affected_add_edge, this in-flight revalidation, the census arm in
-      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
-      # scripts/test-affected-kb-consumers.test.sh must classify a shape
-      # identically; GLOBENT (registration-only classifier) is a deliberate
-      # superset — admission can only widen, never narrow (see the mint arm).
+      # scripts/lint-orphan-test-suites.sh, and materialise() in
+      # scripts/lint-orphan-test-suites.test.sh); the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh and edge_hit() in
+      # scripts/ci-pr-affected-replay.py are Python mirrors pinned by
+      # differential fixtures; GLOBENT (registration-only classifier) is a
+      # deliberate superset — admission can only widen, never narrow (see the
+      # mint arm).
       # Every malformed shape returns MATCH here — a glob edge can only widen a
       # selection, never narrow it. The deeper arms (non-repo-relative head,
       # non-`/` head, `*`-less tail) are unreachable from minted edges (their
       # `:` trips the charset arm first) but ARE reachable via hand-placed
       # `^glob:` entries in relevance arrays — defense-in-depth for that channel.
-      local _g="${e#glob:}" _gh _gt _line
-      case "$_g" in
-        *[!A-Za-z0-9_./*-]*) return 0 ;;    # byte outside the grammar charset → match
+      # Fail-WIDE guard (CTO ruling, #10198): `_diff_touches` reaches this arm
+      # OUTSIDE the `_AFF_LIB_OK` gate for hand-placed `^glob:` relevance
+      # entries, so a missing classifier must match, never rc-127 into a silent
+      # narrow under `set -euo pipefail`.
+      declare -F _affected_glob_split >/dev/null || return 0
+      local _g="${e#glob:}" _line
+      _affected_glob_split "$_g"
+      case "$_AGS_CLASS" in
+        dir)
+          # Cheap head pre-check — no line under the head means no line can match.
+          [[ "$_n" == *"${_NL}${_AGS_HEAD}"* ]] || return 1
+          while IFS= read -r _line; do
+            [[ -n "$_line" && "$_line" == "$_AGS_HEAD"* && "$_line" == $_g ]] && return 0
+          done <<< "$_DEH_N"
+          return 1
+          ;;
+        root)
+          # Root-anchored (#10198): only DIR-LESS diff lines can match — [[ == ]]
+          # lets `*` cross `/`, so the `!= */*` conjunct is the load-bearing
+          # narrowing, not a belt. An empty head degenerates the pre-check to
+          # always-true — keep it conditional on a non-empty head.
+          [[ -z "$_AGS_HEAD" || "$_n" == *"${_NL}${_AGS_HEAD}"* ]] || return 1
+          while IFS= read -r _line; do
+            [[ -n "$_line" && "$_line" != */* && "$_line" == $_g ]] && return 0
+          done <<< "$_DEH_N"
+          return 1
+          ;;
+        # `literal|malformed|*)` — the `*)` is piped, never space-led: the
+        # killed-classification battery's budget arms rewrite a space-led
+        # default-case substring exactly once and assert on its uniqueness.
+        literal|malformed|*) return 0 ;;   # literal + every malformed shape → match (widen-only)
       esac
-      _gh="${_g%%[*?[]*}"
-      case "$_gh" in
-        /*|./*|../*|*"//"*|*"/./"*|*"/../"*) return 0 ;;  # not repo-relative → match
-      esac
-      # (shape checks as [[ ]] — a bare `*) return 0 ;;` here would collide the
-      # substring-unique budget anchor in test-all-killed-classification's fixture)
-      [[ "$_gh" == */ ]] || return 0        # head not /-terminated → match
-      _gt="${_g#$_gh}"
-      [[ "$_gt" == */ ]] && return 0        # tail ends / — unmatchable → match
-      [[ "$_gt" == *\** ]] || return 0      # tail without * → match
-      # Cheap head pre-check — no line under the head means no line can match.
-      [[ "$_n" == *"${_NL}${_gh}"* ]] || return 1
-      while IFS= read -r _line; do
-        [[ -n "$_line" && "$_line" == "$_gh"* && "$_line" == $_g ]] && return 0
-      done <<< "$_DEH_N"
-      return 1
       ;;
     */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
     *)  [[ "$_n" == *"${_NL}${e}${_NL}"* ]] ;;
@@ -2409,6 +2438,11 @@ _aff_classify_runner_diff() {
             # metachar-free head ending in /, a tail carrying * and no ?/[.
             # Anything outside this shape stays semantic — the closed grammar.
             GLOBENT = "^  \"glob:[A-Za-z0-9_.\\/-]+\\/[A-Za-z0-9_.\\/*-]*\\*[A-Za-z0-9_.\\/*-]*\"( +#.*)?$"
+            # GLOBROOT (#10198): the root-anchored form — a slash-free head
+            # (empty allowed) and a slash-free tail carrying `*`. Deliberate
+            # superset like the dir arm: admission can only widen, never
+            # narrow; a /-bearing tail (glob:x*/y) stays semantic.
+            GLOBROOT = "^  \"glob:[A-Za-z0-9_.*-]*\\*[A-Za-z0-9_.*-]*\"( +#.*)?$"
             load(RUNNER, post); load(INDEX, post) }
     {
       line = $0
@@ -2428,17 +2462,17 @@ _aff_classify_runner_diff() {
             # label added in the same diff, and the injectivity rules, are checked by the caller.
             if (body ~ /\r/) { viol("G2-cr", file, cur) }
             else if (blk == 1) {
-              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ GLOBENT || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
+              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ GLOBENT || body ~ GLOBROOT || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
               else if (body == ")") { blk = 0 }
               else { viol("INDEX-SHAPE", file, cur); blk = 0 }
             } else if (body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) {
               j = cur - 1
               while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
-              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT))) viol("INDEX-ANCHOR", file, cur)
+              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT || post[file, j] ~ GLOBROOT))) viol("INDEX-ANCHOR", file, cur)
             } else if (body ~ /^AFFECTED_[A-Z0-9_]+_PATHS=\($/) {
               j = cur - 1
               while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
-              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT)) {
+              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT || post[file, j] ~ GLOBROOT)) {
                 blk = 1; nm = body; sub(/=\($/, "", nm); printf "R\t%s\n", nm
               } else viol("INDEX-ANCHOR", file, cur)
             } else if (body ~ /^  "[A-Za-z0-9_.\/-]+"( +#.*)?$/) {
@@ -2842,7 +2876,7 @@ _affected_rec_read() { # <path>
 # `.` names the whole tree, and an anchored `^./` could never match a diff line,
 # which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
-  local _p="$1" _nl=$'\n' _g _gh _gt
+  local _p="$1" _nl=$'\n' _g
   # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
   case "$_p" in *"$_nl"*) return 0 ;; esac
   case "$_p" in
@@ -2859,12 +2893,15 @@ _affected_add_edge() {
         *[\*?[]*) : ;;                      # a metachar is present — the glob grammar applies
         *) _affected_add_edge "$_g"; return 0 ;;   # none: a literal path entry
       esac
-      # malformed-shape invariant — ONE doctrine, FIVE sites: this mint arm, the
+      # malformed-shape invariant — ONE doctrine, ONE classifier: every bash
+      # site classifies through _affected_glob_split (this mint arm, the
       # in-flight revalidation in _diff_edge_hit's glob:* arm, the census arm in
-      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
-      # scripts/test-affected-kb-consumers.test.sh must classify a shape
-      # identically. Site five — the GLOBENT line shape in the registration-only
-      # classifier — is a DELIBERATE SUPERSET (admits e.g. `../` heads): admission
+      # scripts/lint-orphan-test-suites.sh, and materialise() in
+      # scripts/lint-orphan-test-suites.test.sh); the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh and edge_hit() in
+      # scripts/ci-pr-affected-replay.py are Python mirrors pinned by
+      # differential fixtures. The GLOBENT line shape in the registration-only
+      # classifier is a DELIBERATE SUPERSET (admits e.g. `../` heads): admission
       # only marks a diff registration-only, a malformed member still mints
       # always-match here, and the census REDs it — the superset can never narrow.
       # The grammar is a CLOSED charset (any byte outside [-A-Za-z0-9_./:*]'s
@@ -2876,24 +2913,26 @@ _affected_add_edge() {
       # malformed → always-match (widen-only by design); a metachar-free one
       # takes the literal-path recursion above — a real edge if the path exists,
       # nothing otherwise.
-      case "$_g" in
-        *[!A-Za-z0-9_./*-]*) _p="^glob:${_p}" ;;   # byte outside the grammar charset → verbatim
-        *)
-          _gh="${_g%%[*?[]*}"               # longest leading metachar-free run
-          case "$_gh" in
-            /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _p="^glob:${_p}" ;;  # not repo-relative → verbatim
-            */)
-              _gt="${_g#$_gh}"
-              case "$_gt" in
-                */) _p="^glob:${_p}" ;;     # _gt ends / — no path can match it → verbatim
-                *\**)                       # _gt carries a *
-                  if _affected_probe d "$_gh"; then _p="^glob:${_g}"; else _p="^${_gh}"; fi ;;
-                *) _p="^glob:${_p}" ;;      # _gt without * → malformed → verbatim
-              esac
-              ;;
-            *) _p="^glob:${_p}" ;;          # _gh does not end in / → malformed → verbatim
-          esac
-          ;;
+      # Fail-wide guard (symmetric with the hit arm): the receipt path
+      # (_affected_emit_receipt → _affected_classify → _affected_derive) reaches
+      # this arm outside the _AFF_LIB_OK gate, so a missing helper mints the
+      # verbatim always-match — never an rc-127 silent narrow under `set -e`.
+      # Dormant today: the declared-array walk exits at index-missing under
+      # _AFF_LIB_OK==0 and file-content glob: tokens die at the -e probe, so
+      # only a direct argv token reaches it — pinned by t16 in
+      # test-all-affected.test.sh, which drives _affected_add_edge unsourced.
+      declare -F _affected_glob_split >/dev/null && _affected_glob_split "$_g" || _AGS_CLASS=malformed
+      case "$_AGS_CLASS" in
+        dir)
+          # Well-formed: probe the head dir — present mints `^glob:<pattern>`,
+          # absent degrades to `^<head>/` (the dir-prefix edge the entry
+          # replaced, never narrower).
+          if _affected_probe d "$_AGS_HEAD"; then _p="^glob:${_g}"; else _p="^${_AGS_HEAD}"; fi ;;
+        root)
+          # Root-anchored (#10198): no -d probe — the repo root is always
+          # present, so the entry mints its real edge unconditionally.
+          _p="^glob:${_g}" ;;
+        *) _p="^glob:${_p}" ;;          # malformed (every why) → verbatim always-match
       esac
       ;;
     *)
@@ -5438,14 +5477,14 @@ if want_scripts; then
   # a DECLARED_TOTAL bump in the battery needs all four edited together, and the shard-totality suites
   # pin both halves (plugins/soleur/test/scripts-shard-totality*.sh).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-15
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 16-30
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-13"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-15"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 14-27"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 16-30"
   fi
   # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
   # working tree; the battery builds synthetic fixture repos and proves each
