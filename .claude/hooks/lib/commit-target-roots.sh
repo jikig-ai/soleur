@@ -99,6 +99,7 @@ _CTR_MAX_TARGETS=32
 CTR_TARGETS=()
 CTR_BAD=()
 CTR_ROOTS=()
+CTR_ROOT_ERR=""
 CTR_COMMIT_SEEN=0
 CTR_LEX_STATE=ok
 CTR_LEX_WHY=""
@@ -1016,7 +1017,7 @@ ctr_collect() {
 ctr_resolve_roots() {
   local t base cand top r dup d found s k ti=-1
   local cands=() seen=() bases=()
-  CTR_ROOTS=()
+  CTR_ROOTS=(); CTR_ROOT_ERR=""
   for t in ${CTR_TARGETS[@]+"${CTR_TARGETS[@]}"}; do
     ti=$((ti + 1))
     cands=()
@@ -1038,7 +1039,15 @@ ctr_resolve_roots() {
       for d in ${seen[@]+"${seen[@]}"}; do if [ "$d" = "$cand" ]; then dup=1; fi; done
       [ "$dup" -eq 1 ] && continue
       seen+=("$cand")
-      top=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR git -C "$cand" rev-parse --show-toplevel 2>/dev/null) || continue
+      top=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR git -C "$cand" rev-parse --show-toplevel 2>&1) || {
+        # a failure other than "not a repository" is a repository git cannot read (a bad config value): the caller denies it
+        case "$top" in
+          *"not a git repository"*|*"must be run in a work tree"*) : ;;
+          *) if [ -z "$CTR_ROOT_ERR" ]; then CTR_ROOT_ERR="${top%%$'\n'*}"; fi ;;
+        esac
+        continue
+      }
+      top="${top##*$'\n'}"
       [ -n "$top" ] || continue
       dup=0
       for r in ${CTR_ROOTS[@]+"${CTR_ROOTS[@]}"}; do if [ "$r" = "$top" ]; then dup=1; fi; done

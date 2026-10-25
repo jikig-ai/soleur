@@ -149,14 +149,16 @@ assert_fixture_dir() {
 # (a Go program: measured, still running 30 s after a 2 s alarm), and `timeout` is absent on a stock macOS. The
 # child runs in its own process group so the TERM (then KILL, 2 s later) reaches its grandchildren too.
 # A signal sent to the hook's process group reaches this wrapper too (it stays in that group): the TERM / INT / HUP
-# handler runs the same kill sequence and exits 143, so the child group is not orphaned unbounded.
+# handler runs the same kill sequence and exits 143, so the child group is not orphaned unbounded. The forked child resets
+# those handlers to DEFAULT first thing, and the kill is guarded by `if ($p)`: a signal landing in the child between fork and
+# exec would otherwise run the wrapper's handler there, where $p is 0 and `kill SIG, -0` signals the whole process group (the hook's).
 read -r -d '' CIS_BOUND_PL <<'PL' || true
 my $t = shift; my $p;
-my $stop = sub { my $rc = shift; if (defined $p) { kill 'TERM', -$p; select(undef,undef,undef,2); kill 'KILL', -$p; waitpid($p,0) } exit $rc };
+my $stop = sub { my $rc = shift; if ($p) { kill 'TERM', -$p; select(undef,undef,undef,2); kill 'KILL', -$p; waitpid($p,0) } exit $rc };
 $SIG{ALRM} = sub { $stop->(124) };
 $SIG{$_} = sub { $stop->(143) } for qw(TERM INT HUP);
 $p = fork(); defined $p or exit 125;
-if (!$p) { setpgrp(0,0); exec @ARGV or exit 127 }
+if (!$p) { $SIG{$_} = 'DEFAULT' for qw(ALRM TERM INT HUP); setpgrp(0,0); exec @ARGV or exit 127 }
 alarm $t; waitpid($p,0); alarm 0;
 exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
 PL
