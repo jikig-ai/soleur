@@ -1,12 +1,23 @@
 // #8293 -- the pattern layer's pure module: page parsing, runtime validation, the index
 // the patterns arm sends, and the shared nonce fence. All fixtures are synthesized in a
 // temp dir; the real tree is covered by compound-promote-patterns-live-tree.test.ts.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// `readdir` is wrapped so a test can make the host return names in reverse order: the sort in the loader is
+// otherwise unobservable on a filesystem that already lists alphabetically.
+const fsx = vi.hoisted(() => ({ reverse: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readdir = ((...args: unknown[]) =>
+    (actual.readdir as (...a: unknown[]) => Promise<unknown[]>)(...args).then((r) => (fsx.reverse ? [...r].reverse() : r))) as unknown as typeof actual.readdir;
+  return { ...actual, readdir };
+});
+
 import {
   EVIDENCE_PATH_RE,
+  MAX_PAGE_EVIDENCE,
   MIN_PAGE_EVIDENCE,
   MAX_PAGE_BYTES,
   PATTERNS_DIR,
@@ -310,6 +321,29 @@ describe("parsePatternPage: one fault at a time (each case has the same page acc
     expect(parsePatternPage(pageText({ title: '"reach ops\\x40example.test"' }), `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "pii" });
   });
 
+  it("PII hidden in a decoded TAG is caught too (a tag shape admits an sk-ant- token)", () => {
+    const text = pageText({ tags: '["sk\\x2dant-aaaaaaaaaaaaaaaaaaaaaa"]' });
+    expect(PII.test(text)).toBe(false);
+    expect(parsePatternPage(text, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "pii" });
+  });
+
+  it("a nested-alias tags value is a schema drop, and nothing is stringified before the shape check", () => {
+    // Each level multiplies on stringification (9^N leaves); shape validation must refuse it first.
+    const lvl = ["&a0 [x,x,x,x,x,x,x,x,x]"];
+    for (let i = 1; i <= 4; i++) lvl.push(`&a${i} [${Array.from({ length: 9 }, () => `*a${i - 1}`).join(",")}]`);
+    let calls = 0;
+    const spy = { test: (): boolean => { calls++; return false; } } as unknown as RegExp;
+    const r = parsePatternPage(pageText({ tags: `[${lvl.join(", ")}]` }), `${PATTERNS_DIR}/p.md`, spy);
+    expect(r).toEqual({ ok: false, cause: "schema" });
+    expect(calls).toBe(1); // the raw-text scan only: the decoded-field scan comes after the shape checks
+  });
+
+  it("evidence entries are capped per page", () => {
+    const many = (n: number) => `\n${Array.from({ length: n }, (_, i) => `  - knowledge-base/project/learnings/e${i + 1}.md`).join("\n")}`;
+    expect(parsePatternPage(pageText({ evidence: many(MAX_PAGE_EVIDENCE) }), `${PATTERNS_DIR}/p.md`, PII)).toMatchObject({ ok: true });
+    expect(parsePatternPage(pageText({ evidence: many(MAX_PAGE_EVIDENCE + 1) }), `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "schema" });
+  });
+
   it("the canonical-path predicate accepts the repo's own shape and nothing sloppier", () => {
     expect(isCanonicalEvidencePath("knowledge-base/project/learnings/a.md")).toBe(true);
     expect(isCanonicalEvidencePath("knowledge-base/project/learnings/sub/a.md")).toBe(true);
@@ -388,13 +422,55 @@ describe("loadOpenPatterns: containment, attrition and error signals", () => {
   it("only the 10 lines that are sent are PII-scanned and bounded: a later email is kept, an oversize excerpt is dropped", async () => {
     writeFileSync(join(root, ev(2)), `${"line\n".repeat(10)}late contact: someone@example.test\n`);
     writeFileSync(join(root, ev(3)), `${"y".repeat(MAX_PAGE_BYTES + 1)}\n`);
+    writeFileSync(join(root, ev(4)), "y".repeat(MAX_PAGE_BYTES)); // exactly at the bound: kept
     put("a", pageText({ evidence: `\n${evs(7).map((p) => `  - ${p}`).join("\n")}` }));
     const r = await load();
     expect(r.open).toBe(1);
     expect(r.patterns[0].evidence).toContain(ev(2));
     expect(r.patterns[0].evidence).not.toContain(ev(3));
+    expect(r.patterns[0].evidence).toContain(ev(4));
     expect(r.evidenceEntries.find((e) => e.path === ev(2))?.summary).not.toContain("someone@");
     expect(r.droppedEvidence).toEqual([{ cause: "unreadable", count: 1 }]);
+  });
+
+  it("pages load in sorted order even when the host lists directory entries in reverse", async () => {
+    put("z-first", pageText());
+    put("a-second", pageText());
+    fsx.reverse = true;
+    try {
+      expect((await load()).patterns.map((p) => p.slug)).toEqual(["a-second", "z-first"]);
+    } finally {
+      fsx.reverse = false;
+    }
+  });
+
+  it("an alias that stays INSIDE the repo is refused for the patterns directory and for the learnings root", async () => {
+    put("one", pageText());
+    const pd = join(root, PATTERNS_DIR);
+    renameSync(pd, `${pd}-real`);
+    symlinkSync(`${pd}-real`, pd);
+    expect(await load()).toMatchObject({ dirReadable: false, open: 0 });
+    rmSync(pd);
+    renameSync(`${pd}-real`, pd);
+    const lr = join(root, "knowledge-base/project/learnings");
+    renameSync(lr, `${lr}-real`);
+    symlinkSync(`${lr}-real`, lr);
+    const r = await load();
+    expect(r.patterns).toEqual([]);
+    expect(r.droppedEvidence).toEqual([{ cause: "unreadable", count: 5 }]);
+  });
+
+  it("positive control: a repo reached through a symlinked parent still loads", async () => {
+    put("one", pageText());
+    const holder = mkdtempSync(join(tmpdir(), "patterns-linkroot-"));
+    try {
+      symlinkSync(root, join(holder, "checkout"));
+      const r = await loadOpenPatterns({ repoRoot: join(holder, "checkout"), piiRegex: PII, retiredPaths: new Set<string>() });
+      expect(r).toMatchObject({ dirReadable: true, open: 1 });
+      expect(r.droppedEvidence).toEqual([]);
+    } finally {
+      rmSync(holder, { recursive: true, force: true });
+    }
   });
 
   it("per-key attrition is reported by cause, once per distinct learning, and the page survives", async () => {
@@ -450,6 +526,7 @@ describe("patternsPayloadBytes", () => {
     const tail = renderPatternsTail(patterns, evidenceEntries, "0".repeat(16));
     expect(tail.startsWith("\n\n<<<BEGIN-0000000000000000:pattern-index>>>")).toBe(true);
     expect(tail).toContain("<<<BEGIN-0000000000000000:learning knowledge-base/project/learnings/ev-1.md>>>");
+    expect(tail).toContain(">>>\n\n<<<BEGIN-0000000000000000:learning ");
     expect(patternsPayloadBytes(patterns, evidenceEntries)).toBe(Buffer.byteLength(tail, "utf8"));
     expect(patternsPayloadBytes(patterns, evidenceEntries)).toBeGreaterThan(Buffer.byteLength(JSON.stringify(evidenceEntries), "utf8"));
   });

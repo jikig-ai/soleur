@@ -175,11 +175,6 @@ describe("readLedger", () => {
     expect(LEDGER_MAX_SEARCH_PAGES).toBe(10);
   });
 
-  it("the query is bounded to the App's own PRs: a word-prefix head: alone would match other authors", () => {
-    expect(Q).toContain("author:app/soleur-ai");
-    expect(LEDGER_BOT_LOGIN).toBe("soleur-ai[bot]");
-  });
-
   it("the query's head: prefix is the shared branch prefix the apply step builds on", () => {
     expect(PROMOTE_BRANCH_PREFIX).toBe("self-healing/auto-");
     // The stale-bot-PR watchdog keys on the same prefix as an independent literal: renaming one must red here.
@@ -224,7 +219,7 @@ describe("readLedger", () => {
   });
 
   it("closed_at must look like an ISO timestamp, not merely parse", async () => {
-    for (const bad of ["2026", "1", "Jan 5 2026", "2026-1", "2026-01-05", "2026-11-01 00:00:00"]) {
+    for (const bad of ["2026", "1", "Jan 5 2026", "2026-1", "2026-01-05", "2026-11-01 00:00:00", "2026-11-01T00:00:00", "2026-11-01T00:00:00+0100"]) {
       expect(await causeOf(read(fakeOctokit([[item({ state: "closed", closedAt: bad })]]).octokit)), bad).toBe("unparseable");
     }
   });

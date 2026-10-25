@@ -43,7 +43,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Octokit } from "@octokit/core";
-import { parseFrontMatterSafe } from "../../front-matter-guard";
+import { parseFrontMatterSafe } from "@/server/front-matter-guard";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {

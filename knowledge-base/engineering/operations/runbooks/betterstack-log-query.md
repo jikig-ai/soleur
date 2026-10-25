@@ -576,7 +576,7 @@ means "the deny channel went dark", not "no denials").
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY \
-  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(.component == "cron-filing-deny") | [.fn, .run_id, .count, .capture_status] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(.component == "cron-filing-deny") | [.fn, .run_id, .count, .capture_status] | @tsv'
 ```
 
 Three caveats before reading a zero as clean:
@@ -657,7 +657,7 @@ early terminal rows `disabled`, `deduped` and `week-cap-reached` carry ONLY `inp
 are numbers or closed enums. The ledger read has a usable ceiling of 999 search hits (10 pages of
 100, and a full last page throws `page-cap`). On a failed read the marker has no cause field:
 after Inngest retries (`retries:1`) it shows `status=error`, `ledger_read=failed`,
-a static `error_message` and `error_class=StepError` (an exhausted `step.run` reaches the handler as the SDK's `StepError`, so key on `ledger_read=failed`, not on the class name); the seven causes (`http-5xx`,
+a static `error_message` and an `error_class` that is `StepError` in the SDK's shape (an exhausted `step.run` reaches the handler as `StepError`, and a production bundle may minify class names, so key on `ledger_read=failed`, not on the class name); the seven causes (`http-5xx`,
 `rate-limit`, `page-cap`, `incomplete`, `unparseable`, `drift`, `transport`) are the Sentry `cause`
 tag on op `ledger-read-failed`. How to read
 them: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The `input`
@@ -848,7 +848,7 @@ canary container's rows are not shipped (Vector matches the prod container name 
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_WATCHDOG_DISPATCH \
-  | jq -R -r 'fromjson? | .raw | fromjson? | .host_name as $h | .message | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true) | [$h, .host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .host_name as $h | .message | select(type == "object" and .SOLEUR_WATCHDOG_DISPATCH == true) | [$h, .host_id, .workflow, .slot, .outcome, (.op // ""), (.reason // "")] | @tsv'
 ```
 
 ### `SOLEUR_RUN_REPORT_SWEEP` — the 12:00Z run-report arm changed state
@@ -869,7 +869,7 @@ exists to stop and the follow-through for #8076 grades it from GitHub.
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_RUN_REPORT_SWEEP \
-  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(type == "object" and .SOLEUR_RUN_REPORT_SWEEP == true) | [.closed, .deferred, (.closedByLabel | tojson)] | @tsv'
+  | jq -R -r 'fromjson? | .raw | fromjson? | objects | .message | select(type == "object" and .SOLEUR_RUN_REPORT_SWEEP == true) | [.closed, .deferred, (.closedByLabel | tojson)] | @tsv'
 ```
 
 Rows before 2026-09-19 (PR #8344) decode to a STRING `.message`; the

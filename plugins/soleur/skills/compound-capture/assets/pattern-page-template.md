@@ -44,7 +44,7 @@ closed_by: 12345        # positive integer: the PR number that fixed or retired 
 
 The loader (`apps/web-platform/server/compound-promote-patterns.ts`) and the live-tree test drop or reject a page that breaks any of these:
 
-- At least 5 evidence entries on EVERY page. A page left with fewer than 5 surviving keys is dropped.
+- At least 5 and at most 40 evidence entries on EVERY page. A page left with fewer than 5 surviving keys is dropped.
 - Evidence paths are unique, canonical (no `.`, empty or `..` segments), tracked and not archived.
 - `title`: at most 120 printable ASCII characters. `summary`: at most 200 printable ASCII characters.
 - `tags`: 1 to 12, each matching `^[a-z0-9][a-z0-9-]{0,40}$`.

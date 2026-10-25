@@ -1731,6 +1731,8 @@ export async function cronCompoundPromoteHandler({
             op: "ledger-read-failed",
             message: "prior-proposal ledger read failed",
             tags: { cause: err instanceof LedgerReadError ? err.ledgerCause : "transport" },
+            // The pino mirror carries `extra`, not `tags`: repeat the closed cause so Better Stack has it too.
+            extra: { cause: err instanceof LedgerReadError ? err.ledgerCause : "transport" },
           });
           throw err;
         }
@@ -1760,7 +1762,7 @@ export async function cronCompoundPromoteHandler({
           op: "pattern-page-dropped",
           message: "a pattern page was dropped before the prompt",
           tags: { cause: d.cause },
-          extra: { slug: d.slug },
+          extra: { slug: d.slug, cause: d.cause },
         });
       }
       for (const d of loaded.droppedEvidence) {
@@ -1770,7 +1772,7 @@ export async function cronCompoundPromoteHandler({
           op: "pattern-evidence-dropped",
           message: "evidence learnings were dropped from open pattern pages",
           tags: { cause: d.cause },
-          extra: { count: d.count },
+          extra: { count: d.count, cause: d.cause },
         });
       }
       return { entries: loaded.evidenceEntries, patterns: loaded.patterns, open: loaded.open, dirReadable: loaded.dirReadable };
@@ -1812,11 +1814,10 @@ export async function cronCompoundPromoteHandler({
     });
     if (inputSource === "patterns") {
       // step.run's inferred return is a JSON projection of a union; the patterns arm is the only one with these keys.
-      const fromPatterns = collected as unknown as { patterns: PatternPage[]; open: number; dirReadable?: boolean };
+      const fromPatterns = collected as unknown as { patterns: PatternPage[]; open: number; dirReadable: boolean };
       patternRows = fromPatterns.patterns;
       patternsOpen = fromPatterns.open;
-      // A step result memoized by a build that predated the field replays without it: absent is not unreadable.
-      patternsDirReadable = fromPatterns.dirReadable ?? true;
+      patternsDirReadable = fromPatterns.dirReadable;
     }
     const corpus: { entries: { path: string; summary: string }[] } = { entries: collected.entries };
 
@@ -1840,6 +1841,7 @@ export async function cronCompoundPromoteHandler({
             op: "patterns-empty",
             message: "the patterns arm found no open pattern with usable evidence",
             tags: { cause: patternsDirReadable ? "no-open-patterns" : "dir-unreadable" },
+            extra: { cause: patternsDirReadable ? "no-open-patterns" : "dir-unreadable" },
           });
         }
         return postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger });

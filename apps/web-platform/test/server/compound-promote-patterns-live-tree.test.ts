@@ -23,6 +23,7 @@ import {
   MIN_PAGE_EVIDENCE,
   PATTERNS_DIR,
   isCanonicalEvidencePath,
+  loadOpenPatterns,
   parsePatternPage,
   type PatternPage,
 } from "@/server/compound-promote-patterns";
@@ -81,6 +82,8 @@ function attritionProblems(p: string, root: string, retired: string): string[] {
 function ciProblems(page: PatternPage, text: string, tracked: ReadonlySet<string>, root: string = REPO_ROOT, retired: string = retiredText()): string[] {
   const problems: string[] = [];
   for (const hit of denylistHits(text)) problems.push(`denylist:${hit}`);
+  // A handle that only exists once YAML has decoded it (an escape sequence) is invisible to the raw-text scan.
+  for (const hit of denylistHits([page.title, page.summary, ...page.tags].join("\n"))) problems.push(`denylist-decoded:${hit}`);
   for (const p of page.evidence) {
     if (!isCanonicalEvidencePath(p)) problems.push(`evidence-shape:${p}`);
     else if (p.includes("/archive/")) problems.push(`evidence-archived:${p}`);
@@ -107,6 +110,14 @@ describe("the validator can fail (instrument self-check)", () => {
     const r = parsePatternPage(good(), `${PATTERNS_DIR}/a.md`, piiRegex);
     expect(r.ok).toBe(true);
     if (r.ok) expect(ciProblems(r.page, good(), tracked, synth, "")).toEqual([]);
+  });
+
+  it("flags a handle that only exists after YAML decoding", () => {
+    const text = good().replace('title: "A pattern"', 'title: "Fix \\x40alice loop"');
+    expect(denylistHits(text)).toEqual([]);
+    const r = parsePatternPage(text, `${PATTERNS_DIR}/a.md`, piiRegex);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(ciProblems(r.page, text, tracked, synth, "")).toContain("denylist-decoded:@handle");
   });
 
   it("flags the runtime attrition classes: a retired, a symlinked and a PII-bearing evidence learning", () => {
@@ -167,6 +178,14 @@ describe("the real pattern tree", () => {
     expect(names.length).toBeLessThanOrEqual(SEED_CAP);
     const all = existsSync(dir) ? readdirSync(dir) : [];
     expect(all.filter((n) => !n.endsWith(".md"))).toEqual([]);
+  });
+
+  it("the runtime loader drops nothing from the real tree (alias, size and attrition classes included)", async () => {
+    const r = await loadOpenPatterns({ repoRoot: REPO_ROOT, piiRegex, retiredPaths: new Set<string>() });
+    expect(r.dirReadable).toBe(true);
+    expect(r.dropped).toEqual([]);
+    expect(r.droppedEvidence).toEqual([]);
+    expect(r.open).toBeGreaterThanOrEqual(1);
   });
 
   it("the learnings subtree was enumerated (a vacuous tracked set would pass every page)", () => {

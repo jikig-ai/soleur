@@ -29,7 +29,7 @@ beforeEach(() => {
 describe("front-matter guard", () => {
   test("positive control: plain openers parse (LF, CRLF, BOM, trailing blanks)", () => {
     expect(parseFrontMatterSafe("---\ntitle: ok\n---\nbody").data).toEqual({ title: "ok" });
-    expect(parseFrontMatterSafe("﻿---\r\ntitle: ok\r\n---\r\nbody").data).toEqual({ title: "ok" });
+    expect(parseFrontMatterSafe("\uFEFF---\r\ntitle: ok\r\n---\r\nbody").data).toEqual({ title: "ok" });
     expect(parseFrontMatterSafe("---  \ntitle: ok\n---\nbody").data).toEqual({ title: "ok" });
     expect(parseFrontMatterSafe("no front matter").data).toEqual({});
   });
@@ -72,7 +72,7 @@ describe("front-matter guard", () => {
   });
 
   test("a BOM before a tagged opener is refused too", () => {
-    expect(() => parseFrontMatterSafe(`﻿${payload("---js")}`)).toThrow();
+    expect(() => parseFrontMatterSafe(`\uFEFF${payload("---js")}`)).toThrow();
     expect(g.FM_GUARD_PWNED).toBeUndefined();
   });
 });

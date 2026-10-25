@@ -6,8 +6,8 @@
 //
 // Contract (CTO rulings F1-F3, C1, C2, C5 in the plan's decision record):
 //   - one search query, `head:<PROMOTE_BRANCH_PREFIX>` bounded to the App's own PRs by `author:`
-//     (`head:` is a WORD-prefix match, so the author qualifier is what keeps a fork or human PR on a
-//     look-alike branch from filling the page cap), paged through the shared `fetchAllPages`
+//     (`head:` is a prefix match on the branch name and a trailing hyphen is not significant, so the
+//     author qualifier is what keeps a fork or human PR on a look-alike branch from filling the page cap), paged through the shared `fetchAllPages`
 //     (cap 10 pages of 100; it throws on a full last page, so 999 hits is the usable ceiling and the
 //     Search API's own 1,000-result limit is never reached); NO per-hit detail fetch and no
 //     `pulls?state=all` listing: the search item already carries state, closed_at, merged_at,
@@ -22,7 +22,8 @@
 //     retrieved, a closed item with an unparseable `closed_at`, a malformed item, or bot-authored hits with
 //     none parsing as a promote title (title drift must not read as "nothing to suppress").
 //     A zero-hit read, and hits that are all foreign (a fork or human PR on a self-healing/auto-*
-//     branch), are accepted as an empty ledger: the live search returns 0 today, search-index lag can
+//     branch; the author qualifier keeps them out of the response, so the login check is a second
+//     layer), are accepted as an empty ledger: the live search returns 0 today, search-index lag can
 //     briefly return 0 after a PR opens, and the consequence is at most one duplicate DRAFT PR,
 //     bounded by the week cap and human review (ADR-299, accepted residuals).
 // The search response carries every matching PR's full issue object (body included; the Search API
@@ -45,8 +46,8 @@ export const PROMOTE_BRANCH_PREFIX = "self-healing/auto-";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SEARCH_PER_PAGE = 100;
-/** `closed_at` must look like an ISO timestamp; `new Date("2026")` or `new Date("1")` also parse. */
-const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T/;
+/** `closed_at` must be an ISO timestamp WITH a zone; `new Date("2026")` or `new Date("1")` also parse, and a zone-less one is read as local time. */
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 /** The PR title the apply step gives a promotion PR. The ONLY builder: the reader's parser is derived from the same shape. */
 export function promotePrTitle(hash: string, date: string): string {

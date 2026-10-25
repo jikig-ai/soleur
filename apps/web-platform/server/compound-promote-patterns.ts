@@ -34,6 +34,8 @@ export const MAX_PAGE_BYTES = 16 * 1024;
 export const SUMMARY_MAX_CHARS = 200;
 const TITLE_MAX_CHARS = 120;
 const MAX_TAGS = 12;
+/** Upper bound on evidence entries per page: each one is a file read and a PII-scanned excerpt in the prompt. */
+export const MAX_PAGE_EVIDENCE = 40;
 const TAG_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const PRINTABLE_ASCII_RE = /^[\x20-\x7E]+$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -100,9 +102,10 @@ export function parsePatternPage(text: string, path: string, piiRegex: RegExp): 
 
   let data: Record<string, unknown>;
   try {
-    // Two defences against front-matter code execution: the plain `---` opener check above, and the
-    // shared helper's throwing js/javascript engines (see front-matter-guard.ts). The `---js`
-    // rejection is pinned by a test whose payload is a valid JS object literal.
+    // Code execution is refused three ways: this module's own strict `^---\r?\n` opener check above (it also
+    // rejects a BOM and trailing blanks, which the shared gate admits), then the shared helper's tagged-opener
+    // gate and its throwing js/javascript engines (see front-matter-guard.ts). The `---js` rejection is
+    // pinned by a test whose payload is a valid JS object literal.
     const parsed = parseFrontMatterSafe(text);
     data = parsed.data as Record<string, unknown>;
   } catch {
@@ -114,17 +117,20 @@ export function parsePatternPage(text: string, path: string, piiRegex: RegExp): 
   const { title, summary, status, tags, evidence, required_reading: requiredReading } = data;
   if (typeof title !== "string" || title.length === 0 || title.length > TITLE_MAX_CHARS || !PRINTABLE_ASCII_RE.test(title)) return SCHEMA;
   if (typeof summary !== "string" || summary.length === 0 || summary.length > SUMMARY_MAX_CHARS || !PRINTABLE_ASCII_RE.test(summary)) return SCHEMA;
-  // The raw-text scan above misses a value that only exists once YAML has decoded it (`\x40`, a
-  // `\`-newline continuation), so the decoded strings the model will receive are scanned too.
-  if (piiRegex.test([title, summary, ...(Array.isArray(tags) ? tags.map(String) : [])].join("\n"))) return { ok: false, cause: "pii" };
   if (status !== "open" && status !== "closed") return SCHEMA;
   if (typeof requiredReading !== "boolean") return SCHEMA;
   const openedOn = asDate(data.opened_on);
   if (openedOn === null) return SCHEMA;
   if (!Array.isArray(tags) || tags.length === 0 || tags.length > MAX_TAGS || !tags.every((t) => typeof t === "string" && TAG_RE.test(t))) return SCHEMA;
+  // The raw-text scan above misses a value that only exists once YAML has decoded it (`\x40`, a
+  // `\`-newline continuation), so the decoded strings the model will receive are scanned too. This runs
+  // AFTER the shape checks on purpose: stringifying an unvalidated value (a nested alias structure) would
+  // expand it before any bound applies.
+  if (piiRegex.test([title, summary, ...(tags as string[])].join("\n"))) return { ok: false, cause: "pii" };
   if (
     !Array.isArray(evidence) ||
     evidence.length < MIN_PAGE_EVIDENCE ||
+    evidence.length > MAX_PAGE_EVIDENCE ||
     !evidence.every((p) => typeof p === "string" && isCanonicalEvidencePath(p)) ||
     new Set(evidence).size !== evidence.length
   ) {
@@ -299,7 +305,7 @@ export async function loadOpenPatterns(args: {
   out.open = out.patterns.length;
 
   // Count each dropped learning once, by cause, across the pages that cite it. A page that survives
-  // with fewer keys hashes differently, so attrition must be visible (Sentry only; no marker field).
+  // with fewer keys hashes differently, so attrition must be visible (Sentry and the pino error mirror only; no marker field).
   const byCause = new Map<EvidenceDropCause, number>();
   for (const ev of evidenceByPath.values()) {
     if ("dropped" in ev) byCause.set(ev.dropped, (byCause.get(ev.dropped) ?? 0) + 1);

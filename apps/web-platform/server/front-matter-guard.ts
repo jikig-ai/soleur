@@ -5,7 +5,9 @@
 // of which is sufficient on its own:
 //   1. only a plain `---` opener is parsed (a language tag on the opener line selects an engine);
 //   2. both JS engine names are overridden to throw.
-// Both failure modes THROW; every caller already treats a throw as "no usable front matter".
+// Both failure modes THROW. Callers differ on what a throw means: kb-reader returns the raw text, the patterns
+// parser drops the page, content-publisher skips the file (and mirrors it to Sentry), strategy-review counts an
+// error. A file whose first line is `----` or carries a language tag is therefore refused, not parsed.
 import matter from "gray-matter";
 
 const disabled = (): never => {
@@ -17,12 +19,12 @@ export const SAFE_MATTER_OPTIONS = { engines: { js: disabled, javascript: disabl
 
 /** True when the first line is `---` plus optional trailing blanks (optional BOM, LF or CRLF). */
 export function hasPlainFrontMatterOpener(raw: string): boolean {
-  return /^﻿?---[ \t]*\r?\n/.test(raw);
+  return /^\uFEFF?---[ \t]*\r?\n/.test(raw);
 }
 
 /** True when the text opens a front-matter block that carries a language tag (or any other junk). */
 export function hasTaggedFrontMatterOpener(raw: string): boolean {
-  return /^﻿?---[^\r\n]*[\r\n]/.test(raw) && !hasPlainFrontMatterOpener(raw);
+  return /^\uFEFF?---[^\r\n]*[\r\n]/.test(raw) && !hasPlainFrontMatterOpener(raw);
 }
 
 /** Parse front matter without ever evaluating it. Throws on a tagged opener or a js engine request. */

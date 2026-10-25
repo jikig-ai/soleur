@@ -376,7 +376,7 @@ describe("the patterns arm", () => {
       stubModel([], EDITS);
       const { last } = await run(MANUAL("patterns"));
       expect(last).toMatchObject({ patterns_open: 3 });
-      expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "pattern-page-dropped", tags: { cause: "schema" }, extra: { slug: "page-bad" } }));
+      expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "pattern-page-dropped", tags: { cause: "schema" }, extra: { slug: "page-bad", cause: "schema" } }));
       expect(clusterPrompt()).not.toContain("BODY-BAD");
     } finally {
       git(["reset", "-q", "--hard", "HEAD~1"]);
@@ -693,6 +693,12 @@ describe("hash identity, duplicates, retired/PII exclusion and nonce randomness 
         .filter((c) => (c[1] as { op?: string }).op === "pattern-evidence-dropped")
         .map((c) => (c[1] as unknown as { extra: { count: number } }).extra.count);
       expect(counts).toEqual([1, 1]);
+      // The pino mirror carries `extra`, not `tags`: the closed cause must ride in `extra` too.
+      const extraCauses = vi.mocked(reportSilentFallback).mock.calls
+        .filter((c) => (c[1] as { op?: string }).op === "pattern-evidence-dropped")
+        .map((c) => (c[1] as unknown as { extra: { cause: string } }).extra.cause)
+        .sort();
+      expect(extraCauses).toEqual(["pii", "retired"]);
     } finally {
       git(["reset", "-q", "--hard", "HEAD~1"]);
     }
