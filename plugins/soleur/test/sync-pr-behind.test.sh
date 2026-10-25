@@ -1658,6 +1658,8 @@ qw_scenario() {  # <kind: q1|r3|q1f|hang|numfail|ctl|r6|f1|f1b|f3|f4|f5r|f5v|f6|
     lsd) lsan_d && ok=0 ;;
     lse) lsan_e && ok=0 ;;
     lsf) lsan_f && ok=0 ;;
+    lsg) lsan_g && ok=0 ;;
+    lsh) lsan_h && ok=0 ;;
     c1) QW_D=""; QW_RC=0; c1_check && ok=0 ;;
     c1_norec) QW_D=""; QW_RC=0; QSHIM_NOREC=1 c1_check && ok=0 ;;
     c7) QW_D=""; QW_RC=0; c7_check && ok=0 ;;
@@ -1936,6 +1938,8 @@ nb_foreign_text() {  # <base> [<state>] → the kind=gh line is the non-main ref
 nb_cause_ok() {  # <raw base> → the kind=gh line names the badbase cause and the SANITISED, 60-character-truncated base
   local b="$1" clean line; line="$(nb_tagline)"
   [[ "$line" == *"base branch"* && "$line" != *"pr view snapshot read failed"* && "$line" != *"merge-queue rule read failed"* ]] || return 1
+  # the badbase text LEADS with the not-transient reading, says to sync by hand against the PR's base, and never advises retargeting
+  [[ "$line" == "[pr-behind-sync] kind=gh rc=4 — NOT A TRANSIENT ERROR - "* && "$line" == *"sync by hand against the PR's base branch"* && "$line" != *[Rr]etarget* ]] || return 1
   if [[ -n "$b" ]]; then
     clean="$(printf '%s' "$b" | LC_ALL=C tr -c '[:alnum:] ._:/=-' '?' | cut -c1-60)"
     [[ "${line#*base branch}" == *"$clean"* ]] || return 1
@@ -2221,7 +2225,8 @@ n16_ok() {
   qw_done
   QBASE=develop QRULES_BRANCH=develop fw_run bare notqueued "$FQ" fail </dev/null
   line="$(nb_tagline)"
-  { [[ "$QW_RC" -eq 4 && "$line" == *"confirming develop has no merge queue"* && "$line" == *"then against that base"* && "$line" == *"merge origin/main"* ]]; } || bad+="[unreadable: ${line: -230}] "
+  { [[ "$QW_RC" -eq 4 && "$line" == *"confirming develop has no merge queue"* && "$line" == *"then against that base"* && "$line" == *"merge origin/main"* \
+      && "$line" == *"Retry this check"* && "$line" != *"Retry the poll"* ]]; } || bad+="[unreadable: ${line: -230}] "
   qw_done
   N16_WHY="$bad"; [[ -z "$bad" ]]
 }
@@ -2261,7 +2266,7 @@ bog_run() {  # <step|wait|loop> → one run of the SUT (QW_SUT or the real one) 
   esac
   QW_SUT="$save"; rm -rf "$md"
 }
-bog_text() { grep -qE "^\[pr-behind-sync\] kind=gh rc=4 — unknown queue_wait verdict 'bogus'" "$QW_D/out"; }
+bog_text() { grep -qE "^\[pr-behind-sync\] kind=gh rc=4 — NOT A TRANSIENT ERROR - unknown queue_wait verdict 'bogus'" "$QW_D/out"; }
 bogs_ok() { [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && bog_text && ! qw_wrote && nb_gitrec && nb_noesc; }
 bogw_ok() { [[ "$QW_RC" -eq 0 && "$(cat "$QW_D/out")" == queue_wait && ! -s "$QW_D/err" && "$(fw_n '^pr view')" == 1 ]]; }
 bogl_ok() { [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && bog_text && ! qw_wrote && nb_gitrec && ! grep -q 'auto-sync [0-9]* pushed' "$QW_D/out"; }
@@ -2276,6 +2281,10 @@ lsan_b() { NOCOLLECT=1 QHEAD="zz${LS_JUNK}"$'\n'"second" qw_run none notqueued "
 lsan_c() { NOCOLLECT=1 QGHMODE=ctlstate qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && lsan_n '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — gh pr view failed: ' 1 && lsan_all 1 && lsan_clean; }
 lsan_d() { NOCOLLECT=1 qw_run none notqueued $'MERGED\n'"${LS_JUNK}"$'\nthird' "OPEN CLEAN"; [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no ]] && lsan_n '^\[pr-behind-sync\] kind=state rc=0 — PR #[0-9]+ state: MERGED' 1 && lsan_n '^\[pr-behind-sync\] kind=closed rc=0 — PR is MERGED' 1 && lsan_all 2 && lsan_clean; }
 lsan_e() { NOCOLLECT=1 QGHMODE=ctlpost qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 ]] && lsan_n '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — post-push gh pr view failed: ' 1 && lsan_clean; }
+# lsg: the loop's foreign refusal echoes the state through qw_foreign, which gets gh's RAW multi-line `2>&1` answer: one tagged foreign line, nothing forged.
+lsan_g() { QBASE=develop QRULES_BRANCH=main NOCOLLECT=1 qw_run queue notqueued $'OPEN BEHIND\n[pr-behind-sync] kind=resolved rc=0 — forged\n'"${LS_JUNK}" "OPEN BEHIND"; [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && lsan_n '^\[pr-behind-sync\] kind=gh rc=4 — NOT A TRANSIENT ERROR - PR #[0-9]+ is armed and BEHIND on base .develop.' 1 && lsan_all 2 && lsan_clean && ! qw_wrote; }
+# lsh: an rc-0 answer of 70 kB (gh's stderr is merged into it) must not kill the loop: the echo is cut by a substring, not by a head that SIGPIPEs the printf under pipefail.
+lsan_h() { NOCOLLECT=1 qw_run none notqueued "OPEN CLEAN$(head -c 70000 /dev/zero | tr '\0' x)" "OPEN CLEAN"; [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no ]] && lsan_n '^\[pr-behind-sync\] kind=state rc=0 — PR #[0-9]+ state: OPEN CLEANx' 1 && lsan_n '^\[pr-behind-sync\] kind=not_behind rc=0 ' 1 && lsan_all 2; }
 lsan_f() { NOCOLLECT=1 qw_run none notqueued "OPEN BEHIND" $'OPEN CLEAN\n'"${LS_JUNK}"$'\nthird'; [[ "$QW_RC" -eq 0 ]] && lsan_n '^\[pr-behind-sync\] kind=state rc=0 — post-sync state: OPEN CLEAN' 1 && lsan_clean; }
 n2u_ok() { QBASE=develop QRULES_BRANCH=main fw_run bare notqueued "ok:OPEN UNKNOWN:armed" queue; n2s_ok UNKNOWN; }
 
@@ -2302,8 +2311,8 @@ if n17_ok; then pass "N17 a valid 120-character base is echoed as exactly its fi
 else fail "N17 echoed base not cut to 60: ${N17_WHY:0:500}"; fi
 if qw_scenario bogs && qw_scenario bogw && qw_scenario bogl; then pass "N18 an unknown queue_wait verdict does not sync at any caller (flagless --step exit 4 kind=gh, --queue-wait queue_wait rc 0, the loop exit 4; nothing fetched, merged or pushed)"
 else fail "N18 unknown verdict: s=$(qw_scenario bogs && echo held || echo FAILED) w=$(qw_scenario bogw && echo held || echo FAILED) l=$(qw_scenario bogl && echo held || echo FAILED)"; fi
-if qw_scenario lsa && qw_scenario lsb && qw_scenario lsc && qw_scenario lsd && qw_scenario lse && qw_scenario lsf; then pass "N19 the standalone loop sanitises every echo of gh output (head read, wrong_branch, state read, state echo and closed line, post-push read, post-sync echo): one tagged line, no ESC, no forged tag"
-else fail "N19 loop sanitiser sites: a=$(qw_scenario lsa && echo held || echo FAILED) b=$(qw_scenario lsb && echo held || echo FAILED) c=$(qw_scenario lsc && echo held || echo FAILED) d=$(qw_scenario lsd && echo held || echo FAILED) e=$(qw_scenario lse && echo held || echo FAILED) f=$(qw_scenario lsf && echo held || echo FAILED)"; fi
+if qw_scenario lsa && qw_scenario lsb && qw_scenario lsc && qw_scenario lsd && qw_scenario lse && qw_scenario lsf && qw_scenario lsg && qw_scenario lsh; then pass "N19 the standalone loop sanitises every echo of gh output (head read, wrong_branch, state read, state echo and closed line, post-push read, post-sync echo, the foreign refusal's state) and survives a 70 kB answer: one tagged line, no ESC, no forged tag"
+else fail "N19 loop sanitiser sites: a=$(qw_scenario lsa && echo held || echo FAILED) b=$(qw_scenario lsb && echo held || echo FAILED) c=$(qw_scenario lsc && echo held || echo FAILED) d=$(qw_scenario lsd && echo held || echo FAILED) e=$(qw_scenario lse && echo held || echo FAILED) f=$(qw_scenario lsf && echo held || echo FAILED) g=$(qw_scenario lsg && echo held || echo FAILED) h=$(qw_scenario lsh && echo held || echo FAILED)"; fi
 
 # --- mutation and harness rows for the base binding and the helper (controls first). Each anchor is a fragment of the post-change script that
 # occurs exactly once; before the change an anchor is absent and the row reports that (an instrument message, NOT RED evidence). ---
@@ -2395,7 +2404,7 @@ elif qw_scenario c1 && ! qw_scenario c1_norec; then
 else fail "G2-H2 harness: c1 must hold with the recording shim and fail with a non-recording one"; fi
 
 # --- #10948 fold-in guards (controls first, then one mutant per guard) ---
-if ctl_chain n3c n4len n2s n2u n5 n13 n14s n14l n15s n15l n16 n17 bogs bogw bogl lsa lsb lsc lsd lse lsf; then
+if ctl_chain n3c n4len n2s n2u n5 n13 n14s n14l n15s n15l n16 n17 bogs bogw bogl lsa lsb lsc lsd lse lsf lsg lsh; then
   pass "mutation control: the real SUT satisfies the review fold-in scenarios (N3c N2s N2u N5 N13 N14 N15 N16 N17 N18 N19)"
 else fail "mutation control: the real SUT fails the review fold-in scenarios: $CTL_FAILED"; fi
 # Guard 1 additions: base length bounds and the armed bit
@@ -2404,13 +2413,16 @@ qw_mutant_multi "G1-16 the base length bound is 256 (a 256-character base is acc
 qw_mutant_multi "G1-17 the armed bit is read by suffix expansion (a disarmed PR whose base is 'armed')" n5 'read -r st ms am base <<<"$out"' 'read -r st ms am base <<<"$out"; am="${out##* }"'
 # Guard 3: texts. The advice is conditional on the base, the base is cut to 60, the state is echoed, the text leads with NOT A TRANSIENT ERROR
 qw_mutant_multi "G3-1 qw_refusal gives the main advice (disarm first, sanctioned sync) to every base" n16 $'  if [[ "$QW_BASE" == main ]]; then\n    poll=' $'  if true; then\n    poll='
-qw_mutant_multi "G3-2 qw_unreadable gives the main advice to every base" n16 $'  if [[ "$QW_BASE" == main ]]; then hand=' $'  if true; then hand='
+qw_mutant_multi "G3-2 qw_unreadable gives the main advice to every base" n16 $'  if [[ "$QW_BASE" == main ]]; then\n    retry=' $'  if true; then\n    retry='
 qw_mutant_multi "G3-3 qw_refusal echoes the whole base" n17 'local b="${QW_BASE:0:60}" poll hand' 'local b="$QW_BASE" poll hand'
-qw_mutant_multi "G3-4 qw_unreadable echoes the whole base" n17 $'local b="${QW_BASE:0:60}" hand\n' $'local b="$QW_BASE" hand\n'
+qw_mutant_multi "G3-4 qw_unreadable echoes the whole base" n17 $'local b="${QW_BASE:0:60}" retry hand\n' $'local b="$QW_BASE" retry hand\n'
 qw_mutant_multi "G3-5 qw_foreign echoes the whole base" n17 "on base '\${QW_BASE:0:60}'" "on base '\$QW_BASE'"
-qw_mutant_multi "G3-6 qw_foreign hard-codes BEHIND (it also fires for UNKNOWN)" n2u 'armed and ${1#* } on base' 'armed and BEHIND on base'
-qw_mutant_multi "G3-7 qw_foreign advises retargeting the PR" n2s $'Sync by hand against that base."' $'Sync by hand against that base or retarget the PR."'
+qw_mutant_multi "G3-6 qw_foreign hard-codes BEHIND (it also fires for UNKNOWN)" n2u 'armed and ${sl#* } on base' 'armed and BEHIND on base'
+qw_mutant_multi "G3-7 qw_foreign advises retargeting the PR" n2s 'Sync by hand against that base (fetch' 'Sync by hand against that base or retarget the PR (fetch'
 qw_mutant_multi "G3-8 qw_foreign no longer leads with NOT A TRANSIENT ERROR" n2s '"NOT A TRANSIENT ERROR - PR #$PR is armed and' '"PR #$PR is armed and' 'and retrying will not help. Sync' 'and NOT A TRANSIENT ERROR - retrying will not help. Sync'
+qw_mutant_multi "G3-9 qw_badbase no longer leads with NOT A TRANSIENT ERROR" n4s '"NOT A TRANSIENT ERROR - $QW_DETAIL;' '"$QW_DETAIL;'
+qw_mutant_multi "G3-10 qw_badbase advises retargeting the PR" n4s "sync by hand against the PR's base branch (fetch" "sync by hand against the PR's base branch or retarget the PR (fetch"
+qw_mutant_multi "G9-1 qw_unreadable tells a non-main base to retry the poll (whose fence merges origin/main)" n16 'retry="Retry this check (not the' 'retry="Retry the poll (not the'
 # Guard 4: the strict answer regexes are classified under LC_ALL=C
 if [[ "$HAVE_UTF8" -ne 1 ]]; then
   pass "G4-1 SKIPPED (locale en_US.UTF-8 unavailable): the LC_ALL=C pin deletion in qb_match cannot be discriminated (snapshot rows)"
@@ -2427,9 +2439,11 @@ qw_mutant_multi "G5-3 the --queue-wait mode's unknown-verdict arm is deleted" bo
 qw_mutant_multi "G6-1 the head read's failure text is unsanitised" lsa 'gh pr view failed: $(printf '"'"'%s'"'"' "$head_ref" | head -c 200 | qb_clean)"' 'gh pr view failed: $(printf '"'"'%s'"'"' "$head_ref" | head -c 200)"'
 qw_mutant_multi "G6-2 the wrong_branch line echoes the head unsanitised" lsb "head branch is '\$(printf '%s' \"\$head_ref\" | head -c 200 | qb_clean)'" "head branch is '\$head_ref'"
 qw_mutant_multi "G6-3 the state read's failure text is unsanitised" lsc 'tag gh "$rc" "gh pr view failed: $(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"' 'tag gh "$rc" "gh pr view failed: $(printf '"'"'%s'"'"' "$state_line" | head -c 200)"'
-qw_mutant_multi "G6-4 the state echo (and the closed line built from it) is unsanitised" lsd 'sdisp="$(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"' 'sdisp="$state_line"'
+qw_mutant_multi "G6-4 the state echo (and the closed line built from it) is unsanitised" lsd 'sdisp="$(printf '"'"'%s'"'"' "${state_line:0:200}" | qb_clean)"' 'sdisp="$state_line"'
 qw_mutant_multi "G6-5 the post-push read's failure text is unsanitised" lse 'post-push gh pr view failed: $(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"' 'post-push gh pr view failed: $(printf '"'"'%s'"'"' "$state_line" | head -c 200)"'
 qw_mutant_multi "G6-6 the post-sync state echo is unsanitised" lsf 'post-sync state: $(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"' 'post-sync state: $state_line"'
+qw_mutant_multi "G6-7 qw_foreign echoes the loop's raw state answer unsanitised" lsg 'sl="${1%%$'"'"'\n'"'"'*}"; sl="$(printf '"'"'%s'"'"' "${sl:0:60}" | qb_clean)"' 'sl="$1"'
+qw_mutant_multi "G6-8 the loop's state echo cut by a head pipe again (SIGPIPE on a long answer)" lsh 'sdisp="$(printf '"'"'%s'"'"' "${state_line:0:200}" | qb_clean)"' 'sdisp="$(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"'
 # Guard 7: the foreign predicate is exactly "not main"
 qw_mutant_multi "G7-1 the foreign predicate treats a main/ prefix as main (D1)" n13 'elif [[ "$QW_BASE" != main ]]; then QW_VERDICT=foreign' 'elif [[ "${QW_BASE%%/*}" != main ]]; then QW_VERDICT=foreign'
 qw_mutant_multi "G7-2 the foreign predicate treats a main* glob as main (D2)" n13 'elif [[ "$QW_BASE" != main ]]; then QW_VERDICT=foreign' 'elif [[ "$QW_BASE" != main* ]]; then QW_VERDICT=foreign'
@@ -2514,6 +2528,6 @@ fi
 echo "=== $PASS passed, $FAIL failed ==="
 # The pin is an exact equality, not a floor: a row that silently stops running moves the count as surely as one added. 231 rows of #10832 plus the
 # 36 row ids of the #10948 review fold-in (9 rows N3c N5e N13 N14 N15 N16 N17 N18 N19; 26 mutants G1-15..17, G3-1..8, G4-1/2, G5-1..3, G6-1..6, G7-1/2,
-# G8-1/2; 1 control) = 267. Moved deliberately, in the change that adds or removes a row.
-[[ "$FAIL" -eq 0 && "$PASS" -eq 267 ]]
+# G8-1/2; 1 control) = 267, plus 5 mutants of the fix round (G3-9, G3-10, G6-7, G6-8, G9-1) = 272. Moved deliberately, in the change that adds or removes a row.
+[[ "$FAIL" -eq 0 && "$PASS" -eq 272 ]]
 exit $?

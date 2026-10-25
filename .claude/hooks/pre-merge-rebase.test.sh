@@ -2451,7 +2451,7 @@ t_q24_foreign_base_without_queue_skips_sync() {
   local _ctx _i_ref _i_hand _i_main _i_dis
   _ctx="$(_prf_context)"
   [[ "$_ctx" == *"This skip is ALSO a refusal when the PR's base branch has no merge queue"* && "$_ctx" == *"sync by hand against its own base"* \
-     && "$_ctx" == *"do NOT disarm and re-arm"* && "$_ctx" == *"only for a main-based PR, if you truly need a hand sync, disarm first"* ]] || ok=0
+     && "$_ctx" == *"do NOT disarm and re-arm"* && "$_ctx" == *"gh pr view 4242 --json baseRefName"* && "$_ctx" == *"only for a main-based PR, if you truly need a hand sync, disarm first"* ]] || ok=0
   _i_ref="${_ctx%%This skip is ALSO a refusal*}"; _i_hand="${_ctx%%sync by hand against its own base*}"
   _i_main="${_ctx%%If the PR is based on main*}"; _i_dis="${_ctx%%disarm first*}"
   [[ "${#_i_ref}" -lt "${#_i_hand}" && "${#_i_hand}" -lt "${#_i_main}" && "${#_i_main}" -lt "${#_i_dis}" ]] || ok=0

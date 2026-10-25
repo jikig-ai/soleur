@@ -146,9 +146,10 @@ exit codes (each non-zero exit prints one tagged `kind=<k> rc=<n>` line on stdou
   3   not inside a work tree (kind=not_worktree)
   4   a gh call failed (kind=gh): gh pr view (standalone, flagless --step, --queue-wait), the merge-queue
       read after one retry, or (armed BEHIND PR) the merge-queue rule read of the PR's base branch; also,
-      for an ARMED BEHIND PR (UNKNOWN: flagless --step and --queue-wait only; the standalone loop exits
-      not_behind for it first): a non-main base with no merge-queue rule, or an empty or unsupported base
-      name (standalone, flagless --step; NOT A TRANSIENT ERROR, nothing merged or pushed; not under --fence)
+      for an ARMED BEHIND PR (UNKNOWN: flagless --step only; the standalone loop exits not_behind for it
+      first): a non-main base with no merge-queue rule, or an empty or unsupported base name (standalone,
+      flagless --step; NOT A TRANSIENT ERROR, nothing merged or pushed; not under --fence; --queue-wait
+      answers `queue_wait` with exit 0 for the same PR, so the pre-merge hook skips its own merge)
   5   fetching main failed (kind=fetch)
   6   merge conflict, or merge not committed (hook) — the merge was aborted (kind=merge)
   7   git push failed — the local merge commit is retained (kind=push)
@@ -201,15 +202,17 @@ if [[ "$MODE" != loop && "$MAX_ATTEMPTS" != 1 ]]; then usage_err "--step, --queu
 # strings, so a change to a bound or to the sanitiser had to be made in every copy). qb_bounds sets QB_TIMEOUT / QB_ATTEMPTS / QB_NAP
 # from PR_QUEUE_TIMEOUT / PR_QUEUE_ATTEMPTS / PR_QUEUE_RETRY_SLEEP, each clamped to its documented range (anything else is the
 # default); EVERY reader (queue_state_read, queue_read_settled, queue_wait_eval, qw_snapshot) calls it itself first and reads the
-# QB_* globals directly. QB_* (and QW_BASE, which queue_wait_eval resets on entry) are deliberately NOT initialised here: a reader that
-# skipped its own qb_bounds call would abort under `set -u` (loud) instead of silently running on defaults that ignore the env. It is
-# called directly, never inside `$( )`, so the globals survive. qb_clean is a stdin filter for gh's raw stderr, which reaches a
+# QB_* globals directly. QB_* (and QW_BASE, which queue_wait_eval resets on entry) are deliberately NOT initialised here, so that a reader
+# reading them before ANY qb_bounds call aborts under `set -u` (loud) instead of running on defaults that ignore the env. That net is
+# thin: once one reader has called qb_bounds the globals exist for every later reader on the path, so the guarantee that each reader
+# calls it first is the S1 census in the test suite, not `set -u`. qb_bounds is called directly, never inside `$( )`, so the globals
+# survive. qb_clean is a stdin filter for gh's raw stderr, which reaches a
 # model-visible `kind=gh` line: only [:alnum:] and ._:/=- and space survive (ESC, CR and a forged tag line cannot); LC_ALL=C because BSD
 # tr (macOS) is locale-aware. Neither helper exits. qb_match <string> <ERE> classifies under LC_ALL=C in a subshell (qw_base_path's trick):
 # under a UTF-8 locale `[^[:space:]]` also excludes U+2003, U+3000 and U+2028, all legal in a ref name, so a strict answer regex run in the
 # caller's locale would fail on such a base and turn a refusal into `kind=gh` rc 4, which the hook reads as "sync anyway". A match is only
 # a classification: the caller then splits the answer with `read -r` (no BASH_REMATCH survives the subshell).
-LOOP_BASEREF=""
+LOOP_BASEREF=""  # the standalone loop's base branch, set once before the loop; initialised because queue_wait_gate reads it under set -u
 qb_bounds() {
   QB_TIMEOUT="${PR_QUEUE_TIMEOUT:-10}"; QB_ATTEMPTS="${PR_QUEUE_ATTEMPTS:-2}"; QB_NAP="${PR_QUEUE_RETRY_SLEEP:-2}"
   [[ "$QB_TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || QB_TIMEOUT=10
@@ -333,7 +336,7 @@ queue_read_settled() {
 # rules answer (ADR-270 addendum 2026-10-09) — an unknown answer is not a yes. The cause is in QW_DETAIL. The rules read is of the
 # PR's OWN base branch (its baseRefName, the third argument: #10832), not a fixed `main`; the URL for base `main` is unchanged. The base
 # is validated (qw_base_path) only AFTER the OPEN, BEHIND/UNKNOWN and armed checks, so a PR that never reaches the rules read is never
-# affected by an odd or empty base. Two more internal verdicts, each with its own arm at every caller: `badbase` (the base is empty or
+# affected by an odd or empty base. Two more internal verdicts besides wait / proceed / unreadable, each with its own arm at every caller (and a fail-closed `*)` arm for anything else): `badbase` (the base is empty or
 # unsupported: no request is made) and `foreign` (the base is not `main` and has no merge_queue rule: this script's sync merges
 # origin/main, which is wrong for that PR, so the guarded callers refuse rather than sync). The refusal is a convenience interlock, not
 # an authorization boundary: a PR author can retarget between the snapshot and the read.
@@ -378,7 +381,7 @@ queue_wait_eval() {  # <state_line: "<STATE> <MERGESTATE>"> <armed|disarmed|-> <
 # advice differs by the validated base (QW_BASE, always set when a `wait` verdict exists): for `main` the Phase 7 poll's expiry fallback
 # is the sanctioned sync and a disarm / hand-sync / re-arm is safe; for any other base that sync merges origin/main, which is wrong for
 # the PR, so the text says to sync by hand against that base and never to disarm and re-arm. The `main` text is byte-identical to the
-# pre-#10832 text (the N7a golden row). The echoed base is cut to 60 characters (it is validated, but may be 255 long).
+# pre-#10832 text (pinned by a golden row in the suite). The echoed base is cut to 60 characters (it is validated, but may be 255 long).
 qw_refusal() {
   local b="${QW_BASE:0:60}" poll hand
   if [[ "$QW_BASE" == main ]]; then
@@ -392,10 +395,15 @@ qw_refusal() {
 }
 # ... and the unreadable-rules text (fail closed): an unknown answer is not a yes. The hand-sync clause is conditional on the base as above.
 qw_unreadable() {  # <detail>
-  local b="${QW_BASE:0:60}" hand
-  if [[ "$QW_BASE" == main ]]; then hand="resync by hand only after confirming $b has no merge queue"
-  else hand="resync by hand only after confirming $b has no merge queue, and then against that base (this script and the Phase 7 poll's fallback merge origin/main, which is wrong for a PR based on '$b')"; fi
-  printf '%s' "merge-queue $1 — not syncing: that read decides whether this armed BEHIND PR may be resynced and an unknown answer is not a yes. Retry the poll; a persistent failure means the token cannot read repository rules (raise PR_QUEUE_ATTEMPTS, or $hand)."
+  local b="${QW_BASE:0:60}" retry hand
+  if [[ "$QW_BASE" == main ]]; then
+    retry="Retry the poll"
+    hand="resync by hand only after confirming $b has no merge queue"
+  else
+    retry="Retry this check (not the Phase 7 poll's fence: it merges origin/main, which is wrong for a PR based on '$b')"
+    hand="resync by hand only after confirming $b has no merge queue, and then against that base (this script and the Phase 7 poll's fallback merge origin/main, which is wrong for a PR based on '$b')"
+  fi
+  printf '%s' "merge-queue $1 — not syncing: that read decides whether this armed BEHIND PR may be resynced and an unknown answer is not a yes. $retry; a persistent failure means the token cannot read repository rules (raise PR_QUEUE_ATTEMPTS, or $hand)."
 }
 # The interim non-main refusal (#10832): an armed BEHIND or UNKNOWN PR whose base is not `main` and has no merge_queue rule. This
 # script only ever merges origin/main, which is wrong for such a PR, so it is not syncing; the text LEADS with NOT A TRANSIENT ERROR
@@ -403,10 +411,14 @@ qw_unreadable() {  # <detail>
 # (the script has never synced from a non-main trunk, so a repo whose default branch is not main would be told to do the impossible).
 # <state_line> is GitHub's `<STATE> <MERGESTATE>` (the foreign verdict also fires for UNKNOWN, so the text echoes the real state).
 qw_foreign() {  # <state_line>
-  printf '%s' "NOT A TRANSIENT ERROR - PR #$PR is armed and ${1#* } on base '${QW_BASE:0:60}', not main, and that base has no merge queue; this script only syncs from origin/main (merging main into that PR would be wrong), so it is not syncing and retrying will not help. Sync by hand against that base."
+  local sl
+  sl="${1%%$'\n'*}"; sl="$(printf '%s' "${sl:0:60}" | qb_clean)"  # the loop passes gh's raw `2>&1` answer: first line only, cut and sanitised
+  printf '%s' "NOT A TRANSIENT ERROR - PR #$PR is armed and ${sl#* } on base '${QW_BASE:0:60}', not main, and that base has no merge queue; this script only syncs from origin/main (merging main into that PR would be wrong), so it is not syncing and retrying will not help. Sync by hand against that base (fetch origin <base>, merge origin/<base>, then push)."
 }
 # ... and the unusable-base text (empty, or a name outside qw_base_path's set; QW_DETAIL names the sanitised base).
-qw_badbase() { printf '%s' "NOT A TRANSIENT ERROR - $QW_DETAIL; this script only syncs from origin/main, so it is not syncing; sync by hand against the PR's base branch."; }
+qw_badbase() { printf '%s' "NOT A TRANSIENT ERROR - $QW_DETAIL; this script only syncs from origin/main, so it is not syncing; sync by hand against the PR's base branch (fetch origin <base>, merge origin/<base>, then push)."; }
+# ... and the unknown-verdict text (the `*)` arm of every caller: a verdict this script cannot name is a bug here, never a transient gh error).
+qw_unknown() { printf '%s' "NOT A TRANSIENT ERROR - unknown queue_wait verdict '$(printf '%s' "$QW_VERDICT" | head -c 60 | qb_clean)' — not syncing (an unknown answer is not a yes); this is a bug in this script, report it"; }
 
 # qw_snapshot — ONE bounded `gh pr view <PR> --json state,mergeStateStatus,autoMergeRequest,baseRefName` for the flagless --step and --queue-wait
 # (no GraphQL queue read: --queue-wait's caller already classified queued / not_queued, and a second read would race a
@@ -441,7 +453,7 @@ qw_snapshot() {
 
 # qw_probe — the snapshot plus the predicate, the place that passes the PR's base for the two snapshot callers (--queue-wait and the flagless
 # --step guard); queue_wait_gate is the loop's own call site and passes LOOP_BASEREF (a forgotten base argument at a copy is the bug class,
-# and the G1-2/G1-3/G1-4 rows pin each call). Called directly (never inside `$( )`) so QW_VERDICT, QW_DETAIL and QW_BASE reach the caller.
+# and the suite pins each call). Called directly (never inside `$( )`) so QW_VERDICT, QW_DETAIL and QW_BASE reach the caller.
 qw_probe() { qw_snapshot; queue_wait_eval "$QW_STATE" "$QW_ARMED" "$QW_BASEREF"; }
 
 # --queue-wait: the read-only verdict for the pre-merge hook (#9869), handled beside --queue-state before the worktree check.
@@ -476,7 +488,7 @@ step_guard() {
     badbase) tag gh 4 "$(qw_badbase)"; exit 4 ;;
     unreadable) tag gh 4 "$(qw_unreadable "$QW_DETAIL")"; exit 4 ;;
     proceed) return 0 ;;
-    *) tag gh 4 "unknown queue_wait verdict '$(printf '%s' "$QW_VERDICT" | head -c 60 | qb_clean)' — not syncing (an unknown answer is not a yes); this is a bug in this script, report it"; exit 4 ;;
+    *) tag gh 4 "$(qw_unknown)"; exit 4 ;;
   esac
 }
 
@@ -576,7 +588,7 @@ queue_wait_gate() {  # <state_line>
     badbase) tag gh 4 "$(qw_badbase)"; exit 4 ;;
     unreadable) tag gh 4 "$(qw_unreadable "$QW_DETAIL")"; exit 4 ;;
     proceed) return 0 ;;
-    *) tag gh 4 "unknown queue_wait verdict '$(printf '%s' "$QW_VERDICT" | head -c 60 | qb_clean)' — not syncing (an unknown answer is not a yes); this is a bug in this script, report it"; exit 4 ;;
+    *) tag gh 4 "$(qw_unknown)"; exit 4 ;;
   esac
 }
 
@@ -685,8 +697,9 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
   if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $(printf '%s' "$state_line" | head -c 200 | qb_clean)"; exit 4; fi
 
   # gh's stderr is merged into the answer (2>&1), so even an rc-0 read can carry junk: every echo of it is sanitised (the tests below
-  # still look at the raw $state_line).
-  sdisp="$(printf '%s' "$state_line" | head -c 200 | qb_clean)"
+  # still look at the raw $state_line). The cut is a substring, not `| head -c 200`: this is an assignment under pipefail, and a head
+  # that exits early SIGPIPEs the printf on a long answer (rc 141, loop dead with no tag line).
+  sdisp="$(printf '%s' "${state_line:0:200}" | qb_clean)"
   tag state 0 "PR #$PR state: $sdisp (branch: $BRANCH)"
 
   if [[ "$state_line" == MERGED* || "$state_line" == CLOSED* ]]; then

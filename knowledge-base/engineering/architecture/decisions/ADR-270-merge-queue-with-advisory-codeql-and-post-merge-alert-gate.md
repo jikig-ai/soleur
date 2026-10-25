@@ -844,8 +844,8 @@ so on a repo whose default branch is not `main` every PR is a "non-main" PR and 
 internal verdict fails closed at all three callers. The scope is deliberately narrow: only an ARMED BEHIND PR (UNKNOWN too, but
 at flagless `--step` and `--queue-wait` only: the standalone loop exits `not_behind` first for CLEAN, BLOCKED and UNKNOWN) with
 a non-`main` base and no queue rule, or a base the allowlist rejects (`badbase` also refuses a git-legal name such as `rel+1`
-even when that base has a queue). A disarmed, DIRTY, BLOCKED or CLEAN non-`main` PR keeps syncing `origin/main` exactly as
-before (pinned in the suite as known-wrong), and the Phase 7 fences pass `--fence`, skip the guard and keep their inline `main`
+even when that base has a queue). A disarmed or DIRTY non-`main` PR keeps syncing `origin/main` exactly as
+before (the suite pins both as known-wrong; at the standalone loop a CLEAN or BLOCKED PR exits `not_behind` and is not judged at all), and the Phase 7 fences pass `--fence`, skip the guard and keep their inline `main`
 reads, so accepted residuals (1) (`--fence` is accident prevention) and (2) (the fence's own fail-open arms) of the 2026-10-20
 addendum extend to this class and the fence expiry arm is the live exposure. The refusal is a convenience interlock, not an
 authorization boundary: a PR author can retarget between the snapshot and the read. The hook is still fail-open by design for
@@ -867,6 +867,7 @@ Ruled by CTO agent, 2026-10-23 (rows F1-F7 in the branch's `decision-challenges.
 merge queue" on purpose: the fence prose in `plugins/soleur/skills/ship/SKILL.md` and `plugins/soleur/skills/merge-pr/SKILL.md`,
 `plugins/soleur/scripts/monitor-pr-checks.sh`, `plugins/soleur/lib/harness.ts`, `plugins/soleur/antigravity/INSTRUCTIONS.md`,
 `plugins/soleur/codex/INSTRUCTIONS.md`, `plugins/soleur/devin/INSTRUCTIONS.md`, `infra/github/README.md`,
+`apps/web-platform/server/inngest/functions/cron-bot-pr-reaper.ts`, `plugins/soleur/skills/ship/references/settle-then-admin-merge.md`,
 `plugins/soleur/skills/ship/references/queue-mode.md` (line 5, the Queue mode paragraph),
 `plugins/soleur/skills/ship/references/merge-queue-dequeue.md`, `plugins/soleur/skills/drain-prs/SKILL.md`, `AGENTS.rules.md`
 (rule-body hashes pin it) and `plugins/soleur/lib/pr-merge-poll.ts`. Everything left is tracked on #10958 (Ref #9454, Ref
