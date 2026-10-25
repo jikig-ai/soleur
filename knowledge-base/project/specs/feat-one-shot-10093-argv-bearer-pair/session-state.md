@@ -24,3 +24,13 @@
 - soleur:plan SKILL.md (in-process)
 - soleur:deepen-plan SKILL.md (in-process)
 - Artifacts: tasks.md, decision-challenges.md committed + pushed
+
+## Work Phase Progress (2026-10-25)
+- Implementation done: refusal+resolve-after-refusal in inngest-consumer-probe.sh, ExecStart simplified in .service, POSIX refusal in inngest-bootstrap.sh HEARTBEATSCRIPTEOF body, F6 block + KEY env in inngest-consumer-probe.test.sh (floor 141→158), sh -x rows in inngest.test.sh (floor 549→555), WRAPPER_ACK 2→1 in doppler-injection-bound.test.sh.
+- Suites green: inngest-consumer-probe.test.sh 158/158, doppler-injection-bound.test.sh 61/61. inngest.test.sh re-running after fixing a test-harness `grep -c || echo 0` numeric-compare bug (refusal rows themselves passed).
+- Remaining: sibling suites (zot/journald/infra-config-gate/argv-bearer-sweep/lint), commit, then one-shot steps 4-8 (review → resolve → qa → compound → ship). PR #11097 draft.
+
+## Review Phase (Step 4) — dispatched
+- Class: code (9 seats spawned, background): git-history-analyzer=b4804ac3, pattern-recognition=f5e8c3a7, architecture-strategist=78878603, security-sentinel=3574b6ac, performance-oracle=c3f92072, data-integrity=e5a440d1, agent-native=2931bf33, code-quality=1ca1bdad, test-design=a0004095.
+- Design-risk: no (applies #10637 mechanism). PANEL_SHA=d71329846860e42d3fbbff0067af79b334458061. merge-tree rc=0. Semgrep seat: engine crashed twice locally (Core_scan error) — recorded as failed seat in summary.
+- Remaining: synthesize findings, resolve (one-shot step 5 + fix-round), qa (5.5), compound (6), ship (7), DONE (8). PR #11097 draft. Issues #10093+#10363.
