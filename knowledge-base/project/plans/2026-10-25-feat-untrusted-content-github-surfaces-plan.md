@@ -45,6 +45,16 @@ Framing is **static** (preamble/envelope, no scoring), per the CTO ruling. It fo
 | 9 | Plan v1: hash the conversation id | `workspaceIdHash` is already hashed; the raw field is `sessionId`. | Moved to the #10195 gate with the PA-8 amendment, as separate scope. |
 | 10 | CTO: attachments partly covered; repo research: PDF text inlined unwrapped | Conflict, unresolved. | Out of scope; in #11076. |
 
+## Review revisions (2026-10-25, 13-seat panel at `8c5eb4890a`)
+
+Findings that changed the plan after implementation:
+
+- **The leader-prompt envelope (Phase 2) is latent.** `agent-on-spawn-requested.ts` calls `userPromptTemplate` without `scrubbedContent` and nothing else supplies it (verified by grep; five seats concurred), so the four classes always render their empty-body fallback. The envelope and its tests stay as a guard for a future feeder; the ADR, PR body and #11076 say so, and `sourceRef`, which the model does see, is now reduced to one control-free line.
+- **A GitHub-text MCP read tool was missed:** `workstream_issues_list` returns issue titles and descriptions to the agent. It now carries the same preamble.
+- **The preamble wording** was reworded to read correctly as a system-prompt append (the plan's Phase 3.2 required this and the first implementation did not), to name advisories, and to keep the user's own task authoritative so a legitimate request to work an issue is not read as data. The hosted agent's GitHub-read prompt got a matching note.
+- **Uncovered paths** found by the panel are listed in the ADR amendment and on #11076: GitHub Actions `claude-code-action` workflows, two crons that pass a comment body as the whole prompt, `cron-compound-promote.ts`, tool error text and write-tool results.
+- Test additions: a tool-list census (read set plus write set equals the registered set), real-shaped cron flags, a check that only the substrate passes `--append-system-prompt`, a single-`resolveClaudeBin()`-call check, a scorer-error `subagent` arm, and content-retention and `sourceRef` cases.
+
 ## Research Insights
 
 - **Module surface** (`server/untrusted-content.ts`): `UntrustedSource` union, `UNTRUSTED_PREAMBLES` and `FLAG_THRESHOLDS` are `Record<UntrustedSource, …>`, so adding `github` fails the build until complete. `FLAG_THRESHOLDS.github` is required by the type but unused (nothing calls `classify(…, "github")`); a comment says so. `untrustedRowsResponse` puts the preamble in `content[0]` and compact JSON in `content[1]`. `envelope()` strips control characters before the 256 KiB cap.
@@ -55,7 +65,7 @@ Framing is **static** (preamble/envelope, no scoring), per the CTO ruling. It fo
 - **Open code-review overlap:** none.
 - **Premise validation:** #10194, #4671, #9601, #11076, #11077, #10195, #10196 open; #10192 merged 2026-10-14; cited files and symbols exist on the base.
 - **Plan-review revisions (2026-10-25):** five reviewers; applied: prelude moved to `--append-system-prompt` and made unconditional (rows 6-8 above); bug-fixer envelope and conversation-id hash cut; empty-content guard in the helper; one `wrapToolHandler` with an optional source instead of a second wrapper; stringify inside the try; Guard Contracts trimmed; hosted-Concierge `gh` output disclosed as uncovered; ADR carve-out wording; silent under-action risk added to failure modes.
-- **Property List:** (P1) a third party cannot present instruction-shaped text to an agent from these channels without a data-only caution ahead of it; (P2) every cron spawn carries the caution, so a new GitHub-reading cron cannot miss it; (P3) no new personal data enters logs.
+- **Property List:** (P1) on the channels this PR frames (the seven GitHub-text MCP read tools and every Inngest cron spawn; the leader-prompt envelope is latent, see Review revisions), a third party cannot present instruction-shaped text to an agent without a data-only caution; (P2) every cron spawn carries the caution, so a new GitHub-reading cron cannot miss it; (P3) no new personal data enters logs.
 - **Cut List:** per-tool sources (identical preamble); scoring or a hook for GitHub text (needs its own corpus; deferred to the #10195 soak); a CLI PostToolUse hook for cron output (#11076); a new flag (precedent is unconditional framing); a derived cron census and prelude module (replaced by unconditional injection); cron-bug-fixer envelope (false premise); conversation-id hash (separate scope).
 
 ## Scope Check
@@ -294,5 +304,5 @@ Flag creation or flipping, scoring of GitHub text, new PostToolUse hooks, hosted
 - Never prepend text to a cron prompt: several crons are `/soleur:` commands and the CLI must see the slash first.
 - Do not log titles, authors, repo names or matched text on any new field (CLO).
 - `envelope()` caps at 256 KiB after control-character stripping; leader content is far below it, and the GitHub readers are already size-bounded.
-- The classifier is a mistake-guard and must not be cited to close #7122 or as a public claim.
+- The classifier is a mistake-guard and must not be cited as a mitigation for #7122 (closed 2026-10-06 by the schema-constrained publication work) or as a public claim.
 - A `## User-Brand Impact` section that is empty or filler text fails `deepen-plan`; this one is filled.

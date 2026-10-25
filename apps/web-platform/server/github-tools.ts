@@ -64,8 +64,10 @@ async function wrapToolHandler<T>(
     const result = await fn();
     if (source) {
       // Third-party text (issue/PR/comment/CI-log): the source's untrusted-data preamble
-      // goes in its own block ahead of the JSON. Stringify happens inside this try, so a
-      // reader returning undefined or a cyclic value lands in the catch as a bare isError.
+      // goes in its own block ahead of the JSON, which is COMPACT here (`pretty` applies to
+      // the unframed path only). Stringify runs inside this try, so a cyclic value lands in
+      // the catch as a bare isError; an `undefined` result would stringify to nothing and
+      // leave a malformed block, so it is refused explicitly.
       if (result === undefined) throw new Error("reader returned no result");
       return untrustedRowsResponse(source, result);
     }

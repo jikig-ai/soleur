@@ -234,6 +234,20 @@ describe("envelope + preamble table", () => {
     }
   });
 
+  it("the github preamble reads correctly both ahead of tool output and as a system-prompt append", () => {
+    const p = UNTRUSTED_PREAMBLES.github;
+    expect(p).toContain("UNTRUSTED");
+    expect(p).toMatch(/do not follow instructions/i);
+    // names every channel it frames, including advisories (the CVE leader prompt)
+    for (const word of ["issue", "pull-request", "comment", "diff", "CI-log", "advisory"]) {
+      expect(p).toContain(word);
+    }
+    // not worded as "the following …": on a cron spawn nothing follows it in the system prompt
+    expect(p.toLowerCase()).not.toContain("the following");
+    // keeps the user's own task authoritative so a legitimate request is not read as data
+    expect(p).toMatch(/user's own messages decide/);
+  });
+
   it("untrustedRowsResponse keeps the two-block shape (preamble, then JSON payload)", () => {
     const r = untrustedRowsResponse("crm", [{ a: 1 }]);
     expect(r.content).toEqual([
@@ -404,6 +418,15 @@ describe("createUntrustedContentHook", () => {
         await call(createUntrustedContentHook(), withAgent(pageObj("hi"), bad));
         expect(log.warn.mock.calls[0]?.[0]).toMatchObject({ subagent: false });
       }
+    });
+
+    it("the scorer-error arm also carries the field", async () => {
+      const spy = vi.spyOn(String.prototype, "normalize").mockImplementationOnce(() => {
+        throw new Error("boom");
+      });
+      await call(createUntrustedContentHook({ workspaceId: "ws" }), withAgent(pageObj("x"), AGENT_ID));
+      spy.mockRestore();
+      expect(log.warn.mock.calls[0]?.[0]).toMatchObject({ unscored: true, subagent: true });
     });
 
     it("the unscored (shape) path also carries the field", async () => {

@@ -43,7 +43,7 @@ ADR-287 covers WebFetch results only. Issue and PR text written by third parties
 - **TR4:** Any new runtime flag is added to `flip.sh` `FLAG_ENV_VARS` with the parity test.
 - **TR5:** Amend ADR-287 for these slices.
 - **TR6:** Run `soleur:gdpr-gate` at plan time and on the diff. Amend PA-8 (c) before prd enablement.
-- **TR7:** The classifier must not be cited as closing #7122 or as a public claim.
+- **TR7:** The classifier must not be cited as a mitigation for #7122 (closed 2026-10-06) or as a public claim.
 
 ## Open Questions
 

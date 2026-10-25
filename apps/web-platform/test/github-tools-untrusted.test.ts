@@ -114,6 +114,31 @@ describe("github read tools frame third-party text as untrusted", () => {
   });
 });
 
+// Census: every registered tool is classified READ (framed) or WRITE (unframed). A new tool
+// registered without a decision, or a read tool added without the framing, fails here.
+const WRITE_TOOL_NAMES = [
+  "create_pull_request",
+  "create_issue",
+  "github_trigger_workflow",
+  "github_push_branch",
+];
+
+describe("every github tool is classified read (framed) or write", () => {
+  it("the registered names are exactly the read set plus the write set", () => {
+    const { toolNames } = buildGithubTools({
+      installationId: 1,
+      owner: "o",
+      repo: "r",
+      defaultBranch: "main",
+      workspacePath: "/w",
+      workflowRateLimiter: {} as never,
+    });
+    const bare = toolNames.map((n) => n.replace("mcp__soleur_platform__", "")).sort();
+    const expected = [...READ_TOOLS.map(([n]) => n), ...WRITE_TOOL_NAMES].sort();
+    expect(bare).toEqual(expected);
+  });
+});
+
 describe("write tools are unchanged", () => {
   it("github_push_branch keeps its single compact JSON block with no preamble", async () => {
     readers.pushBranch.mockResolvedValue({ ok: true });

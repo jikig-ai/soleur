@@ -12,7 +12,7 @@
 // cron-claude-eval-mcp-flags.test.ts).
 
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -111,6 +111,21 @@ describe("cron spawns pass the github preamble as a system-prompt append", () =>
     expect(argv[argv.length - 1].startsWith("/")).toBe(true);
   });
 
+  it("a real-shaped flags array (model, allowedTools, plugin-dir, max-turns) still gets the append before --print", async () => {
+    const argv = await captureArgv({
+      flags: [
+        "--print", "--model", "sonnet", "--allowedTools", "Bash(gh issue view:*),Read",
+        "--plugin-dir", "plugins/soleur", "--max-turns", "3", "--",
+      ],
+      prompt: "/soleur:fix-issue 42",
+    });
+    const i = argv.indexOf("--append-system-prompt");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(argv[i + 1]).toBe(UNTRUSTED_PREAMBLES.github);
+    expect(i).toBeLessThan(argv.indexOf("--print"));
+    expect(argv.filter((a) => a === "--append-system-prompt")).toHaveLength(1);
+  });
+
   it("a differently shaped flags array (allowedTools form) still gets exactly one append", async () => {
     const argv = await captureArgv({
       flags: ["--print", "--allowedTools", "Bash(gh issue view:*),Read", "--max-turns", "3", "--"],
@@ -128,5 +143,16 @@ describe("the substrate has exactly one claude spawn site", () => {
     );
     const sites = src.match(/\bspawn\(\s*claudeBin\b/g) ?? [];
     expect(sites).toHaveLength(1);
+    // …and the binary is resolved at exactly one place, so a second spawner under another
+    // name (a different variable, execFile, spawnSimple) must resolve it too and trips this.
+    expect(src.match(/=\s*resolveClaudeBin\(\)/g) ?? []).toHaveLength(1);
+  });
+
+  it("no cron caller supplies its own --append-system-prompt (it would override or duplicate the preamble)", () => {
+    const dir = resolve(REPO_ROOT, "apps/web-platform/server/inngest/functions");
+    const offenders = readdirSync(dir)
+      .filter((f) => f.endsWith(".ts") && f !== "_cron-claude-eval-substrate.ts")
+      .filter((f) => readFileSync(resolve(dir, f), "utf8").includes("append-system-prompt"));
+    expect(offenders).toEqual([]);
   });
 });

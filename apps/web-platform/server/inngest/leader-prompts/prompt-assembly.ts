@@ -20,6 +20,16 @@
 //      past the email regex because the control char breaks the local
 //      part match.
 //
+//   4. assembleEnvelopedPromptText: assemblePromptText + the untrusted-data envelope, for
+//      text a third party wrote. Returns "" for empty content so the callers' fallbacks
+//      still fire. NOTE (#10194): no production code supplies `scrubbedContent` today
+//      (agent-on-spawn-requested.ts passes only sourceRef/owner/repo/number), so the
+//      envelope guards a feeder that does not exist yet.
+//
+//   5. sanitizeSourceRef: one-line, control-free, length-capped form of a source ref for
+//      interpolation into a prompt header. sourceRef is not enveloped, so it must not be
+//      able to carry a newline and start a line of its own.
+//
 // Per cq-regex-unicode-separators-escape-only: regex literals reference
 // U+2028 + U+2029 via escape sequences only (NEVER literal — the literal
 // chars are JS line terminators and cannot appear inside a regex source).
@@ -71,4 +81,11 @@ export function assembleEnvelopedPromptText(
 ): string {
   const text = assemblePromptText(raw, allowlistEmail);
   return text ? envelope("github", text) : "";
+}
+
+/** Max characters of a source ref kept in a prompt header (a GHSA id or owner/repo#n is far shorter). */
+const SOURCE_REF_MAX_CHARS = 200;
+
+export function sanitizeSourceRef(v: unknown): string {
+  return sanitizePromptString(v).replace(/\s+/g, " ").trim().slice(0, SOURCE_REF_MAX_CHARS);
 }

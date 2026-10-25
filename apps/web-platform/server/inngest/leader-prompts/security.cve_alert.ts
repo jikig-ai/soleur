@@ -13,7 +13,7 @@ import {
   LEADER_MAX_TOKENS,
   type AnthropicToolDef,
 } from "./constants";
-import { assembleEnvelopedPromptText } from "./prompt-assembly";
+import { assembleEnvelopedPromptText, sanitizeSourceRef } from "./prompt-assembly";
 
 const TOOLS: AnthropicToolDef[] = [
   {
@@ -111,7 +111,7 @@ export const securityCveAlert: LeaderPromptModule = {
   userPromptTemplate: (input: ClassInput): string => {
     const content = assembleEnvelopedPromptText(input.scrubbedContent ?? "", null);
     return [
-      `CVE alert source: ${input.sourceRef}`,
+      `CVE alert source: ${sanitizeSourceRef(input.sourceRef)}`,
       "",
       "Advisory body (PII-scrubbed):",
       content || "(no advisory body provided)",
