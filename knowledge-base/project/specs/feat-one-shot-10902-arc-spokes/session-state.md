@@ -31,3 +31,9 @@
 - CTO ruling honored: #10737 post names no consumer count/roster (agent-verified 0 hits)
 - GDPR gate: skip — diff touches no regulated-data surface (content + .tf map lines only)
 - Notes: markdownlint-cli2 not installed; agents used repo-pinned `node_modules/.bin/markdownlint` (equivalent engine, CI uses it). distribution-content MD034 bare-URL hits expected (.markdownlintignore'd; publisher contract).
+
+## Review Phase
+- Panel: sequential-fallback (1 orchestrator subagent, 7 mandated seats) at PANEL_SHA 7a833017a8
+- Findings: 1 P2 (calendar regen omitted 11-04 draft + stale/parked rows), 3 P3 (unpinned "months" claim ×4 spots, verbatim closing sentence ×3 posts) — all fixed inline, commit 298d69b698
+- Fix-round 1 verification: FAQ parity True ×4, word counts 1618–1821, jargon rc0, markdownlint rc0 — PASS
+- Rebase: resolved seo-bulk-redirects.tf conflict vs merged PR #11091 (both pair sets kept ascending); force-pushed; PR mergeable
