@@ -24,6 +24,8 @@
 // U+2028 + U+2029 via escape sequences only (NEVER literal — the literal
 // chars are JS line terminators and cannot appear inside a regex source).
 
+import { envelope } from "../../untrusted-content";
+
 // eslint-disable-next-line no-control-regex
 const STRIP_REGEX = /[\x00-\x08\x0b-\x1f\x7f\u2028\u2029]/g;
 
@@ -52,4 +54,21 @@ export function assemblePromptText(
   allowlistEmail: string | null,
 ): string {
   return scrubEmails(sanitizePromptString(raw), allowlistEmail);
+}
+
+/**
+ * assemblePromptText + the untrusted-data envelope, for text a third party wrote
+ * (issue/PR bodies, diffs, CI logs, advisories). Order matters: sanitize and scrub
+ * first, then envelope, so NUL padding cannot push text past the envelope's size cap
+ * and an email cannot hide behind a control character.
+ *
+ * Returns "" for empty content so callers' `content || "(no … provided)"` fallbacks
+ * still fire — an enveloped empty string is truthy and would defeat them.
+ */
+export function assembleEnvelopedPromptText(
+  raw: unknown,
+  allowlistEmail: string | null,
+): string {
+  const text = assemblePromptText(raw, allowlistEmail);
+  return text ? envelope("github", text) : "";
 }
