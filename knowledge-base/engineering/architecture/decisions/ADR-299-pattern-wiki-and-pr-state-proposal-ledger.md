@@ -141,7 +141,7 @@ The pattern-wiki structure (one curated page per recurring pattern, an open/clos
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-10-24-feat-wikiskill-pattern-layer-proposer-index-ledger-reader-plan.md` (page contract, reader contract, marker additions, effect measurement plan).
+- Plan: `knowledge-base/project/plans/archive/20261025-180706-2026-10-24-feat-wikiskill-pattern-layer-proposer-index-ledger-reader-plan.md` (page contract, reader contract, marker additions, effect measurement plan).
 - ADR-054, ADR-092, ADR-235.
 - #8293 (this work), #8281 (observability), #10553 and #10673 (server-side fixes), #10552 (open), #2720 (promotion loop), #2723 (write-mostly knowledge surfaces need a close mechanic).
 
