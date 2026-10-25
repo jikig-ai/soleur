@@ -103,7 +103,7 @@ scripts/followthrough-varq-ban	scripts/sweep-followthroughs.sh	held-unsure	decla
 scripts/followthroughs/ccla-representative-icla-7922	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts	held-unsure	recorder-unreliable		2
 scripts/followthroughs/t5-skip-persistence-bound-7510	apps/web-platform/infra/run-registered-suites.sh	out-of-slice	ascending-reveal cut at cumulative 130		31
 scripts/git-data-reboot-evidence-landed-8210	tests/scripts/lib/git-data-birth-readiness-gate.sh	held-hot	held-hot		17
-scripts/rules-loader-stamp-probe	.claude/hooks/session-rules-loader.sh	declare	-	real (row F): .mcp.json, plugin.json, strip.sh; suite runs the hook	7
+scripts/rules-loader-stamp-probe	.claude/hooks/session-rules-loader.sh	declare	-	real (row F): .mcp.json, plugins/soleur/.mcp.json, plugins/soleur/.claude-plugin/plugin.json, scripts/lib/frontmatter-strip/strip.sh; suite runs the hook	7
 scripts/tmpfs-guard	plugins/soleur/scripts/lib/tmp-classify.sh	held-unsure	recorder-unreliable		5
 tests/scripts/betterstack-roundtrip-latency	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	held-hot	chain: real read betterstack-query.sh (9 commits) reveals mentions on a hot file		4
 tests/scripts/betterstack-roundtrip-latency	scripts/lint-followthrough-varq-ban.sh	declare	-	3 mentions: messages	6
