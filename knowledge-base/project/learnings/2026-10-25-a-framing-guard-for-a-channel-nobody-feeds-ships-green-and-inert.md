@@ -44,5 +44,6 @@ earlier: here the wire did not exist.
 12. **`kill_mine` was given a pattern containing `/`**, and a hook blocked `pgrep -f` twice. — Recovery: used the documented forms. — **Prevention:** hooks worked as designed.
 
 ## Tags
+
 category: workflow-patterns
 module: untrusted-content, plan, review
