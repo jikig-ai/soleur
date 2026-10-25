@@ -329,8 +329,12 @@ resource "betteruptime_heartbeat" "inngest_prd" {
   call      = false
   sms       = false
   email     = true
-  push      = false
+  push      = true
   team_wait = 0
+  # `push` armed under the #9168 measured-flip convention (#10390): a vendor-attribute flip measured
+  # on apply — if the vendor refuses or no-ops, revert to `push = false` in a follow-up. Secondary
+  # channel to the GitHub-issue mirror (scheduled-betterstack-incident-mirror): it needs the
+  # operator's Better Stack mobile app installed and watched, which this file cannot guarantee.
   # "Your team" is the literal default team name in this Better Stack
   # workplace (the only team — t520508). The TF provider does a
   # case-sensitive name lookup against the workplace's team list; the
@@ -418,9 +422,11 @@ resource "betteruptime_heartbeat" "inngest_consumer" {
   call      = false
   sms       = false
   email     = true
-  push      = false
+  push      = true
   team_wait = 0
   team_name = "Your team"
+  # `push` armed under the same #9168 measured-flip convention as inngest_prd above (#10390): revert
+  # to `push = false` if the vendor refuses or no-ops; the GitHub-issue mirror is the deliverable channel.
   policy_id = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
   # `paused` in SOURCE; the ONLY unpause path is the ADR-117 measured-beat arm gate in
   # apply-web-platform-infra.yml, which PATCHes paused=false, polls for status=up (proving a REAL

@@ -340,6 +340,11 @@ export const MANIFEST: ManifestEntry[] = [
     // #8516 — the dead-probe sibling of logtail_exploration_alert.inngest_luks_wrong_volume:
     // a pusher beats it only while a fresh host_role=dedicated inngest-server-probe row
     // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). FED and ARMED.
+    // Since #10390 a beat certifies TWO properties of that same freshest row — freshness AND the
+    // serving verdict: the feeder grades the row's server_active/http_code/cutover_flag through the
+    // shared classify_dedicated_host def and beats <url>/fail on not-serving (verdict fail_beat, an
+    // intended immediate incident), beats normally on healthy/stopped-by-brake, and withholds
+    // (serving_unavailable, exit 3) when the verdict cannot be established.
     // No `arming_pending` (record PR for #9703). This row carried `arming_pending: { tracking_issue: 9703 }`
     // while the monitor was paused-yet-fed. On 2026-10-12 the runbook arm block unpaused it; its read-back
     // was `status=up paused=false`, and the feeder (scripts/inngest-probe-heartbeat-feeder.sh) then reported

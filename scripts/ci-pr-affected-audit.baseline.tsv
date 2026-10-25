@@ -1058,7 +1058,6 @@ scripts/followthroughs/pr-battery-gate-saving-9323	scripts/ci-battery-gate-repla
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/guard-vacuity-floor.test.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/repo-write-boundary.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/repo-write-boundary.test.sh
-scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/test-relevance-paths.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lint-orphan-test-suites.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lint-orphan-test-suites.test.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/registry-pull-path-health.sh
@@ -1101,12 +1100,10 @@ scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-read-classify.s
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-sources.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/git-data-rotate-stamp.sh
 scripts/infra-drift-autoclose	.github/workflows/apply-deploy-pipeline-fix.yml
-scripts/inngest-probe-heartbeat-feeder	.github/workflows/scheduled-inngest-probe-heartbeat.yml
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/sentry/cron-monitors.tf
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/uptime-alerts.tf
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/server/watchdog-dispatch-table.ts
 scripts/inngest-probe-heartbeat-feeder	scripts/betterstack-query.sh
-scripts/inngest-probe-heartbeat-feeder	scripts/lib/inngest-probe-row.sh
 scripts/inngest-tls-soak-10136	scripts/betterstack-query.sh
 scripts/jobs1-stopgap-7432	apps/web-platform/infra/ci-deploy.test.sh
 scripts/jobs1-stopgap-7432	apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh

@@ -2,7 +2,7 @@
 
 # Peer Plugin Audit — Sub-Mode Procedure
 
-Sub-mode of `soleur:competitive-analysis`. Given a GitHub repository URL, produce a 4-section markdown audit (inventory / high-value gaps / overlap / architectural patterns + recommendations) and seed it into the "Skill Library Tier" section of `knowledge-base/product/competitive-intelligence.md`.
+Sub-mode of `soleur:competitive-analysis`. Given a GitHub repository URL, produce a 4-section markdown audit (inventory / high-value gaps / overlap / architectural patterns + recommendations) and upsert it into `audits/<owner>-<repo>.md` under `knowledge-base/product/competitive-intelligence/` and add/update the matching Overlap Matrix row (with a `→ audit` link) in the `knowledge-base/product/competitive-intelligence.md` index.
 
 **Invocation:** `skill: soleur:competitive-analysis peer-plugin-audit <repo-url>` (routed from `SKILL.md` Step 1).
 
@@ -124,12 +124,16 @@ of report body. Wrap every #NNNN GitHub reference in backticks so CommonMark
 does not parse it as a heading.
 
 # Output destination
-Write the report as a new or updated Overlap Matrix entry in the appropriate
-existing tier of knowledge-base/product/competitive-intelligence.md — usually
+Write the audit body to knowledge-base/product/competitive-intelligence/audits/<owner>-<repo>.md
+(minimal shard frontmatter: title, target, last_updated, publishable) AND upsert
+a new or updated Overlap Matrix row in the appropriate existing tier of the
+index knowledge-base/product/competitive-intelligence.md with a
+`→ audit` link to the shard — usually
 Tier 3 (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library
 peers. If the audited repo does not fit any current tier, flag this in the
 report and request taxonomy guidance from the CI team — do not invent a new
-tier in this sub-mode. Do not create parallel files under research/.
+tier in this sub-mode. Exactly ONE audit file per repo: audits/<owner>-<repo>.md;
+never write research/ or a second shard copy.
 ```
 
 ### Output-size guard
@@ -200,16 +204,16 @@ When porting concrete SKILL.md text, the Soleur target file MUST include:
 
 ## Output routing
 
-- Write the report **as a new or updated Overlap Matrix entry** in the appropriate existing tier of `knowledge-base/product/competitive-intelligence.md`. Usually **Tier 3** (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library peers. Use Tier 0 only for platform-native peers (model/IDE-level).
+- Write the audit body to `knowledge-base/product/competitive-intelligence/audits/<owner>-<repo>.md` (minimal shard frontmatter: `title`, `target`, `last_updated`, `publishable`), AND upsert **a new or updated Overlap Matrix entry** in the appropriate existing tier of the index `knowledge-base/product/competitive-intelligence.md` with a `→ audit` link to the shard. Usually **Tier 3** (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library peers. Use Tier 0 only for platform-native peers (model/IDE-level).
 - If an entry for the same repo already exists in any tier, **update it in place** — do not duplicate.
 - If the audited repo does not fit any existing tier, **flag this in the report** and request taxonomy guidance from the CI team. Do not invent new tiers in this sub-mode — tier taxonomy is a CI-team decision, not a per-audit one.
-- Update the file's frontmatter: `last_updated: <today>`, `last_reviewed: <today>`.
-- Do NOT write a parallel file under `knowledge-base/product/research/peer-plugin-audits/`. Single destination prevents stale copies.
+- Update only the index's `last_updated: <today>` — its `last_reviewed` is scanner-owned and must NOT be bumped by an audit write (ADR-094); the shard carries its own `last_updated`.
+- **Superseded 2026-10-24 (#11032):** the old "Do NOT write a parallel file under `knowledge-base/product/research/peer-plugin-audits/`" rule is replaced by the sharded layout — the audit body now lives in exactly ONE file, `audits/<owner>-<repo>.md`; the index keeps only the matrix row + link. Never write `research/peer-plugin-audits/` or a second shard copy.
 - When a later founder decision disposes of an audit item (declined, bundled, superseded), write the disposition against the audit's OWN statement of the item, not the decision's shorthand: re-read the audit row the item came from before claiming it "already shipped". Record declines in the audit record, not in `knowledge-base/project/rejected/` (ADR-234 holds refused product concepts). **Why:** #8648 — a decline said the writing trio's one idea (leading words) had shipped, while the audit's §2 names leading words AND grounding; only the first shipped.
 
 ## Non-audit outcome
 
-If Step 2 returns **zero SKILL.md files**, the repo is not a skill library. Write a short advisory entry (or log-only note) to the tier explaining "category mismatch; no audit produced", and do not add an Overlap Matrix row. This prevents the tier from collecting non-skill-library repos.
+If Step 2 returns **zero SKILL.md files**, the repo is not a skill library. Append a dated advisory entry to `knowledge-base/product/competitive-intelligence/audit-log.md` recording "category mismatch; no audit produced", and do not add an Overlap Matrix row. This prevents the tier from collecting non-skill-library repos.
 
 ## Error branches (reference)
 

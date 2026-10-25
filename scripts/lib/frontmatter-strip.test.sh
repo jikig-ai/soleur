@@ -18,15 +18,16 @@ PASS=0; FAIL=0; TOTAL=0
 pass() { echo "PASS: $1"; PASS=$((PASS+1)); TOTAL=$((TOTAL+1)); }
 fail() { echo "FAIL: $1"; echo "  detail: ${2:-}"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); }
 
-command -v perl    >/dev/null 2>&1 || { echo "SKIP: perl missing"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
+command -v perl    >/dev/null 2>&1 || { echo "UNRESOLVED: perl missing — this suite asserted nothing; install perl"; exit 3; }
+command -v python3 >/dev/null 2>&1 || { echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"; exit 3; }
 # strip.ts needs a TS runtime; the scripts CI shard has none. Skip the TS arm
 # (the sh<->py parity still runs) when bun is absent — this suite is registered
-# in test-all.sh's `want_bun` block where bun is guaranteed present. Mirrors the
-# perl/python3 skip-gates above.
+# in test-all.sh's `want_bun` block where bun is guaranteed present. Unlike the
+# perl/python3 dependency gates above, the bun arm declines to an arm skip, not
+# a whole-suite verdict.
 HAS_BUN=0
 command -v bun >/dev/null 2>&1 && HAS_BUN=1
-[[ -f "$SH" && -f "$PY" ]] || { echo "SKIP: strip impls not present (RED)"; exit 0; }
+[[ -f "$SH" && -f "$PY" ]] || { echo "FAIL: strip impls not present — $SH and $PY are the files under test"; exit 1; }
 if [[ "$HAS_BUN" -eq 1 ]]; then
   [[ -f "$TS" ]] || { echo "FAIL: strip.ts missing but bun present"; exit 1; }
 fi
