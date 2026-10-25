@@ -4,6 +4,7 @@
 - Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-11068-inngest-alerts-push/knowledge-base/project/plans/2026-10-25-chore-inngest-alerts-push-channel-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
+- cto_spawns=1 (batched consult, 5 technical rows ratified verbatim; technical-ruling-gate rc=0)
 
 ### Errors
 - `iac-plan-write-guard.sh` denied the plan write twice on the literal phrase `out-of-band` (guard pattern b); resolved by rephrasing to "armed … after an observed beat" — no opt-out used.
