@@ -380,3 +380,7 @@ The optional scratch-volume proof that detach works under delete protection is d
 A written Hetzner support question is one non-binding, owner-side, read-only way to settle the fact; it is not the only route and not a gate, and a live deletion test is out of scope because project deletion is irreversible.
 
 Ruled by CTO agent, 2026-10-23: state the planning posture "plan as if project deletion or account loss destroys the volume regardless of delete protection" and label the underlying fact not established, in the reworded residual plus this addendum - docs-silent evidence does not separate the options, so the stricter one wins: assuming protection survives risks sole-copy data loss, assuming it does not costs no data, only a pending mitigation decision (rationale amended the same day on review dissent; the posture is unchanged).
+
+## Addendum — 2026-10-25 (#10112, host scripts that write to the state store)
+
+Appended; nothing above is changed. The list of host scripts that write to `soleur-inngest/prd` (the guards' blind spot recorded under the protection set) no longer includes `inngest-luks-cutover.sh`: it is retired. `scripts/cutover-inngest.sh` (with the arm token) and `inngest-cutover-flip.sh` remain. The pointer `INNGEST_LUKS_ACTIVE_VOLUME_ID` has no writer in any delivered artifact; `inngest-redis-luks.test.sh` G4.g3 asserts that for the literal name.

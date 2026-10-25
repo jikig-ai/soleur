@@ -5,7 +5,7 @@
 #   - Downloads pinned inngest-cli, SHA256-verifies, installs to /usr/local/bin.
 #   - Writes systemd units for inngest-server.service, inngest-heartbeat.{service,timer},
 #     inngest-heartbeat-failure-log.service, inngest-server-probe.{service,timer}, and
-#     vector.service; stages the flip + LUKS cutover units from the image's /tmp payload.
+#     vector.service; stages the flip units from the image's /tmp payload (the LUKS cutover trio was retired, #10112).
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
 #   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then

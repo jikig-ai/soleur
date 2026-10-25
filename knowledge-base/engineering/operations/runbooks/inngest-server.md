@@ -566,7 +566,7 @@ emitter: treat it as forged (the DSN is semi-public). Map the page to the next r
   a SIGKILL or power loss, a Sentry POST that failed (`sentry-emit-FAILED` in Better Stack; for
   `sentry-emit-FAILED stage=bootstrap_done_degraded` the degraded state has no second paging path), and a
   bootstrap that exits 0 while broken in ways the degraded check does not test (a refused server
-  start, a missing Vector, missing flip or LUKS-cutover assets). Read these from `life.txt`.
+  start, a missing Vector, missing flip assets). Read these from `life.txt`.
 - **To quiet either, change the rule in Terraform** (`sentry_alert.inngest_provision_failure` or
   `sentry_alert.inngest_provision_degraded`): raise
   `frequency_minutes`, or set `enabled = false`, and regenerate `alert-reference.json` in the same
@@ -1896,11 +1896,11 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 (`hr-no-ssh-fallback-in-runbooks`). Full context + gotchas:
 `knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md`.
 
-> **Refresh-channel cross-ref (#6780, ADR-135).** For the five dedicated-host
+> **Refresh-channel cross-ref (#6780, ADR-135).** For the four dedicated-host
 > carriers in `apps/web-platform/infra/inngest-config-refresh-set.txt`
 > (`inngest-redis-bootstrap.sh`, `inngest-cutover-flip.sh`,
-> `inngest-server-flip-guard.sh`, `cat-inngest-cutover-state.sh`,
-> `inngest-luks-cutover.sh`), an image bake + host replace is no longer the only
+> `inngest-server-flip-guard.sh`, `cat-inngest-cutover-state.sh`; `inngest-luks-cutover.sh`
+> was the fifth until #10112 retired it), an image bake + host replace is no longer the only
 > delivery path: once the signed config-refresh channel is live (host rebuilt
 > with this cloud-init + a promoted `INNGEST_CONFIG_DIGEST`), bundle promotion
 > delivers them in place — see

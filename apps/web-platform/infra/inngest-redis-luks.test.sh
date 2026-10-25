@@ -774,7 +774,7 @@ if [ "$(grep -cxF "$_T116_INVOCATION" "$CLOUD_INIT")" -eq 1 ]; then ok "T1.16m t
 
 # ═══ T1.16n-q — design-review hardening of the self-heal (PR #10228 design pass) ═══
 # T1.16n ATOMIC fstab install: a mid-write death on `cat tmp > /etc/fstab` truncates the file
-# and recreates the exact unhealable state this PR eliminates (inngest-luks-cutover.sh:536-539
+# and recreates the exact unhealable state this PR eliminates (the retired inngest-luks-cutover.sh's mount-listing guard
 # documents the same defect). The install must be same-dir rename: chmod + mv -f, and no
 # redirect-to-/etc/fstab anywhere inside ensure_mount.
 if printf '%s\n' "$_EM" | grep -cF 'mv -f "$_em_tmp" /etc/fstab' >/dev/null && ! printf '%s\n' "$_EM" | grep -cE '> */etc/fstab' >/dev/null; then ok "T1.16n the fstab install is atomic (chmod + mv -f); no redirect-to-/etc/fstab survives"; else no "T1.16n the fstab install is not an atomic rename — a mid-write death truncates /etc/fstab"; fi
@@ -796,7 +796,7 @@ if printf '%s\n' "$_OA" | grep -cF 'backing_is' >/dev/null && printf '%s\n' "$_O
 if [ "$(grep -c 'after 300s' "$CLOUD_INIT")" -ge 4 ] && ! grep -q 'after 30s\b' "$CLOUD_INIT"; then ok "T1.16q all wait-refusal sentences name the 300s bound (no stale 30s survivors)"; else no "T1.16q a wait-refusal sentence still claims the old 30s bound"; fi
 
 # T1.16r STACKED-MOUNT convergence + guarded findmnt: ensure_mount must not `head -1` a findmnt
-# listing (the shadowed-bottom read inngest-luks-cutover.sh documents), must guard the
+# listing (the shadowed-bottom read the retired inngest-luks-cutover.sh documented), must guard the
 # substitution under pipefail (`|| _em_src=""`), must compare the KERNEL-SERVED layer (tail -1),
 # and must pop wrong layers with a bounded umount loop rather than guess which layer a stack
 # serves — the loop's `mountpoint -q` re-check is the convergence condition.

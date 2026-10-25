@@ -32,8 +32,8 @@
 # hypothesis about why :8288 was never bound stays UNKNOWN forever and the replace teaches us
 # nothing. The original boot trace was treated as unrecoverable (when this was written in 2026-08
 # Better Stack retention was taken to be ~3 days, a FREE-TIER figure, against a 12-day-old boot).
-# Better Stack retention is now 90 days: source soleur-inngest-vector-prd reports logs_retention=90
-# (betterstack-log-query.md, measured 2026-09-04, #7772). The decision below does not depend on it:
+# Better Stack retention is no longer ~3 days: source soleur-inngest-vector-prd reported logs_retention=90
+# when measured on 2026-09-04 (betterstack-log-query.md, #7772; the attribute is per source). The decision below does not depend on it:
 # a boot that can actually try is the way to decide why :8288 was never bound.
 #
 # INNGEST_DIAGNOSTIC_BOOT=1 lets the host start against a NON-DURABLE backend, where a second

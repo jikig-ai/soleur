@@ -360,3 +360,7 @@ CONSUMER's read path. A bundle can validate in-process and load as its owner and
 fail the verifier that matters because WHO reads the file is part of the contract.
 Producer self-checks must run the consumer's own verifier image against the artifact
 as shipped. No verification-weakening flag was added (AC10 carries).
+
+## Addendum 2026-10-25 (#10112) — the refresh set has four members
+
+Appended; nothing above is changed. Where this ADR counts "five" carriers (and "five inert dead files"), read four: `inngest-luks-cutover.sh` left the signed set, the `DEST_SPEC` allowlist, the `FILE_MAP` and the web-host push payload when the cutover trio was retired. An old signed bundle that still lists it is refused by a newly provisioned host (`DEST_SPEC` no longer admits the path), which is fail-closed; the promoted `INNGEST_CONFIG_DIGEST` pointer decides which bundle is live, so a stale bundle is never promoted by a merge.

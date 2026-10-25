@@ -6,6 +6,12 @@ related: [6894, 7228, 7695, 8017, 8285, 8294, 8295, 8296, 9703, 9786, 9879, 9927
 
 # Inngest LUKS cutover (#6894)
 
+> **Retired 2026-10-24 (#10112).** The on-host cutover trio (`inngest-luks-cutover.{sh,service,timer}`) is no longer baked into
+> the image, shipped in the signed config-refresh bundle, or pushed to the web hosts, so the dispatch below has no on-host
+> consumer and the dispatcher refuses `op=luks-cutover` (G1/G2/G3). This document is the record of how the cutover ran
+> (2026-09-20); do not follow its dispatch steps. The dispatcher's `op=luks-cutover` arm and its refusal text are retired in a
+> tracked follow-up. Live hosts that received the trio earlier keep inert copies until the next host replace.
+
 **What this does.** Moves the dedicated Inngest host's Redis AOF store from the plaintext volume to
 the encrypted (LUKS) one, without losing a byte and without SSH. The host freezes its writers, copies
 the whole `/mnt/data` mount to the already-attached encrypted volume, proves the copy byte-identical,
