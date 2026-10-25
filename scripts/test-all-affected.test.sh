@@ -2584,15 +2584,18 @@ else
   fail "m8: rc=$ARM_RC — $ARM_OUT"
 fi
 
-# t11 / m9: edge MINTING. A directory token written WITHOUT a trailing "/" (22 declared entries,
-#     `.github/workflows`, `scripts/lib`, ...) must become a prefix edge `^dir/`; a file stays an
+# t11 / m9 / t11b / m9b / t17 / m10: edge MINTING. A directory token written WITHOUT a trailing
+#     "/" must become a prefix edge `^dir/`; a file stays an
 #     exact `^file`; a `.`-rooted token keeps the legacy unanchored form. Driven on the runner's
-#     own `_affected_add_edge` (extracted verbatim, no sandbox), so the sandbox rows -- whose
+#     own `_affected_add_edge`/`_affected_add_declared_edge` (extracted verbatim, no sandbox), so
+#     the sandbox rows -- whose
 #     tokens all end in "/" -- cannot hide a dropped normalisation. m9 deletes the `-d`
-#     normalisation and must change t11's directory answer.
+#     normalisation and must change t11's directory answer; m9b is the same deletion scoped to
+#     the declared twin (#9441), and t17/m10 pin the D12 reversal end-to-end.
 cases=$((cases + 1))
 _edge_src=$(awk '/^_affected_in_list\(\) \{/{f=1} f{print} f && /^_affected_add_edge\(\) \{/{g=1} g && /^\}/{exit}' "$RUNNER")
 _edge_run() { ( cd "$REPO_ROOT" && source scripts/lib/affected-glob.sh && eval "$1" && _AC_EDGES=() && _affected_add_edge "$2" && printf '%s' "${_AC_EDGES[*]}" ); }
+_decl_edge_run() { ( cd "$REPO_ROOT" && source scripts/lib/affected-glob.sh && eval "$1" && _AC_EDGES=() && _affected_add_declared_edge "$2" && printf '%s' "${_AC_EDGES[*]}" ); }
 _t11_dir=$(_edge_run "$_edge_src" scripts/lib)
 _t11_file=$(_edge_run "$_edge_src" scripts/test-all.sh)
 _t11_dot=$(_edge_run "$_edge_src" ./scripts)
@@ -2603,18 +2606,110 @@ else
 fi
 
 cases=$((cases + 1))
+# t11b (#9441): the declared/consumed twin mints WITHOUT the -e filter — the
+# whole point of the D12 reversal. A deleted subject keeps its edge: `dir/`
+# mints the ^dir/ prefix (the deleting diff's lines still match), a deleted
+# file mints ^file; while _affected_add_edge mints NOTHING for the same
+# subjects (the -e filter still binds the derived channel). A slash-less
+# deleted dir mints ^dir — the exact-line dead edge the census now refuses.
+_t11b_ddir=$(_decl_edge_run "$_edge_src" 'zzz-no-such-dir-9441/')
+_t11b_dfile=$(_decl_edge_run "$_edge_src" 'zzz-no-such-file-9441.sh')
+_t11b_dflat=$(_decl_edge_run "$_edge_src" 'zzz-no-such-dir-9441')
+_t11b_live=$(_decl_edge_run "$_edge_src" 'scripts/lib')
+_t11b_filtdir=$(_edge_run "$_edge_src" 'zzz-no-such-dir-9441/')
+_t11b_filtfile=$(_edge_run "$_edge_src" 'zzz-no-such-file-9441.sh')
+if [[ "$_t11b_ddir" == "^zzz-no-such-dir-9441/" && "$_t11b_dfile" == "^zzz-no-such-file-9441.sh" \
+   && "$_t11b_dflat" == "^zzz-no-such-dir-9441" && "$_t11b_live" == "^scripts/lib/" \
+   && -z "$_t11b_filtdir" && -z "$_t11b_filtfile" ]]; then
+  pass "t11b: the declared twin mints ^dir//^file for deleted subjects; the -e filter still binds the derived mint"
+else
+  fail "t11b: ddir='${_t11b_ddir}' dfile='${_t11b_dfile}' dflat='${_t11b_dflat}' live='${_t11b_live}' filtered='${_t11b_filtdir}'/'${_t11b_filtfile}'"
+fi
+
+cases=$((cases + 1))
+# m9: drop the -d normalisation — scoped to _affected_add_edge's body (the
+# extraction's SECOND function; the declared twin carries the same line and
+# gets its own mutant at m9b).
 _mut_src=$(python3 -c '
 import sys
 s = sys.stdin.read()
 old = "if _affected_probe d \"$_p\"; then _p=\"${_p%/}/\"; fi"
-assert s.count(old) == 1, s.count(old)
-sys.stdout.write(s.replace(old, ":"))
+head, marker, tail = s.partition("_affected_add_edge() {")
+assert marker and tail.count(old) == 1, (bool(marker), tail.count(old))
+sys.stdout.write(head + marker + tail.replace(old, ":", 1))
 ' <<<"$_edge_src") || _mut_src=""
 _m9_dir=$(_edge_run "$_mut_src" scripts/lib)
 if [[ -n "$_mut_src" && "$_mut_src" != "$_edge_src" && "$_m9_dir" == "^scripts/lib" ]]; then
   pass "m9: dropping the directory normalisation mints ^scripts/lib (no slash), which t11 rejects"
 else
   fail "m9: landed=$([[ "$_mut_src" != "$_edge_src" ]] && echo yes || echo no) dir='${_m9_dir}'"
+fi
+
+cases=$((cases + 1))
+# m9b (#9441): the same mutation scoped to _affected_add_declared_edge's body
+# (the extraction's FIRST function) — the twin's -d normalisation is just as
+# load-bearing: without it a LIVE slash-less declared dir mints ^dir, an exact
+# line that selects nothing.
+_mut_src=$(python3 -c '
+import sys
+s = sys.stdin.read()
+old = "if _affected_probe d \"$_p\"; then _p=\"${_p%/}/\"; fi"
+head, marker, tail = s.partition("_affected_add_edge() {")
+assert marker and head.count(old) == 1, (bool(marker), head.count(old))
+sys.stdout.write(head.replace(old, ":", 1) + marker + tail)
+' <<<"$_edge_src") || _mut_src=""
+_m9b_dir=$(_decl_edge_run "$_mut_src" scripts/lib)
+if [[ -n "$_mut_src" && "$_mut_src" != "$_edge_src" && "$_m9b_dir" == "^scripts/lib" ]]; then
+  pass "m9b: dropping the twin's directory normalisation mints ^scripts/lib (no slash), which t11b rejects"
+else
+  fail "m9b: landed=$([[ "$_mut_src" != "$_edge_src" ]] && echo yes || echo no) dir='${_m9b_dir}'"
+fi
+
+# t17 / m10 (#9441, D12 reversal): a diff that DELETES a declared subject still
+#     selects the suite guarding it. The sandbox lib injects
+#     `zzz-deleted-subject/` — a path that does not exist in the real tree the
+#     probes run against — into guard-vacuity-floor's declared array; the diff
+#     names one file beneath it. guard-vacuity-floor passes _suite_affected on
+#     its own (signal 4's corpus-scan backstop), so the outcome reads the edge
+#     set alone: ^zzz-deleted-subject/ prefix-matches the deleted file's diff
+#     line. m10 re-points the declared re-add at the filtered mint, restoring
+#     the drop — t17's fixture must then decline.
+_del_lib="$TESTROOT/afflib-del/test-affected-paths.sh"
+mkdir -p "$(dirname "$_del_lib")"
+python3 - "$AFF_LIB" > "$_del_lib" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+anchor = 'AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(\n'
+assert s.count(anchor) == 1, s.count(anchor)
+i = s.index(anchor) + len(anchor)
+sys.stdout.write(s[:i] + '  "zzz-deleted-subject/"\n' + s[i:])
+PY
+cases=$((cases + 1))
+AFF_LIB="$_del_lib" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=zzz-deleted-subject/qzx9.sh' \
+  -- --affected
+if [[ "$ARM_RC" == "0" ]] \
+  && ran_exact 'scripts/guard-vacuity-floor' \
+  && ran_exact 'scripts/lint-dual-lockfile' \
+  && ! ran_exact 'scripts/lint-orphan-test-suites' \
+  && ! ran_exact 'test/x-community'; then
+  pass "t17: a deleted declared subject still selects its suite (guard-vacuity-floor on zzz-deleted-subject/)"
+else
+  fail "t17: rc=$ARM_RC ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='      for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_declared_edge "$_e"; done' \
+SANDBOX_MUT_NEW='      for _e in ${_decl[@]+"${_decl[@]}"}; do _affected_add_edge "$_e"; done' \
+AFF_LIB="$_del_lib" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=zzz-deleted-subject/qzx9.sh' \
+  -- --affected
+if [[ "$ARM_RC" != "98" ]] \
+  && ran_exact 'scripts/lint-dual-lockfile' \
+  && ! ran_exact 'scripts/guard-vacuity-floor'; then
+  pass "m10: restoring the -e-filtered mint drops the deleted subject's edge (t17 detects it)"
+else
+  fail "m10: rc=$ARM_RC ran=$(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
 
 # t16: the mint arm's `declare -F` guard fails WIDE when the glob lib is absent —
@@ -4007,7 +4102,7 @@ fi
 # The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
 # dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
 # legitimately — recompute the literal rather than misdiagnosing truncation.
-MIN_CASES=239
+MIN_CASES=243
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
