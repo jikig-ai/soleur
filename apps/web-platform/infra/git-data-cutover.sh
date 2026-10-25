@@ -171,8 +171,10 @@ trap cleanup EXIT
 # ============================================================================
 # MODE selects one host-side verb; the flag write, the fleet redeploy and the flag
 # read-back are WORKFLOW steps (this script reads no secret store — the contract stands).
-#   proof     (default, DRY_RUN=1): the read-only probe chain above, ending (#8211 PR-E) with the container probe: from INSIDE the
-#             app container, the worktree root is writable by uid 1001 and the git-data transport answers (git-data-container-probe.sh).
+#   proof     (default, DRY_RUN=1): the read-only probe chain above, ending (#8211 PR-E) WHEN CONTAINER_PROBE=1 (the flip's proof step only)
+#             with the container probe: from INSIDE the app container, the worktree root is writable by uid 1001 and the git-data
+#             transport answers (git-data-container-probe.sh). It covers web-1 only (the roster; web-2 has no SSH ingress) and reads the
+#             container running now, before the flip's own redeploy: web-2's egress, env drift and image version are not covered.
 #   freeze    assert git-data-gc.service inactive -> stop git-data-gc.timer -> write
 #             $OLD_ROOT/.cutover-freeze with `writer=<lineage> at=<epoch>` provenance ->
 #             purge legacy .<id>.init.lock residue inside the freeze window.
@@ -258,7 +260,6 @@ web_exec() {
   [[ "$tmo" =~ ^[1-9][0-9]{0,2}$ ]] || return 95
   if [ -z "$CAPTURE_TMP" ]; then CAPTURE_TMP="$(mktemp -d)" || return 95; fi
   : > "$CAPTURE_TMP/capture.err" || return 95
-  : > "$CAPTURE_TMP/capture.out" || return 95
   timeout "$tmo" "${inv[@]}" -o BatchMode=yes -o ConnectTimeout=20 "$h" "$cmd" \
     <"$sin" >"$CAPTURE_TMP/capture.out" 2>"$CAPTURE_TMP/capture.err" || rc=$?
   return "$rc"
@@ -757,10 +758,19 @@ refuse_if_fence_not_intact() {
 # Any other rc (docker exec itself failing: no such container, a stopped one; ssh's 255; the bound's 124) is
 # probe_failed rc=<n>. rc 0 counts only with the body's exact one-line answer: an exit that ran nothing is not a pass.
 CONTAINER_PROBE_ANSWER='container_probe ok worktree_root=writable transport=answered'
+# The app container's name (ci-deploy.sh starts it under this name). A named constant on ONE exact line: the A12 census in
+# git-data-luks.test.sh (the retired cutover body must not come back) exempts exactly this assignment and nothing else.
+CONTAINER_PROBE_APP_NAME="soleur-web-platform"
+# SCOPE (read before relying on it): the probe runs ONLY when the workflow sets CONTAINER_PROBE=1, which it does on the flip's proof
+# step and nowhere else. The proof that ends a rollback (flag off, egress path intentionally unused, the container possibly
+# mid-recreate) must stay able to read `clear`. It covers WEB_HOSTS, which is web-1 ONLY (web-2 has no SSH ingress): web-2's container
+# egress, env drift and image version are NOT covered. And it reads the container running NOW, before the flip's own redeploy.
 refuse_if_container_unready() {
-  # The app container's name, spelled in two pieces so this file carries no literal of the retired cutover body's container names
-  # (the A12 census in git-data-luks.test.sh greps for them): ci-deploy.sh starts the app container under this name.
-  local ctr=soleur-"web-platform" h rc body here qr cmd
+  local ctr="$CONTAINER_PROBE_APP_NAME" h rc body here qr cmd
+  if [ "${CONTAINER_PROBE:-}" != 1 ]; then
+    log "container probe: skipped (CONTAINER_PROBE is not 1: only the flip's proof step runs it; a proof after a rollback must not read the container)"
+    return 0
+  fi
   step "container probe: the worktree root is writable by uid 1001 and git-data answers, both from inside the app container"
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || _store_refuse container-probe probe_failed "" arg_body
   body="$here/git-data-container-probe.sh"

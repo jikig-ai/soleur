@@ -393,7 +393,8 @@ ctx() { printf 'rc=%s | out: %s | tl: %s' "$RC" "$(tail -c 600 "$OUT" | tr '\n' 
 
 WEB_PROBE='^ssh -F /dev/null -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/fixture/web-1\.known_hosts -o HostKeyAlias=web-1 -o HostKeyAlgorithms=ecdsa-sha2-nistp256 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20'
 JUMP_PROBE="$WEB_PROBE -W 10\\.0\\.1\\.20:22 10\\.0\\.1\\.10\$"
-KEYED=(WEB_HOST_SSH="$WEB_INV" GIT_DATA_SSH="$GD_INV")
+# CONTAINER_PROBE=1 is what the workflow sets on the flip's proof step only (the CPA rows run without it).
+KEYED=(WEB_HOST_SSH="$WEB_INV" GIT_DATA_SSH="$GD_INV" CONTAINER_PROBE=1)
 
 # mutate <name> <file> <expected-diff-lines> <sed -E program> — copies <file> to $T/mut/<name>,
 # applies the edit, and requires it to have landed on exactly the expected number of diff lines
@@ -1955,8 +1956,8 @@ check("AC9: key fetch binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_GIT_DA
 cf = step("ssh_config")
 check("WF-sshcfg: the ssh_config writer has no env: and is gated to host-touching modes", bool(cf) and "env" not in cf and "!= 'redeploy'" in str(cf.get("if")), cf.get("if"))
 r = step("host_proof")
-check("WF6: the host-side proof step binds {WEB_HOSTS, GIT_DATA_SSH, MODE=proof, CUTOVER_LINEAGE=cutover-<run_id>}",
-      r.get("env") == {"WEB_HOSTS": "${{ env.WEB_HOST_PRIVATE_IP }}", "GIT_DATA_SSH": "ssh -F ${{ runner.temp }}/gd-ssh-config", "MODE": "proof", "CUTOVER_LINEAGE": "cutover-${{ github.run_id }}"}, r.get("env"))
+check("WF6: the host-side proof step binds {WEB_HOSTS, GIT_DATA_SSH, MODE=proof, CUTOVER_LINEAGE=cutover-<run_id>, CONTAINER_PROBE=1 for the flip only}",
+      r.get("env") == {"WEB_HOSTS": "${{ env.WEB_HOST_PRIVATE_IP }}", "GIT_DATA_SSH": "ssh -F ${{ runner.temp }}/gd-ssh-config", "MODE": "proof", "CUTOVER_LINEAGE": "cutover-${{ github.run_id }}", "CONTAINER_PROBE": "${{ steps.confirm.outputs.mode == 'flip' && '1' || '' }}"}, r.get("env"))
 check("WF10: the proof step runs the script, mode-gated to proof|flip — unfreeze is EXCLUDED (the proof refuses a held sentinel, which is unfreeze's only reason to exist)",
       str(r.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh"
       and "proof" in str(r.get("if")) and "'unfreeze'" not in str(r.get("if")), (r.get("run"), r.get("if")))
@@ -2865,6 +2866,36 @@ if [ "$RC" = 0 ] && [ "$(grep -c 'docker exec' "$TLF")" = 2 ] && grep -qE '^ssh 
   pass "CP5: a two-host roster runs the container probe on each host (the loop is the roster, not web-1 alone)"
 else fail "CP5: the container probe did not cover the roster" "$(ctx)"; fi
 
+# CPA — scope (#8211 PR-E review): the probe runs only when the workflow sets CONTAINER_PROBE=1, on the flip's proof step alone. The proof
+# that reads a clear after a rollback redeploy (flag off, container possibly mid-recreate, egress intentionally unused) must not read the container.
+case_cpa_skip() { # a FAILING container shim must not refuse a proof that did not ask for the probe
+  run_case cpa-skip "${KEYED[@]}" CONTAINER_PROBE= SHIM_CONTAINER=r24
+  [ "$RC" = 0 ] && ! grep -q 'docker exec' "$TLF" && ! grep -q 'probe=container-probe' "$OUT" \
+    && grep -qF '[git-data-cutover] container probe: skipped (CONTAINER_PROBE is not 1' "$OUT" \
+    && grep -qxF '::notice title=git-data-cutover store::verdict=clear' "$OUT"
+}
+if case_cpa_skip; then pass "CPA1: mode=proof without CONTAINER_PROBE=1 -> the failing container shim is never dialed, one line says it was skipped and why, the proof clears (exit 0)"
+else fail "CPA1: the container probe ran (or refused) on a proof that did not ask for it" "$(ctx)"; fi
+run_case cpa-other "${KEYED[@]}" CONTAINER_PROBE=true SHIM_CONTAINER=r24
+if [ "$RC" = 0 ] && ! grep -q 'docker exec' "$TLF"; then pass "CPA2: only the exact value 1 arms the probe (CONTAINER_PROBE=true is a skip, not a run)"
+else fail "CPA2: a value other than 1 armed the probe" "$(ctx)"; fi
+cat > "$T/cpa-wf.py" <<'PY'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+steps = [st for job in wf["jobs"].values() for st in job.get("steps", []) if st.get("name", "").startswith("Host-side proof")]
+if len(steps) != 1:
+    print("steps=%d" % len(steps)); sys.exit(1)
+env = steps[0].get("env", {})
+v = env.get("CONTAINER_PROBE")
+ok = v == "${{ steps.confirm.outputs.mode == 'flip' && '1' || '' }}" and env.get("MODE") == "proof"
+others = [st["name"] for job in wf["jobs"].values() for st in job.get("steps", []) if "CONTAINER_PROBE" in (st.get("env") or {}) and st is not steps[0]]
+print("value=%r others=%r" % (v, others))
+sys.exit(0 if ok and not others else 1)
+PY
+case_cpa_wf() { python3 "$T/cpa-wf.py" "${1:-$WF}" > "$T/cpa-wf.out" 2>&1; }
+if case_cpa_wf; then pass "CPA3: the workflow binds CONTAINER_PROBE on the Host-side proof step ONLY, to the expression that is 1 exactly for mode=flip"
+else fail "CPA3: the workflow's CONTAINER_PROBE binding is wrong or bound elsewhere" "$(cat "$T/cpa-wf.out")"; fi
+
 # (2) the REAL body, executed. cpx <name> <SHIM-style VAR=value ...>: a good root, key, pin and host unless overridden (later wins).
 cpx() {
   local name="$1"; shift
@@ -2924,6 +2955,13 @@ cp_mutdir() { # <name> <script-file> <body-file> — prints the script path of a
   rm -rf "$d"; mkdir -p "$d" && cp "$2" "$d/git-data-cutover.sh" && cp "$3" "$d/git-data-container-probe.sh" || { printf 'FAIL SETUP: cp mutdir %s\n' "$1" >&2; exit 1; }
   printf '%s/git-data-cutover.sh' "$d"
 }
+# CPA mutants: the skip neutered (the probe then runs on a proof that did not ask for it) and the workflow arming it for every mode.
+if mutate cpa-skip-neutered "$SCRIPT" 2 's#^  if \[ "\$\{CONTAINER_PROBE:-\}" != 1 \]; then$#  if [ "${CONTAINER_PROBE:-}" = never ]; then#'; then
+  CASE_SCRIPT="$(cp_mutdir cpa-skip-neutered "$MUTANT" "$CPBODY")" mutant_red cpa-skip-neutered case_cpa_skip
+fi
+if mutate cpa-wf-always "$WF" 2 "s#CONTAINER_PROBE: \\$\\{\\{ steps\\.confirm\\.outputs\\.mode == 'flip' && '1' \\|\\| '' \\}\\}#CONTAINER_PROBE: '1'#"; then
+  mutant_red cpa-wf-always case_cpa_wf "$MUTANT"
+fi
 # the host: the call dropped from the proof chain
 if mutate cp-call-dropped "$SCRIPT" 2 's#^      refuse_if_container_unready$#      :#'; then
   CASE_SCRIPT="$(cp_mutdir call-dropped "$MUTANT" "$CPBODY")" mutant_red cp-call-dropped case_cp_nowrite
@@ -3730,7 +3768,7 @@ drive2() { # label [runner-temp]
   local wb gb
   wb=$(accepted 10.0.1.10); gb=$(accepted 10.0.1.20)
   : > /out/remote.log
-  env -i PATH=/usr/sbin:/usr/bin:/bin HOME=/root WEB_HOSTS=10.0.1.10 \
+  env -i PATH=/usr/sbin:/usr/bin:/bin HOME=/root WEB_HOSTS=10.0.1.10 CONTAINER_PROBE=1 \
     WEB_HOST_SSH="$(pinned_web /tmp/ci /tmp/web.kh)" \
     GIT_DATA_SSH="ssh -F ${2:-/rt}/gd-ssh-config" bash /work/git-data-cutover.sh > "/out/$1.out" 2>&1
   row "$1_rc" "$?"
@@ -3892,7 +3930,8 @@ fi
 # notify body's one inputs.volume_id binding) = 5, so exactly 148; the G5 census row and the N-body / N-exprs verdicts were restated in place.
 # #10297: plus wf-rbclear-no-flag-mode and wf-rbclear-value-inverted (the flag_write binding the precheck's stamp clear depends on) = 2, so exactly 150; review round: plus wf-rbclear-no-nothing-to-rollback (the flag_write `if:` keeps its nothing_to_rollback clause) = 151.
 # #8211 PR-E: plus the container probe's 5 host rows (cp-call-dropped, cp-answer-unchecked, cp-blackhole-unmapped, cp-worktree-unmapped, cp-user-dropped) and 9 body rows (cpb-*) = 14, so exactly 165.
-MUTANT_FLOOR=165
+# Review round (#11072) group A: plus cpa-skip-neutered and cpa-wf-always = 2, so exactly 167.
+MUTANT_FLOOR=167
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3922,7 +3961,8 @@ fi
 # Probe runuser path (#8211): one new standalone row (MZ-P14): 646 -> 647.
 # Probe cwd (flip run 39844703839): one new standalone row (MZ-P15): 647 -> 648.
 # #8211 PR-E (container probe): CP1, CP2 x13, CP3-CP5 (3), CPX1-CPX3 (3), CPX4 x15, CPX5 = 36 standalone rows, plus 14 mutants x 2 (28) = 64: 648 -> 712. The AC2 and R5 rows were restated in place (no new row).
-FLOOR=712
+# Review round (#11072) group A: CPA1-CPA3 (3) + 2 mutants x 2 (4) = 7 more: 712 -> 719 (WF6 restated in place).
+FLOOR=719
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
