@@ -509,8 +509,8 @@ Each issue body carries `Ref #9927` or `Ref #10112`, never a closing keyword.
 
 #### Functional Requirements
 
-- [ ] PR-1: `git grep -n 'PLAIN_ID\|inngest-redis-staging\|/mnt/data-luks\|INNGEST_LUKS_PLAIN_VOLUME_ID' -- 'apps/web-platform/infra/inngest-*.sh' 'apps/web-platform/infra/*.service' 'apps/web-platform/infra/*.timer'` returns nothing; the three cutover files and the cutover test are deleted; the refresh set lists four members and every assertion and message that said five is updated.
-- [ ] PR-1: the flip-guard comment states the 90-day retention with its date basis; `bash apps/web-platform/infra/inngest-server-flip-guard.test.sh` passes.
+- [x] PR-1: `git grep -n 'PLAIN_ID\|inngest-redis-staging\|/mnt/data-luks\|INNGEST_LUKS_PLAIN_VOLUME_ID' -- 'apps/web-platform/infra/inngest-*.sh' 'apps/web-platform/infra/*.service' 'apps/web-platform/infra/*.timer'` returns nothing; the three cutover files and the cutover test are deleted; the refresh set lists four members and every assertion and message that said five is updated.
+- [x] PR-1 (2026-10-25, verified by command): the flip-guard comment states the retention with its date basis (source soleur-inngest-vector-prd, measured 2026-09-04); `bash apps/web-platform/infra/inngest-server-flip-guard.test.sh` passes.
 - [ ] PR-2: `inngest-luks-keeper.test.sh` passes with stubs and, where root and loop devices exist, against a loopback LUKS device; no test touches a production device or any credentialed service.
 - [ ] PR-2: the keeper rows, alert, vector tag and shard registrations exist; `scripts/lint-encryption-posture.py` passes.
 - [ ] PR-3: `terraform fmt -check` and an offline `terraform validate` pass; the new test proves the bucket is count-gated with default `false`, no `doppler_secret`/`random_*` exists in the file, the bucket name is distinct from the tfstate and workspaces header buckets, and the string "EU residency" is absent.
@@ -528,7 +528,7 @@ Each issue body carries `Ref #9927` or `Ref #10112`, never a closing keyword.
 
 - [ ] Guard 1 to 3 mutation rows each demonstrated RED once at work time (recorded in the PR body).
 - [ ] Affected tests only from work; the full battery is a ship-phase concern, not run by spawned agents.
-- [ ] `plugins/soleur/test/terraform-target-parity.test.ts`, `workflow-file-size.test.ts` and the C4 tests pass.
+- [x] `plugins/soleur/test/terraform-target-parity.test.ts`, `workflow-file-size.test.ts` and the C4 tests pass.
 
 ### Post-merge (automated, no operator checklist)
 
