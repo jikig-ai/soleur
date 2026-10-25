@@ -30,3 +30,17 @@ with the evidence and the instruction not to ask the operator. `/ship` renders t
 | F9 — alert lifecycle: the rule also fires on user-caused revoked BYOK tokens | technical | Ruled by CTO agent, 2026-10-25: frame the rule as a temporary diagnostic with a constant message (one Sentry issue; the 40-minute re-notify bounds email) and file a removal-trigger issue in the ship phase. |
 
 Constraint carried from the brief, not a decision: no feature-flag state is changed by this plan; `agent-sandbox-unix-deny` and every other flag are read-only inputs to the diagnostic.
+
+## Addendum, 2026-10-25 (review of PR #10976, panel SHA 30ede92827)
+
+Appended, not edited in place. These are review dispositions, not new rulings; the rulings above stand.
+
+- **F5 (discoverability probe).** F5 said "a one-line rg probe"; the plan said `jq`; neither was in the diff. The probe that
+  exists is the contract test's token-count rows (the op token, and the quoted feature token), which now walk `server/`,
+  `lib/` and `app/` in `.ts/.tsx/.mts/.js/.jsx/.mjs/.cjs`. Cloning the precedent's bash script and mutation suite stays declined.
+- **F14 (suppressed counter).** `agentAuthSuppressedCount` has no production reader (three seats). F14's "counted, never
+  warned" is kept as ruled; the README's responder step 3 now says a missing event can mean cap suppression. Whether to read
+  the counter (for example into `/health`) is left to the root-cause work in #11086. No ruling is contradicted.
+- **Probe-construction guard.** Simplicity proposed deleting the guard around `createAgentAuthFailureProbe` in both runners;
+  code-quality asked that the fallback not be silent. Kept, with a constant `logger.warn` (`warnAgentAuthProbeUnavailable`),
+  because a throw there would otherwise break a dispatch or be misreported as a sandbox failure by the cc factory's catch.

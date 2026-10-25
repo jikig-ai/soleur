@@ -22,7 +22,7 @@ lane: cross-domain
 ### Key improvements
 
 1. **Closed a P0 forgery path** (security + user-impact): the text arm required nothing the model cannot produce, so a tenant could page the operator and mute the real outage's email. The text arm now needs the CLI-set `<synthetic>` model or `is_api_error_message`; the structured arm stays alone sufficient (CTO F13).
-2. **The tap now matches the measured SDK shape**: the real Query returns an internal single-use Stream from its iterator method; the wrapper delegates to that object and never re-enters its iterator method. The earlier "iterator returns `this`" assumption was wrong.
+2. **The tap now matches the measured SDK shape**: the real Query's iterator method is `return this.sdkMessages` (an AsyncGenerator in the installed 0.3.284, so it reads `this`); the wrapper binds it to the query, delegates to the returned object and does not call that object's own iterator method again (conservative: a generator returns itself). The earlier "iterator returns `this`" assumption was wrong, and so was the first correction (a single-use `Stream` that throws on re-entry: that class is the generator's internal input stream, never exposed). Corrected at review.
 3. **Emit isolation and flood bounds**: `withIsolationScope` with breadcrumbs and user cleared, a process-wide cap, `.catch(noop)` on every fire-and-forget branch (the process exits on `unhandledRejection`) (CTO F14, F15).
 4. **`match_kind` keeps its variants** (text classified before the always-present structured code) and the decode key documents `has_egress` as configured-not-reachable and `cli_key_source` project/user/apiKeyHelper/org as tenant-influenced.
 5. **Tests that can actually go RED**: the pino line is observed through the logger's breadcrumb mirror with a positive control, the real `scrubSentryEvent` and Vector drop-list names are in the mutation set, latch/debounce/cap each get their own row, and the wiring cases assert the context is not `unknown`.
@@ -104,7 +104,7 @@ text is consumed "in `server/cc-dispatcher.ts`"; it is consumed in `server/soleu
 
 ### Evidence about the CLI wording (read-only, local, no credentials)
 
-`strings` over the bundled `claude` binary of SDK 0.3.283 (the installed package; the repo pins 0.3.284) shows:
+`strings` over the bundled `claude` binary of SDK 0.3.283 (read at plan time), re-checked with `grep -a` against the pinned 0.3.284 binary at review (installed and pinned agree on 0.3.284), shows:
 `Not logged in · Please run /login` (separator U+00B7), `API Error: 401 Invalid API key · Please run /login`,
 `OAuth token revoked · Please run /login`, `Session expired. Please run /login to sign in again.` /
 `Your session has expired. Please run /login to sign in again.`, `Not logged in. Run claude auth login to authenticate.`
@@ -188,13 +188,15 @@ apart. The diagnostic's one event is designed to separate them.
    `withIsolationScope` and that the async-context strategy is active.
 5. **Tap** (cc path): `tapAgentAuthFailure(query, probe)` captures `orig = query[Symbol.asyncIterator].bind(query)` ONCE
    and overrides `[Symbol.asyncIterator]` in place (identity preserved; a re-entry never double-wraps or recurses).
-   Measured shape of the real SDK Query (`sdk.mjs`, installed 0.3.283; the repo pins 0.3.284, re-check at work time):
-   the Query class has its own `next`, `return`, `throw` that delegate to an internal Stream `this.sdkMessages`, and its
-   `[Symbol.asyncIterator]()` returns that Stream, whose own `[Symbol.asyncIterator]()` throws `Stream can only be iterated once`.
+   Measured shape of the real SDK Query (`sdk.mjs`, 0.3.284, installed and pinned):
+   the Query class has its own `next`, `return`, `throw` that delegate to `this.sdkMessages` (an AsyncGenerator built by an
+   `async*` method), and its `[Symbol.asyncIterator]()` is `return this.sdkMessages`. A second call returns the same generator;
+   the "can only be iterated once" guard belongs to the generator's internal input stream.
    So `for await` (which calls `query[Symbol.asyncIterator]()` once and then the returned object's `next`/`return`)
    never touches `Query.next`. The wrapper therefore returns a thin object whose `next`/`return`/`throw` delegate to the
-   object `orig()` returned, and it must NEVER call that object's `[Symbol.asyncIterator]`. The tap test fixture models this exact
-   shape (a Query-like with its own `next`, and an iterator method that returns a separate single-use stream object).
+   object `orig()` returned, and it does not call that object's `[Symbol.asyncIterator]` (not required for a generator, kept conservative). The tap test
+   has two fixtures: a counter-instrumented stream whose iterator method READS `this` (so an unbound call throws), and one built from a
+   real `async function*` (a `return()` queues behind a pending `next()`).
    Its `next()` returns the ORIGINAL promise unchanged and observes on a side branch (`p.then(r => safeObserve(r.value), noop)`),
    so it adds no `await` to the consumer's path and cannot reorder against `state.closed` / `close()` in
    `consumeStream`; `return`/`throw`, `.close()` and `.interrupt()` are untouched. A frozen, non-writable or
@@ -296,8 +298,8 @@ Write all of the following against the not-yet-existing modules; each must fail 
    different tuple re-emits, the process-wide cap, authMode normalisation and 1.5 s timeout via an injected clock/timer,
    resolver throw -> `unknown`, and a test that no resolver call happens without a claimed match).
 2b. `test/agent-auth-failure-tap.test.ts` - tap semantics against a fixture that models the REAL Query shape (own
-   `next`/`return`/`throw`; an iterator method returning a separate single-use stream object that throws on a second
-   `[Symbol.asyncIterator]` call): identity, order, `break` runs the underlying `finally`, underlying throw propagates,
+   `next`/`return`/`throw`; an iterator method that reads `this` and returns the generator-like stream object, plus a fixture from a real
+   `async function*`): identity, order, `break` runs the underlying `finally`, underlying throw propagates,
    observer throw swallowed, non-writable and non-iterable objects untouched, no double-wrap on re-entry.
 3. `test/agent-auth-failure-sentry-path.test.ts` - REAL path: real logger, real `reportSilentFallback`, real probe, real
    `buildAgentQueryOptions`; only `@sentry/nextjs` is replaced by spies (precedent:
@@ -366,7 +368,7 @@ the accepted alternative if the work phase prefers one fewer copy of the sweep b
   verbatim except the name, `frequency_minutes`, the `feature`/`op` values and the comment block (so `monitor_ids` and
   `lifecycle { ignore_changes = [environment] }` carry over), with a
   comment block naming the emit site, the `null`-first-argument reason (#8629), the constant message / one-issue
-  grouping, the temporary-diagnostic status, and the updated "taken" list (5, 10-40, 60-63, 120, 240, 1440-1442).
+  grouping, the temporary-diagnostic status, and the updated "taken" list (the .tf now points at `grep -h frequency_minutes *.tf` instead of restating it).
 - `infra/sentry/alert-reference.json`: new `agent-auth-failure` entry, key-sorted (`jq -S`), `detectorIds` identical to the
   masked-dir entry, `frequency: 40`. Derive it LOCALLY in the work phase, because the
   PR is red until the file matches the plan projection: the new entry has exactly the shape of the
