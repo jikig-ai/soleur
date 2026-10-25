@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **47 `sentry_alert` rules** (47 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455. 45 are
-  fully Terraform-owned (44 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **48 `sentry_alert` rules** (48 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548. 46 are
+  fully Terraform-owned (45 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
@@ -48,6 +48,37 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   it is routed; mute cannot be set through the provider.
 - **4 uptime monitors** — vendor-hosted HTTP checks, auto-applied on the same
   push-to-main path.
+
+### Diagnostic rule: `agent-auth-failure` (temporary, #10455 / #10548)
+
+`sentry_alert.agent_auth_failure` (`issue-alerts.tf`, `frequency_minutes = 40`) emails `issue_owners` →
+`ActiveMembers` when the server observes the Claude CLI's auth-failure reply (`Not logged in · Please run /login`)
+on either runner. The emit is `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`
+in `server/agent-auth-failure.ts`; the literal `null` first argument keeps it off the pino-mirror path (#8629).
+It carries ten closed-enum tags and nothing else (no key material, env value, message body, user or workspace id, path).
+Email only: nobody is paged until the ADR-260 Slack path is verified.
+
+**Decode the event** (the same table sits above the rule in `issue-alerts.tf`):
+
+| Tags | Reading |
+|---|---|
+| `auth_env_present=false` | The built agent env had no usable credential variable: look at the lease value or scheme, not the CLI. |
+| `auth_env_present=true` and `cli_key_source=none` | The variable was in the options but the CLI process resolved no credential: a spawn or env hand-off problem (read `outer_wrap`, `sandbox`, `seccomp_artifact` next). |
+| `auth_env_present=true` and `cli_key_source` is `ANTHROPIC_API_KEY` or `oauth` | The CLI saw the credential and the API refused it: invalid or revoked key, or an account state. UNVERIFIED locally: only `none` has a captured fixture. |
+| `cli_key_source=unknown` | The `init` message was not seen or carried a value outside the closed list: no conclusion from this field. |
+| `cli_key_source` of `project`, `user`, `apiKeyHelper` or `org` | Tenant-influenced (a workspace setting selects the source): one tenant can legitimately trigger this event; the process-wide cap bounds the volume. |
+| `auth_mode=unbound` / `unknown` | No engine-run row for the conversation / the lookup failed or timed out: no conclusion from this field. |
+| `seccomp_artifact`, `sandbox`, `has_egress` | Posture dimensions for comparing runs where the failure appears and where it does not (for example the `agent-sandbox-unix-deny` flag OFF vs ON). `has_egress` is a build-time flag, not a reachability result. |
+| `match_kind` | `not_logged_in` (the CLI saw no credential); `invalid_api_key`, `oauth_token_revoked`, `session_expired` (a credential was presented and refused or lapsed); `structured` (the SDK's own `authentication_failed` code with no recognised text). |
+
+**Second sink** (if Sentry capture is the broken part): the same call writes a pino error line carrying the same keys, shipped
+to Better Stack. Search the web source for `feature=agent-auth` (`scripts/betterstack-query.sh --since 1h --grep agent-auth`).
+
+**Lifecycle.** This is a temporary diagnostic. Within 48 hours of the first recorded real event (its tag tuple is recorded on
+#10455) a PR drops the rule's email action and keeps the Sentry issue and the pino line. The rule, its
+`alert-reference.json` entry, these README lines, both guard tests, the wiring pins, the widened source-pin regex and the
+`server/agent-auth-failure.ts` header checklist are removed when the root-cause fix merges or 30 days after the first
+event, whichever comes first.
 
 ADR: [ADR-031 — Sentry alert and cron monitor configuration as IaC](../../../../knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md)
 

@@ -1749,6 +1749,82 @@ resource "sentry_alert" "masked_dir_precreate_failed" {
   }
 }
 
+# server/agent-auth-failure.ts observes the SDK stream of BOTH runners (legacy agent-runner.ts, cc-dispatcher.ts)
+# and emits ONE event when the Claude CLI replies "Not logged in · Please run /login" (or its structured
+# `authentication_failed` code): `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`.
+# Before this rule that reply reached the user with nothing in Sentry or Better Stack (#10455, #10548); the cause is
+# not known, so the event carries ten closed-enum tags that separate the competing hypotheses in ONE event. The
+# literal `null` first argument keeps it on the MESSAGE path: an Error would be mirrored by the pino logger as
+# feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never match.
+# Contract: test/sentry-agent-auth-failure-alert-op-contract.test.ts (emit site <-> this block <-> alert-reference.json)
+# and test/agent-auth-failure-sentry-path.test.ts (real logger, real helper, secret canary).
+#
+# TEMPORARY DIAGNOSTIC. It exists to find the cause of the outage, not to page on a steady state. Lifecycle: the
+# email action is dropped within 48 hours of the first recorded real event (tag tuple recorded on #10455) and the
+# rule is removed when the root-cause fix merges or 30 days after the first event, whichever comes first. The
+# removal checklist is in the header of server/agent-auth-failure.ts.
+#
+# GROUPING: the message is constant, so every event shares ONE Sentry issue and the 40-minute re-notify bounds the
+# email volume; the per-user 5-minute debounce and the process-wide cap (10 events per 5 minutes) bound the events.
+# Email only (issue owners, ActiveMembers fallthrough: the project has no ownership rule, so issue_owners alone
+# resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
+# are carried so a later diagnostic op under feature=agent-auth cannot notify by accident.
+#
+# DECODE KEY (read the tags of the event; this table is also in README.md):
+#   auth_env_present=false                         the built agent env had no usable credential variable: look at the
+#                                                  lease value or scheme, not at the CLI.
+#   auth_env_present=true, cli_key_source=none     the variable was in the options but the CLI process resolved no
+#                                                  credential: a spawn or env hand-off problem (read outer_wrap,
+#                                                  sandbox, seccomp_artifact next).
+#   cli_key_source=ANTHROPIC_API_KEY or oauth      the CLI saw a credential and the API refused it: invalid or revoked
+#                                                  key, or an account state. UNVERIFIED locally: only `none` has a
+#                                                  captured fixture.
+#   cli_key_source=unknown                         the init message was not seen or carried a value outside the closed
+#                                                  list: no conclusion from this field.
+#   cli_key_source=project|user|apiKeyHelper|org   tenant-influenced (a workspace setting selects the source): one
+#                                                  tenant can legitimately trigger this event.
+#   auth_mode=unbound | unknown                    no engine-run row for the conversation / the lookup failed or timed
+#                                                  out: no conclusion from this field.
+#   seccomp_artifact, sandbox, has_egress          posture dimensions for comparing runs where the failure appears and
+#                                                  where it does not (for example the agent-sandbox-unix-deny flag OFF
+#                                                  vs ON). has_egress is a build-time flag, not a reachability result.
+#   match_kind                                     not_logged_in = the CLI saw no credential; invalid_api_key,
+#                                                  oauth_token_revoked, session_expired = a credential was presented
+#                                                  and refused or lapsed; structured = the SDK's own
+#                                                  `authentication_failed` code with no recognised text.
+# Distinct frequency_minutes = 40 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-39,60-63,120,240,
+# 1440-1442; 39 is masked_dir_precreate_failed); dedup keys on action shape + action_match + filter_match +
+# frequency, not conditions. The value is provisional until the last merge of origin/main: re-check it then.
+# Events carry only ten closed-enum values: no key material, env value, message body, user or workspace id, or path.
+resource "sentry_alert" "agent_auth_failure" {
+  organization      = var.sentry_org
+  name              = "agent-auth-failure"
+  enabled           = true
+  frequency_minutes = 40
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-auth" } },
+        { tagged_event = { key = "op", match = "eq", value = "cli-auth-failure" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-cloud-task-heartbeat.ts: the stale-bot-PR
 # watchdog (#5138) emits `feature=cron-cloud-task-heartbeat` events for three
 # ops — `stale-bot-pr` (warnSilentFallback, a ci/* PR open >48h: auto-merge
