@@ -17,7 +17,7 @@
 //
 // Exit 0 + "PUSH_ARMED" when all five declare `push = true`; exit 1 +
 // "PUSH_MISSING <resource>" naming the first one that does not (or is absent).
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { codeView, listTfFiles, resourceBlocks, topLevelAttributes } from "../lib/heartbeat-live-reconcile";
@@ -37,8 +37,17 @@ const seen = new Set<string>();
 const missing: string[] = [];
 for (const file of listTfFiles(INFRA_DIR)) {
   const path = join(INFRA_DIR, file);
-  if (!lstatSync(path).isFile()) continue;
-  const code = codeView(readFileSync(path, "utf8"));
+  // Check-then-read on ONE fd (open + fstat on the descriptor): a path-level
+  // lstat→readFileSync pair is the js/file-system-race TOCTOU shape. O_NONBLOCK
+  // keeps the open from hanging on a *.tf FIFO before fstat can refuse it.
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  let code: string;
+  try {
+    if (!fstatSync(fd).isFile()) continue;
+    code = codeView(readFileSync(fd, "utf8"));
+  } finally {
+    closeSync(fd);
+  }
   for (const [type, name] of TARGETS) {
     if (seen.has(name)) continue;
     const block = resourceBlocks(code, type).find((b) => b.resourceName === name);
