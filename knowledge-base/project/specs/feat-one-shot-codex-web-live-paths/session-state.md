@@ -2856,3 +2856,32 @@
   branch pins 1.4.2; exact-head CI uses the pinned version. All source pairing,
   qualification, legal, recovery, authenticated QA, data and final ship holds
   remain; no shared-data or production action occurred.
+
+### Worktree and evidence recovery — 2026-10-25
+
+- Recreated the missing worktree at `a4cd9861eefedef458727c28cef2e0f57c6db7fb`;
+  approved GitHub metadata reads confirmed the same remote head, draft state
+  and disabled auto-merge. The later operator instruction `approved to all`
+  renews non-production investigation/preparation without per-read questions;
+  explicit draft, provider/legal and destructive-production gates remain.
+- Collected fresh, attributed dev schema/ledger/session metadata with verified
+  target separation, provider CA and hostname checks, explicit read-only
+  transactions, zero application rows and zero database mutations. The latest
+  capture found an advisory holder correlated with a main tenant-integration
+  run; this supplies no writer clearance. Missing historical capture origin
+  remains unverified. The dated recovery record owns the private evidence
+  digests and summarized comparison.
+- Independent review found inherited credential-tracing and blob-hash fallback
+  defects, tracked before fixes in issue 11096. Synthetic runner regressions
+  ran RED before minimal GREEN changes. Database-URL linter coverage surfaced
+  six additional scripts; early tracing guards and nonvacuous regressions were
+  added without baseline expansion. Current full validation, final pin refresh,
+  source resync, commit/push and exact-head CI remain pending at this entry.
+- CTO ruled a separately reviewed filename-only reconciliation for ten proven
+  byte-identical legacy bodies, after resync and strict mapping/ledger/schema
+  evidence. No replay, downs, hash/timestamp rewriting or false application of
+  notice issuance is allowed. The live legacy acknowledgment overload requires
+  coordinated containment before qualification. All live reconciliation,
+  runtime/profile, authenticated QA, legal, full review/preflight and shipping
+  gates remain open. See `recovery-evidence-2026-10-25.md` and the dated CTO
+  ruling in `decision-challenges.md`.

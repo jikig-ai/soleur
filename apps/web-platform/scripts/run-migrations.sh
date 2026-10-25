@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# Refuse tracing before expanding any credential-bearing environment value.
+case "$-" in
+  *x*)
+    set +x
+    printf '[FATAL] refusing to run migrations under xtrace: database credentials must not be logged\n' >&2
+    exit 78 ;;
+esac
 set -euo pipefail
 
 # Automated migration runner for Supabase/PostgreSQL.
@@ -459,12 +466,11 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # _schema_migrations). Same hash space as `git ls-tree origin/main`'s third
   # column. Mig 054 is itself the first row to carry content_sha; pre-054 rows
   # stay NULL by design (no apply-time history to retroactively populate).
-  content_sha=$(git hash-object "$migration_file" 2>/dev/null || echo "")
-  if [[ -z "$content_sha" ]]; then
-    # Fall back to sha1sum on systems without git available (no git is a
-    # broken state for this runner, but the script should still complete the
-    # apply — drift probe just won't have content_sha to compare).
-    content_sha=$(sha1sum "$migration_file" 2>/dev/null | awk '{print $1}' || echo "")
+  # A raw file digest is not a Git blob identity. Refuse failed or malformed
+  # hashing before applying SQL rather than recording unverifiable lineage.
+  if ! content_sha=$(git hash-object "$migration_file" 2>/dev/null) || [[ ! "$content_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "::error::Could not obtain a valid Git blob hash for $filename; refusing migration"
+    exit 1
   fi
   # Some historical files wrap their whole body in BEGIN/COMMIT. Strip only
   # that exact outer pair; otherwise it would commit before the ledger INSERT.

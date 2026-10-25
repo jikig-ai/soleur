@@ -11,7 +11,9 @@ GUARD = 'apps/web-platform/scripts/sql/codex-auth-mode-pre-migration.sql'
 # Exact canonical bytes, including the narrow literal-SQL ShellCheck comments.
 # Updating this pin requires review of the complete replacement runner; comment
 # anchors, reordered assembly and other changes never establish clearance.
-REVIEWED_RUNNER_SHA256 = '63b2335267a729eb703634c1bae762b053b6ce6cdb3a679bf2952a6d400e9fb5'
+# Independent security/data review of the complete #11096 correction; source
+# admission alone establishes no runtime, writer or database clearance.
+REVIEWED_RUNNER_SHA256 = 'cca2cd3a9b7268a57198ccd10a27e018c42e9ea3e56a26d052f97451ad951aa1'
 # Historical baseline bc0f0d47: known fresh-schema failure, never clearance.
 BLOCKED_BASELINE_RUNNER_SHA256 = '93b55c090ed2827ffe902ecccde5e68c1d9e5a47bc7abe57c70760640bf702b4'
 SCENARIOS = ('00_support.sql', '10_seed.sql', '20_before_replacement.sql',

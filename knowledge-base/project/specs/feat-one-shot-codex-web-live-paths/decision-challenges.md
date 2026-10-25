@@ -142,3 +142,33 @@ nonce, and timeout tests are required before accepting the fix.
 Dissent: this technical amendment does not resolve legal presentation proof or
 authorize shared database access, migration application, provider requests,
 qualification, readiness or merge.
+
+## Forward-only reconciliation and legacy acknowledgment — 2026-10-25
+
+Ruled by CTO agent, 2026-10-25: prepare a dedicated filename-only reconciliation
+for the ten byte-identical legacy migration blobs. Preserve source fixes,
+resync main and resolve ordinal collisions before binding the final mapping.
+Bind old/new filenames, unchanged blob, original timestamp, source SHA and full
+pre/post ledger digests; require exact source tuples and absent destinations;
+retain an immutable receipt. Refuse partial mappings, changed bytes or unrelated
+ledger changes. Do not replay migrations, run paired downs, rewrite hashes or
+timestamps, or mark genuinely unapplied notice issuance as applied.
+
+Live execution remains blocked by absent current writer clearance and unproven
+live-schema equivalence. Release requires fresh verified target evidence,
+independent schema equivalence, isolated transaction rehearsal, agreed/enforced
+writer exclusion, actual mutex acquisition, transactional ledger lock/CAS and
+independent exact-command review. The mutex's fail-open exit contract alone is
+insufficient. Renumbering must move every exact-name runner guard and test.
+Unrelated down-ledger and new-main rows require separate classification.
+
+Ruled by CTO agent, 2026-10-25: the executable legacy two-argument acknowledgment
+overload is a separate containment prerequisite before authenticated
+qualification. Prepare its narrow revocation and verification offline and
+include it in the coordinated recovery sequence. Do not infer misuse from the
+grant or silently mutate shared dev; retain the qualification hold. Legal and
+provider disposition belongs to the CLO.
+
+Dissent: none. The [recovery evidence](recovery-evidence-2026-10-25.md) records
+metadata-only observations; no shared database mutation or qualification is
+established by either ruling.

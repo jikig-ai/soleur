@@ -238,6 +238,120 @@ for c in doppler-get capture gh-auth; do
     || fail "signal class '$c' should bring the file into scope, got rc=$rc"
 done
 
+# Database connection URLs carry passwords even though their names do not end
+# in TOKEN/KEY/SECRET/PASSWORD/PAT. Exercise scope, guard coverage and runtime
+# acquisition separately; public endpoints and similarly named variables stay
+# traceable. These are in-memory synthesized script bodies, never live URLs.
+python3 - "$LINT" <<'PY'
+import importlib.util
+import subprocess
+import sys
+
+spec = importlib.util.spec_from_file_location('trace_lint_database_urls', sys.argv[1])
+lint = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lint)
+
+leaking_guards = 0
+for name in ('DATABASE_URL', 'DATABASE_URL_POOLER'):
+    for expansion in ('$' + name, '${' + name + ':-}'):
+        lines = ['psql "' + expansion + '"\n']
+        assert lint.in_scope(lines), ('database credential expansion outside scope', name, expansion)
+        assert lint.referenced_credentials(lines) == {name}, ('credential coverage omits URL', name)
+        assert lint.check_rule_a('synthetic.sh', lines, None), ('missing refusal accepted', name)
+    acquire = name + '="$(credential_source)"\n'
+    assert lint.in_scope([acquire]), ('database credential acquisition outside scope', name)
+    assert lint.unconditional_reason(acquire, [acquire]), ('acquisition accepted a conditional guard', name)
+    wrong_guard = ['case "$-" in\n', '  *x*)\n',
+                   '    if [ -n "${UNRELATED_TOKEN:+x}" ]; then exit 78; fi\n',
+                   '    ;;\n', 'esac\n', 'psql "$' + name + '"\n']
+    assert lint.check_rule_c('synthetic.sh', wrong_guard, 0), ('wrong credential guard accepted', name)
+    correct_guard = [line.replace('UNRELATED_TOKEN', name) for line in wrong_guard]
+    assert not lint.check_rule_c('synthetic.sh', correct_guard, 0), ('correct inherited URL guard rejected', name)
+    for expansion in ('$' + name, '${' + name + '}', '${' + name + ':-}'):
+        leaking_guard = ['case "$-" in\n', '  *x*)\n',
+                         '    if [ -n "' + expansion + '" ]; then exit 78; fi\n',
+                         '    ;;\n', 'esac\n', 'printf "%s" "$' + name + '"\n']
+        canary = 'SYNTHETIC_REVIEW_DATABASE_CANARY'
+        probe = subprocess.run(['bash', '-x'], input=''.join(leaking_guard),
+                               env={'PATH': '/usr/bin:/bin', name: canary},
+                               capture_output=True, text=True, timeout=5)
+        assert probe.returncode == 78 and canary in probe.stderr, ('leaky fixture did not leak', name, expansion)
+        violations = lint.check_rule_a('synthetic.sh', leaking_guard, 0) + lint.check_rule_c('synthetic.sh', leaking_guard, 0)
+        assert any('EXPANDS the credential' in finding for finding in violations), ('leaking URL guard accepted', name, expansion)
+        leaking_guards += 1
+assert leaking_guards == 6, ('leaking URL guard matrix lost cases', leaking_guards)
+
+for name in ('PUBLIC_API_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'DATABASE_URL_SUFFIX', 'PUBLIC_DATABASE_URL'):
+    assert not lint.in_scope(['printf "%s" "$' + name + '"\n']), ('noncredential URL entered scope', name)
+    assert not lint.in_scope([name + '="$(endpoint_source)"\n']), ('noncredential URL capture entered scope', name)
+assert not lint.in_scope(['# psql "$DATABASE_URL_POOLER"\n']), 'comment alone entered scope'
+PY
+rc=$?
+[ "$rc" = "0" ] && pass "database URLs: both credential names require complete guards; public URLs stay outside scope" \
+  || fail "database URL scope, acquisition or complete-guard coverage failed (rc=$rc)"
+
+# Run the affected database scripts with synthetic credentials and fake tools.
+# The matrix catches both inherited tracing and a guard placed after --help;
+# empty-credential controls preserve each script's existing safe exit contract.
+python3 - "$REPO_ROOT" <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+root = Path(sys.argv[1])
+cases = (
+    ('apps/web-platform/scripts/audit-not-null-column-insert-coverage.sh', (), 2),
+    ('apps/web-platform/scripts/preflight-schema-vs-ledger.sh', (), 1),
+    ('apps/web-platform/scripts/preflight-worm-cascade-contradiction.sh', (), 1),
+    ('apps/web-platform/scripts/run-verify.sh', (), 1),
+    ('scripts/dev-suite-mutex.sh', ('probe',), 0),
+    ('apps/web-platform/scripts/email-route-status.sh', ('--help',), 78),
+)
+failures = []
+checks = controls = 0
+with tempfile.TemporaryDirectory(prefix='trace-database-scripts-') as directory:
+    fixture = Path(directory)
+    marker = fixture / 'calls'
+    for command in ('psql', 'git', 'doppler', 'curl'):
+        stub = fixture / command
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" ' + command + ' >> "$TRACE_CALLS"\nexit 0\n')
+        stub.chmod(0o755)
+    for relative, args, empty_rc in cases:
+        for mode in ('bash-x', 'inherited'):
+            argv = ['bash'] + (['-x'] if mode == 'bash-x' else []) + [str(root / relative), *args]
+            base_env = {'PATH': str(fixture) + ':/usr/bin:/bin', 'HOME': str(fixture / 'absent'),
+                        'TMPDIR': str(fixture), 'TRACE_CALLS': str(marker)}
+            if mode == 'inherited':
+                base_env['SHELLOPTS'] = 'xtrace'
+            for name in ('DATABASE_URL', 'DATABASE_URL_POOLER'):
+                marker.unlink(missing_ok=True)
+                canary = 'SYNTHETIC_DATABASE_TRACE_CANARY'
+                env = dict(base_env, **{name: 'postgresql://fixture:' + canary + '@example.invalid/fixture'})
+                result = subprocess.run(argv, cwd=root, env=env, capture_output=True, text=True, timeout=10)
+                checks += 1
+                if result.returncode != 78 or canary in result.stdout + result.stderr or marker.exists():
+                    failures.append((relative, mode, name, result.returncode, 'trace guard failed'))
+            marker.unlink(missing_ok=True)
+            result = subprocess.run(argv, cwd=root, env=base_env, capture_output=True, text=True, timeout=10)
+            controls += 1
+            if result.returncode != empty_rc or marker.exists():
+                failures.append((relative, mode, 'no credentials', result.returncode, 'safe exit contract changed'))
+    marker.unlink(missing_ok=True)
+    result = subprocess.run(['bash', str(root / cases[-1][0]), '--help'], cwd=root,
+                            env={'PATH': str(fixture) + ':/usr/bin:/bin', 'HOME': str(fixture / 'absent'),
+                                 'TMPDIR': str(fixture), 'TRACE_CALLS': str(marker)},
+                            capture_output=True, text=True, timeout=10)
+    controls += 1
+    if result.returncode != 0 or marker.exists():
+        failures.append(('email-route-status.sh', 'untraced help', result.returncode))
+assert checks == 24 and controls == 13, ('trace matrix lost cases', checks, controls)
+assert not failures, failures
+PY
+rc=$?
+[ "$rc" = "0" ] && pass "database script trace guards: 24 credential cases and 13 safe no-credential controls" \
+  || fail "database script trace matrix failed (rc=$rc)"
+
 # --- Unenumerable credential set: the hatch is unrepresentable ---------------
 # A file in scope via ${!name} ALONE names no credential, so a `${VAR:+x}` hatch
 # has nothing real to test and is open by construction. Both rows are required:
@@ -3090,7 +3204,8 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=651
+# Floor 653 = prior 651 + database URL scope/guard block + script trace matrix (#11096).
+MIN_ASSERTIONS=653
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
