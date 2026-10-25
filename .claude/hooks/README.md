@@ -256,7 +256,7 @@ working tree (`update-index --add/--cacheinfo/--index-info`, `apply --index/--ca
 `stage-unsimulable`. A path whose `diff` attribute hides its added lines (`-diff`, or a driver name) is re-scanned
 from its raw staged blob.
 The contract, the cause table and the residuals are indexed in
-[ADR-296](../../knowledge-base/engineering/architecture/decisions/ADR-296-scan-the-would-be-index-of-a-chained-git-commit.md).
+[ADR-299](../../knowledge-base/engineering/architecture/decisions/ADR-299-scan-the-would-be-index-of-a-chained-git-commit.md).
 
 Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one): what an
 EARLIER command in the same call changes (a producer, `sed -i` or `prettier --write` before `commit -a`,
