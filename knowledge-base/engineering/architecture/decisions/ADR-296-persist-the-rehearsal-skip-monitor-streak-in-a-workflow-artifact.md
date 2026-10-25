@@ -60,6 +60,10 @@ hosted runner, and its suite also parses the workflow's wiring.
   TRANSIENT verdict must have moved the streak to exactly `restored + 1`, because the probe's own write
   is `2>/dev/null || true` and a lost increment would otherwise be sealed silently; a PASS forces `0`; a
   FAIL keeps what an escalation left (absent means `0`); a `broken` probe keeps the restored value.
+  > **Superseded 2026-10-25 (#11070, ADR-188 amendment):** the escalation now exits 3 and seals as
+  > `broken`, which keeps the streak the probe left; a `fail` verdict never legitimately carries a
+  > surviving streak, so its seal forces `0`, like a PASS. `broken` still keeps the restored value when
+  > the probe left no file (the exits that never reached the probe's own write).
 - The artifact is read through a bounded pipe (the 4096-byte limit is on the compressed archive), and a
   failed listing, a hung listing or a failed download is fatal even under `bootstrap`; only corrupt
   CONTENT is discarded by a bootstrap run.

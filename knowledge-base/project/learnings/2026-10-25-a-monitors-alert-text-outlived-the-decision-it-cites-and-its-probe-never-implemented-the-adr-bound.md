@@ -14,8 +14,6 @@ A monitor is two artifacts that drift independently: the code that decides, and 
 
 ## Session Errors
 
-- **Zero-width character in a path I typed** — Recovery: retyped the command. Prevention: none beyond reading the error; one-off.
-- **Ended a turn naming a next action** (stop hook `unkept-promise-hook.sh`) — Recovery: ended with an explicit `Paused:` sentence. Prevention: already hook-enforced.
 - **Inherited framing** ("image owed") copied through alert text, tests and an ADR — Recovery: premise probe at brainstorm Phase 1.0.5. Prevention: the closed-remedy and ADR-rate checks in Key Insight.
 
 ## Tags

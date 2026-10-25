@@ -33,7 +33,7 @@ All technical rulings: **Ruled by CTO agent, 2026-10-25.**
 | Cache backend for release builds | `cache-to: type=inline` + `cache-from: type=registry,ref=<image>:latest`. No `gha` fallback during transition (a dual cache keeps churning the quota). Keep the `mode=min` secret-safety comment: inline holds final-image layers only, so the secret-bearing builder stage stays out. | A real release shows a build-time regression or the registry cache misses on every build. |
 | Prune workflow | Rejected. It mutates production state and treats the symptom. | n/a |
 | Dockerfile reorder (#5055) | Not needed for this fix. Per-release layers are already last. | Inline cache turns out not to dedupe. |
-| `chown -R` → `COPY --chown` | Include. Removes a duplicate ~394 MB layer. | n/a |
+| `chown -R` → `COPY --chown` | Proposed here; CUT at plan (spec FR2): FR1 alone meets the cap and this changes production image ownership. | n/a |
 | Probe bound | Count runs with at least one skip, not marker lines. FAIL when `runs_with_skip * 20 > observed`. | n/a |
 | Alert text | Drop "#7535 owed". Point at diagnosing the rc 100/125 declines. | n/a |
 | Escalation (#10918) | Own title and body; keep the stable `soleur-skip-persistence-monitor-alert` marker so open-issue dedupe still works. Add a unit case and a wiring property. | n/a |

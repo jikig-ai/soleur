@@ -401,7 +401,7 @@ seal_case "T13 pass+empty" pass "" 0 0
 seal_case "T13 pass forces 0 over a surviving file" pass 5 5 0
 seal_case "T13 pass+x" pass x 0 @fail
 seal_case "T13 fail+absent (a real FAIL cleared the file)" fail @absent 2 0
-seal_case "T13 fail keeps an escalation streak" fail 3 2 3
+seal_case "T13 fail forces 0 over a surviving file (the escalation seals as broken, never fail)" fail 3 2 0
 seal_case "T13 broken+absent keeps the restored value" broken @absent 2 2
 seal_case "T13 broken+empty keeps the restored value (probe killed mid-write)" broken "" 2 2
 seal_case "T13 broken keeps a valid file" broken 4 2 4
@@ -475,6 +475,9 @@ PRIOR=$(out_value prior)
 eq "T15 fetch reports the restored 2 as prior" "$PRIOR" "2"
 eq "T15 restored 2 escalates (rc 3: escalated, not the skip FAIL's 1; #10918)" "$CHAIN_RC" "3"
 has "T15 restored 2 reaches the real probe as 3/3" "$C/probe.log" "consecutive transient runs: 3/3"
+has "T15 the escalation says CANNOT ESTABLISH, not FAIL (it is the instrument, not the arms)" "$C/probe.log" "CANNOT ESTABLISH:"
+lacks "T15 the escalation does not print a FAIL: line" "$C/probe.log" "FAIL:"
+ESC_RC=$CHAIN_RC   # the REAL probe's escalation rc, mapped through the workflow's real case block below
 # The workflow maps the probe's rc 3 to the `broken` verdict, whose seal keeps the streak the probe left.
 runsut_seal broken "$(cat "$C/state/dir/streak")" "$PRIOR"
 eq "T15 seal accepts the escalation (rc)" "$RC" "0"
@@ -827,8 +830,20 @@ cat > "$ALERTGH" <<'GHEOF'
 d="${FAKE_GH_DIR:?}"
 printf '%s\n' "$*" >> "$d/argv.log"
 case "$1 $2" in
-  "issue list") exit 0 ;;
-  "issue comment") exit 0 ;;
+  "issue list") [ -n "${FAKE_EXISTING:-}" ] && printf '%s\n' "$FAKE_EXISTING"; exit 0 ;;
+  "issue view") printf '%s\n' "${FAKE_CUR_TITLE:-}"; exit 0 ;;
+  "issue edit")
+    while [ $# -gt 0 ]; do
+      case "$1" in --title) printf '%s' "$2" > "$d/edited"; shift ;; esac
+      shift
+    done
+    exit "${FAKE_EDIT_RC:-0}" ;;
+  "issue comment")
+    while [ $# -gt 0 ]; do
+      case "$1" in --body-file) cp "$2" "$d/comment"; shift ;; esac
+      shift
+    done
+    exit 0 ;;
   "issue create")
     while [ $# -gt 0 ]; do
       case "$1" in --title) printf '%s' "$2" > "$d/title"; shift ;; --body-file) cp "$2" "$d/body"; shift ;; esac
@@ -858,6 +873,33 @@ alert_case "C3 probe FAIL + failed fetch (the store failure must still show)" fa
 alert_case "C4 probe FAIL, store healthy" fail success success success success "skipping arms across runs" no
 alert_case "C5 probe broken + failed assert" broken success success failure success "not running to a verdict" yes
 
+# The alert issue is SHARED across verdicts (one body marker) and never closed by this monitor, so an
+# OPEN issue titled for an earlier condition receives the next run's comment (#11070 review, CTO
+# ruling D1). The title must follow a probe verdict, never a failed state step, and every comment
+# opens with the verdict it reports (line 3: the marker line and a blank line come first).
+alert_existing_case() { # name verdict upload-outcome current-title edit-rc want-new-title-fragment|none want-verdict-line [log-fragment]
+  newcase; cp "$ALERTGH" "$C/bin/gh"; mkdir -p "$C/tmp"
+  ( cd "$C" && env -i PATH="$C/bin:$PATH" HOME="$C" FAKE_GH_DIR="$C" FAKE_EXISTING=42 FAKE_CUR_TITLE="$4" FAKE_EDIT_RC="$5" \
+      GH_TOKEN=x SUMMARY=probe-summary VERDICT="$2" FETCH_OUTCOME=success SEAL_OUTCOME=success ASSERT_OUTCOME=success \
+      UPLOAD_OUTCOME="$3" RUN_URL=http://run RUNNER_TEMP="$C/tmp" \
+      bash --noprofile --norc -eo pipefail "$ALERT_RUN" ) > "$C/log" 2>&1
+  eq "$1 rc" "$?" "0"
+  if [ "$6" = none ]; then
+    lacks "$1 does not retitle" "$C/argv.log" "issue edit"
+  else
+    has "$1 retitles to the current verdict" "$C/edited" "$6"
+  fi
+  eq "$1 comment opens with the verdict line" "$(sed -n '3p' "$C/comment" 2>/dev/null)" "$7"
+  [ -z "${8:-}" ] || has "$1 surfaces the failed retitle" "$C/log" "$8"
+}
+T_SKIP="monitor: a skip-persistence source is skipping arms across runs"
+T_BROKEN="monitor: the skip-persistence probe is not running to a verdict"
+alert_existing_case "C6 broken onto an open skip-titled issue" broken success "$T_SKIP" 0 "not running to a verdict" "VERDICT NOW: BROKEN (probe not running to a verdict)"
+alert_existing_case "C7 fail onto an open broken-titled issue" fail success "$T_BROKEN" 0 "skipping arms across runs" "VERDICT NOW: FAIL (arms skipping)"
+alert_existing_case "C8 fail onto an issue already titled for it" fail success "$T_SKIP" 0 none "VERDICT NOW: FAIL (arms skipping)"
+alert_existing_case "C9 a failed state step never retitles a probe-verdict title" pass failure "$T_SKIP" 0 none "VERDICT NOW: STATE-STORE FAILED"
+alert_existing_case "C10 a failed retitle is non-fatal and surfaced" fail success "$T_BROKEN" 1 "skipping arms across runs" "VERDICT NOW: FAIL (arms skipping)" "could not retitle"
+
 # ── rc -> verdict, driven through the workflow's REAL `case "$rc"` block (#10918) ────────────────
 # The probe's consecutive-TRANSIENT escalation exits 3, not 1, so it reaches the `broken` verdict
 # (and therefore the "not running to a verdict" title) instead of the "arms are skipping" one.
@@ -881,6 +923,10 @@ for _pair in 0:pass 1:fail 2:transient 3:broken 127:broken; do
   _got=$(rc="$_rc" bash --noprofile --norc -eo pipefail "$RC_CASE" 2>/dev/null || true)
   eq "rc->verdict: probe rc $_rc" "$_got" "$_want"
 done
+# The REAL probe's escalation rc (T15, ESC_RC) through the workflow's real block: the link between the
+# probe's exit and the title is otherwise two separately-pinned halves.
+_got=$(rc="$ESC_RC" bash --noprofile --norc -eo pipefail "$RC_CASE" 2>/dev/null || true)
+eq "rc->verdict: the real probe's escalation maps to broken" "$_got" "broken"
 # The title for the escalation verdict must differ from the skip title, or the split proves nothing.
 _t_broken=$(sed -n 's/^ *broken) *title="\(.*\)" ;;$/\1/p' "$WF" | sed -n '1p')
 _t_fail=$(sed -n 's/^ *fail) *title="\(.*\)" ;;$/\1/p' "$WF" | sed -n '1p')
@@ -894,7 +940,10 @@ fi
 # verdict
 # ─────────────────────────────────────────────────────────────────────────────
 printf 'monitor-streak-state: %s passed, %s failed\n' "$passes" "$fails"
-EXPECTED_MIN_PASSES=740
+# 740 -> 759 (#11070 review), ITEMISED: T15 says CANNOT ESTABLISH (+2: present, no FAIL: line),
+# the real probe's escalation rc through the workflow's real case block (+1), and the shared-issue
+# alert rows C6-C10 (+16: rc, retitle-or-not, verdict line each; the failed-retitle warning).
+EXPECTED_MIN_PASSES=759
 if [ "$passes" -lt "$EXPECTED_MIN_PASSES" ]; then
   printf 'FAIL: only %s assertions ran (floor %s): a suite that stopped asserting is not green\n' "$passes" "$EXPECTED_MIN_PASSES" >&2
   exit 1

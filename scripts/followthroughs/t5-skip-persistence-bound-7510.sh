@@ -21,21 +21,26 @@
 # The second source needs no relay: run-all.sh invokes the guard suites with inherited stdio, so
 # banners and markers reach the job log directly.
 #
-# Exit semantics (per sweep-followthroughs.sh contract):
-#   0 = PASS       (rehearsal arms: no more than 1 skipping run in 20 observed runs, ADR-188's
-#                  bound; guard suites: no skip observed)
-#   1 = FAIL       (rehearsal arms: MORE than 1 skipping run in 20 observed runs, i.e. a recurring
-#                  rather than transient apt / docker-pull decline; guard suites: >= 1 skip, because
-#                  a runner git that no longer exhibits the walk contract the corrupt-walk rows
-#                  validate is a deterministic degradation — the per-source lines name which)
-#   2 = TRANSIENT  (gh unreachable, auth failure, no runs to sample, or a source's
-#                  positive-control discriminator absent in every sampled log)
-#   3 = ESCALATED  (the consecutive-TRANSIENT counter reached its threshold: the probe itself is
-#                  broken, which is NOT evidence about the arms. It exits 3, not 1, so the monitor
-#                  files it under its `broken` title instead of the skip title -- #10918)
+# Exit semantics (0, 1 and 2 per the sweep-followthroughs.sh contract; 3 and 78 are this probe's
+# own rows, read only by the monitor):
+#   0 = PASS       (rehearsal arms: within ADR-188's bound of 1 skipping run in BOUND_DENOM observed
+#                  runs, a single skip being reported as a notice; guard suites: no skip observed)
+#   1 = FAIL       (rehearsal arms: at least 2 skipping runs AND more than 1 in BOUND_DENOM observed,
+#                  i.e. a recurring rather than transient apt / docker-pull decline; guard suites:
+#                  >= 1 skip, because a runner git that no longer exhibits the walk contract the
+#                  corrupt-walk rows validate is a deterministic degradation — the per-source lines
+#                  name which)
+#   2 = TRANSIENT  (gh unreachable, auth failure, no runs to sample, fewer than MIN_OBSERVED observed
+#                  rehearsal runs, or a source's positive-control discriminator absent in every
+#                  sampled log)
+#   3 = CANNOT ESTABLISH (the consecutive-TRANSIENT counter reached its threshold: the probe itself
+#                  is broken, which is NOT evidence about the arms. The sweeper's own rc-3 heading is
+#                  the same words; this probe is not sweeper-enrolled (CARRIER below) and its only
+#                  consumer is the monitor, which files rc 3 under its `broken` title instead of the
+#                  skip title -- #10918)
 #  78 = REFUSED    (running under `set -x` with a live GH_TOKEN -- see the guard below, #7797)
 #
-# 78 IS A FOURTH ROW, ADDED AT REVIEW (#7535 Phase 2). It is deliberately NOT folded into
+# 78 IS A FIFTH ROW, ADDED AT REVIEW (#7535 Phase 2). It is deliberately NOT folded into
 # TRANSIENT: a refusal is a decision this script made about its own safety, not a failure to
 # reach a verdict, and it is fully determined by how the caller invoked it. Amending this block
 # rather than leaving it is the point -- the paragraph below says any code outside the list means
@@ -64,9 +69,11 @@
 #     and would equally have missed the T17 arm #7535 Phase 2 makes skip-eligible —
 #     and for every per-suite marker set in GUARD_UNITS (source 2)
 #   - Source 1 counts RUNS that carried a marker (a run on which two arms skipped is one run), over
-#     the first OBSERVE_TARGET (20) runs that carry the suite's terminal line, taken from up to
-#     LIST_LIMIT (40) listed runs. FAIL when skip_runs * BOUND_DENOM > observed (ADR-188: "more
-#     than 1 in 20"); PASS otherwise, saying so when a skip was seen but is within the bound.
+#     the first OBSERVE_TARGET runs that carry the suite's terminal line, taken from up to
+#     LIST_LIMIT listed push / workflow_dispatch runs. FAIL when skip_runs >= 2 and skip_runs *
+#     BOUND_DENOM > observed (ADR-188: "more than 1 in 20"); with fewer than MIN_OBSERVED observed
+#     runs and no such FAIL the rate is unprovable and the verdict is TRANSIENT; otherwise PASS,
+#     saying so when a skip was seen but is within the bound.
 #   - Source 2 (guard hits) is any-hit FAIL: a degraded runner-git walk contract is deterministic
 #
 # CARRIER (#7574). This probe is NOT enrolled as a `<!-- soleur:followthrough -->`
@@ -131,12 +138,13 @@ _transient() {  # $1 = human reason -- ALWAYS exits, never returns
   # The threshold is operator-settable, so it gets the same treatment as the counter.
   [[ "$T5_TRANSIENT_ESCALATE_AFTER" =~ ^[0-9]+$ ]] || T5_TRANSIENT_ESCALATE_AFTER=3
   if [[ "$streak" -ge $((10#$T5_TRANSIENT_ESCALATE_AFTER)) ]]; then
-    echo "FAIL: the probe has been unable to reach a verdict for ${streak} consecutive runs." >&2
+    echo "CANNOT ESTABLISH: the probe has been unable to reach a verdict for ${streak} consecutive runs." >&2
     echo "      This is no longer a transient condition. A probe that cannot measure is not" >&2
     echo "      evidence that there is nothing to measure -- treat this as a broken instrument," >&2
     echo "      not as a quiet window." >&2
     # rc 3, not 1: this is a broken instrument, and rc 1 files under the "arms are skipping" title
     # of the monitor (#10918). The monitor maps any code outside 0/1/2 to its `broken` verdict.
+    # This is the only path to rc 3; a skip FAIL stays rc 1 and is never filed as "probe broken".
     exit 3
   fi
   exit 2
@@ -154,10 +162,28 @@ SAMPLE=20   # source 2's window (guard-suite runs, sampled by event)
 # listing only 20 runs (failures included) left `observed` at 13 to 15 (measured 2026-10-25), and
 # one skip in 13 is 7.7% -- so one transient apt decline could never be shown to be inside the
 # bound and the monitor stayed red for as long as it stayed in the window. List more, and stop
-# once OBSERVE_TARGET runs have been observed.
+# once OBSERVE_TARGET runs have been observed. The stop bounds the fetches only when the suite
+# line is present in the logs: if it is not, up to LIST_LIMIT logs are fetched (the budget below
+# bounds that case).
 LIST_LIMIT=40
-OBSERVE_TARGET=20
-BOUND_DENOM=20   # 1 skipping run per BOUND_DENOM observed runs is the bound; more than that FAILs
+OBSERVE_TARGET=20   # the window; keep >= BOUND_DENOM, or `observed` can never reach the denominator
+BOUND_DENOM=20      # ADR-188's N: 1 skipping run per BOUND_DENOM observed runs is the bound
+# Below MIN_OBSERVED observed runs a rate cannot be shown either way: a single skip is noise
+# (ADR-188 tolerates one) and zero skips over a handful of runs is not a clean reading. Two skipping
+# runs is the smallest sample that shows recurrence, so that FAILs regardless of the floor.
+MIN_OBSERVED=10
+
+# WALL BUDGET. The monitor wraps this probe in `timeout 600`; a kill there is rc 124, which it files
+# as `broken`. Measured 2026-10-23: ~7 s per `gh run view --log`. Worst case is LIST_LIMIT source-1
+# fetches (the suite line absent from every log) plus SAMPLE source-2 fetches plus 3 listings, about
+# 63 calls and 450 to 500 s -- too close to the wrap. So each fetch is bounded and each loop stops
+# fetching at its own deadline; a stopped loop reports what it observed (never a clean reading from
+# an unfinished sample: source 1 below MIN_OBSERVED is TRANSIENT, an unobserved guard suite too).
+PER_FETCH_TIMEOUT=60
+T5_WALL_BUDGET_S1="${T5_WALL_BUDGET_S1:-420}"
+T5_WALL_BUDGET_S2="${T5_WALL_BUDGET_S2:-560}"
+[[ "$T5_WALL_BUDGET_S1" =~ ^[0-9]+$ ]] || T5_WALL_BUDGET_S1=420
+[[ "$T5_WALL_BUDGET_S2" =~ ^[0-9]+$ ]] || T5_WALL_BUDGET_S2=560
 
 # THE POSITIVE CONTROL, added at review. Counting occurrences of a marker and reporting PASS on
 # zero cannot distinguish "the arm did not skip" from "this probe can no longer see the arm at
@@ -238,12 +264,25 @@ skip_runs=0
 declare -A per_arm=()
 for _m in "${SKIP_MARKERS[@]}"; do per_arm["$_m"]=0; done
 
+fetch_fail=0
+budget_hit=0
 if ! runs=$(gh run list --repo "$REPO" --workflow infra-validation.yml --branch main \
-         --limit "$LIST_LIMIT" --json databaseId,conclusion 2>/dev/null); then
+         --limit "$LIST_LIMIT" --json databaseId,conclusion,event 2>/dev/null); then
   echo "TRANSIENT: infra-validation.yml — gh run list failed" >&2
   transient_reasons="infra-validation gh run list failed"
 else
-  ids=$(printf '%s' "$runs" | jq -r '.[] | select(.conclusion == "success") | .databaseId' 2>/dev/null)
+  # POST-MERGE EVIDENCE ONLY. `--branch main` filters on head_branch, not on event, so a fork PR
+  # from a branch named `main` (which runs this workflow on pull_request with a suite output it
+  # controls) would be listed too, and forged clean runs would dilute the window the rate is taken
+  # over. The workflow's only post-merge trigger is a push to main; a dispatch needs write access.
+  # `gh run list --event` takes ONE value, so the filter is here.
+  #
+  # RED AND CANCELLED RUNS ARE EXCLUDED, DELIBERATELY. The bound is over runs that completed green:
+  # a red run's suite output can be partial or red for a cause unrelated to the arms, and counting
+  # it would change what the 1-in-20 rate measures. The cost is known and accepted (ADR-188 amendment,
+  # Known limits): an apt outage that skips arms can also red the same run, and that run drops out of
+  # numerator and denominator alike. This is why the listing is larger than the window.
+  ids=$(printf '%s' "$runs" | jq -r '.[] | select(.conclusion == "success" and (.event == "push" or .event == "workflow_dispatch")) | .databaseId' 2>/dev/null)
   # An empty sample is NOT a clean bill of health — it is an un-run instrument.
   if [[ -z "$ids" ]]; then
     echo "TRANSIENT: infra-validation.yml — no successful post-merge runs to sample" >&2
@@ -251,7 +290,10 @@ else
   else
     while IFS= read -r id; do
       [[ -n "$id" ]] || continue
-      log=$(gh run view "$id" --repo "$REPO" --log 2>/dev/null) || continue
+      if [[ "$SECONDS" -ge "$T5_WALL_BUDGET_S1" ]]; then budget_hit=1; break; fi
+      # A failed or timed-out fetch is dropped, but COUNTED: it shrinks the window, and the
+      # summary has to be able to say so (a short window is not the same as a quiet one).
+      log=$(timeout "$PER_FETCH_TIMEOUT" gh run view "$id" --repo "$REPO" --log 2>/dev/null) || { fetch_fail=$((fetch_fail + 1)); continue; }
       sampled=$((sampled + 1))
       # HERE-STRING, NOT A PIPE. This was
       #   printf '%s' "$log" | grep -qF "$SUITE_TERMINAL" || continue
@@ -275,28 +317,40 @@ else
       done
       # ADR-188's bound is over RUNS: one apt outage that skips two arms is one bad run.
       if [[ "$run_hits" -gt 0 ]]; then skip_runs=$((skip_runs + 1)); fi
-      # Stop at the window's size. The listing is larger than the window on purpose (failed runs
-      # carry no suite line), so without this a quiet stretch would cost LIST_LIMIT log fetches.
+      # Stop at the window's size. The listing is larger than the window on purpose (red runs are
+      # dropped by the filter above and only runs carrying the suite line are observed), so once the
+      # window is full there is nothing more to read. The stop bounds the fetch count only when the
+      # suite line is present in the logs; the wall budget bounds the case where it is not.
       if [[ "$observed" -ge "$OBSERVE_TARGET" ]]; then break; fi
     done <<< "$ids"
+    _s1_note="${sampled} sampled"
+    [[ "$fetch_fail" -gt 0 ]] && _s1_note="${_s1_note}, ${fetch_fail} fetch(es) failed"
+    [[ "$budget_hit" -eq 1 ]] && _s1_note="${_s1_note}, wall budget reached"
     if [[ "$sampled" -lt 1 ]]; then
-      echo "TRANSIENT: infra-validation.yml — no run logs could be fetched" >&2
+      echo "TRANSIENT: infra-validation.yml — no run logs could be fetched (${_s1_note})" >&2
       transient_reasons="no infra-validation run logs fetched"
     elif [[ "$observed" -lt 1 ]]; then
-      echo "TRANSIENT: infra-validation.yml — fetched ${sampled} run log(s), none containing '${SUITE_TERMINAL}' — the suite did not run in this window, or its output moved. A zero skip-count here would be an un-run instrument reporting a clean bill of health." >&2
+      echo "TRANSIENT: infra-validation.yml — fetched ${sampled} run log(s), none containing '${SUITE_TERMINAL}' — the suite did not run in this window, or its output moved. A zero skip-count here would be an un-run instrument reporting a clean bill of health. (${_s1_note})" >&2
       transient_reasons="rehearsal suite unobserved in sampled logs"
-    elif [[ "$skip_runs" -eq 0 ]]; then
-      echo "PASS: infra-validation.yml — 0 loud rehearsal skips (arms: ${SKIP_MARKERS[*]}) across ${observed} observed post-merge run(s) (${sampled} sampled)"
-    elif [[ $((skip_runs * BOUND_DENOM)) -le "$observed" ]]; then
-      echo "PASS: infra-validation.yml — ${skip_runs} of ${observed} observed post-merge run(s) carried a loud rehearsal skip, within ADR-188's bound of 1 in ${BOUND_DENOM} (arms: ${SKIP_MARKERS[*]}; ${sampled} sampled)"
-    else
+    elif [[ "$skip_runs" -ge 2 && $((skip_runs * BOUND_DENOM)) -gt "$observed" ]]; then
       # DENOMINATOR: `observed`, not `sampled` — the two verdicts describe
       # different populations and reporting FAIL over sampled understates the rate.
-      echo "FAIL: infra-validation.yml — ${skip_runs} of ${observed} observed post-merge run(s) carried a loud rehearsal skip (${hits} marker line(s)), past ADR-188's bound of 1 in ${BOUND_DENOM} (${sampled} sampled)." >&2
+      # Two skipping runs is the smallest sample that shows recurrence, so this FAILs even when the
+      # window is short; a lone skip is ADR-188's accepted transient and never FAILs on its own.
+      echo "FAIL: infra-validation.yml — ${skip_runs} of ${observed} observed post-merge run(s) carried a loud rehearsal skip (${hits} marker line(s)), past ADR-188's bound of 1 in ${BOUND_DENOM} (${_s1_note})." >&2
       for _m in "${SKIP_MARKERS[@]}"; do
         echo "        ${_m}=${per_arm["$_m"]}" >&2
       done
       any_fail=1
+    elif [[ "$observed" -lt "$MIN_OBSERVED" ]]; then
+      echo "TRANSIENT: infra-validation.yml — insufficient sample: ${observed} observed run(s) < ${MIN_OBSERVED}, ${skip_runs} of them skipping; the rate is unprovable either way (${_s1_note})" >&2
+      transient_reasons="rehearsal sample below ${MIN_OBSERVED} observed runs"
+    elif [[ "$skip_runs" -eq 0 ]]; then
+      echo "PASS: infra-validation.yml — 0 loud rehearsal skips (arms: ${SKIP_MARKERS[*]}) across ${observed} observed post-merge run(s) (${_s1_note})"
+    else
+      _s1_rate="within ADR-188's bound of 1 in ${BOUND_DENOM}"
+      [[ "$observed" -lt "$OBSERVE_TARGET" ]] && _s1_rate="within noise; the rate is unprovable below ${OBSERVE_TARGET} observed runs"
+      echo "PASS: infra-validation.yml — ${skip_runs} of ${observed} observed post-merge run(s) carried a loud rehearsal skip, ${_s1_rate} (arms: ${SKIP_MARKERS[*]}; ${_s1_note})"
     fi
   fi
 fi
@@ -340,7 +394,10 @@ else
   g_hits=0
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
-    log=$(gh run view "$id" --repo "$REPO" --log 2>/dev/null) || continue
+    # Same bound as source 1. A stopped loop leaves a suite unobserved, which reads TRANSIENT below,
+    # never a clean reading.
+    if [[ "$SECONDS" -ge "$T5_WALL_BUDGET_S2" ]]; then break; fi
+    log=$(timeout "$PER_FETCH_TIMEOUT" gh run view "$id" --repo "$REPO" --log 2>/dev/null) || continue
     g_sampled=$((g_sampled + 1))
     _log_observed=0
     for _u in "${GUARD_UNITS[@]}"; do
@@ -400,9 +457,9 @@ fi
 if [[ "$any_fail" -eq 1 ]]; then
   _clear_transient_streak
   echo "      ADR-188's declared observation window has fired: a skip is masking a recurring" >&2
-  echo "      condition rather than a transient one. For rehearsal-arm hits the apt or docker-pull" >&2
-  echo "      decline (rc 100 / 125) is recurring: diagnose the mirror or runner cause from the" >&2
-  echo "      skip lines (the pre-baked image was evaluated and cut on measurement in #7535); for" >&2
+  echo "      condition rather than a transient one. For rehearsal-arm hits at least two runs" >&2
+  echo "      skipped: diagnose the decline named in the skip lines (the mirror or runner cause;" >&2
+  echo "      the pre-baked image was evaluated and cut on measurement in #7535); for" >&2
   echo "      g1b./g2b./fl. hits a runner git no longer exhibits the walk contract the guard-suite" >&2
   echo "      rows validate (#10921) — refusal coverage is degraded until the runner image or the" >&2
   echo "      rows change." >&2
