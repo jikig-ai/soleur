@@ -167,7 +167,7 @@ sim_recovery() {
   fi
   lead="The default action is to scrub the secrets — never commit-then-rotate."
   if [ "$named" -eq 0 ]; then
-    printf '%s' "$lead This command also names ${tgt_s}, and ${root_s} is scanned because the shell sits there; the hook cannot tell which repository the git add and the git commit act in. If they are meant for ${tgt_s}: put '-C ${tgt_s}' on BOTH the git add and the git commit (a separate 'cd' call is safe only when no bare git call in the command is meant for ${root_s}). If they are meant for ${root_s}: scrub the file there, or stage only literal paths.${cause}"
+    printf '%s' "$lead This command also names ${tgt_s}, and ${root_s} is scanned because the shell sits there; the hook cannot tell which repository the git add and the git commit act in. If they are meant for ${tgt_s}: put '-C ${tgt_s}' on BOTH the git add and the git commit (a separate 'cd' call is safe only when no bare git call in the command is meant for ${root_s}). If they are meant for ${root_s}: scrub the file there.${cause}"
     return 0
   fi
   case "$state" in

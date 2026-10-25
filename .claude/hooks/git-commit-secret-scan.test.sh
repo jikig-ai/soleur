@@ -1910,9 +1910,9 @@ _t_sim_prefilter() {
 # child shells that source the walker can call it.
 ctr_stage_dump() {
   local i=0 n="${#CTR_ADD_EXACT[@]}" k
-  printf 'stage lex=%s stages=%s opaque=%s refuse=%s unsim=%s all=%s paths_n=%s paths_literal=%s cd_first=%s\n' \
+  printf 'stage lex=%s stages=%s opaque=%s refuse=%s unsim=%s all=%s paths_n=%s paths_literal=%s cd_first=%s bad_n=%s\n' \
     "${CTR_LEX_STATE:-unset}" "${CTR_COMMIT_STAGES:-0}" "${CTR_STAGE_OPAQUE:-0}" "${CTR_STAGE_REFUSE:-0}" "${CTR_STAGE_UNSIMULABLE:-0}" \
-    "${CTR_COMMIT_ALL:-0}" "${#CTR_COMMIT_PATHS[@]}" "${CTR_COMMIT_PATHS_LITERAL:-1}" "${CTR_STAGE_CD_FIRST:-0}"
+    "${CTR_COMMIT_ALL:-0}" "${#CTR_COMMIT_PATHS[@]}" "${CTR_COMMIT_PATHS_LITERAL:-1}" "${CTR_STAGE_CD_FIRST:-0}" "${#CTR_BAD[@]}"
   printf 'refuse_why: %s\n' "${CTR_STAGE_REFUSE_WHY:-}"
   while [ "$i" -lt "$n" ]; do
     printf 'add exact=%s force=%s lit=%s own_C=%s words:' "${CTR_ADD_EXACT[$i]}" "${CTR_ADD_FORCE[$i]}" "${CTR_ADD_LIT[$i]}" "${CTR_ADD_OWNC[$i]}"
@@ -1979,8 +1979,8 @@ _sd_unit_c_rows() {
   _sd_add 'a staging verb in a non-git record is opaque (npm add)' 'npm add left-pad && git commit -m x' 'opaque=1'
   _sd_add 'a non-git record without a staging verb is not opaque' 'echo hello && git commit -m x' 'stages=0' 'opaque=0'
   _sd_add 'a launcher with git behind it is walked, not opaque (timeout)' 'timeout 5 git add f.txt && git commit -m x' 'opaque=0' 'exact=1'
-  _sd_add 'an inline alias.* key is REFUSED on a staging record (a real alias name: git ignores aliases named like builtins)' 'git -c alias.a=add a f.txt && git commit -m x' 'refuse=1'
-  _sd_add 'an inline alias.* key via --config-env is REFUSED' 'git --config-env=alias.a=V a f.txt && git commit -m x' 'refuse=1'
+  _sd_add 'an inline alias.* key is refused as undeterminable (CTO row 49; a real alias name: git ignores aliases named like builtins)' 'git -c alias.a=add a f.txt && git commit -m x' 'bad_n=1'
+  _sd_add 'an inline alias.* key via --config-env is refused as undeterminable' 'git --config-env=alias.a=V a f.txt && git commit -m x' 'bad_n=1'
   # row 23: the environment allowlist
   _sd_add 'HOME= on a staging record is refused' 'HOME=/x git add f.txt && git commit -m x' 'refuse=1'
   _sd_add 'GIT_EDITOR= is on the allowlist' 'GIT_EDITOR=true git add f.txt && git commit -m x' 'refuse=0' 'exact=1'
@@ -3314,11 +3314,9 @@ _t_fr2_hook() {
              "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.a GIT_CONFIG_VALUE_0=add git a -A && git commit -m x" \
              "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.a GIT_CONFIG_VALUE_0=add git a -A && git commit -m x" \
              "git -c 'alias.a=!git add -A' a && git commit -m x"; do
-    _sx "B1 an inline alias is refused (config-refused): ${cmd:0:60}" "$U" "$cmd" deny "alias"
-    _cause_is "B1b ... cause config-refused" config-refused
+    _sx "B1 an inline alias is refused (undeterminable, CTO row 49): ${cmd:0:60}" "$U" "$cmd" deny "defines a git alias" "Define no git alias"
   done
-  _sx "B1c scope (row 40): an alias on a NON-staging record of a committing command is refused too" "$Cn" "git -c alias.a=status a && git commit -m x" deny "alias"
-  _cause_is "B1d ... cause config-refused" config-refused
+  _sx "B1c scope (rows 40, 49): an alias on a NON-staging record of a committing command is refused too" "$Cn" "git -c alias.a=status a && git commit -m x" deny "defines a git alias"
   _sx "B1e control: a non-alias -c on a non-staging record is not refused -> allow" "$Cn" "git -c user.name=x status && git commit -m x" allow
   # B2: a brace, glob or tilde word in the subcommand position
   for cmd in "git ad{d,} -A" "git {add,} -A" "git [a]dd -A" "git ~add -A"; do
@@ -3633,13 +3631,13 @@ _sd_fr2_rows() {
   _sd_add 'A5 an over-cap bundle ending in f carries force=1' "git add -$(printf 'A%.0s' $(seq 1 70))f .env && git commit -m x" 'force=1' 'exact=0'
   _sd_add 'A5 an over-cap bundle without f carries force=0' "git add -$(printf 'A%.0s' $(seq 1 70)) .env && git commit -m x" 'force=0' 'exact=0'
   # B1: aliases
-  _sd_add 'B1 -c alias.a=add on an add-shaped record' 'git -c alias.a=add a f.txt && git commit -m x' 'refuse=1' 'opaque=1'
-  _sd_add 'B1 --config-env=alias.a=V' 'git --config-env=alias.a=V a f.txt && git commit -m x' 'refuse=1' 'opaque=1'
-  _sd_add 'B1 a GIT_CONFIG_KEY alias prefix' 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.a GIT_CONFIG_VALUE_0=add git a f.txt && git commit -m x' 'refuse=1' 'opaque=1'
-  _sd_add 'B1 an alias on a NON-staging record of a committing command (row 40)' 'git -c alias.a=status a && git commit -m x' 'refuse=1'
-  _sd_add 'B1 the string form of an alias' 'git -c "alias.a=!git add -A" a && git commit -m x' 'refuse=1'
-  _sd_add 'B1 the key is case-insensitive' 'git -c Alias.A=add a f.txt && git commit -m x' 'refuse=1'
-  _sd_add 'B1 env GIT_CONFIG_COUNT in front of any git record' 'env GIT_CONFIG_COUNT=1 git status && git commit -m x' 'refuse=1'
+  _sd_add 'B1 -c alias.a=add on an add-shaped record' 'git -c alias.a=add a f.txt && git commit -m x' 'bad_n=1' 'opaque=1'
+  _sd_add 'B1 --config-env=alias.a=V' 'git --config-env=alias.a=V a f.txt && git commit -m x' 'bad_n=1' 'opaque=1'
+  _sd_add 'B1 a GIT_CONFIG_KEY alias prefix' 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.a GIT_CONFIG_VALUE_0=add git a f.txt && git commit -m x' 'bad_n=1' 'opaque=1'
+  _sd_add 'B1 an alias on a NON-staging record of a committing command (row 40)' 'git -c alias.a=status a && git commit -m x' 'bad_n=1'
+  _sd_add 'B1 the string form of an alias' 'git -c "alias.a=!git add -A" a && git commit -m x' 'bad_n=1'
+  _sd_add 'B1 the key is case-insensitive' 'git -c Alias.A=add a f.txt && git commit -m x' 'bad_n=1'
+  _sd_add 'B1 env GIT_CONFIG_COUNT without an alias key is not an alias definition (row 49 narrows row 40 to alias spellings)' 'env GIT_CONFIG_COUNT=1 git status && git commit -m x' 'bad_n=0' 'refuse=0'
   _sd_add 'B1 control: -c user.name on a non-staging record is not refused' 'git -c user.name=x status && git commit -m x' 'refuse=0' 'stages=0'
   # B2: a subcommand that is not a literal word
   for k in 'ad{d,}' '{add,}' '[a]dd' '~add'; do
@@ -3653,7 +3651,7 @@ _sd_fr2_rows() {
   done
   _sd_add 'B3 ash -c "git add -A" makes the stage opaque' 'ash -c "git add -A" && git commit -m x' 'opaque=1' 'stages=1'
   _sd_add 'B3 control: a string with no staging verb' 'ssh host "ls -la" && git commit -m x' 'opaque=0' 'stages=0'
-  _sd_add 'B3 control: a string that only reads (git status)' 'ssh host "git status" && git commit -m x' 'opaque=0' 'stages=0'
+  _sd_add 'B3 a string that mentions git is opaque even when it only reads (CTO row 50: matching verbs is defeated by quoting)' 'ssh host "git status" && git commit -m x' 'opaque=1' 'bad_n=0'
   # B4: apply bundles
   _sd_add 'B4 apply -v3 is --3way' 'git apply -v3 p.diff && git commit -m x' 'unsim=1'
   _sd_add 'B4 apply -3v is --3way' 'git apply -3v p.diff && git commit -m x' 'unsim=1'
@@ -3683,7 +3681,7 @@ _sd_fr2_rows() {
     _sd_add "refused prefix $k" "$k=/x git add f.txt && git commit -m x" 'refuse=1'
   done
   # every refused -c prefix, one row each (narrowing _ctr_cfg_refuses must red)
-  for k in core.autocrlf diff.algorithm attr.tree include.path includeif.gitdir:/x.path add.ignoreErrors apply.whitespace submodule.recurse filter.x.clean alias.zz; do
+  for k in core.autocrlf diff.algorithm attr.tree include.path includeif.gitdir:/x.path add.ignoreErrors apply.whitespace submodule.recurse filter.x.clean; do
     _sd_add "refused -c key $k" "git -c $k=v add f.txt && git commit -m x" 'refuse=1'
   done
   _sd_add 'control -c color.ui is not refused' 'git -c color.ui=never add f.txt && git commit -m x' 'refuse=0'
