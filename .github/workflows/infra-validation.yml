@@ -408,7 +408,13 @@ jobs:
           # annotation — inside the $() above it could only reach stderr.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
-              is_plan_skipped "$d" && echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
+              # `if`, not `A && B`: under `bash -e` a loop whose last iteration
+              # is a non-sentinel root would otherwise leave the pipeline (and
+              # the step) at exit 1 and red `detect-changes` for every PR whose
+              # last changed root carries no sentinel.
+              if is_plan_skipped "$d"; then
+                echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
+              fi
             done
           fi
 

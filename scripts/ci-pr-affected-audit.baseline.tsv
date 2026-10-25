@@ -55,7 +55,6 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	.gitignore
 .claude/hooks/grep-q-pipe-guard.test.sh	AGENTS.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md
-.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/canary-probe-set.md
@@ -713,11 +712,6 @@ plugins/soleur/test/hook-input-classification-mutation.test.sh	plugins/soleur/sc
 plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/lib/rule-metrics-constants.sh
 plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/rule-metrics-aggregate.sh
 plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh	scripts/lib/scratch-root.sh
-plugins/soleur/test/infra-validation-detect.test.sh	apps/cla-evidence/infra/main.tf
-plugins/soleur/test/infra-validation-detect.test.sh	apps/web-platform/infra/git-data-root-key/key.tf
-plugins/soleur/test/infra-validation-detect.test.sh	apps/web-platform/infra/sentry/uptime-monitors.tf
-plugins/soleur/test/infra-validation-detect.test.sh	apps/web-platform/infra/uptime-alerts.tf
-plugins/soleur/test/infra-validation-detect.test.sh	infra/github/main.tf
 plugins/soleur/test/infra-validation-detect.test.sh	scripts/lib/scratch-root.sh
 plugins/soleur/test/inngest-config-bundle-mirror.test.sh	.github/workflows/reusable-release.yml
 plugins/soleur/test/issue-flow-measure.test.sh	apps/web-platform/server/inngest/functions/_cron-run-reports.ts
@@ -1064,7 +1058,6 @@ scripts/followthroughs/pr-battery-gate-saving-9323	scripts/ci-battery-gate-repla
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/guard-vacuity-floor.test.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/repo-write-boundary.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/repo-write-boundary.test.sh
-scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/test-relevance-paths.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lint-orphan-test-suites.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lint-orphan-test-suites.test.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/registry-pull-path-health.sh
@@ -1106,14 +1099,11 @@ scripts/git-data-rehearsal-evidence-8211	scripts/lib/bearer-curl.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-read-classify.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/betterstack-sources.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/lib/git-data-rotate-stamp.sh
-scripts/infra-config-activation-7220	scripts/betterstack-query.sh
 scripts/infra-drift-autoclose	.github/workflows/apply-deploy-pipeline-fix.yml
-scripts/inngest-probe-heartbeat-feeder	.github/workflows/scheduled-inngest-probe-heartbeat.yml
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/sentry/cron-monitors.tf
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/uptime-alerts.tf
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/server/watchdog-dispatch-table.ts
 scripts/inngest-probe-heartbeat-feeder	scripts/betterstack-query.sh
-scripts/inngest-probe-heartbeat-feeder	scripts/lib/inngest-probe-row.sh
 scripts/inngest-tls-soak-10136	scripts/betterstack-query.sh
 scripts/jobs1-stopgap-7432	apps/web-platform/infra/ci-deploy.test.sh
 scripts/jobs1-stopgap-7432	apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh

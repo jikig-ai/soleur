@@ -152,7 +152,7 @@ Runs after premise validation and before the Phase 1 fan-out, for the same reaso
 
 **3. Cut before researching.** Any mechanism that buys no property in the list, or buys one an existing mechanism already covers, is removed here — not researched, not designed, not reviewed. Record each cut in one line (mechanism → property → what already covers it) as the **Cut List**. Emit both lists into the research-insights scratch, exactly as Phase 0.6 emits its Premise Validation note; Phase 1.7 persists them into `## Research Insights`, which is where `plan-review` reads them. A mechanism the ask did not name but the plan later invents is caught by Step 2's re-read of this list, not here.
 
-**Why:** #7418 / ADR-176 — the plan delivered a five-value cursor vocabulary, two decision tables, a resume cap with a strict-advance rule, a bounded-deletion rule, and a branch selector with a tiebreak. The second property was already free: `## Acceptance Criteria` appears in all three detail-level templates, is written last, and `soleur:one-shot` was already asserting on it. The plan never compared its new mechanism against the one already in the codebase; a twelve-agent review then found twelve blocking defects behind a 285/285 green suite, and **nine of them dissolved with the machinery** when the redesign landed. See `knowledge-base/project/learnings/2026-08-10-i-fixed-the-guard-twice-and-my-test-could-not-see-either-fix.md`.
+**Why:** #7418 / ADR-176 — the plan never compared its new mechanism against the one already in the codebase; a twelve-agent review then found twelve blocking defects behind a 285/285 green suite, and **nine of them dissolved with the machinery** when the redesign landed. See `knowledge-base/project/learnings/2026-08-10-i-fixed-the-guard-twice-and-my-test-could-not-see-either-fix.md`.
 
 ### 0.6c. Value-Proposition Measurement (Conditional)
 
@@ -708,6 +708,10 @@ If the plan's Files-to-Edit touch a surface the operator/agent CANNOT directly i
 - The probe's **structured fields discriminate ALL competing root-cause hypotheses in one event** (e.g. `source` / `gitKind` / `gitRevParseValid` for a host-vs-sandbox-mount split) — not a single boolean that emits for only one failure shape.
 
 This is the affected-surface extension of `hr-observability-as-plan-quality-gate` — the diagnosis-first discipline for blind surfaces, enforced at review by `soleur:engineering:review:observability-coverage-reviewer` §Step 4.6. **Why:** #5733 — 6 blind server-side fixes over ~2 weeks because the failing agent-sandbox surface emitted no discriminating telemetry; one in-sandbox event decided the root cause the moment it shipped. See `knowledge-base/project/learnings/best-practices/2026-07-01-blind-surface-needs-structured-probe-before-nth-fix.md`.
+
+#### 2.9.3. Task-Design Gate (Conditional)
+
+[skill-enforced: plan Phase 2.9.3 + deepen-plan Phase 4.13] A `## Files to Create`/`## Files to Edit` entry creating a NEW autonomous-task surface (any new `.github/workflows/*.yml`, Inngest function, registered check, pg_cron, host timer, daemon) emits `## Task Design`: [references/task-design-gate.md](./references/task-design-gate.md).
 
 ### 2.10. Architecture Decision (ADR / C4) Gate
 

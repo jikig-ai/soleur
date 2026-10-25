@@ -55,10 +55,10 @@ assert_fixture_dir() {
   esac
 }
 
-command -v jq >/dev/null 2>&1 || { echo "[FATAL] jq is required" >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
-python3 -c 'import yaml' >/dev/null 2>&1 || { echo "SKIP: PyYAML missing"; exit 0; }
-[[ -f "$FACTS" && -f "$WF" && -f "$GATE" ]] || { printf '[FATAL] workflow, gate script or facts helper missing\n' >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v python3 >/dev/null 2>&1 || { echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"; exit 3; }
+python3 -c 'import yaml' >/dev/null 2>&1 || { echo "UNRESOLVED: PyYAML missing — this suite asserted nothing; install python3-yaml"; exit 3; }
+[[ -f "$FACTS" && -f "$WF" && -f "$GATE" ]] || { printf 'FAIL: workflow, gate script or facts helper missing — the files under test are repo-owned\n' >&2; exit 1; }
 
 SANDBOX="$(mktemp -d)" || { echo "[FATAL] mktemp -d failed" >&2; exit 2; }
 assert_fixture_dir "$SANDBOX"

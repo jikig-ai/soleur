@@ -709,7 +709,7 @@ case "\$1" in
   run) while [ "\$#" -gt 0 ] && [ "\$1" != -- ]; do shift; done; shift; exec "\$@" ;;
   secrets)
     case "\$2" in
-      --only-names) cat "\$FX/ctl/names" 2>/dev/null || printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"DOPPLER_PROJECT":{}}\n' ;;
+      --only-names) cat "\$FX/ctl/names" 2>/dev/null || printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"INNGEST_CONFIG_DIGEST":{},"DOPPLER_PROJECT":{}}\n' ;;
       download) printf '{}\n' ;;
       get) [ "\$3" = INNGEST_DIAGNOSTIC_BOOT ] && cat "\$FX/ctl/diag" 2>/dev/null ;;
     esac ;;
@@ -1520,13 +1520,13 @@ tierb() {
       docker rm -f "$ctr-build" >/dev/null 2>&1
       if [ "$(tb_build_verdict "$rc" "$W/tierb-apt.log")" = skip ]; then
         if [ "$rc" -eq 125 ]; then
-          tb_skip "ADR-188 arm_skip: docker could not create the image-build container (rc=125: $(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 200))"
+          tb_skip "ADR-188 arm_skip: docker could not create the image-build container (rc=125: $(gd_apt_out_tail "$W/tierb-apt.log" 2 | tr '\n' ' ' | head -c 200))"
         else
           tb_skip "ADR-188 arm_skip: the ubuntu apt archive did not serve systemd/jq ($(grep -a FIXTURE_APT_CAUSE "$W/tierb-apt.log" | tail -1 | head -c 200))"
         fi
         return
       fi
-      echo "  FAIL: Tier B: image build failed rc=$rc, not the apt decline ($(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 300))"
+      echo "  FAIL: Tier B: image build failed rc=$rc, not the apt decline ($(gd_apt_out_tail "$W/tierb-apt.log" 2 | tr '\n' ' ' | head -c 300))"
       TB_FAIL=$((TB_FAIL + 1)); TIERB_RESULT="FAIL: image build rc=$rc"; return
     fi
     docker commit "$ctr-build" "$img_tag" >/dev/null && docker rm "$ctr-build" >/dev/null
@@ -1596,7 +1596,7 @@ L=/var/lib/tierb/calls.log
 printf '%s doppler %s TOKEN=%s HOME=%s\n' "$(date +%s.%N)" "$1" "${DOPPLER_TOKEN:-unset}" "${HOME:-unset}" >> "$L"
 case "$1" in
   run) while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; exec "$@" ;;
-  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{}}\n' ;;
+  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"INNGEST_CONFIG_DIGEST":{}}\n' ;;
 esac
 exit 0
 STUB

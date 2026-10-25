@@ -1,9 +1,9 @@
 ---
 title: "Soleur on OpenCode: run your AI organization on open-weights models"
 type: feature-launch
-publish_date:
+publish_date: 2026-10-27
 channels: x, bluesky
-status: draft
+status: scheduled
 pr_reference: "#10723"
 ---
 

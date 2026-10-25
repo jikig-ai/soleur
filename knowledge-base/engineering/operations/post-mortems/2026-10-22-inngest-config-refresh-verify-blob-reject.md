@@ -48,3 +48,25 @@ verbatim `--network none` invocation). Remaining hypothesis class: bundle-load
   the Phase-1 fix branch (tracked on epic #10390).
 - Soak: `scripts/followthroughs/inngest-verify-clean-10390.sh` (directive on the epic; ≥24h clean).
 - Deferred P3 panel items already tracked in #10751.
+
+## Root-cause closure (2026-10-23 — producer arc)
+
+The "bundle-load or host-state divergence" class resolved to **file mode, not envelope**.
+The extended diagnose probe (sigstore-go v1.2.0 `LoadJSONFromPath`, the function cosign
+v3.1.1's `checkNewBundle` gates on) ran against the real promoted digest and printed
+**`LOAD_OK version=v0.3`** (run 40035816173): the emitted bytes parse and validate
+cleanly. The failure is the READ — `cosign sign-blob` writes the `--bundle` file mode
+0600 (`sign_blob.go:132`), `tar -czf` preserves the member mode into the image, and the
+host's verify runs inside the pinned NONROOT cosign container over a bind mount, so
+open() fails EACCES → `LoadJSONFromPath` errors → `checkNewBundle` false →
+`detail=flag-newbundle`. The probe loads the same file only because it reads it as the
+owning user. Envelope hypotheses closed by the TLE census (Rekor v1
+`hashedrekord/0.0.1` body, non-empty checkpoint envelope, all mandatory scalars).
+
+Producer fix (this branch): `chmod 0644` the emitted bundle in the sign step; pin the
+emit surface via `--signing-config apps/web-platform/infra/inngest-signing-config.json`
+(signingconfig v0.2 — Fulcio v1 + oauth2.sigstore.dev v1 + Rekor v1 only, no `tsaUrls`);
+and add a verify-before-publish step that runs the PINNED cosign image over a bind
+mount — the consumer's own nonroot read path — hard-failing unless `Verified OK`
+prints. Lesson: a producer self-check must verify the artifact AS THE CONSUMER reads
+it; verifying as the file's owner is a false-green for the EACCES class.

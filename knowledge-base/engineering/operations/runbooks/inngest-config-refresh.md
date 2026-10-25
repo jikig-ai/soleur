@@ -49,17 +49,41 @@ from the applied digest.
    gh workflow run build-inngest-config-bundle.yml -f version=<N+1>
    ```
 
+   Dispatch only from the **default branch** (no `-r` flag): the host pins
+   `@refs/heads/main` in its identity regexp, so a branch-dispatched bundle verifies at the
+   producer gate but fails the host's check (`reason=signature`, `detail=identity`).
+
    The run is held for reviewer approval (the `inngest-config-signing` environment — HARD-7), then
    `cosign sign-blob`s the manifest (VERSION is a signed field — HARD-2) and dual-publishes to GHCR +
    zot. Its job summary prints `IMAGE@DIGEST`.
 
+   Producer contract (#10390 defect 3): the sign step pins the emit surface via
+   `--signing-config apps/web-platform/infra/inngest-signing-config.json` — a committed
+   signingconfig v0.2 document (Fulcio v1 + oauth2.sigstore.dev v1 + Rekor v1 only, **no
+   `tsaUrls`**; shape-pinned by `inngest-config-bundle-mirror.test.sh`'s jq rows) — and
+   normalizes the emitted `.sigstore.json` to mode 0644, because cosign writes it 0600
+   and the consumer's nonroot verifier container reads the bind-mounted member EACCES
+   (the measured defect-3 root cause, not an envelope defect). A "Verify produced
+   bundle before publish" step then runs the PINNED cosign image over a bind mount and
+   hard-fails unless it prints `Verified OK`; if that step is red the artifact never
+   reaches GHCR/zot — read the step log's cosign error and fix the producer, never
+   re-dispatch past it.
+
 3. **Promote the pointer (separate principal — HARD-6).** The interim route is a MANUAL targeted
-   apply in an authorized window — set `TF_VAR_inngest_config_digest=<IMAGE@DIGEST sha256>` for a
-   `soleur/prd_terraform` apply of `doppler_secret.inngest_config_digest` (the `count`-gated
-   resource springs to life on a non-empty value), verify with `doppler secrets get`, and land the
-   regex+floor admission the same window — the header of
-   `inngest-config-digest.tf` prescribes the exact sequence and bumps the isolation self-check
-   floor from 5 to 6. #9060 automates this per-merge (`-target` route); its absence does not block
+   apply in an authorized window — set the Doppler secret `INNGEST_CONFIG_DIGEST=<IMAGE@DIGEST
+   sha256>` in `soleur/prd_terraform`, then apply `doppler_secret.inngest_config_digest` (the
+   `count`-gated resource springs to life on a non-empty value). The tf-var transformer surfaces
+   the secret to terraform as `TF_VAR_inngest_config_digest`; do NOT create a secret literally
+   named `TF_VAR_inngest_config_digest` — under the transformer it arrives as
+   `TF_VAR_tf_var_inngest_config_digest`, undeclared-var noise (the mis-set observed 2026-10-24).
+   The apply is a state write, so its `AWS_*` must come from `TF_STATE_AWS_*` in
+   `soleur-infra-privileged/prd` per
+   [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+   invocation — the `prd_terraform` pair is read-only and 403s the state push. Verify the secret
+   landed with `doppler secrets get INNGEST_CONFIG_DIGEST -p soleur -c prd_terraform --plain`. The
+   regex+floor admission already LANDED (regex at #8754; floor 5→6 in the defect-3 producer
+   fix) — what survives is the ordering gate: between that merge and this apply, NO dispatch
+   that renders and boots merged cloud-init may run (cloud-init-inngest.yml). #9060 automates this per-merge (`-target` route); its absence does not block
    the manual promotion — `doppler_secret.inngest_config_digest` is on no job's `-target` list
    (pinned by `plugins/soleur/test/terraform-target-parity.test.ts`), so no merge reaches it.
    Terraform is the writer, so no standing CI token can write the isolated `soleur-inngest/prd`.

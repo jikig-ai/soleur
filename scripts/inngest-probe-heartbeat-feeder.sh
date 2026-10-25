@@ -14,12 +14,23 @@
 #   3. the heartbeat is NOT paused. While it is paused the verdict is fresh_heartbeat_paused and
 #      nothing is sent: the response to a beat sent to a paused heartbeat is undocumented, so this
 #      file never depends on it.
+#   4. (#10390 WS2) the SAME newest fresh row classifies to a serving verdict via the shared
+#      classify_dedicated_host def (scripts/inngest-dedicated-host-classify.sh — the verdict the
+#      Oct-22 heartbeat never carried: the probe stayed green while the host was not serving):
+#        - not-serving       -> the beat goes to <url>/fail (immediate incident; the
+#                             web-bash-synthetic.sh precedent), verdict fail_beat;
+#        - healthy           -> normal beat, verdict beat;
+#        - stopped-by-brake  -> normal beat — a deliberate state whose issue class the health
+#                             watchdog owns; the probe pipeline this switch measures is alive;
+#        - probe-unavailable -> withhold, verdict serving_unavailable: a missing signal must not
+#                             read as a working one.
 # There is exactly ONE call site that can reach the heartbeat URL (beat_once), and every path to it
 # passes the verdict logic above.
 #
-# EXIT CONTRACT. Exit 0 means exactly {beat, fresh_heartbeat_paused} for every run that can reach the
-# heartbeat. The one other zero is `--selftest` (an argument no workflow passes; it prints no verdict).
-# Every other outcome withholds
+# EXIT CONTRACT. Exit 0 means exactly {beat, fail_beat, fresh_heartbeat_paused} for every run that
+# can reach the heartbeat (a delivered /fail IS a decided verdict — the incident it opens is the
+# intended outcome, not a feeder error). The one other zero is `--selftest` (an argument no
+# workflow passes; it prints no verdict). Every other outcome withholds
 # the beat and exits non-zero: 3 cannot establish, 4 the beat could not be delivered, 64 usage, 78
 # tracing refused. The EXIT trap rewrites any status outside that set to 3, and rewrites a 0 that
 # did not come from a decided verdict to 3 as well: a fall-off that exited 0 would post a Sentry
@@ -35,10 +46,11 @@
 # CLOCK. "Now" is INNGEST_FEEDER_NOW (ISO-8601 UTC) when set, date -u otherwise. A set-but-malformed
 # value is exit 3, never a wall-clock fallback.
 #
-# TEST SEAMS. INNGEST_FEEDER_NOW and INNGEST_PROBE_ROW_LIB exist for the harness only. A frozen clock or a
-# permissive predicate library would authorize a beat on a dead probe, so the workflow unsets both before
-# running this file and the harness pins that (a seam that is honoured in production must be sealed by
-# its invoker).
+# TEST SEAMS. INNGEST_FEEDER_NOW, INNGEST_PROBE_ROW_LIB and INNGEST_CLASSIFY_LIB exist for the
+# harness only. A frozen clock, a permissive predicate library or a substitute classifier would
+# authorize a beat on a dead probe (or launder a not-serving verdict into a green beat), so the
+# workflow unsets all three before running this file and the harness pins that (a seam that is
+# honoured in production must be sealed by its invoker).
 #
 # Secrets (repo secrets, read only): BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME,
 # BETTERSTACK_QUERY_PASSWORD (the Logs warehouse) and BETTERSTACK_API_TOKEN_READONLY (the uptime API,
@@ -119,12 +131,13 @@ TOKEN_RE='^[A-Za-z0-9._~+/=-]{20,}$'
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS
 # A fixed collation and character class: [0-9] and sort order must not depend on the caller's locale.
 export LC_ALL=C
-# The two test seams (a frozen clock, a substitute predicate library) would authorize a beat on a dead
-# probe. The workflow unsets them; this refuses them inside Actions as well, so a stale export cannot
-# reach a run there even if the workflow's unset were ever edited away.
-if [[ "${GITHUB_ACTIONS:-}" == "true" ]] && { [[ -n "${INNGEST_FEEDER_NOW+x}" ]] || [[ -n "${INNGEST_PROBE_ROW_LIB+x}" ]]; }; then
+# The three test seams (a frozen clock, a substitute predicate library, a substitute classifier) would
+# authorize a beat on a dead probe or launder a bad verdict. The workflow unsets them; this refuses them
+# inside Actions as well, so a stale export cannot reach a run there even if the workflow's unset were
+# ever edited away.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]] && { [[ -n "${INNGEST_FEEDER_NOW+x}" ]] || [[ -n "${INNGEST_PROBE_ROW_LIB+x}" ]] || [[ -n "${INNGEST_CLASSIFY_LIB+x}" ]]; }; then
   marker "query_failed" "reason=test_seam_in_ci"
-  echo "CANNOT BEAT: a test seam (INNGEST_FEEDER_NOW or INNGEST_PROBE_ROW_LIB) is set inside GitHub Actions. It would let a frozen clock or a substitute predicate authorize a beat; nothing was decided."
+  echo "CANNOT BEAT: a test seam (INNGEST_FEEDER_NOW, INNGEST_PROBE_ROW_LIB or INNGEST_CLASSIFY_LIB) is set inside GitHub Actions. It would let a frozen clock, a substitute predicate or a substitute classifier authorize a beat; nothing was decided."
   exit 3
 fi
 # The ONE definition of a probe row (#8846): emitter AND anchored marker. Resolved from this file's
@@ -137,6 +150,24 @@ _ipr_lib="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
 if ! source "$_ipr_lib" || ! declare -F inngest_probe_row_selftest >/dev/null || ! inngest_probe_row_selftest; then
   marker "query_failed" "reason=selector_unavailable lib=$_ipr_lib"
   echo "CANNOT BEAT: reason=selector_unavailable -- the shared probe-row predicate did not load or failed its selftest, so no row can be read as a measurement. This says nothing about the store."
+  exit 3
+fi
+
+# The serving verdict (#10390 WS2) is the ONE definition in scripts/inngest-dedicated-host-classify.sh
+# — the same def scheduled-inngest-health.yml sources, never a re-parse. Loaded under the probe-row
+# lib's own census contract (load-or-fail-closed): unset the function name first so an inherited def
+# never survives a source that failed or defined nothing; the path resolves from this file's repo
+# root; INNGEST_CLASSIFY_LIB is the test-sandbox override (the workflow unsets it). The def carries no
+# selftest of its own, so two proof probes pin the vocabulary: a healthy row must read healthy and an
+# empty read must read probe-unavailable — a substitute that misses either is selector_unavailable.
+unset -f classify_dedicated_host
+_ic_lib="${INNGEST_CLASSIFY_LIB:-$REPO_ROOT/scripts/inngest-dedicated-host-classify.sh}"
+# shellcheck source=scripts/inngest-dedicated-host-classify.sh
+if ! source "$_ic_lib" || ! declare -F classify_dedicated_host >/dev/null \
+   || [[ "$(classify_dedicated_host 1 active 200 "done")" != "healthy" ]] \
+   || [[ "$(classify_dedicated_host 0 '' '' '')" != "probe-unavailable" ]]; then
+  marker "query_failed" "reason=selector_unavailable lib=$_ic_lib"
+  echo "CANNOT BEAT: reason=selector_unavailable -- the shared serving classifier did not load or failed its proof probes, so the freshest row cannot be graded. This says nothing about the store."
   exit 3
 fi
 
@@ -215,8 +246,11 @@ check_freshness() {
     exit 3
   fi
 
-  # One jq pass over the decoded rows: for each row [probe, host, dedicated, dt]. Message text is
-  # never carried out of jq. ANCHORED, NOT A BARE TOKEN: probe = the shared predicate (the probe's own
+  # One jq pass over the decoded rows: for each row [probe, host, dedicated, dt, server_active,
+  # http_code, cutover_flag]. Message text is never carried out of jq — the three serving fields are
+  # the classifier's bounded k=v tokens, extracted with the same first-wins capture rule the
+  # host_role= token uses; an absent one becomes '-' so no tab-separated field is ever empty.
+  # ANCHORED, NOT A BARE TOKEN: probe = the shared predicate (the probe's own
   # emitter AND a message that STARTS with the marker); host = both host fields; role = the FIRST
   # host_role= token (the same first-wins rule the field reader applies). dt is normalised ('T' to
   # ' ') and an absent one becomes '-' so no tab-separated field is ever empty.
@@ -224,10 +258,14 @@ check_freshness() {
   sel="$(printf '%s\n' "$raw" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" "$INNGEST_PROBE_ROW_JQ"'
       fromjson? | select(type == "object") | . as $o
       | ((.raw // "") | fromjson?) | select(type == "object")
+      | ((.message // "") | tostring) as $m
       | [ (if ([select(inngest_probe_row)] | length) > 0 then 1 else 0 end),
           (if (.host == $h and .host_name == $hn) then 1 else 0 end),
           (if ((((.message // "") | tostring) | (capture("(?:^| )host_role=(?<r>[^ ]*)")? // {r: ""})).r) == "dedicated" then 1 else 0 end),
-          ((($o.dt // "") | tostring | sub("T"; " ")) | if . == "" then "-" else . end)
+          ((($o.dt // "") | tostring | sub("T"; " ")) | if . == "" then "-" else . end),
+          (($m | (capture("(?:^| )server_active=(?<v>[^ ]*)")? // {v: ""})).v | if . == "" then "-" else . end),
+          (($m | (capture("(?:^| )http_code=(?<v>[^ ]*)")? // {v: ""})).v | if . == "" then "-" else . end),
+          (($m | (capture("(?:^| )cutover_flag=(?<v>[^ ]*)")? // {v: ""})).v | if . == "" then "-" else . end)
         ] | @tsv' 2>/dev/null)"
   jrc=$?
   if [[ "$jrc" -ne 0 ]]; then
@@ -245,8 +283,8 @@ check_freshness() {
   # trailing Z). Anything else (a zone offset would be read as UTC and could make a stale row look fresh)
   # is counted in dt_rejected and never decides.
   local dt_re='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z?$'
-  local total=0 probe=0 host=0 ded=0 baddt=0 p h r d dts=""
-  while IFS=$'\t' read -r p h r d; do
+  local total=0 probe=0 host=0 ded=0 baddt=0 p h r d sa hc cf cand=""
+  while IFS=$'\t' read -r p h r d sa hc cf; do
     total=$((total + 1))
     if [[ "$p" == 1 ]]; then
       probe=$((probe + 1))
@@ -255,7 +293,9 @@ check_freshness() {
         if [[ "$r" == 1 ]]; then
           ded=$((ded + 1))
           if [[ "$d" =~ $dt_re ]]; then
-            dts+="$d"$'\n'
+            # The serving fields ride the SAME row line the dt decides on, so the verdict that
+            # routes the beat is always the verdict of the row the freshness bound judged.
+            cand+="$d"$'\t'"$sa"$'\t'"$hc"$'\t'"$cf"$'\n'
           else
             baddt=$((baddt + 1))
           fi
@@ -264,9 +304,10 @@ check_freshness() {
     fi
   done <<<"$sel"
 
-  local newest="none"
-  if [[ -n "$dts" ]]; then
-    newest="$(printf '%s' "$dts" | LC_ALL=C sort -s | tail -1)"
+  local newest="none" nline=""
+  if [[ -n "$cand" ]]; then
+    nline="$(printf '%s' "$cand" | LC_ALL=C sort -s | tail -1)"
+    newest="${nline%%$'\t'*}"
   fi
   FUNNEL="rows_total=$total rows_probe=$probe rows_host=$host rows_dedicated=$ded newest_dt=$(printf '%s' "$newest" | tr -c 'A-Za-z0-9:. -' '?' | tr ' ' '_' | head -c 40) lines=$nonempty dt_rejected=$baddt"
   if [[ "$ded" -eq 0 ]]; then
@@ -276,7 +317,7 @@ check_freshness() {
   fi
 
   local dt_epoch=""
-  if [[ -n "$dts" && "$newest" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+  if [[ -n "$nline" && "$newest" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
     dt_epoch="$(date -u -d "${newest:0:19}" +%s 2>/dev/null)" || dt_epoch=""
   fi
   if [[ -z "$dt_epoch" ]]; then
@@ -295,6 +336,19 @@ check_freshness() {
     echo "CANNOT BEAT: the newest dedicated probe row is ${AGE}s old (limit ${FRESH_MAX_SECS}s). A silent probe pipeline must never keep the heartbeat fed."
     exit 3
   fi
+
+  # ── SERVING VERDICT (#10390 WS2) ────────────────────────────────────────────────────────────
+  # The row the freshness bound just passed carries its own serving fields; the shared
+  # classify_dedicated_host def grades them (loaded fail-closed above). The '-' placeholders the
+  # jq pass emitted map back to empty so an absent field reads probe-unavailable (withhold), never
+  # not-serving (a page on a row that proved nothing).
+  local rest="${nline#*$'\t'}"
+  sa="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+  hc="${rest%%$'\t'*}"; cf="${rest#*$'\t'}"
+  [[ "$sa" == "-" ]] && sa=""
+  [[ "$hc" == "-" ]] && hc=""
+  [[ "$cf" == "-" ]] && cf=""
+  SERVING="$(classify_dedicated_host 1 "$sa" "$hc" "$cf")"
 }
 
 # ── HEARTBEAT RESOLUTION (chokepoint 2) ──────────────────────────────────────────────────────
@@ -363,18 +417,31 @@ resolve_heartbeat() {
 
 # ── THE ONE BEAT CALL SITE ───────────────────────────────────────────────────────────────────
 # Success is a 2xx code only: -f does not fail a 3xx, and redirects are never followed. The URL is
-# passed on stdin and is never printed, so no ::add-mask:: line is needed.
+# passed on stdin and is never printed, so no ::add-mask:: line is needed. The serving verdict picks
+# the arm through BEAT_MODE: "fail" appends the literal /fail suffix to the shape-checked HB_URL
+# (the web-bash-synthetic.sh precedent — a verified FAIL pings for an immediate incident rather than
+# alarming through grace); the suffix is a fixed literal appended AFTER resolve_heartbeat's URL_RE
+# guard, so no caller-controlled value reaches the string.
 beat_once() {
-  local code crc
-  code="$(printf 'url = "%s"\n' "$HB_URL" \
+  local code crc target="$HB_URL"
+  if [[ "$BEAT_MODE" == "fail" ]]; then
+    target="${HB_URL%/}/fail"
+  fi
+  code="$(printf 'url = "%s"\n' "$target" \
     | curl --disable --noproxy '*' -fsS --max-time 15 -o /dev/null -w '%{http_code}' --config - 2>/dev/null)"
   crc=$?
   if [[ "$crc" -ne 0 || ! "$code" =~ ^2[0-9][0-9]$ ]]; then
-    fmarker "beat_failed" "reason=http_status http=${code:-none} curl_rc=$crc"
+    fmarker "beat_failed" "reason=http_status http=${code:-none} curl_rc=$crc mode=$BEAT_MODE"
     echo "CANNOT BEAT: the heartbeat ping was not accepted (http ${code:-none}). The probe row was fresh; the feeder could not deliver."
     exit 4
   fi
-  fmarker "beat" "http=$code age_s=$AGE"
+  if [[ "$BEAT_MODE" == "fail" ]]; then
+    fmarker "fail_beat" "http=$code age_s=$AGE serving=$SERVING"
+    echo "fed: the heartbeat's /fail arm was beaten on a not-serving verdict; the incident it opens is the intended outcome."
+    DECIDED=1
+    exit 0
+  fi
+  fmarker "beat" "http=$code age_s=$AGE serving=$SERVING"
   echo "fed: the heartbeat was beaten on a confirmed fresh dedicated probe row."
   DECIDED=1
   exit 0
@@ -382,6 +449,8 @@ beat_once() {
 
 # ── MAIN
 AGE=0
+SERVING=""
+BEAT_MODE="ok"
 check_freshness
 resolve_heartbeat
 if [[ "$HB_PAUSED" == "true" ]]; then
@@ -390,6 +459,18 @@ if [[ "$HB_PAUSED" == "true" ]]; then
   DECIDED=1
   exit 0
 fi
+# The routing table from the property above: only a not-serving verdict arms the /fail suffix.
+# stopped-by-brake beats normally (deliberate state; the probe pipeline it measures is alive and the
+# health watchdog owns its issue class), and anything else — probe-unavailable included — withholds:
+# a missing signal must not read as a working one.
+case "$SERVING" in
+  healthy|stopped-by-brake) ;;
+  not-serving) BEAT_MODE="fail" ;;
+  *)
+    fmarker "serving_unavailable" "serving=$SERVING age_s=$AGE"
+    echo "CANNOT BEAT: the freshest dedicated probe row's serving fields did not grade to a verdict (classifier: ${SERVING:-none}). A missing signal must not read as a working one."
+    exit 3 ;;
+esac
 beat_once
 fmarker "unreachable"
 echo "CANNOT BEAT: the decision flow fell through without a verdict. This is a feeder bug; nothing was decided."

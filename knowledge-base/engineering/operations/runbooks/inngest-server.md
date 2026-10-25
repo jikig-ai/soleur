@@ -130,7 +130,7 @@ filter (a jq fault — file an issue). The anchor's classes:
   server named `soleur-inngest` in the token's project (a replace in flight — re-dispatch once it
   exists);
 - **re-dispatching does nothing until the cause is fixed:** the Doppler token read returned nothing,
-  the token was rejected (HTTP 401/403 — the warning names which variable was sent), or `created` is
+  the token was rejected (HTTP 401/403 — the warning names `HCLOUD_TOKEN_READONLY`), or `created` is
   out of bounds.
 
 When G4 refuses, the `::error::` names which outcome the provisioning probe reported
@@ -138,9 +138,11 @@ When G4 refuses, the `::error::` names which outcome the provisioning probe repo
 provision unit means replace, not resume) and the probe's per-stage detail lines sit on the same
 run's stderr.
 
-Nothing was written in any of these cases. The anchor also prints which token it used: today that is
-the read/write `HCLOUD_TOKEN`, because `HCLOUD_TOKEN_READONLY` is not yet minted
-(`infra-credential-tiers-8209.md` step O5). The same generation scope applies to op=arm G3.7's
+Nothing was written in any of these cases. The anchor reads `HCLOUD_TOKEN_READONLY` alone: since
+#10664 (2026-10-23) there is no fallback to the read/write `HCLOUD_TOKEN`, which no longer exists in
+`prd_terraform` (names-only listing, 2026-10-20). A missing or unusable read-only token is
+`unreadable`. A transient Doppler auth or network failure clears on re-dispatch; a secret that is truly absent
+is restored by the owner (`infra-credential-tiers-8209.md` step O5) before a re-dispatch can pass. The same generation scope applies to op=arm G3.7's
 liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops now also refuse
 while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback (retired by #8285 PR B,
 so three ops today; the sentence is kept as written).
@@ -1329,7 +1331,8 @@ shipped to Better Stack (Vector Source 4). `warning` and `error` classes are als
 `apps/web-platform/infra/sentry/` finds none; tracked as #10556), so a Sentry event here notifies nobody: the read below is the detection. The failed
 release run's `::error::` / `reason=` line carries only one constant: an `inngest_link_*` reason, `inngest_env_scrub_failed` (the env-file scrub), or
 for the canary `canary_inngest_link_inspect_failed` (the `inspect` check) or `canary_inngest_link_failed` (every in-container check); the
-discriminating fields are in the event.
+discriminating fields are in the event. The one exception to "only one constant" is `inngest_link_selfgate_failed`: the `reason` stays that constant, but the
+deploy state also carries `inngest_link_selfgate_phase`, but only the LAST deploy's state and only in the release run's non-zero-exit state dump and `/hooks/deploy-status` (see "Reading `selfgate_failed`" for where that key is and is not printed; for a failed flip the event row is the only record).
 
 ```
 doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep 'INNGEST_LINK: class=' \
@@ -1350,7 +1353,7 @@ is printed beside it). `--grep` is an unanchored substring match on the double-e
 | `https_to_http` | warning | Emitted at resolve time when this host's `last-scheme` file says its last deploy started https and it now resolves http **with a verified scope**. Expected after an intentional `off` or a lapsed lease; otherwise the flag disappeared (hand delete, Doppler restore) and the fleet is moving to plaintext. It never fails the deploy, and an intentional `off` is a warning event only, not a page. **No alert rule routes it** (#10556), so read it after every `off` and on a routine schedule while the flag is on. `last-scheme` is written only after the **production** `docker run` succeeds, never at resolve time, so a failed flip canary and its revert leave it alone, and a scope-unverified run never records one. |
 | `ca_unavailable` | error | https resolved but the CA could not be read from the snapshot or Doppler after three tries. The deploy fails. |
 | `ca_invalid` | error | `why=<tool\|decode\|size\|empty\|key\|count\|parse\|expired\|ca>` names the first failed validator check. The deploy fails. |
-| `selfgate_failed` | error | `rc=` and `http=` of the last of three host-side `curl --cacert <candidate>` attempts. The listener is down, the CA does not match the served certificate, or the host-to-host path is blocked. The deploy fails; the old CA file is untouched. |
+| `selfgate_failed` | error | `rc=<n> http=<ddd\|none> attempts=<n> phase=<token> tcp=<n> tls=<n> verify=<n>`: the last of the host-side `curl --cacert <candidate>` attempts (three by default) and the stage it reached. Never read it from `rc` alone: see "Reading `selfgate_failed`" below for every field and token, a first read per token and the retry rule. The deploy fails with the run-log reason `inngest_link_selfgate_failed` (a constant); the stage is also written to the deploy state as the closed-enum key `inngest_link_selfgate_phase` (same token as `phase=`), which the next deploy on that host erases (for a failed flip, its automatic revert redeploy normally does that about two minutes later; the revert is best-effort, so a given run may leave the key), and only this event adds `rc`, `http`, `attempts`, `tcp`, `tls` and `verify`; the old CA file is untouched. An event without `phase=` is from before the fix: it cannot be decoded further. |
 | `write_failed` | error | `file=ca_candidate\|ca\|link_env`: installing under `/mnt/data/inngest-link` failed with https. See "CA on web hosts" for what can and cannot be repaired. |
 | `ca_unwritable`, `link_env_unwritable`, `last_scheme_unwritable` | warning | The same directory was not writable on a flag-**off** deploy (the placeholder could not be installed) or for the downgrade memory: the deploy continues. |
 | `ca_reset_failed` | warning | Flag-**off** deploy, after the new container started: resetting the stale pinned CA to an empty placeholder failed (`dir=`). The deploy is fine; the pinned CA stays on disk and a later container start would mount it. Same ownership check and the same no-no-SSH-remedy caveat as "CA on web hosts" (#10557). |
@@ -1640,6 +1643,121 @@ empty `served_sha256`, or `served_sha256` different from `cert_sha256`); and a *
 is a certificate that was never installed, not an expiry. The refusal-marker page route (`monitor_send_failed` reading Vector
 Source 2 on the Inngest host) is asserted by source-text guards only; no PRIORITY-2 row from that host has been read back, so treat
 the first one as the proof and read it after A1 (`JSONExtractString(raw,'PRIORITY') = '2'` for the Inngest host's `host`).
+
+### Reading `selfgate_failed`
+
+One failed host-side gate is one line. Read it with the `INNGEST_LINK: class=` query above, `--grep` narrowed to the class and `--since` wide enough to
+cover the failed deploy (the default `--since 1h` silently misses an older deploy; `--since` takes `Nh`, `Nm`, `Nd` or an ISO-Z time):
+
+```
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 24h --grep 'class=selfgate_failed' \
+  | jq -R -r 'fromjson? | .dt as $t | .raw? | fromjson? | select(.SYSLOG_IDENTIFIER == "ci-deploy") | "\($t) \(.host_name) \(.host) \(.message)"'
+```
+
+```
+INNGEST_LINK: class=selfgate_failed level=error rc=<n> http=<ddd|none> attempts=<n> phase=<token> tcp=<n> tls=<n> verify=<n>
+```
+
+The `dt` and host this prints are the failing row's own: use that `dt` as T for every read below, and read the host before reading that host's other rows.
+**An empty result is not a pass and not a reason to re-flip.** The shipper may have lagged or the window may be wrong: widen `--since` once. For a failed **flip** an
+empty read means STOP and ask the owner for the shipper check: do not fall back to "read the state key instead", because for a flip the revert normally erases it (next paragraph).
+Do not re-flip on the run-log reason alone.
+
+**Where the stage is printed.** `phase` is carried in three places, and only the first has the other fields. (1) This Better Stack event: `rc`, `http`, `attempts`,
+`phase`, `tcp`, `tls`, `verify`. (2) The deploy state key `inngest_link_selfgate_phase` (one of the seven tokens below, written by `write_state` through a closed-enum
+check, so an out-of-enum value reads `invalid`; the key is ABSENT unless the https self-gate failed). The key is the LAST deploy's state and is visible in two places only:
+(a) the release run's log, where `web-platform-release.yml` prints the whole state body (`jq .`) when ci-deploy.sh exits non-zero, and (b) `/hooks/deploy-status` while no other
+deploy has run on that host. Any later deploy rewrites the state (`write_state ... running` at its start) and erases the key. Read (b) with the HMAC call in
+`plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`, section "Call Pattern" (no SSH). **web-2:** web-1 answers that hook, and when web-1's last deploy fanned out
+its whole status, including this key, sits under `.peers["<web-2 private ip>"]` of web-1's body (`peers_json()` in `cat-deploy-state.sh`); the release run prints a failing peer's
+body too. The key appears there only once web-2 itself runs the new `ci-deploy.sh`. (3) NOT the flip run log: `inngest-link-flip.yml` polls through
+`.github/actions/dispatch-web-redeploy/track.sh`, which prints only `reason=` and `exit_code=`, so a failed flip run shows the constant reason without the stage.
+**For a failed flip the Better Stack event row is therefore the ONLY record.** The workflow's `Revert to http (best effort)` step redeploys the fleet and every host rewrites its
+state: on 2026-10-23 the failure row was at 15:24:42Z and the revert rows at 15:26:10Z (web-1) and 15:26:44Z (web-2), so about two minutes later both hosts had begun a new deploy, which erases the key (the revert is best-effort and can end `REVERT-INCOMPLETE` or be cancelled, so a given run may leave the key: read Better Stack first), and in that run
+nothing had printed it (evidence file, "Better Stack rows read on 2026-10-23").
+
+Every field is a fixed token or an integer; the event never carries a URL, an address, certificate text or curl's own error message. The gate makes
+`attempts` tries of one curl each (three by default) and passes only on curl exit code 0 with HTTP 200 against the pinned file; nothing here changes that.
+
+| Field | Meaning | Reading rule |
+|---|---|---|
+| `rc` | curl's exit code on the LAST attempt | The same wire event can print a different `rc` on a different curl build (52 on curl 8.5.0, 56 on 7.81 and 8.23), so decide the stage from `phase`, not from `rc`. `rc` is needed only to tell 7 (refused) from 28 (a drop) when `tcp=0`, and for the `unknown` decode below. |
+| `http` | the HTTP code of the LAST attempt, only when it was a three-digit number, else `none` | `000` means curl got no HTTP status. `http=200` with `phase=request` is a 200 header whose body was cut short: not healthy. It is not rc 18 only: rc 18 was measured on curl 8.5.0, rc 56 (a close without `close_notify`) and rc 28 (the body stalled until `--max-time`) on curl 8.23.0, and all three print the same line. |
+| `attempts` | how many attempts ran | The denominator for `tcp` and `tls`. |
+| `phase` | the stage the LAST attempt reached, one of seven tokens below | Describes the last attempt only. |
+| `tcp` | how many of ALL attempts connected TCP, 0 to 99 | Compare it with `attempts`; an attempt whose timer field could not be read adds nothing. |
+| `tls` | how many of ALL attempts printed a non-zero TLS handshake time, 0 to 99 | Compare it with `attempts` and `tcp`. Every measured rc 60 and rc 77 row printed `time_appconnect` 0.000000 (the curl 8.5.0 table in the evidence file, and the rc 60 rows measured on 8.23), so `verify` and `ca_file` lines read `tls=0` as well: `phase` and `rc` separate them from `handshake`. |
+| `verify` | 0 unless `phase=verify`; then curl's certificate verification result of the last attempt, clamped to 99 | See the `verify` reading rule below. |
+
+| `phase` | The last attempt | Typical `rc` | First read with no SSH (below) | Retry |
+|---|---|---|---|---|
+| `connect` | no TCP connection: the listener refused, a firewall dropped the packets, or nothing answers | 7 (refused), 28 (a drop; `tcp=0`) | the Inngest host's `tls-health` rows for the window: `listener`, `nrestarts`, `bind` | Transient only if `nrestarts` rose in the window; read `tls-health` first. A deterministic cause fails the same way on a re-flip, and a re-flip needs the owner's per-command go (A3). |
+| `handshake` | TCP connected and no TLS handshake time was printed (a terminator crash loop, plaintext on the TLS port, a stalled handshake; the rcs measured are 35 and 28). The classifier also files rc 58, 83 and 51 with a non-zero connect time here, not under `ca_file`: those were not measured, so `handshake` with an rc outside 35 and 28 is not evidence of a terminator fault | 35, 28 | the same rows: `unit`, `nrestarts`, `listener` | As `connect`. |
+| `verify` | TLS was rejected at certificate verification: the served certificate does not verify against the candidate CA file (curl printed no handshake time, so `tls=0`, measured on every rc 60 row) | 60 | the `verify=` value, then the `verify` reading rule below: the `tls-health` fingerprints are both Inngest-host values and cannot show the pinned side | Deterministic until the served certificate or the CA value Doppler holds changes; a re-flip repeats it. STOP: do not re-mint, re-publish or re-flip on this line alone. |
+| `ca_file` | curl could not use the candidate CA file it was handed | 77 | nothing earlier in the same deploy: `class=ca_invalid` and `class=write_failed file=ca_candidate` return before the gate runs, so a `ca_file` event means they did not fire and the validator already accepted the bytes (`write_failed file=ca` and `file=link_env` come AFTER the gate and say nothing about it). The CA value in Doppler `soleur/prd` is an owner read, not a no-SSH read; this is not a listener problem | Deterministic until the CA file is right; do not re-flip before the cause is read. |
+| `request` | TLS completed and verified, no HTTP response came back | 56, 52, 28, 1, 18 | the same `tls-health` rows (`unit`, `nrestarts`, `listener`), which describe the terminator only: no field shows its upstream on `127.0.0.1:8288`. The read-only `/hooks/inngest-tls-handshake` call (see "Calling the handshake hook (A2)" above) repeats the gate's own request against the INSTALLED CA file, so it adds nothing while the gate is failing, and after a failed gate it returns `verified_rc=77` only while the installed CA file is still the empty placeholder (a host that has never completed an https deploy; a host holding an older valid CA answers against that file): that is not a verdict on this event | Do not re-flip on `phase=request` alone: unchanged `tls-health` is not a reason to expect a different result, and no cause is readable. Every flip attempt needs the owner's in-session per-command go (A3). A failed gate aborts that host's deploy before any container swap; the workflow's revert step then flag-absent applies and redeploys the fleet (the A3 row counts that as one swap per host). |
+| `status` | TLS verified and an HTTP status other than 200 came back | 0, 18 | the `http=` value | Depends on what answers behind the terminator; read the status first. |
+| `unknown` | the attempt's output could not be read (see the `unknown` decode) | 124, 2, 0 | none: the line carries no stage | Read the `unknown` decode before retrying. |
+
+**`phase=request` means: TLS verified, no HTTP response: check the terminator and its upstream, not the certificate. No cause is readable today:
+the terminator's own journald is not shipped to Better Stack.** `soleur-inngest-tls.service` runs stunnel in the foreground with `syslog = no` and sets no priority, so its
+output takes systemd's default priority 6, and `vector.toml` Source 1 admits only `inngest-server.service` or priority 3-4 from other units (no `vector.toml` entry names the
+terminator). No issue tracks shipping it: #10880 is a different `vector.toml` item, a carrier-drift CI guard. The event does not say whether the terminator, its upstream on `127.0.0.1:8288` or the app failed.
+**Exit from the stop rule (the owner's decision, not made here).** Shipping the terminator's journald is a small `vector.toml` change by reading: add the unit to Source 1 `include_units`
+and to Source 2 `exclude_units` (excludes win, so the two lists move together), and update `apps/web-platform/test/infra/vector-admission.test.sh`, which pins both lists (rows S1 and S2). A `vector.toml`
+change reaches the Inngest host only through the bootstrap image (`IREF` digest in `cloud-init-inngest.yml`, which feeds `user_data`), and `hcloud_server.inngest` has no `ignore_changes` on
+`user_data` (`inngest-host.tf`), so the digest bump forces a host replace; it also touches the `vector.toml` carrier pin that #10880 guards. No issue tracks it. The owner chooses between shipping it before a
+third flip and a one-off SSH read of the terminator's journal under `hr-ssh-diagnosis-verify-firewall`.
+A real stunnel whose upstream refused printed exactly `rc=56 http=000` with TLS completed (curl 8.5.0, one measurement): a match for the shape of the
+2026-10-23 event, not a cause for it.
+
+**First read with no SSH.** The Inngest host phones its `tls-health` row home every 5 minutes, independent of the journald shipper
+(see "Reading `tls-health` without SSH" above for the fields). T is the `dt` the `selfgate_failed` query above printed for the failing row (not the time the run
+was dispatched or read). Widen it by 15 minutes each way and read; the line prints each row's `dt` and host so the rows can be placed against the gate's second:
+
+```
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since <T-15m, ISO-Z> --until <T+15m, ISO-Z> --grep stage=tls-health --limit 10 \
+  | jq -R -r 'fromjson? | .dt as $t | .raw | fromjson? | select(.stage == "tls-health") | "\($t) \(.host) \(.detail)"'
+```
+
+`listener=1` with `nrestarts` unchanged across the window says the terminator was up and stable at the 5-minute samples; it does not say it was up at the
+gate's second, and it says nothing about its upstream. An empty result is not a pass: confirm the query returned rows for the Inngest host first.
+
+**The `verify` reading rule.** `verify=` is meaningful only with `phase=verify`, because curl prints 1 for several unrelated failures; the line suppresses it elsewhere.
+`18`: the served certificate is a different self-signed certificate than the pinned file (the pinned file is a self-signed leaf by design, so a re-mint without a re-publish reads 18). `10`: the served certificate
+expired. `1`: a name mismatch (no matching IP in the served certificate); on curl 8.23 a different certificate WITHOUT the matching IP also reads 1, because the
+name check is reported first (measured), so 1 does not exclude a re-mint. `19`, `20`, `21` and any other value are unexpected: the served chain is not the designed single self-signed
+certificate (a leaf issued by a CA that is not pinned read 20 on curl 8.23, measured); do not guess.
+
+**What the `tls-health` rows can and cannot show for `verify`.** `served_sha256` (the live handshake) and `cert_sha256` (the file on disk) are both measured on the
+Inngest host, from the certificate in `soleur-inngest/prd`. The gate's candidate CA is the `INNGEST_TLS_CA` value in `soleur/prd` that this deploy read (from the
+deploy snapshot, else from Doppler) and decoded; the Terraform `doppler_secret.inngest_tls_ca` writes it as the base64 of the same certificate. Equal `served_sha256`
+and `cert_sha256` therefore say only that the Inngest host is self-consistent, and they stay equal after a re-mint whose new certificate was never re-published to the
+Doppler value the web hosts read: that is exactly the `verify=18` case. No event carries the fingerprint of the candidate or of the pinned file the web hosts have
+installed (the A1 row says the same: no emitter reports a CA fingerprint). Only an owner read of the Doppler `INNGEST_TLS_CA` fingerprint against the Terraform
+certificate's reads the pinned side, and this section's no-SSH reads do not include it. **STOP rule: `phase=verify` alone licenses neither a re-mint, nor a
+re-publish, nor a re-flip.** Read the pinned side first; a re-flip needs the A3 per-command go.
+
+**The flapping rule.** `phase` is the last attempt; `tcp` and `tls` cover all of them. When `tcp` or `tls` is neither 0 nor `attempts`, or when `phase` contradicts the counts
+(for example `phase=connect` with `tcp` at least 1, or `phase=handshake` with `tls` at least 1), the attempts did not all behave alike: read the line as an unstable listener, not as the last token alone.
+A count below `attempts` is not proof of a restart: an attempt that hung (`rc=124`) or printed nothing adds to neither counter, so it lowers both without any listener change. Confirm a restart from the Inngest host's `nrestarts` in `tls-health`, never from the counts alone.
+
+Three worked lines (each is the line the suite's flapping fixture prints, row S4; the attempt sequence in brackets is that fixture's):
+
+- `rc=56 http=000 attempts=3 phase=request tcp=2 tls=2 verify=0` (reset after the request, refused, reset after the request): the first and the last attempts completed TLS and got no HTTP response, the middle one was refused.
+- `rc=7 http=000 attempts=3 phase=connect tcp=1 tls=1 verify=0` (reset after the request, refused, refused): the last attempt was refused, as was the one before it; only the first connected, and it completed TLS but got no HTTP response, so it was not a good attempt.
+- `rc=35 http=000 attempts=3 phase=handshake tcp=2 tls=1 verify=0` (refused, reset after the request, closed during the handshake): the first was refused, the second completed TLS and got no HTTP response, and the last connected TCP and was closed before the TLS handshake finished.
+
+A steady line has `tcp` and `tls` both equal to `attempts` (`request`, `status`), `tcp=attempts tls=0` (`handshake`, and also `verify` and `ca_file`, which print no handshake time: `phase` and `rc` tell them apart) or both 0 (`connect`).
+
+**The `unknown` decode.** `unknown` is never a stage and `tcp=0 tls=0` beside it does NOT mean connect failed: an attempt whose output was unreadable counts nothing.
+`rc=124`: the `timeout 20` wrapper killed curl, so curl printed nothing (a hang; this wins over any good timers). `rc=2`: curl 8.23 with a MISSING CA file prints a usage
+error and no output (measured; curl 7.81 and 8.5.0 print `rc=77` for a missing file, read as `ca_file`, and an EMPTY or garbage file prints 77 on every build measured, so rc 2 does not point at an empty placeholder). `rc=0` with `phase=unknown`: the write-out line was not in the expected four-field shape,
+which means the curl output format changed; file it, do not retry.
+
+**Proof limits.** The profiles were measured against local servers on curl 7.81, 8.5.0 and 8.23, but not every row on every build (evidence: `knowledge-base/project/specs/archive/20261024-023954-feat-one-shot-inngest-selfgate-phase/curl-w-measurements.md`,
+whose last column says which): the real stunnel rows, the truncated body (rc 18) and the firewall drop are 8.5.0 or unrun elsewhere; the host's own curl was not read. The suite compares the double with real curl for six cases (closed port, accept and close, a pinned-certificate mismatch,
+TLS then a clean close, 200, 502); the resolver suite's real-curl rows ran 6 of 6 against curl 8.5.0 (the Ubuntu 24.04 userland) in a container on 2026-10-23, including the pinned-certificate mismatch and the check that the phase the real function emits equals the stub's, at commits `4500ff682c` (274 passed) and `c2ac316a14` (281 passed); an earlier 252-passed run predates the fix commits and is not proof of the shipped code; the same rows also ran on the dev host's 8.23. The hang phases (5 s and 10 s timers), a TCP reset, an empty CA file and a truncated body are stub-only in the suite (measured once in the evidence file, not compared against real curl) and rc 58, 83 and 51 were never measured.
 
 ### Certificate expiry and rotation
 
@@ -2046,6 +2164,12 @@ paused the verifier reports `verdict=fresh_heartbeat_paused` and sends nothing, 
 (clock-dispatched) each reported `verdict=beat http=200`. That is a dated record: read the live state from
 Better Stack, not from this paragraph.
 
+Since #10390 the beat also certifies the **serving verdict**, not just row freshness: the feeder grades
+the same freshest row's `server_active`/`http_code`/`cutover_flag` through the shared
+`classify_dedicated_host` def and beats `<url>/fail` on `not-serving` (verdict `fail_beat` — an intended
+immediate incident), beats normally on `healthy` and `stopped-by-brake`, and withholds
+(`verdict=serving_unavailable`, exit 3) when the fields do not grade to a verdict.
+
 **Reading the feeder (no SSH).** Each run prints one `inngest-probe-feeder: verdict=<v> ...` line. Once
 the warehouse has answered it carries `rows_total rows_probe rows_host rows_dedicated newest_dt lines
 dt_rejected` (and `age_s`), so an empty warehouse, a host or role filter dropping rows, rows that arrived
@@ -2057,20 +2181,22 @@ shape (for example it carries a zone offset); `newest_dt` ignores them, so `prod
 `no_rows` form carry no complete funnel. `heartbeat_not_unique` carries `paged=1` when the API reports a
 further page (the feeder then refuses to trust a page-1 answer). A run that died before printing any marker
 (the script missing, a parse error) prints `verdict=no_marker rc=<n>`.
-Exit 0 means exactly `beat` or `fresh_heartbeat_paused` (`--selftest` is the one other zero and is never
+Exit 0 means exactly `beat`, `fail_beat` or `fresh_heartbeat_paused` (`--selftest` is the one other zero and is never
 run by the workflow). Verdicts: `no_rows` / `producer_silent` (no fresh dedicated probe row; the probe
 pipeline is dark, which is what this heartbeat exists to report), `row_unusable` (no readable timestamp
 among the dedicated rows, or the newest is future-dated; a data fault, not proof the pipeline is dark),
 `query_failed` (warehouse unreadable; says nothing about the store), `beat_failed` (a fresh row existed
-but the heartbeat could not be resolved or delivered). The Sentry monitor
-`scheduled-inngest-probe-heartbeat` checks in `ok` only for the two exit-0 verdicts; `error` means
+but the heartbeat could not be resolved or delivered), `serving_unavailable` (a fresh row existed but its
+serving fields did not grade to a verdict — withheld, never a false beat either way). The Sentry monitor
+`scheduled-inngest-probe-heartbeat` checks in `ok` only for the three exit-0 verdicts (including `fail_beat`,
+whose 2xx /fail POST IS the delivered incident); `error` means
 "withheld or failed", not "feeder broken". `bash scripts/inngest-probe-heartbeat-feeder.sh --selftest`
 prints `selftest=ok` with no network or credentials. A local run sends nothing ONLY while the heartbeat
 is paused; once armed, the same command beats the heartbeat, which is a production write. It needs the
 four secrets `BETTERSTACK_QUERY_HOST`, `BETTERSTACK_QUERY_USERNAME`, `BETTERSTACK_QUERY_PASSWORD` and
 `BETTERSTACK_API_TOKEN_READONLY` (all in Doppler `prd_terraform`):
-`doppler run -p soleur -c prd_terraform -- env -u INNGEST_FEEDER_NOW -u INNGEST_PROBE_ROW_LIB bash scripts/inngest-probe-heartbeat-feeder.sh`
-(the two `env -u` seals keep a stale exported test seam from deciding the verdict). Exit codes are 0 beat
+`doppler run -p soleur -c prd_terraform -- env -u INNGEST_FEEDER_NOW -u INNGEST_PROBE_ROW_LIB -u INNGEST_CLASSIFY_LIB bash scripts/inngest-probe-heartbeat-feeder.sh`
+(the three `env -u` seals keep a stale exported test seam from deciding the verdict). Exit codes are 0 beat
 or paused, 3 withheld, 4 beat could not be delivered, 64 usage, 78 tracing refused.
 
 **Arming is a production write to Better Stack.** Run the command below only after the operator has
@@ -2334,10 +2460,14 @@ setting).
    (set out-of-band, see inngest.tf). From the repo root:
 
    ```bash
-   export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID  -p soleur -c prd_terraform --plain)
-   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+   # Backend creds — post-O5b the prd_terraform AWS_* pair is read-only; a state
+   # write (apply) needs the Tier-B pair exported ambiently (the tf-var
+   # transformer renames injected secrets, so no loader sets bare AWS_*):
+   export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
    terraform -chdir=apps/web-platform/infra init -input=false
-   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+   doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+     doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
      terraform -chdir=apps/web-platform/infra apply \
        -target=random_password.inngest_redis_password_prd \
        -target=doppler_secret.inngest_redis_password_prd

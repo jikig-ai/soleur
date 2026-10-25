@@ -5,7 +5,7 @@ which re-derives this set from `git ls-files` — a new member with no row here 
 CI failure):
 
 - `.claude/hooks/**/*.sh`, excluding `*.test.sh` and files under `/test/` — **56 files**.
-- `scripts/lint-*`, excluding `*.test.sh`, `*.baseline.txt`, `*.highwater*` — **46 files**.
+- `scripts/lint-*`, excluding `*.test.sh`, `*.baseline.txt`, `*.highwater*` — **47 files**.
 
 ## Verdicts
 
@@ -16,7 +16,7 @@ CI failure):
 | `soleur-coupled` | The guard's *purpose* is Soleur's: it enforces a Soleur rule id, a Soleur corpus path, a vendor in Soleur's stack, or Soleur telemetry/workflow machinery. Not shipped. |
 
 **Counts:** hooks — 0 generic / 10 generic-after-extraction / 47 soleur-coupled.
-lints — 9 generic / 8 generic-after-extraction / 29 soleur-coupled.
+lints — 9 generic / 8 generic-after-extraction / 30 soleur-coupled.
 
 The canonical emit pair `plugins/soleur/scripts/precommit-guard.sh` +
 `plugins/soleur/scripts/lib/wrapper-boundary.sh` is NOT in the census set (it
@@ -88,7 +88,7 @@ template rather than shipping the monolith.
 | `supabase-loopback-warn.sh` | soleur-coupled | Supabase vendor stack check (ADR-153). |
 | `worktree-write-guard.sh` | generic-after-extraction | Blocks writes to the main checkout while worktrees exist — repo-generic idea (v2); couplings = `incidents.sh`/`hook-input.sh` sourcing. |
 
-## Census — `scripts/lint-*` (46)
+## Census — `scripts/lint-*` (47)
 
 | File | Verdict | Rationale |
 |---|---|---|
@@ -111,6 +111,7 @@ template rather than shipping the monolith.
 | `lint-followthrough-varq-ban.sh` | soleur-coupled | Soleur probe-set/varq conventions. |
 | `lint-gh-argv-arg.py` | generic | Repo-wide `gh` argv vs jq-flag-token lint over workflows + `*.sh`; no Soleur coupling. |
 | `lint-guard-contract.py` | soleur-coupled | Soleur plan/SKILL.md guard-contract shape (deepen-plan §4.11). |
+| `lint-hcloud-token-readonly-no-fallback.sh` | soleur-coupled | Tree scan for the read/write Hetzner token read (ADR-241 D4); the Soleur secret store and its one allowlisted `op=backup` read. |
 | `lint-infra-no-human-steps.py` | soleur-coupled | `hr-no-ssh-fallback-in-runbooks` on `knowledge-base` docs. |
 | `lint-integration-env-gates.sh` | soleur-coupled | `apps/web-platform/{test,lib}` env-gate wiring + `scheduled-integration-suites.yml`. |
 | `lint-legal-mirror-drift-baseline.sh` | soleur-coupled | Legal mirror corpus (`plugins/soleur/docs/pages/legal`). |

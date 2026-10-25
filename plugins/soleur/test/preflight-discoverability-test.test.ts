@@ -2857,7 +2857,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (a double-quoted scalar). TRUTH: the probe (`curl -fsS https://deploy.soleur.ai/hooks/deploy-status`)
   // signs the GET with a WEBHOOK_DEPLOY_SECRET HMAC over the empty body plus the
   // CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET service-token pair (Doppler soleur/prd_terraform) —
-  // the same credential shape `scripts/followthroughs/workspace-isolation-verdict-2640.sh` uses.
+  // the same credential shape the retired workspace-isolation soak probe used (G1 PR-4a, #10937; history in git).
   // NO SUBSTITUTE: the endpoint answers 403 without them and the `.workspace_isolation` verdict lives
   // only in the deploy host's state file surfaced through that gate, so no unauthenticated read can
   // verify the live verdict. Genuine.
@@ -3018,7 +3018,15 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the rows are shipped by the host's own
   // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the hosts are no-SSH, and
   // the offline suites drive the canary check and the scrub against stubs and prove the event grammar, not that the stored stream carries it. Genuine.
-  const BASELINE_DECLARED_PROBES = 76;
+  // #10934 (2026-10-23): +1 (76 -> 77) for `2026-10-23-fix-inngest-selfgate-name-failing-phase-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep 'INNGEST_LINK: class=' --limit 1`)
+  // reads the web hosts' `ci-deploy` journald rows through the ClickHouse HTTP connection credential
+  // (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the rows are shipped by the host's own
+  // Vector from journald and the warehouse has no unauthenticated read path; the ingest token is write-only and the hosts are no-SSH, and
+  // the offline suites drive the self-gate against a shared curl profile table and real curl and prove the event grammar, not that the stored
+  // stream carries the new phase fields. Genuine.
+  const BASELINE_DECLARED_PROBES = 77;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
