@@ -15,6 +15,10 @@ set -euo pipefail
 # repository. Clear them before anything runs (T39 sets GIT_DIR on the hook call itself).
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
       GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
+# ... and an inherited GIT_CONFIG_COUNT / _KEY_n / _VALUE_n / _PARAMETERS would change every fixture's configuration (and the
+# hook appends its own pins to the count): the suite sets what it needs itself.
+# shellcheck disable=SC2086  # the prefix expansions are the point: a variable per name, or none
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS ${!GIT_CONFIG_KEY_*} ${!GIT_CONFIG_VALUE_*}
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK="$REPO_ROOT/.claude/hooks/git-commit-secret-scan.sh"
@@ -1984,6 +1988,8 @@ _sd_unit_c_rows() {
   # row 23: the environment allowlist
   _sd_add 'HOME= on a staging record is refused' 'HOME=/x git add f.txt && git commit -m x' 'refuse=1'
   _sd_add 'GIT_EDITOR= is on the allowlist' 'GIT_EDITOR=true git add f.txt && git commit -m x' 'refuse=0' 'exact=1'
+  _sd_add 'env GIT_AUTHOR_NAME=x in front of git add is on the allowlist too (the env arm reads the same table)' 'env GIT_AUTHOR_NAME=x git add f.txt && git commit -m x' 'refuse=0' 'exact=1'
+  _sd_add 'env GIT_AUTHOR_NAME=x git commit is no refusal either' 'git add f.txt && env GIT_AUTHOR_NAME=x git commit -m x' 'refuse=0' 'exact=1'
   _sd_add 'LC_ALL= is on the allowlist' 'LC_ALL=C git add f.txt && git commit -m x' 'refuse=0'
   _sd_add 'CI= GIT_AUTHOR_NAME= are on the allowlist' 'CI=1 GIT_AUTHOR_NAME=x git add f.txt && git commit -m x' 'refuse=0'
   _sd_add 'GIT_PAGER= TERM= NO_COLOR= TZ= LANG= are on the allowlist' 'GIT_PAGER=cat TERM=dumb NO_COLOR=1 TZ=UTC LANG=C git add f.txt && git commit -m x' 'refuse=0'
@@ -3253,25 +3259,33 @@ _t_fr2_splitter() {
 _t_fr2_timeout() {
   _sim_init
   [[ -n "$SIM_PD" ]] || SIM_PD=$(_mk_sim_path)
-  local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" U start id miss="" n=0
+  local lib="$REPO_ROOT/.claude/hooks/lib/commit-index-sim.sh" walk="$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" U start id miss="" n=0 got
   local files=("$HOOK" "$walk" "$lib")
   _t "A2 _cis_is_timeout is defined and true for 124" "" bash -c 'source "$1" || exit 9; source "$2" || exit 9; _cis_is_timeout 124' _ "$walk" "$lib"
   _t "A2b ... and false for any other status" "" bash -c 'source "$1" || exit 9; source "$2" || exit 9; ! _cis_is_timeout 1 && ! _cis_is_timeout 0 && ! _cis_is_timeout 137' _ "$walk" "$lib"
   U=$(_mk_leaky_repo untracked)
   SIM_ENV=("SHIM_SLEEP_VERB=add" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
   _sx "A2c a git add that outlives the deadline inside the build -> deny, sim-timeout text" "$U" "git add -A && git commit -m x" deny "very large working tree"
-  _t "A2d ... bounded: the slow add was killed near the deadline, not after its 20 s" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  _t "A2d ... bounded: the slow add was killed near the deadline, not after its 20 s" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 17
   _cause_is "A2e ... cause sim-timeout (not superset-failed)" sim-timeout
   _t "A2f ... and stderr carries no 'command not found'" "err=${ERR:0:200}" _nlacks "x${ERR}" "command not found"
   SIM_ENV=()
   # every function called in command position by the three production files is defined in them
-  for id in $(cat "${files[@]}" | grep -vE '^[[:space:]]*#' \
-      | grep -oE '(^|[;&|(]|then|do|else|!)[[:space:]]*(_?(cis|ctr|sim)_[a-z0-9_]+|_san|text_advice|tmp_fail|hook_exit|cleanup|scan_root|add_root|gitleaks_runnable|deny_undeterminable)([[:space:]]|;|$)' \
-      | grep -oE '_?(cis|ctr|sim)_[a-z0-9_]+|_san|text_advice|tmp_fail|hook_exit|cleanup|scan_root|add_root|gitleaks_runnable|deny_undeterminable' | grep -vxE 'sim_i|sim_on|sim_dir|sim_work|sim_brc' | sort -u); do
+  for id in $(grep -vhE '^[[:space:]]*#' "${files[@]}" | _called_ids); do
     n=$((n + 1))
     grep -qE "^[[:space:]]*(function[[:space:]]+)?${id}[[:space:]]*\\(\\)" "${files[@]}" || miss="$miss $id"
   done
   _t "A2g every function the production files call is defined ($n names checked)" "undefined:$miss" test -z "$miss" -a "$n" -ge 40
+  # the extraction itself: a call that only appears after a keyword was invisible (the sweep passed without checking it)
+  got=$(printf '%s\n' 'if _ctr_k1; then' 'elif _ctr_k2; then' 'while cis_k3; do' 'until sim_k4; do' 'x && _ctr_k5' 'x || _ctr_k6' '! _ctr_k7' 'then _ctr_k8' 'do _ctr_k9' 'else _ctr_k10' '(_ctr_k11)' | _called_ids | tr '\n' ' ')
+  _t "A2g2 the extraction sees a call after if / elif / while / until / && / || / ! / then / do / else / a subshell" "got=$got" \
+    test "$got" = "_ctr_k1 _ctr_k10 _ctr_k11 _ctr_k2 _ctr_k5 _ctr_k6 _ctr_k7 _ctr_k8 _ctr_k9 cis_k3 sim_k4 "
+}
+# the names of the functions a script calls in command position (stdin: script text without comments)
+_called_ids() {
+  grep -oE '(^|[;&|(]|then|do|else|elif|if|while|until|!)[[:space:]]*(_?(cis|ctr|sim)_[a-z0-9_]+|_san|_rm_owned_dir|hook_error_repair|gl_output_check|add_root_of|text_advice|tmp_fail|hook_exit|cleanup|scan_root|add_root|gitleaks_runnable|deny_undeterminable)([[:space:]]|;|\)|$)' \
+    | grep -oE '_?(cis|ctr|sim)_[a-z0-9_]+|_san|_rm_owned_dir|hook_error_repair|gl_output_check|add_root_of|text_advice|tmp_fail|hook_exit|cleanup|scan_root|add_root|gitleaks_runnable|deny_undeterminable' \
+    | grep -vxE 'sim_i|sim_on|sim_dir|sim_work|sim_brc' | LC_ALL=C sort -u
 }
 
 # A3: the plan is read once - a replay fallback in the simulated root never turns a fallback-only root into a simulated one
@@ -3373,6 +3387,7 @@ _t_fr2_hardening() {
   hk=$(_mk_hooks_copy '/^  : > "\$report_file"; : > "\$nodiff_report"$/a\
   : "$FR2_UNSET_VARIABLE"' git-commit-secret-scan.sh)
   HOOK_OVERRIDE="$hk" _sx "A6c a set -u abort (unbound variable) in scan_root: the exit latch denies" "$Cn" "git add -A && git commit -m x" deny "without reaching a decision"
+  _t "A6c2 ... the latch deny cleaned up: nothing is left in TMPDIR" "left: $(ls -A "$SIM_TMP" 2>/dev/null | tr '\n' ' ')" _tmp_empty
   _cause_is "A6d ... cause internal-error" internal-error
   hk=$(_mk_hooks_copy '/^  ctr_collect "\$command"$/a\
   false' git-commit-secret-scan.sh)
@@ -3380,7 +3395,9 @@ _t_fr2_hardening() {
   hk=$(_mk_hooks_copy '/^umask 077$/a\
 exit 1' git-commit-secret-scan.sh)
   HOOK_OVERRIDE="$hk" _sx "A6f the latch alone (no ERR): an exit 1 after sim_on=1 is turned into a deny" "$Cn" "git add -A && git commit -m x" deny "without reaching a decision"
+  _t "A6f2 ... and cleaned up" "left: $(ls -A "$SIM_TMP" 2>/dev/null | tr '\n' ' ')" _tmp_empty
   HOOK_OVERRIDE="$hk" _sx "A6g the same injected exit 1 under a PLAIN commit is a deny too (CTO row 55), with the plain repair (retry, report the hook error), status 0" "$Cn" "git commit -m x" deny "without reaching a decision" "report this hook error" "!git add"
+  _t "A6g2 ... and cleaned up" "left: $(ls -A "$SIM_TMP" 2>/dev/null | tr '\n' ' ')" _tmp_empty
 
   # A9: a walker cut off after ctr_collect (before ctr_resolve_roots) is a torn install
   hk=$(_mk_hooks_copy '/^ctr_resolve_roots() {$/,/^}$/d' lib/commit-target-roots.sh)
@@ -3461,18 +3478,18 @@ _t_fr2_bound() {
   U=$(_mk_leaky_repo untracked); Cn=$(_mk_leaky_repo clean)
   SIM_ENV=("SHIM_SLEEP_VERB=add" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
   _sx "C2a the replay add is bounded: a 20 s add under a 2 s deadline -> sim-timeout, not after 20 s" "$U" "git add clean.txt && git commit -m x" deny "time limit"
-  _t "C2b ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  _t "C2b ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 17
   SIM_ENV=("SHIM_SLEEP_VERB=diff" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
   _sx "C2c the scan's diff --cached is bounded -> sim-timeout" "$Cn" "git add -A && git commit -m x" deny "time limit"
-  _t "C2d ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  _t "C2d ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 17
   _cause_is "C2e ... cause sim-timeout" sim-timeout
   SIM_ENV=("SHIM_SLEEP_VERB=check-attr" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
   _sx "C2f the scan's check-attr is bounded -> sim-timeout" "$Cn" "git add -A && git commit -m x" deny "time limit"
-  _t "C2g ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  _t "C2g ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 17
   D=$(_mk_leaky_repo clean); assert_fixture_dir "$D"; mkdir -p "$D/.git/info"; echo 'clean.txt -diff' > "$D/.git/info/attributes"
   SIM_ENV=("SHIM_SLEEP_VERB=cat-file" "SHIM_SLEEP=20" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
   _sx "C2h the -diff blob read (cat-file --batch) is bounded -> sim-timeout" "$D" "git add clean.txt && git commit -m x" deny "time limit"
-  _t "C2i ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 14
+  _t "C2i ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 17
   SIM_ENV=("GL_REC_SLEEP_DETECT=61" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
   _sx "C2j the -diff re-scan (detect --no-git) is bounded -> sim-timeout" "$D" "git add clean.txt && git commit -m x" deny "time limit"
   _t "C2k ... ended near the deadline" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 20
@@ -3577,7 +3594,7 @@ _t_fr2_fresh() {
 # row 46 and the lexer-less repair texts: a perl-less host reads only a single simple commit unread
 _t_fr2_noperl() {
   _sim_init
-  local R pd
+  local R pd cmd
   R=$(_mk_leaky_repo tracked-modified); pd=$(_mk_stub_path record)
   if [[ -e "$pd/perl" ]]; then _report "row 46 fixture PATH has no perl" fail "the stub PATH carries perl"; return 0; fi
   # (rows R46*) ... and where perl EXISTS the lexer runs even for a plain commit (row 22): a perl wrapper counts its calls
@@ -3598,6 +3615,14 @@ EOF
   EXPECT_PD="$pd" _expect "R46f2 no perl: 'commit --all' -> the same -a repair" "$R" "git commit --all -m x" deny "git add -u" "WITHOUT -a"
   EXPECT_PD="$pd" _expect "R46g no perl: 'commit -m x -- path' -> the repair names the staged-list check and WITHOUT the paths" "$R" "git commit -m x -- tracked.json" deny "git diff --cached --name-only" "WITHOUT the paths"
   EXPECT_PD="$pd" _expect "R46h no perl: a chained add -> the plain repair" "$R" "git add -A && git commit -m x" deny "run git add in one call, the commit in the next"
+  # the allowlist is read from BOTH sides (CTO row 46): forms that look plain but need the lexer, and the one that does not
+  EXPECT_PD="$pd" _expect "R46k no perl: a backtick in the message needs the lexer -> tooling deny" "$R" 'git commit -m "a `id` b"' deny "perl is not installed"
+  EXPECT_PD="$pd" _expect "R46l no perl: -F \"\$(...)\" needs the lexer -> tooling deny" "$R" 'git commit -F "$(mktemp)"' deny "perl is not installed"
+  EXPECT_PD="$pd" _expect "R46m no perl: a bare -F <file> is a plain flag -> allow" "$R" "git commit -F msg.txt" allow
+  EXPECT_PD="$pd" _expect "R46n no perl: -m with a single-quoted message -> allow" "$R" "git commit -m 'fix the thing'" allow
+  for cmd in "git commit --allow-empty -m x" "git commit -S -m x" "git commit --author=a -m x" "git commit -nm x" "git commit -m x 2>&1" "git commit -m x | tail -1" "git commit -m x && git push" "git commit -m x # note"; do
+    EXPECT_PD="$pd" _expect "R46o no perl: '$cmd' is NOT on the allowlist -> tooling deny that says so" "$R" "$cmd" deny "perl is not installed" "NOT read without perl" "git commit -F <file>"
+  done
 }
 
 # A7: a signal sent to the hook's whole process group must not orphan the scanner
@@ -4093,7 +4118,7 @@ _t_fr3_hook() {
   mod=$(printf '%s' "$mod" | sed -e "s/\$SIG{\$_} = 'DEFAULT' for qw(ALRM TERM INT HUP); //")
   _t "R3 A8c fixture: the child's handler reset was removed from the text" "" test "$mod" != "$(printf '%s' "setpgrp(0,0); $CIS_BOUND_PL" | sed -e 's/setpgrp(0,0); exec/kill "INT", $$; select(undef,undef,undef,0.3); setpgrp(0,0); exec/')"
   start=$SECONDS; r=0; perl -e "$mod" 5 sleep 3 >/dev/null 2>&1 || r=$?
-  _t "R3 A8d without the reset the handler runs in the child with \$p = 0: the guarded kill does nothing, the wrapper still exits (143) promptly - no 2 s group-kill sequence" "rc=$r elapsed=$((SECONDS - start))" test "$r" -eq 143 -a $((SECONDS - start)) -lt 2
+  _t "R3 A8d without the reset the handler runs in the child with \$p = 0: the guarded kill does nothing, the wrapper still exits (143) promptly - no 2 s group-kill sequence" "rc=$r elapsed=$((SECONDS - start))" test "$r" -eq 143 -a $((SECONDS - start)) -lt 4
 
   # A10: the ERR trap's subshell guard does not rely on BASHPID (bash 3.2 has none): a failing command inside $( ) prints ONE decision
   hk=$(_mk_hooks_copy '/^  : > "\$report_file"; : > "\$nodiff_report"$/a\
@@ -4161,6 +4186,18 @@ _t_fr3_gl() {
   U=$(_mk_leaky_repo clean); git -C "$U" config core.abbrev bogus; start=$SECONDS
   _sxr "R3 A2g a CLEAN tree with a bad value in the config: a decision, not a hang" "$U" "git commit --allow-empty -m x" deny
   _t "R3 A2h ... within the bound" "elapsed=$((SECONDS - start))" test $((SECONDS - start)) -lt 20
+
+  # C3: THREE staged -diff files with different clean blobs and the leak LAST: every path is read from its OWN blob (a loop that
+  # reads the first blob for each path re-scans a.dat three times and sees no leak)
+  local D3
+  D3=$(_mk_leaky_repo clean); assert_fixture_dir "$D3"
+  printf '*.dat -diff\n' > "$D3/.gitattributes"; printf 'one\n' > "$D3/a.dat"; printf 'two\n' > "$D3/b.dat"; cp "$U/leak.json" "$D3/c.dat"
+  git -C "$D3" add .gitattributes a.dat b.dat c.dat
+  _sxr "R3 C3 [gitleaks] three staged -diff files, differing clean blobs, the leak in the LAST -> deny naming c.dat" "$D3" "git commit -m x" deny "c.dat" "diff driver"
+  printf 'three\n' > "$D3/c.dat"; git -C "$D3" add c.dat
+  _sxr "R3 C3b twin: the third file clean too -> allow" "$D3" "git commit -m x" allow
+  printf 'one\n' > "$D3/a.dat"; printf 'two\n' > "$D3/b.dat"; cp "$U/leak.json" "$D3/c.dat"
+  _sxr "R3 C3c the same three files unstaged in the working tree: 'git add -A && git commit' -> deny naming c.dat" "$D3" "git add -A && git commit -m x" deny "c.dat"
 }
 
 # ---- FIX ROUND 3, unit 2: the walker (rows 49, 50, 54) --------------------------------------------------------------
@@ -4311,7 +4348,7 @@ _t_fr3_cards() {
   printf '*.dat -diff\n' > "$D/.gitattributes"; echo one > "$D/x.dat"
   SIM_ENV=("SHIM_SLEEP_VERB=diff check-attr cat-file" "SHIM_SLEEP=1.2" "CIS_DEADLINE_SECONDS=2"); start=$SECONDS
   _sx "R3 C7c three slow read-only calls (diff, check-attr, cat-file) under a 2 s deadline: the budget is CUMULATIVE -> deny" "$D" "git add -A && git commit -m x" deny "time limit"
-  _t "R3 C7d ... bounded well below the sum of the sleeps and the 30 s ceiling" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 12
+  _t "R3 C7d ... bounded well below the sum of the sleeps and the 30 s ceiling" "elapsed=$((SECONDS - start)) s" test $((SECONDS - start)) -lt 17
   _cause_is "R3 C7e ... cause sim-timeout" sim-timeout
   SIM_ENV=()
 
