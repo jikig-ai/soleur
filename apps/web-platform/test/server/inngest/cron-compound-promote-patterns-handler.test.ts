@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 
 vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
@@ -387,17 +388,33 @@ describe("the ledger reader on the patterns arm", () => {
   it("queries the bot's self-healing/auto- PRs", async () => {
     stubModel([], EDITS);
     await run(MANUAL("patterns"));
-    expect(h.searchQs).toContain("repo:jikig-ai/soleur is:pr head:self-healing/auto-");
+    expect(h.searchQs).toContain("repo:jikig-ai/soleur is:pr author:app/soleur-ai head:self-healing/auto-");
   });
 
   it("an unreadable ledger ends status=error with ledger_read=failed, mirrors a tagged message to Sentry and never calls Anthropic", async () => {
     h.ledger.error = Object.assign(new Error("boom with a body"), { status: 502 });
     stubModel([AGENTS_CLUSTER], EDITS);
     const { last } = await run(MANUAL("patterns"));
-    expect(last).toMatchObject({ status: "error", input_source: "patterns", ledger_read: "failed", error_class: "LedgerReadError" });
+    expect(last).toMatchObject({ status: "error", input_source: "patterns", ledger_read: "failed" });
     expect(h.post).not.toHaveBeenCalled();
     expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "ledger-read-failed", tags: { cause: "http-5xx" } }));
     expect(JSON.stringify(last)).not.toContain("boom with a body");
+  });
+
+  it("through the real step boundary a failed ledger read reaches the marker as StepError, with ledger_read=failed as the discriminator", async () => {
+    h.ledger.error = Object.assign(new Error("boom with a body"), { status: 502 });
+    stubModel([AGENTS_CLUSTER], EDITS);
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const out = await runLikeInngest(
+      ({ step }) => cronCompoundPromoteHandler({ step, logger, event: MANUAL("patterns"), runId: "RUN-P" } as never),
+      { maxAttempts: 2 },
+    );
+    expect(out.outcome).toBe("returned");
+    const rows = h.marker.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    const last = rows[rows.length - 1];
+    // An exhausted step.run reaches the handler as the SDK's StepError, not as LedgerReadError: the runbook keys on ledger_read.
+    expect(last).toMatchObject({ status: "error", input_source: "patterns", ledger_read: "failed", error_class: "StepError" });
+    expect(h.post).not.toHaveBeenCalled();
   });
 
   it("an Anthropic-stage error after a successful ledger read reports ledger_read=ok", async () => {
@@ -498,10 +515,15 @@ describe("containment", () => {
 const COMMON_KEYS = ["clusters_opened", "clusters_proposed", "corpus_count", "corpus_input_bytes", "run_id", "status", "trigger"];
 const PATTERNS_KEYS = ["input_source", "ledger_prs_scanned", "ledger_read", "ledger_suppressed", "ledger_title_skipped", "patterns_open"];
 
+const ROW_ALLOWED = new Set([...COMMON_KEYS, ...PATTERNS_KEYS, "refusals", "refusal_detail", "error_class", "error_message"]);
+
 describe("the marker rows the handler actually emits on the patterns arm (closed vocabulary, asserted on emitted rows)", () => {
-  const ALLOWED = new Set([...COMMON_KEYS, ...PATTERNS_KEYS, "refusals", "refusal_detail", "error_class", "error_message"]);
+  const ALLOWED = ROW_ALLOWED;
   const assertClosed = (row: Record<string, unknown>) => {
     for (const k of Object.keys(JSON.parse(JSON.stringify(row)) as object)) expect(ALLOWED.has(k), `unexpected marker key ${k}`).toBe(true);
+    // The free-text channels carry closed reason slugs and never page or PR text.
+    for (const r of (row.refusals as string[] | undefined) ?? []) expect(r, "refusal reason").toMatch(/^[a-z][a-z-]*$/);
+    expect(String(row.error_message ?? "")).not.toMatch(/Pattern page-|BODY-ROOT|BODY-FIX/);
     for (const k of PATTERNS_KEYS) {
       const v = row[k];
       if (v === undefined) continue; // an unset field is omitted from the JSON row
@@ -551,6 +573,40 @@ describe("the marker rows the handler actually emits on the patterns arm (closed
   });
 });
 
+describe("early rows the fix changed, and the empty-corpus row", () => {
+  it("a patterns request against a disabled config still carries the input discriminator", async () => {
+    const git = gitFixture(remoteDir);
+    writeFileSync(join(remoteDir, "knowledge-base/project/promotion-config.yml"), "enabled: false\n");
+    git(["commit", "-qam", "disable"]);
+    try {
+      const patterns = await run(MANUAL("patterns"));
+      expect(patterns.last).toMatchObject({ status: "disabled", input_source: "patterns" });
+      h.marker.mockReset();
+      const corpus = await run(MANUAL());
+      expect(corpus.last).toMatchObject({ status: "disabled" });
+      expect(corpus.last).not.toHaveProperty("input_source");
+    } finally {
+      git(["reset", "-q", "--hard", "HEAD~1"]);
+    }
+  });
+
+  it("the empty-corpus row (every page closed) carries exactly the allowed keys and closed values", async () => {
+    const git = gitFixture(remoteDir);
+    for (const s of ["page-one", "page-two", "page-three"]) {
+      writeFileSync(join(remoteDir, `knowledge-base/project/patterns/${s}.md`), page(s, Ls(1, Q), { status: "closed" }));
+    }
+    git(["commit", "-qam", "close all"]);
+    try {
+      const { last } = await run(MANUAL("patterns"));
+      expect(last).toMatchObject({ status: "empty-corpus", input_source: "patterns" });
+      expect(keysOf(last).filter((k) => !ROW_ALLOWED.has(k))).toEqual([]);
+      expect(String(last.error_message ?? "")).not.toContain("Pattern page-");
+    } finally {
+      git(["reset", "-q", "--hard", "HEAD~1"]);
+    }
+  });
+});
+
 describe("patterns-empty is reported once per run, with the right cause", () => {
   it("fires exactly once even when the handler body re-executes over memoized steps, cause no-open-patterns", async () => {
     const git = gitFixture(remoteDir);
@@ -597,7 +653,8 @@ describe("hash identity, duplicates, retired/PII exclusion and nonce randomness 
   });
 
   it("two clusters with the same evidence set: the second is refused cluster-duplicate and only one PR is attempted", async () => {
-    const dupe: Cl = { ...SKILL_CLUSTER, source_learnings: AGENTS_CLUSTER.source_learnings };
+    // Reordered on purpose: the hash is over the SORTED set, so the same evidence in another order is the same cluster.
+    const dupe: Cl = { ...SKILL_CLUSTER, source_learnings: [...AGENTS_CLUSTER.source_learnings].reverse() };
     stubModel([AGENTS_CLUSTER, dupe], EDITS);
     const { last } = await run(MANUAL("patterns"));
     expect(last).toMatchObject({ clusters_proposed: 2, clusters_opened: 1, refusals: ["cluster-duplicate"] });
@@ -607,7 +664,7 @@ describe("hash identity, duplicates, retired/PII exclusion and nonce randomness 
   it("the branch and the ledger query share one prefix", async () => {
     stubModel([AGENTS_CLUSTER], EDITS);
     await run(MANUAL("patterns"));
-    expect(h.searchQs).toContain(`repo:jikig-ai/soleur is:pr head:${PROMOTE_BRANCH_PREFIX}`);
+    expect(h.searchQs).toContain(`repo:jikig-ai/soleur is:pr author:app/soleur-ai head:${PROMOTE_BRANCH_PREFIX}`);
     const cfg = h.safeCommit.mock.calls[0][0] as { branchName: string };
     expect(cfg.branchName.startsWith(PROMOTE_BRANCH_PREFIX)).toBe(true);
   });
@@ -632,6 +689,10 @@ describe("hash identity, duplicates, retired/PII exclusion and nonce randomness 
         .map((c) => (c[1] as unknown as { tags: { cause: string } }).tags.cause)
         .sort();
       expect(causes).toEqual(["pii", "retired"]);
+      const counts = vi.mocked(reportSilentFallback).mock.calls
+        .filter((c) => (c[1] as { op?: string }).op === "pattern-evidence-dropped")
+        .map((c) => (c[1] as unknown as { extra: { count: number } }).extra.count);
+      expect(counts).toEqual([1, 1]);
     } finally {
       git(["reset", "-q", "--hard", "HEAD~1"]);
     }
@@ -656,8 +717,9 @@ describe("hash identity, duplicates, retired/PII exclusion and nonce randomness 
     const p = clusterPrompt();
     // The tail starts at the index fence (the earlier "untrusted data" sentence also names the nonce, so match the label);
     // the 16-char nonce makes the measured size equal the sent size.
-    const start = /<<<BEGIN-[0-9a-f]{16}:pattern-index>>>/.exec(p)?.index ?? -1;
+    const start = (/<<<BEGIN-[0-9a-f]{16}:pattern-index>>>/.exec(p)?.index ?? -1) - 2;
     expect(start).toBeGreaterThan(0);
+    expect(p.slice(start).startsWith("\n\n<<<BEGIN-")).toBe(true);
     expect(last.corpus_input_bytes).toBe(Buffer.byteLength(p.slice(start), "utf8"));
   });
 });

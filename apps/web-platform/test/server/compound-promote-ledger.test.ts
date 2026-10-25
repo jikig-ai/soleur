@@ -26,6 +26,7 @@ import {
   type LedgerFailureCause,
   type LedgerOctokit,
 } from "@/server/compound-promote-ledger";
+import { BOT_PR_HEAD_PREFIXES } from "@/server/inngest/functions/cron-cloud-task-heartbeat";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DAY = 24 * 60 * 60 * 1000;
@@ -35,7 +36,7 @@ const H1 = hex("a");
 const H2 = hex("b");
 const OWNER = "acme-org";
 const REPO = "widgets";
-const Q = `repo:${OWNER}/${REPO} is:pr head:self-healing/auto-`;
+const Q = `repo:${OWNER}/${REPO} is:pr author:app/soleur-ai head:self-healing/auto-`;
 const mkItems = (n: number) => Array.from({ length: n }, () => item({ hash: hex("0") }));
 
 type Item = {
@@ -174,8 +175,15 @@ describe("readLedger", () => {
     expect(LEDGER_MAX_SEARCH_PAGES).toBe(10);
   });
 
+  it("the query is bounded to the App's own PRs: a word-prefix head: alone would match other authors", () => {
+    expect(Q).toContain("author:app/soleur-ai");
+    expect(LEDGER_BOT_LOGIN).toBe("soleur-ai[bot]");
+  });
+
   it("the query's head: prefix is the shared branch prefix the apply step builds on", () => {
     expect(PROMOTE_BRANCH_PREFIX).toBe("self-healing/auto-");
+    // The stale-bot-PR watchdog keys on the same prefix as an independent literal: renaming one must red here.
+    expect(BOT_PR_HEAD_PREFIXES).toContain(PROMOTE_BRANCH_PREFIX);
     expect(Q).toContain(`head:${PROMOTE_BRANCH_PREFIX}`);
   });
 
@@ -183,7 +191,7 @@ describe("readLedger", () => {
     ["502", { status: 502 }, "http-5xx"],
     ["a rate limit (403)", { status: 403 }, "rate-limit"],
     ["a secondary limit (429)", { status: 429 }, "rate-limit"],
-    ["a 422 past the result ceiling", { status: 422 }, "page-cap"],
+    ["a 422 (the query itself rejected; page 11 is never requested)", { status: 422 }, "transport"],
     ["a bare network error", new Error("socket hang up with a body that must not be echoed"), "transport"],
   ] as const)("a search that fails with %s throws a typed error", async (_n, error, cause) => {
     const { octokit } = fakeOctokit([[]], { failOn: 1, error });
@@ -210,12 +218,13 @@ describe("readLedger", () => {
     const noPr = { ...item({ state: "closed", closedAt: "2026-01-01T00:00:00Z" }) } as Partial<Item>;
     delete noPr.pull_request;
     expect(await causeOf(read(fakeOctokit([[noPr as Item]]).octokit))).toBe("unparseable");
-    const weird = { ...item({}), state: "merged" } as unknown as Item;
+    // Everything else about this item is valid (ISO closed_at, merged_at set): only the state enum can reject it.
+    const weird = { ...item({ state: "closed", closedAt: "2026-01-01T00:00:00Z", merged: true }), state: "merged" } as unknown as Item;
     expect(await causeOf(read(fakeOctokit([[weird]]).octokit))).toBe("unparseable");
   });
 
   it("closed_at must look like an ISO timestamp, not merely parse", async () => {
-    for (const bad of ["2026", "1", "Jan 5 2026"]) {
+    for (const bad of ["2026", "1", "Jan 5 2026", "2026-1", "2026-01-05", "2026-11-01 00:00:00"]) {
       expect(await causeOf(read(fakeOctokit([[item({ state: "closed", closedAt: bad })]]).octokit)), bad).toBe("unparseable");
     }
   });

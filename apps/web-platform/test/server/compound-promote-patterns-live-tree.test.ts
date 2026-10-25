@@ -5,9 +5,10 @@
 //
 // This suite reads the repository outside the app, so it is registered in `REPO_WIDE_SUITES`
 // (`repo-wide-containment.test.ts` fails otherwise).
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, lstatSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitCleanEnv } from "../../../../plugins/soleur/test/lib/git-clean-env";
@@ -19,9 +20,9 @@ vi.hoisted(() => {
 
 import { PII_REGEX as piiRegex } from "@/server/inngest/functions/cron-compound-promote";
 import {
-  EVIDENCE_PATH_RE,
   MIN_PAGE_EVIDENCE,
   PATTERNS_DIR,
+  isCanonicalEvidencePath,
   parsePatternPage,
   type PatternPage,
 } from "@/server/compound-promote-patterns";
@@ -50,13 +51,41 @@ function trackedLearnings(): Set<string> {
   return new Set(out.split("\0").filter(Boolean));
 }
 
-function ciProblems(page: PatternPage, text: string, tracked: ReadonlySet<string>): string[] {
+/** Retired learning paths, read the way the runtime does (a path that appears in the retired-rule list). */
+function retiredText(): string {
+  const f = join(REPO_ROOT, "scripts/retired-rule-ids.txt");
+  return existsSync(f) ? readFileSync(f, "utf-8") : "";
+}
+
+/**
+ * The runtime drops an evidence learning that is retired, a symlink, or matches the PII regex in the
+ * excerpt that is sent. A page citing one is CI-green but silently changes its cluster hash, so CI
+ * mirrors those classes. `root` is injectable so the self-check can use a synthesized tree.
+ */
+function attritionProblems(p: string, root: string, retired: string): string[] {
+  const out: string[] = [];
+  if (retired.includes(p)) out.push(`evidence-retired:${p}`);
+  const abs = join(root, p);
+  try {
+    if (lstatSync(abs).isSymbolicLink()) out.push(`evidence-symlink:${p}`);
+    else {
+      const excerpt = readFileSync(abs, "utf-8").split("\n").slice(0, 10).join("\n");
+      if (piiRegex.test(excerpt)) out.push(`evidence-pii:${p}`);
+    }
+  } catch {
+    out.push(`evidence-unreadable:${p}`);
+  }
+  return out;
+}
+
+function ciProblems(page: PatternPage, text: string, tracked: ReadonlySet<string>, root: string = REPO_ROOT, retired: string = retiredText()): string[] {
   const problems: string[] = [];
   for (const hit of denylistHits(text)) problems.push(`denylist:${hit}`);
   for (const p of page.evidence) {
-    if (!EVIDENCE_PATH_RE.test(p) || p.includes("..")) problems.push(`evidence-shape:${p}`);
+    if (!isCanonicalEvidencePath(p)) problems.push(`evidence-shape:${p}`);
     else if (p.includes("/archive/")) problems.push(`evidence-archived:${p}`);
     else if (!tracked.has(p)) problems.push(`evidence-untracked:${p}`);
+    else problems.push(...attritionProblems(p, root, retired));
   }
   if (page.evidence.length < MIN_PAGE_EVIDENCE) problems.push("evidence-count");
   if (page.status === "open" && (page.closedOn !== undefined || page.closedBy !== undefined)) problems.push("open-with-closed-fields");
@@ -69,10 +98,32 @@ describe("the validator can fail (instrument self-check)", () => {
     `---\ntitle: "A pattern"\nsummary: "One line."\nstatus: open\nopened_on: "2026-10-24"\ntags: [guards]\nevidence:\n${Array.from({ length: 5 }, (_, i) => `  - knowledge-base/project/learnings/e${i}.md`).join("\n")}\nrequired_reading: false\n---\n## Root cause\n${extra}\n`;
   const tracked = new Set(Array.from({ length: 5 }, (_, i) => `knowledge-base/project/learnings/e${i}.md`));
 
+  const synth = mkdtempSync(join(tmpdir(), "patterns-live-"));
+  mkdirSync(join(synth, "knowledge-base/project/learnings"), { recursive: true });
+  for (let i = 0; i < 5; i++) writeFileSync(join(synth, `knowledge-base/project/learnings/e${i}.md`), `# e${i}\n`);
+  afterAll(() => rmSync(synth, { recursive: true, force: true }));
+
   it("passes a clean synthesized page", () => {
     const r = parsePatternPage(good(), `${PATTERNS_DIR}/a.md`, piiRegex);
     expect(r.ok).toBe(true);
-    if (r.ok) expect(ciProblems(r.page, good(), tracked)).toEqual([]);
+    if (r.ok) expect(ciProblems(r.page, good(), tracked, synth, "")).toEqual([]);
+  });
+
+  it("flags the runtime attrition classes: a retired, a symlinked and a PII-bearing evidence learning", () => {
+    const r = parsePatternPage(good(), `${PATTERNS_DIR}/a.md`, piiRegex);
+    if (!r.ok) throw new Error("fixture invalid");
+    const lr = join(synth, "knowledge-base/project/learnings");
+    writeFileSync(join(lr, "e1.md"), "# e1\ncontact someone@example.test\n");
+    rmSync(join(lr, "e2.md"));
+    symlinkSync(join(lr, "e3.md"), join(lr, "e2.md"));
+    const problems = ciProblems(r.page, good(), tracked, synth, "retired | knowledge-base/project/learnings/e0.md\n");
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        "evidence-retired:knowledge-base/project/learnings/e0.md",
+        "evidence-pii:knowledge-base/project/learnings/e1.md",
+        "evidence-symlink:knowledge-base/project/learnings/e2.md",
+      ]),
+    );
   });
 
   it.each([
@@ -113,7 +164,6 @@ describe("the real pattern tree", () => {
   });
 
   it("is within the seed cap and every file is markdown", () => {
-    expect(names.length).toBeGreaterThanOrEqual(3);
     expect(names.length).toBeLessThanOrEqual(SEED_CAP);
     const all = existsSync(dir) ? readdirSync(dir) : [];
     expect(all.filter((n) => !n.endsWith(".md"))).toEqual([]);

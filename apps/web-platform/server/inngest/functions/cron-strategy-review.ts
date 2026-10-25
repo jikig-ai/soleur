@@ -43,7 +43,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Octokit } from "@octokit/core";
-import matter from "gray-matter";
+import { parseFrontMatterSafe } from "../../front-matter-guard";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import {
@@ -378,9 +378,9 @@ async function runStrategyReview(args: {
       continue;
     }
 
-    let parsed: ReturnType<typeof matter>;
+    let parsed: ReturnType<typeof parseFrontMatterSafe>;
     try {
-      parsed = matter(raw);
+      parsed = parseFrontMatterSafe(raw);
     } catch (err) {
       logger.warn(
         { fn: "cron-strategy-review", filePath, err: (err as Error).message },

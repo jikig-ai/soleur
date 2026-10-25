@@ -50,13 +50,13 @@ The loader (`apps/web-platform/server/compound-promote-patterns.ts`) and the liv
 - `tags`: 1 to 12, each matching `^[a-z0-9][a-z0-9-]{0,40}$`.
 - `slug` (the file name): `^[a-z0-9][a-z0-9-]{0,80}$`.
 - Allowed frontmatter keys only: `title`, `summary`, `status`, `opened_on`, `tags`, `evidence`, `required_reading`, `closed_on`, `closed_by`.
-- At most 16 KiB per page. The tree holds at most 8 pages (CI).
+- At most 16 KiB per page (a larger page is dropped with its own cause, `size`). The tree holds at most 8 pages (CI).
 
-Body sections are not validated and are never sent to the model; only the title, summary, tags, evidence keys and the evidence learnings are.
+Body sections are not schema-validated and are never sent to the model, but they count toward the 16 KiB cap and are PII-scanned with the rest of the page: an email-, IP- or token-shaped string in a body drops the whole page. Only the slug, title, summary, tags, evidence keys and the first 10 lines of each evidence learning are sent.
 
 ## Authoring rules
 
-1. Write no names, handles, tester, tenant, or session-derived detail in any field or body section.
+1. Write no names, handles, tester, tenant, or session-derived detail in any field or body section. Nothing machine-screens person names or handles written without an `@`: this rule is the only control.
 2. Cite only learnings that exist, are tracked, and are not archived. The PR that archives a learning must update or delete any page (including a closed one) that cites it.
 3. Only a human PR edit closes a page. The weekly cron never writes a pattern page.
 4. Add or extend a page through a reviewed PR; never auto-promote from a capture session.

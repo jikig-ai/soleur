@@ -46,13 +46,31 @@ describe("KB API security", () => {
     expect(content).toContain("\\0");
   });
 
-  it("kb-reader disables gray-matter engine execution", () => {
-    const kbReader = resolve(__dirname, "../server/kb-reader.ts");
-    const content = readFileSync(kbReader, "utf-8");
-
-    // `engines: {}` alone does not disable the js engine (gray-matter merges it over its defaults);
-    // the behavioural proof is in kb-reader.test.ts. Pin that the js engine is overridden here.
-    expect(content).toMatch(/engines:\s*\{\s*js:/);
+  it("gray-matter is imported only by server/front-matter-guard.ts (no bare matter() anywhere else)", () => {
+    // Behavioural proof that the guard refuses code-bearing openers is test/front-matter-guard.test.ts;
+    // this is the wire: a new importer that skips the guard re-opens the `---js` hole.
+    const root = resolve(__dirname, "..");
+    const stripComments = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const importers: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        if (name === "node_modules" || name === ".next") continue;
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.(ts|tsx|js|mjs|cjs)$/.test(name) && /from\s+["']gray-matter["']|require\(\s*["']gray-matter["']\s*\)/.test(stripComments(readFileSync(full, "utf-8")))) {
+          importers.push(full.slice(root.length + 1));
+        }
+      }
+    };
+    for (const d of ["server", "app", "lib", "components"]) {
+      try {
+        walk(join(root, d));
+      } catch {
+        /* directory absent in this layout */
+      }
+    }
+    expect(importers).toEqual(["server/front-matter-guard.ts"]);
+    expect(stripComments(readFileSync(resolve(root, "server/kb-reader.ts"), "utf-8"))).toContain("parseFrontMatterSafe(raw)");
   });
 
   it("no KB route handler exposes absolute paths in responses", () => {

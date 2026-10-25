@@ -21,7 +21,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import matter from "gray-matter";
+import { parseFrontMatterSafe } from "../../front-matter-guard";
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import {
@@ -636,9 +636,9 @@ export async function cronContentPublisherHandler({
           if (!name.endsWith(".md")) continue;
           const filePath = join(contentDir, name);
           const raw = await readFile(filePath, "utf-8");
-          let parsed: ReturnType<typeof matter>;
+          let parsed: ReturnType<typeof parseFrontMatterSafe>;
           try {
-            parsed = matter(raw);
+            parsed = parseFrontMatterSafe(raw);
           } catch {
             continue;
           }

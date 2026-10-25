@@ -58,7 +58,7 @@ import {
   fenceBlock,
   loadOpenPatterns,
   patternsPayloadBytes,
-  renderPatternIndex,
+  renderPatternsTail,
   untrustedDataSentence,
   type PatternPage,
 } from "@/server/compound-promote-patterns";
@@ -1554,11 +1554,16 @@ export async function cronCompoundPromoteHandler({
   let ledgerSuppressed = 0;
   // Names the stage that is running so the outer catch can say which one died without a nested catch.
   let stage: "start" | "ledger-read" | "after-ledger" = "start";
+  // Early terminal rows (disabled / deduped / week-cap-reached) exit before the ledger or the pages are
+  // read, so they carry only the discriminator: without it a patterns request that exited there reads
+  // exactly like a corpus run. Empty on the corpus arm.
+  const inputMarker = (): Partial<CompoundPromoteOutcome> =>
+    inputSource === "patterns" ? { input_source: "patterns" } : {};
   // Patterns-path marker fields. EMPTY on the corpus arm, so a scheduled row has exactly the keys it had before.
   const patternsMarker = (): Partial<CompoundPromoteOutcome> =>
     inputSource === "patterns"
       ? {
-          input_source: "patterns",
+          ...inputMarker(),
           patterns_open: patternsOpen,
           ledger_read: ledgerRead,
           ledger_suppressed: ledgerSuppressed,
@@ -1566,11 +1571,6 @@ export async function cronCompoundPromoteHandler({
           ledger_title_skipped: ledgerTitleSkipped,
         }
       : {};
-  // Early terminal rows (disabled / deduped / week-cap-reached) exit before the ledger or the pages are
-  // read, so they carry only the discriminator: without it a patterns request that exited there reads
-  // exactly like a corpus run. Empty on the corpus arm.
-  const inputMarker = (): Partial<CompoundPromoteOutcome> =>
-    inputSource === "patterns" ? { input_source: "patterns" } : {};
   // #8281: why a run produced nothing is the datum that was missing. One
   // entry per refusal that fired, plus a bounded per-cluster detail so a
   // cluster refused EVERY week is distinguishable from a quiet corpus.
@@ -1812,10 +1812,11 @@ export async function cronCompoundPromoteHandler({
     });
     if (inputSource === "patterns") {
       // step.run's inferred return is a JSON projection of a union; the patterns arm is the only one with these keys.
-      const fromPatterns = collected as unknown as { patterns: PatternPage[]; open: number; dirReadable: boolean };
+      const fromPatterns = collected as unknown as { patterns: PatternPage[]; open: number; dirReadable?: boolean };
       patternRows = fromPatterns.patterns;
       patternsOpen = fromPatterns.open;
-      patternsDirReadable = fromPatterns.dirReadable;
+      // A step result memoized by a build that predated the field replays without it: absent is not unreadable.
+      patternsDirReadable = fromPatterns.dirReadable ?? true;
     }
     const corpus: { entries: { path: string; summary: string }[] } = { entries: collected.entries };
 
@@ -1878,10 +1879,7 @@ export async function cronCompoundPromoteHandler({
         `Output ONLY a JSON object with a "clusters" key, nothing else.`,
       ].join("\n");
       const tail = patternsArm
-        ? "\n\n" +
-          renderPatternIndex(patternRows, nonce) +
-          "\n\n" +
-          corpus.entries.map((e) => fenceBlock(nonce, `learning ${e.path}`, e.summary)).join("\n\n")
+        ? renderPatternsTail(patternRows, corpus.entries, nonce)
         : "\n\nCorpus:\n" + JSON.stringify(corpus.entries);
 
       const { text, stopReason } = await postAnthropicMessage({
@@ -1990,8 +1988,8 @@ export async function cronCompoundPromoteHandler({
             ledgerSuppressed++;
             continue;
           }
-          // Two clusters citing the same evidence set build the same branch; the second push would be
-          // rejected non-fast-forward. Refuse it by name instead of relying on that.
+          // Patterns arm only: two clusters citing the same evidence set hash identically and would build
+          // the same branch, so refuse the second by name. (The scheduled arm keeps its pre-existing behaviour.)
           if (seenHashes.has(h)) {
             record(h, { kind: "refused", reason: "cluster-duplicate" });
             continue;

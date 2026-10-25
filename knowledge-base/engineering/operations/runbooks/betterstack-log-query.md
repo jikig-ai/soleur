@@ -657,7 +657,7 @@ early terminal rows `disabled`, `deduped` and `week-cap-reached` carry ONLY `inp
 are numbers or closed enums. The ledger read has a usable ceiling of 999 search hits (10 pages of
 100, and a full last page throws `page-cap`). On a failed read the marker has no cause field:
 after Inngest retries (`retries:1`) it shows `status=error`, `ledger_read=failed`,
-`error_class=LedgerReadError` and a static `error_message`; the seven causes (`http-5xx`,
+a static `error_message` and `error_class=StepError` (an exhausted `step.run` reaches the handler as the SDK's `StepError`, so key on `ledger_read=failed`, not on the class name); the seven causes (`http-5xx`,
 `rate-limit`, `page-cap`, `incomplete`, `unparseable`, `drift`, `transport`) are the Sentry `cause`
 tag on op `ledger-read-failed`. How to read
 them: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The `input`
@@ -666,7 +666,7 @@ option and the patterns-path marker fields".
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
-  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?).message
+  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?|objects).message
               | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote")
               | [$r.dt, .trigger, .status, (.corpus_count//"-"), (.clusters_proposed//"-"),
                  (.clusters_opened//"-"), ((.refusals//[])|join(",")),
@@ -681,12 +681,12 @@ doppler run -p soleur -c prd_terraform -- \
 
 The six patterns-path fields are top-level keys of the decoded `.message` object, so they need no
 extra decoding. Copy-paste recipe (rows from a manual `input:"patterns"` run only; a row with
-`-` in every column on a manual trigger means the option did not reach the handler):
+`-` in every column on a manual trigger means the option did not reach the handler, or the run was a manual corpus run):
 
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
-  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?).message
+  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?|objects).message
               | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote" and .trigger == "manual")
               | [$r.dt, .status, (.input_source//"-"), (.patterns_open//"-"), (.ledger_read//"-"),
                  (.ledger_suppressed//"-"), (.ledger_prs_scanned//"-"), (.ledger_title_skipped//"-"),

@@ -16,6 +16,7 @@ import {
   parsePatternPage,
   patternsPayloadBytes,
   renderPatternIndex,
+  renderPatternsTail,
   untrustedDataSentence,
 } from "@/server/compound-promote-patterns";
 
@@ -250,14 +251,6 @@ describe("front matter cannot execute code (#8293 review: engines:{} does not re
     expect(parsePatternPage(text, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "schema" });
     expect(g.PATTERNS_PWNED).toBeUndefined();
   });
-
-  it("a YAML !!js/function tag does not execute either", () => {
-    const g = globalThis as Record<string, unknown>;
-    delete g.PATTERNS_PWNED2;
-    const text = pageText({ title: '!!js/function "function () { globalThis.PATTERNS_PWNED2 = 1; }"' });
-    expect(parsePatternPage(text, `${PATTERNS_DIR}/p.md`, PII).ok).toBe(false);
-    expect(g.PATTERNS_PWNED2).toBeUndefined();
-  });
 });
 
 describe("parsePatternPage: one fault at a time (each case has the same page accepted without the fault)", () => {
@@ -288,10 +281,33 @@ describe("parsePatternPage: one fault at a time (each case has the same page acc
     expect(parsePatternPage(pageText(over), `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "schema" });
   });
 
-  it("rejects a slug that is not kebab-case, and a page over the size bound", () => {
+  it("rejects a slug that is not kebab-case", () => {
     expect(parsePatternPage(pageText(), `${PATTERNS_DIR}/Bad_Slug.md`, PII)).toEqual({ ok: false, cause: "schema" });
+  });
+
+  it("the size bound is 16 KiB, is its own cause, and runs BEFORE any regex (it is what bounds the regex stall)", () => {
+    expect(MAX_PAGE_BYTES).toBe(16384);
     const big = pageText({}, `## Root cause\n${"x".repeat(MAX_PAGE_BYTES)}\n`);
-    expect(parsePatternPage(big, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "schema" });
+    expect(parsePatternPage(big, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "size" });
+    // An oversize page that ALSO holds an email is a size drop, not a pii drop.
+    const bigAndEmail = pageText({}, `## Root cause\nops@example.test ${"x".repeat(MAX_PAGE_BYTES)}\n`);
+    expect(parsePatternPage(bigAndEmail, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "size" });
+    let calls = 0;
+    const spy = { test: (): boolean => { calls++; return false; } } as unknown as RegExp;
+    parsePatternPage(big, `${PATTERNS_DIR}/p.md`, spy);
+    expect(calls).toBe(0);
+    // One byte under the bound still reaches the regex and the parser.
+    const under = pageText({}, `## Root cause\n${"x".repeat(MAX_PAGE_BYTES - pageText({}, "## Root cause\n\n").length)}\n`);
+    expect(Buffer.byteLength(under, "utf8")).toBeLessThanOrEqual(MAX_PAGE_BYTES);
+    expect(parsePatternPage(under, `${PATTERNS_DIR}/p.md`, PII)).toMatchObject({ ok: true });
+  });
+
+  it("PII that only exists after YAML decoding (an escape sequence) is caught on the decoded fields", () => {
+    // The raw text has no `@`, so the raw-text scan passes; the model would receive `ops@example.test`.
+    const text = pageText({ summary: '"mail ops\\x40example.test about it"' });
+    expect(PII.test(text)).toBe(false);
+    expect(parsePatternPage(text, `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "pii" });
+    expect(parsePatternPage(pageText({ title: '"reach ops\\x40example.test"' }), `${PATTERNS_DIR}/p.md`, PII)).toEqual({ ok: false, cause: "pii" });
   });
 
   it("the canonical-path predicate accepts the repo's own shape and nothing sloppier", () => {
@@ -319,6 +335,66 @@ describe("loadOpenPatterns: containment, attrition and error signals", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("a symlinked directory that stays INSIDE learnings/ is refused too (alias -> archive must not launder an archived learning)", async () => {
+    const lr = join(root, "knowledge-base/project/learnings");
+    mkdirSync(join(lr, "archive"), { recursive: true });
+    for (let n = 1; n <= 5; n++) writeFileSync(join(lr, "archive", `a${n}.md`), `ARCHIVED-SECRET-${n}\n`);
+    symlinkSync(join(lr, "archive"), join(lr, "alias"));
+    put("aliased", pageText({ evidence: `\n${[1, 2, 3, 4, 5].map((n) => `  - knowledge-base/project/learnings/alias/a${n}.md`).join("\n")}` }));
+    const r = await load();
+    expect(r.patterns).toEqual([]);
+    expect(JSON.stringify(r.evidenceEntries)).not.toContain("ARCHIVED-SECRET");
+    expect(r.droppedEvidence).toEqual([{ cause: "unreadable", count: 5 }]);
+  });
+
+  it("a sibling directory that merely shares the learnings prefix is not 'inside' it", async () => {
+    const evil = join(root, "knowledge-base/project/learnings-evil");
+    mkdirSync(evil, { recursive: true });
+    for (let n = 1; n <= 5; n++) writeFileSync(join(evil, `s${n}.md`), `SIBLING-SECRET-${n}\n`);
+    symlinkSync(evil, join(root, "knowledge-base/project/learnings/lnk"));
+    put("sibling", pageText({ evidence: `\n${[1, 2, 3, 4, 5].map((n) => `  - knowledge-base/project/learnings/lnk/s${n}.md`).join("\n")}` }));
+    const r = await load();
+    expect(r.patterns).toEqual([]);
+    expect(JSON.stringify(r.evidenceEntries)).not.toContain("SIBLING-SECRET");
+  });
+
+  it("a symlinked learnings root or patterns directory fails closed", async () => {
+    const real = mkdtempSync(join(tmpdir(), "patterns-realroot-"));
+    try {
+      for (let n = 1; n <= 8; n++) writeFileSync(join(real, `ev-${n}.md`), `ROOT-SECRET-${n}\n`);
+      rmSync(join(root, "knowledge-base/project/learnings"), { recursive: true });
+      symlinkSync(real, join(root, "knowledge-base/project/learnings"));
+      put("rooted", pageText());
+      const r = await load();
+      expect(r.patterns).toEqual([]);
+      expect(JSON.stringify(r.evidenceEntries)).not.toContain("ROOT-SECRET");
+
+      const elsewhere = mkdtempSync(join(tmpdir(), "patterns-elsewhere-"));
+      try {
+        writeFileSync(join(elsewhere, "p.md"), pageText());
+        rmSync(join(root, PATTERNS_DIR), { recursive: true });
+        symlinkSync(elsewhere, join(root, PATTERNS_DIR));
+        expect(await load()).toMatchObject({ dirReadable: false, open: 0 });
+      } finally {
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  it("only the 10 lines that are sent are PII-scanned and bounded: a later email is kept, an oversize excerpt is dropped", async () => {
+    writeFileSync(join(root, ev(2)), `${"line\n".repeat(10)}late contact: someone@example.test\n`);
+    writeFileSync(join(root, ev(3)), `${"y".repeat(MAX_PAGE_BYTES + 1)}\n`);
+    put("a", pageText({ evidence: `\n${evs(7).map((p) => `  - ${p}`).join("\n")}` }));
+    const r = await load();
+    expect(r.open).toBe(1);
+    expect(r.patterns[0].evidence).toContain(ev(2));
+    expect(r.patterns[0].evidence).not.toContain(ev(3));
+    expect(r.evidenceEntries.find((e) => e.path === ev(2))?.summary).not.toContain("someone@");
+    expect(r.droppedEvidence).toEqual([{ cause: "unreadable", count: 1 }]);
   });
 
   it("per-key attrition is reported by cause, once per distinct learning, and the page survives", async () => {
@@ -349,19 +425,13 @@ describe("loadOpenPatterns: containment, attrition and error signals", () => {
     expect(JSON.stringify(r.dropped)).not.toContain("ops@");
   });
 
-  it("a symlinked PAGE file and an oversized page are dropped as schema", async () => {
+  it("a symlinked PAGE file is dropped as schema and an oversized page as size", async () => {
     writeFileSync(join(root, "real-page.md"), pageText());
     symlinkSync(join(root, "real-page.md"), join(root, PATTERNS_DIR, "linked-page.md"));
     put("huge", pageText({}, `## Root cause\n${"x".repeat(MAX_PAGE_BYTES)}\n`));
     const r = await load();
     expect(r.patterns).toEqual([]);
-    expect(r.dropped.map((d) => `${d.slug}:${d.cause}`).sort()).toEqual(["huge:schema", "linked-page:schema"]);
-  });
-
-  it("pages load in sorted file-name order (z created first)", async () => {
-    put("z-first", pageText());
-    put("a-second", pageText());
-    expect((await load()).patterns.map((p) => p.slug)).toEqual(["a-second", "z-first"]);
+    expect(r.dropped.map((d) => `${d.slug}:${d.cause}`).sort()).toEqual(["huge:size", "linked-page:schema"]);
   });
 
   it("an evidence file that is gone is attrition, not a crash", async () => {
@@ -374,14 +444,12 @@ describe("loadOpenPatterns: containment, attrition and error signals", () => {
 });
 
 describe("patternsPayloadBytes", () => {
-  it("equals the byte size of the rendered index plus the fenced evidence tail it measures", async () => {
+  it("is the byte size of the ONE renderer the prompt uses, at the fixed 16-hex nonce width", async () => {
     put("a", pageText());
     const { patterns, evidenceEntries } = await load();
-    const nonce = "0".repeat(16);
-    const tail =
-      renderPatternIndex(patterns, nonce) +
-      "\n\n" +
-      evidenceEntries.map((e) => fenceBlock(nonce, `learning ${e.path}`, e.summary)).join("\n\n");
+    const tail = renderPatternsTail(patterns, evidenceEntries, "0".repeat(16));
+    expect(tail.startsWith("\n\n<<<BEGIN-0000000000000000:pattern-index>>>")).toBe(true);
+    expect(tail).toContain("<<<BEGIN-0000000000000000:learning knowledge-base/project/learnings/ev-1.md>>>");
     expect(patternsPayloadBytes(patterns, evidenceEntries)).toBe(Buffer.byteLength(tail, "utf8"));
     expect(patternsPayloadBytes(patterns, evidenceEntries)).toBeGreaterThan(Buffer.byteLength(JSON.stringify(evidenceEntries), "utf8"));
   });

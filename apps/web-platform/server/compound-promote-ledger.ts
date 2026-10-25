@@ -5,7 +5,9 @@
 // image has no `gh`), and suppressing a cluster whose recomputed hash was already proposed.
 //
 // Contract (CTO rulings F1-F3, C1, C2, C5 in the plan's decision record):
-//   - one search query, `head:<PROMOTE_BRANCH_PREFIX>`, paged through the shared `fetchAllPages`
+//   - one search query, `head:<PROMOTE_BRANCH_PREFIX>` bounded to the App's own PRs by `author:`
+//     (`head:` is a WORD-prefix match, so the author qualifier is what keeps a fork or human PR on a
+//     look-alike branch from filling the page cap), paged through the shared `fetchAllPages`
 //     (cap 10 pages of 100; it throws on a full last page, so 999 hits is the usable ceiling and the
 //     Search API's own 1,000-result limit is never reached); NO per-hit detail fetch and no
 //     `pulls?state=all` listing: the search item already carries state, closed_at, merged_at,
@@ -16,20 +18,24 @@
 //   - suppression is the EXACT hash: open or merged suppresses; closed-unmerged suppresses while
 //     now - closed_at < 60 days (at exactly 60 days it lapses);
 //   - a read that cannot be proven complete THROWS a typed error (fail closed, loud): an API/network
-//     error, a rate limit, the page cap, `incomplete_results`, `total_count` over 1000 or over the items
-//     seen, a closed item with an unparseable `closed_at`, a malformed item, or bot-authored hits with
+//     error, a rate limit, the page cap, `incomplete_results`, a `total_count` over the items
+//     retrieved, a closed item with an unparseable `closed_at`, a malformed item, or bot-authored hits with
 //     none parsing as a promote title (title drift must not read as "nothing to suppress").
 //     A zero-hit read, and hits that are all foreign (a fork or human PR on a self-healing/auto-*
 //     branch), are accepted as an empty ledger: the live search returns 0 today, search-index lag can
 //     briefly return 0 after a PR opens, and the consequence is at most one duplicate DRAFT PR,
 //     bounded by the week cap and human review (ADR-299, accepted residuals).
-// The reader never reads a PR body or comment, and never returns PR text: entries are
-// `{hash, state, closed_at}` only, which is what `step.run` persists.
+// The search response carries every matching PR's full issue object (body included; the Search API
+// has no field projection), so the process RECEIVES that text. The reader uses five fields, never
+// reads a body or comment, and returns no PR text: entries are `{hash, state, closed_at}`, and the
+// step output `step.run` persists is those entries plus two counts (`scanned`, `titleSkipped`).
 import { SOLEUR_BOT_LOGIN, fetchAllPages } from "@/server/inngest/functions/_cron-shared";
 
 export const LEDGER_TTL_DAYS = 60;
 export const LEDGER_MAX_SEARCH_PAGES = 10;
 export const LEDGER_BOT_LOGIN = SOLEUR_BOT_LOGIN;
+/** The search qualifier for the App's PRs: the login without its `[bot]` suffix, under `app/`. */
+const LEDGER_AUTHOR_QUALIFIER = `author:app/${SOLEUR_BOT_LOGIN.replace(/\[bot\]$/, "")}`;
 
 /**
  * The branch prefix every promotion PR is opened on. The ONE definition: the apply step builds the
@@ -123,7 +129,8 @@ function classifyTransportError(err: unknown): LedgerReadError {
   if (/page cap/i.test(message)) return new LedgerReadError("page-cap", "ledger search exceeded the page cap");
   if (status === 403 || status === 429) return new LedgerReadError("rate-limit", `ledger search was refused (${status})`);
   if (status !== undefined && status >= 500) return new LedgerReadError("http-5xx", `ledger search failed (${status})`);
-  if (status === 422) return new LedgerReadError("page-cap", "ledger search is past the 1,000-result ceiling");
+  // Page 11 is never requested (the cap throws first), so a 422 is the query itself being rejected.
+  if (status === 422) return new LedgerReadError("transport", "ledger search query was rejected (422)");
   // Deliberately NOT the raw message: an Octokit error can echo a response body.
   return new LedgerReadError("transport", "ledger search failed before a response");
 }
@@ -134,7 +141,7 @@ function classifyTransportError(err: unknown): LedgerReadError {
  */
 export async function readLedger(args: { octokit: LedgerOctokit; owner: string; repo: string }): Promise<LedgerResult> {
   const { octokit, owner, repo } = args;
-  const q = `repo:${owner}/${repo} is:pr head:${PROMOTE_BRANCH_PREFIX}`;
+  const q = `repo:${owner}/${repo} is:pr ${LEDGER_AUTHOR_QUALIFIER} head:${PROMOTE_BRANCH_PREFIX}`;
   let totalCount = 0;
   let incomplete = false;
   let malformed = false;
@@ -172,7 +179,7 @@ export async function readLedger(args: { octokit: LedgerOctokit; owner: string; 
     const item = asSearchItem(rawItem);
     if (item === null) throw new LedgerReadError("unparseable", "ledger search item has an unexpected shape");
     if (item.user?.login !== LEDGER_BOT_LOGIN) continue; // identity binding: a name-only match never suppresses
-    botHits++
+    botHits++;
     const m = PROMOTE_PR_TITLE_RE.exec(item.title);
     if (m === null) {
       titleSkipped++;

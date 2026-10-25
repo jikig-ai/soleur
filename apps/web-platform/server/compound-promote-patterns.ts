@@ -11,8 +11,8 @@
 // This module imports NOTHING from the handler (the handler imports it): `piiRegex` is injected,
 // which also keeps the handler's census pin of exactly two `TARGET_ALLOW_RE.test(` sites true.
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
-import { join, sep } from "node:path";
-import matter from "gray-matter";
+import { join } from "node:path";
+import { parseFrontMatterSafe } from "./front-matter-guard";
 
 export const PATTERNS_DIR = "knowledge-base/project/patterns";
 
@@ -24,9 +24,10 @@ export const MIN_PAGE_EVIDENCE = 5;
 
 /**
  * A page larger than this is dropped before any regex runs on it. The PII regex's email arm is
- * quadratic on a long unbroken run of its character class (seconds at 40k characters, measured), and it
- * runs synchronously in the web process, so the bound is what keeps one pasted blob from stalling the
- * event loop. Real pages are ~3 KB.
+ * quadratic on a long unbroken run of its character class (about 3 s at 40k characters, about 0.3-0.7 s
+ * at this bound, measured), and it runs synchronously in the web process, so the bound limits one
+ * pasted blob to a sub-second stall per page. Real pages are ~3 KB. The same bound caps the evidence
+ * excerpt that is PII-scanned and sent.
  */
 export const MAX_PAGE_BYTES = 16 * 1024;
 
@@ -41,7 +42,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "title", "summary", "status", "opened_on", "tags", "evidence", "required_reading", "closed_on", "closed_by",
 ]);
 
-export type PatternDropCause = "schema" | "pii" | "evidence";
+export type PatternDropCause = "schema" | "size" | "pii" | "evidence";
 
 export interface PatternPage {
   slug: string;
@@ -56,9 +57,10 @@ export interface PatternPage {
   closedBy?: number;
 }
 
-export type ParsePatternResult = { ok: true; page: PatternPage } | { ok: false; cause: "schema" | "pii" };
+export type ParsePatternResult = { ok: true; page: PatternPage } | { ok: false; cause: "schema" | "size" | "pii" };
 
 const SCHEMA: ParsePatternResult = { ok: false, cause: "schema" };
+const SIZE: ParsePatternResult = { ok: false, cause: "size" };
 
 /**
  * ONE nonce fence shared by every prompt that carries untrusted text. Extracted from
@@ -89,7 +91,7 @@ function asDate(v: unknown): string | null {
  * kebab slug. The WHOLE text (frontmatter and bodies) is scanned with the injected PII regex.
  */
 export function parsePatternPage(text: string, path: string, piiRegex: RegExp): ParsePatternResult {
-  if (Buffer.byteLength(text, "utf8") > MAX_PAGE_BYTES) return SCHEMA;
+  if (Buffer.byteLength(text, "utf8") > MAX_PAGE_BYTES) return SIZE;
   if (piiRegex.test(text)) return { ok: false, cause: "pii" };
   // Only the plain `---` opener: a `---js` / `---javascript` language tag would select another engine.
   if (!/^---\r?\n/.test(text)) return SCHEMA;
@@ -98,11 +100,10 @@ export function parsePatternPage(text: string, path: string, piiRegex: RegExp): 
 
   let data: Record<string, unknown>;
   try {
-    // The real defence against front-matter code execution is the plain `---` opener check above:
-    // gray-matter MERGES `engines` over its defaults, so `engines: {}` does NOT remove the `js` engine
-    // (a `---js` block would still evaluate). Kept as belt and braces only; the `---js` rejection is
-    // pinned by a test whose payload is a valid JS object literal.
-    const parsed = matter(text, { engines: {} });
+    // Two defences against front-matter code execution: the plain `---` opener check above, and the
+    // shared helper's throwing js/javascript engines (see front-matter-guard.ts). The `---js`
+    // rejection is pinned by a test whose payload is a valid JS object literal.
+    const parsed = parseFrontMatterSafe(text);
     data = parsed.data as Record<string, unknown>;
   } catch {
     return SCHEMA;
@@ -113,6 +114,9 @@ export function parsePatternPage(text: string, path: string, piiRegex: RegExp): 
   const { title, summary, status, tags, evidence, required_reading: requiredReading } = data;
   if (typeof title !== "string" || title.length === 0 || title.length > TITLE_MAX_CHARS || !PRINTABLE_ASCII_RE.test(title)) return SCHEMA;
   if (typeof summary !== "string" || summary.length === 0 || summary.length > SUMMARY_MAX_CHARS || !PRINTABLE_ASCII_RE.test(summary)) return SCHEMA;
+  // The raw-text scan above misses a value that only exists once YAML has decoded it (`\x40`, a
+  // `\`-newline continuation), so the decoded strings the model will receive are scanned too.
+  if (piiRegex.test([title, summary, ...(Array.isArray(tags) ? tags.map(String) : [])].join("\n"))) return { ok: false, cause: "pii" };
   if (status !== "open" && status !== "closed") return SCHEMA;
   if (typeof requiredReading !== "boolean") return SCHEMA;
   const openedOn = asDate(data.opened_on);
@@ -184,7 +188,12 @@ export async function loadOpenPatterns(args: {
   const out: LoadedPatterns = { patterns: [], evidenceEntries: [], open: 0, dropped: [], droppedEvidence: [], dirReadable: true };
   const dir = join(repoRoot, PATTERNS_DIR);
   let names: string[];
+  let repoReal: string | null = null;
   try {
+    repoReal = await realpath(repoRoot);
+    // The pages directory must be where it claims to be: a symlinked `patterns/` (or parent) would
+    // make every page below it an outside-the-repo read.
+    if ((await realpath(dir)) !== join(repoReal, PATTERNS_DIR)) throw new Error("patterns dir is aliased");
     const items = await readdir(dir, { withFileTypes: true });
     names = items.filter((i) => i.name.endsWith(".md") && (i.isFile() || i.isSymbolicLink())).map((i) => i.name).sort();
   } catch {
@@ -194,9 +203,12 @@ export async function loadOpenPatterns(args: {
 
   // Real path of the learnings root: an evidence file must resolve INSIDE it. lstat on the leaf alone
   // does not see a symlinked intermediate directory.
+  const learningsRel = "knowledge-base/project/learnings";
   let learningsRoot: string | null = null;
   try {
-    learningsRoot = await realpath(join(repoRoot, "knowledge-base", "project", "learnings"));
+    const candidate = await realpath(join(repoRoot, learningsRel));
+    // The root itself must sit at its own path under the repo (no symlinked `knowledge-base`, `project` or `learnings`).
+    learningsRoot = repoReal !== null && candidate === join(repoReal, learningsRel) ? candidate : null;
   } catch {
     learningsRoot = null;
   }
@@ -214,11 +226,17 @@ export async function loadOpenPatterns(args: {
         const abs = join(repoRoot, rel);
         const st = await lstat(abs);
         const real = learningsRoot === null ? null : await realpath(abs);
-        if (!st.isFile() || st.isSymbolicLink() || real === null || !real.startsWith(learningsRoot + sep)) {
+        // The real path must EQUAL the claimed path: any symlink on the way (even one that stays inside
+        // the learnings root, e.g. `learnings/alias -> archive`) would let the lexical archive/retired
+        // checks above run on a spelling that is not the file that gets read.
+        const expected = learningsRoot === null ? null : join(learningsRoot, rel.slice(learningsRel.length + 1));
+        if (!st.isFile() || st.isSymbolicLink() || real === null || real !== expected) {
           result = { dropped: "unreadable" };
         } else {
-          const content = await readFile(abs, "utf-8");
-          result = piiRegex.test(content) ? { dropped: "pii" } : { summary: content.split("\n").slice(0, 10).join("\n") };
+          // Scan exactly what is sent: the first 10 lines, bounded so the synchronous regex cannot stall.
+          const excerpt = (await readFile(real, "utf-8")).split("\n").slice(0, 10).join("\n");
+          if (Buffer.byteLength(excerpt, "utf8") > MAX_PAGE_BYTES) result = { dropped: "unreadable" };
+          else result = piiRegex.test(excerpt) ? { dropped: "pii" } : { summary: excerpt };
         }
       } catch {
         result = { dropped: "unreadable" };
@@ -237,7 +255,11 @@ export async function loadOpenPatterns(args: {
     let text: string;
     try {
       const st = await lstat(join(repoRoot, rel));
-      if (!st.isFile() || st.isSymbolicLink() || st.size > MAX_PAGE_BYTES) {
+      if (st.size > MAX_PAGE_BYTES) {
+        out.dropped.push({ slug, cause: "size" });
+        continue;
+      }
+      if (!st.isFile() || st.isSymbolicLink()) {
         out.dropped.push({ slug, cause: "schema" });
         continue;
       }
@@ -301,18 +323,27 @@ export function renderPatternIndex(patterns: readonly PatternPage[], nonce: stri
   return fenceBlock(nonce, "pattern-index", JSON.stringify(rows));
 }
 
+/** The patterns arm's whole prompt tail: the fenced index plus every fenced evidence excerpt. ONE renderer for the prompt and the byte metric. */
+export function renderPatternsTail(
+  patterns: readonly PatternPage[],
+  evidenceEntries: ReadonlyArray<{ path: string; summary: string }>,
+  nonce: string,
+): string {
+  return (
+    "\n\n" +
+    renderPatternIndex(patterns, nonce) +
+    "\n\n" +
+    evidenceEntries.map((e) => fenceBlock(nonce, `learning ${e.path}`, e.summary)).join("\n\n")
+  );
+}
+
 /**
- * Byte size of what the patterns arm sends as its prompt tail (the fenced index plus every fenced
- * evidence excerpt), measured with a fixed-width nonce so it is deterministic across replay.
+ * Byte size of what the patterns arm sends as its prompt tail, measured with a fixed-width nonce
+ * (16 hex characters, the width the handler draws) so it is deterministic across replay.
  */
 export function patternsPayloadBytes(
   patterns: readonly PatternPage[],
   evidenceEntries: ReadonlyArray<{ path: string; summary: string }>,
 ): number {
-  const nonce = "0".repeat(16);
-  const tail =
-    renderPatternIndex(patterns, nonce) +
-    "\n\n" +
-    evidenceEntries.map((e) => fenceBlock(nonce, `learning ${e.path}`, e.summary)).join("\n\n");
-  return Buffer.byteLength(tail, "utf8");
+  return Buffer.byteLength(renderPatternsTail(patterns, evidenceEntries, "0".repeat(16)), "utf8");
 }
