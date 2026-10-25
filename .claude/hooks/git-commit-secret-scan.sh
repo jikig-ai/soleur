@@ -48,7 +48,7 @@
 # `gitleaks-staged` step can still block the same commit (and, with an
 # unrunnable gitleaks, fail it — see #8271).
 #
-# THE WOULD-BE INDEX (#10696, ADR-299). This hook runs BEFORE the Bash command it guards, so for a command that stages
+# THE WOULD-BE INDEX (#10696, ADR-300). This hook runs BEFORE the Bash command it guards, so for a command that stages
 # AND commits (`git add -A && git commit`, `git commit -a`, `git commit -am`, `git commit -- <path>`) the index
 # on disk does not yet hold what the commit will record. When the command's own staging is visible to the
 # walker (lib/commit-target-roots.sh sets CTR_COMMIT_STAGES), lib/commit-index-sim.sh copies the real index to
@@ -89,7 +89,7 @@
 # The read-only prepare calls and sim_recovery's git calls are not under the deadline.
 #
 # NAMED RESIDUALS (the sim scans the working tree as it is NOW; the contract, the cause table and every residual
-# are indexed once, with their reasons, in knowledge-base/engineering/architecture/decisions/ADR-299-*.md):
+# are indexed once, with their reasons, in knowledge-base/engineering/architecture/decisions/ADR-300-*.md):
 #   - what an EARLIER command in the same call changes is not seen: a producer, `sed -i`, `prettier --write`, an edit
 #     of .gitignore, config or attributes, a `git mv` out of a path-keyed allowlist, a `git stash pop`;
 #   - a script or wrapper that runs `git add` inside, and user-config aliases (an INLINE alias is a deny);
@@ -757,7 +757,7 @@ scan_root() {
     raw_i=0
     # A path is re-scanned when its `diff` attribute is UNSET (-diff), or names a driver that the repository's git config
     # defines as binary, textconv or command (CTO row 51: ONE `git config --get-regexp`, read the first time a named driver
-    # appears). A driver defined outside git config behaves as text (a named residual, ADR-299).
+    # appears). A driver defined outside git config behaves as text (a named residual, ADR-300).
     while IFS= read -r -d '' _p && IFS= read -r -d '' _a && IFS= read -r -d '' _v; do
       case "$_v" in
         unspecified|set) : ;;

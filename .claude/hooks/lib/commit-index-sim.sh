@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034  # the CIS_* results are read by the sourcing hook
 # commit-index-sim.sh — build the index a Bash command's OWN staging will leave behind, so a scan can read it
 # BEFORE the command runs (#10696).
-# The contract, the deny causes and the named residuals are indexed in ADR-299.
+# The contract, the deny causes and the named residuals are indexed in ADR-300.
 #
 # THE DEFECT THIS EXISTS FOR. git-commit-secret-scan.sh scanned the index before the command it guards had
 # run, so `git add -A && git commit`, `git commit -a` and `git commit -- <path>` were scanned against an index

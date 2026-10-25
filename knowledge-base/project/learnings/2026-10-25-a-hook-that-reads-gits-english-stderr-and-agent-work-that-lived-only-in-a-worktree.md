@@ -26,7 +26,7 @@ Two process failures and one code defect recurred in them:
 - Compute `GIT_CONFIG_COUNT` pins in decimal and length-cap them, and delete the "arithmetic error becomes deny" claim.
 - The CTO's row 56 stopping rule ended the open-ended recogniser tail: after round 3 only a regression of a shipped
   claim, a false deny on a routine command, or a failed verification pass blocks ship; everything else is a
-  documented ADR-299 residual.
+  documented ADR-300 residual.
 
 ## Key Insight
 
