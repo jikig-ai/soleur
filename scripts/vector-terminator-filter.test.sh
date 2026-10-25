@@ -4,17 +4,19 @@
 #
 #   1. STRUCTURE (python3 tomllib over the real vector.toml): the filter reads exactly the raw journald
 #      source, the PII chain reads the FILTER and not the raw source (and still reads every other source),
-#      the condition names exactly the three healthy-request drop literals, scopes the drop to the terminator
-#      unit, is infallible (every field read falls back with `??`) and names no kept class, the filter's
-#      region carries no dollar sign (Vector interpolates inside comments), the stunnel config sets neither
-#      `debug` nor `output`, and the fixture file carries the expected cases.
+#      the condition is exactly three whole-line healthy-request drop patterns (each anchored at both ends),
+#      scopes the drop to the terminator unit, is infallible (every field read falls back with `??`) and
+#      names no kept class, the filter's region carries no unescaped dollar sign (Vector interpolates inside
+#      comments; a doubled one is its escape), the stunnel config sets neither `debug` nor `output`, and the
+#      fixture file carries the expected cases.
 #   2. BEHAVIOUR: `vector test` of vector-terminator-filter.test.toml against the real file, when a Vector
 #      0.43.x binary (or the pinned docker image) is reachable. The BLOCKING run is the
 #      validate-vector-config.yml step (REQUIRE_VECTOR_TEST=1); here an absent binary is reported as SKIP,
 #      never as a pass. `vector validate --no-environment` does NOT compile VRL, so this half is the only
 #      proof the condition behaves.
 #   3. MUTATION ROWS (Guard 2): each edits a COPY (never the real file) and re-runs the same functions over
-#      it. The structure rows need no Vector; the two behavioural rows need one.
+#      it. The structure rows need no Vector; with one reachable, the second-drop and unanchor rows are
+#      judged by `vector test` itself.
 #
 # No network. Fixtures are synthetic (loopback and the measured stunnel 5.72 lines).
 set -uo pipefail
@@ -44,6 +46,26 @@ check_test() { # check_test <description> <command...>: pass when the command ex
   shift
   if "$@"; then pass "$d"; else fail "$d"; fi
 }
+
+# Instrument self-test: drive pass/fail/check/check_test once each in both directions and require both counters
+# to move, then unwind them. A rewritten helper must stop the suite, not make every row below vacuous.
+selftest_p0=$PASS
+selftest_f0=$FAIL
+selftest_ok=1
+check "selftest" 0 >/dev/null
+[[ "$PASS" -eq $((selftest_p0 + 1)) && "$FAIL" -eq "$selftest_f0" ]] || selftest_ok=0
+check "selftest" 1 >/dev/null
+[[ "$PASS" -eq $((selftest_p0 + 1)) && "$FAIL" -eq $((selftest_f0 + 1)) ]] || selftest_ok=0
+check_test "selftest" true >/dev/null
+[[ "$PASS" -eq $((selftest_p0 + 2)) && "$FAIL" -eq $((selftest_f0 + 1)) ]] || selftest_ok=0
+check_test "selftest" false >/dev/null
+[[ "$PASS" -eq $((selftest_p0 + 2)) && "$FAIL" -eq $((selftest_f0 + 2)) ]] || selftest_ok=0
+PASS=$selftest_p0
+FAIL=$selftest_f0
+if [[ "$selftest_ok" -ne 1 ]]; then
+  printf '\n[FATAL] instrument self-test: check()/check_test() did not move the pass and fail counters, so every verdict below would be vacuous.\n' >&2
+  exit 1
+fi
 
 VT_DIR="$(mktemp -d)" || { echo "SETUP FAILED: mktemp" >&2; exit 2; }
 assert_fixture_dir() {
@@ -81,14 +103,26 @@ if not isinstance(cond, str):
     cond = ""
 drop_in = t.get("pii_scrub_drop_userdata", {}).get("inputs", [])
 OTHERS = ["system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"]
-LITS = ["Service [inngest] accepted connection from", "s_connect: connected 127.0.0.1:8288", "Service [inngest] connected remote server from"]
+# VRL comments never decide the condition, so every row below reads it comment-stripped.
+cond = re.sub(r"(?m)#.*$", "", cond)
+MATCHES = re.findall(r"match\(msg, r'([^']*)'\)", cond)
+LITS = [r"Service \[inngest\] accepted connection from", r"s_connect: connected 127\.0\.0\.1:8288", r"Service \[inngest\] connected remote server from"]
 KEPT = ["Connection closed", "Connection reset", "LOG3", "SSL_accept", "Configuration", "No more addresses", "s_connect: connect "]
 
 row("filter is a filter transform over exactly the raw journald source", filt.get("type") == "filter" and filt.get("inputs") == ["inngest_journald"])
+GRAPH = {**c.get("transforms", {}), **c.get("sinks", {})}
+def consumers(node):
+    return sorted(k for k, v in GRAPH.items() if node in (v.get("inputs") or []))
+row("the raw terminator source is read by the filter only, and the filter only by pii_scrub_drop_userdata (no node can take rows before the filter or before the scrub)",
+    consumers("inngest_journald") == ["inngest_terminator_filter"] and consumers("inngest_terminator_filter") == ["pii_scrub_drop_userdata"])
 row("pii_scrub_drop_userdata reads the filter, not the raw terminator source, and still reads every other source",
     "inngest_terminator_filter" in drop_in and "inngest_journald" not in drop_in and all(o in drop_in for o in OTHERS))
 row("filter condition extracted and non-trivial (>= 200 bytes; an empty extraction must fail the suite, never pass it)", len(cond) >= 200)
-row("condition names exactly the three healthy-request drop literals", all(l in cond for l in LITS) and cond.count("contains(") == 3)
+row("condition is exactly three match() drop patterns, one per healthy-request shape, and no contains()",
+    len(MATCHES) == 3 and cond.count("match(") == 3 and "contains(" not in cond
+    and all(sum(1 for m in MATCHES if l in m) == 1 for l in LITS))
+row("every drop pattern is a WHOLE-line match: anchored at the start, an end anchor (the escaped dollar) and the LOG5 level",
+    len(MATCHES) == 3 and all(m.startswith("^") and m.endswith("$$") and r"LOG5\[" in m for m in MATCHES))
 row("condition scopes the drop to the terminator unit", "soleur-inngest-tls.service" in cond)
 row("condition is infallible: both field reads fall back with ??, no fallible call",
     'string(._SYSTEMD_UNIT) ?? ""' in cond and 'string(.message) ?? ""' in cond and re.search(r"[A-Za-z_]!\(", cond) is None)
@@ -97,7 +131,8 @@ row("condition names no kept class (a second drop on Connection closed, LOG3 or 
 start = vec_text.find("# ---------------- inngest_terminator_filter")
 end = vec_text.find("# ---------------- Transform 1/3", start) if start >= 0 else -1
 region = vec_text[start:end] if start >= 0 and end > start else ""
-row("filter region located and carries no dollar sign (Vector interpolates inside comments)", len(region) >= 200 and "$" not in region)
+row("filter region located and carries no unescaped dollar sign (Vector interpolates inside comments; a doubled one is its escape)",
+    len(region) >= 200 and "$" not in region.replace("$$", ""))
 
 ci = open(ci_path, encoding="utf-8").read().split("\n")
 block = []
@@ -110,15 +145,18 @@ if i >= 0:
                 break
             block.append(l.strip())
 row("stunnel config block located (an empty extraction fails)", any(l == "[inngest]" for l in block))
+row("the unit the include list and the filter name is defined in cloud-init, and the stunnel service and upstream the drop patterns name exist there (a rename on either side silently stops the shipping or the drop)",
+    any(l.strip() == "- path: /etc/systemd/system/soleur-inngest-tls.service" for l in ci)
+    and any(l == "[inngest]" for l in block) and any(l == "connect = 127.0.0.1:8288" for l in block))
 row("stunnel config sets no debug key (a higher level is the one way this journal carries more than peers, byte counts and errors)",
-    not any(re.match(r"^debug\s*=", l) for l in block))
+    not any(re.match(r"^debug\s*=", l, re.I) for l in block))
 row("stunnel config sets no output key (a file would pull the logs out of the journal this change ships)",
-    not any(re.match(r"^output\s*=", l) for l in block))
+    not any(re.match(r"^output\s*=", l, re.I) for l in block))
 
 tests = tomllib.load(open(tests_path, "rb")).get("tests", [])
-row("fixture file carries at least 15 tests", len(tests) >= 15)
-row("fixture file carries exactly 3 drop cases (no_outputs_from) and every test inserts at the filter",
-    sum(1 for x in tests if "no_outputs_from" in x) == 3
+row("fixture file carries at least 21 tests", len(tests) >= 21)
+row("fixture file carries exactly 4 drop cases (no_outputs_from: three shapes plus one variant) and every test inserts at the filter",
+    sum(1 for x in tests if "no_outputs_from" in x) == 4
     and all(all(i.get("insert_at") == "inngest_terminator_filter" for i in x.get("inputs", [])) for x in tests)
     and len(tests) > 0)
 PY
@@ -213,8 +251,13 @@ def swap(text, old, new):
 if mode == "unwire":
     vec = swap(vec, 'inputs = ["inngest_terminator_filter", "system_journald"', 'inputs = ["inngest_journald", "system_journald"')
 elif mode == "second_drop":
-    last = 'contains(msg, "Service [inngest] connected remote server from")'
-    vec = swap(vec, last, last + ' ||\n    contains(msg, "Connection closed: 0 byte(s)")')
+    last = r"connected remote server from [0-9a-f.:]+$$')"
+    vec = swap(vec, last, last + ' ||\n  contains(msg, "Connection closed: 0 byte(s)")')
+elif mode == "bypass":
+    vec = swap(vec, 'inputs = ["pii_scrub_string"]', 'inputs = ["pii_scrub_string", "inngest_journald"]')
+elif mode == "unanchor":
+    old = r'^(\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d )?LOG5\[[^\]]+\]: Service \[inngest\] accepted connection from [0-9a-f.:]+$$'
+    vec = swap(vec, old, r'Service \[inngest\] accepted connection from')
 elif mode == "empty_fixture":
     i = tests.find("[[tests]]")
     if i < 0:
@@ -267,11 +310,38 @@ else
   fail "mutation 2: could not be applied or did not land (anchor drifted, so this row measured nothing)"
 fi
 
+# Mutation 2b: one drop pattern loses its anchors (a substring drop). The kept decoys must catch it.
+if mutate unanchor; then
+  if [[ "$VECTOR_AVAILABLE" -eq 1 ]]; then
+    run_vector_test "$VT_DIR/m-unanchor/vector.toml" "$VT_DIR/m-unanchor/tests.toml" "$VT_DIR/m-unanchor/out"
+    M2B_RC=$?
+    count_results "$VT_DIR/m-unanchor/out"
+    grep -E '^test .* \.\.\. failed' "$VT_DIR/m-unanchor/out.clean" > "$VT_DIR/m-unanchor/failed.txt" || true
+    check_test "mutation 2b: an unanchored drop pattern fails the whole-line decoy cases" \
+      bash -c 'test "$1" -ne 0 && grep -qF -- "merely contains the accepted-connection text" "$2"' _ "$M2B_RC" "$VT_DIR/m-unanchor/failed.txt"
+  else
+    structure_rows "$VT_DIR/m-unanchor/vector.toml" "$CLOUD_INIT" "$VT_DIR/m-unanchor/tests.toml" > "$VT_DIR/m-unanchor/rows.tsv"
+    check_test "mutation 2b: an unanchored drop pattern goes RED on the whole-line structure row (no Vector reachable)" \
+      row_failed "$VT_DIR/m-unanchor/rows.tsv" "every drop pattern is a WHOLE-line match"
+  fi
+else
+  fail "mutation 2b: could not be applied or did not land (anchor drifted, so this row measured nothing)"
+fi
+
+# Mutation 2c: a node takes the raw terminator rows around the filter and the scrub. Structure rows only.
+if mutate bypass; then
+  structure_rows "$VT_DIR/m-bypass/vector.toml" "$CLOUD_INIT" "$VT_DIR/m-bypass/tests.toml" > "$VT_DIR/m-bypass/rows.tsv"
+  check_test "mutation 2c: a second reader of the raw terminator source goes RED on the consumer-set row" \
+    row_failed "$VT_DIR/m-bypass/rows.tsv" "the raw terminator source is read by the filter only"
+else
+  fail "mutation 2c: could not be applied or did not land (anchor drifted, so this row measured nothing)"
+fi
+
 # Mutation 3 (the guard's own dispatch): a fixture file that yields zero test cases must fail the floor, never pass as 0 checked.
 if mutate empty_fixture; then
   structure_rows "$VECTOR_TOML" "$CLOUD_INIT" "$VT_DIR/m-empty_fixture/tests.toml" > "$VT_DIR/m-empty_fixture/rows.tsv"
   check_test "mutation 3: a fixture file with zero test cases goes RED on the case-count floor" \
-    row_failed "$VT_DIR/m-empty_fixture/rows.tsv" "fixture file carries at least 15 tests"
+    row_failed "$VT_DIR/m-empty_fixture/rows.tsv" "fixture file carries at least 21 tests"
 else
   fail "mutation 3: could not be applied or did not land (anchor drifted, so this row measured nothing)"
 fi
@@ -287,8 +357,19 @@ fi
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed, $SKIP skipped"
-if [[ $((PASS + FAIL)) -lt 17 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 17.\n' "$((PASS + FAIL))" >&2
-  exit 1
+# The floor is the count THIS run must reach: the engine-backed run records three more verdicts (the
+# vector test rows) than the engine-less one, so a single floor sized for the smaller run lets those three
+# vanish from the larger one. Each arm carries its own literal bound, on its own if, exiting inside the block.
+# Raise them with the suite, derived from a green run.
+if [[ "$VECTOR_AVAILABLE" -eq 1 ]]; then
+  if [[ $((PASS + FAIL)) -lt 25 ]]; then
+    printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 25 with an engine.\n' "$((PASS + FAIL))" >&2
+    exit 1
+  fi
+else
+  if [[ $((PASS + FAIL)) -lt 22 ]]; then
+    printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 22 without an engine.\n' "$((PASS + FAIL))" >&2
+    exit 1
+  fi
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

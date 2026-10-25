@@ -163,7 +163,7 @@ batch_size = 16
 # Same client-side evaluator as Source 1 (#9963): the journald source streams the
 # whole journal and filter_matches admits a record iff
 #   PRIORITY ∈ {0,1,2}
-#   AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service}
+#   AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service, soleur-inngest-tls.service}
 #   AND NOT  SYSLOG_IDENTIFIER ∈ <Source 4's exact tag set>
 # (includes are OR'd over record fields; excludes then drop on any match —
 # excludes win over includes).
@@ -583,7 +583,7 @@ devices.excludes = ["loop*", "dm-*"]
 devices.excludes = ["loop*", "dm-*"]
 mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]
 
-# ---------------- inngest_terminator_filter: bound the TLS terminator's row volume ----------------
+# ---------------- inngest_terminator_filter: trim the TLS terminator's healthy-request rows ----------------
 # Source 1's unit arm admits soleur-inngest-tls.service (stunnel4, the TLS terminator in front of the
 # Inngest listener) at EVERY priority, so without a filter all four lines of every healthy request ship.
 # stunnel's lines carry no priority prefix and take systemd's default level (PRIORITY 6 expected: derived
@@ -592,33 +592,43 @@ mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]
 #
 # This is a DROP-LIST that FAILS OPEN. It drops exactly three healthy-request line shapes of that one unit
 # (measured on stunnel 5.72 only: "accepted connection from", "s_connect: connected 127.0.0.1:8288" and
-# "connected remote server from") and passes every other row: any other unit, a row with no message or a
-# message that is not a string, every LOG0 to LOG4 line, every Connection reset and Connection closed line,
-# startup lines and any wording this list does not know. A wording that differs on the host's stunnel build
-# therefore over-ships (visible in the row count) and never silences. Every inngest-server.service row passes
+# "connected remote server from"), each matched as a WHOLE line (an optional timestamp, the LOG5[pid] prefix,
+# the text and nothing after it), so a LOG3 or LOG4 variant or a line carrying a failure suffix is kept. It
+# passes every other row: any other unit, a row with no message or a message that is not a string, every LOG0
+# to LOG4 line, every Connection reset and Connection closed line, startup lines and any wording this list
+# does not know. A wording that differs on the host's stunnel build therefore over-ships (visible in the row
+# count) and never silences. This is the filter's own property; a row with no usable message is scrubbed to
+# an empty string by pii_scrub_string rather than shipped raw. Every inngest-server.service row passes
 # unchanged: the 524 alert and the cutover audibility checks read them.
 #
 # The condition is INFALLIBLE on purpose. A Vector filter treats a runtime error in its condition as false
 # and DROPS the event, and `vector validate --no-environment` does not compile VRL, so every field read
 # falls back with a coalescing default and only `vector test` (scripts/vector-terminator-filter.test.sh,
-# blocking in validate-vector-config.yml) proves the condition.
+# blocking in validate-vector-config.yml) proves the condition. A doubled dollar sign in a pattern is
+# Vector's escape for one literal dollar sign (the end-of-line anchor).
 #
-# Row budget, measured per unit after the host is replaced: at most 400 per day before any link flip (the
-# host's own 5-minute health probe emits one Connection closed row per probe, about 288 a day) and at most
-# 8,000 per day after one. If the first 24 hours exceed that, the lever is a SECOND drop (Connection closed
-# rows with both byte counts above 0, never the 0-byte shapes); it needs a new bootstrap image and another
-# host replace, so the 24-hour read decides it before the flip is asked for. The unit's debug level stays
-# untouched: a higher level is the one way this journal could start carrying more than peer addresses,
-# byte counts and error strings.
+# Row budget, a HEALTHY-operation bound measured per unit after the host is replaced: count the Connection
+# closed rows with both byte counts above 0 plus the startup rows, nothing else. At most 400 a day before any
+# link flip (the host's own 5-minute health probe emits one such row per probe, about 288 a day) and at most
+# 8,000 a day after one. 8,000 is the alarm; a second drop is asked for only at 10,000 a day sustained after
+# the flip. The lever is a SECOND drop (those rows with both byte counts above 0, never the 0-byte shapes); it
+# needs a new bootstrap image and another host replace, so the 24-hour read decides it before the flip is
+# asked for. Refusal rows (LOG3, Connection reset, the 0-byte shapes) are outage evidence: they are never
+# dropped or throttled, so an outage or a restart loop (the unit restarts on failure with no start limit) can
+# exceed the budget without the filter being wrong. More than 7 startup rows for one boot_id means the unit
+# restarted: read nrestarts in tls-health before touching the filter. A SyslogIdentifier added to the unit
+# would route its rows through Source 4, past this filter; the row count is the detector. The unit's debug
+# level stays untouched: a higher level is the one way this journal could start carrying more than peer
+# addresses, byte counts and error strings.
 [transforms.inngest_terminator_filter]
 type = "filter"
 inputs = ["inngest_journald"]
 condition = '''
 unit = string(._SYSTEMD_UNIT) ?? ""
 msg = string(.message) ?? ""
-healthy = contains(msg, "Service [inngest] accepted connection from") ||
-  contains(msg, "s_connect: connected 127.0.0.1:8288") ||
-  contains(msg, "Service [inngest] connected remote server from")
+healthy = match(msg, r'^(\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d )?LOG5\[[^\]]+\]: Service \[inngest\] accepted connection from [0-9a-f.:]+$$') ||
+  match(msg, r'^(\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d )?LOG5\[[^\]]+\]: s_connect: connected 127\.0\.0\.1:8288$$') ||
+  match(msg, r'^(\d{4}\.\d\d\.\d\d \d\d:\d\d:\d\d )?LOG5\[[^\]]+\]: Service \[inngest\] connected remote server from [0-9a-f.:]+$$')
 !(unit == "soleur-inngest-tls.service" && healthy)
 '''
 
@@ -737,7 +747,9 @@ tag = string!(.pii_scrub_applied)
 if contains(tag, "structured") {
   .pii_scrub_applied = tag + "+string_skipped_already_parsed"
 } else {
-  msg = string!(.message)
+  # A message that is not a string (or absent) is coerced, or becomes "" when it cannot be: string! would abort
+  # and Vector would then ship the event UNSCRUBBED, which is the one direction this stage must not fail.
+  msg = to_string(.message) ?? ""
   # Length-bound BEFORE regex (per 2026-04-17-pii-regex-scrubber-three-invariants.md Invariant 1)
   if length(msg) > 10000 {
     msg = slice!(msg, 0, 10000)
@@ -766,12 +778,14 @@ if contains(tag, "structured") {
   # a `://` ban would either mangle those or get muted. Scheme-agnostic so redis://, amqp://
   # and https:// DSNs are covered by the same rule.
   msg = replace(msg, r'([a-z][a-z0-9+.-]*://)[^:/@\s]+:[^@/\s]+@', "$${1}[redacted]@")
+  msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
   # Doppler token shape: dp. + a two-to-five letter kind + a dot + a long body (a service token also
   # carries its config name). The TLS terminator unit's ExecStartPre sources the host's Doppler env
   # file without redirecting stderr, so a malformed line in that file would echo the offending text,
   # and that file holds the token. Value-shaped like the rules above; it costs no user_data bytes.
-  msg = replace(msg, r'\bdp\.[a-z]{2,5}\.[A-Za-z0-9_.-]{20,}', "dp.[redacted]")
-  msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
+  # It runs AFTER the control-character strip so a token split by a control byte cannot reassemble past it,
+  # and it is anchored on a non-alphanumeric (an underscore or a start counts) rather than on a word boundary.
+  msg = replace(msg, r'(^|[^A-Za-z0-9])dp\.[a-z]{2,5}\.[A-Za-z0-9_.-]{20,}', "$${1}dp.[redacted]")
   .message = msg
   .pii_scrub_applied = tag + "+string"
 }

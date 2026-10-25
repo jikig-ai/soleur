@@ -22,6 +22,9 @@ on:
       - "scripts/vector-egress-rollup.test.sh"
       - "apps/web-platform/infra/vector-terminator-filter.test.toml"
       - "scripts/vector-terminator-filter.test.sh"
+      # The terminator filter suite reads the stunnel config in this file (no debug and no output key), and
+      # the unit's definition names the journal identity the vector.toml unit lists must keep matching.
+      - "apps/web-platform/infra/cloud-init-inngest.yml"
       # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
       # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
       # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
@@ -38,6 +41,9 @@ on:
       - "scripts/vector-egress-rollup.test.sh"
       - "apps/web-platform/infra/vector-terminator-filter.test.toml"
       - "scripts/vector-terminator-filter.test.sh"
+      # The terminator filter suite reads the stunnel config in this file (no debug and no output key), and
+      # the unit's definition names the journal identity the vector.toml unit lists must keep matching.
+      - "apps/web-platform/infra/cloud-init-inngest.yml"
       # AC3 derives the expected SYSLOG_IDENTIFIER set from the infra emitter
       # scripts (SyslogIdentifier= / logger -t / LOG_TAG=), so an emitter-only
       # change (e.g. a new luks-monitor.sh) must re-run this guard — else a
@@ -84,7 +90,7 @@ jobs:
     # always() + `!= 'true'` reads the skip as "" and runs (#8919).
     if: always() && needs.detect-duplicate.outputs.duplicate != 'true'
     runs-on: ubuntu-24.04
-    # 8, not 5: recent runs took 79 to 284 s, and the terminator-filter suite (a Vector test plus four mutation
+    # 8, not 5: recent runs took 58 to 284 s, and the terminator-filter suite (a Vector test plus its mutation
     # rows) and the admission suite's mutation rows add to a cold-cache run.
     timeout-minutes: 8
     steps:

@@ -490,7 +490,7 @@ PYEOF
   mut_row drop_s2_unit 1 "NO: S2 exclude_units ==" "mutation 2: terminator unit removed from S2 exclude_units goes RED"
   mut_row rename_journald_types 2 "zero journald sources" "mutation 3: renamed source types parse to an empty model and exit 2, never 0 checked"
   mut_row third_unit_s1_only 1 "NO: S1 include_units and S2 exclude_units are set-equal" "mutation 4: a third unit added to S1 only goes RED on the set-equality pin"
-  mut_row reverse_both_lists 0 "PASSED" "must-pass: both lists in the opposite order are green (order is permitted, the pins compare sorted sets)"
+  mut_row reverse_both_lists 0 "PASSED" "must-pass: both lists in the opposite order are green (this suite compares sorted sets; the PII and 524 suites pin the literal order)"
 
   # Harness row: edit the SUITE, not the SUT. A copy whose evaluator ignores every exclude map must
   # redden the multiplicity aggregate (S2's exclude_units is what keeps the unit arm single-ship).
@@ -528,7 +528,15 @@ _p=$ok_count; _f=$no_count; _c=$cases; _n=${#LEDGER[@]}
 if (( _n > 0 )); then _saved=("${LEDGER[@]}"); else _saved=(); fi
 expect 0 "self-test probe (pass branch)" "unreachable"
 expect 1 "unreachable" "self-test probe (fail branch; expected, unwound)"
-if (( ok_count != _p + 1 || no_count != _f + 1 || cases != _c + 2 || ${#LEDGER[@]} != _n + 1 )); then
+# run_case owns the verdict of every corpus row (the compare against the expected set), so it gets its own
+# control: one record whose admitted set is known (the #6551 verbatim row) driven with the right expected
+# set and with a wrong one. A compare that always said yes would leave the pass branch alone and never
+# record the wrong-expected case as a failure.
+SELFTEST_REC='{"_SYSTEMD_UNIT":"init.scope","SYSLOG_IDENTIFIER":"systemd","PRIORITY":"3","MESSAGE":"fixture"}'
+run_case "self-test run_case (right expected set)" "$SELFTEST_REC" "inngest_journald" >/dev/null
+run_case "self-test run_case (wrong expected set; expected, unwound)" "$SELFTEST_REC" "system_journald" >/dev/null 2>&1
+MULTI=""
+if (( ok_count != _p + 2 || no_count != _f + 2 || cases != _c + 4 || ${#LEDGER[@]} != _n + 2 )); then
   printf '[FATAL] instrument self-test: expect() did not move every observable (ok %d->%d, no %d->%d, cases %d->%d, ledger %d->%d)\n' \
     "$_p" "$ok_count" "$_f" "$no_count" "$_c" "$cases" "$_n" "${#LEDGER[@]}" >&2
   exit 1

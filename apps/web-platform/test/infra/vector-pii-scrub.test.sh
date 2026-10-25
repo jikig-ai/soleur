@@ -249,6 +249,49 @@ run_fixture "doppler-personal-token-bare-in-a-line" \
 run_fixture "dp-prefix-ordinary-text-passes-through-intact" \
   '{"message":"build output dp.dev.local started"}' \
   '(.message == "build output dp.dev.local started")'
+# Boundaries of the rule, each a case the token body length, the anchor or the stage order decides.
+DP_BODY20="$(printf 'k%.0s' $(seq 1 20))"
+DP_BODY19="$(printf 'k%.0s' $(seq 1 19))"
+run_fixture "doppler-token-body-of-exactly-20-chars-is-redacted" \
+  "{\"message\":\"fetch failed with dp.""st.${DP_BODY20} rejected\"}" \
+  '(.message | test("dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+run_fixture "dp-prefix-with-a-19-char-body-passes-through-intact" \
+  "{\"message\":\"fetch failed with dp.""st.${DP_BODY19} rejected\"}" \
+  "(.message == \"fetch failed with dp.st.${DP_BODY19} rejected\")"
+run_fixture "doppler-token-after-an-underscore-is-redacted (the anchor is a non-alphanumeric, not a word boundary)" \
+  "{\"message\":\"X_dp.""pt.${DP_BODY} rejected\"}" \
+  '(.message | test("X_dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+DP_HEAD="$(printf 'k%.0s' $(seq 1 10))"
+DP_TAIL="$(printf 'k%.0s' $(seq 1 33))"
+# U+2028 is in the same stripped class as the control bytes and survives the JSON hand-off between the three
+# stages (a raw control byte does not: vector vrl prints it unescaped and the next stage cannot parse it).
+DP_SEP="$(printf '\xe2\x80\xa8')"
+run_fixture "doppler-token-split-by-a-stripped-separator-is-redacted (the strip runs before the rule)" \
+  "{\"message\":\"fetch failed with dp.""pt.${DP_HEAD}${DP_SEP}${DP_TAIL} rejected\"}" \
+  '(.message | test("dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+run_fixture "dp-label-after-a-dot-is-redacted-on-purpose (a documented over-redaction: a DNS label shaped like a token)" \
+  '{"message":"registry.dp.eu.example-cloud-long-hostname.internal ok"}' \
+  '(.message == "registry.dp.[redacted] ok")'
+
+# --- A message that is not a string must still be scrubbed, never shipped raw (string! would abort and
+# Vector would then pass the event on unmodified). Absent, integer and object messages each end as a string
+# carrying the string-stage audit tag.
+run_fixture "integer-message-is-coerced-and-scrubbed" \
+  '{"message":12345}' \
+  '(.message | type == "string")' \
+  '(.pii_scrub_applied | endswith("+string"))'
+run_fixture "absent-message-is-scrubbed-to-an-empty-string" \
+  '{"other":"field"}' \
+  '(.message | type == "string")' \
+  '(.pii_scrub_applied | endswith("+string"))'
+run_fixture "object-message-never-ships-raw" \
+  '{"message":{"token":"fixture-only"}}' \
+  '(.message | type == "string")' \
+  '(.pii_scrub_applied | endswith("+string"))' \
+  '(.message | test("fixture-only") | not)'
 
 # --- AC5(c): line-injection chars stripped ---
 run_fixture "line-injection-unicode" \
@@ -839,8 +882,10 @@ fi
 # multi-byte char), so the pin is the guaranteed-minimum run. Ratchet when adding fixtures, and
 # read a floor failure on an otherwise-green run as "you added rows, update this number".
 # Ratcheted 36 -> 39 by #9963 (AC3d-disjoint + AC3d-stale + the Source-1 arm pin).
-# Ratcheted 39 -> 42 by the terminator-journal change (the Doppler token shape: service token, personal token, ordinary dp. text).
-PII_SCRUB_MIN_CASES=42
+# Ratcheted 39 -> 42 by the terminator-journal change (the Doppler token shape: service token, personal token,
+# ordinary dp. text), then 42 -> 51 by its review (body-length boundary pair, underscore anchor, strip order,
+# the documented DNS-label over-redaction, and the three non-string-message cases): the full current count.
+PII_SCRUB_MIN_CASES=51
 if (( CASES < PII_SCRUB_MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PII_SCRUB_MIN_CASES" >&2
