@@ -63,6 +63,6 @@ One PR, seven commits in the order below. Tests first inside every phase.
 
 ## Phase 8: Gates
 
-- [ ] 8.1 `python3 scripts/lint-guard-contract.py <plan>`; vitest shard; `generate-kb-index.test.sh`
-- [ ] 8.2 `soleur:gdpr-gate` over the diff; `user-impact-reviewer` and observability-coverage reviewer at review
+- [x] 8.1 `python3 scripts/lint-guard-contract.py <plan>`; vitest shard; `generate-kb-index.test.sh`
+- [x] 8.2 `soleur:gdpr-gate` over the diff; `user-impact-reviewer` and observability-coverage reviewer at review
 - [ ] 8.3 PR body: `Ref #8293`, effect unmeasured until #10552 clears, no causal claim about the dump, `## Changelog`
