@@ -8,12 +8,9 @@ SUITE_TMP=$(mktemp -d)
 [[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
 trap 'rm -rf "$SUITE_TMP"' EXIT
 
-# jq is required by stop-hook.sh (tested here). Skip gracefully if missing.
-if ! command -v jq &>/dev/null; then
-  echo "SKIP: ralph-loop.test.sh requires jq (not installed)"
-  echo "Install jq for full test coverage: https://jqlang.github.io/jq/download/"
-  exit 0
-fi
+# jq is required by stop-hook.sh (tested here). A missing tool is UNRESOLVED
+# (exit 3), never a green SKIP — the suite asserted nothing (#8773).
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq (https://jqlang.github.io/jq/download/)"; exit 3; }
 
 # Clear git env vars that leak when this test runs inside a git hook (e.g., pre-push).
 # Without this, git rev-parse --show-toplevel in test subprocesses resolves to the

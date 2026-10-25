@@ -903,11 +903,9 @@ scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operatio
 scripts/git-data-reboot-evidence-landed-8210	tests/scripts/lib/git-data-birth-readiness-gate.sh
 scripts/git-data-rehearsal-evidence-8211	scripts/betterstack-query.sh
 scripts/infra-drift-autoclose	.github/workflows/apply-deploy-pipeline-fix.yml
-scripts/inngest-probe-heartbeat-feeder	.github/workflows/scheduled-inngest-probe-heartbeat.yml
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/sentry/cron-monitors.tf
 scripts/inngest-probe-heartbeat-feeder	apps/web-platform/infra/uptime-alerts.tf
 scripts/inngest-probe-heartbeat-feeder	scripts/betterstack-query.sh
-scripts/inngest-probe-heartbeat-feeder	scripts/lib/inngest-probe-row.sh
 scripts/inngest-tls-soak-10136	scripts/betterstack-query.sh
 scripts/jobs1-stopgap-7432	apps/web-platform/infra/ci-deploy.test.sh
 scripts/jobs1-stopgap-7432	apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh
