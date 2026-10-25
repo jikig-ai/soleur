@@ -19,8 +19,8 @@ pass=0; fail=0; cases=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 
-[[ -r "$SUT" ]] || { echo "FATAL: $SUT missing" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: no git"; exit 0; }
+[[ -r "$SUT" ]] || { echo "FAIL: $SUT not found — the file under test is repo-owned" >&2; exit 1; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 S="$(mktemp -d -t backstop-rev-guard.XXXXXXXX)" || exit 2
 trap 'rm -rf "$S"' EXIT
 

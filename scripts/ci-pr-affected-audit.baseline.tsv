@@ -1058,7 +1058,6 @@ scripts/followthroughs/pr-battery-gate-saving-9323	scripts/ci-battery-gate-repla
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/guard-vacuity-floor.test.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/repo-write-boundary.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/repo-write-boundary.test.sh
-scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lib/test-relevance-paths.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lint-orphan-test-suites.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/lint-orphan-test-suites.test.sh
 scripts/followthroughs/pr-battery-gate-saving-9323	scripts/registry-pull-path-health.sh

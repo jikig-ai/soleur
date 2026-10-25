@@ -438,13 +438,28 @@ AFFECTED_CLAUDE_HOOKS_HOOK_INPUT_CONTRACT_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # .claude/hooks/hook-suite-dep-unresolved.test.sh (#8616) — runs every guarded hook suite
-# with one tool off PATH; its population is derived from the `.claude/hooks/` roots of
-# test-all.sh's SUITE_GLOBS, so any hook-directory change (a suite, a guard, a hook it
-# exercises) is its subject. A directory entry is a prefix edge under the substring match.
+# with one tool off PATH; its pair population is derived from the `.claude/hooks/` roots of
+# test-all.sh's SUITE_GLOBS plus its own EXTRA_PAIRED_SUITES list, and its static sweep greps
+# every non-hook runner glob plus scripts/*.test.sh, scripts/followthroughs/*.test.sh,
+# tests/scripts/*.sh and the discoverability probes for SKIP+exit 0 (#8773 widened it).
+# A directory entry is a prefix edge under the substring match.
 AFFECTED_CLAUDE_HOOKS_HOOK_SUITE_DEP_UNRESOLVED_TEST_SH_PATHS=(
   ".claude/hooks/"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
+  "glob:plugins/soleur/test/*.test.sh"
+  "glob:plugins/soleur/skills/*/test/*.test.sh"
+  "glob:plugins/soleur/scripts/*.test.sh"
+  "glob:apps/cla-evidence/scripts/*.test.sh"
+  "glob:apps/web-platform/scripts/*.test.sh"
+  "glob:apps/web-platform/scripts/lib/*.test.sh"
+  "glob:scripts/lib/*.test.sh"
+  "glob:scripts/*.test.sh"
+  "glob:scripts/followthroughs/*.test.sh"
+  "glob:tests/scripts/*.sh"
+  "scripts/context-reviewed-gate-discoverability.sh"
+  "scripts/hook-input-fault-discoverability-probe.sh"
+  "scripts/resend-alert-path-discoverability.sh"
 )
 AFFECTED_CLAUDE_HOOKS_PKILL_SELF_MATCH_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/pkill-self-match-guard.sh"
@@ -610,6 +625,17 @@ AFFECTED_APPS_WEB_PLATFORM_TEST_VITEST_RELATED_PATHS=(
   "apps/web-platform/test/vitest-related.test.sh"
   "apps/web-platform/vitest.config.ts"
   "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/affected-glob.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+# scripts/followthroughs/pr-battery-gate-saving-9323 — reads scripts/lib/affected-glob.sh
+# (named via test-relevance-paths.sh:110).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PR_BATTERY_GATE_SAVING_9323_PATHS=(
+  "scripts/followthroughs/pr-battery-gate-saving-9323.sh"
+  "scripts/followthroughs/pr-battery-gate-saving-9323.test.sh"
+  "scripts/lib/affected-glob.sh"
+  "scripts/lib/test-relevance-paths.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
 )
@@ -695,6 +721,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_TEST_PYRAMID_FIXTURES_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
   "plugins/soleur/skills/schedule/SKILL.md"
   "plugins/soleur/test/schedule-task-design.test.sh"  # self-inclusion
+  "plugins/soleur/test/test-helpers.sh"               # sourced shared harness
+  "scripts/lib/scratch-root.sh"                       # sourced by test-helpers.sh:58
   "scripts/lib/test-affected-paths.sh"                # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(

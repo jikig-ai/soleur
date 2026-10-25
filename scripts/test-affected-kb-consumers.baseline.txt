@@ -22,6 +22,8 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
 .claude/hooks/guardrails.test.sh	knowledge-base
 .claude/hooks/hook-input-contract.test.sh	knowledge-base/project
+.claude/hooks/hook-suite-dep-unresolved.test.sh	knowledge-base/engineering/architecture/diagrams
+.claude/hooks/hook-suite-dep-unresolved.test.sh	knowledge-base/project
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans/archive
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/specs
@@ -239,7 +241,6 @@ scripts/rules-loader-stamp-probe	knowledge-base/project/plans/archive/20261013-0
 scripts/secret-scan-smoke-gate	knowledge-base
 scripts/secret-scan-smoke-gate	knowledge-base/engineering/operations
 scripts/skill-security-scan-step-body	knowledge-base/engineering/security/skill-overrides
-scripts/sweep-followthroughs	knowledge-base/project/learnings
 scripts/test-all-enumerate-toolchain	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md
 scripts/test-all-enumerate-toolchain	knowledge-base/legal
 scripts/test-all-infra-coverage-notice	knowledge-base/engineering/architecture/diagrams

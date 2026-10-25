@@ -11,12 +11,16 @@
 # the caller side — invoke as `bash scripts/context-reviewed-gate-discoverability.sh`.
 set -uo pipefail
 
+# #8773: a missing tool is UNRESOLVED (exit 3 — the probe asserted nothing), and a
+# missing hook-under-test is a FAIL (exit 1 — the file is repo-owned). A green
+# "SKIP" here read as a pass while the gate went unmeasured.
+command -v jq   >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this probe asserted nothing; install jq"; exit 3; }
+command -v git  >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this probe asserted nothing; install git"; exit 3; }
+command -v perl >/dev/null 2>&1 || { echo "UNRESOLVED: perl missing — this probe asserted nothing; install perl"; exit 3; }
+
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 HOOK="${ROOT}/.claude/hooks/context-reviewed-gate.sh"
-if ! command -v jq >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1 || ! command -v perl >/dev/null 2>&1 || [[ ! -x "$HOOK" ]]; then
-  echo "DISCOVERABILITY: SKIP (missing jq/git/perl or hook absent)"
-  exit 0
-fi
+[[ -x "$HOOK" ]] || { echo "FAIL: $HOOK not found or not executable — the hook under test is repo-owned"; exit 1; }
 
 r="$(mktemp -d)"
 : "${r:?fixture dir is empty; git -C <empty> would retarget this write}"

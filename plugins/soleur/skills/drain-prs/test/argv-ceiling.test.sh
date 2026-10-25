@@ -37,7 +37,7 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 [[ -f "$TARGET" ]] || { echo "ERROR: target not found: $TARGET" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
