@@ -54,3 +54,33 @@
   - No content errors; all seats ran inline (content-writer conventions, jargon scan, fact-check-by-source-read against the learning doc + property-testing.md + count-pin learning — every claim in the post traces to a verified source read this session).
 - Components invoked: soleur:work phases 0–4 (sequential Tier C; reviewer/fact-checker/specialist seats ran inline — no nested spawn on Devin); soleur:content-writer conventions + Phase 2.4 scan; soleur:campaign-calendar regen logic; precommit-guard.sh (passed once literal -C path used)
 - NOT done (by instruction): push, PR open, ship/qa/review — parent owns. Task 4.9 remains unticked.
+
+## Review Phase
+
+- Skill run: soleur:review (sequential-fallback — no Task/Agent tool on Devin CLI subagent; every prescribed seat's checklist ran INLINE by this reviewer; per-seat coverage disclosed, no independent-review claim). cloud-detect = `not-local:no-devin-env` (proceeds normally).
+- Change classified: **non-code** (0 source-extension files of 10). Design-risk: **no** (no new mechanism — redirect pair is a data append to an existing map; blog post follows the established schema; no new frontmatter key/vocabulary a second file must learn).
+- Risk tier: **aggregate pattern** (source: plan frontmatter `brand_survival_threshold`). Sensitive-path note: `apps/web-platform/infra/seo-bulk-redirects.tf` matches SENSITIVE_PATH_RE `apps/[^/]+/infra/` → security-sentinel mandatory regardless (was already in baseline).
+- Tier mismatch note: `aggregate pattern` exceeds the diff's shape (content + one .tf map line) — elevated set ran and reported per risk-tier rule; not silently down-tiered.
+- PANEL_SHA: e5e12333894dd819ed203dd11147de18d6eb7a1e. Merge-clean vs origin/main (merge-tree rc=0); mergeable=MERGEABLE; BLOCKED is draft-only.
+- Seats run inline (7): git-history-analyzer, pattern-recognition-specialist, security-sentinel, code-quality-analyst, architecture-strategist (design-validity pass, mandated by aggregate tier), code-simplicity-reviewer (design pass + Step-4 dedup), user-impact-reviewer (tier escalation — its own protocol's single-user threshold check noted and the lens applied to the plan's `## User-Brand Impact` anyway).
+- Seats N/A (with reason): test-design-reviewer (no test files), semgrep-sast (no source), gdpr-gate (no canonical-regex path), structural-enumeration (not guard-shaped), rails pair + migration pair (no Rails/migrations), observability/domain-model drift (no matching paths), anti-slop hook (no .njk/.css/.tsx under the gated dirs), performance-oracle (non-code baseline + no economics claim), data-integrity-guardian + agent-native-reviewer (non-code baseline excludes).
+- Recorded rulings honoured: CTO ruling (accept plan-4.5/panel skip) un-contradicted; publish-date row is operator-schedule `pending - assumed`, not re-litigated.
+- Verified evidence (each claim → falsifying command run):
+  - "seventeen review passes" = PR #10718 merge trailer `Reviewed-Coverage: full 8/8 agents` + `9-seat fix-round` = 17 ✓
+  - "three reviewers flagged the P1" = learning doc names security-sentinel + pattern-recognition + agent-native ✓
+  - tautology → permutation+idempotence → ordering three-act sequence = learning doc + live `property-testing.md` asserts (Counter/sorted(s)==s/all(a<=b)) ✓
+  - P2 self-oracle round-trip + `(unverified)` tool rows + check-date rows = property-testing.md + learning doc ✓
+  - count-pin "presence cannot count" finding = count-pin learning doc ✓
+  - "zero follow-up issues filed" = all findings fixed inline on #10718 (trailer + issue #10904 brief) ✓
+  - word count 1,580 ∈ [1500,2000]; description 132 chars ∈ [120,160]; FAQ JSON-LD parity byte-identical 4/4; jargon scan rc=0; tweet-draft validator rc=0
+  - redirect pair: key = dated filename stem, value = canonical slug (Eleventy fileSlug strips date), appended at map tail, ascending order, aligned `=` ✓
+  - hub→spoke sentence at end of "The test that found a bug on day one…" section; `{{ site.url }}` internal-link convention matches corpus ✓
+  - links: learning doc exists on origin/main; `/pricing/#waitlist` anchor exists in pricing.njk; canonical `/blog/property-test-cannot-fail-teaches-nothing/` resolves via fileSlug ✓
+  - OG image: PNG 1200×630 RGB committed at frontmatter path (content motif not visually verified — Pillow-generated per work phase)
+  - distribution file: frontmatter parity with sibling (#10903 used `issue_reference` — same key), required section headings present, UTM style matches sibling, status: draft ✓
+  - campaign-calendar regen: new draft row present; sibling-session rows (arc→published, opencode→scheduled 10-27, bug-investigator→published 10-15) each verified against their distribution frontmatter ✓
+- Findings: **1 × P3** — hub→spoke link text deviates from plan §2.2's suggested literal ("the full post-mortem" → "the full story of that example"); every structural requirement (one plain-words sentence, end of the named section, facts-only, links spoke) satisfied. Provenance: pr-introduced. Disposition: report to parent; likely wontfix — wording is `taste` class per decision-challenges.
+- Structural-cause roll-up: none (single finding, no shared gap).
+- Issues filed: none — finding is pr-introduced fix-inline class; report-only constraint routes it to the parent.
+- Trailer: NOT emitted — report-only constraint permits only this commit; the emit-review-trailer.sh `--allow-empty` commit is the parent's to run. Coverage for the trailer: `--agents-ran 7 --agents-expected 7 --mode sequential-fallback`.
+- Components invoked: soleur:review phases 0–6 inline (sequential-fallback); pipeline-tally init/incr.
