@@ -7,6 +7,10 @@
 # Triggers: the web watchdog clock is primary, `schedule:` is the fallback; keep workflow_dispatch and
 # the concurrency group (cancel-in-progress: false) and no other trigger (sentry-monitor-iac-parity.test.ts).
 # FED and ARMED (2026-10-12; read-back in the runbook section "Arming the probe heartbeat", knowledge-base/engineering/operations/runbooks/inngest-server.md).
+# Since #10390 the beat also certifies the SERVING verdict on the same freshest row: a not-serving
+# classification beats <url>/fail (verdict fail_beat, an intended immediate incident), healthy and
+# stopped-by-brake beat normally, and a verdict the classifier cannot establish withholds
+# (serving_unavailable).
 # A Sentry `error` check-in means withheld or failed, not "feeder broken".
 
 name: "Scheduled: Inngest Probe Heartbeat Feeder"
@@ -54,9 +58,10 @@ jobs:
           # above does NOT clear -e; a bare `out="$(...)"; rc=$?` would abort the step at the
           # assignment, before the outputs below are written.
           #
-          # The verifier's test seams (a frozen clock, a substitute predicate library) would authorize a
-          # beat on a dead probe if they reached it from the job environment, so seal them here.
-          unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB
+          # The verifier's test seams (a frozen clock, a substitute predicate library, a substitute
+          # classifier) would authorize a beat on a dead probe — or launder a not-serving verdict into
+          # a green beat — if they reached it from the job environment, so seal them here.
+          unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB INNGEST_CLASSIFY_LIB
           rc=0
           out="$(bash scripts/inngest-probe-heartbeat-feeder.sh 2>&1)" || rc=$?
 
@@ -92,6 +97,7 @@ jobs:
           case "$rc" in
             0) case "$verdict" in
                  beat|fresh_heartbeat_paused) echo "::notice::inngest probe heartbeat feeder: ${verdict}" ;;
+                 fail_beat) echo "::notice::inngest probe heartbeat feeder: not_serving — the freshest dedicated probe row classifies not-serving, so the /fail arm was beaten. The incident this opens is the intended outcome, not a feeder error." ;;
                  *) echo "::error::inngest probe heartbeat feeder exited 0 without a deciding verdict (${verdict}); Sentry will check in error." ;;
                esac ;;
             3) echo "::error::inngest probe heartbeat WITHHELD (${verdict}). See the verdict line above for the cause and the funnel counts." ;;
@@ -107,8 +113,10 @@ jobs:
           monitor-slug: scheduled-inngest-probe-heartbeat
           # ok ONLY when the verifier exited 0 AND named a deciding verdict (#7242): exit_code alone
           # cannot tell "the verifier decided this" from "the verifier aborted and left this behind".
+          # fail_beat is an ok-class deciding verdict only because the /fail POST itself returned 2xx —
+          # the beat was DELIVERED; the incident it opens is the intended outcome, not a feeder error.
           # Anything else, including a step that wrote no outputs, checks in `error`.
-          status: ${{ (steps.feeder.outputs.exit_code == '0' && (steps.feeder.outputs.verdict == 'beat' || steps.feeder.outputs.verdict == 'fresh_heartbeat_paused')) && 'ok' || 'error' }}
+          status: ${{ (steps.feeder.outputs.exit_code == '0' && (steps.feeder.outputs.verdict == 'beat' || steps.feeder.outputs.verdict == 'fresh_heartbeat_paused' || steps.feeder.outputs.verdict == 'fail_beat')) && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

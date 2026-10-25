@@ -20,6 +20,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMPREPO:-}" ]] || rm -rf "$TMPREPO"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$SCRIPT_DIR/../../.."
@@ -93,7 +99,6 @@ echo ""
 # against the test runner's checkout, which fails on shallow clones in CI
 # (per test-design review #3521 — fragile-to-fetch-depth class).
 TMPREPO=$(mktemp -d -t classify-rollback-XXXXXXXX)
-trap 'rm -rf "$TMPREPO"' EXIT
 (
   cd "$TMPREPO"
   git init -q -b main

@@ -136,7 +136,13 @@ echo ""
 # someone added a 6th lifted file without updating NOTICE. Must exit non-zero.
 echo "TS3: file present on disk but absent from NOTICE → exit non-zero"
 TMP_FILE="$(mktemp -p "$SKILL_DIR" --suffix=.md unrecognised-XXXX)"
-trap 'rm -f "$TMP_FILE"' EXIT
+# This suite installs per-section traps AFTER the source line, so each must carry the
+# incident-sandbox cleanup itself — an after-source trap REPLACES the composed one
+# test-helpers.sh installed and would leak it (#8659). `_soleur_sb_cleanup` runs FIRST
+# so a failing rm cannot skip it; `declare -F` guards the case where the helpers found
+# INCIDENTS_REPO_ROOT already set and never defined the function (a failing `&&` tail
+# in an EXIT trap does not flip the exit status — measured).
+trap 'declare -F _soleur_sb_cleanup >/dev/null && _soleur_sb_cleanup; rm -f "$TMP_FILE"' EXIT
 echo "fake lifted content" > "$TMP_FILE"
 set +e
 STDERR=$( ( cd "$REPO_ROOT" && bash "$INTEGRITY" "$TMP_FILE" ) 2>&1 1>/dev/null )
@@ -150,7 +156,9 @@ else
   FAIL=$((FAIL + 1))
 fi
 rm -f "$TMP_FILE"
-trap - EXIT
+# The fixture file is gone; reinstall a cleanup-ONLY trap rather than `trap - EXIT`,
+# which would disarm the incident-sandbox cleanup for the remainder of the suite.
+trap 'declare -F _soleur_sb_cleanup >/dev/null && _soleur_sb_cleanup' EXIT
 echo ""
 
 # --- TS4: AC5b parity — lefthook glob matches every NOTICE lifted-files[].path ---
@@ -348,7 +356,7 @@ echo ""
 echo "TS9: mismatched soleur-authored SHA -> exit 1, message names the right list"
 TMP_TS9="$(mktemp -d -t vpi-ts9.XXXXXXXX)"
 assert_fixture_dir "$TMP_TS9"
-trap 'rm -rf "$TMP_TS9"' EXIT
+trap 'declare -F _soleur_sb_cleanup >/dev/null && _soleur_sb_cleanup; rm -rf "$TMP_TS9"' EXIT
 
 make_notice "$TMP_TS9/NOTICE" \
 "  - path: references/fields.md

@@ -70,9 +70,17 @@ from the applied digest.
    re-dispatch past it.
 
 3. **Promote the pointer (separate principal — HARD-6).** The interim route is a MANUAL targeted
-   apply in an authorized window — set `TF_VAR_inngest_config_digest=<IMAGE@DIGEST sha256>` for a
-   `soleur/prd_terraform` apply of `doppler_secret.inngest_config_digest` (the `count`-gated
-   resource springs to life on a non-empty value), verify with `doppler secrets get`. The
+   apply in an authorized window — set the Doppler secret `INNGEST_CONFIG_DIGEST=<IMAGE@DIGEST
+   sha256>` in `soleur/prd_terraform`, then apply `doppler_secret.inngest_config_digest` (the
+   `count`-gated resource springs to life on a non-empty value). The tf-var transformer surfaces
+   the secret to terraform as `TF_VAR_inngest_config_digest`; do NOT create a secret literally
+   named `TF_VAR_inngest_config_digest` — under the transformer it arrives as
+   `TF_VAR_tf_var_inngest_config_digest`, undeclared-var noise (the mis-set observed 2026-10-24).
+   The apply is a state write, so its `AWS_*` must come from `TF_STATE_AWS_*` in
+   `soleur-infra-privileged/prd` per
+   [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+   invocation — the `prd_terraform` pair is read-only and 403s the state push. Verify the secret
+   landed with `doppler secrets get INNGEST_CONFIG_DIGEST -p soleur -c prd_terraform --plain`. The
    regex+floor admission already LANDED (regex at #8754; floor 5→6 in the defect-3 producer
    fix) — what survives is the ordering gate: between that merge and this apply, NO dispatch
    that renders and boots merged cloud-init may run (cloud-init-inngest.yml). #9060 automates this per-merge (`-target` route); its absence does not block

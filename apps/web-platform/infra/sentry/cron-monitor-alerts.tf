@@ -52,6 +52,10 @@ locals {
     # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
     # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
     workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"
+    # #10390 WS1 — the Better Stack incident mirror's liveness monitor, added under the two-PR rule:
+    # the mirror's own [ci/betterstack-incident] issues are the primary channel; route after the
+    # first measured check-in.
+    scheduled_betterstack_incident_mirror = "the mirror's own ci/betterstack-incident GitHub issues are the primary channel; route after the first measured check-in (#10390)"
   }
 }
 
