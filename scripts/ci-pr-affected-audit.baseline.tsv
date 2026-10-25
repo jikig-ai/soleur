@@ -614,7 +614,6 @@ plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/q
 plugins/soleur/test/lint-rejected-register.test.sh	README.md
 plugins/soleur/test/main-health-monitor-workflow.test.sh	.github/workflows/apply-deploy-pipeline-fix.yml
 plugins/soleur/test/main-health-monitor-workflow.test.sh	.github/workflows/infra-validation.yml
-plugins/soleur/test/main-health-monitor-workflow.test.sh	scripts/followthroughs/jobs1-stopgap-7432.sh
 plugins/soleur/test/main-health-monitor-workflow.test.sh	scripts/regenerate-shard-manifest.py
 plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	.github/workflows/merge-queue-cla-synthetics.yml
 plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	scripts/ci-cla-required-ruleset-canonical-required-status-checks.json

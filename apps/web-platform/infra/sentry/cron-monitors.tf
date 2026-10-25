@@ -1409,10 +1409,10 @@ resource "sentry_cron_monitor" "workspaces_luks_verify_web2" {
 # single terminal heartbeat (this file's header, lines on two-step check-ins) —
 # but it must not be FALSE.
 resource "sentry_cron_monitor" "main_health_monitor" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "main-health-monitor"
-  schedule                = { crontab = "0 */6 * * *" }
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "main-health-monitor"
+  schedule     = { crontab = "0 */6 * * *" }
   # #9410 — the monitor is sharded: the envelope is the run's bounded wall
   # clock, i.e. the SLOWEST leg's job ceiling plus the report job's, not a
   # single job's. Currently max(85, 80, 35, 30, 30) + 15 = 100, margin = +25.
