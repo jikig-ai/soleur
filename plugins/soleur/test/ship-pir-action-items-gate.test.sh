@@ -24,6 +24,12 @@ export LC_ALL=C
 
 SUITE_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=./test-helpers.sh
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMP:-}" ]] || rm -rf "$TMP"' EXIT
 source "$SUITE_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd -P "$SUITE_DIR/../../.." && pwd -P)"
@@ -37,7 +43,6 @@ PIR_DIR="$REPO_ROOT/knowledge-base/engineering/operations/post-mortems"
 
 TMP="$(mktemp -d -t pir-gate-suite.XXXXXXXX)"
 assert_fixture_dir "$TMP"
-trap 'rm -rf "$TMP"' EXIT
 
 # Every exit 0/1 must carry a verdict line: an rc with no `[PASS]`/`[FAIL]` line is a script that
 # died somewhere other than its verdict (the `set -e` shape Guard 1 row 12 names).

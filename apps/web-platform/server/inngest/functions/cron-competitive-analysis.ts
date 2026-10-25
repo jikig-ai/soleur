@@ -27,8 +27,8 @@
 // SHAPE DIFF vs PR-7 cron-roadmap-review.ts:
 //   - --model claude-opus-5-5 — competitive-analysis
 //     skill uses opus for cross-tier landscape reasoning.
-//   - --max-turns 45 (was 40) — multi-tier fan-out (tiers 0,3) plus the
-//     follow-up PR creation step needs slightly more headroom.
+//   - --max-turns 60 (was 45) — multi-tier fan-out (tiers 0,3) plus
+//     index + N shard writes and the 4-specialist cascade.
 //   - --allowedTools adds Task to PR-7's set (Bash,Read,Write,Edit,Glob,Grep,
 //     WebSearch,WebFetch + Task) — competitive-analysis skill delegates
 //     per-tier scans via sub-agent invocations.
@@ -102,7 +102,7 @@ const SENTRY_MONITOR_SLUG = "scheduled-competitive-analysis";
 // 50-min wall-clock budget + 10-min slack for setup + teardown + retry.
 const TOKEN_MIN_LIFETIME_MS = 50 * 60 * 1000 + 10 * 60 * 1000;
 
-// 50 min wall-clock budget. Math: 50min / 45turns = ~1.1 min/turn,
+// 50 min wall-clock budget. Math: 50min / 60turns = ~1.1 min/turn,
 // above the 0.75 min/turn floor. Exported for test parity
 // (cron-competitive-analysis.test.ts imports to avoid hard-coded timing
 // drift across SUT tuning).
@@ -122,7 +122,7 @@ const CLAUDE_CODE_FLAGS = [
   "--print",
   ...AUDIT_CLI_ARGS,
   "--max-turns",
-  "45",
+  "60",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task,Skill",
   "--plugin-dir",
@@ -154,7 +154,7 @@ with the label "scheduled-competitive-analysis" summarizing your findings.
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform commits and opens a PR for your changes automatically after the run.
-Only changes under knowledge-base/product/competitive-intelligence.md, knowledge-base/marketing/content-strategy.md, knowledge-base/product/pricing-strategy.md, knowledge-base/sales/battlecards/, and knowledge-base/marketing/seo-refresh-queue.md are persisted — keep all edits inside those paths.
+Only changes under knowledge-base/product/competitive-intelligence.md and knowledge-base/product/competitive-intelligence/ (the report index + its shard files), knowledge-base/marketing/content-strategy.md, knowledge-base/product/pricing-strategy.md, knowledge-base/sales/battlecards/, and knowledge-base/marketing/seo-refresh-queue.md are persisted — keep all edits inside those paths.
 Creating the analysis issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
 `;
 
@@ -186,6 +186,10 @@ const COMMIT_MESSAGE = "docs: update competitive intelligence report";
 
 export const COMPETITIVE_ANALYSIS_ALLOWED_PATHS = [
   "knowledge-base/product/competitive-intelligence.md",
+  // Trailing-slash dir entry is REQUIRED: isPathAllowed is a bare
+  // startsWith, so the ".md" file entry never matches shard paths and a
+  // bare dir stem would also match "competitive-intelligence-evil/".
+  "knowledge-base/product/competitive-intelligence/",
   "knowledge-base/marketing/content-strategy.md",
   "knowledge-base/product/pricing-strategy.md",
   "knowledge-base/sales/battlecards/",

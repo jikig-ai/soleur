@@ -34,10 +34,15 @@
 #
 # AN ENTRY IS A PATH, A DIRECTORY PREFIX, OR A `glob:` PATTERN. A trailing "/"
 # denotes a directory prefix match; anything else is a literal path — except
-# `glob:<literal-head>/<glob-tail>` (#9813), the extension-aware edge for
-# corpus walkers: a diff line under <literal-head> matching <glob-tail> under
-# bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers
-# `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike). `glob:` is
+# `glob:<literal-head>/<glob-tail>` (#9813) or `glob:<root-pattern>` (#10198), the
+# extension-aware edges for corpus walkers: a dir-anchored edge matches a diff
+# line under <literal-head> matching <glob-tail> under bash `[[ == ]]` semantics
+# (`*` crosses `/`, so `knowledge-base/**.sh` covers `knowledge-base/x.sh` and
+# `knowledge-base/a/b/c.sh` alike); a ROOT-ANCHORED member — a `/`-free head
+# (empty allowed), a `/`-free tail carrying `*` — matches only DIR-LESS diff
+# lines (repo-root corpus files like `x.test.sh`). All `glob:` members classify
+# through scripts/lib/affected-glob.sh's `_affected_glob_split`; a `/`-bearing
+# tail under a `/`-free head is malformed (root-tail-slash). `glob:` is
 # DECLARED-ARRAY-ONLY: the token extractors never emit it on purpose (a
 # `glob:`-spelled literal in scanned content still hits the same mint arm —
 # widen-only). The relevance arrays DO stay verbatim substring edges — a
@@ -433,13 +438,28 @@ AFFECTED_CLAUDE_HOOKS_HOOK_INPUT_CONTRACT_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 # .claude/hooks/hook-suite-dep-unresolved.test.sh (#8616) — runs every guarded hook suite
-# with one tool off PATH; its population is derived from the `.claude/hooks/` roots of
-# test-all.sh's SUITE_GLOBS, so any hook-directory change (a suite, a guard, a hook it
-# exercises) is its subject. A directory entry is a prefix edge under the substring match.
+# with one tool off PATH; its pair population is derived from the `.claude/hooks/` roots of
+# test-all.sh's SUITE_GLOBS plus its own EXTRA_PAIRED_SUITES list, and its static sweep greps
+# every non-hook runner glob plus scripts/*.test.sh, scripts/followthroughs/*.test.sh,
+# tests/scripts/*.sh and the discoverability probes for SKIP+exit 0 (#8773 widened it).
+# A directory entry is a prefix edge under the substring match.
 AFFECTED_CLAUDE_HOOKS_HOOK_SUITE_DEP_UNRESOLVED_TEST_SH_PATHS=(
   ".claude/hooks/"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
+  "glob:plugins/soleur/test/*.test.sh"
+  "glob:plugins/soleur/skills/*/test/*.test.sh"
+  "glob:plugins/soleur/scripts/*.test.sh"
+  "glob:apps/cla-evidence/scripts/*.test.sh"
+  "glob:apps/web-platform/scripts/*.test.sh"
+  "glob:apps/web-platform/scripts/lib/*.test.sh"
+  "glob:scripts/lib/*.test.sh"
+  "glob:scripts/*.test.sh"
+  "glob:scripts/followthroughs/*.test.sh"
+  "glob:tests/scripts/*.sh"
+  "scripts/context-reviewed-gate-discoverability.sh"
+  "scripts/hook-input-fault-discoverability-probe.sh"
+  "scripts/resend-alert-path-discoverability.sh"
 )
 AFFECTED_CLAUDE_HOOKS_PKILL_SELF_MATCH_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/pkill-self-match-guard.sh"
@@ -605,6 +625,17 @@ AFFECTED_APPS_WEB_PLATFORM_TEST_VITEST_RELATED_PATHS=(
   "apps/web-platform/test/vitest-related.test.sh"
   "apps/web-platform/vitest.config.ts"
   "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/affected-glob.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+# scripts/followthroughs/pr-battery-gate-saving-9323 — reads scripts/lib/affected-glob.sh
+# (named via test-relevance-paths.sh:110).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_PR_BATTERY_GATE_SAVING_9323_PATHS=(
+  "scripts/followthroughs/pr-battery-gate-saving-9323.sh"
+  "scripts/followthroughs/pr-battery-gate-saving-9323.test.sh"
+  "scripts/lib/affected-glob.sh"
+  "scripts/lib/test-relevance-paths.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
 )
@@ -681,6 +712,18 @@ AFFECTED_PLUGINS_SOLEUR_TEST_TEST_PYRAMID_FIXTURES_TEST_SH_PATHS=(
   "plugins/soleur/test/test-helpers.sh"
   "plugins/soleur/test/test-pyramid-fixtures.test.sh"  # self-inclusion
   "scripts/lib/test-affected-paths.sh"                  # THIS FILE
+)
+# plugins/soleur/test/schedule-task-design.test.sh — pins the `# Task design:` header
+# contract in both generated workflow templates + the Step 0b/Step 1 collection text in
+# schedule/SKILL.md. The other asserted-on files (task-design-gate.md, templates,
+# plan/deepen-plan SKILLs, workflow.js) are covered by content-reference derivation
+# ($REPO_ROOT tokens in the suite); declared edges here are the SUT, self, and index.
+AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
+  "plugins/soleur/skills/schedule/SKILL.md"
+  "plugins/soleur/test/schedule-task-design.test.sh"  # self-inclusion
+  "plugins/soleur/test/test-helpers.sh"               # sourced shared harness
+  "scripts/lib/scratch-root.sh"                       # sourced by test-helpers.sh:58
+  "scripts/lib/test-affected-paths.sh"                # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
@@ -2065,7 +2108,9 @@ AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS=(
 
 # scripts/battery-tag-authorship — census of tag-authoring git commands reachable from the battery:
 # the write-boundary softening in repo-write-boundary.sh and the runner's own command surface.
+# The exemption-ledger bijection greps the forge lib verbatim for the ledgered command (#10921).
 AFFECTED_SCRIPTS_BATTERY_TAG_AUTHORSHIP_PATHS=(
+  "plugins/soleur/test/lib/git-corrupt-graph.sh"
   "scripts/battery-tag-authorship.test.sh"
   "scripts/battery-tag-authorship-mutations.test.sh"
   "scripts/lib/repo-write-boundary.sh"
@@ -2190,12 +2235,11 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # under EVERY top-level root — plus fixture scripts/fixtures/vacuity-contract-control.sh
 # and its own file (covered by the scripts/ prefix). The glob: entries below cover the
 # 13 roots that lacked a declared prefix; the dir prefixes stay because converting them
-# would narrow coverage the suite already had (the #9945 precedent). Residual: a
-# dir-less `x.test.sh` at repo root is corpus yet inexpressible in this `dir/`
-# grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
-# re-derives the live root set to catch NEW top-level dirs, and its th8 row
-# (#10117) REDs the battery on any dir-less corpus member — grammar extension
-# deferred to #10198.
+# would narrow coverage the suite already had (the #9945 precedent). A dir-less `x.test.sh`
+# at repo root is corpus too — root-anchored `glob:` members (#10198) cover it;
+# the th6 row in scripts/test-all-affected.test.sh re-derives the live root
+# set to catch NEW top-level dirs, and its th8 row (#10117) REDs the battery
+# on any dir-less corpus member no declared edge covers.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
 
   "apps/"
@@ -2255,11 +2299,10 @@ AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
 # `.github/workflows/*.yml` surfaces and the REQUIRED_RUNNERS files — the non-corpus
 # reads are already covered by the .github/, scripts/ and apps/ prefixes, so only the
 # *.test.sh corpus needed glob: coverage for the 13 roots without a declared prefix.
-# Residual: a dir-less `x.test.sh` at repo root is corpus yet inexpressible in this
-# `dir/` grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
-# re-derives the live root set to catch NEW top-level dirs, and its th8 row
-# (#10117) REDs the battery on any dir-less corpus member — grammar extension
-# deferred to #10198.
+# A dir-less `x.test.sh` at repo root is corpus too — root-anchored `glob:` members
+# (#10198) cover it; the th6 row in scripts/test-all-affected.test.sh re-derives the
+# live root set to catch NEW top-level dirs, and its th8 row (#10117) REDs the
+# battery on any dir-less corpus member no declared edge covers.
 AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
 
   "apps/"
@@ -2455,10 +2498,10 @@ AFFECTED_SCRIPTS_AUDIT_DEV_SCHEDULED_SHAPES_PATHS=(
 # scripts/lib/repo-write-boundary.sh, and its own file. Uniformly glob:-scoped: a dir
 # prefix over a doc-heavy root would over-select on non-.sh churn, and there is no
 # legacy prefix set to preserve. Residual: a dir-less `x.sh` at repo root is
-# inexpressible in this `dir/` grammar (no head to mint); the th6 row in
+# coverable by a root-anchored `glob:` member (#10198); the th6 row in
 # scripts/test-all-affected.test.sh re-derives the live root set for NEW dirs,
-# and its th8 row (#10117) REDs the battery on any dir-less corpus member —
-# grammar extension deferred to #10198.
+# and its th8 row (#10117) REDs the battery on any dir-less corpus member no
+# declared edge covers.
 AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
   "glob:.agents/**.sh"
   "glob:.claude/**.sh"
@@ -2499,6 +2542,34 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/test-all.sh"
 )
 
+# scripts/inngest-probe-heartbeat-feeder — the dead-probe/serving-verdict feeder battery.
+# WS2 (#10390) made it SOURCE the shared classifier (INNGEST_CLASSIFY_LIB seam, census load)
+# and READ the workflow run block for seam/wf_check rows — reads no name-stem derives.
+AFFECTED_SCRIPTS_INNGEST_PROBE_HEARTBEAT_FEEDER_PATHS=(
+  ".github/workflows/scheduled-inngest-probe-heartbeat.yml"
+  "scripts/inngest-dedicated-host-classify.sh"
+  "scripts/inngest-probe-heartbeat-feeder.sh"
+  "scripts/inngest-probe-heartbeat-feeder.test.sh"
+  "scripts/lib/inngest-probe-row.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/betterstack-incident-mirror — the #10390 incident-mirror battery. Beyond the SUT
+# it READS the shipping workflow (parsed-YAML wiring rows + the verbatim run-block replay),
+# the watchdog dispatch table (the row pin), cron-monitors.tf (the monitor declaration row)
+# and the two suite-registry TSVs — reads no name-stem derivation reaches.
+AFFECTED_SCRIPTS_BETTERSTACK_INCIDENT_MIRROR_PATHS=(
+  ".github/workflows/scheduled-betterstack-incident-mirror.yml"
+  "apps/web-platform/infra/sentry/cron-monitors.tf"
+  "apps/web-platform/server/watchdog-dispatch-table.ts"
+  "scripts/betterstack-incident-mirror.sh"
+  "scripts/betterstack-incident-mirror.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/suite-durations.tsv"
+  "scripts/suite-shard-legs.tsv"
+  "scripts/test-all.sh"
+)
+
 # scripts/followthroughs/registry-clientip-alert-7530.test.sh — the #7530 post-merge probe's
 # exit-code battery. Beyond the probe itself it READS the committed alert file at runtime (the suite
 # compares the SQL the probe sends against that text, and the probe extracts its predicate from it),
@@ -2517,6 +2588,15 @@ AFFECTED_SCRIPTS_FOLLOWTHROUGHS_REGISTRY_CLIENTIP_ALERT_7530_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "scripts/suite-durations.tsv"
   "scripts/suite-shard-legs.tsv"
+)
+
+# scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh — the probe's fed-log
+# battery. Beyond the probe it READS the shared forge lib (marker-literal pin, row q);
+# its other live-repo references are name-greps carried as accept rows (each suite's own
+# in-file roster check is the selecting self-check for producer edits).
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_T5_SKIP_PERSISTENCE_BOUND_7510_PATHS=(
+  "plugins/soleur/test/lib/git-corrupt-graph.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
 # scripts/monitor-streak-state.test.sh — the rehearsal skip monitor's streak-store suite. Its Section B parses the

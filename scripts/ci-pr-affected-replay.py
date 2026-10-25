@@ -169,6 +169,7 @@ on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, n
 """
 import argparse
 import errno
+import fnmatch
 import hashlib
 import json
 import math
@@ -971,15 +972,19 @@ def edge_hit(pt, path):
     empty entry matches everything). A `^` entry is `glob:<head>/<tail>` (a bash `[[ == ]]` glob over the whole path, `*` crosses
     `/`), `dir/` (a prefix) or a file (exact equality). Nothing is a regex: a path holding ( ) [ ] + $ matches itself, and `^a.sh`
     does not match `a.sh.bak`. EVERY malformed glob shape matches (a glob edge can only widen a selection): a byte outside
-    [A-Za-z0-9_./*-], a head that is absolute, begins with `./` or `../`, or holds `//`, `/./` or `/../`, a head not ending in `/`, a tail
-    ending in `/`, a tail without `*`. A tracked name holding a TAB or a double quote is framed differently in the selector's diff blob and
-    is not modelled (no such name is tracked)."""
+    [A-Za-z0-9_./*-], a head that is absolute, begins with `./` or `../`, or holds `//`, `/./` or `/../`, a `/`-bearing head not
+    ending in `/`, a `/`-bearing tail under a `/`-free head, a tail ending in `/`, a tail without `*`. A `/`-free head is a real
+    ROOT-ANCHORED pattern (#10198): it matches only a diff line carrying no `/` that fnmatches the pattern (`*` crosses `/` there
+    too — the dir-less conjunct is load-bearing, mirroring the bash arm's `!= */*`). A tracked name holding a TAB or a double
+    quote is framed differently in the selector's diff blob and is not modelled (no such name is tracked)."""
     if not pt.startswith("^"):
         return pt in path
     e = pt[1:]
     if e.startswith("glob:"):
         g = e[len("glob:"):]
         if GLOB_CHARSET.search(g):
+            return True
+        if "*" not in g:                # a metachar-free payload is a literal edge — always-match (bash `literal` arm)
             return True
         head = g.split("*", 1)[0]
         if head.startswith("/"):        # the head is not repo-relative: six shapes, one line each
@@ -994,13 +999,19 @@ def edge_hit(pt, path):
             return True
         if "/../" in head:
             return True
-        if not head.endswith("/"):      # head not /-terminated
+        if "/" in head and not head.endswith("/"):  # mid-slash head — not /-terminated
             return True
         tail = g[len(head):]
+        if "/" not in head:
+            # Root-anchored (#10198): a `/`-bearing tail can never match a dir-less diff line.
+            if "/" in tail:
+                return True
+            return "/" not in path and fnmatch.fnmatchcase(path, g)
         if tail.endswith("/"):          # unmatchable tail
             return True
-        if "*" not in tail:             # a tail without a wildcard
-            return True
+        if "*" not in tail:             # a tail without a wildcard (unreachable: `*`-
+            return True                 # less payloads take the literal arm; kept to mirror
+                                        # the bash classifier's tail-no-star vocabulary)
         # `*` matches any run of characters, `/` included, and a run of stars is one star: split on `*`, anchor the first and the last
         # segment and find the middle ones in order. Linear in the path, where the equivalent regex is polynomial in the number of stars.
         segs = g.split("*")

@@ -21,7 +21,7 @@
 # appears, and touches nothing in the repository.
 set -uo pipefail
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing — probe cannot run"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this probe asserted nothing; install jq"; exit 3; }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGG="$REPO_ROOT/scripts/rule-metrics-aggregate.sh"
