@@ -90,8 +90,8 @@ jobs:
     # always() + `!= 'true'` reads the skip as "" and runs (#8919).
     if: always() && needs.detect-duplicate.outputs.duplicate != 'true'
     runs-on: ubuntu-24.04
-    # 8, not 5: recent runs took 58 to 284 s, and the terminator-filter suite (a Vector test plus its mutation
-    # rows) and the admission suite's mutation rows add to a cold-cache run.
+    # 8, not 5: a past run took 284 s against the old 300 s limit, and the terminator-filter suite (a Vector test
+    # plus its mutation rows) and the admission suite's mutation rows add to a cold-cache run.
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

@@ -272,6 +272,13 @@ run_fixture "doppler-token-split-by-a-stripped-separator-is-redacted (the strip 
   "{\"message\":\"fetch failed with dp.""pt.${DP_HEAD}${DP_SEP}${DP_TAIL} rejected\"}" \
   '(.message | test("dp\\.\\[redacted\\] rejected"))' \
   '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+run_fixture "doppler-token-directly-after-a-stripped-separator-is-redacted (the rule also runs BEFORE the strip)" \
+  "{\"message\":\"fetch failed with x${DP_SEP}dp.""pt.${DP_BODY} rejected\"}" \
+  '(.message | test("xdp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+run_fixture "dp-prefix-with-a-six-letter-kind-passes-through-intact (the kind is two to five letters)" \
+  "{\"message\":\"fetch failed with dp.abcdef.${DP_BODY} rejected\"}" \
+  "(.message == \"fetch failed with dp.abcdef.${DP_BODY} rejected\")"
 run_fixture "dp-label-after-a-dot-is-redacted-on-purpose (a documented over-redaction: a DNS label shaped like a token)" \
   '{"message":"registry.dp.eu.example-cloud-long-hostname.internal ok"}' \
   '(.message == "registry.dp.[redacted] ok")'
@@ -883,9 +890,10 @@ fi
 # read a floor failure on an otherwise-green run as "you added rows, update this number".
 # Ratcheted 36 -> 39 by #9963 (AC3d-disjoint + AC3d-stale + the Source-1 arm pin).
 # Ratcheted 39 -> 42 by the terminator-journal change (the Doppler token shape: service token, personal token,
-# ordinary dp. text), then 42 -> 51 by its review (body-length boundary pair, underscore anchor, strip order,
-# the documented DNS-label over-redaction, and the three non-string-message cases): the full current count.
-PII_SCRUB_MIN_CASES=51
+# ordinary dp. text; the floor was then 42 against 43 cases), then 51 and 53 by its review (body-length
+# boundary pair, underscore anchor, strip order both ways, six-letter kind, the documented DNS-label
+# over-redaction, and the three non-string-message cases): the full current count of 53.
+PII_SCRUB_MIN_CASES=53
 if (( CASES < PII_SCRUB_MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PII_SCRUB_MIN_CASES" >&2

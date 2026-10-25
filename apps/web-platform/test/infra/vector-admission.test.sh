@@ -33,8 +33,8 @@
 # Suite-file hygiene (guard-vacuity-floor defect class): this file must never
 # carry a bare less-than-less-than or here-string token outside a real heredoc —
 # the meta-guard's heredoc blanker reads ANY such token as a heredoc opener and
-# would swallow the tail floor. The only occurrences below are the three real
-# quoted heredocs feeding python3/cat; all floor/conservation reporting sits
+# would swallow the tail floor. The only occurrences below are the four real
+# quoted heredocs feeding python3/cat (the model, the emulator, the structure checker and the mutation harness); all floor/conservation reporting sits
 # AFTER them, reports with printf + exit 1, and never routes through ok()/no().
 
 set -uo pipefail
@@ -186,7 +186,7 @@ run_case "inngest-server.service PRIORITY 0 (unit arm; S2 exclude drops it there
 
 # The TLS terminator unit (stunnel4, soleur-inngest-tls.service) rides the same unit arm. Its
 # lines carry no <N> prefix, so the journald PRIORITY is derived (systemd's default), not measured on
-# the host: the literal rows below cover every value a build could assign, and a PRIORITY test can
+# the host: the literal rows below cover the values 0 and 2 to 6 a build could assign, and a PRIORITY test can
 # never split its LOG3 refusal lines from its LOG5 healthy lines (plan, Sharp Edges).
 run_case "terminator soleur-inngest-tls.service PRIORITY 6 (unit arm; the expected default)" \
   '{"_SYSTEMD_UNIT":"soleur-inngest-tls.service","SYSLOG_IDENTIFIER":"stunnel4","PRIORITY":"6"}' \

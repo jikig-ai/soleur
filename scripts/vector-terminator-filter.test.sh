@@ -113,8 +113,9 @@ row("filter is a filter transform over exactly the raw journald source", filt.ge
 GRAPH = {**c.get("transforms", {}), **c.get("sinks", {})}
 def consumers(node):
     return sorted(k for k, v in GRAPH.items() if node in (v.get("inputs") or []))
-row("the raw terminator source is read by the filter only, and the filter only by pii_scrub_drop_userdata (no node can take rows before the filter or before the scrub)",
-    consumers("inngest_journald") == ["inngest_terminator_filter"] and consumers("inngest_terminator_filter") == ["pii_scrub_drop_userdata"])
+row("the raw terminator source is read by the filter only, and the filter only by pii_scrub_drop_userdata (no node can take rows before the filter or before the scrub; a wildcard input is refused because Vector expands it)",
+    consumers("inngest_journald") == ["inngest_terminator_filter"] and consumers("inngest_terminator_filter") == ["pii_scrub_drop_userdata"]
+    and not any(ch in str(i) for v in GRAPH.values() for i in (v.get("inputs") or []) for ch in "*?["))
 row("pii_scrub_drop_userdata reads the filter, not the raw terminator source, and still reads every other source",
     "inngest_terminator_filter" in drop_in and "inngest_journald" not in drop_in and all(o in drop_in for o in OTHERS))
 row("filter condition extracted and non-trivial (>= 200 bytes; an empty extraction must fail the suite, never pass it)", len(cond) >= 200)
@@ -145,7 +146,7 @@ if i >= 0:
                 break
             block.append(l.strip())
 row("stunnel config block located (an empty extraction fails)", any(l == "[inngest]" for l in block))
-row("the unit the include list and the filter name is defined in cloud-init, and the stunnel service and upstream the drop patterns name exist there (a rename on either side silently stops the shipping or the drop)",
+row("the unit the filter names is defined in cloud-init, and the stunnel service and upstream the drop patterns name exist there (the include lists are pinned by the admission suite; a rename here silently stops the drop)",
     any(l.strip() == "- path: /etc/systemd/system/soleur-inngest-tls.service" for l in ci)
     and any(l == "[inngest]" for l in block) and any(l == "connect = 127.0.0.1:8288" for l in block))
 row("stunnel config sets no debug key (a higher level is the one way this journal carries more than peers, byte counts and errors)",
@@ -154,7 +155,7 @@ row("stunnel config sets no output key (a file would pull the logs out of the jo
     not any(re.match(r"^output\s*=", l, re.I) for l in block))
 
 tests = tomllib.load(open(tests_path, "rb")).get("tests", [])
-row("fixture file carries at least 21 tests", len(tests) >= 21)
+row("fixture file carries at least 22 tests", len(tests) >= 22)
 row("fixture file carries exactly 4 drop cases (no_outputs_from: three shapes plus one variant) and every test inserts at the filter",
     sum(1 for x in tests if "no_outputs_from" in x) == 4
     and all(all(i.get("insert_at") == "inngest_terminator_filter" for i in x.get("inputs", [])) for x in tests)
@@ -341,7 +342,7 @@ fi
 if mutate empty_fixture; then
   structure_rows "$VECTOR_TOML" "$CLOUD_INIT" "$VT_DIR/m-empty_fixture/tests.toml" > "$VT_DIR/m-empty_fixture/rows.tsv"
   check_test "mutation 3: a fixture file with zero test cases goes RED on the case-count floor" \
-    row_failed "$VT_DIR/m-empty_fixture/rows.tsv" "fixture file carries at least 21 tests"
+    row_failed "$VT_DIR/m-empty_fixture/rows.tsv" "fixture file carries at least 22 tests"
 else
   fail "mutation 3: could not be applied or did not land (anchor drifted, so this row measured nothing)"
 fi

@@ -609,14 +609,16 @@ mountpoints.includes = ["/", "/mnt/data", "/var/lib/vector"]
 #
 # Row budget, a HEALTHY-operation bound measured per unit after the host is replaced: count the Connection
 # closed rows with both byte counts above 0 plus the startup rows, nothing else. At most 400 a day before any
-# link flip (the host's own 5-minute health probe emits one such row per probe, about 288 a day) and at most
+# link flip (the host's own 5-minute health probe is expected to emit one such row per probe, about 288 a day,
+# measured against a canned-200 upstream, so the first 24-hour read settles it) and at most
 # 8,000 a day after one. 8,000 is the alarm; a second drop is asked for only at 10,000 a day sustained after
 # the flip. The lever is a SECOND drop (those rows with both byte counts above 0, never the 0-byte shapes); it
 # needs a new bootstrap image and another host replace, so the 24-hour read decides it before the flip is
 # asked for. Refusal rows (LOG3, Connection reset, the 0-byte shapes) are outage evidence: they are never
 # dropped or throttled, so an outage or a restart loop (the unit restarts on failure with no start limit) can
-# exceed the budget without the filter being wrong. More than 7 startup rows for one boot_id means the unit
-# restarted: read nrestarts in tls-health before touching the filter. A SyslogIdentifier added to the unit
+# exceed the budget without the filter being wrong. More than 7 startup rows (the LOG5 startup lines counted on
+# stunnel 5.72; the host's build is not measured) for one boot means the unit restarted: read nrestarts in
+# tls-health before touching the filter. A SyslogIdentifier added to the unit
 # would route its rows through Source 4, past this filter; the row count is the detector. The unit's debug
 # level stays untouched: a higher level is the one way this journal could start carrying more than peer
 # addresses, byte counts and error strings.
@@ -778,13 +780,17 @@ if contains(tag, "structured") {
   # a `://` ban would either mangle those or get muted. Scheme-agnostic so redis://, amqp://
   # and https:// DSNs are covered by the same rule.
   msg = replace(msg, r'([a-z][a-z0-9+.-]*://)[^:/@\s]+:[^@/\s]+@', "$${1}[redacted]@")
-  msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
   # Doppler token shape: dp. + a two-to-five letter kind + a dot + a long body (a service token also
   # carries its config name). The TLS terminator unit's ExecStartPre sources the host's Doppler env
   # file without redirecting stderr, so a malformed line in that file would echo the offending text,
   # and that file holds the token. Value-shaped like the rules above; it costs no user_data bytes.
-  # It runs AFTER the control-character strip so a token split by a control byte cannot reassemble past it,
-  # and it is anchored on a non-alphanumeric (an underscore or a start counts) rather than on a word boundary.
+  # Anchored on a non-alphanumeric (an underscore or a start counts) rather than on a word boundary.
+  # It runs TWICE around the control-character strip: before it, a newline, tab or carriage return
+  # directly ahead of the token still counts as the separator; after it, a token split by a stripped
+  # character has reassembled. Either position alone leaks the other case. (The older rules above still
+  # run before the strip only, so a value split by a stripped character can evade them: pre-existing.)
+  msg = replace(msg, r'(^|[^A-Za-z0-9])dp\.[a-z]{2,5}\.[A-Za-z0-9_.-]{20,}', "$${1}dp.[redacted]")
+  msg = replace(msg, r'[\x00-\x1f\x7f\u{2028}\u{2029}]', "")
   msg = replace(msg, r'(^|[^A-Za-z0-9])dp\.[a-z]{2,5}\.[A-Za-z0-9_.-]{20,}', "$${1}dp.[redacted]")
   .message = msg
   .pii_scrub_applied = tag + "+string"

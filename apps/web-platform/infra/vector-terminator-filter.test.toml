@@ -211,13 +211,13 @@ insert_at = "inngest_terminator_filter"
 type = "log"
 [tests.inputs.log_fields]
 _SYSTEMD_UNIT = "inngest-server.service"
-message = "Service [inngest] accepted connection from 127.0.0.1:55328"
+message = "2026.10.25 13:34:13 LOG5[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
 [[tests.outputs]]
 extract_from = "inngest_terminator_filter"
 [[tests.outputs.conditions]]
 type = "vrl"
 source = '''
-.message == "Service [inngest] accepted connection from 127.0.0.1:55328" && ._SYSTEMD_UNIT == "inngest-server.service"
+.message == "2026.10.25 13:34:13 LOG5[2]: Service [inngest] accepted connection from 127.0.0.1:55328" && ._SYSTEMD_UNIT == "inngest-server.service"
 '''
 
 [[tests]]
@@ -226,13 +226,13 @@ name = "keeps a row with no unit field even when it carries a drop prefix"
 insert_at = "inngest_terminator_filter"
 type = "log"
 [tests.inputs.log_fields]
-message = "Service [inngest] accepted connection from 127.0.0.1:55328"
+message = "2026.10.25 13:34:13 LOG5[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
 [[tests.outputs]]
 extract_from = "inngest_terminator_filter"
 [[tests.outputs.conditions]]
 type = "vrl"
 source = '''
-.message == "Service [inngest] accepted connection from 127.0.0.1:55328"
+.message == "2026.10.25 13:34:13 LOG5[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
 '''
 
 [[tests]]
@@ -329,4 +329,20 @@ extract_from = "inngest_terminator_filter"
 type = "vrl"
 source = '''
 .message == "2026.10.25 13:34:13 LOG5[2]: s_connect: connected 10.0.0.9:8288"
+'''
+
+[[tests]]
+name = "keeps a drop-shaped line at LOG3 (the level is part of the pattern, not only the failure suffix)"
+[[tests.inputs]]
+insert_at = "inngest_terminator_filter"
+type = "log"
+[tests.inputs.log_fields]
+_SYSTEMD_UNIT = "soleur-inngest-tls.service"
+message = "2026.10.25 13:34:13 LOG3[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
+[[tests.outputs]]
+extract_from = "inngest_terminator_filter"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+.message == "2026.10.25 13:34:13 LOG3[2]: Service [inngest] accepted connection from 127.0.0.1:55328"
 '''
