@@ -1877,7 +1877,7 @@ EOT
   CH_WHY="$bad"; [[ -z "$bad" ]]
 }
 char_row() {  # <id> <check-fn> <what>
-  if [[ "$CHAR_OK" -ne 1 ]]; then pass "$1 SKIPPED (no timeout/gtimeout): $3"; return; fi
+  if [[ "$CHAR_OK" -ne 1 ]]; then fail "$1 needs timeout or gtimeout, neither is on this host: $3"; return; fi
   if "$2"; then pass "$1 $3"; else fail "$1 $3 — ${CH_WHY:-}"; fi
 }
 char_row C1 c1_check "timeout clamp via --queue-state (unset, 7, 0, 00, 07, abc, 9999, 10000 run under 10, 7, 10, 10, 10, 10, 9999, 10)"
@@ -1967,7 +1967,7 @@ n4l_one() {  # <empty|legacy> → the standalone loop with an empty base (or a l
   if [[ "$1" == empty ]]; then QBASE='' qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"; else QHEAD_LEGACY=1 qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"; fi
   [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && nb_cause_ok '' && [[ "$(qw_rulescalls)" == 0 ]] && ! qw_wrote && ! grep -q 'auto-sync [0-9]* pushed' "$QW_D/out" && nb_rules_clean
 }
-HAVE_UTF8=0; if locale -a 2>/dev/null | grep -qiE '^en_US\.utf-?8$'; then HAVE_UTF8=1; fi
+HAVE_UTF8=0; LOCALES="$(locale -a 2>/dev/null || true)"; if grep -qiE '^en_US\.utf-?8$' <<<"$LOCALES"; then HAVE_UTF8=1; fi
 n11_ok() {  # an accented base is rejected under a UTF-8 locale (the LC_ALL=C pin is load-bearing: [A-Za-z] accepts it there)
   [[ "$HAVE_UTF8" == 1 ]] || return 0
   LC_ALL=en_US.UTF-8 QBASE='é' fw_run bare notqueued "$FQ" none </dev/null
