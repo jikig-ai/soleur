@@ -923,3 +923,58 @@ Scenarios were executed once during planning where their green state is
 pre-change-independent (jargon scan on the hub rc 0; tweet-draft validator on
 the sibling draft rc 0; the five-slug redirect grep prints `0` pre-change by
 construction and `5` post-change).
+
+## Enhancement Summary
+
+Deepen-plan pass applied inline (no Task/Agent tool in this subagent context —
+the per-section research and review fan-outs were substituted by direct reads
+of every cited source and mechanical runs of every gate that has a script,
+matching the sibling plan's recorded approach):
+
+- **4.6 User-Brand Impact** — section present, threshold `aggregate pattern`,
+  concrete artifact + exposure lines, threshold-decision line present. PASS.
+- **4.7 Observability** — triggered by the `apps/*/infra/` `.tf` edit; section
+  present with all five fields populated; `discoverability_test.command`
+  starts with `grep` (allowlisted), no `ssh`, finishes in <1s,
+  `expected_output` is the literal `5`, and the command was rewritten to the
+  repeated-`-e` form so no `|`/metacharacter byte reaches Check 10's
+  shell-active reject. PASS.
+- **4.8 PAT-shaped variable sweep** — zero hits. PASS.
+- **4.9 UI-wireframe halt** — no Files-to-Create/Edit path matches the
+  UI-surface glob superset (.md/.png/.tf only; blog posts render through the
+  existing `blog-post.njk` layout — no template/page/component file is
+  authored). SKIP.
+- **4.10 Encryption posture** — `.tf` match fires the trigger; section present
+  with full at_rest/in_transit fields and no boilerplate ("provider handles
+  it" / "supports TLS" absent); no exception needed (no plaintext/no
+  cert-off). PASS.
+- **4.11 Guard contract** — deliverable is prose about guards, not a guard;
+  no `lint-*`, hook, CI gate, or precondition created (explicitly noted in
+  Technical Considerations to disarm the prose keyword hit). SKIP.
+- **4.12 Scope check** — exactly one unfenced `## Scope Check`; Ask Mapping 7
+  rows all `mapped`; Provenance rows carry quotes or justified `inferred`;
+  `Recommendation: single PR` present with the >800-line threshold
+  exceedance explicitly overridden by the operator's one-PR directive; no
+  `status: BLOCKED`. PASS.
+- **4.4 Precedent-diff** — the only code-shaped change (five redirect-map
+  appends) follows the file's own `blog_redirect_pairs` convention (PRs
+  #10996/#11067); recorded in Technical Considerations. PASS.
+- **4.45 realism passes** — verify-the-negative: the plan's negative claims
+  ("no code blocks", "never claim the advisory lint blocks merges", "the
+  migration doc does NOT cover SQL DDL") are claims about the deliverable
+  restated from verified sources — each pinned by direct read, not
+  extrapolated.
+- **4.5 network-outage / 4.55 downtime / 4.13 task-design** — no trigger
+  words; no downtime-inducing op (list-item appends only); no new autonomous
+  task surface. SKIP.
+
+### Residual findings (no new plan changes)
+
+- `technical-ruling-gate.sh --branch` reports `unruled-technical` on the two
+  pending-assumed rows in `decision-challenges.md` — the sanctioned state
+  when the Agent tool is absent; the parent pipeline/operator resolves them
+  (#10736 citation-scope handling; advisor/panel skip).
+- Plan Review (named panel) and the Step 4.5 scoped advisor consult both
+  require Task spawns unavailable here — recorded as a `pending - assumed`
+  technical row; the soleur:review stage re-runs a heavier multi-agent pass
+  on the diff.
