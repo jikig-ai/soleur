@@ -1190,8 +1190,8 @@ else
       case "$p" in
         glob:*)
           # Third declared kind (#9813): glob:<literal-head>/<glob-tail>.
-          # malformed-shape invariant — ONE doctrine, ONE classifier: the mint arm
-          # in _affected_add_edge, the in-flight revalidation in _diff_edge_hit,
+          # malformed-shape invariant — ONE doctrine, ONE classifier: the mint arms
+          # in _affected_add_edge/_affected_add_declared_edge, the in-flight revalidation in _diff_edge_hit,
           # this census arm, and the covers() oracle in
           # scripts/test-affected-kb-consumers.test.sh must classify a shape
           # identically; GLOBENT (registration-only classifier) is a deliberate
@@ -1263,10 +1263,22 @@ else
           }
           ;;
         *)
-          _tracked_member "$p" || {
+          # #9441: a slash-less entry that IS an existing directory must be
+          # written '<p>/'. Since #9441 declared/consumed edges mint through
+          # _affected_add_declared_edge, which carries no `-e` filter, the
+          # declared SPELLING is what carries dir-ness to a deleted subject:
+          # `dir/` mints the `^dir/` prefix on the deleting diff; `dir` mints
+          # `^dir` — an exact line a diff can never produce. `_tracked_member`
+          # cannot see the defect (its dir-prefix arm passes on any tracked
+          # member beneath the dir), so `-d` runs first. `.` is exempt: it is
+          # the whole-tree member, not a directory prefix.
+          if [[ "$p" != "." && -d "$REPO_ROOT/$p" ]]; then
+            echo "ERROR: ${aff_arr} declares '${p}', an existing directory written without a trailing '/' -- a deleted subject mints '^${p}' (an exact line no diff can produce): write it '${p}/'." >&2
+            fails=$((fails + 1))
+          elif ! _tracked_member "$p"; then
             echo "ERROR: ${aff_arr} declares '${p}', which is not a tracked file -- a dead edge can never match a diff." >&2
             fails=$((fails + 1))
-          }
+          fi
           ;;
       esac
     done
