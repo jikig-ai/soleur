@@ -70,7 +70,8 @@ else
   no "inngest_server_probe must carry lifecycle { ignore_changes = [paused] }"
 fi
 
-# (d) Alert routing mirrors DP-10: email on, noisy channels off, paid-tier policy gated on the var.
+# (d) Alert routing: email + push on (#11068 — parity with the inngest_prd/inngest_consumer
+# siblings; DP-10's email-only invariant retired), call/sms off, paid-tier policy gated on the var.
 if has "$hb_block" '^[[:space:]]*email[[:space:]]*=[[:space:]]*true[[:space:]]*$'; then
   ok "heartbeat email = true"
 else
@@ -78,10 +79,10 @@ else
 fi
 if has "$hb_block" '^[[:space:]]*call[[:space:]]*=[[:space:]]*false' \
   && has "$hb_block" '^[[:space:]]*sms[[:space:]]*=[[:space:]]*false' \
-  && has "$hb_block" '^[[:space:]]*push[[:space:]]*=[[:space:]]*false'; then
-  ok "call/sms/push all false (ops@ email only, like DP-10)"
+  && has "$hb_block" '^[[:space:]]*push[[:space:]]*=[[:space:]]*true'; then
+  ok "call/sms false, push true — parity with inngest_prd/inngest_consumer (#11068)"
 else
-  no "inngest_server_probe must set call/sms/push = false"
+  no "inngest_server_probe must set call/sms = false, push = true (#11068)"
 fi
 if has "$hb_block" 'policy_id[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier[[:space:]]*\?[[:space:]]*betteruptime_policy\.uptime\[0\]\.id[[:space:]]*:[[:space:]]*null'; then
   ok "policy_id gated on var.betterstack_paid_tier (null on free tier — provider rejects the linkage)"
