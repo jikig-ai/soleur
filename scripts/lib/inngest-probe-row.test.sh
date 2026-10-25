@@ -442,7 +442,7 @@ FLIP_TAG="$(fsm_tag "$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh"
 # keep accepting exactly that literal until the dispatcher arm is retired (tracked follow-up).
 LUKS_TAG="inngest-luks-cutover"
 if [[ "$FLIP_TAG" == "inngest-cutover-flip" ]]; then
-  pass "flip LOG_TAG derived from the script: $FLIP_TAG (the luks tag '$LUKS_TAG' is a literal NOT checked here; the caller census below grades it)"
+  pass "flip LOG_TAG derived from the script: $FLIP_TAG (the luks tag '$LUKS_TAG' is a literal NOT checked here: no emitter is left to compare it with; the caller census below only checks callers pass the same literal)"
 else
   fail "FSM LOG_TAGs drifted: flip='$FLIP_TAG' (luks literal '$LUKS_TAG')"
 fi

@@ -840,7 +840,7 @@ if printf '%s\n' "$_EM" | grep -cF '_em_mount=0' >/dev/null && printf '%s\n' "$_
 # the measured count after the arms were final, not written ahead of them.
 # #8285 PR B: G4.b2 (the retire dispatch's pointer reader) was deleted with that dispatch, taking the measured count 58 -> 57;
 # the floor stays 57 and is now exact (no slack). Its mutation (a second pointer reader appearing) is still killed by G4.b
-# (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
+# (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails; deleted in #10112, G4.g3 now carries it).
 # #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review rounds added T1.15f set-parity (62 -> 63) then T1.15g reset-line coverage and set-identity (63 -> 64).
 # #9786: 64 -> 70, exact. T1.8a2 (the staging fstab write) and G1.g (the staging mapper name) went with the
 # staging block (-2); T1.16a-h (strip absence + its two controls, DEV derivation, no ext4 arm, blkid -p probe,
@@ -859,7 +859,7 @@ if printf '%s\n' "$_EM" | grep -cF '_em_mount=0' >/dev/null && printf '%s\n' "$_
 # merge. The strip takes T1.16i/j (plaintext-device and staging-mapper ensure_mount targets) and T1.16s (the
 # reopen_pointer_lost refusal on the ext4-skip arm) back out (-3); the surviving T1.16h/g were re-pointed at the
 # single-volume arms, and T1.17b/d/f/g were re-derived for the merged template.
-# #10112 (cutover trio retired): 104 -> 100, exact. G4.g1 (no FSM writer counters), G4.g2 (a subset of G4.g3's census), G4.h (no unit
+# #10112 (cutover trio retired): 104 -> 100, exact. G4.g1 (no FSM writer counters), G4.g2 (a dispatch-side census that excluded no test files, superseded by G4.g3), G4.h (no unit
 # injection / FSM read) and G4.j (no envfile stager) asserted that counters of deleted roles are zero; the dead classifier arms and
 # counters went with them, so a reappearing site is UNCLASSIFIED (G4.b) or a direct write (G4.g3). Four assertions out.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper

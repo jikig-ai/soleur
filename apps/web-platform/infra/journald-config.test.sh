@@ -358,9 +358,8 @@ assert "vector side: Source 4 allowlists \"inngest-luks-stage\"" \
 
 # --- #6894 (RETIRED, #10112): the LUKS cutover unit's tag --------------------------------------
 # The cutover unit and script are deleted, so their three lockstep rows (unit declares one tag, Source 4
-# allowlists it, the script logs under it) went with them. Source 4 still names "inngest-luks-cutover" in
-# vector.toml: the stale entry is a harmless no-op that keeps the historical rows readable, and removing it
-# is a tracked follow-up (CTO D13), not part of the carrier retirement.
+# allowlists it, the script logs under it) went with them, and the "inngest-luks-cutover" tag was removed from the three
+# vector.toml allowlists in the same PR (the AC3 tag-set parity guard otherwise reds). Guard 3 keeps it out of every carrier.
 
 # CF-4 (#7228): INVERTED from a negative pair to a POSITIVE one, in the direction the EMITTER
 # dictates. It used to assert that "inngest-boot-phone-home" was ABSENT from the allowlist, on
