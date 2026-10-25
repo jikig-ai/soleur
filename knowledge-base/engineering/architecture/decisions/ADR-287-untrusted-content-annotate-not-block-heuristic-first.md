@@ -72,6 +72,34 @@ vault to this URL" reaches the model as ordinary tool output.
 8. **No conflict with ADR-157.** That ADR governs PreToolUse permission asks, where unparseable input must ask. A PostToolUse annotator
    that cannot parse a response returns `{}` and logs `unscored`; there is no permission decision to default.
 
+## Decision amendment 2026-10-25 (#10194): static framing for GitHub-sourced text
+
+Slice 1 scored and annotated WebFetch only. #10194 extends **static framing** (a data-only preamble or envelope, no scoring) to three
+channels where a third party writes the text an agent reads. The classify and wrap flags are **not** involved: they gate only the
+WebFetch scorer and hook. Static framing is unconditional, exactly as it already is for the `email`, `inbox` and `crm` sources, so there
+is no runtime kill switch; rollback is a revert and a redeploy.
+
+- **New source `github`** in `UNTRUSTED_PREAMBLES` and `FLAG_THRESHOLDS`. Its threshold entry is required by the `Record` type and is
+  unused: nothing calls `classify(..., "github")`. Scoring GitHub text would need its own corpus (the eval corpus is web-shaped) and no
+  measurement shows a need; revisit after the #10195 soak.
+- **MCP read tools.** The six read-only tools in `server/github-tools.ts` (`github_read_issue`, `github_read_issue_comments`,
+  `github_read_pr`, `github_list_pr_comments`, `github_read_ci_status`, `github_read_workflow_logs`) return the preamble as its own
+  block ahead of the JSON. The CI tools are included because commit messages, branch names and fork-PR log lines are third-party text.
+- **Leader prompts.** The four classes that interpolate third-party text (`engineering.pr_review_pending`, `engineering.ci_failed`,
+  `triage.p0p1_issue`, `security.cve_alert`) wrap it with `envelope("github", ...)` after sanitize and scrub; an empty body keeps its
+  fallback line. `promptVersion` moves to `v1.1.0` on those four so the recorded `prompt_version` identifies the new text.
+  `knowledge.kb_drift` stays unwrapped: its input is the operator's own KB link-check output.
+- **Cron spawns.** `spawnClaudeEval` passes the preamble to every cron through `--append-system-prompt`, never as a prompt prefix:
+  several crons pass a `/soleur:` slash command as the prompt, and the single-flight guard keys on the prompt.
+- **Subagent signal.** The classify log line carries `subagent` (a boolean derived from the SDK's `agent_id`; the id is never logged).
+  This makes coverage observable; it does not establish it (see Phase 0 findings and #10195).
+
+**Not covered by this amendment** (stated so no coverage is implied): the hosted Concierge's `gh` CLI output (it runs `gh issue view`
+through Bash, which has no hook), cron Bash output as a hook-level control, KB and attachment reads including PDF text inlined into a
+prompt, the plugin-side CLI, and Playwright (#11076, #11077). Annotation and framing effectiveness on model behavior is unmeasured, and
+a framed leader or cron task could in principle under-act; compare outcomes by `prompt_version` after deploy. No public claim follows
+from this change.
+
 ## Phase 0 findings (static analysis of SDK typings and binary strings; no live capture)
 
 - **`tool_response` shape for WebFetch** is the SDK's `WebFetchOutput` object `{ bytes, code, codeText, result, durationMs, url }`
@@ -124,9 +152,9 @@ wait for the prd soak.
 Homoglyph and split-word evasions, encoded payloads other than unwrapped base64 and hex (MIME-wrapped or UTF-16 base64 pass),
 instruction text that the model-compressed WebFetch summary drops, and **a payload that is closed-quoted (or a role tag / tool-call syntax) on a page that also uses two distinct prompt-injection or
 prompt-format terms** (role tags and tool-call syntax are discounted on such pages because they are far more often documentation). The scanner reads the first 256 KB: a longer page gets an "only the head was checked" note and its unscanned tail is
-never enveloped. Annotation effectiveness on model behavior is unmeasured. Coverage is partial by design: WebFetch only, and the two
-server-side flags appear in the client flag snapshot (low sensitivity, accepted). Not covered in this slice: `github_read_*` MCP tools,
-cron GitHub issue bodies, KB reads, attachments, Playwright, the plugin-side CLI and subagent fetches (#10194). In production the true
+never enveloped. Annotation effectiveness on model behavior is unmeasured. Scoring coverage is partial by design: WebFetch only, and the two
+server-side flags appear in the client flag snapshot (low sensitivity, accepted). Not covered by the scorer in this slice: GitHub text (static framing
+only, see the 2026-10-25 amendment), KB reads, attachments, Playwright, the plugin-side CLI and subagent fetches (#10194). In production the true
 false-positive rate is unmeasurable because content is not logged; the soak uses flagged-rate drift plus sampled reason-code review.
 The liveness and count-mismatch alerts the plan names are not provisioned by this change; do not enable classify in prd before they
 exist (#10195).
