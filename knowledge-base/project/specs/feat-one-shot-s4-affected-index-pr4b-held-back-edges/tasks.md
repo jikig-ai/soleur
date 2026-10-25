@@ -16,12 +16,14 @@ Process: run long commands detached (script file, `setsid nohup bash <file>` or 
 
 - [ ] 1.1 Scratch copy: declare the chain's edges, no accept rows, `ratchet --report`; save `receipts/chain-<k>-round-<n>-first-report.txt` (summary line plus counted `new-pair`); 60 or more means bisect.
 - [ ] 1.2 `audit --root <scratch git worktree> --all-refs --accept <main's accept file>` for the boundary lines (the ratchet report prints at most 3 per pair); split `anchor/ordinal` on `/`.
-- [ ] 1.3 `receipts/reveals-decisions.tsv`: `suite, edge_F, path, ref file:line, class (real-read|mention), line_kind`; class a edges read every ref line; b/c/d default mention unless the suite extracts and re-reads the path; unsure holds the edge.
-- [ ] 1.4 Hold rules into `receipts/edges-decisions.tsv`: more than 10 rows, or a hot file (more than 8 commits in 90 days) with any row, or unsure; dry-run once on the table.
+- [ ] 1.3 `receipts/reveals-decisions.tsv`: `suite, edges, path, ref file:line, anchor12, line text, class (real-read|mention), line_kind, ref_commits_90d` (match by anchor after a rebase); class a edges read every ref line; b/c/d default mention unless the suite extracts and re-reads the path; unsure holds the edge.
+- [ ] 1.4 Hold rules into `receipts/edges-decisions.tsv`: more than 10 rows, or F or the ref file hot (more than 8 commits in 90 days) with any row, or unsure; outcomes include out-of-slice, held-cap, held-ceiling, held-grep-q, held-breaks-suite; zero surviving edges is a docs-only outcome; dry-run once on the table.
 - [ ] 1.5 Later rounds (real reads declared): under 30, strictly shrinking, at most 4 rounds, 150 cumulative PR-wide, round 1 across chains at most 130.
 - [ ] 1.6 Shared helper reads: `_CLOSURE_LEAF_*` only for 3 or more spreaders; reveals multiplied by spreaders.
 
-## Phase 2 - one commit per round (rounds merged across chains, at most 4 commits)
+## Phase 2 - one green commit per merged round (at most 4, a chain with real reads commits at its fixpoint)
+
+- [ ] 2.0 Commit the runbook edit (six edits, plan 4.1) with the first round; one combined first report of all chains' round-1 edges, no accept rows, at most 130 (the number of record).
 
 - [ ] 2.1 Accept rows from the last round's `--all-refs` output, one per boundary line, reason names the line kind, inserted in file order; assert rows per pair equals ref lines.
 - [ ] 2.2 `git add` new tracked files by pathspec, then `git checkout origin/main -- <baseline>` and prune-only `--print-baseline` to a `.new` file, move it; `ratchet --base origin/main` exit 0; print its wall time.
@@ -41,11 +43,11 @@ Process: run long commands detached (script file, `setsid nohup bash <file>` or 
 
 ## Phase 4 - docs and handoff
 
-- [ ] 4.1 Runbook section 7: three edits (Never-in-a-drain-PR bullet, Reveal-and-hold-back additions, replace the stale 5-path hold with the two numeric holds); written before the verification.
-- [ ] 4.2 Update #10959 body (remaining edges, row-3 cases, PR4c vehicle); comment on #10861 (PR5 inherits the 152-pair edge, the 43 sweeps with the row-6 policy, `grep-q-pipe-guard`, the brittleness measurement).
+- [ ] 4.1 Done in 2.0: runbook section 7, six edits (Never-in-a-drain-PR bullet, Reveal-and-hold-back additions, replace the stale 5-path hold, and the three PR5-only accept-row statements); `grep` for the stale phrases prints nothing.
+- [ ] 4.2 Update #10959 body (remaining edges, row-3 cases, PR4c vehicle; as soon as a chain is held); comment on #10861 (PR5 inherits the 152-pair edge, the 43 sweeps with the row-6 policy, `grep-q-pipe-guard`, the brittleness measurement); comment on #10859 with accept-row count before and after plus a line-kind histogram (data only).
 - [ ] 4.3 PR body: `Ref #10959` / `Ref #10448` / `Ref #9729` only; counts via `wc -l`; stop-line outcome; accept rows by line kind; held edges by reason; recorder result; window consequence; the two parent-recorded results; holds.
 
 ## Phase 5 - ship
 
 - [ ] 5.1 Mark ready after the full gate and replay suite are green; merge via the queue; BEHIND never synced by hand; one re-enqueue on a flaky e2e dequeue.
-- [ ] 5.2 After merge: comment the merge SHA on #10865 with the window-restart sentence; `s4-drain` claim released; #10959, #10448, #9729 stay open; `soleur:compound` captures the accept-row learning.
+- [ ] 5.2 After merge: comment on #10865 the merge SHA, `merged_at`, the oracle inputs touched and the window-restart sentence (skip if zero edges survived); `s4-drain` claim released; #10959, #10448, #9729 stay open; `soleur:compound` captures the accept-row learning.
