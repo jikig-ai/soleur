@@ -641,6 +641,8 @@ below with `git grep -n 106903269` (do not trust a remembered count); on 2026-10
   `readonly VOLUME_ID_PIN=` line in `.github/workflows/scheduled-terraform-drift.yml` (exactly three: the sole-copy probe and the
   two orphan sweeps); the "Hetzner id" text in ADR-282; the postmerge skill's section-5c one-liner
   (`plugins/soleur/skills/postmerge/SKILL.md`); the section-5c one-liner in this runbook; and the `VOL_ID` constant in the suite itself.
+- **Pins enforced by `plugins/soleur/test/token-drift-workflow-causes.test.sh` (rows R9; a stale one reds the suite):** the id in the `curl` shim
+  and in the grep patterns of the project-identity cases. Change every occurrence in that file in the same edit.
 - **Record-only places, updated by hand (nothing compares them):** `scripts/encryption-posture-ledger.json`,
   `knowledge-base/legal/compliance-posture.md`, `inngest-provision-rehearsal.md`, ADR-142, and the dated audit records under
   `knowledge-base/legal/audits/` (historical records keep the id they were written with; add a dated line, do not rewrite them).

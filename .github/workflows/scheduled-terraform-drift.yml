@@ -2551,8 +2551,8 @@ jobs:
           # ── (#10952) PROJECT-IDENTITY PROOF, BEFORE ANY LISTING ────────────────────────────────────────────
           # This sweep lists whatever project its token belongs to. A read-only token that cannot see the production project would
           # list nothing and report a clean sweep, so the sweep first proves the token can see the pinned production volume (ADR-282)
-          # with ONE GET by id. It proves "this token can see the volume", never "this token is project X": Hetzner returns the same
-          # 404 for a deleted volume and for a volume of another project, so the failure text names both causes, and the
+          # with ONE GET by id. It proves "this token can see the volume", never "this token is project X": a 404 is not measured to
+          # distinguish a deleted volume from a volume of another project, so the failure text names both causes, and the
           # sole-copy-protection-check issue stays the primary page for a gone volume. No `-f` (the code is read), every request is
           # bounded, and the answer body is read by ONE closed-vocabulary jq and never printed (the repository is public).
           # An unproven identity ends the sweep red with a named slug and suppresses the orphan listing for this run: the accepted
@@ -2573,6 +2573,8 @@ jobs:
             id_attempt=$((id_attempt + 1))
             id_got=0; id_http=""
             id_http="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS --max-time 30 -o "$id_body" -w '%{http_code}' "https://api.hetzner.cloud/v1/volumes/${VOLUME_ID_PIN}")" || id_got=$?
+            # curl writes the literal 000 when no HTTP answer arrived; that is a transport outcome, never a status.
+            [[ "$id_http" == 000 ]] && id_http=""
             if (( id_got == 0 )) && [[ "$id_http" =~ ^[0-9]{3}$ ]]; then
               case "$id_http" in
                 429|5??) ;;
@@ -2607,7 +2609,11 @@ jobs:
           case "$id_identity" in
             proven) echo "project identity: the token can see the pinned production volume (HTTP ${id_http})" ;;
             unproven)
-              echo "::error::orphan_sweep_project_identity_unproven — the Hetzner Read token cannot prove the production volume is visible to it (HTTP ${id_http}, reason ${id_reason}); this sweep has no verdict and listed nothing. Either the volume is gone or this token belongs to another project; the sole-copy-protection-check issue is the primary page for a gone volume."
+              case "$id_http" in
+                401|403) id_cause="Hetzner refused the token (HTTP ${id_http}): it is revoked, expired or lacks read access." ;;
+                *) id_cause="Either the volume is gone or this token belongs to another project; a 404 is not measured to tell them apart." ;;
+              esac
+              echo "::error::orphan_sweep_project_identity_unproven — the Hetzner Read token cannot prove the production volume is visible to it (HTTP ${id_http}, reason ${id_reason}); this sweep has no verdict and listed nothing. ${id_cause} The sole-copy-protection-check issue is the primary page for a gone volume."
               exit 1 ;;
             *)
               echo "::error::orphan_sweep_project_identity_unreachable — Hetzner did not answer the project-identity request (HTTP ${id_http}, reason ${id_reason}) after ${id_attempt} attempts; this sweep has no verdict and listed nothing. This is not a statement about the token's project."
@@ -3002,7 +3008,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: "${{ steps.sweep.outputs.identity == 'unproven' && '[INFRA DRIFT] rung-2 orphan sweep: cannot prove the production volume is visible to this token' || '[INFRA DRIFT] The rung-2 rehearsal orphan sweep failed' }}"
-          body: '<p><strong>The twice-daily rung-2 rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch Doppler config was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or an issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>Project identity: <code>${{ steps.sweep.outputs.identity }}</code> (HTTP <code>${{ steps.sweep.outputs.identity_http }}</code>, reason <code>${{ steps.sweep.outputs.identity_reason }}</code>). When this reads <code>unproven</code>, this token cannot prove the production volume is visible to it: either the volume is gone, or the token belongs to another project. The <code>sole-copy-protection-check</code> issue is the primary page for a gone volume (this email is the backstop). First read-only step: list the server names with the read-only token. When it reads <code>unreachable</code>, Hetzner did not answer and nothing is claimed about the identity.</p><p>This job holds no Hetzner write credential. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
+          body: '<p><strong>The twice-daily rung-2 rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch Doppler config was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or an issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>Project identity: <code>${{ steps.sweep.outputs.identity || ''not reached'' }}</code> (HTTP <code>${{ steps.sweep.outputs.identity_http || ''none'' }}</code>, reason <code>${{ steps.sweep.outputs.identity_reason || ''none'' }}</code>). When this reads <code>unproven</code>, this token cannot prove the production volume is visible to it: HTTP 401 or 403 means Hetzner refused the token; otherwise either the volume is gone or the token belongs to another project (a 404 is not measured to tell them apart). The <code>sole-copy-protection-check</code> issue is the primary page for a gone volume (this email is the backstop). First read-only step: list the server names with the read-only token. When it reads <code>unreachable</code>, Hetzner did not answer and nothing is claimed about the identity.</p><p>This job holds no Hetzner write credential. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
   # ── (#9175) INNGEST-PROVISION REHEARSAL ORPHAN SWEEP ───────────────────────────
@@ -3087,8 +3093,8 @@ jobs:
           # ── (#10952) PROJECT-IDENTITY PROOF, BEFORE ANY LISTING ────────────────────────────────────────────
           # This sweep lists whatever project its token belongs to. A read-only token that cannot see the production project would
           # list nothing and report a clean sweep, so the sweep first proves the token can see the pinned production volume (ADR-282)
-          # with ONE GET by id. It proves "this token can see the volume", never "this token is project X": Hetzner returns the same
-          # 404 for a deleted volume and for a volume of another project, so the failure text names both causes, and the
+          # with ONE GET by id. It proves "this token can see the volume", never "this token is project X": a 404 is not measured to
+          # distinguish a deleted volume from a volume of another project, so the failure text names both causes, and the
           # sole-copy-protection-check issue stays the primary page for a gone volume. No `-f` (the code is read), every request is
           # bounded, and the answer body is read by ONE closed-vocabulary jq and never printed (the repository is public).
           # An unproven identity ends the sweep red with a named slug and suppresses the orphan listing for this run: the accepted
@@ -3109,6 +3115,8 @@ jobs:
             id_attempt=$((id_attempt + 1))
             id_got=0; id_http=""
             id_http="$(bc_curl scheduled-terraform-drift 'Authorization:Bearer :TOKEN' -- -sS --max-time 30 -o "$id_body" -w '%{http_code}' "https://api.hetzner.cloud/v1/volumes/${VOLUME_ID_PIN}")" || id_got=$?
+            # curl writes the literal 000 when no HTTP answer arrived; that is a transport outcome, never a status.
+            [[ "$id_http" == 000 ]] && id_http=""
             if (( id_got == 0 )) && [[ "$id_http" =~ ^[0-9]{3}$ ]]; then
               case "$id_http" in
                 429|5??) ;;
@@ -3143,7 +3151,11 @@ jobs:
           case "$id_identity" in
             proven) echo "project identity: the token can see the pinned production volume (HTTP ${id_http})" ;;
             unproven)
-              echo "::error::orphan_sweep_project_identity_unproven — the Hetzner Read token cannot prove the production volume is visible to it (HTTP ${id_http}, reason ${id_reason}); this sweep has no verdict and listed nothing. Either the volume is gone or this token belongs to another project; the sole-copy-protection-check issue is the primary page for a gone volume."
+              case "$id_http" in
+                401|403) id_cause="Hetzner refused the token (HTTP ${id_http}): it is revoked, expired or lacks read access." ;;
+                *) id_cause="Either the volume is gone or this token belongs to another project; a 404 is not measured to tell them apart." ;;
+              esac
+              echo "::error::orphan_sweep_project_identity_unproven — the Hetzner Read token cannot prove the production volume is visible to it (HTTP ${id_http}, reason ${id_reason}); this sweep has no verdict and listed nothing. ${id_cause} The sole-copy-protection-check issue is the primary page for a gone volume."
               exit 1 ;;
             *)
               echo "::error::orphan_sweep_project_identity_unreachable — Hetzner did not answer the project-identity request (HTTP ${id_http}, reason ${id_reason}) after ${id_attempt} attempts; this sweep has no verdict and listed nothing. This is not a statement about the token's project."
@@ -3273,7 +3285,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: "${{ steps.sweep.outputs.identity == 'unproven' && '[INFRA DRIFT] inngest orphan sweep: cannot prove the production volume is visible to this token' || '[INFRA DRIFT] The inngest rehearsal orphan sweep failed' }}"
-          body: '<p><strong>The twice-daily inngest rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall or SSH key was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or the issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>Project identity: <code>${{ steps.sweep.outputs.identity }}</code> (HTTP <code>${{ steps.sweep.outputs.identity_http }}</code>, reason <code>${{ steps.sweep.outputs.identity_reason }}</code>). When this reads <code>unproven</code>, this token cannot prove the production volume is visible to it: either the volume is gone, or the token belongs to another project. The <code>sole-copy-protection-check</code> issue is the primary page for a gone volume (this email is the backstop). First read-only step: list the server names with the read-only token. When it reads <code>unreachable</code>, Hetzner did not answer and nothing is claimed about the identity.</p><p>This job holds no Hetzner write credential. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
+          body: '<p><strong>The twice-daily inngest rehearsal orphan sweep failed.</strong> A failed sweep is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall or SSH key was not reported.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step; it names the cause (the Hetzner Read token could not be read or was refused, the Hetzner listing was unreachable, or the issue filer could not file). Step outcomes: Doppler install <code>${{ steps.doppler_cli.outcome }}</code>, sweep <code>${{ steps.sweep.outcome }}</code>.</p><p>Project identity: <code>${{ steps.sweep.outputs.identity || ''not reached'' }}</code> (HTTP <code>${{ steps.sweep.outputs.identity_http || ''none'' }}</code>, reason <code>${{ steps.sweep.outputs.identity_reason || ''none'' }}</code>). When this reads <code>unproven</code>, this token cannot prove the production volume is visible to it: HTTP 401 or 403 means Hetzner refused the token; otherwise either the volume is gone or the token belongs to another project (a 404 is not measured to tell them apart). The <code>sole-copy-protection-check</code> issue is the primary page for a gone volume (this email is the backstop). First read-only step: list the server names with the read-only token. When it reads <code>unreachable</code>, Hetzner did not answer and nothing is claimed about the identity.</p><p>This job holds no Hetzner write credential. Reclaiming a stranded resource is an owner-authorized act and is never part of this workflow.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
   # ── (#10952) ORPHAN-SWEEPS AGGREGATOR: ONE CHECK-IN AND ONE PER-SLOT EMAIL FOR BOTH SWEEPS ──────────────
@@ -3292,7 +3304,8 @@ jobs:
   #
   # THE EMAIL STEP IS PERMANENT, NOT A STOPGAP. The Sentry monitor emails once per incident and never re-pages, and while it is
   # unrouted its issues email nobody; only this step reaches a person on every failed slot. A duplicate beside a sweep's own failure
-  # email is accepted. If this job's own checkout fails nothing is sent from here; whether Sentry then reports a missed check-in for
+  # email is accepted. The sweeps' emails and this one share ONE mail key, so a dead key silences all of them together: they are
+  # not independent cover for each other, and the routed Sentry monitor (#10972) is the only path that does not use it. If this job's own checkout fails nothing is sent from here; whether Sentry then reports a missed check-in for
   # a monitor that has never checked in is unverified and nothing relies on it.
   #
   # LEAST PRIVILEGE. The workflow-level permissions also grant `issues: write`, which this job does not need. It holds only the

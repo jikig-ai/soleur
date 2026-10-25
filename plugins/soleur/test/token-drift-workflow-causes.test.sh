@@ -2267,12 +2267,9 @@ SENTRY_SECRETS = {"SENTRY_INGEST_DOMAIN", "SENTRY_PROJECT_ID", "SENTRY_PUBLIC_KE
 AGG_SECRETS = SENTRY_SECRETS | {"RESEND_API_KEY"}
 AGG_KEYS = {"name", "if", "needs", "runs-on", "steps", "timeout-minutes", "permissions"}
 TF_TEXT = ""
-STATUS_FN = re.compile(r"\b(?:always|failure|cancelled|success)\(\)")
 TOKEN_RE = re.compile(r"\s*(?:('(?:[^']|'')*')|(\|\||&&|==|!=|!|\(|\))|([A-Za-z_][\w\-.]*(?:\(\))?))")
 
-def gh_eval(expr, ctx):
-    """GitHub expression semantics for the subset these workflows use: string literals, ctx lookups, always(), !, ==, !=, &&, ||
-    (&& and || return an operand, == is case-insensitive, an unset lookup is null and compares as the empty string)."""
+def gh_tokens(expr):
     s = str(expr).strip()
     m = re.fullmatch(r"\$\{\{(.*)\}\}", s, re.S)
     if m:
@@ -2284,6 +2281,17 @@ def gh_eval(expr, ctx):
             raise ValueError("cannot tokenize %r at %d" % (s, pos))
         toks.append(mm.group(1) or mm.group(2) or mm.group(3))
         pos = mm.end()
+    return toks
+
+def uses_status_fn(expr):
+    """a status function is a TOKEN ending in () that is not a quoted literal; text inside a string literal is not one"""
+    return any(t.endswith("()") and not t.startswith("'") for t in gh_tokens(expr))
+
+def gh_eval(expr, ctx):
+    """GitHub expression semantics for the subset these workflows use: string literals, ctx lookups, always(), !, ==, !=, &&, ||
+    (&& and || return an operand, == is case-insensitive, an unset lookup is null and compares as the empty string)."""
+    s = str(expr).strip()
+    toks = gh_tokens(s)
     i = [0]
     def peek(): return toks[i[0]] if i[0] < len(toks) else None
     def take():
@@ -2297,6 +2305,7 @@ def gh_eval(expr, ctx):
         if t == "!": return not truthy(prim())
         if t.startswith("'"): return t[1:-1].replace("''", "'")
         if t == "always()": return True
+        if t.endswith("()"): raise ValueError("status function %s is not modelled (fail closed)" % t)
         if t in ("true", "false"): return t == "true"
         if t == "null": return None
         return ctx.get(t)
@@ -2327,7 +2336,7 @@ def job_runs(job, ctx):
     expr = str(job.get("if", "true"))
     v = gh_eval(expr, ctx)
     ok = v is not None and v != "" and v is not False
-    if not STATUS_FN.search(expr):
+    if not uses_status_fn(expr):
         needs = job.get("needs") or []
         needs = [needs] if isinstance(needs, str) else needs
         ok = ok and all(ctx.get("needs.%s.result" % n) == "success" for n in needs)
@@ -2378,8 +2387,9 @@ def r10(wf):
         try:
             if not job_runs(job, needs_ctx(swj, res)):
                 out.append("%s does not run on main when the sweeps are %s" % (jid, res))
-            if job_runs(job, needs_ctx(swj, res, ref="refs/heads/feature")):
-                out.append("%s runs off main" % jid)
+            for off in ("refs/heads/feature", "refs/heads/dev", "refs/tags/v1"):
+                if job_runs(job, needs_ctx(swj, res, ref=off)):
+                    out.append("%s runs off main (%s)" % (jid, off))
         except Exception as e:
             out.append("%s if cannot be evaluated: %s" % (jid, e))
     steps = job.get("steps") or []
@@ -2394,7 +2404,8 @@ def r10(wf):
         out.append("%s checkout has no step timeout" % jid)
     h = steps[hb[0]]
     slug = (h.get("with") or {}).get("monitor-slug")
-    if not (isinstance(slug, str) and re.search(r'name\s*=\s*"%s"' % re.escape(slug), TF_TEXT)):
+    tf_live = "\n".join(l for l in TF_TEXT.splitlines() if not re.match(r"\s*(?:#|//)", l))
+    if not (isinstance(slug, str) and re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{(?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"%s"' % re.escape(slug), tf_live)):
         out.append("%s monitor-slug %r is not a monitor name in cron-monitors.tf" % (jid, slug))
     else:
         nslug = sum(1 for oj in wf["jobs"].values() for s in oj.get("steps") or []
@@ -2403,6 +2414,18 @@ def r10(wf):
             out.append("slug %s has %d check-in steps in the workflow (want 1)" % (slug, nslug))
     if h.get("continue-on-error") is not True:
         out.append("%s heartbeat step is not continue-on-error" % jid)
+    # the heartbeat step must run on EVERY outcome (a check-in that only fires on success never reports `error`), and carry all three ingest inputs
+    try:
+        if "always()" not in gh_tokens(h.get("if", "")):
+            out.append("%s heartbeat step does not use always()" % jid)
+        for res in [(a, b) for a in ("success", "failure", "cancelled", "skipped") for b in ("success", "failure", "cancelled", "skipped")]:
+            if not gh_eval(h.get("if", ""), needs_ctx(swj, res)):
+                out.append("%s heartbeat step is skipped for %s" % (jid, res)); break
+    except Exception as ex:
+        out.append("%s heartbeat condition cannot be evaluated: %s" % (jid, ex))
+    for inp, sec in (("sentry-ingest-domain", "SENTRY_INGEST_DOMAIN"), ("sentry-project-id", "SENTRY_PROJECT_ID"), ("sentry-public-key", "SENTRY_PUBLIC_KEY")):
+        if (h.get("with") or {}).get(inp) != "${{ secrets.%s }}" % sec:
+            out.append("%s heartbeat input %s is not secrets.%s" % (jid, inp, sec))
     # the status expression, evaluated over every result pair: ok only when both are success
     for res in [(a, b) for a in ("success", "failure", "cancelled", "skipped", None) for b in ("success", "failure", "cancelled", "skipped", None)]:
         try:
@@ -2434,6 +2457,32 @@ def r10(wf):
             out.append("%s email step has no bounded timeout" % jid)
         if (e.get("with") or {}).get("resend-api-key") != "${{ secrets.RESEND_API_KEY }}":
             out.append("%s email step does not carry the repository RESEND_API_KEY" % jid)
+        for fld in ("subject", "body"):
+            v = (e.get("with") or {}).get(fld)
+            if not (isinstance(v, str) and v.strip()):
+                out.append("%s email step has no %s" % (jid, fld))
+    # the job bound must cover the sum of its step bounds, or a hung step is cut by the job instead of by its own timeout
+    step_sum = sum(s.get("timeout-minutes") for s in steps if isinstance(s.get("timeout-minutes"), int))
+    jt = job.get("timeout-minutes")
+    if not (isinstance(jt, int) and step_sum < jt <= 15):
+        out.append("%s timeout-minutes %r is not above the step bounds (%d) and at most 15" % (jid, jt, step_sum))
+    # each sweep's failure email names an unproven identity in its SUBJECT, and only then; its body renders the identity fields
+    for sid, sj in sweeps(wf):
+        sm = [s for s in sj.get("steps") or [] if str(s.get("uses", "")).rstrip("/").endswith(EMAIL) and str(s.get("if", "")).strip() == "failure()"]
+        if len(sm) != 1:
+            out.append("%s has %d job-failed email steps (want 1)" % (sid, len(sm))); continue
+        w = sm[0].get("with") or {}
+        for idv, want in (("proven", False), ("unproven", True), ("unreachable", False), (None, False)):
+            try:
+                sub = str(gh_eval(w.get("subject", ""), {"steps.sweep.outputs.identity": idv}))
+            except Exception as ex:
+                out.append("%s email subject cannot be evaluated: %s" % (sid, ex)); break
+            if ("cannot prove" in sub) != want or "orphan sweep" not in sub:
+                out.append("%s email subject for identity=%s is %r (cannot-prove=%s wanted)" % (sid, idv, sub, want))
+        body = str(w.get("body", ""))
+        for fld in ("identity", "identity_http", "identity_reason"):
+            if not re.search(r"steps\.sweep\.outputs\.%s(?![\w])" % fld, body):
+                out.append("%s email body does not render %s" % (sid, fld))
     text = "\n".join(leaves(job))
     for sec in sorted(set(SECRET_REF.findall(text)) - AGG_SECRETS):
         out.append("%s is handed secret %s outside %s" % (jid, sec, "/".join(sorted(AGG_SECRETS))))
@@ -2603,6 +2652,34 @@ def m10_renamed(m):
     a = agg_population(m)[0][0]; m["jobs"] = {("cover-all" if k == a else k): v for k, v in m["jobs"].items()}
 def m10_email_body_reworded(m): agg_step(m, is_email)["with"]["body"] = "<p>reworded</p>"
 def m10_hb_timeout(m): agg_step(m, is_hb)["timeout-minutes"] = 3
+def m10_hb_if_failure(m): agg_step(m, is_hb)["if"] = "failure()"
+def m10_hb_if_never(m): agg_step(m, is_hb)["if"] = "github.event_name == 'never'"
+def m10_hb_if_removed(m): agg_step(m, is_hb).pop("if")
+def m10_hb_key_removed(m): agg_step(m, is_hb)["with"].pop("sentry-public-key")
+def m10_email_subject_removed(m): agg_step(m, is_email)["with"].pop("subject")
+def m10_email_subject_empty(m): agg_step(m, is_email)["with"]["subject"] = ""
+def m10_job_timeout_removed(m): agg(m).pop("timeout-minutes")
+def m10_job_timeout_huge(m): agg(m)["timeout-minutes"] = 360
+def m10_if_not_cancelled(m): agg(m)["if"] = "${{ !cancelled() && github.ref == 'refs/heads/main' }}"
+def m10_if_not_failure(m): agg(m)["if"] = "${{ !failure() && github.ref == 'refs/heads/main' }}"
+def m10_if_quoted_always(m): agg(m)["if"] = "github.ref == 'refs/heads/main' && 'always()'"
+def m10_if_ref_neq_feature(m): agg(m)["if"] = "always() && github.ref != 'refs/heads/feature'"
+def m10_tf_commented(m): m["name"] = str(m.get("name", "")) + " (tf slug commented out)"
+def r10_tf_commented(m):
+    global TF_TEXT
+    old = TF_TEXT
+    TF_TEXT = "\n".join(("# " + l if re.search(r'name\s*=\s*"scheduled-orphan-sweeps"', l) else l) for l in old.splitlines())
+    try:
+        return r10(m)
+    finally:
+        TF_TEXT = old
+def m10_sweep_subject_static(m): fail_email(jobs(m)[RUNG])["with"]["subject"] = "[INFRA DRIFT] The rung-2 rehearsal orphan sweep failed"
+def m10_sweep_subject_inverted(m):
+    w = fail_email(jobs(m)[RUNG])["with"]; w["subject"] = w["subject"].replace("== 'unproven'", "== 'proven'")
+def m10_sweep_subject_reason(m):
+    w = fail_email(jobs(m)[INN])["with"]; w["subject"] = w["subject"].replace("outputs.identity ==", "outputs.identity_reason ==")
+def m10_sweep_body_identity_removed(m):
+    w = fail_email(jobs(m)[RUNG])["with"]; w["body"] = w["body"].replace("steps.sweep.outputs.identity ||", "steps.sweep.outputs.nothing ||")
 
 def lab_steps(m, jid):
     return [s for s in jobs(m)[jid]["steps"] if "gh issue create" in str(s.get("run", ""))]
@@ -2708,6 +2785,23 @@ ROWS = [
     ("r10-unlisted-secret",            r10, m10_other_secret,     "red"),
     ("r10-job-outputs-declared",       r10, m10_outputs,          "red"),
     ("r10-second-checkin-same-slug",   r10, m10_second_checkin,   "red"),
+    ("r10-heartbeat-if-failure",       r10, m10_hb_if_failure,  "red"),
+    ("r10-heartbeat-if-never",         r10, m10_hb_if_never,    "red"),
+    ("r10-heartbeat-if-removed",       r10, m10_hb_if_removed,  "red"),
+    ("r10-heartbeat-key-removed",      r10, m10_hb_key_removed, "red"),
+    ("r10-email-subject-removed",      r10, m10_email_subject_removed, "red"),
+    ("r10-email-subject-empty",        r10, m10_email_subject_empty, "red"),
+    ("r10-job-timeout-removed",        r10, m10_job_timeout_removed, "red"),
+    ("r10-job-timeout-huge",           r10, m10_job_timeout_huge, "red"),
+    ("r10-job-if-not-cancelled",       r10, m10_if_not_cancelled, "red"),
+    ("r10-job-if-not-failure",         r10, m10_if_not_failure, "red"),
+    ("r10-job-if-quoted-always",       r10, m10_if_quoted_always, "red"),
+    ("r10-job-if-ref-neq-feature",     r10, m10_if_ref_neq_feature, "red"),
+    ("r10-slug-commented-out-in-tf",   r10_tf_commented, m10_tf_commented, "red"),
+    ("r10-sweep-subject-static",       r10, m10_sweep_subject_static, "red"),
+    ("r10-sweep-subject-inverted",     r10, m10_sweep_subject_inverted, "red"),
+    ("r10-sweep-subject-wrong-output", r10, m10_sweep_subject_reason, "red"),
+    ("r10-sweep-body-identity-dropped", r10, m10_sweep_body_identity_removed, "red"),
     ("r10-must-pass-aggregator-renamed", r10, m10_renamed,        "clean"),
     ("r10-must-pass-email-body-reworded", r10, m10_email_body_reworded, "clean"),
     ("r10-must-pass-heartbeat-timeout-changed", r10, m10_hb_timeout, "clean"),
@@ -2786,7 +2880,8 @@ fi
 
 # The floor is the table's CURRENT size, so a removed row is visible in the diff that removes it.
 # 61 -> 91 with R10 (22 red rows and 3 must-pass rows) and R11 (4 red rows and 1 must-pass row): 30 added.
-R78_MIN=91
+# 91 -> 108 with the review round's 17 R10 mutation rows (all red).
+R78_MIN=108
 echo "R7/R8: mutation rows — every spelling that re-opens the read/write credential or drops the failure email is RED, legitimate variants GREEN"
 R78_OUT=$(python3 -c "$SWEEP_PY" mutate "$WF") || { echo "FATAL: the R7/R8 mutation runner crashed" >&2; exit 2; }
 r78_line() { if [[ "$1" == "PASS" ]]; then pass "R78/$2: $3"; else fail "R78/$2: $3"; fi; }
@@ -2867,7 +2962,19 @@ if [[ "$url" == https://api.hetzner.cloud/v1/volumes/106903269 ]]; then
     e503) code=503; body='{"error":{"message":"CANARY-9f3a"}}' ;;
     e503_then_ok) if (( nth == 1 )); then code=503; body='{"error":{"message":"CANARY-9f3a"}}'; fi ;;
     e429_then_ok) if (( nth == 1 )); then code=429; body='{"error":{"code":"rate_limit_exceeded","message":"CANARY-9f3a"}}'; fi ;;
-    transport) exit 7 ;;
+    other_id_hi) body='{"volume":{"id":106903270,"name":"CANARY-9f3a"}}' ;;
+    other_id_lo) body='{"volume":{"id":106903268,"name":"CANARY-9f3a"}}' ;;
+    nested_id) body='{"volume":{"id":1,"meta":{"id":106903269},"name":"CANARY-9f3a"}}' ;;
+    null_volume) body='{"volume":null,"note":"CANARY-9f3a"}' ;;
+    empty_object) body='{}' ;;
+    string_id) body='{"volume":{"id":"106903269","name":"CANARY-9f3a"}}' ;;
+    wrong_key) body='{"data":{"volume":{"id":106903269,"name":"CANARY-9f3a"}}}' ;;
+    e500_then_ok) if (( nth == 1 )); then code=500; body='{"error":{"message":"CANARY-9f3a"}}'; fi ;;
+    e502_then_ok) if (( nth == 1 )); then code=502; body='{"error":{"message":"CANARY-9f3a"}}'; fi ;;
+    e504_then_ok) if (( nth == 1 )); then code=504; body='{"error":{"message":"CANARY-9f3a"}}'; fi ;;
+    e500) code=500; body='{"error":{"message":"CANARY-9f3a"}}' ;;
+    e400) code=400; body='{"error":{"code":"invalid_input","message":"CANARY-9f3a"}}' ;;
+    transport) printf '000'; exit 7 ;;
   esac
   [[ -n "$out_file" ]] && printf '%s' "$body" > "$out_file"
   if (( has_f )) && (( code >= 400 )); then exit 22; fi
@@ -2994,7 +3101,7 @@ if [[ "$_v" == BAD:* ]]; then pass "R9/mutation: a script without the shape chec
 # ---------------------------------------------------------------------------
 # r9_anchor_case <script> <anchor> <want state:reason:http> <identity requests expected>: prints OK or BAD:<reason>
 r9_anchor_case() {
-  local script="$1" anchor="$2" want="$3" want_n="$4" d rc out calls gho nanc nlist state reason http
+  local script="$1" anchor="$2" want="$3" want_n="$4" d rc out calls gho nanc nlist nsleep nsleep5 state reason http
   IFS=: read -r state reason http <<<"$want"
   d=$(mktemp -d "$R9_DIR/run.XXXXXX") || { echo "BAD:no run dir"; return; }
   calls="$d/calls"; gho="$d/gho"; : > "$calls"; : > "$gho"
@@ -3006,6 +3113,10 @@ r9_anchor_case() {
   nanc=$(grep '^curl ' "$calls" | grep -c 'v1/volumes/106903269') || nanc=0
   nlist=$(grep '^curl ' "$calls" | grep -vc 'v1/volumes/106903269') || nlist=0
   (( nanc == want_n )) || { echo "BAD:$nanc project-identity requests, want $want_n"; return; }
+  # the 5 s back-off sits between attempts only: one `sleep 5` when a second attempt was made, none otherwise
+  nsleep=$(grep -c '^sleep ' "$calls") || nsleep=0
+  nsleep5=$(grep -c '^sleep 5$' "$calls") || nsleep5=0
+  (( nsleep == want_n - 1 && nsleep5 == want_n - 1 )) || { echo "BAD:$nsleep sleep call(s) ($nsleep5 of them 'sleep 5'), want $((want_n - 1))"; return; }
   grep -q 'CANARY-9f3a' <<<"$out" && { echo "BAD:a response body reached the log"; return; }
   grep -q 'CANARY-9f3a' "$gho" && { echo "BAD:a response body reached \$GITHUB_OUTPUT"; return; }
   if compgen -G "$d/orphan-sweep-identity.*" >/dev/null; then echo "BAD:the temp body file was left behind"; return; fi
@@ -3043,8 +3154,36 @@ forbidden unproven:http:403 1
 badbody unproven:malformed:200 1
 e503 unreachable:http:503 2
 transport unreachable:transport:none 2
+e500_then_ok proven:none:200 2
+e502_then_ok proven:none:200 2
+e504_then_ok proven:none:200 2
+e500 unreachable:http:500 2
+e400 unproven:http:400 1
+other_id_hi unproven:id_mismatch:200 1
+other_id_lo unproven:id_mismatch:200 1
+nested_id unproven:id_mismatch:200 1
+null_volume unproven:malformed:200 1
+empty_object unproven:malformed:200 1
+string_id unproven:malformed:200 1
+wrong_key unproven:malformed:200 1
 CASES
 done
+
+# the two sweeps carry ONE proof: the blocks between the markers must be byte-identical (a fix applied to one copy only is a defect in the other)
+_blk() { sed -n '/# IDENTITY-PROOF-BEGIN/,/# IDENTITY-PROOF-END/p' "$1"; }
+_nb1=$(_blk "$R9_DIR/rung2-rehearsal-orphan-sweep.sh" | wc -l); _nb2=$(_blk "$R9_DIR/inngest-rehearsal-orphan-sweep.sh" | wc -l)
+if (( _nb1 > 20 )) && (( _nb1 == _nb2 )) && cmp -s <(_blk "$R9_DIR/rung2-rehearsal-orphan-sweep.sh") <(_blk "$R9_DIR/inngest-rehearsal-orphan-sweep.sh"); then
+  pass "R9/identity: the two sweeps carry a byte-identical project-identity proof (${_nb1} lines)"
+else
+  fail "R9/identity: the two project-identity proof blocks differ (${_nb1} vs ${_nb2} lines) or are missing"
+fi
+# the equality check must be able to fail: edit one copy by one character
+sed 's/sleep 5; fi/sleep 6; fi/' "$R9_DIR/inngest-rehearsal-orphan-sweep.sh" > "$R9_DIR/mut-blockdiff.sh"
+if cmp -s <(_blk "$R9_DIR/rung2-rehearsal-orphan-sweep.sh") <(_blk "$R9_DIR/mut-blockdiff.sh"); then
+  fail "R9/identity/mutation: a one-character edit to one copy still compared equal"
+else
+  pass "R9/identity/mutation: a one-character edit to one copy is detected"
+fi
 
 # the identity judge must be able to fail: no proof at all, a wrong id accepted, and -f on the request (the code could no longer be read)
 sed '/# IDENTITY-PROOF-BEGIN/,/# IDENTITY-PROOF-END/d' "$R9_DIR/rung2-rehearsal-orphan-sweep.sh" > "$R9_DIR/mut-noproof.sh"
@@ -3059,6 +3198,28 @@ _v=$(r9_anchor_case "$R9_DIR/mut-anyid.sh" other_id unproven:id_mismatch:200 1)
 if [[ "$_v" == BAD:* ]]; then pass "R9/mutation: a proof that accepts any id fails the wrong-id case"; else fail "R9/mutation: the wrong-id case passed over a proof that accepts any id"; fi
 _v=$(r9_anchor_case "$R9_DIR/mut-dashf.sh" notfound unproven:http:404 1)
 if [[ "$_v" == BAD:* ]]; then pass "R9/mutation: -f on the proof request fails the 404 case (the code is unreadable)"; else fail "R9/mutation: the 404 case passed over a proof request that carries -f"; fi
+
+# one row per way the proof can be widened or its retry loop weakened; each runs against BOTH sweeps, because the two copies are pinned equal
+# only by their shape, and each names the case that must turn red
+r9_identity_mut() {   # <label> <sed expression> <anchor> <want> <n>
+  local label="$1" expr="$2" anchor="$3" want="$4" n="$5" job
+  for job in rung2-rehearsal-orphan-sweep inngest-rehearsal-orphan-sweep; do
+    sed -e "$expr" "$R9_DIR/$job.sh" > "$R9_DIR/mut-$label-$job.sh"
+    if cmp -s "$R9_DIR/mut-$label-$job.sh" "$R9_DIR/$job.sh"; then fail "R9/mutation/$label/$job: the mutation did not change the script"; continue; fi
+    _v=$(r9_anchor_case "$R9_DIR/mut-$label-$job.sh" "$anchor" "$want" "$n")
+    if [[ "$_v" == BAD:* ]]; then pass "R9/mutation/$label/$job: fails the $anchor case"; else fail "R9/mutation/$label/$job: the $anchor case passed over the mutant"; fi
+  done
+}
+r9_identity_mut id-ge 's#elif .volume.id == \$pin then#elif .volume.id >= $pin then#' other_id_hi unproven:id_mismatch:200 1
+r9_identity_mut id-window 's#elif .volume.id == \$pin then#elif (.volume.id - $pin) > -2 and (.volume.id - $pin) < 2 then#' other_id_lo unproven:id_mismatch:200 1
+r9_identity_mut id-recursive 's#if (.volume | type) != "object" or (.volume.id | type) != "number" then "bad-body" elif .volume.id == \$pin then#if ([.. | objects | .id?] | index($pin)) != null then "ok" elif false then#' nested_id unproven:id_mismatch:200 1
+r9_identity_mut type-guard 's# or (.volume.id | type) != "number"##' string_id unproven:malformed:200 1
+r9_identity_mut sleep-removed 's#if (( id_attempt < 2 )); then sleep 5; fi#:#' e503_then_ok proven:none:200 2
+r9_identity_mut sleep-long 's#then sleep 5; fi#then sleep 5000; fi#' e503_then_ok proven:none:200 2
+r9_identity_mut sleep-trailing 's#^if (( id_fetched != 1 )); then#sleep 5\n&#' e503 unreachable:http:503 2
+r9_identity_mut retry-narrowed 's#429|5??) ;;#429|503) ;;#' e500_then_ok proven:none:200 2
+r9_identity_mut retry-widened 's#429|5??) ;;#429|5??|4??) ;;#' e400 unproven:http:400 1
+r9_identity_mut zero-as-status 's#\[\[ "\$id_http" == 000 \]\] \&\& id_http=""##' transport unreachable:transport:none 2
 
 # ---------------------------------------------------------------------------
 # R12 -- the labels, from a REAL run of each orphan filer step with a recording `gh` (not a grep of the text). The step is
@@ -3131,7 +3292,12 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Then 172 -> 257 with R7 and R8 (the orphan sweeps hold the read-only Hetzner token only, and email on failure; NOT the retired R7a-c above, which are different rows) with their 61 mutation rows (the review round hardened the guard from the sweeps' spelling to the property: loader/environment population, closed job shape, pinned install, bounds, fail-propagating sweep), and R9 (the converted sweep steps run under the runner's shell with shimmed doppler and curl: 20 case rows and 2 mutation rows) (#10664 follow-up): 85 added, 257 is the REALIZED `PASS + FAIL`.
 # Then 257 -> 317 with #10952: R10 (the sweeps' aggregator: 1 row plus 25 mutation rows), R11 (the label population: 1 row plus 5 mutation rows), the project-identity
 # proof in R9 (11 cases for each of the two sweeps, 22 rows, and 3 mutation rows), and R12 (the labels recorded from a real run of each orphan filer: 3 rows):
-# 60 added, 317 is the REALIZED `PASS + FAIL`.
+# 60 added, 317 was the REALIZED `PASS + FAIL` before the review round.
+# Then 317 -> 380 with the #10952 review round: R10 gains 17 mutation rows (the heartbeat step's own condition and inputs, the email subject and
+# body, the job bound, a job-level `if` the evaluator used to mis-model, a slug that is only a comment, and each sweep's distinct subject and
+# body fields), 12 more identity cases for each of the two sweeps (24 rows: the 5xx class, a 4xx that is not retried, ids either side of the
+# pin, a nested id, a null or empty or mistyped volume, and the back-off sleep now asserted on every case), and 10 identity mutation rows for each of
+# the two sweeps (20 rows): 63 added (two more: the byte-identity of the two proof blocks, and its mutation), 380 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -3147,8 +3313,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 317 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 317." >&2
+if [[ "$((PASS + FAIL))" -lt 380 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 380." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
