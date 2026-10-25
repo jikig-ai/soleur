@@ -188,15 +188,11 @@ a fail-open drop-list filter with a row budget, acceptance of the web-host fan-o
 
 **Status:** no regulated-data surface by the canonical regex (no schema, migration, auth, route or `.sql` file in the lists). The single-user-incident
 trigger (b) makes the GDPR gate advisory here: the shipped rows hold peer addresses of the owner's own hosts, byte counts and TLS error strings, no
-end-user identifier or payload; the existing three-stage PII pipeline sits in front of the sink. See `## Plan Review Disposition
+end-user identifier or payload; the existing three-stage PII pipeline sits in front of the sink.
 
-Panel (single-user-incident threshold): DHH, Kieran, code-simplicity, architecture-strategist, spec-flow; CPO as the named business reviewer (sign-off above). Findings classified per ADR-084.
-
-- **Cut the filter and its chain (DHH, code-simplicity).** A technical fork, so it went back to the CTO (not to the owner): R1 on 2026-10-25 keeps the filter, because a wrong or missing filter later costs a second image and a second replace of the sole scheduler; the design takes three changes from the review (infallible VRL, one `vector test` case per class with `no_outputs_from`, a `tomllib` wiring assertion). Simplifications adopted per R2: literal terminator rows instead of a derived loop, Guard 2 trimmed to three rows, `journald-config.test.sh` run-only, the `fetch_rc=93` issue is not an acceptance gate. The C4 clause stays.
-- **Mechanical, auto-applied:** the priority claim reworded as derived (not measured on the host) with PRIORITY 3 and 5 in the corpus; the cutover-heartbeat premise corrected (Source 4, not Source 1; E13 is in `scripts/cutover-inngest.sh`); the web-host-birth content-hash caveat; time-ordered fan-out; the evidence that a bump merge does not replace the Inngest host (PR #10878); `inputs` readers named; workflow `paths:` and `timeout-minutes`; the quiesce op as an Operator Hold; the typed go bound to tag, digest and host id with a re-verify; failure branches (bump chain, degraded mirror, half-applied replace, no rows after replace); two precondition lists; the first-hour read and an independent signal for ingest refusal; the 24-hour clock defined; the unknowns recorded.
-- **Taste, recorded and not applied:** staggering web-1 and web-2 (needs a Terraform change this PR does not make); whether the typed go expires (the owner's call; the plan binds it to the tag and digest and requires a re-verify); whether the go also covers dispatching the resume (the plan says it does not).
-
-## Sharp Edges` for the gate run.
+**gdpr-gate run (2026-10-25, advisory, inline output only; nothing written to `compliance-posture.md`, no issue filed):**
+**This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
+Canonical path regex over this plan's Files to Edit and Files to Create: zero matches (no migration, `.sql`, auth, route or `lib/auth` file). The five v1 checks: `GDPR-Art-6`, `GDPR-Art-5e`, `GDPR-Art-17`, `GDPR-Art-17-caller` and `GDPR-Art-9` need a new schema column or foreign key and this plan adds none (not triggered); `GDPR-Chapter-V` needs a new non-EEA vendor, environment variable or SDK and this plan adds none (the rows go to the existing Better Stack sink in region eu-fsn-3, `vector.toml` `sinks.betterstack`, already recorded). One suggestion-level note, not a finding: the shipped rows carry peer addresses of the owner's own private network and byte counts, and the unit's `debug` level is the one lever that could add more, which is why the plan pins the absence of a `debug` key. The model-side transmission is plan prose and file paths only, no column values.
 
 ### Gates evaluated and not triggered
 
@@ -540,6 +536,14 @@ The PR body must state, in plain sentences, each of the following (draft text; `
 - **Window.** From merge until the bump lands, `main`'s Guard A is red and `deploy-script-tests` is advisory. A concurrent unrelated carrier PR sees the same red.
 - **Status checks.** #10542 closed; #10543 open; #10544 open (the replace dispatch has no confirm or id-pin input, so the typed go is the only gate); #10545 open (the nft loader is not idempotent: never restart the unit on the host).
 
+## Plan Review Disposition
+
+Panel (single-user-incident threshold): DHH, Kieran, code-simplicity, architecture-strategist, spec-flow; CPO as the named business reviewer (sign-off above). Findings classified per ADR-084.
+
+- **Cut the filter and its chain (DHH, code-simplicity).** A technical fork, so it went back to the CTO (not to the owner): R1 on 2026-10-25 keeps the filter, because a wrong or missing filter later costs a second image and a second replace of the sole scheduler; the design takes three changes from the review (infallible VRL, one `vector test` case per class with `no_outputs_from`, a `tomllib` wiring assertion). Simplifications adopted per R2: literal terminator rows instead of a derived loop, Guard 2 trimmed to three rows, `journald-config.test.sh` run-only, the `fetch_rc=93` issue is not an acceptance gate. The C4 clause stays.
+- **Mechanical, auto-applied:** the priority claim reworded as derived (not measured on the host) with PRIORITY 3 and 5 in the corpus; the cutover-heartbeat premise corrected (Source 4, not Source 1; E13 is in `scripts/cutover-inngest.sh`); the web-host-birth content-hash caveat; time-ordered fan-out; the evidence that a bump merge does not replace the Inngest host (PR #10878); `inputs` readers named; workflow `paths:` and `timeout-minutes`; the quiesce op as an Operator Hold; the typed go bound to tag, digest and host id with a re-verify; failure branches (bump chain, degraded mirror, half-applied replace, no rows after replace); two precondition lists; the first-hour read and an independent signal for ingest refusal; the 24-hour clock defined; the unknowns recorded.
+- **Taste, recorded and not applied:** staggering web-1 and web-2 (needs a Terraform change this PR does not make); whether the typed go expires (the owner's call; the plan binds it to the tag and digest and requires a re-verify); whether the go also covers dispatching the resume (the plan says it does not).
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6. This one declares `single-user incident`.
@@ -547,7 +551,7 @@ The PR body must state, in plain sentences, each of the following (draft text; `
 - Source 1 is an OR over fields: the unit arm admits the terminator at any priority, and the `{3,4}` PRIORITY arm admits any other unit's errors. The terminator's `LOG3` lines are expected at PRIORITY 6 (not 3; derived from systemd's default, not measured on the host), so they ship only through the unit arm; do not "fix" the filter with a priority test, and keep PRIORITY 3 and 5 in the derived corpus so either value is covered.
 - Never add `systemd` to any `SYSLOG_IDENTIFIER` array in either direction (ADR-286, tests pin its absence).
 - Text containing the two words for the infrastructure apply command is written with the Write tool only; this plan names the dispatch by its input value (`inngest-host-replace`) and not by the command line.
-- The GDPR gate (`soleur:gdpr-gate`) is advisory for the single-user-incident trigger; run it at deepen time against this plan and record the output under `### Legal and compliance`.
+- The GDPR gate (`soleur:gdpr-gate`) is advisory for the single-user-incident trigger; its 2026-10-25 run is recorded under `### Legal and compliance` (no findings).
 - Describe the replace window as "unavailable" or a "disruption" in every artifact this change touches.
 
 ### CPO disposition
