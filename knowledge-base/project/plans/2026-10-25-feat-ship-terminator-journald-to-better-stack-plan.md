@@ -31,7 +31,7 @@ image and a host replace that is a production act needing the owner's typed go. 
 
 | Brief or runbook claim | Reality (verified 2026-10-25) | Plan response |
 |---|---|---|
-| The runbook calls the change "a small `vector.toml` change by reading" (add the unit to Source 1 `include_units` and Source 2 `exclude_units`) | Source 1 admits the unit at every priority and stunnel logs every line at journald PRIORITY 6 (no `<N>` prefix), so the bare change ships 4 lines per connection: about 1,150 rows/day today (the host's own 5-minute health probe) and an estimated 7,000 to 24,000 rows/day after a flip (`legacy_8288_packets` rose 36,368 over 24 hours). | Add a fail-open message-text filter (CTO T2), a row budget and a post-replace measurement. |
+| The runbook calls the change "a small `vector.toml` change by reading" (add the unit to Source 1 `include_units` and Source 2 `exclude_units`) | Source 1 admits the unit at every priority and stunnel's lines carry no `<N>` prefix, so they take systemd's default `SyslogLevel=info` (PRIORITY 6), as the runbook states and as the existing `inngest-server.service` rows show (derived, not measured on the host; the filter and the derived corpus do not depend on the value), so the bare change ships 4 lines per connection: about 1,150 rows/day today (the host's own 5-minute health probe) and an estimated 7,000 to 24,000 rows/day after a flip (`legacy_8288_packets` rose 36,368 over 24 hours). | Add a fail-open message-text filter (CTO T2), a row budget and a post-replace measurement. |
 | "touching the #10880 carrier pin" (#10880 is the Guard A carrier-drift guard, open) | Guard A is green on HEAD today at v1.1.58 (the bump cleared the v1.1.57 drift; `cloud-init-inngest-bootstrap.test.sh` prints `GuardA: every baked carrier is byte-identical at vinngest-v1.1.58 (drifted: none)`). This PR reopens the red window until the next bump lands. `deploy-script-tests` is not a required check (#9081 is the open PR-context exemption). | `Ref #10880`, never `Closes`; the PR body states the red window (CTO T5). |
 | "delivered via a bootstrap-image digest bump and an Inngest host replace" | The same `vector.toml` is also delivered to the running web-1 and web-2 by `terraform_data.journald_persistent` and `..._web2` (their `triggers_replace` hashes the file), which run in the merge-triggered apply and restart journald and vector on both web hosts. | Name the web fan-out as a merge-time production effect (CTO T3). |
 | "No issue tracks it" (runbook, `request` row) and "not shipped" | True today; false once this PR merges and the replaced host runs v1.1.59. The live host runs v1.1.57 (Better Stack `pre-zot-pull` row, 2026-10-20T09:26:39Z). | Runbook wording is conditional on the image tag (CTO T6). |
@@ -76,7 +76,7 @@ buy property 1. The `/hooks/inngest-tls-handshake` call repeats the gate's reque
   127.0.0.1:8288: Connection refused (111)`, `LOG3 No more addresses to connect`, `LOG5 Connection reset: 0 byte(s) sent to TLS, 0 byte(s) sent to
   socket`. Upstream accepts then closes with no reply (curl rc 52) logs `LOG5 Connection closed: 0 byte(s) sent to TLS, 78 byte(s) sent to socket`.
   A plain-HTTP client logs `LOG3 SSL_accept ... http request`; a client rejecting the certificate logs `LOG3 SSL_accept ... tlsv1 alert unknown ca`.
-  Startup logs 7 `LOG5` lines. The level is in the message text only. Not measured: the host's stunnel build (Ubuntu package), so the filter fails open.
+  Startup logs 7 `LOG5` lines. The level is in the message text only. The container has no journald, so the line shapes are measured but the journald PRIORITY is derived (above). Not measured: the host's stunnel build (Ubuntu package), so the filter fails open.
 - `tls-health` rows, Better Stack, 2026-10-24T13:33Z to 2026-10-25T13:27Z: one boot (`94b7cf33`), `unit=active nrestarts=0 listener=1`, served and
   Terraform certificate fingerprints equal, `legacy_8288_packets` 10,867 to 47,235, `tls_8443_packets` constant at 21. All rows show `fetch_rc=93`
   (the Doppler key fetch in the unit's ExecStartPre failed at the last start; `die()` falls back to existing material and exits 0). Observed, not
@@ -138,26 +138,24 @@ by the decode table's `connect` row and the `tls=3 verify=0` fields, which place
 | Files to Edit 5: `knowledge-base/engineering/architecture/diagrams/model.c4` (one clause on the `inngest -> betterstack` edge) | ask 4 | inferred - justification: the edge description enumerates what is shipped from the Inngest node and would be incomplete; the C4 mandate makes the edit part of this lifecycle |
 | Files to Edit 6: `knowledge-base/engineering/operations/runbooks/inngest-server.md` | "the `request` stop rule names this change as its exit" | asked |
 | Files to Edit 7: `knowledge-base/engineering/architecture/decisions/ADR-294-inngest-link-tls-terminator-and-flagged-flip.md` (addendum) | "and ADR-294" | asked |
-| Files to Edit 8: `apps/web-platform/infra/journald-config.test.sh` (only if it pins the changed lists) | ask 2 | inferred - justification: it asserts both sides of the Source 4 tags and may name the Source 1 shape; a sweep, edited only on a finding |
 | PR Body Requirements section | "The PR body must state the host replace order" | asked |
 
 ### Split Assessment
 
 - Subsystems touched: 3 - `apps/web-platform` (infra config and tests), `.github` (one workflow path filter), `knowledge-base` (runbook, ADR, C4)
-- Planned files: 11 | Estimated changed lines: 420
+- Planned files: 10 | Estimated changed lines: 380
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR. The two sequencing items the CTO rules out of scope (the `user_data` trim and the `fetch_rc=93` fix) are separate PRs because they edit `cloud-init-inngest.yml`.
 
 ## Files to Edit
 
 1. `apps/web-platform/infra/vector.toml` - Source 1 `include_units`, Source 2 `exclude_units`, new `inngest_terminator_filter` transform, `pii_scrub_drop_userdata` `inputs`, header comments (no dollar-variable text).
-2. `apps/web-platform/test/infra/vector-admission.test.sh` - the S1 and S2 unit pins, a derived per-unit corpus loop, terminator corpus rows.
-3. `apps/web-platform/test/infra/inngest-step-524-alert.test.sh` - the line-275 shape pin and the `inputs` regex, plus its mutation row V1 (the 524 rows still ship through Source 1; re-run `scripts/probe-inngest-524-count.sh` through Better Stack per the comment at that pin and record `unit_rows`).
-4. `.github/workflows/validate-vector-config.yml` - run the new suite (blocking, `REQUIRE_VECTOR_TEST=1`) and add the two new files to both `paths:` filters.
+2. `apps/web-platform/test/infra/vector-admission.test.sh` - the S1 and S2 unit pins (lines ~294 to 299, which also carry text naming `inngest-server.service` alone; sweep the mirror and `sinks.betterstack` pins in the same block), and literal terminator corpus rows at PRIORITY 0, 3, 4, 5 and 6.
+3. `apps/web-platform/test/infra/inngest-step-524-alert.test.sh` - the line-275 shape pin (two units) and the `inputs` regex, which must become a `tomllib` parse that asserts the filter's `inputs` and `pii_scrub_drop_userdata`'s `inputs` separately (the old regex would pass vacuously on the filter's own `inputs = ["inngest_journald"]` line), plus its mutation row V1 (the 524 rows still ship through Source 1; re-run `scripts/probe-inngest-524-count.sh` through Better Stack per the comment at that pin and record `unit_rows`).
+4. `.github/workflows/validate-vector-config.yml` - run the new suite (blocking, `REQUIRE_VECTOR_TEST=1`), add the two new files to both `paths:` filters (they list files, not globs), and check the job's `timeout-minutes: 5` still fits the added step.
 5. `knowledge-base/engineering/architecture/diagrams/model.c4` - one clause on the `inngest -> betterstack` edge.
 6. `knowledge-base/engineering/operations/runbooks/inngest-server.md` - the `request` row and the paragraph under the decode table.
 7. `knowledge-base/engineering/architecture/decisions/ADR-294-inngest-link-tls-terminator-and-flagged-flip.md` - one addendum paragraph.
-8. `apps/web-platform/infra/journald-config.test.sh` - only if it pins the Source 1 or Source 2 lists (grep at work time).
 
 ## Files to Create
 
@@ -184,14 +182,21 @@ a fail-open drop-list filter with a row budget, acceptance of the web-host fan-o
 
 ### Product (CPO sign-off, single-user-incident threshold)
 
-**Status:** pending at write time; the CPO consult is run in this planning pass and its disposition is appended under `### CPO disposition` below.
-No UI surface (no page, component or flow); the Product/UX gate is not triggered.
+**Status:** reviewed (2026-10-25); disposition under `### CPO disposition` below. No UI surface (no page, component or flow); the Product/UX gate is not triggered.
 
 ### Legal and compliance
 
 **Status:** no regulated-data surface by the canonical regex (no schema, migration, auth, route or `.sql` file in the lists). The single-user-incident
 trigger (b) makes the GDPR gate advisory here: the shipped rows hold peer addresses of the owner's own hosts, byte counts and TLS error strings, no
-end-user identifier or payload; the existing three-stage PII pipeline sits in front of the sink. See `## Sharp Edges` for the gate run.
+end-user identifier or payload; the existing three-stage PII pipeline sits in front of the sink. See `## Plan Review Disposition
+
+Panel (single-user-incident threshold): DHH, Kieran, code-simplicity, architecture-strategist, spec-flow; CPO as the named business reviewer (sign-off above). Findings classified per ADR-084.
+
+- **Cut the filter and its chain (DHH, code-simplicity).** A technical fork, so it went back to the CTO (not to the owner): R1 on 2026-10-25 keeps the filter, because a wrong or missing filter later costs a second image and a second replace of the sole scheduler; the design takes three changes from the review (infallible VRL, one `vector test` case per class with `no_outputs_from`, a `tomllib` wiring assertion). Simplifications adopted per R2: literal terminator rows instead of a derived loop, Guard 2 trimmed to three rows, `journald-config.test.sh` run-only, the `fetch_rc=93` issue is not an acceptance gate. The C4 clause stays.
+- **Mechanical, auto-applied:** the priority claim reworded as derived (not measured on the host) with PRIORITY 3 and 5 in the corpus; the cutover-heartbeat premise corrected (Source 4, not Source 1; E13 is in `scripts/cutover-inngest.sh`); the web-host-birth content-hash caveat; time-ordered fan-out; the evidence that a bump merge does not replace the Inngest host (PR #10878); `inputs` readers named; workflow `paths:` and `timeout-minutes`; the quiesce op as an Operator Hold; the typed go bound to tag, digest and host id with a re-verify; failure branches (bump chain, degraded mirror, half-applied replace, no rows after replace); two precondition lists; the first-hour read and an independent signal for ingest refusal; the 24-hour clock defined; the unknowns recorded.
+- **Taste, recorded and not applied:** staggering web-1 and web-2 (needs a Terraform change this PR does not make); whether the typed go expires (the owner's call; the plan binds it to the tag and digest and requires a re-verify); whether the go also covers dispatching the resume (the plan says it does not).
+
+## Sharp Edges` for the gate run.
 
 ### Gates evaluated and not triggered
 
@@ -229,7 +234,16 @@ acknowledgement, not a go: `hr-menu-option-ack-not-prod-write-auth`). No delegat
 | TJ-3: Inngest host replace | The Inngest host (the sole scheduler) is destroyed and recreated from `user_data` pinned to v1.1.59; the scheduler and reminders are unavailable for a bounded window. **A production act: needs the owner's typed go naming the replace.** Not delegable (a replace has no nameable rollback); a re-dispatch after a failed or in-flight replace needs a fresh go. | owner's typed go naming the replace dispatch |
 | TJ-4: resume after the replace | `INNGEST_CUTOVER_FLIP=done` is inherited, so the new host refuses to start the scheduler until a resume runs, and the `inngest-cutover` environment approval is owner-human. | owner (dispatch may follow a recorded delegation; the approval never does) |
 | TJ-5: the 24-hour volume read | Count the unit's rows before any flip; report. Read-only through Better Stack. | none (read-only) |
+| TJ-3a: quiesce for the window | The `cutover-inngest.yml` quiesce op (reminder arming) set for the replace window, and the replay check afterwards. A production act: never taken unprompted. | owner's typed go naming the quiesce, or the same go that names the replace if it says so in terms |
 | The next flip | Separate owner act, outside this plan. The A5, A6 and A7 records stay owner-typed and are not written here. | owner |
+
+**What the typed go is bound to.** The go for TJ-3 names the image tag and digest it will deploy (v1.1.59 and its `@sha256`) and the host id read just before dispatch (the dispatch has no id-pin input, #10544), and the executing session re-verifies the agent-checkable preconditions immediately before dispatching; a go given earlier does not carry over a changed pin. A go covers the replace dispatch only; the resume (TJ-4) needs its own dispatch and the owner's environment approval, and the session pings the owner when the replace is dispatched because the approval wait was 30 of the 35 measured minutes on 2026-09-27.
+
+**Failure branches the plan does not leave open (each ends at an owner go, never at an agent retry).**
+- Bump chain fails (build, mirror or bot PR red): Guard A stays red on `main`; the session arms a watch on the mint and build runs with a stated deadline of the next session start, reads the stage-named `::error::` lines and uses the runbook's auto-mint recovery table (every row is a `gh` command or a code fix). It never hand-writes a pin after a refusal at stage `args`, `ancestry` or `resolve`.
+- Zot mirror degraded (`mirror_status` not `ok`): auto-merge does not arm. An agent does not merge the bot PR by hand; the owner decides after the `mirror_only` backfill the build's warning names. Mirror `ok` is re-read at the go, not only after the bump.
+- Replace half-applied (destroyed with no create, created with no `bootstrap-done`, up with the unit failed): read-only recovery per the runbook's "Abort thresholds" (10 minutes after the apply with `provision-unit-armed` and no `provision-attempt-start`, 2 hours with no `bootstrap-done`, `tls-health` absent 30 minutes after the apply) and the apply run's recovery-read block, then stop; a re-dispatch needs a fresh owner go. The owner may pre-authorize a conditional retry in the same go; that is the owner's choice, not assumed.
+- No terminator rows after the replace: cross-check the host's `tls-health` rows and its other vector-shipped rows for the new `boot_id` (vector broken versus unit down versus Better Stack refusing ingest); never restart the unit (#10545) and never SSH; hand off to the owner with those reads.
 
 ## Infrastructure (IaC)
 
@@ -249,15 +263,16 @@ plus approval latency (incidents measured: 59 and 76 minutes).
 
 ### Host fan-out
 
-Delivery order (the answer to "which hosts need what, in what order"):
+Delivery order, by time (the answer to "which hosts need what, in what order"):
 
 | Step | Host | Delivery | Trigger | Order and notes |
 |---|---|---|---|---|
-| 1 | web-1 | `vector.toml` copied, validated (`vector validate`), installed, vector restarted, `.prev` kept for restore | `terraform_data.journald_persistent` (SSH provisioner), merge apply | automatic at TJ-1; the new unit match and the filter are inert (no terminator unit there) |
-| 1 | web-2 | same | `terraform_data.journald_persistent_web2`, merge apply | automatic at TJ-1; no ordering requirement against web-1; verify vector `active` on both through each host's own rows |
-| 2 | registry host, git-data host | none | n/a | they do not consume this file |
-| 3 | Inngest host | `vector.toml` rides the bootstrap image `soleur-inngest-bootstrap` v1.1.59; a host created from `user_data` pinned to it extracts the file | automatic mint and build (TJ-2), then the owner-gated `inngest-host-replace` dispatch (TJ-3) and the resume (TJ-4) | the only host that runs the terminator; an in-place edit of a running Inngest host does not exist (replace-only, ADR-100) |
-| 4 | web-1, web-2 `cloud-init.yml` pin lines | bumped by the automatic bot PR | TJ-2 | inert (`ignore_changes` on web `user_data`) |
+| 1 | web-1 | `vector.toml` copied, validated (`vector validate`), installed, vector restarted, `.prev` kept for restore | `terraform_data.journald_persistent` (SSH provisioner), merge apply | automatic at TJ-1; the new unit match is inert (no terminator unit there) |
+| 1 | web-2 | same | `terraform_data.journald_persistent_web2`, merge apply | automatic at TJ-1; the two provisioners run in the same apply and are not staggered (a stagger would need a Terraform change this PR does not make); verify vector `active` on both through each host's own rows after the apply |
+| 2 | web-1, web-2 `cloud-init.yml` and Inngest `cloud-init-inngest.yml` pin lines | four pin lines bumped by the automatic bot PR | TJ-2 (after the mint and build) | inert for running hosts: web `user_data` has `ignore_changes`, and the push apply's `-target` list excludes `hcloud_server.inngest` (evidence: the v1.1.58 bump PR #10878 merged 2026-10-22T23:56Z and the live Inngest host kept running v1.1.57) |
+| 3 | Inngest host | `vector.toml` rides the bootstrap image `soleur-inngest-bootstrap` v1.1.59; a host created from `user_data` pinned to it extracts the file | the owner-gated `inngest-host-replace` dispatch (TJ-3), gated on the separate `user_data` trim PR having merged, then the resume (TJ-4) | the only host that runs the terminator; an in-place edit of a running Inngest host does not exist (replace-only, ADR-100) |
+| - | registry host, git-data host | none | n/a | they do not consume this file (`cloud-init-git-data.yml` says `vector.toml` reaches the web host alone; the registry has no `vector.toml` delivery) |
+| - | a NEW web host (birth or replace) | `vector.toml` is also a baked carrier of the web app image (`host_scripts_content_hash`, `server.tf`; verified at boot by `cloud-init.yml`) | `web-host-create` or `web-host-replace` | do NOT birth or replace a web host between this merge and the publish of the app image built from it: the boot-time content-hash verify would fail closed. Running hosts are unaffected |
 
 Fleet siblings are classified `twin` for the provisioner (both web hosts get the file hot, already enforced by `web-host-provisioner-parity.test.sh`); no new
 `terraform_data` is added, so no parity entry changes.
@@ -305,7 +320,7 @@ error_reporting:
   fail_loud: LOG3 rows (s_connect refused, No more addresses to connect, SSL_accept errors) and Connection reset rows are always kept by the filter
 failure_modes:
   - mode: the filter's wording does not match the host's stunnel build and over-ships
-    detection: unit row count over the first 24 hours before any flip, read through betterstack-query.sh, compared with the 400 per day budget
+    detection: a group-by-message-prefix read over the first hour after the resume (a dropped class present means the wording differs), then the unit row count over the first 24 hours before any flip, both through betterstack-query.sh, compared with the 400 per day budget; the 24-hour clock starts at the first startup row of the new boot_id and its baseline excludes that boot's startup rows
     alert_route: the executing session reads it after the replace and fixes the filter before the flip go is asked
   - mode: vector rejects the new config on web-1 or web-2 at merge
     detection: the provisioner prints FATAL and restores vector.toml.prev (the apply fails loudly); Better Stack shows no rows for that host_name after the apply
@@ -314,7 +329,7 @@ failure_modes:
     detection: zero startup row for the new boot_id within 30 minutes of bootstrap-done, read through betterstack-query.sh
     alert_route: the executing session; the stop rule in the runbook stays in force
   - mode: Better Stack ingest refused for quota (HTTP 402) after a flip
-    detection: the existing ingest-402 detection and the unit row count over 10,000 per day
+    detection: the existing ingest-402 detection, an independent signal that does not ride the blocked sink (the self-gate and deploy-state side of the flip, and the host-dark Better Stack checks), and the unit row count over 10,000 per day
     alert_route: the second drop in the CTO ruling (Connection closed lines with both byte counts above 0), never the 0-byte shapes
 logs:
   where: Better Stack Logs source 2457081 (host_name soleur-inngest-prd, unit soleur-inngest-tls.service)
@@ -333,23 +348,26 @@ discoverability_test:
 
 **Assembly.** The journald source set as the real `vector.toml` declares it, modelled by the evaluator in `vector-admission.test.sh`: Source 1 `include_units` and its two
 `exclude_matches` maps, Source 2 `exclude_units` and its `exclude_matches`, Sources 3 and 3b `include_matches.CONTAINER_NAME`, Source 4 `include_matches.SYSLOG_IDENTIFIER`. The
-chokepoint is the parsed TOML model (never a hand list). The corpus for units is DERIVED: for every unit in Source 1 `include_units`, the suite synthesizes one record at each
-of PRIORITY 0, 3, 4 and 6 and asserts exactly one admitting source, so a unit added later is covered without a new row. Members drift; the loop does not.
+chokepoint is the parsed TOML model (never a hand list). The corpus is literal terminator rows at PRIORITY 0, 3, 4, 5 and 6 (CTO R2: a derived per-unit loop is cut), and
+the exact-list equality pins on Source 1 `include_units` and Source 2 `exclude_units` are what catch a second unit added to one list only.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | remove `soleur-inngest-tls.service` from Source 1 `include_units` | RED (the PRIORITY 6 terminator record is admitted by no source) |
+| 1 | remove `soleur-inngest-tls.service` from Source 1 `include_units` | RED (the PRIORITY 6 terminator record is admitted by no source, and the equality pin fails) |
 | 2 | remove it from Source 2 `exclude_units` only | RED (the PRIORITY 2 terminator record is admitted by Source 1 and Source 2: multiplicity 2) |
-| 3 | add exact `stunnel4` to Source 4 `include_matches.SYSLOG_IDENTIFIER` without the two mirrors | RED (the terminator record is admitted by Source 1 and Source 4) |
-| 4 | rename the sources' `type` so the model parses zero journald sources | RED (the suite exits 2 on an empty model and reports zero cases; never "0 checked, pass") |
-| 5 | add a SECOND unit to Source 1 `include_units` after the compliant first, and not to Source 2 `exclude_units` | RED (the derived loop synthesizes the second unit's PRIORITY 2 record: multiplicity 2) |
+| 3 | rename the sources' `type` so the model parses zero journald sources | RED (the suite exits 2 on an empty model and reports zero cases; never "0 checked, pass") |
+| 4 | add a SECOND, third-listed unit to Source 1 `include_units` after the compliant first, and not to Source 2 `exclude_units` | RED (the exact-list equality pins fail on both lists) |
+
+The CTO trimmed this matrix to rows 1 to 3; row 4 stays because the guard-contract rule requires a row that adds a second member after a compliant first, and the equality
+pin (not a loop) is what makes it RED (plan-author note P2 in `decision-challenges.md`).
 
 **Harness rows.** Edit the SUITE: make the evaluator ignore `exclude` maps -> RED (the existing multi-admission rows must redden). Must-PASS non-canonical input: a fixture
-`vector.toml` that lists the same two units in the opposite order and a PRIORITY 5 record for the terminator unit -> PASS (the contract permits order and any priority).
+`vector.toml` that lists the same two units in the opposite order and a PRIORITY 5 record for the terminator unit -> PASS for the evaluator rows (order is permitted; the equality
+pin compares sorted lists).
 
-**Anchor.** No stored value is compared; the corpus is derived from the file under test. What moves outside the commit for a weakening to pass: nothing, because the
+**Anchor.** No stored value is compared; the corpus is literal rows and the pins are read from the file under test. What moves outside the commit for a weakening to pass: nothing, because the
 evaluator reads the file in the same diff, so this guard proves consistency of the partition, not that Vector's evaluator matches the emulator; the emulator's fidelity is
 pinned to Vector 0.43.1 `journald.rs` by the existing header comment and by the live row record after delivery.
 
@@ -366,14 +384,17 @@ line in the measured stunnel output plus synthetic unknown lines. The chokepoint
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | make the condition drop every row of the terminator unit | RED (a kept class, the `LOG3` refusal row, is dropped) |
-| 2 | make the condition drop nothing | RED (a drop class, `accepted connection`, ships) |
-| 3 | add a SECOND drop pattern for `Connection closed` after the compliant three | RED (the 0-byte closed shape is dropped; CTO: never dropped) |
-| 4 | leave `pii_scrub_drop_userdata` `inputs` on the raw `inngest_journald` (filter unwired) | RED (the wiring assertion and the unit test's output count) |
-| 5 | drop the unit check so a row of ANOTHER unit with a drop prefix is dropped | RED (the fail-open row for another unit) |
+| 1 | leave `pii_scrub_drop_userdata` `inputs` on the raw `inngest_journald` (filter unwired) | RED (the `tomllib` wiring assertion) |
+| 2 | add a SECOND drop pattern for `Connection closed` after the compliant three | RED (the 0-byte closed shape is dropped; the per-class `vector test` case for it fails; CTO: never dropped) |
+| 3 | make the extractor or the fixture file yield zero test cases (the guard's own dispatch) | RED (a floor on the number of `[[tests]]` cases and on the extracted condition bytes: "0 checked" cannot pass) |
 
-**Harness rows.** Edit the SUITE: make the extractor return an empty condition -> RED (a floor on extracted bytes and on fixture count, so an empty extraction cannot pass).
-Must-PASS non-canonical input: a stunnel line with different wording (`LOG6`, another service name) and a row with no `.message` -> PASS through unfiltered.
+CTO R1 trimmed this matrix to the wiring row: the other four mutations of the earlier draft (drop every row, drop nothing, drop the unit check, and the like) are exactly what the
+per-class `vector test` cases prove directly, so they are cases, not mutation rows. Rows 2 and 3 stay because the guard-contract rule requires a second-member row and an own-dispatch row.
+Mutation rows run in the `vector test` half of the suite (they edit a temp copy of `vector.toml` and need a Vector binary); under `REQUIRE_VECTOR_TEST=1` a missing binary is a failure, and
+without it the half is reported SKIP and never as a pass.
+
+**Harness rows.** Edit the SUITE: make the extractor return an empty condition -> RED (the same floor). Must-PASS non-canonical input: a stunnel line with different wording (`LOG6`, another
+service name), a row with no `.message`, and a row whose `.message` is not a string -> PASS through unfiltered.
 
 **Anchor.** The fixture lines are measured against stunnel 5.72 in a container; the host's build is unverified, so the anchor outside the commit is the post-replace row count over
 24 hours before any flip (CTO T2): over 400 per day or a dropped class present means the wording differs and the filter is fixed before the flip go.
@@ -383,22 +404,22 @@ Must-PASS non-canonical input: a stunnel line with different wording (`LOG6`, an
 ### Phase 0: preflight (work phase)
 
 1. `git fetch origin && git rebase origin/main` (never merge main in; no stash). Re-run the `gh issue list --label code-review` overlap check on the final file list.
-2. File the two trackers the rulings create, as separate issues (O3): the `user_data` trim PR (target at least 500 B offline, must merge before the replace go; precondition: CI render at least 300 B margin on the trial merge) and the `fetch_rc=93` oddity (sequenced after the trim; states that this journal will not explain it). Milestone from `knowledge-base/product/roadmap.md`.
+2. File the two trackers the rulings create, as separate issues (O3): the `user_data` trim PR (target at least 500 B offline, must merge before the replace go; precondition: CI render at least 300 B margin on the trial merge; a hard precondition, so it is an acceptance gate) and the `fetch_rc=93` oddity (sequenced after the trim; states that this journal will not explain it; filed, but not an acceptance gate of this PR per CTO R2). Milestone from `knowledge-base/product/roadmap.md`.
 3. Confirm the Vector binary for `vector test` (pinned 0.43.1 from `vector.tf`, or `timberio/vector:0.43.1-alpine`); record the path.
 
 ### Phase 1: failing tests first (`cq-write-failing-tests-before`)
 
 Run each suite alone with stdin from `/dev/null`; each must go RED for the intended reason before Phase 2.
-1. `vector-admission.test.sh`: update the S1 and S2 unit pins to the two-unit lists; add the derived per-unit loop and the terminator rows (PRIORITY 0, 3, 4, 6). Verify the harness rows.
+1. `vector-admission.test.sh`: update the S1 and S2 unit pins to the two-unit lists; add literal terminator rows (PRIORITY 0, 3, 4, 5, 6). Verify the harness rows.
 2. `inngest-step-524-alert.test.sh`: update the line-275 shape pin (two units; `inputs` now reaches `inngest_journald` through the filter) and V1; keep V2.
-3. `scripts/vector-terminator-filter.test.sh` and `vector-terminator-filter.test.toml`: the structure half (python3 `tomllib`) and the `vector test` half over the measured lines, a differently-worded line, another unit's line and a message-less row; `REQUIRE_VECTOR_TEST` turns a missing binary into a failure.
+3. `scripts/vector-terminator-filter.test.sh` and `vector-terminator-filter.test.toml`: the structure half (python3 `tomllib`: the filter's `inputs`, and `pii_scrub_drop_userdata`'s `inputs` naming the filter and not the raw source) and the `vector test` half with ONE `[[tests]]` case per class (a case that expects a dropped line uses `no_outputs_from = ["inngest_terminator_filter"]`, since a test has one `extract_from` per output): the three dropped lines, each kept class (the `LOG3` refusal lines, `Connection reset`, both `Connection closed` shapes, startup, the `SSL_accept` lines), a differently-worded line, another unit's line with a drop prefix, a message-less row and a row whose `.message` is not a string; `REQUIRE_VECTOR_TEST` turns a missing binary into a failure.
 4. Write the Guard 1 and Guard 2 mutation rows as suite rows before the guard changes (a mutation row edits a copy of `vector.toml` in a temp dir, never the real file).
 
 ### Phase 2: `vector.toml`
 
 1. Source 1: `include_units = ["inngest-server.service", "soleur-inngest-tls.service"]`; update the header comments that say the source admits `inngest-server.service` (the ADMISSION SEMANTICS block) and the `Consequences` bullets. Keep the SYSLOG_IDENTIFIER and CONTAINER_NAME mirrors untouched.
 2. Source 2: `exclude_units` carries the same two units (excludes win; the two lists move together; `vector.service`'s CRIT path is unchanged).
-3. New transform `[transforms.inngest_terminator_filter]`: `type = "filter"`, `inputs = ["inngest_journald"]`, `condition` a VRL drop-list that fails open: pass when `._SYSTEMD_UNIT` is not `soleur-inngest-tls.service`; pass when `.message` is absent or not a string; otherwise drop only when the message contains `Service [inngest] accepted connection from`, `s_connect: connected 127.0.0.1:8288` or `Service [inngest] connected remote server from`. Everything else passes. No `$VAR` text in comments.
+3. New transform `[transforms.inngest_terminator_filter]`: `type = "filter"`, `inputs = ["inngest_journald"]`, `condition` an INFALLIBLE VRL drop-list that fails open. A Vector filter treats a runtime error in its condition as false and DROPS the event, and `vector validate --no-environment` does not compile VRL, so every field read carries a fallback: `unit = string(._SYSTEMD_UNIT) ?? ""` and `msg = string(.message) ?? ""`, then a pure boolean: pass when `unit` is not `soleur-inngest-tls.service`; pass when `msg` is empty (absent or not a string); otherwise drop only when `msg` contains (via `contains()` with literal strings, so `[inngest]` needs no escaping) `Service [inngest] accepted connection from`, `s_connect: connected 127.0.0.1:8288` or `Service [inngest] connected remote server from`. Everything else passes. No `$VAR` text in comments.
 4. Rewire `pii_scrub_drop_userdata` `inputs`: replace `"inngest_journald"` with `"inngest_terminator_filter"`.
 5. Comments: record the budget (400 per day before a flip, 8,000 after), the second-drop rule, that PRIORITY cannot split the lines (all PRIORITY 6) and that the stunnel wording is measured on 5.72 only.
 
@@ -426,12 +447,13 @@ through Better Stack and record `unit_rows` (the 524 rows must still ship).
 
 ## PR Body Requirements
 
-The PR body must state, in plain sentences, each of the following (draft text; `soleur:ship` renders the `decision-challenges.md` table beside it):
+The PR body must state, in plain sentences, each of the following (draft text; `soleur:ship` renders the `decision-challenges.md` table beside it). CPO condition: the PR body LEADS with item 0 in plain language, before any jargon (stunnel, journald, Guard A).
 
+0. **The plain-language ask (first lines of the PR body).** "Nothing is broken for users today: the link between the app and the scheduler is still the old plain one, and this change does not touch it. Merging this PR causes no user impact; it only adds logging to two web servers (a short restart of the logging agent). The one step with user impact comes later and needs your separate go: replacing the scheduler's server so it can send us the logs that explain the last failed switch-over. While that server is replaced, scheduled agent runs and reminders are unavailable and late (plan for up to about 80 minutes; the measured past windows were 59 and 76 minutes), event sends can fail during the window, and a dashboard draft can be archived without being sent (issue #10543 is still open, so that must be fixed or the window quiesced first). This is optional hardening: if you decline, nothing changes for users, and the next switch-over failure stays as hard to diagnose as the last one (or needs a one-off server read). I recommend a low-traffic window, ideally the next time the host has to be replaced anyway."
 1. **What it does.** Ships the stunnel terminator's journal (`soleur-inngest-tls.service`) to Better Stack through Sources 1 and 2 with a fail-open drop-list filter, so a `phase=request` self-gate failure can be read from Better Stack.
 2. **Delivery and host replace order.** (1) Merge: web-1 and web-2 get `vector.toml` through the existing SSH provisioners and restart journald and vector (the new rules are inert there; `.prev` restore on a rejected config). (2) Automatic: mint `vinngest-v1.1.59`, build and mirror, bot pin-bump PR. (3) Owner-gated: the Inngest host replace, then the resume. The link stays http throughout; the flip is a separate owner act.
 3. **Blast radius.** The Inngest host replace makes the sole scheduler unavailable for a bounded window (clean path 79 seconds to `bootstrap-done`, plan 15 to 60 minutes plus approval latency); scheduler ticks and reminder fires are delayed and each missed tick fires once on resume; event sends can fail during the window (webhooks redeliver, a reminder arm may need re-arming, #10543 dashboard send is open); the Redis AOF volume is retained.
-4. **Precondition list for the replace go.** The PR is merged and the automatic chain finished (pin on `main` is v1.1.59, mirror `ok`, Guard A green again); the `user_data` trim PR is merged and the CI-rendered `user_data` on the trial merge shows at least 300 B margin including c15ed71796, e002f2bc47, dc9391d11c and the v1.1.59 digest; the link is http on both web hosts (`class=resolved state=http_default`); no in-flight `apply-web-platform-infra.yml` or `registry-host-replace-dispatch.yml`; stock preflight and destroy-guard pass; #10542 is closed and #10543 is fixed or the window is quiesced with the replay check; the `cutover-inngest.yml` quiesce op is set; a low-traffic window is chosen; the host id is recorded before and after; the runbook sections "Replace triggers" and "Inherited `done`" are re-read; the owner is available for the `inngest-cutover` environment approval.
+4. **Precondition list for the replace go (two lists).** Agent-checkable, read by the executing session immediately before dispatch: the PR is merged and the automatic chain finished (pin on `main` is v1.1.59, mirror `ok`, Guard A green again); the `user_data` trim PR is merged and the CI-rendered `user_data` on the trial merge shows at least 300 B margin including c15ed71796, e002f2bc47, dc9391d11c and the v1.1.59 digest; the link is http on both web hosts (`class=resolved state=http_default`); no in-flight `apply-web-platform-infra.yml` or `registry-host-replace-dispatch.yml`; stock preflight and destroy-guard pass; #10542 is closed and #10543 is fixed or the window is quiesced with the replay check (a HARD precondition per the CPO: the dashboard draft archived on a failed enqueue is the one personal, visible loss, and when the choice is the quiesced window, the replay check is named in the go); the host id is recorded before dispatch and after; the runbook sections "Replace triggers" and "Inherited `done`" are re-read; the CI-rendered `user_data` margin is read from the trial merge's plan output (the offline script's number does not count). Owner-attested, asked in the go: the low-traffic window is chosen, the quiesce op (TJ-3a) is set, and the owner is available for the `inngest-cutover` environment approval.
 5. **The typed-go ask.** "This replaces the Inngest host so it boots from the image that ships the terminator's journal; the scheduler and reminders are unavailable for a bounded window and need your approval to resume. Reply with your own go naming the Inngest host replace. A menu answer is not a go." Also state: merging needs a separate typed go naming the merge.
 6. **Issue and CI notes.** `Ref #10136`, `Ref #10205`, `Ref #10880` (never `Closes`); Guard A reds on the PR and on `main` until the bump lands (advisory, #9081); nothing in this PR dispatches a workflow.
 
@@ -440,15 +462,15 @@ The PR body must state, in plain sentences, each of the following (draft text; `
 ### Pre-merge (PR)
 
 - [ ] AC1 `vector.toml` Source 1 `include_units` and Source 2 `exclude_units` both equal `["inngest-server.service", "soleur-inngest-tls.service"]` (`vector-admission.test.sh` asserts it).
-- [ ] AC2 The derived per-unit loop in `vector-admission.test.sh` proves exactly one admitting source (`inngest_journald`) for the terminator unit at PRIORITY 0, 3, 4 and 6, and every Guard 1 mutation row goes RED.
-- [ ] AC3 The filter drops exactly the three measured healthy-request prefixes of the terminator unit and passes every other fixture (kept classes, another unit, no `.message`, unknown wording), proven by `vector test` against the real `vector.toml` (`scripts/vector-terminator-filter.test.sh`, `REQUIRE_VECTOR_TEST=1`), and every Guard 2 mutation row goes RED.
+- [ ] AC2 `vector-admission.test.sh` proves exactly one admitting source (`inngest_journald`) for literal terminator rows at PRIORITY 0, 3, 4, 5 and 6, and every Guard 1 mutation row goes RED.
+- [ ] AC3 The filter drops exactly the three measured healthy-request prefixes of the terminator unit and passes every other fixture (kept classes, another unit, no `.message`, unknown wording), proven by one `vector test` case per class against the real `vector.toml` (`scripts/vector-terminator-filter.test.sh`, `REQUIRE_VECTOR_TEST=1`) with infallible VRL (a row whose `.message` is not a string passes), the `tomllib` wiring assertion holds, and every Guard 2 mutation row goes RED.
 - [ ] AC4 `vector validate --no-environment` is green on `vector.toml` and on its rendered `@@HOST_NAME@@` form with Vector 0.43.1.
 - [ ] AC5 `inngest-step-524-alert.test.sh` is green with the updated shape pin and its V1 and V2 rows RED on mutation; `unit_rows` from `scripts/probe-inngest-524-count.sh` is recorded.
 - [ ] AC6 The runbook and the ADR-294 addendum state, per image tag, whether the journal ships, name the three decodes and the omitted lines, and keep the stop rule; neither says an absent line means the request never reached the terminator.
 - [ ] AC7 The PR body carries the six items under `## PR Body Requirements` and the `decision-challenges.md` table.
 - [ ] AC8 `inngest-userdata-budget.sh` still reports headroom 256 B (this PR adds 0 B to `user_data`); Guard A names only `vector.toml` as drifted; every other row of `cloud-init-inngest-bootstrap.test.sh` is green.
 - [ ] AC9 Nothing is merged, armed or dispatched by this pipeline; the PR stays draft unless the owner gives a typed merge go.
-- [ ] AC10 The two trackers (user_data trim, `fetch_rc=93`) exist as separate issues; `Ref #10880` appears and `Closes #10880` does not.
+- [ ] AC10 The `user_data` trim tracker exists as a separate issue (a hard precondition of the replace go); the `fetch_rc=93` issue is filed but is not a gate; `Ref #10880` appears and `Closes #10880` does not.
 - [ ] AC11 `python3 scripts/lint-infra-no-human-steps.py` is clean over the plan, runbook and ADR edits; the C4 tests and `c4-count-parity.test.sh` are green.
 
 ### Post-merge (owner-gated; not performed by this pipeline)
@@ -465,14 +487,17 @@ The PR body must state, in plain sentences, each of the following (draft text; `
 - Given the upstream-closed shape (`Connection closed: 0 byte(s) sent to TLS, 78 byte(s) sent to socket`), then it is kept.
 - Given a `LOG3 SSL_accept ... http request` line and a `tlsv1 alert unknown ca` line, then both are kept.
 - Given a line of another unit that contains `Service [inngest] accepted connection from`, then it is kept (fail open).
-- Given a terminator row with no `.message`, then it is kept; given an unknown-wording stunnel line (`LOG6 ...`), then it is kept.
-- Given a unit added later to Source 1 `include_units` without Source 2 `exclude_units`, then the derived loop reds on multiplicity 2.
+- Given a terminator row with no `.message`, or whose `.message` is not a string, then it is kept; given an unknown-wording stunnel line (`LOG6 ...`), then it is kept.
+- Given a third unit added to Source 1 `include_units` without Source 2 `exclude_units`, then the exact-list equality pins red.
 - Given `pii_scrub_drop_userdata` `inputs` still naming the raw `inngest_journald`, then the wiring assertion reds.
 
 ## Dependencies & Risks
 
 - **Shared file, two delivery paths.** A rejected config at merge reaches web-1 and web-2 first; mitigated by `vector validate` plus `vector test` in CI and the provisioner's `.prev` restore. Rollback: revert the PR (the mint then publishes a new, higher version; never tag an older commit).
-- **Cutover heartbeat.** The cutover gate's E13 reads a Source 4 tag through this pipeline; the filter rewiring touches the path every Source 1 row takes. The filter is fail-open and a Guard 2 row asserts a non-terminator row passes unchanged.
+- **Shared pipeline.** The cutover heartbeat that `scripts/cutover-inngest.sh` grades (E13) enters through Source 4 (`host_scripts_journald`), not Source 1, so a Source 1 filter never sees it; the risks it does share are a config that fails to compile or start (web-1 and web-2 first, mitigated by `vector validate`, `vector test` and the `.prev` restore) and a Source 1/2 partition error (Guard 1). A Source 1 filter does see every `inngest-server.service` row (including the rows the 524 alert reads), so it must be fail-open with infallible VRL, and a fixture asserts a non-terminator row passes unchanged.
+- **Rollback asymmetry.** Reverting the PR restores web-1 and web-2 (the `.prev` restore plus the revert's own delivery) and the mint cuts a NEW higher image (v1.1.60; never tag an older commit); an Inngest host that has already been replaced keeps this image's `vector.toml` until another replace, and a replace has no rollback. Nothing in the new rules is harmful on a replaced host, so the revert is not urgent there.
+- **Other carrier PRs.** Any concurrent PR that touches a baked carrier sees the same Guard A red from this merge until the bump lands; the PR body says so.
+- **The wording is unproven until the replace.** The filter's wording match and the row budget can only be confirmed from the first rows of the replaced host; a wording fix or the second drop then needs a NEW image and another host replace (each with downtime and a fresh owner go), and the 24-hour clock restarts at the next boot.
 - **Volume.** Budget 400 per day before a flip, 8,000 after (CTO T2); estimated unfiltered volume after a flip is up to 24,000 per day; the 2026-08-14 ingest refusal blinded every host for about 49 hours.
 - **`user_data` size.** 256 B headroom against the 300 B precondition; the replace go is blocked on the separate trim and a CI-rendered measurement (CTO T4). A tag or digest swap changes the stored size by at most a few bytes; the CI render, not the offline number, decides.
 - **Not measured.** The host's stunnel build and curl version; how the filter's `._SYSTEMD_UNIT` and `.message` field names look on the host's Vector 0.43.1 (the `vector test` fixtures set them by assumption; the first post-replace row is the check, and the journald field names are those the existing rows already carry: `SYSLOG_IDENTIFIER`, `_SYSTEMD_UNIT`, `message`).
@@ -483,7 +508,7 @@ The PR body must state, in plain sentences, each of the following (draft text; `
 
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6. This one declares `single-user incident`.
 - `vector validate --no-environment` does not compile VRL; only `vector test` does. The filter's correctness rests on the new suite, which must be blocking in `validate-vector-config.yml`.
-- Source 1 is an OR over fields: the unit arm admits the terminator at any priority, and the `{3,4}` PRIORITY arm admits any other unit's errors. The terminator's `LOG3` lines are PRIORITY 6 (not 3), so they ship only through the unit arm; do not "fix" the filter with a priority test.
+- Source 1 is an OR over fields: the unit arm admits the terminator at any priority, and the `{3,4}` PRIORITY arm admits any other unit's errors. The terminator's `LOG3` lines are expected at PRIORITY 6 (not 3; derived from systemd's default, not measured on the host), so they ship only through the unit arm; do not "fix" the filter with a priority test, and keep PRIORITY 3 and 5 in the derived corpus so either value is covered.
 - Never add `systemd` to any `SYSLOG_IDENTIFIER` array in either direction (ADR-286, tests pin its absence).
 - Text containing the two words for the infrastructure apply command is written with the Write tool only; this plan names the dispatch by its input value (`inngest-host-replace`) and not by the command line.
 - The GDPR gate (`soleur:gdpr-gate`) is advisory for the single-user-incident trigger; run it at deepen time against this plan and record the output under `### Legal and compliance`.
@@ -491,4 +516,4 @@ The PR body must state, in plain sentences, each of the following (draft text; `
 
 ### CPO disposition
 
-Pending: appended after the CPO consult in this pass.
+CPO sign-off: approved with conditions (2026-10-25), all four adopted: (1) #10543 fixed, or the window quiesced with the replay check, is a hard precondition of the replace go; (2) the typed-go ask is rewritten in plain language with the duration range (up to about 80 minutes), the user-visible effects, the optional benefit and the cost of declining, and leads the PR body (`## PR Body Requirements` item 0); (3) the replace is scheduled in a low-traffic window, ideally combined with the next replace needed anyway (a scheduling suggestion; the date is the owner's call); (4) the PR body states that merging causes no user impact. The CPO also noted the replace "buys no user value" by itself: it is operator diagnosability only, which is why the ask names the cost of declining. The CPO's note that the "15 to 60 minutes" range understates the measured 59 and 76 minute incidents is applied (the ask says up to about 80 minutes). Do not tell customers "each missed tick fires once on resume" externally: it was measured once on 2026-09-17 and is an internal claim.
