@@ -665,11 +665,18 @@ export function createUntrustedContentHook(opts: UntrustedContentHookOptions = {
       const i = input as Partial<PostToolUseHookInput> | null | undefined;
       if (!i || i.hook_event_name !== "PostToolUse" || i.tool_name !== "WebFetch") return {};
 
+      // The SDK sets agent_id only when the hook fires from within a subagent. Log a boolean,
+      // never the id: it lets a live session show subagent coverage (#10194) without adding an
+      // identifier to the telemetry.
+      const agentId = (i as { agent_id?: unknown }).agent_id;
+      const subagent = typeof agentId === "string" && agentId !== "";
+      const emitHere = (fields: Record<string, unknown>): void => emit({ ...fields, subagent }, opts);
+
       const text = extractWebFetchText(i.tool_response);
       const mode = opts.wrap ? "wrap" : "annotate";
 
       if (text === undefined) {
-        emit({ unscored: true, unscoredReason: "shape", source: "web_fetch", mode }, opts);
+        emitHere({ unscored: true, unscoredReason: "shape", source: "web_fetch", mode });
         mirrorOnce("tool-response-shape", "untrusted-content-shape", opts);
         return {};
       }
@@ -691,12 +698,12 @@ export function createUntrustedContentHook(opts: UntrustedContentHookOptions = {
       };
 
       if (!c.scored) {
-        emit({ ...base, rewriteEmitted: false }, opts);
+        emitHere({ ...base, rewriteEmitted: false });
         mirrorOnce("scorer-error", "untrusted-content-scorer-error", opts, c.unscoredReason);
         return {};
       }
       if (!c.flagged && !c.truncated) {
-        emit({ ...base, rewriteEmitted: false }, opts);
+        emitHere({ ...base, rewriteEmitted: false });
         return {};
       }
 
@@ -710,7 +717,7 @@ export function createUntrustedContentHook(opts: UntrustedContentHookOptions = {
         updatedToolOutput = rewriteWebFetchOutput(i.tool_response, envelope("web_fetch", text));
       }
       const rewriteEmitted = updatedToolOutput !== undefined;
-      emit({ ...base, rewriteEmitted }, opts);
+      emitHere({ ...base, rewriteEmitted });
 
       return {
         hookSpecificOutput: {

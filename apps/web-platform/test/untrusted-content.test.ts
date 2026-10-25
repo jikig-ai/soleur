@@ -369,4 +369,46 @@ describe("createUntrustedContentHook", () => {
     expect(typeof fields.workspaceIdHash).toBe("string");
     expect(fields.workspaceIdHash).not.toBe("ws1");
   });
+
+  // #10194: whether the hook fires for WebFetch calls made inside Task subagents is NOT
+  // established by these cases — the SDK says agent_id is present when it does. They prove
+  // only that the hook treats such an input like any other and that the telemetry can SHOW
+  // coverage (subagent=true) without ever logging the id. The live check is on #10195.
+  describe("subagent signal", () => {
+    const AGENT_ID = "agent-id-SENTINEL-4f9c";
+    // webFetchInput is typed `never` (SDK input is wide); widen it so agent_id can be added.
+    const withAgent = (resp: unknown, agent_id: unknown) => ({
+      ...(webFetchInput(resp) as unknown as Record<string, unknown>),
+      agent_id,
+    });
+
+    it("a subagent input classifies identically and logs subagent: true, never the id", async () => {
+      const plain = await call(createUntrustedContentHook(), webFetchInput(pageObj(ATTACK)));
+      log.warn.mockClear();
+      const sub = await call(createUntrustedContentHook(), withAgent(pageObj(ATTACK), AGENT_ID));
+      expect(sub).toEqual(plain);
+      const fields = log.warn.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(fields).toMatchObject({ op: "untrusted-classify", flagged: true, subagent: true });
+      expect(JSON.stringify([log.warn.mock.calls, obs.mirrorWithDebounce.mock.calls])).not.toContain(AGENT_ID);
+      expect(Object.keys(fields)).not.toContain("agent_id");
+    });
+
+    it("a main-thread input logs subagent: false", async () => {
+      await call(createUntrustedContentHook(), webFetchInput(pageObj("A normal recipe page.")));
+      expect(log.warn.mock.calls[0]?.[0]).toMatchObject({ op: "untrusted-classify", subagent: false });
+    });
+
+    it("an empty or non-string agent_id is not a subagent", async () => {
+      for (const bad of ["", 7, null, {}]) {
+        log.warn.mockClear();
+        await call(createUntrustedContentHook(), withAgent(pageObj("hi"), bad));
+        expect(log.warn.mock.calls[0]?.[0]).toMatchObject({ subagent: false });
+      }
+    });
+
+    it("the unscored (shape) path also carries the field", async () => {
+      await call(createUntrustedContentHook(), withAgent({ result: 42 }, AGENT_ID));
+      expect(log.warn.mock.calls[0]?.[0]).toMatchObject({ unscored: true, unscoredReason: "shape", subagent: true });
+    });
+  });
 });

@@ -63,6 +63,15 @@ describe("leader-prompt registry — untrusted envelope census", () => {
     expect(out).not.toContain(START);
   });
 
+  // Distinguishes sanitize-then-envelope from envelope-then-sanitize: a body made only of
+  // control characters is EMPTY after sanitizing, so the fallback must fire. Enveloping first
+  // would wrap the empty payload and defeat it.
+  it.each(THIRD_PARTY_CLASSES)("%s treats a control-characters-only body as empty", (cls) => {
+    const out = render(cls, "\u0000\u0007\u001b");
+    expect(out).toMatch(/\(no [^)]*provided/);
+    expect(out).not.toContain(START);
+  });
+
   it.each(UNWRAPPED_CLASSES)("%s stays unwrapped (the user's own KB output)", (cls) => {
     const out = render(cls, "broken link in knowledge-base/a.md");
     expect(out).not.toContain(START);
