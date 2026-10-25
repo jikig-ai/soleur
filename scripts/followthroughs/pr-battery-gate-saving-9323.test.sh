@@ -35,7 +35,19 @@ jqx=""; while (( $# )); do if [ "$1" = "--jq" ]; then jqx="$2"; shift; fi; shift
 case "$ep" in
   repos/*/pulls/9324) f="$FX/pr-9324.json" ;;
   repos/*/pulls/*/files*) n="${ep#*pulls/}"; f="$FX/files-${n%%/*}.json" ;;
+  repos/*/pulls?head=*)
+    # head-branch resolution: fixture is head-<branch>.json with '/' folded to '_'; an absent fixture
+    # is a branch with no PR (empty list), not an API failure. The empty list must flow through the
+    # --jq tail below like a real response, so it is materialised rather than printed directly.
+    b="${ep##*head=}"; b="${b%%&*}"; b="${b#*:}"
+    f="$FX/head-${b//\//_}.json"
+    [ -f "$f" ] || { f="$FX/.empty-head.json"; printf '[]\n' > "$f"; } ;;
   repos/*/pulls/*) f="$FX/pr-${ep##*/}.json" ;;
+  repos/*/actions/workflows/ci.yml/runs?event=pull_request*page=*)
+    pg="${ep##*page=}"; pg="${pg%%&*}"
+    if [ "$pg" = 1 ]; then f="$FX/runs.json"
+    else f="$FX/runs-p$pg.json"; [ -f "$f" ] || { f="$FX/.empty-runs.json"; printf '{"workflow_runs":[]}\n' > "$f"; }
+    fi ;;
   repos/*/actions/workflows/ci.yml/runs?event=pull_request*) f="$FX/runs.json" ;;
   repos/*/actions/workflows/ci.yml/runs?event=push*) f="$FX/push-${ep##*head_sha=}.json" ;;
   repos/*/actions/runs/*/jobs*) r="${ep#*runs/}"; f="$FX/jobs-${r%%/*}.json" ;;
@@ -131,6 +143,56 @@ build_fx "$TMP/c3" 25 40 0 0 110; add_light "$TMP/c3" 25 failure
                                     expect "S3: a real escape (push run red) is still found beside the light runs" 1 "ESCAPE: PR 110" "$TMP/c3"
 build_fx "$TMP/c4" 0 40; add_light "$TMP/c4" 25 failure
                                     expect "S3: only failed light runs is NOT YET 0 (they are not a saving, not an escape)" 2 "NOT YET: 0" "$TMP/c4"
+# --- pagination + head-branch resolution (the window-starvation fix) --------------------------------
+# One runs page is ~24 h of PRs and `pull_requests` is populated only while a PR is open, so a merged
+# PR's run needs the pulls?head= lookup. Page 1 here is 100 runs (90 bots + 10 head-resolvable humans);
+# page 2 carries 15 runs with the association present. Both halves are needed for a PASS.
+job40() { jq -n '{jobs:[{name:"test-scripts (1/7)", conclusion:"success", created_at:"2026-10-02T00:00:00Z", started_at:"2026-10-02T00:10:00Z", completed_at:"2026-10-02T00:50:00Z"}]}'; }
+mk_pr_files() {  # <fx> <pr>
+  printf '[{"filename":"docs/x.md"}]\n' > "$1/files-$2.json"
+  printf '{"merged_at":"2026-10-02T00:00:00Z","merge_commit_sha":"psha%s"}\n' "$2" > "$1/pr-$2.json"
+  printf '{"workflow_runs":[{"conclusion":"success"}]}\n' > "$1/push-psha$2.json"
+}
+build_paged_fx() {  # <fx>
+  local fx="$1" i pr runs=""
+  assert_fixture_dir "$fx"
+  build_fx "$fx" 0 40                     # pr-9324.json; runs.json is overwritten below
+  for ((i = 1; i <= 90; i++)); do
+    runs="$runs{\"id\":$((90000 + i)),\"conclusion\":\"success\",\"actor\":{\"type\":\"Bot\"},\"pull_requests\":[{\"number\":$((900 + i))}],\"head_branch\":\"bot$i\"},"
+  done
+  for ((i = 1; i <= 10; i++)); do
+    pr=$((300 + i)); mk_pr_files "$fx" "$pr"; job40 > "$fx/jobs-$((70000 + i)).json"
+    printf '[{"number":%s}]\n' "$pr" > "$fx/head-pb$i.json"
+    runs="$runs{\"id\":$((70000 + i)),\"conclusion\":\"success\",\"actor\":{\"type\":\"User\"},\"pull_requests\":[],\"head_branch\":\"pb$i\"},"
+  done
+  printf '{"workflow_runs":[%s]}\n' "${runs%,}" > "$fx/runs.json"
+  runs=""
+  for ((i = 1; i <= 15; i++)); do
+    pr=$((400 + i)); mk_pr_files "$fx" "$pr"; job40 > "$fx/jobs-$((80000 + i)).json"
+    runs="$runs{\"id\":$((80000 + i)),\"conclusion\":\"success\",\"actor\":{\"type\":\"User\"},\"pull_requests\":[{\"number\":$pr}],\"head_branch\":\"pbx$i\"},"
+  done
+  printf '{"workflow_runs":[%s]}\n' "${runs%,}" > "$fx/runs-p2.json"
+}
+build_paged_fx "$TMP/pg1"
+expect "pagination + head resolution: 10 head-resolved on page 1 + 15 direct on page 2 PASS" 0 "qualifying_runs=25" "$TMP/pg1"
+if grep -q 'page=2' "$TMP/pg1/requests.log"; then pass "a full page 1 triggers a page-2 fetch"; else fail "the probe did not paginate past a full page 1"; fi
+if grep -q 'pulls?head=' "$TMP/pg1/requests.log"; then pass "merged-PR runs resolve through pulls?head="; else fail "no head-branch PR lookup was issued"; fi
+build_fx "$TMP/h1" 20 40
+jq '.workflow_runs += [{id:70001,conclusion:"success",actor:{type:"User"},pull_requests:[],head_branch:"merged-a"}]
+                   | .workflow_runs += [{id:70002,conclusion:"success",actor:{type:"User"},pull_requests:[],head_branch:"no-pr"}]' \
+   "$TMP/h1/runs.json" > "$TMP/h1/runs.tmp" && mv "$TMP/h1/runs.tmp" "$TMP/h1/runs.json"
+printf '[{"number":555}]\n' > "$TMP/h1/head-merged-a.json"
+printf '[{"filename":"scripts/test-all.sh"}]\n' > "$TMP/h1/files-555.json"
+expect "head resolution: a machinery-touching PR found via head_branch is still excluded" 0 "qualifying_runs=20" "$TMP/h1"
+if grep -q 'pulls?head=jikig-ai:merged-a' "$TMP/h1/requests.log"; then pass "the head lookup names owner:branch"; else fail "no head lookup for merged-a: $(cat "$TMP/h1/requests.log")"; fi
+if grep -q 'pulls?head=jikig-ai:no-pr' "$TMP/h1/requests.log"; then pass "a branch with no PR gets a lookup, then is skipped"; else fail "no head lookup for no-pr"; fi
+build_fx "$TMP/d1" 20 40
+# a qualifying PR closed UNMERGED: no merge commit will ever exist, so it must drop out of the escape
+# check rather than pend forever (head-branch resolution makes this state reachable; pre-resolution it
+# was not — the association only existed on open PRs).
+printf '{"merged_at":null,"merge_commit_sha":null,"state":"closed"}\n' > "$TMP/d1/pr-105.json"
+expect "a closed-unmerged qualifying PR drops out of the escape check" 0 "closed unmerged" "$TMP/d1"
+if grep -qE 'page=[2-9]' "$TMP/s1/requests.log"; then fail "a short page 1 must not trigger a second-page fetch"; else pass "a short page 1 (<100 runs) does not paginate"; fi
 out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi
 
