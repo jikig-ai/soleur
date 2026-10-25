@@ -532,10 +532,10 @@ resource "betteruptime_heartbeat" "inngest_server_probe" {
   name   = "soleur-inngest-server-probe-prd"
   period = 3600
   grace  = 1800
-  call   = false
-  sms    = false
-  email  = true
   # #11068 — push armed, parity with the inngest_prd/inngest_consumer sibling heartbeats (inngest.tf); revert to `push = false` if the apply refuses it.
+  call      = false
+  sms       = false
+  email     = true
   push      = true
   team_wait = 0
   team_name = "Your team"

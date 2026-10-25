@@ -71,7 +71,8 @@ else
 fi
 
 # (d) Alert routing: email + push on (#11068 — parity with the inngest_prd/inngest_consumer
-# siblings; DP-10's email-only invariant retired), call/sms off, paid-tier policy gated on the var.
+# siblings; the email-only pin no longer holds for this resource), call/sms off, paid-tier
+# policy gated on the var.
 if has "$hb_block" '^[[:space:]]*email[[:space:]]*=[[:space:]]*true[[:space:]]*$'; then
   ok "heartbeat email = true"
 else
