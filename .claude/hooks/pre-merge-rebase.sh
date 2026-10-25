@@ -755,7 +755,9 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
   # check for nothing: on a merge-queue repo the queue makes the PR current itself. Asked ONLY when this hook's own --queue-state read
   # said `not_queued OPEN armed` (an UNARMED PR still syncs: the first arm's pre-sync is what this hook exists for), and answered by
   # `sync-pr-behind.sh <N> --queue-wait`, the one copy of the predicate (OPEN, BEHIND/UNKNOWN never DIRTY, armed, a merge_queue rule on
-  # main). Two bounded reads (PR_QUEUE_ATTEMPTS=1, PR_QUEUE_TIMEOUT 5 s each) inside a 20 s outer wrapper: shorter than the reads would
+  # the PR's own base branch; an unusable or queue-less non-main base answers queue_wait too: the hook CANNOT tell `wait` from that
+  # refusal, since both print queue_wait, and a third stdout token would fall through to the sync below). Two bounded reads
+  # (PR_QUEUE_ATTEMPTS=1, PR_QUEUE_TIMEOUT 5 s each) inside a 20 s outer wrapper: shorter than the reads would
   # fail OPEN into the push this exists to prevent. The verdict is read from STDOUT only (2>/dev/null) and accepted only when the rc is 0
   # and exactly one line of the CR-stripped output is exactly `queue_wait` or `proceed`; anything else (a non-zero rc incl. 124, an OLD
   # script that exits 2, no line, a forged queue_wait followed by proceed, a suffix) is unreadable and falls THROUGH to today's sync with a
@@ -777,17 +779,17 @@ if [[ -n "$PR_HEAD_NUMBER" ]]; then
         _qw_verdict=$(grep -xE 'queue_wait|proceed' <<<"$_qw_clean" || true)
       fi
       if [[ "$_qw_verdict" == "queue_wait" ]]; then
-        headless_or_stderr info "PR #$PR_HEAD_NUMBER is BEHIND with auto-merge armed on a merge-queue repo — origin/main sync skipped (the queue makes it current)"
+        headless_or_stderr info "PR #$PR_HEAD_NUMBER is BEHIND with auto-merge armed on a merge-queue repo — origin/main sync skipped (the queue makes it current; or, for a base that is not main and has no queue, a refusal: see the hook context)"
         jq -n --arg n "$PR_HEAD_NUMBER" '{
           hookSpecificOutput: {
             hookEventName: "PreToolUse",
-            additionalContext: ("Pre-merge hook: PR #" + $n + " is BEHIND with auto-merge armed (GitHub merge state BEHIND or UNKNOWN) on a merge-queue repo and is not in the queue yet; skipped the origin/main sync. The merge queue makes the PR current itself, and a resync push restarts every required check for nothing, so no sync is needed. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md (\u0027Armed and green but never enqueued\u0027). The Phase 7 poll\u0027s expiry fallback is the sanctioned sync. Keep polling for MERGED; if you truly need a hand sync, disarm first (gh pr merge " + $n + " --disable-auto), sync, then re-arm. A --admin merge bypasses the queue and lands the head as pushed, so a not-up-to-date refusal there is real: gate it with plugins/soleur/scripts/admin-merge-ready.sh.")
+            additionalContext: ("Pre-merge hook: PR #" + $n + " is BEHIND with auto-merge armed (GitHub merge state BEHIND or UNKNOWN) and is not in the queue yet; skipped the origin/main sync. This skip is ALSO a refusal when the PR\u0027s base branch has no merge queue or is not a supported branch name (both print the same answer, so this hook cannot tell them apart; read the base with gh pr view " + $n + " --json baseRefName): this hook and the Phase 7 poll\u0027s fallback only merge origin/main, which is wrong for a PR on another base. For such a PR whose base has no merge queue, sync by hand against its own base (git fetch origin <base> && git merge origin/<base>, then push); if that base has a merge queue of its own, the queue makes the PR current and no sync is needed. Either way do NOT disarm and re-arm: disarming makes the next check find the PR disarmed, and this hook then merges origin/main. If the PR is based on main (a merge-queue repo): no sync is needed, the queue makes the PR current itself and a resync push restarts every required check for nothing. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md (\u0027Armed and green but never enqueued\u0027). For a main-based PR keep polling for MERGED: the Phase 7 poll\u0027s expiry fallback is the sanctioned sync, and only for a main-based PR, if you truly need a hand sync, disarm first (gh pr merge " + $n + " --disable-auto), sync, then re-arm. A --admin merge bypasses the queue and lands the head as pushed, so a not-up-to-date refusal there is real: gate it with plugins/soleur/scripts/admin-merge-ready.sh.")
           }
         }'
         exit 0
       elif [[ "$_qw_verdict" != "proceed" ]]; then
         headless_or_stderr warn "merge-queue wait check failed (cause=queue_wait_unreadable) for PR #$PR_HEAD_NUMBER — proceeding with the origin/main sync; if the PR is waiting on the queue, the push restarts its required checks"
-        _Q_NOTE="${_Q_NOTE} Merge-queue wait check unreadable (cause=queue_wait_unreadable) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if the PR were not waiting on the queue; if it was, that push restarted its required checks. Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-wait."
+        _Q_NOTE="${_Q_NOTE} Merge-queue wait check unreadable (cause=queue_wait_unreadable) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if the PR were not waiting on the queue; if it was, that push restarted its required checks, and if the PR is not based on main that merge of origin/main was the wrong base (gh pr view $PR_HEAD_NUMBER --json baseRefName). Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-wait."
       fi
     fi
   fi
