@@ -20,7 +20,6 @@
 .claude/hooks/devin-matcher-parity.test.sh	plugins/soleur/hooks/stop-hook.sh
 .claude/hooks/git-commit-secret-scan.test.sh	.gitattributes
 .claude/hooks/git-commit-secret-scan.test.sh	knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md
-.claude/hooks/git-commit-secret-scan.test.sh	plugins/soleur/hooks/lib/shell-argv.pl
 .claude/hooks/git-commit-secret-scan.test.sh	plugins/soleur/scripts/lib/session-state.sh
 .claude/hooks/git-commit-secret-scan.test.sh	plugins/soleur/scripts/lib/wrapper-boundary.sh
 .claude/hooks/git-commit-secret-scan.test.sh	scripts/lib/rule-metrics-constants.sh
