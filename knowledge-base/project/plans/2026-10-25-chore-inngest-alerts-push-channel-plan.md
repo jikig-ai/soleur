@@ -224,7 +224,7 @@ in_transit:
 
 ### Engineering
 
-**Status:** reviewed (inline — no Task/subagent surface in this harness; Devin subagent, inline-fallback per the PR #9699/#11001 precedent)
+**Status:** reviewed (inline — no Task/subagent surface in this harness; Devin subagent, inline-fallback per the PR #9699 precedent — #11001's merge commit records `Reviewed-Coverage: full 10/10 agents`, not inline-fallback)
 **Assessment:** Minimal architectural implication — a channel-attribute flip on three existing resources with three live same-plan precedents (app_health #9168; inngest_prd/inngest_consumer #11001). No new substrate, no trust boundary, no ADR needed (alert-notification posture direction is already tracked under #7662). The apply-as-measurement convention bounds the vendor unknown to a loud apply failure + one-line revert.
 
 ### Operations
