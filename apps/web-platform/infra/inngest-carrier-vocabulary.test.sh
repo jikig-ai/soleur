@@ -117,12 +117,13 @@ derive_carriers() {
 
 # scan_file <abs-path> <rel> <vocab:0|1> -> prints VIOLATION lines for one file; returns the number of findings.
 scan_file() {
-  local f="$1" rel="$2" vocab="$3" n=0 hits
+  local f="$1" rel="$2" vocab="$3" n=0 hits stripped
   if [[ "$vocab" == 1 ]]; then
     hits="$(grep -noF -f <(printf '%s\n' "${NEEDLES[@]}") -- "$f" | head -3 | tr '\n' ' ')"
     if [[ -n "$hits" ]]; then printf 'VIOLATION vocabulary %s: %s\n' "$rel" "$hits"; n=$((n + 1)); fi
   fi
-  if strip_comments "$f" | grep -qF -f <(printf '%s\n' "${TRIO_STEMS[@]}"); then
+  stripped="$(strip_comments "$f")"   # captured, then matched via a here-string: a pipe into an early-exit grep can read a match as a miss under pipefail
+  if grep -qF -f <(printf '%s\n' "${TRIO_STEMS[@]}") <<<"$stripped"; then
     printf 'VIOLATION trio-named %s\n' "$rel"; n=$((n + 1))
   fi
   return "$n"
