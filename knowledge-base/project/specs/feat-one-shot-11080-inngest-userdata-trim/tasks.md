@@ -26,7 +26,7 @@ Plan: `knowledge-base/project/plans/2026-10-26-chore-trim-inngest-user-data-befo
 - [ ] 2.4 B: shorten the five untested Descriptions (nftables, bs-token-restage, provision.timer, config-refresh.service, config-refresh.timer); leave the LUKS-open and provision.service Descriptions untouched; expected 528 B
 - [ ] 2.5 C: cut the four logger message tails to marker + fields + `#7228`, moving the prose into whole-line `#` comments above each line with no `${` or `%{` in them; expected 800 B
 - [ ] 2.6 Confirm the headroom is at least 780 B (`jq -e '.headroom >= 780'`); if short, re-measure after the rebase; blank-line removal (about 90 B) closes a shortfall of up to about 90 B only; if C had to be reverted the floor is not reachable here, so stop and re-ask the CTO (note P4)
-- [ ] 2.7 Runbook sync: `knowledge-base/engineering/operations/runbooks/inngest-server.md` marker rows say what the removed tails said (add only if missing)
+- [ ] 2.7 Runbook sync (unconditional): in `knowledge-base/engineering/operations/runbooks/inngest-server.md` add the `reason=` sub-table under the `BOOT_TRACE_LOST` row and a `BS_TOKEN_RESTAGE_FAILED drc=` row carrying the moved diagnosis (curl rc map, token-file-empty consequence); AC10a
 
 ## Phase 3: Verification (one suite at a time)
 
@@ -39,4 +39,4 @@ Plan: `knowledge-base/project/plans/2026-10-26-chore-trim-inngest-user-data-befo
 
 - [ ] 4.1 PR body: baseline and per-step headroom, the CI log line of `inngest-userdata-budget`, the web-redeploy notice, the "PR-time plan shows the host as replaced, known drift" sentence, the Better Stack alert-definitions gap, `Closes #11080`, `Ref #11140`, `Ref #10390`, `Ref #10112`, `Ref #10975`
 - [ ] 4.2 Pre-merge gate: parity green on the trial merge; no `ZIREF` or `IREF` line changed; headroom at least 780 B on the rebased branch; CI budget job green
-- [ ] 4.3 After merge: read the push-apply run for the merge sha (success, no `hcloud_server.inngest` in plan or refresh, 0 changes) and the Better Stack no-new-boot check with the window starting before the merge; attach both to the PR; on any deviation file an `action-required` issue and stop
+- [ ] 4.3 After merge: read the push-apply run for the merge sha (success, no `hcloud_server.inngest` in plan or refresh, 0 changes) and the Better Stack check (no `provision-unit-armed` row with a new `iid=` after the merge, plus a liveness control, window starting before the merge); attach both to the PR; on any deviation file an `action-required` issue and stop

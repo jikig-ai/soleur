@@ -124,7 +124,7 @@ One edit file plus two test files, in this order (tests first, per `cq-write-fai
    - A3: delete the `printf 'INNGEST_LUKS_ADDITIVE_VOLUME_ID=...' > /etc/default/inngest-luks-volumes` line and its `grep -qx` assertion, and the comment above them (it justifies the file for the retired cutover service). Keep `luks_emit luks_key_stage 0 n/a staged`.
    - B: shorten the Descriptions of `inngest-nftables.service`, `inngest-bs-token-restage.service`, `soleur-inngest-provision.timer`, `inngest-config-refresh.service` and `inngest-config-refresh.timer`. Candidate texts (re-measured at work time): "Inngest nftables scoping (SEC-H2)", "Re-stage the boot-trace token (#7228)", "Re-enter provisioning until it succeeds once (#8562)", "Apply the signed inngest config bundle (#6780)", "Fire inngest-config-refresh every 60 s (#6780)". The Descriptions of `inngest-luks-open.service` (quoted by `inngest-redis-luks.test.sh`) and `soleur-inngest-provision.service` (quoted by `scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh`) stay untouched. Re-grep the five old strings across `*.test.*` immediately before editing.
    - C: in `inngest-boot-phone-home.sh` the three `SOLEUR_INNGEST_BOOT_TRACE_LOST` messages end at `reason=token-file-missing path=$tok_file #7228`, `reason=token-file-empty path=$tok_file #7228` and `reason=post-failed rc=$crc #7228`; in `inngest-bs-token-restage.sh` the failure message ends at `drc=$drc #7228`. The removed sentences go into `# ` comment lines directly above each `logger` line, with no `${` or `%{` sequence in them (templatefile reads comments too).
-   - Runbook sync: `knowledge-base/engineering/operations/runbooks/inngest-server.md` already tabulates the two markers; confirm the table row says what the removed tails said (channel dead for that stage; token file missing, empty or POST failed; curl rc classes), and add it there if not.
+   - Runbook sync (unconditional, found by the deepen-pass observability review): the runbook has one `SOLEUR_INNGEST_BOOT_TRACE_LOST` row and nothing on `SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED`, and the comment lines are stripped from the render, so the cut tails would leave this diagnosis nowhere an operator can read it. Add a `reason=` sub-table under the `BOOT_TRACE_LOST` row (`token-file-missing`: expected after a reboot if the per-boot restage unit did not run, `/run` is tmpfs and cloud-init runcmd is first-boot only; `token-file-empty`; `post-failed rc=`: curl rc 6/7 egress, 22 revoked token, 28 timeout, 35/60 TLS) and a new `BS_TOKEN_RESTAGE_FAILED drc=` row (`drc=124` is the `timeout 20`; other values are doppler exit codes; consequence: `/run/inngest-bs-logs-token` is empty for the boot and every `SOLEUR_INNGEST_BOOT_STAGE` marker is lost; pointer to the restage unit).
 4. **Measure and gate** (see Acceptance Criteria), then run the suites one at a time.
 
 Out of scope, with reasons in the Cut List: any LUKS first-boot logic, `infra-config-install.sh`, `cosign-trusted-root.json`, `inngest-host.tf`, the strip regex, image changes, the `--min-headroom` floor, the keeper trio.
@@ -135,7 +135,7 @@ What the push apply does when a `user_data` edit would replace `hcloud_server.in
 
 Pre-merge gate (all must hold at merge time, on the rebased branch): AC1 (headroom), AC2 (no `ZIREF` or `IREF` line touched), AC8 (parity green on the trial merge, diff scope) and AC9 (the CI job `inngest-userdata-budget` is green and its log line is quoted in the PR body next to the offline figure).
 
-Post-merge read, agent-run, no host contact: the push-apply run for the merge sha concludes success, its log has no `hcloud_server.inngest` in plan or refresh, and the plan is 0 changes (`gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha>` then `gh run view <id> --log`, grep for the address). Better Stack check for "nothing was replaced": no new `boot_id` or boot row for `host=soleur-inngest` after the merge time, with the query window starting before the merge and the phone-home cadence stated in the PR evidence. No Doppler, Hetzner or SSH read.
+Post-merge read, agent-run, no host contact: the push-apply run for the merge sha concludes success, its log has no `hcloud_server.inngest` in plan or refresh, and the plan is 0 changes (`gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha>` then `gh run view <id> --log`, grep for the address). Better Stack check for "nothing was replaced" (AC12): no `provision-unit-armed` row with a new `iid=` for `host=soleur-inngest` after the merge time, with the query window starting before the merge and a liveness control query in the PR evidence. No Doppler, Hetzner or SSH read.
 
 Flip conditions (switch to the marker, as a branch-commit body line, and re-ask): the trial-merge plan of the push path lists `hcloud_server.inngest`; parity is red; a `ZIREF` or `IREF` line changed; a push apply in the previous 24 hours had a non-zero outcome on an Inngest-referencing resource. If the post-merge read shows anything other than 0 changes: stop, file an `action-required` issue naming the action, do not retry and do not dispatch.
 
@@ -163,16 +163,16 @@ error_reporting:
 
 failure_modes:
   - mode: the trim leaves the template unrenderable or the cloud-config invalid
-    detection: the budget script exits 2 (RENDER FAILED) and the validate job's cloud-init schema check fails on the PR
+    detection: the workflow run log of the infra-validation jobs - the budget script exits 2 (RENDER FAILED) and the validate job's cloud-init schema check fails on the PR
     alert_route: red infra-validation checks on the PR, email on a red push to main
   - mode: headroom regresses below the floor after a rebase or a concurrent edit to the file
-    detection: AC1's jq gate fails on the branch and the budget script prints the new headroom in the CI log
+    detection: AC1's jq gate fails on the branch and the budget script prints the new headroom in the workflow run log (::error:: on over-cap)
     alert_route: the PR cannot be marked ready; a later push to main that goes over the cap exits 1 and emails ops
   - mode: a trimmed host script or unit misbehaves on a future replace
-    detection: the provision-unit suite (rendered-script execution and the systemd container tier) and the boot-emitter suite before merge; after a later authorized replace the Better Stack boot-stage rows provision-unit-armed and bootstrap-done for the new host
+    detection: the provision-unit suite (rendered-script execution and the systemd container tier) and the boot-emitter suite before merge; after a later authorized replace the Better Stack rows (journald source via the vector Source 4 allowlist, SYSLOG_IDENTIFIER-isolated) for provision-unit-armed and bootstrap-done on the new host
     alert_route: red suites on the PR; Better Stack boot-trace rows and the existing heartbeat-miss alert for the host
   - mode: the merge apply plans or touches hcloud_server.inngest
-    detection: terraform-target-parity pre-merge, then the apply run log read after merge (address absent, 0 changes), and no new boot row in Better Stack
+    detection: terraform-target-parity pre-merge, then the workflow run log of the push apply read after merge (address absent, 0 changes), and no new provision-unit-armed row for a new iid in Better Stack
     alert_route: the destroy-guard HALT turns the apply run red and emails ops; an action-required issue is filed by the post-merge read
 
 logs:
@@ -182,6 +182,7 @@ logs:
 discoverability_test:
   command: bash apps/web-platform/infra/inngest-userdata-budget.sh --json
   expected_output: headroom
+  credentials_required: "terraform binary, not a credential - the templatefile() and base64gzip() render has no allowlisted unauthenticated substitute and the terraform binary is absent from preflight Check 10's sandbox PATH, so Check 10 records SKIP-DECLARED; the real gate is the CI job inngest-userdata-budget and AC1 run locally"
 ```
 
 ## Infrastructure (IaC)
@@ -286,13 +287,13 @@ Related open work: #11140 (leftovers from the trio retirement) item 7 is the STA
 | C: move log-message prose into stripped comments | "content that could move into the image or the render-stripped prose region" | asked |
 | Guard 3 extension to the template | - | inferred - justification: ruled by the CTO (R3); without it change A regresses silently, and the test header already promises it |
 | Quiesce battery adaptation | "prove behavior-neutrality with the existing suites" | asked |
-| Runbook table sync | - | inferred - justification: the removed tails documented operator-facing diagnosis; the runbook row must still say it (one table row) |
+| Runbook table sync | - | inferred - justification: the removed tails are the only readable home of operator-facing diagnosis (curl rc map, token-file-empty consequence); the runbook must carry it once the render drops the prose |
 | Tracking issue for the deferred `--min-headroom` floor | - | inferred - justification: `wg-when-deferring-a-capability-create-a` and ruling R3 |
 
 ### Split Assessment
 
 - Subsystems touched: 1 - `apps/web-platform/infra` (template, two test files) plus one runbook row
-- Planned files: 4 edited (template, two tests, runbook) | Estimated changed lines: about 120
+- Planned files: 4 edited (template, two tests, runbook) | Estimated changed lines: about 140
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -301,7 +302,7 @@ Related open work: #11140 (leftovers from the trio retirement) item 7 is the STA
 - `apps/web-platform/infra/cloud-init-inngest.yml` (A1, A2, A3, B x5, C x4)
 - `apps/web-platform/infra/inngest-carrier-vocabulary.test.sh` (Guard 1)
 - `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` (quiesce battery adaptation)
-- `knowledge-base/engineering/operations/runbooks/inngest-server.md` (marker rows, only if the tails' content is missing)
+- `knowledge-base/engineering/operations/runbooks/inngest-server.md` (marker rows, unconditional: the cut tails are the only place this diagnosis lives today)
 
 ## Files to Create
 
@@ -347,12 +348,13 @@ PR body carries: the baseline and per-step headroom, the CI log line of the budg
 - [ ] AC7: the moved prose lives in whole-line `#` comments and no `${` or `%{` sequence was introduced in them: `git diff origin/main -- apps/web-platform/infra/cloud-init-inngest.yml | grep -E '^\+[[:space:]]*#' | grep -cE '\$\{|%\{'` prints 0; `templatefile-bare-dollar-guard.test.sh` passes.
 - [ ] AC8: `git diff origin/main --name-only` lists only the files in "Files to Edit" plus the planning artifacts and the archived-plan moves the pipeline makes (diff-scope AC: none of `inngest-host.tf`, `infra-config-install.sh`, `cosign-trusted-root.json`, `server.tf`, `hooks.json.tmpl` or any `.github/workflows/*` file appears), and `terraform-target-parity.test.ts` is green on the trial merge.
 - [ ] AC9: the CI job `inngest-userdata-budget` is green on the PR, and the PR body quotes both the offline figures and that job's log line; the PR body contains the web-redeploy notice, the statement that the PR-time plan shows the host as replaced as known drift, the Better Stack alert-definitions gap, and no claim that the host was probed.
+- [ ] AC10a: the runbook carries the moved diagnosis: `grep -c 'BS_TOKEN_RESTAGE_FAILED' knowledge-base/engineering/operations/runbooks/inngest-server.md` prints at least 1 (it prints 0 on main), and the same file contains the strings `token-file-missing`, `token-file-empty`, `post-failed` and the curl rc map `6/7`.
 - [ ] AC10: the deferral of the `--min-headroom 300` floor has a tracking issue (item in #11140 or a new issue) referenced in the PR body, filed before the PR is marked ready.
 
 ### Post-merge (automated read, no host contact)
 
 - [ ] AC11: the push-apply run for the merge sha concludes `success`, its log has no `hcloud_server.inngest` in plan or refresh, and the plan reads 0 changes; the run URL is attached to the PR.
-- [ ] AC12: Better Stack shows no new boot row or `boot_id` for `host=soleur-inngest` after the merge time and the heartbeat continues; the query window starts before the merge and the phone-home cadence is stated. If AC11 or AC12 fails, an `action-required` issue is filed and nothing is dispatched or retried.
+- [ ] AC12 (corroboration only; AC11's apply log is the authoritative proof): `scripts/betterstack-query.sh --since <a time before the merge> --grep provision-unit-armed` and `--grep inngest-bs-token-restage` (the runbook's double `fromjson?` decode, isolated on `.host == "soleur-inngest"`) show no `provision-unit-armed` row carrying a new `iid=` after the merge time (a plain reboot emits a RESTAGED row but keeps the `iid`, so only a new `iid` means a replace), and a liveness control (`--grep inngest- --limit 20`) shows rows after the merge; the hot window is short, the query includes the archive arm. If AC11 or AC12 fails, an `action-required` issue is filed and nothing is dispatched or retried.
 
 ## Domain Review
 
