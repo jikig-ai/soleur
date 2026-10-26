@@ -35,4 +35,7 @@ declared-bin-escapes	refuse	refuse	no	declared bin.pen resolves outside the pack
 pencil-bin-only	refuse	refuse	no	only .bin/pencil exists: the pencil name is never accepted
 bin-missing	refuse	refuse	no	package present, no .bin entry
 bin-points-at-legacy	refuse	refuse	yes	.bin/pen links into the deprecated engine
+package-json-unreadable	refuse	refuse	no	package.json cannot be read
+declared-bin-nonexistent	refuse	refuse	no	package.json declares a pen bin that does not exist
+declared-bin-is-directory	refuse	refuse	no	the declared bin.pen target is a directory, not a file
 path-pen-only	refuse	refuse	no	foreign pen on PATH, nothing installed: no PATH fallback

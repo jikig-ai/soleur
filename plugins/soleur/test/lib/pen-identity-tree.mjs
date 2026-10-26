@@ -24,6 +24,7 @@ import {
   chmodSync,
   copyFileSync,
   mkdirSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -147,6 +148,23 @@ export const LAYOUTS = {
     writePackage(pkgDir, opts);
     writeLegacy(home);
     link("../../../../node_modules/@pencil.dev/cli/dist/index.cjs", join(bin, "pen"));
+  },
+  // package.json cannot be read (a directory stands in its place: unreadable whatever the uid)
+  "package-json-unreadable"({ pkgDir, bin, opts }) {
+    writePackage(pkgDir, opts);
+    rmSync(join(pkgDir, "package.json"));
+    mkdirSync(join(pkgDir, "package.json"));
+    link("../@pen.dev/cli/dist/index.mjs", join(bin, "pen"));
+  },
+  // package.json declares a pen bin that does not exist, while .bin/pen links to a real file in the package
+  "declared-bin-nonexistent"({ pkgDir, bin, opts }) {
+    writePackage(pkgDir, { ...opts, bin: { pen: "dist/missing.mjs" } });
+    link("../@pen.dev/cli/dist/index.mjs", join(bin, "pen"));
+  },
+  // the declared bin.pen target is a directory inside the package, and .bin/pen links to it
+  "declared-bin-is-directory"({ pkgDir, bin, opts }) {
+    writePackage(pkgDir, { ...opts, bin: { pen: "dist" } });
+    link("../@pen.dev/cli/dist", join(bin, "pen"));
   },
   // nothing installed; a foreign `pen` is on PATH (<home>/fakebin is prepended by the runner)
   "path-pen-only"({ home }) {
