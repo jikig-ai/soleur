@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { NavLink } from "@/components/ui/nav-link";
+import { formatAgo } from "@/lib/egress-audit/summary";
 import { usePendingAction } from "@/hooks/use-pending-action";
 
 /**
@@ -20,15 +23,32 @@ import { usePendingAction } from "@/hooks/use-pending-action";
  * toggle's member treatment — rather than hiding the card, so members can
  * see whether the workspace runs agents with open egress.
  */
+const RECORDING_NOTICE =
+  "Hosts your agents contact are recorded as best-effort summary counts (host, allowed or blocked, number of requests) for about 30 days. Every current member of this workspace can view them, including activity from before they joined. No member or session is recorded, some entries may be missing, and counts are minimums. Turning web access off stops new records but does not delete existing ones.";
+// Shown when the collection state could not be determined (org lookup or flag read failed): an outage
+// must never hide the disclosure from the owner who is about to enable web access.
+const RECORDING_NOTICE_GENERIC = "Activity may be recorded and visible to members of this workspace.";
+
 export function WebEgressToggle({
   initialWebEgress,
   isOwner,
+  lastRequestAt = null,
+  collection = false,
 }: {
   initialWebEgress: boolean;
   isOwner: boolean;
+  /** ISO time of the newest recorded request, or null (none, or the read failed and the hint is hidden). */
+  lastRequestAt?: string | null;
+  /** Whether egress audit collection is on for this workspace's org; "unknown" when it could not be read. */
+  collection?: boolean | "unknown";
 }) {
   const [webEgress, setWebEgress] = useState(initialWebEgress);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Relative time is rendered after mount so server and client markup never disagree about "now".
+  const [ago, setAgo] = useState<string | null>(null);
+  useEffect(() => {
+    setAgo(lastRequestAt ? formatAgo(lastRequestAt) : null);
+  }, [lastRequestAt]);
 
   // asyncFn never throws: failure surfaces are the window.alert paths below.
   const { run: persist, pending: loading } = usePendingAction(
@@ -99,9 +119,32 @@ export function WebEgressToggle({
           {/* The wireframe's "Widens the security boundary" risk callout is
               rendered by the SECTION (scope-grants/page.tsx), not this
               toggle — unconditional, since a member viewing the locked
-              state sees the same warning. The "View egress audit log"
-              affordance is deferred to #9545 (no queryable store in Phase
-              A). */}
+              state sees the same warning. */}
+          {!webEgress && lastRequestAt && (
+            <span className="text-xs text-soleur-text-muted">
+              Existing records stay visible to members until deleted about 30
+              days after they were recorded.
+            </span>
+          )}
+          {!isOwner && collection === true && (
+            <span className="text-xs text-soleur-text-muted">
+              Egress is recorded and visible to members of this workspace.
+            </span>
+          )}
+          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+            <NavLink
+              href="/dashboard/settings/scope-grants/egress-audit"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-soleur-accent-gold-fg"
+            >
+              View egress audit log
+              <ArrowRight aria-hidden="true" className="h-3 w-3" />
+            </NavLink>
+            {ago && (
+              <span className="text-xs text-soleur-text-muted">
+                Last recorded request: {ago}
+              </span>
+            )}
+          </div>
         </div>
         <button
           type="button"
@@ -139,8 +182,17 @@ export function WebEgressToggle({
             data to external hosts if compromised or prompt-injected.
             Sandboxed commands run without stored credentials while this is
             on — agents can't push to git remotes or use stored API keys.
-            Every outbound request is logged with workspace attribution.
           </p>
+          {collection === true && (
+            <p className="text-xs text-soleur-text-secondary">
+              {RECORDING_NOTICE}
+            </p>
+          )}
+          {collection === "unknown" && (
+            <p className="text-xs text-soleur-text-secondary">
+              {RECORDING_NOTICE_GENERIC}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button
               variant="outlined"
