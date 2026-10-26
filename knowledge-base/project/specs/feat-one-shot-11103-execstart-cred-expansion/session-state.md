@@ -35,6 +35,6 @@ Suite results: doppler-injection-bound 71/71 (MIN_ASSERTIONS 59->71); inngest.te
 
 AC9 verified: grep -c 'bash -c' inngest-redis.service = 0; rendered server unit ExecStart carries no $/bash -c.
 
-Notable: #7286 lockstep selector widened ExecStart->Exec(Start|StartPre|StartPost) (doppler call moved to ExecStartPre — same hazard class). Scanner's @@-fragment resolution is quote-aware (single-quoted full scan; double-quoted only backslash-literal \$) — avoids the SDK_URL="${SDK_URL:-...}" render-time-default false positive. INNGEST_REDIS_ACL_FILE is a test-only override seam (masked by --only-secrets in prod).
+Notable: #7286 lockstep selector widened ExecStart->Exec(Start|StartPre|StartPost) (doppler call moved to ExecStartPre — same hazard class). Scanner's @@-fragment resolution is quote-aware (single-quoted full scan; double-quoted only backslash-literal \$) — avoids the SDK_URL="${SDK_URL:-...}" render-time-default false positive. INNGEST_REDIS_ACL_FILE is a test-only override seam (--only-secrets injects only the password; nothing writes it to the env file, and a stray ambient value is confined by ReadWritePaths=/mnt/data/redis).
 
-Commits: 9cfa25769b (tests), d211a1488b (source). Not pushed.
+Commits: 9cfa25769b (tests), d211a1488b (source), b9e8a10aa7 (docs). Pushed to the PR head (b9e8a10aa7).
