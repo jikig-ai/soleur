@@ -3051,9 +3051,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_VERSION_BANNER_HOOK_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# (#10793) plus the target-resolution lib the hook sources and the shell lexer that lib runs.
 AFFECTED_CLAUDE_HOOKS_BRAND_HEX_COMMIT_GATE_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  ".claude/hooks/lib/commit-target-roots.sh"
   ".claude/hooks/lib/incidents.sh"
+  "plugins/soleur/hooks/lib/shell-argv.pl"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 # (#10696) the closure leaf libs, plus the hook, the two libs it sources, the shell lexer and the gitleaks config the suite drives.
