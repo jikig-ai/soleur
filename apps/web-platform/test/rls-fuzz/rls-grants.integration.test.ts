@@ -85,7 +85,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — api-role grant coverage (local, ca
       select count(*)::int as bad,
              coalesce(string_agg(distinct offender, ', '), '') as offenders
       from (
-        select own.rolname || '.' || d.defaclobjtype || ' -> '
+        select own.rolname || '.' || d.defaclobjtype::text || ' -> '
                || coalesce(g.rolname, 'PUBLIC') || ' ' || a.privilege_type as offender
         from pg_default_acl d
         join pg_roles own on own.oid = d.defaclrole
