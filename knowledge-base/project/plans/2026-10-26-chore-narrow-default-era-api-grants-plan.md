@@ -15,6 +15,23 @@ requires_cpo_signoff: true
 
 # chore(supabase): narrow default-era api-role table grants (audit list from 174 snapshot)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26 (same-session deepen pass)
+**Gate results:** 4.6 User-Brand Impact — pass (threshold `single-user incident`, matching ADR-303's declared threshold for this surface); 4.7 Observability — pass (`rg`-verb local probe, literal expected_output); 4.10 Encryption Posture — pass (no new store/connection; declared for touched surfaces); 4.11 Guard Contract — pass (`lint-guard-contract.py` clean, 1 guard entry, 6-row matrix incl. own-dispatch + order + must-PASS rows); 4.12 Scope Check — pass (exactly one unfenced section, all asks mapped, inferred items justified); 4.13 Task Design — N/A (no new autonomous-task surface); 4.5 network / 4.55 downtime / 4.8 PAT / 4.9 wireframe — all no-trigger.
+**Fan-out disclosure:** no agent-spawn capability on this harness — per-section research agents, review agents, and the 4.45 verify-the-negative/post-edit passes were executed inline in this process; the negative claims were re-verified by direct grep (see below) rather than by subagent.
+
+### Precedent-diff (4.4)
+
+Prescribed pattern: `DO $$ BEGIN IF to_regclass('public."<rel>"') IS NOT NULL THEN REVOKE … [re-GRANT …] END IF; END $$;` + `check_name`/`bad` verify + `OVERRIDES` registry entries. Precedent: `migrations/175_tom4_shape_iv_client_grant_revokes.sql` + `verify/175_*.sql` + `table-grants.ts` OVERRIDES block — grepped and read verbatim at plan time. **Divergences from precedent, deliberate:** (a) 175 revoked with zero re-grants (shape-iv tables need nothing for client roles); 178 re-grants `SELECT` to `authenticated` on four live-read relations and column-level `UPDATE` on `users` — the REVOKE-ALL-then-re-GRANT ordering inside each block is pinned by Guard Contract matrix row 5; (b) 178 adds an `INTERNAL`-kind OVERRIDES entry (`_schema_migrations`), a shape 175's OVERRIDES block did not use — mechanism verified against `buildRegistry()`'s collision rule (INTERNAL map throws; OVERRIDES replaces). All other conventions (to_regclass guards, down-file restoring prior verb sets, verify contract, provenance strings) are 1:1 with the precedent.
+
+### Verify-the-negative (4.45)
+
+- "`flag_flip_audit` has no client readers" — `git grep -n "\.from(.flag_flip_audit.\)" apps/web-platform/{app,server,lib,hooks}` → 0 hits (writes only via `audit_flag_flip` definer RPC, confirmed 071).
+- "`_schema_migrations` has no api-role client" — same grep → 0 `.from()` hits; all readers are `psql $DATABASE_URL` scripts (run-migrations.sh, dev-ledger-parity*, preflight-schema-vs-ledger). **Flagged residual:** the Phase-1 task re-runs this census before choosing INTERNAL vs service_role-only — a negative claim gated on implementation-time re-proof, not assumed.
+- "No INSERT/DELETE policies on `users` for client roles" — policy census: `001` carries only "Users can read own profile" (SELECT) + "Users can update own profile" (UPDATE); migration 054's own comment verifies no INSERT grant path to anon/authenticated. `handle_new_user` trigger (001, definer-context) owns row creation.
+- "No anon consumer of `users`" — middleware's `users` select sits after the `!user → /login` redirect (middleware.ts:707+); identity.ts selects post-auth-check; `(auth)/callback` uses serviceClient.
+
 ## Overview
 
 Migration `174_api_data_grants_snapshot.sql` (merged PR #11180, ADR-303) reproduced prd's *effective* api-role privileges verbatim so fresh replays match prd after the 2026-10-30 Supabase grant-defaults flip. Issue #11193 is the deferred narrowing pass ADR-303 §Consequences names explicitly: several relations still hold default-era grants they never needed. This plan revokes them per-relation against two evidence criteria — (a) does any supabase-js/PostgREST client path read or write the relation as `anon`/`authenticated`, and (b) does any SECURITY DEFINER RPC require the base-table grant — then encodes the intended posture in `test/rls-fuzz/table-grants.ts` OVERRIDES so the live-catalog fuzz gate keeps asserting it.
