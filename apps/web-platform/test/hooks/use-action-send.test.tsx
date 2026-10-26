@@ -1,0 +1,198 @@
+/**
+ * #10543 — useActionSend: client handling of the new send-route contract.
+ *
+ * Both entry points (`onSend`, and `onConfirmTyped` once the typed-confirm modal is open) must handle:
+ *   503 enqueue_unavailable            → approval saved, retry copy, NOT acknowledged, NOT archived, modal stays open
+ *   409 approval_expired / not_a_draft → "can no longer run" (the route archived the draft; refresh clears the card)
+ *   409 draft_changed_since_approval   → restore-or-refresh copy, nothing acknowledged
+ *   409 send_in_progress               → "another send is in progress", never acknowledges or archives
+ *   403 with no denyReasonCopy entry   → generic "Permissions changed" copy
+ * and the confirm path adopts the fresh draft hash from a 409 requires_confirmation so a retype does not loop.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act, waitFor } from "@testing-library/react";
+
+vi.mock("@/lib/client-observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
+
+import { useActionSend } from "@/hooks/use-action-send";
+
+const ORIGINAL_FETCH = globalThis.fetch;
+
+let responses: Array<{ status: number; body: Record<string, unknown> }> = [];
+
+beforeEach(() => {
+  responses = [];
+  globalThis.fetch = vi.fn(async () => {
+    const next = responses.shift() ?? { status: 200, body: {} };
+    return new Response(JSON.stringify(next.body), {
+      status: next.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+});
+
+afterEach(() => {
+  globalThis.fetch = ORIGINAL_FETCH;
+});
+
+const COPY_503 =
+  "Your approval is saved, but we couldn't start the agent. Click Send again to retry.";
+const COPY_NO_LONGER = "This approval can no longer run. Refresh to update this card.";
+const COPY_CHANGED =
+  "This draft changed after you approved it. Restore the approved text or refresh.";
+const COPY_IN_PROGRESS = "Another send is in progress - try again in a moment";
+const COPY_PERMISSIONS =
+  "Permissions changed since you approved. This action can't run.";
+
+function setup() {
+  const onAcknowledgedArchive = vi.fn();
+  const hook = renderHook(() =>
+    useActionSend({ messageId: "msg-1", onAcknowledgedArchive }),
+  );
+  return { ...hook, onAcknowledgedArchive };
+}
+
+/** Drive onSend to a 409 requires_confirmation so the confirm modal state is open. */
+async function openConfirm(
+  hook: ReturnType<typeof setup>,
+  hash = "hash-1",
+): Promise<void> {
+  responses.push({
+    status: 409,
+    body: {
+      error: "requires_confirmation",
+      action_class: "finance.payment_failed",
+      tier: "approve_every_time",
+      recipient_excerpt: "r",
+      content_excerpt: "c",
+      expected_draft_preview_hash: hash,
+      message_id: "msg-1",
+    },
+  });
+  act(() => hook.result.current.onSend());
+  await waitFor(() => expect(hook.result.current.confirming).not.toBeNull());
+}
+
+const CASES: Array<{
+  name: string;
+  status: number;
+  body: Record<string, unknown>;
+  copy: string;
+}> = [
+  {
+    name: "503 enqueue_unavailable",
+    status: 503,
+    body: { error: "enqueue_unavailable", action_send_id: "as-1", retryable: true },
+    copy: COPY_503,
+  },
+  {
+    name: "409 approval_expired",
+    status: 409,
+    body: { error: "approval_expired", message_id: "msg-1" },
+    copy: COPY_NO_LONGER,
+  },
+  {
+    name: "409 not_a_draft",
+    status: 409,
+    body: { error: "not_a_draft", status: "archived" },
+    copy: COPY_NO_LONGER,
+  },
+  {
+    name: "409 draft_changed_since_approval",
+    status: 409,
+    body: { error: "draft_changed_since_approval", message_id: "msg-1" },
+    copy: COPY_CHANGED,
+  },
+  {
+    name: "409 send_in_progress",
+    status: 409,
+    body: { error: "send_in_progress", message_id: "msg-1" },
+    copy: COPY_IN_PROGRESS,
+  },
+  {
+    name: "403 no_active_grant (no denyReasonCopy)",
+    status: 403,
+    body: { error: "no_active_grant", action_class: "x" },
+    copy: COPY_PERMISSIONS,
+  },
+];
+
+describe("onSend", () => {
+  it.each(CASES)("$name sets its copy and never acknowledges or archives", async (c) => {
+    const hook = setup();
+    responses.push({ status: c.status, body: c.body });
+
+    act(() => hook.result.current.onSend());
+    await waitFor(() => expect(hook.result.current.error).toBe(c.copy));
+
+    expect(hook.result.current.acknowledged).toBe(false);
+    expect(hook.onAcknowledgedArchive).not.toHaveBeenCalled();
+  });
+
+  it("409 already_sent stays a soft success (acknowledged + archive)", async () => {
+    const hook = setup();
+    responses.push({
+      status: 409,
+      body: { error: "already_sent", message_id: "msg-1" },
+    });
+
+    act(() => hook.result.current.onSend());
+    await waitFor(() => expect(hook.result.current.acknowledged).toBe(true));
+    expect(hook.onAcknowledgedArchive).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("onConfirmTyped", () => {
+  it.each(CASES)("$name sets its copy, keeps the modal open, and never acknowledges or archives", async (c) => {
+    const hook = setup();
+    await openConfirm(hook, "hash-1");
+    responses.push({ status: c.status, body: c.body });
+
+    act(() => hook.result.current.onConfirmTyped(true, "SEND"));
+    await waitFor(() => expect(hook.result.current.error).toBe(c.copy));
+
+    expect(hook.result.current.acknowledged).toBe(false);
+    expect(hook.onAcknowledgedArchive).not.toHaveBeenCalled();
+    expect(hook.result.current.confirming).not.toBeNull();
+    expect(hook.result.current.confirming?.expectedDraftPreviewHash).toBe(
+      "hash-1",
+    );
+  });
+
+  it("a 409 requires_confirmation adopts the fresh expected_draft_preview_hash and keeps the 're-send' copy", async () => {
+    const hook = setup();
+    await openConfirm(hook, "hash-stale");
+    responses.push({
+      status: 409,
+      body: {
+        error: "requires_confirmation",
+        expected_draft_preview_hash: "hash-fresh",
+        message_id: "msg-1",
+      },
+    });
+
+    act(() => hook.result.current.onConfirmTyped(true, "SEND"));
+    await waitFor(() =>
+      expect(hook.result.current.error).toBe(
+        "Draft changed since you confirmed — please re-send.",
+      ),
+    );
+    expect(hook.result.current.confirming?.expectedDraftPreviewHash).toBe(
+      "hash-fresh",
+    );
+  });
+
+  it("any other 409 falls through to the generic 'Send failed (409)'", async () => {
+    const hook = setup();
+    await openConfirm(hook);
+    responses.push({ status: 409, body: { error: "something_new" } });
+
+    act(() => hook.result.current.onConfirmTyped(true, "SEND"));
+    await waitFor(() =>
+      expect(hook.result.current.error).toBe("Send failed (409)"),
+    );
+  });
+});

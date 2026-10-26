@@ -16,6 +16,8 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { createHash } from "node:crypto";
 
+import { createActionSendsStore } from "../../../helpers/action-sends-row-mock";
+
 const {
   mockGetUser,
   mockFrom,
@@ -150,12 +152,6 @@ function setupMessageRow(
     ...overrides,
   };
 
-  // Chain: from(messages).select(...).eq(id).eq(user_id).maybeSingle()
-  const messageMaybeSingle = vi.fn(async () => ({ data: row, error: null }));
-  const messageEq2 = vi.fn(() => ({ maybeSingle: messageMaybeSingle }));
-  const messageEq1 = vi.fn(() => ({ eq: messageEq2 }));
-  const messageSelect = vi.fn(() => ({ eq: messageEq1 }));
-
   // Chain: from(scope_grants).select(...).eq.eq.is.order.limit.maybeSingle()
   const sgMaybeSingle = vi.fn(async () => ({
     data: { id: GRANT_ID },
@@ -168,22 +164,22 @@ function setupMessageRow(
   const sgEq1 = vi.fn(() => ({ eq: sgEq2 }));
   const sgSelect = vi.fn(() => ({ eq: sgEq1 }));
 
-  // Chain: from(messages).update(...).eq.eq()
-  const updEq2 = vi.fn(async () => ({ error: null }));
-  const updEq1 = vi.fn(() => ({ eq: updEq2 }));
-  const messageUpdate = vi.fn(() => ({ eq: updEq1 }));
+  // #10543: messages + action_sends are served by the shared stateful store
+  // (default: no action_sends row, so every case below takes the first-click
+  // path). The archive update chain is the store's, which accepts the third
+  // `.eq("status","draft")` filter the route now adds.
+  const store = createActionSendsStore({
+    message: {
+      source_ref: "",
+      ...row,
+    } as Parameters<typeof createActionSendsStore>[0]["message"],
+  });
 
   mockFrom.mockImplementation((table: string) => {
-    if (table === "messages") {
-      return {
-        select: messageSelect,
-        update: messageUpdate,
-      };
-    }
     if (table === "scope_grants") {
       return { select: sgSelect };
     }
-    return {};
+    return store.from(table);
   });
 
   return { row };
