@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 
 # #11168 / #11156 — The post-save hard gate in ux-design-lead.md step 3.2 is a
-# `node -e` snippet (Node 22.19 is guaranteed on the headless path; no `stat -c`,
-# no `jq`). This suite extracts the DOCUMENTED snippet from the agent body and runs
-# it on fixtures, so the prose cannot drift from a gate that works:
+# `node -e` snippet (no `stat -c`, no `jq`). This suite extracts the DOCUMENTED
+# snippet from the agent body and runs it on fixtures, so the prose cannot drift
+# from a gate that works:
 #   - a 96-byte empty document (the #11143 collapse shape)
-#   - an unchanged file after a REFUSED save (stale guard: bytes identical to pre-edit)
+#   - an unchanged file after a refusal (stale guard: bytes identical to pre-edit)
 #   - a valid saved file (size > 128, children >= 1, hash changed)
-#   - a valid file while a `REFUSED save:` was seen anywhere in the session
+#   - a valid file while an UNRESOLVED `REFUSED save:` / `NOT PERSISTED:` result is
+#     outstanding (the flag is 1 until open_document + a clean replay resets it to 0)
+#   - a flag that is neither 0 nor 1 (fail closed: an unset variable is not a pass)
+# The gate trusts the agent to report the flag (CTO ruling 5, ADR-304): a skipped
+# replay is undetectable from the file, which this suite does not pretend to catch.
 # pyramid-justified: none needed; unit-level shell test over documented prose.
 
 set -euo pipefail
@@ -97,6 +101,7 @@ out="$(run_gate "$UNCHANGED" "$PRE_VALID" 1)"; rc=$?
 set -e
 assert_eq "1" "$rc" "unchanged file after a refusal fails the gate"
 assert_contains "$out" "REFUSED save:" "refusal failure tells the agent to surface the REFUSED text"
+assert_contains "$out" "NOT PERSISTED:" "refusal failure names the NOT PERSISTED marker as the second unpersisted signal"
 
 # 2b. Unchanged file with NO refusal reported still fails (hash equals pre-edit).
 set +e
@@ -118,12 +123,25 @@ out="$(run_gate "$VALID" "$PRE_EMPTY" 0)"; rc=$?
 set -e
 assert_eq "0" "$rc" "valid saved file with a changed hash passes the gate"
 
-# 4. Valid file but a REFUSED save: appeared in some batch_design or save result.
+# 4. Valid file but an unresolved REFUSED save: / NOT PERSISTED: result is outstanding.
 set +e
 out="$(run_gate "$VALID" "none" 1)"; rc=$?
 set -e
-assert_eq "1" "$rc" "valid file with a REFUSED save: in the session fails the gate"
-assert_contains "$out" "REFUSED save:" "refused-session failure names REFUSED save:"
+assert_eq "1" "$rc" "valid file with an unresolved unpersisted result fails the gate"
+assert_contains "$out" "REFUSED save:" "unresolved-session failure names REFUSED save:"
+assert_contains "$out" "NOT PERSISTED:" "unresolved-session failure names NOT PERSISTED:"
+assert_contains "$out" "open_document" "unresolved-session failure names the recovery (open_document, then replay)"
+
+# 4b. Fail closed: a flag that is neither 0 nor 1 (unset, empty, typo) never passes.
+set +e
+out="$(run_gate "$VALID" "none" "")"; rc=$?
+set -e
+assert_eq "1" "$rc" "an empty REFUSED flag fails the gate (fail closed)"
+assert_contains "$out" "REFUSED" "empty-flag failure names the flag"
+set +e
+out="$(run_gate "$VALID" "none" "yes")"; rc=$?
+set -e
+assert_eq "1" "$rc" "a non-0/1 REFUSED flag fails the gate (fail closed)"
 
 # 5. Larger than 128 bytes but zero children fails on children.
 NOKIDS="$WORK/nokids.pen"
@@ -145,4 +163,17 @@ out="$(run_gate "$WORK/garbage.pen" "none" 0)"; rc=$?
 set -e
 assert_eq "1" "$rc" "unparseable file fails the gate"
 
-print_results 21
+# The prose around the gate carries the same semantics as the snippet.
+AGENT_TEXT="$(cat "$AGENT")"
+assert_contains "$AGENT_TEXT" "unresolved" "agent prose defines the flag as an unresolved unpersisted state"
+assert_contains "$AGENT_TEXT" "NOT PERSISTED:" "agent prose treats NOT PERSISTED: as unpersisted"
+assert_contains "$AGENT_TEXT" "agent-reported" "agent prose states the agent-reported residual (ruling 5)"
+if [[ "$AGENT_TEXT" == *"Node 22.19 is guaranteed"* ]]; then
+  echo "  FAIL: agent prose must not claim Node 22.19 is guaranteed"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: agent prose does not claim Node 22.19 is guaranteed"
+  PASS=$((PASS + 1))
+fi
+
+print_results 31
