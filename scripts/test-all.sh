@@ -6547,7 +6547,6 @@ if want_scripts; then
   # #9728 (ADR-276 S3): the soak probe's exit-code contract (a fake gh, an injected clock, a stub resolver and mutation
   # rows over copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/ci-draft-light-soak-9728" bash scripts/followthroughs/ci-draft-light-soak-9728.test.sh
-  run_suite "scripts/followthroughs/orphan-sweeps-relook-10972" bash scripts/followthroughs/orphan-sweeps-relook-10972.test.sh
   # (#9812) the derive cache lib and the runner's recording/dispatch instrumentation. Explicit
   # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
   # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
@@ -6560,6 +6559,10 @@ if want_scripts; then
   # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
   # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
+  # #10972: the orphan-sweeps re-look probe's exit-code contract (a curl shim that accepts one exact argv, an injected
+  # clock, mutant-justified rows for every branch that can end in 0 or 1, and an in-process plus nested proof that the
+  # verdict helpers and the final gate can fail). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/orphan-sweeps-relook-10972" bash scripts/followthroughs/orphan-sweeps-relook-10972.test.sh
 fi
 
 # Named bun-test entries — bun shard.
