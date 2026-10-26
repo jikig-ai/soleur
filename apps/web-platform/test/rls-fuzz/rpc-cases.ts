@@ -51,6 +51,8 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   get_workspace_bash_autonomous: (c) => `select get_workspace_bash_autonomous('${c.wsA}')`,
   get_workspace_debug_mode: (c) => `select get_workspace_debug_mode('${c.wsA}')`,
   get_workspace_web_egress: (c) => `select get_workspace_web_egress('${c.wsA}')`,
+  // Member-only egress audit summary (mig 177, #9545 PR2): the in-body membership check raises 42501 for tenant B.
+  get_egress_audit_summary: (c) => `select get_egress_audit_summary('${c.wsA}', 200, null)`,
   resolve_workspace_installation_id: (c) => `select resolve_workspace_installation_id('${c.wsA}')`,
   claim_repo_clone_lock: (c) => `select claim_repo_clone_lock('${c.wsA}')`,
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
