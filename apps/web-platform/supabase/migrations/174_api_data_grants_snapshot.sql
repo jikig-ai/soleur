@@ -11,22 +11,21 @@
 -- GENERATED, not hand-written. Provenance: extracted 2026-10-26 from the live
 -- prd catalog via
 --   doppler run -p soleur -c prd -- npx tsx scripts/dump-api-grants.ts
--- over aclexplode(pg_class.relacl) + aclexplode(pg_attribute.attacl) —
+-- over aclexplode(pg_class.relacl) + information_schema.column_privileges —
 -- the effective privileges for anon/authenticated/service_role on every
--- public relation (relkind r,v,m,p,f,S — PostgREST serves partitioned
--- parents and foreign tables too), emitted verbatim. Privileges carried via
+-- public relation (relkind r,v,m,S), emitted verbatim. Privileges carried via
 -- PUBLIC grants are materialized per-role. Column-level grants are emitted
 -- ONLY where table-level was deliberately revoked (workspaces.authenticated
 -- SELECT split) — a table-level GRANT would subsume and re-expose the held-back
 -- columns. Runtime audit trail: /tmp report seeds
--- test/rls-fuzz/table-grants.ts; the narrowing follow-up issue #11193 carries
--- the per-relation classification. Decision: ADR-303.
+-- test/rls-fuzz/table-grants.ts; the narrowing follow-up issue carries the
+-- per-relation classification. Decision: ADR-303.
 --
 -- KNOWN DELIBERATE SNAPSHOT WARTS (reproduced verbatim, per P1 zero-prd-change):
 --   - users carries table-level UPDATE to all api roles on prd TODAY even
 --     though migration 006 revoked it to UPDATE(email)-only — a later grant
 --     restored the table-level verb; reproducing prd exactly, narrowing is
---     tracked in the follow-up issue #11193.
+--     tracked in the follow-up issue.
 --   - _schema_migrations is created by run-migrations.sh itself, not by a
 --     migration file; it holds default-era full grants and keeps them.
 --

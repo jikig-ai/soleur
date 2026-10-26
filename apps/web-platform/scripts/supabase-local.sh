@@ -361,8 +361,9 @@ ensure_snippets_dir() {
 # alter supabase_admin's defacls, so the sweep raised mid-run, ON_ERROR_STOP
 # fired, and `start` exited 2 on a correctly-functioning stack (CI run
 # 121583902510). `supabase_admin` IS the image's superuser, so a session under
-# it can alter its own AND postgres's defacls; the docker-exec'd psql uses
-# in-container trust auth, so `-U supabase_admin` needs no password. The docs'
+# it can alter its own AND postgres's defacls; the docker-exec'd psql connects over in-container TCP with the image's
+# documented local admin password (supabase_admin/postgres) — unix-socket peer auth does
+# NOT cover this role (measured: CI job 121606494650 password-auth failure). The docs'
 # two FUNCTION statements are
 # deliberately omitted: the 10-30 flip does not change function defaults, the
 # in-schema form is inert against the built-in PUBLIC EXECUTE default
@@ -400,7 +401,7 @@ normalize_default_privileges() {
     return 2
   fi
 
-  if ! docker exec -i "$db_id" psql -U supabase_admin -d postgres --no-psqlrc -v ON_ERROR_STOP=1 <<'NORMALIZE_SQL'; then
+  if ! docker exec -i -e PGPASSWORD=postgres "$db_id" psql -h 127.0.0.1 -U supabase_admin -d postgres --no-psqlrc -v ON_ERROR_STOP=1 <<'NORMALIZE_SQL'; then
 -- Supabase's documented "Revoke default privileges" statements, verbatim in
 -- the `for role postgres` form (securing-your-api; `postgres` is the migration
 -- role). The bootstrap defacl owner on the pinned image is `supabase_admin` —
