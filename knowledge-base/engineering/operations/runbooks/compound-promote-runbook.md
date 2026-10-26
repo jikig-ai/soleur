@@ -266,6 +266,47 @@ exact-hash suppression can be evaded by citing a different subset (accepted, tra
 a **closed unmerged** one stops suppressing at 60 days from `closed_at` (at exactly 60 days it
 lapses).
 
+## The gated new-skill create arm (`allow_create`, #10550) - scaffolding
+
+Recorded 2026-10-26, ahead of the code. **Status: dark-launched, scaffolding only.** The rows below describe
+the behaviour the wiring commits of #10550 implement; until they merge, no marker carries these fields. The
+authority is ADR-092's create-only amendment of 2026-10-26 (closed six-path set, own verdict union) and the
+ADR-300 addendum of the same date.
+
+- **Reachability.** The arm runs only on a manual trigger with `data.input:"patterns"` AND
+  `data.allow_create:true` (default off). The scheduled run, a manual `corpus` run and a non-boolean
+  `allow_create` leave it absent and the run unchanged. The edit loop runs first; the arm then uses what is left
+  of the week cap (it counts all open `self-healing/auto` PRs, not a calendar week).
+- **Output.** At most ONE create per run: a DRAFT PR adding a markdown-only skill (`SKILL.md`, `PURPOSE.md`,
+  Cursor stub) plus two README counts and one ledger row, body line `CREATE (new skill)`. Never auto-merged.
+- **Preconditions for the first live fire (an operator-authorized production act, NOT performed by #10550):**
+  the evidence PRs #11230 and #11231 merged or closed (otherwise every manual fire ends `week-cap-reached` before
+  the arm); a runtime flag created through `soleur:flag-create` if the trigger-secret holder check in
+  `phase0-measurements.md` ever finds a non-operator holder; the deploy verified (`deploy-arm.sh find --wait`
+  and the served build sha equal to the merge sha); the compliance-posture dated note read.
+- **Reading a refusal.** One refusal reason, `create-refused`, with a closed `class`; Sentry mirror op
+  `create-refused` with a `class` tag. A refused create writes NO ledger row, so a pattern refused for budget or
+  scan is retried once headroom frees.
+
+| `class` | Meaning | How to read it |
+|---|---|---|
+| `week-cap` | no week-cap slot left after the edit loop | expected while any `self-healing/auto` PR is open; close or merge the open drafts |
+| `create-open` | another open PR already carries the `CREATE (new skill)` line, or the open-PR list could not be read | one open create at a time; a list failure refuses rather than guesses |
+| `index-empty` | no open pattern page to read | check `patterns_open` |
+| `input-size` | pattern index plus skill list exceeds the input ceiling | refused, never truncated; trim the index or raise the ceiling by amending the ADR |
+| `model-invalid` | the model answer did not parse into the closed schema | one call, no retry; read the Sentry event |
+| `shape` | a model string or a rendered file failed the shape allowlist, claim-word, PII or credential screen | the marker carries the field name, never the text |
+| `slug` | slug collides with a skill dir, agent name or an open PR path | choose another pattern or wait for the open PR |
+| `prefer-patch` | the nearest skill ranks in the top three by overlap and overlap is over the threshold | the marker carries rank and top-1 score (numbers); patch that skill instead |
+| `budget` | description words exceed `cap - total`, or the cap or a description could not be parsed | the marker carries `cap` and `total` (numbers); free words by trimming a description in a human PR |
+| `scan` | the scanner did not return an explicit LOW-RISK first line with exit 0 on BOTH files (HIGH-RISK, REVIEW, empty, non-zero, timeout, missing tool) | `detail` says which; a missing tool means the runner image lacks a dependency |
+| `readme-sync` | the README sync changed anything beyond digits in the two README files | a script defect; the draft is not opened |
+| `stub-drift` | the rendered Cursor stub differs from the generator's output | rerun the generator after a header change; the parity test should have caught it |
+| `persist` | the commit or PR step failed for a genuine reason | read the workflow-run log |
+
+- **Kill switch.** Stop firing manual triggers with `allow_create`; the flag is read per event and is off by
+  default, so no deploy is needed to switch the arm off. The existing opt-out in this runbook also stops it.
+
 ## Sharp edges
 
 - **`.claude/.rule-incidents.jsonl` is gitignored.** The cron CANNOT read it.
