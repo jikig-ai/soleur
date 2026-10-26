@@ -12,6 +12,21 @@ brand_survival_threshold: aggregate pattern
 
 # infra: route the scheduled-orphan-sweeps Sentry monitor (due 2026-10-27)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Agents used:** CTO (two rulings rounds), learnings-researcher, functional-discovery, DHH, Kieran, code-simplicity, security-sentinel, observability-coverage-reviewer, spec-flow-analyzer, git-history-analyzer, framework-docs-researcher.
+
+### Key improvements
+1. The detector-id fallback (apply forensics artifact) was found not to exist for a successful apply; the `plan_pr` artifact is the only tokenless source, otherwise `Blocked`.
+2. The probe was cut to a pinned 14-day window with an `ok`-count floor, exit 3 for every read failure, `NOT_BEFORE` hard-coded so the editable issue-body date is not the control, and no response body in any output.
+3. The merge gate now authenticates each slot run, carries a state record and wake arming, a pre-ready sync check against `origin/main`, and a merge-SHA-based apply read-back that tolerates cancelled-successor runs.
+
+### New considerations
+- Draft-PR CI is light; the first full battery runs after the last gate on the due date (operator-class challenge recorded in decision-challenges.md).
+- Three stale comment sites in `scheduled-terraform-drift.yml` (not two) go in the deferral issue.
+- Sentry API specifics (`per_page` max, `missed` rows listed, `timeout` counting) are unverified from public docs; the design cannot produce a false 0 from them and the scratch-tracker dry run reads them on real data.
+
 ## Overview
 
 The Sentry cron monitor `scheduled-orphan-sweeps` (Terraform label `scheduled_orphan_sweeps`, crontab `0 6,18 * * *`, margin 60 min) was created unrouted under the two-PR rule when #10952 shipped (PR #10967). Until it is bound to `sentry_alert.cron_monitor_failure`, a missed or failed check-in opens a Sentry issue that emails nobody. The aggregator job `orphan-sweeps-checkin` and the two sweeps' own failure emails are the only cover, and they share one mail key (`RESEND_API_KEY`), so they are not independent of each other. This PR is the second PR of the two-PR rule for this monitor: move the label from `local.cron_monitor_alert_unrouted` into `monitor_ids`, regenerate `alert-reference.json`, and tie off the follow-up the issue demands (the 2026-11-09 re-look).
