@@ -44,7 +44,8 @@ repo_adapter="$REPO_ROOT/plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-a
 # --- Case 1: installed adapter matches repo → no drift, exit 0 ---
 case1_dir="$tmp_dir/case1"
 mkdir -p "$case1_dir"
-cp "$repo_adapter" "$case1_dir/pencil-mcp-adapter.mjs"
+scripts_dir="$REPO_ROOT/plugins/soleur/skills/pencil-setup/scripts"
+cp "$scripts_dir"/*.mjs "$case1_dir/"
 set +e
 out=$(PENCIL_ADAPTER_INSTALL_DIR="$case1_dir" bash "$CHECK_DEPS" --check-adapter-drift 2>&1)
 rc=$?
@@ -63,6 +64,47 @@ rc=$?
 set -e
 assert_eq "3" "$rc" "drifted sha: exit 3"
 assert_contains "$out" "DRIFT" "drifted sha: prints DRIFT marker"
+
+# --- Case 2b: a stale SIBLING module next to a fresh adapter is drift too ---
+# The save sentinel and the REPL surface table are siblings; hashing only the
+# main file reported OK while the guards were stale.
+case2b_dir="$tmp_dir/case2b"
+mkdir -p "$case2b_dir"
+cp "$scripts_dir"/*.mjs "$case2b_dir/"
+echo "// stale" >> "$case2b_dir/pencil-save-gate.mjs"
+set +e
+out=$(PENCIL_ADAPTER_INSTALL_DIR="$case2b_dir" bash "$CHECK_DEPS" --check-adapter-drift 2>&1)
+rc=$?
+set -e
+assert_eq "3" "$rc" "stale sibling: exit 3"
+assert_contains "$out" "pencil-save-gate.mjs" "stale sibling: names the drifted module"
+
+# --- Case 2c: a MISSING sibling is drift ---
+case2c_dir="$tmp_dir/case2c"
+mkdir -p "$case2c_dir"
+cp "$scripts_dir"/*.mjs "$case2c_dir/"
+rm "$case2c_dir/pencil-repl-surface.mjs"
+set +e
+out=$(PENCIL_ADAPTER_INSTALL_DIR="$case2c_dir" bash "$CHECK_DEPS" --check-adapter-drift 2>&1)
+rc=$?
+set -e
+assert_eq "3" "$rc" "missing sibling: exit 3"
+assert_contains "$out" "pencil-repl-surface.mjs" "missing sibling: names the missing module"
+
+# --- Case 2c: an unparseable module list is an error, never a clean OK ---
+case2c_scripts="$tmp_dir/case2c-scripts"
+case2c_dir="$tmp_dir/case2c"
+mkdir -p "$case2c_scripts" "$case2c_dir"
+cp "$CHECK_DEPS" "$case2c_scripts/check_deps.sh"
+cp "$repo_adapter" "$case2c_scripts/pencil-mcp-adapter.mjs"
+cp "$repo_adapter" "$case2c_dir/pencil-mcp-adapter.mjs"
+echo "# no module list here" > "$case2c_scripts/copy_adapter.sh"
+set +e
+out=$(PENCIL_ADAPTER_INSTALL_DIR="$case2c_dir" bash "$case2c_scripts/check_deps.sh" --check-adapter-drift 2>&1)
+rc=$?
+set -e
+assert_eq "2" "$rc" "empty module list: exit 2"
+assert_contains "$out" "no adapter modules parsed" "empty module list: says why"
 
 # --- Case 3: --auto re-copies and then exits 0 ---
 case3_dir="$tmp_dir/case3"
