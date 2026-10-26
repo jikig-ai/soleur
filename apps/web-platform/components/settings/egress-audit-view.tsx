@@ -1,14 +1,18 @@
 import type { ReactNode } from "react";
+// <!-- anti-slop:disable TWO-ICON-LIBS reason="Single icon library (lucide-react); rule's regex fires on any single match of the supported-library list, not on multi-library usage — calibration FP per #4270" -->
 import { ArrowLeft, Ban, Check, Info, Lock, Minus, TriangleAlert } from "lucide-react";
 import { NavLink } from "@/components/ui/nav-link";
 import { EgressAuditRefreshButton } from "@/components/settings/egress-audit-refresh-button";
-import type { EgressAuditResult } from "@/server/egress-audit-read";
+import { EGRESS_AUDIT_HEADING_ID } from "@/components/settings/egress-audit-focus";
 import {
-  formatAbsolute,
+  EGRESS_AUDIT_PATH,
+  PAGE_LIMIT,
   formatAgo,
+  formatAtLeast,
   outcomeOf,
   type DecisionFilter,
   type EgressAuditPayload,
+  type EgressAuditResult,
   type Outcome,
 } from "@/lib/egress-audit/summary";
 
@@ -21,8 +25,8 @@ import {
 // words "complete", "every connection", "tamper-proof" or "sessions", and never a calendar date in a
 // retention sentence (rows expire individually; no stored date exists).
 
-const BASE = "/dashboard/settings/scope-grants/egress-audit";
-const PRIVACY_RIGHTS_URL = "https://soleur.ai/pages/legal/privacy-policy.html#data-subject-rights";
+const BASE = EGRESS_AUDIT_PATH;
+const PRIVACY_RIGHTS_URL = "https://soleur.ai/legal/privacy-policy/#data-subject-rights";
 const FILTERS: { key: DecisionFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "allowed", label: "Allowed" },
@@ -30,7 +34,16 @@ const FILTERS: { key: DecisionFilter; label: string }[] = [
   { key: "other", label: "Other" },
 ];
 const hrefFor = (f: DecisionFilter) => (f === "all" ? BASE : `${BASE}?decision=${f}`);
-const nf = (n: number) => n.toLocaleString("en-US");
+// A workspace name is user-chosen and unbounded; clip it so the subtitle can never blow out the layout.
+const NAME_MAX = 60;
+const clipName = (n: string) => (n.length > NAME_MAX ? `${n.slice(0, NAME_MAX - 1).trimEnd()}…` : n);
+
+const capitalize = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
+const CELL_BASE = "md:table-cell md:px-3.5 md:py-3";
+const CELL_NUM = `ml-3 inline-block text-xs text-soleur-text-muted md:ml-0 ${CELL_BASE} md:text-right md:text-[13px]`;
+// Below md the thead is hidden and rows stack, so each value carries its own visible label there.
+const MOBILE_LABEL = "mr-1 text-soleur-text-muted md:hidden";
 
 const OUTCOME_STYLE: Record<Outcome, { text: string; Icon: typeof Check }> = {
   Allowed: { text: "text-emerald-400", Icon: Check },
@@ -102,7 +115,7 @@ function Banner() {
     <Notice
       icon={<Info aria-hidden="true" className="h-3.5 w-3.5" />}
       lead="A best-effort summary, not a full record."
-      body="Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are kept for about 30 days, then deleted."
+      body="Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are deleted about 30 days after they were recorded."
     />
   );
 }
@@ -130,7 +143,7 @@ function Chips({ filter }: { filter: DecisionFilter }) {
         })}
       </nav>
       <p className="text-[11px] text-soleur-text-muted">
-        Other: the request was neither completed as allowed nor blocked by policy, for example because the destination returned an error.
+        Other: the request was neither allowed through nor blocked by policy, for example because the destination returned an error.
       </p>
     </div>
   );
@@ -138,73 +151,107 @@ function Chips({ filter }: { filter: DecisionFilter }) {
 
 function TimeText({ iso, now }: { iso: string; now: number }) {
   return (
-    <time dateTime={iso} title={formatAbsolute(iso)}>
+    <time dateTime={iso}>
       {formatAgo(iso, now)}
     </time>
   );
 }
 
+function Row({
+  host,
+  decision,
+  count,
+  lastSeen,
+  now,
+}: {
+  host: ReactNode;
+  decision: string;
+  count: number;
+  lastSeen: string;
+  now: number;
+}) {
+  return (
+    <tr
+      role="row"
+      className="block border-t border-soleur-border-default px-3.5 py-3 md:table-row md:px-0 md:py-0"
+    >
+      {host}
+      <td role="cell" className={`mt-1.5 inline-block ${CELL_BASE}`}>
+        <span className={MOBILE_LABEL}>Outcome</span>
+        <OutcomeLabel decision={decision} />
+      </td>
+      <td role="cell" className={`${CELL_NUM} md:text-soleur-text-primary`}>
+        <span className={MOBILE_LABEL}>Requests</span>
+        {formatAtLeast(count)}
+      </td>
+      <td role="cell" className={`${CELL_NUM} md:text-soleur-text-secondary`}>
+        <span className={MOBILE_LABEL}>Last seen</span>
+        <TimeText iso={lastSeen} now={now} />
+      </td>
+    </tr>
+  );
+}
+
 function HostTable({ data, now }: { data: EgressAuditPayload; now: number }) {
   return (
-    <table className="w-full border border-soleur-border-default bg-soleur-bg-surface-1 text-left text-[13px]">
+    <table
+      role="table"
+      className="w-full border border-soleur-border-default bg-soleur-bg-surface-1 text-left text-[13px]"
+    >
       <caption className="sr-only">Hosts your workspace's agents contacted in the last 30 days, with outcome and a minimum request count</caption>
-      <thead className="hidden bg-soleur-bg-surface-2 text-[11px] font-medium uppercase tracking-wide text-soleur-text-muted md:table-header-group">
-        <tr>
-          <th scope="col" className="px-3.5 py-2.5 font-medium">Host</th>
-          <th scope="col" className="w-28 px-3.5 py-2.5 font-medium">Outcome</th>
-          <th scope="col" className="w-36 px-3.5 py-2.5 text-right font-medium">Requests (minimum)</th>
-          <th scope="col" className="w-36 px-3.5 py-2.5 text-right font-medium">Last seen</th>
+      <thead
+        role="rowgroup"
+        className="hidden bg-soleur-bg-surface-2 text-[11px] font-medium uppercase tracking-wide text-soleur-text-muted md:table-header-group"
+      >
+        <tr role="row">
+          <th role="columnheader" scope="col" className="px-3.5 py-2.5 font-medium">Host</th>
+          <th role="columnheader" scope="col" className="w-28 px-3.5 py-2.5 font-medium">Outcome</th>
+          <th role="columnheader" scope="col" className="w-36 px-3.5 py-2.5 text-right font-medium">Requests (minimum)</th>
+          <th role="columnheader" scope="col" className="w-36 px-3.5 py-2.5 text-right font-medium">Last seen</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody role="rowgroup">
         {data.rows.map((r) => (
-          <tr
+          <Row
             key={`${r.host}|${r.decision}`}
-            className="block border-t border-soleur-border-default px-3.5 py-3 md:table-row md:px-0 md:py-0"
-          >
-            <th scope="row" className="block break-all px-0 font-medium text-soleur-text-primary md:table-cell md:px-3.5 md:py-3" title={r.host}>
-              {r.host}
-            </th>
-            <td className="mt-1.5 inline-block md:mt-0 md:table-cell md:px-3.5 md:py-3">
-              <OutcomeLabel decision={r.decision} />
-            </td>
-            <td className="ml-3 inline-block text-xs text-soleur-text-muted md:ml-0 md:table-cell md:px-3.5 md:py-3 md:text-right md:text-[13px] md:text-soleur-text-primary">
-              {`at least ${nf(r.request_count)}`}
-            </td>
-            <td className="ml-3 inline-block text-xs text-soleur-text-muted md:ml-0 md:table-cell md:px-3.5 md:py-3 md:text-right md:text-[13px] md:text-soleur-text-secondary">
-              <TimeText iso={r.last_seen} now={now} />
-            </td>
-          </tr>
+            host={
+              <th
+                role="rowheader"
+                scope="row"
+                className={`block break-all px-0 font-medium text-soleur-text-primary ${CELL_BASE}`}
+                title={r.host}
+              >
+                <span className={MOBILE_LABEL}>Host</span>
+                {r.host}
+              </th>
+            }
+            decision={r.decision}
+            count={r.request_count}
+            lastSeen={r.last_seen}
+            now={now}
+          />
         ))}
         {data.overflow.map((o) => (
-          <tr
+          <Row
             key={`overflow|${o.decision}`}
-            className="block border-t border-soleur-border-default px-3.5 py-3 md:table-row md:px-0 md:py-0"
-          >
-            <th scope="row" className="block px-0 font-normal text-soleur-text-secondary md:table-cell md:px-3.5 md:py-3">
-              <span className="inline-flex items-center gap-1.5">
+            host={
+              <th
+                role="rowheader"
+                scope="row"
+                className={`block px-0 font-normal text-soleur-text-secondary ${CELL_BASE}`}
+              >
+                <span className={MOBILE_LABEL}>Host</span>
                 Other hosts, not listed individually
-                <span
-                  tabIndex={0}
-                  role="img"
-                  aria-label="Counts are minimums and may be lower than actual activity."
-                  title="Counts are minimums and may be lower than actual activity."
-                  className="inline-flex text-soleur-text-muted"
-                >
-                  <Info aria-hidden="true" className="h-3 w-3" />
+                <span className="block text-[11px] text-soleur-text-muted">
+                  Counts are minimums and may be lower than actual activity.
                 </span>
-              </span>
-            </th>
-            <td className="mt-1.5 inline-block md:mt-0 md:table-cell md:px-3.5 md:py-3">
-              <OutcomeLabel decision={o.decision} />
-            </td>
-            <td className="ml-3 inline-block text-xs text-soleur-text-muted md:ml-0 md:table-cell md:px-3.5 md:py-3 md:text-right md:text-[13px] md:text-soleur-text-primary">
-              {`at least ${nf(o.request_count)}`}
-            </td>
-            <td className="ml-3 inline-block text-xs text-soleur-text-muted md:ml-0 md:table-cell md:px-3.5 md:py-3 md:text-right md:text-[13px] md:text-soleur-text-secondary">
-              <TimeText iso={o.last_seen} now={now} />
-            </td>
-          </tr>
+              </th>
+            }
+            decision={o.decision}
+            count={o.request_count}
+            lastSeen={o.last_seen}
+            now={now}
+          />
         ))}
       </tbody>
     </table>
@@ -219,9 +266,11 @@ function Header({ workspaceName }: { workspaceName: string | null }) {
         Scope Grants
       </NavLink>
       <header className="flex flex-col gap-2.5">
-        <h1 className="text-2xl font-medium text-soleur-text-primary">Egress audit log</h1>
-        <p className="text-sm text-soleur-text-secondary">
-          {`Sites ${workspaceName ? `${workspaceName}'s` : "your workspace's"} agents contacted in about the last 30 days, with the outcome of each (best-effort).`}
+        <h1 id={EGRESS_AUDIT_HEADING_ID} tabIndex={-1} className="text-2xl font-medium text-soleur-text-primary outline-none">
+          Egress audit log
+        </h1>
+        <p className="break-words text-sm text-soleur-text-secondary">
+          {`Sites ${workspaceName ? `${clipName(workspaceName)}'s` : "your workspace's"} agents contacted in about the last 30 days, with the outcome of each (best-effort).`}
         </p>
       </header>
     </>
@@ -239,6 +288,14 @@ function Footer() {
   );
 }
 
+function SwitchWorkspaceLink() {
+  return (
+    <NavLink href="/dashboard" className="border border-soleur-border-default px-4 py-2 text-xs font-medium text-soleur-text-primary">
+      Switch workspace
+    </NavLink>
+  );
+}
+
 function UnavailableCard() {
   return (
     <StateCard
@@ -253,52 +310,65 @@ function UnavailableCard() {
 }
 
 export function EgressAuditView({ result, filter, now = Date.now() }: { result: EgressAuditResult; filter: DecisionFilter; now?: number }) {
+  // The settings shell already caps the content width, so no max-width here.
   const shell = (children: ReactNode, workspaceName: string | null = null) => (
-    <div className="flex max-w-[760px] flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-5">
       <Header workspaceName={workspaceName} />
       {children}
       <Footer />
     </div>
   );
 
-  if (result.kind === "forbidden") {
-    return shell(
-      <StateCard
-        icon={<Lock className="h-6 w-6" />}
-        title="You no longer have access to this workspace."
-        body="Ask a workspace owner to add you again, or switch workspace."
-        action={
-          <NavLink href="/dashboard" className="border border-soleur-border-default px-4 py-2 text-xs font-medium text-soleur-text-primary">
-            Switch workspace
-          </NavLink>
-        }
-        alert
-      />,
-    );
+  switch (result.kind) {
+    case "forbidden":
+      return shell(
+        <StateCard
+          alert
+          icon={<Lock className="h-6 w-6" />}
+          title="You no longer have access to this workspace."
+          body="Ask a workspace owner to add you again, or switch workspace."
+          action={<SwitchWorkspaceLink />}
+        />,
+      );
+    case "unbound":
+      return shell(
+        <StateCard
+          alert
+          icon={<Lock className="h-6 w-6" />}
+          title="We couldn't determine your workspace."
+          body="Pick a workspace and try again."
+          action={<SwitchWorkspaceLink />}
+        />,
+      );
+    case "unavailable":
+      return shell(
+        <>
+          <Banner />
+          <UnavailableCard />
+        </>,
+      );
+    case "ready":
+      return <ReadyView result={result} filter={filter} now={now} shell={shell} />;
+    default: {
+      const _exhaustive: never = result;
+      return _exhaustive;
+    }
   }
-  if (result.kind === "unbound") {
-    return shell(
-      <StateCard
-        icon={<Lock className="h-6 w-6" />}
-        title="We couldn't determine your workspace."
-        body="Pick a workspace and try again."
-        action={
-          <NavLink href="/dashboard" className="border border-soleur-border-default px-4 py-2 text-xs font-medium text-soleur-text-primary">
-            Switch workspace
-          </NavLink>
-        }
-      />,
-    );
-  }
-  if (result.kind === "unavailable") {
-    return shell(
-      <>
-        <Banner />
-        <UnavailableCard />
-      </>,
-    );
-  }
+}
 
+type Shell = (children: ReactNode, workspaceName?: string | null) => ReactNode;
+
+function ReadyView({
+  result,
+  filter,
+  now,
+  shell,
+}: {
+  result: Extract<EgressAuditResult, { kind: "ready" }>;
+  filter: DecisionFilter;
+  now: number;
+  shell: Shell;
+}) {
   const { data, collection, webAccess, workspaceName } = result;
   const hasData = data.rows.length > 0 || data.overflow.length > 0;
   const filteredLabel = FILTERS.find((f) => f.key === filter)?.label ?? "";
@@ -320,12 +390,16 @@ export function EgressAuditView({ result, filter, now = Date.now() }: { result: 
           <Notice
             tone="gold"
             icon={<Info aria-hidden="true" className="h-3.5 w-3.5" />}
-            lead={filter === "all" ? "Showing the 200 most recent entries." : `Showing the 200 most recent ${filteredLabel} entries.`}
+            lead={
+              filter === "all"
+                ? `Showing the ${PAGE_LIMIT} most recent entries.`
+                : `Showing the ${PAGE_LIMIT} most recent ${filteredLabel} entries.`
+            }
             body="Older entries in this 30-day window are not listed, and counts are minimums."
           />
         )}
         <p className="text-[13px] font-medium text-soleur-text-primary" aria-live="polite">
-          {`At least ${nf(total)} requests · at least ${nf(blocked)} blocked${filter === "all" ? "" : " (all outcomes)"}`}
+          {`${capitalize(formatAtLeast(total))} requests · ${formatAtLeast(blocked)} blocked${filter === "all" ? "" : " (all outcomes)"}`}
         </p>
         <Chips filter={filter} />
         <HostTable data={data} now={now} />
@@ -333,7 +407,6 @@ export function EgressAuditView({ result, filter, now = Date.now() }: { result: 
       workspaceName,
     );
   }
-
   // No rows. A filter that matches nothing while the window has requests is its own line, not an empty state.
   if (filter !== "all" && total > 0) {
     return shell(
