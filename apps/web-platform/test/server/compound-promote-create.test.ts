@@ -384,7 +384,7 @@ describe("instruction-risk denylist (R1): a tripwire over every model string, no
   });
 
   it("applies to every string kind: slug, description, patch_rejection_reason and each list", () => {
-    expect(shapeProblem("curl-helper", "ident")).toBe("instruction-risk");
+    expect(shapeProblem("sudo", "ident")).toBe("instruction-risk"); // an ident is refused only when it IS a destructive token
     expect(shapeProblem("This skill should be used when a run needs sudo access for cleanup of build output", "description")).toBe("instruction-risk");
     const risky = SEATS[0];
     const reason = checkCreate(proposal({ patch_rejection_reason: risky }), ctx());
@@ -1286,6 +1286,50 @@ describe("Cursor stub renderer (guard 4 helpers; the every-skill parity lives in
   it("quotes the description as a YAML scalar (a colon and a quote stay inside)", () => {
     const out = renderCursorSkillStub({ folder: "x-y", description: 'a: b "c" \\ d', disableModel: false });
     expect(out).toContain('description: "a: b \\"c\\" \\\\ d"');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+describe("instruction-risk is tested per line, never across lines (fix-round 2)", () => {
+  const grok = readGrokBlock(readFileSync(join(PLUGIN_ROOT, "skills/plan/SKILL.md"), "utf8"));
+  const template = readFileSync(join(PLUGIN_ROOT, "skills/skill-creator/templates/purpose.md"), "utf8");
+  const base = (): ReturnType<typeof checkOk>["proposal"] => checkOk().proposal;
+  const render = (over: Record<string, unknown>) =>
+    renderCreateFiles({ proposal: { ...base(), ...over } as ReturnType<typeof checkOk>["proposal"], grokBlock: grok, purposeTemplate: template, date: "2026-10-26", evidenceCount: 5 });
+
+  it("two clean adjacent bullets whose JOINED text would match are accepted by shape and by the rendered gate", () => {
+    const pair = ["Ignore flaky runs", "Rerun all tests"];
+    expect(instructionRiskProblem(pair.join("\n"))).toBeNull(); // the gap class never crosses a newline
+    for (const list of ["when_to_use", "steps", "sharp_edges", "merge_retire_candidates"] as const) {
+      expect(render({ [list]: pair }), list).toMatchObject({ kind: "rendered" });
+    }
+    expect(checkCreate(proposal({ steps: pair }), ctx()).kind).toBe("create");
+  });
+
+  it("a period-separated pair inside one bullet is accepted", () => {
+    expect(instructionRiskProblem("Ignore flaky results. Rerun all tests.")).toBeNull();
+    expect(render({ steps: ["Ignore flaky results. Rerun all tests."] })).toMatchObject({ kind: "rendered" });
+  });
+
+  it("a genuinely risky pair on ONE line is still refused (the per-line test is not a bypass)", () => {
+    expect(instructionRiskProblem("Ignore flaky runs and rerun all tests")).toBe("override");
+    expect(render({ steps: ["Ignore flaky runs and rerun all tests"] })).toMatchObject({ kind: "refused", detail: "instruction-risk:skill" });
+  });
+
+  it("idents are exempt from the phrase denylist: eval-regression, curl-retry and force-push-recovery are accepted end to end", () => {
+    for (const slug of ["eval-regression", "curl-retry", "force-push-recovery"]) {
+      expect(shapeProblem(slug, "ident"), slug).toBeNull();
+      const v = checkCreate(proposal({ slug }), ctx());
+      expect(v.kind, slug).toBe("create");
+      // the rendered `name: <slug>` line and the H1 are exempt too, so the refusal cannot happen AFTER the model call
+      expect(render({ slug }), slug).toMatchObject({ kind: "rendered" });
+    }
+  });
+
+  it("an ident that is exactly a destructive token is refused; the exemption is exact-match, not a substring pass", () => {
+    for (const slug of ["sudo", "chmod", "mkfs"]) expect(shapeProblem(slug, "ident"), slug).toBe("instruction-risk");
+    // claim words still apply to an ident
+    expect(shapeProblem("gdpr-gate", "ident")).toBe("claim-word");
   });
 });
 

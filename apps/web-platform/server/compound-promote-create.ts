@@ -308,14 +308,17 @@ export const INSTRUCTION_RISK_GROUPS = [
   {
     id: "exfiltration",
     label: "reading or sending secrets (exfiltrating data, private keys, env files, or printing, posting or pasting tokens, passwords and credentials)",
-    re: new RegExp(`exfiltrat|\\bprivate\\s+key|\\bssh\\s+key|\\benv(?:ironment)?\\s+file|\\.env\\b|\\b${EXFIL_VERB}\\b[^.]{0,40}?\\b${SENSITIVE_NOUN}\\b`, "i"),
+    re: new RegExp(`exfiltrat|\\bprivate\\s+key|\\bssh\\s+key|\\benv(?:ironment)?\\s+file|\\.env\\b|\\b${EXFIL_VERB}\\b[^.\n]{0,40}?\\b${SENSITIVE_NOUN}\\b`, "i"),
   },
   {
     id: "override",
     label: "overriding instructions (ignore, disregard or forget earlier guidance, bypass, override instructions, the system prompt)",
-    re: /\b(?:ignore|disregard|forget)\b[^.]{0,40}?\b(?:previous|prior|above|all|earlier)\b|\bbypass(?:es|ed|ing)?\b|\boverrid\w*\b[^.]{0,40}?\binstructions?\b|\bsystem\s+prompt\b/i,
+    re: /\b(?:ignore|disregard|forget)\b[^.\n]{0,40}?\b(?:previous|prior|above|all|earlier)\b|\bbypass(?:es|ed|ing)?\b|\boverrid\w*\b[^.\n]{0,40}?\binstructions?\b|\bsystem\s+prompt\b/i,
   },
 ] as const;
+
+/** An ident (the slug) is refused only when it is exactly one of these tokens. */
+const IDENT_DENIED_TOKENS: ReadonlySet<string> = new Set(["sudo", "chmod", "chown", "mkfs", "eval", "curl", "wget", "base64", "exfiltrate", "bypass"]);
 
 /** The id of the first denylist group `text` hits, else `null`. */
 export function instructionRiskProblem(text: string): string | null {
@@ -341,8 +344,11 @@ export function shapeProblem(value: string, kind: ShapeKind): string | null {
   if (COMMAND_FORM_RE.test(value)) return "command-form";
   if (kind === "ref" && !REF_NAME_RE.test(value)) return "ref-format";
   if (kind === "pattern-ref" && !PATTERN_SLUG_RE.test(value)) return "ref-format";
+  // An ident is the slug. It is exempt from the phrase denylist (eval-regression, curl-retry and force-push-recovery
+  // are legitimate names) and refused only when it IS one destructive token; claim words still apply to it.
+  if (kind === "ident" && IDENT_DENIED_TOKENS.has(value.toLowerCase())) return "instruction-risk";
   if (kind !== "ref" && kind !== "pattern-ref") {
-    if (instructionRiskProblem(value)) return "instruction-risk";
+    if (kind !== "ident" && instructionRiskProblem(value)) return "instruction-risk";
     if (CLAIM_WORD_RE.test(value)) return "claim-word";
   }
   if (kind === "description") {
@@ -968,10 +974,12 @@ export function checkRenderedCreate(files: RenderedFiles, p: CreateProposal, gro
   // Instruction-risk over the MODEL-DERIVED segments: the Grok block, headings, blank lines, the fixed PURPOSE link
   // line and the exact fixed lines the renderer supplied (template text, server sentences) are exempt; a golden test
   // proves those clean. A model line that merely RESEMBLES a fixed line is not exempt (exact match only).
-  const exempt = new Set<string>([SKILL_PURPOSE_LINE, ...fixedLines]);
+  // The `name: <slug>` line is the slug (an ident, exempt from the phrase denylist); the H1 is a heading line already.
+  // Each segment is tested ALONE: the gap classes never cross a newline, and joining lines would invent a phrase.
+  const exempt = new Set<string>([SKILL_PURPOSE_LINE, `name: ${p.slug}`, ...fixedLines]);
   for (const [label, text] of [["skill", files.skillMd.replace(grokBlock, "")], ["purpose", files.purposeMd]] as const) {
     const segments = text.split("\n").filter((l) => l.trim() !== "" && !l.startsWith("#") && l !== "---" && !exempt.has(l));
-    if (instructionRiskProblem(segments.join("\n"))) return refuse("shape", `instruction-risk:${label}`);
+    if (segments.some((s) => instructionRiskProblem(s))) return refuse("shape", `instruction-risk:${label}`);
   }
 
   // SKILL.md
