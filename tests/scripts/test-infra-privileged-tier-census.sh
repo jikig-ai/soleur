@@ -3621,9 +3621,8 @@ g4dg_base() { # <name> <MUTDIR> — the base declares both retired resources; HE
   mutate "$1-base" "$2/base/apps/web-platform/infra/github-app.tf" 6 '$a\resource "hcloud_volume" "git_data" {\n  name = "x"\n}\nresource "hcloud_volume_attachment" "git_data" {\n  volume_id = 1\n}'
 }
 g4dg_wf() { # <name> <MUTDIR> — HEAD ships the compliant dispatch-only workflow
-  local f="$2/tree/.github/workflows/git-data-plaintext-volume-destroy.yml"
   assert_fixture_dir "$2"
-  cat > "$f" <<'G4DGEOF'
+  cat > "$2/tree/.github/workflows/git-data-plaintext-volume-destroy.yml" <<'G4DGEOF'
 name: dg
 on:
   workflow_dispatch:
@@ -3643,7 +3642,7 @@ jobs:
         run: |
           terraform apply -no-color -input=false tfplan
 G4DGEOF
-  fixture_written "$1-workflow" "$f"
+  fixture_written "$1-workflow" "$2/tree/.github/workflows/git-data-plaintext-volume-destroy.yml"
 }
 G4DG_WF="tree/.github/workflows/git-data-plaintext-volume-destroy.yml"
 MUTDIR="$(fixcopy g4-15)"; assert_fixture_dir "$MUTDIR"
