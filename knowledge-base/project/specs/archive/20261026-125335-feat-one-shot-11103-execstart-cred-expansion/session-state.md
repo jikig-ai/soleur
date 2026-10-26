@@ -70,3 +70,13 @@ Status: COMPLETE.
 - Route-to-definition: one bounded bullet appended to `plugins/soleur/skills/qa/SKILL.md` Notes (designed-advisory red = set-membership claim; bump census floors with the diff). Constitution promotion: skipped — covered by the routed bullet + existing qa notes.
 - Archival: DEFERRED to ship Phase 6.45 (archive-kb.sh) per pipeline brief — spec dir still in flight, ship Phase 6 reads decision-challenges.md from it.
 - Phase 1.6 token-efficiency: skipped by script (small uncommitted diff).
+
+## Ship Phase
+
+Status: IN PROGRESS — gates green, arming next.
+
+- Phase 0-4: trailer gate PASS; review evidence `Reviewed-By-Soleur: soleur:review` + `Reviewed-Coverage: sequential-fallback` (newest trailer, `aggregate pattern` threshold — non-blocking, disclosed); learning present (`compound:` commit); README counts in sync; affected battery launched detached (contended siblings — capacity-gated wait then affected-tests.sh).
+- Phase 5.4/5.5: probe-residue clean; preflight degraded-inline (sensitive-path match → Check 6 PASS via plan `aggregate pattern`, Check 10 PASS probe-verb allowlisted + AC9 probe expected=actual=0; path-gated checks SKIP); Review-Findings Exit COUNT=0; net-issue-flow NET=+1 OVERRIDDEN via PR-body marker (Filed: #11171 #11172, Closes #11103); CMO/COO/vendor gates not triggered; deploy-pipeline drift gate FIRED (cat-deploy-state.sh + inngest-redis-bootstrap.sh) → tracking comment posted; Incident-PIR gate FIRED on the plan-in-corpus scan → PIR authored + committed (30f6821bcf), action-items gate PASS (#10382 #10390 #11171); undeferred-opstep + soak scans clean; technical-ruling --branch PASS + --pr-body PASS; merge-base lints OK (skill-body-budget caught + reverted a qa SKILL.md route bullet — file was at 36989/37000 B on main); hold-gate 0 standing; overlap preflight clean.
+- Phase 6: PR #11159 retitled `fix(infra): remove inner-bash credential expansion…` + body rewritten (Closes #11103, Filed, Model Dissents, Merge Danger, Tally, Changelog, Test plan); labels semver:patch + type/security + app:web-platform; auto-close scan clean (intentional Closes only).
+- Phase 6.45: archive-kb.sh archived plan + spec dir (this file now lives under specs/archive/).
+- Holds: none recorded. Errors this phase: GuardD stale census floor found+fixed (be11fc8a1e); skill-body-budget FAIL on route bullet → reverted (insight kept in learning).
