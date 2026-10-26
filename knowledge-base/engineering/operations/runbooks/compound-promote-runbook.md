@@ -243,8 +243,8 @@ seed and consumes the week's `week-cap` slots. Until the flip tracker ships a dr
 Present on the `SOLEUR_COMPOUND_PROMOTE_OUTCOME` row only when `input_source` is `patterns`; the
 scheduled row's field set is byte-identical to before. All are numbers or closed enums. Query
 recipe and the full field list: `betterstack-log-query.md`. The early terminal rows `disabled`,
-`deduped` and `week-cap-reached` on a manual patterns run carry ONLY `input_source:"patterns"` (none of
-the other fields below).
+`deduped` and `week-cap-reached` on a manual patterns run carry ONLY `input_source:"patterns"` and
+`create_requested` (none of the other fields below).
 
 | Field | Meaning | How to read it |
 |---|---|---|
@@ -266,12 +266,12 @@ exact-hash suppression can be evaded by citing a different subset (accepted, tra
 a **closed unmerged** one stops suppressing at 60 days from `closed_at` (at exactly 60 days it
 lapses).
 
-## The gated new-skill create arm (`allow_create`, #10550) - scaffolding
+## The gated new-skill create arm (`allow_create`, #10550)
 
-Recorded 2026-10-26, ahead of the code. **Status: dark-launched, scaffolding only.** The rows below describe
-the behaviour the wiring commits of #10550 implement; until they merge, no marker carries these fields. The
-authority is ADR-092's create-only amendment of 2026-10-26 (closed six-path set, own verdict union) and the
-ADR-300 addendum of the same date.
+Recorded 2026-10-26. **Status: dark-launched.** The arm is wired in `cron-compound-promote.ts` (control flow and
+marker) and `compound-promote-create-arm.ts` (the two step bodies); no production create has been fired and none
+is authorized by the PR that wired it. The authority is ADR-092's create-only amendment of 2026-10-26 (closed
+six-path set, own verdict union) and the ADR-300 addendum of the same date.
 
 - **Reachability.** The arm runs only on a manual trigger with `data.input:"patterns"` AND
   `data.allow_create:true` (default off). The scheduled run, a manual `corpus` run and a non-boolean
@@ -304,8 +304,63 @@ ADR-300 addendum of the same date.
 | `stub-drift` | the rendered Cursor stub differs from the generator's output | rerun the generator after a header change; the parity test should have caught it |
 | `persist` | the commit or PR step failed for a genuine reason | read the workflow-run log |
 
+`create_detail` values by class (closed tokens; a `<field>:<rule>` token names the model field and the shape rule, never its text):
+
+| `class` | `create_detail` values |
+|---|---|
+| `week-cap` | `no-slot` (the edit loop used the last slot, or none was free) |
+| `create-open` | `open-create-pr`, `list-failed`, `list-incomplete`, `paths-unverifiable`, `paths-incomplete` |
+| `index-empty` | `no-open-patterns` |
+| `input-size` | `over-ceiling` (numbers: `tokens`, `max`, `bytes`; the bound is bytes / 4) |
+| `model-invalid` | `no-api-key`, `transport`, `max-tokens`, `empty`, `not-json`, `schema`, `unknown-pattern`, `no-strings`, `internal` |
+| `shape` | `<field>:<rule>` from the shape allowlist, `<field>:pii`, `<field>:credential`, `rendered-<file>:<pii or credential>`, `template-unreadable`, `render`, `grok-block`, `fence:*`, `size:*`, `frontmatter*`, `purpose-link`, `slot-left:purpose` |
+| `slug` | `format`, `reserved`, `skill-exists`, `agent-exists`, `cursor-name-exists`, `open-pr-slug` |
+| `prefer-patch` | `no-skill-list`, `nearest-missing`, `nearest-not-top3`, `overlap`, `open-pr-nearest` |
+| `budget` | `skills-dir-unreadable`, `frontmatter-*`, `description-not-a-string`, `population-below-floor`, `cap-unreadable`, `unreadable`, `words-out-of-range`, `over-headroom` |
+| `scan` | `high-risk`, `review`, `non-zero`, `empty-output`, `timeout`, `unrecognised`, `missing-tool`, `input-too-small`, `input-unreadable`, `meta-base-invalid`, `no-input`, `count-mismatch` |
+| `readme-sync` | `readme-unreadable`, `git-failed`, `timeout`, `script-failed`, `unexpected-change`, `no-change`, `non-digit-change` |
+| `stub-drift` | `stub-differs` |
+| `persist` | `branch-shape`, `clone-not-clean`, `internal`, `path-missing`, `path-not-regular`, `path-empty`, `path-too-large`, `path-nul`, `path-not-utf8`, `git-failed`, `changed-set-mismatch`, `path-count`, `unexpected-path`, `missing-path`, `duplicate-path`, `failed-<stage>` and `not-committed-<status>` (the commit helper's own exit) |
+
 - **Kill switch.** Stop firing manual triggers with `allow_create`; the flag is read per event and is off by
   default, so no deploy is needed to switch the arm off. The existing opt-out in this runbook also stops it.
+
+### Create-arm marker fields
+
+Every field below is absent from a scheduled row and from a manual `corpus` row (the field set of those rows is
+byte-identical to before the arm existed). `create_requested` is the only one present when the arm did not run.
+All are booleans, closed enums or numbers, except `create_detail`, a closed token (a field label plus a rule id,
+or a fixed phrase) that never carries model text. Query recipe: `betterstack-log-query.md`.
+
+| Field | Meaning | How to read it |
+|---|---|---|
+| `create_requested` | a manual `patterns` row: whether the event carried `allow_create === true` | Present on EVERY manual patterns row, including the early `disabled`, `deduped` and `week-cap-reached` rows. `false` means the arm was off (a non-boolean `allow_create` such as `"true"` or `1` is ignored, never coerced). `true` with no `create_arm` means the run ended before the arm: read `status` |
+| `create_arm` | `ran`, emitted ONLY when the arm ran | Absent means off. With it, `kind` is `create` |
+| `kind` | `create` (the type also names `edit`, which is never emitted) | Emitted only together with `create_arm` |
+| `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or the pattern is already proposed (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
+| `create_no_action_reason` | `no-pattern-qualifies`, `all-owned` or `other` | `other` also marks a suppressed (already proposed) pattern |
+| `create_refusal_class`, `create_detail` | the `class` table above and its closed token | The same pair is mirrored to Sentry (op `create-refused`, tag `class`, `extra.detail`) |
+| `create_words`, `create_cap`, `create_total` | description words requested, the budget cap and the current model-visible total | Budget refusals only; `cap - total` is the headroom the description must fit |
+| `create_top1`, `create_nearest_rank` | the best overlap score with an existing skill and the rank of the model's nearest skill | `prefer-patch` refusals only; compare with the refusal threshold in the PR body trailer |
+| `create_pr` | the draft PR number | `opened` only |
+
+Where the create outcome sits: the arm runs AFTER the edit loop, so `status` is the edit loop's status
+(`completed`, or `no-qualifying-clusters` when the edit arm had nothing to open) and `clusters_opened` counts edit
+PRs only. A create PR is never counted there. A run whose edit loop already used the last week-cap slot ends with
+`create_refusal_class: "week-cap"`; a run that finds the cap saturated before the loop (today: #11230 and #11231 are
+two open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the arm.
+
+- **Where the cause is readable without SSH.** Better Stack: the marker row (recipe in `betterstack-log-query.md`).
+  Sentry: one MESSAGE event per refusal, feature `cron-compound-promote`, op `create-refused`, tag `class`, with
+  `extra.detail` and the same numbers. Infrastructure faults have their own ops: `create-gate-spawn` and
+  `create-gate-git` (a gate script or git could not run), `create-propose-internal` and `create-persist-internal` (a
+  defect inside a step, converted to a returned refusal), `create-own-pr-lookup-failed` (the replay lookup; the step
+  continues) and `create-clone-restore-failed` (the clone could not be returned to a clean main).
+- **A refused create writes no ledger row.** The promotion-log row exists only inside a committed PR, so a pattern
+  refused for budget, scan or sync is retried on the next manual fire once the cause is gone.
+- **Replay.** Step `create-propose` is memoized and never throws; step `create-persist` looks up its own open PR by
+  the deterministic head branch (`self-healing/auto-<cluster hash>-<run date>`) and counts a hit as success, so a
+  replay cannot open a second PR.
 
 ## Sharp edges
 
