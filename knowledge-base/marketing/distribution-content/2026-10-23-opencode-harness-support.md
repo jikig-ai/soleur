@@ -1,5 +1,5 @@
 ---
-title: "Soleur on OpenCode: run your AI organization on open-weights models"
+title: "Soleur on OpenCode: open-weights models, sovereign memory"
 type: feature-launch
 publish_date: 2026-10-27
 channels: x, bluesky
@@ -11,12 +11,12 @@ pr_reference: "#10723"
 
 ## X/Twitter Thread
 
-Soleur now runs on OpenCode — the fifth supported harness alongside Claude Code, Grok Build, Codex, and Devin CLI. Run the full 67-agent, 103-skill AI organization on open-weights models or any BYOK provider while keeping your company memory in plain files you own.
+Soleur's 67 agents and 104 skills now run on OpenCode — the fifth supported harness. Use your own provider credentials or open-weights models through Ollama, llama.cpp, or LM Studio while your company memory stays in plain files you own.
 
-2/ One command to install: npx @soleur/opencode install (or bunx @soleur/opencode install). It vendors the full Soleur payload into ~/.config/opencode/soleur/ so skills, agent stubs, /go routing, and shell guards survive npx cache pruning.
+2/ Install with npx @soleur/opencode install (or bunx @soleur/opencode install). It vendors skills, agent stubs, /go routing, and shell guards into ~/.config/opencode/soleur/ so they survive npx cache pruning.
 
-3/ Because your knowledge base lives in plain Markdown files in your own Git repo, you can switch between frontier APIs, local inference, or open-weights models without your AI team forgetting a single past decision. https://soleur.ai/getting-started/
+3/ OpenCode supports local models through Ollama, llama.cpp, and LM Studio. Your plain-file knowledge base stays intact when you switch supported providers. Full story: https://soleur.ai/blog/own-your-ai-team-without-vendor-lock-in/
 
 ## Bluesky
 
-Soleur now runs on OpenCode — the fifth supported harness alongside Claude Code, Grok Build, Codex, and Devin CLI. Install with npx @soleur/opencode install and run all 67 agents and 103 skills on open-weights models or any BYOK provider while owning your memory in Git.
+Soleur now runs on OpenCode. Install with npx @soleur/opencode install, bring your own provider credentials or open-weights models through Ollama, llama.cpp, or LM Studio, and keep your company memory in plain files you own. https://soleur.ai/blog/own-your-ai-team-without-vendor-lock-in/

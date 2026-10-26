@@ -59,7 +59,7 @@ unset _incidents_wb
 _incidents_repo_root() {
   if [[ -n "${INCIDENTS_REPO_ROOT:-}" ]]; then
     echo "$INCIDENTS_REPO_ROOT"
-    return
+    return 0  # never bare: from a trap handler bash 5.2 returns the TRIGGERING command's status (dropped ERR-trap rows)
   fi
   (cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd -P)
 }

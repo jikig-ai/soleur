@@ -199,3 +199,7 @@ of those for a command that could be a `git commit` (a strict `git commit`, a lo
 self-repair argument: every repair this gate prescribes (`git checkout -- .claude/hooks/lib`,
 installing perl, splitting or rewriting the command, naming a literal path) is not itself a commit,
 so the deny cannot block its own repair. Every other failure still asks.
+
+## Addendum — 2026-10-23 (#10696): a failed simulation of the commit's own staging also denies
+
+A chained `git add ... && git commit`, `commit -a` or pathspec commit is scanned against a simulated would-be index (ADR-301); a simulation failure (timeout, gitleaks error, refused config or environment, content from outside the tree) **denies** with a named cause and repair, with no bypass (the harness hook timeout is non-blocking, so an expiry-bypass equals a crash). This supersedes "keeps its existing allow plus bypass row" above for the simulated path only; the contract, causes and residuals are indexed in ADR-301.

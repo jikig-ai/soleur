@@ -1504,6 +1504,25 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_MERGE_EFFECT_CLASS_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/ship-prepush-secret-scan.test.sh — reads the script under test, the ship SKILL.md call site, the repo's own
+# gitleaks pack and the CI range arm it must stay in parity with; the shared libs it sources are named so an edit to them selects it.
+AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PREPUSH_SECRET_SCAN_TEST_SH_PATHS=(
+  ".github/workflows/secret-scan.yml"
+  ".claude/hooks/lib/incidents.sh"
+  ".claude/hooks/ship-unpushed-commits-gate.sh"
+  ".gitleaks.toml"
+  "plugins/soleur/skills/review/SKILL.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/lib/gitleaks-probe.sh"
+  "plugins/soleur/test/ship-prepush-secret-scan.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/rule-metrics-constants.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
@@ -1680,6 +1699,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_MAIN_HEALTH_MONITOR_WORKFLOW_TEST_SH_PATHS=(
   "apps/web-platform/infra/run-registered-suites.sh"
   "knowledge-base/project/learnings/best-practices/"
   "plugins/soleur/test/main-health-monitor-workflow.test.sh"
+  "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-workflow-errexit-capture.py"
   "scripts/test-all.sh"
@@ -3059,8 +3079,15 @@ AFFECTED_CLAUDE_HOOKS_BRAND_HEX_COMMIT_GATE_TEST_SH_PATHS=(
   ".claude/hooks/lib/incidents.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# (#10696) the closure leaf libs, plus the hook, the two libs it sources, the shell lexer and the gitleaks config the suite drives.
 AFFECTED_CLAUDE_HOOKS_GIT_COMMIT_SECRET_SCAN_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  ".claude/hooks/git-commit-secret-scan.sh"
+  ".claude/hooks/git-commit-secret-scan.test.sh"
+  ".claude/hooks/lib/commit-index-sim.sh"
+  ".claude/hooks/lib/commit-target-roots.sh"
+  ".gitleaks.toml"
+  "plugins/soleur/hooks/lib/shell-argv.pl"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_CLAUDE_HOOKS_GUARDRAILS_TEST_SH_PATHS=(
