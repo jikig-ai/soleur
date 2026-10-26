@@ -40,6 +40,7 @@ import {
   CREATE_INPUT_BYTES_PER_TOKEN,
   CREATE_INPUT_MAX_TOKENS,
   CREATE_PR_BODY_LINE,
+  CREATE_STAGE_ORDER,
   OVERLAP_REFUSE_THRESHOLD,
   checkCreate,
   countDescriptionWords,
@@ -383,33 +384,75 @@ describe("the ADR-092 create-only amendment is pinned to the exported constants 
     expect(amendment).toContain("every other synthetic check the helper posts remains synthetic");
   });
 
-  it("separates pre-model preconditions from post-model gates and lists the post-model gates in code order", () => {
-    expect(amendment).toContain("Pre-model preconditions, in order:");
-    expect(amendment).toContain("Then ONE model call with no retry.");
-    expect(amendment).toContain("Post-model gates, in the order the code runs them:");
-    // Anchors are whole phrases of the sentence above; their positions must ascend (the order is the claim).
-    const order = [
-      "the week cap (shared with the edit arm",
-      "one open create at a time",
-      "a readable budget (cap and total, failing closed)",
-      "the input-size ceiling",
-      "Then ONE model call with no retry.",
-      "shape, instruction-risk, claim-word and PII and credential screens over every model string",
-      "the ledger (a pattern with an existing proposal",
-      "slug collision (skill, agent, command stem, Cursor stub directory",
-      "prefer-patch (the model must name",
-      "the description-budget gate. Step B then refreshes the clone",
-      "runs the rendered-output gate",
-      "including the instruction-risk scan over the model-derived segments",
-      "then `soleur:skill-security-scan` on BOTH files",
-      "the README sync (changed set exactly the two README paths)",
-      "the stub self-consistency check",
-      "the base-moved check",
-      "and only then the commit.",
+  // One ADR phrase per stage id of CREATE_STAGE_ORDER. The Record type makes a stage added to the list without a phrase a
+  // compile error, and the key-set assertion below makes it a test failure; positions must ascend (the order is the claim).
+  // This pins the ADR TEXT to the exported list; that the arm itself runs in this order is asserted by the arm tests.
+  const STAGE_PHRASES = {
+    stepA: {
+      "week-cap": "Step A (`create-propose`), in order: the week cap (shared with the edit arm",
+      "index-empty": "a non-empty pattern index",
+      "clone-present": "the clone being present",
+      "create-open": "one open create at a time",
+      populations: "the budget and collision populations measured from the clone, including the open pull request path scan",
+      "input-size": "the input-size ceiling (refuse, never truncate)",
+      "api-key": "the API key",
+      model: "then ONE model call with no retry.",
+      "check-create": "After the call comes `checkCreate`, whose gates run in this order:",
+    },
+    checkCreate: {
+      schema: "schema validation",
+      "slug-format": "slug format",
+      shape: "shape, instruction-risk and claim-word checks over every model string",
+      pii: "the PII and credential screen over every model string",
+      ledger: "the ledger (a pattern with an existing proposal",
+      collision: "slug collision (skill, agent, command stem, Cursor stub directory",
+      "prefer-patch": "prefer-patch (the model must name",
+      budget: "the description budget (a readable cap and total, at least the minimum and at most 30 words, and within `cap - total`).",
+    },
+    stepB: {
+      "branch-taken": "Step B (`create-persist`), in order: the branch-taken check, before the clone is touched",
+      "token-set": "sets the installation token",
+      "fetch-reset": "`git fetch --depth=1 origin main` and `git reset --hard FETCH_HEAD`",
+      "token-strip": "strips the token from `remote.origin.url`",
+      recheck: "re-runs `checkCreate` on the refreshed tree",
+      render: "renders the three files",
+      "rendered-gate": "runs the rendered-output gate",
+      scan: "then `soleur:skill-security-scan` on BOTH files",
+      "readme-sync": "the README sync (changed set exactly the two README paths)",
+      "bytes-differ": "the bytes-differ check",
+      "token-restore": "restores the token with `setOriginToken`",
+      fetch: "fetches once more",
+      "base-moved": "the base-moved check",
+      commit: "and only then the commit.",
+    },
+  } as const satisfies { [K in keyof typeof CREATE_STAGE_ORDER]: Record<(typeof CREATE_STAGE_ORDER)[K][number], string> };
+
+  it("the ADR lists every stage of CREATE_STAGE_ORDER, once each, in the order the list gives (Step A, checkCreate, Step B)", () => {
+    for (const group of ["stepA", "checkCreate", "stepB"] as const) {
+      expect(Object.keys(STAGE_PHRASES[group]), group).toEqual([...CREATE_STAGE_ORDER[group]]);
+    }
+    const phrases = [
+      ...CREATE_STAGE_ORDER.stepA.map((id) => STAGE_PHRASES.stepA[id]),
+      ...CREATE_STAGE_ORDER.checkCreate.map((id) => STAGE_PHRASES.checkCreate[id]),
+      ...CREATE_STAGE_ORDER.stepB.map((id) => STAGE_PHRASES.stepB[id]),
     ];
-    const at = order.map((o) => amendment.indexOf(o));
-    expect(at.filter((i) => i < 0), `missing anchors: ${order.filter((_, i) => at[i] < 0).join(" | ")}`).toEqual([]);
+    const at = phrases.map((o) => amendment.indexOf(o));
+    expect(at.filter((i) => i < 0), `missing anchors: ${phrases.filter((_, i) => at[i] < 0).join(" | ")}`).toEqual([]);
     expect([...at].sort((x, y) => x - y)).toEqual(at);
+    expect(new Set(at).size).toBe(at.length);
+    for (const o of phrases) expect(amendment.split(o).length - 1, o).toBe(1);
+  });
+
+  it("states the stub check scope and the deadline scope the way the code behaves", () => {
+    expect(amendment).toContain("the stub check is renderer self-consistency; parity with the real generator is CI `cursor-name-map --check`");
+    expect(amendment).toContain("`deadline` covers the pre-commit phase only, not `safeCommitAndPr` and not the final cleanup");
+  });
+
+  it("harness: the pin can fail (reordering two stage phrases or dropping one is detected)", () => {
+    const swapped = amendment.replace("the base-moved check", "XX").replace("the bytes-differ check", "the base-moved check").replace("XX", "the bytes-differ check");
+    expect(swapped).not.toBe(amendment);
+    expect(swapped.indexOf("the base-moved check")).toBeLessThan(swapped.indexOf("the bytes-differ check"));
+    expect(amendment.indexOf("the bytes-differ check")).toBeLessThan(amendment.indexOf("the base-moved check"));
   });
 
   it("states the controls, the tripwire status of the denylist, the cap enforcement wording, the path function and the token and base-moved sequence", () => {
@@ -419,9 +462,9 @@ describe("the ADR-092 create-only amendment is pinned to the exported constants 
     expect(amendment).toContain("enforced by CI at the cap value until a human changes the cap");
     expect(amendment).not.toContain("never exceed 2436");
     expect(amendment).toContain("derived by one exported function, `createPathList(slug)`");
-    expect(amendment).toContain("sets `origin` to the token-free HTTPS URL before any create-arm script is spawned");
-    expect(amendment).toContain("calls `setOriginToken` immediately before `safeCommitAndPr`");
-    expect(amendment).toContain("`git fetch --depth=1 origin main` and `git reset --hard FETCH_HEAD`");
+    expect(amendment).toContain("Step A runs with the installation token on disk but spawns no script");
+    expect(amendment).toContain("stripped from `remote.origin.url` after the first authenticated fetch and before any script spawns");
+    expect(amendment).toContain("restored (`setOriginToken`) only for the final fetch and the single `safeCommitAndPr` call");
     expect(amendment).toContain("returns `persist/base-moved` on any difference");
     expect(amendment).toContain("the server renders them from the validated pattern slug, the evidence count and the run date");
   });
