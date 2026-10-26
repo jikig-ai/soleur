@@ -670,3 +670,7 @@ Pyramid layers: unit (pure modules), integration (installed adapter over real MC
 - `plugins/soleur/skills/pencil-setup/scripts/pencil-save-gate.mjs` (`decideSave`, `runGuardedSave`)
 - `plugins/soleur/skills/pencil-setup/SKILL.md` (sharp edges: engine contract, save sentinel, pin bump)
 - `knowledge-base/project/learnings/bug-fixes/2026-10-26-a-stub-that-encodes-your-belief-about-an-engine-passes-the-bug-it-was-written-to-catch.md`
+
+## Addendum — 2026-10-26 (work phase): measured outcome of the batch_design host-function probe
+
+Ruling 11.2 and the Cut List entry for raw `execute` made a shadowing prelude conditional on the live probe. The probe on `@pen.dev/cli` 0.3.13 recorded `Export` writing outside the document directory and replacing an existing file, and image fills reading local files through absolute, `file://` and `../` urls. The condition was met, and the CTO ruled (2026-10-26, row in `decision-challenges.md`) to accept the residual with no prelude: the caller already has a same-user shell, image urls resolve inside the engine so a prelude cannot cover them, and the probe pins the behaviour so engine drift fails a named pin. ADR-304 carries the reasoning and the flip condition (confine the child with an OS sandbox if the tools reach an agent without a shell, or run hosted).
