@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { CREDENTIAL_RE, PII_REGEX, computeClusterHash } from "@/server/compound-promote-screens";
-import { fenceBlock, renderPatternIndex, untrustedDataSentence, type PatternPage } from "@/server/compound-promote-patterns";
+import { SLUG_RE as PATTERN_SLUG_RE, fenceBlock, renderPatternIndex, untrustedDataSentence, type PatternPage } from "@/server/compound-promote-patterns";
 
 // =============================================================================
 // Constants (each read by prompt, check and PR-body trailer)
@@ -258,8 +258,21 @@ export function parseCreateModelText(text: string): unknown {
 // Shape allowlist
 // =============================================================================
 
-export type ShapeKind = "description" | "item" | "field" | "ident";
+/**
+ * `ident` = the new slug; `ref` = a model-named EXISTING skill and `pattern-ref` = a pattern slug, both validated
+ * against the server's own lists afterwards, so they skip the claim-word and instruction-risk phrase rules (a real
+ * skill may be called gdpr-gate) but keep every structural rule.
+ */
+export type ShapeKind = "description" | "item" | "field" | "ident" | "ref" | "pattern-ref";
 
+// The pattern reader's own slug limit ({0,80} after the first character), so a legitimate page slug is not refused.
+const PATTERN_SLUG_MAX = (() => {
+  const n = Number(/\{0,(\d+)\}/.exec(PATTERN_SLUG_RE.source)?.[1]);
+  if (!Number.isInteger(n)) throw new Error("create: cannot derive the pattern slug limit");
+  return n + 1;
+})();
+
+const REF_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 const PRINTABLE_ASCII_RE = /^[\x20-\x7e]+$/;
 const LEADING_OK_RE = /^[A-Za-z0-9]/;
 // Characters that change how a markdown renderer, an HTML sink or the harness reads what follows.
@@ -279,8 +292,45 @@ const CLAIM_WORD_RE = new RegExp(`(?<![A-Za-z0-9])(?:${CREATE_CLAIM_WORDS.map((w
 
 function maxCharsFor(kind: ShapeKind): number {
   if (kind === "item") return CREATE_ITEM_MAX_CHARS;
-  if (kind === "ident") return CREATE_SLUG_IDENT_MAX;
+  if (kind === "ident" || kind === "ref") return CREATE_SLUG_IDENT_MAX;
+  if (kind === "pattern-ref") return PATTERN_SLUG_MAX;
   return CREATE_FIELD_MAX_CHARS;
+}
+
+/**
+ * R1: a case-insensitive, word-bounded phrase denylist over text a reader might follow. It is a TRIPWIRE, not a
+ * control (a paraphrase evades it); the controls are the draft PR, mergeMode none, the LOW-RISK scan and the human
+ * reviewer. The verbs gate the credential nouns so the bare words token, secret and password stay usable.
+ */
+const SENSITIVE_NOUN = "(?:token|secret|credential|password|passphrase|api[- ]?key)s?";
+const EXFIL_VERB = "(?:read|print|post|send|include|upload|paste|echo|cat|copy|dump|leak|reveal|share|display|email|transmit)";
+export const INSTRUCTION_RISK_GROUPS = [
+  {
+    id: "destructive",
+    label: "destructive or privileged commands (recursive delete, force push, sudo, chmod, hard reset, dropping tables, deleting everything)",
+    re: /\brm\s+-[a-z]*[rf]|\bforce[- ]push|\bpush\s+(?:--force|-f)\b|\b(?:sudo|chmod|chown|mkfs)\b|\bgit\s+reset\s+--hard|\bdrop\s+(?:table|database|schema)\b|\bdelete\s+(?:all|every|everything)\b/i,
+  },
+  {
+    id: "exec-net",
+    label: "code execution or network tools (eval, curl, wget, base64, ssh)",
+    re: /\b(?:eval|curl|wget|base64|ssh|scp)\b/i,
+  },
+  {
+    id: "exfiltration",
+    label: "reading or sending secrets (exfiltrating data, private keys, env files, or printing, posting or pasting tokens, passwords and credentials)",
+    re: new RegExp(`exfiltrat|\\bprivate\\s+key|\\bssh\\s+key|\\benv(?:ironment)?\\s+file|\\.env\\b|\\b${EXFIL_VERB}\\b[^.]{0,40}?\\b${SENSITIVE_NOUN}\\b`, "i"),
+  },
+  {
+    id: "override",
+    label: "overriding instructions (ignore, disregard or forget earlier guidance, bypass, override instructions, the system prompt)",
+    re: /\b(?:ignore|disregard|forget)\b[^.]{0,40}?\b(?:previous|prior|above|all|earlier)\b|\bbypass(?:es|ed|ing)?\b|\boverrid\w*\b[^.]{0,40}?\binstructions?\b|\bsystem\s+prompt\b/i,
+  },
+] as const;
+
+/** The id of the first denylist group `text` hits, else `null`. */
+export function instructionRiskProblem(text: string): string | null {
+  for (const g of INSTRUCTION_RISK_GROUPS) if (g.re.test(text)) return g.id;
+  return null;
 }
 
 /**
@@ -299,7 +349,12 @@ export function shapeProblem(value: string, kind: ShapeKind): string | null {
   if (PATH_TOKEN_RE.test(value)) return "path-token";
   if (SOLEUR_TOKEN_RE.test(value)) return "soleur-token";
   if (COMMAND_FORM_RE.test(value)) return "command-form";
-  if (CLAIM_WORD_RE.test(value)) return "claim-word";
+  if (kind === "ref" && !REF_NAME_RE.test(value)) return "ref-format";
+  if (kind === "pattern-ref" && !PATTERN_SLUG_RE.test(value)) return "ref-format";
+  if (kind !== "ref" && kind !== "pattern-ref") {
+    if (instructionRiskProblem(value)) return "instruction-risk";
+    if (CLAIM_WORD_RE.test(value)) return "claim-word";
+  }
   if (kind === "description") {
     if (value.includes('"')) return "quote";
     if (!value.startsWith(CREATE_DESCRIPTION_PREFIX)) return "description-prefix";
@@ -322,10 +377,10 @@ interface LabeledString {
 /** Every model-authored string, labelled by a fixed field name (and index) used in refusal details. */
 export function collectModelStrings(p: CreateProposal): LabeledString[] {
   const out: LabeledString[] = [
-    { label: "pattern_slug", value: p.pattern_slug, kind: "ident" },
+    { label: "pattern_slug", value: p.pattern_slug, kind: "pattern-ref" },
     { label: "slug", value: p.slug, kind: "ident" },
     { label: "description", value: p.description, kind: "description" },
-    { label: "nearest_skill", value: p.nearest_skill, kind: "ident" },
+    { label: "nearest_skill", value: p.nearest_skill, kind: "ref" },
     { label: "patch_rejection_reason", value: p.patch_rejection_reason, kind: "field" },
     { label: "purpose.origin", value: p.purpose.origin, kind: "field" },
     { label: "purpose.patterns_addressed", value: p.purpose.patterns_addressed, kind: "field" },
@@ -761,6 +816,9 @@ export function readGrokBlock(planSkillMd: string): string {
   return lines.slice(starts[0], ends[0] + 1).join("\n") + "\n";
 }
 
+/** The one fixed line of SKILL.md that links PURPOSE.md. */
+const SKILL_PURPOSE_LINE = "See [PURPOSE.md](./PURPOSE.md) for why this skill exists, the nearest existing skill, and its history.";
+
 const bullets = (items: readonly string[]): string => items.map((i) => `- ${i}`).join("\n");
 
 function titleFromSlug(slug: string): string {
@@ -795,7 +853,7 @@ export function renderSkillMd(p: CreateProposal, grokBlock: string): string {
       "",
       bullets(p.sharp_edges),
       "",
-      "See [PURPOSE.md](./PURPOSE.md) for why this skill exists, the nearest existing skill, and its history.",
+      SKILL_PURPOSE_LINE,
     ].join("\n") + "\n"
   );
 }
@@ -879,7 +937,7 @@ function sizeOk(text: string): boolean {
  * PURPOSE.md, exactly `name` + `description` frontmatter that matches the proposal, exactly one canonical Grok block,
  * and a stub equal to what the pure renderer produces for this skill.
  */
-export function checkRenderedCreate(files: RenderedFiles, p: CreateProposal, grokBlock: string): RenderedVerdict {
+export function checkRenderedCreate(files: RenderedFiles, p: CreateProposal, grokBlock: string, fixedLines: readonly string[] = []): RenderedVerdict {
   for (const [label, text] of [["skill", files.skillMd], ["purpose", files.purposeMd], ["stub", files.stub]] as const) {
     if (text.trim().length === 0) return refuse("shape", `empty:${label}`);
   }
@@ -888,6 +946,15 @@ export function checkRenderedCreate(files: RenderedFiles, p: CreateProposal, gro
   for (const [label, text] of [["skill", files.skillMd], ["purpose", files.purposeMd], ["stub", files.stub]] as const) {
     const hit = screenProblem(text);
     if (hit) return refuse("shape", `rendered-${label}:${hit}`);
+  }
+
+  // Instruction-risk over the MODEL-DERIVED segments: the Grok block, headings, blank lines, the fixed PURPOSE link
+  // line and the exact fixed lines the renderer supplied (template text, server sentences) are exempt; a golden test
+  // proves those clean. A model line that merely RESEMBLES a fixed line is not exempt (exact match only).
+  const exempt = new Set<string>([SKILL_PURPOSE_LINE, ...fixedLines]);
+  for (const [label, text] of [["skill", files.skillMd.replace(grokBlock, "")], ["purpose", files.purposeMd]] as const) {
+    const segments = text.split("\n").filter((l) => l.trim() !== "" && !l.startsWith("#") && l !== "---" && !exempt.has(l));
+    if (instructionRiskProblem(segments.join("\n"))) return refuse("shape", `instruction-risk:${label}`);
   }
 
   // SKILL.md
