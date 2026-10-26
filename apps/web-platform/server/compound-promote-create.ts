@@ -147,7 +147,10 @@ export interface CreateRefusal {
   class: CreateRefusalClass;
   /** A closed token (field label plus rule id, or a fixed phrase). Never model text. */
   detail: string;
-  /** Numbers only, for the marker. */
+  /**
+   * Numbers only. `max` is reserved for `input-size` (the input token ceiling, which the marker forwards as
+   * `create_max`); the budget class uses `min_words`/`max_words`, which are Sentry-only and never forwarded.
+   */
   numbers?: Record<string, number>;
 }
 
@@ -804,7 +807,7 @@ export function checkCreate(raw: unknown, c: CreateContext): CreateVerdict {
   if (!c.budget || !Number.isFinite(c.budget.total) || !Number.isFinite(c.budget.cap)) return refuse("budget", "unreadable");
   const words = countWords(p.description);
   if (words < CREATE_DESCRIPTION_MIN_WORDS || words > CREATE_DESCRIPTION_MAX_WORDS) {
-    return refuse("budget", "words-out-of-range", { words, min: CREATE_DESCRIPTION_MIN_WORDS, max: CREATE_DESCRIPTION_MAX_WORDS });
+    return refuse("budget", "words-out-of-range", { words, min_words: CREATE_DESCRIPTION_MIN_WORDS, max_words: CREATE_DESCRIPTION_MAX_WORDS });
   }
   const headroom = c.budget.cap - c.budget.total;
   if (words > headroom) {

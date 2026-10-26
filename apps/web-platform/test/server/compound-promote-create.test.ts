@@ -963,7 +963,13 @@ describe("budget gate (guard 2): cap - total, on a FIXTURE budget", () => {
     for (const n of [CREATE_DESCRIPTION_MAX_WORDS + 1, CREATE_DESCRIPTION_MIN_WORDS - 1]) {
       const v = checkCreate(proposal({ description: words(n) }), ctx({ budget: { total: 0, cap: 5000 } }));
       expect(v.kind, String(n)).toBe("refused");
-      if (v.kind === "refused") expect([v.class, v.detail]).toEqual(["budget", "words-out-of-range"]);
+      if (v.kind === "refused") {
+        expect([v.class, v.detail]).toEqual(["budget", "words-out-of-range"]);
+        // The budget keys are min_words/max_words (Sentry only): a bare `max` is the input-size token ceiling's key.
+        expect(v.numbers).toEqual({ words: n, min_words: CREATE_DESCRIPTION_MIN_WORDS, max_words: CREATE_DESCRIPTION_MAX_WORDS });
+        expect(v.numbers).not.toHaveProperty("max");
+        expect(v.numbers).not.toHaveProperty("min");
+      }
     }
     expect(checkCreate(proposal({ description: words(CREATE_DESCRIPTION_MAX_WORDS) }), ctx({ budget: { total: 0, cap: 5000 } })).kind).toBe("create");
     expect(checkCreate(proposal({ description: words(CREATE_DESCRIPTION_MIN_WORDS) }), ctx({ budget: { total: 0, cap: 5000 } })).kind).toBe("create");
