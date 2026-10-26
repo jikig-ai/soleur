@@ -6,7 +6,7 @@ Plan: `knowledge-base/project/plans/2026-10-26-ci-s4-affected-index-pr5-glob-mea
 
 - 0.1 `git fetch origin main`, merge it, record `BASE=$(git rev-parse origin/main)` and `date -u` in `receipts/measurement-stamp.txt`.
 - 0.2 Re-verify: #10861 open, holds untouched, `gh pr list --label s4-drain --state open` empty, handoff receipts present.
-- 0.3 Take the edge sets once, before any edit: `bash scripts/test-all.sh --print-selection --paths=README.md > receipts/rows.txt` (background; cold run takes minutes); confirm `fallback=none` and rows for the four labels.
+- 0.3 Take the edge sets once, before any edit: `bash scripts/test-all.sh --print-selection --paths=README.md > receipts/rows.txt` (background; cold run takes minutes); confirm `fallback=none` and rows for the four labels; one retry on a selector timeout, then stop (Outcome C); a label with no row is refused.
 
 ## Phase 1 - build the measurement (tests first)
 
@@ -16,26 +16,30 @@ Plan: `knowledge-base/project/plans/2026-10-26-ci-s4-affected-index-pr5-glob-mea
   - 1.1.3 one table-driven verdict row (60000/60001, 30000/30001, 50/51 of 200) and the floor, missing and disagree rows
   - 1.1.4 pair-coverage refusal, directory-completeness, malformed-entry refusal, non-canonical candidates file
   - 1.1.5 spot-check divergence stop (rc 4)
+  - 1.1.5b fixtures use runtime-built or synthetic path names (the replay test is an audited suite); a label's rows are OR-ed, differing edge sets and missing rows are refused; runner-changed is a substring match; deleted-path units are counted conservatively
   - 1.1.6 Guard Contract mutation rows 1-7 and harness rows (a)-(b)
 - 1.2 Implement `cmd_glob_rate`, `durations_src`, docstring and argparse in `scripts/ci-pr-affected-replay.py` (read-only; `durations()` untouched)
-- 1.3 Green the section, run the whole replay suite detached, shellcheck, `py_compile`; commit tool and tests before measuring
+- 1.3 Green the section, run `audit` and `ratchet --base origin/main` (no new pair), pin the oracle byte-identical (audit and `ratchet --print-baseline` output before and after), run the whole replay suite detached, shellcheck, `py_compile`; commit tool and tests before measuring
 
 ## Phase 2 - take both measurements
 
 - 2.1 The 200 units: assert 200 first-parent commits of `$BASE`, `(#N)` subjects, distinct PR count, dates
 - 2.2 Duration (measurement 1) for the four labels with the `src` column; the duration gate (`floor`, missing, over 60000 ms stop here)
 - 2.3 Recorder evidence for gate-passing suites (one attempt each)
-- 2.4 Candidate sets for gate-passing suites; each entry matches a tracked file
-- 2.5 Build `receipts/pairs-scope.tsv` (the 43-pair rows plus the one `boundary-prefix` pair)
+- 2.4 `candidates.tsv`: one line per measured suite (blank entry for a gated-out suite); candidate sets for gate-passing suites; each entry matches a tracked file; `no-complete-set` rule (always_on needs duration <= 30 s and an existing-only rate above 25%)
+- 2.5 Build `receipts/pairs-scope.tsv` with the `awk` command from the plan, filtered to gate-passing labels, saving the command and row count
 - 2.6 Run `glob-rate ... --base $BASE --spot-check 3`; save `glob-rate.tsv` and the marker line
+- 2.6b Failure branches: rc 3 one retry then stop; rc 4 fix the tool, commit, re-run 0.3 and 2.1-2.7, else `model-diverges`
 - 2.7 Glob-half check in a detached scratch worktree against the real selector; remove the worktree
 
 ## Phase 3 - apply the verdicts (skip when nothing qualifies)
 
-- 3.1 Claim `s4-drain` (label on #11226, mirror comment on #10448)
-- 3.2 Edit `scripts/lib/test-affected-paths.sh` for `glob` and `always_on` rows only; fix the stale grep-q-pipe-guard array comment
+- 3.1 Re-check `gh pr list --label s4-drain --state open` (skip Phase 3 if held), then claim `s4-drain` (label on #11226, mirror comment on #10448)
+- 3.2-3.4 land as one commit.
+- 3.2 Edit `scripts/lib/test-affected-paths.sh` for `glob` and `always_on` rows only; for an `always_on` entry also raise `_MIN_ALWAYS_ON_DECLARED` in `scripts/test-all.sh` and the `f1` pin and `m_s_floor` fixture in `scripts/test-all-affected.test.sh`; fix the stale grep-q-pipe-guard array comment
 - 3.3 Delete the accept rows reported stale `suite-always-on`
 - 3.4 Prune the baseline with `ratchet --print-baseline`; `ratchet --base origin/main` exits 0
+- 3.4b Rehearse the rollback (`git revert --no-commit` in a scratch worktree, then ratchet and census) before 3.5
 - 3.5 Post-edit parity (empty-candidate run, one real-selector glob-only check per edited suite)
 - 3.6 Verification set (replay suite, affected tests, kb-consumers test, probe-row test, orphan census, `uniq -d`, shellcheck, markdown lint)
 
