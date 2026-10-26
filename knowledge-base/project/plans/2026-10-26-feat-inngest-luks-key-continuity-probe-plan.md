@@ -15,6 +15,25 @@ requires_cpo_signoff: true
 
 # infra: Inngest on-host LUKS key-continuity probe (#9927 item 2)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26 (headless, bounded pass: the plan had already run a CTO ruling, a CPO sign-off, a re-ruling on the dead-man, a learnings search, a repo-research pass, a functional-overlap check and a five-seat plan-review panel, so the deepen pass ran the mechanical gates and the citation and negative-claim sweeps rather than a second full agent fan-out).
+**Gates run mechanically:** 4.6 User-Brand Impact (present, `single-user incident`), 4.7 Observability (5 fields, no SSH, allowlisted verb `grep`, literal `expected_output`, `credentials_required` declared, command is not suite-shaped), 4.8 PAT-shaped variables (none), 4.9 UI wireframe (no UI surface; skipped), 4.10 Encryption Posture (present, `does_not_defend` non-empty, no exception block needed), 4.11 Guard Contract (`python3 scripts/lint-guard-contract.py` green, 3 entries), 4.12 Scope Check (one unfenced section, no `unmapped` row, descoped row justified, `Recommendation:` line present), 4.13 Task Design (not triggered: no new workflow, function, timer or daemon; the probe reuses the existing 30 s oneshot), 4.55 Downtime (not triggered: no replace, no lock-taking DDL; the probe adds at most about 100 s to one tick per day), 4.5 Network outage (not triggered: the plan addresses no connectivity symptom).
+**Citation sweep:** every `knowledge-base/` path in the plan resolves; every cited issue and PR was read live (states in Premise Validation); every `hr-`/`wg-`/`cq-` rule id resolves (one is migrated-but-active, `wg-architecture-decision-is-a-plan-deliverable`); labels `follow-through`, `domain/engineering`, `priority/p3-low`, `type/chore` exist; every test and script path named exists on the branch (`scripts/regenerate-shard-manifest.py`, `plugins/soleur/test/workflow-file-size.test.ts`, `plugins/soleur/test/terraform-target-parity.test.ts`, the C4 suites, `run-registered-suites.sh`, the sibling alert suite).
+**GDPR gate (advisory, triggered by the single-user-incident threshold):** the five v1 checks have nothing to match: no schema column, no PII table, no FK to `users`, no new non-EEA vendor or SDK (Better Stack ingest and the existing phone-home are reused), no Art. 9 column name. No findings. This is not legal review; the header-backup questions stay with the CLO under #9927 item 1.
+
+### Key improvements found in the deepen pass
+
+1. Verified the phone-home row shape from the source: the payload is `{message: "<marker> stage=<stage> <detail>", marker, stage, detail, host, dt, ...}`, so a message-anchored `position(JSONExtractString(raw,'message'),marker)=1` matches the phone-home channel, a `dt` column exists for the dead-man's window filter, and a detail key named `stage` would duplicate the prepended one (already fixed: `at=`).
+2. Verify-the-negative sweep over the plan's negative claims: "`inngest-cutover-flip` is admitted in `vector.toml`" confirmed (three lists); "`GUARD_REV` is pinned" confirmed (`cutover-inngest-workflow.test.sh` asserts `EXPECTED_GUARD` equals `GUARD_REV`); "the member scripts are not `user_data` inputs" confirmed (`inngest-host.tf` embeds `infra-config-install.sh`, `cosign-trusted-root.json` and the image pin); "`apply-web-platform-infra.yml` is the only workflow that applies the alerts file" confirmed by the workflow census; one claim weakened: the plan no longer attributes the "older bundle overwrites the baked script" behaviour to an ADR-135 passage it could not re-find (reworded to the mechanism).
+3. Post-edit self-audit: after the plan-review edits the plan was grepped for the renamed or dropped symbols: no `stage=` key remains in a row example, the persistent-`indeterminate` issue appears only as a dropped item, never as one to file, and the paging alert carries no 90,000 s window.
+4. `tasks.md` and `decision-challenges.md` already carry the load-bearing corrections (rows D10 and D11, the two-issue follow-up set, the `at=` literal, the web-host push check); nothing further to propagate.
+
+### New considerations discovered
+
+- The real-tool measurements and the ERR-trap measurement are dated 2026-10-26 on a file container and bash 5.3; the work phase re-measures and cites commands, not figures.
+- The dead-man's 30-day window and the sandbox claim remain the two unproven items; both have explicit gates and fallbacks in Phase 2.3 and Phase 3.2.
+
 ## Overview
 
 Add a read-only probe on the dedicated Inngest scheduler host that asks cryptsetup whether the passphrase the host holds still unlocks the LUKS2 header of the volume behind `/mnt/data`, and report the answer as one `SOLEUR_INNGEST_LUKS_KEY_PROBE` row that Better Stack can read without any host login. Two Better Stack alerts come with it: one that pages on a failed verdict, and one self-arming dead-man that fires when a once-seen probe stops producing a measured verdict.
@@ -175,7 +194,7 @@ See "Follow-up issues to file". Filed at the start of the work phase.
 1. Pre-promotion checks (agent-runnable, read-only, recorded on the tracker): `bash -n` and a `--fixture-seams` smoke run of the script as packed into the built bundle; the Phase 2.3 rehearsal result; a review of the member diff since the last promoted bundle (the bundle is built from the default branch, so any other member edit merged since then ships too); a pre-built, unpromoted revert bundle at the next higher version (the channel is monotonic, a rollback is a roll-forward).
 2. Dispatch `build-inngest-config-bundle.yml` from the default branch at a version above the applied one (read it from the newest `SOLEUR_INFRA_PULL_APPLIED version=` row; if that row is absent or past retention, read the drift comparator summary; the brief says v5, so expect 6), approved in the `inngest-config-signing` environment.
 3. Promote the digest (`INNGEST_CONFIG_DIGEST` in `soleur/prd_terraform`, then the targeted apply per `inngest-config-refresh.md` step 3; #9060 automation is still open). A menu answer is not authorization for either step (`hr-menu-option-ack-not-prod-write-auth`). The plan builds none of it and dispatches nothing.
-4. Before ANY future host replace, promote a probe-carrying bundle: a replaced host handed an older promoted bundle overwrites the image-baked script and silently drops the probe (ADR-135 addendum).
+4. Before ANY future host replace, promote a probe-carrying bundle: a replaced host applies the currently promoted bundle over the image-baked script, so a promoted bundle that predates the probe silently drops it (the refresh engine installs whatever the promoted pointer names; ADR-135 records the floor and pointer behaviour).
 
 **First-row verification (read-only, no SSH; also the close condition of the owner-hold tracker):** `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_LUKS_KEY_PROBE --limit 5`, read by meaning: a row from the SYSLOG_IDENTIFIER `inngest-cutover-flip` channel AND a phone-home row, both `token=ok rc=0`, within about two minutes of the next applied bundle (the 60 s refresh timer, then the first 30 s tick with no stamp). A webhook payload that quotes the marker, or an `indeterminate` row, does not satisfy it. `token=fail_*` pages. The first `ok` row is also the delivery proof (no `GUARD_REV` bump).
 
@@ -359,7 +378,7 @@ The ADR amendment describes the delivered-and-gated target state; the delivery h
 
 ### Legal (CLO)
 
-Not relevant: no personal-data processing, no new store, no new recipient; the header backup and any Art. 17 or disclosure wording stay with the CLO under #9927 item 1 and are not decided here. `soleur:gdpr-gate` is run advisory-only on this plan at deepen time because the single-user-incident threshold triggers it.
+Not relevant: no personal-data processing, no new store, no new recipient; the header backup and any Art. 17 or disclosure wording stay with the CLO under #9927 item 1 and are not decided here. `soleur:gdpr-gate` ran advisory-only on this plan at deepen time (the single-user-incident threshold triggers it): no findings (see the Enhancement Summary).
 
 ### Product/UX Gate
 
