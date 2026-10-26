@@ -919,7 +919,8 @@ anthropic-admin-key-6297|scripts/followthroughs/anthropic-admin-key-6297.test.sh
 cwv-field-rum-9178|scripts/followthroughs/cwv-field-rum-9178.test.sh
 send-failed-alert-probe-8097|scripts/followthroughs/send-failed-alert-probe-8097.test.sh
 betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh
-git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh'
+git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh
+orphan-sweeps-relook-10972|scripts/followthroughs/orphan-sweeps-relook-10972.test.sh'
 
 # HMAC (S2-C): the probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
 # config channel: name | kind | hosts | min_calls | body | owning test. Only `delegated` rows remain, so the hosts, min_calls and
