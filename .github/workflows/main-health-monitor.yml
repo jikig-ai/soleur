@@ -1,6 +1,7 @@
 # Main branch health monitor.
-# Runs the full test suite against main on a schedule.
-# If tests fail and no open tracking issue exists, creates a P1 issue.
+# Runs the full test suite against main on a schedule, SHARDED across parallel
+# legs (#9410). A report job that `needs` every leg owns the single tracker and
+# the single Sentry check-in.
 # To test manually: gh workflow run main-health-monitor.yml
 # The recurring run is dispatched by the Inngest cron `cron-main-health-monitor`
 # (every 6 hours on the hour UTC) — Inngest is the single scheduling substrate.
@@ -36,20 +37,55 @@
 #      this branch's own verification dispatch.
 #   C. The infra suites were never covered here. `test-all.sh` gates its nested
 #      infra runner on a diff against `origin/main`, which on a clean checkout
-#      OF main is empty — permanently, not incidentally.
+#      OF main is empty — permanently, not incidentally. The dedicated
+#      `test-infra` leg below runs `TEST_GROUP=infra`, which bypasses the gate.
 #   E. (#8112) A bare `[FAIL]` grep titled a step-budget exhaustion "main branch tests
 #      failing". Seven `[FAIL]` lines in that tracker's body were EXPECTED positive
 #      controls, and the capture's own breakdown said `0 failed`; the step had in fact
 #      been killed at its `timeout-minutes` ceiling on every run listed from 2026-09-13
 #      to 2026-10-01 (2411-2413 s each). The
 #      verdict is now the runner's (a `RED`/`UNACCOUNTED` line, or a printed breakdown
-#      with at least one failed suite), a `[FAIL]` line is display-only, and each suite
-#      step records its own elapsed seconds so the next ceiling is derived from an
+#      with at least one failed suite), a `[FAIL]` line is display-only, and each leg's
+#      suite step records its own elapsed seconds so the next ceiling is derived from an
 #      uncensored figure.
 #
 # The consequence of fixing A without B is a monitor with a longer green window
 # in which it still closes real trackers, so B is fixed first and the filer's
 # condition is exhaustive over `success | failure | cancelled | skipped`.
+#
+# ---------------------------------------------------------------------------
+# THE SHARDED SHAPE (#9410). The pre-#9410 monitor ran `TEST_GROUP=all` as ONE
+# sequential step (~50 min wall, over the 40-min step ceiling on every run since
+# 2026-09-17), so each suite-set growth forced a step-ceiling + job-ceiling +
+# Sentry envelope re-derivation. It now mirrors ci.yml's leg topology, because
+# `SCRIPTS_SHARD` is scoped to the two scripts groups (test-all.sh refuses it
+# under any other TEST_GROUP):
+#
+#   test-webplat        matrix 1/2..2/2  VITEST_SHARD   (vitest native shard)
+#   test-bun            1 leg            TEST_GROUP=bun
+#   test-scripts        matrix 1/8..8/8  SCRIPTS_SHARD  (ADR-240 manifest, n=8)
+#   test-scripts-heavy  matrix 1/3..3/3  SCRIPTS_SHARD  (ADR-240 manifest, n=3)
+#   test-infra          1 leg            TEST_GROUP=infra (default -P width)
+#   report              needs all five   tracker + mintwatch + Sentry check-in
+#
+# Coverage vs `TEST_GROUP=all`: `all` = scripts + scripts-heavy + bun + webplat
+# + the diff-gated nested infra runner. The five leg jobs cover the same
+# registration set (want_* group arms are identical to `all`'s), and the nested
+# infra runner — which fires under `all` only on an infra-touching diff — is
+# covered unconditionally by the explicit test-infra leg instead. On `main`
+# (empty diff) nothing changes; on a branch dry-run the old shape ran the infra
+# set twice (nested + standalone) and the new one runs it once. JOBS=1 exists
+# nowhere now: it pinned the `all` step's NESTED infra runner, and no leg runs
+# `all`, so nothing needs it. (#7432's unpin evidence stands.)
+#
+# ONE CHECK-IN OWNER, ONE TRACKER. Leg jobs emit only a per-leg ::notice::
+# annotation (`SOLEUR_MAIN_HEALTH <leg>=<outcome>` — the jobs1-stopgap-7432 soak
+# probe reads `infra=`/`infra_elapsed_s=` on the test-infra check-run). The
+# report job reads every leg's `needs.<job>.result`, downloads the per-leg
+# capture+status artifacts, classifies them with the #8112 arm taxonomy, and is
+# the only job that files/closes the tracker and checks in to Sentry. A failed
+# leg's suite step deliberately carries NO continue-on-error — `needs.*.result`
+# must carry the real verdict, and `continue-on-error` would pin it to success.
 # ---------------------------------------------------------------------------
 
 name: "Main Health Monitor"
@@ -65,15 +101,16 @@ on:
         default: false
 
 concurrency:
-  # A DRY RUN gets its own group (#8112 review). A healthy run is now ~110 minutes, so a manual or
-  # measurement dispatch sharing the cron group within ~100 minutes before a 6-hourly slot would
-  # delay the scheduled run past the Sentry margin, and a dry run sends no check-in to say so.
+  # A DRY RUN gets its own group (#8112 review). A healthy run's wall clock is
+  # now the slowest leg plus the report job, but a manual or measurement
+  # dispatch sharing the cron group before a 6-hourly slot could still delay the
+  # scheduled run, and a dry run sends no check-in to say so.
   group: main-health-monitor${{ inputs.dry_run && '-dry-run' || '' }}
   # false, deliberately (#7307 hazard D). With `true`, the workflow MANUFACTURED
   # `cancelled` conclusions indistinguishable from a ceiling timeout — measured
   # 2026-08-06: three runs cancelled at 1m20s / 2m31s / 6m29s, far under any
   # ceiling. Once `cancelled` is a reportable signal (it is, below), those would
-  # file spurious P1s. At a 6h cadence with a ~110-minute run, queueing is free.
+  # file spurious P1s. At a 6h cadence, queueing is free.
   # Residual, recorded not fixed: GitHub still cancels older PENDING runs in a
   # group, so this reduces rather than eliminates the class — the Sentry monitor
   # is what makes a missed run legible either way.
@@ -83,8 +120,8 @@ permissions:
   contents: read
   issues: write
 
-# TOOLCHAIN PINS — this workflow runs `TEST_GROUP=all`, i.e. the suites of EVERY
-# CI shard, so its environment must be the UNION of those shards' toolchains.
+# TOOLCHAIN PINS — the legs run the suites of EVERY ci.yml shard, so between
+# them their environments are the UNION of those shards' toolchains.
 # Before #7307 it carried none of them, which is why its coverage was already
 # partly vacuous: 3 suites went RED without gitleaks (they hard-ABORTed then;
 # since #8266 the gitleaks suites probe runnability and skip per arm, and any
@@ -97,7 +134,7 @@ permissions:
 # earlier revision of this comment claimed "nothing mechanically couples them",
 # which was false for gitleaks and likec4 and would have sent a future bumper
 # past two guards that exist:
-#   GITLEAKS_*        -> 5 sites: ci.yml (test-scripts + test-scripts-heavy),
+#   GITLEAKS_*        -> sites: ci.yml (test-scripts + test-scripts-heavy),
 #                        secret-scan.yml,
 #                        .github/actions/bot-pr-with-synthetic-checks/action.yml,
 #                        and here. Guarded by Test 5 of
@@ -125,130 +162,405 @@ env:
   TERRAFORM_VERSION: "1.10.5"
 
 jobs:
-  health-check:
-    # Pinned to match infra-validation and the Item I soak evidence (the runner's own annotation
-    # says the `ubuntu-latest` label starts moving to a newer image on 2026-10-19, inside the
-    # soak); re-evaluate the image together with infra-validation's pin.
+  # ---------------------------------------------------------------------------
+  # LEG: apps/web-platform vitest — mirrors ci.yml's test-webplat toolchain.
+  # ---------------------------------------------------------------------------
+  test-webplat:
     runs-on: ubuntu-24.04
-
-    # TIMEOUT BUDGET — measured, not guessed. Re-derive; do not copy.
-    #
-    # The #7307 band (14m49s-15m26s) is NOT the input: every run over 15m was
-    # KILLED at 15m, so it measures the OLD CEILING, not the suite. Censored data.
-    #
-    # WARM vs COLD is the trap here, and it bit the first derivation. Every run on
-    # this branch executes the infra suites TWICE (92 when this was written; the
-    # set is glob-derived since #8736 and grows — do not re-pin a count) — the
-    # branch diff touches
-    # apps/web-platform/infra/, so `TEST_GROUP=all` fires the nested runner inside
-    # the tests step first, and the standalone infra step then runs against an
-    # already-warm workspace (~1.9x faster at -P 4). On `main` the nested run does
-    # NOT happen (empty diff — defect C), so the standalone step is the first and
-    # only run: COLD. The nested run therefore INFLATES the tests figure (safe to
-    # leave) and DEFLATES the infra figure (not safe), and an earlier revision of
-    # this block noticed only the first.
-    #
-    # tests — job-level (NOT run-level, which adds queue+teardown). The binding run is
-    # 36950488321 (2026-10-02, workflow_dispatch dry run on this PR's branch, ceilings
-    # temporarily raised to 90/45/150 so that NEITHER step was censored):
-    #   tests=4228 s (70m28s)   infra=2326 s (38m46s)
-    # read from the `SOLEUR_MAIN_HEALTH ... tests_elapsed_s=4228 infra_elapsed_s=2326`
-    # annotation, with the runner's own breakdown printed
-    # (`=== 549 suites: 547 passed, 1 failed, ...`; the one failed suite was this file's
-    # Sentry parity row, expected RED at that commit because the Terraform edit was
-    # withheld). Every earlier figure in this block was CENSORED: from 2026-09-17 the tests
-    # step ended at 2411-2413 s on all 60 listed runs (the 40-minute ceiling) and the infra
-    # step at its 15- then 20-minute ceiling. A censored run measures the ceiling, never the
-    # suite. The tests step did not run the nested infra runner on that dry run: it was
-    # dispatched from a commit whose three-dot diff touched no apps/web-platform/infra/ path
-    # (the Terraform edit was withheld on purpose), so the figure is the `main` shape. The
-    # final state of the branch DOES touch that path, and a later dispatch from it would
-    # include a nested infra run in the tests figure. Cross-check: 2209 s of suite time had elapsed for 256 of 414 suites at
-    # the old kill, which extrapolates to about 60 min for 414 suites and about 80 min scaled
-    # to the 549 suites counted now, against 70.5 min measured.
-    #
-    # The infra figure is the standalone step on the same run, cold and sequential, with the
-    # bounded in-container apt cycle already merged on that branch (the apt stall had inflated
-    # earlier infra figures). Both steps are expected to keep growing with the suite set.
-    # That infra figure was measured at the sequential width; since #7432 the infra step runs at
-    # the runner's default width, so the 60-minute ceiling is now over-provisioned for it (the
-    # ceiling and its Sentry coupling are deliberately not re-derived here).
-    #
-    # Rule: roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
-    #       tests_step = max(30, roundup5(tests_max * 1.5))
-    #       infra_step = max(10, roundup5(infra_max * 1.5))
-    #       job        = tests_step + infra_step + 5 (setup) + 10 (cancel-token margin)
-    # Worked:
-    #   tests 70m28s = 70.47 -> x1.5 = 105.70 -> roundup5 110
-    #   infra 38m46s = 38.77 -> x1.5 = 58.15  -> roundup5 60
-    #   job   = 110 + 60 + 5 + 10 = 185      (setup measured 60-94s over the 62 runs since 2026-09-17)
-    # The apps/web-platform/infra/sentry cron monitor (`main_health_monitor`) carries
-    # max_runtime_minutes = job and checkin_margin_minutes = job + 25; the static guard in
-    # plugins/soleur/test/main-health-monitor-workflow.test.sh (G2) keeps the three together.
-    # This is a STOPGAP: a tests step above 60 minutes is the trigger recorded in #9410 for
-    # sharding the monitor, and that trigger has been reached.
-    #
-    # The job ceiling must dominate the SUM of the step ceilings, not the max: with
-    # two timed steps, `max + 10` lets the job token trip midway through the second
-    # step, and a JOB cancel skips every remaining step regardless of `if:` —
-    # recreating defect A with the fix in place.
-    #
-    # The 1.5x and the floors are ARBITRARY SLACK, not a variance estimate. They are
-    # affordable because the repo is PUBLIC — which also pins the runner at 4 vCPU.
-    # A private repo gets 2 vCPU, roughly doubling CPU-bound work and putting infra
-    # over its ceiling; this derivation is coupled to the public-repo runner and
-    # would need re-deriving if that ever changes.
-    #
-    # Re-derive with:
-    #   gh run list --workflow=main-health-monitor.yml --limit 30 \
-    #     --json databaseId,conclusion,createdAt
-    #   gh run view <id> --json jobs   # job-level, NOT run-level
-    # and note `gh run view --json jobs` reports steps[].conclusion, which
-    # `continue-on-error: true` PINS TO success — the verdict is the step `outcome`.
-    timeout-minutes: 185
-
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     steps:
-      # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
-      # deploy-script-tests job. The cloud-init-inngest-bootstrap drift guard
-      # compares its pin against the latest tag merged into HEAD (#8782); a
-      # shallow checkout hides older tags from `git tag --merged`, so in CI a
-      # shallow or tagless checkout FAILS the guard rather than skipping -- this
-      # job would go red on checkout wiring, not on real drift.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
-          fetch-tags: true
-
-      # ci.yml's test-webplat and test-bun shards both pin node 22 via
-      # setup-node; this job runs TEST_GROUP=all, i.e. those very groups, so
-      # without this it ran them on the runner's stock node. The "union of every
-      # shard's toolchain" claim above was false in exactly this way until #7307's
-      # review caught it — keep the SHA in lockstep with ci.yml.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
           bun-version-file: ".bun-version"
 
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
 
       - name: Install web-platform dependencies
         run: npm ci --ignore-scripts
         working-directory: apps/web-platform
 
-      # Toolchain for the infra suites (#7307 defect C). Mirrors
-      # infra-validation.yml's deploy-script-tests job, which is the reference
-      # environment those suites are written against.
-      #
-      # terraform_version is pinned to the SAME literal as that workflow's
-      # env.TERRAFORM_VERSION. Stated as a known (small) drift surface rather
-      # than hidden: nothing mechanically couples the two today, so a bump there
-      # silently diverges here. terraform_wrapper: false keeps `terraform
-      # console` stdout byte-clean, which the render-parity suites depend on.
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts   # literals, not env: see TOOLCHAIN PINS
+          likec4 --version
+
+      - name: Install bubblewrap (C4 render sandbox) and socat (SDK sandbox startup check)
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends bubblewrap socat
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+
+      # 10-min step ceiling: leg p90 ~4.37 min (ci.yml's test-webplat measure)
+      # x1.5 = 6.6 -> floor 10. See the TIMEOUT BUDGET block on test-infra.
+      - name: Run test suite
+        id: suite
+        timeout-minutes: 10
+        env:
+          TEST_GROUP: webplat
+          VITEST_SHARD: ${{ matrix.shard }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LIKEC4_REQUIRED: "1"
+          C4_BWRAP_REQUIRED: "1"
+        run: |
+          set +e
+          t0=$SECONDS
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          bash scripts/test-all.sh 2>&1 | tee "$RUNNER_TEMP/leg-report/capture.txt"
+          rc=${PIPESTATUS[0]}
+          elapsed=$((SECONDS - t0))
+          set -e
+          # The step's OWN elapsed seconds (#8112). A step the ceiling kills never
+          # reaches this line, so an absent figure marks that sample as CENSORED.
+          echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Stage leg report
+        if: always()
+        env:
+          LEG_ID: webplat-${{ strategy.job-index }}
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+          SUITE_ELAPSED_S: ${{ steps.suite.outputs.elapsed_s }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          [[ -f "$RUNNER_TEMP/leg-report/capture.txt" ]] || : > "$RUNNER_TEMP/leg-report/capture.txt"
+          {
+            printf 'outcome=%s\n' "$SUITE_OUTCOME"
+            if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then
+              printf 'elapsed_s=%s\n' "$SUITE_ELAPSED_S"
+            else
+              printf 'elapsed_s=\n'
+            fi
+          } > "$RUNNER_TEMP/leg-report/status.env"
+          # Per-leg machine-readable verdict (the jobs1-stopgap-7432 soak probe
+          # reads the test-infra leg's check-run). ${LEG_ID}_elapsed_s is emitted
+          # only when purely numeric — suite children inherit $GITHUB_OUTPUT.
+          EL=""
+          if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then EL=" ${LEG_ID}_elapsed_s=${SUITE_ELAPSED_S}"; fi
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH ${LEG_ID}=${SUITE_OUTCOME}${EL}"
+
+      - name: Upload leg report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: monitor-leg-webplat-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/leg-report/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # LEG: bun-side suites — mirrors ci.yml's test-bun toolchain.
+  # ---------------------------------------------------------------------------
+  test-bun:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      # 10-min floor; ci.yml's test-bun p90 is under 2 min.
+      - name: Run test suite
+        id: suite
+        timeout-minutes: 10
+        env:
+          TEST_GROUP: bun
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          t0=$SECONDS
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          bash scripts/test-all.sh 2>&1 | tee "$RUNNER_TEMP/leg-report/capture.txt"
+          rc=${PIPESTATUS[0]}
+          elapsed=$((SECONDS - t0))
+          set -e
+          echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Stage leg report
+        if: always()
+        env:
+          LEG_ID: bun
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+          SUITE_ELAPSED_S: ${{ steps.suite.outputs.elapsed_s }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          [[ -f "$RUNNER_TEMP/leg-report/capture.txt" ]] || : > "$RUNNER_TEMP/leg-report/capture.txt"
+          {
+            printf 'outcome=%s\n' "$SUITE_OUTCOME"
+            if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then
+              printf 'elapsed_s=%s\n' "$SUITE_ELAPSED_S"
+            else
+              printf 'elapsed_s=\n'
+            fi
+          } > "$RUNNER_TEMP/leg-report/status.env"
+          EL=""
+          if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then EL=" ${LEG_ID}_elapsed_s=${SUITE_ELAPSED_S}"; fi
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH ${LEG_ID}=${SUITE_OUTCOME}${EL}"
+
+      - name: Upload leg report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: monitor-leg-bun
+          path: ${{ runner.temp }}/leg-report/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # LEGS: the light scripts group, 8-way on the ADR-240 manifest.
+  # Leg membership comes from scripts/suite-shard-legs.tsv (n=8), not from
+  # position — the same manifest ci.yml's test-scripts consumes. Every leg under
+  # ~600 s of predicted suite time (#9307); untabled labels hash-fallback.
+  # ---------------------------------------------------------------------------
+  test-scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]
+    env:
+      # Same two-channel shape as ci.yml: TEST_GROUP is a step env naming WHICH
+      # suites exist, SCRIPTS_SHARD is a job env naming WHICH SLICE this leg
+      # owns. The runner exits 2 on a set-but-empty or non-scripts-group shard.
+      SCRIPTS_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
+        run: |
+          set -euo pipefail
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
+          likec4 --version
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Allow unprivileged user namespaces (read-recorder network-namespace rows)
+        run: sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      # 15-min step ceiling: ~9.5 min predicted suite time per leg at K=8 (every
+      # leg under 600 s, #9307) x1.5 = 14.25 -> roundup5 15.
+      - name: Run test suite
+        id: suite
+        timeout-minutes: 15
+        env:
+          TEST_GROUP: scripts
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          t0=$SECONDS
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          bash scripts/test-all.sh 2>&1 | tee "$RUNNER_TEMP/leg-report/capture.txt"
+          rc=${PIPESTATUS[0]}
+          elapsed=$((SECONDS - t0))
+          set -e
+          echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Stage leg report
+        if: always()
+        env:
+          LEG_ID: scripts-${{ strategy.job-index }}
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+          SUITE_ELAPSED_S: ${{ steps.suite.outputs.elapsed_s }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          [[ -f "$RUNNER_TEMP/leg-report/capture.txt" ]] || : > "$RUNNER_TEMP/leg-report/capture.txt"
+          {
+            printf 'outcome=%s\n' "$SUITE_OUTCOME"
+            if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then
+              printf 'elapsed_s=%s\n' "$SUITE_ELAPSED_S"
+            else
+              printf 'elapsed_s=\n'
+            fi
+          } > "$RUNNER_TEMP/leg-report/status.env"
+          EL=""
+          if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then EL=" ${LEG_ID}_elapsed_s=${SUITE_ELAPSED_S}"; fi
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH ${LEG_ID}=${SUITE_OUTCOME}${EL}"
+
+      - name: Upload leg report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: monitor-leg-scripts-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/leg-report/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # LEGS: the three cost-heaviest registrations, one suite per leg, on the
+  # ADR-240 heavy manifest (scripts/suite-shard-legs-heavy.tsv, n=3).
+  # ---------------------------------------------------------------------------
+  test-scripts-heavy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+    env:
+      SCRIPTS_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned, sha-verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      # 65-min step ceiling: the worst member is the registry battery, whose own
+      # declared _suite_budget_ms is 2500000 ms = 41.67 min — the repo's DECLARED
+      # expectation, so a ceiling below it is a silent kill on a legitimate run.
+      # 1.5 x 41.67 = 62.5 -> roundup5 65. The other two members (~6 min) sit far
+      # under it.
+      - name: Run test suite
+        id: suite
+        timeout-minutes: 65
+        env:
+          TEST_GROUP: scripts-heavy
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          t0=$SECONDS
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          bash scripts/test-all.sh 2>&1 | tee "$RUNNER_TEMP/leg-report/capture.txt"
+          rc=${PIPESTATUS[0]}
+          elapsed=$((SECONDS - t0))
+          set -e
+          echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Stage leg report
+        if: always()
+        env:
+          LEG_ID: heavy-${{ strategy.job-index }}
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+          SUITE_ELAPSED_S: ${{ steps.suite.outputs.elapsed_s }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          [[ -f "$RUNNER_TEMP/leg-report/capture.txt" ]] || : > "$RUNNER_TEMP/leg-report/capture.txt"
+          {
+            printf 'outcome=%s\n' "$SUITE_OUTCOME"
+            if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then
+              printf 'elapsed_s=%s\n' "$SUITE_ELAPSED_S"
+            else
+              printf 'elapsed_s=\n'
+            fi
+          } > "$RUNNER_TEMP/leg-report/status.env"
+          EL=""
+          if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then EL=" ${LEG_ID}_elapsed_s=${SUITE_ELAPSED_S}"; fi
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH ${LEG_ID}=${SUITE_OUTCOME}${EL}"
+
+      - name: Upload leg report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: monitor-leg-heavy-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/leg-report/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # LEG: the infra suites. `TEST_GROUP=infra` runs ONLY the infra runner and
+  # bypasses the empty-diff gate that makes defect C permanent on `main`.
+  # A single leg, not a SOLEUR_INFRA_SHARD matrix: the jobs1-stopgap-7432 soak
+  # probe reads ONE job's log for the `-P K` width line, the RED/UNACCOUNTED
+  # lines and the runner's single tally line — a matrix would fork each of those
+  # surfaces across four check-runs.
+  #
+  # TIMEOUT BUDGET — measured, not guessed. Re-derive; do not copy.
+  # The last uncensored whole-suite measurement is run 36950488321
+  # (2026-10-02 dry run): tests=4228 s sequential over `all`, infra=2326 s
+  # sequential. Per-leg ceilings follow the same rule:
+  #   roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
+  #   leg_step = max(10, roundup5(leg_max * 1.5))
+  #   leg_job  = leg_step + 10 (setup) + 10 (stage/upload/notice + cancel margin)
+  #   envelope = max(leg_job) + report(15); Sentry max_runtime = envelope,
+  #              checkin_margin = envelope + 25 — both kept in lockstep by the
+  #              static guard (G2) in
+  #              plugins/soleur/test/main-health-monitor-workflow.test.sh.
+  # infra: 38.77 x 1.5 = 58.15 -> 60, and the comment is stale in the SAFE
+  # direction — the leg runs the runner's default width (-P 4) since #7432.
+  # ---------------------------------------------------------------------------
+  test-infra:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    steps:
+      # fetch-depth: 0 + fetch-tags: true mirror infra-validation.yml's
+      # deploy-script-tests job. The cloud-init-inngest-bootstrap drift guard
+      # compares its pin against the latest tag merged into HEAD (#8782); a
+      # shallow checkout hides older tags from `git tag --merged`, so in CI a
+      # shallow or tagless checkout FAILS the guard rather than skipping.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
@@ -263,198 +575,119 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq cloud-init
 
-      # gitleaks: the gitleaks suites (gitleaks-merge-commit.test.sh,
-      # gitleaks-rules.test.sh, code-to-prd.test.sh and
-      # .claude/hooks/git-commit-secret-scan.test.sh) probe RUNNABILITY
-      # (`gitleaks version` exits 0, not `command -v`) and skip only the arms
-      # that need the binary. Under CI=true — set on every Actions run — any
-      # skipped arm FAILS the suite, naming the arms, so without this install
-      # the monitor goes RED rather than green over skipped coverage.
-      # History: measured on run 31328156153, three of them went RED purely for
-      # its absence (then via a hard ABORT exit 2).
-      # Same pinned + checksum-verified shape as ci.yml's test-scripts shard.
-      - name: Install gitleaks (pinned, sha-verified)
-        run: |
-          set -euo pipefail
-          curl -sSLo gitleaks.tgz \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
-          tar -xzf gitleaks.tgz gitleaks
-          chmod +x gitleaks
-          sudo mv gitleaks /usr/local/bin/gitleaks
-          gitleaks version
-
-      # likec4: c4-model-freshness.test.sh renders the .c4 sources and byte-diffs
-      # the committed model.likec4.json. Without the CLI it SELF-SKIPS, and a
-      # self-skip is indistinguishable from a pass — so a stale committed artifact
-      # would sail through the very monitor meant to catch a broken main.
-      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
-        run: |
-          set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts   # literals, not env: see TOOLCHAIN PINS
-          likec4 --version
-
-      # ORDERED BEFORE the infra step, and that ordering is the invariant.
+      # ORDERED BEFORE the suite step, and that ordering is the invariant.
       # A registered infra suite whose tool is absent self-skips with exit 0,
       # and run-registered-suites.sh prints PASS for a skip — so without this
       # assertion the monitor would go green over silently-absent coverage,
       # which is the exact "looks like coverage" shape this PR exists to remove.
-      # The assertion set mirrors what infra-validation.yml itself guarantees;
-      # see the PR body for the wider live-derived tool list and why widening it
-      # here (beyond what CI asserts) would red the monitor for a condition CI
-      # tolerates.
       - name: Assert toolchain present
         run: |
           command -v terraform
           command -v cloud-init
           command -v python3
           command -v jq
-          gitleaks version >/dev/null   # runnable, not merely resolvable (#8266)
-          command -v likec4
           docker info >/dev/null
 
-      # PER-STEP capture files, not one shared file. A single shared capture is
-      # actively misleading: both steps `tee -a` into it, so `tail -30` returns
-      # whichever step ran LAST. Measured on run 31331269522 — tests=failure,
-      # infra=success — the filed issue's "Failure summary" was 30 lines of the
-      # infra step's PASS output and contained no trace of the actual failure.
-      # That is the phantom-chasing shape this workflow is supposed to remove.
-      # Reset both up front so a warm runner cannot leak stale output either.
-      - name: Reset test output captures
-        run: |
-          : > /tmp/tests-output.txt
-          : > /tmp/infra-output.txt
-
-      - name: Run test suite
-        id: tests
-        continue-on-error: true
-        timeout-minutes: 110 # derived from run 36950488321 (uncensored); see the TIMEOUT BUDGET block above
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # JOBS=1 -- SEQUENTIAL, deliberately, on THIS step only (the infra step below
-          # runs at the runner's default width; see the last paragraph). The tests
-          # step runs the nested infra runner whenever the branch diff touches
-          # apps/web-platform/infra/, and that nested run needs the pin. The pin is
-          # at step scope, NOT workflow scope: node-gyp reads JOBS as its `make -j`
-          # width, so a workflow-level value also serialises native rebuilds in
-          # `bun install` and `npm install -g`.
-          #
-          # Why the pin existed: the runner defaults to min(nproc,6), i.e. -P 4 on a
-          # 4-core hosted runner, and a 2026-08 measurement (#7376, eight executions
-          # of the same 92-suite set on an unchanged tree) saw four fail naming six
-          # distinct suites, while the -P 1 runs were clean. #7376 later traced the
-          # flake mostly to the `grep -q` early-exit pipe shape under pipefail, with
-          # -P contention only opening the scheduling gap; #9554 removed that shape
-          # from the production roots on 2026-10-06, which is the start of this
-          # change's observation window.
-          #
-          # Why the infra step no longer carries it (Item I of the grep -q series,
-          # #9217; tracker #7432): the infra-validation `deploy-script-tests` legs
-          # run the same runner at -P 4 on the same runner image (688 leg
-          # executions on push to main from 2026-09-25 to 2026-10-16: 609 success,
-          # 75 failure, none shown parallel-only; each leg runs about a quarter
-          # of the suite set on average, the monitor runs all of it), while the sequential infra step
-          # did not reliably fit its 60-minute ceiling at the current suite count:
-          # 81 of about 270 monitor runs that reported a verdict (30%) had the infra
-          # step killed at the ceiling (the verdict reads infra=failure with no
-          # infra_elapsed_s). On `main` the nested runner is skipped in this step, so
-          # this pin affects the branch-diff case only. Guard (12) in
-          # plugins/soleur/test/main-health-monitor-workflow.test.sh asserts both
-          # halves. The revert trigger is stated once, in the header of
-          # scripts/followthroughs/jobs1-stopgap-7432.sh, and mirrored on #7432.
-          JOBS: 1
-        run: |
-          set +e
-          t0=$SECONDS
-          bash scripts/test-all.sh 2>&1 | tee -a /tmp/tests-output.txt
-          rc=${PIPESTATUS[0]}
-          elapsed=$((SECONDS - t0))
-          set -e
-          # The step's OWN elapsed seconds (#8112). A step the ceiling kills never reaches this line,
-          # so an absent figure marks that sample as CENSORED, and a present one is uncensored by
-          # construction: the next ceiling derivation reads ordinary runs instead of needing a
-          # dedicated dry run. Written by the workflow itself, but `$GITHUB_OUTPUT` is inherited by
-          # every suite child, so the consumers still validate it as numeric before use.
-          echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
-          exit "$rc"
-
-      # TEST_GROUP=infra is not "also run infra" — it runs ONLY infra, which is
-      # why this is a second step rather than an argument on the one above.
-      # It also bypasses the empty-diff gate that makes defect C permanent
-      # (scripts/test-all.sh sets _infra_ran=1 on `TEST_GROUP == "infra"`).
+      # 60-min step ceiling — see the TIMEOUT BUDGET block on this job. No JOBS
+      # pin: TEST_GROUP=infra never nests the runner, and Item I of the grep -q
+      # series (#9217, tracker #7432) measured the default width clean.
       - name: Run infra suites
-        id: infra
-        continue-on-error: true
-        timeout-minutes: 60 # derived from run 36950488321 (uncensored); see the TIMEOUT BUDGET block above
+        id: suite
+        timeout-minutes: 60
         env:
           TEST_GROUP: infra
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           t0=$SECONDS
-          bash scripts/test-all.sh 2>&1 | tee -a /tmp/infra-output.txt
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          bash scripts/test-all.sh 2>&1 | tee "$RUNNER_TEMP/leg-report/capture.txt"
           rc=${PIPESTATUS[0]}
           elapsed=$((SECONDS - t0))
           set -e
-          # The step's OWN elapsed seconds (#8112). A step the ceiling kills never reaches this line,
-          # so an absent figure marks that sample as CENSORED, and a present one is uncensored by
-          # construction: the next ceiling derivation reads ordinary runs instead of needing a
-          # dedicated dry run. Written by the workflow itself, but `$GITHUB_OUTPUT` is inherited by
-          # every suite child, so the consumers still validate it as numeric before use.
           echo "elapsed_s=${elapsed}" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
-      # `steps.<id>.outcome` is readable ONLY inside `${{ }}`. `gh run view
-      # --json jobs` exposes `steps[].conclusion`, which `continue-on-error:
-      # true` pins to `success` — so without this step the outcomes are
-      # unobservable after the fact and the acceptance criteria that assert on
-      # them are unverifiable.
-      - name: Record step outcomes
+      - name: Stage leg report
         if: always()
-        # The elapsed figures arrive through env:, never inlined into the script, and are emitted
-        # only when purely numeric: `$GITHUB_OUTPUT` is inherited by every suite child, so a
-        # non-numeric value could otherwise carry a workflow command into the `echo "::notice ..."`
-        # below (#8112 security review).
         env:
-          TESTS_ELAPSED_S: ${{ steps.tests.outputs.elapsed_s }}
-          INFRA_ELAPSED_S: ${{ steps.infra.outputs.elapsed_s }}
+          LEG_ID: infra
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+          SUITE_ELAPSED_S: ${{ steps.suite.outputs.elapsed_s }}
         run: |
-          T_EL=""
-          I_EL=""
-          if [[ "${TESTS_ELAPSED_S:-}" =~ ^[0-9]+$ ]]; then T_EL=" tests_elapsed_s=${TESTS_ELAPSED_S}"; fi
-          if [[ "${INFRA_ELAPSED_S:-}" =~ ^[0-9]+$ ]]; then I_EL=" infra_elapsed_s=${INFRA_ELAPSED_S}"; fi
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/leg-report"
+          [[ -f "$RUNNER_TEMP/leg-report/capture.txt" ]] || : > "$RUNNER_TEMP/leg-report/capture.txt"
           {
-            echo "tests=${{ steps.tests.outcome }}"
-            echo "infra=${{ steps.infra.outcome }}"
-          } >> "$GITHUB_STEP_SUMMARY"
-          # The summary above is human-only: GitHub exposes no REST field for job
-          # summaries, and this redirect keeps the values off stdout too. The
-          # annotation below IS retrievable without SSH via
-          #   gh api repos/{owner}/{repo}/check-runs/<job-id>/annotations
-          # and fires on every path — including a green run and a dry run, where
-          # the filer's ::error:: never happens and the verdict would otherwise be
-          # unreadable by anything but a human with a browser.
-          # `tests_elapsed_s` / `infra_elapsed_s` are ABSENT when the step ended before the runner
-          # returned (killed at its ceiling), which marks that sample as censored.
-          # `mint=` is the mintwatch verdict (#9082): the annotation is the
-          # machine-readable verdict surface, so the mint conclusion's input belongs
-          # on it too (empty when the step never ran).
-          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }} mint=${{ steps.mintwatch.outputs.verdict }}${T_EL}${I_EL}"
+            printf 'outcome=%s\n' "$SUITE_OUTCOME"
+            if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then
+              printf 'elapsed_s=%s\n' "$SUITE_ELAPSED_S"
+            else
+              printf 'elapsed_s=\n'
+            fi
+          } > "$RUNNER_TEMP/leg-report/status.env"
+          # PROBE PARITY: the jobs1-stopgap-7432 soak greps `infra=` and
+          # `infra_elapsed_s=` on this check-run's annotation; LEG_ID is `infra`
+          # precisely so those token names survive.
+          EL=""
+          if [[ "$SUITE_ELAPSED_S" =~ ^[0-9]+$ ]]; then EL=" ${LEG_ID}_elapsed_s=${SUITE_ELAPSED_S}"; fi
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH ${LEG_ID}=${SUITE_OUTCOME}${EL}"
 
-      # #9082 — the auto-mint's own conclusion as a monitor input. A red
-      # `mint-inngest-bootstrap-tag.yml` run on main reaches the operator otherwise
-      # only via its Slack step, which silently does nothing when
-      # SLACK_RELEASES_WEBHOOK_URL is unset or the post fails. This step reads the
-      # newest COMPLETED run on main and emits `verdict` — `red` ONLY for the two
-      # conclusions the issue names (`failure`, `startup_failure`): an in-flight
-      # run, a success/skipped/cancelled conclusion, or no run at all is not red,
-      # and an unreadable API is `unknown` — fail-open but never silent, with
-      # `::error::` on every such path (the 2026-10-06 queue-health conventions).
-      # `gh --json` is piped to a STANDALONE jq — `gh --jq` does not forward
-      # `--arg` (#9533) — and no pipe-fed `grep -q` decides a predicate (jq
-      # computes it). Deliberately NO `timeout-minutes:` of its own: the job
-      # ceiling is pinned at sum(step ceilings)+15 by the workflow test, so the
-      # bounded part here is the `timeout`-wrapped gh call, and the step always
-      # exits 0 — an API blip must never consume the suite job's ceiling.
+      - name: Upload leg report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: monitor-leg-infra
+          path: ${{ runner.temp }}/leg-report/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # REPORT: the single owner of the tracker and the Sentry check-in.
+  # `if: always()` is load-bearing: a failed or cancelled leg must never skip
+  # the reporter. `needs` lists every leg job; the five results plus the
+  # downloaded per-leg capture+status artifacts are the whole input.
+  # ---------------------------------------------------------------------------
+  report:
+    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, test-infra]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # The leg ids the reporter expects artifacts for — one per matrix leg plus
+      # the two singleton legs. The static guard derives this list from the
+      # matrix literals and the fixed legs; a matrix resize without an update
+      # here is a RED, not a drift.
+      EXPECTED_LEGS: "webplat-0 webplat-1 bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2 infra"
+    steps:
+      # `actions/checkout` is required ONLY for the sentry-heartbeat composite —
+      # a local `uses: ./` action resolves from the runner's workspace, which a
+      # job that never checks out leaves empty: the step fails "Can't find
+      # 'action.yml'" and its continue-on-error swallows that, so NO check-in
+      # ever posts and every healthy run pages as missed (the exact failure
+      # mode measured on run 35333427096, documented in
+      # scheduled-devin-docs-drift.yml). persist-credentials: false — the
+      # report's API calls all ride the GH_TOKEN env, never the checkout token.
+      - name: Check out this repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # Legs upload `monitor-leg-<id>` artifacts carrying capture.txt +
+      # status.env. A leg whose JOB was killed or cancelled uploads nothing, so
+      # a missing dir means "no leg report", not "green". continue-on-error:
+      # the zero-artifact case (every leg cancelled) fails the download itself,
+      # and the filer must still run to say so.
+      - name: Download leg reports
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: monitor-leg-*
+          path: /tmp/leg-reports
+
+      # Ordered BEFORE Record step outcomes so `mint=` in the annotation carries
+      # the real verdict, not an empty output.
       - name: Read newest mint-inngest-bootstrap-tag run (slow-path)
         id: mintwatch
         if: always()
@@ -497,32 +730,67 @@ jobs:
           echo "conclusion=$MINT_CONCLUSION" >> "$GITHUB_OUTPUT"
           exit 0
 
+      # The annotation IS retrievable without SSH via
+      #   gh api repos/{owner}/{repo}/check-runs/<job-id>/annotations
+      # and fires on every path — including a green run and a dry run, where
+      # the filer's ::error:: never happens and the verdict would otherwise be
+      # unreadable by anything but a human with a browser. Per-leg verdicts and
+      # elapsed figures live on each leg's own annotation and in its
+      # status.env inside the monitor-leg-* artifacts.
+      - name: Record step outcomes
+        if: always()
+        env:
+          R_WEBPLAT: ${{ needs.test-webplat.result }}
+          R_BUN: ${{ needs.test-bun.result }}
+          R_SCRIPTS: ${{ needs.test-scripts.result }}
+          R_HEAVY: ${{ needs.test-scripts-heavy.result }}
+          R_INFRA: ${{ needs.test-infra.result }}
+        run: |
+          reported=0
+          expected=0
+          for leg in $EXPECTED_LEGS; do
+            expected=$((expected + 1))
+            [[ -f "/tmp/leg-reports/monitor-leg-${leg}/status.env" ]] && reported=$((reported + 1))
+          done
+          {
+            echo "webplat=${R_WEBPLAT}"
+            echo "bun=${R_BUN}"
+            echo "scripts=${R_SCRIPTS}"
+            echo "heavy=${R_HEAVY}"
+            echo "infra=${R_INFRA}"
+            echo "legs=${reported}/${expected}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH webplat=${R_WEBPLAT} bun=${R_BUN} scripts=${R_SCRIPTS} heavy=${R_HEAVY} infra=${R_INFRA} mint=${{ steps.mintwatch.outputs.verdict }} legs=${reported}/${expected}"
+
       - name: Create issue on failure
         # `!= 'success'`, not `== 'failure'` — a job/step timeout is `cancelled`
-        # and a skipped step is `skipped`; both must report.
+        # and a skipped leg is `skipped`; both must report.
         #
         # `!cancelled()` is load-bearing and NOT decoration: GitHub implicitly
         # ANDs `success()` into any step `if:` that contains no status-check
         # function. Without it this step is skipped whenever an EARLIER step
-        # failed — and the two suite steps carry `continue-on-error: true`, so
-        # the only steps that can fail the job are setup. Those are exactly the
-        # runs where the monitor knows least and must still say so.
+        # failed — the download step is deliberately continue-on-error, so this
+        # is the only guard keeping a failed download from skipping the filer.
         #
-        # Exhaustive and disjoint with the closer over STEP outcomes WHEN THE JOB
-        # COMPLETES. A job-level cancel skips both arms regardless of `if:`; that
-        # class is covered by the Sentry missed-check-in alarm, not here.
+        # Exhaustive and disjoint with the closer over JOB results WHEN THIS JOB
+        # COMPLETES. A job-level cancel of THIS job skips both arms regardless of
+        # `if:`; that class is covered by the Sentry missed-check-in alarm, not
+        # here. Per-leg detail (which leg, which suite) comes from the
+        # monitor-leg-* artifacts; a leg with no artifact is named "no leg
+        # report" in the body.
         # #9082 — the mint verdict is a third red input, disjoint with the
         # suites': a mint-red run with green suites reaches the dedicated mint
         # arm below, not the suite arms.
-        if: ${{ !cancelled() && !inputs.dry_run && (steps.tests.outcome != 'success' || steps.infra.outcome != 'success' || steps.mintwatch.outputs.verdict == 'red') }}
+        if: ${{ !cancelled() && !inputs.dry_run && (needs.test-webplat.result != 'success' || needs.test-bun.result != 'success' || needs.test-scripts.result != 'success' || needs.test-scripts-heavy.result != 'success' || needs.test-infra.result != 'success' || steps.mintwatch.outputs.verdict == 'red') }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_SHA: ${{ github.sha }}
-          TESTS_OUTCOME: ${{ steps.tests.outcome }}
-          INFRA_OUTCOME: ${{ steps.infra.outcome }}
-          TESTS_ELAPSED_S: ${{ steps.tests.outputs.elapsed_s }}
-          INFRA_ELAPSED_S: ${{ steps.infra.outputs.elapsed_s }}
+          R_WEBPLAT: ${{ needs.test-webplat.result }}
+          R_BUN: ${{ needs.test-bun.result }}
+          R_SCRIPTS: ${{ needs.test-scripts.result }}
+          R_HEAVY: ${{ needs.test-scripts-heavy.result }}
+          R_INFRA: ${{ needs.test-infra.result }}
           MINT_VERDICT: ${{ steps.mintwatch.outputs.verdict }}
           MINT_RUN_ID: ${{ steps.mintwatch.outputs.run_id }}
           MINT_CONCLUSION: ${{ steps.mintwatch.outputs.conclusion }}
@@ -558,45 +826,48 @@ jobs:
             | jq -r --arg s "$SENTINEL" \
                 '[.[] | select(.body | contains($s)) | .number] | sort | .[0] // empty')
 
-          # Excerpt ONLY the step(s) that failed, each labelled.
-          #
-          # Prefer the FAILURE LINES over the tail. `run-registered-suites.sh`
-          # emits one `PASS <path>` / `RED  <path>` per suite, so a `tail -30` of
-          # an infra failure is 30 PASS lines and a count — the operator gets no
-          # name. Issue #7374, filed by this branch, is exactly that artifact.
-          #
-          # The runner no longer DISCARDS each suite's output (#7376): it captures
-          # per-suite stdout+stderr and prints a bounded, marker-anchored excerpt
-          # for every RED. Those lines carry the `SOLEUR| ` sentinel and are
-          # filtered out below — they answer "why" in the run log, while this
-          # block's job is to name the failing suite from the `^RED ` lines.
-          # Each suite step's own elapsed seconds, appended to the step-outcomes line below. They
-          # arrive through env: and are used only when purely numeric, because $GITHUB_OUTPUT is
-          # inherited by every suite child (#8112 security review).
-          ELAPSED_NOTE=""
-          if [[ "${TESTS_ELAPSED_S:-}" =~ ^[0-9]+$ ]]; then
-            ELAPSED_NOTE="${ELAPSED_NOTE} \`tests_elapsed_s=${TESTS_ELAPSED_S}\`"
-          fi
-          if [[ "${INFRA_ELAPSED_S:-}" =~ ^[0-9]+$ ]]; then
-            ELAPSED_NOTE="${ELAPSED_NOTE} \`infra_elapsed_s=${INFRA_ELAPSED_S}\`"
-          fi
+          # Iterate EXPECTED_LEGS, not the download dir: a leg that reported
+          # nothing must be NAMED in the body ("no leg report"), and a leg whose
+          # artifact is present but not in EXPECTED_LEGS is surfaced as extra
+          # rather than silently trusted.
           SUMMARY=""
           HAS_FAIL_MARKER=0
           # A THIRD result class, tracked separately and never folded into the flag above.
-          # scripts/test-all.sh now distinguishes a suite that FAILED an assertion from one
+          # scripts/test-all.sh distinguishes a suite that FAILED an assertion from one
           # that was TERMINATED by a signal, and only the first is a statement about main.
           HAS_KILLED_MARKER=0
           RAN_ANY=0
-          for pair in "tests:/tmp/tests-output.txt:${TESTS_OUTCOME}" \
-                      "infra:/tmp/infra-output.txt:${INFRA_OUTCOME}"; do
-            label="${pair%%:*}"
-            rest="${pair#*:}"
-            file="${rest%%:*}"
-            outcome="${rest#*:}"
+          N_REPORTED=0
+          LEG_OUTCOME_NOTE=""
+          for leg in $EXPECTED_LEGS; do
+            dir="/tmp/leg-reports/monitor-leg-${leg}"
+            outcome=""
+            elapsed=""
+            file=""
+            if [[ -f "$dir/status.env" ]]; then
+              # awk, not `sed | head`: a producer-status-discarding `| head` is
+              # defect B's shape and the static guard (10) rejects it.
+              outcome="$(awk -F= '$1 == "outcome" { print $2; exit }' "$dir/status.env")"
+              elapsed="$(awk -F= '$1 == "elapsed_s" { print $2; exit }' "$dir/status.env")"
+            fi
+            [[ -f "$dir/capture.txt" ]] && file="$dir/capture.txt"
+            if [[ -n "$outcome" ]]; then N_REPORTED=$((N_REPORTED + 1)); fi
             [[ "$outcome" == "success" ]] && continue
             [[ -n "$outcome" ]] && RAN_ANY=1
-            SUMMARY="${SUMMARY}--- ${label} (outcome=${outcome:-<step never ran>}) ---"$'\n'
-            if [[ -s "$file" ]]; then
+            if [[ -z "$outcome" ]]; then
+              # No artifact and no status: the leg's job was killed before it
+              # could stage its report (a job-level cancel, a runner loss) or
+              # the upload/download channel dropped it. Named, never silent.
+              SUMMARY="${SUMMARY}--- ${leg} (no leg report — the leg job did not complete or its artifact was lost) ---"$'\n\n'
+            else
+              # Per-leg elapsed seconds, next to the leg's outcome. The value
+              # came through an artifact file written from $GITHUB_OUTPUT —
+              # numeric-guarded before it reaches the body, same as #8112.
+              EL_NOTE=""
+              if [[ "$elapsed" =~ ^[0-9]+$ ]]; then EL_NOTE=", elapsed_s=${elapsed}"; fi
+              SUMMARY="${SUMMARY}--- ${leg} (outcome=${outcome}${EL_NOTE}) ---"$'\n'
+            fi
+            if [[ -n "$file" && -s "$file" ]]; then
               # THE VERDICT IS THE RUNNER'S, NOT A GREP FOR `[FAIL]` (#8112). `^RED ` is the infra
               # runner's own verdict token: its header says "a failing suite prints `RED <path>`,
               # not `FAIL`. A `grep FAIL` over this runner's log returns zero hits on a failing
@@ -609,7 +880,7 @@ jobs:
               # fail() helper, and a step killed at its ceiling renders the in-flight suite as
               # `[FAIL]` before the runner dies without printing any verdict at all.
               #
-              # The breakdown shape is the `=== $suites suites: ...` echo in scripts/test-all.sh;
+              # The breakdown shape is the `=== $suites suites:` echo in scripts/test-all.sh;
               # the monitor test derives it from there, so a runner-side rename reds that suite.
               #
               # `-m 20` + `cut`, matching the killed capture below. The `| head -20` form this
@@ -680,10 +951,11 @@ jobs:
               # duplicated the tail and bypassed this filter on a PUBLIC issue (#8112). Prefixing
               # alone does not keep dumped bytes out of the issue body; only this filter does.
               #
-              # Applied to BOTH captures, not just infra: the tests step runs test-all.sh, which
-              # invokes the runner as a nested suite. And the sentinel is `SOLEUR| ` rather than
-              # a bare `| ` precisely so this is safe here -- scripts/expenses-verify-by-check
-              # prints markdown tables at column 0, which a bare filter would strip.
+              # Applied to BOTH capture kinds, not just infra: the scripts legs run test-all.sh,
+              # which invokes the infra runner as a nested suite on an infra-touching branch diff.
+              # And the sentinel is `SOLEUR| ` rather than a bare `| ` precisely so this is safe
+              # here -- scripts/expenses-verify-by-check prints markdown tables at column 0, which
+              # a bare filter would strip.
               #
               # `grep -v` is a DISPLAY FILTER: its producer is a file that `[[ -s ]]` above
               # already proved non-empty, so there is no producer status worth propagating. Safe
@@ -748,6 +1020,17 @@ jobs:
               SUMMARY="${SUMMARY}(no capture on disk — the step did not run, or was killed before writing)"$'\n\n'
             fi
           done
+          # Legs that produced an artifact but are not in EXPECTED_LEGS are
+          # surfaced rather than silently trusted — a renamed leg must not
+          # smuggle a capture past the expected-list accounting.
+          for dir in /tmp/leg-reports/monitor-leg-*; do
+            [[ -d "$dir" ]] || continue
+            leg="${dir##*/monitor-leg-}"
+            case " $EXPECTED_LEGS " in
+              *" $leg "*) ;;
+              *) SUMMARY="${SUMMARY}--- ${leg} (unexpected leg report — not in EXPECTED_LEGS) ---"$'\n\n' ;;
+            esac
+          done
 
           # #9082 — the mint verdict rides the body in EVERY arm. A suite failure
           # dominates the title below, but the mint detail must still reach the
@@ -761,7 +1044,7 @@ jobs:
             --color "B60205" \
             --force 2>/dev/null || true
 
-          # FOUR shapes, not three. AP-021 (ADR-166): a CI-emitted message may only
+          # FIVE shapes, not four. AP-021 (ADR-166): a CI-emitted message may only
           # name a cause the job MEASURED. The setup-failure arm exists because
           # `!cancelled()` deliberately routes it here, and naming a cause for it
           # would send the operator after a phantom — the defect this file exists
@@ -781,9 +1064,9 @@ jobs:
           )
 
           if [[ "$RAN_ANY" == "0" && "$MINT_VERDICT" == "red" ]]; then
-            # #9082 mint-red-only: both suites reported success (or no outcome),
-            # so the suite arms would mis-name this — AP-021: name what was
-            # measured, which here is the mint workflow's own conclusion.
+            # #9082 mint-red-only: every leg reported success (or no leg
+            # reported), so the suite arms would mis-name this — AP-021: name
+            # what was measured, which here is the mint workflow's own conclusion.
             TITLE="CI: inngest-bootstrap auto-mint run ${MINT_CONCLUSION:-failed} on main"
             HEADING="Auto-mint watch — newest completed run concluded ${MINT_CONCLUSION:-failure}"
             LEDE="The health monitor's mintwatch step read the newest completed mint-inngest-bootstrap-tag.yml run on main and it concluded ${MINT_CONCLUSION:-failure}; the test and infra suites are green, so the red here is the auto-mint itself. A carrier/pin/recipe change that needed a tag may have shipped un-minted — the drift is caught by Guard A/AC6 until the next mint lands."
@@ -794,8 +1077,8 @@ jobs:
             )
           elif [[ "$RAN_ANY" == "0" ]]; then
             TITLE="CI: main-branch health check could not run"
-            HEADING="Run failed before the suites started"
-            LEDE="A setup step failed (checkout, toolchain install, or the toolchain assertion). The suites never ran, so this issue says nothing about main's health — see the run log's failed step."
+            HEADING="Run failed before the suites reported"
+            LEDE="No leg reported a suite outcome — every leg job was cancelled or failed before its suite step finished, or the leg reports never reached the report job. The suites' verdicts are unmeasured, so this issue says nothing about main's health — see the run's job list and the failed leg's log."
           elif [[ "$HAS_FAIL_MARKER" == "1" ]]; then
             TITLE="CI: main branch tests failing"
             HEADING="Failure summary"
@@ -810,32 +1093,32 @@ jobs:
             ACTIONS=(
               "1. Re-run this check: \`gh workflow run main-health-monitor.yml\`"
               "2. If the same suite is reported terminated again, file a tracking issue for it and link it here"
-              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill. Since #7429 the set of suites that can surface one is no longer just the six this runner starts via \`bun\`/\`node\` directly: the two nested shell runners now propagate the signal shape instead of flattening it, which adds the 98 infra suites behind \`run-registered-suites.sh\` and the 14 fixture suites behind \`.github/scripts/test/run-all.sh\`. For an INFRA suite the terminated member is named on the \`RED  <path>\` line, which this job greps separately. For a FIXTURE suite under \`.github/scripts/test/\` the member name does NOT reach this issue: that runner's own \`[KILLED]\` line is deliberately shaped so the RUNNER cannot forge the top-level marker, and it goes to stderr. Note the limit of that shaping: it constrains the runner, not an arbitrary suite -- a fixture suite's stdout is not captured, so a suite could in principle print the top-level anchor itself. Treat a \`[KILLED]\` line naming a fixture suite as unverified until you have read the shard log. In that case open the run log for the shard and read the runner's output directly. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
+              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill. Since #7429 the set of suites that can surface one is no longer just the six this runner starts via \`bun\`/\`node\` directly: the two nested shell runners now propagate the signal shape instead of flattening it, which adds the 98 infra suites behind \`run-registered-suites.sh\` and the 14 fixture suites behind \`.github/scripts/test/\`. For an INFRA suite the terminated member is named on the \`RED  <path>\` line, which this job greps separately. For a FIXTURE suite under \`.github/scripts/test/\` the member name does NOT reach this issue: that runner's own \`[KILLED]\` line is deliberately shaped so the RUNNER cannot forge the top-level marker, and it goes to stderr. Note the limit of that shaping: it constrains the runner, not an arbitrary suite -- a fixture suite's stdout is not captured, so a suite could in principle print the top-level anchor itself. Treat a \`[KILLED]\` line naming a fixture suite as unverified until you have read the leg's log. In that case open the run log for the leg and read the runner's output directly. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
             )
           else
-            # No marker of any kind in the capture. What this run MEASURED is the step
-            # outcome and nothing else. The previous wording here named "a step or job
+            # No marker of any kind in any leg's capture. What this run MEASURED is each
+            # leg's outcome and nothing else. The previous wording here named "a step or job
             # timeout" — a cause the job did not measure, in the very file whose header
             # condemns that pattern. It survived lint-diagnosis-claims.sh only because
             # `usually` is absent from that gate's CLAIM regex; it was still a miss.
             TITLE="CI: main-branch health check did not complete"
             HEADING="Run did not complete"
-            LEDE="A suite step ended without a confirmed suite failure. The step outcome recorded below is all this run measured about it — read the run log's step list for what the runner did last."
+            LEDE="A suite leg ended without a confirmed suite failure. The leg outcomes recorded below are all this run measured about it — read the run's job list for the leg that stopped."
             # This arm inherited the default ACTIONS ("identify the commit that introduced the
             # failure / revert it") on a run whose own lede says nothing was reported. It also catches
             # non-budget endings (a runner crash, an early abort), so the elapsed-time step is
             # conditional on the printed figures and states no cause (ADR-166).
             ACTIONS=(
-              "1. This run confirmed no failing suite (no \`RED\`/\`UNACCOUNTED\` line and no failing breakdown), so main's health is unverified: it is not known to be broken."
-              "2. Read the run log's step list for the step that stopped: \`gh run view ${GITHUB_RUN_ID} --json jobs --jq '.jobs[].steps[] | {name,conclusion,startedAt,completedAt}'\`. A \`tests_elapsed_s\` / \`infra_elapsed_s\` figure above means that step returned to the shell; compare it (in seconds, times 60 for the workflow's \`timeout-minutes\`) with that step's ceiling in \`.github/workflows/main-health-monitor.yml\` for headroom. No figure means the step ended before it returned."
+              "1. This run confirmed no failing suite (no \`RED\`/\`UNACCOUNTED\` line and no failing breakdown in any leg's capture), so main's health is unverified: it is not known to be broken."
+              "2. Read the run's job list for the leg that stopped: \`gh run view ${GITHUB_RUN_ID} --json jobs --jq '.jobs[].steps[] | {name,conclusion,startedAt,completedAt}'\`. A leg section below carrying \`elapsed_s\` means that leg's suite step returned to the shell; compare it (in seconds, times 60 for the workflow's \`timeout-minutes\`) with that leg's step ceiling in \`.github/workflows/main-health-monitor.yml\` for headroom. No figure means the step ended before it returned; 'no leg report' means the leg's job was killed before it could stage its report."
               "3. Inspect any unconfirmed [FAIL]-shaped lines listed above: a genuine failure printed before the step ended would be shown here but not confirmed by this run. Do not revert a commit on the strength of this issue alone."
             )
           fi
 
           # REDACT before publishing. This repo is PUBLIC, and `tee` captures the
           # suite's raw stdout+stderr BEFORE the runner's masking pass — masking
-          # rewrites the log stream, not the file. The tests step carries
-          # GITHUB_TOKEN and the infra step runs terraform, whose error text is
+          # rewrites the log stream, not the file. Legs' suite steps carry
+          # GITHUB_TOKEN and the infra leg runs terraform, whose error text is
           # the likeliest carrier. Before this PR the filer never fired, so the
           # channel was dormant; it is live now.
           #
@@ -882,7 +1165,7 @@ jobs:
             echo ""
             echo "${LEDE}"
             echo ""
-            echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\` \`mint=${MINT_VERDICT:-unknown}\`${ELAPSED_NOTE}"
+            echo "Step outcomes: \`webplat=${R_WEBPLAT:-<never ran>}\` \`bun=${R_BUN:-<never ran>}\` \`scripts=${R_SCRIPTS:-<never ran>}\` \`heavy=${R_HEAVY:-<never ran>}\` \`infra=${R_INFRA:-<never ran>}\` \`mint=${MINT_VERDICT:-unknown}\` \`legs=${N_REPORTED} reported\`"
             echo ""
             echo "### ${HEADING}"
             echo ""
@@ -927,7 +1210,7 @@ jobs:
               # a runner that measured nothing about what terminated the suite.
               echo "${LEDE}"
               echo ""
-              echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\` \`mint=${MINT_VERDICT:-unknown}\`${ELAPSED_NOTE}"
+              echo "Step outcomes: \`webplat=${R_WEBPLAT:-<never ran>}\` \`bun=${R_BUN:-<never ran>}\` \`scripts=${R_SCRIPTS:-<never ran>}\` \`heavy=${R_HEAVY:-<never ran>}\` \`infra=${R_INFRA:-<never ran>}\` \`mint=${MINT_VERDICT:-unknown}\` \`legs=${N_REPORTED} reported\`"
               echo ""
               echo "### ${HEADING}"
               echo ""
@@ -961,7 +1244,7 @@ jobs:
             # step, matching the treatment given to `gh issue edit` below.
             gh issue comment "$EXISTING" --body-file /tmp/issue-comment.md \
               || echo "::warning::could not comment on #${EXISTING}"
-            echo "::error::Main branch health check did not pass (tests=${TESTS_OUTCOME:-none} infra=${INFRA_OUTCOME:-none}). Commented on #${EXISTING}."
+            echo "::error::Main branch health check did not pass (scripts=${R_SCRIPTS:-none} infra=${R_INFRA:-none}). Commented on #${EXISTING}."
             exit 0
           fi
 
@@ -980,7 +1263,7 @@ jobs:
           gh issue edit "$ISSUE_URL" --milestone "Post-MVP / Later" \
             || echo "::warning::milestone 'Post-MVP / Later' not set on ${ISSUE_URL}"
 
-          echo "::error::Main branch health check did not pass (tests=${TESTS_OUTCOME:-none} infra=${INFRA_OUTCOME:-none} mint=${MINT_VERDICT:-unknown}). Issue created."
+          echo "::error::Main branch health check did not pass (scripts=${R_SCRIPTS:-none} infra=${R_INFRA:-none} mint=${MINT_VERDICT:-unknown}). Issue created."
 
       - name: Close issue on success
         # #9082 — the mint verdict is a non-closing conjunct: a green-suite sweep
@@ -988,13 +1271,13 @@ jobs:
         # `== 'green'`) is deliberate fail-open: an `unknown` verdict is an API
         # blip, not a measured red, and the queue-health convention does not let
         # an unmeasured input block the green path. `!cancelled() &&` is the
-        # alarm-issue-filing-guard remedy: an `if:` gated on `steps.*.outputs.`
+        # alarm-issue-filing-guard remedy: an `if:` gated on `needs.*.result`
         # with no status-check function inherits implicit success() and skips —
         # it never even evaluates — whenever ANY earlier step failed. It is
         # `!cancelled()` and NOT `always()` for the same reason the filer uses
         # it: `always()` would close the tracker regardless of the suite
         # verdict (the (3b) check pins that). The conjuncts still gate the body.
-        if: ${{ !cancelled() && !inputs.dry_run && steps.tests.outcome == 'success' && steps.infra.outcome == 'success' && steps.mintwatch.outputs.verdict != 'red' }}
+        if: ${{ !cancelled() && !inputs.dry_run && needs.test-webplat.result == 'success' && needs.test-bun.result == 'success' && needs.test-scripts.result == 'success' && needs.test-scripts-heavy.result == 'success' && needs.test-infra.result == 'success' && steps.mintwatch.outputs.verdict != 'red' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1037,7 +1320,7 @@ jobs:
       # external missed-check-in alarm can report it.
       #
       # Skipped on a dry run — and the reason is NOT "it might post a misleading
-      # ok" (it cannot: the status below is computed from the real step outcomes).
+      # ok" (it cannot: the status below is computed from the real job results).
       # It is that ANY check-in satisfies the monitor's margin. A manual
       # measurement dispatch that checked in would therefore SUPPRESS the page for
       # a scheduled run that never happened, which is the one failure this monitor
@@ -1050,7 +1333,7 @@ jobs:
           monitor-slug: main-health-monitor
           # #9082 — the mint verdict joins the heartbeat's measured-red set, with
           # the same fail-open polarity as the closer: `unknown` is not `red`.
-          status: ${{ (steps.tests.outcome == 'success' && steps.infra.outcome == 'success' && steps.mintwatch.outputs.verdict != 'red') && 'ok' || 'error' }}
+          status: ${{ (needs.test-webplat.result == 'success' && needs.test-bun.result == 'success' && needs.test-scripts.result == 'success' && needs.test-scripts-heavy.result == 'success' && needs.test-infra.result == 'success' && steps.mintwatch.outputs.verdict != 'red') && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
