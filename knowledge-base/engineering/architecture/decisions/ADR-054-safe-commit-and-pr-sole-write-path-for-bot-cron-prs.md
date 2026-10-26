@@ -92,3 +92,5 @@ content. A refusal is stage `integrity` with a closed-vocabulary reason and no b
 stays in the `auto` class. The Consequences bullet on monitoring semantics applies: an `integrity` refusal is a Sentry and
 issue-comment signal, and the handler's `patch-digest-notice` (ADR-273) repairs the public issue the refusal would otherwise leave
 linking a digest that did not land.
+
+**Addendum 2026-10-26 (#10550).** The gated new-skill create arm's `safeCommitAndPr` call lives in `apps/web-platform/server/compound-promote-create-arm.ts`, outside `server/inngest/functions/`, so invariant 1's directory walk does not reach it; `cron-safe-commit-parity.test.ts` walks that file explicitly and requires `exactPaths` with an empty `allowedPaths`, a draft PR and `mergeMode: "none"`.

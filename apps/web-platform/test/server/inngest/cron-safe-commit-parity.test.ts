@@ -714,3 +714,48 @@ describe("#7122 — cron-community-monitor persists by exactPaths, not the diges
     expect(src).not.toMatch(/COMMUNITY_MONITOR_ALLOWED_PATHS\s*=\s*\[\s*COMMUNITY_DIGEST_DIR/);
   });
 });
+
+// #10550 -- the gated create arm's commit call lives OUTSIDE `functions/` (in `server/compound-promote-create-arm.ts`),
+// so invariant 1's directory walk cannot see it. This extends the SAME source-text guards to that file: no blanket
+// git-add literal, and its one safeCommitAndPr call persists by `exactPaths` with an empty `allowedPaths` (the closed
+// six-path set, byte-checked against `expectedContent`), exactly like the #7122 precedent above. Fail-closed on parse.
+describe("#10550 — the create arm's commit call (outside functions/) persists by exactPaths", () => {
+  const ARM = resolve(__dirname, "../../../server/compound-promote-create-arm.ts");
+  const src = readFileSync(ARM, "utf-8");
+  const calls = [...src.matchAll(/await commit\(\{([\s\S]*?)\n\s*\}\);/g)];
+
+  it("carries no blanket-add literal", () => {
+    expect(src).not.toContain("git add -A");
+    expect(src).not.toContain("git add --all");
+    expect(src).not.toContain("git add -u");
+    expect(src).not.toContain("git add .");
+  });
+
+  it("has exactly one commit call (the safeCommitAndPr seam) and the gate parsed it", () => {
+    expect(src).toMatch(/const commit = a\.safeCommit \?\? safeCommitAndPr;/);
+    expect(calls, "could not parse the commit call — gate DISENGAGED").toHaveLength(1);
+  });
+
+  it("the call passes exactPaths and expectedContent, and its allowedPaths is the empty list only", () => {
+    const [, body] = calls[0] ?? [];
+    expect(body).toMatch(/^\s+exactPaths:\s*\S/m);
+    expect(body).toMatch(/^\s+expectedContent:\s*\S/m);
+    const allowed = /^\s+allowedPaths:\s*([^\n]+?),?\s*$/m.exec(body ?? "");
+    expect(allowed, "no allowedPaths argument found in the call body").not.toBeNull();
+    expect(allowed![1].replace(/,\s*$/, "").trim()).toMatch(/^\[\s*\](?:\s+as\s+const)?$/);
+  });
+
+  it("is a draft with mergeMode none (the arm never auto-merges)", () => {
+    const [, body] = calls[0] ?? [];
+    expect(body).toMatch(/^\s+prDraft:\s*true,/m);
+    expect(body).toMatch(/^\s+mergeMode:\s*"none",/m);
+  });
+
+  it("mutation: a call that allows a directory prefix is RED", () => {
+    const mutated = src.replace("allowedPaths: [],", 'allowedPaths: ["plugins/soleur/skills/"],');
+    expect(mutated).not.toBe(src);
+    const [, body] = [...mutated.matchAll(/await commit\(\{([\s\S]*?)\n\s*\}\);/g)][0] ?? [];
+    const allowed = /^\s+allowedPaths:\s*([^\n]+?),?\s*$/m.exec(body ?? "");
+    expect(allowed![1].replace(/,\s*$/, "").trim()).not.toMatch(/^\[\s*\](?:\s+as\s+const)?$/);
+  });
+});
