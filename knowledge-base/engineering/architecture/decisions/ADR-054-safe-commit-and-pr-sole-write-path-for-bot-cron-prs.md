@@ -94,3 +94,28 @@ issue-comment signal, and the handler's `patch-digest-notice` (ADR-273) repairs 
 linking a digest that did not land.
 
 **Addendum 2026-10-26 (#10550).** The gated new-skill create arm's `safeCommitAndPr` call lives in `apps/web-platform/server/compound-promote-create-arm.ts`, outside `server/inngest/functions/`, so invariant 1's directory walk does not reach it; `cron-safe-commit-parity.test.ts` walks that file explicitly and requires `exactPaths` with an empty `allowedPaths`, a draft PR and `mergeMode: "none"`.
+
+## Addendum - 2026-10-26 (#10550)
+
+Append-only; nothing above is edited. This restates, as its own section, how the gated new-skill create arm uses the write path and
+what the review round added around it. The paragraph headed "Addendum 2026-10-26 (#10550)" above stays as written.
+
+- **Where the call lives and what pins it.** The create arm's one `safeCommitAndPr` call is in
+  `apps/web-platform/server/compound-promote-create-arm.ts`, outside `server/inngest/functions/`. `cron-safe-commit-parity.test.ts`
+  walks that file explicitly: no blanket-add literal, no array-form staging (`["add", ...]`), the call passes `exactPaths` with an
+  empty `allowedPaths` and `expectedContent`, a draft PR and `mergeMode: "none"`, and the arm's own git subcommands are a closed
+  list of non-writing verbs (fetch, reset, clean, checkout, rev-parse, remote, ls-tree, ls-remote).
+- **The replay-resume arm does not apply to this caller.** The arm returns the clone to a clean `main` before every attempt, so the
+  helper's "HEAD is already on the branch with commits ahead" test never holds. What makes a replay safe is Step B itself: it looks
+  up its own open PR by the deterministic head branch (a hit counts only when the body carries the `CREATE (new skill)` line), and,
+  after the second fetch, refuses `persist/branch-exists` when the branch is already on the remote with no open PR. The arm never
+  deletes a remote branch; the operator does (runbook). A late `failed-push` is therefore not the expected symptom of an orphan branch.
+- **Git failures carry closed evidence, never git's output.** The arm's `runGit` reports a failed call to Sentry as a synthetic error
+  (`git <sub> failed`) with a closed `extra` (`sub`, `exit`, a `SIG*` signal name, `killed`, `timedOut`); it never forwards the
+  `execFile` error, whose message holds the command line and stderr, and a failed fetch against the tokenised origin echoes the remote
+  URL there. The refusal carries the exit status as a number and a closed cause token (`timeout`, `exit<N>`, `signal`, `spawn`).
+- **Token handling stays inside the step.** The installation token is on disk only for the refresh fetch and, after the repo scripts
+  ran, for the second fetch, the remote-branch probe and this helper. The final strip from `.git/config` is checked, retried once and
+  mirrored (`create-origin-strip-failed`) on failure. The edit loop's token handling is untouched, as before.
+- **The base-moved window is accepted.** A README edit merged after the second fetch and before the helper's own fetch can still be
+  reverted in the PR diff. The PR is a draft and a human reads the diff; nothing merges automatically.
