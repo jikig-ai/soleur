@@ -20,7 +20,7 @@ Authoring-tool preconditions (hook gates, collapse gates) are written for iterat
 4. **Pencil warnings: missing `clock` icon, collapsed empty spacers, clipped screens** — Recovery: `hourglass`, `fill_container` + height, taller screen frames — Prevention: one-off authoring detail, recorded here only.
 5. **Created the worktree with `git worktree add` instead of `worktree-manager.sh`** — Recovery: none needed (branch already existed and was pushed; no install required) — Prevention: one-off; the manager's `feature` command creates a new branch, so it does not fit resuming an existing one.
 
-6. **Plan premise check named migration 164 free from `origin/main` alone** — Recovery: sharp-edges pass probed every `origin/*` ref (164 held by drafts #10901/#10905, 165-173 by a codex branch); the plan now picks the number at the last rebase — Prevention: routed into `plan/SKILL.md` Phase 0.6 item 6.
+6. **Plan premise check named migration 164 free from `origin/main` alone** — Recovery: sharp-edges pass probed every `origin/*` ref (164 held by drafts #10901/#10905, 165-173 by a codex branch); the plan now picks the number at the last rebase — Prevention: routed into the plan skill's `references/plan-sharp-edges.md` (moved there from `plan/SKILL.md` Phase 0.6 at ship: the SKILL.md body budget has no headroom).
 7. **Armed a `/loop` wakeup (`ScheduleWakeup`) in a non-loop session** — Recovery: cancelled it with `stop: true` before it fired — Prevention: one-off; `ScheduleWakeup` is only for `/loop` dynamic mode, background agents notify on completion.
 8. **`cd` to the main checkout inside a worktree session** — Recovery: next command returned to the worktree — Prevention: one-off; use absolute worktree paths for `gh --body-file` instead of `cd`.
 

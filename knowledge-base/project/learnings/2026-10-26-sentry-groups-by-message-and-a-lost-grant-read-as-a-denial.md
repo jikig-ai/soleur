@@ -98,7 +98,7 @@ any code: it needs the vendor's behaviour, so the repo-side proxy is "no static 
    sanctioned reconcile workflow. **Prevention:** before editing a migration during review, check whether
    `tenant-integration` has run on the PR; routed as a bullet in the review skill's migration defect-classes reference.
 8. **Plan premise "migration 164 is free" was wrong** (claimed by open draft PRs; highest ordinal on any `origin/*` ref
-   was 176). Recovery: 177, probed across all remote refs. **Prevention:** already routed to plan Phase 0.6 item 6.
+   was 176). Recovery: 177, probed across all remote refs. **Prevention:** already routed to the plan skill's `references/plan-sharp-edges.md`.
 9. **Brainstorm claims refuted by research:** `resolveCurrentWorkspaceId` does not validate membership and falls back to
    the user id; a function-level `statement_timeout` does not re-arm the running statement; a route plus a 429 state
    machine was unnecessary. Recovery: plan rewritten. **Prevention:** none beyond measuring before ruling.
