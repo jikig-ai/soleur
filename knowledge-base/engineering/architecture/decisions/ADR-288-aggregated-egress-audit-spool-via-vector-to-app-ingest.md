@@ -223,7 +223,7 @@ that said a policy "lands in PR2" (migration 162 is immutable on `main`; its hea
 4. **Router Cache window.** The 30 s Router Cache (`staleTimes.dynamic`, ADR-067) lets a just-removed member's already-open session
    re-display a payload fetched earlier.
 5. **Agent-readable surface parity gap.** The RPC is callable by any authenticated member client but no agent/MCP tool exists. A
-   follow-up issue tracks it.
+   follow-up issue (#11258) tracks it.
 
 The status stays **Adopting**: it moves to `accepted` after PR2 has merged and the owner notice has been out for at least 7 days (an
 enablement step; the flag flip is tracked in #11237, not part of PR2).
