@@ -14,7 +14,7 @@
 // clone of it, the REAL Step A to produce the verdict, and the REAL Step B. Only the two SPAWN gates (scanner and
 // README sync -- exercised for real in compound-promote-create-gates.test.ts and the dry-render suite) and the
 // commit helper are doubles; each double records what `.git/config` held at the moment it ran.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -48,6 +48,7 @@ vi.mock("@/server/compound-promote-create-gates", async (importOriginal) => ({
 }));
 
 import { reportSilentFallback } from "@/server/observability";
+import { setOriginToken } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 import {
   CREATE_PERSIST_DEADLINE_MS,
   PLAIN_ORIGIN_URL,
@@ -358,12 +359,93 @@ describe("R5 -- the stale depth-1 clone is refreshed to main before the render",
     }
   });
 
-  it("a failing fetch is persist/fetch-failed (the remote is gone), and the token is still stripped", async () => {
+  it("a failing fetch is persist/fetch-failed (the remote is gone) with the git exit as evidence; the token is stripped and NOTHING of git's stderr reaches Sentry", async () => {
     const w = world();
     const v = await propose(w);
     rmSync(w.remote, { recursive: true, force: true });
-    expect(await runCreatePersistStep(persistArgs(w, v))).toEqual({ kind: "refused", class: "persist", detail: "fetch-failed" });
+    vi.mocked(reportSilentFallback).mockClear();
+    expect(await runCreatePersistStep(persistArgs(w, v))).toEqual({ kind: "refused", class: "persist", detail: "fetch-failed", numbers: { exit_code: 128 } });
     expect(w.config()).not.toContain("x-access-token");
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", extra: expect.objectContaining({ detail: "fetch-failed", cause: "exit128", exit_code: 128 }) }));
+    // git's stderr names the (token-shaped) remote path; the synthetic Error and the closed extras do not carry it
+    const sent = JSON.stringify(vi.mocked(reportSilentFallback).mock.calls.map((c) => [String((c[0] as Error | null)?.message), c[1]]));
+    expect(sent).not.toContain("x-access-token");
+    expect(sent).not.toContain(w.remote);
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(expect.objectContaining({ message: "git fetch failed" }), expect.objectContaining({ op: "create-gate-git", extra: expect.objectContaining({ sub: "fetch", exit: 128 }) }));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+describe("G1 -- the origin write and the final strip", () => {
+  it("a planted-symlink refusal and an ordinary set-url failure carry DISTINCT closed causes, never git's message", async () => {
+    const secret = "ghs_" + "Q9w8E7r6".repeat(5);
+    for (const [message, cause] of [
+      ["git remote set-url origin refused: a symlinked git entry", "symlink-refused"],
+      [`git remote set-url origin failed (exit 128, signal null): fatal ${secret}`, "set-url-failed"],
+    ] as const) {
+      const w = world();
+      const v = await propose(w);
+      vi.mocked(reportSilentFallback).mockClear();
+      const r = await runCreatePersistStep(persistArgs(w, v, { setOrigin: async () => { throw new Error(message); } }));
+      expect(r).toEqual({ kind: "refused", class: "persist", detail: "origin-failed" });
+      expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ extra: expect.objectContaining({ cause }) }));
+      expect(JSON.stringify(vi.mocked(reportSilentFallback).mock.calls)).not.toContain(secret);
+    }
+  });
+
+  // A `git` first on PATH that fails `remote set-url` while the counter file holds a positive number, else execs the real git.
+  let gitBin = "";
+  let counter = "";
+  let savedPath: string | undefined;
+  beforeEach(() => {
+    gitBin = tmp("create-persist-gitwrap-");
+    counter = join(gitBin, "fail-count");
+    const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    writeFileSync(join(gitBin, "git"), `#!/bin/sh\nfor a in "$@"; do\n  if [ "$a" = "set-url" ] && [ -s "${counter}" ]; then\n    n=$(cat "${counter}"); if [ "$n" -gt 0 ]; then echo $((n-1)) > "${counter}"; echo "fatal: simulated" >&2; exit 128; fi\n  fi\ndone\nexec ${real} "$@"\n`, { mode: 0o755 });
+    savedPath = process.env.PATH;
+    process.env.PATH = `${gitBin}:${savedPath ?? ""}`;
+  });
+  afterEach(() => {
+    process.env.PATH = savedPath;
+  });
+
+  const commitThatBreaksStrip = (failures: number) =>
+    vi.fn(async () => {
+      writeFileSync(counter, String(failures));
+      return { status: "committed", prNumber: 77, branch: "b", fileCount: 6, deletionCount: 0 };
+    });
+
+  it("the final strip failing once is retried and the clone ends clean; nothing is mirrored", async () => {
+    const w = world();
+    const v = await propose(w);
+    vi.mocked(reportSilentFallback).mockClear();
+    expect(await runCreatePersistStep(persistArgs(w, v, { safeCommit: commitThatBreaksStrip(1) }))).toEqual({ kind: "opened", pr: 77 });
+    expect(w.config()).not.toContain("x-access-token");
+    expect(vi.mocked(reportSilentFallback).mock.calls.some((c) => (c[1] as { op: string }).op === "create-origin-strip-failed")).toBe(false);
+  });
+
+  it("the final strip failing twice is MIRRORED (op create-origin-strip-failed) and the step result is unchanged", async () => {
+    const w = world();
+    const v = await propose(w);
+    vi.mocked(reportSilentFallback).mockClear();
+    expect(await runCreatePersistStep(persistArgs(w, v, { safeCommit: commitThatBreaksStrip(2) }))).toEqual({ kind: "opened", pr: 77 });
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ feature: "cron-compound-promote", op: "create-origin-strip-failed" }));
+    expect(w.config()).toContain("x-access-token"); // the failure is real: the token IS still on disk, which is why it is mirrored
+  });
+
+  it("the in-step strip failing (after the first fetch) refuses persist/origin-strip-failed with the evidence, and the final strip still runs", async () => {
+    const w = world();
+    const v = await propose(w);
+    // The first origin write succeeds; the next `set-url` (the in-step strip after the fetch) fails once.
+    const setOrigin = async (root: string, token: string) => {
+      await setOriginToken(root, token);
+      writeFileSync(counter, "1");
+    };
+    vi.mocked(reportSilentFallback).mockClear();
+    const r = await runCreatePersistStep(persistArgs(w, v, { setOrigin }));
+    expect(r).toEqual({ kind: "refused", class: "persist", detail: "origin-strip-failed", numbers: { exit_code: 128 } });
+    expect(w.config()).not.toContain("x-access-token");
+    expect(h.scan).not.toHaveBeenCalled();
   });
 });
 
@@ -475,7 +557,7 @@ describe("G -- one deadline, a lost clone, a short-circuiting restore", () => {
     const v = await propose(w);
     vi.mocked(reportSilentFallback).mockClear();
     const a = persistArgs(w, v, { repoRoot: dir });
-    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "clone-not-clean" });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "clone-not-clean", numbers: { exit_code: 128 } });
     const gitMirrors = vi.mocked(reportSilentFallback).mock.calls.filter((c) => (c[1] as { op: string }).op === "create-gate-git");
     expect(gitMirrors).toHaveLength(1);
   });

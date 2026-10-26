@@ -35,7 +35,9 @@ import {
   SCAN_MIN_INPUT_BYTES,
   SCAN_REQUIRED_TOOLS,
   COLLECT_MAX_FILE_BYTES,
+  GIT_MAX_TIMEOUT_MS,
   GIT_TIMEOUT_MS,
+  clampGitTimeout,
   runGit,
   snapshotClone,
   SKILL_SCAN_SCRIPT,
@@ -591,13 +593,64 @@ describe("syncReadmeCounts: the baseline can be taken BEFORE the scanner (`since
 });
 
 describe("runGit (hardened, scrubbed)", () => {
-  it("runs git with a bounded timeout and returns stdout; a failure is a returned value and is mirrored with only the subcommand", async () => {
+  it("runs git with a bounded timeout and returns stdout; a failure is a returned CLOSED evidence object and is mirrored with only the subcommand and numbers", async () => {
     const root = tmp("cp-gates-git-");
     gitFixture(root)(["init", "-q", "-b", "main", "."]);
     expect(await runGit(root, ["rev-parse", "--is-inside-work-tree"], { baseEnv })).toEqual({ ok: true, stdout: "true\n" });
-    expect(await runGit(root, ["no-such-subcommand"], { baseEnv })).toEqual({ ok: false });
-    expect(vi.mocked(reportSilentFallback).mock.calls.at(-1)?.[1]).toMatchObject({ op: "create-gate-git", extra: { sub: "no-such-subcommand" } });
+    const failed = await runGit(root, ["no-such-subcommand"], { baseEnv });
+    expect(failed).toEqual({ ok: false, exit: expect.any(Number), timedOut: false });
+    expect(Object.keys(failed).sort()).toEqual(["exit", "ok", "timedOut"]);
+    const [err, opts] = vi.mocked(reportSilentFallback).mock.calls.at(-1) as [Error, { op: string; extra: Record<string, unknown> }];
+    expect(opts).toMatchObject({ op: "create-gate-git", extra: { sub: "no-such-subcommand", exit: expect.any(Number), killed: false, timedOut: false } });
+    // The Error handed to Sentry is SYNTHETIC: git's own message carries the command line and stderr.
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe("git no-such-subcommand failed");
     expect(GIT_TIMEOUT_MS).toBe(30_000);
+    expect(GIT_MAX_TIMEOUT_MS).toBe(GIT_TIMEOUT_MS * 2);
+  });
+
+  // A fake `git` first on PATH that echoes a remote URL carrying a token-shaped string on stderr, exactly what git does
+  // when a fetch against the tokenized origin fails.
+  const SECRET = "ghs_" + "A1b2C3d4".repeat(5);
+  function fakeGit(body: string): { root: string; env: { PATH: string } } {
+    const bin = tmp("cp-gates-fakegit-");
+    put(bin, "git", `#!/bin/sh\n${body}\n`, 0o755);
+    const root = tmp("cp-gates-git-leak-");
+    return { root, env: { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` } };
+  }
+
+  it("G1: a token-shaped string on git's stderr appears NOWHERE in what reaches Sentry or the returned value", async () => {
+    const { root, env } = fakeGit(`echo "fatal: unable to access 'https://x-access-token:${SECRET}@github.com/o/r.git/': The requested URL returned error: 403" >&2\nexit 128`);
+    const r = await runGit(root, ["fetch", "--depth=1", "origin", "main"], { baseEnv: env });
+    expect(r).toEqual({ ok: false, exit: 128, timedOut: false });
+    const sent = JSON.stringify(vi.mocked(reportSilentFallback).mock.calls.map((c) => [String((c[0] as Error)?.message), (c[0] as Error)?.stack, c[1]]));
+    expect(sent).not.toContain(SECRET);
+    expect(sent).not.toContain("x-access-token");
+    expect(sent).not.toContain("403");
+    expect(JSON.stringify(r)).not.toContain(SECRET);
+    expect(vi.mocked(reportSilentFallback).mock.calls.at(-1)?.[1]).toMatchObject({ op: "create-gate-git", extra: { sub: "fetch", exit: 128, killed: false, timedOut: false } });
+  });
+
+  it("G1: a killed git (timeout) is timedOut:true with the signal NAME from a closed pattern, never a message", async () => {
+    const { root, env } = fakeGit(`echo "${SECRET}" >&2\nsleep 5`);
+    const r = await runGit(root, ["fetch", "origin", "main"], { baseEnv: env, timeoutMs: 200 });
+    expect(r).toMatchObject({ ok: false, timedOut: true, signal: "SIGTERM" });
+    const extra = vi.mocked(reportSilentFallback).mock.calls.at(-1)?.[1]?.extra as Record<string, unknown>;
+    expect(extra).toMatchObject({ sub: "fetch", killed: true, timedOut: true, signal: "SIGTERM" });
+    expect(JSON.stringify(vi.mocked(reportSilentFallback).mock.calls)).not.toContain(SECRET);
+  });
+
+  it("G1: a git that cannot be spawned (no such binary) is a failure with no exit and no signal", async () => {
+    const empty = tmp("cp-gates-nogit-");
+    const r = await runGit(empty, ["status"], { baseEnv: { PATH: empty } });
+    expect(r).toEqual({ ok: false, timedOut: false });
+  });
+
+  it("G1: the per-call timeout is clamped to GIT_MAX_TIMEOUT_MS (x2 of the default), never above", () => {
+    expect(clampGitTimeout(undefined)).toBe(GIT_TIMEOUT_MS);
+    expect(clampGitTimeout(5)).toBe(5);
+    expect(clampGitTimeout(0)).toBe(1);
+    expect(clampGitTimeout(10 * GIT_MAX_TIMEOUT_MS)).toBe(GIT_MAX_TIMEOUT_MS);
   });
 });
 

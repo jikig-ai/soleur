@@ -80,6 +80,8 @@ import {
   runSkillScan,
   snapshotClone,
   syncReadmeCounts,
+  type GitEvidence,
+  type GitResult,
   type ReadmeSyncResult,
   type ScanResult,
 } from "@/server/compound-promote-create-gates";
@@ -474,23 +476,65 @@ export function buildCreatePrBody(v: CreateVerdictCreate): string {
   ].join("\n");
 }
 
-/** Hardened, scrubbed git calls for the clone hygiene around Step B. */
-async function restoreCleanMain(root: string): Promise<boolean> {
+/** The evidence part of a failed git result (everything but `ok`). */
+function evidenceOf(r: Extract<GitResult, { ok: false }>): GitEvidence {
+  const { ok: _ok, ...ev } = r;
+  return ev;
+}
+
+/** Hardened, scrubbed git calls for the clone hygiene around Step B. `null` = clean; otherwise the evidence of the call that failed. */
+async function restoreCleanMain(root: string): Promise<GitEvidence | null> {
   // Short-circuits on the first failed call: once `reset` failed, `clean` and `checkout` would act on a clone in an unknown state.
   for (const args of [["reset", "--hard", "HEAD"], ["clean", "-fd"], ["checkout", "main"]]) {
-    if (!(await runGit(root, args, { timeoutMs: GIT_TIMEOUT_MS })).ok) return false;
+    const r = await runGit(root, args, { timeoutMs: GIT_TIMEOUT_MS });
+    if (!r.ok) return evidenceOf(r);
   }
-  return true;
+  return null;
 }
 
 const stripOrigin = (root: string, timeoutMs = GIT_TIMEOUT_MS) => runGit(root, ["remote", "set-url", "origin", PLAIN_ORIGIN_URL], { timeoutMs });
 
-/** Blob ids of the base-sensitive paths at `ref` (`HEAD` or `FETCH_HEAD`); `null` when git cannot name them all. */
-async function baseBlobs(root: string, ref: string, timeoutMs: number): Promise<string[] | null> {
+/**
+ * The closed cause token of a failed git call: `timeout`, `exit<N>`, `signal` (killed by a signal that is not the
+ * timeout) or `spawn` (git never ran). It rides `extra.cause` in Sentry; the exit status also rides the refusal numbers.
+ */
+export function gitCause(ev: GitEvidence): string {
+  if (ev.timedOut) return "timeout";
+  if (ev.exit !== undefined) return `exit${ev.exit}`;
+  if (ev.signal !== undefined) return "signal";
+  return "spawn";
+}
+
+/**
+ * The closed cause of a failed `setOriginToken`: a planted symlink is refused before git runs, an ordinary `set-url`
+ * failure is its own token, anything else falls back to the errno / class-name vocabulary. Never a message: the
+ * helper's message can carry git's stderr.
+ */
+export function originCause(err: unknown): string {
+  const msg = typeof err === "object" && err !== null && typeof (err as { message?: unknown }).message === "string" ? (err as { message: string }).message : "";
+  if (msg.startsWith("git remote set-url origin refused")) return "symlink-refused";
+  if (msg.startsWith("git remote set-url origin failed")) return "set-url-failed";
+  return causeToken(err);
+}
+
+/**
+ * Strip the installation token from `.git/config` on the way out. Checked, retried once, and a failure is MIRRORED:
+ * the token would otherwise stay on disk for the rest of the (ephemeral) workspace's life with nobody told.
+ */
+async function stripOriginChecked(root: string): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if ((await stripOrigin(root)).ok) return;
+  }
+  reportSilentFallback(null, { feature: CREATE_ARM_FEATURE, op: "create-origin-strip-failed", message: "could not strip the installation token from .git/config" });
+}
+
+/** Blob ids of the base-sensitive paths at `ref` (`HEAD` or `FETCH_HEAD`); `ok:false` (with the git evidence) when git cannot name them all. */
+async function baseBlobs(root: string, ref: string, timeoutMs: number): Promise<{ ok: true; ids: string[] } | { ok: false; ev: GitEvidence }> {
   const r = await runGit(root, ["rev-parse", ...BASE_BLOB_PATHS.map((p) => `${ref}:${p}`)], { timeoutMs });
-  if (!r.ok) return null;
+  if (!r.ok) return { ok: false, ev: evidenceOf(r) };
   const ids = r.stdout.split("\n").filter(Boolean);
-  return ids.length === BASE_BLOB_PATHS.length && ids.every((i) => /^[0-9a-f]{40,64}$/.test(i)) ? ids : null;
+  // Git answered but not with BASE_BLOB_PATHS.length object ids: report it as an exit-less, signal-less failure.
+  return ids.length === BASE_BLOB_PATHS.length && ids.every((i) => /^[0-9a-f]{40,64}$/.test(i)) ? { ok: true, ids } : { ok: false, ev: { timedOut: false } };
 }
 
 interface PersistCtx {
@@ -542,7 +586,8 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
   let restoredUpfront = false;
   try {
     // A retry of this step must start from a clean main (the previous attempt may have left files behind).
-    if (!(await restoreCleanMain(a.repoRoot))) return fail("persist", "clone-not-clean");
+    const dirty = await restoreCleanMain(a.repoRoot);
+    if (dirty) return fail("persist", "clone-not-clean", { numbers: dirty.exit === undefined ? undefined : { exit_code: dirty.exit }, extra: { cause: gitCause(dirty) } });
     restoredUpfront = true;
     return await persistInner(a, ctx);
   } catch (err) {
@@ -553,10 +598,10 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
       // review: swallowed -- best-effort removal of a scratch dir outside the clone; the OS temp reaper bounds a leak.
     });
     // The token never outlives the step on disk, whatever the outcome (best effort; the workspace is torn down next).
-    if (ctx.originTouched) await stripOrigin(a.repoRoot);
+    if (ctx.originTouched) await stripOriginChecked(a.repoRoot);
     // The unconditional reset also discards the residue of a refusal: nothing a refused create wrote survives. Skipped
     // when the very first restore already failed: a second attempt on a clone in an unknown state proves nothing.
-    if (restoredUpfront && !(await restoreCleanMain(a.repoRoot))) {
+    if (restoredUpfront && (await restoreCleanMain(a.repoRoot)) !== null) {
       reportSilentFallback(null, { feature: CREATE_ARM_FEATURE, op: "create-clone-restore-failed", message: "could not return the clone to a clean main" });
     }
   }
@@ -588,6 +633,9 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   const setOrigin = a.setOrigin ?? setOriginToken;
   const budgetMs = (own: number): number => Math.max(1, Math.min(own, c.left()));
   const expired = (): CreateRefusal | null => (c.left() <= 0 ? fail("persist", "deadline") : null);
+  // A git failure: the deadline wins when the budget ran out (the kill was ours), else the closed evidence rides the refusal.
+  const gitFail = (detail: string, ev: GitEvidence): CreateRefusal =>
+    expired() ?? fail("persist", detail, { numbers: ev.exit === undefined ? undefined : { exit_code: ev.exit }, extra: { cause: gitCause(ev) } });
 
   // ---- R5: refresh the depth-1 clone to the current main, then R4: take the token OFF disk ----------------------
   let early = expired();
@@ -596,16 +644,17 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
     c.originTouched = true;
     await setOrigin(a.repoRoot, a.installationToken);
   } catch (err) {
-    return fail("persist", "origin-failed", { extra: { cause: causeToken(err) } });
+    return fail("persist", "origin-failed", { extra: { cause: originCause(err) } });
   }
-  if (!(await runGit(a.repoRoot, ["fetch", "--depth=1", "origin", "main"], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) })).ok) {
-    return expired() ?? fail("persist", "fetch-failed");
-  }
-  if (!(await runGit(a.repoRoot, ["reset", "--hard", "FETCH_HEAD"], { timeoutMs: budgetMs(GIT_TIMEOUT_MS) })).ok) return fail("persist", "reset-failed");
+  const fetch1 = await runGit(a.repoRoot, ["fetch", "--depth=1", "origin", "main"], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
+  if (!fetch1.ok) return gitFail("fetch-failed", fetch1);
+  const reset = await runGit(a.repoRoot, ["reset", "--hard", "FETCH_HEAD"], { timeoutMs: budgetMs(GIT_TIMEOUT_MS) });
+  if (!reset.ok) return gitFail("reset-failed", reset);
   const usedBlobs = await baseBlobs(a.repoRoot, "HEAD", budgetMs(GIT_TIMEOUT_MS));
-  if (usedBlobs === null) return fail("persist", "blob-read-failed");
+  if (!usedBlobs.ok) return gitFail("blob-read-failed", usedBlobs.ev);
   // From here to the commit no script may see the token (a spawned script could read `.git/config`).
-  if (!(await stripOrigin(a.repoRoot, budgetMs(GIT_TIMEOUT_MS))).ok) return fail("persist", "origin-strip-failed");
+  const strip = await stripOrigin(a.repoRoot, budgetMs(GIT_TIMEOUT_MS));
+  if (!strip.ok) return gitFail("origin-strip-failed", strip);
 
   // ---- re-run the admission checks against the refreshed tree ---------------------------------------------------
   const measured = await measureClone(a.repoRoot);
@@ -701,14 +750,13 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   try {
     await setOrigin(a.repoRoot, a.installationToken);
   } catch (err) {
-    return fail("persist", "origin-failed", { extra: { cause: causeToken(err) } });
+    return fail("persist", "origin-failed", { extra: { cause: originCause(err) } });
   }
-  if (!(await runGit(a.repoRoot, ["fetch", "--depth=1", "origin", "main"], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) })).ok) {
-    return expired() ?? fail("persist", "fetch-failed");
-  }
+  const fetch2 = await runGit(a.repoRoot, ["fetch", "--depth=1", "origin", "main"], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
+  if (!fetch2.ok) return gitFail("fetch-failed", fetch2);
   const nowBlobs = await baseBlobs(a.repoRoot, "FETCH_HEAD", budgetMs(GIT_TIMEOUT_MS));
-  if (nowBlobs === null) return fail("persist", "blob-read-failed");
-  const moved = nowBlobs.filter((id, i) => id !== usedBlobs[i]).length;
+  if (!nowBlobs.ok) return gitFail("blob-read-failed", nowBlobs.ev);
+  const moved = nowBlobs.ids.filter((id, i) => id !== usedBlobs.ids[i]).length;
   if (moved > 0) return fail("persist", "base-moved", { numbers: { changed_count: moved } });
   early = expired();
   if (early) return early;

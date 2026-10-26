@@ -58,6 +58,8 @@ const SPAWN_MAX_STDERR_BYTES = 4096;
 /** Largest single file the collector will hand to `safeCommitAndPr` as expected content. */
 export const COLLECT_MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const GIT_TIMEOUT_MS = 30_000;
+/** The largest timeout one git call may be given (a caller with a deadline is still capped here). */
+export const GIT_MAX_TIMEOUT_MS = GIT_TIMEOUT_MS * 2;
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
 
 /**
@@ -359,27 +361,56 @@ export async function runSkillScan(o: RunSkillScanOpts): Promise<ScanResult> {
 // Git view of the clone (hardened, scrubbed)
 // =============================================================================
 
-export type GitResult = { ok: true; stdout: string } | { ok: false };
+/** Closed evidence of a failed git call: the exit status, the signal NAME (closed `SIG*` pattern) and whether the timeout fired. Never stderr. */
+export interface GitEvidence {
+  exit?: number;
+  signal?: string;
+  timedOut: boolean;
+}
+
+export type GitResult = { ok: true; stdout: string } | ({ ok: false } & GitEvidence);
 
 export interface RunGitOpts {
   baseEnv?: BaseEnv;
-  /** Clamped to `GIT_TIMEOUT_MS`; a caller with a deadline passes the time it has left. */
+  /** Clamped to `[1, GIT_MAX_TIMEOUT_MS]` (the default is `GIT_TIMEOUT_MS`); a caller with a deadline passes the time it has left. */
   timeoutMs?: number;
 }
 
+/** The effective timeout of one git call: the request (default `GIT_TIMEOUT_MS`), at least 1 ms and at most `GIT_MAX_TIMEOUT_MS`. */
+export function clampGitTimeout(requested: number | undefined): number {
+  return Math.max(1, Math.min(requested ?? GIT_TIMEOUT_MS, GIT_MAX_TIMEOUT_MS));
+}
+
+const SIGNAL_NAME_RE = /^SIG[A-Z0-9]{2,12}$/;
+const GIT_SUB_RE = /^[a-z][a-z-]{0,23}$/;
+
 /**
  * The ONE hardened, scrubbed git invocation of the create arm (the arm's clone hygiene uses it too): hardening args,
- * hardening env, the scrubbed environment (no token, no `GIT_*` location variable), a bounded buffer and timeout. A
- * failure is mirrored to Sentry (`create-gate-git`, only the subcommand) and returned, never thrown.
+ * hardening env, the scrubbed environment (no token, no `GIT_*` location variable), a bounded buffer and timeout.
+ *
+ * A failure is returned as CLOSED evidence (`exit`, `signal`, `timedOut`) and mirrored to Sentry (`create-gate-git`) as
+ * a SYNTHETIC Error plus a closed `extra`. The raw execFile Error is never forwarded: its message carries the command
+ * line and git's stderr, and a failed fetch against the tokenized origin echoes the remote URL there.
  */
 export function runGit(root: string, args: readonly string[], opts: RunGitOpts = {}): Promise<GitResult> {
   const env = { ...buildScrubbedEnv({}, opts.baseEnv ?? process.env), ...GIT_HARDENING_ENV, GIT_TERMINAL_PROMPT: "0" } as unknown as NodeJS.ProcessEnv;
-  const timeout = Math.max(1, Math.min(opts.timeoutMs ?? GIT_TIMEOUT_MS, GIT_TIMEOUT_MS * 2));
+  const timeout = clampGitTimeout(opts.timeoutMs);
   return new Promise((resolve) => {
     execFile("git", [...GIT_HARDENING_ARGS, "-C", root, ...args], { env, maxBuffer: GIT_MAX_BUFFER, timeout, encoding: "utf8" }, (err, stdout) => {
       if (err) {
-        reportSilentFallback(err, { feature: CREATE_ARM_FEATURE_NAME, op: "create-gate-git", extra: { sub: args[0] } });
-        resolve({ ok: false });
+        const e = err as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null };
+        const exit = typeof e.code === "number" && Number.isInteger(e.code) ? e.code : undefined;
+        const signal = typeof e.signal === "string" && e.signal !== "" ? (SIGNAL_NAME_RE.test(e.signal) ? e.signal : "other") : undefined;
+        const killed = e.killed === true;
+        // execFile kills with SIGTERM when the timeout fires; a kill for any other reason (maxBuffer) is not a timeout.
+        const timedOut = killed && e.signal === "SIGTERM" && e.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+        const sub = typeof args[0] === "string" && GIT_SUB_RE.test(args[0]) ? args[0] : "other";
+        reportSilentFallback(new Error(`git ${sub} failed`), {
+          feature: CREATE_ARM_FEATURE_NAME,
+          op: "create-gate-git",
+          extra: { sub, ...(exit === undefined ? {} : { exit }), ...(signal === undefined ? {} : { signal }), killed, timedOut },
+        });
+        resolve({ ok: false, ...(exit === undefined ? {} : { exit }), ...(signal === undefined ? {} : { signal }), timedOut });
         return;
       }
       resolve({ ok: true, stdout });
