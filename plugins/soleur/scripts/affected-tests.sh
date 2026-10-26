@@ -264,7 +264,7 @@ CFG_INERT_PATHS=()
 # Content trigger (lib content-trigger.sh): three flat keys, all or none. Values
 # land directly in AFFECTED_CT_PATTERN/_PATHS/_COMMAND; this flag records that any
 # of the three appeared, so a partial group is refused rather than silently ignored.
-CFG_CT_ANY=0
+CFG_CT_SET=0
 
 # Dump the JSON object as NUL-separated KEY\0TYPE\0VALUE\0 triples on stdout —
 # array elements arrive as one `elem:<type>` record each, an empty array as a
@@ -343,6 +343,10 @@ JSEOF
   return 2
 }
 
+# Refusal of a content-trigger key: names the offending key (a missing key and an empty one
+# are the same refusal).
+_affected_ct_bad() { finish 4 none "bad-config key=$1" config "$CI_NAME" - - -; }
+
 # Load and validate. Fail-closed everywhere: malformed, unknown key, or wrong
 # type → rc 4 reason=bad-config key=<k>; a vacuous test_command →
 # reason=vacuous-test-command.
@@ -391,17 +395,17 @@ affected_load_config() {
         CFG_BUDGET_CI="$v" ;;
       content_trigger_pattern)
         [[ "$t" == string ]] || { badkey="$k"; break; }
-        CFG_CT_ANY=1
+        CFG_CT_SET=1
         AFFECTED_CT_PATTERN="$v" ;;
       content_trigger_command)
         [[ "$t" == string ]] || { badkey="$k"; break; }
-        CFG_CT_ANY=1
+        CFG_CT_SET=1
         AFFECTED_CT_COMMAND="$v" ;;
       content_trigger_paths)
         if [[ "$t" == array ]]; then
-          CFG_CT_ANY=1
+          CFG_CT_SET=1
         elif [[ "$t" == elem:string ]]; then
-          CFG_CT_ANY=1
+          CFG_CT_SET=1
           AFFECTED_CT_PATHS+=("$v")
         else
           badkey="$k"; break
@@ -416,26 +420,31 @@ affected_load_config() {
   # Content trigger: all three keys or none, each refused naming ITS key (a missing
   # key and an empty one are the same refusal). A half-declared trigger that silently
   # never fires is exactly the failure it exists to prevent.
-  if (( CFG_CT_ANY )); then
-    _ct_bad() { finish 4 none "bad-config key=$1" config "$CI_NAME" - - -; }
+  if (( CFG_CT_SET )); then
     if [[ -z "$AFFECTED_CT_PATTERN" || "$AFFECTED_CT_PATTERN" == *$'\n'* ]]; then
-      _ct_bad content_trigger_pattern
+      _affected_ct_bad content_trigger_pattern
     fi
-    ((${#AFFECTED_CT_PATHS[@]} > 0)) || _ct_bad content_trigger_paths
-    local _ct_g
+    ((${#AFFECTED_CT_PATHS[@]} > 0)) || _affected_ct_bad content_trigger_paths
+    local _ct_g _ct_probe
     for _ct_g in "${AFFECTED_CT_PATHS[@]}"; do
-      # Refused: empty or multi-line globs; a match-everything glob (the scan would be
-      # unbounded and the command near-permanent, as for inert_paths); and shapes that
-      # can never match a repo-relative path (leading `./` or `/`, trailing `/`).
-      if [[ -z "$_ct_g" || "$_ct_g" == *$'\n'* || "$_ct_g" == ./* || "$_ct_g" == /* || "$_ct_g" == */ ]] \
-         || affected_glob_match "zz9q8/probe.nonexistent" "$_ct_g"; then
-        _ct_bad content_trigger_paths
+      # Refused: empty, multi-line or whitespace-bearing globs; shapes that can never match
+      # a repo-relative path in `[[ == ]]` (leading `./`, `/` or `!`, trailing `/`, `//`, a
+      # `.`/`..` segment, `{a,b}` which is not expanded); and a match-everything glob (the
+      # scan would be unbounded and the command near-permanent, as for inert_paths): any
+      # glob that matches one of a handful of improbable probe paths.
+      if [[ -z "$_ct_g" || "$_ct_g" == *$'\n'* || "$_ct_g" == *[[:space:]]* \
+            || "$_ct_g" == ./* || "$_ct_g" == /* || "$_ct_g" == '!'* || "$_ct_g" == */ \
+            || "$_ct_g" == *//* || "$_ct_g" == */./* || "$_ct_g" == *..* || "$_ct_g" == *[{}]* ]]; then
+        _affected_ct_bad content_trigger_paths
       fi
+      for _ct_probe in "zz9q8/probe.nonexistent" "a" ".hidden" "x/y.z" "Q9"; do
+        if affected_glob_match "$_ct_probe" "$_ct_g"; then _affected_ct_bad content_trigger_paths; fi
+      done
     done
     # A vacuous command (`true`, `cmd || true`) would certify nothing: same denylist
     # as test_command, but the refusal names THIS key.
     if [[ -z "$AFFECTED_CT_COMMAND" ]] || _affected_cmd_vacuous "$AFFECTED_CT_COMMAND"; then
-      _ct_bad content_trigger_command
+      _affected_ct_bad content_trigger_command
     fi
     AFFECTED_CT_ARMED=1
   fi
@@ -557,7 +566,7 @@ if [[ -n "$RUNNER" ]]; then
     # the operator (it can cost real time), so explain reports the delegation.
     echo "SELECTION mode=delegated runner=$RUNNER flag=$_flag"
     echo "runner owns selection — inspect with: bash $RUNNER --print-selection"
-    AFFECTED_CT_ELIGIBLE=1
+    (( ARG_FULL_REQUESTED )) || AFFECTED_CT_ELIGIBLE=1
     finish 0 explain delegated runner "$CI_NAME" - - -
   fi
   if [[ "$CI_NAME" != none ]]; then
@@ -794,7 +803,7 @@ fi
 
 if (( ARG_EXPLAIN )); then
   echo "SELECTION mode=${MODE} reason=${REASON} global_hit=$(affected_marker_field "${GLOBAL_HIT:--}") ci=${CI_NAME}"
-  AFFECTED_CT_ELIGIBLE=1
+  (( ARG_FULL_REQUESTED )) || AFFECTED_CT_ELIGIBLE=1
   finish 0 explain "$REASON" - "$CI_NAME" - - -
 fi
 

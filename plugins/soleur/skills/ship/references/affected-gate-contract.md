@@ -54,7 +54,7 @@ gate probes registration, not presence.
 | 0 | Selected tests passed, or `NO_TESTS_AFFECTED` (all-inert diff) | proceed |
 | 1 | A selected test failed / runner signal-killed / the content-trigger command failed (`reason=content-trigger-failed`) | stop; report failures (for `content-trigger-failed`, re-run the `content_trigger_command` directly) |
 | 4 | `AFFECTED_GATE_REFUSED reason=<no-stack\|bad-config\|vacuous-test-command\|no-base-ref\|not-a-repo\|toolchain-missing\|runner-refused>` + a `remedy:` line | stop; fix the named cause — never retry blindly |
-| 6 | `AFFECTED_GATE_BUDGET_DEFERRED` — budget expired AND a CI test workflow exists | proceed to CI; record CI as the authoritative gate; never label the run passed |
+| 6 | `AFFECTED_GATE_BUDGET_DEFERRED` — budget expired AND a CI test workflow exists (with `content_trigger=deferred` the selected tests passed and only the content-trigger command is owed to CI) | proceed to CI; record CI as the authoritative gate; never label the run passed |
 | 7 | No test suite detected at all | proceed with the disclosed note; never label passed |
 
 Multi-stack aggregation: worst-of `1 > 4 > 6 > 0`; `7` only when every adapter
@@ -102,7 +102,7 @@ runner `3` → rc 1 `reason=runner-signal`.
 | `budget_seconds` | number | Wall-clock cap; enforced only when CI detected; default 900; must be a positive integer |
 | `max_workers` | number | Overrides `max(1, ncpu/2) / (1 + running gate processes)`; positive integer |
 | `budget_ci` | boolean | Forces CI-deferral eligibility |
-| `content_trigger_pattern`, `content_trigger_paths`, `content_trigger_command` | string, string[], string | The content trigger below. All three or none: a partial or empty group, a multi-line pattern, an empty or match-everything glob (`*`, `**/*`), a glob that can never match a repo-relative path (leading `./` or `/`, trailing `/`), or an empty or vacuous command (same denylist as `test_command`) is `bad-config key=<the offending key>` |
+| `content_trigger_pattern`, `content_trigger_paths`, `content_trigger_command` | string, string[], string | The content trigger below. All three or none: a partial or empty group, a multi-line pattern, an empty, whitespace-bearing or match-everything glob (`*`, `**/*`, `[!p]*`: any glob matching one of a few improbable probe paths), a glob that can never match a repo-relative path (leading `./`, `/` or `!`; trailing `/`; `//`; a `.`/`..` segment; `{a,b}`, which `[[ == ]]` does not expand), or an empty or vacuous command (same denylist as `test_command`) is `bad-config key=<the offending key>` |
 
 ## Content trigger
 
@@ -120,14 +120,17 @@ gate). Its exit status is the only failure signal.
   full (global paths, empty diff, degraded census, no selector — the stack adapter's full
   run never runs the repo-declared command). An operator's own `--full`, `test_command`,
   `--self-check`, help, refusals, and `rc 7` (no test suite) never run it, and neither does
-  `--explain` (it only reports). A failed primary (marker field `skipped`) owns the verdict.
+  `--explain` (it only reports; under an operator's `--full` it prints nothing). On a repo with no
+  runner an operator's `--full` is the stack's full command only: it does not cover the trigger. A failed primary (marker field `skipped`) owns the verdict.
   The command runs under the same remaining wall-clock budget: with a detected CI workflow
   an expiry is rc 6 (field `deferred`), else rc 1.
 - **What counts.** Added lines only, taken from one `git diff -U0 --text` of the working tree
-  against `merge-base(<base>, HEAD)` plus untracked files (binary and symlinks skipped). The
+  against `merge-base(<base>, HEAD)` (renames are a delete plus an add, so moving a file that
+  already names the string into the globs fires) plus untracked files (read as text; symlinks
+  skipped). The
   base is `--base`, else `origin/main`, else `origin/master` — never the upstream ref, which on
   a pushed branch would hide every pushed fixture. A path or removal line that names the
-  string never fires; a pure rename adds no line and does not fire. The string is matched as a
+  string never fires. The string is matched as a
   fixed string, not a regex. Globs: a pattern with a `/` matches the whole path (and `*`
   crosses `/`, `**/` also matches zero directories); a bare name matches the basename.
 - **Fail direction.** A scan that cannot decide runs the command and says so

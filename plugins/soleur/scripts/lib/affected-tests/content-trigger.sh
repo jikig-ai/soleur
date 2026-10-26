@@ -64,7 +64,7 @@ _affected_ct_in_globs() {
 #              `--text` makes git diff files marked `-diff`/`binary` or holding NUL.
 #   untracked: `git ls-files --others --exclude-standard`, limited to the globs,
 #              regular files only (a symlink is not read), each read with
-#              `grep -IqF` (binary skipped).
+#              `grep -aqF` (as text, matching the tracked leg's `--text`).
 affected_ct_scan() {
   AFFECTED_CT_STATE=none
   AFFECTED_CT_LEG=""
@@ -111,8 +111,13 @@ affected_ct_scan() {
   # decoded here, so a quoted-name file that adds the pattern reports `?quoted`
   # and the scan declines to decide rather than dropping it.
   _ct_rc=0
-  _ct_hits="$(git -c core.quotePath=false diff -U0 --text --no-color --no-ext-diff --no-textconv -M \
+  # `--no-renames`: a renamed file is then a delete plus an add, so moving a file that
+  # already names the string INTO the globs (or editing it while moving) fires, as an
+  # added file does; with rename detection git shows only the delta. `tr -d` keeps a
+  # NUL (which `--text` can emit) from truncating a line in awks that stop at one.
+  _ct_hits="$(git -c core.quotePath=false diff -U0 --text --no-color --no-ext-diff --no-textconv --no-renames \
     --src-prefix=a/ --dst-prefix=b/ "$_ct_mb" -- 2>/dev/null \
+    | LC_ALL=C tr -d '\000' \
     | CT_PAT="$AFFECTED_CT_PATTERN" awk '
     BEGIN { pat = ENVIRON["CT_PAT"]; path = ""; inh = 0; seen = 0 }
     /^diff --git / { path = ""; inh = 0; seen = 0; next }
@@ -162,7 +167,7 @@ affected_ct_scan() {
       AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG="untracked-cap"; return 0
     fi
     _ct_rc=0
-    grep -IqF -- "$AFFECTED_CT_PATTERN" "$_ct_p" 2>/dev/null || _ct_rc=$?
+    grep -aqF -- "$AFFECTED_CT_PATTERN" "$_ct_p" 2>/dev/null || _ct_rc=$?
     case "$_ct_rc" in
       0) AFFECTED_CT_STATE=fired; return 0 ;;
       1) : ;;
@@ -215,11 +220,12 @@ affected_ct_hook() {
   # budget as the primary run, and its failure is the gate's failure.
   affected_bound bash -c "$AFFECTED_CT_COMMAND" || _ct_crc=$?
   if (( _ct_crc != 0 )); then
-    (( _ct_crc == 137 )) && echo "affected-tests: the content-trigger command exited 137 (SIGKILL — OOM or kill escalation), not necessarily budget expiry; deferral still applies." >&2
+    (( _ct_crc == 137 )) && echo "affected-tests: the content-trigger command exited 137 (SIGKILL — OOM or kill escalation), not necessarily budget expiry." >&2
     if [[ ( "$_ct_crc" == 124 || "$_ct_crc" == 137 ) && "$AFFECTED_BUDGET_ACTIVE" == 1 && "${CI_NAME:-none}" != none ]]; then
       AFFECTED_CT_OUT_RC=6
       AFFECTED_CT_OUT_REASON=budget-deferred
       AFFECTED_CT_OUT_FIELD=deferred
+      echo "affected-tests: the content-trigger command did not finish within the shared budget — the selected tests passed; only the command is owed to CI."
     else
       AFFECTED_CT_OUT_RC=1
       AFFECTED_CT_OUT_REASON=content-trigger-failed

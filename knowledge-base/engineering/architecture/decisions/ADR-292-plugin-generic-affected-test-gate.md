@@ -36,7 +36,7 @@ Time-boxed read of `melodic-software/claude-code-plugins` `plugins/toolchain`: a
 
 ## Addendum (2026-10-26)
 
-The gate gained a config-declared content trigger (three `.soleur-test-gate.json` keys; #10924 P4b): when a diff adds a configured fixed string to a file under configured globs, a passing run that the operator did not make `--full` also runs a configured command (marker field `content_trigger=<clear|ran|failed|deferred|skipped|scan-error>`, contract in `affected-gate-contract.md`).
+The gate gained a config-declared content trigger (three `.soleur-test-gate.json` keys; #10924 P4b): when a diff adds a configured fixed string to a file under configured globs, a passing run that the operator did not make `--full` also runs a configured command (marker field and full contract in `affected-gate-contract.md`).
 
 - It is an additive, per-repo-declared coverage channel. It does not reverse ADR-242 decision 8's deferral of NARROWING selection by token-level diff edges; it can only add a run, never remove one.
 - A scan that cannot decide runs the command (fail toward coverage, as in ADR-242 decision 3).
