@@ -1,6 +1,6 @@
 ---
 name: trigger-cron
-description: "This skill should be used to fire an allowlisted cron manual-trigger via POST /api/internal/trigger-cron, without SSH. Reads the secret read-only from Doppler; lists events; supports event data and a dry-run."
+description: "This skill should be used to fire an allowlisted cron manual-trigger on demand via POST /api/internal/trigger-cron, without SSH. Reads the secret read-only from Doppler; lists allowlisted events; supports event data and a dry-run."
 ---
 
 <!-- soleur-cloud-mode:start -->
