@@ -1,8 +1,8 @@
 // WikiSkill Phase 2 (#10550) -- the create arm's gates that SPAWN a process or read the clone.
 //
-// Three repo scripts run through ONE helper, `spawnRepoScript`: the skill security scan, the README count sync, and
-// (when it exists) nothing else -- the Cursor generator does not run in the runner image (Phase 0, CTO G3), so the
-// stub is rendered by the pure renderer in `compound-promote-create.ts`.
+// Two repo scripts run through ONE helper, `spawnRepoScript`: the skill security scan and the README count sync. The
+// Cursor generator does not run in the runner image (Phase 0, CTO G3), so the stub is rendered by the pure renderer in
+// `compound-promote-create.ts`.
 //
 // Contract (Guard 1):
 //   - the spawn environment is an ALLOWLIST (no installation token, no secret, no GIT_* location variable);
@@ -27,6 +27,9 @@ import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-com
 import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "@/server/inngest/functions/_git-hardening";
 import { createPathList } from "@/server/compound-promote-create";
 
+// The Sentry feature name (the same literal the arm exports as `CREATE_ARM_FEATURE`; a leaf constant here avoids an import cycle).
+const CREATE_ARM_FEATURE_NAME = "cron-compound-promote";
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -42,13 +45,19 @@ const SCAN_REVIEW_LINE = "# skill-security-scan verdict: REVIEW";
 export const SCAN_MIN_INPUT_BYTES = 200;
 export const SCAN_TIMEOUT_MS = 60_000;
 export const README_SYNC_TIMEOUT_MS = 30_000;
-/** Tools `run-scan.sh` needs (bash plus the coreutils/jq it shells to). Checked before any scan. */
-export const SCAN_REQUIRED_TOOLS = ["bash", "jq", "sha256sum", "awk", "sed", "grep", "find", "mktemp", "tr", "timeout"] as const;
+/**
+ * Tools the scripts the gates spawn need (bash plus the coreutils/jq they shell to). Checked before any scan. The
+ * closed set doubles as the vocabulary of `missing_tool_names` in the Sentry extra (a name outside it is never echoed).
+ */
+export const SCAN_REQUIRED_TOOLS = [
+  "bash", "jq", "sha256sum", "awk", "sed", "grep", "find", "mktemp", "tr", "timeout",
+  "cut", "head", "date", "cat", "rm", "mv", "mkdir", "id", "dirname", "basename",
+] as const;
 export const SPAWN_MAX_STDOUT_BYTES = 1024 * 1024;
 const SPAWN_MAX_STDERR_BYTES = 4096;
 /** Largest single file the collector will hand to `safeCommitAndPr` as expected content. */
 export const COLLECT_MAX_FILE_BYTES = 2 * 1024 * 1024;
-const GIT_TIMEOUT_MS = 30_000;
+export const GIT_TIMEOUT_MS = 30_000;
 const GIT_MAX_BUFFER = 16 * 1024 * 1024;
 
 /**
@@ -110,7 +119,6 @@ export interface SpawnRepoScriptOpts {
   repoRoot: string;
   /** Repo-relative path of the script. Must be a regular file under the REAL repo root. */
   script: string;
-  args?: readonly string[];
   stdin?: string;
   extraEnv: Readonly<Record<string, string>>;
   timeoutMs: number;
@@ -157,7 +165,7 @@ export async function spawnRepoScript(o: SpawnRepoScriptOpts): Promise<SpawnScri
     let stdoutBytes = 0;
     let stderr = "";
     // A child environment is legitimately partial; the repo's ProcessEnv augmentation (NODE_ENV required) is for READING.
-    const child = spawn("bash", [file.abs, ...(o.args ?? [])], {
+    const child = spawn("bash", [file.abs], {
       cwd: root,
       env: env as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"] as const,
@@ -200,7 +208,7 @@ export async function spawnRepoScript(o: SpawnRepoScriptOpts): Promise<SpawnScri
     });
     child.on("error", (err: NodeJS.ErrnoException) => {
       // An interpreter that cannot be spawned is an infrastructure fault, not a verdict: surface it to Sentry.
-      reportSilentFallback(err, { feature: "cron-compound-promote", op: "create-gate-spawn", extra: { script: o.script, code: err.code ?? "unknown" } });
+      reportSilentFallback(err, { feature: CREATE_ARM_FEATURE_NAME, op: "create-gate-spawn", extra: { script: o.script, code: err.code ?? "unknown" } });
       finish({ kind: "spawn-error", detail: err.code ?? "unknown" });
     });
     child.on("close", (code, signal) => finish({ kind: "exit", code, signal, stdout, stderr }));
@@ -237,7 +245,21 @@ export function preflightTools(pathEnv: string, tools: readonly string[] = SCAN_
   return missing.length === 0 ? { ok: true } : { ok: false, missing: [...missing] };
 }
 
-export type ScanEvaluation = { ok: true } | { ok: false; detail: string };
+/** Process evidence of a failed gate script: the exit code and the signal NAME (closed: `SIG*`, else `other`). */
+export interface ScriptEvidence {
+  exit?: number;
+  signal?: string;
+}
+
+function evidenceOf(r: SpawnScriptResult): ScriptEvidence {
+  if (r.kind !== "exit") return {};
+  return {
+    ...(typeof r.code === "number" ? { exit: r.code } : {}),
+    ...(r.signal ? { signal: /^SIG[A-Z0-9]{2,12}$/.test(r.signal) ? r.signal : "other" } : {}),
+  };
+}
+
+export type ScanEvaluation = { ok: true } | ({ ok: false; detail: string } & ScriptEvidence);
 
 /**
  * Accept ONLY exit 0 AND a first stdout line exactly equal to the LOW-RISK banner. Everything else is a refusal with
@@ -248,18 +270,26 @@ export function evaluateScanOutput(r: SpawnScriptResult): ScanEvaluation {
   if (r.kind === "spawn-error") return { ok: false, detail: "spawn-error" };
   if (r.kind === "script-not-regular") return { ok: false, detail: "script-not-regular" };
   if (r.kind === "output-overflow") return { ok: false, detail: "output-overflow" };
-  if (r.code !== 0) return { ok: false, detail: "non-zero" };
-  if (r.stdout.trim() === "") return { ok: false, detail: "empty-output" };
+  if (r.code !== 0) return { ok: false, detail: "non-zero", ...evidenceOf(r) };
+  if (r.stdout.trim() === "") return { ok: false, detail: "empty-output", ...evidenceOf(r) };
   const first = r.stdout.split("\n")[0];
   if (first === SCAN_LOW_RISK_LINE) return { ok: true };
-  if (first === SCAN_HIGH_RISK_LINE) return { ok: false, detail: "high-risk" };
-  if (first === SCAN_REVIEW_LINE) return { ok: false, detail: "review" };
-  return { ok: false, detail: "unrecognised" };
+  if (first === SCAN_HIGH_RISK_LINE) return { ok: false, detail: "high-risk", ...evidenceOf(r) };
+  if (first === SCAN_REVIEW_LINE) return { ok: false, detail: "review", ...evidenceOf(r) };
+  return { ok: false, detail: "unrecognised", ...evidenceOf(r) };
 }
 
 export type ScanResult =
-  | { ok: true; scanned: number; verdicts: Array<{ path: string; verdict: "LOW-RISK" }> }
-  | { ok: false; class: "scan"; detail: string; path?: string; missing?: string[] };
+  | { ok: true }
+  | ({
+      ok: false;
+      detail: string;
+      path?: string;
+      /** Index of the refused file in `relPaths` (0 = SKILL.md, 1 = PURPOSE.md). */
+      fileIndex?: number;
+      /** Names of the missing tools, always members of `SCAN_REQUIRED_TOOLS`. */
+      missing?: string[];
+    } & ScriptEvidence);
 
 export interface RunSkillScanOpts {
   repoRoot: string;
@@ -273,7 +303,7 @@ export interface RunSkillScanOpts {
   spawn?: typeof spawnRepoScript;
 }
 
-const scanRefusal = (detail: string, extra?: { path?: string; missing?: string[] }): ScanResult => ({ ok: false, class: "scan", detail, ...extra });
+const scanRefusal = (detail: string, extra?: Omit<Extract<ScanResult, { ok: false }>, "ok" | "detail">): ScanResult => ({ ok: false, detail, ...extra });
 
 /**
  * Run the offline skill security scan on EVERY file and require an explicit LOW-RISK for each. Order: non-empty file
@@ -296,19 +326,18 @@ export async function runSkillScan(o: RunSkillScanOpts): Promise<ScanResult> {
 
   const baseEnv = o.baseEnv ?? process.env;
   const pre = preflightTools(baseEnv.PATH ?? "");
-  if (!pre.ok) return scanRefusal("missing-tool", { missing: pre.missing });
+  if (!pre.ok) return scanRefusal("missing-tool", { missing: pre.missing.filter((t) => (SCAN_REQUIRED_TOOLS as readonly string[]).includes(t)) });
 
   const inputs: Array<{ path: string; content: string }> = [];
   for (const rel of o.relPaths) {
     const file = await resolveRegularFile(o.repoRoot, rel);
-    if (!file) return scanRefusal("input-unreadable", { path: rel });
-    if (file.size < SCAN_MIN_INPUT_BYTES) return scanRefusal("input-too-small", { path: rel });
+    if (!file) return scanRefusal("input-unreadable", { path: rel, fileIndex: inputs.length });
+    if (file.size < SCAN_MIN_INPUT_BYTES) return scanRefusal("input-too-small", { path: rel, fileIndex: inputs.length });
     inputs.push({ path: rel, content: await readFile(file.abs, "utf8") });
   }
 
   const run = o.spawn ?? spawnRepoScript;
-  const verdicts: Array<{ path: string; verdict: "LOW-RISK" }> = [];
-  for (const input of inputs) {
+  for (const [fileIndex, input] of inputs.entries()) {
     const result = await run({
       repoRoot: o.repoRoot,
       script: SKILL_SCAN_SCRIPT,
@@ -318,23 +347,38 @@ export async function runSkillScan(o: RunSkillScanOpts): Promise<ScanResult> {
       baseEnv,
     });
     const verdict = evaluateScanOutput(result);
-    if (!verdict.ok) return scanRefusal(verdict.detail, { path: input.path });
-    verdicts.push({ path: input.path, verdict: "LOW-RISK" });
+    if (!verdict.ok) {
+      const { ok: _ok, detail, ...evidence } = verdict;
+      return scanRefusal(detail, { path: input.path, fileIndex, ...evidence });
+    }
   }
-  if (verdicts.length !== o.relPaths.length) return scanRefusal("count-mismatch");
-  return { ok: true, scanned: verdicts.length, verdicts };
+  return { ok: true };
 }
 
 // =============================================================================
 // Git view of the clone (hardened, scrubbed)
 // =============================================================================
 
-function git(root: string, args: readonly string[], baseEnv: BaseEnv): Promise<{ ok: true; stdout: string } | { ok: false }> {
-  const env = { ...buildScrubbedEnv({}, baseEnv), ...GIT_HARDENING_ENV } as NodeJS.ProcessEnv;
+export type GitResult = { ok: true; stdout: string } | { ok: false };
+
+export interface RunGitOpts {
+  baseEnv?: BaseEnv;
+  /** Clamped to `GIT_TIMEOUT_MS`; a caller with a deadline passes the time it has left. */
+  timeoutMs?: number;
+}
+
+/**
+ * The ONE hardened, scrubbed git invocation of the create arm (the arm's clone hygiene uses it too): hardening args,
+ * hardening env, the scrubbed environment (no token, no `GIT_*` location variable), a bounded buffer and timeout. A
+ * failure is mirrored to Sentry (`create-gate-git`, only the subcommand) and returned, never thrown.
+ */
+export function runGit(root: string, args: readonly string[], opts: RunGitOpts = {}): Promise<GitResult> {
+  const env = { ...buildScrubbedEnv({}, opts.baseEnv ?? process.env), ...GIT_HARDENING_ENV, GIT_TERMINAL_PROMPT: "0" } as unknown as NodeJS.ProcessEnv;
+  const timeout = Math.max(1, Math.min(opts.timeoutMs ?? GIT_TIMEOUT_MS, GIT_TIMEOUT_MS * 2));
   return new Promise((resolve) => {
-    execFile("git", [...GIT_HARDENING_ARGS, "-C", root, ...args], { env, maxBuffer: GIT_MAX_BUFFER, timeout: GIT_TIMEOUT_MS, encoding: "utf8" }, (err, stdout) => {
+    execFile("git", [...GIT_HARDENING_ARGS, "-C", root, ...args], { env, maxBuffer: GIT_MAX_BUFFER, timeout, encoding: "utf8" }, (err, stdout) => {
       if (err) {
-        reportSilentFallback(err, { feature: "cron-compound-promote", op: "create-gate-git", extra: { sub: args[0] } });
+        reportSilentFallback(err, { feature: CREATE_ARM_FEATURE_NAME, op: "create-gate-git", extra: { sub: args[0] } });
         resolve({ ok: false });
         return;
       }
@@ -345,7 +389,7 @@ function git(root: string, args: readonly string[], baseEnv: BaseEnv): Promise<{
 
 /** Every path git reports as changed, deleted or untracked (one per file, no rename detection). */
 async function changedPaths(root: string, baseEnv: BaseEnv): Promise<string[] | null> {
-  const r = await git(root, ["status", "--porcelain=v1", "-z", "-uall", "--no-renames"], baseEnv);
+  const r = await runGit(root, ["status", "--porcelain=v1", "-z", "-uall", "--no-renames"], { baseEnv });
   if (!r.ok) return null;
   return r.stdout
     .split("\u0000")
@@ -353,11 +397,13 @@ async function changedPaths(root: string, baseEnv: BaseEnv): Promise<string[] | 
     .map((e) => e.slice(3));
 }
 
+export type CloneSnapshot = Map<string, string>;
+
 /** path -> content hash (or "deleted" / "link:<target>") for every path git reports; the basis for "what did this step change". */
-async function snapshot(root: string, baseEnv: BaseEnv): Promise<Map<string, string> | null> {
+export async function snapshotClone(root: string, baseEnv: BaseEnv = process.env): Promise<CloneSnapshot | null> {
   const paths = await changedPaths(root, baseEnv);
   if (!paths) return null;
-  const out = new Map<string, string>();
+  const out: CloneSnapshot = new Map();
   for (const p of paths) {
     try {
       const abs = join(root, p);
@@ -375,17 +421,27 @@ async function snapshot(root: string, baseEnv: BaseEnv): Promise<Map<string, str
 // =============================================================================
 
 export type ReadmeSyncResult =
-  | { ok: true; contents: Record<(typeof README_PATHS)[number], string> }
-  | { ok: false; class: "readme-sync"; detail: string };
+  | { ok: true }
+  | ({
+      ok: false;
+      detail: string;
+      /** `unexpected-change`: how many non-README paths differ. `no-change`: how many README files changed (0 or 1). */
+      changedCount?: number;
+    } & ScriptEvidence);
 
 export interface SyncReadmeCountsOpts {
   repoRoot: string;
   timeoutMs?: number;
   baseEnv?: BaseEnv;
   spawn?: typeof spawnRepoScript;
+  /**
+   * A clone snapshot taken BEFORE the scanner ran. When given it is the baseline for the "nothing else changed" guard,
+   * so a scan-time write to any non-README path is caught too; otherwise the baseline is taken here, before the sync.
+   */
+  since?: CloneSnapshot;
 }
 
-const readmeRefusal = (detail: string): ReadmeSyncResult => ({ ok: false, class: "readme-sync", detail });
+const readmeRefusal = (detail: string, extra?: Omit<Extract<ReadmeSyncResult, { ok: false }>, "ok" | "detail">): ReadmeSyncResult => ({ ok: false, detail, ...extra });
 
 /** Same line count, and every differing line differs only in its digit runs. */
 export function digitOnlyLineDiff(before: string, after: string): boolean {
@@ -410,7 +466,8 @@ async function readRegularUtf8(root: string, rel: string): Promise<string | null
 
 /**
  * Run `scripts/sync-readme-counts.sh` in the clone and require that it changed EXACTLY the two README files, each by
- * digits only (the script also rewrites prose and other docs elsewhere; those would be a refusal, not a commit).
+ * digits only. (The script itself edits only those two files; the unexpected-change guard is the tripwire for a
+ * script defect or a scan-time write, not a description of normal behaviour.)
  */
 export async function syncReadmeCounts(o: SyncReadmeCountsOpts): Promise<ReadmeSyncResult> {
   const baseEnv = o.baseEnv ?? process.env;
@@ -420,22 +477,24 @@ export async function syncReadmeCounts(o: SyncReadmeCountsOpts): Promise<ReadmeS
     if (text === null) return readmeRefusal("readme-unreadable");
     before[rel] = text;
   }
-  const snapBefore = await snapshot(o.repoRoot, baseEnv);
+  const snapBefore = o.since ?? (await snapshotClone(o.repoRoot, baseEnv));
   if (!snapBefore) return readmeRefusal("git-failed");
 
   const run = o.spawn ?? spawnRepoScript;
   const r = await run({ repoRoot: o.repoRoot, script: README_SYNC_SCRIPT, extraEnv: {}, timeoutMs: o.timeoutMs ?? README_SYNC_TIMEOUT_MS, baseEnv });
   if (r.kind === "timeout") return readmeRefusal("timeout");
   if (r.kind === "script-not-regular") return readmeRefusal("script-not-regular");
-  if (r.kind !== "exit" || r.code !== 0) return readmeRefusal("script-failed");
+  if (r.kind !== "exit" || r.code !== 0) return readmeRefusal("script-failed", evidenceOf(r));
 
-  const snapAfter = await snapshot(o.repoRoot, baseEnv);
+  const snapAfter = await snapshotClone(o.repoRoot, baseEnv);
   if (!snapAfter) return readmeRefusal("git-failed");
   const readmes = new Set<string>(README_PATHS);
+  let unexpected = 0;
   for (const p of new Set([...snapBefore.keys(), ...snapAfter.keys()])) {
     if (readmes.has(p)) continue;
-    if (snapBefore.get(p) !== snapAfter.get(p)) return readmeRefusal("unexpected-change");
+    if (snapBefore.get(p) !== snapAfter.get(p)) unexpected += 1;
   }
+  if (unexpected > 0) return readmeRefusal("unexpected-change", { changedCount: unexpected });
 
   const after: Record<string, string> = {};
   for (const rel of README_PATHS) {
@@ -444,9 +503,10 @@ export async function syncReadmeCounts(o: SyncReadmeCountsOpts): Promise<ReadmeS
     after[rel] = text;
   }
   // The new skill must move BOTH counts; a README the script left alone means the counts and the tree disagree.
-  if (README_PATHS.some((rel) => after[rel] === before[rel])) return readmeRefusal("no-change");
+  const changed = README_PATHS.filter((rel) => after[rel] !== before[rel]).length;
+  if (changed < README_PATHS.length) return readmeRefusal("no-change", { changedCount: changed });
   if (README_PATHS.some((rel) => !digitOnlyLineDiff(before[rel], after[rel]))) return readmeRefusal("non-digit-change");
-  return { ok: true, contents: { "README.md": after["README.md"], "plugins/soleur/README.md": after["plugins/soleur/README.md"] } };
+  return { ok: true };
 }
 
 // =============================================================================
@@ -455,7 +515,7 @@ export async function syncReadmeCounts(o: SyncReadmeCountsOpts): Promise<ReadmeS
 
 export type CollectResult =
   | { ok: true; exactPaths: readonly string[]; expectedContent: Record<string, string> }
-  | { ok: false; class: "persist"; detail: string; index?: number };
+  | { ok: false; detail: string; index?: number };
 
 export interface CollectCreateContentOpts {
   repoRoot: string;
@@ -463,7 +523,7 @@ export interface CollectCreateContentOpts {
   baseEnv?: BaseEnv;
 }
 
-const collectRefusal = (detail: string, index?: number): CollectResult => (index === undefined ? { ok: false, class: "persist", detail } : { ok: false, class: "persist", detail, index });
+const collectRefusal = (detail: string, index?: number): CollectResult => (index === undefined ? { ok: false, detail } : { ok: false, detail, index });
 
 /**
  * Read the six create paths from the clone as the exact strings `expectedContent` needs, and require that git sees

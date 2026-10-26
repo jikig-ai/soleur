@@ -34,6 +34,10 @@ import {
   SCAN_LOW_RISK_LINE,
   SCAN_MIN_INPUT_BYTES,
   SCAN_REQUIRED_TOOLS,
+  COLLECT_MAX_FILE_BYTES,
+  GIT_TIMEOUT_MS,
+  runGit,
+  snapshotClone,
   SKILL_SCAN_SCRIPT,
   buildScrubbedEnv,
   collectCreateContent,
@@ -117,8 +121,14 @@ describe("constants", () => {
     expect(SKILL_SCAN_SCRIPT).toBe("plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh");
     expect(README_SYNC_SCRIPT).toBe("scripts/sync-readme-counts.sh");
     expect([...README_PATHS]).toEqual(["README.md", "plugins/soleur/README.md"]);
-    expect([...SCAN_REQUIRED_TOOLS]).toEqual(["bash", "jq", "sha256sum", "awk", "sed", "grep", "find", "mktemp", "tr", "timeout"]);
-    expect(SCAN_MIN_INPUT_BYTES).toBeGreaterThanOrEqual(100);
+    // The scripts the gates spawn call these coreutils too (cut, head, date, cat, rm, mv, mkdir, id, dirname, basename).
+    expect([...SCAN_REQUIRED_TOOLS]).toEqual([
+      "bash", "jq", "sha256sum", "awk", "sed", "grep", "find", "mktemp", "tr", "timeout",
+      "cut", "head", "date", "cat", "rm", "mv", "mkdir", "id", "dirname", "basename",
+    ]);
+    // The named threshold: the scanner says LOW-RISK on empty input, so a rendered file below this is refused unscanned.
+    expect(SCAN_MIN_INPUT_BYTES).toBe(200);
+    expect(COLLECT_MAX_FILE_BYTES).toBe(2 * 1024 * 1024);
   });
 });
 
@@ -134,6 +144,22 @@ describe("buildScrubbedEnv", () => {
     expect(JSON.stringify(env)).not.toContain(secretish);
     expect(env.PATH).toBe("/usr/bin");
     expect(Object.values(env).every((v) => typeof v === "string")).toBe(true);
+  });
+
+  it("HOME and TMPDIR are the temp dir whatever the base HOME says (no ~/.config/gh, no git config of the real user)", () => {
+    const env = buildScrubbedEnv({}, { PATH: "/usr/bin", HOME: "/home/hostile", TMPDIR: "/home/hostile/tmp" });
+    expect(env.HOME).toBe(tmpdir());
+    expect(env.TMPDIR).toBe(tmpdir());
+    expect(JSON.stringify(env)).not.toContain("hostile");
+  });
+
+  it("every alternative of the forbidden-name pattern refuses (one name each)", () => {
+    for (const name of ["MY_PRIVATE_THING", "GITHUB_FOO", "X_CREDENTIAL", "ANTHROPIC_FOO", "DOPPLER_FOO", "SVC_PASSWD", "GH_FOO", "GIT_WORK_TREE", "A_TOKEN", "B_SECRET", "C_PASSWORD", "D_APIKEY", "E_API_KEY"]) {
+      expect(() => buildScrubbedEnv({ [name]: "x" }, { PATH: "/usr/bin" }), name).toThrow(/env/i);
+    }
+    expect(() => buildScrubbedEnv({ lower_case: "x" }, { PATH: "/usr/bin" })).toThrow(/env/i);
+    expect(() => buildScrubbedEnv({ OK_NAME: "a\u0000b" }, { PATH: "/usr/bin" })).toThrow(/env/i);
+    expect(buildScrubbedEnv({ SKILL_SECURITY_SCAN_OFFLINE: "1" }, { PATH: "/usr/bin" }).SKILL_SECURITY_SCAN_OFFLINE).toBe("1");
   });
 
   it("refuses an extra whose name looks like a secret or a git location variable", () => {
@@ -251,9 +277,15 @@ describe("evaluateScanOutput: accept ONLY exit 0 AND a first line exactly the LO
   ];
   for (const [label, input, detail] of cases) {
     it(`refuses ${label}`, () => {
-      expect(evaluateScanOutput(input as never)).toEqual({ ok: false, detail });
+      expect(evaluateScanOutput(input as never)).toMatchObject({ ok: false, detail });
     });
   }
+
+  it("keeps the evidence of a failed script: the exit code and a closed signal NAME, never stderr", () => {
+    expect(evaluateScanOutput({ kind: "exit", code: 3, signal: null, stdout: LOW, stderr: "secret-ish stderr" })).toEqual({ ok: false, detail: "non-zero", exit: 3 });
+    expect(evaluateScanOutput({ kind: "exit", code: null, signal: "SIGKILL", stdout: "", stderr: "x" })).toEqual({ ok: false, detail: "non-zero", signal: "SIGKILL" });
+    expect(evaluateScanOutput({ kind: "exit", code: null, signal: "weird signal; rm", stdout: "", stderr: "" })).toEqual({ ok: false, detail: "non-zero", signal: "other" });
+  });
 
   it("accepts exactly one shape", () => {
     expect(evaluateScanOutput(exit(0, LOW))).toEqual({ ok: true });
@@ -269,19 +301,25 @@ describe("runSkillScan against a stand-in scanner (real spawn)", () => {
 
   it("LOW-RISK on both files passes and reports N verdicts, not zero", async () => {
     const c = fakeClone({ verdict: LOW });
-    expect(await run(c)).toEqual({ ok: true, scanned: 2, verdicts: [{ path: "a/SKILL.md", verdict: "LOW-RISK" }, { path: "a/PURPOSE.md", verdict: "LOW-RISK" }] });
+    expect(await run(c)).toEqual({ ok: true });
   });
 
   it("guard 1 row 1: HIGH-RISK with exit 0 is refused (skipping the verdict comparison would pass it)", async () => {
     const c = fakeClone({ verdict: "# skill-security-scan verdict: HIGH-RISK\n", exit: 0 });
-    expect(await run(c)).toMatchObject({ ok: false, class: "scan", detail: "high-risk", path: "a/SKILL.md" });
+    expect(await run(c)).toMatchObject({ ok: false, detail: "high-risk", path: "a/SKILL.md", fileIndex: 0, exit: 0 });
+  });
+
+  it("observability: the exit code and the index of the refused file survive (a non-zero exit on the SECOND file)", async () => {
+    const c = fakeClone({ verdict: LOW });
+    put(c.root, SKILL_SCAN_SCRIPT, `#!/usr/bin/env bash\ncat > /dev/null\nn="$(cat "${c.root}/.count" 2>/dev/null || echo 0)"\necho $((n+1)) > "${c.root}/.count"\nif [ "$n" -ge 1 ]; then exit 9; fi\necho "${SCAN_LOW_RISK_LINE}"\n`, 0o755);
+    expect(await run(c)).toEqual({ ok: false, detail: "non-zero", path: "a/PURPOSE.md", fileIndex: 1, exit: 9 });
   });
 
   it("REVIEW, empty output, non-zero exit, timeout each refuse with class scan", async () => {
-    expect(await run(fakeClone({ verdict: "# skill-security-scan verdict: REVIEW\n" }))).toMatchObject({ ok: false, class: "scan", detail: "review" });
-    expect(await run(fakeClone({ verdict: "" }))).toMatchObject({ ok: false, class: "scan", detail: "empty-output" });
-    expect(await run(fakeClone({ verdict: LOW, exit: 3 }))).toMatchObject({ ok: false, class: "scan", detail: "non-zero" });
-    expect(await run(fakeClone({ verdict: LOW, sleep: 20 }), { timeoutMs: 300 })).toMatchObject({ ok: false, class: "scan", detail: "timeout" });
+    expect(await run(fakeClone({ verdict: "# skill-security-scan verdict: REVIEW\n" }))).toMatchObject({ ok: false, detail: "review" });
+    expect(await run(fakeClone({ verdict: "" }))).toMatchObject({ ok: false, detail: "empty-output" });
+    expect(await run(fakeClone({ verdict: LOW, exit: 3 }))).toMatchObject({ ok: false, detail: "non-zero" });
+    expect(await run(fakeClone({ verdict: LOW, sleep: 20 }), { timeoutMs: 300 })).toMatchObject({ ok: false, detail: "timeout" });
   });
 
   it("the SECOND file failing refuses even though the first was LOW-RISK (both are scanned)", async () => {
@@ -293,22 +331,22 @@ describe("runSkillScan against a stand-in scanner (real spawn)", () => {
       `#!/usr/bin/env bash\ncat > /dev/null\nn="$(cat "${c.root}/.count" 2>/dev/null || echo 0)"\necho $((n+1)) > "${c.root}/.count"\nif [ "$n" -ge 1 ]; then echo "# skill-security-scan verdict: HIGH-RISK"; else echo "${SCAN_LOW_RISK_LINE}"; fi\n`,
       0o755,
     );
-    expect(await run(c)).toMatchObject({ ok: false, class: "scan", detail: "high-risk", path: "a/PURPOSE.md" });
+    expect(await run(c)).toMatchObject({ ok: false, detail: "high-risk", path: "a/PURPOSE.md" });
   });
 
   it("guard 1 row 2: an empty list of files is a refusal, not a clean pass", async () => {
     const c = fakeClone({ verdict: LOW });
-    expect(await run(c, { relPaths: [] })).toMatchObject({ ok: false, class: "scan", detail: "no-input" });
+    expect(await run(c, { relPaths: [] })).toMatchObject({ ok: false, detail: "no-input" });
   });
 
   it("asserts a non-empty, minimum-size input BEFORE scanning (the real scanner returns LOW-RISK on empty input)", async () => {
     const c = fakeClone({ verdict: LOW });
     put(c.root, "a/EMPTY.md", "");
     put(c.root, "a/TINY.md", "x".repeat(SCAN_MIN_INPUT_BYTES - 1));
-    expect(await run(c, { relPaths: ["a/EMPTY.md"] })).toMatchObject({ ok: false, class: "scan", detail: "input-too-small" });
-    expect(await run(c, { relPaths: ["a/TINY.md"] })).toMatchObject({ ok: false, class: "scan", detail: "input-too-small" });
-    expect(await run(c, { relPaths: ["a/MISSING.md"] })).toMatchObject({ ok: false, class: "scan", detail: "input-unreadable" });
-    expect(await run(c, { relPaths: ["../escape.md"] })).toMatchObject({ ok: false, class: "scan", detail: "input-unreadable" });
+    expect(await run(c, { relPaths: ["a/EMPTY.md"] })).toMatchObject({ ok: false, detail: "input-too-small" });
+    expect(await run(c, { relPaths: ["a/TINY.md"] })).toMatchObject({ ok: false, detail: "input-too-small" });
+    expect(await run(c, { relPaths: ["a/MISSING.md"] })).toMatchObject({ ok: false, detail: "input-unreadable" });
+    expect(await run(c, { relPaths: ["../escape.md"] })).toMatchObject({ ok: false, detail: "input-unreadable" });
   });
 
   it("a missing scanner tool is a refusal naming the tools, before any scan (preflight)", async () => {
@@ -316,24 +354,28 @@ describe("runSkillScan against a stand-in scanner (real spawn)", () => {
     const bin = tmp("cp-gates-bin-");
     put(bin, "bash", "#!/bin/sh\n", 0o755);
     const r = await run(c, { baseEnv: { PATH: bin } });
-    expect(r).toMatchObject({ ok: false, class: "scan", detail: "missing-tool" });
-    if (!r.ok) expect(r.missing).toContain("jq");
+    expect(r).toMatchObject({ ok: false, detail: "missing-tool" });
+    if (!r.ok) {
+      expect(r.missing).toContain("jq");
+      // the names are members of the closed set, so they can ride the Sentry extra verbatim
+      expect((r.missing ?? []).every((t) => (SCAN_REQUIRED_TOOLS as readonly string[]).includes(t))).toBe(true);
+    }
   });
 
   it("a missing scanner script is a refusal", async () => {
     const c = fakeClone({ verdict: LOW });
     rmSync(join(c.root, SKILL_SCAN_SCRIPT));
-    expect(await run(c)).toMatchObject({ ok: false, class: "scan", detail: "script-not-regular" });
+    expect(await run(c)).toMatchObject({ ok: false, detail: "script-not-regular" });
   });
 
   it("SKILL_SCAN_META_BASE must exist and sit OUTSIDE the clone", async () => {
     const c = fakeClone({ verdict: LOW });
-    expect(await run(c, { metaBase: c.root })).toMatchObject({ ok: false, class: "scan", detail: "meta-base-invalid" });
-    expect(await run(c, { metaBase: join(c.root, "a") })).toMatchObject({ ok: false, class: "scan", detail: "meta-base-invalid" });
-    expect(await run(c, { metaBase: join(c.meta, "does-not-exist") })).toMatchObject({ ok: false, class: "scan", detail: "meta-base-invalid" });
+    expect(await run(c, { metaBase: c.root })).toMatchObject({ ok: false, detail: "meta-base-invalid" });
+    expect(await run(c, { metaBase: join(c.root, "a") })).toMatchObject({ ok: false, detail: "meta-base-invalid" });
+    expect(await run(c, { metaBase: join(c.meta, "does-not-exist") })).toMatchObject({ ok: false, detail: "meta-base-invalid" });
     const viaLink = join(tmp("cp-gates-link-"), "l");
     symlinkSync(c.root, viaLink);
-    expect(await run(c, { metaBase: viaLink })).toMatchObject({ ok: false, class: "scan", detail: "meta-base-invalid" });
+    expect(await run(c, { metaBase: viaLink })).toMatchObject({ ok: false, detail: "meta-base-invalid" });
   });
 
   it("guard 1 row 9: the scanner runs with SKILL_SECURITY_SCAN_OFFLINE=1, a meta base outside the clone, no token, cwd = clone", async () => {
@@ -390,7 +432,7 @@ describe("runSkillScan against the REAL scanner (copied into a throwaway clone)"
   const scan = (relPaths: string[]) => runSkillScan({ repoRoot: clone, relPaths, metaBase: meta, timeoutMs: 60_000 });
 
   it("the rendered golden SKILL.md and PURPOSE.md are LOW-RISK for the real scanner", async () => {
-    expect(await scan(["out/SKILL.md", "out/PURPOSE.md"])).toMatchObject({ ok: true, scanned: 2 });
+    expect(await scan(["out/SKILL.md", "out/PURPOSE.md"])).toEqual({ ok: true });
   });
 
   it("a fenced curl-pipe-bash block is refused (HIGH-RISK or REVIEW)", async () => {
@@ -432,58 +474,53 @@ describe("syncReadmeCounts", () => {
   const run = (root: string, over: Record<string, unknown> = {}) => syncReadmeCounts({ repoRoot: root, timeoutMs: 10_000, baseEnv, ...over });
   const bump = `sed -i 's/104 skills/105 skills/; s/| Skills | 104 |/| Skills | 105 |/' README.md plugins/soleur/README.md\n`;
 
-  it("accepts digit-only changes to exactly the two READMEs and returns their bytes", async () => {
+  it("accepts digit-only changes to exactly the two READMEs", async () => {
     const { root } = repo(bump);
-    const r = await run(root);
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(Object.keys(r.contents).sort()).toEqual([...README_PATHS].sort());
-      expect(r.contents[ROOT_README]).toBe(readFileSync(join(root, ROOT_README), "utf8"));
-      expect(r.contents[ROOT_README]).toContain("105 skills");
-      expect(r.contents[PLUGIN_README]).toContain("| Skills | 105 |");
-    }
+    expect(await run(root)).toEqual({ ok: true });
+    expect(readFileSync(join(root, ROOT_README), "utf8")).toContain("105 skills");
+    expect(readFileSync(join(root, PLUGIN_README), "utf8")).toContain("| Skills | 105 |");
   });
 
   it("guard 1 row 6: a non-digit change in a README is refused", async () => {
     const { root } = repo(`sed -i 's/104 skills/105 skills/; s/Unrelated line/Rewritten line/' README.md\nsed -i 's/| Skills | 104 |/| Skills | 105 |/' plugins/soleur/README.md\n`);
-    expect(await run(root)).toMatchObject({ ok: false, class: "readme-sync", detail: "non-digit-change" });
+    expect(await run(root)).toMatchObject({ ok: false, detail: "non-digit-change" });
   });
 
   it("guard 1 row 6: a THIRD file touched (modified, created, or deleted) is refused", async () => {
-    expect(await run(repo(bump + "echo changed >> other.md\n").root)).toMatchObject({ ok: false, class: "readme-sync", detail: "unexpected-change" });
-    expect(await run(repo(bump + "echo new > brand-new.txt\n").root)).toMatchObject({ ok: false, class: "readme-sync", detail: "unexpected-change" });
-    expect(await run(repo(bump + "rm other.md\n").root)).toMatchObject({ ok: false, class: "readme-sync", detail: "unexpected-change" });
-    expect(await run(repo(bump + "echo more >> plugins/soleur/skills/new-one/SKILL.md\n").root)).toMatchObject({ ok: false, class: "readme-sync", detail: "unexpected-change" });
+    expect(await run(repo(bump + "echo changed >> other.md\n").root)).toEqual({ ok: false, detail: "unexpected-change", changedCount: 1 });
+    expect(await run(repo(bump + "echo new > brand-new.txt\n").root)).toMatchObject({ ok: false, detail: "unexpected-change" });
+    expect(await run(repo(bump + "rm other.md\n").root)).toMatchObject({ ok: false, detail: "unexpected-change" });
+    expect(await run(repo(bump + "echo more >> plugins/soleur/skills/new-one/SKILL.md\n").root)).toMatchObject({ ok: false, detail: "unexpected-change" });
   });
 
   it("a line added or removed (not a digit-for-digit swap) is refused", async () => {
-    expect(await run(repo(bump + "echo extra >> README.md\n").root)).toMatchObject({ ok: false, class: "readme-sync", detail: "non-digit-change" });
-    expect(await run(repo(bump + "sed -i '$d' plugins/soleur/README.md\n").root)).toMatchObject({ ok: false, class: "readme-sync", detail: "non-digit-change" });
+    expect(await run(repo(bump + "echo extra >> README.md\n").root)).toMatchObject({ ok: false, detail: "non-digit-change" });
+    expect(await run(repo(bump + "sed -i '$d' plugins/soleur/README.md\n").root)).toMatchObject({ ok: false, detail: "non-digit-change" });
   });
 
   it("no change at all is a refusal (a new skill must move the counts)", async () => {
-    expect(await run(repo("exit 0\n").root)).toMatchObject({ ok: false, class: "readme-sync", detail: "no-change" });
-    expect(await run(repo(`sed -i 's/104 skills/105 skills/' README.md\n`).root)).toMatchObject({ ok: false, class: "readme-sync", detail: "no-change" });
+    expect(await run(repo("exit 0\n").root)).toEqual({ ok: false, detail: "no-change", changedCount: 0 });
+    expect(await run(repo(`sed -i 's/104 skills/105 skills/' README.md\n`).root)).toEqual({ ok: false, detail: "no-change", changedCount: 1 });
   });
 
   it("a failing, slow or missing script is a refusal", async () => {
-    expect(await run(repo("exit 2\n").root)).toMatchObject({ ok: false, class: "readme-sync", detail: "script-failed" });
-    expect(await run(repo("sleep 20\n").root, { timeoutMs: 300 })).toMatchObject({ ok: false, class: "readme-sync", detail: "timeout" });
+    expect(await run(repo("exit 2\n").root)).toEqual({ ok: false, detail: "script-failed", exit: 2 });
+    expect(await run(repo("sleep 20\n").root, { timeoutMs: 300 })).toMatchObject({ ok: false, detail: "timeout" });
     const { root } = repo(bump);
     rmSync(join(root, README_SYNC_SCRIPT));
-    expect(await run(root)).toMatchObject({ ok: false, class: "readme-sync", detail: "script-not-regular" });
+    expect(await run(root)).toMatchObject({ ok: false, detail: "script-not-regular" });
   });
 
   it("a README that is missing or a symlink is a refusal", async () => {
     const a = repo(bump);
     rmSync(join(a.root, ROOT_README));
-    expect(await run(a.root)).toMatchObject({ ok: false, class: "readme-sync" });
+    expect(await run(a.root)).toMatchObject({ ok: false });
     const b = repo(bump);
     const target = join(b.root, "target.md");
     writeFileSync(target, "x\n");
     rmSync(join(b.root, PLUGIN_README));
     symlinkSync(target, join(b.root, PLUGIN_README));
-    expect(await run(b.root)).toMatchObject({ ok: false, class: "readme-sync" });
+    expect(await run(b.root)).toMatchObject({ ok: false });
   });
 
   it("the sync script does not receive any token or secret", async () => {
@@ -515,12 +552,52 @@ describe("syncReadmeCounts", () => {
     git(["commit", "-q", "-m", "init"]);
     put(root, "plugins/soleur/skills/brand-new-skill/SKILL.md", "");
     const r = await run(root);
-    expect(r, JSON.stringify(r)).toMatchObject({ ok: true });
-    if (r.ok) {
-      const before = readFileSync(join(REPO_ROOT, "README.md"), "utf8");
-      expect(r.contents["README.md"]).not.toBe(before);
-      expect(r.contents["README.md"].replace(/\d+/g, "#")).toBe(before.replace(/\d+/g, "#"));
-    }
+    expect(r, JSON.stringify(r)).toEqual({ ok: true });
+    const before = readFileSync(join(REPO_ROOT, "README.md"), "utf8");
+    const after = readFileSync(join(root, "README.md"), "utf8");
+    expect(after).not.toBe(before);
+    expect(after.replace(/\d+/g, "#")).toBe(before.replace(/\d+/g, "#"));
+  });
+});
+
+describe("syncReadmeCounts: the baseline can be taken BEFORE the scanner (`since`)", () => {
+  function repo(sync: string): string {
+    const root = tmp("cp-gates-since-");
+    const git = gitFixture(root);
+    git(["init", "-q", "-b", "main", "."]);
+    put(root, "README.md", "**104 skills**\n");
+    put(root, "plugins/soleur/README.md", "| Skills | 104 |\n");
+    put(root, README_SYNC_SCRIPT, sync, 0o755);
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "init"]);
+    put(root, "plugins/soleur/skills/new-one/SKILL.md", BIG);
+    return root;
+  }
+  const bump = `sed -i 's/104/105/' README.md plugins/soleur/README.md\n`;
+
+  it("a write made between the baseline and the sync (the scanner's turn) is an unexpected change", async () => {
+    const root = repo(bump);
+    const since = await snapshotClone(root, baseEnv);
+    expect(since).not.toBeNull();
+    writeFileSync(join(root, "plugins/soleur/skills/new-one/SKILL.md"), BIG + "\nappended by a scanner\n");
+    expect(await syncReadmeCounts({ repoRoot: root, timeoutMs: 10_000, baseEnv, since: since as never })).toEqual({ ok: false, detail: "unexpected-change", changedCount: 1 });
+  });
+
+  it("harness: WITHOUT `since` the same scan-time write is invisible (the baseline is taken after it), so the option is what catches it", async () => {
+    const root = repo(bump);
+    writeFileSync(join(root, "plugins/soleur/skills/new-one/SKILL.md"), BIG + "\nappended by a scanner\n");
+    expect(await syncReadmeCounts({ repoRoot: root, timeoutMs: 10_000, baseEnv })).toEqual({ ok: true });
+  });
+});
+
+describe("runGit (hardened, scrubbed)", () => {
+  it("runs git with a bounded timeout and returns stdout; a failure is a returned value and is mirrored with only the subcommand", async () => {
+    const root = tmp("cp-gates-git-");
+    gitFixture(root)(["init", "-q", "-b", "main", "."]);
+    expect(await runGit(root, ["rev-parse", "--is-inside-work-tree"], { baseEnv })).toEqual({ ok: true, stdout: "true\n" });
+    expect(await runGit(root, ["no-such-subcommand"], { baseEnv })).toEqual({ ok: false });
+    expect(vi.mocked(reportSilentFallback).mock.calls.at(-1)?.[1]).toMatchObject({ op: "create-gate-git", extra: { sub: "no-such-subcommand" } });
+    expect(GIT_TIMEOUT_MS).toBe(30_000);
   });
 });
 
@@ -553,35 +630,41 @@ describe("collectCreateContent (the bytes handed to safeCommitAndPr)", () => {
   it("guard 1 row 4: a seventh changed path (a script, any file) is refused as changed-set-mismatch", async () => {
     const a = cloneWithChanges();
     put(a.root, `plugins/soleur/skills/${SLUG}/scripts/run.sh`, "echo hi\n");
-    expect(await collect(a.root)).toMatchObject({ ok: false, class: "persist", detail: "changed-set-mismatch" });
+    expect(await collect(a.root)).toMatchObject({ ok: false, detail: "changed-set-mismatch" });
     const b = cloneWithChanges();
     put(b.root, "stray.txt", "x\n");
-    expect(await collect(b.root)).toMatchObject({ ok: false, class: "persist", detail: "changed-set-mismatch" });
+    expect(await collect(b.root)).toMatchObject({ ok: false, detail: "changed-set-mismatch" });
   });
 
   it("a missing path, an empty file, a NUL byte, an oversize file, a symlink and a directory are refused", async () => {
-    expect(await collect(cloneWithChanges([createPathList(SLUG)[1]]).root)).toMatchObject({ ok: false, class: "persist" });
+    expect(await collect(cloneWithChanges([createPathList(SLUG)[1]]).root)).toMatchObject({ ok: false });
     const empty = cloneWithChanges();
     writeFileSync(join(empty.root, createPathList(SLUG)[0]), "");
-    expect(await collect(empty.root)).toMatchObject({ ok: false, class: "persist", detail: "path-empty" });
+    expect(await collect(empty.root)).toMatchObject({ ok: false, detail: "path-empty" });
     const nul = cloneWithChanges();
     writeFileSync(join(nul.root, createPathList(SLUG)[0]), "a\u0000b\n");
-    expect(await collect(nul.root)).toMatchObject({ ok: false, class: "persist", detail: "path-nul" });
+    expect(await collect(nul.root)).toMatchObject({ ok: false, detail: "path-nul" });
     const big = cloneWithChanges();
     writeFileSync(join(big.root, "README.md"), "y".repeat(3 * 1024 * 1024));
-    expect(await collect(big.root)).toMatchObject({ ok: false, class: "persist", detail: "path-too-large" });
+    expect(await collect(big.root)).toMatchObject({ ok: false, detail: "path-too-large" });
     const link = cloneWithChanges();
     const target = join(link.root, "elsewhere.md");
     writeFileSync(target, "z\n");
     rmSync(join(link.root, createPathList(SLUG)[1]));
     symlinkSync(target, join(link.root, createPathList(SLUG)[1]));
-    expect(await collect(link.root)).toMatchObject({ ok: false, class: "persist" });
+    expect(await collect(link.root)).toMatchObject({ ok: false });
+  });
+
+  it("a lone 0xFF byte is not valid UTF-8 and is refused path-not-utf8 with its index", async () => {
+    const { root } = cloneWithChanges();
+    writeFileSync(join(root, createPathList(SLUG)[2]), Buffer.concat([Buffer.from("stub "), Buffer.from([0xff]), Buffer.from(" tail\n")]));
+    expect(await collect(root)).toEqual({ ok: false, detail: "path-not-utf8", index: 2 });
   });
 
   it("an unchanged required path (git sees no change) is a changed-set mismatch, not a silent skip", async () => {
     const { root, git } = cloneWithChanges();
     git(["checkout", "--", "README.md"]);
-    expect(await collect(root)).toMatchObject({ ok: false, class: "persist", detail: "changed-set-mismatch" });
+    expect(await collect(root)).toMatchObject({ ok: false, detail: "changed-set-mismatch" });
   });
 
   it("an invalid slug is refused before touching the disk", async () => {
