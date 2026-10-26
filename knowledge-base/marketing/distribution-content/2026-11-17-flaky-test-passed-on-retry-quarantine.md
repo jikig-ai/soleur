@@ -1,9 +1,9 @@
 ---
 title: "A Flaky Test Passed on Retry and the Loop Called It Fixed"
 type: pillar
-publish_date:
+publish_date: 2026-11-17
 channels: x, bluesky, discord, linkedin-personal
-status: draft
+status: scheduled
 issue_reference: "#10739"
 ---
 
