@@ -364,12 +364,12 @@ Two design rules change what a reading means:
   SQLite-only; a requested diagnostic boot is exempt), the attempt emits `bootstrap-done-DEGRADED`
   with `why=` naming which, and exits 0 without the latch. The unit does not retry on that boot; the timer retries at the next boot.
   The host serves degraded until then, as before #8562.
-- **The cutover timers are always put back.** Before each bootstrap run the unit stops the flip
-  and LUKS-cutover timers and waits (bounded at 300 s) for any running flip or LUKS-cutover step,
-  a non-empty `/var/lib/inngest-luks-cutover/frozen-active`, or a flip between steps (the flip
+- **The flip timer is always put back.** Before each bootstrap run the unit stops the flip
+  timer and waits (bounded at 300 s) for a running flip step or a flip between steps (the flip
   FSM's host state slot reads `"flag":"flipping"`). On success the bootstrap re-enables the
-  timers; on a failed attempt the unit's exit handler restarts every timer that was active when
-  it stopped them.
+  timer; on a failed attempt the unit's exit handler restarts the timer if it was active when
+  it was stopped. (The retired LUKS cutover timer and service, and the `frozen-active` check,
+  left this loop at #11080; the image stopped baking them at v1.1.61, #10966.)
 
 Each attempt also re-runs the bounded private-NIC wait and, before the bootstrap, a bounded
 `dpkg --configure -a`.
@@ -412,22 +412,24 @@ root config), a read-scoped token, `INNGEST_DIAGNOSTIC_BOOT=true`, loopback `sdk
 | `isolation-check-FAILED` (Better Stack) | The Doppler boot credential failed the isolation self-check; the attempt ended before any pull. |
 | `zot-creds-EMPTY` / `zot-login-FAILED` (Better Stack) | No baked zot credential, or the zot login was refused. The pull that follows misses. |
 | `inngest_pull_fatal` with `attempt=N` (Sentry, fatal, paged; Better Stack) | This attempt's zot pull missed. One missed attempt, not a dead host. |
-| `provision-fsm-busy` (Better Stack) | A flip step was still running after the 300 s quiesce bound; the attempt ended and retries. (The LUKS cutover step left this loop with image v1.1.61, #11080.) |
+| `provision-fsm-busy` (Better Stack) | A flip step was still running after the 300 s quiesce bound; the attempt ended and retries. |
 | `bootstrap-exit-<rc>` (Better Stack) | The bootstrap exited `rc`; its detail carries the output tail. `rc != 0` is followed by `bootstrap-failure-journal` and ends the attempt. |
 | `bootstrap-failure-journal` (Better Stack) | Written after a failed bootstrap: the failed units and the `inngest-server` journal for that attempt. |
 | `provision-attempt-exit-<rc>` (Better Stack) | Attempt ended with `rc` (`143` = killed at `TimeoutStartSec` or at shutdown). |
 | `provision_attempt_failed` (Sentry, warning, **paged** by `inngest-provision-failure`, #9176) | Same failure, on the channel that does not depend on Doppler. Its detail carries `rc=`, `attempt=`, `iid=` and `why=<last stage>`. `why=inngest_pull_fatal` is excluded from that rule: the pull miss already paged through `zot-mirror-fallback-rate`. |
 | `sentry-emit-FAILED stage=… rc=…` (Better Stack) | The Sentry POST for that stage failed; read the stage from Better Stack instead. |
 | `SOLEUR_INNGEST_BOOT_TRACE_LOST` (journald tag `inngest-boot-phone-home`) | The Better Stack channel was dead for that stage (token file missing or empty, or the POST failed). It leaves the host only once Vector runs, i.e. after a bootstrap; until then the Sentry rows are the trace. |
-| `SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=<n>` (journald tag `inngest-bs-token-restage`) | The per-boot restage unit could not re-fetch the Better Stack token from Doppler, so the token file under `/run` is empty for this boot and every `SOLEUR_INNGEST_BOOT_STAGE` marker is lost until the next restage. `drc=124` is the 20 s timeout; any other value is the Doppler CLI's exit code. Same shipping rule as the row above: it leaves the host once Vector runs, until then the Sentry rows are the trace. |
+| `SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=<n>` (journald tag `inngest-bs-token-restage`) | The per-boot restage unit could not re-fetch the Better Stack token from Doppler, so no token file is written under `/run` for this boot (the failure arm exits before writing) and every `SOLEUR_INNGEST_BOOT_STAGE` marker is lost until the next restage; the next `SOLEUR_INNGEST_BOOT_TRACE_LOST` row then carries `reason=token-file-missing`. `drc=124` is the 20 s timeout, `drc=0` means Doppler answered but the secret value was empty, `drc=127` means the `doppler` binary was not found, and any other value is the Doppler CLI's exit code. Same shipping rule as the row above: it leaves the host once Vector runs, until then the Sentry rows are the trace. |
 | `bootstrap-done-DEGRADED why=… iid=…` (Better Stack); `bootstrap_done_degraded` (Sentry, warning, **paged** by `inngest-provision-degraded`, #9299; see [§ Reading an `inngest-provision-degraded` page](#reading-an-inngest-provision-degraded-page-9299)) | The bootstrap exited 0 but the host serves SQLite-only (`why=` is `.redis-inactive` and/or `.no-durable-execstart`). **No latch**; the next boot retries. Not a PASS. |
 | `bootstrap-done iid=…` (Better Stack) | Full success; the latch is written. This is the recovery signal. |
 
-`SOLEUR_INNGEST_BOOT_TRACE_LOST` carries a `reason=` field. The sentence that used to ride in the shipped message now lives here, because the host's user_data keeps only the marker, the fields and the issue reference (#11080):
+`SOLEUR_INNGEST_BOOT_TRACE_LOST` carries a `reason=` field. The sentence that used to ride in the shipped message now lives here, because the host's user_data keeps only the marker, the fields (`stage=` names the marker whose delivery was lost, `path=` is the token file) and the issue reference (#7228):
 
-- `reason=token-file-missing`: the Better Stack boot-trace channel is dead for this boot and every later marker is lost. Expected after any reboot when the per-boot restage unit did not run (`/run` is tmpfs and the first-boot command list runs once).
-- `reason=token-file-empty`: the token file exists but is empty; the channel is dead for this boot. Look for `SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED` from the same boot.
-- `reason=post-failed rc=<n>`: the POST to Better Stack failed. By curl return code: 6/7 is egress, 22 is a revoked token (HTTP 400 or above), 28 is the 8 s timeout, 35/60 is TLS (clock skew or trust).
+- `reason=token-file-missing`: there is no token file, the Better Stack boot-trace channel is dead for this boot and every later marker is lost. Either the per-boot restage unit did not run (`/run` is tmpfs and the first-boot command list runs once), or it ran and failed: look for `SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED` from the same boot (a failed restage never creates the file).
+- `reason=token-file-empty`: the token file exists but holds nothing, so the channel is dead for this boot. The only writer that can leave it empty is the first-boot staging of the baked `betterstack_logs_token`, so the template value was blank; a later restage that fails does not fix it.
+- `reason=post-failed rc=<n>`: the POST to Better Stack failed. By curl return code: 6/7 is egress, 22 is HTTP 400 or above (a revoked token, 401, is the usual cause; this row does not carry the status), 28 is the 8 s timeout, 35/60 is TLS (clock skew or trust).
+
+Read these rows with `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since <ISO> --grep SOLEUR_INNGEST_BOOT_TRACE_LOST` (and the same with `SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED`), decoding each row's `raw` field as the restage recipe above does.
 
 Signatures that have no stage of their own:
 
@@ -483,7 +485,7 @@ awk '$2 == "provision-attempt-start" {buf = ""} {buf = buf $0 "\n"} END {printf 
   `provision-attempt-start` count, over at least 3 attempts.
 - **"Repeating `provision-fsm-busy`"** reads as: it ends 3 or more consecutive attempts (the last
   lines of `life.txt` alternate `provision-attempt-start` / `provision-fsm-busy`). That is a flip
-  or LUKS-cutover step wedged for well over 15 minutes. Read the FSM state with the read-only
+  step wedged for well over 15 minutes. Read the FSM state with the read-only
   `scripts/inngest-host-state.sh` (locally, or via the `inngest-host-state.yml` one-tap wrapper,
   #8449 UC2; see [§ Reading host state without SSH](#reading-host-state-without-ssh)). Do not
   replace blindly: the flip FSM's flag lives in Doppler and outlives the host (ADR-100

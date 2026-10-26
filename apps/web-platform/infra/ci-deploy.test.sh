@@ -7639,8 +7639,8 @@ declare -A QI_PIN_B=(
   [apps/web-platform/infra/git-data-luks-reopen.sh]=1
   # #8562 cloud-init-inngest.yml — ONE variable-unit start, in soleur-inngest-provision's on_exit.
   # It restores the cutover-FSM timers the provision attempt paused. `_fsm_timers_stopped` is
-  # built only from the literal list `inngest-cutover-flip.timer`, and
-  # only from that timer if it was `active` before the stop. So the variable is provably never
+  # built only from `inngest-cutover-flip.timer`, and only if it was `active`
+  # before the stop. So the variable is provably never
   # inngest-server, and it never starts a timer that was not already running. Behavioural rows:
   # cloud-init-inngest-provision-unit.test.sh G2-r15 ("the failed attempt restarts the flip
   # timer") and G2-r17 (a flip timer that was inactive is not started). Pinned as a change detector.

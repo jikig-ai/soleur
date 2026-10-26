@@ -1914,3 +1914,7 @@ Until ADR-294 reaches `accepted` (a verified handshake plus a 48 hour soak in wh
 ## Addendum — 2026-10-25 (#10112) — the boot-trace retention claim is superseded, but only for as long as the window lasts
 
 Appended; nothing above is changed. Consequences item 4 of the 2026-07 incident addendum (the text anchored to Decision 6a) states the `SOLEUR_INNGEST_BOOT_STAGE` sink retention as about 3 days and the boot trace as irrecoverable by construction. That figure was a free-tier reading. `betterstack-log-query.md` records that source `soleur-inngest-vector-prd` reported `logs_retention=90` when measured on 2026-09-04 (#7772; the attribute is per source). The trace is therefore recoverable only while it is inside that window; it is not recoverable by construction and not guaranteed either. It was measured on two endpoint shapes on that one day, so re-read the attribute before relying on it. The decision (diagnose with a boot that can try to bind) does not depend on it.
+
+## Addendum — 2026-10-26 (#11080) — the provision unit's quiesce is the flip FSM only
+
+Appended; nothing above is changed. The 2026-07 provision-unit addendum's "FSM quiesce" bullet names both the flip and the LUKS cutover timers and services and the `frozen-active` hold. The LUKS cutover leg left the user_data template at #11080 (the image stopped baking it at `vinngest-v1.1.61`, #10966); see the addendum of the same date in ADR-257 for the current shape. Nothing else in this ADR changes.

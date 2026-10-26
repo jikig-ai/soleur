@@ -20,13 +20,18 @@
 #     bare unit name or a name built from `$e` is caught.
 #
 # cloud-init-inngest.yml (the Inngest host's user_data template, whose STAGED list and quiesce loop used to name the
-# retired trio) is scanned for the trio stems as a delivery file since #11080; its comments are stripped like the others,
-# so the history prose the template keeps stays legal and only a code line can red it. The vocabulary scan does not
-# cover it (the template legitimately names live secrets that share a prefix with a retired needle).
+# retired trio) is scanned since #11080 for BOTH the trio stems and the vocabulary, after stripping exactly what the
+# render strips (inngest_rationale_strip in inngest-host.tf: a whole-line `#` followed by a space or nothing). So the
+# history prose the template keeps in `# ` comments stays legal, while a `#x` or `#!` line, which the render KEEPS and a
+# host would receive, is code. The vocabulary scan reads raw (comments included) for the baked carriers but
+# comment-stripped for the template, whose comments legitimately name retired paths (`/mnt/data-luks` in the fstab note).
+# The other delivery files that stage or place assets (the web host's cloud-init.yml, ci-deploy.sh, the two Terraform
+# roots that render the template, the config-bundle producer workflow) are in DELIVERY_FILES for the stem scan.
 #
 # NOT COVERED HERE (deliberately). (1) The scan judges the SOURCE tree, never the pinned image a host boots or an
-# already published bundle (GuardA binds tag to source). (2) A name assembled from two quoted halves, and a lowercase or
-# otherwise respelled needle, are not matched: the needles are exact strings.
+# already published bundle (GuardA binds tag to source). (2) A name assembled from two quoted halves, split across a
+# line continuation, built from a shell variable or a glob, a base64 payload, and a lowercase or otherwise respelled
+# needle, are not matched: the stems and needles are exact strings.
 #
 # Run: bash apps/web-platform/infra/inngest-carrier-vocabulary.test.sh
 #
@@ -90,6 +95,11 @@ DELIVERY_FILES=(
   "$SERVER_TF_REL"
   ".github/workflows/apply-deploy-pipeline-fix.yml"
   "$TMPL_REL"
+  "apps/web-platform/infra/cloud-init.yml"
+  "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/inngest-host.tf"
+  "apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf"
+  ".github/workflows/build-inngest-config-bundle.yml"
 )
 
 # The retired identifiers, EXACT (a carrier may still say "plaintext" in an unrelated comment). One per element:
@@ -111,6 +121,9 @@ TRIO_STEMS=(inngest-luks-cutover inngest_luks_cutover INNGEST_LUKS_CUTOVER_SH)
 CARRIER_FLOOR=10
 
 strip_comments() { grep -vE '^[[:space:]]*#' "$1" || true; }
+# strip_render <file>: exactly what inngest_rationale_strip removes from the user_data render (a whole-line `#` followed by a
+# space or tab, or nothing). A `#x` or `#!` line survives the render, so for the template it is code.
+strip_render() { grep -vE '^[[:space:]]*#([[:space:]].*)?$' "$1" || true; }
 
 # derive_carriers <repo-root> -> the carrier set, one repo-relative path per line (build recipe cp lines UNION refresh set).
 derive_carriers() {
@@ -119,23 +132,30 @@ derive_carriers() {
     grep -vE '^[[:space:]]*(#|$)' "$root/$SET_REL"; } | sort -u
 }
 
-# scan_file <abs-path> <rel> <vocab:0|1> -> prints VIOLATION lines for one file; returns the number of findings.
+# scan_file <abs-path> <rel> <mode:0|1|2> -> prints VIOLATION lines for one file; returns the number of findings.
+# mode 0: trio stems over comment-stripped text. mode 1: the raw vocabulary scan plus mode 0. mode 2 (the user_data template):
+# the stems AND the vocabulary over the text left after the render's own strip.
 scan_file() {
-  local f="$1" rel="$2" vocab="$3" n=0 hits stripped
-  if [[ "$vocab" == 1 ]]; then
+  local f="$1" rel="$2" mode="$3" n=0 hits stripped stems
+  if [[ "$mode" == 1 ]]; then
     hits="$(grep -noF -f <(printf '%s\n' "${NEEDLES[@]}") -- "$f" | head -3 | tr '\n' ' ')"
     if [[ -n "$hits" ]]; then printf 'VIOLATION vocabulary %s: %s\n' "$rel" "$hits"; n=$((n + 1)); fi
   fi
-  stripped="$(strip_comments "$f")"   # captured, then matched via a here-string: a pipe into an early-exit grep can read a match as a miss under pipefail
+  if [[ "$mode" == 2 ]]; then stripped="$(strip_render "$f")"; else stripped="$(strip_comments "$f")"; fi   # captured, then matched via a here-string: a pipe into an early-exit grep can read a match as a miss under pipefail
+  if [[ "$mode" == 2 ]]; then
+    hits="$(grep -oF -f <(printf '%s\n' "${NEEDLES[@]}") <<<"$stripped" | sort -u | head -3 | tr '\n' ' ')"
+    if [[ -n "$hits" ]]; then printf 'VIOLATION vocabulary %s: %s\n' "$rel" "$hits"; n=$((n + 1)); fi
+  fi
   if grep -qF -f <(printf '%s\n' "${TRIO_STEMS[@]}") <<<"$stripped"; then
-    printf 'VIOLATION trio-named %s\n' "$rel"; n=$((n + 1))
+    stems="$(grep -oF -f <(printf '%s\n' "${TRIO_STEMS[@]}") <<<"$stripped" | sort -u | tr '\n' ' ')"
+    printf 'VIOLATION trio-named %s: %s\n' "$rel" "$stems"; n=$((n + 1))
   fi
   return "$n"
 }
 
 # g3_scan <repo-root> -> prints one `VIOLATION <tag> <detail>` line per finding and `CARRIERS <n>`; rc 0 iff none.
 g3_scan() {
-  local root="$1" n=0 v=0 rel carriers k
+  local root="$1" n=0 v=0 rel carriers k mode
   [[ -r "$root/$WF_REL" ]] || { printf 'VIOLATION unreadable-workflow %s\n' "$WF_REL"; return 1; }
   [[ -r "$root/$SET_REL" ]] || { printf 'VIOLATION unreadable-refresh-set %s\n' "$SET_REL"; return 1; }
   carriers="$(derive_carriers "$root")"
@@ -154,7 +174,10 @@ g3_scan() {
   # The build recipe, its check twin and the refresh set carry both scans; the delivery path carries the stem scan only.
   for rel in "${RECIPE_FILES[@]}" "${DELIVERY_FILES[@]}"; do
     if [[ ! -r "$root/$rel" ]]; then printf 'VIOLATION unreadable %s\n' "$rel"; v=$((v + 1)); continue; fi
-    case " ${RECIPE_FILES[*]} " in *" $rel "*) scan_file "$root/$rel" "$rel" 1; k=$? ;; *) scan_file "$root/$rel" "$rel" 0; k=$? ;; esac
+    mode=0
+    case " ${RECIPE_FILES[*]} " in *" $rel "*) mode=1 ;; esac
+    [[ "$rel" == "$TMPL_REL" ]] && mode=2
+    scan_file "$root/$rel" "$rel" "$mode"; k=$?
     v=$((v + k))
   done
   [[ "$v" -eq 0 ]]
@@ -276,6 +299,23 @@ if kills neg-noop noop vocabulary 2>/dev/null; then fail "negative control: a no
 if kills neg-wrong-tag remove_redis_bootstrap vocabulary 2>/dev/null; then fail "negative control: a wrong-tag mutation was reported killed"; else pass "negative control: a mutation yielding the wrong tag is not reported killed"; fi
 if stays_green neg-green-noop noop 2>/dev/null; then fail "negative control: a no-op was reported as a landed must-pass edit"; else pass "negative control: a no-op is not accepted as a must-pass edit"; fi
 if stays_green neg-green-overblock overblock 2>/dev/null; then fail "negative control: an over-blocking edit was reported green"; else pass "negative control: an over-blocking edit is not reported green"; fi
+# ... and for the two WRAPPERS that turn those verdicts into pass/fail (neutering `if kills ...` to `if true` would leave every
+# row below vacuous with the suite green): each must report a FAILING verdict for an input that has to fail. The control drives
+# the wrapper, requires that exactly one failure was recorded, unwinds the counters so the real tally is untouched, and then
+# records its own pass.
+wrapper_must_fail() { # <what> <wrapper> <args...>
+  local what="$1" p0="$passes" f0="$fails" t0="$total"; shift
+  "$@" >/dev/null 2>&1
+  if [[ $((fails - f0)) -eq 1 && $((total - t0)) -eq 1 ]]; then
+    passes="$p0"; fails="$f0"; total="$t0"
+    pass "negative control: $what reports a failing verdict (the wrapper is not neutered)"
+  else
+    passes="$p0"; fails="$f0"; total="$t0"
+    fail "negative control: $what did not record a failure for an input that must fail"
+  fi
+}
+wrapper_must_fail "mutate()" mutate neg-wrapper-mutate noop vocabulary
+wrapper_must_fail "expect_green()" expect_green neg-wrapper-green overblock
 
 # Rows 1..N: each retired identifier alone, in its own row, in a derived carrier.
 needle_row() { append_line "$FLIP_SH_REL" "X=$NEEDLE"; }
@@ -305,9 +345,6 @@ mutate missing-carrier remove_redis_bootstrap carrier-missing
 # A delivery-path file the scan reads disappears: unreadable is a violation, never a silent skip.
 m_unreadable() { remove_file apps/web-platform/infra/hooks.json.tmpl; }
 mutate unreadable-delivery-file m_unreadable unreadable
-# ... including the user_data template itself (the generated rows below judge a file that is present; this one judges its absence).
-m_unreadable_tmpl() { remove_file "$TMPL_REL"; }
-mutate unreadable-cloud-init-inngest m_unreadable_tmpl unreadable
 
 # The retired trio, by every delivery path and every respelling. One row per recipe/delivery file (generated from the
 # arrays the scan reads, so dropping a file from either array reds its row)...
@@ -342,17 +379,21 @@ m_tmpl_readd() {
   append_line "$TMPL_REL" '      for _t in inngest-cutover-flip.timer inngest-luks-cutover.timer; do'
 }
 mutate trio-template-staged-and-quiesce-readd m_tmpl_readd trio-named
-# The other spellings, as code, in the template: the matcher is shared with the rows above, and each row pins that no spelling
-# was dropped from TRIO_STEMS.
-m_tmpl_brace() { append_line "$TMPL_REL" '      install -m 0755 /tmp/inngest-luks-cutover.{sh,service,timer} /usr/local/bin/'; }
-mutate trio-template-brace-form m_tmpl_brace trio-named
-m_tmpl_snake() { append_line "$TMPL_REL" '      X=inngest_luks_cutover'; }
-mutate trio-template-snake-case m_tmpl_snake trio-named
-m_tmpl_upper() { append_line "$TMPL_REL" '      X=INNGEST_LUKS_CUTOVER_SH'; }
-mutate trio-template-upper-case m_tmpl_upper trio-named
 # A code line with a trailing comment in the template is RED: comment stripping must not eat code.
 m_tmpl_trailing() { append_line "$TMPL_REL" '      systemctl stop inngest-luks-cutover.timer  # retired'; }
 mutate trio-template-code-line-with-trailing-comment m_tmpl_trailing trio-named
+# The render strips only a whole-line `#` followed by a space or nothing, so a `#x` line and a `#!` line are SHIPPED to the host:
+# for the template they are code, even though the baked carriers' comment strip (any `^\s*#`) would hide them.
+m_tmpl_hash_nospace() { append_line "$TMPL_REL" '      #inngest-luks-cutover.timer'; }
+mutate trio-template-hash-without-space m_tmpl_hash_nospace trio-named
+m_tmpl_hashbang() { append_line "$TMPL_REL" '      #!/usr/local/bin/inngest-luks-cutover.sh'; }
+mutate trio-template-hashbang-line m_tmpl_hashbang trio-named
+# The retired NON-stem names are covered for the template by the vocabulary scan (the stem scan cannot see them): the write
+# this PR deleted, put back verbatim, is RED.
+m_tmpl_volumes_write() {
+  append_line "$TMPL_REL" "    printf 'INNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\\n' \"\$LUKS_ID\" > /etc/default/inngest-luks-volumes"
+}
+mutate vocabulary-template-luks-volumes-write m_tmpl_volumes_write vocabulary
 
 # Must-PASS (non-canonical) rows: the scan must not over-block.
 # P1: a carrier that says "plaintext" in an unrelated comment is allowed (the match is on the exact retired identifiers).
@@ -361,9 +402,9 @@ expect_green pass-plaintext-comment p1
 # P2: a prose comment that names the retired trio (history) is allowed in a carrier and in the bootstrap; only code lines count.
 p2() { append_line "$BOOT_REL" '# history: inngest-luks-cutover.sh was retired from the image'; append_line "$FLIP_SH_REL" '# sibling of the retired inngest-luks-cutover FSM'; }
 expect_green pass-trio-in-comment p2
-# P2b: the same history prose as a WHOLE-LINE comment in the user_data template is allowed (the template keeps its history in comments).
-p2b() { append_line "$TMPL_REL" '      # history: inngest-luks-cutover.timer was retired from the image and from this quiesce loop'; }
-expect_green pass-trio-in-template-comment p2b
+# P2b: a `# ` history comment in the user_data template that names a retired needle AND a stem is allowed: the render strips it.
+p2b() { append_line "$TMPL_REL" '      # history: inngest-luks-cutover.timer and /etc/default/inngest-luks-volumes left this template at #11080'; }
+expect_green pass-history-comment-in-template p2b
 # P3: a compliant NEW carrier (non-canonical set member) is accepted and derived.
 p3() { add_carrier inngest-newcarrier-c.sh 'echo ok'; }
 expect_green pass-new-carrier p3
@@ -374,13 +415,13 @@ echo ""
 echo "inngest-carrier-vocabulary.test.sh: ${passes} passed, ${fails} failed (${total} assertions)"
 
 # Anti-vacuity floor (ADR-193): reports directly, never through pass/fail. Rows: 1 real tree + 1 needle-list pin + 1 delivery-set
-# pin (the user_data template) + 1 control + 4 negative controls + 13 needle rows + 4 recipe-needle rows + 1 comment-needle +
-# 6 carrier-set rows (second, empty, one-dropped, missing, unreadable, unreadable template) + 11 trio rows (4 recipe + 7
-# delivery) + 2 payload spellings + 6 baked-carrier trio rows + 5 template trio rows (re-add, brace, snake, upper, trailing
-# comment) + 5 must-pass = 61. The floor is the measured count, so deleting any generated row (or a needle, or the template from
-# DELIVERY_FILES) reds it.
-if [[ "$total" -lt 61 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is 61\n' "$total" >&2
+# pin (the user_data template) + 1 control + 4 negative controls + 2 wrapper controls + 13 needle rows + 4 recipe-needle rows +
+# 1 comment-needle + 5 carrier-set rows (second, empty, one-dropped, missing, unreadable) + 16 trio rows (4 recipe + 12
+# delivery) + 2 payload spellings + 6 baked-carrier trio rows + 5 template rows (re-add, trailing comment, hash without space,
+# hash-bang, luks-volumes write) + 5 must-pass = 67. The floor is the measured count, so deleting any generated row
+# (or a needle, or the template from DELIVERY_FILES) reds it.
+if [[ "$total" -lt 67 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is 67\n' "$total" >&2
   exit 1
 fi
 if [[ "$fails" -ne 0 ]]; then exit 1; fi

@@ -533,7 +533,8 @@ write_files:
       if [ ! -r "$tok_file" ]; then
         # The Better Stack boot-trace channel is DEAD for this boot and every marker after this one is
         # lost. Expected after any reboot if the per-boot re-stage unit did not run (/run is tmpfs;
-        # cloud-init runcmd is first-boot only).
+        # cloud-init runcmd is first-boot only), or if it ran and failed (a failed re-stage never
+        # creates the file).
         logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-missing path=$tok_file #7228"
         exit 0
       fi
@@ -570,7 +571,7 @@ write_files:
       # that simply stopped reporting. rc alone is enough to separate them: 6/7 = egress, 22 =
       # HTTP >=400 under -f, 28 = the 8s timeout, 35/60 = TLS.
       if [ "$crc" -ne 0 ]; then
-        # The POST failed; the curl rc map (6/7 egress, 22 revoked token, 28 timeout, 35/60 TLS) is above.
+        # The POST failed; the curl rc map is in the comment block above.
         logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc #7228"
       fi
       exit 0
@@ -877,8 +878,8 @@ write_files:
         # LOUD, and non-zero so `systemctl is-active` disagrees too. Nothing Requires= this
         # unit, so a failure here cannot wedge the boot — it only makes the dead channel
         # visible instead of silent, which is the entire point of the change.
-        # Could not re-fetch the Better Stack token from Doppler, so the /run token file is EMPTY for this
-        # boot and every boot-stage marker will be lost.
+        # Could not re-fetch the Better Stack token from Doppler, so no token file is written to /run for
+        # this boot (the exit below precedes the write) and every boot-stage marker will be lost.
         logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=$drc #7228"
         exit 1
       fi
@@ -997,8 +998,8 @@ write_files:
       # direct curl) and Sentry through the baked DSN, which needs no Doppler — and it reports
       # FIRST: a slow cleanup (the `docker rm` is bounded at 15 s) must not push the report past
       # systemd's SIGKILL. why= is the last stage this attempt announced, so a failure in an
-      # unnamed arm still says where it was. A failed attempt that stopped the cutover FSM timers
-      # (the quiesce below) starts them again: only a successful bootstrap re-enables them itself.
+      # unnamed arm still says where it was. A failed attempt that stopped the flip timer (the
+      # quiesce below) starts it again: only a successful bootstrap re-enables it itself.
       on_exit() {
         rc=$?
         set +e
@@ -1395,7 +1396,7 @@ write_files:
       # the ID docker create returned); the cutover flip trio + guard, whose missing docker-cp
       # lines once meant DEDICATED_FLIP stayed 0 and the flip timer never installed on any
       # dedicated host (#6178: the build baked them, the bootstrap looked in /tmp, nothing copied
-      # them there); and the LUKS cutover trio (#6894, install_missing is fail-closed).
+      # them there). (The LUKS cutover trio, #6894, left this list at #11080.)
       for _f in $STAGED; do docker cp "$cid:/$_f" "/tmp/$_f" 2>/dev/null || true; done
       # Make the staging outcome VISIBLE off-box (curl-direct phone-home, Vector-independent):
       # the silent absence of these files is exactly what hid the missing-timer bug for a full
@@ -1444,11 +1445,13 @@ write_files:
       # FSM writes `aborted`, which op=resume cannot recover from without a /mnt/data recut. So stop
       # the flip timer and wait, BOUNDED (300 s total), for an in-flight step to finish. The
       # bootstrap re-enables the timer (`enable --now`) as it always has. On attempt 1 of a fresh
-      # host neither unit exists yet and this is a no-op. NO `Before=` ordering on that service:
+      # host the flip timer does not exist yet and this is a no-op. NO `Before=` ordering on that service:
       # the bootstrap restarts units synchronously, so that ordering would invite a deadlock.
       # The timer, if it WAS active, is recorded, so a failed attempt restarts exactly it
       # (on_exit); a successful bootstrap re-enables it itself. (The retired LUKS cutover FSM had
-      # a timer and a service in this loop until image v1.1.61 stopped baking them, #11080.)
+      # a timer and a service in this loop until #11080; image v1.1.61 stopped baking them. The loop
+      # and the accumulator stay list-shaped on purpose: the provision-unit rows G2-r14, G2-r15 and
+      # G2-r17 and the ci-deploy variable-unit pin anchor on that shape.)
       # BUSY is wider than "a oneshot is activating": the FSM can be mid-flight between two of its
       # steps with no unit running. The flip FSM's host state slot
       # (/var/lock/inngest-cutover-flip.state, written by inngest-cutover-flip.sh's emit_state)

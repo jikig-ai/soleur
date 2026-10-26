@@ -19,3 +19,26 @@
 soleur:plan, soleur:plan-review, soleur:deepen-plan; cto, learnings-researcher, repo-research-analyst, dhh/kieran/code-simplicity reviewers, observability-coverage-reviewer, two general-purpose agents.
 
 cto_spawns=1
+
+## Review Phase (PR 11139, panel SHA b7e11c98a2, tier aggregate pattern)
+
+Dedup ledger: 13 seats, about 60 raw findings -> 24 unique. Seats: simplicity, architecture (design-validity pass), git-history, pattern-recognition, security-sentinel, performance-oracle, data-integrity-guardian, agent-native, code-quality, test-design, user-impact, structural-enumeration, observability. No P1 on code, security or data integrity. Merge safety (R2) re-verified by the architecture and git-history seats (five prior merges each had a successful push apply with no marker; the push `-target` set never reaches the server).
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix |
+|---|---|---|---|
+| runbook pairs token-file-empty with RESTAGE_FAILED; file is absent after a failed restage; drc=0/127 unexplained | runbook-restage-diagnosis (P1 by brief rule) | simplicity, security, user-impact, agent-native, observability, code-quality, git-history | runbook rows and bullets, template comment (done) |
+| runbook bullet 367-372 and line 486 still describe the LUKS quiesce | stale-quiesce-prose | architecture, pattern, code-quality, git-history | runbook (done) |
+| timeline wording: loop dropped the units at #11080, not at image v1.1.61 | timeline-wording | git-history, architecture, code-quality | runbook row, template comment (done) |
+| ADR-257 item 6 and ADR-100 addendum describe the two-FSM quiesce | adr-stale | architecture, pattern, code-quality, git-history | dated addenda (done) |
+| template comments: docker cp history, attempt-1, plural, rc-map duplicate, single-element loops | template-stale-comments | data-integrity, quality, git-history, pattern, observability | comment edits, 0 B (done) |
+| Guard 3 vocabulary scan false reason; luks-volumes write re-add is green; `#x`/`#!` shipped by render but stripped by guard; unscanned delivery files | guard-assembly-narrower-than-name | structural-enum, test-design, pattern, quality | scan mode 2, 5 delivery files, rows (done) |
+| mutate()/expect_green() wrappers neuterable | wrapper-dispatch-axis | test-design | two wrapper controls (done) |
+| svc= flip timer unpinned; success-path restore unpinned; T5 lower bound | provision-unit-gaps | test-design, structural-enum, quality | T4c, G2-r18, G2-r19, T5 exact (running) |
+| dead sed rule in the loop-device test | dead-rewrite | many seats | delete (done) |
+| budget stubs optimistic by ~150-300 B | stub-scale-headroom | user-impact, performance | PR body + #11140 note |
+| plan claims `::error::` on over-cap; web-release "no user impact"; mint noop | plan-text | observability, user-impact | plan amendments (done), PR body |
+| redundant template rows (brace, snake, upper, P2b, unreadable) | over-built-tests | simplicity, pattern, test-design | dropped (done) |
+| pre-existing dangling comment cites (283, 293, 2506, 2516) | pre-existing-comments | pattern, git-history, quality | wontfix: stripped history comments, outside this PR's subject |
+
+dedup: ~60 raw -> 24 unique
+

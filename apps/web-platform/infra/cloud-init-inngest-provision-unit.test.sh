@@ -2,10 +2,10 @@
 # Guard suite for #8562: the dedicated inngest host provisions through a LATCHED, RETRYING systemd
 # unit (soleur-inngest-provision.service + .timer), not through a once-per-instance runcmd item.
 #
-# WHAT IS GUARDED. The plan's `## Guard Contract` (8 guards, 59 rows: 51 RED + 8 must-PASS),
-# knowledge-base/project/plans/2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md, plus 24
-# rows from the PR #9159 review (widened detectors, degraded success, the wider FSM quiesce):
-# 89 rows, 80 RED + 9 must-PASS (executed counts, #11080).
+# WHAT IS GUARDED. The plan's `## Guard Contract` (8 guards),
+# knowledge-base/project/plans/2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md, plus the
+# rows added since (widened detectors, degraded success, the FSM quiesce). The executed counts
+# (rows, RED, must-PASS) are EXPECTED_ROWS / EXPECTED_RED / EXPECTED_MUSTPASS below.
 #   G1 single login + pull site, inside the script the unit executes (never runcmd)
 #   G2 every failure arm retries, none latches, one EXIT trap reports it
 #   G3 latch identity and position
@@ -59,8 +59,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UBUNTU_BASE="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\.04@sha256:[0-9a-f]{64})'\$/\1/p" "${SCRIPT_DIR}/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | head -1)"
 [ -n "$UBUNTU_BASE" ] || { echo "FAIL SETUP: no UBUNTU_BASE pin readable from git-data-runcmd-rehearsal.test.sh" >&2; exit 1; }
 BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
-EXPECTED_ROWS=89
-EXPECTED_RED=80
+EXPECTED_ROWS=91
+EXPECTED_RED=82
 EXPECTED_MUSTPASS=9
 
 die() { printf 'INSTRUMENT FAULT: %s\n' "$*" >&2; exit 2; }
@@ -966,12 +966,19 @@ guard_all() {
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/boot_rc"; run_sc T4b; common T4b 1
   _ta "$( has T4b '^systemctl stop inngest-cutover-flip\.timer$' && ! has T4b '^systemctl start inngest-cutover-flip\.timer$' && echo 0 || echo 1)" "TA T4b: a flip timer that was inactive before the quiesce is not started again by the failed attempt"
 
+  # T4c — the bootstrap SUCCEEDS with the flip timer active before the quiesce: the exit handler restores timers only on a failed
+  # attempt (a successful bootstrap re-enables the timer itself), and the post-boot-health marker lists exactly the four units
+  # in order, the flip timer last (the comment above that line promises a non-active 4th field surfaces a missing timer).
+  reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo active > "$fx/ctl/is_active_inngest-cutover-flip.timer"; run_sc T4c; common T4c 0
+  _ta "$( has T4c '^systemctl stop inngest-cutover-flip\.timer$' && ! has T4c '^systemctl start inngest-cutover-flip\.timer$' && echo 0 || echo 1)" "TA T4c: a successful attempt does not restart the flip timer from the exit handler"
+  _ta "$( has T4c '^phone post-boot-health svc=\[inactive,active,inactive,active,\] ' && echo 0 || echo 1)" "TA T4c: the post-boot-health svc list is exactly the four units, the flip timer last"
+
   # T5 — stale container: pre-clean by name, then everything addresses the returned ID.
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo newcid42 > "$fx/ctl/cid"; run_sc T5; common T5 0
   local t5_rm t5_cr
   t5_rm="$(at T5 '^docker rm -f soleur-inngest-bootstrap-extract$')"; t5_cr="$(at T5 '^docker create ')"
   _ta "$( [ -n "$t5_rm" ] && [ -n "$t5_cr" ] && [ "$t5_rm" -lt "$t5_cr" ] && echo 0 || echo 1)" "TA T5: the stale-name pre-clean precedes docker create"
-  _ta "$( [ "$(cnt T5 '^docker cp ')" -ge 10 ] && [ "$(cnt T5 '^docker cp newcid42:/')" = "$(cnt T5 '^docker cp ')" ] && echo 0 || echo 1)" "TA T5: every docker cp (the bootstrap + the 9 STAGED assets) addresses the ID docker create returned ($(cnt T5 '^docker cp newcid42:/')/$(cnt T5 '^docker cp '))"
+  _ta "$( [ "$(cnt T5 '^docker cp ')" -eq 10 ] && [ "$(cnt T5 '^docker cp newcid42:/')" = "$(cnt T5 '^docker cp ')" ] && echo 0 || echo 1)" "TA T5: every docker cp (the bootstrap + the 9 STAGED assets) addresses the ID docker create returned ($(cnt T5 '^docker cp newcid42:/')/$(cnt T5 '^docker cp '))"
 
   # T7 — an unnamed arm (the fatal docker cp of the bootstrap script) is still reported, FIRST.
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/cp_boot_rc"; run_sc T7; common T7 1
@@ -1011,7 +1018,9 @@ guard_all() {
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; : > "$fx/ctl/boot_degraded"; echo inactive > "$fx/ctl/is_active_inngest-redis.service"; printf ' true\n' > "$fx/ctl/diag"; run_sc TD3; common TD3 0
   _ta "$( has TD3 '^phone bootstrap-done attempt=1 iid=i-fixture$' && ! has TD3 'DEGRADED' && echo 0 || echo 1)" "TA TD3: a REQUESTED diagnostic boot (INNGEST_DIAGNOSTIC_BOOT=true) is exempt: bootstrap-done and the latch"
 
-  # TQ — the cutover-FSM quiesce: each busy signal holds the bootstrap off and fails the attempt.
+  # TQ — the cutover-FSM quiesce: each busy signal holds the bootstrap off and fails the attempt. (A retired LUKS cutover unit
+  # or the frozen-active check coming back into the template is owned by Guard 3 in inngest-carrier-vocabulary.test.sh, not by
+  # this battery.)
   local q qn
   for q in Q1 Q4; do
     reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo active > "$fx/ctl/is_active_inngest-cutover-flip.timer"
@@ -1066,8 +1075,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-# 174 -> 168 at #11080: T4b adds 4 (three common rows and one), Q2 and Q3 leave with the retired LUKS cutover units (5 each).
-C0_EXPECTED=168
+C0_EXPECTED=173
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
@@ -1375,6 +1383,11 @@ row G2-r16 RED "G2: the iid derivation is byte-identical" '
 raw_rep("IID=\"$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | LC_ALL=C tr -cd \x27A-Za-z0-9._-\x27)\"", "IID=\"$( (cat /var/lib/cloud/data/instance-id 2>/dev/null || hostname) | LC_ALL=C tr -cd \x27A-Za-z0-9._\x27)\""); save()'
 row G2-r17 RED "TA T4b: a flip timer that was inactive" '
 rep_line("for _t in $_fsm_timers_stopped; do systemctl start \"$_t\" >/dev/null 2>&1; done", "systemctl start inngest-cutover-flip.timer >/dev/null 2>&1"); save()'
+row G2-r18 RED "TA T4c: a successful attempt does not restart" '
+del_line("for _t in $_fsm_timers_stopped; do systemctl start \"$_t\" >/dev/null 2>&1; done")
+ins_before("[ -z \"$cid\" ] || timeout 15 docker rm -f \"$cid\" >/dev/null 2>&1", ["for _t in $_fsm_timers_stopped; do systemctl start \"$_t\" >/dev/null 2>&1; done"]); save()'
+row G2-r19 RED "TA T4c: the post-boot-health svc list" '
+raw_rep("vector.service inngest-cutover-flip.timer 2>&1 | tr", "vector.service 2>&1 | tr"); save()'
 row G3-r9 RED "G3: exactly one latch write site" '
 a = one("on_exit() {"); ins_after("set +e", ["[ \"$rc\" -eq 124 ] && : | tee \"$LATCH\""], after=a); save()'
 row G3-r10 RED "G3: exactly one latch write site" '
