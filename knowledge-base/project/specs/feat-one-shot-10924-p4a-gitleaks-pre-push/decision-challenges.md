@@ -38,3 +38,11 @@ These supersede the rows above where they overlap. Measured facts behind them: C
 | F7 Remedy and fetch fixes | technical | Ruled by CTO agent, 2026-10-26: `published=` receipt field with a rotate-first remedy, merge-base in every remedy, headless never edits the gitleaks config or adds an inline allow, fetch with the explicit refspec `+refs/heads/main:refs/remotes/origin/main`. All inline. |
 | F8 Simplifications | taste | Ruled by CTO agent, 2026-10-26: keep best-effort fetch, `--base`/`--no-fetch` and the `GIT_CONFIG_COUNT` pin. Add only: drop empty/relative PATH entries, run the symlinked gitleaks as found (realpath only for the in-repo check). |
 
+### Amendments from the fix-round verification (same day, no new fork)
+
+The fix-round seats found that two rulings, implemented as written, had measured defects. Both amendments only narrow behaviour to what the ruling's own stated intent requires:
+
+- F2 amended: the `HEAD` config fallback is removed. With a base that has no (or an empty) `.gitleaks.toml`, a PR could ship its own allowlist and scan itself clean; the scan is now NOT_RUN `gitleaks-toml-absent`. gitleaks is also pointed at the git dir, not the work tree, because it reads a checked-out `.gitleaksignore` from its source.
+- F3 amended: `HOME`/`XDG_CONFIG_HOME` are no longer replaced. `GIT_CONFIG_GLOBAL=/dev/null` already replaces both global git config files, and a replaced `HOME` broke every version-manager (mise/asdf) gitleaks shim, turning each run into a false INCOMPLETE.
+- F6 refined: the in-repo PATH entries are dropped (not only an in-repo gitleaks refused), a git under the current directory is refused before it runs, and `published=` for the remedy is decided by whether a FINDING commit is on origin.
+

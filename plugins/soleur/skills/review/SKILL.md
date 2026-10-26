@@ -108,7 +108,7 @@ First, I need to determine the review target type and set up the code for analys
 - [ ] Set up language-specific analysis tools
 - [ ] Prepare security scanning environment
 - [ ] Make sure we are on the branch we are reviewing. Use gh pr checkout to switch to the branch or manually checkout the branch.
-- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)` — review agents read remote state; unpushed commits produce stale findings [rf-before-spawning-review-agents-push-the]; run `prepush-secret-scan.sh` first). That push drives a CI cycle — `incr ci_cycles` after it.
+- [ ] Push the branch before spawning the panel (`git push -u origin $(git branch --show-current)`; agents read remote state [rf-before-spawning-review-agents-push-the]) after running ship's `prepush-secret-scan.sh` (Bash `timeout: 400000`; 0/43 continue, else STOP); `incr ci_cycles` after the push.
 
 Ensure that the code is ready for analysis (either in worktree or on current branch). ONLY then proceed to the next step.
 
@@ -1067,7 +1067,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    ```bash
    git add <changed files>
    git commit -m "docs: review artifacts for feat-<name>"
-   # secret scan first
+   # ship's prepush-secret-scan.sh first
    git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
 

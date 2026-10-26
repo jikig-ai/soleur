@@ -184,11 +184,13 @@ if [ "${1:-}" = version ]; then
   exit 0
 fi
 refuse() { printf 'stub: unexpected argv: %s\n' "$*" >>"${STUB_REFUSE:-/dev/null}"; exit 64; }
-[ "$#" -eq 14 ] || refuse "$@"
+[ "$#" -eq 15 ] || refuse "$@"
 [ "$1" = git ] && [ "$2" = --redact ] && [ "$3" = --no-banner ] && [ "$4" = --exit-code ] && [ "$5" = 1 ] || refuse "$@"
 [ "$6" = --config ] && [ -f "$7" ] && [ "$8" = --gitleaks-ignore-path ] && [ -f "$9" ] || refuse "$@"
 [ "${10}" = --report-format ] && [ "${11}" = json ] && [ "${12}" = --report-path ] && [ -n "${13}" ] || refuse "$@"
-[[ "${14}" =~ ^--log-opts=--no-merges\ --text\ [0-9a-f]{40}\.\.[0-9a-f]{40}$ ]] || refuse "$@"
+[ -f "${14}/HEAD" ] && [ -d "${14}/objects" ] || refuse "$@"
+[[ "${15}" =~ ^--log-opts=--no-merges\ --text\ [0-9a-f]{40}\.\.[0-9a-f]{40}$ ]] || refuse "$@"
+printf 'source: %s\n' "${14}" >>"$STUB_LOG"
 {
   printf 'env.GITLEAKS_CONFIG=%s\n' "${GITLEAKS_CONFIG-unset}"
   printf 'env.GIT_NO_REPLACE_OBJECTS=%s\n' "${GIT_NO_REPLACE_OBJECTS-unset}"
@@ -266,6 +268,7 @@ lit_mutant() {
   if [[ "$s" != *"$old"* ]]; then fail "mutant $name: anchor [$old] not found in the script"; return 1; fi
   printf '%s\n' "${s/"$old"/"$new"}" >"$TMP/mut/$name.sh"
   if cmp -s "$PRISTINE" "$TMP/mut/$name.sh"; then fail "mutant $name did not land"; return 1; fi
+  if ! bash -n "$TMP/mut/$name.sh" 2>/dev/null; then fail "mutant $name does not parse (a syntax error would read as RED)"; return 1; fi
   return 0
 }
 # smut <label> <mutant> <repo> <mode> <expected rc under the PRISTINE script> [VAR=val ...] — the stub arm
@@ -309,6 +312,7 @@ else
   fail "receipt line shape drifted: $_rline"
 fi
 want_in "the scan read the BASE's committed config (byte count)" "$(cat "$STUB_LOGF")" "cfgbytes: $BASE_TOML_BYTES"
+want_in "gitleaks is pointed at the git dir, not the work tree" "$(cat "$STUB_LOGF")" "source: $ST/.git"
 
 sscan "$ST" clean-unparseable
 want_rc "unparseable scanned line: still exits 0 (format drift must not disable the scan)" 0
@@ -362,8 +366,8 @@ want_in "NOT_RUN warns loudly on stderr" "$ERRV" "NOT RUN"
 mkdir -p "$ST/bin"
 cp "$TMP/stubdir/gitleaks" "$ST/bin/gitleaks"
 scan "$ST" "PATH=$ST/bin:$TMP/links" "STUB_MODE=clean" "TMPDIR=$TMP/td"
-want_rc "a gitleaks that resolves inside the repo: NOT_RUN" 43
-reason_is "in-repo shim: reason gitleaks-in-repo" gitleaks-in-repo
+want_rc "a gitleaks in an in-repo PATH entry is filtered out: NOT_RUN" 43
+reason_is "in-repo PATH entry: reason gitleaks-absent (the entry is dropped, not trusted)" gitleaks-absent
 # A symlink OUTSIDE the repo that points INTO it is the PR-controlled-shim vector.
 mkdir -p "$TMP/slink"
 ln -sf "$ST/bin/gitleaks" "$TMP/slink/gitleaks"
@@ -398,6 +402,20 @@ addfile app/x.txt "benign" "x"
 sscan "$R" clean
 want_rc "no committed .gitleaks.toml anywhere: NOT_RUN" 43
 reason_is "no toml: reason gitleaks-toml-absent" gitleaks-toml-absent
+# A base WITHOUT a config never falls back to the PR's own (the PR could ship an allowlist).
+mkrepo nh notoml
+addfile .gitleaks.toml "$(cat "$CONFIG")" "the PR adds a config"
+sscan "$R" clean STUB_N=1
+want_rc "base without a toml, PR adds one: NOT_RUN, never the PR's config" 43
+reason_is "no base toml: reason gitleaks-toml-absent" gitleaks-toml-absent
+# A range that only DELETES (or renames) adds no lines: gitleaks scans 0 commits and that is not a mismatch.
+mkrepo del
+git -C "$R" rm -q README.md
+git -C "$R" commit -qm "delete only"
+sscan "$R" clean STUB_N=0
+want_rc "a deletion-only range with scanned=0: CLEAN, not a false stop" 0
+want_in "...range=1" "$OUTV" "range=1"
+if lit_mutant m24 '$1 ~ /^[0-9]+$/ && $1 > 0' '$1 ~ /^[0-9]+$/ && $1 >= 0'; then smut "M24 added-lines test loosened" m24 "$R" clean 0 STUB_N=0; fi
 cp "$ST/.gitleaks.toml" "$TMP/toml.hold"
 printf 'garbage = [[[\n' >"$ST/.gitleaks.toml"
 sscan "$ST" clean STUB_N=2
@@ -446,9 +464,32 @@ if lit_mutant m9 '  case "$_e" in /*) _np' '  case "$_e" in *) _np'; then
   SCRIPT_UNDER_TEST="$TMP/mut/m9.sh"
   scan "$ST" "PATH=.:$TMP/stubdir:$TMP/links" "STUB_MODE=clean" "STUB_N=2" "STUB_LOG=$STUB_LOGF" "TMPDIR=$TMP/td"
   SCRIPT_UNDER_TEST=""
-  if [ -e "$TMP/PWNED" ]; then pass "M9 relative PATH kept: the repo-local git row goes RED"; else fail "M9 survived"; fi
+  if [ -e "$TMP/PWNED" ] || [ "$RC" != 0 ]; then pass "M9 relative PATH kept: the repo-local git row goes RED (rc=$RC; the git-in-repo guard may refuse it first)"; else fail "M9 survived"; fi
 fi
 rm -f "$ST/git" "$TMP/PWNED"
+# An ABSOLUTE PATH entry inside the repo (direnv PATH_add, node_modules/.bin) is dropped too.
+mkdir -p "$ST/bin"
+printf '#!/bin/sh\n: >"%s/PWNED"\nexec "%s" "$@"\n' "$TMP" "$(type -P timeout)" >"$ST/bin/timeout"
+chmod +x "$ST/bin/timeout"
+rm -f "$TMP/PWNED"
+scan "$ST" "PATH=$ST/bin:$TMP/stubdir:$TMP/links" "STUB_MODE=clean" "STUB_N=2" "STUB_LOG=$STUB_LOGF" "TMPDIR=$TMP/td"
+if [ ! -e "$TMP/PWNED" ]; then pass "an absolute in-repo PATH entry never ran the repo-local timeout"; else fail "the in-repo timeout ran as the operator"; fi
+want_rc "...and the scan still completed" 0
+if lit_mutant m21 '  case "$_ed/" in "$TOPREAL"/*) continue ;; esac' '  :'; then
+  rm -f "$TMP/PWNED"
+  SCRIPT_UNDER_TEST="$TMP/mut/m21.sh"
+  scan "$ST" "PATH=$ST/bin:$TMP/stubdir:$TMP/links" "STUB_MODE=clean" "STUB_N=2" "STUB_LOG=$STUB_LOGF" "TMPDIR=$TMP/td"
+  SCRIPT_UNDER_TEST=""
+  if [ -e "$TMP/PWNED" ]; then pass "M21 in-repo PATH entries kept: the repo-local timeout row goes RED"; else fail "M21 survived"; fi
+fi
+rm -f "$ST/bin/timeout" "$TMP/PWNED"
+printf '#!/bin/sh\n: >"%s/PWNED"\nexec "%s" "$@"\n' "$TMP" "$_realgit" >"$ST/bin/git"
+chmod +x "$ST/bin/git"
+scan "$ST" "PATH=$ST/bin:$TMP/links" "TMPDIR=$TMP/td"
+want_rc "a git that lives in an in-repo PATH entry is refused before it runs" 43
+reason_is "in-repo git: reason git-in-repo" git-in-repo
+if [ ! -e "$TMP/PWNED" ]; then pass "...and it never ran"; else fail "the in-repo git ran"; fi
+rm -rf "${ST:?}/bin" "$TMP/PWNED"
 
 echo "== 2. --base is a selector, never a command line"
 for b in "a b" "-x" "HEAD~1" "nonexistent" "--all"; do
@@ -534,14 +575,14 @@ for _kv in GITLEAKS_CONFIG=unset GIT_DIR=unset GIT_WORK_TREE=unset GIT_INDEX_FIL
   GIT_NO_REPLACE_OBJECTS=1 GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904 GIT_CONFIG_GLOBAL=/dev/null; do
   want_in "the child sees env.$_kv" "$_log" "env.$_kv"
 done
-want_notin "HOME is replaced for the child" "$_log" "env.HOME=$HOME"
+want_in "HOME is passed through (a version-manager shim needs it)" "$_log" "env.HOME=$HOME"
 if lit_mutant m17 'GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR' 'GIT_WORK_TREE GIT_COMMON_DIR'; then
   SCRIPT_UNDER_TEST="$TMP/mut/m17.sh"
   sscan "$ST" clean STUB_N=2 "GIT_INDEX_FILE=$TMP/foreign-index"
   SCRIPT_UNDER_TEST=""
   case "$(cat "$STUB_LOGF")" in *"env.GIT_INDEX_FILE=unset"*) fail "M17 survived: GIT_INDEX_FILE was still scrubbed" ;; *) pass "M17 GIT_INDEX_FILE left in the environment: the scrub row goes RED" ;; esac
 fi
-if lit_mutant m18 $'  GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904\n' ''; then
+if lit_mutant m18 $'  "GIT_ATTR_SOURCE=$EMPTY_TREE"\n' ''; then
   SCRIPT_UNDER_TEST="$TMP/mut/m18.sh"
   sscan "$ST" clean STUB_N=2
   SCRIPT_UNDER_TEST=""
@@ -604,8 +645,9 @@ if _needs_gl "known-answer arms"; then
   want_notin "no secret bytes in the output" "$OUTV$ERRV" "MIIEowIBAAKCAQEA"
   want_notin "no author email in the output" "$OUTV$ERRV" "fixture@example.com"
   want_in "FINDINGS prints the merge-base remedy" "$ERRV" 'git reset --soft "$(git merge-base origin/main HEAD)"'
-  want_in "an unpublished range is told the commit is still local" "$ERRV" "Commit still local"
-  want_in "the receipt says attr=pinned on this git" "$OUTV" "attr=pinned"
+  want_in "an unpublished finding is told no finding commit is on origin" "$ERRV" "No finding commit is on origin"
+  want_in "...and that a rebased or amended branch may still have been pushed" "$ERRV" "EVER pushed"
+  want_in "...and an automated agent is told to stop" "$ERRV" "If you are an automated agent: STOP"
   _attr_pinned=1
   case "$OUTV" in *"attr=pinned"*) ;; *) _attr_pinned=0 ;; esac
 
@@ -700,7 +742,47 @@ if _needs_gl "known-answer arms"; then
   want_rc "a pushed secret: FINDINGS" 1
   want_in "a published range: published=1" "$OUTV" "published=1"
   want_in "...and the remedy says PUBLISHED / rotate first" "$ERRV" "PUBLISHED"
-  want_notin "...and does not claim the commit is still local" "$ERRV" "Commit still local"
+  want_in "...and tells the operator to look for a collaborator's commits before any force-push" "$ERRV" 'git log --oneline HEAD..origin/feat'
+  want_in "...with the lease pinned to the branch" "$ERRV" 'force-with-lease=feat:'
+  want_notin "...and does not claim no finding commit is on origin" "$ERRV" "No finding commit is on origin"
+
+  # A clean first commit is on origin, the secret commit is not: the secret is NOT published.
+  mkrepo prt
+  addfile app/clean.txt "benign" "clean first"
+  git -C "$R" push -q origin feat
+  addfile app/key.txt "$(mk_pem)" "secret, unpushed"
+  scan "$R" "TMPDIR=$TMP/td"
+  want_rc "a clean pushed commit plus an unpushed secret commit: FINDINGS" 1
+  want_in "...the range is partly published but the SECRET is not" "$ERRV" "No finding commit is on origin"
+  want_notin "...so it does not tell the operator to force-push over the clean commit" "$ERRV" "force-with-lease"
+
+  # Ranges that add no lines (deletion, rename) are not a mismatch.
+  mkrepo dlr
+  git -C "$R" rm -q README.md
+  git -C "$R" commit -qm "delete only"
+  scan "$R" "TMPDIR=$TMP/td"
+  want_rc "a deletion-only range: CLEAN (gitleaks reads added lines only)" 0
+
+  # A checked-out .gitleaksignore is controlled by the PR: it must not allowlist the PR's own secret.
+  mkrepo ign
+  addfile app/key.txt "$(mk_pem)" "add key"
+  scan "$R" "TMPDIR=$TMP/td"
+  want_rc "ignore-file fixture, before the ignore file exists: FINDINGS" 1
+  _c12=$(printf '%s\n' "$ERRV" | sed -n 's/^  finding: \([0-9a-f]*\) .*/\1/p' | head -n 1)
+  _ln=$(printf '%s\n' "$ERRV" | sed -n 's/^  finding: [0-9a-f]* app\/key\.txt:\([0-9]*\) .*/\1/p' | head -n 1)
+  printf '%s:app/key.txt:private-key:%s\n' "$(git -C "$R" rev-parse "$_c12")" "$_ln" >"$R/.gitleaksignore"
+  scan "$R" "TMPDIR=$TMP/td"
+  want_rc "a work-tree .gitleaksignore that fingerprints the PR's own secret changes nothing" 1
+  git -C "$R" add .gitleaksignore
+  git -C "$R" commit -qm "ignore my own secret"
+  scan "$R" "TMPDIR=$TMP/td"
+  want_rc "...and neither does one the PR COMMITS" 1
+  if lit_mutant m20 $'      "$GITCOMMON" \\\n' ''; then
+    SCRIPT_UNDER_TEST="$TMP/mut/m20.sh"
+    scan "$R" "TMPDIR=$TMP/td"
+    SCRIPT_UNDER_TEST=""
+    if [ "$RC" != 1 ]; then rpass "M20 gitleaks pointed at the work tree again: the ignore-file row goes RED (rc=$RC)"; else fail "M20 survived: the checked-out .gitleaksignore was never read"; fi
+  fi
 
   mkrepo sol
   addfile app/tok.txt "$(mk_sol)" "add soleur token"
@@ -789,6 +871,12 @@ if _needs_gl "known-answer arms"; then
   }
   scan "$KN" "TMPDIR=$TMP/td"
   want_rc "mutation control: the PRISTINE script gives the known answer" 1
+  # caught() owns its verdict: an IDENTITY mutant must be reported as SURVIVED.
+  cp "$PRISTINE" "$TMP/mut/identity2.sh"
+  _f0=$FAIL
+  caught "control: the identity mutant" identity2 "$KN" 1 >/dev/null
+  if [ "$FAIL" -ne $((_f0 + 1)) ]; then echo "FATAL: caught cannot report a surviving mutant" >&2; exit 2; fi
+  FAIL=$((FAIL - 1))
 
   if lit_mutant m1 '--no-merges --text ${BASE_SHA}..${HEAD_SHA}" # mut:range' '--no-merges --text ${HEAD_SHA}..${HEAD_SHA}" # mut:range'; then caught "M1 empty range" m1 "$KN" 1; fi
   if lit_mutant m2a '      "$GL" git \' '      true git \'; then caught "M2a gitleaks call replaced by true" m2a "$KN" 1; fi
@@ -810,7 +898,7 @@ if _needs_gl "known-answer arms"; then
     SCRIPT_UNDER_TEST="$TMP/mut/m4p.sh"
     scan "$KN" "TMPDIR=$TMP/td" "GIT_CONFIG_PARAMETERS='color.diff'='always'"
     SCRIPT_UNDER_TEST=""
-    if [ "$RC" != 1 ]; then rpass "M4a PARAMETERS pin removed: RED under color.diff=always (rc=$RC)"; else note "M4a PARAMETERS-pin-only mutant SURVIVED the colour fixture (measured; recorded, not asserted)"; fi
+    if [ "$RC" != 1 ]; then rpass "M4a PARAMETERS pin removed: RED under color.diff=always (rc=$RC)"; else fail "M4a PARAMETERS pin removed SURVIVED the hostile colour fixture"; fi
   fi
   if lit_mutant m4c "$_c_line" '  "GIT_CONFIG_COUNT=${gl_cfg_n}" # mut:colorcount'; then
     SCRIPT_UNDER_TEST="$TMP/mut/m4c.sh"
@@ -873,16 +961,33 @@ fi
 skill_order_ok() {
   awk '/^## Phase 6: Push and Create PR/ { in6 = 1; next }
        /^## / { if (in6) exit }
-       in6 && !p && index($0, "prepush-secret-scan.sh\"") > 0 { p = NR }
+       in6 && !p && index($0, "**Secret scan — BEFORE every") == 1 { p = NR }
        in6 && !g && $0 == "git push -u origin BRANCH_NAME" { g = NR }
        END { if (p && g && p < g) exit 0; exit 1 }' "$1"
 }
 phase_block() { # phase_block <file> <heading-prefix> — the lines of one `## ` section
   awk -v h="$2" 'index($0, h) == 1 { on = 1; print; next } /^## / { if (on) exit } on { print }' "$1"
 }
-# next_has <file> <marker-line-regex> <needle> — every marker line is followed (within 2 lines) by the needle.
-next_has() {
-  awk -v m="$2" -v n="$3" '$0 ~ m { seen++; if (!(index($0, n) || ((getline a) > 0 && index(a, n)) )) bad++ } END { exit (seen > 0 && !bad) ? 0 : 1 }' "$1"
+# push_sites_ok <file> <comment-regex> <expected-sites> <exempt-regex> — EVERY `git push` command line inside a
+# fenced block (comment lines and the exempt line excluded) has the scan comment as the previous non-blank line,
+# and the number of such sites is exactly the expected one: a new unguarded push site reds on both counts.
+push_sites_ok() {
+  awk -v cm="$2" -v want="$3" -v ex="$4" '
+    /^ *```/ { fence = !fence; prev = ""; next }
+    fence {
+      if ($0 ~ /(^|[^A-Za-z-])git push( |$)/ && $0 !~ /^ *#/ && !(ex != "" && $0 ~ ex)) { sites++; if (prev !~ cm) bad++ }
+      if ($0 !~ /^[[:space:]]*$/) prev = $0
+    }
+    END { exit (sites == want && !bad) ? 0 : 1 }' "$1"
+}
+# pointer_ok <file> — the exact pointer line appears once, outside any code fence and any HTML comment.
+pointer_ok() {
+  awk '/^ *```/ { fence = !fence; next }
+       { line = $0
+         if (incom) { if (index(line, "-->")) incom = 0; next }
+         if (index(line, "<!--")) { if (!index(line, "-->")) incom = 1; next }
+         if (!fence && index(line, "**Secret scan — BEFORE every `git push`") == 1) n++ }
+       END { exit (n == 1) ? 0 : 1 }' "$1"
 }
 if skill_order_ok "$SKILL"; then pass "SKILL.md: the Phase 6 secret scan precedes the first push"; else fail "SKILL.md: the scan call is missing from Phase 6 or does not precede git push -u origin BRANCH_NAME"; fi
 _p6=$(phase_block "$SKILL" "## Phase 6: Push and Create PR")
@@ -891,26 +996,26 @@ want_in "the pointer line starts as the secret-scan instruction" "${_ptr:0:60}" 
 want_notin "the pointer line is not commented out" "$_ptr" "<!--"
 want_in "the pointer carries the runnable command with the rc echo" "$_ptr" 'bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/prepush-secret-scan.sh"; echo "SCAN_RC=$?"'
 want_in "the pointer carries the Bash timeout" "$_ptr" 'Bash `timeout: 400000`'
-want_in "the pointer carries the whole 0 / 43 / else rule" "$_ptr" '0 continue; 43 append the printed `secret-scan:` line to the PR body, continue; else STOP (44: show the operator the reason; 127: plugin root unset, see Cloud Mode).'
-want_in "the pointer says headless FINDINGS aborts and never edits the gitleaks config" "$_ptr" "Headless FINDINGS: abort, never rewrite history or edit the gitleaks config."
+want_in "the pointer carries the whole 0 / 43 / else rule" "$_ptr" '0 continue; 43 append the printed `secret-scan:` line to the PR body (re-add after any body rewrite), continue; else STOP (44: show the operator the reason; 127: plugin root unset, see Cloud Mode).'
+want_in "the pointer says headless FINDINGS aborts and never edits the gitleaks config" "$_ptr" "Headless FINDINGS/44: abort, never rewrite history or edit the gitleaks config."
 _p64=$(phase_block "$SKILL" "## Phase 6.4: Unpushed-Commits Gate")
 want_in "Phase 6.4 carries the hook-paragraph pointer" "$_p64" "Run the Phase 6 secret scan before the \`git push\` it asks for."
 want_in "the Phase 6.4 headless echo names the scan" "$_p64" "Run the Phase 6 secret scan, then 'git push'."
 want_in "Phase 6.4 still names the fail-closed fetch behaviour" "$_p64" "Fail-closed on fetch failure"
 want_in "Phase 6.4 still names chained forms" "$_p64" "(chained forms too)"
 want_in "the Phase 6.4 enforcement tag is unchanged" "$_p64" "[skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]"
-if next_has "$SKILL" '^ *# Phase 6 secret scan first$' "git push"; then pass "every '# Phase 6 secret scan first' comment sits directly above a git push line"; else fail "a '# Phase 6 secret scan first' comment is missing or not above a git push"; fi
-_n_c=$(grep -c '^ *# Phase 6 secret scan first$' "$SKILL")
-if [ "$_n_c" = 3 ]; then pass "SKILL.md: the 6.5 resolver push, the 6.5 re-push and the Phase 7 CI-fix push each carry the scan comment (3)"; else fail "SKILL.md: expected 3 push-site scan comments, found $_n_c"; fi
-want_in "Phase 6.45's archive push carries the scan" "$(grep -F 'chore(kb): archive <branch>' -B4 "$SKILL")" "(Phase 6 secret scan first)"
-if next_has "$REVIEW_SKILL" '^ *# secret scan first$' "git push"; then pass "review SKILL.md: the fix/artifact push carries the scan comment"; else fail "review SKILL.md: the push block lacks the scan comment"; fi
-want_in "review SKILL.md: the pre-panel push names the script" "$(grep -F 'Push the branch to remote before spawning the panel' "$REVIEW_SKILL")" "prepush-secret-scan.sh"
-want_in "the unpushed-commits hook's deny text names the scan" "$(grep -F 'permissionDecisionReason: ("BLOCKED: " + $n' "$HOOK")" "prepush-secret-scan.sh"
+if push_sites_ok "$SKILL" '^ *# Phase 6 secret scan first$' 4 'git push -u origin BRANCH_NAME'; then pass "SKILL.md: all 4 later push sites (6.45, 6.5 x2, 7) carry the scan comment directly above, and there are no others"; else fail "SKILL.md: a git push site lacks the scan comment, or the site count changed (want exactly 4)"; fi
+if pointer_ok "$SKILL"; then pass "SKILL.md: the pointer line is live (outside fences and HTML comments)"; else fail "SKILL.md: the pointer line is missing, duplicated, fenced or commented out"; fi
+if push_sites_ok "$REVIEW_SKILL" "^ *# ship's prepush-secret-scan.sh first$" 1 ''; then pass "review SKILL.md: the fix/artifact push carries the scan comment (and is the only push site)"; else fail "review SKILL.md: the push block lacks the scan comment or a new push site appeared"; fi
+want_in "review SKILL.md: the pre-panel push names the script" "$(grep -F 'Push the branch before spawning the panel' "$REVIEW_SKILL")" "prepush-secret-scan.sh"
+_hookline=$(grep -F 'permissionDecisionReason: ("BLOCKED: " + $n' "$HOOK")
+want_in "the unpushed-commits hook's deny text names the scan script" "$_hookline" "prepush-secret-scan.sh"
+want_in "...and the stop rule" "$_hookline" "anything else STOP"
 if [ -f "$REPO_ROOT/plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh" ]; then pass "the script path named in the pointer exists"; else fail "the pointer names a script that does not exist"; fi
 
 # M5 REORDER: move the call line after the push line in a sandbox copy; the order check must go RED.
 cp "$SKILL" "$TMP/mut/skill.pristine.md"
-_P=$(awk -v h="## Phase 6: Push and Create PR" 'index($0, h) == 1 { on = 1; next } /^## / { if (on) exit } on && index($0, "prepush-secret-scan.sh\"") > 0 { print NR; exit }' "$SKILL")
+_P=$(awk -v h="## Phase 6: Push and Create PR" 'index($0, h) == 1 { on = 1; next } /^## / { if (on) exit } on && index($0, "**Secret scan — BEFORE every") == 1 { print NR; exit }' "$SKILL")
 _G=$(awk -v h="## Phase 6: Push and Create PR" 'index($0, h) == 1 { on = 1; next } /^## / { if (on) exit } on && $0 == "git push -u origin BRANCH_NAME" { print NR; exit }' "$SKILL")
 if [[ "$_P" =~ ^[0-9]+$ ]] && [[ "$_G" =~ ^[0-9]+$ ]] && [ "$_P" -lt "$_G" ]; then
   awk -v P="$_P" -v G="$_G" 'NR == P { held = $0; next } { print } NR == G { print held }' "$SKILL" >"$TMP/mut/skill.reorder.md"
@@ -918,6 +1023,25 @@ if [[ "$_P" =~ ^[0-9]+$ ]] && [[ "$_G" =~ ^[0-9]+$ ]] && [ "$_P" -lt "$_G" ]; th
 else
   fail "M5: could not locate the call line ($_P) and the push line ($_G) inside the Phase 6 block"
 fi
+# Reject controls: each verdict-owning pin helper must be able to say NO, or its green certifies nothing.
+printf '```bash\n# Phase 6 secret scan first\ngit push\n```\n' >"$TMP/mut/ps-good.md"
+printf '```bash\n# Phase 6 secret scan first\necho hi\ngit push\n```\n' >"$TMP/mut/ps-gap.md"
+printf '```bash\n# Phase 6 secret scan first\ngit push\ngit push && echo second\n```\n' >"$TMP/mut/ps-extra.md"
+if push_sites_ok "$TMP/mut/ps-good.md" '^ *# Phase 6 secret scan first$' 1 '' && ! push_sites_ok "$TMP/mut/ps-gap.md" '^ *# Phase 6 secret scan first$' 1 '' && ! push_sites_ok "$TMP/mut/ps-extra.md" '^ *# Phase 6 secret scan first$' 1 ''; then
+  pass "push_sites_ok accepts a guarded site and rejects a gap and an unguarded extra site"
+else
+  fail "push_sites_ok cannot tell a guarded push from an unguarded one"
+fi
+printf '**Secret scan — BEFORE every `git push` x\n' >"$TMP/mut/pt-good.md"
+printf '```text\n**Secret scan — BEFORE every `git push` x\n```\n' >"$TMP/mut/pt-fence.md"
+printf '<!--\n**Secret scan — BEFORE every `git push` x\n-->\n' >"$TMP/mut/pt-html.md"
+printf '**Secret scan — BEFORE every `git push` x\n**Secret scan — BEFORE every `git push` y\n' >"$TMP/mut/pt-dup.md"
+if pointer_ok "$TMP/mut/pt-good.md" && ! pointer_ok "$TMP/mut/pt-fence.md" && ! pointer_ok "$TMP/mut/pt-html.md" && ! pointer_ok "$TMP/mut/pt-dup.md"; then
+  pass "pointer_ok accepts a live pointer and rejects a fenced, commented-out and duplicated one"
+else
+  fail "pointer_ok cannot tell a live pointer from an inert one"
+fi
+
 # ============================== floor and reporting ====================================================
 _t_ci_contract() {
   local body rc
@@ -926,16 +1050,19 @@ _t_ci_contract() {
     fail "CI fail-on-skip contract: epilogue markers matched nothing, the extraction is broken"
     return
   fi
-  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); CI=true'"
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); CI=true; FAIL=0'"
 $body" ) >/dev/null 2>&1 || rc=$?
   if [ "$rc" != 1 ]; then fail "CI fail-on-skip contract: CI=true with skips did not exit 1"; return; fi
-  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); unset CI'"
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); unset CI; FAIL=0'"
 $body" ) >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 1 ]; then fail "CI fail-on-skip contract: a local skip (no CI) exited 1"; return; fi
-  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); CI=true'"
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); CI=true; FAIL=0'"
 $body" ) >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 1 ]; then fail "CI fail-on-skip contract: CI=true with no skips exited 1"; return; fi
-  pass "CI fail-on-skip contract (3-row truth table on the real epilogue)"
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); unset CI; FAIL=1'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" != 1 ]; then fail "final exit gate: a recorded failure did not exit 1"; return; fi
+  pass "CI fail-on-skip contract and the final exit gate (4-row truth table on the real epilogue)"
 }
 _t_ci_contract
 
@@ -944,12 +1071,12 @@ echo "stub-arm assertions: $PASS, real-arm assertions: $RPASS, failed: $FAIL"
 if [ "${#SKIPPED_ARMS[@]}" -gt 0 ]; then
   echo "SKIPPED arms: ${SKIPPED_ARMS[*]}"
 fi
-FLOOR=140
+FLOOR=150
 if [ "$PASS" -lt "$FLOOR" ]; then
   printf 'FATAL: only %s stub-arm assertions passed; floor is %s (a stub or a gutted suite)\n' "$PASS" "$FLOOR" >&2
   exit 1
 fi
-RFLOOR=55
+RFLOOR=62
 if [ "$HAVE_GITLEAKS" = 1 ] || [ "${CI:-}" = "true" ]; then
   if [ "$RPASS" -lt "$RFLOOR" ]; then
     printf 'FATAL: only %s real-arm assertions passed; floor is %s (real arms gutted, or skipped under CI)\n' "$RPASS" "$RFLOOR" >&2
@@ -963,6 +1090,6 @@ if [ "${#SKIPPED_ARMS[@]}" -gt 0 ]; then
     exit 1
   fi
 fi
-# <<< ci-contract-epilogue
 [ "$FAIL" -eq 0 ] || exit 1
+# <<< ci-contract-epilogue
 exit 0

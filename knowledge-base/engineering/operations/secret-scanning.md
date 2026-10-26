@@ -31,7 +31,7 @@ Two CI enforcement layers plus a local pre-push scan, one source of truth.
 |---|---|---|---|---|
 | **Lefthook `gitleaks-staged`** | local pre-commit | every `git commit` | yes (`--no-verify`, hook removal) | fast feedback before a leak hits the local index |
 | **Lefthook `lint-fixture-content`** | local pre-commit | every `git commit` | yes | catches semi-sensitive shapes (real emails, prod-shape UUIDs, Supabase project refs) gitleaks misses |
-| **Ship `prepush-secret-scan.sh`** | local, run by `soleur:ship` and the review skill before their pushes | at the call sites that carry the skill text (not every push site) | no: it is a script the skill calls, so another script's push never reaches it (#11126 tracks the `git push` hook) | catches a secret-bearing commit while its history is still local, where a rewrite can still clear it; CI's scan starts only at the PR |
+| **Ship `prepush-secret-scan.sh`** | local, run by `soleur:ship` and the review skill before their pushes | at the call sites that carry the skill text (not every push site) | yes: it runs only where the skill text calls it, so another script's push never reaches it (#11126 tracks the `git push` hook) | catches a secret-bearing commit while its history is still local, where a rewrite can still clear it; CI's scan starts only at the PR |
 | **CI `secret-scan` workflow** | GitHub Actions | PR + merge_group + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
 
 Each trigger scans a **different set of commits** — see
@@ -591,16 +591,19 @@ Why the scan matters: CI's secret scan starts at the pull request, after the pus
 What the scan reads: the **base's** committed `.gitleaks.toml` and `.gitleaksignore`, never the working tree's and never
 the PR's. A PR that widens, breaks or deletes its own config cannot scan itself clean; a legitimate allowlist-adding PR
 therefore gets FINDINGS here, and CI's `allowlist-diff` job (label or `Allowlist-Widened-By:` trailer) arbitrates.
-gitleaks runs with `GIT_ATTR_SOURCE` set to the empty tree, `--text`, and the global/system git config and `HOME`
-replaced, so committed `-diff`/`binary` attributes, NUL-byte files and a user's `diff.*` settings do not blind it.
+gitleaks is pointed at the repository's git dir (so a checked-out `.gitleaksignore` is not read), and runs with
+`GIT_ATTR_SOURCE` set to the empty tree, `--text`, and the global/system git config replaced, so committed
+`-diff`/`binary` attributes, NUL-byte files and a user's `diff.*` settings do not blind it. A base without a usable
+`.gitleaks.toml` is NOT_RUN: the scan never falls back to the PR's own config. An inline `gitleaks:allow` added by the
+PR is honoured here exactly as in CI.
 
 What it does **not** cover (documented, not claimed away):
 
 - **Content that exists only in a conflict-resolution merge commit.** `--no-merges` mirrors CI's range arm and
   misses it (measured: rc 0, while `-m` and `gitleaks dir` find it). CI's `gitleaks dir .` step is the net; a tip-tree
   pass belongs to #11126.
-- **`.git/info/attributes` and git older than 2.40** (receipt `attr=unpinned`) can still hide a path from the patch
-  stream; UTF-16 files are invisible here and to CI.
+- **UTF-16 files** are invisible here and to CI. git older than 2.40 prints `attr=unpinned` (`GIT_ATTR_SOURCE` is
+  ignored there; `--text` still holds).
 - **Version skew.** CI pins gitleaks 8.24.2; a newer local pack can flag something CI accepts. That is still a stop;
   `.gitleaks.toml` is read from the base, so a false positive is cleared by a reviewed allowlist PR, not in place.
 - **Pushes that never reach it.** Another script's push (`pre-merge-rebase.sh`, `sync-pr-behind.sh`), `merge-pr`,

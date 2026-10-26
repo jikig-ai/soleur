@@ -1641,7 +1641,7 @@ fi
 
 **Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** (a stale ref hides the miss). See rule `wg-ship-push-before-merge` in `AGENTS.rules.md` for the canonical contract.
 
-**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set when the PR is one check from merging; the restarted cycle is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 CI cycles, one on a late ADR commit at 65 of 67 checks.
+**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set when the PR is one check from merging; the restarted cycle is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 CI cycles (a late ADR commit at 65 of 67 checks).
 
 **Hook ordering:** the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json), so an auto-sync push has updated the tracking ref before this gate counts; `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces it.
 
@@ -1735,7 +1735,7 @@ Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, 
 
 **Pipeline tally gate — BEFORE pushing (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (standalone ship writes no ledger otherwise), `gate ci_cycles` — `STOP` → `budget-capped` session-state write per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) and exit; `WARN`/`UNKNOWN` → continue; `incr ci_cycles` after a successful push.
 
-**Secret scan — BEFORE every `git push` (also 6.45, 6.5, 7):** `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/prepush-secret-scan.sh"; echo "SCAN_RC=$?"`, Bash `timeout: 400000` ([contract](./scripts/prepush-secret-scan.sh)); 43 is not an error. 0 continue; 43 append the printed `secret-scan:` line to the PR body, continue; else STOP (44: show the operator the reason; 127: plugin root unset, see Cloud Mode). Headless FINDINGS: abort, never rewrite history or edit the gitleaks config.
+**Secret scan — BEFORE every `git push` (also 6.45, 6.5, 7):** `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/prepush-secret-scan.sh"; echo "SCAN_RC=$?"`, Bash `timeout: 400000` ([contract](./scripts/prepush-secret-scan.sh)); 43 is not an error. 0 continue; 43 append the printed `secret-scan:` line to the PR body (re-add after any body rewrite), continue; else STOP (44: show the operator the reason; 127: plugin root unset, see Cloud Mode). Headless FINDINGS/44: abort, never rewrite history or edit the gitleaks config.
 
 Push the branch to remote. Get the branch name first:
 
@@ -2011,9 +2011,10 @@ In that line `hold-gate-eval.sh` is `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scr
 bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
 ```
 
-If it archives anything (`Archived N artifact(s)`), commit and push the move (Phase 6 secret scan first) so it rides this PR — never a follow-up:
+If it archives anything (`Archived N artifact(s)`), commit and push the move so it rides this PR — never a follow-up:
 
 ```bash
+# Phase 6 secret scan first
 git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
 ```
 
