@@ -1,9 +1,9 @@
 ---
 title: "A Property Test That Cannot Fail Teaches Nothing"
 type: pillar
-publish_date:
+publish_date: 2026-10-28
 channels: x, bluesky, discord, linkedin-personal
-status: draft
+status: scheduled
 issue_reference: "#10904"
 ---
 
