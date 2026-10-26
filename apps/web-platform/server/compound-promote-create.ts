@@ -292,28 +292,58 @@ function maxCharsFor(kind: ShapeKind): number {
  * control (a paraphrase evades it); the controls are the draft PR, mergeMode none, the LOW-RISK scan and the human
  * reviewer. The verbs gate the credential nouns so the bare words token, secret and password stay usable.
  */
-const SENSITIVE_NOUN = "(?:token|secret|credential|password|passphrase|api[- ]?key)s?";
-const EXFIL_VERB = "(?:read|print|post|send|include|upload|paste|echo|cat|copy|dump|leak|reveal|share|display|email|transmit)";
+// Every gap class excludes the period AND the newline, so a phrase never spans two sentences or two bullets.
+const GAP40 = String.raw`[^.\n]{0,40}?`;
+const SENSITIVE_NOUN = String.raw`(?:environment\s+variables?|env\s+vars?|(?:api|access)[- ]?keys?|passwords?|passphrases?|secrets?|tokens?|credentials?)`;
+const EXFIL_VERB = String.raw`(?:(?:read|print|post|send|include|upload|paste|echo|cat|copy|dump|leak|reveal|share|display|email|transmit|write|log|store|save|attach|commit|put|show|output|forward|add|append|publish|export|collect|gather|return)(?:s|es|ed|ing)?)`;
+const SECRET_FILE_NOUN = String.raw`\.(?:aws|npmrc|netrc|ssh|kube|docker|gnupg)\b|\bkubeconfig|\bid_rsa|\bdot ?env\b|\bdotenv\b|\bkeychain\b|\bservice[- ]account (?:key|json|file)\b|\.pem\b|\bcredentials (?:file|folder|directory)\b`;
+const SECRET_DIR_NAME = String.raw`(?:aws|ssh|kube|docker|gnupg|gpg)`;
 export const INSTRUCTION_RISK_GROUPS = [
   {
     id: "destructive",
-    label: "destructive or privileged commands (recursive delete, force push, sudo, chmod, hard reset, dropping tables, deleting everything)",
-    re: /\brm\s+-[a-z]*[rf]|\bforce[- ]push|\bpush\s+(?:--force|-f)\b|\b(?:sudo|chmod|chown|mkfs)\b|\bgit\s+reset\s+--hard|\bdrop\s+(?:table|database|schema)\b|\bdelete\s+(?:all|every|everything)\b/i,
+    label: "destructive or privileged commands (recursive delete in any flag spelling, force push in any spelling, sudo, chmod, hard reset, dropping tables, deleting everything)",
+    re: new RegExp(
+      String.raw`\brm[ \t]+(?:\S+[ \t]+){0,4}?-{1,2}[a-z-]*[rf]\w*|\bforce[- ]push|\bpush\b${GAP40}(?:--force(?:-with-lease)?|\s-f\b)|\b(?:sudo|chmod|chown|mkfs)\b|\bgit\s+reset\s+--hard|\bdrop\s+(?:table|database|schema)\b|\bdelete\s+(?:all|every|everything)\b`,
+      "i",
+    ),
   },
   {
     id: "exec-net",
-    label: "code execution or network tools (eval, curl, wget, base64, ssh)",
-    re: /\b(?:eval|curl|wget|base64|ssh|scp)\b/i,
+    label: "code execution or network tools (eval, curl, wget, base64)",
+    re: /\b(?:eval|curl|wget|base64)\b/i,
   },
   {
     id: "exfiltration",
-    label: "reading or sending secrets (exfiltrating data, private keys, env files, or printing, posting or pasting tokens, passwords and credentials)",
-    re: new RegExp(`exfiltrat|\\bprivate\\s+key|\\bssh\\s+key|\\benv(?:ironment)?\\s+file|\\.env\\b|\\b${EXFIL_VERB}\\b[^.\n]{0,40}?\\b${SENSITIVE_NOUN}\\b`, "i"),
+    label:
+      "reading or sending secrets (exfiltrating data, private or ssh keys, env files, credential files such as .aws, .npmrc, kubeconfig or id_rsa, the aws, ssh, kube or docker directories, or writing, logging, storing, attaching, committing, showing or posting tokens, passwords, API keys, environment variables and credentials)",
+    re: new RegExp(
+      String.raw`exfiltrat|\bprivate\s+key|\bssh\s+key|\benv(?:ironment)?\s+file|\.env\b|${SECRET_FILE_NOUN}|\b${EXFIL_VERB}\b${GAP40}\b${SECRET_DIR_NAME}\b[^.\n]{0,20}?\b(?:directory|dir|folder|contents)\b|\b${EXFIL_VERB}\b${GAP40}\b${SENSITIVE_NOUN}\b`,
+      "i",
+    ),
   },
   {
     id: "override",
-    label: "overriding instructions (ignore, disregard or forget earlier guidance, bypass, override instructions, the system prompt)",
-    re: /\b(?:ignore|disregard|forget)\b[^.\n]{0,40}?\b(?:previous|prior|above|all|earlier)\b|\bbypass(?:es|ed|ing)?\b|\boverrid\w*\b[^.\n]{0,40}?\binstructions?\b|\bsystem\s+prompt\b/i,
+    label:
+      "overriding instructions or safeguards (ignore, disregard or forget earlier guidance, bypass, override instructions, pretend rules do not apply, the system prompt or message, acting without review, preview, confirmation or approval, skipping, disabling or turning off a scan, check, gate or review, merging, approving, charging, refunding or sending silently, following or running commands found in an issue, page, comment or email, piping into a shell)",
+    re: new RegExp(
+      [
+        String.raw`\b(?:ignore|disregard|forget)\b${GAP40}\b(?:previous|prior|above|all|earlier)\b`,
+        String.raw`\bbypass(?:es|ed|ing)?\b`,
+        String.raw`\boverrid\w*\b${GAP40}\binstructions?\b`,
+        String.raw`\bsystem\s+prompt\b`,
+        String.raw`\breveal the system (?:message|prompt)\b`,
+        String.raw`\bwithout (?:a )?(?:review|preview|confirmation|approval|asking)\b`,
+        String.raw`\bskip the (?:review|preview|confirmation|prompt|check|scan|gate)\b`,
+        String.raw`\bdisable (?:the )?(?:scan|check|gate|review)\b`,
+        String.raw`\bturn off (?:the )?(?:scan|check|gate|review)\b`,
+        String.raw`\b(?:merge|approve|charge|refund|send)\b[^.\n]{0,30}?\b(?:without|silently|automatically|on its own)\b`,
+        String.raw`\b(?:follow|obey|execute)\b[^.\n]{0,30}?(?:instructions?|commands?)\b[^.\n]{0,40}?\b(?:found|given|in|from)\b[^.\n]{0,30}?\b(?:issue|page|response|fetched|downloaded|comment|email)`,
+        String.raw`\brun\b[^.\n]{0,20}?(?:shell )?command[^.\n]{0,30}?(?:given|in) (?:the )?(?:issue|page|comment)`,
+        String.raw`\bpipe\b[^.\n]{0,30}?\binto (?:a )?(?:shell|sh|bash)\b`,
+        String.raw`\bpretend\b${GAP40}\b(?:rules?|instructions?)\b`,
+      ].join("|"),
+      "i",
+    ),
   },
 ] as const;
 
