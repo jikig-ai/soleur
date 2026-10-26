@@ -435,6 +435,34 @@ assert "no unrendered @@DARK_ARM@@ sentinel LINE survives either render" \
 assert "rendered dark arm calls logger via \"\$LOG_TAG\", not an inlined tag literal" \
   "! grep -qE '^[[:space:]]*logger[[:space:]]+-t[[:space:]]+[a-z]' '$DEDICATED_PING'"
 
+# --- #10363: a traced launch of the rendered body exits 78 before any URL expansion --------------
+echo "--- #10363 xtrace refusal: sh -x on the rendered heartbeat body ---"
+for _render in "$WEB_PING" "$DEDICATED_PING"; do
+  XT_LOG="$PING_TMP/logger-xt-$(basename "$_render").txt"; : > "$XT_LOG"
+  XT_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$XT_LOG" \
+    INNGEST_HEARTBEAT_URL='https://uptime.betterstack.test/api/v1/heartbeat/XT_SENTINEL' \
+    sh -x "$_render" 2>&1)" && XT_RC=0 || XT_RC=$?
+  assert "xtrace refusal ($(basename "$_render")): sh -x exits 78 before any expansion" \
+    "[[ '$XT_RC' -eq 78 ]]"
+  assert "xtrace refusal ($(basename "$_render")): refusal text on a non-trace line" \
+    "[[ \$(printf '%s' \"\$XT_OUT\" | grep -v '^+' | grep -c 'refusing to run under xtrace') -ge 1 ]]"
+  assert "xtrace refusal ($(basename "$_render")): the sentinel URL is in neither the output nor the logger sink" \
+    "[[ \$(printf '%s' \"\$XT_OUT\" | grep -c XT_SENTINEL) -eq 0 && \$(grep -c XT_SENTINEL '$XT_LOG' || true) -eq 0 ]]"
+done
+# Positive leak control: a render with the case $- block REMOVED must print the sentinel under
+# sh -x — otherwise the rows above discriminate nothing (a refusal-free SUT would pass them).
+XT_MUT="$PING_TMP/ping-web-noguard.sh"
+sed '/^case \$- in$/,/^esac$/d' "$WEB_PING" > "$XT_MUT"
+assert "xtrace control: the guard-removed render differs from the real one" \
+  "! cmp -s '$WEB_PING' '$XT_MUT'"
+XT_LOG="$PING_TMP/logger-xt-mut.txt"; : > "$XT_LOG"
+XT_MUT_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$XT_LOG" \
+  INNGEST_HEARTBEAT_URL='https://uptime.betterstack.test/api/v1/heartbeat/XT_SENTINEL' \
+  INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" \
+  sh -x "$XT_MUT" 2>&1)" && XT_MUT_RC=0 || XT_MUT_RC=$?
+assert "xtrace control: the guard-free render under sh -x DOES trace the sentinel (the refusal rows can see a leak)" \
+  "[[ \$(printf '%s' \"\$XT_MUT_OUT\" | grep -c XT_SENTINEL) -ge 1 ]]"
+
 # AC5b case 1 -- dedicated render, URL absent: exit 0 + exactly one url_present=no row.
 DED_LOG="$PING_TMP/logger-dedicated-absent.txt"
 DED_ABSENT_OUT=$(run_ping "$DEDICATED_PING" "" "$DED_LOG") && DED_ABSENT_RC=0 || DED_ABSENT_RC=$?
@@ -2401,9 +2429,81 @@ SERVER_UNIT_BLOCK=$(awk '/cat > "\$UNIT_FILE" <</,/^UNITEOF$/' "$BOOTSTRAP_SH")
 # break the eval (same fragility fixed in the heartbeat assert above).
 assert "inngest-server unit block extracted (non-empty)" \
   "[[ -n \"\$SERVER_UNIT_BLOCK\" ]] && [[ \$(printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | wc -l) -ge 5 ]]"
-# AC1: each new flag asserted independently (flag-order-insensitive).
-assert "server ExecStart sets --poll-interval 60" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cE 'inngest start .*--poll-interval 60' >/dev/null"
+
+# --- #11103: the rendered inngest-server-launch.sh (resolve-after-refusal) ----------------------
+# The unit's ExecStart used to wrap `doppler run ... -- bash -c '<expansion>; exec inngest
+# start ...'` — a traced launch printed the resolved credentials to stderr and journald shipped
+# them off-box (vector.toml Source 1 admits inngest-server.service at ANY priority). The fix:
+# the ExecStart expands NOTHING and the rendered /usr/local/bin/inngest-server-launch.sh
+# resolves the credentials AFTER an unconditional xtrace refusal — the #10637/#10363 shape.
+# Named -launch (not -start): `inngest-server-start-REFUSED` is a live phone-home marker string
+# and a substring-colliding name would poison every grep anchor that reads it.
+SERVERLAUNCH_BLOCK=$(awk '/cat > "\$LAUNCH_SCRIPT" <</,/^SERVERLAUNCHEOF$/' "$BOOTSTRAP_SH")
+assert "inngest-server launch-script block extracted (non-empty)" \
+  "[[ -n \"\$SERVERLAUNCH_BLOCK\" ]] && [[ \$(printf '%s\n' \"\$SERVERLAUNCH_BLOCK\" | wc -l) -ge 5 ]]"
+SERVERLAUNCH_BODY=$(printf '%s\n' "$SERVERLAUNCH_BLOCK" | sed '1d;$d')
+# First EXECUTABLE statement (skipping shebang/comment/blank) must be the unconditional refusal —
+# an expansion ABOVE it would trace before the guard can fire.
+SL_FIRST_EXEC=$(printf '%s\n' "$SERVERLAUNCH_BODY" | grep -vE '^#!|^[[:space:]]*(#|$)' | sed -n '1p' || true)
+assert "launch script's FIRST executable statement is the unconditional \`case \$- in\` xtrace refusal" \
+  "[[ \"\$SL_FIRST_EXEC\" == 'case \$- in' ]]"
+_sl_ln() { printf '%s\n' "$SERVERLAUNCH_BODY" | grep -nF "$1" | sed -n '1p' | cut -d: -f1 || true; }
+SL_CASE_LN=$(_sl_ln 'case $- in'); SL_SETU_LN=$(_sl_ln 'set -u')
+SL_SIGN_LN=$(_sl_ln 'export INNGEST_SIGNING_KEY="${INNGEST_SIGNING_KEY#signkey-prod-}"')
+SL_ENV_LN=$(_sl_ln '@@BACKEND_ENV@@'); SL_EXEC_LN=$(_sl_ln 'exec /usr/local/bin/inngest start')
+assert "launch script order: refusal < set -u < signing-key strip < @@BACKEND_ENV@@ < exec (AC4)" \
+  "[[ -n '$SL_CASE_LN' && -n '$SL_SETU_LN' && -n '$SL_SIGN_LN' && -n '$SL_ENV_LN' && -n '$SL_EXEC_LN' && '$SL_CASE_LN' -lt '$SL_SETU_LN' && '$SL_SETU_LN' -lt '$SL_SIGN_LN' && '$SL_SIGN_LN' -lt '$SL_ENV_LN' && '$SL_ENV_LN' -lt '$SL_EXEC_LN' ]]"
+# Reconcile-always + executable: the write sits OUTSIDE the SKIP_BINARY_INSTALL guard (same
+# masking class as the unit write) and the bootstrap chmods it 0755.
+SL_GUARD_CLOSE_LN=$(grep -nE '^fi  # end SKIP_BINARY_INSTALL guard' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+SL_WRITE_LN=$(grep -nE 'cat > "\$LAUNCH_SCRIPT" <<' "$BOOTSTRAP_SH" | sed -n '1p' | cut -d: -f1 || true)
+assert "launch script write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-always)" \
+  "[[ -n '$SL_GUARD_CLOSE_LN' && -n '$SL_WRITE_LN' && '$SL_GUARD_CLOSE_LN' -lt '$SL_WRITE_LN' ]]"
+assert "launch script is chmod 0755 by the bootstrap" \
+  "grep -qF 'chmod 0755 \"\$LAUNCH_SCRIPT\"' \"$BOOTSTRAP_SH\""
+
+# Traced-launch replay: the REAL heredoc body, rendered with the durable BACKEND_ENV fragment
+# (the bootstrap's own substitution shape). Four vectors — `sh -x`, `bash -x`, SHELLOPTS=xtrace,
+# a BASH_ENV `set -x` — each must exit 78 with the refusal on a NON-trace line and neither
+# credential sentinel in the output.
+SL_RENDER="$PING_TMP/inngest-server-launch.sh"
+printf '%s\n' "$SERVERLAUNCH_BODY" | sed 's|@@BACKEND_ENV@@|export INNGEST_REDIS_URI="redis://:${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; |' > "$SL_RENDER"
+assert "launch render carries no @@BACKEND_ENV@@ sentinel post-substitution" \
+  "! grep -c '@@BACKEND_ENV@@' '$SL_RENDER' >/dev/null"
+# A .sh file is not a systemd unit: `$$` there is the PID, not a literal-$ escape — the
+# single-\$ respell of the durable fragment and the signing-key strip is load-bearing.
+assert "launch script carries no \$\$ anywhere (single-\$ spellings only — \$\$ in a .sh is the PID)" \
+  "! grep -cF '\$\$' '$SL_RENDER' >/dev/null"
+printf 'set -x\n' > "$PING_TMP/sl-xt.env"
+for _slform in sh-x bash-x shelopts benv; do
+  case "$_slform" in
+    sh-x)     SL_OUT="$(env INNGEST_SIGNING_KEY='signkey-prod-XT_SIGNKEY_SENTINEL' INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' sh -x "$SL_RENDER" 2>&1)" && SL_RC=0 || SL_RC=$? ;;
+    bash-x)   SL_OUT="$(env INNGEST_SIGNING_KEY='signkey-prod-XT_SIGNKEY_SENTINEL' INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' bash -x "$SL_RENDER" 2>&1)" && SL_RC=0 || SL_RC=$? ;;
+    shelopts) SL_OUT="$(env SHELLOPTS=xtrace INNGEST_SIGNING_KEY='signkey-prod-XT_SIGNKEY_SENTINEL' INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' bash "$SL_RENDER" 2>&1)" && SL_RC=0 || SL_RC=$? ;;
+    benv)     SL_OUT="$(env BASH_ENV="$PING_TMP/sl-xt.env" INNGEST_SIGNING_KEY='signkey-prod-XT_SIGNKEY_SENTINEL' INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' bash "$SL_RENDER" 2>&1)" && SL_RC=0 || SL_RC=$? ;;
+  esac
+  assert "launch xtrace refusal [$_slform]: exits 78 before any expansion" \
+    "[[ '$SL_RC' -eq 78 ]]"
+  assert "launch xtrace refusal [$_slform]: refusal text on a non-trace line" \
+    "[[ \$(printf '%s' \"\$SL_OUT\" | grep -v '^+' | grep -c 'refusing to run under xtrace') -ge 1 ]]"
+  assert "launch xtrace refusal [$_slform]: neither credential sentinel reaches the output" \
+    "[[ \$(printf '%s' \"\$SL_OUT\" | grep -cE 'XT_(SIGNKEY|REDPW)_SENTINEL') -eq 0 ]]"
+done
+# Positive leak control: a render with the `case $-` block REMOVED must trace the sentinel and
+# reach the exec — otherwise the rows above discriminate nothing (a refusal-free SUT passes them).
+SL_MUT="$PING_TMP/inngest-server-launch-noguard.sh"
+sed '/^case \$- in$/,/^esac$/d' "$SL_RENDER" > "$SL_MUT"
+assert "launch xtrace control: the guard-removed render differs from the real one" \
+  "! cmp -s '$SL_RENDER' '$SL_MUT'"
+SL_MUT_OUT="$(env INNGEST_SIGNING_KEY='signkey-prod-XT_SIGNKEY_SENTINEL' INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' bash -x "$SL_MUT" 2>&1)" && SL_MUT_RC=0 || SL_MUT_RC=$?
+assert "launch xtrace control: the guard-free render DOES trace the sentinel and reaches the exec" \
+  "[[ \$(printf '%s' \"\$SL_MUT_OUT\" | grep -cE 'XT_(SIGNKEY|REDPW)_SENTINEL') -ge 1 && \$(printf '%s' \"\$SL_MUT_OUT\" | grep -c 'exec /usr/local/bin/inngest') -ge 1 ]]"
+
+# AC1: each new flag asserted independently (flag-order-insensitive). The flag tail stays on the
+# unit's argv (the @@BACKEND_FLAGS@@ sentinel consumers read `systemctl show -p ExecStart`);
+# `inngest start` itself moved into the launch script.
+assert "server ExecStart sets --poll-interval 60 (on the unit; inngest start moved to the launch script)" \
+  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cE 'ExecStart=.*--poll-interval 60' >/dev/null && printf '%s\n' \"\$SERVERLAUNCH_BLOCK\" | grep -cF 'exec /usr/local/bin/inngest start' >/dev/null"
 # #6178: --sdk-url is now TEMPLATED (@@SDK_URL@@ sentinel, same bash-param-expansion
 # mechanism as @@BACKEND_*@@) so the dedicated inngest host can point at a remote web
 # backend's private interface. The heredoc carries the sentinel; a substitution strips
@@ -2426,14 +2526,16 @@ assert "no @@DOPPLER_PROJECT@@ substitution mechanism remains in bootstrap (#655
   "! grep -qF '//@@DOPPLER_PROJECT@@/' \"\$BOOTSTRAP_SH\""
 assert "DOPPLER_PROJECT default PRESERVES 'soleur' for the co-located web host (regression guard, #6178)" \
   "grep -qF 'DOPPLER_PROJECT=\"\${DOPPLER_PROJECT:-soleur}\"' \"\$BOOTSTRAP_SH\""
-# Regression guard: the signing-key strip survives the edit as an ENV export (#5560 —
-# inngest reads INNGEST_SIGNING_KEY from env; the `signkey-prod-` strip is preserved so
-# the self-hosted server gets the bare hex). The systemd `$$` escape must not be
-# accidentally unescaped (Sharp Edge). INNGEST_EVENT_KEY is no longer on the ExecStart
-# at all (read from the doppler env by name) — asserted absent by the #5560 security
-# invariant below.
-assert "server ExecStart re-exports the stripped signing-key (env-delivered, #5560)" \
-  "printf '%s\n' \"\$SERVER_UNIT_BLOCK\" | grep -cF 'export INNGEST_SIGNING_KEY=\"\$\${INNGEST_SIGNING_KEY#signkey-prod-}\"' >/dev/null"
+# Regression guard: the signing-key strip survives the #11103 move as an ENV export
+# (#5560 — inngest reads INNGEST_SIGNING_KEY from env; the `signkey-prod-` strip is
+# preserved so the self-hosted server gets the bare hex). It moved from the unit's
+# inner `bash -c` into the launch script, single-\$-respelled (a .sh is not a unit:
+# `\$\$` there is the PID, not a systemd escape), and it sits AFTER the unconditional
+# xtrace refusal so a traced launch exits before it evaluates. INNGEST_EVENT_KEY is
+# still not on the ExecStart at all (read from the doppler env by name) — asserted
+# absent by the #5560 security invariant below.
+assert "launch script re-exports the stripped signing-key (env-delivered, single-\$, #5560/#11103)" \
+  "printf '%s\n' \"\$SERVERLAUNCH_BLOCK\" | grep -cF 'export INNGEST_SIGNING_KEY=\"\${INNGEST_SIGNING_KEY#signkey-prod-}\"' >/dev/null"
 # --- #5547 Gap 2: REDIS_READY-gated durable/SQLite-fail-safe ExecStart ---
 # The durable backend flags (#5450) moved OUT of the single-quoted server-unit
 # heredoc into a REDIS_READY-gated BACKEND_FLAGS fragment that is substituted
@@ -2462,22 +2564,26 @@ else
   echo "  FAIL: ordering env-file($ENV_FILE_LINE) < REDIS_READY($REDIS_READY_LINE) < server-cat($SERVER_CAT_LINE) (#5547 AC2)"
 fi
 
-# AC3 — the heredoc carries BOTH the @@BACKEND_ENV@@ and @@BACKEND_FLAGS@@ sentinels
-# on the inngest start line, --sqlite-dir /var/lib/inngest is in the SHARED prefix
-# (present in BOTH branches), and a (non-sed) substitution strips each sentinel so
-# none survives in the written unit (#5547 AC3 + #5560 env-delivery).
-ENV_SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE '@@BACKEND_ENV@@exec /usr/local/bin/inngest start' || true)
-FLAGS_SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE 'inngest start .*@@BACKEND_FLAGS@@' || true)
-SQLITE_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cF -- '--sqlite-dir /var/lib/inngest' || true)
+# AC3 — #11103 re-anchored: the @@BACKEND_ENV@@ sentinel now lives in the LAUNCH
+# SCRIPT (before its exec, where the env exports must run), @@BACKEND_FLAGS@@ stays
+# on the unit's ExecStart argv (the durable-detection sentinel's four consumers
+# read `systemctl show -p ExecStart`), --sqlite-dir /var/lib/inngest is in the
+# launch script's SHARED prefix (present in BOTH branches), and a (non-sed)
+# substitution strips each sentinel so none survives in the written artifacts
+# (#5547 AC3 + #5560 env-delivery + #11103 resolve-after-refusal).
+ENV_SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVERLAUNCH_BLOCK" | grep -cF '@@BACKEND_ENV@@' || true)
+LAUNCH_EXEC_IN_HEREDOC=$(printf '%s\n' "$SERVERLAUNCH_BLOCK" | grep -cF 'exec /usr/local/bin/inngest start' || true)
+FLAGS_SENTINEL_IN_HEREDOC=$(printf '%s\n' "$SERVER_UNIT_BLOCK" | grep -cE 'ExecStart=.*@@BACKEND_FLAGS@@' || true)
+SQLITE_IN_HEREDOC=$(printf '%s\n' "$SERVERLAUNCH_BLOCK" | grep -cF -- '--sqlite-dir /var/lib/inngest' || true)
 ENV_SUBST=$(grep -cE '@@BACKEND_ENV@@/' "$BOOTSTRAP_SH" || true)
 FLAGS_SUBST=$(grep -cE '@@BACKEND_FLAGS@@/' "$BOOTSTRAP_SH" || true)
 TOTAL=$((TOTAL + 1))
-if [[ "$ENV_SENTINEL_IN_HEREDOC" -ge 1 && "$FLAGS_SENTINEL_IN_HEREDOC" -ge 1 && "$SQLITE_IN_HEREDOC" -ge 1 && "$ENV_SUBST" -ge 1 && "$FLAGS_SUBST" -ge 1 ]]; then
+if [[ "$ENV_SENTINEL_IN_HEREDOC" -ge 1 && "$LAUNCH_EXEC_IN_HEREDOC" -ge 1 && "$FLAGS_SENTINEL_IN_HEREDOC" -ge 1 && "$SQLITE_IN_HEREDOC" -ge 1 && "$ENV_SUBST" -ge 1 && "$FLAGS_SUBST" -ge 1 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: heredoc carries @@BACKEND_ENV@@ + @@BACKEND_FLAGS@@ sentinels + --sqlite-dir shared prefix; both substitutions strip them (#5547 AC3 / #5560)"
+  echo "  PASS: launch script carries @@BACKEND_ENV@@ before its exec + --sqlite-dir shared prefix; unit argv carries @@BACKEND_FLAGS@@; both substitutions strip them (#5547 AC3 / #5560 / #11103)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: AC3 (env_sentinel=$ENV_SENTINEL_IN_HEREDOC flags_sentinel=$FLAGS_SENTINEL_IN_HEREDOC sqlite_shared=$SQLITE_IN_HEREDOC env_subst=$ENV_SUBST flags_subst=$FLAGS_SUBST)"
+  echo "  FAIL: AC3 (env_sentinel=$ENV_SENTINEL_IN_HEREDOC launch_exec=$LAUNCH_EXEC_IN_HEREDOC flags_sentinel=$FLAGS_SENTINEL_IN_HEREDOC sqlite_shared=$SQLITE_IN_HEREDOC env_subst=$ENV_SUBST flags_subst=$FLAGS_SUBST)"
 fi
 
 # Durable env + flags (#5450/#5560 build-time guard, reconciled to the env-delivery
@@ -2518,35 +2624,43 @@ else
   echo "  FAIL: durable BACKEND_FLAGS must be '--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1' (sentinel first) (#6258 AC1) — got: $DURABLE_FLAGS_FULL"
 fi
 
-# AC4 — the durable env fragment preserves the LITERAL $${INNGEST_REDIS_PASSWORD}
-# Doppler token, and the ExecStart re-exports the stripped $${INNGEST_SIGNING_KEY}
-# (systemd unescapes $$→$, then bash -c expands the doppler-injected env). grep -F
-# single-quoted so the $$ is matched literally (never the shell PID). #5560: the
-# postgres URI + event key are read from the env by name with NO bootstrap token.
+# AC4 — #11103 re-anchored: the durable env fragment preserves the LITERAL
+# ${INNGEST_REDIS_PASSWORD} expansion in SINGLE-$ spelling (the fragment now lands
+# in a .sh, where $$ is the PID, not a systemd escape), and the launch script
+# re-exports the stripped ${INNGEST_SIGNING_KEY} — both AFTER its unconditional
+# xtrace refusal. grep -F single-quoted so $ is matched literally. The absence of
+# `$$` is asserted too: a leftover systemd-escaped spelling would expand as the
+# PID in the script, silently losing the credential. #5560: the postgres URI +
+# event key are read from the env by name with NO bootstrap token.
 EXECSTART_LINE=$(grep -E '^ExecStart=.*doppler run' "$BOOTSTRAP_SH" | sed -n '1p' || true)
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$DURABLE_ENV" | grep -cF '$${INNGEST_REDIS_PASSWORD}' >/dev/null \
-   && printf '%s\n' "$EXECSTART_LINE" | grep -cF '$${INNGEST_SIGNING_KEY#signkey-prod-}' >/dev/null; then
+if printf '%s\n' "$DURABLE_ENV" | grep -cF '${INNGEST_REDIS_PASSWORD}' >/dev/null \
+   && ! printf '%s\n' "$DURABLE_ENV" | grep -cF '$$' >/dev/null \
+   && printf '%s\n' "$SERVERLAUNCH_BLOCK" | grep -cF '${INNGEST_SIGNING_KEY#signkey-prod-}' >/dev/null \
+   && ! printf '%s\n' "$SERVERLAUNCH_BLOCK" | grep -cF '$$' >/dev/null; then
   PASS=$((PASS + 1))
-  echo "  PASS: durable env preserves literal \$\${INNGEST_REDIS_PASSWORD}; ExecStart re-exports stripped \$\${INNGEST_SIGNING_KEY} (#5560 AC4)"
+  echo "  PASS: durable env preserves literal \${INNGEST_REDIS_PASSWORD}; launch script re-exports stripped \${INNGEST_SIGNING_KEY} — both single-\$ (#5560 AC4 / #11103)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: must preserve literal \$\${INNGEST_REDIS_PASSWORD} (env: $DURABLE_ENV) + \$\${INNGEST_SIGNING_KEY} re-export (execstart: $EXECSTART_LINE)"
+  echo "  FAIL: must preserve literal \${INNGEST_REDIS_PASSWORD} single-\$ (env: $DURABLE_ENV) + \${INNGEST_SIGNING_KEY} re-export in the launch script (block: $SERVERLAUNCH_BLOCK)"
 fi
 
 # #5560 SECURITY INVARIANT (negative): the ExecStart template carries NO secret on
 # argv — no --signing-key/--event-key flags, and no --postgres-uri/--redis-uri flags
-# (those are env-delivered). The only $${...} on the ExecStart line is the signing-key
-# re-export (an env export, not an argv flag).
+# (those are env-delivered). #11103 strengthens it: the ExecStart now expands
+# NOTHING at all — no bash -c, no $ of any spelling — and `exec` lives in the
+# launch script after its xtrace refusal.
 TOTAL=$((TOTAL + 1))
-if printf '%s\n' "$EXECSTART_LINE" | grep -cF 'exec /usr/local/bin/inngest start' >/dev/null \
+if printf '%s\n' "$SERVERLAUNCH_BLOCK" | grep -cF 'exec /usr/local/bin/inngest start' >/dev/null \
+   && printf '%s\n' "$EXECSTART_LINE" | grep -cF '/usr/local/bin/inngest-server-launch.sh' >/dev/null \
    && ! printf '%s\n' "$EXECSTART_LINE" | grep -cE -- >/dev/null '--signing-key|--event-key' \
-   && ! printf '%s\n' "$EXECSTART_LINE" | grep -cE -- >/dev/null '--(postgres|redis)-uri'; then
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -cE -- >/dev/null '--(postgres|redis)-uri' \
+   && ! printf '%s\n' "$EXECSTART_LINE" | grep -cE 'bash -c|\$' >/dev/null; then
   PASS=$((PASS + 1))
-  echo "  PASS: ExecStart passes NO secret on argv (no --signing-key/--event-key/--postgres-uri/--redis-uri); uses exec (#5560 security invariant)"
+  echo "  PASS: ExecStart expands NOTHING and passes no secret on argv — it launches the resolve-after-refusal script (no bash -c, no \$, no --signing-key/--event-key/--postgres-uri/--redis-uri) (#5560 / #11103)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: ExecStart must carry no secret flags + use exec (line: $EXECSTART_LINE)"
+  echo "  FAIL: ExecStart must name the launch script with no expansion and no secret flags (line: $EXECSTART_LINE)"
 fi
 
 # SQLite-only fail-safe: an EMPTY BACKEND_FLAGS + an `unset INNGEST_POSTGRES_URI`
@@ -2634,19 +2748,90 @@ assert "redis.conf bounds maxmemory"      "grep -qE '^maxmemory [0-9]' '$REDIS_C
 assert "redis.conf bounds AOF rewrite"    "grep -qE '^auto-aof-rewrite-percentage' '$REDIS_CONF' && grep -qE '^auto-aof-rewrite-min-size' '$REDIS_CONF'"
 assert "redis.conf dir on /mnt/data"      "grep -qE '^dir /mnt/data/redis' '$REDIS_CONF'"
 assert "redis.conf loopback bind"         "grep -qE '^bind 127.0.0.1' '$REDIS_CONF'"
-# The unit MUST pin to the persistent mount (architecture P1-2) + inject the
-# password via doppler (never a literal in the file).
+# The unit MUST pin to the persistent mount (architecture P1-2) + deliver the
+# password via the aclfile writer (never a literal in the file, never on argv,
+# never expanded inside a bash -c — #11103).
 assert "redis.service RequiresMountsFor=/mnt/data" "grep -qE '^RequiresMountsFor=/mnt/data' '$REDIS_SERVICE'"
-assert "redis.service requirepass injected from Doppler" "grep -qF 'requirepass \"\$INNGEST_REDIS_PASSWORD\"' '$REDIS_SERVICE'"
-# #6555: the redis.service ExecStart dropped `--project` — it resolves the Doppler project from
+assert "redis.service ExecStart is plain redis-server on the conf (no doppler run, no bash -c, no expansion)" \
+  "grep -qxF 'ExecStart=/usr/bin/redis-server /mnt/data/redis/inngest-redis.conf' '$REDIS_SERVICE' && ! grep -qE '^ExecStart=.*(bash -c|\\\$)' '$REDIS_SERVICE'"
+assert "redis.service delivers the password via an --only-secrets-bounded acl-writer ExecStartPre (#11103)" \
+  "grep -qxF 'ExecStartPre=/usr/bin/doppler run --config \${DOPPLER_CONFIG} --only-secrets INNGEST_REDIS_PASSWORD -- /usr/local/bin/inngest-redis-acl.sh' '$REDIS_SERVICE'"
+# Ordering is load-bearing: the acl writer runs AFTER the mount-guard so the acl
+# file lands on the proven /mnt/data mount (never the ephemeral root disk).
+REDIS_GUARD_LN=$(grep -nE '^ExecStartPre=/usr/local/bin/inngest-redis-mount-guard\.sh' "$REDIS_SERVICE" | sed -n '1p' | cut -d: -f1 || true)
+REDIS_ACL_LN=$(grep -nE '^ExecStartPre=/usr/bin/doppler run .*inngest-redis-acl\.sh' "$REDIS_SERVICE" | sed -n '1p' | cut -d: -f1 || true)
+assert "redis.service acl-writer ExecStartPre runs AFTER the mount-guard ExecStartPre" \
+  "[[ -n '$REDIS_GUARD_LN' && -n '$REDIS_ACL_LN' && '$REDIS_GUARD_LN' -lt '$REDIS_ACL_LN' ]]"
+assert "redis.conf declares the aclfile (the conf carries no requirepass/user)" \
+  "grep -qxF 'aclfile /mnt/data/redis/inngest-redis.acl' '$REDIS_CONF' && ! grep -qE '^(requirepass|user)[[:space:]]' '$REDIS_CONF'"
+# #6555: the redis.service ExecStartPre dropped `--project` — it resolves the Doppler project from
 # EnvironmentFile=/etc/default/inngest-server (DOPPLER_PROJECT) at runtime. The bootstrap installs
 # the unit verbatim (no @@DOPPLER_PROJECT@@ substitution round-trip).
 assert "redis.service runs under doppler run --config \${DOPPLER_CONFIG} with NO --project (#6555/#9175)" \
-  "grep -qF 'doppler run --config \${DOPPLER_CONFIG}' '$REDIS_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$REDIS_SERVICE'"
+  "grep -qF 'doppler run --config \${DOPPLER_CONFIG}' '$REDIS_SERVICE' && ! grep -qE '^Exec(Start|StartPre|StartPost)=.*--project' '$REDIS_SERVICE'"
 assert "redis.service reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
   "grep -qxF 'EnvironmentFile=/etc/default/inngest-server' '$REDIS_SERVICE'"
 assert "inngest-redis-bootstrap.sh no longer renders a @@DOPPLER_PROJECT@@ substitution (#6555)" \
   "! grep -qF '//@@DOPPLER_PROJECT@@/' '$SCRIPT_DIR/inngest-redis-bootstrap.sh'"
+
+# --- #11103: the acl writer (ACLEOF heredoc in inngest-redis-bootstrap.sh) ----------------------
+# Site-1's delivery half: the unit's second ExecStartPre runs this script under
+# `doppler run --only-secrets INNGEST_REDIS_PASSWORD`; it refuses unconditionally under xtrace,
+# validates the password (non-empty, no whitespace/quote/backslash/control bytes — anything the
+# aclfile grammar could not carry literally), and atomically writes the 0600 aclfile.
+ACL_BLOCK=$(awk '/inngest-redis-acl\.sh <<.ACLEOF./,/^ACLEOF$/' "$REDIS_BOOTSTRAP")
+assert "acl-writer ACLEOF block extracted from inngest-redis-bootstrap.sh (non-empty)" \
+  "[[ -n \"\$ACL_BLOCK\" ]] && [[ \$(printf '%s\n' \"\$ACL_BLOCK\" | wc -l) -ge 5 ]]"
+assert "acl writer is installed 0755 via /dev/stdin (the mount-guard precedent, reconcile-always)" \
+  "grep -qF 'install -m 0755 /dev/stdin /usr/local/bin/inngest-redis-acl.sh' '$REDIS_BOOTSTRAP'"
+# #11172: the writer's default path and the conf's aclfile directive are ONE wire — a drift
+# either way fails loud at runtime but stays green here (every replay row uses the override).
+ACL_DEFAULT_PATH=$(printf '%s\n' "$ACL_BLOCK" | sed -n 's/.*INNGEST_REDIS_ACL_FILE:-\([^}]*\)}.*/\1/p' | sed -n '1p')
+assert "acl writer's default ACL_FILE equals the conf's declared aclfile path (#11172)" \
+  "[[ \"\$ACL_DEFAULT_PATH\" == '/mnt/data/redis/inngest-redis.acl' ]]"
+ACL_BODY=$(printf '%s\n' "$ACL_BLOCK" | sed '1d;$d')
+ACL_FIRST_EXEC=$(printf '%s\n' "$ACL_BODY" | grep -vE '^#!|^[[:space:]]*(#|$)' | sed -n '1p' || true)
+assert "acl writer's FIRST executable statement is the unconditional \`case \$- in\` xtrace refusal" \
+  "[[ \"\$ACL_FIRST_EXEC\" == 'case \$- in' ]]"
+ACL_SUT="$PING_TMP/inngest-redis-acl.sh"
+printf '%s\n' "$ACL_BODY" > "$ACL_SUT"; chmod +x "$ACL_SUT"
+ACL_XT_OUT="$(env INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' INNGEST_REDIS_ACL_FILE="$PING_TMP/acl-xt/inngest-redis.acl" sh -x "$ACL_SUT" 2>&1)" && ACL_XT_RC=0 || ACL_XT_RC=$?
+assert "acl writer under sh -x exits 78 before any expansion" \
+  "[[ '$ACL_XT_RC' -eq 78 ]]"
+assert "acl writer under sh -x: refusal text on a non-trace line" \
+  "[[ \$(printf '%s' \"\$ACL_XT_OUT\" | grep -v '^+' | grep -c 'refusing to run under xtrace') -ge 1 ]]"
+assert "acl writer under sh -x never prints the password sentinel" \
+  "[[ \$(printf '%s' \"\$ACL_XT_OUT\" | grep -c 'XT_REDPW_SENTINEL') -eq 0 ]]"
+# Validation rows: an empty/unset or malformed password must fail LOUD (the unit's
+# designed-loud posture) and must NOT write the file.
+mkdir -p "$PING_TMP/acl-out"
+ACL_TARGET="$PING_TMP/acl-out/inngest-redis.acl"
+ACL_BAD_RC=0; env -u INNGEST_REDIS_PASSWORD INNGEST_REDIS_ACL_FILE="$ACL_TARGET" sh "$ACL_SUT" >/dev/null 2>&1 || ACL_BAD_RC=$?
+assert "acl writer refuses an UNSET password (non-zero, no file write)" \
+  "[[ '$ACL_BAD_RC' -ne 0 && ! -e '$ACL_TARGET' ]]"
+ACL_BAD_RC=0; env INNGEST_REDIS_PASSWORD='' INNGEST_REDIS_ACL_FILE="$ACL_TARGET" sh "$ACL_SUT" >/dev/null 2>&1 || ACL_BAD_RC=$?
+assert "acl writer refuses an EMPTY password (non-zero, no file write)" \
+  "[[ '$ACL_BAD_RC' -ne 0 && ! -e '$ACL_TARGET' ]]"
+ACL_BAD_RC=0; env INNGEST_REDIS_PASSWORD='bad pw' INNGEST_REDIS_ACL_FILE="$ACL_TARGET" sh "$ACL_SUT" >/dev/null 2>&1 || ACL_BAD_RC=$?
+assert "acl writer refuses a whitespace-bearing password (non-zero, no file write)" \
+  "[[ '$ACL_BAD_RC' -ne 0 && ! -e '$ACL_TARGET' ]]"
+ACL_BAD_RC=0; env INNGEST_REDIS_PASSWORD='bad"pw' INNGEST_REDIS_ACL_FILE="$ACL_TARGET" sh "$ACL_SUT" >/dev/null 2>&1 || ACL_BAD_RC=$?
+assert "acl writer refuses a quote-bearing password (non-zero, no file write)" \
+  "[[ '$ACL_BAD_RC' -ne 0 && ! -e '$ACL_TARGET' ]]"
+# The green path: a valid password lands the exact ACL rule atomically at 0600.
+ACL_OK_RC=0; env INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' INNGEST_REDIS_ACL_FILE="$ACL_TARGET" sh "$ACL_SUT" >/dev/null 2>&1 || ACL_OK_RC=$?
+ACL_EXPECT_HASH="$(printf '%s' 'XT_REDPW_SENTINEL' | sha256sum | cut -d' ' -f1)"
+assert "acl writer writes 'user default on #<sha256> ~* &* +@all' atomically at 0600 (cleartext never at rest)" \
+  "[[ '$ACL_OK_RC' -eq 0 && \$(cat '$ACL_TARGET' 2>/dev/null) == 'user default on #${ACL_EXPECT_HASH} ~* &* +@all' && \$(stat -c %a '$ACL_TARGET' 2>/dev/null) == '600' && \$(grep -cF 'XT_REDPW_SENTINEL' '$ACL_TARGET' 2>/dev/null || true) -eq 0 ]]"
+# Positive control: the refusal is what gates the write — a guard-removed copy under -x must
+# trace the sentinel AND reach the write.
+ACL_MUT="$PING_TMP/inngest-redis-acl-noguard.sh"
+sed '/^case \$- in$/,/^esac$/d' "$ACL_SUT" > "$ACL_MUT"
+rm -f "$ACL_TARGET"
+ACL_MUT_OUT="$(env INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' INNGEST_REDIS_ACL_FILE="$ACL_TARGET" sh -x "$ACL_MUT" 2>&1)" && ACL_MUT_RC=0 || ACL_MUT_RC=$?
+assert "acl writer xtrace control: the guard-removed copy under -x DOES trace the sentinel and writes" \
+  "[[ \$(printf '%s' \"\$ACL_MUT_OUT\" | grep -c 'XT_REDPW_SENTINEL') -ge 1 && -e '$ACL_TARGET' ]]"
+
 # #5450 F1 regression guard: the conf MUST live under /mnt/data/redis, NOT
 # /etc/redis — on the existing-host deploy the bootstrap runs inside
 # webhook.service's ProtectSystem=strict namespace where /etc is read-only and
@@ -2788,9 +2973,8 @@ echo "--- #9175: Doppler --config census on the inngest dedicated-host boot path
 # site cannot slip in unlisted either).
 # The heartbeat's curl `--config - >/dev/null` (#9757) is curl's stdin config, not a Doppler config name: excluded by its exact shape.
 DOPPLER_CFG_SITES="$(for _f in "$CLOUD_INIT_INNGEST" "$BOOTSTRAP_SH" \
-    "$SCRIPT_DIR/inngest-cutover-flip.sh" "$SCRIPT_DIR/inngest-luks-cutover.sh" \
-    "$SCRIPT_DIR/inngest-redis.service" "$CUTOVER_FLIP_SERVICE" \
-    "$SCRIPT_DIR/inngest-luks-cutover.service"; do
+    "$SCRIPT_DIR/inngest-cutover-flip.sh" \
+    "$SCRIPT_DIR/inngest-redis.service" "$CUTOVER_FLIP_SERVICE"; do
     grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#' \
       | grep -vE -- '/usr/bin/curl .* --config - >/dev/null$'
   done)"
@@ -2800,8 +2984,10 @@ DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inng
 # --project soleur-inngest --config ${inngest_doppler_config}` (the templatefile-var form,
 # the same shape every sibling site carries so the rehearsal render swaps prd ->
 # rehearsal_<runid>).
-assert "inngest boot-path --config census is exactly 20 sites (unlisted site -> RED, #9175)" \
-  "[[ '$DCFG_N' == '20' ]]"
+# 20 -> 16: #10112 retired the LUKS cutover trio (inngest-luks-cutover.sh carried three sites,
+# inngest-luks-cutover.service one).
+assert "inngest boot-path --config census is exactly 16 sites (unlisted site -> RED, #9175)" \
+  "[[ '$DCFG_N' == '16' ]]"
 assert "every boot-path --config site resolves through a parameterization (no literal config name, #9175)" \
   "[[ -z \"\$DCFG_BAD\" ]]"
 
@@ -2843,9 +3029,10 @@ echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep 
 #     apply. push-infra-config.sh targets deploy.${APP_DOMAIN_BASE} (web-1) only, so the
 #     web-host credential never reaches that host and a drop-in there would be inert at best
 #     and wrong-project at worst.
-#   inngest-luks-cutover.service (#6894) — the same dedicated-host delivery and the same primary
-#     credential as the flip unit above, for the same reasons; a drop-in would be inert there.
-DROPIN_ACK_UNITS=("inngest-cutover-flip.service" "inngest-luks-cutover.service")
+#   (inngest-luks-cutover.service, #6894, was the second entry; the unit is retired from the image
+#   with the rest of the cutover trio, #10112, so its ack is gone with it. A later dedicated-host
+#   unit that reads the same primary credential re-grows this list deliberately, with its reason.)
+DROPIN_ACK_UNITS=("inngest-cutover-flip.service")
 
 lockstep_examined=0
 LOCKSTEP_EXAMINED_UNITS=""
@@ -2861,8 +3048,11 @@ for unit_path in "$SCRIPT_DIR"/*.service; do
 
   # Selector (a): reads the pinned copy as a REQUIRED file (no '-' prefix).
   grep -qE '^EnvironmentFile=/etc/default/inngest-server$' "$unit_path" || continue
-  # Selector (b): ExecStart invokes doppler DIRECTLY (not behind a token-presence test).
-  grep -qE '^ExecStart=[^ ]*/doppler run ' "$unit_path" || continue
+  # Selector (b): an Exec directive invokes doppler DIRECTLY (not behind a token-presence
+  # test). The hazard is the unconditional call, not the directive slot — #11103 moved
+  # inngest-redis.service's `doppler run` into an ExecStartPre (the acl writer), and an
+  # ExecStartPre refusal crash-loops the unit exactly like an ExecStart one.
+  grep -qE '^Exec(Start|StartPre|StartPost)=[^ ]*/doppler run ' "$unit_path" || continue
   # Selector (c): and has no live-credential source of its own.
   if grep -qE '^EnvironmentFile=-?/etc/default/soleur-doppler-token$' "$unit_path"; then continue; fi
 
@@ -2957,26 +3147,20 @@ assert "lockstep invariant examined inngest-redis.service specifically" \
   "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -cF 'inngest-redis.service' >/dev/null"
 # The ack list is the guard's only escape hatch, and prose ("an unexplained skip is how a ratchet
 # stops ratcheting") does not enforce itself. Growing it must be a deliberate, visible edit.
-# Grown 1 -> 2 by #6894 (inngest-luks-cutover.service, reason recorded at the list). The members
-# are pinned by NAME too: a count alone would let a swap of one acked unit for a web-host unit pass.
-assert "ack list holds exactly 2 entries (a silent third ack cannot open a hole)" \
-  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 2 ]]"
-assert "ack list members are exactly the two dedicated-host units" \
-  "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service inngest-luks-cutover.service' ]]"
+# Grown 1 -> 2 by #6894, back to 1 by #10112 (the cutover unit was retired; reason recorded at the
+# list). The member is pinned by NAME too: a count alone would let a swap of the acked unit for a
+# web-host unit pass.
+assert "ack list holds exactly 1 entry (a silent second ack cannot open a hole)" \
+  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 1 ]]"
+assert "ack list member is exactly the dedicated-host flip unit" \
+  "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service' ]]"
 
 echo ""
-echo "--- #9939: ConditionPathExists skip-vs-fail on the LUKS cutover trio ---"
+echo "--- #9939: section helpers for the ConditionPathExists skip-vs-fail pins ---"
 #
-# Every EnvironmentFile= a unit declares is written by a runcmd stage late in first boot, so a
-# start attempted before the writer completes (an aborted LUKS stage, the bootstrap-armed timer
-# against never-written files) must SKIP — one "skipped, unmet condition check" notice — never
-# FAIL into the LUKS journal channel. The service carries the condition for its non-timer
-# start jobs (its [Install] WantedBy=multi-user.target arm if ever enabled, manual starts,
-# future Wants=/Requires= consumers); the timer carries the same pair because a
-# condition on it is evaluated at ACTIVATION, so an abort-host never arms the ~30s tick storm.
-# The EnvironmentFile= lines themselves stay unprefixed — the fail-closed contract is retained.
-LUKS_CUTOVER_SVC="$SCRIPT_DIR/inngest-luks-cutover.service"
-LUKS_CUTOVER_TMR="$SCRIPT_DIR/inngest-luks-cutover.timer"
+# The LUKS cutover trio's own #9939 pins (service + timer condition/EnvironmentFile pairs) went with
+# the trio when it was retired from the image (#10112). The two helpers stay: the #9962 pins below
+# judge the flip pair, the bootstrap-generated units and inngest-redis with them.
 # Placement is part of the property: a ConditionPathExists= under [Service]/[Install] is an
 # inert unknown lvalue — the unit starts unconditionally and the storm returns while a
 # whole-file presence grep stays green — so every condition assert counts lines inside the
@@ -2987,29 +3171,6 @@ LUKS_CUTOVER_TMR="$SCRIPT_DIR/inngest-luks-cutover.timer"
 # reads as absent.
 _luks_sec()      { awk -v sec="$2" '$0=="["sec"]"{u=1;next} /^\[/{u=0} u' "$1"; }
 _luks_sec_vals() { _luks_sec "$1" "$2" | sed -n "s/^[[:space:]]*$3=//p" | tr ' \t' '\n' | sed '/^$/d' | sort -u; }
-assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-server is absent" \
-  "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
-assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-luks-volumes is absent" \
-  "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
-assert "inngest-luks-cutover.service keeps BOTH EnvironmentFile= lines unprefixed in [Service] (fail-closed)" \
-  "_luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-luks-volumes' >/dev/null && ! _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
-# Bare `Directive=` resets the list wholesale in systemd (EnvironmentFile= empties the env
-# set, ConditionPathExists= erases every condition) — invisible to the literal pins and to the
-# set extractors, which drop empty tokens. Checked file-wide: a reset line is never legitimate
-# here, in any section, at any indent.
-assert "no bare EnvironmentFile=/ConditionPathExists= reset lines in the cutover units" \
-  "! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' '$LUKS_CUTOVER_SVC' '$LUKS_CUTOVER_TMR' >/dev/null"
-# SET IDENTITY, not cardinality: the sorted path set of [Unit] conditions must equal the
-# sorted path set of [Service] EnvironmentFile= values — a coordinated mismatched pair or a
-# non-/etc/default/ path fails where a count comparison would pass.
-assert "inngest-luks-cutover.service's [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
-  "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
-assert "inngest-luks-cutover.timer carries the inngest-server condition in [Unit] (evaluated at activation, not per-elapse)" \
-  "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
-assert "inngest-luks-cutover.timer carries the inngest-luks-volumes condition in [Unit] (evaluated at activation, not per-elapse)" \
-  "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
-assert "inngest-luks-cutover.timer's [Unit] condition path-set equals the service's [Service] EnvironmentFile path-set" \
-  "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
 
 echo "--- #9962: the same skip-vs-fail class on the non-LUKS siblings ---"
 #
@@ -3094,6 +3255,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
+# #10112: 549 -> 541 (the eight #9939 LUKS cutover trio condition rows went with the trio; the ack-list arity
+# rows are unchanged in number). Measured 541/541.
 # #9757 / #10120: 451 -> 549 (the heartbeat stdin-config, shape-guard, hourly-marker, own-stamp, stamp-normalisation,
 # real-curl smoke, exit-status and dash rows; measured 549/549 with the pinned-container dash rows and terraform run).
 # Skipped rows are never counted toward the floor: the active floor is the FULL literal minus the dash rows that were SKIPPED
@@ -3101,7 +3264,14 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # absent. Under CI a skipped or failed dash row is itself a FAILURE (see the dash block above).
 # Accounting: DASH_SKIPPED is 0 or DASH_ROWS, never a partial count, so a half-skipped block cannot read as a tier.
 if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 'FAIL: dash accounting: DASH_SKIPPED=%s is neither 0 nor DASH_ROWS=%s.\n' "$DASH_SKIPPED" "$DASH_ROWS" >&2; exit 1; fi
-INNGEST_MIN_ASSERTIONS_FULL=549
+# #10363: 549 -> 557 (the sh -x refusal rows over both rendered bodies plus the guard-removed leak
+# control — review fix-round; a refusal-free render must visibly trace the sentinel).
+# #10112: 557 -> 549 (the eight #9939 rows asserting the retired cutover trio went with it).
+# #11103: 549 -> 585 (the SERVERLAUNCHEOF extraction/ordering/replay rows, the ACLEOF acl-writer
+# rows, and the re-anchored ExecStart + redis.service asserts; measured 585/585 with terraform
+# fmt and the pinned-container dash rows). 585 -> 586 (#11172: writer-default == conf aclfile
+# path pin).
+INNGEST_MIN_ASSERTIONS_FULL=586
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \

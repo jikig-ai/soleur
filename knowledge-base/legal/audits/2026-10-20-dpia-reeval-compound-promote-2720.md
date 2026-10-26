@@ -6,6 +6,7 @@ issue: 6107
 status: draft-requires-counsel-review
 processing_activity: "Article 30 register Processing Activity 31 (Anthropic-egressing Inngest function fleet), member `cron-compound-promote` — the Compound Promotion Loop (#2720), phase 1 (cluster call) and phase 2 (additive-edit call)"
 conclusion: "DRAFT position, pending operator adoption and counsel review: full DPIA NOT required at single-operator scale — a determination at current scale, conditional, NOT an empirical finding. On the 2026-07-31 fleet screening's own scoring the loop engages WP248 criterion 8 and partially engages 7 and 9, with 4 unassessed (two and a half criteria, more if 4 is engaged), so WP248's presumption IS met; it is displaced on stated reasons, not by the count, and the displacement requires counsel confirmation. The empirical limbs (false-positive rate, operator merge ratio) were not assessable (0/0, undefined) and the verdict does not rest on them; it rests on structural factors only, two of which are unverified. Acceptance of residuals (a) and (b) is conditional on two Art. 6 balancings (persons named in a learning, by 2026-11-19; publication, before 2026-10-25) that are currently unmet. This memo is the first recorded Art. 35(1) threshold determination and is retrospective; if counsel concludes otherwise, the period from 2026-07-06 is a timing failure this memo does not cure. Five named accepted residual risks; fifteen re-evaluation triggers pinned (fourteen distinct, trigger 11 restates trigger 1); re-arm tracker #10676."
+addendum_2026_10_26: "Addendum 2026-10-26 (#10552) at the end of this memo: its changes are conditioned on the merge of PR #11157; the recorded fact that the trigger-1 comment condition fired 2026-10-26T09:47Z (PR #10812) is NOT conditioned, and is recorded without discharging it. Draft material for internal sign-off, not legal advice."
 related:
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/legal/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md
@@ -40,6 +41,8 @@ that is never auto-merged (plus a second, comment-based output surface, see §2)
 best-effort (not guaranteed) pattern prefilter on the input. The WP248 tally is stated in §3: it
 **meets** the WP248 presumption and the presumption is displaced on stated reasons. The empirical
 limbs are deferred to the first opened draft PR, and the re-arm tracker is **#10676**.
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** the "second, comment-based output surface" is removed: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
 
 ## 0. Why now, and why late
 
@@ -83,6 +86,8 @@ denominator is written 0/0 and called undefined; it is never written as a percen
 | Scheduled runs since enablement | **Not derivable as an observation**; schedule arithmetic only | 15 (Sundays 00:00 UTC, 2026-07-12 to 2026-10-18) | Cron expression `0 0 * * 0`. The Sentry cron heartbeat was not queried. |
 | Refusal reasons across the 10 proposed clusters | **Measured** (same query) | All 10 refused before any PR; reason `diff-underivable-apply` ×8 and `diff-underivable` ×2 (names from a vocabulary closed by test census, not by type) | Outcome rows. |
 
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** the row on skill-conflict comments describes the pre-merge loop: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR. The fact that one such comment was posted on 2026-10-26 is recorded in the Addendum, not here. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
+
 The ten decoded outcome rows break down as follows (aggregates only): by status, 5 `completed`,
 3 `no-qualifying-clusters`, 2 `error`; by trigger, 5 scheduled and 5 manual. The corpus held
 2,234 entries on 2026-09-19 and 2,768 on 2026-10-18; the serialized corpus sent in the cluster
@@ -93,6 +98,8 @@ the loop's proposals, because none was ever reviewed by a human. It supports one
 statement: in 106 days of operation, no draft PR was opened by the loop. Whether a skill-conflict
 comment (the second public surface, §2) was ever posted in the weeks that cannot be decoded is
 not established.
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** the sentence on skill-conflict comments describes the pre-merge loop: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
 
 ## 2. Data-flow change record
 
@@ -117,9 +124,11 @@ learnings are in the corpus (§7).
 | Model-authored text sent | None (the model has not yet spoken). | The cluster rationale from phase 1, capped at 2,000 characters; it is derived from data already sent. |
 | Untrusted-data handling | **None beyond JSON serialization.** The whole corpus is appended after a `Corpus:` heading with no nonce and no data-not-instructions framing. Only `target_path` and the source list are server-validated; the `rationale` is model text. | Each block is wrapped in per-call-nonce delimiters and labelled as data, not instructions. |
 | Model output | Up to the cluster cap: path, tier, target, source list, rationale. No diff. | An insertion only (anchor line plus new lines), at most 4,096 output tokens (`DRAFT_EDIT_MAX_TOKENS`). The server derives the diff with git. |
-| Output screen before any PR | Path allowlist (`TARGET_ALLOW_RE`). | Inserted lines: at most 20 lines of at most 500 printable-ASCII characters; credential shapes refused (`CREDENTIAL_RE`); scheme-bearing (`://`) and non-relative markdown links, code fences, HTML comments and command substitution refused; for `AGENTS.rules.md`, each inserted line carries exactly one new rule id of an allowed class (cq, rf, pdr, cm) and no hard-rule or workflow-gate id. Bare hosts, `mailto:` text and bare email text are not screened. **On the draft-PR diff screen, the email, IPv4 and IBAN alternatives of `PII_REGEX` are deliberately not applied to model output** (the code comment gives the reason: they over-match rule prose), so that screen is narrower than the screen on input. The skill-conflict comment path (next row) applies the full `PII_REGEX` to its model-derived diff. |
+| Output screen before any PR | Path allowlist (`TARGET_ALLOW_RE`). | Inserted lines: at most 20 lines of at most 600 printable-ASCII characters for `AGENTS.rules.md` (pinned by a test to the corpus lint's per-rule cap) and at most 1000 for `SKILL.md`, with a 500-character target stated in the prompt (from the merge of PR #11157, #10552; the cap was 500 before); credential shapes refused (`CREDENTIAL_RE`); scheme-bearing (`://`) and non-relative markdown links, code fences, HTML comments and command substitution refused; for `AGENTS.rules.md`, each inserted line carries exactly one new rule id of an allowed class (cq, rf, pdr, cm) and no hard-rule or workflow-gate id. Bare hosts, `mailto:` text and bare email text are not screened. **On the draft-PR diff screen, the email, IPv4 and IBAN alternatives of `PII_REGEX` are deliberately not applied to model output** (the code comment gives the reason: they over-match rule prose), so that screen is narrower than the screen on input. The skill-conflict comment path (next row) applies the full `PII_REGEX` to its model-derived diff. |
 | Result | A list of proposed clusters. | **Two public output surfaces.** (1) A draft PR labelled `self-healing/auto`, `mergeMode` none (never auto-merged), operator review required; the PR body and commit trailers name the source learnings' paths and the PR carries the diff. (2) For a `plugins/soleur/skills/` target, when another open PR touches skills, the apply step posts the model-derived diff as a comment on that **unrelated** open PR, as the GitHub App, with no draft PR, no label and no human gate before posting; the full `PII_REGEX` is applied first and a match replaces the diff with a redaction notice. Surface (2) is invisible to the PR-only measurements in §1. |
 | Concurrency cap | At most `WEEK_CAP_DEFAULT` = 2 minus the open PRs carrying the label `self-healing/auto` (a search count, and the label is applied in a best-effort step); when two are open the run exits at `week-cap-reached`. The cap is **inactive at zero open PRs**. | Same cap, per attempt. It does not bound weekly transmissions at one scheduled run, given manual triggers and the retry. |
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** in the "Output screen before any PR" row, the final sentence about the skill-conflict comment path and its full `PII_REGEX` screen, and in the "Result" row, surface (2) (the unrelated-PR comment with no human gate), describe the pre-merge loop: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR, so only surface (1), the draft PR, remains. The per-line cap in that row is edited in place above. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
 
 **Net change from phase 2.** One additional file per cluster (the target, which is committed
 repository content), a repeat of already-sent summaries, and a model-authored rationale derived
@@ -143,6 +152,8 @@ the marker is a PA-8 operation), is pinned by the marker's own test suite (Guard
 was not re-run for this memo. #10553 added new refusal reason names to the list; the field set
 is unchanged. The phase-2 prompt and the proposed insertion are not written to the marker.
 
+> **Superseded 2026-10-24 (#8293, ADR-300; conditioned on the merge of the pattern-layer PR):** the statement that the marker field set is unchanged is superseded for manual runs with `input:"patterns"`, which add six fields; see the Addendum of 2026-10-24 at the end of this memo. The text above stays as the record of 2026-10-20.
+
 **Other sinks, which the marker statement does not cover.** (i) When the allowlist refuses a
 model-supplied target path, the path is written to the function log and to Sentry after
 `redactGithubSourcedText` and a 200-character cap; that is model-chosen text, redacted by
@@ -154,6 +165,8 @@ text comes from a tool processing model-derived input, so arbitrary prose is unl
 field exists. (iii) The corpus entries and step outputs are held in the self-hosted Inngest run
 state (see §4). (iv) The skill-conflict comment is a publication surface, not a sink, and is
 recorded in the Result row above.
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** item (iv) describes the pre-merge loop: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
 
 ## 3. Screening against Art. 35(3) and WP248 rev.01
 
@@ -181,6 +194,8 @@ there is no DPIA to review, so the triggers stand in for it.
 | WP248 8, innovative use of technology | **Engaged.** A scheduled LLM drafts text that, if merged, becomes a rule in the file that governs other agents. |
 | WP248 9, processing that prevents exercise of a right | **Partially engaged, through the publication limb.** A draft PR is readable the moment it opens, and the human gate acts at merge, not at publication; a skill-conflict comment is posted with no gate at all. Once text is on a public repository, the controller alone cannot reliably erase it (edit history, forks, mirrors); the fleet screening reached the same mechanism for PA-32. The limb is **not yet realised** (zero draft PRs opened), which is a fact about the past and not a control. The fleet screening scored PA-31 "No" here because it found no public-output limb; this member has one, so that scoring does not transfer. Residual (b). |
 
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** in the WP248 9 row, "a skill-conflict comment is posted with no gate at all" describes the pre-merge loop: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR. The draft-PR publication limb of that row is unchanged. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
+
 **Tally.** On the fleet screening's scoring, the loop engages criterion 8 and partially engages
 7 (by analogy to the fleet screening, whose partial score for 7 attaches to the community-collector members, not to this member) and 9 (the public-output limb that the fleet screening's
 PA-31 conclusion expressly excluded); criterion 4 is unassessed. That is **two and a half
@@ -200,6 +215,8 @@ not relied on. The reasoning is the CLO's draft; it is **not** shown by the coun
 requires counsel confirmation. On those reasons the risk to rights and freedoms is draft-assessed
 as **not "high"** in the Art. 35(1) sense on the facts available, and a full DPIA is not
 required at current scale.
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** the parenthetical on the skill-conflict comment, the "or a comment" write authority and the "bounded (§2)" inserted-text reference describe the pre-merge loop: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR; the inserted-text bound becomes 600 characters per line for `AGENTS.rules.md` and 1000 for `SKILL.md`, at most 20 lines. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
 
 **Art. 6 basis.** PA-31 records Art. 6(1)(f) for the repository population, balanced in the
 fleet LIA (Arm A). Arm A covers the transmission to the processor of **already-published
@@ -227,6 +244,8 @@ currently unmet.**
   first scheduled run that could open a PR (a manual trigger could be sooner): complete it
   before then or use the kill switch. A PR opened before it exists is a publication without a
   recorded basis and is recorded as such (trigger 1).
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** "or posted comment" describes the pre-merge loop: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR. See the Addendum for the recorded fact that the trigger-1 comment condition fired on 2026-10-26. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
 
 ## 4. Why the remaining surface does not change the conclusion
 
@@ -260,6 +279,8 @@ currently unmet.**
   re-pin and five CI gates, would publish wording no counsel has seen, and the first opened PR
   (the point at which the gap becomes material) is a re-evaluation trigger. This is a CLO
   ruling; it is revisited at trigger 1. No public or marketing claim comes out of this memo.
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** the references to comment content and to loop-published comments describe the pre-merge loop: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
 
 ## 5. Named accepted residual risks
 
@@ -295,6 +316,8 @@ PRs; comments not established). Recovery: close the PR and delete the branch, or
 comment; that does not reach forks, mirrors or edit history, which is why the first opened PR
 or posted comment is a trigger and not a formality.
 
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** residual (b) narrows to the draft PR only: on the merge of PR #11157 the loop no longer posts the skill-conflict comment: the guard instead checks whether an open PR changes the same target file and, if so (or if it cannot finish checking), refuses the cluster and opens no PR. The per-line size in this paragraph ("up to 500 characters") becomes up to 600 for `AGENTS.rules.md` and up to 1000 for `SKILL.md`. The acceptance conditions of residual (b) (the limb (ii) balancing) are unchanged, and this edit does not discharge them. The text above stays as the record of 2026-10-20; see the Addendum of 2026-10-26 at the end of this memo.
+
 **(c) Model-chosen text in secondary sinks.** The single redacted, capped error text field, the
 redacted, capped refused target path, and the git stderr detail field of the diff-path refusal
 diagnostic are redacted by shape, not by content. Accepted because they are capped (200
@@ -315,6 +338,8 @@ the text of a proposed rule. The harm is a misleading or low-quality rule propos
 merge for a draft PR, not an action on a person. Whether that is adequate as an engineering
 control is for the CTO; this memo evaluates only that no write or act authority beyond a draft
 PR or a comment exists.
+
+> **Superseded 2026-10-26 (#10552; conditioned on the merge of PR #11157):** "or a comment" in the sentence above describes the skill-conflict comment, which the loop no longer posts from the merge; the only write authority is then a draft PR. The text above stays as the record of 2026-10-20.
 
 **(e) 30-day processor retention, Zero-Retention amendment unsigned; Commercial Terms status
 unverified (`anthropic.md`).** Inherited from PA-31 section (f) and applicable to both phases.
@@ -424,6 +449,48 @@ Additional triggers:
   fleet screening.
 - **No public claim.** Nothing in this memo supports a statement about the loop's privacy
   properties in any public or marketing material.
+
+---
+
+## Addendum 2026-10-24 (#8293, ADR-300): the patterns path
+
+*Dated, append-only. Conditioned on the merge of the pattern-layer PR: until then none of this describes a deployed state. Nothing above is rewritten.*
+
+**What changes.** The handler gains a manual-trigger option `input:"patterns"` (default `corpus`; the scheduled cron ignores it). On that path the model is sent the open pattern pages under `knowledge-base/project/patterns/` (title, summary, tags, evidence keys) and the first 10 lines of each page's evidence learnings, in place of the whole prefiltered learnings corpus. The input is a curated subset of text of the kind already sent; the same prefilter (`PII_REGEX`, retired-rule list) applies to the pages and to every evidence learning, and the pages are screened for names and handles. Before the model call the handler reads prior proposal outcomes from GitHub (PR state of `self-healing/auto-*` branches, through Octokit search). It reads titles, states and timestamps of the bot's own PRs and no PR comment or body text. GitHub is already a recipient. No new processor, key, endpoint, category, purpose or retention is introduced.
+
+**Trigger 15 fires.** The marker field set changes on the patterns path: `input_source`, `patterns_open`, `ledger_read`, `ledger_suppressed`, `ledger_prs_scanned` and `ledger_title_skipped`. All six are numbers or closed enums; none carries model-supplied or third-party free text, so trigger 7 does not fire. On the scheduled path the field set is unchanged. This is the change the memo anticipated when it listed any outcome of the open decision challenge #8443 under trigger 15; this addendum does not resolve #8443.
+
+**Trigger 2 arguably fires.** "What is sent to a processor" changes in selection (a curated subset instead of the whole corpus), not in kind. The better reading is that the exposure shrinks; the conservative reading counts any change to the input set. This addendum records it as arguably fired and does not rely on the narrower reading.
+
+**What this addendum does not do.** This addendum does not cure the unmet 2026-10-25 and 2026-11-19 conditions the memo records in section 7 (the publication-limb balancing, practically due before 2026-10-25, and the balancing for persons merely named in a learning, due 2026-11-19). Both remain unmet at the date of this addendum, so the acceptance of residuals (a) and (b) remains conditional and not yet earned. It also does not verify the Commercial Terms premise (trigger 14), does not sample the pattern pages or their evidence for identifying prose beyond the deterministic prefilter, and makes no statement about the effect of the layer on proposal yield. The determination in the memo (a draft position, pending counsel review) is neither confirmed nor changed by this addendum; counsel review of both is still required.
+
+**Publication surface.** Pattern pages are persistent derived text in a public repository (Art. 5(1)(e) storage limitation). The mitigations are the seed cap (at most 8 pages), the no-names-or-handles rule, the PII and handle-shape screen over the whole page text in CI and at runtime, and a close state that removes a page from the prompt. They are a curation control, not a guarantee.
+
+### Addendum correction 2026-10-25 (#8293 review)
+
+*Dated. Corrects statements in the 2026-10-24 addendum above; that text is not edited. Conditioned on the merge of the pattern-layer PR, like the addendum it corrects; until then none of it describes a deployed state. Both were written in the same unmerged PR, so this correction was itself revised before merge (the first draft overstated that the ledger read "receives only" five fields).*
+
+- **Runtime screen.** The runtime screen is `PII_REGEX` over the raw page text, over the decoded title, summary and tags, and over the first 10 lines of each cited evidence learning (the excerpt that is sent), plus schema, canonical-path, size (16 KiB per page and per excerpt) and symlink checks (a symlink anywhere on an evidence path drops that evidence file; an aliased patterns directory empties the whole patterns arm, cause `dir-unreadable`; an aliased learnings root drops every evidence file, so every page falls under five surviving entries and is dropped, and either case ends the run `empty-corpus` with no fallback to the corpus). The handle, UUID and host denylist runs in CI over the raw page text and over the decoded title, summary and tags, and its "handle" means an `@`-prefixed handle. This also supersedes the 2026-10-24 sentence that "the same prefilter applies to every evidence learning": on the patterns arm the scan covers the first 10 lines that are sent, not the whole file. Person names, and handles written without an `@`, are not machine-screened anywhere, in a page or in an evidence excerpt. The 2026-10-24 wording that pages are "screened for names and handles" and that the handle-shape screen applies "at runtime" is corrected accordingly; the no-names rule is a curation control only.
+- **Category.** The 2026-10-24 statements "changes in selection, not in kind" and "no new ... category" are corrected: the sent text includes pattern titles, summaries and tags, which are new derived text authored in the repository, besides evidence excerpts of the kind already sent.
+- **Ledger read.** The search response contains the full issue object of every matching PR, including its body and author object (the GitHub Search API has no field projection), so the process receives that text. The code uses only title, state, closed_at, merged_at and user.login, and neither reads, logs nor stores the rest; the query is bounded to the App's own PRs by an `author:` qualifier (`head:` alone is a prefix match on the branch name and would also match look-alike branches), and the code re-checks the author login as a second layer, so other authors' items are not expected in the response. The step output persisted by Inngest is {hash, state, closed_at} entries plus two counts (`scanned`, `titleSkipped`). The 2026-10-24 sentence "reads titles, states and timestamps ... and no PR comment or body text" is corrected to this.
+- **Retention.** Pattern pages are persistent derived text in a public repository. Closing a page removes it from the prompt, not from git history, forks or clones (PA-32 (f) records that no erasure routine is implementable). The earlier statement that no retention is introduced is corrected to except pattern pages. The `collect-patterns` and `ledger-read` steps also memoize titles, summaries, tags, 10-line excerpts and hashes in the Inngest run state, within the retention PA-31 (f) already records.
+- **Observability.** Dropped-page, dropped-evidence and ledger-failure signals are closed enums, counts and validated slugs; they reach Sentry and the pino error mirror shipped to Better Stack, not Sentry alone.
+
+---
+
+## Addendum 2026-10-26 (#10552): proposer refusals, line cap and skill-conflict guard
+
+*Dated, append-only. Draft material for internal sign-off; it is not legal advice. The "What changes" bullets below are conditioned on the merge of PR #11157: until then they do not describe a deployed state. The "Recorded fact" paragraph is NOT conditioned: it records an event that has already happened. Nothing above is rewritten except the output-screen cell in the §2 table, edited in place, and the dated `Superseded` markers placed under the sentences they supersede.*
+
+**What changes on the merge of PR #11157.**
+
+- **The skill-conflict comment is removed.** On the merge the loop no longer posts the model-derived diff as a comment on an open PR. The guard instead checks whether an open PR changes the same target file; if so, or if it cannot finish checking (a scan bound is reached), it refuses the cluster as `skill-conflict-guard` or `skill-conflict-guard-unverifiable` and opens no PR. The conflicting PR number is written to the application log (Better Stack) and sits in the run's stored step output (Inngest run state); it is a public PR number, which on its own is not personal data, and no PR author login or file name other than the requested allowlisted target is stored, logged or sent. The second public output surface of §2 therefore narrows to the draft PR only, and residual (b) narrows with it. This is a reduction of a publication surface, not a new one.
+- **The per-line cap moves.** On the merge the inserted-line cap is 600 characters for `AGENTS.rules.md` (pinned by a test to the corpus lint's per-rule cap, so the validator accepts what the corpus lint accepts) and 1000 for `SKILL.md`, with a 500-character target stated in the prompt; the 20-line cap is unchanged. A `SKILL.md` edit can then carry up to 20 lines, each up to 1000 characters; the whole diff stays bounded at 16,384 characters (`MAX_DIFF_BYTES`), so at most 16 full lines is the reachable maximum and a larger diff is refused `diff-size-exceeded`. The credential, charset and render-hazard screens are unchanged and still apply to every inserted line, and the draft PR is still behind a human merge decision. The widened bound is on text that is written by the model and published only in a draft PR; it is not a widening of anything sent to the processor.
+- **Nothing new goes to Anthropic.** The corpus, target file, rationale and refusal diagnostics sent to Anthropic are unchanged; the only change in the model call is the wording of the instruction that states the line cap. Other processors receive new closed-enum or public diagnostics: Sentry (the unverifiable refusal: a bound, a cluster hash), Better Stack (warn lines: a hash, a public PR number, an allowlisted target path, a bound) and Inngest (the stored scan result), plus up to 153 read-only GitHub API calls per run; none is personal data. Trigger 2 (a change to what is sent to a processor) is not engaged on either reading recorded in the 2026-10-24 addendum: no input set, field or call site changes, and the #10676 list names input items only. It would be engaged only on a wider third reading, under which any change to the text of a model-call instruction counts. Whether to adopt that reading is for counsel; the hedge is kept because counting the change costs nothing and not counting it cannot be undone.
+
+**Recorded fact, not a discharge (trigger 1).** The first-listed trigger of §6 includes "first posted skill-conflict comment". On 2026-10-26, at 09:47:40Z, the loop (acting as the GitHub App) posted such a comment on public PR #10812, an open Dependabot PR unrelated to the proposed cluster's file; the guard that posted it matched on text (the PR's title, body or comments), not on a changed-file test; PR #10812's only changed file is a Dependabot requirements file. No balancing basis for that publication is recorded, and the §3 limb (ii) balancing remains unmet. That condition of trigger 1 has therefore fired. **This addendum records the fact and does not discharge the trigger:** the re-run of the empirical limbs, the review of the comment for identifying text, and the decision on the limb (ii) balancing stay with the operator and counsel under tracker #10676. Deleting the comment is not part of PR #11157; it is a separate operator decision, because deletion is a destructive write to a public repository, destroys the evidence the trigger needs, and does not reach notification emails, mirrors or edit history.
+
+**What is not established.** Whether the 2026-10-26 comment, or any other, carries identifying text has not been reviewed in this addendum. Whether the changed cap alters the draft-PR output risk is a judgment recorded here as "bounded by the unchanged screens and the human gate", not a measurement; no draft PR has been opened by the loop as of this addendum.
 
 ---
 

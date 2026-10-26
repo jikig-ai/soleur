@@ -20,6 +20,7 @@
 // ---------------------------------------------------------------------------
 
 import { accessSync, constants, unlinkSync, writeFileSync } from "fs";
+import { gitDataKeyFileContents } from "./git-data-key";
 import { randomUUID } from "crypto";
 import { join } from "path";
 import { execFile } from "child_process";
@@ -450,10 +451,11 @@ export async function gitWithPrivateKeyAuth(
   const knownHostsPath = join(dir, `.git-transport-${randomUUID()}.known_hosts`);
 
   try {
-    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
+    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF); the docker-env
+    // one-line form of the key is repaired here too (#8211 PR-G), whatever the caller passed.
     // BOTH writes live inside the try so a throw on the SECOND write still reaches
     // the finally cleanup for the first (0600 key) file (#5817 security review P3).
-    writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
+    writeFileSync(keyPath, gitDataKeyFileContents(privateKey), {
       mode: 0o600,
     });
     writeFileSync(knownHostsPath, trust.knownHosts, { mode: 0o600 });
@@ -544,10 +546,11 @@ export async function sshWithPrivateKeyAuth(
   const knownHostsPath = join(dir, `.git-provision-${randomUUID()}.known_hosts`);
 
   try {
-    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF).
+    // 0600 + a trailing newline (OpenSSH rejects a key file missing the final LF); the docker-env
+    // one-line form of the key is repaired here too (#8211 PR-G), whatever the caller passed.
     // BOTH writes live inside the try so a throw on the SECOND write still reaches
     // the finally cleanup for the first (0600 key) file (#5817 security review P3).
-    writeFileSync(keyPath, privateKey.endsWith("\n") ? privateKey : `${privateKey}\n`, {
+    writeFileSync(keyPath, gitDataKeyFileContents(privateKey), {
       mode: 0o600,
     });
     writeFileSync(knownHostsPath, trust.knownHosts, { mode: 0o600 });

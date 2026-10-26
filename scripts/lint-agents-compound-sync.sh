@@ -131,6 +131,7 @@ fi
 SITES=(
   "apps/web-platform/server/inngest/functions/cron-compound-promote.ts|^const MAX_ALWAYS_LOADED_BYTES = ([0-9]+);|REJECT"
   "apps/web-platform/server/inngest/functions/cron-compound-promote.ts|^const PROPOSE_ALWAYS_LOADED_BUDGET = ([0-9]+);|WARN"
+  "apps/web-platform/server/inngest/functions/cron-compound-promote.ts|^export const AGENTS_EDIT_LINE_MAX_CHARS = ([0-9]+);|PER_RULE_CAP"
   "scripts/compound-promote.sh|^ALWAYS_LOADED_CAP=([0-9]+)|REJECT"
   "scripts/compound-promote.sh|^PROPOSE_ALWAYS_LOADED_BUDGET=([0-9]+)|WARN"
   "AGENTS.rules.md|([0-9]+) warn|WARN"

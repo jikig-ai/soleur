@@ -6,6 +6,13 @@ related: [6894, 7228, 7695, 8017, 8285, 8294, 8295, 8296, 9703, 9786, 9879, 9927
 
 # Inngest LUKS cutover (#6894)
 
+> **Cutover dispatch retired 2026-10-25 (#10112).** The on-host cutover trio (`inngest-luks-cutover.{sh,service,timer}`) is no longer baked into
+> the image, shipped in the signed config-refresh bundle, or pushed to the web hosts, and the dispatcher refuses `op=luks-cutover` (G1/G2/G3).
+> Sections 1-5b are the record of how the cutover ran (2026-09-20); do not follow their dispatch steps. **Section 5c (sole-copy
+> protection, key loss, total loss, deliberate unprotect, break-glass and revert) stays in force** and is still the operator procedure those alerts point at. Section 6 below is FSM-dispatch troubleshooting; read it as history. A host provisioned before this
+> change still has the trio installed and its timer enabled until the next host replace; the dispatcher stays inert only while the flag is `done`
+> and the pointer is set. The dispatcher's `op=luks-cutover` arm and refusal text are retired in a tracked follow-up.
+
 **What this does.** Moves the dedicated Inngest host's Redis AOF store from the plaintext volume to
 the encrypted (LUKS) one, without losing a byte and without SSH. The host freezes its writers, copies
 the whole `/mnt/data` mount to the already-attached encrypted volume, proves the copy byte-identical,
@@ -117,7 +124,7 @@ Refusal reasons, and what each one is telling you:
 
 | `reason=` | Meaning |
 | --- | --- |
-| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. **After the host replace that carries #9786 this is the EXPECTED answer to any flagged run** (flag `armed`/`copying`/`copied`/`swapped`/`rollback`): the stage no longer writes the plaintext id the image-baked script reads, the cutover is complete, and at flag `done` the unit is a no-op. Such a refusal writes the terminal flag `aborted`, so do not dispatch a flagged run on a host in that state. |
+| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes` (as of #11080 the stage never writes that file on a host born from the current template, so on such a host this is the expected answer). Nothing was stopped. **After the host replace that carries #9786 this is the EXPECTED answer to any flagged run** (flag `armed`/`copying`/`copied`/`swapped`/`rollback`): the stage no longer writes the plaintext id the image-baked script reads, the cutover is complete, and at flag `done` the unit is a no-op. Such a refusal writes the terminal flag `aborted`, so do not dispatch a flagged run on a host in that state. |
 | `pointer-already-set` | This host is already past the cutover. There is no verb to go back (§5a); nothing to do. |
 | `canonical-not-plaintext` / `staging-not-mapper` / `staging-wrong-backing` / `canonical-mapper-open` | The pre-cutover topology is not what the FSM requires. The host is not in the state this dispatch acts on; read the probe row before doing anything. |
 | `envfile-key-absent` | `/etc/default/inngest-luks` carries no passphrase, so the boot-reopen unit could not open the store on the next boot. Refused before anything stopped. |
@@ -629,6 +636,23 @@ show the attribute going from false back to true on the volume, an in-place upda
 `luks_volume_touched` on any volume action other than no-op or create, so step 2 is refused by construction. The next
 infra-path merge or `manual-rerun` runs the per-merge apply and re-protects. Any out-of-band lift is reverted by that
 apply. Do not use one to try to complete a replace.
+
+### Volume recreated: the id-pin bump checklist (added 2026-10-24, Ref #10952)
+
+A recreated volume has a new Hetzner id, and until the pin is bumped the sole-copy probe and BOTH orphan sweeps report the old id as
+missing (the sweeps end red with `orphan_sweep_project_identity_unproven` and list nothing; ADR-282 addendum 2026-10-24). The bump PR
+merges in the same cycle as the `.tf` change that recreates the volume; the founder, as incident owner, owns it. Regenerate the list
+below with `git grep -n 106903269` (do not trust a remembered count); on 2026-10-24 it names these places:
+
+- **Pins enforced by `plugins/soleur/test/sole-copy-drift-check.test.sh` (rows N1 and N1b; a stale one reds the suite):** every
+  `readonly VOLUME_ID_PIN=` line in `.github/workflows/scheduled-terraform-drift.yml` (exactly three: the sole-copy probe and the
+  two orphan sweeps); the "Hetzner id" text in ADR-282; the postmerge skill's section-5c one-liner
+  (`plugins/soleur/skills/postmerge/SKILL.md`); the section-5c one-liner in this runbook; and the `VOL_ID` constant in the suite itself.
+- **Pins enforced by `plugins/soleur/test/token-drift-workflow-causes.test.sh` (rows R9; a stale one reds the suite):** the id in the `curl` shim
+  and in the grep patterns of the project-identity cases. Change every occurrence in that file in the same edit.
+- **Record-only places, updated by hand (nothing compares them):** `scripts/encryption-posture-ledger.json`,
+  `knowledge-base/legal/compliance-posture.md`, `inngest-provision-rehearsal.md`, ADR-142, and the dated audit records under
+  `knowledge-base/legal/audits/` (historical records keep the id they were written with; add a dated line, do not rewrite them).
 
 ### Revert recipe
 

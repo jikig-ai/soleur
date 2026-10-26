@@ -227,6 +227,89 @@ run_fixture "authorization-bearer-leak" \
   '(.message | test("Bearer \\[redacted\\]"))' \
   '(.message | test("eyJhbGc") | not)'
 
+# --- Doppler token shape (the TLS terminator's journal is shipped from the replaced Inngest host) ---
+# The terminator unit's ExecStartPre sources /etc/default/inngest-doppler without redirecting stderr, so
+# a malformed line in that file would echo the offending text, and that file holds the Doppler token.
+# The rule is value-shaped (dp. + a two-to-five letter kind + a dot + a long body, a service token also
+# carrying the config name) and costs no user_data bytes. The token literals are assembled at run time:
+# a contiguous token-shaped string in a committed file is what a secret scanner exists to flag.
+DP_BODY="$(printf 'k%.0s' $(seq 1 43))"
+DP_SERVICE="dp.""st.prd_terraform.${DP_BODY}"
+DP_PERSONAL="dp.""pt.${DP_BODY}"
+run_fixture "doppler-service-token-in-env-parse-error" \
+  "{\"message\":\"/etc/default/inngest-doppler: line 3: DOPPLER_TOKEN=${DP_SERVICE}: command not found\"}" \
+  '(.message | test("dp\\.\\[redacted\\]"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)' \
+  '(.message | test("prd_terraform") | not)' \
+  '(.message | test("DOPPLER_TOKEN="))'
+run_fixture "doppler-personal-token-bare-in-a-line" \
+  "{\"message\":\"fetch failed with ${DP_PERSONAL} rejected\"}" \
+  '(.message | test("dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+run_fixture "dp-prefix-ordinary-text-passes-through-intact" \
+  '{"message":"build output dp.dev.local started"}' \
+  '(.message == "build output dp.dev.local started")'
+# Boundaries of the rule, each a case the token body length, the anchor or the stage order decides.
+DP_BODY20="$(printf 'k%.0s' $(seq 1 20))"
+DP_BODY19="$(printf 'k%.0s' $(seq 1 19))"
+run_fixture "doppler-token-body-of-exactly-20-chars-is-redacted" \
+  "{\"message\":\"fetch failed with dp.""st.${DP_BODY20} rejected\"}" \
+  '(.message | test("dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+run_fixture "dp-prefix-with-a-19-char-body-passes-through-intact" \
+  "{\"message\":\"fetch failed with dp.""st.${DP_BODY19} rejected\"}" \
+  "(.message == \"fetch failed with dp.st.${DP_BODY19} rejected\")"
+run_fixture "doppler-token-after-an-underscore-is-redacted (the anchor is a non-alphanumeric, not a word boundary)" \
+  "{\"message\":\"X_dp.""pt.${DP_BODY} rejected\"}" \
+  '(.message | test("X_dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+DP_HEAD="$(printf 'k%.0s' $(seq 1 10))"
+DP_TAIL="$(printf 'k%.0s' $(seq 1 33))"
+# U+2028 is in the same stripped class as the control bytes and survives the JSON hand-off between the three
+# stages (a raw control byte does not: vector vrl prints it unescaped and the next stage cannot parse it).
+DP_SEP="$(printf '\xe2\x80\xa8')"
+run_fixture "doppler-token-split-by-a-stripped-separator-is-redacted (the strip runs before the rule)" \
+  "{\"message\":\"fetch failed with dp.""pt.${DP_HEAD}${DP_SEP}${DP_TAIL} rejected\"}" \
+  '(.message | test("dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+run_fixture "doppler-token-directly-after-a-stripped-separator-is-redacted (the rule also runs BEFORE the strip)" \
+  "{\"message\":\"fetch failed with x${DP_SEP}dp.""pt.${DP_BODY} rejected\"}" \
+  '(.message | test("xdp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkkkkkkkkkkkkkk") | not)'
+DP_MID="$(printf 'k%.0s' $(seq 1 25))"
+DP_REST="$(printf 'k%.0s' $(seq 1 18))"
+run_fixture "doppler-token-split-late-in-the-body-is-redacted-whole (the first pass tolerates stripped characters in the body)" \
+  "{\"message\":\"fetch failed with dp.""pt.${DP_MID}${DP_SEP}${DP_REST} rejected\"}" \
+  '(.message | test("dp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkk") | not)'
+run_fixture "doppler-token-after-a-separator-and-split-early-is-redacted-whole" \
+  "{\"message\":\"fetch failed with x${DP_SEP}dp.""pt.kkkkkkkkkk${DP_SEP}${DP_TAIL} rejected\"}" \
+  '(.message | test("xdp\\.\\[redacted\\] rejected"))' \
+  '(.message | test("kkkkkkkk") | not)'
+run_fixture "dp-prefix-with-a-six-letter-kind-passes-through-intact (the kind is two to five letters)" \
+  "{\"message\":\"fetch failed with dp.abcdef.${DP_BODY} rejected\"}" \
+  "(.message == \"fetch failed with dp.abcdef.${DP_BODY} rejected\")"
+run_fixture "dp-label-after-a-dot-is-redacted-on-purpose (a documented over-redaction: a DNS label shaped like a token)" \
+  '{"message":"registry.dp.eu.example-cloud-long-hostname.internal ok"}' \
+  '(.message == "registry.dp.[redacted] ok")'
+
+# --- A message that is not a string must still be scrubbed, never shipped raw (string! would abort and
+# Vector would then pass the event on unmodified). Absent, integer and object messages each end as a string
+# carrying the string-stage audit tag.
+run_fixture "integer-message-is-coerced-and-scrubbed" \
+  '{"message":12345}' \
+  '(.message | type == "string")' \
+  '(.pii_scrub_applied | endswith("+string"))'
+run_fixture "absent-message-is-scrubbed-to-an-empty-string" \
+  '{"other":"field"}' \
+  '(.message | type == "string")' \
+  '(.pii_scrub_applied | endswith("+string"))'
+run_fixture "object-message-never-ships-raw" \
+  '{"message":{"token":"fixture-only"}}' \
+  '(.message | type == "string")' \
+  '(.pii_scrub_applied | endswith("+string"))' \
+  '(.message | test("fixture-only") | not)'
+
 # --- AC5(c): line-injection chars stripped ---
 run_fixture "line-injection-unicode" \
   '{"message":"foo bar bazqux"}' \
@@ -288,7 +371,7 @@ assert_grep() {
 assert_grep "app_container_journald source exists" '^\[sources\.app_container_journald\]'
 assert_grep "warn filter reads the app_container source" '^inputs = \["app_container_journald"\]'
 assert_grep "app container routed THROUGH pii_scrub (redaction path, not sink-direct)" \
-  '^inputs = \["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"\]'
+  '^inputs = \["inngest_terminator_filter", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald", "egress_audit_throttled_dedupe"\]'
 # The marker chain is the ONLY addition (#9545): it carries a workspace id and a count, never a host.
 assert_grep "egress audit throttle marker is the only addition to the scrub inputs, built from vector's internal metrics" \
   '^inputs = \["egress_audit_throttled_filter"\]'
@@ -734,8 +817,8 @@ if [[ -z "$SRC2_BLOCK" ]]; then
   fail "Source 2 drift (#7898): [sources.system_journald] block not found in vector.toml"
 elif ! grep -qE '^include_matches\.PRIORITY = \["0", "1", "2"\]$' <<<"$SRC2_BLOCK"; then
   fail "Source 2 drift (#7898): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\"] — the host-script crit rows (logger -p user.crit = PRIORITY 2) would stop shipping"
-elif ! grep -qE '^exclude_units = \["inngest-server\.service"\]$' <<<"$SRC2_BLOCK"; then
-  fail "Source 2 drift (#7898): exclude_units widened/changed — a monitor unit added here would lose its off-box refusal path"
+elif ! grep -qE '^exclude_units = \["inngest-server\.service", "soleur-inngest-tls\.service"\]$' <<<"$SRC2_BLOCK"; then
+  fail "Source 2 drift (#7898): exclude_units widened/changed (it carries exactly the two units Source 1 includes) — a monitor unit added here would lose its off-box refusal path"
 elif ! grep -qE '^inputs = \[.*"system_journald".*\]' "$VECTOR_TOML"; then
   fail "Source 2 drift (#7898): system_journald is no longer an input of the pii_scrub chain"
 else
@@ -761,12 +844,14 @@ if [[ -z "$SRC1_BLOCK" ]]; then
   fail "Source 1 drift (#9963): [sources.inngest_journald] block not found in vector.toml"
 elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["3", "4"\]$' >/dev/null; then
   fail "Source 1 drift (#9963 + #6551 partition): include_matches.PRIORITY is no longer exactly [\"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping; PRIORITY 0-2 moved to Source 2 under the partition (untagged rows)"
-elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service"\]$' >/dev/null; then
+elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service", "soleur-inngest-tls\.service"\]$' >/dev/null; then
   fail "Source 1 drift (#9963): include_units changed — the unit's own rows at every priority stop shipping"
-elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_journald"')" = "0" ]; then
-  fail "Source 1 drift (#9963): inngest_journald is no longer an input of the pii_scrub chain (checked against the pii_scrub* transform block's own inputs line, not any inputs line)"
+elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_terminator_filter"')" = "0" ]; then
+  fail "Source 1 drift (#9963): the terminator filter (the only reader of inngest_journald) is no longer an input of the pii_scrub chain (checked against the pii_scrub* transform block's own inputs line, not any inputs line)"
+elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_journald"')" != "0" ]; then
+  fail "Source 1 drift (terminator filter): the raw inngest_journald is an input of the pii_scrub chain again, so the filter is bypassed"
 else
-  pass "Source 1 (inngest_journald) admits inngest-server.service OR PRIORITY {3,4} from any unit and feeds the scrub chain — the #9963+#6551 control-row arm holds"
+  pass "Source 1 (inngest_journald) admits the inngest-server and TLS terminator units OR PRIORITY {3,4} from any unit and feeds the scrub chain through the terminator filter — the #9963+#6551 control-row arm holds"
 fi
 
 echo
@@ -814,7 +899,12 @@ fi
 # multi-byte char), so the pin is the guaranteed-minimum run. Ratchet when adding fixtures, and
 # read a floor failure on an otherwise-green run as "you added rows, update this number".
 # Ratcheted 36 -> 39 by #9963 (AC3d-disjoint + AC3d-stale + the Source-1 arm pin).
-PII_SCRUB_MIN_CASES=39
+# Ratcheted 39 -> 42 by the terminator-journal change (the Doppler token shape: service token, personal token,
+# ordinary dp. text; the floor was then 42 against 43 cases), then 51 and 53 by its review (body-length
+# boundary pair, underscore anchor, strip order both ways, six-letter kind, the documented DNS-label
+# over-redaction, a late split and a separator-plus-early-split, and the three non-string-message cases): the
+# full current count of 55.
+PII_SCRUB_MIN_CASES=55
 if (( CASES < PII_SCRUB_MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PII_SCRUB_MIN_CASES" >&2

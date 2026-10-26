@@ -1192,6 +1192,24 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
   timezone                = "UTC"
 }
 
+# #10952 — liveness and outcome for the two Hetzner orphan sweeps (scheduled-terraform-drift.yml →
+# rung2-rehearsal-orphan-sweep and inngest-rehearsal-orphan-sweep). ONE slug for the pair: the
+# `orphan-sweeps-checkin` aggregator job posts `ok` only when both sweep jobs concluded success (see the
+# rule in the comment block above that job). The 25-minute job cap puts a worst-case check-in about 30
+# minutes after the slot, inside checkin_margin_minutes = 60. max_runtime_minutes has no effect (a
+# single check-in). Created UNROUTED under the two-PR rule (cron-monitor-alerts.tf); routing is #10972.
+resource "sentry_cron_monitor" "scheduled_orphan_sweeps" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-orphan-sweeps"
+  schedule                = { crontab = "0 6,18 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 30
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # #6031 (ADR-088) — the scheduled-ghcr-token-minter monitor was REMOVED when the minter was
 # disabled (App installation tokens cannot pull the private repo-linked GHCR packages). The
 # minter itself was deleted by #8714 (ADR-096 task 5.4); there is nothing to restore.
@@ -1409,12 +1427,17 @@ resource "sentry_cron_monitor" "workspaces_luks_verify_web2" {
 # single terminal heartbeat (this file's header, lines on two-step check-ins) —
 # but it must not be FALSE.
 resource "sentry_cron_monitor" "main_health_monitor" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "main-health-monitor"
-  schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 210
-  max_runtime_minutes     = 185
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "main-health-monitor"
+  schedule     = { crontab = "0 */6 * * *" }
+  # #9410 — the monitor is sharded: the envelope is the run's bounded wall
+  # clock, i.e. the SLOWEST leg's job ceiling plus the report job's, not a
+  # single job's. Currently max(85, 80, 35, 30, 30) + 15 = 100, margin = +25.
+  # The G2 row of plugins/soleur/test/main-health-monitor-workflow.test.sh
+  # keeps these two literals coupled to the workflow.
+  checkin_margin_minutes  = 125
+  max_runtime_minutes     = 100
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

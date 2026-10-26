@@ -1927,3 +1927,49 @@ export async function ensureDedupIssue(
   })) as { data: { number: number } };
   return { created: true, issueNumber: created.data.number };
 }
+
+/**
+ * Walk all pages of a paginated octokit list call (`per_page: 100`) up to a
+ * defensive cap of 20 pages — the `fetchAllPages` pattern established in
+ * `get-workstream-issue-options.ts` (the octokit client here is bare
+ * `@octokit/core`; no `paginate` plugin is installed).
+ *
+ * Any dedup path that ENUMERATES items to decide "does a matching open item
+ * exist" must page to completion: a bounded first page makes an existing open
+ * item beyond it invisible and the cron files a duplicate — a failure that
+ * grows exactly when the repo is busiest (#8182). The enumeration call sites
+ * are `listOpenPrHeads` (open-PR dedup for both the drift and attestation
+ * arms) and the per-bundle issue scan in `open-drift-issue-<slug>`.
+ */
+export async function fetchAllPages<T>(
+  fetchPage: (page: number) => Promise<{ data: T[] }>,
+  opts?: { perPage?: number; maxPages?: number },
+): Promise<T[]> {
+  const perPage = opts?.perPage ?? 100;
+  const maxPages = opts?.maxPages ?? 20;
+  const out: T[] = [];
+  let lastSize = 0;
+  for (let page = 1; page <= maxPages; page++) {
+    const { data } = await fetchPage(page);
+    out.push(...data);
+    lastSize = data.length;
+    if (data.length < perPage) break;
+  }
+  // The cap is a bound on runaway walks, not a silent truncation point: a
+  // full final page means the enumeration is INCOMPLETE and a dedup decided
+  // on it can miss an existing open item — the exact defect #8182 exists to
+  // close. Fail loud rather than dedup on a partial view.
+  if (lastSize === perPage) {
+    throw new Error(
+      `fetchAllPages hit the ${maxPages}-page cap with a full final page — enumeration is incomplete; dedup must not decide on a partial view`,
+    );
+  }
+  return out;
+}
+
+/**
+ * The login GitHub reports for a PR authored by the Soleur GitHub App. Single source for
+ * the compound-promote ledger reader's identity binding (#8293). `cron-bot-pr-reaper.ts`
+ * keeps its own local literal; a suite pins the two equal (the reaper is not edited here).
+ */
+export const SOLEUR_BOT_LOGIN = "soleur-ai[bot]";

@@ -563,11 +563,6 @@ SWEEP_DEFERRALS=(
   # forbidden-diagnostic rule allows (apps/web-platform/infra/luks-monitor-install.test.sh, G2 and G4). Converting it needs that security
   # review, so it rides a PR that carries the review, not a lint sweep.
   'apps/web-platform/infra/workspaces-luks.tf | = | 1 | #9217'
-  # A sixth class, found at review: a script BAKED into a digest-pinned image whose pin lives in a user_data file. The inngest bootstrap
-  # image carries inngest-luks-cutover.sh at tag vinngest-v1.1.44 and cloud-init-inngest-bootstrap.test.sh (GuardA) requires every baked
-  # carrier byte-identical to that tag, so a one-token edit needs a new image AND a pin bump in cloud-init-inngest.yml (= an inngest host
-  # replace). Convert it only in the PR that mints the next image tag, and delete the row there.
-  'apps/web-platform/infra/inngest-luks-cutover.sh | = | 1 | #9217'
 )
 
 # scan_sweep <root> -> line 1 `SWEPT: <n> files`, then any `UNRESOLVED: ...` lines, then the code lines that match
@@ -1448,8 +1443,8 @@ loose_ctl="$(_loose_not_test_shaped 'apps/web-platform/infra/* | <= | 99 | #9217
   || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two injected rows, and not the tight one)")
 # The loose-row check sees only `<=` rows, so a TIGHT production row would pass it. Every non-test-shaped row, in any mode, must be one of the
 # file-exact deferrals above: no glob characters, and exactly GATED_PROD_ROWS of them, in the order GATED_PROD_GLOBS pins. Changing the set is then a visible three-place edit (the row, the count, the glob list).
-GATED_PROD_ROWS=6
-GATED_PROD_GLOBS=$'apps/web-platform/infra/cloud-init-registry.yml\napps/web-platform/infra/cloud-init-inngest.yml\napps/web-platform/infra/cloud-init-git-data.yml\napps/web-platform/infra/git-data-bootstrap.sh\napps/web-platform/infra/workspaces-luks.tf\napps/web-platform/infra/inngest-luks-cutover.sh\n'
+GATED_PROD_ROWS=5
+GATED_PROD_GLOBS=$'apps/web-platform/infra/cloud-init-registry.yml\napps/web-platform/infra/cloud-init-inngest.yml\napps/web-platform/infra/cloud-init-git-data.yml\napps/web-platform/infra/git-data-bootstrap.sh\napps/web-platform/infra/workspaces-luks.tf\n'
 prod_globs=""
 for _row in "${SWEEP_DEFERRALS[@]}"; do
   IFS='|' read -r _g _ <<<"$_row"; _g="${_g#"${_g%%[![:space:]]*}"}"; _g="${_g%"${_g##*[![:space:]]}"}"
@@ -2045,11 +2040,12 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=289   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples (286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub)
+PJ_TRIPLES=291   # recomputed from a green run (291 on main, minus 1 at #10112: the retired inngest-luks-cutover suite's triple leaves with the file): the number of distinct (test file, verb, producer file) triples (289 -> 291 with the access suite's docker stub for the container probe, #8211 PR-E: two producer files; 286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub; +1 at #10696: the secret-scan suite's pass-through perl wrapper)
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
   '.claude/hooks/browser-snapshot-credential-guard.test.sh | jq | exempt | deliberate-fault never: def 156 `exit 127` first statement (jq absent shim; the row asserts the degraded deny) (reach T1; t1:rc1/0s red:rc0/1s; hits 1)'
+  '.claude/hooks/git-commit-secret-scan.test.sh | perl | exempt | pass-through wrapper (R46i) logs one line then execs the real perl, which reads the piped command text'
   '.claude/hooks/grep-rewrite.test.sh | grep | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/10s; hits 2)'
   '.claude/hooks/grep-rewrite.test.sh | jq | drains | 2 | *'
   '.claude/hooks/guardrails.test.sh | perl | exempt | deliberate-fault never: def 1034 `exit 127` first statement (perl absent stub, the fixture is "without perl the fallback still gates") (reach T1; t1:rc0/61s; hits 6)'
@@ -2084,6 +2080,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/fresh-boot-ready.test.sh | doppler | exempt | text-only the derived producer apps/cla-evidence/infra/bootstrap.sh matches by basename only; the suite says bootstrap.sh only in assertion messages about the host bootstrap script and never runs the cla-evidence script'
   'apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh | cryptsetup | exempt | text-only luksOpen pipe site (the `cryptsetup luksOpen --key-file -` line in git-data-bootstrap.sh section 1) is outside the extracted store-verify unit; stub answers isLuks only'
   'apps/web-platform/infra/git-data-cutover-access.test.sh | doppler | exempt | arm-drain the finalizer stub (def 2450) drains stdin as the first act of its secrets set arm (S7c edit, wire assert FZ1); the other three doppler stubs refuse or serve get only and receive no piped set (3 non-test producers)'
+  'apps/web-platform/infra/git-data-cutover-access.test.sh | docker | drains | 1 | *'
   'apps/web-platform/infra/git-data-flag-precheck.test.sh | doppler | drains | 1 | = set'
   'apps/web-platform/infra/git-data-liveness.test.sh | curl | exempt | arm-drain def 180 drains in its --config arm at opener+4 and def 859 is a one-line printf stub whose body is cat >/dev/null (the finder reads the newline escape before cat as a word, so it cannot credit it); 122 piped --config - calls (reach T1)'
   'apps/web-platform/infra/git-data-luks-reopen.test.sh | cryptsetup | exempt | arm-drain the luksOpen arm reads the key (cat to key_seen) before any exit; keyed on the subcommand, not the flag'

@@ -105,7 +105,7 @@ on:
       # TRIGGER_FILES by ship-deploy-pipeline-fix-gate.test.ts.
       - "apps/web-platform/infra/inngest-registry-probe.sh"
       - "apps/web-platform/infra/inngest-doublefire-probe.sh"
-      # #6780 — the five dedicated-host carriers (ADR-135 refresh-set members D3). Their real
+      # #6780 — the four dedicated-host carriers (ADR-135 refresh-set members D3). Their real
       # channel is the dedicated host's signed bundle pull; on web hosts they are inert
       # /usr/local/bin files — but they ARE in FILE_MAP + push payload + the
       # deploy_pipeline_fix triggers_replace hash, so a body-only edit must fire this apply
@@ -114,7 +114,6 @@ on:
       - "apps/web-platform/infra/inngest-cutover-flip.sh"
       - "apps/web-platform/infra/inngest-server-flip-guard.sh"
       - "apps/web-platform/infra/cat-inngest-cutover-state.sh"
-      - "apps/web-platform/infra/inngest-luks-cutover.sh"
       # #7095 — the re-deliverable web-host Doppler credential and the two systemd drop-ins
       # that re-point the generated units (vector, inngest-heartbeat) at it. All three are
       # host-delivered over the webhook channel AND registered in server.tf's

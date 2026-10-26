@@ -110,6 +110,9 @@
 #                  unless the cache dir is owned, non-symlink and was just created. The two test
 #                  suites added by the same PR carry NO baseline rows: every fixture write is under
 #                  a canonical `assert_fixture_dir`.
+#   -12 (2026-10-24) #10112: inngest-luks-cutover.sh (11 rows) and inngest-luks-cutover.test.sh (1 row)
+#                  were DELETED with the retired cutover trio, so both rows leave the baseline and no
+#                  other row moves. The three entries below that name those files are history.
 #   1439 -> 1440   #6894, ship-time advisor round: one more `$STATE_DIR` write in
 #                  inngest-luks-cutover.sh (the rollback-verified latch) — same root class as the
 #                  ten rows already itemised below; the row goes 10 -> 11 and nothing else moves.
@@ -201,14 +204,13 @@
 2	apps/web-platform/infra/inngest-config-bundle-pack.sh
 1	apps/web-platform/infra/inngest-config-bundle-pack.test.sh
 2	apps/web-platform/infra/inngest-consumer-probe.sh
+1	apps/web-platform/infra/inngest-consumer-probe.test.sh
 5	apps/web-platform/infra/inngest-cutover-flip.sh
 2	apps/web-platform/infra/inngest-cutover-flip.test.sh
 6	apps/web-platform/infra/inngest-cutover-latch.test.sh
 2	apps/web-platform/infra/inngest-doublefire-probe.sh
 5	apps/web-platform/infra/inngest-inventory.sh
 1	apps/web-platform/infra/inngest-inventory.test.sh
-11	apps/web-platform/infra/inngest-luks-cutover.sh
-1	apps/web-platform/infra/inngest-luks-cutover.test.sh
 7	apps/web-platform/infra/inngest-nic-wait.test.sh
 2	apps/web-platform/infra/inngest-provision-rehearsal.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
@@ -269,6 +271,7 @@
 1	.claude/hooks/devin-matcher-parity.test.sh
 2	.claude/hooks/docs-cli-verification.test.sh
 3	.claude/hooks/follow-through-directive-gate.test.sh
+1	.claude/hooks/git-commit-secret-scan.sh
 1	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/incidents.test.sh
 1	.claude/hooks/lib/freeze-lock.sh

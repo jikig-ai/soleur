@@ -13,7 +13,6 @@
 .claude/hooks/devin-matcher-parity.test.sh	plugins/soleur/hooks/hooks.json
 .claude/hooks/git-commit-secret-scan.test.sh	.gitattributes
 .claude/hooks/git-commit-secret-scan.test.sh	knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md
-.claude/hooks/git-commit-secret-scan.test.sh	plugins/soleur/hooks/lib/shell-argv.pl
 .claude/hooks/grep-q-pipe-guard.test.sh	.github/actions/anthropic-preflight/action.yml
 .claude/hooks/grep-q-pipe-guard.test.sh	.github/actions/mint-infra-app-token/action.yml
 .claude/hooks/grep-q-pipe-guard.test.sh	.github/actions/notify-ops-email/action.yml
@@ -347,7 +346,6 @@ plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	README.md
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	package.json
 plugins/soleur/skills/community/test/community-argv.test.sh	.gitignore
 plugins/soleur/skills/community/test/community-argv.test.sh	apps/web-platform/Dockerfile
-plugins/soleur/skills/community/test/github-community.test.sh	plugins/soleur/test/test-helpers.sh
 plugins/soleur/skills/compound/test/phase-16.test.sh	AGENTS.md
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	.github/workflows/fix-constraints-stage-a.yml
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	.github/workflows/fix-constraints-stage-b.yml
@@ -432,20 +430,14 @@ plugins/soleur/skills/incident/test/redact-sentinel.test.sh	knowledge-base/engin
 plugins/soleur/skills/linear-fetch/test/parity.test.sh	.github/workflows/pr-quality-guards.yml
 plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization.test.sh	knowledge-base/legal/tenant-dpa-register.md
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	README.md
-plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	.claude/hooks/skill-security-scan-write.sh
 plugins/soleur/skills/verification-scaffold/test/generator.test.sh	.claude/settings.json
 plugins/soleur/skills/verification-scaffold/test/generator.test.sh	.gitleaks.toml
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md
-plugins/soleur/test/audit-flag-flip.test.sh	plugins/soleur/skills/flag-create/scripts/create.sh
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/hooks/bare-root-cwd-guard.sh
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/hooks/session-rules-loader.sh
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/settings.json
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.devin/config.json
-plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/brand-hex-commit-gate.sh
-plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/git-commit-secret-scan.sh
 plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/guardrails.sh
-plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/lib/incidents.sh
-plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/pre-closing-technical-fork-gate.test.sh
 plugins/soleur/test/ci-classify-step-exec.test.sh	.github/workflows/ci.yml
 plugins/soleur/test/ci-classify-step-exec.test.sh	README.md
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	.github/workflows/ci.yml
@@ -549,7 +541,6 @@ plugins/soleur/test/flag-org-scoping-pr2.test.sh	apps/web-platform/lib/feature-f
 plugins/soleur/test/flagsmith-stdin-config.test.sh	apps/web-platform/.env.example
 plugins/soleur/test/flagsmith-stdin-config.test.sh	apps/web-platform/lib/feature-flags/server.ts
 plugins/soleur/test/gdpr-gate-self-test.test.sh	README.md
-plugins/soleur/test/gdpr-gate-self-test.test.sh	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts
 plugins/soleur/test/generate-kb-index.test.sh	knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md
 plugins/soleur/test/generate-kb-index.test.sh	scripts/ensure-kb-index.sh
 plugins/soleur/test/git-env-list-parity.test.sh	.claude/hooks/incident-sandbox-coverage.test.sh
@@ -614,15 +605,12 @@ plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/q
 plugins/soleur/test/lint-rejected-register.test.sh	README.md
 plugins/soleur/test/main-health-monitor-workflow.test.sh	.github/workflows/apply-deploy-pipeline-fix.yml
 plugins/soleur/test/main-health-monitor-workflow.test.sh	.github/workflows/infra-validation.yml
-plugins/soleur/test/main-health-monitor-workflow.test.sh	scripts/followthroughs/jobs1-stopgap-7432.sh
 plugins/soleur/test/main-health-monitor-workflow.test.sh	scripts/regenerate-shard-manifest.py
 plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	.github/workflows/merge-queue-cla-synthetics.yml
 plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	scripts/ci-cla-required-ruleset-canonical-required-status-checks.json
 plugins/soleur/test/merge-queue-stall-check.test.sh	.github/workflows/merge-queue-stall-check.yml
 plugins/soleur/test/merge-queue-stall-check.test.sh	infra/github/ruleset-ci-required.tf
-plugins/soleur/test/net-issue-flow.test.sh	.claude/hooks/ship-net-issue-flow-gate.sh
 plugins/soleur/test/net-issue-flow.test.sh	AGENTS.rules.md
-plugins/soleur/test/net-issue-flow.test.sh	scripts/lint-rule-bodies.py
 plugins/soleur/test/net-issue-flow.test.sh	scripts/rule-metrics-aggregate.sh
 plugins/soleur/test/notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/operator-9321-stages.test.sh	.github/actions/infra-credentials/action.yml
@@ -682,7 +670,6 @@ plugins/soleur/test/reusable-release-degraded-pointer.test.sh	knowledge-base/eng
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	scripts/ensure-doppler.sh
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	scripts/ensure-doppler.sh
-plugins/soleur/test/rtk-grammar-parity.test.sh	.claude/hooks/pkill-self-match-guard.sh
 plugins/soleur/test/scripts-shard-manifest.test.sh	apps/web-platform/infra/run-registered-suites.sh
 plugins/soleur/test/scripts-shard-totality.test.sh	.github/workflows/ci.yml
 plugins/soleur/test/scripts-shard-totality.test.sh	scripts/suite-shard-legs-heavy.tsv
@@ -698,7 +685,6 @@ plugins/soleur/test/test-pyramid-fixtures.test.sh	scripts/suite-durations-heavy.
 plugins/soleur/test/test-pyramid-fixtures.test.sh	scripts/suite-durations.tsv
 plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh	AGENTS.md
 plugins/soleur/test/vendor-bundle-coverage.test.sh	.github/workflows/vendor-pin-verify.yml
-plugins/soleur/test/vendor-bundle-coverage.test.sh	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts
 plugins/soleur/test/vendor-bundle-coverage.test.sh	lefthook.yml
 plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/vendor-pin-integrity.test.sh	lefthook.yml
@@ -717,7 +703,6 @@ plugins/soleur/test/worktree-manager-install-bounded.test.sh	bunfig.toml
 plugins/soleur/test/worktree-manager-install-bounded.test.sh	package-lock.json
 plugins/soleur/test/worktree-manager-install-bounded.test.sh	package.json
 plugins/soleur/test/zot-http-deadlines-required.test.sh	apps/web-platform/infra/cloud-init-registry.yml
-plugins/soleur/test/zot-http-deadlines-required.test.sh	apps/web-platform/infra/zot-config-deadlines.test.sh
 plugins/soleur/test/zot-image-mirror-publish.test.sh	.github/workflows/zot-image-mirror.yml
 plugins/soleur/test/zot-image-mirror-publish.test.sh	apps/web-platform/infra/zot-image-oci-archive.sh
 scripts/actions-queue-health	.github/workflows/scheduled-actions-queue-health.yml
@@ -816,7 +801,6 @@ scripts/followthrough-varq-ban	scripts/betterstack-query.sh
 scripts/followthrough-varq-ban	scripts/lib/trusted-verdict.sh
 scripts/followthrough-varq-ban	scripts/sweep-followthroughs.sh
 scripts/followthroughs/ccla-representative-icla-7922	apps/cla-evidence/roster/ccla-roster.json
-scripts/followthroughs/ccla-representative-icla-7922	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts
 scripts/followthroughs/ccla-representative-icla-7922	scripts/followthroughs/ccla-representative-icla-7922.acknowledged
 scripts/followthroughs/ci-draft-light-soak-9728	.github/workflows/ci.yml
 scripts/followthroughs/ci-push-dedupe-soak-9512	.github/workflows/ci.yml
@@ -1070,7 +1054,6 @@ scripts/registry-htpasswd-stdin-10119	scripts/betterstack-query.sh
 scripts/registry-luks-live-8386	.github/workflows/apply-web-platform-infra.yml
 scripts/registry-luks-live-8386	scripts/betterstack-query.sh
 scripts/registry-luks-live-8386	scripts/encryption-posture-ledger.json
-scripts/rules-loader-stamp-probe	.claude/hooks/session-rules-loader.sh
 scripts/rules-loader-stamp-probe	AGENTS.md
 scripts/rules-loader-stamp-probe	AGENTS.rules.md
 scripts/rules-loader-stamp-probe	knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
@@ -1432,7 +1415,6 @@ scripts/tmpfs-guard	AGENTS.md
 scripts/tmpfs-guard	AGENTS.rules.md
 scripts/tmpfs-guard	plugins/soleur/.claude-plugin/plugin.json
 scripts/tmpfs-guard	plugins/soleur/.mcp.json
-scripts/tmpfs-guard	plugins/soleur/scripts/lib/tmp-classify.sh
 scripts/web-host-escrow-preflight	scripts/check-web-host-escrow-config.sh
 scripts/web2-luks-live-6931	.github/workflows/scheduled-followthrough-sweeper.yml
 scripts/web2-luks-live-6931	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -1490,7 +1472,6 @@ tests/scripts/betterstack-ingest-probe	scripts/followthroughs/betterstack-roundt
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/betterstack-query-archive	scripts/ensure-doppler.sh
 tests/scripts/betterstack-roundtrip-latency	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh
-tests/scripts/betterstack-roundtrip-latency	scripts/lint-followthrough-varq-ban.sh
 tests/scripts/cleanup-merged-space	.gitignore
 tests/scripts/cleanup-merged-space	AGENTS.md
 tests/scripts/cleanup-merged-space	CLAUDE.md
@@ -1522,7 +1503,6 @@ tests/scripts/git-data-root-key-arm	apps/web-platform/infra/git-data-root-key.fi
 tests/scripts/git-data-rung2-evidence-capture	.github/workflows/git-data-rung2-rehearsal.yml
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
-tests/scripts/git-data-rung2-evidence-capture	scripts/betterstack-query.sh
 tests/scripts/git-data-rung2-evidence-capture	scripts/followthroughs/git-data-rung2-evidence-capture.sh
 tests/scripts/inngest-host-dark-gate	.github/workflows/apply-web-platform-infra.yml
 tests/scripts/inngest-host-dark-gate	scripts/cutover-inngest.sh
@@ -1531,7 +1511,6 @@ tests/scripts/inngest-host-shape-gate	.github/workflows/apply-web-platform-infra
 tests/scripts/kb-drift-walker	AGENTS.md
 tests/scripts/kb-drift-walker	AGENTS.rules.md
 tests/scripts/lint-rule-bodies	AGENTS.rules.md
-tests/scripts/lint-rule-bodies	scripts/lint-rule-bodies.py
 tests/scripts/lint-rule-bodies	scripts/migrated-rule-ids.txt
 tests/scripts/lint-rule-ids	AGENTS.md
 tests/scripts/lint-rule-ids	AGENTS.rules.md

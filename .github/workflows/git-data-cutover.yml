@@ -487,6 +487,10 @@ jobs:
           GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
           MODE: proof
           CUTOVER_LINEAGE: cutover-${{ github.run_id }}
+          # The container probe (worktree root writable by uid 1001, git-data reachable from INSIDE the app container) is the flip's
+          # gate and only the flip's: mode=proof also reads a clear after a rollback redeploy, where the egress path is intentionally
+          # unused and the container may be mid-recreate. Web-1 only (the roster); it reads the container running now.
+          CONTAINER_PROBE: ${{ steps.confirm.outputs.mode == 'flip' && '1' || '' }}
         run: bash apps/web-platform/infra/git-data-cutover.sh
 
       # --- flip: freeze the store (gc quiesced, provenance sentinel, lock purge) ------

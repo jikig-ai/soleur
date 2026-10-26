@@ -47,7 +47,7 @@ vi.mock("pino", async (importOriginal) => {
   return { ...actual, default: factory };
 });
 
-import { emitOutcomeMarker } from "@/server/compound-promote-marker";
+import { COMPOUND_PROMOTE_STATUSES, emitOutcomeMarker, type CompoundPromoteStatus } from "@/server/compound-promote-marker";
 
 beforeEach(() => expect.hasAssertions());
 afterEach(() => {
@@ -360,5 +360,89 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
     expect(`logger.warn({ [RUN_REPORT_SWEEP_MARKER]: true, ...summary }, "x")`).toMatch(CTX_LOGGER_MARKER_RE);
     expect(`logger.warn({ SOLEUR_COMPOUND_PROMOTE_OUTCOME: true, fn }, "x")`).toMatch(CTX_LOGGER_MARKER_RE);
     expect(`log.warn({ SOLEUR_COMPOUND_PROMOTE_OUTCOME: true }, "x")`).not.toMatch(CTX_LOGGER_MARKER_RE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8293 -- the patterns-path fields: numbers and closed enums only, never text.
+// ---------------------------------------------------------------------------
+describe("the patterns-path marker fields (#8293)", () => {
+  /** The complete set of keys an emitted patterns-path row may carry, with the shape each value must have. */
+  const ALLOWED: Record<string, (v: unknown) => boolean> = {
+    SOLEUR_COMPOUND_PROMOTE_OUTCOME: (v) => v === true,
+    fn: (v) => v === "cron-compound-promote",
+    component: (v) => v === "compound-promote",
+    level: (v) => typeof v === "number",
+    time: (v) => typeof v === "number",
+    msg: (v) => v === "compound promote outcome",
+    trigger: (v) => v === "cron" || v === "manual",
+    run_id: (v) => typeof v === "string",
+    status: (v) => (COMPOUND_PROMOTE_STATUSES as readonly unknown[]).includes(v),
+    corpus_count: (v) => typeof v === "number",
+    clusters_proposed: (v) => typeof v === "number",
+    clusters_opened: (v) => typeof v === "number",
+    corpus_input_bytes: (v) => typeof v === "number",
+    refusals: (v) => Array.isArray(v),
+    refusals_total: (v) => typeof v === "number",
+    refusal_detail: (v) => Array.isArray(v),
+    input_source: (v) => v === "corpus" || v === "patterns",
+    patterns_open: (v) => typeof v === "number",
+    ledger_read: (v) => v === "ok" || v === "failed",
+    ledger_suppressed: (v) => typeof v === "number",
+    ledger_prs_scanned: (v) => typeof v === "number",
+    ledger_title_skipped: (v) => typeof v === "number",
+  };
+
+  it("an emitted patterns-path row carries only allowlisted keys, each a number or a closed enum", () => {
+    emitOutcomeMarker({
+      trigger: "manual",
+      run_id: "R",
+      status: "no-qualifying-clusters",
+      corpus_count: 15,
+      clusters_proposed: 2,
+      clusters_opened: 0,
+      corpus_input_bytes: 8123,
+      refusals: ["ledger-suppressed", "ledger-suppressed"],
+      refusal_detail: [{ cluster_hash: "a".repeat(64), reason: "ledger-suppressed" }],
+      input_source: "patterns",
+      patterns_open: 3,
+      ledger_read: "ok",
+      ledger_suppressed: 2,
+      ledger_prs_scanned: 4,
+      ledger_title_skipped: 1,
+    });
+    expect(captured.lines).toHaveLength(1);
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(row)) {
+      expect(Object.keys(ALLOWED), `unexpected marker key ${k}`).toContain(k);
+      expect(ALLOWED[k](v), `marker key ${k} has the wrong shape`).toBe(true);
+    }
+    for (const k of ["input_source", "patterns_open", "ledger_read", "ledger_suppressed", "ledger_prs_scanned", "ledger_title_skipped"]) {
+      expect(row, `row lacks ${k}`).toHaveProperty(k);
+    }
+  });
+
+  it("a row with none of the new fields (the scheduled path) carries none of them", () => {
+    emitOutcomeMarker({ trigger: "cron", run_id: "R", status: "completed", corpus_count: 1, clusters_proposed: 0, clusters_opened: 0 });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    for (const k of ["input_source", "patterns_open", "ledger_read", "ledger_suppressed", "ledger_prs_scanned", "ledger_title_skipped"]) {
+      expect(row).not.toHaveProperty(k);
+    }
+  });
+
+  it("the allowed-keys list is what the instrument checks: a free-text key would be flagged", () => {
+    emitOutcomeMarker({ trigger: "manual", run_id: "R", status: "completed", ...({ free_text: "hello" } as object) });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    expect(Object.keys(row).filter((k) => !(k in ALLOWED))).toEqual(["free_text"]);
+  });
+
+  it("CompoundPromoteStatus has exactly the eight literals, and the runtime array mirrors the union", () => {
+    const union: CompoundPromoteStatus[] = [...COMPOUND_PROMOTE_STATUSES];
+    expect(union).toHaveLength(8);
+    expect(new Set(union).size).toBe(8);
+    const src = readFileSync(join(__dirname, "..", "..", "..", "server", "compound-promote-marker.ts"), "utf-8");
+    const body = /export type CompoundPromoteStatus =([^;]+);/.exec(src)?.[1] ?? "";
+    expect(body.match(/\|?\s*"[a-z-]+"/g)?.length).toBe(8);
+    for (const lit of union) expect(body).toContain(`"${lit}"`);
   });
 });

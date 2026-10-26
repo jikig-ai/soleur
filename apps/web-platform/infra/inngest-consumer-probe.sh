@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
 set -u
+# Refuse to run under xtrace (#7797, #10363): this probe resolves and uses a secret heartbeat URL
+# (the variable named by INNGEST_CONSUMER_URL_KEY), so a traced launch would print it to stderr,
+# which journald ships off-box. Unconditional on purpose: the key name is always in the env file,
+# so a credential-keyed refusal would fire identically at higher complexity. It tests the STATE
+# (`$-`), so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV `set -x` are all caught. The unit's
+# ExecStart runs this script directly under `doppler run` and expands nothing (#9639, #10637):
+# the URL is resolved BELOW, after this refusal, from the variable NAME in INNGEST_CONSUMER_URL_KEY.
+# A change that resolves it above this block, or that makes the unit expand it again, reopens that
+# gap. For on-host debugging read `journalctl -t inngest-consumer-probe` (shipped to Better Stack)
+# or run inngest-consumer-probe.test.sh against stubs — never `bash -x` this script.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 # --- #7228 Phase 1: inngest CONSUMER-perspective serviceability probe --------------------------
 # Runs ON THE WEB HOST and verifies that the dedicated inngest host (10.0.1.40:8288) actually
 # SERVES its function registry over the private NIC. On success it pings a dedicated Better Stack
@@ -35,7 +48,8 @@ set -u
 # is in vector.toml's Source-4 allowlist and emits 3 `logger` rows per run (PREFLIGHT_START +
 # DONE/TIMEOUT + a summary), so a 60s wrapper would cost ~4,320 rows/day against a ~25k/day quota
 # — reintroducing the ~1,440 rows/day cost #6617b removed, which vector.toml:145 names "a fresh
-# quota decision". That script is BASH_SOURCE-guarded at :141 exactly so it can be sourced without
+# quota decision". That script is BASH_SOURCE-guarded at its tail (`${BASH_SOURCE[0]} == $0`)
+# exactly so it can be sourced without
 # running, and its fetch_functions() emits no markers. Sourcing buys both properties at once.
 # inngest-consumer-probe.test.sh pins this with a drift block; do not inline a second query here.
 #
@@ -54,7 +68,7 @@ set -u
 #
 # CONFIG IS ENV, delivered by server.tf into /etc/default/inngest-consumer-probe:
 # INNGEST_REMOTE_GQL_URL (optional; the sourced default already points at 10.0.1.40) and
-# INNGEST_CONSUMER_URL_KEY, whose named Doppler var the unit resolves by indirect expansion.
+# INNGEST_CONSUMER_URL_KEY, whose named Doppler var this script resolves by indirect expansion.
 #
 # TEST SEAMS (never set in production): INNGEST_PROBE_FUNCTIONS_FIXTURE is inherited from the
 # sourced script; SOLEUR_INNGEST_CONSUMER_PING_LOG re-routes the heartbeat ping to a file;
@@ -80,7 +94,22 @@ fi
 # (keep -u) immediately, before any classification runs.
 set +e +o pipefail
 
-URL="${INNGEST_CONSUMER_URL:-}"
+# THE HEARTBEAT URL (#9639, #10637). The unit no longer exports it: it names the variable doppler
+# injected it under (INNGEST_CONSUMER_URL_KEY, an identity mapping for the single inngest host) and
+# this script reads that variable HERE, after the xtrace refusal above. The NAME comes from an env
+# file, and `${!name}` evaluates array subscripts and command substitutions inside `name`, so it is
+# judged first: an upper-case identifier or nothing (LC_ALL=C pins ASCII ranges — byte-identical to
+# the _key_ok in web-zot-consumer-probe.sh and web-private-nic-guard.sh, whose suites' F6
+# locale[ranges off] rows make that case). No fallback to a bare variable of any other name. This
+# script never exports the resolved value; doppler's own injected copy under the key-named variable
+# is still inherited by children, as before this change.
+_key_ok() { local LC_ALL=C; case "${1:-}" in ''|[!A-Z]*|*[!A-Z0-9_]*) return 1 ;; esac; }
+# `unset` first: an exported URL in the inherited environment would keep its export attribute
+# through the assignments below.
+unset URL
+URL=""
+KEY_BAD=false
+if _key_ok "${INNGEST_CONSUMER_URL_KEY:-}"; then URL="${!INNGEST_CONSUMER_URL_KEY:-}"; else KEY_BAD=true; fi
 FAULT_MARKER="${SOLEUR_INNGEST_CONSUMER_FAULT_MARKER:-/run/inngest-consumer-probe.fault}"
 FAULT_INTERVAL="${SOLEUR_INNGEST_CONSUMER_FAULT_INTERVAL:-1800}"
 REFUSAL_MARKER="${SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER:-/run/inngest-consumer-probe.refusal}"
@@ -132,7 +161,7 @@ _ping() {
     printf 'PING %s\n' "$1" >> "$SOLEUR_INNGEST_CONSUMER_PING_LOG"
     return 0
   fi
-  [ -n "$URL" ] || { echo "[inngest-consumer-probe] WARN: INNGEST_CONSUMER_URL unset — the registry is servable but the beat cannot be sent, so the monitor will alarm on a HEALTHY host. Check /etc/default/inngest-consumer-probe." >&2; return 0; }
+  [ -n "$URL" ] || { echo "[inngest-consumer-probe] WARN: INNGEST_CONSUMER_URL unset — the registry is servable but the beat cannot be sent, so the monitor will alarm on a HEALTHY host. Check /etc/default/inngest-consumer-probe." >&2; [ "$KEY_BAD" = true ] && echo "[inngest-consumer-probe] WARN: INNGEST_CONSUMER_URL_KEY is unset or is not an upper-case variable name (the value is not shown); the heartbeat URL cannot be resolved." >&2; return 0; }
   if ! _hb_url_ok "$URL"; then
     local reason=token_shape LC_ALL=C
     case "$URL" in *[[:cntrl:]]*) reason=control_char ;; esac

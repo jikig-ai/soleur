@@ -813,7 +813,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/inngest-doublefire-probe.sh"
   "apps/web-platform/infra/inngest-enumerate-reminders.sh"
   "apps/web-platform/infra/inngest-inventory.sh"
-  "apps/web-platform/infra/inngest-luks-cutover.sh"
   "apps/web-platform/infra/inngest-rearm-reminders.sh"
   "apps/web-platform/infra/inngest-redis-bootstrap.sh"
   "apps/web-platform/infra/inngest-registry-probe.sh"
@@ -1047,6 +1046,7 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/betterstack-ingest-probe.sh"
+  "scripts/betterstack-query.sh"
   "scripts/compound-promote.test.sh"
   "scripts/lib/betterstack-sources.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1100,6 +1100,7 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ABSENCE_CLASSIFIER_PATHS=(
 AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
   "scripts/lib/betterstack-sources.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-followthrough-varq-ban.sh"
   "tests/scripts/test-betterstack-roundtrip-latency.sh"
 )
 
@@ -1479,6 +1480,46 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_CONCURRENCY_KEY_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/merge-effect-class-parity.test.sh — derived edges could not reach its subject (the workflows' trigger
+# blocks); declared from the repo paths its suite file names. Editing the classifier's allowlist is the exact weakening it catches.
+AFFECTED_PLUGINS_SOLEUR_TEST_MERGE_EFFECT_CLASS_PARITY_TEST_SH_PATHS=(
+  ".github/workflows/"
+  "plugins/soleur/scripts/merge-effect-class.sh"
+  "plugins/soleur/scripts/merge-effect-class.ci-only.tsv"
+  "plugins/soleur/test/merge-effect-class-parity.test.sh"
+  "plugins/soleur/test/workflow-run-deploy-invariants.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/scripts/merge-effect-class.test.sh — reads the consumer sentence in operator-holds.md and the parity suite.
+AFFECTED_PLUGINS_SOLEUR_SCRIPTS_MERGE_EFFECT_CLASS_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/merge-effect-class.sh"
+  "plugins/soleur/scripts/merge-effect-class.ci-only.tsv"
+  "plugins/soleur/scripts/merge-effect-class.test.sh"
+  "plugins/soleur/skills/ship/references/operator-holds.md"
+  "plugins/soleur/test/merge-effect-class-parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/ship-prepush-secret-scan.test.sh — reads the script under test, the ship SKILL.md call site, the repo's own
+# gitleaks pack and the CI range arm it must stay in parity with; the shared libs it sources are named so an edit to them selects it.
+AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PREPUSH_SECRET_SCAN_TEST_SH_PATHS=(
+  ".github/workflows/secret-scan.yml"
+  ".claude/hooks/lib/incidents.sh"
+  ".claude/hooks/ship-unpushed-commits-gate.sh"
+  ".gitleaks.toml"
+  "plugins/soleur/skills/review/SKILL.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/lib/gitleaks-probe.sh"
+  "plugins/soleur/test/ship-prepush-secret-scan.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/rule-metrics-constants.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
@@ -1655,6 +1696,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_MAIN_HEALTH_MONITOR_WORKFLOW_TEST_SH_PATHS=(
   "apps/web-platform/infra/run-registered-suites.sh"
   "knowledge-base/project/learnings/best-practices/"
   "plugins/soleur/test/main-health-monitor-workflow.test.sh"
+  "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-workflow-errexit-capture.py"
   "scripts/test-all.sh"
@@ -2875,7 +2917,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST__BASE_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  ".claude/hooks/brand-hex-commit-gate.sh"
+  ".claude/hooks/git-commit-secret-scan.sh"
   ".claude/hooks/incidents.test.sh"
+  ".claude/hooks/lib/commit-target-roots.sh"
+  ".claude/hooks/lib/incidents.sh"
+  ".claude/hooks/lib/technical-fork-cues.sh"
+  ".claude/hooks/pre-closing-technical-fork-gate.sh"
+  ".claude/hooks/pre-closing-technical-fork-gate.test.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_BRAND_WORKSHOP_PEN_COMMIT_AFTER_SAVE_TEST_SH_PATHS=(
@@ -2969,6 +3018,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_ROADMAP_RECONCILE_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_RTK_GRAMMAR_PARITY_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  ".claude/hooks/pkill-self-match-guard.sh"
+  "scripts/lib/rule-metrics-constants.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_SKILL_ONCE_TEST_SH_PATHS=(
@@ -2989,6 +3040,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_UX_DESIGN_LEAD_OUTPUT_PATH_GUARD_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_VENDOR_BUNDLE_COVERAGE_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_VENDOR_PIN_INTEGRITY_TEST_SH_PATHS=(
@@ -3004,8 +3056,15 @@ AFFECTED_CLAUDE_HOOKS_BRAND_HEX_COMMIT_GATE_TEST_SH_PATHS=(
   ".claude/hooks/lib/incidents.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# (#10696) the closure leaf libs, plus the hook, the two libs it sources, the shell lexer and the gitleaks config the suite drives.
 AFFECTED_CLAUDE_HOOKS_GIT_COMMIT_SECRET_SCAN_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  ".claude/hooks/git-commit-secret-scan.sh"
+  ".claude/hooks/git-commit-secret-scan.test.sh"
+  ".claude/hooks/lib/commit-index-sim.sh"
+  ".claude/hooks/lib/commit-target-roots.sh"
+  ".gitleaks.toml"
+  "plugins/soleur/hooks/lib/shell-argv.pl"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_CLAUDE_HOOKS_GUARDRAILS_TEST_SH_PATHS=(
@@ -3055,6 +3114,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_EVAL_HARNESS_TEST_GEN_MODELS_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_AUDIT_FLAG_FLIP_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-create/scripts/create.sh"
   "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
   "plugins/soleur/skills/user-set-role/scripts/set-role.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
@@ -3070,6 +3130,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_E2E_SKIP_ANCHORS_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GDPR_GATE_SELF_TEST_TEST_SH_PATHS=(
   ".claude/hooks/lib/incidents.sh"
+  "apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GIT_TRIPWIRE_TEST_SH_PATHS=(
@@ -3141,4 +3202,45 @@ AFFECTED_TESTS_SCRIPTS_WEB_HOST_BIRTH_GATE_PATHS=(
 AFFECTED_TESTS_SCRIPTS_ZOT_INVENTORY_ASSERT_MARKER_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/zot-inventory.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_SKILLS_COMMUNITY_TEST_GITHUB_COMMUNITY_TEST_SH_PATHS=(
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_SKILLS_SKILL_SECURITY_SCAN_TEST_META_DIR_REAP_TEST_SH_PATHS=(
+  ".claude/hooks/skill-security-scan-write.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
+  ".claude/hooks/ship-net-issue-flow-gate.sh"
+  "scripts/_agents_md_sections.py"
+  "scripts/lib/rule-metrics-constants.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/lint-rule-bodies.py"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_HTTP_DEADLINES_REQUIRED_TEST_SH_PATHS=(
+  "apps/web-platform/infra/zot-config-deadlines.test.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_SCRIPTS_RULES_LOADER_STAMP_PROBE_PATHS=(
+  ".claude/hooks/session-rules-loader.sh"
+  ".mcp.json"
+  "plugins/soleur/.claude-plugin/plugin.json"
+  "plugins/soleur/.mcp.json"
+  "scripts/lib/frontmatter-strip/strip.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_TESTS_SCRIPTS_LINT_RULE_BODIES_PATHS=(
+  "scripts/_agents_md_sections.py"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/lint-rule-bodies.py"
+)
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_CCLA_REPRESENTATIVE_ICLA_7922_PATHS=(
+  "apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_SCRIPTS_TMPFS_GUARD_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )

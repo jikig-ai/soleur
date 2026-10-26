@@ -79,6 +79,7 @@ describe("handler source-shape anchors", () => {
     ],
     ["buildPublisherEnv", "env builder function"],
     ["stale-content-detection", "stale content reporting op"],
+    ["stale-content-frontmatter", "refused front matter is mirrored, not skipped silently"],
     ["STALE_EVENTS_FILE", "stale events file env var"],
     ["mintInstallationToken", "token minting"],
     ["setupEphemeralWorkspace", "workspace setup"],
