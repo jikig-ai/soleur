@@ -76,6 +76,36 @@ Checked every cited reference; all held or were narrowed:
 
 None — queried open `code-review`-labeled issues for all seven planned file paths; zero body matches (checked 2026-10-26).
 
+## Deepen Pass
+
+**Deepened on:** 2026-10-26 | **Mode:** in-process, `Reviewed-Coverage: sequential-fallback` — the planning subagent has no Task-spawn capability; every halt gate was executed mechanically in-shell and the agent fan-out (skills/learnings/review/research agents) was replaced by a planner self-review plus the standing checks below. The residual is recorded in `knowledge-base/project/specs/feat-one-shot-gsc-index-link-equity/decision-challenges.md`.
+
+### Halt-gate verdicts (all executed against the file)
+
+- **4.6 User-Brand Impact:** PASS — section present, threshold `aggregate pattern` (valid enum), decision line present.
+- **4.7 Observability:** PASS — all 5 fields populated, no placeholders; `discoverability_test.command` = `grep -o …` (allowlisted verb, no `ssh`, sub-second, non-suite); `expected_output` = literal `company-as-a-service/`.
+- **4.8 PAT-shaped variables:** PASS — zero matches on the four-pattern regex.
+- **4.9 UI-wireframe artifact:** PASS — `knowledge-base/product/design/marketing/learn-nav-go-deeper-rail.pen` referenced and committed (`git ls-files --error-unmatch` verified).
+- **4.10 Encryption Posture:** N/A — no `.tf`/SQL/cloud-init/compose file, no new store or connection.
+- **4.11 Guard Contract:** PASS — `python3 scripts/lint-guard-contract.py` green (2 guard entries); Assembly is structural (two emitting surfaces + a `pages/**` census), matrices are design-derived with dispatch, second-member, and must-PASS rows.
+- **4.12 Scope Check:** PASS — exactly one unfenced `## Scope Check`, all three subsections present, zero `unmapped`/`status: BLOCKED` rows, every `inferred` item justified, `Recommendation: single PR` present.
+- **4.13 Task Design:** N/A — no new autonomous-task surface (the tracking issue is a GitHub issue, not a registered task).
+- **4.4 Precedent-diff:** precedents exist and are used — `Product`/`Company` `children` blocks in `site.json` (same mechanism), `seo-aeo-drift-guard.test.ts`'s built-site assertions (same harness the guard extends), and `pillar-series.njk`/related-links blocks for the mesh notes. Not novel.
+- **4.45 Verify-the-negative:** negative claims re-verified — nav contains zero links to the ten pillar/cluster URLs (site.json `nav` enumerated); `/goal-primitive/` has zero inbound references site-wide; `/glossary/` is footer-only (footerColumns). No contradiction found.
+- **4.5 Network-outage / 4.55 Downtime-cutover:** no trigger — static docs site, Cloudflare Pages deploy, no host/DB/router operation.
+- **Citations:** rule IDs cited (`cq-eleventy-critical-css-screenshot-gate`, `cq-write-failing-tests-before`, `wg-ui-feature-requires-pen-wireframe`) verified ACTIVE; issues #8143/#8144/#5616/#7181 verified OPEN, #8332 CLOSED, #3328 merged — all via `gh` this session.
+
+### Additional learning folded
+
+- `2026-10-21-a-remove-the-link-control-cannot-red-a-basename-substring-census.md` (`cq-assert-anchor-not-bare-token`): a census keyed on bare-basename substring cannot be driven RED. Guards 1+2 therefore assert **anchored `href="/x/"` / `href="https://soleur.ai/x/"` forms on built HTML**, never bare URL tokens — the discipline is load-bearing for the mutation matrix to mean anything.
+- `2026-05-05-gsc-indexing-triage-patterns.md`: GSC exports are aggregate-only — consistent with the premise that the validation email does not enumerate URLs; the bucket is re-read only via the operator-sign-in dashboard path.
+
+### Key improvements from the pass
+
+1. `/goal-primitive/` found unreachable (zero inbound links) by the census reasoning — added to the rail and to the guard's classification contract.
+2. Guard Contract hardened: census-over-`pages/**` (unclassified bucket goes RED) + anchored-href assertions per the basename-substring learning.
+3. AC split into `Pre-merge (PR)` / `Post-merge (operator)` (sharp-edge #2226); PR-body intent routed through `decision-challenges.md` since `soleur:ship` authors the body (sharp-edge #5984).
+
 ## Problem Statement / Motivation
 
 On 2026-10-26 Google Search Console replied to the 2026-09-20 "Validate Fix" request for the "Crawled - currently not indexed" bucket: some pages are still affected. The bucket's five healthy live URLs (`/blog/soleur-vs-polsia/`, `/blog/why-most-agentic-tools-plateau/`, `/blog/ai-agents-for-solo-founders/`, `/legal/gdpr-policy/`, `/legal/data-protection-disclosure/`) serve 200, are self-canonical, carry no meta-refresh — verified 2026-10-26 by `scripts/followthroughs/gsc-indexing-drain-8332.sh` (124 checks, 0 failures). Per `knowledge-base/project/learnings/2026-06-15-gsc-crawled-not-indexed-remediation-is-internal-linking.md`, on healthy pages this bucket is Google's discretionary quality call and the only in-repo lever is internal-link equity.
