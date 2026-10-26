@@ -176,7 +176,12 @@ run_probe() {
     "$REAL_BASH" "$PROBE" > "$OUT" 2>&1
   RC=$?
   NCALLS=$(wc -l < "$CALLS" | tr -d ' ')
-  if [[ -s "$REFUSE" ]] || grep -qF -- "$LEAK" "$OUT" || grep -qF -- "$TOKEN" "$OUT"; then
+  # the token of THIS run (an override replaces the default), checked as well as the default
+  tok_leak=0
+  for a in "$@"; do
+    case "$a" in SENTRY_ACTIONS_RO_TOKEN=?*) grep -qF -- "${a#SENTRY_ACTIONS_RO_TOKEN=}" "$OUT" && tok_leak=1 ;; esac
+  done
+  if [[ -s "$REFUSE" || "$tok_leak" -ne 0 ]] || grep -qF -- "$LEAK" "$OUT" || grep -qF -- "$TOKEN" "$OUT"; then
     fail "universal: shim refusal, body leak or token in output (rc=$RC; refusals: $(tr '\n' ';' < "$REFUSE"))"
   else
     pass "universal: no shim refusal, no body leak, no token in output (rc=$RC)"

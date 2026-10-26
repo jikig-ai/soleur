@@ -52,6 +52,7 @@
 # check-in without one, so there is nothing to filter on). NOT MEASURED: the Sentry issue state of the
 # monitor, the routing, and whether any alert email reached a person. A PASS means check-in health only.
 #
+# ORDER: the truncation guard assumes Sentry lists check-ins newest first (its default).
 # PAGE LIMIT: one request, per_page=100, no pagination. The newest 100 rows cover about 50 days at two
 # slots a day, so the window stays reachable for about 36 days after it closes; after that the read is a
 # truncation (exit 3) and the owner re-reads by hand. The reply is capped at 5 MiB where curl enforces
