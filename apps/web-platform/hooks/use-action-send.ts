@@ -25,9 +25,12 @@
 //                        acknowledgment artifact. Empty for kb_drift
 //                        link-* sources until PR-B's leader-prompt loop
 //                        resolves per-class targeting.
-//   degraded          — set to "enqueue_failed" when the Inngest enqueue
-//                        between writeActionSend and archive flip threw.
-//                        Cards should render "Acknowledged (queued)" copy.
+//   degraded          — "no_artifact_in_pr_a" when the source_ref shape has
+//                        no GitHub target yet (no Inngest event is sent). An
+//                        exhausted enqueue is NOT a 200 any more (#10543): the
+//                        route answers 503 enqueue_unavailable, the approval is
+//                        saved and the draft stays, so `error` carries the
+//                        retry copy and `acknowledged` stays false.
 //   confirming        — non-null while the typed-confirm modal is open.
 //   confirmPending    — typed-confirm POST in flight. The modal stays
 //                        open (`confirming` is NOT cleared until the POST
@@ -76,7 +79,7 @@ export interface UseActionSendResult {
   error: string | null;
   acknowledged: boolean;
   artifactUrl: string;
-  degraded: "enqueue_failed" | "no_artifact_in_pr_a" | undefined;
+  degraded: "no_artifact_in_pr_a" | undefined;
   confirming: ConfirmationPayload | null;
   confirmPending: boolean;
   onConfirmTyped: (confirmedTyped: boolean, typedValue: string) => void;
@@ -92,7 +95,7 @@ export function useActionSend(
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [artifactUrl, setArtifactUrl] = useState("");
-  const [degraded, setDegraded] = useState<"enqueue_failed" | "no_artifact_in_pr_a" | undefined>(
+  const [degraded, setDegraded] = useState<"no_artifact_in_pr_a" | undefined>(
     undefined,
   );
   const [confirming, setConfirming] = useState<ConfirmationPayload | null>(
@@ -116,6 +119,56 @@ export function useActionSend(
     });
   }
 
+  // Founder-facing copy for the statuses the send route can answer with besides 200 / already_sent /
+  // requires_confirmation. Card-neutral on purpose: GitHubCard and KbDriftCard bind no `disabled` to a
+  // hook flag and have no Discard/Edit, so every state here must be recoverable by a refresh and the
+  // copy names no affordance (CTO S1). Pure over (status, parsed body); returns null when the status
+  // is not one of these (the caller falls through to its generic "Send failed (NNN)").
+  function failureCopy(
+    status: number,
+    json: { error?: string; deny_reason?: string },
+  ): string | null {
+    if (status === 503 && json.error === "enqueue_unavailable") {
+      return "Your approval is saved, but we couldn't start the agent. Click Send again to retry.";
+    }
+    if (status === 409) {
+      switch (json.error) {
+        case "approval_expired":
+        case "not_a_draft":
+          return "This approval can no longer run. Refresh to update this card.";
+        case "draft_changed_since_approval":
+          return "This draft changed after you approved it. Restore the approved text or refresh.";
+        case "send_in_progress":
+          return "Another send is in progress - try again in a moment";
+        default:
+          return null;
+      }
+    }
+    if (status === 403) {
+      if (
+        denyReasonCopy &&
+        json.deny_reason !== undefined &&
+        json.deny_reason in denyReasonCopy
+      ) {
+        const copy = denyReasonCopy[json.deny_reason as DenyReason];
+        if (copy !== undefined) return copy;
+      }
+      if (
+        json.error === "no_active_grant" &&
+        denyReasonCopy?.no_scope_grant !== undefined
+      ) {
+        return denyReasonCopy.no_scope_grant;
+      }
+      if (
+        json.error === "no_active_grant" ||
+        json.error === "template_not_authorized"
+      ) {
+        return "Permissions changed since you approved. This action can't run.";
+      }
+    }
+    return null;
+  }
+
   function sendFailureMessage(err: unknown): string {
     if (err instanceof DOMException && err.name === "TimeoutError") {
       reportSilentFallback(err, {
@@ -135,11 +188,7 @@ export function useActionSend(
     setAcknowledged(true);
     setArtifactUrl(json.artifact_view_url ?? "");
     setDegraded(
-      json.degraded === "enqueue_failed"
-        ? "enqueue_failed"
-        : json.degraded === "no_artifact_in_pr_a"
-          ? "no_artifact_in_pr_a"
-          : undefined,
+      json.degraded === "no_artifact_in_pr_a" ? "no_artifact_in_pr_a" : undefined,
     );
     onAcknowledgedArchive?.();
   }
@@ -159,16 +208,17 @@ export function useActionSend(
           handle200(json);
           return;
         }
+        const json = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          deny_reason?: string;
+          action_class?: string;
+          tier?: string;
+          recipient_excerpt?: string;
+          content_excerpt?: string;
+          expected_draft_preview_hash?: string;
+          message_id?: string;
+        };
         if (res.status === 409) {
-          const json = (await res.json().catch(() => ({}))) as {
-            error?: string;
-            action_class?: string;
-            tier?: string;
-            recipient_excerpt?: string;
-            content_excerpt?: string;
-            expected_draft_preview_hash?: string;
-            message_id?: string;
-          };
           if (json.error === "requires_confirmation") {
             setConfirming({
               actionClass: json.action_class ?? "",
@@ -189,29 +239,10 @@ export function useActionSend(
             return;
           }
         }
-        if (res.status === 403) {
-          const json = (await res.json().catch(() => ({}))) as {
-            error?: string;
-            deny_reason?: string;
-          };
-          if (
-            denyReasonCopy &&
-            json.deny_reason !== undefined &&
-            json.deny_reason in denyReasonCopy
-          ) {
-            const copy = denyReasonCopy[json.deny_reason as DenyReason];
-            if (copy !== undefined) {
-              setError(copy);
-              return;
-            }
-          }
-          if (
-            json.error === "no_active_grant" &&
-            denyReasonCopy?.no_scope_grant !== undefined
-          ) {
-            setError(denyReasonCopy.no_scope_grant);
-            return;
-          }
+        const copy = failureCopy(res.status, json);
+        if (copy !== null) {
+          setError(copy);
+          return;
         }
         setError(`Send failed (${res.status})`);
       } catch (err) {
@@ -245,17 +276,34 @@ export function useActionSend(
           handle200(json);
           return;
         }
+        const json = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          deny_reason?: string;
+          expected_draft_preview_hash?: string;
+        };
         if (res.status === 409) {
-          const json = (await res.json().catch(() => ({}))) as {
-            error?: string;
-          };
           if (json.error === "already_sent") {
             setConfirming(null);
             setAcknowledged(true);
             onAcknowledgedArchive?.();
             return;
           }
-          setError("Draft changed since you confirmed — please re-send.");
+          if (json.error === "requires_confirmation") {
+            // Adopt the server's fresh hash so a retype does not loop on the
+            // stale one (the draft changed between the two POSTs).
+            const fresh = json.expected_draft_preview_hash;
+            if (typeof fresh === "string" && fresh !== "") {
+              setConfirming((c) =>
+                c ? { ...c, expectedDraftPreviewHash: fresh } : c,
+              );
+            }
+            setError("Draft changed since you confirmed — please re-send.");
+            return;
+          }
+        }
+        const copy = failureCopy(res.status, json);
+        if (copy !== null) {
+          setError(copy);
           return;
         }
         setError(`Send failed (${res.status})`);

@@ -367,7 +367,7 @@ describe("POST /api/dashboard/today/[id]/send", () => {
     expect(mockWriteActionSend).not.toHaveBeenCalled();
   });
 
-  test("(10) 409 already_sent on 23505 unique_violation (double-click)", async () => {
+  test("(10) 409 send_in_progress on 23505 unique_violation (concurrent click lost the insert race; #10543)", async () => {
     setupMessageRow();
     mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
     mockWriteActionSend.mockRejectedValueOnce(
@@ -376,7 +376,9 @@ describe("POST /api/dashboard/today/[id]/send", () => {
     const res = await POST(makeRequest({}), ctx());
     expect(res.status).toBe(409);
     const json = (await res.json()) as { error: string };
-    expect(json.error).toBe("already_sent");
+    // Not already_sent: the loser must not archive its card client-side. The
+    // next click finds the winner's pending row and replays it.
+    expect(json.error).toBe("send_in_progress");
   });
 
   test("422 unknown_action_class (defensive — should be rare after backfill)", async () => {

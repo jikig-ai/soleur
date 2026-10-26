@@ -101,7 +101,7 @@ export function createActionSendsStore(opts: StoreOptions): ActionSendsStore {
           lookupError = null;
           return { data: null, error };
         }
-        const rows = (table === "messages" ? messages : actionSends) as AnyRow[];
+        const rows = (table === "messages" ? messages : actionSends) as unknown as AnyRow[];
         const hit = matching(rows, filters)[0];
         return { data: hit ? project(hit, cols) : null, error: null };
       },
@@ -129,7 +129,7 @@ export function createActionSendsStore(opts: StoreOptions): ActionSendsStore {
             emit("messages-archive-failed");
             return Promise.resolve({ error }).then(resolve, reject);
           }
-          for (const r of matching(messages as AnyRow[], filters)) {
+          for (const r of matching(messages as unknown as AnyRow[], filters)) {
             Object.assign(r, patch);
           }
           emit("messages-archive");
