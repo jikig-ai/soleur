@@ -3227,7 +3227,7 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
     ).toEqual([]);
   });
 
-  test("every pillar/cluster URL is reachable from the global nav or the homepage body", () => {
+  test("every pillar/cluster URL is reachable from the global nav; rail members from nav or homepage body", () => {
     // Nav subtree = <ul class="nav-links"> ... </header> (nav children render
     // site-wide, so a non-homepage page proves the site-wide claim). Footer
     // links do not count.
@@ -3239,7 +3239,15 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
     // Homepage body = built index.html minus the footer region.
     const indexHtml = readSite("index.html");
     const body = indexHtml.slice(0, indexHtml.indexOf("<footer"));
-    for (const url of [...PILLAR_CLUSTER, ...RAIL_LINKED]) {
+    // PILLAR_CLUSTER coverage is nav-specific (#8144 AC: "reachable from the
+    // global nav on every page") — a homepage-only link does not satisfy it.
+    for (const url of PILLAR_CLUSTER) {
+      expect(
+        hasHref(navSubtree, url),
+        `${url}: not reachable from the global nav`,
+      ).toBe(true);
+    }
+    for (const url of RAIL_LINKED) {
       expect(
         hasHref(navSubtree, url) || hasHref(body, url),
         `${url}: no entry-point inbound link (nav or homepage body)`,
