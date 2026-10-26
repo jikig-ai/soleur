@@ -11,14 +11,14 @@ Plan: `knowledge-base/project/plans/2026-10-26-feat-agentic-verification-epilogu
 ## Phase 2 — Pin the six distribution drafts
 
 - [x] 2.1 `knowledge-base/marketing/distribution-content/2026-10-29-property-test-cannot-fail-teaches-nothing.md`: `publish_date: 2026-10-28`, `status: scheduled` (unquoted date, corpus convention).
-- [x] 2.2 `…/2026-11-03-first-property-test-found-real-bug.md`: `publish_date: 2026-11-03`, `status: scheduled`.
-- [x] 2.3 `…/2026-11-05-map-that-cant-drift.md`: `publish_date: 2026-11-05`, `status: scheduled`.
-- [x] 2.4 `…/2026-11-10-test-the-migration-not-just-the-schema.md`: `publish_date: 2026-11-10`, `status: scheduled`.
-- [x] 2.5 `…/2026-11-12-map-that-only-records-what-the-agent-saw.md`: `publish_date: 2026-11-12`, `status: scheduled`.
-- [x] 2.6 `…/2026-11-17-flaky-test-passed-on-retry-quarantine.md`: `publish_date: 2026-11-17`, `status: scheduled`.
+- [x] 2.2 `knowledge-base/marketing/distribution-content/2026-11-03-first-property-test-found-real-bug.md`: `publish_date: 2026-11-03`, `status: scheduled`.
+- [x] 2.3 `knowledge-base/marketing/distribution-content/2026-11-05-map-that-cant-drift.md`: `publish_date: 2026-11-05`, `status: scheduled`.
+- [x] 2.4 `knowledge-base/marketing/distribution-content/2026-11-10-test-the-migration-not-just-the-schema.md`: `publish_date: 2026-11-10`, `status: scheduled`.
+- [x] 2.5 `knowledge-base/marketing/distribution-content/2026-11-12-map-that-only-records-what-the-agent-saw.md`: `publish_date: 2026-11-12`, `status: scheduled`.
+- [x] 2.6 `knowledge-base/marketing/distribution-content/2026-11-17-flaky-test-passed-on-retry-quarantine.md`: `publish_date: 2026-11-17`, `status: scheduled`.
 - [x] 2.7 Do NOT touch `2026-11-04-six-questions-before-recurring-job.md`, `plugins/soleur/docs/blog/2026-11-04-before-your-ai-team-takes-a-recurring-job.md`, or `campaign-calendar.md`.
 - [x] 2.8 Validate: `bash scripts/lint-distribution-content.sh <each edited file>` exit 0; `bun test plugins/soleur/test/distribution-content-format.test.ts` green.
-- [x] 2.9 Double-book check: `grep -h "^publish_date:" knowledge-base/marketing/distribution-content/*.md | sort | uniq -d` → empty.
+- [x] 2.9 Double-book check: per-date count `for d in 2026-10-28 2026-11-03 2026-11-05 2026-11-10 2026-11-12 2026-11-17; do grep -h "^publish_date:" knowledge-base/marketing/distribution-content/*.md | grep -c "publish_date: $d\$"; done` → `1` each (verified). A whole-corpus `uniq -d` prints pre-existing published dupes (03-21, 04-21, 06-15) — historical, expected.
 
 ## Phase 3 — Issue operations
 
@@ -31,4 +31,4 @@ Plan: `knowledge-base/project/plans/2026-10-26-feat-agentic-verification-epilogu
 
 - [x] 4.1 Confirm `decision-challenges.md` property-test row names the shipped pin date (update if AC9 moved it).
 - [x] 4.2 Commit plan + tasks + decision-challenges + the six frontmatter edits; push.
-- [x] 4.3 If a rebase was needed: `GIT_EDITOR=true git rebase --continue`; `LEFTHOOK=0` for replay; `pgrep -a git` for orphan children before retrying (learning 2026-10-25).
+- [x] 4.3 (conditional — no rebase was needed) If a rebase was needed: `GIT_EDITOR=true git rebase --continue`; `LEFTHOOK=0` for replay; `pgrep -a git` for orphan children before retrying (learning 2026-10-25).

@@ -31,3 +31,9 @@
 - linked-PR + open-body probes re-run on #10902 #11078 #10736 #11003: all linked PRs MERGED (citations — closingIssuesReferences verified), zero open same-scope PRs.
 - ANCHOR probe over the six planned distribution files: no open PR touches them.
 - cto_spawns=0 (carried-forward ruling reused per subagent report)
+
+### Review-round note (2026-10-26)
+
+- PR #11158 merged 2026-10-26T11:03Z (`80667bbee2`) — `six-questions` is `status: scheduled` + `publish_date: 2026-11-04` on origin/main; the cron re-slot hazard is moot.
+- Fix commit applied panel findings: plan AC7 reworded (per-date uniqueness, pre-existing published dupes excepted), vacuous `-H`/`uniq -d` command replaced with per-date count check, tasks 2.9 same fix, ellipsis paths expanded, task 4.3 annotated conditional-not-needed.
+- Panel verdict: 0 P1, 1 P2 (broken recorded verification commands — fixed inline), P3s resolved or noted; the `seo-bulk-redirects.tf` redirect-pair citation verified accurate (`:98`).

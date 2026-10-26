@@ -391,9 +391,10 @@ Two issues matched the *directory/calendar* strings only:
   `plugins/soleur/docs/blog/2026-11-04-before-your-ai-team-takes-a-recurring-job.md`,
   `knowledge-base/marketing/campaign-calendar.md` → clean (merge-base form —
   a sibling merge touching those paths must not red it).
-- [ ] AC7 — No two files in `knowledge-base/marketing/distribution-content/`
-  share a `publish_date` (re-run the occupied-set grep after edits: each
-  pinned date appears exactly once).
+- [x] AC7 — Each pinned `publish_date` appears exactly once across
+  `knowledge-base/marketing/distribution-content/` (pre-existing published-corpus
+  duplicate dates — 2026-03-21, 2026-04-21, 2026-06-15 — are historical and
+  excepted; re-run the per-date count check after edits: six pins, one each).
 - [ ] AC8 —
   `knowledge-base/project/specs/feat-one-shot-10902-agentic-verification-epilogue/{tasks.md,decision-challenges.md}`
   committed; the property-test row's ruling names the shipped date.
@@ -437,7 +438,7 @@ assertions); there is no unit-test surface in a frontmatter-only diff.
 - **Verification commands:**
   - `for i in 10397 10636 10694 10730 10737 10739; do gh issue view $i --json state --jq .state; done` → all `CLOSED`
   - `grep -c 'blog/' plugins/soleur/docs/blog/2026-10-23-agentic-verification-checklist-shipped.md` ≥ 7
-  - `grep -H '^publish_date:' knowledge-base/marketing/distribution-content/*.md | sort -t: -k3 | uniq -d` → empty (no double-booked slot)
+  - `for d in 2026-10-28 2026-11-03 2026-11-05 2026-11-10 2026-11-12 2026-11-17; do grep -h '^publish_date:' knowledge-base/marketing/distribution-content/*.md | grep -c "publish_date: $d\$"; done` → six lines of `1` (no double-booked slot; a whole-corpus `uniq -d` is both vacuous under `-H` and false-positive on pre-existing published dupes)
   - `bash scripts/lint-distribution-content.sh knowledge-base/marketing/distribution-content/<file>` ×6 → exit 0
   - `bun test plugins/soleur/test/distribution-content-format.test.ts` → pass
 
