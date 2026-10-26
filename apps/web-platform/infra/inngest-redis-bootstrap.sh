@@ -144,6 +144,65 @@ exit 0
 GUARDEOF
 log "installed /usr/local/bin/inngest-redis-mount-guard.sh (two-state /mnt/data guard, #7695)"
 
+# 3.6 (#11103). The acl writer the unit's second ExecStartPre calls. Same delivery as the
+#     mount-guard above: heredoc-internal so it rides the same bootstrap script on every host
+#     (no STAGED list or image-manifest edit), reconcile-always on every run.
+#
+#     WHY aclfile AT ALL. The pre-#11103 unit wrapped the start in an inner `bash -c` that
+#     expanded "$INNGEST_REDIS_PASSWORD" onto redis-server's argv — a traced launch
+#     (SHELLOPTS=xtrace / BASH_ENV / bash -x) printed it to stderr and journald shipped it
+#     off-box, and /proc/<pid>/cmdline (0444) + `CONFIG GET requirepass` exposed it even
+#     untraced. The conf now declares `aclfile`; this script turns the Doppler-injected
+#     password into `user default on ><pw> ~* &* +@all` — the secret never lands on argv,
+#     and Redis stores SHA256 so nothing reads the cleartext back. `AUTH <pw>` resolves to
+#     the default user either way, so the inngest `redis://:<pw>@127.0.0.1:6379` client is
+#     unchanged.
+install -m 0755 /dev/stdin /usr/local/bin/inngest-redis-acl.sh <<'ACLEOF'
+#!/usr/bin/env bash
+# ExecStartPre acl writer for inngest-redis.service (#11103). Runs under
+# `doppler run --only-secrets INNGEST_REDIS_PASSWORD` — it sees exactly one secret.
+# Exits 0 (aclfile written) or non-zero (refusal/validation failure — the unit fails
+# designed-loud, same posture as the mount-guard).
+
+# Refuse to run under tracing FIRST (the #7797/#10363 shape): this script resolves a live
+# credential and a traced launch would print it to stderr, which journald ships off-box.
+# Unconditional on purpose, tests the STATE ($-), works in bash and dash, and stays above
+# every expansion below. The message must stay value-free.
+case $- in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #11103)\n' >&2; exit 78 ;;
+esac
+set -u
+
+# The acl file path. INNGEST_REDIS_ACL_FILE is a TEST-ONLY override seam: the unit's
+# --only-secrets bound injects INNGEST_REDIS_PASSWORD and nothing else, so on a host this
+# is always the default; the suite sets it to replay validation rows off /mnt/data.
+ACL_FILE="${INNGEST_REDIS_ACL_FILE:-/mnt/data/redis/inngest-redis.acl}"
+
+# Value-free validation (FATAL, no write): the aclfile grammar cannot carry whitespace
+# (it would split the rule), quotes or a backslash (they escape out of the >password
+# token), or control bytes. random_password.inngest_redis_password_* emits alnum-only
+# (special=false), so a compliant secret always passes; a malformed one fails the unit
+# loud rather than writing a rule that silently changes auth.
+if [ -z "${INNGEST_REDIS_PASSWORD:-}" ]; then
+  printf 'FATAL: INNGEST_REDIS_PASSWORD is unset or empty — refusing to write the aclfile (value-free)\n' >&2
+  exit 1
+fi
+if printf '%s' "$INNGEST_REDIS_PASSWORD" | LC_ALL=C grep -qE "[[:space:]\"'\\[:cntrl:]]"; then
+  printf 'FATAL: INNGEST_REDIS_PASSWORD carries whitespace, a quote, a backslash or a control byte — refusing to write the aclfile (value-free)\n' >&2
+  exit 1
+fi
+
+# Atomic tmp+mv (never a half-written aclfile at 0600, deploy-owned — the writer runs as
+# User=deploy and can only write inside ReadWritePaths=/mnt/data/redis).
+ACL_TMP="$(mktemp "${ACL_FILE}.tmp.XXXXXX")"
+trap 'rm -f "$ACL_TMP"' EXIT
+chmod 0600 "$ACL_TMP"
+printf 'user default on >%s ~* &* +@all\n' "$INNGEST_REDIS_PASSWORD" > "$ACL_TMP"
+mv -f "$ACL_TMP" "$ACL_FILE"
+trap - EXIT
+ACLEOF
+log "installed /usr/local/bin/inngest-redis-acl.sh (aclfile writer, #11103)"
+
 # 4. Install the conf (onto /mnt/data — webhook-namespace-writable) + the unit
 #    (/etc/systemd/system is in ReadWritePaths). Sourced from the /tmp staging
 #    the OCI entrypoint / cloud-init populated. Skip the conf install if absent
