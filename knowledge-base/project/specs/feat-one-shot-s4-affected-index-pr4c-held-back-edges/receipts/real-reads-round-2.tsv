@@ -1,0 +1,6 @@
+suite	declared real-read file	parent_edge	commits_90d	index_entries_before
+tests/scripts/git-data-rung2-evidence-capture	apps/web-platform/infra/cloud-init-git-data.yml	scripts/followthroughs/git-data-rung2-evidence-capture.sh	16	0
+tests/scripts/git-data-rung2-evidence-capture	scripts/lib/betterstack-absence.sh	scripts/followthroughs/git-data-rung2-evidence-capture.sh	1	2
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/lib/commit-target-roots.sh	.claude/hooks/git-commit-secret-scan.sh	1	0
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/lib/technical-fork-cues.sh	.claude/hooks/pre-closing-technical-fork-gate.test.sh	3	0
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/pre-closing-technical-fork-gate.sh	.claude/hooks/pre-closing-technical-fork-gate.test.sh	2	0
