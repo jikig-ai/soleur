@@ -10,7 +10,7 @@ Process: run long commands detached (script file with `setsid nohup bash <file>`
 - [ ] 0.2 Measure the base on a detached worktree of `origin/main` (`ratchet --report`, `audit --all-refs --accept`); save `receipts/ratchet-base-<sha12>.out`.
 - [ ] 0.3 Build `receipts/edges-decisions.tsv` (suite, F, outcome, reason, chain, shared_ref, accept_rows, extra_drained, commits_90d_F, declaring_suites) from `receipts/worklist-edges.tsv`; membership test (105 baselined); recompute `commits_90d` for every F into `receipts/commits-90d.txt`; array names via `_aff_label_map`, new blocks (at most 3), label-map collisions; pre-flag hot-F exception candidates; `declaring_suites` includes PR4d consumers.
 - [ ] 0.4 One recorder pass over every candidate slice suite (`audit-suite-reads.sh record --mode check --only ...` on the committed HEAD) plus suite-text proofs for the `declared-F-never-opened` edges; one attempt each; evidence in `receipts/retest/`; failures become `recorder-unreliable-2` / `declared-F-never-opened-2` and go to PR5.
-- [ ] 0.5 Cut the slice once at a round-1 sum of 130 (ascending, no skipping ahead); chains C1 57 / C2 43 / C3 17 (shared ref files share a chain, `shared_ref` empty across chains); mark `held-ceiling` and `held-pr5` (`grep-q-pipe-guard`, birth-readiness).
+- [ ] 0.5 Cut the slice once at a round-1 sum of 130 (ascending, no skipping ahead); chains C1 57 / C2 30 / C3 30 (shared ref files share a chain, `shared_ref` empty across chains); mark `held-ceiling` and `held-pr5` (`grep-q-pipe-guard`, birth-readiness).
 
 ## Phase 1 - per chain: declare, first report, pre-classify
 
