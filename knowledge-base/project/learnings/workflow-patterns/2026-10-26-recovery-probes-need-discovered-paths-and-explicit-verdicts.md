@@ -32,6 +32,20 @@ The recovery ran those fixtures RED before updating them, then verified missing
 and malformed nonce rejection alongside the valid cases. Strict runtime schemas
 were preserved.
 
+For the later collector hardening, the npm cache held the package tarball
+object but not the registry packument; `npm pack --offline` therefore failed
+with `ENOTCACHED`. Do not turn that into an implicit online install. Fetch only
+the exact lockfile URL after network approval, verify the tarball's SRI against
+the committed lock, and extract/import only those verified bytes. The focused
+Vitest fixture also hit sandbox `EPERM` when it spawned synthetic tar/git
+helpers; rerun the exact local suite with subprocess escalation rather than
+counting fixture setup errors as test results.
+
+The focused `tsc --noEmit` also caught two test-only type errors: the project
+narrows `ProcessEnv` to require `NODE_ENV`, and the preview/execute result union
+does not narrow from a runtime boolean. Supply the fixture's test environment
+and assert the preview result structurally with `toMatchObject`.
+
 A later commit was refused as main/master even though `pwd`, branch and Git
 top-level all identified the recovery feature worktree. The installed harness
 guidance already documents the missing-envelope-CWD failure mode. Pass the

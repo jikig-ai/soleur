@@ -57,11 +57,34 @@ draft push, without altering scan rules or readiness. The response was:
 historical Pencil document-ID finding only. No scanner configuration, history,
 inline waiver, draft state or auto-merge setting was changed by the exception.
 
+## Accepted policy and technical plan review
+
+The internal CLO policy proposal is now recorded at
+`knowledge-base/legal/audits/2026-10-26-codex-notice-rights-retention-decision.md`.
+The operator approved the stated policy for implementation and isolated
+testing: 30-minute nonce validity, up to five further minutes for ordinary
+primary-table deletion, no permanent notice history, request-receipt-time
+preservation, eligible Article 20 inclusion and contract-only basis for new
+processing. The approval does not grant final processing clearance or any
+shared-data/provider/readiness/ship authority.
+
+The plan panel found that a later worker read could miss deleted metadata, a
+new request could reuse a completed archive, the existing resend UI cannot
+renew an expired unacknowledged notice, and `now()` is unsafe after lock waits.
+The revised plan now specifies atomic request/job snapshots, derived expiry,
+post-lock `clock_timestamp()`, one database-owned one-minute `pg_cron` cleanup
+with independent oldest-expired-age monitoring, exact contract-subject gating,
+and a reachable metadata-only renewal flow before explicit resend. CTO ruled
+the correction must be split into two dependent PR slices stacked on this held
+feature branch because migration 176 depends on migration 175 in PR #9051.
+Plan review recheck is still required after pushing the revision.
+
 ## Independent holds
 
-CLO purpose/basis, retention, Article 15/20 and post-consumption decisions are
-being prepared as a separate internal assessment. The operator's reserved
-legal-risk acceptance remains distinct from an internal CLO proposal.
+Backup/PITR and rights-snapshot/archive lifecycle facts, per-subject contract
+and controller capacity evidence, measured cleanup capacity and independent
+monitor health, provider/runtime qualification, and final CLO processing
+clearance remain outstanding.
 
 Fresh shared evidence requires a new source-bound collector, verified CA,
 independent review and an exact-action proposal/approval before execution.

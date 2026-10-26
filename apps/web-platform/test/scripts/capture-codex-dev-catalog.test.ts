@@ -3,9 +3,10 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { rootCertificates } from "node:tls";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseArguments, runCapture, SECTIONS } from "../../scripts/capture-codex-dev-catalog.mjs";
+import { dopplerEnvironment, parseArguments, preparePinnedDriver, runCapture, SECTIONS } from "../../scripts/capture-codex-dev-catalog.mjs";
 
 const SHA = "a".repeat(40);
 const DEV = "a".repeat(20);
@@ -20,7 +21,17 @@ function fixture() {
   mkdirSync(join(root, ".soleur"), { mode: 0o700 });
   const caFile = join(root, "root.pem");
   writeFileSync(caFile, rootCertificates[0], { mode: 0o600 });
-  const options = { sourceSha: SHA, caFile, caSha256: createHash("sha256").update(rootCertificates[0]).digest("hex"), outputDirectory: join(root, ".soleur", "capture"), execute: true };
+  const packageRoot = join(root, "package");
+  mkdirSync(join(packageRoot, "src"), { recursive: true, mode: 0o700 });
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "postgres", version: "3.4.9", type: "module", exports: { import: "./src/index.js" } }));
+  writeFileSync(join(packageRoot, "src", "index.js"), "export default function postgres() {}\n");
+  const driverArchive = join(root, "postgres-3.4.9.tgz");
+  execFileSync("tar", ["-czf", driverArchive, "-C", root, "package"]);
+  chmodSync(driverArchive, 0o600);
+  const driverIntegrity = `sha512-${createHash("sha512").update(readFileSync(driverArchive)).digest("base64")}`;
+  mkdirSync(join(root, "apps", "web-platform"), { recursive: true });
+  writeFileSync(join(root, "apps", "web-platform", "package-lock.json"), JSON.stringify({ packages: { "node_modules/postgres": { version: "3.4.9", resolved: "https://registry.npmjs.org/postgres/-/postgres-3.4.9.tgz", integrity: driverIntegrity } } }));
+  const options = { sourceSha: SHA, caFile, caSha256: createHash("sha256").update(rootCertificates[0]).digest("hex"), driverArchive, driverIntegrity, outputDirectory: join(root, ".soleur", "capture"), execute: true };
   const query = vi.fn(async (sql: string): Promise<Record<string, unknown>[]> => sql.startsWith("SELECT current_setting")
     ? [{ read_only: "on", isolation: "repeatable read" }]
     : sql.includes("FROM public._schema_migrations")
@@ -36,25 +47,70 @@ function fixture() {
   });
   const verifySource = vi.fn(async () => ({ source_sha: SHA, files: {} }));
   const resolveRef = vi.fn(async (url: string) => new URL(url).hostname.split(".")[0]);
-  const dependencies = { repoRoot: root, verifySource, doppler, resolveRef, connect };
+  const preparePinnedDriver = vi.fn(async () => ({ entry: join(packageRoot, "src", "index.js"), version: "3.4.9", cleanup: vi.fn(async () => {}) }));
+  const dependencies = { repoRoot: root, verifySource, preparePinnedDriver, doppler, resolveRef, connect };
   return { root, options, dependencies, query, transaction, connect, end, doppler, verifySource };
 }
 
 describe("dormant shared-dev catalog capture", () => {
   it("defaults to preview and refuses unknown, duplicate or incomplete arguments", () => {
     const f = fixture();
-    const args = ["--source-sha", SHA, "--ca-file", f.options.caFile, "--ca-sha256", f.options.caSha256, "--output-directory", f.options.outputDirectory];
+    const args = ["--source-sha", SHA, "--ca-file", f.options.caFile, "--ca-sha256", f.options.caSha256, "--driver-archive", f.options.driverArchive, "--output-directory", f.options.outputDirectory];
     expect(parseArguments(args).execute).toBe(false);
     expect(parseArguments([...args, "--execute"]).execute).toBe(true);
     expect(() => parseArguments([...args, "--execute", "--execute"])).toThrow();
     expect(() => parseArguments([...args, "--database-url", CANARY])).toThrow();
-    expect(() => parseArguments(args.slice(0, -2))).toThrow();
+    const archiveIndex = args.indexOf("--driver-archive");
+    const withoutArchive = args.filter((_, index) => index !== archiveIndex && index !== archiveIndex + 1);
+    expect(() => parseArguments(withoutArchive)).toThrow();
+  });
+
+  it("captures relation and function owners needed to compare effective privilege boundaries", () => {
+    expect(SECTIONS.find((section: { name: string }) => section.name === "relations")?.sql).toContain("pg_get_userbyid(c.relowner)");
+    expect(SECTIONS.find((section: { name: string }) => section.name === "functions")?.sql).toContain("pg_get_userbyid(p.proowner)");
+  });
+
+  it("passes only approved Doppler auth context and drops executable/host overrides", () => {
+    expect(dopplerEnvironment({
+      NODE_ENV: "test",
+      HOME: "/home/synthetic",
+      PATH: "/tmp/attacker:/usr/bin",
+      DOPPLER_TOKEN: "SYNTHETIC_DOPPLER_TOKEN",
+      DOPPLER_API_HOST: "https://attacker.invalid",
+      NODE_OPTIONS: "--require /tmp/attacker.js",
+      LD_PRELOAD: "/tmp/attacker.so",
+    })).toEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/synthetic",
+      DOPPLER_TOKEN: "SYNTHETIC_DOPPLER_TOKEN",
+    });
+  });
+
+  it("loads only a tarball whose bytes match the lockfile integrity and exact postgres version", async () => {
+    const f = fixture();
+    const prepared = await preparePinnedDriver(f.options.driverArchive, f.options.driverIntegrity);
+    try {
+      expect(prepared.version).toBe("3.4.9");
+      expect(prepared.entry).toContain("/src/index.js");
+      const loaded = await import(pathToFileURL(prepared.entry).href);
+      expect(typeof loaded.default).toBe("function");
+    } finally {
+      await prepared.cleanup();
+    }
+
+    const altered = join(f.root, "altered.tgz");
+    writeFileSync(altered, readFileSync(f.options.driverArchive));
+    writeFileSync(altered, Buffer.concat([readFileSync(altered), Buffer.from("changed")]));
+    chmodSync(altered, 0o600);
+    await expect(preparePinnedDriver(altered, f.options.driverIntegrity)).rejects.toThrow("driver_integrity");
+    await expect(preparePinnedDriver(f.options.driverArchive, "sha512-AAAA")).rejects.toThrow("driver_integrity");
   });
 
   it("preview verifies local bindings but makes zero external calls and writes nothing", async () => {
     const f = fixture();
     const result = await runCapture({ ...f.options, execute: false }, f.dependencies);
     expect(result.status).toBe("preview-no-external-actions");
+    expect(result).toMatchObject({ source: { runtime_dependencies: { postgres: { version: "3.4.9", integrity: f.options.driverIntegrity } } } });
     expect(f.verifySource).toHaveBeenCalledWith(SHA);
     expect(f.doppler).not.toHaveBeenCalled();
     expect(f.dependencies.resolveRef).not.toHaveBeenCalled();
@@ -64,10 +120,10 @@ describe("dormant shared-dev catalog capture", () => {
 
   it("real source binding accepts committed bytes and rejects another SHA or dirty source before external calls", async () => {
     const f = fixture();
-    const paths = ["apps/web-platform/scripts/capture-codex-dev-catalog.mjs", "apps/web-platform/lib/supabase/resolve-ref.ts", "apps/web-platform/package-lock.json", "apps/web-platform/node_modules/postgres/src/index.js", "apps/web-platform/node_modules/postgres/src/connection.js"];
+    const paths = ["apps/web-platform/scripts/capture-codex-dev-catalog.mjs", "apps/web-platform/lib/supabase/resolve-ref.ts", "apps/web-platform/package-lock.json"];
     for (const file of paths) {
       mkdirSync(join(f.root, file, ".."), { recursive: true });
-      writeFileSync(join(f.root, file), file.endsWith(".json") ? "{}\n" : "// synthesized source\n");
+      writeFileSync(join(f.root, file), file.endsWith(".json") ? JSON.stringify({ packages: { "node_modules/postgres": { version: "3.4.9", resolved: "https://registry.npmjs.org/postgres/-/postgres-3.4.9.tgz", integrity: f.options.driverIntegrity } } }) : "// synthesized source\n");
     }
     const git = (args: string[]) => execFileSync("git", ["-C", f.root, "-c", "core.hooksPath=/dev/null", ...args], { env: { NODE_ENV: "test", PATH: "/usr/bin:/bin", HOME: "/nonexistent", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" }, encoding: "utf8" }).trim();
     git(["init", "-q"]);

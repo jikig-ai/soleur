@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Dormant metadata-only collector. Preview is the default; --execute requires
-// separate approval of its exact source/CA/output-bound command. No write SQL.
+// separate approval of its source/CA/driver/output-bound command. No write SQL.
 import { execFile } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -16,6 +17,12 @@ const SOURCE_FILES = [
   "apps/web-platform/package-lock.json",
 ];
 const BYTE_LIMIT = 4 * 1024 * 1024;
+const DRIVER_ARCHIVE_LIMIT = 4 * 1024 * 1024;
+const DRIVER_PACKAGE = Object.freeze({
+  name: "postgres",
+  version: "3.4.9",
+  resolved: "https://registry.npmjs.org/postgres/-/postgres-3.4.9.tgz",
+});
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const UID = process.getuid?.();
@@ -28,20 +35,20 @@ function requireValue(condition, code) { if (!condition) throw new Refusal(code)
 export const SECTIONS = Object.freeze([
   { name: "identity", maximum: 1, sql: "SELECT clock_timestamp()::text AS observed_at, current_database() AS database, current_user AS role, version() AS version, pg_backend_pid() AS backend_pid LIMIT 2" },
   { name: "ledger", maximum: 1024, sql: "SELECT filename, content_sha, to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS applied_at FROM public._schema_migrations ORDER BY filename LIMIT 1025" },
-  { name: "relations", maximum: 1024, sql: "SELECT c.relname, c.relkind, c.relrowsecurity, c.relforcerowsecurity, c.relacl::text AS acl FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m') ORDER BY c.relname LIMIT 1025" },
+  { name: "relations", maximum: 1024, sql: "SELECT c.relname, pg_get_userbyid(c.relowner) AS owner, c.relkind, c.relrowsecurity, c.relforcerowsecurity, c.relacl::text AS acl FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m') ORDER BY c.relname LIMIT 1025" },
   { name: "columns", maximum: 4096, sql: "SELECT c.relname, a.attname, a.attnum, format_type(a.atttypid,a.atttypmod) AS type, a.attnotnull, a.attidentity, a.attgenerated, pg_get_expr(d.adbin,d.adrelid) AS default_expression FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped ORDER BY c.relname,a.attnum LIMIT 4097" },
   { name: "constraints", maximum: 4096, sql: "SELECT c.relname, k.conname, k.contype, k.convalidated, pg_get_constraintdef(k.oid,true) AS definition FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' ORDER BY c.relname,k.conname LIMIT 4097" },
   { name: "indexes", maximum: 4096, sql: "SELECT c.relname, i.indexrelid::regclass::text AS index_name, i.indisvalid, i.indisready, pg_get_indexdef(i.indexrelid) AS definition FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' ORDER BY c.relname,index_name LIMIT 4097" },
   { name: "triggers", maximum: 4096, sql: "SELECT c.relname,t.tgname,t.tgenabled,pg_get_triggerdef(t.oid,true) AS definition FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND NOT t.tgisinternal ORDER BY c.relname,t.tgname LIMIT 4097" },
   { name: "policies", maximum: 4096, sql: "SELECT tablename,policyname,permissive,roles,cmd,qual,with_check FROM pg_policies WHERE schemaname='public' ORDER BY tablename,policyname LIMIT 4097" },
-  { name: "functions", maximum: 128, sql: "SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS arguments,p.prosecdef,p.proconfig,p.proacl::text AS acl,pg_get_functiondef(p.oid) AS definition,has_function_privilege('anon',p.oid,'EXECUTE') AS anon_execute,has_function_privilege('authenticated',p.oid,'EXECUTE') AS authenticated_execute,has_function_privilege('service_role',p.oid,'EXECUTE') AS service_execute FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prokind='f' AND p.proname IN ('bind_agent_engine_run','start_agent_engine_attempt','transition_agent_engine_attempt','assert_agent_engine_attempt_generation','append_agent_engine_lifecycle_event','save_agent_engine_recovery_checkpoint','get_agent_engine_recovery_checkpoint','anonymise_agent_engine_data','set_workspace_default_engine','count_codex_conversation_rebinds','record_codex_history_transfer_acknowledgment','codex_history_transfer_acknowledged','purge_stale_codex_history_transfer_acknowledgments','purge_codex_history_transfer_acknowledgments_on_member_change','issue_codex_history_transfer_notice','mark_codex_history_transfer_notice_delivered','delete_codex_history_transfer_notice_issuance','purge_stale_codex_history_transfer_notice_issuances','purge_replaced_codex_history_notice_membership') ORDER BY p.proname,arguments LIMIT 129" },
+  { name: "functions", maximum: 128, sql: "SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS arguments,pg_get_userbyid(p.proowner) AS owner,p.prosecdef,p.proconfig,p.proacl::text AS acl,pg_get_functiondef(p.oid) AS definition,has_function_privilege('anon',p.oid,'EXECUTE') AS anon_execute,has_function_privilege('authenticated',p.oid,'EXECUTE') AS authenticated_execute,has_function_privilege('service_role',p.oid,'EXECUTE') AS service_execute FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prokind='f' AND p.proname IN ('bind_agent_engine_run','start_agent_engine_attempt','transition_agent_engine_attempt','assert_agent_engine_attempt_generation','append_agent_engine_lifecycle_event','save_agent_engine_recovery_checkpoint','get_agent_engine_recovery_checkpoint','anonymise_agent_engine_data','set_workspace_default_engine','count_codex_conversation_rebinds','record_codex_history_transfer_acknowledgment','codex_history_transfer_acknowledged','purge_stale_codex_history_transfer_acknowledgments','purge_codex_history_transfer_acknowledgments_on_member_change','issue_codex_history_transfer_notice','mark_codex_history_transfer_notice_delivered','delete_codex_history_transfer_notice_issuance','purge_stale_codex_history_transfer_notice_issuances','purge_replaced_codex_history_notice_membership') ORDER BY p.proname,arguments LIMIT 129" },
   { name: "sessions", maximum: 256, sql: "SELECT clock_timestamp()::text AS observed_at,pid,backend_start::text,application_name,state,xact_start::text,wait_event_type,wait_event FROM pg_stat_activity WHERE datname=current_database() ORDER BY pid LIMIT 257" },
   { name: "locks", maximum: 256, sql: "SELECT clock_timestamp()::text AS observed_at,l.pid,l.locktype,l.mode,l.granted,l.relation::regclass::text AS relation,l.classid,l.objid,l.objsubid,(l.locktype='advisory' AND l.objsubid=1 AND l.classid=((hashtextextended('tenant_integration_dev_suite',0)>>32)&4294967295) AND l.objid=(hashtextextended('tenant_integration_dev_suite',0)&4294967295)) AS dev_suite_mutex FROM pg_locks l WHERE l.database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND l.locktype IN ('advisory','relation') ORDER BY l.pid,l.locktype,l.mode LIMIT 257" },
 ].map((section) => Object.freeze(section)));
 
 export function parseArguments(argv) {
   const options = { execute: false };
-  const keys = { "--source-sha": "sourceSha", "--ca-file": "caFile", "--ca-sha256": "caSha256", "--output-directory": "outputDirectory" };
+  const keys = { "--source-sha": "sourceSha", "--ca-file": "caFile", "--ca-sha256": "caSha256", "--driver-archive": "driverArchive", "--output-directory": "outputDirectory" };
   const seen = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -51,13 +58,29 @@ export function parseArguments(argv) {
     requireValue(Object.hasOwn(keys, argument) && typeof argv[index + 1] === "string" && !argv[index + 1].startsWith("--"), "arguments");
     options[keys[argument]] = argv[++index];
   }
-  requireValue(SHA.test(options.sourceSha ?? "") && DIGEST.test(options.caSha256 ?? "") && options.caFile && options.outputDirectory, "arguments");
+  requireValue(SHA.test(options.sourceSha ?? "") && DIGEST.test(options.caSha256 ?? "") && options.caFile && options.driverArchive && options.outputDirectory, "arguments");
   return options;
 }
 
 async function fixedCommand(binary, args, code, env = process.env) {
   try { return (await executeFile(binary, args, { env, timeout: 15_000, maxBuffer: 256 * 1024, encoding: "utf8" })).stdout; }
   catch { throw new Refusal(code); }
+}
+
+export function dopplerEnvironment(sourceEnv = process.env) {
+  requireValue(typeof sourceEnv.HOME === "string" && isAbsolute(sourceEnv.HOME), "credential_read");
+  const environment = { PATH: "/usr/bin:/bin", HOME: sourceEnv.HOME };
+  if (typeof sourceEnv.DOPPLER_TOKEN === "string" && sourceEnv.DOPPLER_TOKEN.length > 0) environment.DOPPLER_TOKEN = sourceEnv.DOPPLER_TOKEN;
+  return environment;
+}
+
+async function dopplerExecutable(home) {
+  const binDirectory = join(home, ".local", "bin");
+  const executable = await fs.realpath(join(binDirectory, "doppler"));
+  requireValue(relative(binDirectory, executable) !== ".." && !relative(binDirectory, executable).startsWith(`..${sep}`), "credential_read");
+  const stat = await fs.stat(executable);
+  requireValue(stat.isFile() && stat.uid === UID && stat.nlink === 1 && !(stat.mode & 0o022) && (stat.mode & 0o111) !== 0, "credential_read");
+  return executable;
 }
 
 async function bounded(promise, milliseconds, code) {
@@ -81,8 +104,47 @@ async function verifySource(sourceSha, repoRoot = REPO_ROOT) {
     requireValue(SHA.test(committedBlob) && committedBlob === currentBlob, "source_binding");
     files[path] = hash(bytes);
   }
-  for (const path of ["apps/web-platform/node_modules/postgres/src/index.js", "apps/web-platform/node_modules/postgres/src/connection.js"]) files[path] = hash(await fs.readFile(join(repoRoot, path)));
   return { source_sha: sourceSha, files };
+}
+
+function validDriverIntegrity(value) {
+  return typeof value === "string" && /^sha512-[A-Za-z0-9+/]{86}==$/.test(value);
+}
+
+export async function preparePinnedDriver(archivePath, expectedIntegrity) {
+  requireValue(isAbsolute(archivePath) && validDriverIntegrity(expectedIntegrity), "driver_integrity");
+  const archiveHandle = await fs.open(archivePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let archive;
+  try {
+    const stat = await archiveHandle.stat();
+    requireValue(stat.isFile() && stat.nlink === 1 && stat.uid === UID && !(stat.mode & 0o077) && stat.size > 0 && stat.size <= DRIVER_ARCHIVE_LIMIT, "driver_integrity");
+    archive = await archiveHandle.readFile();
+    requireValue(`sha512-${createHash("sha512").update(archive).digest("base64")}` === expectedIntegrity, "driver_integrity");
+  } finally { await archiveHandle.close(); }
+
+  const root = await fs.mkdtemp(join(tmpdir(), "soleur-pr9051-postgres-"));
+  await fs.chmod(root, 0o700);
+  try {
+    const archiveCopy = join(root, "verified-driver.tgz");
+    const archiveCopyHandle = await fs.open(archiveCopy, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try { await archiveCopyHandle.writeFile(archive); await archiveCopyHandle.sync(); }
+    finally { await archiveCopyHandle.close(); }
+    const packageRoot = join(root, "package");
+    await fs.mkdir(packageRoot, { mode: 0o700 });
+    await fixedCommand("/usr/bin/tar", ["-xzf", archiveCopy, "--no-same-owner", "--no-same-permissions", "--strip-components=1", "-C", packageRoot], "driver_archive", {
+      PATH: "/usr/bin:/bin", HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+    });
+    const packagePath = join(packageRoot, "package.json");
+    requireValue(await fs.realpath(packagePath) === packagePath, "driver_archive");
+    const packageInfo = JSON.parse(await fs.readFile(packagePath, "utf8"));
+    requireValue(packageInfo.name === DRIVER_PACKAGE.name && packageInfo.version === DRIVER_PACKAGE.version && packageInfo.exports?.import === "./src/index.js", "driver_version");
+    const entryRealPath = await fs.realpath(join(packageRoot, packageInfo.exports.import));
+    requireValue(entryRealPath.startsWith(`${packageRoot}${sep}`) && (await fs.stat(entryRealPath)).isFile(), "driver_archive");
+    return { entry: entryRealPath, version: packageInfo.version, cleanup: async () => fs.rm(root, { recursive: true, force: true }) };
+  } catch (error) {
+    await fs.rm(root, { recursive: true, force: true });
+    throw error instanceof Refusal ? error : new Refusal("driver_archive");
+  }
 }
 
 async function localBindings(options, repoRoot) {
@@ -95,6 +157,17 @@ async function localBindings(options, repoRoot) {
   requireValue(parentStat.isDirectory() && parentStat.uid === UID && !(parentStat.mode & 0o022), "output_path");
   try { await fs.lstat(output); throw new Refusal("output_exists"); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
+  requireValue(isAbsolute(options.driverArchive), "driver_integrity");
+  const lockfile = JSON.parse(await fs.readFile(join(repoRoot, "apps/web-platform/package-lock.json"), "utf8"));
+  const driverLock = lockfile.packages?.["node_modules/postgres"];
+  requireValue(driverLock?.version === DRIVER_PACKAGE.version && driverLock?.resolved === DRIVER_PACKAGE.resolved && validDriverIntegrity(driverLock?.integrity), "driver_integrity");
+  const driverHandle = await fs.open(options.driverArchive, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const driverStat = await driverHandle.stat();
+    requireValue(driverStat.isFile() && driverStat.nlink === 1 && driverStat.uid === UID && !(driverStat.mode & 0o077) && driverStat.size > 0 && driverStat.size <= DRIVER_ARCHIVE_LIMIT, "driver_integrity");
+    const driverBytes = await driverHandle.readFile();
+    requireValue(`sha512-${createHash("sha512").update(driverBytes).digest("base64")}` === driverLock.integrity, "driver_integrity");
+  } finally { await driverHandle.close(); }
   const handle = await fs.open(options.caFile, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await handle.stat();
@@ -103,7 +176,7 @@ async function localBindings(options, repoRoot) {
     requireValue(hash(ca) === options.caSha256, "ca_binding");
     const certificate = new X509Certificate(ca);
     requireValue(certificate.ca && Date.now() >= Date.parse(certificate.validFrom) && Date.now() < Date.parse(certificate.validTo), "ca_binding");
-    return { ca, output };
+    return { ca, output, driverIntegrity: driverLock.integrity };
   } finally { await handle.close(); }
 }
 
@@ -118,11 +191,14 @@ function connectionOptions(dsn, ca, expectedRef) {
   };
 }
 
-async function dependencies() {
+async function dependencies(driverEntry) {
   // Lazy imports: importing this module or previewing never resolves DNS,
   // invokes Doppler, constructs a database connection or imports application code.
-  const [{ default: postgres }, { resolveSupabaseRef }] = await Promise.all([import("postgres"), import("../lib/supabase/resolve-ref.ts")]);
-  return { resolveRef: resolveSupabaseRef, connect: async (options) => postgres(options), doppler: (args) => fixedCommand("doppler", args, "credential_read") };
+  // The driver entry is extracted from and verified against the lockfile tarball.
+  const environment = dopplerEnvironment();
+  const dopplerPath = await dopplerExecutable(environment.HOME);
+  const [{ default: postgres }, { resolveSupabaseRef }] = await Promise.all([import(pathToFileURL(driverEntry).href), import("../lib/supabase/resolve-ref.ts")]);
+  return { resolveRef: resolveSupabaseRef, connect: async (options) => postgres(options), doppler: (args) => fixedCommand(dopplerPath, args, "credential_read", environment) };
 }
 
 async function publish(output, data, receipt) {
@@ -150,20 +226,23 @@ async function publish(output, data, receipt) {
 
 export async function runCapture(options, injected = {}) {
   let database;
+  let driver;
   try {
     const verify = injected.verifySource ?? ((sha) => verifySource(sha, injected.repoRoot ?? REPO_ROOT));
     let source;
     try { source = await verify(options.sourceSha); } catch { throw new Refusal("source_binding"); }
     const local = await localBindings(options, injected.repoRoot ?? REPO_ROOT);
-    const preview = { status: "preview-no-external-actions", source, ca_sha256: options.caSha256, output_directory: local.output, sections: SECTIONS.map(({ name, maximum }) => ({ name, maximum })), work_seconds: 60, byte_limit: BYTE_LIMIT, application_rows: 0, mutations: 0, writer_clearance: false };
+    const sourceReceipt = { ...source, runtime_dependencies: { postgres: { version: DRIVER_PACKAGE.version, integrity: local.driverIntegrity } } };
+    const preview = { status: "preview-no-external-actions", source: sourceReceipt, ca_sha256: options.caSha256, output_directory: local.output, sections: SECTIONS.map(({ name, maximum }) => ({ name, maximum })), work_seconds: 60, byte_limit: BYTE_LIMIT, application_rows: 0, mutations: 0, writer_clearance: false };
     if (options.execute !== true) return preview;
+    driver = await (injected.preparePinnedDriver ?? preparePinnedDriver)(options.driverArchive, local.driverIntegrity);
     const deadline = Date.now() + 60_000;
     const step = (operation, code) => {
       const remaining = deadline - Date.now();
       requireValue(remaining > 0, "deadline");
       return bounded(operation(), Math.min(15_000, remaining), code);
     };
-    const adapters = { ...(await (injected.doppler && injected.connect && injected.resolveRef ? Promise.resolve({}) : dependencies())), ...injected };
+    const adapters = { ...(await (injected.doppler && injected.connect && injected.resolveRef ? Promise.resolve({}) : dependencies(driver.entry))), ...injected };
     const read = async (args) => {
       try { return (await step(() => adapters.doppler(args), "credential_read")).trim(); } catch { throw new Refusal("credential_read"); }
     };
@@ -196,15 +275,16 @@ export async function runCapture(options, injected = {}) {
     database = undefined;
     try { requireValue(JSON.stringify(await verify(options.sourceSha)) === JSON.stringify(source), "source_binding"); } catch { throw new Refusal("source_binding"); }
     requireValue(Date.now() < deadline, "deadline");
-    const data = JSON.stringify({ source, captured_at: new Date().toISOString(), sections, application_rows: 0, mutations: 0, writer_clearance: false, session_observations_are_not_exclusion: true }) + "\n";
+    const data = JSON.stringify({ source: sourceReceipt, captured_at: new Date().toISOString(), sections, application_rows: 0, mutations: 0, writer_clearance: false, session_observations_are_not_exclusion: true }) + "\n";
     requireValue(Buffer.byteLength(data) <= BYTE_LIMIT, "byte_limit");
-    const result = { status: "captured-read-only-metadata", source_sha: options.sourceSha, ca_sha256: options.caSha256, catalog_sha256: hash(data), counts: Object.fromEntries(Object.entries(sections).map(([name, rows]) => [name, rows.length])), application_rows: 0, mutations: 0, writer_clearance: false };
+    const result = { status: "captured-read-only-metadata", source_sha: options.sourceSha, ca_sha256: options.caSha256, driver_integrity: local.driverIntegrity, catalog_sha256: hash(data), counts: Object.fromEntries(Object.entries(sections).map(([name, rows]) => [name, rows.length])), application_rows: 0, mutations: 0, writer_clearance: false };
     await publish(local.output, data, result);
     return result;
   } catch (error) {
     throw new Refusal(error instanceof Refusal ? error.code : "refused");
   } finally {
     if (database) { try { await database.end({ timeout: 5 }); } catch { /* No success receipt exists on a collection failure. */ } }
+    if (driver) { try { await driver.cleanup(); } catch { /* The only residue is verified package code in a private temporary directory. */ } }
   }
 }
 
