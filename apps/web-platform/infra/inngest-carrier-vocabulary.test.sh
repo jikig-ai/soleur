@@ -19,11 +19,13 @@
 #     payload, the hook template, the web-host trigger set). The stem, not `.sh|.service|.timer`, so a brace form, a
 #     bare unit name or a name built from `$e` is caught.
 #
-# NOT COVERED HERE (deliberately). (1) The STAGED list and quiesce loop in cloud-init-inngest.yml still name the
-# retired trio until the user_data PR (PR-D) lands; that file is user_data and is out of this change, PR-D adds it to the
-# scan. Until then a stale STAGED entry is harmless: the staging copy is `docker cp ... || true` and the bootstrap no
-# longer looks for the files. (2) The scan judges the SOURCE tree, never the pinned image a host boots or an already
-# published bundle (GuardA binds tag to source). (3) A name assembled from two quoted halves, and a lowercase or
+# cloud-init-inngest.yml (the Inngest host's user_data template, whose STAGED list and quiesce loop used to name the
+# retired trio) is scanned for the trio stems as a delivery file since #11080; its comments are stripped like the others,
+# so the history prose the template keeps stays legal and only a code line can red it. The vocabulary scan does not
+# cover it (the template legitimately names live secrets that share a prefix with a retired needle).
+#
+# NOT COVERED HERE (deliberately). (1) The scan judges the SOURCE tree, never the pinned image a host boots or an
+# already published bundle (GuardA binds tag to source). (2) A name assembled from two quoted halves, and a lowercase or
 # otherwise respelled needle, are not matched: the needles are exact strings.
 #
 # Run: bash apps/web-platform/infra/inngest-carrier-vocabulary.test.sh
@@ -76,6 +78,7 @@ INSTALL_REL="apps/web-platform/infra/infra-config-install.sh"
 SERVER_TF_REL="apps/web-platform/infra/server.tf"
 FLIP_SH_REL="apps/web-platform/infra/inngest-cutover-flip.sh"
 FLIP_SVC_REL="apps/web-platform/infra/inngest-cutover-flip.service"
+TMPL_REL="apps/web-platform/infra/cloud-init-inngest.yml"
 # Files outside the derived carrier set that the scans also read: the build recipe, its twin and the refresh set (VOCABULARY + STEM),
 # and the delivery path of the retired trio (STEM only).
 RECIPE_FILES=("$WF_REL" "$CHECK_SH_REL" "$CHECK_YML_REL" "$SET_REL")
@@ -86,6 +89,7 @@ DELIVERY_FILES=(
   "apps/web-platform/infra/hooks.json.tmpl"
   "$SERVER_TF_REL"
   ".github/workflows/apply-deploy-pipeline-fix.yml"
+  "$TMPL_REL"
 )
 
 # The retired identifiers, EXACT (a carrier may still say "plaintext" in an unrelated comment). One per element:
@@ -163,6 +167,12 @@ real_out="$(g3_scan "$REPO_ROOT" 2>&1)"; real_rc=$?
 if [[ "$real_rc" -eq 0 ]]; then pass "real tree: no baked carrier names the retired cutover vocabulary or the retired trio ($(grep -E '^CARRIERS ' <<<"$real_out"))"; else fail "real tree violates Guard 3: ${real_out}"; fi
 real_n="$(sed -n 's/^CARRIERS //p' <<<"$real_out")"
 if [[ "${NEEDLES[*]}" == "$NEEDLES_PINNED" ]]; then pass "needle list: NEEDLES equals its independently spelled pin (${#NEEDLES[@]} identifiers)"; else fail "needle list: NEEDLES drifted from NEEDLES_PINNED -- a retired identifier was edited or dropped from the guard"; fi
+# The user_data template is a member of DELIVERY_FILES. A fixture mutation cannot drop an array entry that lives in the script
+# under test, so this independent spelling of the path is the pin (and the anti-vacuity floor below is the second one).
+case " ${DELIVERY_FILES[*]} " in
+  *" apps/web-platform/infra/cloud-init-inngest.yml "*) pass "delivery set: DELIVERY_FILES names the user_data template (the STAGED list and quiesce loop cannot re-name the retired trio unseen)" ;;
+  *) fail "delivery set: DELIVERY_FILES no longer names apps/web-platform/infra/cloud-init-inngest.yml -- the template dropped out of the trio scan" ;;
+esac
 
 # ---------------------------------------------------------------------------------------------------------------------
 # 2. Fixture tree: a pristine copy of exactly the files the scan reads, mutated one row at a time.
@@ -295,6 +305,9 @@ mutate missing-carrier remove_redis_bootstrap carrier-missing
 # A delivery-path file the scan reads disappears: unreadable is a violation, never a silent skip.
 m_unreadable() { remove_file apps/web-platform/infra/hooks.json.tmpl; }
 mutate unreadable-delivery-file m_unreadable unreadable
+# ... including the user_data template itself (the generated rows below judge a file that is present; this one judges its absence).
+m_unreadable_tmpl() { remove_file "$TMPL_REL"; }
+mutate unreadable-cloud-init-inngest m_unreadable_tmpl unreadable
 
 # The retired trio, by every delivery path and every respelling. One row per recipe/delivery file (generated from the
 # arrays the scan reads, so dropping a file from either array reds its row)...
@@ -321,6 +334,25 @@ m_cp() { append_line "$WF_REL" "$(cp_line inngest-luks-cutover.timer)"; }
 mutate trio-recipe-staging-line m_cp trio-named
 m_trailing() { append_line "$BOOT_REL" 'systemctl enable inngest-luks-cutover  # retired'; }
 mutate trio-code-line-with-trailing-comment m_trailing trio-named
+# ... and the user_data template, by the shapes a regression would take. A realistic re-add: the three names back on the STAGED
+# line AND the timer back in the quiesce loop as a SECOND member after the compliant first one. The lines are appended, not
+# edited in place, so the row lands whatever the template's current wording is.
+m_tmpl_readd() {
+  append_line "$TMPL_REL" '      STAGED="$STAGED inngest-luks-cutover.sh inngest-luks-cutover.service inngest-luks-cutover.timer"'
+  append_line "$TMPL_REL" '      for _t in inngest-cutover-flip.timer inngest-luks-cutover.timer; do'
+}
+mutate trio-template-staged-and-quiesce-readd m_tmpl_readd trio-named
+# The other spellings, as code, in the template: the matcher is shared with the rows above, and each row pins that no spelling
+# was dropped from TRIO_STEMS.
+m_tmpl_brace() { append_line "$TMPL_REL" '      install -m 0755 /tmp/inngest-luks-cutover.{sh,service,timer} /usr/local/bin/'; }
+mutate trio-template-brace-form m_tmpl_brace trio-named
+m_tmpl_snake() { append_line "$TMPL_REL" '      X=inngest_luks_cutover'; }
+mutate trio-template-snake-case m_tmpl_snake trio-named
+m_tmpl_upper() { append_line "$TMPL_REL" '      X=INNGEST_LUKS_CUTOVER_SH'; }
+mutate trio-template-upper-case m_tmpl_upper trio-named
+# A code line with a trailing comment in the template is RED: comment stripping must not eat code.
+m_tmpl_trailing() { append_line "$TMPL_REL" '      systemctl stop inngest-luks-cutover.timer  # retired'; }
+mutate trio-template-code-line-with-trailing-comment m_tmpl_trailing trio-named
 
 # Must-PASS (non-canonical) rows: the scan must not over-block.
 # P1: a carrier that says "plaintext" in an unrelated comment is allowed (the match is on the exact retired identifiers).
@@ -329,6 +361,9 @@ expect_green pass-plaintext-comment p1
 # P2: a prose comment that names the retired trio (history) is allowed in a carrier and in the bootstrap; only code lines count.
 p2() { append_line "$BOOT_REL" '# history: inngest-luks-cutover.sh was retired from the image'; append_line "$FLIP_SH_REL" '# sibling of the retired inngest-luks-cutover FSM'; }
 expect_green pass-trio-in-comment p2
+# P2b: the same history prose as a WHOLE-LINE comment in the user_data template is allowed (the template keeps its history in comments).
+p2b() { append_line "$TMPL_REL" '      # history: inngest-luks-cutover.timer was retired from the image and from this quiesce loop'; }
+expect_green pass-trio-in-template-comment p2b
 # P3: a compliant NEW carrier (non-canonical set member) is accepted and derived.
 p3() { add_carrier inngest-newcarrier-c.sh 'echo ok'; }
 expect_green pass-new-carrier p3
@@ -338,12 +373,14 @@ if [[ "$(sed -n 's/^CARRIERS //p' <<<"$p3_out")" -eq $((real_n + 1)) ]]; then pa
 echo ""
 echo "inngest-carrier-vocabulary.test.sh: ${passes} passed, ${fails} failed (${total} assertions)"
 
-# Anti-vacuity floor (ADR-193): reports directly, never through pass/fail. Rows: 1 real tree + 1 needle-list pin + 1 control
-# + 4 negative controls + 13 needle rows + 4 recipe-needle rows + 1 comment-needle + 5 carrier-set rows (second, empty,
-# one-dropped, missing, unreadable) + 10 trio rows (4 recipe + 6 delivery) + 2 payload spellings + 6 baked-carrier trio
-# rows + 4 must-pass = 52. The floor is the measured count, so deleting any generated row (or a needle) reds it.
-if [[ "$total" -lt 52 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is 52\n' "$total" >&2
+# Anti-vacuity floor (ADR-193): reports directly, never through pass/fail. Rows: 1 real tree + 1 needle-list pin + 1 delivery-set
+# pin (the user_data template) + 1 control + 4 negative controls + 13 needle rows + 4 recipe-needle rows + 1 comment-needle +
+# 6 carrier-set rows (second, empty, one-dropped, missing, unreadable, unreadable template) + 11 trio rows (4 recipe + 7
+# delivery) + 2 payload spellings + 6 baked-carrier trio rows + 5 template trio rows (re-add, brace, snake, upper, trailing
+# comment) + 5 must-pass = 61. The floor is the measured count, so deleting any generated row (or a needle, or the template from
+# DELIVERY_FILES) reds it.
+if [[ "$total" -lt 61 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is 61\n' "$total" >&2
   exit 1
 fi
 if [[ "$fails" -ne 0 ]]; then exit 1; fi
