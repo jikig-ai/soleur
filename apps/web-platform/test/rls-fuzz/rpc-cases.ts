@@ -106,6 +106,9 @@ export const EXCLUDED: Record<string, string> = {
   check_my_revocation: "self-only (p_jwt_iat is the caller's own token iat)",
   my_revocation_status: "self-only; reads auth.uid()'s revocation state, no params",
   is_jti_denied_from_jwt: "reads the caller's own request.jwt.claims jti; no tenancy param",
+  users_own_github_username: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
+  users_own_kb_sync_history: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
+  users_own_health_snapshot: "zero-arg, auth.uid()-pinned own-row PK lookup (mig 176 policy helper); nothing to forge",
   set_current_organization_id: "sets the CALLER's own current-org session pointer (user_session_state for auth.uid())",
   append_kb_sync_row: "appends to the caller's own kb-sync log; p_row is the caller's payload, no A-addressable id",
   // global (non-workspace) namespace: recipient-hash suppression is cross-tenant BY DESIGN (a shared send-dedup ledger)
