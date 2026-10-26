@@ -467,7 +467,7 @@ describe("#6750 A1 pin 1 — every finalizeOutputAwareHeartbeat caller passes re
       // the flag migrating into ANY object literal — including an indented line
       // inside one of the large backtick prompt templates — while the finalize
       // call silently loses it.
-      const calls = [...src.matchAll(/finalizeOutputAwareHeartbeat\(\{([\s\S]*?)\n    \}\)/g)];
+      const calls = [...src.matchAll(/finalizeOutputAwareHeartbeat\(\{([\s\S]*?)\n {4}\}\)/g)];
       expect(calls.length, `${file}: could not parse the finalize call — gate DISENGAGED`).toBeGreaterThan(0);
       for (const [, body] of calls) {
         expect(body, `${file}: a finalizeOutputAwareHeartbeat call omits retryEligible`).toMatch(
