@@ -2815,8 +2815,9 @@ assert "acl writer refuses a quote-bearing password (non-zero, no file write)" \
   "[[ '$ACL_BAD_RC' -ne 0 && ! -e '$ACL_TARGET' ]]"
 # The green path: a valid password lands the exact ACL rule atomically at 0600.
 ACL_OK_RC=0; env INNGEST_REDIS_PASSWORD='XT_REDPW_SENTINEL' INNGEST_REDIS_ACL_FILE="$ACL_TARGET" sh "$ACL_SUT" >/dev/null 2>&1 || ACL_OK_RC=$?
-assert "acl writer writes 'user default on ><pw> ~* &* +@all' atomically at 0600" \
-  "[[ '$ACL_OK_RC' -eq 0 && \$(cat '$ACL_TARGET' 2>/dev/null) == 'user default on >XT_REDPW_SENTINEL ~* &* +@all' && \$(stat -c %a '$ACL_TARGET' 2>/dev/null) == '600' ]]"
+ACL_EXPECT_HASH="$(printf '%s' 'XT_REDPW_SENTINEL' | sha256sum | cut -d' ' -f1)"
+assert "acl writer writes 'user default on #<sha256> ~* &* +@all' atomically at 0600 (cleartext never at rest)" \
+  "[[ '$ACL_OK_RC' -eq 0 && \$(cat '$ACL_TARGET' 2>/dev/null) == 'user default on #${ACL_EXPECT_HASH} ~* &* +@all' && \$(stat -c %a '$ACL_TARGET' 2>/dev/null) == '600' && \$(grep -cF 'XT_REDPW_SENTINEL' '$ACL_TARGET' 2>/dev/null || true) -eq 0 ]]"
 # Positive control: the refusal is what gates the write — a guard-removed copy under -x must
 # trace the sentinel AND reach the write.
 ACL_MUT="$PING_TMP/inngest-redis-acl-noguard.sh"

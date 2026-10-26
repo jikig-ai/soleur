@@ -153,9 +153,10 @@ log "installed /usr/local/bin/inngest-redis-mount-guard.sh (two-state /mnt/data 
 #     (SHELLOPTS=xtrace / BASH_ENV / bash -x) printed it to stderr and journald shipped it
 #     off-box, and /proc/<pid>/cmdline (0444) + `CONFIG GET requirepass` exposed it even
 #     untraced. The conf now declares `aclfile`; this script turns the Doppler-injected
-#     password into `user default on ><pw> ~* &* +@all` — the secret never lands on argv,
-#     and Redis stores SHA256 so nothing reads the cleartext back. `AUTH <pw>` resolves to
-#     the default user either way, so the inngest `redis://:<pw>@127.0.0.1:6379` client is
+#     password into `user default on #<sha256> ~* &* +@all` — the secret never lands on argv
+#     OR disk: the `#` spelling writes the password's SHA256 directly (a `>` spelling would
+#     leave the cleartext in the file at rest — review P2), and `AUTH <pw>` resolves to the
+#     default user either way, so the inngest `redis://:<pw>@127.0.0.1:6379` client is
 #     unchanged.
 install -m 0755 /dev/stdin /usr/local/bin/inngest-redis-acl.sh <<'ACLEOF'
 #!/usr/bin/env bash
@@ -192,12 +193,17 @@ if printf '%s' "$INNGEST_REDIS_PASSWORD" | LC_ALL=C grep -qE "[[:space:]\"'\\[:c
   exit 1
 fi
 
+# Hash BEFORE the write: `#` is the aclfile grammar's SHA256 form — AUTH presents cleartext
+# and Redis hashes it for the comparison, so the on-disk artifact never carries the
+# credential (a `>` rule would persist it at rest — review P2). Unsalted SHA256 of a
+# random_password-minted 48-char alnum is not a dictionary target.
+ACL_HASH="$(printf '%s' "$INNGEST_REDIS_PASSWORD" | sha256sum | cut -d' ' -f1)"
 # Atomic tmp+mv (never a half-written aclfile at 0600, deploy-owned — the writer runs as
 # User=deploy and can only write inside ReadWritePaths=/mnt/data/redis).
 ACL_TMP="$(mktemp "${ACL_FILE}.tmp.XXXXXX")"
 trap 'rm -f "$ACL_TMP"' EXIT
 chmod 0600 "$ACL_TMP"
-printf 'user default on >%s ~* &* +@all\n' "$INNGEST_REDIS_PASSWORD" > "$ACL_TMP"
+printf 'user default on #%s ~* &* +@all\n' "$ACL_HASH" > "$ACL_TMP"
 mv -f "$ACL_TMP" "$ACL_FILE"
 trap - EXIT
 ACLEOF
