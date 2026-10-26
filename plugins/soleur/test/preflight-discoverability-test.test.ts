@@ -3063,7 +3063,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // Better Stack ClickHouse read connection (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_scheduled). NO SUBSTITUTE: the
   // refusal rows exist only in Better Stack and the warehouse has no unauthenticated read path; the offline suites prove the marker
   // grammar and the probe's grading, not that the stored stream carries a run's rows. Genuine.
-  const BASELINE_DECLARED_PROBES = 83;
+  // #10550 (2026-10-26): +1 (83 -> 84) for `2026-10-26-feat-wikiskill-phase-2-gated-new-skill-creation-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 5`) reads the
+  // proposer's outcome marker rows from the Better Stack ClickHouse read connection (Better Stack Logs read token, Doppler). NO SUBSTITUTE:
+  // the marker exists only in production logs and the warehouse has no unauthenticated read path; the offline suites prove the marker
+  // grammar, not that the stored stream carries a run's rows. Genuine.
+  const BASELINE_DECLARED_PROBES = 84;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
