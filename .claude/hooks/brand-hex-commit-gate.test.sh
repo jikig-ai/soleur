@@ -29,6 +29,19 @@ _report() {
   fi
 }
 
+# Canonical fixture-dir guard (byte-identical to plugins/soleur/test/test-helpers.sh); the relative-path
+# ratchet recognises only this executed statement before a write into a fixture root.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # Build a payload string for the hook and capture its JSON decision.
 _run() {
   local cwd="$1" tool="$2" command="$3"
@@ -477,6 +490,19 @@ _seed_bare() {
 
 _phys() { ( cd "$1" && pwd -P ); }
 
+# In $WT: commit a clean tracked banner, then leave an OFF-BRAND edit to it unstaged (tracked, modified,
+# NOT staged), so only a working-tree diff base ('commit -a' / '-p') can see it. Paths are rooted at the
+# guarded $WT, never at a cd, so the relative-path ratchet can prove them absolute.
+_dirty_tracked_banner() {
+  assert_fixture_dir "$WT"
+  mkdir -p "$WT/$(dirname "$BANNER")"
+  printf '%s\n' "$CLEAN_TSX" > "$WT/$BANNER"
+  git -C "$WT" add "$BANNER"
+  git -C "$WT" commit -q -m "seed banner"
+  printf '%s\n' "$OFFBRAND_TSX" > "$WT/$BANNER"
+}
+
+
 # PATH directory carrying the tools the hook needs, and NOT perl (the lexer needs it).
 _mk_path_dir() {
   local d t p
@@ -568,9 +594,7 @@ t_t27_t28_no_cd_unchanged() {
 
 t_t29_diff_base_follows_commit_all() {
   _seed_bare
-  ( cd "$WT" && mkdir -p "$(dirname "$BANNER")" && printf '%s\n' "$CLEAN_TSX" > "$BANNER" && git add "$BANNER" \
-      && git commit -q -m "seed banner"
-    printf '%s\n' "$OFFBRAND_TSX" > "$BANNER" )   # tracked, modified, NOT staged
+  _dirty_tracked_banner
   _run_cmd "$BARE" "git -C $WT commit -a -m x"
   _expect "T29 'git -C <wt> commit -a' scans the unstaged tracked edit -> deny" "d=$(_decision "$OUT")" _is_deny
   _run_cmd "$BARE" "git -C $WT commit -m x"
@@ -748,10 +772,11 @@ t_t38_target_config_cannot_run_code() {
   printf '#!/bin/sh\n: > "%s/textconv"\ncat "$1"\n' "$mk" > "$tc"
   printf '#!/bin/sh\n: > "%s/fsmonitor"\nexit 0\n' "$mk" > "$fm"
   chmod +x "$tc" "$fm"
-  ( cd "$WT" && mkdir -p "$(dirname "$BANNER")" && printf '%s\n' "$CLEAN_TSX" > "$BANNER" \
-      && printf '*.tsx diff=evil\n' > .gitattributes && git add "$BANNER" && git commit -q -m "seed banner"
-    git config diff.evil.textconv "$tc"; git config core.fsmonitor "$fm"
-    printf '%s\n' "$OFFBRAND_TSX" > "$BANNER" )
+  assert_fixture_dir "$WT"
+  printf '%s\n' '*.tsx diff=evil' > "$WT/.gitattributes"
+  git -C "$WT" config diff.evil.textconv "$tc"
+  git -C "$WT" config core.fsmonitor "$fm"
+  _dirty_tracked_banner
   rm -f "$mk"/textconv "$mk"/fsmonitor
   _run_cmd "$BARE" "git -C $WT commit -a -m x"
   _expect "T38 a target repo's textconv driver and fsmonitor hook do not run in the gate (still denies)" \
@@ -790,9 +815,7 @@ t_t40_inherited_git_dir_does_not_redirect_the_scan() {
 
 t_t41_diff_base_comes_from_the_lexer() {
   _seed_bare
-  ( cd "$WT" && mkdir -p "$(dirname "$BANNER")" && printf '%s\n' "$CLEAN_TSX" > "$BANNER" && git add "$BANNER" \
-      && git commit -q -m "seed banner"
-    printf '%s\n' "$OFFBRAND_TSX" > "$BANNER" )   # tracked, modified, NOT staged
+  _dirty_tracked_banner
   _run_cmd "$BARE" "ls -la && git -C $WT commit -m x"
   _expect "T41 'ls -la' before a -C commit does not read as commit -a -> allow" "d=$(_decision "$OUT")" _is_allow
   _run_cmd "$BARE" "git -C $WT commit -a -m 'do git commit now'"
