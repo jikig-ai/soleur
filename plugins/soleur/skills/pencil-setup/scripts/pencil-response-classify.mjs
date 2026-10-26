@@ -13,6 +13,9 @@ const ERROR_PATTERNS = [
   /^Error:/m,
   /^\[ERROR\]/m,
   /^Invalid properties:/m,
+  // @pencil.dev/cli 0.2.9 answers a tool it no longer has with this line; it
+  // used to classify as success, and the auto-save ran after it (#11143).
+  /^Unknown tool:/m,
   // Auth-failure responses from the pencil REPL. Anchored to start-of-line
   // (via multiline flag) for `Unauthorized` / `HTTP 401` / `Invalid API key`
   // so a node name echoed back in `batch_get` output ("Unauthorized state")
