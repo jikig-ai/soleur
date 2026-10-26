@@ -15,7 +15,9 @@ related_pr: 9051
 cpo_signoff: granted-2026-10-26
 user_impact_review: concur-2026-10-26
 gdpr_gate: advisory-run-art-5e-retention-finding
-status: draft-pending-clo-decisions
+status: draft-policy-approved-pending-plan-review
+clo_decision: knowledge-base/legal/audits/2026-10-26-codex-notice-rights-retention-decision.md
+operator_policy_acceptance: approved-2026-10-26
 ---
 
 # Complete Codex Notice Access and Bounded Retention
@@ -120,7 +122,9 @@ research.
   classification), and PR #9051 (draft rollout; independent holds remain).
 
 The issue does not prescribe a duration, legal basis, Article 15 scope after
-consumption, Article 20 disposition, or schedule substrate. Those remain
+consumption, Article 20 disposition, or schedule substrate. The accepted CLO
+decision below now supplies the legal policy; schedule selection and factual
+clearance remain
 decision gates, not research assumptions.
 
 ## User-Brand Impact
@@ -181,9 +185,9 @@ The issue and audit do not establish actual customer exposure.
 The CPO approved the `single-user incident` threshold and P1 planning priority
 on 2026-10-26. The user-impact-reviewer concurred on 2026-10-26 after the
 role-by-role artifact/vector review. These are impact-framing signoffs only.
-The advisory GDPR gate ran and identified the unresolved server-retention
-maximum. A new CLO decision on retention, purpose, Article 15 projection, and
-Article 20 disposition remains required before qualification. The existing
+The advisory GDPR gate identified the missing enforced server-retention bound.
+The later CLO decision supplies the proposed policy, which the operator
+accepted; implementation and final factual/legal qualification remain open. The existing
 TOM 4 classification attestation does not substitute for them.
 
 ## Current Data-Flow Inventory
@@ -203,18 +207,21 @@ TOM 4 classification attestation does not substitute for them.
 
 ### 1. Member access projection
 
-Add the table to the DSAR allowlist with a technical Article 15 baseline only
-after CLO approves the scope. Keep Article 20 separate. The export worker must
+The October 26 CLO decision and operator acceptance approve Article 15 access
+and conservative Article 20 inclusion for eligible service activity. This is
+an independently assessed portability decision, conditional on the subject's
+actual basis and controller capacity. The export worker must
 read the metadata through one narrowly scoped `SECURITY DEFINER` projection RPC
 with `search_path = public, pg_temp`, qualified relations, and a subject ID
 argument supplied by the already-authenticated DSAR job. Grant execution only
 to the server service role. Do not grant direct `SELECT` on the table to any
 role.
 
-Return only fields needed to explain a retained issuance: conversation
-reference, member reference for scope assertion, generation, issue time and
-delivery-marker time. Do not return `nonce_hash`, raw nonce, workspace data or
-membership-epoch internals unless CLO specifically requires a field. The hash
+Return every retained non-secret subject field or its faithful intelligible
+equivalent: conversation, workspace and member references, generation,
+membership timestamp, issuance and delivery-marker times, and expiry if stored.
+Explain generation and membership context; do not include other members' data.
+Do not return `nonce_hash` or raw nonce in the automatic bulk projection. The hash
 is an authenticator: exposing it could let an authenticated caller satisfy the
 hash-based acknowledgment protocol without possessing the notice nonce. The
 RPC must select only rows owned by the requested member; `exportSqlTable()` must
@@ -229,11 +236,16 @@ table rule for every other allowlisted table. Update
 cross-tenant integration tests. A raw table name in an allowlist must not
 silently authorize a direct service-role query.
 
-Because successful acknowledgment currently consumes and deletes the issuance,
-the export will include only metadata still retained at request time. CLO must
-decide whether that existing post-consumption deletion is compatible with
-Article 15 completeness or whether a separate minimal historical event is
-necessary. Do not retain a second history record merely to make export easier.
+Successful acknowledgment may delete the issuance without permanent history.
+Preserve eligible non-secret metadata existing when the controller receives an
+access request, before asynchronous export can lose it to acknowledgment,
+expiry, erasure or lifecycle cleanup. Bind preservation to request admission
+with an atomic or equivalently proven procedure, including the email channel.
+Data genuinely deleted before receipt need not be recreated. The separate
+acknowledgment is not a complete notice history. The rights-response copy has
+its own necessary fulfillment purpose and lifecycle; prove its actual archive,
+failure and deletion behavior before final CLO clearance. Download-link expiry
+alone is not deletion evidence. Never preserve replay authenticators.
 
 ### 2. Expiry and bounded cleanup
 
@@ -256,11 +268,14 @@ Use these timestamp semantics:
   an expired row only when it is creating and sending a new notice through the
   existing explicit notice flow.
 
-The **duration is intentionally unset**. CLO must provide a justified maximum
-server lifetime and purpose/basis record before the migration or qualification
-is approved. The scheduled cleanup interval must fit inside that maximum with
-its worst-case scheduler delay included. Do not substitute the 30-minute
-browser cache TTL, invent a duration, or allow same-nonce retries to renew it.
+The accepted proposed policy is **30 minutes of nonce usability**, followed by
+at most **five further minutes for primary-table deletion**: a 35-minute ordinary
+abandoned-row residence ceiling. This is a controller policy, not a statutory
+duration or current enforcement. Include scheduler, queue, batch, lock and retry
+delay in the erasure bound; prove capacity and alert early enough to intervene.
+Block new issuance when required cleanup health is unavailable. Same-nonce
+retries never renew lifetime. Managed backups/PITR and rights-response copies
+remain distinct factual/lifecycle clearance conditions in the CLO decision.
 
 Use the existing scheduled-retention patterns only after confirming their
 monitoring and ownership properties. Prefer a monitored Inngest scheduled
@@ -297,31 +312,30 @@ reading or consent.
 
 ## Legal and Operator Decisions
 
-1. **CLO retention decision:** select and justify the maximum server lifetime,
-   cleanup delay bound, and purpose/legal-basis treatment. Article 6(1)(b) is
-   only a candidate for state necessary to the requested service. Any separate
-   security/accountability use needs its own purpose/basis assessment. No
-   duration or basis is asserted in this plan.
-2. **CLO Article 15 decision:** confirm the minimum metadata returned and
-   whether deleting the issuance on successful acknowledgment leaves a required
-   access gap. The nonce hash is withheld only with the security rationale
-   above; this is not a blanket private-table exclusion.
-3. **CLO Article 20 decision:** separately determine whether any part of the
-   controller-generated issuance record is data provided by the member and
-   portable. Do not copy the acknowledgment table's `15+20` label by analogy.
+1. **Accepted internal policy:** the source-based [CLO decision](../../legal/audits/2026-10-26-codex-notice-rights-retention-decision.md)
+   supplies the proposed 30-minute validity/five-minute deletion limits, narrow
+   service purpose, faithful non-secret Article 15 projection, request-receipt-
+   time preservation, ordinary post-ack deletion and independently assessed
+   Article 20 inclusion for eligible service activity. The operator explicitly
+   approved this legal-risk policy for implementation and isolated testing.
+2. **Remaining basis/capacity facts:** Article 6(1)(b) applies only to a verified
+   contracting subject where objectively necessary. Team/noncontracting roles
+   remain blocked pending the actual controller basis/instructions. No separate
+   security/accountability purpose or Article 6(1)(f) fallback is approved.
+3. **Remaining lifecycle facts:** establish actual backup/PITR handling and the
+   rights-response copy/archive failure, restore and deletion lifecycle before
+   final processing clearance. The bulk authenticator exclusion does not waive
+   case-specific handling of an explicit full-access request.
 4. **CLO processing-record decision:** define the exact dated PA-2/compliance
    amendment, retention wording and role split. Update the processor register
    only if the actual processing activity warrants it. No provider permission
    follows from these local controls.
-5. **Operator legal-risk approval:** review the CLO's proposed retention and
-   purpose decision before it is treated as approved. Engineering cannot settle
-   that legal-risk choice. The existing broad non-production authorization
-   does not authorize a new shared-database read or write; follow the exact
-   approval boundary recorded in the recovery evidence.
+5. **Approval boundary:** operator policy acceptance does not authorize a new
+   shared-database read/write, provider request, customer processing, readiness,
+   merge or deployment. Follow the exact recovery-evidence approval boundary.
 
-There is no independent CTO ruling here on the legal maximum, Article 20, or
-whether post-ack deletion satisfies Article 15. Those decisions lack evidence
-and belong to the CLO/operator. The CTO technical design recommendation is the
+The accepted policy comes from the CLO and operator; it is not a CTO ruling or
+professional counsel opinion. The CTO technical design recommendation is the
 projection RPC, current-nonce timestamps, fail-closed expiry checks and bounded
 cleanup described above.
 
@@ -381,11 +395,10 @@ cleanup described above.
 ## Work Phases and Gates
 
 1. **Confirm scope and sign-offs:** CPO and user-impact-reviewer signoffs are
-   recorded for the single-user impact threshold. CLO supplies retention,
-   legal-basis, Article 15/20 and post-consumption decisions. The advisory
-   `soleur:gdpr-gate` ran and recorded the missing maximum-lifetime finding.
-   If the CLO or operator decision is pending, do not choose a duration or
-   enable processing.
+   recorded for the single-user impact threshold. The CLO decision and operator
+   acceptance supply the legal policy for implementation and isolated testing.
+   The advisory `soleur:gdpr-gate` recorded the missing enforcement finding.
+   Final factual/legal processing clearance remains withheld.
 2. **Inventory schedulers and schema:** inspect existing DSAR grant/query
    assertions, `pg_cron` retention patterns, Inngest cron monitors and cleanup
    callers. Recheck migration ordinal, affected user-FK tables and existing
@@ -496,18 +509,22 @@ criteria; it must not be treated as available until added and tested.
 ### Split Assessment
 
 - Subsystems touched: 3 — `apps/web-platform`, `scripts`, `knowledge-base`
-- Planned files: approximately 23 (including focused test files and conditional schedule files) | Estimated changed lines: approximately 700
+- Pre-decision estimate: approximately 23 files / 700 changed lines. Request-admission preservation and the complete privacy-document/mirror set require a new inventory and split ruling before implementation; the old estimate does not establish headroom.
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR — the DSAR scope, expiry semantics, cleanup, and legal record updates share the same issuance lifecycle and CLO decisions; the correction remains separate from draft PR #9051.
+- Recommendation: pending the revised inventory and CTO plan review. Preserve all six asks; do not drop request-time rights completeness to fit a threshold. The correction remains separate from draft PR #9051.
 
 ## Acceptance Criteria
 
 - [x] CPO and user-impact-reviewer sign off the single-user impact framing and
       priority; the advisory GDPR gate runs and records its retention finding.
-- [ ] CLO and operator approve purpose/basis, maximum lifetime, Article 15/20
-      and post-consumption handling before implementation/qualification.
+- [x] CLO proposes purpose/basis, maximum lifetime, Article 15/20 and
+      post-consumption policy; operator accepts it for implementation and isolated
+      testing. Factual basis/capacity and final processing clearance remain held.
 - [ ] A DSAR projection path returns the CLO-approved member metadata, omits
       nonce/hash and other members, and preserves zero direct table grants.
+- [ ] Request admission preserves eligible metadata present at receipt despite
+      later acknowledgment, expiry and erasure; tests cover the email procedure,
+      failure and deletion lifecycle without creating permanent notice history.
 - [ ] The allowlist completeness and per-row query checks recognize only the
       tested issuance RPC projection; existing direct-table checks still cover
       all other allowlisted tables.
@@ -532,6 +549,7 @@ criteria; it must not be treated as available until added and tested.
 
 - `apps/web-platform/supabase/migrations/<rechecked-ordinal>_codex_notice_rights_retention.sql` — new projection/expiry/cleanup RPCs and scheduler binding; do not edit migration 175.
 - `apps/web-platform/server/dsar-export-allowlist.ts` and `server/dsar-export.ts` — scoped metadata export through the reviewed RPC.
+- `apps/web-platform/app/api/account/export/route.ts` and the request-admission RPC/rights snapshot tests — preserve the approved request-receipt-time projection before asynchronous processing; establish the equivalent email procedure.
 - `apps/web-platform/server/ws-handler.ts` — stable expiry response while preserving held-turn and explicit resend behavior.
 - `apps/web-platform/server/inngest/functions/`, `server/inngest/cron-manifest.ts`, and `apps/web-platform/infra/sentry/cron-monitors.tf` — only if no existing monitored schedule can safely host the cleanup.
 - `apps/web-platform/scripts/codex-notice-retention-status.sh` — no-SSH status probe using the credential-safe read pattern.
@@ -554,10 +572,9 @@ criteria; it must not be treated as available until added and tested.
 
 ## Open Questions
 
-1. What maximum lifetime and cleanup delay does the CLO approve, and what
-   purpose/basis supports that period?
-2. Does Article 15 require issuance/delivery history after acknowledgment has
-   consumed and deleted the pending issuance, or is the retained acknowledgment
-   record the complete remaining record?
-3. Does the CLO classify any issuance metadata under Article 20, separately
-   from Article 15 access?
+1. Which verified subject contract/controller capacity supports the narrow
+   service purpose for qualification? Other roles remain blocked.
+2. What are the proven backup/PITR and rights-response-copy deletion/restore
+   lifecycles? Final CLO clearance depends on these facts.
+3. Does the complete source plan, including request-admission preservation,
+   remain within the single-PR split threshold after inventory and plan review?
