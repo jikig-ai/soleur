@@ -362,8 +362,7 @@ repo the gate capability-probes and delegates [scripts/test-all.sh](../../../../
 always-on fast tier (#9763), ADR-262's PR-gated mutation batteries, and the
 infra consumed edge still apply — and a docs-only diff returns
 `NO_TESTS_AFFECTED`, which is not coverage. Preview the selection with
-`bash scripts/test-all.sh --print-selection` and state the `selected N of M`
-with the verdict (#10333).
+`--print-selection` and state the `selected N of M` (#10333).
 
 **Probe capacity first (#7545).** An affected run can still DEGRADE to the
 full battery (undecidable diff, runner/index touched, FORCE_ALL), so spend ~3 s
@@ -399,8 +398,8 @@ from a `pull_request` run — which GitHub builds against `refs/pull/N/merge`. C
 therefore verified `merge(HEAD, base)`, not the HEAD tree the local battery would
 run, and those are the same tree only when `origin/main` is already an ancestor of
 HEAD. The gate refuses when it is not, so "CI already verified this exact tree" is
-a claim it establishes rather than one it assumes. The practical consequence: to
-get the saving on a re-run, sync with `main` first.
+a claim it establishes rather than assumes. Re-run savings need `main` synced
+first.
 
 Branch on the exit code, never on the prose:
 
@@ -1623,9 +1622,9 @@ Run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-questio
 
 [skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]
 
-Before queueing `gh pr merge --squash --auto` (Phase 6.5's CI Status Check below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. This was the failure mode in PR #3624 → #3627 → #3630: the orchestrator went `preflight → gh pr edit → gh pr ready → gh pr merge --squash --auto` without re-pushing, and 2 of 5 commits (the actual fix + the review fix) never landed on `main`.
+Before queueing `gh pr merge --squash --auto` (Phase 6.5's CI Status Check below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. (PR #3624 → #3627 → #3630: 2 of 5 commits never landed.)
 
-The PreToolUse hook [`.claude/hooks/ship-unpushed-commits-gate.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.sh) enforces this gate mechanically — it intercepts every `gh pr merge` (including chained forms like `gh pr ready && gh pr merge`) and denies the tool call when `git rev-list origin/<branch>..HEAD --count` returns > 0. The deny message lists the unpushed SHAs so the operator can `git push` and re-issue.
+The PreToolUse hook [`.claude/hooks/ship-unpushed-commits-gate.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.sh) enforces this gate mechanically — it intercepts every `gh pr merge` (chained forms too) and denies the tool call when `git rev-list origin/<branch>..HEAD --count` returns > 0. The deny message lists the unpushed SHAs so the operator can `git push` and re-issue. Run the Phase 6 secret scan before the `git push` it asks for.
 
 For headless or non-hooked contexts (CI workflows, direct shell invocations), run the equivalent check before `gh pr merge`:
 
@@ -1634,17 +1633,17 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git fetch origin "$BRANCH" 2>/dev/null || true
 UNPUSHED=$(git rev-list "origin/${BRANCH}..HEAD" --count 2>/dev/null || echo 0)
 if [[ "$UNPUSHED" -gt 0 ]]; then
-  echo "FAIL: ${UNPUSHED} unpushed commit(s) on origin/${BRANCH}. Run 'git push'." >&2
+  echo "FAIL: ${UNPUSHED} unpushed commit(s) on origin/${BRANCH}. Run the Phase 6 secret scan, then 'git push'." >&2
   git log "origin/${BRANCH}..HEAD" --oneline >&2
   exit 1
 fi
 ```
 
-**Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** — a stale tracking ref re-introduces the silent-miss class this gate exists to prevent, so the hook denies and prompts the operator to fetch manually. See rule `wg-ship-push-before-merge` in `AGENTS.rules.md` for the canonical contract.
+**Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** (a stale ref hides the miss). See rule `wg-ship-push-before-merge` in `AGENTS.rules.md` for the canonical contract.
 
-**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait, which is dead time you are already spending. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings — otherwise batching work into the wait buys a cycle and spends a review. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set at the worst possible moment: the PR is one check from merging, and the cycle it restarts is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 CI cycles, one on a late ADR commit at 65 of 67 checks.
+**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set when the PR is one check from merging; the restarted cycle is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 CI cycles (a late ADR commit at 65 of 67 checks).
 
-**Hook ordering** matters: the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json) so any auto-sync push performed by the rebase hook has updated the upstream tracking ref before this gate counts unpushed commits. `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces the ordering invariant — keep it green if either hook moves.
+**Hook ordering:** the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json), so an auto-sync push has updated the tracking ref before this gate counts; `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces it.
 
 ## Phase 6: Push and Create PR
 
@@ -1735,6 +1734,8 @@ Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, 
 <!-- grok-pre-push-gate:end -->
 
 **Pipeline tally gate — BEFORE pushing (#9403):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (standalone ship writes no ledger otherwise), `gate ci_cycles` — `STOP` → `budget-capped` session-state write per the [render spec](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/pipeline-tally-render.md) and exit; `WARN`/`UNKNOWN` → continue; `incr ci_cycles` after a successful push.
+
+**Secret scan — BEFORE every `git push` (also 6.45, 6.5, 7):** `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/prepush-secret-scan.sh"; echo "SCAN_RC=$?"`, Bash `timeout: 400000` ([contract](./scripts/prepush-secret-scan.sh)); 43 is not an error. 0 continue; 43 append the printed `secret-scan:` line to the PR body (re-add after any body rewrite), continue; else STOP (44: show the operator the reason; 127: plugin root unset, see Cloud Mode). Headless FINDINGS/44: abort, never rewrite history or edit the gitleaks config.
 
 Push the branch to remote. Get the branch name first:
 
@@ -2013,6 +2014,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
 If it archives anything (`Archived N artifact(s)`), commit and push the move so it rides this PR — never a follow-up:
 
 ```bash
+# Phase 6 secret scan first
 git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
 ```
 
@@ -2126,6 +2128,7 @@ retired both the driver and AC17.)
 
    ```bash
    git merge --abort
+   # Phase 6 secret scan first
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-regenerable-conflicts.sh" origin/main && git push \
      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
@@ -2153,6 +2156,7 @@ retired both the driver and AC17.)
 5. Push and re-verify:
 
    ```bash
+   # Phase 6 secret scan first
    git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    gh pr view --json mergeable | jq '.mergeable'
    ```
@@ -2567,6 +2571,7 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
    a. If the failure is in tests or lint: invoke `skill: soleur:test-fix-loop` to diagnose, fix, and commit. After test-fix-loop completes, push and re-queue auto-merge:
 
       ```bash
+      # Phase 6 secret scan first
       git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
       gh pr merge <number> --squash --auto
       ```
