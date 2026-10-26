@@ -71,20 +71,22 @@ function client(opts: { summary?: ReplySource; webEgress?: ReplySource; workspac
   const from = vi.fn((table: string) => {
     if (table !== "workspaces") throw new Error(`unexpected table ${table}`);
     const lookup: { select: string; eq: [string, unknown][] } = { select: "", eq: [] };
-    const chain = {
+    // Like the real client: from() exposes only select(); eq() and maybeSingle() exist only on the chain select() returns.
+    const filtered = {
+      eq: (column: string, value: unknown) => {
+        lookup.eq.push([column, value]);
+        return filtered;
+      },
+      maybeSingle: () => builder(opts.workspaceRow ?? { data: { organization_id: ORG, name: "Acme" }, error: null }),
+    };
+    return {
       select: (columns: string) => {
         if (columns !== ORG_SELECT) throw new Error(`unexpected column list ${columns}`);
         lookup.select = columns;
         orgLookups.push(lookup);
-        return chain;
+        return filtered;
       },
-      eq: (column: string, value: unknown) => {
-        lookup.eq.push([column, value]);
-        return chain;
-      },
-      maybeSingle: () => builder(opts.workspaceRow ?? { data: { organization_id: ORG, name: "Acme" }, error: null }),
     };
-    return chain;
   });
   return { rpc, from, signals, orgLookups } as never;
 }
@@ -330,7 +332,7 @@ describe("loadEgressAudit: ready", () => {
     expect(rpcArgs(c2, "get_egress_audit_summary")).toEqual([{ p_workspace_id: WS, p_limit: 200, p_decision: null }]);
   });
 
-  it("every database read is bounded by an AbortSignal, and the web-access and org reads are keyed on the pointer's workspace", async () => {
+  it("both RPC reads carry an AbortSignal, and the web-access and org reads are keyed on the pointer's workspace", async () => {
     const c = client({});
     await loadEgressAudit(c, USER, "all");
     for (const fn of ["get_egress_audit_summary", "get_workspace_web_egress"]) {
