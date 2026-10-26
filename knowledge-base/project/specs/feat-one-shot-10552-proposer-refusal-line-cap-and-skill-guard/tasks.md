@@ -22,10 +22,10 @@ Ref #10552 (never Closes). Do not trigger the cron. Tests are written before the
   - 2.1.1 New `cron-compound-promote-skill-guard.test.ts`, table-driven; fake octokit records `(route, params)` (cases in the plan's Acceptance Criteria)
   - 2.1.2 Route-aware Octokit mock in `cron-compound-promote-draft-handler.test.ts` and `cron-compound-promote-patterns-handler.test.ts`; handler cases: different-file opens, same-file refuses (no POST, no Sentry for conflict), unverifiable (Sentry op), shared scan across two skill clusters, AGENTS-only run makes no pulls call
 - 2.2 Implement
-  - 2.2.1 `scanOpenPrSkillPaths` (two literal routes, 3 PR pages, 10 file pages, 150-request budget, `pr.user?.login`, skip `dependabot[bot]` only, array checks throw)
-  - 2.2.2 `skillConflictVerdict`
-  - 2.2.3 `step.run("skill-conflict-scan")` before the cluster loop, only when a proposed cluster targets `plugins/soleur/skills/`
-  - 2.2.4 Replace the apply-step guard block (warn log with `pr`; `reportSilentFallback` only for unverifiable); delete the comment POST and `skillConflictDiffBody`
+  - 2.2.1 Module-level `scanOpenPrSkillPaths({octokit, owner, repo, targets})` (two literal routes, 3 PR pages, 10 file pages, 150-request budget, `pr.user?.login`, skip `dependabot[bot]` only, fixed-string throw on non-array); `changed` records only paths equal to a requested target, first PR wins, first-reached bound reported
+  - 2.2.2 `skillConflictVerdict` (`Object.hasOwn`, never `in`)
+  - 2.2.3 Lazy `step.run("skill-conflict-scan")` assigned to a hoisted `let skillScan`, just before the apply step, only for a drafted skill cluster and only once; `targets` = kept proposals' skill target paths; no new `TARGET_ALLOW_RE.test(` in the handler, no second `Promise<ClusterOutcome>` opener
+  - 2.2.4 Replace the apply-step guard block (conflict: warn with `fn`,`hash`,`pr`(integer),`target`; unverifiable: warn with `hash`,`bound` + `reportSilentFallback`); delete the comment POST and `skillConflictDiffBody`
 - 2.3 Run `github-url.test.ts` and the outcome census (Guards 1, 1b, 1c, 3, 3b)
 
 ## Phase 3: co-moving probe and runbooks

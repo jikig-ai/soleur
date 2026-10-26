@@ -18,6 +18,23 @@ lane: cross-domain
 `Ref #10552` only. Never `Closes`: #10552 stays open until a scheduled run actually opens a draft PR. The PR body
 must say the effect is **unmeasured until #10552 clears** and must not claim these fixes will open a PR.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Sections enhanced:** Proposed Solution (Defect B), Guard Contract (Guard 2), Observability, Acceptance Criteria, Dependencies & Risks, Research Insights
+**Passes run:** halts 4.6 (User-Brand Impact, scope-out present), 4.7 (Observability schema), 4.8 (no PAT shapes), 4.9/4.10/4.13 (not triggered: no UI, store or new autonomous surface), 4.11 (`lint-guard-contract.py` green, assembly is structural), 4.12 (one unfenced `## Scope Check`); architecture-strategist, security-sentinel and observability-coverage-reviewer reviews; live verification of cited PR/issue states and of the Octokit typings.
+
+### Key Improvements
+
+1. The skill-conflict scan is now **lazy** (first drafted skill cluster only) and records **only the kept clusters' exact target paths**: no wasted ~40 requests on clusters refused earlier, a bounded memoized output, and no attacker-controlled file names stored or logged.
+2. Lookups use `Object.hasOwn` (the scan result crosses an Inngest JSON round-trip), the first PR wins, and the log carries an integer PR number only.
+3. Observability block now cites layers (pino -> Vector -> Better Stack, pino -> Sentry), states the conflict arm is deliberately non-paging, and uses the literal `PASS` for the probe.
+
+### New Considerations Discovered
+
+- The handler-level constraints from the census: no new `async (): Promise<ClusterOutcome> => {` opener, no new `TARGET_ALLOW_RE.test(` call inside the handler; both are why the helpers are module-level.
+- The SKILL.md payload room grows to 20 lines x 1000 characters; bounded by the 20-line cap and the human-gated draft PR (accepted, see Dependencies & Risks).
+
 ## Overview
 
 The 2026-10-26 09:46Z manual `input:"patterns"` run (Better Stack outcome row, run_id
@@ -96,6 +113,14 @@ The one technical fork (page bounds and total request budget) went to the CTO as
 bounds of B-1. Not adopted: a shared Octokit mock helper across the two handler suites (the hoisted `vi.mock`
 factories are per-file by construction) and trimming the Scope Check tables (required by the skill).
 
+### Deepen-pass verification (2026-10-26)
+
+- **Octokit typings, resolved in the installed `@octokit/openapi-types` 27.0.0** (`apps/web-platform/node_modules/@octokit/openapi-types/types.d.ts`): `pull-request-simple.user` is `components["schemas"]["nullable-simple-user"]` (line 18856), so `pr.user` can be null; the files `diff-entry` has `previous_filename?: string` (line 23129), so a rename is detectable. `cron-bug-fixer.ts` (`listOpenBotFixIssueNumbers`, line ~227) is the precedent for `octokit: Octokit` plus `as { data: ... }` on the two literal routes.
+- **Cited states, resolved live:** #10552 OPEN, #10676 OPEN (`compliance: re-run the empirical DPIA limbs at the first loop-opened draft PR (#2720)`), PR #10812 OPEN (Dependabot, one file), PR #11157 OPEN (this branch's draft PR). No AGENTS rule ids are cited in this plan; no GitHub label is prescribed.
+- **Precedent-diff (Phase 4.4):** the pagination-with-bound plus `Array.isArray` guard is novel to this function; the nearest precedent (`cron-bug-fixer.ts` ~364) is single-page and unbounded, so the bounded loop has no sibling to copy and is covered by the table-driven tests rather than by precedent.
+- **Verify-the-negative sweep:** "no other caller of `skillConflictDiffBody`" (grep: only the cron file and its test), "`PII_REGEX` has other uses" (lines ~1759, ~1807 per review), "`skill-conflict-guard-comment-posted` appears nowhere else" (grep: only the cron file). All confirmed.
+- **Security review (no P0):** the 600/1000 caps leave `CREDENTIAL_RE` / `AGENTS_ID_TOKEN_RE` worst cases at roughly 1e6 steps on 1000 characters (trivial); the installation token is minted without a `permissions` map, so removing the comment POST changes no scope (an unscoped token being wider than needed is a pre-existing observation, not part of this fix).
+
 ## Proposed Solution
 
 ### Defect A - one cap per target, the AGENTS cap pinned to the lint
@@ -121,10 +146,13 @@ In `cron-compound-promote.ts`:
 
 CTO rulings B-1 (match rule), B-2 (fail-closed arms), B-3 (no comment) and B-4 (bounds, shared per-run scan).
 
-- **Scan once per run.** New exported `scanOpenPrSkillPaths({ octokit, owner, repo })` returns a JSON-serialisable
-  `{ changed: Record<string, number>; incomplete: null | "prs" | "files" | "requests" }`: every changed path
-  under `plugins/soleur/skills/` (as `filename` and as `previous_filename`) mapped to the first open PR number
-  that changes it. It uses only two literal routes, `GET /repos/{owner}/{repo}/pulls` (state open, 100 per page,
+- **Scan once per run.** New exported `scanOpenPrSkillPaths({ octokit, owner, repo, targets })` (a module-level
+  helper) returns a JSON-serialisable `{ changed: Record<string, number>; incomplete: null | "prs" | "files" | "requests" }`.
+  `targets` is the list of the kept skill clusters' `target_path` values; `changed` records ONLY paths that equal
+  one of them exactly (as `filename` or `previous_filename`), mapped to the first open PR number that changes
+  it (first PR wins: skip a key that already exists via `Object.hasOwn`). That bounds the memoized step output to
+  at most one entry per skill cluster (a 1000-file fork PR cannot inflate Inngest run state) and keeps
+  attacker-controlled file names out of any stored or logged value. It uses only two literal routes, `GET /repos/{owner}/{repo}/pulls` (state open, 100 per page,
   `SKILL_GUARD_PR_PAGES = 3`) and `GET /repos/{owner}/{repo}/pulls/{pull_number}/files` (100 per page,
   `SKILL_GUARD_FILE_PAGES_PER_PR = 10`), with a run-wide `SKILL_GUARD_FILE_REQUEST_BUDGET = 150` file-list
   requests. The first bound reached is recorded in `incomplete` (`prs`: the last PR page was full; `files`: a PR
@@ -132,20 +160,33 @@ CTO rulings B-1 (match rule), B-2 (fail-closed arms), B-3 (no comment) and B-4 (
   never lost. Skip only author login `dependabot[bot]` (call saving; the exact path match already excludes it) and
   read it as `pr.user?.login` because `user` is null for deleted accounts. Do not skip drafts (the App's own
   promote PRs are drafts) and do not skip large PRs (the list endpoint has no changed-file count). A non-array
-  payload or any request error throws: the step fails, Inngest retries, no PR opens (the existing fail-closed
-  behaviour).
-- **Where it runs.** One `step.run("skill-conflict-scan", ...)` before the cluster loop, only when at least one
-  proposed cluster's `target_path` starts with `plugins/soleur/skills/` (otherwise the scan is not run and an
-  `AGENTS.rules.md`-only run makes no pulls request). Its result is memoized by Inngest, so a replay does not
-  re-read GitHub and both clusters share one budget.
+  payload (fixed-string error, never the payload) or any request error throws: the step fails, Inngest retries,
+  no PR opens (the existing fail-closed behaviour, CTO ruling B-2; a skill-scan failure ends the run exactly as
+  the old in-step request failure did, so no new blast radius for `AGENTS.rules.md` clusters). Priority when
+  several bounds are hit: the first reached wins, pinned by a test row so the `bound` tag is stable.
+- **Where it runs (lazily, once).** A handler-scope `let skillScan` is assigned from
+  `step.run("skill-conflict-scan", ...)` just before the apply `step.run`, only when `draft.kind === "drafted"`,
+  the cluster's `target_path` starts with `plugins/soleur/skills/` and `skillScan` is still unset. It sits after
+  the ledger/dedup/week-cap filtering and the early return, so suppressed, duplicate, sub-quorum and
+  draft-refused clusters never trigger it, and an `AGENTS.rules.md`-only run makes no pulls request. The step
+  result is memoized, drafts are memoized, so the call is replay-deterministic, both skill clusters share one
+  budget, and the assignment happens outside any step callback (census Guard 3 is about mutations inside
+  callbacks). The scan step must not copy the `async (): Promise<ClusterOutcome> => {` signature (census
+  Guard 3 requires exactly one opener) and must not add a `TARGET_ALLOW_RE.test(` call inside the handler (the
+  patterns-handler suite counts exactly two); the prefix gate and all path logic stay in module-level helpers.
 - **Verdict per cluster.** A pure exported `skillConflictVerdict(scan, targetPath)` returns
-  `{kind:"conflict", pr}` when `targetPath` is a key of `changed`; else `{kind:"unverifiable", bound}` when
+  `{kind:"conflict", pr}` when `Object.hasOwn(changed, targetPath)` (`changed` crosses a JSON round-trip on replay,
+  so never use `in`); else `{kind:"unverifiable", bound}` when
   `incomplete` is set; else `{kind:"clear"}`. The apply step (inside the existing
   `target_path.startsWith("plugins/soleur/skills/")` block) maps `conflict` to the existing
   `{kind:"refused", reason:"skill-conflict-guard"}` after a `logger.warn` (`skill-conflict-guard-refused`, fields
-  `fn`, `hash`, `pr`, `target`; warn because the Better Stack filter keeps level >= 40), and `unverifiable` to
-  `{kind:"refused", reason:"skill-conflict-guard-unverifiable"}` after a warn and one message-path
-  `reportSilentFallback` (tag `bound`, `extra.cluster_hash`). `ClusterOutcome.reason` is already a plain string,
+  `fn`, `hash`, `pr` (only if `Number.isInteger`), `target`; warn because the Better Stack filter keeps level >= 40;
+  never a PR title or file name), and `unverifiable` to
+  `{kind:"refused", reason:"skill-conflict-guard-unverifiable"}` after a warn (fields `fn`, `hash`, `bound`) and one
+  message-path `reportSilentFallback` (tag `bound`, `extra.cluster_hash`). The warn and the Sentry call run inside
+  the memoized apply callback, so they fire on first execution only (matches every existing refusal site);
+  `refusals.push` stays outside the callback in `record()`. The old log string `skill-conflict-guard-comment-posted`
+  appears nowhere else in the repo (grepped), so renaming it breaks no runbook query. `ClusterOutcome.reason` is already a plain string,
   so `record()` needs no new field.
 - **Intended behaviour, stated.** The App's own earlier open draft promote PR that changes the same SKILL.md
   conflicts: the new cluster is refused as `skill-conflict-guard` (CTO confirmed). That is the guard's purpose
@@ -155,7 +196,7 @@ CTO rulings B-1 (match rule), B-2 (fail-closed arms), B-3 (no comment) and B-4 (
 
 ## Files to Edit
 
-- `apps/web-platform/server/inngest/functions/cron-compound-promote.ts` - constants, `newLinesCause` cap and stale comment, prompt line, `scanOpenPrSkillPaths`, `skillConflictVerdict`, the `skill-conflict-scan` step, the apply-step guard block, delete `skillConflictDiffBody`.
+- `apps/web-platform/server/inngest/functions/cron-compound-promote.ts` - constants, `newLinesCause` cap and stale comment, prompt line, `scanOpenPrSkillPaths`, `skillConflictVerdict`, the lazy `skill-conflict-scan` step + hoisted `skillScan`, the apply-step guard block, delete `skillConflictDiffBody`.
 - `apps/web-platform/test/server/inngest/cron-compound-promote-draft-edit.test.ts` - drop the `skillConflictDiffBody` import and describe block; replace the `501`/`500` rows with per-target boundary rows; add the prompt-text assertion and the pin test (with an exported-in-file `extractPerRuleCap` helper used by the pin and by its fixture rows).
 - `apps/web-platform/test/server/inngest/cron-compound-promote-draft-handler.test.ts` - route-aware Octokit mock (the current mock answers every route with a search-shaped object, which the new array check rejects); add handler-level guard cases.
 - `apps/web-platform/test/server/inngest/cron-compound-promote-patterns-handler.test.ts` - route-aware Octokit mock for the pulls routes (its `SKILL_CLUSTER` reaches the guard).
@@ -223,18 +264,18 @@ Single PR. The ADR and compliance text describe the post-merge state.
 liveness_signal:
   what: "SOLEUR_COMPOUND_PROMOTE_OUTCOME marker row per run (refusals[] + refusal_detail[]), shipped to Better Stack"
   cadence: "weekly (Sunday 00:00 UTC) plus manual input:patterns runs"
-  alert_target: "follow-through sweeper on #10552 (probe exit 5 after 35 days NOT YET) and Sentry issue for draft-edit-refused"
+  alert_target: "follow-through sweeper on #10552 (probe exit 5 after 35 days NOT YET); Sentry issue feed for draft-edit-refused and skill-conflict-guard-unverifiable (feed only, no paging rule claimed)"
   configured_in: "apps/web-platform/server/inngest/functions/cron-compound-promote.ts; scripts/followthroughs/compound-promote-draft-edit-10552.sh"
 error_reporting:
   destination: "Sentry via reportSilentFallback (feature cron-compound-promote)"
-  fail_loud: "logger.warn lines skill-conflict-guard-refused / skill-conflict-guard-unverifiable (level 40, reaches Better Stack) and a refusals[] entry; API errors fail the scan step"
+  fail_loud: "logger.warn lines skill-conflict-guard-refused / skill-conflict-guard-unverifiable (level 40, reaches Better Stack) and a refusals[] entry; API errors fail the scan step (Sentry correlation via the Inngest run error)"
 failure_modes:
   - mode: "an open PR changes the cluster's target file"
-    detection: "refusals[] contains skill-conflict-guard; warn line carries pr and target"
-    alert_route: "Better Stack row read by the #10552 probe (N-class, NOT YET)"
+    detection: "pino warn skill-conflict-guard-refused (fn, hash, pr, target) shipped by Vector to Better Stack, plus a refusals[] entry in the outcome marker; query: scripts/betterstack-query.sh --grep skill-conflict-guard-refused"
+    alert_route: "deliberately non-paging: the #10552 probe grades it N-class (NOT YET) and raises ACTION REQUIRED only after 35 days; a stale self-conflicting draft PR can block a file quietly until then"
   - mode: "scan cannot finish (bound prs, files or requests reached, no match)"
-    detection: "refusals[] contains skill-conflict-guard-unverifiable; one reportSilentFallback per affected cluster per run, op skill-conflict-guard-unverifiable, tag bound with the single bound that was hit"
-    alert_route: "Sentry issue and the same Better Stack row"
+    detection: "pino warn skill-conflict-guard-unverifiable (fn, hash, bound) via Vector to Better Stack, mirrored by the pino -> Sentry path (reportSilentFallback message path, op skill-conflict-guard-unverifiable, tag bound), plus a refusals[] entry"
+    alert_route: "Sentry issue feed (no paging rule is claimed for this op) and the same Better Stack row"
   - mode: "model line exceeds the new cap"
     detection: "draft-edit-refused with reason edit-invalid and cause too-long (Sentry tags)"
     alert_route: "Sentry issue; N-class in the probe"
@@ -243,7 +284,9 @@ logs:
   retention: "Better Stack source retention"
 discoverability_test:
   command: "bash scripts/followthroughs/compound-promote-draft-edit-10552.sh"
-  expected_output: "PASS or NOT YET or FAIL or CANNOT ESTABLISH"
+  expected_output: "PASS"
+  # the probe prints PASS to stdout (exit 0); NOT YET (2), FAIL (1), CANNOT ESTABLISH (3) and ACTION REQUIRED (5) go to stderr.
+  # credentials_required below makes preflight Check 10 SKIP-DECLARED, so the 15s cap is never exercised.
   credentials_required: "Better Stack query credentials (Doppler soleur/prd_scheduled BETTERSTACK_QUERY_HOST, _USERNAME, _PASSWORD) - the refusal rows exist only in Better Stack, so no unauthenticated probe verifies the same property"
 ```
 
@@ -291,7 +334,7 @@ and the guard never yields "clear" when the scan hit a bound and found no match.
 `target_path.startsWith("plugins/soleur/skills/")`. The scan quantifies over up to 3 pages of 100 open PRs and,
 per PR, up to 10 pages of 100 files, under a run-wide 150-request budget. In the assembly: two literal routes, the
 author skip, three bounds, three error paths (request error, non-array payload, bound reached), the step-presence
-condition (scan runs only when some cluster targets a skill) and the handler's verdict mapping (`conflict` ->
+condition (scan runs lazily, only for a drafted skill cluster, once) and the handler's verdict mapping (`conflict` ->
 `skill-conflict-guard`, `unverifiable` -> `skill-conflict-guard-unverifiable`, `clear` -> continue).
 `AGENTS.rules.md`-only runs must make zero calls to either route. Anchor: the guard compares a live API answer to
 the cluster's own path, so no stored value is involved.
@@ -311,6 +354,9 @@ the cluster's own path, so no stored value is involved.
 | 9 | Match with `includes` or `startsWith` instead of equality | RED (must-PASS: a PR changing `.../alpha/SKILL.md.orig` is clear) |
 | 10 | Read `pr.user.login` without optional chaining | RED (a `user: null` PR row must not throw) |
 | 11 | Run the scan once per cluster instead of once per run | RED (handler case with two skill clusters asserts the pulls route is requested once per page, and the file budget is shared) |
+| 12 | Record every changed skill path instead of only the clusters' targets | RED (a 1000-file PR scan result holds at most one entry per target) |
+| 13 | Look the target up with `in` instead of `Object.hasOwn` | RED (a target named `constructor`-style key is never reported as a conflict after a JSON round-trip of `changed`) |
+| 14 | Run the scan eagerly before drafting | RED (a skill cluster refused by quorum/duplicate/draft makes zero pulls requests) |
 
 Harness rows: (H1, suite edit) make the fake octokit answer every files request with a full page forever: the
 scan must still terminate and report `files` (the loop bound ends it, not the fake). (H2, must-PASS non-canonical)
@@ -376,12 +422,13 @@ No Product/UX surface, no marketing, finance, sales, operations or support impli
 - [ ] A vitest reads `PER_RULE_CAP` out of `scripts/lint-agents-rule-budget.py` (path resolved from `import.meta.url`, a missing file is a hard failure, anchored exactly-one-match, integer-validated) and asserts equality with `AGENTS_EDIT_LINE_MAX_CHARS`.
 - [ ] Boundary rows: an AGENTS rule line of exactly 600 characters is accepted, 601 is `edit-invalid`/`too-long`; a SKILL line of 1000 is accepted, 1001 is refused; 20 lines at each cap pass; a 301-character line of two-byte characters is refused as `charset`.
 - [ ] The prompt sent for an AGENTS target contains the hard cap 600 and for a SKILL target 1000, plus the soft target 500, each taken from the constants.
-- [ ] `scanOpenPrSkillPaths` + `skillConflictVerdict` (table-driven): clear for a Dependabot #10812-shaped fixture (title mentions the skills directory, file `requirements.txt`) with no files request made for the Dependabot PR; clear for a different-file human PR; conflict for a same-file PR; conflict for a rename whose `previous_filename` matches; conflict for a same-file PR authored by an App bot; conflict for a match on the second files page; a `user: null` PR does not throw; unverifiable with `bound` `prs`, `files` and `requests` respectively when each bound is reached without a match; a match found after a bound was reached is still a conflict; rejects on a request error and on a non-array payload. The fake records `(route, params)` and the suite asserts the exact route set, `state:"open"`, `per_page:100` and incrementing `page`.
-- [ ] Handler level: a different-file open PR lets the skill cluster open; a same-file PR yields `skill-conflict-guard` with no `safeCommitAndPr` call, no request whose route starts with `POST`, and no `reportSilentFallback` for the conflict; the unverifiable case yields `skill-conflict-guard-unverifiable` with a Sentry `op` of the same name; two skill clusters share one scan; an `AGENTS.rules.md`-only run makes no call to either pulls route.
+- [ ] `scanOpenPrSkillPaths({..., targets})` + `skillConflictVerdict` (table-driven): clear for a Dependabot #10812-shaped fixture (title mentions the skills directory, file `requirements.txt`) with no files request made for the Dependabot PR; clear for a different-file human PR; conflict for a same-file PR; conflict for a rename whose `previous_filename` matches; conflict for a same-file PR authored by an App bot; conflict for a match on the second files page; a `user: null` PR does not throw; `changed` holds only entries equal to a requested target (a 1000-file PR yields at most one entry per target); the first PR wins for a path changed by two PRs; the first-reached bound is the one reported when several are hit; unverifiable with `bound` `prs`, `files` and `requests` respectively when each bound is reached without a match; a match found after a bound was reached is still a conflict; rejects on a request error and on a non-array payload. The fake records `(route, params)` and the suite asserts the exact route set, `state:"open"`, `per_page:100` and incrementing `page`.
+- [ ] Handler level: a different-file open PR lets the skill cluster open; a same-file PR yields `skill-conflict-guard` with no `safeCommitAndPr` call, no request whose route starts with `POST`, and no `reportSilentFallback` for the conflict; the unverifiable case yields `skill-conflict-guard-unverifiable` with a Sentry `op` of the same name; two skill clusters share one scan; an `AGENTS.rules.md`-only run, and a skill cluster refused earlier by quorum, duplicate or draft refusal, make no call to either pulls route (the scan is lazy).
 - [ ] `grep -rn "skillConflictDiffBody\|search/issues" apps/web-platform/server/inngest/functions/cron-compound-promote.ts` returns only the ledger/week-cap search call sites that predate this change (no `in:files`, no `skillConflictDiffBody`).
 - [ ] `apps/web-platform/test/github-url.test.ts`, `cron-compound-promote-outcome-census.test.ts` (including Guards 1, 1b, 1c, 3, 3b), the three `cron-compound-promote-*` handler/edit suites and `plugins/soleur/test/c4-count-parity.test.sh` are green.
 - [ ] `bash scripts/followthroughs/compound-promote-draft-edit-10552.test.sh` passes with `MIN_CASES` raised to the new measured total.
 - [ ] Runbook, `betterstack-log-query.md`, ADR-092 (in place), ADR-300, the DPIA memo and `compliance-posture.md` row 170 carry the text listed under Files to Edit; the ADR-092 sentence names 600, 1000 and the 500 prompt target.
+- [ ] The patterns-handler suite's "exactly two `TARGET_ALLOW_RE.test(` sites in the handler" test and census Guard 3 (exactly one `async (): Promise<ClusterOutcome> => {` opener) stay green: the scan step does not copy that signature and adds no `TARGET_ALLOW_RE.test(` call.
 - [ ] `python3 scripts/lint-guard-contract.py` and `python3 scripts/lint-infra-no-human-steps.py` pass on this plan.
 - [ ] PR body: `Ref #10552` (not `Closes`), states the effect is **unmeasured until #10552 clears**, does not claim a PR will open, and lists the CTO and CLO rulings. #10552, #10551, #10550, #8443 and #8293 are not commented on or closed.
 
@@ -415,6 +462,9 @@ or AGENTS-targeting cluster passing these two gates, read by the #10552 probe. U
 - **A new refusal reason touches co-moving artifacts** (probe `nset` and header prose, probe test floor, runbook, Better Stack enum list). All are in Files to Edit; the census (Guard 1b) pins only `edit-*` reasons and is unaffected, verified by running it.
 - **The new `skill-conflict-scan` step is inside the census-covered handler.** Guards 1 and 3 (apply-step window, replay safety) must stay green; the step returns a plain JSON object and mutates no handler-scope accumulator.
 - **1000 for SKILL.md is a judgment value** (no lint to pin it). Revisit only if refusal rows show it being hit (CTO ruling A-3).
+- **Accepted race.** Both skill clusters share one snapshot of the open PRs; a PR opened between the scan and `safeCommitAndPr` is not seen. State this in the runbook. A human-gated draft PR bounds the consequence to a merge conflict a reviewer resolves.
+- **Availability limit, accepted.** Any contributor (including a fork) who opens a PR on the same skill file, or one PR with more than 1000 changed files, blocks a skill cluster until it closes. This is fail-closed by design; the runbook says so.
+- **SKILL.md payload room.** A skill edit can now carry up to 20 lines x 1000 characters (20k characters); the AGENTS-only id/tag screens do not apply to skills. Bounded by the 20-line cap, the unchanged credential and render-hazard screens and the human-gated draft PR. A total inserted-character cap was considered and not added (it would be a new threshold with no measured need); revisit with the 1000 value if refusal rows show it being hit.
 - **Compliance wording must stay conditional on merge** (CLO): do not write the removal in the past tense.
 
 ## Implementation Phases
