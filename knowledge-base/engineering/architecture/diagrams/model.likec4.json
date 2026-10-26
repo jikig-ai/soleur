@@ -2624,7 +2624,7 @@
 "id": "nzu6oc"
 },
 "18hdt6v": {
-"title": "Ships journald + host_metrics via Vector (arm64, aarch64 build) to Logs source 2457081 -- SINCE #8054 the inngest-cutover-flip heartbeat on this edge (one JSON STRING per 30 s FSM tick via logger -t, on EVERY flag including terminal ones, carrying the journald _BOOT_ID envelope; Vector ships the message as a STRING and it is Better Stack's ingest-side parse that yields the .message.{flag,reason,guard,exit_code,start_ts} object the consumer selects on) is a SAFETY-CRITICAL INPUT to cutover-inngest.yml op=execute step 2.0 (E13 of inngest_execute_registry_gate: the newest same-boot heartbeat within 15 min is the freshness bridge that lets a <=90-min-old dark probe row authorize the pre-flight). A producer-side change to the FSM's emit shape (the flag key, pinned by inngest-cutover-flip.test.sh), the timer cadence, or the vector.toml allowlist for that tag is a change to the cutover's own gate, and a warehouse-side change to the ingest parse surfaces there as fsm_unreadable — read the github -> betterstack edge for the consumer. Separately, this edge does NOT carry the user-serving application container's pino stream, which reaches the same source over the `hetzner -> betterstack` Vector edge instead; the two multiplex into one source and are distinguished only by host_name, so do not read this edge as accounting for the source's user-data-bearing content; token in soleur-inngest/prd (ADR-100 Phase-1 caveat resolved, #6197). Source 2457081 is NOT isolated to this node — the web hosts ship to the SAME source (see the hetzner edge), and the two are told apart only by the per-host host_name discriminator, which web-1 currently POISONS: web-1 wears this node's host_name=soleur-inngest-prd until its recreate clears the stale label (#6616). The dedicated node's telemetry host (auto OS hostname) is soleur-inngest, which equals its hcloud_server.inngest name (inngest-host.tf) — NOT soleur-inngest-server-prd, which is a Better Stack heartbeat monitor name (inngest.tf), never a telemetry value. host_metrics rows on this edge are the bare Vector metric and carry the host in tags.host, not host_name (#9372: confirmed 2026-10-06 for the web hosts; this node runs the same vector.toml)",
+"title": "Ships journald + host_metrics via Vector (arm64, aarch64 build) to Logs source 2457081 (the journald includes, on a host created from an image cut after PR #10975, the TLS terminator unit soleur-inngest-tls.service through the fail-open drop-list filter inngest_terminator_filter, which omits only three healthy-request line shapes) -- SINCE #8054 the inngest-cutover-flip heartbeat on this edge (one JSON STRING per 30 s FSM tick via logger -t, on EVERY flag including terminal ones, carrying the journald _BOOT_ID envelope; Vector ships the message as a STRING and it is Better Stack's ingest-side parse that yields the .message.{flag,reason,guard,exit_code,start_ts} object the consumer selects on) is a SAFETY-CRITICAL INPUT to cutover-inngest.yml op=execute step 2.0 (E13 of inngest_execute_registry_gate: the newest same-boot heartbeat within 15 min is the freshness bridge that lets a <=90-min-old dark probe row authorize the pre-flight). A producer-side change to the FSM's emit shape (the flag key, pinned by inngest-cutover-flip.test.sh), the timer cadence, or the vector.toml allowlist for that tag is a change to the cutover's own gate, and a warehouse-side change to the ingest parse surfaces there as fsm_unreadable — read the github -> betterstack edge for the consumer. Separately, this edge does NOT carry the user-serving application container's pino stream, which reaches the same source over the `hetzner -> betterstack` Vector edge instead; the two multiplex into one source and are distinguished only by host_name, so do not read this edge as accounting for the source's user-data-bearing content; token in soleur-inngest/prd (ADR-100 Phase-1 caveat resolved, #6197). Source 2457081 is NOT isolated to this node — the web hosts ship to the SAME source (see the hetzner edge), and the two are told apart only by the per-host host_name discriminator, which web-1 currently POISONS: web-1 wears this node's host_name=soleur-inngest-prd until its recreate clears the stale label (#6616). The dedicated node's telemetry host (auto OS hostname) is soleur-inngest, which equals its hcloud_server.inngest name (inngest-host.tf) — NOT soleur-inngest-server-prd, which is a Better Stack heartbeat monitor name (inngest.tf), never a telemetry value. host_metrics rows on this edge are the bare Vector metric and carry the host in tags.host, not host_name (#9372: confirmed 2026-10-06 for the web hosts; this node runs the same vector.toml)",
 "technology": "Vector → Better Stack Logs (HTTPS)",
 "source": {
 "model": "platform.infra.inngest"
@@ -2964,7 +2964,7 @@
 "id": "1mo6fjm"
 },
 "3ju75i": {
-"title": "CI is both an emitter and the applier: the ./.github/actions/sentry-heartbeat composite posts ok|error check-ins from 19 workflows, in two groups — 13 GHA-`schedule:`-fired (image-cve-scan (W3, epic #9601 — the advisory runtime-image vulnerability scan; it keeps a native daily `schedule:` because no Inngest dispatch exists for it in this advisory phase, and exit 3 = unmeasured posts `error`), scheduled-inngest-health, -zot-restart-loop [both also fired by a fourth substrate since #8495: web-server-scheduled, GHA-executed — the dispatch clock, ADR-248], -inngest-probe-heartbeat (#9703 — the feeder for the dead-probe heartbeat; also fired by the dispatch clock), -betterstack-incident-mirror (#10390 — mirrors Better Stack's open incidents to GitHub issues; also fired by the dispatch clock — never by Inngest, since the incidents it mirrors include Inngest's own outages), -realtime-probe, -prod-version-drift, -marketplace-drift (#7471 — it carries every control on the published distribution manifest, which lives in a repo with no CI, so its own liveness had to be monitored from here; since #7490 that is two jobs, the manifest check and the delivery canary, and this monitor's status expression consumes BOTH verdicts, since gating it on the manifest job alone would check in ok on a canary-only failure), -devin-docs-drift (#8160 — a disposable per-issue watcher on Cognition's public docs; its native schedule is deliberate: an Inngest dispatch would spend a queue slot daily on a surface that changes on a human release cadence, and the watcher's teardown deletes this entry with it), -actions-queue-health (#8578, dispatch-primary since #9273 — the earlier anti-circularity premise conflated trigger delivery with execution substrate: the Inngest dispatch only POSTs workflow_dispatch (no runner needed to FIRE) while the executor still lands in the measured runner queue, so the self-referential starvation signal is preserved; its native `schedule:` was demoted to FALLBACK after GHA schedule deferral (~4 fires/day under org load) paged ~47 missed check-ins/day on a healthy queue), and scheduled-supabase-watchdog (#9168 — the bounded auto-restart watchdog; its native `schedule:` is the FALLBACK trigger, the primary being the Inngest dispatch cron cron-supabase-watchdog-dispatch — the third substrate below — so it lives in this group by parsed `on:` shape while its cadence is really dispatch-driven), scheduled-integration-suites (#9855 — the nightly env-gated integration leg; the monitor is the dead-man arm for a wholly-dropped cron, and its check-in is producer-outcome-first via the run's aggregate step), and workspaces-luks-verify, whose native schedule is deliberate rather than incidental: it verifies web-1's own LUKS mount, and although the Inngest SCHEDULER moved to its own dedicated host at the #6178 cutover (ADR-100 — which supersedes the #5450 same-host durable-backend framing), Inngest still EXECUTES functions on web-1 (step requests go to the Cloudflare-proxied serve URL, whose `app` A record is web-1 only; sdk_url 10.0.1.10:3000 is the registration poll — ADR-243), so an Inngest-dispatched verifier would die with its own subject — ADR-033's anti-circularity corollary, #6808) and 6 `workflow_dispatch`-only ones that Inngest DISPATCHES per ADR-033 (scheduled-terraform-drift, -machinery-drain, -domain-model-drift, -supabase-advisor-scan, -sentry-alert-drift (#7650 §2.9, dispatched by cron-sentry-alert-drift), and main-health-monitor — the fourth added by #7307, which REVERSED that workflow's documented Design-A posture of having no own Sentry monitor: Design A rested end-to-end liveness on a broken main going un-issued being a readable signal, and #7307 is the counterexample, since the executor filed nothing for four months). That second group is the third substrate: Inngest-scheduled but GHA-executed, so their check-in rides this edge, not webapp's. Of 66 cron monitors, 21 check in from here and 45 from webapp — these counts are parity-gated against their live derivations by plugins/soleur/test/c4-count-parity.test.sh (#7209), so a new emitter or monitor fails loudly here instead of staling this prose. apply-sentry-infra.yml also auto-applies the sentry root on push to main via the jianyuan/sentry provider (ADR-031 — no dashboard step; its `paths:` filter covers the WHOLE infra/sentry/ tree, per that workflow's own header). scheduled-terraform-drift.yml's sentry leg plans the same root READ-ONLY twice daily with the same SENTRY_IAC_AUTH_TOKEN binding (#6612). SEPARATELY, web-platform-release.yml POSTs directly to the store API from two inline curls — live-verify's emit, and the release-outcome job's mirror when the operator email does not deliver (tags gate=release-outcome, op=release-alert-undelivered, classifier=ok|failed) — an inline curl from the runner, on no SDK and no composite (#7138)",
+"title": "CI is both an emitter and the applier: the ./.github/actions/sentry-heartbeat composite posts ok|error check-ins from 19 workflows, in two groups — 13 GHA-`schedule:`-fired (image-cve-scan (W3, epic #9601 — the advisory runtime-image vulnerability scan; it keeps a native daily `schedule:` because no Inngest dispatch exists for it in this advisory phase, and exit 3 = unmeasured posts `error`), scheduled-inngest-health, -zot-restart-loop [both also fired by a fourth substrate since #8495: web-server-scheduled, GHA-executed — the dispatch clock, ADR-248], -inngest-probe-heartbeat (#9703 — the feeder for the dead-probe heartbeat; also fired by the dispatch clock), -betterstack-incident-mirror (#10390 — mirrors Better Stack's open incidents to GitHub issues; also fired by the dispatch clock — never by Inngest, since the incidents it mirrors include Inngest's own outages), -realtime-probe, -prod-version-drift, -marketplace-drift (#7471 — it carries every control on the published distribution manifest, which lives in a repo with no CI, so its own liveness had to be monitored from here; since #7490 that is two jobs, the manifest check and the delivery canary, and this monitor's status expression consumes BOTH verdicts, since gating it on the manifest job alone would check in ok on a canary-only failure), -devin-docs-drift (#8160 — a disposable per-issue watcher on Cognition's public docs; its native schedule is deliberate: an Inngest dispatch would spend a queue slot daily on a surface that changes on a human release cadence, and the watcher's teardown deletes this entry with it), -actions-queue-health (#8578, dispatch-primary since #9273 — the earlier anti-circularity premise conflated trigger delivery with execution substrate: the Inngest dispatch only POSTs workflow_dispatch (no runner needed to FIRE) while the executor still lands in the measured runner queue, so the self-referential starvation signal is preserved; its native `schedule:` was demoted to FALLBACK after GHA schedule deferral (~4 fires/day under org load) paged ~47 missed check-ins/day on a healthy queue), and scheduled-supabase-watchdog (#9168 — the bounded auto-restart watchdog; its native `schedule:` is the FALLBACK trigger, the primary being the Inngest dispatch cron cron-supabase-watchdog-dispatch — the third substrate below — so it lives in this group by parsed `on:` shape while its cadence is really dispatch-driven), scheduled-integration-suites (#9855 — the nightly env-gated integration leg; the monitor is the dead-man arm for a wholly-dropped cron, and its check-in is producer-outcome-first via the run's aggregate step), and workspaces-luks-verify, whose native schedule is deliberate rather than incidental: it verifies web-1's own LUKS mount, and although the Inngest SCHEDULER moved to its own dedicated host at the #6178 cutover (ADR-100 — which supersedes the #5450 same-host durable-backend framing), Inngest still EXECUTES functions on web-1 (step requests go to the Cloudflare-proxied serve URL, whose `app` A record is web-1 only; sdk_url 10.0.1.10:3000 is the registration poll — ADR-243), so an Inngest-dispatched verifier would die with its own subject — ADR-033's anti-circularity corollary, #6808) and 6 `workflow_dispatch`-only ones that Inngest DISPATCHES per ADR-033 (scheduled-terraform-drift, -machinery-drain, -domain-model-drift, -supabase-advisor-scan, -sentry-alert-drift (#7650 §2.9, dispatched by cron-sentry-alert-drift), and main-health-monitor — the fourth added by #7307, which REVERSED that workflow's documented Design-A posture of having no own Sentry monitor: Design A rested end-to-end liveness on a broken main going un-issued being a readable signal, and #7307 is the counterexample, since the executor filed nothing for four months). That second group is the third substrate: Inngest-scheduled but GHA-executed, so their check-in rides this edge, not webapp's. Of 67 cron monitors, 22 check in from here and 45 from webapp — these counts are parity-gated against their live derivations by plugins/soleur/test/c4-count-parity.test.sh (#7209), so a new emitter or monitor fails loudly here instead of staling this prose. apply-sentry-infra.yml also auto-applies the sentry root on push to main via the jianyuan/sentry provider (ADR-031 — no dashboard step; its `paths:` filter covers the WHOLE infra/sentry/ tree, per that workflow's own header). scheduled-terraform-drift.yml's sentry leg plans the same root READ-ONLY twice daily with the same SENTRY_IAC_AUTH_TOKEN binding (#6612). SEPARATELY, web-platform-release.yml POSTs directly to the store API from two inline curls — live-verify's emit, and the release-outcome job's mirror when the operator email does not deliver (tags gate=release-outcome, op=release-alert-undelivered, classifier=ok|failed) — an inline curl from the runner, on no SDK and no composite (#7138)",
 "technology": "HTTPS (cron check-in API + Terraform provider, SENTRY_AUTH_TOKEN)",
 "source": {
 "model": "github"
@@ -16993,7 +16993,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__cursorCli",
-"x": 11590,
+"x": 11611,
 "y": 1754,
 "width": 341,
 "height": 180,
@@ -17688,7 +17688,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__systemdUser",
-"x": 9692,
+"x": 9713,
 "y": 1754,
 "width": 379,
 "height": 180,
@@ -18125,7 +18125,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "components",
-"x": 11868,
+"x": 11889,
 "y": 2123,
 "width": 1882,
 "height": 733,
@@ -18253,7 +18253,7 @@
 "technology": "Markdown SKILL.md",
 "kind": "container",
 "navigateTo": "__platform_plugin_skills",
-"x": 12876,
+"x": 12897,
 "y": 2205,
 "width": 336,
 "height": 180,
@@ -18291,7 +18291,7 @@
 "technology": "Markdown Agent Defs",
 "kind": "container",
 "navigateTo": "__platform_plugin_agents",
-"x": 11908,
+"x": 11929,
 "y": 2205,
 "width": 320,
 "height": 180,
@@ -18330,7 +18330,7 @@
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 13322,
+"x": 13343,
 "y": 2205,
 "width": 387,
 "height": 180,
@@ -18366,7 +18366,7 @@
 "technology": "bash PreToolUse hook + Perl shell lexer (hooks/lib/shell-argv.pl, spans byte-identical to .claude/hooks/lib/filing-shape.pl)",
 "kind": "component",
 "navigateTo": "__platform_plugin_destructiveGuard",
-"x": 12338,
+"x": 12359,
 "y": 2205,
 "width": 427,
 "height": 180,
@@ -18563,7 +18563,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 12870,
+"x": 12891,
 "y": 2615,
 "width": 348,
 "height": 200,
@@ -18601,7 +18601,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 15098,
+"x": 15087,
 "y": 2625,
 "width": 372,
 "height": 180,
@@ -18645,7 +18645,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__doppler",
-"x": 8676,
+"x": 8697,
 "y": 1754,
 "width": 345,
 "height": 180,
@@ -18734,7 +18734,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__zotRegistry",
-"x": 10057,
+"x": 10078,
 "y": 2205,
 "width": 354,
 "height": 180,
@@ -18770,7 +18770,7 @@
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
 "navigateTo": "__platform_infra_inngestPostgres",
-"x": 1031,
+"x": 1114,
 "y": 1744,
 "width": 335,
 "height": 200,
@@ -18806,7 +18806,7 @@
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "kind": "container",
 "navigateTo": "__platform_infra_inngestRedis",
-"x": 1477,
+"x": 1560,
 "y": 1754,
 "width": 362,
 "height": 180,
@@ -18971,7 +18971,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__betterstack",
-"x": 10383,
+"x": 10404,
 "y": 2625,
 "width": 388,
 "height": 180,
@@ -19010,7 +19010,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__slack",
-"x": 10970,
+"x": 10848,
 "y": 2979,
 "width": 345,
 "height": 180,
@@ -19624,72 +19624,72 @@
 "label": "Discovers",
 "points": [
 [
-6178,
+6181,
 1503
 ],
 [
-6247,
-1641
+6255,
+1640
 ],
 [
-6401,
-1898
+6420,
+1897
 ],
 [
-6625,
+6648,
 1984
 ],
 [
-6694,
+6717,
 2011
 ],
 [
-9225,
+9246,
 2001
 ],
 [
-9299,
+9320,
 2004
 ],
 [
-9999,
+10020,
 2031
 ],
 [
-10171,
+10192,
 2088
 ],
 [
-10871,
+10892,
 2114
 ],
 [
-10898,
+10919,
 2115
 ],
 [
-12795,
+12816,
 2114
 ],
 [
-12821,
+12842,
 2122
 ],
 [
-12867,
+12888,
 2138
 ],
 [
-12912,
+12933,
 2168
 ],
 [
-12948,
+12969,
 2198
 ]
 ],
 "labelBBox": {
-"x": 6626,
+"x": 6649,
 "y": 1822,
 "width": 94,
 "height": 39
@@ -19710,72 +19710,72 @@
 "label": "Discovers",
 "points": [
 [
-6114,
+6118,
 1503
 ],
 [
-6087,
+6096,
 1631
 ],
 [
-6061,
-1863
+6079,
+1865
 ],
 [
-6193,
+6214,
 1984
 ],
 [
-6223,
-2012
+6245,
+2011
 ],
 [
-9118,
+9139,
 1989
 ],
 [
-9156,
+9177,
 2004
 ],
 [
-9223,
+9244,
 2031
 ],
 [
-9209,
+9230,
 2088
 ],
 [
-9276,
+9297,
 2114
 ],
 [
-9306,
+9327,
 2126
 ],
 [
-11571,
+11592,
 2117
 ],
 [
-11603,
+11624,
 2122
 ],
 [
-11704,
+11725,
 2141
 ],
 [
-11812,
+11833,
 2179
 ],
 [
-11898,
+11919,
 2215
 ]
 ],
 "labelBBox": {
-"x": 6194,
+"x": 6215,
 "y": 1822,
 "width": 99,
 "height": 39
@@ -19908,16 +19908,16 @@
 1744
 ],
 [
-15230,
-2362
+15225,
+2355
 ],
 [
-13761,
-2620
+13779,
+2617
 ],
 [
-13229,
-2692
+13251,
+2691
 ]
 ],
 "labelBBox": {
@@ -19943,107 +19943,107 @@
 "points": [
 [
 7185,
-1467
+1463
 ],
 [
-7263,
-1493
+7269,
+1489
 ],
 [
-7351,
-1528
+7366,
+1525
 ],
 [
-7425,
+7446,
 1573
 ],
 [
-7487,
+7508,
 1611
 ],
 [
-7479,
+7500,
 1655
 ],
 [
-7545,
+7566,
 1684
 ],
 [
-7873,
+7894,
 1826
 ],
 [
-8017,
+8038,
 1606
 ],
 [
-8346,
+8367,
 1744
 ],
 [
-8496,
+8517,
 1807
 ],
 [
-8469,
+8490,
 1927
 ],
 [
-8621,
+8642,
 1984
 ],
 [
-8662,
+8683,
 2000
 ],
 [
-11768,
+11789,
 2003
 ],
 [
-11812,
+11833,
 2004
 ],
 [
-12029,
+12050,
 2011
 ],
 [
-13604,
+13625,
 1976
 ],
 [
-13765,
+13786,
 2122
 ],
 [
-13908,
+13929,
 2253
 ],
 [
-13938,
+13959,
 2405
 ],
 [
-13816,
+13837,
 2555
 ],
 [
-13743,
+13764,
 2644
 ],
 [
-13434,
+13455,
 2685
 ],
 [
-13230,
+13251,
 2702
 ]
 ],
 "labelBBox": {
-"x": 13753,
+"x": 13774,
 "y": 2029,
 "width": 200,
 "height": 56
@@ -20064,24 +20064,24 @@
 "label": "Reads/writes",
 "points": [
 [
-13044,
+13065,
 2385
 ],
 [
-13044,
+13065,
 2449
 ],
 [
-13044,
+13065,
 2535
 ],
 [
-13044,
+13065,
 2604
 ]
 ],
 "labelBBox": {
-"x": 13045,
+"x": 13066,
 "y": 2478,
 "width": 85,
 "height": 39
@@ -20102,24 +20102,24 @@
 "label": "Reads/writes",
 "points": [
 [
-12228,
+12249,
 2364
 ],
 [
-12401,
+12422,
 2439
 ],
 [
-12677,
+12698,
 2557
 ],
 [
-12859,
+12880,
 2635
 ]
 ],
 "labelBBox": {
-"x": 12673,
+"x": 12694,
 "y": 2478,
 "width": 85,
 "height": 39
@@ -20890,36 +20890,36 @@
 "label": "Config + run history",
 "points": [
 [
-1392,
+1386,
 1503
 ],
 [
-1370,
-1525
+1366,
+1524
 ],
 [
-1348,
-1549
+1347,
+1548
 ],
 [
-1330,
+1333,
 1573
 ],
 [
-1295,
+1307,
 1622
 ],
 [
-1264,
-1683
+1294,
+1682
 ],
 [
-1242,
-1734
+1288,
+1733
 ]
 ],
 "labelBBox": {
-"x": 1331,
+"x": 1334,
 "y": 1607,
 "width": 197,
 "height": 39
@@ -20940,24 +20940,24 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-1528,
+1545,
 1503
 ],
 [
-1555,
+1586,
 1574
 ],
 [
-1593,
-1672
+1643,
+1673
 ],
 [
-1620,
-1745
+1685,
+1746
 ]
 ],
 "labelBBox": {
-"x": 1597,
+"x": 1648,
 "y": 1607,
 "width": 167,
 "height": 39
@@ -22896,32 +22896,32 @@
 1543
 ],
 [
-11026,
+11027,
 1569
 ],
 [
-9234,
-1531
+9254,
+1532
 ],
 [
-9131,
+9152,
 1573
 ],
 [
-9045,
+9066,
 1609
 ],
 [
-8969,
+8990,
 1684
 ],
 [
-8919,
+8940,
 1746
 ]
 ],
 "labelBBox": {
-"x": 9132,
+"x": 9153,
 "y": 1573,
 "width": 256,
 "height": 106
@@ -22946,56 +22946,56 @@
 1421
 ],
 [
-3364,
-1449
+3369,
+1450
 ],
 [
-6646,
-1570
-],
-[
-6672,
+6687,
 1573
 ],
 [
-6911,
+6693,
+1573
+],
+[
+6932,
 1603
 ],
 [
-6963,
+6984,
 1651
 ],
 [
-7202,
+7223,
 1684
 ],
 [
-7580,
+7601,
 1736
 ],
 [
-7679,
+7700,
 1707
 ],
 [
-8060,
+8081,
 1744
 ],
 [
-8268,
+8289,
 1764
 ],
 [
-8506,
+8527,
 1795
 ],
 [
-8666,
+8687,
 1817
 ]
 ],
 "labelBBox": {
-"x": 7203,
+"x": 7224,
 "y": 1573,
 "width": 311,
 "height": 106
@@ -23048,47 +23048,47 @@
 1582
 ],
 [
-11582,
+11590,
 1563
 ],
 [
-11509,
+11517,
 1573
 ],
 [
-11332,
+11344,
 1599
 ],
 [
-11299,
+11312,
 1656
 ],
 [
-11122,
+11140,
 1684
 ],
 [
-10276,
-1816
+10296,
+1818
 ],
 [
-10042,
+10062,
 1612
 ],
 [
-9196,
+9217,
 1744
 ],
 [
-9142,
+9163,
 1752
 ],
 [
-9084,
+9105,
 1767
 ],
 [
-9032,
+9053,
 1782
 ]
 ],
@@ -23115,39 +23115,39 @@
 "label": "Injects secrets",
 "points": [
 [
-8677,
+8698,
 1761
 ],
 [
-8634,
+8655,
 1738
 ],
 [
-8589,
+8610,
 1712
 ],
 [
-8549,
+8570,
 1684
 ],
 [
-8490,
+8511,
 1642
 ],
 [
-8486,
-1618
+8508,
+1617
 ],
 [
-8429,
+8450,
 1573
 ],
 [
-8259,
-1442
+8272,
+1439
 ],
 [
-8220,
+8228,
 1395
 ],
 [
@@ -23155,8 +23155,8 @@
 1313
 ],
 [
-7902,
-1264
+7901,
+1266
 ],
 [
 7852,
@@ -23192,7 +23192,7 @@
 ]
 ],
 "labelBBox": {
-"x": 8387,
+"x": 8406,
 "y": 1391,
 "width": 93,
 "height": 39
@@ -23213,60 +23213,60 @@
 "label": "Injects the web-host boot credential. \nThe LUKS-at-rest passphrase \n(WORKSPACES_LUKS_KEY, ADR-119) is \ndeliberately scoped to a DEDICATED \nprd_workspaces_luks config read by a ",
 "points": [
 [
-8677,
+8698,
 1790
 ],
 [
-8618,
+8639,
 1774
 ],
 [
-8551,
+8572,
 1756
 ],
 [
-8489,
+8510,
 1744
 ],
 [
-8289,
+8310,
 1703
 ],
 [
-8219,
+8240,
 1770
 ],
 [
-8034,
+8055,
 1684
 ],
 [
-7968,
+7989,
 1653
 ],
 [
-7979,
-1605
+8001,
+1604
 ],
 [
-7914,
+7935,
 1573
 ],
 [
-7835,
-1535
+7847,
+1532
 ],
 [
-7791,
-1594
+7799,
+1599
 ],
 [
 7719,
 1543
 ],
 [
-7553,
-1427
+7552,
+1428
 ],
 [
 7674,
@@ -23323,35 +23323,47 @@
 "label": "Injects secrets — dedicated host's boot \ncredential is scoped to the SEPARATE \nDoppler project `soleur-inngest` (its \nown `prd` root holds only inngest \nsecrets: Postgres URI, freshly-rotated ",
 "points": [
 [
-8677,
+8698,
 1817
 ],
 [
-8517,
+8538,
 1793
 ],
 [
-8273,
+8294,
 1761
 ],
 [
-8060,
+8081,
 1744
 ],
 [
-7884,
-1730
+7940,
+1733
 ],
 [
-1893,
-1591
+3117,
+1578
+],
+[
+2975,
+1573
+],
+[
+2836,
+1569
+],
+[
+1857,
+1580
 ],
 [
 1723,
 1543
 ],
 [
-1694,
+1693,
 1535
 ],
 [
@@ -23364,7 +23376,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5803,
+"x": 6264,
 "y": 1573,
 "width": 245,
 "height": 106
@@ -23981,56 +23993,56 @@
 1543
 ],
 [
-1892,
+1893,
 1588
 ],
 [
-7861,
+7881,
 1531
 ],
 [
-8031,
+8052,
 1573
 ],
 [
-8133,
+8154,
 1599
 ],
 [
-8138,
+8159,
 1658
 ],
 [
-8240,
+8261,
 1684
 ],
 [
-8442,
+8463,
 1736
 ],
 [
-11779,
-1734
+11800,
+1733
 ],
 [
-11987,
+12008,
 1744
 ],
 [
-12347,
-1762
+12360,
+1761
 ],
 [
-12766,
+12769,
 1800
 ],
 [
 13002,
-1824
+1823
 ]
 ],
 "labelBBox": {
-"x": 8241,
+"x": 8262,
 "y": 1573,
 "width": 281,
 "height": 106
@@ -24240,35 +24252,35 @@
 1543
 ],
 [
-1906,
+1907,
 1592
 ],
 [
-8367,
+8387,
 1512
 ],
 [
-8546,
+8567,
 1573
 ],
 [
-8622,
+8643,
 1600
 ],
 [
-8613,
+8634,
 1657
 ],
 [
-8689,
+8710,
 1684
 ],
 [
-8937,
+8957,
 1770
 ],
 [
-13167,
+13168,
 1689
 ],
 [
@@ -24289,7 +24301,7 @@
 ]
 ],
 "labelBBox": {
-"x": 8690,
+"x": 8711,
 "y": 1573,
 "width": 259,
 "height": 106
@@ -24558,44 +24570,56 @@
 1253
 ],
 [
-9582,
-1475
+9483,
+1399
 ],
 [
-9665,
-1519
+9542,
+1421
 ],
 [
-9990,
+9748,
+1543
+],
+[
+9858,
+1609
+],
+[
+9884,
+1628
+],
+[
+10000,
 1684
 ],
 [
-10049,
-1714
+10064,
+1715
 ],
 [
-10085,
-1692
+10103,
+1689
 ],
 [
-10127,
+10148,
 1744
 ],
 [
-10231,
-1874
+10254,
+1872
 ],
 [
-10244,
+10266,
 2075
 ],
 [
-10241,
+10262,
 2195
 ]
 ],
 "labelBBox": {
-"x": 9718,
+"x": 9749,
 "y": 1358,
 "width": 273,
 "height": 106
@@ -24668,44 +24692,44 @@
 1543
 ],
 [
-8888,
-1607
+8892,
+1609
 ],
 [
-9288,
-1496
+9305,
+1494
 ],
 [
-9412,
+9433,
 1573
 ],
 [
-9500,
-1629
+9521,
+1628
 ],
 [
-9563,
+9584,
 1911
 ],
 [
-9637,
+9658,
 1984
 ],
 [
-9753,
+9774,
 2098
 ],
 [
-9920,
+9941,
 2179
 ],
 [
-10047,
+10068,
 2230
 ]
 ],
 "labelBBox": {
-"x": 9492,
+"x": 9513,
 "y": 1616,
 "width": 25,
 "height": 18
@@ -24782,40 +24806,40 @@
 1165
 ],
 [
-10433,
-1272
+10434,
+1271
 ],
 [
 10465,
 1313
 ],
 [
-10574,
-1455
+10570,
+1456
 ],
 [
-10675,
-1512
+10656,
+1513
 ],
 [
-10625,
+10610,
 1684
 ],
 [
-10566,
-1886
+10556,
+1882
 ],
 [
-10417,
-2084
+10421,
+2083
 ],
 [
-10321,
+10333,
 2197
 ]
 ],
 "labelBBox": {
-"x": 10631,
+"x": 10617,
 "y": 1358,
 "width": 253,
 "height": 106
@@ -24836,36 +24860,36 @@
 "label": "Injects the registry-host boot \ncredential (scoped to the isolated \nsoleur-registry project's prd root — the \n4 admitted secrets ZOT_PULL/PUSH_TOKEN + \nBETTERSTACK_LOGS_TOKEN + ",
 "points": [
 [
-8919,
+8940,
 1934
 ],
 [
-8972,
+8993,
 1995
 ],
 [
-9051,
+9072,
 2072
 ],
 [
-9137,
+9158,
 2114
 ],
 [
-9294,
+9315,
 2192
 ],
 [
-9777,
+9798,
 2249
 ],
 [
-10047,
+10068,
 2277
 ]
 ],
 "labelBBox": {
-"x": 9138,
+"x": 9159,
 "y": 2004,
 "width": 304,
 "height": 106
@@ -24886,40 +24910,40 @@
 "label": "Fetches its OWN zot image at first boot \nas the pinned release asset \nzot-image-<version>-<D12> (a prerelease \nof this repo) - NEVER from itself \n(bootstrap paradox) and NEVER from ",
 "points": [
 [
-10411,
+10432,
 2264
 ],
 [
-10620,
+10641,
 2229
 ],
 [
-10978,
+10999,
 2170
 ],
 [
-11287,
+11308,
 2122
 ],
 [
-11656,
+11677,
 2066
 ],
 [
-11747,
+11768,
 2032
 ],
 [
-12119,
+12140,
 2004
 ],
 [
-12194,
-1998
+12214,
+1999
 ],
 [
-14752,
-2015
+14753,
+2014
 ],
 [
 14821,
@@ -25048,56 +25072,56 @@
 1543
 ],
 [
-8606,
-1589
+8608,
+1590
 ],
 [
-9226,
-1525
+9245,
+1524
 ],
 [
-9295,
+9316,
 1573
 ],
 [
-9457,
-1687
+9478,
+1686
 ],
 [
-9346,
+9367,
 1826
 ],
 [
-9464,
+9485,
 1984
 ],
 [
-9707,
+9728,
 2309
 ],
 [
-9825,
+9846,
 2351
 ],
 [
-10175,
+10196,
 2555
 ],
 [
-10237,
+10258,
 2591
 ],
 [
-10308,
+10329,
 2622
 ],
 [
-10373,
+10394,
 2647
 ]
 ],
 "labelBBox": {
-"x": 9465,
+"x": 9486,
 "y": 1831,
 "width": 25,
 "height": 18
@@ -25115,10 +25139,10 @@
 "id": "162wtn9",
 "source": "platform.infra.inngest",
 "target": "betterstack",
-"label": "Ships journald + host_metrics via Vector \n(arm64, aarch64 build) to Logs source \n2457081 -- SINCE #8054 the \ninngest-cutover-flip heartbeat on this \nedge (one JSON STRING per 30 s FSM tick ",
+"label": "Ships journald + host_metrics via Vector \n(arm64, aarch64 build) to Logs source \n2457081 (the journald includes, on a \nhost created from an image cut after PR \n#10975, the TLS terminator unit ",
 "points": [
 [
-1639,
+1638,
 1503
 ],
 [
@@ -25134,46 +25158,46 @@
 1543
 ],
 [
-3092,
-2097
+1734,
+1548
 ],
 [
-3486,
-2114
+5120,
+2383
 ],
 [
-4938,
+5132,
 2385
 ],
 [
-5598,
-2508
+5749,
+2498
 ],
 [
-5770,
-2504
+5908,
+2505
 ],
 [
-6439,
+6533,
 2555
 ],
 [
-7947,
-2670
+8010,
+2674
 ],
 [
-9770,
-2703
+9797,
+2705
 ],
 [
-10373,
+10393,
 2712
 ]
 ],
 "labelBBox": {
-"x": 3489,
+"x": 4006,
 "y": 2004,
-"width": 278,
+"width": 254,
 "height": 106
 },
 "parent": null,
@@ -25193,35 +25217,35 @@
 "points": [
 [
 2579,
-1468
+1459
 ],
 [
-3183,
-1656
+3307,
+1654
 ],
 [
-5309,
-2297
+6204,
+2423
 ],
 [
-7115,
+7136,
 2555
 ],
 [
-7750,
+7771,
 2646
 ],
 [
-9729,
+9750,
 2696
 ],
 [
-10373,
+10394,
 2710
 ]
 ],
 "labelBBox": {
-"x": 4870,
+"x": 5111,
 "y": 2004,
 "width": 247,
 "height": 106
@@ -25310,28 +25334,28 @@
 1294
 ],
 [
-10391,
-1240
+10390,
+1241
 ],
 [
 10465,
 1313
 ],
 [
-10557,
+10558,
 1404
 ],
 [
-10574,
+10588,
 2311
 ],
 [
-10576,
+10596,
 2615
 ]
 ],
 "labelBBox": {
-"x": 10541,
+"x": 10546,
 "y": 1616,
 "width": 25,
 "height": 18
@@ -25352,36 +25376,36 @@
 "label": "Ships disk-state observability — df% of \n/var/lib/zot + resize2fs before/after + \nzot health — as one SOLEUR_ZOT_DISK \nevent, plus a SOLEUR_PRIVATE_NIC \nprivate-NIC convergence event (#6415), ",
 "points": [
 [
-10209,
+10230,
 2385
 ],
 [
-10199,
+10220,
 2438
 ],
 [
-10196,
+10217,
 2505
 ],
 [
-10228,
+10249,
 2555
 ],
 [
-10262,
+10283,
 2607
 ],
 [
-10317,
+10338,
 2643
 ],
 [
-10374,
+10395,
 2666
 ]
 ],
 "labelBBox": {
-"x": 10229,
+"x": 10250,
 "y": 2444,
 "width": 264,
 "height": 107
@@ -25402,24 +25426,24 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-10633,
+10653,
 2626
 ],
 [
-10781,
+10797,
 2391
 ],
 [
-11182,
+11188,
 1756
 ],
 [
-11336,
+11338,
 1512
 ]
 ],
 "labelBBox": {
-"x": 11026,
+"x": 11036,
 "y": 2004,
 "width": 262,
 "height": 106
@@ -25440,52 +25464,52 @@
 "label": "Origin uptime probe at the LB-fronted \napp.soleur.ai surface \n(betteruptime_monitor.app/soleur_apex) — \ncovers web-1 (the app A-record → web-1, \ndns.tf); the #5933 per-host web-<n> ",
 "points": [
 [
-10383,
+10404,
 2692
 ],
 [
-9748,
+9769,
 2618
 ],
 [
-7746,
+7767,
 2357
 ],
 [
-7227,
+7248,
 1984
 ],
 [
-7127,
+7148,
 1911
 ],
 [
-7182,
+7203,
 1820
 ],
 [
-7084,
+7105,
 1744
 ],
 [
-7069,
+7090,
 1732
 ],
 [
-6709,
+6731,
 1758
 ],
 [
-6883,
+6904,
 1573
 ],
 [
-6958,
-1494
+6976,
+1497
 ],
 [
-7299,
-1623
+7302,
+1620
 ],
 [
 7374,
@@ -25529,7 +25553,7 @@
 ]
 ],
 "labelBBox": {
-"x": 7228,
+"x": 7249,
 "y": 1788,
 "width": 269,
 "height": 107
@@ -25550,48 +25574,48 @@
 "label": "Incident mirror (ADR-298, epic #10390): \nscheduled-betterstack-incident-mirror.yml \nruns every 15 min (watchdog-dispatch \nprimary — it watches the paging \nsubstrate, so it cannot be ",
 "points": [
 [
-10771,
+10792,
 2683
 ],
 [
-10988,
+11009,
 2642
 ],
 [
-11342,
+11363,
 2553
 ],
 [
-11603,
+11624,
 2385
 ],
 [
-11735,
+11756,
 2300
 ],
 [
-11708,
+11729,
 2206
 ],
 [
-11841,
+11862,
 2122
 ],
 [
-11996,
+12017,
 2025
 ],
 [
-12055,
+12076,
 2031
 ],
 [
-12236,
+12257,
 2004
 ],
 [
-12313,
-1992
+12334,
+1993
 ],
 [
 14971,
@@ -26003,27 +26027,27 @@
 ],
 [
 10276,
-1533
+1532
 ],
 [
-10177,
+10178,
 1573
 ],
 [
-10089,
+10094,
 1609
 ],
 [
-10010,
-1685
+10021,
+1684
 ],
 [
-9956,
+9971,
 1746
 ]
 ],
 "labelBBox": {
-"x": 10178,
+"x": 10179,
 "y": 1573,
 "width": 262,
 "height": 106
@@ -26045,59 +26069,59 @@
 "points": [
 [
 7185,
-1460
+1457
 ],
 [
-7292,
-1487
+7297,
+1485
 ],
 [
-7426,
-1527
+7440,
+1525
 ],
 [
-7542,
+7563,
 1573
 ],
 [
-7639,
-1613
+7660,
+1612
 ],
 [
-7649,
+7670,
 1657
 ],
 [
-7751,
+7772,
 1684
 ],
 [
-8102,
+8123,
 1778
 ],
 [
-9026,
+9047,
 1701
 ],
 [
-9387,
+9408,
 1744
 ],
 [
-9485,
+9506,
 1755
 ],
 [
-9593,
+9614,
 1776
 ],
 [
-9682,
+9703,
 1795
 ]
 ],
 "labelBBox": {
-"x": 7752,
+"x": 7773,
 "y": 1573,
 "width": 255,
 "height": 106
@@ -26118,28 +26142,28 @@
 "label": "Reaps the agent session by stopping its \nscope, via BindsTo= on the terminal's \nown scope — a UNIT dependency, because \nadoption moves the process out of the \nterminal's cgroup so co-membership can ",
 "points": [
 [
-9780,
+9809,
 1754
 ],
 [
-9694,
-1680
+9731,
+1684
 ],
 [
-9580,
-1584
+9627,
+1594
 ],
 [
-9554,
+9575,
 1573
 ],
 [
-9348,
-1492
+9360,
+1489
 ],
 [
-9262,
-1625
+9271,
+1628
 ],
 [
 9056,
@@ -26147,7 +26171,7 @@
 ],
 [
 8908,
-1484
+1485
 ],
 [
 8917,
@@ -26216,24 +26240,24 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-10720,
+10705,
 2805
 ],
 [
-10803,
-2857
+10766,
+2856
 ],
 [
-10907,
-2921
+10843,
+2920
 ],
 [
-10991,
-2973
+10906,
+2972
 ]
 ],
 "labelBBox": {
-"x": 10895,
+"x": 10836,
 "y": 2875,
 "width": 214,
 "height": 39
@@ -26254,48 +26278,48 @@
 "label": "Mobile push notification",
 "points": [
 [
-11270,
-2979
+11193,
+3004
 ],
 [
-11344,
-2915
+11311,
+2948
 ],
 [
-11424,
-2823
+11445,
+2854
 ],
 [
-11424,
+11445,
 2716
 ],
 [
-11424,
+11445,
 1843
 ],
 [
-11424,
+11445,
 1843
 ],
 [
-11424,
+11445,
 1843
 ],
 [
-11424,
-1730
+11445,
+1729
+],
+[
+11429,
+1600
 ],
 [
 11415,
-1601
-],
-[
-11407,
-1514
+1513
 ]
 ],
 "labelBBox": {
-"x": 11425,
+"x": 11446,
 "y": 2273,
 "width": 150,
 "height": 39
@@ -26501,24 +26525,24 @@
 "label": "Runs Soleur from the local Cursor CLI",
 "points": [
 [
-11473,
+11478,
 1503
 ],
 [
-11533,
+11541,
 1574
 ],
 [
-11617,
-1673
+11631,
+1674
 ],
 [
-11679,
-1746
+11696,
+1747
 ]
 ],
 "labelBBox": {
-"x": 11624,
+"x": 11637,
 "y": 1617,
 "width": 241,
 "height": 18
@@ -26610,60 +26634,60 @@
 1547
 ],
 [
-10632,
+10633,
 1573
 ],
 [
-11062,
+11071,
 1673
 ],
 [
-11105,
+11118,
 1887
 ],
 [
-11535,
+11556,
 1984
 ],
 [
-11658,
-2012
+11679,
+2011
 ],
 [
-12542,
+12563,
 1991
 ],
 [
-12667,
+12688,
 2004
 ],
 [
-12937,
+12958,
 2033
 ],
 [
-13017,
+13038,
 2017
 ],
 [
-13267,
+13288,
 2122
 ],
 [
-13313,
+13334,
 2142
 ],
 [
-13359,
+13380,
 2171
 ],
 [
-13399,
+13420,
 2199
 ]
 ],
 "labelBBox": {
-"x": 10924,
+"x": 10931,
 "y": 1590,
 "width": 227,
 "height": 72
@@ -26685,95 +26709,95 @@
 "points": [
 [
 7185,
-1501
+1493
 ],
 [
-7227,
-1522
+7234,
+1516
 ],
 [
-7270,
-1547
+7285,
+1543
 ],
 [
-7308,
+7329,
 1573
 ],
 [
-7368,
-1615
+7389,
+1614
 ],
 [
-7368,
+7389,
 1644
 ],
 [
-7428,
+7449,
 1684
 ],
 [
-7695,
+7716,
 1861
 ],
 [
-7770,
+7791,
 1915
 ],
 [
-8083,
+8104,
 1984
 ],
 [
-8169,
+8190,
 2003
 ],
 [
-11159,
+11180,
 1999
 ],
 [
-11247,
+11268,
 2004
 ],
 [
-11677,
+11698,
 2030
 ],
 [
-11780,
+11801,
 2088
 ],
 [
-12210,
+12231,
 2114
 ],
 [
-12239,
+12260,
 2116
 ],
 [
-13239,
+13260,
 2114
 ],
 [
-13267,
+13288,
 2122
 ],
 [
-13317,
+13338,
 2138
 ],
 [
-13367,
+13388,
 2168
 ],
 [
-13408,
+13429,
 2199
 ]
 ],
 "labelBBox": {
-"x": 8084,
+"x": 8105,
 "y": 1814,
 "width": 238,
 "height": 55
@@ -26886,7 +26910,7 @@
 1392
 ],
 [
-15806,
+15807,
 1475
 ],
 [
@@ -26894,15 +26918,15 @@
 1684
 ],
 [
-15680,
-2049
+15678,
+2050
 ],
 [
-15457,
+15450,
 2440
 ],
 [
-15347,
+15337,
 2617
 ]
 ],
@@ -26928,24 +26952,24 @@
 "label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
-13710,
-2342
+13731,
+2343
 ],
 [
-14049,
-2422
+14064,
+2423
 ],
 [
-14746,
-2587
+14742,
+2586
 ],
 [
-15087,
-2668
+15077,
+2667
 ]
 ],
 "labelBBox": {
-"x": 14611,
+"x": 14613,
 "y": 2453,
 "width": 259,
 "height": 89
@@ -26966,84 +26990,84 @@
 "label": "PreToolUse ask/deny on destructive \ncommands; no egress",
 "points": [
 [
-6825,
+6843,
 1503
 ],
 [
-6801,
+6820,
 1523
 ],
 [
-6780,
-1546
+6800,
+1547
 ],
 [
-6766,
+6787,
 1573
 ],
 [
-6711,
-1679
+6734,
+1681
 ],
 [
-6773,
-1937
+6800,
+1942
 ],
 [
-6830,
+6851,
 1984
 ],
 [
-6857,
+6878,
 2006
 ],
 [
-9265,
+9286,
 2003
 ],
 [
-9299,
+9320,
 2004
 ],
 [
-9987,
+10008,
 2031
 ],
 [
-10157,
+10178,
 2088
 ],
 [
-10845,
+10866,
 2114
 ],
 [
-10885,
+10906,
 2116
 ],
 [
-12245,
+12266,
 2111
 ],
 [
-12283,
+12304,
 2122
 ],
 [
-12337,
+12358,
 2138
 ],
 [
-12390,
+12411,
 2168
 ],
 [
-12435,
+12456,
 2199
 ]
 ],
 "labelBBox": {
-"x": 6831,
+"x": 6852,
 "y": 1814,
 "width": 229,
 "height": 55
@@ -27073,30 +27097,30 @@
 ],
 [
 13913,
-1971
+1970
 ],
 [
 13879,
 1984
 ],
 [
-13623,
-2086
+13632,
+2083
 ],
 [
-13522,
-2006
+13534,
+2009
 ],
 [
-13277,
+13297,
 2118
 ]
 ],
 "labelBBox": {
-"x": 13323,
+"x": 13333,
 "y": 1932,
 "width": 301,
-"height": 107
+"height": 106
 },
 "parent": null,
 "relations": [
@@ -27484,16 +27508,16 @@
 "label": "Opt-in release lookup \n(SOLEUR_UPDATE_CHECK=1 at session start) \nand the explicit, user-started \n/soleur:version compare: git ls-remote \n--tags against ",
 "points": [
 [
-13750,
-2674
+13771,
+2673
 ],
 [
-14126,
-2648
+14142,
+2647
 ],
 [
-14597,
-2609
+14604,
+2608
 ],
 [
 15015,
@@ -27573,7 +27597,7 @@
 ]
 ],
 "labelBBox": {
-"x": 13981,
+"x": 13992,
 "y": 2521,
 "width": 306,
 "height": 106
@@ -27668,7 +27692,7 @@
 "label": "Loads skills, AGENTS.md rules, and MCP \nin both substrates; plugin subagents and \nSessionStart/SessionEnd hooks only on \nlocal. Since #8401 all three /soleur:go \nsession gates also resolve the plugin ",
 "points": [
 [
-14453,
+14452,
 1934
 ],
 [
@@ -27684,35 +27708,35 @@
 1984
 ],
 [
-14049,
-2096
+14054,
+2095
 ],
 [
-13959,
+13965,
 2082
 ],
 [
-13641,
+13652,
 2114
 ],
 [
-13602,
+13614,
 2118
 ],
 [
-13342,
+13361,
 2110
 ],
 [
-13277,
+13298,
 2120
 ]
 ],
 "labelBBox": {
-"x": 13599,
-"y": 2094,
+"x": 13610,
+"y": 2093,
 "width": 265,
-"height": 106
+"height": 107
 },
 "parent": null,
 "relations": [
@@ -27730,24 +27754,24 @@
 "label": "Loads generated skill and agent stubs \nfrom the plugin root",
 "points": [
 [
-11931,
+11952,
 1860
 ],
 [
-12148,
+12169,
 1886
 ],
 [
-12529,
+12550,
 1953
 ],
 [
-12812,
+12833,
 2117
 ]
 ],
 "labelBBox": {
-"x": 12147,
+"x": 12168,
 "y": 1888,
 "width": 240,
 "height": 55
@@ -49662,7 +49686,7 @@
 "id": "162wtn9",
 "source": "platform.infra.inngest",
 "target": "betterstack",
-"label": "Ships journald + host_metrics via Vector \n(arm64, aarch64 build) to Logs source \n2457081 -- SINCE #8054 the \ninngest-cutover-flip heartbeat on this \nedge (one JSON STRING per 30 s FSM tick ",
+"label": "Ships journald + host_metrics via Vector \n(arm64, aarch64 build) to Logs source \n2457081 (the journald includes, on a \nhost created from an image cut after PR \n#10975, the TLS terminator unit ",
 "points": [
 [
 3661,
@@ -49681,36 +49705,36 @@
 1482
 ],
 [
-3445,
-1529
+3455,
+1527
 ],
 [
-3398,
-1507
+3411,
+1509
 ],
 [
-3233,
+3257,
 1542
 ],
 [
-3047,
-1582
+3068,
+1583
 ],
 [
-3007,
+3027,
 1622
 ],
 [
-2818,
+2836,
 1652
 ],
 [
-2357,
+2367,
 1726
 ],
 [
-2221,
-1596
+2229,
+1594
 ],
 [
 1769,
@@ -49730,9 +49754,9 @@
 ]
 ],
 "labelBBox": {
-"x": 3234,
+"x": 3258,
 "y": 1542,
-"width": 278,
+"width": 254,
 "height": 106
 },
 "parent": null,
@@ -50121,27 +50145,27 @@
 "label": "A queryable second copy of the \nboot-completion signal and gc-fault \nevents, posted by direct curl (NOT a \nVector agent — git-data ships no \nhost_metrics and so structurally cannot ",
 "points": [
 [
-3217,
-1411
+3216,
+1413
 ],
 [
-3047,
-1441
+3050,
+1443
 ],
 [
-2778,
-1490
+2789,
+1492
 ],
 [
-2546,
+2564,
 1542
 ],
 [
-2355,
-1585
+2366,
+1586
 ],
 [
-2312,
+2319,
 1611
 ],
 [
@@ -50150,7 +50174,7 @@
 ],
 [
 1965,
-1686
+1685
 ],
 [
 1920,
@@ -50174,7 +50198,7 @@
 ]
 ],
 "labelBBox": {
-"x": 2547,
+"x": 2565,
 "y": 1542,
 "width": 247,
 "height": 106
@@ -63470,28 +63494,28 @@
 "label": "[...]",
 "points": [
 [
-299,
+301,
 831
 ],
 [
-402,
+405,
 769
 ],
 [
-550,
+554,
 691
 ],
 [
-690,
+695,
 650
 ],
 [
-941,
-577
+945,
+578
 ],
 [
-1700,
-529
+1701,
+530
 ],
 [
 2053,
@@ -63499,7 +63523,7 @@
 ]
 ],
 "labelBBox": {
-"x": 691,
+"x": 696,
 "y": 693,
 "width": 25,
 "height": 18
@@ -63562,32 +63586,32 @@
 507
 ],
 [
-1747,
-518
+1748,
+519
 ],
 [
-1091,
-554
+1099,
+556
 ],
 [
-887,
+895,
 650
 ],
 [
-805,
+811,
 689
 ],
 [
-732,
+736,
 763
 ],
 [
-682,
+685,
 823
 ]
 ],
 "labelBBox": {
-"x": 888,
+"x": 896,
 "y": 650,
 "width": 281,
 "height": 106
@@ -63609,35 +63633,35 @@
 "points": [
 [
 2063,
-517
+518
 ],
 [
-1837,
-539
+1840,
+541
 ],
 [
-1456,
-585
+1468,
+588
 ],
 [
-1332,
+1346,
 650
 ],
 [
-1255,
+1266,
 691
 ],
 [
-1187,
+1195,
 763
 ],
 [
-1141,
+1145,
 822
 ]
 ],
 "labelBBox": {
-"x": 1333,
+"x": 1347,
 "y": 650,
 "width": 259,
 "height": 106
@@ -63655,41 +63679,41 @@
 "id": "162wtn9",
 "source": "platform.infra.inngest",
 "target": "betterstack",
-"label": "Ships journald + host_metrics via Vector \n(arm64, aarch64 build) to Logs source \n2457081 -- SINCE #8054 the \ninngest-cutover-flip heartbeat on this \nedge (one JSON STRING per 30 s FSM tick ",
+"label": "Ships journald + host_metrics via Vector \n(arm64, aarch64 build) to Logs source \n2457081 (the journald includes, on a \nhost created from an image cut after PR \n#10975, the TLS terminator unit ",
 "points": [
 [
 2063,
-518
+524
 ],
 [
-1954,
-537
+1961,
+544
 ],
 [
-1815,
-574
+1833,
+582
 ],
 [
-1714,
+1738,
 650
 ],
 [
-1657,
+1677,
 694
 ],
 [
-1615,
+1629,
 764
 ],
 [
-1587,
+1596,
 822
 ]
 ],
 "labelBBox": {
-"x": 1715,
+"x": 1739,
 "y": 650,
-"width": 278,
+"width": 254,
 "height": 106
 },
 "parent": null,
@@ -63766,28 +63790,28 @@
 500
 ],
 [
-270,
+273,
 511
 ],
 [
-141,
+144,
 650
 ],
 [
-99,
+102,
 695
 ],
 [
-105,
+107,
 764
 ],
 [
-120,
+122,
 821
 ]
 ],
 "labelBBox": {
-"x": 142,
+"x": 145,
 "y": 650,
 "width": 265,
 "height": 106

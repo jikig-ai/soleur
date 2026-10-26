@@ -56,6 +56,9 @@ locals {
     # the mirror's own [ci/betterstack-incident] issues are the primary channel; route after the
     # first measured check-in.
     scheduled_betterstack_incident_mirror = "the mirror's own ci/betterstack-incident GitHub issues are the primary channel; route after the first measured check-in (#10390)"
+    # #10952 — the two orphan sweeps' aggregator check-in, added under the two-PR rule: its detector id does not exist
+    # until this PR's Sentry apply converges. The routing PR is due 2026-10-27 (#10972) and needs no check-in.
+    scheduled_orphan_sweeps = "the orphan-sweeps aggregator job's own per-slot email and the sweeps' own failure emails are the cover until routed (one shared mail key, so not independent of each other); routing PR due by 2026-10-27 (#10972)"
   }
 }
 
