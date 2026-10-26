@@ -3,7 +3,7 @@ title: "Before Your AI Team Takes a Recurring Job, It Answers Six Questions"
 type: spoke
 publish_date: 2026-11-04
 channels: x, bluesky, discord, linkedin-personal
-status: draft
+status: scheduled
 issue_reference: "#11074"
 ---
 
