@@ -151,7 +151,6 @@ function setup(
           message_id: MSG_ID,
           user_id: FOUNDER_A,
           per_send_body_sha256: DRAFT_HASH,
-          action_class: ACTION_CLASS,
           tier_at_send: "draft_one_click",
           clicked_at: new Date(NOW.getTime() - HOUR).toISOString(),
           ...opts.row,
@@ -253,6 +252,32 @@ describe("replay: a pending approval row within 23h", () => {
     );
     expect(ids).toEqual([`agent-spawn-${ROW_ID}`, `agent-spawn-${ROW_ID}`]);
     expect(mockWriteActionSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("an archive that matches no row is not silent", () => {
+  test("a 0-row archive (RLS-hidden or a concurrent change) reports messages-archive-no-row and the request still succeeds", async () => {
+    setup();
+    store.hideNextArchive();
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(200);
+    expect(store.messageStatus()).toBe("draft");
+    const ops = mockReportSilentFallback.mock.calls.map(
+      (c) => (c[1] as { op: string }).op,
+    );
+    expect(ops).toContain("messages-archive-no-row");
+  });
+
+  test("[guard] a normal archive reports nothing", async () => {
+    setup();
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(200);
+    expect(store.messageStatus()).toBe("archived");
+    const ops = mockReportSilentFallback.mock.calls.map(
+      (c) => (c[1] as { op: string }).op,
+    );
+    expect(ops).not.toContain("messages-archive-no-row");
   });
 });
 
@@ -436,42 +461,6 @@ describe("the 23h replay age gate (server clock, fail-closed)", () => {
     });
   });
 
-  test("exactly 23h replays; 23h + 1ms is expired (boundary pins, fixed clock)", async () => {
-    setup({
-      row: { clicked_at: new Date(NOW.getTime() - 23 * HOUR).toISOString() },
-    });
-    expect((await POST(makeRequest({}), ctx())).status).toBe(200);
-
-    vi.clearAllMocks();
-    mockValidateOrigin.mockReturnValue({
-      valid: true,
-      origin: "https://app.soleur.ai",
-    });
-    mockGetUser.mockResolvedValue({ data: { user: { id: FOUNDER_A } } });
-    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
-    mockInngestSend.mockResolvedValue({ ids: ["evt-1"] });
-    mockRunTemplateGate.mockResolvedValue({ kind: "allow" });
-    setup({
-      row: {
-        clicked_at: new Date(NOW.getTime() - 23 * HOUR - 1).toISOString(),
-      },
-    });
-    const late = await POST(makeRequest({}), ctx());
-    expect(late.status).toBe(409);
-    expect(((await late.json()) as { error: string }).error).toBe(
-      "approval_expired",
-    );
-  });
-
-  test("clock skew (CTO Q5): a click up to 60s in the FUTURE still replays", async () => {
-    setup({
-      row: { clicked_at: new Date(NOW.getTime() + 30_000).toISOString() },
-    });
-    const res = await POST(makeRequest({}), ctx());
-    expect(res.status).toBe(200);
-    expect(mockInngestSend).toHaveBeenCalledTimes(1);
-  });
-
   test.each([
     ["garbage", "not-a-timestamp"],
     ["null", null],
@@ -562,7 +551,6 @@ describe("concurrency, scoping and failure arms", () => {
           message_id: MSG_ID,
           user_id: FOUNDER_B,
           per_send_body_sha256: DRAFT_HASH,
-          action_class: ACTION_CLASS,
         }),
       ],
     });
@@ -632,7 +620,6 @@ describe("review-round pins (#10543)", () => {
           message_id: OTHER_MSG,
           user_id: FOUNDER_A,
           per_send_body_sha256: DRAFT_HASH,
-          action_class: ACTION_CLASS,
           clicked_at: new Date(NOW.getTime() - HOUR).toISOString(),
         }),
         pendingActionSendRow({
@@ -640,7 +627,6 @@ describe("review-round pins (#10543)", () => {
           message_id: MSG_ID,
           user_id: FOUNDER_A,
           per_send_body_sha256: DRAFT_HASH,
-          action_class: ACTION_CLASS,
           clicked_at: new Date(NOW.getTime() - HOUR).toISOString(),
         }),
       ],

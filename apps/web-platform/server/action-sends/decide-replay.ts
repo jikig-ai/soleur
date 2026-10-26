@@ -28,8 +28,9 @@ export const REPLAY_MAX_AGE_MS = 23 * 60 * 60 * 1000;
 
 // `clicked_at` is a DB-clock `DEFAULT now()` read against the app server's clock. A few hundred ms
 // of skew must not destroy an approval that was never dispatched, so a small NEGATIVE age replays;
-// beyond this the value is not a plausible click time and the replay fails closed WITHOUT archiving
-// (CTO Q5: it self-heals when the clock catches up).
+// beyond this (or when the value does not parse) it is not a plausible click time and the replay fails
+// closed WITHOUT archiving (CTO Q5). A future timestamp self-heals when the clock catches up; an
+// unparseable one cannot occur in practice (`clicked_at` is NOT NULL DEFAULT now()) and stays refused.
 export const CLOCK_SKEW_TOLERANCE_MS = 60_000;
 
 export type ReplayDecision =

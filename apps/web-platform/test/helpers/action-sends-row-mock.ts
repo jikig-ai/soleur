@@ -28,7 +28,6 @@ export interface ActionSendRowShape {
   message_id: string;
   user_id: string;
   per_send_body_sha256: string | null;
-  action_class: string;
   tier_at_send: string;
   clicked_at: string | null;
   acknowledged_at: string | null;
@@ -61,6 +60,8 @@ export interface ActionSendsStore {
   failLookup: (err?: { message: string; code?: string }) => void;
   /** Make the next `messages.update(...)` fail with this error (the row is NOT updated). */
   failNextArchive: (err?: { message: string; code?: string }) => void;
+  /** The next `messages.update(...)` succeeds without error but matches no row (RLS-hidden shape). */
+  hideNextArchive: () => void;
   messageStatus: () => string;
   archiveCount: () => number;
 }
@@ -115,16 +116,27 @@ export function createActionSendsStore(opts: StoreOptions): ActionSendsStore {
     return chain;
   }
 
+  let hideArchive = false;
+
   function updateBuilder(patch: AnyRow) {
     const filters: Filter[] = [];
+    let returning = false;
     const chain = {
       eq(col: string, val: unknown) {
         filters.push([col, val]);
         return chain;
       },
+      // `.select("id")` after an update makes the awaited result carry the matched rows.
+      select(_cols: string) {
+        returning = true;
+        return chain;
+      },
       // Thenable: `await supabase.from(...).update(...).eq(...)` resolves here.
       then(
-        resolve: (v: { error: { message: string; code?: string } | null }) => unknown,
+        resolve: (v: {
+          data?: AnyRow[];
+          error: { message: string; code?: string } | null;
+        }) => unknown,
         reject?: (e: unknown) => unknown,
       ) {
         try {
@@ -135,11 +147,15 @@ export function createActionSendsStore(opts: StoreOptions): ActionSendsStore {
             emit("messages-archive-failed");
             return Promise.resolve({ error }).then(resolve, reject);
           }
-          for (const r of matching(messages as unknown as AnyRow[], filters)) {
+          const hit = hideArchive ? [] : matching(messages as unknown as AnyRow[], filters);
+          hideArchive = false;
+          for (const r of hit) {
             Object.assign(r, patch);
           }
           emit("messages-archive");
-          return Promise.resolve({ error: null }).then(resolve, reject);
+          return Promise.resolve(
+            returning ? { data: hit.map((r) => ({ id: r.id })), error: null } : { error: null },
+          ).then(resolve, reject);
         } catch (e) {
           return Promise.reject(e).then(resolve, reject);
         }
@@ -168,6 +184,10 @@ export function createActionSendsStore(opts: StoreOptions): ActionSendsStore {
     failLookup(err = { message: "lookup failed", code: "XX000" }) {
       lookupError = err;
     },
+    /** The next `messages.update(...)` succeeds without error but matches no row (RLS-hidden shape). */
+    hideNextArchive() {
+      hideArchive = true;
+    },
     failNextArchive(err = { message: "archive failed", code: "XX000" }) {
       archiveError = err;
     },
@@ -183,7 +203,6 @@ export function pendingActionSendRow(
   return {
     id: "44444444-4444-4444-aaaa-444444444444",
     per_send_body_sha256: null,
-    action_class: "engineering.pr_review_pending",
     tier_at_send: "draft_one_click",
     clicked_at: new Date().toISOString(),
     acknowledged_at: null,

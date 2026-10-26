@@ -24,7 +24,11 @@ export interface EnqueueAgentSpawnArgs {
 // Per-attempt bound. sendInngestWithRetry has no per-attempt timeout and `inngest.send` takes no
 // AbortSignal here, so a hung Inngest host would hold each of the 3 attempts for the HTTP client's
 // connect timeout and outlast the browser's 30s send watchdog (the founder would see "Send timed
-// out" instead of the 503 retry copy). 3 x 6s plus 1.5s of backoff = 19.5s, under that watchdog.
+// out" instead of the 503 retry copy). 3 x 6s plus 1.5s of backoff = 19.5s for the enqueue alone: the template gate (up to 5s) and the
+// Supabase round trips share the same 30s, so a slow database on top of a hung Inngest can still reach
+// the watchdog; the approval row is already committed then, so the re-click replays it. The timed-out
+// attempt's underlying send is not cancelled (the SDK takes no AbortSignal); the event id makes a late
+// landing harmless.
 // A timed-out attempt is classified transient by isTransientFetchError (DOMException TimeoutError)
 // and retried; an attempt that actually landed is harmless because the event id dedups.
 const ATTEMPT_TIMEOUT_MS = 6_000;

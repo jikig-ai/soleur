@@ -126,7 +126,7 @@ export function useActionSend(
   // Founder-facing copy for the statuses the send route can answer with besides 200 / already_sent /
   // requires_confirmation. Card-neutral on purpose: GitHubCard and KbDriftCard bind no `disabled` to a
   // hook flag and have no Discard/Edit, so every state here must be recoverable by a refresh and the
-  // copy names no affordance (CTO S1). Pure over (status, parsed body) apart from the `denyReasonCopy`
+  // copy avoids naming Discard/Edit (CTO S1; the 503 line only says to click Send again). Pure over (status, parsed body) apart from the `denyReasonCopy`
   // option it closes over; returns null when the status is not one of these (the caller falls through
   // to its generic "Send failed (NNN)"). A 503 only reads as "approval saved" when the body says so: a
   // bare gateway 503 must not claim an approval exists.

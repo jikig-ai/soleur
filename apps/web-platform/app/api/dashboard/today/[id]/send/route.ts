@@ -128,12 +128,23 @@ async function archiveDraft(
   messageId: string,
   actionSendId: string,
 ): Promise<void> {
-  const { error: archiveErr } = await supabase
+  const { data: archived, error: archiveErr } = await supabase
     .from("messages")
     .update({ status: "archived" })
     .eq("id", messageId)
     .eq("user_id", userId)
-    .eq("status", "draft");
+    .eq("status", "draft")
+    .select("id");
+  if (!archiveErr && archived?.length === 0) {
+    // RLS hides rows without an error, so a missing owner-UPDATE policy (or a concurrent state
+    // change) reads as success. Surface it: the card would otherwise stay up with a live approval.
+    reportSilentFallback(new Error("messages archive matched 0 rows"), {
+      feature: "dashboard-send",
+      op: "messages-archive-no-row",
+      message: "archive update matched no draft row (RLS or concurrent state change)",
+      extra: { userId, messageId, actionSendId },
+    });
+  }
   if (archiveErr) {
     reportSilentFallback(archiveErr, {
       feature: "dashboard-send",
@@ -143,6 +154,23 @@ async function archiveDraft(
       extra: { userId, messageId, actionSendId },
     });
   }
+}
+
+function approvalBody(args: {
+  actionSendId: string;
+  actionClass: string;
+  tier: string;
+  artifactViewUrl: string;
+  degraded?: string;
+}) {
+  return {
+    id: args.actionSendId,
+    action_class: args.actionClass,
+    tier: args.tier,
+    action_send_id: args.actionSendId,
+    artifact_view_url: args.artifactViewUrl,
+    ...(args.degraded ? { degraded: args.degraded } : {}),
+  };
 }
 
 export async function POST(
@@ -259,6 +287,23 @@ export async function POST(
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
 
+  const refuseStaleReplay = (
+    actionSendId: string,
+    reason: "expired" | "future_clicked_at",
+  ) => {
+    warnSilentFallback(null, {
+      feature: "spawn-agent",
+      op: "inngest-replay-stale",
+      message:
+        "approval replay refused: action_sends row outside the replay window",
+      extra: { userId, messageId, actionSendId, replay: true, reason },
+    });
+    return NextResponse.json(
+      { error: "approval_expired", message_id: messageId },
+      { status: 409 },
+    );
+  };
+
   let replayRow: ExistingApprovalRow | null = null;
   if (existing) {
     const decision = decideReplay({
@@ -280,40 +325,24 @@ export async function POST(
         // Nothing would be dispatched for this source_ref shape: finish the archive that a
         // previous click could not.
         await archiveDraft(supabase, userId, messageIdStr, existing.id);
-        return NextResponse.json({
-          id: existing.id,
-          action_class: actionClass,
-          tier: existing.tier_at_send,
-          action_send_id: existing.id,
-          artifact_view_url: "",
-          ...(sourceRef ? { degraded: "no_artifact_in_pr_a" as const } : {}),
-        });
-      case "expired":
-      case "clock_skew":
-        // expired: archive so the card clears (CTO S1; the approval is abandoned, see the header).
-        // clock_skew: a click time implausibly in the future: fail closed WITHOUT archiving, it
-        // self-heals when the clock catches up (CTO Q5).
-        if (decision.kind === "expired") {
-          await archiveDraft(supabase, userId, messageIdStr, existing.id);
-        }
-        warnSilentFallback(null, {
-          feature: "spawn-agent",
-          op: "inngest-replay-stale",
-          message:
-            "approval replay refused: action_sends row outside the replay window",
-          extra: {
-            userId,
-            messageId,
-            actionSendId: existing.id,
-            replay: true,
-            reason:
-              decision.kind === "expired" ? "expired" : "future_clicked_at",
-          },
-        });
         return NextResponse.json(
-          { error: "approval_expired", message_id: messageId },
-          { status: 409 },
+          approvalBody({
+            actionSendId: existing.id,
+            actionClass,
+            tier: existing.tier_at_send,
+            artifactViewUrl: "",
+            degraded: sourceRef ? "no_artifact_in_pr_a" : undefined,
+          }),
         );
+      case "expired":
+        // Archive so the card clears (CTO S1): the approval is abandoned, see the header.
+        await archiveDraft(supabase, userId, messageIdStr, existing.id);
+        return refuseStaleReplay(existing.id, "expired");
+      case "clock_skew":
+        // The click time is not a plausible past instant (a future timestamp beyond the skew
+        // tolerance, or an unparseable one): fail closed WITHOUT archiving (CTO Q5). A future
+        // timestamp clears once the clock catches up; an unparseable one stays refused.
+        return refuseStaleReplay(existing.id, "future_clicked_at");
       case "draft_changed":
         // The approval is bound to the body the founder saw. Runs BEFORE isGranted so a refused
         // replay never reaches the template gate (whose first-send authorization has a side
@@ -588,12 +617,13 @@ export async function POST(
     data: { action_class: actionClass, tier: grant.tier },
   });
 
-  return NextResponse.json({
-    id: actionSendId,
-    action_class: actionClass,
-    tier: grant.tier,
-    action_send_id: actionSendId,
-    artifact_view_url: artifactViewUrl,
-    ...(degraded ? { degraded } : {}),
-  });
+  return NextResponse.json(
+    approvalBody({
+      actionSendId,
+      actionClass,
+      tier: grant.tier,
+      artifactViewUrl,
+      degraded,
+    }),
+  );
 }
