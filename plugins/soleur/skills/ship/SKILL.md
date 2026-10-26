@@ -361,7 +361,9 @@ Then run the affected-suite gate — the plugin entry point, wired the same in
 repo the gate capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh), so the
 always-on fast tier (#9763), ADR-262's PR-gated mutation batteries, and the
 infra consumed edge still apply — and a docs-only diff returns
-`NO_TESTS_AFFECTED`, which is not coverage.
+`NO_TESTS_AFFECTED`, which is not coverage. Preview the selection with
+`bash scripts/test-all.sh --print-selection` and state the `selected N of M`
+with the verdict (#10333).
 
 **Probe capacity first (#7545).** An affected run can still DEGRADE to the
 full battery (undecidable diff, runner/index touched, FORCE_ALL), so spend ~3 s
