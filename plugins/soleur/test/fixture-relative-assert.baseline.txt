@@ -364,6 +364,7 @@
 1	plugins/soleur/test/check-deps-adapter-drift.test.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh
 1	plugins/soleur/test/claude-code-action-auth.test.sh
+1	plugins/soleur/test/collision-precheck.test.sh
 1	plugins/soleur/test/compaction-state-hook.test.sh
 1	plugins/soleur/test/domain-model-headless-append.test.sh
 1	plugins/soleur/test/domain-model-init.test.sh

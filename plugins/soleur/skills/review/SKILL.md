@@ -29,7 +29,6 @@ Review here means this agent pipeline (`rf-never-skip-qa-review-before-merging`,
 
 <requirements>
 - Git repository with GitHub CLI (`gh`) installed and authenticated
-- Clean main/master branch
 - Proper permissions to create worktrees and access the repository
 - For document reviews: Path to a markdown file or document
 </requirements>
@@ -45,8 +44,6 @@ if [[ -f "CLAUDE.md" ]]; then
   cat CLAUDE.md
 fi
 ```
-
-Read `CLAUDE.md` if it exists - apply project conventions during review.
 
 **A FIX COMMIT IS THE LEAST-AUDITED SURFACE IN THE DIFF — GRADE IT AS ITS OWN CHANGE.** When a commit's subject says it closes a defect class, read its NEW code for that same class before reading anything else, and check whether the fix was applied to the INSTANCE or to the CLASS (grep every other consumer of the same input). For an anchor assertion, "anchored on a call-form a comment cannot produce" is necessary and NOT sufficient: also require the haystack to be comment-STRIPPED, SCOPED to the region under test, and the match UNIQUE within it — and never accept a `grep -c … -ge N` as a placement claim, because a count is evidence about a file, never about a branch. **Why:** #7695 — `cq-assert-anchor-not-bare-token` recurred three times on one branch, twice inside the commits fixing it (one arm sat a single function below the reference implementation that comment-strips); separately, a `"actions": []` fix applied at two addresses left ~10 sibling counters blind, so three destroys of sole-copy volumes scored a clean plan with `destroy_count` 0. `T1.9c` asserted "both refusals exit non-zero" via `grep -c '^exit 1$' -ge 3` against a file containing nine, and printed `ok` with both refusals flipped to `exit 0`. See `knowledge-base/project/learnings/2026-09-04-every-fix-reintroduced-the-class-it-was-fixing.md`.
 
@@ -88,10 +85,6 @@ copy is the impoverished one. See
 
 <review_target> #$ARGUMENTS </review_target>
 
-<thinking>
-First, I need to determine the review target type and set up the code for analysis.
-</thinking>
-
 #### Immediate Actions:
 
 <task_list>
@@ -103,20 +96,19 @@ First, I need to determine the review target type and set up the code for analys
 - [ ] If ALREADY on the target branch (PR branch, requested branch name, or the branch already checked out for review) → proceed with analysis on current branch
 - [ ] If DIFFERENT branch than the review target → offer to use worktree: "Use git-worktree skill for isolated Call `skill: git-worktree` with branch name
 - [ ] Fetch PR metadata using `gh pr view --json` for title, body, files, linked issues
+- [ ] Collision pre-check: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/collision-precheck.sh" <N>` per linked issue — open PRs + foreign `proc.sh list_runs` rows; report hits before the panel (#10333)
 - [ ] `git fetch origin main && git merge-tree --write-tree origin/main HEAD >/dev/null; echo rc=$?` — a non-zero rc is a conflict with `main`; rebase BEFORE spawning the panel. A conflict found by a seat costs a rebase plus a second fix→CI round (PR #8052: `PROMOTED_FILES` collided with a sibling promotion, found by the code-quality seat).
 - [ ] Read `gh pr view --json mergeable,mergeStateStatus` BEFORE reading the check set as a verdict. GitHub cannot build a merge ref for a `CONFLICTING`/`DIRTY` PR, and **every `pull_request`-triggered workflow is then suppressed** — so the checks that do report (CodeQL, CLA, `push`-triggered jobs) are all green and the PR looks clean while the suites that would judge the diff never ran. An ABSENT check is not a passing one, and nothing on the PR page says so. **Why:** #8209/PR #8563 — a branch sat green-but-incomplete for a day; merging `origin/main` took the run from 4 checks to 57, two of which were red.
-- [ ] Set up language-specific analysis tools
-- [ ] Prepare security scanning environment
-- [ ] Make sure we are on the branch we are reviewing. Use gh pr checkout to switch to the branch or manually checkout the branch.
-- [ ] Push the branch before spawning the panel (`git push -u origin $(git branch --show-current)`; agents read remote state [rf-before-spawning-review-agents-push-the]) after running ship's `prepush-secret-scan.sh` (Bash `timeout: 400000`; 0/43 continue, else STOP); `incr ci_cycles` after the push.
+- [ ] Use `gh pr checkout` or a manual checkout so the reviewed branch is current
+- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)`; review agents read remote state [rf-before-spawning-review-agents-push-the]) after running ship's `prepush-secret-scan.sh` (Bash `timeout: 400000`; 0/43 continue, else STOP). That push drives a CI cycle — `incr ci_cycles` after it (ship's convention).
 
-Ensure that the code is ready for analysis (either in worktree or on current branch). ONLY then proceed to the next step.
+Proceed once the tree is ready (worktree or current branch).
 
 </task_list>
 
 #### Change Classification Gate
 
-Before spawning review agents, classify the PR to avoid spawning agents whose expertise is irrelevant to the change.
+Before spawning review agents, classify the PR to right-size the panel.
 
 1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/review-*.txt` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
 
@@ -198,8 +190,10 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 Spawned agents run only the suites targeting the files they were given — mechanically,
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` — it delegates `--affected`
 to a capability-positive [runner](../../../../scripts/test-all.sh) when present, else its
-stack adapters select; the founder-repo runner-side equivalent is
-`TEST_GROUP=affected bash scripts/test-all.sh`. No hand-derived suite list is needed.
+stack adapters select. A spawned agent handed an EXPLICIT file list may instead run
+`TEST_GROUP=affected bash scripts/test-all.sh` — a DIFFERENT, heuristic selector (#8591)
+that prints `[affected] MODE=full` and runs nearly everything on an undecidable diff
+(2026-10-15 `apps/web-platform/infra/`: ran >1h).
 **`SOLEUR_SUBAGENT=1` is a
 convention a lead MAY export before spawning — the harness does not set it** (measured 2026-08-19:
 UNSET inside spawned agents). When it IS exported, a plain `test-all.sh` invocation exits 4 while `affected`
@@ -207,7 +201,12 @@ proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
-panel returns — `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` ([contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)); absent a [runner](../../../../scripts/test-all.sh) it is the sole scope. Two backstops:
+panel returns — the bounded default `bash scripts/test-all.sh` (bare resolves `--affected`;
+plugin-portable: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"`, sole scope absent a
+[runner](../../../../scripts/test-all.sh) — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)),
+previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M`:
+"every covering suite ran" is the printed selection vs the run's per-suite results, not memory
+(#10333). Two backstops:
 [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate run already in flight
 (#7553) — `affected` is exempt from that too — and `tc_acquire`'s advisory lock (ADR-133)
 serialises whatever gets past that. The
@@ -255,13 +254,13 @@ Record `PANEL_SHA=$(git rev-parse HEAD)` before dispatch — fix rounds diff aga
 
 </parallel_tasks>
 
-**Note:** The conditional agents block below (agents 9-14: Rails reviewers, migration experts, soleur:engineering:review:test-design-reviewer, semgrep) is **unaffected** by the classification gate. Both gates run independently — the classification controls only the always-on agents above.
+**Note:** the conditional agents below (9-14) are unaffected by the classification gate — it controls only the always-on agents above.
 
 #### Conditional Agents (Run if applicable):
 
 <conditional_agents>
 
-These agents are run ONLY when the PR matches specific criteria. Check the PR files list and project structure to determine if they apply:
+These agents run ONLY when the PR matches the criteria below:
 
 **If project is a Rails app (Gemfile AND config/routes.rb exist at repo root):**
 
@@ -1067,7 +1066,6 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    ```bash
    git add <changed files>
    git commit -m "docs: review artifacts for feat-<name>"
-   # ship's prepush-secret-scan.sh first
    git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
 
