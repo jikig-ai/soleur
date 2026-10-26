@@ -22,6 +22,14 @@
 # past the monitor's 60-minute margin (or a pending slot run can be replaced by a newer dispatch and never start);
 # Sentry may then record a `missed` row, and this probe's exit 1 is permanent, so the owner closes #10972 by hand.
 #
+# WAIVER (CTO ruling D7, 2026-10-26). Slot bucket 1 (the 2026-10-26T18:00Z slot, run 40373916062) posted an `error`
+# check-in because three jobs of that run failed a download in the same minute (step `Install Doppler CLI (pinned)`,
+# exit 22, and a credential load); that is a transient infrastructure failure outside this change, and that slot ran
+# before the monitor was routed, so no Sentry email was due. An `error` row inside bucket 1 (and only there) is read
+# as `waived`: it is not a bad row and it covers bucket 1. Everything else is unchanged: an `error` row in any
+# other bucket is exit 1, `missed`, `timeout` and an unrecognised status in bucket 1 stay bad, and a bucket 1 with
+# neither an `ok` nor a waived row is uncovered (exit 3). The count is printed as `waived=<n>`.
+#
 # Exit semantics (scripts/sweep-followthroughs.sh contract):
 #   0 = PASS    no missed/timeout/error row in the window AND every one of the 28 slots has an `ok` row
 #               (sweeper closes #10972)
@@ -85,6 +93,7 @@ readonly MAX_FILESIZE=5242880
 readonly WIN_START_ISO="2026-10-26T06:00:00Z"
 readonly WIN_END_ISO="2026-11-09T06:00:00Z"
 readonly SLOT_SECONDS=43200
+readonly WAIVED_SLOT=1 # slot bucket 1 = 2026-10-26T18:00Z up to (not including) 2026-10-27T06:00Z; see WAIVER above
 
 cannot() { echo "CANNOT ESTABLISH: $1" >&2; exit 3; }
 closing() { echo "Note: the Sentry issue state, the routing and any alert delivery were not measured; this probe reads check-in rows only (#10972)."; }
@@ -142,7 +151,7 @@ fi
 # with no `ok` row. Every verdict below reads this object.
 rc=0
 RESULT=$(jq -s -c --argjson ws "$WIN_START" --argjson we "$WIN_END" --argjson slot "$SLOT_SECONDS" \
-  --argjson slots "$SLOT_FLOOR" '
+  --argjson slots "$SLOT_FLOOR" --argjson waived "$WAIVED_SLOT" '
   def ts: (.dateAdded // .dateCreated // null)
           | if type == "string" then (sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch null) else null end;
   def st: (.status | if type == "string" then ascii_downcase else null end) as $s
@@ -151,8 +160,10 @@ RESULT=$(jq -s -c --argjson ws "$WIN_START" --argjson we "$WIN_END" --argjson sl
             else "other" end;
   def isbad: .s == "missed" or .s == "timeout" or .s == "error";
   .[0] | [ .[] | { s: st, t: ts } ] as $r
-  | [ $r[] | select(.t != null and .t >= $ws and .t < $we) ] as $w
-  | ([ $w[] | select(.s == "ok") | ((.t - $ws) / $slot | floor) ] | unique) as $cov
+  | [ $r[] | select(.t != null and .t >= $ws and .t < $we)
+          | . + { b: ((.t - $ws) / $slot | floor) }
+          | if .s == "error" and .b == $waived then .s = "waived" else . end ] as $w
+  | ([ $w[] | select(.s == "ok" or .s == "waived") | .b ] | unique) as $cov
   | ([ range(0; $slots) ] - $cov | map($ws + . * $slot | todate)) as $uncovered
   | {
       n: ($r | length),

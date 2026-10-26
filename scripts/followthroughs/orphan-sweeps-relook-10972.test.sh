@@ -92,7 +92,7 @@ calls_are() { # calls_are <expected-request-count> <label>   (reads NCALLS from 
 finish() {
   echo
   echo "executed assertions: $((passes + fails)) (pass=$passes fail=$fails)"
-  EXPECTED_MIN=166
+  EXPECTED_MIN=189
   total=$((passes + fails))
   if [[ "$total" -lt "$EXPECTED_MIN" ]]; then
     printf 'FATAL: only %s assertions executed (floor %s): the suite dispatched too little\n' "$total" "$EXPECTED_MIN" >&2
@@ -284,6 +284,33 @@ run_probe "$(with "$(slot_rows 27)" "$(row in_progress $((WIN_START + 27 * SLOT 
 check "$RC" 3 "9i an in_progress row never covers a slot"
 run_probe "$(with "$CLEAN" "$(row in_progress $((WIN_START + 7 * SLOT + 5)))")" 200 "$NOW_AFTER"
 check "$RC" 0 "9j an in_progress row inside a covered slot is ignored"
+
+echo "== waived slot (CTO ruling D7: an error row inside slot bucket 1 only)"
+NO1="$("$REAL_JQ" -n -c --argjson c "$CLEAN" '$c | del(.[1])')" # CLEAN without its slot-1 ok row
+S1=$((WIN_START + SLOT))
+run_probe "$(with "$NO1" "$(row error $((S1 + 60)))")" 200 "$NOW_AFTER"
+check "$RC" 0 "W1 an error row inside slot 1 covers slot 1 (waived)"
+present "waived=1" "$OUT" "W1b the waived count is printed"
+run_probe "$(with "$NO1" "$(row error "$S1")")" 200 "$NOW_AFTER"
+check "$RC" 0 "W2 an error row exactly at the slot 1 start is waived"
+run_probe "$(with "$NO1" "$(row error $((S1 + SLOT - 1)))")" 200 "$NOW_AFTER"
+check "$RC" 0 "W3 an error row in the last second of slot 1 is waived"
+run_probe "$(with "$NO1" "$(row error $((S1 + SLOT)))")" 200 "$NOW_AFTER"
+check "$RC" 1 "W4 an error row at the start of slot 2 is NOT waived (exit 1)"
+run_probe "$(with "$NO1" "$(row error $((S1 - 1)))")" 200 "$NOW_AFTER"
+check "$RC" 1 "W5 an error row in the last second of slot 0 is NOT waived (exit 1)"
+run_probe "$(with "$NO1" "$(row missed $((S1 + 60)))")" 200 "$NOW_AFTER"
+check "$RC" 1 "W6 a missed row inside slot 1 is not waived (exit 1)"
+run_probe "$(with "$NO1" "$(row timeout $((S1 + 60)))")" 200 "$NOW_AFTER"
+check "$RC" 1 "W7 a timeout row inside slot 1 is not waived (exit 1)"
+run_probe "$NO1" 200 "$NOW_AFTER"
+check "$RC" 3 "W8 slot 1 with neither an ok nor a waived row stays uncovered (exit 3)"
+run_probe "$(with "$NO1" "$(row weird $((S1 + 60)))")" 200 "$NOW_AFTER"
+check "$RC" 3 "W9 an unrecognised status inside slot 1 is not waived (exit 3)"
+run_probe "$(with "$CLEAN" "$(row error $((S1 + 60)))")" 200 "$NOW_AFTER"
+check "$RC" 0 "W10 an error row beside an ok row in slot 1 is harmless (exit 0)"
+run_probe "$(with "$(slot_rows 27)" "$(row error $((S1 + 60)))")" 200 "$NOW_AFTER"
+check "$RC" 3 "W11 a waived slot 1 does not cover the missing last slot (exit 3)"
 
 echo "== status vocabulary (allowlist)"
 for odd in failed 'error ' miss unknown; do
