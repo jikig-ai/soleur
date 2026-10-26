@@ -26,3 +26,11 @@
 
 ### Components Invoked
 - soleur:plan (full run), soleur:deepen-plan (full run, halt gates passed), soleur:gdpr-gate (inline advisory — no findings)
+
+## Review Phase (2026-10-26, second session)
+- Status: complete. Class `code`, tier `single-user incident` (plan frontmatter). `Reviewed-Coverage: sequential-fallback 15/15` — the session has no subagent spawn surface; every panel role's lens was executed inline sequentially (git-history, pattern-recognition, architecture, security-sentinel R1–R6, performance, data-integrity, agent-native, code-quality, code-simplicity, user-impact, test-design, data-migration, deployment-verification, structural-enumeration, semgrep+custom rules [0 results], gdpr-gate [5 checks all N/A], anti-slop tier1 inline [clean], coverage consult).
+- Census re-verified call-site-by-call-site: all non-census `users` writes service-client; `api_keys`/`audit_*`/`dsar_export_jobs` writes all service-client; authenticated surfaces = SELECT + {email, onboarding_completed_at, pwa_banner_dismissed_at, runtime_explainer_dismissed_at, nudges_dismissed}. Structural enumeration: views all `security_invoker` (no widening); authenticated-callable functions all DEFINER or non-touching; no PUBLIC grants.
+- Findings: 1 total (P3) — verify/178 probed the enumerated universe but not the complement: stray `attacl` column grants survive `REVOKE ALL ON TABLE` and passed the sentinel silently (fuzz gate backstopped). Fixed inline: `aeab414a04` (complement row `no_uncovered_col_grants_narrowed`) + `12e21381a5` (widened to service_role for _schema_migrations). Live-verified on local stack: 31/31 bad=0; positive control (planted `GRANT UPDATE(tc_accepted_at)` / `GRANT SELECT(filename)`) fires bad=1 then 0 after revoke.
+- Fix round 1: seats resolved via fix-round-seats.sh (9), executed inline — caught the service_role gap above. One verification pass: live verify + positive controls + vitest 66/66 + lint-migration-api-grants green.
+- Trailer emitted `e2d297609e`; Review-Evidence comment posted. domain-ruling=CTO (recorded) + CPO sign-off.
+- CI cycles: pushed aeab414a04 + 12e21381a5 + e2d297609e.
