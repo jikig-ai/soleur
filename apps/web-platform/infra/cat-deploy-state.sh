@@ -744,9 +744,10 @@ INNGEST_SERVER_STATUS="$(service_status inngest-server.service)"
 # by measurement, not by bootstrap-pin inference. Two deliberate non-features,
 # both measured dead on production before this shipped lean:
 #   1. No /proc/<MainPID>/exe resolution — inngest-server's ExecStart is
-#      `doppler run -- bash -c '… exec /usr/local/bin/inngest start …'`, so the
-#      unit's MainPID is the doppler wrapper (doppler forks; exec happens in its
-#      child), and same-UID non-descendant exe readlinks are denied under
+#      `doppler run -- /usr/local/bin/inngest-server-launch.sh …` (the launch
+#      script execs `inngest start` itself, #11103), so the unit's MainPID is the
+#      doppler wrapper (doppler forks; exec happens in its child), and same-UID
+#      non-descendant exe readlinks are denied under
 #      kernel.yama.ptrace_scope=1 anyway.
 #   2. No ExecStart path= parse — the structured token is /usr/bin/doppler, and
 #      `doppler version` is not a registered subcommand, so that leg could only
