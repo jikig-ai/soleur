@@ -4,6 +4,7 @@
 - Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-9639-probe-residuals/knowledge-base/project/plans/2026-10-26-fix-9639-probe-residuals-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
+- cto_spawns=1 (batched ruling of 5 pending-assumed rows; technical-ruling-gate PASS)
 
 ### Errors
 - One tool-level rejection: `git commit` blocked as "committing to main/master" because the guard evaluated the parent checkout's CWD; resolved via `git -C <worktree>`. Commits: a46fab2206 (plan + tasks + decision-challenges), 39d04d443b (deepen).
