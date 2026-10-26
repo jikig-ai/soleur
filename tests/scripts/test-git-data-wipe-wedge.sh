@@ -8,7 +8,8 @@
 # (WEDGE_ADDRS) by any workflow without a refusing gate. The F1/F2 fixtures are kept as synthesized plan
 # content the gates are fed.
 #
-# PROPERTY. After the git-data wipe deletes the plaintext volume (or only detaches it) and before
+# PROPERTY (as written for the wipe-then-PR-C ordering; Option B removed the HCL first, see the UPDATE
+# above). After the git-data wipe deletes the plaintext volume (or only detaches it) and before
 # PR-C removes `hcloud_volume.git_data` from HCL and state, no workflow other than the git-data
 # dispatch's own plan-time gate (tests/scripts/lib/git-data-host-replace-gate.sh, `out_of_scope`)
 # can plan a REPLACE of hcloud_server.git_data or a CREATE of hcloud_volume.git_data. The harm this
@@ -37,8 +38,9 @@
 # The sanctioned reader (the job sourcing git_data_host_replace_gate) is held harder: its gate must PASS
 # the pre-wipe canonical plan, and REFUSE F1 with out_of_scope >= 1 in BOTH modes.
 #
-# COST (state this in the runbook and the PR body): until PR-C merges, the gates refuse every
-# web-platform apply on main, security fixes included.
+# COST (as written for the wipe-then-PR-C ordering): until PR-C merges, the gates refuse every
+# web-platform apply on main, security fixes included. Under Option B the cost is the reverse: the
+# replace/birth/rotate routes are disabled from the merge until #11194 (ADR-239 Amendment 2026-10-26).
 #
 # Non-vacuity: a mutation matrix on COPIES of the workflows (and synthetic ones) proves each way to
 # open the wedge goes RED for the right reason; harness rows prove an emptied fixture loader or an

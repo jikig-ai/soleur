@@ -1156,12 +1156,12 @@ INTENDED_DESTROYS = {
 # there. Widening `root_targets` was ruled out (CTO 2026-10-26): it would loosen G4b for every saved-plan job.
 # An entry is honoured only while `dispatch_gated_ok` holds for the named workflow file (so deleting that file
 # expires the allowance mechanically), never for G4_PROTECTED addresses (G4f), and never when the address is also
-# bare-targeted by an apply step. Each entry: (evidence, workflow path under .github/). The two entries leave in the
-# post-destroy record PR, together with the workflow.
+# bare-targeted by an apply step. Each entry: (evidence, workflow path under .github/, gate function the apply step must
+# call before `terraform apply`). The two entries leave in the post-destroy record PR, together with the workflow.
 DISPATCH_GATED_DESTROYS = {
     "apps/web-platform/infra": {
-        "hcloud_volume.git_data": ("#8211 Option B / ADR-239 Amendment 2026-10-26", "workflows/git-data-plaintext-volume-destroy.yml"),
-        "hcloud_volume_attachment.git_data": ("#8211 Option B / ADR-239 Amendment 2026-10-26", "workflows/git-data-plaintext-volume-destroy.yml"),
+        "hcloud_volume.git_data": ("#8211 Option B / ADR-239 Amendment 2026-10-26", "workflows/git-data-plaintext-volume-destroy.yml", "git_data_plaintext_destroy_gate"),
+        "hcloud_volume_attachment.git_data": ("#8211 Option B / ADR-239 Amendment 2026-10-26", "workflows/git-data-plaintext-volume-destroy.yml", "git_data_plaintext_destroy_gate"),
     },
 }
 # RETIRED, STATE-ABSENT. A resource block deleted because its resource was already gone: a count-gated throwaway
@@ -1180,7 +1180,7 @@ RETIRED_STATE_ABSENT = {
 # Never destroyable and never "retired": the App identity (forget-only) and the SOLE-COPY live stores (the Inngest LUKS
 # volume, its attachment, passphrase and key secret, web-1's workspaces LUKS volume and its attachment, and the two
 # Inngest Doppler parents doppler_project.inngest and doppler_environment.inngest_prd, #9879). A later PR that lists one of these
-# in INTENDED_DESTROYS or RETIRED_STATE_ABSENT trips G4f instead of silently masking its destroy (#8285 PR B review).
+# in INTENDED_DESTROYS, RETIRED_STATE_ABSENT or DISPATCH_GATED_DESTROYS trips G4f instead of silently masking its destroy (#8285 PR B review).
 G4_PROTECTED = {
     "doppler_secret.github_app_id", "doppler_secret.github_app_private_key",
     "hcloud_volume.inngest_redis_luks", "hcloud_volume_attachment.inngest_redis_luks",
@@ -1195,16 +1195,35 @@ G4_PROTECTED = {
 # github-app.tf). G4H_SOLE_COPY is DERIVED from the single list above, never a second hand-written list.
 G4_APP_IDENTITY = frozenset({"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"})
 G4H_SOLE_COPY = frozenset(G4_PROTECTED) - G4_APP_IDENTITY
+def step_code(st):
+    """A step's run body as COMMANDS: continuation lines joined; blank, comment, echo and printf lines dropped, so a
+    mention of `terraform apply` in prose or an echo is not a command."""
+    out = []
+    for ln in CONT.sub(" ", str(st.get("run") or "")).split("\n"):
+        s = ln.strip()
+        if not s or s.startswith("#") or re.match(r"(?:echo|printf)\b", s):
+            continue
+        out.append(s)
+    return "\n".join(out)
+def step_obeys(st):
+    """True iff nothing about the step lets a refusal upstream be ignored: no continue-on-error and no status
+    function (always/failure/cancelled) in its `if:`."""
+    if st.get("continue-on-error") not in (None, False):
+        return False
+    return not re.search(r"\b(?:always|failure|cancelled)\s*\(", str(st.get("if") or ""))
 def dispatch_gated_ok(r, a):
     """True only while the named workflow still has every property that makes its saved-plan destroy safe to
-    allow: dispatch-ONLY trigger; a job with a literal `environment:`; a `terraform plan -out` step that
-    `-target`s exactly this address (quote-tolerant, boundary-anchored: `ADDR[\"k\"]` and prefixes do not match);
-    and a LATER step that applies a positional plan file with no `-target`/`-replace`. The address must not also be
-    bare-targeted by an apply step, and must not be protected."""
+    allow: dispatch-ONLY trigger; a job with a tier-B `environment:` and no job-level continue-on-error; a
+    `terraform plan -out=F` COMMAND (not a comment or echo) whose `-target` set is EXACTLY the addresses this
+    workflow is allowed to destroy; and a LATER step that, as a command, calls the entry's gate function and
+    only then applies the positional plan file F (no `-target`/`-replace`), with neither step able to ignore a
+    refusal. The address must not also be bare-targeted by an apply step, and must not be protected."""
     ent = DISPATCH_GATED_DESTROYS.get(r, {}).get(a)
     if not ent or a in G4_PROTECTED or a in root_targets.get(r, set()):
         return False
+    want = {x for x, e in DISPATCH_GATED_DESTROYS.get(r, {}).items() if e[1] == ent[1]}
     q = re.compile(r"-target=([\"']?)" + re.escape(a) + r"\1(?=[\s\\]|$)")
+    tq = re.compile(r"-target=([\"']?)([^\s\\\"']+)\1(?=[\s\\]|$)")
     for j in jobs:
         if j.rel != ent[1]:
             continue
@@ -1212,21 +1231,28 @@ def dispatch_gated_ok(r, a):
         on = doc.get("on") if doc.get("on") is not None else doc.get(True)
         if not (isinstance(on, dict) and list(on.keys()) == ["workflow_dispatch"]):
             continue
-        if not (j.has_env_key and j.arms and all(x for x in j.arms)):
+        if not (j.has_env_key and j.arms and all(x in TIER_B_ENVIRONMENTS for x in j.arms)):
+            continue
+        if j.body.get("continue-on-error") not in (None, False):
             continue
         plan_i = None
+        plan_out = None
         for i, st in enumerate(j.steps):
-            body = CONT.sub(" ", str(st.get("run") or ""))
-            if (re.search(r"(?<![-\w])terraform\s+plan(?![-\w])", body)
-                    and re.search(r"\s-out(?:=|\s)", body) and q.search(body)):
-                plan_i = i
+            body = step_code(st)
+            mo = re.search(r"\s-out=(\S+)", body)
+            if (re.search(r"(?<![-\w])terraform\s+plan(?![-\w])", body) and mo and q.search(body)
+                    and {m.group(2) for m in tq.finditer(body)} == want and step_obeys(st)):
+                plan_i, plan_out = i, mo.group(1)
                 break
         if plan_i is None:
             continue
         for st in j.steps[plan_i + 1:]:
-            body = CONT.sub(" ", str(st.get("run") or ""))
+            body = step_code(st)
             m = re.search(r"(?<![-\w])terraform\s+apply((?:\s+-\S+)*)\s+([A-Za-z0-9_./][A-Za-z0-9_./-]*)(?=\s*(?:;|&&|\|\||$))", body)
-            if m and not re.search(r"-(?:target|replace)\b", m.group(1)):
+            if not (m and m.group(2) == plan_out and not re.search(r"-(?:target|replace)\b", m.group(1)) and step_obeys(st)):
+                continue
+            gi = body.find(ent[2])
+            if 0 <= gi < m.start():
                 return True
     return False
 orphans = []
@@ -1248,7 +1274,7 @@ check("G4c: every `resource` block the base ref declares and HEAD no longer decl
       bool(BASE_ROOT) and n_base >= 1 and g4c_probe_ok and not orphans,
       ("base unavailable" if not BASE_ROOT else "declared-reader probe failed (a commented-out resource read as declared, or a real one did not)" if not g4c_probe_ok else "orphans=%s" % orphans[:8]))
 bad_intended = sorted({a for _r, d in list(INTENDED_DESTROYS.items()) + list(RETIRED_STATE_ABSENT.items()) + list(DISPATCH_GATED_DESTROYS.items()) for a in d if a in G4_PROTECTED})
-check("G4f: no INTENDED_DESTROYS or RETIRED_STATE_ABSENT entry names a protected address (the App identity, which "
+check("G4f: no INTENDED_DESTROYS, RETIRED_STATE_ABSENT or DISPATCH_GATED_DESTROYS entry names a protected address (the App identity, which "
       "may only ever be FORGOTTEN, or a sole-copy live store: %s)" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
 # G4g: a RETIRED_STATE_ABSENT entry is a claim that the address is GONE. If HEAD declares it again the claim is
 # false and a later deletion of that new block would ride the allowance with no `removed` block (re-declare, apply,
@@ -3640,6 +3666,8 @@ jobs:
       - name: Terraform apply
         working-directory: apps/web-platform/infra
         run: |
+          set -euo pipefail
+          if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID"; then exit 1; fi
           terraform apply -no-color -input=false tfplan
 G4DGEOF
   fixture_written "$1-workflow" "$2/tree/.github/workflows/git-data-plaintext-volume-destroy.yml"
@@ -3692,6 +3720,53 @@ cp "$T/ipt.py" "$T/ipt-g4-22.py" || { printf 'FAIL SETUP: g4-22 checker copy\n' 
 if mutate g4-22-protected-in-dispatch-gated "$T/ipt-g4-22.py" 1 's/^(        )("hcloud_volume\.git_data": \("#8211 Option B.*)$/\1"doppler_secret.github_app_id": ("x", "workflows\/x.yml"),\n\1\2/'; then
   python3 "$T/ipt-g4-22.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4-22.tsv" 2> "$T/mut/g4-22.tsv.err"
   mutant_red g4-22-protected-in-dispatch-gated wf_row "$T/mut/g4-22.tsv" "G4f:"
+fi
+
+# Rows 23-29 — the allowance must not be satisfied by a LEXICAL decoy (test-design review of #11179): an echoed apply,
+# an extra -target on the plan, an apply of a DIFFERENT plan file, status-function and continue-on-error overrides, a
+# missing gate call, and an environment that is not a tier-B reviewer environment. Each starts from the compliant
+# fixture of row 15 and changes ONE thing.
+MUTDIR="$(fixcopy g4-23)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-23 "$MUTDIR" && g4dg_wf g4-23 "$MUTDIR" \
+   && mutate g4-23-echoed-apply "$MUTDIR/$G4DG_WF" 2 's/^          terraform apply -no-color -input=false tfplan$/          echo terraform apply -no-color -input=false tfplan/'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-23.tsv" ""
+  mutant_red g4-23-dispatch-gated-echoed-apply wf_row "$T/mut/g4-23.tsv" "G4c:"
+fi
+MUTDIR="$(fixcopy g4-24)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-24 "$MUTDIR" && g4dg_wf g4-24 "$MUTDIR" \
+   && mutate g4-24-extra-target "$MUTDIR/$G4DG_WF" 2 "s/^            -target='hcloud_volume\\.git_data'\$/            -target='hcloud_volume.git_data' -target=hcloud_server.git_data/"; then
+  fixcensus "$MUTDIR" "$T/mut/g4-24.tsv" ""
+  mutant_red g4-24-dispatch-gated-extra-target wf_row "$T/mut/g4-24.tsv" "G4c:"
+fi
+MUTDIR="$(fixcopy g4-25)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-25 "$MUTDIR" && g4dg_wf g4-25 "$MUTDIR" \
+   && mutate g4-25-other-plan-file "$MUTDIR/$G4DG_WF" 2 's/terraform apply -no-color -input=false tfplan$/terraform apply -no-color -input=false other.tfplan/'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-25.tsv" ""
+  mutant_red g4-25-dispatch-gated-other-plan-file wf_row "$T/mut/g4-25.tsv" "G4c:"
+fi
+MUTDIR="$(fixcopy g4-26)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-26 "$MUTDIR" && g4dg_wf g4-26 "$MUTDIR" \
+   && mutate g4-26-apply-if-always "$MUTDIR/$G4DG_WF" 1 '/^      - name: Terraform apply$/a\        if: always()'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-26.tsv" ""
+  mutant_red g4-26-dispatch-gated-apply-if-always wf_row "$T/mut/g4-26.tsv" "G4c:"
+fi
+MUTDIR="$(fixcopy g4-27)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-27 "$MUTDIR" && g4dg_wf g4-27 "$MUTDIR" \
+   && mutate g4-27-plan-continue-on-error "$MUTDIR/$G4DG_WF" 1 '/^      - name: Terraform plan$/a\        continue-on-error: true'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-27.tsv" ""
+  mutant_red g4-27-dispatch-gated-plan-continue-on-error wf_row "$T/mut/g4-27.tsv" "G4c:"
+fi
+MUTDIR="$(fixcopy g4-28)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-28 "$MUTDIR" && g4dg_wf g4-28 "$MUTDIR" \
+   && mutate g4-28-gate-call-removed "$MUTDIR/$G4DG_WF" 1 '/git_data_plaintext_destroy_gate tfplan\.json/d'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-28.tsv" ""
+  mutant_red g4-28-dispatch-gated-gate-call-removed wf_row "$T/mut/g4-28.tsv" "G4c:"
+fi
+MUTDIR="$(fixcopy g4-29)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-29 "$MUTDIR" && g4dg_wf g4-29 "$MUTDIR" \
+   && mutate g4-29-unprotected-environment "$MUTDIR/$G4DG_WF" 2 's/^    environment: web-platform-infra-apply$/    environment: unprotected-env/'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-29.tsv" ""
+  mutant_red g4-29-dispatch-gated-unprotected-environment wf_row "$T/mut/g4-29.tsv" "G4c:"
 fi
 
 # ── G4h (#9879): no `removed` / `moved` block over a sole-copy address ───────────────────────────────────────────────
@@ -4778,7 +4853,8 @@ fi
 # 145 -> 151 (#10990, AC7b limb 3): g1-k1 (fixture .sh writer, 1), g1-k2 (checker write-token set, 1),
 #   g1-k3 (second-member fixture .sh writer, 1), g1-k4 (half-set pair, 1), g1-k5 (checker
 #   classification key, 1), g1-k6 (read-only fixture .sh, 1). Measured: 151 ran.
-MUTANT_FLOOR=173
+# 173 -> 194 (#11179 review): g4-23..g4-29 (lexical-decoy rows, base + fixture + one mutation = 3 landings each). Measured: 194 ran.
+MUTANT_FLOOR=194
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4831,7 +4907,8 @@ _ran=$((passes + fails))
 #   suite measured 376 on this branch — the recorded 369 above is stale by 7 (the floor asserts
 #   only `-lt`, so upward drift never trips it). Measured: 393 ran.
 # 402 -> 429 (#8211 Option B, DISPATCH_GATED_DESTROYS): g4-15..g4-22 (19 landings/fixtures + 8 verdicts). Measured: 429 ran.
-FLOOR=429
+# 429 -> 457 (#11179 review): g4-23..g4-29 (21 landings/fixtures + 7 verdicts). Measured: 457 ran.
+FLOOR=457
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

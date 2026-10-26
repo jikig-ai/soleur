@@ -93,7 +93,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
 // 279 -> 286 (#10175, +7): the rotate's store-never-written gate describe (real-tree pins, the wiring mutation battery, the no-other-flag-writer scan, the flag-seam credential enumeration, the census pin, and the two executed-step tests). The 2 rows of slack above are unchanged (declared 288).
 // 296 -> 297 (#10697 fix round, +1): the web_bash_synthetic beat's period/grace/alerting-attribute pins and the URL-secret name tie.
-const TEST_FLOOR = 305;
+// 297 -> 305 (#11179, +8): the plaintext git-data volume destroy workflow pins (dispatch-only trigger, validate/destroy job wiring, the two-address -target set, the saved-plan apply, the gate call, read-back/cleanup, single-sourced volume id).
+// 305 -> 309 (#11179 review, +4): the apply-step re-gate, the no-ignorable-refusal wiring (exact ifs, no continue-on-error, main-only), the read-back shape=gone / server-id-drift pin, and the by-name (not hard-coded) server and LUKS ids.
+const TEST_FLOOR = 309;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -8642,10 +8644,54 @@ describe("the plaintext git-data volume destroy workflow pins (Option B, ADR-239
     expect(apply).not.toContain("-auto-approve");
   });
 
-  test("the gate is called with the dispatch input and its return code is checked", () => {
+  test("the gate is called with the dispatch input and the live server id, and its return code is checked", () => {
     const plan = extractStep(destroyJob, /Terraform plan \(only the two retired addresses\)/) ?? "";
-    expect(plan).toContain('if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID"; then');
+    expect(plan).toContain('if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID"; then');
     expect(plan).toContain("EXPECTED_VOLUME_ID: ${{ inputs.expected_volume_id }}");
+    expect(plan).toContain("SERVER_ID: ${{ steps.pre.outputs.server_id }}");
+  });
+
+  test("the apply step re-judges the saved plan BEFORE it applies it, in the same step", () => {
+    const apply = extractStep(destroyJob, /Terraform apply \(destroy the retired plaintext volume\)/) ?? "";
+    expectNonEmptyDispatch(apply.length, 1);
+    const gateAt = apply.indexOf('if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID"; then');
+    const applyAt = apply.indexOf("terraform apply -no-color -input=false tfplan");
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(gateAt);
+    expect(apply).toContain("terraform show -json tfplan > tfplan.json");
+    expect(apply).toContain("trap 'rm -f tfplan.json' EXIT");
+  });
+
+  test("no step or job can ignore a refusal: exact ifs, no continue-on-error, main-only", () => {
+    for (const re of [/Terraform plan \(only the two retired addresses\)/, /Terraform apply \(destroy the retired plaintext volume\)/]) {
+      const step = extractStep(destroyJob, re) ?? "";
+      expectNonEmptyDispatch(step.length, 1);
+      expect(/^\s{8}if: steps\.pre\.outputs\.already_gone == 'false'\s*$/m.test(step)).toBe(true);
+      expect(step).not.toMatch(/continue-on-error/);
+      expect(step).not.toMatch(/\b(always|failure|cancelled)\(/);
+    }
+    expect(destroyJob).not.toMatch(/^\s{4}continue-on-error/m);
+    expect(validateJob).not.toMatch(/continue-on-error/);
+    expect(/^\s{4}if: github\.ref == 'refs\/heads\/main'\s*$/m.test(destroyJob)).toBe(true);
+    expect(validateJob).toContain('"${GITHUB_REF}" != "refs/heads/main"');
+    expect(validateJob).toContain("verdict=not_main");
+  });
+
+  test("the read-back requires shape=gone and an unchanged server and LUKS id", () => {
+    const rb = extractStep(destroyJob, /Read-back \(404 by id/) ?? "";
+    expect(rb).toContain('"$shape" != "gone"');
+    expect(rb).toContain("verdict=server_id_drift");
+  });
+
+  test("the server and LUKS ids are resolved by name, never hard-coded", () => {
+    const probe = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/git-data-plaintext-volume-state.sh"), "utf8");
+    for (const body of [wf, gateText, probe]) {
+      expect(body).not.toContain("170370833");
+      expect(body).not.toContain("107140231");
+    }
+    expect(probe).toContain("SERVER_NAME=soleur-git-data");
+    expect(probe).toContain("LUKS_NAME=soleur-git-data-luks-store");
+    expect(probe).toContain('PINNED_VOLUME_ID=106867358');
   });
 
   test("the read-back runs on success AND failure; plan files are removed always and never uploaded", () => {

@@ -13,14 +13,26 @@
 #
 # THE CONTROLS, OUTSIDE THE REVIEWER'S APPROVAL (prevent_self_review=false: the owner can approve their
 # own run, so these do not depend on that approval):
+#   0. Main only: `validate` fails loudly (verdict=not_main) and `destroy` is skipped when the run is not
+#      on refs/heads/main. The gate and the probe are sourced from ${GITHUB_WORKSPACE}, so a branch
+#      dispatch could otherwise source a neutered gate; the environment's own deployment-branch policy is
+#      a repository setting this file cannot assert, so this is defence in depth.
 #   1. `validate` job (no environment): both typed inputs are compared as literals BEFORE any approval
 #      is requested, so a typo never consumes a reviewer approval.
-#   2. The pre-plan read (git-data-plaintext-volume-state.sh): proves the token can see server
-#      170370833 holding the LUKS volume 107140231 (a 404 from another project's token means nothing),
-#      then decides the shape. Unexpected shapes are refused before any plan exists.
+#   2. The pre-plan read (git-data-plaintext-volume-state.sh): resolves the git-data server and its LUKS
+#      volume LIVE BY NAME (ids are not pinned: a host rotate re-mints both), proves the token can see
+#      them (a 404 from another project's token means nothing), then decides the shape. Unexpected shapes
+#      are refused before any plan exists.
 #   3. The plan gate (tests/scripts/lib/git-data-plaintext-destroy-gate.sh): the saved plan must delete
-#      exactly the pinned volume (and optionally its attachment) and change nothing else.
-#   4. The read-back: 404 by id, empty list by name, LUKS volume still present on the server.
+#      exactly the pinned volume (and optionally its attachment, bound to the live server) and change
+#      nothing else. It runs after the plan AND AGAIN in the SAME step that applies the saved plan, so
+#      the plan that is applied is the plan that was judged.
+#   4. The read-back: 404 by id, EMPTY list by name (shape=gone), LUKS volume still present on the same
+#      server, and the server and LUKS ids unchanged since the pre-plan read.
+#
+# PRECONDITIONS NOT CARRIED (CTO ruling 2026-10-26, ADR-239 Amendment 2026-10-26): the soak, run-record
+# scan and boot-signal predicates of Amendment 2026-10-15 belong to the in-host DL-2 wipe. This is a
+# provider-API delete of a device that is never mounted writable and is not the rollback target.
 #
 # CONCURRENCY: workflow-level terraform-apply-web-platform-host is the serializer of the lockless R2
 # state (main.tf `use_lockfile = false`); job-level git-data-state is the mutex with git-data-cutover,
@@ -65,6 +77,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Require main (a branch dispatch is refused loudly, not skipped)
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "::error::verdict=not_main — this workflow may only be dispatched from refs/heads/main (got ${GITHUB_REF}); the gate and the probe are sourced from the checked-out ref."
+            exit 1
+          fi
       - name: Validate dispatch inputs (before any approval is requested)
         env:
           EXPECTED_RAW: ${{ inputs.expected_volume_id }}
@@ -83,10 +102,10 @@ jobs:
 
   destroy:
     needs: validate
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    # The sole HUMAN authorization on this path: reviewer-gated, main-only deployment branch policy. The
-    # branch pin is load-bearing — the gate and the probe are sourced from ${GITHUB_WORKSPACE}, so without
-    # it a branch dispatch could source a neutered gate and approve itself.
+    # The sole HUMAN authorization on this path: reviewer-gated. The job-level ref guard above and the
+    # validate job's not_main verdict are the in-file branch pin (see control 0 in the header).
     environment: web-platform-infra-apply
     concurrency:
       group: git-data-state
@@ -142,8 +161,12 @@ jobs:
             echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
-          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
-          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # Heredoc-delimiter form: a newline-bearing value cannot inject an extra assignment (BASH_ENV class).
+          delim="SOLEUR_EOF_$(openssl rand -hex 12)"
+          {
+            printf 'AWS_ACCESS_KEY_ID<<%s\n%s\n%s\n' "$delim" "$KEY_ID" "$delim"
+            printf 'AWS_SECRET_ACCESS_KEY<<%s\n%s\n%s\n' "$delim" "$SECRET" "$delim"
+          } >> "$GITHUB_ENV"
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
@@ -160,14 +183,20 @@ jobs:
           out="$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-plaintext-volume-state.sh")" || rc=$?
           printf '%s\n' "$out"
           if [[ "$rc" -ne 0 ]]; then
-            echo "::error::verdict=pre_plan_read_failed (exit ${rc}) — the Hetzner read could not be completed or the presence proof failed; nothing was planned."
+            echo "::error::verdict=pre_plan_read_failed (exit ${rc}) — the Hetzner read could not be completed (3 no credential, 4 API or parse error, 5 presence proof failed: the git-data server or its LUKS volume was not found by name); nothing was planned."
             exit 1
           fi
           shape="$(printf '%s\n' "$out" | sed -n 's/^shape=//p' | head -1)"
           luks="$(printf '%s\n' "$out" | sed -n 's/^luks_volume=//p' | head -1)"
           luks_server="$(printf '%s\n' "$out" | sed -n 's/^luks_server_id=//p' | head -1)"
-          if [[ "$luks" != "present" || "$luks_server" != "170370833" ]]; then
-            echo "::error::verdict=luks_volume_missing — the LUKS volume 107140231 is not present on server 170370833 (luks_volume=${luks} luks_server_id=${luks_server}); refusing."
+          server_id="$(printf '%s\n' "$out" | sed -n 's/^server_id=//p' | head -1)"
+          luks_id="$(printf '%s\n' "$out" | sed -n 's/^luks_volume_id=//p' | head -1)"
+          if ! [[ "$server_id" =~ ^[0-9]+$ && "$luks_id" =~ ^[0-9]+$ ]]; then
+            echo "::error::verdict=server_pin_missing — the probe did not print numeric server_id and luks_volume_id (server_id=${server_id} luks_volume_id=${luks_id}); refusing."
+            exit 1
+          fi
+          if [[ "$luks" != "present" || "$luks_server" != "$server_id" ]]; then
+            echo "::error::verdict=luks_volume_missing — the LUKS volume ${luks_id} is not present on the git-data server ${server_id} (luks_volume=${luks} luks_server_id=${luks_server}); refusing."
             exit 1
           fi
           case "$shape" in
@@ -177,7 +206,8 @@ jobs:
             *) echo "::error::verdict=${shape} — unexpected Hetzner shape for the plaintext volume; refusing before any plan exists."
                exit 1 ;;
           esac
-          echo "shape=${shape}" >> "$GITHUB_OUTPUT"
+          echo "server_id=${server_id}" >> "$GITHUB_OUTPUT"
+          echo "luks_volume_id=${luks_id}" >> "$GITHUB_OUTPUT"
 
       - name: Terraform plan (only the two retired addresses) + destroy gate
         if: steps.pre.outputs.already_gone == 'false'
@@ -185,6 +215,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           EXPECTED_VOLUME_ID: ${{ inputs.expected_volume_id }}
+          SERVER_ID: ${{ steps.pre.outputs.server_id }}
         run: |
           case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
           # set +e so the rc diagnostic below runs — GitHub runs `run:` under an inherited -e that
@@ -209,22 +240,37 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/plan-gate-preamble.sh"
           # shellcheck source=tests/scripts/lib/git-data-plaintext-destroy-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-plaintext-destroy-gate.sh"
-          if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID"; then
+          if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID"; then
             echo "::error::plaintext-volume destroy gate REFUSED: the plan is not exactly the pinned delete of hcloud_volume.git_data (and optionally its attachment). The gate message above names the verdict. Nothing has been applied."
             jq -r '[.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"]) | "\(.address) \(.change.actions | join(","))"] | .[]' tfplan.json >&2 || true
             exit 1
           fi
           echo "plaintext-volume destroy gate PASSED."
 
+      # The gate runs AGAIN here, in the SAME step as the apply, against the plan file that is about to be
+      # applied: the plan that is applied is the plan that was judged, and a gate refusal exits before the
+      # apply can run.
       - name: Terraform apply (destroy the retired plaintext volume)
         id: apply
         if: steps.pre.outputs.already_gone == 'false'
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          EXPECTED_VOLUME_ID: ${{ inputs.expected_volume_id }}
+          SERVER_ID: ${{ steps.pre.outputs.server_id }}
         run: |
           case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
           set -euo pipefail
+          trap 'rm -f tfplan.json' EXIT
+          terraform show -json tfplan > tfplan.json
+          # shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/plan-gate-preamble.sh"
+          # shellcheck source=tests/scripts/lib/git-data-plaintext-destroy-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-plaintext-destroy-gate.sh"
+          if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID"; then
+            echo "::error::plaintext-volume destroy gate REFUSED the saved plan at apply time. Nothing has been applied."
+            exit 1
+          fi
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply failed. The attachment and the volume are destroyed in dependency order and each is recorded in the state as it completes, so a partial apply is re-dispatchable: the read-back below reports the actual state."
@@ -239,6 +285,8 @@ jobs:
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           ALREADY_GONE: ${{ steps.pre.outputs.already_gone }}
+          PRE_SERVER_ID: ${{ steps.pre.outputs.server_id }}
+          PRE_LUKS_ID: ${{ steps.pre.outputs.luks_volume_id }}
         run: |
           case $- in *x*) echo "::error::refusing to run under xtrace (a Hetzner token is in scope)"; exit 78 ;; esac
           set -uo pipefail
@@ -261,20 +309,31 @@ jobs:
             exit 1
           fi
           summary="$(printf '%s\n' "$out" | sed -n 's/^plaintext_volume=//p' | head -1)"
+          shape="$(printf '%s\n' "$out" | sed -n 's/^shape=//p' | head -1)"
           luks="$(printf '%s\n' "$out" | sed -n 's/^luks_volume=//p' | head -1)"
           luks_server="$(printf '%s\n' "$out" | sed -n 's/^luks_server_id=//p' | head -1)"
-          if [[ "$luks" != "present" || "$luks_server" != "170370833" ]]; then
-            echo "::error::verdict=luks_volume_missing — the LUKS volume 107140231 is no longer present on server 170370833. STOP and escalate to the owner."
+          server_id="$(printf '%s\n' "$out" | sed -n 's/^server_id=//p' | head -1)"
+          luks_id="$(printf '%s\n' "$out" | sed -n 's/^luks_volume_id=//p' | head -1)"
+          if [[ "$luks" != "present" || "$luks_server" != "$server_id" ]]; then
+            echo "::error::verdict=luks_volume_missing — the LUKS volume ${luks_id} is no longer present on the git-data server ${server_id}. STOP and escalate to the owner."
+            exit 1
+          fi
+          if [[ -n "${PRE_SERVER_ID:-}" && ( "$server_id" != "$PRE_SERVER_ID" || "$luks_id" != "${PRE_LUKS_ID:-}" ) ]]; then
+            echo "::error::verdict=server_id_drift — the git-data server or its LUKS volume changed during this run (server ${PRE_SERVER_ID} -> ${server_id}, luks ${PRE_LUKS_ID:-unset} -> ${luks_id}); the git-data-state group excludes a concurrent rotate, so this is a real fault. STOP and escalate to the owner."
             exit 1
           fi
           if [[ "${APPLY_OUTCOME:-}" == "success" || "${ALREADY_GONE:-}" == "true" ]]; then
-            if [[ "$summary" != "absent" ]]; then
-              echo "::error::verdict=volume_still_present — the apply reported success (or the volume was already gone) but the plaintext volume is still present."
+            if [[ "$shape" != "gone" ]]; then
+              echo "::error::verdict=volume_still_present — the apply reported success (or the volume was already gone) but the read-back shape is '${shape}' (plaintext_volume=${summary}); the end event requires 404 by id AND an empty name lookup (shape=gone)."
               exit 1
             fi
-            echo "end event proven: volume 106867358 returns 404 and the name lookup is empty; the LUKS volume is present on the server."
+            echo "end event proven: volume 106867358 returns 404 and the name lookup is empty; the LUKS volume is present on the git-data server."
           elif [[ "${APPLY_OUTCOME:-}" == "failure" ]]; then
-            echo "::error::verdict=volume_still_present_after_failed_apply — plaintext_volume=${summary}. Re-dispatch this workflow; it will plan only what remains."
+            if [[ "$shape" == "gone" ]]; then
+              echo "::error::verdict=apply_failed_volume_gone — the apply reported failure but the device is gone (404 by id, empty name lookup). The Terraform state may still list the addresses; a refresh drops them. Do not re-dispatch."
+            else
+              echo "::error::verdict=volume_still_present_after_failed_apply — shape=${shape}. Re-dispatch this workflow; it will plan only what remains."
+            fi
             exit 1
           else
             echo "apply did not run (an earlier step refused): plaintext_volume=${summary}; nothing was changed by this run."

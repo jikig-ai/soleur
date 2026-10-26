@@ -20,8 +20,10 @@
 # `workflow_dispatch` path now exists (apply-web-platform-infra.yml, mirroring
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
 # WITHOUT SSH — a scoped, destroy-guarded `terraform apply -replace='hcloud_server.git_data'`
-# that PRESERVES the data volumes (hcloud_volume.git_data_luks, and the retired plaintext volume
-# until its destroy dispatch runs) and the LUKS passphrase by OMISSION. It is a maintenance-window dispatch, not a per-PR apply;
+# that PRESERVES the data volume (hcloud_volume.git_data_luks) and the LUKS passphrase by OMISSION.
+# DISABLED from the Option B merge until #11194 retires the plaintext arms from its gates: the
+# replace, rotate and create gates still demand the retired plaintext addresses, so they refuse every
+# plan (ADR-239 Amendment 2026-10-26, item 4). It is a maintenance-window dispatch, not a per-PR apply;
 # these resources remain excluded from the per-PR `-target=` list. Before it, git-data had
 # ZERO non-SSH reprovision path (hr-prod-host-config-change-immutable-redeploy gap). The
 # invariant that a boot-armed heartbeat needs such a path is mechanically enforced by
@@ -380,7 +382,7 @@ resource "doppler_secret" "git_data_ssh_host_key" {
 # rung-2 gate derives its hash-input set by grepping THAT file — see
 # tests/scripts/lib/git-data-birth-readiness-gate.sh.
 # git_data_volume_id below is a LITERAL (the retired plaintext volume):
-# SOLEUR-DEBT: a literal id for a device the dispatched git-data-plaintext-volume-destroy workflow deletes at the provider API (ADR-239 Amendment 2026-10-26); it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change. After the destroy it names a nonexistent device, so any host rebirth boots into the bootstrap's plaintext_unverified FATAL; remove it (set "") only with a deliberate host replace, sequenced behind the gate-retirement follow-up for the git-data host replace/birth routes.
+# SOLEUR-DEBT: literal id naming a device that the dispatched git-data-plaintext-volume-destroy workflow deletes at the provider API (it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change, ADR-239 Amendment 2026-10-26) and after that any host rebirth boots into the bootstrap plaintext_unverified FATAL; when #11194 merges (plaintext arms retired from the host replace/birth/rotate gates) set this to "" in a deliberate, owner-named host replace.
 module "git_data_userdata" {
   source = "./modules/git-data-userdata"
 
