@@ -8,9 +8,5 @@
   "when_to_use": ["A flaky upstream returns transient errors", "A request storm follows a brief outage"],
   "steps": ["Identify which failures are transient", "Cap the attempt count and the total wait", "Add jitter to every delay", "Log each retry with its attempt number"],
   "sharp_edges": ["Never retry a request that changes state without an idempotency key", "A retry without a cap hides an outage"],
-  "merge_retire_candidates": ["Retire this skill if a workflow skill grows a retry section"],
-  "purpose": {
-    "origin": "Several unrelated sessions rediscovered the same retry mistakes.",
-    "patterns_addressed": "Retries without caps and retries of unsafe requests recurred across sessions."
-  }
+  "merge_retire_candidates": ["Retire this skill if a workflow skill grows a retry section"]
 }

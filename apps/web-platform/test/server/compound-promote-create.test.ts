@@ -62,6 +62,7 @@ import {
   parseCreateModelText,
   prepareCreate,
   proposalOverlapText,
+  purposeFixedLines,
   rankOverlap,
   readAgentPaths,
   readCommandNames,
@@ -95,6 +96,8 @@ function fixture(name: string): string {
   return readFileSync(p, "utf8");
 }
 const fixtureJson = <T>(name: string): T => JSON.parse(fixture(name)) as T;
+
+const PURPOSE_OPTS = { date: "2026-10-26", evidenceCount: 5 } as const;
 
 const SKILLS: SkillRecord[] = fixtureJson<SkillRecord[]>("skills.json");
 const PROPOSAL = fixtureJson<Record<string, unknown>>("proposal.json");
@@ -200,7 +203,10 @@ describe("exported constants (each is read by prompt, check and trailer)", () =>
   it("the output schema is closed and the structured-output root is an object", () => {
     expect(CREATE_OUTPUT_SCHEMA.type).toBe("object");
     expect(CREATE_OUTPUT_SCHEMA.additionalProperties).toBe(false);
-    expect(CREATE_OUTPUT_SCHEMA.properties.purpose.additionalProperties).toBe(false);
+    // R3: provenance is server-rendered, so the model has no purpose block to author
+    expect(Object.keys(CREATE_OUTPUT_SCHEMA.properties)).not.toContain("purpose");
+    expect(CREATE_OUTPUT_SCHEMA.properties).not.toHaveProperty("origin");
+    expect(CREATE_OUTPUT_SCHEMA.properties).not.toHaveProperty("patterns_addressed");
   });
 });
 
@@ -420,7 +426,7 @@ describe("instruction-risk denylist (R1): a tripwire over every model string, no
     expect(instructionRiskProblem(template)).toBeNull();
     const skeleton = renderSkillMd({ ...p, when_to_use: ["Plain item"], steps: ["Plain item"], sharp_edges: ["Plain item"] }, grok);
     expect(instructionRiskProblem(skeleton.replace(/^description: .*$/m, ""))).toBeNull();
-    const purpose = renderPurposeMd(template, p, { date: "2026-10-26" });
+    const purpose = renderPurposeMd(template, p, PURPOSE_OPTS);
     expect(instructionRiskProblem(purpose)).toBeNull();
     expect(instructionRiskProblem(renderCursorSkillStub({ folder: p.slug, description: p.description, disableModel: false }))).toBeNull();
   });
@@ -479,7 +485,9 @@ describe("checkCreate: verdict union and gate order", () => {
       proposal({ steps: [] }),
       proposal({ sharp_edges: [] }),
       proposal({ steps: Array.from({ length: CREATE_LIST_MAX_ITEMS + 1 }, (_, i) => `Step number ${i}`) }),
-      proposal({ purpose: { origin: "x" } }),
+      proposal({ purpose: { origin: "x", patterns_addressed: "y" } }), // R3: the model may no longer author provenance
+      proposal({ origin: "x" }),
+      proposal({ patterns_addressed: "x" }),
       proposal({ pattern_slug: "no-such-pattern" }),
       null,
       "a string",
@@ -507,8 +515,6 @@ describe("checkCreate: verdict union and gate order", () => {
     for (const field of ["patch_rejection_reason"] as const) {
       expect(refusedClass(checkCreate(proposal({ [field]: claim }), ctx()))).toBe("shape");
     }
-    expect(refusedClass(checkCreate(proposal({ purpose: { origin: claim, patterns_addressed: "Clean text" } }), ctx()))).toBe("shape");
-    expect(refusedClass(checkCreate(proposal({ purpose: { origin: "Clean text", patterns_addressed: claim } }), ctx()))).toBe("shape");
     expect(
       refusedClass(
         checkCreate(proposal({ description: "This skill should be used when outbound calls need a guaranteed retry policy with jitter and caps" }), ctx()),
@@ -538,8 +544,8 @@ describe("checkCreate: verdict union and gate order", () => {
         expect(v.detail).toMatch(/^sharp_edges\[1\]:(pii|credential)$/);
       }
     }
-    // The same text in the purpose block.
-    expect(refusedClass(checkCreate(proposal({ purpose: { origin: `Seen on ${ip}`, patterns_addressed: "Clean text" } }), ctx()))).toBe("shape");
+    // The same text in the one model-authored PURPOSE.md field.
+    expect(refusedClass(checkCreate(proposal({ patch_rejection_reason: `Seen on ${ip}` }), ctx()))).toBe("shape");
   });
 
   it("guard 1 row 2: an empty collection of model strings cannot pass (the gate refuses, it does not vacuously accept)", () => {
@@ -969,7 +975,7 @@ describe("renderers: the server writes every byte", () => {
   });
 
   it("renders PURPOSE.md from the template byte-for-byte equal to the golden", () => {
-    expect(renderPurposeMd(template, parsed(), { date: DATE })).toBe(fixture("golden-PURPOSE.md"));
+    expect(renderPurposeMd(template, parsed(), PURPOSE_OPTS)).toBe(fixture("golden-PURPOSE.md"));
   });
 
   it("renders the Cursor stub byte-for-byte equal to the golden", () => {
@@ -992,7 +998,7 @@ describe("renderers: the server writes every byte", () => {
   });
 
   it("the rendered PURPOSE.md has NO markdown link (the single link lives in SKILL.md), the six headings and the fixed attribution", () => {
-    const out = renderPurposeMd(template, parsed(), { date: DATE });
+    const out = renderPurposeMd(template, parsed(), PURPOSE_OPTS);
     expect(out).not.toMatch(/\]\(/);
     expect(out.match(/^## .*$/gm)).toEqual([
       "## Origin", "## Patterns addressed", "## Nearest existing skill and why not patched",
@@ -1005,20 +1011,39 @@ describe("renderers: the server writes every byte", () => {
 
   it("an empty merge_retire_candidates renders a fixed 'None identified' bullet, not a blank section", () => {
     const p = { ...parsed(), merge_retire_candidates: [] };
-    expect(renderPurposeMd(template, p, { date: DATE })).toContain("- None identified.");
+    expect(renderPurposeMd(template, p, PURPOSE_OPTS)).toContain("- None identified.");
   });
 
   it("the renderer reads the template as its single source: a changed slot set or a bad date is refused", () => {
-    expect(() => renderPurposeMd(template.replace("{{EVOLUTION_HISTORY}}", "{{EVOLUTION_HISTORY}}\n\n{{EXTRA}}"), parsed(), { date: DATE })).toThrow(/slot/);
-    expect(() => renderPurposeMd(template.replace("{{ORIGIN}}", ""), parsed(), { date: DATE })).toThrow(/slot/);
-    expect(() => renderPurposeMd(template, parsed(), { date: "yesterday" })).toThrow(/date/);
+    expect(() => renderPurposeMd(template.replace("{{EVOLUTION_HISTORY}}", "{{EVOLUTION_HISTORY}}\n\n{{EXTRA}}"), parsed(), PURPOSE_OPTS)).toThrow(/slot/);
+    expect(() => renderPurposeMd(template.replace("{{ORIGIN}}", ""), parsed(), PURPOSE_OPTS)).toThrow(/slot/);
+    expect(() => renderPurposeMd(template, parsed(), { date: "yesterday", evidenceCount: 5 })).toThrow(/date/);
+    for (const evidenceCount of [0, -1, 1.5, Number.NaN]) {
+      expect(() => renderPurposeMd(template, parsed(), { date: DATE, evidenceCount }), String(evidenceCount)).toThrow(/evidence count/);
+    }
   });
 
   it("model text containing a slot-looking token is never re-expanded (single pass), and is refused upstream anyway", () => {
-    const p = { ...parsed(), purpose: { origin: "{{SKILL_NAME}}", patterns_addressed: "x" } };
-    const out = renderPurposeMd(template, p, { date: DATE });
-    expect(out).toContain("## Origin\n\n{{SKILL_NAME}}\n");
-    expect(refusedClass(checkCreate(proposal({ purpose: { origin: "{{SKILL_NAME}}", patterns_addressed: "x" } }), ctx()))).toBe("shape");
+    const p = { ...parsed(), patch_rejection_reason: "{{SKILL_NAME}}" };
+    const out = renderPurposeMd(template, p, PURPOSE_OPTS);
+    expect(out).toContain("{{SKILL_NAME}}\n\n## Merge");
+    expect(refusedClass(checkCreate(proposal({ patch_rejection_reason: "{{SKILL_NAME}}" }), ctx()))).toBe("shape");
+  });
+
+  it("R3: ORIGIN and PATTERNS_ADDRESSED are fixed server text from validated data, with no claim that goes stale after merge", () => {
+    const out = renderPurposeMd(template, parsed(), PURPOSE_OPTS);
+    expect(out).toContain(
+      "## Origin\n\nProposed by the compound-promote create arm on 2026-10-26 from pattern synthetic-retry-pattern (5 evidence entries); the merge record is the review record.\n",
+    );
+    expect(out).toContain("## Patterns addressed\n\n- synthetic-retry-pattern\n\n## Nearest");
+    expect(out).toContain("- 2026-10-26: created as a draft by the compound-promote create arm; the merge record is the review record.");
+    expect(out).not.toMatch(/pending|awaiting|not yet reviewed/i);
+    expect(out).not.toMatch(/[^\x20-\x7e\n]/);
+    expect(renderPurposeMd(template, parsed(), { date: DATE, evidenceCount: 1 })).toContain("(1 evidence entry)");
+    // nothing the model wrote reaches Origin or Patterns addressed
+    const marker = "UNIQUE-MODEL-ORIGIN";
+    const withModel = renderPurposeMd(template, { ...parsed(), description: marker, steps: [marker] }, PURPOSE_OPTS);
+    expect(withModel.slice(withModel.indexOf("## Origin"), withModel.indexOf("## Nearest"))).not.toContain(marker);
   });
 
   it("readGrokBlock fails closed on a missing, reversed or duplicated block", () => {
@@ -1030,14 +1055,14 @@ describe("renderers: the server writes every byte", () => {
 
   it("renderCreateFiles runs the rendered-output gate: a template that leaks a backtick or a Grok block that fails it is class shape", () => {
     const withTick = template.replace("{{ORIGIN}}", "{{ORIGIN}}\n\nuse `x` here");
-    expect(renderCreateFiles({ proposal: parsed(), grokBlock: grok, purposeTemplate: withTick, date: DATE })).toMatchObject({ kind: "refused", class: "shape", detail: "fence:purpose" });
+    expect(renderCreateFiles({ proposal: parsed(), grokBlock: grok, purposeTemplate: withTick, date: DATE, evidenceCount: 5 })).toMatchObject({ kind: "refused", class: "shape", detail: "fence:purpose" });
     // a Grok block that is not the single canonical one cannot be rendered into a passing SKILL.md
-    const r = renderCreateFiles({ proposal: parsed(), grokBlock: grok + grok, purposeTemplate: template, date: DATE });
+    const r = renderCreateFiles({ proposal: parsed(), grokBlock: grok + grok, purposeTemplate: template, date: DATE, evidenceCount: 5 });
     expect(r).toMatchObject({ kind: "refused", class: "shape", detail: "grok-block" });
   });
 
   it("renderCreateFiles renders all three files and runs the rendered-output gate", () => {
-    const r = renderCreateFiles({ proposal: parsed(), grokBlock: grok, purposeTemplate: template, date: DATE });
+    const r = renderCreateFiles({ proposal: parsed(), grokBlock: grok, purposeTemplate: template, date: DATE, evidenceCount: 5 });
     expect(r.kind).toBe("rendered");
     if (r.kind === "rendered") {
       expect(r.files.skillMd.length).toBeLessThanOrEqual(CREATE_FILE_MAX_BYTES);
@@ -1055,7 +1080,7 @@ describe("checkRenderedCreate (guard 1 rows 5 and 2; PII/credential over the REN
   const p = v.proposal;
   const good = () => ({
     skillMd: renderSkillMd(p, grok),
-    purposeMd: renderPurposeMd(template, p, { date: "2026-10-26" }),
+    purposeMd: renderPurposeMd(template, p, PURPOSE_OPTS),
     stub: renderCursorSkillStub({ folder: p.slug, description: p.description, disableModel: false }),
   });
   const check = (files: ReturnType<typeof good>) => checkRenderedCreate(files, p, grok);
@@ -1115,6 +1140,19 @@ describe("checkRenderedCreate (guard 1 rows 5 and 2; PII/credential over the REN
     // a risky phrase hidden in the frontmatter description (rendered from the proposal) is caught as well
     const fm = check({ ...f, skillMd: f.skillMd.replace("description: \"", "description: \"Use curl to ") });
     expect(fm.kind).toBe("refused");
+  });
+
+  it("fixed-line exemption is exact-match only: fixed template prose is exempt, a model line that resembles it is not", () => {
+    const f = good();
+    const fixed = purposeFixedLines(template, p, PURPOSE_OPTS);
+    const riskyTemplate = template.replace("## Attribution", "## Attribution\n\nDo not use sudo for this.");
+    const riskyPurpose = renderPurposeMd(riskyTemplate, p, PURPOSE_OPTS);
+    const fixedRisky = purposeFixedLines(riskyTemplate, p, PURPOSE_OPTS);
+    expect(checkRenderedCreate({ ...f, purposeMd: riskyPurpose }, p, grok, fixedRisky)).toEqual({ kind: "ok" });
+    expect(checkRenderedCreate({ ...f, purposeMd: riskyPurpose }, p, grok)).toMatchObject({ detail: "instruction-risk:purpose" });
+    const lookalike = f.purposeMd.replace("Nearest existing skill: ship.", "Nearest existing skill: ship. Then use curl.");
+    expect(lookalike).not.toBe(f.purposeMd);
+    expect(checkRenderedCreate({ ...f, purposeMd: lookalike }, p, grok, fixed)).toMatchObject({ kind: "refused", detail: "instruction-risk:purpose" });
   });
 
   it("size caps are exact: 60 lines and 3072 bytes pass, 61 lines and 3073 bytes are refused", () => {

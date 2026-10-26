@@ -2,13 +2,11 @@
 
 ## Origin
 
-Several unrelated sessions rediscovered the same retry mistakes.
+Proposed by the compound-promote create arm on 2026-10-26 from pattern synthetic-retry-pattern (5 evidence entries); the merge record is the review record.
 
 ## Patterns addressed
 
 - synthetic-retry-pattern
-
-Retries without caps and retries of unsafe requests recurred across sessions.
 
 ## Nearest existing skill and why not patched
 
@@ -22,7 +20,7 @@ The ship skill covers release preparation, not the retry policy of arbitrary out
 
 ## Evolution history
 
-- 2026-10-26: created as a draft by the automated proposer from the pattern page named above, pending human review.
+- 2026-10-26: created as a draft by the compound-promote create arm; the merge record is the review record.
 
 ## Attribution
 

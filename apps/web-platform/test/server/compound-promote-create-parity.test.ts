@@ -227,7 +227,7 @@ describe("Guard 4: the rendered Grok block equals the pinned canonical", () => {
     const v = checkCreate(JSON.parse(readFileSync(join(FIX, "proposal.json"), "utf8")), ctx);
     expect(v.kind).toBe("create");
     if (v.kind !== "create") return;
-    const r = renderCreateFiles({ proposal: v.proposal, grokBlock: grok, purposeTemplate: template, date: "2026-10-26" });
+    const r = renderCreateFiles({ proposal: v.proposal, grokBlock: grok, purposeTemplate: template, date: "2026-10-26", evidenceCount: 1 });
     expect(r.kind).toBe("rendered");
     if (r.kind !== "rendered") return;
     const text = r.files.skillMd;

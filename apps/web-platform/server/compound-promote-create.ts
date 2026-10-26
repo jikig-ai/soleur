@@ -140,7 +140,6 @@ export interface CreateProposal {
   steps: string[];
   sharp_edges: string[];
   merge_retire_candidates: string[];
-  purpose: { origin: string; patterns_addressed: string };
 }
 
 export interface CreateRefusal {
@@ -213,15 +212,6 @@ export const CREATE_OUTPUT_SCHEMA = {
     steps: { type: "array", items: { type: "string" } },
     sharp_edges: { type: "array", items: { type: "string" } },
     merge_retire_candidates: { type: "array", items: { type: "string" } },
-    purpose: {
-      type: "object",
-      additionalProperties: false,
-      required: ["origin", "patterns_addressed"],
-      properties: {
-        origin: { type: "string" },
-        patterns_addressed: { type: "string" },
-      },
-    },
   },
 } as const;
 
@@ -241,7 +231,6 @@ const CreateSchema = z.strictObject({
   steps: list(1, CREATE_LIST_MAX_ITEMS),
   sharp_edges: list(1, CREATE_LIST_MAX_ITEMS),
   merge_retire_candidates: list(0, CREATE_LIST_MAX_ITEMS),
-  purpose: z.strictObject({ origin: z.string(), patterns_addressed: z.string() }),
 });
 const OutputSchema = z.discriminatedUnion("decision", [NoActionSchema, CreateSchema]);
 
@@ -382,8 +371,6 @@ export function collectModelStrings(p: CreateProposal): LabeledString[] {
     { label: "description", value: p.description, kind: "description" },
     { label: "nearest_skill", value: p.nearest_skill, kind: "ref" },
     { label: "patch_rejection_reason", value: p.patch_rejection_reason, kind: "field" },
-    { label: "purpose.origin", value: p.purpose.origin, kind: "field" },
-    { label: "purpose.patterns_addressed", value: p.purpose.patterns_addressed, kind: "field" },
   ];
   const lists: Array<[string, string[]]> = [
     ["when_to_use", p.when_to_use],
@@ -858,27 +845,51 @@ export function renderSkillMd(p: CreateProposal, grokBlock: string): string {
   );
 }
 
+export interface PurposeOpts {
+  /** The memoized run date, YYYY-MM-DD. */
+  date: string;
+  /** Number of evidence entries of the chosen pattern page (server data, never model text). */
+  evidenceCount: number;
+}
+
+/** Fixed server text for the slots the model does not write. ASCII only, no backticks or links. */
+function purposeValues(p: CreateProposal, o: PurposeOpts): Record<(typeof PURPOSE_TEMPLATE_SLOTS)[number], string> {
+  if (!DATE_RE.test(o.date)) throw new Error("create: bad date");
+  if (!Number.isInteger(o.evidenceCount) || o.evidenceCount < 1) throw new Error("create: bad evidence count");
+  const entries = o.evidenceCount === 1 ? "entry" : "entries";
+  return {
+    SKILL_NAME: p.slug,
+    ORIGIN: `Proposed by the compound-promote create arm on ${o.date} from pattern ${p.pattern_slug} (${o.evidenceCount} evidence ${entries}); the merge record is the review record.`,
+    PATTERNS_ADDRESSED: `- ${p.pattern_slug}`,
+    NEAREST_SKILL: `Nearest existing skill: ${p.nearest_skill}.`,
+    PATCH_REJECTION_REASON: p.patch_rejection_reason,
+    MERGE_RETIRE_CANDIDATES: p.merge_retire_candidates.length > 0 ? bullets(p.merge_retire_candidates) : NO_MERGE_RETIRE_LINE,
+    EVOLUTION_HISTORY: `- ${o.date}: created as a draft by the compound-promote create arm; the merge record is the review record.`,
+  };
+}
+
+const NO_MERGE_RETIRE_LINE = "- None identified.";
+
 /**
  * PURPOSE.md: fills the closed slot set of the template (the single source of the headings and the fixed
- * attribution). The template is validated against the closed slot set first; model text is substituted in ONE pass so
- * a slot-looking string in a model field is never re-expanded.
+ * attribution). The template is validated against the closed slot set first; text is substituted in ONE pass so a
+ * slot-looking string in a model field is never re-expanded. Only `patch_rejection_reason` and the merge-retire
+ * bullets are model text; origin, patterns and history are rendered from server data (R3).
  */
-export function renderPurposeMd(template: string, p: CreateProposal, opts: { date: string }): string {
-  if (!DATE_RE.test(opts.date)) throw new Error("create: bad date");
+export function renderPurposeMd(template: string, p: CreateProposal, opts: PurposeOpts): string {
+  const values = purposeValues(p, opts);
   const found = [...template.matchAll(/\{\{([^{}]*)\}\}/g)].map((m) => m[1]);
   const want = new Set<string>(PURPOSE_TEMPLATE_SLOTS);
   if (found.some((s) => !want.has(s)) || [...want].some((s) => !found.includes(s))) throw new Error("create: purpose template slot set changed");
   if (template.replace(/\{\{[A-Z_]+\}\}/g, "").match(/\{\{|\}\}/)) throw new Error("create: purpose template slot malformed");
-  const values: Record<(typeof PURPOSE_TEMPLATE_SLOTS)[number], string> = {
-    SKILL_NAME: p.slug,
-    ORIGIN: p.purpose.origin,
-    PATTERNS_ADDRESSED: `- ${p.pattern_slug}\n\n${p.purpose.patterns_addressed}`,
-    NEAREST_SKILL: `Nearest existing skill: ${p.nearest_skill}.`,
-    PATCH_REJECTION_REASON: p.patch_rejection_reason,
-    MERGE_RETIRE_CANDIDATES: p.merge_retire_candidates.length > 0 ? bullets(p.merge_retire_candidates) : "- None identified.",
-    EVOLUTION_HISTORY: `- ${opts.date}: created as a draft by the automated proposer from the pattern page named above, pending human review.`,
-  };
   return template.replace(/\{\{([A-Z_]+)\}\}/g, (_m, slot: keyof typeof values) => values[slot]);
+}
+
+/** The exact PURPOSE.md lines that are server text (template prose plus the rendered server sentences), exempt from the rendered instruction-risk scan. */
+export function purposeFixedLines(template: string, p: CreateProposal, opts: PurposeOpts): string[] {
+  const v = purposeValues(p, opts);
+  const templateProse = template.split("\n").filter((l) => l.trim() !== "" && !l.startsWith("#") && !/\{\{[A-Z_]+\}\}/.test(l));
+  return [...templateProse, v.ORIGIN, v.PATTERNS_ADDRESSED, v.NEAREST_SKILL, v.EVOLUTION_HISTORY, NO_MERGE_RETIRE_LINE];
 }
 
 // -- Cursor stub: a pure duplicate of plugins/soleur/scripts/sync-cursor-name-map.ts, pinned byte-for-byte by the
@@ -993,17 +1004,27 @@ export function checkRenderedCreate(files: RenderedFiles, p: CreateProposal, gro
 export type RenderCreateResult = { kind: "rendered"; files: RenderedFiles } | CreateRefusal;
 
 /** Render all three files from a validated proposal and run the rendered-output gate. Template errors refuse (class shape). */
-export function renderCreateFiles(args: { proposal: CreateProposal; grokBlock: string; purposeTemplate: string; date: string }): RenderCreateResult {
+export function renderCreateFiles(args: {
+  proposal: CreateProposal;
+  grokBlock: string;
+  purposeTemplate: string;
+  date: string;
+  /** Evidence entries of the chosen pattern page (`page.evidence.length`). */
+  evidenceCount: number;
+}): RenderCreateResult {
   let files: RenderedFiles;
+  let fixed: string[];
   try {
+    const opts = { date: args.date, evidenceCount: args.evidenceCount };
+    fixed = purposeFixedLines(args.purposeTemplate, args.proposal, opts);
     files = {
       skillMd: renderSkillMd(args.proposal, args.grokBlock),
-      purposeMd: renderPurposeMd(args.purposeTemplate, args.proposal, { date: args.date }),
+      purposeMd: renderPurposeMd(args.purposeTemplate, args.proposal, opts),
       stub: renderCursorSkillStub({ folder: args.proposal.slug, description: args.proposal.description, disableModel: false }),
     };
   } catch {
     return refuse("shape", "render");
   }
-  const v = checkRenderedCreate(files, args.proposal, args.grokBlock);
+  const v = checkRenderedCreate(files, args.proposal, args.grokBlock, fixed);
   return v.kind === "ok" ? { kind: "rendered", files } : v;
 }
