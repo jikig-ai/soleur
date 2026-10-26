@@ -2040,11 +2040,12 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=290   # recomputed from a green run (291 on main, minus 1 at #10112: the retired inngest-luks-cutover suite's triple leaves with the file): the number of distinct (test file, verb, producer file) triples (289 -> 291 with the access suite's docker stub for the container probe, #8211 PR-E: two producer files; 286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub)
+PJ_TRIPLES=291   # recomputed from a green run (291 on main, minus 1 at #10112: the retired inngest-luks-cutover suite's triple leaves with the file): the number of distinct (test file, verb, producer file) triples (289 -> 291 with the access suite's docker stub for the container probe, #8211 PR-E: two producer files; 286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub; +1 at #10696: the secret-scan suite's pass-through perl wrapper)
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
   '.claude/hooks/browser-snapshot-credential-guard.test.sh | jq | exempt | deliberate-fault never: def 156 `exit 127` first statement (jq absent shim; the row asserts the degraded deny) (reach T1; t1:rc1/0s red:rc0/1s; hits 1)'
+  '.claude/hooks/git-commit-secret-scan.test.sh | perl | exempt | pass-through wrapper (R46i) logs one line then execs the real perl, which reads the piped command text'
   '.claude/hooks/grep-rewrite.test.sh | grep | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/10s; hits 2)'
   '.claude/hooks/grep-rewrite.test.sh | jq | drains | 2 | *'
   '.claude/hooks/guardrails.test.sh | perl | exempt | deliberate-fault never: def 1034 `exit 127` first statement (perl absent stub, the fixture is "without perl the fallback still gates") (reach T1; t1:rc0/61s; hits 6)'

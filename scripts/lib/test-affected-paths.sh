@@ -1680,6 +1680,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_MAIN_HEALTH_MONITOR_WORKFLOW_TEST_SH_PATHS=(
   "apps/web-platform/infra/run-registered-suites.sh"
   "knowledge-base/project/learnings/best-practices/"
   "plugins/soleur/test/main-health-monitor-workflow.test.sh"
+  "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-workflow-errexit-capture.py"
   "scripts/test-all.sh"
@@ -3039,8 +3040,15 @@ AFFECTED_CLAUDE_HOOKS_BRAND_HEX_COMMIT_GATE_TEST_SH_PATHS=(
   ".claude/hooks/lib/incidents.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# (#10696) the closure leaf libs, plus the hook, the two libs it sources, the shell lexer and the gitleaks config the suite drives.
 AFFECTED_CLAUDE_HOOKS_GIT_COMMIT_SECRET_SCAN_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_INCIDENTS_LIBS[@]}"
+  ".claude/hooks/git-commit-secret-scan.sh"
+  ".claude/hooks/git-commit-secret-scan.test.sh"
+  ".claude/hooks/lib/commit-index-sim.sh"
+  ".claude/hooks/lib/commit-target-roots.sh"
+  ".gitleaks.toml"
+  "plugins/soleur/hooks/lib/shell-argv.pl"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_CLAUDE_HOOKS_GUARDRAILS_TEST_SH_PATHS=(
