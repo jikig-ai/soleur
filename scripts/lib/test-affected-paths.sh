@@ -1100,6 +1100,7 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ABSENCE_CLASSIFIER_PATHS=(
 AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
   "scripts/lib/betterstack-sources.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-followthrough-varq-ban.sh"
   "tests/scripts/test-betterstack-roundtrip-latency.sh"
 )
 
@@ -2991,6 +2992,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_ROADMAP_RECONCILE_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_RTK_GRAMMAR_PARITY_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  ".claude/hooks/pkill-self-match-guard.sh"
+  "scripts/lib/rule-metrics-constants.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_SKILL_ONCE_TEST_SH_PATHS=(
@@ -3011,6 +3014,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_UX_DESIGN_LEAD_OUTPUT_PATH_GUARD_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_VENDOR_BUNDLE_COVERAGE_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  "apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_VENDOR_PIN_INTEGRITY_TEST_SH_PATHS=(
@@ -3077,6 +3081,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_EVAL_HARNESS_TEST_GEN_MODELS_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_AUDIT_FLAG_FLIP_TEST_SH_PATHS=(
+  "plugins/soleur/skills/flag-create/scripts/create.sh"
   "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
   "plugins/soleur/skills/user-set-role/scripts/set-role.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
@@ -3163,4 +3168,37 @@ AFFECTED_TESTS_SCRIPTS_WEB_HOST_BIRTH_GATE_PATHS=(
 AFFECTED_TESTS_SCRIPTS_ZOT_INVENTORY_ASSERT_MARKER_PATHS=(
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/zot-inventory.sh"
+)
+AFFECTED_PLUGINS_SOLEUR_SKILLS_COMMUNITY_TEST_GITHUB_COMMUNITY_TEST_SH_PATHS=(
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_SKILLS_SKILL_SECURITY_SCAN_TEST_META_DIR_REAP_TEST_SH_PATHS=(
+  ".claude/hooks/skill-security-scan-write.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_NET_ISSUE_FLOW_TEST_SH_PATHS=(
+  ".claude/hooks/ship-net-issue-flow-gate.sh"
+  "scripts/_agents_md_sections.py"
+  "scripts/lib/rule-metrics-constants.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/lint-rule-bodies.py"
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_HTTP_DEADLINES_REQUIRED_TEST_SH_PATHS=(
+  "apps/web-platform/infra/zot-config-deadlines.test.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_SCRIPTS_RULES_LOADER_STAMP_PROBE_PATHS=(
+  ".claude/hooks/session-rules-loader.sh"
+  ".mcp.json"
+  "plugins/soleur/.claude-plugin/plugin.json"
+  "plugins/soleur/.mcp.json"
+  "scripts/lib/frontmatter-strip/strip.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_TESTS_SCRIPTS_LINT_RULE_BODIES_PATHS=(
+  "scripts/_agents_md_sections.py"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+  "scripts/lint-rule-bodies.py"
 )
