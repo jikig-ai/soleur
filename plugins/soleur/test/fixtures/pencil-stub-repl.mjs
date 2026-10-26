@@ -25,12 +25,14 @@
 //   <out>.pid    the child's pid (the test kills it to simulate a crash)
 //   <out>.flags  JSON read at start and before each command:
 //     loadEmpty         ignore the --in document (the engine's silent empty load)
+//     loadFirst         <n>: load only the first n top-level nodes of --in (an engine that drops content)
 //     invalidAsEmpty    legacy 0.2.9: an unparseable --in loads empty with an [ERROR] line
 //     exitOnStart       exit 1 before the first prompt (a failed respawn)
 //     slowExitMs        take this long to exit after SIGTERM (a slow old child)
 //     startDelayMs      delay the first prompt by this long (a slow new child)
 //     bigExecute        pad execute replies past 64 KiB (a large design)
 //     failSave          save() prints the measured `Save failed: EACCES...` shape and writes nothing
+//     exitOnSave        the process dies when save() arrives (a crash mid-save)
 //     saveReply         text printed verbatim instead of `Saved <path>` ("" prints nothing)
 //     saveWrites        false: save() does not write the file
 //     countForgery      wrongNonce | duplicate | missing: tamper with the count-probe reply
@@ -142,6 +144,7 @@ if (inFile) {
     }
     if (doc) {
       nodes = Array.isArray(doc.children) ? doc.children : [];
+      if (typeof flags().loadFirst === "number") nodes = nodes.slice(0, flags().loadFirst);
       if (typeof doc.fileToken === "string") fileToken = doc.fileToken;
     }
   }
@@ -506,6 +509,7 @@ function runCountProbe(nonce) {
 
 function doSave() {
   const f = flags();
+  if (f.exitOnSave) process.exit(1);
   if (f.failSave) return saveFailure({ message: `EACCES: permission denied, open '${outFile}'`, errno: -13, code: "EACCES", syscall: "open", path: outFile });
   if (f.saveReply !== undefined) {
     if (f.saveWrites !== false) writeDoc(outFile, { version: "2.21", fileToken, children: nodes });

@@ -13,9 +13,16 @@
 // imports so a broken registration exits with a clear adapter-authored error instead of
 // ERR_MODULE_NOT_FOUND from the MCP SDK. All imports are dynamic (`await import`) for the
 // same reason — static imports resolve during module parsing, before any top-level
-// statement runs. Rule: cq-pencil-mcp-silent-drop-diagnosis-checklist.
+// statement runs. Rule: ex-cq-pencil-mcp-silent-drop-diagnosis-checklist.
+//
+// Binary trust (the child holds the credential): the pen CLI is resolved only under the
+// installing user's own prefix, and an override travels in this process's ARGV
+// (`--pencil-binary=<abs>`, set by the user-approved MCP registration), never in an
+// environment variable a project settings file could set. See findPenBinary / trustedOverride.
 
 // --- Node version gate (numeric: a string compare orders 22.9.0 after 22.19.0) ---
+// NODE_FLOOR is an inline copy of pencil-repl-surface.mjs's (this gate runs before any
+// import can); pencil-repl-surface.test.ts pins it, that module and check_deps.sh together.
 
 const NODE_FLOOR = [22, 19, 0];
 {
@@ -43,7 +50,14 @@ const NODE_FLOOR = [22, 19, 0];
 // way is called out (value-free).
 
 let keyFromArgv = false;
+// `--pencil-binary=<absolute path>`: the only way to point the adapter at another engine
+// binary (stub tests, the live probe). Validated at spawn time by trustedOverride().
+let PENCIL_BINARY_ARG = null;
 for (let i = 2; i < process.argv.length; i++) {
+  if (process.argv[i].startsWith("--pencil-binary=")) {
+    PENCIL_BINARY_ARG = process.argv[i].slice("--pencil-binary=".length) || null;
+    continue;
+  }
   if (process.argv[i] === "-e" && i + 1 < process.argv.length) {
     const eqIdx = process.argv[i + 1].indexOf("=");
     if (eqIdx > 0) {
@@ -62,6 +76,12 @@ for (let i = 2; i < process.argv.length; i++) {
     }
     i++; // skip the value arg
   }
+}
+if (PENCIL_BINARY_ARG === null && (process.env.PENCIL_BINARY ?? "") !== "") {
+  process.stderr.write(
+    "[pencil-adapter] WARN: the PENCIL_BINARY environment variable is ignored (a project settings file can set it). " +
+      "To run another engine binary, register the adapter with --pencil-binary=<absolute path> in its arguments.\n"
+  );
 }
 if (keyFromArgv) {
   process.stderr.write(
@@ -107,13 +127,14 @@ let McpServer, StdioServerTransport, z, nodeSpawn;
 let existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync;
 let openSync, closeSync, fstatSync, readSync, fsConstants;
 let basename, dirname, isAbsolute, join, resolve, sep;
-let homedir, tmpdir;
+let homedir, tmpdir, userInfo;
 let enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES, sanitizeFilename, classifyResponse, stripAnsi;
-let runGuardedSave, diskTopLevelCount, memoryTopLevelCount, DISK_UNRECOGNIZED, fingerprintState, savedReplyPath, hash8;
+let runGuardedSave, diskTopLevelCount, memoryTopLevelCount, fingerprintState, savedReplyPath, hash8;
+let loadFidelityFailure, notPersistedMessage, recreatedNote, isDefiniteSaveFailure, saveFailureLine;
 let formatReplCommand, planSpawn, REPL_PROMPT;
 let buildBatchDesignCommand, buildScreenshotCommand, buildExportCommand, buildVariablesCommand;
 let buildEditorStateCommand, buildReadSkillCommand, newCountNonce, buildCountCommand;
-let validateNodeIds, validateExportFormat, validateScale, validateQuality, validateOutputDir;
+let validateNodeIds, validateExportFormat, validateScale, validateQuality, validateOutputDir, EXPORT_FORMATS;
 let redactionForms, redactText, createRollingRedactor;
 
 try {
@@ -126,7 +147,7 @@ try {
     openSync, closeSync, fstatSync, readSync, constants: fsConstants,
   } = await import("node:fs"));
   ({ basename, dirname, isAbsolute, join, resolve, sep } = await import("node:path"));
-  ({ homedir, tmpdir } = await import("node:os"));
+  ({ homedir, tmpdir, userInfo } = await import("node:os"));
   ({ enrichErrorMessage, removedToolHint, REMOVED_TOOL_NAMES } = await import("./pencil-error-enrichment.mjs"));
   ({ sanitizeFilename } = await import("./sanitize-filename.mjs"));
   ({ classifyResponse, stripAnsi } = await import("./pencil-response-classify.mjs"));
@@ -134,10 +155,14 @@ try {
     runGuardedSave,
     diskTopLevelCount,
     memoryTopLevelCount,
-    DISK_UNRECOGNIZED,
     fingerprintState,
     savedReplyPath,
     hash8,
+    loadFidelityFailure,
+    notPersistedMessage,
+    recreatedNote,
+    isDefiniteSaveFailure,
+    saveFailureLine,
   } = await import("./pencil-save-gate.mjs"));
   ({
     formatReplCommand,
@@ -156,6 +181,7 @@ try {
     validateScale,
     validateQuality,
     validateOutputDir,
+    EXPORT_FORMATS,
     redactionForms,
     redactText,
     createRollingRedactor,
@@ -193,7 +219,18 @@ function rawText(raw) {
   return stripAnsi(String(raw ?? "")).trim();
 }
 
-const MAX_PEN_BYTES = 64 * 1024 * 1024;
+// Every wait and escalation in one place (milliseconds).
+const TIMEOUTS = {
+  spawnPromptMs: 30000, // banner + first prompt of a new engine
+  replyMs: 30000, // one command's reply
+  promptQuietMs: 50, // the prompt must end the buffer, and stderr must stay quiet, this long
+  stderrSettleMs: 500, // at most this long waiting for late stderr after the prompt
+  killTermMs: 2000, // SIGTERM -> SIGKILL
+  killGiveUpMs: 4000, // stop waiting for a child that will not die
+};
+
+const MAX_PEN_BYTES = 64 * 1024 * 1024; // larger files are refused (read whole for the baseline hash)
+const STDERR_BUFFER_CAP = 1 << 20;
 
 // The bytes of `file`, or null when it does not exist. Opened O_RDONLY|O_NOFOLLOW (a
 // symlink swapped in after open_document is an error, not a read through the link) and
@@ -253,9 +290,10 @@ function canonicalFile(p) {
   return join(nearestRealpath(dirname(p)), basename(p));
 }
 
-// The engine writes through symlinks (measured on 0.2.9) and the sentinel reads through
-// them too, so a link from a project's design.pen to an unrelated file would turn one edit
-// into an overwrite of that file. Only plain .pen files; the returned path is canonical.
+// The engine is ASSUMED to write through symlinks (not re-measured on @pen.dev/cli), and
+// the sentinel's reads would follow them too, so a link from a project's design.pen to an
+// unrelated file could turn one edit into an overwrite of that file. Only plain .pen
+// files; the returned path is canonical.
 function penPath(value, label) {
   const abs = resolve(value);
   if (!abs.toLowerCase().endsWith(".pen")) {
@@ -393,81 +431,168 @@ function saveScreenshot(base64Data, mimeType, nodeId) {
 // --- Binary resolution ---
 //
 // The credential goes to exactly one program, so the program is identified before it is
-// spawned. Resolved only inside ~/.local/share/pen-cli (the lockfile-pinned prefix
+// spawned. Resolved only inside <home>/.local/share/pen-cli (the lockfile-pinned prefix
 // check_deps.sh installs): the package's name must be @pen.dev/cli, its declared bin.pen
-// target must sit inside the package directory, and the realpath of .bin/pen must EQUAL
-// that target. No PATH walk, never the `pencil` name. The caller spawns the returned
-// REALPATH with `node`, so a link swapped before a respawn is not followed. A version
-// other than the pin only warns.
+// target must be a regular file inside the package directory, and the realpath of
+// .bin/pen must EQUAL that target. No PATH walk, never the `pencil` name. The caller spawns
+// the returned REALPATH with `node`, so a link swapped before a respawn is not followed. A
+// version other than the pin only warns.
+//
+// Where the prefix lives is a trust decision too (a settings env block can redirect $HOME):
+// candidates are the passwd home first, then $HOME when it differs (a container whose HOME
+// is not the passwd home keeps working). A candidate is used only when its package
+// directory is outside the working directory and CLAUDE_PROJECT_DIR (a project cannot
+// supply the binary), owned by this user and not group- or world-writable.
 const PEN_CLI_PIN = "0.3.13";
+const CHECK_DEPS_CMD = "bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto";
 
-function findPenBinary() {
-  const prefix = join(homedir(), ".local", "share", "pen-cli");
-  const fail = (why) =>
-    new Error(
-      `pen CLI not found or not trusted (${why}); run \`bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh\` or /soleur:pencil-setup to install @pen.dev/cli@${PEN_CLI_PIN}`
-    );
-  let pkgDir;
-  try {
-    pkgDir = realpathSync(join(prefix, "node_modules", "@pen.dev", "cli"));
-  } catch {
-    throw fail("@pen.dev/cli is not installed under ~/.local/share/pen-cli");
+// realpath of the working directory and of CLAUDE_PROJECT_DIR, minus any that contain
+// `realHome` (a root at or above the home directory would exclude every default install,
+// and is the user's own tree, not a project that could plant a binary).
+function projectRoots(realHome) {
+  const roots = [];
+  for (const p of [process.cwd(), process.env.CLAUDE_PROJECT_DIR]) {
+    if (!p) continue;
+    let real;
+    try {
+      real = realpathSync(p);
+    } catch {
+      continue;
+    }
+    if (real === sep || (realHome && isInside(real, realHome)) || roots.includes(real)) continue;
+    roots.push(real);
   }
-  let pkg;
-  try {
-    pkg = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
-  } catch {
-    throw fail("its package.json is unreadable");
-  }
-  if (pkg?.name !== "@pen.dev/cli") throw fail("the package name is not @pen.dev/cli");
-  const declaredRel = pkg?.bin && typeof pkg.bin === "object" ? pkg.bin.pen : undefined;
-  if (typeof declaredRel !== "string" || declaredRel === "") throw fail("the package declares no pen bin");
-  let declared;
-  try {
-    declared = realpathSync(resolve(pkgDir, declaredRel));
-  } catch {
-    throw fail("the declared pen bin is missing");
-  }
-  if (!isInside(pkgDir, declared)) throw fail("the declared pen bin resolves outside the package directory");
-  let linked;
-  try {
-    linked = realpathSync(join(prefix, "node_modules", ".bin", "pen"));
-  } catch {
-    throw fail(".bin/pen is missing");
-  }
-  if (linked !== declared) throw fail(".bin/pen does not point at the package's declared pen bin");
-  if (pkg.version !== PEN_CLI_PIN) {
-    process.stderr.write(
-      `[pencil-adapter] WARN: @pen.dev/cli version ${oneLine(pkg.version)} differs from the pin ${PEN_CLI_PIN}; run check_deps.sh to re-install the pinned version\n`
-    );
-  }
-  return declared;
+  return roots;
 }
 
-// PENCIL_BINARY keeps its name. Only the registrant can set it (stub tests use it), but it
-// is still run with the credential, so it must be an absolute path to a regular file owned
-// by this user that nobody else can write. Each use writes a value-free stderr line.
+function findPenBinary() {
+  const candidates = [];
+  try {
+    const home = userInfo().homedir;
+    if (home) candidates.push({ label: "passwd", home });
+  } catch {
+    // no passwd entry: $HOME is the only candidate
+  }
+  const envHome = process.env.HOME;
+  if (envHome && !candidates.some((c) => c.home === envHome)) candidates.push({ label: "HOME", home: envHome });
+
+  // One candidate: the verdict is { declared, pkg } or { why, installed } (installed: the
+  // package directory exists but is not trusted or not a valid install).
+  const inspect = (home) => {
+    const prefix = join(home, ".local", "share", "pen-cli");
+    let pkgDir;
+    try {
+      pkgDir = realpathSync(join(prefix, "node_modules", "@pen.dev", "cli"));
+    } catch {
+      return { installed: false, why: "@pen.dev/cli is not installed under ~/.local/share/pen-cli" };
+    }
+    let realHome = null;
+    try {
+      realHome = realpathSync(home);
+    } catch {
+      // keep null: nothing extra to exempt
+    }
+    if (projectRoots(realHome).some((root) => isInside(root, pkgDir))) {
+      return { installed: true, why: "the package directory is inside the working directory or the project directory" };
+    }
+    let st;
+    try {
+      st = statSync(pkgDir);
+    } catch {
+      return { installed: true, why: "the package directory cannot be inspected" };
+    }
+    if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
+      return { installed: true, why: "the package directory is not owned by the current user" };
+    }
+    if ((st.mode & 0o022) !== 0) return { installed: true, why: "the package directory is group- or world-writable" };
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+    } catch {
+      return { installed: true, why: "its package.json is unreadable" };
+    }
+    if (pkg?.name !== "@pen.dev/cli") return { installed: true, why: "the package name is not @pen.dev/cli" };
+    const declaredRel = pkg?.bin && typeof pkg.bin === "object" ? pkg.bin.pen : undefined;
+    if (typeof declaredRel !== "string" || declaredRel === "") return { installed: true, why: "the package declares no pen bin" };
+    let declared;
+    try {
+      declared = realpathSync(resolve(pkgDir, declaredRel));
+    } catch {
+      return { installed: true, why: "the declared pen bin is missing" };
+    }
+    if (!isInside(pkgDir, declared)) return { installed: true, why: "the declared pen bin resolves outside the package directory" };
+    try {
+      if (!statSync(declared).isFile()) return { installed: true, why: "the declared pen bin is not a regular file" };
+    } catch {
+      return { installed: true, why: "the declared pen bin cannot be inspected" };
+    }
+    let linked;
+    try {
+      linked = realpathSync(join(prefix, "node_modules", ".bin", "pen"));
+    } catch {
+      return { installed: true, why: ".bin/pen is missing" };
+    }
+    if (linked !== declared) return { installed: true, why: ".bin/pen does not point at the package's declared pen bin" };
+    return { declared, pkg };
+  };
+
+  const whys = [];
+  for (const candidate of candidates) {
+    const verdict = inspect(candidate.home);
+    if (!verdict.declared) {
+      whys.push(verdict);
+      continue;
+    }
+    if (candidate.label === "HOME") {
+      process.stderr.write("[pencil-adapter] using the pen CLI under $HOME (it differs from the passwd home directory)\n");
+    }
+    if (verdict.pkg.version !== PEN_CLI_PIN) {
+      process.stderr.write(
+        `[pencil-adapter] WARN: @pen.dev/cli version ${oneLine(verdict.pkg.version)} differs from the pin ${PEN_CLI_PIN}; run \`${CHECK_DEPS_CMD}\` to re-install the pinned version\n`
+      );
+    }
+    return verdict.declared;
+  }
+  const why = (whys.find((v) => v.installed) ?? whys[0])?.why ?? "no home directory could be determined";
+  throw new Error(
+    `pen CLI not found or not trusted (${why}); run \`${CHECK_DEPS_CMD}\` or /soleur:pencil-setup to install @pen.dev/cli@${PEN_CLI_PIN}`
+  );
+}
+
+// `--pencil-binary=<abs>` (argv, set by the user-approved registration): still run with the
+// credential, so it must be an absolute path to a regular file owned by this user that
+// nobody else can write and that is not inside the working directory or the project
+// directory. Each use writes a value-free stderr line.
 function trustedOverride(path) {
-  if (!isAbsolute(path)) throw new Error("PENCIL_BINARY must be an absolute path");
+  if (!isAbsolute(path)) throw new Error("--pencil-binary must be an absolute path");
   let st;
   try {
     st = lstatSync(path);
   } catch (err) {
-    throw new Error(`PENCIL_BINARY cannot be used: ${err?.code ?? "unreadable"}`);
+    throw new Error(`--pencil-binary cannot be used: ${err?.code ?? "unreadable"}`);
   }
-  if (st.isSymbolicLink()) throw new Error("PENCIL_BINARY must not be a symlink");
-  if (!st.isFile()) throw new Error("PENCIL_BINARY must be a regular file");
+  if (st.isSymbolicLink()) throw new Error("--pencil-binary must not be a symlink");
+  if (!st.isFile()) throw new Error("--pencil-binary must be a regular file");
   if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
-    throw new Error("PENCIL_BINARY must be owned by the current user");
+    throw new Error("--pencil-binary must be owned by the current user");
   }
-  if ((st.mode & 0o022) !== 0) throw new Error("PENCIL_BINARY must not be group- or world-writable");
-  process.stderr.write("[pencil-adapter] PENCIL_BINARY override in use (the default pen binary was not resolved)\n");
-  return realpathSync(path);
+  if ((st.mode & 0o022) !== 0) throw new Error("--pencil-binary must not be group- or world-writable");
+  const real = realpathSync(path);
+  let realHome = null;
+  try {
+    realHome = realpathSync(userInfo().homedir);
+  } catch {
+    // keep null
+  }
+  if (projectRoots(realHome).some((root) => isInside(root, real))) {
+    throw new Error("--pencil-binary must not be inside the working directory or the project directory");
+  }
+  process.stderr.write("[pencil-adapter] --pencil-binary override in use (the default pen binary was not resolved)\n");
+  return real;
 }
 
 function resolveBinary() {
-  const override = process.env.PENCIL_BINARY;
-  return override ? trustedOverride(override) : findPenBinary();
+  return PENCIL_BINARY_ARG ? trustedOverride(PENCIL_BINARY_ARG) : findPenBinary();
 }
 
 // --- Child process environment ---
@@ -508,15 +633,19 @@ function childCwd() {
 class SaveBaseline {
   #state = { tag: "none" };
 
-  // Read the file into a state. Never throws: a failed read is an `unknown` state with the
-  // errno, and says so on stderr.
+  // Read the file into { state, bytes }: bytes is a Buffer, null (the file does not
+  // exist) or undefined (unreadable). Never throws: a failed read is an `unknown` state
+  // with the errno, and says so on stderr.
   capture(file) {
     try {
-      return fingerprintState(readBytesOrNull(file));
+      const bytes = readBytesOrNull(file);
+      return { state: fingerprintState(bytes), bytes };
     } catch (err) {
       const detail = String(err?.code ?? err?.message ?? err);
-      process.stderr.write(`[pencil-adapter] baseline capture failed (${oneLine(detail)}); baseline=unknown\n`);
-      return { tag: "unknown", cause: "capture-failed", detail };
+      process.stderr.write(
+        `[pencil-adapter] baseline capture failed for ${oneLine(redactKey(file))} (${oneLine(redactKey(detail))}); baseline=unknown\n`
+      );
+      return { state: { tag: "unknown", cause: "capture-failed", detail }, bytes: undefined };
     }
   }
 
@@ -539,11 +668,18 @@ class SaveBaseline {
 
 const baseline = new SaveBaseline();
 
-// Set by a stale/missing refusal and cleared ONLY by a successful open_document: until then
-// every save is refused, and a crash respawn does not recapture the baseline (a respawn
-// must not turn a refusal into a silent re-baseline). `null` until first set.
-let refusalPending = null;
+// Set by a stale refusal (or a respawn that found the file changed or gone) and cleared
+// ONLY by a successful open_document: until then every save is refused, and a crash
+// respawn does not recapture the baseline (a respawn must not turn a refusal into a silent
+// re-baseline).
+let refusalPending = false;
+// Why the engine was respawned while a refusal was armed: false, "restart" (it was already
+// armed), or the cause that armed it at the respawn ("external-change" | "file-missing").
 let restartedWhileArmed = false;
+// True from the moment an edit's outcome is a refusal or a NOT PERSISTED result until a
+// confirmed save or a successful open_document: exports and screenshots made meanwhile are
+// rendered from memory, not from the file.
+let unpersistedEdits = false;
 
 function armRefusal(file) {
   if (refusalPending === true) return;
@@ -556,6 +692,7 @@ function clearRefusal(file) {
   const was = refusalPending === true;
   refusalPending = false;
   restartedWhileArmed = false;
+  unpersistedEdits = false;
   if (was) process.stderr.write(`[pencil-adapter] refusalPending=false ${oneLine(redactKey(file))} (open_document ok)\n`);
 }
 
@@ -566,16 +703,13 @@ const FS_PROBE = {
   size: (p) => {
     try {
       return statSync(p).size;
-    } catch {
+    } catch (err) {
+      // 0 sends planSpawn to its no-input branch; the errno is the only trace of why
+      process.stderr.write(`[pencil-adapter] could not stat ${oneLine(redactKey(p))} (${err?.code ?? "error"}); treating it as empty for --in\n`);
       return 0;
     }
   },
 };
-
-// The prompt must be at the END of the buffer and stay there this long before a reply
-// counts as complete; stderr must have been quiet this long as well. Bytes that arrive
-// after that, with no command in flight, are a desync.
-const PROMPT_QUIET_MS = 50;
 
 // Set when open_document could not load the file it was given. Every tool errors until the
 // next successful open_document, so nothing runs (or saves) against a document that is not
@@ -601,6 +735,8 @@ class PencilProcess {
     this.outputFile = null;
     // The file the last successful spawn passed as --in (null = started empty).
     this.lastInFile = null;
+    // diskTopLevelCount of the bytes of --in as read BEFORE the last spawn (null: no --in)
+    this.lastLoadDiskCount = null;
     this.scratchFile = null;
     this._waiter = null;
     this._onExit = null;
@@ -610,6 +746,7 @@ class PencilProcess {
   clearTarget() {
     this.outputFile = null;
     this.lastInFile = null;
+    this.lastLoadDiskCount = null;
     baseline.clear();
   }
 
@@ -625,13 +762,13 @@ class PencilProcess {
       let recapture = true;
       if (refusalPending === true) {
         recapture = false;
-        restartedWhileArmed = true;
+        restartedWhileArmed = "restart";
         process.stderr.write("[pencil-adapter] respawn: refusalPending still armed, baseline not recaptured\n");
       } else if (baseline.get().tag === "unknown") {
         recapture = false;
         process.stderr.write("[pencil-adapter] respawn: baseline unknown, not recaptured (open_document to re-baseline)\n");
       }
-      await this.spawn(this.outputFile, null, this.lastInFile, { recapture });
+      await this.spawn(this.outputFile, null, this.lastInFile, { recapture, respawn: true });
       return;
     }
     // No document opened yet: a private scratch document, so tools that need none
@@ -642,8 +779,11 @@ class PencilProcess {
     await this.spawn(this.scratchFile);
   }
 
-  // `explicitInFile` is the caller's template (open_document `inputPath`).
-  async spawn(outFile, explicitInFile = null, resumeInFile = null, { recapture = true } = {}) {
+  // `explicitInFile` is the caller's template (open_document `inputPath`). `respawn` marks
+  // the crash/timeout reload of the bound document: it compares what is on disk now with
+  // the session's baseline (ruling: arm the refusal when the file changed or vanished) and
+  // checks load fidelity here, because no open_document runs after it.
+  async spawn(outFile, explicitInFile = null, resumeInFile = null, { recapture = true, respawn = false } = {}) {
     const binary = resolveBinary();
     const { inFile } = planSpawn({
       outFile,
@@ -659,7 +799,33 @@ class PencilProcess {
     // What this session starts from, read from --out BEFORE the engine exists. A change
     // between here and the first save (including while the engine loads) is a change the
     // session did not see, so the first save refuses. Committed only once the prompt arrives.
-    const captured = recapture ? baseline.capture(outFile) : null;
+    const captured = baseline.capture(outFile);
+    // The bytes of the document the engine is about to load, read before it starts: the
+    // top-level count the load must reproduce (the file itself when it is --in).
+    let loadedDiskCount = null;
+    if (inFile) {
+      let inBytes = captured.bytes;
+      let unreadable = captured.state.tag === "unknown" ? captured.state.detail : null;
+      if (inFile !== outFile) {
+        try {
+          inBytes = readBytesOrNull(inFile);
+        } catch (err) {
+          inBytes = undefined;
+          unreadable = String(err?.code ?? err?.message ?? err);
+        }
+      }
+      if (inBytes === undefined) {
+        throw new Error(`${inFile} could not be read before loading it (${oneLine(unreadable ?? "unreadable")}); it was not modified`);
+      }
+      loadedDiskCount = diskTopLevelCount(inBytes);
+    }
+    // A respawn onto a changed or vanished file is decided now, applied at the prompt.
+    let armCause = null;
+    const previous = baseline.get();
+    if (respawn && recapture && previous.tag === "hash") {
+      if (captured.state.tag === "missing") armCause = "file-missing";
+      else if (captured.state.tag === "hash" && captured.state.hash !== previous.hash) armCause = "external-change";
+    }
 
     this.buffer = "";
     this.stderrBuffer = "";
@@ -687,7 +853,12 @@ class PencilProcess {
       if (safe) process.stderr.write(safe);
       if (this.child === child) {
         this.stderrBuffer += text;
-        if (this.stderrBuffer.length > 1 << 20) this.stderrBuffer = this.stderrBuffer.slice(-(1 << 19));
+        if (this.stderrBuffer.length > STDERR_BUFFER_CAP) {
+          // trim at a line start, never mid-line (a half line could hide half a credential spelling)
+          const tail = this.stderrBuffer.slice(-(STDERR_BUFFER_CAP >> 1));
+          const nl = tail.indexOf("\n");
+          this.stderrBuffer = nl === -1 ? tail : tail.slice(nl + 1);
+        }
         this.lastStderrAt = Date.now();
       }
     });
@@ -696,6 +867,7 @@ class PencilProcess {
     child.stdin.on("error", () => {});
 
     const gone = (code, signal, err) => {
+      // the rolling redactor is flushed here, when the stream has ended, and nowhere else
       const rest = redactor.flush();
       if (rest) process.stderr.write(rest);
       process.stderr.write(
@@ -712,15 +884,37 @@ class PencilProcess {
     child.on("error", (err) => gone(null, null, err));
 
     try {
-      await this.waitForPrompt(30000); // banner + initial prompt
+      await this.waitForPrompt(TIMEOUTS.spawnPromptMs); // banner + initial prompt
     } catch (err) {
       if (this.child === child) await this.kill(); // never leave a half-started child behind
       throw err;
     }
-    if (captured) baseline.commit(captured);
+    if (armCause) {
+      // the baseline stays the OLD one: the engine loaded content (or nothing) this session never saw
+      armRefusal(outFile);
+      restartedWhileArmed = armCause;
+      process.stderr.write(
+        `[pencil-adapter] respawn: file ${armCause === "file-missing" ? "is gone" : "changed on disk"} behind a restarted session (cause=${armCause}) baseline=${hash8(previous.hash)} disk=${hash8(captured.state.hash)}; refusalPending armed\n`
+      );
+    } else if (recapture) {
+      baseline.commit(captured.state);
+    }
     this.outputFile = outFile;
     this.lastInFile = inFile;
+    this.lastLoadDiskCount = loadedDiskCount;
     this.ready = true;
+    if (respawn) {
+      // no open_document runs after a respawn, so the load is verified here
+      const nonce = newCountNonce();
+      const memoryCount = memoryTopLevelCount(rawText(await this.sendCommand(buildCountCommand(nonce))), nonce);
+      const failure = loadFidelityFailure({ file: inFile ?? outFile, diskCount: loadedDiskCount, memoryCount });
+      if (failure) {
+        openFailure = oneLine(redactKey(failure));
+        process.stderr.write(`[pencil-adapter] respawn load check failed: ${openFailure}\n`);
+        await this.kill();
+        throw new Error(`open failed: ${openFailure}\n${OPEN_FAILED_NEXT}`);
+      }
+    }
   }
 
   async kill() {
@@ -729,8 +923,8 @@ class PencilProcess {
     this.ready = false;
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     await new Promise((resolveKill) => {
-      const escalate = setTimeout(() => child.kill("SIGKILL"), 2000);
-      const giveUp = setTimeout(done, 4000);
+      const escalate = setTimeout(() => child.kill("SIGKILL"), TIMEOUTS.killTermMs);
+      const giveUp = setTimeout(done, TIMEOUTS.killGiveUpMs);
       function done() {
         clearTimeout(escalate);
         clearTimeout(giveUp);
@@ -774,11 +968,11 @@ class PencilProcess {
     this.child.stdin.write(cmd + "\n");
     let raw;
     try {
-      raw = await this.waitForPrompt(30000);
+      raw = await this.waitForPrompt(TIMEOUTS.replyMs);
       // Errors travel on STDERR and may land a moment after the prompt: wait for it to go quiet.
       const t0 = Date.now();
-      while (this.lastStderrAt && Date.now() - this.lastStderrAt < PROMPT_QUIET_MS && Date.now() - t0 < 500) {
-        await sleep(PROMPT_QUIET_MS - (Date.now() - this.lastStderrAt) + 1);
+      while (this.lastStderrAt && Date.now() - this.lastStderrAt < TIMEOUTS.promptQuietMs && Date.now() - t0 < TIMEOUTS.stderrSettleMs) {
+        await sleep(TIMEOUTS.promptQuietMs - (Date.now() - this.lastStderrAt) + 1);
       }
     } catch (err) {
       // A timed-out reply would otherwise be attributed to the NEXT command.
@@ -790,8 +984,9 @@ class PencilProcess {
       }
       throw err;
     }
-    const rest = this._redactor?.flush();
-    if (rest) process.stderr.write(rest);
+    // (the rolling redactor is NOT flushed here: a credential spelling split across the
+    // end of one reply and the start of the next must still be caught; it is flushed when
+    // the child's streams close)
     // Every reply leaves here, so one redaction covers every sink that follows.
     const errText = stripAnsi(redactKey(this.stderrBuffer)).trim();
     const out = redactKey(raw);
@@ -803,7 +998,7 @@ class PencilProcess {
     return out;
   }
 
-  waitForPrompt(timeoutMs = 30000) {
+  waitForPrompt(timeoutMs = TIMEOUTS.replyMs) {
     return new Promise((resolvePrompt, reject) => {
       const child = this.child;
       if (!child) {
@@ -843,7 +1038,7 @@ class PencilProcess {
       };
 
       // The reply is complete only when the prompt is the LAST thing in the buffer and
-      // nothing more arrives for PROMPT_QUIET_MS: a node name or a read_skill page that
+      // nothing more arrives for TIMEOUTS.promptQuietMs: a node name or a read_skill page that
       // contains the prompt text at a line start does not end the reply early.
       this._waiter = {
         feed: (text) => {
@@ -857,7 +1052,7 @@ class PencilProcess {
           quiet = setTimeout(() => {
             cleanup();
             resolvePrompt(stripped.slice(0, stripped.length - REPL_PROMPT.length).trim());
-          }, PROMPT_QUIET_MS);
+          }, TIMEOUTS.promptQuietMs);
         },
       };
     });
@@ -958,11 +1153,22 @@ async function guardedSave(send, source) {
     isRefusalPending: () => refusalPending === true,
     send: async () => send(formatReplCommand("save", {})),
     isConfirmed: (raw) => isSavedFor(raw, file),
+    isDefiniteFailure: (raw) => isDefiniteSaveFailure(raw),
     readAfterSave: async () => readBytesOrNull(file),
     adoptBaseline: (state) => baseline.adopt(state),
     wasRestarted: () => restartedWhileArmed,
   });
   if (saved.refused && saved.arm) armRefusal(file);
+  if (saved.refused || saved.failed || saved.unconfirmed) unpersistedEdits = true;
+  else if (saved.saved) unpersistedEdits = false;
+  if (saved.recreated) {
+    process.stderr.write(
+      oneLine(redactKey(`[pencil-adapter] [reason=recreated] ${file} baseline=${hash8(saved.baselineHash)}`)) + "\n"
+    );
+  }
+  if (saved.failed) {
+    process.stderr.write(`[pencil-adapter] save failed (definite): baseline kept; ${failureDetail(saved.raw)}\n`);
+  }
   if (saved.unconfirmed) {
     process.stderr.write(
       "[pencil-adapter] save unconfirmed: reply did not match the expected Saved line; baseline=unknown\n"
@@ -974,12 +1180,17 @@ async function guardedSave(send, source) {
   return saved;
 }
 
+// The engine's own reason for a failed save, one line, redacted, capped.
+function failureDetail(raw) {
+  return oneLine(redactKey(saveFailureLine(raw))).slice(0, 300);
+}
+
 // Every refusal state leaves ONE stderr line, from here, whichever save path hit it
 // (hashes only as 8-hex-char prefixes).
 function logRefusal(saved, via) {
   const file = pencilProcess.outputFile ?? "";
   const hashes =
-    saved.code === "stale" || saved.code === "missing" || saved.code === "refusal-pending"
+    saved.code === "stale" || saved.code === "refusal-pending"
       ? ` baseline=${hash8(saved.baselineHash)} disk=${hash8(saved.diskHash)}`
       : "";
   const cause = saved.code === "unknown-baseline" ? ` cause=${saved.cause ?? "unknown"}${saved.detail ? ` errno=${saved.detail}` : ""}` : "";
@@ -989,17 +1200,36 @@ function logRefusal(saved, via) {
 }
 
 // The refused operations are appended to a refusal so the replay does not depend on the
-// agent's context (64 KiB cap, redacted).
+// agent's context (64 KiB cap, redacted). Variables bound by an EARLIER batch_design call
+// are not part of the echo and are lost when the document is reopened.
 const MAX_ECHO_BYTES = 64 * 1024;
 function refusalText(saved, operations) {
   if (operations === undefined) return saved.message;
   let ops = redactKey(String(operations));
   if (Buffer.byteLength(ops) > MAX_ECHO_BYTES) ops = `${ops.slice(0, MAX_ECHO_BYTES)}\n[... truncated at 64 KiB]`;
-  return `${saved.message}\n\nRefused operations (replay them in order after open_document):\n\`\`\`\n${ops}\n\`\`\``;
+  return `${saved.message}\n\nRefused operations (replay them in order after open_document; re-bind any variable that an earlier batch_design call defined, those bindings are lost on reopen):\n\`\`\`\n${ops}\n\`\`\``;
 }
 
 function errorResult(text) {
   return { content: [{ type: "text", text }], isError: true };
+}
+
+// The NOT PERSISTED result for a save outcome that is neither a refusal nor a confirmation
+// (`failed` / `unconfirmed`), with the engine's own text in `detail` (redacted, capped).
+function notPersistedResult(saved) {
+  const file = pencilProcess.outputFile;
+  if (saved.failed) return notPersistedMessage({ code: "save-failed", file, detail: failureDetail(saved.raw) });
+  const after = classifyResponse(saved.raw);
+  const detail = after.isError ? oneLine(enrichErrorMessage(after.text)).slice(0, 300) : "";
+  return notPersistedMessage({ code: "unconfirmed", file, detail });
+}
+
+// A save that threw (timeout, dead engine) after the edit was applied.
+function saveIncompleteResult(err) {
+  unpersistedEdits = true;
+  const reason = oneLine(redactKey(err?.message ?? err)).slice(0, 300);
+  process.stderr.write(`[pencil-adapter] save did not complete: ${reason}\n`);
+  return errorResult(notPersistedMessage({ code: "save-incomplete", file: pencilProcess.outputFile, detail: reason }));
 }
 
 // --- MCP Server setup ---
@@ -1010,8 +1240,10 @@ const server = new McpServer({
 });
 
 // Every tool goes through here: an open-failed adapter refuses everything but
-// open_document, and any thrown error (a REPL contract violation, a dead process, a
-// timeout) becomes an isError result with the replacement hints.
+// open_document, and any thrown error (a REPL contract violation, a bad path, a dead
+// process, a timeout) becomes an isError result with the replacement hints AND one stderr
+// line `tool=<name> error: ...` (redacted, one line, at most 300 characters), so the
+// adapter's own log shows what the caller was told.
 function registerTool(name, schema, handler, { allowWhenOpenFailed = false, description } = {}) {
   const callback = async (params) => {
     if (openFailure && !allowWhenOpenFailed) {
@@ -1022,7 +1254,9 @@ function registerTool(name, schema, handler, { allowWhenOpenFailed = false, desc
     try {
       return await handler(params ?? {});
     } catch (err) {
-      return errorResult(enrichErrorMessage(redactKey(String(err?.message ?? err))));
+      const message = redactKey(String(err?.message ?? err));
+      process.stderr.write(`[pencil-adapter] tool=${name} error: ${oneLine(message).slice(0, 300)}\n`);
+      return errorResult(enrichErrorMessage(message));
     }
   };
   if (description) server.tool(name, description, schema, callback);
@@ -1033,8 +1267,9 @@ function registerTool(name, schema, handler, { allowWhenOpenFailed = false, desc
 //
 // `build(params)` returns the one REPL line (validated by the surface module). Replies are
 // capped (64 KiB) by the classifier and redacted by the process, never parsed. A reply is
-// an error when it arrived with an error on stderr or classifies as one.
-function registerReadOnlyTool(name, schema, build, options) {
+// an error when it classifies as one; with `errorFrom: "stderr"` only an error on the
+// engine's stderr counts (read_skill returns markdown that can contain error-looking lines).
+function registerReadOnlyTool(name, schema, build, { errorFrom, ...options } = {}) {
   registerTool(name, schema, async (params) => {
     const cmd = build(params);
     const { raw, stderrError } = await commandQueue.runExclusive(async (send) => {
@@ -1042,7 +1277,7 @@ function registerReadOnlyTool(name, schema, build, options) {
       return { raw: reply, stderrError: pencilProcess.lastStderrError };
     });
     const { text, isError: classified } = classifyResponse(raw);
-    const isError = name === "read_skill" ? stderrError : classified;
+    const isError = errorFrom === "stderr" ? stderrError : classified;
     return {
       content: [{ type: "text", text: isError ? enrichErrorMessage(text) : text }],
       isError,
@@ -1089,6 +1324,7 @@ registerReadOnlyTool(
   { path: z.string().optional() },
   ({ path }) => buildReadSkillCommand(path),
   {
+    errorFrom: "stderr",
     description:
       "Read the engine's own design guidance: read_skill() lists the pages; read_skill({ path }) reads one (execute.md is the operation grammar, pen-schema.md the file schema, guide/<name>.md the design guides). Read-only.",
   }
@@ -1132,7 +1368,7 @@ registerTool("get_screenshot", { nodeId: z.string() }, async ({ nodeId }) => {
   }
   const shots = parseScreenshots(rawText(raw));
   const content = [];
-  if (refusalPending === true) content.push({ type: "text", text: UNSAVED_WARNING });
+  if (unpersistedEdits) content.push({ type: "text", text: UNSAVED_WARNING });
   if (!shots || shots.length === 0) {
     content.push({ type: "text", text: capped });
     return { content };
@@ -1159,7 +1395,7 @@ registerTool(
   {
     nodeIds: z.array(z.string()),
     outputDir: z.string(),
-    format: z.enum(["png", "jpeg", "webp", "pdf"]).optional(),
+    format: z.enum(EXPORT_FORMATS).optional(),
     scale: z.number().optional(),
     quality: z.number().optional(),
   },
@@ -1170,7 +1406,9 @@ registerTool(
     validateQuality(quality);
     validateOutputDir(outputDir);
     const dir = containedDir(outputDir);
-    const overwritten = ids.map((id) => `${id}.${fmt}`).filter((name) => existsSync(join(dir, name)));
+    // png/jpeg/webp write `<nodeId>.<format>`; a pdf export combines the nodes into one export.pdf
+    const expected = fmt === "pdf" ? ["export.pdf"] : ids.map((id) => `${id}.${fmt}`);
+    const overwritten = expected.filter((name) => existsSync(join(dir, name)));
     const raw = await commandQueue.enqueue(
       buildExportCommand({ nodeIds: ids, outputDir: dir, format: fmt, scale, quality })
     );
@@ -1192,7 +1430,7 @@ registerTool(
         }
       });
     const lines = [];
-    if (refusalPending === true) lines.push(UNSAVED_WARNING);
+    if (unpersistedEdits) lines.push(UNSAVED_WARNING);
     lines.push(`Exported to: ${dir}`);
     if (overwritten.length > 0) {
       lines.push(`These files already existed there and were overwritten: ${overwritten.join(", ")}`);
@@ -1207,9 +1445,12 @@ for (const name of REMOVED_TOOL_NAMES) registerRemovedTool(name);
 // --- Mutating tool (auto-save after) ---
 
 // A successful edit's reply: the engine text (an `## issues detected:` block passes through),
-// then the document it hit, then any save warning.
+// then the document it hit, then any save warning. A save that recreated a file removed
+// behind the session is announced FIRST.
 function editResult(saved, text) {
-  const lines = [text, `Document: ${pencilProcess.outputFile}`];
+  const lines = [];
+  if (saved.recreated) lines.push(recreatedNote(pencilProcess.outputFile));
+  lines.push(text, `Document: ${pencilProcess.outputFile}`);
   if (saved.warning) lines.push(`WARNING: ${saved.warning}`);
   return { content: [{ type: "text", text: lines.join("\n") }] };
 }
@@ -1221,7 +1462,8 @@ registerTool(
     const cmd = buildBatchDesignCommand(operations);
     // ONE exclusive job: the edit and its save cannot be separated by a crash respawn, a
     // queued open_document or another command, so a success reply means the edit was
-    // applied AND persisted (or the reply says otherwise).
+    // applied AND persisted (or the reply says otherwise, in a result whose first line is
+    // `REFUSED save: [reason=...]` or `NOT PERSISTED: [reason=...]`).
     return commandQueue.runExclusive(async (send) => {
       const { text, isError } = classifyResponse(await send(cmd));
       if (isError) {
@@ -1234,11 +1476,7 @@ registerTool(
       try {
         saved = await guardedSave(send, "auto-save");
       } catch (err) {
-        const reason = oneLine(redactKey(err?.message ?? err));
-        process.stderr.write(`[pencil-adapter] save did not complete after batch_design: ${reason}\n`);
-        return errorResult(
-          `The edit was applied in memory but the save did not complete (${reason}); it is not persisted.`
-        );
+        return saveIncompleteResult(err);
       }
       if (saved.refused) {
         logRefusal(saved, "auto-save");
@@ -1246,13 +1484,8 @@ registerTool(
           `${refusalText(saved, operations)}\n\nEngine response to the edit:\n${text}`
         );
       }
-      if (saved.unconfirmed) {
-        const after = classifyResponse(saved.raw);
-        return errorResult(
-          after.isError
-            ? `Edit applied but the save failed: ${enrichErrorMessage(after.text)}\nThe save was not confirmed; call open_document on the file before saving again.`
-            : "Edit applied but the save was not confirmed (the engine's reply was not `Saved <file>`); call open_document on the file before saving again."
-        );
+      if (saved.failed || saved.unconfirmed) {
+        return errorResult(`${notPersistedResult(saved)}\n\nEngine response to the edit:\n${text}`);
       }
       return editResult(saved, text);
     });
@@ -1261,7 +1494,7 @@ registerTool(
     description:
       "Run a Pencil operation script (Insert, Update, Copy, Replace, Move, Delete, Generate, with short aliases I, U, C, R, M, D, G). " +
       'The field is `operations`. Full grammar: read_skill({ path: "execute.md" }). ' +
-      "The document is saved after every successful call (a read through Get/Print saves too); a refused save is reported as an error that lists the refused operations. " +
+      "The document is saved after every successful call (a read through Get/Print saves too); a save that did not persist is reported as an error whose first line is `REFUSED save: [reason=...]` (refused, with the refused operations echoed) or `NOT PERSISTED: [reason=...]`. " +
       "Layout problems arrive as an `## issues detected:` block in the reply. The reply ends with `Document: <path>`.",
   }
 );
@@ -1294,27 +1527,24 @@ registerTool(
           );
         }
         try {
-          // spawn() reads the file's baseline BEFORE the engine starts and commits it at the prompt
+          // spawn() reads the file's baseline (and the count the load must reproduce)
+          // BEFORE the engine starts and commits the baseline at the prompt
           await pencilProcess.restart(outFile, inFile);
           const loadedFrom = pencilProcess.lastInFile;
           const nonce = newCountNonce();
           const memoryCount = memoryTopLevelCount(rawText(await send(buildCountCommand(nonce))), nonce);
           let note = "";
           if (loadedFrom) {
-            const diskCount = diskTopLevelCount(readBytesOrNull(loadedFrom));
-            if (diskCount === DISK_UNRECOGNIZED) {
-              throw new Error(
-                `${loadedFrom} exists but is not a recognizable .pen document (the engine loads such a file as empty); it was not modified`
-              );
-            }
-            if (typeof diskCount === "number" && diskCount > 0 && !(memoryCount > 0)) {
-              throw new Error(
-                `${loadedFrom} holds ${diskCount} top-level node(s) on disk but loaded ${memoryCount === null ? "unreadable" : "empty"}; it was not modified`
-              );
-            }
+            const diskCount = pencilProcess.lastLoadDiskCount;
+            const failure = loadFidelityFailure({ file: loadedFrom, diskCount, memoryCount });
+            if (failure) throw new Error(failure);
             if (diskCount === 0) {
               note = ` (${loadedFrom} is an empty document; if you expected content, check version control)`;
             }
+          }
+          const captured = baseline.get();
+          if (captured.tag === "unknown") {
+            note += `\nWARNING: could not record a baseline for ${outFile} (${oneLine(redactKey(captured.detail ?? captured.cause))}); every save is refused until the file is a readable regular file and open_document succeeds on it.`;
           }
           openFailure = null;
           clearRefusal(outFile);
@@ -1349,22 +1579,25 @@ registerTool(
 registerTool("save", {}, async () => {
   // Explicit saves are subject to the same sentinel and stale check as the auto-save,
   // inside one exclusive job.
-  const saved = await commandQueue.runExclusive((send) => guardedSave(send, "save"));
+  const saved = await commandQueue.runExclusive(async (send) => {
+    try {
+      return await guardedSave(send, "save");
+    } catch (err) {
+      return { incomplete: err };
+    }
+  });
+  if (saved.incomplete) return saveIncompleteResult(saved.incomplete);
   if (saved.refused) {
     logRefusal(saved, "save");
     return errorResult(refusalText(saved));
   }
-  const { text, isError } = classifyResponse(saved.raw);
-  if (saved.unconfirmed) {
-    return errorResult(
-      isError
-        ? `${enrichErrorMessage(text)}\nThe save was not confirmed; call open_document on the file before saving again.`
-        : "The save was not confirmed (the engine's reply was not `Saved <file>`); call open_document on the file before saving again."
-    );
-  }
-  return {
-    content: [{ type: "text", text: saved.warning ? `${text}\nWARNING: ${saved.warning}` : text }],
-  };
+  if (saved.failed || saved.unconfirmed) return errorResult(notPersistedResult(saved));
+  const { text } = classifyResponse(saved.raw);
+  const lines = [];
+  if (saved.recreated) lines.push(recreatedNote(pencilProcess.outputFile));
+  lines.push(text);
+  if (saved.warning) lines.push(`WARNING: ${saved.warning}`);
+  return { content: [{ type: "text", text: lines.join("\n") }] };
 });
 
 // --- Start server ---

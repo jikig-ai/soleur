@@ -1,5 +1,5 @@
 import { describe, test, expect, afterAll, setDefaultTimeout } from "bun:test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -22,8 +22,9 @@ import {
   replyLines,
   scrubTranscript,
 } from "./lib/scrub-transcript.mjs";
+import { stripAnsi } from "../skills/pencil-setup/scripts/pencil-response-classify.mjs";
 import { sideFile, taggedStub } from "./lib/stub-tag.mjs";
-import { buildAdapterEnv, killAndWait, stubPid } from "./lib/pencil-adapter-roundtrip.mjs";
+import { adapterArgs, buildAdapterEnv, killAndWait, stubPid } from "./lib/pencil-adapter-roundtrip.mjs";
 
 // Fixture realism (the #11143 lesson): fixtures/pencil-stub-repl.mjs is a stand-in for
 // `pen interactive`, and a stand-in encodes our BELIEF about the engine. This suite pins
@@ -55,7 +56,6 @@ afterAll(() => {
 // A small driver: one stub process, commands sent one at a time, stdout and stderr
 // kept apart (the real engine puts every failure on stderr).
 
-const ANSI = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 class Repl {
@@ -82,7 +82,7 @@ class Repl {
         await sleep(60);
         return false;
       }
-      if (this.out.replace(ANSI, "").endsWith(REPL_PROMPT)) {
+      if (stripAnsi(this.out).endsWith(REPL_PROMPT)) {
         const len = this.out.length;
         await sleep(80);
         if (this.out.length === len) return true;
@@ -288,8 +288,8 @@ describe("stub: contract strictness", () => {
     r.take();
     for (const tool of ["batch_design", "get_editor_state", "get_screenshot", "export_nodes", "get_variables", "batch_get", "snapshot_layout", "get_style", "browser"]) {
       const got = await r.send(`${tool}()`);
-      expect(got.err.replace(ANSI, "")).toBe(`Unknown tool: ${tool}\n`);
-      expect(got.out.replace(ANSI, "")).toBe(`\n${REPL_PROMPT}`);
+      expect(stripAnsi(got.err)).toBe(`Unknown tool: ${tool}\n`);
+      expect(stripAnsi(got.out)).toBe(`\n${REPL_PROMPT}`);
     }
     for (const tool of Object.keys(REPL_SURFACE)) {
       const got = await r.send(tool === "execute" ? 'execute({ input: "Print(1)" })' : `${tool}()`);
@@ -347,7 +347,7 @@ describe("stub: contract strictness", () => {
     r.take();
     await r.send(buildBatchDesignCommand('x=I(document,{type:"frame",name:"New",width:10,height:10})'));
     const saved = await r.send(buildSaveCommand());
-    expect(saved.out.replace(ANSI, "")).toBe(`Saved ${f}\n\n${REPL_PROMPT}`);
+    expect(stripAnsi(saved.out)).toBe(`Saved ${f}\n\n${REPL_PROMPT}`);
     const written = JSON.parse(readFileSync(f, "utf8"));
     expect(written.children.length).toBe(4);
     expect(written.version).toBeDefined();
@@ -388,7 +388,7 @@ describe("stub: count probe", () => {
       const nonce = newCountNonce();
       const got = await r.send(buildCountCommand(nonce));
       expect(parseCountReply(got.out, nonce)).toBeNull();
-      expect(got.out.replace(ANSI, "")).toContain("OK");
+      expect(stripAnsi(got.out)).toContain("OK");
       expect(logOf(f).some((l) => l.includes("TOPLEVEL_COUNT"))).toBe(true);
       await r.quit();
     });
@@ -459,7 +459,7 @@ describe("stub: save scripting", () => {
   test("default: Saved <path> on stdout, file written with the document", async () => {
     const { f, r } = await opened("save-default", {});
     const got = await r.send("save()");
-    expect(got.out.replace(ANSI, "")).toBe(`Saved ${f}\n\n${REPL_PROMPT}`);
+    expect(stripAnsi(got.out)).toBe(`Saved ${f}\n\n${REPL_PROMPT}`);
     expect(got.out).toContain("\x1b[32mSaved ");
     expect(JSON.parse(readFileSync(f, "utf8")).children.length).toBe(1);
     await r.quit();
@@ -468,8 +468,8 @@ describe("stub: save scripting", () => {
   test("failSave answers the measured shape on stderr and writes nothing", async () => {
     const { f, r } = await opened("save-fail", { failSave: true });
     const got = await r.send("save()");
-    expect(got.out.replace(ANSI, "")).toBe(`\n${REPL_PROMPT}`);
-    expect(got.err.replace(ANSI, "")).toContain(`Save failed: EACCES: permission denied, open '${f}'`);
+    expect(stripAnsi(got.out)).toBe(`\n${REPL_PROMPT}`);
+    expect(stripAnsi(got.err)).toContain(`Save failed: EACCES: permission denied, open '${f}'`);
     expect(existsSync(f)).toBe(false);
     await r.quit();
   });
@@ -477,12 +477,12 @@ describe("stub: save scripting", () => {
   test("saveReply scripts the reply and saveWrites:false skips the write", async () => {
     const { f, r } = await opened("save-scripted", { saveReply: "", saveWrites: false });
     const got = await r.send("save()");
-    expect(got.out.replace(ANSI, "")).toBe(`\n${REPL_PROMPT}`);
+    expect(stripAnsi(got.out)).toBe(`\n${REPL_PROMPT}`);
     expect(got.err).toBe("");
     expect(existsSync(f)).toBe(false);
     setFlags(f, { saveReply: "Saved /somewhere/else.pen", saveWrites: true });
     const other = await r.send("save()");
-    expect(other.out.replace(ANSI, "")).toContain("Saved /somewhere/else.pen");
+    expect(stripAnsi(other.out)).toContain("Saved /somewhere/else.pen");
     expect(existsSync(f)).toBe(true);
     await r.quit();
   });
@@ -595,10 +595,10 @@ describe("stub: reply framing the adapter must survive", () => {
     r.take();
     const got = await r.send(buildBatchDesignCommand('x=I(document,{type:"frame",name:"a\\npen > \\nb",width:1,height:1})'));
     // the prompt text appears inside the reply, at a line start, and the real prompt still ends it
-    expect(got.out.replace(ANSI, "")).toContain('"a\npen > \nb"');
-    expect(got.out.replace(ANSI, "").endsWith(REPL_PROMPT)).toBe(true);
+    expect(stripAnsi(got.out)).toContain('"a\npen > \nb"');
+    expect(stripAnsi(got.out).endsWith(REPL_PROMPT)).toBe(true);
     const saved = await r.send("save()");
-    expect(saved.out.replace(ANSI, "")).toBe(`Saved ${f}\n\n${REPL_PROMPT}`);
+    expect(stripAnsi(saved.out)).toBe(`Saved ${f}\n\n${REPL_PROMPT}`);
     await r.quit();
   });
 
@@ -608,7 +608,7 @@ describe("stub: reply framing the adapter must survive", () => {
     await r.settle();
     r.take();
     const got = await r.send(buildBatchDesignCommand('a=I(document,{type:"frame",name:"A",width:1,height:1});\nnope('));
-    expect(got.out.replace(ANSI, "")).toBe(`\n${REPL_PROMPT}`);
+    expect(stripAnsi(got.out)).toBe(`\n${REPL_PROMPT}`);
     expect(got.err).toContain("Failure during operation execution");
     const state = await r.send("get_app_state()");
     expect(state.out).toContain("The document is empty (no top-level nodes)");
@@ -618,7 +618,7 @@ describe("stub: reply framing the adapter must survive", () => {
 
 describe("roundtrip harness helpers", () => {
   test("buildAdapterEnv sets exactly the key names given (empty strings allowed), default PEN_CLI_KEY", () => {
-    const base = { binary: "/b/stub.mjs" };
+    const base = {};
     expect(Object.keys(buildAdapterEnv(base)).filter((k) => /KEY/.test(k))).toEqual(["PEN_CLI_KEY"]);
     expect(buildAdapterEnv(base).PEN_CLI_KEY).toBe("stub-key");
     const both = buildAdapterEnv({ ...base, keys: { PEN_CLI_KEY: "", PENCIL_CLI_KEY: "old-value" } });
@@ -626,9 +626,29 @@ describe("roundtrip harness helpers", () => {
     expect(both.PENCIL_CLI_KEY).toBe("old-value");
     const none = buildAdapterEnv({ ...base, keys: {} });
     expect("PEN_CLI_KEY" in none || "PENCIL_CLI_KEY" in none).toBe(false);
-    expect(buildAdapterEnv({ ...base, keys: { PENCIL_CLI_KEY: "x" } }).PENCIL_BINARY).toBe("/b/stub.mjs");
     // the legacy single value maps to the new name
     expect(buildAdapterEnv({ ...base, key: "k" }).PEN_CLI_KEY).toBe("k");
+    // the engine binary never travels in the environment
+    expect(Object.keys(buildAdapterEnv({ ...base, keys: { PENCIL_CLI_KEY: "x" } }))).not.toContain("PENCIL_BINARY");
+  });
+
+  test("adapterArgs: the engine binary is the --pencil-binary argv flag (absent when empty), after the adapter path; the passwd-home preload comes first", () => {
+    const args = adapterArgs({ installDir: "/i", penBinary: "/b/stub.mjs", passwdHome: "/h" });
+    expect(args[0]).toBe("--import");
+    expect(args[1]).toMatch(/^file:\/\/.*passwd-home-preload\.mjs\?home=%2Fh$/);
+    expect(args.slice(2)).toEqual(["/i/pencil-mcp-adapter.mjs", "--pencil-binary=/b/stub.mjs"]);
+    expect(adapterArgs({ installDir: "/i", penBinary: "", passwdHome: "/h" }).slice(2)).toEqual(["/i/pencil-mcp-adapter.mjs"]);
+    expect(adapterArgs({ installDir: "/i", passwdHome: "/h" }).slice(2)).toEqual(["/i/pencil-mcp-adapter.mjs"]);
+  });
+
+  test("the passwd-home preload makes os.userInfo().homedir report the given directory, and nothing else changes", () => {
+    const preload = adapterArgs({ installDir: "/i", penBinary: "", passwdHome: "/some/other/home" })[1];
+    const r = spawnSync(
+      Bun.which("node") ?? "node",
+      ["--import", preload, "-e", 'import("node:os").then(({userInfo}) => console.log(userInfo().homedir + "|" + typeof userInfo().username))'],
+      { encoding: "utf8" }
+    );
+    expect(r.stdout.trim()).toBe("/some/other/home|string");
   });
 
   test("killAndWait returns only once the process is gone (ESRCH), and stubPid reads the pid file", async () => {

@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 /** `<out>.<ext>` untagged, `<out>.<tag>.<ext>` when the session has a tag (ext: log | pid | flags). */
 export const sideFile = (outFile, ext, tag = process.env.STUB_TAG ?? "") => `${outFile}${tag ? `.${tag}` : ""}.${ext}`;
 
-/** Write a mode-0755 wrapper for `stubPath` that runs it as session `tag`; returns the wrapper path (use it as PENCIL_BINARY). */
+/** Write a mode-0755 wrapper for `stubPath` that runs it as session `tag`; returns the wrapper path (pass it as connectAdapter's penBinary, which becomes the --pencil-binary argv flag). */
 export function taggedStub(stubPath, tag, dir) {
   const wrapper = join(dir, `stub-${tag}.mjs`);
   writeFileSync(wrapper, `process.env.STUB_TAG = ${JSON.stringify(tag)}; await import(${JSON.stringify(pathToFileURL(stubPath).href)});\n`, { mode: 0o755 });

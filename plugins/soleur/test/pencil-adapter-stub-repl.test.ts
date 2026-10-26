@@ -26,7 +26,7 @@ import {
   sideFile,
   taggedStub,
 } from "./lib/pencil-adapter-roundtrip.mjs";
-import { buildPenTree } from "./lib/pen-identity-tree.mjs";
+import { buildPenTree, LAYOUTS } from "./lib/pen-identity-tree.mjs";
 import { REPL_SURFACE } from "../skills/pencil-setup/scripts/pencil-repl-surface.mjs";
 import { LIVE_TOOL_NAMES, REMOVED_TOOL_NAMES } from "../skills/pencil-setup/scripts/pencil-error-enrichment.mjs";
 
@@ -44,7 +44,7 @@ const STUB = resolve(import.meta.dir, "fixtures/pencil-stub-repl.mjs");
 const IDENTITY_TSV = resolve(import.meta.dir, "fixtures/pen-identity-cases.tsv");
 const root = realpathSync(mkdtempSync(join(tmpdir(), "pencil-stub-it-")));
 let installDir = "";
-let BIN = ""; // an untagged, mode-0755 wrapper around the stub (the adapter trusts PENCIL_BINARY only for a safe regular file)
+let BIN = ""; // an untagged, mode-0755 wrapper around the stub (the adapter trusts --pencil-binary only for a safe regular file)
 const sessions: Array<{ close: () => Promise<void> }> = [];
 
 const pen = (n: number, tag = "seed") =>
@@ -66,8 +66,11 @@ const read = (f: string) => readFileSync(f, "utf8");
 const children = (f: string) => JSON.parse(read(f)).children.length;
 
 type Session = Awaited<ReturnType<typeof connectAdapter>>;
-async function session(opts: { binary?: string; keys?: Record<string, string>; cwd?: string; extraEnv?: Record<string, string>; nodeBin?: string } = {}): Promise<Session> {
-  const s = await connectAdapter({ installDir, binary: opts.binary ?? BIN, keys: opts.keys, cwd: opts.cwd, extraEnv: opts.extraEnv, nodeBin: opts.nodeBin });
+// `binary` is the engine binary the session is registered with (the --pencil-binary argv flag);
+// "" leaves the adapter on its default resolution. `passwdHome` is what os.userInfo().homedir
+// reports inside the adapter (default: the session's HOME).
+async function session(opts: { binary?: string; keys?: Record<string, string>; cwd?: string; extraEnv?: Record<string, string>; nodeBin?: string; passwdHome?: string } = {}): Promise<Session> {
+  const s = await connectAdapter({ installDir, penBinary: opts.binary ?? BIN, keys: opts.keys, cwd: opts.cwd, extraEnv: opts.extraEnv, nodeBin: opts.nodeBin, passwdHome: opts.passwdHome });
   sessions.push(s);
   return s;
 }
@@ -670,20 +673,40 @@ describe("stale-file save guard (#11168)", () => {
     expect((await s.call("save")).isError).toBe(false);
   });
 
-  test("a file removed behind the session is refused with its own reason, and not recreated", async () => {
+  test("a file removed behind a LIVE session is saved again (recreated): the engine's copy is the only one, and the result says so", async () => {
     const f = join(caseDir("removed-behind"), "a.pen");
     writeFileSync(f, pen(2));
     const s = await session();
     await s.call("open_document", { filePath: f });
     rmSync(f);
     const r = await s.call("batch_design", { operations: ADD });
-    expect(r.isError).toBe(true);
-    expect(r.text).toContain("REFUSED save:");
-    expect(r.text).toMatch(/no longer exists on disk/);
-    expect(r.text).not.toMatch(/changed on disk since/);
-    expect(existsSync(f)).toBe(false);
-    expect(saves(f)).toBe(0);
-    expect(s.stderr()).toMatch(/REFUSED save: \[reason=missing\] \S+ baseline=[0-9a-f]{8}/);
+    expect(r.isError).toBe(false);
+    expect(r.text.split("\n")[0]).toBe(
+      `NOTE: ${f} had been removed from disk (a branch switch, a move or a delete); this save recreated it from the session's copy - tell the user and check that the file belongs at that path`
+    );
+    expect(r.text).toContain(`Document: ${f}`);
+    expect(existsSync(f)).toBe(true);
+    expect(children(f)).toBe(3); // the engine's copy: 2 seeds plus the edit
+    expect(s.stderr()).toMatch(/\[pencil-adapter\] \[reason=recreated\] \S+ baseline=[0-9a-f]{8}/);
+    expect(s.stderr()).not.toMatch(/REFUSED save/);
+    // the recreated file is the new baseline: the next edit saves without a note
+    const again = await s.call("batch_design", { operations: ADD });
+    expect(again.isError).toBe(false);
+    expect(again.text).not.toMatch(/^NOTE:/);
+    expect(children(f)).toBe(4);
+  });
+
+  test("an explicit save over a file removed behind a live session is prefixed by the same note", async () => {
+    const f = join(caseDir("removed-behind-save"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    rmSync(f);
+    const r = await s.call("save");
+    expect(r.isError).toBe(false);
+    expect(r.text.split("\n")[0]).toMatch(/^NOTE: .* had been removed from disk/);
+    expect(r.text).toMatch(/\nSaved /);
+    expect(children(f)).toBe(2);
   });
 
   test("a symlink or a FIFO swapped in after open_document is refused with its own reason, never as `missing`", async () => {
@@ -733,6 +756,40 @@ describe("stale-file save guard (#11168)", () => {
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/changed on disk since/);
     expect(read(f)).toBe(swapped);
+  });
+
+  test("G1a: in a document larger than 4096 bytes, a change only in the LAST node is still stale (the hash covers the whole document)", async () => {
+    const f = join(caseDir("stale-large-tail"), "a.pen");
+    const big = (tail: string) =>
+      JSON.stringify({
+        version: "2.21",
+        children: Array.from({ length: 120 }, (_, i) => ({ id: `n${i}`, type: "frame", name: i === 119 ? tail : `node number ${i}`, width: 10, height: 10 })),
+      });
+    const a = big("tail-aaaa");
+    expect(a.length).toBeGreaterThan(4096 * 2);
+    writeFileSync(f, a);
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    const b = big("tail-bbbb");
+    expect(b.length).toBe(a.length);
+    writeFileSync(f, b);
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=stale] ${f} was not modified.`);
+    expect(read(f)).toBe(b);
+  });
+
+  test("an external rewrite that only reorders object keys does not refuse (canonical JSON)", async () => {
+    const f = join(caseDir("same-keyorder"), "a.pen");
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    const doc = JSON.parse(read(f));
+    const reordered = { children: doc.children.map((n: any) => Object.fromEntries(Object.entries(n).reverse())), ...Object.fromEntries(Object.entries(doc).filter(([k]) => k !== "children").reverse()) };
+    writeFileSync(f, JSON.stringify(reordered));
+    expect(read(f)).not.toBe(JSON.stringify(doc));
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    expect(children(f)).toBe(2);
   });
 
   test("a session that loads from a template onto an absent --out saves cleanly, twice", async () => {
@@ -786,7 +843,7 @@ describe("stale-file save guard (#11168)", () => {
     setFlags(f, { saveReply: "", saveWrites: false });
     const r = await s.call("batch_design", { operations: ADD });
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/not confirmed/);
+    expect(r.text.split("\n")[0]).toBe(`NOT PERSISTED: [reason=unconfirmed] ${f} may or may not have been written: the engine's reply was not \`Saved <file>\`.`);
     expect(s.stderr()).toContain("save unconfirmed: reply did not match the expected Saved line; baseline=unknown");
     setFlags(f, {});
     writeFileSync(f, pen(5, "foreign"));
@@ -807,14 +864,14 @@ describe("stale-file save guard (#11168)", () => {
     setFlags(f, { saveReply: "Saved /somewhere/else.pen" });
     const r = await s.call("batch_design", { operations: ADD });
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/not confirmed/);
+    expect(r.text).toMatch(/^NOT PERSISTED: \[reason=unconfirmed\]/);
     setFlags(f, {});
     const next = await s.call("save");
     expect(next.isError).toBe(true);
     expect(next.text).toMatch(/last save was not confirmed/);
   });
 
-  test("after one `Save failed:` a retry uses the unconfirmed wording, and a re-open then allows the save", async () => {
+  test("a definite `Save failed:` keeps the previous baseline: the retry after the cause is fixed saves (no open_document, which would discard the edit)", async () => {
     const f = join(caseDir("save-failed"), "a.pen");
     writeFileSync(f, pen(2));
     const s = await session();
@@ -822,15 +879,88 @@ describe("stale-file save guard (#11168)", () => {
     setFlags(f, { failSave: true });
     const failed = await s.call("batch_design", { operations: ADD });
     expect(failed.isError).toBe(true);
-    expect(failed.text).toMatch(/Save failed: EACCES/);
+    expect(failed.text.split("\n")[0]).toMatch(/^NOT PERSISTED: \[reason=save-failed\] \S+ was not written: the engine reported a failed save \(Save failed: EACCES/);
+    expect(failed.text).toMatch(/applied in memory only/);
+    expect(failed.text).toMatch(/call save again/);
+    expect(failed.text).toMatch(/Do NOT call open_document/);
+    expect(s.stderr()).toMatch(/save failed \(definite\): baseline kept/);
+    expect(s.stderr()).not.toContain("baseline=unknown");
+    expect(children(f)).toBe(2);
     setFlags(f, {});
     const retry = await s.call("save");
+    expect(retry.isError).toBe(false);
+    expect(retry.text).toMatch(/Saved /);
+    expect(children(f)).toBe(3); // the edit made before the failure
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    expect(children(f)).toBe(4);
+  });
+
+  test("a definite failure followed by a change on disk refuses as stale on the retry (the kept baseline still guards)", async () => {
+    const f = join(caseDir("save-failed-then-changed"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { failSave: true });
+    expect((await s.call("batch_design", { operations: ADD })).text).toMatch(/reason=save-failed/);
+    setFlags(f, {});
+    writeFileSync(f, pen(6, "other"));
+    const before = read(f);
+    const retry = await s.call("save");
     expect(retry.isError).toBe(true);
-    expect(retry.text).toMatch(/last save was not confirmed/);
-    expect(retry.text).not.toMatch(/changed on disk since/);
+    expect(retry.text.split("\n")[0]).toBe(`REFUSED save: [reason=stale] ${f} was not modified.`);
+    expect(read(f)).toBe(before);
+  });
+
+  test("an ambiguous reply is NOT a definite failure: the baseline becomes unknown (a retry is refused, only open_document recovers)", async () => {
+    const f = join(caseDir("save-ambiguous"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { saveReply: "Save failed? who knows", saveWrites: false });
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.text).toMatch(/^NOT PERSISTED: \[reason=unconfirmed\]/);
+    setFlags(f, {});
+    const retry = await s.call("save");
+    expect(retry.text.split("\n")[0]).toBe(`REFUSED save: [reason=unknown-baseline] ${f} was not modified.`);
     expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
     expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
-    expect(children(f)).toBe(3);
+  });
+
+  test("a save that kills the engine mid-command is `NOT PERSISTED: [reason=save-incomplete]`, and the session recovers", async () => {
+    const f = join(caseDir("save-incomplete"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { exitOnSave: true });
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toMatch(/^NOT PERSISTED: \[reason=save-incomplete\] \S+: the edit was applied in memory but the save did not complete/);
+    expect(r.text).toMatch(/pen exited during a command/);
+    expect(s.stderr()).toMatch(/save did not complete: .*pen exited/);
+    expect(children(f)).toBe(2);
+    setFlags(f, {});
+    const explicit = await s.call("save");
+    expect(explicit.isError).toBe(false);
+  });
+
+  test("exports and screenshots are marked while ANY edit is unpersisted (NOT PERSISTED too), and the mark clears on a confirmed save", async () => {
+    const d = caseDir("unpersisted-mark");
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session({ cwd: d });
+    await s.call("open_document", { filePath: f });
+    const clean = await s.call("export_nodes", { nodeIds: ["seed0"], outputDir: join(d, "e1") });
+    expect(clean.text).not.toMatch(/rendered from unsaved memory/);
+    setFlags(f, { failSave: true });
+    expect((await s.call("batch_design", { operations: ADD })).text).toMatch(/NOT PERSISTED/);
+    const marked = await s.call("export_nodes", { nodeIds: ["seed0"], outputDir: join(d, "e2") });
+    expect(marked.text.split("\n")[0]).toBe("WARNING: rendered from unsaved memory, not the file on disk");
+    expect((await s.call("get_screenshot", { nodeId: "seed0" })).text).toMatch(/WARNING: rendered from unsaved memory/);
+    setFlags(f, {});
+    expect((await s.call("save")).isError).toBe(false);
+    const after = await s.call("export_nodes", { nodeIds: ["seed0"], outputDir: join(d, "e3") });
+    expect(after.text).not.toMatch(/rendered from unsaved memory/);
+    expect((await s.call("get_screenshot", { nodeId: "seed0" })).text).not.toMatch(/rendered from unsaved memory/);
   });
 
   test("REFUSAL THEN CRASH RESPAWN: the next save is still refused (restart wording) until open_document succeeds", async () => {
@@ -864,6 +994,250 @@ describe("stale-file save guard (#11168)", () => {
     writeFileSync(f, pen(4, "other"));
     expect((await s.call("batch_design", { operations: ADD })).isError).toBe(true);
     expect((await s.call("get_editor_state", {})).isError).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The marker contract: the FIRST line of every refusal tool-result is
+// `REFUSED save: [reason=<code>] <file> was not modified.`
+
+describe("marker contract: reason codes in the tool result", () => {
+  const first = (r: { text: string }) => r.text.split("\n")[0];
+
+  test("empty (disk holds nodes, memory empty)", async () => {
+    const f = join(caseDir("marker-empty"), "a.pen");
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    writeFileSync(f, pen(3));
+    expect(first(await s.call("save"))).toBe(`REFUSED save: [reason=empty] ${f} was not modified.`);
+  });
+
+  test("empty also covers an unreadable in-memory count", async () => {
+    const f = join(caseDir("marker-empty-unreadable"), "a.pen");
+    writeFileSync(f, pen(3));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { countForgery: "missing" });
+    expect(first(await s.call("save"))).toBe(`REFUSED save: [reason=empty] ${f} was not modified.`);
+  });
+
+  test("unrecognized (disk is not a .pen document)", async () => {
+    const f = join(caseDir("marker-unrecognized"), "a.pen");
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    writeFileSync(f, "# not a pen\n");
+    expect(first(await s.call("save"))).toBe(`REFUSED save: [reason=unrecognized] ${f} was not modified.`);
+  });
+
+  test("stale, then refusal-pending on the next save", async () => {
+    const f = join(caseDir("marker-stale"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    writeFileSync(f, pen(5, "other"));
+    expect(first(await s.call("save"))).toBe(`REFUSED save: [reason=stale] ${f} was not modified.`);
+    expect(first(await s.call("save"))).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+  });
+
+  test("unknown-baseline", async () => {
+    const f = join(caseDir("marker-unknown"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { saveReply: "", saveWrites: false });
+    expect((await s.call("save")).text).toMatch(/^NOT PERSISTED: \[reason=unconfirmed\]/);
+    setFlags(f, {});
+    expect(first(await s.call("save"))).toBe(`REFUSED save: [reason=unknown-baseline] ${f} was not modified.`);
+  });
+
+  test("every code that reaches the stderr line also reaches the tool result, with the same code", async () => {
+    const f = join(caseDir("marker-both"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    writeFileSync(f, pen(5, "other"));
+    const r = await s.call("batch_design", { operations: ADD });
+    const code = /^REFUSED save: \[reason=([a-z-]+)\]/.exec(first(r))![1];
+    expect(code).toBe("stale");
+    expect(s.stderr()).toContain(`REFUSED save: [reason=${code}] ${f}`);
+  });
+
+  test("open_document warns when the captured baseline is unknown (a FIFO at the path)", async () => {
+    const d = caseDir("open-unknown-baseline");
+    const f = join(d, "a.pen");
+    expect(spawnSync("mkfifo", [f]).status).toBe(0);
+    const s = await session();
+    const o = await s.call("open_document", { filePath: f });
+    expect(o.isError).toBe(false);
+    expect(o.text).toMatch(/Opened .* \(0 top-level node\(s\) loaded\)/);
+    expect(o.text).toMatch(/\nWARNING: could not record a baseline for .*ENOTFILE.*every save is refused/);
+    expect(s.stderr()).toMatch(/baseline capture failed for \S+ \(ENOTFILE\); baseline=unknown/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Respawn rulings: a crash/timeout respawn onto a changed or vanished file arms the refusal;
+// the respawn load is verified like open_document's.
+
+describe("crash respawn onto a file the session did not see", () => {
+  test("EXTERNAL CHANGE during the crash arms the refusal: the engine's reload is read, but the next edit is refused until open_document", async () => {
+    const f = join(caseDir("respawn-external"), "a.pen");
+    writeFileSync(f, pen(3));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    await killAndWait(stubPid(f));
+    writeFileSync(f, pen(5, "other"));
+    const before = read(f);
+    const g = await s.call("get_editor_state", {});
+    expect(g.isError).toBe(false);
+    expect(g.text).toContain("other4"); // the engine reloaded the NEW content
+    expect(s.stderr()).toMatch(/respawn: file changed on disk behind a restarted session \(cause=external-change\) baseline=[0-9a-f]{8} disk=[0-9a-f]{8}; refusalPending armed/);
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect(r.text).toMatch(/the engine reloaded NEW content/);
+    expect(r.text).toMatch(/Nothing on disk was overwritten/);
+    expect(r.text).toContain("Insert(document"); // the refused operations are echoed
+    expect(read(f)).toBe(before);
+    expect(saves(f)).toBe(0);
+    expect(s.stderr()).toMatch(/REFUSED save: \[reason=refusal-pending\] \S+ baseline=[0-9a-f]{8} disk=[0-9a-f]{8}/);
+    // recovery
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    expect(children(f)).toBe(6);
+  });
+
+  test("FILE REMOVED during the crash arms the refusal and is NOT silently recreated", async () => {
+    const f = join(caseDir("respawn-missing"), "a.pen");
+    writeFileSync(f, pen(3));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    await killAndWait(stubPid(f));
+    rmSync(f);
+    const g = await s.call("get_editor_state", {});
+    expect(g.isError).toBe(false);
+    expect(s.stderr()).toMatch(/respawn: file is gone behind a restarted session \(cause=file-missing\) baseline=[0-9a-f]{8} disk=-; refusalPending armed/);
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect(r.text).toMatch(/no longer exists on disk/);
+    expect(r.text).toMatch(/recreate the edits from your context/);
+    expect(existsSync(f)).toBe(false);
+    expect(saves(f)).toBe(0);
+  });
+
+  test("an UNCHANGED file adopts silently on respawn (no arm, the next edit saves)", async () => {
+    const f = join(caseDir("respawn-unchanged"), "a.pen");
+    writeFileSync(f, pen(3));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    await killAndWait(stubPid(f));
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    expect(s.stderr()).not.toMatch(/cause=(external-change|file-missing)/);
+    expect(children(f)).toBe(4);
+  });
+
+  test("a missing baseline that is still missing adopts silently", async () => {
+    const f = join(caseDir("respawn-still-missing"), "a.pen");
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    await killAndWait(stubPid(f));
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    expect(children(f)).toBe(1);
+  });
+
+  test("A7: an unknown baseline plus a crash is not recaptured: the next save is refused, and the marker says so", async () => {
+    const f = join(caseDir("respawn-unknown"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { saveReply: "", saveWrites: false });
+    expect((await s.call("batch_design", { operations: ADD })).text).toMatch(/reason=unconfirmed/);
+    setFlags(f, {});
+    await killAndWait(stubPid(f));
+    const r = await s.call("batch_design", { operations: ADD });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=unknown-baseline] ${f} was not modified.`);
+    expect(s.stderr()).toContain("respawn: baseline unknown, not recaptured (open_document to re-baseline)");
+    expect(saves(f)).toBe(1);
+  });
+
+  test("A19: a change made during the crash window is what arms (and pins the new behaviour, not a silent adopt)", async () => {
+    const f = join(caseDir("respawn-a19"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false); // saved: 3 nodes, baseline = that
+    await killAndWait(stubPid(f));
+    const doc = JSON.parse(read(f));
+    doc.children[0].name = "edited-elsewhere";
+    writeFileSync(f, JSON.stringify(doc));
+    expect((await s.call("get_editor_state", {})).isError).toBe(false);
+    const r = await s.call("save");
+    expect(r.text.split("\n")[0]).toBe(`REFUSED save: [reason=refusal-pending] ${f} was not modified.`);
+    expect(saves(f)).toBe(1);
+  });
+});
+
+describe("load fidelity (open_document and the respawn load)", () => {
+  test("open_document refuses a load with FEWER top-level nodes than the file holds (any drop, not only zero)", async () => {
+    const f = join(caseDir("fidelity-open"), "a.pen");
+    writeFileSync(f, pen(5));
+    setFlags(f, { loadFirst: 3 });
+    const before = read(f);
+    const s = await session();
+    const o = await s.call("open_document", { filePath: f });
+    expect(o.isError).toBe(true);
+    expect(o.text).toMatch(/holds 5 top-level node\(s\) on disk but loaded 3; it was not modified/);
+    expect((await s.call("get_editor_state", {})).text).toMatch(/open failed/);
+    expect(read(f)).toBe(before);
+    expect(saves(f)).toBe(0);
+  });
+
+  test("a load with the same or more nodes is accepted", async () => {
+    const f = join(caseDir("fidelity-ok"), "a.pen");
+    writeFileSync(f, pen(5));
+    const s = await session();
+    expect((await s.call("open_document", { filePath: f })).text).toMatch(/5 top-level node/);
+  });
+
+  test("RESPAWN loaded-empty (the P1 repro): no tool runs until open_document succeeds, and nothing is saved over the file", async () => {
+    const f = join(caseDir("fidelity-respawn-empty"), "a.pen");
+    writeFileSync(f, pen(3));
+    const s = await session();
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    setFlags(f, { loadEmpty: true }); // the engine will load the unchanged file as an empty document
+    await killAndWait(stubPid(f));
+    const before = read(f);
+    const g = await s.call("get_editor_state", {});
+    expect(g.isError).toBe(true);
+    expect(g.text).toMatch(/open failed: .*holds 3 top-level node\(s\) on disk but loaded empty/);
+    const e = await s.call("batch_design", { operations: ADD });
+    expect(e.isError).toBe(true);
+    expect(e.text).toMatch(/open failed/);
+    expect((await s.call("save")).isError).toBe(true);
+    expect(read(f)).toBe(before);
+    expect(saves(f)).toBe(0);
+    expect(s.stderr()).toMatch(/respawn load check failed/);
+    // recovery: the engine behaves again and open_document succeeds
+    setFlags(f, {});
+    const o = await s.call("open_document", { filePath: f });
+    expect(o.isError).toBe(false);
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(false);
+    expect(children(f)).toBe(4);
+  });
+
+  test("RESPAWN load with fewer (but not zero) nodes is refused the same way, using the count read BEFORE the spawn", async () => {
+    const f = join(caseDir("fidelity-respawn-fewer"), "a.pen");
+    writeFileSync(f, pen(4));
+    const s = await session();
+    await s.call("open_document", { filePath: f });
+    setFlags(f, { loadFirst: 2, rewriteOnStart: JSON.parse(pen(2)) }); // the file shrinks to match the dropped load: only the count read BEFORE the spawn still sees 4
+    await killAndWait(stubPid(f));
+    const g = await s.call("get_editor_state", {});
+    expect(g.isError).toBe(true);
+    expect(g.text).toMatch(/holds 4 top-level node\(s\) on disk but loaded 2/);
+    expect(saves(f)).toBe(0);
   });
 });
 
@@ -985,9 +1359,51 @@ await import(${JSON.stringify(pathToFileURL(STUB).href)});
     expect(r.text).not.toContain(SECRET);
     expect(s.stderr()).not.toContain(SECRET);
     expect(s.stderr()).not.toContain(SECRET.slice(0, 16));
+    // The rolling redactor is NOT flushed when a command ends (a spelling split across two
+    // replies must still be caught), so the redacted line surfaces with the next stderr
+    // output (or when the child's streams close): a second command moves the held tail out.
+    await s.call("batch_design", { operations: ADD });
     expect(s.stderr()).toContain("<redacted>");
-    // the edit itself still went through
-    expect(children(f)).toBe(1);
+    expect(s.stderr()).not.toContain(SECRET);
+    // the edits themselves still went through
+    expect(children(f)).toBe(2);
+  });
+
+  test("A26: a key inside the refused operations is redacted in the tool result (the echo is not a leak path)", async () => {
+    const f = join(caseDir("echo-refused-ops"), "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session({ keys: { PEN_CLI_KEY: SECRET } });
+    await s.call("open_document", { filePath: f });
+    writeFileSync(f, pen(5, "other"));
+    const r = await s.call("batch_design", { operations: `${ADD}\nPrint("${SECRET}")` });
+    expect(r.isError).toBe(true);
+    expect(r.text.split("\n")[0]).toMatch(/^REFUSED save: \[reason=stale\]/);
+    expect(r.text).not.toContain(SECRET);
+    expect(r.text).toContain("<redacted>");
+    expect(s.stderr()).not.toContain(SECRET);
+  });
+
+  test("A27: a key inside the document path is redacted on the stderr REFUSED line (logRefusal) and the armed line", async () => {
+    const d = caseDir(`logrefusal-${SECRET}`);
+    const f = join(d, "a.pen");
+    writeFileSync(f, pen(2));
+    const s = await session({ keys: { PEN_CLI_KEY: SECRET } });
+    await s.call("open_document", { filePath: f });
+    writeFileSync(f, pen(5, "other"));
+    expect((await s.call("batch_design", { operations: ADD })).isError).toBe(true);
+    expect(s.stderr()).toMatch(/REFUSED save: \[reason=stale\] \S*<redacted>\S*\/a\.pen/);
+    expect(s.stderr()).toMatch(/refusalPending=true \S*<redacted>/);
+    expect(s.stderr()).not.toContain(SECRET);
+  });
+
+  test("A12: the `baseline capture failed` line redacts a key in the path", async () => {
+    const d = caseDir(`capture-failed-${SECRET}`);
+    const f = join(d, "a.pen");
+    expect(spawnSync("mkfifo", [f]).status).toBe(0);
+    const s = await session({ keys: { PEN_CLI_KEY: SECRET } });
+    await s.call("open_document", { filePath: f });
+    expect(s.stderr()).toMatch(/baseline capture failed for \S*<redacted>\S* \(ENOTFILE\)/);
+    expect(s.stderr()).not.toContain(SECRET);
   });
 
   test("-e KEY=VALUE on argv: only the two key names are accepted, with a value-free warning", async () => {
@@ -1005,15 +1421,15 @@ await import(${JSON.stringify(pathToFileURL(STUB).href)});
 });
 
 describe("binary resolution", () => {
-  test("a relative PENCIL_BINARY is refused", async () => {
+  test("a relative --pencil-binary is refused", async () => {
     const d = caseDir("relative-binary");
     const s = await session({ binary: "relative/pen.js", cwd: d });
     const r = await s.call("open_document", { filePath: join(d, "a.pen") });
     expect(r.isError).toBe(true);
-    expect(r.text).toMatch(/PENCIL_BINARY must be an absolute path/);
+    expect(r.text).toMatch(/--pencil-binary must be an absolute path/);
   });
 
-  test("PENCIL_BINARY must be a regular file owned by us, not group- or world-writable, not a symlink", async () => {
+  test("--pencil-binary must be a regular file owned by us, not group- or world-writable, not a symlink", async () => {
     const d = caseDir("override-modes");
     const writable = join(d, "writable.mjs");
     copyFileSync(BIN, writable);
@@ -1028,16 +1444,138 @@ describe("binary resolution", () => {
       const s = await session({ binary });
       const r = await s.call("open_document", { filePath: join(d, "a.pen") });
       expect(r.isError).toBe(true);
-      expect(r.text).toMatch(/PENCIL_BINARY/);
+      expect(r.text).toMatch(/--pencil-binary/);
       expect(r.text).toMatch(why);
     }
   });
 
-  test("a safe PENCIL_BINARY works and each use writes a value-free stderr line", async () => {
+  test("a safe --pencil-binary works and each use writes a value-free stderr line", async () => {
     const f = join(caseDir("override-ok"), "a.pen");
     const s = await session();
     expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
-    expect(s.stderr()).toMatch(/PENCIL_BINARY override in use/);
+    expect(s.stderr()).toMatch(/--pencil-binary override in use/);
+    expect(s.stderr()).not.toContain(BIN);
+  });
+
+  test("the PENCIL_BINARY environment variable ALONE is ignored (a project settings env block must not pick the binary), with a value-free WARN", async () => {
+    const d = caseDir("env-binary-ignored");
+    const home = caseDir("env-binary-ignored-home"); // nothing installed under it
+    const s = await session({ binary: "", cwd: d, nodeBin: Bun.which("node") ?? "node", extraEnv: { HOME: home, PENCIL_BINARY: BIN } });
+    const r = await s.call("open_document", { filePath: join(d, "a.pen") });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/pen CLI not found/);
+    expect(s.stderr()).toMatch(/PENCIL_BINARY environment variable is ignored/);
+    expect(s.stderr()).not.toContain(BIN);
+    expect(existsSync(sideFile(join(d, "a.pen"), "log"))).toBe(false); // the stub never ran
+  });
+
+  test("--pencil-binary wins over a stray PENCIL_BINARY, and the stray one draws no warning", async () => {
+    const f = join(caseDir("flag-and-env"), "a.pen");
+    const s = await session({ extraEnv: { PENCIL_BINARY: "/nonexistent/evil.mjs" } });
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    expect(s.stderr()).not.toMatch(/PENCIL_BINARY environment variable is ignored/);
+  });
+
+  test("--pencil-binary inside the working directory is refused (a project cannot supply the binary)", async () => {
+    const d = caseDir("override-in-cwd");
+    const inside = join(d, "pen.mjs");
+    copyFileSync(BIN, inside);
+    chmodSync(inside, 0o755);
+    const s = await session({ binary: inside, cwd: d });
+    const r = await s.call("open_document", { filePath: join(d, "a.pen") });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/--pencil-binary must not be inside the working directory or the project directory/);
+    expect(existsSync(sideFile(join(d, "a.pen"), "log"))).toBe(false);
+  });
+
+  test("--pencil-binary inside CLAUDE_PROJECT_DIR is refused too", async () => {
+    const d = caseDir("override-in-project");
+    const inside = join(d, "pen.mjs");
+    copyFileSync(BIN, inside);
+    chmodSync(inside, 0o755);
+    const s = await session({ binary: inside, extraEnv: { CLAUDE_PROJECT_DIR: d } });
+    const r = await s.call("open_document", { filePath: join(d, "a.pen") });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/must not be inside the working directory or the project directory/);
+  });
+
+  // The default binary: the passwd home first, $HOME second; a candidate is used only when
+  // its package directory is outside the working directory and CLAUDE_PROJECT_DIR and is
+  // owned by us and not group- or world-writable.
+  describe("default resolution: candidates and trust", () => {
+    const openOn = async (name: string, opts: { passwdHome: string; home: string; cwd?: string; extraEnv?: Record<string, string> }) => {
+      const d = caseDir(`${name}-doc`);
+      const s = await session({
+        binary: "",
+        nodeBin: Bun.which("node") ?? "node",
+        cwd: opts.cwd ?? d,
+        passwdHome: opts.passwdHome,
+        extraEnv: { HOME: opts.home, PATH: "/usr/bin:/bin", ...(opts.extraEnv ?? {}) },
+      });
+      const r = await s.call("open_document", { filePath: join(d, "doc.pen") });
+      return { s, r, d };
+    };
+    const accepted = (r: { text: string }) => /exited before it was ready/.test(r.text) && !/pen CLI not found/.test(r.text);
+
+    test("the $HOME candidate is used when the passwd home holds nothing, with one value-free stderr line", async () => {
+      const empty = caseDir("cand-empty");
+      const home = caseDir("cand-home");
+      buildPenTree(home, "good");
+      const { s, r } = await openOn("cand-home-fallback", { passwdHome: empty, home });
+      expect(accepted(r)).toBe(true);
+      expect(s.stderr()).toMatch(/using the pen CLI under \$HOME \(it differs from the passwd home directory\)/);
+      expect(s.stderr()).not.toContain(home);
+    });
+
+    test("the passwd home is tried FIRST: a good install there wins over a bad $HOME one, and a bad one there falls through to a good $HOME", async () => {
+      const goodHome = caseDir("cand-first-good");
+      const badHome = caseDir("cand-first-bad");
+      buildPenTree(goodHome, "good");
+      buildPenTree(badHome, "name-mismatch");
+      const one = await openOn("cand-order-1", { passwdHome: goodHome, home: badHome });
+      expect(accepted(one.r)).toBe(true);
+      expect(one.s.stderr()).not.toMatch(/using the pen CLI under \$HOME/);
+      const two = await openOn("cand-order-2", { passwdHome: badHome, home: goodHome });
+      expect(accepted(two.r)).toBe(true);
+      expect(two.s.stderr()).toMatch(/using the pen CLI under \$HOME/);
+    });
+
+    test("when both are bad the error names the reason of the installed-but-untrusted one and `check_deps.sh --auto`", async () => {
+      const empty = caseDir("cand-bad-empty");
+      const badHome = caseDir("cand-bad-bad");
+      buildPenTree(badHome, "name-mismatch");
+      const { r } = await openOn("cand-both-bad", { passwdHome: empty, home: badHome });
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/pen CLI not found or not trusted \(the package name is not @pen\.dev\/cli\)/);
+      expect(r.text).toMatch(/check_deps\.sh --auto/);
+    });
+
+    test("a package directory inside the working directory is refused (the repo cannot supply the binary), also via CLAUDE_PROJECT_DIR", async () => {
+      const home = caseDir("cand-in-cwd");
+      const tree = buildPenTree(home, "good");
+      // the working directory is an ancestor of the package directory but not of $HOME itself
+      const viaCwd = await openOn("cand-in-cwd-1", { passwdHome: home, home, cwd: join(home, ".local") });
+      expect(viaCwd.r.text).toMatch(/pen CLI not found or not trusted \(the package directory is inside the working directory or the project directory\)/);
+      const viaProject = await openOn("cand-in-cwd-2", { passwdHome: home, home, extraEnv: { CLAUDE_PROJECT_DIR: join(tree.prefix, "..") } });
+      expect(viaProject.r.text).toMatch(/inside the working directory or the project directory/);
+      expect(existsSync(join(home, "engine-env.log"))).toBe(false); // the credential was never handed over
+    });
+
+    test("a working directory that IS (or contains) the home directory does not disqualify the install", async () => {
+      const home = caseDir("cand-cwd-is-home");
+      buildPenTree(home, "good");
+      const { r } = await openOn("cand-cwd-home", { passwdHome: home, home, cwd: home });
+      expect(accepted(r)).toBe(true);
+    });
+
+    test("a group-writable package directory is refused", async () => {
+      const home = caseDir("cand-writable");
+      const tree = buildPenTree(home, "good");
+      chmodSync(tree.pkgDir, 0o775);
+      const { r } = await openOn("cand-writable-1", { passwdHome: home, home });
+      expect(r.text).toMatch(/pen CLI not found or not trusted \(the package directory is group- or world-writable\)/);
+      expect(existsSync(join(home, "engine-env.log"))).toBe(false);
+    });
   });
 
   test("the child's PATH has no empty or relative entries", async () => {
@@ -1071,8 +1609,9 @@ await import(${JSON.stringify(pathToFileURL(STUB).href)});
     .filter((l) => l.trim() && !l.startsWith("#"))
     .map((l) => l.split("\t"))
     .filter((c) => c[0] !== "layout");
-  test("the identity table is non-empty and every layout is covered", () => {
-    expect(rows.length).toBeGreaterThanOrEqual(14);
+  test("the identity table covers every layout of the tree builder, and only those", () => {
+    expect(rows.map((c) => c[0]).sort()).toEqual(Object.keys(LAYOUTS).sort());
+    expect(rows.length).toBeGreaterThanOrEqual(17);
   });
   for (const [layout, adapterVerdict] of rows) {
     test(`identity row ${layout}: adapter ${adapterVerdict}`, async () => {
@@ -1114,6 +1653,56 @@ await import(${JSON.stringify(pathToFileURL(STUB).href)});
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/pen CLI not found/);
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registerTool's catch: every thrown tool error leaves ONE `tool=<name> error:` stderr line
+// (redacted, one line, at most 300 characters) next to the result the caller gets.
+
+describe("a tool error leaves a stderr marker", () => {
+  const SECRET = ["stub", "credential", "delta", "echo", "foxtrot"].join("-");
+  const lineOf = (stderr: string, tool: string) => stderr.split("\n").find((l) => l.startsWith(`[pencil-adapter] tool=${tool} error: `)) ?? "";
+
+  test("penPath (open_document of a non-.pen file), containedDir (export outside the roots), formatReplCommand (a removed tool) and findPenBinary each log their tool", async () => {
+    const d = caseDir("tool-marker");
+    const f = join(d, "a.pen");
+    const s = await session({ cwd: d });
+    await s.call("open_document", { filePath: f });
+
+    const notPen = await s.call("open_document", { filePath: join(d, "notes.md") });
+    expect(notPen.isError).toBe(true);
+    expect(lineOf(s.stderr(), "open_document")).toMatch(/error: filePath must be a \.pen file/);
+
+    const outside = await s.call("export_nodes", { nodeIds: ["x"], outputDir: join(caseDir("tool-marker-outside"), "o") });
+    expect(outside.isError).toBe(true);
+    expect(lineOf(s.stderr(), "export_nodes")).toMatch(/error: outputDir .* is outside the allowed directories/);
+
+    const removed = await s.call("snapshot_layout", {});
+    expect(removed.isError).toBe(true);
+    expect(lineOf(s.stderr(), "snapshot_layout")).toMatch(/error: Unknown tool: snapshot_layout/);
+
+    const badId = await s.call("get_screenshot", { nodeId: "bad id" });
+    expect(badId.isError).toBe(true);
+    expect(lineOf(s.stderr(), "get_screenshot")).toMatch(/error: node id must match/);
+
+    const home = caseDir("tool-marker-home");
+    const bare = await session({ binary: "", cwd: d, nodeBin: Bun.which("node") ?? "node", extraEnv: { HOME: home, PATH: "/usr/bin:/bin" } });
+    const noPen = await bare.call("get_editor_state", {});
+    expect(noPen.isError).toBe(true);
+    expect(lineOf(bare.stderr(), "get_editor_state")).toMatch(/error: pen CLI not found/);
+  });
+
+  test("the line is one line, at most 300 characters after the marker, and the key is redacted", async () => {
+    const d = caseDir("tool-marker-redact");
+    const s = await session({ cwd: d, keys: { PEN_CLI_KEY: SECRET } });
+    const r = await s.call("open_document", { filePath: join(d, `${"x".repeat(400)}-${SECRET}.md`) });
+    expect(r.isError).toBe(true);
+    const line = lineOf(s.stderr(), "open_document");
+    expect(line).not.toBe("");
+    expect(line.length).toBeLessThanOrEqual("[pencil-adapter] tool=open_document error: ".length + 300);
+    expect(s.stderr()).not.toContain(SECRET);
+    expect(r.text).not.toContain(SECRET);
   });
 });
 

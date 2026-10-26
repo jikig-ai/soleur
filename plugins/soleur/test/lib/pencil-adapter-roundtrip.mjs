@@ -3,6 +3,13 @@
 // fixtures/pencil-stub-repl.mjs; engine-contract-probe.sh points it at the
 // real `pen` binary. Same driver on both sides keeps the stub honest.
 //
+// Engine binary: `connectAdapter({ penBinary })` is the ONE way a test or the probe chooses the
+// binary: it adds the `--pencil-binary=<abs>` argv flag the adapter honours (an env var is ignored by
+// design). An empty/absent penBinary leaves the adapter on its default resolution.
+// The adapter looks for the default binary under the passwd home first, then $HOME; `passwdHome`
+// (default: the HOME the adapter gets) is what os.userInfo().homedir reports inside the adapter
+// process (passwd-home-preload.mjs), so a test HOME is the only prefix searched.
+//
 // Credential: `connectAdapter({ keys })` sets EXACTLY the key names given (the
 // adapter accepts PEN_CLI_KEY, with PENCIL_CLI_KEY as the deprecated fallback; an
 // empty string is allowed and means "set but unset-equivalent"). The default is
@@ -39,19 +46,31 @@ export function installAdapter(installDir) {
 }
 
 /**
- * The environment handed to the adapter process: PATH/HOME/TMPDIR, PENCIL_BINARY, exactly the
- * credential names in `keys`, then `extraEnv`. `key` is the legacy single-value form (PEN_CLI_KEY).
+ * The environment handed to the adapter process: PATH/HOME/TMPDIR, exactly the credential names in
+ * `keys`, then `extraEnv`. `key` is the legacy single-value form (PEN_CLI_KEY). It carries no engine
+ * binary: that travels in argv (adapterArgs).
  */
-export function buildAdapterEnv({ binary, keys, key, extraEnv = {} }) {
+export function buildAdapterEnv({ keys, key, extraEnv = {} }) {
   const credential = keys ?? { PEN_CLI_KEY: key ?? "stub-key" };
   return {
     PATH: process.env.PATH ?? "",
     HOME: process.env.HOME ?? "",
     TMPDIR: process.env.TMPDIR ?? "",
     ...credential,
-    PENCIL_BINARY: binary,
     ...extraEnv,
   };
+}
+
+/** The node argv for the installed adapter: the passwd-home preload, the adapter, then `--pencil-binary=<abs>` when given. */
+export function adapterArgs({ installDir, penBinary, passwdHome }) {
+  const preload = pathToFileURL(join(HERE, "passwd-home-preload.mjs"));
+  preload.searchParams.set("home", passwdHome);
+  return [
+    "--import",
+    preload.href,
+    join(installDir, "pencil-mcp-adapter.mjs"),
+    ...(penBinary ? [`--pencil-binary=${penBinary}`] : []),
+  ];
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -87,16 +106,16 @@ export const stubPid = (outFile, tag = "") => Number(readFileSync(sideFile(outFi
  * @returns {{ call: (name: string, args?: object) => Promise<{text: string, isError: boolean}>,
  *             stderr: () => string, close: () => Promise<void> }}
  */
-export async function connectAdapter({ installDir, binary, keys, key, extraEnv = {}, cwd, nodeBin }) {
+export async function connectAdapter({ installDir, penBinary, keys, key, extraEnv = {}, cwd, nodeBin, passwdHome }) {
   const sdk = (rel) => import(pathToFileURL(join(installDir, "node_modules/@modelcontextprotocol/sdk/dist/esm", rel)).href);
   const { Client } = await sdk("client/index.js");
   const { StdioClientTransport } = await sdk("client/stdio.js");
 
-  const env = buildAdapterEnv({ binary, keys, key, extraEnv });
+  const env = buildAdapterEnv({ keys, key, extraEnv });
   const transport = new StdioClientTransport({
     command: nodeBin || process.env.NODE_BIN || "node",
     ...(cwd ? { cwd } : {}),
-    args: [join(installDir, "pencil-mcp-adapter.mjs")],
+    args: adapterArgs({ installDir, penBinary, passwdHome: passwdHome ?? env.HOME }),
     env,
     stderr: "pipe",
   });

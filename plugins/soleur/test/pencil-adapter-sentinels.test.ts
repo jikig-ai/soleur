@@ -12,6 +12,8 @@ import { join, resolve } from "node:path";
 const SCRIPTS = resolve(import.meta.dir, "../skills/pencil-setup/scripts");
 const adapter = readFileSync(resolve(SCRIPTS, "pencil-mcp-adapter.mjs"), "utf8");
 const gate = readFileSync(resolve(SCRIPTS, "pencil-save-gate.mjs"), "utf8");
+const surface = readFileSync(resolve(SCRIPTS, "pencil-repl-surface.mjs"), "utf8");
+const classify = readFileSync(resolve(SCRIPTS, "pencil-response-classify.mjs"), "utf8");
 const copyScript = readFileSync(resolve(SCRIPTS, "copy_adapter.sh"), "utf8");
 
 // strip // comments (whole-line and trailing) and /* */ blocks so prose cannot
@@ -173,9 +175,11 @@ describe("Observability — one logRefusal helper behind both save call sites", 
   });
 
   test("no other stderr write carries a REFUSED save line", () => {
-    const writes = code.split("\n").filter((l) => /REFUSED save/.test(l));
-    expect(writes.length).toBe(1);
-    expect(writes[0]).toMatch(/\[reason=\$\{/);
+    // (the tool description for the agent also names the marker, as prose with `[reason=...]`)
+    const interpolated = code.split("\n").filter((l) => /REFUSED save: \[reason=\$\{/.test(l));
+    expect(interpolated.length).toBe(1);
+    expect(interpolated[0]).toMatch(/\$\{saved\.code\}/);
+    expect(code.split("\n").filter((l) => /REFUSED save/.test(l) && /stderr/.test(l))).toEqual([]);
   });
 
   test("every refusal state has its stderr marker", () => {
@@ -183,11 +187,44 @@ describe("Observability — one logRefusal helper behind both save call sites", 
       "refusalPending=true",
       "refusalPending=false",
       "respawn: refusalPending still armed, baseline not recaptured",
+      "respawn: baseline unknown, not recaptured (open_document to re-baseline)",
       "save unconfirmed: reply did not match the expected Saved line; baseline=unknown",
+      "save failed (definite): baseline kept",
       "WARN post-save read failed",
+      "[reason=recreated]",
+      "respawn load check failed",
+      "baseline capture failed for",
     ]) {
       expect(adapter).toContain(marker);
     }
+    // the respawn that finds the file changed or gone names its cause
+    expect(adapter).toMatch(/cause=\$\{armCause\}/);
+    expect(code).toMatch(/armCause = "file-missing"/);
+    expect(code).toMatch(/armCause = "external-change"/);
+  });
+
+  test("registerTool's catch writes `tool=<name> error:` (redacted, one line, <= 300 chars) next to the result", () => {
+    const start = code.indexOf("function registerTool(");
+    const body = code.slice(start, code.indexOf("\n}\n", start));
+    expect(body).toMatch(/redactKey\(String\(err\?\.message \?\? err\)\)/);
+    expect(body).toContain("`[pencil-adapter] tool=${name} error: ${oneLine(message).slice(0, 300)}\\n`");
+    // the stderr write sits before the result is built
+    expect(body.indexOf("tool=${name} error:")).toBeLessThan(body.indexOf("return errorResult(enrichErrorMessage(message))"));
+  });
+
+  test("the not-persisted markers are built in the gate module, one place for every code", () => {
+    for (const marker of ["REFUSED save: [reason=${code}]", "NOT PERSISTED: [reason=save-failed]", "NOT PERSISTED: [reason=unconfirmed]", "NOT PERSISTED: [reason=save-incomplete]"]) {
+      expect(gate).toContain(marker);
+    }
+    for (const code of ["save-failed", "unconfirmed", "save-incomplete"]) expect(adapter).toContain(`code: "${code}"`);
+  });
+
+  test("unpersistedEdits is set on refusal and not-persisted outcomes, cleared on a confirmed save or a successful open_document, and gates the unsaved warning", () => {
+    expect(code).toMatch(/if \(saved\.refused \|\| saved\.failed \|\| saved\.unconfirmed\) unpersistedEdits = true;/);
+    expect(code).toMatch(/else if \(saved\.saved\) unpersistedEdits = false;/);
+    expect(count2(code, /unpersistedEdits = false;/g)).toBe(3); // the declaration, a confirmed save, open_document (clearRefusal)
+    expect(count2(code, /if \(unpersistedEdits\)/g)).toBe(2); // get_screenshot, export_nodes
+    expect(code).not.toMatch(/if \(refusalPending === true\) (content|lines)\.push/);
   });
 
   test("the success-side lines are pinned so a migration cannot drop them", () => {
@@ -196,7 +233,80 @@ describe("Observability — one logRefusal helper behind both save call sites", 
   });
 });
 
+describe("Single definitions", () => {
+  test("stripAnsi has ONE definition (the classifier's); nothing else carries an ANSI regex", () => {
+    expect(classify).toMatch(/export function stripAnsi/);
+    for (const [name, src] of [["adapter", code], ["gate", gateCode], ["surface", stripComments(surface)]] as const) {
+      expect(src).not.toMatch(/x1b\\\[\[0-9/); // no ANSI regex of its own
+      expect(src).not.toMatch(/u001b\\\[/i);
+      if (name !== "adapter") expect(src).toMatch(/import \{ stripAnsi \} from "\.\/pencil-response-classify\.mjs"/);
+    }
+    expect(adapter).toMatch(/\{ classifyResponse, stripAnsi \} = await import\("\.\/pencil-response-classify\.mjs"\)/);
+    // the widened class: private-mode CSI is included
+    expect(classify).toContain("[0-9;?]*");
+  });
+
+  test("the export format enum comes from the surface table, not a second hard-coded list", () => {
+    expect(code).toMatch(/z\.enum\(EXPORT_FORMATS\)/);
+    expect(code).not.toMatch(/z\.enum\(\[/);
+  });
+
+  test("timeouts are named once: no bare 30000/2000/4000/500 duration outside TIMEOUTS", () => {
+    const outside = code.replace(/const TIMEOUTS = \{[\s\S]*?\n\};/, "");
+    for (const n of ["30000", "2000", "4000", "500"]) expect(outside).not.toMatch(new RegExp(`\\b${n}\\b`));
+  });
+
+  test("dead code stays removed: shouldSkipSave, the `changed` alias, the read_skill name special-case, the 0.2.9 symlink claim", () => {
+    expect(adapter).not.toMatch(/shouldSkipSave/);
+    expect(gate).not.toMatch(/shouldSkipSave|diskReason|stale === "changed"/);
+    expect(code).not.toMatch(/name === "read_skill"/);
+    expect(code).toMatch(/errorFrom === "stderr"/);
+    expect(adapter).not.toMatch(/measured on 0\.2\.9/);
+    expect(adapter).toMatch(/ex-cq-pencil-mcp-silent-drop-diagnosis-checklist/);
+    expect(adapter).not.toMatch(/[^-]cq-pencil-mcp-silent-drop-diagnosis-checklist/);
+    expect(code).toMatch(/let refusalPending = false;/);
+  });
+
+  test("the stderr tail buffer is trimmed at a line start, never mid-line", () => {
+    const at = code.indexOf("STDERR_BUFFER_CAP) {");
+    expect(at).toBeGreaterThan(-1);
+    const block = code.slice(at, at + 500);
+    expect(block).toMatch(/tail\.indexOf\("\\n"\)/);
+    expect(block).toMatch(/tail\.slice\(nl \+ 1\)/);
+  });
+
+  test("the rolling redactor is flushed when the child's streams close and nowhere else", () => {
+    expect(count2(code, /\.flush\(\)/g)).toBe(1);
+    const at = code.indexOf(".flush()");
+    expect(code.slice(code.lastIndexOf("const gone", at), at)).toMatch(/const gone = /);
+  });
+});
+
 describe("Credential and engine identity", () => {
+  test("the engine binary override is argv-only: --pencil-binary is parsed, the PENCIL_BINARY variable is only ever warned about", () => {
+    expect(code).toMatch(/startsWith\("--pencil-binary="\)/);
+    expect(count2(code, /process\.env\.PENCIL_BINARY\b/g)).toBe(1); // only the value-free WARN condition, nothing that resolves a path
+    expect(code).toMatch(/PENCIL_BINARY_ARG \? trustedOverride\(PENCIL_BINARY_ARG\) : findPenBinary\(\)/);
+  });
+
+  test("candidates are the passwd home then $HOME, each excluded when inside the working directory or CLAUDE_PROJECT_DIR, owner- and mode-checked, and the bin must be a regular file", () => {
+    const fn = code.slice(code.indexOf("function findPenBinary"));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+    expect(body).toMatch(/userInfo\(\)\.homedir/);
+    expect(body).toMatch(/process\.env\.HOME/);
+    expect(body).toMatch(/projectRoots\(/);
+    expect(body).toMatch(/process\.getuid/);
+    expect(body).toMatch(/& 0o022/);
+    expect(body).toMatch(/isFile\(\)/);
+    const roots = code.slice(code.indexOf("function projectRoots"));
+    expect(roots.slice(0, roots.indexOf("\n}\n"))).toMatch(/process\.cwd\(\), process\.env\.CLAUDE_PROJECT_DIR/);
+  });
+
+  test("the error and warning texts name `check_deps.sh --auto`", () => {
+    expect(code).toMatch(/const CHECK_DEPS_CMD = "bash plugins\/soleur\/skills\/pencil-setup\/scripts\/check_deps\.sh --auto"/);
+    expect(count2(code, /\$\{CHECK_DEPS_CMD\}/g)).toBeGreaterThanOrEqual(2);
+  });
+
   test("the key is resolved once into a const and both names are deleted from process.env", () => {
     expect(code).toMatch(/const API_KEY\b/);
     expect(code).toMatch(/delete process\.env\.PEN_CLI_KEY/);
