@@ -3176,11 +3176,13 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
   function pagePermalinks(): { file: string; url: string }[] {
     const out: { file: string; url: string }[] = [];
     const walk = (dir: string): void => {
-      for (const ent of readdirSync(dir)) {
-        const full = join(dir, ent);
-        if (statSync(full).isDirectory()) {
+      // Dirent-based listing: the type check rides the directory entry, so no
+      // stat-then-read TOCTOU (CodeQL js/file-system-race) and no extra syscall.
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, ent.name);
+        if (ent.isDirectory()) {
           walk(full);
-        } else if (/\.(njk|md)$/.test(ent)) {
+        } else if (/\.(njk|md)$/.test(ent.name)) {
           const src = readFileSync(full, "utf8");
           const m = src.match(/^permalink:\s*(\S+)\s*$/m);
           expect(m, `${full}: permalink frontmatter`).not.toBeNull();
