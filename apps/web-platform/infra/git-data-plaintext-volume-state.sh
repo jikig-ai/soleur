@@ -9,7 +9,7 @@
 #     "Plaintext-volume destroy (Option B...)", run locally with a read-only token.
 #
 # It only issues GETs. It prints key=value lines (counts and identifiers only — never a response
-# body) and the FIRST line is always the summary: `plaintext_volume=present`, `plaintext_volume=absent`
+# body) and the FIRST stdout line is the summary (a response-parse failure, exit 4, prints its error= line to stderr only): `plaintext_volume=present`, `plaintext_volume=absent`
 # or `plaintext_volume=unknown` (no credential, API/parse error, failed presence proof). `shape=` names
 # the full state so a refusal can say which:
 #   present_attached   volume exists on the git-data server (both the attachment and the volume remain)

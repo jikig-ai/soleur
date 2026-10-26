@@ -183,7 +183,7 @@ jobs:
           out="$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-plaintext-volume-state.sh")" || rc=$?
           printf '%s\n' "$out"
           if [[ "$rc" -ne 0 ]]; then
-            echo "::error::verdict=pre_plan_read_failed (exit ${rc}) — the Hetzner read could not be completed (3 no credential, 4 API or parse error, 5 presence proof failed: the git-data server or its LUKS volume was not found by name); nothing was planned."
+            echo "::error::verdict=pre_plan_read_failed (exit ${rc}) — the Hetzner read could not be completed (3 no credential, 4 API or parse error, 5 presence proof failed: a by-name lookup of the git-data server or its LUKS volume returned a non-200 or not exactly one match; read the probe error= line above); nothing was planned."
             exit 1
           fi
           shape="$(printf '%s\n' "$out" | sed -n 's/^shape=//p' | head -1)"

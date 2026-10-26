@@ -1240,8 +1240,10 @@ def dispatch_gated_ok(r, a):
         for i, st in enumerate(j.steps):
             body = step_code(st)
             mo = re.search(r"\s-out=(\S+)", body)
+            strict = [m.group(2) for m in tq.finditer(body)]
+            loose = re.findall(r"(?<![\w])-{1,2}target\b", body)
             if (re.search(r"(?<![-\w])terraform\s+plan(?![-\w])", body) and mo and q.search(body)
-                    and {m.group(2) for m in tq.finditer(body)} == want and step_obeys(st)):
+                    and set(strict) == want and len(strict) == len(loose) and step_obeys(st)):
                 plan_i, plan_out = i, mo.group(1)
                 break
         if plan_i is None:
@@ -1251,8 +1253,10 @@ def dispatch_gated_ok(r, a):
             m = re.search(r"(?<![-\w])terraform\s+apply((?:\s+-\S+)*)\s+([A-Za-z0-9_./][A-Za-z0-9_./-]*)(?=\s*(?:;|&&|\|\||$))", body)
             if not (m and m.group(2) == plan_out and not re.search(r"-(?:target|replace)\b", m.group(1)) and step_obeys(st)):
                 continue
-            gi = body.find(ent[2])
-            if 0 <= gi < m.start():
+            gm = re.search(r"(?m)^if\s+!\s+" + re.escape(ent[2]) + r"\s+" + re.escape(plan_out) + r"\.json\s", body)
+            if (gm and gm.start() < m.start()
+                    and not re.search(re.escape(ent[2]) + r"\s*\(\)", body)
+                    and not re.search(r"\|\|\s*(?:true|:)\b", body)):
                 return True
     return False
 orphans = []
@@ -3769,6 +3773,19 @@ if g4dg_base g4-29 "$MUTDIR" && g4dg_wf g4-29 "$MUTDIR" \
   mutant_red g4-29-dispatch-gated-unprotected-environment wf_row "$T/mut/g4-29.tsv" "G4c:"
 fi
 
+MUTDIR="$(fixcopy g4-30)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-30 "$MUTDIR" && g4dg_wf g4-30 "$MUTDIR" \
+   && mutate g4-30-whole-token-quoted-target "$MUTDIR/$G4DG_WF" 2 "s/^            -target='hcloud_volume\\.git_data'\$/            -target='hcloud_volume.git_data' \"-target=hcloud_server.git_data\"/"; then
+  fixcensus "$MUTDIR" "$T/mut/g4-30.tsv" ""
+  mutant_red g4-30-dispatch-gated-whole-token-quoted-target wf_row "$T/mut/g4-30.tsv" "G4c:"
+fi
+MUTDIR="$(fixcopy g4-31)"; assert_fixture_dir "$MUTDIR"
+if g4dg_base g4-31 "$MUTDIR" && g4dg_wf g4-31 "$MUTDIR" \
+   && mutate g4-31-gate-call-unenforced "$MUTDIR/$G4DG_WF" 2 's/^          if ! git_data_plaintext_destroy_gate tfplan\.json "\$EXPECTED_VOLUME_ID" "\$SERVER_ID"; then exit 1; fi$/          git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID" || true/'; then
+  fixcensus "$MUTDIR" "$T/mut/g4-31.tsv" ""
+  mutant_red g4-31-dispatch-gated-gate-call-unenforced wf_row "$T/mut/g4-31.tsv" "G4c:"
+fi
+
 # ── G4h (#9879): no `removed` / `moved` block over a sole-copy address ───────────────────────────────────────────────
 # MUST-PASS arm first: the compliant fixture carries the two App-identity forget-only `removed` blocks (github-app.tf)
 # and a benign `moved` block (placement-group.tf), and G4h and G4h2 stay green on all of them.
@@ -4854,7 +4871,8 @@ fi
 #   g1-k3 (second-member fixture .sh writer, 1), g1-k4 (half-set pair, 1), g1-k5 (checker
 #   classification key, 1), g1-k6 (read-only fixture .sh, 1). Measured: 151 ran.
 # 173 -> 194 (#11179 review): g4-23..g4-29 (lexical-decoy rows, base + fixture + one mutation = 3 landings each). Measured: 194 ran.
-MUTANT_FLOOR=194
+# 194 -> 200 (#11179 verification pass): g4-30 (whole-token quoted extra target), g4-31 (unenforced gate call), 3 landings each. Measured: 200 ran.
+MUTANT_FLOOR=200
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4908,7 +4926,8 @@ _ran=$((passes + fails))
 #   only `-lt`, so upward drift never trips it). Measured: 393 ran.
 # 402 -> 429 (#8211 Option B, DISPATCH_GATED_DESTROYS): g4-15..g4-22 (19 landings/fixtures + 8 verdicts). Measured: 429 ran.
 # 429 -> 457 (#11179 review): g4-23..g4-29 (21 landings/fixtures + 7 verdicts). Measured: 457 ran.
-FLOOR=457
+# 457 -> 465 (#11179 verification pass): g4-30/g4-31 (6 landings/fixtures + 2 verdicts). Measured: 465 ran.
+FLOOR=465
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
