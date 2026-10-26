@@ -163,16 +163,15 @@ pos_env="$(grep -n '> /etc/default/inngest-server' "$WORK/runcmd.txt" | head -1 
 { [ -n "$pos_arm" ] && [ -n "$pos_env" ] && [ "$pos_arm" -gt "$pos_env" ]; } \
   && pass || fail "S6: timer armed before /etc/default/inngest-server write (arm=$pos_arm env=$pos_env)"
 
-# S7: HARD-1 + AC18 — refresh-set = the five dedicated carriers, all in DEST_SPEC, no engine.
+# S7: HARD-1 + AC18 — refresh-set = the four dedicated carriers, all in DEST_SPEC, no engine.
 SET_FILE="$DIR/inngest-config-refresh-set.txt"
 members="$(grep -vE '^\s*(#|$)' "$SET_FILE" | sort)"
 want_members="$(printf '%s\n' \
   apps/web-platform/infra/cat-inngest-cutover-state.sh \
   apps/web-platform/infra/inngest-cutover-flip.sh \
-  apps/web-platform/infra/inngest-luks-cutover.sh \
   apps/web-platform/infra/inngest-redis-bootstrap.sh \
   apps/web-platform/infra/inngest-server-flip-guard.sh | sort)"
-[ "$members" = "$want_members" ] && pass || fail "S7: refresh-set != the five dedicated carriers"
+[ "$members" = "$want_members" ] && pass || fail "S7: refresh-set != the four dedicated carriers"
 missing=0
 while IFS= read -r m; do
   base="/usr/local/bin/$(basename "$m")"
