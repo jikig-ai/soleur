@@ -50,3 +50,23 @@ Status: COMPLETE — soleur:review, sequential-fallback (no nested-agent tool in
 - Trailer: f0b013fc9d (`Reviewed-Coverage: sequential-fallback 12/12`); Review-Evidence comment posted on PR #11159. Branch NOT pushed per parent constraint — push + ship remain for the orchestrator.
 
 Remaining: push branch, then soleur:compound -> soleur:ship.
+
+## QA Phase
+
+Status: COMPLETE — PASS (sequential-fallback; no browser surface — infra-only diff, plan Test Scenarios are unit/integration prose, verified via the named suites + AC checks per the pipeline brief).
+
+- Step 2.6 nav-states gate: skipped silently (diff touches no `app/(dashboard)/**`, `components/dashboard/**`, or `layout.tsx`).
+- Suite greens: doppler-injection-bound 71/71; inngest 586/586; cloud-init-inngest-provision-unit 88 rows; cat-deploy-state 167/167; inngest-cutover-flip 194/194; journald-config 113/113; vector-admission (`apps/web-platform/test/infra/`) 58/58.
+- cloud-init-inngest-bootstrap: 268/269 — the one red is the designed-advisory GuardA (vinngest pin propagation, ADR-232, non-required).
+- QA FINDING FIXED: GuardD census floor `GD_ALL == 10` was stale — the diff added the quoted `SERVERLAUNCHEOF` heredoc to inngest-bootstrap.sh (11 heredocs). Bumped to 11 in be11fc8a1e (pushed); convention precedent: 235693e411 added GuardD + a heredoc together.
+- AC ledger: AC1 ExecStart plain redis-server + acl-writer ExecStartPre after mount-guard ✓; AC2 aclfile directive, refusal-first writer, atomic 0600 (#<sha256> form per review P2) ✓; AC3 rendered ExecStart sentinel-shaped, zero expansions ✓; AC4 launch script ordering + chmod 0755 reconcile-always ✓; AC5/AC6 via suite greens ✓; AC7 journald + vector-admission green, no vector.toml diff ✓; AC8 named suites pass (GuardA excluded by design) ✓; AC9 `grep -c 'bash -c' inngest-redis.service` = 0 ✓.
+
+## Compound Phase
+
+Status: COMPLETE.
+
+- Learning: `knowledge-base/project/learnings/test-failures/2026-10-26-the-advisory-red-i-attributed-was-two-reds-a-census-floor-the-diff-moved.md` (Session Errors: 4 items, each with **Prevention:**).
+- Deviation Analyst: no hard-rule deviations this phase; `.rule-incidents.jsonl` absent (no incidents). Rule budget: linter `[WARN] B_ALWAYS=44390 >= 44000` (approaching 46000 ratchet — no new rule added; insight routed to the owning skill instead); registry 44463 bytes / 99 rules (longest 597); constitution.md 320/300 advisory; 79 rules unused>8w (informational only).
+- Route-to-definition: one bounded bullet appended to `plugins/soleur/skills/qa/SKILL.md` Notes (designed-advisory red = set-membership claim; bump census floors with the diff). Constitution promotion: skipped — covered by the routed bullet + existing qa notes.
+- Archival: DEFERRED to ship Phase 6.45 (archive-kb.sh) per pipeline brief — spec dir still in flight, ship Phase 6 reads decision-challenges.md from it.
+- Phase 1.6 token-efficiency: skipped by script (small uncommitted diff).
