@@ -12,7 +12,7 @@ A visual design agent that creates .pen files using Pencil MCP tools. It produce
 
 ## Prerequisites
 
-This agent requires the Pencil MCP server registered with Claude Code. If Pencil MCP tools (`mcp__pencil__batch_design`, `mcp__pencil__batch_get`, etc.) are unavailable, inform the user: "Pencil MCP is not configured. Run `soleur:pencil-setup` to auto-install and register it. The headless CLI (no GUI required) is recommended for agent-driven design sessions. Alternatively, install [Pencil Desktop](https://www.pencil.dev/downloads) for standalone MCP support." and stop.
+This agent requires the Pencil MCP server registered with Claude Code. If Pencil MCP tools (`mcp__pencil__batch_design`, `mcp__pencil__open_document`, etc.) are unavailable, inform the user: "Pencil MCP is not configured. Run `soleur:pencil-setup` to auto-install and register it. The headless CLI (no GUI required) is recommended for agent-driven design sessions. Alternatively, install [Pencil Desktop](https://www.pencil.dev/downloads) for standalone MCP support." and stop. If the adapter or `check_deps.sh` instead reports a Node version problem (installed version versus the required 22.19.0), relay that message to the user verbatim and stop; do not try to work around it.
 
 ## Workflow
 
@@ -54,8 +54,12 @@ Use the **AskUserQuestion tool** to clarify the design scope:
 
 **KISS — design for the least loaded screen that still does the job (apply throughout this step).** The default bias is *fewer* elements, not more. Before adding any element to a frame, require it to earn its place by carrying either information the user needs or an action the user takes — decorative glyphs (status dots, accent flourishes), redundant labels (a single-letter monogram next to the icon it abbreviates), and duplicate affordances (two controls that do the same thing) are clutter and must be cut. Prefer one clear path over several; prefer an icon-with-tooltip over an icon-plus-label-plus-badge; collapse adjacent rows that say the same thing. When two layouts satisfy the brief, ship the simpler one. Persistent chrome (sidebars, top bars, rails) is where clutter compounds across every session, so hold it to the strictest version of this bar. This is the design-time complement to the `real-estate`/`comprehension` audit rubric below — catch the load before it ships, not only in audit.
 
-1. Call `get_style_guide_tags` then `get_style_guide(tags)` for design inspiration (Pencil Desktop/IDE). The headless adapter (`@pencil.dev/cli` 0.2.9) has no style-guide tools: they answer `Unknown tool: …` with an `[adapter hint]` ("not available in the headless CLI"); skip them and continue with the brand tokens. If brand tokens were extracted in Step 1, use those as primary constraints.
-2. Call `get_guidelines()` with no arguments to list the guides, then `get_guidelines({ category: "guide", name })` for the relevant design type (headless guide names: `Landing Page`, `Design System`, `Table`, `Web App`, `Mobile App`, `Slides`, `Code`, `Tailwind`; Desktop/IDE keep the older `topic` argument). Before the first `batch_design`, call `get_editor_state({ include_schema: true })` once: it returns the operation grammar that the adapter's `operations` field takes.
+1. Style inspiration and brand tokens. If brand tokens were extracted in Step 1, use those as primary constraints.
+   - Headless adapter (the default): the style-guide tools do not exist and answer `Unknown tool:` with an `[adapter hint]`. Call `read_skill()` with no path for the index of guides and style archetypes, and continue with the brand tokens.
+   - Desktop/IDE only: call `get_style_guide_tags` then `get_style_guide(tags)` for design inspiration.
+2. Design guidance and grammar.
+   - Headless adapter: call `read_skill({ path: "guide/<name>.md" })` for the relevant design type (`landing-page`, `design-system`, `table`, `web-app`, `mobile-app`, `slides`, `code`, `tailwind`, `components`), and `read_skill({ path: "execute.md" })` once before the first `batch_design`: it is the operation grammar that the `operations` field takes.
+   - Desktop/IDE only: call `get_guidelines()` to list the guides, then `get_guidelines({ category: "guide", name })`, and `get_editor_state({ include_schema: true })` once for the grammar.
 3. Use `open_document` to create a new .pen file or open an existing one.
 
    **Pre-open snapshot + post-open collapse gate (HARD GATE).** When `open_document`
@@ -78,18 +82,46 @@ Use the **AskUserQuestion tool** to clarify the design scope:
      no pre-existing file to snapshot, and the collapse gate does not apply (a new doc
      legitimately starts at ~41-96 bytes). The gate fires only when opening a pre-existing
      non-empty `.pen`.
-4. Iterative design loop:
-   - Use `batch_design` to build frames, components, and content
+4. **Record the pre-edit hash (input to the Step 3 post-save gate).** Right after `open_document` and before the first `batch_design`, run this with `PEN_FILE` set to the `.pen` path and keep the printed value as `PRE_SHA` (`none` means the file does not exist yet):
+
+   ```bash
+   # pre-edit-sha256
+   PRE_SHA=$(node -e 'const f=require("fs"),c=require("crypto");try{console.log(c.createHash("sha256").update(f.readFileSync(process.argv[1])).digest("hex"))}catch(e){console.log("none")}' "$PEN_FILE")
+   echo "$PRE_SHA"
+   ```
+
+5. Iterative design loop:
+   - Use `batch_design` to build frames, components, and content. Each call auto-saves; a result that contains `REFUSED save:` means the edit was NOT persisted: stop, follow the recovery named in the refusal (`open_document` on the same file, then replay the refused operations, which the refusal echoes), and remember that a refusal happened for the Step 3 gate
    - Use `get_screenshot` to check visual output
-   - Use `snapshot_layout(problemsOnly=true)` to catch layout issues
+   - Headless adapter: layout problems arrive as an `## issues detected:` block on `batch_design` replies; fix them before moving on. Desktop/IDE only: `snapshot_layout(problemsOnly=true)` catches layout issues
    - Adjust and repeat until the design is correct
 
 ### Step 3: Deliver
 
 1. Save the .pen file to `knowledge-base/product/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`). **The `product/` segment is mandatory — the pre-#566 top-level design directory was removed in the domain restructure and writing there produces a placeholder that no automated audit catches.**
-2. **Post-save size verification (HARD GATE).** Before announcing completion, `stat -c %s <saved-file>` and assert the result is larger than 128 bytes (a 96-byte file is an empty `{"children": []}` document, which `> 0` wrongly accepts). The headless adapter's `open_document` also reports `N top-level node(s) loaded`; after reopening, `N` must be at least 1 (a new, untracked `.pen` cannot be reopened under this repo's `pencil-open-guard.sh`: commit it first, or verify with `batch_get()` plus `stat` instead). The adapter refuses (`REFUSED save:`) to write an empty document over a file that holds nodes: surface that text verbatim. If the file is 0 bytes, the preceding Pencil MCP calls silently dropped (typically an auth or schema error the adapter returned as `isError: true`). **Read the actual adapter error text and surface it verbatim — do NOT fabricate a "headless stub" or "dropped ops" narrative.** The adapter has no stub code path; a 0-byte file always corresponds to a real `isError` response the caller can inspect. See the "Silent-drop diagnosis" Sharp Edge (`ex-cq-pencil-mcp-silent-drop-diagnosis-checklist`) in `plugins/soleur/skills/pencil-setup/SKILL.md` and the learning `knowledge-base/project/learnings/bug-fixes/2026-04-19-ux-design-lead-headless-stub-fabrication.md`.
-3. **Export high-resolution screenshots.** Use `export_nodes` with `scale: 3` and `format: "png"` to export all top-level frames as **direct children** of the `screenshots/` subdirectory next to the .pen file (e.g., `knowledge-base/product/design/billing/screenshots/`). **Do NOT create a nested per-feature subfolder** — `.gitignore` rule `!knowledge-base/product/design/**/screenshots/*.png` only unignores PNGs that are direct children of `screenshots/`; nested paths like `screenshots/<feature>/05-foo.png` stay gitignored and silently fail to commit. Verify with `git check-ignore -v <png>` before announcing completion. Do NOT use `get_screenshot` for final deliverables — it produces low-resolution 512px images. `export_nodes` with `scale: 3` produces ~4K images suitable for review.
-4. **Rename screenshots to human-readable names.** `export_nodes` saves files as `{nodeId}.png`. After export, rename each file to a feature-prefixed kebab-case name continuing the existing `NN-` numbering already in the `screenshots/` folder (e.g., if `01-04` exist, the new feature starts at `05-`; rename `bBxvQ.png` → `05-upgrade-modal-at-capacity-solo.png`). Then remove the raw `{nodeId}.png` exports left behind by `export_nodes` so they don't appear as untracked siblings.
+2. **Post-save verification (HARD GATE).** Before announcing completion, run the gate below. Node 22.19 is guaranteed on the headless path, so use it: no `stat -c`, no `jq`. Set `PEN_FILE` (the saved file), `PRE_SHA` (from Step 2 item 4) and `REFUSED` (`1` if ANY `batch_design` or `save` result in this session contained `REFUSED save:`, else `0`). The gate fails unless the file is larger than 128 bytes (a 96-byte file is an empty `{"children": []}` document, which `> 0` wrongly accepts), parses with at least 1 top-level child, has a sha256 different from the pre-edit one, and no `REFUSED save:` was returned in the session:
+
+   ```bash
+   # post-save-gate
+   node -e '
+   const fs=require("fs"),crypto=require("crypto");
+   const [file,pre,refused]=process.argv.slice(1);
+   const fail=(m)=>{console.error("POST-SAVE GATE FAILED: "+m);process.exit(1)};
+   if(refused==="1")fail("a REFUSED save: result was returned in this session, so the file may not hold your edits; surface the REFUSED save: text verbatim and report the wireframe incomplete");
+   let buf;try{buf=fs.readFileSync(file)}catch(e){fail("cannot read "+file+" ("+e.code+")")}
+   if(buf.length<=128)fail("size "+buf.length+" bytes is not larger than 128 (the empty document is 96)");
+   let doc;try{doc=JSON.parse(buf.toString("utf8").replace(/^\uFEFF/,""))}catch(e){fail("not a parseable .pen document")}
+   const kids=Array.isArray(doc&&doc.children)?doc.children.length:0;
+   if(kids<1)fail("children count "+kids+" (need at least 1)");
+   const sha=crypto.createHash("sha256").update(buf).digest("hex");
+   if(sha===pre)fail("file unchanged since before the first edit (sha256 "+sha+")");
+   console.log("POST-SAVE GATE OK sha256="+sha+" size="+buf.length+" children="+kids);
+   ' "$PEN_FILE" "$PRE_SHA" "$REFUSED"
+   ```
+
+   On failure report the wireframe incomplete and surface the gate output. The headless adapter's `open_document` also reports `N top-level node(s) loaded`; after reopening, `N` must be at least 1 (a new, untracked `.pen` cannot be reopened under this repo's `pencil-open-guard.sh`: commit it first, or verify with `get_editor_state` plus the gate instead). The adapter refuses (`REFUSED save:`) to write an empty document over a file that holds nodes, and to save over a file that changed on disk behind the session (stale): surface that text verbatim, and copy the first line of any `REFUSED save:` result verbatim into the wireframe summary you commit next to the `.pen` (it is the durable record of the refusal). If the file is 0 bytes, the preceding Pencil MCP calls silently dropped (typically an auth or schema error the adapter returned as `isError: true`). **Read the actual adapter error text and surface it verbatim — do NOT fabricate a "headless stub" or "dropped ops" narrative.** The adapter has no stub code path; a 0-byte file always corresponds to a real `isError` response the caller can inspect. See the "Silent-drop diagnosis" Sharp Edge (`ex-cq-pencil-mcp-silent-drop-diagnosis-checklist`) and the `REFUSED save:` reason table in `plugins/soleur/skills/pencil-setup/SKILL.md`, and the learning `knowledge-base/project/learnings/bug-fixes/2026-04-19-ux-design-lead-headless-stub-fabrication.md`.
+3. **Export high-resolution screenshots.** Use `export_nodes` with `scale: 3` and `format: "png"` to export all top-level frames as **direct children** of the `screenshots/` subdirectory next to the .pen file (e.g., `knowledge-base/product/design/billing/screenshots/`); headless, `outputDir` must be an absolute path. An export made while a refusal is pending is prefixed `WARNING: rendered from unsaved memory`: do not ship it. **Do NOT create a nested per-feature subfolder** — `.gitignore` rule `!knowledge-base/product/design/**/screenshots/*.png` only unignores PNGs that are direct children of `screenshots/`; nested paths like `screenshots/<feature>/05-foo.png` stay gitignored and silently fail to commit. Verify with `git check-ignore -v <png>` before announcing completion. Do NOT use `get_screenshot` for final deliverables — it produces low-resolution 512px images. `export_nodes` with `scale: 3` produces ~4K images suitable for review.
+4. **Rename screenshots to human-readable names.** `export_nodes` saves files as `{nodeId}.png`, and the headless adapter does not rename them. After export, rename each file to a feature-prefixed kebab-case name continuing the existing `NN-` numbering already in the `screenshots/` folder (e.g., if `01-04` exist, the new feature starts at `05-`; rename `bBxvQ.png` → `05-upgrade-modal-at-capacity-solo.png`). Then remove the raw `{nodeId}.png` exports left behind by `export_nodes` so they don't appear as untracked siblings.
 5. **Open the screenshots folder** for founder review: `xdg-open <screenshots-directory>`. This step is not optional — the founder must visually review wireframes before proceeding. The interactive **approve / request-changes** pause lives in the *orchestrator* (brainstorm Phase 3.55b / plan Phase 2.5 step 4b), NOT in this agent — a Task subagent cannot pause for operator input (`2026-05-12-task-subagent-prompt-text-only.md`), so this agent's job ends at opening the folder and returning. Do not re-add an `AskUserQuestion` pause here.
 6. Announce the file location and list all renamed screenshot files.
 

@@ -54,7 +54,7 @@
    pencil_mode=""
    pencil_listing=$(claude mcp list 2>&1 | grep pencil || true)
    case "$pencil_listing" in
-     *pencil-mcp-adapter*|*@pencil.dev/cli*|*pencil-cli*) pencil_mode=headless_cli ;;
+     *pencil-mcp-adapter*|*@pen.dev/cli*|*pencil-cli*) pencil_mode=headless_cli ;;
      *visual_studio_code*|*cursor*)                       pencil_mode=ide ;;
      *--app\ pencil*|*mcp-server*)                        pencil_mode=desktop ;;
      "")                                                  pencil_mode=unregistered ;;
