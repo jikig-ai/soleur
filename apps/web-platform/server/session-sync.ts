@@ -593,7 +593,8 @@ async function recordKbSyncHistory(
     });
     return;
   }
-  log.debug({ userIdHash: hashUserId(userId), fileCount }, "Recorded KB sync history");
+  const uidHash = hashUserId(userId);
+  log.debug({ userIdHash: uidHash, fileCount }, "Recorded KB sync history");
 }
 
 // #4224 — shared constants for the workspace-reconcile feature.
