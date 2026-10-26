@@ -13,7 +13,7 @@
 ### Decisions
 - Backfill shape: generated snapshot of prd's effective privileges emitted as explicit GRANTs in `174_api_data_grants_snapshot.sql` — zero prd behavior change; per-table narrowing deferred to a follow-up paired with #4027. Per-table grants chosen over `ALTER DEFAULT PRIVILEGES`.
 - Two-tier guard: authoritative live-catalog gate (`test/rls-fuzz/rls-grants.integration.test.ts` + `table-grants.ts` registry); subordinate `lint-migration-api-grants.sh --from-pr-diff` in `tenant-integration.yml`, with `soleur:no-data-api:` sentinel escape hatch and a sequence-USAGE arm.
-- `auto_expose_new_tables = false` in `supabase/config.toml` makes the local fuzz stack model the post-10-30 world.
+- SUPERSEDED by CTO ruling 2026-10-26: `supabase-local.sh` post-start normalize is the parity mechanism (config key absent on pinned CLI 2.84.2).
 - All deepen-plan halt gates (4.4–4.13) pass.
 
 ### Components Invoked

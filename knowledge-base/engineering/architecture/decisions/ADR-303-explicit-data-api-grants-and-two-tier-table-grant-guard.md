@@ -66,8 +66,8 @@ text.
 - A future create-table migration without grants fails in CI before merge —
   statically (lint) and at runtime (fuzz gate on a defaults-off stack).
 - Per-relation narrowing of default-era grants (e.g. `users` carrying
-  table-level UPDATE despite 006's column-split intent) is deferred to a
-  follow-up issue paired with #4027 — narrowing under a remediation banner is
-  the #4647 silent-failure class and changes prd behavior.
+  table-level UPDATE despite 006's column-split intent) is deferred to
+  follow-up issue #11193 paired with #4027 — narrowing under a remediation
+  banner is the #4647 silent-failure class and changes prd behavior.
 - The `.down.sql` for 174 is a documented no-op: REVOKE cannot distinguish
   grant provenance and would strip default-era effective access on prd.

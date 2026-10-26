@@ -399,7 +399,7 @@ DOCKER_PS_OUT="" res=$(run_assert)
 if [[ "${res%%|*}" == "0" ]]; then pass "default (hook) path still 0"; else fail "default changed: ${res%%|*}"; fi
 
 # ---------------------------------------------------------------------------
-# T17-T23 — the post-start normalize arm (ADR-303).
+# T17-T25 — the post-start normalize arm (ADR-303).
 #
 # Behavioural, like T10: a fake `supabase` records argv, a fake `docker`
 # records every call in DOCKER_ARGV_LOG, and the assertions read the records —
@@ -419,6 +419,11 @@ recorded="$(cat "$argv_file" 2>/dev/null || true)"
 if [[ "$start_rc" == "0" ]]; then pass "start exits 0 on happy path"; else fail "start rc=$start_rc"; fi
 if [[ "$recorded" == "--network-id ${EXPECTED_NET} start" ]]; then pass "start argv correct"; else fail "start argv wrong: '$recorded'"; fi
 if grep -Eq '^exec -i db1 psql ' "$docker_log"; then pass "normalize execs psql in the discovered db container"; else fail "no db exec in docker log: $(cat "$docker_log")"; fi
+# The psql ROLE is load-bearing: the bootstrap defacls in `public` are owned by
+# `supabase_admin`, and `postgres` cannot `alter default privileges for role
+# supabase_admin` — a `-U postgres` session fails the sweep mid-run and bricks
+# `start` (the exact CI red this suite must never regress to).
+if grep -Eq '^exec -i db1 psql -U supabase_admin ' "$docker_log"; then pass "normalize connects AS supabase_admin (can alter every owner's defacls)"; else fail "psql not running as supabase_admin: $(cat "$docker_log")"; fi
 if grep -Eq 'name=supabase_db' "$docker_log"; then pass "db container discovered by name filter"; else fail "no supabase_db discovery call: $(cat "$docker_log")"; fi
 
 echo "T18: db start is also a start-class verb (normalize runs)"
@@ -497,7 +502,18 @@ set -e
 if [[ "$ncrc" == "2" ]]; then pass "missing db container -> rc=2"; else fail "expected 2, got $ncrc ($ncout)"; fi
 if grep -Eq 'no supabase_db container' <<<"$ncout"; then pass "names the missing container"; else fail "no diagnostic: $ncout"; fi
 
-MIN_ASSERTIONS=55
+echo "T25: db reset is a start-class verb — it recreates the db, reinstalling bootstrap defacls"
+reset_fixture
+d="$(new_case_dir)"
+docker_log="${d}/docker-argv"
+set +e
+env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  SUPABASE_ARGV_FILE="${d}/sa" DOCKER_ARGV_LOG="$docker_log"  DOCKER_NET_EXISTS="1" DOCKER_NET_OPT="127.0.0.1" DOCKER_PS_OUT="db1"  bash "$SCRIPT" db reset >/dev/null 2>&1
+reset_rc=$?
+set -e
+if [[ "$reset_rc" == "0" ]]; then pass "db reset exits 0"; else fail "db reset rc=$reset_rc"; fi
+if grep -Eq '^exec -i db1 psql -U supabase_admin ' "$docker_log"; then pass "normalize re-runs after db reset"; else fail "no normalize after db reset: $(cat "$docker_log")"; fi
+
+MIN_ASSERTIONS=59
 echo ""
 echo "supabase-local.test.sh: $PASS passed, $FAIL failed"
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then

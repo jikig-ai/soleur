@@ -12,12 +12,16 @@
 #
 # THE CONTRACT: every file checked here that creates a public relation (table,
 # view, materialized view — temp and partition-child excluded) must carry an
-# in-file `GRANT ... TO (anon|authenticated|service_role)` naming it, or a
-# `-- soleur:no-data-api: <rel> — <reason>` sentinel (reason REQUIRED — a
-# reason-free exemption is an allowlist entry with no rationale). Tables with
-# serial/identity columns additionally need a sequence `GRANT USAGE` (post-
-# flip sequences keep no USAGE default) or the sentinel; `create sequence`
-# needs the same.
+# in-file `GRANT ... TO (anon|authenticated|service_role)` naming it (the
+# column-list form `GRANT SELECT (a,b) ON TABLE <rel> TO <role>` counts — it IS
+# api exposure), or a `-- soleur:no-data-api: <rel> — <reason>` sentinel
+# (`public.<rel>` accepted; reason REQUIRED — a reason-free exemption is an
+# allowlist entry with no rationale). Tables with serial/identity columns —
+# including `CREATE TABLE … (LIKE src INCLUDING ALL|IDENTITY)` copies —
+# additionally need a sequence `GRANT USAGE` (post-flip sequences keep no
+# USAGE default) or the sentinel; `create sequence` needs the same.
+# `GRANT … ON ALL TABLES/SEQUENCES IN SCHEMA public` is NOT a satisfying form
+# (blanket over-grant — flagged outright).
 #
 # DETECTION runs on noise-stripped SQL (comments, dollar-quoted bodies,
 # single-quoted strings removed) via the JS engine in
@@ -84,9 +88,23 @@ fi
 
 declare -a files=()
 if [[ "$1" == "--from-pr-diff" ]]; then
-  # Refresh origin/main best-effort (mirrors the fetch in run-migrations.sh's
-  # unmerged-apply gate).
-  git -C "$REPO_ROOT" fetch --no-tags --quiet origin main 2>/dev/null || true
+  # Refresh origin/main (mirrors the fetch in run-migrations.sh's
+  # unmerged-apply gate). NOT best-effort: a failed fetch leaves origin/main
+  # stale or absent, and diffing against a missing ref exits nonzero — which
+  # `|| true` used to swallow into "no files changed" → a silent false-green
+  # over a PR that was never examined. Fail CLOSED (2) on either error.
+  # (`cmd && rc=0 || rc=$?` — -e-safe and correct under this script's `set -u`
+  # without -e, where a bare failing command would otherwise still be caught.)
+  fetch_out="$(git -C "$REPO_ROOT" fetch --no-tags origin main 2>&1)" && fetch_rc=0 || fetch_rc=$?
+  if [[ "$fetch_rc" -ne 0 ]]; then
+    echo "::error::lint-migration-api-grants: 'git fetch origin main' failed (rc=${fetch_rc}) — the PR-diff window is not established. ${fetch_out}" >&2
+    exit 2
+  fi
+  diff_out="$(git -C "$REPO_ROOT" diff origin/main...HEAD --name-only --diff-filter=AMR -- 'apps/web-platform/supabase/migrations/*.sql' 2>&1)" && diff_rc=0 || diff_rc=$?
+  if [[ "$diff_rc" -ne 0 ]]; then
+    echo "::error::lint-migration-api-grants: 'git diff origin/main...HEAD' failed (rc=${diff_rc}) — refusing to pass over an unexamined diff. ${diff_out}" >&2
+    exit 2
+  fi
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     # Skip down-sibling files — they're manual rollback; lint applies to
@@ -95,9 +113,12 @@ if [[ "$1" == "--from-pr-diff" ]]; then
       *.down.sql) continue ;;
     esac
     # git diff returns repo-relative paths; absolutize against repo root
-    # so subsequent [[ -f ]] works regardless of caller CWD.
+    # so subsequent [[ -f ]] works regardless of caller CWD. The diff filter
+    # includes R (renamed+modified — for a rename git reports the NEW path,
+    # which is the file we lint); a rename-only entry still passes the
+    # [[ -f ]] check below, and a renamed migration must not escape the lint.
     files+=("$REPO_ROOT/$f")
-  done < <(git -C "$REPO_ROOT" diff origin/main...HEAD --name-only --diff-filter=AM -- 'apps/web-platform/supabase/migrations/*.sql' 2>/dev/null || true)
+  done <<<"$diff_out"
   if [[ ${#files[@]} -eq 0 ]]; then
     echo "lint-migration-api-grants: no migration changes in PR diff; nothing to check."
     exit 0

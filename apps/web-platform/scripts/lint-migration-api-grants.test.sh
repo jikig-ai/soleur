@@ -2,25 +2,33 @@
 # Tests for lint-migration-api-grants.sh (ADR-303 — the static tier of the
 # two-tier api-role table-grant guard).
 #
-# Covers the plan's Guard-1 mutation matrix:
-#   T1 — ungranted create-table → exit 1, names the relation
-#   T2 — lowercase single-role grant → exit 0 (non-canonical permitted form)
-#   T3 — two tables, grant covers only the first → exit 1 (a check stopping at
-#        the first member is the defect itself)
-#   T4 — dead-detector → the pass-case output must report >=1 relation scanned
-#        (a lint reporting "0 scanned" on a file that creates one is vacuous)
-#   T5 — .down.sql containing create table → exit 0 (never applied)
-#   T6 — GENERATED ALWAYS AS IDENTITY + table grant, no sequence grant → exit 1
-#        (the sequence arm; post-flip sequences keep no USAGE default)
-#   T7 — soleur:no-data-api sentinel with reason → exit 0
-#   T8 — create table inside a -- comment / dollar-quoted body → exit 0
-#        (the noise-stripper must not see non-DDL text)
-#   T9 — harness-mutation guard: a stub cannot satisfy the suite — T1's fixture
-#        must produce rc=1 AND an ::error:: marker AND the relation name, and
-#        the assertion floor keeps a dropped-case edit loud.
-# Extra rows mirroring the AC4 wording: case-insensitive create, view arm,
-# sequence-grant-satisfies-identity variant, reason-free sentinel RED,
-# nonexistent-file rc=2.
+# Covers the plan's Guard-1 mutation matrix (numbers match the body labels):
+#   T1  — ungranted create-table → exit 1, names the relation, ::error:: marker
+#   T2  — lowercase single-role grant → exit 0 (non-canonical permitted form)
+#   T3  — two tables, grant covers only the first → exit 1 naming the second
+#         (a check stopping at the first member is the defect itself)
+#   T4  — pass-case output must report >=1 relation scanned (a lint reporting
+#         "0 scanned" on a file that creates one is vacuous)
+#   T5  — .down.sql containing create table → exit 0 (never applied)
+#   T6  — GENERATED ALWAYS AS IDENTITY + table grant, no sequence grant → exit 1
+#         (the sequence arm; post-flip sequences keep no USAGE default);
+#         T6b adds the satisfying GRANT USAGE, T6c the serial variant
+#   T7  — soleur:no-data-api sentinel with reason → exit 0; T7b reason-free → 1
+#   T8  — create table inside a -- comment / /* */ block / dollar-quoted body →
+#         exit 0 (the noise-stripper must not see non-DDL text); T8c pins the
+#         DO-block to_regclass GRANT convention, T8b pins that a GRANT inside a
+#         string does NOT count
+#   T9  — case-insensitive create view arm: granted → 0, ungranted → 1 + named
+#   T10 — partition-child and temp-table creates are not public relations
+#   T11 — nonexistent file → exit 2
+#   T12 — no args → exit 2
+#   T13 — column-list grant form satisfies (GRANT SELECT (a,b) ON TABLE …)
+#   T14 — GRANT … ON ALL TABLES IN SCHEMA public → exit 1 (blanket over-grant)
+#   T15 — schema-qualified sentinel (`public.<rel>`) → 0; sentinel inside a
+#         /* */ block comment does NOT exempt → 1
+#   T16 — CREATE TABLE … (LIKE src INCLUDING ALL) needs the sequence arm → 1
+#        without, 0 with a sequence GRANT USAGE
+# The assertion-count floor at the bottom keeps a dropped-case edit loud.
 #
 # Run: bash apps/web-platform/scripts/lint-migration-api-grants.test.sh
 
@@ -271,10 +279,77 @@ set -e
 if [[ "$rc" == "2" ]]; then pass "exit 2 on no args"; else fail "expected 2, got $rc"; fi
 
 # ----------------------------------------------------------------------
+echo "T13: column-list grant form satisfies (GRANT SELECT (a,b) ON TABLE …)"
+cat > "$tmp/900_colgrant.sql" <<'SQL'
+CREATE TABLE public.t13_cols (
+  id uuid PRIMARY KEY,
+  email text
+);
+GRANT SELECT (id, email) ON TABLE public.t13_cols TO authenticated;
+SQL
+res=$(run_lint "$tmp/900_colgrant.sql")
+rc="${res%%|*}"; out="${res#*|}"
+if [[ "$rc" == "0" ]]; then pass "exit 0 — column grant counts"; else fail "expected 0, got $rc ($out)"; fi
+
+# ----------------------------------------------------------------------
+echo "T14: GRANT … ON ALL TABLES IN SCHEMA public → fails (blanket over-grant)"
+cat > "$tmp/900_blanket.sql" <<'SQL'
+CREATE TABLE public.t14_blanket (id uuid PRIMARY KEY);
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;
+SQL
+res=$(run_lint "$tmp/900_blanket.sql")
+rc="${res%%|*}"; out="${res#*|}"
+if [[ "$rc" == "1" ]]; then pass "exit 1 — blanket grant rejected"; else fail "expected 1, got $rc ($out)"; fi
+if grep -Eq 'ALL TABLES|blanket' <<<"$out"; then pass "names the blanket form"; else fail "no blanket diagnostic: $out"; fi
+
+# ----------------------------------------------------------------------
+echo "T15: schema-qualified sentinel passes; sentinel inside /* */ does NOT exempt"
+cat > "$tmp/900_sentinel_qualified.sql" <<'SQL'
+CREATE TABLE public.t15_qual (id uuid PRIMARY KEY);
+-- soleur:no-data-api: public.t15_qual — internal-only, definer-RPC access
+SQL
+res=$(run_lint "$tmp/900_sentinel_qualified.sql")
+rc="${res%%|*}"; out="${res#*|}"
+if [[ "$rc" == "0" ]]; then pass "exit 0 — public.<rel> sentinel counts"; else fail "expected 0, got $rc ($out)"; fi
+
+cat > "$tmp/900_sentinel_block.sql" <<'SQL'
+CREATE TABLE public.t15_block (id uuid PRIMARY KEY);
+/* -- soleur:no-data-api: t15_block — commented-out example, must not exempt */
+SQL
+res=$(run_lint "$tmp/900_sentinel_block.sql")
+rc="${res%%|*}"; out="${res#*|}"
+if [[ "$rc" == "1" ]]; then pass "exit 1 — block-comment sentinel is noise"; else fail "expected 1, got $rc ($out)"; fi
+
+# ----------------------------------------------------------------------
+echo "T16: CREATE TABLE … (LIKE src INCLUDING ALL) triggers the sequence arm"
+cat > "$tmp/900_like.sql" <<'SQL'
+CREATE TABLE public.t16_src (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY
+);
+CREATE TABLE public.t16_copy (LIKE public.t16_src INCLUDING ALL);
+GRANT SELECT ON public.t16_src TO authenticated;
+GRANT SELECT ON public.t16_copy TO authenticated;
+GRANT USAGE ON SEQUENCE public.t16_src_id_seq TO service_role;
+SQL
+res=$(run_lint "$tmp/900_like.sql")
+rc="${res%%|*}"; out="${res#*|}"
+# t16_copy's identity column name can't be derived from its span, so ANY
+# sequence USAGE grant in the file satisfies its arm — the src seq grant does.
+if [[ "$rc" == "0" ]]; then pass "exit 0 — in-file sequence grant satisfies the LIKE copy"; else fail "expected 0, got $rc ($out)"; fi
+
+cat > "$tmp/900_like_nogrant.sql" <<'SQL'
+CREATE TABLE public.t16b_copy (LIKE public.t16_src INCLUDING IDENTITY);
+GRANT SELECT ON public.t16b_copy TO authenticated;
+SQL
+res=$(run_lint "$tmp/900_like_nogrant.sql")
+rc="${res%%|*}"; out="${res#*|}"
+if [[ "$rc" == "1" ]] && grep -Eq 'sequence|USAGE' <<<"$out"; then pass "exit 1 — LIKE INCLUDING IDENTITY without seq grant"; else fail "expected 1 + sequence diagnostic, got $rc ($out)"; fi
+
+# ----------------------------------------------------------------------
 # Assertion-count floor — deleting cases or no-op-ing pass/fail must not let
 # the suite certify nothing (the supabase-local.test.sh precedent).
 # ----------------------------------------------------------------------
-MIN_ASSERTIONS=22
+MIN_ASSERTIONS=30
 echo ""
 echo "lint-migration-api-grants.test.sh: $PASS passed, $FAIL failed"
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then

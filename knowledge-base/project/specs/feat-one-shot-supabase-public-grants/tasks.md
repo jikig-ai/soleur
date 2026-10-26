@@ -12,15 +12,15 @@ Deadline driver: Supabase Data API auto-grant flip on 2026-10-30.
 
 ## Phase A — Audit + snapshot generation
 
-- [ ] 1.1 Create `apps/web-platform/scripts/dump-api-grants.sh` (or `.ts` matching `rls-parity-check.ts` conventions): read-only extraction over `information_schema.role_table_grants` + `column_privileges` + `role_usage_grants` for grantees `anon`/`authenticated`/`service_role`, all `public` relations (relkind r,v,m,S). Emit (a) GRANT DDL reproducing effective state (table-level where held; per-column where table-level revoked — the 006/079 shapes) and (b) per-relation classification block (RLS enabled? policies? serial/identity?).
-- [ ] 1.2 Run the extraction via `doppler run -c prd` (read-only, the run-verify access class).
+- [x] 1.1 Create `apps/web-platform/scripts/dump-api-grants.sh` (or `.ts` matching `rls-parity-check.ts` conventions): read-only extraction over `information_schema.role_table_grants` + `column_privileges` + `role_usage_grants` for grantees `anon`/`authenticated`/`service_role`, all `public` relations (relkind r,v,m,S). Emit (a) GRANT DDL reproducing effective state (table-level where held; per-column where table-level revoked — the 006/079 shapes) and (b) per-relation classification block (RLS enabled? policies? serial/identity?).
+- [x] 1.2 Run the extraction via `doppler run -c prd` (read-only, the run-verify access class).
 - [ ] 1.3 Hand-review the generated matrix; produce the narrowing follow-up list (relations holding default-era anon/auth grants with no evidence of API consumers).
 
 ## Phase B — Backfill migration + sentinel
 
-- [ ] 2.1 Write `apps/web-platform/supabase/migrations/174_api_data_grants_snapshot.sql`: provenance header (generator + date + command), `to_regclass` preconditions per FK-lint convention, generated GRANT DDL grouped by relation with classification annotations. Transaction-safe DDL only (GRANT, no CONCURRENTLY-class constructs).
-- [ ] 2.2 Write `174_api_data_grants_snapshot.down.sql` — documented no-op (see plan Technical Considerations; REVOKE-down is unsafe on prd).
-- [ ] 2.3 Write `apps/web-platform/supabase/verify/174_api_data_grants_snapshot.sql` — per-relation `has_table_privilege`/`has_column_privilege`/`has_sequence_privilege` assertions for the full registered set; idempotent (verify-migrations re-runs it).
+- [x] 2.1 Write `apps/web-platform/supabase/migrations/174_api_data_grants_snapshot.sql`: provenance header (generator + date + command), `to_regclass` preconditions per FK-lint convention, generated GRANT DDL grouped by relation with classification annotations. Transaction-safe DDL only (GRANT, no CONCURRENTLY-class constructs).
+- [x] 2.2 Write `174_api_data_grants_snapshot.down.sql` — documented no-op (see plan Technical Considerations; REVOKE-down is unsafe on prd).
+- [x] 2.3 Write `apps/web-platform/supabase/verify/174_api_data_grants_snapshot.sql` — per-relation `has_table_privilege`/`has_column_privilege`/`has_sequence_privilege` assertions for the full registered set; idempotent (verify-migrations re-runs it).
 
 ## Phase C — Local-stack parity pin
 
@@ -37,9 +37,9 @@ Deadline driver: Supabase Data API auto-grant flip on 2026-10-30.
 
 ## Phase E — Decision record + deferral
 
-- [ ] 5.1 Author `knowledge-base/engineering/architecture/decisions/ADR-303-explicit-data-api-grants-and-two-tier-table-grant-guard.md` + reciprocal cross-ref into ADR-112's header.
-- [ ] 5.2 File the grant-narrowing follow-up issue (Phase-A audit list attached; relates #4027; labels `domain/engineering`, `type/chore`).
-- [ ] 5.3 Sweep `grep -rn 'ADR-303\|174_api_data_grants' knowledge-base/project/{plans,specs}/feat-one-shot-supabase-public-grants/` if renumbering occurred in 0.2/0.3.
+- [x] 5.1 Author `knowledge-base/engineering/architecture/decisions/ADR-303-explicit-data-api-grants-and-two-tier-table-grant-guard.md` + reciprocal cross-ref into ADR-112's header.
+- [x] 5.2 File the grant-narrowing follow-up issue (Phase-A audit list attached; relates #4027; labels `domain/engineering`, `type/chore`).
+- [x] 5.3 Sweep `grep -rn 'ADR-303\|174_api_data_grants' knowledge-base/project/{plans,specs}/feat-one-shot-supabase-public-grants/` if renumbering occurred in 0.2/0.3.
 
 ## Verification (maps to plan ACs)
 

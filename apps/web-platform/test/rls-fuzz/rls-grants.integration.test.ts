@@ -4,9 +4,9 @@ import { publicApiRelations, publicApiSequences } from "./catalog";
 import {
   API_ROLES,
   TABLE_VERBS,
-  SEQUENCE_VERBS,
   TABLE_GRANT_REGISTRY,
   SNAPSHOT_RELATION_FLOOR,
+  SNAPSHOT_PARSED_RELATION_COUNT,
   type ApiRole,
   type GrantSet,
 } from "./table-grants";
@@ -100,13 +100,15 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — api-role grant coverage (local, ca
   });
 
   test("registry is non-vacuous (snapshot parse produced the full prd set)", () => {
-    // The 2026-10-26 prd audit enumerated 62 relations; a dead parser yields an
-    // empty registry and the parity test would red on the catalog side anyway —
-    // this floor makes a silent parse failure loud independent of a live DB.
-    expect(TABLE_GRANT_REGISTRY.size).toBeGreaterThanOrEqual(SNAPSHOT_RELATION_FLOOR);
+    // The 2026-10-26 prd audit enumerated 62 relations. The floor asserts on the
+    // PARSED-snapshot count only — never the registry total: INTERNAL/OVERRIDES/
+    // RETIRED entries are hand-authored and must not feed a floor that exists to
+    // prove the parser produced the prd set. A dead parser yields 0 either way;
+    // this keeps it loud independent of a live DB.
+    expect(SNAPSHOT_PARSED_RELATION_COUNT).toBeGreaterThanOrEqual(SNAPSHOT_RELATION_FLOOR);
     for (const [name, entry] of TABLE_GRANT_REGISTRY) {
-      if (entry.kind === "INTERNAL") {
-        expect(entry.reason.trim().length, `INTERNAL '${name}' must carry a reason`).toBeGreaterThan(0);
+      if (entry.kind === "INTERNAL" || entry.kind === "RETIRED") {
+        expect(entry.reason.trim().length, `${entry.kind} '${name}' must carry a reason`).toBeGreaterThan(0);
       } else {
         const total = [...entry.grants.privileges.values()].reduce((n, s) => n + s.size, 0);
         expect(total, `EXPOSED '${name}' must grant at least one verb to at least one api role`).toBeGreaterThan(0);
@@ -117,17 +119,25 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — api-role grant coverage (local, ca
   test("catalog⇔registry parity: every public relation/sequence is classified; no stale entries", async () => {
     const rels = await publicApiRelations(sql);
     const seqs = await publicApiSequences(sql);
-    const catalog = new Set([...rels.map((r) => r.relname), ...seqs]);
+    const catalog = new Set([...rels.map((r) => r.relname), ...seqs.map((s) => s.relname)]);
     // Non-vacuity: an empty catalog means the wrong DB is being enumerated —
     // a satisfied-by-nothing gate must not pass.
     expect(catalog.size).toBeGreaterThan(0);
     const registered = new Set(TABLE_GRANT_REGISTRY.keys());
     const unclassified = [...catalog].filter((n) => !registered.has(n)).sort();
-    const stale = [...registered].filter((n) => !catalog.has(n)).sort();
+    // RETIRED entries are EXPECTED absent (the relation was dropped/renamed —
+    // that absence is the classification), so they are exempt from `stale`; a
+    // RETIRED name that still EXISTS is the error instead.
+    const stale = [...registered].filter(
+      (n) => TABLE_GRANT_REGISTRY.get(n)!.kind !== "RETIRED" && !catalog.has(n),
+    ).sort();
+    const resurrected = [...registered].filter(
+      (n) => TABLE_GRANT_REGISTRY.get(n)!.kind === "RETIRED" && catalog.has(n),
+    ).sort();
     expect(
-      { unclassified, stale },
-      "every live public relation/sequence needs a table-grants.ts classification (EXPOSED or INTERNAL); every registry entry must name a live relation — stale entries rot silently",
-    ).toEqual({ unclassified: [], stale: [] });
+      { unclassified, stale, resurrected },
+      "every live public relation/sequence needs a table-grants.ts classification (EXPOSED or INTERNAL); every non-RETIRED registry entry must name a live relation — stale entries rot silently; a RETIRED entry whose relation still exists is a wrong retirement record",
+    ).toEqual({ unclassified: [], stale: [], resurrected: [] });
   });
 
   test("effective table/view privileges equal the registered set (both directions)", async () => {
@@ -140,7 +150,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — api-role grant coverage (local, ca
       cross join unnest(array['anon','authenticated','service_role']) as r(role)
       cross join unnest(array['DELETE','INSERT','MAINTAIN','REFERENCES','SELECT','TRIGGER','TRUNCATE','UPDATE']) as v(verb)
       where n.nspname = 'public'
-        and c.relkind in ('r', 'v', 'm')
+        and c.relkind in ('r', 'v', 'm', 'p', 'f')
         and not c.relispartition
       order by c.relname, r.role, v.verb`);
 
@@ -186,7 +196,11 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — api-role grant coverage (local, ca
 
   test("effective sequence privileges equal the registered set", async () => {
     const seqs = await publicApiSequences(sql);
-    if (seqs.length === 0) return; // no sequences on this stack — nothing to assert (parity test owns the floor)
+    // NON-VACUOUS: the corpus guarantees >=1 public sequence
+    // (agent_engine_events_id_seq — mig 138's identity column, snapshotted by
+    // 174). An early `return` on zero rows would let a broken enumerator or a
+    // stack missing the identity column exit green having asserted nothing.
+    expect(seqs.length, "no public sequences enumerated — the corpus guarantees agent_engine_events_id_seq; a zero here means the enumerator or the stack is broken").toBeGreaterThan(0);
     const rows = await withTransientRetry(() => sql<PrivRow[]>`
       select c.relname, r.role, v.verb,
              has_sequence_privilege(r.role, c.oid, v.verb) as held
@@ -200,7 +214,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — api-role grant coverage (local, ca
 
     const held = indexByRelation(rows);
     const violations: string[] = [];
-    for (const relname of seqs) {
+    for (const { relname } of seqs) {
       const entry = TABLE_GRANT_REGISTRY.get(relname);
       const perRole = held.get(relname);
       if (!perRole) {
@@ -282,6 +296,56 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — api-role grant coverage (local, ca
           violations.push(`${f.relname}.${r.col}: ${f.role} ${f.verb} held at column level but NOT registered — column split widened`);
         } else if (!r.held && shouldHold) {
           violations.push(`${f.relname}.${r.col}: ${f.role} ${f.verb} registered but not held — column split lost`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  // The registered-splits loop above only probes relations that HAVE
+  // columnPrivileges — a NEW column grant on a relation registered without
+  // them (e.g. `GRANT SELECT (newcol) ON t TO authenticated` where SELECT is
+  // not held at table level) changes effective privileges yet never enters
+  // `flagged`. This sweep enumerates EVERY api-role column ACL in the catalog
+  // (aclexplode(pg_attribute.attacl)) and requires each to be registered —
+  // unless the same verb is already registered at table level for that role
+  // (a redundant-but-harmless column grant; effective state was already
+  // asserted equal by the table-level probe).
+  test("every live column-level ACL is registered or covered by a table-level grant", async () => {
+    const aclRows = await withTransientRetry(() => sql<{ relname: string; col: string; grantee: string; verb: string }[]>`
+      select c.relname, a.attname as col,
+             case when x.grantee = 0 then 'PUBLIC' else g.rolname end as grantee,
+             x.privilege_type as verb
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+      cross join lateral aclexplode(a.attacl) x
+      left join pg_roles g on g.oid = x.grantee
+      where n.nspname = 'public'
+        and c.relkind in ('r', 'v', 'm', 'p', 'f')
+        and not c.relispartition
+        and (x.grantee = 0 or g.rolname in ('anon','authenticated','service_role'))
+      order by c.relname, a.attname, grantee, verb`);
+
+    const violations: string[] = [];
+    for (const r of aclRows) {
+      // PUBLIC is effective for every role; expand it to the api roles.
+      const roles: readonly string[] = r.grantee === "PUBLIC" ? API_ROLES : [r.grantee];
+      for (const role of roles) {
+        const entry = TABLE_GRANT_REGISTRY.get(r.relname);
+        if (!entry) continue; // unclassified — the parity test owns that red
+        if (entry.kind === "INTERNAL" || entry.kind === "RETIRED") {
+          violations.push(
+            `${r.relname}.${r.col}: ${role} ${r.verb} held at column level but the relation is ${entry.kind} — over-grant`,
+          );
+          continue;
+        }
+        const registeredCol = entry.grants.columnPrivileges.get(role as ApiRole)?.get(r.col)?.has(r.verb) === true;
+        const coveredByTable = entry.grants.privileges.get(role as ApiRole)?.has(r.verb) === true;
+        if (!registeredCol && !coveredByTable) {
+          violations.push(
+            `${r.relname}.${r.col}: ${role} ${r.verb} held at column level but NOT registered — register the split in table-grants.ts columnPrivileges or revoke the grant`,
+          );
         }
       }
     }

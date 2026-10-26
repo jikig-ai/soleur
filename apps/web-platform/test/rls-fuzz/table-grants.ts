@@ -17,6 +17,12 @@
 //    catalog counterpart of the migration lint's `soleur:no-data-api:`
 //    sentinel. A reason is REQUIRED (the ADR-112 escape-hatch lesson: a
 //    reason-free exemption is an allowlist entry with no rationale).
+//  - RETIRED: the relation was DROPPED or RENAMED away — it is EXPECTED to be
+//    absent from the live catalog, so it is exempt from the stale-entry check
+//    that would otherwise red on it (the remediation path for removals: keep
+//    the classification as the record of intentional removal rather than
+//    deleting the registry row). A reason is REQUIRED, and a RETIRED entry
+//    whose relation still EXISTS reds — the retirement record is then wrong.
 //
 // SEEDING. The EXPOSED set is derived BY PARSING migration
 // 174_api_data_grants_snapshot.sql at load — the generated snapshot IS the
@@ -68,14 +74,17 @@ export interface GrantSet {
 
 export type RegistryEntry =
   | { kind: "EXPOSED"; grants: GrantSet; provenance: string }
-  | { kind: "INTERNAL"; reason: string };
+  | { kind: "INTERNAL"; reason: string }
+  | { kind: "RETIRED"; reason: string };
 
 const SNAPSHOT_PATH = path.resolve(
   __dirname,
   "../../supabase/migrations/174_api_data_grants_snapshot.sql",
 );
 
-const _API_ROLE_RE = "(anon|authenticated|service_role)";
+// Derived from the API_ROLES tuple — a hand-retyped regex would silently drift
+// from the authoritative list.
+const _API_ROLE_RE = `(${API_ROLES.join("|")})`;
 const _RELNAME_RE = '"?([a-z_][a-z0-9_]*)"?';
 const _ON_PUBLIC_TABLE = `on\\s+table\\s+public\\s*\\.\\s*${_RELNAME_RE}\\s+to\\s+${_API_ROLE_RE}\\b`;
 
@@ -182,6 +191,23 @@ export function exposed(
 const INTERNAL: Record<string, string> = {};
 
 /**
+ * RETIRED — relations the corpus has DROPPED or RENAMED away. The entry is
+ * the record of intentional removal: excluded from the stale-entry check (a
+ * retired relation is SUPPOSED to be absent from the catalog) and from the
+ * privilege assertions (there is nothing to probe). A reason is REQUIRED;
+ * an entry whose relation still exists in the live catalog reds — either the
+ * relation was never actually removed or the entry name is a typo.
+ *
+ * Unlike INTERNAL, a RETIRED name MAY collide with a parsed snapshot entry —
+ * that is the normal case: dropping a snapshot-covered relation leaves its
+ * 174 GRANTs in place (the `to_regclass` precondition makes them no-ops on
+ * replay), and the RETIRED row REPLACES the parsed EXPOSED entry so the gate
+ * stops expecting the relation in the catalog. This replacement is the
+ * remediation path a future DROP/RENAME migration uses.
+ */
+const RETIRED: Record<string, string> = {};
+
+/**
  * OVERRIDES — registry entries for relations whose intended grant set is NOT
  * in migration 174: relations created after the snapshot (the author declares
  * the api surface here, mirroring the migration's own GRANTs — the lint makes
@@ -191,10 +217,19 @@ const INTERNAL: Record<string, string> = {};
  */
 const OVERRIDES: Record<string, RegistryEntry> = {};
 
+const SNAPSHOT_GRANTS = parseSnapshotGrants(readFileSync(SNAPSHOT_PATH, "utf8"));
+
+/**
+ * How many relations the 174 snapshot parse produced — the NON-VACUITY floor
+ * asserts on THIS count (not the registry's size, which INTERNAL/OVERRIDES/
+ * RETIRED inflate or mutate) so a dead parser is loud independent of the
+ * hand-authored maps.
+ */
+export const SNAPSHOT_PARSED_RELATION_COUNT = SNAPSHOT_GRANTS.size;
+
 function buildRegistry(): ReadonlyMap<string, RegistryEntry> {
-  const parsed = parseSnapshotGrants(readFileSync(SNAPSHOT_PATH, "utf8"));
   const registry = new Map<string, RegistryEntry>();
-  for (const [name, grants] of parsed) {
+  for (const [name, grants] of SNAPSHOT_GRANTS) {
     registry.set(name, {
       kind: "EXPOSED",
       grants,
@@ -212,6 +247,15 @@ function buildRegistry(): ReadonlyMap<string, RegistryEntry> {
     }
     registry.set(name, { kind: "INTERNAL", reason });
   }
+  for (const [name, reason] of Object.entries(RETIRED)) {
+    if (!reason.trim()) {
+      throw new Error(`table-grants.ts: RETIRED entry '${name}' has no reason — reason is required`);
+    }
+    // Replaces any parsed snapshot/INTERNAL entry for the same name — a
+    // dropped snapshot relation keeps its (now-no-op) 174 GRANTs, so the
+    // parsed EXPOSED row is stale the moment the DROP lands.
+    registry.set(name, { kind: "RETIRED", reason });
+  }
   for (const [name, entry] of Object.entries(OVERRIDES)) registry.set(name, entry);
   return registry;
 }
@@ -223,5 +267,8 @@ function buildRegistry(): ReadonlyMap<string, RegistryEntry> {
  */
 export const TABLE_GRANT_REGISTRY: ReadonlyMap<string, RegistryEntry> = buildRegistry();
 
-/** Non-vacuity floor: the snapshot covered 62 public relations on prd 2026-10-26. */
+/** Non-vacuity floor: the snapshot covered 62 public relations on prd 2026-10-26.
+ *  Asserted against {@link SNAPSHOT_PARSED_RELATION_COUNT} — the parsed-snapshot
+ *  count only, never the registry total (hand-authored entries must not feed a
+ *  floor that exists to prove the PARSER produced the prd set). */
 export const SNAPSHOT_RELATION_FLOOR = 62;

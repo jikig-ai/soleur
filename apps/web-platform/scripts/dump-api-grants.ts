@@ -11,10 +11,18 @@
 // privileges compose default-era auto-grants + explicit GRANT/REVOKE and cannot
 // be reconstructed from source text (a REVOKE leaves no trace in earlier files).
 // We read `aclexplode(pg_class.relacl)` (exact per-role table/sequence ACLs) and
-// `information_schema.column_privileges` (the 006/079 column-split shapes where
-// table-level was deliberately revoked — a table-level GRANT would silently
-// subsume and re-expose every column; Postgres resolution, see
-// learnings/2026-03-20-supabase-column-level-grant-override.md).
+// `aclexplode(pg_attribute.attacl)` (exact column ACLs — NOT
+// information_schema.column_privileges, which is scoped to privileges the
+// connecting role may grant and silently under-reports for a non-superuser
+// DSN). The column shapes exist for the 006/079 splits where table-level was
+// deliberately revoked — a table-level GRANT would silently subsume and
+// re-expose every column; Postgres resolution, see
+// learnings/2026-03-20-supabase-column-level-grant-override.md.
+//
+// The emitted artifact IS the migration shape: a GENERATED header plus, per
+// relation, the FK-lint-convention `DO $$ BEGIN IF to_regclass(…) IS NOT NULL
+// THEN … END IF; END $$;` wrapper — no manual transform between this script's
+// output and the committed file (hand-authored header prose aside).
 //
 // Run (prd, read-only catalog introspection — same access class as
 // run-verify.sh):
@@ -28,7 +36,19 @@ import postgres from "postgres";
 import { writeFileSync } from "node:fs";
 
 const API_ROLES = ["anon", "authenticated", "service_role"] as const;
-const RELKIND_LABEL: Record<string, string> = { r: "table", v: "view", m: "matview", S: "sequence" };
+const RELKIND_LABEL: Record<string, string> = {
+  r: "table",
+  v: "view",
+  m: "matview",
+  S: "sequence",
+  p: "partitioned table",
+  f: "foreign table",
+};
+// PostgREST serves all of r,v,m,p,f — keep the dump's scope identical to the
+// rls-fuzz catalog enumerator (test/rls-fuzz/catalog.ts › publicApiRelations)
+// so a partitioned parent or foreign table cannot escape the snapshot.
+const RELKINDS_REL = "'r','v','m','p','f'";
+const RELKINDS_ALL = `'r','v','m','p','f','S'`;
 
 interface AclRow {
   relname: string;
@@ -90,18 +110,30 @@ async function main(): Promise<number> {
       cross join lateral aclexplode(c.relacl) a
       left join pg_roles g on g.oid = a.grantee
       where n.nspname = 'public'
-        and c.relkind in ('r','v','m','S')
+        and c.relkind in (${RELKINDS_ALL})
         and (a.grantee = 0 or g.rolname in ('anon','authenticated','service_role'))
+        and not c.relispartition
       order by c.relkind, c.relname, grantee, privilege
     `);
 
-    // Column-level grants (the revoked-table-level shapes: 006 users, 079 repos).
+    // Column-level grants (the revoked-table-level shapes: 006 users, 079
+    // repos). Read aclexplode(pg_attribute.attacl) — information_schema.
+    // column_privileges is permission-scoped to the CONNECTING role's
+    // grantable set and silently under-reports under a non-superuser DSN.
     const cols = await sql.unsafe<ColRow[]>(`
-      select table_name, column_name, grantee, privilege_type as privilege
-      from information_schema.column_privileges
-      where table_schema = 'public'
-        and grantee in ('anon','authenticated','service_role','PUBLIC')
-      order by table_name, grantee, privilege, column_name
+      select c.relname as table_name, a.attname as column_name,
+             case when x.grantee = 0 then 'PUBLIC' else g.rolname end as grantee,
+             x.privilege_type as privilege
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+      cross join lateral aclexplode(a.attacl) x
+      left join pg_roles g on g.oid = x.grantee
+      where n.nspname = 'public'
+        and c.relkind in (${RELKINDS_REL})
+        and not c.relispartition
+        and (x.grantee = 0 or g.rolname in ('anon','authenticated','service_role'))
+      order by c.relname, grantee, privilege, a.attname
     `);
 
     // Classification inputs: RLS flags, permissive policies, identity/serial cols.
@@ -123,7 +155,7 @@ async function main(): Promise<number> {
         join pg_namespace n on n.oid = c.relnamespace
         left join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
         left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
-        where n.nspname = 'public' and c.relkind in ('r','v','m','S')
+        where n.nspname = 'public' and c.relkind in (${RELKINDS_ALL})
         group by c.relname
       )
       select c.relname, c.relkind, c.relrowsecurity as rls, c.relforcerowsecurity as force_rls,
@@ -134,7 +166,8 @@ async function main(): Promise<number> {
       join pg_namespace n on n.oid = c.relnamespace
       left join pol on pol.tablename = c.relname
       left join ident on ident.relname = c.relname
-      where n.nspname = 'public' and c.relkind in ('r','v','m','S')
+      where n.nspname = 'public' and c.relkind in (${RELKINDS_ALL})
+        and not c.relispartition
       order by c.relkind, c.relname
     `);
 
@@ -176,21 +209,40 @@ async function main(): Promise<number> {
       }
     }
 
-    const relOrder = (k: string) => ({ r: 0, v: 1, m: 2, S: 3 })[k] ?? 9;
+    const relOrder = (k: string) => ({ r: 0, p: 1, f: 2, v: 3, m: 4, S: 5 })[k] ?? 9;
+    // Codepoint compare, NOT localeCompare: locale ordering is environment-
+    // dependent and would let the emitted file's ordering drift by machine.
     const rels = [...tblByName.keys()].sort(
-      (a, b) => relOrder(tblByName.get(a)!) - relOrder(tblByName.get(b)!) || a.localeCompare(b),
+      (a, b) => relOrder(tblByName.get(a)!) - relOrder(tblByName.get(b)!) || (a < b ? -1 : a > b ? 1 : 0),
     );
 
-    const lines: string[] = [];
+    // Emit the committed-artifact shape directly: per relation, the FK-lint
+    // `to_regclass` precondition wrapper around its GRANTs, so the file this
+    // command produces needs no manual transform to become the migration.
+    const lines: string[] = [
+      `-- GENERATED by scripts/dump-api-grants.ts on ${new Date().toISOString().slice(0, 10)}.`,
+      `-- Provenance: effective api-role privileges of every public relation`,
+      `-- (relkind r,v,m,p,f,S) extracted from the live prd catalog via`,
+      `-- aclexplode(pg_class.relacl) + aclexplode(pg_attribute.attacl), emitted`,
+      `-- verbatim. See 174_api_data_grants_snapshot.sql's header for the full`,
+      `-- rationale (changelog 45329, ADR-303) — keep regenerated headers aligned`,
+      `-- with it; known snapshot warts are documented there, not here.`,
+      `--`,
+      `-- Per-relation grants sit behind to_regclass preconditions (FK-lint`,
+      `-- convention): a relation that does not exist on a given replay is`,
+      `-- skipped rather than aborting the file.`,
+      ``,
+    ];
     for (const rel of rels) {
       const kind = tblByName.get(rel)!;
       const objKw = kind === "S" ? "SEQUENCE" : "TABLE";
+      const grantLines: string[] = [];
       const roles = tableLevel.get(rel);
       if (roles) {
         for (const role of API_ROLES) {
           const verbs = roles.get(role);
           if (!verbs?.size) continue;
-          lines.push(`GRANT ${[...verbs].sort().join(", ")} ON ${objKw} public.${q(rel)} TO ${role};`);
+          grantLines.push(`    GRANT ${[...verbs].sort().join(", ")} ON ${objKw} public.${q(rel)} TO ${role};`);
         }
       }
       const cg = colGrants.get(rel);
@@ -200,18 +252,21 @@ async function main(): Promise<number> {
           if (!verbs) continue;
           for (const [verb, colset] of [...verbs].sort()) {
             const colsList = [...colset].sort().map(q).join(", ");
-            lines.push(`GRANT ${verb} (${colsList}) ON TABLE public.${q(rel)} TO ${role};`);
+            grantLines.push(`    GRANT ${verb} (${colsList}) ON TABLE public.${q(rel)} TO ${role};`);
           }
         }
       }
-      if (lines.length && (roles || cg)) lines.push("");
+      if (!grantLines.length) continue;
+      lines.push(`DO $$ BEGIN IF to_regclass('public.${q(rel)}') IS NOT NULL THEN`);
+      lines.push(...grantLines);
+      lines.push(`END IF; END $$;`, ``);
     }
 
     // ---- Report -------------------------------------------------------------
     const report: string[] = [
       `# api-grants snapshot report — ${new Date().toISOString().slice(0, 10)}`,
       "",
-      `Relations: ${rels.length} | table-level grant lines: ${lines.filter((l) => l.startsWith("GRANT")).length}`,
+      `Relations: ${rels.length} | table-level grant lines: ${lines.filter((l) => l.trimStart().startsWith("GRANT")).length}`,
       "",
       "| relation | kind | RLS | force | permissive policies | identity | serial | api-role grants | notes |",
       "|---|---|---|---|---|---|---|---|---|",
@@ -234,7 +289,7 @@ async function main(): Promise<number> {
 
     writeFileSync(outPath, lines.join("\n") + "\n");
     writeFileSync(reportPath, report.join("\n") + "\n");
-    console.log(`[dump-api-grants] wrote ${lines.filter((l) => l.startsWith("GRANT")).length} grant statements for ${rels.length} relations -> ${outPath}`);
+    console.log(`[dump-api-grants] wrote ${lines.filter((l) => l.trimStart().startsWith("GRANT")).length} grant statements for ${rels.length} relations -> ${outPath}`);
     console.log(`[dump-api-grants] classification report -> ${reportPath}`);
     return 0;
   } catch (e) {

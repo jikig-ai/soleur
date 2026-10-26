@@ -6,11 +6,17 @@
 // PROPERTY (Guard 1 of the plan): every migration file checked here that
 // creates a `public`-schema Data-API-visible relation (table / view /
 // materialized view — temp and partition-child excluded) must carry an
-// in-file api-role GRANT naming that relation, or a
-// `-- soleur:no-data-api: <relation> — <reason>` sentinel (reason REQUIRED).
-// Tables with serial/identity columns additionally need a sequence
-// `GRANT USAGE` (post-flip sequences keep no USAGE default) or the sentinel;
-// standalone `create sequence` needs the same.
+// in-file api-role GRANT naming that relation — the column-list form
+// `GRANT SELECT (a,b) ON TABLE <rel> TO <role>` counts, it IS api exposure —
+// or a `-- soleur:no-data-api: <relation> — <reason>` sentinel (`public.`
+// prefix accepted; reason REQUIRED, and the sentinel is honored ONLY inside a
+// `--` line comment — one inside a block comment, string, or dollar-quoted
+// body is noise, not an exemption). Tables with serial/identity columns —
+// including `CREATE TABLE … (LIKE src INCLUDING ALL|IDENTITY)` copies —
+// additionally need a sequence `GRANT USAGE` (post-flip sequences keep no
+// USAGE default) or the sentinel; standalone `create sequence` needs the
+// same. `GRANT … ON ALL TABLES/SEQUENCES IN SCHEMA public` is a blanket
+// over-grant — flagged outright, never a satisfying form.
 //
 // PARSING: SQL noise is stripped FIRST (line comments, nested block comments,
 // single-quoted strings, dollar-quoted bodies) — a `create table` inside a
@@ -28,12 +34,10 @@
 // table %I', …)` inside a DO block is invisible to source-form detection;
 // `alter table … add column serial` on an existing table is likewise unseen.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { realpathSync } from "node:fs";
 
 export const API_ROLES = new Set(["anon", "authenticated", "service_role"]);
-const API_ROLE_RE = "(anon|authenticated|service_role)";
 
 // ---------------------------------------------------------------------------
 // Noise stripping — faithful port of test/migration-lint/definer-grants.ts
@@ -258,6 +262,12 @@ const CREATE_SEQ_RE = new RegExp(
 const PARTITION_OF_RE = /\bpartition\s+of\b/i;
 const SERIAL_RE = /\b(?:bigserial|smallserial|serial\d*)\b/i;
 const IDENTITY_RE = /\bgenerated\s+(?:always|by\s+default)\s+as\s+identity\b/i;
+// `CREATE TABLE t (LIKE src INCLUDING ALL|INCLUDING IDENTITY)` materializes
+// serial/identity columns copied from `src` — the backing sequence needs the
+// same USAGE arm even though no serial/identity keyword appears in the span.
+// (`INCLUDING ALL EXCLUDING IDENTITY` still triggers — over-requiring is the
+// safe direction; the sentinel is the escape.)
+const LIKE_COPY_RE = /\blike\b[\s\S]*\bincluding\s+(?:all|identity)\b/i;
 const CONSTRAINT_HEADS = new Set([
   "primary", "foreign", "unique", "check", "constraint", "exclude", "like",
 ]);
@@ -286,7 +296,7 @@ export function extractCreates(stripped) {
     const name = (m[modIdx === undefined ? 2 : modIdx + 2] ?? "").toLowerCase();
     const span = stmtSpan(stripped, m.index);
     if (kind === "table" && PARTITION_OF_RE.test(span)) return; // partition children inherit the parent's ACL
-    out.push({ name, kind, modifier, start: m.index, end: m.index + m[0].length, span });
+    out.push({ name, kind, start: m.index, end: m.index + m[0].length, span });
   };
   for (const m of stripped.matchAll(CREATE_TABLE_RE)) push(m, "table", 1);
   for (const m of stripped.matchAll(CREATE_VIEW_RE)) push(m, "view", undefined);
@@ -295,9 +305,16 @@ export function extractCreates(stripped) {
   return out;
 }
 
-/** Detect serial/identity columns in a table create's parenthesized list; returns expected sequence names or null. */
+/**
+ * Detect serial/identity columns in a table create's parenthesized list;
+ * returns expected sequence names, null when column names cannot be derived
+ * (the caller then requires ANY sequence USAGE grant in the file). A
+ * `LIKE src INCLUDING ALL|IDENTITY` copy returns null — the copied identity
+ * columns' sequence names live in the SOURCE table's definition, not this
+ * span.
+ */
 function autoSeqNames(create, stripped) {
-  if (!(SERIAL_RE.test(create.span) || IDENTITY_RE.test(create.span))) return [];
+  if (!(SERIAL_RE.test(create.span) || IDENTITY_RE.test(create.span) || LIKE_COPY_RE.test(create.span))) return [];
   const paren = stripped.indexOf("(", create.end - 1);
   if (paren === -1 || paren >= create.start + create.span.length) return null;
   const { inner, end } = readBalancedParens(stripped, paren);
@@ -352,6 +369,17 @@ export function extractGrants(stripped) {
   );
   for (const m of stripped.matchAll(GRANT_TABLE)) record(m, false);
 
+  // Column-list form: `GRANT SELECT (a,b) ON TABLE t TO authenticated`
+  // (comma-separated multi-privilege lists `SELECT (a), UPDATE (b)` match too).
+  // A column-level grant IS api exposure for the relation — the corpus's own
+  // 006/079 deliberate splits use it — so it satisfies the relation arm
+  // exactly like a table-level grant would. Group layout matches `record`.
+  const GRANT_TABLE_COL = new RegExp(
+    String.raw`\bgrant\s+([a-z_]+\s*\([^)]*\)\s*(?:,\s*[a-z_]+\s*\([^)]*\)\s*)*)\s+on\s+(?:table\s+)?${SCHEMA_NAME}\s+to\s+([^;]+?)\s*;`,
+    "gi",
+  );
+  for (const m of stripped.matchAll(GRANT_TABLE_COL)) record(m, false);
+
   const GRANT_SEQ = new RegExp(
     String.raw`\bgrant\s+([a-z_,\s]+?)\s+on\s+sequence\s+${SCHEMA_NAME}\s+to\s+([^;]+?)\s*;`,
     "gi",
@@ -362,41 +390,145 @@ export function extractGrants(stripped) {
 }
 
 /**
- * `-- soleur:no-data-api: <relation> — <reason>` sentinels, read from RAW text
- * (the marker lives inside a line comment — noise-stripping removes it before
- * detection runs). Reason is REQUIRED; `null` reason flags a violation when
- * the sentinel is consulted.
+ * `GRANT … ON ALL TABLES|SEQUENCES IN SCHEMA <s> TO <roles>` — a schema-wide
+ * blanket grant, NOT a satisfying form: it grants every existing public
+ * relation indiscriminately, which is the over-exposure the guard exists to
+ * prevent. Returned as a violation when the target schema is `public` and at
+ * least one api role is in the TO-list, so the form can neither silently pass
+ * nor fail opaquely. Scanned on the body-preserving strip (a literal blanket
+ * GRANT inside a `DO $$ … $$` still counts — same reasoning as GRANTs).
+ */
+export function extractBlanketGrants(preservedStripped) {
+  const out = [];
+  const GRANT_ALL = /\bgrant\s+([a-z_,\s()]+?)\s+on\s+all\s+(tables|sequences)\s+in\s+schema\s+"?([a-z_][a-z0-9_]*)"?\s+to\s+([^;]+?)\s*;/gi;
+  for (const m of preservedStripped.matchAll(GRANT_ALL)) {
+    const schema = (m[3] ?? "").toLowerCase();
+    if (schema !== "public") continue;
+    const roles = (m[4] ?? "")
+      .split(",")
+      .map((seg) => (/^(?:group\s+)?"?([a-z_][a-z0-9_]*)"?/i.exec(seg.trim())?.[1] ?? "").toLowerCase())
+      .filter((r) => API_ROLES.has(r));
+    if (!roles.length) continue;
+    out.push(`GRANT … ON ALL ${m[2].toUpperCase()} IN SCHEMA public TO ${roles.join(", ")}`);
+  }
+  return out;
+}
+
+/**
+ * `-- soleur:no-data-api: [public.]<relation> — <reason>` sentinels.
+ *
+ * Honored ONLY inside `--` line comments — a marker inside a `/* *\/` block
+ * comment, a `'…'` literal, or a `$$…$$`/`$tag$` body is prose inside noise,
+ * not a top-level sentinel (a raw-text scan would let a commented-out
+ * example or an `EXECUTE '… -- soleur:…'` string exempt a real relation).
+ * The scan therefore re-runs the same state machine instead of a bare
+ * matchAll. The `<relation>` accepts an optional `public.` qualifier
+ * (unquoted or `"public"."t"`-ish) so the sentinel reads like the GRANT it
+ * replaces. Reason is REQUIRED; `null` reason flags a violation when the
+ * sentinel is consulted.
  */
 export function extractSentinels(raw) {
   const out = new Map(); // name -> {reason: string|null}
-  const re = /--[ \t]*soleur:no-data-api[ \t]*:[ \t]*"?([a-z_][a-z0-9_]*)"?[ \t]*(?:[—–-][ \t]*([^\n]*))?/gi;
-  for (const m of raw.matchAll(re)) {
-    const name = m[1].toLowerCase();
-    const reason = (m[2] ?? "").trim() || null;
-    out.set(name, { reason });
+  const re = /soleur:no-data-api[ \t]*:[ \t]*(?:"?public"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?[ \t]*(?:[—–-][ \t]*([^\n]*))?/gi;
+  let i = 0;
+  const n = raw.length;
+  while (i < n) {
+    const c = raw[i];
+    const two = raw.slice(i, i + 2);
+
+    if (two === "--") {
+      const nl = raw.indexOf("\n", i);
+      const comment = raw.slice(i + 2, nl === -1 ? n : nl);
+      for (const m of comment.matchAll(re)) {
+        out.set(m[1].toLowerCase(), { reason: (m[2] ?? "").trim() || null });
+      }
+      if (nl === -1) break;
+      i = nl; // preserve the newline
+      continue;
+    }
+
+    if (two === "/*") {
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        const t = raw.slice(i, i + 2);
+        if (t === "/*") {
+          depth++;
+          i += 2;
+        } else if (t === "*/") {
+          depth--;
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+      continue;
+    }
+
+    if (c === "'") {
+      i++;
+      while (i < n) {
+        if (raw[i] === "'" && raw[i + 1] === "'") {
+          i += 2;
+          continue;
+        }
+        if (raw[i] === "'") {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+
+    if (c === "$") {
+      const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(raw.slice(i, i + 64));
+      if (m) {
+        const tag = m[0];
+        const end = raw.indexOf(tag, i + tag.length);
+        i = end === -1 ? n : end + tag.length;
+        continue;
+      }
+    }
+
+    i++;
   }
   return out;
 }
 
 const FIX_HINT =
-  "Add:    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.<rel> TO anon, authenticated, service_role;\n" +
-  "Or opt out of the Data API entirely with a required-reason sentinel:\n" +
-  "          -- soleur:no-data-api: <rel> — <reason>\n" +
-  "See ADR-303 (explicit per-relation api-role grants; the authoritative gate is test/rls-fuzz/rls-grants.integration.test.ts).";
+  "Grant only the roles/verbs the API actually needs — anon usually needs NOTHING;\n" +
+  "  table-level and column-list (`GRANT SELECT (a,b) ON TABLE <rel> TO <role>`) forms both satisfy.\n" +
+  "  BOTH write sites are required, or the fuzz parity gate reds later:\n" +
+  "    1. this file: e.g. GRANT SELECT ON TABLE public.<rel> TO authenticated;\n" +
+  "    2. test/rls-fuzz/table-grants.ts: an OVERRIDES `exposed({…})` entry mirroring the GRANTs\n" +
+  "       (the authoritative gate asserts effective == registered, both directions).\n" +
+  "  To opt out of the Data API entirely, also BOTH sites:\n" +
+  "    1. this file: `-- soleur:no-data-api: <rel> — <reason>` (reason REQUIRED);\n" +
+  "    2. test/rls-fuzz/table-grants.ts: an INTERNAL entry carrying that reason.\n" +
+  "  `GRANT … ON ALL TABLES|SEQUENCES IN SCHEMA public` is NOT accepted (blanket over-grant).\n" +
+  "  See ADR-303; the authoritative gate is test/rls-fuzz/rls-grants.integration.test.ts.";
 
 /**
  * Check one migration file's text. Returns a list of violation strings
- * (empty = pass). `label` is used in messages (usually the basename).
+ * (empty = pass).
  */
-export function checkSql(raw, label) {
+export function checkSql(raw) {
   const stripped = stripSqlNoise(raw);
   const creates = extractCreates(stripped);
   // Grants scan a DIFFERENT noise profile (see stripSqlNoisePreserveBodies):
   // literal GRANTs inside `DO $$ … THEN GRANT … $$` are the corpus's
   // conditional-grant convention and must count.
-  const { tableGrants, seqUsage } = extractGrants(stripSqlNoisePreserveBodies(raw));
+  const preserved = stripSqlNoisePreserveBodies(raw);
+  const { tableGrants, seqUsage } = extractGrants(preserved);
   const sentinels = extractSentinels(raw);
   const violations = [];
+
+  for (const b of extractBlanketGrants(preserved)) {
+    violations.push(
+      `uses '${b}' — a schema-wide blanket grant is not a per-relation grant: it gives an api role privileges on EVERY existing public relation. Grant only the relation(s) this migration creates, with only the verbs the API needs.`,
+    );
+  }
 
   for (const c of creates) {
     const sent = sentinels.get(c.name);
@@ -460,7 +592,7 @@ export function main(files) {
     if (label.endsWith(".down.sql")) continue; // operator-only rollback siblings, never applied
     const stripped = stripSqlNoise(raw);
     relations += extractCreates(stripped).length;
-    for (const v of checkSql(raw, label)) {
+    for (const v of checkSql(raw)) {
       console.error(`::error::${label}: ${v.split("\n").join("\n::error::  ")}`);
       violations++;
     }
