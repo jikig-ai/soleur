@@ -293,18 +293,61 @@ No cross-domain implications detected — CI/test-infrastructure + database-inte
 ## Observability
 
 The failure surface IS the CI check — it already reports red loudly (this issue was
-filed by it). The durable observability gap (catalog-posture drift invisible to the
-ledger probe) is handled as a Phase-3 follow-up issue, not a new gate in this PR.
+filed by `check-red-on-main.sh`). The durable observability gap (catalog-posture drift
+invisible to the ledger probe) is handled as a Phase-3 follow-up issue, not a new gate
+in this PR.
 
 ```yaml
-liveness_signal:    # "Tenant integration (dev-Supabase)" check on main push / required PR context; alert = issue filed by check-red-on-main.sh
-error_reporting:    # GitHub check conclusion + auto-filed ci/main-broken issue; fail_loud: yes
-failure_modes:      # [{mode: cross-tenant deny regresses to timeout/error, detection: vitest assertion in session-sync.tenant-isolation.test.ts, alert_route: check-red-on-main.sh → GitHub issue}]
-logs:               # GitHub Actions job log (retention: GH default)
+liveness_signal:
+  what: "Tenant integration (dev-Supabase) check conclusion on push to main"
+  cadence: "every main push + every isolation-surface PR"
+  alert_target: "check-red-on-main.sh files a ci/main-broken GitHub issue (this issue, #10764)"
+  configured_in: ".github/workflows/tenant-integration.yml + scripts/check-red-on-main.sh"
+error_reporting:
+  destination: "GitHub check conclusion + vitest assertion output in job log"
+  fail_loud: "yes — required check context red on every affected PR"
+failure_modes:
+  - mode: "cross-tenant UPDATE deny regresses to timeout/wrong error"
+    detection: "session-sync.tenant-isolation.test.ts dual-shape assertion"
+    alert_route: "check-red-on-main.sh → GitHub issue (ci/main-broken)"
+logs:
+  where: "GitHub Actions job log for tenant-integration"
+  retention: "GitHub default (90d)"
 discoverability_test:
-  command:          # grep -c 'users_own_' apps/web-platform/supabase/migrations/*users_restrictive_policy_subqueries.sql
-  expected_output:  # literal counts "3" (function definitions) — printed by grep -c
+  command: "grep -c 'CREATE OR REPLACE FUNCTION public.users_own_' apps/web-platform/supabase/migrations/*users_restrictive_policy_subqueries.sql"
+  expected_output: "3"
 ```
+
+## Encryption Posture
+
+Detection note only: this plan creates no persistent data store and no new
+cross-component/network connection. The migration modifies RLS policy *expressions* on
+an existing table (`public.users`); no data at rest or in transit is affected, and no
+`.tf`/`cloud-init`/`docker-compose` surface is touched.
+
+```yaml
+at_rest: "unchanged — public.users already exists; Supabase-managed disk encryption posture is unaffected by a policy-expression change"
+in_transit: "unchanged — no new connection; the only traffic is the existing pooler/psql + PostgREST paths over TLS"
+```
+
+## Downtime & Cutover
+
+The migration runs `CREATE FUNCTION` + `DROP POLICY`/`CREATE POLICY` on
+`public.users` — metadata-only DDL taking a sub-second `ACCESS EXCLUSIVE` lock per
+statement. There is **no table rewrite, no backfill, no long transaction** (the file is
+applied under `--single-transaction`; its whole body is five catalog edits). `users` is
+not a hot UPDATE path on prd (~18 rows; the granted client surface is `UPDATE(email)`
+self-updates only), so the residual risk is a sub-second lock wait, not a cutover
+event. Zero-downtime alternatives (blue-green etc.) are inapplicable to in-place policy
+metadata changes; the bounded window is the migration's own transaction.
+
+## GDPR / Compliance Note
+
+Regulated-data surface regex fires (`supabase/migrations/*.sql`), self-assessed: the
+change modifies RLS **enforcement mechanics** on `users` — deny semantics are preserved
+verbatim (same policies, same columns, same own-row predicate). No new processing
+activity, no new data category, no new access path, no Art. 30 trigger. The fix
+*removes* a 17.5s full-table policy scan, which is privacy-neutral-to-positive.
 
 ## Architecture Decision (ADR/C4)
 
