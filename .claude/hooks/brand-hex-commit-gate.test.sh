@@ -430,5 +430,300 @@ t_devin_exec_triggers() {
 t_single_line_token_css_palette
 t_devin_exec_triggers
 
+# ---- #10793: the gate scans the repository a commit TARGETS, not the hook cwd ----
+# A hook process anchored at a core.bare=true root cannot see a linked worktree through
+# its own cwd, so `cd <wt> && git commit` and `git -C <wt> commit` went unscanned. The
+# target is now read from the command text (lib/commit-target-roots.sh). Hex fixtures are
+# synthesised inline; deny rows each carry an allow twin.
+
+OFFBRAND_TSX='export const B = () => <div className="bg-[#2563eb]">x</div>;'
+CLEAN_TSX='export const B = () => <div className="bg-brand-accent-gold-fill">x</div>;'
+BANNER="apps/web-platform/components/dashboard/banner.tsx"
+
+# Sets OUT (stdout), ERR (stderr), RC (hook exit status) and the journal watermark.
+# $3 is an optional PATH directory (the hook then runs under that directory's bash only);
+# HOOK_UNDER overrides the hook path (the lib-missing case runs a copy).
+_run_cmd() {
+  local cwd="$1" cmd="$2" pd="${3:-}" payload errf
+  errf=$(mktemp -p "$SUITE_TMP")
+  _JOURNAL_MARK=$({ wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl"; } 2>/dev/null || echo 0)
+  payload=$(jq -nc --arg w "$cwd" --arg c "$cmd" '{tool_name: "Bash", cwd: $w, tool_input: {command: $c}}')
+  RC=0
+  if [[ -n "$pd" ]]; then
+    OUT=$(cd "$cwd" && env PATH="$pd" CLAUDE_PROJECT_DIR="$REPO_ROOT" "$pd/bash" "${HOOK_UNDER:-$HOOK}" <<<"$payload" 2>"$errf") || RC=$?
+  else
+    OUT=$(cd "$cwd" && CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "${HOOK_UNDER:-$HOOK}" <<<"$payload" 2>"$errf") || RC=$?
+  fi
+  ERR=$(cat "$errf"); rm -f "$errf"
+}
+
+# This hook's own incident rows since the last _run_cmd, as "<event>|<prefix>" lines.
+_gate_rows() {
+  local f="$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl"
+  [[ -f "$f" ]] || return 0
+  tail -n "+$(( ${_JOURNAL_MARK:-0} + 1 ))" "$f" \
+    | jq -r 'select(.rule_id | startswith("brand-hex-commit-gate")) | .event_type + "|" + .rule_text_prefix'
+}
+
+# A bare root (core.bare=true) with one linked worktree: sets BARE and WT as PHYSICAL paths
+# (ctr_resolve_roots returns toplevels physically, so a symlinked tmpdir would break matching).
+_seed_bare() {
+  BARE=$(_seed_repo); BARE=$(cd "$BARE" && pwd -P)
+  ( cd "$BARE" && git config core.bare true && git worktree add -q .worktrees/wt -b wtb )
+  WT="$BARE/.worktrees/wt"
+}
+
+_phys() { ( cd "$1" && pwd -P ); }
+
+# PATH directory carrying the tools the hook needs; "perl" adds perl (the lexer needs it).
+_mk_path_dir() {
+  local d t p extra=""
+  [[ "${1:-}" == perl ]] && extra=perl
+  d=$(mktemp -d "$SUITE_TMP/path.XXXXXX")
+  for t in bash sh git jq mktemp grep cat dirname basename rm date flock sed awk tr head tail cut wc \
+           sort env readlink realpath mkdir chmod touch id stat ls cp mv ln find xargs expr uname seq \
+           $extra; do
+    p=$(command -v "$t" 2>/dev/null) || continue
+    [[ "$p" == /* ]] && ln -s "$p" "$d/$t"
+  done
+  echo "$d"
+}
+
+_is_deny()  { [[ "$(_decision "$OUT")" == deny ]]; }
+_is_allow() { [[ "$(_decision "$OUT")" == allow ]]; }
+
+# Assertion helper: _expect <label> <detail> <test-command...>
+_expect() {
+  local label="$1" detail="$2"; shift 2
+  if "$@"; then _report "$label" ok; else _report "$label" fail "$detail"; fi
+}
+
+_expect_warn_allow() {
+  local label="$1"
+  if [[ "$(_decision "$OUT")" == allow && "$RC" -eq 0 && "$ERR" == *WARN* && "$ERR" == *"cannot determine"* \
+        && "$OUT" != *'"deny"'* && "$OUT" != *'"ask"'* ]]; then
+    _report "$label" ok
+  else
+    _report "$label" fail "d=$(_decision "$OUT") rc=$RC err=${ERR:0:160} out=${OUT:0:80}"
+  fi
+}
+
+t_t25_cd_into_worktree_from_bare_root() {
+  _seed_bare
+  # Fixture self-check: the cwd really is a bare root (no work tree) and the target really is one.
+  local bare_flag wt_flag
+  bare_flag=$(git -C "$BARE" rev-parse --is-inside-work-tree 2>/dev/null || true)
+  wt_flag=$(git -C "$WT" rev-parse --is-inside-work-tree 2>/dev/null || true)
+  _expect "T25a fixture: bare root is not a work tree, worktree is" "bare=$bare_flag wt=$wt_flag" \
+    test "$bare_flag" = false -a "$wt_flag" = true
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$BARE" "cd $WT && git commit -m x"
+  _expect "T25 'cd <wt> && git commit' from a bare root, off-brand staged -> deny names file" \
+    "d=$(_decision "$OUT") r=$(_reason "$OUT" | head -c 120)" \
+    bash -c '[[ "$1" == deny && "$2" == *banner.tsx* ]]' _ "$(_decision "$OUT")" "$(_reason "$OUT")"
+  _stage "$WT" "$BANNER" "$CLEAN_TSX"
+  _run_cmd "$BARE" "cd $WT && git commit -m x"
+  _expect "T25b same command, tokenized content -> allow" "d=$(_decision "$OUT") r=$(_reason "$OUT" | head -c 120)" _is_allow
+  rm -rf "$BARE"
+}
+
+t_t26_dash_c_worktree() {
+  _seed_bare
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$BARE" "git -C $WT commit -m x"
+  _expect "T26 'git -C <wt> commit' from a bare root, off-brand staged -> deny names file" \
+    "d=$(_decision "$OUT") err=${ERR:0:120}" \
+    bash -c '[[ "$1" == deny && "$2" == *banner.tsx* ]]' _ "$(_decision "$OUT")" "$(_reason "$OUT")"
+  _stage "$WT" "$BANNER" "$CLEAN_TSX"
+  _run_cmd "$BARE" "git -C $WT commit -m x"
+  _expect "T26b same command, tokenized content -> allow" "d=$(_decision "$OUT")" _is_allow
+  # The strict regex needs the words adjacent, so `git -C W commit` never reached the scan, even
+  # from inside a work tree: a -C that names a DIFFERENT repository was skipped entirely.
+  local other; other=$(_seed_repo)
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$other" "git -C $WT commit -m x"
+  _expect "T26c 'git -C <other repo> commit' from inside a clean work tree -> deny" "d=$(_decision "$OUT")" _is_deny
+  rm -rf "$BARE" "$other"
+}
+
+t_t27_t28_no_cd_unchanged() {
+  _seed_bare
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$BARE" "git commit -m x"
+  _expect "T27 bare-root cwd, plain 'git commit' (no cd/-C) -> allow with no WARN (unchanged)" \
+    "d=$(_decision "$OUT") err=${ERR:0:120}" \
+    bash -c '[[ "$1" == allow && "$2" != *WARN* ]]' _ "$(_decision "$OUT")" "$ERR"
+  rm -rf "$BARE"
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$repo" "git commit -m x"
+  _expect "T28 no-cd path: repo cwd, off-brand staged -> deny, reason text unchanged" "d=$(_decision "$OUT")" \
+    bash -c '[[ "$1" == deny && "$2" == "BLOCKED: brand-hex-commit-gate found 1 raw hex colour literal(s) in staged UI/template content. Locations: apps/web-platform/components/dashboard/banner.tsx:1 (component #2563eb;"* ]]' _ "$(_decision "$OUT")" "$(_reason "$OUT")"
+  _run_cmd "$repo" 'echo "git -C x commit"'
+  _expect "T28b prose mention of 'git -C x commit' with off-brand staged -> allow (not a commit)" "d=$(_decision "$OUT")" _is_allow
+  _run_cmd "$repo" "git commit-tree abc123"
+  _expect "T28c 'git commit-tree' with off-brand staged -> allow" "d=$(_decision "$OUT")" _is_allow
+  rm -rf "$repo"
+}
+
+t_t29_diff_base_follows_commit_all() {
+  _seed_bare
+  ( cd "$WT" && mkdir -p "$(dirname "$BANNER")" && printf '%s\n' "$CLEAN_TSX" > "$BANNER" && git add "$BANNER" \
+      && git commit -q -m "seed banner"
+    printf '%s\n' "$OFFBRAND_TSX" > "$BANNER" )   # tracked, modified, NOT staged
+  _run_cmd "$BARE" "git -C $WT commit -a -m x"
+  _expect "T29 'git -C <wt> commit -a' scans the unstaged tracked edit -> deny" "d=$(_decision "$OUT")" _is_deny
+  _run_cmd "$BARE" "git -C $WT commit -m x"
+  _expect "T29b same fixture without -a (nothing staged) -> allow" "d=$(_decision "$OUT")" _is_allow
+  _run_cmd "$BARE" "cd $WT && git commit -a -m x"
+  _expect "T29c 'cd <wt> && git commit -a' scans the unstaged tracked edit -> deny" "d=$(_decision "$OUT")" _is_deny
+  _run_cmd "$BARE" "git -C $WT commit -m 'fix -a flag handling'"
+  _expect "T29d '-a' inside the -m text does not flip the base for the -C form -> allow" "d=$(_decision "$OUT")" _is_allow
+  rm -rf "$BARE"
+}
+
+t_t30_two_roots() {
+  local a b
+  a=$(_seed_repo); a=$(_phys "$a"); b=$(_seed_repo); b=$(_phys "$b")
+  _stage "$b" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$a" "cd $b && git commit -m x"
+  _expect "T30 clean cwd repo + 'cd <off-brand repo>' -> deny, finding prefixed with the target root" \
+    "d=$(_decision "$OUT") r=$(_reason "$OUT" | head -c 160)" \
+    bash -c '[[ "$1" == deny && "$2" == *"[$3]"* ]]' _ "$(_decision "$OUT")" "$(_reason "$OUT")" "$(basename "$b")"
+  _stage "$b" "$BANNER" "$CLEAN_TSX"
+  _run_cmd "$a" "cd $b && git commit -m x"
+  _expect "T30b both repos clean -> allow" "d=$(_decision "$OUT")" _is_allow
+  # Union, not replacement: the cwd repo holds the finding, the named target is clean.
+  _stage "$a" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$a" "cd $b && git commit -m x"
+  _expect "T30c finding in the cwd repo, named target clean -> deny (cwd root still scanned)" \
+    "d=$(_decision "$OUT")" \
+    bash -c '[[ "$1" == deny && "$2" == *"[$3]"* ]]' _ "$(_decision "$OUT")" "$(_reason "$OUT")" "$(basename "$a")"
+  rm -rf "$a" "$b"
+}
+
+# A palette is discovered from THAT repository's committed CSS. The named target (scanned
+# first) has #2563eb as a brand colour; the cwd repo does not. The same email-class hex is
+# on-brand in the first and off-brand in the second: a palette leaked from the first root
+# turns the cwd repo's real finding into an allow.
+t_t31_palette_per_root() {
+  local a b
+  a=$(_seed_repo); a=$(_phys "$a"); b=$(_seed_repo); b=$(_phys "$b")
+  ( cd "$b" && printf '  --brand-blue: #2563eb;\n' >> apps/web-platform/app/globals.css \
+      && git add apps/web-platform/app/globals.css && git commit -q -m "blue token" )
+  _stage "$b" "apps/web-platform/server/notifications.ts" 'const a = { color: "#2563eb" };'
+  _stage "$a" "apps/web-platform/server/notifications.ts" 'const a = { color: "#2563eb" };'
+  _run_cmd "$a" "cd $b && git commit -m x"
+  _expect "T31 palette is rebuilt per root: cwd repo's off-brand email hex still denies" \
+    "d=$(_decision "$OUT") r=$(_reason "$OUT" | head -c 160)" \
+    bash -c '[[ "$1" == deny && "$2" == *"[$3]"* ]]' _ "$(_decision "$OUT")" "$(_reason "$OUT")" "$(basename "$a")"
+  ( cd "$a" && git reset -q apps/web-platform/server/notifications.ts )
+  _run_cmd "$a" "cd $b && git commit -m x"
+  _expect "T31b twin: only the root where the hex IS a brand colour is staged -> allow" "d=$(_decision "$OUT")" _is_allow
+  rm -rf "$a" "$b"
+}
+
+t_t32_relative_quoted_and_missing_targets() {
+  _seed_bare
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$BARE" "cd ./.worktrees/wt && git commit -m x"
+  _expect "T32 relative 'cd ./.worktrees/wt' resolves against the hook cwd -> deny" "d=$(_decision "$OUT")" _is_deny
+  _run_cmd "$BARE" "cd \"$WT\" && git commit -m x"
+  _expect "T32b double-quoted literal path -> deny" "d=$(_decision "$OUT")" _is_deny
+  _stage "$WT" "$BANNER" "$CLEAN_TSX"
+  _run_cmd "$BARE" "cd ./.worktrees/wt && git commit -m x"
+  _expect "T32c relative target, clean content -> allow" "d=$(_decision "$OUT")" _is_allow
+  rm -rf "$BARE"
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$repo" "cd /nonexistent-dir-10793 && git commit -m x"
+  _expect "T32d target that does not exist falls back to the cwd repo -> deny" "d=$(_decision "$OUT")" _is_deny
+  rm -rf "$repo"
+}
+
+t_t33_undeterminable_warns_and_allows() {
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "$BANNER" "$OFFBRAND_TSX"   # the cwd repo would DENY if it were scanned
+  local c
+  for c in 'cd "$WT" && git commit -m x' 'cd ~/x && git commit -m x' 'cd wt* && git commit -m x' \
+           'GIT_DIR=/x git commit -m x' 'git --git-dir=/x commit -m x'; do
+    _run_cmd "$repo" "$c"
+    _expect_warn_allow "T33 undeterminable target [$c] -> WARN + allow, no scan (cwd repo holds off-brand)"
+  done
+  local rows; rows=$(_gate_rows)
+  _expect "T33b the undeterminable arm records a bypass row" "rows=$rows" \
+    bash -c '[[ "$1" == *"bypass|target undeterminable"* ]]' _ "$rows"
+  rm -rf "$repo"
+}
+
+t_t34_no_perl() {
+  _seed_bare
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  local nop; nop=$(_mk_path_dir)
+  [[ ! -e "$nop/perl" ]] || { _report "T34 fixture: PATH dir has no perl" fail "perl present"; return; }
+  _run_cmd "$BARE" "git -C $WT commit -m x" "$nop"
+  _expect_warn_allow "T34 no perl: 'git -C <wt> commit' -> WARN + allow"
+  _run_cmd "$BARE" "cd $WT && git commit -m x" "$nop"
+  _expect_warn_allow "T34b no perl: 'cd <wt> && git commit' -> WARN + allow"
+  rm -rf "$BARE"
+  # A perl-less host must not go silent on every plain commit.
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$repo" "git commit -m x" "$nop"
+  _expect "T34c no perl: plain 'git commit' in a repo with off-brand staged -> deny (cwd path)" \
+    "d=$(_decision "$OUT") err=${ERR:0:120}" _is_deny
+  rm -rf "$repo"
+}
+
+t_t35_lib_missing() {
+  local tmp="$SUITE_TMP/nolib"; mkdir -p "$tmp/lib"
+  cp "$REPO_ROOT/.claude/hooks/brand-hex-commit-gate.sh" "$tmp/"
+  cp "$REPO_ROOT"/.claude/hooks/lib/*.sh "$tmp/lib/"
+  rm -f "$tmp/lib/commit-target-roots.sh"
+  [[ ! -e "$tmp/lib/commit-target-roots.sh" ]] || { _report "T35 fixture: lib removed" fail "still present"; return; }
+  _seed_bare
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  HOOK_UNDER="$tmp/brand-hex-commit-gate.sh" _run_cmd "$BARE" "git -C $WT commit -m x"
+  _expect_warn_allow "T35 lib missing: 'git -C <wt> commit' -> WARN + allow"
+  rm -rf "$BARE"
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "$BANNER" "$OFFBRAND_TSX"
+  HOOK_UNDER="$tmp/brand-hex-commit-gate.sh" _run_cmd "$repo" "git commit -m x"
+  _expect "T35b lib missing: plain 'git commit' with off-brand staged -> deny (unchanged cwd path)" \
+    "d=$(_decision "$OUT")" _is_deny
+  rm -rf "$repo" "$tmp"
+}
+
+t_t36_header_no_longer_claims_identity() {
+  local hook="$REPO_ROOT/.claude/hooks/brand-hex-commit-gate.sh" n_ident n_lib
+  n_ident=$(grep -cE 'identical (copy|to git-commit-secret-scan)' "$hook" || true)
+  n_lib=$(grep -c 'commit-target-roots.sh' "$hook" || true)
+  _expect "T36 header/in-body comments drop the 'identical to the secret scan' claim and name the lib" \
+    "identical=$n_ident lib=$n_lib" test "$n_ident" -eq 0 -a "$n_lib" -ge 1
+}
+
+# Fixture control: the same off-brand worktree committed from INSIDE it, with no cd/-C, denies.
+# A green deny in T25/T26 therefore means the TARGET was resolved, not that the fixture is odd.
+t_t37_fixture_control() {
+  _seed_bare
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$WT" "git commit -m x"
+  _expect "T37 fixture control: commit from inside the worktree with no cd -> deny" "d=$(_decision "$OUT")" _is_deny
+  rm -rf "$BARE"
+}
+
+t_t25_cd_into_worktree_from_bare_root
+t_t26_dash_c_worktree
+t_t27_t28_no_cd_unchanged
+t_t29_diff_base_follows_commit_all
+t_t30_two_roots
+t_t31_palette_per_root
+t_t32_relative_quoted_and_missing_targets
+t_t33_undeterminable_warns_and_allows
+t_t34_no_perl
+t_t35_lib_missing
+t_t36_header_no_longer_claims_identity
+t_t37_fixture_control
+
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
