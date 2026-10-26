@@ -1046,6 +1046,7 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/betterstack-ingest-probe.sh"
+  "scripts/betterstack-query.sh"
   "scripts/compound-promote.test.sh"
   "scripts/lib/betterstack-sources.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -2916,7 +2917,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST__BASE_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
+  ".claude/hooks/brand-hex-commit-gate.sh"
+  ".claude/hooks/git-commit-secret-scan.sh"
   ".claude/hooks/incidents.test.sh"
+  ".claude/hooks/lib/commit-target-roots.sh"
+  ".claude/hooks/lib/incidents.sh"
+  ".claude/hooks/lib/technical-fork-cues.sh"
+  ".claude/hooks/pre-closing-technical-fork-gate.sh"
+  ".claude/hooks/pre-closing-technical-fork-gate.test.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_BRAND_WORKSHOP_PEN_COMMIT_AFTER_SAVE_TEST_SH_PATHS=(
@@ -3122,6 +3130,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_E2E_SKIP_ANCHORS_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GDPR_GATE_SELF_TEST_TEST_SH_PATHS=(
   ".claude/hooks/lib/incidents.sh"
+  "apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_GIT_TRIPWIRE_TEST_SH_PATHS=(
@@ -3226,4 +3235,12 @@ AFFECTED_TESTS_SCRIPTS_LINT_RULE_BODIES_PATHS=(
   "scripts/_agents_md_sections.py"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
   "scripts/lint-rule-bodies.py"
+)
+AFFECTED_SCRIPTS_FOLLOWTHROUGHS_CCLA_REPRESENTATIVE_ICLA_7922_PATHS=(
+  "apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+AFFECTED_SCRIPTS_TMPFS_GUARD_PATHS=(
+  "plugins/soleur/scripts/lib/tmp-classify.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
