@@ -341,15 +341,30 @@ export async function isAgentSandboxUnixDenyEnabled(identity: Identity = ANON_ID
 }
 
 /**
- * #10455 (b) — the same read as `isAgentSandboxUnixDenyEnabled`, plus whether Flagsmith ANSWERED. `fellBack` is true when the
- * value came from the container's env mirror because the Flagsmith fetch failed (a cold one-shot process hits a 200 ms timeout
- * routinely). The runtime Bash synthetic's resolver CLI reports `unresolved` on it instead of testing the wrong artifact.
+ * The same read as `getRuntimeFlag`, plus whether Flagsmith ANSWERED. `fellBack` is true when the value came from the
+ * container's env mirror because a configured Flagsmith client failed to answer (a cold one-shot process hits a 200 ms
+ * timeout routinely). With no `FLAGSMITH_ENVIRONMENT_KEY` configured the env mirror IS the authority, so `fellBack` is
+ * false: nothing was supposed to answer. A caller that must not act on a mirror value reads `fellBack`, not `value`.
+ */
+export async function readRuntimeFlagDetailed(
+  name: RuntimeFlagName,
+  identity: Identity,
+): Promise<{ value: boolean; fellBack: boolean }> {
+  const snap = await getRuntimeSnapshot(identity.role, identity.orgId);
+  return { value: snap[name], fellBack: client() !== null && _fallbackSnapshots.has(snap) };
+}
+
+/**
+ * #10455 (b) — the same read as `isAgentSandboxUnixDenyEnabled`, plus whether Flagsmith ANSWERED (see
+ * `readRuntimeFlagDetailed`). The runtime Bash synthetic's resolver CLI reports `unresolved` on `fellBack` instead of
+ * testing the wrong artifact.
  */
 export async function readAgentSandboxUnixDenyDetailed(
   identity: Identity = ANON_IDENTITY,
 ): Promise<{ value: boolean; fellBack: boolean }> {
-  const snap = await getRuntimeSnapshot(identity.role, identity.orgId);
-  return { value: snap["agent-sandbox-unix-deny"], fellBack: _fallbackSnapshots.has(snap) };
+  const r = await readRuntimeFlagDetailed("agent-sandbox-unix-deny", identity);
+  // Unlike the audit view, the resolver CLI also treats "no Flagsmith key" as unresolved (the env mirror is not the artifact in use).
+  return client() === null ? { value: r.value, fellBack: true } : r;
 }
 
 /**

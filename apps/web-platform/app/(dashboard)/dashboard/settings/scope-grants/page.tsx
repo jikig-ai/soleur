@@ -97,7 +97,14 @@ export default async function ScopeGrantsPage() {
 
   // #9545 PR2 — the card's "Last recorded request" hint and the collection state for the enable dialog
   // and the non-owner line. Never throws: any failure hides the hint (a single bounded, decorative read).
-  const egressCard = await loadEgressCardState(supabase, user.id);
+  // The loader reads its own workspace pointer; this page resolved `activeWorkspaceId` separately for the
+  // owner flag. If the two disagree (a switch between the reads, or the solo fallback) the hint and the
+  // dialog copy must not describe a different workspace than the toggle's owner state, so both are dropped.
+  const loadedEgressCard = await loadEgressCardState(supabase, user.id);
+  const egressCard =
+    loadedEgressCard.workspaceId === activeWorkspaceId
+      ? loadedEgressCard
+      : { lastRequestAt: null, collection: "unknown" as const };
 
   // Belt-and-suspenders .eq("founder_id", user.id) defends against any
   // future RLS loosening on scope_grants. Comment per today/route.ts

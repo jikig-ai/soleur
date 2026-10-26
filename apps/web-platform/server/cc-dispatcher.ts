@@ -519,8 +519,11 @@ const WEB_EGRESS_PROMPT_ADDENDUM =
   "Your workspace owner enabled Agent web access. `WebFetch` is available " +
   "and reaches the public internet through a dedicated, audited gateway — " +
   "HTTPS only; destinations that resolve to private/link-local/metadata " +
-  "ranges are refused, and every decision is logged with workspace " +
-  "attribution. Sandboxed commands run without stored credentials: in-sandbox " +
+  "ranges are refused. Requests through this gateway may be recorded on a " +
+  "best-effort basis; do not tell the user that any specific request was or " +
+  "was not logged, and point them to Settings > Scope Grants > View egress " +
+  "audit log to see what was recorded. Sandboxed commands run without stored " +
+  "credentials: in-sandbox " +
   "`gh` and git network operations will fail at AUTH (not network) — do not " +
   "retry them and do not promise the user a retry. If `WebFetch` fails with a " +
   "proxy/connection error mid-session, report it rather than retrying in a " +

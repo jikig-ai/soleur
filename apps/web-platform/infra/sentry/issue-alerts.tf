@@ -1012,11 +1012,14 @@ resource "sentry_alert" "egress_blocked" {
 # pino mirror capture it first and de-duplicate the tagged event away, #8629). Paged ops:
 #   rpc_error              -> the summary RPC failed or returned a malformed body
 #   rpc_timeout            -> the summary RPC outlived its bound
-#   workspace_read_error   -> the current-workspace pointer read threw (the view renders `unavailable`)
-# The card's hint ops (hint_timeout, hint_rpc_error) and the collection-state ops (org_read, flag_eval)
-# are WARNING-level debounced mirrors of a decorative read and are deliberately NOT routed here: this
-# rule has no level filter, so routing them would email a person for a hidden "Last recorded request".
-# The expected 42501 denial (a removed member or stale pointer) is never mirrored at all.
+#   workspace_read_error   -> the destination PAGE's current-workspace pointer read threw or timed out
+#                             (the view renders `unavailable`); page-only, the card has its own unpaged op
+# Everything else the loader emits is a WARNING-level debounced mirror of a decorative read and is
+# deliberately NOT routed here: this rule has no level filter, so routing them would email a person for
+# a hidden "Last recorded request". They stay searchable as feature:egress-audit-read, unpaged:
+# hint_timeout, hint_rpc_error, hint_workspace_read (the card), org_read, flag_eval, web_access_read.
+# The in-body 42501 denial (a removed member or stale pointer) is never mirrored at all; an engine 42501
+# ("permission denied for function", a lost grant) IS a fault and arrives as rpc_error with pg_code=42501.
 # Do NOT rename this resource or the live rule name (`egress-audit-read-failure`): a rename is a
 # destroy/create of a live paging rule. frequency_minutes=41 is distinct from every other rule (Sentry
 # de-duplicates on action_match+logic_type+frequency+actions-shape, not on conditions). The feature

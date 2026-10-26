@@ -109,6 +109,16 @@ describe("middleware GAP G — no-store on authenticated documents", () => {
     expect(res.headers.get("cache-control")).toMatch(/no-store/);
   });
 
+  test("egress audit page document navigation with a ?decision= filter → Cache-Control: no-store (#9545)", async () => {
+    const res = await middleware(
+      makeRequest("/dashboard/settings/scope-grants/egress-audit?decision=denied", {
+        "sec-fetch-dest": "document",
+      }),
+    );
+    expect(res.status).not.toBe(302);
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
   test("authenticated SW-proxied navigation (Sec-Fetch-Dest: empty, Sec-Fetch-Mode: navigate) → no-store (#8969)", async () => {
     // sw.js forwards navigations via respondWith(fetch(event.request)): dest
     // degrades to `empty` but mode stays `navigate`. The dest-only gate skipped
