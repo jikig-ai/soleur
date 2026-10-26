@@ -361,7 +361,8 @@ Then run the affected-suite gate — the plugin entry point, wired the same in
 repo the gate capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh), so the
 always-on fast tier (#9763), ADR-262's PR-gated mutation batteries, and the
 infra consumed edge still apply — and a docs-only diff returns
-`NO_TESTS_AFFECTED`, which is not coverage.
+`NO_TESTS_AFFECTED`, which is not coverage. Preview with
+`bash scripts/test-all.sh --print-selection`, stating `selected N of M` (#10333).
 
 **Probe capacity first (#7545).** An affected run can still DEGRADE to the
 full battery (undecidable diff, runner/index touched, FORCE_ALL), so spend ~3 s
@@ -372,8 +373,8 @@ bash scripts/test-all.sh --capacity
 ```
 
 It prints one verdict — `CAPACITY_OK` / `CAPACITY_CONTENDED reason=…` / `CAPACITY_UNKNOWN reason=…`,
-each with the measured value and the threshold — plus the pid, worktree and elapsed time of every
-sibling run. It takes no lock, runs no suite and always exits 0.
+each with the measured value and threshold — plus pid, worktree and elapsed time per sibling run.
+It takes no lock, runs no suite and always exits 0.
 
 **It does not gate this phase and must never be treated as permission to skip it.** A
 `CAPACITY_CONTENDED` verdict changes what a RED below is *worth* (apply
@@ -397,8 +398,8 @@ from a `pull_request` run — which GitHub builds against `refs/pull/N/merge`. C
 therefore verified `merge(HEAD, base)`, not the HEAD tree the local battery would
 run, and those are the same tree only when `origin/main` is already an ancestor of
 HEAD. The gate refuses when it is not, so "CI already verified this exact tree" is
-a claim it establishes rather than one it assumes. The practical consequence: to
-get the saving on a re-run, sync with `main` first.
+a claim it establishes rather than assumes. Re-run savings need `main` synced
+first.
 
 Branch on the exit code, never on the prose:
 
