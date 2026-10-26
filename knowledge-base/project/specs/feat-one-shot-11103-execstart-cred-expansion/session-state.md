@@ -21,3 +21,20 @@
 
 ### Agent ledger
 - cto_spawns=1
+
+## Work Phase
+
+Status: COMPLETE — all four phases landed, both commits pushed to branch (not pushed upstream).
+
+- Phase 1 RED: doppler-injection-bound.test.sh inner-c stage flagged both live sites — inngest-redis.service ($INNGEST_REDIS_PASSWORD) + rendered inngest-server.service ($INNGEST_REDIS_PASSWORD,$INNGEST_SIGNING_KEY via @@BACKEND_ENV@@ fragment resolution).
+- Phase 2: inngest-redis.service ExecStartPre aclfile writer after mount-guard; conf declares aclfile; ExecStart plain redis-server. inngest-redis-bootstrap.sh step 3.6 installs inngest-redis-acl.sh (refusal-first, charset validation, atomic 0600 tmp+mv).
+- Phase 3: /usr/local/bin/inngest-server-launch.sh rendered reconcile-always (case $- refusal -> set -u -> signing-key strip single-$ -> @@BACKEND_ENV@@ -> exec ... "$@"); unit ExecStart = doppler run -- /usr/local/bin/inngest-server-launch.sh @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@; @@BACKEND_ENV@@ substitution retargeted to launch_content + chmod 0755.
+- Phase 4: comments corrected (cat-deploy-state.sh:746, inngest.tf:166, bootstrap secrets-delivery prose, unit/conf headers).
+
+Suite results: doppler-injection-bound 71/71 (MIN_ASSERTIONS 59->71); inngest.test.sh 585/585 (floor 549->585); journald-config 113/113; vector-admission 58/58; cloud-init-inngest-provision-unit 88 rows PASS; cat-deploy-state 167/167; inngest-cutover-flip 194/194. cloud-init-inngest-bootstrap rc=1 — GuardA DESIGNED-advisory red only (drifted: the 4 edited carrier files vs vinngest-v1.1.61; ADR-232, propagates at next tag bump — expected, non-required).
+
+AC9 verified: grep -c 'bash -c' inngest-redis.service = 0; rendered server unit ExecStart carries no $/bash -c.
+
+Notable: #7286 lockstep selector widened ExecStart->Exec(Start|StartPre|StartPost) (doppler call moved to ExecStartPre — same hazard class). Scanner's @@-fragment resolution is quote-aware (single-quoted full scan; double-quoted only backslash-literal \$) — avoids the SDK_URL="${SDK_URL:-...}" render-time-default false positive. INNGEST_REDIS_ACL_FILE is a test-only override seam (masked by --only-secrets in prod).
+
+Commits: 9cfa25769b (tests), d211a1488b (source). Not pushed.
