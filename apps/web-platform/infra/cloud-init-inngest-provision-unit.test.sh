@@ -3,7 +3,7 @@
 # unit (soleur-inngest-provision.service + .timer), not through a once-per-instance runcmd item.
 #
 # WHAT IS GUARDED. The plan's `## Guard Contract` (8 guards),
-# knowledge-base/project/plans/2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md, plus the
+# knowledge-base/project/plans/archive/20260928-212808-2026-09-28-fix-inngest-bootstrap-pull-retrying-unit-plan.md, plus the
 # rows added since (widened detectors, degraded success, the FSM quiesce). The executed counts
 # (rows, RED, must-PASS) are EXPECTED_ROWS / EXPECTED_RED / EXPECTED_MUSTPASS below.
 #   G1 single login + pull site, inside the script the unit executes (never runcmd)
@@ -40,7 +40,7 @@
 #           start into an auto-restart wait, honours ConditionPathExists= across a reboot, and
 #           fires an elapsed OnBootSec timer. The static layer pins the DIRECTIVES those behaviours
 #           depend on, not systemd's behaviour; T15's quiesce logic is also covered in Tier A
-#           (T4, T4b, Q1, Q4, Q5).
+#           (T4, T4b, T4c, Q1, Q4, Q5).
 #
 # ROWS. Every row mutates a pristine copy of the RENDER (the guard's input), asserts the mutation
 # LANDED, runs the whole guard over it, and requires (RED) a FAIL line naming its assertion with
@@ -978,7 +978,7 @@ guard_all() {
   local t5_rm t5_cr
   t5_rm="$(at T5 '^docker rm -f soleur-inngest-bootstrap-extract$')"; t5_cr="$(at T5 '^docker create ')"
   _ta "$( [ -n "$t5_rm" ] && [ -n "$t5_cr" ] && [ "$t5_rm" -lt "$t5_cr" ] && echo 0 || echo 1)" "TA T5: the stale-name pre-clean precedes docker create"
-  _ta "$( [ "$(cnt T5 '^docker cp ')" -eq 10 ] && [ "$(cnt T5 '^docker cp newcid42:/')" = "$(cnt T5 '^docker cp ')" ] && echo 0 || echo 1)" "TA T5: every docker cp (the bootstrap + the 9 STAGED assets) addresses the ID docker create returned ($(cnt T5 '^docker cp newcid42:/')/$(cnt T5 '^docker cp '))"
+  _ta "$( [ "$(cnt T5 '^docker cp ')" -eq 10 ] && [ "$(cnt T5 '^docker cp newcid42:/')" = "$(cnt T5 '^docker cp ')" ] && echo 0 || echo 1)" "TA T5: every docker cp (want 10 = 1 bootstrap + 9 STAGED; update the count when STAGED changes) addresses the ID docker create returned ($(cnt T5 '^docker cp newcid42:/')/$(cnt T5 '^docker cp '))"
 
   # T7 — an unnamed arm (the fatal docker cp of the bootstrap script) is still reported, FIRST.
   reset_fx; echo 0 > "$fx/ctl/pull_rc"; echo 1 > "$fx/ctl/cp_boot_rc"; run_sc T7; common T7 1

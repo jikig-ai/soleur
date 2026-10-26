@@ -21,7 +21,8 @@
 #
 # cloud-init-inngest.yml (the Inngest host's user_data template, whose STAGED list and quiesce loop used to name the
 # retired trio) is scanned since #11080 for BOTH the trio stems and the vocabulary, after stripping exactly what the
-# render strips (inngest_rationale_strip in inngest-host.tf: a whole-line `#` followed by a space or nothing). So the
+# render strips (inngest_rationale_strip in inngest-host.tf: a whole-line `#` followed by a space, tab or nothing, with
+# leading blanks of space or tab only; infra-config-install.sh, embedded verbatim in the render, is scanned the same way). So the
 # history prose the template keeps in `# ` comments stays legal, while a `#x` or `#!` line, which the render KEEPS and a
 # host would receive, is code. The vocabulary scan reads raw (comments included) for the baked carriers but
 # comment-stripped for the template, whose comments legitimately name retired paths (`/mnt/data-luks` in the fstab note).
@@ -30,8 +31,10 @@
 #
 # NOT COVERED HERE (deliberately). (1) The scan judges the SOURCE tree, never the pinned image a host boots or an
 # already published bundle (GuardA binds tag to source). (2) A name assembled from two quoted halves, split across a
-# line continuation, built from a shell variable or a glob, a base64 payload, and a lowercase or otherwise respelled
-# needle, are not matched: the stems and needles are exact strings.
+# line continuation, built from a shell variable, brace or interpolation form, a glob or a backslash, a base64 payload, and
+# a lowercase or otherwise respelled needle, are not matched: the stems and needles are exact strings. (3) The upper-snake
+# stem is INNGEST_LUKS_CUTOVER_SH, not INNGEST_LUKS_CUTOVER: the shorter form is a live admitted Doppler secret name in the
+# template. (4) Delivery scripts outside DELIVERY_FILES (any other script the render or a bundle embeds) are not read.
 #
 # Run: bash apps/web-platform/infra/inngest-carrier-vocabulary.test.sh
 #
@@ -121,9 +124,10 @@ TRIO_STEMS=(inngest-luks-cutover inngest_luks_cutover INNGEST_LUKS_CUTOVER_SH)
 CARRIER_FLOOR=10
 
 strip_comments() { grep -vE '^[[:space:]]*#' "$1" || true; }
-# strip_render <file>: exactly what inngest_rationale_strip removes from the user_data render (a whole-line `#` followed by a
-# space or tab, or nothing). A `#x` or `#!` line survives the render, so for the template it is code.
-strip_render() { grep -vE '^[[:space:]]*#([[:space:]].*)?$' "$1" || true; }
+# strip_render <file>: what inngest_rationale_strip removes from the user_data render (a whole-line `#` followed by a space or
+# tab, or nothing; leading blanks are space or tab only). A `#x`, `#!`, `#<FF>` or form-feed-led line survives the render, so
+# for the template it is code. Byte-wise (LC_ALL=C, literal space/tab) so [[:space:]] cannot hide FF, VT, CR or U+2028.
+strip_render() { LC_ALL=C grep -vE $'^[ \t]*#([ \t].*)?$' "$1" || true; }
 
 # derive_carriers <repo-root> -> the carrier set, one repo-relative path per line (build recipe cp lines UNION refresh set).
 derive_carriers() {
@@ -176,7 +180,8 @@ g3_scan() {
     if [[ ! -r "$root/$rel" ]]; then printf 'VIOLATION unreadable %s\n' "$rel"; v=$((v + 1)); continue; fi
     mode=0
     case " ${RECIPE_FILES[*]} " in *" $rel "*) mode=1 ;; esac
-    [[ "$rel" == "$TMPL_REL" ]] && mode=2
+    # The template, and the install script it embeds verbatim (indent(6, ...)), reach the host through the render's own strip.
+    [[ "$rel" == "$TMPL_REL" || "$rel" == "$INSTALL_REL" ]] && mode=2
     scan_file "$root/$rel" "$rel" "$mode"; k=$?
     v=$((v + k))
   done
@@ -388,6 +393,10 @@ m_tmpl_hash_nospace() { append_line "$TMPL_REL" '      #inngest-luks-cutover.tim
 mutate trio-template-hash-without-space m_tmpl_hash_nospace trio-named
 m_tmpl_hashbang() { append_line "$TMPL_REL" '      #!/usr/local/bin/inngest-luks-cutover.sh'; }
 mutate trio-template-hashbang-line m_tmpl_hashbang trio-named
+# A form-feed-led line is not a render-stripped comment either (the render's leading blanks are space and tab only), so a
+# `[[:space:]]`-wide strip here would hide it. The literal 0x0C byte is the pin.
+m_tmpl_ff() { append_line "$TMPL_REL" $'\f# ; systemctl stop inngest-luks-cutover.timer'; }
+mutate trio-template-formfeed-led-line m_tmpl_ff trio-named
 # The retired NON-stem names are covered for the template by the vocabulary scan (the stem scan cannot see them): the write
 # this PR deleted, put back verbatim, is RED.
 m_tmpl_volumes_write() {
@@ -417,11 +426,11 @@ echo "inngest-carrier-vocabulary.test.sh: ${passes} passed, ${fails} failed (${t
 # Anti-vacuity floor (ADR-193): reports directly, never through pass/fail. Rows: 1 real tree + 1 needle-list pin + 1 delivery-set
 # pin (the user_data template) + 1 control + 4 negative controls + 2 wrapper controls + 13 needle rows + 4 recipe-needle rows +
 # 1 comment-needle + 5 carrier-set rows (second, empty, one-dropped, missing, unreadable) + 16 trio rows (4 recipe + 12
-# delivery) + 2 payload spellings + 6 baked-carrier trio rows + 5 template rows (re-add, trailing comment, hash without space,
-# hash-bang, luks-volumes write) + 5 must-pass = 67. The floor is the measured count, so deleting any generated row
-# (or a needle, or the template from DELIVERY_FILES) reds it.
-if [[ "$total" -lt 67 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is 67\n' "$total" >&2
+# delivery) + 2 payload spellings + 6 baked-carrier trio rows + 6 template rows (re-add, trailing comment, hash without space,
+# hash-bang, form-feed-led, luks-volumes write) + 5 must-pass = 68 (template rows: 6, was 5). The floor is the measured count,
+# so deleting any generated row (or a needle, or the template from DELIVERY_FILES) reds it.
+if [[ "$total" -lt 68 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is 68\n' "$total" >&2
   exit 1
 fi
 if [[ "$fails" -ne 0 ]]; then exit 1; fi

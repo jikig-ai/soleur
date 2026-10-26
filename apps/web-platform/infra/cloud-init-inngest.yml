@@ -533,8 +533,8 @@ write_files:
       if [ ! -r "$tok_file" ]; then
         # The Better Stack boot-trace channel is DEAD for this boot and every marker after this one is
         # lost. Expected after any reboot if the per-boot re-stage unit did not run (/run is tmpfs;
-        # cloud-init runcmd is first-boot only), or if it ran and failed (a failed re-stage never
-        # creates the file).
+        # cloud-init runcmd is first-boot only), or if it ran and failed (a failed re-stage does not
+        # create or overwrite the file).
         logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-missing path=$tok_file #7228"
         exit 0
       fi
@@ -1032,8 +1032,9 @@ write_files:
       attempt=$(( $${n:-0} + 1 ))
       printf '%s\n' "$attempt" > "$STATE/attempts" || true
       # CHANNEL RE-ARM. inngest-bs-token-restage.service makes ONE attempt per boot; if it ran
-      # during a Doppler outage the token file is empty and every phone-home row is lost for the
-      # rest of the boot. Re-stage it (the same script, unchanged) whenever it is empty.
+      # during a Doppler outage the token file is missing (a failed restage never creates it) or empty
+      # and every phone-home row is lost for the rest of the boot. Re-stage it (the same script,
+      # unchanged) whenever it is missing or empty.
       [ -s /run/inngest-bs-logs-token ] || /usr/local/bin/inngest-bs-token-restage.sh >/dev/null 2>&1 || true
       /usr/local/bin/inngest-boot-phone-home.sh provision-attempt-start "attempt=$attempt iid=$IID" || true
       # THE ENVIRONMENT THE UNIT PROMISED. The token reaches every doppler call below from
@@ -1450,8 +1451,8 @@ write_files:
       # The timer, if it WAS active, is recorded, so a failed attempt restarts exactly it
       # (on_exit); a successful bootstrap re-enables it itself. (The retired LUKS cutover FSM had
       # a timer and a service in this loop until #11080; image v1.1.61 stopped baking them. The loop
-      # and the accumulator stay list-shaped on purpose: the provision-unit rows G2-r14, G2-r15 and
-      # G2-r17 and the ci-deploy variable-unit pin anchor on that shape.)
+      # and the accumulator stay list-shaped on purpose: the provision-unit rows and the ci-deploy
+      # variable-unit pin anchor on that shape.)
       # BUSY is wider than "a oneshot is activating": the FSM can be mid-flight between two of its
       # steps with no unit running. The flip FSM's host state slot
       # (/var/lock/inngest-cutover-flip.state, written by inngest-cutover-flip.sh's emit_state)

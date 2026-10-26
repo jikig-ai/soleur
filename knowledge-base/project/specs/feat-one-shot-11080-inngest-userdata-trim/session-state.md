@@ -33,12 +33,12 @@ Dedup ledger: 13 seats, about 60 raw findings -> 24 unique. Seats: simplicity, a
 | template comments: docker cp history, attempt-1, plural, rc-map duplicate, single-element loops | template-stale-comments | data-integrity, quality, git-history, pattern, observability | comment edits, 0 B (done) |
 | Guard 3 vocabulary scan false reason; luks-volumes write re-add is green; `#x`/`#!` shipped by render but stripped by guard; unscanned delivery files | guard-assembly-narrower-than-name | structural-enum, test-design, pattern, quality | scan mode 2, 5 delivery files, rows (done) |
 | mutate()/expect_green() wrappers neuterable | wrapper-dispatch-axis | test-design | two wrapper controls (done) |
-| svc= flip timer unpinned; success-path restore unpinned; T5 lower bound | provision-unit-gaps | test-design, structural-enum, quality | T4c, G2-r18, G2-r19, T5 exact (running) |
+| svc= flip timer unpinned; success-path restore unpinned; T5 lower bound | provision-unit-gaps | test-design, structural-enum, quality | T4c, G2-r18, G2-r19, T5 exact (done) |
 | dead sed rule in the loop-device test | dead-rewrite | many seats | delete (done) |
 | budget stubs optimistic by ~150-300 B | stub-scale-headroom | user-impact, performance | PR body + #11140 note |
 | plan claims `::error::` on over-cap; web-release "no user impact"; mint noop | plan-text | observability, user-impact | plan amendments (done), PR body |
 | redundant template rows (brace, snake, upper, P2b, unreadable) | over-built-tests | simplicity, pattern, test-design | dropped (done) |
 | pre-existing dangling comment cites (283, 293, 2506, 2516) | pre-existing-comments | pattern, git-history, quality | wontfix: stripped history comments, outside this PR's subject |
 
-dedup: ~60 raw -> 24 unique
+dedup: ~60 raw findings across 13 seats -> 24 unique after merging duplicates (the table lists them grouped by theme)
 

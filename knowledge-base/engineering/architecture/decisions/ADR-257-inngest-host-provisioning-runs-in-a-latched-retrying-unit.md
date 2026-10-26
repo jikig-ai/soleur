@@ -118,6 +118,9 @@ edge at all, not that the host lacks a reboot.
      it does today. On a failed attempt the script's exit handler restarts every timer that was
      active when the quiesce stopped it, so a failing unit never leaves the cutover FSMs switched
      off.
+
+   > **Superseded 2026-10-26 (#11080):** the quiesce is the flip FSM only on a host born from the current template; see the addendum below.
+
    - The provision unit deliberately has no `Before=` ordering on those services: the bootstrap
      restarts units synchronously, so that ordering would invite a deadlock.
 7. **Per-attempt recovery of first-boot state the retry depends on.** Each attempt re-runs the
