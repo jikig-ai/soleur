@@ -85,14 +85,16 @@ UNION ALL
 
 -- Complement sweep over attacl (review fix, PR #11253): column-level grants
 -- survive the table-level REVOKE ALL — assert none exist on the narrowed
--- relations for anon/authenticated beyond the users census columns, and none
--- that a held table-level verb does not already cover (mirrors the fuzz
--- gate's registered-or-covered rule).
+-- relations for any api role beyond the users census columns, and none that
+-- a held table-level verb does not already cover (mirrors the fuzz gate's
+-- registered-or-covered rule). service_role is in the sweep because
+-- _schema_migrations revokes it too; on the other six relations its held
+-- table-level verbs exempt a redundant column grant, same as the fuzz gate.
 SELECT 'no_uncovered_col_grants_narrowed', count(*)::int
 FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid
 JOIN pg_namespace n ON n.oid = c.relnamespace
-CROSS JOIN (VALUES ('anon'),('authenticated')) r(role)
+CROSS JOIN (VALUES ('anon'),('authenticated'),('service_role')) r(role)
 CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('REFERENCES')) v(verb)
 WHERE n.nspname = 'public'
   AND c.relname IN ('_schema_migrations','api_keys','audit_byok_use','audit_github_token_use','dsar_export_jobs','flag_flip_audit','users')
