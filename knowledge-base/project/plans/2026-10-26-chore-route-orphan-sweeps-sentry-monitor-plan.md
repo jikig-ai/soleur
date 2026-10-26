@@ -37,7 +37,7 @@ Checked against GitHub and `origin/main` on 2026-10-26:
 - No live scheduler: the recent `scheduled-terraform-drift.yml` runs listed are all event `workflow_dispatch` (latest 2026-10-26T06:00:04Z). The next slot's run therefore exists only if the dispatcher fires it; its absence is itself a gate failure (Phase 6).
 - ADR corpus: ADR-031 (Sentry as IaC, #8630 amendment) owns the two-PR rule and the one-alert-binds-all-monitors decision; routing one more monitor follows it and decides nothing new. ADR-241's 2026-10-24 entry states "routing is #10972"; that dated pointer stays true history and the ADR is not edited (CTO R5).
 - The apply for the #10967 merge (run 40248419931, event push, head 5e46901abe) concluded `success` with `Terraform apply` and `sentry_alert live fidelity` both `success`: the monitor exists in Sentry. That run has 0 artifacts: the forensics upload is `if: failure()`.
-- Apply path: `apply-sentry-infra.yml` triggers on `apps/web-platform/infra/sentry/**`. Its `plan_pr` job holds the committed `alert-reference.json` equal to the plan projection (`scripts/sentry-alert-reference-gate.sh`) and uploads the expected document as artifact `sentry-alert-reference-expected-<run-id>` on a mismatch. Its apply job ends with `sentry_alert live fidelity`, which compares live `detectorIds` of `cron-monitor-failure` against the projection of the plan just applied.
+- Apply path: `apply-sentry-infra.yml` triggers on `apps/web-platform/infra/sentry/**`. Its `plan_pr` job holds the committed `alert-reference.json` equal to the plan projection (`scripts/sentry-alert-reference-gate.sh`) and uploads the expected document as artifact `sentry-alert-reference-expected-<run-id>` on a mismatch. Its apply job runs `sentry_alert live fidelity` as a late step, which compares live `detectorIds` of `cron-monitor-failure` against the projection of the plan just applied.
 
 ### Property List and Cut List (Phase 0.6b)
 
@@ -62,7 +62,7 @@ Mechanisms the brief names, each with the property it buys and what already cove
 Cut List (mechanisms considered and removed before research):
 
 - A separate post-merge Sentry token read of the monitor -> P4 -> covered by the apply's own fidelity step (CTO Fork 3).
-- Editing the three "unrouted until #10972" comments in `scheduled-terraform-drift.yml` -> P1 does not need them; a comment-only edit would pull the heavy token-drift gate into a routing PR (CTO Fork 2). Tracked as a deferral instead.
+- Editing the three stale comment sites in `scheduled-terraform-drift.yml` (two say "unrouted until #10972", lines near 3000 and 3280; the "THE EMAIL STEP IS PERMANENT" block near 3309 says "while it is unrouted its issues email nobody") -> P1 does not need them; a comment-only edit would pull the heavy token-drift gate into a routing PR (CTO Fork 2). Tracked as a deferral instead.
 - Reading Sentry issue state in the new probe -> an endpoint nobody has verified in this repo; with `failure_issue_threshold = 1` every `missed`, `timeout` or `error` check-in opens an issue and an `ok` after it resolves it (`recovery_threshold = 1`), so the check-in statuses determine whether an issue was opened. The residual (resolved vs open at the time of the look) is stated as not measured.
 - Per-slot bucket coverage in the probe -> a missing check-in already shows up as a server-generated `missed` row; replaced by the simple window plus an `ok`-count floor (CTO R1).
 - The ADR-241 dated amendment -> the ADR's pointer is history, the runbook is what triage reads (CTO R5).
@@ -78,6 +78,10 @@ Cut List (mechanisms considered and removed before research):
 - `2026-10-23-timeout-record-satisfies-verdicts-in-both-directions.md`: a `timeout` row can satisfy negative arms vacuously; the probe's fixtures include a timeout row in each bucket position.
 - Sibling `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`: the org is `jikigai-eu` on host `de.sentry.io`; the probe pins both literals (as the sibling does) rather than reading them from the environment.
 
+### Sentry API facts (deepen-plan research, 2026-10-26, Sentry public docs)
+
+Confirmed: the path `GET /api/0/organizations/{org}/monitors/{monitor}/checkins/` exists (https://docs.sentry.io/api/crons/retrieve-checkins-for-a-monitor); failure thresholds count missed and error check-ins and consecutive ok check-ins resolve the open issue (https://sentry.io/changelog/2023-12-20-margins-and-thresholds-for-cron-monitors). Unverified from public docs: the `per_page` maximum and Link-header pagination, whether server-generated `missed` rows are listed, whether `timeout` counts toward the failure threshold, and `sentry_alert.monitor_ids` accepting cron-monitor ids explicitly (the provider docs type it as a set of strings; this repo already binds 63 cron monitors that way and the apply's fidelity step passes). The probe is designed so none of the unverified items can produce a false 0: it does not rely on `missed` rows existing (the `ok`-count floor catches a silent monitor independently), it treats a full page that does not reach the window start as exit 3, and the sibling probe already reads the `dateAdded` and `status` fields live (verified in #5728 Phase 0). The scratch-tracker dry-run is where the rest is read on real data.
+
 ### Functional overlap
 
 Registry search (3 of 3 reachable) found only partial overlaps (`sentry-cli`, `sentry`, `use-sentry`, `error-tracking`); none covers Terraform alert routing or a sweeper probe, and none is installed. Built in-repo.
@@ -87,13 +91,13 @@ Registry search (3 of 3 reachable) found only partial overlaps (`sentry-cli`, `s
 First round (CTO agent, 2026-10-26, before drafting):
 
 - **Fork 1 - follow-up mechanism:** Ruled by CTO agent, 2026-10-26: enroll #10972 itself in the follow-through sweeper (option A). Plan rule 2.9.1 and ship Phase 5.5 require a time-gated close criterion to be enrolled; the other options leave closure to memory. New probe plus sibling suite, directive `earliest=2026-11-09T00:00:00Z`, `secrets=SENTRY_ACTIONS_RO_TOKEN`, label `follow-through`, no new secret.
-- **Fork 2 - stale prose:** Ruled by CTO agent, 2026-10-26: edit the `.tf` comment above the monitor, the unrouted-map entry (removed with it) and the runbook; leave the `scheduled-terraform-drift.yml` comments (only two of three are stale). Amended by R5 below (ADR-241 edit dropped).
+- **Fork 2 - stale prose:** Ruled by CTO agent, 2026-10-26: edit the `.tf` comment above the monitor, the unrouted-map entry (removed with it) and the runbook; leave the `scheduled-terraform-drift.yml` comments (the CTO counted two stale sites; the attribution check found a third, the block near line 3309 whose sentence "while it is unrouted its issues email nobody" also becomes false, so all three are named in the deferral issue). Amended by R5 below (ADR-241 edit dropped).
 - **Fork 3 - apply read-back:** Ruled by CTO agent, 2026-10-26: the post-apply `sentry_alert live fidelity` step plus the committed `alert-reference.json` is sufficient evidence of convergence; no separate token read. Prove it from `gh run view` on the apply run for the merge SHA: fidelity step `success` (not `skipped`) and Terraform apply step `success`. (Checked at plan time: `scripts/sentry-alert-live-fidelity.sh` compares `detectorIds` per rule by name and reports `MONITOR UNBIND` on a difference; the same two step names read `success` on the last apply, run 40248419931.)
 
 Second round (after the four-agent plan review; Ruled by CTO agent, 2026-10-26):
 
-- **R1 - probe verdict shape:** the sibling's simple window, not per-slot buckets. Window is [2026-10-26T06:00Z, min(now, 2026-11-09T06:00Z)) with the END pinned as a literal, so the verdict is immutable and a later row cannot re-fail a closed tracker. `missed`, `timeout` and `error` rows each exit 1 (reverses the first-round "error does not fail": the probe never reads Sentry issue state, and with `failure_issue_threshold = 1` an `error` row is the case that opens an issue, so a closing probe fails closed). Zero rows, truncation, or fewer `ok` rows than closed 12-hour slots in the window exit 3.
-- **R2 - suite:** 12 rows, listed in the Guard Contract; crontab-parity row and harness row (a) dropped (moot with the end pinned).
+- **R1 - probe verdict shape:** the sibling's simple window, not per-slot buckets. Window is [2026-10-26T06:00Z, 2026-11-09T06:00Z) with START and END pinned as literals and the probe refusing to judge before the window closes (security review: not clipped to now), so the verdict is immutable and a later row cannot re-fail a closed tracker. `missed`, `timeout` and `error` rows each exit 1 (reverses the first-round "error does not fail": the probe never reads Sentry issue state, and with `failure_issue_threshold = 1` an `error` row is the case that opens an issue, so a closing probe fails closed). Zero rows, truncation, or fewer `ok` rows than closed 12-hour slots in the window exit 3.
+- **R2 - suite:** 12 rows, now 14 after the security review added rows 13 and 14 (listed in the Guard Contract); crontab-parity row and harness row (a) dropped (moot with the end pinned).
 - **R3 - exit codes:** exit 3 (CANNOT ESTABLISH) for every read or integrity failure (zero rows, truncation, non-array, unpinned destination, unusable token, HTTP or auth failure, failed floor); exit 2 (NOT YET) only for nothing-to-judge (no closed slot yet); 78 for xtrace. Authority: `plugins/soleur/skills/ship/references/followthrough-stub-template.sh` (lines 11, 55, 71) and `scripts/sweep-followthroughs.sh` (renders 2 and 3 separately, both non-closing). The sibling's blanket exit 2 is legacy.
 - **R4 - detector id source:** the CTO kept the `plan_pr` artifact primary and the apply forensics artifact as contingency. **Plan-author correction of fact, recorded in decision-challenges.md:** the forensics upload step is `if: failure()` and run 40248419931 (the apply for the #10967 merge, `success`) lists 0 artifacts, so the contingency does not exist. The only credential-free source is the `plan_pr` artifact; if it is absent the step ends `Blocked`.
 - **R5 - prose scope:** drop the ADR-241 amendment (its "routing is #10972" is a dated pointer and stays true history). Keep the `.tf` comment edits, the runbook edit and the deferral issue for the two stale workflow comments (`wg-when-deferring-a-capability-create-a`; #10972 cannot carry it because the sweeper closes #10972).
@@ -136,8 +140,10 @@ The id is the monitor's live detector id, which is not derivable offline and not
 
 1. Commit Phase 1 as its own commit and push. The `plan_pr` job of `apply-sentry-infra.yml` runs on the draft PR; its reference gate is expected to go red once (committed reference lacks the new id) and uploads `sentry-alert-reference-expected-<run-id>`. The step summary states the credential-free remedy: `gh run download <run-id> -n sentry-alert-reference-expected-<run-id>`.
 2. Download into the scratch directory (never into the repo tree), then compare structurally: the expected document must differ from the committed one in exactly one place, one new element in `cron-monitor-failure.detectorIds`. Print only booleans and counts (`jq` length, sortedness, the count of keys that differ), never the document.
+2a. Download into a fresh empty directory in the scratchpad and check `jq -e 'type=="object"'` on it before any copy; word the PR-body claim about it as "the projection's allowlist plus a shape denylist" (the workflow's secret sweep is a prefix denylist and covers only that one file), not "swept clean".
+2b. Before trusting the artifact: `gh run view <run-id> --json headSha` must equal the Phase 1 commit (a superseded or cancelled run gives a stale document). If the gate went red for another reason and no artifact exists, read the failing step: a 410 brownout in the plan step clears on `gh run rerun <run-id> --failed` (rerun once); a binding-gate or destroy-gate red is a real defect to fix. Record the run id in the state record (Phase 6 step 0).
 3. Copy it over `apps/web-platform/infra/sentry/alert-reference.json`, commit separately, push, and wait for the reference gate to turn green.
-4. Invariants (mechanical, run locally): `jq -S . alert-reference.json | diff -q - alert-reference.json` (canonical), `detectorIds | . == sort`, count 64, and the same id set otherwise.
+4. Invariants (mechanical, run locally), stated relative to `origin/main` so a sibling merge (PR #10905 also edits these files) cannot falsify them: `jq -S . alert-reference.json | diff -q - alert-reference.json` (canonical), `detectorIds | . == sort`, count = main's count + 1 (63 to 64 at plan time), and the id set equals main's plus exactly one id.
 
 If the `plan_pr` artifact is absent (the gate went red for another reason, or the artifact expired): stop with `Blocked: detector id needs a Sentry token read` and name this step. There is no tokenless fallback: the apply forensics artifact is uploaded only on a failed apply (`if: failure()`), and the apply for the #10967 merge (run 40248419931) succeeded and has none.
 
@@ -145,9 +151,10 @@ If the `plan_pr` artifact is absent (the gate went red for another reason, or th
 
 Files: `scripts/followthroughs/orphan-sweeps-relook-10972.sh` (probe) and `scripts/followthroughs/orphan-sweeps-relook-10972.test.sh` (fixture suite). The probe is a small delta on `community-monitor-checkin-soak-5728.sh` (refuse under xtrace, token-shape guard, pinned org `jikigai-eu` and host `de.sentry.io`, bearer on curl's stdin config channel, response shape check before trusting a zero), with these changes (CTO R1 to R3):
 
-- Slug `scheduled-orphan-sweeps`; `per_page=100`; window start the literal 2026-10-26T06:00:00Z and window end the literal 2026-11-09T06:00:00Z, clipped to "now" (so the verdict, once the window has closed, never changes).
-- Exit 1 on any `missed`, `timeout` or `error` row in the window. `in_progress` rows are ignored (not a verdict). Exit 0 only when no such row exists AND the count of `ok` rows is at least the number of closed 12-hour slots in the window (28 for the full window).
-- Exit 3 for zero rows, a non-array response, a full page whose oldest row is newer than the window start (truncation), an unpinned destination, an unusable token, an HTTP or auth failure, or a failed floor. Exit 2 only when no slot has closed yet. Exit 78 under xtrace.
+- Slug `scheduled-orphan-sweeps`; `per_page=100`; `--max-time 30 --proto '=https'`; window start the literal 2026-10-26T06:00:00Z and window end the literal 2026-11-09T06:00:00Z. The probe also hard-codes `NOT_BEFORE=2026-11-09T06:00:00Z` (the window end) and exits 2 before it, so the verdict always covers the FULL window with the 28-slot floor: the `earliest=` in the editable issue body is a convenience, not the control, and editing it cannot make a partial window close the tracker (security review: the sweeper does not track edits to the directive).
+- Exit 1 on any `missed`, `timeout` or `error` row in the window. `in_progress` rows are ignored (not a verdict). Exit 0 only when no such row exists AND the count of `ok` rows is at least the number of slots in the full window (28).
+- Output never echoes the response body (a public Actions log and a public issue comment carry it): on a non-200 or non-array response print only the HTTP status and a fixed reason string.
+- Exit 3 for zero rows, a non-array response, a full page whose oldest row is newer than the window start (truncation), an unpinned destination, an unusable token, an HTTP or auth failure, or a failed floor. Exit 2 only before `NOT_BEFORE`. Exit 78 under xtrace.
 - Output: counts per status and the first few offending timestamps; a closing line that the Sentry issue state was not read. No ids, no values.
 - Header states the credential posture (read-only `SENTRY_ACTIONS_RO_TOKEN`, no GitHub token), the consequence of exit 1 (a bad slot makes the verdict permanent; closing then needs the owner), and a `RETIREMENT:` line (convention requirement) listing every site to delete with the probe: the suite, the `run_suite` line in `scripts/test-all.sh`, the four generated manifest files (and `scripts/ci-pr-affected-audit.baseline.tsv` if a row was added), and the `follow-through` label on #10972.
 
@@ -155,7 +162,7 @@ Pre-merge lints that gate a new probe and suite (run them locally, all read-only
 
 Registration (follow the nearest sibling `ci-draft-light-soak-9728`): a `run_suite "scripts/followthroughs/orphan-sweeps-relook-10972" bash scripts/followthroughs/orphan-sweeps-relook-10972.test.sh` line in `scripts/test-all.sh`, then the manifest rows through the generator, never by hand: `python3 scripts/regenerate-shard-manifest.py --incremental --write`. This is mechanical regeneration, not design. Check `scripts/ci-pr-affected-audit.baseline.tsv` against the affected gate and regenerate with its own tool only if the gate demands a row.
 
-Dry-run on real data (the one check a fixture cannot make): the sweeper skips a tracker whose `earliest=` is in the future, so a dry-run on the real #10972 would never run the probe. Use a throwaway scratch issue labelled `follow-through` whose directive has the same `script=` and `secrets=` but `earliest=<now>`, then `gh workflow run scheduled-followthrough-sweeper.yml --ref feat-one-shot-10972-route-orphan-sweeps-monitor -f dry_run=true`, read the scratch tracker's `exit=` line and output tail (dry-run posts nothing), and close the scratch issue. It answers whether `per_page=100` is honoured on the EU host and how many rows 14 days return. The directive gate resolves `script=` under the main checkout; use the convention's untracked copy there if it reports "does not exist", and remove the copy afterward.
+Dry-run on real data (the one check a fixture cannot make; run it only AFTER the lints, the suite and the review fixes pass, because it executes the branch's probe with the live read-only token on a public Actions log, so first confirm the probe prints only counts and timestamps; close the scratch tracker and remove any untracked copy immediately): the sweeper skips a tracker whose `earliest=` is in the future, so a dry-run on the real #10972 would never run the probe. Record the scratch issue number (and any untracked copy path in the main checkout) in the state record BEFORE creating it, and clean both up on resume if the session died; the real scheduled sweeper from main would otherwise keep seeing a stray tracker. Use a throwaway scratch issue labelled `follow-through` whose directive has the same `script=` and `secrets=` but `earliest=<now>`, then `gh workflow run scheduled-followthrough-sweeper.yml --ref feat-one-shot-10972-route-orphan-sweeps-monitor -f dry_run=true`, read the scratch tracker's `exit=` line and output tail (dry-run posts nothing), and close the scratch issue. It answers whether `per_page=100` is honoured on the EU host and how many rows 14 days return. The directive gate resolves `script=` under the main checkout; use the convention's untracked copy there if it reports "does not exist", and remove the copy afterward.
 
 Enrollment on #10972: label `follow-through` and the directive pasted UNFENCED at column 0:
 
@@ -167,9 +174,9 @@ Enrollment on #10972: label `follow-through` and the directive pasted UNFENCED a
 -->
 ```
 
-Timing: the sweeper runs from main and checks that the script exists before it checks `earliest=`, so enrolling before the merge produces a "missing in repo HEAD" failure line on each sweep until the merge. Enroll after the merge unless ship Phase 5.5's fail-closed soak gate demands it earlier, in which case enroll at ship and accept the noise for at most the hours until the merge.
+Timing (decided): the sweeper runs from main and checks that the script exists before it checks `earliest=`, so enrolling before the merge produces a "missing in repo HEAD" failure line on each sweep until the merge, while enrolling only after the merge depends on a session surviving the queue (a lost enrollment is silent and means #10972 is never closed mechanically). Enroll at Phase 6 step 6, right before arming the merge, after both slots read ok: the noise window is then only the merge-queue minutes, and the enrollment no longer depends on a post-merge session. Ship Phase 5.5's fail-closed soak gate is satisfied at the same point.
 
-Deferral tracking (filed at work time, milestone Post-MVP / Later): one issue "chore: refresh the two stale 'unrouted until #10972' comments in scheduled-terraform-drift.yml at its next edit", naming the sites by content anchor ("its Sentry monitor is unrouted until"), the trigger (next real edit to that workflow) and the reason (CTO Fork 2). #10972 cannot carry it because the sweeper closes #10972.
+Deferral tracking (filed at work time, milestone Post-MVP / Later): one issue "chore: refresh the two stale 'unrouted until #10972' comments in scheduled-terraform-drift.yml at its next edit", naming the three sites by content anchor ("its Sentry monitor is unrouted until" twice, and "while it is unrouted its issues email nobody" in the aggregator's rule block), the trigger (next real edit to that workflow) and the reason (CTO Fork 2). #10972 cannot carry it because the sweeper closes #10972.
 
 ### Phase 4 - Prose that the routing makes false
 
@@ -188,23 +195,33 @@ Deferral tracking (filed at work time, milestone Post-MVP / Later): one issue "c
 
 Earliest 2026-10-26T18:00Z. Slot runs are dispatched from main; each run finishes about 45 seconds after it starts.
 
-Durable owner: this run ends well before 18:00Z, so before ending it posts one comment on draft PR #11154 ("merge gate waiting on slot A 2026-10-26T18:00Z and slot B 2026-10-27T06:00Z; not ready; reads are metadata only") and emits the end-of-work resume prompt naming both slot times. A `Blocked` result is posted as a comment on #11154 and #10972; if the 2026-10-27 due date will slip, file ONE `action-required` issue.
+Step 0, before this run ends (it ends well before 18:00Z, and a comment wakes nothing):
 
+- Post ONE state record on draft PR #11154: branch, the Phase 1 and Phase 2 commit SHAs, the `plan_pr` run ids and their `headSha`, the scratch issue number and any untracked-copy path (Phase 3), the evidence read so far, and the line "merge gate waiting on slot A 2026-10-26T18:00Z and slot B 2026-10-27T06:00Z; not ready".
+- Arm a one-time wake for about 18:05Z and 06:05Z through the harness's scheduling facility when one is available; otherwise the end-of-work resume prompt (naming both times, the PR, the plan path and the state-record comment) is the only wake, and the pipeline's next phase owns it.
+- A `Blocked` result is posted on #11154 and #10972; if the 2026-10-27 due date will slip, file ONE `action-required` issue.
+- Post-merge checklist (Phase 7, the #10972 comment) goes into the PR body so the merge itself carries what remains.
+
+Before marking ready (after slot B reads ok), run a pre-ready sync check: `git fetch origin main`, then diff `origin/main` against the last pushed base for `apps/web-platform/infra/sentry/**` and `tests/scripts/lib/sentry-alert-projection.jq`. Nothing changed: proceed. Changed (including PR #10905 landing first, which edits the same two `.tf` files): merge `origin/main` into the branch, re-derive the sorted position and re-run the Phase 1 and Phase 2 checks, push, wait for `plan_pr` to go green, then proceed. This pre-ready sync is allowed; the "do not sync by hand" rule applies only to a PR that is already in the merge queue. The slot reads do not need to be redone after such a sync (they concern runtime, not code). Reason: `plan_pr` runs on `pull_request` default types, so `ready_for_review` does not re-run it and `merge_group` skips the heavy plan, which makes the last green `plan_pr` as old as the last push.
+
+CI note recorded as an operator-class challenge in decision-challenges.md: pushes to a draft PR run only the light CI checks; the first full battery runs on `ready_for_review`, after the last gate, on the due date. Mitigations inside the brief: the local affected gate to rc 0 before ready; a stated budget (a red full battery after ready is fixed and re-queued, and a slip past 2026-10-27 is reported, not hidden).
+
+0b. Authenticate the run before trusting it (a hand dispatch of the workflow on any ref would otherwise produce a green aggregator): `gh api repos/jikig-ai/soleur/actions/runs/<id> --jq '[.head_branch,.path,.triggering_actor.login,.run_started_at,.head_sha]'` must show `main`, `.github/workflows/scheduled-terraform-drift.yml`, the same dispatcher login the 06:00Z run 40277293413 shows (read it the same way once and record it), a start within about 15 minutes of the slot, and a `head_sha` that `git merge-base --is-ancestor <sha> origin/main` accepts. A run that fails this is excluded and named, never counted; at least one authentic run must exist.
 1. Slot A, 2026-10-26T18:00Z:
    `gh run list --workflow scheduled-terraform-drift.yml --created ">=2026-10-26T17:30:00Z" --limit 10 --json databaseId,createdAt,event,status,conclusion,headSha`
-   Pick the run created within about 90 minutes of 18:00Z. No run by 19:30Z is a gate failure: `Blocked: no 18:00Z drift run was dispatched (the dispatcher did not fire)`.
+   Every run created in that window must pass the reads below (a retry or second dispatch is read too; a failed first run followed by a green retry is NOT an ok slot: report it). No run by 19:30Z is a gate failure: `Blocked: no 18:00Z drift run was dispatched (the dispatcher did not fire)`.
 2. For that run, gate on the aggregator itself rather than a hard-coded job count (the sole-copy job is planned to join `needs` later, #10430): `gh run view <id> --json jobs --jq '.jobs[] | select(.name=="orphan-sweeps-checkin") | .steps[] | [.name,.conclusion] | @tsv'` must show `Sentry check-in (orphan sweeps)` = `success` and the email step (name starting `Email notification (orphan sweeps`) = `skipped`; and every `*-orphan-sweep` job must read `success` (`select(.name|endswith("-orphan-sweep"))`).
-3. Status and ingest answer, read from the one job's log with the timestamp prefix stripped and the match anchored to the emitted line (GitHub echoes each step's `run:` source into the log, so a bare substring would match the source text):
-   `gh run view <id> --job <checkin-job-id> --log | sed -E 's/^[^ ]+\s+[^ ]+\s+//' | grep -aE '^(STATUS: |MONITOR_SLUG: |sentry-heartbeat: http_code=[0-9]+$)' | head -n 6` must print `MONITOR_SLUG: scheduled-orphan-sweeps`, `STATUS: ok` and `sentry-heartbeat: http_code=202`. Rehearsed read-only on 2026-10-26 against run 40277293413 (job id from `gh run view <id> --json jobs`): it printed exactly those three lines.
+3. Ingest answer: the job's step conclusions from step 2 are the primary evidence. The only emitted program line is `sentry-heartbeat: http_code=<n>` (GitHub's echo of the step's `env:` block also prints `STATUS: <value>` and `MONITOR_SLUG: <slug>`, which show what the step was GIVEN, not what Sentry received):
+   `gh run view <id> --job <checkin-job-id> --log | grep -aE '(sentry-heartbeat: http_code=[0-9]+|STATUS: (ok|error)|MONITOR_SLUG: [a-z-]+)$' | sed -E 's/^.*(sentry-heartbeat: http_code=|STATUS: |MONITOR_SLUG: )/\1/' | head -n 6` must show `MONITOR_SLUG: scheduled-orphan-sweeps`, `STATUS: ok` and `sentry-heartbeat: http_code=202` (the source echo `-w '\nsentry-heartbeat: http_code=%{http_code}\n'` does not end in digits, so it cannot match). Rehearse read-only on run 40277293413 before relying on it.
 4. Slot B, 2026-10-27T06:00Z: same reads. It is a hard gate (CTO R6). It finishes about 06:01Z, leaving the rest of 2026-10-27 UTC for the merge queue; a missing, late or non-ok slot B is `Blocked: <reason>` and the due date is then the owner's call.
 5. Any `error` status, any non-2xx, any sweep job not `success`, or a missing run: stop, do not mark the PR ready, report `Blocked: <slot, run id, which check failed>`.
-6. Only then: mark ready, then `gh pr merge 11154 --squash --auto` per the repo's merge flow (merge queue; no hand sync).
+6. Post each slot's run id and its read lines as a comment on #11154 at the time of reading (a resumed session must not re-derive them). Only then: run the pre-ready sync check, enroll #10972 (Phase 3), mark ready, then `gh pr merge 11154 --squash --auto` per the repo's merge flow (merge queue; no hand sync of a queued PR).
 
 What this gate does not prove: Sentry's own view of the monitor (a 202 shows acceptance only) and the Sentry issue state. Both stay named as not measured in the PR body.
 
 ### Phase 7 - Post-merge read-back (Done-when item 2)
 
-On the apply run for the merge SHA (`gh run list --workflow apply-sentry-infra.yml --event push --limit 5 --json databaseId,headSha,conclusion,status`): if the run is queued or in progress, wait with a bounded `Monitor` until-loop (not a sleep). Then read the job's step list, matching the fidelity step by prefix (`startswith("sentry_alert live fidelity")`) so an AC-tag rename cannot flip a pass into `Blocked`. Required: `Terraform apply (cron + uptime monitors)` = `success`, the fidelity step = `success` (not `skipped`), and the run `success`. This is the convergence evidence (CTO Fork 3). If the fidelity step is `skipped`, or the run is red: report `Blocked: apply did not converge (run <id>, step <name>)`; do not hand-apply. The next scheduled drift run after the apply then posts to a monitor that now exists and is routed.
+Take the merge SHA from `gh pr view 11154 --json mergeCommit`. The apply workflow's concurrency group keeps one pending run, so a later Sentry-tree merge can cancel the run for your SHA while its successor applies your change too. Therefore: select the earliest push-event apply run on main whose head contains the merge SHA as an ancestor (`git merge-base --is-ancestor`); a `cancelled` run means read its successor. If the run is queued or in progress, wait with a bounded `Monitor` until-loop (not a sleep). Read the step list, matching the fidelity step by prefix (`startswith("sentry_alert live fidelity")`) so an AC-tag rename cannot flip a pass into `Blocked`. Required: `Terraform apply (cron + uptime monitors)` = `success` and the fidelity step = `success` (not `skipped`); judge by these step conclusions, not by the run conclusion (the later BYOK and AC17 steps can fail a run whose apply and fidelity converged, and that is reported separately). If no apply run exists for the SHA, check the squashed commit message for a `[skip-sentry-apply]` line and report that as the reason. If the apply or fidelity step is `skipped` or failed: `Blocked: apply did not converge (run <id>, step <name>)`; do not hand-apply. This proves convergence of live state against the plan just applied, not that the committed JSON equals live; the daily `scheduled-sentry-alert-drift.yml` owns the latter. The next scheduled drift run after the apply then posts to a monitor that exists and is routed.
 
 Then post one comment on #10972 with the measured facts and dates, and leave the issue open for the sweeper (enrolled for 2026-11-09).
 
@@ -240,7 +257,7 @@ Query of open `code-review` issues against every planned path:
 
 ### Guard 1 - orphan-sweeps re-look probe (`orphan-sweeps-relook-10972.sh`)
 
-**Property.** The probe exits 0 only when, in the pinned window [2026-10-26T06:00:00Z, 2026-11-09T06:00:00Z) clipped to now, no check-in has status `missed`, `timeout` or `error` and at least one `ok` check-in exists per closed 12-hour slot; it never exits 0 on an empty, truncated, malformed, unpinned or unauthenticated reading.
+**Property.** The probe exits 0 only when, in the full pinned window [2026-10-26T06:00:00Z, 2026-11-09T06:00:00Z), evaluated only once the window has closed, no check-in has status `missed`, `timeout` or `error` and at least 28 `ok` check-ins exist (one per 12-hour slot); it never exits 0 on an empty, truncated, malformed, unpinned or unauthenticated reading.
 
 **Assembly.** One chokepoint: the single `jq` evaluation over the one checkins response that yields per-status counts and the oldest row's timestamp; every path that can end in 0 or 1 flows through the final verdict arm. The inputs proven before that arm: xtrace refusal, token shape, destination pin (org and host literals), HTTP 200, response type (array), row timestamps parse, window coverage (oldest returned row at or before the window start, or the page is not full), and the slot floor computed from the window length. Window start and end are literals in the probe; the floor is arithmetic over them, so there is no second schedule to keep in sync. Members drift (new rows arrive daily) but the pinned end makes the evaluated set immutable once the window closes.
 
@@ -256,14 +273,16 @@ Query of open `code-review` issues against every planned path:
 | 6 | A bad row dated after the pinned end | ignored, exit 0 |
 | 7 | Full page of rows whose oldest row is newer than the window start (truncation) | exit 3 |
 | 8 | Response is an object, not an array | exit 3 |
-| 9 | `ok` count below the closed-slot floor (27 `ok` rows) | exit 3 |
+| 9 | `ok` count below the 28-slot floor (27 `ok` rows) | exit 3 |
 | 10 | `SENTRY_ORG` or `SENTRY_API_HOST` differs from the pinned literal | exit 3, no request sent |
 | 11 | Token unset, or containing a newline | exit 3, no request sent |
 | 12 | Script run under `bash -x` with a token set | exit 78, no token in output |
+| 13 | Run before 2026-11-09T06:00Z (the issue-body `earliest=` edited earlier) | exit 2, no request sent |
+| 14 | A 401 or non-array fixture whose body carries a token-shaped string | exit 3 and nothing from the body appears in stdout or stderr |
 
 **Harness rows.** The suite asserts a nonzero executed-row count (a ledger of `0 passed, 0 failed` is a failure), so a suite that dispatches nothing cannot score green. Must-PASS inputs that are not the canonical clean fixture: rows 6 and an `in_progress` row inside the window (ignored, still 0), and an `ok` row arriving at the end of its slot. Boundary rows: exactly 100 rows with the oldest before the window start passes the truncation guard; 100 rows with the oldest after it exits 3.
 
-**Anchor.** The window literals live in the probe, so weakening the verdict needs a reviewed diff; the date gate `earliest=` lives in the issue-body directive, outside the commit, and the sweeper's directive gate logs an edit to it. The probe proves "no failed check-in and enough ok check-ins in the window", not the integrity of Sentry's data: a spoofed `ok` from the public write-only ingest key (already true of every monitor, stated in the workflow comment) is out of scope and named as not defended.
+**Anchor.** The window literals and `NOT_BEFORE` live in the probe, so weakening the verdict or the date needs a reviewed diff; the issue-body `earliest=` is outside the commit but is NOT relied on (the sweeper does not track edits to a directive, so an early `earliest=` would otherwise let a partial window close the tracker; row 13 pins this). The probe proves "no failed check-in and the full count of ok check-ins in the window", not the integrity of Sentry's data: a spoofed `ok` from the public write-only ingest key (already true of every monitor, stated in the workflow comment) is out of scope and named as not defended.
 
 Order and lifetime properties: none. The probe reads once and keeps no state, so no reorder row applies; stated so the omission is deliberate.
 
@@ -273,6 +292,7 @@ Order and lifetime properties: none. The probe reads once and keeps no state, so
 liveness_signal:
   what: Sentry cron monitor scheduled-orphan-sweeps (check-in per 06:00 and 18:00 UTC slot from the orphan-sweeps-checkin job)
   cadence: twice daily; missed-check-in margin 60 minutes
+  verified_by_this_plan: the binding (apply fidelity step) and check-in acceptance (HTTP 202); NOT verified here: email delivery
   alert_target: sentry_alert.cron_monitor_failure emails issue owners, falling through to all active org members, at most once per 1441 minutes per monitor environment
   configured_in: apps/web-platform/infra/sentry/cron-monitor-alerts.tf (monitor_ids) and apps/web-platform/infra/sentry/cron-monitors.tf (resource scheduled_orphan_sweeps)
 
@@ -282,28 +302,65 @@ error_reporting:
 
 failure_modes:
   - mode: a sweep job fails, is cancelled or times out
-    detection: orphan-sweeps-checkin posts status error to scheduled-orphan-sweeps
+    detection: Sentry monitor scheduled-orphan-sweeps receives an error check-in from orphan-sweeps-checkin; workflow run log of job orphan-sweeps-checkin and of the failed sweep job (named error slug)
     alert_route: Sentry issue to org email (this PR) plus the aggregator's own email (shared mail key)
   - mode: no run is dispatched for a slot
-    detection: Sentry server-generated missed check-in after the 60 minute margin
+    detection: Sentry monitor missed check-in (server-generated after the 60 minute margin)
     alert_route: Sentry issue to org email (this PR); the aggregator email cannot fire because no job ran
+  - mode: the check-in POST is rejected (non-2xx, for example a rotated ingest key)
+    detection: workflow run log of job orphan-sweeps-checkin, line sentry-heartbeat http_code (the step is continue-on-error, so the run stays green); then Sentry monitor missed check-in about 60 minutes later
+    alert_route: Sentry issue to org email once the miss registers; the run log shows the cause immediately
   - mode: the apply leaves the alert unbound to the new detector
-    detection: apply-sentry-infra.yml step sentry_alert live fidelity reports MONITOR UNBIND and fails the run; daily scheduled-sentry-alert-drift.yml compares live against the committed alert-reference.json
-    alert_route: apply-failure tracking issue and the daily drift issue
+    detection: workflow run log of apply-sentry-infra.yml, step sentry_alert live fidelity (::error:: MONITOR UNBIND); daily scheduled-sentry-alert-drift.yml compares live against the committed alert-reference.json
+    alert_route: the apply-failure tracking issue (ci/apply-sentry-infra) and the daily drift issue (ci/sentry-alert-drift)
+  - mode: the monitor is deleted or recreated out of band (a new detector id)
+    detection: daily scheduled-sentry-alert-drift.yml (ci/sentry-alert-drift issue) and the next apply's plan
+    alert_route: the drift issue
+  - mode: the alert is bound but the email is suppressed or undelivered (the 1441-minute throttle, an empty recipient fall-through, a muted member)
+    detection: not measured in this PR. A Sentry monitor issue that is open with no email received is the symptom; the Sentry issue state is read on 2026-11-09 only as far as check-in statuses (probe), not delivery. Named residual; the aggregator's own per-slot email is the independent-of-Sentry path but shares the mail key
+    alert_route: none beyond the residual note in the PR body and the runbook triage row
   - mode: the 2026-11-09 re-look finds a missed, timeout or error check-in
-    detection: orphan-sweeps-relook-10972.sh exits 1 on the follow-through sweeper (exit 3 when it cannot read)
-    alert_route: sweeper comment on #10972, issue stays open
+    detection: sweeper run log and comment on #10972, probe exit 1 (exit 3 when it cannot read, for example an expired SENTRY_ACTIONS_RO_TOKEN, which comments on #10972 each sweep and leaves it open)
+    alert_route: sweeper comment on #10972; on a persistent exit 3 the owner refreshes the token through the runbook sentry-actions-ro-token-rotation.md (no host access involved)
 
 logs:
   where: GitHub Actions run logs for scheduled-terraform-drift.yml (job orphan-sweeps-checkin) and apply-sentry-infra.yml; Sentry check-in history for the monitor
   retention: GitHub Actions log retention for the repository; Sentry monitor check-in retention per the org plan
 
 discoverability_test:
-  command: grep -c "sentry_cron_monitor.scheduled_orphan_sweeps.id" apps/web-platform/infra/sentry/cron-monitor-alerts.tf
+  command: grep -cE '^    sentry_cron_monitor\.scheduled_orphan_sweeps\.id,$' apps/web-platform/infra/sentry/cron-monitor-alerts.tf
   expected_output: "1"
 ```
 
-The command verifies the committed binding only, and says so: the live state is verified by the apply run's fidelity step (Phase 7), because a live read needs a credential the run does not hold. No `ssh` anywhere; every read above is `gh` or `curl` against a vendor API from CI.
+The command is a static binding check only (anchored so it cannot match a longer name or a comment) and says so: the live state is verified by the apply run's fidelity step (Phase 7), because a live read needs a credential the run does not hold. No `ssh` anywhere; every read above is `gh` or `curl` against a vendor API from CI.
+
+## Encryption Posture
+
+This plan adds no persistent store (the probe keeps no state; the alert reference is a committed repo file holding configuration ids only). The `.tf` edit changes the membership of an existing alert and creates no store. It does add one new cross-component connection: the follow-through probe's read of the Sentry API from the sweeper's runner.
+
+```yaml
+at_rest:
+  - store: none introduced (the probe writes nothing; apps/web-platform/infra/sentry/alert-reference.json is committed configuration, not user data)
+    mechanism: not a store - the committed reference lives in the git repository, whose own posture is unchanged by this PR
+    evidence: apps/web-platform/infra/sentry/alert-reference.json holds rule names, frequencies, trigger and action shapes and numeric detector ids only (checked 2026-10-26: its top-level keys per rule are actionFilters, detectorIds, enabled, frequency, name, triggerConditions, triggerLogicType, and the file contains no '@' character)
+    defends_against: nothing is claimed for this file beyond repository access control
+    does_not_defend: anyone with read access to the repository can read the file; it is not a secret and is treated as public configuration
+    disclosed_as: not-publicly-claimed
+    live_verification: unavailable:no store to verify
+in_transit:
+  - connection: follow-through sweeper runner -> de.sentry.io Sentry organisation API (GET checkins, bearer SENTRY_ACTIONS_RO_TOKEN)
+    enforced_at: scripts/followthroughs/orphan-sweeps-relook-10972.sh (curl with --proto '=https', destination pinned by literal equality to jikigai-eu / de.sentry.io, bearer on curl's stdin config channel), modelled on scripts/followthroughs/community-monitor-checkin-soak-5728.sh
+    tls: https, curl defaults (TLS 1.2 or newer negotiated with the vendor)
+    cert_verification: on
+    does_not_defend: a compromised runner or a leaked read-only token (the token is org-level read-only, ADR-031); a vendor-side breach; traffic metadata
+    disclosed_as: not-publicly-claimed
+```
+
+No `exception` block: nothing is plaintext and certificate verification stays on.
+
+### Network-Outage Deep-Dive (trigger match was the word "timeout" as a Sentry check-in status, not a connectivity symptom)
+
+The plan has no SSH, firewall or provisioner dependency. The only network paths are HTTPS 443 from GitHub-hosted runners to `api.github.com` (gate reads), to `de.sentry.io` (probe read) and to the Sentry ingest host (existing check-in). L3 firewall allow-list: not applicable, no allow-list sits on these paths (GitHub-hosted runners, public vendor endpoints). L3 DNS/routing: not applicable beyond the probe's resolver-confinement prologue copied from the sibling. L7 TLS: certificate verification on (above). L7 application: the HTTP status of the checkins read is mapped to exit 3 with the status code in the output (no body is echoed beyond 500 bytes, as in the sibling).
 
 ## Scope Check
 
@@ -348,11 +405,11 @@ The command verifies the committed binding only, and says so: the live state is 
 
 Pre-merge (PR author, mechanical):
 
-1. `local.cron_monitor_alert_unrouted` no longer contains `scheduled_orphan_sweeps` (3 entries remain) and `monitor_ids` contains `sentry_cron_monitor.scheduled_orphan_sweeps.id,` exactly once, between `scheduled_oauth_probe` and `scheduled_plausible_goals` (`grep -c` returns 1; `terraform fmt -check` passes).
+1. `local.cron_monitor_alert_unrouted` no longer contains `scheduled_orphan_sweeps` (one fewer entry than on `origin/main`; 3 remain at plan time) and `monitor_ids` contains `sentry_cron_monitor.scheduled_orphan_sweeps.id,` exactly once, between `scheduled_oauth_probe` and `scheduled_plausible_goals` (`grep -c` returns 1; `terraform fmt -check` passes).
 2. `sentry-cron-monitor-routing-parity.test.ts` passes (24 of 24 at baseline; same count after).
-3. `alert-reference.json` is canonical (`jq -S . f | diff -q - f`), `cron-monitor-failure.detectorIds` is sorted with 64 elements, and it differs from `origin/main`'s copy by exactly one added id. The `plan_pr` reference gate is green on the PR's head commit. (Implementation location: Phase 2, artifact `sentry-alert-reference-expected-<run-id>` of `apply-sentry-infra.yml`.)
+3. `alert-reference.json` is canonical (`jq -S . f | diff -q - f`), `cron-monitor-failure.detectorIds` is sorted with 64 elements, and it differs from `origin/main`'s copy by exactly one added id and has one more element than main's (64 at plan time, 63 on main). The `plan_pr` reference gate is green on the PR's head commit. (Implementation location: Phase 2, artifact `sentry-alert-reference-expected-<run-id>` of `apply-sentry-infra.yml`.)
 4. `plugins/soleur/test/c4-count-parity.test.sh` passes.
-5. `orphan-sweeps-relook-10972.test.sh` passes with all 12 matrix rows and the harness and boundary rows driven, prints a nonzero assertion count; `shellcheck`, `scripts/lint-followthrough-varq-ban.sh`, `scripts/lint-shell-trace-credential-refusal.py` and `scripts/lint-orphan-test-suites.sh` are clean for the new files. The probe header carries the credential posture and a `RETIREMENT:` line listing every site (suite, `run_suite` line, four manifest files, the `follow-through` label on #10972).
+5. `orphan-sweeps-relook-10972.test.sh` passes with all 14 matrix rows and the harness and boundary rows driven, prints a nonzero assertion count; `shellcheck`, `scripts/lint-followthrough-varq-ban.sh`, `scripts/lint-shell-trace-credential-refusal.py` and `scripts/lint-orphan-test-suites.sh` are clean for the new files. The probe header carries the credential posture and a `RETIREMENT:` line listing every site (suite, `run_suite` line, four manifest files, the `follow-through` label on #10972).
 6. The sweeper dry-run against a throwaway scratch tracker (same `script=` and `secrets=`, `earliest=<now>`) shows the probe's `exit=` line and output tail on real data with a real verdict or a stated exit 3 reason; the scratch issue is closed afterward. A silent or unexplained result is a defect fixed before ready.
 7. After the merge (or at ship if Phase 5.5 requires earlier): #10972 carries the `follow-through` label and the unfenced directive (`script=scripts/followthroughs/orphan-sweeps-relook-10972.sh`, `earliest=2026-11-09T00:00:00Z`, `secrets=SENTRY_ACTIONS_RO_TOKEN`); the sweeper's directive gate accepts it.
 8. A deferral issue exists for the two stale comment sites in `scheduled-terraform-drift.yml` (Post-MVP / Later, with the re-evaluation trigger).
@@ -385,7 +442,7 @@ No Product/UX gate: the mechanical UI-surface override does not fire (no `compon
 
 - Routing parity: before and after, `sentry-cron-monitor-routing-parity.test.ts` 24 of 24. A fixture edit that lists the label in both the map and `monitor_ids` must red (existing row; observed by temporarily double-listing it locally and reverting).
 - Reference gate: committed reference without the new id reds `plan_pr` and uploads the expected artifact (the Phase 2 first push); with it, green.
-- Probe suite: the twelve matrix rows plus the harness and boundary rows; the "0 passed, 0 failed" ledger case reds.
+- Probe suite: the fourteen matrix rows plus the harness and boundary rows; the "0 passed, 0 failed" ledger case reds.
 - Gate rehearsal (read-only, now): run the Phase 6 commands against run 40277293413 and confirm they print three `success` jobs, `skipped` email step, `http_code=202`, `STATUS` `ok`. That proves the commands on a known-good slot before the unknown one.
 - Apply read-back rehearsal: run the Phase 7 `gh run view` against the most recent successful `apply-sentry-infra.yml` push run and confirm both step names are present with a conclusion.
 
@@ -394,7 +451,7 @@ No Product/UX gate: the mechanical UI-surface override does not fire (no `compon
 - **Never print the expected-reference document, the apply plan, or any diff.** Compare with `jq` and print counts and booleans. The detector id is a numeric configuration id, not a secret, but the artifact is a whole projection.
 - **A 202 from the ingest endpoint shows acceptance only.** The gate's "ok" is job success and an accepted check-in, not Sentry's own monitor status. The PR body must not claim more.
 - **`per_page=100` on the EU checkins endpoint is unverified** (the sibling uses 30 and a 7-day window). The probe's truncation guard (full page that does not reach the window start is exit 3) makes a cap show up as a non-closing result with a reason, never a pass; the scratch-tracker dry-run is where the real row count is read. If the endpoint caps lower than 14 days of slots, switch the probe to follow the `Link` cursor, within the same script.
-- **The directive must be pasted unfenced at column 0** in the #10972 body; a fenced or indented one enrolls nothing (#7490).
+- **The directive must be pasted unfenced at column 0** in the #10972 body; a fenced or indented one enrolls nothing (the sweeper's fence predicate in `scripts/sweep-followthroughs.sh`).
 - **The directive gate resolves `script=` under the main checkout, not the worktree**; use the convention's untracked copy if it reports "does not exist", and remove the copy afterward.
 - **A sweeper dry-run on the real #10972 never runs the probe** (the `earliest=` gate precedes it); only a scratch tracker with `earliest=<now>` does.
 - **Retiring the probe leaves the label behind**: removing the script while the `follow-through` label stays on closed #10972 logs a "missing in repo HEAD" error daily for the sweeper's lookback window. The `RETIREMENT:` header line says to remove the label too.
@@ -412,4 +469,4 @@ No Product/UX gate: the mechanical UI-surface override does not fire (no `compon
 - The artifact path yields no id: contingency in Phase 2, else `Blocked` on the exact step.
 - The probe's real-data dry run shows the endpoint behaves differently than the sibling's: the fixture suite cannot see it, which is why the scratch-tracker dry run precedes enrollment.
 - Exit 1 on the probe is permanent for the pinned window; the sweeper then comments daily and only the owner closes #10972. Accepted (CTO R1, R6).
-- The 2026-10-24 ruling C5 (#10952 plan) cut a follow-through script for the routing issue; the present ruling reverses that in effect because the re-look is now enrolled under rule 2.9.1. The simplicity reviewer's alternative (no suite, a sibling copy) was ruled against by the CTO for the 12-row suite because a wrong exit 0 closes the tracker silently.
+- The 2026-10-24 ruling C5 (#10952 plan) cut a follow-through script for the routing issue; the present ruling reverses that in effect because the re-look is now enrolled under rule 2.9.1. The simplicity reviewer's alternative (no suite, a sibling copy) was ruled against by the CTO for the 14-row suite because a wrong exit 0 closes the tracker silently.
