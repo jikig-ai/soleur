@@ -358,6 +358,10 @@ export async function readRuntimeFlagDetailed(
  * #10455 (b) — the same read as `isAgentSandboxUnixDenyEnabled`, plus whether Flagsmith ANSWERED (see
  * `readRuntimeFlagDetailed`). The runtime Bash synthetic's resolver CLI reports `unresolved` on `fellBack` instead of
  * testing the wrong artifact.
+ *
+ * `fellBack` here is BROADER than in `readRuntimeFlagDetailed`: it is also true when no Flagsmith client is configured
+ * (there `readRuntimeFlagDetailed` reports false). The resolver CLI exists to test the artifact actually in use, and an
+ * env mirror with no Flagsmith behind it is not that artifact, so "nothing was supposed to answer" still means unresolved.
  */
 export async function readAgentSandboxUnixDenyDetailed(
   identity: Identity = ANON_IDENTITY,

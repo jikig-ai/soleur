@@ -5,7 +5,8 @@
 // render in place (the settings tabs stay); only an uncaught bug reaches the dashboard error boundary.
 // Caching: `force-dynamic` below keeps the page out of the static cache, and the middleware sends
 // `Cache-Control: no-store` on authenticated document navigations (test/middleware.no-store.test.ts), so a
-// member's audit log is not restored by Back after sign-out.
+// member's audit log is not restored by Back after sign-out (document navigations only; this does not govern
+// client-side route transitions or fetches).
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";

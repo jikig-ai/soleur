@@ -34,6 +34,12 @@ describe("migration 177 denial messages vs RPC_DENIAL_PREFIX", () => {
     for (const d of denials) expect([d.message, d.message.startsWith(RPC_DENIAL_PREFIX)]).toEqual([d.message, true]);
   });
 
+  it("no statement raises the denial by its condition NAME (insufficient_privilege), which the SQLSTATE scan would miss", () => {
+    expect(code).not.toMatch(/ERRCODE\s*=\s*'?insufficient_privilege'?/i);
+    expect(code).not.toMatch(/\bRAISE\s+insufficient_privilege\b/i);
+    expect(code).not.toMatch(/\binsufficient_privilege\b/i);
+  });
+
   it("no statement in the file raises 42501 by a spelling the scan above does not see", () => {
     // Every mention of the SQLSTATE in executable code must be one of the parsed RAISE statements.
     expect((code.match(/'42501'/g) ?? []).length).toBe(raises.filter((r) => r.errcode === "42501").length);

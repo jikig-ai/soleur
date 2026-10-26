@@ -517,7 +517,7 @@ const GH_NO_NETWORK_PROMPT_ADDENDUM =
 const WEB_EGRESS_PROMPT_ADDENDUM =
   "## Web access enabled for this session\n" +
   "Your workspace owner enabled Agent web access. `WebFetch` is available " +
-  "and reaches the public internet through a dedicated, audited gateway — " +
+  "and reaches the public internet through a dedicated egress gateway — " +
   "HTTPS only; destinations that resolve to private/link-local/metadata " +
   "ranges are refused. Requests through this gateway may be recorded on a " +
   "best-effort basis; do not tell the user that any specific request was or " +

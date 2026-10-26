@@ -109,6 +109,9 @@ describe("middleware GAP G — no-store on authenticated documents", () => {
     expect(res.headers.get("cache-control")).toMatch(/no-store/);
   });
 
+  // Regression pin for the `?decision=` query form only. no-store here is PATH-INDEPENDENT (every authenticated
+  // document navigation gets it, as the case above shows); this is not evidence of a route-specific control on
+  // the egress audit page, and the page's own protection is the RPC's membership gate plus `force-dynamic`.
   test("egress audit page document navigation with a ?decision= filter → Cache-Control: no-store (#9545)", async () => {
     const res = await middleware(
       makeRequest("/dashboard/settings/scope-grants/egress-audit?decision=denied", {

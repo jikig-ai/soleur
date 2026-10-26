@@ -17,6 +17,7 @@
 // A caller that wants to distinguish a thrown evaluation from either catches the throw itself.
 
 import { getRuntimeFlag, readRuntimeFlagDetailed } from "@/lib/feature-flags/server";
+import type { CollectionState } from "@/lib/egress-audit/summary";
 
 export const EGRESS_AUDIT_COLLECTION_FLAG = "egress-audit-collection" as const;
 
@@ -34,7 +35,7 @@ export async function isEgressAuditCollectionOn(orgId: string): Promise<boolean>
 }
 
 /** `true` / `false` as Flagsmith answered, `"unknown"` when the value is the env mirror because Flagsmith did not answer. */
-export async function readEgressAuditCollectionState(orgId: string): Promise<true | false | "unknown"> {
+export async function readEgressAuditCollectionState(orgId: string): Promise<CollectionState> {
   const { value, fellBack } = await readRuntimeFlagDetailed(EGRESS_AUDIT_COLLECTION_FLAG, identityFor(orgId));
   return fellBack ? "unknown" : value;
 }

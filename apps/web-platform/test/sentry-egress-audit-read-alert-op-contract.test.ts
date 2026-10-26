@@ -7,8 +7,11 @@ import { describe, it, expect } from "vitest";
 // `sentry-egress-ghcr-deny-alert-op-contract.test.ts`.
 //
 // server/egress-audit-read.ts has exactly two mirror emitters, and every op is a string literal at its call site:
-//   fault("op", ...)                   error level, the paged class
-//   warn("op", ...) / onFault("op")    warning level, debounced, UNPAGED
+//   fault("op", "message", ...)                      error level, the paged class
+//   warn("op", "message", ...) / onFault("op", "m")  warning level, debounced, UNPAGED
+// Every op also owns its static message: Sentry groups message events by message (level and tags are not part of the
+// group), so a message shared by two ops, or by a fault and a warn, would put paged events into a group the rule
+// never matches.
 // The Sentry rule `egress-audit-read-failure` routes the fault ops to a person. Renaming the feature or an op on
 // either side, or dropping one from the filter, would dark the page while every loader test stays green (they read
 // the emitted event, not the rule), so this binds the sides by DERIVING both op sets from the code, not from
@@ -16,8 +19,12 @@ import { describe, it, expect } from "vitest";
 //   * the Terraform filter's feature value equals the loader's FEATURE constant;
 //   * the ops emitted through fault() equal the filter's op set, the ops emitted through warn()/onFault() are
 //     disjoint from it, and no op is emitted at both levels;
-//   * the two helpers are each defined once and no other code mirrors directly, so a new emitter cannot
-//     bypass the classification;
+//   * the two helpers are each defined once and no other code mirrors directly (reportSilentFallback,
+//     mirrorWarnWithDebounce, warnSilentFallback, infoSilentFallback), so a new emitter cannot bypass the
+//     classification;
+//   * the number of fault( / warn( / onFault( call sites equals the number of literal-op call sites, so a computed
+//     first argument cannot hide an op from the derived sets;
+//   * no static message appears under two ops or at both levels;
 //   * the committed alert-reference.json entry equals the filter (sentry-alert-reference-gate.sh
 //     holds the committed copy equal to the plan, so a stale copy reds the PR job).
 // Comments are stripped from both the loader and the .tf so a comment naming a literal cannot satisfy an
@@ -54,6 +61,9 @@ const sortedUnique = (xs: string[]): string[] => [...new Set(xs)].sort();
 const PAGED = sortedUnique([...loader.matchAll(/\bfault\(\s*"([a-z_]+)"/g)].map((m) => m[1]));
 const UNPAGED = sortedUnique([...loader.matchAll(/\b(warn|onFault)\(\s*"([a-z_]+)"/g)].map((m) => m[2]));
 const FILTER = (block.match(/key = "op", match = "in", value = "([^"]+)"/)?.[1] ?? "").split(",").filter(Boolean).sort();
+
+// Every emitter call site outside the two helper definitions: [kind, op, message].
+const SITES = [...loader.matchAll(/\b(fault|warn|onFault)\(\s*"([a-z_]+)"\s*,\s*"([^"]+)"/g)].map((m) => ({ kind: m[1], op: m[2], message: m[3] }));
 
 // The text of `function <name>(...) { ... }` up to its closing brace at column 0.
 const helperBody = (name: string): string => loader.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}\\n`))?.[0] ?? "";
@@ -93,12 +103,41 @@ describe("egress-audit-read alert op contract", () => {
   it("each emitter is defined once and nothing else mirrors directly (so no emitter bypasses the classification)", () => {
     expect(loader.match(/\bfunction fault\(/g)).toHaveLength(1);
     expect(loader.match(/\bfunction warn\(/g)).toHaveLength(1);
+    expect(helperBody("fault")).not.toBe("");
+    expect(helperBody("warn")).not.toBe("");
     const outside = loader.replace(helperBody("fault"), "").replace(helperBody("warn"), "");
     expect(outside).not.toMatch(/\breportSilentFallback\(/);
     expect(outside).not.toMatch(/\bmirrorWarnWithDebounce\(/);
+    expect(outside).not.toMatch(/\bwarnSilentFallback\(/);
+    expect(outside).not.toMatch(/\binfoSilentFallback\(/);
     // ...and each helper mirrors with err = null (so each reason is its own issue group), at the level its name says.
     expect(helperBody("fault")).toMatch(/\breportSilentFallback\(null, \{ feature: FEATURE, op, message/);
     expect(helperBody("warn")).toMatch(/\bmirrorWarnWithDebounce\(null, \{ feature: FEATURE, op, message/);
+  });
+
+  it("every emitter call site passes a string-literal op and message (a computed argument cannot hide an op)", () => {
+    const outside = loader.replace(helperBody("fault"), "").replace(helperBody("warn"), "");
+    for (const kind of ["fault", "warn", "onFault"]) {
+      const all = (outside.match(new RegExp(`\\b${kind}\\(`, "g")) ?? []).length;
+      const literal = SITES.filter((s) => s.kind === kind).length;
+      expect([kind, all > 0]).toEqual([kind, true]);
+      expect([kind, all]).toEqual([kind, literal]);
+    }
+  });
+
+  it("no static message is shared by two ops or by a paged and an unpaged emitter (Sentry groups by message)", () => {
+    expect(SITES.length).toBeGreaterThan(0);
+    const byMessage = new Map<string, { ops: Set<string>; levels: Set<string> }>();
+    for (const s of SITES) {
+      const e = byMessage.get(s.message) ?? { ops: new Set<string>(), levels: new Set<string>() };
+      e.ops.add(s.op);
+      e.levels.add(s.kind === "fault" ? "fault" : "warn");
+      byMessage.set(s.message, e);
+    }
+    for (const [message, e] of byMessage) {
+      expect([message, e.ops.size]).toEqual([message, 1]);
+      expect([message, e.levels.size]).toEqual([message, 1]);
+    }
   });
 
   it("the committed alert-reference.json entry equals the Terraform filter", () => {

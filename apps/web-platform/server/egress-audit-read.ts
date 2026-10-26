@@ -22,8 +22,10 @@
 //      its own Sentry issue group and the tag-filtered alert rule matches (an Error object would let the
 //      pino mirror capture it first and de-duplicate the tagged event away). A reply error adds only a
 //      low-cardinality `pg_code` tag. No workspace id, host or other value ever reaches a mirror.
-//   5. Exactly two emitters exist, and the op is a string literal at every call site (the alert
-//      contract test derives the paged and unpaged op sets from this file):
+//   5. Exactly two emitters exist, and the op is a string literal at every fault( / warn( / onFault( call
+//      (the alert contract test derives the paged and unpaged op sets from this file). Every op also owns
+//      its static message: Sentry groups by message, not by level or tag, so two ops sharing a message
+//      would share one issue group and a paged event could land in a group the alert rule never matches:
 //        fault(op, ...)  error level, the paged class (Terraform filter: rpc_error, rpc_timeout,
 //                        workspace_read_error);
 //        warn(op, ...)   warning level, debounced, UNPAGED (decorative reads: the card hint, the
@@ -52,12 +54,15 @@ const FEATURE = "egress-audit-read";
 export { FEATURE as EGRESS_AUDIT_READ_FEATURE };
 
 // Destination page. The summary RPC is the page's one essential read; the pointer read before it and the
-// collection / web-access reads after it are bounded tighter so a degraded database cannot stack them.
+// collection / web-access reads after it carry tighter bounds. The bounds still stack: the collection step
+// alone can take up to 3000 ms (org read 1500 + flag read 1500, in sequence, in parallel with the 1500 ms
+// web-access read), so the page worst case is 2000 + 8000 + 3000 ms.
 const PAGE_TIMEOUT_MS = 8_000;
 const PAGE_POINTER_TIMEOUT_MS = 2_000;
 const PAGE_AUX_TIMEOUT_MS = 1_500;
 // Scope Grants card: decorative, so every read is short and the whole load is capped (the hint is one
-// backward primary-key probe, expected under 5 ms; these bounds are for a degraded database).
+// backward primary-key probe, expected under 5 ms; these bounds are for a degraded database). When the
+// overall cap fires, the inner reads keep running and may still emit late unpaged warnings.
 const CARD_POINTER_TIMEOUT_MS = 600;
 const CARD_ORG_TIMEOUT_MS = 800;
 const HINT_TIMEOUT_MS = 800;
@@ -130,7 +135,7 @@ async function readPointer(supabase: SupabaseClient, userId: string, timeoutMs: 
 async function readCollection(
   supabase: SupabaseClient,
   wsId: string,
-  onFault: (op: string) => void,
+  onFault: (op: string, message: string) => void,
   timeoutMs: number,
 ): Promise<{ collection: CollectionState; workspaceName: string | null }> {
   let orgId: string;
@@ -138,13 +143,13 @@ async function readCollection(
   try {
     const r = await bounded(supabase.from("workspaces").select("organization_id, name").eq("id", wsId).maybeSingle(), timeoutMs);
     if (r === "timeout" || r.error || !r.data?.organization_id) {
-      onFault("org_read");
+      onFault("org_read", "egress audit read: collection organisation could not be read");
       return { collection: "unknown", workspaceName: null };
     }
     orgId = r.data.organization_id;
     workspaceName = typeof r.data.name === "string" ? r.data.name : null;
   } catch {
-    onFault("org_read");
+    onFault("org_read", "egress audit read: collection organisation could not be read");
     return { collection: "unknown", workspaceName: null };
   }
   // readEgressAuditCollectionState does not throw on a Flagsmith outage (it answers "unknown"); the catch and the
@@ -152,12 +157,12 @@ async function readCollection(
   try {
     const collection = await bounded(readEgressAuditCollectionState(orgId), timeoutMs);
     if (collection === "timeout") {
-      onFault("flag_eval");
+      onFault("flag_eval", "egress audit read: collection flag evaluation timed out");
       return { collection: "unknown", workspaceName };
     }
     return { collection, workspaceName };
   } catch {
-    onFault("flag_eval");
+    onFault("flag_eval", "egress audit read: collection flag evaluation failed");
     return { collection: "unknown", workspaceName };
   }
 }
@@ -236,7 +241,7 @@ export async function loadEgressAudit(
 
   // Started only after the RPC succeeded: a failing or slow summary call never waits behind these two reads.
   const [{ collection, workspaceName }, webAccess] = await Promise.all([
-    readCollection(supabase, ws, (op) => warn(op, "egress audit read: collection state could not be determined"), PAGE_AUX_TIMEOUT_MS),
+    readCollection(supabase, ws, warn, PAGE_AUX_TIMEOUT_MS),
     readWebAccess(supabase, ws),
   ]);
   return { kind: "ready", data: reply.data, collection, webAccess, workspaceName };
@@ -273,11 +278,11 @@ async function loadEgressCardStateInner(supabase: SupabaseClient, userId: string
 
   const pointer = await readPointer(supabase, userId, CARD_POINTER_TIMEOUT_MS);
   if (pointer.kind === "timeout") {
-    warn("hint_workspace_read", "egress audit read: current workspace pointer read timed out");
+    warn("hint_workspace_read", "egress audit read: card pointer read timed out");
     return hide;
   }
   if (pointer.kind === "threw") {
-    warn("hint_workspace_read", "egress audit read: current workspace pointer could not be read");
+    warn("hint_workspace_read", "egress audit read: card pointer could not be read");
     return hide;
   }
   if (pointer.kind === "unbound") return hide;
@@ -286,7 +291,7 @@ async function loadEgressCardStateInner(supabase: SupabaseClient, userId: string
   // The hint probe and the collection lookup are independent: start both, await both.
   const [lastRequestAt, { collection }] = await Promise.all([
     readHint(supabase, ws),
-    readCollection(supabase, ws, (op) => warn(op, "egress audit read: collection state could not be determined"), CARD_ORG_TIMEOUT_MS),
+    readCollection(supabase, ws, warn, CARD_ORG_TIMEOUT_MS),
   ]);
   return { lastRequestAt, collection, workspaceId: ws };
 }

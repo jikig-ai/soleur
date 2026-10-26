@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // #9545 PR2 — server loader for the egress audit view and the card hint. The RPC (migration 177) is
 // the only authz gate: the loader's own jobs are (1) take the workspace id ONLY from the fail-loud
@@ -42,41 +42,74 @@ const payload = (over: Record<string, unknown> = {}) => ({
 type RpcReply = { data: unknown; error: null | { code?: string; message?: string; name?: string } };
 type ReplySource = RpcReply | (() => RpcReply | Promise<RpcReply>);
 
-// supabase-js query builder stand-in: thenable, with abortSignal() like the real PostgREST builder.
-const builder = (reply: ReplySource) => {
+// supabase-js query builder stand-in: thenable, with abortSignal() like the real PostgREST builder. The signal
+// each call carries is recorded, so a dropped `.abortSignal(AbortSignal.timeout(ms))` is observable.
+const builder = (reply: ReplySource, onSignal?: (signal: unknown) => void) => {
   const run = async () => (typeof reply === "function" ? reply() : reply);
-  const b: { abortSignal: () => unknown; then: PromiseLike<RpcReply>["then"] } = {
-    abortSignal: () => b,
+  const b: { abortSignal: (signal: unknown) => unknown; then: PromiseLike<RpcReply>["then"] } = {
+    abortSignal: (signal) => {
+      onSignal?.(signal);
+      return b;
+    },
     then: (res, rej) => run().then(res, rej),
   };
   return b;
 };
 
+// The only column list the loader may ask the workspaces table for; anything else throws like a bad PostgREST select.
+const ORG_SELECT = "organization_id, name";
+
 function client(opts: { summary?: ReplySource; webEgress?: ReplySource; workspaceRow?: ReplySource }) {
-  const rpc = vi.fn((fn: string) => {
-    if (fn === "get_egress_audit_summary") return builder(opts.summary ?? { data: payload(), error: null });
-    if (fn === "get_workspace_web_egress") return builder(opts.webEgress ?? { data: true, error: null });
+  const signals: { fn: string; signal: unknown }[] = [];
+  const orgLookups: { select: string; eq: [string, unknown][] }[] = [];
+  const rpc = vi.fn((fn: string, _args?: unknown) => {
+    const onSignal = (signal: unknown) => signals.push({ fn, signal });
+    if (fn === "get_egress_audit_summary") return builder(opts.summary ?? { data: payload(), error: null }, onSignal);
+    if (fn === "get_workspace_web_egress") return builder(opts.webEgress ?? { data: true, error: null }, onSignal);
     throw new Error(`unexpected rpc ${fn}`);
   });
   const from = vi.fn((table: string) => {
     if (table !== "workspaces") throw new Error(`unexpected table ${table}`);
+    const lookup: { select: string; eq: [string, unknown][] } = { select: "", eq: [] };
     const chain = {
-      select: () => chain,
-      eq: () => chain,
+      select: (columns: string) => {
+        if (columns !== ORG_SELECT) throw new Error(`unexpected column list ${columns}`);
+        lookup.select = columns;
+        orgLookups.push(lookup);
+        return chain;
+      },
+      eq: (column: string, value: unknown) => {
+        lookup.eq.push([column, value]);
+        return chain;
+      },
       maybeSingle: () => builder(opts.workspaceRow ?? { data: { organization_id: ORG, name: "Acme" }, error: null }),
     };
     return chain;
   });
-  return { rpc, from } as never;
+  return { rpc, from, signals, orgLookups } as never;
 }
 
-type Spied = { rpc: ReturnType<typeof vi.fn>; from: ReturnType<typeof vi.fn> };
+type Spied = {
+  rpc: ReturnType<typeof vi.fn>;
+  from: ReturnType<typeof vi.fn>;
+  signals: { fn: string; signal: unknown }[];
+  orgLookups: { select: string; eq: [string, unknown][] }[];
+};
 const spied = (c: unknown) => c as Spied;
+const signalsFor = (c: unknown, fn: string) => spied(c).signals.filter((s) => s.fn === fn).map((s) => s.signal);
 const rpcArgs = (c: unknown, fn: string) => spied(c).rpc.mock.calls.filter((call) => call[0] === fn).map((call) => call[1]);
 
 const faults = () => h.reportSilentFallback.mock.calls.map((c) => c[1] as { feature: string; op: string; message: string; tags?: Record<string, string> });
 const warns = () => h.mirrorWarnWithDebounce.mock.calls.map((c) => c[1] as { feature: string; op: string; message: string; tags?: Record<string, string> });
 const neverRpc = (): Promise<RpcReply> => new Promise<RpcReply>(() => {});
+
+// Every unpaged emission is debounced per (feature, op): the mirror's 3rd and 4th arguments must be exactly
+// (FEATURE, op), or two ops would share one debounce bucket and one would be swallowed.
+afterEach(() => {
+  for (const call of h.mirrorWarnWithDebounce.mock.calls) {
+    expect([call[2], call[3]]).toEqual([EGRESS_AUDIT_READ_FEATURE, (call[1] as { op: string }).op]);
+  }
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -297,6 +330,20 @@ describe("loadEgressAudit: ready", () => {
     expect(rpcArgs(c2, "get_egress_audit_summary")).toEqual([{ p_workspace_id: WS, p_limit: 200, p_decision: null }]);
   });
 
+  it("every database read is bounded by an AbortSignal, and the web-access and org reads are keyed on the pointer's workspace", async () => {
+    const c = client({});
+    await loadEgressAudit(c, USER, "all");
+    for (const fn of ["get_egress_audit_summary", "get_workspace_web_egress"]) {
+      const sigs = signalsFor(c, fn);
+      expect([fn, sigs.length]).toEqual([fn, 1]);
+      expect([fn, sigs[0] instanceof AbortSignal]).toEqual([fn, true]);
+    }
+    expect(rpcArgs(c, "get_workspace_web_egress")).toEqual([{ p_workspace_id: WS }]);
+    // The org lookup selects exactly the two columns and filters on the workspace id, nothing else.
+    expect(spied(c).from).toHaveBeenCalledWith("workspaces");
+    expect(spied(c).orgLookups).toEqual([{ select: "organization_id, name", eq: [["id", WS]] }]);
+  });
+
   it("carries the payload, the workspace name, collection and web access", async () => {
     const out = await loadEgressAudit(client({}), USER, "all");
     expect(out).toMatchObject({ kind: "ready", collection: true, webAccess: true, workspaceName: "Acme" });
@@ -317,6 +364,7 @@ describe("loadEgressAudit: collection state", () => {
     h.readEgressAuditCollectionState.mockRejectedValue(new Error("flagsmith"));
     expect(await loadEgressAudit(client({}), USER, "all")).toMatchObject({ kind: "ready", collection: "unknown", workspaceName: "Acme" });
     expect(warns().map((w) => w.op)).toEqual(["flag_eval"]);
+    expect(warns()[0].message).toBe("egress audit read: collection flag evaluation failed");
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
   });
 
@@ -324,6 +372,7 @@ describe("loadEgressAudit: collection state", () => {
     const bad = client({ workspaceRow: { data: null, error: { message: "rls" } } });
     expect(await loadEgressAudit(bad, USER, "all")).toMatchObject({ kind: "ready", collection: "unknown", workspaceName: null });
     expect(warns().map((w) => w.op)).toEqual(["org_read"]);
+    expect(warns()[0].message).toBe("egress audit read: collection organisation could not be read");
     expect(h.readEgressAuditCollectionState).not.toHaveBeenCalled();
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
   });
@@ -361,6 +410,7 @@ describe("loadEgressAudit: collection state", () => {
       await vi.advanceTimersByTimeAsync(1_500);
       await expect(p).resolves.toMatchObject({ kind: "ready", collection: "unknown", workspaceName: "Acme" });
       expect(warns().map((w) => w.op)).toEqual(["flag_eval"]);
+      expect(warns()[0].message).toBe("egress audit read: collection flag evaluation timed out");
     } finally {
       vi.useRealTimers();
     }
@@ -380,6 +430,8 @@ describe("loadEgressAudit: web access", () => {
     expect(warns()).toHaveLength(1);
     expect(warns()[0]).toMatchObject({ op: "web_access_read", tags: { pg_code: "42501" } });
     expect(h.mirrorWarnWithDebounce.mock.calls[0][0]).toBeNull();
+    expect(h.mirrorWarnWithDebounce.mock.calls[0][2]).toBe("egress-audit-read");
+    expect(h.mirrorWarnWithDebounce.mock.calls[0][3]).toBe("web_access_read");
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
   });
 
@@ -425,6 +477,11 @@ describe("loadEgressCardState", () => {
     const out = await loadEgressCardState(c, USER);
     expect(out).toEqual({ lastRequestAt: "2026-10-26T11:00:00Z", collection: true, workspaceId: WS });
     expect(rpcArgs(c, "get_egress_audit_summary")).toEqual([{ p_workspace_id: WS, p_limit: 0, p_decision: null }]);
+    const sigs = signalsFor(c, "get_egress_audit_summary");
+    expect(sigs).toHaveLength(1);
+    expect(sigs[0] instanceof AbortSignal).toBe(true);
+    expect(spied(c).orgLookups).toEqual([{ select: "organization_id, name", eq: [["id", WS]] }]);
+    expect(rpcArgs(c, "get_workspace_web_egress")).toEqual([]);
     expect(h.mirrorWarnWithDebounce).not.toHaveBeenCalled();
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
   });
@@ -441,6 +498,8 @@ describe("loadEgressCardState", () => {
     h.readWorkspaceIdFromDb.mockRejectedValue(new Error("down"));
     expect(await loadEgressCardState(client({}), USER)).toEqual(hide);
     expect(warns().map((w) => w.op)).toEqual(["hint_workspace_read"]);
+    // Its own message: the page's paged pointer fault must not share a Sentry group with this unpaged warning.
+    expect(warns()[0].message).toBe("egress audit read: card pointer could not be read");
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
   });
 
@@ -455,6 +514,7 @@ describe("loadEgressCardState", () => {
       await vi.advanceTimersByTimeAsync(1);
       await expect(p).resolves.toEqual(hide);
       expect(warns().map((w) => w.op)).toEqual(["hint_workspace_read"]);
+      expect(warns()[0].message).toBe("egress audit read: card pointer read timed out");
       expect(spied(c).rpc).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

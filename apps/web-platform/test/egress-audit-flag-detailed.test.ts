@@ -14,7 +14,7 @@ vi.mock("@/server/observability", () => ({
   mirrorWarnWithDebounce: vi.fn(),
 }));
 
-import { __resetFeatureFlagsForTests, ANON_IDENTITY, readRuntimeFlagDetailed } from "@/lib/feature-flags/server";
+import { __resetFeatureFlagsForTests, ANON_IDENTITY, readAgentSandboxUnixDenyDetailed, readRuntimeFlagDetailed } from "@/lib/feature-flags/server";
 import { isEgressAuditCollectionOn, readEgressAuditCollectionState } from "@/server/egress-audit-collection";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
@@ -57,6 +57,15 @@ describe("readRuntimeFlagDetailed", () => {
     process.env.FLAG_EGRESS_AUDIT_COLLECTION = "1";
     __resetFeatureFlagsForTests();
     await expect(readRuntimeFlagDetailed("egress-audit-collection", ANON_IDENTITY)).resolves.toEqual({ value: true, fellBack: false });
+  });
+});
+
+describe("readAgentSandboxUnixDenyDetailed vs readRuntimeFlagDetailed (fellBack breadth)", () => {
+  it("with NO Flagsmith key the sandbox reader reports fellBack=true while the generic reader reports false", async () => {
+    // Documented in the JSDoc of readAgentSandboxUnixDenyDetailed: the resolver CLI treats "no client" as unresolved.
+    await expect(readRuntimeFlagDetailed("agent-sandbox-unix-deny", ANON_IDENTITY)).resolves.toMatchObject({ fellBack: false });
+    __resetFeatureFlagsForTests();
+    await expect(readAgentSandboxUnixDenyDetailed()).resolves.toMatchObject({ fellBack: true });
   });
 });
 

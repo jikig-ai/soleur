@@ -667,6 +667,34 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
     expect(out.negative.truncated).toBe(false);
   });
 
+  test("cost bound: with more than 500 distinct groups, p_limit 9999 returns exactly 500 rows (the clamp), truncated, and the summary still counts every group", async () => {
+    const GROUPS = 650;
+    const out = await seededAs(
+      ctx.userA,
+      async (t) => {
+        // Direct insert as the table owner: the ingest folds hosts beyond its own per-bucket cap into (other),
+        // so it cannot seed more than 500 distinct groups into one bucket.
+        await t`reset role`;
+        const b = bucketAt(60);
+        await t`insert into public.workspace_egress_audit_rollup
+                  (workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen)
+                select ${ctx.wsA}, ${b}::timestamptz, 'cap-' || g || '.example.test', 'allowed', 'web-1', 1, 0,
+                       ${b}::timestamptz, ${b}::timestamptz + g * interval '1 second'
+                  from generate_series(1, ${GROUPS}) g`;
+        await t`set local role service_role`;
+      },
+      async (t) => ({ huge: await summarize(t, ctx.wsA, 9999), edge: await summarize(t, ctx.wsA, 500), nul: await summarize(t, ctx.wsA, null) }),
+    );
+    expect(out.huge.rows).toHaveLength(500);
+    expect(out.huge.truncated).toBe(true);
+    expect(out.edge.rows).toHaveLength(500);
+    expect(out.edge.truncated).toBe(true);
+    expect(out.nul.rows).toHaveLength(200);
+    expect(out.huge.summary.request_count_min).toBe(GROUPS);
+    // newest first: the highest g (last_seen) leads
+    expect(out.huge.rows[0].host).toBe(`cap-${GROUPS}.example.test`);
+  });
+
   test("p_limit = 0 returns only last_request_at: counts null, arrays empty, truncated false", async () => {
     const [probe, full] = await seededAs(ctx.userA, seedWsA, async (t) => [await summarize(t, ctx.wsA, 0), await summarize(t, ctx.wsA, 200)]);
     expect(probe.summary.request_count_min).toBeNull();
@@ -864,7 +892,9 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
     }
   });
 
-  test("probe skew: an all-future-dated newest bucket falls back to the older eligible bucket; another workspace's rows never leak into the probe", async () => {
+  // The explicit timeout (above the vitest default of 16 s) covers the worst case of the wait below (25 s) plus the
+  // case itself, so the wall-clock wait can never turn into a timeout flake.
+  test("probe skew: an all-future-dated newest bucket falls back to the older eligible bucket; another workspace's rows never leak into the probe", { timeout: 60_000 }, async () => {
     // Needs the current bucket to still be open for the whole case (a future-dated last_seen inside it).
     if (Date.now() % 900_000 > 880_000) await new Promise((r) => setTimeout(r, 25_000));
     const olderStart = bucketAt(60);

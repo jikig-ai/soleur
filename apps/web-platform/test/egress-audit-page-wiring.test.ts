@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { EGRESS_AUDIT_PATH } from "@/lib/egress-audit/summary";
 
 type ViewElement = ReactElement<{ result: unknown; filter: string }>;
 
@@ -74,6 +77,13 @@ describe("egress audit page wiring", () => {
     await expect(render("blocked")).rejects.toThrow("NEXT_REDIRECT:/login");
     expect(h.redirect).toHaveBeenCalledWith("/login");
     expect(h.loadEgressAudit).not.toHaveBeenCalled();
+  });
+
+  it("the page file lives at the route the card link and the filter chips point to (EGRESS_AUDIT_PATH), so a move cannot 404 them", () => {
+    // /dashboard/settings/scope-grants/egress-audit -> app/(dashboard)/dashboard/settings/scope-grants/egress-audit/page.tsx
+    expect(EGRESS_AUDIT_PATH.startsWith("/dashboard/")).toBe(true);
+    const page = path.join(__dirname, "..", "app", "(dashboard)", ...EGRESS_AUDIT_PATH.split("/").filter(Boolean), "page.tsx");
+    expect([page, existsSync(page)]).toEqual([page, true]);
   });
 
   it("the page is forced dynamic so a member's log is never statically cached", async () => {

@@ -17,7 +17,6 @@ export function toRpcDecision(filter: DecisionFilter): "allowed" | "denied" | "o
   return filter === "blocked" ? "denied" : filter;
 }
 
-export type StoredDecision = "allowed" | "denied" | "other";
 export type Outcome = "Allowed" | "Blocked" | "Other";
 
 export function outcomeOf(decision: string): Outcome {

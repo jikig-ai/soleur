@@ -95,6 +95,10 @@ describe("isEgressAuditPayload", () => {
       "a NaN count": { ...ok(), rows: [{ ...ok().rows[0], request_count: Number.NaN }] },
       "a negative summary count": { ...ok(), summary: { request_count_min: -1, blocked_request_count_min: null, last_request_at: null } },
       "an unparseable last_request_at": { ...ok(), summary: { request_count_min: 1, blocked_request_count_min: 0, last_request_at: "soon" } },
+      "window.start absent": { ...ok(), window: { end: "2026-10-26T00:00:00Z" } },
+      "window.start a number": { ...ok(), window: { start: 1, end: "2026-10-26T00:00:00Z" } },
+      "an overflow element with a non-string decision": { ...ok(), overflow: [{ decision: 1, request_count: 3, last_seen: "2026-10-26T12:00:00Z" }] },
+      "an overflow element without a decision": { ...ok(), overflow: [{ request_count: 3, last_seen: "2026-10-26T12:00:00Z" }] },
       "an unparseable last_seen": { ...ok(), overflow: [{ decision: "other", request_count: 1, last_seen: "soon" }] },
     };
     for (const [label, body] of Object.entries(cases)) expect([label, isEgressAuditPayload(body)]).toEqual([label, false]);
