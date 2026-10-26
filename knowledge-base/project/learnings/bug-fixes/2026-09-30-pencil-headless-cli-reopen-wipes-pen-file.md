@@ -61,3 +61,21 @@ path per session + size check + atomic rename.
    **Prevention:** read the gate's error text literally; it names the format.
 6. Headless `.pen` reopen wipe (this file's subject).
    **Prevention:** the v2-path + size-check + mv pattern above.
+
+## Addendum — 2026-10-26 (#11143): the root cause was the missing `--in`
+
+The "second session loads an empty document" behaviour above is not an engine
+defect. `pencil interactive --out <file>` starts an empty document unless
+`--in <file>` is also passed, and the adapter's `open_document` passed `--in`
+only when the caller supplied `inputPath`. Measured against @pencil.dev/cli
+0.2.9: `--in X --out X` loads the existing file and saves it back correctly.
+The adapter now decides `--in` at every spawn (`planSpawn`), reports the loaded
+node count, and routes every save through one sentinel that refuses an empty
+document over a non-empty file. The prevention above (a fresh path per session)
+still protects a Bash-driven REPL that passes no `--in`.
+
+The same issue found the reason design calls "did nothing": the adapter sent
+`batch_design({ operations })` where 0.2.9 takes `{ input }`; the engine drops
+an unknown key and prints `OK`. Prevention: every REPL line is built by one
+formatter that refuses a tool or key outside the pinned CLI's signature table,
+and `engine-contract-probe.sh` diffs that table against the live `--help`.
