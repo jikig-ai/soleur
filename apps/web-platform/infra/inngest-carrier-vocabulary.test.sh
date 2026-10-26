@@ -397,6 +397,9 @@ mutate trio-template-hashbang-line m_tmpl_hashbang trio-named
 # `[[:space:]]`-wide strip here would hide it. The literal 0x0C byte is the pin.
 m_tmpl_ff() { append_line "$TMPL_REL" $'\f# ; systemctl stop inngest-luks-cutover.timer'; }
 mutate trio-template-formfeed-led-line m_tmpl_ff trio-named
+# infra-config-install.sh is embedded verbatim in the render, so it is scanned like the template: a hash-bang line in it is code.
+m_install_hashbang() { append_line "$INSTALL_REL" '#!/usr/local/bin/inngest-luks-cutover.sh'; }
+mutate trio-install-script-hashbang-line m_install_hashbang trio-named
 # The retired NON-stem names are covered for the template by the vocabulary scan (the stem scan cannot see them): the write
 # this PR deleted, put back verbatim, is RED.
 m_tmpl_volumes_write() {
@@ -427,10 +430,10 @@ echo "inngest-carrier-vocabulary.test.sh: ${passes} passed, ${fails} failed (${t
 # pin (the user_data template) + 1 control + 4 negative controls + 2 wrapper controls + 13 needle rows + 4 recipe-needle rows +
 # 1 comment-needle + 5 carrier-set rows (second, empty, one-dropped, missing, unreadable) + 16 trio rows (4 recipe + 12
 # delivery) + 2 payload spellings + 6 baked-carrier trio rows + 6 template rows (re-add, trailing comment, hash without space,
-# hash-bang, form-feed-led, luks-volumes write) + 5 must-pass = 68 (template rows: 6, was 5). The floor is the measured count,
+# hash-bang, form-feed-led, luks-volumes write) + 1 install-script row + 5 must-pass = 69. The floor is the measured count,
 # so deleting any generated row (or a needle, or the template from DELIVERY_FILES) reds it.
-if [[ "$total" -lt 68 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is 68\n' "$total" >&2
+if [[ "$total" -lt 69 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is 69\n' "$total" >&2
   exit 1
 fi
 if [[ "$fails" -ne 0 ]]; then exit 1; fi
