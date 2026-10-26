@@ -100,7 +100,7 @@ copy is the impoverished one. See
 - [ ] `git fetch origin main && git merge-tree --write-tree origin/main HEAD >/dev/null; echo rc=$?` — a non-zero rc is a conflict with `main`; rebase BEFORE spawning the panel. A conflict found by a seat costs a rebase plus a second fix→CI round (PR #8052: `PROMOTED_FILES` collided with a sibling promotion, found by the code-quality seat).
 - [ ] Read `gh pr view --json mergeable,mergeStateStatus` BEFORE reading the check set as a verdict. GitHub cannot build a merge ref for a `CONFLICTING`/`DIRTY` PR, and **every `pull_request`-triggered workflow is then suppressed** — so the checks that do report (CodeQL, CLA, `push`-triggered jobs) are all green and the PR looks clean while the suites that would judge the diff never ran. An ABSENT check is not a passing one, and nothing on the PR page says so. **Why:** #8209/PR #8563 — a branch sat green-but-incomplete for a day; merging `origin/main` took the run from 4 checks to 57, two of which were red.
 - [ ] Use `gh pr checkout` or a manual checkout so the reviewed branch is current
-- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)`; review agents read remote state [rf-before-spawning-review-agents-push-the]) after running ship's `prepush-secret-scan.sh` (Bash `timeout: 400000`; 0/43 continue, else STOP). That push drives a CI cycle — `incr ci_cycles` after it (ship's convention).
+- [ ] Push the branch before spawning the panel (`git push -u origin $(git branch --show-current)`; review agents read remote state [rf-before-spawning-review-agents-push-the]) after running ship's `prepush-secret-scan.sh` (Bash `timeout: 400000`; 0/43 continue, else STOP). That push drives a CI cycle — `incr ci_cycles` after it (ship's convention).
 
 Proceed once the tree is ready (worktree or current branch).
 
@@ -1066,6 +1066,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    ```bash
    git add <changed files>
    git commit -m "docs: review artifacts for feat-<name>"
+   # ship's prepush-secret-scan.sh first
    git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
 
