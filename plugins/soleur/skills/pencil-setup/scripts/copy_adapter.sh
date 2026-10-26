@@ -36,6 +36,15 @@ if [[ ! -f "$REPO_ADAPTER_DIR/pencil-mcp-adapter.mjs" ]]; then
   exit 1
 fi
 
+# Validate EVERY source before copying ANY: a hard error mid-loop would leave a
+# mixed-version install (new adapter, old guards) that fails far from the cause.
+for file in "${ADAPTER_FILES[@]}"; do
+  if [[ ! -f "$REPO_ADAPTER_DIR/$file" ]]; then
+    echo "ERROR: missing repo file $REPO_ADAPTER_DIR/$file — refusing a partial install" >&2
+    exit 1
+  fi
+done
+
 mkdir -p "$INSTALL_DIR" || {
   echo "ERROR: cannot create install dir $INSTALL_DIR" >&2
   exit 2

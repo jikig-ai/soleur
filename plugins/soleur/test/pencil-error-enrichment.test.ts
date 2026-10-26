@@ -67,4 +67,9 @@ describe("enrichErrorMessage — removed tools (#11143)", () => {
   test("an unrelated unknown tool is passed through unchanged", () => {
     expect(enrichErrorMessage("Unknown tool: nope")).toBe("Unknown tool: nope");
   });
+  test("prototype names do not hit the hint table", () => {
+    for (const name of ["constructor", "toString", "hasOwnProperty"]) {
+      expect(enrichErrorMessage(`Unknown tool: ${name}`)).toBe(`Unknown tool: ${name}`);
+    }
+  });
 });

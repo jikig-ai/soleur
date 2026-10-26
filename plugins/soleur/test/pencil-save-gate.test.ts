@@ -6,6 +6,7 @@ import {
   decideSave,
   refusalMessage,
   runGuardedSave,
+  DISK_UNRECOGNIZED,
 } from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
 
 // T2.3 — Auto-save after a failed mutation is the mechanism that produced
@@ -55,15 +56,24 @@ describe("diskTopLevelCount", () => {
     expect(diskTopLevelCount(penWith(3))).toBe(3);
     expect(diskTopLevelCount(penWith(0))).toBe(0);
   });
-  test("null for missing, empty or unparseable text", () => {
+  test("null only for missing or blank text", () => {
     expect(diskTopLevelCount(null)).toBeNull();
     expect(diskTopLevelCount(undefined)).toBeNull();
     expect(diskTopLevelCount("")).toBeNull();
     expect(diskTopLevelCount("   \n")).toBeNull();
-    expect(diskTopLevelCount("{not json")).toBeNull();
   });
-  test("a parsed document without a children array counts as empty", () => {
-    expect(diskTopLevelCount('{"version":"2.9"}')).toBe(0);
+  test("non-blank text that is not a .pen document is UNRECOGNIZED, never nothing-to-protect", () => {
+    // The engine loads each of these as an EMPTY document without an error,
+    // so the next save would destroy hand-recoverable content (#11143 review).
+    expect(diskTopLevelCount("{not json")).toBe(DISK_UNRECOGNIZED);
+    expect(diskTopLevelCount("# Notes\nnot a pen file")).toBe(DISK_UNRECOGNIZED);
+    expect(diskTopLevelCount("<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> x")).toBe(DISK_UNRECOGNIZED);
+    expect(diskTopLevelCount('{"version":"2.9"}')).toBe(DISK_UNRECOGNIZED);
+    expect(diskTopLevelCount('{"name":"package","version":"1.0.0"}')).toBe(DISK_UNRECOGNIZED);
+    expect(diskTopLevelCount("[1,2]")).toBe(DISK_UNRECOGNIZED);
+  });
+  test("a leading byte-order mark is stripped before parsing", () => {
+    expect(diskTopLevelCount(String.fromCharCode(0xfeff) + penWith(3))).toBe(3);
   });
 });
 
@@ -98,9 +108,16 @@ describe("decideSave", () => {
   test("disk 0 / memory 0 allows (collapsed target has nothing to protect)", () => {
     expect(decideSave({ diskCount: 0, memoryCount: 0 }).allow).toBe(true);
   });
-  test("disk missing or unparseable allows", () => {
+  test("disk missing or blank allows", () => {
     expect(decideSave({ diskCount: null, memoryCount: 0 }).allow).toBe(true);
     expect(decideSave({ diskCount: null, memoryCount: null }).allow).toBe(true);
+  });
+  test("an unrecognized disk document refuses whatever memory holds", () => {
+    for (const memoryCount of [0, 1, 5, null]) {
+      const d = decideSave({ diskCount: DISK_UNRECOGNIZED, memoryCount });
+      expect(d.allow).toBe(false);
+      expect(d.reason).toMatch(/not a recognizable/);
+    }
   });
   test("disk 3 / memory 5 allows", () => {
     expect(decideSave({ diskCount: 3, memoryCount: 5 }).allow).toBe(true);
@@ -116,6 +133,23 @@ describe("refusalMessage", () => {
     expect(m).toContain("open_document");
     expect(m).toMatch(/new file path/i);
     expect(m).toMatch(/do not delete or recreate/i);
+  });
+  test("names exactly one next step per cause, and always forbids delete-to-bypass", () => {
+    const empty = refusalMessage({ file: "/d/a.pen", source: "save", diskCount: 3, memoryCount: 0 });
+    const unreadable = refusalMessage({ file: "/d/a.pen", source: "save", diskCount: 3, memoryCount: null, memoryReason: "boom" });
+    const garbage = refusalMessage({ file: "/d/a.pen", source: "save", diskCount: DISK_UNRECOGNIZED, memoryCount: 2 });
+    for (const m of [empty, unreadable, garbage]) {
+      expect(m).toContain("REFUSED save:");
+      expect(m).toMatch(/Next step:/);
+      expect(m.match(/Next step:/g)!.length).toBe(1);
+      expect(m).toMatch(/do not delete or recreate/i);
+    }
+    // an unreadable probe must not be blamed on a never-loaded file
+    expect(unreadable).toContain("boom");
+    expect(unreadable).not.toMatch(/never loaded/i);
+    expect(unreadable).not.toMatch(/replace the file with an empty document/i);
+    expect(garbage).toMatch(/not a recognizable \.pen document/);
+    expect(garbage).not.toMatch(/never loaded/i);
   });
   test("the auto-save variant says the edit is applied in memory but not persisted", () => {
     const m = refusalMessage({ file: "/d/a.pen", source: "auto-save", diskCount: 3, memoryCount: 0 });
@@ -183,5 +217,50 @@ describe("runGuardedSave (dependency-injected)", () => {
     const r = await runGuardedSave(deps);
     expect(r.refused).toBe(true);
     expect(calls).not.toContain("send:save");
+  });
+
+  test("a probe that THROWS refuses and carries the cause", async () => {
+    const calls: string[] = [];
+    const r = await runGuardedSave({
+      file: "/d/a.pen",
+      source: "save",
+      readDisk: async () => penWith(3),
+      probeMemory: async () => {
+        throw new Error("pencil exited during a command");
+      },
+      send: async () => {
+        calls.push("send:save");
+        return "saved";
+      },
+    });
+    expect(r.refused).toBe(true);
+    expect(r.message).toContain("pencil exited during a command");
+    expect(calls).toEqual([]);
+  });
+
+  test("a disk read that THROWS refuses (an I/O error is not 'missing')", async () => {
+    const calls: string[] = [];
+    const r = await runGuardedSave({
+      file: "/d/a.pen",
+      source: "save",
+      readDisk: async () => {
+        throw new Error("EACCES: permission denied");
+      },
+      probeMemory: async () => JSON.stringify({ nodes: [{ id: "a" }] }),
+      send: async () => {
+        calls.push("send:save");
+        return "saved";
+      },
+    });
+    expect(r.refused).toBe(true);
+    expect(r.message).toContain("EACCES");
+    expect(calls).toEqual([]);
+  });
+
+  test("an unrecognized target refuses without probing memory", async () => {
+    const { calls, deps } = mk("{not json", JSON.stringify({ nodes: [{ id: "a" }] }));
+    const r = await runGuardedSave(deps);
+    expect(r.refused).toBe(true);
+    expect(calls).toEqual(["readDisk"]);
   });
 });

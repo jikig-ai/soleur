@@ -53,24 +53,27 @@ trap 'rm -rf -- "$work"' EXIT
 
 cat > "$work/probe.mjs" <<'NODE'
 import { spawnSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [scriptsDir, testLib, workDir, pencilBin] = process.argv.slice(2);
 const { REPL_SURFACE } = await import(pathToFileURL(join(scriptsDir, "pencil-repl-surface.mjs")).href);
 const { installAdapter, connectAdapter } = await import(pathToFileURL(join(testLib, "pencil-adapter-roundtrip.mjs")).href);
+const { memoryTopLevelCount } = await import(pathToFileURL(join(scriptsDir, "pencil-save-gate.mjs")).href);
 
 let failures = 0;
 const check = (ok, label, detail = "") => {
-  console.log(`${ok ? "PASS" : "FAIL"} ${label}${ok || !detail ? "" : `: ${detail}`}`);
+  // never print the credential, even inside engine output echoed on a failure
+  const safe = String(detail).split(process.env.PENCIL_CLI_KEY).join("<redacted>").slice(0, 400);
+  console.log(`${ok ? "PASS" : "FAIL"} ${label}${ok || !safe ? "" : `: ${safe}`}`);
   if (!ok) failures++;
 };
 
 // 1. signature diff against `pencil interactive --help`
 const help = spawnSync(process.execPath, [pencilBin, "interactive", "--help"], {
   encoding: "utf8",
-  env: { PATH: process.env.PATH, HOME: process.env.HOME, PENCIL_CLI_KEY: process.env.PENCIL_CLI_KEY },
+  env: { PATH: process.env.PATH, HOME: process.env.HOME },
 });
 const text = `${help.stdout}\n${help.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
 const live = {};
@@ -101,11 +104,8 @@ try {
   const b2 = await a.call("batch_design", { operations: 'g=I(document,{type:"frame",width:50,height:50})' });
   check(!b2.isError, "second consecutive batch_design", b2.text);
   const g = await a.call("batch_get", {});
-  let shape = null;
-  try {
-    const j = JSON.parse(g.text);
-    shape = Array.isArray(j) ? j.length : Array.isArray(j.nodes) ? j.nodes.length : null;
-  } catch {}
+  // the parser the save sentinel itself uses, not a re-implementation of it
+  const shape = memoryTopLevelCount(g.text);
   check(shape !== null && shape >= 2, "batch_get() returns a parseable top-level node list", g.text.slice(0, 200));
   const sv = await a.call("save");
   check(!sv.isError, "explicit save", sv.text);
@@ -130,6 +130,53 @@ try {
 }
 const doc = JSON.parse(readFileSync(pen, "utf8"));
 check(Array.isArray(doc.children) && doc.children.length >= 2, "on-disk document keeps its children", JSON.stringify(doc).slice(0, 200));
+
+// 5. A design whose batch_get() reply exceeds 64 KiB must still save and reopen:
+//    the sentinel parses the UNtruncated reply (a capped reply is not valid JSON).
+const big = join(workDir, "big.pen");
+a = await connectAdapter({ installDir, binary: pencilBin, key: process.env.PENCIL_CLI_KEY });
+try {
+  const o = await a.call("open_document", { filePath: big });
+  check(!o.isError, "open_document on a new path (large design)", o.text);
+  const pad = "x".repeat(500);
+  const ops = Array.from({ length: 140 }, (_, i) => `n${i}=I(document,{type:"frame",name:"${pad}${i}",width:10,height:10})`).join("\n");
+  const r = await a.call("batch_design", { operations: ops });
+  check(!r.isError, "batch_design inserting 140 frames with long names", r.text);
+  const g = await a.call("batch_design", { operations: 'extra=I(document,{type:"frame",width:5,height:5})' });
+  check(!g.isError, "a second edit over a non-empty file is allowed by the sentinel", g.text);
+} finally {
+  await a.close();
+}
+let bigSize = 0;
+try { bigSize = statSync(big).size; } catch {}
+check(bigSize > 60000, "the large design reached disk", `size=${bigSize}`);
+a = await connectAdapter({ installDir, binary: pencilBin, key: process.env.PENCIL_CLI_KEY });
+try {
+  const o = await a.call("open_document", { filePath: big });
+  const n = /\((\d+) top-level node/.exec(o.text);
+  check(!o.isError && n && Number(n[1]) >= 140, "the large design reopens with its nodes", o.text);
+} finally {
+  await a.close();
+}
+
+// 6. The sentinel against the REAL engine: content appears behind the session's
+//    back while the session's document is empty. A save must be refused.
+const guarded = join(workDir, "guarded.pen");
+a = await connectAdapter({ installDir, binary: pencilBin, key: process.env.PENCIL_CLI_KEY });
+try {
+  const o = await a.call("open_document", { filePath: guarded });
+  check(!o.isError, "open_document on a new path (sentinel check)", o.text);
+  writeFileSync(guarded, readFileSync(pen));
+  const before = readFileSync(guarded, "utf8");
+  const sv = await a.call("save");
+  check(sv.isError && /REFUSED save:/.test(sv.text), "an empty document is refused over a non-empty file", sv.text);
+  check(readFileSync(guarded, "utf8") === before, "the refused save left the file byte-identical");
+  writeFileSync(guarded, "# not a pen document\n");
+  const garbage = await a.call("batch_design", { operations: 'z=I(document,{type:"frame",width:5,height:5})' });
+  check(garbage.isError && /not a recognizable/.test(garbage.text), "an unrecognizable file is never overwritten", garbage.text);
+} finally {
+  await a.close();
+}
 
 console.log(failures === 0 ? "PROBE OK" : `PROBE FAILED (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

@@ -58,6 +58,7 @@ export const BATCH_DESIGN_PREAMBLE =
 // ends, which would split one command across two REPL lines.
 function jsonLine(value) {
   return JSON.stringify(value)
+    .replace(/\u0085/g, "\\u0085")
     .replace(/\u2028/g, "\\u2028")
     .replace(/\u2029/g, "\\u2029");
 }
@@ -103,9 +104,10 @@ export function formatReplCommand(toolName, params) {
 
 // Decide the `--in` argument for one spawn of `pencil interactive --out <outFile>`.
 //
-// `initialInFile` is the caller's explicit input (a template) and applies to
-// the FIRST spawn only; the adapter clears it afterwards, so a respawn after a
-// crash reloads `outFile` and a template can never overwrite saved edits.
+// `initialInFile` is the caller's explicit input (a template). The adapter
+// passes it for the open_document spawn only and passes none on a respawn, so a
+// respawn after a crash reloads `outFile` and a template can never overwrite
+// saved edits.
 // Without an explicit input, an existing non-empty `outFile` is reloaded:
 // before this, `open_document({ filePath })` started an empty document at
 // `--out` and the next save replaced the file with 96 bytes.

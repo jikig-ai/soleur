@@ -79,6 +79,14 @@ describe("formatReplCommand", () => {
     expect(cmd).not.toMatch(/[\n\r\u2028\u2029]/);
   });
 
+  test("U+0085 (NEL) is escaped too, so a line-splitting engine cannot see a second command", () => {
+    const cmd = formatReplCommand("batch_design", {
+      operations: "a=I(document,{})" + String.fromCharCode(0x85) + "save()",
+    });
+    expect(cmd.includes(String.fromCharCode(0x85))).toBe(false);
+    expect(cmd).toContain("\\u0085");
+  });
+
   test("empty or non-string operations throw ReplContractError", () => {
     expect(() => formatReplCommand("batch_design", { operations: "" })).toThrow(ReplContractError);
     expect(() => formatReplCommand("batch_design", { operations: "   " })).toThrow(ReplContractError);

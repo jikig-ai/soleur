@@ -79,3 +79,16 @@ The same issue found the reason design calls "did nothing": the adapter sent
 an unknown key and prints `OK`. Prevention: every REPL line is built by one
 formatter that refuses a tool or key outside the pinned CLI's signature table,
 and `engine-contract-probe.sh` diffs that table against the live `--help`.
+
+## Addendum — 2026-10-26 (#11143 review round): measure the open, not only the save
+
+The upstream report (#4859) saw the file truncated at the `open_document` call itself,
+while this fix measured writes only on `save()` (and none on SIGTERM or `exit()`). The
+two are not reconciled, so the adapter no longer relies on either reading: the file the
+engine is told to load is checked at open (a non-blank file the engine would load as an
+empty document is refused), a template is never opened over an existing document, and
+every save is guarded. Live measurements from the review: the engine loads a truncated
+`.pen`, one with a byte-order mark, one with git conflict markers and an arbitrary text
+file as an EMPTY document with exit 0, and `batch_get()` of a 1500-node design is ~950 KB,
+so anything that parses that reply must not read the 64 KiB-capped classifier text.
+

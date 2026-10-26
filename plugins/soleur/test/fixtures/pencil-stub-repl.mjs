@@ -6,7 +6,16 @@
 // Side channels, because the adapter hands the child a scrubbed environment:
 //   <out>.log    every command line received, plus one ARGS line per start
 //   <out>.pid    the child's pid (the test kills it to simulate a crash)
-//   <out>.flags  JSON read before each command: { loadEmpty: boolean }
+//   <out>.flags  JSON read at start and before each command:
+//     loadEmpty      ignore the --in document (the engine's silent empty load)
+//     invalidAsEmpty an unparseable --in file loads empty with an [ERROR] line
+//                    (measured on 0.2.9) instead of exiting
+//     exitOnStart    exit 1 before the first prompt (a failed respawn)
+//     slowExitMs     take this long to exit after SIGTERM (a slow old child)
+//     startDelayMs   delay the first prompt by this long (a slow new child)
+//     bigBatchGet    pad batch_get() past 64 KiB (a large design)
+//     junkBatchGet   batch_get() answers text that is not a node list
+//     failSave       save() answers an engine error and writes nothing
 //
 // The signature whitelist below is the second of three copies of the 0.2.9
 // surface (module table, this stub, the live --help). It exits 64 on an
@@ -58,6 +67,15 @@ const flags = () => {
 log(`ARGS ${argv.join(" ")}`);
 writeFileSync(`${outFile}.pid`, String(process.pid));
 
+if (flags().exitOnStart) {
+  process.stderr.write("stub: exitOnStart flag set\n");
+  process.exit(1);
+}
+const slowExitMs = Number(flags().slowExitMs ?? 0);
+if (slowExitMs > 0) {
+  process.on("SIGTERM", () => setTimeout(() => process.exit(0), slowExitMs));
+}
+
 let nodes = [];
 if (inFile) {
   if (!existsSync(inFile)) {
@@ -69,8 +87,12 @@ if (inFile) {
       const doc = JSON.parse(readFileSync(inFile, "utf8"));
       nodes = Array.isArray(doc.children) ? doc.children : [];
     } catch {
-      process.stderr.write(`Input file is not a valid .pen: ${inFile}\n`);
-      process.exit(1);
+      if (flags().invalidAsEmpty) {
+        process.stderr.write(`[ERROR] Input file is not a valid .pen: ${inFile}\n`);
+      } else {
+        process.stderr.write(`Input file is not a valid .pen: ${inFile}\n`);
+        process.exit(1);
+      }
     }
   }
 }
@@ -78,7 +100,9 @@ if (inFile) {
 let counter = 0;
 const PROMPT = "pencil > ";
 const reply = (text) => process.stdout.write(`${text}\n${PROMPT}`);
-process.stdout.write(PROMPT);
+const startDelayMs = Number(flags().startDelayMs ?? 0);
+if (startDelayMs > 0) setTimeout(() => process.stdout.write(PROMPT), startDelayMs);
+else process.stdout.write(PROMPT);
 
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
@@ -100,6 +124,7 @@ rl.on("line", (line) => {
   }
 
   if (tool === "save") {
+    if (flags().failSave) return reply("Error: disk full");
     writeFileSync(outFile, JSON.stringify({ version: "2.9", children: nodes }));
     return reply(`Saved to ${outFile}`);
   }
@@ -112,7 +137,11 @@ rl.on("line", (line) => {
     }
   }
 
-  if (tool === "batch_get") return reply(JSON.stringify({ nodes }));
+  if (tool === "batch_get") {
+    if (flags().junkBatchGet) return reply("this is not a node list");
+    if (flags().bigBatchGet) return reply(JSON.stringify({ nodes, pad: "x".repeat(70000) }));
+    return reply(JSON.stringify({ nodes }));
+  }
   if (tool === "batch_design") {
     const input = String(args.input ?? "");
     if (input.includes("BADOP")) return reply("Error: invalid operation BADOP");

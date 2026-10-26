@@ -57,7 +57,23 @@ if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
   installed_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
   repo_sha=$(sha256sum -- "$repo_adapter" | awk '{print $1}')
 
-  if [[ "$installed_sha" == "$repo_sha" ]]; then
+  # Compare EVERY runtime module copy_adapter.sh installs, not only the main
+  # file: a stale sibling (the save sentinel, the REPL surface table) next to a
+  # fresh adapter is exactly the state this check exists to catch. The list is
+  # read from copy_adapter.sh so the two cannot disagree. (A while-read loop, not
+  # mapfile: this script also runs on macOS bash 3.2.)
+  drifted=""
+  while IFS= read -r module; do
+    [[ -n "$module" ]] || continue
+    if [[ ! -f "$install_dir/$module" ]] || ! cmp -s -- "$script_dir/$module" "$install_dir/$module"; then
+      drifted="$drifted $module"
+    fi
+  done < <(sed -n '/^ADAPTER_FILES=(/,/^)/p' "$script_dir/copy_adapter.sh" | grep -o '"[^"]*\.mjs"' | tr -d '"')
+  if [[ "$installed_sha" != "$repo_sha" ]]; then
+    drifted="$drifted pencil-mcp-adapter.mjs"
+  fi
+
+  if [[ -z "$drifted" ]]; then
     echo "OK: installed adapter matches repo (sha ${repo_sha:0:12})"
     exit 0
   fi
@@ -78,7 +94,7 @@ if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
     fi
   fi
 
-  echo "DRIFT: installed ${installed_sha:0:12} != repo ${repo_sha:0:12}"
+  echo "DRIFT: installed ${installed_sha:0:12} != repo ${repo_sha:0:12}; differing or missing:${drifted}"
   echo "       Run: bash $(basename "${BASH_SOURCE[0]}") --check-adapter-drift --auto"
   echo "       Or re-run /soleur:pencil-setup to refresh the installed adapter."
   exit 3
