@@ -154,7 +154,7 @@ beforeAll(async () => {
     octokit: { request: async () => ({ data: [] }), graphql: async () => ({}) } as never,
     logger: { info: () => {}, warn: () => {}, error: () => {} },
     verdict: proposed,
-    page: PATTERN,
+    patterns: [PATTERN],
     safeCommit: (async (cfg: { exactPaths: readonly string[]; expectedContent: Record<string, string> }) => {
       committed = { exactPaths: cfg.exactPaths, expectedContent: cfg.expectedContent };
       return { status: "committed", prNumber: 1, branch: "b", fileCount: 6, deletionCount: 0 };

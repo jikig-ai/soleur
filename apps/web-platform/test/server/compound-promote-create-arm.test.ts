@@ -18,6 +18,8 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 }));
 import { reportSilentFallback } from "@/server/observability";
 import {
+  BASE_BLOB_PATHS,
+  CREATE_ARM_FEATURE,
   CREATE_HEAD_PREFIX,
   REAL_CHECK_NAMES,
   SCHEDULED_ISSUE_LABEL,
@@ -36,8 +38,10 @@ import {
   type CreateVerdictCreate,
 } from "@/server/compound-promote-create-arm";
 import {
+  COMPONENTS_TEST_PATH,
   CREATE_MAX_TOKENS,
   CREATE_PR_BODY_LINE,
+  PROMOTION_LOG_PATH,
   OVERLAP_REFUSE_THRESHOLD,
   countDescriptionWords,
   createClusterHash,
@@ -46,7 +50,8 @@ import {
   type SkillRecord,
 } from "@/server/compound-promote-create";
 import type { PatternPage } from "@/server/compound-promote-patterns";
-import { CREATE_EXCLUDED_SYNTHETIC_CHECKS } from "@/server/compound-promote-create-gates";
+import { PROMOTE_BRANCH_PREFIX } from "@/server/compound-promote-ledger";
+import { CREATE_EXCLUDED_SYNTHETIC_CHECKS, CREATE_FEATURE_NAME, GIT_MAX_TIMEOUT_MS, GIT_TIMEOUT_MS, README_PATHS } from "@/server/compound-promote-create-gates";
 
 const FIX = join(__dirname, "..", "fixtures", "compound-promote-create");
 const SKILLS = JSON.parse(readFileSync(join(FIX, "skills.json"), "utf8")) as SkillRecord[];
@@ -128,6 +133,16 @@ describe("findOpenCreatePr -- one open create at a time", () => {
     expect(await findOpenCreatePr(octokitOf(Object.assign(new Error("rate limited, body: secret-ish"), { status: 429 })).octokit, "o", "r")).toEqual({ kind: "unverifiable", detail: "list-failed", cause: "http-429" });
     const weird = { request: async () => ({ data: { not: "an array" } }) } as never;
     expect(await findOpenCreatePr(weird, "o", "r")).toEqual({ kind: "unverifiable", detail: "list-failed", cause: "non-array" });
+  });
+});
+
+describe("derived constants (no duplicated literal arrays)", () => {
+  it("the base blob set, the head prefix and the real-check names are DERIVED from their owners", () => {
+    expect([...BASE_BLOB_PATHS]).toEqual([...README_PATHS, PROMOTION_LOG_PATH, COMPONENTS_TEST_PATH]);
+    expect(CREATE_HEAD_PREFIX).toBe(PROMOTE_BRANCH_PREFIX);
+    expect(REAL_CHECK_NAMES).toBe(CREATE_EXCLUDED_SYNTHETIC_CHECKS);
+    expect(CREATE_ARM_FEATURE).toBe(CREATE_FEATURE_NAME);
+    expect(GIT_MAX_TIMEOUT_MS).toBe(GIT_TIMEOUT_MS * 2);
   });
 });
 
@@ -433,7 +448,7 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
     runStartedAt: "2026-10-26T10:00:00.000Z",
     octokit: { request: async () => ({ data: [] }), graphql: async () => ({}) } as never,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    page: PATTERN,
+    patterns: [PATTERN],
     verdict: {
       kind: "create", proposal: PROPOSAL, clusterHash: "c".repeat(64), gates: [],
       overlap: { top1Name: "ship", top1: 0.05, nearestRank: 1, top3: ["ship"] }, words: 22, cap: 2436, total: 2402, headroom: 34,
@@ -470,7 +485,7 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
     expect(a.safeCommit).not.toHaveBeenCalled();
   });
 
-  it("a failed own-PR lookup is mirrored and does NOT end the step (safeCommitAndPr's branch replay-resume is the second layer)", async () => {
+  it("a failed own-PR lookup is mirrored and does NOT end the step (the branch-exists probe before the commit is what stops a second push)", async () => {
     const a = persistArgs({ octokit: { request: async () => { throw Object.assign(new Error("502"), { status: 502 }); }, graphql: async () => ({}) } });
     roots.push(a.repoRoot);
     // The directory is not a git clone, so the step then refuses at the clean-main guard, before any write.

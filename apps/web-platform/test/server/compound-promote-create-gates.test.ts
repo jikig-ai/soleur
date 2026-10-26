@@ -729,7 +729,7 @@ describe("collectCreateContent (the bytes handed to safeCommitAndPr)", () => {
 // ---------------------------------------------------------------------------------------------------------
 describe("createSyntheticCheckNames (guard 1 row 8)", () => {
   it("excludes `skill-security-scan PR gate` and `test` and keeps every other synthetic check", () => {
-    expect([...CREATE_EXCLUDED_SYNTHETIC_CHECKS]).toEqual(["skill-security-scan PR gate", "test"]);
+    expect([...CREATE_EXCLUDED_SYNTHETIC_CHECKS]).toEqual(["test", "skill-security-scan PR gate"]);
     const names = createSyntheticCheckNames();
     for (const x of CREATE_EXCLUDED_SYNTHETIC_CHECKS) expect(names).not.toContain(x);
     expect(names.length).toBeGreaterThan(0);

@@ -143,6 +143,8 @@ interface World {
   /** Commit `files` to the remote's main. */
   advance: (files: Record<string, string>) => void;
   config: () => string;
+  /** `git` run in the remote repository. */
+  rgit: (args: string[]) => string;
 }
 
 function world(): World {
@@ -166,6 +168,7 @@ function world(): World {
       rgit(["commit", "-qm", "advance"]);
     },
     config: () => readFileSync(join(clone, ".git", "config"), "utf8"),
+    rgit,
   };
 }
 
@@ -209,7 +212,7 @@ function persistArgs(w: World, verdict: CreateVerdictCreate, over: Record<string
     octokit: { request: async () => ({ data: [] }), graphql: async () => ({}) } as never,
     logger: logger(),
     verdict,
-    page: PATTERN,
+    patterns: [PATTERN],
     safeCommit: commit as never,
     ...over,
   } as Parameters<typeof runCreatePersistStep>[0] & { safeCommit: typeof commit };
@@ -341,8 +344,9 @@ describe("R5 -- the stale depth-1 clone is refreshed to main before the render",
     expect(w.config()).not.toContain("x-access-token");
   });
 
-  it("the cap file or the promotion log moving during the gates refuses too; an unrelated file moving does not", async () => {
+  it("the root README, the cap file or the promotion log moving during the gates refuses too; an unrelated file moving does not", async () => {
     for (const [file, text, refused] of [
+      [README, "Soleur: 99 skills\nMerged line from another PR\n", true],
       ["plugins/soleur/test/components.test.ts", "const SKILL_DESCRIPTION_WORD_BUDGET = 9999;\n", true],
       [PROMOTION_LOG_PATH, "| date | hash | target | n | status | tier | pr |\n| 2026-10-26 | h | t | 5 | merged | skill | #1 |\n", true],
       ["docs/unrelated.md", "changed\n", false],
@@ -446,6 +450,90 @@ describe("G1 -- the origin write and the final strip", () => {
     expect(r).toEqual({ kind: "refused", class: "persist", detail: "origin-strip-failed", numbers: { exit_code: 128 } });
     expect(w.config()).not.toContain("x-access-token");
     expect(h.scan).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+describe("G3 -- Step B correctness: the second fetch, the PR body, the orphan branch, the lookups", () => {
+  it("(a) a skill dir with the new slug that appears on main BETWEEN the gates is persist/slug-appeared; no commit, token stripped", async () => {
+    for (const rel of [`plugins/soleur/skills/${SLUG}/SKILL.md`, `plugins/soleur/cursor/skills/soleur-${SLUG}/SKILL.md`]) {
+      const w = world();
+      const v = await propose(w);
+      h.scan.mockImplementation(async () => {
+        w.advance({ [rel]: skillMd(SLUG, "This skill should be used when another PR added the same slug while the gates ran.") });
+        return { ok: true };
+      });
+      const a = persistArgs(w, v);
+      expect(await runCreatePersistStep(a), rel).toEqual({ kind: "refused", class: "persist", detail: "slug-appeared" });
+      expect(a.safeCommit).not.toHaveBeenCalled();
+      expect(w.config()).not.toContain("x-access-token");
+    }
+  });
+
+  it("(a) harness: an unrelated directory appearing between the gates does NOT refuse", async () => {
+    const w = world();
+    const v = await propose(w);
+    h.scan.mockImplementation(async () => {
+      w.advance({ "plugins/soleur/skills/another-new/NOTES.md": "x\n" });
+      return { ok: true };
+    });
+    expect(await runCreatePersistStep(persistArgs(w, v))).toEqual({ kind: "opened", pr: 77 });
+  });
+
+  it("(b) the PR body states the REFRESHED check (words, headroom, total, cap), not Step A's", async () => {
+    const w = world();
+    const v = await propose(w);
+    // another PR merged a 5-word description after Step A measured: the total moved, the headroom shrank by 5
+    w.advance({ "plugins/soleur/skills/late-arrival/SKILL.md": skillMd("late-arrival", "five words in this description") });
+    const a = persistArgs(w, v);
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "opened", pr: 77 });
+    const body = String((a.safeCommit.mock.calls[0][0] as unknown as { prBody: string }).prBody);
+    expect(body).toContain(`Budget headroom before this skill: ${v.headroom - 5} words (total ${v.total + 5}, cap ${v.cap}).`);
+    expect(body).not.toContain(`(total ${v.total}, cap`);
+  });
+
+  it("(c) an orphan branch on the remote (pushed, PR never opened) is persist/branch-exists: named, mirrored, NOT deleted, no commit", async () => {
+    const w = world();
+    const v = await propose(w);
+    const branch = `self-healing/auto-${v.clusterHash}-2026-10-26`;
+    w.rgit(["branch", branch]);
+    const a = persistArgs(w, v);
+    vi.mocked(reportSilentFallback).mockClear();
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "branch-exists" });
+    expect(a.safeCommit).not.toHaveBeenCalled();
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", tags: { class: "persist" }, extra: expect.objectContaining({ detail: "branch-exists" }) }));
+    expect(w.rgit(["branch", "--list", branch])).toContain(branch); // the arm never deletes a remote branch
+    expect(w.config()).not.toContain("x-access-token");
+  });
+
+  it("(c) harness: a remote WITHOUT the branch proceeds to the commit, and the probe runs with the token on (the remote is private)", async () => {
+    const w = world();
+    const v = await propose(w);
+    const a = persistArgs(w, v);
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "opened", pr: 77 });
+    expect(a.safeCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("(d) a pattern list that lacks the verdict's pattern is persist/page-missing, MIRRORED, before any request or write", async () => {
+    const w = world();
+    const v = await propose(w);
+    const request = vi.fn(async () => ({ data: [] }));
+    const a = persistArgs(w, v, { patterns: [], octokit: { request, graphql: async () => ({}) } });
+    vi.mocked(reportSilentFallback).mockClear();
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "page-missing" });
+    expect(request).not.toHaveBeenCalled();
+    expect(h.scan).not.toHaveBeenCalled();
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", tags: { class: "persist" } }));
+  });
+
+  it("(d) recheck-mismatch: a verdict whose cluster hash is well-formed but not the page's is refused persist/recheck-mismatch; nothing rendered, no commit", async () => {
+    const w = world();
+    const v = await propose(w);
+    const a = persistArgs(w, { ...v, clusterHash: "f".repeat(64) });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "recheck-mismatch" });
+    expect(h.scan).not.toHaveBeenCalled();
+    expect(a.safeCommit).not.toHaveBeenCalled();
+    expect(w.config()).not.toContain("x-access-token");
   });
 });
 

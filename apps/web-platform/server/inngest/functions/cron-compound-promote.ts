@@ -2237,12 +2237,6 @@ export async function cronCompoundPromoteHandler({
         return;
       }
       const verdict: CreateVerdictCreate = proposed;
-      const page = patternRows.find((pg) => pg.slug === verdict.proposal.pattern_slug);
-      if (!page) {
-        // Unreachable (checkCreate resolved the pattern from this very list); named rather than assumed.
-        recordCreateRefusal({ kind: "refused", class: "persist", detail: "page-missing" });
-        return;
-      }
       const persisted: CreatePersistResult = await step.run("create-persist", async () =>
         runCreatePersistStep({
           repoRoot,
@@ -2251,7 +2245,8 @@ export async function cronCompoundPromoteHandler({
           octokit: new Octokit({ auth: installationToken }),
           logger,
           verdict,
-          page,
+          // The arm resolves the verdict's page from this list, so a missing page is its own mirrored refusal.
+          patterns: patternRows,
         }),
       );
       if (persisted.kind === "opened") {

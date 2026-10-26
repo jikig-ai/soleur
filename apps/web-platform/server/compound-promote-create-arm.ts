@@ -8,11 +8,13 @@
 //   Step A `create-propose`  runCreateProposeStep   week-cap -> clone-present -> create-open -> budget -> prompt ->
 //                                                   ONE model call -> checkCreate. MEMOIZED and NEVER THROWS: every
 //                                                   failure is a returned refusal with a closed class.
-//   Step B `create-persist`  runCreatePersistStep   own-PR lookup -> refresh the clone to main (R5) -> strip the token
-//                                                   from `.git/config` (R4) -> re-check -> render -> write -> scan ->
-//                                                   README sync -> collect -> bytes check -> restore the token and
-//                                                   compare the base blobs -> safeCommitAndPr in exactPaths mode.
-//                                                   ONE step, ONE deadline.
+//   Step B `create-persist`  runCreatePersistStep   page lookup -> own-PR lookup -> refresh the clone to main (R5) ->
+//                                                   strip the token from `.git/config` (R4) -> re-check -> render ->
+//                                                   write -> scan -> README sync -> collect -> bytes check -> restore
+//                                                   the token, fetch again and compare the base (blobs, new-slug dirs,
+//                                                   remote branch) -> safeCommitAndPr in exactPaths mode. ONE step;
+//                                                   ONE deadline over the PRE-COMMIT phase only (the own-PR lookup,
+//                                                   safeCommitAndPr and the final cleanup run outside it).
 //
 // Contracts (plan Guards 1 and 3, CTO G2, review rulings R4 and R5):
 //   - dark-launched: the handler calls this only for trigger=manual, input=patterns, allow_create===true;
@@ -21,9 +23,12 @@
 //   - the PR is a DRAFT, label self-healing/auto, mergeMode "none"; its body never claims a merge;
 //   - the branch suffix derives from the memoized run-start date, never a fresh Date, and Step B first looks up its
 //     own open PR by the deterministic head branch (a hit counts as resumed ONLY when its body carries the CREATE
-//     line: the EDIT arm uses the same branch shape), so a replay cannot open a second PR;
-//   - the installation token is NOT in `.git/config` while any create-arm script runs (R4); it is put back only for
-//     the two network calls (the fetch and the commit helper). The edit loop's token handling is untouched: a known
+//     line: the EDIT arm uses the same branch shape). A replay cannot open a second PR for two reasons: that lookup,
+//     and the `branch-exists` probe, which refuses when the branch is already on the remote with no open PR (the
+//     clone is reset to main before every attempt, so `safeCommitAndPr`'s own HEAD==branch resume never applies);
+//   - the installation token is NOT in `.git/config` while any create-arm script runs (R4); it is on disk only for
+//     the network calls: the fetch that refreshes the clone (before any script), and, after the scripts, the second
+//     fetch, the remote-branch probe and the commit helper. The edit loop's token handling is untouched: a known
 //     limit recorded in the runbook;
 //   - the create PR does NOT inherit the edit arm's `skill-security-scan PR gate` / `test` synthetic checks.
 //
@@ -71,7 +76,11 @@ import {
   type WordCountResult,
 } from "@/server/compound-promote-create";
 import {
+  CREATE_EXCLUDED_SYNTHETIC_CHECKS,
+  CREATE_FEATURE_NAME,
+  GIT_MAX_TIMEOUT_MS,
   GIT_TIMEOUT_MS,
+  README_PATHS,
   README_SYNC_TIMEOUT_MS,
   SCAN_TIMEOUT_MS,
   collectCreateContent,
@@ -90,7 +99,7 @@ import {
 // Constants
 // =============================================================================
 
-export const CREATE_ARM_FEATURE = "cron-compound-promote";
+export const CREATE_ARM_FEATURE = CREATE_FEATURE_NAME;
 /** The ONE Sentry op every create refusal is mirrored under (runbook: `compound-promote-runbook.md`). */
 export const CREATE_REFUSED_OP = "create-refused";
 /** Bound on the single model call: the same cap the edit-draft call uses (an AbortSignal, so no billed zombie). */
@@ -111,19 +120,25 @@ const PR_PAGE_SIZE = 100;
 const PR_LIST_TIMEOUT_MS = 20_000;
 export const CREATE_LABEL = "self-healing/auto";
 /** The head-ref prefix both arms use; with the CREATE body line it is what identifies a create PR (the label is best effort). */
-export const CREATE_HEAD_PREFIX = "self-healing/auto-";
+export const CREATE_HEAD_PREFIX = PROMOTE_BRANCH_PREFIX;
 /** Mirrors `SENTRY_MONITOR_SLUG` in the handler (the scheduled-output issue label safeCommitAndPr comments on); pinned by a test. */
 export const SCHEDULED_ISSUE_LABEL = "scheduled-compound-promote";
-/** ONE deadline for the whole of Step B. Every spawn and git call gets `min(its own timeout, what is left)`. */
+/**
+ * ONE deadline over the PRE-COMMIT phase of Step B (the clone refresh, re-check, render, gates, second fetch and
+ * branch probe). Every spawn and git call in that phase gets `min(its own timeout, what is left)`. It does NOT cover
+ * the own-PR lookup (it runs first, with its own 20 s timeout), `safeCommitAndPr` (its own steps and timeouts) or the
+ * final cleanup in the `finally` block.
+ */
 export const CREATE_PERSIST_DEADLINE_MS = 150_000;
-const FETCH_TIMEOUT_MS = 60_000;
+/** A network fetch may use the largest single git timeout. */
+const FETCH_TIMEOUT_MS = GIT_MAX_TIMEOUT_MS;
 /** The tokenless remote the clone is pointed at while any create-arm script runs (R4). */
 export const PLAIN_ORIGIN_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}.git`;
 /** The files whose origin/main blob ids are compared before the commit (R5): the two READMEs, the log and the cap file. */
-export const BASE_BLOB_PATHS = ["README.md", "plugins/soleur/README.md", PROMOTION_LOG_PATH, COMPONENTS_TEST_PATH] as const;
+export const BASE_BLOB_PATHS = [...README_PATHS, PROMOTION_LOG_PATH, COMPONENTS_TEST_PATH] as const;
 
 /** The checks that are real on a create draft (the complement of what the loop posts), in the order the PR body names them. */
-export const REAL_CHECK_NAMES = ["test", "skill-security-scan PR gate"] as const;
+export const REAL_CHECK_NAMES = CREATE_EXCLUDED_SYNTHETIC_CHECKS;
 
 type ArmOctokit = Pick<Octokit, "request">;
 type PersistOctokit = Pick<Octokit, "request" | "graphql">;
@@ -434,8 +449,8 @@ export interface CreatePersistArgs {
   octokit: PersistOctokit;
   logger: Logger;
   verdict: CreateVerdictCreate;
-  /** The chosen pattern page (its evidence count is the promotion-log `n` column; the re-check needs the page). */
-  page: PatternPage;
+  /** The open pattern pages the run loaded; the verdict's page is found by slug (its evidence count is the promotion-log `n` column; the re-check needs it). */
+  patterns: readonly PatternPage[];
   /** Test seams. */
   safeCommit?: typeof safeCommitAndPr;
   setOrigin?: typeof setOriginToken;
@@ -549,19 +564,21 @@ async function baseBlobs(root: string, ref: string, timeoutMs: number): Promise<
 
 interface PersistCtx {
   slug: string;
+  page: PatternPage;
   dateSuffix: string;
   branchName: string;
   metaBase: string;
-  /** Milliseconds left of the one Step B deadline. */
+  /** Milliseconds left of the Step B pre-commit deadline. */
   left: () => number;
   /** Set once the token has been written to `.git/config`, so the cleanup knows to strip it. */
   originTouched: boolean;
 }
 
 /**
- * Step B. ONE step: look up our own open PR, refresh the clone, re-check, render, write, scan, sync, collect, commit.
- * A refused create writes no ledger row (the row is only ever inside the committed PR). The clone is returned to a
- * clean main before and after, and the token is stripped from `.git/config` on the way out.
+ * Step B. ONE step: look up our own open PR, refresh the clone, re-check, render, write, scan, sync, collect, prove the
+ * base did not move, commit. A refused create writes no ledger row (the row is only ever inside the committed PR). The
+ * clone is returned to a clean main before and after, and the token is stripped from `.git/config` on the way out. The
+ * deadline covers the work between the clean-main restore and the commit helper, not the lookup, the helper or the cleanup.
  */
 export async function runCreatePersistStep(a: CreatePersistArgs): Promise<CreatePersistResult> {
   const v = a.verdict;
@@ -569,6 +586,8 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
   const dateSuffix = a.runStartedAt.slice(0, 10);
   const branchName = createBranchName(v.clusterHash, dateSuffix);
   if (!BRANCH_SHAPE_RE.test(branchName)) return fail("persist", "branch-shape");
+  const page = a.patterns.find((p) => p.slug === v.proposal.pattern_slug);
+  if (!page) return fail("persist", "page-missing"); // unreachable in practice (Step A resolved it from this very list); mirrored, not assumed
   if (!existsSync(a.repoRoot)) return fail("persist", "clone-missing");
 
   // Replay: a previous attempt of THIS step may already have opened our PR. A hit is success, not a second PR, but
@@ -585,14 +604,15 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
       return fail("persist", "branch-taken", { numbers: pr === undefined ? undefined : { pr } });
     }
   } catch (err) {
-    // Not provable either way: continue (safeCommitAndPr's own branch-keyed replay-resume is the second layer), loudly.
+    // Not provable either way: continue, loudly. If our PR is in fact open, the `branch-exists` probe before the commit
+    // refuses (a refusal, not a second PR); `safeCommitAndPr`'s own resume does not apply, the clone being reset to main.
     reportSilentFallback(err, { feature: CREATE_ARM_FEATURE, op: "create-own-pr-lookup-failed", message: "own open PR lookup failed", extra: { cause: causeToken(err) } });
   }
 
   const now = a.now ?? Date.now;
   const deadlineAt = now() + (a.deadlineMs ?? CREATE_PERSIST_DEADLINE_MS);
   const metaBase = await mkdtemp(join(a.metaParent ?? tmpdir(), "compound-promote-create-scan-"));
-  const ctx: PersistCtx = { slug, dateSuffix, branchName, metaBase, left: () => deadlineAt - now(), originTouched: false };
+  const ctx: PersistCtx = { slug, page, dateSuffix, branchName, metaBase, left: () => deadlineAt - now(), originTouched: false };
   let restoredUpfront = false;
   try {
     // A retry of this step must start from a clean main (the previous attempt may have left files behind).
@@ -646,18 +666,23 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   // A git failure: the deadline wins when the budget ran out (the kill was ours), else the closed evidence rides the refusal.
   const gitFail = (detail: string, ev: GitEvidence): CreateRefusal =>
     expired() ?? fail("persist", detail, { numbers: ev.exit === undefined ? undefined : { exit_code: ev.exit }, extra: { cause: gitCause(ev) } });
+  // Put the token on disk and fetch the current main (depth 1). The token is on disk from here until the caller strips it.
+  const tokenOnAndFetch = async (): Promise<CreateRefusal | null> => {
+    const early = expired();
+    if (early) return early;
+    try {
+      c.originTouched = true;
+      await setOrigin(a.repoRoot, a.installationToken);
+    } catch (err) {
+      return fail("persist", "origin-failed", { extra: { cause: originCause(err) } });
+    }
+    const fetched = await runGit(a.repoRoot, ["fetch", "--depth=1", "origin", "main"], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
+    return fetched.ok ? null : gitFail("fetch-failed", fetched);
+  };
 
   // ---- R5: refresh the depth-1 clone to the current main, then R4: take the token OFF disk ----------------------
-  let early = expired();
-  if (early) return early;
-  try {
-    c.originTouched = true;
-    await setOrigin(a.repoRoot, a.installationToken);
-  } catch (err) {
-    return fail("persist", "origin-failed", { extra: { cause: originCause(err) } });
-  }
-  const fetch1 = await runGit(a.repoRoot, ["fetch", "--depth=1", "origin", "main"], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
-  if (!fetch1.ok) return gitFail("fetch-failed", fetch1);
+  const firstFetch = await tokenOnAndFetch();
+  if (firstFetch) return firstFetch;
   const reset = await runGit(a.repoRoot, ["reset", "--hard", "FETCH_HEAD"], { timeoutMs: budgetMs(GIT_TIMEOUT_MS) });
   if (!reset.ok) return gitFail("reset-failed", reset);
   const usedBlobs = await baseBlobs(a.repoRoot, "HEAD", budgetMs(GIT_TIMEOUT_MS));
@@ -670,7 +695,7 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   const measured = await measureClone(a.repoRoot);
   if (!measured.ok) return mirrored(measured.refusal, measured.extra);
   const recheck = checkCreate(proposal, {
-    patterns: [a.page],
+    patterns: [c.page],
     skills: measured.counted.records,
     skillDirs: measured.counted.dirs,
     agentPaths: measured.agentPaths,
@@ -692,11 +717,12 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   } catch (err) {
     return fail("shape", "template-unreadable", { extra: { cause: causeToken(err) } });
   }
-  const rendered = renderCreateFiles({ proposal, grokBlock, purposeTemplate, date: c.dateSuffix, evidenceCount: a.page.evidence.length });
+  const evidenceCount = c.page.evidence.length;
+  const rendered = renderCreateFiles({ proposal, grokBlock, purposeTemplate, date: c.dateSuffix, evidenceCount });
   if (rendered.kind === "refused") return mirrored(rendered);
 
   // Files on disk FIRST: the scanner and the exactPaths staging both read the disk.
-  early = expired();
+  let early = expired();
   if (early) return early;
   const paths = createPathList(c.slug);
   const [skillRel, purposeRel, stubRel] = paths;
@@ -713,7 +739,7 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   }
   // The ledger row rides the commit (same shape as the edit arm's row); it is never written before the gates pass
   // because nothing above reaches this point on a refusal, and the finally-reset discards it on any later one.
-  const logRow = `\n| ${c.dateSuffix} | ${v.clusterHash} | ${skillRel} | ${a.page.evidence.length} | pending | skill | (PR pending) |\n`;
+  const logRow = `\n| ${c.dateSuffix} | ${v.clusterHash} | ${skillRel} | ${evidenceCount} | pending | skill | (PR pending) |\n`;
   let logBase: string;
   try {
     logBase = await readFile(join(a.repoRoot, PROMOTION_LOG_PATH), "utf8");
@@ -729,8 +755,12 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   // ---- gates ----------------------------------------------------------------------------------------------------
   early = expired();
   if (early) return early;
-  // Two files are scanned one after the other, so each gets at most half of what is left.
-  const scan = await runSkillScan({ repoRoot: a.repoRoot, relPaths: [skillRel, purposeRel], metaBase: c.metaBase, timeoutMs: Math.max(1, Math.min(SCAN_TIMEOUT_MS, Math.floor(c.left() / 2))) });
+  // The files are scanned one after the other, so each gets at most an equal share of what is left.
+  const scanPaths = [skillRel, purposeRel];
+  const scan = await runSkillScan({
+    repoRoot: a.repoRoot, relPaths: scanPaths, metaBase: c.metaBase,
+    timeoutMs: Math.max(1, Math.min(SCAN_TIMEOUT_MS, Math.floor(c.left() / scanPaths.length))),
+  });
   if (!scan.ok) return scan.detail === "timeout" && c.left() <= 0 ? fail("persist", "deadline") : scanFailure(scan);
 
   early = expired();
@@ -755,19 +785,22 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   }
 
   // ---- R4/R5: put the token back for the network calls only, and prove the base did not move -------------------
-  early = expired();
-  if (early) return early;
-  try {
-    await setOrigin(a.repoRoot, a.installationToken);
-  } catch (err) {
-    return fail("persist", "origin-failed", { extra: { cause: originCause(err) } });
-  }
-  const fetch2 = await runGit(a.repoRoot, ["fetch", "--depth=1", "origin", "main"], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
-  if (!fetch2.ok) return gitFail("fetch-failed", fetch2);
+  const secondFetch = await tokenOnAndFetch();
+  if (secondFetch) return secondFetch;
   const nowBlobs = await baseBlobs(a.repoRoot, "FETCH_HEAD", budgetMs(GIT_TIMEOUT_MS));
   if (!nowBlobs.ok) return gitFail("blob-read-failed", nowBlobs.ev);
   const moved = nowBlobs.ids.filter((id, i) => id !== usedBlobs.ids[i]).length;
   if (moved > 0) return fail("persist", "base-moved", { numbers: { changed_count: moved } });
+  // The blobs above only cover files that existed; a skill that took our slug (or our Cursor stub name) while the
+  // gates ran is a NEW directory, which no blob id names.
+  const tree = await runGit(a.repoRoot, ["ls-tree", "FETCH_HEAD", "--", dirname(skillRel), dirname(stubRel)], { timeoutMs: budgetMs(GIT_TIMEOUT_MS) });
+  if (!tree.ok) return gitFail("tree-read-failed", tree);
+  if (tree.stdout.trim() !== "") return fail("persist", "slug-appeared");
+  // An orphan branch (pushed by an earlier attempt, no open PR) would make the push fail late as `failed-push`: name it
+  // here and never delete it (the operator decides; the runbook says how).
+  const probe = await runGit(a.repoRoot, ["ls-remote", "--heads", "origin", `refs/heads/${c.branchName}`], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
+  if (!probe.ok) return gitFail("branch-probe-failed", probe);
+  if (probe.stdout.trim() !== "") return fail("persist", "branch-exists");
   early = expired();
   if (early) return early;
 
@@ -793,7 +826,8 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
     scheduledIssueLabel: SCHEDULED_ISSUE_LABEL,
     branchName: c.branchName,
     prTitle: promotePrTitle(v.clusterHash, c.dateSuffix),
-    prBody: buildCreatePrBody(v),
+    // The refreshed check, not Step A's: the PR states the numbers the gates passed against the tree being committed.
+    prBody: buildCreatePrBody(recheck),
     prDraft: true,
     prLabels: [CREATE_LABEL],
     syntheticChecks: {

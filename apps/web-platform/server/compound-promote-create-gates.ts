@@ -27,8 +27,8 @@ import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-com
 import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "@/server/inngest/functions/_git-hardening";
 import { createPathList } from "@/server/compound-promote-create";
 
-// The Sentry feature name (the same literal the arm exports as `CREATE_ARM_FEATURE`; a leaf constant here avoids an import cycle).
-const CREATE_ARM_FEATURE_NAME = "cron-compound-promote";
+/** The Sentry feature name of the create arm and its gates (the arm re-exports it as `CREATE_ARM_FEATURE`; a leaf constant here avoids an import cycle). */
+export const CREATE_FEATURE_NAME = "cron-compound-promote";
 
 // =============================================================================
 // Constants
@@ -66,7 +66,7 @@ const GIT_MAX_BUFFER = 16 * 1024 * 1024;
  * Guard 1 row 8: the create PR must NOT inherit the edit arm's synthetic checks. A faked green
  * `skill-security-scan PR gate` is the #8203 class; a faked `test` would hide a real components.test failure.
  */
-export const CREATE_EXCLUDED_SYNTHETIC_CHECKS = ["skill-security-scan PR gate", "test"] as const;
+export const CREATE_EXCLUDED_SYNTHETIC_CHECKS = ["test", "skill-security-scan PR gate"] as const;
 
 export function createSyntheticCheckNames(): readonly string[] {
   const all: readonly string[] = SYNTHETIC_CHECK_NAMES;
@@ -210,7 +210,7 @@ export async function spawnRepoScript(o: SpawnRepoScriptOpts): Promise<SpawnScri
     });
     child.on("error", (err: NodeJS.ErrnoException) => {
       // An interpreter that cannot be spawned is an infrastructure fault, not a verdict: surface it to Sentry.
-      reportSilentFallback(err, { feature: CREATE_ARM_FEATURE_NAME, op: "create-gate-spawn", extra: { script: o.script, code: err.code ?? "unknown" } });
+      reportSilentFallback(err, { feature: CREATE_FEATURE_NAME, op: "create-gate-spawn", extra: { script: o.script, code: err.code ?? "unknown" } });
       finish({ kind: "spawn-error", detail: err.code ?? "unknown" });
     });
     child.on("close", (code, signal) => finish({ kind: "exit", code, signal, stdout, stderr }));
@@ -406,7 +406,7 @@ export function runGit(root: string, args: readonly string[], opts: RunGitOpts =
         const timedOut = killed && e.signal === "SIGTERM" && e.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
         const sub = typeof args[0] === "string" && GIT_SUB_RE.test(args[0]) ? args[0] : "other";
         reportSilentFallback(new Error(`git ${sub} failed`), {
-          feature: CREATE_ARM_FEATURE_NAME,
+          feature: CREATE_FEATURE_NAME,
           op: "create-gate-git",
           extra: { sub, ...(exit === undefined ? {} : { exit }), ...(signal === undefined ? {} : { signal }), killed, timedOut },
         });
