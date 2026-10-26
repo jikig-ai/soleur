@@ -14,6 +14,27 @@ brand_survival_threshold: none
 
 Spec lacks valid lane: no spec.md exists for this branch, so `lane:` defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Sections enhanced:** Phases 0-3, both Guard Contract entries, Research Insights, Dependencies & Risks, Acceptance Criteria
+**Agents and passes used:** plan-review (DHH-lens, Kieran-lens, per-mechanism simplicity), a catalogue verification pass over the whole sharp-edges file, architecture-strategist,
+test-design-reviewer, security-sentinel, the deepen-plan halt gates (4.5-4.13: all pass or skip), and a scratch prototype of the final design run against 36 fixture sentences. No further CTO spawn
+(cto_spawns=2 of 2).
+
+### Key improvements
+
+1. The prototype found three plan errors before any code: the G1-8b anchor needs a re-pin, the first cover rule was wider than CTO A3, and the first LP3 could not see a deleted phrase gate.
+2. Every fixture now names the single veto or release that decides it (LP1a/LP2/LP5b-LP5e/LP10), each mutation anchor is fixed and asserted unique, and the mutation set grew from 8 to 16 rows
+   (V6 floor 51) so each copied veto, both phrase alternatives, the cover capture and both self-check clauses have a killing row.
+3. The ralph reminder now carries the closed operator-only list, the CLO and the plugin-relative path to section 8.1, is tested against a literal oracle on four state files, and the suite gets a floor.
+
+### New considerations discovered
+
+- The pre-ask hook shares `tfc_self_check`, so an emptied label variable fails its ruling arm open too; its ML3 row gains the two variables (one existing row).
+- Residuals are now stated and pinned: final-sentence-only judging, a forged category prefix, veto words and synonyms, first-Stop-only, and the `unkept-promise-hook.sh` text that teaches the label.
+- `affected-tests.sh` does not select the pre-ask or ralph suites from these edits; they run explicitly and their pass lines go in the PR body.
+
 ## Overview
 
 A `soleur:one-shot` session ended a turn with a paragraph that handed the founder a technical call and a
@@ -70,7 +91,7 @@ the hook, the lib, the suite, `plugins/soleur/hooks/stop-hook.sh`, section 8.1 o
 ### Property List (Phase 0.6b)
 
 - P1. A closing whose final `Blocked:`/`Paused:` sentence hands a technical ruling to the operator is stopped
-  once, with the CTO-routing reason.
+  once, on the first Stop of a chain, with the CTO-routing reason.
 - P2. A genuine operator-only blocker (money, scope, priority, schedule, irreversible, production-mutating,
   legal-risk, brand) is never stopped, and an ordinary waiting label ("Blocked: waiting on CI") is never stopped.
 - P3. Every parse doubt still fails open with one stderr line.
@@ -110,6 +131,12 @@ the hook, the lib, the suite, `plugins/soleur/hooks/stop-hook.sh`, section 8.1 o
   labels, `Operator-only (...)` released closings, price/merge-vetoed and negated sentences and fixture A8i pass.
   Full-population differential with labels intact, base hook against prototype, same 11,421 messages: base 0
   blocks, prototype 1 block (the incident), 1 verdict flip in total.
+- Deepen-pass prototype v3 (scratch, the plan's final design: label phrase and verb-bound negation with the `n't` and `no need for` forms, `fin_cover` per sentence, the awk `islabel`
+  fold, `F<cover>` rows, the hit goes straight to the block output): 36 of 36 fixture sentences behave as Phase 0 states (LB1-LB4, LB6-LB8, LP11u and the covered-unrelated-question-unit row
+  block; LP1a, all eight categories, LP2, LP2b, LP3q, LP4-LP4d, LP5b-LP5e, LP6, LP9, LP10, LP10b, LP11, LP12, A8i and a trailing space-only line pass); each copied veto line is unique in the
+  lib, so the mutation anchors land on the new function. The prototype corrected three plan claims: G1-8b needs a re-pin (the original anchor is a one-line `if ... then exit 0; fi`); the first
+  cover rule ("any `esc` set in the line") was wider than CTO A3 and let an unrelated covered question unit release a technical label (replaced by `fin_cover`); and the first LP3 could not
+  kill a deleted phrase gate because the pre-filter exits first (LP3q adds a harmless question).
 - Baseline suite (`bash .claude/hooks/pre-closing-technical-fork-gate.test.sh`): 175/175 passed in 29 s; V5 reports
   258 of 258 spawns; V6 reports 35 mutants killed against a floor of 35.
 - Not measured: whether the ralph reminder changes model behaviour (signage efficacy is `unverified`; the flip
@@ -144,7 +171,9 @@ the hook, the lib, the suite, `plugins/soleur/hooks/stop-hook.sh`, section 8.1 o
 - Mutation rows are anchored on literal source text and `apply_mut` replaces the FIRST occurrence: the new
   function declares `local sentence="${1-}"` and writes every veto against `"$sentence"`, and is defined after
   `tfc_is_handoff`, so each new anchor is unique and G1-17/G1-21/G1-22 keep matching their current first
-  occurrence. G1-8b's anchor line stays byte-identical (no re-pin); G1-19's anchor line stays valid.
+  occurrence. G1-8b MUST be re-pinned: its anchor is the whole one-line `if [[ -n "$CONTENT" ]] && ! [[ ... ]]; then exit 0; fi`, which becomes a multi-line block;
+  the new anchor is the first line of that block (`if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then`, one occurrence), mutated to
+  `if [[ -n "$FINAL_SENT" ]]; then`, and E3b still flips (the mutant enters the branch on `none.`, finds no hand-off and exits 0). G1-19's anchor line stays valid.
 - Lib purity row C2: no `.claude/`, `CLAUDE_PROJECT_DIR`, `emit_incident`, `hcloud` or `g2` on a non-comment line;
   row C3: every `TFC_*_RE=` cue has exactly one definition site (the new variables are named `*_ERE`, like the CL4 ones).
 - Reason text rows R1-R4: the block reason keeps the CTO/CLO names, the closed list, `Paused:` and `Operator-only (money):`,
@@ -170,26 +199,36 @@ against the unchanged hook; Phases 1-5 make them green.
 
 ### Phase 0 — fixtures RED (suite `.claude/hooks/pre-closing-technical-fork-gate.test.sh`)
 
-New rows (the count is taken from the suite's own TOTAL at the end of the phase; about 33 with the mutation rows of Phase 2 and the census row):
+New rows (the count is taken from the suite's own TOTAL at the end of the work; about 49 with the mutation rows of Phase 2, the census row and the ledger row):
 
 - Must-BLOCK (each name starts with its token and is added to `D_NAMES`, so V5 proves THIS hook's reason blocked it): LB1 the verbatim
   incident closing (status line, "Your call" paragraph, `Blocked:` sentence); LB2 the label sentence alone (no `?`, no CL4 phrase:
   proves pre-filter parity); LB3 bold `**Paused**:` with "awaiting your ruling on whether"; LB4 NBSP inside "your ruling";
-  LB6 an `Operator-only (...)` sentence separated from the label by a blank line does not release; LB7 "pending your ruling on which design".
-- Must-PASS: LP1 all eight `Operator-only (category)` categories release the label sentence (loop, one case, as E2c does) plus LP1a one
-  category as its own row for the mutation; LP2 `Blocked: Operator-only (schedule): ...` releases; LP3 ordinary waiting labels (loop: CI,
-  merge queue, a third party has not replied, "waiting on your go-ahead to merge"); LP4 negation, worded so that ONLY the negation veto
-  releases it: "Blocked: this is not awaiting your ruling, it only waits on CI." (a phrase "not blocked on your ruling" never matches the
-  phrase list and would not kill the mutation); LP5b "Blocked: needs your ruling on whether to merge now." (authorization veto only);
-  LP5c "Blocked: with your go-ahead i would proceed, but it needs your ruling on whether the failure counts." (permission veto only);
-  LP5d "Blocked: the feature needs your ruling on whether the failure counts." (closing-extra veto only); LP6 the CTO's documented residual
-  "Blocked: the plan needs your ruling on whether the date slips." (business veto only); LP9 the label is not the final sentence;
-  LP10 the label inside backticks (stripped) passes; LP11 an `Operator-only (...)` sentence, then a label sentence that itself ends in a question mark, passes
-  (and one row where the cover is 0 while a neighbouring unit is covered still blocks). A8i stays as it is and is not re-added.
-- Fail-open: ML2 a lib copy without `tfc_is_label_handoff`, or with an empty `TFC_LABEL_PHRASE_ERE`, fails open with "cue lib missing or
-  incomplete" on stderr.
+  LB6 an `Operator-only (...)` sentence separated from the label by a blank line does not release; LB7 "pending your ruling on which design";
+  LB8 "Blocked: your ruling on which design is still open." (the second phrase alternative only).
+- Must-PASS. Every release fixture uses the two-line shape (the `Operator-only` sentence on line 1, a single newline, the label on line 2) and a label
+  body byte-identical to LB2's, so LB2 is its blocking twin and the release is the only difference:
+  LP1 all eight categories (loop, one case, as E2c does) and LP1a one category ("Operator-only (money): the second seat is a spend call." then the LB2 label) as its
+  own row for the mutation; LP2 the inline form `Blocked: Operator-only (scope): needs your ruling ...` (the category must be one of money, scope, irreversible or
+  legal-risk and the reason after the colon must carry no veto word: schedule, priority and brand are business words and production-mutating trips the authorization veto,
+  so those would pass without the release and prove nothing); LP2b the bold inline form; LP3 ordinary waiting labels (loop: CI, merge queue, a third party has not
+  replied, "waiting on your go-ahead to merge") and LP3q "Is CI green yet? Blocked: waiting on CI." (the `?` keeps the pre-filter open, so deleting the
+  phrase gate would flip it); LP4 "Blocked: this is not awaiting your ruling, it only waits on CI." (only the negation veto releases it; "not blocked on your ruling" never
+  matches the phrase list) plus LP4b "we are not waiting on your ruling", LP4c "this isn't awaiting your ruling" and LP4d "there is no need for your ruling on whether it counts";
+  one single-veto sentence each: LP5b "Blocked: needs your ruling on whether to merge now." (authorization), LP5c "Blocked: it is ok to keep waiting, but it needs your ruling on whether
+  the failure counts." (shared permission shape `ok to` only: a go-ahead is also an authorization verb and would be released twice), LP5e "Blocked: shall i arm slot b; it needs your
+  ruling on whether the failure counts." (closing-only permission shape only), LP5d "Blocked: the feature needs your ruling on whether the failure counts." (closing-extra);
+  LP6 the CTO's documented residual "Blocked: the plan needs your ruling on whether the date slips." (business veto only); LP9 the label is not the final sentence (no row
+  kills it; it documents the residual); LP10 the phrase inside backticks in a non-label sentence ("Blocked: waiting on CI; the phrase the hook cues on is `needs your ruling on whether`.")
+  so the span strip is what keeps it passing; LP10b the label on a `>` quote line; LP11 an `Operator-only (...)` sentence, then a label sentence that itself ends in a question mark,
+  passes, and LP11u the same label sentence uncovered blocks; LP12 the label sentence split by a full stop ("Blocked: CI read error. It needs your ruling on whether that counts.") passes,
+  documenting the residual; LP13 "Operator-only (money): ok? Blocked: needs your ruling ..." blocks (a cover consumed by an unrelated `?` unit does not carry over, CTO A3). A8i stays as it is.
+- Fail-open: ML2 reuses ML1's tree with one lib copy per cause: (a) `tfc_is_label_handoff()` renamed so the function is missing, (b) `TFC_LABEL_PHRASE_ERE=''`, (c) `TFC_LABEL_NEG_ERE=''`;
+  each is `cmp`-checked to differ from the pristine lib, the unmodified control blocks LB2, and each copy passes it with "cue lib missing or incomplete" on stderr.
 - Reason: R5 the reason carries the substring "unless that sentence itself leaves a technical ruling" (so the sentence cannot drift).
-- Harness: H5 the neutered always-block decider reddens the new must-PASS rows (a RED-only matrix cannot see a guard that blocks everything).
+- Ledger: LG2 after LB1 the last ledger row has the cue `label`, a `len=... sha256=...` snippet and none of the lowercase tokens ruling or doppler (the hash covers the normalised text
+  after the label colon; the lib header says so).
+- No H5: H1 already proves the instrument; the block-everything guard is killed by G1-34 (Phase 2).
 
 ### Phase 1 — lib and hook
 
@@ -197,63 +236,74 @@ New rows (the count is taken from the suite's own TOTAL at the end of the phase;
 
   ```text
   TFC_LABEL_PHRASE_ERE='\b(needs|needed|awaiting|awaits|requires|pending|waiting (on|for)) your ruling\b|\byour ruling (on|about|as to) (whether|if|which)\b'
-  TFC_LABEL_NEG_ERE='\b(not|no longer|never|without)\b ([a-z]+ ){0,2}(needs?|awaiting|pending|requires?) your ruling'
+  TFC_LABEL_NEG_ERE='(\b(not|no longer|never|without)\b|n'"'"'t) ([a-z]+ ){0,2}(needs?|awaiting|pending|requires?|waiting (on|for)) your ruling|\bno need for your ruling\b'
   ```
 
-  and `tfc_is_label_handoff` declaring `local sentence="${1-}"`, setting `TFC_HIT=""`, returning 1 on an empty sentence, then: phrase
-  match required; EXTRA, BUSINESS, `TFC_CL4_AUTH_RE`, `RULING_PERM_RE`, `TFC_CLOSING_PERM_RE` vetoes (each its own physical line against
-  `"$sentence"`); then the negation veto; then `TFC_HIT=label`, return 0. Extend `tfc_self_check` to require both variables non-empty and
-  `declare -f tfc_is_label_handoff`. Header: the cue count is now 4 of 6 and this is the last cue; the next label miss adds no cue and
-  opens the other remedy named in ADR-084 (A2t). `_TFC_COMPLETE=1` stays the last statement. Single-quote the assignments; any
-  apostrophe uses the lib's existing `'"'"'` idiom.
+  and `tfc_is_label_handoff` declaring `local sentence="${1-}"`, setting `TFC_HIT=""`, returning 1 on an empty sentence, then: the phrase gate on its own line;
+  EXTRA, BUSINESS, `TFC_CL4_AUTH_RE`, `RULING_PERM_RE`, `TFC_CLOSING_PERM_RE` vetoes (each its own physical line against `"$sentence"`); then the negation veto; then
+  `TFC_HIT=label`, return 0. Each assignment is ONE physical line at column 0 (the pre-ask suite's ML3 blanks a variable with `sed s/^VAR=.*/VAR=''/`). Extend `tfc_self_check`
+  (one line checking both variables non-empty, and one line for `declare -f tfc_is_label_handoff`). Header: the cue count is now 4 of 6 and this is the last cue; the next label miss
+  adds no cue and opens the other remedy named in ADR-084 (A2t); the ledger hash for the label cue covers the normalised text after the label colon. `_TFC_COMPLETE=1` stays the last
+  statement. No comment in the lib or the hook may repeat a mutation anchor.
 - `.claude/hooks/pre-closing-technical-fork-gate.sh`:
-  1. Pre-filter: `grep -E "$TFC_CL4_CANDIDATE_ERE|$TFC_LABEL_PHRASE_ERE"` (the label phrase is already the function's first gate, so the
-     pre-filter cannot judge fewer sentences than the function accepts).
-  2. Cover flag: in the awk main block keep `line_cover`, set to `esc` at the start of each non-blank line and to 1 whenever `esc` is set to 1 inside
-     the line (so a cover consumed by a `?` unit of the same line still counts), and assign `last_cover = line_cover` after the `while` loop; in END
-     compute the inline form with the awk's own `islabel()` on the final sentence's body (the text after the `Paused:`/`Blocked:` colon), so the eight-category list
-     stays in ONE place, and print `"F" cover "\t" s`. The reader becomes `grep -E "^F[01]${TAB}"` and `FINAL_SENT="${FINAL#F?"$TAB"}"` with
-     `FINAL_COVER="${FINAL:1:1}"`. (Captured after the main loop and not in END: a trailing blank or space-only line resets `esc` while `last_line`
-     still names the label line.) Fixture LP11 covers the label sentence that itself ends in a question mark.
-  3. Move `HIT_UNIT=""; HIT_CUE=""` above the label branch. Keep the `if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then`
-     line byte-identical; inside it, take `BODY="${FINAL_SENT#*:}"; BODY="${BODY# }"` and run, each on its own line:
+  1. Pre-filter: `grep -E "$TFC_CL4_CANDIDATE_ERE|$TFC_LABEL_PHRASE_ERE"` (the label phrase is already the function's first gate, so the pre-filter cannot judge fewer sentences than
+     the function accepts).
+  2. Cover flag (CTO A3: the same cover flag the unit rows carry): in the awk, `fin_cover = esc` after each sentence is processed in `note_sentences` and after the `?`-unit's own `islabel`
+     check, before `esc` resets; END folds the inline form with the awk's own `islabel()` on the final sentence's body (the text after the `Paused:`/`Blocked:` colon, emphasis stripped), so the
+     eight-category list stays in ONE place, and prints `"F" cover "\t" s`. The reader becomes `grep -E "^F[01]${TAB}"` and `FINAL_SENT="${FINAL#F?"$TAB"}"` with `FINAL_COVER="${FINAL:1:1}"`.
+     (A trailing space-only line does not lose the cover: `fin_cover` is assigned per sentence and never at END.)
+  3. Move `HIT_UNIT=""; HIT_CUE=""` above the label branch. Keep the empty-label exclusion condition itself unchanged, as the first line of a now multi-line block
+     (`if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then`; G1-8b is re-pinned to it); inside it, take `BODY="${FINAL_SENT#*:}"; BODY="${BODY# }"` and run, each on its own line:
      `[[ "$FINAL_COVER" == 1 ]] && exit 0`; `tfc_is_label_handoff "$BODY" || exit 0`; then `HIT_UNIT="$BODY"; HIT_CUE="$TFC_HIT"`. Wrap the two judging loops in
      `if [[ -z "$HIT_UNIT" ]]; then ... fi` so a label hit goes to the single block output with no fall-through (CTO A1).
   4. Reword the block reason's last paragraph to: "A final sentence beginning Paused: or Blocked: followed by what you are waiting on also ends
      this check, unless that sentence itself leaves a technical ruling to the operator; then route it to the CTO first." (no angle brackets;
      none of promise, operator-gate, done).
-  5. Update the header's ESCAPES paragraph and the "mostly inert inside a ralph loop" note (the reminder, A2t, B3).
+  5. Update the header's ESCAPES paragraph and the "mostly inert inside a ralph loop" note (the reminder, A2t, B3), and the "mirrors the plugin hook" comment.
 
 ### Phase 2 — suite accounting and mutation rows
 
-- Mutation rows (each asserts it landed, parses, control gives the expected verdict, mutant differs, mutant did not crash):
-  G1-23 delete the label judge (LB1/LB2 flip block to pass); G1-24 the pre-filter drops the label phrase (LB2 flips); G1-25 break the
-  carried-over cover (`line_cover` starts at 0; LP1a flips pass to block); G1-26 delete the awk's inline `islabel` fold on the label body (LP2 flips); G1-27 delete the negation
-  veto (LP4 flips); G1-28 delete the BUSINESS veto in the label function (LP6 flips); G1-29 delete the authorization veto there (LP5b flips);
-  G1-30 delete the `TFC_LABEL_PHRASE_ERE` clause from `tfc_self_check` (a custom row like G2-1: ML2's emptied-phrase lib copy flips from fail-open
-  to block); G1-31 the existing G1-16 mutation (never reset the cover on a blank line) driven by LB6 (a second member after a compliant first);
-  G1-32 delete the two permission vetoes (LP5c flips); G1-33 delete the closing-extra veto (LP5d flips).
-- Census row C5 (the pattern of C1/C3): exactly one file defines `tfc_is_label_handoff` and the `TFC_LABEL_*_ERE` variables (the lib), and only the closing
-  hook calls the function (C3's pattern `^TFC_[A-Z0-9_]*_RE=` does not match `*_ERE=`, so the new variables need their own row).
-- Each mutation anchor is one physical line of the unique text of its function or block; G1-2/G1-21/G1-22 keep their current first-occurrence anchors.
-- Set `V1`'s literal and `MIN_CASES` to the exact new TOTAL in one edit; set the V6 floor to the exact new killed count (46 if all eleven
-  rows land); extend `D_NAMES`; update the header MUTATION MATRIX comment; keep the floor shape.
+Each new row first asserts its anchor occurs exactly once (`[[ "$(grep -cF -- "$old" "$f")" == 1 ]]`), then the existing guards (landed, parses, control gives the expected verdict, mutant differs,
+mutant did not crash). Anchors, all single physical lines:
+
+- G1-23 `tfc_is_label_handoff "$BODY" || exit 0` becomes `exit 0` (LB1, LB2 flip block to pass; never `:`, which would block everything).
+- G1-24 `grep -E "$TFC_CL4_CANDIDATE_ERE|$TFC_LABEL_PHRASE_ERE"` becomes `grep -E "$TFC_CL4_CANDIDATE_ERE"` (LB2 flips: own dispatch).
+- G1-25 the first `fin_cover = esc` (in `note_sentences`) becomes `fin_cover = 0` (LP1a flips pass to block).
+- G1-26 the awk's inline fold `if (islabel(b)) cov = 1` becomes `if (0) cov = 1` (LP2 flips; never anchored on `islabel(`, whose first hit is the function definition).
+- G1-27, G1-28, G1-29, G1-33 the new function's negation, BUSINESS, authorization and closing-extra veto lines, each replaced by `:` (LP4, LP6, LP5b, LP5d flip pass to block).
+- G1-32 the `RULING_PERM_RE` veto line and G1-32b the `TFC_CLOSING_PERM_RE` veto line of the new function, each replaced by `:` (LP5c / LP5e flip).
+- G1-30 delete the `tfc_self_check` line that requires both label variables (a custom row like G2-1: ML2's emptied-phrase copy flips from fail-open to block); G1-37 delete the
+  `declare -f tfc_is_label_handoff` line (ML2's missing-function copy flips).
+- G1-31 the existing G1-16 mutation (`if (line ~ /^ *$/) { esc = 0; next }` loses its reset) driven by LB6 (a second member after a compliant first; that line stays byte-identical).
+- G1-34 delete the phrase gate line of the new function (LP3q flips pass to block: a label function that blocks any label sentence is seen).
+- G1-35 the `fin_cover = esc` in the `?`-unit branch becomes `fin_cover = 0` (LP11 flips pass to block); G1-36 delete the second phrase alternative (LB8 flips block to pass).
+- Census row C5 (the pattern of C1/C3): exactly one file defines `tfc_is_label_handoff` and the `TFC_LABEL_*_ERE` variables (the lib), and only the closing hook calls the function (C3's pattern
+  `^TFC_[A-Z0-9_]*_RE=` does not match `*_ERE=`, so the new variables need their own row).
+- Set `V1`'s literal and `MIN_CASES` to the exact new TOTAL in one edit; set the V6 floor to the exact new killed count (51 if all sixteen rows land: G1-23 to G1-37 plus G1-32b; take the number
+  from a green run); extend `D_NAMES`; update the header MUTATION MATRIX comment; keep the floor shape.
 
 ### Phase 3 — loop reminder (`plugins/soleur/hooks/stop-hook.sh`, `plugins/soleur/test/ralph-loop.test.sh`)
 
-- Before the final `jq` call define `REMINDER='Before ending a turn with Blocked: or Paused:, class every decision this reason leaves to the operator, send the technical ones to soleur:engineering:cto first, and see section 8.1 of technical-ruling-delegation.md.'` (one physical line, single-quoted, no backticks or apostrophes, no angle brackets), and emit
-  `{"decision":"block","reason":($prompt + "\n\n" + $rem),"systemMessage":$msg}` from `jq -n --arg prompt ... --arg rem "$REMINDER" --arg msg ...`
-  (never by editing `PROMPT_TEXT`: command substitution strips trailing newlines). `systemMessage` stays the `Ralph iteration N | ...` banner
-  byte-for-byte and does not contain the reminder (CTO B3c; `systemMessage` is user-visible only). jq's pretty output is kept so the existing
-  `"decision": "block"` assertions stay green. Loop control, the stuck/repeat/similarity detection (they hash `LAST_OUTPUT`) and the stored prompt are untouched.
-- Tests (written first), one promise-bearing and one plain state file, iteration 1 and iteration N in the same loop, with a multi-line prompt
-  that has trailing text and no line that is exactly `---`: RL-B3a `decision` is `block` (asserted first, so zero emitted blocks cannot pass);
-  `reason` starts with the stored prompt, computed with the hook's own extraction (`awk '/^---$/{i++; next} i>=2'` and the `$(...)` strip),
-  and ends with the constant line; RL-B3b `systemMessage` equals the banner and lacks the reminder; the state file's prompt block and the
-  iteration/`stuck_count`/`repeat_count` values behave as before; RL-B3c the existing ralph rows stay green unchanged.
-- Mutations (a mutant tree mirrors `hooks/` and `scripts/` and asserts the control emits `"decision": "block"` first): delete the line from `reason`;
-  exit 0 before the block is emitted (own dispatch); add the reminder only when `NEXT_ITERATION` is 2 (second member); move it to
-  `systemMessage` only; prepend instead of append. Each reddens a row.
+- Before the final `jq` call define the constant on one physical line, single-quoted, with no backticks, apostrophes or angle brackets:
+
+  ```text
+  REMINDER='Before ending a turn with Blocked: or Paused:, class every decision the reason leaves to the operator. Send the technical ones to soleur:engineering:cto first (legal ones to soleur:legal:clo) and name only the operator-only remainder. Money, scope, priority, schedule, irreversible, production-mutating, legal-risk and brand decisions stay with the operator, and a CTO ruling never authorizes such an act. See section 8.1 of skills/brainstorm-techniques/references/technical-ruling-delegation.md in the Soleur plugin.'
+  ```
+
+  Emit `{"decision":"block","reason":($prompt + "\n\n" + $rem),"systemMessage":$msg}` from `jq -n --arg prompt ... --arg rem "$REMINDER" --arg msg ...` (never by editing `PROMPT_TEXT`:
+  command substitution strips trailing newlines). `systemMessage` stays the `Ralph iteration N | ...` banner byte-for-byte and does not contain the reminder (CTO B3c; `systemMessage` is
+  user-visible only). jq's pretty output is kept so the existing `"decision": "block"` assertions stay green. Loop control, the stuck/repeat/similarity detection (they hash `LAST_OUTPUT`) and the
+  stored prompt are untouched.
+- Tests (written first): four fresh state files made with the suite's `create_state_file` (iteration 1 and iteration 7, each with and without a completion promise; iteration N is never 1, so the
+  iteration-2-only mutant cannot pass both), each holding the literal prompt `Line one` / blank line / `Line two ends here` and no `---` line. RL-B3a asserts `.decision == block` first (so zero emitted
+  blocks cannot pass), then `.reason` equals the literal prompt, two newlines and the literal REMINDER text (a test-side copy: the oracle is the literal, not the hook's own extraction), and contains
+  `soleur:engineering:cto`, `section 8.1` and `Blocked:`; RL-B3b `.systemMessage` equals the literal banner for NEXT_ITERATION and lacks `section 8.1`; the state file's prompt block (extracted with
+  the awk) and `stuck_count` are compared before and after (the hook rewrites the frontmatter on every run, so the whole file is not compared). The suite finishes with `print_results <N>`, N taken from
+  a green run, so deleting the RL-B3 block trips the anti-vacuity floor. The existing ralph rows stay green unchanged (an acceptance statement, not a row).
+- Mutations, each applied with a first-occurrence applier that refuses an absent anchor and runs `bash -n`, in a mutant tree that mirrors `hooks/` and `scripts/` and whose control emits
+  `"decision": "block"` first: delete the line from `reason`; exit 0 before the block is emitted (own dispatch: the only mutant that expects empty output, and it also requires stderr free of
+  `line N:` diagnostics); add the reminder only when `NEXT_ITERATION` is 2 (second member); move it to `systemMessage` only; prepend instead of append. The other four must still emit
+  `"decision": "block"` with the reminder missing or misplaced. Each reddens a row.
 
 ### Phase 4 — skills (one definition, pointers)
 
@@ -278,7 +328,7 @@ New rows (the count is taken from the suite's own TOTAL at the end of the phase;
 
 ### Phase 5 — record
 
-- ADR-084 addendum dated 2026-10-26, at most about 15 lines: A1(i) and the narrowed Q2 residual, A2 (one cue, tripwire TRIPPED, its replacement and the
+- ADR-084 addendum dated 2026-10-26, at most about 15 lines (it also states: the pre-ask ruling arm shares `tfc_self_check`, so an emptied label variable skips that arm with the stderr line, an accepted coupling covered by the pre-ask suite's ML3 row; and the label cue is first-Stop only): A1(i) and the narrowed Q2 residual, A2 (one cue, tripwire TRIPPED, its replacement and the
   next-miss rule), A3 with the question-mark-label edge, B3 with the `reason` channel in one sentence and the B1 flip condition, ADR-178 unchanged.
 - Learning file under `knowledge-base/project/learnings/` (dated at write time, slug `a-label-escape-hid-a-hand-off-the-hook-had-no-phrase-for-and-the-prefilter-never-read`):
   the problem, the three measured reasons, and the pre-filter-parity trap (the first prototype passed for the wrong reason). The cue measurements go in the PR
@@ -311,6 +361,7 @@ Run the suite, the ratchets for every touched file (Acceptance Criteria), the af
 - `.claude/hooks/lib/technical-fork-cues.sh`
 - `.claude/hooks/pre-closing-technical-fork-gate.sh`
 - `.claude/hooks/pre-closing-technical-fork-gate.test.sh`
+- `.claude/hooks/pre-ask-technical-fork-gate.test.sh` (one existing row: its fail-open loop over the lib's required variables gains the two label variables; TOTAL does not move)
 - `plugins/soleur/hooks/stop-hook.sh`
 - `plugins/soleur/test/ralph-loop.test.sh`
 - `plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md`
@@ -356,7 +407,7 @@ The addendum describes the target state now; nothing is soak-gated.
 
 ### Guard 1 — label-sentence hand-off arm of the closing gate
 
-**Property.** A closing whose final `Paused:`/`Blocked:` sentence itself hands a technical ruling to the operator is stopped once,
+**Property.** A closing whose final `Paused:`/`Blocked:` sentence itself hands a technical ruling to the operator is stopped once, on the first Stop of a chain,
 unless an `Operator-only (category):` sentence of the same paragraph (or the label body itself) releases it, and every parse doubt
 passes.
 
@@ -373,17 +424,18 @@ any of them must move a row.
 |---|---|---|
 | 1 | G1-23 delete the label judge (the branch always exits 0) | RED: LB1 and LB2 flip block to pass |
 | 2 | G1-24 the pre-filter drops the label phrase (own dispatch: a closing with only the label cue never reaches units) | RED: LB2 flips |
-| 3 | G1-25 break the carried-over cover (the awk `line_cover` starts at 0) | RED: LP1a flips pass to block |
+| 3 | G1-25 break the carried-over cover (the awk `fin_cover` in `note_sentences` becomes 0) / G1-35 the same in the `?`-unit branch | RED: LP1a / LP11 flip pass to block |
 | 4 | G1-26 delete the awk's inline `islabel` fold on the label body | RED: LP2 flips pass to block |
 | 5 | G1-27 delete the negation veto | RED: LP4 flips pass to block |
 | 6 | G1-28 / G1-29 delete the BUSINESS veto / the authorization veto in the label function | RED: LP6 / LP5b flip pass to block |
-| 7 | G1-32 / G1-33 delete the two permission vetoes / the closing-extra veto in the label function | RED: LP5c / LP5d flip pass to block |
-| 8 | G1-30 delete the `TFC_LABEL_PHRASE_ERE` clause from `tfc_self_check` | RED: ML2's emptied-phrase lib copy flips from fail-open to block |
-| 9 | second member after a compliant first: G1-31, the G1-16 mutation (never reset the cover on a blank line) driven by LB6 (an `Operator-only` sentence in an EARLIER paragraph, then the technical label) | RED: LB6 flips block to pass |
+| 7 | G1-32 / G1-32b / G1-33 delete the shared permission veto / the closing-only permission veto / the closing-extra veto in the label function | RED: LP5c / LP5e / LP5d flip pass to block |
+| 8 | G1-30 delete the `tfc_self_check` line that requires both label variables / G1-37 delete its `declare -f` line | RED: ML2's emptied-variable copy / missing-function copy flips from fail-open to block |
+| 9 | G1-34 delete the phrase gate of the label function (a function that blocks any label sentence) / G1-36 delete the second phrase alternative | RED: LP3q flips pass to block / LB8 flips block to pass |
+| 10 | second member after a compliant first: G1-31, the G1-16 mutation (never reset the cover on a blank line) driven by LB6 (an `Operator-only` sentence in an EARLIER paragraph, then the technical label) | RED: LB6 flips block to pass |
 
-**Harness rows.** H5: the always-block decider reddens the new must-PASS rows (LP1-LP6, LP9, LP10). The must-PASS rows are not the
-canonical: LP3 and LP5b-LP5d differ from the incident in the way the contract permits (a different label content, a single vetoed word).
-ML2: a lib copy missing the function or with an empty regex must fail open with the stderr cause, so a stub lib cannot satisfy the suite.
+**Harness rows.** The must-PASS rows are not the canonical: LP3/LP3q and LP5b-LP5e differ from the incident in the way the contract permits (a different label content, a single
+vetoed word), and every release row has LB2 as its blocking twin; G1-34 is the block-everything probe (H1 already proves the row helper). ML2 (three causes): a lib copy missing the
+function or with an empty regex must fail open with the stderr cause, so a stub lib cannot satisfy the suite. LG2 pins the ledger cue name `label`.
 
 **Anchor.** The suite stores a count (`V1`, `MIN_CASES`) and a mutant floor (V6). A weakening that deletes rows and one floor passes
 inside one diff; what is outside the commit is `scripts/guard-vacuity-floor.test.sh`, which builds the neutered-counter and
@@ -408,10 +460,11 @@ branches of the `SYSTEM_MSG` construction); the tally-capped and max-iteration e
 | 4 | move the reminder to `systemMessage` only | RED: RL-B3a and RL-B3b (the model never sees it) |
 | 5 | prepend instead of append (prompt no longer first) | RED: the prefix assertion |
 
-**Harness rows.** One case with a promise-bearing state file and one without, so both branches are exercised; the stored-prompt
-byte-identity row compares the state file before and after; the mutant tree asserts its control blocks before it is mutated.
+**Harness rows.** Four fresh state files (iteration 1 and 7, with and without a promise), so both branches and a non-first iteration are exercised; the oracle is a literal expected string, not
+the hook's own extraction; the stored-prompt row compares the state file's prompt block (not the whole file) before and after; the mutant tree asserts its control blocks before it is mutated;
+the suite ends with `print_results <N>` so deleting the RL-B3 block trips a floor.
 
-**Anchor.** The existing ralph rows stay green unchanged (they assert `"decision": "block"` and loop control, not the message text);
+**Anchor.** The existing ralph rows stay green unchanged (they assert `"decision": "block"` and loop control, not the message text, so they are a statement and not a row);
 no stored value is compared to the thing it protects.
 
 ## Observability
@@ -433,7 +486,7 @@ failure_modes:
     detection: tfc_self_check fails open with "cue lib missing or incomplete" on stderr; suite rows ML1 and ML2
     alert_route: suite red in CI
   - mode: the ralph reminder is dropped
-    detection: ralph-loop.test.sh RL-B3a and RL-B3b
+    detection: ralph-loop.test.sh RL-B3a and RL-B3b; locally `grep -c 'Send the technical ones to soleur:engineering:cto first' plugins/soleur/hooks/stop-hook.sh` prints 1; a further in-loop miss (the B1 flip condition) is founder-reported only, no hook instruments later Stops of a chain
     alert_route: suite red in CI
 logs:
   where: .claude/.rule-incidents.jsonl (local, gitignored ledger)
@@ -510,12 +563,12 @@ brand, legal, spend or revenue surface.
 
 - [ ] AC1 The verbatim incident closing makes the real hook print a block decision: suite row LB1 passes; the label-only sentence (LB2, no `?`, no CL4 phrase) also blocks.
 - [ ] AC2 `bash .claude/hooks/pre-closing-technical-fork-gate.test.sh` prints `OK`; `V1`'s literal, `MIN_CASES` and the suite's TOTAL are the same exact number (taken from a green run, 175 plus the rows added); the V6 floor equals the killed count; V5 lists every new must-block name.
-- [ ] AC3 Each new mutation row (G1-23 to G1-33) reports killed; deleting the label branch reddens LB1 and LB2 (shown in the PR body from a sandbox run).
-- [ ] AC4 Must-PASS: all eight `Operator-only (category)` categories, the inline form, ordinary waiting labels, negation, each single-veto sentence (business, authorization, permission, closing-extra), and fixture A8i pass.
-- [ ] AC5 `bash plugins/soleur/test/ralph-loop.test.sh` is green, including RL-B3a to RL-B3c on both state files and the five reminder mutations.
+- [ ] AC3 Each new mutation row (G1-23 to G1-37 and G1-32b, sixteen rows) reports killed; deleting the label branch reddens LB1 and LB2 (shown in the PR body from a sandbox run).
+- [ ] AC4 Must-PASS: all eight `Operator-only (category)` categories (two-line shape), the inline form (plain and bold), ordinary waiting labels (with and without a pre-filter-opening question), the four negation forms, each single-veto sentence (business, authorization, shared permission, closing-only permission, closing-extra), LP10/LP10b/LP11/LP12 and fixture A8i pass; LP11u and LP13 block.
+- [ ] AC5 `bash plugins/soleur/test/ralph-loop.test.sh` is green, including RL-B3a and RL-B3b on all four state files, the five reminder mutations, and `print_results <N>` with a floor.
 - [ ] AC6 `bun test plugins/soleur/test/components.test.ts`, `bash plugins/soleur/test/technical-ruling-gate.test.sh`, `bash plugins/soleur/test/cto-interface-selector.test.sh` and `bash plugins/soleur/test/boundary-prefix.test.sh` are green; `python3 scripts/lint-skill-body-budget.py --base origin/main` is green and `plugins/soleur/skills/one-shot/SKILL.md` is no larger than 51996 bytes.
 - [ ] AC7 Ratchets for the touched files are green: `bash scripts/guard-vacuity-floor.test.sh`; `shellcheck` on the hook, lib, suite, `plugins/soleur/hooks/stop-hook.sh` and `plugins/soleur/test/ralph-loop.test.sh`; `python3 scripts/lint-guard-contract.py` on this plan; `bash plugins/soleur/test/fixture-dir-operand-assert.test.sh`; `bash plugins/soleur/test/fixture-relative-assert.test.sh` (new fixture operands in the ralph suite can move its baseline counts); `bash .claude/hooks/hook-suite-dep-unresolved.test.sh`; `bash .claude/hooks/grep-q-pipe-guard.test.sh`; `bash scripts/lint-trap-tempfile-ownership.test.sh`; `bash .claude/hooks/pre-ask-technical-fork-gate.test.sh` (the pre-ask hook calls the same `tfc_self_check`, so an emptied label phrase also fails ITS ruling arm open: accepted coupling, stated in the ADR addendum); `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- [ ] AC8 `bash plugins/soleur/scripts/affected-tests.sh` exits 0 (rc 6 is not a pass).
+- [ ] AC8 `bash plugins/soleur/scripts/affected-tests.sh` exits 0 (rc 6 is not a pass). It does not select `pre-ask-technical-fork-gate.test.sh` or `ralph-loop.test.sh` from these edits: AC5 and AC7 run them explicitly and their pass lines go in the PR body under `## Measured`.
 - [ ] AC9 Section 8.1 of the reference carries the Blocked/Paused pre-check with its heading and pinned sentences byte-identical; the four pointers exist; `git diff --name-only origin/main...HEAD` lists neither `AGENTS.md` nor `AGENTS.rules.md` nor `ship/SKILL.md` nor `plan/SKILL.md`.
 - [ ] AC10 ADR-084 carries a 2026-10-26 addendum recording the rulings, the tripwire disposition, the channel and the B1 flip condition; a learning file matching `knowledge-base/project/learnings/*-a-label-escape-hid-a-hand-off*.md` exists; `git diff origin/main...HEAD -- plugins/soleur/skills | grep -cE '^[-+]description:'` prints 0.
 - [ ] AC11 `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` exits 0; every technical row carries a `Ruled by CTO agent` ruling.
@@ -532,7 +585,8 @@ brand, legal, spend or revenue surface.
 
 ## Dependencies & Risks
 
-- Recall: still cue-based; the paragraph above the label and words held back by the vetoes (`plan`, `date`, `merge`, ...) pass the hook. The CTO accepted this; the skill pre-check is the control and the ADR addendum states the next-miss rule.
+- Recall: first-Stop only (a label written after an `unkept-promise-hook.sh` block, or on a later Stop of a ralph chain, carries `stop_hook_active` true and is unjudged: the section 8.1 pre-check and the loop reminder are the only controls there, and the `unkept-promise-hook.sh` text that teaches `Blocked:` is unchanged); still cue-based; the paragraph above the label and words held back by the vetoes (`plan`, `date`, `merge`, ...) pass the hook. The CTO accepted this; the skill pre-check is the control and the ADR addendum states the next-miss rule.
+- Residuals stated in the ADR addendum (each pinned by a documenting row where one exists): the arm judges only a final sentence that BEGINS with the label (a label sentence split by a full stop, or any sentence after the label, is unjudged: LP12); a one-sentence `Operator-only (category):` prefix in the same paragraph releases it without any check that the category is true (CTO A3); a veto word, a near-synonym ("needs your decision", "sign-off"), a split sentence, a forged category, the `<stop>` escape or `SOLEUR_ACK_TECHNICAL_FORK=1` all avoid it. The arm is a once-per-turn nudge, not a barrier; the control is the section 8.1 pre-check, and a miss opens the other ADR-084 remedy, never a synonym cue (A2t).
 - The first prototype passed the incident for the wrong reason (the paragraph's "your call" kept the pre-filter open). LB2 and mutation G1-24 exist to keep that from recurring.
 - One-shot SKILL.md has 4 bytes of headroom under its ceiling; the pointer edit must not grow it past 51996 bytes.
 - The tripwire disposition rests on the CTO's reading of the recorded misses; the addendum cites an artifact for each (the 2026-10-12 and 2026-10-19 hook changes and their fixtures, this incident) and states that the loop-inertness condition is the addendum's own known-limitation note rather than a separately recorded incident.
