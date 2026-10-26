@@ -371,8 +371,8 @@ a status-code/ordering fix.
 ruled 2026-10-26; follow-ups (pill deletion split, test rewrite), a second round after plan review (R1-R4: 23h replay age
 gate, lookup before the gates, 23505 re-lookup cut, stale op kept) and a third round after deepen-plan (S1-S4: expired
 approvals archived, `send_in_progress` for 23505, no-dispatch pending rows ungated, hash check before the gates) ruled the
-same day. See `## Decision Rulings`. No Product/UX
-gate: no UI-surface file is created or edited (the hook is not under `components/`; the pill file is deliberately left
+same day. See `## Decision Rulings`. Product/UX
+review is not required because no UI-surface file is created or edited (the hook is not under `components/`; the pill file is deliberately left
 untouched and tracked in #11212); the only visible change is an inline error string rendered by existing error UI.
 
 **UI-surface determination:** none of `## Files to Edit` / `## Files to Create` matches the shared UI-surface glob superset
