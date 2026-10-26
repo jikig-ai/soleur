@@ -3,7 +3,9 @@
 // Extracted so it can be unit-tested without importing the adapter (which
 // pulls in @modelcontextprotocol/sdk and cannot load in a bare test env).
 
-const ANSI_ESCAPE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+// CSI sequences, private-mode ones (`ESC[?25l`) included. THE one definition: the adapter,
+// the save gate and the REPL surface import stripAnsi from here.
+const ANSI_ESCAPE = /\x1b\[[0-9;?]*[a-zA-Z]/g;
 
 // REPL responses are bounded in practice. Cap before classification so a
 // pathological multi-MB response can't spin the `^`-anchored multiline

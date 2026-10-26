@@ -21,17 +21,17 @@ export const LIVE_TOOL_NAMES = Object.freeze([
 // Every hint starts with the removed tool's own name and names a tool that exists.
 const REMOVED_TOOL_HINTS = Object.freeze({
   batch_get:
-    "batch_get was removed (the engine has no node-dump tool). Read nodes with Get(...) and Print(...) inside batch_design (a batch_design call also auto-saves), or call get_editor_state for the list of top-level nodes.",
+    "batch_get was removed (the engine has no node-dump tool). Read nodes with Get(...) and Print(...) inside batch_design, for example Get(id,(n,c)=>Print(c.bounds.width)) for a node's measured size; the visitor's second argument also carries the node's layout problems as c.problems. A batch_design call also auto-saves. get_editor_state lists the top-level nodes.",
   snapshot_layout:
-    "snapshot_layout was removed. Layout problems arrive as an `## issues detected:` block on batch_design replies; fix them with Update(...) inside batch_design.",
+    "snapshot_layout was removed. Layout problems arrive as an `## issues detected:` block on batch_design replies; fix them with Update(...) inside batch_design. To measure a node, Print its bounds: Get(id,(n,c)=>Print(c.bounds.width)); the layout problems of a node are in c.problems (grammar: read_skill({ path: \"execute.md\" })).",
   get_guidelines:
     'get_guidelines was removed. Read design guidance with read_skill({ path: "guide/<name>.md" }); call read_skill() with no path for the index.',
   get_style_guide:
-    'get_style_guide was removed. read_skill() lists the style archetypes; read one with read_skill({ path: "guide/<name>.md" }), or continue with brand tokens.',
+    'get_style_guide was removed. read_skill() lists the engine guides by name, but style archetypes cannot be loaded headless: continue with brand tokens, or read a design guide page with read_skill({ path: "guide/<name>.md" }).',
   get_style_guide_tags:
-    'get_style_guide_tags was removed. read_skill() lists the style archetypes; read one with read_skill({ path: "guide/<name>.md" }), or continue with brand tokens.',
+    'get_style_guide_tags was removed. read_skill() lists the engine guides by name, but style archetypes cannot be loaded headless: continue with brand tokens, or read a design guide page with read_skill({ path: "guide/<name>.md" }).',
   find_empty_space_on_canvas:
-    'find_empty_space_on_canvas was removed. Call FindEmptySpace(...) inside batch_design (grammar: read_skill({ path: "execute.md" })).',
+    'find_empty_space_on_canvas was removed. Call Print(FindEmptySpace(...)) inside batch_design to read the free position (grammar: read_skill({ path: "execute.md" })).',
   set_variables:
     'set_variables was removed. Call SetVariables(...) inside batch_design (grammar: read_skill({ path: "execute.md" })).',
   search_all_unique_properties:

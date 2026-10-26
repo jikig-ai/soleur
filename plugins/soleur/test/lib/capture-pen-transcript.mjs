@@ -31,15 +31,15 @@ import {
   buildVariablesCommand,
   formatReplCommand,
 } from "../../skills/pencil-setup/scripts/pencil-repl-surface.mjs";
+import { stripAnsi } from "../../skills/pencil-setup/scripts/pencil-response-classify.mjs";
 import { createNormalizer, collapseReply, findLeaks, gitleaksFindings, renderTranscript, replyLines } from "./scrub-transcript.mjs";
 
-const ANSI = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const NONCE = "0123456789abcdef0123456789abcdef";
 
 // A command may depend on what earlier replies printed (a node id).
 const firstNodeId = (history) => {
   for (const h of history) {
-    const m = /": "([A-Za-z0-9_-]{3,})" \(= /.exec(h.replace(ANSI, ""));
+    const m = /": "([A-Za-z0-9_-]{3,})" \(= /.exec(stripAnsi(h));
     if (m) return m[1];
   }
   throw new Error("no node id printed yet");
@@ -118,7 +118,7 @@ function runSession(penBin, key, home, sess) {
       const t0 = Date.now();
       for (;;) {
         if (exited !== null) return false;
-        if (out.replace(ANSI, "").endsWith(REPL_PROMPT)) {
+        if (stripAnsi(out).endsWith(REPL_PROMPT)) {
           const len = out.length;
           await sleep(120);
           if (out.length === len) {

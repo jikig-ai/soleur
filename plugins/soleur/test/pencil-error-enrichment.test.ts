@@ -93,9 +93,9 @@ describe("enrichErrorMessage — removed tools", () => {
     ["snapshot_layout", /## issues detected:.*batch_design/s],
     ["get_guidelines", /read_skill\(\{ path: "guide\/<name>\.md" \}\)/],
     ["set_variables", /SetVariables\(.*batch_design/s],
-    ["find_empty_space_on_canvas", /FindEmptySpace\(.*batch_design/s],
-    ["get_style_guide", /read_skill\(\).*style archetypes/s],
-    ["get_style_guide_tags", /read_skill\(\).*style archetypes/s],
+    ["find_empty_space_on_canvas", /Print\(FindEmptySpace\(.*\)\).*batch_design/s],
+    ["get_style_guide", /read_skill\(\).*cannot be loaded headless.*brand tokens/s],
+    ["get_style_guide_tags", /read_skill\(\).*cannot be loaded headless.*brand tokens/s],
     ["search_all_unique_properties", /Get\(.*Update\(.*batch_design/s],
     ["replace_all_matching_properties", /Get\(.*Update\(.*batch_design/s],
   ];
@@ -110,6 +110,24 @@ describe("enrichErrorMessage — removed tools", () => {
       expect(out).not.toMatch(/category|include_schema|get_guidelines\(\) with no arguments/);
     });
   }
+
+  test("the measuring hints name the visitor forms the layout audit uses: c.bounds and c.problems", () => {
+    for (const tool of ["batch_get", "snapshot_layout"]) {
+      const hint = removedToolHint(tool) as string;
+      expect(hint).toContain("Get(id,(n,c)=>Print(c.bounds.width))");
+      expect(hint).toContain("c.problems");
+    }
+  });
+
+  test("the style-guide hints do not promise a loadable archetype (the names are listed, they cannot be loaded headless)", () => {
+    for (const tool of ["get_style_guide", "get_style_guide_tags"]) {
+      const hint = removedToolHint(tool) as string;
+      expect(hint).not.toMatch(/read one with|lists the style archetypes/);
+      expect(hint).toMatch(/by name, but style archetypes cannot be loaded headless/);
+      expect(hint).toMatch(/brand tokens/);
+      expect(hint).toMatch(/guide\/<name>\.md/);
+    }
+  });
 
   test("every removed tool has a hint and every hint names a tool that exists in the new surface", () => {
     for (const tool of REMOVED_TOOL_NAMES) {

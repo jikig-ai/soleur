@@ -1,7 +1,7 @@
 // pencil-repl-surface.mjs — the REPL contract between the adapter and
 // @pen.dev/cli (`pen interactive --out <f> [--in <f>]`, measured on 0.3.13), as
-// pure functions so bun tests need no MCP SDK. The only import is node:crypto
-// (the count nonce).
+// pure functions so bun tests need no MCP SDK. Imports: node:crypto (the count nonce)
+// and stripAnsi from pencil-response-classify.mjs (the one ANSI definition).
 //
 // Why this exists (#11143): the adapter once sent `batch_design({ operations })`
 // while the engine took `{ input }`; the engine dropped the unknown key and
@@ -32,7 +32,10 @@
 //   REPL_SURFACE                 frozen table: tool -> allowed keys (execute, get_app_state, read_skill, save)
 //   REPL_PROMPT / REPL_PROMPT_RAW   `pen > ` after ANSI strip / the raw coloured bytes
 //   BATCH_DESIGN_PREAMBLE        the `var I=Insert,...;` alias line
-//   NODE_FLOOR, compareVersions(a,b), nodeVersionOk(v)   Node 22.19.0 numeric floor
+//   NODE_FLOOR, compareVersions(a,b), nodeVersionOk(v)   Node 22.19.0 numeric floor. The adapter
+//                                cannot import this (its own gate runs before any import), so it
+//                                carries an inline copy; a parity test pins the copies together
+//                                with check_deps.sh's three NODE_FLOOR_* variables.
 //   formatReplCommand(tool, params)   the ONE formatter (refuses unknown tool/key)
 //   buildBatchDesignCommand(operations)          execute({ input: "<preamble>\n<ops>" })
 //   buildScreenshotCommand(nodeId)               execute({ input: 'TakeScreenshot(["id"])' })
@@ -40,7 +43,8 @@
 //   buildVariablesCommand()                      execute Print(GetVariables())
 //   buildEditorStateCommand()                    get_app_state()
 //   buildReadSkillCommand(path?)                 read_skill(...)
-//   buildSaveCommand()                           save()   (the adapter's single emission site calls this)
+//   buildSaveCommand()                           save()   (tests and the probe; the adapter's one emission
+//                                                site is formatReplCommand("save", {}) inside guardedSave)
 //   newCountNonce(), buildCountSnippet(nonce), buildCountCommand(nonce)   sentinel memory probe
 //   countSnippetNonce(input)     recognises the snippet (the stub uses it)
 //   parseCountReply(text, nonce) -> integer | null   exactly one `TOPLEVEL_COUNT:<nonce>:<n>` line
@@ -51,6 +55,7 @@
 //   planSpawn({outFile, initialInFile, resumeInFile, probe})   `--in` decision
 
 import { randomBytes } from "node:crypto";
+import { stripAnsi } from "./pencil-response-classify.mjs";
 
 export class ReplContractError extends Error {
   constructor(message) {
@@ -79,7 +84,8 @@ export const BATCH_DESIGN_PREAMBLE =
   "var I=Insert,U=Update,C=Copy,R=Replace,M=Move,D=Delete,G=Generate;";
 
 // @pen.dev/cli requires Node >= 22.19.0 (engines.node). Numeric compare:
-// a string compare orders 22.9.0 after 22.19.0.
+// a string compare orders 22.9.0 after 22.19.0. The adapter's inline gate and
+// check_deps.sh repeat these three numbers (parity test: pencil-repl-surface.test.ts).
 export const NODE_FLOOR = Object.freeze([22, 19, 0]);
 
 export function compareVersions(a, b) {
@@ -295,14 +301,12 @@ export function countSnippetNonce(input) {
   return m ? m[1] : null;
 }
 
-const ANSI = /\x1b\[[0-9;]*[a-zA-Z]/g;
-
 // The top-level node count carried by a reply to the count snippet, or null.
 // Exactly one line `TOPLEVEL_COUNT:<this nonce>:<digits>` on an `OK` reply;
 // zero lines, two lines, another nonce or an error reply all give null.
 export function parseCountReply(text, nonce) {
   if (typeof nonce !== "string" || !NONCE_RE.test(nonce)) return null;
-  const lines = String(text ?? "").replace(ANSI, "").split(/\r?\n/);
+  const lines = stripAnsi(String(text ?? "")).split(/\r?\n/);
   const first = lines.find((l) => l.trim() !== "");
   if (first === undefined || first.trim() !== "OK") return null;
   const re = new RegExp(`^TOPLEVEL_COUNT:${nonce}:(\\d{1,9})$`);

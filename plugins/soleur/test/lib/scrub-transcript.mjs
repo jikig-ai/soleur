@@ -22,12 +22,12 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { stripAnsi } from "../../skills/pencil-setup/scripts/pencil-response-classify.mjs";
 import { REPL_PROMPT, redactionForms } from "../../skills/pencil-setup/scripts/pencil-repl-surface.mjs";
 
 export const SYNTHETIC_UUID = "00000000-0000-4000-8000-000000000000";
 const UUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
-const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const KEY_SHAPED_RE = /[A-Za-z0-9+/_=-]{32,}/g;
 const SKILL_MARKER = "<SKILL-TEXT>";
 
@@ -44,7 +44,7 @@ function pathPairs(paths) {
 export function scrubTranscript(text, opts = {}) {
   const { secrets = [], paths = [], normalize = false } = opts;
   let out = String(text ?? "");
-  if (normalize) out = out.replace(ANSI_RE, "");
+  if (normalize) out = stripAnsi(out);
 
   for (const secret of secrets) {
     for (const form of redactionForms(secret)) out = out.split(form).join("<REDACTED>");
@@ -76,7 +76,7 @@ export function scrubTranscript(text, opts = {}) {
 // get_app_state lists them as `<id>` (<type>): <name> [..], one entry after another.
 export function harvestNodeIds(text) {
   const ids = [];
-  const plain = String(text ?? "").replace(ANSI_RE, "");
+  const plain = stripAnsi(String(text ?? ""));
   const found = [];
   for (const m of plain.matchAll(/": "([A-Za-z0-9_-]{3,})"(?: \(= [A-Za-z0-9_$]+\))?$/gm)) found.push([m.index, m[1]]);
   for (const m of plain.matchAll(/(?:^- Top-level nodes: |, )`([A-Za-z0-9_-]{3,})` \(\w+\)/gm)) found.push([m.index, m[1]]);
@@ -114,7 +114,7 @@ export function createNormalizer(opts = {}) {
 // Raw stream text -> transcript lines: ANSI stripped, the trailing prompt dropped
 // from stdout, one trailing newline dropped.
 export function replyLines(text, { stripPrompt }) {
-  let t = String(text ?? "").replace(ANSI_RE, "");
+  let t = stripAnsi(String(text ?? ""));
   if (stripPrompt && t.endsWith(REPL_PROMPT)) t = t.slice(0, -REPL_PROMPT.length);
   if (t === "") return [];
   const lines = t.split("\n");

@@ -1,29 +1,11 @@
-// pencil-save-gate.mjs — pure decision function for auto-save after a
-// pencil REPL mutation. Extracted so it can be unit-tested without
-// importing the adapter.
-//
-// Why this exists: the adapter previously called save() unconditionally
-// after every mutating op (batch_design, open_document,
-// etc.). When a mutation errored (auth failure, invalid property), the
-// follow-up save() still ran and wrote a 0-byte or stale .pen file to
-// disk. The caller saw a successful save but no real content — the
-// "silent drop" that preceded #2630's fabricated "headless stub"
-// narrative.
-
-/**
- * Decide whether to SKIP the post-mutation save() call.
- *
- * Returns true only when the last classification explicitly reports
- * isError === truthy. Missing/null/undefined classifications allow
- * the save (preserves existing behavior for first-call and for callers
- * that don't track classifications).
- */
-export function shouldSkipSave(lastClassification) {
-  if (!lastClassification || typeof lastClassification !== "object") {
-    return false;
-  }
-  return Boolean(lastClassification.isError);
-}
+// pencil-save-gate.mjs — the pure decision logic behind every save the adapter sends
+// (extracted so it can be unit-tested without the MCP SDK): the empty-overwrite sentinel
+// (#11143), the stale-file guard (#11168), the load-fidelity check, the refusal and
+// not-persisted message builders, and the dependency-injected `runGuardedSave` that
+// orders them. The adapter owns I/O (reads, the REPL, the baseline); this module owns
+// every verdict and every user-visible refusal text, so the marker contract (first line
+// `REFUSED save: [reason=<code>] <file> ...` / `NOT PERSISTED: [reason=<code>] <file> ...`)
+// lives in one place.
 
 // --- Empty-overwrite sentinel (#11143) and stale-file guard (#11168) --------
 //
@@ -43,6 +25,7 @@ export function shouldSkipSave(lastClassification) {
 
 import { createHash } from "node:crypto";
 import { parseCountReply } from "./pencil-repl-surface.mjs";
+import { stripAnsi } from "./pencil-response-classify.mjs";
 
 /** The file exists with content, but it is not a document the engine can load back. */
 export const DISK_UNRECOGNIZED = "unrecognized";
@@ -118,32 +101,46 @@ export function decideSave({ diskCount, memoryCount }) {
 }
 
 const NEVER_BYPASS = "Do not delete or recreate the file to bypass this check.";
+// The repo's open guard refuses an untracked path; the recovery step names the way through it.
+const UNTRACKED_HINT = "If the path is untracked, commit an empty placeholder first (the repo's open guard).";
 
 /**
- * Refusal text. `stale` selects the #11168 family (a decideStale code; `changed`
- * is an alias of `stale`); without it the #11143 texts apply, unchanged.
+ * Refusal text. Its FIRST line is the marker `REFUSED save: [reason=<code>] <file> was
+ * not modified.` (codes: stale, unknown-baseline, refusal-pending, empty, unrecognized).
+ * `stale` selects the #11168 family (a decideStale code); without it the #11143 texts
+ * apply (`unrecognized` when the disk document is not a .pen, else `empty`, which also
+ * covers an unreadable in-memory count). `restart` (refusal-pending only) says why the
+ * engine was respawned while the refusal was armed: "restart" (it was already armed),
+ * "external-change" or "file-missing" (the respawn found the file changed or gone).
  */
-export function refusalMessage({ file, source, diskCount, memoryCount, memoryReason, diskReason, stale, cause, detail, restarted }) {
-  const lines = [`REFUSED save: ${file} was not modified.`];
+export function refusalMessage({ file, source, diskCount, memoryCount, memoryReason, stale, cause, detail, restart }) {
+  const code = stale ? stale : diskCount === DISK_UNRECOGNIZED ? "unrecognized" : "empty";
+  const lines = [`REFUSED save: [reason=${code}] ${file} was not modified.`];
   if (stale) {
-    const code = stale === "changed" ? "stale" : stale;
     if (code === "stale") {
       lines.push(
         "It changed on disk since this session loaded or last saved it (another session, git, or an editor such as Pencil Desktop). Edits made since are not persisted, and re-opening discards them.",
-        `Next step: stop editing, call open_document on ${file}, then replay the refused operations in order. Keep one writer per file (there is no lock). ${NEVER_BYPASS} If open_document itself fails on the changed file, stop: do not retry or recreate it, and tell the user the file was changed by another tool.`
-      );
-    } else if (code === "missing") {
-      lines.push(
-        "The file no longer exists on disk: it was removed or renamed since this session loaded or last saved it. Edits made since are not persisted.",
-        `Next step: tell the user the file was removed by another tool, then call open_document on ${file} (this starts a new empty document, so replay the refused operations in order) or open_document a different new path. Keep one writer per file. ${NEVER_BYPASS}`
+        `Next step: stop editing, call open_document on ${file}, then replay the refused operations in order. Keep one writer per file (there is no lock). ${UNTRACKED_HINT} ${NEVER_BYPASS} If open_document itself fails on the changed file, stop: do not retry or recreate it, and tell the user the file was changed by another tool.`
       );
     } else if (code === "refusal-pending") {
-      lines.push(
-        restarted
-          ? "An earlier save was refused because the file changed on disk, and the session restarted since: the earlier edits were discarded when the engine reloaded the file. Edits made since are not persisted."
-          : "An earlier save was refused because the file changed on disk, and no open_document has succeeded since. Edits made since are not persisted, and re-opening discards them.",
-        `Next step: call open_document on ${file}, then replay the refused operations in order. Keep one writer per file (there is no lock). ${NEVER_BYPASS} If open_document itself fails on the changed file, stop: do not retry or recreate it, and tell the user the file was changed by another tool.`
-      );
+      if (restart === "file-missing") {
+        lines.push(
+          "The session restarted (a crash or a timeout) and the file no longer exists on disk: the earlier edits lived in the engine that died and are gone. Edits made since are not persisted.",
+          `Next step: tell the user the file was removed by another tool, then call open_document on ${file} (a new empty document, since the file is gone) or open_document a different .pen path, and recreate the edits from your context. ${UNTRACKED_HINT} Keep one writer per file. ${NEVER_BYPASS}`
+        );
+      } else if (restart === "external-change") {
+        lines.push(
+          "The session restarted (a crash or a timeout) and the engine reloaded NEW content: the file changed on disk since this session last loaded or saved it, so the earlier unsaved edits were lost with the old engine and any edit made since sits on a picture of the file this session never saw. Nothing on disk was overwritten.",
+          `Next step: call open_document on ${file}, then replay the refused operations in order. Keep one writer per file (there is no lock). ${UNTRACKED_HINT} ${NEVER_BYPASS} If open_document itself fails on the changed file, stop: do not retry or recreate it, and tell the user the file was changed by another tool.`
+        );
+      } else {
+        lines.push(
+          restart
+            ? "An earlier save was refused because the file changed on disk, and the session restarted since: the earlier edits were discarded when the engine reloaded the file. Edits made since are not persisted."
+            : "An earlier save was refused because the file changed on disk, and no open_document has succeeded since. Edits made since are not persisted, and re-opening discards them.",
+          `Next step: call open_document on ${file}, then replay the refused operations in order. Keep one writer per file (there is no lock). ${UNTRACKED_HINT} ${NEVER_BYPASS} If open_document itself fails on the changed file, stop: do not retry or recreate it, and tell the user the file was changed by another tool.`
+        );
+      }
     } else {
       // unknown-baseline: why the session cannot say what is on disk
       const why =
@@ -156,12 +153,12 @@ export function refusalMessage({ file, source, diskCount, memoryCount, memoryRea
               : "This session has no record of what it loaded from the file, so it cannot tell whether the file changed.";
       lines.push(
         why,
-        `Next step: call open_document on ${file} (it reloads what is on disk and re-baselines), then replay the refused operations in order. Keep one writer per file. ${NEVER_BYPASS} If open_document itself fails, stop and tell the user.`
+        `Next step: call open_document on ${file} (it reloads what is on disk and re-baselines), then replay the refused operations in order. Keep one writer per file. ${UNTRACKED_HINT} ${NEVER_BYPASS} If open_document itself fails, stop and tell the user.`
       );
     }
   } else if (diskCount === DISK_UNRECOGNIZED) {
     lines.push(
-      `It exists but is not a recognizable .pen document${diskReason ? ` (${diskReason})` : ""}: unparseable JSON, git conflict markers, or not a Pencil file. The engine would load it as an empty document and the save would destroy content you may still be able to recover.`,
+      "It exists but is not a recognizable .pen document: unparseable JSON, git conflict markers, or not a Pencil file. The engine would load it as an empty document and the save would destroy content you may still be able to recover.",
       `Next step: open_document a new file path and continue the design there. ${NEVER_BYPASS}`
     );
   } else if (memoryCount === null || memoryCount === undefined) {
@@ -183,6 +180,76 @@ export function refusalMessage({ file, source, diskCount, memoryCount, memoryRea
   return lines.join("\n");
 }
 
+/**
+ * First line of a not-persisted outcome that is NOT a refusal:
+ * `NOT PERSISTED: [reason=<code>] <file> ...`, codes save-failed (a definite
+ * `Save failed:` reply), unconfirmed (an ambiguous, timed-out or unmatched reply) and
+ * save-incomplete (the edit applied but the save step threw or did not finish).
+ * `detail` is already redacted and capped by the caller.
+ */
+export function notPersistedMessage({ code, file, detail }) {
+  const why = detail ? ` (${detail})` : "";
+  if (code === "save-failed") {
+    return [
+      `NOT PERSISTED: [reason=save-failed] ${file} was not written: the engine reported a failed save${why}.`,
+      "The edit is applied in memory only. Fix the cause (permissions, disk space, path) and call save again. Do NOT call open_document: it discards the edit.",
+    ].join("\n");
+  }
+  if (code === "unconfirmed") {
+    return [
+      `NOT PERSISTED: [reason=unconfirmed] ${file} may or may not have been written: the engine's reply was not \`Saved <file>\`${why}.`,
+      `Next step: call open_document on ${file} before saving again (it reloads what is on disk and re-baselines), then replay the edit. ${UNTRACKED_HINT}`,
+    ].join("\n");
+  }
+  if (code === "save-incomplete") {
+    return [
+      `NOT PERSISTED: [reason=save-incomplete] ${file}: the edit was applied in memory but the save did not complete${why}; it is not persisted.`,
+      "Next step: call get_editor_state to see whether the document still holds the edit, then call save again; if the engine restarted, replay the edit.",
+    ].join("\n");
+  }
+  throw new TypeError(`notPersistedMessage: unknown code '${code}'`);
+}
+
+/** The note that prefixes the result of a save that recreated a file removed behind a live session. */
+export function recreatedNote(file) {
+  return `NOTE: ${file} had been removed from disk (a branch switch, a move or a delete); this save recreated it from the session's copy - tell the user and check that the file belongs at that path`;
+}
+
+/**
+ * Load fidelity: at load nothing has been edited, so fewer top-level nodes in memory than
+ * in the file the engine loaded means it dropped content, and the next save would write
+ * the smaller set over the customer's file. Returns the error text, or null when the load
+ * is faithful (or there was nothing on disk to compare). `diskCount` is
+ * diskTopLevelCount() of the bytes read BEFORE the engine started; `memoryCount` is the
+ * engine's count (null = unreadable). A count cannot see nested nodes that were dropped.
+ */
+export function loadFidelityFailure({ file, diskCount, memoryCount }) {
+  if (diskCount === DISK_UNRECOGNIZED) {
+    return `${file} exists but is not a recognizable .pen document (the engine loads such a file as empty); it was not modified`;
+  }
+  if (typeof diskCount !== "number" || diskCount <= 0) return null;
+  if (typeof memoryCount === "number" && memoryCount >= diskCount) return null;
+  const loaded = memoryCount === null || memoryCount === undefined ? "unreadable" : memoryCount === 0 ? "empty" : String(memoryCount);
+  return `${file} holds ${diskCount} top-level node(s) on disk but loaded ${loaded}; it was not modified`;
+}
+
+/**
+ * A definite failed save: the reply has a `Save failed:` line, no `Saved` line, and is not
+ * the confirmation (callers ask isConfirmed first). Empty, timed-out, wrong-path and
+ * otherwise unmatched replies are not definite.
+ */
+export function isDefiniteSaveFailure(raw) {
+  if (typeof raw !== "string") return false;
+  const lines = stripAnsi(raw).split(/\r?\n/);
+  return lines.some((l) => /^Save failed:/.test(l)) && !lines.some((l) => /^Saved\b/.test(l));
+}
+
+/** The `Save failed:` line of a reply (ANSI stripped, trimmed), else "". */
+export function saveFailureLine(raw) {
+  const line = stripAnsi(String(raw ?? "")).split(/\r?\n/).find((l) => /^Save failed:/.test(l));
+  return line ? line.trim() : "";
+}
+
 // --- The stale-file guard (#11168) -------------------------------------------
 //
 // The session keeps ONE baseline of the file it is bound to, as a tagged value:
@@ -192,11 +259,24 @@ export function refusalMessage({ file, source, diskCount, memoryCount, memoryRea
 //   { tag: "unknown", cause, detail? }       a capture, a read-back or a save reply failed
 // A present blank file is a `hash` (of the empty bytes), not `missing`.
 
+// Recursive sorted-key JSON: object key order carries no meaning in a .pen document, so a
+// formatter that reorders keys must not make every save refuse. Arrays keep their order.
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 /**
- * SHA-256 (hex) of the canonical JSON of the document: BOM stripped,
- * JSON.stringify(JSON.parse(text)), so line endings, indentation and a formatter
- * cannot make every save refuse. Text that does not parse is hashed as the raw
- * bytes (any change to it is a change).
+ * SHA-256 (hex) of the canonical JSON of the document: BOM stripped, keys sorted
+ * recursively, so line endings, indentation, key order and a formatter cannot make every
+ * save refuse. Text that does not parse is hashed as the raw bytes (any change to it is a
+ * change).
  */
 export function fingerprintBytes(bytes) {
   const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(String(bytes ?? ""), "utf8");
@@ -204,7 +284,7 @@ export function fingerprintBytes(bytes) {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   let material = buf;
   try {
-    material = Buffer.from(JSON.stringify(JSON.parse(text)), "utf8");
+    material = Buffer.from(canonicalJson(JSON.parse(text)), "utf8");
   } catch {
     // not a JSON document: the raw bytes are the fingerprint
   }
@@ -223,10 +303,13 @@ export function hash8(hash) {
 }
 
 /**
- * The stale check: a pure function of the stored baseline, the file as it is now
- * and the refusalPending flag. Only an exact `missing`/`hash` match allows.
+ * The stale check: a pure function of the stored baseline, the file as it is now and the
+ * refusalPending flag. Only an exact `missing`/`hash` match allows, plus ONE amendment: a
+ * `hash` baseline whose file is now missing allows with `recreated: true` (a live engine's
+ * in-memory document is then the only copy of the session's saved edits and nothing on
+ * disk can be overwritten; the respawn case is refused by the adapter before it gets here).
  *
- * @returns {{ allow: true } | { allow: false, code: "stale"|"missing"|"unknown-baseline"|"refusal-pending",
+ * @returns {{ allow: true, recreated?: true } | { allow: false, code: "stale"|"unknown-baseline"|"refusal-pending",
  *            arm: boolean, cause?: string, detail?: string, baselineHash?: string, diskHash?: string, reason: string }}
  */
 export function decideStale({ baseline, current, refusalPending }) {
@@ -254,15 +337,15 @@ export function decideStale({ baseline, current, refusalPending }) {
       : refuse("stale", "the file appeared on disk after this session started on a missing path", { arm: true });
   }
   // baseline.tag === "hash"
-  if (current.tag === "missing") return refuse("missing", "the file was removed from disk behind the session", { arm: true });
-  if (current.tag === "hash" && current.hash === baseline.hash) return { allow: true };
+  if (current.tag === "missing") return { allow: true, recreated: true };
+  if (current.hash === baseline.hash) return { allow: true };
   return refuse("stale", "the file changed on disk since this session loaded or last saved it", { arm: true });
 }
 
 /** The path of exactly one `Saved <path>` line (ANSI stripped, trimmed), else null. */
 export function savedReplyPath(raw) {
   if (typeof raw !== "string") return null;
-  const text = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").trim();
+  const text = stripAnsi(raw).trim();
   const m = /^Saved ([^\n]+)$/.exec(text);
   return m ? m[1].trim() : null;
 }
@@ -288,12 +371,18 @@ function requireDeps(deps, names) {
  *   isRefusalPending() the refusalPending flag
  *   send()            emits the engine's save and returns its reply (the adapter's one emission site)
  *   isConfirmed(raw)  true only for `Saved <this file>`
+ *   isDefiniteFailure(raw)  optional (default false): true for a definite `Save failed:` reply
  *   readAfterSave()   bytes after a confirmed save; retried 3 times
- *   adoptBaseline(s)  stores a new baseline state (called once per save, after `send`)
- *   wasRestarted()    optional: true when the engine was respawned while a refusal was pending (wording only)
+ *   adoptBaseline(s)  stores a new baseline state (called once per save, after `send`, except
+ *                     on a definite failure, which keeps the previous baseline)
+ *   wasRestarted()    optional: why the engine was respawned while a refusal was armed
+ *                     (false | "restart" | "external-change" | "file-missing"; wording only)
  *
  * Order: readDisk, probeMemory (only when the file holds nodes), decideSave
  * (empty / unrecognized), readFresh, decideStale, send, readAfterSave, adoptBaseline.
+ * Results: `refused` (never sent), `failed` (definite `Save failed:`, baseline kept),
+ * `unconfirmed` (baseline now unknown), `saved`. `recreated: true` marks a decision that
+ * allowed a save over a file removed behind a live session.
  */
 export async function runGuardedSave(deps) {
   requireDeps(deps, [
@@ -311,23 +400,18 @@ export async function runGuardedSave(deps) {
   const retryDelayMs = deps.retryDelayMs ?? 100;
 
   let diskCount;
-  let diskReason;
-  let diskErrCode;
-  let diskBytes;
   try {
-    diskBytes = await readDisk();
-    diskCount = diskTopLevelCount(diskBytes);
+    diskCount = diskTopLevelCount(await readDisk());
   } catch (err) {
-    diskReason = String(err?.message ?? err);
-    diskErrCode = err?.code;
+    const reason = String(err?.message ?? err);
     return {
       saved: false,
       refused: true,
       code: "unknown-baseline",
       cause: "capture-failed",
-      detail: diskErrCode,
-      reason: `the file could not be read: ${diskReason}`,
-      message: refusalMessage({ file, source, stale: "unknown-baseline", cause: "capture-failed", detail: diskReason }),
+      detail: err?.code,
+      reason: `the file could not be read: ${reason}`,
+      message: refusalMessage({ file, source, stale: "unknown-baseline", cause: "capture-failed", detail: reason }),
     };
   }
 
@@ -349,7 +433,7 @@ export async function runGuardedSave(deps) {
       refused: true,
       code: diskCount === DISK_UNRECOGNIZED ? "unrecognized" : "empty",
       reason: decision.reason,
-      message: refusalMessage({ file, source, diskCount, memoryCount, memoryReason, diskReason }),
+      message: refusalMessage({ file, source, diskCount, memoryCount, memoryReason }),
     };
   }
 
@@ -378,15 +462,23 @@ export async function runGuardedSave(deps) {
         stale: stale.code,
         cause: stale.cause,
         detail: stale.detail,
-        restarted: typeof deps.wasRestarted === "function" ? Boolean(deps.wasRestarted()) : false,
+        restart: typeof deps.wasRestarted === "function" ? deps.wasRestarted() : false,
       }),
     };
   }
+  const recreated = stale.recreated === true;
+  const baselineHash = getBaseline()?.tag === "hash" ? getBaseline().hash : undefined;
 
   const raw = await send();
   if (!isConfirmed(raw)) {
+    if (typeof deps.isDefiniteFailure === "function" && deps.isDefiniteFailure(raw)) {
+      // A definite failure wrote nothing the session cannot detect: the previous baseline
+      // stays, so a retry after the cause is fixed is not blocked (a partial write shows up
+      // as a changed hash and refuses as stale, the safe direction).
+      return { saved: false, refused: false, failed: true, recreated, baselineHash, raw };
+    }
     adoptBaseline({ tag: "unknown", cause: "unconfirmed-save" });
-    return { saved: false, refused: false, unconfirmed: true, raw };
+    return { saved: false, refused: false, unconfirmed: true, recreated, baselineHash, raw };
   }
   let after = null;
   let lastErr = null;
@@ -410,11 +502,13 @@ export async function runGuardedSave(deps) {
       saved: true,
       refused: false,
       confirmed: true,
+      recreated,
+      baselineHash,
       raw,
       detail: String(lastErr?.code ?? lastErr?.message ?? lastErr),
       warning: `The save was confirmed, but the file could not be read back (${String(lastErr?.code ?? lastErr?.message ?? lastErr)}); the next save is refused until open_document is called on it.`,
     };
   }
   adoptBaseline(after);
-  return { saved: true, refused: false, confirmed: true, raw };
+  return { saved: true, refused: false, confirmed: true, recreated, baselineHash, raw };
 }

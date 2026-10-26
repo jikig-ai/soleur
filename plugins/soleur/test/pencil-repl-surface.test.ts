@@ -1,4 +1,7 @@
 import { describe, test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { stripAnsi } from "../skills/pencil-setup/scripts/pencil-response-classify.mjs";
 import {
   ReplContractError,
   REPL_SURFACE,
@@ -50,7 +53,9 @@ const EXPECTED_SURFACE: Record<string, string[]> = {
   save: [],
 };
 
-const REMOVED_NAMES = [
+// Names that are NOT in the engine's REPL surface (the adapter's live and removed tool
+// names among them): formatReplCommand must refuse every one as `Unknown tool:`.
+const NOT_REPL_TOOLS = [
   "batch_design",
   "batch_get",
   "snapshot_layout",
@@ -96,7 +101,7 @@ describe("REPL_SURFACE table", () => {
     expect(REPL_PROMPT).toBe("pen > ");
     // measured on piped stdout: the engine colours the prompt even without a TTY
     expect(REPL_PROMPT_RAW).toBe("\x1b[36mpen\x1b[39m \x1b[2m>\x1b[22m ");
-    expect(REPL_PROMPT_RAW.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")).toBe(REPL_PROMPT);
+    expect(stripAnsi(REPL_PROMPT_RAW)).toBe(REPL_PROMPT);
   });
 });
 
@@ -120,7 +125,7 @@ describe("formatReplCommand", () => {
   });
 
   test("a tool the engine does not have (or the adapter retired) throws 'Unknown tool:'", () => {
-    for (const tool of [...REMOVED_NAMES, "nope", "get_style", "browser"]) {
+    for (const tool of [...NOT_REPL_TOOLS, "nope", "get_style", "browser"]) {
       let err: any;
       try {
         formatReplCommand(tool, { a: 1 });
@@ -467,6 +472,31 @@ describe("redaction", () => {
 describe("Node floor 22.19.0", () => {
   test("the floor is [22, 19, 0]", () => {
     expect([...NODE_FLOOR]).toEqual([22, 19, 0]);
+  });
+
+  // The adapter's inline gate (it runs before any import can) and check_deps.sh repeat the
+  // floor: all four spellings must be the same three numbers.
+  test("parity: the adapter's inline NODE_FLOOR, this module's, and check_deps.sh's three variables agree", () => {
+    const scripts = resolve(import.meta.dir, "../skills/pencil-setup/scripts");
+    const adapter = readFileSync(resolve(scripts, "pencil-mcp-adapter.mjs"), "utf8");
+    const surface = readFileSync(resolve(scripts, "pencil-repl-surface.mjs"), "utf8");
+    const shell = readFileSync(resolve(scripts, "check_deps.sh"), "utf8");
+    const inlineFloor = (src: string) => {
+      const m = /const NODE_FLOOR = (?:Object\.freeze\()?\[(\d+), (\d+), (\d+)\]/.exec(src);
+      expect(m).not.toBeNull();
+      return [Number(m![1]), Number(m![2]), Number(m![3])];
+    };
+    const shellVar = (name: string) => {
+      const m = new RegExp(`^NODE_FLOOR_${name}=(\\d+)$`, "m").exec(shell);
+      expect(m).not.toBeNull();
+      return Number(m![1]);
+    };
+    const want = [...NODE_FLOOR];
+    expect(inlineFloor(adapter)).toEqual(want);
+    expect(inlineFloor(surface)).toEqual(want);
+    expect([shellVar("MAJOR"), shellVar("MINOR"), shellVar("PATCH")]).toEqual(want);
+    // the adapter's gate is numeric (a string compare orders 22.9.0 after 22.19.0)
+    expect(adapter).toMatch(/parseInt\(n, 10\)/);
   });
 
   test("numeric compare distinguishes 22.18.x from 22.19.0 (string compare would not)", () => {

@@ -1,6 +1,5 @@
 import { describe, test, expect } from "bun:test";
 import {
-  shouldSkipSave,
   diskTopLevelCount,
   memoryTopLevelCount,
   decideSave,
@@ -12,44 +11,12 @@ import {
   decideStale,
   hash8,
   savedReplyPath,
+  notPersistedMessage,
+  recreatedNote,
+  loadFidelityFailure,
+  isDefiniteSaveFailure,
+  saveFailureLine,
 } from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
-
-// T2.3 — Auto-save after a failed mutation is the mechanism that produced
-// 0-byte .pen files. The adapter's registerMutatingTool and open_document
-// unconditionally enqueued save() after a batch_design/open. If the
-// mutation errored, pencil's save() ran against a stale or uninitialized
-// state and wrote nothing. The gate decides: do NOT save when the
-// preceding mutation produced an isError=true classification.
-
-describe("shouldSkipSave", () => {
-  test("skips when last classification isError=true", () => {
-    expect(shouldSkipSave({ isError: true, text: "Invalid properties: foo" })).toBe(true);
-  });
-
-  test("allows save when last classification isError=false", () => {
-    expect(shouldSkipSave({ isError: false, text: 'node0="abc"' })).toBe(false);
-  });
-
-  test("skips on auth-failure classification", () => {
-    expect(shouldSkipSave({ isError: true, text: "Unauthorized" })).toBe(true);
-  });
-
-  test("allows save when no prior classification exists (first call)", () => {
-    expect(shouldSkipSave(null)).toBe(false);
-    expect(shouldSkipSave(undefined)).toBe(false);
-  });
-
-  test("allows save when classification is missing isError field", () => {
-    // Defensive: if the caller forgets to pass the classification shape,
-    // don't block the save (preserves existing behavior).
-    expect(shouldSkipSave({ text: "hello" } as any)).toBe(false);
-  });
-
-  test("skips when isError is truthy but not strictly true", () => {
-    // Defensive: accept any truthy isError value.
-    expect(shouldSkipSave({ isError: 1, text: "bad" } as any)).toBe(true);
-  });
-});
 
 // #11143 — empty-overwrite sentinel (Guard 1). An empty in-memory document
 // must never replace an on-disk .pen that holds at least one top-level node.
@@ -191,20 +158,23 @@ describe("refusalMessage: the stale family (#11168)", () => {
     expect(stale.match(/Next step:/g)!.length).toBe(1);
     expect(stale).toMatch(/in memory but not persisted/i);
   });
-  test("`changed` is accepted as an alias of stale (the observability probe passes it)", () => {
-    expect(refusalMessage({ file: "x.pen", source: "save", stale: "changed" })).toBe(
-      refusalMessage({ file: "x.pen", source: "save", stale: "stale" })
-    );
+  test("`changed` is no longer an alias: only the decideStale codes are codes", () => {
+    expect(refusalMessage({ file: "x.pen", source: "save", stale: "changed" })).toContain("[reason=changed]");
   });
   test("each state has its own wording, distinct from the others", () => {
-    const missing = refusalMessage({ file: "/d/a.pen", source: "save", stale: "missing" });
+    const missing = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending", restart: "file-missing" });
+    const external = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending", restart: "external-change" });
     const unconfirmed = refusalMessage({ file: "/d/a.pen", source: "save", stale: "unknown-baseline", cause: "unconfirmed-save" });
     const postRead = refusalMessage({ file: "/d/a.pen", source: "save", stale: "unknown-baseline", cause: "post-save-read-failed" });
     const capture = refusalMessage({ file: "/d/a.pen", source: "save", stale: "unknown-baseline", cause: "capture-failed", detail: "ELOOP" });
     const pending = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending" });
-    const restarted = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending", restarted: true });
-    expect(missing).toMatch(/removed|no longer exists/i);
+    const restarted = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending", restart: "restart" });
+    expect(missing).toMatch(/no longer exists on disk/i);
+    expect(missing).toMatch(/recreate the edits from your context/);
     expect(missing).not.toMatch(/changed on disk since/);
+    expect(external).toMatch(/engine reloaded NEW content/);
+    expect(external).toMatch(/Nothing on disk was overwritten/);
+    expect(external).toMatch(/call open_document on \/d\/a\.pen, then replay/);
     expect(unconfirmed).toMatch(/last save was not confirmed/i);
     expect(unconfirmed).not.toMatch(/changed on disk since/);
     expect(postRead).toMatch(/could not be read back/i);
@@ -212,13 +182,97 @@ describe("refusalMessage: the stale family (#11168)", () => {
     expect(restarted).toMatch(/session restarted/i);
     expect(restarted).toMatch(/earlier edits were discarded/i);
     expect(pending).not.toMatch(/session restarted/i);
-    const all = [stale, missing, unconfirmed, postRead, capture, pending, restarted];
+    const all = [stale, missing, external, unconfirmed, postRead, capture, pending, restarted];
     for (const m of all) {
       expect(m).toContain("REFUSED save:");
       expect(m.match(/Next step:/g)!.length).toBe(1);
       expect(m).toMatch(/do not delete or recreate/i);
     }
     expect(new Set(all).size).toBe(all.length);
+  });
+});
+
+describe("the marker contract: the first line of every refusal is `REFUSED save: [reason=<code>] <file> was not modified.`", () => {
+  const first = (m: string) => m.split("\n")[0];
+  const cases: Array<[string, any]> = [
+    ["empty", { diskCount: 3, memoryCount: 0 }],
+    ["empty", { diskCount: 3, memoryCount: null, memoryReason: "boom" }],
+    ["unrecognized", { diskCount: DISK_UNRECOGNIZED, memoryCount: 2 }],
+    ["stale", { stale: "stale" }],
+    ["unknown-baseline", { stale: "unknown-baseline", cause: "unconfirmed-save" }],
+    ["refusal-pending", { stale: "refusal-pending" }],
+    ["refusal-pending", { stale: "refusal-pending", restart: "restart" }],
+    ["refusal-pending", { stale: "refusal-pending", restart: "external-change" }],
+    ["refusal-pending", { stale: "refusal-pending", restart: "file-missing" }],
+  ];
+  for (const [code, args] of cases) {
+    test(`reason=${code} ${JSON.stringify(args)}`, () => {
+      expect(first(refusalMessage({ file: "/d/a.pen", source: "save", ...args }))).toBe(`REFUSED save: [reason=${code}] /d/a.pen was not modified.`);
+    });
+  }
+  test("the next steps for the recoverable refusals name the repo's open guard", () => {
+    for (const stale of ["stale", "refusal-pending", "unknown-baseline"]) {
+      expect(refusalMessage({ file: "/d/a.pen", source: "save", stale })).toMatch(/commit an empty placeholder first/);
+    }
+  });
+});
+
+describe("notPersistedMessage: `NOT PERSISTED: [reason=<code>] <file> ...`", () => {
+  test("save-failed says in memory only, fix the cause, save again, never open_document", () => {
+    const m = notPersistedMessage({ code: "save-failed", file: "/d/a.pen", detail: "Save failed: EACCES" });
+    expect(m.split("\n")[0]).toBe("NOT PERSISTED: [reason=save-failed] /d/a.pen was not written: the engine reported a failed save (Save failed: EACCES).");
+    expect(m).toMatch(/applied in memory only/);
+    expect(m).toMatch(/call save again/);
+    expect(m).toMatch(/Do NOT call open_document: it discards the edit/);
+  });
+  test("unconfirmed and save-incomplete carry their code on line one", () => {
+    expect(notPersistedMessage({ code: "unconfirmed", file: "/d/a.pen" }).split("\n")[0]).toMatch(/^NOT PERSISTED: \[reason=unconfirmed\] \/d\/a\.pen may or may not have been written/);
+    expect(notPersistedMessage({ code: "unconfirmed", file: "/d/a.pen" })).toMatch(/call open_document on \/d\/a\.pen before saving again/);
+    expect(notPersistedMessage({ code: "save-incomplete", file: "/d/a.pen", detail: "timeout" }).split("\n")[0]).toBe(
+      "NOT PERSISTED: [reason=save-incomplete] /d/a.pen: the edit was applied in memory but the save did not complete (timeout); it is not persisted."
+    );
+  });
+  test("an unknown code is a programming error, not a message", () => {
+    expect(() => notPersistedMessage({ code: "nope", file: "x" })).toThrow(/unknown code/);
+  });
+  test("recreatedNote is the NOTE line of ruling 2", () => {
+    expect(recreatedNote("/d/a.pen")).toBe(
+      "NOTE: /d/a.pen had been removed from disk (a branch switch, a move or a delete); this save recreated it from the session's copy - tell the user and check that the file belongs at that path"
+    );
+  });
+});
+
+describe("loadFidelityFailure (ruling 6): memory fewer than disk at load", () => {
+  const f = "/d/a.pen";
+  test("any drop refuses, not only a drop to zero; unreadable and empty are drops", () => {
+    expect(loadFidelityFailure({ file: f, diskCount: 5, memoryCount: 3 })).toBe(`${f} holds 5 top-level node(s) on disk but loaded 3; it was not modified`);
+    expect(loadFidelityFailure({ file: f, diskCount: 3, memoryCount: 0 })).toMatch(/but loaded empty/);
+    expect(loadFidelityFailure({ file: f, diskCount: 3, memoryCount: null })).toMatch(/but loaded unreadable/);
+    expect(loadFidelityFailure({ file: f, diskCount: 1, memoryCount: 0 })).not.toBeNull();
+  });
+  test("equal or more nodes, and nothing on disk, pass", () => {
+    expect(loadFidelityFailure({ file: f, diskCount: 3, memoryCount: 3 })).toBeNull();
+    expect(loadFidelityFailure({ file: f, diskCount: 3, memoryCount: 9 })).toBeNull();
+    expect(loadFidelityFailure({ file: f, diskCount: 0, memoryCount: 0 })).toBeNull();
+    expect(loadFidelityFailure({ file: f, diskCount: null, memoryCount: null })).toBeNull();
+    expect(loadFidelityFailure({ file: f, diskCount: undefined, memoryCount: 0 })).toBeNull();
+  });
+  test("a file that is not a .pen document is refused whatever memory holds", () => {
+    expect(loadFidelityFailure({ file: f, diskCount: DISK_UNRECOGNIZED, memoryCount: 4 })).toMatch(/not a recognizable \.pen document/);
+  });
+});
+
+describe("isDefiniteSaveFailure / saveFailureLine (ruling 3)", () => {
+  test("a `Save failed:` line with no `Saved` line is definite (ANSI and surrounding stderr noise allowed)", () => {
+    expect(isDefiniteSaveFailure("\u001b[31mSave failed: EACCES: permission denied\u001b[39m\n")).toBe(true);
+    expect(isDefiniteSaveFailure("[WARN] [IPC] request failed\n[ERROR] Headless editor error\nSave failed: disk full\n")).toBe(true);
+    expect(saveFailureLine("[ERROR] x\n\u001b[31mSave failed: disk full\u001b[39m\n")).toBe("Save failed: disk full");
+  });
+  test("empty, wrong-path, ambiguous and mixed replies are not definite", () => {
+    for (const raw of ["", "OK", "Saved /elsewhere.pen", "Save failed? hm", "  Save failed: indented", "Saved /d/a.pen\nSave failed: late", null, undefined, 3]) {
+      expect(isDefiniteSaveFailure(raw as any)).toBe(false);
+    }
+    expect(saveFailureLine("Saved /d/a.pen")).toBe("");
   });
 });
 
@@ -236,6 +290,25 @@ describe("fingerprintBytes (canonical JSON, #11168 ruling 11.1)", () => {
     expect(fingerprintBytes(JSON.stringify(doc, null, 2).replace(/\n/g, "\r\n"))).toBe(h);
     expect(fingerprintBytes("\ufeff" + JSON.stringify(doc))).toBe(h);
     expect(fingerprintBytes(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(doc))]))).toBe(h);
+  });
+  test("object key order does not change it, at any depth (arrays keep their order)", () => {
+    const a = JSON.stringify({ version: "2.21", children: [{ id: "n0", type: "frame", layout: { gap: 1, mode: "v" } }] });
+    const b = JSON.stringify({ children: [{ layout: { mode: "v", gap: 1 }, type: "frame", id: "n0" }], version: "2.21" });
+    expect(a).not.toBe(b);
+    expect(fingerprintBytes(a)).toBe(fingerprintBytes(b));
+    expect(fingerprintBytes(JSON.stringify({ children: [{ id: "a" }, { id: "b" }] }))).not.toBe(
+      fingerprintBytes(JSON.stringify({ children: [{ id: "b" }, { id: "a" }] }))
+    );
+    // a key named like a prototype slot is a key like any other
+    expect(fingerprintBytes('{"__proto__":{"a":1},"b":2}')).toBe(fingerprintBytes('{"b":2,"__proto__":{"a":1}}'));
+  });
+  test("G1a: a document well over 4096 bytes differing only in its LAST node differs (the hash covers the whole document)", () => {
+    const big = (tail: string) => JSON.stringify({ children: Array.from({ length: 300 }, (_, i) => ({ id: `n${i}`, name: i === 299 ? tail : `node ${i}` })) });
+    const a = big("tail-aaaa");
+    const b = big("tail-bbbb");
+    expect(a.length).toBeGreaterThan(8192);
+    expect(a.length).toBe(b.length);
+    expect(fingerprintBytes(a)).not.toBe(fingerprintBytes(b));
   });
   test("a changed value differs, including a same-size one", () => {
     const a = JSON.stringify({ children: [{ id: "x", name: "seed0" }] });
@@ -261,19 +334,27 @@ describe("fingerprintBytes (canonical JSON, #11168 ruling 11.1)", () => {
   });
 });
 
-describe("decideStale: only an exact missing/hash match allows", () => {
+describe("decideStale: only an exact missing/hash match allows (plus recreated)", () => {
   const H1 = { tag: "hash", hash: "1".repeat(64) } as const;
   const H2 = { tag: "hash", hash: "2".repeat(64) } as const;
   const MISSING = { tag: "missing" } as const;
   const dec = (baseline: any, current: any, refusalPending = false) => decideStale({ baseline, current, refusalPending });
 
-  test("hash baseline: equal hash allows, different hash is stale, missing is missing", () => {
+  test("hash baseline: equal hash allows, different hash is stale", () => {
     expect(dec(H1, H1).allow).toBe(true);
     const stale = dec(H1, H2);
     expect(stale).toMatchObject({ allow: false, code: "stale", arm: true });
     expect(stale.baselineHash).toBe(H1.hash);
     expect(stale.diskHash).toBe(H2.hash);
-    expect(dec(H1, MISSING)).toMatchObject({ allow: false, code: "missing", arm: true });
+  });
+  test("hash baseline + file removed behind a live session: ALLOW, marked recreated (ruling 2); a missing baseline that stays missing is not recreated", () => {
+    expect(dec(H1, MISSING)).toEqual({ allow: true, recreated: true });
+    expect(dec(MISSING, MISSING)).toEqual({ allow: true });
+    expect(dec(H1, H1)).toEqual({ allow: true });
+  });
+  test("recreated never overrides the other refusals: pending, unknown baseline", () => {
+    expect(dec(H1, MISSING, true)).toMatchObject({ allow: false, code: "refusal-pending" });
+    expect(dec({ tag: "unknown", cause: "unconfirmed-save" }, MISSING)).toMatchObject({ allow: false, code: "unknown-baseline" });
   });
   test("missing baseline: still missing allows, a file that appeared is stale", () => {
     expect(dec(MISSING, MISSING).allow).toBe(true);
@@ -439,11 +520,47 @@ describe("runGuardedSave (dependency-injected, ordering)", () => {
     expect(m.adopted[0]).toEqual(H(penWith(1)));
   });
 
-  test("a file removed behind a hash baseline refuses as missing (the first read is already null)", async () => {
-    const m = mk({ disk: null, fresh: null, baseline: H(penWith(2)) });
+  test("a file removed behind a hash baseline is saved and reported recreated (the first read is already null)", async () => {
+    const m = mk({ disk: null, fresh: null, baseline: H(penWith(2)), after: [penWith(2)] });
     const r = await runGuardedSave(m.deps);
-    expect(r).toMatchObject({ refused: true, code: "missing", arm: true });
-    expect(m.calls).not.toContain("send:save");
+    expect(r).toMatchObject({ saved: true, refused: false, recreated: true, baselineHash: H(penWith(2)).hash });
+    expect(m.calls).toEqual(["readDisk", "readFresh", "send:save", "readAfterSave", "adopt"]);
+    expect(m.adopted[0]).toEqual(H(penWith(2)));
+  });
+
+  test("a removed file with delete-every-node semantics is still the sentinel's: decideSave runs first (disk present, memory empty)", async () => {
+    const m = mk({ mem: countReply(0), baseline: H(penWith(3)) });
+    const r = await runGuardedSave(m.deps);
+    expect(r).toMatchObject({ refused: true, code: "empty" });
+  });
+
+  test("a definite failure keeps the previous baseline and adopts nothing (ruling 3)", async () => {
+    const m = mk({ saveReply: "Save failed: EACCES" });
+    (m.deps as any).isDefiniteFailure = (raw: string) => /^Save failed:/.test(raw);
+    const before = m.baseline();
+    const r = await runGuardedSave(m.deps);
+    expect(r).toMatchObject({ saved: false, refused: false, failed: true, raw: "Save failed: EACCES" });
+    expect(r.unconfirmed).toBeUndefined();
+    expect(m.adopted).toEqual([]);
+    expect(m.baseline()).toBe(before);
+    expect(m.calls).not.toContain("readAfterSave");
+  });
+
+  test("without isDefiniteFailure, or when it says no, the reply is unconfirmed and the baseline becomes unknown", async () => {
+    const m = mk({ saveReply: "Save failed: EACCES" });
+    expect(await runGuardedSave(m.deps)).toMatchObject({ unconfirmed: true });
+    const n = mk({ saveReply: "" });
+    (n.deps as any).isDefiniteFailure = () => false;
+    expect(await runGuardedSave(n.deps)).toMatchObject({ unconfirmed: true });
+    expect(n.adopted).toEqual([{ tag: "unknown", cause: "unconfirmed-save" }]);
+  });
+
+  test("wasRestarted's cause reaches the refusal-pending wording", async () => {
+    const m = mk({ pending: true });
+    (m.deps as any).wasRestarted = () => "external-change";
+    const r = await runGuardedSave(m.deps);
+    expect(r.message).toMatch(/engine reloaded NEW content/);
+    expect(r.message.split("\n")[0]).toBe("REFUSED save: [reason=refusal-pending] /d/a.pen was not modified.");
   });
 
   test("a fresh read that throws refuses as unknown-baseline/capture-failed with the errno, no save", async () => {

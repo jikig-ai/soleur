@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { classifyResponse } from "../skills/pencil-setup/scripts/pencil-response-classify.mjs";
+import { classifyResponse, stripAnsi } from "../skills/pencil-setup/scripts/pencil-response-classify.mjs";
 
 // The adapter's response classifier marks failure REPL strings as errors. The
 // pre-fix classifier only matched /^Error:/, /^\[ERROR\]/ and
@@ -33,6 +33,12 @@ describe("classifyResponse — pre-existing error prefixes (regression guard)", 
   test("trims trailing/leading whitespace", () => {
     const { text } = classifyResponse("   hello world   \n");
     expect(text).toBe("hello world");
+  });
+
+  test("stripAnsi is the one shared export and also strips private-mode CSI (`ESC[?25l`)", () => {
+    expect(stripAnsi("\x1b[?25lhidden cursor\x1b[?25h")).toBe("hidden cursor");
+    expect(stripAnsi("\x1b[31mred\x1b[39m \x1b[2K\x1b[1;32mgreen")).toBe("red green");
+    expect(classifyResponse("\x1b[?25l\x1b[31mError: red\x1b[39m").isError).toBe(true);
   });
 
   test("strips ANSI escape sequences", () => {
