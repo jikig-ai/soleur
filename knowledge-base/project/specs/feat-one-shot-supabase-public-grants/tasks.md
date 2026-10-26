@@ -5,10 +5,10 @@ Deadline driver: Supabase Data API auto-grant flip on 2026-10-30.
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 Verify `auto_expose_new_tables` key support on pinned Supabase CLI 2.84.2 (`supabase/cli#5524`, securing-your-api docs); annotate the chosen mechanism in the plan/PR per the CLI-verification gate.
+- [x] 0.1 RESOLVED by CTO ruling 2026-10-26: `auto_expose_new_tables` does NOT exist on pinned CLI 2.84.2 (added by `supabase/cli#5239`, merged 2026-05-26 — post-2.84.2). Mechanism = `supabase-local.sh` post-start normalize; do NOT write the config key.
 - [ ] 0.2 Confirm next free migration number is still 164 (re-scan `ls apps/web-platform/supabase/migrations/`); renumber up/down/verify trio together if a sibling landed.
 - [ ] 0.3 Confirm ADR-303 is still the next free ADR ordinal against `origin/main` and pushed branches (probe all `origin/*` refs).
-- [ ] 0.4 Resolve `decision-challenges.md` pending rulings: CPO sign-off (`requires_cpo_signoff: true`) MUST land before implementation begins.
+- [x] 0.4 RESOLVED 2026-10-26: all six technical rows ruled by CTO agent (cto-rulings.md); CPO sign-off GRANTED + user-impact-reviewer GRANTED — discharged in `decision-challenges.md`.
 
 ## Phase A — Audit + snapshot generation
 
@@ -24,7 +24,7 @@ Deadline driver: Supabase Data API auto-grant flip on 2026-10-30.
 
 ## Phase C — Local-stack parity pin
 
-- [ ] 3.1 Set `auto_expose_new_tables = false` under `[api]` in `apps/web-platform/supabase/config.toml` (or implement the `supabase-local.sh` normalize fallback if 0.1 refutes the key).
+- [ ] 3.1 Add a post-start normalize step to `apps/web-platform/scripts/supabase-local.sh` applying Supabase's documented revoke-default-privileges SQL (PRIMARY path per CTO ruling; do NOT write `auto_expose_new_tables` to `config.toml` — absent on pinned CLI 2.84.2).
 - [ ] 3.2 Add a fuzz-side assertion that the local stack's `pg_default_acl` carries no api-role default table grants (the P6 faithfulness pin).
 
 ## Phase D — Guards

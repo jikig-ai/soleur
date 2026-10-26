@@ -61,7 +61,7 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 
 1. **Audit + generate.** A read-only catalog extraction (run via the existing `doppler run -c prd` run-verify path) dumps, per `public` relation (relkind `r`,`v`,`m`,`S`), the effective privileges for `anon`/`authenticated`/`service_role` from `information_schema.role_table_grants`, `information_schema.column_privileges`, and `information_schema.role_usage_grants`. Output = explicit `GRANT`/`REVOKE`-free DDL reproducing that state verbatim (table-level where held, per-column where table-level was deliberately revoked). The same extraction emits the per-relation classification (client-exposed / service-role-only / internal) that seeds the fuzz registry and the narrowing follow-up list.
 2. **Backfill migration** `164_api_data_grants_snapshot.sql` (number provisional — next free at plan time; renumber per convention if a sibling lands first): the generated grants, idempotent (`GRANT` is idempotent; `IF EXISTS` guards not needed for grants but relation-existence `to_regclass` preconditions keep the file self-describing per the FK-lint convention). On prd this is a no-op (the privileges are already effective); on fresh builds it restores the exact prd posture.
-3. **Flip the local stack to the new world.** `supabase/config.toml` `[api] auto_expose_new_tables = false` — the flag exists today (supabase/cli#5524; CLI 2.84.2 pinned in rls-authz-fuzz.yml — verify the key at implementation, fallback below). With defaults off, the fuzz stack's grant state = explicit migration grants only, i.e., exactly the post-10-30 world. Fallback if the flag is unsupported/no-op on 2.84.2: a normalize step in `apps/web-platform/scripts/supabase-local.sh` running Supabase's documented "Revoke default privileges" SQL after stack start.
+3. **Flip the local stack to the new world (Ruled by CTO agent, 2026-10-26).** A post-start normalize step in `apps/web-platform/scripts/supabase-local.sh` applies Supabase's documented "Revoke default privileges" SQL after stack start — the PRIMARY path, not a fallback. The `[api] auto_expose_new_tables` config key does NOT exist on pinned CLI 2.84.2 (it was added by `supabase/cli#5239`, merged 2026-05-26; 2.84.2 released 2026-03-25) — writing it is dead config at best, a parse failure at worst. All local+CI starts funnel through the wrapper (`package.json` `db:start`; fuzz job `rls-authz-fuzz.yml:60-62`), so one normalize step covers both. With defaults off, the fuzz stack's grant state = explicit migration grants only, i.e., exactly the post-10-30 world. On any future CLI bump to >=v2.116.0 the swap to the declarative key is REQUIRED (unset re-enables auto-expose there) — recorded in ADR-303.
 4. **Runtime authoritative gate.** Extend `test/rls-fuzz/catalog.ts` with a public-relation + sequence enumerator; new registry `test/rls-fuzz/table-grants.ts` (mirroring `rpc-cases.ts`) recording each relation's intended api-role privilege set; new gate `test/rls-fuzz/rls-grants.integration.test.ts` asserting `has_table_privilege`/`has_column_privilege`/`has_sequence_privilege` per registry on the applied stack, with catalog⇔registry parity so an unclassified new relation reds.
 5. **Static subordinate lint.** `apps/web-platform/scripts/lint-migration-api-grants.sh` (+`.test.sh`), `--from-pr-diff`, wired into `tenant-integration.yml` beside `lint-migration-fk-preconditions.sh`: every diff-touched migration creating a `public` relation (table/view/materialized view, `temp` excluded) must carry an api-role `GRANT` for it in-file, or a `-- soleur:no-data-api: <relation> — <reason>` sentinel; serial/identity/sequence-using tables additionally require a sequence `GRANT USAGE` presence or the sentinel.
 6. **Deploy-time sentinel.** `apps/web-platform/supabase/verify/164_*.sql` asserting expected-vs-effective grants on prd post-apply (runs automatically in the release `verify-migrations` job via `run-verify.sh`), plus the existing `rls-parity-check.ts` `role_table_grants` local-vs-prod diff as a continuous drift detector.
@@ -77,17 +77,17 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 - `apps/web-platform/test/migration-lint/definer-grants.ts` — ADR-112's vitest static-tier sibling (for EXECUTE grants on definer functions; table grants are a different object class).
 - `apps/web-platform/test/rls-fuzz/{catalog.ts,rpc-cases.ts,targets.ts}` — the live-catalog enumerator + classification-registry pattern to mirror; `bun run test:rls-fuzz` globs the whole dir (`package.json:18`), so a new gate file runs in the existing `rls-authz-fuzz` job.
 - `apps/web-platform/scripts/rls-parity-check.ts` — already diffs `information_schema.role_table_grants` and `pg_roles` local-vs-prod (`:53,:59`); becomes a continuous proof that the snapshot matches prd once the local stack runs defaults-off.
-- `apps/web-platform/scripts/supabase-local.sh` — the loopback-bound stack wrapper (ADR-153); home of the config-flip fallback normalize step.
-- `apps/web-platform/supabase/config.toml` — `[api]` section exists (`:21`), no `auto_expose_new_tables` key today.
-- `.github/workflows/rls-authz-fuzz.yml` — local CLI stack, CLI pinned 2.84.2 (`:46`), applies migrations via run-migrations.sh (`[db.migrations] enabled = false`).
+- `apps/web-platform/scripts/supabase-local.sh` — the loopback-bound stack wrapper (ADR-153); home of the post-start normalize step (PRIMARY local-parity mechanism per CTO ruling — the config key does not exist on pinned CLI 2.84.2).
+- `apps/web-platform/supabase/config.toml` — `[api]` section exists (`:21`), no `auto_expose_new_tables` key — and NOT added by this plan: the key first shipped in `supabase/cli#5239` (merged 2026-05-26), after pinned CLI 2.84.2 (2026-03-25). Dead config at best, parse failure at worst. Deferred until the deliberate CLI bump, where unset ≡ auto-expose again so `= false` becomes mandatory (>=v2.116.0 note per 6337; recorded in ADR-303).
+- `.github/workflows/rls-authz-fuzz.yml` — local CLI stack, CLI pinned 2.84.2 (`:54`; the pin is deliberate — `:50-51` ties CLI/GoTrue to prod for ADR-111 parity, so no CLI bump under a 4-day deadline), applies migrations via run-migrations.sh (`[db.migrations] enabled = false`).
 - `apps/web-platform/docs/migration-rollback.md` — forward-only convention; `.down.sql` files are manual aids, not automation.
 - Learnings: `2026-03-20-supabase-column-level-grant-override.md` (table grant subsumes column grants — the 006/079 trap), `2026-05-21-rls-restrictive-policy-plus-column-grant-blocks-tenant-writes.md` (missing grant = silent write failure, #4224), `2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md` (`to_regclass` precondition convention).
 
 **ADRs read (Phase 0.6 corpus grep):** ADR-111 (fuzz harness; `supabase db reset` structurally incompatible — 29 duplicate numeric prefixes; faithfulness contract includes `role_table_grants` parity), ADR-112 (two-tier guard precedent; `ALTER DEFAULT PRIVILEGES` deferred to #6340 pending a live role-scope probe — a mis-scoped ADP is a silent no-op under `supabase_admin`; **#6340 auto-closed stale 2026-10-10, NOT_PLANNED — the probe never ran**, so no validated ADP path exists either way), ADR-153 (loopback binding), ADR-044/ADR-101 (workspace tenancy + client-RPC conventions). No ADR decided the *table-grant* question — this plan's mechanism is not a rejected alternative; ADR-112's ADP-deferral reasoning (mis-scope = silent no-op) is the load-bearing precedent applied here.
 
-**External docs:** Supabase changelog 45329 (the breaking change; existing tables keep grants), `supabase.com/docs/guides/api/securing-your-api` (default-privilege table: the flip removes `select,insert,update,delete` but tables KEEP `truncate,references,trigger,maintain` and sequences keep only `update` — **sequence `USAGE` is lost**, so serial/identity inserts via Data API would fail even with a table grant), `supabase/cli#5524` (`[api].auto_expose_new_tables` tri-state; unset now = revoke; `true` deprecated, removed 2026-10-30).
+**External docs:** Supabase changelog 45329 (the breaking change; existing tables keep grants), `supabase.com/docs/guides/api/securing-your-api` (default-privilege table: the flip removes `select,insert,update,delete` but tables KEEP `truncate,references,trigger,maintain` and sequences keep only `update` — **sequence `USAGE` is lost**, so serial/identity inserts via Data API would fail even with a table grant), `supabase/cli#5239` (`[api].auto_expose_new_tables` — added 2026-05-26, AFTER pinned CLI 2.84.2's 2026-03-25 release, so the key cannot be used here; per 6337, on CLI >=v2.116.0 unset re-enables auto-expose, so a future bump must set `false` explicitly).
 
-**Premise Validation (Phase 0.6):** triage claims verified — migrations dir, 294 files, canonical applier, rls-authz-fuzz arm, and #4027 (OPEN, p3 tech-debt) all confirmed. One correction: "ZERO table-level grants" is inaccurate — 14 of 42 create-table files DO carry api-role table/column grants (e.g., 049 service_role-scoped, 079 column-scoped, 084, 107 view grant); the accurate claim is *partial, inconsistent coverage*. Substance stands. `#4647` surfaced as prior-art evidence. Serial/identity columns exist in ≥11 migrations (029, 033, 046, 053, 061, 064, 084, 093, 121, 126…) — sequence privileges are in scope, not optional.
+**Premise Validation (Phase 0.6):** triage claims verified — migrations dir, 294 files, canonical applier, rls-authz-fuzz arm, and #4027 (OPEN, p3 tech-debt) all confirmed. One correction: "ZERO table-level grants" is inaccurate — 14 of 42 create-table files DO carry api-role table/column grants (e.g., 049 service_role-scoped, 079 column-scoped, 084, 107 view grant); the accurate claim is *partial, inconsistent coverage*. Substance stands. `#4647` surfaced as prior-art evidence. Serial/identity correction (Ruled by CTO agent, 2026-10-26): the claimed "≥11 migrations with serial/identity" matched only on comment words — the corpus has exactly ONE identity column (`138_agent_engine_runs.sql:66`), zero serials, zero `CREATE SEQUENCE`. Sequence privileges remain in scope (that column needs USAGE, and the guard arm is forward-looking for future serial/identity tables) — on corrected grounds, not the inflated count.
 
 **Property List (Phase 0.6b):** P1 prd keeps serving the Data API exactly as today after 10-30 (no widening, no narrowing). P2 every fresh environment built by replaying the migration corpus reproduces prd's effective api-role privilege state. P3 deliberate narrowings (column-level splits 006/079, role-scoped 049) are preserved verbatim — never widened by the backfill. P4 a future create-table/view migration without required grants fails before merge. P5 drift between intended and effective grant state is detected continuously, on prd and on the local stack. P6 the local fuzz stack models the post-change default so the guards measure migration-grants, not platform-defaults.
 
@@ -98,7 +98,7 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 | Spec/triage claim | Codebase reality | Plan response |
 |---|---|---|
 | "ZERO migrations contain table-level GRANT to anon/authenticated/service_role" | 14 of 42 create-table files carry api-role table/column grants (049, 064, 079, 084, 107, 110, 138 partial via view); 28 carry none | Backfill generated from live catalog — both populations land in the same snapshot; no enumeration needed from source text |
-| "rls-authz-fuzz CI arm gets permission-denied after 10-30" | The arm runs a LOCAL `supabase start` (CLI 2.84.2); breakage depends on the CLI's auto-expose behavior, not the hosted flip — `auto_expose_new_tables` is already tri-state in the CLI | Pin `auto_expose_new_tables = false` so the stack models the target world deterministically either way |
+| "rls-authz-fuzz CI arm gets permission-denied after 10-30" | The arm runs a LOCAL `supabase start` (CLI 2.84.2); breakage depends on the CLI's auto-expose behavior, not the hosted flip — and the `auto_expose_new_tables` key does not exist on the pinned CLI (supabase/cli#5239 landed 2026-05-26, after 2.84.2's 2026-03-25 release) | Normalize default privileges in `supabase-local.sh` post-start so the stack models the target world deterministically (Ruled by CTO agent, 2026-10-26 — the config-key form was rejected) |
 | "supabase db reset recreates schema and loses grants" | `supabase db reset` is structurally incompatible with this repo — 29 duplicate numeric prefixes PK the CLI tracker (ADR-111) | Plan uses the repo's canonical `run-migrations.sh` replay; no `db reset` dependency |
 
 ## Open Code-Review Overlap
@@ -122,9 +122,9 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 
 ### Phase C — Flip the local stack to post-change defaults
 
-7. Set `auto_expose_new_tables = false` under `[api]` in `apps/web-platform/supabase/config.toml`. Verify the exact key against the pinned CLI 2.84.2 (`supabase/cli#5524`, `supabase.com/docs/guides/api/securing-your-api` "Revoke default privileges"); annotate the plan snippet `<!-- verified: <date> source: <url> -->` at implementation per the CLI-verification gate.
-8. Fallback (only if step 7's key is unsupported on 2.84.2): add a normalize step to `apps/web-platform/scripts/supabase-local.sh` applying Supabase's documented revoke-default-privileges SQL post-start; assert the resulting `pg_default_acl` state.
-9. Assert in the fuzz job (or a `rls-fuzz` unit test) that the local stack's `pg_default_acl` carries no api-role table grants — the P6 faithfulness pin, so the gate below measures migration grants, not platform defaults.
+7. Add a post-start normalize step to `apps/web-platform/scripts/supabase-local.sh` applying Supabase's documented "Revoke default privileges" SQL (`supabase.com/docs/guides/api/securing-your-api`) after stack start. This is the PRIMARY mechanism (Ruled by CTO agent, 2026-10-26): `auto_expose_new_tables` does not exist on pinned CLI 2.84.2 — do NOT write it to `config.toml`. All local+CI starts funnel through this wrapper (`package.json` `db:start`; fuzz job `rls-authz-fuzz.yml:60-62`), so one step covers both surfaces.
+8. Assert the resulting `pg_default_acl` state after normalize — the fuzz stack must carry no api-role default table privileges. Annotate `<!-- verified: <date> source: <url> -->` at implementation per the CLI-verification gate.
+9. Record in ADR-303 that on any future CLI bump to >=v2.116.0 the swap to `[api] auto_expose_new_tables = false` becomes REQUIRED (per 6337, unset re-enables auto-expose on newer CLIs) — the declarative key replaces the normalize step then, not now.
 
 ### Phase D — Guards (runtime authoritative + static subordinate)
 
@@ -136,7 +136,7 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 
 ### Phase E — Decision record + deferral
 
-15. Author `ADR-303-explicit-data-api-grants-and-two-tier-table-grant-guard.md` (ordinal provisional; next free is 303 — sweep on collision per the ordinal gate) recording: explicit per-relation grants as the convention, the two-tier authority split (fuzz gate authoritative, lint subordinate — mirroring ADR-112), the ADP-restore rejection (with the ADR-112/#6340 mis-scope reasoning), and the `auto_expose_new_tables=false` local parity pin.
+15. Author `ADR-303-explicit-data-api-grants-and-two-tier-table-grant-guard.md` (ordinal provisional; next free is 303 — sweep on collision per the ordinal gate) recording: explicit per-relation grants as the convention, the two-tier authority split (fuzz gate authoritative, lint subordinate — mirroring ADR-112), the ADP-restore rejection (with the ADR-112/#6340 mis-scope reasoning), and the local-parity mechanism — `supabase-local.sh` post-start normalize under pinned CLI 2.84.2, with the recorded swap to `[api] auto_expose_new_tables = false` becoming REQUIRED at any CLI bump to >=v2.116.0 (6337: unset re-enables auto-expose there).
 16. File the narrowing follow-up issue (grant-hygiene audit list from Phase A; relates #4027) and mark it blocked-by nothing — it has no deadline; label `domain/engineering`, `type/chore`, `code-review`-adjacent wording avoided.
 17. File a tracking issue for THIS change if the pipeline wants a `#N` (changelog/PR body link; optional — the PR can stand on the changelog citation alone).
 
@@ -168,10 +168,9 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 
 ## Files to Edit
 
-- `apps/web-platform/supabase/config.toml` — `[api] auto_expose_new_tables = false`
+- `apps/web-platform/scripts/supabase-local.sh` — post-start normalize step (PRIMARY local-parity mechanism per CTO ruling)
 - `apps/web-platform/test/rls-fuzz/catalog.ts` — add `publicApiRelations()`/`publicApiSequences()`
 - `.github/workflows/tenant-integration.yml` — add the lint step beside the FK lint
-- `apps/web-platform/scripts/supabase-local.sh` — only if the config flag is unsupported on CLI 2.84.2 (fallback normalize)
 
 ## User-Brand Impact
 
@@ -180,7 +179,7 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** a one-verbatim-verb mistake in the generated snapshot on a PII table exposes one founder's data — a single-user breach class identical to the RLS-leak class ADR-111 scoped `single-user incident`; `none` is untenable because the migration touches grant ACLs on PII-adjacent tables.
 
-`requires_cpo_signoff: true` set in frontmatter. CPO sign-off is required at plan time before `soleur:work` begins; in this headless run it is recorded in `decision-challenges.md` as pending — `soleur:engineering:review:user-impact-reviewer` will be invoked at review time.
+`requires_cpo_signoff: true` set in frontmatter. CPO sign-off is required at plan time before `soleur:work` begins — **discharged 2026-10-26**: `soleur:product:cpo` and `soleur:engineering:review:user-impact-reviewer` both returned GRANTED (rationale in `decision-challenges.md`).
 
 ## Observability
 
@@ -258,7 +257,7 @@ in_transit:
 
 **Property.** On the applied stack, every `public`-schema relation's and sequence's effective privileges for `{anon, authenticated, service_role}` exactly equal its registered classification — no missing grants (P2) and no unregistered exposure (P3).
 
-**Assembly.** Live `pg_class` enumeration of `public` relkind `r`,`v`,`m`,`S` on the fuzz stack — every member flows through `test/rls-fuzz/table-grants.ts` (the single classification registry; unregistered member reds via the catalog⇔registry parity assertion). Chokepoint: the `rls-authz-fuzz` job (`test:rls-fuzz` globs the dir), a required check. With `auto_expose_new_tables=false`, effective state = explicit migration grants only — the gate measures what migrations declared, not platform defaults (P6).
+**Assembly.** Live `pg_class` enumeration of `public` relkind `r`,`v`,`m`,`S` on the fuzz stack — every member flows through `test/rls-fuzz/table-grants.ts` (the single classification registry; unregistered member reds via the catalog⇔registry parity assertion). Chokepoint: the `rls-authz-fuzz` job (`test:rls-fuzz` globs the dir), a required check. With the `supabase-local.sh` normalize applied, effective state = explicit migration grants only — the gate measures what migrations declared, not platform defaults (P6).
 
 **Mutation matrix:**
 
@@ -299,13 +298,13 @@ The ADR ships in this PR describing the landed state (`status: accepted`); the g
 | 3 | "A durable guard so a future create table migration without the required grants fails before merge" | Phase D: fuzz grant gate (authoritative) + lint-migration-api-grants.sh (subordinate) + tenant-integration wiring | mapped |
 | 4 | "match how this repo already lints migrations; check apps/web-platform/supabase/scripts/ and verify/ and existing lefthook/CI gates" | Lint mirrors `lint-migration-fk-preconditions.sh` shape + `--from-pr-diff` in tenant-integration.yml; `verify/164` sentinel mirrors the verify/ convention | mapped |
 | 5 | "Down-migration implications" | `.down.sql` documented no-op + Technical Considerations analysis | mapped |
-| 6 | "whether tests/CI (rls-authz-fuzz) can prove the fix" | `auto_expose_new_tables=false` pin + catalog grant-state gate + `rls-parity-check.ts` role_table_grants diff | mapped |
+| 6 | "whether tests/CI (rls-authz-fuzz) can prove the fix" | `supabase-local.sh` post-start normalize (defaults-off stack) + catalog grant-state gate + `rls-parity-check.ts` role_table_grants diff | mapped |
 
 ### Plan-Item Provenance
 
 | Plan item | User words cited | Verdict |
 |---|---|---|
-| `auto_expose_new_tables = false` config pin | inferred — ask said "make this repo safe" + "rls-authz-fuzz … gets permission-denied"; the pin is what makes the CI arm prove the fix deterministically (ask 6) | inferred (justified) |
+| `supabase-local.sh` post-start normalize (defaults-off local stack) | inferred — ask said "make this repo safe" + "rls-authz-fuzz … gets permission-denied"; defaults-off is what makes the CI arm prove the fix deterministically (ask 6); mechanism set by CTO ruling 2026-10-26 (config key absent on pinned CLI 2.84.2) | inferred (justified) |
 | fuzz `table-grants.ts` registry + gate | "durable guard" (ask 3) + "tests/CI (rls-authz-fuzz) can prove the fix" (ask 6) | asked |
 | lint script + workflow step | "durable guard … fails before merge (lint script / CI check)" (ask 3) | asked |
 | ADR-303 + narrowing follow-up issue | inferred — cross-cutting convention change requires an ADR (plan Phase 2.10 gate); deferral-tracking checklist requires filing deferred items | inferred (justified) |
@@ -314,7 +313,7 @@ The ADR ships in this PR describing the landed state (`status: accepted`); the g
 
 ### Split Assessment
 
-- Subsystems touched: 3 — `apps/web-platform/supabase/` (migration + config), `apps/web-platform/scripts` + `apps/web-platform/test/rls-fuzz` (guards), `.github/workflows/` (lint wiring)
+- Subsystems touched: 3 — `apps/web-platform/supabase/` (migration), `apps/web-platform/scripts` + `apps/web-platform/test/rls-fuzz` (local-stack normalize + guards), `.github/workflows/` (lint wiring)
 - Planned files: 9 create + 3 edit (12) | Estimated changed lines: ~700 (dominated by generated grant DDL, ~70 relations)
 - Thresholds: >= 4 subsystem roots OR > 25 files OR > 800 lines — under all three
 - Recommendation: single PR — the lint and gate are what make the migration verifiable; splitting them from it ships the invariant unguarded.
@@ -329,7 +328,7 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 
 - [ ] **AC1.** `apps/web-platform/supabase/migrations/164_api_data_grants_snapshot.sql` exists, is generated from a prd catalog extraction (provenance comment names the command + date), applies cleanly via `run-migrations.sh` on a fresh defaults-off stack, and its grant set covers EVERY `public` relation (relkind r,v,m) and sequence that holds api-role privileges on prd — completeness proven by the verify sentinel, not by file inspection.
 - [ ] **AC2.** Post-apply on prd, effective api-role privileges for every public relation are IDENTICAL to pre-apply (snapshot-exact): `verify/164` per-relation `has_*_privilege` assertions pass and the `rls-parity-check.ts` `role_table_grants` diff shows no drift. No table-level grant is added where column-level postures exist (`users` UPDATE-email-only, `repos` column-split, `runtime_mint_intent` service_role-scoped — the 006/079/049 shapes asserted verbatim).
-- [ ] **AC3.** `apps/web-platform/supabase/config.toml` sets `auto_expose_new_tables = false` (or the documented `supabase-local.sh` fallback normalizes `pg_default_acl` identically), and the fuzz job asserts the local stack carries no api-role default table grants.
+- [ ] **AC3.** `apps/web-platform/scripts/supabase-local.sh` normalizes default privileges post-start (Supabase's documented revoke-default-privileges SQL), the fuzz job asserts the local stack's `pg_default_acl` carries no api-role default table grants, and `config.toml` carries NO `auto_expose_new_tables` key (absent on pinned CLI 2.84.2).
 - [ ] **AC4.** `bash apps/web-platform/scripts/lint-migration-api-grants.sh --from-pr-diff` exits 1 on a create-table-without-grant diff, 0 on granted/sentinel fixtures, and runs as a step in `tenant-integration.yml`; `lint-migration-api-grants.test.sh` covers the mutation-matrix rows (table, view, second-member, serial/identity-sequence arm, down-file skip, sentinel, case-insensitivity).
 - [ ] **AC5.** `test/rls-fuzz/rls-grants.integration.test.ts` enumerates live `pg_class` and asserts registered grant state with catalog⇔registry parity; `bun run test:rls-fuzz` is green including the new gate; a new unclassified public relation demonstrably reds it (fixture run or test case).
 - [ ] **AC6.** `verify/164_api_data_grants_snapshot.sql` passes under `run-verify.sh` post-apply on prd and is idempotent (verify-migrations re-runs it).
@@ -363,7 +362,7 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 
 - **Deadline pressure:** 4 days to the flip. Mitigation: the lint alone prevents the acute prd risk (new table post-flip without grants); prd's existing tables are never affected by the flip, so the backfill is not on the prod-critical path — it is on the fresh-environment path.
 - **Race:** a `create table` migration merged before this PR would need manual grants post-flip — flag in PR body; consider landing the lint first if the PR grows.
-- **`auto_expose_new_tables` support on CLI 2.84.2:** unverified at plan time; the supabase-local.sh fallback covers it. CLI-verification gate applies at implementation.
+- **`auto_expose_new_tables` on CLI 2.84.2:** resolved by CTO ruling 2026-10-26 — the key was added by `supabase/cli#5239` (merged 2026-05-26) and does NOT exist on the pinned CLI; the `supabase-local.sh` normalize is the primary path, not a fallback. On any future bump to >=v2.116.0 the config key becomes required (unset re-enables auto-expose per 6337) — recorded in ADR-303.
 - **prd catalog read:** `doppler run -c prd` read-only path is the established `run-verify.sh` mechanism — no new credential surface.
 - **Generated-file drift:** the snapshot is a point-in-time prd state; relations created between generation and merge must be re-swept — the fuzz gate (registry parity) catches the miss if the author forgets.
 - **#4027 interaction:** runtime_mint_intent's deliberately narrow service_role grants are preserved by snapshot-exact; the narrowing follow-up must not conflict with #4027's scope.
@@ -383,7 +382,7 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 
 - Supabase changelog 45329 — <https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically>
 - Supabase "Securing your API" default-privilege table — <https://supabase.com/docs/guides/api/securing-your-api>
-- `supabase/cli#5524` — `auto_expose_new_tables` tri-state flip
+- `supabase/cli#5239` — `auto_expose_new_tables` (added 2026-05-26; absent on pinned CLI 2.84.2)
 - `supabase.com/docs/guides/troubleshooting/database-api-42501-errors` — `role_table_grants` introspection + recommended `GRANT` remediation
 - ADR-111, ADR-112, ADR-153 (this repo)
 - Issues: #4027 (narrow service_role grants), #4647 (missing-grant silent failure), #6306/#6328 (definer EXECUTE grant class), #6340 (ADP live-probe), #3220 (overlap — acknowledged)
@@ -396,7 +395,7 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 - Do NOT rely on the fuzz harness's RLS-denial verdicts to prove grant coverage — 42501 conflates "denied by grant" with "denied by RLS"; assert `has_table_privilege` state.
 - Do NOT skip the sequence arm — post-change sequences lose `USAGE`; serial/identity inserts via Data API fail even with the table granted.
 - Do NOT write a REVOKE-bearing `.down.sql` — it strips default-era effective access on prd, strictly worse than the forward state.
-- Do NOT leave the local stack on implicit defaults — without `auto_expose_new_tables=false` the gate measures platform defaults, not migration grants, and the whole proof is circular.
+- Do NOT leave the local stack on implicit defaults — without the `supabase-local.sh` normalize the gate measures platform defaults, not migration grants, and the whole proof is circular. Do NOT write `auto_expose_new_tables` to `config.toml` — the key does not exist on pinned CLI 2.84.2 (added 2026-05-26, post-2.84.2); dead config at best, parse failure at worst.
 - Do NOT forget the migration number is provisional (164 at plan time) — a sibling `16x` can land first; renumber the up/down/verify trio together.
 - The lint's `soleur:no-data-api:` sentinel requires a reason — an uncommented sentinel is an allowlist entry with no rationale (the ADR-112 EXCLUDED-class escape-hatch lesson).
-- CPO sign-off is required before `soleur:work` (threshold `single-user incident`) — recorded pending in `decision-challenges.md` for this headless run.
+- CPO sign-off was required before `soleur:work` (threshold `single-user incident`) — discharged 2026-10-26: CPO agent + user-impact-reviewer both GRANTED (`decision-challenges.md`).
