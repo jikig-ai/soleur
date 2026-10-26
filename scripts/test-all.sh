@@ -3712,7 +3712,8 @@ _aff_runner_banner() {
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
 # #10664: +1 always-on (the hcloud-token read-only no-fallback scan); re-pinned at 119-5.
-_MIN_ALWAYS_ON_DECLARED=114
+# #10861: +1 always-on (the grep-q-pipe-guard whole-tree reader, PR4b row 6 verdict); re-pinned at 120-5.
+_MIN_ALWAYS_ON_DECLARED=115
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -6137,6 +6138,8 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # Plaintext git-data volume destroy plan gate (Option B of the W0 route; pins volume 106867358 + its attachment, refuses anything else).
+  run_suite "tests/scripts/git-data-plaintext-destroy-gate" bash tests/scripts/test-git-data-plaintext-destroy-gate.sh
   run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
