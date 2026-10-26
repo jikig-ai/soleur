@@ -8,8 +8,14 @@
 
 ### Errors
 - `dsar_export_audit_pii` in the issue body's audit list is stale — migration `175_tom4_shape_iv_client_grant_revokes` (already on main) revoked its anon/authenticated grants; plan treats it as a no-op verification row.
-- No agent-spawn capability inside the planning subagent — skill-prescribed fan-outs executed inline; technical rulings recorded `pending - assumed:` in decision-challenges.md; CPO sign-off (requires_cpo_signoff) pending.
+- No agent-spawn capability inside the planning subagent — skill-prescribed fan-outs executed inline; pipeline parent discharged rulings (below).
 - Plan-review panel could not fan out — noted for the pipeline (Devin: sequential-fallback coverage applies).
+
+### Rulings (technical-ruling gate, 2026-10-26)
+- `cto_spawns=1` — soleur:engineering:cto Rule spawn ruled all 4 technical rows (kb_sync_history reroute confirmed + column-grant fallback struck as dead-on-arrival via 017 RESTRICTIVE policy; api_keys table-level SELECT confirmed — column-level refuted by 4 live authenticated ciphertext call sites; flag_flip_audit keeps service_role; _schema_migrations INTERNAL via OVERRIDES kind-INTERNAL).
+- `cpo_spawns=1` — soleur:product:cpo signed off (`single-user incident` threshold) with 3 conditions recorded in plan §User-Brand Impact + decision-challenges.md.
+- technical-ruling-gate.sh --branch: PASS (5 rows).
+- Plan amended for ruling deltas (Note B fallback struck; rejected-alternatives rows 119–120 corrected).
 
 ### Decisions
 - Migration number 178 (176 = open PR #11224; 177 = open WIP PR #11115).
