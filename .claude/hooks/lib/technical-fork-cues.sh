@@ -13,7 +13,7 @@
 # WHY IT HAS TO GROW AS WELL AS BE SHARED. Measured 2026-10-12: the existing cues match none of the
 # three questions that triggered this work (evidence sufficiency, a design choice, an ordering), and
 # the existing veto silences one of them (the word `deploy` inside `deploy-channel`). So the closing
-# group adds three `?` cues and a narrower veto, plus one declarative cue (CL4, its own function `tfc_is_handoff`, 2026-10-19); the pre-ask hook is NOT widened by them. It asks for `shared+ask`, which
+# group adds three `?` cues and a narrower veto, plus one declarative cue (CL4, its own function `tfc_is_handoff`, 2026-10-19) and one label-sentence cue (its own function `tfc_is_label_handoff`, 2026-10-26); the pre-ask hook is NOT widened by them. It asks for `shared+ask`, which
 # adds ONE cue of its own (`ask`, 2026-10-14: a brief's "ask the operator" question about how named leftover items are
 # disposed of, run as a new pipeline vs recorded as not fixed). `shared` itself is unchanged; no production hook asks for
 # plain `shared` first, but the pre-ask hook's version-skew fallback does (do not "clean it up"). The closing
@@ -102,6 +102,18 @@ TFC_CL4_AUTH_RE='\b(flip|dispatch|rotate|rotation|wipe|delete|revoke|deploy|rede
 # ones included) and to no cue in the pre-ask group.
 TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accountants?|lawyers?|investors?|customers?|features?|roadmap|milestones?)\b'
 
+# LABEL arm (2026-10-26, Ruled by CTO agent; cue 4 of 6 and the LAST one): the final sentence of a closing that begins `Paused:` or
+# `Blocked:` used to end the whole check, and a label whose own sentence handed a technical ruling to the operator ("... needs your
+# ruling on whether this transient failure counts") passed it. `tfc_is_label_handoff` judges that ONE sentence (the text after the
+# label colon), apart from the `?` cues and from CL4. One phrase only: `your ruling` after a verb of waiting, or on/about/as to
+# whether|if|which. Measured on 2026-10-26 over 10,695 local label-ending messages: this phrase fired once (the incident) and never
+# wrongly; the wider "your call" fired 19 times, 12 of them operator-class, so it is NOT a cue here. The next miss in a label sentence
+# adds no cue: it opens the other ADR-084 remedy (judging a Decision-for-you list that carries no question mark), never a synonym.
+# NEG is bound to the verb: "this is not awaiting your ruling" is a status line, "no need for your ruling" is not a request.
+# The ledger hash for this cue covers the normalised text AFTER the label colon.
+TFC_LABEL_PHRASE_ERE='\b(needs|needed|awaiting|awaits|requires|pending|waiting (on|for)) your ruling\b|\byour ruling (on|about|as to) (whether|if|which)\b'
+TFC_LABEL_NEG_ERE='(\b(not|no longer|never|without)\b|n'"'"'t) ([a-z]+ ){0,2}(needs?|awaiting|pending|requires?|waiting (on|for)) your ruling|\bno need for your ruling\b'
+
 # ASK group (2026-10-14, Ruled by CTO agent): the DISPOSITION of items a brief already named. A brief that says "ask the
 # operator" about whether leftover roadmap items run as a new pipeline or are recorded as not fixed is a technical routing
 # call, not a scope ask. Both halves (ROUTE and RECORD) must sit in the SAME '?' segment, inside the weak-cue block, so
@@ -128,7 +140,10 @@ tfc_self_check() {
   [[ -n "${TFC_ASK_ROUTE_RE-}" && -n "${TFC_ASK_RECORD_RE-}" && -n "${TFC_ASK_VETO_RE-}" ]] || return 1
   # Same reason for CL4: an empty ERE matches every sentence, so the hook would block every closing.
   [[ -n "${TFC_CL4_SELF_ERE-}" && -n "${TFC_CL4_PHRASE_ERE-}" && -n "${TFC_CL4_CANDIDATE_ERE-}" && -n "${TFC_CL4_NOUN_RE-}" && -n "${TFC_CL4_AUTH_RE-}" ]] || return 1
+  # Same reason for the label arm: an empty phrase ERE would match every Blocked:/Paused: sentence, an empty negation ERE would veto none.
+  [[ -n "${TFC_LABEL_PHRASE_ERE-}" && -n "${TFC_LABEL_NEG_ERE-}" ]] || return 1
   declare -f tfc_is_handoff >/dev/null 2>&1 || return 1
+  declare -f tfc_is_label_handoff >/dev/null 2>&1 || return 1
   declare -f tfc_is_fork >/dev/null 2>&1 || return 1
   return 0
 }
@@ -217,6 +232,27 @@ tfc_is_handoff() {
   grep -qE "$TFC_CLOSING_PERM_RE" <<<"$unit" && return 1
   # shellcheck disable=SC2034  # read by the sourcing hook
   TFC_HIT="cl4"
+  return 0
+}
+
+# tfc_is_label_handoff <sentence>  exit 0 = the body of a final Paused:/Blocked: label itself hands a technical ruling to the operator, 1 = pass.
+# <sentence> is the text AFTER the label colon, already lowercased and single-spaced. Sets TFC_HIT=label on a hit. Same call-in-current-shell rule
+# as tfc_is_fork. The phrase gate comes first; then the same vetoes as the CL4 function (closing EXTRA, BUSINESS, authorization verbs, the two
+# permission shapes) and a negation veto. Each veto is its own physical line against the one variable `sentence`, so each has its own mutation row.
+tfc_is_label_handoff() {
+  local sentence="${1-}"
+  # shellcheck disable=SC2034  # TFC_HIT is the function's output channel, read by the sourcing hook
+  TFC_HIT=""
+  [[ -n "$sentence" ]] || return 1
+  grep -qE "$TFC_LABEL_PHRASE_ERE" <<<"$sentence" || return 1
+  grep -qE "$TFC_CLOSING_EXTRA_RE" <<<"$sentence" && return 1
+  grep -qE "$TFC_BUSINESS_RE" <<<"$sentence" && return 1
+  grep -qE "$TFC_CL4_AUTH_RE" <<<"$sentence" && return 1
+  grep -qE "$RULING_PERM_RE" <<<"$sentence" && return 1
+  grep -qE "$TFC_CLOSING_PERM_RE" <<<"$sentence" && return 1
+  grep -qE "$TFC_LABEL_NEG_ERE" <<<"$sentence" && return 1
+  # shellcheck disable=SC2034  # read by the sourcing hook
+  TFC_HIT="label"
   return 0
 }
 

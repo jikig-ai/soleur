@@ -20,7 +20,9 @@
 # FIRST Stop of a chain is judged (it carries false; ralph and this hook may both block it, and the model then
 # sees two reasons, which is benign: the next Stop carries true for both). Every later Stop in the chain,
 # including the one-shot Step 8 closing, carries true and exits at arm 4, so mid-pipeline closing messages
-# are not judged; the pointer line in the one-shot skill is signage there, not hook-backed.
+# are not judged. Two controls stand where this hook cannot (ADR-084 addendum, 2026-10-26): the pre-check before a Blocked:/Paused:
+# label in section 8.1 of technical-ruling-delegation.md, and the constant reminder the ralph stop hook appends to its model-visible
+# block text on every iteration. Neither is a barrier; both are signage at the carrier boundary.
 #
 # FAIL OPEN, AND WHY (ADR-157 "What this supersedes": absorbing a failure is correct for a Stop hook; a
 # Stop hook cannot ask). A wrongly blocked closing message is the worse failure, so every parse doubt
@@ -30,8 +32,11 @@
 # matches every line), an unterminated fence. It never sources lib/hook-input.sh (PreToolUse-shaped).
 #
 # ESCAPES (each needs non-empty content). `<stop>OPERATOR-GATE: ...</stop>` or `<stop>BLOCKED: ...</stop>`
-# anywhere in the window, and a final-sentence plain `Paused:` / `Blocked:` label (shared with
-# unkept-promise-hook.sh, so one appended label disarms both gates), pass the whole closing.
+# anywhere in the window pass the whole closing. A final-sentence plain `Paused:` / `Blocked:` label (shared with
+# unkept-promise-hook.sh, so one appended label disarms both gates) passes the whole closing too, EXCEPT that the labelled sentence
+# itself is judged by tfc_is_label_handoff (2026-10-26: "Blocked: ... needs your ruling on whether this failure counts" is a technical
+# hand-off, not a status): it blocks once unless an `Operator-only (category):` sentence of the same paragraph, or the label body
+# itself, covers it. The paragraph above the label is NOT judged, and only a final sentence that BEGINS with the label is.
 # `Operator-only (category): ...` governs ONLY its own sentence and the next `?` unit in the same paragraph,
 # so one appended self-label cannot pass three unrelated technical questions. The block reason teaches the
 # plain forms only: it carries no angle-bracket text (the model echoes markup it is taught).
@@ -100,10 +105,10 @@ CUT=0
 WIN="$(printf '%s' "$NORM" | tail -c 1500)"
 [[ -n "${WIN//[[:space:]]/}" ]] || exit 0
 # Cheap pre-filter, on the NORMALISED window (a raw-byte test missed "your<NBSP>call", review of PR #10547): without a `?` only a
-# declarative hand-off (CL4) can hit, and its candidate alternation is the lib's own, so the two cannot drift.
+# declarative hand-off (CL4) or a label sentence handing over a ruling can hit, and both candidate expressions are the lib's own, so they cannot drift.
 # The sentence split mirrors the awk's, so a `^`-anchored alternative reads a sentence start in both. Captured into a variable and tested, never piped into a quiet grep.
 if [[ "$WIN" != *"?"* ]]; then
-  CAND_HIT="$(sed -E 's/([.!]) /\1\n/g' <<<"$WIN" | grep -E "$TFC_CL4_CANDIDATE_ERE" || true)"
+  CAND_HIT="$(sed -E 's/([.!]) /\1\n/g' <<<"$WIN" | grep -E "$TFC_CL4_CANDIDATE_ERE|$TFC_LABEL_PHRASE_ERE" || true)"
   [[ -n "$CAND_HIT" ]] || exit 0
 fi
 
@@ -111,7 +116,8 @@ fi
 if grep -qE '<stop>(operator-gate|blocked):[[:space:]]*[^<[:space:]][^<]*</stop>' <<<"$WIN"; then exit 0; fi
 
 # --- units: the `?`-terminated sentences (rows U), each with its own escape flag; the declarative hand-off candidates (rows D,
-# CL4, judged apart); plus the final sentence (row F) ---------------------------------------------------
+# CL4, judged apart); plus the final sentence (row F, carrying the same cover flag: 1 when an Operator-only sentence earlier in the
+# paragraph, or the label body itself, covers it) ----------------------------------------------------------
 # A `?` ends a unit only before whitespace, end of line or closing punctuation, so a URL query string is
 # not a boundary. `esc` is set by a sentence-initial `Operator-only (category):` label and covers exactly
 # one unit (its own sentence if that is a unit, else the next one) and never crosses a blank line.
@@ -124,9 +130,10 @@ UNITS="$(printf '%s\n' "$WIN" | awk -v cut="$CUT" -v cand="$TFC_CL4_CANDIDATE_ER
     for (i = 1; i <= n; i++) {
       if (islabel(a[i])) esc = 1
       else if (a[i] ~ cand) print "D" esc "\t" a[i]
+      fin_cover = esc
     }
   }
-  BEGIN { esc = 0; last_line = "" }
+  BEGIN { esc = 0; fin_cover = 0; last_line = "" }
   {
     line = $0
     if (NR == 1 && cut == 1) {
@@ -152,32 +159,45 @@ UNITS="$(printf '%s\n' "$WIN" | awk -v cut="$CUT" -v cand="$TFC_CL4_CANDIDATE_ER
       sub(/^ +/, "", unit)
       if (islabel(unit)) esc = 1
       print "U" esc "\t" unit
-      esc = 0
+      fin_cover = esc; esc = 0
     }
   }
   END {
     if (last_line != "") {
       n = split(last_line, a, /[.!?] /)
       s = a[n]; sub(/^[ *_>-]+/, "", s)
-      print "F\t" s
+      cov = fin_cover
+      b = s; gsub(/[*_]/, "", b)
+      if (b ~ /^(paused|blocked):/) { sub(/^[^:]*: */, "", b); if (islabel(b)) cov = 1 }
+      print "F" cov "\t" s
     }
   }')" || { _note "SKIPPED — unit split failed"; exit 0; }
 
-# Final-sentence `Paused:` / `Blocked:` label passes the whole closing (it mirrors the plugin hook). A label
-# with no content, or only a no-op word ("Blocked: none."), is a status line and does not count.
+# Final-sentence `Paused:` / `Blocked:` label (it mirrors the plugin hook) ends the check, EXCEPT when that sentence itself hands a
+# technical ruling to the operator (tfc_is_label_handoff) and nothing covers it: then it is the hit, and the block output below is the
+# only way out. A label with no content, or only a no-op word ("Blocked: none."), is a status line and does not count. Only the label
+# sentence is judged (the paragraph above it stays exempt), and every doubt (no hand-off, a cover) exits 0.
 TAB=$'\t'
-FINAL="$(grep -E "^F${TAB}" <<<"$UNITS" | tail -n 1)"
+HIT_UNIT=""; HIT_CUE=""
+FINAL="$(grep -E "^F[01]${TAB}" <<<"$UNITS" | tail -n 1)"
 if [[ -n "$FINAL" ]]; then
-  FINAL_SENT="${FINAL#F"$TAB"}"
+  FINAL_COVER="${FINAL:1:1}"
+  FINAL_SENT="${FINAL#F?"$TAB"}"
   # `**Paused**:` is the plugin hook's accepted bold form too, so strip emphasis markers before the match.
   FINAL_SENT="${FINAL_SENT//[*_]/}"
   if [[ "$FINAL_SENT" =~ ^(paused|blocked): ]]; then
     CONTENT="${FINAL_SENT#*:}"; CONTENT="${CONTENT//[[:punct:][:space:]]/}"
-    if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then exit 0; fi
+    if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then
+      BODY="${FINAL_SENT#*:}"; BODY="${BODY# }"
+      [[ "$FINAL_COVER" == 1 ]] && exit 0
+      tfc_is_label_handoff "$BODY" || exit 0
+      HIT_UNIT="$BODY"; HIT_CUE="$TFC_HIT"
+    fi
   fi
 fi
 
-# --- judge the last 12 units, each alone ------------------------------------------------------------
+# --- judge the last 12 units, each alone (skipped when the label arm already has its hit) ------------
+if [[ -z "$HIT_UNIT" ]]; then
 declare -a JUDGE=()
 while IFS= read -r row; do
   [[ "$row" == "U0${TAB}"* ]] && JUDGE+=("${row#"U0${TAB}"}")
@@ -196,7 +216,6 @@ COUNT_D=${#JUDGE_D[@]}
 START_D=0
 if (( COUNT_D > 12 )); then START_D=$((COUNT_D - 12)); _note "NOTE — $COUNT_D declarative hand-off candidates, judging the last 12"; fi
 
-HIT_UNIT=""; HIT_CUE=""
 for (( k = START_D; k < COUNT_D; k++ )); do
   u="${JUDGE_D[$k]}"
   if tfc_is_handoff "$u"; then HIT_UNIT="$u"; HIT_CUE="$TFC_HIT"; break; fi
@@ -212,6 +231,7 @@ for (( k = START; k < COUNT; k++ )); do
   if (( rc == 0 )); then HIT_UNIT="$u"; HIT_CUE="$TFC_HIT"; break; fi
   (( rc == 2 )) && { _note "SKIPPED — tfc_is_fork rejected its arguments"; exit 0; }
 done
+fi
 [[ -n "$HIT_UNIT" ]] || exit 0
 
 # --- block: ONE JSON object, byte-constant text (never the unit, the cue or any model text) --------
@@ -221,7 +241,7 @@ Do this now: spawn soleur:engineering:cto with the Agent tool (legal questions: 
 
 Then re-send your closing message with the ruling in it. Split the item: ask the operator only the authorization that remains, and only for a decision in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand. Say in one line why you re-sent (the CTO ruled, or the fork is operator-only), and restate only the delta plus the authorization: the operator has already read the first message.
 
-Only if the fork is genuinely operator-only, classify it instead of asking the CTO: put Operator-only (money): or the matching category, then the reason, directly before the question it covers (same paragraph). A final sentence beginning Paused: or Blocked: followed by what you are waiting on also ends this check.
+Only if the fork is genuinely operator-only, classify it instead of asking the CTO: put Operator-only (money): or the matching category, then the reason, directly before the question it covers (same paragraph). A final sentence beginning Paused: or Blocked: followed by what you are waiting on also ends this check, unless that sentence itself leaves a technical ruling to the operator; then route it to the CTO first.
 
 See hr-technical-fork-is-not-an-operator-question.'
 SYSMSG='pre-closing-technical-fork-gate: stopped once because the closing message asked the operator to rule on a technical fork; the assistant was told to consult its CTO agent. If that was wrong, reply "send it anyway" (a repeat close always passes). The assistant can also release it with Operator-only (money): the reason, placed before the question. To disarm this check for a whole session, start the session with SOLEUR_ACK_TECHNICAL_FORK=1.'
