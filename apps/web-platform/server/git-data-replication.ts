@@ -23,6 +23,7 @@ import { createHash } from "crypto";
 import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
+import { readGitDataKeyEnv, type GitDataKeyEnvName } from "./git-data-key";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
 import { hashUserId, reportSilentFallback } from "./observability";
 import {
@@ -209,8 +210,10 @@ export function resolveGitDataHostKeyPin(): string {
  * and provisioning read is non-empty after trim. Dev carries none of them.
  */
 function gitDataArmedInProcess(): boolean {
-  return ["GIT_REMOVE_SSH_PRIVATE_KEY", "GIT_PROVISION_SSH_PRIVATE_KEY", "GIT_DATA_SSH_HOST"].some(
-    (k) => !!process.env[k]?.trim(),
+  return (
+    !!readGitDataKeyEnv("GIT_REMOVE_SSH_PRIVATE_KEY") ||
+    !!readGitDataKeyEnv("GIT_PROVISION_SSH_PRIVATE_KEY") ||
+    !!process.env.GIT_DATA_SSH_HOST?.trim()
   );
 }
 
@@ -333,8 +336,8 @@ export function gitDataRemoteUrl(workspaceId: string): string {
   return `ssh://git@${host}${GIT_DATA_REPO_PATH_PREFIX}/${workspaceId}.git`;
 }
 
-function requireEnvKey(name: string): string {
-  const key = process.env[name]?.trim();
+function requireEnvKey(name: GitDataKeyEnvName): string {
+  const key = readGitDataKeyEnv(name);
   if (!key) {
     throw new Error(
       `git-data: ${name} is unset — cannot reach the git-data host. ` +
@@ -503,7 +506,7 @@ export async function removeGitDataRepo(workspaceId: string): Promise<GitDataEra
   // present ⇒ the store is (or was) in play, so attempt the erase regardless of the
   // flag. The host-side wrapper is idempotent — a remove of a non-existent repo is
   // a no-op — so an over-eager call is harmless.
-  const removeKey = process.env.GIT_REMOVE_SSH_PRIVATE_KEY?.trim();
+  const removeKey = readGitDataKeyEnv("GIT_REMOVE_SSH_PRIVATE_KEY");
   if (!removeKey) {
     // "Never in play" is only supportable when the SIBLING arming inputs are absent too.
     // Provisioning arms on a DIFFERENT variable (GIT_PROVISION_SSH_PRIVATE_KEY), so a
