@@ -38,7 +38,11 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 }));
 vi.mock("@octokit/core", () => ({
   Octokit: class {
-    request = async (_route: string, params: Record<string, unknown>) => {
+    request = async (route: string, params: Record<string, unknown>) => {
+      // The skill-conflict guard (#10552) lists open PRs and their files: nothing is open here.
+      if (route === "GET /repos/{owner}/{repo}/pulls" || route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
+        return { data: [] };
+      }
       const q = String(params.q ?? "");
       h.searchQs.push(q);
       if (q.includes("head:self-healing/auto-")) {

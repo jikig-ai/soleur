@@ -1,9 +1,9 @@
 ---
 title: "A Map That Can't Drift"
 type: pillar
-publish_date:
+publish_date: 2026-11-05
 channels: x, bluesky, discord, linkedin-personal
-status: draft
+status: scheduled
 issue_reference: "#10694"
 ---
 
