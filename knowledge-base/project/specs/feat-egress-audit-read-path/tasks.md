@@ -17,21 +17,23 @@ Plan: `knowledge-base/project/plans/2026-10-26-feat-egress-audit-read-path-plan.
 - [ ] 1.2 Shape test `test/supabase-migrations/NNN-egress-audit-summary-rpc.test.ts` (definer, search_path, `42501`, grants, no table grant or policy, no timeout clause)
 - [ ] 1.3 Migration `NNN_egress_audit_summary_rpc.sql` + `.down.sql` + `supabase/verify/NNN_*.sql` (records `authenticated` rolconfig)
 - [ ] 1.4 Run `bun run test:rls-fuzz` and `cd apps/web-platform && ./node_modules/.bin/vitest run test/migration-rpc-grants.test.ts`
-- [ ] 1.5 `EXPLAIN ANALYZE` on the worst-case seed (500 rows per bucket x ~2,880 buckets); keep the result for the PR description; switch the hint to a PK probe if the `p_limit = 0` probe exceeds ~100 ms
+- [ ] 1.5 Measure per plan AC3a: `EXPLAIN (ANALYZE, BUFFERS)` cold and warm on three seeds (unique hosts; 100 repeating hosts at 500 rows per bucket; same with ~50 interleaved tenants), after `ANALYZE`/`VACUUM`, 6+ calls; budgets hint probe <= 20 ms, page warm p95 < 500 ms; record `authenticated` `rolconfig`. The hint uses the latest-bucket probe from the start
+- [ ] 1.6 Tenant-boundary mutants: seed tenant B with distinct data and assert A sees none of it in every branch; membership check is the first statement (order oracle with an invalid `p_decision`); constant in-body message distinct from the grant-denial text; seed aggregation cases through `ingest_egress_audit_rollup`
 
 ## Phase 2: Loader and shared helper
 
 - [ ] 2.1 Failing tests `test/egress-audit-read-loader.test.ts` (null workspace -> unbound; reader throw -> unavailable; RPC not called in either; 42501 -> forbidden and not mirrored; other errors and abort -> unavailable with one mirror; forged query params ignored; collection tri-state incl. unknown; webAccess null)
 - [ ] 2.2 `server/egress-audit-collection.ts` (`isEgressAuditCollectionOn`); swap the inline call in `server/egress-audit-ingest.ts`; amend the flag comment in `lib/feature-flags/server.ts`
 - [ ] 2.3 `server/egress-audit-read.ts` and `lib/egress-audit/summary.ts`
-- [ ] 2.4 Sentry alert for feature `egress-audit-read` (`infra/sentry/issue-alerts.tf`, `alert-reference.json`)
+- [ ] 2.4 Sentry rule `egress-audit-read-failure` (`infra/sentry/issue-alerts.tf`, `alert-reference.json`; filter `feature eq egress-audit-read` and `op in rpc_error,rpc_timeout,workspace_read_error`) plus the op-contract test; reasons go in `op` with `err = null` and a static message per reason; hint mirror uses `mirrorWarnWithDebounce` with a stated key and distinct `errorClass`, registered in `server/observability.ts`
 
 ## Phase 3: UI
 
 - [ ] 3.1 Failing component tests: `test/egress-audit-view.test.tsx` (every kind and precedence branch, error is never empty, filtered-empty, truncation wording, overflow label, "at least" everywhere, banner rule, no date or forbidden word in rendered text, chips as `NavLink` with `aria-current`) and `test/web-egress-toggle.test.tsx` (link in both states, hint shown/hidden, dialog copy by prop)
 - [ ] 3.2 `app/(dashboard)/dashboard/settings/scope-grants/egress-audit/page.tsx` (force-dynamic, awaited `searchParams`) and `components/settings/egress-audit-view.tsx` plus the retry/refresh client island
 - [ ] 3.3 Scope Grants page: concurrent bounded `p_limit = 0` read, collection check, debounced mirror, props to the toggle; remove the stale comment
-- [ ] 3.4 `components/settings/web-egress-toggle.tsx`: link in both states, client-rendered "Last request: X ago", dialog copy replaced; remove the stale comment
+- [ ] 3.4 `components/settings/web-egress-toggle.tsx`: link in both states, client-rendered "Last recorded request: X ago" (clamped at zero), Off status retention sentence when a last request exists, one-line recording notice for non-owners when collection is on, dialog notice tri-state (generic sentence on "unknown"); remove the stale comment
+- [ ] 3.4a Page: workspace name in the subtitle, "(all outcomes)" summary label under a filter, footer erasure statement and link, banner text about pre-join visibility, `Cache-Control: private, no-store` verified in a browser or integration fetch
 - [ ] 3.5 `tsc`, unit and component projects (vitest, not `bun test`)
 
 ## Phase 4: Records and documents
