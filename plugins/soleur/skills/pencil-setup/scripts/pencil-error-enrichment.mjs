@@ -1,21 +1,58 @@
 // Pure function: enriches known Pencil API error messages with actionable hints.
 // Extracted for testability — no external dependencies.
+//
+// Tool surface (CTO ruling 1): the adapter keeps the agent-facing `mcp__pencil__*`
+// names stable and translates them onto @pen.dev/cli's REPL. Eight tools are
+// live; nine are removed stubs that never reach the engine. REMOVED_TOOL_HINTS is
+// the ONE table behind both the adapter's stub handlers and the hint appended to
+// an engine `Unknown tool:` line, so the two cannot drift.
 
-// Tools @pencil.dev/cli 0.2.9 removed (#11143). Retire with #11156.
-const REMOVED_TOOL_HINTS = {
-  set_variables:
-    "set_variables is not available in the headless CLI. Set variables with SetVariables(...) inside batch_design (syntax: get_editor_state({ include_schema: true })).",
-  find_empty_space_on_canvas:
-    "find_empty_space_on_canvas is not available in the headless CLI. Use FindEmptySpace(...) inside batch_design (syntax: get_editor_state({ include_schema: true })).",
+export const LIVE_TOOL_NAMES = Object.freeze([
+  "open_document",
+  "save",
+  "batch_design",
+  "get_screenshot",
+  "export_nodes",
+  "get_editor_state",
+  "get_variables",
+  "read_skill",
+]);
+
+// Every hint starts with the removed tool's own name and names a tool that exists.
+const REMOVED_TOOL_HINTS = Object.freeze({
+  batch_get:
+    "batch_get was removed (the engine has no node-dump tool). Read nodes with Get(...) and Print(...) inside batch_design (a batch_design call also auto-saves), or call get_editor_state for the list of top-level nodes.",
+  snapshot_layout:
+    "snapshot_layout was removed. Layout problems arrive as an `## issues detected:` block on batch_design replies; fix them with Update(...) inside batch_design.",
+  get_guidelines:
+    'get_guidelines was removed. Read design guidance with read_skill({ path: "guide/<name>.md" }); call read_skill() with no path for the index.',
   get_style_guide:
-    "get_style_guide is not available in the headless CLI. Call get_guidelines() with no arguments to list the available guides, or continue with brand tokens.",
+    'get_style_guide was removed. read_skill() lists the style archetypes; read one with read_skill({ path: "guide/<name>.md" }), or continue with brand tokens.',
   get_style_guide_tags:
-    "get_style_guide_tags is not available in the headless CLI. Call get_guidelines() with no arguments to list the available guides, or continue with brand tokens.",
+    'get_style_guide_tags was removed. read_skill() lists the style archetypes; read one with read_skill({ path: "guide/<name>.md" }), or continue with brand tokens.',
+  find_empty_space_on_canvas:
+    'find_empty_space_on_canvas was removed. Call FindEmptySpace(...) inside batch_design (grammar: read_skill({ path: "execute.md" })).',
+  set_variables:
+    'set_variables was removed. Call SetVariables(...) inside batch_design (grammar: read_skill({ path: "execute.md" })).',
   search_all_unique_properties:
-    "search_all_unique_properties has no headless equivalent in this CLI version. Read nodes with batch_get and inspect them.",
+    "search_all_unique_properties has no headless equivalent. Read nodes with Get(...) and Print(...) inside batch_design; change them with Update(...) in the same batch_design call.",
   replace_all_matching_properties:
-    "replace_all_matching_properties has no headless equivalent in this CLI version. Apply the change with Update(...) calls inside batch_design.",
-};
+    "replace_all_matching_properties has no headless equivalent. Read with Get(...) and change nodes with Update(...) calls inside batch_design.",
+});
+
+export const REMOVED_TOOL_NAMES = Object.freeze(Object.keys(REMOVED_TOOL_HINTS));
+
+// The hint for a removed tool, or undefined for any other name (prototype names
+// included).
+export function removedToolHint(name) {
+  return Object.hasOwn(REMOVED_TOOL_HINTS, name) ? REMOVED_TOOL_HINTS[name] : undefined;
+}
+
+// `execute` failures end with advice to retry with `edits`/`editId`, which the
+// adapter does not expose; point at the one path that exists instead.
+const EXECUTE_RETRY_ADVICE =
+  /^- IMPORTANT: Fix this by calling `execute` again with the `edits` parameter.*$/m;
+const EXECUTE_EDIT_ID_LINE = /^- `editId`: .*\n?/m;
 
 export function enrichErrorMessage(text) {
   if (text.includes("alignSelf") && text.includes("unexpected property")) {
@@ -31,11 +68,22 @@ export function enrichErrorMessage(text) {
       "third positional argument to I() (e.g., {after: \"nodeId\"}). Positional " +
       "insertion is not supported. Nodes are appended at end of parent. Use " +
       "M(nodeId, parent, index) to reorder after insertion. Discover the target " +
-      "index with batch_get on the parent. See #1117.";
+      "index with Get(...) on the parent inside batch_design. See #1117.";
   }
   const removed = text.match(/^Unknown tool: ([a-z_]+)/m);
-  if (removed && Object.hasOwn(REMOVED_TOOL_HINTS, removed[1])) {
-    return text + "\n\n[adapter hint] " + REMOVED_TOOL_HINTS[removed[1]];
+  if (removed) {
+    const hint = removedToolHint(removed[1]);
+    if (hint) return text + "\n\n[adapter hint] " + hint;
+    return text;
+  }
+  if (EXECUTE_RETRY_ADVICE.test(text)) {
+    return text
+      .replace(
+        EXECUTE_RETRY_ADVICE,
+        "- IMPORTANT: Fix the operations and re-send the corrected operations with batch_design (the failed block was rolled back)."
+      )
+      .replace(EXECUTE_EDIT_ID_LINE, "")
+      .trimEnd();
   }
   return text;
 }
