@@ -959,7 +959,30 @@ export const DRAFT_EDIT_MAX_TOKENS = 4_096;
 /** About 30k tokens. 4 of the 104 allowlisted targets exceed it today (#10551 shortens them). */
 export const EDIT_TARGET_MAX_BYTES = 120_000;
 const EDIT_NEW_LINES_MAX = 20;
-const EDIT_LINE_MAX_CHARS = 500;
+/**
+ * The hard cap on one model-written `AGENTS.rules.md` line. It equals the corpus lint's
+ * `PER_RULE_CAP` in scripts/lint-agents-rule-budget.py (600 UTF-8 bytes), and a vitest reads that
+ * constant and asserts equality (the SITES row in the compound-sync lint pins it too, in
+ * lefthook and CI), so the validator never accepts a line the lint rejects and never
+ * refuses one the lint accepts (#10552: a 500 cap refused real rules, 26 of the 99 rule bullets in
+ * AGENTS.rules.md are longer than 500). Characters equal bytes here because PRINTABLE_ASCII_RE admits only ASCII.
+ */
+export const AGENTS_EDIT_LINE_MAX_CHARS = 600;
+/**
+ * The hard cap on one model-written `SKILL.md` line. No lint governs SKILL.md line length (1071
+ * existing lines are over 600), so this constant has no pin by design; revisit it only if refusal
+ * rows (`edit-invalid` / `too-long`) show 1000 being hit. The apply step's MAX_DIFF_BYTES (a
+ * LENGTH check, in characters) still bounds the whole diff, so at most 16 full lines is the reachable
+ * maximum: 20 full lines pass this validator and are then refused `diff-size-exceeded` by name.
+ */
+export const SKILL_EDIT_LINE_MAX_CHARS = 1000;
+/** The soft target the prompt asks for; the hard cap of the target is what is enforced. */
+export const EDIT_LINE_TARGET_CHARS = 500;
+
+/** The one place a line cap is chosen: the validator and the prompt builder both call it. */
+function editLineMaxChars(targetPath: string): number {
+  return targetPath === "AGENTS.rules.md" ? AGENTS_EDIT_LINE_MAX_CHARS : SKILL_EDIT_LINE_MAX_CHARS;
+}
 
 export const EDIT_REFUSAL_REASONS = [
   "edit-target-unreadable",
@@ -1132,13 +1155,14 @@ function newLinesCause(lines: string[], targetPath: string, base: string): strin
   if (lines.length === 0) return "empty";
   if (lines.length > EDIT_NEW_LINES_MAX) return "too-many";
   if (!lines.every((l) => PRINTABLE_ASCII_RE.test(l))) return "charset";
-  if (lines.some((l) => l.length > EDIT_LINE_MAX_CHARS)) return "too-long";
+  const lineCap = editLineMaxChars(targetPath);
+  if (lines.some((l) => l.length > lineCap)) return "too-long";
   if (lines.every((l) => l.trim() === "")) return "empty";
   // A bare `---` would open or close a frontmatter block.
   if (lines.some((l) => l === "---")) return "shape";
   if (lines.some((l) => CREDENTIAL_RE.test(l))) return "credential";
-  // A fence, comment or preprocessing marker would change how the rest of the file (or the
-  // skill-conflict comment that quotes the diff) is read.
+  // A fence, comment or preprocessing marker would change how the rest of the file or the committed
+  // text is read (the draft PR body carries source-learning paths and rule slugs, never the diff).
   if (lines.some((l) => RENDER_HAZARD_RE.test(l))) return "shape";
   if (targetPath === "AGENTS.rules.md") {
     // A model cannot mint an `hr-` or `wg-` rule (ADR-092 reserves those for human review);
@@ -1353,7 +1377,7 @@ export async function draftAdditiveEdit(args: {
     `You are adding ONE small, additive edit to a rules file, drawing on the learnings below.`,
     untrustedDataSentence(nonce),
     `Contract: return insert_after_line and new_lines. insert_after_line MUST be copied verbatim from the target file and appear in it exactly once (use "" to append at the end of the file). new_lines are the lines to insert after it. Append new lines only; never restate, edit or delete an existing line.`,
-    `Each new line is printable ASCII, at most ${EDIT_LINE_MAX_CHARS} characters; at most ${EDIT_NEW_LINES_MAX} lines.`,
+    `Each new line is printable ASCII, at most ${editLineMaxChars(cluster.target_path)} characters (aim for ${EDIT_LINE_TARGET_CHARS} or fewer; a line over the hard cap refuses the whole edit); at most ${EDIT_NEW_LINES_MAX} lines.`,
     cluster.target_path === "AGENTS.rules.md"
       ? `Every new line must be one rule bullet of the form "- <rule text> [id: <new-id>]" with exactly one [id: ...] per line, an id of class cq-, rf-, pdr- or cm- (3-60 lowercase letters, digits or hyphens after the prefix) that is not already in the file, and no mention of any hr- or wg- rule anywhere in the line, and no enforcement tags such as [skill-enforced] or [mandates-filing]. No links, URLs, code fences or HTML comments. Always-loaded byte headroom for this edit: ${headroomBytes} bytes.`
       : `Do not insert inside the frontmatter or inside a fenced code block. Links must be relative (starting ./ or ../); no URLs, no $( command substitution, no code fences or HTML comments.`,
@@ -1393,18 +1417,132 @@ export async function draftAdditiveEdit(args: {
   return buildAdditiveEditDiff({ targetPath: cluster.target_path, base: target.base, edit });
 }
 
+/** The target prefix the skill-conflict guard applies to (module-level, so the handler holds one definition). */
+export const SKILL_TARGET_PREFIX = "plugins/soleur/skills/";
+/** Open-PR list pages (100 per page) the skill-conflict scan reads: 300 PRs. */
+export const SKILL_GUARD_PR_PAGES = 3;
+/** File-list pages (100 per page) read per open PR: 1000 changed files. */
+export const SKILL_GUARD_FILE_PAGES_PER_PR = 10;
+/** File-list requests the whole run may spend across every open PR. */
+export const SKILL_GUARD_FILE_REQUEST_BUDGET = 150;
+const SKILL_GUARD_PAGE_SIZE = 100;
+/** Per-request timeout: a hung socket must not hold one request open. */
+export const SKILL_GUARD_REQUEST_TIMEOUT_MS = 20_000;
 /**
- * The diff block of the skill-conflict comment the App posts on an unrelated open PR. The fence is
- * sized from the content: a context line of the diff can be a bare closing fence (a base file that
- * contains a fenced block), and CommonMark lets a fence of equal or greater length close the block,
- * so a fixed three-backtick fence let the rest of the diff render as live markdown (@mentions,
- * links, image beacons) from the bot account.
+ * Total wall-clock bound for the whole scan (the account-wide cron slot is held while it runs).
+ * Passing it (a clock strictly later) records bound `time`: unverifiable, never clear. Checked before every request.
  */
-export function skillConflictDiffBody(diff: string): string {
-  if (PII_REGEX.test(diff)) return "[diff redacted — PII pattern detected in LLM output]";
-  const longestRun = Math.max(0, ...(diff.match(/`+/g) ?? []).map((r) => r.length));
-  const fence = "`".repeat(Math.max(4, longestRun + 1));
-  return `${fence}diff\n${diff}\n${fence}`;
+export const SKILL_GUARD_DEADLINE_MS = 120_000;
+/**
+ * The one author skipped, to save requests. This is an accepted exclusion, not a derivation: the
+ * path match never runs for a skipped PR, so a Dependabot PR that did edit the target would not be
+ * seen (Dependabot edits manifests and lockfiles, not SKILL.md).
+ */
+const SKILL_GUARD_SKIPPED_AUTHOR = "dependabot[bot]";
+
+export type SkillScanBound = "prs" | "files" | "requests" | "time";
+/**
+ * The run-wide result of the skill-conflict scan. JSON-serialisable on purpose: it is a memoized
+ * step output, so it must survive an Inngest replay. `changed` holds ONLY paths equal to one of
+ * the requested targets (first open PR wins), which bounds it at one entry per skill cluster and
+ * keeps attacker-controlled file names out of stored or logged values.
+ */
+export type SkillScan = {
+  changed: Record<string, number>;
+  incomplete: SkillScanBound | null;
+  /** The exact targets this scan was asked about: a target outside it was never checked. */
+  scanned: string[];
+};
+export type SkillVerdict =
+  | { kind: "clear" }
+  | { kind: "conflict"; pr: number }
+  | { kind: "unverifiable"; bound: SkillScanBound | "targets" };
+
+/**
+ * One scan over the open PRs' changed files, answering "does some open PR change one of these
+ * exact files?" (#10552, replacing a title/body search that never tested file overlap). It makes
+ * two literal-route requests only, never writes, and throws on any request error or non-array
+ * payload (fixed strings: a payload is never echoed), so the step fails and Inngest retries
+ * instead of reading a fault as "no conflict". Hitting a bound is recorded in `incomplete` and the
+ * scan keeps going where it still can, so a later match is never lost.
+ */
+export async function scanOpenPrSkillPaths(input: {
+  octokit: Pick<Octokit, "request">;
+  owner: string;
+  repo: string;
+  targets: string[];
+  /** Clock, injectable so the deadline is testable without waiting. */
+  now?: () => number;
+}): Promise<SkillScan> {
+  const { octokit, owner, repo } = input;
+  const now = input.now ?? Date.now;
+  const deadline = now() + SKILL_GUARD_DEADLINE_MS;
+  const wanted = new Set(input.targets);
+  const scanned = [...wanted];
+  const changed: Record<string, number> = {};
+  let incomplete: SkillScanBound | null = null;
+  const noteBound = (b: SkillScanBound): void => {
+    incomplete ??= b;
+  };
+  let fileRequests = 0;
+
+  prPages: for (let page = 1; page <= SKILL_GUARD_PR_PAGES; page++) {
+    if (now() > deadline) {
+      noteBound("time");
+      break;
+    }
+    const { data: prs } = await octokit.request("GET /repos/{owner}/{repo}/pulls", {
+      owner, repo, state: "open", per_page: SKILL_GUARD_PAGE_SIZE, page,
+      request: { signal: AbortSignal.timeout(SKILL_GUARD_REQUEST_TIMEOUT_MS) },
+    });
+    if (!Array.isArray(prs)) throw new Error("skill-conflict scan: pulls payload was not an array");
+    for (const pr of prs) {
+      if (!Number.isInteger(pr.number)) throw new Error("skill-conflict scan: pull request without a number");
+      if (pr.user?.login === SKILL_GUARD_SKIPPED_AUTHOR) continue;
+      for (let filePage = 1; filePage <= SKILL_GUARD_FILE_PAGES_PER_PR; filePage++) {
+        if (fileRequests >= SKILL_GUARD_FILE_REQUEST_BUDGET) {
+          noteBound("requests");
+          break prPages;
+        }
+        if (now() > deadline) {
+          noteBound("time");
+          break prPages;
+        }
+        fileRequests++;
+        const { data: files } = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+          owner, repo, pull_number: pr.number, per_page: SKILL_GUARD_PAGE_SIZE, page: filePage,
+          request: { signal: AbortSignal.timeout(SKILL_GUARD_REQUEST_TIMEOUT_MS) },
+        });
+        if (!Array.isArray(files)) throw new Error("skill-conflict scan: files payload was not an array");
+        for (const f of files) {
+          for (const name of [f.filename, f.previous_filename]) {
+            if (typeof name === "string" && wanted.has(name) && !Object.hasOwn(changed, name)) {
+              changed[name] = pr.number;
+            }
+          }
+        }
+        if (files.length < SKILL_GUARD_PAGE_SIZE) break;
+        if (filePage === SKILL_GUARD_FILE_PAGES_PER_PR) noteBound("files");
+      }
+      if (wanted.size > 0 && Object.keys(changed).length === wanted.size) return { changed, incomplete, scanned };
+    }
+    if (prs.length < SKILL_GUARD_PAGE_SIZE) break;
+    if (page === SKILL_GUARD_PR_PAGES) noteBound("prs");
+  }
+  return { changed, incomplete, scanned };
+}
+
+/**
+ * The only place a skill-conflict verdict is made. `changed` crosses a JSON round trip on replay,
+ * so membership is `Object.hasOwn`, never `in` (a target named like an Object.prototype member
+ * must not read as a conflict). A conflict outranks an incomplete scan; an incomplete scan with no
+ * match is never "clear", and neither is a target the scan was never asked about (`targets`).
+ */
+export function skillConflictVerdict(scan: SkillScan, targetPath: string): SkillVerdict {
+  if (Object.hasOwn(scan.changed, targetPath)) return { kind: "conflict", pr: scan.changed[targetPath] };
+  if (!Array.isArray(scan.scanned) || !scan.scanned.includes(targetPath)) return { kind: "unverifiable", bound: "targets" };
+  if (scan.incomplete !== null) return { kind: "unverifiable", bound: scan.incomplete };
+  return { kind: "clear" };
 }
 
 /**
@@ -1581,8 +1719,11 @@ export async function cronCompoundPromoteHandler({
   // so a replay (which re-enters no step callback) still counts every cluster. Known
   // limit: a run already in flight at deploy whose `apply-and-pr-*` step is memoized
   // `opened` has no memoized `draft-edit-*`; its draft re-runs on replay and, if refused,
-  // would be recorded as a refusal. Runs last under 10 minutes and fire weekly, so this
-  // is accepted and documented rather than guarded.
+  // would be recorded as a refusal. The same window covers #10552's new `skill-conflict-scan`
+  // step: a run already in flight at deploy that resumes on this code finds a step id its saved
+  // sequence lacks, and the SDK may stop it (NON_DETERMINISTIC_FUNCTION) outside the handler's
+  // catch, so no outcome marker is emitted for that run. Runs last under 10 minutes and fire
+  // weekly, so this is accepted and documented rather than guarded.
   const record = (hash: string, o: ClusterOutcome): void => {
     if (o.kind === "opened") {
       clustersOpened++;
@@ -1951,6 +2092,7 @@ export async function cronCompoundPromoteHandler({
     // model-supplied source_learnings path that is not a key is dropped, never read.
     const corpusSummaries = new Map(corpus.entries.map((e) => [e.path, e.summary] as const));
     const draftedTargets = new Set<string>();
+    let skillScan: SkillScan | undefined;
 
     // The parse above is a cast of model output. Rebuild each proposal field by field and keep
     // only source learnings that are keys of the collected corpus: they flow into the cluster
@@ -2027,6 +2169,16 @@ export async function cronCompoundPromoteHandler({
 
     // FR9-FR18: apply clusters and open PRs
     clustersProposed = clusterResult.clusters.length;
+
+    // The skill files this run may draft: the scan records only these exact paths. The allowlist
+    // check is the module-level `assertAllowedTarget` (the handler keeps its two inline sites).
+    const skillScanTargets = [
+      ...new Set(
+        proposals
+          .filter((c) => c.target_path.startsWith(SKILL_TARGET_PREFIX) && assertAllowedTarget(c.target_path) === null)
+          .map((c) => c.target_path),
+      ),
+    ];
 
     for (const [clusterIndex, proposed] of proposals.entries()) {
       const clusterHash = computeClusterHash(proposed.source_learnings);
@@ -2116,6 +2268,30 @@ export async function cronCompoundPromoteHandler({
         proposed_diff_unified: draft.kind === "drafted" ? draft.diff : "",
       };
 
+      // #10552: one run-wide scan of the open PRs' changed files, taken lazily (only a DRAFTED skill
+      // cluster needs it, so suppressed, duplicate, sub-quorum and refused clusters and an
+      // AGENTS.rules.md-only run make zero pulls requests) and shared by every skill cluster. It is
+      // a memoized step, assigned OUTSIDE any step callback. The verdict is made here too, so the
+      // apply callback only reads a constant; a scan the step could not complete throws and the
+      // run retries, it is never read as "no conflict".
+      // The scan and the verdict share `needsSkillGuard`, so a drafted skill cluster always gets a
+      // verdict. The scan's target set is built separately (prefix AND allowlist), so a drafted target
+      // outside it is `unverifiable` (`targets`), never clear: that branch is a tripwire, unreachable
+      // today because the draft step already refuses an off-allowlist target.
+      const needsSkillGuard = draft.kind === "drafted" && proposed.target_path.startsWith(SKILL_TARGET_PREFIX);
+      let skillVerdict: SkillVerdict | null = null;
+      if (needsSkillGuard) {
+        skillScan ??= await step.run("skill-conflict-scan", async () =>
+          scanOpenPrSkillPaths({
+            octokit: new Octokit({ auth: installationToken }),
+            owner: REPO_OWNER,
+            repo: REPO_NAME,
+            targets: skillScanTargets,
+          }),
+        );
+        skillVerdict = skillConflictVerdict(skillScan, proposed.target_path);
+      }
+
       // A refused draft skips the apply step.
       const outcome: ClusterOutcome = draft.kind === "refused"
         ? { kind: "refused", reason: draft.reason }
@@ -2201,24 +2377,34 @@ export async function cronCompoundPromoteHandler({
           return { kind: "refused", reason: "agents-core-hr-rule-edit-refused" };
         }
 
-        if (cluster.target_path.startsWith("plugins/soleur/skills/")) {
-          const { data: openPRs } = await octokit.request("GET /search/issues", {
-            q: `is:pr is:open repo:${REPO_OWNER}/${REPO_NAME} "plugins/soleur/skills" in:files`,
-            per_page: 5,
+        // #10552: the verdict was made OUTSIDE this callback from the run-wide scan (one memoized
+        // step shared by every skill cluster). WARN, not info: `app_container_warn_filter` keeps
+        // level >= 40, so an info line never reaches Better Stack and the exit would be invisible.
+        if (skillVerdict !== null && skillVerdict.kind === "conflict") {
+          logger.warn(
+            {
+              fn: "cron-compound-promote",
+              hash: clusterHash,
+              pr: Number.isInteger(skillVerdict.pr) ? skillVerdict.pr : undefined,
+              target: cluster.target_path,
+            },
+            "skill-conflict-guard-refused",
+          );
+          return { kind: "refused", reason: "skill-conflict-guard" };
+        }
+        if (skillVerdict !== null && skillVerdict.kind === "unverifiable") {
+          logger.warn(
+            { fn: "cron-compound-promote", hash: clusterHash, bound: skillVerdict.bound },
+            "skill-conflict-guard-unverifiable",
+          );
+          // MESSAGE path (err = null) with TAGS: see draft-edit-refused above (#8629).
+          reportSilentFallback(null, {
+            feature: "cron-compound-promote", op: "skill-conflict-guard-unverifiable",
+            message: `skill conflict scan incomplete: ${skillVerdict.bound}`,
+            tags: { bound: skillVerdict.bound },
+            extra: { cluster_hash: clusterHash },
           });
-          if (openPRs.total_count > 0) {
-            const firstPR = openPRs.items[0];
-            const diffBody = skillConflictDiffBody(cluster.proposed_diff_unified);
-            await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
-              owner: REPO_OWNER, repo: REPO_NAME, issue_number: firstPR.number,
-              body: `Compound-promote cluster \`${clusterHash}\` proposes edits to \`${cluster.target_path}\` but this PR already touches skill files. Posting diff here instead of opening a conflicting branch.\n\n${diffBody}`,
-            });
-            // WARN, not info: `app_container_warn_filter` keeps level >= 40,
-            // so an info line never reaches Better Stack and this exit was
-            // invisible -- the very blindness #8281 exists to remove.
-            logger.warn({ fn: "cron-compound-promote", pr: firstPR.number }, "skill-conflict-guard-comment-posted");
-            return { kind: "refused", reason: "skill-conflict-guard" };
-          }
+          return { kind: "refused", reason: "skill-conflict-guard-unverifiable" };
         }
 
         const branchName = `${PROMOTE_BRANCH_PREFIX}${clusterHash}-${dateSuffix}`;
