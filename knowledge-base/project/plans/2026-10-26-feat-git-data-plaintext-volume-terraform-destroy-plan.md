@@ -114,7 +114,179 @@ The text below this section is the plan as written before implementation and the
 | `git-data.tf` edit | asks 1 | asked |
 | `.github/workflows/git-data-plaintext-volume-destroy.yml` | asks 2 | asked |
 | `tests/scripts/lib/git-data-plaintext-destroy-gate.sh` + `tests/scripts/test-git-data-plaintext-destroy-gate.sh` | asks 3, 7 | asked |
-| `apps/web-platform/infra/git-data-plaintext-volume-state.sh` (read-only probe) | — | inferred — justification: the pre-plan read, the post-apply read-back and the `## Observability
+| `apps/web-platform/infra/git-data-plaintext-volume-state.sh` (read-only probe) | — | inferred — justification: the pre-plan read, the post-apply read-back and the `## Observability` discoverability command are the same three-line read; one script avoids three copies |
+| `terraform-target-parity.test.ts` edits (exclusions, `MAIN_ROOT_TF_WORKFLOWS`, pins describe block) | asks 5 | asked |
+| `test-git-data-wipe-wedge.sh` edit | asks 5 | asked |
+| `scripts/encryption-posture-ledger.json` row removal + rehearsal-row prose | asks 5 | asked |
+| runbook section + ADR-239 DRAFT amendment | asks 6 | asked |
+| `scripts/suite-durations.tsv`, `scripts/suite-shard-legs.tsv` rows for the one new test | — | inferred — justification: `lint-orphan-test-suites` fails on an unregistered new test |
+| follow-up GitHub issues (gate retirement + `id=""` rebirth sequencing; post-destroy record PR + workflow deletion) | — | inferred — justification: `wg-when-deferring-a-capability-create-a`; the disabled host-replace path and the dangling literal need an owner and a date |
+
+### Split Assessment
+
+- Subsystems touched: 4 — `apps/web-platform/infra`, `.github/workflows`, `tests/scripts`, `knowledge-base` (+ `plugins/soleur/test`, `scripts` registries)
+- Planned files: ~16 | Estimated changed lines: ~650 (gate + tests dominate)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR — the HCL removal, the workflow and the gate are not independently safe (HCL alone leaves drift plans red; the workflow alone has nothing to destroy; the gate/workflow pair needs the addresses absent from config to grade as pure deletes). Four subsystem roots is justified by one coherent change.
+
+## Open Code-Review Overlap
+
+- #10112 (`scripts/encryption-posture-ledger.json`): **Acknowledge.** Its residuals are different concerns; this PR edits only the `hcloud_volume.git_data` row and the rehearsal row's prose that refers to it. The scope-out stays open.
+
+## Implementation Phases
+
+### Phase 0 — Offline experiment and read-only confirmations (no repo change)
+
+- Scratch dir under the session scratchpad: a `terraform_data` config, resource B removed from config but kept in state. Record for `-target=B` (orphan) and `-target=GONE` (absent from config and state): exit code, warning text, `resource_changes` shape, `action_reason` of the orphan delete, whether `resource_changes` is omitted on an empty plan. Terraform 1.9.8 is installed; try the pinned 1.10.5 if the network allows and state which version proved what.
+- Re-read the live volume read-only (`GET /v1/volumes/106867358`): id, name, server 170370833, LUKS volume 107140231 on the same server. Stop and re-plan if anything differs.
+- Run the baseline suites named in Phase 3 on the unmodified tree.
+- Verify by grep that `git-data-cutover.yml` and the `rollback` mode never reference the plaintext volume (AC).
+
+### Phase 1 — Guard first: the gate and its test (TDD)
+
+Write `tests/scripts/test-git-data-plaintext-destroy-gate.sh` and `tests/scripts/lib/git-data-plaintext-destroy-gate.sh` before the workflow. `git_data_plaintext_destroy_gate <plan.json> <expected_volume_id>`: parameter named `local plan_json`; sources `plan-gate-preamble.sh` and CALLS `plan_gate_assert_readable`/`_classifiable`/`_numeric` (anchored call); one `jq -n` computes every counter, wrapped in `if ! counts=$(jq ...)`, then `plan_gate_assert_numeric` on each. Rules:
+- Compare `.change.actions == ["delete"]` exactly (never `index`/`any`); ignore only entries whose actions are exactly `["no-op"]` or exactly `["read"]` (the targeted closure pulls the server, module and data sources in as `no-op`/`read`); anything else non-ignorable is out of scope.
+- Exactly one entry per pinned address, `.mode == "managed"`, exact `.address` (no prefix match); no `deposed` entries.
+- Types: `hcloud_volume.before.id` is a string, attachment `volume_id`/`server_id` are numbers — `tostring` both sides, constants are strings; pin the attachment `server_id` to 170370833 as well as `volume_id`.
+- Required: the volume delete. An attachment-only delete with the volume present is RED; the attachment alone being absent (already gone) is GREEN.
+- Optional hardening after Phase 0: assert `action_reason == "delete_because_no_resource_config"`.
+
+### Phase 2 — HCL removal and the destroy workflow
+
+- `apps/web-platform/infra/git-data.tf`: delete the two resources; `git_data_volume_id = "106867358"` with a comment and a `SOLEUR-DEBT:` marker — literal is the dangling id after destroy; remove it only with a deliberate host replace that sets `""`, sequenced behind the gate-retirement issue; refresh the stale comment at `:23` and mentions in `git-data-luks.tf`. Check that `var.git_data_volume_size` (`variables.tf:223`) is now unused and that validation/lint steps tolerate it. `modules/git-data-userdata/*` untouched.
+- `.github/workflows/git-data-plaintext-volume-destroy.yml` (new, `workflow_dispatch` only; precedents: the deleted forget workflow, the replace job's plan step at `apply-web-platform-infra.yml:~356-363` and its `set +e` rc-capture bracket):
+  - Top-level `env.TF_VAR_terraform_version` equal to `TERRAFORM_VERSION` (1.10.5); `permissions: contents: read`; SHA-pinned actions (`actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5`, `hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85`); workflow-level `concurrency: terraform-apply-web-platform-host, cancel-in-progress: false`.
+  - Job `validate` (no environment, no job-level group): inputs passed through `env:` and compared as literals before any secret is read — `expected_volume_id == 106867358`, `confirm == DESTROY-PLAINTEXT-GIT-DATA-VOLUME`; refuses under `set -x`. A typo fails here and never consumes a reviewer approval.
+  - Job `destroy` (`needs: validate`, `environment: web-platform-infra-apply`, job-level `concurrency: git-data-state, cancel-in-progress: false`, `timeout-minutes`): tiered credential loader; R2 creds with `::add-mask::`; `terraform init -lockfile=readonly`; ephemeral SSH public key step and `doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform …` with `-var=ssh_key_path=…` (the root has 17 required variables; `file()` is evaluated at plan time). Hetzner helpers send the token on stdin, treat 404 as an answer (never `curl -f`), retry 429/5xx in the read-back, and fail closed on any `gh`/API error.
+  - Steps: pre-plan read via `git-data-plaintext-volume-state.sh` (volume id/name/server; name list; server 170370833 returns 200 and holds LUKS volume 107140231 — a presence proof, since a 404 from another project proves nothing) → **already-gone short-circuit**: volume 404 and name list empty → skip plan/gate/apply, run the read proof, summarise "already destroyed (original run id if known)" → refuse with named verdicts on unexpected shapes (name exists under a different id; attachment exists at Hetzner but not in state; volume attached to another server) → `terraform plan -target=hcloud_volume_attachment.git_data -target=hcloud_volume.git_data -out=tfplan` → `terraform show -json tfplan` to a runner file read only by the gate → gate (`if ! …` at the call site) → `terraform apply tfplan` → read-back as a `success() || failure()` step reporting actual state (`attachment_gone`, `volume_present|absent`, 404 by id, empty name list, LUKS volume still present on the server) → cleanup step (`if: always()`) removing `tfplan` and `tfplan.json`; no upload of plan files, no human-readable `terraform show` to the log.
+  - Step summary fields: run id, verdict, pre and post state, plan counts, LUKS present and attached, UTC timestamp — counts and identifiers only. The record PR pastes the summary (default run retention is shorter than an attestation needs).
+  - Reviewer rejection leaves no change; re-dispatch is the recovery.
+
+### Phase 3 — Keep the existing guards green (change only what turns red)
+
+- `plugins/soleur/test/terraform-target-parity.test.ts`: remove the two `OPERATOR_APPLIED_EXCLUSIONS` entries (`:1284-85`) because the exclusion set is checked against declared resources; add the new workflow to `MAIN_ROOT_TF_WORKFLOWS` (`:2320`) and bump `expect(found.length).toBe(3)` to 4 (`:2430-2452`); add a pins describe block asserting: `workflow_dispatch` only, `environment: web-platform-infra-apply`, both concurrency groups, the two inputs and literals, exactly the two `-target`s, `env.TF_VAR_terraform_version`, the gate call site `if !` form, and that neither the workflow nor the gate references `ack-destroy`. **Leave** `GIT_DATA_REPLACE_TARGETS`, `GIT_DATA_BIRTH_TARGET_BASES` and `GIT_DATA_PRESERVED_VOLUMES` unchanged — the parity test pins the replace/birth jobs' `-target` lines, the gates' allow-sets and those constants equal, and the gates stay untouched.
+- `tests/scripts/test-git-data-wipe-wedge.sh`: update `WEDGE_ADDRS` (`:66`), fixture F1/F2 live-check expectations and the stale header; run and fix only what it asserts.
+- `scripts/encryption-posture-ledger.json`: remove the `hcloud_volume.git_data` row (the lint resolves HCL; a row for a removed resource fails) and fix the rehearsal row prose (`reevaluate_when: hcloud_volume.git_data becomes the LUKS volume`). The exception and the 2026-11-12 bound move to the ADR amendment and #6897 with dated entries and a milestone.
+- Run and fix only what the removal turns red: `git-data-rung2-rehearsal.test.sh`, `test-infra-privileged-tier-census.sh` Guard 1 (and the G1i extract form), `workflow-file-size.test.ts`, `c4-count-parity.test.sh`, `lint-encryption-posture.test.sh`, `test-plan-gate-preamble.sh`, `test-git-data-host-replace-gate.sh`, `test-git-data-host-birth-gate.sh` (their fixtures keep the retired addresses and stay green — they give no signal that the live route is disabled; that is what the filed issue is for).
+- Register the one new test in `scripts/suite-durations.tsv` and `scripts/suite-shard-legs.tsv` using the `tests/scripts/<name minus test- prefix>` label form.
+
+### Phase 4 — Records (draft; nothing attested)
+
+- Runbook `git-data-luks-cutover-5274.md`: new section "Plaintext-volume destroy (Option B)" next to "The wipe": dispatch command and inputs; **order: flip retry (and any rotate) → merge → dispatch**, a flip started during the destroy is unsupported; dispatch only when the reviewer can approve immediately (the workflow-level group is held through approval and GitHub keeps one pending run per group); cancel a stale `waiting` cutover run; expected plan counts; the drift-issue window and the "never run an untargeted apply" warning; recovery by re-dispatch; reviewer rejection and who notes #6897; rollback after the destroy cannot use the plaintext volume. Short; the claim limits live in the ADR and the section links there.
+- ADR-239: append `## Amendment 2026-10-26 — Terraform destroy is an accepted equivalent end event (#8211)`, marked `PENDING CLO ATTESTATION`; the claim-limits paragraph once ("device deleted at the provider API" only; no claim about emptiness, "no personal data", provider snapshots or copies, lock residue, `.gc-cursor`, or copies held by anyone with prior access); fires on the owner's successful dispatch; states that the git-data host rotate/replace/create routes are disabled until the gates are retired and that `id = ""` can only be reached by a deliberate host replace; states `prevent_self_review=false`. The emptiness claim the CLO barred appears nowhere.
+- File two issues (milestone + re-evaluation date): (1) retire the plaintext arms of the replace/birth gates, `git_data_host_post_apply_assert` and the three jobs' `-target` lines, then replace the host with `id = ""`; (2) post-destroy record PR — Art. 30 marker, `expenses.md` flip, DPD §10.3(b) refresh, deleting the one-shot workflow + gate + tests + parity/registry entries. #6897 carries the 2026-11-02 and 2026-11-12 dates.
+- No edit to `docs/legal/**`, its mirror, `legal-doc-shas.ts`, `article-30-register.md` or `expenses.md`.
+
+### Phase 5 — Review, PR body, stop
+
+Full relevant suites, `soleur:review`, `soleur:qa` (no UI scenarios; skips), compound, then `soleur:ship` configured to STOP at a READY PR with green CI (no auto-merge armed, no merge). PR body: `Ref #8211`, `Ref #6897`, the disabled-capability statement, the expected drift issue, and an `## Owner actions` section naming — not running — flip retry first (and any rotate), then merge, then the dispatch (`gh workflow run git-data-plaintext-volume-destroy.yml -f expected_volume_id=106867358 -f confirm=DESTROY-PLAINTEXT-GIT-DATA-VOLUME`), the environment approval, CLO attestation of the ADR amendment, and the recorded bound on #6897 (re-ruling by 2026-11-02 if not merged).
+
+## Files to Create
+
+- `.github/workflows/git-data-plaintext-volume-destroy.yml`
+- `tests/scripts/lib/git-data-plaintext-destroy-gate.sh`
+- `tests/scripts/test-git-data-plaintext-destroy-gate.sh`
+- `apps/web-platform/infra/git-data-plaintext-volume-state.sh`
+
+## Files to Edit
+
+- `apps/web-platform/infra/git-data.tf`
+- `apps/web-platform/infra/git-data-luks.tf` (comments that now assert a false fact)
+- `plugins/soleur/test/terraform-target-parity.test.ts`
+- `tests/scripts/test-git-data-wipe-wedge.sh`
+- `scripts/encryption-posture-ledger.json`
+- `scripts/suite-durations.tsv`, `scripts/suite-shard-legs.tsv`
+- `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-239-git-data-serves-from-luks-at-birth.md`
+- `knowledge-base/engineering/architecture/diagrams/model.c4` (only if `c4-count-parity` or a description now false requires it)
+
+`.github/workflows/apply-web-platform-infra.yml` and the replace/birth gate libraries are NOT edited.
+
+## User-Brand Impact
+
+**If this lands broken, the user experiences:** a git-data host replaced or rebooted by a changed `user_data`, or the LUKS store detached — workspaces that cannot read or push repository state; or, after the merge, a host-recovery path that is disabled when an incident needs it. Merging alone changes no resource; the exposure is the dispatched destroy with a wrong target, and the disabled replace route.
+
+**If this leaks, the user's data is exposed via:** nothing new; the PR reads and logs only counts and identifiers and never uploads plan JSON. The volume is a retained plaintext device that may hold id-bearing lock residue (CLO ruling); deleting it removes that exposure.
+
+**Brand-survival threshold:** single-user incident
+
+The threshold is `single-user incident` because a mis-scoped destroy of the LUKS volume, an unplanned host replace, or a disabled recovery route is outage/data-loss class on the git-data store. The CTO and CLO rulings of 2026-10-26 are the recorded technical and legal sign-offs; CPO sign-off is requested at plan time (Phase 2.6) before `soleur:work`; `soleur:engineering:review:user-impact-reviewer` runs at review; the owner's merge and dispatch are the authorization.
+
+## Domain Review
+
+**Domains relevant:** Engineering (CTO ruled), Legal (CLO ruled), Operations
+
+### Engineering
+**Status:** reviewed
+**Assessment:** CTO 2026-10-26: Option B feasible by 2026-11-05 with a literal id (byte-identical `user_data`), a dedicated workflow with its own gate, id pinned twice, replace/birth gates untouched. Plan review (CTO devex lens) added: workflow-level `terraform-apply-web-platform-host` + job-level `git-data-state`; merge only after the flip retry; follow-up issues for gate retirement and the dangling literal; fold the structural test into the parity suite.
+
+### Legal
+**Status:** reviewed
+**Assessment:** CLO 2026-10-26 (v1 internal attestation, not external counsel): Option B recommended; the device limb is satisfied by a provider-API delete; requires a dated ADR-239 amendment; the emptiness claim ("the volume held nothing") is not attestable and must not appear; no `docs/legal/**` edit required; post-destroy DPD §10.3(b) refresh recommended, not required.
+
+### Product (CPO plan-time sign-off, `requires_cpo_signoff`)
+**Status:** reviewed — SIGN-OFF WITH CONDITIONS (2026-10-26)
+**Assessment:** No user-visible promise is created; merge alone changes nothing; the only product-side exposure is the disabled host-recovery window between merge and gate retirement. Conditions, all carried into Phase 4/5 and the ACs: (1) both follow-up issues filed before READY, each with milestone, calendar date and owner — the gate-retirement issue names a target date (about one week after the destroy); (2) Owner actions state the order flip retry → any rotate → merge → dispatch, and that no host rotate/replace/create may start after the merge until gate retirement lands (an emergency rebirth in that window stops and escalates to the owner); (3) if not merged by 2026-11-02, the CLO re-ruling and the DPD edit are dated items on #6897; (4) no public copy beyond the ADR claim limits; (5) keep merge-to-dispatch within about 24 hours or hold the merge. Owner decisions (not technical): tolerance of the recovery window; whether the post-destroy DPD refresh needs a user-facing notice (recommend no proactive announcement); avoid dispatching during a cohort onboarding call or demo; accept self-approval (`prevent_self_review=false`) consciously; the `expenses.md` flip has an owner.
+
+### Operations
+**Status:** reviewed
+**Assessment:** A provider-resident device deletion through Terraform satisfies `hr-all-infrastructure-provisioning-servers`; the `expenses.md` flip is a post-destroy record edit.
+
+No Product/UX surface (no UI file in the Files lists).
+
+## Infrastructure (IaC)
+
+### Terraform changes
+Root `apps/web-platform/infra`: remove `hcloud_volume.git_data` and `hcloud_volume_attachment.git_data`; module input `git_data_volume_id` becomes the literal `"106867358"`. No provider/version change. No new sensitive variable; the workflow reuses the sibling `doppler run … tf-var` plumbing and the tiered credential loader.
+
+### Apply path
+Not cloud-init-only and not `-replace`. A dedicated reviewer-gated dispatch destroys the attachment (live detach, no reboot — first in-repo hot-detach, unmeasured, low risk) then the volume. Expected downtime: none; the volume is never mounted writable (ADR-239 D2). `user_data` unchanged, so `hcloud_server.git_data` plans no change.
+
+### Host fan-out
+No `terraform_data` SSH provisioner is added or changed; not applicable.
+
+### Distinctness / drift safeguards
+The gate pins volume id/name and the attachment's volume and server ids as constants; LUKS volume 107140231, the server and the passphrase pair may show only `no-op`/`read`. Drift plans show the two destroys between merge and dispatch (documented; the dispatch resolves them). State lives in R2; plan JSON is never uploaded.
+
+### Vendor-tier reality check
+No Hetzner tier gate affects delete. Protection is off on both volumes (`protection.delete=false`, read 2026-10-26), so the id pins and the live read are the only guards.
+
+## Architecture Decision (ADR/C4)
+
+### ADR
+Amend ADR-239: `Amendment 2026-10-26 — Terraform destroy is an accepted equivalent end event`. DRAFT, PENDING CLO ATTESTATION, fires on the owner's successful dispatch. It also records the disabled host rotate/replace/create routes and the sequencing to `id = ""`. Not a deferred follow-up; the gate-retirement work is a separate PR with its own issue.
+
+### C4 views
+Read all three model files before concluding (`model.c4`, `views.c4`, `spec.c4`). Enumerated for this change: external human actors — none added; external systems — Hetzner API (already modeled), GitHub Actions (already modeled); data stores — the plaintext volume appears in descriptions only (update any description that says it still exists); actor↔surface access — unchanged. Run `plugins/soleur/test/c4-count-parity.test.sh`: a new workflow may move a stated workflow count; fix only if it fails.
+
+### Sequencing
+The ADR describes the target state now. The destroy happens at the owner's dispatch.
+
+## Encryption Posture
+
+```yaml
+at_rest:
+  - store: hcloud_volume.git_data (removed)
+    mechanism: plaintext-exception (retired; being destroyed)
+    evidence: scripts/encryption-posture-ledger.json row removed in this PR; the device is deleted by the dispatched workflow (404 read-back by id and name)
+    defends_against: nothing at the volume layer (unchanged); the destroy removes the device
+    does_not_defend: provider snapshots/copies, lock-file residue and .gc-cursor are unmeasured and unclaimed; copies held by anyone with prior access
+    disclosed_as: not-publicly-claimed (DPD section 10.3(b) stays date-anchored and true)
+    live_verification: Hetzner API read 2026-10-26 (id 106867358, server 170370833); the workflow re-reads before and after
+in_transit:
+  - connection: runner to Hetzner API and R2 backend
+    tls: https
+    cert_verification: on
+    does_not_defend: a compromised runner token; the environment reviewer and branch policy bound it
+    disclosed_as: not-publicly-claimed
+exception:
+  justification: the retained volume stays until the owner dispatches the destroy; the exception continues from the removed ledger row into the ADR-239 amendment and #6897
+  tracking_issue: "#6897"
+  reevaluate_when: dispatch done, or 2026-11-02 if the PR is not merged (CLO single bounded extension to 2026-12-11)
+  expires_on: 2026-11-12
+```
+
+## Observability
 
 Every signal of this one-shot, dispatcher-attended workflow is **layer 6 analogue: the workflow run log** (`::error::` annotations, the step summary, exit codes). There is no Inngest function, pino logger or Vector sink in this change, and none is needed. There is also no standing notifier: `git-data-cutover.yml`'s `notify-failure` job does not cover this workflow, so a failed or cancelled run reaches the dispatcher through GitHub's default failed-run email only (the record PR, #11195, is where the outcome is written down).
 
@@ -166,6 +338,7 @@ discoverability_test:
   expected_output: plaintext_volume=present or plaintext_volume=absent (plaintext_volume=unknown with exit 3, 4 or 5 when it cannot determine)
   credentials_required: HCLOUD_TOKEN_READONLY from Doppler prd_terraform - the provider API has no unauthenticated read of volume state
 ```
+
 
 ## Guard Contract
 
