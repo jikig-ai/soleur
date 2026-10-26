@@ -37,7 +37,10 @@ import { CREDENTIAL_RE, PII_REGEX } from "@/server/inngest/functions/cron-compou
 import {
   CREATE_DESCRIPTION_MAX_WORDS,
   CREATE_DESCRIPTION_MIN_WORDS,
+  CREATE_CLAIM_WORDS,
+  CREATE_FIELD_MAX_CHARS,
   CREATE_FILE_MAX_BYTES,
+  CREATE_MARKUP_CHARS,
   CREATE_FILE_MAX_LINES,
   CREATE_GATES,
   CREATE_INPUT_BYTES_PER_TOKEN,
@@ -908,7 +911,7 @@ describe("prepareCreate: input ceiling (refuse, never truncate) and the prompt",
     expect(v).toMatchObject({ kind: "refused", class: "index-empty" });
   });
 
-  it("lists model-visible skills only, fences untrusted data, and states every limit from the exported constants", () => {
+  it("lists model-visible skills only, fences untrusted data and returns the output cap", () => {
     const v = prepareCreate({ patterns: [PATTERN], skills: SKILLS, nonce });
     expect(v.kind).toBe("ready");
     if (v.kind !== "ready") return;
@@ -916,12 +919,47 @@ describe("prepareCreate: input ceiling (refuse, never truncate) and the prompt",
     expect(v.prompt).toContain(`<<<BEGIN-${nonce}:pattern-index>>>`);
     expect(v.prompt).toContain("- git-worktree: ");
     expect(v.prompt).not.toContain("- go: "); // disable-model-invocation: not model-visible
-    for (const n of [CREATE_DESCRIPTION_MAX_WORDS, CREATE_DESCRIPTION_MIN_WORDS, CREATE_LIST_MAX_ITEMS, CREATE_FILE_MAX_LINES, CREATE_FILE_MAX_BYTES]) {
-      expect(v.prompt).toContain(String(n));
-    }
-    expect(v.prompt).toContain(OVERLAP_REFUSE_THRESHOLD.toFixed(2));
     for (const r of CREATE_NO_ACTION_REASONS) expect(v.prompt).toContain(r);
     expect(v.maxTokens).toBe(CREATE_MAX_TOKENS);
+  });
+
+  // The nonce contains digits, so every numeric rule is asserted inside the sentence that states it, never as a bare numeral.
+  it("states every rule the check enforces, in anchored sentences built from the exported constants", () => {
+    const v = prepareCreate({ patterns: [PATTERN], skills: SKILLS, nonce });
+    if (v.kind !== "ready") throw new Error("ready expected");
+    const rules = v.prompt.split("\n").filter((l) => l.startsWith("- "));
+    const has = (re: RegExp) => expect(rules.some((l) => re.test(l)), String(re)).toBe(true);
+    has(/^- slug: kebab-case, 3 to 41 characters, starting with a letter/);
+    has(/^- description: 12 to 30 words, starting with "This skill should be used"/);
+    has(/^- nearest_skill: .*\(at most 60 characters\)/);
+    has(/^- when_to_use, steps, sharp_edges: 1 to 6 short plain sentences each \(at most 160 characters\)\. merge_retire_candidates: 0 to 6\./);
+    has(/^- Each file the server renders must stay under 60 lines and 3072 bytes/);
+    has(/^- Every string: printable ASCII only, at most 300 characters/);
+    has(/^- Every string must start with a letter or digit/);
+    has(/^- No double quote in the description\./);
+    has(/^- No string may look like personal data .* or a credential /);
+    has(/overlap with any existing skill reaches 0\.16; .* among the server's top 3 matches/);
+    has(/^- pattern_slug must be exactly the slug of one pattern in the index/);
+    has(/^- Never write instructions that /);
+    // the character set, the claim words and the denylist groups are read from the same constants the check uses
+    const markup = rules.find((l) => l.startsWith("- Every string must contain none of these characters:")) ?? "";
+    for (const c of CREATE_MARKUP_CHARS) {
+      expect(markup).toContain(` ${c}`);
+      expect(shapeProblem(`Text ${c} here`, "item"), c).toBe("markup");
+    }
+    const claims = rules.find((l) => l.startsWith("- Never use these claim words:")) ?? "";
+    for (const w of CREATE_CLAIM_WORDS) expect(claims).toContain(w);
+    const risk = rules.find((l) => l.startsWith("- Never write instructions that ")) ?? "";
+    for (const g of INSTRUCTION_RISK_GROUPS) expect(risk).toContain(g.label);
+  });
+
+  it("a string at exactly each stated limit passes the check; one past it fails (prompt and check cannot drift apart)", () => {
+    expect(shapeProblem("a".repeat(CREATE_FIELD_MAX_CHARS), "field")).toBeNull();
+    expect(shapeProblem("a".repeat(CREATE_FIELD_MAX_CHARS + 1), "field")).toBe("length");
+    expect(shapeProblem("a".repeat(CREATE_SLUG_IDENT_MAX), "ref")).toBeNull();
+    expect(shapeProblem("a".repeat(CREATE_SLUG_IDENT_MAX + 1), "ref")).toBe("length");
+    expect(CREATE_FIELD_MAX_CHARS).toBe(300);
+    expect(CREATE_SLUG_IDENT_MAX).toBe(60);
   });
 
   it("refuses over the ceiling with numbers, and does not truncate", () => {

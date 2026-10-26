@@ -265,7 +265,8 @@ const REF_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 const PRINTABLE_ASCII_RE = /^[\x20-\x7e]+$/;
 const LEADING_OK_RE = /^[A-Za-z0-9]/;
 // Characters that change how a markdown renderer, an HTML sink or the harness reads what follows.
-const MARKUP_RE = /[<>[\]{}|\\$@~]/;
+export const CREATE_MARKUP_CHARS = "<>[]{}|\\$@~";
+const MARKUP_RE = new RegExp(`[${[...CREATE_MARKUP_CHARS].map((c) => `\\${c}`).join("")}]`);
 const URL_RE = /:\/\/|www\./i;
 const RULE_ID_RE = /(?:^|[^a-z0-9])(?:hr|wg|cq|rf|pdr|cm)-[a-z0-9]/i;
 const PATH_TOKEN_RE = /(?:^|[^a-z0-9])(?:scripts|references|assets|skills)\//i;
@@ -652,13 +653,18 @@ export function prepareCreate(args: { patterns: readonly PatternPage[]; skills: 
     `no_action needs a reason_class from: ${CREATE_NO_ACTION_REASONS.join(", ")}.`,
     "",
     "A create returns structured fields only. You never write a file, a diff, frontmatter or a heading; the server renders them.",
-    `- slug: kebab-case, ${SLUG_MIN} to ${SLUG_MAX} characters, not an existing skill or agent name.`,
+    `- slug: kebab-case, ${SLUG_MIN} to ${SLUG_MAX} characters, starting with a letter, not an existing skill, agent, command or Cursor stub name.`,
     `- description: ${CREATE_DESCRIPTION_MIN_WORDS} to ${CREATE_DESCRIPTION_MAX_WORDS} words, starting with "${CREATE_DESCRIPTION_PREFIX}", routing text only. The total description budget is shared and nearly full.`,
-    `- nearest_skill: the existing skill closest to this pattern (from the skill list), and patch_rejection_reason: why a patch to it is wrong.`,
+    `- nearest_skill: the existing skill closest to this pattern, copied from the skill list (at most ${CREATE_SLUG_IDENT_MAX} characters). patch_rejection_reason: why a patch to it is wrong.`,
     `- when_to_use, steps, sharp_edges: 1 to ${CREATE_LIST_MAX_ITEMS} short plain sentences each (at most ${CREATE_ITEM_MAX_CHARS} characters). merge_retire_candidates: 0 to ${CREATE_LIST_MAX_ITEMS}.`,
     `- Each file the server renders must stay under ${CREATE_FILE_MAX_LINES} lines and ${CREATE_FILE_MAX_BYTES} bytes: be brief.`,
-    "- Plain ASCII text only. No backticks, code fences, links, URLs, paths, HTML, rule ids, command names, or the word soleur followed by a colon.",
-    "- Never claim a guarantee, certification, compliance or security property. Never restate or relax a hard rule.",
+    `- Every string: printable ASCII only, at most ${CREATE_FIELD_MAX_CHARS} characters (the list items above are shorter).`,
+    "- Every string must start with a letter or digit, and no string may contain a backtick, a code fence, a URL, a file path, a rule id, a command name, or the word soleur followed by a colon.",
+    `- Every string must contain none of these characters: ${[...CREATE_MARKUP_CHARS].join(" ")}`,
+    "- No double quote in the description.",
+    "- No string may look like personal data (an email address, an IP address, a phone number) or a credential (a key, a token, a password).",
+    `- Never use these claim words: ${CREATE_CLAIM_WORDS.join(", ")}. Never restate or relax a hard rule.`,
+    `- Never write instructions that ${INSTRUCTION_RISK_GROUPS.map((g) => g.label).join("; or that ")}.`,
     `- A server-side overlap check refuses a create whose overlap with any existing skill reaches ${OVERLAP_REFUSE_THRESHOLD.toFixed(2)}; your nearest_skill must be among the server's top ${OVERLAP_TOP_K} matches.`,
     "- pattern_slug must be exactly the slug of one pattern in the index.",
     "",
