@@ -205,7 +205,7 @@ row "U1 an authorization first, a technical unit second" block "Do you authorize
 LBL_BODY="needs your ruling on whether the failure counts"
 LB2_MSG="Blocked: $LBL_BODY."
 INC_PAR="Your call, since the plan names the due date and any ruling on this slot as yours: accept slot A as a transient infra failure and proceed on slot B plus CI, or hold until a clean pair of slots exists and let the 2026-10-27 date slip."
-INC_LBL='Blocked: slot A (2026-10-26T18:00Z) read `error` on a CI run, so marking the Sentry routing PR ready needs your ruling on whether this transient Doppler CLI install failure counts.'
+INC_LBL="Blocked: slot A (2026-10-26T18:00Z) read \`error\` on a CI run, so marking the Sentry routing PR ready needs your ruling on whether this transient Doppler CLI install failure counts."
 row "LB1 the 2026-10-26 incident closing: the final Blocked: sentence hands a technical ruling to the operator" block "$STATUS
 
 $INC_PAR

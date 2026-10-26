@@ -1087,6 +1087,7 @@ RB3_PROMPT_AWK='/^---$/{i++; next} i>=2'
 rb3_state() { # <dir> <iteration> <promise>: a state file whose stored prompt is RB3_PROMPT (no blank line, no --- line inside it)
   local f="$1/.claude/ralph-loop.${TEST_PID}.local.md"
   create_state_file "$1" "$2" 0 "$3" 0 3
+  assert_fixture_dir "$f"
   awk '{ print } /^---$/ { c++ } c == 2 { exit }' "$f" > "$f.new" && printf '%s\n' "$RB3_PROMPT" >> "$f.new" && mv "$f.new" "$f"
 }
 rb3_banner() { # <next iteration> <promise literal as written to the state file>
@@ -1126,7 +1127,8 @@ for rb3_it in 1 7; do
     done
     # RL-B3b: systemMessage is the user-visible banner byte-for-byte and does not carry the reminder; the stored prompt and the counters are untouched.
     assert_eq "$(rb3_banner $((rb3_it + 1)) "$rb3_pr")" "$(jq -r '.systemMessage' <<<"${RB3_OUT:-{\}}" 2>/dev/null || true)" "RL-B3b iteration $rb3_it promise $rb3_pr: systemMessage is the banner, no reminder"
-    assert_eq "$RB3_PROMPT" "$RB3_STORED_AFTER" "RL-B3b iteration $rb3_it promise $rb3_pr: the stored prompt block is unchanged by the run"
+    assert_eq "$RB3_PROMPT" "$RB3_STORED_BEFORE" "RL-B3b iteration $rb3_it promise $rb3_pr: the fixture stores the literal prompt (precondition)"
+    assert_eq "$RB3_STORED_BEFORE" "$RB3_STORED_AFTER" "RL-B3b iteration $rb3_it promise $rb3_pr: the stored prompt block is unchanged by the run"
     assert_eq "0" "$RB3_STUCK" "RL-B3b iteration $rb3_it promise $rb3_pr: stuck_count is unchanged (loop control untouched)"
     assert_eq "ok" "$rb3_v" "RL-B3 iteration $rb3_it promise $rb3_pr: combined verdict"
   done
@@ -1177,5 +1179,5 @@ echo ""
 
 # --- Summary ---
 
-# 180 = the green run after RL-B3 landed (PASS + FAIL + SKIPPED); deleting the RL-B3 block drops the count below it and trips the floor.
-print_results 180
+# 184 = the green run after RL-B3 landed (PASS + FAIL + SKIPPED); deleting the RL-B3 block drops the count below it and trips the floor.
+print_results 184
