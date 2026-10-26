@@ -95,7 +95,7 @@ linking a digest that did not land.
 
 **Addendum 2026-10-26 (#10550).** The gated new-skill create arm's `safeCommitAndPr` call lives in `apps/web-platform/server/compound-promote-create-arm.ts`, outside `server/inngest/functions/`, so invariant 1's directory walk does not reach it; `cron-safe-commit-parity.test.ts` walks that file explicitly and requires `exactPaths` with an empty `allowedPaths`, a draft PR and `mergeMode: "none"`.
 
-## Addendum - 2026-10-26 (#10550)
+## Addendum - 2026-10-26 (#10550): the create arm's write path, restated
 
 Append-only; nothing above is edited. This restates, as its own section, how the gated new-skill create arm uses the write path and
 what the review round added around it. The paragraph headed "Addendum 2026-10-26 (#10550)" above stays as written.

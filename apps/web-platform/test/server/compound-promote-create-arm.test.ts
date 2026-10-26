@@ -301,6 +301,74 @@ describe("Step A runCreateProposeStep -- never throws, every refusal is a return
 });
 
 // ---------------------------------------------------------------------------------------------------------
+describe("Step A runs its stages in CREATE_STAGE_ORDER.stepA (condition peeling)", () => {
+  it("week-cap wins over index-empty when BOTH fail (a swap of the two checks is red)", async () => {
+    const v = await runCreateProposeStep(args({ capLeft: 0, patterns: [] }));
+    expect(v).toMatchObject({ kind: "refused", class: "week-cap", detail: "no-slot" });
+    // and with the cap fixed the other one is what remains
+    expect(await runCreateProposeStep(args({ capLeft: 1, patterns: [] }))).toMatchObject({ kind: "refused", class: "index-empty" });
+  });
+
+  // Every stage's failing condition is armed AT ONCE. The first run must show the first stage's refusal; each fix removes
+  // exactly the failure of the stage just seen, so the next refusal is the next stage in CREATE_STAGE_ORDER.stepA. The
+  // shared `events` stream also shows the three stages with a double (create-open, populations, model) in their order.
+  it("each stage's refusal appears in turn: week-cap, index-empty, same-run, clone-present, create-open, populations, input-size, api-key, model, check-create", async () => {
+    const events: string[] = [];
+    const root = pluginTree({ skills: 40, cap: null });
+    for (let i = 0; i < 400; i++) {
+      const d = `big-${i}`;
+      mkdirSync(join(root, "plugins/soleur/skills", d), { recursive: true });
+      writeFileSync(join(root, "plugins/soleur/skills", d, "SKILL.md"), `---\nname: ${d}\ndescription: ${JSON.stringify("This skill should be used ".repeat(40))}\n---\n`);
+    }
+    const HASH = createClusterHash(PATTERN.evidence);
+    const gone = join(tmpdir(), "create-arm-peel-gone-" + Date.now());
+    let listing: unknown[] = [{ number: 5, body: CREATE_PR_BODY_LINE, head: { ref: `${CREATE_HEAD_PREFIX}${"a".repeat(64)}-2026-10-26`, repo: { full_name: "jikig-ai/soleur" } } }];
+    let scanThrows = true;
+    let postImpl: () => Promise<{ text: string; stopReason: string }> = async () => { throw new Error("Anthropic API request failed (TimeoutError)"); };
+    const cur: Partial<CreateProposeArgs> = { capLeft: 0, patterns: [], sameRunHashes: [HASH], repoRoot: gone, apiKey: undefined };
+    const run = () => runCreateProposeStep(args({
+      ...cur,
+      octokit: { request: async () => { events.push("create-open"); return { data: listing }; } } as never,
+      scanOpenPrPaths: async () => { events.push("populations-scan"); if (scanThrows) throw new Error("boom"); return { paths: [], incomplete: null }; },
+      post: (async () => { events.push("model"); return postImpl(); }) as never,
+    }));
+
+    expect(await run()).toMatchObject({ class: "week-cap" });
+    cur.capLeft = 1;
+    expect(await run()).toMatchObject({ class: "index-empty" });
+    cur.patterns = [PATTERN];
+    expect(await run()).toEqual({ kind: "no_action", reason: "other" }); // same-run: nothing offerable
+    cur.sameRunHashes = [];
+    expect(await run()).toEqual({ kind: "refused", class: "persist", detail: "clone-missing" });
+    expect(events).toEqual([]); // none of the above reached a request, a scan or the model
+    cur.repoRoot = root;
+    expect(await run()).toMatchObject({ class: "create-open", detail: "open-create-pr" });
+    expect(events).toEqual(["create-open"]);
+    listing = [];
+    expect(await run()).toMatchObject({ class: "budget", detail: "cap-unreadable" }); // populations: the clone measurements come first
+    expect(events).toEqual(["create-open", "create-open"]);
+    mkdirSync(join(root, "plugins/soleur/test"), { recursive: true });
+    writeFileSync(join(root, "plugins/soleur/test/components.test.ts"), "const SKILL_DESCRIPTION_WORD_BUDGET = 999999;\n");
+    expect(await run()).toMatchObject({ class: "create-open", detail: "paths-unverifiable" }); // populations: then the open-PR path scan
+    expect(events.slice(-2)).toEqual(["create-open", "populations-scan"]);
+    scanThrows = false;
+    expect(await run()).toMatchObject({ class: "input-size", detail: "over-ceiling" });
+    expect(events).not.toContain("model");
+    for (let i = 0; i < 400; i++) rmSync(join(root, "plugins/soleur/skills", `big-${i}`), { recursive: true, force: true });
+    expect(await run()).toMatchObject({ class: "model-invalid", detail: "no-api-key" });
+    expect(events).not.toContain("model");
+    cur.apiKey = "k";
+    expect(await run()).toMatchObject({ class: "model-invalid", detail: "transport" });
+    expect(events.at(-1)).toBe("model");
+    postImpl = async () => ({ text: JSON.stringify({ ...PROPOSAL, slug: "x" }), stopReason: "end_turn" }); // reaches checkCreate, which refuses it
+    const last = await run();
+    expect(events.at(-1)).toBe("model");
+    expect(last).toMatchObject({ kind: "refused" });
+    expect(last).not.toMatchObject({ class: "model-invalid" });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
 describe("Step A with a valid create proposal", () => {
   function createArgs(over: Partial<CreateProposeArgs> = {}, proposalOver: Record<string, unknown> = {}): CreateProposeArgs {
     const base = args();

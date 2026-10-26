@@ -99,15 +99,19 @@ export type CreateGate = (typeof CREATE_GATES)[number];
  * The real order the create arm runs its stages in, as closed ids. Step A is `create-propose`, Step B is
  * `create-persist`; `checkCreate` is the gate list inside Step A's last stage. The ADR-092 amendment sentence and the
  * parity test are pinned to THIS list (each id has one ADR phrase, in this order), so reordering the ADR prose or
- * adding a stage here without its phrase turns the parity suite red. The arm's own order is asserted against it by
- * the arm tests, not by this module.
+ * adding a stage here without its phrase turns the parity suite red. This module asserts nothing about the arm's own
+ * order; two tests do: Step B's by an event trace (every git call, the origin writes and the doubles on one stream,
+ * compound-promote-create-persist.test.ts), Step A's by peeling conditions (compound-promote-create-arm.test.ts: every
+ * stage's failing condition is set at once and removed in the listed order, so each refusal appears in turn). The pure
+ * Step B stages no double can see (recheck, render, rendered-gate, bytes-differ) are not in the trace, and the Step A
+ * stages that only refuse (api-key, input-size, check-create) are ordered by that peel, not by an event.
  */
 export const CREATE_STAGE_ORDER = {
-  stepA: ["week-cap", "index-empty", "clone-present", "create-open", "populations", "input-size", "api-key", "model", "check-create"],
+  stepA: ["week-cap", "index-empty", "same-run", "clone-present", "create-open", "populations", "input-size", "api-key", "model", "check-create"],
   checkCreate: CREATE_GATES,
   stepB: [
     "branch-taken", "token-set", "fetch-reset", "token-strip", "recheck", "render", "rendered-gate", "scan", "readme-sync",
-    "bytes-differ", "token-restore", "fetch", "base-moved", "commit",
+    "bytes-differ", "token-restore", "fetch", "base-moved", "slug-appeared", "branch-exists", "commit",
   ],
 } as const;
 

@@ -293,7 +293,7 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 |---|---|---|
 | `week-cap` | no week-cap slot left after the edit loop | expected while any `self-healing/auto` PR is open; close or merge the open drafts |
 | `create-open` | another open PR already carries the `CREATE (new skill)` line, or the open-PR list could not be read | one open create at a time; a list failure refuses rather than guesses |
-| `index-empty` | no open pattern page to read | check `patterns_open` |
+| `index-empty` | no open pattern page to read | defence in depth: the handler exits `empty-corpus` first, so this refusal is not expected in production; if it appears, check `patterns_open` |
 | `input-size` | pattern index plus skill list exceeds the input ceiling | refused, never truncated; trim the index or raise the ceiling by amending the ADR |
 | `model-invalid` | the model answer did not parse into the closed schema | one call, no retry; read the Sentry event |
 | `shape` | a model string or a rendered file failed the shape allowlist, claim-word, PII or credential screen | the marker carries the field name, never the text |

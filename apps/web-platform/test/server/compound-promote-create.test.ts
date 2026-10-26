@@ -1573,11 +1573,11 @@ describe("CREATE_STAGE_ORDER: the one ordered stage list the ADR sentence and th
   it("is closed, ordered and consistent with the verdict gates", () => {
     expect([...CREATE_STAGE_ORDER.checkCreate]).toEqual([...CREATE_GATES]);
     expect([...CREATE_STAGE_ORDER.stepA]).toEqual([
-      "week-cap", "index-empty", "clone-present", "create-open", "populations", "input-size", "api-key", "model", "check-create",
+      "week-cap", "index-empty", "same-run", "clone-present", "create-open", "populations", "input-size", "api-key", "model", "check-create",
     ]);
     expect([...CREATE_STAGE_ORDER.stepB]).toEqual([
       "branch-taken", "token-set", "fetch-reset", "token-strip", "recheck", "render", "rendered-gate", "scan", "readme-sync",
-      "bytes-differ", "token-restore", "fetch", "base-moved", "commit",
+      "bytes-differ", "token-restore", "fetch", "base-moved", "slug-appeared", "branch-exists", "commit",
     ]);
     for (const list of Object.values(CREATE_STAGE_ORDER)) expect(new Set(list).size).toBe(list.length);
   });

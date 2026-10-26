@@ -606,7 +606,9 @@ describe("G9 -- the stage order, the deadline checkpoints, the commit config, th
         fetches += 1;
         stages.push(fetches === 1 ? "fetch-reset" : "fetch");
       } else if (fetches === 1 && (ev === "reset" || ev === "rev-parse")) stages.push("fetch-reset");
-      else if (fetches === 2 && (ev === "rev-parse" || ev === "ls-tree" || ev === "ls-remote")) stages.push("base-moved");
+      else if (fetches === 2 && ev === "rev-parse") stages.push("base-moved");
+      else if (fetches === 2 && ev === "ls-tree") stages.push("slug-appeared");
+      else if (fetches === 2 && ev === "ls-remote") stages.push("branch-exists");
       else if (ev === "scan" || ev === "readme-sync") stages.push(ev);
       else if (ev === "commit") {
         stages.push("commit");

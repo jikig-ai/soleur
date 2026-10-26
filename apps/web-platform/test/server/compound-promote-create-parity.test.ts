@@ -386,11 +386,13 @@ describe("the ADR-092 create-only amendment is pinned to the exported constants 
 
   // One ADR phrase per stage id of CREATE_STAGE_ORDER. The Record type makes a stage added to the list without a phrase a
   // compile error, and the key-set assertion below makes it a test failure; positions must ascend (the order is the claim).
-  // This pins the ADR TEXT to the exported list; that the arm itself runs in this order is asserted by the arm tests.
+  // This pins the ADR TEXT to the exported list; that the arm itself runs in this order is asserted by the arm tests
+  // (Step A: the condition-peeling test in compound-promote-create-arm.test.ts; Step B: the event trace in the persist suite).
   const STAGE_PHRASES = {
     stepA: {
       "week-cap": "Step A (`create-propose`), in order: the week cap (shared with the edit arm",
       "index-empty": "a non-empty pattern index",
+      "same-run": "a pattern the edit loop already recorded this run is not offered",
       "clone-present": "the clone being present",
       "create-open": "one open create at a time",
       populations: "the budget and collision populations measured from the clone, including the open pull request path scan",
@@ -423,6 +425,8 @@ describe("the ADR-092 create-only amendment is pinned to the exported constants 
       "token-restore": "restores the token with `setOriginToken`",
       fetch: "fetches once more",
       "base-moved": "the base-moved check",
+      "slug-appeared": "the slug-appeared check",
+      "branch-exists": "the branch-exists check",
       commit: "and only then the commit.",
     },
   } as const satisfies { [K in keyof typeof CREATE_STAGE_ORDER]: Record<(typeof CREATE_STAGE_ORDER)[K][number], string> };
