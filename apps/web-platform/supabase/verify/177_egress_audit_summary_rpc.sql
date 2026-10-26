@@ -4,6 +4,7 @@
 -- bad=1 on a drift; run-verify.sh fails the deploy if any bad=1 (precedent: verify/158).
 --
 -- The member read surface must be exactly: SECURITY DEFINER, STABLE, search_path pinned,
+-- plan_cache_mode pinned to force_custom_plan, a jti denylist check in the body,
 -- EXECUTE for `authenticated` only (Supabase default privileges re-grant to anon and
 -- service_role, so every non-authenticated role is checked by name), and the rollup table
 -- must stay un-readable by `authenticated` with zero policies.
@@ -23,6 +24,19 @@ SELECT 'egress_summary_search_path_pinned',
              AND EXISTS (SELECT 1 FROM unnest(p.proconfig) c
                           WHERE c LIKE 'search_path=%pg_temp%')
             THEN 0 ELSE 1 END::int
+  FROM pg_proc p
+ WHERE p.oid = 'public.get_egress_audit_summary(uuid, integer, text)'::regprocedure
+UNION ALL
+SELECT 'egress_summary_plan_cache_mode_custom',
+       CASE WHEN p.proconfig IS NOT NULL
+             AND EXISTS (SELECT 1 FROM unnest(p.proconfig) c
+                          WHERE c = 'plan_cache_mode=force_custom_plan')
+            THEN 0 ELSE 1 END::int
+  FROM pg_proc p
+ WHERE p.oid = 'public.get_egress_audit_summary(uuid, integer, text)'::regprocedure
+UNION ALL
+SELECT 'egress_summary_checks_jti_denylist',
+       CASE WHEN p.prosrc LIKE '%is_jti_denied_from_jwt()%' THEN 0 ELSE 1 END::int
   FROM pg_proc p
  WHERE p.oid = 'public.get_egress_audit_summary(uuid, integer, text)'::regprocedure
 UNION ALL

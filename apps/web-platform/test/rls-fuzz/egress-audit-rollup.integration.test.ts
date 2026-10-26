@@ -446,6 +446,8 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
   };
 
   const IN_BODY_DENIAL = "egress audit: workspace membership required";
+  const JTI_DENIAL = "egress audit: token denied";
+  const MAX_SAFE = 9007199254740991;
   const claimsFor = (sub: string): string => buildAuthenticatedClaims({ sub });
 
   const rowAt = (ws: string, minutesAgo: number, over: Record<string, unknown> = {}) => {
@@ -461,8 +463,8 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
   };
 
   // Seed as service_role through the ingest, then run `fn` as the given member, all in one rolled-back txn.
-  const seededAs = <T>(sub: string, seed: (t: Txn) => Promise<void>, fn: (t: Txn) => Promise<T>): Promise<T> =>
-    attackAs(sql, claimsFor(sub), async (t) => {
+  const seededAs = <T>(sub: string, seed: (t: Txn) => Promise<void>, fn: (t: Txn) => Promise<T>, jti?: string): Promise<T> =>
+    attackAs(sql, jti === undefined ? claimsFor(sub) : buildAuthenticatedClaims({ sub, jti }), async (t) => {
       await t`reset role`;
       await t`update public.workspaces set web_egress = true where id in (${ctx.wsA}, ${ctx.wsB})`;
       await t`set local role service_role`;
@@ -740,6 +742,160 @@ describe.skipIf(!ENABLED)("workspace_egress_audit_rollup (local, live database)"
       select (select count(*)::int from pg_policies where schemaname = 'public' and tablename = 'workspace_egress_audit_rollup') as policies,
              has_table_privilege('authenticated', 'public.workspace_egress_audit_rollup', 'SELECT') as can_select`);
     expect(r).toEqual({ policies: 0, can_select: false });
+  });
+
+  // ---- review-fix cases (#11115): filters, jti denylist, count clamp, probe skew, top-N ----
+
+  // wsA's seed plus overflow rows of all three outcomes, so every decision filter has overflow to return.
+  const seedWsAWithOverflow = async (t: Txn): Promise<void> => {
+    await seedWsA(t);
+    await ingest(t, [
+      rowAt(ctx.wsA, 40, { requested_host: "(other)", decision: "allowed", source_host: "web-1", request_count: 40 }),
+      rowAt(ctx.wsA, 41, { requested_host: "(other)", decision: "allowed", source_host: "web-2", request_count: 5 }),
+      rowAt(ctx.wsA, 42, { requested_host: "(other)", decision: "denied", request_count: 9 }),
+      rowAt(ctx.wsA, 43, { requested_host: "(other)", decision: "other", request_count: 6 }),
+    ]);
+  };
+
+  test("the 'allowed' and 'other' filters each return only their own rows and overflow; summary totals do not change", async () => {
+    const out = await seededAs(ctx.userA, seedWsAWithOverflow, async (t) => ({
+      none: await summarize(t, ctx.wsA),
+      allowed: await summarize(t, ctx.wsA, 200, "allowed"),
+      other: await summarize(t, ctx.wsA, 200, "other"),
+    }));
+    // 15 + 4 + 2 (hosts) + 45 + 9 + 6 (overflow); blocked = denied only (4 + 9).
+    for (const [name, view] of Object.entries(out)) {
+      expect(view.summary.request_count_min, `${name}: total is filter-independent`).toBe(81);
+      expect(view.summary.blocked_request_count_min, `${name}: blocked is filter-independent`).toBe(13);
+    }
+    expect(out.none.rows.map((r) => r.decision).sort(), "no filter: all three outcomes").toEqual(["allowed", "denied", "other"]);
+    expect(out.allowed.rows.map((r) => [r.host, r.decision, r.request_count]), "allowed filter: rows").toEqual([["a.example.test", "allowed", 15]]);
+    expect(out.allowed.overflow.map((o) => [o.decision, o.request_count]), "allowed filter: overflow").toEqual([["allowed", 45]]);
+    expect(out.other.rows.map((r) => [r.host, r.decision, r.request_count]), "other filter: rows").toEqual([["c.example.test", "other", 2]]);
+    expect(out.other.overflow.map((o) => [o.decision, o.request_count]), "other filter: overflow").toEqual([["other", 6]]);
+    expect(out.allowed.truncated).toBe(false);
+    expect(out.other.truncated).toBe(false);
+  });
+
+  test("top-N: p_limit keeps the newest groups in order; truncated reflects the filtered groups only", async () => {
+    const out = await seededAs(ctx.userA, seedWsAWithOverflow, async (t) => ({
+      full: await summarize(t, ctx.wsA, 200),
+      one: await summarize(t, ctx.wsA, 1),
+      two: await summarize(t, ctx.wsA, 2),
+      oneAllowed: await summarize(t, ctx.wsA, 1, "allowed"),
+      oneDenied: await summarize(t, ctx.wsA, 1, "denied"),
+    }));
+    expect(out.full.rows.map((r) => r.host), "full order is last_seen DESC").toEqual(["b.example.test", "c.example.test", "a.example.test"]);
+    expect(out.one.rows.map((r) => r.host), "limit 1 keeps the newest group").toEqual(["b.example.test"]);
+    expect(out.one.truncated, "limit 1 of 3 groups truncates").toBe(true);
+    expect(out.two.rows.map((r) => r.host), "limit 2 keeps the two newest, in order").toEqual(["b.example.test", "c.example.test"]);
+    expect(out.two.truncated).toBe(true);
+    expect(out.oneAllowed.rows).toHaveLength(1);
+    expect(out.oneAllowed.truncated, "one allowed group fits limit 1").toBe(false);
+    expect(out.oneDenied.truncated, "one denied group fits limit 1").toBe(false);
+    // the summary is computed over everything, whatever the page size
+    expect(out.one.summary).toEqual(out.full.summary);
+    expect(out.one.overflow).toEqual(out.full.overflow);
+  });
+
+  test("a member with a denied jti is refused with the jti message for p_limit 200 and 0; a non-member gets the membership message; an allowed jti still reads", async () => {
+    const deniedJti = randomUUID();
+    const allowedJti = randomUUID();
+    const denyFor = (founder: string) => async (t: Txn) => {
+      await seedWsA(t);
+      await t`reset role`;
+      await t`insert into public.denied_jti (jti, founder_id) values (${deniedJti}, ${founder})`;
+      await t`set local role service_role`;
+    };
+    for (const limit of [200, 0]) {
+      await expect(
+        seededAs(ctx.userA, denyFor(ctx.userA), (t) => summarize(t, ctx.wsA, limit), deniedJti),
+        `member, denied jti, p_limit=${limit}`,
+      ).rejects.toMatchObject({ code: "42501", message: JTI_DENIAL });
+    }
+    await expect(
+      seededAs(ctx.userA, denyFor(ctx.userA), (t) => summarize(t, ctx.wsA, 200, "x"), deniedJti),
+      "member, denied jti, bad decision: the jti check comes before the 22023 check",
+    ).rejects.toMatchObject({ code: "42501", message: JTI_DENIAL });
+    for (const limit of [200, 0]) {
+      await expect(
+        seededAs(ctx.userB, denyFor(ctx.userB), (t) => summarize(t, ctx.wsA, limit), deniedJti),
+        `non-member, denied jti, p_limit=${limit}: the membership message wins`,
+      ).rejects.toMatchObject({ code: "42501", message: IN_BODY_DENIAL });
+    }
+    // two-sided control on the same data: a jti that is not on the denylist reads normally.
+    const ok = await seededAs(ctx.userA, denyFor(ctx.userA), async (t) => ({ full: await summarize(t, ctx.wsA), probe: await summarize(t, ctx.wsA, 0) }), allowedJti);
+    expect(ok.full.rows).toHaveLength(3);
+    expect(ok.probe.summary.last_request_at).not.toBeNull();
+  });
+
+  test("huge stored counts no longer raise 22003: every returned count is clamped to the JS-safe maximum", async () => {
+    const out = await seededAs(
+      ctx.userA,
+      async (t) => {
+        await t`reset role`;
+        const b = bucketAt(60);
+        const ins = (host: string, decision: string, source: string) =>
+          t`insert into public.workspace_egress_audit_rollup
+              (workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen)
+            values (${ctx.wsA}, ${b}, ${host}, ${decision}, ${source}, 9000000000000000000, 0, ${b}, ${new Date(Date.parse(b) + 300_000).toISOString()})`;
+        // Two sources per group: the per-group sum (1.8e19) overflows bigint without the clamp; the
+        // group sums then overflow it again in the total and the blocked total.
+        await ins("big-a.example.test", "allowed", "web-1");
+        await ins("big-a.example.test", "allowed", "web-2");
+        await ins("big-d.example.test", "denied", "web-1");
+        await ins("big-d.example.test", "denied", "web-2");
+        await ins("(other)", "allowed", "web-1");
+        await ins("(other)", "allowed", "web-2");
+        await t`set local role service_role`;
+      },
+      async (t) => ({ full: await summarize(t, ctx.wsA), denied: await summarize(t, ctx.wsA, 200, "denied") }),
+    );
+    for (const view of [out.full, out.denied]) {
+      expect(view.summary.request_count_min, "total is clamped").toBe(MAX_SAFE);
+      expect(view.summary.blocked_request_count_min, "blocked total is clamped").toBe(MAX_SAFE);
+    }
+    const byHost = Object.fromEntries(out.full.rows.map((r) => [r.host, r.request_count]));
+    expect(byHost["big-a.example.test"], "per-group count is clamped").toBe(MAX_SAFE);
+    expect(byHost["big-d.example.test"], "per-group count is clamped").toBe(MAX_SAFE);
+    expect(out.full.overflow.map((o) => o.request_count), "overflow count is clamped").toEqual([MAX_SAFE]);
+    for (const n of [...out.full.rows.map((r) => r.request_count), out.full.summary.request_count_min as number]) {
+      expect(Number.isSafeInteger(n)).toBe(true);
+    }
+  });
+
+  test("probe skew: an all-future-dated newest bucket falls back to the older eligible bucket; another workspace's rows never leak into the probe", async () => {
+    // Needs the current bucket to still be open for the whole case (a future-dated last_seen inside it).
+    if (Date.now() % 900_000 > 880_000) await new Promise((r) => setTimeout(r, 25_000));
+    const olderStart = bucketAt(60);
+    const olderLast = new Date(Date.parse(olderStart) + 300_000).toISOString();
+    const out = await seededAs(
+      ctx.userA,
+      async (t) => {
+        await t`reset role`;
+        const ins = (ws: string, bucket: string, host: string, lastSeenIso: string) =>
+          t`insert into public.workspace_egress_audit_rollup
+              (workspace_id, bucket_start, requested_host, decision, source_host, request_count, bytes_out, first_seen, last_seen)
+            values (${ws}, ${bucket}, ${host}, 'allowed', 'web-1', 1, 0, ${bucket}, ${lastSeenIso})`;
+        const cur = bucketAt(0);
+        // A: the newest bucket has started (bucket_start <= now) but every last_seen in it is still in the future.
+        await ins(ctx.wsA, cur, "future-a.example.test", new Date(Date.parse(cur) + 899_000).toISOString());
+        // A: the older bucket holds the only eligible row.
+        await ins(ctx.wsA, olderStart, "older-a.example.test", olderLast);
+        // B: a newer ELIGIBLE bucket (a probe whose inner subquery lost its tenant filter would pick it and return NULL for A) ...
+        await ins(ctx.wsB, bucketAt(20), "b-newer-bucket.example.test", new Date(Date.parse(bucketAt(20)) + 300_000).toISOString());
+        // ... and a later row inside A's older bucket (an outer query that lost its tenant filter would return it).
+        await ins(ctx.wsB, olderStart, "b-same-bucket.example.test", new Date(Date.parse(olderStart) + 800_000).toISOString());
+        await t`set local role service_role`;
+      },
+      async (t) => ({ probe: await summarize(t, ctx.wsA, 0), full: await summarize(t, ctx.wsA) }),
+    );
+    expect(out.probe.summary.last_request_at, "probe falls back to the newest bucket with an eligible row").not.toBeNull();
+    expect(Date.parse(out.probe.summary.last_request_at as string), "probe returns A's older-bucket last_seen exactly").toBe(Date.parse(olderLast));
+    expect(out.full.rows.map((r) => r.host), "the full view agrees: only the older row is eligible").toEqual(["older-a.example.test"]);
+    expect(Date.parse(out.full.summary.last_request_at as string)).toBe(Date.parse(olderLast));
+    expect(JSON.stringify(out)).not.toContain("b-newer-bucket");
+    expect(JSON.stringify(out)).not.toContain("b-same-bucket");
   });
 
 });
