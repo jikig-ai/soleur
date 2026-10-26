@@ -373,11 +373,11 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Standing constraint for EVERY tier — a spawned agent never runs the FULL gate.**
    Spawned agents run only the suites targeting the files they were given — mechanically,
-   `test-all.sh --affected` (the #8322 declared-edge gate); one handed an EXPLICIT file list
-   may instead run `TEST_GROUP=affected bash scripts/test-all.sh` (the #8591 heuristic
-   selector — a DIFFERENT selector: an undecidable diff prints `[affected] MODE=full` and
-   runs nearly everything, 2026-10-15 on `apps/web-platform/infra/` still running after an
-   hour). Both are exempt from both refusal arms, so the spawn prompt needs no hand-derived
+   `test-all.sh --affected` (the #8322 declared-edge gate); the compat spelling
+   `TEST_GROUP=affected bash scripts/test-all.sh` also survives as a deprecated
+   ALIAS of the same axis (#8621 — the #8591 heuristic selector was folded after
+   its decline set missed 49-355 suites per diff against the declared index).
+   Both are exempt from both refusal arms, so the spawn prompt needs no hand-derived
    suite list. What a spawned agent must not run is a
    full-gate-shaped invocation: `test-all.sh --full`,
    `apps/web-platform/infra/run-registered-suites.sh`, or any other full-battery runner —
@@ -1042,7 +1042,7 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
 
    The gate's rc contract (0/1/4/6/7), the `.soleur-test-gate.json` override schema, and per-rc actions live in [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md). In THIS repo it capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh) --affected — selection fails toward coverage (`AFFECTED_FALLBACK reason=…` on an undecidable diff or a touched runner/index); preview it via `bash scripts/test-all.sh --print-selection` (repo-local). A green affected run is the diff's coverage, not a full-coverage claim; CI's sharded battery is the backstop. A refusal (rc 4) names its cause and prints a `remedy:` line — never retry it blindly.
 
-   A second, heuristic scoped selector also exists (#8591): `TEST_GROUP=affected bash scripts/test-all.sh` — chokepoint declines on argv paths, content references, stems, and an always-run census backstop, with no declared index to maintain. It is the substitute both rc=4 refusals prescribe, and the spawned-agent-with-explicit-file-list form; an undeterminable diff prints `[affected] MODE=full` and runs everything (2026-10-15 on `apps/web-platform/infra/`: still running after an hour), so never the lead's gate. `TEST_GROUP=affected --affected` refuses rc=2. Both are scoped evidence, not the ship gate.
+   A deprecated compat spelling also exists (#8621): `TEST_GROUP=affected bash scripts/test-all.sh` is an alias of `--affected` — the #8591 heuristic it replaces was folded into the declared-edge axis after the decline-set measurement found misses on every corpus diff. It remains the substitute both rc=4 refusals prescribe; `TEST_GROUP=affected --affected` refuses rc=2. Either spelling is scoped evidence, not the ship gate.
 
    **`TEST_GROUP=<g>` remains as an explicit cross-cut, not the default.** `TEST_GROUP=bun|scripts|scripts-heavy|webplat|infra bash scripts/test-all.sh` restricts the run to that group's registrations under the same affected-selection rules — a non-`all` ask force-selects its group. Use it to re-run one shard in isolation; it is no longer how the Phase 2 exit picks coverage — the affected index derives a finer set.
 

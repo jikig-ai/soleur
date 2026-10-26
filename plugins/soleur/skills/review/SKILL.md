@@ -191,9 +191,9 @@ Spawned agents run only the suites targeting the files they were given — mecha
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"` — it delegates `--affected`
 to a capability-positive [runner](../../../../scripts/test-all.sh) when present, else its
 stack adapters select. A spawned agent handed an EXPLICIT file list may instead run
-`TEST_GROUP=affected bash scripts/test-all.sh` — a DIFFERENT, heuristic selector (#8591)
-that prints `[affected] MODE=full` and runs nearly everything on an undecidable diff
-(2026-10-15 `apps/web-platform/infra/`: ran >1h).
+`TEST_GROUP=affected bash scripts/test-all.sh` — a deprecated compat ALIAS of
+`--affected` (#8621; the #8591 heuristic it replaced was folded after its
+decline set missed suites on every corpus diff).
 **`SOLEUR_SUBAGENT=1` is a
 convention a lead MAY export before spawning — the harness does not set it** (measured 2026-08-19:
 UNSET inside spawned agents). When it IS exported, a plain `test-all.sh` invocation exits 4 while `affected`
