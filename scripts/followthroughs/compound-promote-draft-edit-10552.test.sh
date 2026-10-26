@@ -207,7 +207,7 @@ for r in diff-path-off-target corpus-shrink-refused agents-core-hr-rule-edit-ref
 done
 
 echo "P-6. only skill-conflict-guard / target-path-refused (and the other N-class reasons) -> exit 2, never 0"
-for r in skill-conflict-guard target-path-refused target-missing branch-name-shape-failed diff-size-exceeded; do
+for r in skill-conflict-guard skill-conflict-guard-unverifiable target-path-refused target-missing branch-name-shape-failed diff-size-exceeded; do
   probe_rows -- "$C" "$(mk_row "$(marker cron completed 0 "[\"$r\"]")" "$D1")"
   expect_rc "P-6 ($r)" 2 "$PROBE_RC"
   if grep -q -- "$r" "$PROBE_DIR/err"; then pass "P-6 ($r): printed"; else fail "P-6 ($r): not printed"; fi
@@ -704,7 +704,7 @@ mut_row M-16 "a quorum refusal shields a class-F defect beside it -> the defect 
 
 
 # --- verdict: floor + conservation reported DIRECTLY, never via pass()/fail() --
-MIN_CASES=186
+MIN_CASES=188
 total=$((passes + fails))
 if (( total < MIN_CASES )); then
   printf 'FATAL: only %d case(s) ran; floor is %d - the suite asserted nothing\n' "$total" "$MIN_CASES" >&2
