@@ -452,7 +452,7 @@ Doppler secret and the Terraform state value `random_password.inngest_redis_luks
 | Doppler secret overwritten | Stop; do not dispatch any apply (a repair is a secret update with `random_password` a no-op, and the per-merge HALT blocks an update of the pair unattended, correctly). Route A: restore the previous value from Doppler version history (plan tier and rollback scope not measured, #9927; never print values or diffs). **Superseded 2026-10-20 (#9927), as to "plan tier and rollback scope not measured":** Route A is **unverified; treat it as unavailable and plan on Route B**. Recorded 2026-10-20: the plan tier is not measurable from the CLI (no plan field); the `soleur-inngest/prd` config log holds 68 entries back to 2026-07-23 (89 days old), which a 3-day activity-log window (documented for the free Developer plan) could not hold; a rollback restores one log entry (a secret add, update or delete), not a whole config (documented, never run); an owner who still chooses Route A reads the entry's age first (it must be inside the 7-day repair horizon stated in the ADR-282 2026-10-22 addendum) and never prints the diff. Route B, when history is unavailable: the Terraform state value is the second, independent copy, so this is NOT total loss; the owner writes it back (below). Total loss only if both copies are gone. **While the Doppler value stays overwritten, every infra-path merge's per-merge apply plans an update of the Doppler copy and halts on the rotation HALT: merge infra PRs with `[skip-web-platform-apply]` until the key is repaired.** |
 | Terraform state entry lost | Stop; do not apply. The per-merge HALT blocks a create of `random_password.inngest_redis_luks` (alone or with the Doppler copy); a create of the Doppler copy alone stays legal. **This halt wedges every merge's per-merge apply, so all infra delivery stops, not only the inngest store, until the owner repairs state** (an `import {}` block is not a route that plans as a no-op: it plans the same replacement); until then merging needs `[skip-web-platform-apply]` and applies nothing. Rehearsed offline by `inngest-redis-luks-import-rehearsal.test.sh`: verified on local state with a synthetic value; not run against R2-backed state. Follow "State-loss recovery: owner procedure" directly below the table; result and limits: the ADR-282 addendum of 2026-10-19. The repository owner decides the repair; no agent applies it. |
 | Both copies lost | Total loss of the store. Follow "After a total loss" below. |
-| LUKS header corrupted | No recovery; the host fails to open the volume. Incident (`soleur:incident`); follow "After a total loss" if the data is unreadable. Detection lags to the first Redis failure. |
+| LUKS header corrupted | No recovery; the host fails to open the volume. Incident (`soleur:incident`); follow "After a total loss" if the data is unreadable. Detection lagged to the first Redis failure until 2026-10-26; once the owner has delivered the probe-carrying bundle, the daily key-continuity probe pages on a header or keyslot that no longer opens with the held key (see "Key-continuity probe (#9927 item 2)" below; ADR-282 Addendum 2026-10-26 for the limits). |
 | Volume deleted despite protection, or project loss | No recovery. Incident; follow "After a total loss". |
 
 **State-loss recovery: owner procedure (owner-run; added 2026-10-19, #9927 item 5; verified on local state with a synthetic value, terraform 1.9.8 and 1.10.5; not run against R2-backed state, and the credential wrapper in step 1 was not exercised).**
@@ -596,6 +596,83 @@ backup (item 1b of #9927) stays parked until an Art. 17 retention and erasure de
 was lost (`email/inbound.received`) harms its external sender, and a statutory request among them keeps its clock running. After a
 loss the owner lists the inbound mail received since the last known-good triage from the mail provider's side (counts only; no address
 goes into a committed file), triages it by hand, and records the clock in the incident report. Nothing in the user notice covers this group.
+
+### Key-continuity probe (#9927 item 2)
+
+A daily, read-only probe on the dedicated Inngest host asks cryptsetup whether the key the host holds still opens the LUKS2 header of the volume behind `/mnt/data`. It is a bounded function (`luks_key_probe_tick`) inside `apps/web-platform/infra/inngest-cutover-flip.sh`, so it ships through the signed config bundle ([ADR-135](../../architecture/decisions/ADR-135-pull-based-signed-config-refresh-for-dedicated-inngest-host.md), [`inngest-config-refresh.md`](./inngest-config-refresh.md)) with no `user_data` change and no host replace. The decision, isolation rules and accepted residuals are in the ADR-282 addendum of 2026-10-26; this section does not restate them. A page means the key no longer opens the volume; header backup is the open, legal-gated item (#9927 item 1), and no recovery exists if the header is lost. Every read below needs no host login (`hr-no-ssh-fallback-in-runbooks`).
+
+**The row.** One plain-text line, `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<literal>`, emitted twice: under SYSLOG_IDENTIFIER `inngest-cutover-flip` (shipped by Vector) and through the curl-direct phone-home (whose message starts with the marker, then `stage=luks-key-probe`, then the detail). It never carries the key, a UUID, a device id, a hash or stderr. Cadence: the first 30-second tick after delivery (no stamp), then every 24 hours after an `ok`, every hour after any other token.
+
+| Token | Meaning | Pages |
+| --- | --- | --- |
+| `ok` (`rc=0`) | The key held at `/etc/default/inngest-luks` unlocked a keyslot of the header at probe time. | no |
+| `fail_passphrase` (`rc=2`, from the `kdf` step) | cryptsetup read the header and no keyslot accepts the held key. | yes |
+| `fail_header` (from the `uuid` step) | The device is not readable as LUKS: `luksUUID` and `isLuks` both exited 1 (two independent reads must agree). | yes |
+| `fail_key_absent` (`at=key`) | The key file is missing, unreadable, or its value is empty: the next reboot cannot reopen the store. | yes |
+| `indeterminate` | The probe could not measure. The `at=` literal names the step: `key` (the key-file check timed out or could not run), `mount` (not on a `/dev/mapper/` source), `status` (`cryptsetup status` unusable), `uuid` (a non-1 exit, a timeout or a missing tool), `mem` (not enough free memory for the keyslot's KDF), `shield` (the OOM shield write was refused), `kdf` (a timeout or an exit other than 0 or 2). It is never a verdict about the key. | never on its own |
+
+**What the probe can and cannot claim.** Can: at probe time, the key held on this host at `/etc/default/inngest-luks` unlocks a keyslot of the LUKS2 header on the device behind the `/mnt/data` mapper; this covers the reboot path (`inngest-luks-open.service`) for that device. Cannot: that the Doppler copy equals the host file (the 12-hour drift plan covers that, and a host replace reads Doppler); that a header backup exists; that the header survives a future device fault; that the device behind the mapper is the by-id volume the boot unit opens (they coincide by construction while mounted; the probe does not derive the boot unit's device); or that a failed header is recoverable (ADR-282 "No recovery" stands until the legal-gated backup ships). LUKS2 keeps a redundant secondary header, so damage to the primary header alone may not fail the probe.
+
+**Key-charset assumption.** The key value is `random_password` with `special = false` (ADR-006 addendum), that is `[A-Za-z0-9]`, so the probe's `sed` extraction and systemd's `EnvironmentFile` parsing (the reboot path) read the same bytes. A value outside that set (an `=`, a trailing space) is outside the assumption; the probe suite pins the observed behaviour. A trailing newline would make the right key fail, which is why the probe strips it.
+
+**Sandbox status.** `sandbox: unverified`. The real `findmnt` shape under the unit's `ProtectSystem=strict` and bind-mounted `ReadWritePaths`, `--disable-locks` and the `oom_score_adj` write were measured only on a file-backed container at plan time. Until a rehearsal result is recorded here, the first-row verification below accepts only `token=ok`, and an `indeterminate` row with `at=mount`, `at=status` or `at=kdf` is read as "not yet proven", never as delivery.
+
+**Decision table for a page** (no destructive step; every action that writes belongs to the repository owner):
+
+| Page | What it means | Action |
+| --- | --- | --- |
+| `fail_key_absent` or `fail_passphrase` | The next reboot cannot reopen the store (key absent), or the header or keyslot no longer matches the host key. | STOP. Dispatch no host replace until the cause is established: a replace re-reads Doppler and may not open the volume. Read the 12-hour drift plan for the Doppler copy. The owner follows the existing "Per-loss-mode owner and procedure" table above (Doppler secret overwritten, state lost, header corrupted). |
+| `fail_header` | The device no longer reads as a LUKS volume. | ADR-282 "No recovery". Follow "After a total loss" if the data is unreadable, and open an incident with `soleur:incident`. |
+| `indeterminate` (no page of its own) | The probe could not measure. | Read the `at=` literal from the rows (query below). A dead-man page without a fail page means the probe cannot measure (`mount`, `status`, `mem`, `shield`, `kdf`): fix the measurement; it is not health. |
+
+A fail page re-runs hourly while the verdict stays non-`ok`, and the alert clears within about three hours of the first `ok`.
+
+**The dead-man.** A second alert fires when the probe has been seen at least once (the oldest marker row is more than 26 hours old) and then produces no `ok` or `fail_*` row for 26 hours. It counts only measured verdicts, so an `indeterminate`-only stream fires it after 26 hours and a failing probe leaves it quiet (the paging alert owns that). It is quiet before delivery. Its accepted residuals, stated and not hidden:
+
+- a bundle revert, or promotion of an older bundle, fires it about 26 hours later (correct: the probe is gone);
+- a log-pipeline outage longer than 26 hours fires it;
+- it self-disarms after 30 days with no marker rows at all (its query window is 30 days); if the probe is ever dark that long, the dead-man must be converted to a count-variable form (recorded on the keeper follow-up under #9927);
+- a bundle that is never promoted keeps it quiet forever; the owner-hold tracker for delivery, not the alert, covers that.
+
+**Check the pipeline before the host.** A dead-man page far more often means the pipeline or the bundle than the volume. Diagnose with no host login, in this order (both commands are read-only; read each result by meaning, since a webhook payload that quotes the marker is not a probe row):
+
+```
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 72h --grep SOLEUR_INNGEST_LUKS_KEY_PROBE --limit 20
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 72h --grep SOLEUR_INFRA_PULL_APPLIED --limit 1
+```
+
+1. Do other rows from the host arrive (the `SOLEUR_INFRA_PULL_` rows, the cutover heartbeat)? If not, the Logs pipeline or the host is the problem, not the key.
+2. Compare the newest `SOLEUR_INFRA_PULL_APPLIED version=` with the version of the bundle that first carried the probe. A version below the probe-carrying one means a bundle revert or an older bundle: the probe is gone, and a probe-carrying bundle must be promoted again.
+3. Only then read the `at=` literals of the last probe rows as the table above says.
+
+<!-- lint-infra-ignore start: describes held production acts and their verification; the PR performs none of them -->
+**Delivery: what the merge does by itself, and what the owner holds.**
+
+What the merge does by itself (automation, no operator step):
+
+- `apply-web-platform-infra.yml` creates the alert resources.
+- `apply-deploy-pipeline-fix.yml` fires: `inngest-cutover-flip.sh` is a `triggers_replace` hash input of `terraform_data.deploy_pipeline_fix` and is in that workflow's `paths:`. It pushes the web-host payload (webhook plus the tunnelled SSH bridge) to the web hosts, where the script is an inert file (no flip timer on web). Expect `files_written == files_total` in the run; the ship skill's `DEPLOY_PIPELINE_FIX_TRIGGERS` gate applies; no `[skip-deploy-fix-apply]` marker is used (the web copy must stay in lockstep with the trigger lists).
+- `mint-inngest-bootstrap-tag.yml` mints a `vinngest` tag because `inngest-cutover-flip.sh` is a `cp`-staged carrier, and the bot opens a pin-bump PR that edits `cloud-init-inngest.yml`. That bump is routine: merge-apply `-target` lists exclude `hcloud_server.*`, so it shows only as standing drift (#10835, #10768) and replaces nothing. It is a separate PR from the probe's.
+
+What reaches the dedicated host only after the owner acts (held; production-mutating). These are owner-reserved production writes; this section describes them and no agent performs them. A menu answer is not authorization for any of them (`hr-menu-option-ack-not-prod-write-auth`):
+
+1. Pre-promotion checks (read-only, recorded on the tracker): `bash -n` and a `--fixture-seams` smoke run of the script as packed into the built bundle; the sandbox rehearsal result; a review of the member diff since the last promoted bundle (the bundle is built from the default branch, so any other member edit merged since then ships too); a pre-built, unpromoted revert bundle at the next higher version (the channel is monotonic, so a rollback is a roll-forward).
+2. Dispatch `build-inngest-config-bundle.yml` from the default branch at a version above the applied one (read it from the newest `SOLEUR_INFRA_PULL_APPLIED version=` row; if that row is absent or past retention, read the drift comparator summary), approved in the `inngest-config-signing` environment. The exact steps are in [`inngest-config-refresh.md`](./inngest-config-refresh.md) "Ship a host-script change".
+3. Promote the digest (`INNGEST_CONFIG_DIGEST` in `soleur/prd_terraform`, then the targeted apply per `inngest-config-refresh.md` step 3; #9060 automation is still open).
+4. Before ANY future host replace, promote a probe-carrying bundle: a replaced host applies the currently promoted bundle over the image-baked script, so a promoted bundle that predates the probe silently drops it.
+
+**First-row verification** (read-only, no host login; also the close condition of the owner-hold tracker):
+
+```
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_LUKS_KEY_PROBE --limit 5
+```
+
+Read by meaning: a row from the SYSLOG_IDENTIFIER `inngest-cutover-flip` channel AND a phone-home row, both `token=ok rc=0`, within about two minutes of the next applied bundle (the 60-second refresh timer, then the first 30-second tick with no stamp). A webhook payload that quotes the marker, or an `indeterminate` row, does not satisfy it. A `token=fail_*` row pages. The first `ok` row is also the delivery proof (`GUARD_REV` is deliberately not bumped).
+
+**Rollback (independent of the probe path):** a revert PR restoring the previous script, a new bundle at a higher version (pre-built per step 1), and the same promotion. The refresh engine and units are not members, so the rollback path does not run through the probe. Expected side effect: the dead-man fires about 26 hours after the measured rows stop. A script that breaks every tick would kill the only no-SSH rollback channel on the dedicated host, which is why step 1 exists.
+
+**Residuals stated, not hidden:** if the bundle is never promoted, the dead-man stays quiet forever (the owner-hold tracker carries a due date); the dead-man self-disarms after 30 days with no rows at all; the bot pin-bump PR is merged or closed per the existing image-release runbook and its standing drift is harmless.
+<!-- lint-infra-ignore end -->
 
 ### Deliberate unprotect (two reviewed changes; no sanctioned erase path)
 

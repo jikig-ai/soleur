@@ -99,6 +99,8 @@ from the applied digest.
    is the applied-and-verified signal. A `SOLEUR_INFRA_PULL_VERIFY_FAIL` line means the host rejected
    the bundle and kept last-known-good (fail-closed — HARD-10); read the reason and re-cut.
 
+Delivering the LUKS key-continuity probe (a bounded job inside the refresh-set member `inngest-cutover-flip.sh`, ADR-282 addendum 2026-10-26) uses this same path; its pre-promotion checks, first-row verification and rollback are in [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) section 5c, "Key-continuity probe (#9927 item 2)".
+
 ## Batching & promotion cadence
 
 The producer version is monotonic, not per-commit: batch several host-script edits into one bundle
