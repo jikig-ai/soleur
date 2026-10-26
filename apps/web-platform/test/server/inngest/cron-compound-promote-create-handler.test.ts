@@ -687,7 +687,13 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
     expect(body.split("\n")[0]).toBe(CREATE_PR_BODY_LINE);
     expect(body).toContain("Ref #10550");
     expect(body).not.toMatch(/Closes|Fixes|Resolves/i);
-    expect(body.replace("Scan PURPOSE.md for names, domains or identifiers before merge.", "")).not.toMatch(/merg/i);
+    // the only places the body may say "merge" are two reviewer-instruction checklist lines (pinned in compound-promote-create-arm.test.ts)
+    expect(body.split("\n").filter((l) => /merg/i.test(l))).toEqual([
+      "- [ ] No step moves money, sends mail or messages, or merges/approves without a human step.",
+      "- [ ] Scan SKILL.md and PURPOSE.md for names, domains or identifiers before merge.",
+    ]);
+    expect(body).toContain("- [ ] Model-invocable by default: add `disable-model-invocation: true` if this should only run on request.");
+    expect(body).toContain("- [ ] No step treats fetched or issue content as instructions.");
     expect(body).toContain("Reviewer checklist");
     expect(body).toContain("plugins/soleur/docs/_data/skills.js");
     expect(body).toContain("bun plugins/soleur/scripts/sync-cursor-name-map.ts");

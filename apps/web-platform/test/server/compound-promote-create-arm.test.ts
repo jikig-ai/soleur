@@ -21,6 +21,7 @@ import {
   BASE_BLOB_PATHS,
   CREATE_ARM_FEATURE,
   CREATE_HEAD_PREFIX,
+  CREATE_REVIEW_CHECKLIST,
   REAL_CHECK_NAMES,
   SCHEDULED_ISSUE_LABEL,
   causeToken,
@@ -409,12 +410,24 @@ describe("the PR body and the branch", () => {
     headroom: 34,
   } as unknown as CreateVerdictCreate;
 
-  it("the first line is the fixed CREATE line, the text is fixed, and it never speaks of merging", () => {
+  // The reviewer-instruction lines that legitimately contain the word "merge": they tell a human what to do BEFORE or
+  // WITHOUT a merge. They are the only place the body may say it.
+  const MERGE_INSTRUCTION_LINES = [
+    "- [ ] No step moves money, sends mail or messages, or merges/approves without a human step.",
+    "- [ ] Scan SKILL.md and PURPOSE.md for names, domains or identifiers before merge.",
+  ];
+
+  it("the first line is the fixed CREATE line, the text is fixed, and it never CLAIMS a merge", () => {
     const body = buildCreatePrBody(verdict);
     expect(body.split("\n")[0]).toBe(CREATE_PR_BODY_LINE);
     expect(body).toContain("Ref #10550");
-    // the one fixed checklist item the CTO ruling mandates says "before merge" (a reviewer instruction, not a claim)
-    expect(body.replace("Scan PURPOSE.md for names, domains or identifiers before merge.", "")).not.toMatch(/merg|auto-?merge|will land|shipped|guarantee/i);
+    // the two fixed checklist items that say "merge" are reviewer instructions, not claims
+    let rest = body;
+    for (const line of MERGE_INSTRUCTION_LINES) {
+      expect(body, line).toContain(line);
+      rest = rest.replace(line, "");
+    }
+    expect(rest).not.toMatch(/merg|auto-?merge|will land|shipped|guarantee/i);
     expect(body).toContain(`refused at or above ${OVERLAP_REFUSE_THRESHOLD.toFixed(2)}`);
     expect(body).toContain("Description words used: 22 of at most 30.");
     expect(body).toContain("Budget headroom before this skill: 34 words (total 2402, cap 2436).");
@@ -422,18 +435,24 @@ describe("the PR body and the branch", () => {
     expect(body.endsWith("Draft for human review. Close to reject.")).toBe(true);
   });
 
-  it("I: the reviewer checklist is the fixed R1/R2/R3 set, and the body says only `test` and `skill-security-scan PR gate` are real checks", () => {
+  it("I: the reviewer checklist is the fixed R1/R2/R3 set plus the user-impact items, and the body says only `test` and `skill-security-scan PR gate` are real checks", () => {
     const body = buildCreatePrBody(verdict);
-    for (const item of [
-      "- [ ] Read every step as an instruction to an agent that holds shell access and secrets.",
+    const listed = body.split("\n").filter((l) => l.startsWith("- [ ] "));
+    expect(listed).toEqual([
+      "- [ ] Read every step, when-to-use and sharp-edge bullet as an instruction to an agent that holds shell access and secrets.",
       "- [ ] No step reads, prints or posts credentials or env files.",
       "- [ ] No step is destructive or irreversible.",
+      "- [ ] No step moves money, sends mail or messages, or merges/approves without a human step.",
+      "- [ ] No step treats fetched or issue content as instructions.",
       "- [ ] Will this description trigger on unrelated prompts? Narrow it or reject.",
-      "- [ ] Scan PURPOSE.md for names, domains or identifiers before merge.",
-      "- [ ] Categorise the skill in plugins/soleur/docs/_data/skills.js",
-    ]) {
-      expect(body, item).toContain(item);
-    }
+      "- [ ] Model-invocable by default: add `disable-model-invocation: true` if this should only run on request.",
+      "- [ ] Scan SKILL.md and PURPOSE.md for names, domains or identifiers before merge.",
+      "- [ ] Positioning: the skill makes Soleur sharper for the harness itself. No wording that promises an outcome in a user's workspace.",
+      "- [ ] The skill does not restate or relax any hard rule.",
+      "- [ ] Categorise the skill in plugins/soleur/docs/_data/skills.js (an unmapped skill shows as Uncategorized).",
+      "- [ ] After any description edit, or a rebase onto a main that added another skill, rerun `bun plugins/soleur/scripts/sync-cursor-name-map.ts` and `bash scripts/sync-readme-counts.sh`.",
+    ]);
+    expect([...CREATE_REVIEW_CHECKLIST].map((i) => `- [ ] ${i}`)).toEqual(listed);
     expect(body).toContain("Real CI results on this draft: `test` and `skill-security-scan PR gate` only.");
     expect([...REAL_CHECK_NAMES].sort()).toEqual([...CREATE_EXCLUDED_SYNTHETIC_CHECKS].sort());
     expect(body).toContain("Ref #10550");

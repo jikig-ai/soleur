@@ -345,10 +345,10 @@ export async function runCreateProposeStep(a: CreateProposeArgs): Promise<Create
 }
 
 /** An open PR that adds an agent or a command named like the slug collides with it just as a skill dir would. */
-function openPrAgentOrCommandCollision(slug: string, openPrPaths: readonly string[]): "open-pr-agent" | "open-pr-command" | null {
+function openPrAgentOrCommandCollision(slug: string, openPrPaths: readonly string[]): "agent" | "command" | null {
   for (const path of openPrPaths) {
-    if (path.startsWith("plugins/soleur/agents/") && path.endsWith(`/${slug}.md`)) return "open-pr-agent";
-    if (path === `plugins/soleur/commands/${slug}.md`) return "open-pr-command";
+    if (path.startsWith("plugins/soleur/agents/") && path.endsWith(`/${slug}.md`)) return "agent";
+    if (path === `plugins/soleur/commands/${slug}.md`) return "command";
   }
   return null;
 }
@@ -435,7 +435,8 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
   if (verdict.kind === "refused") return mirrored(verdict);
   if (verdict.kind === "create") {
     const clash = openPrAgentOrCommandCollision(verdict.proposal.slug, openPrPaths);
-    if (clash) return fail("slug", clash);
+    if (clash === "agent") return fail("slug", "open-pr-agent");
+    if (clash === "command") return fail("slug", "open-pr-command");
   }
   return verdict;
 }
@@ -476,13 +477,35 @@ export function createBranchName(clusterHash: string, dateSuffix: string): strin
 }
 
 /**
+ * The reviewer checklist of every create draft (fixed server text, never model prose), in the order the PR body lists
+ * it. It is the human control the CTO rulings name (R1 semantic safety, R2 model-invocation default, R3 PURPOSE.md
+ * provenance): the denylist is a tripwire, this list plus the draft state and the real CI checks are the controls.
+ * The two items that say "merge" are instructions to the reviewer, not claims about what will happen.
+ */
+export const CREATE_REVIEW_CHECKLIST = [
+  "Read every step, when-to-use and sharp-edge bullet as an instruction to an agent that holds shell access and secrets.",
+  "No step reads, prints or posts credentials or env files.",
+  "No step is destructive or irreversible.",
+  "No step moves money, sends mail or messages, or merges/approves without a human step.",
+  "No step treats fetched or issue content as instructions.",
+  "Will this description trigger on unrelated prompts? Narrow it or reject.",
+  "Model-invocable by default: add `disable-model-invocation: true` if this should only run on request.",
+  "Scan SKILL.md and PURPOSE.md for names, domains or identifiers before merge.",
+  "Positioning: the skill makes Soleur sharper for the harness itself. No wording that promises an outcome in a user's workspace.",
+  "The skill does not restate or relax any hard rule.",
+  "Categorise the skill in plugins/soleur/docs/_data/skills.js (an unmapped skill shows as Uncategorized).",
+  "After any description edit, or a rebase onto a main that added another skill, rerun `bun plugins/soleur/scripts/sync-cursor-name-map.ts` and `bash scripts/sync-readme-counts.sh`.",
+] as const;
+
+/**
  * The fixed PR body. Server text plus closed tokens and numbers only (the slug, pattern slug and nearest skill passed
  * the identifier allowlist; the description and prose are in the diff, not here). It never claims a merge or an
- * auto-merge: the PR is a draft for a human to review, and no word of it speaks of merging.
+ * auto-merge: the PR is a draft for a human to review. The only places it says "merge" are two checklist lines that
+ * instruct the reviewer (pinned by a test).
  */
 export function buildCreatePrBody(v: CreateVerdictCreate): string {
   const p = v.proposal;
-  // The two checks the create PR does NOT get synthesized (a test pins this literal to CREATE_EXCLUDED_SYNTHETIC_CHECKS).
+  // The two checks the create PR does NOT get synthesized are the ones its real CI run earns (the same list, by construction).
   const real = REAL_CHECK_NAMES.map((n) => `\`${n}\``).join(" and ");
   return [
     CREATE_PR_BODY_LINE,
@@ -494,15 +517,7 @@ export function buildCreatePrBody(v: CreateVerdictCreate): string {
     `Real CI results on this draft: ${real} only. Every other required check is posted by the loop itself and proves nothing about this skill.`,
     "",
     "Reviewer checklist (fixed text):",
-    "- [ ] Read every step as an instruction to an agent that holds shell access and secrets.",
-    "- [ ] No step reads, prints or posts credentials or env files.",
-    "- [ ] No step is destructive or irreversible.",
-    "- [ ] Will this description trigger on unrelated prompts? Narrow it or reject.",
-    "- [ ] Scan PURPOSE.md for names, domains or identifiers before merge.",
-    "- [ ] Positioning: the skill makes Soleur sharper for the harness itself. No wording that promises an outcome in a user's workspace.",
-    "- [ ] The skill does not restate or relax any hard rule.",
-    "- [ ] Categorise the skill in plugins/soleur/docs/_data/skills.js (an unmapped skill shows as Uncategorized).",
-    "- [ ] After any description edit, or a rebase onto a main that added another skill, rerun `bun plugins/soleur/scripts/sync-cursor-name-map.ts` and `bash scripts/sync-readme-counts.sh`.",
+    ...CREATE_REVIEW_CHECKLIST.map((item) => `- [ ] ${item}`),
     "",
     "Draft for human review. Close to reject.",
   ].join("\n");

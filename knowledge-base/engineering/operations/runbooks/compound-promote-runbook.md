@@ -303,7 +303,7 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 | `scan` | the scanner did not return an explicit LOW-RISK first line with exit 0 on BOTH files (HIGH-RISK, REVIEW, empty, non-zero, timeout, missing tool) | `detail` says which. Marker numbers: `create_file_index` (0 SKILL.md, 1 PURPOSE.md), `create_exit` (the script's exit code), `create_missing_tools` (how many). Sentry `extra`: `signal` (a `SIG*` name) and `missing_tool_names` (always members of the closed tool list). A missing tool means the runner image lacks a dependency |
 | `readme-sync` | the README sync changed anything beyond digits in the two README files, or nothing at all | a script defect or a scan-time write; the draft is not opened. Marker numbers: `create_changed_count` (`unexpected-change`: paths other than the READMEs that differ; `no-change`: how many of the two READMEs changed), `create_exit` |
 | `stub-drift` | the rendered Cursor stub differs from the renderer's own expectation | this is RENDERER SELF-CONSISTENCY only. Parity of the pure renderer with the real generator is the CI `cursor-name-map --check` (`sync-cursor-name-map.ts --check`), not a run-time check. If this fires the renderer was edited without its expectation |
-| `persist` | a precondition of the commit failed, or the commit helper did | The create arm commits from the cron worker (Inngest), NOT from a GitHub Actions workflow; there is no workflow-run log to read. Read the Sentry event: op `create-refused` (tag `class`, `extra.detail`), and for `failed-<stage>` / `not-committed-<status>` the helper's own Sentry mirror for that stage |
+| `persist` | a precondition of the commit failed, or the commit helper did | The create arm commits from the cron worker (Inngest), NOT from a GitHub Actions workflow; there is no workflow-run log to read. Read the Sentry event: op `create-refused` (tag `class`, `extra.detail`, and for a git failure `extra.cause`, see "Git failures" below), and for `failed-<stage>` / `not-committed-<status>` the helper's own Sentry mirror for that stage |
 
 `create_detail` values by class (closed tokens; a `<field>:<rule>` token names the model field and the shape rule, never its text):
 
@@ -313,28 +313,32 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 | `create-open` | `open-create-pr`, `list-failed`, `list-incomplete`, `paths-unverifiable`, `paths-incomplete` |
 | `index-empty` | `no-open-patterns` |
 | `input-size` | `over-ceiling` (marker numbers `create_tokens`, `create_max`, `create_bytes`; the bound is bytes / 4) |
-| `model-invalid` | `no-api-key`, `transport` (Sentry `extra.cause`: `http-429`, `TimeoutError`, ...), `max-tokens`, `empty`, `not-json`, `schema`, `unknown-pattern`, `no-strings`, `internal` |
-| `shape` | `<field>:<rule>` from the shape allowlist (rules include `instruction-risk` -- the phrase denylist -- `claim-word`, `ref-format`, `markup`, `url`, `backtick`), `<field>:pii`, `<field>:credential`, `rendered-<file>:<pii or credential>`, `template-unreadable` (Sentry `extra.cause`), `render`, `grok-block`, `fence:skill`, `fence:purpose`, `size:skill`, `size:purpose`, `frontmatter-keys`, `frontmatter-values`, `purpose-link`, `slot-left:purpose` |
+| `model-invalid` | `no-api-key`, `transport` (Sentry `extra.cause`: `http-429`, `TimeoutError`, ...), `max-tokens`, `empty`, `not-json`, `schema`, `unknown-pattern`, `internal` |
+| `shape` | `<field>:<rule>` from the shape allowlist (rules include `instruction-risk` -- the phrase denylist, so `<field>:instruction-risk` is a MODEL STRING that hit it -- `claim-word`, `ref-format`, `markup`, `url`, `backtick`), `<field>:pii`, `<field>:credential`, `rendered-<file>:<pii or credential>`, `instruction-risk:skill` and `instruction-risk:purpose` (a model-derived LINE of the rendered SKILL.md / PURPOSE.md hit the denylist; the fixed template text is exempt), `empty:<file>` (a rendered file was empty), `template-unreadable` (Sentry `extra.cause`), `render`, `grok-block`, `fence:skill`, `fence:purpose`, `size:skill`, `size:purpose`, `frontmatter` (the rendered SKILL.md frontmatter did not parse), `frontmatter-keys`, `frontmatter-values`, `purpose-link`, `slot-left:purpose` |
 | `slug` | `format`, `yaml-word`, `reserved`, `skill-exists`, `agent-exists`, `cursor-name-exists`, `cursor-dir-exists`, `open-pr-slug`, `open-pr-agent`, `open-pr-command`, and the unmeasurable-population tokens `agents-dir-unreadable`, `agents-below-floor`, `cursor-dir-unreadable`, `cursor-below-floor` |
-| `prefer-patch` | `no-skill-list`, `nearest-missing`, `nearest-not-top3`, `overlap`, `open-pr-nearest` |
+| `prefer-patch` | `nearest-missing`, `nearest-not-top3`, `overlap`, `open-pr-nearest` |
 | `budget` | `skills-dir-unreadable`, `skill-unreadable`, `frontmatter-missing`, `frontmatter-unparseable`, `frontmatter-not-a-map`, `description-not-a-string`, `population-below-floor`, `cap-unreadable`, `unreadable`, `words-out-of-range`, `over-headroom` |
 | `scan` | `high-risk`, `review`, `non-zero`, `empty-output`, `timeout`, `unrecognised`, `spawn-error` (the interpreter could not be started; also mirrored as op `create-gate-spawn`), `script-not-regular` (the scanner is missing, a symlink or not a regular file under the repo root), `output-overflow` (more than 1 MiB of stdout), `missing-tool`, `input-too-small`, `input-unreadable`, `meta-base-invalid`, `no-input` |
-| `readme-sync` | `readme-unreadable`, `git-failed`, `timeout`, `script-not-regular`, `script-failed`, `unexpected-change`, `no-change`, `non-digit-change` |
+| `readme-sync` | `readme-unreadable`, `git-failed`, `timeout`, `script-not-regular`, `spawn-error` (the interpreter could not be started), `output-overflow` (more than 1 MiB of stdout), `script-failed` (the script ran and exited non-zero: `create_exit`), `unexpected-change`, `no-change`, `non-digit-change` |
 | `stub-drift` | `stub-differs` |
-| `persist` | `branch-shape`, `branch-taken` (an open PR on our branch is not a create PR), `clone-missing` (the clone directory is gone; either step), `clone-not-clean`, `origin-failed`, `fetch-failed`, `reset-failed`, `blob-read-failed`, `origin-strip-failed`, `recheck-mismatch`, `page-missing`, `log-unreadable`, `base-moved`, `bytes-differ`, `deadline`, `internal`, `path-missing`, `path-not-regular`, `path-empty`, `path-too-large`, `path-nul`, `path-not-utf8`, `git-failed`, `changed-set-mismatch`, `failed-<stage>` and `not-committed-<status>` (the commit helper's own exit) |
+| `persist` | `branch-shape`, `branch-taken` (an open PR on our branch is not a create PR), `clone-missing` (the clone directory is gone; either step), `clone-not-clean`, `origin-failed`, `fetch-failed`, `reset-failed`, `blob-read-failed`, `origin-strip-failed`, `recheck-mismatch`, `page-missing` (the verdict's pattern is not in the run's pattern list; mirrored), `log-unreadable`, `base-moved`, `slug-appeared`, `tree-read-failed`, `branch-exists`, `branch-probe-failed`, `bytes-differ`, `deadline`, `internal`, `path-missing`, `path-not-regular`, `path-empty`, `path-too-large`, `path-nul`, `path-not-utf8`, `git-failed`, `changed-set-mismatch`, `failed-<stage>` and `not-committed-<status>` (the commit helper's own exit) |
 | `create-open` (extra) | the `list-failed` and `paths-unverifiable` refusals also carry `extra.cause` in Sentry, a closed token (`http-<status>`, an errno name, an error class name or `unknown`), never a message |
 
 - **Kill switch.** There is no runtime flag. `allow_create` is read from each event, so the kill switch is to STOP
   FIRING manual triggers that carry it; nothing needs deploying. The existing opt-out in this runbook (`enabled:
   false` in `promotion-config.yml`) also stops it, because the run ends `disabled` before the arm.
 - **Known limit (R4): the edit loop's token handling is untouched.** The create arm takes the installation token
-  OFF `.git/config` before any of its scripts run and puts it back only for the fetch and the commit helper. The
+  OFF `.git/config` before any of its scripts run. The token is on disk only for the network calls: the refresh fetch
+  (before any script), and after the scripts the second fetch, the remote-branch probe and the commit helper. The
   EDIT loop still clones with the token in `.git/config` and runs no repo script, as before. A change there is a
-  separate piece of work.
-- **Clone loss and token expiry.** Step B refreshes the clone from `origin/main` with the step's token and compares
-  four base blobs again just before the commit. If the worker lost the clone between the steps the refusal is
-  `persist/clone-missing`; if the token has expired the refresh is `persist/fetch-failed` (or `origin-failed`).
-  Neither writes anything; a new manual run starts from a fresh clone and a fresh token.
+  separate piece of work. If the final strip of the token from `.git/config` fails twice, the arm mirrors Sentry op
+  `create-origin-strip-failed` (the token stays on the ephemeral workspace's disk until it is torn down).
+- **Clone loss and token expiry.** The memoized clone path lives on the worker. If the container restarted between
+  the two steps, or before a replay, the directory is gone: `persist/clone-missing` (either step), nothing written.
+  The installation token is minted once per run and lasts about an hour: a replay of `create-persist` more than
+  roughly an hour later hands it an EXPIRED token, and the first fetch fails as `persist/fetch-failed` (or
+  `origin-failed`) with `extra.cause` like `exit128`. Neither case writes anything; a new manual run starts from a
+  fresh clone and a fresh token.
 - **An unreviewed create draft holds capacity.** The create PR is a draft nobody merges automatically. While it is
   open it (a) permanently blocks any further create (`create-open`: one open create at a time) and (b) holds one of
   the two shared `self-healing/auto` week-cap slots. NO alert fires for an ignored draft today. The operator closes
@@ -349,7 +353,7 @@ or a fixed phrase) that never carries model text. Query recipe: `betterstack-log
 
 | Field | Meaning | How to read it |
 |---|---|---|
-| `create_requested` | a manual `patterns` row: whether the event carried `allow_create === true` | Present on every manual `patterns` row, including the early `disabled`, `deduped` and `week-cap-reached` rows. NOT present on a manual run without `input:"patterns"` (a manual corpus row stays byte-identical to before the arm), so an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace at all. `false` means the arm was off (a non-boolean `allow_create` such as `"true"` or `1` is ignored, never coerced). `true` with no `create_arm` means the run ended before the arm (read `status`), or that the clustering answer was truncated (`anthropic-truncated`: the arm is skipped, never spending the call) |
+| `create_requested` | a manual `patterns` row: whether the event carried `allow_create === true` | Present on every manual `patterns` row, including the early `disabled`, `deduped` and `week-cap-reached` rows. NOT present on a manual run without `input:"patterns"` (a manual corpus row stays byte-identical to before the arm), so an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace at all. `false` means the arm was off (a non-boolean `allow_create` such as `"true"` or `1` is ignored, never coerced). `true` with no `create_arm` means the run ended before the arm: read `status`. `week-cap-reached`, `empty-corpus`, `deduped` and `disabled` are early exits; `anthropic-truncated` means the edit clustering answer was truncated and the arm is skipped on that path (it never spends the call). The scope: a manual `patterns` row gains EXACTLY this one key when the arm did not run |
 | `create_arm` | `ran`, emitted ONLY when the arm ran | Absent means off. With it, `kind` is `create` |
 | `kind` | `create` | Emitted only together with `create_arm` |
 | `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or the pattern is already proposed (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
@@ -359,7 +363,7 @@ or a fixed phrase) that never carries model text. Query recipe: `betterstack-log
 | `create_top1`, `create_nearest_rank` | the best overlap score with an existing skill and the rank of the model's nearest skill | `prefer-patch` refusals only; compare with the refusal threshold in the PR body trailer |
 | `create_tokens`, `create_max`, `create_bytes` | the input-size bound (bytes / 4), its ceiling and the input bytes | `input-size` refusals only |
 | `create_path_index` | index into the six-path set (0 SKILL.md, 1 PURPOSE.md, 2 Cursor stub, 3 README.md, 4 plugins/soleur/README.md, 5 promotion log) | `persist` collector refusals (`path-*`) and `persist/bytes-differ` |
-| `create_file_index`, `create_exit`, `create_missing_tools`, `create_changed_count` | scan: refused file (0 or 1), the script's exit code, how many tools were missing; readme-sync: changed counts; `persist/base-moved`: how many base blobs moved | `scan`, `readme-sync` and `base-moved` refusals. The signal NAME, the missing tool NAMES and cause tokens are Sentry-only (`extra`) |
+| `create_file_index`, `create_exit`, `create_missing_tools`, `create_changed_count` | scan: refused file (0 or 1), the script's exit code, how many tools were missing; readme-sync: changed counts; `persist/base-moved`: how many base blobs moved; `create_exit` also: the exit status of a failed git call (`fetch-failed` and the other git failures) | `scan`, `readme-sync`, `base-moved` and git-failure refusals. The signal NAME, the missing tool NAMES and cause tokens are Sentry-only (`extra`). `min_words`, `max_words`, `headroom`, `threshold` and `pr` are Sentry-only numbers too |
 | `create_pr` | the draft PR number | `opened` only |
 
 Where the create outcome sits: the arm runs AFTER the edit loop, so `status` is the edit loop's status
@@ -373,35 +377,69 @@ two open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the 
   `extra.detail` and the same numbers. Infrastructure faults have their own ops: `create-gate-spawn` and
   `create-gate-git` (a gate script or git could not run), `create-propose-internal` and `create-persist-internal` (a
   defect inside a step, converted to a returned refusal), `create-own-pr-lookup-failed` (the replay lookup; the step
-  continues) and `create-clone-restore-failed` (the clone could not be returned to a clean main).
+  continues), `create-clone-restore-failed` (the clone could not be returned to a clean main) and
+  `create-origin-strip-failed` (the token could not be removed from `.git/config` after two tries).
 - **A refused create writes no ledger row.** The promotion-log row exists only inside a committed PR, so a pattern
   refused for budget, scan or sync is retried on the next manual fire once the cause is gone.
 - **Replay.** Step `create-propose` is memoized and never throws; step `create-persist` looks up its own open PR by
   the deterministic head branch (`self-healing/auto-<cluster hash>-<run date>`) and counts a hit as success ONLY when
   the PR body carries the `CREATE (new skill)` line, so a replay cannot open a second PR. A hit without the line is an
   EDIT PR (both arms use the same branch shape): `persist/branch-taken`.
-- **Same-run collision.** The create arm treats every cluster hash the edit loop recorded in the same run (opened or
-  attempted) as already proposed: it ends `no_action` (`create_no_action_reason: other`) and `ledger_suppressed`
-  counts it.
-- **Base blobs.** Step B refreshes the clone to the current main, re-runs the admission checks on it, and compares
-  the blob ids of `README.md`, `plugins/soleur/README.md`, the promotion log and the budget-cap file with the ones it
-  used just before the commit: `persist/base-moved` when ANY moved (an unrelated merge does not refuse).
-- **One deadline.** Step B has one 150 s budget; every script and git call gets the smaller of its own timeout and
-  what is left; an exhausted budget is `persist/deadline`.
+- **Same-run collision.** The create arm does not offer the model a pattern whose cluster hash the edit loop recorded
+  in the same run (opened or attempted): no model call is spent on it, and when every pattern is owned that way the
+  arm ends `no_action` (`create_no_action_reason: other`) without a call and with no `ledger_suppressed` increment.
+  A model that names an owned pattern anyway is the backstop: still `no_action` / `other`, and the hash is NOT
+  recorded a second time (one `refusal_detail` entry per hash, no extra `ledger_suppressed`).
+- **Base moved.** Step B refreshes the clone to the current main, re-runs the admission checks on it, and, just
+  before the commit (after a second fetch), compares the blob ids of `README.md`, `plugins/soleur/README.md`, the
+  promotion log and the budget-cap file with the ones it used: `persist/base-moved` when ANY moved (an unrelated
+  merge does not refuse). The same fetch lists the two new-slug directories (the skill dir and the Cursor stub dir):
+  one that appeared on main while the gates ran is `persist/slug-appeared`. Accepted window: a README edit merged
+  AFTER that second fetch and BEFORE `safeCommitAndPr`'s own fetch can still be reverted in the PR diff. The PR is a
+  draft and the reviewer reads the diff; nothing merges automatically.
+- **Orphan branch (`persist/branch-exists`).** The branch name is deterministic (`self-healing/auto-<cluster
+  hash>-<run date>`). If an earlier attempt pushed it and the PR was never opened (or was closed), the new attempt
+  finds the branch on the remote with no open PR and refuses `persist/branch-exists` instead of failing late as
+  `failed-push`. The arm NEVER deletes a remote branch. Operator action: delete the orphan branch (GitHub UI, or
+  `gh api -X DELETE repos/jikig-ai/soleur/git/refs/heads/<branch>`) and fire again, or wait for the next UTC day
+  (the date is part of the name). The same-day wedge is a known limit. `persist/branch-probe-failed` is the probe
+  itself failing (read `extra.cause`).
+- **Git failures.** `fetch-failed`, `reset-failed`, `blob-read-failed`, `tree-read-failed`, `origin-strip-failed`,
+  `branch-probe-failed` and `clone-not-clean` carry closed evidence: the marker field `create_exit` (git's exit
+  status, absent when git was killed or never ran) and Sentry `extra.cause`, one of `timeout`, `exit<N>`, `signal`
+  or `spawn`. `origin-failed` carries `extra.cause` of `symlink-refused` (a symlinked `.git` entry), `set-url-failed`
+  (git refused the remote change) or an errno / class name. Sentry op `create-gate-git` is the per-call event: a
+  SYNTHETIC error `git <sub> failed` with `extra` `{sub, exit, signal, killed, timedOut}`. Git's own stderr is never
+  forwarded (a failed fetch against the tokenized origin echoes the remote URL there).
+- **One deadline, pre-commit only.** Step B has one 150 s budget over the pre-commit phase (clone refresh, re-check,
+  render, gates, second fetch and branch probe); every script and git call in it gets the smaller of its own timeout
+  and what is left; an exhausted budget is `persist/deadline`. It does NOT cover the own-PR lookup (it runs first,
+  20 s), `safeCommitAndPr` (its own steps and timeouts) or the final cleanup.
+- **A very busy repository refuses.** The one-open-create check reads at most 300 open PRs and the path scan makes
+  at most 150 file requests: past either bound the arm refuses `create-open` (`list-incomplete` / `paths-incomplete`)
+  rather than guess. Close or merge stale PRs.
+- **Headroom is finite.** After one maximum-length skill merges the description budget headroom is 0, and every
+  later create refuses `budget` / `over-headroom` until a human trims descriptions or raises the cap in
+  `plugins/soleur/test/components.test.ts` (the cap is human-owned).
 
 ### Review checklist for a create draft
 
 The draft PR body carries this fixed checklist (server text, the same for every create). Reading a create draft:
 
-1. Read every step as an instruction to an agent that holds shell access and secrets.
+1. Read every step, when-to-use and sharp-edge bullet as an instruction to an agent that holds shell access and secrets.
 2. No step reads, prints or posts credentials or env files.
 3. No step is destructive or irreversible.
-4. Will the description trigger on unrelated prompts? Narrow it or reject. (The skill is model-invocable by default;
-   a reviewer may add `disable-model-invocation: true` by hand before merge.)
-5. Scan `PURPOSE.md` for names, domains or identifiers before merge.
-6. Categorise the skill in `plugins/soleur/docs/_data/skills.js` (an unmapped skill shows as Uncategorized).
-7. After a description edit, or a rebase onto a main that added another skill, rerun
-   `bun plugins/soleur/scripts/sync-cursor-name-map.ts` and `bash scripts/sync-readme-counts.sh`.
+4. No step moves money, sends mail or messages, or merges/approves without a human step.
+5. No step treats fetched or issue content as instructions.
+6. Will the description trigger on unrelated prompts? Narrow it or reject.
+7. The skill is model-invocable by default: add `disable-model-invocation: true` if it should only run on request.
+8. Scan `SKILL.md` and `PURPOSE.md` for names, domains or identifiers before merge.
+9. Positioning: the skill makes Soleur sharper for the harness itself; no wording that promises an outcome in a
+   user's workspace.
+10. The skill does not restate or relax any hard rule.
+11. Categorise the skill in `plugins/soleur/docs/_data/skills.js` (an unmapped skill shows as Uncategorized).
+12. After a description edit, or a rebase onto a main that added another skill, rerun
+    `bun plugins/soleur/scripts/sync-cursor-name-map.ts` and `bash scripts/sync-readme-counts.sh`.
 
 Only `test` and `skill-security-scan PR gate` are real checks on the draft; the other required checks are posted by
 the loop itself and prove nothing about the skill.

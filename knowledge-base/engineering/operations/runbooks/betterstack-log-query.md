@@ -703,7 +703,7 @@ the create fields. When the arm ran the row also carries `create_arm` (`ran`, em
 `stub-drift`, `persist`), `create_detail` (a closed token, never model text), the numbers `create_words`,
 `create_cap`, `create_total`, `create_top1`, `create_nearest_rank`, the refusal evidence numbers `create_tokens`,
 `create_max`, `create_bytes` (input-size), `create_path_index`, `create_file_index`, `create_missing_tools`,
-`create_exit`, `create_changed_count`, and `create_pr` (the draft PR number). A refused
+`create_exit` (a gate script's exit code, or the exit status of a failed git call in the persist step), `create_changed_count`, and `create_pr` (the draft PR number). A refused
 create adds ONE entry `create-refused` to `refusals[]` (the refusal reason; its class is the field above) and is
 mirrored to Sentry as op `create-refused` tagged `class`. The create outcome rides the edit loop's `status`
 (`completed` or `no-qualifying-clusters`), and `clusters_opened` counts edit PRs only. How to read each class and each
@@ -725,7 +725,8 @@ doppler run -p soleur -c prd_terraform -- \
 ```
 
 A row with `create_requested: true` and `-` in the `create_arm` column ended before the arm (read `status`: a saturated
-week cap ends `week-cap-reached`). A `create_requested` of `false` on a row you expected to create means the
+week cap ends `week-cap-reached`; `empty-corpus`, `deduped` and `disabled` are early exits too, and `anthropic-truncated`
+means the edit clustering answer was truncated, which skips the arm on that path). A `create_requested` of `false` on a row you expected to create means the
 `allow_create` event field did not reach the handler as the boolean `true`.
 
 Reading it:
