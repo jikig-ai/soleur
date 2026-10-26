@@ -541,6 +541,8 @@ which is exactly when you most want to know.
 
 ## git_data_host_replace
 
+> **DISABLED from the Option B merge until #11194 (2026-10-26).** This job, `git_data_host_create` and the rotate selector `-target` the retired plaintext volume and attachment addresses and their gates demand those addresses, so every plan is refused. Escalate to the owner instead of re-dispatching; see ADR-239 Amendment 2026-10-26, item 4.
+
 Selected by `-f apply_target=git-data-host-replace` (#6242, ADR-103). git-data.tf +
 git-data-luks.tf + network.tf resources are OPERATOR_APPLIED_EXCLUSIONS (ADR-068) —
 deliberately NOT in the per-PR `-target=` allow-list, and the per-PR path bridges over SSH
