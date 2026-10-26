@@ -1,4 +1,4 @@
-// WikiSkill Phase 2 (#10550), commit 5 -- handler-level behaviour of the gated create arm.
+// WikiSkill Phase 2 (#10550) -- handler-level behaviour of the gated create arm.
 //
 // PROPERTIES
 //   Guard 3  A scheduled run, a manual `corpus` run and a manual `patterns` run whose `allow_create` is anything but
@@ -46,6 +46,10 @@ const h = vi.hoisted(() => ({
   ownPrs: [] as unknown[],
   heads: [] as string[],
   calls: [] as string[],
+  /** `.git/config` of the clone at the moment each spawn gate double ran (R4). */
+  configAt: { scan: [] as string[], sync: [] as string[] },
+  /** Runs after a named step callback returned (a test seam: delete the clone between the two create steps). */
+  afterStep: null as null | ((name: string, repoRoot: string) => void),
 }));
 
 vi.mock("@/server/observability", async (importOriginal) => ({
@@ -179,7 +183,8 @@ beforeAll(() => {
     }
   }
   process.env.ANTHROPIC_API_KEY = "test-key";
-  remoteDir = mkdtempSync(join(tmpdir(), "create-handler-remote-"));
+  // The literal `x-access-token` in the path makes the clone's `.git/config` carry the marker the real token URL would (R4).
+  remoteDir = mkdtempSync(join(tmpdir(), "create-handler-remote-x-access-token-"));
   workRoot = mkdtempSync(join(tmpdir(), "create-handler-work-"));
   const git = gitFixture(remoteDir);
   git(["init", "-q", "-b", "main", "."]);
@@ -282,8 +287,17 @@ beforeEach(() => {
   editClusters = [EDIT_CLUSTER];
   h.safeCommit.mockResolvedValue({ status: "committed", prNumber: 101, branch: "b", fileCount: 1, deletionCount: 0 });
   // Default gates: pass. `collect` reads what is on disk, exactly the contract of the real collector.
-  h.scan.mockResolvedValue({ ok: true, scanned: 2, verdicts: [] });
-  h.sync.mockResolvedValue({ ok: true, contents: { "README.md": "x", "plugins/soleur/README.md": "y" } });
+  h.configAt.scan.length = 0;
+  h.configAt.sync.length = 0;
+  h.afterStep = null;
+  h.scan.mockImplementation(async (o: { repoRoot: string }) => {
+    h.configAt.scan.push(readFileSync(join(o.repoRoot, ".git", "config"), "utf8"));
+    return { ok: true };
+  });
+  h.sync.mockImplementation(async (o: { repoRoot: string }) => {
+    h.configAt.sync.push(readFileSync(join(o.repoRoot, ".git", "config"), "utf8"));
+    return { ok: true };
+  });
   h.collect.mockImplementation(async (o: { repoRoot: string; slug: string }) => {
     const paths = createPathList(o.slug);
     const expectedContent: Record<string, string> = {};
@@ -313,10 +327,11 @@ async function run(event: { name: string; data?: Record<string, unknown> }): Pro
       if (memo.has(name)) return memo.get(name) as T;
       const v = await cb();
       memo.set(name, v);
-      if (name === "create-persist") {
-        const repo = (memo.get("read-config") as { repoRoot: string }).repoRoot;
+      const repo = (memo.get("read-config") as { repoRoot: string } | undefined)?.repoRoot;
+      if (name === "create-persist" && repo && existsSync(repo)) {
         statusAfterPersist.push(execFileSync("git", ["-C", repo, "status", "--porcelain", "-uall"], { encoding: "utf8" }));
       }
+      if (repo) h.afterStep?.(name, repo);
       return v;
     },
   };
@@ -468,7 +483,8 @@ describe("the week cap (CTO G2): the edit loop runs first and shares the cap", (
 
 // ---------------------------------------------------------------------------------------------------------
 describe("one open create at a time (CTO G2)", () => {
-  const OPEN_CREATE = { number: 777, body: `${CREATE_PR_BODY_LINE}\n\nProposed by the loop.`, labels: [{ name: "self-healing/auto" }] };
+  const BOT_HEAD = { ref: `${PROMOTE_BRANCH_PREFIX}${"c".repeat(64)}-2026-10-20` };
+  const OPEN_CREATE = { number: 777, body: `${CREATE_PR_BODY_LINE}\n\nProposed by the loop.`, labels: [{ name: "self-healing/auto" }], head: BOT_HEAD };
 
   it("another open self-healing/auto PR carrying the fixed CREATE line refuses create-open before any model call", async () => {
     h.pulls.list = [OPEN_CREATE];
@@ -479,10 +495,16 @@ describe("one open create at a time (CTO G2)", () => {
     expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", tags: { class: "create-open" } }));
   });
 
-  it("a CREATE line on a PR WITHOUT the label, and the label without the line, do not count", async () => {
+  it("E: detection does NOT depend on the best-effort label -- a labelless create PR (bot head + CREATE line) still refuses create-open", async () => {
+    h.pulls.list = [{ ...OPEN_CREATE, labels: [] }];
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_outcome: "refused", create_refusal_class: "create-open", create_detail: "open-create-pr" });
+  });
+
+  it("the CREATE line on a non-bot head, and a bot head without the line, do not count", async () => {
     h.pulls.list = [
-      { number: 1, body: CREATE_PR_BODY_LINE, labels: [{ name: "other" }] },
-      { number: 2, body: "an edit PR", labels: [{ name: "self-healing/auto" }] },
+      { number: 1, body: CREATE_PR_BODY_LINE, labels: [{ name: "other" }], head: { ref: "feature/quote-the-line" } },
+      { number: 2, body: "an edit PR", labels: [{ name: "self-healing/auto" }], head: BOT_HEAD },
     ];
     const r = await run(PATTERNS_CREATE());
     expect(r.last).toMatchObject({ create_outcome: "opened" });
@@ -609,7 +631,7 @@ describe("Step A: create-propose is ONE bounded model call, memoized, and never 
     }];
     const r = await run(PATTERNS_CREATE());
     expect(r.last.refusals).toContain("ledger-suppressed");
-    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action" });
+    expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 1 });
     expect(r.last).not.toHaveProperty("create_refusal_class");
     expect(createCommits()).toHaveLength(0);
     expect(r.names).not.toContain("create-persist");
@@ -647,7 +669,7 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
     expect(body.split("\n")[0]).toBe(CREATE_PR_BODY_LINE);
     expect(body).toContain("Ref #10550");
     expect(body).not.toMatch(/Closes|Fixes|Resolves/i);
-    expect(body).not.toMatch(/merg/i);
+    expect(body.replace("Scan PURPOSE.md for names, domains or identifiers before merge.", "")).not.toMatch(/merg/i);
     expect(body).toContain("Reviewer checklist");
     expect(body).toContain("plugins/soleur/docs/_data/skills.js");
     expect(body).toContain("bun plugins/soleur/scripts/sync-cursor-name-map.ts");
@@ -679,11 +701,11 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
       expect(o.relPaths).toEqual([`plugins/soleur/skills/${slug}/SKILL.md`, `plugins/soleur/skills/${slug}/PURPOSE.md`]);
       expect(existsSync(o.metaBase)).toBe(true);
       expect(o.metaBase.startsWith(o.repoRoot)).toBe(false);
-      return { ok: true, scanned: 2, verdicts: [] };
+      return { ok: true };
     });
     h.sync.mockImplementation(async () => {
       order.push("sync");
-      return { ok: true, contents: { "README.md": "x", "plugins/soleur/README.md": "y" } };
+      return { ok: true };
     });
     h.collect.mockImplementation(async (o: { repoRoot: string; slug: string }) => {
       order.push("collect");
@@ -699,9 +721,9 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
   });
 
   it.each([
-    ["scan", () => h.scan.mockResolvedValue({ ok: false, class: "scan", detail: "high-risk", path: "p" }), "scan", "high-risk"],
-    ["readme-sync", () => h.sync.mockResolvedValue({ ok: false, class: "readme-sync", detail: "non-digit-change" }), "readme-sync", "non-digit-change"],
-    ["collector", () => h.collect.mockResolvedValue({ ok: false, class: "persist", detail: "changed-set-mismatch" }), "persist", "changed-set-mismatch"],
+    ["scan", () => h.scan.mockResolvedValue({ ok: false, detail: "high-risk", path: "p" }), "scan", "high-risk"],
+    ["readme-sync", () => h.sync.mockResolvedValue({ ok: false, detail: "non-digit-change" }), "readme-sync", "non-digit-change"],
+    ["collector", () => h.collect.mockResolvedValue({ ok: false, detail: "changed-set-mismatch" }), "persist", "changed-set-mismatch"],
     ["helper non-commit", () => h.safeCommit.mockResolvedValue({ status: "failed", stage: "integrity", message: "m" }), "persist", "failed-integrity"],
     ["helper no-changes", () => h.safeCommit.mockResolvedValue({ status: "no-changes" }), "persist", "not-committed-no-changes"],
   ] as const)("a %s refusal ends the create refused (class %s), mirrors to Sentry, and leaves the clone CLEAN: a refused create writes no ledger row", async (_n, arrange, cls, detail) => {
@@ -716,7 +738,7 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
   });
 
   it("a scan refusal never reaches the commit helper even when later gates would pass (Guard 1 row 1)", async () => {
-    h.scan.mockResolvedValue({ ok: false, class: "scan", detail: "review", path: "p" });
+    h.scan.mockResolvedValue({ ok: false, detail: "review", path: "p" });
     await run(PATTERNS_CREATE());
     expect(h.sync).not.toHaveBeenCalled();
     expect(h.collect).not.toHaveBeenCalled();
@@ -741,7 +763,7 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
 // ---------------------------------------------------------------------------------------------------------
 describe("replay (CTO G2): a second pass finds its own open PR and never opens a second", () => {
   it("Step B looks up its own open PR by the deterministic head branch; a hit is success and nothing is committed", async () => {
-    h.ownPrs = [{ number: 4242 }];
+    h.ownPrs = [{ number: 4242, body: `${CREATE_PR_BODY_LINE}\n\nProposed by the loop.` }];
     const r = await run(PATTERNS_CREATE());
     expect(r.last).toMatchObject({ create_outcome: "opened", create_pr: 4242 });
     expect(createCommits()).toHaveLength(0);
@@ -821,5 +843,130 @@ describe("the marker for a create run", () => {
   it("the scheduled-path equivalence holds: no create step name exists anywhere in a cron run", async () => {
     const r = await run(CRON());
     expect(r.names.filter((n) => n.startsWith("create-"))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+describe("review round -- the same-run collision, the token, the lost clone, the bounds", () => {
+  it("A: a create that picks the cluster hash the EDIT loop just opened is suppressed (same branch shape), never committed", async () => {
+    // The edit loop opens a PR on exactly the create pattern's evidence set -> its branch is `self-healing/auto-<ENTRY_HASH>-<date>`.
+    editClusters = [{ ...EDIT_CLUSTER, source_learnings: CREATE_EVIDENCE }];
+    const r = await run(PATTERNS_CREATE());
+    expect(editCommits()).toHaveLength(1);
+    expect((editCommits()[0][0] as { branchName: string }).branchName).toContain(ENTRY_HASH);
+    expect(createPrompts()).toHaveLength(1); // the model was asked ...
+    expect(createCommits()).toHaveLength(0); // ... but the colliding pattern is not created
+    expect(r.names).not.toContain("create-persist");
+    expect(r.last).toMatchObject({ clusters_opened: 1, create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 1 });
+    expect(r.last.refusals).toContain("ledger-suppressed");
+    expect(r.last).not.toHaveProperty("create_pr");
+  });
+
+  it("A: the create-propose step receives exactly the hashes the edit loop recorded (opened or attempted)", async () => {
+    const r = await run(PATTERNS_CREATE());
+    expect(editCommits()).toHaveLength(1);
+    // a different evidence set: the edit hash is not the create hash, so the create proceeds and opens its own PR
+    expect(r.last).toMatchObject({ create_outcome: "opened", clusters_opened: 1 });
+    expect((createCommits()[0][0] as { branchName: string }).branchName).toContain(ENTRY_HASH);
+    expect((editCommits()[0][0] as { branchName: string }).branchName).not.toContain(ENTRY_HASH);
+  });
+
+  it("R4: the clone's .git/config carries NO token while the scanner and the README sync run (the fixture's remote path carries the marker)", async () => {
+    let cloneConfig = "";
+    h.afterStep = (name, repo) => {
+      if (name === "read-config") cloneConfig = readFileSync(join(repo, ".git", "config"), "utf8");
+    };
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_outcome: "opened" });
+    // sound: the clone the handler made DOES carry the marker (it was cloned from the token-named remote)
+    expect(cloneConfig).toContain("x-access-token");
+    expect(h.configAt.scan).toHaveLength(1);
+    expect(h.configAt.sync).toHaveLength(1);
+    for (const cfg of [...h.configAt.scan, ...h.configAt.sync]) expect(cfg).not.toContain("x-access-token");
+  });
+
+  it("G: a clone that vanishes between create-propose and create-persist is persist/clone-missing: no scan, no commit, one mirrored refusal", async () => {
+    h.afterStep = (name, repo) => {
+      if (name === "create-propose") rmSync(repo, { recursive: true, force: true });
+    };
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_outcome: "refused", create_refusal_class: "persist", create_detail: "clone-missing" });
+    expect(h.scan).not.toHaveBeenCalled();
+    expect(createCommits()).toHaveLength(0);
+    expect(vi.mocked(reportSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string }).op === "create-refused")).toHaveLength(1);
+  });
+
+  it("L: a truncated clustering answer with allow_create never spends create-propose (no create step, no create call)", async () => {
+    h.post.mockImplementation(async (a: { messages: Array<{ content: string }> }) => {
+      if (a.messages[0].content.includes("clustering agent")) return { text: "{", stopReason: "max_tokens" };
+      throw new Error("unstubbed prompt");
+    });
+    const r = await run(PATTERNS_CREATE());
+    expect(r.result.status).toBe("anthropic-truncated");
+    expect(r.names.some((n) => n.startsWith("create-"))).toBe(false);
+    expect(createPrompts()).toHaveLength(0);
+    expect(r.last).toMatchObject({ status: "anthropic-truncated", create_requested: true });
+    expect(r.last).not.toHaveProperty("create_arm");
+  });
+
+  it("L: the open-PR path scan hitting a bound propagates through the handler adapter -> create-open/paths-incomplete, no model call", async () => {
+    // 200 open PRs, each costing one file request: the scan's 150-request budget runs out; the one-open-create list (2 pages) is complete.
+    h.pulls.list = Array.from({ length: 200 }, (_, i) => ({ number: 1000 + i, body: "an edit PR", labels: [], head: { ref: `feature/x${i}` } }));
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_outcome: "refused", create_refusal_class: "create-open", create_detail: "paths-incomplete" });
+    expect(createPrompts()).toHaveLength(0);
+  });
+
+  it("L: an error AFTER the arm ran still carries the create fields on the error marker", async () => {
+    h.marker.mockImplementationOnce(() => {
+      throw new Error("marker sink exploded");
+    });
+    const r = await run(PATTERNS_CREATE());
+    expect(r.markers.length).toBeGreaterThanOrEqual(2);
+    expect(r.last).toMatchObject({ status: "error", create_requested: true, create_arm: "ran", kind: "create", create_outcome: "opened", create_pr: 101 });
+  });
+
+  it("F: refusal evidence numbers reach the marker through the typed allowlist (exit code, file index, path index, changed count, missing tools)", async () => {
+    h.scan.mockResolvedValue({ ok: false, detail: "non-zero", path: "p", fileIndex: 1, exit: 3, signal: "SIGKILL" });
+    const scan = await run(PATTERNS_CREATE());
+    expect(scan.last).toMatchObject({ create_refusal_class: "scan", create_detail: "non-zero", create_file_index: 1, create_exit: 3 });
+    expect(JSON.stringify(scan.last)).not.toContain("SIGKILL"); // the signal name is Sentry-only
+
+    h.scan.mockResolvedValue({ ok: false, detail: "missing-tool", missing: ["jq", "cut", "date"] });
+    h.marker.mockClear();
+    const tools = await run(PATTERNS_CREATE());
+    expect(tools.last).toMatchObject({ create_detail: "missing-tool", create_missing_tools: 3 });
+    expect(JSON.stringify(tools.last)).not.toContain('"jq"');
+
+    h.scan.mockResolvedValue({ ok: true });
+    h.sync.mockResolvedValue({ ok: false, detail: "unexpected-change", changedCount: 2 });
+    h.marker.mockClear();
+    const sync = await run(PATTERNS_CREATE());
+    expect(sync.last).toMatchObject({ create_refusal_class: "readme-sync", create_changed_count: 2 });
+
+    h.sync.mockResolvedValue({ ok: true });
+    h.collect.mockResolvedValue({ ok: false, detail: "path-nul", index: 4 });
+    h.marker.mockClear();
+    const collect = await run(PATTERNS_CREATE());
+    expect(collect.last).toMatchObject({ create_refusal_class: "persist", create_detail: "path-nul", create_path_index: 4 });
+  });
+
+  it("D: a collector that hands back bytes other than the gated ones is persist/bytes-differ (the rendered SKILL.md is pinned)", async () => {
+    h.collect.mockImplementation(async (o: { repoRoot: string; slug: string }) => {
+      const paths = createPathList(o.slug);
+      const expectedContent = Object.fromEntries(paths.map((p) => [p, readFileSync(join(o.repoRoot, p), "utf8")]));
+      expectedContent[paths[0]] += "\nappended after the scan\n";
+      return { ok: true, exactPaths: paths, expectedContent };
+    });
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_refusal_class: "persist", create_detail: "bytes-differ", create_path_index: 0 });
+    expect(createCommits()).toHaveLength(0);
+  });
+
+  it("E: the replay lookup that finds an EDIT PR on the same branch is NOT success: persist/branch-taken", async () => {
+    h.ownPrs = [{ number: 31, body: "Tier: agents-core\nCluster-Hash: x" }];
+    const r = await run(PATTERNS_CREATE());
+    expect(r.last).toMatchObject({ create_outcome: "refused", create_refusal_class: "persist", create_detail: "branch-taken" });
+    expect(createCommits()).toHaveLength(0);
   });
 });

@@ -38,6 +38,7 @@ import {
   type CompoundPromoteOutcome,
   type CompoundPromoteStatus,
   type RefusalDetailEntry,
+  CREATE_MARKER_NUMBERS,
 } from "@/server/compound-promote-marker";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
 import { reportSilentFallback } from "@/server/observability";
@@ -1730,18 +1731,15 @@ export async function cronCompoundPromoteHandler({
   let createPr: number | undefined;
   const createMarker = (): Partial<CompoundPromoteOutcome> => {
     if (!createArmRan) return {};
-    const n = createRefusal?.numbers;
+    const n = createRefusal?.numbers ?? {};
     return {
       kind: "create",
       create_arm: "ran",
       ...(createOutcome === undefined ? {} : { create_outcome: createOutcome }),
       ...(createNoAction === undefined ? {} : { create_no_action_reason: createNoAction }),
       ...(createRefusal === undefined ? {} : { create_refusal_class: createRefusal.class, create_detail: createRefusal.detail }),
-      ...(n?.words === undefined ? {} : { create_words: n.words }),
-      ...(n?.cap === undefined ? {} : { create_cap: n.cap }),
-      ...(n?.total === undefined ? {} : { create_total: n.total }),
-      ...(n?.top1 === undefined ? {} : { create_top1: n.top1 }),
-      ...(n?.nearest_rank === undefined ? {} : { create_nearest_rank: n.nearest_rank }),
+      // Only these numbers reach the marker (an allowlist: a number the pure module adds is Sentry-only until named here).
+      ...Object.fromEntries(Object.entries(CREATE_MARKER_NUMBERS).flatMap(([from, to]) => (n[from] === undefined ? [] : [[to, n[from]]]))),
       ...(createPr === undefined ? {} : { create_pr: createPr }),
     };
   };
@@ -1760,7 +1758,11 @@ export async function cronCompoundPromoteHandler({
   // sequence lacks, and the SDK may stop it (NON_DETERMINISTIC_FUNCTION) outside the handler's
   // catch, so no outcome marker is emitted for that run. Runs last under 10 minutes and fire
   // weekly, so this is accepted and documented rather than guarded.
+  // Every cluster hash the edit loop recorded this run (opened or attempted). The create arm treats each as
+  // suppressed: both arms build `self-healing/auto-<hash>-<date>`, so a create on one of these would find the EDIT PR.
+  const runHashes = new Set<string>();
   const record = (hash: string, o: ClusterOutcome): void => {
+    runHashes.add(hash);
     if (o.kind === "opened") {
       clustersOpened++;
       return;
@@ -2208,6 +2210,7 @@ export async function cronCompoundPromoteHandler({
           ledgerEntries,
           runStartedAt,
           capLeft,
+          sameRunHashes: [...runHashes],
           apiKey: process.env.ANTHROPIC_API_KEY,
           runId,
           scanOpenPrPaths: async (prefixes) => {
@@ -2234,7 +2237,12 @@ export async function cronCompoundPromoteHandler({
         return;
       }
       const verdict: CreateVerdictCreate = proposed;
-      const evidenceCount = patternRows.find((pg) => pg.slug === verdict.proposal.pattern_slug)?.evidence.length ?? 0;
+      const page = patternRows.find((pg) => pg.slug === verdict.proposal.pattern_slug);
+      if (!page) {
+        // Unreachable (checkCreate resolved the pattern from this very list); named rather than assumed.
+        recordCreateRefusal({ kind: "refused", class: "persist", detail: "page-missing" });
+        return;
+      }
       const persisted: CreatePersistResult = await step.run("create-persist", async () =>
         runCreatePersistStep({
           repoRoot,
@@ -2243,7 +2251,7 @@ export async function cronCompoundPromoteHandler({
           octokit: new Octokit({ auth: installationToken }),
           logger,
           verdict,
-          evidenceCount,
+          page,
         }),
       );
       if (persisted.kind === "opened") {

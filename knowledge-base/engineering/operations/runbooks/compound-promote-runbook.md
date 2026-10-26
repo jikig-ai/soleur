@@ -274,8 +274,9 @@ is authorized by the PR that wired it. The authority is ADR-092's create-only am
 six-path set, own verdict union) and the ADR-300 addendum of the same date.
 
 - **Reachability.** The arm runs only on a manual trigger with `data.input:"patterns"` AND
-  `data.allow_create:true` (default off). The scheduled run, a manual `corpus` run and a non-boolean
-  `allow_create` leave it absent and the run unchanged. The edit loop runs first; the arm then uses what is left
+  `data.allow_create:true`. `allow_create` is an EVENT field, not a runtime flag: absent, or anything but the boolean
+  `true`, means off, and no flag exists to flip. The scheduled run, a manual `corpus` run and a non-boolean
+  `allow_create` leave the arm absent and the run unchanged. The edit loop runs first; the arm then uses what is left
   of the week cap (it counts all open `self-healing/auto` PRs, not a calendar week).
 - **Output.** At most ONE create per run: a DRAFT PR adding a markdown-only skill (`SKILL.md`, `PURPOSE.md`,
   Cursor stub) plus two README counts and one ledger row, body line `CREATE (new skill)`. Never auto-merged.
@@ -299,31 +300,45 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 | `slug` | slug collides with a skill dir, agent name or an open PR path | choose another pattern or wait for the open PR |
 | `prefer-patch` | the nearest skill ranks in the top three by overlap and overlap is over the threshold | the marker carries rank and top-1 score (numbers); patch that skill instead |
 | `budget` | description words exceed `cap - total`, or the cap or a description could not be parsed | the marker carries `cap` and `total` (numbers); free words by trimming a description in a human PR |
-| `scan` | the scanner did not return an explicit LOW-RISK first line with exit 0 on BOTH files (HIGH-RISK, REVIEW, empty, non-zero, timeout, missing tool) | `detail` says which; a missing tool means the runner image lacks a dependency |
-| `readme-sync` | the README sync changed anything beyond digits in the two README files | a script defect; the draft is not opened |
-| `stub-drift` | the rendered Cursor stub differs from the generator's output | rerun the generator after a header change; the parity test should have caught it |
-| `persist` | the commit or PR step failed for a genuine reason | read the workflow-run log |
+| `scan` | the scanner did not return an explicit LOW-RISK first line with exit 0 on BOTH files (HIGH-RISK, REVIEW, empty, non-zero, timeout, missing tool) | `detail` says which. Marker numbers: `create_file_index` (0 SKILL.md, 1 PURPOSE.md), `create_exit` (the script's exit code), `create_missing_tools` (how many). Sentry `extra`: `signal` (a `SIG*` name) and `missing_tool_names` (always members of the closed tool list). A missing tool means the runner image lacks a dependency |
+| `readme-sync` | the README sync changed anything beyond digits in the two README files, or nothing at all | a script defect or a scan-time write; the draft is not opened. Marker numbers: `create_changed_count` (`unexpected-change`: paths other than the READMEs that differ; `no-change`: how many of the two READMEs changed), `create_exit` |
+| `stub-drift` | the rendered Cursor stub differs from the renderer's own expectation | this is RENDERER SELF-CONSISTENCY only. Parity of the pure renderer with the real generator is the CI `cursor-name-map --check` (`sync-cursor-name-map.ts --check`), not a run-time check. If this fires the renderer was edited without its expectation |
+| `persist` | a precondition of the commit failed, or the commit helper did | The create arm commits from the cron worker (Inngest), NOT from a GitHub Actions workflow; there is no workflow-run log to read. Read the Sentry event: op `create-refused` (tag `class`, `extra.detail`), and for `failed-<stage>` / `not-committed-<status>` the helper's own Sentry mirror for that stage |
 
 `create_detail` values by class (closed tokens; a `<field>:<rule>` token names the model field and the shape rule, never its text):
 
 | `class` | `create_detail` values |
 |---|---|
-| `week-cap` | `no-slot` (the edit loop used the last slot, or none was free) |
+| `week-cap` | `no-slot` (the edit loop used the last slot, or none was free; no number rides it) |
 | `create-open` | `open-create-pr`, `list-failed`, `list-incomplete`, `paths-unverifiable`, `paths-incomplete` |
 | `index-empty` | `no-open-patterns` |
-| `input-size` | `over-ceiling` (numbers: `tokens`, `max`, `bytes`; the bound is bytes / 4) |
-| `model-invalid` | `no-api-key`, `transport`, `max-tokens`, `empty`, `not-json`, `schema`, `unknown-pattern`, `no-strings`, `internal` |
-| `shape` | `<field>:<rule>` from the shape allowlist, `<field>:pii`, `<field>:credential`, `rendered-<file>:<pii or credential>`, `template-unreadable`, `render`, `grok-block`, `fence:*`, `size:*`, `frontmatter*`, `purpose-link`, `slot-left:purpose` |
-| `slug` | `format`, `reserved`, `skill-exists`, `agent-exists`, `cursor-name-exists`, `open-pr-slug` |
+| `input-size` | `over-ceiling` (marker numbers `create_tokens`, `create_max`, `create_bytes`; the bound is bytes / 4) |
+| `model-invalid` | `no-api-key`, `transport` (Sentry `extra.cause`: `http-429`, `TimeoutError`, ...), `max-tokens`, `empty`, `not-json`, `schema`, `unknown-pattern`, `no-strings`, `internal` |
+| `shape` | `<field>:<rule>` from the shape allowlist (rules include `instruction-risk` -- the phrase denylist -- `claim-word`, `ref-format`, `markup`, `url`, `backtick`), `<field>:pii`, `<field>:credential`, `rendered-<file>:<pii or credential>`, `template-unreadable` (Sentry `extra.cause`), `render`, `grok-block`, `fence:skill`, `fence:purpose`, `size:skill`, `size:purpose`, `frontmatter-keys`, `frontmatter-values`, `purpose-link`, `slot-left:purpose` |
+| `slug` | `format`, `yaml-word`, `reserved`, `skill-exists`, `agent-exists`, `cursor-name-exists`, `cursor-dir-exists`, `open-pr-slug`, `open-pr-agent`, `open-pr-command`, and the unmeasurable-population tokens `agents-dir-unreadable`, `agents-below-floor`, `cursor-dir-unreadable`, `cursor-below-floor` |
 | `prefer-patch` | `no-skill-list`, `nearest-missing`, `nearest-not-top3`, `overlap`, `open-pr-nearest` |
-| `budget` | `skills-dir-unreadable`, `frontmatter-*`, `description-not-a-string`, `population-below-floor`, `cap-unreadable`, `unreadable`, `words-out-of-range`, `over-headroom` |
-| `scan` | `high-risk`, `review`, `non-zero`, `empty-output`, `timeout`, `unrecognised`, `missing-tool`, `input-too-small`, `input-unreadable`, `meta-base-invalid`, `no-input`, `count-mismatch` |
-| `readme-sync` | `readme-unreadable`, `git-failed`, `timeout`, `script-failed`, `unexpected-change`, `no-change`, `non-digit-change` |
+| `budget` | `skills-dir-unreadable`, `skill-unreadable`, `frontmatter-missing`, `frontmatter-unparseable`, `frontmatter-not-a-map`, `description-not-a-string`, `population-below-floor`, `cap-unreadable`, `unreadable`, `words-out-of-range`, `over-headroom` |
+| `scan` | `high-risk`, `review`, `non-zero`, `empty-output`, `timeout`, `unrecognised`, `spawn-error` (the interpreter could not be started; also mirrored as op `create-gate-spawn`), `script-not-regular` (the scanner is missing, a symlink or not a regular file under the repo root), `output-overflow` (more than 1 MiB of stdout), `missing-tool`, `input-too-small`, `input-unreadable`, `meta-base-invalid`, `no-input` |
+| `readme-sync` | `readme-unreadable`, `git-failed`, `timeout`, `script-not-regular`, `script-failed`, `unexpected-change`, `no-change`, `non-digit-change` |
 | `stub-drift` | `stub-differs` |
-| `persist` | `branch-shape`, `clone-not-clean`, `internal`, `path-missing`, `path-not-regular`, `path-empty`, `path-too-large`, `path-nul`, `path-not-utf8`, `git-failed`, `changed-set-mismatch`, `path-count`, `unexpected-path`, `missing-path`, `duplicate-path`, `failed-<stage>` and `not-committed-<status>` (the commit helper's own exit) |
+| `persist` | `branch-shape`, `branch-taken` (an open PR on our branch is not a create PR), `clone-missing` (the clone directory is gone; either step), `clone-not-clean`, `origin-failed`, `fetch-failed`, `reset-failed`, `blob-read-failed`, `origin-strip-failed`, `recheck-mismatch`, `page-missing`, `log-unreadable`, `base-moved`, `bytes-differ`, `deadline`, `internal`, `path-missing`, `path-not-regular`, `path-empty`, `path-too-large`, `path-nul`, `path-not-utf8`, `git-failed`, `changed-set-mismatch`, `failed-<stage>` and `not-committed-<status>` (the commit helper's own exit) |
+| `create-open` (extra) | the `list-failed` and `paths-unverifiable` refusals also carry `extra.cause` in Sentry, a closed token (`http-<status>`, an errno name, an error class name or `unknown`), never a message |
 
-- **Kill switch.** Stop firing manual triggers with `allow_create`; the flag is read per event and is off by
-  default, so no deploy is needed to switch the arm off. The existing opt-out in this runbook also stops it.
+- **Kill switch.** There is no runtime flag. `allow_create` is read from each event, so the kill switch is to STOP
+  FIRING manual triggers that carry it; nothing needs deploying. The existing opt-out in this runbook (`enabled:
+  false` in `promotion-config.yml`) also stops it, because the run ends `disabled` before the arm.
+- **Known limit (R4): the edit loop's token handling is untouched.** The create arm takes the installation token
+  OFF `.git/config` before any of its scripts run and puts it back only for the fetch and the commit helper. The
+  EDIT loop still clones with the token in `.git/config` and runs no repo script, as before. A change there is a
+  separate piece of work.
+- **Clone loss and token expiry.** Step B refreshes the clone from `origin/main` with the step's token and compares
+  four base blobs again just before the commit. If the worker lost the clone between the steps the refusal is
+  `persist/clone-missing`; if the token has expired the refresh is `persist/fetch-failed` (or `origin-failed`).
+  Neither writes anything; a new manual run starts from a fresh clone and a fresh token.
+- **An unreviewed create draft holds capacity.** The create PR is a draft nobody merges automatically. While it is
+  open it (a) permanently blocks any further create (`create-open`: one open create at a time) and (b) holds one of
+  the two shared `self-healing/auto` week-cap slots. NO alert fires for an ignored draft today. The operator closes
+  it (rejects the skill) or merges it after review; until then the arm and one edit slot are parked.
 
 ### Create-arm marker fields
 
@@ -334,14 +349,17 @@ or a fixed phrase) that never carries model text. Query recipe: `betterstack-log
 
 | Field | Meaning | How to read it |
 |---|---|---|
-| `create_requested` | a manual `patterns` row: whether the event carried `allow_create === true` | Present on EVERY manual patterns row, including the early `disabled`, `deduped` and `week-cap-reached` rows. `false` means the arm was off (a non-boolean `allow_create` such as `"true"` or `1` is ignored, never coerced). `true` with no `create_arm` means the run ended before the arm: read `status` |
+| `create_requested` | a manual `patterns` row: whether the event carried `allow_create === true` | Present on every manual `patterns` row, including the early `disabled`, `deduped` and `week-cap-reached` rows. NOT present on a manual run without `input:"patterns"` (a manual corpus row stays byte-identical to before the arm), so an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace at all. `false` means the arm was off (a non-boolean `allow_create` such as `"true"` or `1` is ignored, never coerced). `true` with no `create_arm` means the run ended before the arm (read `status`), or that the clustering answer was truncated (`anthropic-truncated`: the arm is skipped, never spending the call) |
 | `create_arm` | `ran`, emitted ONLY when the arm ran | Absent means off. With it, `kind` is `create` |
-| `kind` | `create` (the type also names `edit`, which is never emitted) | Emitted only together with `create_arm` |
+| `kind` | `create` | Emitted only together with `create_arm` |
 | `create_outcome` | `no_action`, `refused` or `opened` | `no_action` = the model declined (`create_no_action_reason`) or the pattern is already proposed (`ledger-suppressed` in `refusals[]`, `ledger_suppressed` counted). `opened` = a draft PR exists (`create_pr`). `refused` = one `create-refused` entry in `refusals[]` plus `create_refusal_class` and `create_detail` |
 | `create_no_action_reason` | `no-pattern-qualifies`, `all-owned` or `other` | `other` also marks a suppressed (already proposed) pattern |
 | `create_refusal_class`, `create_detail` | the `class` table above and its closed token | The same pair is mirrored to Sentry (op `create-refused`, tag `class`, `extra.detail`) |
 | `create_words`, `create_cap`, `create_total` | description words requested, the budget cap and the current model-visible total | Budget refusals only; `cap - total` is the headroom the description must fit |
 | `create_top1`, `create_nearest_rank` | the best overlap score with an existing skill and the rank of the model's nearest skill | `prefer-patch` refusals only; compare with the refusal threshold in the PR body trailer |
+| `create_tokens`, `create_max`, `create_bytes` | the input-size bound (bytes / 4), its ceiling and the input bytes | `input-size` refusals only |
+| `create_path_index` | index into the six-path set (0 SKILL.md, 1 PURPOSE.md, 2 Cursor stub, 3 README.md, 4 plugins/soleur/README.md, 5 promotion log) | `persist` collector refusals (`path-*`) and `persist/bytes-differ` |
+| `create_file_index`, `create_exit`, `create_missing_tools`, `create_changed_count` | scan: refused file (0 or 1), the script's exit code, how many tools were missing; readme-sync: changed counts; `persist/base-moved`: how many base blobs moved | `scan`, `readme-sync` and `base-moved` refusals. The signal NAME, the missing tool NAMES and cause tokens are Sentry-only (`extra`) |
 | `create_pr` | the draft PR number | `opened` only |
 
 Where the create outcome sits: the arm runs AFTER the edit loop, so `status` is the edit loop's status
@@ -359,8 +377,34 @@ two open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the 
 - **A refused create writes no ledger row.** The promotion-log row exists only inside a committed PR, so a pattern
   refused for budget, scan or sync is retried on the next manual fire once the cause is gone.
 - **Replay.** Step `create-propose` is memoized and never throws; step `create-persist` looks up its own open PR by
-  the deterministic head branch (`self-healing/auto-<cluster hash>-<run date>`) and counts a hit as success, so a
-  replay cannot open a second PR.
+  the deterministic head branch (`self-healing/auto-<cluster hash>-<run date>`) and counts a hit as success ONLY when
+  the PR body carries the `CREATE (new skill)` line, so a replay cannot open a second PR. A hit without the line is an
+  EDIT PR (both arms use the same branch shape): `persist/branch-taken`.
+- **Same-run collision.** The create arm treats every cluster hash the edit loop recorded in the same run (opened or
+  attempted) as already proposed: it ends `no_action` (`create_no_action_reason: other`) and `ledger_suppressed`
+  counts it.
+- **Base blobs.** Step B refreshes the clone to the current main, re-runs the admission checks on it, and compares
+  the blob ids of `README.md`, `plugins/soleur/README.md`, the promotion log and the budget-cap file with the ones it
+  used just before the commit: `persist/base-moved` when ANY moved (an unrelated merge does not refuse).
+- **One deadline.** Step B has one 150 s budget; every script and git call gets the smaller of its own timeout and
+  what is left; an exhausted budget is `persist/deadline`.
+
+### Review checklist for a create draft
+
+The draft PR body carries this fixed checklist (server text, the same for every create). Reading a create draft:
+
+1. Read every step as an instruction to an agent that holds shell access and secrets.
+2. No step reads, prints or posts credentials or env files.
+3. No step is destructive or irreversible.
+4. Will the description trigger on unrelated prompts? Narrow it or reject. (The skill is model-invocable by default;
+   a reviewer may add `disable-model-invocation: true` by hand before merge.)
+5. Scan `PURPOSE.md` for names, domains or identifiers before merge.
+6. Categorise the skill in `plugins/soleur/docs/_data/skills.js` (an unmapped skill shows as Uncategorized).
+7. After a description edit, or a rebase onto a main that added another skill, rerun
+   `bun plugins/soleur/scripts/sync-cursor-name-map.ts` and `bash scripts/sync-readme-counts.sh`.
+
+Only `test` and `skill-security-scan PR gate` are real checks on the draft; the other required checks are posted by
+the loop itself and prove nothing about the skill.
 
 ## Sharp edges
 

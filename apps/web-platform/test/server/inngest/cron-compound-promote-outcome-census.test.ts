@@ -1171,7 +1171,7 @@ const CREATE_GATES = join(SERVER_DIR, "compound-promote-create-gates.ts");
 export function censusCreateClasses(sources: string[]): { declared: string[]; emitted: string[] } {
   const declared: string[] = [];
   const emitted: string[] = [];
-  const CTORS = new Set(["refuse", "refusal", "refuseAndMirror"]);
+  const CTORS = new Set(["refuse", "refusal", "fail"]);
   for (const src of sources) {
     const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
     const visit = (n: ts.Node): void => {
@@ -1206,7 +1206,7 @@ describe("Guard 1e (#10550) -- every create refusal class is declared once and e
 
   it("the declared set equals the emitted set, in both directions (the gates' `class:` literals included)", () => {
     const { declared, emitted } = censusCreateClasses(read());
-    expect(declared).toHaveLength(13);
+    expect(declared).toHaveLength(13); // the single pin of the class-vocabulary length (the marker suite does not repeat it)
     expect(new Set(declared).size).toBe(13);
     expect(sortedUnique(emitted)).toEqual(sortedUnique(declared));
   });
@@ -1221,7 +1221,7 @@ describe("Guard 1e (#10550) -- every create refusal class is declared once and e
 
   it("mutation: an emitted-but-undeclared class is RED", () => {
     const [create, arm, gates] = read();
-    const mutated = arm.replace('refuseAndMirror("week-cap", "no-slot"', 'refuseAndMirror("ghost-class", "no-slot"');
+    const mutated = arm.replace('fail("week-cap", "no-slot"', 'fail("ghost-class", "no-slot"');
     expect(mutated).not.toBe(arm);
     const { declared, emitted } = censusCreateClasses([create, mutated, gates]);
     expect(sortedUnique(emitted)).not.toEqual(sortedUnique(declared));
@@ -1229,7 +1229,7 @@ describe("Guard 1e (#10550) -- every create refusal class is declared once and e
 
   it("mutation: retargeting the ONLY week-cap site leaves week-cap declared-but-unemitted (RED)", () => {
     const [create, arm, gates] = read();
-    const mutated = arm.replace('refuseAndMirror("week-cap", "no-slot"', 'refuseAndMirror("budget", "no-slot"');
+    const mutated = arm.replace('fail("week-cap", "no-slot"', 'fail("budget", "no-slot"');
     expect(mutated).not.toBe(arm);
     const { declared, emitted } = censusCreateClasses([create, mutated, gates]);
     expect(sortedUnique(declared).filter((c) => !emitted.includes(c))).toEqual(["week-cap"]);
@@ -1336,7 +1336,7 @@ describe("Guard 1f (#10550) -- one emit site for `create-refused`, every create 
     expect(arm).not.toMatch(/return refusal\(/);
     expect(arm).not.toMatch(/return refuse\(/);
     // non-vacuity: the helpers are used many times
-    expect((arm.match(/refuseAndMirror\(|mirrorAndReturn\(/g) ?? []).length).toBeGreaterThanOrEqual(20);
+    expect((arm.match(/\bfail\(|\bmirrored\(/g) ?? []).length).toBeGreaterThanOrEqual(20);
   });
 
   it("every returned refusal in the arm's step bodies is one of the helper spellings (no `return {` with kind refused)", () => {

@@ -1,4 +1,4 @@
-// WikiSkill Phase 2 (#10550), commit 5 -- the import-cycle break.
+// WikiSkill Phase 2 (#10550) -- the import-cycle break.
 //
 // `compound-promote-create.ts` needs the handler's PII/credential screens and cluster hash; the handler now needs
 // the create arm. A cycle between them was safe only by luck (names used inside function bodies), so the three

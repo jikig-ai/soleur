@@ -1,4 +1,4 @@
-// WikiSkill Phase 2 (#10550), commit 5 -- the create arm's two step bodies, unit level.
+// WikiSkill Phase 2 (#10550) -- the create arm's two step bodies, unit level.
 //
 // The handler-level behaviour (invariance, week cap, ordering, replay through the real step boundary) is in
 // test/server/inngest/cron-compound-promote-create-handler.test.ts. This file owns what only a unit can reach:
@@ -18,7 +18,10 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 }));
 import { reportSilentFallback } from "@/server/observability";
 import {
-  CREATE_LABEL,
+  CREATE_HEAD_PREFIX,
+  REAL_CHECK_NAMES,
+  SCHEDULED_ISSUE_LABEL,
+  causeToken,
   CREATE_MODEL_TIMEOUT_MS,
   CREATE_OPEN_PR_PAGES,
   CREATE_PR_PATH_PREFIXES,
@@ -35,11 +38,15 @@ import {
 import {
   CREATE_MAX_TOKENS,
   CREATE_PR_BODY_LINE,
-  CREATE_REFUSAL_CLASSES,
   OVERLAP_REFUSE_THRESHOLD,
+  countDescriptionWords,
+  createClusterHash,
+  proposalOverlapText,
+  rankOverlap,
   type SkillRecord,
 } from "@/server/compound-promote-create";
 import type { PatternPage } from "@/server/compound-promote-patterns";
+import { CREATE_EXCLUDED_SYNTHETIC_CHECKS } from "@/server/compound-promote-create-gates";
 
 const FIX = join(__dirname, "..", "fixtures", "compound-promote-create");
 const SKILLS = JSON.parse(readFileSync(join(FIX, "skills.json"), "utf8")) as SkillRecord[];
@@ -61,7 +68,8 @@ beforeEach(() => {
 
 // ---------------------------------------------------------------------------------------------------------
 describe("findOpenCreatePr -- one open create at a time", () => {
-  const pr = (n: number, body: string, labels: string[]) => ({ number: n, body, labels: labels.map((name) => ({ name })) });
+  const HEAD = `${CREATE_HEAD_PREFIX}${"a".repeat(64)}-2026-10-26`;
+  const pr = (n: number, body: string, ref: string | null = HEAD) => ({ number: n, body, head: ref === null ? null : { ref } });
   const octokitOf = (pages: unknown[][] | Error) => {
     const calls: Array<Record<string, unknown>> = [];
     return {
@@ -76,30 +84,49 @@ describe("findOpenCreatePr -- one open create at a time", () => {
     };
   };
 
-  it("finds a labelled PR whose body contains the fixed line, by literal-route GET /pulls with state=open", async () => {
-    const { octokit, calls } = octokitOf([[pr(1, "edit", [CREATE_LABEL]), pr(2, `${CREATE_PR_BODY_LINE}\nrest`, [CREATE_LABEL])]]);
+  it("finds a PR by head-ref prefix plus the fixed body line, by literal-route GET /pulls with state=open", async () => {
+    const { octokit, calls } = octokitOf([[pr(1, "edit"), pr(2, `${CREATE_PR_BODY_LINE}\nrest`)]]);
     expect(await findOpenCreatePr(octokit, "o", "r")).toEqual({ kind: "open", pr: 2 });
     expect(calls[0]).toMatchObject({ route: "GET /repos/{owner}/{repo}/pulls", state: "open", per_page: 100, page: 1 });
   });
 
-  it("ignores the line without the label and the label without the line", async () => {
-    const { octokit } = octokitOf([[pr(1, CREATE_PR_BODY_LINE, ["x"]), pr(2, "edit", [CREATE_LABEL]), { number: 3, body: null, labels: null }]]);
+  it("does NOT depend on the best-effort label: a labelless create PR still counts (a label failure must not allow a second open create)", async () => {
+    const labelless = { number: 7, body: CREATE_PR_BODY_LINE, head: { ref: HEAD }, labels: [] };
+    expect(await findOpenCreatePr(octokitOf([[labelless]]).octokit, "o", "r")).toEqual({ kind: "open", pr: 7 });
+  });
+
+  it("ignores the line on a PR whose head is not a bot branch, a bot branch without the line, and null shapes", async () => {
+    const { octokit } = octokitOf([[pr(1, CREATE_PR_BODY_LINE, "feature/x"), pr(2, "edit"), pr(3, CREATE_PR_BODY_LINE, null), { number: 4, body: null, head: { ref: HEAD } }, { number: 5, body: CREATE_PR_BODY_LINE }]]);
     expect(await findOpenCreatePr(octokit, "o", "r")).toEqual({ kind: "none" });
   });
 
   it("walks pages until a short one; a FULL last allowed page is unverifiable (never inferred clear)", async () => {
-    const full = Array.from({ length: 100 }, (_, i) => pr(i + 1, "edit", [CREATE_LABEL]));
-    const { octokit: ok, calls } = octokitOf([full, [pr(500, `${CREATE_PR_BODY_LINE}`, [CREATE_LABEL])]]);
+    const full = Array.from({ length: 100 }, (_, i) => pr(i + 1, "edit"));
+    const { octokit: ok, calls } = octokitOf([full, [pr(500, `${CREATE_PR_BODY_LINE}`)]]);
     expect(await findOpenCreatePr(ok, "o", "r")).toEqual({ kind: "open", pr: 500 });
     expect(calls.map((c) => c.page)).toEqual([1, 2]);
     const { octokit: capped } = octokitOf(Array.from({ length: CREATE_OPEN_PR_PAGES }, () => full));
     expect(await findOpenCreatePr(capped, "o", "r")).toEqual({ kind: "unverifiable", detail: "list-incomplete" });
   });
 
-  it("a request error and a non-array payload are unverifiable list-failed", async () => {
-    expect(await findOpenCreatePr(octokitOf(new Error("502")).octokit, "o", "r")).toEqual({ kind: "unverifiable", detail: "list-failed" });
+  it("a request error and a non-array payload are unverifiable list-failed, with a closed cause token", async () => {
+    expect(await findOpenCreatePr(octokitOf(Object.assign(new Error("rate limited, body: secret-ish"), { status: 429 })).octokit, "o", "r")).toEqual({ kind: "unverifiable", detail: "list-failed", cause: "http-429" });
     const weird = { request: async () => ({ data: { not: "an array" } }) } as never;
-    expect(await findOpenCreatePr(weird, "o", "r")).toEqual({ kind: "unverifiable", detail: "list-failed" });
+    expect(await findOpenCreatePr(weird, "o", "r")).toEqual({ kind: "unverifiable", detail: "list-failed", cause: "non-array" });
+  });
+});
+
+describe("causeToken -- a closed token, never a message", () => {
+  it("maps an HTTP status, an allowlisted errno code or class name; everything else is `unknown`", () => {
+    expect(causeToken(Object.assign(new Error("x"), { status: 429 }))).toBe("http-429");
+    expect(causeToken(Object.assign(new Error("x"), { status: 99 }))).toBe("Error");
+    expect(causeToken(Object.assign(new Error("x"), { code: "ENOENT" }))).toBe("ENOENT");
+    expect(causeToken(Object.assign(new Error("x"), { code: "EWEIRD" }))).toBe("Error");
+    expect(causeToken(Object.assign(new Error("x"), { name: "TimeoutError" }))).toBe("TimeoutError");
+    expect(causeToken(new Error("Anthropic API request failed (TimeoutError)"))).toBe("TimeoutError");
+    expect(causeToken(new Error("some free text with a token ghs_secret"))).toBe("Error");
+    expect(causeToken(Object.assign(new Error("x"), { name: "EvilName; drop table" }))).toBe("unknown");
+    for (const odd of [null, undefined, "str", 42]) expect(causeToken(odd)).toBe("unknown");
   });
 });
 
@@ -148,6 +175,15 @@ describe("Step A runCreateProposeStep -- never throws, every refusal is a return
     expect(await runCreateProposeStep(args({ capLeft: Number.NaN, post: post as never }))).toMatchObject({ class: "week-cap" });
   });
 
+  it("G: a missing clone is persist/clone-missing, after the cap and index checks and before any request", async () => {
+    const request = vi.fn();
+    const post = vi.fn();
+    const v = await runCreateProposeStep(args({ repoRoot: join(tmpdir(), "create-arm-gone-" + Date.now()), octokit: { request } as never, post: post as never }));
+    expect(v).toEqual({ kind: "refused", class: "persist", detail: "clone-missing" });
+    expect(request).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("index-empty: no open pattern refuses before the listing", async () => {
     const request = vi.fn();
     const v = await runCreateProposeStep(args({ patterns: [], octokit: { request } as never }));
@@ -171,7 +207,9 @@ describe("Step A runCreateProposeStep -- never throws, every refusal is a return
   });
 
   it("budget: a tree the counter cannot read, and a missing cap, are refused (fail closed)", async () => {
-    expect(await runCreateProposeStep(args({ repoRoot: "/nonexistent" }))).toMatchObject({ class: "budget", detail: "skills-dir-unreadable" });
+    const bare = mkdtempSync(join(tmpdir(), "create-arm-bare-"));
+    roots.push(bare);
+    expect(await runCreateProposeStep(args({ repoRoot: bare }))).toMatchObject({ class: "budget", detail: "skills-dir-unreadable" });
     expect(await runCreateProposeStep(args({ repoRoot: pluginTree({ skills: 3 }) }))).toMatchObject({ class: "budget", detail: "population-below-floor" });
     expect(await runCreateProposeStep(args({ repoRoot: pluginTree({ cap: null }) }))).toMatchObject({ class: "budget", detail: "cap-unreadable" });
   });
@@ -186,11 +224,11 @@ describe("Step A runCreateProposeStep -- never throws, every refusal is a return
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("the scan is asked for exactly the two create prefixes", async () => {
+  it("the scan is asked for the skill, Cursor stub, agent and command prefixes", async () => {
     const scan = vi.fn(async () => ({ paths: [], incomplete: null }));
     await runCreateProposeStep(args({ scanOpenPrPaths: scan }));
     expect(scan).toHaveBeenCalledWith(CREATE_PR_PATH_PREFIXES);
-    expect([...CREATE_PR_PATH_PREFIXES]).toEqual(["plugins/soleur/skills/", "plugins/soleur/cursor/skills/"]);
+    expect([...CREATE_PR_PATH_PREFIXES]).toEqual(["plugins/soleur/skills/", "plugins/soleur/cursor/skills/", "plugins/soleur/agents/", "plugins/soleur/commands/"]);
   });
 
   it("no API key is a returned model-invalid refusal and no call is made", async () => {
@@ -232,6 +270,71 @@ describe("Step A runCreateProposeStep -- never throws, every refusal is a return
 });
 
 // ---------------------------------------------------------------------------------------------------------
+describe("Step A with a valid create proposal", () => {
+  function createArgs(over: Partial<CreateProposeArgs> = {}, proposalOver: Record<string, unknown> = {}): CreateProposeArgs {
+    const base = args();
+    const counted = countDescriptionWords(join(base.repoRoot, "plugins", "soleur"));
+    if (!counted.ok) throw new Error(counted.detail);
+    const merged: Record<string, unknown> = { ...structuredClone(PROPOSAL), ...proposalOver };
+    merged.nearest_skill = rankOverlap(
+      proposalOverlapText({ slug: String(merged.slug), description: String(merged.description), when_to_use: merged.when_to_use as string[] }),
+      counted.records,
+    )[0].name;
+    return { ...base, post: vi.fn(async () => ({ text: JSON.stringify(merged), stopReason: "end_turn" })) as never, ...over };
+  }
+  const HASH = createClusterHash(PATTERN.evidence);
+
+  it("a valid proposal passes every gate and returns a create verdict (the harness for the rows below)", async () => {
+    const v = await runCreateProposeStep(createArgs());
+    expect(v).toMatchObject({ kind: "create", clusterHash: HASH });
+  });
+
+  it("A: a cluster hash the EDIT loop recorded this run is suppressed, not created (both arms build the same branch)", async () => {
+    const post = vi.fn(async (_: unknown) => ({ text: "", stopReason: "end_turn" }));
+    const a = createArgs({ sameRunHashes: [HASH] });
+    const v = await runCreateProposeStep(a);
+    expect(v).toEqual({ kind: "suppressed", clusterHash: HASH });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("A: an unrelated same-run hash does not suppress", async () => {
+    expect(await runCreateProposeStep(createArgs({ sameRunHashes: ["f".repeat(64)] }))).toMatchObject({ kind: "create" });
+  });
+
+  it("E: an open PR that adds an agent or a command named like the slug refuses slug/open-pr-agent | open-pr-command", async () => {
+    const slug = String(PROPOSAL.slug);
+    expect(await runCreateProposeStep(createArgs({ scanOpenPrPaths: async () => ({ paths: [`plugins/soleur/agents/engineering/${slug}.md`], incomplete: null }) })))
+      .toMatchObject({ class: "slug", detail: "open-pr-agent" });
+    expect(await runCreateProposeStep(createArgs({ scanOpenPrPaths: async () => ({ paths: [`plugins/soleur/commands/${slug}.md`], incomplete: null }) })))
+      .toMatchObject({ class: "slug", detail: "open-pr-command" });
+    // a longer name that merely ends with the slug is not a collision
+    expect(await runCreateProposeStep(createArgs({ scanOpenPrPaths: async () => ({ paths: [`plugins/soleur/agents/engineering/not-${slug}.md`], incomplete: null }) })))
+      .toMatchObject({ kind: "create" });
+  });
+
+  it("F: the swallowed failures carry a closed cause token in the Sentry extra (detail stays the census token)", async () => {
+    const transport = await runCreateProposeStep(createArgs({ post: (async () => { throw Object.assign(new Error("429 body text"), { status: 429 }); }) as never }));
+    expect(transport).toMatchObject({ class: "model-invalid", detail: "transport" });
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: CREATE_REFUSED_OP, extra: expect.objectContaining({ detail: "transport", cause: "http-429" }) }));
+    expect(JSON.stringify(vi.mocked(reportSilentFallback).mock.calls)).not.toContain("429 body text");
+
+    vi.mocked(reportSilentFallback).mockClear();
+    await runCreateProposeStep(createArgs({ scanOpenPrPaths: async () => { throw Object.assign(new Error("x"), { code: "ECONNRESET" }); } }));
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ extra: expect.objectContaining({ detail: "paths-unverifiable", cause: "ECONNRESET" }) }));
+
+    vi.mocked(reportSilentFallback).mockClear();
+    await runCreateProposeStep(createArgs({ octokit: { request: async () => { throw Object.assign(new Error("x"), { status: 503 }); } } as never }));
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ extra: expect.objectContaining({ detail: "list-failed", cause: "http-503" }) }));
+
+    vi.mocked(reportSilentFallback).mockClear();
+    const noCap = createArgs();
+    rmSync(join(noCap.repoRoot, "plugins/soleur/test/components.test.ts"));
+    await runCreateProposeStep(noCap);
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ extra: expect.objectContaining({ detail: "cap-unreadable", cause: "ENOENT" }) }));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
 describe("mirrorCreateRefusal -- ONE op, a class tag, closed extras", () => {
   it("is a message-path capture (err = null) tagged with the class, carrying detail and numbers", () => {
     mirrorCreateRefusal({ kind: "refused", class: "budget", detail: "over-headroom", numbers: { words: 31, cap: 2436, total: 2402 } });
@@ -242,12 +345,6 @@ describe("mirrorCreateRefusal -- ONE op, a class tag, closed extras", () => {
       tags: { class: "budget" },
       extra: { class: "budget", detail: "over-headroom", words: 31, cap: 2436, total: 2402 },
     });
-  });
-
-  it("every class in the closed vocabulary mirrors under the same op", () => {
-    for (const c of CREATE_REFUSAL_CLASSES) mirrorCreateRefusal({ kind: "refused", class: c, detail: "x" });
-    const ops = new Set(vi.mocked(reportSilentFallback).mock.calls.map((x) => (x[1] as { op: string }).op));
-    expect([...ops]).toEqual(["create-refused"]);
   });
 });
 
@@ -269,7 +366,8 @@ describe("the PR body and the branch", () => {
     const body = buildCreatePrBody(verdict);
     expect(body.split("\n")[0]).toBe(CREATE_PR_BODY_LINE);
     expect(body).toContain("Ref #10550");
-    expect(body).not.toMatch(/merg|auto-?merge|will land|shipped|guarantee/i);
+    // the one fixed checklist item the CTO ruling mandates says "before merge" (a reviewer instruction, not a claim)
+    expect(body.replace("Scan PURPOSE.md for names, domains or identifiers before merge.", "")).not.toMatch(/merg|auto-?merge|will land|shipped|guarantee/i);
     expect(body).toContain(`refused at or above ${OVERLAP_REFUSE_THRESHOLD.toFixed(2)}`);
     expect(body).toContain("Description words used: 22 of at most 30.");
     expect(body).toContain("Budget headroom before this skill: 34 words (total 2402, cap 2436).");
@@ -277,11 +375,34 @@ describe("the PR body and the branch", () => {
     expect(body.endsWith("Draft for human review. Close to reject.")).toBe(true);
   });
 
+  it("I: the reviewer checklist is the fixed R1/R2/R3 set, and the body says only `test` and `skill-security-scan PR gate` are real checks", () => {
+    const body = buildCreatePrBody(verdict);
+    for (const item of [
+      "- [ ] Read every step as an instruction to an agent that holds shell access and secrets.",
+      "- [ ] No step reads, prints or posts credentials or env files.",
+      "- [ ] No step is destructive or irreversible.",
+      "- [ ] Will this description trigger on unrelated prompts? Narrow it or reject.",
+      "- [ ] Scan PURPOSE.md for names, domains or identifiers before merge.",
+      "- [ ] Categorise the skill in plugins/soleur/docs/_data/skills.js",
+    ]) {
+      expect(body, item).toContain(item);
+    }
+    expect(body).toContain("Real CI results on this draft: `test` and `skill-security-scan PR gate` only.");
+    expect([...REAL_CHECK_NAMES].sort()).toEqual([...CREATE_EXCLUDED_SYNTHETIC_CHECKS].sort());
+    expect(body).toContain("Ref #10550");
+    expect(body).not.toMatch(/Closes|Fixes|Resolves/i);
+  });
+
   it("the body carries no model prose: the description and rationale fields never appear", () => {
     const body = buildCreatePrBody(verdict);
     for (const text of [String(PROPOSAL.description), String(PROPOSAL.patch_rejection_reason), ...(PROPOSAL.steps as string[])]) {
       expect(body).not.toContain(text);
     }
+  });
+
+  it("SCHEDULED_ISSUE_LABEL equals the handler's SENTRY_MONITOR_SLUG (the label safeCommitAndPr comments on)", () => {
+    const handler = readFileSync(join(__dirname, "..", "..", "server", "inngest", "functions", "cron-compound-promote.ts"), "utf8");
+    expect(/const SENTRY_MONITOR_SLUG = "([^"]+)";/.exec(handler)?.[1]).toBe(SCHEDULED_ISSUE_LABEL);
   });
 
   it("the branch is the edit arm's shape: prefix + 64-hex hash + date", () => {
@@ -297,7 +418,7 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
     runStartedAt: "2026-10-26T10:00:00.000Z",
     octokit: { request: async () => ({ data: [] }), graphql: async () => ({}) } as never,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    evidenceCount: 5,
+    page: PATTERN,
     verdict: {
       kind: "create", proposal: PROPOSAL, clusterHash: "c".repeat(64), gates: [],
       overlap: { top1Name: "ship", top1: 0.05, nearestRank: 1, top3: ["ship"] }, words: 22, cap: 2436, total: 2402, headroom: 34,
@@ -307,19 +428,40 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
   });
 
   it("a hit on our own open PR (deterministic head) is success with NO commit", async () => {
-    const a = persistArgs({ octokit: { request: async () => ({ data: [{ number: 9 }] }), graphql: async () => ({}) } });
+    const a = persistArgs({ octokit: { request: async () => ({ data: [{ number: 9, body: `${CREATE_PR_BODY_LINE}\nrest` }] }), graphql: async () => ({}) } });
     roots.push(a.repoRoot);
     expect(await runCreatePersistStep(a as never)).toEqual({ kind: "opened", pr: 9, resumed: true });
     expect(a.safeCommit).not.toHaveBeenCalled();
   });
 
+  it("A: a hit that is an EDIT PR (same branch shape, no CREATE line in the body) is NOT resumed: persist/branch-taken, no commit", async () => {
+    const a = persistArgs({ octokit: { request: async () => ({ data: [{ number: 9, body: "Tier: agents-core. Cluster-Hash: x" }] }), graphql: async () => ({}) } });
+    roots.push(a.repoRoot);
+    const v = await runCreatePersistStep(a as never);
+    expect(v).toEqual({ kind: "refused", class: "persist", detail: "branch-taken", numbers: { pr: 9 } });
+    expect(a.safeCommit).not.toHaveBeenCalled();
+    expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: CREATE_REFUSED_OP, tags: { class: "persist" } }));
+    // a body that is not a string at all is not a create PR either
+    const b = persistArgs({ octokit: { request: async () => ({ data: [{ number: 10, body: null }] }), graphql: async () => ({}) } });
+    roots.push(b.repoRoot);
+    expect(await runCreatePersistStep(b as never)).toMatchObject({ class: "persist", detail: "branch-taken" });
+  });
+
+  it("G: a missing clone directory is its own named refusal before ANY request or write", async () => {
+    const request = vi.fn(async () => ({ data: [] }));
+    const a = persistArgs({ repoRoot: join(tmpdir(), "create-arm-gone-" + Date.now()), octokit: { request, graphql: async () => ({}) } });
+    expect(await runCreatePersistStep(a as never)).toEqual({ kind: "refused", class: "persist", detail: "clone-missing" });
+    expect(request).not.toHaveBeenCalled();
+    expect(a.safeCommit).not.toHaveBeenCalled();
+  });
+
   it("a failed own-PR lookup is mirrored and does NOT end the step (safeCommitAndPr's branch replay-resume is the second layer)", async () => {
-    const a = persistArgs({ octokit: { request: async () => { throw new Error("502"); }, graphql: async () => ({}) } });
+    const a = persistArgs({ octokit: { request: async () => { throw Object.assign(new Error("502"), { status: 502 }); }, graphql: async () => ({}) } });
     roots.push(a.repoRoot);
     // The directory is not a git clone, so the step then refuses at the clean-main guard, before any write.
     const v = await runCreatePersistStep(a as never);
     expect(v).toMatchObject({ kind: "refused", class: "persist", detail: "clone-not-clean" });
-    expect(reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ op: "create-own-pr-lookup-failed" }));
+    expect(reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ op: "create-own-pr-lookup-failed", extra: { cause: "http-502" } }));
     expect(a.safeCommit).not.toHaveBeenCalled();
   });
 

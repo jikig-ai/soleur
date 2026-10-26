@@ -1,4 +1,4 @@
-// WikiSkill Phase 2 (#10550), commit 5 -- the DRY RENDER: every CI-red surface a new skill touches, run against a
+// WikiSkill Phase 2 (#10550) -- the DRY RENDER: every CI-red surface a new skill touches, run against a
 // synthetic copy of the real tree with a created skill injected.
 //
 // PROPERTY: the create arm's output is mergeable as drafted. Rendering the six-path set with the REAL gates (the real
@@ -28,12 +28,18 @@ import { dirname, join } from "node:path";
 vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
 });
+const remote = vi.hoisted(() => ({ url: "" }));
 vi.mock("@/server/observability", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/observability")>()),
   reportSilentFallback: vi.fn(),
 }));
+// Step B refreshes the clone from `origin` (R5): the copy gets a local bare remote instead of the real GitHub URL.
+vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/inngest/functions/_cron-shared")>()),
+  buildAuthenticatedCloneUrl: () => remote.url,
+}));
 
-import { runCreatePersistStep, runCreateProposeStep, type CreateVerdictCreate } from "@/server/compound-promote-create-arm";
+import { PLAIN_ORIGIN_URL, runCreatePersistStep, runCreateProposeStep, type CreateVerdictCreate } from "@/server/compound-promote-create-arm";
 import {
   PROMOTION_LOG_PATH,
   countDescriptionWords,
@@ -62,6 +68,7 @@ const BUN_SUITES = [
 ];
 
 let tree = "";
+const remotes: string[] = [];
 let committed: { exactPaths: readonly string[]; expectedContent: Record<string, string> } | null = null;
 let baselinePass = 0;
 let injectedPass = 0;
@@ -104,6 +111,11 @@ beforeAll(async () => {
   git(["init", "-q", "-b", "main", "."]);
   git(["add", "-A"]);
   git(["commit", "-qm", "baseline"]);
+  const bare = mkdtempSync(join(tmpdir(), "create-dry-render-remote-"));
+  remotes.push(bare);
+  expect(sh("git", ["clone", "-q", "--bare", tree, bare], REPO_ROOT).status).toBe(0);
+  remote.url = `file://${bare}`;
+  git(["remote", "add", "origin", remote.url]);
 
   // Baseline: the repository's own checks pass on the unmodified copy (otherwise the injected run proves nothing).
   const base = bunTest();
@@ -142,7 +154,7 @@ beforeAll(async () => {
     octokit: { request: async () => ({ data: [] }), graphql: async () => ({}) } as never,
     logger: { info: () => {}, warn: () => {}, error: () => {} },
     verdict: proposed,
-    evidenceCount: PATTERN.evidence.length,
+    page: PATTERN,
     safeCommit: (async (cfg: { exactPaths: readonly string[]; expectedContent: Record<string, string> }) => {
       committed = { exactPaths: cfg.exactPaths, expectedContent: cfg.expectedContent };
       return { status: "committed", prNumber: 1, branch: "b", fileCount: 6, deletionCount: 0 };
@@ -167,6 +179,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   if (tree) rmSync(tree, { recursive: true, force: true });
+  for (const r of remotes) rmSync(r, { recursive: true, force: true });
 });
 
 describe("the real gates passed on the real tree", () => {
@@ -176,6 +189,10 @@ describe("the real gates passed on the real tree", () => {
     expect(c.exactPaths).toEqual(createPathList(SLUG));
     expect(Object.keys(c.expectedContent).sort()).toEqual([...createPathList(SLUG)].sort());
     expect(c.expectedContent[`plugins/soleur/skills/${SLUG}/SKILL.md`]).toMatch(/^---\nname: http-retry-backoff\n/);
+  });
+
+  it("R4: the clone's origin is the tokenless URL after the step (the token never outlives it on disk)", () => {
+    expect(sh("git", ["config", "remote.origin.url"], tree).stdout.trim()).toBe(PLAIN_ORIGIN_URL);
   });
 
   it("the budget numbers come from the real tree and leave a non-negative headroom after the new skill", () => {
@@ -252,7 +269,12 @@ describe("the repository's own CI checks, run unmodified over the tree with the 
   });
 
   const mdl = join(REPO_ROOT, "node_modules", ".bin", "markdownlint");
-  it.skipIf(!existsSync(mdl))("markdownlint (the repo's pinned binary and config) is clean on the generated markdown", () => {
+  it("markdownlint (the repo's pinned binary and config) is clean on the generated markdown", () => {
+    if (!existsSync(mdl)) {
+      // Locally an absent binary is a skip; in CI it is a FAILURE (a silent skip would let the lint surface go unchecked).
+      expect(process.env.CI, "markdownlint must be installed where CI runs this suite").toBeFalsy();
+      return;
+    }
     const r = sh(mdl, ["--config", join(REPO_ROOT, ".markdownlint.json"), `plugins/soleur/skills/${SLUG}/SKILL.md`, `plugins/soleur/skills/${SLUG}/PURPOSE.md`], tree);
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
   });

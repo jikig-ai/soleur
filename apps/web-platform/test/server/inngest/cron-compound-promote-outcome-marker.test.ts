@@ -47,7 +47,7 @@ vi.mock("pino", async (importOriginal) => {
   return { ...actual, default: factory };
 });
 
-import { COMPOUND_PROMOTE_STATUSES, emitOutcomeMarker, type CompoundPromoteStatus } from "@/server/compound-promote-marker";
+import { COMPOUND_PROMOTE_STATUSES, CREATE_MARKER_NUMBERS, emitOutcomeMarker, type CompoundPromoteStatus } from "@/server/compound-promote-marker";
 import { CREATE_NO_ACTION_REASONS, CREATE_REFUSAL_CLASSES } from "@/server/compound-promote-create";
 
 beforeEach(() => expect.hasAssertions());
@@ -392,7 +392,7 @@ const ALLOWED: Record<string, (v: unknown) => boolean> = {
   ledger_prs_scanned: (v) => typeof v === "number",
   ledger_title_skipped: (v) => typeof v === "number",
   // #10550: the create arm's fields. Closed enums, numbers and one closed token; never model text.
-  kind: (v) => v === "edit" || v === "create",
+  kind: (v) => v === "create",
   create_requested: (v) => typeof v === "boolean",
   create_arm: (v) => v === "ran",
   create_outcome: (v) => v === "no_action" || v === "refused" || v === "opened",
@@ -404,6 +404,14 @@ const ALLOWED: Record<string, (v: unknown) => boolean> = {
   create_total: (v) => typeof v === "number",
   create_top1: (v) => typeof v === "number",
   create_nearest_rank: (v) => typeof v === "number",
+  create_tokens: (v) => typeof v === "number",
+  create_max: (v) => typeof v === "number",
+  create_bytes: (v) => typeof v === "number",
+  create_path_index: (v) => typeof v === "number",
+  create_file_index: (v) => typeof v === "number",
+  create_missing_tools: (v) => typeof v === "number",
+  create_exit: (v) => typeof v === "number",
+  create_changed_count: (v) => typeof v === "number",
   create_pr: (v) => typeof v === "number",
 };
 
@@ -465,10 +473,13 @@ describe("the patterns-path marker fields (#8293)", () => {
 // ---------------------------------------------------------------------------
 // #10550 -- the create arm's marker fields. The scheduled path gains NONE of them.
 // ---------------------------------------------------------------------------
+const CREATE_KEYS_ALL: string[] = Object.keys(ALLOWED);
+
 describe("the create-arm marker fields (#10550)", () => {
   const CREATE_KEYS = [
     "kind", "create_requested", "create_arm", "create_outcome", "create_no_action_reason", "create_refusal_class",
     "create_detail", "create_words", "create_cap", "create_total", "create_top1", "create_nearest_rank", "create_pr",
+    "create_tokens", "create_max", "create_bytes", "create_path_index", "create_file_index", "create_missing_tools", "create_exit", "create_changed_count",
   ];
 
   it("a scheduled-path row carries none of the create fields", () => {
@@ -491,8 +502,23 @@ describe("the create-arm marker fields (#10550)", () => {
     }
   });
 
-  it("the class and no-action vocabularies the marker validates are the create module's own constants", () => {
-    expect([...CREATE_REFUSAL_CLASSES]).toHaveLength(13);
+  it("the no-action vocabulary the marker validates is the create module's own constant (the class set's length is pinned once, in the census)", () => {
     expect([...CREATE_NO_ACTION_REASONS]).toEqual(["no-pattern-qualifies", "all-owned", "other"]);
+    expect(CREATE_REFUSAL_CLASSES.length).toBeGreaterThan(0);
+  });
+
+  it("the number allowlist: every refusal number the marker forwards maps to a typed, numeric create_* field (and nothing else is forwarded)", () => {
+    expect(Object.keys(CREATE_MARKER_NUMBERS).sort()).toEqual(
+      ["bytes", "cap", "changed_count", "exit_code", "file_index", "max", "missing_tools", "nearest_rank", "path_index", "tokens", "top1", "total", "words"],
+    );
+    for (const field of Object.values(CREATE_MARKER_NUMBERS)) {
+      expect(CREATE_KEYS_ALL).toContain(field);
+      expect(ALLOWED[field](1)).toBe(true);
+      expect(ALLOWED[field]("text")).toBe(false);
+    }
+    // and each is emitted by the marker as given
+    emitOutcomeMarker({ trigger: "manual", run_id: "R", status: "completed", kind: "create", create_arm: "ran", create_tokens: 12001, create_max: 12000, create_bytes: 48004, create_path_index: 5, create_file_index: 1, create_missing_tools: 3, create_exit: 3, create_changed_count: 2 });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    expect(row).toMatchObject({ create_tokens: 12001, create_max: 12000, create_bytes: 48004, create_path_index: 5, create_file_index: 1, create_missing_tools: 3, create_exit: 3, create_changed_count: 2 });
   });
 });

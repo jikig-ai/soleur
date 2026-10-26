@@ -643,7 +643,7 @@ complete), `refusal_detail[]` (capped at 20 — see below; #8427 widened it past
 row carries `component: "compound-promote"` (emitter:
 `server/compound-promote-marker.ts`, PR #8344).
 
-Six further fields appear **only on a manual run with `input:"patterns"`** (ADR-300);
+Further fields appear **only on a manual run with `input:"patterns"`** (ADR-300);
 the scheduled row's field set is unchanged, so their absence is the normal shape for
 `trigger: "cron"`: `input_source` (`patterns`; never emitted on the corpus arm), `patterns_open` (count of open
 pattern pages loaded), `ledger_read` (`ok` | `failed`; `failed` rides a `status: "error"`
@@ -653,8 +653,8 @@ proposed, each also a `ledger-suppressed` entry in `refusals[]` / `refusal_detai
 and `ledger_title_skipped` (bot-authored search items skipped because the title did not
 match the anchored promote-cluster title pattern; warn-level, does not fail by itself, but if
 every bot PR was retitled the read fails `drift`; a human-retitled PR stops suppressing). The
-early terminal rows `disabled`, `deduped` and `week-cap-reached` carry ONLY `input_source` (and the boolean `create_requested`, below). All six
-are numbers or closed enums. The ledger read has a usable ceiling of 999 search hits (10 pages of
+early terminal rows `disabled`, `deduped` and `week-cap-reached` carry ONLY `input_source` (and the boolean `create_requested`, below). Every one
+is a number or a closed enum (`create_requested` is a boolean). The ledger read has a usable ceiling of 999 search hits (10 pages of
 100, and a full last page throws `page-cap`). On a failed read the marker has no cause field:
 after Inngest retries (`retries:1`) it shows `status=error`, `ledger_read=failed`,
 a static `error_message` and an `error_class` that is `StepError` in the SDK's shape (an exhausted `step.run` reaches the handler as `StepError`, and a production bundle may minify class names, so key on `ledger_read=failed`, not on the class name); the seven causes (`http-5xx`,
@@ -701,12 +701,16 @@ the create fields. When the arm ran the row also carries `create_arm` (`ran`, em
 (`no-pattern-qualifies` | `all-owned` | `other`), `create_refusal_class` (one of `week-cap`, `create-open`,
 `index-empty`, `input-size`, `model-invalid`, `shape`, `slug`, `prefer-patch`, `budget`, `scan`, `readme-sync`,
 `stub-drift`, `persist`), `create_detail` (a closed token, never model text), the numbers `create_words`,
-`create_cap`, `create_total`, `create_top1`, `create_nearest_rank`, and `create_pr` (the draft PR number). A refused
+`create_cap`, `create_total`, `create_top1`, `create_nearest_rank`, the refusal evidence numbers `create_tokens`,
+`create_max`, `create_bytes` (input-size), `create_path_index`, `create_file_index`, `create_missing_tools`,
+`create_exit`, `create_changed_count`, and `create_pr` (the draft PR number). A refused
 create adds ONE entry `create-refused` to `refusals[]` (the refusal reason; its class is the field above) and is
 mirrored to Sentry as op `create-refused` tagged `class`. The create outcome rides the edit loop's `status`
 (`completed` or `no-qualifying-clusters`), and `clusters_opened` counts edit PRs only. How to read each class and each
 `create_detail` token: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The gated new-skill
-create arm". Copy-paste recipe (create-arm rows only; empty output means no manual `allow_create` run in the window):
+create arm". Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
+there); the rows that asked for a create are those with `.create_requested == true`. Empty output means no manual
+`patterns` run in the window; an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace on any row:
 
 ```bash
 doppler run -p soleur -c prd_terraform -- \
@@ -716,12 +720,13 @@ doppler run -p soleur -c prd_terraform -- \
               | [$r.dt, .status, (.create_requested|tostring), (.create_arm//"-"), (.create_outcome//"-"),
                  (.create_refusal_class//"-"), (.create_detail//"-"), (.create_no_action_reason//"-"),
                  (.create_words//"-"), (.create_cap//"-"), (.create_total//"-"), (.create_top1//"-"),
-                 (.create_nearest_rank//"-"), (.create_pr//"-")] | @tsv'
+                 (.create_nearest_rank//"-"), (.create_tokens//"-"), (.create_path_index//"-"), (.create_file_index//"-"),
+                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-")] | @tsv'
 ```
 
 A row with `create_requested: true` and `-` in the `create_arm` column ended before the arm (read `status`: a saturated
-week cap ends `week-cap-reached`). A `create_requested` of `false` on a row you expected to create means the flag did
-not reach the handler as the boolean `true`.
+week cap ends `week-cap-reached`). A `create_requested` of `false` on a row you expected to create means the
+`allow_create` event field did not reach the handler as the boolean `true`.
 
 Reading it:
 
