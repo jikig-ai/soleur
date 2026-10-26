@@ -12,6 +12,41 @@ requires_cpo_signoff: true
 
 # feat(harness): WikiSkill Phase 2 - gated new-skill creation
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26. **Evidence used:** a repo-research pass (68 tool calls, all anchors re-derived), a learnings pass
+(29 applicable learnings), a functional-overlap check, CTO rulings T1-T8, F1-F3, G1-G3, a CLO review, a five-seat plan-review
+panel (DHH, Kieran, code-simplicity, architecture, spec-flow) and a plan-time GDPR gate. A full all-agent fan-out was not run:
+the plan edits no UI, schema or infrastructure, and each claim was re-derived from source by at least two seats.
+
+### Key improvements applied at review and deepen
+
+1. The create arm no longer inherits the edit arm's synthetic checks (a faked green `skill-security-scan PR gate` is the #8203
+   class); the scan spawns with `SKILL_SECURITY_SCAN_OFFLINE=1` exactly as `pr-quality-guards.yml` does.
+2. A two-step replay-safe shape (memoized `create-propose`, single `create-persist`), one-open-create-at-a-time, edit loop first,
+   and the saturated week cap (#11230 and #11231 are two open `self-healing/auto` PRs today) turned into a unit-test requirement.
+3. Marker fields minimised so the scheduled path gains none (`create_arm` only when the arm ran; `create_requested` on manual runs).
+4. Budget arithmetic shown with verified before/after text; `BASELINE_DECLARED_PROBES` moved to commit 1.
+5. Live-fire written as an operator-held ACTION with preconditions; deferral issues cut to one.
+
+### New considerations discovered
+
+- Every skill needs a byte-identical Grok block, a Cursor stub and two README counts; the shape allowlist and path set were widened
+  accordingly. `PURPOSE.md` sits inside `skills/**/*.md` lint globs.
+- The Phase 0 runner-image command output decides whether the real Cursor generator can replace the duplicate renderer (CTO G3).
+
+### Deepen halts run mechanically
+
+4.6 user-brand impact: pass (threshold `single-user incident`). 4.7 observability: pass (all five fields present, first token
+`bash`, literal `expected_output`, non-placeholder `credentials_required`). 4.8 PAT sweep: 0 hits. 4.9 UI wireframe: skip (no UI
+surface). 4.10 encryption: skip (no store or connection; section states why). 4.11 guard contract:
+`python3 scripts/lint-guard-contract.py` green, 4 entries. 4.12 scope check: one unfenced section, three subsections, one
+`Recommendation:` line, no `unmapped` or `BLOCKED`. 4.13 task design: skip (no new autonomous task surface; the arm lives inside
+the existing function). 4.55 downtime: skip. Cited rule ids (`cq-skill-description-budget-headroom`,
+`cq-test-fixtures-synthesized-only`, `wg-when-deferring-a-capability-create-a`) exist; cited PRs #10970, #8276, #11157, #10553,
+#10673, #10947 are MERGED and #7122 is a CLOSED issue (the `exactPaths` code comment cites it); `lint-orphan-test-suites.sh`,
+`harness-parity-tree.test.ts` and `pr-quality-guards.yml` exist; `SYNTHETIC_CHECK_NAMES` contains `skill-security-scan PR gate`.
+
 ## Overview
 
 Phase 2 of the WikiSkill work split out of #8281 (issue #10550, `Ref` only, never `Closes`). It lets
