@@ -1,0 +1,16 @@
+# Decision challenges: feat-one-shot-10793-brand-hex-gate-target-repo
+
+Headless planning (2026-10-26). Technical forks were ruled by the CTO agent, never put to the operator. The base ruling (issue #10793 comment 6411990414, 2026-10-23) is not re-litigated.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| T1 Base ruling: ship as its own PR; reuse `commit-target-roots.sh`; undeterminable target warns and allows; no-cd path unchanged; header corrected; sim lib not adopted | technical | Ruled by CTO, 2026-10-23 (issue comment 6411990414): SHIP as its own small PR - fail-open gate with no secret-leak blast radius, so no deny and no ask |
+| T2 Undeterminable (CTR_BAD, CTR_ROOT_ERR, lexer or lib unavailable): pure warn+allow with no scan, vs scan the determinable roots and deny only on findings | technical | Ruled by CTO agent, 2026-10-26: pure warn+allow with no scan - a gate that scans and denies on a repo the commit may not target breaks the recorded ruling. Carve-out A: when the lexer or lib is unavailable and the text has no target-moving token (cd, pushd, -C, --git-dir, --work-tree, GIT_), use the unchanged cwd path, so a perl-less host does not go silent on every plain commit. Would flip if CTR_BAD is measured on ordinary no-cd commits |
+| T3 Trigger: the strict regex does not match `git -C W commit` | technical | Ruled by CTO agent, 2026-10-26: widen to the loose both-words test confirmed by the lexer commit record, as the secret scan does - this is the actual fix for the -C form |
+| T4 Scanned roots: CTR_ROOTS union process-cwd toplevel, with or without the payload-cwd (HOOK_CWD) root | technical | Ruled by CTO agent, 2026-10-26: CTR_ROOTS plus the process-cwd toplevel, deduped; no HOOK_CWD root because it would change the no-cd path. Reset PALETTE, PALETTE_NAME and palette_built per root |
+| T5 Diff base (-a/--all) for the -C form | technical | Ruled by CTO agent, 2026-10-26: keep the textual regex when the literal words `git commit` are present (no-cd path byte-for-byte unchanged); consult CTR_COMMIT_ALL only when they are absent; one NAME_REF for all roots |
+| T6 Lexer invocation: every command with both words git and commit, vs a narrower pre-filter | technical | Ruled by CTO agent, 2026-10-26: run the lexer whenever both words appear. Carve-out C: lexer shows no commit record and the strict regex also fails -> allow (quoted prose not newly scanned); strict match with no record -> unchanged cwd behaviour with CTR_BAD dropped. Load the lib fail-soft, then assert ctr_collect, ctr_resolve_roots and CTR_STAGE_API as the secret scan does |
+| T7 Multi-root deny reason | technical | Ruled by CTO agent, 2026-10-26: prefix each finding with the root basename only when more than one root was scanned |
+| T8 Plan-review panel not run separately in the headless planning phase; deepen-plan covers review | technical | pending - assumed: deepen-plan's parallel reviewers stand in for plan-review in this pipeline stage; ship-time review (soleur:review) is the binding panel |
