@@ -138,7 +138,7 @@ Post-merge read, agent-run, no host contact: the push-apply run for the merge sh
 
 Flip conditions (switch to the marker, as a branch-commit body line, and re-ask): the trial-merge plan of the push path lists `hcloud_server.inngest`; parity is red; a `ZIREF` or `IREF` line changed; a push apply in the previous 24 hours had a non-zero outcome on an Inngest-referencing resource. If the post-merge read shows anything other than 0 changes: stop, file an `action-required` issue naming the action, do not retry and do not dispatch.
 
-Web-redeploy notice for the PR body (#9755 text): "Merging a change under `apps/web-platform/infra/**` fires the production apply of the parent root and may redeploy the web platform. This change touches user_data of the Inngest host and plans no web-platform resource change; the apply outcome is verified after merge (apply run conclusion, Better Stack via `scripts/betterstack-query.sh`, no SSH)." Also in the PR body: merging causes no user impact and does not touch the Inngest host; the PR-time infra plan will show the host as replaced and that is known drift; Better Stack alert definitions outside the repo were not readable (R1 dissent); the host replace, the resume and the flip need their own typed goes.
+Web-redeploy notice for the PR body (the convention of #9755 item 3, notice plus a post-merge apply-outcome check; the wording below is the PR-1 prework plan's): "Merging a change under `apps/web-platform/infra/**` fires the production apply of the parent root and may redeploy the web platform. This change touches user_data of the Inngest host and plans no web-platform resource change; the apply outcome is verified after merge (apply run conclusion, Better Stack via `scripts/betterstack-query.sh`, no SSH)." Also in the PR body: merging causes no user impact and does not touch the Inngest host; the PR-time infra plan will show the host as replaced and that is known drift; Better Stack alert definitions outside the repo were not readable (R1 dissent); the host replace, the resume and the flip need their own typed goes.
 
 ## User-Brand Impact
 
@@ -207,7 +207,24 @@ Not applicable: no vendor resource is created. The one vendor limit that matters
 
 ## Encryption Posture
 
-No persistent store and no new connection are introduced (a template trim). The file name matches the posture gate's `cloud-init.*\.ya?ml$` detection regex, so this line records the assessment: nothing is added, the `luksFormat` and `luksOpen` anchors that `scripts/lint-encryption-posture.py --repo-sweep` reads are untouched and that sweep is part of the verification list.
+This PR introduces no persistent store and no new connection (a template trim). The file name matches the posture gate's `cloud-init.*\.ya?ml$` detection, so the one store whose apparatus this template carries is declared below as UNCHANGED; the authority for every field is its entry in `scripts/encryption-posture-ledger.json` (store `hcloud_volume.inngest_redis_luks`), and `python3 scripts/lint-encryption-posture.py --repo-sweep` re-resolves the template's anchors in the verification list.
+
+```yaml
+at_rest:
+  - store: hcloud_volume.inngest_redis_luks (unchanged; this PR edits none of its resources)
+    mechanism: luks
+    evidence: the template's `cryptsetup luksFormat` and `cryptsetup luksOpen --key-file - "$DEV" inngest-redis` anchors in cloud-init-inngest.yml stay byte-identical (the LUKS first-boot stage is not touched, P1); ledger entry above
+    defends_against: a seized, RMA'd or snapshot-imaged Hetzner block volume carrying the Inngest queue and run-state AOF
+    does_not_defend: a leaked credential; an app-layer read on the unlocked host; a compromised redis or inngest process; and the sole-copy risk (the volume is the only copy of the store and the Doppler key the only copy the host reads)
+    disclosed_as: not-publicly-claimed
+    live_verification: "unavailable: per the ledger entry the hourly server probe proves which device backs /mnt/data, not the cipher; unchanged by this PR"
+in_transit:
+  - connection: none added; the existing web-to-Inngest private-network edge and the TLS terminator units are untouched
+    tls: unchanged (per the ledger connection entries)
+    cert_verification: unchanged
+    does_not_defend: a passive on-net attacker on the private network for the plain-HTTP edge, as recorded in the ledger connection entry
+    disclosed_as: per the ledger connection entry
+```
 
 ## Guard Contract
 
