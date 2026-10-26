@@ -12,16 +12,15 @@
 //   - Refusal `detail` values are closed tokens built from constants, never model text.
 //   - Nothing here reads a secret, spawns a process or touches the network.
 //
-// Import-cycle note: `PII_REGEX` and `CREDENTIAL_RE` are imported from the handler module so a change there moves
-// this gate (they must not be re-derived). The handler will import this module in the wiring commit, so the edge
-// is a cycle; it is safe because both names are used only inside function bodies, never at module load.
+// Import-cycle note: `PII_REGEX`, `CREDENTIAL_RE` and the cluster hash come from the leaf module
+// `compound-promote-screens.ts` (the handler re-exports the two regexes from the same place), so a change there
+// moves this gate and there is no import edge from here to the handler.
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { CREDENTIAL_RE, PII_REGEX } from "@/server/inngest/functions/cron-compound-promote";
+import { CREDENTIAL_RE, PII_REGEX, computeClusterHash } from "@/server/compound-promote-screens";
 import { fenceBlock, renderPatternIndex, untrustedDataSentence, type PatternPage } from "@/server/compound-promote-patterns";
 
 // =============================================================================
@@ -540,16 +539,11 @@ export function rankOverlap(text: string, skills: readonly SkillRecord[]): Array
 // =============================================================================
 
 /**
- * The cluster hash over a pattern's evidence keys. Byte-identical to `computeClusterHash` in the handler (sorted,
- * newline-joined, trailing newline, sha256 hex), so the branch, PR title and ledger shapes are unchanged and a
- * pattern with an existing patch PR is suppressed for create too (CTO F2).
+ * The cluster hash over a pattern's evidence keys. It IS the handler's `computeClusterHash` (one function, from the
+ * leaf module): the branch, PR title and ledger shapes are unchanged and a pattern with an existing patch PR is
+ * suppressed for create too (CTO F2).
  */
-export function createClusterHash(evidence: readonly string[]): string {
-  const sorted = [...evidence].sort();
-  return createHash("sha256")
-    .update(sorted.join("\n") + "\n")
-    .digest("hex");
-}
+export const createClusterHash = computeClusterHash;
 
 // =============================================================================
 // Prompt (reads every constant)

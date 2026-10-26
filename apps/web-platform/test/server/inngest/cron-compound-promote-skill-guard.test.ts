@@ -457,3 +457,57 @@ describe("skillConflictVerdict", () => {
     expect(s.scanned.sort()).toEqual([ALPHA, BETA]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// #10550 -- the create variant: `collectPrefixes` additionally records which open-PR file names sit under the given
+// prefixes (the create arm's slug and nearest-skill collision gates). The default call is untouched.
+// ---------------------------------------------------------------------------------------------------------
+describe("scanOpenPrSkillPaths create variant (collectPrefixes)", () => {
+  const PREFIXES = ["plugins/soleur/skills/", "plugins/soleur/cursor/skills/"] as const;
+  const run = async (prs: Pr[], extra: { maxCollected?: number; targets?: string[] } = {}) => {
+    const f = fake(prs);
+    const s = await scanOpenPrSkillPaths({
+      octokit: f.octokit, owner: "o", repo: "r", targets: extra.targets ?? [], collectPrefixes: PREFIXES, maxCollected: extra.maxCollected,
+    });
+    return { s, calls: f.calls };
+  };
+
+  it("the default call has NO `touched` key (existing consumers see the exact shape they always did)", async () => {
+    const { s } = await scan([{ number: 1, files: [{ filename: ALPHA }] }], [ALPHA]);
+    expect(Object.keys(s).sort()).toEqual(["changed", "incomplete", "scanned"]);
+  });
+
+  it("collects every changed or renamed-from file under a prefix, de-duplicated, and nothing else", async () => {
+    const { s } = await run([
+      { number: 1, files: [{ filename: "plugins/soleur/skills/newone/SKILL.md" }, { filename: "docs/readme.md" }] },
+      { number: 2, files: [{ filename: "plugins/soleur/skills/newone/SKILL.md" }, { filename: "plugins/soleur/cursor/skills/soleur-newone/SKILL.md", previous_filename: "plugins/soleur/skills/old/SKILL.md" }] },
+    ]);
+    expect([...(s.touched ?? [])].sort()).toEqual([
+      "plugins/soleur/cursor/skills/soleur-newone/SKILL.md",
+      "plugins/soleur/skills/newone/SKILL.md",
+      "plugins/soleur/skills/old/SKILL.md",
+    ]);
+    expect(s.incomplete).toBeNull();
+  });
+
+  it("does NOT stop early: with no exact targets every open PR's file list is read", async () => {
+    const { calls } = await run([
+      { number: 1, files: [{ filename: "a.md" }] },
+      { number: 2, files: [{ filename: "b.md" }] },
+    ]);
+    expect(count(calls, FILES)).toBe(2);
+  });
+
+  it("a PR touching more matching files than the cap records the bound (`files`) rather than growing without limit", async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ filename: `plugins/soleur/skills/s${i}/SKILL.md` }));
+    const { s } = await run([{ number: 1, files: many }], { maxCollected: 5 });
+    expect(s.touched).toHaveLength(5);
+    expect(s.incomplete).toBe("files");
+  });
+
+  it("still answers the exact-target question alongside (a target inside a prefix is in `changed` too)", async () => {
+    const { s } = await run([{ number: 9, files: [{ filename: ALPHA }] }], { targets: [ALPHA] });
+    expect(s.changed).toEqual({ [ALPHA]: 9 });
+    expect(s.touched).toEqual([ALPHA]);
+  });
+});

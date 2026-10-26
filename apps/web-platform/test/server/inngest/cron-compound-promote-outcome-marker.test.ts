@@ -48,6 +48,7 @@ vi.mock("pino", async (importOriginal) => {
 });
 
 import { COMPOUND_PROMOTE_STATUSES, emitOutcomeMarker, type CompoundPromoteStatus } from "@/server/compound-promote-marker";
+import { CREATE_NO_ACTION_REASONS, CREATE_REFUSAL_CLASSES } from "@/server/compound-promote-create";
 
 beforeEach(() => expect.hasAssertions());
 afterEach(() => {
@@ -366,33 +367,47 @@ describe("SOLEUR_COMPOUND_PROMOTE_OUTCOME marker shape (#8281)", () => {
 // ---------------------------------------------------------------------------
 // #8293 -- the patterns-path fields: numbers and closed enums only, never text.
 // ---------------------------------------------------------------------------
-describe("the patterns-path marker fields (#8293)", () => {
-  /** The complete set of keys an emitted patterns-path row may carry, with the shape each value must have. */
-  const ALLOWED: Record<string, (v: unknown) => boolean> = {
-    SOLEUR_COMPOUND_PROMOTE_OUTCOME: (v) => v === true,
-    fn: (v) => v === "cron-compound-promote",
-    component: (v) => v === "compound-promote",
-    level: (v) => typeof v === "number",
-    time: (v) => typeof v === "number",
-    msg: (v) => v === "compound promote outcome",
-    trigger: (v) => v === "cron" || v === "manual",
-    run_id: (v) => typeof v === "string",
-    status: (v) => (COMPOUND_PROMOTE_STATUSES as readonly unknown[]).includes(v),
-    corpus_count: (v) => typeof v === "number",
-    clusters_proposed: (v) => typeof v === "number",
-    clusters_opened: (v) => typeof v === "number",
-    corpus_input_bytes: (v) => typeof v === "number",
-    refusals: (v) => Array.isArray(v),
-    refusals_total: (v) => typeof v === "number",
-    refusal_detail: (v) => Array.isArray(v),
-    input_source: (v) => v === "corpus" || v === "patterns",
-    patterns_open: (v) => typeof v === "number",
-    ledger_read: (v) => v === "ok" || v === "failed",
-    ledger_suppressed: (v) => typeof v === "number",
-    ledger_prs_scanned: (v) => typeof v === "number",
-    ledger_title_skipped: (v) => typeof v === "number",
-  };
+/** The complete set of keys an emitted patterns-path row may carry, with the shape each value must have. */
+const ALLOWED: Record<string, (v: unknown) => boolean> = {
+  SOLEUR_COMPOUND_PROMOTE_OUTCOME: (v) => v === true,
+  fn: (v) => v === "cron-compound-promote",
+  component: (v) => v === "compound-promote",
+  level: (v) => typeof v === "number",
+  time: (v) => typeof v === "number",
+  msg: (v) => v === "compound promote outcome",
+  trigger: (v) => v === "cron" || v === "manual",
+  run_id: (v) => typeof v === "string",
+  status: (v) => (COMPOUND_PROMOTE_STATUSES as readonly unknown[]).includes(v),
+  corpus_count: (v) => typeof v === "number",
+  clusters_proposed: (v) => typeof v === "number",
+  clusters_opened: (v) => typeof v === "number",
+  corpus_input_bytes: (v) => typeof v === "number",
+  refusals: (v) => Array.isArray(v),
+  refusals_total: (v) => typeof v === "number",
+  refusal_detail: (v) => Array.isArray(v),
+  input_source: (v) => v === "corpus" || v === "patterns",
+  patterns_open: (v) => typeof v === "number",
+  ledger_read: (v) => v === "ok" || v === "failed",
+  ledger_suppressed: (v) => typeof v === "number",
+  ledger_prs_scanned: (v) => typeof v === "number",
+  ledger_title_skipped: (v) => typeof v === "number",
+  // #10550: the create arm's fields. Closed enums, numbers and one closed token; never model text.
+  kind: (v) => v === "edit" || v === "create",
+  create_requested: (v) => typeof v === "boolean",
+  create_arm: (v) => v === "ran",
+  create_outcome: (v) => v === "no_action" || v === "refused" || v === "opened",
+  create_no_action_reason: (v) => (CREATE_NO_ACTION_REASONS as readonly unknown[]).includes(v),
+  create_refusal_class: (v) => (CREATE_REFUSAL_CLASSES as readonly unknown[]).includes(v),
+  create_detail: (v) => typeof v === "string" && /^[a-z0-9][a-z0-9_.:[\]-]{0,63}$/.test(v),
+  create_words: (v) => typeof v === "number",
+  create_cap: (v) => typeof v === "number",
+  create_total: (v) => typeof v === "number",
+  create_top1: (v) => typeof v === "number",
+  create_nearest_rank: (v) => typeof v === "number",
+  create_pr: (v) => typeof v === "number",
+};
 
+describe("the patterns-path marker fields (#8293)", () => {
   it("an emitted patterns-path row carries only allowlisted keys, each a number or a closed enum", () => {
     emitOutcomeMarker({
       trigger: "manual",
@@ -444,5 +459,40 @@ describe("the patterns-path marker fields (#8293)", () => {
     const body = /export type CompoundPromoteStatus =([^;]+);/.exec(src)?.[1] ?? "";
     expect(body.match(/\|?\s*"[a-z-]+"/g)?.length).toBe(8);
     for (const lit of union) expect(body).toContain(`"${lit}"`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #10550 -- the create arm's marker fields. The scheduled path gains NONE of them.
+// ---------------------------------------------------------------------------
+describe("the create-arm marker fields (#10550)", () => {
+  const CREATE_KEYS = [
+    "kind", "create_requested", "create_arm", "create_outcome", "create_no_action_reason", "create_refusal_class",
+    "create_detail", "create_words", "create_cap", "create_total", "create_top1", "create_nearest_rank", "create_pr",
+  ];
+
+  it("a scheduled-path row carries none of the create fields", () => {
+    emitOutcomeMarker({ trigger: "cron", run_id: "R", status: "completed", corpus_count: 1, clusters_proposed: 0, clusters_opened: 0 });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    for (const k of CREATE_KEYS) expect(row).not.toHaveProperty(k);
+  });
+
+  it("a refused-create row carries the closed class, the closed detail token and numbers, and is JSON-flat", () => {
+    emitOutcomeMarker({
+      trigger: "manual", run_id: "R", status: "completed", input_source: "patterns", kind: "create", create_requested: true,
+      create_arm: "ran", create_outcome: "refused", create_refusal_class: "budget", create_detail: "over-headroom",
+      create_words: 31, create_cap: 2436, create_total: 2402,
+      refusals: ["create-refused"],
+    });
+    const row = JSON.parse(captured.lines[0]) as Record<string, unknown>;
+    expect(row).toMatchObject({ kind: "create", create_arm: "ran", create_outcome: "refused", create_refusal_class: "budget", create_words: 31, create_cap: 2436, create_total: 2402, refusals: ["create-refused"] });
+    for (const [k, v] of Object.entries(row)) {
+      if (k.startsWith("create_") || k === "kind") expect(ALLOWED[k](v), `marker key ${k} has the wrong shape`).toBe(true);
+    }
+  });
+
+  it("the class and no-action vocabularies the marker validates are the create module's own constants", () => {
+    expect([...CREATE_REFUSAL_CLASSES]).toHaveLength(13);
+    expect([...CREATE_NO_ACTION_REASONS]).toEqual(["no-pattern-qualifies", "all-owned", "other"]);
   });
 });

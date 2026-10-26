@@ -27,6 +27,7 @@
 // enforced by this module and pinned by its own suite.
 import pino from "pino";
 import { redactGithubSourcedText } from "@/lib/safety/redaction-allowlist";
+import type { CreateNoActionReason, CreateRefusalClass } from "@/server/compound-promote-create";
 
 const log = pino({ base: { component: "compound-promote" } });
 
@@ -149,6 +150,32 @@ export interface CompoundPromoteOutcome {
    * the weekly path stays dark.
    */
   trigger?: "cron" | "manual";
+  /**
+   * THE GATED CREATE ARM (#10550). Closed enums, booleans and numbers; never model text. EVERY field here is absent
+   * from a scheduled-path row and from a manual `corpus` row, which stay byte-identical to before the arm existed.
+   *
+   *   - `create_requested`   a manual `patterns` run: whether the event carried `allow_create === true`. Present on
+   *                          every such row (also the early terminal rows), so each switch-on is visible without SSH.
+   *   - `kind`, `create_arm` emitted ONLY when the arm ran (`create_arm: "ran"`); an absent field means off.
+   *   - `create_outcome`     `no_action` (the model declined, or the pattern is already proposed), `refused`, `opened`.
+   *   - `create_refusal_class` the closed class of the ONE refusal reason `create-refused`; `create_detail` its closed
+   *                          token (a field label plus a rule id, or a fixed phrase); the numbers explain a budget or
+   *                          overlap refusal (cap and total, top-1 overlap score, rank of the nearest skill).
+   */
+  kind?: "edit" | "create";
+  create_requested?: boolean;
+  create_arm?: "ran";
+  create_outcome?: "no_action" | "refused" | "opened";
+  create_no_action_reason?: CreateNoActionReason;
+  create_refusal_class?: CreateRefusalClass;
+  create_detail?: string;
+  create_words?: number;
+  create_cap?: number;
+  create_total?: number;
+  create_top1?: number;
+  create_nearest_rank?: number;
+  /** The draft PR number when `create_outcome` is `opened`. */
+  create_pr?: number;
   /** Inngest run id — the join key to a Sentry event for the same run. */
   run_id?: string;
   /**
