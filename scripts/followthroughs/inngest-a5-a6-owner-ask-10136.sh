@@ -31,7 +31,8 @@
 # posts, as plain unfenced lines on #10136 (the UTC time must be a full ISO time ending in Z):
 #   S5-A5-DONE: 2026-11-20T14:00:00Z     after the signing-key rotation is complete
 #   S6-A6-DONE: 2026-11-25T09:30:00Z     after the no-known-access record is filed and linked
-# A line starting with a marker that is NOT in that format is reported in the ask, not silently ignored.
+# A line starting with a marker whose time is NOT a real UTC time in that format is named in every ask that is waiting
+# for it (the dead-man warning, the A6 ask, the A5 ask), not silently ignored.
 #
 # DATES are constants derived from the legal bridge date 2026-11-12 (extendable once, to 2026-12-10): the dead-man
 # is three days before it. If the bridge is extended or lapses, edit them here.
@@ -66,7 +67,7 @@ say() { printf '%s\n' "$*"; }
 
 # issue_state <n>: sets ST (OPEN|CLOSED) and REASON (e.g. COMPLETED); returns 1 on a failed or unparseable read.
 # ST and REASON are cleared first as defence in depth: every caller returns 3 on a failed read today, so a stale value is
-# unreachable (the suite records that mutant as equivalent), but a future caller must not inherit the previous issue.
+# unreachable (the suite's header enumerates the callers), but a future caller must not inherit the previous issue.
 issue_state() {
   local out
   ST=""; REASON=""
@@ -81,8 +82,14 @@ completed() { [[ "$ST" == CLOSED && "$REASON" == COMPLETED ]]; }
 # well-formed) or none. Returns 1 when grep itself fails (rc >= 2), which the caller turns into exit 3.
 anchor_state() {
   local name="$1" text="$2" rc
-  grep -Eq "^${name}: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z[[:space:]]*$" <<<"$text"; rc=$?
-  if [ "$rc" -eq 0 ]; then say ok; return 0; fi
+  local re="^${name}: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z[[:space:]]*$" ts
+  grep -Eq "$re" <<<"$text"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    # the shape matched; the time must also be a real time (2026-13-45T99:99:99Z is a typo, not a done line)
+    ts="$(grep -E "$re" <<<"$text" | tail -n 1 | sed -E "s/^${name}: //; s/[[:space:]]+$//")"
+    if date -u -d "$ts" +%s >/dev/null 2>&1; then say ok; else say bad; fi
+    return 0
+  fi
   [ "$rc" -eq 1 ] || return 1
   grep -Eq "^${name}:" <<<"$text"; rc=$?
   if [ "$rc" -eq 0 ]; then say bad; return 0; fi
@@ -117,12 +124,15 @@ main() {
   local bodies
   bodies="$(trusted_verdict_bodies "$EPIC" "$REPO")" \
     || { say "CANNOT ESTABLISH: could not read the owner's done lines on the epic (comment or permission read failed)"; return 3; }
-  bodies="$(tr -d '\r' <<<"$bodies")"
+  bodies="$(tr -d '\r' <<<"$bodies")" || { say "CANNOT ESTABLISH: could not normalise the owner's done lines"; return 3; }
 
   local a5 a6
   a5="$(anchor_state S5-A5-DONE "$bodies")" || { say "CANNOT ESTABLISH: could not scan the owner's done lines"; return 3; }
   a6="$(anchor_state S6-A6-DONE "$bodies")" || { say "CANNOT ESTABLISH: could not scan the owner's done lines"; return 3; }
-  local fmt="a UTC time ending in Z, like 2026-11-20T14:00:00Z"
+  local fmt="YYYY-MM-DDTHH:MM:SSZ" bad_note=""
+  [ "$a5" != bad ] || bad_note="A line starting with S5-A5-DONE: was found on #$EPIC but is not a real UTC time, so it was ignored. Use $fmt (the real time, ending in Z)."
+  [ "$a6" != bad ] || bad_note="${bad_note:+$bad_note }A line starting with S6-A6-DONE: was found on #$EPIC but is not a real UTC time, so it was ignored. Use $fmt (the real time, ending in Z)."
+  days() { if [ "$1" -eq 1 ]; then say "1 day"; else say "$1 days"; fi; }
 
   # 1. both acts recorded
   if [ "$a6" = ok ] && [ "$a5" = ok ]; then
@@ -130,7 +140,7 @@ main() {
     return 2
   fi
   if [ "$a6" = ok ] && [ "$a5" != ok ]; then
-    say "CANNOT ESTABLISH: A6 is recorded on #$EPIC but A5 is not. A6 only follows A5. Post the S5-A5-DONE line (with $fmt) or correct the A6 line."
+    say "CANNOT ESTABLISH: A6 is recorded on #$EPIC but A5 is not. A6 only follows A5. Post the S5-A5-DONE line ($fmt, the real time ending in Z) or correct the A6 line."
     return 3
   fi
 
@@ -155,7 +165,9 @@ main() {
       else
         say "The legal bridge ends $BRIDGE (it can be extended once, to $LAPSE)."
       fi
-      say "Ways out: finish what is missing above, then give your go for A5; or schedule #$ROUTE (or run the manual key rotation procedure from the runbook, once the 48-hour check has passed)."
+      say "Ways out: finish what is missing above, then give your go for A5 in a session."
+      say "Or, once the 48-hour check has passed, run the manual key rotation procedure from the runbook with your go instead of waiting for #$ROUTE."
+      [ -z "$bad_note" ] || say "$bad_note"
       return 5
     fi
   fi
@@ -167,13 +179,14 @@ main() {
     say "Write it under knowledge-base/legal/audits/ and link it from #$LINKED and #$EPIC. The legal reviewer attests it separately."
     say "It needs the measured firewall-rule re-read from the host and the read-only list of Hetzner members on the private network."
     if [ "$left" -lt 0 ]; then
-      say "The Inngest row lapsed on $LAPSE ($(( -left )) days ago)."
+      say "The Inngest accepted-risk entry lapsed on $LAPSE ($(days "$(( -left ))") ago)."
     elif [ "$today_e" -gt "$bridge_e" ]; then
-      say "If the bridge was extended, the Inngest row lapses $LAPSE ($left days left)."
+      say "If the bridge was extended, the Inngest accepted-risk entry lapses $LAPSE ($(days "$left") left)."
     else
-      say "The Inngest row lapses $LAPSE ($left days left)."
+      say "The Inngest accepted-risk entry lapses $LAPSE ($(days "$left") left)."
     fi
-    say "When it is filed, post this line on #$EPIC: S6-A6-DONE: <$fmt>"
+    say "When it is filed, post this line on #$EPIC, with the real UTC time: S6-A6-DONE: $fmt"
+    [ -z "$bad_note" ] || say "$bad_note"
     return 5
   fi
 
@@ -203,8 +216,11 @@ main() {
   else
     say "The dashboard-send defect (#$REPLAY) is not fixed: run A5 in a quiet window with no sends in flight, and check for lost sends afterwards."
   fi
-  [ "$a5" != bad ] || say "A line starting S5-A5-DONE: was found on #$EPIC but is not in the right format, so it was ignored. Use $fmt."
-  say "Give your go for A5 in a session, naming the rotation. When it is done, post this line on #$EPIC: S5-A5-DONE: <$fmt>"
+  if [ "$today_e" -ge "$deadman_e" ]; then
+    say "The legal bridge date is $BRIDGE (it can be extended once, to $LAPSE), so this is time-sensitive."
+  fi
+  [ -z "$bad_note" ] || say "$bad_note"
+  say "Give your go for A5 in a session, naming the rotation. When it is done, post this line on #$EPIC, with the real UTC time: S5-A5-DONE: $fmt"
   return 5
 }
 

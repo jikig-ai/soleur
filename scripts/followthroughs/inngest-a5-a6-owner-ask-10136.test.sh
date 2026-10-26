@@ -189,7 +189,7 @@ expect "row 3 beats row 2: A5 recorded while the route is open still asks A6" 5 
 # --- row 2: the bridge-risk ask ---------------------------------------------------------------------------------
 reset_fixture
 run_case 2026-11-09
-expect "row 2: from 2026-11-09 with the route open the bridge-risk ask fires" 5 "schedule"
+expect "row 2: from 2026-11-09 with the route open the bridge-risk ask fires" 5 "Ways out"
 reset_fixture
 run_case 2026-11-08
 expect "row 2 boundary: the day before the dead-man stays quiet" 2 "waiting on the 48-hour check"
@@ -198,7 +198,7 @@ run_case 2026-11-13
 expect "row 2: after the bridge date the text says it has passed" 5 "has passed"
 reset_fixture; GH_ISSUE_10540="CLOSED:NOT_PLANNED"
 run_case 2026-11-09
-expect "row 2: a route closed as not planned is not a landed route" 5 "schedule"
+expect "row 2: a route closed as not planned is not a landed route" 5 "Ways out"
 reset_fixture; GH_ISSUE_10540="CLOSED:COMPLETED"
 run_case 2026-11-09
 expect "dead-man: route landed but the soak still open past 2026-11-09 still warns" 5 "has not finished" "is not done"
@@ -207,7 +207,7 @@ run_case 2026-11-09
 expect "dead-man: a soak closed without a completed result warns" 5 "closed without a completed result"
 reset_fixture; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_11215="CLOSED:COMPLETED"
 run_case 2026-11-09
-expect "dead-man off: soak and route both complete means the A5 ask, not the warning" 5 "A5 is ready" "bridge"
+expect "dead-man off: soak and route both complete means the A5 ask, not the warning" 5 "A5 is ready" "cannot start yet"
 reset_fixture
 run_case 2026-11-12
 expect "row 2 boundary: on the bridge date itself the text says it ends" 5 "ends 2026-11-12" "The legal bridge date of"
@@ -217,7 +217,7 @@ expect "row 2: after the extended date the text says so" 5 "extended date of 202
 # soak open and past the date: the bridge-risk row must come BEFORE the soak rows
 reset_fixture; GH_ISSUE_11215="OPEN:"
 run_case 2026-11-10
-expect "ordering: the date risk is evaluated before the soak rows" 5 "schedule"
+expect "ordering: the date risk is evaluated before the soak rows" 5 "Ways out"
 
 # --- rows 4 to 6: the soak and the route -----------------------------------------------------------------------
 reset_fixture
@@ -233,7 +233,7 @@ expect "row 6: the soak passed but the route is open" 2 "blocked on #10540"
 # --- row 7: the A5 ask ------------------------------------------------------------------------------------------
 reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_10543="OPEN:"
 run_case 2026-10-30
-expect "row 7: soak passed and route landed asks for A5" 5 "replaces the scheduler's signing key"
+expect "row 7: soak passed and route landed asks for A5" 5 "replaces the scheduler's signing key" "time-sensitive"
 cases=$((cases + 1)); grep -qF "quiet window" <<<"$OUT" && grep -qF "S5-A5-DONE" <<<"$OUT" \
   && pass "row 7: with #10543 open the ask names the quiesced window and the done line" \
   || fail "row 7: the ask lacks the quiesced window or the done line"
@@ -241,7 +241,41 @@ reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLET
 run_case 2026-10-30
 expect "row 7: with #10543 fixed the ask drops the quiesced window" 5 "replaces the scheduler's signing key" "quiet window"
 
-# --- the A6 ask after the lapse date; A6 without A5; malformed anchors -----------------------------------------------
+reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"
+run_case 2026-11-10
+expect "row 7: past the dead-man date the A5 ask carries the bridge urgency" 5 "so this is time-sensitive"
+
+# --- the A6 ask around the bridge and lapse dates; A6 without A5; malformed anchors ----------------------------------
+# Equivalence note: clearing ST/REASON at the top of issue_state() is defence in depth, not a behaviour the suite can
+# observe: every caller (the dead-man soak and route reads, the soak, route and replay reads) returns 3 on a failed
+# read, so a stale value is never consulted. A mutant removing the clearing therefore survives, by design.
+reset_fixture
+mk_comments "owner1|S5-A5-DONE: 2026-11-01T10:00:00Z"
+run_case 2026-11-20
+expect "row 3: between the bridge date and the lapse date the A6 ask hedges and counts down" 5 "If the bridge was extended, the Inngest accepted-risk entry lapses 2026-12-10 (20 days left)"
+reset_fixture
+mk_comments "owner1|S5-A5-DONE: 2026-11-01T10:00:00Z"
+run_case 2026-12-10
+expect "row 3 boundary: on the lapse date it is 0 days left, not yet lapsed" 5 "(0 days left)" "lapsed on"
+reset_fixture
+mk_comments "owner1|S5-A5-DONE: 2026-11-01T10:00:00Z"
+run_case 2026-12-09
+expect "row 3: one day left is singular" 5 "(1 day left)" "1 days"
+reset_fixture
+run_case 2026-12-10
+expect "row 2 boundary: on the lapse date the bridge has passed but the extended date has not" 5 "has passed" "extended date"
+reset_fixture
+mk_comments "owner1|S5-A5-DONE: 2026-11-01T10:00:00Z" "owner1|S6-A6-DONE: soon"
+run_case 2026-11-05
+expect "anchor: a malformed S6 line is named in the A6 ask" 5 "S6-A6-DONE: was found" "both recorded"
+reset_fixture
+mk_comments "owner1|S5-A5-DONE: 2026-11-01Tgarbage"
+run_case 2026-11-10
+expect "anchor: a malformed S5 line is named in the dead-man warning too" 5 "S5-A5-DONE: was found"
+reset_fixture
+mk_comments "owner1|S5-A5-DONE: 2026-13-45T99:99:99Z"
+run_case 2026-10-30
+expect "anchor: a well-shaped but impossible time is not an anchor" 2 "waiting on the 48-hour check"
 reset_fixture
 mk_comments "owner1|S5-A5-DONE: 2026-11-01T10:00:00Z"
 run_case 2026-12-13
@@ -257,7 +291,7 @@ expect "anchor: a malformed time is not an anchor (soak still gates)" 2 "waiting
 reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"
 mk_comments "owner1|S5-A5-DONE: 2026-11-01Tgarbage"
 run_case 2026-10-30
-expect "anchor: a malformed S5 line is named in the A5 ask" 5 "not in the right format"
+expect "anchor: a malformed S5 line is named in the A5 ask" 5 "not a real UTC time"
 reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_10543="CLOSED:NOT_PLANNED"
 run_case 2026-10-30
 expect "row 7: a replay-defect tracker closed as not planned is not 'fixed'" 5 "quiet window" "is fixed"
@@ -297,7 +331,7 @@ for r in "${ALL_RCS[@]}"; do case "$r" in 2|3|5) : ;; *) bad_rc="$bad_rc $r" ;; 
 
 cases=$((cases + 1))
 hyg=""
-for tok in owner1 drive-by hetzner "CLO-internal" INNGEST_SIGNING_KEY INNGEST_EVENT_KEY CANARY-LEAK-7f3; do
+for tok in owner1 drive-by hetzner- "CLO-internal" INNGEST_SIGNING_KEY INNGEST_EVENT_KEY CANARY-LEAK-7f3; do
   grep -qF -- "$tok" <<<"$ALL_OUT" && hyg="$hyg $tok"
 done
 [[ -z "$hyg" ]] && pass "no output line names a login, a host, a key name or internal text" || fail "output hygiene: found:$hyg"
@@ -308,7 +342,7 @@ cases=$((cases + 1))
   && pass "the probe reads anchors through trusted_verdict_bodies on the epic" \
   || fail "the probe does not call trusted_verdict_bodies on the epic"
 cases=$((cases + 1))
-gh_calls="$(grep -nE '(^|[^[:alnum:]_-])gh (issue|api|pr|search)' "$PROBE" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+gh_calls="$(grep -nE '(^|[^[:alnum:]_./-])gh[[:space:]]+[a-z]' "$PROBE" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v 'for need in' || true)"
 if [[ "$(grep -c . <<<"$gh_calls")" -eq 1 ]] && grep -qF 'gh issue view "$1" --repo "$REPO" --json state,stateReason' <<<"$gh_calls"; then
   pass "the probe's only gh call is the state read (every comment read goes through the trusted lib)"
 else
@@ -322,7 +356,8 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
     "$((passes + fails))" "$cases" >&2
   exit 1
 fi
-MIN_ASSERTIONS=40
+# Exact on purpose: deleting any case must red the suite (a floor with slack is attack budget).
+MIN_ASSERTIONS=48
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1
