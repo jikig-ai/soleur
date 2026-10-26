@@ -8,6 +8,7 @@ Branch: feat-one-shot-10924-p4b-kb-consumers-selection. Issue: #10924 (Ref only)
 - 0.1 Add contract-suite rows T1-T15, H1-H3 to `plugins/soleur/scripts/affected-tests.test.sh` (fixture repos, stub delegated runner, ledger with sequence numbers); spell the pattern string-joined.
 - 0.2 Run the suite once and confirm RED for the right reason (no hook yet).
 - 0.3 Pin `content_trigger_paths`: verify each candidate glob matches at least one tracked file; re-run the 150-commit rate measurement for the final set; keep it at or under 10 percent; record command and figure for the PR body.
+- 0.4 Record the wall time of `bash scripts/test-affected-kb-consumers.test.sh` on this checkout (cold and warm derive cache) for the PR body; the manifest weight is 91 s and a cold run under sibling load is far higher.
 
 ## Phase 1: the lib
 

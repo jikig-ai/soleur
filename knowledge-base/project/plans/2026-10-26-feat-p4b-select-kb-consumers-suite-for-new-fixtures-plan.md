@@ -10,6 +10,23 @@ type: feat
 
 Spec lacks valid lane: defaulted to cross-domain (fail-closed). No `spec.md` exists for this one-shot branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Sections enhanced:** Research Insights, Dependencies & Risks, Acceptance Criteria (verification passes; no design change)
+**Verification passes used:** mechanical halt gates 4.6 (User-Brand Impact), 4.7 (Observability), 4.8 (PAT shapes), 4.9/4.10/4.13 (not triggered: no UI file, no store or `.tf`, no new autonomous task), 4.11 (`lint-guard-contract.py`), 4.12 (Scope Check); a control measurement of the selector; line-anchor and rule-ID verification. A 40-agent fan-out was not run: the plan is a single-gate bash change whose design was already ruled by the CTO and reviewed by a three-seat panel, so extra research agents would re-derive the same code reads.
+
+### Key Improvements
+
+1. Control measurement added: the same `--print-selection` run on a `knowledge-base/` path selects the ratchet (`AFFECTED_SELECTED scripts/test-affected-kb-consumers 1`, selected=121 of 670, `fallback=none`), so the fixture-path `0` is the selector's real behavior and not a harness artifact.
+2. Cold-cache cost risk named: the ratchet shells out to `test-all.sh --enumerate-commands` and `--print-selection`; on a cold derive cache under sibling load the figure is far above the 91 s weight (the measuring run here exceeded 10 minutes while a sibling `test-all.sh` ran). Phase 0 records the wall time of the extra command on this checkout.
+3. Every line anchor in the plan was re-read against the file (`affected-tests.sh` 473, 489, 701, 717, 903 are the five `finish 0` exits the eligibility flags precede; `affected_glob_match` at 595; config load at 369-370).
+
+### New Considerations Discovered
+
+- Sibling sessions share the machine: a foreign `test-all.sh --affected` was running during this deepen pass; the contract suite must not assert on ambient process state (AC rows use synthetic ledgers only).
+
+
 ## Overview
 
 Item P4b of the follow-up list on #10924 (umbrella #9757, `Ref` only, neither is closed by this PR): the
@@ -64,6 +81,17 @@ test and fixture trees excluding `apps/` 11/150 (7.3%); plus `scripts/**` 16/150
 **Institutional learnings applied.** 2026-10-01 grep-q pipefail (grep a FILE, never `producer | grep -q`); the 73% whole-content trigger (added lines only, path-limited);
 ratchet authoring constraint (a literal `knowledge-base/` on a line without a fixture word is read as a real read: string-join it in the new test rows, e.g. `"knowledge""-base/"`);
 2026-10-14 ratchets no file query selects (explicit pre-push list below); 2026-10-22 gate queued 40+ min behind stale runs (use `list_runs` / `kill_mine` from `plugins/soleur/scripts/lib/proc.sh`, CI is the authority when the local run defers).
+
+**Deepen-pass verification (2026-10-26).**
+
+```text
+bash scripts/test-all.sh --print-selection --paths=plugins/soleur/test/fixtures/new-fixture.sh
+  AFFECTED_SELECTED scripts/test-affected-kb-consumers 0 edge:declared ; AFFECTED_SUMMARY selected=247 of=671 fallback=none
+bash scripts/test-all.sh --print-selection --paths=knowledge-base/project/learnings/x.md      (control)
+  AFFECTED_SELECTED scripts/test-affected-kb-consumers 1 edge:declared ; AFFECTED_SUMMARY selected=121 of=670 fallback=none
+```
+
+Cited issues re-read live: #10924 open (P4a ticked), #9757 open, #11164 draft PR, #11166 filed this run. The plan cites no SHA, tag, vendor status code or AGENTS rule ID that needs a live resolve (rule IDs in the plan body were grepped against `AGENTS.md`/`AGENTS.rules.md`: none missing).
 
 **Open points a deepen pass must not re-litigate:** locus (ruled C), fail direction (run), exit folding (worst-of), no ADR (all in `decision-challenges.md`).
 
@@ -252,7 +280,7 @@ discoverability_test:
 ### Phase 0 - RED first and measurement (`cq-write-failing-tests-before`)
 
 1. Add the contract-suite rows T1-T15 (below) to `plugins/soleur/scripts/affected-tests.test.sh` against fixture repos with stub runners; run once and confirm RED for the right reason (no hook yet).
-2. Pin `content_trigger_paths`: verify each candidate glob matches at least one tracked file (`git ls-files | grep` translation), re-run the 150-commit rate measurement for the final set, record the figure in the PR body; if above 10 percent, drop globs until at or under.
+2. Pin `content_trigger_paths`: verify each candidate glob matches at least one tracked file (`git ls-files | grep` translation), re-run the 150-commit rate measurement for the final set, record the figure in the PR body; if above 10 percent, drop globs until at or under. Also record the wall time of `bash scripts/test-affected-kb-consumers.test.sh` on this checkout, cold and warm derive cache (tasks.md 0.4).
 
 ### Phase 1 - the lib
 
@@ -357,6 +385,7 @@ Fixture-repo rows in `plugins/soleur/scripts/affected-tests.test.sh` (synthesize
 - **Selection split across two layers (named by the CTO).** The runner's `--print-selection` and CI's replay mirror will not show the gate-added run. Mitigation: the marker field, `--explain`, and CI `merge_group` running the ratchet on the candidate tree.
 - **Config string runs as a command.** Same trust level as `test_command`; a PR can edit the config and the code together (consistency, not integrity); CI is the independent gate.
 - **False-trigger rate.** Path-limited, added-lines-only, fixed-string; measured 7.3 percent for the test trees; `scripts/**` whole-tree was 10.7 percent and is not used. Flip evidence: above 10 percent, narrow the globs.
+- **Cold-cache cost of the extra command.** The ratchet itself runs `test-all.sh --enumerate-commands` and `--print-selection --paths=README.md`; on a cold derive cache with a sibling `test-all.sh` running, wall time is many minutes, not the 91 s manifest weight. The command runs under `affected_bound` with the 2400 s budget: with CI detected it defers (rc 6, CI authoritative); the PR records the measured wall time. Phase 0 (tasks.md 0.4) records it.
 - **Local gate queueing.** The 2026-10-22 session sat 40+ minutes behind its own stale runs; use `list_runs` / `kill_mine` from `plugins/soleur/scripts/lib/proc.sh` before a gate run, and treat CI as authoritative on `AFFECTED_GATE_BUDGET_DEFERRED`.
 - **Moving `affected_glob_match` up within `affected-tests.sh`.** A pure-function reorder; the existing `inert_paths` probe rows pin it. The hook calls it at run time and treats a missing definition as `scan-error`.
 - **Dynamic scoping inside `finish()`.** Helpers called from it see its locals (`rc`, `mode`, `reason`); the hook uses `_ct_`-prefixed `local` variables only.
