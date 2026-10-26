@@ -22,8 +22,8 @@ The Inngest host's rendered `user_data` sits 280 B under Hetzner's 32,768 B cap 
 Three kinds of text go, and none of them is host logic:
 
 - **A. Dead references to the retired LUKS cutover trio** (148 B). Image `vinngest-v1.1.61` is the merge commit of #10966, which deleted `inngest-luks-cutover.{sh,service,timer}` from the bootstrap image. The template still stages the trio, quiesces it, polls its service and writes the one environment file only it read. `inngest-carrier-vocabulary.test.sh` already says those references stay "until the user_data PR lands".
-- **B. Five unit `Description=` strings no test quotes** (about 120 B of the combined budget).
-- **C. Four logger message tails** that are explanatory prose after an em dash (about 280 B). The prose moves into `#` comment lines directly above each message, which the render strips for free, so the knowledge stays in the source and the shipped markers, fields and `#7228` reference are unchanged.
+- **B. Five unit `Description=` strings no test quotes** (100 B).
+- **C. Four logger message tails** that are explanatory prose after an em dash (272 B). The prose moves into `#` comment lines directly above each message, which the render strips for free, so the knowledge stays in the source and the shipped markers, fields and `#7228` reference are unchanged.
 
 The PR also extends the existing Guard 3 stem scan to cover `cloud-init-inngest.yml`, so change A cannot regress silently (ruling R3).
 
@@ -80,7 +80,7 @@ Command for every row: `bash inngest-userdata-budget.sh` run inside a scratch co
 | D (rejected) | blank lines removed from the template | about +90 |
 | S (rejected) | `inngest_rationale_strip` widened to blank lines | +160 alone (280 to 440) |
 
-The chosen set A + B(5) + C measures 31,968 B stored, 800 B headroom, 520 B trimmed, which is 20 B above the ruled floor of 780 B. The margin is thin on purpose (D is the ruled fallback worth about 90 B) and the figure is deterministic, so Phase 0 and the final gate re-measure after the rebase.
+The chosen set A + B(5) + C measures 31,968 B stored, 800 B headroom, 520 B trimmed, which is 20 B above the ruled floor of 780 B. The margin is thin (D, worth about 90 B, covers only a small shortfall and cannot replace C) and the figure is deterministic, so Phase 0 and the final gate re-measure after the rebase.
 
 Pre-checks done on the chosen scratch tree: the `| grep -q` census count in the template stays 4; the `ZIREF=` and `IREF=` lines are byte-identical; the non-comment text has zero hits for the three trio stems (it has 6 today).
 
@@ -132,12 +132,7 @@ Out of scope, with reasons in the Cut List: any LUKS first-boot logic, `infra-co
 
 What the push apply does when a `user_data` edit would replace `hcloud_server.inngest`: nothing, because the resource is pruned by `-target`; the `server_touched` abort exists only on the dispatch path. The `[skip-web-platform-apply]` marker therefore buys no safety for this PR: it skips the push apply, it does not prevent a replace, and under `COMMIT_MESSAGES` squash it must sit on its own line in a branch commit body or it silently fails. Decision: no marker.
 
-Pre-merge gate (all must hold at merge time, on the rebased branch):
-
-1. `bun test plugins/soleur/test/terraform-target-parity.test.ts` is green on the trial merge.
-2. `git diff origin/main -- apps/web-platform/infra/cloud-init-inngest.yml` touches no `ZIREF` or `IREF` line.
-3. `bash apps/web-platform/infra/inngest-userdata-budget.sh --json | jq -e '.headroom >= 780'` exits 0.
-4. The CI job `inngest-userdata-budget` is green on the PR and its log line is quoted in the PR body next to the offline figure.
+Pre-merge gate (all must hold at merge time, on the rebased branch): AC1 (headroom), AC2 (no `ZIREF` or `IREF` line touched), AC8 (parity green on the trial merge, diff scope) and AC9 (the CI job `inngest-userdata-budget` is green and its log line is quoted in the PR body next to the offline figure).
 
 Post-merge read, agent-run, no host contact: the push-apply run for the merge sha concludes success, its log has no `hcloud_server.inngest` in plan or refresh, and the plan is 0 changes (`gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha>` then `gh run view <id> --log`, grep for the address). Better Stack check for "nothing was replaced": no new `boot_id` or boot row for `host=soleur-inngest` after the merge time, with the query window starting before the merge and the phone-home cadence stated in the PR evidence. No Doppler, Hetzner or SSH read.
 
@@ -233,29 +228,14 @@ No persistent store and no new connection are introduced (a template trim). The 
 | 5 | Brace form `inngest-luks-cutover.{sh,service,timer}` in a code line | RED (`trio-named`) |
 | 6 | Snake-case `inngest_luks_cutover` field and upper-case `INNGEST_LUKS_CUTOVER_SH` in the template | RED (`trio-named`) |
 | 7 | Remove the template file from the fixture tree (the guard's own dispatch: unreadable is a violation, never a skip) | RED (`unreadable`) |
-| 8 | Drop `cloud-init-inngest.yml` from the `DELIVERY_FILES` array (a guard reporting nothing checked) | RED (the generated per-file `trio-` row for it disappears; a positive control that the scan reads the file, asserted by name in the suite, must go RED) |
 
-Harness rows: edit the verdict helper `kills()` to ignore the tag and the negative controls at the top of the suite must turn red (they exist: `neg-noop`, `neg-wrong-tag`, `neg-green-noop`, `neg-green-overblock`); add one negative control for the new file (an appended no-op line must not count as a kill). Must-PASS rows (non-canonical, permitted by the contract): a whole-line `#` comment naming the retired trio in the template stays GREEN (history prose is legal), and a code line whose trailing text is a comment that names the trio is RED (comment stripping must not eat code). Anchor: the stored values here are the `NEEDLES_PINNED` literal and `CARRIER_FLOOR`; this PR changes neither, and the scan judges the SOURCE tree, so the anchor that a weakening PR also has to move is the test file itself, reviewed in the same diff.
+Harness rows: the suite's existing negative controls (`neg-noop`, `neg-wrong-tag`, `neg-green-noop`, `neg-green-overblock`) already judge the verdict helpers and need no new row; the per-file `trio-<basename>` row is generated from `DELIVERY_FILES`, so dropping the template from the array removes its row and row 1 (the real tree against the unmodified template) is the positive control that the scan reads the file. Must-PASS rows (non-canonical, permitted by the contract): a whole-line `#` comment naming the retired trio in the template stays GREEN (history prose is legal), and a code line whose trailing text is a comment that names the trio is RED (comment stripping must not eat code). Anchor: the stored values here are the `NEEDLES_PINNED` literal and `CARRIER_FLOOR`; this PR changes neither, and the scan judges the SOURCE tree, so the anchor that a weakening PR also has to move is the test file itself, reviewed in the same diff.
 
 Post-change survivor check (the mutation that defeats the mechanism after the remediation lands): the remediation deletes text and writes only `#` comments, so the first question is whether the new comment text matches the classifier; it does not, because the scan strips whole-line comments before matching, and the moved prose names none of the stems.
 
-### Guard 2 - the quiesce battery stays non-vacuous after the trio leaves the loop
+### Quiesce battery adaptation (not a new guard)
 
-**Property.** The provision script still holds the bootstrap off while a flip FSM step is mid-flight, and restarts exactly the timers it stopped when an attempt fails.
-
-**Assembly.** `soleur-inngest-provision`'s quiesce block (timer loop, stop line, busy-check loop, flip state slot) as executed by Tier A (`dash -u` on the rendered script) and Tier B (systemd in a privileged container) of `cloud-init-inngest-provision-unit.test.sh`; the rows that pin it are T4, Q1, Q4, Q5 and the G2 mutation rows G2-r12 to G2-r15.
-
-**Mutation matrix:**
-
-| # | Mutation | Expected |
-|---|---|---|
-| 1 | Change the busy test `= activating` to `= activatingX` (existing row G2-r12) | RED |
-| 2 | Delete the line that restarts each timer recorded in `_fsm_timers_stopped` (existing row G2-r15) | RED |
-| 3 | Re-point of the old G2-r14 row: empty the busy-check loop (the flip service removed from the `for _u in` list) | RED |
-| 4 | Remove the flip state-slot test (`*'"flag":"flipping"'*`) so Q4 no longer holds the bootstrap off | RED |
-| 5 | Rename the flip timer in the stop line only (the stop and the loop disagree), after a compliant first member | RED |
-
-Harness rows: the suite's own exact-count control (`rows: executed=N/N (RED a/a, must-PASS b/b)`) is edited to the measured post-change counts, and a deliberately miscounted copy must be rejected; must-PASS rows Q5 (settled flag, not busy) and TD3 stay. Anchor: none beyond the suite's exact inventory; the work phase records the executed counts from a run, not from the header.
+`cloud-init-inngest-provision-unit.test.sh` pins the quiesce loop with rows that name the retired trio (T4, Q2, Q3, Q5, the `Q_OPEN` constant and the G2-r14 mutation row). Change A removes their inputs, so the rows are re-pointed or dropped: T4 on the flip timer, Q2 and Q3 and the `luks-cutover` fixture state dropped, Q1, Q4 and Q5 kept (Q5 with the flip flag only), `Q_OPEN` and G2-r14 re-pointed to the new loop text (G2-r14 now empties the busy-check loop), G2-r12 and G2-r15 unchanged. No mutation rows are added. The exact executed-row counts come from a run of the suite, never from the header.
 
 ## Open Code-Review Overlap
 
@@ -302,7 +282,7 @@ Related open work: #11140 (leftovers from the trio retirement) item 7 is the STA
 
 - `apps/web-platform/infra/cloud-init-inngest.yml` (A1, A2, A3, B x5, C x4)
 - `apps/web-platform/infra/inngest-carrier-vocabulary.test.sh` (Guard 1)
-- `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` (Guard 2)
+- `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh` (quiesce battery adaptation)
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` (marker rows, only if the tails' content is missing)
 
 ## Files to Create
@@ -316,17 +296,17 @@ None in the product tree. Planning artifacts only: this plan, `knowledge-base/pr
 - 0.1 Rebase onto `origin/main` (never merge main in). Re-run `bash apps/web-platform/infra/inngest-userdata-budget.sh --json` and record the baseline; if main moved, re-measure the candidate set in a scratch copy before editing.
 - 0.2 `git diff origin/main --stat` is empty for the template; confirm the `ZIREF` and `IREF` lines and the `| grep -q` count (4) before editing.
 - 0.3 Re-grep the five Description strings and the four message tails across `*.test.*`, `scripts/` and `.github/` for new pins since this plan.
-- 0.4 File or comment on the tracking issue for the deferred `--min-headroom 300` floor (#11140 gets a new item or a new issue is filed, `Ref` both ways) before the PR is marked ready.
+- 0.4 Add the deferred `--min-headroom 300` floor as a new item on #11140 (a comment, `Ref` both ways) before the PR is marked ready.
 
 ### Phase 1 - Red tests first
 
 - 1.1 Guard 1 rows in `inngest-carrier-vocabulary.test.sh`; run it: the real-tree row is RED (6 stem hits).
-- 1.2 Guard 2 adaptation in the provision-unit suite is prepared but its green state depends on Phase 2, so run only the rows that exist today and keep the old battery until the template changes in the same commit; record that the old rows still pass against the unmodified template (control).
+- 1.2 Quiesce battery adaptation in the provision-unit suite is prepared but its green state depends on Phase 2, so run only the rows that exist today and keep the old battery until the template changes in the same commit; record that the old rows still pass against the unmodified template (control).
 
 ### Phase 2 - Template edits
 
 - 2.1 A1, A2, A3, then measure; 2.2 B, then measure; 2.3 C, then measure. Record the headroom after each step in the PR body (expected 428 B, 528 B, 800 B).
-- 2.4 If the final figure is below 780 B, apply the ruled fallbacks in this order only: re-measure after the rebase; if C must be reverted for an alert-match reason, take the shortfall from blank-line removal in the template (about 90 B, ruled for that case only).
+- 2.4 If the final figure is below 780 B after the rebase, re-measure first (a moved baseline is the likely cause). Blank-line removal in the template (about 90 B, ruled as the fallback in R1) closes a shortfall of up to about 90 B only. If C has to be reverted for an alert-match reason, the floor is NOT reachable in this PR: A + B(5) measures 528 B and adding blank-line removal gives about 618 B, below 780 B. In that case stop, record it, and re-ask the CTO (ruling note P4); do not ship below the floor and do not present blank-line removal as sufficient.
 
 ### Phase 3 - Verification (one suite at a time, stdin from `/dev/null`, long ones in the background with a completion wait)
 
@@ -376,7 +356,7 @@ PR body carries: the baseline and per-step headroom, the CI log line of the budg
 
 ## Dependencies & Risks
 
-- **Thin margin over the floor (800 B against 780 B).** Mitigated by re-measuring after the rebase and by the ruled fallback (blank lines, about 90 B). A concurrent edit to the file (bot pin bumps change only the 64-hex digest, same length) cannot move the figure materially.
+- **Thin margin over the floor (800 B against 780 B).** Mitigated by re-measuring after the rebase and by the ruled fallback for a small shortfall (blank lines, about 90 B). The fallback cannot replace C: reverting C leaves the PR about 160 B short of the floor, which means stop and re-ask (P4). A concurrent edit to the file (bot pin bumps change only the 64-hex digest, same length) cannot move the figure materially.
 - **Better Stack alert definitions outside the repo were not readable.** Mitigated by keeping every marker, field and `#7228` verbatim; the R1 flip reverts only C if an alert keys on tail text.
 - **Fixture counts in the provision-unit suite are exact.** Mitigated by taking executed counts from a run; the header currently says 83 rows while the suite reports 88.
 - **Pinned text elsewhere.** Mitigated by Phase 0.3 re-grep and by running the full Phase 3 list (the affected-tests map has no entry for the template).

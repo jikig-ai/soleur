@@ -7,13 +7,13 @@ Plan: `knowledge-base/project/plans/2026-10-26-chore-trim-inngest-user-data-befo
 - [ ] 0.1 Rebase onto `origin/main` (never merge main in); re-run `bash apps/web-platform/infra/inngest-userdata-budget.sh --json` and record the baseline (280 B headroom expected)
 - [ ] 0.2 Record the template's `ZIREF=` and `IREF=` lines and the `| grep -q` count (4) before editing
 - [ ] 0.3 Re-grep the five Description strings and the four message tails across `*.test.*`, `scripts/` and `.github/` for pins added since the plan
-- [ ] 0.4 File or extend the tracking issue for the deferred `--min-headroom 300` floor (add an item to #11140 or a new issue), before the PR is marked ready
+- [ ] 0.4 Add the deferred `--min-headroom 300` floor as a new item on #11140 (a comment), before the PR is marked ready
 
 ## Phase 1: Red tests first
 
 - [ ] 1.1 In `apps/web-platform/infra/inngest-carrier-vocabulary.test.sh` add `apps/web-platform/infra/cloud-init-inngest.yml` to `DELIVERY_FILES`
-  - [ ] 1.1.1 Add the Guard 1 mutation rows (bare stem, STAGED re-add, quiesce-loop re-add after a compliant first member, brace form, snake and upper-case spellings, file removed, file dropped from the array)
-  - [ ] 1.1.2 Add the must-PASS rows (stem in a whole-line comment stays GREEN; a code line with a trailing comment naming the stem is RED) and one negative control for the new file
+  - [ ] 1.1.1 Add the Guard 1 mutation rows (unmodified template, bare stem, STAGED re-add, quiesce-loop re-add after a compliant first member, brace form, snake and upper-case spellings, file removed)
+  - [ ] 1.1.2 Add the must-PASS rows (stem in a whole-line comment stays GREEN; a code line with a trailing comment naming the stem is RED) (no new negative control; the existing `neg-*` controls stand)
   - [ ] 1.1.3 Replace the header's "NOT COVERED (1)" paragraph
   - [ ] 1.1.4 Run the suite: the real-tree row is RED with 6 stem hits (the failing test for change A)
 - [ ] 1.2 Prepare the quiesce-battery adaptation in `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh`: T4 on the flip timer; drop Q2 and Q3 and the `luks-cutover` fixture state; keep Q1, Q4, Q5 (flip flag only); re-point `Q_OPEN` and the G2-r14 mutation row; take row counts from an executed run (the header says 83, the suite reports 88)
@@ -25,7 +25,7 @@ Plan: `knowledge-base/project/plans/2026-10-26-chore-trim-inngest-user-data-befo
 - [ ] 2.3 A3: delete the `/etc/default/inngest-luks-volumes` write and `grep -qx` lines and their comment; expected 428 B
 - [ ] 2.4 B: shorten the five untested Descriptions (nftables, bs-token-restage, provision.timer, config-refresh.service, config-refresh.timer); leave the LUKS-open and provision.service Descriptions untouched; expected 528 B
 - [ ] 2.5 C: cut the four logger message tails to marker + fields + `#7228`, moving the prose into whole-line `#` comments above each line with no `${` or `%{` in them; expected 800 B
-- [ ] 2.6 Confirm the headroom is at least 780 B (`jq -e '.headroom >= 780'`); if not, apply only the ruled fallback (blank lines, about 90 B) per the plan
+- [ ] 2.6 Confirm the headroom is at least 780 B (`jq -e '.headroom >= 780'`); if short, re-measure after the rebase; blank-line removal (about 90 B) closes a shortfall of up to about 90 B only; if C had to be reverted the floor is not reachable here, so stop and re-ask the CTO (note P4)
 - [ ] 2.7 Runbook sync: `knowledge-base/engineering/operations/runbooks/inngest-server.md` marker rows say what the removed tails said (add only if missing)
 
 ## Phase 3: Verification (one suite at a time)
