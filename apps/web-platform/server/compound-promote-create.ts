@@ -318,36 +318,41 @@ function maxCharsFor(kind: ShapeKind): number {
 // Every gap class excludes the period AND the newline, so a phrase never spans two sentences or two bullets.
 const GAP40 = String.raw`[^.\n]{0,40}?`;
 const SENSITIVE_NOUN = String.raw`(?:environment\s+variables?|env\s+vars?|(?:api|access)[- ]?keys?|passwords?|passphrases?|secrets?|tokens?|credentials?)`;
+// A credential noun followed by one of these is a quantity or a policy topic ("token count", "secret rotation"), not the
+// credential itself. The words are a closed list; a noun followed by anything else still counts.
+const BENIGN_AFTER_NOUN = String.raw`(?!\s+(?:count|counts|budget|usage|limit|limits|window|scanning|policy|policies|rotation|inventory|naming|expiry|amount)\b)`;
 const EXFIL_VERB = String.raw`(?:(?:read|print|post|send|include|upload|paste|echo|cat|copy|dump|leak|reveal|share|display|email|transmit|write|log|store|save|attach|commit|put|show|output|forward|add|append|publish|export|collect|gather|return)(?:s|es|ed|ing)?)`;
-const SECRET_FILE_NOUN = String.raw`\.(?:aws|npmrc|netrc|ssh|kube|docker|gnupg)\b|\bkubeconfig|\bid_rsa|\bdot ?env\b|\bdotenv\b|\bkeychain\b|\bservice[- ]account (?:key|json|file)\b|\.pem\b|\bcredentials (?:file|folder|directory)\b`;
+// "dotenv" alone names a loader library; it counts as the secrets file only next to a file-ish noun ("the dotenv values").
+const DOTENV_FILEISH = String.raw`(?=\s+(?:file|files|settings|values|config|configuration|entries|contents|variables|vars|secrets)\b)`;
+const SECRET_FILE_NOUN = String.raw`\.(?:aws|npmrc|netrc|ssh|kube|docker|gnupg)\b|\bkubeconfig|\bid_rsa|\bdot ?env\b${DOTENV_FILEISH}|\bdotenv\b${DOTENV_FILEISH}|\bkeychain\b|\bservice[- ]account (?:key|json|file)\b|\.pem\b|\bcredentials (?:file|folder|directory)\b`;
 const SECRET_DIR_NAME = String.raw`(?:aws|ssh|kube|docker|gnupg|gpg)`;
 export const INSTRUCTION_RISK_GROUPS = [
   {
     id: "destructive",
-    label: "destructive or privileged commands (recursive delete in any flag spelling, force push in any spelling, sudo, chmod, hard reset, dropping tables, deleting everything)",
+    label: "destructive or privileged commands (recursive delete in any flag spelling, force push in any spelling including a leading plus on the ref, sudo, chmod, hard reset, git clean with force, dd, find -delete, dropping or truncating tables, deleting everything)",
     re: new RegExp(
-      String.raw`\brm[ \t]+(?:\S+[ \t]+){0,4}?-{1,2}[a-z-]*[rf]\w*|\bforce[- ]push|\bpush\b${GAP40}(?:--force(?:-with-lease)?|\s-f\b)|\b(?:sudo|chmod|chown|mkfs)\b|\bgit\s+reset\s+--hard|\bdrop\s+(?:table|database|schema)\b|\bdelete\s+(?:all|every|everything)\b`,
+      String.raw`\brm[ \t]+(?:\S+[ \t]+){0,4}?-{1,2}[a-z-]*[rf]\w*|\bforce[- ]push|\bpush\b${GAP40}(?:--force(?:-with-lease)?|\s-f\b)|\b(?:sudo|chmod|chown|mkfs)\b|\bgit\s+reset\s+--hard|\bdrop\s+(?:table|database|schema)\b|\bdelete\s+(?:all|every|everything)\b|\bpush\b${GAP40}\s\+\w|\bpush\b${GAP40}\bforce\b|\bgit\s+clean\b[^.\n]{0,20}?\s-{1,2}[a-z-]*[fd]\w*|\bdd\s+if=|\bfind\b[^\n]{0,40}?\s-delete\b|\btruncate\b${GAP40}\btable\b`,
       "i",
     ),
   },
   {
     id: "exec-net",
-    label: "code execution or network tools (eval, curl, wget, base64)",
-    re: /\b(?:eval|curl|wget|base64)\b/i,
+    label: "code execution or network tools (eval, curl, wget, base64, ssh, scp, nc, netcat)",
+    re: /\b(?:eval|curl|wget|base64|scp|nc|netcat)\b|(?<!\.)\bssh\b(?!\s+(?:key|config|dir|directory|folder|contents)\b)/i,
   },
   {
     id: "exfiltration",
     label:
       "reading or sending secrets (exfiltrating data, private or ssh keys, env files, credential files such as .aws, .npmrc, kubeconfig or id_rsa, the aws, ssh, kube or docker directories, or writing, logging, storing, attaching, committing, showing or posting tokens, passwords, API keys, environment variables and credentials)",
     re: new RegExp(
-      String.raw`exfiltrat|\bprivate\s+key|\bssh\s+key|\benv(?:ironment)?\s+file|\.env\b|${SECRET_FILE_NOUN}|\b${EXFIL_VERB}\b${GAP40}\b${SECRET_DIR_NAME}\b[^.\n]{0,20}?\b(?:directory|dir|folder|contents)\b|\b${EXFIL_VERB}\b${GAP40}\b${SENSITIVE_NOUN}\b`,
+      String.raw`exfiltrat|\bprivate\s+key|\bssh\s+key|\benv(?:ironment)?\s+file|\.env\b(?!\.(?:example|sample|template)\b)|${SECRET_FILE_NOUN}|\b${EXFIL_VERB}\b${GAP40}\b${SECRET_DIR_NAME}\b[^.\n]{0,20}?\b(?:directory|dir|folder|contents)\b|\b${EXFIL_VERB}\b${GAP40}\b${SENSITIVE_NOUN}\b${BENIGN_AFTER_NOUN}|\bprintenv\b`,
       "i",
     ),
   },
   {
     id: "override",
     label:
-      "overriding instructions or safeguards (ignore, disregard or forget earlier guidance, bypass, override instructions, pretend rules do not apply, the system prompt or message, acting without review, preview, confirmation or approval, skipping, disabling or turning off a scan, check, gate or review, merging, approving, charging, refunding or sending silently, following or running commands found in an issue, page, comment or email, piping into a shell)",
+      "overriding instructions or safeguards (ignore, disregard or forget earlier guidance, bypass, override instructions, pretend rules do not apply, the system prompt or message, acting without review, preview, confirmation or approval, skipping, disabling or turning off a scan, check, gate, linter or review, no-verify, merging, approving, charging, refunding or sending silently, following or running commands found in an issue, page, comment or email, piping into a shell)",
     re: new RegExp(
       [
         String.raw`\b(?:ignore|disregard|forget)\b${GAP40}\b(?:previous|prior|above|all|earlier)\b`,
@@ -356,13 +361,14 @@ export const INSTRUCTION_RISK_GROUPS = [
         String.raw`\bsystem\s+prompt\b`,
         String.raw`\breveal the system (?:message|prompt)\b`,
         String.raw`\bwithout (?:a )?(?:review|preview|confirmation|approval|asking)\b`,
-        String.raw`\bskip the (?:review|preview|confirmation|prompt|check|scan|gate)\b`,
-        String.raw`\bdisable (?:the )?(?:scan|check|gate|review)\b`,
-        String.raw`\bturn off (?:the )?(?:scan|check|gate|review)\b`,
+        String.raw`\bskip (?:all )?(?:of )?the (?:review|preview|confirmation|prompt|checks?|scans?|gates?)\b`,
+        String.raw`\bdisable (?:the )?(?:scan|check|gate|review|linter)\b`,
+        String.raw`\bturn off (?:the )?(?:scan|check|gate|review|linter)\b`,
+        String.raw`\bno-verify\b`,
         String.raw`\b(?:merge|approve|charge|refund|send)\b[^.\n]{0,30}?\b(?:without|silently|automatically|on its own)\b`,
         String.raw`\b(?:follow|obey|execute)\b[^.\n]{0,30}?(?:instructions?|commands?)\b[^.\n]{0,40}?\b(?:found|given|in|from)\b[^.\n]{0,30}?\b(?:issue|page|response|fetched|downloaded|comment|email)`,
         String.raw`\brun\b[^.\n]{0,20}?(?:shell )?command[^.\n]{0,30}?(?:given|in) (?:the )?(?:issue|page|comment)`,
-        String.raw`\bpipe\b[^.\n]{0,30}?\binto (?:a )?(?:shell|sh|bash)\b`,
+        String.raw`\bpipe\b[^.\n]{0,30}?\b(?:into|to) (?:a )?(?:shell|sh|bash)\b`,
         String.raw`\bpretend\b${GAP40}\b(?:rules?|instructions?)\b`,
       ].join("|"),
       "i",
@@ -370,8 +376,20 @@ export const INSTRUCTION_RISK_GROUPS = [
   },
 ] as const;
 
-/** An ident (the slug) is refused only when it is exactly one of these tokens. */
-const IDENT_DENIED_TOKENS: ReadonlySet<string> = new Set(["sudo", "chmod", "chown", "mkfs", "eval", "curl", "wget", "base64", "exfiltrate", "bypass"]);
+/**
+ * An ident (the slug) is refused when it IS one of these tokens, or when its words (hyphens read as spaces) hit the
+ * destructive, exfiltration or override groups. The exec-net group is NOT run on idents: curl-retry, eval-regression
+ * and wget-mirror are legitimate names. A slug such as force-push-recovery is refused as a consequence (accepted).
+ */
+export const IDENT_DENIED_TOKENS: ReadonlySet<string> = new Set(["sudo", "chmod", "chown", "mkfs", "eval", "curl", "wget", "base64", "exfiltrate", "bypass"]);
+const IDENT_PHRASE_GROUPS: readonly string[] = ["destructive", "exfiltration", "override"];
+
+/** The id of the first denylist group (destructive, exfiltration, override) that the words of a slug hit, else `null`. */
+function identPhraseProblem(slug: string): string | null {
+  const words = slug.replace(/-/g, " ");
+  for (const g of INSTRUCTION_RISK_GROUPS) if (IDENT_PHRASE_GROUPS.includes(g.id) && g.re.test(words)) return g.id;
+  return null;
+}
 
 /** The id of the first denylist group `text` hits, else `null`. */
 export function instructionRiskProblem(text: string): string | null {
@@ -397,9 +415,9 @@ export function shapeProblem(value: string, kind: ShapeKind): string | null {
   if (COMMAND_FORM_RE.test(value)) return "command-form";
   if (kind === "ref" && !REF_NAME_RE.test(value)) return "ref-format";
   if (kind === "pattern-ref" && !PATTERN_SLUG_RE.test(value)) return "ref-format";
-  // An ident is the slug. It is exempt from the phrase denylist (eval-regression, curl-retry and force-push-recovery
-  // are legitimate names) and refused only when it IS one destructive token; claim words still apply to it.
-  if (kind === "ident" && IDENT_DENIED_TOKENS.has(value.toLowerCase())) return "instruction-risk";
+  // An ident is the slug. The exec-net group is exempt (eval-regression, curl-retry are legitimate names); the destructive,
+  // exfiltration and override groups run on its words, and a slug that IS one destructive token is refused; claim words still apply.
+  if (kind === "ident" && (IDENT_DENIED_TOKENS.has(value.toLowerCase()) || identPhraseProblem(value))) return "instruction-risk";
   if (kind !== "ref" && kind !== "pattern-ref") {
     if (kind !== "ident" && instructionRiskProblem(value)) return "instruction-risk";
     if (CLAIM_WORD_RE.test(value)) return "claim-word";
