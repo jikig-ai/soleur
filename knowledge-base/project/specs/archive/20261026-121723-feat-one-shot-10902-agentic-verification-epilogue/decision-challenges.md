@@ -1,0 +1,17 @@
+# Decision challenges — feat-one-shot-10902-agentic-verification-epilogue
+
+Plan: `knowledge-base/project/plans/2026-10-26-feat-agentic-verification-epilogue-plan.md`
+Context: one-shot pipeline plan phase on Devin CLI subagent — no Agent/Task tool, so
+technical rulings are recorded as `pending - assumed:` defaults per the pipeline's
+technical-ruling convention, and no named review panel or domain leader could be
+spawned (self-review only).
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Property-test distribution `publish_date` — the recorded default 2026-10-29 was displaced by the guardrails spoke's scheduled 10-29 slot; the directive offers "auto-slot" or explicit pin | operator (schedule) | **2026-10-28 stands as the recorded default** — the closest free day to the superseded 10-29 default, keeping the spoke inside the arc's publish week (Oct 26–30) while the news peg still has value; Wed pins have direct precedent (PR #11158 pins Wed 2026-11-04) and the publisher is weekday-agnostic (`scripts/content-publisher.sh:884-896` — posts any `status: scheduled` + `publish_date == today`). The Tue/Thu-pure fallback is 2026-11-19 (next free slot after the five pinned spokes) if the operator prefers convention over recency. Reversal: edit `publish_date` before the daily publisher run |
+| Pinning the five arc spokes to their filename/blog dates vs leaving them to cron auto-slot | operator (schedule) | **Pinned to filename dates** (11-03, 11-05, 11-10, 11-12, 11-17 — the recorded defaults in the arc-spokes spec and all verified free Tue/Thu). Auto-slot was verified (`planPromotions` assigns ready drafts filename-asc to free Tue/Thu slots) but lands every spoke one slot late — property-test's earlier filename eats 11-03 — and re-slots `six-questions` (overwriting `publish_date: 2026-11-04`) if PR #11158 is still unmerged. The pin arm is the directive's "flip to scheduled with publish_date" wording |
+| Closing #11078 and #11003 (action-required, decision-challenge labeled) without operator ack | operator (scope) | **Close with evidence comments** — both recorded defaults were superseded by shipped reality (#11078: post shipped `date: 2026-10-29`, distribution resolved by the 10-28 pin; #11003: shipped slot is scheduled 10-29, not the recorded 10-27). The directive's "resolve it" delegates #11078; #11003 is the same falsified-premise class on the same arc. Reversal: reopen the issue |
+| #10736 disposition — comment the roster-free finding but leave OPEN | operator (scope) | **Leave open** — the keep-vs-revert decision on the `ux-audit`/`reproduce-bug` citations is the operator's; the plan supplies only the verified fact (zero consumer-roster references in the spoke post or draft, per the 2026-10-25 CTO ruling) that makes either resolution safe for published content |
+| Scoped advisor consult (plan Step 4.5), the plan-review named panel, domain-leader spawns, and fresh CTO rulings — all require Task/agent spawns unavailable in this subagent context | technical | Ruled by CTO agent, 2026-10-25: accept the skip — proceed with inline self-review (carried forward from the identical constraint ruled on in sibling specs `20261025-214638-feat-one-shot-10902-arc-spokes` and `20261025-150240-feat-one-shot-10904-pbt-methodology`; Step 4.5 is advisory by contract, every slot/fact claim here is pinned to a verified source read, the diff is six two-line frontmatter edits, and soleur:review re-runs a heavier pass on it) |

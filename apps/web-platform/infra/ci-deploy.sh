@@ -326,6 +326,26 @@ resolve_host_id() {
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
 
+# Per-host owner-side relay bind (ADR-068 §(a), item 2). SOLEUR_PROXY_BIND is the
+# host's OWN private-net IP; it cannot be a fleet-wide Doppler value (two hosts
+# would bind each other's address). Resolve from the 10.0.1.0/24 interface.
+# Best-effort: empty value keeps the listener fail-closed (createProxyServer.no-bind).
+resolve_proxy_bind() {
+  if [[ -n "${SOLEUR_PROXY_BIND_OVERRIDE:-}" ]]; then
+    printf '%s' "$SOLEUR_PROXY_BIND_OVERRIDE"
+    return 0
+  fi
+  local ip
+  ip=$(ip -4 -o addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | head -1 || true)
+  if [[ -n "$ip" ]]; then
+    printf '%s' "$ip"
+    return 0
+  fi
+  return 1
+}
+PROXY_BIND="$(resolve_proxy_bind || true)"
+readonly PROXY_BIND
+
 # 2-host deploy fan-out (#5274 Phase 3, ADR-068 "deploy fan-out" amendment).
 # After the receiving host's OWN prod swap succeeds, forward the SAME deploy to
 # every PEER web host over the private net, so one webhook trigger delivers the
@@ -5172,6 +5192,7 @@ case "$COMPONENT" in
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
+      -e SOLEUR_PROXY_BIND="$PROXY_BIND" \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -5553,6 +5574,7 @@ case "$COMPONENT" in
         -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
+        -e SOLEUR_PROXY_BIND="$PROXY_BIND" \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -e SOLEUR_EGRESS_REAPER=1 \
         -v /mnt/data/workspaces:/workspaces \
