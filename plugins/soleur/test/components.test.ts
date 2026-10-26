@@ -1803,4 +1803,45 @@ describe("plugin slash-name uniqueness", () => {
       ).toBe(false);
     }
   });
+
+  describe("harness documentation parity", () => {
+    const harnesses: { id: string; label: string; tableHeader: string }[] = [
+      { id: "claude", label: "Claude Code", tableHeader: "Claude Code" },
+      { id: "codex", label: "Codex", tableHeader: "Codex" },
+      { id: "devin", label: "Devin CLI", tableHeader: "Devin CLI" },
+      { id: "grok", label: "Grok Build", tableHeader: "Grok Build" },
+      { id: "opencode", label: "OpenCode", tableHeader: "OpenCode" },
+      { id: "antigravity", label: "Google Antigravity CLI", tableHeader: "Google Antigravity" },
+    ];
+
+    test("README.md contains an installation section for every supported harness", () => {
+      const repoRoot = resolve(PLUGIN_ROOT, "../..");
+      const readmePath = resolve(repoRoot, "README.md");
+      const readme = readFileSync(readmePath, "utf-8");
+
+      for (const h of harnesses) {
+        expect(
+          readme.includes(h.label),
+          `README.md is missing an installation section for harness '${h.id}' (${h.label}). ` +
+            "When adding or modifying a harness in lib/harness.ts, update README.md.",
+        ).toBe(true);
+      }
+    });
+
+    test("getting-started.njk documents every supported harness in prose and comparison table", () => {
+      const gettingStartedPath = resolve(PLUGIN_ROOT, "docs", "pages", "getting-started.njk");
+      const content = readFileSync(gettingStartedPath, "utf-8");
+
+      for (const h of harnesses) {
+        expect(
+          content.includes(h.label),
+          `getting-started.njk is missing documentation for harness '${h.id}' (${h.label}).`,
+        ).toBe(true);
+        expect(
+          content.includes(`<th>${h.tableHeader}</th>`),
+          `getting-started.njk table is missing header column <th>${h.tableHeader}</th> for harness '${h.id}'.`,
+        ).toBe(true);
+      }
+    });
+  });
 });

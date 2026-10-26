@@ -34,7 +34,7 @@ last_updated: 2026-10-22
           <p>Built on open standards:</p>
           <ul>
             <li>Source-available under the <a href="{{ site.github }}/blob/main/LICENSE" rel="noopener noreferrer">Business Source License 1.1</a> &mdash; free to use, modify, and self-host; converts to Apache-2.0 four years after each release.</li>
-            <li>Runs on agentic coding harnesses &mdash; self-hosted today on <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, Grok Build, Codex, Devin CLI, and OpenCode, each with its own setup guide below.</li>
+            <li>Runs on agentic coding harnesses &mdash; self-hosted today on <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, Grok Build, Codex, Devin CLI, OpenCode, and Google Antigravity CLI, each with its own setup guide below.</li>
             <li>Connects tools and context through the <a href="https://modelcontextprotocol.io" rel="noopener noreferrer">Model Context Protocol (MCP)</a> open specification.</li>
           </ul>
         </div>
@@ -47,9 +47,9 @@ last_updated: 2026-10-22
         <p class="section-label">Source-available. Install in your own harness.</p>
         <h2 class="section-title">Run it yourself</h2>
 
-        <p>Prefer to run it yourself? Soleur is source-available and runs self-hosted on Claude Code, Grok Build, Codex, Devin CLI, and OpenCode today &mdash; the same {{ stats.agents }} agents and {{ stats.skills }} skills on each. Keep your knowledge base as plain files on your own machine, and join the waitlist if you want the hosted version when it opens.</p>
+        <p>Prefer to run it yourself? Soleur is source-available and runs self-hosted on Claude Code, Grok Build, Codex, Devin CLI, OpenCode, and Google Antigravity CLI today &mdash; the same {{ stats.agents }} agents and {{ stats.skills }} skills on each. Keep your knowledge base as plain files on your own machine, and join the waitlist if you want the hosted version when it opens.</p>
 
-        <p>The blocks below install Soleur on each harness. The <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> path is the one with a published marketplace; the other four install from this repository and each has its own setup guide. Every harness needs its own session: nothing is shared between them.</p>
+        <p>The blocks below install Soleur on each harness. The <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> path is the one with a published marketplace; the other five install from this repository and each has its own setup guide. Every harness needs its own session: nothing is shared between them.</p>
 
         <h3 class="section-subtitle">Claude Code</h3>
 
@@ -107,7 +107,18 @@ npx @soleur/opencode install --check    # prints opencode-install ok when the tr
 
         <p>Commands are bare (<code>/go</code>, <code>/sync</code>, <code>/help</code>) and skills are invoked by bare id (<code>plan</code>, not <code>soleur:plan</code>), because OpenCode has no <code>soleur:</code> namespace. Two guards decide shell commands on OpenCode, and both run for real &mdash; a <code>deny</code> blocks the call, an <code>ask</code> opens a prompt &mdash; but they decide shell calls only: actions taken through OpenCode&rsquo;s code-mode <code>execute</code> are not covered. Soleur&rsquo;s operator-stage approval gate is not wired on OpenCode: those flows refuse rather than approve. OpenCode has no Stop hook, so the pipeline&rsquo;s <code>&lt;promise&gt;DONE&lt;/promise&gt;</code> completion marker is advisory: a finished gate sequence is reported rather than hard-stopped, and autonomous skills rely on their own structural checks. <code>/version</code> is installed but reports an unknown version, because the canonical command resolves the plugin through <code>CLAUDE_PLUGIN_ROOT</code>, which this harness does not set. Full routing rules and the remaining capability differences: <a href="{{ site.github }}/blob/main/plugins/soleur/opencode/INSTRUCTIONS.md" rel="noopener noreferrer">OpenCode instructions</a>.</p>
 
-        <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Devin CLI: <code>/soleur:go</code>. OpenCode: <code>/go</code>.</p>
+        <h3 class="section-subtitle">Google Antigravity CLI</h3>
+
+        <p>Soleur loads as an Antigravity plugin via <code>.antigravity-plugin/plugin.json</code>. From a repository containing the plugin manifest:</p>
+
+        <!-- verified: 2026-10-26 source: plugins/soleur/antigravity/INSTRUCTIONS.md -->
+        <div class="quickstart-code">
+          <pre><code>agy            # start an interactive session</code></pre>
+        </div>
+
+        <p>Commands use the <code>/soleur:</code> prefix (<code>/soleur:go</code>, <code>/soleur:sync</code>, <code>/soleur:help</code>). Tool calls are translated natively to Antigravity primitives (<code>view_file</code>, <code>write_to_file</code>, <code>replace_file_content</code>, <code>run_command</code>, <code>invoke_subagent</code>), with background watches and CI polling handled reactively through <code>schedule</code> rather than blocking loops. For dynamic subagent registration and translation tables, see the <a href="{{ site.github }}/blob/main/plugins/soleur/antigravity/INSTRUCTIONS.md" rel="noopener noreferrer">Antigravity instructions</a>.</p>
+
+        <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Codex: <code>$soleur:go</code>. Devin CLI: <code>/soleur:go</code>. OpenCode: <code>/go</code>. Google Antigravity: <code>/soleur:go</code>.</p>
         <table>
           <thead>
             <tr>
@@ -117,6 +128,7 @@ npx @soleur/opencode install --check    # prints opencode-install ok when the tr
               <th>Codex</th>
               <th>Devin CLI</th>
               <th>OpenCode</th>
+              <th>Google Antigravity</th>
             </tr>
           </thead>
           <tbody>
@@ -127,6 +139,7 @@ npx @soleur/opencode install --check    # prints opencode-install ok when the tr
               <td><code>$soleur:go</code></td>
               <td><code>/soleur:go</code></td>
               <td><code>/go</code></td>
+              <td><code>/soleur:go</code></td>
             </tr>
             <tr>
               <td>Sync</td>
@@ -135,6 +148,7 @@ npx @soleur/opencode install --check    # prints opencode-install ok when the tr
               <td><code>$soleur:sync</code></td>
               <td><code>/soleur:sync</code></td>
               <td><code>/sync</code></td>
+              <td><code>/soleur:sync</code></td>
             </tr>
             <tr>
               <td>Help</td>
@@ -143,6 +157,7 @@ npx @soleur/opencode install --check    # prints opencode-install ok when the tr
               <td><code>$soleur:help</code></td>
               <td><code>/soleur:help</code></td>
               <td><code>/help</code></td>
+              <td><code>/soleur:help</code></td>
             </tr>
             <tr>
               <td>Next skill</td>
@@ -151,13 +166,14 @@ npx @soleur/opencode install --check    # prints opencode-install ok when the tr
               <td>Load <code>$soleur:&lt;skill&gt;</code>, or read <code>SKILL.md</code></td>
               <td>Slash <code>/soleur:&lt;skill&gt;</code></td>
               <td><code>skill</code> tool, bare id (<code>plan</code>)</td>
+              <td>Slash <code>/soleur:&lt;skill&gt;</code></td>
             </tr>
           </tbody>
         </table>
 
         <div class="callout">
-          <strong>Existing project?</strong> Claude Code and Devin CLI: <code>/soleur:sync</code>. Grok Build and OpenCode: <code>/sync</code>. Codex: <code>$soleur:sync</code>. Analyze the codebase and populate the knowledge base.<br>
-          <strong>Starting fresh?</strong> Claude Code and Devin CLI: <code>/soleur:go</code>. Grok Build and OpenCode: <code>/go</code>. Codex: <code>$soleur:go</code>. Describe what you need.
+          <strong>Existing project?</strong> Claude Code, Devin CLI, and Google Antigravity: <code>/soleur:sync</code>. Grok Build and OpenCode: <code>/sync</code>. Codex: <code>$soleur:sync</code>. Analyze the codebase and populate the knowledge base.<br>
+          <strong>Starting fresh?</strong> Claude Code, Devin CLI, and Google Antigravity: <code>/soleur:go</code>. Grok Build and OpenCode: <code>/go</code>. Codex: <code>$soleur:go</code>. Describe what you need.
         </div>
 
         <div class="callout">

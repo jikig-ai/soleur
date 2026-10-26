@@ -51,6 +51,7 @@ claude-settings	.claude/hooks/pre-merge-rebase.sh	PreToolUse	Bash	bind	devin-too
 claude-settings	.claude/hooks/prod-write-defer-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; emits permissionDecision:defer — UNMEASURED under Devin (EC§6); internal "Bash" ledger literal stays raw (documented-only site)
 claude-settings	.claude/hooks/ship-net-issue-flow-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-operator-step-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
+claude-settings	.claude/hooks/ship-cmo-content-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-runbook-ssh-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-soak-followthrough-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-unpushed-commits-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
