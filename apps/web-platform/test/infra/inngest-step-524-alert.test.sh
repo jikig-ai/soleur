@@ -33,6 +33,8 @@
 #     so `time BETWEEN …` would be always-true and sum the source's entire history.
 #   * vector.toml's inngest_journald source keeps the exact unit + PRIORITY shape the 524 rows were
 #     OBSERVED to ship through (PRIORITY 6 rows ship despite the {3,4} match, post-#6551 partition); any edit reds (V1/V2).
+#     The source now lists TWO units (inngest-server and the TLS terminator), and its rows reach the PII
+#     chain only THROUGH the terminator's fail-open filter; that routing is parsed, not matched (V3).
 #   * Every exploration and alert in the section is in the apply workflow's -target= allowlist
 #     (#5566: an untargeted resource is never applied, so the alert never exists).
 #
@@ -272,13 +274,23 @@ check("runbooks/betterstack-log-query.md" in sec, "the incidents carry a clickab
 # (scripts/probe-inngest-524-count.sh prints unit_rows) before the alert can be trusted again.
 _vsrc = re.search(r"^\[sources\.inngest_journald\]\n(.*?)(?=^\[|\Z)", vector, re.S | re.M)
 _vbody = _vsrc.group(1) if _vsrc else ""
-check(re.search(r'^include_units = \["inngest-server\.service"\]\s*$', _vbody, re.M) is not None
+check(re.search(r'^include_units = \["inngest-server\.service", "soleur-inngest-tls\.service"\]\s*$', _vbody, re.M) is not None
       and re.search(r'^include_matches\.PRIORITY = \["3", "4"\]\s*$', _vbody, re.M) is not None
       and re.search(r'^exclude_matches\.SYSLOG_IDENTIFIER = ', _vbody, re.M) is not None
       and re.search(r'^exclude_matches\.CONTAINER_NAME = \["soleur-web-platform", "soleur-egress-gw"\]\s*$', _vbody, re.M) is not None
-      and len(re.findall(r"^include_matches\.", _vbody, re.M)) == 1
-      and re.search(r'^inputs = \[[^\]]*"inngest_journald"', vector, re.M) is not None,
-      "vector: the inngest_journald source is exactly the observed shape the 524 rows ship through (unit + PRIORITY {3,4} + emitter/container excludes, routed)")
+      and len(re.findall(r"^include_matches\.", _vbody, re.M)) == 1,
+      "vector: the inngest_journald source is exactly the observed shape the 524 rows ship through (the two units + PRIORITY {3,4} + emitter/container excludes)")
+# Routing is a PARSE of the real file, not a regex over its text: the old `inputs = [...\"inngest_journald\"` regex
+# would now pass vacuously on the terminator filter's OWN `inputs = ["inngest_journald"]` line, whatever the PII
+# stage reads. The 524 rows are inngest-server.service rows, so they must still reach the PII chain, now THROUGH
+# the fail-open filter (which passes every row of any other unit unchanged).
+import tomllib
+_vcfg = tomllib.loads(vector)
+_vtr = _vcfg.get("transforms", {})
+_filt_in = _vtr.get("inngest_terminator_filter", {}).get("inputs", [])
+_drop_in = _vtr.get("pii_scrub_drop_userdata", {}).get("inputs", [])
+check(_filt_in == ["inngest_journald"] and "inngest_terminator_filter" in _drop_in and "inngest_journald" not in _drop_in,
+      "vector: the 524 rows still ship - inngest_journald feeds the terminator filter and ONLY the filter feeds pii_scrub_drop_userdata (parsed, not matched)")
 print("\n".join(out))
 PY
 )" || { printf '[FATAL] the structural checker crashed (python rc != 0) — no verdict\n' >&2; exit 2; }
@@ -415,9 +427,11 @@ s = s.replace(old, "")'
     "s = in_block(s, 'resource \"logtail_exploration_alert\" \"claude_cost_daily_burn\"', 'value               = local.claude_cost_daily_burn_usd', 'value               = 15')"
 
   mutate_red "V1: vector's inngest_journald source loses the inngest-server unit" VEC \
-    "s = s.replace('include_units = [\"inngest-server.service\"]', 'include_units = [\"inngest-other.service\"]', 1)"
+    "s = s.replace('include_units = [\"inngest-server.service\", \"soleur-inngest-tls.service\"]', 'include_units = [\"inngest-other.service\", \"soleur-inngest-tls.service\"]', 1)"
   mutate_red "V2: vector's inngest_journald PRIORITY filter changes" VEC \
     "s = s.replace('include_matches.PRIORITY = [\"3\", \"4\"]\n', 'include_matches.PRIORITY = [\"3\"]\n', 1)"
+  mutate_red "V3: the PII stage reads the raw inngest_journald again (the terminator filter is unwired)" VEC \
+    "s = s.replace('inputs = [\"inngest_terminator_filter\", \"system_journald\"', 'inputs = [\"inngest_journald\", \"system_journald\"', 1)"
 
   # S1 — must stay GREEN: a later section appended below this one (the .tf's own recipe) is out of
   # this guard's scope, so a future alert with a different select shape cannot trip it.
@@ -438,12 +452,12 @@ s = s.replace(old, "")'
   fi
 fi
 
-# 102 = 70 presence rows + 32 mutation rows (30 must-RED, S1 must-GREEN, C1 must-FATAL). The
+# 104 = 71 presence rows + 33 mutation rows (31 must-RED, S1 must-GREEN, C1 must-FATAL). The
 # MUT_SKIP floor is exactly today's presence count (3 discovered explorations): a discovery that
 # finds fewer, or a checker that dies part-way, drops below it. Raise both in the same edit that
 # adds a row. A breached floor or ledger is FATAL (rc 2), never an assertion (rc 1).
-_floor=102
-[ -n "${MUT_SKIP:-}" ] && _floor=70
+_floor=104
+[ -n "${MUT_SKIP:-}" ] && _floor=71
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$_ran" "$_floor" >&2; exit 2; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 2; fi

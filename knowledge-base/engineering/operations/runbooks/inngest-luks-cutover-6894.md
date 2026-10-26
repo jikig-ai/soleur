@@ -630,6 +630,23 @@ show the attribute going from false back to true on the volume, an in-place upda
 infra-path merge or `manual-rerun` runs the per-merge apply and re-protects. Any out-of-band lift is reverted by that
 apply. Do not use one to try to complete a replace.
 
+### Volume recreated: the id-pin bump checklist (added 2026-10-24, Ref #10952)
+
+A recreated volume has a new Hetzner id, and until the pin is bumped the sole-copy probe and BOTH orphan sweeps report the old id as
+missing (the sweeps end red with `orphan_sweep_project_identity_unproven` and list nothing; ADR-282 addendum 2026-10-24). The bump PR
+merges in the same cycle as the `.tf` change that recreates the volume; the founder, as incident owner, owns it. Regenerate the list
+below with `git grep -n 106903269` (do not trust a remembered count); on 2026-10-24 it names these places:
+
+- **Pins enforced by `plugins/soleur/test/sole-copy-drift-check.test.sh` (rows N1 and N1b; a stale one reds the suite):** every
+  `readonly VOLUME_ID_PIN=` line in `.github/workflows/scheduled-terraform-drift.yml` (exactly three: the sole-copy probe and the
+  two orphan sweeps); the "Hetzner id" text in ADR-282; the postmerge skill's section-5c one-liner
+  (`plugins/soleur/skills/postmerge/SKILL.md`); the section-5c one-liner in this runbook; and the `VOL_ID` constant in the suite itself.
+- **Pins enforced by `plugins/soleur/test/token-drift-workflow-causes.test.sh` (rows R9; a stale one reds the suite):** the id in the `curl` shim
+  and in the grep patterns of the project-identity cases. Change every occurrence in that file in the same edit.
+- **Record-only places, updated by hand (nothing compares them):** `scripts/encryption-posture-ledger.json`,
+  `knowledge-base/legal/compliance-posture.md`, `inngest-provision-rehearsal.md`, ADR-142, and the dated audit records under
+  `knowledge-base/legal/audits/` (historical records keep the id they were written with; add a dated line, do not rewrite them).
+
 ### Revert recipe
 
 Two recipes. The full revert was executed once in a scratch detached worktree (the record is below); the partial recipe is a
