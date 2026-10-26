@@ -1887,11 +1887,11 @@ reset_fakes; run_gate "$R_T8" gate
 want_no_call "T8: a changed file outside the globs does not fire" '^ctcmd	'
 want_marker "T8: marker says clear" "$CT_RUN content_trigger=clear"
 
-# T9 [M7]: a LARGE untracked file naming the pattern on its first line. Read through a
-# pipe under pipefail, grep -q's early exit SIGPIPEs the producer and the hit reads as a
+# T9 [M7]: a LARGE untracked file (many SHORT lines — one 300 KB line does not reproduce it)
+# naming the pattern on its first line. Read through a pipe under pipefail, grep -q's early exit SIGPIPEs the producer and the hit reads as a
 # miss; the scan reads the file directly.
 R_T9="$(mk_ct_repo ct9 '["tests/*"]')"
-{ printf '%s\n' "$CT_PAT"; head -c 300000 /dev/zero | tr '\0' 'a'; printf '\n'; } > "$R_T9/tests/big.test.sh"
+{ printf '%s\n' "$CT_PAT"; yes 'filler line of text' | head -n 40000; } > "$R_T9/tests/big.test.sh"
 reset_fakes; run_gate "$R_T9" gate
 want_call "T9: a >64 KB untracked file with an early hit fires" '^ctcmd	'
 want_marker "T9: and the scan DECIDED (ran, not scan-error: an undecided scan also runs the command)" "$CT_RUN content_trigger=ran"
