@@ -1583,6 +1583,40 @@ describe("instruction-risk is tested per line, never across lines (fix-round 2)"
     expect(checkCreate(proposal({ steps: pair }), ctx()).kind).toBe("create");
   });
 
+  // The alternatives that use `\\s+` cross a newline, so a JOINED rendering of two adjacent lines WOULD match them. The
+  // bullets' "- " prefix normally separates model lines, so the rows build the adjacency by hand: two plain model lines, each clean,
+  // directly after one another in a rendered file. The gate must test each line alone (kills a join-then-test mutant).
+  it.each([
+    [["Check the system", "prompt wording"], "system prompt"],
+    [["Remove the private", "key rotation notes"], "private key"],
+    [["Look at the env", "file loader notes"], "env file"],
+    [["Never delete", "everything twice"], "delete everything"],
+    [["Do not drop", "table headers from the export"], "drop table"],
+  ] as const)("two adjacent plain lines that are clean alone but match `\\s+` when joined are accepted: %j (%s)", (pair, _why) => {
+    for (const line of pair) expect(instructionRiskProblem(line), line).toBeNull();
+    expect(instructionRiskProblem(pair.join("\n")), "the joined form must match, or this row proves nothing").not.toBeNull();
+    const p = { ...base(), patch_rejection_reason: pair[0] } as ReturnType<typeof checkOk>["proposal"];
+    const r = renderCreateFiles({ proposal: p, grokBlock: grok, purposeTemplate: template, date: "2026-10-26", evidenceCount: 5 });
+    expect(r.kind).toBe("rendered");
+    if (r.kind !== "rendered") return;
+    const fixed = purposeFixedLines(template, p, { date: "2026-10-26", evidenceCount: 5 });
+    const purposeMd = r.files.purposeMd.replace(`\n${pair[0]}\n`, `\n${pair[0]}\n${pair[1]}\n`);
+    expect(purposeMd, "the second line was inserted right after the first").not.toBe(r.files.purposeMd);
+    expect(checkRenderedCreate({ ...r.files, purposeMd }, p, grok, fixed)).toEqual({ kind: "ok" });
+    // control: the same words on ONE line are refused (the row is not testing a gate that never fires)
+    const oneLine = r.files.purposeMd.replace(`\n${pair[0]}\n`, `\n${pair[0]} ${pair[1]}\n`);
+    expect(checkRenderedCreate({ ...r.files, purposeMd: oneLine }, p, grok, fixed)).toMatchObject({ kind: "refused", detail: "instruction-risk:purpose" });
+  });
+
+  it("the fixed SKILL.md link line is clean under every group, so exempting it is belt and braces, not load-bearing (an equivalent mutant)", () => {
+    const r = render({});
+    expect(r.kind).toBe("rendered");
+    if (r.kind !== "rendered") return;
+    const link = r.files.skillMd.split("\n").find((l) => l.startsWith("See [PURPOSE.md]")) ?? "";
+    expect(link).toContain("./PURPOSE.md");
+    expect(instructionRiskProblem(link)).toBeNull();
+  });
+
   it("a period-separated pair inside one bullet is accepted", () => {
     expect(instructionRiskProblem("Ignore flaky results. Rerun all tests.")).toBeNull();
     expect(render({ steps: ["Ignore flaky results. Rerun all tests."] })).toMatchObject({ kind: "rendered" });

@@ -719,6 +719,40 @@ describe("#7122 — cron-community-monitor persists by exactPaths, not the diges
 // so invariant 1's directory walk cannot see it. This extends the SAME source-text guards to that file: no blanket
 // git-add literal, and its one safeCommitAndPr call persists by `exactPaths` with an empty `allowedPaths` (the closed
 // six-path set, byte-checked against `expectedContent`), exactly like the #7122 precedent above. Fail-closed on parse.
+/**
+ * The git subcommand of every `runGit(<root>, [...])` call in `src`: the first non-flag token of the argument list
+ * (`-c` and `-C` take a value, any other `-x` is a bare flag). The clean-main restore passes a loop variable, whose literal
+ * list is read from the `for (const args of [...])` line. Throws (fail closed) on a call it cannot read.
+ */
+function armGitSubcommands(src: string): Set<string> {
+  const subs = new Set<string>();
+  const firstNonFlag = (items: string[], where: string): string => {
+    for (let i = 0; i < items.length; i++) {
+      const t = items[i];
+      if (t === "-c" || t === "-C") { i += 1; continue; }
+      if (t.startsWith("-")) continue;
+      return t;
+    }
+    throw new Error(`runGit call has no subcommand: ${where}`);
+  };
+  const literalItems = (list: string): string[] => [...list.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  for (const m of src.matchAll(/runGit\(\s*[A-Za-z.]+\s*,\s*([^\n]*)/g)) {
+    const rest = m[1];
+    if (rest.startsWith("[")) {
+      // up to the closing bracket of the first argument list (the arm's lists hold no nested brackets)
+      const close = rest.indexOf("]");
+      subs.add(firstNonFlag(literalItems(close < 0 ? rest : rest.slice(0, close)), m[0]));
+    } else if (/^args\b/.test(rest)) {
+      const loop = /for \(const args of \[(.*?)\]\) \{/s.exec(src)?.[1];
+      if (loop === undefined) throw new Error("runGit(args) call cannot be read: no literal loop list");
+      for (const arr of loop.matchAll(/\[([^\]]*)\]/g)) subs.add(firstNonFlag(literalItems(arr[1]), arr[0]));
+    } else {
+      throw new Error(`runGit call cannot be read: ${m[0]}`);
+    }
+  }
+  return subs;
+}
+
 describe("#10550 — the create arm's commit call (outside functions/) persists by exactPaths", () => {
   const ARM = resolve(__dirname, "../../../server/compound-promote-create-arm.ts");
   const src = readFileSync(ARM, "utf-8");
@@ -735,14 +769,32 @@ describe("#10550 — the create arm's commit call (outside functions/) persists 
     expect(src).not.toMatch(/\[\s*"add"/);
     expect(src).not.toMatch(/"add",\s*"(?:-A|--all|-u|\.)"/);
     const ALLOWED = new Set(["fetch", "reset", "clean", "checkout", "rev-parse", "remote", "ls-tree", "ls-remote"]);
-    const subs = new Set<string>();
-    for (const m of src.matchAll(/runGit\(\s*[A-Za-z.]+,\s*\[\s*"([a-z][a-z-]*)"/g)) subs.add(m[1]);
-    // the clean-main restore iterates a literal list of argument arrays
-    const loop = /for \(const args of \[(.*?)\]\) \{/s.exec(src)?.[1] ?? "";
-    for (const m of loop.matchAll(/\[\s*"([a-z][a-z-]*)"/g)) subs.add(m[1]);
+    const subs = armGitSubcommands(src);
     expect(subs.size, "could not parse the arm's git calls — gate DISENGAGED").toBeGreaterThanOrEqual(7);
     expect([...subs].filter((x) => !ALLOWED.has(x))).toEqual([]);
     for (const verb of ["add", "commit", "push", "merge", "rebase", "apply", "am", "cherry-pick", "config", "stash"]) expect(subs.has(verb), verb).toBe(false);
+  });
+
+  it("reads the FIRST NON-FLAG token of each runGit call, so a leading `-c name=value` cannot hide the subcommand", () => {
+    const hidden = 'await runGit(root, ["-c", "user.name=x", "commit", "-m", "m"], { timeoutMs: 1 });';
+    expect([...armGitSubcommands(hidden)]).toEqual(["commit"]);
+    const flagged = 'runGit(root, ["--no-pager", "-C", "/x", "push", "origin"], opts);\nrunGit(r, ["-c","a=b","-c","c=d","fetch"], o);';
+    expect([...armGitSubcommands(flagged)].sort()).toEqual(["fetch", "push"]);
+    // a call whose argument list is not a literal array (and is not the clean-main loop's `args`) cannot be read: fail closed
+    expect(() => armGitSubcommands("runGit(root, someArgs, o);")).toThrow(/cannot be read/);
+    expect(() => armGitSubcommands('runGit(root, ["-c", "x=y"], o);')).toThrow(/no subcommand/);
+  });
+
+  it("never spawns git (or anything) itself: no child_process import and no raw execFile/spawn/exec call in the arm", () => {
+    const code = src.split("\n").filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).join("\n"); // comments may say "spawn" and "fork"
+    expect(code.length).toBeGreaterThan(1000); // non-vacuity
+    expect(code).not.toMatch(/from\s+["'](?:node:)?child_process["']/);
+    expect(code).not.toMatch(/require\(\s*["'](?:node:)?child_process["']/);
+    expect(code).not.toMatch(/(?<![.\w])(?:execFile|execFileSync|spawn|spawnSync|exec|execSync|fork)\s*\(/);
+    // the harness can fail: the same patterns DO see a raw spawn of git
+    expect('import { execFile } from "node:child_process";').toMatch(/from\s+["'](?:node:)?child_process["']/);
+    expect('execFile("git", ["push"], cb)').toMatch(/(?<![.\w])(?:execFile|execFileSync|spawn|spawnSync|exec|execSync|fork)\s*\(/);
+    expect("/x/.exec(y)").not.toMatch(/(?<![.\w])(?:execFile|execFileSync|spawn|spawnSync|exec|execSync|fork)\s*\(/);
   });
 
   it("has exactly one commit call (the safeCommitAndPr seam) and the gate parsed it", () => {

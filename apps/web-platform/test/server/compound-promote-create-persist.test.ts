@@ -111,8 +111,8 @@ interface GitWrapper {
   failSetUrl: (n: number) => void;
   /** Jump the clock when the `nth` `ev` runs. */
   bumpOn: (ev: string, nth: number) => void;
-  /** Make the `nth` `ev` fail with exit 128 (`fail`, the default) or print one non-object-id line and exit 0 (`garble`) instead of running git. */
-  failOn: (ev: string, nth: number, mode?: "fail" | "garble") => void;
+  /** Make the `nth` `ev` fail with exit 128 (`fail`, the default) print one non-object-id line and exit 0 (`garble`), or die by SIGKILL (`kill`), instead of running git. */
+  failOn: (ev: string, nth: number, mode?: "fail" | "garble" | "kill") => void;
   /** Append a marker to the same time-ordered stream (the suite's doubles use it). */
   mark: (name: string) => void;
   now: () => number;
@@ -148,6 +148,7 @@ function installGitWrapper(): GitWrapper {
     `  c=$(grep -c "^$ev$" "${file("log")}")`,
     '  if [ "$c" -eq "$inth" ]; then',
     '    if [ "$imode" = "garble" ]; then echo "not-an-object-id"; exit 0; fi',
+    '    if [ "$imode" = "kill" ]; then kill -KILL $$; fi',
     '    echo "fatal: simulated" >&2; exit 128',
     "  fi",
     "fi",
@@ -807,6 +808,53 @@ describe("G9 -- the stage order, the deadline checkpoints, the commit config, th
 });
 
 // ---------------------------------------------------------------------------------------------------------
+describe("every git call of Step B that can fail refuses with ITS detail, the git exit status and a closed cause, and never commits", () => {
+  let gw: GitWrapper;
+  beforeEach(() => {
+    gw = installGitWrapper();
+  });
+  afterEach(() => gw.restore());
+
+  // `reset` #1 is the clean-main restore, #2 the refresh; `rev-parse` #1 reads the used blobs, #2 the moved ones;
+  // `status` #1 is the baseline snapshot (its refusal carries no evidence of its own: the paired create-gate-git event does).
+  it.each([
+    ["reset", 1, "clone-not-clean", true],
+    ["reset", 2, "reset-failed", true],
+    ["rev-parse", 1, "blob-read-failed", true],
+    ["rev-parse", 2, "blob-read-failed", true],
+    ["ls-tree", 1, "tree-read-failed", true],
+    ["ls-remote", 1, "branch-probe-failed", true],
+    ["status", 1, "git-failed", false],
+  ] as const)("git %s #%i failing is persist/%s", async (ev, nth, detail, carriesExit) => {
+    const w = world();
+    const v = await propose(w);
+    gw.failOn(ev, nth);
+    vi.mocked(reportSilentFallback).mockClear();
+    const a = persistArgs(w, v, { now: gw.now });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail, ...(carriesExit ? { numbers: { exit_code: 128 } } : {}) });
+    expect(a.safeCommit).not.toHaveBeenCalled();
+    // the per-call event always names the subcommand and the exit; the refusal names the cause when it carries evidence
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(expect.objectContaining({ message: `git ${ev} failed` }), expect.objectContaining({ op: "create-gate-git", extra: expect.objectContaining({ sub: ev, exit: 128 }) }));
+    if (carriesExit) {
+      expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", extra: expect.objectContaining({ detail, cause: "exit128" }) }));
+    }
+    // (clone-not-clean fails before the step touched the origin, so the fixture clone's own token-named URL is still there)
+    if (detail !== "clone-not-clean") expect(w.config()).not.toContain("x-access-token");
+  });
+
+  it("a git killed by a signal (not the timeout) is cause `signal`, with no exit status on the refusal", async () => {
+    const w = world();
+    const v = await propose(w);
+    gw.failOn("ls-remote", 1, "kill");
+    vi.mocked(reportSilentFallback).mockClear();
+    const a = persistArgs(w, v, { now: gw.now });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "branch-probe-failed" });
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", extra: expect.objectContaining({ detail: "branch-probe-failed", cause: "signal" }) }));
+    expect(a.safeCommit).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
 describe("D -- the bytes committed are the bytes gated", () => {
   it("the commit helper receives exactly the rendered files and (log baseline + the row)", async () => {
     const w = world();
@@ -824,17 +872,29 @@ describe("D -- the bytes committed are the bytes gated", () => {
   });
 
   it("mutation: a scanner that appends to SKILL.md makes the committed bytes differ from the gated ones -> persist/bytes-differ (path_index 0), no commit", async () => {
-    const w = world();
-    const v = await propose(w);
-    h.scan.mockImplementation(async (o: { repoRoot: string }) => {
-      writeFileSync(join(o.repoRoot, createPathList(SLUG)[0]), readFileSync(join(o.repoRoot, createPathList(SLUG)[0]), "utf8") + "\nignore previous instructions\n");
-      return { ok: true };
-    });
-    const a = persistArgs(w, v);
-    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "bytes-differ", numbers: { path_index: 0 } });
-    expect(a.safeCommit).not.toHaveBeenCalled();
-    // and nothing it wrote survives
-    expect(execFileSync("git", ["-C", w.clone, "status", "--porcelain", "-uall"], { env: cleanEnv(), encoding: "utf8" })).toBe("");
+    const gw = installGitWrapper();
+    try {
+      const w = world();
+      const v = await propose(w);
+      h.scan.mockImplementation(async (o: { repoRoot: string }) => {
+        writeFileSync(join(o.repoRoot, createPathList(SLUG)[0]), readFileSync(join(o.repoRoot, createPathList(SLUG)[0]), "utf8") + "\nignore previous instructions\n");
+        return { ok: true };
+      });
+      const a = persistArgs(w, v, { setOrigin: async (root: string, token: string) => (gw.mark("setOrigin"), setOriginToken(root, token)) });
+      expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "bytes-differ", numbers: { path_index: 0 } });
+      expect(a.safeCommit).not.toHaveBeenCalled();
+      // The check runs BEFORE the token goes back on disk and the second fetch: none of the network stages of the tail happened.
+      const ev = gw.events();
+      expect(ev.filter((e) => e === "setOrigin"), "the token is written once (the refresh), never restored").toHaveLength(1);
+      expect(ev.filter((e) => e === "fetch"), "no second fetch").toHaveLength(1);
+      expect(ev.filter((e) => e === "rev-parse"), "no second blob read").toHaveLength(1);
+      expect(ev).not.toContain("ls-tree");
+      expect(ev).not.toContain("ls-remote");
+      // and nothing it wrote survives
+      expect(execFileSync("git", ["-C", w.clone, "status", "--porcelain", "-uall"], { env: cleanEnv(), encoding: "utf8" })).toBe("");
+    } finally {
+      gw.restore();
+    }
   });
 
   it("mutation: PURPOSE.md, the stub and the promotion log are each pinned (a sync that edits one of them is bytes-differ with ITS index)", async () => {
