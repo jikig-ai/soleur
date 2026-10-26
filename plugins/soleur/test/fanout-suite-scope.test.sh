@@ -505,7 +505,7 @@ fi
 # the scoped substitute BOTH refusals prescribe. Post-#8621 the spelling is a parse-time
 # alias of --affected, so the exemption arms run where the selector can actually derive
 # (index libs present, runner-changed neutered) — on the index-less default sandbox the
-# alias correctly degrades to full and the refusals re-fire, which arm 11e pins.
+# alias correctly degrades to full and the refusals re-fire, which arm 11g pins.
 
 # The substitute must be NAMED in the refusal text — a refusal prescribing an unnamed command
 # sends the refused agent to guess, and guessing is how full gates get re-run under the hatch.
@@ -851,6 +851,18 @@ PY
     pass "degraded-full re-fires the sibling refusal post-derivation (rc=4)"
   else
     fail "degraded-full did not refuse under a measured sibling (rc=$ARM_RC, $ARM_SUITES suites)"
+  fi
+
+  # 11g: the degraded ALIAS spelling re-fires identically — this default sandbox has no
+  # index libs, so TEST_GROUP=affected degrades to full post-derivation and the sibling
+  # refusal must still fire (the re-refuse keys on _AFFECTED, which the alias arms).
+  run_arm degraded-alias-sibling TC_PROC_ROOT="$SIB_PROC_F" TEST_GROUP=affected
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 4 && "$ARM_SUITES" -eq 0 ]] \
+     && grep -qF 'sibling full-gate run(s) already in flight' <<<"$ARM_OUT"; then
+    pass "degraded-full re-fires the sibling refusal for the alias spelling (rc=4)"
+  else
+    fail "degraded-full alias did not refuse under a measured sibling (rc=$ARM_RC, $ARM_SUITES suites)"
   fi
 fi
 

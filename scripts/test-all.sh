@@ -423,7 +423,7 @@ RUNNER EDITS (a diff touching scripts/test-all.sh or scripts/lib/test-affected-p
       git add <files> && bash scripts/test-all.sh --affected --affected-scope=staged
   TEST_GROUP=affected is a deprecated compat ALIAS of --affected (#8621 — the
   #8591 heuristic selector was folded into the declared-edge axis): it carries
-  the same runner-changed fallback and cannot be combined with --affected.
+  the same runner-changed fallback and cannot be combined with --affected or --full.
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass),
@@ -1210,7 +1210,7 @@ if (( _AFF_SCOPE_REQ == 1 )); then
     echo "       Valid invocations: --affected [--affected-scope=branch|staged] or TEST_GROUP=affected." >&2
     exit 2
   fi
-  if [[ "$TEST_GROUP" != "all" && "$TEST_GROUP" != "affected" ]]; then
+  if [[ "$TEST_GROUP" != "all" ]]; then
     echo "ERROR: --affected-scope scopes an affected selection only; TEST_GROUP=$TEST_GROUP is a different axis." >&2
     echo "       Valid invocations: --affected (explicit or the local default) or TEST_GROUP=affected." >&2
     exit 2
@@ -7117,9 +7117,14 @@ fi
 # already carries them; this line names the mode so a reader (or a poll grepping the
 # terminal marker) can tell scoped evidence from the ship gate without counting skips.
 if (( _TG_AFFECTED_ALIAS == 1 )); then
-  echo "NOTE: TEST_GROUP=affected is a deprecated alias of --affected (#8621) — the run"
-  echo "      above IS the declared-edge affected selection. This is scoped evidence, not"
-  echo "      the full battery. To run everything: bash scripts/test-all.sh --full"
+  if (( _aff_ready == 1 )); then
+    echo "NOTE: TEST_GROUP=affected is a deprecated alias of --affected (#8621) — the run"
+    echo "      above IS the declared-edge affected selection. This is scoped evidence, not"
+    echo "      the full battery. To run everything: bash scripts/test-all.sh --full"
+  else
+    echo "NOTE: TEST_GROUP=affected is a deprecated alias of --affected (#8621) — the run"
+    echo "      above degraded to the full battery; the banner names the reason."
+  fi
 fi
 echo "=== $((suites - failed - killed - skipped - _ceiling_declined))/$suites suites passed ==="
 

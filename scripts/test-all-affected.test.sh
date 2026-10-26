@@ -2670,8 +2670,8 @@ fi
 #     selects the suite guarding it. The sandbox lib injects
 #     `zzz-deleted-subject/` — a path that does not exist in the real tree the
 #     probes run against — into guard-vacuity-floor's declared array; the diff
-#     names one file beneath it. guard-vacuity-floor passes _suite_affected on
-#     its own (signal 4's corpus-scan backstop), so the outcome reads the edge
+#     names one file beneath it. guard-vacuity-floor selects on its own via the
+#     always-on census floor, so the outcome reads the edge
 #     set alone: ^zzz-deleted-subject/ prefix-matches the deleted file's diff
 #     line. m10 re-points the declared re-add at the filtered mint, restoring
 #     the drop — t17's fixture must then decline.
