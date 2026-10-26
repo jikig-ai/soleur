@@ -441,7 +441,7 @@ elif mutation == "enumerate_off":
     s = sub_once(s, '  && (( _ENUMERATE == 0 && _PRINT_SELECTION == 0 )) \\\n', '',
                  'enumerate conjunct in default arm')
 elif mutation == "affected_selector_off":
-    s = sub_once(s, ' \\\n  && { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }', '',
+    s = sub_once(s, ' \\\n  && { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }', ' \\\n  && false',
                  'all-group affected selector')
 elif mutation == "ci_emit_off":
     s = sub_once(s, 'if [[ -z "${CI:-}" && -n "${TEST_TIMING_LOG:-}" ]] \\',

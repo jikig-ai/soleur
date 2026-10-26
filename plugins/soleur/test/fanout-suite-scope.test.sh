@@ -501,42 +501,11 @@ else
 fi
 
 
-# --- Arm 8c: TEST_GROUP=affected is the scoped substitute BOTH refusals prescribe -------------
-#
-# Both refusals tell the refused caller to run `TEST_GROUP=affected` instead — an instruction
-# that exits 4 is a dead end, not a substitute. These arms pin that the prescribed path actually
-# proceeds under each antecedent. The recorder replaces run_suite wholesale, so these arms
-# assert the REFUSAL exemption only — the decline semantics live in
-# scripts/test-all-group-affected.test.sh, which is the suite that owns them
-# (renamed out of the #8322 add/add collision; that name belongs to the
-# declared-edge selector's suite).
-run_arm subg-affected SOLEUR_SUBAGENT=1 TEST_GROUP=affected
-CASES=$((CASES + 1))
-if [[ "$ARM_RC" -eq 0 ]]; then
-  pass "SOLEUR_SUBAGENT=1 does not refuse TEST_GROUP=affected (rc=$ARM_RC)"
-else
-  fail "the prescribed substitute was refused by the subagent clause (rc=$ARM_RC) — a dead-end refusal"
-fi
-CASES=$((CASES + 1))
-if [[ "$ARM_SUITES" -ge $((NORMAL_SUITES - 5)) ]]; then
-  pass "the subagent-affected run reaches suite registration ($ARM_SUITES of $NORMAL_SUITES)"
-else
-  fail "the subagent-affected run recorded $ARM_SUITES suite(s) against a baseline of $NORMAL_SUITES"
-fi
-
-run_arm sib-affected TC_PROC_ROOT="$SIB_PROC_F" TEST_GROUP=affected
-CASES=$((CASES + 1))
-if [[ "$ARM_RC" -eq 0 ]]; then
-  pass "a measured sibling does not refuse TEST_GROUP=affected (rc=$ARM_RC)"
-else
-  fail "the prescribed substitute was refused by the sibling clause (rc=$ARM_RC) — a dead-end refusal"
-fi
-CASES=$((CASES + 1))
-if [[ "$ARM_SUITES" -ge $((NORMAL_SUITES - 5)) ]]; then
-  pass "the sibling-affected run reaches suite registration ($ARM_SUITES of $NORMAL_SUITES)"
-else
-  fail "the sibling-affected run recorded $ARM_SUITES suite(s) against a baseline of $NORMAL_SUITES"
-fi
+# --- Arm 8c (relocated to the Arm-11 decidable sandbox below): TEST_GROUP=affected is
+# the scoped substitute BOTH refusals prescribe. Post-#8621 the spelling is a parse-time
+# alias of --affected, so the exemption arms run where the selector can actually derive
+# (index libs present, runner-changed neutered) — on the index-less default sandbox the
+# alias correctly degrades to full and the refusals re-fire, which arm 11e pins.
 
 # The substitute must be NAMED in the refusal text — a refusal prescribing an unnamed command
 # sends the refused agent to guess, and guessing is how full gates get re-run under the hatch.
@@ -806,6 +775,40 @@ PY
   else
     fail "--affected refused under a measured sibling (rc=$ARM_RC) — sibling exemption broken"
   fi
+
+  # 8c (relocated): the TEST_GROUP=affected ALIAS is the scoped substitute both refusals
+  # prescribe — an instruction that exits 4 is a dead end, not a substitute. Same sandbox
+  # as 11a/11b: the alias arms _AFFECTED identically (#8621), so it exempts identically.
+  ARM_SANDBOX=$SANDBOX_AFF ARM_ARGV=
+  run_arm subg-alias SOLEUR_SUBAGENT=1 TEST_GROUP=affected
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 0 ]]; then
+    pass "SOLEUR_SUBAGENT=1 does not refuse the TEST_GROUP=affected alias (rc=$ARM_RC)"
+  else
+    fail "the prescribed substitute was refused by the subagent clause (rc=$ARM_RC) — a dead-end refusal"
+  fi
+  CASES=$((CASES + 1))
+  if [[ "$ARM_SUITES" -ge 1 ]]; then
+    pass "the subagent alias run reaches suite registration ($ARM_SUITES recorded)"
+  else
+    fail "the subagent alias run recorded 0 suite(s) — it was refused silently"
+  fi
+
+  ARM_SANDBOX=$SANDBOX_AFF ARM_ARGV=
+  run_arm sib-alias TC_PROC_ROOT="$SIB_PROC_F" TEST_GROUP=affected
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 0 ]]; then
+    pass "a measured sibling does not refuse the TEST_GROUP=affected alias (rc=$ARM_RC)"
+  else
+    fail "the prescribed substitute was refused by the sibling clause (rc=$ARM_RC) — a dead-end refusal"
+  fi
+  CASES=$((CASES + 1))
+  if [[ "$ARM_SUITES" -ge 1 ]]; then
+    pass "the sibling alias run reaches suite registration ($ARM_SUITES recorded)"
+  else
+    fail "the sibling alias run recorded 0 suite(s) — it was refused silently"
+  fi
+  unset ARM_SANDBOX
 
   # 11c: --full under SOLEUR_SUBAGENT refuses, before any work.
   ARM_ARGV=--full
