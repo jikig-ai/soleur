@@ -1092,6 +1092,35 @@ resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat" {
   timezone                = "UTC"
 }
 
+# Liveness for the Better Stack incident mirror (#10390 WS1):
+# .github/workflows/scheduled-betterstack-incident-mirror.yml. The mirror is GHA-executed and
+# watchdog-dispatched (WATCHDOG_DISPATCH_TABLE, 15-min slots); its `schedule:` trigger is only the
+# fallback. It CANNOT be Inngest-scheduled — it observes the Better Stack paging substrate the
+# Inngest fleet's own outages report through (the 2026-10-22 email-only incident delivery), so an
+# Inngest-scheduled mirror goes dark exactly when the incidents it mirrors are firing
+# (ADR-033 anti-circularity; the workflow carries the ADR-248 gate-override header). The check-in
+# is the workflow's terminal sentry-heartbeat step, `ok` only on a deciding exit 0
+# (verdict mirrored|no_incidents); every read/filing failure posts `error`, and a dead dispatch
+# clock is a missed check-in. A dead mirror opens a Sentry issue within interval + margin.
+# Margin = 12-min clock skew + measured worst queue + runtime (max_runtime_minutes = 6; the job's
+# `timeout-minutes: 6`) — capped at 60 to match the parity ceiling; re-measure the queue tail once
+# this workflow has history before narrowing it (same command as scheduled_inngest_health).
+# Slug MUST match `monitor-slug` in the workflow's sentry-heartbeat step
+# (scheduled-betterstack-incident-mirror). Routing: declared UNROUTED under the two-PR rule —
+# cron-monitor-alerts.tf `local.cron_monitor_alert_unrouted`; a follow-up PR moves it into
+# monitor_ids after the first measured apply.
+resource "sentry_cron_monitor" "scheduled_betterstack_incident_mirror" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-betterstack-incident-mirror"
+  schedule                = { crontab = "*/15 * * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 6
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # Executor liveness for the nightly Supabase advisor RLS gate (#3366).
 # Dispatched by apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts;
 # the check-in is posted at the END of .github/workflows/scheduled-supabase-advisor-scan.yml
@@ -1158,6 +1187,24 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
   schedule                = { crontab = "0 6,18 * * *" }
   checkin_margin_minutes  = 60
   max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# #10952 — liveness and outcome for the two Hetzner orphan sweeps (scheduled-terraform-drift.yml →
+# rung2-rehearsal-orphan-sweep and inngest-rehearsal-orphan-sweep). ONE slug for the pair: the
+# `orphan-sweeps-checkin` aggregator job posts `ok` only when both sweep jobs concluded success (see the
+# rule in the comment block above that job). The 25-minute job cap puts a worst-case check-in about 30
+# minutes after the slot, inside checkin_margin_minutes = 60. max_runtime_minutes has no effect (a
+# single check-in). Created UNROUTED under the two-PR rule (cron-monitor-alerts.tf); routing is #10972.
+resource "sentry_cron_monitor" "scheduled_orphan_sweeps" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-orphan-sweeps"
+  schedule                = { crontab = "0 6,18 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 30
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"

@@ -52,6 +52,13 @@ locals {
     # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
     # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
     workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"
+    # #10390 WS1 — the Better Stack incident mirror's liveness monitor, added under the two-PR rule:
+    # the mirror's own [ci/betterstack-incident] issues are the primary channel; route after the
+    # first measured check-in.
+    scheduled_betterstack_incident_mirror = "the mirror's own ci/betterstack-incident GitHub issues are the primary channel; route after the first measured check-in (#10390)"
+    # #10952 — the two orphan sweeps' aggregator check-in, added under the two-PR rule: its detector id does not exist
+    # until this PR's Sentry apply converges. The routing PR is due 2026-10-27 (#10972) and needs no check-in.
+    scheduled_orphan_sweeps = "the orphan-sweeps aggregator job's own per-slot email and the sweeps' own failure emails are the cover until routed (one shared mail key, so not independent of each other); routing PR due by 2026-10-27 (#10972)"
   }
 }
 

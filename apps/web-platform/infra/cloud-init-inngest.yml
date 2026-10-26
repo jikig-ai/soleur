@@ -1154,11 +1154,15 @@ write_files:
       # header requires the admitting regex to land atomically with the apply — admitting an
       # absent name is a no-op for the subset test (n_total and n_inngest both exclude it), so
       # landing it early is free and removes the ordering hazard entirely.
-      # The floor stays 5 ON PURPOSE. That .tf's DEC-FLOOR note calls the digest dark-present and
-      # implies a 5->6 bump, but the bump is only safe ONCE the secret exists: raising it while the
-      # digest is unapplied makes a 5-name dark boot FATAL — re-bricking the host this very change
-      # exists to unbrick. Bump the floor (here and in inngest-host.test.sh) in the SAME change
-      # that applies inngest-config-digest.tf, never before.
+      # The floor is now 6 (#10390 defect 3, 5->6): INNGEST_CONFIG_DIGEST materializes in THIS
+      # arc's promotion apply — TF_VAR_inngest_config_digest on the soleur/prd_terraform
+      # apply-web-platform-infra.yml path writes doppler_secret.inngest_config_digest into
+      # this project (runbook step 3). ORDERING GATE (CTO ruling): between this change's merge
+      # and that promotion apply, NO dispatch that renders and boots merged cloud-init may run —
+      # inngest-host-replace, inngest-provision-rehearsal.yml, cutover-inngest.yml, or any apply
+      # whose -target set carries hcloud_server.inngest. Floor 6 against a still-5-name live set
+      # FATALs that boot (remedy: promote first, then replace). The merge and the promotion must
+      # ride the same window.
       # An over-scoped `prd`-branch token would see ~116 foreign secrets → n_total != n_inngest →
       # refuse. On pass, continue; on fail, this attempt exits non-zero BEFORE any pull
       # (fail-closed) and the unit retries — a credential-scope failure repeats on every attempt,
@@ -1172,7 +1176,7 @@ write_files:
       names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
       n_total="$(printf '%s\n' "$names" | grep -c . || true)"
       n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|LUKS_CUTOVER|LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
-      if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
+      if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 6 ]; then
         echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_)"; exit 1
       fi
       echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
@@ -1263,7 +1267,7 @@ write_files:
       # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
       # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
       # and every consumer below follows IREF.
-      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.58@sha256:14a46f56af1221d41d7c716d768700142e6ca260bc3209a108e235f4a36c05b6
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.61@sha256:e3630bcae2343e44f4db895a4b6b40bb74d383b7a99482292d5a1e620add39af
       # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
       # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
       # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
@@ -1313,7 +1317,7 @@ write_files:
       # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
       set +e
       if [ -n "$ZOT_EP" ]; then
-        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.58@sha256:14a46f56af1221d41d7c716d768700142e6ca260bc3209a108e235f4a36c05b6"
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.61@sha256:e3630bcae2343e44f4db895a4b6b40bb74d383b7a99482292d5a1e620add39af"
         last_stage=pre-zot-pull
         /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
         install -m 600 /dev/null /var/log/inngest-zot-pull.log

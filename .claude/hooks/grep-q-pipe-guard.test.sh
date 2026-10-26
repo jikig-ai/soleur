@@ -88,7 +88,7 @@
 #               a regex alternation that holds a bar). mawk's regex is quadratic too: a bar line carrying a 20 KB run of spaces takes about 5 s, and 40,000 backslash-continued
 #               lines 5 to 14 s; no line in the tree is near either. The split pass skips a line without a bar before any regex runs. A generated bundle that long needs an ignore entry, not a wider limit.
 #   reach       `test-all.sh --affected` selects this guard only for the paths its declared edge list names (apps/web-platform and tests/ paths, .claude/hooks); not
-#               plugins/ (the declared entry `plugins/.` matches nothing; two named plugin test files do select it), .github/, scripts/*.sh outside scripts/lib, scripts/*.py, lefthook.yml, knowledge-base code
+#               plugins/ (the `plugins/.` entry minted a dead `^plugins/./` edge and was deleted in #9441; two named plugin test files do select it), .github/, scripts/*.sh outside scripts/lib, scripts/*.py, lefthook.yml, knowledge-base code
 #               or markdown: the full battery in CI always runs it.
 # The named FILES_* passes below stay as they are: they pin the SUITES whose incidents made this class, and carry the
 # affected-paths wiring. The sweep is a line search, so a name in a comment is handled by the comment filter and the
@@ -563,11 +563,6 @@ SWEEP_DEFERRALS=(
   # forbidden-diagnostic rule allows (apps/web-platform/infra/luks-monitor-install.test.sh, G2 and G4). Converting it needs that security
   # review, so it rides a PR that carries the review, not a lint sweep.
   'apps/web-platform/infra/workspaces-luks.tf | = | 1 | #9217'
-  # A sixth class, found at review: a script BAKED into a digest-pinned image whose pin lives in a user_data file. The inngest bootstrap
-  # image carries inngest-luks-cutover.sh at tag vinngest-v1.1.44 and cloud-init-inngest-bootstrap.test.sh (GuardA) requires every baked
-  # carrier byte-identical to that tag, so a one-token edit needs a new image AND a pin bump in cloud-init-inngest.yml (= an inngest host
-  # replace). Convert it only in the PR that mints the next image tag, and delete the row there.
-  'apps/web-platform/infra/inngest-luks-cutover.sh | = | 1 | #9217'
 )
 
 # scan_sweep <root> -> line 1 `SWEPT: <n> files`, then any `UNRESOLVED: ...` lines, then the code lines that match
@@ -1448,8 +1443,8 @@ loose_ctl="$(_loose_not_test_shaped 'apps/web-platform/infra/* | <= | 99 | #9217
   || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two injected rows, and not the tight one)")
 # The loose-row check sees only `<=` rows, so a TIGHT production row would pass it. Every non-test-shaped row, in any mode, must be one of the
 # file-exact deferrals above: no glob characters, and exactly GATED_PROD_ROWS of them, in the order GATED_PROD_GLOBS pins. Changing the set is then a visible three-place edit (the row, the count, the glob list).
-GATED_PROD_ROWS=6
-GATED_PROD_GLOBS=$'apps/web-platform/infra/cloud-init-registry.yml\napps/web-platform/infra/cloud-init-inngest.yml\napps/web-platform/infra/cloud-init-git-data.yml\napps/web-platform/infra/git-data-bootstrap.sh\napps/web-platform/infra/workspaces-luks.tf\napps/web-platform/infra/inngest-luks-cutover.sh\n'
+GATED_PROD_ROWS=5
+GATED_PROD_GLOBS=$'apps/web-platform/infra/cloud-init-registry.yml\napps/web-platform/infra/cloud-init-inngest.yml\napps/web-platform/infra/cloud-init-git-data.yml\napps/web-platform/infra/git-data-bootstrap.sh\napps/web-platform/infra/workspaces-luks.tf\n'
 prod_globs=""
 for _row in "${SWEEP_DEFERRALS[@]}"; do
   IFS='|' read -r _g _ <<<"$_row"; _g="${_g#"${_g%%[![:space:]]*}"}"; _g="${_g%"${_g##*[![:space:]]}"}"
@@ -2045,7 +2040,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=294   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=290   # recomputed from a green run (291 on main, minus 1 at #10112: the retired inngest-luks-cutover suite's triple leaves with the file): the number of distinct (test file, verb, producer file) triples (289 -> 291 with the access suite's docker stub for the container probe, #8211 PR-E: two producer files; 286 -> 287 with the orphan-sweep guard's R9 curl shim, which drains its stdin config; earlier: 294 -> 286 at G1 PR-4a, #10937: seven triples of the four retired probes leave, and deriving HM5_FILES from the HMAC manifest drops the sweep's literal join on inngest-soak-6178.sh) (+1 at #10931: the registry wiring suite's doppler stub)
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -2056,6 +2051,7 @@ PRODUCER_JOIN=(
   '.github/scripts/test/fixtures-validate-infra-templates.sh | terraform | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc1/10s red:rc1/5s; hits 0)'
   '.github/scripts/test/test-mint-inngest-bootstrap-tag~.sh | gh | exempt | arm-drain all-arms-keyed: def 112 `body=$(cat)` at opener+29, after the arg parse; the earlier exits (FORBID 99, unmodelled flag 64, DELETE) are rows where no piped call may arrive (reach T2; t2:rc0/175s; hits 62 (stdin-flag))'
   'apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh | doppler | drains | 1 | *'
+  'scripts/betterstack-incident-mirror.test.sh | curl | drains | 1 | *'
   'apps/web-platform/infra/cat-deploy-state.test.sh | docker | exempt | text-only derived site ci-deploy.sh is grep-pinned only (the SDK_BASH_SMOKE_STATE_FILE default-path assert); the docker mock serves docker inspect alone and no piped call reaches it'
   'apps/web-platform/infra/ci-deploy.test.sh | curl | exempt | text-only derived sites cloud-init-inngest.yml (its two printf-to-curl -K - pipes: the Better Stack and the Sentry phone-home emitters) are grep-pinned only; ci-deploy.sh:378 feeds --config - via < <(printf) not a pipe'
   'apps/web-platform/infra/ci-deploy.test.sh | docker | drains | 2 | --password-stdin'
@@ -2083,6 +2079,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/fresh-boot-ready.test.sh | doppler | exempt | text-only the derived producer apps/cla-evidence/infra/bootstrap.sh matches by basename only; the suite says bootstrap.sh only in assertion messages about the host bootstrap script and never runs the cla-evidence script'
   'apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh | cryptsetup | exempt | text-only luksOpen pipe site (the `cryptsetup luksOpen --key-file -` line in git-data-bootstrap.sh section 1) is outside the extracted store-verify unit; stub answers isLuks only'
   'apps/web-platform/infra/git-data-cutover-access.test.sh | doppler | exempt | arm-drain the finalizer stub (def 2450) drains stdin as the first act of its secrets set arm (S7c edit, wire assert FZ1); the other three doppler stubs refuse or serve get only and receive no piped set (3 non-test producers)'
+  'apps/web-platform/infra/git-data-cutover-access.test.sh | docker | drains | 1 | *'
   'apps/web-platform/infra/git-data-flag-precheck.test.sh | doppler | drains | 1 | = set'
   'apps/web-platform/infra/git-data-liveness.test.sh | curl | exempt | arm-drain def 180 drains in its --config arm at opener+4 and def 859 is a one-line printf stub whose body is cat >/dev/null (the finder reads the newline escape before cat as a word, so it cannot credit it); 122 piped --config - calls (reach T1)'
   'apps/web-platform/infra/git-data-luks-reopen.test.sh | cryptsetup | exempt | arm-drain the luksOpen arm reads the key (cat to key_seen) before any exit; keyed on the subcommand, not the flag'
@@ -2187,7 +2184,6 @@ PRODUCER_JOIN=(
   'scripts/check-web-host-escrow-config.test.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc124/301s; hits 0 (stdin-flag))'
   'scripts/ci-demand-census.test.sh | jq | exempt | text-only no piped jq in scripts/ci-demand-census.sh (every jq reads a file operand); the ci.yml sites in sites.txt are fixture names, not exercised'
   'scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh | tr | exempt | deliberate-fault never: `printf #!/usr/bin/env bash\nexit 5\n` at 334 (failing tr, "a failing CR strip is never read as no marker")'
-  'scripts/followthroughs/infra-config-activation-7220.test.sh | python3 | exempt | deliberate-fault never: `printf #!/usr/bin/env bash\nexit 1\n` at 305 (failing python3, "uncomputable signature refused") (reach T2; t2:rc0/6s; hits 1)'
   'scripts/followthroughs/inngest-soak-6178.test.sh | python3 | exempt | deliberate-fault python3 stubs exit 1 or print a non-digest to drive the refused-signature rows, and the producer is printf with an empty write (no EPIPE possible) of the followthrough script (reach: not probed, found by the final configuration, read by hand)'
   'scripts/followthroughs/web2-luks-live-6931.test.sh | ready | exempt | not-a-command a word in a usage comment of betterstack-query:110; the suite stubs a ready function and no non-test pipe feeds it (reach T2; t2:rc0/169s; hits 324)'
   'scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh | jq | drains | 1 | *'
@@ -2211,14 +2207,16 @@ PRODUCER_JOIN=(
   'tests/scripts/test-argv-bearer-sweep.sh | fatal | exempt | not-a-command a word in a case-pattern alternation (cloud-init-registry:1759), prose (reach T1; t1:rc124/301s; hits 0)'
   'tests/scripts/test-argv-bearer-sweep.sh | htpasswd | exempt | text-only every htpasswd word is registry-template site text or mutation text; the executable arm stubs docker, never htpasswd, so no piped call reaches an htpasswd stub'
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'
-  'tests/scripts/test-argv-bearer-sweep.sh | python3 | exempt | deliberate-fault never: defs 2973/2974/2975/3235 exit 1 / print a non-digest / fail only `-I` (fault stubs for the HMAC rows) (reach T1; t1:rc124/301s; hits 13)'
+  'tests/scripts/test-argv-bearer-sweep.sh | python3 | exempt | deliberate-fault never: the PYSEL and PYGARB fault stubs fail only `-I` / print a non-digest (fault stubs for the parity E1b rows) (reach T1; t1:rc124/301s; hits 13)'
   'tests/scripts/test-destroy-guard-counter-web-platform.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/41s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | curl | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (2 non-test producers) (reach T1; t1:rc124/300s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210, so no pipe reaches it'
   'tests/scripts/test-git-data-wipe-wedge.sh | doppler | exempt | text-only reach probe not run for this pair: the producer pipes into doppler only in the CI-token mint step of apply-web-platform-infra.yml (two secrets set calls), which this suite never executes; it extracts the plan-time gates and runs them under a shim that answers doppler run or a quiet success'
   'tests/scripts/test-git-data-boot-signal-poll.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/21s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-rung2-evidence-capture.sh | curl | exempt | text-only reach probe: suite ran green and no piped call reached the stub (2 non-test producers) (reach T1; t1:rc1/92s red3:rc0/38s; hits 0 (stdin-flag))'
+  'tests/scripts/test-registry-d10-workflow-wiring.sh | doppler | exempt | text-only the suite runs only the restore step body, which calls doppler bare in a command substitution with no stdin; the text piped into doppler lives in other steps of the workflow file it names, and none of those steps runs (1 non-test producers)'
   'tests/scripts/test-sentry-alert-live-fidelity.sh | curl | drains | 2 | *'
+  'plugins/soleur/test/token-drift-workflow-causes.test.sh | curl | drains | 1 | *'
   'tests/scripts/test-supabase-advisor-scan.sh | curl | drains | 1 | --header @-'
   'tests/scripts/test-workspaces-luks-cutover-gate.sh | cryptsetup | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/5s; hits 0)'
   'tests/scripts/test-zot-log-channel-probe.sh | awk | drains | 2 | *'

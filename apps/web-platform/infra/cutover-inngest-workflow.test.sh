@@ -338,8 +338,8 @@ done
 assert "pool pre-check reads SUPABASE_ACCESS_TOKEN (read-only mgmt API)" "grep -qF 'secrets.SUPABASE_ACCESS_TOKEN' '$WF'"
 # Ordering: the pre-check MUST run BEFORE the 2.0 registry probe (2.0 opens its own
 # GQL→Postgres connection that would otherwise be counted against the readiness baseline).
-PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | head -1 | cut -d: -f1)
-REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | head -1 | cut -d: -f1)
+PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | sed -n '1p' | cut -d: -f1) || true
+REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | sed -n '1p' | cut -d: -f1) || true
 assert "case (a) 2.-1 pool pre-check runs BEFORE the 2.0 registry probe" "[[ -n '$PRECHECK_LN' && -n '$REGPROBE_LN' && '$PRECHECK_LN' -lt '$REGPROBE_LN' ]]"
 assert "case (a) clean pool below ceiling emits ::notice:: and proceeds" "grep -qF '2.-1 pool pre-check CLEAN' '$WF'"
 # (b) gates on readiness baseline + burst headroom, NOT the 80%-of-cap pressure line
@@ -370,13 +370,13 @@ DF_SH="$REPO_ROOT/apps/web-platform/infra/inngest-doublefire-probe.sh"
 # in-script DEFAULT deadline < the outer curl --max-time for each op. inventory 22 < 30,
 # doublefire 50 < 60 — an ordering-only check (deadline < outer) would be met even WITHOUT
 # the clamp, so we ALSO assert the remaining-budget clamp exists in each script.
-INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | head -1)
-DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | head -1)
+INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | sed -n '1p') || true
+DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | sed -n '1p') || true
 assert "inventory in-script deadline (22) < outer curl --max-time 30 (SUM bound)" "[[ -n '$INV_DEADLINE' && '$INV_DEADLINE' -lt 30 ]]"
 # #6919 — the doublefire budget was raised (deadline 50→90, outer curl 60→120) + a per-page
 # FLOOR added so late pages never starve to ~0s → empty → false "malformed". SUM bound stays
 # airtight: deadline(90) + PAGE_MIN(8) = 98 < the 120s outer curl.
-DF_PAGE_MIN=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$DF_SH" | head -1)
+DF_PAGE_MIN=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$DF_SH" | sed -n '1p') || true
 assert "doublefire in-script deadline (90) < outer curl --max-time 120 (SUM bound, #6919)" "[[ -n '$DF_DEADLINE' && '$DF_DEADLINE' -lt 120 ]]"
 assert "doublefire SUM bound airtight: deadline + PAGE_MIN < 120 (#6919)" "[[ -n '$DF_DEADLINE' && -n '$DF_PAGE_MIN' && \$(( DF_DEADLINE + DF_PAGE_MIN )) -lt 120 ]]"
 assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-starvation, #6919)" "grep -qE 'max_time < PREFLIGHT_PAGE_MIN_S \)\) && max_time=\\\$PREFLIGHT_PAGE_MIN_S' '$DF_SH'"
@@ -603,8 +603,8 @@ assert "arm) reads POSTGRES_URI read-through from prd_terraform (no -p/-c on the
 assert "arm) does NOT reference a dropped operator seed (INNGEST_POSTGRES_URI_PROD)" "! grep -qE 'INNGEST_POSTGRES_URI_PROD' '$ARM_FILE'"
 
 # AC7 write order: armed written AFTER both URIs.
-PG_SET_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
-FLIP_SET_LN=$(grep -nE 'secrets set INNGEST_CUTOVER_FLIP ' "$ARM_FILE" | head -1 | cut -d: -f1)
+PG_SET_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
+FLIP_SET_LN=$(grep -nE 'secrets set INNGEST_CUTOVER_FLIP ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
 assert "arm) writes POSTGRES_URI BEFORE INNGEST_CUTOVER_FLIP=armed (write order AC7)" "[[ -n '$PG_SET_LN' && -n '$FLIP_SET_LN' && '$PG_SET_LN' -lt '$FLIP_SET_LN' ]]"
 
 # AC8 / G3 positive prod-URI assertion + :6543 reject; G1 pre-write FSM-state guard (DI-C2).
@@ -1184,7 +1184,11 @@ lv_mocks() {
         echo HCLOUD_TOKEN_READONLY >> "$FLV_HC_READS"
         case "$LV_TOK" in both|ro) printf '%s\n' 'RO-TOKEN-SENTINEL' ;; esac
         return 0 ;;
-      "secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain")
+      "secrets get HCLOUD_TOKEN"|"secrets get HCLOUD_TOKEN "*|"secrets get "*" HCLOUD_TOKEN"|"secrets get "*" HCLOUD_TOKEN "*)
+        # BAIT, keyed on the NAME and not the argv: any read of the bare read/write name `HCLOUD_TOKEN`, at ANY argv
+        # position (first, middle or last) and with any flags, is recorded and answered, so a respelled fallback cannot
+        # slip into the generic miss arm. Ordered after the HCLOUD_TOKEN_READONLY arm, and every form needs a space or
+        # the end of the argv after the name, so `HCLOUD_TOKEN_READONLY` in any spelling can never match here.
         echo HCLOUD_TOKEN >> "$FLV_HC_READS"
         case "$LV_TOK" in both|rw) printf '%s\n' 'RW-TOKEN-SENTINEL' ;; esac
         return 0 ;;
@@ -1436,7 +1440,9 @@ call_flip_liveness_count current rc6
 assert "G3 generation anchor: a DNS/connect failure names that class" "grep -qF 'unreachable from the runner (transport rc=6' '$FLV_ERR'"
 call_flip_liveness_count current ok none
 assert "G3 generation anchor: no token resolved -> __UNREADABLE__, curl never called" \
-  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' ]] && grep -qF 'doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN' '$FLV_ERR'"
+  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' ]] && grep -qF 'doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform' '$FLV_ERR' && grep -qF 'step O5 of infra-credential-tiers-8209.md' '$FLV_ERR'"
+assert "G3 generation anchor: the empty-token warning restores the secret only if it is genuinely absent (auth/network checked first)" \
+  "grep -qF 'only if the secret is genuinely absent' '$FLV_ERR'"
 
 lv_case "a timestamp with a trailing newline is excluded, not fatal to the count" nlts+2cur ok 2
 call_flip_liveness_count late-ingest ok
@@ -1446,40 +1452,55 @@ call_flip_liveness_count no-ts ok
 assert "G3 generation: counted=0 with malformed>0 warns of a schema change, which a replace will not fix" \
   "grep -qF 'carried no parseable __REALTIME_TIMESTAMP or dt' '$FLV_ERR' && ! grep -qF 'WAIT and re-dispatch' '$FLV_ERR'"
 call_flip_liveness_count current ok rw
-assert "G3 generation anchor: the read/write fallback is announced by NAME (never value)" \
-  "grep -qF '::notice::G3 generation anchor: using the read/write HCLOUD_TOKEN' '$FLV_ERR'"
-assert "G3 generation anchor: the read/write token is masked too, and reaches stderr only as the mask" \
-  "grep -qxF '::add-mask::RW-TOKEN-SENTINEL' '$FLV_ERR' && [[ \"\$(grep -c 'RW-TOKEN-SENTINEL' '$FLV_ERR')\" -eq 1 ]]"
-call_flip_liveness_count current http401 rw
+assert "G3 generation anchor: read-only empty and read/write present -> only HCLOUD_TOKEN_READONLY is read (HC_READS exact)" \
+  "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> zero curl calls and the result is __UNREADABLE__" \
+  "[[ ! -s '$FLV_CURL_CALLS' && '$FLV_OUT' == '__UNREADABLE__' ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> no doppler/curl request deviated from the contract (STUB_MISS empty)" \
+  "[[ -z \"\$(cat '$FLV_STUB_MISS' 2>/dev/null)\" ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> the read/write sentinel is absent from stdout, stderr, curl argv, curl stdin and curl calls" \
+  "! grep -qF 'RW-TOKEN-SENTINEL' '$FLV_ERR' '$FLV_CURL_ARGV' '$FLV_CURL_STDIN' '$FLV_CURL_CALLS' && [[ '$FLV_OUT' != *RW-TOKEN* ]]"
+# An ENVIRONMENT fallback (a read/write HCLOUD_TOKEN already exported into the reader's environment, read-only secret empty) must be caught too.
+HCLOUD_TOKEN=RW-ENV-SENTINEL call_flip_liveness_count current ok none
+assert "G3 generation anchor: read-only empty and HCLOUD_TOKEN exported into the environment -> __UNREADABLE__, zero curl calls, only the read-only name read" \
+  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' && \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
+assert "G3 generation anchor: read-only empty and HCLOUD_TOKEN exported into the environment -> RW-ENV-SENTINEL never reaches stdout, stderr, curl argv, curl stdin or curl calls" \
+  "! grep -qF 'RW-ENV-SENTINEL' '$FLV_ERR' '$FLV_CURL_ARGV' '$FLV_CURL_STDIN' '$FLV_CURL_CALLS' && [[ '$FLV_OUT' != *RW-ENV* ]]"
+call_flip_liveness_count current http401 both
 assert "G3 generation anchor: a rejected token names the variable that was sent" \
-  "grep -qF 'the one sent was HCLOUD_TOKEN;' '$FLV_ERR'"
+  "grep -qF 'the one sent was HCLOUD_TOKEN_READONLY;' '$FLV_ERR'"
 # A local filter fault must warn, so the `unreadable` refusal never points at a warning that is absent.
+# Herestring feeds, never `printf | _generation_scoped_count` (#9325): the counter can refuse
+# BEFORE reading stdin — the overridden _current_instance_row_counts below never reads it at
+# all, and an empty tag returns earlier still — so a producer's write lands on a closed read
+# end, pipefail turns the SIGPIPE (141) into the pipeline rc, and `set -e` propagates it out
+# of FILTER_OUT=$(…) and kills the whole suite. A herestring has no producer process.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' 'garbage'; }
-  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip <<<"$FIX_CUR_1_FLIP" 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" <<<"$FIX_CUR_1_FLIP" )"
 assert "G3 generation: a filter that does not yield six integers -> __UNREADABLE__ WITH a warning naming it" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]] && grep -qF 'row-count filter did not yield six integers' '$FLV_ERR'"
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' '2 2 2 0 0 0 9'; }
-  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip <<<"$FIX_CUR_1_FLIP" 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" <<<"$FIX_CUR_1_FLIP" )"
 assert "G3 generation: a SEVENTH token from the filter is refused, not silently absorbed" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]]"
 # #8846: a counter reached without an emitter tag cannot scope to the FSM, so it refuses, and says
 # the defect is in the script (not the host) — on STDERR, never inside the stdout token.
 # Ref #9325: refusing consumers need no input; a pipe races printf against their exit under pipefail.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
-  _generation_scoped_count "$FIX_FLOOR" test "" <<<"$FIX_CUR_1_FLIP"$'\n'"$FIX_CUR_2_FLIP" 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test "" 2>"$FLV_ERR" <<<"$FIX_CUR_1_FLIP"$'\n'"$FIX_CUR_2_FLIP" )"
 assert "#8846 an EMPTY emitter tag -> __UNREADABLE__ (got '$FILTER_OUT'), with the missing-tag warning on stderr" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]] && grep -qF '::warning::' '$FLV_ERR' && grep -qF 'liveness counter called without an emitter tag — a defect in cutover-inngest.sh, not a host state' '$FLV_ERR'"
 # #8873 review (test-design F4): the emitter match is EXACT. The other FSM's rows, and a tag that
 # merely shares the `inngest-` prefix, count 0 — a `startswith("inngest-")` loosening survived every
 # row above because each fixture's emitter was either the exact tag or `doppler`.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
-  printf '%s\n' "$FIX_CUR_1_LUKS" "$FIX_CUR_2_LUKS" | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" <<<"$FIX_CUR_1_LUKS"$'\n'"$FIX_CUR_2_LUKS" )"
 assert "#8873 the LUKS FSM's current-generation rows count 0 on the FLIP counter (got '$FILTER_OUT')" "[[ '$FILTER_OUT' == '0' ]]"
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
-  printf '%s\n' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)) inngest-cutover-flip-x)" \
-  | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" \
+    <<<"$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)) inngest-cutover-flip-x)" )"
 assert "#8873 a tag that only SHARES the prefix (inngest-cutover-flip-x) counts 0 (got '$FILTER_OUT')" "[[ '$FILTER_OUT' == '0' ]]"
 # Closure: the host-pair predicate lives in exactly ONE place, and both write-gating readers reach it.
 HP_SITES=$(grep -cF '.r.host == $h and .r.host_name == $hn' "$BODY_SH" || true)
@@ -1498,7 +1519,7 @@ assert "G3 generation: the flush latch body never reaches the generation anchor 
 
 # Guard 2 — token hygiene and transport, on a successful read.
 call_flip_liveness_count current ok both
-assert "G3 generation anchor: Tier A first — only HCLOUD_TOKEN_READONLY is read when it resolves" \
+assert "G3 generation anchor: only HCLOUD_TOKEN_READONLY is read" \
   "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
 assert "G3 generation anchor: the token travels on curl's stdin as the Authorization header" \
   "grep -qxF 'Authorization: Bearer RO-TOKEN-SENTINEL' '$FLV_CURL_STDIN'"
@@ -1509,9 +1530,6 @@ assert "G3 generation anchor: transport pins (--disable first, --noproxy, --prot
   "[[ \"\$(head -1 '$FLV_CURL_ARGV')\" == '--disable' ]] && grep -qxF -- '--noproxy' '$FLV_CURL_ARGV' && grep -qxF -- '=https' '$FLV_CURL_ARGV' && grep -qxF -- '--max-time' '$FLV_CURL_ARGV' && grep -qxF -- '@-' '$FLV_CURL_ARGV' && grep -qxF -- 'name=soleur-inngest' '$FLV_CURL_ARGV' && grep -qxF -- 'https://api.hetzner.cloud/v1/servers' '$FLV_CURL_ARGV'"
 assert "G3 generation anchor: no --retry, no -f/--fail, no -S (the HTTP class must stay readable; curl's error text is not an egress path)" \
   "! grep -qxE -- '--retry.*|-f|--fail.*|-S|-sS|-fsS|--show-error' '$FLV_CURL_ARGV'"
-call_flip_liveness_count current ok rw
-assert "G3 generation anchor: falls back to HCLOUD_TOKEN only after an empty read-only read" \
-  "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY HCLOUD_TOKEN ' && '$FLV_OUT' == '2' ]] && grep -qxF 'Authorization: Bearer RW-TOKEN-SENTINEL' '$FLV_CURL_STDIN'"
 # The wrapper returns 0 on every failure, so a caller's `x="$(…)"` under set -e never dies mute.
 AR_REACHED=0
 for _am in rc28 http503 absent nonjson; do
@@ -1598,9 +1616,9 @@ assert "G3 generation: no curl/doppler request in this section deviated from the
   "[[ ! -s '$FLV_STUB_MISS' ]]"
 # Positive controls: the stubs must be able to REJECT, or the ledger above proves nothing.
 ( lv_mocks current ok both; printf 'x' | curl --disable --noproxy '*' -s --proto =https --max-time 20 -H @- -w '\n%{http_code}' https://api.hetzner.cloud/v1/servers >/dev/null ) || true
-( lv_mocks current ok both; doppler secrets get HCLOUD_TOKEN -p soleur -c prd --plain >/dev/null ) || true
+( lv_mocks current ok both; doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd --plain >/dev/null ) || true
 assert "G3 generation: stub control — curl without --get and doppler with the wrong config are both recorded as misses" \
-  "grep -qF 'unexpected-curl: w=1 get=0' '$FLV_STUB_MISS' && grep -qF 'unexpected-doppler: secrets get HCLOUD_TOKEN -p soleur -c prd --plain' '$FLV_STUB_MISS'"
+  "grep -qF 'unexpected-curl: w=1 get=0' '$FLV_STUB_MISS' && grep -qF 'unexpected-doppler: secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd --plain' '$FLV_STUB_MISS'"
 
 # --- (b3) op=resume's G3 HOST-AUDIBILITY GATE (#7674, CTO ruling) -----------------------------
 # `flushed` is acted on ONLY by the on-host 30s timer. Writing it to a dark host recovers nothing
@@ -1820,8 +1838,8 @@ assert "arm) G3.6 refuses BEFORE the first prod write (G4)" "[[ -n '$G36_LN' && 
 assert "arm) G3.5 cites the #6178 cutover-502 condition in its remediation" "grep -qF 'cutover-502' '$ARM_FILE'"
 # The parity gate runs BEFORE the arm writes (G4/G5) — a divergent channel must
 # block the flip, never be written past.
-PARITY_LN=$(grep -nF 'G3.5 CHANNEL-KEY PARITY GATE FAILED' "$ARM_FILE" | head -1 | cut -d: -f1)
-G4_WRITE_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+PARITY_LN=$(grep -nF 'G3.5 CHANNEL-KEY PARITY GATE FAILED' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
+G4_WRITE_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
 assert "arm) G3.5 parity gate precedes the G4 POSTGRES_URI write (blocks before arming)" "[[ -n '$PARITY_LN' && -n '$G4_WRITE_LN' && '$PARITY_LN' -lt '$G4_WRITE_LN' ]]"
 
 # D5/C4 environment required-reviewer gate + C5 conditional token env (repo-level, not in the case body).
@@ -2421,7 +2439,7 @@ assert "#8873 _flip_transition_dt derives NO anchor from the LUKS FSM's rows" "[
 # TRUNCATION: a FULL page means betterstack-query.sh's newest-N LIMIT may have hidden the
 # earliest transition, so the row we would pick is LATER than truth — a NARROWER window,
 # the unsafe direction. It must refuse rather than derive an under-covering anchor.
-FTD_LIMIT=$(grep -oE 'local limit=[0-9]+' "$DF_HARNESS_SRC" | grep -oE '[0-9]+' | head -1)
+FTD_LIMIT=$(grep -oE 'local limit=[0-9]+' "$DF_HARNESS_SRC" | grep -oE '[0-9]+' | sed -n '1p') || true
 assert "#6178 the truncation limit was extracted from the SUT (not hardcoded here)" "[[ '$FTD_LIMIT' =~ ^[0-9]+$ && '$FTD_LIMIT' -gt 1 ]]"
 # BOUNDARY PAIR, derived: limit-1 must be accepted, limit must be refused. Sampling only
 # {0,1,3,50} left `-ge $limit` indistinguishable from `-ge 4`.
@@ -2656,7 +2674,7 @@ assert "#6178 op=verify QUALIFIES a clean verdict when the claim is weaker" \
 # extraction replaced it). `// "absent"` is load-bearing: a bare .total_count on a body
 # lacking the field yields the string "null", which matches NONE of the gate's literals, so
 # a partial GraphQL error would sail through the vacuity gate.
-TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | head -1 | sed "s/^jq -r '//; s/'\$//")
+TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | sed -n '1p' | sed "s/^jq -r '//; s/'\$//") || true
 assert "#6178 the total_count extraction expression was found in the verify arm" "[[ -n '$TC_EXPR' ]]"
 for _tc_case in '{}|absent' '{"total_count":0}|0' '{"total_count":"unknown"}|unknown' '{"total_count":728}|728'; do
   _tc_body="${_tc_case%%|*}"; _tc_want="${_tc_case##*|}"
@@ -4242,7 +4260,7 @@ assert "#6939 verify) calls missed_tick_report exactly once (got '$MTR_CALL_CT')
 assert "#6939 the call sits after the LAST exactly-once VERIFIED echo (call=$MTR_CALL_LN verdict=$MTR_VERDICT_LN)" "[[ -n '$MTR_CALL_LN' && -n '$MTR_VERDICT_LN' && '$MTR_CALL_LN' -gt '$MTR_VERDICT_LN' ]]"
 # The neighbours pin reachability: a call wrapped in an `if`, or a second printer after it, moves
 # one of them.
-MTR_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'missed_tick_report' | head -1 | sed 's/^[[:space:]]*//' || true)
+MTR_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'missed_tick_report' | sed -n '1p' | sed 's/^[[:space:]]*//' || true)
 MTR_NEXT=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -A1 -F 'missed_tick_report' | tail -1 | sed 's/^[[:space:]]*//' || true)
 # #6940 — the call now follows the zero-run discovery block's closing `fi`; the
 # block's own position (directly after the SCOPE CAVEAT) is pinned below.
@@ -4326,8 +4344,8 @@ _mtr_rc=$MTR_RC
 MTR_SET=$(mtr_set)
 MTR_SHAPE_BAD=$( { grep -E '^  candidate ' "$MTR_OUT" || true; } | grep -cvE '^  candidate function_id=[^ ]+ empty_bucket_start=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' || true)
 MTR_CMDISH=$(grep -cE 'soleur:|--event|manual-trigger' "$MTR_OUT" || true)
-MTR_HDR_LN=$(grep -nE '^::warning::.*UNVERIFIED.*NOT a re-fire list' "$MTR_OUT" | head -1 | cut -d: -f1 || true)
-MTR_CAND1_LN=$(grep -nE '^  candidate ' "$MTR_OUT" | head -1 | cut -d: -f1 || true)
+MTR_HDR_LN=$(grep -nE '^::warning::.*UNVERIFIED.*NOT a re-fire list' "$MTR_OUT" | sed -n '1p' | cut -d: -f1 || true)
+MTR_CAND1_LN=$(grep -nE '^  candidate ' "$MTR_OUT" | sed -n '1p' | cut -d: -f1 || true)
 assert "#6939 ON canonical: rc is exactly 0 (got $_mtr_rc)" "[[ '$_mtr_rc' == '0' ]]"
 assert "#6939 ON canonical: the UNVERIFIED / NOT a re-fire list header precedes every candidate (hdr=$MTR_HDR_LN first=$MTR_CAND1_LN)" "[[ -n '$MTR_HDR_LN' && -n '$MTR_CAND1_LN' && '$MTR_HDR_LN' -lt '$MTR_CAND1_LN' ]]"
 assert "#6939 ON canonical: exact candidate set (got '$MTR_SET')" "[[ '$MTR_SET' == 'fn-d@11:00,fn-d@12:00,fn-d@13:00,fn-h@12:00' ]]"
@@ -4446,8 +4464,8 @@ echo "--- #6940 zero-run discovery (registry-sourced, scoped re-probe) ---"
 # REG_BODY is captured AFTER the registry precondition reads BODY and BEFORE the
 # doublefire fetch overwrites it — a capture after that point would hold the runs
 # body and silently un-discover every cron.
-REG_BODY_LN=$(grep -nF 'REG_BODY="$BODY"' "$VERIFY_ARM_FILE" | head -1 | cut -d: -f1 || true)
-RUNS_FETCH_LN=$(grep -n 'cat /tmp/verify-runs' "$VERIFY_ARM_FILE" | head -1 | cut -d: -f1 || true)
+REG_BODY_LN=$(grep -nF 'REG_BODY="$BODY"' "$VERIFY_ARM_FILE" | sed -n '1p' | cut -d: -f1 || true)
+RUNS_FETCH_LN=$(grep -n 'cat /tmp/verify-runs' "$VERIFY_ARM_FILE" | sed -n '1p' | cut -d: -f1 || true)
 assert "#6940 verify arm captures REG_BODY exactly once (got line '$REG_BODY_LN')" "[[ -n '$REG_BODY_LN' && \"\$(grep -cF 'REG_BODY=\"\$BODY\"' '$VERIFY_ARM_FILE')\" -eq 1 ]]"
 assert "#6940 REG_BODY is captured BEFORE the doublefire fetch overwrites BODY (reg=$REG_BODY_LN runs=$RUNS_FETCH_LN)" "[[ -n '$REG_BODY_LN' && -n '$RUNS_FETCH_LN' && '$REG_BODY_LN' -lt '$RUNS_FETCH_LN' ]]"
 
@@ -4461,7 +4479,7 @@ assert "#6940 zero_run_cron_ids() extraction is non-empty and carries its defini
 # windowless burns a webhook call the report cannot use), and the block directly
 # follows the SCOPE CAVEAT echo.
 assert "#6940 discovery is gated on flag == true AND both window vars set" "grep -qF 'if [[ \"\$MTR_GATE\" == \"true\" && -n \"\${CUTOVER_WINDOW_FROM:-}\" && -n \"\${CUTOVER_WINDOW_UNTIL:-}\" ]]; then' '$VERIFY_ARM_FILE'"
-DISC_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'MTR_GATE="${CUTOVER_MISSED_TICK_CANDIDATES:-}"' | head -1 | sed 's/^[[:space:]]*//' || true)
+DISC_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'MTR_GATE="${CUTOVER_MISSED_TICK_CANDIDATES:-}"' | sed -n '1p' | sed 's/^[[:space:]]*//' || true)
 assert "#6940 the discovery block directly follows the 2.6 SCOPE CAVEAT echo (got: \$DISC_PREV)" "[[ \"\$DISC_PREV\" == 'echo \"::notice::2.6 SCOPE CAVEAT'* ]]"
 assert "#6940 an empty zero-run set issues NO second call (guarded by -n)" "grep -qF 'if [[ -n \"\$ZERO_RUN_IDS\" ]]; then' '$VERIFY_ARM_FILE'"
 # The WIRE, not just the endpoints (#7969): the suite executes the extracted helper
@@ -4948,7 +4966,15 @@ _DISPATCHED=$((PASS + FAIL))
 #   row (+1), the empty-scan row (+1), and the two positive controls (+2).
 # 1127 -> 1131 (+4) at the #8316 review round, measured: the strip's suffix and prefix over-reach rows (+2) and the two pins on
 #   the reworded G3.7 `latched` ::error:: text (+2); the every-_erg_*-helper row now derives from `_GATE_OTHER_RE` (net 0).
-_EXACT_FLOOR=1131
+# 1131 -> 1129 (-2) at #10664 Site C (the generation anchor has no read/write fallback), measured: the "fallback is announced by
+#   NAME", "read/write token is masked too" and "falls back only after an empty read-only read" assertions are removed (-3) and
+#   one block asserting the read/write token is never read, sent or printed replaces them (+1); the 401 row keeps its place.
+# 1129 -> 1134 (+5) at the #10891 review round, measured: the compound "read-only empty, read/write present" assertion is split into
+#   four named ones (HC_READS exact, zero curl calls + verdict, STUB_MISS empty, read/write sentinel absent from every stream) (+3), and an
+#   exported-HCLOUD_TOKEN environment row adds two (verdict + zero curl + reads, sentinel absent) (+2): +5 in total.
+# 1134 -> 1135 (+1) at the #10664 review round 2, measured: one pin on the empty-token warning's remedy tail (`only if the secret is
+#   genuinely absent`, so a reword cannot drop the auth/network-first ordering).
+_EXACT_FLOOR=1135
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

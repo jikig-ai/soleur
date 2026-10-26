@@ -47,6 +47,8 @@ Our review panel found four defects in that guard before it shipped:
 
 Four ways for "the map is correct" to be a lie, each subtle, each caught before anyone relied on it. This became the theme of the whole four days.
 
+We wrote up [the guard that keeps the map honest]({{ site.url }}/blog/map-that-cant-drift/) — the four defects it caught in itself, and what a coverage check has to prove — as a companion to this post. And for your own agent, [the convention that lets it keep an honest map]({{ site.url }}/blog/map-that-only-records-what-the-agent-saw/) is written up as a companion too — what the map records, where it lives, and how it stays true.
+
 ## The test that found a bug on day one — and the example that could never fail
 
 Property-based testing is the row most teams skip, because "generate thousands of random inputs" sounds exotic. It is not. You write one sentence — "cleaning up a value twice must give the same answer as cleaning it once" — and a machine spends its afternoon trying to prove you wrong.
@@ -55,11 +57,13 @@ The very first generated test we ran caught a real bug on day one. A small utili
 
 Then the row taught its own second lesson. When we wrote the guide that teaches our users' workflows to do the same thing, three reviewers independently flagged the guide's own worked example: it was written so that every possible answer — including a completely wrong one — would pass it. An example that cannot fail teaches a practice that cannot catch anything. And after we fixed that, the fix-round found a second layer: a do-nothing program still passed the improved example. Teaching material gets graded like code now, because to a reader it is code.
 
+We wrote up [the full post-mortem]({{ site.url }}/blog/property-test-cannot-fail-teaches-nothing/) — how the example shipped, what the reviewers caught, and what it changed — as a companion to this post. We also wrote up [the day-one bug itself]({{ site.url }}/blog/first-property-test-found-real-bug/) — the input nobody would have hand-picked — as a companion to this post.
+
 ## Old versus new, side by side
 
 The differential-testing row exists because of a failure mode anyone who has replaced a system knows: the new version passes its own tests while quietly diverging from the old one in ways nobody documented. Users never relied on the specification; they relied on what the old thing actually did.
 
-The answer is to treat the old system as the referee: feed both versions the same inputs and account for every difference. We shipped that practice into the workflow our users get — any change that moves data through a new path now has to show before-and-after evidence, born from an incident class we had measured where a change applied cleanly and broke everything downstream of it. The companion rule the reviews surfaced: a check that cannot go red is not coverage. If your comparison can only ever report success, it is a formality wearing a seatbelt costume.
+The answer is to treat the old system as the referee: feed both versions the same inputs and account for every difference. We shipped that practice into the workflow our users get — any change that moves data through a new path now has to show before-and-after evidence, born from an incident class we had measured where a change applied cleanly and broke everything downstream of it. The companion rule the reviews surfaced: a check that cannot go red is not coverage. If your comparison can only ever report success, it is a formality wearing a seatbelt costume. We wrote up [the differential-testing practice]({{ site.url }}/blog/test-the-migration-not-just-the-schema/) — the old system as referee, before-and-after evidence for every change — as a companion to this post.
 
 ## A pass on retry is not a pass
 
@@ -67,7 +71,7 @@ Here is a failure mode unique to AI-driven work. When a check fails sometimes an
 
 So we shipped a quarantine rule into the fix-loop workflow users get: every newly failed check gets exactly one isolated re-run, and a pass-on-retry on unchanged work is filed as a flake to be quarantined and tracked — never reported as fixed.
 
-And here the reviews caught the sharpest defect of the four days. The rule's own "all clear" row — the line meant to mean "everything that failed turned out to be a flake" — could fire on a run that produced no readable results at all. Zero quarantines, read as green. The success row proved nothing, which is exactly the failure mode the row existed to prevent. A second reviewer found a warning flag whose trigger was empty by construction — it compared the failing check against a list of things the workflow never touches, so it could never be true. Decoration that reads as coverage.
+And here the reviews caught the sharpest defect of the four days. The rule's own "all clear" row — the line meant to mean "everything that failed turned out to be a flake" — could fire on a run that produced no readable results at all. Zero quarantines, read as green. The success row proved nothing, which is exactly the failure mode the row existed to prevent. A second reviewer found a warning flag whose trigger was empty by construction — it compared the failing check against a list of things the workflow never touches, so it could never be true. Decoration that reads as coverage. We wrote up [the quarantine protocol]({{ site.url }}/blog/flaky-test-passed-on-retry-quarantine/) — one isolated re-run, then the file — as a companion to this post.
 
 ## Safety rails you can install
 
@@ -75,7 +79,7 @@ The last row is the one closest to the founder's version of the problem. We run 
 
 We audited all 102 of our automated checks one by one. The answer: four. Four were generic enough to belong in any repository — a scan for accidentally committed secrets, a check that work never lands straight on the main line, a check against stashing away unfinished work, and a check that catches tests abandoned with nothing left to run. Nearly everything a mature verification system accumulates turns out to be welded to the machinery around it. The audit is the honest part of the story — most teams would have promised a hundred and shipped four quietly.
 
-The four that shipped each have to prove themselves before they are allowed to guard anything. Installing one triggers a rehearsal on a throwaway copy of the repository: the check must catch a real planted violation, then go quiet when the violation is removed. A guard that cannot be proven to fire is a document, not a guard — and it installs nothing if something already sits where it would go, rather than quietly overwriting what you have.
+The four that shipped each have to prove themselves before they are allowed to guard anything. Installing one triggers a rehearsal on a throwaway copy of the repository: the check must catch a real planted violation, then go quiet when the violation is removed. A guard that cannot be proven to fire is a document, not a guard — and it installs nothing if something already sits where it would go, rather than quietly overwriting what you have. We wrote up [the audit's full story]({{ site.url }}/blog/audited-102-guardrails-four-portable/) — every check classified, every verdict explained — as a companion to this post.
 
 ## The real lesson: verify the verifiers
 

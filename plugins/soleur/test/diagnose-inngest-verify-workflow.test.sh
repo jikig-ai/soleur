@@ -156,6 +156,18 @@ chk("D4b", "the sigstore bundle inside the tarball is jq-inspected",
     re.search(r"(?<![A-Za-z0-9_.-])jq(?![A-Za-z0-9_-])", code) is not None
     and ".sigstore.json" in code)
 
+# D6 — the defect-3 verbatim-error surface: the field-level census that discriminates the
+# H1-H4 loci, plus the Go probe that prints the LoadJSONFromPath error checkNewBundle swallows.
+chk("D6a", "a SHA-pinned actions/setup-go step exists for the verbatim loader probe",
+    any(re.fullmatch(r"actions/setup-go@[0-9a-f]{40}", str(s.get("uses", "")) or "") is not None
+        for s in steps))
+chk("D6b", "the probe pins sigstore-go@v1.2.0 literally (the vendored version in cosign v3.1.1's go.mod)",
+    "sigstore-go@v1.2.0" in code)
+chk("D6c", "the probe calls LoadJSONFromPath and prints LOAD_OK or the verbatim error",
+    "LoadJSONFromPath" in code and "LOAD_OK" in code)
+chk("D6d", "the TLE census discriminates the locus (kindVersion + checkpoint envelope + canonicalizedBody)",
+    "kindVersion" in code and "checkpoint" in code and "canonicalizedBody" in code)
+
 for r in rows:
     print("%s\t%s\t%s\t%s" % r)
 PY
@@ -206,6 +218,18 @@ awk -F'\t' '$1=="D1c" && $2=="FAIL" {found=1} END{exit found?0:1}' "$SCR/mut/row
   && ok "D1c mutation: dropping packages:read goes red" \
   || no "D1c mutation: workflow without packages:read stayed green (row is vacuous)"
 
+# Mutation arm: a probe pinned to the wrong sigstore-go version must go red on D6b.
+sed 's/sigstore-go@v1\.2\.0/sigstore-go@v9.9.9/' "$WF" > "$SCR/mut/wrong-pin.yml" \
+  && assert_fixture_dir "$SCR/mut/wrong-pin.yml"
+if grep -q 'sigstore-go@v9.9.9' "$SCR/mut/wrong-pin.yml"; then
+  python3 "$SCR/analyze.py" "$SCR/mut/wrong-pin.yml" > "$SCR/mut/rows3.tsv" 2>/dev/null || true
+  awk -F'\t' '$1=="D6b" && $2=="FAIL" {found=1} END{exit found?0:1}' "$SCR/mut/rows3.tsv" \
+    && ok "D6b mutation: wrong sigstore-go pin goes red" \
+    || no "D6b mutation: wrong sigstore-go pin stayed green (row is vacuous)"
+else
+  no "D6b mutation arm could not build the mutated copy (sed found no pin)"
+fi
+
 # D5 — the fix-round guard lines this suite's whole file exists to pin:
 # errexit-guard on the verify arms (a bare docker run aborts the step on the
 # failure the probe exists to capture), digest-shape validation, and the
@@ -214,7 +238,7 @@ for pin in '|| rc=$?' 'BUNDLE_DIGEST" =~ ^(sha256:)?' 'tar -tzvf' 'END{exit foun
   grep -qF "$pin" "$WF" && ok "D5: $pin" || no "D5: missing guard line: $pin"
 done
 
-MIN_ASSERTIONS=30
+MIN_ASSERTIONS=35
 [ "$passes" -ge "$MIN_ASSERTIONS" ] \
   || { echo "FLOOR: ${passes} assertions < floor $MIN_ASSERTIONS — a block stopped running"; fails=$((fails+1)); }
 

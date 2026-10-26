@@ -1700,6 +1700,111 @@ resource "sentry_alert" "seccomp_remediation_failed" {
   }
 }
 
+# server/agent-runner-sandbox-config.ts (buildAgentSandboxConfig) pre-creates each masked dir (peer-socket,
+# transcript, session-tmp) before every dispatch (an ungated, idempotent mkdirSync on each build); the SDK skips a deny landing that does not exist, so a failed
+# mkdir leaves a cross-tenant read channel UNMASKED for that dir (the entry stays in denyRead: fail-open per dir).
+# Before this rule the failure was an error event with nobody behind it (#10455). The emit is
+# `reportSilentFallback(null, { feature: "agent-sandbox", op: "masked-dir-precreate", tags: { dir_kind } })`: the
+# literal `null` first argument keeps it on the MESSAGE path, because an Error would be mirrored by the pino
+# logger as feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never
+# match. Contract: test/sentry-masked-dir-precreate-alert-op-contract.test.ts (emit site <-> this block) and
+# test/agent-sandbox-precreate-sentry-path.test.ts (real logger, real helper).
+#
+# GROUPING: the message is constant per `dir_kind` (peer-socket | transcript | session-tmp) and carries no path, so
+# Sentry opens ONE issue per kind (an acknowledged benign kind cannot silence a later one); no per-dir fingerprint
+# (one persistent fault would otherwise page once per dir). value=0 notifies on the first event of a group within
+# the hour, and a persistent fault re-notifies every `frequency_minutes` (an acknowledged/resolved issue stops it).
+# Email only (issue owners, ActiveMembers fallthrough: the project has no ownership rule, so issue_owners alone
+# resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
+# are carried: `op` alone would also match any future emitter reusing the op name under another feature.
+# Distinct frequency_minutes = 39 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-38,60-63,120,240,
+# 1440-1442; re-verified free after merging main, which took 38 for art17_workspace_tree_erasure_incomplete); dedup keys on action shape + action_match + filter_match + frequency, not
+# conditions. Events carry only the kind, the errno (code/syscall) and the dir path: no user content.
+resource "sentry_alert" "masked_dir_precreate_failed" {
+  organization      = var.sentry_org
+  name              = "masked-dir-precreate-failed"
+  enabled           = true
+  frequency_minutes = 39
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-sandbox" } },
+        { tagged_event = { key = "op", match = "eq", value = "masked-dir-precreate" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# server/agent-auth-failure.ts observes the SDK stream of BOTH runners (legacy agent-runner.ts, cc-dispatcher.ts)
+# and emits ONE event when the Claude CLI replies "Not logged in · Please run /login" (or its structured
+# `authentication_failed` code): `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`.
+# Before this rule that reply reached the user with nothing in Sentry or Better Stack (#10455, #10548); the cause is
+# not known, so the event carries ten closed-enum tags that separate the competing hypotheses in ONE event. The
+# literal `null` first argument keeps it on the MESSAGE path: an Error would be mirrored by the pino logger as
+# feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never match.
+# Contract: test/sentry-agent-auth-failure-alert-op-contract.test.ts (emit site <-> this block <-> alert-reference.json)
+# and test/agent-auth-failure-sentry-path.test.ts (real logger, real helper, secret canary).
+#
+# TEMPORARY DIAGNOSTIC. It exists to find the cause of the outage, not to page on a steady state. Lifecycle: the
+# email action is dropped within 48 hours of the first recorded real event (tag tuple recorded on #10455) and the
+# rule is removed when the root-cause fix merges or 30 days after the first event, whichever comes first. The
+# removal checklist is in the header of server/agent-auth-mode.ts.
+#
+# GROUPING: the message is constant, so every event shares ONE Sentry issue and the 40-minute re-notify bounds the
+# email volume; the per-user 5-minute debounce and the process-wide cap (10 events per 5 minutes) bound the events.
+# Email only (issue owners, ActiveMembers fallthrough: the project has no ownership rule, so issue_owners alone
+# resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
+# are carried so a later diagnostic op under feature=agent-auth cannot notify by accident.
+#
+# DECODE KEY: README.md ("Diagnostic rule: agent-auth-failure") is the one copy of the tag decode table, the responder
+# steps and the read commands.
+# Distinct frequency_minutes = 40 avoids Sentry POST-time exact-duplicate dedup (`grep -h frequency_minutes *.tf` lists
+# the values in use); dedup keys on action shape + action_match + filter_match + frequency, not conditions. The value is
+# provisional until the last merge of origin/main: re-check it then.
+# Events carry only ten closed-enum values: no key material, env value, message body, user or workspace id, or path.
+resource "sentry_alert" "agent_auth_failure" {
+  organization      = var.sentry_org
+  name              = "agent-auth-failure"
+  enabled           = true
+  frequency_minutes = 40
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-auth" } },
+        { tagged_event = { key = "op", match = "eq", value = "cli-auth-failure" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # server/inngest/functions/cron-cloud-task-heartbeat.ts: the stale-bot-PR
 # watchdog (#5138) emits `feature=cron-cloud-task-heartbeat` events for three
 # ops — `stale-bot-pr` (warnSilentFallback, a ci/* PR open >48h: auto-merge

@@ -119,3 +119,38 @@ One ordered step of a named fallback ladder — and the entry is the instruction
 failing test to a scripted browser session; `plugins/soleur/skills/operator-bootstrap/SKILL.md` climbs credential sources
 and ends at a prompt; `plugins/soleur/skills/compound/SKILL.md` steps a rule through trim, migrate
 and retire. Write "rung 4 of the reproduction ladder", never "rung 4".
+
+**Run**:
+A black-box, trigger-to-finish execution — a GHA workflow run, an Inngest execution, or an
+agent session — that never waits on a human mid-flight. Definer:
+`knowledge-base/engineering/architecture/factory-map.md` §Vocabulary map. The re-entry
+contract (an `action-required` issue, or `message_user` stalling the session as the defer)
+is what makes "never waits" survivable.
+
+_Avoid_: "session" when meaning the black-box execution — a session is one possible
+runner-context, not the unit of work.
+
+**Trigger**:
+What fires a task — a cron tick, a `workflow_dispatch`, a label or event, an upstream run,
+or an armed reminder check. Definer:
+`knowledge-base/engineering/architecture/factory-map.md` §Vocabulary map.
+
+**Runner**:
+The disposable execution surface a run lands on — a GHA runner VM, a Devin cloud container,
+a git worktree, or the agent bwrap sandbox. Definer:
+`knowledge-base/engineering/architecture/factory-map.md` §Vocabulary map.
+
+_Avoid_: "server", "host", "box" — those name infrastructure, not the disposable surface
+the orchestrator allocates. "sandbox" names the bwrap surface specifically: A runner, not
+THE runner.
+
+**Task**:
+A defined-once, run-many-times autonomous unit — a skill (`soleur:<skill>`), a
+`scheduled-*.yml` workflow, or an Inngest `cron-*`/`oneshot-*` function. Definer:
+`knowledge-base/engineering/architecture/factory-map.md` §Vocabulary map; Soleur splits the
+peer single "task" across two substrates — GHA cron for pure-GH ops, Inngest for
+secret/server-side work (`schedule` Step 0 routes). Every NEW task answers the six
+task-design questions at design time (factory-map §The six task-design questions).
+
+_Avoid_: "cron job" — name the substrate; the two creation paths carry different secret
+access.

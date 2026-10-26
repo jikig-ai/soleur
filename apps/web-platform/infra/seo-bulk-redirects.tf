@@ -94,6 +94,14 @@ locals {
     "2026-09-25-parked-vs-forgotten-ideas"                          = "parked-vs-forgotten-ideas"
     "2026-09-26-beta-testers-went-quiet"                            = "beta-testers-went-quiet"
     "2026-10-23-agentic-verification-checklist-shipped"             = "agentic-verification-checklist-shipped"
+    "2026-10-27-audited-102-guardrails-four-portable"               = "audited-102-guardrails-four-portable"
+    "2026-10-29-property-test-cannot-fail-teaches-nothing"          = "property-test-cannot-fail-teaches-nothing"
+    "2026-11-03-first-property-test-found-real-bug"                 = "first-property-test-found-real-bug"
+    "2026-11-04-before-your-ai-team-takes-a-recurring-job"          = "before-your-ai-team-takes-a-recurring-job"
+    "2026-11-05-map-that-cant-drift"                                = "map-that-cant-drift"
+    "2026-11-10-test-the-migration-not-just-the-schema"             = "test-the-migration-not-just-the-schema"
+    "2026-11-12-map-that-only-records-what-the-agent-saw"           = "map-that-only-records-what-the-agent-saw"
+    "2026-11-17-flaky-test-passed-on-retry-quarantine"              = "flaky-test-passed-on-retry-quarantine"
   }
 
   # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs

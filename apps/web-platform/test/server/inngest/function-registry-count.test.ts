@@ -112,6 +112,12 @@ const NON_INNGEST_MONITORS = new Set([
   // recorded `cancelled` (not `failure`) and `| tee` discarded the suite's exit
   // code. See sentry_cron_monitor.main_health_monitor in cron-monitors.tf.
   "main-health-monitor",
+  // #10390 WS1: GHA-executed, watchdog-dispatched (WATCHDOG_DISPATCH_TABLE); the native
+  // `schedule:` is the fallback trigger only. It deliberately has no Inngest cron function —
+  // the mirror reads the Better Stack paging substrate the Inngest fleet's own outages report
+  // through, so an Inngest-scheduled mirror goes dark exactly when the incidents it mirrors are
+  // firing (ADR-033 anti-circularity). The terminal sentry-heartbeat step posts the check-in.
+  "scheduled-betterstack-incident-mirror",
   // The weekly machinery drain: cron-machinery-drain.ts only DISPATCHES
   // scheduled-machinery-drain.yml and declares no SENTRY_MONITOR_SLUG, because
   // the work runs in the ephemeral GitHub runner rather than the app process.
@@ -126,6 +132,10 @@ const NON_INNGEST_MONITORS = new Set([
   // sentry-heartbeat step pings the check-in; there is no Inngest cron function, so
   // it maps to no SENTRY_MONITOR_SLUG — same class as scheduled-terraform-drift.
   "scheduled-heartbeat-reconcile",
+  // #10952: GHA-fired (scheduled-terraform-drift.yml -> orphan-sweeps-checkin job) -- the one check-in for
+  // the rung-2 and inngest orphan sweeps, `ok` only when both sweep jobs succeeded. There is no Inngest cron
+  // function for it, so it maps to no SENTRY_MONITOR_SLUG -- same class as scheduled-terraform-drift.
+  "scheduled-orphan-sweeps",
   // #7834: GHA-fired executor (scheduled-sentry-alert-drift.yml) posts the terminal
   // heartbeat; cron-sentry-alert-drift.ts only DISPATCHES the workflow and declares no
   // SENTRY_MONITOR_SLUG (the probe runs in the ephemeral runner, not the app process), so

@@ -149,6 +149,60 @@ v(re.search(r'--bundle\s+"\$\{MANIFEST\}\.sigstore\.json"', sbody) is not None,
   "sign-blob writes <manifest>.sigstore.json via --bundle")
 v(not re.search(r"--output-signature\b|--output-certificate\b", sbody),
   "sign-blob carries no removed cosign-2.x --output-signature/--output-certificate flags")
+v(re.search(r"--signing-config\s+apps/web-platform/infra/inngest-signing-config\.json", sbody) is not None,
+  "sign-blob pins the emit surface via --signing-config apps/web-platform/infra/inngest-signing-config.json (#10390 defect 3)")
+v(re.search(r'chmod\s+0?644\s+"\$\{MANIFEST\}\.sigstore\.json"', sbody) is not None,
+  "the sign step normalizes the emitted bundle to mode 0644 — cosign writes it 0600 (sign_blob.go:132) and the nonroot verifier container reads it EACCES (#10390 defect 3 measured cause)")
+
+# Verify-before-publish gate (#10390 defect 3): the producer never self-verified its
+# artifact against the consumer's pinned loader — sign-time in-process validate() is
+# not the on-disk LoadJSONFromPath path that rejected the promoted bundle
+# (detail=flag-newbundle). A step named for verification must sit BETWEEN the
+# sign-blob step and the Assemble-bundle step in the same job, run the consumer's
+# verify contract on the produced .sigstore.json, and hard-fail unless it prints
+# Verified OK — an unloadable bundle can never reach the push steps again.
+gate_hits = []
+for jn, job in jobs.items():
+    _steps = job.get("steps", [])
+    _si = [i for i, s in enumerate(_steps)
+           if re.search(r"^\s*cosign\s+sign-blob\b", str(s.get("run", "")), re.M)]
+    _ai = [i for i, s in enumerate(_steps)
+           if str(s.get("name", "")).startswith("Assemble bundle tarball")]
+    if not _si or not _ai:
+        continue
+    gate_hits += [s for s in _steps[_si[0] + 1:_ai[0]]
+                  if re.search(r"[Vv]erif", str(s.get("name", "")))]
+v(len(gate_hits) == 1,
+  "exactly one verify-before-publish step ([Vv]erif in the name) sits between sign-blob and Assemble-bundle (%d found)" % len(gate_hits))
+gbody = str(gate_hits[0].get("run", "")) if gate_hits else ""
+for _tok in ("verify-blob", "--trusted-root",
+             "apps/web-platform/infra/cosign-trusted-root.json", "--bundle",
+             "certificate-identity-regexp", "certificate-oidc-issuer",
+             "token.actions.githubusercontent.com", "Verified OK",
+             "docker run", "--network none", "-v ", "docker image inspect"):
+    v(_tok in gbody, "the verify-before-publish run body carries `%s`" % _tok)
+v(bool(gate_hits) and gate_hits[0].get("continue-on-error") is not True,
+  "the verify-before-publish step is a HARD fail (no continue-on-error) — it must block the push steps")
+v("57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870" in gbody,
+  "the verify gate runs the PINNED cosign image — the consumer's own nonroot verifier, which is the only arm that sees EACCES-class member-mode defects")
+# The gate's defect-class coverage lives in WHO reads the file: the pinned image's nonroot
+# default user (65532) over a bind mount. A `--user` override (root) or a runner-binary
+# `cosign verify-blob` (file owner) makes EACCES invisible while every token above survives —
+# pin both out. The workflow asserts Config.User non-root at run time; the token pins keep
+# the container wrapper itself.
+v(not re.search(r"--user\b", gbody),
+  "the verify-before-publish docker run carries no `--user` override — a root user disarms the EACCES coverage the gate exists for")
+v(not re.search(r"--insecure-ignore-tlog|--insecure-ignore-sct|--new-bundle-format|--key[\s=]",
+                sbody + "\n" + gbody),
+  "neither the sign nor the verify argv carries a verification-weakening flag (AC10)")
+# Guard-2 M4 (plan): a push-path step carrying an outcome-insulating `if:` (always(),
+# failure()) bypasses the hard-fail — the implicit success() skip is the ONLY thing that
+# stops the push after a red gate. The build/push step must carry no `if:` at all.
+push_steps = [s for j in jobs.values() for s in j.get("steps", [])
+              if s.get("id") == "docker_build"
+              or re.search(r"docker/build-push-action", str(s.get("uses", "")))]
+v(bool(push_steps) and all(s.get("if") is None for s in push_steps),
+  "push steps carry no `if:` — an always()/outcome-insulating condition would bypass the verify hard-fail (Guard-2 M4)")
 
 # OCI-image pin (#10390): the host extract runs `docker create` + `docker cp`, and create
 # refuses a command-less scratch image ("no command specified") — a bare FROM scratch +
@@ -185,6 +239,41 @@ v(dm != -1 and cc != -1 and ok_i != -1 and dm < cc < ok_i,
   "the cosign leg sits after the bundle digest check and before mirror_status=ok")
 open(body_out, "w").write(body)
 PY
+
+# ---------------------------------------------------------------------------
+# Pinned signing-config shape (#10390 defect 3): the emit-surface pin is a COMMITTED
+# signingconfig v0.2 document — Rekor v1 only, no TSA — so sign-blob's emitted bundle
+# stays inside the envelope the host's pinned sigstore-go v1.2.0 loader accepts.
+# jq assertions on the committed file (a shape row, never a network call).
+# ---------------------------------------------------------------------------
+echo "T0b: the pinned signing-config is signingconfig v0.2, Rekor v1 only, no TSA"
+SIGCFG="$REPO_ROOT/apps/web-platform/infra/inngest-signing-config.json"
+command -v jq >/dev/null 2>&1 || { echo "FATAL: jq unavailable" >&2; exit 2; }
+if [[ ! -f "$SIGCFG" ]]; then
+  fail "pinned signing-config file is absent at $SIGCFG — commit the emit-surface pin (#10390 defect 3)"
+else
+  jq -e '.mediaType | test("signingconfig")' "$SIGCFG" >/dev/null 2>&1 \
+    && pass "signing-config mediaType is a sigstore signingconfig document" \
+    || fail "signing-config mediaType must contain 'signingconfig'"
+  jq -e '.mediaType | test("v0\\.2")' "$SIGCFG" >/dev/null 2>&1 \
+    && pass "signing-config mediaType is the v0.2 schema" \
+    || fail "signing-config mediaType must carry the v0.2 schema version"
+  jq -e '(.caUrls | length) == 1 and .caUrls[0].url == "https://fulcio.sigstore.dev" and .caUrls[0].majorApiVersion == 1' "$SIGCFG" >/dev/null 2>&1 \
+    && pass "signing-config caUrls is exactly the Fulcio v1 entry" \
+    || fail "signing-config caUrls must be the single Fulcio v1 entry"
+  jq -e '(.oidcUrls | length) == 1 and .oidcUrls[0].url == "https://oauth2.sigstore.dev/auth" and .oidcUrls[0].majorApiVersion == 1' "$SIGCFG" >/dev/null 2>&1 \
+    && pass "signing-config oidcUrls is exactly the oauth2.sigstore.dev v1 entry" \
+    || fail "signing-config oidcUrls must be the single oauth2.sigstore.dev v1 entry"
+  jq -e '(.rekorTlogUrls | length) == 1 and .rekorTlogUrls[0].url == "https://rekor.sigstore.dev" and .rekorTlogUrls[0].majorApiVersion == 1' "$SIGCFG" >/dev/null 2>&1 \
+    && pass "signing-config rekorTlogUrls is exactly one Rekor v1 entry" \
+    || fail "signing-config rekorTlogUrls must be exactly https://rekor.sigstore.dev at majorApiVersion 1 — a Rekor-v2 service forces a TSA and drifts the emitted TLE shape"
+  jq -e 'has("tsaUrls") | not' "$SIGCFG" >/dev/null 2>&1 \
+    && pass "signing-config omits tsaUrls entirely (no TSA -> no timestampVerificationData in the emitted bundle)" \
+    || fail "signing-config must NOT carry tsaUrls — the pin removes the TSA surface (#10390 defect 3)"
+  jq -e '.rekorTlogConfig.selector == "ANY" and .tsaConfig.selector == "ANY"' "$SIGCFG" >/dev/null 2>&1 \
+    && pass "signing-config selectors are ANY for both rekorTlogConfig and tsaConfig" \
+    || fail "signing-config must pin rekorTlogConfig.selector and tsaConfig.selector to ANY"
+fi
 
 # ---------------------------------------------------------------------------
 # Deterministic stubs. They VALIDATE argv (exit 64 + a REFUSE log line on a contract violation,
@@ -642,6 +731,29 @@ elif name == "sign-adds-output-certificate":
 elif name == "sign-step-deleted":
     s = must_sub(r"      - name: Keyless sign-blob the manifest.*?      - name: Assemble",
                  "      - name: Assemble", s)
+elif name == "sign-drops-signing-config":
+    s = must_sub(r'\n            --signing-config apps/web-platform/infra/inngest-signing-config\.json \\', "", s)
+elif name == "sign-drops-chmod":
+    s = must_sub(r'\n          chmod 0644 "\$\{MANIFEST\}\.sigstore\.json"', "", s)
+elif name == "verify-step-deleted":
+    s = must_sub(r"      - name: Verify[^\n]*\n.*?(?=      - name: Assemble)",
+                 "", s)
+elif name == "verify-soft-fail":
+    s = must_sub(r"(      - name: Verify[^\n]*\n)",
+                 r"\1        continue-on-error: true\n", s)
+elif name == "verify-adds-insecure-flag":
+    s = must_sub(r'verify-blob \\\n',
+                 lambda m: 'verify-blob --insecure-ignore-tlog \\\n', s)
+elif name == "verify-drops-docker":
+    # Runner-binary verify: `cosign verify-blob` runs as the file's OWNER — the EACCES
+    # class is invisible to it. Keeps every token pin except the container wrapper.
+    s = must_sub(r'timeout 120 docker run --rm --network none \\\n', 'exec cosign \\\n', s)
+elif name == "verify-adds-user-root":
+    s = must_sub(r'--network none', '--network none --user 0', s)
+elif name == "verify-drops-user-inspect":
+    s = must_sub(r'VERIFIER_USER="\$\(docker image inspect[^\n]*\n', "", s)
+elif name == "push-step-if-always":
+    s = must_sub(r"(id: docker_build\n)", "\\1        if: always()\n", s)
 elif name == "dockerfile-cmd-dropped":
     s = must_sub(r'CMD \["true"\]\\n', "", s)
 elif name == "cosign-copy-dropped":
@@ -753,6 +865,15 @@ else
     "sign-adds-output-signature|struct|no removed cosign-2.x"
     "sign-adds-output-certificate|struct|no removed cosign-2.x"
     "sign-step-deleted|struct|exactly one step invokes cosign sign-blob"
+    "sign-drops-signing-config|struct|emit surface via --signing-config"
+    "sign-drops-chmod|struct|mode 0644"
+    "verify-step-deleted|struct|verify-before-publish step"
+    "verify-soft-fail|struct|HARD fail"
+    "verify-adds-insecure-flag|struct|verification-weakening flag"
+    "verify-drops-docker|struct|docker run"
+    "verify-adds-user-root|struct|a root user disarms"
+    "verify-drops-user-inspect|struct|docker image inspect"
+    "push-step-if-always|struct|push steps carry no"
     "dockerfile-cmd-dropped|struct|carries a CMD"
     "cosign-copy-dropped|struct|cosign verifier image is copied"
     "cosign-copy-route-dropped|cosigncopyfail|cosign copy failing every time"
@@ -814,7 +935,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=108
+MIN_ASSERTIONS=144
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1

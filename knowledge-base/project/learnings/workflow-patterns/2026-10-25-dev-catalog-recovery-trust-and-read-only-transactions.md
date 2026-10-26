@@ -40,3 +40,19 @@ not treated as evidence that recovery or a shared operation succeeded.
 
 The [dated recovery record](../../specs/feat-one-shot-codex-web-live-paths/recovery-evidence-2026-10-25.md)
 owns the observed counts, digests, limitations and remaining gates.
+
+## Recovery continuation — 2026-10-26
+
+The commit guard evaluated the session's default-branch directory rather than
+the shell tool's `workdir`. Explicit `git -C <absolute-worktree>` selected the
+verified feature branch without bypassing the guard. Prefer that form for
+mutating Git operations when the session starts at the repository root.
+
+The original recovery directory and its Git registration disappeared despite
+a current branch lease; the actor is not established. The committed/pushed
+fixes survived, while uncommitted merge resolutions and ignored captures did
+not. Track the event, recover from the known commit in a distinct worktree,
+and use a reversible Git worktree lock while active. Do not identify an
+unverified cleanup implementation as the cause. A lock is not protection
+against arbitrary filesystem removal. Run global tool-cache installation from
+a stable directory, and preserve source checkpoints before long waits.

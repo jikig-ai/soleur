@@ -108,3 +108,30 @@ hash; all **8** rehearsal assertions now pass. The full offline wrapper then
 refused its preparation phase because runtime source was still uncommitted.
 This is a clean-source refusal, not a complete wrapper pass. Preserve the
 reviewed fixes in a commit and rerun the complete wrapper on clean source.
+
+## Clean-source validation and recovery addendum — 2026-10-26
+
+The complete offline qualification wrapper subsequently passed on clean commit
+`fac3acfd2839135992c80fa1a62c323d3c5481ea`, with exit 0 and unchanged HEAD.
+That result belongs to this exact pre-resync source; it is not transferred to
+the main merge or later renumbering. The commit is now pushed to PR 9051.
+
+After interruption the original worktree and Git registration were absent.
+Recreation preserved the committed fixes but not ignored evidence or the
+uncommitted merge. A second disappearance occurred before a pending installer
+could start, despite a current branch lease. Cause is unverified and tracked in
+[issue 11162](https://github.com/jikig-ai/soleur/issues/11162). Recovery now uses
+the same branch in `.worktrees/pr9051-recovery-20261026`, with an explicit Git
+worktree lock while active. This is protection against ordinary removal/prune,
+not proof of the removing mechanism. Earlier private captures are currently
+unavailable; their committed digests and summaries remain historical evidence.
+
+The retained CTO ruling requires adding exact
+`167_codex_auth_mode_rebind.sql` protection while retaining historical exact
+145 and 165 identities. Do not protect unrelated migrations solely by ordinal.
+The all-paired-down and malformed-row barriers apply to every protected alias.
+The provisional allocation is 165–175 after main's 163 and the independently
+owned 164 reservation; remeasure before final source binding. Runner guards
+must follow their semantics: tie/backfill 165→167, grant barrier 169→171,
+owner-scope barrier 170→172, notice issuance 173→175. Preserve all SQL bytes.
+Those runner changes require a fresh full-runner source review and hash pin.

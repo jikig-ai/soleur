@@ -209,7 +209,7 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # otherwise leave the rule watching for an alias that no longer exists — the alert would go quiet,
 # which reads exactly like health. `hcloud_volume.inngest_redis_luks.id` is the digits Hetzner
 # assigns; the by-id alias is `scsi-0HC_Volume_<id>`, the same construction the host's own resolver
-# and inngest-luks-cutover.sh use.
+# and (until it was retired with the cutover trio, #10112) inngest-luks-cutover.sh used.
 locals {
   inngest_luks_wrong_volume_alias = "scsi-0HC_Volume_${hcloud_volume.inngest_redis_luks.id}"
 
@@ -294,8 +294,9 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   # this file whose paused state is a variable rather than a constant `false`.
   paused = !var.inngest_luks_cutover_complete
 
+  # #11068 — push armed under the #9168 measured-flip convention; revert to `push = false` if the apply refuses it.
   email          = true
-  push           = false
+  push           = true
   call           = false
   sms            = false
   critical_alert = false
@@ -739,8 +740,9 @@ resource "logtail_exploration_alert" "inngest_step_524" {
 
   paused = false
 
+  # #11068 — push armed under the #9168 measured-flip convention; revert to `push = false` if the apply refuses it.
   email          = true
-  push           = false
+  push           = true
   call           = false
   sms            = false
   critical_alert = false

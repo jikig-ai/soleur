@@ -8,6 +8,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project
@@ -21,9 +22,12 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
 .claude/hooks/guardrails.test.sh	knowledge-base
 .claude/hooks/hook-input-contract.test.sh	knowledge-base/project
+.claude/hooks/hook-suite-dep-unresolved.test.sh	knowledge-base/engineering/architecture/diagrams
+.claude/hooks/hook-suite-dep-unresolved.test.sh	knowledge-base/project
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans/archive
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/specs
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/domain-model.md
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms
@@ -52,6 +56,8 @@ plugins/soleur	knowledge-base/project/plans	dir-operand-tests	false-positive: sh
 plugins/soleur	knowledge-base/project/plans/archive	dir-operand-tests	false-positive: model-launch-review.test.ts creates this directory inside a scratch root
 plugins/soleur	knowledge-base/project/specs	dir-operand-tests	false-positive: terraform-target-parity.test.ts uses the directory as the join base; its one real read (the spec's measurements.md) is covered by a dedicated edge
 plugins/soleur	knowledge-base/project/specs/archive	dir-operand-tests	false-positive: terraform-target-parity.test.ts falls back to a timestamp-renamed archive copy of the same file; a rename out of the live directory is a deleted declared subject (ADR-242 decision 17)
+plugins/soleur/scripts/merge-effect-class.test.sh	knowledge-base
+plugins/soleur/scripts/merge-effect-class.test.sh	knowledge-base/project
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	knowledge-base/engineering/architecture/diagrams
 plugins/soleur/scripts/sync-pr-behind.test.sh	knowledge-base/engineering/architecture/diagrams/model.c4
 plugins/soleur/scripts/sync-pr-behind.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json
@@ -71,7 +77,6 @@ plugins/soleur/skills/incident/test/redact-sentinel.test.sh	knowledge-base/engin
 plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	knowledge-base/engineering/security/skill-overrides
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md
-plugins/soleur/test/apply-delivery-gap-follower.test.sh	knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md
 plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/engineering/architecture/diagrams
 plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/marketing/brand-guide.md
 plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/product/roadmap.md
@@ -109,6 +114,7 @@ plugins/soleur/test/kb-search-support-path.test.sh	knowledge-base/project/learni
 plugins/soleur/test/lane-frontmatter.test.sh	knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/2026-09-20-accountant-prepaid-hosting-contract.md
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/README.md
+plugins/soleur/test/merge-effect-class-parity.test.sh	knowledge-base
 plugins/soleur/test/notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/brainstorms
 plugins/soleur/test/operator-ack-guard.test.sh	knowledge-base/project/plans
@@ -239,7 +245,6 @@ scripts/rules-loader-stamp-probe	knowledge-base/project/plans/archive/20261013-0
 scripts/secret-scan-smoke-gate	knowledge-base
 scripts/secret-scan-smoke-gate	knowledge-base/engineering/operations
 scripts/skill-security-scan-step-body	knowledge-base/engineering/security/skill-overrides
-scripts/sweep-followthroughs	knowledge-base/project/learnings
 scripts/test-all-enumerate-toolchain	knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md
 scripts/test-all-enumerate-toolchain	knowledge-base/legal
 scripts/test-all-infra-coverage-notice	knowledge-base/engineering/architecture/diagrams
@@ -258,6 +263,7 @@ tests/commands/sync-rule-prune	knowledge-base/project/specs
 tests/hooks/drop-sentinel-parity	knowledge-base/engineering/operations/skill-freshness.json
 tests/hooks/drop-sentinel-parity	knowledge-base/project
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
+tests/scripts/argv-bearer-sweep	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md

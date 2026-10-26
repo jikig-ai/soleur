@@ -149,8 +149,8 @@ the Dockerfile's `deps` stage: since #8136 `web-platform-build` builds the Docke
 against a fork-controlled `package.json` again. Accepted, because the blast radius is
 strictly narrower than the path this ADR closed: the scripts execute inside a discarded
 buildkit container that receives no runner environment, no `GITHUB_TOKEN`, no secret
-build-args and no cache write (the release exports `mode=min`, and the PR job sets no
-`cache-to`), whereas the pre-ADR path ran them in the runner process itself. Guard 2's
+build-args and no cache write (the release's inline cache carries final-image layers only
+(ADR-299; it was `mode=min` on the Actions cache before), and the PR job sets no `cache-to`), whereas the pre-ADR path ran them in the runner process itself. Guard 2's
 assembly scans `run:` commands only, so this `uses: docker/build-push-action` install site is
 invisible to it by construction — named here and in the lint's BOUNDARY comment rather than
 left as a silent gap. The reason the job builds the real stage at all is release

@@ -21,7 +21,13 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { buildAgentEnv } from "@/server/agent-env";
-import { buildAgentSandboxConfig, probeAgentSandboxHardening } from "@/server/agent-runner-sandbox-config";
+import {
+  buildAgentSandboxConfig,
+  peerMessagingSocketDirs,
+  probeAgentSandboxHardening,
+  sessionTranscriptDirs,
+} from "@/server/agent-runner-sandbox-config";
+import { AGENT_SESSION_TMP_ROOT } from "@/server/agent-session-tmp";
 import * as probe from "../infra/lib/sdk-bash-probe.mjs";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -84,6 +90,43 @@ describe("the smoke probe's literal sandbox config tracks buildAgentSandboxConfi
     expect(probe.maskedDirs(uid, home)).toEqual(["/tmp/cc-socks", `/tmp/cc-socks-${uid}`, `${home}/.claude/projects`]);
     const builder = buildAgentSandboxConfig(workspace) as { filesystem: { denyRead: string[] } };
     expect(builder.filesystem.denyRead).toEqual(expect.arrayContaining(probe.maskedDirs(uid, home)));
+  });
+
+  // Guard 2 (#10455 PR-B): the set the runtime probe CREATES equals, as a SET, the set the production builder pre-creates under the
+  // default container env. Built from the builder's own helpers, called directly (no exported chokepoint); equality, not arrayContaining.
+  const sameSet = (a: string[], b: string[]): boolean => a.length === new Set(a).size && b.length === new Set(b).size && a.length === b.length && a.every((x) => b.includes(x));
+  const builderPrecreateSet = (uid: number, h: string): string[] => {
+    // the controlled env: HOME fixed, every override unset
+    const env = { HOME: h } as Record<string, string | undefined>;
+    return [...new Set([...peerMessagingSocketDirs(env, uid), ...sessionTranscriptDirs(env), AGENT_SESSION_TMP_ROOT])];
+  };
+
+  it("Guard 2: precreateDirs(uid, home) equals the builder's pre-create set (exactly 4 members), for two different uids and HOMEs", () => {
+    for (const [uid, h] of [[process.getuid!(), home], [4242, "/home/other"]] as const) {
+      const builderSet = builderPrecreateSet(uid, h);
+      expect(builderSet, "floor: the controlled-env derivation must yield exactly the 4 default dirs").toHaveLength(4);
+      const probeSet = probe.precreateDirs(uid, h);
+      expect([...probeSet].sort(), `probe=${JSON.stringify(probeSet)} builder=${JSON.stringify(builderSet)}`).toEqual([...builderSet].sort());
+      expect(sameSet(probeSet, builderSet)).toBe(true);
+    }
+  });
+
+  it("Guard 2: SESSION_TMP_ROOT is pinned to AGENT_SESSION_TMP_ROOT, and the builder's denyRead carries every member of the probe's create set", () => {
+    expect(probe.SESSION_TMP_ROOT).toBe(AGENT_SESSION_TMP_ROOT);
+    const uid = process.getuid!();
+    const builder = buildAgentSandboxConfig(workspace) as { filesystem: { denyRead: string[] } };
+    expect(builder.filesystem.denyRead).toEqual(expect.arrayContaining(probe.precreateDirs(uid, home)));
+  });
+
+  it("HARNESS control (Guard 2 row 7): the set comparison rejects a superset, a subset and a duplicate, so it is not arrayContaining", () => {
+    const uid = process.getuid!();
+    const builderSet = builderPrecreateSet(uid, home);
+    expect(sameSet([...probe.precreateDirs(uid, home), "/tmp/extra"], builderSet)).toBe(false);
+    expect(sameSet(probe.precreateDirs(uid, home).slice(1), builderSet)).toBe(false);
+    expect(sameSet([...probe.precreateDirs(uid, home).slice(1), "/tmp/cc-socks"], [...builderSet.slice(1), builderSet[1]])).toBe(false);
+    expect(sameSet(probe.precreateDirs(uid, home), builderSet)).toBe(true);
+    // and the floor row's input: an empty derivation is not "equal to an empty probe set"
+    expect(builderSet.length).toBeGreaterThan(0);
   });
 
   it("HARNESS must-PASS: a config differing from the canonical only by key order is still equal", () => {

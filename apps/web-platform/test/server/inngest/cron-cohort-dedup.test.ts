@@ -302,7 +302,7 @@ const ROWS: Row[] = [
       commitMessage: "docs: update competitive intelligence report",
       artifact: {
         hit: "knowledge-base/product/competitive-intelligence.md",
-        nearMiss: "knowledge-base/productx/competitive-intelligence.md",
+        nearMiss: "knowledge-base/product/competitive-intelligence-evil/audit.md",
         unrelated: "knowledge-base/sales/battlecards/acme.md",
       },
   },

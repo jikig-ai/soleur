@@ -154,6 +154,16 @@ done
 assert "#8609 a state without the overlay fields prints none (absent = never ran, not a default)" \
   "printf '%s' '$OK_OUT' | jq -e 'has(\"github_app_key_source\") or has(\"github_app_key_fetch\") or has(\"github_app_key_probe\") or has(\"github_app_key_probe_reason\") | not' >/dev/null"
 
+# --- #10934: inngest_link_selfgate_phase, which ci-deploy.sh write_state records only for a deploy whose https self-gate failed, rides through verbatim ---
+# (the runbook and deploy-status-debugging read it off this output.) An ABSENT key means the gate did not fail: it must not be fabricated or defaulted.
+echo '{"exit_code":1,"reason":"inngest_link_selfgate_failed","inngest_link_selfgate_phase":"request"}' > "$TMP/sgp.state"
+SGP_OUT=$(CI_DEPLOY_STATE="$TMP/sgp.state" bash "$TARGET")
+assert "#10934 inngest_link_selfgate_phase is printed verbatim (request) beside the constant reason" \
+  "[[ \$(printf '%s' '$SGP_OUT' | jq -r '.inngest_link_selfgate_phase') == 'request' ]] \
+   && [[ \$(printf '%s' '$SGP_OUT' | jq -r '.reason') == 'inngest_link_selfgate_failed' ]]"
+assert "#10934 a state without inngest_link_selfgate_phase prints none (absent = the gate did not fail, not a default)" \
+  "printf '%s' '$OK_OUT' | jq -e 'has(\"inngest_link_selfgate_phase\") | not' >/dev/null"
+
 # --- pre-existing services.* keys preserved ---
 echo '{"exit_code":0,"services":{"web":"healthy"}}' > "$TMP/svc.state"
 SVC_OUT=$(CI_DEPLOY_STATE="$TMP/svc.state" bash "$TARGET")
@@ -1024,7 +1034,8 @@ echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # Assertion floor (literal, read straight off the counter, derived from a green run): a suite that silently stops reaching its
 # assertions (an early return, a swallowed extraction failure, an emptied loop) must not pass on the strength of the few that ran.
-MIN_ASSERTIONS=151
+# #10934 review round 2: 151 -> 167, the measured total of the green run (165 before this round, +2 rows: inngest_link_selfgate_phase passes through / is absent).
+MIN_ASSERTIONS=167
 if (( TOTAL < MIN_ASSERTIONS )); then
   printf 'FAIL: only %d assertions ran (floor %d)\n' "$TOTAL" "$MIN_ASSERTIONS"
   exit 1

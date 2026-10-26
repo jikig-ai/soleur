@@ -435,6 +435,34 @@ assert "no unrendered @@DARK_ARM@@ sentinel LINE survives either render" \
 assert "rendered dark arm calls logger via \"\$LOG_TAG\", not an inlined tag literal" \
   "! grep -qE '^[[:space:]]*logger[[:space:]]+-t[[:space:]]+[a-z]' '$DEDICATED_PING'"
 
+# --- #10363: a traced launch of the rendered body exits 78 before any URL expansion --------------
+echo "--- #10363 xtrace refusal: sh -x on the rendered heartbeat body ---"
+for _render in "$WEB_PING" "$DEDICATED_PING"; do
+  XT_LOG="$PING_TMP/logger-xt-$(basename "$_render").txt"; : > "$XT_LOG"
+  XT_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$XT_LOG" \
+    INNGEST_HEARTBEAT_URL='https://uptime.betterstack.test/api/v1/heartbeat/XT_SENTINEL' \
+    sh -x "$_render" 2>&1)" && XT_RC=0 || XT_RC=$?
+  assert "xtrace refusal ($(basename "$_render")): sh -x exits 78 before any expansion" \
+    "[[ '$XT_RC' -eq 78 ]]"
+  assert "xtrace refusal ($(basename "$_render")): refusal text on a non-trace line" \
+    "[[ \$(printf '%s' \"\$XT_OUT\" | grep -v '^+' | grep -c 'refusing to run under xtrace') -ge 1 ]]"
+  assert "xtrace refusal ($(basename "$_render")): the sentinel URL is in neither the output nor the logger sink" \
+    "[[ \$(printf '%s' \"\$XT_OUT\" | grep -c XT_SENTINEL) -eq 0 && \$(grep -c XT_SENTINEL '$XT_LOG' || true) -eq 0 ]]"
+done
+# Positive leak control: a render with the case $- block REMOVED must print the sentinel under
+# sh -x — otherwise the rows above discriminate nothing (a refusal-free SUT would pass them).
+XT_MUT="$PING_TMP/ping-web-noguard.sh"
+sed '/^case \$- in$/,/^esac$/d' "$WEB_PING" > "$XT_MUT"
+assert "xtrace control: the guard-removed render differs from the real one" \
+  "! cmp -s '$WEB_PING' '$XT_MUT'"
+XT_LOG="$PING_TMP/logger-xt-mut.txt"; : > "$XT_LOG"
+XT_MUT_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$XT_LOG" \
+  INNGEST_HEARTBEAT_URL='https://uptime.betterstack.test/api/v1/heartbeat/XT_SENTINEL' \
+  INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" \
+  sh -x "$XT_MUT" 2>&1)" && XT_MUT_RC=0 || XT_MUT_RC=$?
+assert "xtrace control: the guard-free render under sh -x DOES trace the sentinel (the refusal rows can see a leak)" \
+  "[[ \$(printf '%s' \"\$XT_MUT_OUT\" | grep -c XT_SENTINEL) -ge 1 ]]"
+
 # AC5b case 1 -- dedicated render, URL absent: exit 0 + exactly one url_present=no row.
 DED_LOG="$PING_TMP/logger-dedicated-absent.txt"
 DED_ABSENT_OUT=$(run_ping "$DEDICATED_PING" "" "$DED_LOG") && DED_ABSENT_RC=0 || DED_ABSENT_RC=$?
@@ -2788,9 +2816,8 @@ echo "--- #9175: Doppler --config census on the inngest dedicated-host boot path
 # site cannot slip in unlisted either).
 # The heartbeat's curl `--config - >/dev/null` (#9757) is curl's stdin config, not a Doppler config name: excluded by its exact shape.
 DOPPLER_CFG_SITES="$(for _f in "$CLOUD_INIT_INNGEST" "$BOOTSTRAP_SH" \
-    "$SCRIPT_DIR/inngest-cutover-flip.sh" "$SCRIPT_DIR/inngest-luks-cutover.sh" \
-    "$SCRIPT_DIR/inngest-redis.service" "$CUTOVER_FLIP_SERVICE" \
-    "$SCRIPT_DIR/inngest-luks-cutover.service"; do
+    "$SCRIPT_DIR/inngest-cutover-flip.sh" \
+    "$SCRIPT_DIR/inngest-redis.service" "$CUTOVER_FLIP_SERVICE"; do
     grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#' \
       | grep -vE -- '/usr/bin/curl .* --config - >/dev/null$'
   done)"
@@ -2800,8 +2827,10 @@ DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inng
 # --project soleur-inngest --config ${inngest_doppler_config}` (the templatefile-var form,
 # the same shape every sibling site carries so the rehearsal render swaps prd ->
 # rehearsal_<runid>).
-assert "inngest boot-path --config census is exactly 20 sites (unlisted site -> RED, #9175)" \
-  "[[ '$DCFG_N' == '20' ]]"
+# 20 -> 16: #10112 retired the LUKS cutover trio (inngest-luks-cutover.sh carried three sites,
+# inngest-luks-cutover.service one).
+assert "inngest boot-path --config census is exactly 16 sites (unlisted site -> RED, #9175)" \
+  "[[ '$DCFG_N' == '16' ]]"
 assert "every boot-path --config site resolves through a parameterization (no literal config name, #9175)" \
   "[[ -z \"\$DCFG_BAD\" ]]"
 
@@ -2843,9 +2872,10 @@ echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep 
 #     apply. push-infra-config.sh targets deploy.${APP_DOMAIN_BASE} (web-1) only, so the
 #     web-host credential never reaches that host and a drop-in there would be inert at best
 #     and wrong-project at worst.
-#   inngest-luks-cutover.service (#6894) — the same dedicated-host delivery and the same primary
-#     credential as the flip unit above, for the same reasons; a drop-in would be inert there.
-DROPIN_ACK_UNITS=("inngest-cutover-flip.service" "inngest-luks-cutover.service")
+#   (inngest-luks-cutover.service, #6894, was the second entry; the unit is retired from the image
+#   with the rest of the cutover trio, #10112, so its ack is gone with it. A later dedicated-host
+#   unit that reads the same primary credential re-grows this list deliberately, with its reason.)
+DROPIN_ACK_UNITS=("inngest-cutover-flip.service")
 
 lockstep_examined=0
 LOCKSTEP_EXAMINED_UNITS=""
@@ -2957,26 +2987,20 @@ assert "lockstep invariant examined inngest-redis.service specifically" \
   "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -cF 'inngest-redis.service' >/dev/null"
 # The ack list is the guard's only escape hatch, and prose ("an unexplained skip is how a ratchet
 # stops ratcheting") does not enforce itself. Growing it must be a deliberate, visible edit.
-# Grown 1 -> 2 by #6894 (inngest-luks-cutover.service, reason recorded at the list). The members
-# are pinned by NAME too: a count alone would let a swap of one acked unit for a web-host unit pass.
-assert "ack list holds exactly 2 entries (a silent third ack cannot open a hole)" \
-  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 2 ]]"
-assert "ack list members are exactly the two dedicated-host units" \
-  "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service inngest-luks-cutover.service' ]]"
+# Grown 1 -> 2 by #6894, back to 1 by #10112 (the cutover unit was retired; reason recorded at the
+# list). The member is pinned by NAME too: a count alone would let a swap of the acked unit for a
+# web-host unit pass.
+assert "ack list holds exactly 1 entry (a silent second ack cannot open a hole)" \
+  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 1 ]]"
+assert "ack list member is exactly the dedicated-host flip unit" \
+  "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service' ]]"
 
 echo ""
-echo "--- #9939: ConditionPathExists skip-vs-fail on the LUKS cutover trio ---"
+echo "--- #9939: section helpers for the ConditionPathExists skip-vs-fail pins ---"
 #
-# Every EnvironmentFile= a unit declares is written by a runcmd stage late in first boot, so a
-# start attempted before the writer completes (an aborted LUKS stage, the bootstrap-armed timer
-# against never-written files) must SKIP — one "skipped, unmet condition check" notice — never
-# FAIL into the LUKS journal channel. The service carries the condition for its non-timer
-# start jobs (its [Install] WantedBy=multi-user.target arm if ever enabled, manual starts,
-# future Wants=/Requires= consumers); the timer carries the same pair because a
-# condition on it is evaluated at ACTIVATION, so an abort-host never arms the ~30s tick storm.
-# The EnvironmentFile= lines themselves stay unprefixed — the fail-closed contract is retained.
-LUKS_CUTOVER_SVC="$SCRIPT_DIR/inngest-luks-cutover.service"
-LUKS_CUTOVER_TMR="$SCRIPT_DIR/inngest-luks-cutover.timer"
+# The LUKS cutover trio's own #9939 pins (service + timer condition/EnvironmentFile pairs) went with
+# the trio when it was retired from the image (#10112). The two helpers stay: the #9962 pins below
+# judge the flip pair, the bootstrap-generated units and inngest-redis with them.
 # Placement is part of the property: a ConditionPathExists= under [Service]/[Install] is an
 # inert unknown lvalue — the unit starts unconditionally and the storm returns while a
 # whole-file presence grep stays green — so every condition assert counts lines inside the
@@ -2987,29 +3011,6 @@ LUKS_CUTOVER_TMR="$SCRIPT_DIR/inngest-luks-cutover.timer"
 # reads as absent.
 _luks_sec()      { awk -v sec="$2" '$0=="["sec"]"{u=1;next} /^\[/{u=0} u' "$1"; }
 _luks_sec_vals() { _luks_sec "$1" "$2" | sed -n "s/^[[:space:]]*$3=//p" | tr ' \t' '\n' | sed '/^$/d' | sort -u; }
-assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-server is absent" \
-  "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
-assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-luks-volumes is absent" \
-  "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
-assert "inngest-luks-cutover.service keeps BOTH EnvironmentFile= lines unprefixed in [Service] (fail-closed)" \
-  "_luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-luks-volumes' >/dev/null && ! _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
-# Bare `Directive=` resets the list wholesale in systemd (EnvironmentFile= empties the env
-# set, ConditionPathExists= erases every condition) — invisible to the literal pins and to the
-# set extractors, which drop empty tokens. Checked file-wide: a reset line is never legitimate
-# here, in any section, at any indent.
-assert "no bare EnvironmentFile=/ConditionPathExists= reset lines in the cutover units" \
-  "! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' '$LUKS_CUTOVER_SVC' '$LUKS_CUTOVER_TMR' >/dev/null"
-# SET IDENTITY, not cardinality: the sorted path set of [Unit] conditions must equal the
-# sorted path set of [Service] EnvironmentFile= values — a coordinated mismatched pair or a
-# non-/etc/default/ path fails where a count comparison would pass.
-assert "inngest-luks-cutover.service's [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
-  "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
-assert "inngest-luks-cutover.timer carries the inngest-server condition in [Unit] (evaluated at activation, not per-elapse)" \
-  "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
-assert "inngest-luks-cutover.timer carries the inngest-luks-volumes condition in [Unit] (evaluated at activation, not per-elapse)" \
-  "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
-assert "inngest-luks-cutover.timer's [Unit] condition path-set equals the service's [Service] EnvironmentFile path-set" \
-  "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
 
 echo "--- #9962: the same skip-vs-fail class on the non-LUKS siblings ---"
 #
@@ -3094,6 +3095,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
+# #10112: 549 -> 541 (the eight #9939 LUKS cutover trio condition rows went with the trio; the ack-list arity
+# rows are unchanged in number). Measured 541/541.
 # #9757 / #10120: 451 -> 549 (the heartbeat stdin-config, shape-guard, hourly-marker, own-stamp, stamp-normalisation,
 # real-curl smoke, exit-status and dash rows; measured 549/549 with the pinned-container dash rows and terraform run).
 # Skipped rows are never counted toward the floor: the active floor is the FULL literal minus the dash rows that were SKIPPED
@@ -3101,6 +3104,9 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # absent. Under CI a skipped or failed dash row is itself a FAILURE (see the dash block above).
 # Accounting: DASH_SKIPPED is 0 or DASH_ROWS, never a partial count, so a half-skipped block cannot read as a tier.
 if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 'FAIL: dash accounting: DASH_SKIPPED=%s is neither 0 nor DASH_ROWS=%s.\n' "$DASH_SKIPPED" "$DASH_ROWS" >&2; exit 1; fi
+# #10363: 549 -> 557 (the sh -x refusal rows over both rendered bodies plus the guard-removed leak
+# control — review fix-round; a refusal-free render must visibly trace the sentinel).
+# #10112: 557 -> 549 (the eight #9939 rows asserting the retired cutover trio went with it).
 INNGEST_MIN_ASSERTIONS_FULL=549
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then

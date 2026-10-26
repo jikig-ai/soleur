@@ -2,13 +2,13 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **46 `sentry_alert` rules** (46 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211. 44 are
-  fully Terraform-owned (43 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **48 `sentry_alert` rules** (48 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931, #9823, #8211, #10455, #10548. 46 are
+  fully Terraform-owned (45 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
   (this root's convention against a POST-time dedup keyed on action shape +
-  frequency; unmeasured on the workflows endpoint — `grep -h frequency_minutes *.tf`).
+  frequency; unmeasured on the workflows endpoint — `grep -h frequency_minutes *.tf`). Re-check it after every merge of `origin/main`: a sibling can take the value you picked (#10892 lost 38 to #10898 and shipped 39).
 
   **TWO are FROZEN (#8451).** `auth-per-user-loop` and `sandbox-startup-failure`
   trigger on `event_unique_user_frequency_count`, which the pinned provider's
@@ -36,7 +36,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **65 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **67 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
@@ -48,6 +48,91 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   it is routed; mute cannot be set through the provider.
 - **4 uptime monitors** — vendor-hosted HTTP checks, auto-applied on the same
   push-to-main path.
+
+## Diagnostic rule: `agent-auth-failure` (temporary, #10455 / #10548)
+
+`sentry_alert.agent_auth_failure` (`issue-alerts.tf`, `frequency_minutes = 40`) emails `issue_owners` →
+`ActiveMembers` when the server observes the Claude CLI's auth-failure reply (`Not logged in · Please run /login`)
+on either runner. The emit is `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`
+in `server/agent-auth-failure.ts`; the literal `null` first argument keeps it off the pino-mirror path (#8629).
+It carries ten closed-enum tags and nothing else (no key material, env value, message body, user or workspace id, path).
+Email only: nobody is paged until the ADR-260 Slack path is verified.
+
+**Decode the event.** This README is the one copy of the decode table; `issue-alerts.tf` points here. Terms first:
+
+- `runner`: `legacy` (`server/agent-runner.ts`) or `cc-soleur-go` (`server/cc-dispatcher.ts`).
+- `credential_scheme`: `api_key` (the leased credential is an Anthropic API key, env `ANTHROPIC_API_KEY`) or `oauth_token`
+  (a Claude subscription token, env `CLAUDE_CODE_OAUTH_TOKEN`).
+- `auth_env_present`: whether that scheme's variable was a non-empty string in the options handed to the SDK. `unknown`
+  means the options were unreadable at the time (the field says nothing).
+- `auth_mode`: the persisted engine binding of the conversation, `managed` or `api-key`; `unbound` = no engine-run row
+  (an old or unbound conversation); `unknown` = the lookup failed, timed out (1.5 s) or returned a value outside the list.
+- `cli_key_source`: the `apiKeySource` the CLI itself reports in its `system`/`init` message, taken from a closed list
+  (the SDK's `ApiKeySource`; a parity check in `test/agent-auth-failure-matcher.test.ts` keeps it equal).
+- `seccomp_artifact`: `base` or `unixdeny` (the AF_UNIX-deny profile); `outer_wrap`: a spawn hook wraps the CLI process;
+  `sandbox`: the SDK sandbox is `on` or `off`; `has_egress`: the session was built with network egress (a build-time
+  flag, not a reachability result).
+
+| Tags | Reading |
+|---|---|
+| `auth_env_present=false` | The built agent env had no usable credential variable: look at the lease value or scheme, not the CLI. |
+| `credential_scheme=api_key`, `auth_env_present=true` and `cli_key_source=none` | The key variable was in the options but the CLI process reports no credential source: a spawn or env hand-off problem (read `outer_wrap`, `sandbox`, `seccomp_artifact` next). |
+| `credential_scheme=api_key`, `auth_env_present=true` and `cli_key_source` is `ANTHROPIC_API_KEY` | The CLI saw the key and the API refused it: invalid or revoked key, or an account state. UNVERIFIED locally: only `none` has a captured fixture. |
+| `credential_scheme=oauth_token` | the SDK documents `cli_key_source=none` as "no API key in use, e.g. claude.ai OAuth login", so it does NOT mean "no credential" here: read `match_kind` instead (`oauth_token_revoked`, `session_expired`, or `not_logged_in`). |
+| `cli_key_source` is `/login managed key` | The CLI is using a key created by its own `/login` flow rather than the injected variable: unexpected for this server, record it. |
+| `cli_key_source=unknown` | The `init` message was not seen or carried a value outside the closed list: no conclusion from this field. |
+| `cli_key_source` of `user`, `project`, `org`, `temporary` or `oauth` | The SDK documents these as legacy members that current CLIs never emit: an unexpected value, record it. |
+| `cli_key_source` is `apiKeyHelper` | A configured helper command supplied the credential. The agent options set `settingSources: []` and nothing in this repo configures a helper, so this is unexpected too. |
+| `auth_mode=unbound` / `unknown` | No engine-run row for the conversation / the lookup failed or timed out: no conclusion from this field. |
+| `seccomp_artifact`, `sandbox`, `has_egress` | Posture dimensions for comparing runs where the failure appears and where it does not (for example the `agent-sandbox-unix-deny` flag OFF vs ON). |
+| `match_kind` | `not_logged_in` (the CLI saw no credential); `invalid_api_key`, `oauth_token_revoked`, `session_expired` (a credential was presented and refused or lapsed); `structured` (the SDK's own `authentication_failed` code with no recognised text). |
+
+**When the email arrives (responder steps).**
+
+1. Open the event in Sentry and read the ten tags with the table above. Do not look for a message body, user or path: none is sent.
+2. Record the tag tuple as a comment on #10455 (the first real tuple starts the lifecycle clock below).
+3. **Resolve the issue after recording the tuple; never archive or ignore it.** Every event shares one Sentry issue, and a
+   benign one (a single tenant's own revoked key: `invalid_api_key` or `oauth_token_revoked`) groups with the real outage
+   signal, so an archived issue would also swallow the next real email.
+4. The event is deduplicated, so its absence is not proof of health: at most one event per user and tuple per 5 minutes, at most
+   10 per 5 minutes process-wide (a handful of accounts with a revoked key can fill that cap, because one account can hold
+   several tuples), and the pdf chapter router and the scheduled Inngest agents are not observed. A cap-suppressed event
+   leaves no trace.
+5. Hand the cause to #11086; do not extend this diagnostic with new tags without a new plan.
+
+**Read the events** (read-only; the token never appears in argv, and the `field=` projections are needed for Discover to honour
+`query`; `scripts/sentry-issue.sh` is the hardened reader for issues and host events, this is the shape for these tags):
+
+```bash
+doppler run -p soleur -c prd -- bash -c 'curl --disable --noproxy "*" --proto "=https" -m 30 -fsS --config - -G \
+  "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/" \
+  --data-urlencode "query=feature:agent-auth op:cli-auth-failure" --data-urlencode "statsPeriod=24h" \
+  -d dataset=errors -d per_page=100 -d field=timestamp -d field=runner -d field=credential_scheme \
+  -d field=auth_env_present -d field=auth_mode -d field=cli_key_source -d field=seccomp_artifact \
+  -d field=has_egress -d field=sandbox -d field=outer_wrap -d field=match_kind \
+  < <(printf "header = \"Authorization: Bearer %s\"\n" "$SENTRY_ISSUE_RO_TOKEN")' | jq '.data'
+```
+
+**Second sink** (if Sentry capture is the broken part): the same call writes a pino error line, a JSON object carrying the
+same ten keys plus `feature` and `op`, shipped to Better Stack. The line is double-encoded, so decode it before filtering:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep cli-auth-failure \
+  | jq -r '.raw | fromjson | select(.feature == "agent-auth")'
+```
+
+A fault inside the diagnostic itself is visible as one constant `logger.warn` line per probe, per tap or per process
+(`auth-failure probe:` observer error or construction failure, `auth-failure tap:` observer error or "not installed" (the
+diagnostic is blind for that Query, for example after an SDK change), `auth-failure matcher:` unreadable message); these are
+breadcrumbs and never Sentry events, so search Better Stack for them by text. A silent rule is therefore not proof of health
+until none of these lines is present.
+
+**Lifecycle.** This is a temporary diagnostic. Within 48 hours of the first recorded real event (its tag tuple is recorded on
+#10455) a PR drops the rule's email action and keeps the Sentry issue and the pino line. The rule, its
+`alert-reference.json` entry, these README lines, both guard tests, the wiring pins, the widened source-pin regex and the
+other items of the removal checklist in the header of `server/agent-auth-mode.ts` are removed when the root-cause fix merges
+or 30 days after the first event, whichever comes first (#11085 tracks both steps). If no real event has been recorded by
+2026-11-30, #11085 is reviewed on that date rather than waiting on the event-driven clock.
 
 ADR: [ADR-031 — Sentry alert and cron monitor configuration as IaC](../../../../knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md)
 

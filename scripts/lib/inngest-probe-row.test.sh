@@ -141,6 +141,7 @@ declare -A ALLOW=(
   [".github/workflows/infra-validation.yml"]="pull_request paths: filter naming the lib"
   ["scripts/lib/bs-emitter-row.sh"]="the #8875 sibling lib — its header names this lib for contract lineage; it selects nothing itself (its own def is bs_emitter_row)"
   ["scripts/ci-pr-affected-audit.baseline.tsv"]="a data file of suite and path pairs (the affected-index ratchet baseline): it names this lib as a pair member and selects nothing"
+  ["scripts/lib/test-affected-paths.sh"]="the AFFECTED_*_PATHS declaration index — it names this lib as a feeder-read edge member and selects nothing"
 )
 
 # Files that MUST be discovered (#8873 review: a `>= N` count floor let the discovery drop the
@@ -435,11 +436,15 @@ fsm_tag() { # <fsm script> -> its readonly LOG_TAG value
   sed -nE 's/^[[:space:]]*readonly[[:space:]]+LOG_TAG="([^"]+)".*/\1/p' "$1" | head -1
 }
 FLIP_TAG="$(fsm_tag "$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh")"
-LUKS_TAG="$(fsm_tag "$REPO_ROOT/apps/web-platform/infra/inngest-luks-cutover.sh")"
-if [[ "$FLIP_TAG" == "inngest-cutover-flip" && "$LUKS_TAG" == "inngest-luks-cutover" ]]; then
-  pass "FSM LOG_TAGs read: $FLIP_TAG / $LUKS_TAG"
+# The LUKS cutover emitter (inngest-luks-cutover.sh) was retired with the cutover trio (#10112), so its LOG_TAG can no
+# longer be DERIVED from the script. The tag stays a literal here on purpose: the dispatcher's inert op=luks-cutover
+# arm (scripts/cutover-inngest.sh) and the followthrough still count rows under it, and the caller census below must
+# keep accepting exactly that literal until the dispatcher arm is retired (tracked follow-up).
+LUKS_TAG="inngest-luks-cutover"
+if [[ "$FLIP_TAG" == "inngest-cutover-flip" ]]; then
+  pass "flip LOG_TAG derived from the script: $FLIP_TAG (the luks tag '$LUKS_TAG' is a literal NOT checked here: no emitter is left to compare it with; the caller census below only checks callers pass the same literal)"
 else
-  fail "FSM LOG_TAGs drifted: flip='$FLIP_TAG' luks='$LUKS_TAG'"
+  fail "FSM LOG_TAGs drifted: flip='$FLIP_TAG' (luks literal '$LUKS_TAG')"
 fi
 
 CALLS="$(cd "$REPO_ROOT" && git grep -n '_generation_scoped_count' -- ':!*.test.sh' ':!knowledge-base' ':!*.md' \
