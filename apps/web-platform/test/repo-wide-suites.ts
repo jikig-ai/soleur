@@ -103,6 +103,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/compound-promote-patterns-live-tree.test.ts",
   "test/server/compound-promote-create.test.ts",
   "test/server/compound-promote-create-parity.test.ts",
+  "test/server/compound-promote-create-gates.test.ts",
   "test/server/inngest/cron-content-vendor-drift-revendor.test.ts",
   "test/server/inngest/cron-linkedin-token-check.test.ts",
   "test/server/inngest/cron-merge-queue-stall-dispatch.test.ts",
