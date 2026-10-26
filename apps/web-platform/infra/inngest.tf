@@ -162,8 +162,10 @@ resource "doppler_secret" "inngest_manual_trigger_secret_dev" {
 # Self-hosted Redis password (prd) — the queue/run-state store's auth. Generated
 # via random_password (hashicorp/random, already declared for random_id), NOT an
 # operator-mint sensitive var (hr-tf-variable-no-operator-mint-default). special
-# = false keeps it URL-safe inside the redis://:<pw>@127.0.0.1:6379 URI that
-# inngest-server + inngest-redis ExecStart build. prd-only: the durable Inngest
+# = false keeps it URL-safe inside the redis://:<pw>@127.0.0.1:6379 URI the
+# inngest-server launch script exports, and charset-safe on the aclfile rule
+# inngest-redis's ExecStartPre writer emits (#11103 — neither ExecStart expands
+# it now). prd-only: the durable Inngest
 # server is prd-only (dev runs ephemeral local `inngest dev`, no --redis-uri).
 resource "random_password" "inngest_redis_password_prd" {
   length  = 48
