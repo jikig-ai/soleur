@@ -835,3 +835,15 @@ its folder still renders the generator's output.
 - Brainstorm: `knowledge-base/project/brainstorms/archive/20260918-160549-2026-09-18-wikiskill-skill-evolution-brainstorm.md`;
   spec: `knowledge-base/project/specs/archive/20260918-160549-feat-wikiskill-skill-evolution/spec.md` (FR11-FR15, TR4).
 - Prior plan: `knowledge-base/project/plans/archive/20261025-180706-2026-10-24-feat-wikiskill-pattern-layer-proposer-index-ledger-reader-plan.md`.
+
+## Addendum 2026-10-26 (review round, Part 2): code behaviour that differs from the prose above
+
+Dated corrections; the sections above are left as written. Where they disagree, this addendum describes the code.
+
+- **`create_requested` (lines ~28, ~347, ~399, ~630).** The field is recorded on every manual PATTERNS row, including the early `disabled`, `deduped` and `week-cap-reached` rows; "every manual run" in those lines means "every manual patterns run". A manual run without `input:"patterns"` is a corpus run and stays byte-identical, so an `allow_create` sent without `input:"patterns"` leaves no trace (ruling Review R7). The `kind` marker field is `"create"` only; `"edit"` is never emitted and was removed from the type.
+- **Same-run collision.** `create-propose` receives the cluster hashes the edit loop recorded in the same run and treats each as suppressed; Step B counts an existing PR on its branch as `resumed` only when the body carries the `CREATE (new skill)` line (otherwise `persist/branch-taken`).
+- **Token and base (rulings R4 and R5).** Step B refreshes the clone (`fetch --depth=1 origin main`, `reset --hard FETCH_HEAD`), takes the token out of `.git/config` before any script runs, re-runs the admission checks on the refreshed tree, and restores the token only for the final fetch and the commit helper, comparing four base blobs (`persist/base-moved`).
+- **Bytes.** The collected bytes must equal the rendered files and the log baseline plus row (`persist/bytes-differ`); the README sync's change guard is baselined before the scanner runs.
+- **One open create.** Detected by the `self-healing/auto-` head ref plus the `CREATE (new skill)` body line; the best-effort label is not required.
+- **Step B deadline and clone loss.** One 150 s deadline (`persist/deadline`); a missing clone directory is `persist/clone-missing` in either step.
+- **Marker numbers.** Only `CREATE_MARKER_NUMBERS` reach the marker (tokens, max, bytes, path index, file index, missing-tool count, exit code, changed count besides the earlier words, cap, total, top1, nearest rank); signal names, tool names and cause tokens are Sentry-only. The `week-cap` refusal carries no number.
