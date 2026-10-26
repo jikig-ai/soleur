@@ -616,7 +616,7 @@ addfile app/one.txt "one" "feat one"
 addfile app/two.txt "two" "feat two"
 git -C "$TMP/w/shal/repo" push -q origin feat
 git clone -q --depth 1 --branch feat "file://$TMP/w/shal/origin.git" "$TMP/w/shal/clone" 2>/dev/null
-git -C "$TMP/w/shal/clone" fetch -q --depth 1 origin main:refs/remotes/origin/main 2>/dev/null
+git -C "$TMP/w/shal/clone" fetch -q --no-tags --depth 1 origin main:refs/remotes/origin/main 2>/dev/null
 sscan "$TMP/w/shal/clone" clean
 want_rc "depth-1 clone: NOT_RUN (the environment is the cause)" 43
 reason_is "depth-1 clone: reason no-merge-base" no-merge-base
