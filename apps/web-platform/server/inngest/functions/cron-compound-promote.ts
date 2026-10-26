@@ -1430,7 +1430,7 @@ const SKILL_GUARD_PAGE_SIZE = 100;
 export const SKILL_GUARD_REQUEST_TIMEOUT_MS = 20_000;
 /**
  * Total wall-clock bound for the whole scan (the account-wide cron slot is held while it runs).
- * Reaching it records bound `time`: unverifiable, never clear. Checked before every request.
+ * Passing it (a clock strictly later) records bound `time`: unverifiable, never clear. Checked before every request.
  */
 export const SKILL_GUARD_DEADLINE_MS = 120_000;
 /**

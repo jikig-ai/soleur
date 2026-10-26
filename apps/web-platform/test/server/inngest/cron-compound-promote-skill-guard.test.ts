@@ -337,6 +337,24 @@ describe("the whole scan is bounded in time (bound `time`)", () => {
     expect(skillConflictVerdict(s, ALPHA)).toEqual({ kind: "unverifiable", bound: "time" });
   });
 
+  it("the PAGE-loop check also stops the scan: a full first pulls page, then a late clock, reads no second page", async () => {
+    // reads: 1 deadline, 2 page-1 check, 3..102 one file-request check per PR, 103 page-2 check (late).
+    let reads = 0;
+    const { s, calls } = await scan(prs(120), [ALPHA], { now: () => (++reads <= 102 ? 0 : 1_000_000) });
+    expect(s.incomplete).toBe("time");
+    expect(count(calls, PULLS)).toBe(1);
+    expect(count(calls, FILES)).toBe(PAGE);
+  });
+
+  it("the edge: a clock exactly AT the deadline is on time, one millisecond past it is not", async () => {
+    let reads = 0;
+    const atDeadline = await scan(prs(3), [ALPHA], { now: () => (++reads === 1 ? 0 : SKILL_GUARD_DEADLINE_MS) });
+    expect(atDeadline.s.incomplete).toBeNull();
+    reads = 0;
+    const past = await scan(prs(3), [ALPHA], { now: () => (++reads === 1 ? 0 : SKILL_GUARD_DEADLINE_MS + 1) });
+    expect(past.s.incomplete).toBe("time");
+  });
+
   it("a scan that finishes inside the deadline is untouched", async () => {
     const { s } = await scan(prs(5), [ALPHA], { now: () => 1_000 });
     expect(s.incomplete).toBeNull();
