@@ -1,0 +1,403 @@
+// WikiSkill Phase 2 (#10550) -- parity of the create arm's server-side duplicates with the REAL tree.
+//
+// The create arm duplicates three things the repo's own tooling owns: the Cursor stub generator (bun-shaped,
+// does not run in the runner image -- Phase 0, CTO G3), the Grok invoke block (single source plan/SKILL.md) and the
+// description-budget counter (bun test components.test.ts). A duplicate that is not pinned drifts silently, so each
+// is compared here against the thing it duplicates, over the real tree.
+//
+// PROPERTY (Guards 2 and 4): the server's description-word count equals the count components.test.ts computes; the
+// rendered Cursor stub equals the generator's output and the rendered Grok block equals the pinned canonical, for
+// every skill and for a new one.
+//
+// ASSEMBLY: the chokepoints are `countDescriptionWords`, `readBudgetCap`, `renderCursorSkillStub` and `readGrokBlock`.
+// The per-skill loop below is the population; each loop asserts its own non-zero floor so "zero folders compared" is
+// RED, not green.
+//
+// ANCHOR: `cursor-name-map --check`, `grok-harness-invoke.test.ts` and `components.test.ts` run in CI independently
+// of this suite; this file only proves the duplicates agree with them.
+//
+// This suite reads the repository (plugins/, knowledge-base/), so it is registered in REPO_WIDE_SUITES.
+import { describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+vi.hoisted(() => {
+  process.env.NEXT_PHASE = "phase-production-build";
+});
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  reportSilentFallback: vi.fn(),
+}));
+
+import { parse as parseYaml } from "yaml";
+import { MIN_TRACKED_SKILLS } from "../../../../plugins/soleur/test/lib/population-floors";
+import {
+  CREATE_DESCRIPTION_MAX_WORDS,
+  CREATE_DESCRIPTION_MIN_WORDS,
+  CREATE_FILE_MAX_BYTES,
+  CREATE_FILE_MAX_LINES,
+  CREATE_INPUT_BYTES_PER_TOKEN,
+  CREATE_INPUT_MAX_TOKENS,
+  CREATE_PR_BODY_LINE,
+  OVERLAP_REFUSE_THRESHOLD,
+  OVERLAP_TOP_K,
+  checkCreate,
+  countDescriptionWords,
+  createPathList,
+  prepareCreate,
+  proposalOverlapText,
+  rankOverlap,
+  readBudgetCap,
+  readGrokBlock,
+  renderCreateFiles,
+  renderCursorSkillStub,
+  type CreateContext,
+  type SkillRecord,
+} from "@/server/compound-promote-create";
+
+const FIX = join(__dirname, "..", "fixtures", "compound-promote-create");
+const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+const PLUGIN_ROOT = join(REPO_ROOT, "plugins", "soleur");
+
+// The generator is bun-shaped (`import.meta.dir`), which this app's tsc does not type, so it is loaded by path at
+// runtime and typed structurally here. Vite resolves its bare `yaml` import through the vitest project root (Phase 0).
+type Generator = { buildCursorNameMap(pluginRoot: string): { files: Map<string, string>; problems: string[] } };
+const GENERATOR_PATH = join(PLUGIN_ROOT, "scripts", "sync-cursor-name-map.ts");
+const { buildCursorNameMap } = (await import(/* @vite-ignore */ GENERATOR_PATH)) as Generator;
+
+// ---------------------------------------------------------------------------------------------------------
+// Guard 4: Cursor stub parity
+// ---------------------------------------------------------------------------------------------------------
+
+type StubArgs = { folder: string; description: string | null; disableModel: boolean };
+type StubRender = (a: StubArgs) => string;
+
+/** Independent frontmatter read (NOT the generator's private one): description null when absent or empty. */
+function stubArgsFor(root: string, folder: string): StubArgs {
+  const raw = readFileSync(join(root, "skills", folder, "SKILL.md"), "utf8");
+  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const fm = (m ? parseYaml(m[1]) : {}) as Record<string, unknown> | null;
+  const d = fm?.description;
+  return {
+    folder,
+    description: typeof d === "string" && d !== "" ? d : null,
+    disableModel: fm?.["disable-model-invocation"] === true,
+  };
+}
+
+/** Compare the renderer to the generator over every skill folder under `root`. Returns the problems and the population. */
+function stubParity(root: string, render: StubRender): { problems: string[]; compared: number } {
+  const built = buildCursorNameMap(root);
+  const problems: string[] = [...built.problems.map((p) => `generator: ${p}`)];
+  let compared = 0;
+  for (const folder of readdirSync(join(root, "skills")).sort()) {
+    if (!existsSync(join(root, "skills", folder, "SKILL.md"))) continue;
+    const rel = `cursor/skills/${render(stubArgsFor(root, folder)).match(/^name: (.*)$/m)?.[1] ?? "?"}/SKILL.md`;
+    const want = built.files.get(rel);
+    const got = render(stubArgsFor(root, folder));
+    compared += 1;
+    if (want === undefined) problems.push(`no generator output for ${folder} (${rel})`);
+    else if (want !== got) problems.push(`DRIFT ${folder}`);
+  }
+  return { problems, compared };
+}
+
+const real: StubRender = (a) => renderCursorSkillStub(a);
+
+function syntheticPluginRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "cp-create-parity-"));
+  const w = (rel: string, body: string) => {
+    const p = join(root, rel);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, body);
+  };
+  // YAML escapes are written as TEXT (backslash-u), so no raw separator character appears in this source file.
+  w("skills/alpha/SKILL.md", '---\nname: alpha\ndescription: "Quote \\" backslash \\\\ colon: tab\\t line\\u2028sep and  double  space"\n---\n\nBody\n');
+  w("skills/go/SKILL.md", '---\nname: go\ndescription: "Routes."\n---\n\nBody\n');
+  w("skills/help/SKILL.md", '---\nname: help\ndescription: "Lists."\n---\n\nBody\n');
+  w("skills/plan/SKILL.md", '---\nname: plan\ndescription: "Plans."\n---\n\nBody\n');
+  w("skills/mismatch/SKILL.md", '---\nname: some-other-name\ndescription: "Name differs from folder."\n---\n\nBody\n');
+  w("skills/user-invoked/SKILL.md", '---\nname: user-invoked\ndescription: "Hidden."\ndisable-model-invocation: true\n---\n\nBody\n');
+  w("skills/no-description/SKILL.md", "---\nname: no-description\n---\n\nBody\n");
+  // The synthetic NEW skill the create arm would produce.
+  w("skills/brand-new-skill/SKILL.md", `---\nname: brand-new-skill\ndescription: "${"This skill should be used when a brand new routine appears and needs a home."}"\n---\n\nBody\n`);
+  w("agents/engineering/review/synthetic-reviewer.md", '---\nname: synthetic-reviewer\ndescription: "Reviews."\nmodel: inherit\n---\n\nBody\n');
+  return root;
+}
+
+describe("Guard 4: the pure Cursor stub renderer equals the generator", () => {
+  it("over EVERY real skill folder (population floor asserted)", () => {
+    const { problems, compared } = stubParity(PLUGIN_ROOT, real);
+    expect(problems).toEqual([]);
+    expect(compared).toBeGreaterThanOrEqual(MIN_TRACKED_SKILLS);
+    // And the parity population is the generator's own population (no folder silently skipped).
+    const generated = [...buildCursorNameMap(PLUGIN_ROOT).files.keys()].filter((k) => k.startsWith("cursor/skills/")).length;
+    expect(compared).toBe(generated);
+  });
+
+  it("over a synthetic tree incl. a NEW skill, escapes, bare/command/model-disabled special cases and a name that differs from the folder", () => {
+    const root = syntheticPluginRoot();
+    try {
+      const { problems, compared } = stubParity(root, real);
+      expect(problems).toEqual([]);
+      expect(compared).toBe(8);
+      const built = buildCursorNameMap(root);
+      expect(built.files.has("cursor/skills/soleur-brand-new-skill/SKILL.md")).toBe(true);
+      // must-PASS non-canonical (harness row): the stub is named by the FOLDER, not by the frontmatter name.
+      expect(built.files.get("cursor/skills/soleur-mismatch/SKILL.md")).toContain("name: soleur-mismatch\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("mutation 1: changing ONE character of the header is detected", () => {
+    const mutated: StubRender = (a) => renderCursorSkillStub(a).replace("do not call", "do nt call");
+    expect(mutated({ folder: "x", description: "d", disableModel: false })).not.toBe(real({ folder: "x", description: "d", disableModel: false }));
+    expect(stubParity(PLUGIN_ROOT, mutated).problems.length).toBeGreaterThan(0);
+  });
+
+  it("mutation 2 (own dispatch): a parity loop over zero folders cannot pass the population floor", () => {
+    const empty = mkdtempSync(join(tmpdir(), "cp-create-parity-empty-"));
+    try {
+      mkdirSync(join(empty, "skills"), { recursive: true });
+      mkdirSync(join(empty, "agents"), { recursive: true });
+      const { compared } = stubParity(empty, real);
+      expect(compared).toBe(0);
+      expect(compared).toBeLessThan(MIN_TRACKED_SKILLS); // the floor in the real-tree test above is what turns this RED
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("mutation 3: a second skill whose description contains a character the renderer mishandles is detected", () => {
+    const root = syntheticPluginRoot();
+    try {
+      // A renderer that quotes with JSON.stringify leaves U+2028 raw where the generator escapes it.
+      const sloppy: StubRender = (a) =>
+        a.description !== null && a.folder === "alpha"
+          ? renderCursorSkillStub(a).replace(/^description: .*$/m, () => `description: ${JSON.stringify(a.description)}`)
+          : renderCursorSkillStub(a);
+      const alpha = stubArgsFor(root, "alpha");
+      expect(sloppy(alpha)).not.toBe(renderCursorSkillStub(alpha)); // self-check: the mutation changed something
+      expect(stubParity(root, sloppy).problems.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a differently worded NEW skill renders the same bytes the generator would write for it", () => {
+    const root = syntheticPluginRoot();
+    try {
+      const args = stubArgsFor(root, "brand-new-skill");
+      expect(renderCursorSkillStub(args)).toBe(buildCursorNameMap(root).files.get("cursor/skills/soleur-brand-new-skill/SKILL.md"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Guard 4: Grok block
+// ---------------------------------------------------------------------------------------------------------
+
+describe("Guard 4: the rendered Grok block equals the pinned canonical", () => {
+  const grokTest = readFileSync(join(PLUGIN_ROOT, "test", "grok-harness-invoke.test.ts"), "utf8");
+  const pin = /const CANONICAL_MD5 = "([0-9a-f]{32})";/.exec(grokTest)?.[1];
+  const planMd = readFileSync(join(PLUGIN_ROOT, "skills", "plan", "SKILL.md"), "utf8");
+
+  it("the md5 pin is read from grok-harness-invoke.test.ts (single source) and the block read from plan/SKILL.md matches it", () => {
+    expect(pin, "the pin literal must be found in grok-harness-invoke.test.ts").toMatch(/^[0-9a-f]{32}$/);
+    expect(createHash("md5").update(readGrokBlock(planMd)).digest("hex")).toBe(pin);
+  });
+
+  it("a rendered SKILL.md carries that exact block, once, before the first H1 and outside the frontmatter", () => {
+    const grok = readGrokBlock(planMd);
+    const template = readFileSync(join(PLUGIN_ROOT, "skills", "skill-creator", "templates", "purpose.md"), "utf8");
+    const skills = JSON.parse(readFileSync(join(FIX, "skills.json"), "utf8")) as SkillRecord[];
+    const ctx: CreateContext = {
+      patterns: [
+        {
+          slug: "synthetic-retry-pattern", title: "t", summary: "s", status: "open", openedOn: "2026-10-01", tags: [],
+          evidence: ["knowledge-base/project/learnings/a.md"], requiredReading: false,
+        },
+      ],
+      skills, skillDirs: skills.map((s) => s.name), agentPaths: [], openPrPaths: [],
+      budget: { total: 2402, cap: 2436 }, isHashSuppressed: () => false,
+    };
+    const v = checkCreate(JSON.parse(readFileSync(join(FIX, "proposal.json"), "utf8")), ctx);
+    expect(v.kind).toBe("create");
+    if (v.kind !== "create") return;
+    const r = renderCreateFiles({ proposal: v.proposal, grokBlock: grok, purposeTemplate: template, date: "2026-10-26" });
+    expect(r.kind).toBe("rendered");
+    if (r.kind !== "rendered") return;
+    const text = r.files.skillMd;
+    expect(text.split("<!-- grok-harness-invoke:start -->").length - 1).toBe(1);
+    expect(text).toContain(grok);
+    const lines = text.split("\n");
+    const close = lines.indexOf("---", 1);
+    expect(lines.indexOf("<!-- grok-harness-invoke:start -->")).toBeGreaterThan(close);
+    expect(lines.indexOf("<!-- grok-harness-invoke:start -->")).toBeLessThan(lines.findIndex((l) => l.startsWith("# ")));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Guard 2: budget counter and cap
+// ---------------------------------------------------------------------------------------------------------
+
+describe("Guard 2: the server's word count equals the bun test's, over the real tree", () => {
+  // The independent definition: the SAME helpers components.test.ts calls, run under bun.
+  const BUN_SCRIPT = `
+    import { discoverSkills, parseComponent } from ${JSON.stringify(join(PLUGIN_ROOT, "test", "helpers"))};
+    let total = 0, disabled = 0, n = 0, includingDisabled = 0, spaceSplit = 0;
+    for (const p of discoverSkills()) {
+      n++;
+      const { frontmatter } = parseComponent(p);
+      const desc = String(frontmatter.description || "");
+      includingDisabled += desc.split(/\\s+/).filter(Boolean).length;
+      spaceSplit += desc.split(" ").filter(Boolean).length;
+      if (frontmatter["disable-model-invocation"] === true) { disabled++; continue; }
+      total += desc.split(/\\s+/).filter(Boolean).length;
+    }
+    console.log(JSON.stringify({ total, disabled, n, includingDisabled, spaceSplit }));
+  `;
+  const bunRun = (): { total: number; disabled: number; n: number; includingDisabled: number; spaceSplit: number } => {
+    const out = execFileSync("bun", ["-e", BUN_SCRIPT], { cwd: PLUGIN_ROOT, encoding: "utf8", timeout: 60_000 });
+    return JSON.parse(out.trim().split("\n").pop() as string);
+  };
+
+  it("total, population and user-invoked count equal what discoverSkills()/parseComponent() compute under bun", () => {
+    const bun = bunRun();
+    const ours = countDescriptionWords(PLUGIN_ROOT);
+    expect(ours.ok).toBe(true);
+    if (!ours.ok) return;
+    expect(ours.total).toBe(bun.total);
+    expect(ours.skills).toBe(bun.n);
+    expect(ours.disabled).toBe(bun.disabled);
+    expect(ours.skills).toBeGreaterThanOrEqual(MIN_TRACKED_SKILLS);
+    expect(ours.disabled).toBeGreaterThan(0);
+  });
+
+  it("mutations 1 and 4 are real on this tree: counting user-invoked skills, or splitting on a single space, would NOT agree", () => {
+    const bun = bunRun();
+    expect(bun.includingDisabled).not.toBe(bun.total); // mutation 1 (counts disable-model-invocation skills too)
+    // A single-space split only differs when a description has a double space or a newline; if none does today the
+    // mutation is unobservable on the real tree and the fixture-tree test in compound-promote-create.test.ts owns it.
+    expect(bun.spaceSplit).toBeGreaterThanOrEqual(bun.total);
+  });
+
+  it("the cap is the constant assignment in components.test.ts and the total is within it", () => {
+    const src = readFileSync(join(PLUGIN_ROOT, "test", "components.test.ts"), "utf8");
+    const cap = readBudgetCap(src);
+    expect(cap).not.toBeNull();
+    const first = /^const SKILL_DESCRIPTION_WORD_BUDGET = (\d+);/m.exec(src);
+    expect(cap).toBe(Number(first?.[1]));
+    const ours = countDescriptionWords(PLUGIN_ROOT);
+    expect(ours.ok && ours.total <= (cap as number)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// prefer-patch calibration against the REAL skill list + the input ceiling on the real corpus
+// ---------------------------------------------------------------------------------------------------------
+
+describe("overlap threshold holds on the REAL skill list", () => {
+  const cal = JSON.parse(readFileSync(join(FIX, "calibration.json"), "utf8")) as {
+    evidence: Array<{ id: string; target: string; slug: string; description: string; when_to_use: string[] }>;
+    negatives: Array<{ id: string; slug: string; description: string; when_to_use: string[] }>;
+  };
+  const counted = countDescriptionWords(PLUGIN_ROOT);
+
+  it("each evidence fixture ranks its patch target first and clears the threshold with margin; negatives stay below it", () => {
+    expect(counted.ok).toBe(true);
+    if (!counted.ok) return;
+    for (const e of cal.evidence) {
+      const r = rankOverlap(proposalOverlapText(e), counted.records);
+      expect(r[0].name, e.id).toBe(e.target);
+      expect(r[0].score, e.id).toBeGreaterThanOrEqual(OVERLAP_REFUSE_THRESHOLD + 0.04);
+    }
+    expect(cal.negatives.length).toBeGreaterThanOrEqual(4);
+    for (const n of cal.negatives) {
+      const r = rankOverlap(proposalOverlapText(n), counted.records);
+      expect(r[0].score, `${n.id} top1=${r[0].name}`).toBeLessThanOrEqual(OVERLAP_REFUSE_THRESHOLD - 0.04);
+    }
+    expect(OVERLAP_TOP_K).toBe(3);
+  });
+
+  it("the input ceiling holds on the real corpus under the documented bytes/4 bound (and the bound is stated)", () => {
+    expect(counted.ok).toBe(true);
+    if (!counted.ok) return;
+    const dir = join(REPO_ROOT, "knowledge-base", "project", "patterns");
+    // Upper bound of the rendered index: the whole page files (the index renders only slug, title, summary, tags, evidence).
+    const pageBytes = readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .reduce((n, f) => n + statSync(join(dir, f)).size, 0);
+    const skills = counted.records.filter((s) => !s.disableModelInvocation);
+    const listBytes = Buffer.byteLength(skills.map((s) => `- ${s.name}: ${s.description}`).join("\n"), "utf8");
+    const bound = Math.ceil((pageBytes + listBytes) / CREATE_INPUT_BYTES_PER_TOKEN);
+    // Record: printed so the PR body can cite the measured margin.
+    console.info(`CREATE input bound: pages=${pageBytes}B list=${listBytes}B tokens<=${bound} (ceiling ${CREATE_INPUT_MAX_TOKENS}, bytes/${CREATE_INPUT_BYTES_PER_TOKEN})`);
+    expect(bound).toBeLessThanOrEqual(CREATE_INPUT_MAX_TOKENS);
+    // A single over-ceiling skill list is refused by the real gate (never truncated).
+    const huge = Array.from({ length: 700 }, (_, i) => ({ name: `s${i}`, description: "This skill should be used when " + "x ".repeat(40), disableModelInvocation: false }));
+    expect(prepareCreate({ patterns: [{ slug: "p", title: "t", summary: "s", status: "open", openedOn: "2026-10-01", tags: [], evidence: [], requiredReading: false }], skills: huge, nonce: "0".repeat(16) }).kind).toBe("refused");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// ADR-092 amendment wording pin (Guard 1 anchor)
+// ---------------------------------------------------------------------------------------------------------
+
+function stripFences(text: string): string {
+  return text.replace(/^```[\s\S]*?^```[^\n]*\n?/gm, "");
+}
+
+describe("the ADR-092 create-only amendment is pinned to the exported constants (Guard 1 anchor)", () => {
+  const adr = readFileSync(
+    join(REPO_ROOT, "knowledge-base", "engineering", "architecture", "decisions", "ADR-092-additive-only-auto-edit-boundary-and-hard-rule-body-weakening-gate.md"),
+    "utf8",
+  );
+  const start = adr.indexOf("## Amendment — create-only new-skill path");
+  const amendment = start === -1 ? "" : stripFences(adr.slice(start)).replace(/\s+/g, " ");
+
+  it("the amendment exists and is the tail of the ADR", () => {
+    expect(start, "ADR-092 must carry the create-only amendment heading").toBeGreaterThan(-1);
+    expect(amendment.length).toBeGreaterThan(1000);
+  });
+
+  it("names exactly the six paths the code derives (with <slug> for the slug)", () => {
+    const paths = createPathList("zzz").map((p) => p.replaceAll("zzz", "<slug>"));
+    expect(paths).toHaveLength(6);
+    for (const p of paths) expect(amendment, p).toContain(p);
+    expect(amendment).toContain("A seventh path");
+  });
+
+  it("states the numeric and verbatim contract the code enforces", () => {
+    expect(amendment).toContain(`at most ${CREATE_DESCRIPTION_MAX_WORDS} words`);
+    expect(amendment).toContain("top three");
+    expect(OVERLAP_TOP_K).toBe(3);
+    expect(amendment).toContain("`# skill-security-scan verdict: LOW-RISK`");
+    expect(amendment).toContain("`SKILL_SECURITY_SCAN_OFFLINE=1`");
+    expect(amendment).toContain(`\`${CREATE_PR_BODY_LINE}\``);
+    expect(amendment).toContain("`create-refused`");
+    expect(amendment).toContain("`allowedPaths: []`");
+    expect(amendment).toContain("`mergeMode: \"none\"`");
+    expect(amendment).toContain("the edit arm still never accepts status `A`");
+    expect(amendment).toContain("`skill-security-scan PR gate` or `test`");
+  });
+
+  it("limits stated in the amendment's own words agree with the constants", () => {
+    // The ADR states the minimum without a number; the constants must stay coherent with 'at most 30 words'.
+    expect(CREATE_DESCRIPTION_MIN_WORDS).toBeLessThan(CREATE_DESCRIPTION_MAX_WORDS);
+    expect(CREATE_FILE_MAX_LINES).toBe(60);
+    expect(CREATE_FILE_MAX_BYTES).toBe(3072);
+  });
+
+  it("harness: weakening the pinned text is detected (the instrument can fail)", () => {
+    const weakened = amendment.replace("A seventh path", "An extra path");
+    expect(weakened).not.toBe(amendment);
+    expect(weakened).not.toContain("A seventh path");
+  });
+});

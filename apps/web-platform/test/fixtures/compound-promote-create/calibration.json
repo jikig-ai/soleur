@@ -1,0 +1,47 @@
+{
+  "note": "Synthesized calibration cases for OVERLAP_REFUSE_THRESHOLD (#10550). The two evidence rows carry ONLY the cluster hash of the open draft PR and the patch target; every text field is invented for this fixture, no learning or PR content is copied.",
+  "evidence": [
+    {
+      "id": "evidence-11230",
+      "cluster_hash": "17787139e9f405e879f325f7a3c936a7ee6890b217c7023a15c4bb33fdd51bed",
+      "target": "git-worktree",
+      "slug": "worktree-prune-guard",
+      "description": "This skill should be used when stale or orphaned Git worktrees pile up and need safe pruning, branch cleanup and removal checks during parallel development.",
+      "when_to_use": ["Several feature worktrees exist and some branches were already merged", "A worktree directory remains after its branch was deleted"]
+    },
+    {
+      "id": "evidence-11231",
+      "cluster_hash": "e330ced87868a12b430f41286db9a100bbefb92c67f38a85f4d1b29101eb7df3",
+      "target": "pencil-setup",
+      "slug": "pencil-mcp-recovery",
+      "description": "This skill should be used when the Pencil design tool MCP server is missing or unregistered and the desktop app or IDE extension must be detected and registered again.",
+      "when_to_use": ["Pencil MCP tools are unavailable in a session", "The IDE extension is installed but the MCP server is not registered"]
+    }
+  ],
+  "negatives": [
+    {
+      "id": "negative-http-retry",
+      "slug": "http-retry-backoff",
+      "description": "This skill should be used when outbound network calls fail intermittently and need bounded retries with exponential delay and jitter.",
+      "when_to_use": ["A flaky upstream returns transient errors", "A request storm follows a brief outage"]
+    },
+    {
+      "id": "negative-csv-import",
+      "slug": "csv-import-validation",
+      "description": "This skill should be used when importing spreadsheet rows needs column type checks, duplicate detection and a rejected-row report.",
+      "when_to_use": ["A bulk upload contains malformed rows", "Totals differ between the source sheet and the stored rows"]
+    },
+    {
+      "id": "negative-timezone",
+      "slug": "calendar-timezone-handling",
+      "description": "This skill should be used when meeting times, recurring events and daylight saving transitions must stay correct across user locales.",
+      "when_to_use": ["An invite shows the wrong hour for a remote attendee", "A recurring event shifts after a clock change"]
+    },
+    {
+      "id": "negative-alt-text",
+      "slug": "image-alt-text-audit",
+      "description": "This skill should be used when published pages need accessible text alternatives reviewed for photos, charts and decorative graphics.",
+      "when_to_use": ["A page ships with unlabeled charts", "Screen reader users report missing image descriptions"]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "decision": "create",
+  "pattern_slug": "synthetic-retry-pattern",
+  "slug": "http-retry-backoff",
+  "description": "This skill should be used when outbound network calls fail intermittently and need bounded retries with exponential delay and jitter.",
+  "nearest_skill": "ship",
+  "patch_rejection_reason": "The ship skill covers release preparation, not the retry policy of arbitrary outbound calls, so a patch would bury it.",
+  "when_to_use": ["A flaky upstream returns transient errors", "A request storm follows a brief outage"],
+  "steps": ["Identify which failures are transient", "Cap the attempt count and the total wait", "Add jitter to every delay", "Log each retry with its attempt number"],
+  "sharp_edges": ["Never retry a request that is not safe to repeat", "A retry without a cap hides an outage"],
+  "merge_retire_candidates": ["Retire this skill if a workflow skill grows a retry section"],
+  "purpose": {
+    "origin": "Several unrelated sessions rediscovered the same retry mistakes.",
+    "patterns_addressed": "Retries without caps and retries of unsafe requests recurred across sessions."
+  }
+}
