@@ -962,7 +962,7 @@ const EDIT_NEW_LINES_MAX = 20;
 /**
  * The hard cap on one model-written `AGENTS.rules.md` line. It equals the corpus lint's
  * `PER_RULE_CAP` in scripts/lint-agents-rule-budget.py (600 UTF-8 bytes), and a vitest reads that
- * constant and asserts equality (the SITES row in scripts/lint-agents-compound-sync.sh pins it too, in
+ * constant and asserts equality (the SITES row in the compound-sync lint pins it too, in
  * lefthook and CI), so the validator never accepts a line the lint rejects and never
  * refuses one the lint accepts (#10552: a 500 cap refused real rules, 26 of the 99 rule bullets in
  * AGENTS.rules.md are longer than 500). Characters equal bytes here because PRINTABLE_ASCII_RE admits only ASCII.
