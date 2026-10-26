@@ -224,7 +224,7 @@ done
 
 # The anchors are the floor under the CVE thresholds. Source-grepped here so that lowering
 # a threshold AND its anchor together is a three-file edit rather than a two-line one.
-for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.10.2" "@hono/node-server:2:2.0.10"; do
+for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.12.2" "@hono/node-server:2:2.0.10"; do
   IFS=: read -r pkg major want <<< "$spec"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *\(\"${pkg}\", ${major}\): \"[0-9.]+\"," "$GUARD" || true)"

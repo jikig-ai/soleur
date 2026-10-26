@@ -104,16 +104,17 @@ REQUIRED = [
     # pen-cli resolves a DIFFERENT major line of several watched packages than the adapter does,
     # so the completeness sweep demands a row per line (re-derived 2026-10-26 from
     # `gh api "/advisories?ecosystem=npm&affects=<pkg>"`). Floors are the strictest first_patched
-    # of the published advisories on that line, except undici 8, which is held at 8.10.2 (the
-    # level the lockfile and the rest of this table's snapshot era were derived at): the 8.12.2
-    # advisories (GHSA-xjj6-f33q-929c HIGH, GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472) are
-    # OPEN against the engine's locked undici 8.10.2 and need a lockfile decision, not a table edit.
+    # of the published advisories on that line. undici 8 sits at 8.12.2 (GHSA-xjj6-f33q-929c HIGH,
+    # GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472): the engine's own dependency
+    # (@earendil-works/pi-coding-agent) pins undici 8.10.2 EXACTLY, so `npm update` cannot move it and
+    # pen-cli/package.json carries `"overrides": {"undici": "8.12.2"}`. Drop the override when the
+    # engine's dependency range itself reaches 8.12.2; bump it only after a green engine-contract-probe.sh.
     ("pen-cli", "hono", 4, "4.13.11"),
     ("pen-cli", "@hono/node-server", 2, "2.0.10"),
     ("pen-cli", "ip-address", 10, "10.7.4"),
     ("pen-cli", "fast-uri", 3, "3.1.9"),
     ("pen-cli", "brace-expansion", 5, "5.0.12"),
-    ("pen-cli", "undici", 8, "8.10.2"),
+    ("pen-cli", "undici", 8, "8.12.2"),
 ]
 
 # THE FLOOR UNDER THE FLOOR. The structural check in main() asserts a row's minimum sits
@@ -143,7 +144,7 @@ FLOOR_ANCHORS = {
     ("hono", 4): "4.12.34",
     ("@hono/node-server", 1): "1.19.15",
     ("@hono/node-server", 2): "2.0.10",
-    ("undici", 8): "8.10.2",
+    ("undici", 8): "8.12.2",   # GHSA-xjj6-f33q-929c (HIGH); pen-cli override, see the pen-cli rows
     ("@opentelemetry/propagator-jaeger", 2): "2.9.0",
 }
 

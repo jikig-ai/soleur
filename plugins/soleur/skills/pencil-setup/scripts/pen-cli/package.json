@@ -5,5 +5,8 @@
   "description": "Lockfile-pinned install prefix for the headless Pencil engine. check_deps.sh copies this pair to ~/.local/share/pen-cli and runs npm ci there (ADR-191).",
   "dependencies": {
     "@pen.dev/cli": "0.3.13"
+  },
+  "overrides": {
+    "undici": "8.12.2"
   }
 }
