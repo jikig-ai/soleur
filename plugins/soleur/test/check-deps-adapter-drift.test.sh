@@ -91,6 +91,21 @@ set -e
 assert_eq "3" "$rc" "missing sibling: exit 3"
 assert_contains "$out" "pencil-repl-surface.mjs" "missing sibling: names the missing module"
 
+# --- Case 2c: an unparseable module list is an error, never a clean OK ---
+case2c_scripts="$tmp_dir/case2c-scripts"
+case2c_dir="$tmp_dir/case2c"
+mkdir -p "$case2c_scripts" "$case2c_dir"
+cp "$CHECK_DEPS" "$case2c_scripts/check_deps.sh"
+cp "$repo_adapter" "$case2c_scripts/pencil-mcp-adapter.mjs"
+cp "$repo_adapter" "$case2c_dir/pencil-mcp-adapter.mjs"
+echo "# no module list here" > "$case2c_scripts/copy_adapter.sh"
+set +e
+out=$(PENCIL_ADAPTER_INSTALL_DIR="$case2c_dir" bash "$case2c_scripts/check_deps.sh" --check-adapter-drift 2>&1)
+rc=$?
+set -e
+assert_eq "2" "$rc" "empty module list: exit 2"
+assert_contains "$out" "no adapter modules parsed" "empty module list: says why"
+
 # --- Case 3: --auto re-copies and then exits 0 ---
 case3_dir="$tmp_dir/case3"
 mkdir -p "$case3_dir"

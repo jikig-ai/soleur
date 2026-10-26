@@ -63,12 +63,19 @@ if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
   # read from copy_adapter.sh so the two cannot disagree. (A while-read loop, not
   # mapfile: this script also runs on macOS bash 3.2.)
   drifted=""
+  compared=0
   while IFS= read -r module; do
     [[ -n "$module" ]] || continue
+    compared=$((compared + 1))
     if [[ ! -f "$install_dir/$module" ]] || ! cmp -s -- "$script_dir/$module" "$install_dir/$module"; then
       drifted="$drifted $module"
     fi
   done < <(sed -n '/^ADAPTER_FILES=(/,/^)/p' "$script_dir/copy_adapter.sh" | grep -o '"[^"]*\.mjs"' | tr -d '"')
+  if [[ "$compared" -eq 0 ]]; then
+    # An unreadable module list must not read as "no drift": it would compare nothing.
+    echo "ERROR: no adapter modules parsed from $script_dir/copy_adapter.sh ADAPTER_FILES" >&2
+    exit 2
+  fi
 
   if [[ -z "$drifted" ]]; then
     echo "OK: installed adapter matches repo (sha ${repo_sha:0:12})"
