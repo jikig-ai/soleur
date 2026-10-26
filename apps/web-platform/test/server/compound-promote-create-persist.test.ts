@@ -544,6 +544,36 @@ describe("G3 -- Step B correctness: the second fetch, the PR body, the orphan br
     expect(w.config()).not.toContain("x-access-token");
   });
 
+  it("(c) V7: a FAILED first own-PR lookup is retried once before branch-exists refuses -- a replay of a successful attempt resumes as opened", async () => {
+    const w = world();
+    const v = await propose(w);
+    w.rgit(["branch", `self-healing/auto-${v.clusterHash}-2026-10-26`]); // the earlier attempt pushed it ...
+    const request = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("502"), { status: 502 })) // ... but the lookup could not see its PR
+      .mockResolvedValue({ data: [{ number: 55, body: "CREATE (new skill)\nrest" }] }); // ... which is there on the second look
+    const a = persistArgs(w, v, { octokit: { request, graphql: async () => ({}) } });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "opened", pr: 55 });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(a.safeCommit).not.toHaveBeenCalled();
+    expect(w.config()).not.toContain("x-access-token");
+  });
+
+  it("(c) V7: the second look fails too (or finds no PR): branch-exists refuses; a lookup that SUCCEEDED the first time is never repeated", async () => {
+    const branch = (v: CreateVerdictCreate) => `self-healing/auto-${v.clusterHash}-2026-10-26`;
+    const w = world();
+    const v = await propose(w);
+    w.rgit(["branch", branch(v)]);
+    const failing = vi.fn(async () => { throw Object.assign(new Error("502"), { status: 502 }); });
+    expect(await runCreatePersistStep(persistArgs(w, v, { octokit: { request: failing, graphql: async () => ({}) } }))).toEqual({ kind: "refused", class: "persist", detail: "branch-exists" });
+    expect(failing).toHaveBeenCalledTimes(2);
+    const w2 = world();
+    const v2 = await propose(w2);
+    w2.rgit(["branch", branch(v2)]);
+    const none = vi.fn(async () => ({ data: [] }));
+    expect(await runCreatePersistStep(persistArgs(w2, v2, { octokit: { request: none, graphql: async () => ({}) } }))).toEqual({ kind: "refused", class: "persist", detail: "branch-exists" });
+    expect(none).toHaveBeenCalledTimes(1);
+  });
+
   it("(c) harness: a remote WITHOUT the branch proceeds to the commit, and the probe runs with the token on (the remote is private)", async () => {
     const w = world();
     const v = await propose(w);

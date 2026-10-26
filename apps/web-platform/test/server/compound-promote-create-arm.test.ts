@@ -644,6 +644,15 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
     expect(a.safeCommit).not.toHaveBeenCalled();
   });
 
+  it("V7: the step never throws -- a scratch directory that cannot be created is a returned, mirrored persist/internal with a closed cause", async () => {
+    const a = persistArgs({ metaParent: join(tmpdir(), "create-arm-no-such-parent-" + Date.now(), "deeper") });
+    const v = await runCreatePersistStep(a as never);
+    expect(v).toEqual({ kind: "refused", class: "persist", detail: "internal" });
+    expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: CREATE_REFUSED_OP, extra: expect.objectContaining({ detail: "internal", cause: "ENOENT" }) }));
+    expect(reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ op: "create-persist-internal" }));
+    expect(a.safeCommit).not.toHaveBeenCalled();
+  });
+
   it("a verdict whose cluster hash is not 64 lowercase hex cannot form a branch (branch-shape)", async () => {
     const a = persistArgs();
     (a.verdict as { clusterHash: string }).clusterHash = "NOT-A-HASH";

@@ -401,7 +401,8 @@ two open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the 
 - **Orphan branch (`persist/branch-exists`).** The branch name is deterministic (`self-healing/auto-<cluster
   hash>-<run date>`). If an earlier attempt pushed it and the PR was never opened (or was closed), the new attempt
   finds the branch on the remote with no open PR and refuses `persist/branch-exists` instead of failing late as
-  `failed-push`. The arm NEVER deletes a remote branch. Operator action: delete the orphan branch (GitHub UI, or
+  `failed-push`. If the earlier own-PR lookup could not be completed (a Sentry `create-own-pr-lookup-failed`), the arm looks once more
+  before refusing, so a replay of an attempt that did open the draft still ends `opened`. The arm NEVER deletes a remote branch. Operator action: delete the orphan branch (GitHub UI, or
   `gh api -X DELETE repos/jikig-ai/soleur/git/refs/heads/<branch>`) and fire again, or wait for the next UTC day
   (the date is part of the name). The same-day wedge is a known limit. `persist/branch-probe-failed` is the probe
   itself failing (read `extra.cause`).

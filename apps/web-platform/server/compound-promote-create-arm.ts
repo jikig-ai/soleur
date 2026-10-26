@@ -24,7 +24,7 @@
 //   - the branch suffix derives from the memoized run-start date, never a fresh Date, and Step B first looks up its
 //     own open PR by the deterministic head branch (a hit counts as resumed ONLY when its body carries the CREATE
 //     line: the EDIT arm uses the same branch shape). A replay cannot open a second PR for two reasons: that lookup,
-//     and the `branch-exists` probe, which refuses when the branch is already on the remote with no open PR (the
+//     and the `branch-exists` probe, which refuses when the branch is already on the remote with no open PR (after one more lookup when the first failed; the
 //     clone is reset to main before every attempt, so `safeCommitAndPr`'s own HEAD==branch resume never applies);
 //   - the installation token is NOT in `.git/config` while any create-arm script runs (R4); it is on disk only for
 //     the network calls: the fetch that refreshes the clone (before any script), and, after the scripts, the second
@@ -607,6 +607,36 @@ interface PersistCtx {
   left: () => number;
   /** Set once the token has been written to `.git/config`, so the cleanup knows to strip it. */
   originTouched: boolean;
+  /** The first own-PR lookup could not be completed: the `branch-exists` refusal asks once more before it refuses. */
+  ownLookupFailed: boolean;
+}
+
+/**
+ * Look up our own open PR by the deterministic head branch. `null` = provably none; a result = the PR is open (`opened`
+ * when it is a create PR, `persist/branch-taken` when an EDIT PR holds the branch); `lookup-failed` = not provable either
+ * way (mirrored, loudly): the caller continues, and the `branch-exists` probe before the commit is what stops a second
+ * push (`safeCommitAndPr`'s own resume does not apply, the clone being reset to main).
+ */
+async function lookupOwnPr(a: CreatePersistArgs, branchName: string): Promise<CreatePersistResult | null | "lookup-failed"> {
+  try {
+    const own = await a.octokit.request("GET /repos/{owner}/{repo}/pulls", {
+      owner: REPO_OWNER, repo: REPO_NAME, state: "open", head: `${REPO_OWNER}:${branchName}`, per_page: 1,
+      request: { signal: AbortSignal.timeout(PR_LIST_TIMEOUT_MS) },
+    });
+    if (Array.isArray(own.data) && own.data.length > 0) {
+      const hit = own.data[0] as { number?: unknown; body?: unknown };
+      const pr = Number.isInteger(hit.number) ? (hit.number as number) : undefined;
+      if (typeof hit.body === "string" && hit.body.includes(CREATE_PR_BODY_LINE)) {
+        a.logger.info({ fn: CREATE_ARM_FEATURE, hash: a.verdict.clusterHash, pr }, "create-resumed"); // success, not a second PR; the marker reads like a fresh open
+        return { kind: "opened", ...(pr === undefined ? {} : { pr }) };
+      }
+      return fail("persist", "branch-taken", { numbers: pr === undefined ? undefined : { pr } });
+    }
+    return null;
+  } catch (err) {
+    reportSilentFallback(err, { feature: CREATE_ARM_FEATURE, op: "create-own-pr-lookup-failed", message: "own open PR lookup failed", extra: { cause: causeToken(err) } });
+    return "lookup-failed";
+  }
 }
 
 /**
@@ -626,25 +656,8 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
 
   // Replay: a previous attempt of THIS step may already have opened our PR. A hit is success, not a second PR, but
   // ONLY when it is a create PR: the edit arm builds the same branch shape, and an edit PR is not our PR.
-  try {
-    const own = await a.octokit.request("GET /repos/{owner}/{repo}/pulls", {
-      owner: REPO_OWNER, repo: REPO_NAME, state: "open", head: `${REPO_OWNER}:${branchName}`, per_page: 1,
-      request: { signal: AbortSignal.timeout(PR_LIST_TIMEOUT_MS) },
-    });
-    if (Array.isArray(own.data) && own.data.length > 0) {
-      const hit = own.data[0] as { number?: unknown; body?: unknown };
-      const pr = Number.isInteger(hit.number) ? (hit.number as number) : undefined;
-      if (typeof hit.body === "string" && hit.body.includes(CREATE_PR_BODY_LINE)) {
-        a.logger.info({ fn: CREATE_ARM_FEATURE, hash: v.clusterHash, pr }, "create-resumed"); // success, not a second PR; the marker reads like a fresh open
-        return { kind: "opened", ...(pr === undefined ? {} : { pr }) };
-      }
-      return fail("persist", "branch-taken", { numbers: pr === undefined ? undefined : { pr } });
-    }
-  } catch (err) {
-    // Not provable either way: continue, loudly. If our PR is in fact open, the `branch-exists` probe before the commit
-    // refuses (a refusal, not a second PR); `safeCommitAndPr`'s own resume does not apply, the clone being reset to main.
-    reportSilentFallback(err, { feature: CREATE_ARM_FEATURE, op: "create-own-pr-lookup-failed", message: "own open PR lookup failed", extra: { cause: causeToken(err) } });
-  }
+  const ownPr = await lookupOwnPr(a, branchName);
+  if (ownPr !== null && ownPr !== "lookup-failed") return ownPr;
 
   // The lookup above needs no clone, so a replay of a SUCCESSFUL attempt on a replaced container resumes as `opened`; a
   // clone that is gone only matters once the step has to work on it.
@@ -652,10 +665,11 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
 
   const now = a.now ?? Date.now;
   const deadlineAt = now() + (a.deadlineMs ?? CREATE_PERSIST_DEADLINE_MS);
-  const metaBase = await mkdtemp(join(a.metaParent ?? tmpdir(), "compound-promote-create-scan-"));
-  const ctx: PersistCtx = { slug, page, dateSuffix, branchName, metaBase, left: () => deadlineAt - now(), originTouched: false };
+  // `metaBase` is created INSIDE the try (a full or unwritable temp dir must be a returned refusal, never a throw).
+  const ctx: PersistCtx = { slug, page, dateSuffix, branchName, metaBase: "", left: () => deadlineAt - now(), originTouched: false, ownLookupFailed: ownPr === "lookup-failed" };
   let restoredUpfront = false;
   try {
+    ctx.metaBase = await mkdtemp(join(a.metaParent ?? tmpdir(), "compound-promote-create-scan-"));
     // A retry of this step must start from a clean main (the previous attempt may have left files behind).
     const dirty = await restoreCleanMain(a.repoRoot);
     if (dirty) return fail("persist", "clone-not-clean", { numbers: dirty.exit === undefined ? undefined : { exit_code: dirty.exit }, extra: { cause: gitCause(dirty) } });
@@ -665,9 +679,11 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
     reportSilentFallback(err, { feature: CREATE_ARM_FEATURE, op: "create-persist-internal", message: "create-persist failed unexpectedly" });
     return fail("persist", "internal", { extra: { cause: causeToken(err) } });
   } finally {
-    await rm(metaBase, { recursive: true, force: true }).catch(() => {
-      // review: swallowed -- best-effort removal of a scratch dir outside the clone; the OS temp reaper bounds a leak.
-    });
+    if (ctx.metaBase !== "") {
+      await rm(ctx.metaBase, { recursive: true, force: true }).catch(() => {
+        // review: swallowed -- best-effort removal of a scratch dir outside the clone; the OS temp reaper bounds a leak.
+      });
+    }
     // The token never outlives the step on disk, whatever the outcome (best effort; the workspace is torn down next).
     if (ctx.originTouched) await stripOriginChecked(a.repoRoot);
     // The unconditional reset also discards the residue of a refusal: nothing a refused create wrote survives. Skipped
@@ -842,7 +858,13 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   // here and never delete it (the operator decides; the runbook says how).
   const probe = await runGit(a.repoRoot, ["ls-remote", "--heads", "origin", `refs/heads/${c.branchName}`], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
   if (!probe.ok) return gitFail("branch-probe-failed", probe, "probe");
-  if (probe.stdout.trim() !== "") return fail("persist", "branch-exists");
+  if (probe.stdout.trim() !== "") {
+    // The branch is on the remote. If the first own-PR lookup failed, a replay of a SUCCESSFUL attempt looks exactly like
+    // an orphan: ask once more, and resume as `opened` when the PR is there after all.
+    const again = c.ownLookupFailed ? await lookupOwnPr(a, c.branchName) : null;
+    if (again !== null && again !== "lookup-failed") return again;
+    return fail("persist", "branch-exists");
+  }
   early = expired("commit-guard");
   if (early) return early;
 
