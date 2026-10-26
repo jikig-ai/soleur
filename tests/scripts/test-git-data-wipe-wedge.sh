@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Guard 7 — THE WEDGE (#10138, design-wipe-body-pr.md section 4, requirement 1; plan Phase 6).
 #
+# UPDATE 2026-10-26 (Option B): the plaintext volume and its attachment left the HCL (git-data.tf now
+# passes git_data_volume_id as a literal) and are deleted by .github/workflows/git-data-plaintext-volume-
+# destroy.yml, so the interim "wipe done, HCL still declares the volume" state this guard was written for
+# can no longer produce a volume CREATE. What remains guarded is reachability of hcloud_server.git_data
+# (WEDGE_ADDRS) by any workflow without a refusing gate. The F1/F2 fixtures are kept as synthesized plan
+# content the gates are fed.
+#
 # PROPERTY. After the git-data wipe deletes the plaintext volume (or only detaches it) and before
 # PR-C removes `hcloud_volume.git_data` from HCL and state, no workflow other than the git-data
 # dispatch's own plan-time gate (tests/scripts/lib/git-data-host-replace-gate.sh, `out_of_scope`)
@@ -63,7 +70,12 @@ root_key_fixtures "${DIR}/lib/git-data-root-key-arm-gate.sh"
 PRIOR_STATE="$(root_key_prior_state)"
 
 INFRA_ROOT="apps/web-platform/infra"
-WEDGE_ADDRS="hcloud_server.git_data,hcloud_volume.git_data,hcloud_volume_attachment.git_data"
+# 2026-10-26 (Option B, ADR-239 Amendment 2026-10-26): hcloud_volume.git_data and
+# hcloud_volume_attachment.git_data are no longer declared in the root HCL, so no plan can CREATE them
+# and the deriver (which only follows addresses present in the HCL graph) would skip them. The addresses
+# that can still be wedged are the host itself: a per-merge or untargeted plan that reaches
+# hcloud_server.git_data is the open route. F1/F2 stay as the synthesized plan content the gates are fed.
+WEDGE_ADDRS="hcloud_server.git_data"
 
 # row <name> <ok:0|1> <detail> — the CALL-SITE counter `rows` moves independently of the verdict.
 row() {
@@ -663,10 +675,11 @@ expect_red() {
   fi
 }
 
-# M1 add hcloud_volume_attachment.git_data to the per-merge apply's -target set. The per-merge guard
-# (inline destroy-guard counters) refuses F1's server REPLACE but passes F2: only the target set kept
-# the attachment out of that plan.
-awk '{ print } /^ *-target=betteruptime_policy\.github_webhook \\$/ && !d { match($0, /^ */); printf "%s-target=hcloud_volume_attachment.git_data \\\n", substr($0, 1, RLENGTH); d=1 }' "$APPLY_WF" > "${WFM}/m1.yml"
+# M1 add hcloud_server.git_data to the per-merge apply's -target set. The per-merge guard (inline
+# destroy-guard counters) refuses F1's server REPLACE but passes F2: only the target set keeps the host
+# out of that plan. (Until 2026-10-26 this injected hcloud_volume_attachment.git_data; that address left
+# the HCL with the plaintext volume, so the injection would target nothing.)
+awk '{ print } /^ *-target=betteruptime_policy\.github_webhook \\$/ && !d { match($0, /^ */); printf "%s-target=hcloud_server.git_data \\\n", substr($0, 1, RLENGTH); d=1 }' "$APPLY_WF" > "${WFM}/m1.yml"
 if cmp -s "${WFM}/m1.yml" "$APPLY_WF"; then row "M1 (mutation matched)" 1 "the per-merge plan anchor drifted; the mutation changed nothing"; else
   mutate_list "${TMP}/m1.list" "${WFM}/m1.yml:${APPLY_WF}"
   wedge_run m1 "${TMP}/m1.list" "${FX}/f1.json" "${FX}/f2.json" "${FX}/ctl.json"

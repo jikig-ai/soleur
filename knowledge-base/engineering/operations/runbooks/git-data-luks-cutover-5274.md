@@ -1632,6 +1632,28 @@ The boot-signal read takes the newest `boot_complete` row of the CURRENT server 
 
 SSH-class and for a stuck state only; no step above depends on it. `wipe_snapshot_teardown_failed` means a host-local device-mapper snapshot named `git-data-pt-snap` (copy-on-write file in `/dev/shm`) may still exist over the retired device. Every later run then refuses (`wipe_snapshot_present` or `wipe_device_has_holders`), and nothing can be detached while it stands. Do not clear it by rebooting the host: the reboot is the dead end above. Open an incident with the CTO and have the host-side teardown done in the script's own order (unmount the snapshot, `dmsetup remove --retry git-data-pt-snap`, detach the loop device, remove the COW file), then `wipe_check` shows the device as before.
 
+## Plaintext-volume destroy (Option B, #8211 / #6897)
+
+The retired plaintext Hetzner volume (id 106867358, name `soleur-git-data-store`) is deleted through Terraform by `.github/workflows/git-data-plaintext-volume-destroy.yml` instead of the DL-2 wipe (which cannot conclude; see the wipe section above). The claim limits, the controls and the consequences are in ADR-239 Amendment 2026-10-26 (DRAFT, pending CLO attestation); this section is the procedure.
+
+**Order.** Flip retry (and any rotate it needs) first, then merge the Option B PR, then dispatch within about 24 hours. The merge disables the git-data host rotate, replace and create routes until the gate-retirement follow-up (#11194) lands, and a rotate is required before every flip dispatch. No git-data-cutover run may be queued or running: the job holds the `git-data-state` group, so it simply waits behind one, and a stale `waiting` cutover run should be cancelled. Avoid a cohort onboarding call or demo.
+
+**Dispatch** (the owner, in their own session):
+
+```bash
+gh workflow run git-data-plaintext-volume-destroy.yml -f expected_volume_id=106867358 -f confirm=DESTROY-PLAINTEXT-GIT-DATA-VOLUME
+```
+
+A wrong input fails in the `validate` job, before any approval is requested. The `destroy` job then waits for the `web-platform-infra-apply` reviewer. The run holds the workflow-level `terraform-apply-web-platform-host` group from its start, including while it waits, and GitHub keeps one pending run per group: dispatch only when the reviewer can approve at once, and confirm the run actually started.
+
+**What the run proves.** Pre-plan read (the token can see server 170370833 holding the LUKS volume 107140231, so a 404 means something), a plan that deletes exactly the volume and its attachment, the gate, the apply, then a read-back that also runs after a failed apply: 404 by id, empty list by name, LUKS volume still present on the server. The step summary carries counts and identifiers only; paste it into the record PR (#11195), because the default run retention is shorter than an attestation needs.
+
+**Between merge and dispatch.** The state still holds both addresses, so every untargeted plan shows the two destroys, and `scheduled-terraform-drift.yml` files an `infra-drift` issue and email. That is expected and the dispatch resolves it. Do not run an untargeted `terraform apply` in that window: it would delete the volume without the pins or the gate.
+
+**Recovery.** A failed or partial run is re-dispatched through the same workflow; the read-back says what remains. A re-dispatch after success finds the volume gone, skips plan/gate/apply and re-proves the end event. A reviewer rejection changes nothing; re-dispatch, and note the new date on #6897. If the PR is not merged by 2026-11-02, the CLO re-ruling and the DPD section 10.3(b) edit are dated items on #6897.
+
+**After the destroy.** The wipe-family modes of `git-data-cutover.yml` still exist and will see the volume gone. A rollback cannot use the plaintext volume as a target. The record PR (#11195) deletes this workflow, its gate and tests, and retires the ledger row.
+
 ## Verdict map
 
 | Where you are | What the run reads | What to do |
