@@ -10,7 +10,7 @@
 #   3 CANNOT ESTABLISH   a read failed or returned something unparseable; never turned into an ask
 #   5 ACTION REQUIRED    the owner has something to do (the sweeper repeats the comment on every daily sweep of an
 #                        open tracker, so the ask repeats until the owner posts the done line)
-# The suite asserts the never-0/1 invariant on every input. The owner ends the tracker by closing it AND removing
+# Under shell tracing with GH_TOKEN set it refuses with 78 (EX_CONFIG, also never 0 or 1). The suite asserts the never-0/1 invariant on every input. The owner ends the tracker by closing it AND removing
 # its follow-through label.
 #
 # DECISION ORDER, first match wins. Any read that fails or returns something unparseable is exit 3, never an ask.
@@ -52,6 +52,17 @@
 #   the tracker pointers in the A5 and A6 rows of knowledge-base/engineering/operations/runbooks/inngest-server.md
 # Re-census at retirement with: git grep -n 'inngest-a5-a6-owner-ask-10136'
 set -uo pipefail
+
+# Refuse to run under shell tracing while the credential is bound: xtrace would print GH_TOKEN into the sweeper's public
+# comment (#7797). 78 (EX_CONFIG) lands in the sweeper's TRANSIENT bucket, never a pass or a close.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 EPIC=10136
 SOAK=11215

@@ -323,6 +323,11 @@ reset_fixture
 run_case "2026-13-45"
 expect "an impossible date is exit 3" 3 "does not parse"
 
+# --- the xtrace refusal: tracing with the credential bound must refuse (78) before anything is read ---------------
+reset_fixture
+OUT="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" GH_TOKEN=fixture GH_COMMENTS_JSON="$WORK/comments.json" bash -x "$PROBE" 2>&1)"; RC=$?
+expect "xtrace: tracing with a live credential refuses with 78" 78 "refusing to trace with a live credential set"
+
 # --- never exit 0 or 1; output hygiene --------------------------------------------------------------------------
 cases=$((cases + 1))
 bad_rc=""
@@ -357,7 +362,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
   exit 1
 fi
 # Exact on purpose: deleting any case must red the suite (a floor with slack is attack budget).
-MIN_ASSERTIONS=48
+MIN_ASSERTIONS=49
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1
