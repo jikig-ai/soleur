@@ -900,6 +900,45 @@ t_t47_warn_text_is_locale_proof() {
   rm -rf "$repo"
 }
 
+# The perl-less mover test must see what the lexer would: a newline-separated cd, env -C, a cd after a
+# shell keyword; and must NOT see a mover that only appears in a commit message.
+t_t48_no_perl_movers_and_messages() {
+  local nop repo c; nop=$(_mk_path_dir)
+  _seed_bare
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  for c in "$(printf 'echo hi\ncd %s\ngit commit -m x' "$WT")" "env -C $WT git commit -m x" \
+           "if cd $WT; then git commit -m x; fi" "'cd' $WT && git commit -m x"; do
+    _run_cmd "$BARE" "$c" "$nop"
+    _expect_warn_allow "T48 no perl: mover shape [${c:0:22}] -> WARN + allow"
+  done
+  rm -rf "$BARE"
+  repo=$(_seed_repo); _stage "$repo" "$BANNER" "$OFFBRAND_TSX"
+  for c in 'git commit -m "cd into dir fix"' "git commit -m 'document GIT_DIR and --chdir'" 'git commit -am "build && cd out"'; do
+    _run_cmd "$repo" "$c" "$nop"
+    _expect "T48b no perl: a mover named only in the message is still scanned [$c] -> deny" "d=$(_decision "$OUT") err=${ERR:0:100}" _is_deny
+  done
+  _run_cmd "$repo" "git -c user.name=x commit -m x" "$nop"
+  _expect "T48c no perl: a loose-only commit form is allowed unscanned, but leaves a bypass row" \
+    "d=$(_decision "$OUT") rows=$(_gate_rows)" \
+    bash -c '[[ "$1" == allow && "$2" == *"lexer unavailable (loose form)"* ]]' _ "$(_decision "$OUT")" "$(_gate_rows)"
+  rm -rf "$repo"
+}
+
+# The perl-less loose-commit regex is quadratic on a long run of `git` words (measured 5.4 s at 40 KB
+# uncapped) and the command is model-controlled: the hook must return promptly. The fixture carries a
+# mover (cd) so the loose test is actually reached, and no `git commit` so it stays loose-only.
+t_t49_no_perl_regexes_are_bounded() {
+  local nop repo big t0 ms; nop=$(_mk_path_dir)
+  repo=$(_seed_repo)
+  big=$(printf 'git %.0s' $(seq 1 10000))
+  t0=$(date +%s%N)
+  _run_cmd "$repo" "commit $big cd x" "$nop"
+  ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+  _expect "T49 a 40 KB run of git words returns promptly without perl (${ms} ms)" "d=$(_decision "$OUT") ms=$ms" \
+    bash -c '[[ "$1" == allow && "$2" -lt 2000 ]]' _ "$(_decision "$OUT")" "$ms"
+  rm -rf "$repo"
+}
+
 # The harness's own deciders: a suite that cannot fail proves nothing. Drive each once with an input
 # that MUST be rejected, then unwind the counters so the floor below stays exact.
 _selftest_instrument() {
@@ -928,11 +967,13 @@ t_t44_cwd_equals_target_is_one_root
 t_t45_unreadable_target_repo
 t_t46_same_basename_roots_are_told_apart
 t_t47_warn_text_is_locale_proof
+t_t48_no_perl_movers_and_messages
+t_t49_no_perl_regexes_are_bounded
 _selftest_instrument
 
 # Assertion floor: not equality (every added assertion would then be a spurious failure); reported with
 # printf + exit, never through the helpers it backstops.
-MIN_ASSERTIONS=88
+MIN_ASSERTIONS=97
 if [[ $((pass + fail)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran, floor is %s - the suite is not asserting\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

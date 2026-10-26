@@ -155,12 +155,15 @@ warn_allow_undeterminable() {
 
 # A command whose text moves the target cannot be trusted to the cwd repository when the lexer is
 # unavailable. It only decides between "warn + allow" and "scan the cwd repository", so it errs toward
-# moving, but narrowly: `cd` / `pushd` only at command position (a message saying "fix cd handling" is
-# not one), `-C` only as a `git` option (never `git commit -C <rev>`), and only the GIT_* variables that
-# relocate the repository (never GIT_AUTHOR_DATE). Mirrors what lib/commit-target-roots.sh refuses.
-moving_re='(^|[;&|({`"'"'"'])[[:space:]]*(builtin[[:space:]]+)?\\?(cd|pushd)([[:space:]]|$)'
+# moving: `cd` / `pushd` after any whitespace, separator, bracket or quote (a newline counts, so does
+# `if cd X; then`), `-C` as a git or env option (never `git commit -C <rev>`), and the GIT_* variables that
+# relocate the repository (never GIT_AUTHOR_DATE). It is tested on the command with each commit MESSAGE
+# argument removed, so a message saying "fix cd handling" or "GIT_DIR notes" is not a mover.
+# Mirrors what lib/commit-target-roots.sh refuses.
+moving_re='(^|[[:space:];&|({`"'"'"'!])(builtin[[:space:]]+)?\\?['"'"'"]?(cd|pushd)['"'"'"]?([[:space:]]|$)'
 moving_re+='|git[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*-C[[:space:]]'
-moving_re+='|--git-dir|--work-tree|--chdir|[[:space:]]-D[[:space:]]|core\.(worktree|bare)|--config-env'
+moving_re+='|(^|[[:space:]])env([[:space:]]+-[^[:space:]]+)*[[:space:]]+-[A-Za-z]*C([[:space:]]|$)'
+moving_re+='|--git-dir|--work-tree|--ch[a-z]*|--wd|--working-directory|[[:space:]]-D[[:space:]]|core\.(worktree|bare)|--config-env'
 moving_re+='|GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CONFIG)'
 moving_re+='|(chroot|nsenter|unshare)[[:space:]]'
 # Lexer unavailable: does a loose-only text read as a git commit command at all?
@@ -198,16 +201,24 @@ if [ "$lexed" -eq 1 ]; then
 else
   # Lexer or lib unavailable. A plain commit still takes the cwd path, so a host without perl does
   # not go silent on every commit; one that moves its target cannot be resolved.
-  if [[ "$command" =~ $moving_re ]]; then
+  # Bounded: the two regexes below are super-linear on pathological text (34 s at 80 KB measured), and the
+  # command is model-controlled. Past 4 KB the text is not inspected; a plain commit takes the cwd path.
+  probe="${command:0:4096}"
+  moving_text="$(printf '%s' "$probe" | sed -E "s/(^|[[:space:]])(-[A-Za-z]*m|--message)[[:space:]=]*('[^']*'|\"[^\"]*\")//g")"
+  if [[ "$moving_text" =~ $moving_re ]]; then
     # A loose-only text that does not read as a commit (git log --grep=commit) is not one: no WARN, no row.
-    if [ "$strict_match" -eq 0 ] && ! [[ "$command" =~ $loose_commit_re ]]; then allow; fi
+    if [ "$strict_match" -eq 0 ] && ! [[ "$probe" =~ $loose_commit_re ]]; then allow; fi
     if [ "$ctr_ok" -eq 1 ]; then
       warn_allow_undeterminable "lexer unavailable" "${CTR_LEX_WHY:-the command lexer could not run}"
     else
       warn_allow_undeterminable "lib missing" "the target-resolution library is unavailable"
     fi
   fi
-  [ "$strict_match" -eq 1 ] || allow
+  if [ "$strict_match" -eq 0 ]; then
+    # A loose-only commit form (git --no-pager commit) cannot be scanned without the lexer: leave a trace.
+    if [[ "$probe" =~ $loose_commit_re ]]; then emit brand-hex-commit-gate bypass "target undeterminable: lexer unavailable (loose form)"; fi
+    allow
+  fi
 fi
 
 # The hook process's own repository is always scanned too (the no-cd path). At a bare root
@@ -418,6 +429,7 @@ scan_root() {
 
 # The scan now reaches repositories the command text names, so their own config must not run code in
 # this hook: no textconv driver (--no-textconv above) and no fsmonitor hook (command-scope config wins).
+# A clean filter still runs under `-a` (`git diff HEAD` filters worktree files); the commit itself runs it too.
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
 
 dup_base=0
