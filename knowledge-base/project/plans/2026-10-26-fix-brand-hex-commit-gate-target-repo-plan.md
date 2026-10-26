@@ -215,16 +215,16 @@ PR body via `--body-file`: `Closes #10793`, `Ref #10331`, `Ref #10609`, the test
 ## Acceptance Criteria
 
 Pre-merge (PR):
-- [ ] AC1 `cd <worktree> && git commit` and `git -C <worktree> commit`, run with the hook process cwd at a `core.bare=true` root, deny when the worktree's staged files carry a raw hex literal (tests T25, T26) and allow when they do not (twins). Verified by `bash .claude/hooks/brand-hex-commit-gate.test.sh`.
-- [ ] AC2 `git -C <other repo> commit` from inside a clean work tree scans the other repo (T26c); a two-root command scans both and the deny names the offending root (T30).
-- [ ] AC3 The no-cd path is unchanged: all 24 pre-existing assertions still pass unmodified; T27/T28 regression rows pass; the diff-base regex and deny text are byte-identical (`git diff` of those hunks shows no change).
-- [ ] AC4 An undeterminable target (variable, `~`, glob, `GIT_DIR=`, `--git-dir`, no perl with a target-moving token, lib missing, `CTR_ROOT_ERR`) yields decision `allow`, exit 0, a stderr `WARN`, and a `bypass` incident row; never `deny`, never `ask` (T33-T35).
-- [ ] AC5 `-a`/`--all` selects the `HEAD` base for `git -C W commit -a` through `CTR_COMMIT_ALL` and still ignores flag-like text inside `-m` (T29).
-- [ ] AC6 Palette discovery is per root (T31).
-- [ ] AC7 The header comment and the in-body trigger comment no longer claim identity with the secret scan's regex (T36 content anchors).
-- [ ] AC8 Every Phase 4 command exits 0; `scripts/lib/test-affected-paths.sh` has exactly one `AFFECTED_CLAUDE_HOOKS_BRAND_HEX_COMMIT_GATE_TEST_SH_PATHS=` and it names the lib and the lexer; the boundary-prefix exemption is on the right line.
-- [ ] AC9 `git diff --stat origin/main` shows no change to `.claude/hooks/git-commit-secret-scan.sh`, `.claude/hooks/lib/commit-target-roots.sh`, `.claude/hooks/lib/commit-index-sim.sh`, or `plugins/soleur/skills/work/SKILL.md`; the hook does not reference `commit-index-sim` or `CIS_`.
-- [ ] AC10 Every phase's work is committed and pushed (`git status` clean, `git log origin/<branch>..HEAD` empty) before the next phase starts.
+- [x] AC1 `cd <worktree> && git commit` and `git -C <worktree> commit`, run with the hook process cwd at a `core.bare=true` root, deny when the worktree's staged files carry a raw hex literal (tests T25, T26) and allow when they do not (twins). Verified by `bash .claude/hooks/brand-hex-commit-gate.test.sh`.
+- [x] AC2 `git -C <other repo> commit` from inside a clean work tree scans the other repo (T26c); a two-root command scans both and the deny names the offending root (T30).
+- [x] AC3 The no-cd path is unchanged: all 24 pre-existing assertions still pass unmodified; T27/T28 regression rows pass; the diff-base regex and deny text are byte-identical (`git diff` of those hunks shows no change).
+- [x] AC4 An undeterminable target (variable, `~`, glob, `GIT_DIR=`, `--git-dir`, no perl with a target-moving token, lib missing, `CTR_ROOT_ERR`) yields decision `allow`, exit 0, a stderr `WARN`, and a `bypass` incident row; never `deny`, never `ask` (T33-T35).
+- [x] AC5 `-a`/`--all` selects the `HEAD` base for `git -C W commit -a` through `CTR_COMMIT_ALL` and still ignores flag-like text inside `-m` (T29).
+- [x] AC6 Palette discovery is per root (T31).
+- [x] AC7 The header comment and the in-body trigger comment no longer claim identity with the secret scan's regex (T36 content anchors).
+- [x] AC8 Every Phase 4 command exits 0; `scripts/lib/test-affected-paths.sh` has exactly one `AFFECTED_CLAUDE_HOOKS_BRAND_HEX_COMMIT_GATE_TEST_SH_PATHS=` and it names the lib and the lexer; the boundary-prefix exemption is on the right line.
+- [x] AC9 `git diff --stat origin/main` shows no change to `.claude/hooks/git-commit-secret-scan.sh`, `.claude/hooks/lib/commit-target-roots.sh`, `.claude/hooks/lib/commit-index-sim.sh`, or `plugins/soleur/skills/work/SKILL.md`; the hook does not reference `commit-index-sim` or `CIS_`.
+- [x] AC10 Every phase's work is committed and pushed (`git status` clean, `git log origin/<branch>..HEAD` empty) before the next phase starts.
 - [ ] AC11 PR body contains `Closes #10793`, a separate `Ref #10331`, `Ref #10609`, no closing keyword for #10331.
 
 Post-merge: none (hook change takes effect on the next session; no deploy, no migration).
