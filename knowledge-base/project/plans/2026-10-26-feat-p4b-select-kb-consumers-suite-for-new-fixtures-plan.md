@@ -26,7 +26,6 @@ Spec lacks valid lane: defaulted to cross-domain (fail-closed). No `spec.md` exi
 
 - Sibling sessions share the machine: a foreign `test-all.sh --affected` was running during this deepen pass; the contract suite must not assert on ambient process state (AC rows use synthetic ledgers only).
 
-
 ## Overview
 
 Item P4b of the follow-up list on #10924 (umbrella #9757, `Ref` only, neither is closed by this PR): the
