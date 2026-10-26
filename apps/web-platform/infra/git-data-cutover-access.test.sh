@@ -272,7 +272,7 @@ case "$c" in
       badline)   printf 'container_probe ok worktree_root=writable transport=answered EXTRA\n'; exit 0 ;;
       r*)        cat >/dev/null; exit "${_cm#r}" ;;
       exec)      # run the REAL body in a clean env, the way docker exec would: stdin is the body
-                 exec env -i PATH=/usr/bin:/bin TMPDIR="${CP_TMP:-/tmp}" WORKTREE_ROOT="${CP_WT_ROOT-}" GIT_TRANSPORT_SSH_PRIVATE_KEY="${CP_KEY-}" \
+                 exec env -i PATH=/usr/bin:/bin TMPDIR="${CP_TMP:-/tmp}" WORKTREE_ROOT="${CP_WT_ROOT-}" GIT_TRANSPORT_SSH_PRIVATE_KEY="${CP_KEY_ENV-${CP_KEY-}}" \
                    GIT_DATA_SSH_HOST_KEY="${CP_PIN-}" GIT_DATA_SSH_HOST="${CP_HOST-}" GDCP_SSH="${CP_SSH:-ssh}" GDCP_TIMEOUT="${CP_TIMEOUT:-15}" \
                    GDCP_REPO_ROOT=/mnt/git-data/repositories CP_LOG="${CP_LOG-}" CP_INNER="${CP_INNER-}" CP_KEY="${CP_KEY-}" CP_PIN="${CP_PIN-}" \
                    CP_NOMOUNT="${CP_NOMOUNT-}" CP_WRAPPER="${CP_WRAPPER-}" sh -s ;;
@@ -2795,7 +2795,18 @@ CPBODY="$DIR/git-data-container-probe.sh"
 WRAPPER_SRC="$DIR/git-data-transport-wrapper.sh"
 [ -s "$CPBODY" ] || { printf 'FAIL SETUP: %s not found\n' "$CPBODY" >&2; exit 1; }
 CP="$T/cp"; mkdir -p "$CP/wt" "$CP/tmp" || { printf 'FAIL SETUP: cp dirs\n' >&2; exit 1; }
-CP_KEYCANARY='-----BEGIN OPENSSH PRIVATE KEY-----CANARY-CP-KEY-7c1e'
+# The transport key fixture (#8211 PR-G): a SYNTHESIZED ed25519 key. The body now refuses an unparseable key (key_shape), so the canary can no longer be
+# a one-line placeholder; the canary the leak greps hunt for is the key's own third line (base64 body, unique to this key).
+ssh-keygen -q -t ed25519 -N '' -C cp-fixture -f "$CP/fixkey" || { printf 'FAIL SETUP: ssh-keygen cp fixture key\n' >&2; exit 1; }
+CP_KEYCANARY="$(cat "$CP/fixkey")"
+CP_CANARY_LINE="$(sed -n 3p "$CP/fixkey")"
+[ "${#CP_CANARY_LINE}" -ge 40 ] && [ "$(wc -l < "$CP/fixkey")" -ge 4 ] || { printf 'FAIL SETUP: cp fixture key shape\n' >&2; exit 1; }
+# PEM markers assembled so no source line carries a literal key block (secret scanners flag the shape).
+CP_PEM_B="-----BEGIN OPENSSH PRIVATE KEY""-----"; CP_PEM_E="-----END OPENSSH PRIVATE KEY""-----"
+# The docker-format form of the same key: what `doppler secrets download --format docker` + `docker --env-file` hands the container
+# (ONE line, a literal backslash-n pair between lines, the final newline gone; measured: an 8-line value -> 7 pairs).
+CP_KEYDOCKER="$(awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }' "$CP/fixkey")"
+case "$CP_KEYDOCKER" in *$'\n'*) printf 'FAIL SETUP: docker-form key holds a real newline\n' >&2; exit 1 ;; esac
 CP_PINV='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICPFIXTUREPINCPFIXTUREPINCPFIXTUREPIN00000'
 cat > "$CP/inner-ssh" <<'SHIM'
 #!/usr/bin/env bash
@@ -2809,7 +2820,7 @@ for a in "$@"; do
   esac
 done
 while [ $# -gt 0 ]; do [ "$1" = -i ] && kf="$2"; shift; done
-if [ -n "$kf" ] && [ "$(stat -c %a "$kf")" = 600 ] && [ "$(head -n 1 "$kf")" = "$CP_KEY" ] && [ -n "$kh" ] && [ "$(cat "$kh")" = "git-data $CP_PIN" ]; then
+if [ -n "$kf" ] && [ "$(stat -c %a "$kf")" = 600 ] && [ "$(cat "$kf")" = "$CP_KEY" ] && [ -n "$kh" ] && [ "$(cat "$kh")" = "git-data $CP_PIN" ]; then
   printf 'inner-creds ok\n' >> "$CP_LOG"
 fi
 case "${CP_INNER:-answer}" in
@@ -2855,7 +2866,7 @@ for spec in "r21|worktree_root_not_writable" \
             "r24|container_egress_blackhole reason=timeout" "r25|container_egress_blackhole reason=refused" \
             "r22|probe_failed reason=scratch" "r23|probe_failed reason=transport_env_absent" "r26|probe_failed reason=auth_refused" \
             "r27|probe_failed reason=host_key" "r28|probe_failed reason=unclassified" \
-            "r29|probe_failed reason=ssh_unrunnable" "r30|probe_failed reason=ssh_closed" \
+            "r29|probe_failed reason=ssh_unrunnable" "r30|probe_failed reason=ssh_closed" "r31|probe_failed reason=key_shape" \
             "r1|probe_failed rc=1" "r255|probe_failed rc=255" "r124|probe_failed rc=124" \
             "silent|probe_failed reason=bad_answer" "badline|probe_failed reason=bad_answer"; do
   IFS='|' read -r _mode _want <<< "$spec"
@@ -2935,13 +2946,13 @@ case_cpx_ok() {
   cpx ok && [ "$RC" = 0 ] && cpx_word ok && grep -qxF 'inner-creds ok' "$CP_LOGF" && grep -qxF 'inner-stdin devnull' "$CP_LOGF" \
     && grep -qE "^inner -F /dev/null -i $CP/tmp/[A-Za-z0-9.]+/k -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o HostKeyAlias=git-data -o HostKeyAlgorithms=ssh-ed25519 -o UpdateHostKeys=no -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile=$CP/tmp/[A-Za-z0-9.]+/kh -o BatchMode=yes -o ConnectTimeout=5 git@10\.0\.1\.20 git-upload-pack '/mnt/git-data/repositories/cutover-container-probe-absent\.git'\$" "$CP_LOGF" \
     && [ -z "$(ls -A "$CP/tmp")" ] && [ -z "$(ls -A "$CP/wt")" ] \
-    && ! grep -rqF CANARY-CP-KEY "$OUT" "$TLF" "$CP_LOGF"
+    && ! grep -rqF -- "$CP_CANARY_LINE" "$OUT" "$TLF" "$CP_LOGF"
 }
 case_cpx_via() { # <label> <expected verdict tail> [VAR=value ...] — the body's real exit code through the host's mapping
   local label="$1" want="$2"; shift 2
   cpx "$label" "$@"
   local want_rc=5; [ "$want" = ok ] && want_rc=0
-  [ "$RC" = "$want_rc" ] && cpx_word "$want" && ! grep -rqF CANARY-CP-KEY "$OUT" "$TLF" "$CP_LOGF" && [ -z "$(ls -A "$CP/tmp")" ]
+  [ "$RC" = "$want_rc" ] && cpx_word "$want" && ! grep -rqF -- "$CP_CANARY_LINE" "$OUT" "$TLF" "$CP_LOGF" && [ -z "$(ls -A "$CP/tmp")" ]
 }
 if case_cpx_ok; then pass "CPX1: the REAL body, a writable root and a wrapper answer -> ok; the key sat in a 0600 file beside the pinned known_hosts line, ssh got the pinned options, the absent-repo command and /dev/null stdin; the scratch dir and the probe dir are gone; the key text never reached any output"
 else fail "CPX1: the executed container body did not clear cleanly" "$(ctx) log=[$(tr '\n' '|' < "$CP/log-ok" | cut -c1-300)]"; fi
@@ -2990,7 +3001,7 @@ case_cpx_term() { # SIGTERM while the dial is in flight: the key file must not o
   sleep 0.3
   kill -TERM "$bp" 2>/dev/null
   rcw=0; wait "$bp" || rcw=$?
-  [ "$rcw" = 143 ] && [ -z "$(ls -A "$CP/tmp")" ] && ! grep -qF CANARY-CP-KEY "$CP/term.out" && [ -z "$(ls -A "$CP/wt")" ]
+  [ "$rcw" = 143 ] && [ -z "$(ls -A "$CP/tmp")" ] && ! grep -qF -- "$CP_CANARY_LINE" "$CP/term.out" && [ -z "$(ls -A "$CP/wt")" ]
 }
 # CPX7 — the incident's shape without root: a worktree root the running user cannot create in (mode 0555 stands in for the incident's
 # root-owned directory: CI cannot chown to another uid). Root bypasses the mode, so a root run counts it as SKIPPED, never as a pass.
@@ -3011,6 +3022,54 @@ if grep -qF 'echo "remote: git-data transport: $1" >&2' "$WRAPPER_SRC" && grep -
    && grep -qF "grep -qF 'remote: git-data transport:'" "$CPBODY"; then
   pass "CPX5: the transport wrapper still prefixes every refusal with 'remote: git-data transport:' and still rejects an absent repo, and the probe body keys on exactly that prefix"
 else fail "CPX5: the wrapper's refusal prefix and the probe's needle have drifted apart" "wrapper or body text changed"; fi
+
+# CPX8-CPX16 — the docker-format key and the key_shape refusal (#8211 PR-G; rehearsal-2 flip run 40305860011). The container's env holds the key as
+# ONE line with literal backslash-n pairs; the body must turn it into the real multi-line key BEFORE ssh reads it (the inner ssh shim compares the
+# file it was handed with the multi-line fixture: `inner-creds ok`), and must refuse a key that still cannot parse with the fixed word key_shape,
+# before any dial, with no key text in any output.
+case_cpx_dockerkey() {
+  case_cpx_via dockerkey ok CP_KEY_ENV="$CP_KEYDOCKER" && grep -qxF 'inner-creds ok' "$CP_LOGF"
+}
+if case_cpx_dockerkey; then pass "CPX8: the REAL body, the key in docker env-file form (one line, literal backslash-n pairs) -> the ssh key file holds the real multi-line key (byte-equal to the fixture), the dial is made, ok"
+else fail "CPX8: the docker-format key was not repaired before ssh read it" "$(ctx) log=[$(tr '\n' '|' < "$CP/log-dockerkey" | cut -c1-300)]"; fi
+case_cpx_keyshape() { # <label> <CP_KEY_ENV value> — refused as key_shape, and the dial was never made
+  case_cpx_via "$1" 'probe_failed reason=key_shape' CP_KEY_ENV="$2" && ! grep -q '^inner ' "$CP_LOGF"
+}
+case_cpx_ks_oneline() { case_cpx_keyshape ks-oneline "${CP_PEM_B}cpx-oneline-placeholder-key"; }
+case_cpx_ks_garbage() { case_cpx_keyshape ks-garbage "$(printf '%s\n%s\n%s' "$CP_PEM_B" 'bm90LWEta2V5LWF0LWFsbA==' "$CP_PEM_E")"; }
+case_cpx_ks_truncated() { case_cpx_keyshape ks-truncated "${CP_KEYDOCKER%\\n*\\n*}"; }
+if case_cpx_ks_oneline; then pass "CPX9: a one-line key with no backslash-n pair (nothing to repair) -> key_shape, no dial, no key text printed"
+else fail "CPX9: a one-line key was not refused as key_shape" "$(ctx)"; fi
+if case_cpx_ks_garbage; then pass "CPX10: three PEM-shaped lines that ssh-keygen cannot parse -> key_shape, no dial"
+else fail "CPX10: an unparseable three-line key was not refused as key_shape" "$(ctx)"; fi
+if case_cpx_ks_truncated; then pass "CPX11: a docker-form key cut short (the END line and the last body line gone) -> key_shape, no dial"
+else fail "CPX11: a truncated docker-form key was not refused as key_shape" "$(ctx)"; fi
+case_cpx_blankkey() { case_cpx_via blankkey 'probe_failed reason=transport_env_absent' CP_KEY_ENV="$(printf ' \t\n ')"; }
+if case_cpx_blankkey; then pass "CPX12: a whitespace-only key is ABSENT (transport_env_absent), never key_shape"
+else fail "CPX12: a whitespace-only key was not read as absent" "$(ctx)"; fi
+# Without ssh-keygen in the container only the BEGIN/END line shape (and the 3-line floor) can be checked: a PATH holding exactly the tools the body
+# uses, no ssh-keygen, and an inner ssh that just answers.
+CP_NOKG="$CP/nokg-bin"; mkdir -p "$CP_NOKG" || { printf 'FAIL SETUP: nokg dir\n' >&2; exit 1; }
+for _t in mktemp rm mkdir rmdir grep head tail wc sed timeout; do
+  ln -sf "$(command -v "$_t")" "$CP_NOKG/$_t" || { printf 'FAIL SETUP: nokg link %s\n' "$_t" >&2; exit 1; }
+done
+printf '#!/bin/sh\necho "remote: git-data transport: repo does not exist" >&2\nexit 1\n' > "$CP/ssh-answer" && chmod +x "$CP/ssh-answer" || { printf 'FAIL SETUP: ssh-answer\n' >&2; exit 1; }
+[ ! -e "$CP_NOKG/ssh-keygen" ] || { printf 'FAIL SETUP: nokg dir holds ssh-keygen\n' >&2; exit 1; }
+case_cpx_nokg() { # <key env value> -> sets NOKG_RC
+  rm -rf "$CP/tmp" "$CP/wt"; mkdir -p "$CP/tmp" "$CP/wt"
+  NOKG_RC=0
+  env -i PATH="$CP_NOKG" TMPDIR="$CP/tmp" WORKTREE_ROOT="$CP/wt" GIT_TRANSPORT_SSH_PRIVATE_KEY="$1" GIT_DATA_SSH_HOST_KEY="$CP_PINV" \
+    GIT_DATA_SSH_HOST=10.0.1.20 GDCP_SSH="$CP/ssh-answer" GDCP_TIMEOUT=15 "$CP_DASH" "${CASE_BODY:-$CPBODY}" </dev/null > "$CP/nokg.out" 2>&1 || NOKG_RC=$?
+}
+case_cpx_nokg_ok() { case_cpx_nokg "$CP_KEYDOCKER"; [ "$NOKG_RC" = 0 ] && grep -qxF 'container_probe ok worktree_root=writable transport=answered' "$CP/nokg.out" && [ -z "$(ls -A "$CP/tmp")" ]; }
+case_cpx_nokg_nomarker() { case_cpx_nokg "$(printf '%s\n%s\n%s' 'bm90LWEtcGVtLWF0LWFsbA==' 'bm90LWEtcGVtLWF0LWFsbA==' 'bm90LWEtcGVtLWF0LWFsbA==')"; [ "$NOKG_RC" = 31 ] && [ -z "$(ls -A "$CP/tmp")" ]; }
+case_cpx_nokg_short() { case_cpx_nokg "$(printf '%s\n%s' "$CP_PEM_B" "$CP_PEM_E")"; [ "$NOKG_RC" = 31 ] && [ -z "$(ls -A "$CP/tmp")" ]; }
+if case_cpx_nokg_ok; then pass "CPX13: no ssh-keygen in the container, a docker-form key -> repaired, the BEGIN/END shape holds, the dial is made, ok"
+else fail "CPX13: the no-ssh-keygen path did not clear a good docker-form key" "rc=$NOKG_RC out=[$(head -c 200 "$CP/nokg.out" | tr '\n' '|')]"; fi
+if case_cpx_nokg_nomarker; then pass "CPX14: no ssh-keygen, three lines without the BEGIN/END markers -> key_shape (exit 31)"
+else fail "CPX14: the BEGIN/END shape check did not refuse a marker-less key" "rc=$NOKG_RC"; fi
+if case_cpx_nokg_short; then pass "CPX15: no ssh-keygen, BEGIN and END with nothing between (2 lines) -> key_shape (exit 31): the 3-line floor"
+else fail "CPX15: the 3-line floor did not refuse a two-line key" "rc=$NOKG_RC"; fi
 
 # CP mutants. A cutover-script mutant is placed beside a copy of the real body (the script finds its body next to itself); a body mutant is
 # placed beside a copy of the real script.
@@ -3054,6 +3113,10 @@ fi
 if mutate cp-user-dropped "$SCRIPT" 2 's#docker exec -i -u 1001:1001 -e#docker exec -i -e#'; then
   CASE_SCRIPT="$(cp_mutdir user-dropped "$MUTANT" "$CPBODY")" mutant_red cp-user-dropped case_cp_ok
 fi
+# rc 31 read as an unclassified failure instead of key_shape
+if mutate cp-keyshape-unmapped "$SCRIPT" 2 's#^      31\) _store_refuse container-probe probe_failed "" key_shape ;;$#      31) _store_refuse container-probe probe_failed "" unclassified ;;#'; then
+  CASE_SCRIPT="$(cp_mutdir keyshape-unmapped "$MUTANT" "$CPBODY")" mutant_red cp-keyshape-unmapped case_cpx_ks_oneline
+fi
 # the body: every one of these must turn a named executed row RED
 case_cpx_proc() { case_cpx_via m-proc worktree_root_not_writable CP_WT_ROOT=/proc/self; }
 case_cpx_timeout_hang() { case_cpx_via m-hang 'container_egress_blackhole reason=timeout' CP_INNER=hang CP_TIMEOUT=2; }
@@ -3083,6 +3146,11 @@ cp_body_row cpb-bare-timeout 2 's#Operation timed out#Operation timed out|timeou
 cp_body_row cpb-closed-as-blackhole 2 's#then exit 30; fi$#then exit 25; fi#' case_cpx_closed
 cp_body_row cpb-term-trap-dropped 2 "s#^trap 'exit 143' TERM\$#:#" case_cpx_term
 cp_body_row cpb-needle-changed 2 "s#grep -qF 'remote: git-data transport:'#grep -qF 'remote: NEVER'#" case_cpx_ok
+cp_body_row cpb-normalise-dropped 2 "s#^  \*'\\\\n'\*\) key=#  *'\\\\nNEVER'*) key=#" case_cpx_dockerkey
+cp_body_row cpb-keygen-unchecked 2 's#^  ssh-keygen -y -f "\$d/k" </dev/null >/dev/null 2>&1 \|\| exit 31$#  ssh-keygen -y -f "$d/k" </dev/null >/dev/null 2>\&1 || :#' case_cpx_ks_garbage
+cp_body_row cpb-linefloor-dropped 2 's#^if \[ "\$klines" -lt 3 \]; then exit 31; fi$#:#' case_cpx_nokg_short
+cp_body_row cpb-shape-markers-dropped 4 's#^  case "\$(first|last)" in .*$#  :#' case_cpx_nokg_nomarker
+cp_body_row cpb-blank-trim-dropped 2 's#^trim_key$#:#' case_cpx_blankkey
 
 # ── RB — every store-probe word has a runbook row, and every verdict-map row names a live word ──
 # Scope: the store and fence probes' verdict and reason words (everything through _store_*). The
@@ -4012,7 +4080,8 @@ fi
 # Review round (#11072) group A: plus cpa-skip-neutered and cpa-wf-always = 2, so exactly 167.
 # Group B (#11072): plus cpb-unrunnable-unclassified, cpb-bare-timeout, cpb-closed-as-blackhole and cpb-term-trap-dropped = 4, so exactly 171.
 # Group C (#11072): plus cp-stderr-dropped and cp-first-host-only = 2, so exactly 173.
-MUTANT_FLOOR=173
+# #8211 PR-G: plus cp-keyshape-unmapped, cpb-normalise-dropped, cpb-keygen-unchecked, cpb-linefloor-dropped, cpb-shape-markers-dropped, cpb-blank-trim-dropped = 6, so exactly 179.
+MUTANT_FLOOR=179
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4045,7 +4114,8 @@ fi
 # Review round (#11072) group A: CPA1-CPA3 (3) + 2 mutants x 2 (4) = 7 more: 712 -> 719 (WF6 restated in place).
 # Group B (#11072): CP2 r29/r30 (2), CPX4 +6, CPX6 (1) = 9 standalone, plus 4 mutants x 2 (8) = 17 more: 719 -> 736.
 # Group C (#11072): CP6, CP5b, CPX7 (3; CPX7 is a SKIP when run as root, still counted) + 2 mutants x 2 (4) = 7 more: 736 -> 743.
-FLOOR=743
+# #8211 PR-G (docker-format key, key_shape): CP2 r31 (1), CPX8-CPX15 (8) = 9 standalone, plus 6 mutants x 2 (12) = 21 more: 743 -> 764.
+FLOOR=764
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
