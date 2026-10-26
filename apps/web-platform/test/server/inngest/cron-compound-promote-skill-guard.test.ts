@@ -113,6 +113,13 @@ describe("the guard decides on the FILE, not on the words of a PR", () => {
     expect(skillConflictVerdict(s, ALPHA)).toEqual({ kind: "conflict", pr: 78 });
   });
 
+  it("same-file on the SECOND files page of a PR conflicts", async () => {
+    const files = [...filler(PAGE), { filename: ALPHA }];
+    const { s, calls } = await scan([{ number: 31, files }], [ALPHA]);
+    expect(skillConflictVerdict(s, ALPHA)).toEqual({ kind: "conflict", pr: 31 });
+    expect(calls.filter((c) => c.route === FILES).map((c) => c.params.page)).toEqual([1, 2]);
+  });
+
   it("the scan does not stop at the first PR: a same-file PR listed second still conflicts", async () => {
     const prs: Pr[] = [
       { number: 1, files: [{ filename: BETA }] },
