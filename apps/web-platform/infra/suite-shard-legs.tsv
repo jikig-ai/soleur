@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1000
-# generated-at=2026-10-24T08:54:13Z
+# generated-at=2026-10-26T20:43:15Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)

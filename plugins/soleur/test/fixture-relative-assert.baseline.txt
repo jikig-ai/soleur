@@ -205,12 +205,13 @@
 1	apps/web-platform/infra/inngest-config-bundle-pack.test.sh
 2	apps/web-platform/infra/inngest-consumer-probe.sh
 1	apps/web-platform/infra/inngest-consumer-probe.test.sh
-5	apps/web-platform/infra/inngest-cutover-flip.sh
+7	apps/web-platform/infra/inngest-cutover-flip.sh
 2	apps/web-platform/infra/inngest-cutover-flip.test.sh
 6	apps/web-platform/infra/inngest-cutover-latch.test.sh
 2	apps/web-platform/infra/inngest-doublefire-probe.sh
 5	apps/web-platform/infra/inngest-inventory.sh
 1	apps/web-platform/infra/inngest-inventory.test.sh
+17	apps/web-platform/infra/inngest-luks-key-probe.test.sh
 7	apps/web-platform/infra/inngest-nic-wait.test.sh
 2	apps/web-platform/infra/inngest-provision-rehearsal.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh

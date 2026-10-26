@@ -224,6 +224,7 @@ run_flip() {
       CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" \
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
+      CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
       ${extra[@]+"${extra[@]}"} \
       bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
@@ -1097,6 +1098,7 @@ EOF
 chmod +x "$CANARY_STUB"
 rc=0
 env CUTOVER_LOGGER_CMD="$CANARY_STUB" CUTOVER_FLIP_FLAG="" \
+    CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
     bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
 assert_eq "an authorised run exits 0" "0" "$rc"
 if [[ -e "$CANARY" ]]; then
@@ -1138,6 +1140,7 @@ EOF
 chmod +x "$ALT_STUB"
 rc=0
 env CUTOVER_LOGGER_CMD="$ALT_STUB" CUTOVER_FLIP_FLAG="" \
+    CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
     bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
 assert_eq "the alternate-root authorised run exits 0" "0" "$rc"
 if [[ -e "$ALT_CANARY" ]]; then
@@ -1372,10 +1375,15 @@ fi
 # 187 -> 190: +3 for review fixes — the positional argv3 marker pin, the logger-side
 # `unavailable` assert on the failure arm, and a miscount corrected.
 # 190 -> 194: +4 for the >4000-char bound fixture (Test 5o).
+# 194 -> 195: +1 for #9927 — the LUKS key-probe stamp default (/var/lib/inngest-cutover/...) is a
+# derived write target and lands inside the unit's StateDirectory (the containment loop above).
+# The probe itself is exercised by inngest-luks-key-probe.test.sh; this suite points the stamp seam
+# at a directory that does not exist, so the probe SKIPS (an unrecordable stamp never probes) and
+# every row/trace count here stays exactly what it was.
 # EXACT, not a floor with slack (the cloud-init suite's C0 convention): the assertion
 # inventory is fixed by this file, so a count that drifts — an assertion deleted, a block
 # silently skipped — is itself a RED. Bump it in the same edit that adds an assertion.
-EXPECTED_ASSERTIONS=194
+EXPECTED_ASSERTIONS=195
 if [[ "$PASS" -ne "$EXPECTED_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the count through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
