@@ -43,3 +43,5 @@ lands a row here. Rejection state is read from GitHub PR state through Octokit
 Issue: #2720.
 
 <!-- ROWS BELOW THIS LINE — append-only -->
+
+| 2026-10-26 | e330ced87868a12b430f41286db9a100bbefb92c67f38a85f4d1b29101eb7df3 | plugins/soleur/skills/pencil-setup/SKILL.md | 7 | pending | skill | (PR pending) |
