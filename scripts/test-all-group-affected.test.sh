@@ -69,7 +69,7 @@ fi
 # and remembers the spelling in _TG_AFFECTED_ALIAS for the deprecation note.
 if grep -q '_aff_group_req" == "affected"' "$TARGET" \
    && grep -q '_TG_AFFECTED_ALIAS=1' "$TARGET" \
-   && awk '/_aff_group_req" == "affected"/,/fi/' "$TARGET" | grep -q '_AFFECTED=1'; then
+   && grep -q '_AFFECTED=1' < <(awk '/_aff_group_req" == "affected"/,/fi/' "$TARGET"); then
   pass "A2 — TEST_GROUP=affected arms _AFFECTED and the alias marker"
 else
   fail "A2 — the alias does not arm the --affected axis"
