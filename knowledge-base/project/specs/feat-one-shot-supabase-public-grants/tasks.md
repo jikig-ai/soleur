@@ -24,16 +24,16 @@ Deadline driver: Supabase Data API auto-grant flip on 2026-10-30.
 
 ## Phase C — Local-stack parity pin
 
-- [ ] 3.1 Add a post-start normalize step to `apps/web-platform/scripts/supabase-local.sh` applying Supabase's documented revoke-default-privileges SQL (PRIMARY path per CTO ruling; do NOT write `auto_expose_new_tables` to `config.toml` — absent on pinned CLI 2.84.2).
-- [ ] 3.2 Add a fuzz-side assertion that the local stack's `pg_default_acl` carries no api-role default table grants (the P6 faithfulness pin).
+- [x] 3.1 DONE 2026-10-27: post-start normalize step to `apps/web-platform/scripts/supabase-local.sh` applying Supabase's documented revoke-default-privileges SQL (PRIMARY path per CTO ruling; do NOT write `auto_expose_new_tables` to `config.toml` — absent on pinned CLI 2.84.2).
+- [x] 3.2 DONE 2026-10-27: pg_default_acl assertion lives in rls-grants.integration.test.ts (first test) — that the local stack's `pg_default_acl` carries no api-role default table grants (the P6 faithfulness pin).
 
 ## Phase D — Guards
 
-- [ ] 4.1 Create `apps/web-platform/test/rls-fuzz/table-grants.ts` — registry mirroring `rpc-cases.ts`: per public relation + sequence, `EXPOSED: { role: Set<verb> }` or `INTERNAL` with reason citing the Phase-A audit.
-- [ ] 4.2 Edit `apps/web-platform/test/rls-fuzz/catalog.ts` — add `publicApiRelations()` + `publicApiSequences()` enumerators from `pg_class`.
-- [ ] 4.3 Create `apps/web-platform/test/rls-fuzz/rls-grants.integration.test.ts` — gate asserting registered grant state per catalog member + catalog⇔registry parity. Red-proof: unclassified relation reds; mis-granted member reds.
-- [ ] 4.4 Create `apps/web-platform/scripts/lint-migration-api-grants.sh` + `.test.sh` — noise-stripping detector (comments/dollar-bodies/strings, per `definer-grants.ts:100` precedent); per-relation GRANT-or-sentinel requirement + sequence arm; `.down.sql` skipped; cover the plan's Guard-1 mutation-matrix rows.
-- [ ] 4.5 Edit `.github/workflows/tenant-integration.yml` — add `bash scripts/lint-migration-api-grants.sh --from-pr-diff` beside the FK-precondition step (~line 386).
+- [x] 4.1 DONE 2026-10-27: `apps/web-platform/test/rls-fuzz/table-grants.ts` created — — registry mirroring `rpc-cases.ts`: per public relation + sequence, `EXPOSED: { role: Set<verb> }` or `INTERNAL` with reason citing the Phase-A audit.
+- [x] 4.2 DONE 2026-10-27: `apps/web-platform/test/rls-fuzz/catalog.ts` — — add `publicApiRelations()` + `publicApiSequences()` enumerators from `pg_class`.
+- [x] 4.3 DONE 2026-10-27: `apps/web-platform/test/rls-fuzz/rls-grants.integration.test.ts` created — — gate asserting registered grant state per catalog member + catalog⇔registry parity. Red-proof: unclassified relation reds; mis-granted member reds.
+- [x] 4.4 DONE 2026-10-27: `apps/web-platform/scripts/lint-migration-api-grants.sh` + `.test.sh` (23 assertions green) + `scripts/lib/lint-migration-api-grants.mjs` engine — — noise-stripping detector (comments/dollar-bodies/strings, per `definer-grants.ts:100` precedent); per-relation GRANT-or-sentinel requirement + sequence arm; `.down.sql` skipped; cover the plan's Guard-1 mutation-matrix rows.
+- [x] 4.5 DONE 2026-10-27: `.github/workflows/tenant-integration.yml` — — add `bash scripts/lint-migration-api-grants.sh --from-pr-diff` beside the FK-precondition step (~line 386).
 
 ## Phase E — Decision record + deferral
 

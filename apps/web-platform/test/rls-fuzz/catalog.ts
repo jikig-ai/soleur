@@ -146,6 +146,52 @@ export interface SecDefFn {
   args: string;
 }
 
+export interface ApiRelation {
+  relname: string;
+  /** 'r' table | 'v' view | 'm' materialized view */
+  relkind: "r" | "v" | "m";
+}
+
+/**
+ * The api-role grant surface (ADR-303): every `public`-schema relation the
+ * Data API can expose — tables, views, materialized views (relkind r,v,m).
+ * Partition children (relispartition) are excluded: they carry no independent
+ * ACL — a child's privilege resolves through its partitioned parent (relkind
+ * 'p'), which is itself excluded because PostgREST exposes it only through the
+ * parent endpoint and the corpus creates none. Live-catalog enumeration, same
+ * contract as every enumerator here: a new public relation shows up
+ * automatically and the grant registry (table-grants.ts) must classify it or
+ * the parity gate reds.
+ */
+export async function publicApiRelations(sql: Sql): Promise<ApiRelation[]> {
+  return withTransientRetry(() => sql<ApiRelation[]>`
+    select c.relname, c.relkind
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'v', 'm')
+      and not c.relispartition
+    order by c.relname`);
+}
+
+/**
+ * Every `public`-schema sequence (relkind S). Post-flip, a sequence created
+ * without explicit grants loses USAGE for the api roles — serial/identity
+ * inserts via the Data API fail even when the table itself is granted (the
+ * lint's sequence arm is the PR-time pre-filter; this is the live enumerator
+ * the grant gate runs against).
+ */
+export async function publicApiSequences(sql: Sql): Promise<string[]> {
+  const rows = await withTransientRetry(() => sql<{ relname: string }[]>`
+    select c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'S'
+    order by c.relname`);
+  return rows.map((r) => r.relname);
+}
+
 /**
  * The RPC bypass set (AC8): every `SECURITY DEFINER` function in `public` that
  * `authenticated` may EXECUTE. A definer fn that trusts a caller-supplied

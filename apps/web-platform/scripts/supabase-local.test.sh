@@ -43,7 +43,6 @@ pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 WORKROOT="$(mktemp -d -t supabase-local-test.XXXXXXXX)" || {
   echo "SETUP FAILURE: cannot allocate a work dir" >&2; exit 2; }
 trap 'rm -rf "$WORKROOT"' EXIT INT TERM HUP
-CASE_N=0
 
 # ---------------------------------------------------------------------------
 # Fake `docker`, argv-aware.
@@ -69,6 +68,7 @@ make_fake_docker() {
 : "${DOCKER_NET_OPT:=}"
 : "${DOCKER_NET_EXISTS:=0}"
 : "${DOCKER_NET_RM_EXIT:=0}"
+: "${DOCKER_EXEC_EXIT:=0}"
 : "${DOCKER_ARGV_LOG:=/dev/null}"
 printf '%s\n' "$*" >> "$DOCKER_ARGV_LOG"
 
@@ -103,6 +103,16 @@ case "${1:-}" in
       create)  : ;;
     esac
     ;;
+  # The post-start normalize path: `docker exec <id> psql ...`. The argv record
+  # (DOCKER_ARGV_LOG, written above) is the behavioral evidence the normalize
+  # ran; DOCKER_EXEC_EXIT simulates psql failing inside the container so the
+  # failure-loud contract is testable.
+  exec)
+    if [[ "$DOCKER_EXEC_EXIT" != "0" ]]; then
+      echo "psql: ERROR: normalize failed" >&2
+      exit "$DOCKER_EXEC_EXIT"
+    fi
+    ;;
 esac
 exit 0
 FAKE
@@ -110,13 +120,15 @@ FAKE
 }
 
 # Fake `supabase` that records its argv — this is what makes the passthrough
-# path behaviourally testable instead of source-grepped.
+# path behaviourally testable instead of source-grepped. SUPABASE_EXIT lets a
+# case simulate a failing start so the wrapper's exit-code propagation and
+# normalize-skip contracts are exercised, not asserted from source.
 make_fake_supabase() {
   local dir="$1"
   cat > "$dir/supabase" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "${SUPABASE_ARGV_FILE:-/dev/null}"
-exit 0
+exit "${SUPABASE_EXIT:-0}"
 FAKE
   chmod +x "$dir/supabase"
 }
@@ -134,9 +146,14 @@ reset_fixture() {
 }
 
 new_case_dir() {
-  CASE_N=$((CASE_N + 1))
-  local d="${WORKROOT}/case-${CASE_N}"
-  mkdir -p "$d" || { echo "SETUP FAILURE: mkdir $d" >&2; exit 2; }
+  # mktemp-unique, NOT a counter: the function is invoked via $(...) command
+  # substitution, which runs in a SUBSHELL — a `CASE_N=$((CASE_N + 1))` inside
+  # would increment only the subshell's copy, silently returning the same dir
+  # for every case. That was harmless while fixtures wrote with `>` (truncate)
+  # but breaks any append-mode artifact (the DOCKER_ARGV_LOG record): shared
+  # dirs leak one case's argv log into the next.
+  local d
+  d="$(mktemp -d "${WORKROOT}/case-XXXXXXXX")" || { echo "SETUP FAILURE: mktemp case dir" >&2; exit 2; }
   make_fake_docker "$d"
   make_fake_supabase "$d"
   printf '%s' "$d"
@@ -381,7 +398,106 @@ reset_fixture
 DOCKER_PS_OUT="" res=$(run_assert)
 if [[ "${res%%|*}" == "0" ]]; then pass "default (hook) path still 0"; else fail "default changed: ${res%%|*}"; fi
 
-MIN_ASSERTIONS=37
+# ---------------------------------------------------------------------------
+# T17-T23 — the post-start normalize arm (ADR-303).
+#
+# Behavioural, like T10: a fake `supabase` records argv, a fake `docker`
+# records every call in DOCKER_ARGV_LOG, and the assertions read the records —
+# a `start` that forgot to normalize, or a `stop`/`assert` that ran it, would
+# both leave the wrong argv trace. DOCKER_PS_OUT supplies the discovered db
+# container id ("db1"); the normalize must `docker exec` THAT container.
+# ---------------------------------------------------------------------------
+echo "T17: start runs the normalize via docker exec psql on the discovered db container"
+reset_fixture
+d="$(new_case_dir)"
+argv_file="${d}/supabase-argv"; docker_log="${d}/docker-argv"
+set +e
+env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  SUPABASE_ARGV_FILE="$argv_file" DOCKER_ARGV_LOG="$docker_log"  DOCKER_NET_EXISTS="1" DOCKER_NET_OPT="127.0.0.1" DOCKER_PS_OUT="db1"  bash "$SCRIPT" start >/dev/null 2>&1
+start_rc=$?
+set -e
+recorded="$(cat "$argv_file" 2>/dev/null || true)"
+if [[ "$start_rc" == "0" ]]; then pass "start exits 0 on happy path"; else fail "start rc=$start_rc"; fi
+if [[ "$recorded" == "--network-id ${EXPECTED_NET} start" ]]; then pass "start argv correct"; else fail "start argv wrong: '$recorded'"; fi
+if grep -Eq '^exec -i db1 psql ' "$docker_log"; then pass "normalize execs psql in the discovered db container"; else fail "no db exec in docker log: $(cat "$docker_log")"; fi
+if grep -Eq 'name=supabase_db' "$docker_log"; then pass "db container discovered by name filter"; else fail "no supabase_db discovery call: $(cat "$docker_log")"; fi
+
+echo "T18: db start is also a start-class verb (normalize runs)"
+reset_fixture
+d="$(new_case_dir)"
+docker_log="${d}/docker-argv"
+set +e
+env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  SUPABASE_ARGV_FILE="${d}/sa" DOCKER_ARGV_LOG="$docker_log"  DOCKER_NET_EXISTS="1" DOCKER_NET_OPT="127.0.0.1" DOCKER_PS_OUT="db1"  bash "$SCRIPT" db start >/dev/null 2>&1
+dbstart_rc=$?
+set -e
+if [[ "$dbstart_rc" == "0" ]]; then pass "db start exits 0"; else fail "db start rc=$dbstart_rc"; fi
+if grep -Eq '^exec -i db1 psql ' "$docker_log"; then pass "normalize runs on db start"; else fail "no exec after db start: $(cat "$docker_log")"; fi
+
+echo "T19: normalize failure fails the start loudly (never a quiet green)"
+reset_fixture
+d="$(new_case_dir)"
+docker_log="${d}/docker-argv"
+set +e
+nout=$(env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  SUPABASE_ARGV_FILE="${d}/sa" DOCKER_ARGV_LOG="$docker_log"  DOCKER_NET_EXISTS="1" DOCKER_NET_OPT="127.0.0.1" DOCKER_PS_OUT="db1" DOCKER_EXEC_EXIT="1"  bash "$SCRIPT" start 2>&1)
+nrc=$?
+set -e
+if [[ "$nrc" != "0" ]]; then pass "normalize failure -> nonzero exit (rc=$nrc)"; else fail "normalize failure exited 0 (false green)"; fi
+if grep -Eq 'normalize FAILED' <<<"$nout"; then pass "names the normalize failure"; else fail "no failure message: $nout"; fi
+
+echo "T20: a failing start propagates its own rc and skips the normalize"
+reset_fixture
+d="$(new_case_dir)"
+docker_log="${d}/docker-argv"
+set +e
+env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  SUPABASE_ARGV_FILE="${d}/sa" DOCKER_ARGV_LOG="$docker_log" SUPABASE_EXIT="5"  DOCKER_NET_EXISTS="1" DOCKER_NET_OPT="127.0.0.1" DOCKER_PS_OUT="db1"  bash "$SCRIPT" start >/dev/null 2>&1
+frc=$?
+set -e
+if [[ "$frc" == "5" ]]; then pass "start's own rc=5 propagates"; else fail "expected 5, got $frc"; fi
+if grep -Eq '^exec ' "$docker_log"; then fail "normalize ran despite failed start: $(cat "$docker_log")"; else pass "normalize skipped on start failure"; fi
+
+echo "T21: stop does NOT run the normalize (remediation path stays clean)"
+reset_fixture
+d="$(new_case_dir)"
+docker_log="${d}/docker-argv"
+set +e
+env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  SUPABASE_ARGV_FILE="${d}/sa" DOCKER_ARGV_LOG="$docker_log"  DOCKER_NET_EXISTS="1" DOCKER_NET_OPT="127.0.0.1" DOCKER_PS_OUT="db1"  bash "$SCRIPT" stop >/dev/null 2>&1
+stop_rc=$?
+set -e
+if [[ "$stop_rc" == "0" ]]; then pass "stop exits 0"; else fail "stop rc=$stop_rc"; fi
+if grep -Eq '^exec ' "$docker_log" 2>/dev/null; then fail "normalize ran on stop: $(cat "$docker_log")"; else pass "no db exec on stop"; fi
+
+echo "T22: status does NOT run the normalize"
+reset_fixture
+d="$(new_case_dir)"
+docker_log="${d}/docker-argv"
+set +e
+env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  SUPABASE_ARGV_FILE="${d}/sa" DOCKER_ARGV_LOG="$docker_log"  DOCKER_NET_EXISTS="1" DOCKER_NET_OPT="127.0.0.1" DOCKER_PS_OUT="db1"  bash "$SCRIPT" status >/dev/null 2>&1
+status_rc=$?
+set -e
+if [[ "$status_rc" == "0" ]]; then pass "status exits 0"; else fail "status rc=$status_rc"; fi
+if grep -Eq '^exec ' "$docker_log" 2>/dev/null; then fail "normalize ran on status: $(cat "$docker_log")"; else pass "no db exec on status"; fi
+
+echo "T23: assert does NOT run the normalize"
+reset_fixture
+d="$(new_case_dir)"
+docker_log="${d}/docker-argv"
+set +e
+env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  DOCKER_ARGV_LOG="$docker_log"  DOCKER_PS_OUT="c1" DOCKER_INSPECT_c1="$CLEAN"  bash "$SCRIPT" assert >/dev/null 2>&1
+arc=$?
+set -e
+if [[ "$arc" == "0" ]]; then pass "assert exits 0"; else fail "assert rc=$arc"; fi
+if grep -Eq '^exec ' "$docker_log" 2>/dev/null; then fail "normalize ran on assert: $(cat "$docker_log")"; else pass "no db exec on assert"; fi
+
+echo "T24: start with no discoverable db container fails closed (rc=2, not a false green)"
+reset_fixture
+d="$(new_case_dir)"
+set +e
+ncout=$(env -i PATH="$d:/usr/bin:/bin" HOME="$HOME" TMPDIR="$TMPDIR"  SUPABASE_ARGV_FILE="${d}/sa" DOCKER_ARGV_LOG="${d}/docker-argv"  DOCKER_NET_EXISTS="1" DOCKER_NET_OPT="127.0.0.1" DOCKER_PS_OUT=""  bash "$SCRIPT" start 2>&1)
+ncrc=$?
+set -e
+if [[ "$ncrc" == "2" ]]; then pass "missing db container -> rc=2"; else fail "expected 2, got $ncrc ($ncout)"; fi
+if grep -Eq 'no supabase_db container' <<<"$ncout"; then pass "names the missing container"; else fail "no diagnostic: $ncout"; fi
+
+MIN_ASSERTIONS=55
 echo ""
 echo "supabase-local.test.sh: $PASS passed, $FAIL failed"
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
