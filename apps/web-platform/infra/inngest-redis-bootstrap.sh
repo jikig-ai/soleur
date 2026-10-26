@@ -196,14 +196,16 @@ if [ -z "${INNGEST_REDIS_PASSWORD:-}" ]; then
   printf 'FATAL: INNGEST_REDIS_PASSWORD is unset or empty — refusing to write the aclfile (value-free)\n' >&2
   exit 1
 fi
-# `=~`, not `printf | grep -q` — under pipefail an early-exiting grep can
-# read as a miss (#9217 grep-q-pipe guard). The class matches whitespace, a quote,
-# a backslash or a control byte, identically to the previous grep -E pattern.
-_acl_bad_re='[[:space:]"'"'"'\\[:cntrl:]]'
-if [[ "$INNGEST_REDIS_PASSWORD" =~ $_acl_bad_re ]]; then
-  printf 'FATAL: INNGEST_REDIS_PASSWORD carries whitespace, a quote, a backslash or a control byte — refusing to write the aclfile (value-free)\n' >&2
-  exit 1
-fi
+# POSIX `case` glob, not `[[ =~ ]]` — the suite replays this writer under `sh`
+# (dash), where `[[` does not exist: the failed builtin reads as a false `if`,
+# the refusal is skipped, and the file gets written anyway (post-#11103 red —
+# the same silent-pass shape the #9217 grep-q-pipe guard exists to prevent).
+# One glob per alternative so no quoting lives inside a bracket expression.
+case "$INNGEST_REDIS_PASSWORD" in
+  *[[:space:]]*|*\"*|*\'*|*\\*|*[[:cntrl:]]*)
+    printf 'FATAL: INNGEST_REDIS_PASSWORD carries whitespace, a quote, a backslash or a control byte — refusing to write the aclfile (value-free)\n' >&2
+    exit 1 ;;
+esac
 
 # Hash BEFORE the write: `#` is the aclfile grammar's SHA256 form — AUTH presents cleartext
 # and Redis hashes it for the comparison, so the on-disk artifact never carries the
