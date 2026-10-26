@@ -959,7 +959,27 @@ export const DRAFT_EDIT_MAX_TOKENS = 4_096;
 /** About 30k tokens. 4 of the 104 allowlisted targets exceed it today (#10551 shortens them). */
 export const EDIT_TARGET_MAX_BYTES = 120_000;
 const EDIT_NEW_LINES_MAX = 20;
-const EDIT_LINE_MAX_CHARS = 500;
+/**
+ * The hard cap on one model-written `AGENTS.rules.md` line. It equals the corpus lint's
+ * `PER_RULE_CAP` in scripts/lint-agents-rule-budget.py (600 UTF-8 bytes), and a vitest reads that
+ * constant and asserts equality, so the validator never accepts a line the lint rejects and never
+ * refuses one the lint accepts (#10552: a 500 cap refused real rules, 26 of 137 existing lines are
+ * longer). Characters equal bytes here because PRINTABLE_ASCII_RE admits only ASCII.
+ */
+export const AGENTS_EDIT_LINE_MAX_CHARS = 600;
+/**
+ * The hard cap on one model-written `SKILL.md` line. No lint governs SKILL.md line length (1071
+ * existing lines are over 600), so this constant has no pin by design; revisit it only if refusal
+ * rows (`edit-invalid` / `too-long`) show 1000 being hit.
+ */
+export const SKILL_EDIT_LINE_MAX_CHARS = 1000;
+/** The soft target the prompt asks for; the hard cap of the target is what is enforced. */
+export const EDIT_LINE_TARGET_CHARS = 500;
+
+/** The one place a line cap is chosen: the validator and the prompt builder both call it. */
+function editLineMaxChars(targetPath: string): number {
+  return targetPath === "AGENTS.rules.md" ? AGENTS_EDIT_LINE_MAX_CHARS : SKILL_EDIT_LINE_MAX_CHARS;
+}
 
 export const EDIT_REFUSAL_REASONS = [
   "edit-target-unreadable",
@@ -1132,13 +1152,14 @@ function newLinesCause(lines: string[], targetPath: string, base: string): strin
   if (lines.length === 0) return "empty";
   if (lines.length > EDIT_NEW_LINES_MAX) return "too-many";
   if (!lines.every((l) => PRINTABLE_ASCII_RE.test(l))) return "charset";
-  if (lines.some((l) => l.length > EDIT_LINE_MAX_CHARS)) return "too-long";
+  const lineCap = editLineMaxChars(targetPath);
+  if (lines.some((l) => l.length > lineCap)) return "too-long";
   if (lines.every((l) => l.trim() === "")) return "empty";
   // A bare `---` would open or close a frontmatter block.
   if (lines.some((l) => l === "---")) return "shape";
   if (lines.some((l) => CREDENTIAL_RE.test(l))) return "credential";
-  // A fence, comment or preprocessing marker would change how the rest of the file (or the
-  // skill-conflict comment that quotes the diff) is read.
+  // A fence, comment or preprocessing marker would change how the rest of the file, the draft PR
+  // body that quotes the diff, or the committed text is read.
   if (lines.some((l) => RENDER_HAZARD_RE.test(l))) return "shape";
   if (targetPath === "AGENTS.rules.md") {
     // A model cannot mint an `hr-` or `wg-` rule (ADR-092 reserves those for human review);
@@ -1353,7 +1374,7 @@ export async function draftAdditiveEdit(args: {
     `You are adding ONE small, additive edit to a rules file, drawing on the learnings below.`,
     untrustedDataSentence(nonce),
     `Contract: return insert_after_line and new_lines. insert_after_line MUST be copied verbatim from the target file and appear in it exactly once (use "" to append at the end of the file). new_lines are the lines to insert after it. Append new lines only; never restate, edit or delete an existing line.`,
-    `Each new line is printable ASCII, at most ${EDIT_LINE_MAX_CHARS} characters; at most ${EDIT_NEW_LINES_MAX} lines.`,
+    `Each new line is printable ASCII, at most ${editLineMaxChars(cluster.target_path)} characters (aim for ${EDIT_LINE_TARGET_CHARS} or fewer; a longer line refuses the whole edit); at most ${EDIT_NEW_LINES_MAX} lines.`,
     cluster.target_path === "AGENTS.rules.md"
       ? `Every new line must be one rule bullet of the form "- <rule text> [id: <new-id>]" with exactly one [id: ...] per line, an id of class cq-, rf-, pdr- or cm- (3-60 lowercase letters, digits or hyphens after the prefix) that is not already in the file, and no mention of any hr- or wg- rule anywhere in the line, and no enforcement tags such as [skill-enforced] or [mandates-filing]. No links, URLs, code fences or HTML comments. Always-loaded byte headroom for this edit: ${headroomBytes} bytes.`
       : `Do not insert inside the frontmatter or inside a fenced code block. Links must be relative (starting ./ or ../); no URLs, no $( command substitution, no code fences or HTML comments.`,
