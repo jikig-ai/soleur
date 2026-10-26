@@ -6547,6 +6547,7 @@ if want_scripts; then
   # #9728 (ADR-276 S3): the soak probe's exit-code contract (a fake gh, an injected clock, a stub resolver and mutation
   # rows over copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/ci-draft-light-soak-9728" bash scripts/followthroughs/ci-draft-light-soak-9728.test.sh
+  run_suite "scripts/followthroughs/orphan-sweeps-relook-10972" bash scripts/followthroughs/orphan-sweeps-relook-10972.test.sh
   # (#9812) the derive cache lib and the runner's recording/dispatch instrumentation. Explicit
   # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
   # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
