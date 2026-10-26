@@ -122,7 +122,7 @@ fi
 # ── the predicate, compared whole ─────────────────────────────────────────────────────────────
 _msg="JSONExtractString(raw, 'message')"
 EXPECT_1="SELECT {{time}} AS time, count(*) AS value FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}}"
-EXPECT_1+=" AND (JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'web-nic-guard' AND position(${_msg}, 'unpinned_url') > 0) GROUP BY time"
+EXPECT_1+=" AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'web-nic-guard' AND position(${_msg}, 'unpinned_url') > 0 GROUP BY time"
 if [ -n "$EMIT_NEEDLE" ] && [ "$EMIT_NEEDLE" = "unpinned_url" ] && [ "$SQL_1" = "$EXPECT_1" ]; then
   ok "the predicate equals the string built from the emitter's own needle (tag + position, nothing else)"
 else

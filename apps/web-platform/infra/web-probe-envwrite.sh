@@ -47,9 +47,10 @@ esac
 
 # HOST_UPPER mirrors the SSH provisioner's `upper(replace(each.key, "-", "_"))` (server.tf) — so
 # "web-1" → "WEB_1", "web-2" → "WEB_2". This names the per-host Better Stack heartbeat URL var
-# (WEB_NIC_GUARD_URL_WEB_2, WEB_ZOT_CONSUMER_URL_WEB_2) that doppler run injects at unit start. For the nic-guard and
-# zot probe the SCRIPT resolves it, through the *_URL_KEY name written below, after its xtrace refusal (#9639); the
-# git-data and inngest-consumer units still resolve it in their ExecStart wrapper (recorded not fixed on #9639).
+# (WEB_NIC_GUARD_URL_WEB_2, WEB_ZOT_CONSUMER_URL_WEB_2) that doppler run injects at unit start. Each
+# probe's SCRIPT resolves it, through the *_URL_KEY name written below, after its xtrace refusal —
+# all four units (nic-guard, zot, git-data and inngest-consumer) now expand nothing in their
+# ExecStart (#9639 F6).
 HOST_UPPER="$(printf '%s' "$SOLEUR_HOST_KEY" | tr 'a-z-' 'A-Z_')"
 
 # git-data uses ONE shared beat today (single-host; masking moot, C3) → the KEY is unsuffixed. The
