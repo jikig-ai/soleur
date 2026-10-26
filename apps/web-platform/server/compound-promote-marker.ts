@@ -221,6 +221,14 @@ export const CREATE_MARKER_NUMBERS = {
   changed_count: "create_changed_count",
 } as const satisfies Record<string, keyof CompoundPromoteOutcome>;
 
+/**
+ * The numeric refusal keys that are SENTRY-ONLY on purpose: a create refusal may carry them in `numbers` (so they reach
+ * the `create-refused` event's `extra`), and the handler never forwards them to the marker. Every number key the three
+ * create modules pass is either a key of {@link CREATE_MARKER_NUMBERS} or listed here; a census test enforces it, so a
+ * new number is a decision about the marker's shape, not an accident.
+ */
+export const CREATE_SENTRY_ONLY_NUMBERS = ["min_words", "max_words", "headroom", "threshold", "pr"] as const;
+
 /** Cap on `refusal_detail` entries so one pathological run cannot flood the sink. */
 export const REFUSAL_DETAIL_CAP = 20;
 

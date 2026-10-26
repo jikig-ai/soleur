@@ -413,6 +413,22 @@ describe("Guard 3 -- the arm is reachable ONLY for trigger=manual, input=pattern
     expect(r.last).toMatchObject({ create_requested: true, create_arm: "ran", kind: "create" });
   });
 
+  it("G5e: the marker key sets are pinned -- scheduled and manual-corpus rows carry NO create key; a manual-patterns row gains EXACTLY `create_requested`", async () => {
+    const keysOf = async (ev: { name: string; data?: Record<string, unknown> }) => Object.keys((await run(ev)).last).sort();
+    const cron = await keysOf(CRON());
+    const corpus = await keysOf(MANUAL({ input: "corpus" }));
+    const patterns = await keysOf(MANUAL({ input: "patterns" }));
+    const patternsOn = await keysOf(MANUAL({ input: "patterns", allow_create: false }));
+    expect(cron.filter((k) => k.startsWith("create_") || k === "kind")).toEqual([]);
+    expect(corpus.filter((k) => k.startsWith("create_") || k === "kind")).toEqual([]);
+    expect(corpus).toEqual(cron); // a manual corpus row is the scheduled row
+    expect(patterns).toEqual(patternsOn);
+    expect(patterns.filter((k) => k.startsWith("create_") || k === "kind")).toEqual(["create_requested"]);
+    // the patterns row is the patterns-arm fields plus that ONE key
+    expect(patterns.filter((k) => k !== "create_requested")).toEqual(patterns.filter((k) => !k.startsWith("create_")));
+    expect(patterns).toEqual(expect.arrayContaining(["input_source", "ledger_read", "ledger_suppressed", "patterns_open", "trigger"]));
+  });
+
   it("the scheduled path and the manual corpus path never gain a create field, even when the arm is refused elsewhere", async () => {
     for (const ev of [CRON(), MANUAL(), MANUAL({ input: "corpus" })]) {
       const r = await run(ev);

@@ -138,6 +138,7 @@ async function resolveRegularFile(repoRoot: string, rel: string): Promise<{ abs:
   try {
     root = await realpath(repoRoot);
   } catch {
+    // review: swallowed -- a repo root that cannot be resolved is "not a regular file"; every caller turns null into a closed refusal.
     return null;
   }
   const abs = join(root, rel);
@@ -147,6 +148,7 @@ async function resolveRegularFile(repoRoot: string, rel: string): Promise<{ abs:
     if ((await realpath(abs)) !== abs) return null; // a symlinked directory component
     return { abs, size: st.size };
   } catch {
+    // review: swallowed -- an absent or unreadable entry is "not a regular file"; the caller names the refusal (path-missing / input-unreadable).
     return null;
   }
 }
@@ -322,6 +324,7 @@ export async function runSkillScan(o: RunSkillScanOpts): Promise<ScanResult> {
     root = await realpath(o.repoRoot);
     if (!(await stat(meta)).isDirectory()) return scanRefusal("meta-base-invalid");
   } catch {
+    // review: swallowed -- an unresolvable scanner meta dir is the closed refusal meta-base-invalid.
     return scanRefusal("meta-base-invalid");
   }
   if (meta === root || meta.startsWith(root + sep)) return scanRefusal("meta-base-invalid");
@@ -441,6 +444,7 @@ export async function snapshotClone(root: string, baseEnv: BaseEnv = process.env
       const st = await lstat(abs);
       out.set(p, st.isSymbolicLink() ? `link:${await readlink(abs)}` : createHash("sha256").update(await readFile(abs)).digest("hex"));
     } catch {
+      // review: swallowed -- a path git lists that cannot be lstat'd is recorded as "deleted" in the snapshot, which is what it is.
       out.set(p, "deleted");
     }
   }
@@ -491,6 +495,7 @@ async function readRegularUtf8(root: string, rel: string): Promise<string | null
   try {
     return await readFile(f.abs, "utf8");
   } catch {
+    // review: swallowed -- an unreadable README is the closed refusal readme-unreadable.
     return null;
   }
 }
@@ -515,7 +520,11 @@ export async function syncReadmeCounts(o: SyncReadmeCountsOpts): Promise<ReadmeS
   const r = await run({ repoRoot: o.repoRoot, script: README_SYNC_SCRIPT, extraEnv: {}, timeoutMs: o.timeoutMs ?? README_SYNC_TIMEOUT_MS, baseEnv });
   if (r.kind === "timeout") return readmeRefusal("timeout");
   if (r.kind === "script-not-regular") return readmeRefusal("script-not-regular");
-  if (r.kind !== "exit" || r.code !== 0) return readmeRefusal("script-failed", evidenceOf(r));
+  // Every non-exit outcome has its own detail (the scan gate does the same): a script that never started or flooded
+  // stdout is not a script that failed.
+  if (r.kind === "spawn-error") return readmeRefusal("spawn-error");
+  if (r.kind === "output-overflow") return readmeRefusal("output-overflow");
+  if (r.code !== 0) return readmeRefusal("script-failed", evidenceOf(r));
 
   const snapAfter = await snapshotClone(o.repoRoot, baseEnv);
   if (!snapAfter) return readmeRefusal("git-failed");
@@ -571,6 +580,7 @@ export async function collectCreateContent(o: CollectCreateContentOpts): Promise
       try {
         await lstat(join(await realpath(o.repoRoot), rel));
       } catch {
+        // review: swallowed -- an lstat failure here means the path is absent: path-missing (anything else is path-not-regular).
         missing = true;
       }
       return collectRefusal(missing ? "path-missing" : "path-not-regular", index);

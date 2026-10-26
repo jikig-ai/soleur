@@ -513,6 +513,16 @@ describe("syncReadmeCounts", () => {
     expect(await run(root)).toMatchObject({ ok: false, detail: "script-not-regular" });
   });
 
+  it("G5b: a script that cannot be spawned and one that floods stdout are their OWN details, not `script-failed`", async () => {
+    const { root } = repo(bump);
+    const spawnError = (async () => ({ kind: "spawn-error", detail: "ENOENT" })) as never;
+    const overflow = (async () => ({ kind: "output-overflow" })) as never;
+    expect(await run(root, { spawn: spawnError })).toEqual({ ok: false, detail: "spawn-error" });
+    expect(await run(root, { spawn: overflow })).toEqual({ ok: false, detail: "output-overflow" });
+    // a real flood through the real helper (the cap is 1 MiB of stdout)
+    expect(await run(repo("head -c 2000000 /dev/zero | tr '\\0' 'a'\n").root)).toEqual({ ok: false, detail: "output-overflow" });
+  });
+
   it("a README that is missing or a symlink is a refusal", async () => {
     const a = repo(bump);
     rmSync(join(a.root, ROOT_README));

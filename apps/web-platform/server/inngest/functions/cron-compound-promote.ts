@@ -1705,8 +1705,10 @@ export async function cronCompoundPromoteHandler({
     inputSource === "patterns"
       ? {
           input_source: "patterns",
-          // #10550: every manual patterns row records whether the create arm was requested, so each switch-on is
-          // visible without SSH (also on the early terminal rows). Absent on the scheduled and corpus paths.
+          // #10550: every manual PATTERNS row records whether the create arm was requested, so each switch-on is
+          // visible without SSH (also on the early terminal rows). SCOPE: this is the ONE key a manual-patterns row
+          // gains when the arm did not run; the scheduled row and the manual-corpus row stay byte-identical to before
+          // the arm existed (pinned by the key-set test in cron-compound-promote-create-handler.test.ts).
           ...(trigger === "manual" ? { create_requested: allowCreate } : {}),
         }
       : {};
