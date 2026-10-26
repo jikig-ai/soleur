@@ -31,18 +31,18 @@ Process: run long commands detached (script file with `setsid nohup bash <file>`
 
 ## Phase 3 - fixpoint and verification
 
-- [ ] 3.1 Final audit equals the last cycle, `stale=0`, `gap_refs == wc -l` baseline, marker `exit=0 reason=pass`.
-- [ ] 3.2 Prune-only baseline diff (file-based), removed lines = `declare` rows + `extra_drained`; `inngest-probe-row.test.sh` untouched, kept pair present.
-- [ ] 3.3 Scope checks (no test file, workflow, `test-all.sh`, ADR; no `glob:`, `ALWAYS_ON`, prefix, new index comment; accept diff additions only).
-- [ ] 3.4 Replay suite detached.
-- [ ] 3.5 Full affected gate detached and non-blocking (`SOLEUR_ALLOW_FULL_GATE=1 ... --affected`, rc from the rc file); CI `test` context is the merge gate.
-- [ ] 3.6 `test-all-affected.test.sh`, `lint-orphan-test-suites.sh`, shellcheck, `markdown-lint.sh`; duplicate `AFFECTED_*_PATHS` names none.
-- [ ] 3.7 Quote the final local `ratchet` wall next to the base wall.
+- [x] 3.1 Final audit equals the last cycle, `stale=0`, `gap_refs == wc -l` baseline, marker `exit=0 reason=pass`. (Merged main c507f9be85: live=1619 baseline=1619, accepted=67 stale=0 gap_refs=1619.)
+- [x] 3.2 Prune-only baseline diff (file-based), removed lines = `declare` rows + `extra_drained`; `inngest-probe-row.test.sh` untouched, kept pair present. (0 added, 8 removed vs origin/main.)
+- [x] 3.3 Scope checks (no test file, workflow, `test-all.sh`, ADR; no `glob:`, `ALWAYS_ON`, prefix, new index comment; accept diff additions only). (26 additions, 0 removals; 17 index insertions.)
+- [x] 3.4 Replay suite detached. (Skipped by the plan rule: main did not change the replay script or its suite since the 1078/0 run on the first cut.)
+- [x] 3.5 Full affected gate detached and non-blocking: not finished. The worktree vanished mid-run (about 10:19 +0100) and the gate aborted at 237 s; the CI `test` context is the merge gate.
+- [x] 3.6 `test-all-affected.test.sh` 248/0, `lint-orphan-test-suites.sh` none, shellcheck rc 0, `markdown-lint.sh` clean; duplicate `AFFECTED_*_PATHS` names: only the 2 pre-existing.
+- [x] 3.7 Local `ratchet` wall: 180 s cold on the worktree, 81 s warm on the scratch merge tree; base wall in `receipts/ratchet-base-81192540bf.out`.
 
 ## Phase 4 - documentation and handoff
 
-- [ ] 4.1 Runbook section 7 edits (last docs commit, conditional on the declared count N: PR4d wording only if N is at least 10, no edit at zero); `grep -nE 'PR4b and PR4c|PR4c or PR5'` prints nothing when N is at least 10.
-- [ ] 4.2 Update #10959 (remaining edges by reason code, PR4d eligibility, series end); comment on #10861 (PR5 handoff by name).
+- [x] 4.1 Runbook section 7 edits (last docs commit, conditional on the declared count N: PR4d wording only if N is at least 10, no edit at zero); `grep -nE 'PR4b and PR4c|PR4c or PR5'` prints nothing when N is at least 10.
+- [x] 4.2 Update #10959 (remaining edges by reason code, PR4d eligibility, series end); comment on #10861 (PR5 handoff by name).
 - [ ] 4.3 PR body: `Ref` only, counts via `wc -l`, chain table, stop-line outcome, accept rows by line kind, holds by reason code, re-test results, yield, declared N and PR4d eligibility, series end, local gate state, holds.
 
 ## Phase 5 - ship
