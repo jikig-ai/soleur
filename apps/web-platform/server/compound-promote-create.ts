@@ -95,6 +95,22 @@ export const CREATE_GATES = [
 ] as const;
 export type CreateGate = (typeof CREATE_GATES)[number];
 
+/**
+ * The real order the create arm runs its stages in, as closed ids. Step A is `create-propose`, Step B is
+ * `create-persist`; `checkCreate` is the gate list inside Step A's last stage. The ADR-092 amendment sentence and the
+ * parity test are pinned to THIS list (each id has one ADR phrase, in this order), so reordering the ADR prose or
+ * adding a stage here without its phrase turns the parity suite red. The arm's own order is asserted against it by
+ * the arm tests, not by this module.
+ */
+export const CREATE_STAGE_ORDER = {
+  stepA: ["week-cap", "index-empty", "clone-present", "create-open", "populations", "input-size", "api-key", "model", "check-create"],
+  checkCreate: CREATE_GATES,
+  stepB: [
+    "branch-taken", "token-set", "fetch-reset", "token-strip", "recheck", "render", "rendered-gate", "scan", "readme-sync",
+    "bytes-differ", "token-restore", "fetch", "base-moved", "commit",
+  ],
+} as const;
+
 /** The closed PURPOSE.md template slot set. The renderer fills exactly these; the template test pins the same set. */
 export const PURPOSE_TEMPLATE_SLOTS = [
   "SKILL_NAME",

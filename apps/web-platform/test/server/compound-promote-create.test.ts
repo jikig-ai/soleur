@@ -51,6 +51,7 @@ import {
   CREATE_NO_ACTION_REASONS,
   CREATE_OUTPUT_SCHEMA,
   CREATE_REFUSAL_CLASSES,
+  CREATE_STAGE_ORDER,
   CREATE_SLUG_IDENT_MAX,
   OVERLAP_REFUSE_THRESHOLD,
   OVERLAP_TOP_K,
@@ -1508,6 +1509,77 @@ describe("instruction-risk is tested per line, never across lines (fix-round 2)"
     for (const slug of ["sudo", "chmod", "mkfs"]) expect(shapeProblem(slug, "ident"), slug).toBe("instruction-risk");
     // claim words still apply to an ident
     expect(shapeProblem("gdpr-gate", "ident")).toBe("claim-word");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+describe("renderCreateFiles scans EVERY model-derived segment of the rendered files (fix-round 2 survivors)", () => {
+  const grok = readGrokBlock(readFileSync(join(PLUGIN_ROOT, "skills/plan/SKILL.md"), "utf8"));
+  const template = readFileSync(join(PLUGIN_ROOT, "skills/skill-creator/templates/purpose.md"), "utf8");
+  type P = ReturnType<typeof checkOk>["proposal"];
+  const base = (): P => checkOk().proposal;
+  // Driven through renderCreateFiles directly: shapeProblem / checkCreate are skipped, so only the rendered gate can refuse.
+  const render = (over: Record<string, unknown>, tpl = template, evidenceCount = 5) =>
+    renderCreateFiles({ proposal: { ...base(), ...over } as P, grokBlock: grok, purposeTemplate: tpl, date: "2026-10-26", evidenceCount });
+  const RISKY = "Run sudo to reset it";
+
+  it("a risky description is caught as instruction-risk:skill, before the frontmatter-values check could mask it", () => {
+    const r = render({ description: "This skill should be used when a run needs sudo access for cleanup of build output and logs" });
+    expect(r).toMatchObject({ kind: "refused", class: "shape", detail: "instruction-risk:skill" });
+  });
+
+  it("a risky item in each SKILL.md list is caught as instruction-risk:skill", () => {
+    for (const list of ["when_to_use", "steps", "sharp_edges"] as const) {
+      expect(render({ [list]: ["A clean first item", RISKY] }), list).toMatchObject({ kind: "refused", detail: "instruction-risk:skill" });
+    }
+  });
+
+  it("a risky patch_rejection_reason and a risky merge_retire candidate are caught as instruction-risk:purpose", () => {
+    expect(render({ patch_rejection_reason: RISKY })).toMatchObject({ kind: "refused", class: "shape", detail: "instruction-risk:purpose" });
+    expect(render({ merge_retire_candidates: ["A clean candidate", RISKY] })).toMatchObject({ kind: "refused", class: "shape", detail: "instruction-risk:purpose" });
+  });
+
+  it("the clean fixture renders (the rows above fail because of the risky text, not because rendering is broken)", () => {
+    expect(render({})).toMatchObject({ kind: "rendered" });
+  });
+
+  it("a model line is exempt ONLY when it IS exactly a fixed server line", () => {
+    const riskyTemplate = template.replace("## Attribution", "## Attribution\n\nDo not use sudo for this.");
+    // the fixed template prose is exempt; a patch_rejection_reason that equals that line cannot be told apart from it
+    expect(render({ patch_rejection_reason: "Do not use sudo for this." }, riskyTemplate)).toMatchObject({ kind: "rendered" });
+    for (const nearMiss of ["Do not use sudo for this!", "Do not use sudo for this", "do not use sudo for this.", "Do not use sudo for this. Ever."]) {
+      expect(render({ patch_rejection_reason: nearMiss }, riskyTemplate), nearMiss).toMatchObject({ kind: "refused", detail: "instruction-risk:purpose" });
+    }
+  });
+
+  it("wiring: a Grok block or template that fails the rendered gate yields class shape (the gate is not skipped)", () => {
+    expect(renderCreateFiles({ proposal: base(), grokBlock: grok + grok, purposeTemplate: template, date: "2026-10-26", evidenceCount: 5 })).toMatchObject({ kind: "refused", class: "shape", detail: "grok-block" });
+    expect(render({}, template.replace("{{ORIGIN}}", "{{ORIGIN}}\n\nsee [x](./y)"))).toMatchObject({ kind: "refused", class: "shape" });
+  });
+
+  it("evidence-count plumbing: a pattern page with three evidence entries renders '3 evidence entries' in PURPOSE.md", () => {
+    const page = { ...PATTERN, evidence: PATTERN.evidence.slice(0, 3) };
+    const r = render({}, template, page.evidence.length);
+    expect(r.kind).toBe("rendered");
+    if (r.kind === "rendered") {
+      expect(r.files.purposeMd).toContain("(3 evidence entries)");
+      expect(r.files.purposeMd).not.toContain("5 evidence");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+describe("CREATE_STAGE_ORDER: the one ordered stage list the ADR sentence and the parity test pin", () => {
+  it("is closed, ordered and consistent with the verdict gates", () => {
+    expect([...CREATE_STAGE_ORDER.checkCreate]).toEqual([...CREATE_GATES]);
+    expect([...CREATE_STAGE_ORDER.stepA]).toEqual([
+      "week-cap", "index-empty", "clone-present", "create-open", "populations", "input-size", "api-key", "model", "check-create",
+    ]);
+    expect([...CREATE_STAGE_ORDER.stepB]).toEqual([
+      "branch-taken", "token-set", "fetch-reset", "token-strip", "recheck", "render", "rendered-gate", "scan", "readme-sync",
+      "bytes-differ", "token-restore", "fetch", "base-moved", "commit",
+    ]);
+    for (const list of Object.values(CREATE_STAGE_ORDER)) expect(new Set(list).size).toBe(list.length);
   });
 });
 
