@@ -347,8 +347,8 @@ logs:
   retention:       "Better Stack Logs retention; journald persistent per terraform_data.journald_persistent"
 
 discoverability_test:
-  command:         "grep -c \"unpinned_url\" apps/web-platform/infra/betterstack-logs-alerts.tf"
-  expected_output: "2"
+  command:         "grep -q unpinned_url apps/web-platform/infra/betterstack-logs-alerts.tf && printf 'ok'"
+  expected_output: "ok"
 ```
 
 ## Post-merge verification (no SSH; run by `soleur:postmerge`)
@@ -487,7 +487,7 @@ No ledger row required: `logtail_exploration*` is a non-store resource type (ale
 - **`if ! probe; then` destroys the exit code.** The F7 detail needs the real `rc`, so the block must restructure to `if probe; then :; else rc=$?` — an `else` after a non-negated `if` keeps `set -e` semantics identical.
 - **The env-file key set does NOT change** — `GIT_DATA_HEARTBEAT_URL_KEY=GIT_DATA_HEARTBEAT_URL` is already baked by both writers (server.tf + envwrite); `fresh-boot-parity.test.sh` §12 must stay green without edits.
 - **Mutation rows anchored on "the unfixed sibling" die with this diff** — `drop-wrapper-ack`, `ack-extra-name`, G1.6/G1.10/G1.10b/G1.10c must be re-scoped in the same edit or the suite self-aborts on missing anchors (`SystemExit`), which reads as suite-broken not suite-red.
-- **`expected_output "2"` for the discoverability probe** counts `unpinned_url` occurrences in the .tf (locals SQL + alert comment/name) — if the implementer writes the word more places, bump the literal; it is a presence signal, not a count invariant.
+- **The discoverability probe is a presence check** — `grep -q … && printf 'ok'` with literal `ok`, not a count; a count literal would drift the first time the word appears in an extra comment.
 - **Two merge-queue PRs ahead carry test-red fixes** — rebase before queue join; the diff must not add new deploy-script-tests reds on main (constraint, restated).
 - **A plan whose `## User-Brand Impact` section is empty or omits the threshold fails deepen-plan Phase 4.6** — filled above with the sensitive-path scope-out bullet.
 - **Apply the F6 retro verbatim:** sweep stale prose by CLAIM (grep the noun), not by files touched; the parity/body-clause/hostile-fixture rows are not optional "lean port" cuts.
@@ -502,3 +502,48 @@ No ledger row required: `logtail_exploration*` is a non-store resource type (ale
 - ADRs: ADR-202 (refusal reach incl. unit wrapper — amended in-plan), ADR-218 (logtail alert class/free-tier), ADR-280 (credentials reach curl on stdin config), ADR-154 (bridge vs bridge-less apply stages), ADR-147.
 - Learnings: `2026-10-25-third-copy-of-a-security-guard-needs-a-parity-row.md`, `security-issues/2026-10-19-a-hostile-fixture-must-put-the-payload-in-the-value-the-fix-reads.md`, `test-failures/2026-10-20-a-privacy-narrowing-of-my-env-dump-by-name-removed-the-property-the-row-tested.md`, `2026-09-22-my-sweep-was-keyed-on-a-literal-and-the-claim-had-another-spelling.md`, `2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
 - Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` (standing alarms + unpinned_url decode at ~:1194-1207); `apply-web-platform-infra-job-rationale.md`, `monitor-send-failed-alert.md`.
+
+## Network-Outage Deep-Dive (deepen-plan Phase 4.5 — resource-shape trigger)
+
+The plan consumes `terraform_data.git_data_probe_install` (`connection { type = "ssh" }` +
+`provisioner "file"`/`"remote-exec"`): the per-merge apply's SSH leg is a hard delivery dependency.
+This is not an incident diagnosis — the path is unchanged and already carried #10637's identical
+delivery — so each layer's status is recorded as verification-by-artifact or explicit opt-out:
+
+1. **L3 firewall allow-list** — the apply's SSH is runner → `hcloud_server.web["web-1"].ipv4_address`
+   on the managed fleet firewall, not operator egress (admin-IP drift class does not apply; the
+   fleet's inbound rules are Terraform-managed and unchanged by this diff). [opt-out: existing
+   delivery path, unmodified; last identical delivery = #10637 merged apply]
+2. **L3 DNS/routing** — the connection targets a literal `ipv4_address` from state, no DNS.
+   [verified by resource shape: `server.tf:1309`]
+3. **L7 TLS/proxy** — not an HTTPS path. [n/a]
+4. **L7 application layer** — the SSH path is pinned (`host_key = local.web_1_ssh_host_key`,
+   `script_path` under `/root`); failure surface is a red apply run with `git_data_probe_install`
+   tainted, not a diagnostic mystery. Recovery is the runbook-documented one: push a fix commit or
+   `gh workflow run apply-web-platform-infra.yml --ref main -f reason='re-deliver'` — never
+   `gh run rerun --failed` (re-runs the old merge ref). [verified: betterstack-log-query.md:~1182]
+
+Residual risk accepted: an SSH interruption mid-apply leaves the resource tainted and the next
+apply retries delivery at the same content hash — no partial-state hazard (oneshot unit, timer
+re-enabled at provisioner end).
+
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Gates run:** 4.4 Precedent-diff (entire change is pattern-bound to the merged #10637/#10363 sibling contract — the plan's precedent is the sibling diff itself, cited throughout), 4.5 Network-outage (fired on the resource-shape trigger; subsection above), 4.55 Downtime (not triggered — no replace/lock/dropped-connection op; oneshot unit re-delivered between ticks), 4.6 User-Brand (pass; `none` with the sensitive-path scope-out bullet), 4.7 Observability (pass; 5 fields, probe verb `grep`, literal `expected_output: "ok"`, <15 s), 4.8 PAT (pass; no hits), 4.9 UI-wireframe (skipped; no UI-surface file), 4.10 Encryption Posture (pass; section declares no new store/connection with posture of touched connections), 4.11 Guard Contract (`scripts/lint-guard-contract.py` green — 4 guard entries), 4.12 Scope Check (1 unfenced section, all asks mapped or justified-inferred, single-PR recommendation), 4.13 Task Design (not triggered — the `logtail_exploration_alert` is a vendor alert object, not an autonomous-task surface; it notifies humans, it does no work).
+**Verification instead of agent fan-out:** this subagent context has no Task/spawn surface, so the Phase 2-6 fan-outs (skills, learnings, per-section research, review agents) could not spawn. Every claim was verified directly instead — the proportionate-depth approach the F6 sibling plan also took — with full file reads, greps, `gh`, and the mechanical gate runs above. The five technical forks that would have gone to CTO rulings are persisted as `pending - assumed` rows in `specs/feat-one-shot-9639-probe-residuals/decision-challenges.md`.
+
+### Key improvements over the first draft
+
+1. The F6 arm is bigger than the brief stated: the script has NO xtrace refusal at all (the brief assumed one existed), so it gains both halves of the sibling contract — refusal AND post-refusal key resolution — plus the unconditional-vs-conditional form ruling.
+2. The "extend test coverage" ask is inverted by measurement: the suite already enforces the invariant — the unit is exempted by a cardinality-pinned ack whose own `wrapper_stale` check *forces* the drain in the same diff; the harder work is re-scoping the mutation rows anchored on "the unfixed sibling".
+3. F8's real surface is the 7-step recipe, not the two resources: `-target=` allowlist lines, drift-guard suite, runbook, standing-alarms row, and the 17→18 exploration-count pin are all load-bearing deliverables.
+4. F7 needs the `if ! probe` → `if probe … else rc=$?` restructure: the negated form destroys the exit code the detail file must carry (78 vs 1 discrimination).
+5. No host replace and no env-file change: the `GIT_DATA_HEARTBEAT_URL_KEY` identity mapping is already baked by both writers; propagation is the routine per-merge apply (hash-triggered re-delivery to web-1, baked files for fresh hosts).
+
+### New considerations discovered
+
+- Open code-review issue #11171 (inner-c grammar scope-out) touches the same suite — acknowledged, not folded (different stage); the INNER_C comments citing the git-data unit update in-diff.
+- ADR-202's addendum names the unfixed units — it goes stale on merge and is amended in-plan per `wg-architecture-decision-is-a-plan-deliverable`.
+- The alert must NOT carry a `host_name` conjunct — the refusal fires on either web host; the #8706 conjunct trap cuts the other way here.
+- `decision-challenges.md` rows are machine-gated (sharp-edge catalogue ~:311): canonical `| Item | Class | Ruling |` header, 3 cells, no literal `|`; `pending - assumed` rows will be flagged by `technical-ruling-gate.sh` for real CTO rulings before ship.
