@@ -210,7 +210,7 @@ export function causeToken(err: unknown): string {
 
 export type OpenCreateProbe =
   | { kind: "none" }
-  | { kind: "open"; pr: number }
+  | { kind: "open" }
   | { kind: "unverifiable"; detail: "list-failed" | "list-incomplete"; cause?: string };
 
 interface ListedPr {
@@ -259,7 +259,7 @@ export async function findOpenCreatePr(octokit: ArmOctokit, owner: string, repo:
     for (const pr of data as ListedPr[]) {
       const ref = headRef(pr);
       if (ref !== null && ref.startsWith(CREATE_HEAD_PREFIX) && typeof pr.body === "string" && pr.body.includes(CREATE_PR_BODY_LINE) && headIsThisRepo(pr, owner, repo)) {
-        return { kind: "open", pr: Number.isInteger(pr.number) ? (pr.number as number) : 0 };
+        return { kind: "open" };
       }
     }
     if (data.length < PR_PAGE_SIZE) return { kind: "none" };
@@ -445,7 +445,7 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
 // Step B -- create-persist
 // =============================================================================
 
-export type CreatePersistResult = { kind: "opened"; pr?: number; resumed?: true } | CreateRefusal;
+export type CreatePersistResult = { kind: "opened"; pr?: number } | CreateRefusal;
 
 export type CreateVerdictCreate = Extract<CreateVerdict, { kind: "create" }>;
 
@@ -622,7 +622,10 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
     if (Array.isArray(own.data) && own.data.length > 0) {
       const hit = own.data[0] as { number?: unknown; body?: unknown };
       const pr = Number.isInteger(hit.number) ? (hit.number as number) : undefined;
-      if (typeof hit.body === "string" && hit.body.includes(CREATE_PR_BODY_LINE)) return { kind: "opened", ...(pr === undefined ? {} : { pr }), resumed: true };
+      if (typeof hit.body === "string" && hit.body.includes(CREATE_PR_BODY_LINE)) {
+        a.logger.info({ fn: CREATE_ARM_FEATURE, hash: v.clusterHash, pr }, "create-resumed"); // success, not a second PR; the marker reads like a fresh open
+        return { kind: "opened", ...(pr === undefined ? {} : { pr }) };
+      }
       return fail("persist", "branch-taken", { numbers: pr === undefined ? undefined : { pr } });
     }
   } catch (err) {

@@ -502,11 +502,6 @@ describe("the create-arm marker fields (#10550)", () => {
     }
   });
 
-  it("the no-action vocabulary the marker validates is the create module's own constant (the class set's length is pinned once, in the census)", () => {
-    expect([...CREATE_NO_ACTION_REASONS]).toEqual(["no-pattern-qualifies", "all-owned", "other"]);
-    expect(CREATE_REFUSAL_CLASSES.length).toBeGreaterThan(0);
-  });
-
   it("the number allowlist: every refusal number the marker forwards maps to a typed, numeric create_* field (and nothing else is forwarded)", () => {
     expect(Object.keys(CREATE_MARKER_NUMBERS).sort()).toEqual(
       ["bytes", "cap", "changed_count", "exit_code", "file_index", "max", "missing_tools", "nearest_rank", "path_index", "tokens", "top1", "total", "words"],

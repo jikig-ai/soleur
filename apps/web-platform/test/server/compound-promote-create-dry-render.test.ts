@@ -269,11 +269,12 @@ describe("the repository's own CI checks, run unmodified over the tree with the 
   });
 
   const mdl = join(REPO_ROOT, "node_modules", ".bin", "markdownlint");
-  it("markdownlint (the repo's pinned binary and config) is clean on the generated markdown", () => {
+  it("markdownlint (the repo's pinned binary and config) is clean on the generated markdown", (ctx) => {
     if (!existsSync(mdl)) {
-      // Locally an absent binary is a skip; in CI it is a FAILURE (a silent skip would let the lint surface go unchecked).
+      // Locally an absent binary is a SKIP (visible as skipped); in CI it is a FAILURE (a silent skip would let the lint
+      // surface go unchecked).
       expect(process.env.CI, "markdownlint must be installed where CI runs this suite").toBeFalsy();
-      return;
+      ctx.skip();
     }
     const r = sh(mdl, ["--config", join(REPO_ROOT, ".markdownlint.json"), `plugins/soleur/skills/${SLUG}/SKILL.md`, `plugins/soleur/skills/${SLUG}/PURPOSE.md`], tree);
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);

@@ -93,13 +93,13 @@ describe("findOpenCreatePr -- one open create at a time", () => {
 
   it("finds a PR by head-ref prefix plus the fixed body line, by literal-route GET /pulls with state=open", async () => {
     const { octokit, calls } = octokitOf([[pr(1, "edit"), pr(2, `${CREATE_PR_BODY_LINE}\nrest`)]]);
-    expect(await findOpenCreatePr(octokit, "o", "r")).toEqual({ kind: "open", pr: 2 });
+    expect(await findOpenCreatePr(octokit, "o", "r")).toEqual({ kind: "open" });
     expect(calls[0]).toMatchObject({ route: "GET /repos/{owner}/{repo}/pulls", state: "open", per_page: 100, page: 1 });
   });
 
   it("does NOT depend on the best-effort label: a labelless create PR still counts (a label failure must not allow a second open create)", async () => {
     const labelless = { number: 7, body: CREATE_PR_BODY_LINE, head: { ref: HEAD, repo: { full_name: "o/r" } }, labels: [] };
-    expect(await findOpenCreatePr(octokitOf([[labelless]]).octokit, "o", "r")).toEqual({ kind: "open", pr: 7 });
+    expect(await findOpenCreatePr(octokitOf([[labelless]]).octokit, "o", "r")).toEqual({ kind: "open" });
   });
 
   it("ignores the line on a PR whose head is not a bot branch, a bot branch without the line, and null shapes", async () => {
@@ -118,13 +118,13 @@ describe("findOpenCreatePr -- one open create at a time", () => {
     expect(await findOpenCreatePr(octokit, "o", "r")).toEqual({ kind: "none" });
     // and the same PR from THIS repo is found (the assertion can fail)
     const { octokit: own } = octokitOf([[pr(1, CREATE_PR_BODY_LINE, HEAD, "attacker/r"), pr(9, CREATE_PR_BODY_LINE, HEAD, "o/r")]]);
-    expect(await findOpenCreatePr(own, "o", "r")).toEqual({ kind: "open", pr: 9 });
+    expect(await findOpenCreatePr(own, "o", "r")).toEqual({ kind: "open" });
   });
 
   it("walks pages until a short one; a FULL last allowed page is unverifiable (never inferred clear)", async () => {
     const full = Array.from({ length: 100 }, (_, i) => pr(i + 1, "edit"));
     const { octokit: ok, calls } = octokitOf([full, [pr(500, `${CREATE_PR_BODY_LINE}`)]]);
-    expect(await findOpenCreatePr(ok, "o", "r")).toEqual({ kind: "open", pr: 500 });
+    expect(await findOpenCreatePr(ok, "o", "r")).toEqual({ kind: "open" });
     expect(calls.map((c) => c.page)).toEqual([1, 2]);
     const { octokit: capped } = octokitOf(Array.from({ length: CREATE_OPEN_PR_PAGES }, () => full));
     expect(await findOpenCreatePr(capped, "o", "r")).toEqual({ kind: "unverifiable", detail: "list-incomplete" });
@@ -478,8 +478,14 @@ describe("the PR body and the branch", () => {
 
 // ---------------------------------------------------------------------------------------------------------
 describe("Step B runCreatePersistStep -- guards before any write", () => {
+  // The scratch repoRoot is registered for cleanup HERE, so no test has to remember to.
+  const scratchRoot = (): string => {
+    const d = mkdtempSync(join(tmpdir(), "create-arm-persist-"));
+    roots.push(d);
+    return d;
+  };
   const persistArgs = (over: Record<string, unknown> = {}) => ({
-    repoRoot: mkdtempSync(join(tmpdir(), "create-arm-persist-")),
+    repoRoot: scratchRoot(),
     installationToken: "t",
     runStartedAt: "2026-10-26T10:00:00.000Z",
     octokit: { request: async () => ({ data: [] }), graphql: async () => ({}) } as never,
@@ -495,21 +501,18 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
 
   it("a hit on our own open PR (deterministic head) is success with NO commit", async () => {
     const a = persistArgs({ octokit: { request: async () => ({ data: [{ number: 9, body: `${CREATE_PR_BODY_LINE}\nrest` }] }), graphql: async () => ({}) } });
-    roots.push(a.repoRoot);
-    expect(await runCreatePersistStep(a as never)).toEqual({ kind: "opened", pr: 9, resumed: true });
+    expect(await runCreatePersistStep(a as never)).toEqual({ kind: "opened", pr: 9 });
     expect(a.safeCommit).not.toHaveBeenCalled();
   });
 
   it("A: a hit that is an EDIT PR (same branch shape, no CREATE line in the body) is NOT resumed: persist/branch-taken, no commit", async () => {
     const a = persistArgs({ octokit: { request: async () => ({ data: [{ number: 9, body: "Tier: agents-core. Cluster-Hash: x" }] }), graphql: async () => ({}) } });
-    roots.push(a.repoRoot);
     const v = await runCreatePersistStep(a as never);
     expect(v).toEqual({ kind: "refused", class: "persist", detail: "branch-taken", numbers: { pr: 9 } });
     expect(a.safeCommit).not.toHaveBeenCalled();
     expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: CREATE_REFUSED_OP, tags: { class: "persist" } }));
     // a body that is not a string at all is not a create PR either
     const b = persistArgs({ octokit: { request: async () => ({ data: [{ number: 10, body: null }] }), graphql: async () => ({}) } });
-    roots.push(b.repoRoot);
     expect(await runCreatePersistStep(b as never)).toMatchObject({ class: "persist", detail: "branch-taken" });
   });
 
@@ -523,7 +526,6 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
 
   it("a failed own-PR lookup is mirrored and does NOT end the step (the branch-exists probe before the commit is what stops a second push)", async () => {
     const a = persistArgs({ octokit: { request: async () => { throw Object.assign(new Error("502"), { status: 502 }); }, graphql: async () => ({}) } });
-    roots.push(a.repoRoot);
     // The directory is not a git clone, so the step then refuses at the clean-main guard, before any write.
     const v = await runCreatePersistStep(a as never);
     expect(v).toMatchObject({ kind: "refused", class: "persist", detail: "clone-not-clean" });
@@ -533,7 +535,6 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
 
   it("a directory that is not a clean clone refuses persist without writing a single file", async () => {
     const a = persistArgs();
-    roots.push(a.repoRoot);
     const v = await runCreatePersistStep(a as never);
     expect(v).toMatchObject({ kind: "refused", class: "persist", detail: "clone-not-clean" });
     expect(a.safeCommit).not.toHaveBeenCalled();
@@ -541,7 +542,6 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
 
   it("a verdict whose cluster hash is not 64 lowercase hex cannot form a branch (branch-shape)", async () => {
     const a = persistArgs();
-    roots.push(a.repoRoot);
     (a.verdict as { clusterHash: string }).clusterHash = "NOT-A-HASH";
     expect(await runCreatePersistStep(a as never)).toMatchObject({ class: "persist", detail: "branch-shape" });
   });

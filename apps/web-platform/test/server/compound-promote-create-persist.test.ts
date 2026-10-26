@@ -19,7 +19,6 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { parse as parseYaml } from "yaml";
 
 vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
@@ -65,15 +64,13 @@ import {
   createPathList,
   proposalOverlapText,
   rankOverlap,
-  type SkillRecord,
 } from "@/server/compound-promote-create";
 import type { PatternPage } from "@/server/compound-promote-patterns";
 import { gitFixture } from "../../../../plugins/soleur/test/lib/git-fixture-env";
+import { buildSyntheticPluginTree, skillMd } from "../helpers/compound-promote-tree";
 
-const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const FIX = join(__dirname, "..", "fixtures", "compound-promote-create");
 const PROPOSAL = JSON.parse(readFileSync(join(FIX, "proposal.json"), "utf8")) as Record<string, unknown>;
-const FIXTURE_SKILLS = JSON.parse(readFileSync(join(FIX, "skills.json"), "utf8")) as SkillRecord[];
 const SLUG = String(PROPOSAL.slug);
 const PATTERN: PatternPage = {
   slug: String(PROPOSAL.pattern_slug), title: "Synthetic", summary: "Synthetic summary.", status: "open", openedOn: "2026-10-01", tags: ["retry"],
@@ -96,8 +93,6 @@ const cleanEnv = (): NodeJS.ProcessEnv => {
 };
 
 let template = "";
-const skillMd = (name: string, description: string, off = false) =>
-  ["---", `name: ${name}`, `description: ${JSON.stringify(description)}`, ...(off ? ["disable-model-invocation: true"] : []), "---", "", `# ${name}`, ""].join("\n");
 
 beforeAll(() => {
   template = tmp("create-persist-template-x-access-token-");
@@ -107,24 +102,7 @@ beforeAll(() => {
     mkdirSync(dirname(join(template, p)), { recursive: true });
     writeFileSync(join(template, p), t);
   };
-  const realPlan = readFileSync(join(REPO_ROOT, "plugins/soleur/skills/plan/SKILL.md"), "utf8");
-  const planFm = /^---\n([\s\S]*?)\n---\n?/.exec(realPlan)?.[1] ?? "";
-  const planDesc = String((parseYaml(planFm) as { description?: unknown }).description ?? "");
-  const records: SkillRecord[] = FIXTURE_SKILLS.filter((s) => s.name !== "plan");
-  for (const s of records) put(`plugins/soleur/skills/${s.name}/SKILL.md`, skillMd(s.name, s.description, s.disableModelInvocation));
-  put("plugins/soleur/skills/plan/SKILL.md", realPlan);
-  records.push({ name: "plan", description: planDesc, disableModelInvocation: false });
-  for (let i = 0; i < 40; i++) {
-    const name = `filler-topic-${i}`;
-    const description = `This skill should be used when handling the unrelated filler topic number ${i} in a synthetic fixture tree.`;
-    put(`plugins/soleur/skills/${name}/SKILL.md`, skillMd(name, description));
-    records.push({ name, description, disableModelInvocation: false });
-  }
-  put("plugins/soleur/skills/skill-creator/templates/purpose.md", readFileSync(join(REPO_ROOT, "plugins/soleur/skills/skill-creator/templates/purpose.md"), "utf8"));
-  for (let i = 0; i < 30; i++) put(`plugins/soleur/agents/engineering/synthetic-agent-${i}.md`, "---\nname: x\n---\n");
-  for (let i = 0; i < 50; i++) put(`plugins/soleur/cursor/skills/soleur-stub-${i}/SKILL.md`, "stub\n");
-  const total = records.filter((r) => !r.disableModelInvocation).reduce((n, r) => n + r.description.split(/\s+/).filter(Boolean).length, 0);
-  put("plugins/soleur/test/components.test.ts", `// history: 1 -> 2\nconst SKILL_DESCRIPTION_WORD_BUDGET = ${total + 40};\n`);
+  buildSyntheticPluginTree(put);
   put(README, "Soleur: 99 skills\n");
   put(PLUGIN_README, "| Skills | 99 |\n");
   put(PROMOTION_LOG_PATH, "| date | hash | target | n | status | tier | pr |\n");
@@ -268,7 +246,7 @@ describe("R4 -- the token is not in .git/config while any create-arm script runs
   it("a refusal still strips the token (the scanner refused)", async () => {
     const w = world();
     const v = await propose(w);
-    h.scan.mockResolvedValue({ ok: false, detail: "high-risk", path: "p", fileIndex: 0, exit: 0 });
+    h.scan.mockResolvedValue({ ok: false, detail: "high-risk", fileIndex: 0, exit: 0 });
     const r = await runCreatePersistStep(persistArgs(w, v));
     expect(r).toMatchObject({ kind: "refused", class: "scan", detail: "high-risk", numbers: { file_index: 0, exit_code: 0 } });
     expect(w.config()).not.toContain("x-access-token");
@@ -329,38 +307,29 @@ describe("R5 -- the stale depth-1 clone is refreshed to main before the render",
     expect(a.safeCommit).not.toHaveBeenCalled();
   });
 
-  it("the base moving DURING the gates (a README the sync used) refuses persist/base-moved with the changed count; no commit", async () => {
+  // Another PR merges `file` while the scanner runs; only the four base files (and a new-slug dir) refuse.
+  it.each([
+    [PLUGIN_README, "| Skills | 99 |\n| Agents | 5 |\n", 1],
+    [README, "Soleur: 99 skills\nMerged line from another PR\n", 1],
+    ["plugins/soleur/test/components.test.ts", "const SKILL_DESCRIPTION_WORD_BUDGET = 9999;\n", 1],
+    [PROMOTION_LOG_PATH, "| date | hash | target | n | status | tier | pr |\n| 2026-10-26 | h | t | 5 | merged | skill | #1 |\n", 1],
+    ["docs/unrelated.md", "changed\n", 0],
+  ])("the base moving DURING the gates: %s changed -> %i blob(s) moved (0 = no refusal)", async (file, text, movedCount) => {
     const w = world();
     const v = await propose(w);
-    h.scan.mockImplementation(async (o: { repoRoot: string }) => {
-      h.configAt.scan.push(readFileSync(join(o.repoRoot, ".git", "config"), "utf8"));
-      w.advance({ [PLUGIN_README]: "| Skills | 99 |\n| Agents | 5 |\n" }); // another PR merges while the scanner runs
+    h.scan.mockImplementation(async () => {
+      w.advance({ [file]: text });
       return { ok: true };
     });
     const a = persistArgs(w, v);
     const r = await runCreatePersistStep(a);
-    expect(r).toEqual({ kind: "refused", class: "persist", detail: "base-moved", numbers: { changed_count: 1 } });
+    if (movedCount === 0) {
+      expect(r).toEqual({ kind: "opened", pr: 77 });
+      return;
+    }
+    expect(r).toEqual({ kind: "refused", class: "persist", detail: "base-moved", numbers: { changed_count: movedCount } });
     expect(a.safeCommit).not.toHaveBeenCalled();
     expect(w.config()).not.toContain("x-access-token");
-  });
-
-  it("the root README, the cap file or the promotion log moving during the gates refuses too; an unrelated file moving does not", async () => {
-    for (const [file, text, refused] of [
-      [README, "Soleur: 99 skills\nMerged line from another PR\n", true],
-      ["plugins/soleur/test/components.test.ts", "const SKILL_DESCRIPTION_WORD_BUDGET = 9999;\n", true],
-      [PROMOTION_LOG_PATH, "| date | hash | target | n | status | tier | pr |\n| 2026-10-26 | h | t | 5 | merged | skill | #1 |\n", true],
-      ["docs/unrelated.md", "changed\n", false],
-    ] as const) {
-      const w = world();
-      const v = await propose(w);
-      h.scan.mockImplementation(async () => {
-        w.advance({ [file]: text });
-        return { ok: true };
-      });
-      const r = await runCreatePersistStep(persistArgs(w, v));
-      expect(r.kind, file).toBe(refused ? "refused" : "opened");
-      if (refused) expect(r).toMatchObject({ class: "persist", detail: "base-moved" });
-    }
   });
 
   it("a failing fetch is persist/fetch-failed (the remote is gone) with the git exit as evidence; the token is stripped and NOTHING of git's stderr reaches Sentry", async () => {
@@ -589,7 +558,7 @@ describe("D -- the bytes committed are the bytes gated", () => {
     const r = await runCreatePersistStep(persistArgs(w, v));
     expect(r).toEqual({ kind: "refused", class: "scan", detail: "missing-tool", numbers: { missing_tools: 2 } });
     expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ extra: expect.objectContaining({ missing_tool_names: ["jq", "cut"] }) }));
-    h.scan.mockResolvedValue({ ok: false, detail: "non-zero", path: "p", fileIndex: 1, exit: 3, signal: "SIGKILL" });
+    h.scan.mockResolvedValue({ ok: false, detail: "non-zero", fileIndex: 1, exit: 3, signal: "SIGKILL" });
     const w2 = world();
     const r2 = await runCreatePersistStep(persistArgs(w2, await propose(w2)));
     expect(r2).toEqual({ kind: "refused", class: "scan", detail: "non-zero", numbers: { file_index: 1, exit_code: 3 } });
@@ -624,7 +593,7 @@ describe("G -- one deadline, a lost clone, a short-circuiting restore", () => {
     let clock = 5_000;
     h.scan.mockImplementation(async () => {
       clock += CREATE_PERSIST_DEADLINE_MS + 5;
-      return { ok: false, detail: "timeout", path: "p", fileIndex: 0 };
+      return { ok: false, detail: "timeout", fileIndex: 0 };
     });
     expect(await runCreatePersistStep(persistArgs(w, v, { now: () => clock }))).toEqual({ kind: "refused", class: "persist", detail: "deadline" });
   });
@@ -668,30 +637,18 @@ describe("JSON-plain step results (memoized, under the 1 MiB step output bound)"
     return s.slice(0, n).trim();
   };
 
-  it("the MAXIMUM-size proposal verdict round-trips through JSON unchanged and stays far under 1 MiB", async () => {
+  it("the MAXIMUM-size verdict and every persist result (opened, resumed, refused with numbers) round-trip through JSON unchanged, far under 1 MiB", async () => {
     const w = world();
     const items = (seed: string) => Array.from({ length: CREATE_LIST_MAX_ITEMS }, (_, i) => `${long(`${seed}${"abcdef"[i]}`, CREATE_ITEM_MAX_CHARS - 1)}x`.slice(0, CREATE_ITEM_MAX_CHARS));
     const v = await propose(w, {
-      patch_rejection_reason: long("Qlorem", CREATE_FIELD_MAX_CHARS),
-      when_to_use: items("Wzz"),
-      steps: items("Szz"),
-      sharp_edges: items("Ezz"),
-      merge_retire_candidates: items("Mzz"),
+      patch_rejection_reason: long("Qlorem", CREATE_FIELD_MAX_CHARS), when_to_use: items("Wzz"), steps: items("Szz"), sharp_edges: items("Ezz"), merge_retire_candidates: items("Mzz"),
     });
-    expect(JSON.parse(JSON.stringify(v))).toEqual(v);
-    expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeLessThan(1024 * 1024);
-    expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeGreaterThan(4000); // the proposal really is large
-  });
-
-  it("the persist results (opened, resumed, refused with numbers) round-trip unchanged", async () => {
-    const w = world();
-    const v = await propose(w);
     const opened = await runCreatePersistStep(persistArgs(w, v));
-    expect(opened).toEqual({ kind: "opened", pr: 77 });
     const refused = await runCreatePersistStep(persistArgs(world(), v, { verdict: { ...v, clusterHash: "NOT-A-HASH" } }));
-    for (const r of [opened, refused, { kind: "opened", pr: 9, resumed: true }]) {
+    for (const r of [v, opened, refused, { kind: "opened", pr: 9 }]) {
       expect(JSON.parse(JSON.stringify(r))).toEqual(r);
       expect(Buffer.byteLength(JSON.stringify(r), "utf8")).toBeLessThan(1024 * 1024);
     }
+    expect(Buffer.byteLength(JSON.stringify(v), "utf8")).toBeGreaterThan(4000); // the proposal really is large
   });
 });

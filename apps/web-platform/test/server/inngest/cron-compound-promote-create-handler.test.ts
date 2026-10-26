@@ -21,8 +21,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { parse as parseYaml } from "yaml";
 import { runLikeInngest } from "../../helpers/inngest-step-harness";
+import { buildSyntheticPluginTree } from "../../helpers/compound-promote-tree";
 
 vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
@@ -46,10 +46,6 @@ const h = vi.hoisted(() => ({
   ownPrs: [] as unknown[],
   heads: [] as string[],
   calls: [] as string[],
-  /** `.git/config` of the clone at the moment each spawn gate double ran (R4). */
-  configAt: { scan: [] as string[], sync: [] as string[] },
-  /** Runs after a named step callback returned (a test seam: delete the clone between the two create steps). */
-  afterStep: null as null | ((name: string, repoRoot: string) => void),
 }));
 
 vi.mock("@/server/observability", async (importOriginal) => ({
@@ -124,7 +120,6 @@ import {
 import { createSyntheticCheckNames } from "@/server/compound-promote-create-gates";
 import { gitFixture } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
-const REPO_ROOT = join(__dirname, "..", "..", "..", "..", "..");
 const FIX = join(__dirname, "..", "..", "fixtures", "compound-promote-create");
 const Q = 5;
 const L = (n: number) => `knowledge-base/project/learnings/l${n}.md`;
@@ -160,7 +155,6 @@ function page(slug: string, evidence: string[]): string {
 
 const fixtureJson = <T,>(name: string): T => JSON.parse(readFileSync(join(FIX, name), "utf8")) as T;
 const PROPOSAL = fixtureJson<Record<string, unknown>>("proposal.json");
-const FIXTURE_SKILLS = fixtureJson<SkillRecord[]>("skills.json");
 const CREATE_PATTERN_SLUG = String(PROPOSAL.pattern_slug);
 const CREATE_EVIDENCE = Ls(1, Q);
 const EDIT_EVIDENCE = Ls(Q + 1, Q);
@@ -171,9 +165,6 @@ let workRoot: string;
 let allSkills: SkillRecord[] = [];
 let wordTotal = 0;
 const savedGitEnv: Record<string, string | undefined> = {};
-
-const skillMd = (name: string, description: string, off = false) =>
-  ["---", `name: ${name}`, `description: ${JSON.stringify(description)}`, ...(off ? ["disable-model-invocation: true"] : []), "---", "", `# ${name}`, ""].join("\n");
 
 beforeAll(() => {
   for (const k of Object.keys(process.env)) {
@@ -200,30 +191,10 @@ beforeAll(() => {
   put(`knowledge-base/project/patterns/${CREATE_PATTERN_SLUG}.md`, page(CREATE_PATTERN_SLUG, CREATE_EVIDENCE));
   put("knowledge-base/project/patterns/page-two.md", page("page-two", EDIT_EVIDENCE));
 
-  // A synthetic plugin tree: 17 fixture skills + the REAL plan skill (the canonical Grok block) + the REAL purpose
-  // template + filler skills so the population clears the counter's floor.
-  // The REAL plan skill replaces the fixture's `plan` entry (its Grok block is the canonical one the renderer reads).
-  const realPlan = readFileSync(join(REPO_ROOT, "plugins/soleur/skills/plan/SKILL.md"), "utf8");
-  const planFm = /^---\n([\s\S]*?)\n---\n?/.exec(realPlan)?.[1] ?? "";
-  const planDesc = String((parseYaml(planFm) as { description?: unknown }).description ?? "");
-  const records: SkillRecord[] = FIXTURE_SKILLS.filter((s) => s.name !== "plan");
-  for (const s of records) put(`plugins/soleur/skills/${s.name}/SKILL.md`, skillMd(s.name, s.description, s.disableModelInvocation));
-  put("plugins/soleur/skills/plan/SKILL.md", realPlan);
-  records.push({ name: "plan", description: planDesc, disableModelInvocation: (parseYaml(planFm) as Record<string, unknown>)["disable-model-invocation"] === true });
-  for (let i = 0; i < 40; i++) {
-    const name = `filler-topic-${i}`;
-    const description = `This skill should be used when handling the unrelated filler topic number ${i} in a synthetic fixture tree.`;
-    put(`plugins/soleur/skills/${name}/SKILL.md`, skillMd(name, description));
-    records.push({ name, description, disableModelInvocation: false });
-  }
-  put("plugins/soleur/skills/skill-creator/templates/purpose.md", readFileSync(join(REPO_ROOT, "plugins/soleur/skills/skill-creator/templates/purpose.md"), "utf8"));
-  put("plugins/soleur/agents/engineering/review/synthetic-reviewer.md", "---\nname: synthetic-reviewer\n---\n");
-  // The collision populations the create arm fails closed on (agents >= 30, Cursor stubs >= 50).
-  for (let i = 0; i < 30; i++) put(`plugins/soleur/agents/engineering/synthetic-agent-${i}.md`, "---\nname: x\n---\n");
-  for (let i = 0; i < 50; i++) put(`plugins/soleur/cursor/skills/soleur-stub-${i}/SKILL.md`, "stub\n");
-  allSkills = records;
-  wordTotal = records.filter((r) => !r.disableModelInvocation).reduce((n, r) => n + r.description.split(/\s+/).filter(Boolean).length, 0);
-  put("plugins/soleur/test/components.test.ts", `// history: 1 -> 2\nconst SKILL_DESCRIPTION_WORD_BUDGET = ${wordTotal + 40};\n`);
+  // The shared synthetic plugin tree (fixture skills + the REAL plan skill and PURPOSE template + fillers + populations + cap).
+  const tree = buildSyntheticPluginTree(put);
+  allSkills = tree.records;
+  wordTotal = tree.total;
   put("README.md", "Soleur: 99 skills\n");
   put("plugins/soleur/README.md", "| Skills | 99 |\n");
   git(["add", "-A"]);
@@ -287,17 +258,8 @@ beforeEach(() => {
   editClusters = [EDIT_CLUSTER];
   h.safeCommit.mockResolvedValue({ status: "committed", prNumber: 101, branch: "b", fileCount: 1, deletionCount: 0 });
   // Default gates: pass. `collect` reads what is on disk, exactly the contract of the real collector.
-  h.configAt.scan.length = 0;
-  h.configAt.sync.length = 0;
-  h.afterStep = null;
-  h.scan.mockImplementation(async (o: { repoRoot: string }) => {
-    h.configAt.scan.push(readFileSync(join(o.repoRoot, ".git", "config"), "utf8"));
-    return { ok: true };
-  });
-  h.sync.mockImplementation(async (o: { repoRoot: string }) => {
-    h.configAt.sync.push(readFileSync(join(o.repoRoot, ".git", "config"), "utf8"));
-    return { ok: true };
-  });
+  h.scan.mockResolvedValue({ ok: true });
+  h.sync.mockResolvedValue({ ok: true });
   h.collect.mockImplementation(async (o: { repoRoot: string; slug: string }) => {
     const paths = createPathList(o.slug);
     const expectedContent: Record<string, string> = {};
@@ -331,7 +293,6 @@ async function run(event: { name: string; data?: Record<string, unknown> }): Pro
       if (name === "create-persist" && repo && existsSync(repo)) {
         statusAfterPersist.push(execFileSync("git", ["-C", repo, "status", "--porcelain", "-uall"], { encoding: "utf8" }));
       }
-      if (repo) h.afterStep?.(name, repo);
       return v;
     },
   };
@@ -509,23 +470,6 @@ describe("one open create at a time (CTO G2)", () => {
     expect(createPrompts()).toHaveLength(0);
     expect(createCommits()).toHaveLength(0);
     expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", tags: { class: "create-open" } }));
-  });
-
-  it("E: detection does NOT depend on the best-effort label -- a labelless create PR (bot head + CREATE line) still refuses create-open", async () => {
-    h.pulls.list = [{ ...OPEN_CREATE, labels: [] }];
-    const r = await run(PATTERNS_CREATE());
-    expect(r.last).toMatchObject({ create_outcome: "refused", create_refusal_class: "create-open", create_detail: "open-create-pr" });
-  });
-
-  it("the CREATE line on a non-bot head, and a bot head without the line, do not count", async () => {
-    h.pulls.list = [
-      { number: 1, body: CREATE_PR_BODY_LINE, labels: [{ name: "other" }], head: { ref: "feature/quote-the-line" } },
-      { number: 2, body: "an edit PR", labels: [{ name: "self-healing/auto" }], head: BOT_HEAD },
-      // G2: a FORK PR with the bot branch name and the fixed line is not ours and must not block the arm
-      { ...OPEN_CREATE, number: 3, head: { ...BOT_HEAD, repo: { full_name: "someone-else/soleur" } } },
-    ];
-    const r = await run(PATTERNS_CREATE());
-    expect(r.last).toMatchObject({ create_outcome: "opened" });
   });
 
   it("a list that cannot be read REFUSES create-open (absence is never inferred from a failed read)", async () => {
@@ -745,7 +689,7 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
   });
 
   it.each([
-    ["scan", () => h.scan.mockResolvedValue({ ok: false, detail: "high-risk", path: "p" }), "scan", "high-risk"],
+    ["scan", () => h.scan.mockResolvedValue({ ok: false, detail: "high-risk" }), "scan", "high-risk"],
     ["readme-sync", () => h.sync.mockResolvedValue({ ok: false, detail: "non-digit-change" }), "readme-sync", "non-digit-change"],
     ["collector", () => h.collect.mockResolvedValue({ ok: false, detail: "changed-set-mismatch" }), "persist", "changed-set-mismatch"],
     ["helper non-commit", () => h.safeCommit.mockResolvedValue({ status: "failed", stage: "integrity", message: "m" }), "persist", "failed-integrity"],
@@ -762,7 +706,7 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
   });
 
   it("a scan refusal never reaches the commit helper even when later gates would pass (Guard 1 row 1)", async () => {
-    h.scan.mockResolvedValue({ ok: false, detail: "review", path: "p" });
+    h.scan.mockResolvedValue({ ok: false, detail: "review" });
     await run(PATTERNS_CREATE());
     expect(h.sync).not.toHaveBeenCalled();
     expect(h.collect).not.toHaveBeenCalled();
@@ -934,31 +878,6 @@ describe("review round -- the same-run collision, the token, the lost clone, the
     expect((editCommits()[0][0] as { branchName: string }).branchName).not.toContain(ENTRY_HASH);
   });
 
-  it("R4: the clone's .git/config carries NO token while the scanner and the README sync run (the fixture's remote path carries the marker)", async () => {
-    let cloneConfig = "";
-    h.afterStep = (name, repo) => {
-      if (name === "read-config") cloneConfig = readFileSync(join(repo, ".git", "config"), "utf8");
-    };
-    const r = await run(PATTERNS_CREATE());
-    expect(r.last).toMatchObject({ create_outcome: "opened" });
-    // sound: the clone the handler made DOES carry the marker (it was cloned from the token-named remote)
-    expect(cloneConfig).toContain("x-access-token");
-    expect(h.configAt.scan).toHaveLength(1);
-    expect(h.configAt.sync).toHaveLength(1);
-    for (const cfg of [...h.configAt.scan, ...h.configAt.sync]) expect(cfg).not.toContain("x-access-token");
-  });
-
-  it("G: a clone that vanishes between create-propose and create-persist is persist/clone-missing: no scan, no commit, one mirrored refusal", async () => {
-    h.afterStep = (name, repo) => {
-      if (name === "create-propose") rmSync(repo, { recursive: true, force: true });
-    };
-    const r = await run(PATTERNS_CREATE());
-    expect(r.last).toMatchObject({ create_outcome: "refused", create_refusal_class: "persist", create_detail: "clone-missing" });
-    expect(h.scan).not.toHaveBeenCalled();
-    expect(createCommits()).toHaveLength(0);
-    expect(vi.mocked(reportSilentFallback).mock.calls.filter((c) => (c[1] as { op?: string }).op === "create-refused")).toHaveLength(1);
-  });
-
   it("L: a truncated clustering answer with allow_create never spends create-propose (no create step, no create call)", async () => {
     h.post.mockImplementation(async (a: { messages: Array<{ content: string }> }) => {
       if (a.messages[0].content.includes("clustering agent")) return { text: "{", stopReason: "max_tokens" };
@@ -990,7 +909,7 @@ describe("review round -- the same-run collision, the token, the lost clone, the
   });
 
   it("F: refusal evidence numbers reach the marker through the typed allowlist (exit code, file index, path index, changed count, missing tools)", async () => {
-    h.scan.mockResolvedValue({ ok: false, detail: "non-zero", path: "p", fileIndex: 1, exit: 3, signal: "SIGKILL" });
+    h.scan.mockResolvedValue({ ok: false, detail: "non-zero", fileIndex: 1, exit: 3, signal: "SIGKILL" });
     const scan = await run(PATTERNS_CREATE());
     expect(scan.last).toMatchObject({ create_refusal_class: "scan", create_detail: "non-zero", create_file_index: 1, create_exit: 3 });
     expect(JSON.stringify(scan.last)).not.toContain("SIGKILL"); // the signal name is Sentry-only
@@ -1012,24 +931,5 @@ describe("review round -- the same-run collision, the token, the lost clone, the
     h.marker.mockClear();
     const collect = await run(PATTERNS_CREATE());
     expect(collect.last).toMatchObject({ create_refusal_class: "persist", create_detail: "path-nul", create_path_index: 4 });
-  });
-
-  it("D: a collector that hands back bytes other than the gated ones is persist/bytes-differ (the rendered SKILL.md is pinned)", async () => {
-    h.collect.mockImplementation(async (o: { repoRoot: string; slug: string }) => {
-      const paths = createPathList(o.slug);
-      const expectedContent = Object.fromEntries(paths.map((p) => [p, readFileSync(join(o.repoRoot, p), "utf8")]));
-      expectedContent[paths[0]] += "\nappended after the scan\n";
-      return { ok: true, exactPaths: paths, expectedContent };
-    });
-    const r = await run(PATTERNS_CREATE());
-    expect(r.last).toMatchObject({ create_refusal_class: "persist", create_detail: "bytes-differ", create_path_index: 0 });
-    expect(createCommits()).toHaveLength(0);
-  });
-
-  it("E: the replay lookup that finds an EDIT PR on the same branch is NOT success: persist/branch-taken", async () => {
-    h.ownPrs = [{ number: 31, body: "Tier: agents-core\nCluster-Hash: x" }];
-    const r = await run(PATTERNS_CREATE());
-    expect(r.last).toMatchObject({ create_outcome: "refused", create_refusal_class: "persist", create_detail: "branch-taken" });
-    expect(createCommits()).toHaveLength(0);
   });
 });

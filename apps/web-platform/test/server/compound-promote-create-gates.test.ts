@@ -308,13 +308,13 @@ describe("runSkillScan against a stand-in scanner (real spawn)", () => {
 
   it("guard 1 row 1: HIGH-RISK with exit 0 is refused (skipping the verdict comparison would pass it)", async () => {
     const c = fakeClone({ verdict: "# skill-security-scan verdict: HIGH-RISK\n", exit: 0 });
-    expect(await run(c)).toMatchObject({ ok: false, detail: "high-risk", path: "a/SKILL.md", fileIndex: 0, exit: 0 });
+    expect(await run(c)).toMatchObject({ ok: false, detail: "high-risk", fileIndex: 0, exit: 0 });
   });
 
   it("observability: the exit code and the index of the refused file survive (a non-zero exit on the SECOND file)", async () => {
     const c = fakeClone({ verdict: LOW });
     put(c.root, SKILL_SCAN_SCRIPT, `#!/usr/bin/env bash\ncat > /dev/null\nn="$(cat "${c.root}/.count" 2>/dev/null || echo 0)"\necho $((n+1)) > "${c.root}/.count"\nif [ "$n" -ge 1 ]; then exit 9; fi\necho "${SCAN_LOW_RISK_LINE}"\n`, 0o755);
-    expect(await run(c)).toEqual({ ok: false, detail: "non-zero", path: "a/PURPOSE.md", fileIndex: 1, exit: 9 });
+    expect(await run(c)).toEqual({ ok: false, detail: "non-zero", fileIndex: 1, exit: 9 });
   });
 
   it("REVIEW, empty output, non-zero exit, timeout each refuse with class scan", async () => {
@@ -333,7 +333,7 @@ describe("runSkillScan against a stand-in scanner (real spawn)", () => {
       `#!/usr/bin/env bash\ncat > /dev/null\nn="$(cat "${c.root}/.count" 2>/dev/null || echo 0)"\necho $((n+1)) > "${c.root}/.count"\nif [ "$n" -ge 1 ]; then echo "# skill-security-scan verdict: HIGH-RISK"; else echo "${SCAN_LOW_RISK_LINE}"; fi\n`,
       0o755,
     );
-    expect(await run(c)).toMatchObject({ ok: false, detail: "high-risk", path: "a/PURPOSE.md" });
+    expect(await run(c)).toMatchObject({ ok: false, detail: "high-risk", fileIndex: 1 });
   });
 
   it("guard 1 row 2: an empty list of files is a refusal, not a clean pass", async () => {

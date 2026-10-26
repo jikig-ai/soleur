@@ -288,7 +288,6 @@ export type ScanResult =
   | ({
       ok: false;
       detail: string;
-      path?: string;
       /** Index of the refused file in `relPaths` (0 = SKILL.md, 1 = PURPOSE.md). */
       fileIndex?: number;
       /** Names of the missing tools, always members of `SCAN_REQUIRED_TOOLS`. */
@@ -331,14 +330,14 @@ export async function runSkillScan(o: RunSkillScanOpts): Promise<ScanResult> {
 
   const baseEnv = o.baseEnv ?? process.env;
   const pre = preflightTools(baseEnv.PATH ?? "");
-  if (!pre.ok) return scanRefusal("missing-tool", { missing: pre.missing.filter((t) => (SCAN_REQUIRED_TOOLS as readonly string[]).includes(t)) });
+  if (!pre.ok) return scanRefusal("missing-tool", { missing: pre.missing }); // a subset of SCAN_REQUIRED_TOOLS by construction
 
-  const inputs: Array<{ path: string; content: string }> = [];
+  const inputs: Array<{ content: string }> = [];
   for (const rel of o.relPaths) {
     const file = await resolveRegularFile(o.repoRoot, rel);
-    if (!file) return scanRefusal("input-unreadable", { path: rel, fileIndex: inputs.length });
-    if (file.size < SCAN_MIN_INPUT_BYTES) return scanRefusal("input-too-small", { path: rel, fileIndex: inputs.length });
-    inputs.push({ path: rel, content: await readFile(file.abs, "utf8") });
+    if (!file) return scanRefusal("input-unreadable", { fileIndex: inputs.length });
+    if (file.size < SCAN_MIN_INPUT_BYTES) return scanRefusal("input-too-small", { fileIndex: inputs.length });
+    inputs.push({ content: await readFile(file.abs, "utf8") });
   }
 
   const run = o.spawn ?? spawnRepoScript;
@@ -354,7 +353,7 @@ export async function runSkillScan(o: RunSkillScanOpts): Promise<ScanResult> {
     const verdict = evaluateScanOutput(result);
     if (!verdict.ok) {
       const { ok: _ok, detail, ...evidence } = verdict;
-      return scanRefusal(detail, { path: input.path, fileIndex, ...evidence });
+      return scanRefusal(detail, { fileIndex, ...evidence });
     }
   }
   return { ok: true };
