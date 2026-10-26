@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
   openPrs: [] as Array<{ number: number; user?: { login: string } | null; files?: Array<{ filename: string }> }>,
   /** When set, the pulls list route throws it. */
   pullsError: null as unknown,
+  /** The `auth` option of every Octokit constructed. */
+  auths: [] as unknown[],
 }));
 
 vi.mock("@/server/observability", async (importOriginal) => ({
@@ -37,13 +39,16 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 }));
 vi.mock("@octokit/core", () => ({
   Octokit: class {
+    constructor(opts?: { auth?: unknown }) {
+      h.auths.push(opts?.auth);
+    }
     // Route-aware (#10552): the skill-conflict guard lists open PRs and their changed files.
     request = async (route: string, params: Record<string, unknown> = {}) => {
       h.requests.push({ route, params });
       if (route === "GET /repos/{owner}/{repo}/pulls" || route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
         // The guard must ask for open PRs, 100 per page, of a real repo (a swapped or empty owner/repo
         // would silently scan nothing in production).
-        if (typeof params.owner !== "string" || !params.owner || typeof params.repo !== "string" || !params.repo || params.owner === params.repo) {
+        if (params.owner !== REPO_OWNER || params.repo !== REPO_NAME) {
           throw new Error(`bad owner/repo: ${String(params.owner)}/${String(params.repo)}`);
         }
         if (params.per_page !== 100 || (route.endsWith("/pulls") && params.state !== "open")) {
@@ -57,8 +62,9 @@ vi.mock("@octokit/core", () => ({
       }
       if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
         const pr = h.openPrs.find((p) => p.number === params.pull_number);
+        if (!pr) throw new Error(`no such PR ${String(params.pull_number)}`);
         const page = Number(params.page ?? 1);
-        return { data: (pr?.files ?? []).slice((page - 1) * 100, page * 100) };
+        return { data: (pr.files ?? []).slice((page - 1) * 100, page * 100) };
       }
       return { data: { total_count: 0, items: [] } };
     };
@@ -84,6 +90,7 @@ vi.mock("@/server/compound-promote-marker", async (importOriginal) => ({
 
 import { reportSilentFallback } from "@/server/observability";
 import { PROMOTION_QUORUM, cronCompoundPromoteHandler } from "@/server/inngest/functions/cron-compound-promote";
+import { REPO_NAME, REPO_OWNER } from "@/server/inngest/functions/_cron-shared";
 import { gitFixture, gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 const L = (n: number) => `knowledge-base/project/learnings/l${n}.md`;
@@ -157,6 +164,7 @@ beforeEach(() => {
   h.marker.mockReset();
   vi.mocked(reportSilentFallback).mockClear();
   h.requests.length = 0;
+  h.auths.length = 0;
   h.openPrs = [];
   h.pullsError = null;
   h.safeCommit.mockResolvedValue({ status: "committed" });
@@ -656,6 +664,10 @@ describe("#10552: the skill-conflict guard decides on the same file and never po
     expect(last).toMatchObject({ clusters_proposed: 2, clusters_opened: 2, refusals: [] });
     expect(fileLists()).toHaveLength(1);
     expect(searchedByFiles()).toHaveLength(0);
+    // The scan runs as the minted installation token, not unauthenticated (the mock mints "ghs_" + 30 x).
+    expect(h.auths.every((a) => a === "ghs_" + "x".repeat(30))).toBe(true);
+    expect(h.auths.length).toBeGreaterThanOrEqual(1);
+    expect(h.requests.some((r) => r.params.owner === REPO_OWNER && r.params.repo === REPO_NAME)).toBe(true);
   });
 
   it("same-file: an open PR that changes the target refuses it as skill-conflict-guard, with no POST and no comment", async () => {

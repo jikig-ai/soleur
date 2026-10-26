@@ -180,11 +180,12 @@ What a streak means when you read the weekly marker:
   closes. Both skill clusters in a run share one snapshot of the open PRs, so a PR opened after the scan
   and before the commit is not seen; the consequence is a merge conflict a reviewer resolves on the
   human-gated draft PR.
-- **`skill-conflict-guard-unverifiable`**: the guard hit a scan bound with no match, so it refuses
+- **`skill-conflict-guard-unverifiable`**: the guard could not complete its check (a scan bound was hit with no match, or the scan was not asked about the target), so it refuses
   rather than report "no conflict". The bounds: 300 or more open PRs (`bound=prs`), a PR with
   1000 or more changed files (`bound=files`), or more than 150 file-list requests in one run
   (`bound=requests`; with more than about 150 open non-Dependabot PRs this one trips first, because
-  each costs a request). A scan asked about a target it did not cover reports `bound=targets` (an internal fault: report it). While such a PR or PR count exists, every skill cluster is unverifiable until it
+  each costs a request), or a scan that runs past its 120-second total deadline (`bound=time`, a slow
+  GitHub; each request also has its own 20-second timeout). A scan asked about a target it did not cover reports `bound=targets` (an internal fault: report it). While such a PR or PR count exists, every skill cluster is unverifiable until it
   closes (fail closed by design; any contributor, including a fork, can cause it). `AGENTS.rules.md`
   clusters are unaffected. Signals: the warn line `skill-conflict-guard-unverifiable` (fields `fn`,
   `hash`, `bound`) in Better Stack, and a Sentry event (op `skill-conflict-guard-unverifiable`, tag
@@ -195,7 +196,7 @@ What a streak means when you read the weekly marker:
   is 600 characters for `AGENTS.rules.md` (pinned by a test to `PER_RULE_CAP` in
   `scripts/lint-agents-rule-budget.py`, so the validator refuses exactly what the corpus lint would) and
   1000 for `SKILL.md` (no lint governs skill lines; revisit only if refusal rows show 1000 being hit;
-  the whole diff is still bounded at 16,384 bytes, so at most 16 full lines is the reachable maximum and
+  the whole diff is still bounded at 16,384 characters, so at most 16 full lines is the reachable maximum and
   more is refused `diff-size-exceeded`).
   The prompt states a soft target of 500 characters and the hard cap. There is no retry: a too-long line
   refuses the whole cluster.

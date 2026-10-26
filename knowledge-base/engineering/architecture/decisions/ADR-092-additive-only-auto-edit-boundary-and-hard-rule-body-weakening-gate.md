@@ -212,7 +212,7 @@ the edits the cron can now make; it does not replace the body-weakening gate for
 
 **Compensating controls on model-authored text.** Because the inserted text lands in the
 always-loaded corpus, it is constrained in code rather than by prompt: printable ASCII only,
-caps of 20 lines and, per line, 600 characters for `AGENTS.rules.md` (pinned by a test to the corpus lint's `PER_RULE_CAP`) or 1000 for `SKILL.md`, with a 500-character target stated in the prompt (corrected on the merge of PR #11157, #10552; this sentence previously said 500; the diff-size gate still bounds the whole diff at 16,384 bytes), no credential-shaped substring (the credential tail of
+caps of 20 lines and, per line, 600 characters for `AGENTS.rules.md` (pinned by a test to the corpus lint's `PER_RULE_CAP`) or 1000 for `SKILL.md`, with a 500-character target stated in the prompt (corrected on the merge of PR #11157, #10552; this sentence previously said 500; the diff-size gate still bounds the whole diff at 16,384 characters), no credential-shaped substring (the credential tail of
 `PII_REGEX`, parity-pinned by a test, plus a private-key header and a bearer credential), no bare
 `---`, and no code fence, HTML comment, harness preprocessing marker, link or image other than a relative
 `./` / `../` one, URL (`://`) or command substitution (`$(`), and no `[mandates-filing]`-style enforcement tag. Source learnings are

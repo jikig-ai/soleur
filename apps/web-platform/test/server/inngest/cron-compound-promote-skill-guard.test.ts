@@ -15,9 +15,11 @@ vi.mock("@/server/observability", async (importOriginal) => ({
 }));
 
 import {
+  SKILL_GUARD_DEADLINE_MS,
   SKILL_GUARD_FILE_PAGES_PER_PR,
   SKILL_GUARD_FILE_REQUEST_BUDGET,
   SKILL_GUARD_PR_PAGES,
+  SKILL_GUARD_REQUEST_TIMEOUT_MS,
   scanOpenPrSkillPaths,
   skillConflictVerdict,
 } from "@/server/inngest/functions/cron-compound-promote";
@@ -69,9 +71,9 @@ function fake(prs: Pr[], opts: { fileFor?: (pr: Pr, page: number) => unknown } =
   return { octokit: { request } as unknown as Parameters<typeof scanOpenPrSkillPaths>[0]["octokit"], calls };
 }
 
-const scan = (prs: Pr[], targets: string[], opts?: Parameters<typeof fake>[1]) => {
+const scan = (prs: Pr[], targets: string[], opts?: Parameters<typeof fake>[1] & { now?: () => number }) => {
   const f = fake(prs, opts);
-  return scanOpenPrSkillPaths({ octokit: f.octokit, owner: "o", repo: "r", targets }).then((s) => ({ s, calls: f.calls }));
+  return scanOpenPrSkillPaths({ octokit: f.octokit, owner: "o", repo: "r", targets, now: opts?.now }).then((s) => ({ s, calls: f.calls }));
 };
 
 const count = (calls: Call[], route: string) => calls.filter((c) => c.route === route).length;
@@ -278,21 +280,76 @@ describe("a PARTIAL last page is not a bound (the bounds fire only on a full fin
   });
 
   it("the request budget stops the PR list too: no further pulls page is read once it is spent", async () => {
-    const prs: Pr[] = Array.from({ length: SKILL_GUARD_FILE_REQUEST_BUDGET + 20 }, (_, i) => ({ number: i + 1, files: filler(1) }));
-    const { calls } = await scan(prs, [ALPHA]);
+    // Page 2 is FULL (200 PRs) and a third page exists, so only the outer break keeps the scan at 2 pulls pages.
+    const prs: Pr[] = Array.from({ length: 2 * PAGE + 20 }, (_, i) => ({ number: i + 1, files: filler(1) }));
+    const { s, calls } = await scan(prs, [ALPHA]);
     expect(count(calls, PULLS)).toBe(2);
+    expect(s.incomplete).toBe("requests");
   });
 });
 
 describe("every request is bounded in time", () => {
-  it("both routes carry an abort signal", async () => {
-    const prs: Pr[] = [{ number: 1, files: filler(1) }];
-    const { calls } = await scan(prs, [ALPHA]);
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    for (const c of calls) {
-      const req = c.params.request as { signal?: unknown } | undefined;
-      expect(req?.signal).toBeInstanceOf(AbortSignal);
+  it("the per-request timeout is 20 s (a 0 or an hour-long bound is a regression)", () => {
+    expect(SKILL_GUARD_REQUEST_TIMEOUT_MS).toBe(20_000);
+  });
+
+  it("each request gets its OWN fresh AbortSignal.timeout(20 s), on both routes", async () => {
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const prs: Pr[] = [{ number: 1, files: filler(1) }, { number: 2, files: filler(1) }];
+      const { calls } = await scan(prs, [ALPHA]);
+      expect(calls.length).toBeGreaterThanOrEqual(3);
+      const signals = calls.map((c) => (c.params.request as { signal?: AbortSignal } | undefined)?.signal);
+      for (const sig of signals) expect(sig).toBeInstanceOf(AbortSignal);
+      // one shared signal would abort every later request after the first 20 s
+      expect(new Set(signals).size).toBe(calls.length);
+      expect(spy).toHaveBeenCalledTimes(calls.length);
+      for (const call of spy.mock.calls) expect(call[0]).toBe(SKILL_GUARD_REQUEST_TIMEOUT_MS);
+      // a live signal is not yet aborted at call time
+      for (const sig of signals) expect(sig!.aborted).toBe(false);
+    } finally {
+      spy.mockRestore();
     }
+  });
+});
+
+describe("the whole scan is bounded in time (bound `time`)", () => {
+  const prs = (n: number): Pr[] => Array.from({ length: n }, (_, i) => ({ number: i + 1, files: filler(1) }));
+
+  it("the deadline is two minutes", () => {
+    expect(SKILL_GUARD_DEADLINE_MS).toBe(120_000);
+  });
+
+  it("a clock past the deadline stops the scan with bound `time`, unverifiable, never clear", async () => {
+    let t = 1_000;
+    const now = () => t;
+    // Each request advances the clock by 50 s: the third file request starts past 120 s.
+    const f = fake(prs(10));
+    const wrapped = {
+      request: async (route: string, params: Record<string, unknown>) => {
+        t += 50_000;
+        return (f.octokit as unknown as { request: (r: string, p: Record<string, unknown>) => Promise<unknown> }).request(route, params);
+      },
+    } as unknown as Parameters<typeof scanOpenPrSkillPaths>[0]["octokit"];
+    const s = await scanOpenPrSkillPaths({ octokit: wrapped, owner: "o", repo: "r", targets: [ALPHA], now });
+    expect(s.incomplete).toBe("time");
+    expect(count(f.calls, FILES)).toBeLessThan(10);
+    expect(skillConflictVerdict(s, ALPHA)).toEqual({ kind: "unverifiable", bound: "time" });
+  });
+
+  it("a scan that finishes inside the deadline is untouched", async () => {
+    const { s } = await scan(prs(5), [ALPHA], { now: () => 1_000 });
+    expect(s.incomplete).toBeNull();
+  });
+
+  it("a match found before the deadline still wins over a later `time` bound", async () => {
+    // Clock reads 1-3 (deadline, first page, first PR's file request) are on time; later reads are past it.
+    let reads = 0;
+    const list: Pr[] = [{ number: 1, files: [{ filename: ALPHA }] }, ...prs(5)];
+    const { s } = await scan(list, [ALPHA, BETA], { now: () => (++reads <= 3 ? 0 : 1_000_000) });
+    expect(s.changed).toEqual({ [ALPHA]: 1 });
+    expect(skillConflictVerdict(s, ALPHA)).toEqual({ kind: "conflict", pr: 1 });
+    expect(skillConflictVerdict(s, BETA)).toEqual({ kind: "unverifiable", bound: "time" });
   });
 });
 
@@ -361,6 +418,15 @@ describe("skillConflictVerdict", () => {
     expect(skillConflictVerdict(mk({ changed: { [ALPHA]: 9 } }), ALPHA)).toEqual({ kind: "conflict", pr: 9 });
     expect(skillConflictVerdict(mk({ incomplete: "requests" }), ALPHA)).toEqual({ kind: "unverifiable", bound: "requests" });
     expect(skillConflictVerdict(mk({ changed: { [ALPHA]: 9 }, incomplete: "prs" }), ALPHA)).toEqual({ kind: "conflict", pr: 9 });
+  });
+
+  it("`targets` outranks an incomplete scan: the label names the first reason the target is unchecked", () => {
+    expect(skillConflictVerdict(mk({ incomplete: "prs", scanned: [] }), ALPHA)).toEqual({ kind: "unverifiable", bound: "targets" });
+  });
+
+  it("a scan result without a `scanned` array (an older shape) is unverifiable, not a crash and not clear", () => {
+    const old = { changed: {}, incomplete: null } as unknown as Parameters<typeof skillConflictVerdict>[0];
+    expect(skillConflictVerdict(old, ALPHA)).toEqual({ kind: "unverifiable", bound: "targets" });
   });
 
   it("a target the scan was never asked about is unverifiable, never clear", () => {

@@ -962,7 +962,8 @@ const EDIT_NEW_LINES_MAX = 20;
 /**
  * The hard cap on one model-written `AGENTS.rules.md` line. It equals the corpus lint's
  * `PER_RULE_CAP` in scripts/lint-agents-rule-budget.py (600 UTF-8 bytes), and a vitest reads that
- * constant and asserts equality, so the validator never accepts a line the lint rejects and never
+ * constant and asserts equality (the SITES row in scripts/lint-agents-compound-sync.sh pins it too, in
+ * lefthook and CI), so the validator never accepts a line the lint rejects and never
  * refuses one the lint accepts (#10552: a 500 cap refused real rules, 26 of the 99 rule bullets in
  * AGENTS.rules.md are longer than 500). Characters equal bytes here because PRINTABLE_ASCII_RE admits only ASCII.
  */
@@ -970,9 +971,9 @@ export const AGENTS_EDIT_LINE_MAX_CHARS = 600;
 /**
  * The hard cap on one model-written `SKILL.md` line. No lint governs SKILL.md line length (1071
  * existing lines are over 600), so this constant has no pin by design; revisit it only if refusal
- * rows (`edit-invalid` / `too-long`) show 1000 being hit. The apply step's MAX_DIFF_BYTES still
- * bounds the whole diff, so at most 16 full lines is the reachable maximum: 20 full lines pass this
- * validator and are then refused `diff-size-exceeded` by name.
+ * rows (`edit-invalid` / `too-long`) show 1000 being hit. The apply step's MAX_DIFF_BYTES (a
+ * LENGTH check, in characters) still bounds the whole diff, so at most 16 full lines is the reachable
+ * maximum: 20 full lines pass this validator and are then refused `diff-size-exceeded` by name.
  */
 export const SKILL_EDIT_LINE_MAX_CHARS = 1000;
 /** The soft target the prompt asks for; the hard cap of the target is what is enforced. */
@@ -1161,7 +1162,7 @@ function newLinesCause(lines: string[], targetPath: string, base: string): strin
   if (lines.some((l) => l === "---")) return "shape";
   if (lines.some((l) => CREDENTIAL_RE.test(l))) return "credential";
   // A fence, comment or preprocessing marker would change how the rest of the file or the committed
-  // text is read (the draft PR body carries slug names only, never the diff).
+  // text is read (the draft PR body carries source-learning paths and rule slugs, never the diff).
   if (lines.some((l) => RENDER_HAZARD_RE.test(l))) return "shape";
   if (targetPath === "AGENTS.rules.md") {
     // A model cannot mint an `hr-` or `wg-` rule (ADR-092 reserves those for human review);
@@ -1425,8 +1426,13 @@ export const SKILL_GUARD_FILE_PAGES_PER_PR = 10;
 /** File-list requests the whole run may spend across every open PR. */
 export const SKILL_GUARD_FILE_REQUEST_BUDGET = 150;
 const SKILL_GUARD_PAGE_SIZE = 100;
-/** Per-request timeout: a hung socket must not stall the step (and the account-wide cron slot). */
-const SKILL_GUARD_REQUEST_TIMEOUT_MS = 20_000;
+/** Per-request timeout: a hung socket must not hold one request open. */
+export const SKILL_GUARD_REQUEST_TIMEOUT_MS = 20_000;
+/**
+ * Total wall-clock bound for the whole scan (the account-wide cron slot is held while it runs).
+ * Reaching it records bound `time`: unverifiable, never clear. Checked before every request.
+ */
+export const SKILL_GUARD_DEADLINE_MS = 120_000;
 /**
  * The one author skipped, to save requests. This is an accepted exclusion, not a derivation: the
  * path match never runs for a skipped PR, so a Dependabot PR that did edit the target would not be
@@ -1434,7 +1440,7 @@ const SKILL_GUARD_REQUEST_TIMEOUT_MS = 20_000;
  */
 const SKILL_GUARD_SKIPPED_AUTHOR = "dependabot[bot]";
 
-export type SkillScanBound = "prs" | "files" | "requests";
+export type SkillScanBound = "prs" | "files" | "requests" | "time";
 /**
  * The run-wide result of the skill-conflict scan. JSON-serialisable on purpose: it is a memoized
  * step output, so it must survive an Inngest replay. `changed` holds ONLY paths equal to one of
@@ -1465,8 +1471,12 @@ export async function scanOpenPrSkillPaths(input: {
   owner: string;
   repo: string;
   targets: string[];
+  /** Clock, injectable so the deadline is testable without waiting. */
+  now?: () => number;
 }): Promise<SkillScan> {
   const { octokit, owner, repo } = input;
+  const now = input.now ?? Date.now;
+  const deadline = now() + SKILL_GUARD_DEADLINE_MS;
   const wanted = new Set(input.targets);
   const scanned = [...wanted];
   const changed: Record<string, number> = {};
@@ -1477,6 +1487,10 @@ export async function scanOpenPrSkillPaths(input: {
   let fileRequests = 0;
 
   prPages: for (let page = 1; page <= SKILL_GUARD_PR_PAGES; page++) {
+    if (now() > deadline) {
+      noteBound("time");
+      break;
+    }
     const { data: prs } = await octokit.request("GET /repos/{owner}/{repo}/pulls", {
       owner, repo, state: "open", per_page: SKILL_GUARD_PAGE_SIZE, page,
       request: { signal: AbortSignal.timeout(SKILL_GUARD_REQUEST_TIMEOUT_MS) },
@@ -1488,6 +1502,10 @@ export async function scanOpenPrSkillPaths(input: {
       for (let filePage = 1; filePage <= SKILL_GUARD_FILE_PAGES_PER_PR; filePage++) {
         if (fileRequests >= SKILL_GUARD_FILE_REQUEST_BUDGET) {
           noteBound("requests");
+          break prPages;
+        }
+        if (now() > deadline) {
+          noteBound("time");
           break prPages;
         }
         fileRequests++;
@@ -1522,7 +1540,7 @@ export async function scanOpenPrSkillPaths(input: {
  */
 export function skillConflictVerdict(scan: SkillScan, targetPath: string): SkillVerdict {
   if (Object.hasOwn(scan.changed, targetPath)) return { kind: "conflict", pr: scan.changed[targetPath] };
-  if (!scan.scanned.includes(targetPath)) return { kind: "unverifiable", bound: "targets" };
+  if (!Array.isArray(scan.scanned) || !scan.scanned.includes(targetPath)) return { kind: "unverifiable", bound: "targets" };
   if (scan.incomplete !== null) return { kind: "unverifiable", bound: scan.incomplete };
   return { kind: "clear" };
 }
@@ -2256,8 +2274,10 @@ export async function cronCompoundPromoteHandler({
       // a memoized step, assigned OUTSIDE any step callback. The verdict is made here too, so the
       // apply callback only reads a constant; a scan the step could not complete throws and the
       // run retries, it is never read as "no conflict".
-      // ONE predicate decides both the scan and the verdict, so they cannot diverge: a drafted skill
-      // cluster always gets a verdict, and a target the scan was not asked about is `unverifiable`.
+      // The scan and the verdict share `needsSkillGuard`, so a drafted skill cluster always gets a
+      // verdict. The scan's target set is built separately (prefix AND allowlist), so a drafted target
+      // outside it is `unverifiable` (`targets`), never clear: that branch is a tripwire, unreachable
+      // today because the draft step already refuses an off-allowlist target.
       const needsSkillGuard = draft.kind === "drafted" && proposed.target_path.startsWith(SKILL_TARGET_PREFIX);
       let skillVerdict: SkillVerdict | null = null;
       if (needsSkillGuard) {

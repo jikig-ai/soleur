@@ -997,6 +997,12 @@ describe("edit line caps: per-target hard cap, pinned to the corpus lint", () =>
       expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
     });
 
+    it.each(Array.from({ length: 20 }, (_, i) => i))("an over-cap line at position %i of 20 is refused (every line is checked)", async (at) => {
+      const lines = Array.from({ length: 20 }, (_, i) => ruleOfLength(i === at ? AGENTS_EDIT_LINE_MAX_CHARS + 1 : AGENTS_EDIT_LINE_MAX_CHARS, i));
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
     it("an over-cap line in the MIDDLE of three is refused (every line is checked, not the first or last)", async () => {
       const lines = [ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 0), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS + 1, 1), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 2)];
       const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
@@ -1010,6 +1016,20 @@ describe("edit line caps: per-target hard cap, pinned to the corpus lint", () =>
   });
 
   describe("SKILL.md boundary is its own cap, not the AGENTS one", () => {
+    it("the SKILL.md cap is exactly 1000: a 1000-character line is accepted and a 1001-character line refused (literals)", async () => {
+      expect(SKILL_EDIT_LINE_MAX_CHARS).toBe(1000);
+      const accepted = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: ["d".repeat(1000)] });
+      expect(accepted.ok).toBe(true);
+      const refused = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: ["d".repeat(1001)] });
+      expect(refused).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it.each(Array.from({ length: 20 }, (_, i) => i))("an over-cap SKILL.md line at position %i of 20 is refused", async (at) => {
+      const lines = Array.from({ length: 20 }, (_, i) => "e".repeat(i === at ? 1001 : 1000));
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
     it("an over-cap SKILL.md line in the MIDDLE of three is refused", async () => {
       const ok = "c".repeat(SKILL_EDIT_LINE_MAX_CHARS);
       const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: [ok, ok + "c", ok] });
@@ -1076,7 +1096,7 @@ describe("edit line caps: per-target hard cap, pinned to the corpus lint", () =>
 
     it("both prompts say a longer line refuses the whole edit", async () => {
       for (const target of [AGENTS, SKILL_ALPHA]) {
-        expect(await promptFor(target)).toMatch(/refuses the whole edit/);
+        expect(await promptFor(target)).toMatch(/a line over the hard cap refuses the whole edit/);
       }
     });
   });
