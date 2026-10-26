@@ -85,15 +85,15 @@ a.1. **Commit the `.pen` source immediately after first save (recover-from-wipe 
    onward) — so an iteration-cycle wipe (#3274: `open_document` silently
    overwriting the source with empty state) is recoverable via
    `git checkout -- <path>`. **Gate the commit on a non-collapsed save first**:
-   `stat -c %s <pen>` must be `> 64 bytes` (a 41-byte `{"version": …, "children": []}`
+   `stat -c %s <pen>` must be `> 128 bytes` (the 41- to 96-byte empty `{"version": …, "children": []}`
    shell is a failed/empty save, not a baseline worth committing — committing it
-   defeats the recover-from-wipe purpose). If the `.pen` is `≤ 64 bytes`, halt and
+   defeats the recover-from-wipe purpose). If the `.pen` is `≤ 128 bytes`, halt and
    surface the save failure instead of committing.
 
    ```bash
    pen=knowledge-base/product/design/brand/<topic>-<YYYY-MM-DD>/<topic>.pen
    sz=$(stat -c %s "$pen")
-   if [[ "$sz" -le 64 ]]; then
+   if [[ "$sz" -le 128 ]]; then
      echo "BLOCKED: $pen is only ${sz}B — first save did not produce a real document; not committing a wiped baseline." >&2
    else
      git add "$pen"

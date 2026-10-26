@@ -46,3 +46,32 @@ describe("enrichErrorMessage", () => {
     expect(result).toBe(input);
   });
 });
+
+// #11143 — replacement hints for the tools @pencil.dev/cli 0.2.9 removed.
+describe("enrichErrorMessage — removed tools (#11143)", () => {
+  const cases: Array<[string, RegExp]> = [
+    ["set_variables", /SetVariables\(.*include_schema: true/],
+    ["find_empty_space_on_canvas", /FindEmptySpace\(.*include_schema: true/],
+    ["get_style_guide", /get_guidelines\(\) with no arguments/],
+    ["get_style_guide_tags", /get_guidelines\(\) with no arguments/],
+    ["search_all_unique_properties", /no headless equivalent/i],
+    ["replace_all_matching_properties", /no headless equivalent/i],
+  ];
+  for (const [tool, re] of cases) {
+    test(`${tool} gets a replacement hint`, () => {
+      const out = enrichErrorMessage(`Unknown tool: ${tool}`);
+      expect(out).toContain("[adapter hint]");
+      expect(out).toMatch(re);
+      // the engine rejects a `category: "style"` argument; the old hint taught it
+      expect(out).not.toMatch(/category/);
+    });
+  }
+  test("an unrelated unknown tool is passed through unchanged", () => {
+    expect(enrichErrorMessage("Unknown tool: nope")).toBe("Unknown tool: nope");
+  });
+  test("prototype names do not hit the hint table", () => {
+    for (const name of ["constructor", "toString", "hasOwnProperty"]) {
+      expect(enrichErrorMessage(`Unknown tool: ${name}`)).toBe(`Unknown tool: ${name}`);
+    }
+  });
+});
