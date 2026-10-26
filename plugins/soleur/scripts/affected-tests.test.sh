@@ -1848,7 +1848,7 @@ want_marker "T3: marker" "$CT_RUN content_trigger=ran"
 # the only text that counts.
 R_T4="$(mk_ct_repo ct4 '["tests/*"]')"
 printf 'l1\n%s present\nNEW unrelated line\nl3\n' "$CT_PAT" > "$R_T4/tests/base.test.sh"
-git -C "$R_T4" add -A; git -C "$R_T4" commit -q -m "adjacent"
+assert_fixture_dir "$R_T4"; git -C "$R_T4" add -A; git -C "$R_T4" commit -q -m "adjacent"
 reset_fakes; run_gate "$R_T4" gate
 want_no_call "T4: a pre-existing mention does not fire" '^ctcmd	'
 want_marker "T4: marker says clear" "$CT_RUN content_trigger=clear"
@@ -1856,7 +1856,7 @@ want_marker "T4: marker says clear" "$CT_RUN content_trigger=clear"
 # T5 [M5]: no resolvable base → the scan cannot decide → the command RUNS.
 R_T5="$(mk_repo ct5)"; write_runner_capable "$R_T5"; write_ct_cmd "$R_T5"
 write_config "$R_T5" "$(ct_cfg '["tests/*"]')"; mkdir -p "$R_T5/tests"; printf 'base\n' > "$R_T5/tests/base.test.sh"
-git -C "$R_T5" add -A; git -C "$R_T5" commit -q -m base; git -C "$R_T5" checkout -q -b feature
+assert_fixture_dir "$R_T5"; git -C "$R_T5" add -A; git -C "$R_T5" commit -q -m base; git -C "$R_T5" checkout -q -b feature
 commit_chg "$R_T5" tests/x.test.sh 'no pattern at all'
 reset_fakes; run_gate "$R_T5" gate
 want_rc 0 "T5: an undecidable scan still passes when the command passes"
@@ -1904,11 +1904,11 @@ commit_chg "$R_T10A" "tests/${CT_PAT}hello.txt" 'plain content'
 reset_fakes; run_gate "$R_T10A" gate
 want_no_call "T10a: a path naming the pattern does not fire" '^ctcmd	'
 R_T10B="$(mk_ct_repo ct10b '["tests/*"]')"
-printf 'l1\nl3\n' > "$R_T10B/tests/base.test.sh"; git -C "$R_T10B" add -A; git -C "$R_T10B" commit -q -m "removal"
+assert_fixture_dir "$R_T10B"; printf 'l1\nl3\n' > "$R_T10B/tests/base.test.sh"; git -C "$R_T10B" add -A; git -C "$R_T10B" commit -q -m "removal"
 reset_fakes; run_gate "$R_T10B" gate
 want_no_call "T10b: a removal-only diff does not fire" '^ctcmd	'
 R_T10C="$(mk_ct_repo ct10c '["tests/*"]')"
-git -C "$R_T10C" mv tests/base.test.sh tests/renamed.test.sh; git -C "$R_T10C" commit -q -m "rename"
+assert_fixture_dir "$R_T10C"; git -C "$R_T10C" mv tests/base.test.sh tests/renamed.test.sh; git -C "$R_T10C" commit -q -m "rename"
 reset_fakes; run_gate "$R_T10C" gate
 want_no_call "T10c: a pure rename does not fire" '^ctcmd	'
 
@@ -1965,13 +1965,13 @@ ct_bad ct13-arrcmd '{"content_trigger_pattern":"x/","content_trigger_paths":["te
 # strips or rewrites prefixes, fires; the hook honours --base while defaulting to
 # origin/main.
 R_T14="$(mk_ct_repo ct14 '["tests/*"]')"
-git -C "$R_T14" config diff.noprefix true
-git -C "$R_T14" config diff.mnemonicPrefix true
+assert_fixture_dir "$R_T14"; git -C "$R_T14" config diff.noprefix true
+assert_fixture_dir "$R_T14"; git -C "$R_T14" config diff.mnemonicPrefix true
 _b0="$(git -C "$R_T14" rev-parse origin/main)"
 commit_chg "$R_T14" 'tests/dir with space/é.test.sh' "$CT_PAT"
 reset_fakes; run_gate "$R_T14" gate
 want_call "T14: a spaced, non-ASCII path fires despite diff.noprefix/mnemonicPrefix" '^ctcmd	'
-git -C "$R_T14" update-ref refs/remotes/origin/main HEAD
+assert_fixture_dir "$R_T14"; git -C "$R_T14" update-ref refs/remotes/origin/main HEAD
 reset_fakes; run_gate "$R_T14" gate
 want_no_call "T14: with origin/main at HEAD nothing is pending" '^ctcmd	'
 reset_fakes; run_gate "$R_T14" gate --base "$_b0"

@@ -18,12 +18,12 @@
 # repo-agnostic: nothing here names a repository suite.
 #
 # FAIL DIRECTION. Anything that stops the scan from deciding (no base ref, a git
-# or mktemp failure) RUNS the command. A missed ratchet is a CI-only red; a spurious
-# run is a few minutes.
+# failure) RUNS the command. A missed ratchet is a CI-only red; a spurious run is a
+# few minutes.
 #
 # Variables are `_ct_`-prefixed locals; results travel through the AFFECTED_CT_*
-# globals, and the scan is never called through `$(...)` (a subshell would lose
-# the affected_mktemp scratch registration and leak the temp file).
+# globals. The scan keeps its working data in variables, never in scratch files:
+# nothing to register with affected_mktemp, nothing to leak on an early exit.
 
 AFFECTED_CT_PATTERN=""
 AFFECTED_CT_COMMAND=""
@@ -64,7 +64,7 @@ affected_ct_scan() {
   AFFECTED_CT_STATE=none
   AFFECTED_CT_COUNT=0
   AFFECTED_CT_LEG=""
-  local _ct_base="" _ct_mb="" _ct_b _ct_rc=0 _ct_p _ct_diff _ct_hits _ct_untr
+  local _ct_base="" _ct_mb="" _ct_b _ct_rc=0 _ct_p _ct_hits _ct_untr
 
   if ! declare -F affected_glob_match >/dev/null 2>&1; then
     AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=glob-matcher; return 0
@@ -92,23 +92,20 @@ affected_ct_scan() {
   fi
 
   # --- tracked leg ---------------------------------------------------------
-  affected_mktemp ct-diff || { AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=mktemp; return 0; }
-  _ct_diff="$AFFECTED_TMP"
-  affected_mktemp ct-hits || { AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=mktemp; return 0; }
-  _ct_hits="$AFFECTED_TMP"
-  _ct_rc=0
-  git -c core.quotePath=false diff -U0 --no-color --no-ext-diff --no-textconv -M \
-    --src-prefix=a/ --dst-prefix=b/ "$_ct_mb" -- >"$_ct_diff" 2>/dev/null || _ct_rc=$?
-  if (( _ct_rc != 0 )); then
-    AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=diff; return 0
-  fi
+  # The diff is piped straight into awk (which reads to EOF, so the producer can
+  # never take a SIGPIPE) and only the matching PATHS are kept, in a variable:
+  # no scratch file, so nothing to leak and no redirect target to prove absolute.
+  # pipefail (set by the gate) turns a failing `git diff` into a non-zero status.
+  #
   # The pattern travels in the environment: `awk -v` processes backslash
   # escapes, ENVIRON does not. State resets on every `diff --git`; the path comes
   # from the `+++ b/<path>` header (git appends a TAB when it contains a space);
   # nothing counts until the first `@@` of that file, so a header or path that
   # NAMES the pattern, or a removal line, can never fire. One path per matching file.
   _ct_rc=0
-  CT_PAT="$AFFECTED_CT_PATTERN" awk '
+  _ct_hits="$(git -c core.quotePath=false diff -U0 --no-color --no-ext-diff --no-textconv -M \
+    --src-prefix=a/ --dst-prefix=b/ "$_ct_mb" -- 2>/dev/null \
+    | CT_PAT="$AFFECTED_CT_PATTERN" awk '
     BEGIN { pat = ENVIRON["CT_PAT"]; path = ""; inh = 0; seen = 0 }
     /^diff --git / { path = ""; inh = 0; seen = 0; next }
     inh == 0 && /^\+\+\+ / {
@@ -122,20 +119,18 @@ affected_ct_scan() {
     inh == 1 && substr($0, 1, 1) == "+" && seen == 0 && path != "" {
       if (index(substr($0, 2), pat) > 0) { print path; seen = 1 }
     }
-  ' "$_ct_diff" >"$_ct_hits" 2>/dev/null || _ct_rc=$?
+  ')" || _ct_rc=$?
   if (( _ct_rc != 0 )); then
-    AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=awk; return 0
+    AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=diff; return 0
   fi
   while IFS= read -r _ct_p; do
     [[ -n "$_ct_p" ]] || continue
     if _ct_in_globs "$_ct_p"; then AFFECTED_CT_COUNT=$((AFFECTED_CT_COUNT + 1)); fi
-  done <"$_ct_hits"
+  done <<<"$_ct_hits"
 
   # --- untracked leg -------------------------------------------------------
-  affected_mktemp ct-untracked || { AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=mktemp; return 0; }
-  _ct_untr="$AFFECTED_TMP"
   _ct_rc=0
-  git -c core.quotePath=false ls-files --others --exclude-standard >"$_ct_untr" 2>/dev/null || _ct_rc=$?
+  _ct_untr="$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null)" || _ct_rc=$?
   if (( _ct_rc != 0 )); then
     AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=ls-files; return 0
   fi
@@ -149,7 +144,7 @@ affected_ct_scan() {
       1) : ;;
       *) AFFECTED_CT_STATE=scan-error; AFFECTED_CT_LEG=grep; return 0 ;;
     esac
-  done <"$_ct_untr"
+  done <<<"$_ct_untr"
 
   (( AFFECTED_CT_COUNT > 0 )) && AFFECTED_CT_STATE=fired
   return 0
