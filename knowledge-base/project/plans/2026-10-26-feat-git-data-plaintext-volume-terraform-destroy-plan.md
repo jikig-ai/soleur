@@ -29,6 +29,16 @@ create routes: their gates demand the retired plaintext addresses, which can no 
 That is a disabled capability tracked by a filed issue, not "fails closed, fine". A rotate is required
 before every flip dispatch, so **the merge must follow the flip retry and any rotate it needs**.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26 (proportionate pass; the full 40-agent deepen fan-out was NOT run, by the invocation's own constraint — the plan had already been through the CTO, CLO and CPO rulings, a six-seat plan-review panel and an architecture seat that measured `-target` behaviour on terraform 1.9.8).
+
+**Gates run and passed:** 4.6 User-Brand Impact (threshold `single-user incident`), 4.7 Observability (five fields; probe verb `bash`; literal `expected_output`; `credentials_required` declared), 4.8 no PAT-shaped variable, 4.10 Encryption Posture, 4.11 Guard Contract (`lint-guard-contract.py`: 1 plan, 1 guard entry, rc 0), 4.12 Scope Check (one unfenced section, zero `unmapped`), 4.13 Task Design (one unfenced section). 4.9 and 4.45 do not apply (no UI surface; no negative security claim without a grep — the "no workflow runs an untargeted apply" claim was verified by the repo-research and architecture seats).
+
+**Live citation checks:** SHA pins `34e114876b0b…` (checkout, 40 chars, 79 workflows) and `5e8dbf3c6d9d…` (setup-terraform, 40 chars, 12 workflows) resolve; rule ids `hr-all-infrastructure-provisioning-servers` and `wg-when-deferring-a-capability-create-a` exist; #8211, #6897 and #10112 are OPEN; `git-data.tf:386/538/552`, `git-data-cutover.yml:112-114` and the `git-data-state` job groups at `apply-web-platform-infra.yml:3743-3745` and `:5677` match the plan text.
+
+**Not verified here (carried into Phase 0 / the ACs):** `-target` on 1.10.5; `action_reason` of the orphan delete; whether the PR-time `infra-validation.yml` plan comment is available for the byte-identical `user_data` evidence.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec claim | Reality | Plan response |
