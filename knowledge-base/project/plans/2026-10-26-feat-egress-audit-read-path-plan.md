@@ -400,8 +400,8 @@ logs:
   where: Sentry events (layer 2); release context (layer 5) from the existing Sentry release tagging
   retention: Sentry project default
 discoverability_test:
-  command: grep -q 'egress-audit-read-failure' apps/web-platform/infra/sentry/issue-alerts.tf && grep -q 'egress-audit-read-failure' apps/web-platform/infra/sentry/alert-reference.json && printf ok
-  expected_output: "ok"
+  command: grep -c egress-audit-read-failure apps/web-platform/infra/sentry/alert-reference.json
+  expected_output: "2"
 ```
 
 Notes: `SilentFallbackOptions` is `{feature, op?, extra?, message?, tags?}` — there is no `reason` field, so reason codes live in `op`. The rule follows the sibling `sentry_alert` shape (triggers `first_seen_event`, `reappeared_event`, `regression_event`; a `tagged_event feature eq` filter plus `op in`; email action to `issue_owners`); its `name` string is load-bearing (a rename destroys a live rule), and `alert-reference.json` is gated by `scripts/sentry-alert-reference-gate.sh` and the daily live-fidelity probe. An op-contract test (sibling pattern: `test/sentry-egress-ghcr-deny-alert-op-contract.test.ts`) asserts the Terraform filter value equals the loader's exported `FEATURE` constant and the reference entry matches field for field, which is what makes the probe above meaningful rather than a self-referential string check. The effective query bound is the `authenticated` role's timeout plus the structural bounds and the page's abort signal, not a function-level setting.
