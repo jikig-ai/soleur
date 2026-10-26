@@ -682,6 +682,34 @@ describe("prefer-patch: overlap ranking and the calibrated threshold", () => {
     }
   });
 
+  // One word apart: the same neutral slug and description, only the when_to_use text moves the top-1 score across 0.16.
+  const NEAR = [
+    { id: "rclone", below: "upload sync", above: "upload sync manage" },
+    { id: "ship", below: "prepare feature deployment", above: "prepare feature deployment commit" },
+  ] as const;
+  const nearInput = (nearest: string, when: string) => ({
+    slug: "zephyr-quartz-lantern",
+    description: "This skill should be used when marble orchid falcon tundra velvet matter for a thing that needs one more word here",
+    when_to_use: [when],
+    nearest_skill: nearest,
+  });
+
+  for (const n of NEAR) {
+    it(`near-miss ${n.id}: a top-1 score in 0.13-0.15 creates, 0.17-0.19 is refused as overlap`, () => {
+      const lo = score(nearInput(n.id, n.below))[0];
+      const hi = score(nearInput(n.id, n.above))[0];
+      expect([lo.name, hi.name]).toEqual([n.id, n.id]);
+      expect(lo.score).toBeGreaterThanOrEqual(0.13);
+      expect(lo.score).toBeLessThanOrEqual(0.15);
+      expect(hi.score).toBeGreaterThanOrEqual(0.17);
+      expect(hi.score).toBeLessThanOrEqual(0.19);
+      expect(checkCreate(proposal(nearInput(n.id, n.below)), ctx()).kind).toBe("create");
+      const refused = checkCreate(proposal(nearInput(n.id, n.above)), ctx());
+      expect(refused.kind).toBe("refused");
+      if (refused.kind === "refused") expect([refused.class, refused.detail]).toEqual(["prefer-patch", "overlap"]);
+    });
+  }
+
   it("the nearest skill must exist and be in the server's top-3", () => {
     const missing = checkCreate(proposal({ nearest_skill: "no-such-skill" }), ctx());
     expect(missing.kind).toBe("refused");

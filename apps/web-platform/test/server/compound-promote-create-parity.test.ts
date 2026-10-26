@@ -248,19 +248,18 @@ describe("Guard 2: the server's word count equals the bun test's, over the real 
   // The independent definition: the SAME helpers components.test.ts calls, run under bun.
   const BUN_SCRIPT = `
     import { discoverSkills, parseComponent } from ${JSON.stringify(join(PLUGIN_ROOT, "test", "helpers"))};
-    let total = 0, disabled = 0, n = 0, includingDisabled = 0, spaceSplit = 0;
+    let total = 0, disabled = 0, n = 0, includingDisabled = 0;
     for (const p of discoverSkills()) {
       n++;
       const { frontmatter } = parseComponent(p);
       const desc = String(frontmatter.description || "");
       includingDisabled += desc.split(/\\s+/).filter(Boolean).length;
-      spaceSplit += desc.split(" ").filter(Boolean).length;
       if (frontmatter["disable-model-invocation"] === true) { disabled++; continue; }
       total += desc.split(/\\s+/).filter(Boolean).length;
     }
-    console.log(JSON.stringify({ total, disabled, n, includingDisabled, spaceSplit }));
+    console.log(JSON.stringify({ total, disabled, n, includingDisabled }));
   `;
-  const bunRun = (): { total: number; disabled: number; n: number; includingDisabled: number; spaceSplit: number } => {
+  const bunRun = (): { total: number; disabled: number; n: number; includingDisabled: number } => {
     const out = execFileSync("bun", ["-e", BUN_SCRIPT], { cwd: PLUGIN_ROOT, encoding: "utf8", timeout: 60_000 });
     return JSON.parse(out.trim().split("\n").pop() as string);
   };
@@ -277,12 +276,9 @@ describe("Guard 2: the server's word count equals the bun test's, over the real 
     expect(ours.disabled).toBeGreaterThan(0);
   });
 
-  it("mutations 1 and 4 are real on this tree: counting user-invoked skills, or splitting on a single space, would NOT agree", () => {
+  it("mutation 1 is real on this tree: counting user-invoked skills would NOT agree (the whitespace-split mutation is owned by the fixture-tree test, since tab and newline descriptions make a real-tree comparison direction-dependent)", () => {
     const bun = bunRun();
-    expect(bun.includingDisabled).not.toBe(bun.total); // mutation 1 (counts disable-model-invocation skills too)
-    // A single-space split only differs when a description has a double space or a newline; if none does today the
-    // mutation is unobservable on the real tree and the fixture-tree test in compound-promote-create.test.ts owns it.
-    expect(bun.spaceSplit).toBeGreaterThanOrEqual(bun.total);
+    expect(bun.includingDisabled).not.toBe(bun.total);
   });
 
   it("the cap is the constant assignment in components.test.ts and the total is within it", () => {
@@ -307,19 +303,22 @@ describe("overlap threshold holds on the REAL skill list", () => {
   };
   const counted = countDescriptionWords(PLUGIN_ROOT);
 
-  it("each evidence fixture ranks its patch target first and clears the threshold with margin; negatives stay below it", () => {
+  it("the threshold still separates the two populations on the real tree: every negative below it, every evidence fixture at or above it", () => {
     expect(counted.ok).toBe(true);
     if (!counted.ok) return;
-    for (const e of cal.evidence) {
+    expect(cal.negatives.length).toBeGreaterThanOrEqual(4);
+    const evidence = cal.evidence.map((e) => {
       const r = rankOverlap(proposalOverlapText(e), counted.records);
       expect(r[0].name, e.id).toBe(e.target);
-      expect(r[0].score, e.id).toBeGreaterThanOrEqual(OVERLAP_REFUSE_THRESHOLD + 0.04);
-    }
-    expect(cal.negatives.length).toBeGreaterThanOrEqual(4);
-    for (const n of cal.negatives) {
-      const r = rankOverlap(proposalOverlapText(n), counted.records);
-      expect(r[0].score, `${n.id} top1=${r[0].name}`).toBeLessThanOrEqual(OVERLAP_REFUSE_THRESHOLD - 0.04);
-    }
+      return r[0].score;
+    });
+    const negatives = cal.negatives.map((n) => ({ id: n.id, ...rankOverlap(proposalOverlapText(n), counted.records)[0] }));
+    // No absolute margin: a new real skill on a neighbouring subject moves a negative's score, and that must not red an
+    // unrelated PR unless it genuinely closes the gap between the two populations, which is what this asserts.
+    const worst = negatives.reduce((a, b) => (b.score > a.score ? b : a));
+    console.info(`OVERLAP real tree: worst negative ${worst.id}->${worst.name}:${worst.score.toFixed(3)}, weakest evidence ${Math.min(...evidence).toFixed(3)}, threshold ${OVERLAP_REFUSE_THRESHOLD}`);
+    expect(worst.score, `negative ${worst.id} now overlaps ${worst.name}; re-calibrate the threshold`).toBeLessThan(OVERLAP_REFUSE_THRESHOLD);
+    expect(Math.min(...evidence)).toBeGreaterThanOrEqual(OVERLAP_REFUSE_THRESHOLD);
   });
 
   it("the input ceiling holds on the real corpus under the documented bytes/4 bound (and the bound is stated)", () => {
