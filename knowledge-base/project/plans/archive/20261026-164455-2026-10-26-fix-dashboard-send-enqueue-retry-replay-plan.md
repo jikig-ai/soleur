@@ -401,7 +401,7 @@ the replay never writes a second approval row and refuses to dispatch when the d
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** one founder losing one approved action is recoverable (re-click) and
   non-destructive, so not a single-user incident (the CTO devex review concurred); a pattern of silent drops during an
-  Inngest outage would be the aggregate trust problem this fixes.
+  Inngest unavailability would be the aggregate trust problem this fixes.
 
 ## Observability
 
@@ -417,7 +417,7 @@ error_reporting:
 failure_modes:
   - mode: Inngest unreachable so the enqueue is exhausted
     detection: Sentry event op=inngest-enqueue and the 503 in the route response log
-    alert_route: Sentry issue stream; the platform Inngest outage signals fire independently
+    alert_route: Sentry issue stream; the platform Inngest liveness signals fire independently
   - mode: founder never re-clicks so an approved row stays unacknowledged
     detection: Sentry op=inngest-enqueue followed by no op=inngest-enqueue-replay for the same actionSendId
     alert_route: tracked for a future sweeper in #11211 (re-evaluation criteria recorded there)
