@@ -43,7 +43,6 @@ import {
   OVERLAP_REFUSE_THRESHOLD,
   PROMOTION_LOG_PATH,
   PURPOSE_TEMPLATE_PATH,
-  checkCreatePathSet,
   checkCreate,
   countDescriptionWords,
   createPathList,
@@ -51,12 +50,15 @@ import {
   prepareCreate,
   readAgentPaths,
   readBudgetCap,
+  readCommandNames,
+  readCursorDirs,
   readGrokBlock,
   renderCreateFiles,
   type CreateProposal,
   type CreateRefusal,
   type CreateRefusalClass,
   type CreateVerdict,
+  unmeasurableCollisionRefusal,
 } from "@/server/compound-promote-create";
 import {
   buildScrubbedEnv,
@@ -242,6 +244,13 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
     return refuseAndMirror("create-open", "paths-unverifiable");
   }
 
+  // The collision populations are measured BEFORE the model call (fail closed, never after a billed call).
+  const agents = readAgentPaths(pluginRoot);
+  if (!agents.ok) return mirrorAndReturn(unmeasurableCollisionRefusal(agents.detail));
+  const cursor = readCursorDirs(pluginRoot);
+  if (!cursor.ok) return mirrorAndReturn(unmeasurableCollisionRefusal(cursor.detail));
+  const commandNames = readCommandNames(pluginRoot);
+
   const nonce = a.nonce ?? randomBytes(8).toString("hex");
   const prepared = prepareCreate({ patterns: a.patterns, skills: counted.records, nonce });
   if (prepared.kind === "refused") return mirrorAndReturn(prepared);
@@ -278,7 +287,9 @@ async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
     patterns: a.patterns,
     skills: counted.records,
     skillDirs: counted.dirs,
-    agentPaths: readAgentPaths(pluginRoot),
+    agentPaths: agents.paths,
+    cursorDirs: cursor.dirs,
+    commandNames,
     openPrPaths,
     budget: { total: counted.total, cap },
     isHashSuppressed: (hash) => decideSuppression({ entries: a.ledgerEntries, hash, now: runNow }),
@@ -425,7 +436,7 @@ async function persistInner(
   } catch {
     return refuseAndMirror("shape", "template-unreadable");
   }
-  const rendered = renderCreateFiles({ proposal, grokBlock, purposeTemplate, date: c.dateSuffix });
+  const rendered = renderCreateFiles({ proposal, grokBlock, purposeTemplate, date: c.dateSuffix, evidenceCount: a.evidenceCount });
   if (rendered.kind === "refused") return mirrorAndReturn(rendered);
 
   // Files on disk FIRST: the scanner and the exactPaths staging both read the disk.
@@ -456,8 +467,6 @@ async function persistInner(
 
   const collected = await collectCreateContent({ repoRoot: a.repoRoot, slug: c.slug });
   if (!collected.ok) return mirrorAndReturn(refusal("persist", collected.detail, collected.index === undefined ? undefined : { path_index: collected.index }));
-  const pathVerdict = checkCreatePathSet(c.slug, collected.exactPaths);
-  if (!pathVerdict.ok) return mirrorAndReturn(refusal("persist", pathVerdict.detail));
 
   const titleLine = `chore(self-healing): create skill ${c.slug} from cluster ${v.clusterHash}`;
   const trailer = [

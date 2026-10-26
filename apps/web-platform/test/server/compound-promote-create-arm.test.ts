@@ -114,6 +114,9 @@ function pluginTree(opts: { skills?: number; cap?: number | null } = {}): string
   const records = [...SKILLS];
   for (let i = 0; i < (opts.skills ?? 40); i++) records.push({ name: `filler-${i}`, description: `This skill should be used for filler topic ${i}.`, disableModelInvocation: false });
   for (const s of records) put(`plugins/soleur/skills/${s.name}/SKILL.md`, `---\nname: ${s.name}\ndescription: ${JSON.stringify(s.description)}\n---\n# ${s.name}\n`);
+  // The collision populations the create arm fails closed on (agents >= 30, Cursor stubs >= 50).
+  for (let i = 0; i < 30; i++) put(`plugins/soleur/agents/engineering/synthetic-agent-${i}.md`, "---\nname: x\n---\n");
+  for (let i = 0; i < 50; i++) put(`plugins/soleur/cursor/skills/soleur-stub-${i}/SKILL.md`, "stub\n");
   const total = records.filter((r) => !r.disableModelInvocation).reduce((n, r) => n + r.description.split(/\s+/).filter(Boolean).length, 0);
   if (opts.cap !== null) put("plugins/soleur/test/components.test.ts", `const SKILL_DESCRIPTION_WORD_BUDGET = ${opts.cap ?? total + 40};\n`);
   return root;

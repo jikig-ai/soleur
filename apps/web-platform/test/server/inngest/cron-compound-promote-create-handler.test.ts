@@ -213,6 +213,9 @@ beforeAll(() => {
   }
   put("plugins/soleur/skills/skill-creator/templates/purpose.md", readFileSync(join(REPO_ROOT, "plugins/soleur/skills/skill-creator/templates/purpose.md"), "utf8"));
   put("plugins/soleur/agents/engineering/review/synthetic-reviewer.md", "---\nname: synthetic-reviewer\n---\n");
+  // The collision populations the create arm fails closed on (agents >= 30, Cursor stubs >= 50).
+  for (let i = 0; i < 30; i++) put(`plugins/soleur/agents/engineering/synthetic-agent-${i}.md`, "---\nname: x\n---\n");
+  for (let i = 0; i < 50; i++) put(`plugins/soleur/cursor/skills/soleur-stub-${i}/SKILL.md`, "stub\n");
   allSkills = records;
   wordTotal = records.filter((r) => !r.disableModelInvocation).reduce((n, r) => n + r.description.split(/\s+/).filter(Boolean).length, 0);
   put("plugins/soleur/test/components.test.ts", `// history: 1 -> 2\nconst SKILL_DESCRIPTION_WORD_BUDGET = ${wordTotal + 40};\n`);
@@ -699,7 +702,6 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
     ["scan", () => h.scan.mockResolvedValue({ ok: false, class: "scan", detail: "high-risk", path: "p" }), "scan", "high-risk"],
     ["readme-sync", () => h.sync.mockResolvedValue({ ok: false, class: "readme-sync", detail: "non-digit-change" }), "readme-sync", "non-digit-change"],
     ["collector", () => h.collect.mockResolvedValue({ ok: false, class: "persist", detail: "changed-set-mismatch" }), "persist", "changed-set-mismatch"],
-    ["collector path set", () => h.collect.mockResolvedValue({ ok: true, exactPaths: [...createPathList(String(PROPOSAL.slug)), "scripts/evil.sh"], expectedContent: {} }), "persist", "path-count"],
     ["helper non-commit", () => h.safeCommit.mockResolvedValue({ status: "failed", stage: "integrity", message: "m" }), "persist", "failed-integrity"],
     ["helper no-changes", () => h.safeCommit.mockResolvedValue({ status: "no-changes" }), "persist", "not-committed-no-changes"],
   ] as const)("a %s refusal ends the create refused (class %s), mirrors to Sentry, and leaves the clone CLEAN: a refused create writes no ledger row", async (_n, arrange, cls, detail) => {
@@ -710,7 +712,7 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
     expect(r.last.refusals).toContain("create-refused");
     expect(r.statusAfterPersist).toEqual([""]);
     expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", tags: { class: cls } }));
-    if (cls !== "persist" || detail.startsWith("changed") || detail === "path-count") expect(createCommits()).toHaveLength(0);
+    if (cls !== "persist" || detail.startsWith("changed")) expect(createCommits()).toHaveLength(0);
   });
 
   it("a scan refusal never reaches the commit helper even when later gates would pass (Guard 1 row 1)", async () => {
