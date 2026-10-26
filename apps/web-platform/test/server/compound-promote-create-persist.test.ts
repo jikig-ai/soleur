@@ -15,8 +15,9 @@
 // README sync -- exercised for real in compound-promote-create-gates.test.ts and the dry-render suite) and the
 // commit helper are doubles; each double records what `.git/config` held at the moment it ran.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -48,6 +49,8 @@ vi.mock("@/server/compound-promote-create-gates", async (importOriginal) => ({
 
 import { reportSilentFallback } from "@/server/observability";
 import { setOriginToken } from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import { CREATE_STAGE_ORDER } from "@/server/compound-promote-create";
+import { README_SYNC_TIMEOUT_MS, SCAN_TIMEOUT_MS, createSyntheticCheckNames } from "@/server/compound-promote-create-gates";
 import {
   CREATE_PERSIST_DEADLINE_MS,
   PLAIN_ORIGIN_URL,
@@ -91,6 +94,68 @@ const cleanEnv = (): NodeJS.ProcessEnv => {
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_") && v !== undefined) env[k] = v;
   return env as NodeJS.ProcessEnv;
 };
+
+// ---------------------------------------------------------------------------------------------------------
+// A `git` first on PATH. It (1) logs the EVENT of every invocation (fetch, reset, clean, checkout, rev-parse, status,
+// ls-tree, ls-remote, remote, set-url) to a file, (2) fails `set-url` while the counter file holds a positive number,
+// and (3) writes BIG into the clock file on the Nth occurrence of a chosen event, so a test can make a deadline
+// checkpoint fire exactly between two git calls. The clock file is what `now` reads. Everything else execs real git.
+let clockFilePath = "";
+const clockPath = (): string => clockFilePath;
+const CLOCK_START = 1_000_000;
+const CLOCK_BIG = 100_000_000;
+interface GitWrapper {
+  events: () => string[];
+  /** Make the next `n` `set-url` calls fail. */
+  failSetUrl: (n: number) => void;
+  /** Jump the clock when the `nth` `ev` runs. */
+  bumpOn: (ev: string, nth: number) => void;
+  /** Append a marker to the same time-ordered stream (the suite's doubles use it). */
+  mark: (name: string) => void;
+  now: () => number;
+  restore: () => void;
+}
+function installGitWrapper(): GitWrapper {
+  const dir = tmp("create-persist-gitwrap-");
+  const file = (n: string) => join(dir, n);
+  writeFileSync(file("log"), "");
+  writeFileSync(file("clock"), String(CLOCK_START));
+  clockFilePath = file("clock");
+  writeFileSync(file("fail-count"), "0");
+  writeFileSync(file("bump"), "none 0");
+  const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  const script = [
+    "#!/bin/sh",
+    'ev=""',
+    'for a in "$@"; do',
+    '  case "$a" in fetch|reset|clean|checkout|rev-parse|status|ls-tree|ls-remote|remote) [ -z "$ev" ] && ev="$a";; esac',
+    "done",
+    'for a in "$@"; do [ "$a" = "set-url" ] && ev="set-url"; done',
+    `echo "$ev" >> "${file("log")}"`,
+    'if [ "$ev" = "set-url" ]; then',
+    `  n=$(cat "${file("fail-count")}"); if [ "$n" -gt 0 ]; then echo $((n-1)) > "${file("fail-count")}"; echo "fatal: simulated" >&2; exit 128; fi`,
+    "fi",
+    `read bev bnth < "${file("bump")}"`,
+    'if [ "$ev" = "$bev" ]; then',
+    `  c=$(grep -c "^$ev$" "${file("log")}"); [ "$c" -eq "$bnth" ] && echo ${CLOCK_BIG} > "${file("clock")}"`,
+    "fi",
+    `exec ${real} "$@"`,
+    "",
+  ].join("\n");
+  writeFileSync(file("git"), script, { mode: 0o755 });
+  const saved = process.env.PATH;
+  process.env.PATH = `${dir}:${saved ?? ""}`;
+  return {
+    events: () => readFileSync(file("log"), "utf8").split("\n").filter(Boolean),
+    failSetUrl: (n) => writeFileSync(file("fail-count"), String(n)),
+    bumpOn: (ev, nth) => writeFileSync(file("bump"), `${ev} ${nth}`),
+    mark: (name) => appendFileSync(file("log"), `${name}\n`),
+    now: () => Number(readFileSync(file("clock"), "utf8")),
+    restore: () => {
+      process.env.PATH = saved;
+    },
+  };
+}
 
 let template = "";
 
@@ -366,25 +431,15 @@ describe("G1 -- the origin write and the final strip", () => {
     }
   });
 
-  // A `git` first on PATH that fails `remote set-url` while the counter file holds a positive number, else execs the real git.
-  let gitBin = "";
-  let counter = "";
-  let savedPath: string | undefined;
+  let gw: GitWrapper;
   beforeEach(() => {
-    gitBin = tmp("create-persist-gitwrap-");
-    counter = join(gitBin, "fail-count");
-    const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-    writeFileSync(join(gitBin, "git"), `#!/bin/sh\nfor a in "$@"; do\n  if [ "$a" = "set-url" ] && [ -s "${counter}" ]; then\n    n=$(cat "${counter}"); if [ "$n" -gt 0 ]; then echo $((n-1)) > "${counter}"; echo "fatal: simulated" >&2; exit 128; fi\n  fi\ndone\nexec ${real} "$@"\n`, { mode: 0o755 });
-    savedPath = process.env.PATH;
-    process.env.PATH = `${gitBin}:${savedPath ?? ""}`;
+    gw = installGitWrapper();
   });
-  afterEach(() => {
-    process.env.PATH = savedPath;
-  });
+  afterEach(() => gw.restore());
 
   const commitThatBreaksStrip = (failures: number) =>
     vi.fn(async () => {
-      writeFileSync(counter, String(failures));
+      gw.failSetUrl(failures);
       return { status: "committed", prNumber: 77, branch: "b", fileCount: 6, deletionCount: 0 };
     });
 
@@ -412,7 +467,7 @@ describe("G1 -- the origin write and the final strip", () => {
     // The first origin write succeeds; the next `set-url` (the in-step strip after the fetch) fails once.
     const setOrigin = async (root: string, token: string) => {
       await setOriginToken(root, token);
-      writeFileSync(counter, "1");
+      gw.failSetUrl(1);
     };
     vi.mocked(reportSilentFallback).mockClear();
     const r = await runCreatePersistStep(persistArgs(w, v, { setOrigin }));
@@ -503,6 +558,191 @@ describe("G3 -- Step B correctness: the second fetch, the PR body, the orphan br
     expect(h.scan).not.toHaveBeenCalled();
     expect(a.safeCommit).not.toHaveBeenCalled();
     expect(w.config()).not.toContain("x-access-token");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+describe("G9 -- the stage order, the deadline checkpoints, the commit config, the evidence count, the `since` baseline", () => {
+  let gw: GitWrapper;
+  beforeEach(() => {
+    gw = installGitWrapper();
+  });
+  afterEach(() => gw.restore());
+
+  /** Run Step B with every observable event on ONE time-ordered stream: the octokit lookup, the origin writes, the three doubles and every git call. */
+  async function observed(over: Record<string, unknown> = {}) {
+    const w = world();
+    const v = await propose(w);
+    h.scan.mockImplementation(async () => (gw.mark("scan"), { ok: true }));
+    h.sync.mockImplementation(async (o: { repoRoot: string }) => (gw.mark("readme-sync"), bumpReadmes(o.repoRoot), { ok: true }));
+    const a = persistArgs(w, v, {
+      now: gw.now,
+      octokit: { request: async () => (gw.mark("branch-taken"), { data: [] }), graphql: async () => ({}) },
+      setOrigin: async (root: string, token: string) => (gw.mark("setOrigin"), setOriginToken(root, token)),
+      ...over,
+    });
+    const commit = a.safeCommit;
+    a.safeCommit = vi.fn(async (cfg: unknown) => (gw.mark("commit"), commit(cfg as never))) as never;
+    const result = await runCreatePersistStep(a);
+    return { w, v, a, result, events: gw.events() };
+  }
+
+  /** Map the event stream to CREATE_STAGE_ORDER ids. Everything outside the step body (the clean-main restores, the final strip) maps to nothing. */
+  function stagesOf(events: readonly string[]): string[] {
+    const stages: string[] = [];
+    let fetches = 0;
+    let setOrigins = 0;
+    let internalSetUrl = false;
+    for (const ev of events) {
+      if (ev === "branch-taken") stages.push("branch-taken");
+      else if (ev === "setOrigin") {
+        setOrigins += 1;
+        stages.push(setOrigins === 1 ? "token-set" : "token-restore");
+        internalSetUrl = true; // the `set-url` setOriginToken performs is part of this stage
+      } else if (ev === "set-url") {
+        if (internalSetUrl) internalSetUrl = false;
+        else if (fetches === 1) stages.push("token-strip");
+      } else if (ev === "fetch") {
+        fetches += 1;
+        stages.push(fetches === 1 ? "fetch-reset" : "fetch");
+      } else if (fetches === 1 && (ev === "reset" || ev === "rev-parse")) stages.push("fetch-reset");
+      else if (fetches === 2 && (ev === "rev-parse" || ev === "ls-tree" || ev === "ls-remote")) stages.push("base-moved");
+      else if (ev === "scan" || ev === "readme-sync") stages.push(ev);
+      else if (ev === "commit") {
+        stages.push("commit");
+        break;
+      }
+    }
+    return stages.filter((id, i) => id !== stages[i - 1]);
+  }
+
+  it("the stages the arm PERFORMS, in order, are CREATE_STAGE_ORDER.stepB (minus the four pure stages no double can see)", async () => {
+    const { result, events } = await observed();
+    expect(result).toEqual({ kind: "opened", pr: 77 });
+    const PURE = new Set(["recheck", "render", "rendered-gate", "bytes-differ"]);
+    expect(stagesOf(events)).toEqual(CREATE_STAGE_ORDER.stepB.filter((id) => !PURE.has(id)));
+  });
+
+  it("the commit helper receives the WHOLE config: run start (memoized, not now), trailer, labels, draft, merge mode, checks, summary", async () => {
+    const w = world();
+    const v = await propose(w);
+    const RUN = "2025-01-02T03:04:05.000Z"; // not today: a fresh Date would show
+    const a = persistArgs(w, v, { runStartedAt: RUN });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "opened", pr: 77 });
+    const cfg = a.safeCommit.mock.calls[0][0] as unknown as Record<string, unknown>;
+    const branch = `self-healing/auto-${v.clusterHash}-2025-01-02`;
+    expect(cfg).toMatchObject({
+      spawnCwd: w.clone,
+      installationToken: "tok-synthetic",
+      cronName: "cron-compound-promote",
+      commitMessage: `chore(self-healing): create skill ${SLUG} from cluster ${v.clusterHash}`,
+      allowedPaths: [],
+      runStartedAt: RUN,
+      scheduledIssueLabel: "scheduled-compound-promote",
+      branchName: branch,
+      prTitle: `self-healing(auto): promote cluster ${v.clusterHash} 2025-01-02`,
+      prDraft: true,
+      prLabels: ["self-healing/auto"],
+      mergeMode: "none",
+      syntheticChecks: { names: [...createSyntheticCheckNames()], summary: "self-healing/auto new-skill draft - operator review required" },
+    });
+    expect(String(cfg.commitBody)).toMatch(/^Bot-Author: compound-promotion-loop@\S+$/m);
+    expect(String(cfg.commitBody).split("\n").slice(1)).toEqual([`Cluster-Hash: ${v.clusterHash}`, "Tier: skill", `Create-Skill: ${SLUG}`]);
+    expect(String(cfg.prBody).split("\n")[0]).toBe("CREATE (new skill)");
+  });
+
+  it("the evidence count is the PAGE's: a 7-entry page writes n=7 to the promotion-log row and `7 evidence entries` to PURPOSE.md (not a constant)", async () => {
+    const seven: PatternPage = { ...PATTERN, evidence: [1, 2, 3, 4, 5, 6, 7].map((n) => `knowledge-base/project/learnings/2026-10-0${n}-synthetic-${n}.md`) };
+    const w = world();
+    const counted = countDescriptionWords(join(w.clone, "plugins", "soleur"));
+    if (!counted.ok) throw new Error(counted.detail);
+    const merged: Record<string, unknown> = { ...structuredClone(PROPOSAL) };
+    merged.nearest_skill = rankOverlap(proposalOverlapText({ slug: String(merged.slug), description: String(merged.description), when_to_use: merged.when_to_use as string[] }), counted.records)[0].name;
+    const v = await runCreateProposeStep({
+      repoRoot: w.clone, octokit: { request: async () => ({ data: [] }) } as never, patterns: [seven], ledgerEntries: [], runStartedAt: RUN_AT, capLeft: 1,
+      apiKey: "k", runId: "R", scanOpenPrPaths: async () => ({ paths: [], incomplete: null }), post: poster(merged),
+    });
+    if (v.kind !== "create") throw new Error(JSON.stringify(v));
+    const a = persistArgs(w, v, { patterns: [seven] });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "opened", pr: 77 });
+    const content = (a.safeCommit.mock.calls[0][0] as unknown as { expectedContent: Record<string, string> }).expectedContent;
+    expect(content[PROMOTION_LOG_PATH]).toContain(`| ${v.clusterHash} | plugins/soleur/skills/${SLUG}/SKILL.md | 7 | pending | skill |`);
+    expect(content[`plugins/soleur/skills/${SLUG}/PURPOSE.md`]).toContain("(7 evidence entries)");
+  });
+
+  it("the README sync gets the pre-scan clone snapshot as `since`: the new files and the log row at their gated hashes, and the scan-time write is NOT in it", async () => {
+    const w = world();
+    const v = await propose(w);
+    const paths = createPathList(SLUG);
+    let scanned = "";
+    h.scan.mockImplementation(async (o: { repoRoot: string }) => {
+      scanned = readFileSync(join(o.repoRoot, paths[1]), "utf8");
+      writeFileSync(join(o.repoRoot, paths[1]), `${scanned}appended by the scanner\n`);
+      return { ok: true };
+    });
+    const a = persistArgs(w, v);
+    await runCreatePersistStep(a);
+    const since = (h.sync.mock.calls[0][0] as { since: Map<string, string> }).since;
+    expect(since).toBeInstanceOf(Map);
+    const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+    expect(since.get(paths[1])).toBe(sha(scanned)); // the baseline predates the scanner's write
+    for (const rel of [paths[0], paths[2], PROMOTION_LOG_PATH]) expect(since.has(rel), rel).toBe(true);
+    expect(since.has(README)).toBe(false); // the READMEs are untouched at snapshot time
+  });
+
+  it("a resumed open (our own PR is already open) is logged, not silent, and never commits", async () => {
+    const w = world();
+    const v = await propose(w);
+    const a = persistArgs(w, v, { octokit: { request: async () => ({ data: [{ number: 41, body: "CREATE (new skill)\nrest" }] }), graphql: async () => ({}) } });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "opened", pr: 41 });
+    expect(a.safeCommit).not.toHaveBeenCalled();
+    expect((a.logger as unknown as { info: ReturnType<typeof vi.fn> }).info).toHaveBeenCalledWith(expect.objectContaining({ pr: 41 }), "create-resumed");
+  });
+
+  it("a deadline of zero ends the step at its first checkpoint: no origin write, no render, no scan", async () => {
+    const w = world();
+    const v = await propose(w);
+    const setOrigin = vi.fn();
+    const a = persistArgs(w, v, { now: gw.now, deadlineMs: 0, setOrigin });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "deadline" });
+    expect(setOrigin).not.toHaveBeenCalled();
+    expect(h.scan).not.toHaveBeenCalled();
+  });
+
+  // Each row kills the clock at ONE point and expects the NEXT checkpoint to fire and nothing after it to run.
+  // (`set-url` #1 is the token write, #2 the strip; `status` #1 is the baseline snapshot; `ls-remote` is the last git call.)
+  it.each([
+    ["after the token strip, before the render and the file writes", () => gw.bumpOn("set-url", 2), { scan: 0, sync: 0, commit: 0, noGit: ["status"] }],
+    ["after the baseline snapshot, before the scanner", () => gw.bumpOn("status", 1), { scan: 0, sync: 0, commit: 0, noGit: [] }],
+    ["after the scanner, before the README sync", () => h.scan.mockImplementation(async () => (writeFileSync(clockPath(), String(CLOCK_BIG)), { ok: true })), { scan: 1, sync: 0, commit: 0, noGit: [] }],
+    ["after the README sync, before the second origin write", () => h.sync.mockImplementation(async (o: { repoRoot: string }) => (bumpReadmes(o.repoRoot), writeFileSync(clockPath(), String(CLOCK_BIG)), { ok: true })), { scan: 1, sync: 1, commit: 0, noGit: [] }],
+    ["after the branch probe, before the commit", () => gw.bumpOn("ls-remote", 1), { scan: 1, sync: 1, commit: 0, noGit: [] }],
+  ] as const)("deadline checkpoint: %s", async (_name, arrange, calls) => {
+    const w = world();
+    const v = await propose(w);
+    arrange();
+    const a = persistArgs(w, v, { now: gw.now });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "deadline" });
+    expect(h.scan).toHaveBeenCalledTimes(calls.scan);
+    expect(h.sync).toHaveBeenCalledTimes(calls.sync);
+    expect(a.safeCommit).toHaveBeenCalledTimes(calls.commit);
+    for (const ev of calls.noGit) expect(gw.events(), `git ${ev} must not have run`).not.toContain(ev);
+    expect(w.config()).not.toContain("x-access-token");
+    expect(execFileSync("git", ["-C", w.clone, "status", "--porcelain", "-uall"], { env: cleanEnv(), encoding: "utf8" })).toBe("");
+  });
+
+  it("budgetMs clamps each spawn to min(its own timeout, what is left): the scanner gets half of the budget, the sync the whole of it", async () => {
+    const w = world();
+    const v = await propose(w);
+    await runCreatePersistStep(persistArgs(w, v, { now: gw.now, deadlineMs: 20_000 }));
+    expect((h.scan.mock.calls[0][0] as { timeoutMs: number }).timeoutMs).toBe(10_000); // floor(20_000 / 2 files)
+    expect((h.sync.mock.calls[0][0] as { timeoutMs: number }).timeoutMs).toBe(20_000); // min(30_000, 20_000)
+    h.scan.mockClear();
+    h.sync.mockClear();
+    const w2 = world();
+    await runCreatePersistStep(persistArgs(w2, await propose(w2), { now: gw.now, deadlineMs: 900_000 }));
+    expect((h.scan.mock.calls[0][0] as { timeoutMs: number }).timeoutMs).toBe(SCAN_TIMEOUT_MS); // min(60_000, 450_000)
+    expect((h.sync.mock.calls[0][0] as { timeoutMs: number }).timeoutMs).toBe(README_SYNC_TIMEOUT_MS); // min(30_000, 900_000)
   });
 });
 

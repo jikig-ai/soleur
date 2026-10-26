@@ -190,6 +190,9 @@ beforeAll(() => {
   for (let n = 1; n <= 12; n++) put(L(n), `# Learning ${n}\n\nA recurring failure number ${n} about retries.\n`);
   put(`knowledge-base/project/patterns/${CREATE_PATTERN_SLUG}.md`, page(CREATE_PATTERN_SLUG, CREATE_EVIDENCE));
   put("knowledge-base/project/patterns/page-two.md", page("page-two", EDIT_EVIDENCE));
+  // A THIRD page that sorts AFTER the create pattern and has a different evidence count (7, not 5): the arm must resolve the
+  // verdict's page by slug (a lookup of "the last page" would write n=7 to the ledger row).
+  put("knowledge-base/project/patterns/zz-page-three.md", page("zz-page-three", Ls(6, 7)));
 
   // The shared synthetic plugin tree (fixture skills + the REAL plan skill and PURPOSE template + fillers + populations + cap).
   const tree = buildSyntheticPluginTree(put);
@@ -833,8 +836,8 @@ describe("review round -- the same-run collision, the token, the lost clone, the
 
   it("G4: when the only pattern is owned by the edit loop this run there is NO create model call at all", async () => {
     const git = gitFixture(remoteDir);
-    execFileSync("git", ["-C", remoteDir, "rm", "-q", "knowledge-base/project/patterns/page-two.md"]);
-    git(["commit", "-qm", "drop page two"]);
+    execFileSync("git", ["-C", remoteDir, "rm", "-q", "knowledge-base/project/patterns/page-two.md", "knowledge-base/project/patterns/zz-page-three.md"]);
+    git(["commit", "-qm", "drop pages two and three"]);
     try {
       editClusters = [{ ...EDIT_CLUSTER, source_learnings: CREATE_EVIDENCE }];
       const r = await run(PATTERNS_CREATE());

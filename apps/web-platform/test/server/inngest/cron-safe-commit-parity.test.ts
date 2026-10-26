@@ -731,6 +731,20 @@ describe("#10550 — the create arm's commit call (outside functions/) persists 
     expect(src).not.toContain("git add .");
   });
 
+  it("carries no ARRAY-FORM staging either (the literal strings above miss `[\"add\", \"-A\"]`), and its own git calls are a closed list of non-writing subcommands", () => {
+    expect(src).not.toMatch(/\[\s*"add"/);
+    expect(src).not.toMatch(/"add",\s*"(?:-A|--all|-u|\.)"/);
+    const ALLOWED = new Set(["fetch", "reset", "clean", "checkout", "rev-parse", "remote", "ls-tree", "ls-remote"]);
+    const subs = new Set<string>();
+    for (const m of src.matchAll(/runGit\(\s*[A-Za-z.]+,\s*\[\s*"([a-z][a-z-]*)"/g)) subs.add(m[1]);
+    // the clean-main restore iterates a literal list of argument arrays
+    const loop = /for \(const args of \[(.*?)\]\) \{/s.exec(src)?.[1] ?? "";
+    for (const m of loop.matchAll(/\[\s*"([a-z][a-z-]*)"/g)) subs.add(m[1]);
+    expect(subs.size, "could not parse the arm's git calls — gate DISENGAGED").toBeGreaterThanOrEqual(7);
+    expect([...subs].filter((x) => !ALLOWED.has(x))).toEqual([]);
+    for (const verb of ["add", "commit", "push", "merge", "rebase", "apply", "am", "cherry-pick", "config", "stash"]) expect(subs.has(verb), verb).toBe(false);
+  });
+
   it("has exactly one commit call (the safeCommitAndPr seam) and the gate parsed it", () => {
     expect(src).toMatch(/const commit = a\.safeCommit \?\? safeCommitAndPr;/);
     expect(calls, "could not parse the commit call — gate DISENGAGED").toHaveLength(1);
