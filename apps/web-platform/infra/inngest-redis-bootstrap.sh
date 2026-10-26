@@ -196,7 +196,11 @@ if [ -z "${INNGEST_REDIS_PASSWORD:-}" ]; then
   printf 'FATAL: INNGEST_REDIS_PASSWORD is unset or empty — refusing to write the aclfile (value-free)\n' >&2
   exit 1
 fi
-if printf '%s' "$INNGEST_REDIS_PASSWORD" | LC_ALL=C grep -qE "[[:space:]\"'\\[:cntrl:]]"; then
+# `=~`, not `printf | grep -q` — under pipefail an early-exiting grep can
+# read as a miss (#9217 grep-q-pipe guard). The class matches whitespace, a quote,
+# a backslash or a control byte, identically to the previous grep -E pattern.
+_acl_bad_re='[[:space:]"'"'"'\\[:cntrl:]]'
+if [[ "$INNGEST_REDIS_PASSWORD" =~ $_acl_bad_re ]]; then
   printf 'FATAL: INNGEST_REDIS_PASSWORD carries whitespace, a quote, a backslash or a control byte — refusing to write the aclfile (value-free)\n' >&2
   exit 1
 fi
