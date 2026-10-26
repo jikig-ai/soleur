@@ -129,18 +129,6 @@ function buildPencilEnv() {
 // the post-mutation save gate (see `shouldSkipSave`) skips auto-save
 // and avoids overwriting .pen files with 0-byte output (#2630).
 
-// --- Node ID extraction ---
-
-function extractNodeIds(response) {
-  const entries = [];
-  const pattern = /Inserted node `([A-Za-z0-9_-]+)`/g;
-  let match;
-  while ((match = pattern.exec(response)) !== null) {
-    entries.push(match[1]);
-  }
-  return entries;
-}
-
 // --- Screenshot persistence ---
 
 function saveScreenshot(base64Data, nodeId) {
@@ -174,7 +162,6 @@ class PencilProcess {
     this.stderrBuffer = "";
     this.outputFile = null;
     this.inputFile = null;
-    this.nodeIdMap = new Map();
     this._dataHandler = null;
   }
 
@@ -188,7 +175,6 @@ class PencilProcess {
     this.outputFile = outFile;
     this.inputFile = inFile;
     this.buffer = "";
-    this.nodeIdMap.clear();
 
     // Spawn pencil using the adapter's own Node binary (process.execPath)
     // instead of relying on the pencil script's #!/usr/bin/env node shebang,
@@ -415,7 +401,7 @@ function registerReadOnlyTool(name, schema, handler) {
 
 // --- Mutating tool handler factory ---
 
-function registerMutatingTool(name, schema, postHandler) {
+function registerMutatingTool(name, schema) {
   server.tool(name, schema, async (params) => {
     await ensureProcess();
     const cmd = formatReplCommand(name, params);
@@ -430,9 +416,6 @@ function registerMutatingTool(name, schema, postHandler) {
         `[pencil-adapter] SKIPPED save (${name} errored): ${text.slice(0, 200)}\n`
       );
       return { content: [{ type: "text", text: enrichErrorMessage(text) }], isError: true };
-    }
-    if (postHandler) {
-      postHandler(text);
     }
     // Auto-save after mutating operations — gated by `shouldSkipSave` so a
     // failed mutation does not trigger a save that overwrites valid .pen
@@ -607,17 +590,7 @@ server.tool(
 
 // --- Mutating tools (auto-save after) ---
 
-registerMutatingTool(
-  "batch_design",
-  { operations: z.string() },
-  (text) => {
-    // Extract and track node IDs
-    const nodeIds = extractNodeIds(text);
-    for (const id of nodeIds) {
-      pencilProcess.nodeIdMap.set(id, id);
-    }
-  }
-);
+registerMutatingTool("batch_design", { operations: z.string() });
 
 registerMutatingTool("replace_all_matching_properties", {
   parents: z.array(z.string()),
