@@ -88,6 +88,25 @@ done
 PATH=$_np
 export PATH
 
+# drop_repo_paths <physical root> — remove every absolute PATH entry that lives inside the repository
+# (direnv PATH_add, node_modules/.bin): a PR could put a git, timeout, jq, env or gitleaks there, and the
+# first match wins, so the entry is filtered, not skipped. Builtins only (`cd -P`, `pwd -P`).
+drop_repo_paths() {
+  local root=$1 e ed np=""
+  local -a pe
+  [ "$root" != / ] || return 0
+  IFS=: read -ra pe <<<"$PATH"
+  for e in ${pe[@]+"${pe[@]}"}; do
+    ed=$(cd -P "$e" 2>/dev/null && pwd -P) || ed=""
+    case "$ed/" in "$root"/*) continue ;; esac
+    np="${np:+$np:}$e"
+  done
+  [ -n "$np" ] || np=/usr/bin:/bin
+  PATH=$np
+  export PATH
+  hash -r
+}
+
 BASE_REF="refs/remotes/origin/main"
 DO_FETCH=1
 
@@ -167,31 +186,28 @@ for _v in $(compgen -e GITLEAKS_); do
 done
 export GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1
 
-# Refuse a git that lives under the current directory BEFORE running it (an in-repo shim would run as
-# the operator); in-repo PATH entries are dropped below once the repository root is known.
-_g=$(type -P git 2>/dev/null) || _g=""
-[ -n "$_g" ] || finish NOT_RUN not-a-work-tree
-_gd=$(cd -P "$(dirname "$_g")" 2>/dev/null && pwd -P) || _gd=""
+# Nothing external may run before the PATH is clean, so the repository root is found with builtins only:
+# the nearest ancestor holding a `.git` (a file for worktrees and submodules, a directory otherwise).
+_root=$(pwd -P)
+_d=$_root
+while :; do
+  if [ -e "$_d/.git" ]; then
+    _root=$_d
+    break
+  fi
+  [ "$_d" != / ] || break
+  _d=${_d%/*}
+  [ -n "$_d" ] || _d=/
+done
+drop_repo_paths "$_root" # mut:earlyfilter
 _cwd=$(pwd -P)
-case "$_gd/" in "$_cwd"/*) finish NOT_RUN git-in-repo ;; esac
+[ "$_cwd" = "$_root" ] || drop_repo_paths "$_cwd"
 
+[ -n "$(type -P git 2>/dev/null)" ] || finish NOT_RUN not-a-work-tree
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || TOP=""
 [ -n "$TOP" ] || finish NOT_RUN not-a-work-tree
 TOPREAL=$(cd -P "$TOP" 2>/dev/null && pwd -P) || TOPREAL=$TOP
-
-# Drop absolute PATH entries that live inside the repository (direnv PATH_add, node_modules/.bin):
-# a PR could put a git, timeout, jq, env or gitleaks there. The first match wins, so filter, don't skip.
-_np=""
-IFS=: read -ra _pe <<<"$PATH"
-for _e in ${_pe[@]+"${_pe[@]}"}; do
-  _ed=$(cd -P "$_e" 2>/dev/null && pwd -P) || _ed=""
-  case "$_ed/" in "$TOPREAL"/*) continue ;; esac
-  _np="${_np:+$_np:}$_e"
-done
-[ -n "$_np" ] || _np=/usr/bin:/bin
-PATH=$_np
-export PATH
-hash -r
+drop_repo_paths "$TOPREAL"
 
 umask 077
 TMP=$(mktemp -d 2>/dev/null) || finish NOT_RUN tmpdir-unavailable

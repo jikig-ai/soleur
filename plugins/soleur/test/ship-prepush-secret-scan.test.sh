@@ -464,7 +464,7 @@ if lit_mutant m9 '  case "$_e" in /*) _np' '  case "$_e" in *) _np'; then
   SCRIPT_UNDER_TEST="$TMP/mut/m9.sh"
   scan "$ST" "PATH=.:$TMP/stubdir:$TMP/links" "STUB_MODE=clean" "STUB_N=2" "STUB_LOG=$STUB_LOGF" "TMPDIR=$TMP/td"
   SCRIPT_UNDER_TEST=""
-  if [ -e "$TMP/PWNED" ] || [ "$RC" != 0 ]; then pass "M9 relative PATH kept: the repo-local git row goes RED (rc=$RC; the git-in-repo guard may refuse it first)"; else fail "M9 survived"; fi
+  if [ -e "$TMP/PWNED" ] || [ "$RC" != 0 ]; then pass "M9 relative PATH kept: the repo-local git row goes RED (rc=$RC)"; else note "M9 relative-entry drop removed is an EQUIVALENT mutant: drop_repo_paths also drops a relative entry whose directory is the repo (a git cwd always is); kept as the first layer"; fi
 fi
 rm -f "$ST/git" "$TMP/PWNED"
 # An ABSOLUTE PATH entry inside the repo (direnv PATH_add, node_modules/.bin) is dropped too.
@@ -475,7 +475,7 @@ rm -f "$TMP/PWNED"
 scan "$ST" "PATH=$ST/bin:$TMP/stubdir:$TMP/links" "STUB_MODE=clean" "STUB_N=2" "STUB_LOG=$STUB_LOGF" "TMPDIR=$TMP/td"
 if [ ! -e "$TMP/PWNED" ]; then pass "an absolute in-repo PATH entry never ran the repo-local timeout"; else fail "the in-repo timeout ran as the operator"; fi
 want_rc "...and the scan still completed" 0
-if lit_mutant m21 '  case "$_ed/" in "$TOPREAL"/*) continue ;; esac' '  :'; then
+if lit_mutant m21 '    case "$ed/" in "$root"/*) continue ;; esac' '    :'; then
   rm -f "$TMP/PWNED"
   SCRIPT_UNDER_TEST="$TMP/mut/m21.sh"
   scan "$ST" "PATH=$ST/bin:$TMP/stubdir:$TMP/links" "STUB_MODE=clean" "STUB_N=2" "STUB_LOG=$STUB_LOGF" "TMPDIR=$TMP/td"
@@ -483,13 +483,28 @@ if lit_mutant m21 '  case "$_ed/" in "$TOPREAL"/*) continue ;; esac' '  :'; then
   if [ -e "$TMP/PWNED" ]; then pass "M21 in-repo PATH entries kept: the repo-local timeout row goes RED"; else fail "M21 survived"; fi
 fi
 rm -f "$ST/bin/timeout" "$TMP/PWNED"
-printf '#!/bin/sh\n: >"%s/PWNED"\nexec "%s" "$@"\n' "$TMP" "$_realgit" >"$ST/bin/git"
-chmod +x "$ST/bin/git"
-scan "$ST" "PATH=$ST/bin:$TMP/links" "TMPDIR=$TMP/td"
-want_rc "a git that lives in an in-repo PATH entry is refused before it runs" 43
-reason_is "in-repo git: reason git-in-repo" git-in-repo
-if [ ! -e "$TMP/PWNED" ]; then pass "...and it never ran"; else fail "the in-repo git ran"; fi
-rm -rf "${ST:?}/bin" "$TMP/PWNED"
+# In-repo shims of the very first commands (git, dirname) must not run either, from the repo root OR a
+# subdirectory: the repository root is found with builtins, before anything external executes.
+for _shim in git dirname; do
+  _real=$(type -P "$_shim")
+  printf '#!/bin/sh\n: >"%s/PWNED"\nexec "%s" "$@"\n' "$TMP" "$_real" >"$ST/bin/$_shim"
+  chmod +x "$ST/bin/$_shim"
+done
+mkdir -p "$ST/sub"
+for _cwd in "$ST" "$ST/sub"; do
+  rm -f "$TMP/PWNED"
+  scan "$_cwd" "PATH=$ST/bin:$TMP/stubdir:$TMP/links" "STUB_MODE=clean" "STUB_N=2" "STUB_LOG=$STUB_LOGF" "TMPDIR=$TMP/td"
+  want_rc "an in-repo git/dirname PATH shim is filtered, cwd=${_cwd#"$TMP"/w/}: the scan completes" 0
+  if [ ! -e "$TMP/PWNED" ]; then pass "...and no in-repo shim ran (cwd=${_cwd#"$TMP"/w/})"; else fail "an in-repo shim ran as the operator (cwd=${_cwd#"$TMP"/w/})"; fi
+done
+if lit_mutant m25 'drop_repo_paths "$_root" # mut:earlyfilter' ': # mut:earlyfilter'; then
+  rm -f "$TMP/PWNED"
+  SCRIPT_UNDER_TEST="$TMP/mut/m25.sh"
+  scan "$ST/sub" "PATH=$ST/bin:$TMP/stubdir:$TMP/links" "STUB_MODE=clean" "STUB_N=2" "STUB_LOG=$STUB_LOGF" "TMPDIR=$TMP/td"
+  SCRIPT_UNDER_TEST=""
+  if [ -e "$TMP/PWNED" ]; then pass "M25 early PATH filter removed: the in-repo shim row goes RED"; else fail "M25 survived"; fi
+fi
+rm -rf "${ST:?}/bin" "${ST:?}/sub" "$TMP/PWNED"
 
 echo "== 2. --base is a selector, never a command line"
 for b in "a b" "-x" "HEAD~1" "nonexistent" "--all"; do
@@ -1071,7 +1086,7 @@ echo "stub-arm assertions: $PASS, real-arm assertions: $RPASS, failed: $FAIL"
 if [ "${#SKIPPED_ARMS[@]}" -gt 0 ]; then
   echo "SKIPPED arms: ${SKIPPED_ARMS[*]}"
 fi
-FLOOR=150
+FLOOR=151
 if [ "$PASS" -lt "$FLOOR" ]; then
   printf 'FATAL: only %s stub-arm assertions passed; floor is %s (a stub or a gutted suite)\n' "$PASS" "$FLOOR" >&2
   exit 1
