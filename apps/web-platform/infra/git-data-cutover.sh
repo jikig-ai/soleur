@@ -755,6 +755,9 @@ refuse_if_fence_not_intact() {
 #   26  the endpoint refused the transport key            probe_failed reason=auth_refused
 #   27  the pinned host key did not verify                probe_failed reason=host_key
 #   28  anything else                                     probe_failed reason=unclassified
+#   29  ssh / timeout could not be run (rc 126 / 127)     probe_failed reason=ssh_unrunnable
+#   30  the endpoint closed or reset the connection      probe_failed reason=ssh_closed
+#   31  the transport key is not a parseable key file     probe_failed reason=key_shape (checked before any dial; #8211 PR-G)
 # Any other rc (docker exec itself failing: no such container, a stopped one; ssh's 255; the bound's 124) is
 # probe_failed rc=<n>. rc 0 counts only with the body's exact one-line answer: an exit that ran nothing is not a pass.
 CONTAINER_PROBE_ANSWER='container_probe ok worktree_root=writable transport=answered'
@@ -792,6 +795,7 @@ refuse_if_container_unready() {
       28) _store_refuse container-probe probe_failed "" unclassified ;;
       29) _store_refuse container-probe probe_failed "" ssh_unrunnable ;;
       30) _store_refuse container-probe probe_failed "" ssh_closed ;;
+      31) _store_refuse container-probe probe_failed "" key_shape ;;
       *) _access_stderr "$CAPTURE_TMP/capture.err"
          _store_refuse container-probe probe_failed "$rc" ;;
     esac

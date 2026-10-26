@@ -34,6 +34,7 @@ import {
 } from "@/server/observability";
 import { isGitDataStoreEnabled } from "@/server/workspace-resolver";
 import { gitWithPrivateKeyAuth } from "@/server/git-auth";
+import { readGitDataKeyEnv } from "@/server/git-data-key";
 // Pure transport helpers (call-time only) from the WRITE-side module. The two
 // modules reference each other exclusively inside async function bodies (this
 // file → gitDataRemoteUrl/assertSafeWorkspaceId; the write module →
@@ -212,7 +213,7 @@ export async function fetchFromGitData(params: {
     );
   }
 
-  const transportKey = process.env.GIT_TRANSPORT_SSH_PRIVATE_KEY?.trim();
+  const transportKey = readGitDataKeyEnv("GIT_TRANSPORT_SSH_PRIVATE_KEY");
   if (!transportKey) {
     throw new Error(
       "git-data: GIT_TRANSPORT_SSH_PRIVATE_KEY is unset — cannot fetch from the " +
