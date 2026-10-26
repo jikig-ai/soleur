@@ -1,0 +1,45 @@
+---
+title: "ci: S4 PR4c, the remaining held-back edges of the code-edge drain and their revealed mentions"
+date: 2026-10-26
+slug: ci-s4-affected-index-pr4c-held-back-edges
+branch: feat-one-shot-s4-affected-index-pr4c-held-back-edges
+issue: 10959
+---
+
+## Overview
+
+PR4c continues the S4 affected-index drain after PR4b (merged 2026-10-26 as `b97c1d275e`): it takes the held-back real-read edges that PR4b left on the #10959 worklist and drains the ones that pass the series bar, under the same stop line and accept-row rules. Draft PR #11131 (label `s4-drain`) is the vehicle.
+
+## Research Insights
+
+### Premise validation (Phase 0.6)
+
+Checked live with `gh`/`git` on 2026-10-26: #10959, #10448, #9729, #10860, #10861, #10865, #10414, #10859, #10949, #10862 are all OPEN; draft PR #11131 is OPEN, is the only `s4-drain` PR and has no commits beyond the branch init (`gh pr view 11131 --json files` reports 0 files); PR4b merged as `b97c1d275e` and `origin/main` is `81192540bf` (two infra pin bumps later, none touching the index, baseline or accept file). Baseline `wc -l` = 1,629; accept file = 74 lines; the brief's "1,629" holds.
+Worklist: the archived PR4b `receipts/edges-decisions.tsv` has 106 non-`declare` rows; 105 are still exact lines of the baseline (the 106th, `scripts/inngest-probe-heartbeat-feeder` -> `scripts/lib/inngest-probe-row.sh`, is `already-undrained`), of which `tests/scripts/inngest-host-dark-gate` -> `scripts/lib/inngest-probe-row.sh` is `kept-for-census` (CTO row 5 of the PR4b log: no test edit in a drain PR). So 104 edges are declarable candidates. The PR4b archive is under `knowledge-base/project/specs/archive/20261025-222836-feat-one-shot-s4-affected-index-pr4b-held-back-edges/` (the brief's path holds).
+STALE-premise check: the runbook already carries the PR4b/PR4c accept-row allowance (section 7, "Never in a drain PR", "Reveal and hold-back", "Ambiguous pairs and big files"), so unlike PR4b no rubric edit is owed; only the "PR4b worklist" bullet needs a PR4c pointer. ADR corpus: ADR-276 amendment item 2 is the drain tool and already authorizes accept rows; no ADR lists accept rows or per-chain drains as a rejected alternative (PR4b grep, nothing changed since).
+
+### Measurements (this planning session, read-only, local)
+
+- Trial (throwaway detached worktree of `81192540bf`, removed afterwards; the 104 candidate edges declared at once in 27 existing arrays plus 5 new blocks, NO accept rows): `exit=1 reason=new-pair live=2000 baseline=1629` => 475 new pairs, 104 `stale-line` (exactly the declared edges), wall 192 s. No suite outside the declared set gained a pair. Receipts: `receipts/trial-all-edges-reveal-by-suite.tsv`, `receipts/trial-all-edges-new-pairs.tsv`, `receipts/ratchet-trial-all-edges-81192540bf.out`, `receipts/worklist-edges.tsv`.
+- Shape (suite: edges, round-1 reveal): 25 small suites reveal 1 to 12 each (cumulative 105, 25 edges; these are PR4b's `held-*` suites plus `scripts/compound-promote`); PR4b's `out-of-slice` suites: `boundary-prefix` 5/13, `required-checks-merge-group-coverage` 1/14, `preflight-check10-suite-integrity` 3/15, `scratch-residue` 9/16, `plugins/soleur` 5/17, `t5-skip-persistence-bound-7510` 1/18, `battery-tag-authorship` 5/29 (these seven: 29 edges, cumulative 122), `betterstack-emitter-read` 18/29 (cumulative 151, past the 130 line), `grep-q-pipe-guard` 31/68, `git-data-birth-readiness-gate` 1/151 (never a drain-PR edge, ruled to PR5).
+- The reveal numbers agree with PR4b's trial for the out-of-slice suites to within 1 pair, so PR4b's real reads did not move them. 151 of the 475 first-ref files are `grep-q-pipe-guard.test.sh` itself (the 151 pairs of the birth-readiness edge) and 37 are `apps/web-platform/infra/run-registered-suites.sh` (31 commits in 90 days: hot; shared by `battery-tag-authorship` and `t5-skip-persistence-bound-7510`).
+- Hot declared files among the slice candidates (`git log --since=90.days --oneline origin/main -- F | wc -l`): `.claude/hooks/guardrails.sh` 13, `plugins/soleur/scripts/grok-pre-push-gate.sh` 9, `tests/scripts/test-infra-privileged-tier-census.sh` 19, `apps/web-platform/infra/run-registered-suites.sh` 31; every other F of the seven slice suites is at or under 8 (`ship-unpushed-commits-gate.test.sh` is exactly 8, not hot). Any accept row on a hot F holds the whole edge; the counts are re-run in Phase 0.
+
+### Institutional learnings applied
+
+All of the PR4b list still applies (see the archived PR4b plan, "Institutional learnings applied": regenerate the baseline from `git checkout origin/main -- <baseline>`, audit WITH main's accept file, duplicate `AFFECTED_*_PATHS` check after each merge of main, `grep -q P < <(producer)`, kill own stale suite runs, stage by explicit pathspec). New or sharpened for PR4c:
+- `knowledge-base/project/learnings/2026-10-25-a-read-recorder-classifies-revealed-pairs-and-an-all-edges-trial-sizes-a-drain.md`: run the recorder over the slice suites BEFORE classifying by eye (two recordings, about 15 s per suite); opened in both = real read, not opened = mention only if the line kind is in the closed list; recorder-unreliable and bulk readers hold; the yield is bounded by the holds, not the cap (PR4b: 11 of 36 slice edges declared).
+- `knowledge-base/project/learnings/2026-10-18-ratchet-guards-must-pin-the-scan-population-and-their-own-registrations.md`: a comment added to `scripts/lib/test-affected-paths.sh` can be an INDEX-ANCHOR finding; add only array entries and the existing `# THIS FILE` marker, no new comment lines.
+- `knowledge-base/project/learnings/2026-10-25-a-fix-round-reintroduced-the-pipe-it-was-fixing-and-the-worktree-vanished-under-it.md` and `plugins/soleur/skills/git-worktree/SKILL.md` (manual-worktree lease note): the worktree was reaped last time while the lead waited on background suites. The lease is a time-boxed reservation (default 240 minutes, window clamped to 4-24 h, `acquire_lease` in `plugins/soleur/scripts/lib/session-state.sh`) with no automatic renewal; a lease file for this worktree exists now. Commit and push a WIP before every long wait and re-acquire the lease before each wait and again while the PR sits in the merge queue.
+- `plugins/soleur/skills/ship/references/queue-mode.md`: a BEHIND armed PR must not be synced and a push dequeues it, so the only window to merge `origin/main` (the accept file conflicts when siblings append rows) is BEFORE arming.
+- `knowledge-base/project/learnings/2026-09-22-one-shared-json-leaf-made-every-pair-of-prs-conflict.md`: the accept file is a shared tail; insert rows in the file's existing order and re-derive them from the audit after the merge instead of resolving a conflict by hand.
+
+### Property List and Cut List (Phase 0.6b)
+
+Properties (observable outcomes): (1) a held-back edge is declared only where the suite really reads or executes the file, and a revealed pair is accepted only as a classified mention; (2) the baseline only loses lines, only through the prune-only `ratchet --print-baseline`, run to a fixpoint; (3) every revealed pair is classified from a cited line and recorder evidence BEFORE the commit and the CTO stop line holds; (4) every commit leaves `ratchet` at exit 0 and the final audit shows zero stale or unused accept rows; (5) what PR4c did not take is tracked by name on #10959 with the reason code; (6) the window consequence is recorded on #10865 with the merge SHA; (7) the PR survives the merge queue (merged with `origin/main`, lease alive, no sync after arming).
+Mechanisms the ask names, and what on `origin/main` already buys each property (grepped: `scripts/ci-pr-affected-replay.py --help`, the runbook section 7, the accept file, `scripts/audit-suite-reads.sh --help`): declaration (`AFFECTED_*_PATHS`), prune-only baseline, anchor-keyed accept rows with a validator (`load_accept`, `judge_rules`), the read recorder, the stop line (a CTO ruling, not code) and the worktree lease (`acquire_lease`) all exist.
+Cut list: no new script or lint (receipts are data; the helper scripts of the work phase stay in the scratchpad); no change to `ratchet`, the audit reach, the replay suite or the recorder; no new `_CLOSURE_LEAF_*` array unless 3 or more labels spread the same helper; no ADR edit; no accept-file schema change; no new issue (the continuation is #10959); no lease-renewal tooling (`acquire_lease` re-acquire is the existing mechanism); no sibling-conflict automation (merge `origin/main`, regenerate, push before arming is the existing recipe).
+
+### Value-proposition measurement (Phase 0.6c)
+
+No CI-cost saving is claimed (the lever `CI_PR_AFFECTED` is unset and locked). The measurable output is baseline lines drained: `wc -l scripts/ci-pr-affected-audit.baseline.tsv` before (1,629) and after, upper bound 29 of 1,629 for the seven-suite slice (1.8 percent, before the hold rules), and accept rows added (`wc -l` of the accept file; estimate from the trial's mention share). PR4b's measured conversion was 11 declared of 36 slice edges (31 percent); the plan states that expectation and does not argue the yield.
