@@ -3188,6 +3188,10 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
             file: full,
             url: `/${m![1].replace(/index\.html$/, "")}`,
           });
+        } else {
+          // A non-page-source file under pages/** must not silently escape the
+          // census — classify it explicitly or the glob's totality claim is false.
+          out.push({ file: full, url: `__nonpage__:${full}` });
         }
       }
     };
@@ -3203,7 +3207,7 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
 
   test("anti-vacuity: registry is complete and every registry URL resolves to a built page", () => {
     expect(PILLAR_CLUSTER.length).toBeGreaterThanOrEqual(10);
-    for (const url of PILLAR_CLUSTER) {
+    for (const url of [...PILLAR_CLUSTER, ...RAIL_LINKED]) {
       expect(
         existsSync(resolve(SITE, url.slice(1), "index.html")),
         `built page for ${url}`,
@@ -3235,6 +3239,7 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
     const navStart = pricing.indexOf('<ul class="nav-links">');
     expect(navStart, "nav-links block present on /pricing/").toBeGreaterThan(-1);
     const navEnd = pricing.indexOf("</header>", navStart);
+    expect(navEnd, "</header> follows the nav block").toBeGreaterThan(navStart);
     const navSubtree = pricing.slice(navStart, navEnd);
     // Homepage body = built index.html minus the footer region.
     const indexHtml = readSite("index.html");
@@ -3256,7 +3261,18 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
   });
 
   test("pillar/cluster mesh: pillar forward-links, compare back/sibling links, agentic-engineering cluster", () => {
-    const pillar = readSite("company-as-a-service/index.html");
+    // Scope the haystack to <main> … </main> — the rendered page also carries
+    // the global nav (where every pillar/cluster URL is now a child), so a
+    // whole-page match is satisfied by nav chrome and cannot be driven RED.
+    const mainOf = (rel: string): string => {
+      const html = readSite(rel);
+      const s = html.indexOf("<main");
+      const e = html.indexOf("</main>", s);
+      expect(s, `${rel}: <main> present`).toBeGreaterThan(-1);
+      expect(e, `${rel}: </main> present`).toBeGreaterThan(s);
+      return html.slice(s, e);
+    };
+    const pillar = mainOf("company-as-a-service/index.html");
     for (const url of [
       "/compare/soleur-vs-cursor/",
       "/compare/soleur-vs-devin/",
@@ -3265,7 +3281,7 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
     ]) {
       expect(hasHref(pillar, url), `pillar forward-links ${url}`).toBe(true);
     }
-    const cursor = readSite("compare/soleur-vs-cursor/index.html");
+    const cursor = mainOf("compare/soleur-vs-cursor/index.html");
     expect(
       hasHref(cursor, "/company-as-a-service/"),
       "cursor compare links the pillar",
@@ -3274,7 +3290,7 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
       hasHref(cursor, "/compare/soleur-vs-devin/"),
       "cursor compare links its sibling",
     ).toBe(true);
-    const devin = readSite("compare/soleur-vs-devin/index.html");
+    const devin = mainOf("compare/soleur-vs-devin/index.html");
     expect(
       hasHref(devin, "/company-as-a-service/"),
       "devin compare links the pillar",
@@ -3283,7 +3299,7 @@ describe("pillar/cluster link graph — entry-point + mesh coverage", () => {
       hasHref(devin, "/compare/soleur-vs-cursor/"),
       "devin compare links its sibling",
     ).toBe(true);
-    const ae = readSite("agentic-engineering/index.html");
+    const ae = mainOf("agentic-engineering/index.html");
     for (const url of [
       "/skills/",
       "/glossary/",
