@@ -162,3 +162,28 @@ describe("every closed refusal detail token in the create modules is in the runb
     expect(findStale([...runbookTableTokens(runbook), "no-strings"], tokens)).toEqual(["no-strings"]);
   });
 });
+
+describe("the runbook documents every closed Sentry extra token the create arm can set (extra.cause, extra.stage)", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const runbook = readFileSync(RUNBOOK, "utf-8");
+  const arm = readFileSync(CREATE_ARM, "utf-8");
+
+  it("every DEADLINE_STAGES token of the arm is a backticked token of the runbook", () => {
+    const list = /export const DEADLINE_STAGES = \[([^\]]+)\] as const/.exec(arm)?.[1] ?? "";
+    const stages = [...list.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
+    expect(stages.length).toBeGreaterThanOrEqual(12); // non-vacuity: the parse found the list
+    expect(stages.filter((t) => !runbook.includes(`\`${t}\``))).toEqual([]);
+  });
+
+  it("every cause literal the arm builds for itself (not from an error object) is a backticked token of the runbook", () => {
+    // `cause: "non-array"` (the listing) and the gitCause / originCause return literals
+    const literals = new Set<string>();
+    for (const m of arm.matchAll(/\bcause:\s*"([a-z-]+)"/g)) literals.add(m[1]);
+    for (const m of arm.matchAll(/\breturn "([a-z-]+)";/g)) literals.add(m[1]);
+    const mustHave = ["non-array", "bad-output", "timeout", "signal", "spawn", "symlink-refused", "set-url-failed"];
+    for (const t of mustHave) expect(literals.has(t), `the arm no longer builds cause ${t}`).toBe(true);
+    expect(mustHave.filter((t) => !runbook.includes(`\`${t}\``))).toEqual([]);
+  });
+});

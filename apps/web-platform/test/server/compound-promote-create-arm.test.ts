@@ -25,6 +25,7 @@ import {
   REAL_CHECK_NAMES,
   SCHEDULED_ISSUE_LABEL,
   causeToken,
+  gitCause,
   CREATE_MODEL_TIMEOUT_MS,
   CREATE_OPEN_PR_PAGES,
   CREATE_PR_PATH_PREFIXES,
@@ -113,9 +114,13 @@ describe("findOpenCreatePr -- one open create at a time", () => {
       pr(2, CREATE_PR_BODY_LINE, HEAD, "o/r-fork"),
       pr(3, CREATE_PR_BODY_LINE, HEAD, null), // head.repo missing (a deleted fork): not ours
       { number: 4, body: CREATE_PR_BODY_LINE, head: { ref: HEAD, repo: null } },
-      pr(5, CREATE_PR_BODY_LINE, HEAD, "O/R"), // case differs: GitHub reports the canonical name, so a mismatch is not ours either
     ]]);
     expect(await findOpenCreatePr(octokit, "o", "r")).toEqual({ kind: "none" });
+    // OBS F5: the repository name is compared case-insensitively (the same repository), so a case difference IS ours
+    expect(await findOpenCreatePr(octokitOf([[pr(5, CREATE_PR_BODY_LINE, HEAD, "O/R")]]).octokit, "o", "r")).toEqual({ kind: "open" });
+    expect(await findOpenCreatePr(octokitOf([[pr(6, CREATE_PR_BODY_LINE, HEAD, "o/R")]]).octokit, "O", "r")).toEqual({ kind: "open" });
+    // a non-string full_name is never ours
+    expect(await findOpenCreatePr(octokitOf([[{ number: 7, body: CREATE_PR_BODY_LINE, head: { ref: HEAD, repo: { full_name: 42 } } }]]).octokit, "o", "r")).toEqual({ kind: "none" });
     // and the same PR from THIS repo is found (the assertion can fail)
     const { octokit: own } = octokitOf([[pr(1, CREATE_PR_BODY_LINE, HEAD, "attacker/r"), pr(9, CREATE_PR_BODY_LINE, HEAD, "o/r")]]);
     expect(await findOpenCreatePr(own, "o", "r")).toEqual({ kind: "open" });
@@ -158,6 +163,16 @@ describe("causeToken -- a closed token, never a message", () => {
     expect(causeToken(new Error("some free text with a token ghs_secret"))).toBe("Error");
     expect(causeToken(Object.assign(new Error("x"), { name: "EvilName; drop table" }))).toBe("unknown");
     for (const odd of [null, undefined, "str", 42]) expect(causeToken(odd)).toBe("unknown");
+  });
+});
+
+describe("gitCause -- the closed cause of a failed git call", () => {
+  it("bad-output (exit 0, wrong shape) wins; then timeout, exit<N>, signal, spawn", () => {
+    expect(gitCause({ timedOut: false, badOutput: true })).toBe("bad-output");
+    expect(gitCause({ timedOut: true, signal: "SIGTERM" })).toBe("timeout");
+    expect(gitCause({ timedOut: false, exit: 128 })).toBe("exit128");
+    expect(gitCause({ timedOut: false, signal: "SIGKILL" })).toBe("signal");
+    expect(gitCause({ timedOut: false })).toBe("spawn");
   });
 });
 

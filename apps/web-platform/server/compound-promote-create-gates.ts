@@ -368,6 +368,8 @@ export interface GitEvidence {
   exit?: number;
   signal?: string;
   timedOut: boolean;
+  /** Set by a caller (never by `runGit`) when git exited 0 but its answer was not the shape the caller needs: cause `bad-output`. */
+  badOutput?: boolean;
 }
 
 export type GitResult = { ok: true; stdout: string } | ({ ok: false } & GitEvidence);

@@ -53,6 +53,7 @@ import { CREATE_STAGE_ORDER } from "@/server/compound-promote-create";
 import { README_SYNC_TIMEOUT_MS, SCAN_TIMEOUT_MS, createSyntheticCheckNames } from "@/server/compound-promote-create-gates";
 import {
   CREATE_PERSIST_DEADLINE_MS,
+  DEADLINE_STAGES,
   PLAIN_ORIGIN_URL,
   runCreatePersistStep,
   runCreateProposeStep,
@@ -110,6 +111,8 @@ interface GitWrapper {
   failSetUrl: (n: number) => void;
   /** Jump the clock when the `nth` `ev` runs. */
   bumpOn: (ev: string, nth: number) => void;
+  /** Make the `nth` `ev` fail with exit 128 (`fail`, the default) or print one non-object-id line and exit 0 (`garble`) instead of running git. */
+  failOn: (ev: string, nth: number, mode?: "fail" | "garble") => void;
   /** Append a marker to the same time-ordered stream (the suite's doubles use it). */
   mark: (name: string) => void;
   now: () => number;
@@ -123,6 +126,7 @@ function installGitWrapper(): GitWrapper {
   clockFilePath = file("clock");
   writeFileSync(file("fail-count"), "0");
   writeFileSync(file("bump"), "none 0");
+  writeFileSync(file("inject"), "none 0 fail");
   const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
   const script = [
     "#!/bin/sh",
@@ -139,6 +143,14 @@ function installGitWrapper(): GitWrapper {
     'if [ "$ev" = "$bev" ]; then',
     `  c=$(grep -c "^$ev$" "${file("log")}"); [ "$c" -eq "$bnth" ] && echo ${CLOCK_BIG} > "${file("clock")}"`,
     "fi",
+    `read iev inth imode < "${file("inject")}"`,
+    'if [ "$ev" = "$iev" ]; then',
+    `  c=$(grep -c "^$ev$" "${file("log")}")`,
+    '  if [ "$c" -eq "$inth" ]; then',
+    '    if [ "$imode" = "garble" ]; then echo "not-an-object-id"; exit 0; fi',
+    '    echo "fatal: simulated" >&2; exit 128',
+    "  fi",
+    "fi",
     `exec ${real} "$@"`,
     "",
   ].join("\n");
@@ -149,6 +161,7 @@ function installGitWrapper(): GitWrapper {
     events: () => readFileSync(file("log"), "utf8").split("\n").filter(Boolean),
     failSetUrl: (n) => writeFileSync(file("fail-count"), String(n)),
     bumpOn: (ev, nth) => writeFileSync(file("bump"), `${ev} ${nth}`),
+    failOn: (ev, nth, mode = "fail") => writeFileSync(file("inject"), `${ev} ${nth} ${mode}`),
     mark: (name) => appendFileSync(file("log"), `${name}\n`),
     now: () => Number(readFileSync(file("clock"), "utf8")),
     restore: () => {
@@ -711,26 +724,71 @@ describe("G9 -- the stage order, the deadline checkpoints, the commit config, th
     expect(h.scan).not.toHaveBeenCalled();
   });
 
-  // Each row kills the clock at ONE point and expects the NEXT checkpoint to fire and nothing after it to run.
+  // Each row kills the clock at ONE point and expects the NEXT checkpoint to fire and nothing after it to run, and the
+  // refusal to NAME that checkpoint (`extra.stage`, a member of DEADLINE_STAGES).
   // (`set-url` #1 is the token write, #2 the strip; `status` #1 is the baseline snapshot; `ls-remote` is the last git call.)
   it.each([
-    ["after the token strip, before the render and the file writes", () => gw.bumpOn("set-url", 2), { scan: 0, sync: 0, commit: 0, noGit: ["status"] }],
-    ["after the baseline snapshot, before the scanner", () => gw.bumpOn("status", 1), { scan: 0, sync: 0, commit: 0, noGit: [] }],
-    ["after the scanner, before the README sync", () => h.scan.mockImplementation(async () => (writeFileSync(clockPath(), String(CLOCK_BIG)), { ok: true })), { scan: 1, sync: 0, commit: 0, noGit: [] }],
-    ["after the README sync, before the second origin write", () => h.sync.mockImplementation(async (o: { repoRoot: string }) => (bumpReadmes(o.repoRoot), writeFileSync(clockPath(), String(CLOCK_BIG)), { ok: true })), { scan: 1, sync: 1, commit: 0, noGit: [] }],
-    ["after the branch probe, before the commit", () => gw.bumpOn("ls-remote", 1), { scan: 1, sync: 1, commit: 0, noGit: [] }],
-  ] as const)("deadline checkpoint: %s", async (_name, arrange, calls) => {
+    ["after the token strip, before the render and the file writes", () => gw.bumpOn("set-url", 2), { scan: 0, sync: 0, commit: 0, noGit: ["status"] }, "write"],
+    ["after the baseline snapshot, before the scanner", () => gw.bumpOn("status", 1), { scan: 0, sync: 0, commit: 0, noGit: [] }, "scan"],
+    ["after the scanner, before the README sync", () => h.scan.mockImplementation(async () => (writeFileSync(clockPath(), String(CLOCK_BIG)), { ok: true })), { scan: 1, sync: 0, commit: 0, noGit: [] }, "readme-sync"],
+    ["after the README sync, before the second origin write", () => h.sync.mockImplementation(async (o: { repoRoot: string }) => (bumpReadmes(o.repoRoot), writeFileSync(clockPath(), String(CLOCK_BIG)), { ok: true })), { scan: 1, sync: 1, commit: 0, noGit: [] }, "final-fetch"],
+    ["after the branch probe, before the commit", () => gw.bumpOn("ls-remote", 1), { scan: 1, sync: 1, commit: 0, noGit: [] }, "commit-guard"],
+  ] as const)("deadline checkpoint: %s", async (_name, arrange, calls, stage) => {
     const w = world();
     const v = await propose(w);
     arrange();
     const a = persistArgs(w, v, { now: gw.now });
     expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "deadline" });
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", extra: expect.objectContaining({ detail: "deadline", stage }) }));
+    expect(DEADLINE_STAGES).toContain(stage);
     expect(h.scan).toHaveBeenCalledTimes(calls.scan);
     expect(h.sync).toHaveBeenCalledTimes(calls.sync);
     expect(a.safeCommit).toHaveBeenCalledTimes(calls.commit);
     for (const ev of calls.noGit) expect(gw.events(), `git ${ev} must not have run`).not.toContain(ev);
     expect(w.config()).not.toContain("x-access-token");
     expect(execFileSync("git", ["-C", w.clone, "status", "--porcelain", "-uall"], { env: cleanEnv(), encoding: "utf8" })).toBe("");
+  });
+
+  // A git call that FAILS because the budget ran out (the kill was ours) is the deadline, and says which call. One row per
+  // git stage that has a deadline token; the clock jumps and the same call fails, so the deadline takes precedence over
+  // the git refusal it would otherwise be.
+  it.each([
+    ["fetch", 1, "fetch"],
+    ["reset", 2, "reset"], // reset #1 is the clean-main restore before the step proper
+    ["rev-parse", 1, "blobs"],
+    ["set-url", 2, "strip"],
+    ["fetch", 2, "final-fetch"],
+    ["rev-parse", 2, "final-blobs"],
+    ["ls-tree", 1, "tree"],
+    ["ls-remote", 1, "probe"],
+  ] as const)("a failing git %s #%i with the budget gone is persist/deadline at stage %s (precedence over the git refusal)", async (ev, nth, stage) => {
+    const w = world();
+    const v = await propose(w);
+    gw.bumpOn(ev, nth);
+    gw.failOn(ev, nth);
+    const a = persistArgs(w, v, { now: gw.now });
+    expect(await runCreatePersistStep(a)).toEqual({ kind: "refused", class: "persist", detail: "deadline" });
+    expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", extra: expect.objectContaining({ detail: "deadline", stage }) }));
+    expect(a.safeCommit).not.toHaveBeenCalled();
+    expect(w.config()).not.toContain("x-access-token");
+  });
+
+  it("every DEADLINE_STAGES token is the stage of some row above (the list has no dead entry, the rows no unlisted stage)", () => {
+    const rows = ["write", "scan", "readme-sync", "final-fetch", "commit-guard", "fetch", "reset", "blobs", "strip", "final-fetch", "final-blobs", "tree", "probe"];
+    expect([...new Set(rows)].sort()).toEqual([...DEADLINE_STAGES].sort());
+  });
+
+  it("OBS F3: git answering a blob read with the wrong shape (exit 0) is cause bad-output, not spawn, and carries no exit status", async () => {
+    for (const nth of [1, 2]) {
+      const w = world();
+      const v = await propose(w);
+      gw.failOn("rev-parse", nth, "garble");
+      vi.mocked(reportSilentFallback).mockClear();
+      const r = await runCreatePersistStep(persistArgs(w, v, { now: gw.now }));
+      expect(r, `rev-parse #${nth}`).toEqual({ kind: "refused", class: "persist", detail: "blob-read-failed" });
+      expect(vi.mocked(reportSilentFallback)).toHaveBeenCalledWith(null, expect.objectContaining({ op: "create-refused", extra: expect.objectContaining({ detail: "blob-read-failed", cause: "bad-output" }) }));
+      expect(w.config()).not.toContain("x-access-token");
+    }
   });
 
   it("budgetMs clamps each spawn to min(its own timeout, what is left): the scanner gets half of the budget, the sync the whole of it", async () => {

@@ -323,6 +323,7 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
 | `stub-drift` | `stub-differs` |
 | `persist` | `branch-shape`, `branch-taken` (an open PR on our branch is not a create PR), `clone-missing` (the clone directory is gone; either step), `clone-not-clean`, `origin-failed`, `fetch-failed`, `reset-failed`, `blob-read-failed`, `origin-strip-failed`, `recheck-mismatch`, `page-missing` (the verdict's pattern is not in the run's pattern list; mirrored), `log-unreadable`, `base-moved`, `slug-appeared`, `tree-read-failed`, `branch-exists`, `branch-probe-failed`, `bytes-differ`, `deadline`, `internal`, `path-missing`, `path-not-regular`, `path-empty`, `path-too-large`, `path-nul`, `path-not-utf8`, `git-failed`, `changed-set-mismatch`, `failed-<stage>` and `not-committed-<status>` (the commit helper's own exit) |
 | `create-open` (extra) | the `list-failed` and `paths-unverifiable` refusals also carry `extra.cause` in Sentry, a closed token (`http-<status>`, an errno name, an error class name or `unknown`), never a message |
+| `cause` (extra) | Sentry `extra.cause` is set at exactly these sites, always a closed token and never a message. `create-open`: `list-failed` and `paths-unverifiable`. `budget`: `cap-unreadable`. `model-invalid`: `transport`. `shape`: `template-unreadable`. `persist`: `log-unreadable`, `internal`, `origin-failed`, and every git refusal (`clone-not-clean`, `fetch-failed`, `reset-failed`, `blob-read-failed`, `origin-strip-failed`, `tree-read-failed`, `branch-probe-failed`). Vocabulary: `http-<status>`; an errno name (`ENOENT`, `EACCES`, ...); an error class name (`TimeoutError`, `HttpError`, ...); `unknown`; `non-array` (`create-open/list-failed`: the listing answered with something that is not a list); for `origin-failed` `symlink-refused` and `set-url-failed`; for a git call `timeout`, `exit<N>`, `signal`, `spawn` (git never ran) and `bad-output` (git exited 0 but its answer was not the expected list of object ids) |
 
 - **Kill switch.** There is no runtime flag. `allow_create` is read from each event, so the kill switch is to STOP
   FIRING manual triggers that carry it; nothing needs deploying. The existing opt-out in this runbook (`enabled:
@@ -407,17 +408,23 @@ two open `self-healing/auto` PRs) ends `week-cap-reached` and never reaches the 
 - **Git failures.** `fetch-failed`, `reset-failed`, `blob-read-failed`, `tree-read-failed`, `origin-strip-failed`,
   `branch-probe-failed` and `clone-not-clean` carry closed evidence: the marker field `create_exit` (git's exit
   status, absent when git was killed or never ran) and Sentry `extra.cause`, one of `timeout`, `exit<N>`, `signal`
-  or `spawn`. `origin-failed` carries `extra.cause` of `symlink-refused` (a symlinked `.git` entry), `set-url-failed`
+  `spawn` or `bad-output`. `origin-failed` carries `extra.cause` of `symlink-refused` (a symlinked `.git` entry), `set-url-failed`
   (git refused the remote change) or an errno / class name. Sentry op `create-gate-git` is the per-call event: a
   SYNTHETIC error `git <sub> failed` with `extra` `{sub, exit, signal, killed, timedOut}`. Git's own stderr is never
   forwarded (a failed fetch against the tokenized origin echoes the remote URL there).
+  `readme-sync/git-failed` and `persist/git-failed` (the clone snapshot before the sync, the snapshot after it, and the changed-set read
+  of the collector) carry NO cause of their own: read the paired `create-gate-git` Sentry event of the same run (its `extra` has
+  `sub`, `exit`, `signal`, `killed`, `timedOut`).
 - **One deadline, pre-commit only.** Step B has one 150 s budget over the pre-commit phase (clone refresh, re-check,
   render, gates, second fetch and branch probe); every script and git call in it gets the smaller of its own timeout
-  and what is left; an exhausted budget is `persist/deadline`. It does NOT cover the own-PR lookup (it runs first,
+  and what is left; an exhausted budget is `persist/deadline`, and the Sentry `extra.stage` names the stage that ran out: `fetch`, `reset`, `blobs`, `strip`, `write` (the checkpoint before the files are written), `scan`, `readme-sync`, `final-fetch`, `final-blobs`, `tree`, `probe` or `commit-guard` (the checkpoint before the commit helper). A git call that failed because the budget ran out is reported as `deadline`, not as the git refusal. It does NOT cover the own-PR lookup (it runs first,
   20 s), `safeCommitAndPr` (its own steps and timeouts) or the final cleanup.
 - **A very busy repository refuses.** The one-open-create check reads at most 300 open PRs and the path scan makes
   at most 150 file requests: past either bound the arm refuses `create-open` (`list-incomplete` / `paths-incomplete`)
   rather than guess. Close or merge stale PRs.
+  A fork PR never counts toward `create-open` (only a PR whose head branch is in THIS repository does; the repository
+  name is compared case-insensitively). A flood of more than 300 open PRs, fork or not, makes the arm refuse
+  `create-open/list-incomplete`: an accepted limit, the same bound the edit arm's open-PR read has.
 - **Headroom is finite.** After one maximum-length skill merges the description budget headroom is 0, and every
   later create refuses `budget` / `over-headroom` until a human trims descriptions or raises the cap in
   `plugins/soleur/test/components.test.ts` (the cap is human-owned).

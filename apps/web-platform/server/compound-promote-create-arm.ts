@@ -131,6 +131,16 @@ export const SCHEDULED_ISSUE_LABEL = "scheduled-compound-promote";
  * final cleanup in the `finally` block.
  */
 export const CREATE_PERSIST_DEADLINE_MS = 150_000;
+/**
+ * Where Step B ran out of its budget, as a closed token on the Sentry extra of `persist/deadline` (`extra.stage`): the
+ * stage whose checkpoint or git call saw an exhausted budget. `write` is the checkpoint before the files are written,
+ * `final-blobs` / `tree` / `probe` are the three git reads after the second fetch, `commit-guard` the last checkpoint
+ * before the commit helper.
+ */
+export const DEADLINE_STAGES = [
+  "fetch", "reset", "blobs", "strip", "write", "scan", "readme-sync", "final-fetch", "final-blobs", "tree", "probe", "commit-guard",
+] as const;
+export type DeadlineStage = (typeof DEADLINE_STAGES)[number];
 /** A network fetch may use the largest single git timeout. */
 const FETCH_TIMEOUT_MS = GIT_MAX_TIMEOUT_MS;
 /** The tokenless remote the clone is pointed at while any create-arm script runs (R4). */
@@ -230,7 +240,9 @@ function headIsThisRepo(pr: ListedPr, owner: string, repo: string): boolean {
   if (typeof pr.head !== "object" || pr.head === null) return false;
   const headRepo = (pr.head as { repo?: unknown }).repo;
   if (typeof headRepo !== "object" || headRepo === null) return false;
-  return (headRepo as { full_name?: unknown }).full_name === `${owner}/${repo}`;
+  // GitHub reports the canonical name, but a case difference is the same repository, never a stranger's fork.
+  const fullName = (headRepo as { full_name?: unknown }).full_name;
+  return typeof fullName === "string" && fullName.toLowerCase() === `${owner}/${repo}`.toLowerCase();
 }
 
 /**
@@ -542,10 +554,11 @@ async function restoreCleanMain(root: string): Promise<GitEvidence | null> {
 const stripOrigin = (root: string, timeoutMs = GIT_TIMEOUT_MS) => runGit(root, ["remote", "set-url", "origin", PLAIN_ORIGIN_URL], { timeoutMs });
 
 /**
- * The closed cause token of a failed git call: `timeout`, `exit<N>`, `signal` (killed by a signal that is not the
- * timeout) or `spawn` (git never ran). It rides `extra.cause` in Sentry; the exit status also rides the refusal numbers.
+ * The closed cause token of a failed git call: `bad-output` (git exited 0 with an answer of the wrong shape), `timeout`,
+ * `exit<N>`, `signal` (killed by a signal that is not the timeout) or `spawn` (git never ran). It rides `extra.cause` in Sentry; the exit status also rides the refusal numbers.
  */
 export function gitCause(ev: GitEvidence): string {
+  if (ev.badOutput) return "bad-output";
   if (ev.timedOut) return "timeout";
   if (ev.exit !== undefined) return `exit${ev.exit}`;
   if (ev.signal !== undefined) return "signal";
@@ -580,8 +593,8 @@ async function baseBlobs(root: string, ref: string, timeoutMs: number): Promise<
   const r = await runGit(root, ["rev-parse", ...BASE_BLOB_PATHS.map((p) => `${ref}:${p}`)], { timeoutMs });
   if (!r.ok) return { ok: false, ev: evidenceOf(r) };
   const ids = r.stdout.split("\n").filter(Boolean);
-  // Git answered but not with BASE_BLOB_PATHS.length object ids: report it as an exit-less, signal-less failure.
-  return ids.length === BASE_BLOB_PATHS.length && ids.every((i) => /^[0-9a-f]{40,64}$/.test(i)) ? { ok: true, ids } : { ok: false, ev: { timedOut: false } };
+  // Git answered (exit 0) but not with BASE_BLOB_PATHS.length object ids: cause `bad-output`, not `spawn`.
+  return ids.length === BASE_BLOB_PATHS.length && ids.every((i) => /^[0-9a-f]{40,64}$/.test(i)) ? { ok: true, ids } : { ok: false, ev: { timedOut: false, badOutput: true } };
 }
 
 interface PersistCtx {
@@ -690,13 +703,14 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   const proposal: CreateProposal = v.proposal;
   const setOrigin = a.setOrigin ?? setOriginToken;
   const budgetMs = (own: number): number => Math.max(1, Math.min(own, c.left()));
-  const expired = (): CreateRefusal | null => (c.left() <= 0 ? fail("persist", "deadline") : null);
+  const deadline = (stage: DeadlineStage): CreateRefusal => fail("persist", "deadline", { extra: { stage } });
+  const expired = (stage: DeadlineStage): CreateRefusal | null => (c.left() <= 0 ? deadline(stage) : null);
   // A git failure: the deadline wins when the budget ran out (the kill was ours), else the closed evidence rides the refusal.
-  const gitFail = (detail: string, ev: GitEvidence): CreateRefusal =>
-    expired() ?? fail("persist", detail, { numbers: ev.exit === undefined ? undefined : { exit_code: ev.exit }, extra: { cause: gitCause(ev) } });
+  const gitFail = (detail: string, ev: GitEvidence, stage: DeadlineStage): CreateRefusal =>
+    expired(stage) ?? fail("persist", detail, { numbers: ev.exit === undefined ? undefined : { exit_code: ev.exit }, extra: { cause: gitCause(ev) } });
   // Put the token on disk and fetch the current main (depth 1). The token is on disk from here until the caller strips it.
-  const tokenOnAndFetch = async (): Promise<CreateRefusal | null> => {
-    const early = expired();
+  const tokenOnAndFetch = async (stage: "fetch" | "final-fetch"): Promise<CreateRefusal | null> => {
+    const early = expired(stage);
     if (early) return early;
     try {
       c.originTouched = true;
@@ -705,19 +719,19 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
       return fail("persist", "origin-failed", { extra: { cause: originCause(err) } });
     }
     const fetched = await runGit(a.repoRoot, ["fetch", "--depth=1", "origin", "main"], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
-    return fetched.ok ? null : gitFail("fetch-failed", fetched);
+    return fetched.ok ? null : gitFail("fetch-failed", fetched, stage);
   };
 
   // ---- R5: refresh the depth-1 clone to the current main, then R4: take the token OFF disk ----------------------
-  const firstFetch = await tokenOnAndFetch();
+  const firstFetch = await tokenOnAndFetch("fetch");
   if (firstFetch) return firstFetch;
   const reset = await runGit(a.repoRoot, ["reset", "--hard", "FETCH_HEAD"], { timeoutMs: budgetMs(GIT_TIMEOUT_MS) });
-  if (!reset.ok) return gitFail("reset-failed", reset);
+  if (!reset.ok) return gitFail("reset-failed", reset, "reset");
   const usedBlobs = await baseBlobs(a.repoRoot, "HEAD", budgetMs(GIT_TIMEOUT_MS));
-  if (!usedBlobs.ok) return gitFail("blob-read-failed", usedBlobs.ev);
+  if (!usedBlobs.ok) return gitFail("blob-read-failed", usedBlobs.ev, "blobs");
   // From here to the commit no script may see the token (a spawned script could read `.git/config`).
   const strip = await stripOrigin(a.repoRoot, budgetMs(GIT_TIMEOUT_MS));
-  if (!strip.ok) return gitFail("origin-strip-failed", strip);
+  if (!strip.ok) return gitFail("origin-strip-failed", strip, "strip");
 
   // ---- re-run the admission checks against the refreshed tree ---------------------------------------------------
   const measured = await measureClone(a.repoRoot);
@@ -750,7 +764,7 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   if (rendered.kind === "refused") return mirrored(rendered);
 
   // Files on disk FIRST: the scanner and the exactPaths staging both read the disk.
-  let early = expired();
+  let early = expired("write");
   if (early) return early;
   const paths = createPathList(c.slug);
   const [skillRel, purposeRel, stubRel] = paths;
@@ -781,7 +795,7 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   if (!since) return fail("persist", "git-failed");
 
   // ---- gates ----------------------------------------------------------------------------------------------------
-  early = expired();
+  early = expired("scan");
   if (early) return early;
   // The files are scanned one after the other, so each gets at most an equal share of what is left.
   const scanPaths = [skillRel, purposeRel];
@@ -789,12 +803,12 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
     repoRoot: a.repoRoot, relPaths: scanPaths, metaBase: c.metaBase,
     timeoutMs: Math.max(1, Math.min(SCAN_TIMEOUT_MS, Math.floor(c.left() / scanPaths.length))),
   });
-  if (!scan.ok) return scan.detail === "timeout" && c.left() <= 0 ? fail("persist", "deadline") : scanFailure(scan);
+  if (!scan.ok) return scan.detail === "timeout" && c.left() <= 0 ? deadline("scan") : scanFailure(scan);
 
-  early = expired();
+  early = expired("readme-sync");
   if (early) return early;
   const sync = await syncReadmeCounts({ repoRoot: a.repoRoot, timeoutMs: budgetMs(README_SYNC_TIMEOUT_MS), since });
-  if (!sync.ok) return sync.detail === "timeout" && c.left() <= 0 ? fail("persist", "deadline") : readmeFailure(sync);
+  if (!sync.ok) return sync.detail === "timeout" && c.left() <= 0 ? deadline("readme-sync") : readmeFailure(sync);
 
   const collected = await collectCreateContent({ repoRoot: a.repoRoot, slug: c.slug });
   if (!collected.ok) {
@@ -813,23 +827,23 @@ async function persistInner(a: CreatePersistArgs, c: PersistCtx): Promise<Create
   }
 
   // ---- R4/R5: put the token back for the network calls only, and prove the base did not move -------------------
-  const secondFetch = await tokenOnAndFetch();
+  const secondFetch = await tokenOnAndFetch("final-fetch");
   if (secondFetch) return secondFetch;
   const nowBlobs = await baseBlobs(a.repoRoot, "FETCH_HEAD", budgetMs(GIT_TIMEOUT_MS));
-  if (!nowBlobs.ok) return gitFail("blob-read-failed", nowBlobs.ev);
+  if (!nowBlobs.ok) return gitFail("blob-read-failed", nowBlobs.ev, "final-blobs");
   const moved = nowBlobs.ids.filter((id, i) => id !== usedBlobs.ids[i]).length;
   if (moved > 0) return fail("persist", "base-moved", { numbers: { changed_count: moved } });
   // The blobs above only cover files that existed; a skill that took our slug (or our Cursor stub name) while the
   // gates ran is a NEW directory, which no blob id names.
   const tree = await runGit(a.repoRoot, ["ls-tree", "FETCH_HEAD", "--", dirname(skillRel), dirname(stubRel)], { timeoutMs: budgetMs(GIT_TIMEOUT_MS) });
-  if (!tree.ok) return gitFail("tree-read-failed", tree);
+  if (!tree.ok) return gitFail("tree-read-failed", tree, "tree");
   if (tree.stdout.trim() !== "") return fail("persist", "slug-appeared");
   // An orphan branch (pushed by an earlier attempt, no open PR) would make the push fail late as `failed-push`: name it
   // here and never delete it (the operator decides; the runbook says how).
   const probe = await runGit(a.repoRoot, ["ls-remote", "--heads", "origin", `refs/heads/${c.branchName}`], { timeoutMs: budgetMs(FETCH_TIMEOUT_MS) });
-  if (!probe.ok) return gitFail("branch-probe-failed", probe);
+  if (!probe.ok) return gitFail("branch-probe-failed", probe, "probe");
   if (probe.stdout.trim() !== "") return fail("persist", "branch-exists");
-  early = expired();
+  early = expired("commit-guard");
   if (early) return early;
 
   const titleLine = `chore(self-healing): create skill ${c.slug} from cluster ${v.clusterHash}`;

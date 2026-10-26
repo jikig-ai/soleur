@@ -183,7 +183,7 @@ export interface CompoundPromoteOutcome {
   /** `scan` refusals: the index of the refused file (0 SKILL.md, 1 PURPOSE.md) and how many tools were missing. */
   create_file_index?: number;
   create_missing_tools?: number;
-  /** `scan` / `readme-sync` refusals: the gate script's exit code. */
+  /** `scan` / `readme-sync` refusals: the gate script's exit code; also `persist` refusals: the exit status of a failed git call. */
   create_exit?: number;
   /** `readme-sync` (paths that changed) and `persist/base-moved` (base blobs that moved). */
   create_changed_count?: number;
