@@ -1504,7 +1504,9 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_MERGE_EFFECT_CLASS_TEST_SH_PATHS=(
 # gitleaks pack and the CI range arm it must stay in parity with; the shared libs it sources are named so an edit to them selects it.
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PREPUSH_SECRET_SCAN_TEST_SH_PATHS=(
   ".github/workflows/secret-scan.yml"
+  ".claude/hooks/ship-unpushed-commits-gate.sh"
   ".gitleaks.toml"
+  "plugins/soleur/skills/review/SKILL.md"
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh"
   "plugins/soleur/test/lib/git-fixture-env.sh"

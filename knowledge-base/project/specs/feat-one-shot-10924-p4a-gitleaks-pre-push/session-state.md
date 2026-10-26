@@ -3,7 +3,7 @@
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-10-26-feat-p4a-gitleaks-pre-push-range-scan-ship-phase-6-4-plan.md
 - Status: complete
-- cto_spawns=2 (five forks during planning; one batched spawn for the four rows the technical-ruling gate flagged)
+- cto_spawns=3 (five forks during planning; one batched spawn for the four rows the technical-ruling gate flagged; one batched spawn at review for F1-F8)
 
 ### Errors
 None. Planning-agent tool snags (a blocked scratch `rm -rf`, a blocked scratch `git commit`, early-returning background waits) did not affect the plan.

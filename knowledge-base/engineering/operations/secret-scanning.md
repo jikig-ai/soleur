@@ -25,13 +25,13 @@ in [#3121](https://github.com/jikig-ai/soleur/issues/3121). It covers:
 
 ## Architecture
 
-Two enforcement layers, one source of truth.
+Two CI enforcement layers plus a local pre-push scan, one source of truth.
 
 | Layer | Where | When | Bypassable | Purpose |
 |---|---|---|---|---|
 | **Lefthook `gitleaks-staged`** | local pre-commit | every `git commit` | yes (`--no-verify`, hook removal) | fast feedback before a leak hits the local index |
 | **Lefthook `lint-fixture-content`** | local pre-commit | every `git commit` | yes | catches semi-sensitive shapes (real emails, prod-shape UUIDs, Supabase project refs) gitleaks misses |
-| **Ship `prepush-secret-scan.sh`** | local, run by `soleur:ship` before each push | once before the first push (later pushes by prose) | yes (it is a script the skill calls; CI is the net) | catches a secret-bearing commit while its history is still local, where a rewrite can still clear it |
+| **Ship `prepush-secret-scan.sh`** | local, run by `soleur:ship` and the review skill before their pushes | at the call sites that carry the skill text (not every push site) | no: it is a script the skill calls, so another script's push never reaches it (#11126 tracks the `git push` hook) | catches a secret-bearing commit while its history is still local, where a rewrite can still clear it; CI's scan starts only at the PR |
 | **CI `secret-scan` workflow** | GitHub Actions | PR + merge_group + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
 
 Each trigger scans a **different set of commits** — see
@@ -576,23 +576,35 @@ without a 2nd-reviewer.
 unpublished commit and is cleared by rewriting it. Once pushed, a later "fix" commit cannot clear the CI range scan,
 because that scan reads every commit in the range, not the tip.
 
-The contract is in the script header: exit `0` CLEAN, `1` FINDINGS (stop), `43` NOT_RUN (record
-`secret-scan: not run (<reason>)` in the PR body and continue, since CI is the gate). Any other exit is a stop. A
-`CLEAN` verdict needs gitleaks to exit 0 **and** write a report of exactly `[]`; a missing or empty report is
-`NOT_RUN`, never `CLEAN`. The receipt line carries the full base and head SHAs, the range size, the commit count
-gitleaks reports, whether the range touched the gitleaks config, and the local gitleaks version.
+The contract is in the script header: exit `0` CLEAN, `1` FINDINGS (stop), `43` NOT_RUN (the environment lacks
+something: record `secret-scan: not run (<reason>)` in the PR body and continue, since CI still gates the merge), `44`
+INCOMPLETE (stop; the operator decides). Only `0` and `43` continue. `44` covers every outcome the PR's own content
+can induce: a timeout, a crashed or empty scan, a scanned-count mismatch, `ERR`/`fatal:` output from an rc-0 scan
+(an unreadable object), or no merge base in a non-shallow clone. A `CLEAN` verdict needs gitleaks to exit 0, write a
+report of exactly `[]`, and print no error output. The receipt line carries the full base and head SHAs, the range
+size, the commit count gitleaks reports, whether the range touched the gitleaks config, which config was read
+(`cfg=base`), whether part of the range is already on `origin/<branch>` (`published=`), and the local gitleaks version.
+
+Why the scan matters: CI's secret scan starts at the pull request, after the push, and a pushed SHA stays reachable
+(`refs/pull/N/head`) even after a force-push. Only a local scan can prevent publication.
+
+What the scan reads: the **base's** committed `.gitleaks.toml` and `.gitleaksignore`, never the working tree's and never
+the PR's. A PR that widens, breaks or deletes its own config cannot scan itself clean; a legitimate allowlist-adding PR
+therefore gets FINDINGS here, and CI's `allowlist-diff` job (label or `Allowlist-Widened-By:` trailer) arbitrates.
+gitleaks runs with `GIT_ATTR_SOURCE` set to the empty tree, `--text`, and the global/system git config and `HOME`
+replaced, so committed `-diff`/`binary` attributes, NUL-byte files and a user's `diff.*` settings do not blind it.
 
 What it does **not** cover (documented, not claimed away):
 
 - **Content that exists only in a conflict-resolution merge commit.** `--no-merges` mirrors CI's range arm and
-  misses it (measured: rc 0, while `-m` and `gitleaks dir` find it). CI's `gitleaks dir .` step is the net.
-- **A path marked `-diff` in a gitattributes file.** gitleaks reads patches, and such a path yields none.
-- **A PR that widens its own allowlist.** The scan uses the working-tree config, as CI does, so the receipt's
-  `cfg_changed=1` makes it visible and CI's `allowlist-diff` job is the independent check.
+  misses it (measured: rc 0, while `-m` and `gitleaks dir` find it). CI's `gitleaks dir .` step is the net; a tip-tree
+  pass belongs to #11126.
+- **`.git/info/attributes` and git older than 2.40** (receipt `attr=unpinned`) can still hide a path from the patch
+  stream; UTF-16 files are invisible here and to CI.
 - **Version skew.** CI pins gitleaks 8.24.2; a newer local pack can flag something CI accepts. That is still a stop;
-  clear a false positive with a per-rule allowlist.
-- **Later pushes.** Only the first push in the ship flow is structurally preceded by the scan. The other push sites
-  rely on the skill text until a `git push` hook exists (tracked in #11126).
+  `.gitleaks.toml` is read from the base, so a false positive is cleared by a reviewed allowlist PR, not in place.
+- **Pushes that never reach it.** Another script's push (`pre-merge-rebase.sh`, `sync-pr-behind.sh`), `merge-pr`,
+  `fix-issue` and the resolve workflows rely on a `git pre-push` hook that does not exist yet (tracked in #11126).
 
 ## When an alert fires
 

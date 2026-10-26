@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # prepush-secret-scan.sh — local per-commit secret scan over the commits a push would publish.
 #
-# WHAT. Runs `gitleaks git` over `origin/main..HEAD` (non-merge commits, the same range shape as
-# the CI range arm in .github/workflows/secret-scan.yml) BEFORE `git push`, so a secret-bearing
+# WHAT. Runs `gitleaks git` over `origin/main..HEAD` (non-merge commits, the range shape of the CI
+# range arm in .github/workflows/secret-scan.yml, plus `--text`) BEFORE `git push`, so a secret-bearing
 # commit is caught while its history is still local and fixable by rewriting an unpublished commit.
-# A published secret cannot be cleared by a later "fix" commit: the CI range scan reads every
-# commit in the range, not the tip. Called from `soleur:ship` Phase 6 (the first push) and, by
-# prose, before every later push in that skill; Phase 6.4 carries the pointer.
+# CI cannot do that job: its scan starts at the PR, after the push, and a pushed SHA stays reachable
+# (refs/pull/N/head) even after a force-push. A published secret cannot be cleared by a later "fix"
+# commit either: the range scan reads every commit in the range, not the tip. Called by prose from
+# `soleur:ship` before each of its pushes and from the review skill's pushes; the hook-level
+# chokepoint (a git `pre-push`) is tracked in #11126.
 #
 # USAGE.   prepush-secret-scan.sh [--base REF] [--no-fetch]
 #   --base REF   range base (default refs/remotes/origin/main). A SELECTOR, not a skip switch:
@@ -14,53 +16,70 @@
 #                it is resolved to a full commit SHA and ONLY that SHA reaches --log-opts.
 #   --no-fetch   skip the best-effort `git fetch origin main` (offline probes, tests).
 # No environment variable or file skips the scan. The only env knob is
-# SOLEUR_PREPUSH_SCAN_TIMEOUT (integer seconds, 1..600, default 120; anything else falls back).
+# SOLEUR_PREPUSH_SCAN_TIMEOUT (integer seconds, 1..600, default 240; anything else falls back), and
+# an expired bound is a STOP (44), never a skip. Worst case ~330s: run it with a Bash timeout of 400s.
 #
-# EXIT CONTRACT (the caller branches on this):
-#   0   CLEAN     — rc 0 from gitleaks AND a report of exactly `[]`.
-#   1   FINDINGS  — STOP. Also what a `set -u` abort produces, which is the safe direction.
-#   43  NOT_RUN   — the scan did not or could not run: record `secret-scan: not run (<reason>)`
-#                   in the PR body and continue (CI's secret-scan.yml is the load-bearing gate).
-#   any other value is a STOP, including 127 (script not found: CLAUDE_PLUGIN_ROOT unset in a
-#   cloud shell) and 64 (bad arguments). ONLY 0 and 43 continue. 43 is deliberately outside every
-#   status bash produces by accident (1 generic/`set -u`, 2 syntax, 126/127, 128+N), the same
-#   reasoning as battery-owed.sh's 42, so a crash can never read as "continue".
+# EXIT CONTRACT (the caller branches on this; ONLY 0 and 43 continue):
+#   0   CLEAN      — rc 0 from gitleaks, a report of exactly `[]`, and no scan-error output.
+#   1   FINDINGS   — STOP. Also what a `set -u` abort produces, which is the safe direction.
+#   43  NOT_RUN    — the scan could not be attempted because the ENVIRONMENT lacks something (no
+#                    gitleaks, no work tree, no tmpdir, unresolvable base, a shallow clone, no
+#                    committed .gitleaks.toml). Record `secret-scan: not run (<reason>)` in the PR
+#                    body and continue; CI's secret-scan.yml still gates the merge (not the publication).
+#   44  INCOMPLETE — STOP, the operator decides. The scan ran or was attempted and the range was NOT
+#                    verified clean: timeout/OOM, rc >= 2, an empty report, a scanned-count mismatch,
+#                    `ERR`/`fatal:` in an rc-0 scan (an unreadable object), or no merge base in a
+#                    non-shallow repo. Each of these can be induced by the PR's own content, so none
+#                    may read as "continue". Any unexpected verdict also lands here.
+#   any other value is a STOP too, including 127 (script not found: CLAUDE_PLUGIN_ROOT unset) and 64
+#   (bad arguments). 43/44 are outside every status bash produces by accident (1 generic/`set -u`,
+#   2 syntax, 126/127, 128+N), the reasoning of battery-owed.sh's 42.
 #
-# RECEIPT (stdout, always the last line bar the NOT_RUN line below):
-#   PREPUSH_SECRET_SCAN verdict=<CLEAN|FINDINGS|NOT_RUN> base=<sha|none> head=<sha|none>
-#     fetch=<ok|stale|skipped> range=<N> scanned=<M|?> cfg_changed=<0|1> gitleaks=<ver|none> reason=<token>
+# RECEIPT (stdout; the last line bar the NOT_RUN line below):
+#   PREPUSH_SECRET_SCAN verdict=<CLEAN|FINDINGS|NOT_RUN|INCOMPLETE> base=<sha|none> head=<sha|none>
+#     fetch=<ok|stale|skipped> range=<N> scanned=<M|?> cfg_changed=<0|1> cfg=<base|head|none>
+#     published=<0|1|?> attr=<pinned|unpinned> gitleaks=<ver|none> reason=<token>
 #   On NOT_RUN a final `secret-scan: not run (<reason>)` line follows: that is the PR-body line.
 #   `scanned` is read best-effort from gitleaks' `N commits scanned.` line and cross-checked only
 #   when it parses (a parse miss leaves `scanned=?` and does not block CLEAN, so output-format
-#   drift cannot turn every run into NOT_RUN). Findings print commit/file/line/rule id on stderr,
+#   drift cannot turn every run into INCOMPLETE). Findings print commit/file/line/rule id on stderr,
 #   never the secret, the `Match` text or raw gitleaks output (which carries author emails).
+#
+# WHAT THE SCAN READS. The BASE's committed .gitleaks.toml and .gitleaksignore (cfg=base), never the
+# working tree's and never the PR's: a PR that widens its own allowlist, deletes the config or
+# breaks it cannot scan itself clean. A legitimate allowlist-adding PR therefore gets FINDINGS here;
+# CI's `allowlist-diff` job (label or `Allowlist-Widened-By:` trailer) is the arbiter. `cfg_changed=1`
+# says the range touches the config, .gitleaksignore or a root .gitattributes. gitleaks runs with
+# GIT_ATTR_SOURCE=<empty tree>, `--text`, and global/system git config and HOME replaced, so
+# committed `-diff`/`binary` attributes, NUL-byte files and a user's diff.* settings cannot blind it.
 #
 # LIMITATIONS (measured, documented rather than claimed away; CI's `gitleaks dir .` is the net):
 #   - Merge commits: `--no-merges` mirrors CI's range arm and misses content that exists ONLY in a
-#     conflict-resolution merge commit (rc 0; `-m` and `gitleaks dir` find it). Not claimed covered.
-#   - A path marked `-diff` in a gitattributes file yields no patch lines for gitleaks to read.
-#     The commit hook re-scans such blobs; this script does not (the local-only vector is the
-#     operator's own .git/info/attributes; committed attributes are covered by CI).
-#   - The scan uses the working-tree .gitleaks.toml/.gitleaksignore (CI parity), so a PR that
-#     widens its own allowlist can scan itself clean here. `cfg_changed=1` makes that visible;
-#     CI's `allowlist-diff` job is the independent backstop. It is a visibility flag, not a gate.
+#     conflict-resolution merge commit (rc 0; `-m` and `gitleaks dir` find it). A tip-tree scan
+#     belongs to #11126.
+#   - `.git/info/attributes` (the operator's own file) and git < 2.40 (attr=unpinned) can still hide
+#     a path from the patch stream. UTF-16 files are invisible here and to CI.
 #   - Version skew: CI pins gitleaks 8.24.2. A newer local rule pack can flag what CI accepts; that
-#     is still a STOP (conservative) and the receipt prints the local version. False positives are
-#     cleared with a per-rule allowlist in .gitleaks.toml (review applies), so the check cannot
-#     deadlock a push.
-#   - Shallow clones with no merge base (hosted ship) are NOT_RUN `no-merge-base`: scanning a
-#     truncated history would attribute other commits to this PR.
-#   - A huge blob or long range can force a timeout, which is NOT_RUN. Accepted (CI gates); the
-#     NOT_RUN WARN on stderr is loud so it is not silent.
+#     is still a STOP (conservative) and the receipt prints the local version.
+#   - Shallow clones with no merge base are NOT_RUN `no-merge-base`: scanning a truncated history
+#     would attribute other commits to this PR.
+#   - A push made by another script (pre-merge-rebase.sh, sync-pr-behind.sh) never reaches this
+#     scan: only a git `pre-push` hook can see it (#11126).
 #
-# REMEDY (printed with FINDINGS; headless ship aborts and never rewrites history unasked):
-#   1. Commit still local: `git reset --soft origin/main`, remove the secret from the files and
-#      recommit (squashes the range and re-runs the commit hook); tip commit only: `git commit --amend`.
-#   2. Commit already on `origin`: the secret is published. Rotate it first, then reset as above,
-#      then `git push --force-with-lease`, then follow knowledge-base/engineering/operations/secret-scanning.md.
-#   3. False positive: add a per-rule allowlist to .gitleaks.toml (review applies) and re-run.
+# REMEDY: printed with FINDINGS, branched on `published=`; headless ship aborts and never rewrites
+# history unasked, never edits .gitleaks.toml/.gitleaksignore, never adds an inline allow.
 
 set -uo pipefail
+
+# Drop empty and relative PATH entries first: `:/bin` or `./bin` would run a repo-local git, timeout,
+# jq or env as the operator.
+IFS=: read -ra _pe <<<"${PATH:-}"
+_np=""
+for _e in ${_pe[@]+"${_pe[@]}"}; do
+  case "$_e" in /*) _np="${_np:+$_np:}$_e" ;; esac
+done
+PATH=$_np
+export PATH
 
 BASE_REF="refs/remotes/origin/main"
 DO_FETCH=1
@@ -71,6 +90,9 @@ R_FETCH=skipped
 R_RANGE=0
 R_SCANNED='?'
 R_CFG=0
+R_CFGSRC=none
+R_PUB='?'
+R_ATTR=unpinned
 R_GL=none
 
 TMP=""
@@ -79,28 +101,30 @@ cleanup() {
   rm -rf "${TMP:?}"
 }
 trap cleanup EXIT
-trap 'cleanup; exit 130' INT
-trap 'cleanup; exit 143' TERM
 
 usage_die() {
   printf 'usage: prepush-secret-scan.sh [--base REF] [--no-fetch]\n' >&2
   exit 64
 }
 
-# finish <CLEAN|FINDINGS|NOT_RUN> <reason-token> — prints the receipt and exits. The only exit
-# path for a verdict; the explicit `exit "$final_rc"` is the contract (never an implicit status).
+# finish <CLEAN|FINDINGS|NOT_RUN|INCOMPLETE> <reason-token> — prints the receipt and exits. The only
+# exit path for a verdict; the explicit `exit "$final_rc"` is the contract (never an implicit status).
+# The default arm is a STOP: a mistyped or new verdict must never read as "continue".
 finish() {
   local verdict=$1 reason=$2 final_rc
   case "$verdict" in
     CLEAN) final_rc=0 ;;
     FINDINGS) final_rc=1 ;;
-    *) final_rc=43 ;;
+    NOT_RUN) final_rc=43 ;;
+    *) final_rc=44 ;;
   esac
-  printf 'PREPUSH_SECRET_SCAN verdict=%s base=%s head=%s fetch=%s range=%s scanned=%s cfg_changed=%s gitleaks=%s reason=%s\n' \
-    "$verdict" "$R_BASE" "$R_HEAD" "$R_FETCH" "$R_RANGE" "$R_SCANNED" "$R_CFG" "$R_GL" "$reason"
+  printf 'PREPUSH_SECRET_SCAN verdict=%s base=%s head=%s fetch=%s range=%s scanned=%s cfg_changed=%s cfg=%s published=%s attr=%s gitleaks=%s reason=%s\n' \
+    "$verdict" "$R_BASE" "$R_HEAD" "$R_FETCH" "$R_RANGE" "$R_SCANNED" "$R_CFG" "$R_CFGSRC" "$R_PUB" "$R_ATTR" "$R_GL" "$reason"
   if [ "$verdict" = NOT_RUN ]; then
-    printf 'WARN: secret-scan NOT RUN (%s): the commits were not scanned locally; CI secret-scan.yml remains the gate.\n' "$reason" >&2
+    printf 'WARN: secret-scan NOT RUN (%s): the commits were not scanned locally; CI secret-scan.yml gates the merge, not the publication.\n' "$reason" >&2
     printf 'secret-scan: not run (%s)\n' "$reason"
+  elif [ "$final_rc" -eq 44 ]; then
+    printf 'STOP: secret-scan INCOMPLETE (%s): the range was NOT verified clean. Do not push; show the operator this reason. The operator may push explicitly, never silently.\n' "$reason" >&2
   fi
   exit "$final_rc"
 }
@@ -108,7 +132,7 @@ finish() {
 # san <string> <max-len> — ASCII allowlist for every printed field that comes from PR content or a
 # possibly hostile toml: ANSI escapes, newlines and prompt-injection text must not reach the transcript.
 san() {
-  printf '%s' "$1" | tr -cd '[:alnum:]._/@+=-' | cut -c1-"$2"
+  printf '%s' "$1" | LC_ALL=C tr -cd '[:alnum:]._/@+=-' | LC_ALL=C cut -c1-"$2"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -140,6 +164,7 @@ TOP=$(git rev-parse --show-toplevel 2>/dev/null) || TOP=""
 
 umask 077
 TMP=$(mktemp -d 2>/dev/null) || finish NOT_RUN tmpdir-unavailable
+mkdir -p "$TMP/home" "$TMP/xdg"
 
 TO_CMD=()
 if command -v timeout >/dev/null 2>&1; then
@@ -160,7 +185,7 @@ bounded() {
   fi
 }
 
-SCAN_T=120
+SCAN_T=240
 case "${SOLEUR_PREPUSH_SCAN_TIMEOUT:-}" in
   '' | *[!0-9]*) ;;
   *)
@@ -171,13 +196,13 @@ case "${SOLEUR_PREPUSH_SCAN_TIMEOUT:-}" in
 esac
 
 # ── 2. preconditions, each a NOT_RUN with a named reason ──────────────────────────────────────
-[ -f "$TOP/.gitleaks.toml" ] || finish NOT_RUN gitleaks-toml-absent
-
 GL=$(type -P gitleaks 2>/dev/null) || GL=""
 [ -n "$GL" ] || finish NOT_RUN gitleaks-absent
 
-# Resolve symlinks to the real file and refuse one that lives inside the repo: a PR-controlled
-# shim would run attacker code under this script's identity.
+# Resolve symlinks to the real file ONLY to refuse one that lives inside the repo (a PR-controlled
+# shim would run attacker code under this script's identity). The program that RUNS is $GL as found:
+# a version-manager shim is a symlink to a multi-call binary that picks the tool from argv[0], so
+# executing the resolved target runs a different program.
 _p=$GL
 while [ -L "$_p" ]; do
   _t=$(readlink "$_p")
@@ -197,26 +222,32 @@ esac
 # Probe by RUNNING it, from a neutral cwd: `command -v` alone certifies an unpinned version-manager
 # shim that resolves and exits non-zero. A bound expiry (124/137) is a load condition, not a broken
 # install, so it gets one wider retry before it is called a timeout.
-GLVER=$(cd / && bounded 10 "$GLREAL" version 2>/dev/null </dev/null)
+GLVER=$(cd / && bounded 10 "$GL" version 2>/dev/null </dev/null)
 prc=$?
 if [ "$prc" -eq 124 ] || [ "$prc" -eq 137 ]; then
-  GLVER=$(cd / && bounded 60 "$GLREAL" version 2>/dev/null </dev/null)
+  GLVER=$(cd / && bounded 60 "$GL" version 2>/dev/null </dev/null)
   prc=$?
   if [ "$prc" -eq 124 ] || [ "$prc" -eq 137 ]; then
-    finish NOT_RUN timeout
+    finish INCOMPLETE timeout
   fi
 fi
 [ "$prc" -eq 0 ] || finish NOT_RUN gitleaks-unrunnable
 R_GL=$(printf '%s' "$GLVER" | sed -n '1p' | tr -cd '[:alnum:].-' | cut -c1-24)
 [ -n "$R_GL" ] || R_GL=unknown
 
+# GIT_ATTR_SOURCE needs git >= 2.40; an older git ignores it and the receipt says so.
+read -r _gmaj _gmin <<<"$(git --version 2>/dev/null | sed -En 's/^git version ([0-9]+)\.([0-9]+).*/\1 \2/p')"
+if [[ "${_gmaj:-}" =~ ^[0-9]+$ ]] && [[ "${_gmin:-}" =~ ^[0-9]+$ ]]; then
+  if [ "$_gmaj" -gt 2 ] || { [ "$_gmaj" -eq 2 ] && [ "$_gmin" -ge 40 ]; }; then R_ATTR=pinned; fi
+fi
+
 # ── 3. refresh (best effort) ──────────────────────────────────────────────────────────────────
 # A stale base can only WIDEN the range (over-scan), so a failed fetch is a state, not a failure.
 # A locally advanced refs/remotes/origin/main (update-ref, branch -f) narrows it, which is why the
-# receipt prints both SHAs unabbreviated.
+# receipt prints both SHAs unabbreviated. The explicit refspec also works in a single-branch clone,
+# where a bare `git fetch origin main` leaves refs/remotes/origin/main untouched.
 if [ "$DO_FETCH" -eq 1 ]; then
-  (cd "$TOP" && bounded 10 git fetch --no-tags -q origin main) </dev/null >/dev/null 2>&1
-  if [ $? -eq 0 ]; then
+  if (cd "$TOP" && bounded 10 git fetch --no-tags -q origin '+refs/heads/main:refs/remotes/origin/main') </dev/null >/dev/null 2>&1; then
     R_FETCH=ok
   else
     R_FETCH=stale
@@ -236,17 +267,50 @@ R_BASE=$BASE_SHA
 R_HEAD=$HEAD_SHA
 
 # An unresolvable ref makes `gitleaks git` exit 0 with an empty report (measured), so the checks
-# above are load-bearing. No merge base (depth-1 hosted clone) means an over-scan of main's cut-off
-# history would be attributed to this PR.
-(cd "$TOP" && git merge-base "$BASE_SHA" "$HEAD_SHA") >/dev/null 2>&1 || finish NOT_RUN no-merge-base
+# above are load-bearing. No merge base means an over-scan of main's history would be attributed to
+# this PR: environmental in a shallow clone, but in a full clone it is an orphan or unrelated
+# branch, which a PR can create on purpose, so that is a STOP.
+if ! (cd "$TOP" && git merge-base "$BASE_SHA" "$HEAD_SHA") >/dev/null 2>&1; then
+  if [ "$(cd "$TOP" && git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+    finish NOT_RUN no-merge-base
+  fi
+  finish INCOMPLETE no-merge-base
+fi
 
 N=$(cd "$TOP" && git rev-list --count --no-merges "$BASE_SHA..$HEAD_SHA" 2>/dev/null) || N=""
 [[ "$N" =~ ^[0-9]+$ ]] || finish NOT_RUN range-unreadable
 R_RANGE=$N
 # E non-empty means at least one commit in range carries a patch (an empty commit has none).
 E=$(cd "$TOP" && git log --no-merges --format= --name-only "$BASE_SHA..$HEAD_SHA" 2>/dev/null)
-CFG=$(cd "$TOP" && git diff --name-only "$BASE_SHA..$HEAD_SHA" -- .gitleaks.toml .gitleaksignore .gitattributes 2>/dev/null)
+CFG=$(cd "$TOP" && git diff --name-only "$BASE_SHA...$HEAD_SHA" -- .gitleaks.toml .gitleaksignore .gitattributes 2>/dev/null)
 [ -z "$CFG" ] || R_CFG=1
+
+# published=1 when part of the range is already on origin/<branch>: the remedy then starts with
+# rotation, because a rewrite does not unpublish anything.
+BR=$(cd "$TOP" && git symbolic-ref --quiet --short HEAD 2>/dev/null) || BR=""
+if [ -n "$BR" ] && [[ "$BR" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+  if RB=$(cd "$TOP" && git rev-parse --verify --quiet --end-of-options "refs/remotes/origin/${BR}^{commit}" 2>/dev/null); then
+    U=$(cd "$TOP" && git rev-list --count --no-merges "$BASE_SHA..$HEAD_SHA" "^$RB" 2>/dev/null) || U=""
+    if [[ "$U" =~ ^[0-9]+$ ]]; then
+      if [ "$U" -lt "$N" ]; then R_PUB=1; else R_PUB=0; fi
+    fi
+  else
+    R_PUB=0
+  fi
+fi
+
+# The config the scan reads is the BASE's committed one (HEAD's only when the base has none).
+CFGREF=$BASE_SHA
+if ! (cd "$TOP" && git show "$BASE_SHA:.gitleaks.toml") >"$TMP/gitleaks.toml" 2>/dev/null || [ ! -s "$TMP/gitleaks.toml" ]; then
+  CFGREF=$HEAD_SHA
+  if ! (cd "$TOP" && git show "$HEAD_SHA:.gitleaks.toml") >"$TMP/gitleaks.toml" 2>/dev/null || [ ! -s "$TMP/gitleaks.toml" ]; then
+    finish NOT_RUN gitleaks-toml-absent
+  fi
+  R_CFGSRC="head"
+else
+  R_CFGSRC="base"
+fi
+(cd "$TOP" && git show "$CFGREF:.gitleaksignore") >"$TMP/gitleaksignore" 2>/dev/null || : >"$TMP/gitleaksignore"
 
 if [ "$N" -eq 0 ]; then
   R_SCANNED=0
@@ -254,44 +318,58 @@ if [ "$N" -eq 0 ]; then
 fi
 
 # ── 5. scan ───────────────────────────────────────────────────────────────────────────────────
-# BOTH colour surfaces are pinned: GIT_CONFIG_PARAMETERS is read AFTER the GIT_CONFIG_COUNT list and
-# beats it, so a count-only pin loses to `git -c color.diff=always` in the caller's environment, and a
-# coloured patch hides `+` lines from gitleaks. We APPEND to whatever the caller exported.
+# Every git setting that changes what the patch stream shows is pinned on BOTH surfaces:
+# GIT_CONFIG_PARAMETERS is read AFTER the GIT_CONFIG_COUNT list and beats it, so a count-only pin
+# loses to `git -c color.diff=always` in the caller's environment, and a coloured patch hides `+`
+# lines from gitleaks. We APPEND to whatever the caller exported. Prefix and attribute settings
+# matter as much as colour: diff.noprefix drops the first path component and defeats the toml's
+# path allowlists.
+GL_PINS=(color.ui=never color.diff=never diff.noprefix=false diff.mnemonicPrefix=false diff.srcPrefix=a/ diff.dstPrefix=b/ core.attributesFile=/dev/null)
 gl_cfg_n="${GIT_CONFIG_COUNT:-0}"
 case "$gl_cfg_n" in '' | *[!0-9]*) gl_cfg_n=0 ;; esac
-GLENV=(
-  env
-  "GIT_CONFIG_COUNT=$((gl_cfg_n + 2))" # mut:colorcount
-  "GIT_CONFIG_KEY_${gl_cfg_n}=color.ui"
-  "GIT_CONFIG_VALUE_${gl_cfg_n}=never"
-  "GIT_CONFIG_KEY_$((gl_cfg_n + 1))=color.diff"
-  "GIT_CONFIG_VALUE_$((gl_cfg_n + 1))=never"
-  "GIT_CONFIG_PARAMETERS=${GIT_CONFIG_PARAMETERS:+${GIT_CONFIG_PARAMETERS} }'color.ui'='never' 'color.diff'='never'" # mut:colorparams
+gl_cfg_n=$((10#$gl_cfg_n))
+gl_params="${GIT_CONFIG_PARAMETERS:-}"
+GLENV=(env)
+for _i in "${!GL_PINS[@]}"; do
+  _k=${GL_PINS[$_i]%%=*}
+  _val=${GL_PINS[$_i]#*=}
+  GLENV+=("GIT_CONFIG_KEY_$((gl_cfg_n + _i))=$_k" "GIT_CONFIG_VALUE_$((gl_cfg_n + _i))=$_val")
+  gl_params="${gl_params:+$gl_params }'$_k'='$_val'"
+done
+GLENV+=(
+  "GIT_CONFIG_COUNT=$((gl_cfg_n + ${#GL_PINS[@]}))" # mut:colorcount
+  "GIT_CONFIG_PARAMETERS=$gl_params" # mut:colorparams
+  GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+  GIT_CONFIG_GLOBAL=/dev/null
+  GIT_CONFIG_SYSTEM=/dev/null
+  "HOME=$TMP/home"
+  "XDG_CONFIG_HOME=$TMP/xdg"
 )
 
 # stdout and stderr are captured to $TMP and never echoed: raw gitleaks output carries author emails.
 (
   cd "$TOP" &&
     bounded "$SCAN_T" "${GLENV[@]}" \
-      "$GLREAL" git \
+      "$GL" git \
       --redact \
       --no-banner \
       --exit-code 1 \
-      --config "$TOP/.gitleaks.toml" \
+      --config "$TMP/gitleaks.toml" \
+      --gitleaks-ignore-path "$TMP/gitleaksignore" \
       --report-format json \
       --report-path "$TMP/report.json" \
-      --log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}" # mut:range
+      --log-opts="--no-merges --text ${BASE_SHA}..${HEAD_SHA}" # mut:range
 ) </dev/null >"$TMP/out" 2>"$TMP/err"
 scan_rc=$?
 
 # ── 6. verdict. The ORDER is part of the contract. ─────────────────────────────────────────────
 if [ "$scan_rc" -eq 124 ] || [ "$scan_rc" -eq 137 ]; then
-  finish NOT_RUN timeout
+  finish INCOMPLETE timeout
 fi
 # A missing or zero-byte report is evaluated BEFORE any content branch, so rc 0 with no report can
 # never reach CLEAN.
 if [ ! -s "$TMP/report.json" ]; then
-  finish NOT_RUN empty-report # mut:emptyreport
+  finish INCOMPLETE empty-report # mut:emptyreport
 fi
 REPORT=$(tr -d ' \t\r\n' <"$TMP/report.json")
 
@@ -302,16 +380,22 @@ if [[ "$SCANNED" =~ ^[0-9]+$ ]]; then
 fi
 
 if [ "$scan_rc" -eq 0 ] && [ "$REPORT" = '[]' ]; then
+  # gitleaks exits 0 with `[]` and a partial count when git could not read an object (measured):
+  # its ERR / fatal lines are the only signal. Written to a file first so grep -q never SIGPIPEs sed.
+  cat "$TMP/out" "$TMP/err" 2>/dev/null | sed -e "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" >"$TMP/plain.log"
+  if grep -qE '(^|[^A-Za-z])ERR([^A-Za-z]|$)|fatal:' "$TMP/plain.log"; then
+    finish INCOMPLETE scan-errors
+  fi
   if [[ "$SCANNED" =~ ^[0-9]+$ ]] && [ -n "$E" ]; then
     if [ "$SCANNED" -eq 0 ] || [ "$SCANNED" -gt "$N" ]; then
-      finish NOT_RUN scanned-mismatch
+      finish INCOMPLETE scanned-mismatch
     fi
   fi
   finish CLEAN no-findings
 fi
 
 if [ "$scan_rc" -ne 0 ] && [ "$scan_rc" -ne 1 ]; then
-  finish NOT_RUN "gitleaks-rc-$(san "$scan_rc" 3)"
+  finish INCOMPLETE "gitleaks-rc-${scan_rc}"
 fi
 
 # rc 1 with a non-empty report is FINDINGS even when the report does not parse; rc 0 with a
@@ -333,16 +417,31 @@ if [ -s "$TMP/sum.tsv" ]; then
     printf '  ... and %s more\n' "$((total - 5))" >&2
   fi
 else
-  printf '  finding: the report could not be summarised (jq absent or unparseable); rule ids: %s\n' \
+  printf '  finding: the report could not be summarised (jq absent or unparseable); %s finding(s)\n' \
     "$(grep -c '"RuleID"' "$TMP/report.json" 2>/dev/null)" >&2
 fi
+printf 'Remedy (the secret is never printed here):\n' >&2
+if [ "$R_PUB" = 1 ]; then
+  cat >&2 <<'EOF'
+  1. Part of this range is ALREADY on origin/<branch>: the secret is PUBLISHED. Rotate it FIRST; a
+     rewrite does not unpublish it (the SHA stays reachable via refs/pull/N/head).
+  2. Then: `git reset --soft "$(git merge-base origin/main HEAD)"`, remove the secret, recommit;
+     `git fetch origin <branch>`, inspect what the remote holds, and only then
+     `git push --force-with-lease=<branch>:<sha-you-reviewed>`. Follow the secret-scanning runbook
+     (engineering/operations/secret-scanning.md).
+EOF
+else
+  cat >&2 <<'EOF'
+  1. Commit still local: `git reset --soft "$(git merge-base origin/main HEAD)"`, remove the secret
+     from the files, recommit (this squashes the range and re-runs the commit hook); tip commit
+     only: `git commit --amend`. Do NOT use `git reset --soft origin/main`: when main has advanced it
+     reverts main's newer commits.
+EOF
+fi
 cat >&2 <<'EOF'
-Remedy (the secret is never printed here):
-  1. Commit still local: `git reset --soft origin/main`, remove the secret from the files, recommit
-     (this squashes the range and re-runs the commit hook); tip commit only: `git commit --amend`.
-  2. Commit already on origin: the secret is PUBLISHED. Rotate it first, then reset as above, then
-     `git push --force-with-lease`, then follow the secret-scanning runbook (engineering/operations/secret-scanning.md).
-  3. False positive: add a per-rule allowlist to .gitleaks.toml (review applies) and re-run.
-Interactive ship asks before rewriting history; headless ship aborts here and never rewrites it unasked.
+  False positive: interactive ship asks the operator. This scan reads the BASE's committed config,
+  so a same-PR allowlist edit does not apply here; CI's allowlist-diff job arbitrates it.
+Headless ship aborts here: it never rewrites history, never edits .gitleaks.toml or .gitleaksignore
+and never adds an inline `gitleaks:allow`.
 EOF
 finish FINDINGS secret-found

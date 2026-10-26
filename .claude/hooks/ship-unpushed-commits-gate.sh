@@ -186,7 +186,7 @@ jq -n \
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: ("BLOCKED: " + $n + " local commit(s) not pushed to origin/" + $branch + ". Run `git push` before queuing auto-merge.\n\nUnpushed commits:\n" + $commits)
+      permissionDecisionReason: ("BLOCKED: " + $n + " local commit(s) not pushed to origin/" + $branch + ". Run the ship Phase 6 secret scan (prepush-secret-scan.sh; exit 0 or 43 continue), then `git push`, before queuing auto-merge.\n\nUnpushed commits:\n" + $commits)
     }
   }'
 exit 0
