@@ -840,7 +840,7 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 > occur in this phase, which already enforces it, so it no longer costs every
 > session's always-loaded budget. This is now its canonical home.
 >
-> Before shipping, `soleur:ship` Phase 5.5 runs conditional domain-leader gates (CMO content-opportunity, CMO website framing, COO expense-tracking) on file-path matches, semver labels, and new service signups [id: hr-before-shipping-ship-phase-5-5-runs] [skill-enforced: ship Phase 5.5] [hook-enforced: .claude/hooks/ship-cmo-content-gate.sh].
+> Before shipping, `soleur:ship` Phase 5.5 runs conditional domain-leader gates (CMO content-opportunity, CMO website framing, COO expense-tracking) on file-path matches, semver labels, and new service signups [id: hr-before-shipping-ship-phase-5-5-runs] [skill-enforced: ship Phase 5.5].
 
 ### CMO Content-Opportunity Gate
 
