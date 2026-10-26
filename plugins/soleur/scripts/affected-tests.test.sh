@@ -2003,6 +2003,7 @@ unset _b0
 mk_inert_ct_repo() { # <name>
   local r; r="$(mk_repo "$1")"; seed_js "$r"; write_ct_cmd "$r"
   write_config "$r" "$(ct_cfg '["docs/*"]')"
+  [[ "${CT_WITH_CI:-0}" == 1 ]] && seed_ci "$r"
   seal_base "$r"; printf '%s' "$r"
 }
 R_T15="$(mk_inert_ct_repo ct15)"
@@ -2058,6 +2059,9 @@ want_field "A1: mode is selected" mode 'selected'
 reset_fakes; run_gate "$R_A1" gate --full
 want_no_call "A2: an operator's --full never runs the command (adapter arm)" '^ctcmd	'
 want_no_out "A2: and the marker carries no field" 'content_trigger='
+reset_fakes; run_gate "$R_A1" explain --explain --full
+want_no_out "A3: the adapter-arm --explain under an operator --full prints no CONTENT_TRIGGER line" 'CONTENT_TRIGGER'
+want_no_call "A3: and runs nothing" '^ctcmd	'
 reset_fakes; run_gate "$R_A1" explain --explain
 want_no_call "A3: --explain on the adapter arm runs nothing" '^ctcmd	'
 want_out "A3: and reports the armed trigger" '^CONTENT_TRIGGER armed=1 state=fired paths=1$'
@@ -2130,7 +2134,7 @@ want_field "W6: and the scan answered clear" content_trigger 'clear'
 R_W7="$(mk_ct_repo ctw7 '["tests/*"]')"
 printf 'a\0%s\n' "$CT_PAT" > "$R_W7/tests/blob.test.sh"
 reset_fakes; run_gate "$R_W7" gate
-want_call "W7: an untracked file with a NUL byte is read as text (parity with the tracked --text leg)" '^ctcmd	'
+want_call "W7: an untracked file with a NUL byte fires (as the tracked --text leg does)" '^ctcmd	'
 R_W8="$(mk_ct_repo ctw8 '["tests/*"]')"
 commit_chg "$R_W8" .gitattributes 'tests/attr.test.sh -diff'
 commit_chg "$R_W8" tests/attr.test.sh "x $CT_PAT"
@@ -2189,6 +2193,13 @@ commit_chg "$R_I1" docs/note.md "$CT_PAT"
 reset_fakes; export FAKE_CT_RC=1; run_gate "$R_I1" gate
 want_rc 1 "I1: an inert diff whose command fails fails the gate"
 want_marker "I1: marker is not the inert counts under mode=none" "AFFECTED_GATE ran=- of=- skipped=- mode=selected reason=content-trigger-failed stack=- ci=none content_trigger=failed"
+# I2: the inert exit precedes the generic budget arming, so it arms its own: a command
+# killed (137) on an inert diff with a detected CI workflow defers to CI like any other run.
+R_I2="$(CT_WITH_CI=1 mk_inert_ct_repo cti2)"
+commit_chg "$R_I2" docs/note.md "$CT_PAT"
+reset_fakes; export FAKE_CT_RC=137; run_gate "$R_I2" gate
+want_rc 6 "I2: an inert diff with CI and a killed command defers (the budget is armed on the inert exit)"
+want_field "I2: field is deferred" content_trigger 'deferred'
 
 # ---- second batch: escalated full, deferred primary, 137, bounds, fixed strings, dead globs ----
 
@@ -2293,6 +2304,11 @@ ct_bad ct13-dotdot '{"content_trigger_pattern":"x/","content_trigger_paths":["..
 ct_bad ct13-space '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/* "],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
 ct_bad ct13-bang '{"content_trigger_pattern":"x/","content_trigger_paths":["!tests/*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
 ct_bad ct13-notp '{"content_trigger_pattern":"x/","content_trigger_paths":["[!p]*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-dot '{"content_trigger_pattern":"x/","content_trigger_paths":["."],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-trailingdot '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/."],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-hiddenonly '{"content_trigger_pattern":"x/","content_trigger_paths":[".h*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-dotted '{"content_trigger_pattern":"x/","content_trigger_paths":["x/*.z"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
+ct_bad ct13-capq '{"content_trigger_pattern":"x/","content_trigger_paths":["Q*"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
 ct_bad ct13-newlineglob '{"content_trigger_pattern":"x/","content_trigger_paths":["tests/*\nfoo"],"content_trigger_command":"bash scripts/ct-cmd.sh"}' 'bad-config key=content_trigger_paths'
 
 # H1: the ledger is the discriminator. With the stub's ledger write removed the gate
@@ -2316,7 +2332,7 @@ R_H3="$(mk_repo cth3)"; write_runner_capable "$R_H3"; seal_base "$R_H3"
 commit_chg "$R_H3" tests/new.test.sh "$CT_PAT"
 reset_fakes; run_gate "$R_H3" gate
 want_marker "H3: unarmed marker is unchanged" "$CT_RUN"
-unset R_CTE1 R_A1 R_A4 R_A5 R_P1 R_P2 R_D1 R_I1 R_U1 R_U2 R_U3 R_U4 R_X1 R_X1U R_X2 R_B1 R_R1 R_V1 R_W1 R_W2 R_W3 R_W4 R_W5 R_W6 R_W7 R_W8 R_W9 R_W10 R_W11 R_W12 R_W13 R_W14 R_W15 R_T12C R_T1 R_T2 R_T3 R_T4 R_T5 R_T6 R_T7 R_T8 R_T9 R_T10A R_T10B R_T10C R_T11 R_T11B R_T12 R_T12B R_T14 R_T15 R_T15B R_H1 R_H2 R_H3
+unset R_CTE1 R_A1 R_A4 R_A5 R_P1 R_P2 R_D1 R_I1 R_I2 R_U1 R_U2 R_U3 R_U4 R_X1 R_X1U R_X2 R_B1 R_R1 R_V1 R_W1 R_W2 R_W3 R_W4 R_W5 R_W6 R_W7 R_W8 R_W9 R_W10 R_W11 R_W12 R_W13 R_W14 R_W15 R_T12C R_T1 R_T2 R_T3 R_T4 R_T5 R_T6 R_T7 R_T8 R_T9 R_T10A R_T10B R_T10C R_T11 R_T11B R_T12 R_T12B R_T14 R_T15 R_T15B R_H1 R_H2 R_H3
 
 # ============================ cross-run contract ===============================
 # G1-10: every run path emits the marker — a second exit site that fires before the
@@ -2355,6 +2371,6 @@ unset _kind _rc _of _xfail _badword
 
 # Floor = the full count less a little slack for the rows that
 # depend on a host binary (jq): it is a floor, so a deleted block of rows reddens it.
-print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-445}"
+print_results "${AFFECTED_TESTS_MIN_ASSERTIONS:-467}"
 
 

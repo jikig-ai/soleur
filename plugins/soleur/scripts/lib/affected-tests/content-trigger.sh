@@ -64,7 +64,9 @@ _affected_ct_in_globs() {
 #              `--text` makes git diff files marked `-diff`/`binary` or holding NUL.
 #   untracked: `git ls-files --others --exclude-standard`, limited to the globs,
 #              regular files only (a symlink is not read), each read with
-#              `grep -aqF` (as text, matching the tracked leg's `--text`).
+#              `grep -aqF` (as text, like the tracked leg's `--text`; under `-q` GNU grep
+#              exits 0 on a binary match either way, so `-a` is belt-and-braces for
+#              greps that would otherwise answer `Binary file matches`).
 affected_ct_scan() {
   AFFECTED_CT_STATE=none
   AFFECTED_CT_LEG=""

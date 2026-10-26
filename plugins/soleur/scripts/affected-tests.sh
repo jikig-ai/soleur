@@ -434,7 +434,8 @@ affected_load_config() {
       # glob that matches one of a handful of improbable probe paths.
       if [[ -z "$_ct_g" || "$_ct_g" == *$'\n'* || "$_ct_g" == *[[:space:]]* \
             || "$_ct_g" == ./* || "$_ct_g" == /* || "$_ct_g" == '!'* || "$_ct_g" == */ \
-            || "$_ct_g" == *//* || "$_ct_g" == */./* || "$_ct_g" == *..* || "$_ct_g" == *[{}]* ]]; then
+            || "$_ct_g" == *//* || "$_ct_g" == */./* || "$_ct_g" == . || "$_ct_g" == */. \
+            || "$_ct_g" == *..* || "$_ct_g" == *[{}]* ]]; then
         _affected_ct_bad content_trigger_paths
       fi
       for _ct_probe in "zz9q8/probe.nonexistent" "a" ".hidden" "x/y.z" "Q9"; do
@@ -787,6 +788,12 @@ if (( ALL_INERT )) && (( ${#AFFECTED_CHANGED[@]} > 0 )) && (( ARG_FULL == 0 )) &
   # UNIT NOTE: on this path of= counts CHANGED files (all inert), not the
   # repo test-file census other paths emit — units differ by design here.
   AFFECTED_CT_ELIGIBLE=1   # under --explain the hook only reports; it runs nothing
+  # The inert exit precedes the budget arming below: arm it here so the content-trigger
+  # command is bounded (and deferred to CI at expiry) like every other post-primary run.
+  if [[ "$CI_NAME" != none ]]; then
+    AFFECTED_BUDGET_ACTIVE=1
+    AFFECTED_DEADLINE=$(( $(affected_now) + CFG_BUDGET_SECONDS ))
+  fi
   finish 0 none inert - "$CI_NAME" 0 "${#AFFECTED_CHANGED[@]}" "${#AFFECTED_CHANGED[@]}"
 fi
 
