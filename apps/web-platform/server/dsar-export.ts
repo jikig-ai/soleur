@@ -511,7 +511,7 @@ export async function exportSqlTable(
     results.push({ table: "agent_engine_events", spec: DSAR_TABLE_ALLOWLIST.agent_engine_events, rows });
   }
 
-  // -- agent_engine_attempts (migration 163, joined through owned run) --
+  // -- agent_engine_attempts (migration 165, joined through owned run) --
   {
     const { data, error } = await service
       .from("agent_engine_attempts")
@@ -523,7 +523,7 @@ export async function exportSqlTable(
     results.push({ table: "agent_engine_attempts", spec: DSAR_TABLE_ALLOWLIST.agent_engine_attempts, rows });
   }
 
-  // -- agent_engine_recovery_checkpoints (migration 163, joined via run) --
+  // -- agent_engine_recovery_checkpoints (migration 165, joined via run) --
   {
     const { data, error } = await service
       .from("agent_engine_recovery_checkpoints")
@@ -538,7 +538,7 @@ export async function exportSqlTable(
     results.push({ table: "agent_engine_recovery_checkpoints", spec: DSAR_TABLE_ALLOWLIST.agent_engine_recovery_checkpoints, rows });
   }
 
-  // -- Codex history-transfer acknowledgments (migration 169) ----------
+  // -- Codex history-transfer acknowledgments (migration 171) ----------
   {
     const { data, error } = await service
       .from("codex_history_transfer_acknowledgments")

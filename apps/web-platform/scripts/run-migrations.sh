@@ -372,10 +372,10 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     continue
   fi
 
-  # Migration 165 backfills the workspace mode from the latest Codex
+  # Migration 167 backfills the workspace mode from the latest Codex
   # conversation run. Refuse when conflicting modes share that latest
   # timestamp; ORDER BY created_at alone cannot choose deterministically.
-  if [[ "$filename" == "165_codex_auth_mode_rebind.sql" ]]; then
+  if [[ "$filename" == "167_codex_auth_mode_rebind.sql" ]]; then
     codex_auth_mode_timestamp_tie_count=$(run_sql "/* codex_auth_mode_timestamp_tie_count */
       SELECT count(*)
         FROM (
@@ -398,7 +398,7 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
           HAVING count(DISTINCT r.auth_mode) > 1
         ) AS conflicting_latest_modes;")
     if [[ ! "$codex_auth_mode_timestamp_tie_count" =~ ^[0-9]+$ || "$codex_auth_mode_timestamp_tie_count" -gt 0 ]]; then
-      echo "::error::Codex auth-mode backfill has conflicting latest timestamps; resolve the affected workspace state before migration 165. No migration was applied."
+      echo "::error::Codex auth-mode backfill has conflicting latest timestamps; resolve the affected workspace state before migration 167. No migration was applied."
       exit 1
     fi
   fi
@@ -489,17 +489,17 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # Applied migration bytes stay immutable. Admission must hold its lock through
   # the body and ledger insert; a separate preflight SELECT is not race-safe.
   codex_guard="$SCRIPT_DIR/sql/codex-auth-mode-pre-migration.sql"
-  if [[ "$filename" == "165_codex_auth_mode_rebind.sql" && ! -r "$codex_guard" ]]; then
-    echo "::error::Codex auth-mode pre-migration guard is unavailable; refusing migration 165"
+  if [[ "$filename" == "167_codex_auth_mode_rebind.sql" && ! -r "$codex_guard" ]]; then
+    echo "::error::Codex auth-mode pre-migration guard is unavailable; refusing migration 167"
     exit 1
   fi
-  if [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+  if [[ "$filename" == "172_codex_history_ack_owner_scope.sql" ]]; then
     # Preserve the fail-closed state even if preparing this migration fails.
-    # A database may already have ledgered 169 under the older runner while
+    # A database may already have ledgered 171 under the older runner while
     # retaining its workspace-only authenticated RPC grants.
     if ! psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 \
       -c "REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role; REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;"; then
-      echo "::error::Could not close Codex acknowledgment RPC grants before migration 170; refusing owner-scope migration"
+      echo "::error::Could not close Codex acknowledgment RPC grants before migration 172; refusing owner-scope migration"
       exit 1
     fi
   fi
@@ -508,12 +508,12 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # Conditional command substitutions suppress errexit, so check EVERY output
   # command explicitly, including literal SQL and the ledger suffix.
   if ! migration_sql="$(
-    if [[ "$filename" == "165_codex_auth_mode_rebind.sql" ]]; then
+    if [[ "$filename" == "167_codex_auth_mode_rebind.sql" ]]; then
       cat "$codex_guard" || exit 1
     fi
-    if [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
-      # Also cover a database where 169 was ledgered before this runner gained
-      # the 169 barrier: close the old grants within 170's transaction before
+    if [[ "$filename" == "172_codex_history_ack_owner_scope.sql" ]]; then
+      # Also cover a database where 171 was ledgered before this runner gained
+      # the 171 barrier: close the old grants within 172's transaction before
       # replacing either function. The commit then reveals owner-scoped bodies
       # and restored grants atomically.
       printf 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n' || exit 1
@@ -524,16 +524,16 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
     else
       cat "$migration_file" || exit 1
     fi
-    # Migration 169 originally grants authenticated callers two acknowledgment
+    # Migration 171 originally grants authenticated callers two acknowledgment
     # RPCs that do not yet enforce conversation ownership. Keep those grants
-    # from becoming visible at the transaction boundary; migration 170 restores
+    # from becoming visible at the transaction boundary; migration 172 restores
     # them only after replacing both functions with owner-scoped definitions.
     # The migration files remain immutable for databases that already ledgered
     # them, while fresh runner-managed installs have no exposed interval.
-    if [[ "$filename" == "169_codex_history_transfer_ack.sql" ]]; then
+    if [[ "$filename" == "171_codex_history_transfer_ack.sql" ]]; then
       printf '\nREVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n' || exit 1
       printf 'REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) FROM PUBLIC, anon, authenticated, service_role;\n' || exit 1
-    elif [[ "$filename" == "170_codex_history_ack_owner_scope.sql" ]]; then
+    elif [[ "$filename" == "172_codex_history_ack_owner_scope.sql" ]]; then
       printf '\nGRANT EXECUTE ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint) TO authenticated;\n' || exit 1
       printf 'GRANT EXECUTE ON FUNCTION public.codex_history_transfer_acknowledged(uuid, bigint) TO authenticated;\n' || exit 1
     fi

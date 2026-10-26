@@ -156,7 +156,7 @@ os.execv('/usr/bin/COMMAND', ['COMMAND', *sys.argv[1:]])
         self.assertIn('--single-transaction', applies[0]['argv'])
 
     def test_codex_guard_body_then_ledger_order_and_no_outer_commit(self):
-        result, applies, _ = self.capture({'165_codex_auth_mode_rebind.sql': 'BEGIN;\nSELECT 145;\nCOMMIT;\n'})
+        result, applies, _ = self.capture({'167_codex_auth_mode_rebind.sql': 'BEGIN;\nSELECT 145;\nCOMMIT;\n'})
         self.assertEqual(result.returncode, 0, result.stderr)
         sql = applies[0]['sql']
         self.assertLess(sql.index('LOCK TABLE public.workspace_engine_settings'), sql.index('SELECT 145;'))
@@ -168,11 +168,11 @@ os.execv('/usr/bin/COMMAND', ['COMMAND', *sys.argv[1:]])
         # migration via sed, and unwrapped migration via cat. Include both
         # acknowledgment migrations whose grants must never outlive a body.
         cases = [
-            ('cat', 'codex-auth-mode-pre-migration.sql', '165_codex_auth_mode_rebind.sql', True),
-            ('sed', '165_codex_auth_mode_rebind.sql', '165_codex_auth_mode_rebind.sql', True),
-            ('sed', '169_codex_history_transfer_ack.sql', '169_codex_history_transfer_ack.sql', True),
-            ('sed', '170_codex_history_ack_owner_scope.sql', '170_codex_history_ack_owner_scope.sql', True),
-            ('cat', '170_codex_history_ack_owner_scope.sql', '170_codex_history_ack_owner_scope.sql', False),
+            ('cat', 'codex-auth-mode-pre-migration.sql', '167_codex_auth_mode_rebind.sql', True),
+            ('sed', '167_codex_auth_mode_rebind.sql', '167_codex_auth_mode_rebind.sql', True),
+            ('sed', '171_codex_history_transfer_ack.sql', '171_codex_history_transfer_ack.sql', True),
+            ('sed', '172_codex_history_ack_owner_scope.sql', '172_codex_history_ack_owner_scope.sql', True),
+            ('cat', '172_codex_history_ack_owner_scope.sql', '172_codex_history_ack_owner_scope.sql', False),
             ('cat', '001_synthetic.sql', '001_synthetic.sql', False),
         ]
         for command, target, filename, wrapped in cases:
@@ -189,16 +189,16 @@ os.execv('/usr/bin/COMMAND', ['COMMAND', *sys.argv[1:]])
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn('Could not assemble migration SQL', result.stdout)
                     self.assertEqual(applies, [], 'an incomplete SQL unit must never reach psql')
-                    if filename == '170_codex_history_ack_owner_scope.sql':
+                    if filename == '172_codex_history_ack_owner_scope.sql':
                         barriers = [call for call in calls if '-c' in call['argv'] and 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment' in call['sql']]
                         self.assertEqual(len(barriers), 1, 'the legacy grant barrier must commit before fallible assembly')
                         self.assertIn('REVOKE ALL ON FUNCTION public.codex_history_transfer_acknowledged', barriers[0]['sql'])
 
     def test_failed_legacy_grant_barrier_refuses_before_assembly_or_apply(self):
         result, applies, calls = self.capture(
-            {'170_codex_history_ack_owner_scope.sql': 'SELECT 170;\n'}, fail_barrier=True)
+            {'172_codex_history_ack_owner_scope.sql': 'SELECT 170;\n'}, fail_barrier=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Could not close Codex acknowledgment RPC grants before migration 170', result.stdout)
+        self.assertIn('Could not close Codex acknowledgment RPC grants before migration 172', result.stdout)
         self.assertEqual(applies, [], 'failed revoke barrier must prevent every migration apply')
         barriers = [call for call in calls if '-c' in call['argv'] and 'REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment' in call['sql']]
         self.assertEqual(len(barriers), 1)

@@ -3347,10 +3347,10 @@ fi
 echo "G3-Codex145-legacy-protect: a legacy applied row protects every paired down"
 CASES=$((CASES + 1))
 pr_start w548
-pr_commit 'w548' 163_agent_engine_attempts.sql="CODEX143-legacy-protect" 163_agent_engine_attempts.down.sql="$(cat "$REPO_ROOT/$MDIR/163_agent_engine_attempts.down.sql")"
+pr_commit 'w548' 165_agent_engine_attempts.sql="CODEX143-legacy-protect" 165_agent_engine_attempts.down.sql="$(cat "$REPO_ROOT/$MDIR/165_agent_engine_attempts.down.sql")"
 pr_publish 548 w548
 gh_reset; pr_json 548 "" closed w548
-wledger "163_agent_engine_attempts.sql|$(blob_file CODEX143-legacy-protect)|$(ts 110)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 120)"
+wledger "165_agent_engine_attempts.sql|$(blob_file CODEX143-legacy-protect)|$(ts 110)" "145_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 120)"
 run_writer --pr 548 --execute --allow-later-rows
 if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
   pass "legacy migration 145 protects the renamed ancestor down"
@@ -3361,7 +3361,7 @@ fi
 echo "G3-Codex-malformed-protected: a malformed raw 165 row is detected before parsing and blocks every write"
 CASES=$((CASES + 1))
 gh_reset; pr_json 548 "" closed w548
-wledger "163_agent_engine_attempts.sql|$(blob_file CODEX143-legacy-protect)|$(ts 110)" \
+wledger "165_agent_engine_attempts.sql|$(blob_file CODEX143-legacy-protect)|$(ts 110)" \
   "165_codex_auth_mode_rebind.sql|synthetic|sha|$(ts 120)"
 run_writer --pr 548 --execute --allow-later-rows
 if [[ "$rc" == "1" ]] && zero_writes && grep -q 'protected Codex migration ledger row is malformed' <<<"$out" \
@@ -3374,10 +3374,10 @@ fi
 echo "G3-Codex163: an ancestor down cannot erase admission evidence while 165 is retained"
 CASES=$((CASES + 1))
 pr_start w541
-pr_commit 'w541' 163_agent_engine_attempts.sql="CODEX143-synthetic" 163_agent_engine_attempts.down.sql="$(cat "$REPO_ROOT/$MDIR/163_agent_engine_attempts.down.sql")"
+pr_commit 'w541' 165_agent_engine_attempts.sql="CODEX143-synthetic" 165_agent_engine_attempts.down.sql="$(cat "$REPO_ROOT/$MDIR/165_agent_engine_attempts.down.sql")"
 pr_publish 541 w541
 gh_reset; pr_json 541 "" closed w541
-wledger "163_agent_engine_attempts.sql|$(blob_file CODEX143-synthetic)|$(ts 110)" "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 120)"
+wledger "165_agent_engine_attempts.sql|$(blob_file CODEX143-synthetic)|$(ts 110)" "165_codex_auth_mode_rebind.sql|$(blob_file CODEX145-synthetic)|$(ts 120)"
 run_writer --pr 541 --execute --allow-later-rows
 if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
   pass "the actual attempt-table down cannot bypass the protected later migration"
@@ -3456,6 +3456,172 @@ if [[ "$rc" == "0" ]] && one_unit && grep -q 'ledger-only=1' <<<"$out" \
 else
   fail "expected unrelated ledger-only cleanup; got rc=$rc out=$out"
 fi
+
+# Exercise every historical/current protected identity through the writer and
+# scanner. Exact names matter: a reused ordinal is not the same migration.
+for codex_alias_ordinal in 145 165 167; do
+  codex_alias_name="${codex_alias_ordinal}_codex_auth_mode_rebind.sql"
+  codex_alias_down="${codex_alias_name%.sql}.down.sql"
+  codex_alias_pr=$((7000 + codex_alias_ordinal))
+  codex_alias_branch="w_codex_alias_${codex_alias_ordinal}"
+  codex_alias_body="CODEX-alias-${codex_alias_ordinal}-synthetic"
+  pr_start "$codex_alias_branch"
+  pr_commit "$codex_alias_branch" "$codex_alias_name=$codex_alias_body" "$codex_alias_down=SELECT 1;"
+  pr_publish "$codex_alias_pr" "$codex_alias_branch"
+
+  echo "G3-Codex-alias-${codex_alias_ordinal}-direct: a paired down cannot discard this identity"
+  CASES=$((CASES + 1))
+  gh_reset; pr_json "$codex_alias_pr" "" closed "$codex_alias_branch"
+  wledger "$codex_alias_name|$(blob_file "$codex_alias_body")|$(ts 90)"
+  run_writer --pr "$codex_alias_pr" --execute --allow-later-rows
+  if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+    pass "protected alias $codex_alias_ordinal refuses direct discard"
+  else
+    fail "protected alias $codex_alias_ordinal lost direct refusal: rc=$rc out=$out"
+  fi
+
+  codex_ledger_pr=$((codex_alias_pr + 100))
+  codex_ledger_branch="${codex_alias_branch}_ledger_only"
+  codex_ledger_body="CODEX-alias-${codex_alias_ordinal}-ledger-only-synthetic"
+  pr_start "$codex_ledger_branch"
+  pr_commit "$codex_ledger_branch" "$codex_alias_name=$codex_ledger_body"
+  pr_publish "$codex_ledger_pr" "$codex_ledger_branch"
+  echo "G3-Codex-alias-${codex_alias_ordinal}-ledger-only: missing down does not waive protection"
+  CASES=$((CASES + 1))
+  gh_reset; pr_json "$codex_ledger_pr" "" closed "$codex_ledger_branch"
+  wledger "$codex_alias_name|$(blob_file "$codex_ledger_body")|$(ts 90)"
+  run_writer --pr "$codex_ledger_pr" --execute --allow-later-rows
+  if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+    pass "protected alias $codex_alias_ordinal refuses ledger-only discard"
+  else
+    fail "protected alias $codex_alias_ordinal lost ledger-only refusal: rc=$rc out=$out"
+  fi
+
+  codex_other_pr=$((codex_alias_pr + 200))
+  codex_other_branch="${codex_alias_branch}_unrelated"
+  codex_other_name="450_alias_${codex_alias_ordinal}.sql"
+  codex_other_down="${codex_other_name%.sql}.down.sql"
+  codex_other_body="CODEX-unrelated-${codex_alias_ordinal}-synthetic"
+  codex_unpaired_name="451_alias_${codex_alias_ordinal}.sql"
+  codex_unpaired_body="CODEX-unpaired-${codex_alias_ordinal}-synthetic"
+  pr_start "$codex_other_branch"
+  pr_commit "$codex_other_branch" "$codex_other_name=$codex_other_body" "$codex_other_down=SELECT 1;" "$codex_unpaired_name=$codex_unpaired_body"
+  pr_publish "$codex_other_pr" "$codex_other_branch"
+
+  echo "G3-Codex-alias-${codex_alias_ordinal}-malformed: raw protection precedes ledger parsing"
+  CASES=$((CASES + 1))
+  gh_reset; pr_json "$codex_other_pr" "" closed "$codex_other_branch"
+  wledger "$codex_other_name|$(blob_file "$codex_other_body")|$(ts 90)" "$codex_alias_name|synthetic|sha|$(ts 120)"
+  run_writer --pr "$codex_other_pr" --execute --allow-later-rows
+  if [[ "$rc" == "1" ]] && zero_writes && grep -q 'protected Codex migration ledger row is malformed' <<<"$out" \
+    && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+    pass "protected alias $codex_alias_ordinal survives malformed raw rows"
+  else
+    fail "protected alias $codex_alias_ordinal lost malformed-row refusal: rc=$rc out=$out"
+  fi
+
+  echo "G3-Codex-alias-${codex_alias_ordinal}-unrelated: every paired down remains blocked"
+  CASES=$((CASES + 1))
+  gh_reset; pr_json "$codex_other_pr" "" closed "$codex_other_branch"
+  wledger "$codex_other_name|$(blob_file "$codex_other_body")|$(ts 90)" "$codex_alias_name|$(blob_file "$codex_alias_body")|$(ts 120)"
+  run_writer --pr "$codex_other_pr" --execute --allow-later-rows
+  if [[ "$rc" == "1" ]] && zero_writes && grep -q 'reason=codex-forward-only)' <<<"$out"; then
+    pass "protected alias $codex_alias_ordinal blocks an unrelated benign down"
+  else
+    fail "protected alias $codex_alias_ordinal lost global down refusal: rc=$rc out=$out"
+  fi
+
+  echo "G3-Codex-alias-${codex_alias_ordinal}-unpaired: unrelated ledger-only cleanup stays available"
+  CASES=$((CASES + 1))
+  gh_reset; pr_json "$codex_other_pr" "" closed "$codex_other_branch"
+  wledger "$codex_unpaired_name|$(blob_file "$codex_unpaired_body")|$(ts 90)" "$codex_alias_name|$(blob_file "$codex_alias_body")|$(ts 120)"
+  run_writer --pr "$codex_other_pr" --execute
+  if [[ "$rc" == "0" ]] && one_unit && grep -qF "$(cas_of "$codex_unpaired_name" "$(blob_file "$codex_unpaired_body")")" "$PAYLOAD" \
+    && ! grep -qF "$(cas_of "$codex_alias_name" "$(blob_file "$codex_alias_body")")" "$PAYLOAD"; then
+    pass "unrelated ledger-only cleanup preserves protected alias $codex_alias_ordinal"
+  else
+    fail "protected alias $codex_alias_ordinal over-refused unrelated ledger-only cleanup: rc=$rc out=$out"
+  fi
+
+  codex_scan_dir="$tmp/codex-alias-$codex_alias_ordinal"
+  assert_fixture_dir "$codex_scan_dir"
+  mkdir -p "$codex_scan_dir"
+  codex_scan_path="$codex_scan_dir/$codex_alias_down"
+  printf 'SELECT 1;\n' > "$codex_scan_path"
+  echo "G3-Codex-alias-${codex_alias_ordinal}-scan: normal down classification retains protection"
+  CASES=$((CASES + 1))
+  codex_scan_output=$(bash "$WBIN/dev-ledger-reconcile.sh" --scan-down "$codex_scan_path")
+  if awk -F '\t' -v name="$codex_alias_down" '$1 == name && $2 ~ /(^|,)codex-forward-only(,|$)/ { found=1 } END { exit !found }' <<<"$codex_scan_output"; then
+    pass "the scanner recognizes protected alias $codex_alias_ordinal"
+  else
+    fail "protected alias $codex_alias_ordinal lost normal scanner refusal: $codex_scan_output"
+  fi
+
+  printf 'SELECT \\\n' > "$codex_scan_path"
+  echo "G3-Codex-alias-${codex_alias_ordinal}-backslash: both refusal classes survive"
+  CASES=$((CASES + 1))
+  codex_scan_output=$(bash "$WBIN/dev-ledger-reconcile.sh" --scan-down "$codex_scan_path")
+  if awk -F '\t' -v name="$codex_alias_down" '$1 == name && $2 == "backslash,codex-forward-only" { found=1 } END { exit !found }' <<<"$codex_scan_output"; then
+    pass "the scanner preserves backslash and protected alias $codex_alias_ordinal"
+  else
+    fail "protected alias $codex_alias_ordinal lost backslash scanner refusal: $codex_scan_output"
+  fi
+
+  printf 'SELECT 1;\n' > "$codex_scan_path"
+  codex_mutant_path="$codex_scan_dir/mutant-writer.sh"
+  python3 - "$WBIN/dev-ledger-reconcile.sh" "$codex_mutant_path" "$codex_alias_name" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+forward = sys.argv[3]
+down = forward.removesuffix('.sql') + '.down.sql'
+# Remove either source spelling, so this mutant tests the alias contract
+# independently of whether down-name normalization is shared or duplicated.
+source = source.replace(down, '999_codex_alias_removed.down.sql')
+Path(sys.argv[2]).write_text(source.replace(forward, '999_codex_alias_removed.sql'))
+PY
+  echo "G3-Codex-alias-${codex_alias_ordinal}-mutation: removing the alias breaks its runtime contract"
+  CASES=$((CASES + 1))
+  codex_mutant_output=$(bash "$codex_mutant_path" --scan-down "$codex_scan_path")
+  if ! cmp -s "$WBIN/dev-ledger-reconcile.sh" "$codex_mutant_path" \
+    && awk -F '\t' -v name="$codex_alias_down" '$1 == name && $2 ~ /(^|,)codex-forward-only(,|$)/ { found=1 } END { exit !found }' <<<"$(bash "$WBIN/dev-ledger-reconcile.sh" --scan-down "$codex_scan_path")" \
+    && ! awk -F '\t' -v name="$codex_alias_down" '$1 == name && $2 ~ /(^|,)codex-forward-only(,|$)/ { found=1 } END { exit !found }' <<<"$codex_mutant_output"; then
+    pass "the protected alias $codex_alias_ordinal removal mutant is killed"
+  else
+    fail "protected alias $codex_alias_ordinal removal was not discriminated"
+  fi
+done
+
+for codex_negative_name in 165_agent_engine_attempts.sql 167_codex_lifecycle_state_sync.sql; do
+  codex_negative_ordinal="${codex_negative_name%%_*}"
+  codex_negative_branch="w_codex_negative_$codex_negative_ordinal"
+  codex_negative_pr=$((8000 + codex_negative_ordinal))
+  codex_negative_owned="452_negative_${codex_negative_ordinal}.sql"
+  codex_negative_body="CODEX-negative-${codex_negative_ordinal}-synthetic"
+  pr_start "$codex_negative_branch"
+  pr_commit "$codex_negative_branch" "$codex_negative_owned=$codex_negative_body" "${codex_negative_owned%.sql}.down.sql=SELECT 1;"
+  pr_publish "$codex_negative_pr" "$codex_negative_branch"
+  gh_reset; pr_json "$codex_negative_pr" "" closed "$codex_negative_branch"
+  wledger "$codex_negative_owned|$(blob_file "$codex_negative_body")|$(ts 90)" "$codex_negative_name|$(blob_file CODEX-negative-unrelated)|$(ts 120)"
+  run_writer --pr "$codex_negative_pr" --execute --allow-later-rows
+  codex_negative_rc=$rc
+  codex_negative_unit=0
+  if one_unit; then codex_negative_unit=1; fi
+  codex_negative_dir="$tmp/codex-negative-$codex_negative_ordinal"
+  assert_fixture_dir "$codex_negative_dir"
+  mkdir -p "$codex_negative_dir"
+  codex_negative_down="${codex_negative_name%.sql}.down.sql"
+  printf 'SELECT 1;\n' > "$codex_negative_dir/$codex_negative_down"
+  codex_negative_scan=$(bash "$WBIN/dev-ledger-reconcile.sh" --scan-down "$codex_negative_dir/$codex_negative_down")
+  echo "G3-Codex-negative-${codex_negative_ordinal}: ordinal reuse alone grants no protection"
+  CASES=$((CASES + 1))
+  if [[ "$codex_negative_rc" == "0" && "$codex_negative_unit" == "1" ]] \
+    && awk -F '\t' -v name="$codex_negative_down" '$1 == name && $2 == "-" { found=1 } END { exit !found }' <<<"$codex_negative_scan"; then
+    pass "unrelated identity $codex_negative_name does not activate protection"
+  else
+    fail "numeric-only overprotection for $codex_negative_name: rc=$codex_negative_rc scan=$codex_negative_scan"
+  fi
+done
 
 echo "G3-M10d: a CREATE OR REPLACE FUNCTION down while a later MAIN row exists -> rc 1"
 CASES=$((CASES + 1))
@@ -4266,14 +4432,14 @@ PIN_LATER=$(tr '\n' ' ' <<'LIST'
 160_dsar_export_audit_pii_cascade_null_carveout.down.sql
 161_audit_github_token_use_cascade_null_carveout.down.sql
 162_action_sends_message_id_cascade_null_carveout.down.sql
-163_agent_engine_attempts.down.sql
-165_codex_auth_mode_rebind.down.sql
-166_codex_terminal_lifecycle.down.sql
-167_codex_lifecycle_state_sync.down.sql
-168_codex_lifecycle_lock_order.down.sql
-170_codex_history_ack_owner_scope.down.sql
-172_agent_engine_erasure_lock_order.down.sql
-173_codex_history_notice_issuance.down.sql
+165_agent_engine_attempts.down.sql
+167_codex_auth_mode_rebind.down.sql
+168_codex_terminal_lifecycle.down.sql
+169_codex_lifecycle_state_sync.down.sql
+170_codex_lifecycle_lock_order.down.sql
+172_codex_history_ack_owner_scope.down.sql
+174_agent_engine_erasure_lock_order.down.sql
+175_codex_history_notice_issuance.down.sql
 LIST
 )
 if [[ "$scan_rc" == "0" && "${#DOWNS[@]}" -ge 95 && "$(grep -c . <<<"$scan")" == "${#DOWNS[@]}" \
@@ -4902,7 +5068,9 @@ else
 fi
 
 echo ""
-EXPECTED_CASES=264
+# Measured prior 269 cases plus 26 alias/negative-control cases. The RED run
+# executes all 295 cases; every case must still contribute exactly one verdict.
+EXPECTED_CASES=295
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   printf 'FATAL: only %s of %s cases ran — suite is truncated\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

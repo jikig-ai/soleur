@@ -7,11 +7,11 @@ const isCi = process.env.CI === "true";
 const container = isCi
   ? `codex_ack_pg_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`
   : "supabase_db_web-platform";
-const migration = path.join(__dirname, "../supabase/migrations/169_codex_history_transfer_ack.sql");
-const ownershipHardening = path.join(__dirname, "../supabase/migrations/170_codex_history_ack_owner_scope.sql");
-const ownershipRollback = path.join(__dirname, "../supabase/migrations/170_codex_history_ack_owner_scope.down.sql");
-const noticeIssuance = path.join(__dirname, "../supabase/migrations/173_codex_history_notice_issuance.sql");
-const noticeIssuanceRollback = path.join(__dirname, "../supabase/migrations/173_codex_history_notice_issuance.down.sql");
+const migration = path.join(__dirname, "../supabase/migrations/171_codex_history_transfer_ack.sql");
+const ownershipHardening = path.join(__dirname, "../supabase/migrations/172_codex_history_ack_owner_scope.sql");
+const ownershipRollback = path.join(__dirname, "../supabase/migrations/172_codex_history_ack_owner_scope.down.sql");
+const noticeIssuance = path.join(__dirname, "../supabase/migrations/175_codex_history_notice_issuance.sql");
+const noticeIssuanceRollback = path.join(__dirname, "../supabase/migrations/175_codex_history_notice_issuance.down.sql");
 const docker = (args: string[], input?: string, timeout = 10_000) => spawnSync("docker", args, {
   encoding: "utf8",
   input,
@@ -35,7 +35,7 @@ function runSql(database: string, sql: string): string {
   return result.stdout.trim();
 }
 
-describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
+describe("migration 171 acknowledgment RPCs on disposable PostgreSQL", () => {
   it.skipIf(!canRunDatabaseTest)("fences acknowledgments by active member and current binding generation", async () => {
     let ownsContainer = false;
     const database = `codex_ack_test_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
@@ -300,7 +300,7 @@ describe("migration 169 acknowledgment RPCs on disposable PostgreSQL", () => {
         DELETE FROM public.users WHERE id = '30000000-0000-4000-8000-000000000001';
         SELECT count(*) FROM public.codex_history_transfer_acknowledgments;
         ${noticeIssuanceRollbackSql}
-        -- Migration 170 rollback must not restore workspace-only acknowledgment scope.
+        -- Migration 172 rollback must not restore workspace-only acknowledgment scope.
         SET request.jwt.claim.sub = '30000000-0000-4000-8000-000000000002';
         ${ownershipRollbackSql}
         SELECT public.record_codex_history_transfer_acknowledgment(

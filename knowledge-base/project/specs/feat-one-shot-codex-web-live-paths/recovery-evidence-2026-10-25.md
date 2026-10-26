@@ -135,3 +135,60 @@ owned 164 reservation; remeasure before final source binding. Runner guards
 must follow their semantics: tie/backfill 165→167, grant barrier 169→171,
 owner-scope barrier 170→172, notice issuance 173→175. Preserve all SQL bytes.
 Those runner changes require a fresh full-runner source review and hash pin.
+
+## Source-renumber and privacy-gate addendum — 2026-10-26
+
+PR head `912d84902027b7f37cfdb575f44ed97f77b8323b` is pushed and remains the
+last-pushed SHA. The 21 SQL migration files in this worktree were moved from
+the provisional 163–173 allocation to 165–175; the before/after manifest is
+`.soleur/renumber-20261026/sql-after.json` (SHA-256
+`690bff9db0ad86715633d60e75f1d381128e0e94e7eacbe1a3ba53a7d19d565d`). The
+preserved bytes include the notice-issuance migration at 175. Numbered tests
+and active runner/reconciler guards were moved to their current names. These
+changes are still uncommitted and have not received fresh full-runner review.
+
+The tenant-integration run `40308877641` at the pushed pre-renumber source
+failed closed on the known ten-row legacy filename mismatch: the applied
+143–152 rows matched the branch bodies by blob under 163–172. The gate asked
+for identity restoration or a separately reviewed ledger reconciliation. This
+CI observation is historical to that SHA; it is not a new catalog capture or
+authorization to change the shared ledger. CI run `40308877768` failed the
+draft-light aggregate as designed: test shards were skipped and the workflow
+reports that the full battery is owed at ready. It does not constitute a
+ready-head test failure.
+
+Pinned Node 22 migration/runner Vitest on the current worktree reported 47
+passed, one failed (the audited, still-unimplemented DSAR completeness path),
+and ten isolated SQL integration cases skipped with DB access and Docker
+dispatch disabled. A subsequent full app `tsc --noEmit` completed with exit 0.
+The TOM4 source fix adds issuance metadata as shape (iv), states its RPC-only
+direct-privilege boundary, and names it outside WORM. The source gate passes
+28/25 assertions; its expanded mutation battery passes 36/36, including client
+policy, direct service-role/client table grants, and broadened issue-RPC
+mutants, omission of an explicit PUBLIC revoke and recreation/regrant of the
+legacy two-argument acknowledgment overload. ShellCheck reports the same 28
+informational diagnostics as HEAD.
+
+The dated internal CLO audit is
+`knowledge-base/legal/audits/2026-10-26-codex-nonce-ledger-and-hosted-auth-recheck.md`.
+It attests the source classification only and withholds processing clearance
+pending rights, purpose and server-retention controls. The final focused CLO
+recheck found no remaining mismatch in the paired gate/DPA classification;
+that is not processing clearance. The implementation plan at
+`knowledge-base/project/plans/2026-10-26-fix-codex-notice-rights-and-retention-plan.md`
+is draft pending CPO/user-impact review and CLO purpose, rights and maximum-
+retention decisions. No rights/retention implementation, shared-ledger
+reconciliation, fresh production catalog capture, provider request, runtime
+qualification or customer-content clearance is established by this addendum.
+Issue
+[#11170](https://github.com/jikig-ai/soleur/issues/11170) tracks subject-access
+metadata and bounded server retention.
+
+The plan now records the CPO approval of the single-user incident threshold and
+P1 priority, the user-impact reviewer's concurrence, and the advisory GDPR
+gate's Article 5(e) retention finding. It also has the required research
+Property List/Cut List and six-ask scope mapping. This is plan readiness only:
+CLO purpose/basis, Article 15/20 and post-consumption decisions, and the maximum
+server lifetime remain open. Plan review has not run because the changed plan is
+not yet on a reviewable pushed head.
+Keep the PR draft and auto-merge disabled.

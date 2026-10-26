@@ -1,4 +1,4 @@
--- run-migrations.sh injects this before migration 165 in the SAME transaction
+-- run-migrations.sh injects this before migration 167 in the SAME transaction
 -- as its unchanged body and ledger insert. The locks exclude mode changes and
 -- run inserts until the constrained backfill finishes. Do not run admission
 -- checks as separate count queries: that leaves a write window before the ALTER.

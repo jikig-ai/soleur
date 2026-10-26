@@ -2,8 +2,8 @@
 
 ## Work Phase
 
-- Plan file: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wiring-plan.md`
-- Status: partial implementation; production qualification and required review gates pending
+- Plan file: `knowledge-base/project/plans/2026-10-26-fix-codex-notice-rights-and-retention-plan.md`
+- Status: plan structure and signoff records updated; plan review, implementation, legal clearance, qualification and shipping gates remain pending
 
 ### 2026-10-23 delivery and runner follow-up
 
@@ -2885,3 +2885,42 @@
   runtime/profile, authenticated QA, legal, full review/preflight and shipping
   gates remain open. See `recovery-evidence-2026-10-25.md` and the dated CTO
   ruling in `decision-challenges.md`.
+
+### Recovery continuation — 2026-10-26
+
+- Exact pushed head: `912d84902027b7f37cfdb575f44ed97f77b8323b`; PR #9051 remains
+  draft with auto-merge off. The repeated worktree disappearance is tracked in
+  #11162; current branch work is protected by a Git worktree lock at
+  `.worktrees/pr9051-recovery-20261026`.
+- Renumbered 21 SQL migrations and six numbered tests from provisional 163–173
+  to 165–175, preserving SQL bytes. Updated runner/reconciler and active
+  references. The exact old→new filename mapping, manifest and source digests
+  are local in `.soleur/renumber-20261026/`; changes remain uncommitted pending
+  independent exact-runner review and the source-cited legal re-review.
+- The current tenant-integration result at the pushed SHA is a fail-closed
+  ten-row old-filename mismatch, not a live mutation. The draft-light CI
+  aggregate is red by design because the full battery is owed at ready. No
+  reconciliation or current live-catalog re-read occurred.
+- TOM4 now passes 28/25 source assertions and 36 mutation cases after
+  classifying nonce issuance as shape (iv), RPC-only, outside WORM.
+  `tsc --noEmit` passes.
+  Focused migration Vitest is 47 pass / 1 DSAR-completeness fail / 10 isolated
+  SQL skips. Internal CLO classification attestation is saved, but processing
+  clearance is withheld; the final focused CLO recheck found no remaining
+  DPA/TOM4 mismatch but did not clear processing. Rights/retention is tracked
+  by #11170. CPO approved the single-user incident threshold and P1 planning
+  priority; the user-impact reviewer concurred after role-by-role review. The
+  advisory GDPR gate recorded an Article 5(e) retention finding and no Article
+  9 match. The plan is saved at
+  `knowledge-base/project/plans/2026-10-26-fix-codex-notice-rights-and-retention-plan.md`;
+  it now includes the Property List, Cut List, six-ask mapping and split
+  assessment. CLO purpose/basis, Article 15/20, post-consumption, and maximum-
+  retention decisions remain pending. The plan makes no independent CTO ruling.
+- Next: finish plan review after reviewable changes are committed and pushed;
+  preserve/push implementation only after the required source/legal gates;
+  finish DSAR and bounded-retention implementation, obtain current shared
+  capture and writer coordination under the established approval boundary,
+  complete the filename-map validator and isolated transaction rehearsal, then
+  repeat qualification, recovery and QA, exact-head review/preflight, legal/data
+  clearance and readiness/ship gates. Provider-hosted auth modes remain blocked;
+  customer content remains blocked. Do not ready or merge the PR.

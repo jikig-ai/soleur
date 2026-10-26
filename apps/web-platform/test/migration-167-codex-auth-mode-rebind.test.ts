@@ -6,22 +6,22 @@ import path from "node:path";
 const root = path.join(__dirname, "../supabase/migrations");
 const read = (file: string) => readFileSync(path.join(root, file), "utf8");
 
-describe("migration 165: Codex auth-mode rebinding", () => {
+describe("migration 167: Codex auth-mode rebinding", () => {
   it("keeps the already-applied migration 144 byte-identical and applies only its delta", () => {
-    const applied = readFileSync(path.join(root, "164_codex_auth_mode_rebind.sql"));
+    const applied = readFileSync(path.join(root, "166_codex_auth_mode_rebind.sql"));
     const gitBlob = createHash("sha1")
       .update(Buffer.concat([Buffer.from(`blob ${applied.length}\0`), applied]))
       .digest("hex");
     expect(gitBlob).toBe("be38bcb39d313de4e24ba44f02cdb47aebc3f00b");
 
-    const delta = read("165_codex_auth_mode_rebind.sql");
+    const delta = read("167_codex_auth_mode_rebind.sql");
     expect(delta).not.toMatch(/ADD COLUMN auth_mode_generation/);
     expect(delta).toMatch(/ADD COLUMN accepted_at/);
     expect(delta).toMatch(/ADD COLUMN codex_auth_mode/);
   });
 
   it("makes the explicit owner choice atomic with Codex conversation rebinding", () => {
-    const sql = read("165_codex_auth_mode_rebind.sql");
+    const sql = read("167_codex_auth_mode_rebind.sql");
     expect(sql).toMatch(/BEGIN;\s+SET LOCAL lock_timeout = '30s';\s+SET LOCAL statement_timeout = '5min';/);
     expect(sql).toMatch(/CREATE OR REPLACE FUNCTION public\.set_workspace_default_engine\(/);
     expect(sql).toMatch(/p_apply_to_existing_codex_conversations boolean DEFAULT false/);
@@ -50,8 +50,8 @@ describe("migration 165: Codex auth-mode rebinding", () => {
   });
 
   it("pins every attempt to the generation of its Codex binding", () => {
-    const prior = read("164_codex_auth_mode_rebind.sql");
-    const sql = read("165_codex_auth_mode_rebind.sql");
+    const prior = read("166_codex_auth_mode_rebind.sql");
+    const sql = read("167_codex_auth_mode_rebind.sql");
     expect(prior).toMatch(/ALTER TABLE public\.agent_engine_runs[\s\S]*ADD COLUMN auth_mode_generation bigint NOT NULL DEFAULT 0/);
     expect(prior).toMatch(/ALTER TABLE public\.agent_engine_attempts[\s\S]*ADD COLUMN auth_mode_generation bigint NOT NULL DEFAULT 0/);
     expect(sql).not.toMatch(/ADD COLUMN auth_mode_generation/);
@@ -63,7 +63,7 @@ describe("migration 165: Codex auth-mode rebinding", () => {
   });
 
   it("lets an accepted turn finish after a switch while fencing stale writes and retries", () => {
-    const sql = read("165_codex_auth_mode_rebind.sql");
+    const sql = read("167_codex_auth_mode_rebind.sql");
     const accept = sql.match(/^CREATE OR REPLACE FUNCTION public\.assert_agent_engine_attempt_generation\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     const transition = sql.match(/CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     const lifecycle = sql.match(/CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
@@ -75,7 +75,7 @@ describe("migration 165: Codex auth-mode rebinding", () => {
     expect(lifecycle).toMatch(/v_attempt\.accepted_at IS NULL[\s\S]*auth_mode_generation IS DISTINCT FROM v_run_generation/);
     expect(checkpoint).toMatch(/v_attempt_generation IS DISTINCT FROM v_run_generation/);
 
-    const down = read("165_codex_auth_mode_rebind.down.sql");
+    const down = read("167_codex_auth_mode_rebind.down.sql");
     expect(down).toMatch(/DROP COLUMN IF EXISTS accepted_at/);
     expect(down).toMatch(/DROP COLUMN IF EXISTS codex_auth_mode/);
     expect(down).toMatch(/CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*terminal engine attempt is immutable/);
@@ -83,7 +83,7 @@ describe("migration 165: Codex auth-mode rebinding", () => {
   });
 
   it("commits every lifecycle status and its attempt transition in one RPC", () => {
-    const sql = read("168_codex_lifecycle_lock_order.sql");
+    const sql = read("170_codex_lifecycle_lock_order.sql");
     const lifecycle = sql.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     const transition = sql.match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
 
@@ -92,41 +92,41 @@ describe("migration 165: Codex auth-mode rebinding", () => {
     expect(lifecycle).toMatch(/^\s*INSERT INTO public\.agent_engine_events[\s\S]*RETURNING \* INTO v_row/m);
     expect(lifecycle).toMatch(/IF p_payload->>'source_type' = 'status'[\s\S]*p_payload->>'status' IS DISTINCT FROM v_attempt\.status THEN(?:\s*--[^\n]*\n)*\s*PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
     expect(lifecycle).not.toMatch(/UPDATE public\.agent_engine_attempts AS a SET/);
-    const down = read("168_codex_lifecycle_lock_order.down.sql");
-    const priorLifecycle = read("167_codex_lifecycle_state_sync.sql").match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+    const down = read("170_codex_lifecycle_lock_order.down.sql");
+    const priorLifecycle = read("169_codex_lifecycle_state_sync.sql").match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     const rollbackLifecycle = down.match(/^CREATE OR REPLACE FUNCTION public\.append_agent_engine_lifecycle_event\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     expect(rollbackLifecycle).toBe(priorLifecycle);
-    const priorTransition = read("165_codex_auth_mode_rebind.sql").match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
+    const priorTransition = read("167_codex_auth_mode_rebind.sql").match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     const rollbackTransition = down.match(/^CREATE OR REPLACE FUNCTION public\.transition_agent_engine_attempt\([\s\S]*?^\$\$;/m)?.[0] ?? "";
     expect(rollbackTransition).toBe(priorTransition);
   });
 
-  it("keeps applied migrations 145 through 147 immutable and puts lock-order sync in migration 168", () => {
-    const applied = readFileSync(path.join(root, "165_codex_auth_mode_rebind.sql"));
+  it("keeps applied migrations 145 through 147 immutable and puts lock-order sync in migration 170", () => {
+    const applied = readFileSync(path.join(root, "167_codex_auth_mode_rebind.sql"));
     const gitBlob = createHash("sha1")
       .update(Buffer.concat([Buffer.from(`blob ${applied.length}\0`), applied]))
       .digest("hex");
     expect(gitBlob).toBe("18282434482be03df053d014aa94ad0f153a631b");
 
-    const appliedLifecycle = readFileSync(path.join(root, "166_codex_terminal_lifecycle.sql"));
+    const appliedLifecycle = readFileSync(path.join(root, "168_codex_terminal_lifecycle.sql"));
     const lifecycleBlob = createHash("sha1")
       .update(Buffer.concat([Buffer.from(`blob ${appliedLifecycle.length}\0`), appliedLifecycle]))
       .digest("hex");
     expect(lifecycleBlob).toBe("b006fb01c2544addd8035be4314273e14b7526ab");
 
-    const appliedStateSync = readFileSync(path.join(root, "167_codex_lifecycle_state_sync.sql"));
+    const appliedStateSync = readFileSync(path.join(root, "169_codex_lifecycle_state_sync.sql"));
     const stateSyncBlob = createHash("sha1")
       .update(Buffer.concat([Buffer.from(`blob ${appliedStateSync.length}\0`), appliedStateSync]))
       .digest("hex");
     expect(stateSyncBlob).toBe("a8cef89ecdc303d3575dae712bd5181af5e0fd67");
 
-    const delta = read("168_codex_lifecycle_lock_order.sql");
+    const delta = read("170_codex_lifecycle_lock_order.sql");
     expect(delta).toMatch(/FOR UPDATE/);
     expect(delta).toMatch(/PERFORM public\.transition_agent_engine_attempt\(p_attempt_id, p_payload->>'status'\)/);
   });
 
   it("restores the prior owner RPC and schema on rollback", () => {
-    const down = read("165_codex_auth_mode_rebind.down.sql");
+    const down = read("167_codex_auth_mode_rebind.down.sql");
     expect(down).toMatch(/BEGIN;\s+SET LOCAL lock_timeout = '30s';\s+SET LOCAL statement_timeout = '5min';/);
     expect(down).toMatch(/CREATE OR REPLACE FUNCTION public\.set_workspace_default_engine\([\s\S]*p_apply_to_existing_codex_conversations boolean DEFAULT false/);
     expect(down).toMatch(/DROP INDEX IF EXISTS public\.agent_engine_runs_codex_rebind_idx/);

@@ -201,6 +201,7 @@ SHAPE_IV = {  # TOM 4 shape (iv): RLS enabled, ZERO policies, Customer Data
     "agent_engine_attempts", "agent_engine_recovery_checkpoints",
     "pending_checkout_sessions",  # user-keyed checkout claim marker (migration 144)
     "codex_history_transfer_acknowledgments",  # member-scoped ack ledger, RPC-only (migration 149)
+    "codex_history_transfer_notice_issuances",  # member-linked issuance metadata, zero policies and RPC-only (migration 175)
     "workspace_egress_audit_rollup",  # per-workspace egress audit rollup, dark until PR2 (migration 162, ADR-288)
 }
 # Zero-policy tables that hold no Customer Data. Assertion 4 requires every
@@ -291,6 +292,17 @@ check("8", not bad8,
       "client-reachable grants found: %s — shape (iv) warrants that no "
       "client-held credential reaches these tables" % bad8)
 
+direct_service_table_grants = []
+for mo in re.finditer(r'GRANT\s+[^;]*?\bON\s+(?:TABLE\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s+TO\s+[^;]*?;',
+                      ALL, re.I | re.S):
+    if mo.group(1) == "codex_history_transfer_notice_issuances" and re.search(
+            r'\bservice_role\b', mo.group(0), re.I):
+        direct_service_table_grants.append(mo.group(0).strip())
+check("26", not direct_service_table_grants,
+      "nonce issuance metadata has no direct service_role TABLE grant",
+      "direct grants found: %s — service_role must reach this private table only "
+      "through its narrow RPCs" % direct_service_table_grants)
+
 # ================================================================= PREDICATES
 ok9 = True
 detail9 = []
@@ -361,6 +373,61 @@ def granted_roles(fn):
                 roles -= found
     return roles
 
+def function_argument_types(raw):
+    """Normalize the named simple SQL arguments used by the pinned RPCs."""
+    if not raw.strip():
+        return ()
+    return tuple(argument.strip().split()[-1].lower() for argument in raw.split(','))
+
+def function_signature_state(fn, signature):
+    """Replay CREATE/DROP and EXECUTE ACLs for one overload, including PUBLIC's default."""
+    wanted = tuple(part.strip().lower() for part in signature.split(','))
+    ddl = re.compile(
+        r'\b(CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION|DROP\s+FUNCTION)\s+'
+        r'(?:public\.)?' + re.escape(fn) + r'\s*\(([^)]*)\)', re.I | re.S)
+    acl = re.compile(
+        r'\b(GRANT|REVOKE)\s+(?:ALL|EXECUTE)[^;]*?\bON\s+FUNCTION\s+'
+        r'(?:public\.)?' + re.escape(fn) + r'\s*\(([^)]*)\)\s*(?:TO|FROM)\s+([^;]+);',
+        re.I | re.S)
+    exists = False
+    roles = set()
+    for migration in MIGRATIONS:
+        body = BODY[migration]
+        events = []
+        for match in ddl.finditer(body):
+            if function_argument_types(match.group(2)) == wanted:
+                events.append((match.start(), 'ddl', match.group(1).upper(), None))
+        for match in acl.finditer(body):
+            if function_argument_types(match.group(2)) == wanted:
+                events.append((match.start(), 'acl', match.group(1).upper(), match.group(3)))
+        for _, kind, action, role_list in sorted(events):
+            if kind == 'ddl':
+                if action.startswith('DROP'):
+                    exists = False
+                    roles.clear()
+                else:
+                    # CREATE FUNCTION grants EXECUTE to PUBLIC by default.
+                    # CREATE OR REPLACE preserves an existing ACL.
+                    if not action.startswith('CREATE OR REPLACE') or not exists:
+                        roles = {'public'}
+                    exists = True
+            else:
+                found = {role.strip().lower() for role in role_list.split(',')}
+                if action == 'GRANT':
+                    roles |= found
+                else:
+                    roles -= found
+    return exists, roles
+
+def granted_roles_for_signature(fn, signature):
+    return function_signature_state(fn, signature)[1]
+
+legacy_ack_exists = function_signature_state(
+    "record_codex_history_transfer_acknowledgment", "uuid, bigint")[0]
+check("28", not legacy_ack_exists,
+      "legacy two-argument acknowledgment function is absent after the notice migration",
+      "the legacy overload is recreated in the migration corpus; it bypasses notice possession and delivery proof")
+
 SERVICE_ONLY = ("accept_terms", "anonymise_tc_acceptances",
                 "write_dsar_export_audit_pii", "write_tenant_deploy_audit")
 bad13 = {}
@@ -382,6 +449,26 @@ check("15", "authenticated" not in r15,
       "is_jti_denied is NOT granted to authenticated on a net replay (068 granted, 069 revoked)",
       "net grantees are %s — a live grant is an arbitrary-UUID deny-list oracle "
       "with no authorisation check" % sorted(r15))
+
+NOTICE_RPC_SIGNATURES = {
+    ("issue_codex_history_transfer_notice", "uuid, bigint, uuid, text"): {"service_role"},
+    ("mark_codex_history_transfer_notice_delivered", "uuid, bigint, uuid, text"): {"service_role"},
+    ("delete_codex_history_transfer_notice_issuance", "uuid, bigint, uuid, text"): {"service_role"},
+    # The old two-argument overload must be absent/ungranted; the exact
+    # three-argument overload is the only authenticated acknowledgment path.
+    ("record_codex_history_transfer_acknowledgment", "uuid, bigint"): set(),
+    ("record_codex_history_transfer_acknowledgment", "uuid, bigint, text"): {"authenticated"},
+}
+bad_notice_rpc_roles = {
+    f"{fn}({signature})": {"got": sorted(granted_roles_for_signature(fn, signature)), "want": sorted(expected)}
+    for (fn, signature), expected in NOTICE_RPC_SIGNATURES.items()
+    if granted_roles_for_signature(fn, signature) != expected
+}
+check("27", not bad_notice_rpc_roles,
+      "nonce issuance RPCs retain exact service_role/authenticated grants",
+      "unexpected effective EXECUTE grantees: %s — the issue, delivery-marker "
+      "and unsent-delete RPCs are service_role-only; only the three-argument "
+      "acknowledgment consumer is authenticated" % bad_notice_rpc_roles)
 
 # ======================================================== SHAPE (v) AND TOM 7
 corpus_buckets = set(re.findall(r"bucket_id\s*=\s*'([a-z0-9-]+)'", ALL, re.I))
@@ -540,7 +627,8 @@ missing_worm_events = sorted(
     for function, required_events in required_events_by_function.items()
     if required_events - event_coverage.get(function, set()))
 worm_exclusions = {"agent_engine_attempts", "agent_engine_recovery_checkpoints",
-                   "pending_checkout_sessions"}
+                   "pending_checkout_sessions",
+                   "codex_history_transfer_notice_issuances"}
 excluded_worm_attachments = sorted(
     (table, function) for table, function, _, _ in active_worm_triggers
     if table in worm_exclusions)
@@ -578,8 +666,9 @@ check("25", not weak_worm_functions,
 check("18", all(table in dpa_text for table in worm_exclusions)
       and "outside that WORM set" in dpa_text,
       "TOM 7 identifies mutable TOM 4 tables outside WORM coverage",
-      "name agent_engine_attempts, agent_engine_recovery_checkpoints, and "
-      "pending_checkout_sessions as outside the WORM set")
+      "name agent_engine_attempts, agent_engine_recovery_checkpoints, "
+      "pending_checkout_sessions, and codex_history_transfer_notice_issuances "
+      "as outside the WORM set")
 
 # ================================================================= CITATIONS
 cited_migrations = set(re.findall(r'`(\d{3}_[a-z0-9_]+)`', dpa_text))

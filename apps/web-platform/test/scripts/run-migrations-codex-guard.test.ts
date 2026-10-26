@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const scripts = path.resolve(__dirname, "../../scripts");
 
-describe("migration 165 admission in the real migration runner", () => {
+describe("migration 167 admission in the real migration runner", () => {
   function captureApply(filename: string, missingGuard = false, legacyRows: string[] = [], migrationBodies: Record<string, string> = {}, failAckPreflight = false, failOwnerScopeApply = false, failTiePreflight = false) {
     const fixture = mkdtempSync(path.join(tmpdir(), "codex-migration-runner-"));
     try {
@@ -51,7 +51,7 @@ esac
   }
 
   it("places the bounded lock and rejection before the unchanged migration and its ledger write in one transaction", () => {
-    const result = captureApply("165_codex_auth_mode_rebind.sql");
+    const result = captureApply("167_codex_auth_mode_rebind.sql");
     expect(result.status, result.output).toBe(0);
     const lock = result.sql.search(/^LOCK TABLE public\.workspace_engine_settings IN ACCESS EXCLUSIVE MODE;/m);
     const rejection = result.sql.search(/^\s*RAISE EXCEPTION 'Codex auth-mode migration refused:/m);
@@ -67,7 +67,7 @@ esac
   });
 
   it("fails before applying when the required guard asset is absent", () => {
-    const result = captureApply("165_codex_auth_mode_rebind.sql", true);
+    const result = captureApply("167_codex_auth_mode_rebind.sql", true);
     expect(result.status).not.toBe(0);
     expect(result.output).toContain("Codex auth-mode pre-migration guard is unavailable");
     expect(result.sql).toBe("");
@@ -81,9 +81,9 @@ esac
   });
 
   it.each([
-    ["143_agent_engine_attempts.sql", "163_agent_engine_attempts.sql"],
-    ["144_codex_auth_mode_rebind.sql", "164_codex_auth_mode_rebind.sql"],
-    ["145_codex_auth_mode_rebind.sql", "165_codex_auth_mode_rebind.sql"],
+    ["143_agent_engine_attempts.sql", "165_agent_engine_attempts.sql"],
+    ["144_codex_auth_mode_rebind.sql", "166_codex_auth_mode_rebind.sql"],
+    ["145_codex_auth_mode_rebind.sql", "167_codex_auth_mode_rebind.sql"],
   ])("fails closed on legacy ledger row %s before applying the renamed chain", (legacy, renamed) => {
     const result = captureApply(renamed, false, [legacy]);
     expect(result.status, result.output).not.toBe(0);
@@ -94,12 +94,12 @@ esac
   });
 
   it("checks the whole renamed chain before an earlier pending migration", () => {
-    const result = captureApply("163_agent_engine_attempts.sql", false, ["145_codex_auth_mode_rebind.sql"], {
-      "165_codex_auth_mode_rebind.sql": "BEGIN;\\nSELECT 1;\\nCOMMIT;\\n",
+    const result = captureApply("165_agent_engine_attempts.sql", false, ["145_codex_auth_mode_rebind.sql"], {
+      "167_codex_auth_mode_rebind.sql": "BEGIN;\\nSELECT 1;\\nCOMMIT;\\n",
     });
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("legacy migration ledger row 145_codex_auth_mode_rebind.sql");
-    expect(result.output).toContain("renamed migration 165_codex_auth_mode_rebind.sql");
+    expect(result.output).toContain("renamed migration 167_codex_auth_mode_rebind.sql");
     expect(result.sql).toBe("");
   });
 
@@ -111,17 +111,17 @@ esac
     expect(result.sql).toBe("");
   });
 
-  it("refuses migration 165 when latest Codex run timestamps tie across auth modes", () => {
-    const result = captureApply("165_codex_auth_mode_rebind.sql", false, [], {}, false, false, true);
+  it("refuses migration 167 when latest Codex run timestamps tie across auth modes", () => {
+    const result = captureApply("167_codex_auth_mode_rebind.sql", false, [], {}, false, false, true);
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain("Codex auth-mode backfill has conflicting latest timestamps");
     expect(result.sql).toBe("");
   });
 
-  it("checks latest auth-mode ties while migration 165 excludes run writers", () => {
-    const migrationPath = path.resolve(__dirname, "../../supabase/migrations/165_codex_auth_mode_rebind.sql");
+  it("checks latest auth-mode ties while migration 167 excludes run writers", () => {
+    const migrationPath = path.resolve(__dirname, "../../supabase/migrations/167_codex_auth_mode_rebind.sql");
     const migrationSql = readFileSync(migrationPath, "utf8");
-    const result = captureApply("165_codex_auth_mode_rebind.sql", false, [], { "165_codex_auth_mode_rebind.sql": migrationSql });
+    const result = captureApply("167_codex_auth_mode_rebind.sql", false, [], { "167_codex_auth_mode_rebind.sql": migrationSql });
     expect(result.status, result.output).toBe(0);
     const settingsLock = result.sql.search(/^LOCK TABLE public\.workspace_engine_settings IN ACCESS EXCLUSIVE MODE;$/m);
     const runsLock = result.sql.search(/^LOCK TABLE public\.agent_engine_runs IN SHARE MODE;$/m);
@@ -137,13 +137,13 @@ esac
     expect(result.sql).toMatch(/^\s+SELECT max\(latest\.created_at\)$/m);
   });
 
-  it("keeps authenticated RPC execution closed across migrations 169 and 170", () => {
+  it("keeps authenticated RPC execution closed across migrations 171 and 172", () => {
     const migrations = path.resolve(__dirname, "../../supabase/migrations");
     const migrationBodies = Object.fromEntries([
-      "169_codex_history_transfer_ack.sql",
-      "170_codex_history_ack_owner_scope.sql",
+      "171_codex_history_transfer_ack.sql",
+      "172_codex_history_ack_owner_scope.sql",
     ].map((name) => [name, readFileSync(path.join(migrations, name), "utf8")]));
-    const result = captureApply("169_codex_history_transfer_ack.sql", false, [], migrationBodies);
+    const result = captureApply("171_codex_history_transfer_ack.sql", false, [], migrationBodies);
     expect(result.status, result.output).toBe(0);
     const applies = result.sql.split("-- migration apply --").slice(1);
     expect(applies).toHaveLength(2);
@@ -185,27 +185,27 @@ esac
     for (const sql of applies) expect(sql).not.toMatch(/^(?:BEGIN|COMMIT|ROLLBACK);/m);
   });
 
-  it("does not apply migration 170 when the committed acknowledgment revoke fails", () => {
+  it("does not apply migration 172 when the committed acknowledgment revoke fails", () => {
     const migrations = path.resolve(__dirname, "../../supabase/migrations");
     const migrationBodies = Object.fromEntries([
-      "169_codex_history_transfer_ack.sql",
-      "170_codex_history_ack_owner_scope.sql",
+      "171_codex_history_transfer_ack.sql",
+      "172_codex_history_ack_owner_scope.sql",
     ].map((name) => [name, readFileSync(path.join(migrations, name), "utf8")]));
-    const result = captureApply("169_codex_history_transfer_ack.sql", false, [], migrationBodies, true);
+    const result = captureApply("171_codex_history_transfer_ack.sql", false, [], migrationBodies, true);
     expect(result.status).not.toBe(0);
-    expect(result.output).toContain("Could not close Codex acknowledgment RPC grants before migration 170");
+    expect(result.output).toContain("Could not close Codex acknowledgment RPC grants before migration 172");
     expect(result.sql.split("-- migration apply --")).toHaveLength(2);
   });
 
-  it("keeps migration 170 failure after the committed revoke fail-closed", () => {
+  it("keeps migration 172 failure after the committed revoke fail-closed", () => {
     const migrations = path.resolve(__dirname, "../../supabase/migrations");
     const migrationBodies = Object.fromEntries([
-      "169_codex_history_transfer_ack.sql",
-      "170_codex_history_ack_owner_scope.sql",
+      "171_codex_history_transfer_ack.sql",
+      "172_codex_history_ack_owner_scope.sql",
     ].map((name) => [name, readFileSync(path.join(migrations, name), "utf8")]));
-    const result = captureApply("169_codex_history_transfer_ack.sql", false, [], migrationBodies, false, true);
+    const result = captureApply("171_codex_history_transfer_ack.sql", false, [], migrationBodies, false, true);
     expect(result.status).not.toBe(0);
-    expect(result.output).toContain("Migration failed: 170_codex_history_ack_owner_scope.sql");
+    expect(result.output).toContain("Migration failed: 172_codex_history_ack_owner_scope.sql");
     expect(result.ackPreflightSql).toContain("REVOKE ALL ON FUNCTION public.record_codex_history_transfer_acknowledgment(uuid, bigint)");
     const applies = result.sql.split("-- migration apply --").slice(1);
     expect(applies).toHaveLength(2);

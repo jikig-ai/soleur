@@ -172,3 +172,17 @@ provider disposition belongs to the CLO.
 Dissent: none. The [recovery evidence](recovery-evidence-2026-10-25.md) records
 metadata-only observations; no shared database mutation or qualification is
 established by either ruling.
+
+## Protected identities after source renumber — 2026-10-26 implementation note
+
+This note records implementation against the retained CTO ruling; it is not a
+new CTO ruling. Protected identities are exact filenames
+`145_codex_auth_mode_rebind.sql`, `165_codex_auth_mode_rebind.sql` and
+`167_codex_auth_mode_rebind.sql`. Ordinal-only matches are forbidden because
+165 and 167 now identify other migrations as well. The local reconciler maps
+forward/down pairs by exact protected filename and applies the global paired-
+down barrier to every protected ledger row, including malformed rows; the
+`--allow-later-rows` option does not waive it. Negative controls remain
+`165_agent_engine_attempts.sql` and `167_codex_lifecycle_state_sync.sql`.
+The renumbered runner/reconciler changes remain uncommitted and need fresh
+review. No shared ledger was read or changed in this continuation.

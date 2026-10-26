@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const migration = readFileSync(join(__dirname, "../supabase/migrations/173_codex_history_notice_issuance.sql"), "utf8");
+const migration = readFileSync(join(__dirname, "../supabase/migrations/175_codex_history_notice_issuance.sql"), "utf8");
 
-describe("migration 173: notice-bound Codex acknowledgment", () => {
+describe("migration 175: notice-bound Codex acknowledgment", () => {
   it("stores private notice issuance by owner, conversation, generation, and membership epoch", () => {
     expect(migration).toMatch(/CREATE TABLE public\.codex_history_transfer_notice_issuances/);
     expect(migration).toMatch(/nonce_hash text NOT NULL/);
