@@ -52,7 +52,6 @@ import {
   OVERLAP_TOP_K,
   PURPOSE_TEMPLATE_SLOTS,
   checkCreate,
-  checkCreatePathSet,
   checkRenderedCreate,
   countDescriptionWords,
   countWords,
@@ -63,6 +62,10 @@ import {
   proposalOverlapText,
   rankOverlap,
   readAgentPaths,
+  readCommandNames,
+  readCursorDirs,
+  unmeasurableCollisionRefusal,
+  CREATE_MIN_AGENT_POPULATION,
   readBudgetCap,
   readGrokBlock,
   renderCreateFiles,
@@ -70,6 +73,7 @@ import {
   renderPurposeMd,
   renderSkillMd,
   shapeProblem,
+  isValidSlug,
   type CreateContext,
   type SkillRecord,
 } from "@/server/compound-promote-create";
@@ -118,6 +122,8 @@ function ctx(over: Partial<CreateContext> = {}): CreateContext {
     skills: SKILLS,
     skillDirs: SKILLS.map((s) => s.name),
     agentPaths: ["engineering/review/synthetic-reviewer.md"],
+    cursorDirs: [],
+    commandNames: ["go", "sync", "help", "version"],
     openPrPaths: [],
     budget: { total: 2402, cap: 2436 },
     isHashSuppressed: () => false,
@@ -125,19 +131,22 @@ function ctx(over: Partial<CreateContext> = {}): CreateContext {
   };
 }
 
+// The server's ranking restricted to the skills the model is shown (user-invoked skills are not offered).
+function visibleRank(p: { slug: string; description: string; when_to_use: string[] }): string[] {
+  const hidden = new Set(SKILLS.filter((x) => x.disableModelInvocation).map((x) => x.name));
+  return rankOverlap(proposalOverlapText(p), SKILLS).map((r) => r.name).filter((n) => !hidden.has(n));
+}
+
 // The nearest skill follows the server's own ranking unless a test pins one explicitly, so a gate under test
 // (budget, shape, ...) is never accidentally masked by the prefer-patch corroboration.
 function proposal(over: Record<string, unknown> = {}): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...structuredClone(PROPOSAL), ...over };
   if (!("nearest_skill" in over)) {
-    merged.nearest_skill = rankOverlap(
-      proposalOverlapText({
-        slug: String(merged.slug),
-        description: String(merged.description),
-        when_to_use: merged.when_to_use as string[],
-      }),
-      SKILLS,
-    )[0].name;
+    merged.nearest_skill = visibleRank({
+      slug: String(merged.slug),
+      description: String(merged.description),
+      when_to_use: merged.when_to_use as string[],
+    })[0];
   }
   return merged;
 }
@@ -157,6 +166,7 @@ describe("exported constants (each is read by prompt, check and trailer)", () =>
     expect(CREATE_FILE_MAX_BYTES).toBe(3072);
     expect(CREATE_LIST_MAX_ITEMS).toBe(6);
     expect(OVERLAP_TOP_K).toBe(3);
+    expect(OVERLAP_REFUSE_THRESHOLD).toBe(0.16);
     expect(CREATE_INPUT_BYTES_PER_TOKEN).toBe(4);
   });
 
@@ -207,6 +217,8 @@ describe("shape allowlist (controls over model text are allowlists)", () => {
     ["comment", "Add <!-- hidden --> text", "markup"],
     ["template slot", "Insert {{SKILL_NAME}} here", "markup"],
     ["backslash", "Escape with a back\\slash", "markup"],
+    ["pipe", "Pipe the output | into the next step", "markup"],
+    ["tilde", "Expand ~ to the home folder", "markup"],
     ["dollar", "Run $(whoami) now", "markup"],
     ["mention", "Ping the owner at @someone now", "markup"],
     ["hr rule id", "Restate hr-never-do-this exactly", "rule-id"],
@@ -243,7 +255,7 @@ describe("shape allowlist (controls over model text are allowlists)", () => {
     expect(shapeProblem("Use this skill when something happens in the world today", "description")).toBe("description-prefix");
   });
 
-  for (const word of ["guarantee", "guarantees", "guaranteed", "compliant", "compliance", "certified", "secure", "your workspace"]) {
+  for (const word of ["guarantee", "guarantees", "guaranteed", "compliant", "compliance", "certified", "secure", "your workspace", "private", "encrypted", "safe", "safety", "audited", "gdpr", "warranty", "ensures", "100%"]) {
     it(`refuses the claim word "${word}" case-insensitively and word-bounded`, () => {
       expect(shapeProblem(`This is ${word.toUpperCase()} behaviour here`, "item")).toBe("claim-word");
       expect(shapeProblem(`Mixed ${word[0].toUpperCase()}${word.slice(1)} case here`, "item")).toBe("claim-word");
@@ -254,6 +266,14 @@ describe("shape allowlist (controls over model text are allowlists)", () => {
     expect(shapeProblem("Security review of inputs matters", "item")).toBeNull();
     expect(shapeProblem("Insecure defaults are a risk", "item")).toBeNull();
     expect(shapeProblem("A secured pipeline is not claimed", "item")).toBeNull();
+    expect(shapeProblem("Privately held notes are not claimed", "item")).toBeNull();
+    expect(shapeProblem("Unsafe retries are a risk", "item")).toBeNull();
+    expect(shapeProblem("Reached 1000% of the plan", "item")).toBeNull();
+  });
+
+  it("a slash inside a word pair is not a command form (and/or, read/write)", () => {
+    expect(shapeProblem("Use and/or between the read/write options", "item")).toBeNull();
+    expect(shapeProblem("Then run /ship to finish", "item")).toBe("command-form");
   });
 
   it("enforces the per-kind length caps", () => {
@@ -278,7 +298,7 @@ describe("checkCreate: verdict union and gate order", () => {
     expect(v.clusterHash).toBe(createClusterHash(PATTERN.evidence));
     expect(v.words).toBe(countWords(String(PROPOSAL.description)));
     expect(v.headroom).toBe(34);
-    expect(v.overlap.top3).toHaveLength(3);
+    expect(v.overlap.nearestRank).toBeGreaterThanOrEqual(1);
   });
 
   it("harness row c: a differently worded valid proposal passes (a gate that rejects everything is detected)", () => {
@@ -291,6 +311,14 @@ describe("checkCreate: verdict union and gate order", () => {
         sharp_edges: ["Never silently drop a row"],
         merge_retire_candidates: [],
       }),
+      ctx(),
+    );
+    expect(v.kind).toBe("create");
+  });
+
+  it("a minimal valid proposal (one when_to_use, one step, one sharp edge, no merge-retire items) is CREATED", () => {
+    const v = checkCreate(
+      proposal({ when_to_use: ["A flaky upstream returns transient errors"], steps: ["Cap the attempt count"], sharp_edges: ["A retry without a cap hides an outage"], merge_retire_candidates: [] }),
       ctx(),
     );
     expect(v.kind).toBe("create");
@@ -393,6 +421,38 @@ describe("slug validation and collision", () => {
     }
   });
 
+  it("pins SLUG_MAX at 41: 41 characters create, 42 are refused", () => {
+    const at = "a" + "b".repeat(40);
+    expect(at).toHaveLength(41);
+    expect(checkCreate(proposal({ slug: at }), ctx()).kind).toBe("create");
+    expect(refusedClass(checkCreate(proposal({ slug: at + "b" }), ctx()))).toBe("slug");
+    expect(isValidSlug(at)).toBe(true);
+    expect(isValidSlug(at + "b")).toBe(false);
+    expect(isValidSlug("ab")).toBe(false);
+    expect(isValidSlug("abc")).toBe(true);
+  });
+
+  it("refuses YAML 1.1 boolean and null words as a slug (they parse as non-strings in a bare scalar)", () => {
+    for (const slug of ["yes", "off", "true", "false", "null"]) {
+      const v = checkCreate(proposal({ slug }), ctx());
+      expect(v.kind, slug).toBe("refused");
+      if (v.kind === "refused") expect([v.class, v.detail]).toEqual(["slug", "yaml-word"]);
+    }
+  });
+
+  it("the reserved set is a static floor PLUS every command basename the clone carries", () => {
+    expect(refusedClass(checkCreate(proposal({ slug: "ship-it" }), ctx({ commandNames: ["ship-it"] })))).toBe("slug");
+    expect(checkCreate(proposal({ slug: "ship-it" }), ctx({ commandNames: [] })).kind).toBe("create");
+    // the floor holds even when the commands directory could not be read
+    expect(refusedClass(checkCreate(proposal({ slug: "version" }), ctx({ commandNames: [] })))).toBe("slug");
+  });
+
+  it("a Cursor stub directory soleur-<slug> that already exists collides", () => {
+    const v = checkCreate(proposal(), ctx({ cursorDirs: ["soleur-http-retry-backoff"] }));
+    expect(v.kind).toBe("refused");
+    if (v.kind === "refused") expect([v.class, v.detail]).toEqual(["slug", "cursor-dir-exists"]);
+  });
+
   it("rejects a slug that collides with a skill dir, an agent leaf, a cursor name, a command stem or an open PR path", () => {
     expect(refusedClass(checkCreate(proposal({ slug: "kb-search" }), ctx()))).toBe("slug");
     // A skills directory that carries no SKILL.md still collides.
@@ -485,6 +545,25 @@ describe("prefer-patch: overlap ranking and the calibrated threshold", () => {
     const far = checkCreate(proposal({ slug: e.slug, description: e.description, when_to_use: e.when_to_use, nearest_skill: farOne }), ctx());
     expect(far.kind).toBe("refused");
     if (far.kind === "refused") expect([far.class, far.detail]).toEqual(["prefer-patch", "nearest-not-top3"]);
+  });
+
+  it("nearest_skill at rank exactly 3 is accepted, rank 4 is refused (visible ranking)", () => {
+    const e = CAL.negatives[0];
+    const names = visibleRank(e);
+    const run = (nearest: string) => checkCreate(proposal({ slug: e.slug, description: e.description, when_to_use: e.when_to_use, nearest_skill: nearest }), ctx());
+    const at3 = run(names[OVERLAP_TOP_K - 1]);
+    expect(at3.kind).toBe("create");
+    if (at3.kind === "create") expect(at3.overlap.nearestRank).toBe(OVERLAP_TOP_K);
+    const at4 = run(names[OVERLAP_TOP_K]);
+    expect(at4.kind).toBe("refused");
+    if (at4.kind === "refused") expect([at4.class, at4.detail, at4.numbers?.nearest_rank]).toEqual(["prefer-patch", "nearest-not-top3", OVERLAP_TOP_K + 1]);
+  });
+
+  it("a user-invoked skill is never a valid nearest_skill (the model is not shown it)", () => {
+    const e = CAL.negatives[0];
+    const v = checkCreate(proposal({ slug: e.slug, description: e.description, when_to_use: e.when_to_use, nearest_skill: "go" }), ctx());
+    expect(v.kind).toBe("refused");
+    if (v.kind === "refused") expect([v.class, v.detail]).toEqual(["prefer-patch", "nearest-missing"]);
   });
 
   it("an open PR already touching the nearest skill refuses (a patch is in flight)", () => {
@@ -639,13 +718,39 @@ describe("word counter and cap reader (guard 2 rows 1-5) on fixture trees", () =
     expect(readBudgetCap("const SKILL_DESCRIPTION_WORD_BUDGET = 0;")).toBeNull();
   });
 
-  it("reads agent paths recursively and ignores non-markdown files", () => {
+  it("reads agent paths recursively, ignores non-markdown files and returns a discriminated result", () => {
     const root = mkdtempSync(join(tmpdir(), "cp-create-t6-"));
     mkdirSync(join(root, "agents", "a", "b"), { recursive: true });
     writeFileSync(join(root, "agents", "a", "b", "x.md"), "x");
     writeFileSync(join(root, "agents", "a", "notes.txt"), "x");
-    expect(readAgentPaths(root)).toEqual(["a/b/x.md"]);
-    expect(readAgentPaths(join(root, "nope"))).toEqual([]);
+    expect(readAgentPaths(root, { minEntries: 1 })).toEqual({ ok: true, paths: ["a/b/x.md"] });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("agents and cursor readers FAIL CLOSED: a missing directory or a population below the floor is not an empty list", () => {
+    const root = mkdtempSync(join(tmpdir(), "cp-create-t6b-"));
+    expect(readAgentPaths(join(root, "nope"))).toEqual({ ok: false, detail: "agents-dir-unreadable" });
+    mkdirSync(join(root, "agents"), { recursive: true });
+    writeFileSync(join(root, "agents", "x.md"), "x");
+    expect(readAgentPaths(root)).toEqual({ ok: false, detail: "agents-below-floor" });
+    expect(CREATE_MIN_AGENT_POPULATION).toBeGreaterThan(1);
+    expect(readCursorDirs(join(root, "nope"))).toEqual({ ok: false, detail: "cursor-dir-unreadable" });
+    mkdirSync(join(root, "cursor", "skills", "soleur-a"), { recursive: true });
+    expect(readCursorDirs(root)).toEqual({ ok: false, detail: "cursor-below-floor" });
+    expect(readCursorDirs(root, { minEntries: 1 })).toEqual({ ok: true, dirs: ["soleur-a"] });
+    expect(unmeasurableCollisionRefusal("agents-dir-unreadable")).toEqual({ kind: "refused", class: "slug", detail: "agents-dir-unreadable" });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("reads command basenames; an unreadable commands directory is [] (the static floor still applies)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cp-create-t6c-"));
+    expect(readCommandNames(root)).toEqual([]);
+    mkdirSync(join(root, "commands"), { recursive: true });
+    writeFileSync(join(root, "commands", "go.md"), "x");
+    writeFileSync(join(root, "commands", "notes.txt"), "x");
+    expect(readCommandNames(root)).toEqual(["go"]);
+    // the real tree carries the four stems the static floor names
+    expect(readCommandNames(PLUGIN_ROOT)).toEqual(expect.arrayContaining(["go", "sync", "help", "version"]));
     rmSync(root, { recursive: true, force: true });
   });
 });
@@ -673,8 +778,6 @@ describe("prepareCreate: input ceiling (refuse, never truncate) and the prompt",
     expect(v.prompt).toContain(OVERLAP_REFUSE_THRESHOLD.toFixed(2));
     for (const r of CREATE_NO_ACTION_REASONS) expect(v.prompt).toContain(r);
     expect(v.maxTokens).toBe(CREATE_MAX_TOKENS);
-    expect(v.inputBytes).toBeGreaterThan(0);
-    expect(v.inputTokensBound).toBe(Math.ceil(v.inputBytes / CREATE_INPUT_BYTES_PER_TOKEN));
   });
 
   it("refuses over the ceiling with numbers, and does not truncate", () => {
@@ -708,7 +811,6 @@ describe("prepareCreate: input ceiling (refuse, never truncate) and the prompt",
     const over = prepareCreate({ patterns: [PATTERN], skills: mk(lo + 1), nonce });
     expect(at.kind).toBe("ready");
     expect(over.kind).toBe("refused");
-    if (at.kind === "ready") expect(at.inputTokensBound).toBeLessThanOrEqual(CREATE_INPUT_MAX_TOKENS);
   });
 });
 
@@ -788,6 +890,14 @@ describe("renderers: the server writes every byte", () => {
     expect(grok.endsWith("<!-- grok-harness-invoke:end -->\n")).toBe(true);
   });
 
+  it("renderCreateFiles runs the rendered-output gate: a template that leaks a backtick or a Grok block that fails it is class shape", () => {
+    const withTick = template.replace("{{ORIGIN}}", "{{ORIGIN}}\n\nuse `x` here");
+    expect(renderCreateFiles({ proposal: parsed(), grokBlock: grok, purposeTemplate: withTick, date: DATE })).toMatchObject({ kind: "refused", class: "shape", detail: "fence:purpose" });
+    // a Grok block that is not the single canonical one cannot be rendered into a passing SKILL.md
+    const r = renderCreateFiles({ proposal: parsed(), grokBlock: grok + grok, purposeTemplate: template, date: DATE });
+    expect(r).toMatchObject({ kind: "refused", class: "shape", detail: "grok-block" });
+  });
+
   it("renderCreateFiles renders all three files and runs the rendered-output gate", () => {
     const r = renderCreateFiles({ proposal: parsed(), grokBlock: grok, purposeTemplate: template, date: DATE });
     expect(r.kind).toBe("rendered");
@@ -813,7 +923,7 @@ describe("checkRenderedCreate (guard 1 rows 5 and 2; PII/credential over the REN
   const check = (files: ReturnType<typeof good>) => checkRenderedCreate(files, p, grok);
 
   it("accepts the clean render", () => {
-    expect(check(good())).toEqual({ kind: "ok", filesChecked: 3 });
+    expect(check(good())).toEqual({ kind: "ok" });
   });
 
   it("row 5: a fenced block rendered into PURPOSE.md after a clean SKILL.md is refused", () => {
@@ -857,6 +967,26 @@ describe("checkRenderedCreate (guard 1 rows 5 and 2; PII/credential over the REN
     expect(check({ ...f, purposeMd: f.purposeMd + "y".repeat(CREATE_FILE_MAX_BYTES) })).toMatchObject({ kind: "refused", detail: "size:purpose" });
   });
 
+  it("size caps are exact: 60 lines and 3072 bytes pass, 61 lines and 3073 bytes are refused", () => {
+    const f = good();
+    const padLines = (text: string, lines: number): string => text + "x\n".repeat(lines - (text.split("\n").length - 1));
+    const padBytes = (text: string, bytes: number): string => text.replace(/\n$/, "") + "y".repeat(bytes - Buffer.byteLength(text.replace(/\n$/, ""), "utf8") - 1) + "\n";
+    const lines60 = padLines(f.skillMd, CREATE_FILE_MAX_LINES);
+    expect(lines60.split("\n").length - 1).toBe(CREATE_FILE_MAX_LINES);
+    expect(check({ ...f, skillMd: lines60 })).toEqual({ kind: "ok" });
+    expect(check({ ...f, skillMd: lines60 + "x\n" })).toMatchObject({ kind: "refused", detail: "size:skill" });
+    const lines60p = padLines(f.purposeMd, CREATE_FILE_MAX_LINES);
+    expect(check({ ...f, purposeMd: lines60p })).toEqual({ kind: "ok" });
+    expect(check({ ...f, purposeMd: lines60p + "x\n" })).toMatchObject({ kind: "refused", detail: "size:purpose" });
+    const b = padBytes(f.skillMd, CREATE_FILE_MAX_BYTES);
+    expect(Buffer.byteLength(b, "utf8")).toBe(CREATE_FILE_MAX_BYTES);
+    expect(check({ ...f, skillMd: b })).toEqual({ kind: "ok" });
+    expect(check({ ...f, skillMd: b.replace(/\n$/, "y\n") })).toMatchObject({ kind: "refused", detail: "size:skill" });
+    const bp = padBytes(f.purposeMd, CREATE_FILE_MAX_BYTES);
+    expect(check({ ...f, purposeMd: bp })).toEqual({ kind: "ok" });
+    expect(check({ ...f, purposeMd: bp.replace(/\n$/, "y\n") })).toMatchObject({ kind: "refused", detail: "size:purpose" });
+  });
+
   it("an empty rendered file is refused (guard 1 row 2: empty input must not be 'clean')", () => {
     const f = good();
     expect(check({ ...f, skillMd: "" })).toMatchObject({ kind: "refused" });
@@ -871,7 +1001,7 @@ describe("checkRenderedCreate (guard 1 rows 5 and 2; PII/credential over the REN
 });
 
 // ---------------------------------------------------------------------------------------------------------
-describe("path set (guard 1 row 4): exactly six paths, status A only", () => {
+describe("path set (guard 1 row 4): the six paths are derived in one place", () => {
   const slug = "http-retry-backoff";
   it("lists the six paths in the fixed order", () => {
     expect(createPathList(slug)).toEqual([
@@ -882,21 +1012,6 @@ describe("path set (guard 1 row 4): exactly six paths, status A only", () => {
       "plugins/soleur/README.md",
       "knowledge-base/project/learnings/promotion-log.md",
     ]);
-  });
-
-  it("refuses a seventh path, a scripts file, a missing path, a duplicate and an off-slug path", () => {
-    const six = createPathList(slug);
-    expect(checkCreatePathSet(slug, six)).toEqual({ ok: true });
-    expect(checkCreatePathSet(slug, [...six].reverse())).toEqual({ ok: true }); // order-insensitive set equality
-    for (const mutated of [
-      [...six, "plugins/soleur/skills/http-retry-backoff/scripts/run.sh"],
-      [...six, "extra.md"],
-      six.slice(1),
-      [...six.slice(1), six[1]],
-      [...six.slice(1), "plugins/soleur/skills/other/SKILL.md"],
-    ]) {
-      expect(checkCreatePathSet(slug, mutated).ok).toBe(false);
-    }
   });
 
   it("refuses a traversal slug when deriving paths", () => {

@@ -6,7 +6,7 @@
       "cluster_hash": "17787139e9f405e879f325f7a3c936a7ee6890b217c7023a15c4bb33fdd51bed",
       "target": "git-worktree",
       "slug": "worktree-prune-guard",
-      "description": "This skill should be used when stale or orphaned Git worktrees pile up and need safe pruning, branch cleanup and removal checks during parallel development.",
+      "description": "This skill should be used when stale or orphaned Git worktrees pile up and need careful pruning, branch cleanup and removal checks during parallel development.",
       "when_to_use": ["Several feature worktrees exist and some branches were already merged", "A worktree directory remains after its branch was deleted"]
     },
     {

@@ -21,7 +21,7 @@ description: "This skill should be used when outbound network calls fail intermi
 
 ## Sharp edges
 
-- Never retry a request that is not safe to repeat
+- Never retry a request that changes state without an idempotency key
 - A retry without a cap hides an outage
 
 See [PURPOSE.md](./PURPOSE.md) for why this skill exists, the nearest existing skill, and its history.

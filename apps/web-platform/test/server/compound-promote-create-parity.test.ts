@@ -37,13 +37,10 @@ import { MIN_TRACKED_SKILLS } from "../../../../plugins/soleur/test/lib/populati
 import {
   CREATE_DESCRIPTION_MAX_WORDS,
   CREATE_DESCRIPTION_MIN_WORDS,
-  CREATE_FILE_MAX_BYTES,
-  CREATE_FILE_MAX_LINES,
   CREATE_INPUT_BYTES_PER_TOKEN,
   CREATE_INPUT_MAX_TOKENS,
   CREATE_PR_BODY_LINE,
   OVERLAP_REFUSE_THRESHOLD,
-  OVERLAP_TOP_K,
   checkCreate,
   countDescriptionWords,
   createPathList,
@@ -224,7 +221,7 @@ describe("Guard 4: the rendered Grok block equals the pinned canonical", () => {
           evidence: ["knowledge-base/project/learnings/a.md"], requiredReading: false,
         },
       ],
-      skills, skillDirs: skills.map((s) => s.name), agentPaths: [], openPrPaths: [],
+      skills, skillDirs: skills.map((s) => s.name), agentPaths: [], cursorDirs: [], commandNames: [], openPrPaths: [],
       budget: { total: 2402, cap: 2436 }, isHashSuppressed: () => false,
     };
     const v = checkCreate(JSON.parse(readFileSync(join(FIX, "proposal.json"), "utf8")), ctx);
@@ -323,7 +320,6 @@ describe("overlap threshold holds on the REAL skill list", () => {
       const r = rankOverlap(proposalOverlapText(n), counted.records);
       expect(r[0].score, `${n.id} top1=${r[0].name}`).toBeLessThanOrEqual(OVERLAP_REFUSE_THRESHOLD - 0.04);
     }
-    expect(OVERLAP_TOP_K).toBe(3);
   });
 
   it("the input ceiling holds on the real corpus under the documented bytes/4 bound (and the bound is stated)", () => {
@@ -377,7 +373,6 @@ describe("the ADR-092 create-only amendment is pinned to the exported constants 
   it("states the numeric and verbatim contract the code enforces", () => {
     expect(amendment).toContain(`at most ${CREATE_DESCRIPTION_MAX_WORDS} words`);
     expect(amendment).toContain("top three");
-    expect(OVERLAP_TOP_K).toBe(3);
     expect(amendment).toContain("`# skill-security-scan verdict: LOW-RISK`");
     expect(amendment).toContain("`SKILL_SECURITY_SCAN_OFFLINE=1`");
     expect(amendment).toContain(`\`${CREATE_PR_BODY_LINE}\``);
@@ -391,8 +386,6 @@ describe("the ADR-092 create-only amendment is pinned to the exported constants 
   it("limits stated in the amendment's own words agree with the constants", () => {
     // The ADR states the minimum without a number; the constants must stay coherent with 'at most 30 words'.
     expect(CREATE_DESCRIPTION_MIN_WORDS).toBeLessThan(CREATE_DESCRIPTION_MAX_WORDS);
-    expect(CREATE_FILE_MAX_LINES).toBe(60);
-    expect(CREATE_FILE_MAX_BYTES).toBe(3072);
   });
 
   it("harness: weakening the pinned text is detected (the instrument can fail)", () => {

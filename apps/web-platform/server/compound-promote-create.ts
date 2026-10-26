@@ -1,20 +1,15 @@
-// WikiSkill Phase 2 (#10550) -- the PURE half of the gated new-skill create arm.
+// WikiSkill Phase 2 (#10550) -- the PURE half of the gated new-skill create arm (plan 2026-10-26, Guards 1, 2 and 4).
 //
-// The proposer never authors a file. The model returns structured fields; THIS module validates every string
-// against a shape ALLOWLIST, ranks the proposal against the existing skills, checks the description budget, and
-// renders SKILL.md, PURPOSE.md and the Cursor stub from fixed templates. The spawn-based gates (security scan,
-// README count sync) live in `compound-promote-create-gates.ts`; the handler wiring is a later commit.
+// The model returns structured fields; this module validates every string against a shape allowlist, ranks the
+// proposal against the existing skills, checks the description budget and renders SKILL.md, PURPOSE.md and the Cursor
+// stub from fixed templates. Spawn-based gates live in `compound-promote-create-gates.ts`, the wiring in the arm.
 //
-// Design contract (plan 2026-10-26-feat-wikiskill-phase-2-gated-new-skill-creation-plan.md, Guards 1, 2 and 4):
-//   - Every numeric rule is an exported constant read by the prompt, the check and the PR-body trailer
-//     (a threshold that lives only in a prompt is a request, not a constraint).
-//   - Every gate fails CLOSED on input it cannot measure (malformed frontmatter, unreadable cap, empty render).
-//   - Refusal `detail` values are closed tokens built from constants, never model text.
+//   - Every numeric rule is an exported constant read by the prompt, the check and the PR-body trailer.
+//   - Every gate fails CLOSED on input it cannot measure. Refusal `detail` values are closed tokens, never model text.
 //   - Nothing here reads a secret, spawns a process or touches the network.
 //
-// Import-cycle note: `PII_REGEX`, `CREDENTIAL_RE` and the cluster hash come from the leaf module
-// `compound-promote-screens.ts` (the handler re-exports the two regexes from the same place), so a change there
-// moves this gate and there is no import edge from here to the handler.
+// `PII_REGEX`, `CREDENTIAL_RE` and the cluster hash come from the leaf module `compound-promote-screens.ts`, so there
+// is no import edge from here to the handler.
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -40,24 +35,20 @@ export const CREATE_LIST_MAX_ITEMS = 6;
 /** Per-string caps. `description` is also bounded by word count. */
 export const CREATE_ITEM_MAX_CHARS = 160;
 export const CREATE_FIELD_MAX_CHARS = 300;
+/** Cap for a model-named skill identifier (the new slug is further bounded by SLUG_MAX). */
+export const CREATE_SLUG_IDENT_MAX = 60;
 /** CTO F3: hard ceiling on index + skill list; refuse, never truncate. */
 export const CREATE_INPUT_MAX_TOKENS = 12000;
-/**
- * The documented bound used to turn bytes into tokens: bytes / 4, rounded up. It is a heuristic (no tokenizer
- * exists under server/), measured in Phase 0 at ~9.8k tokens for the real index plus model-visible skill list.
- * Under a pessimistic bytes / 3 the real input would be ~13k; the gate states the bound it uses and refuses
- * whenever THAT bound exceeds the ceiling.
- */
+/** Bytes-to-tokens bound (bytes / 4, rounded up); a heuristic, no tokenizer exists under server/. Phase 0 measured ~9.8k. */
 export const CREATE_INPUT_BYTES_PER_TOKEN = 4;
 /** CTO F3: output cap of the single create-propose call. */
 export const CREATE_MAX_TOKENS = 3000;
 /** The server's top-K overlap ranking the model's `nearest_skill` must appear in. */
 export const OVERLAP_TOP_K = 3;
 /**
- * A create is refused as `prefer-patch` when the best existing skill overlaps the proposal at or above this score
- * (IDF-weighted cosine over word stems, see `rankOverlap`). Calibrated on two synthesized evidence fixtures
- * (git-worktree, pencil-setup patch targets) and four synthetic negatives; the numbers are recorded in the
- * Phase 3 commit message and printed by the calibration test.
+ * A create is refused as `prefer-patch` when ANY existing skill (user-invoked ones included) overlaps the proposal at
+ * or above this score (IDF-weighted cosine over word stems, see `rankOverlap`). Calibrated on two synthesized evidence
+ * fixtures and four synthetic negatives; the calibration test prints the numbers and pins the literal.
  */
 export const OVERLAP_REFUSE_THRESHOLD = 0.16;
 /** A skills tree with fewer SKILL.md files than this is a broken read, not a clean count. */
@@ -91,7 +82,7 @@ export type CreateRefusalClass = (typeof CREATE_REFUSAL_CLASSES)[number];
 export const CREATE_NO_ACTION_REASONS = ["no-pattern-qualifies", "all-owned", "other"] as const;
 export type CreateNoActionReason = (typeof CREATE_NO_ACTION_REASONS)[number];
 
-/** The `checkCreate` gates, in the order they run. A passing verdict carries the list of those that ran. */
+/** The `checkCreate` gates, in the order they run; a passing verdict lists those that ran (a vacuous pass is visible). */
 export const CREATE_GATES = [
   "schema",
   "slug-format",
@@ -118,12 +109,13 @@ export const PURPOSE_TEMPLATE_SLOTS = [
 /** The screens are the handler's own regexes (identity), exported so a test can pin that. */
 export const CREATE_SCREENS = { pii: PII_REGEX, credential: CREDENTIAL_RE } as const;
 
-// Slugs that name a command stem or a Cursor bare name; a skill may never take them.
-const RESERVED_SLUGS: ReadonlySet<string> = new Set(["go", "sync", "help", "version"]);
+// Static floor of slugs that name a command stem or a Cursor bare name; the commands directory adds to it.
+const RESERVED_SLUG_FLOOR: readonly string[] = ["go", "sync", "help", "version"];
+// YAML 1.1 reads these bare scalars as booleans or null, so a skill named so would not round-trip through frontmatter.
+const YAML_WORD_SLUGS: ReadonlySet<string> = new Set(["y", "n", "yes", "no", "on", "off", "true", "false", "null"]);
 const SLUG_FORMAT_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const SLUG_MIN = 3;
 const SLUG_MAX = 41;
-const SKILL_NAME_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // =============================================================================
@@ -169,7 +161,7 @@ export type CreateVerdict =
       proposal: CreateProposal;
       clusterHash: string;
       gates: readonly CreateGate[];
-      overlap: { top1Name: string; top1: number; nearestRank: number; top3: string[] };
+      overlap: { top1Name: string; top1: number; nearestRank: number };
       words: number;
       cap: number;
       total: number;
@@ -182,8 +174,12 @@ export interface CreateContext {
   skills: readonly SkillRecord[];
   /** Every directory under skills/, including one with no SKILL.md (collision population). */
   skillDirs: readonly string[];
-  /** Paths under agents/, e.g. `engineering/review/foo.md`. */
+  /** Paths under agents/, e.g. `engineering/review/foo.md` (from `readAgentPaths`, which fails closed). */
   agentPaths: readonly string[];
+  /** Directory names under plugins/soleur/cursor/skills, e.g. `soleur-ship` (from `readCursorDirs`). */
+  cursorDirs: readonly string[];
+  /** Basenames of plugins/soleur/commands/*.md without `.md` (from `readCommandNames`; `[]` when unreadable). */
+  commandNames: readonly string[];
   /** Paths touched by open PRs (the handler's `scanOpenPrSkillPaths`). */
   openPrPaths: readonly string[];
   /** Measured from the clone with the SAME counter as the bun test; `null` = unreadable (refuse). */
@@ -273,14 +269,19 @@ const RULE_ID_RE = /(?:^|[^a-z0-9])(?:hr|wg|cq|rf|pdr|cm)-[a-z0-9]/i;
 const PATH_TOKEN_RE = /(?:^|[^a-z0-9])(?:scripts|references|assets|skills)\//i;
 const SOLEUR_TOKEN_RE = /soleur\s*:/i;
 const COMMAND_FORM_RE = /(?:^|\s)\/[A-Za-z]/;
-const CLAIM_WORD_RE = /\b(?:guarantee(?:s|d)?|compliant|compliance|certified|secure|your workspace)\b/i;
+/** Words (and one phrase) a created skill may not use to claim a property; read by the prompt and the check. */
+export const CREATE_CLAIM_WORDS: readonly string[] = [
+  "guarantee", "guarantees", "guaranteed", "compliant", "compliance", "certified", "secure", "your workspace",
+  "private", "encrypted", "safe", "safety", "audited", "gdpr", "warranty", "ensures", "100%",
+];
+// Lookarounds instead of \b so the entry "100%" (non-word last character) is bounded the same way as the words.
+const CLAIM_WORD_RE = new RegExp(`(?<![A-Za-z0-9])(?:${CREATE_CLAIM_WORDS.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![A-Za-z0-9])`, "i");
 
 function maxCharsFor(kind: ShapeKind): number {
   if (kind === "item") return CREATE_ITEM_MAX_CHARS;
   if (kind === "ident") return CREATE_SLUG_IDENT_MAX;
   return CREATE_FIELD_MAX_CHARS;
 }
-const CREATE_SLUG_IDENT_MAX = 60;
 
 /**
  * The shape allowlist for ONE model string. Returns the first rule that refuses it (a closed token) or `null`.
@@ -343,15 +344,14 @@ export function collectModelStrings(p: CreateProposal): LabeledString[] {
 // Paths
 // =============================================================================
 
-function assertSlug(slug: string): void {
-  if (slug.length < SLUG_MIN || slug.length > SLUG_MAX || !SLUG_FORMAT_RE.test(slug)) {
-    throw new Error("create: invalid slug");
-  }
+/** The one slug rule: kebab-case, 3 to 41 characters, starting with a letter. */
+export function isValidSlug(slug: string): boolean {
+  return slug.length >= SLUG_MIN && slug.length <= SLUG_MAX && SLUG_FORMAT_RE.test(slug);
 }
 
 /** The closed six-path set, in the fixed order (CTO F1). */
 export function createPathList(slug: string): readonly string[] {
-  assertSlug(slug);
+  if (!isValidSlug(slug)) throw new Error("create: invalid slug");
   return [
     `plugins/soleur/skills/${slug}/SKILL.md`,
     `plugins/soleur/skills/${slug}/PURPOSE.md`,
@@ -360,18 +360,6 @@ export function createPathList(slug: string): readonly string[] {
     "plugins/soleur/README.md",
     PROMOTION_LOG_PATH,
   ];
-}
-
-export type PathSetVerdict = { ok: true } | { ok: false; detail: "path-count" | "unexpected-path" | "missing-path" | "duplicate-path" };
-
-/** Set equality with the six paths: a seventh path (or a `scripts/` file) is refused; order does not matter. */
-export function checkCreatePathSet(slug: string, paths: readonly string[]): PathSetVerdict {
-  const want = createPathList(slug);
-  if (new Set(paths).size !== paths.length) return { ok: false, detail: "duplicate-path" };
-  if (paths.length > want.length) return { ok: false, detail: "path-count" };
-  for (const p of paths) if (!want.includes(p)) return { ok: false, detail: "unexpected-path" };
-  for (const w of want) if (!paths.includes(w)) return { ok: false, detail: "missing-path" };
-  return { ok: true };
 }
 
 // =============================================================================
@@ -456,24 +444,69 @@ export function readBudgetCap(source: string): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
-/** Paths under `<pluginRoot>/agents`, relative and recursive, markdown only. A missing directory is `[]`. */
-export function readAgentPaths(pluginRoot: string): string[] {
+/** An agents tree with fewer markdown files than this is a broken read, not a clean listing. */
+export const CREATE_MIN_AGENT_POPULATION = 30;
+
+export type AgentPathsResult = { ok: true; paths: string[] } | { ok: false; detail: "agents-dir-unreadable" | "agents-below-floor" };
+
+/**
+ * Paths under `<pluginRoot>/agents`, relative and recursive, markdown only. FAILS CLOSED: any unreadable directory or a
+ * population below `minEntries` is `{ok:false}` (an empty list would silently drop the agent-name collision check).
+ */
+export function readAgentPaths(pluginRoot: string, opts?: { minEntries?: number }): AgentPathsResult {
   const out: string[] = [];
-  const walk = (dir: string, prefix: string): void => {
+  const walk = (dir: string, prefix: string): boolean => {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
-      return;
+      return false;
     }
     for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const rel = prefix ? `${prefix}/${e.name}` : e.name;
-      if (e.isDirectory()) walk(join(dir, e.name), rel);
-      else if (e.isFile() && e.name.endsWith(".md")) out.push(rel);
+      if (e.isDirectory()) {
+        if (!walk(join(dir, e.name), rel)) return false;
+      } else if (e.isFile() && e.name.endsWith(".md")) out.push(rel);
     }
+    return true;
   };
-  walk(join(pluginRoot, "agents"), "");
-  return out;
+  if (!walk(join(pluginRoot, "agents"), "")) return { ok: false, detail: "agents-dir-unreadable" };
+  if (out.length < Math.max(1, opts?.minEntries ?? CREATE_MIN_AGENT_POPULATION)) return { ok: false, detail: "agents-below-floor" };
+  return { ok: true, paths: out };
+}
+
+export type CursorDirsResult = { ok: true; dirs: string[] } | { ok: false; detail: "cursor-dir-unreadable" | "cursor-below-floor" };
+
+/** Directory names under `<pluginRoot>/cursor/skills` (the stub folders `soleur-<slug>`). Fails closed like `readAgentPaths`. */
+export function readCursorDirs(pluginRoot: string, opts?: { minEntries?: number }): CursorDirsResult {
+  let dirs: string[];
+  try {
+    dirs = readdirSync(join(pluginRoot, "cursor", "skills"), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return { ok: false, detail: "cursor-dir-unreadable" };
+  }
+  if (dirs.length < Math.max(1, opts?.minEntries ?? CREATE_MIN_SKILL_POPULATION)) return { ok: false, detail: "cursor-below-floor" };
+  return { ok: true, dirs };
+}
+
+/** Basenames of `<pluginRoot>/commands/*.md`. Unreadable is `[]`: the static reserved floor still applies. */
+export function readCommandNames(pluginRoot: string): string[] {
+  try {
+    return readdirSync(join(pluginRoot, "commands"), { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith(".md"))
+      .map((e) => e.name.replace(/\.md$/, ""))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** The refusal for a collision population that could not be measured (the arm maps a failed reader result to it). */
+export function unmeasurableCollisionRefusal(detail: string): CreateRefusal {
+  return refuse("slug", detail);
 }
 
 // =============================================================================
@@ -551,12 +584,12 @@ export const createClusterHash = computeClusterHash;
 
 export type PrepareCreateResult =
   | CreateRefusal
-  | { kind: "ready"; prompt: string; maxTokens: number; inputBytes: number; inputTokensBound: number };
+  | { kind: "ready"; prompt: string; maxTokens: number };
 
 /**
  * Build the single create-propose prompt, or refuse before any model call. The input is the pattern index plus the
  * MODEL-VISIBLE skill list (a user-invoked skill is not offered as a nearest skill); over the ceiling is refused,
- * never truncated. The bound used is `CREATE_INPUT_BYTES_PER_TOKEN` and is stated in the refusal numbers.
+ * never truncated.
  */
 export function prepareCreate(args: { patterns: readonly PatternPage[]; skills: readonly SkillRecord[]; nonce: string }): PrepareCreateResult {
   if (args.patterns.length === 0) return refuse("index-empty", "no-open-patterns");
@@ -591,7 +624,7 @@ export function prepareCreate(args: { patterns: readonly PatternPage[]; skills: 
     "",
     skillBlock,
   ].join("\n");
-  return { kind: "ready", prompt, maxTokens: CREATE_MAX_TOKENS, inputBytes, inputTokensBound };
+  return { kind: "ready", prompt, maxTokens: CREATE_MAX_TOKENS };
 }
 
 // =============================================================================
@@ -631,12 +664,12 @@ export function checkCreate(raw: unknown, c: CreateContext): CreateVerdict {
   gates.push("schema");
 
   // slug format (narrower than the shape rules; reported as class slug)
-  if (p.slug.length < SLUG_MIN || p.slug.length > SLUG_MAX || !SLUG_FORMAT_RE.test(p.slug)) return refuse("slug", "format");
+  if (!isValidSlug(p.slug)) return refuse("slug", "format");
+  if (YAML_WORD_SLUGS.has(p.slug)) return refuse("slug", "yaml-word");
   gates.push("slug-format");
 
   // shape over EVERY model string
   const strings = collectModelStrings(p);
-  if (strings.length < 11) return refuse("model-invalid", "no-strings"); // the minimum a valid create carries
   for (const s of strings) {
     const rule = shapeProblem(s.value, s.kind);
     if (rule) return refuse("shape", `${s.label}:${rule}`);
@@ -656,22 +689,22 @@ export function checkCreate(raw: unknown, c: CreateContext): CreateVerdict {
   gates.push("ledger");
 
   // collision
-  if (RESERVED_SLUGS.has(p.slug)) return refuse("slug", "reserved");
+  if (RESERVED_SLUG_FLOOR.includes(p.slug) || c.commandNames.includes(p.slug)) return refuse("slug", "reserved");
   if (c.skillDirs.includes(p.slug) || c.skills.some((s) => s.name === p.slug)) return refuse("slug", "skill-exists");
   const agents = agentNames(c.agentPaths);
   if (agents.leaves.has(p.slug)) return refuse("slug", "agent-exists");
   if (agents.cursor.has(`soleur-${p.slug}`)) return refuse("slug", "cursor-name-exists");
+  if (c.cursorDirs.includes(`soleur-${p.slug}`)) return refuse("slug", "cursor-dir-exists");
   const slugPrefixes = [`plugins/soleur/skills/${p.slug}/`, `plugins/soleur/cursor/skills/soleur-${p.slug}/`];
   if (c.openPrPaths.some((path) => slugPrefixes.some((pre) => path.startsWith(pre)))) return refuse("slug", "open-pr-slug");
   gates.push("collision");
 
-  // prefer-patch
-  if (c.skills.length === 0) return refuse("prefer-patch", "no-skill-list");
-  if (!SKILL_NAME_RE.test(p.nearest_skill) || !c.skills.some((s) => s.name === p.nearest_skill)) return refuse("prefer-patch", "nearest-missing");
+  // prefer-patch. One ranking over EVERY skill (a user-invoked skill still owns its area, so the threshold sees it);
+  // the nearest skill is ranked among the skills the model was shown, because that is the list it chose from.
+  const hidden = new Set(c.skills.filter((s) => s.disableModelInvocation).map((s) => s.name));
+  if (!c.skills.some((s) => s.name === p.nearest_skill && !s.disableModelInvocation)) return refuse("prefer-patch", "nearest-missing");
   const ranked = rankOverlap(proposalOverlapText(p), c.skills);
-  const names = ranked.map((r) => r.name);
-  const nearestRank = names.indexOf(p.nearest_skill) + 1;
-  const top3 = names.slice(0, OVERLAP_TOP_K);
+  const nearestRank = ranked.filter((r) => !hidden.has(r.name)).findIndex((r) => r.name === p.nearest_skill) + 1;
   const top1 = round3(ranked[0].score);
   if (nearestRank > OVERLAP_TOP_K) {
     return refuse("prefer-patch", "nearest-not-top3", { nearest_rank: nearestRank, top1 });
@@ -700,7 +733,7 @@ export function checkCreate(raw: unknown, c: CreateContext): CreateVerdict {
     proposal: p,
     clusterHash,
     gates,
-    overlap: { top1Name: ranked[0].name, top1, nearestRank, top3 },
+    overlap: { top1Name: ranked[0].name, top1, nearestRank },
     words,
     cap: c.budget.cap,
     total: c.budget.total,
@@ -834,7 +867,7 @@ export interface RenderedFiles {
   stub: string;
 }
 
-export type RenderedVerdict = { kind: "ok"; filesChecked: number } | CreateRefusal;
+export type RenderedVerdict = { kind: "ok" } | CreateRefusal;
 
 function sizeOk(text: string): boolean {
   return Buffer.byteLength(text, "utf8") <= CREATE_FILE_MAX_BYTES && text.split("\n").length - 1 <= CREATE_FILE_MAX_LINES;
@@ -887,7 +920,7 @@ export function checkRenderedCreate(files: RenderedFiles, p: CreateProposal, gro
   // Stub
   const wantStub = renderCursorSkillStub({ folder: p.slug, description: p.description, disableModel: false });
   if (files.stub !== wantStub) return refuse("stub-drift", "stub-differs");
-  return { kind: "ok", filesChecked: 3 };
+  return { kind: "ok" };
 }
 
 export type RenderCreateResult = { kind: "rendered"; files: RenderedFiles } | CreateRefusal;
