@@ -347,7 +347,6 @@ plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	README.md
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	package.json
 plugins/soleur/skills/community/test/community-argv.test.sh	.gitignore
 plugins/soleur/skills/community/test/community-argv.test.sh	apps/web-platform/Dockerfile
-plugins/soleur/skills/community/test/github-community.test.sh	plugins/soleur/test/test-helpers.sh
 plugins/soleur/skills/compound/test/phase-16.test.sh	AGENTS.md
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	.github/workflows/fix-constraints-stage-a.yml
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	.github/workflows/fix-constraints-stage-b.yml
@@ -432,11 +431,9 @@ plugins/soleur/skills/incident/test/redact-sentinel.test.sh	knowledge-base/engin
 plugins/soleur/skills/linear-fetch/test/parity.test.sh	.github/workflows/pr-quality-guards.yml
 plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization.test.sh	knowledge-base/legal/tenant-dpa-register.md
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	README.md
-plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	.claude/hooks/skill-security-scan-write.sh
 plugins/soleur/skills/verification-scaffold/test/generator.test.sh	.claude/settings.json
 plugins/soleur/skills/verification-scaffold/test/generator.test.sh	.gitleaks.toml
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md
-plugins/soleur/test/audit-flag-flip.test.sh	plugins/soleur/skills/flag-create/scripts/create.sh
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/hooks/bare-root-cwd-guard.sh
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/hooks/session-rules-loader.sh
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	.claude/settings.json
@@ -620,9 +617,7 @@ plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	.github/workflows/me
 plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	scripts/ci-cla-required-ruleset-canonical-required-status-checks.json
 plugins/soleur/test/merge-queue-stall-check.test.sh	.github/workflows/merge-queue-stall-check.yml
 plugins/soleur/test/merge-queue-stall-check.test.sh	infra/github/ruleset-ci-required.tf
-plugins/soleur/test/net-issue-flow.test.sh	.claude/hooks/ship-net-issue-flow-gate.sh
 plugins/soleur/test/net-issue-flow.test.sh	AGENTS.rules.md
-plugins/soleur/test/net-issue-flow.test.sh	scripts/lint-rule-bodies.py
 plugins/soleur/test/net-issue-flow.test.sh	scripts/rule-metrics-aggregate.sh
 plugins/soleur/test/notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/operator-9321-stages.test.sh	.github/actions/infra-credentials/action.yml
@@ -682,7 +677,6 @@ plugins/soleur/test/reusable-release-degraded-pointer.test.sh	knowledge-base/eng
 plugins/soleur/test/reusable-release-degraded-pointer.test.sh	scripts/ensure-doppler.sh
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh	scripts/ensure-doppler.sh
-plugins/soleur/test/rtk-grammar-parity.test.sh	.claude/hooks/pkill-self-match-guard.sh
 plugins/soleur/test/scripts-shard-manifest.test.sh	apps/web-platform/infra/run-registered-suites.sh
 plugins/soleur/test/scripts-shard-totality.test.sh	.github/workflows/ci.yml
 plugins/soleur/test/scripts-shard-totality.test.sh	scripts/suite-shard-legs-heavy.tsv
@@ -698,7 +692,6 @@ plugins/soleur/test/test-pyramid-fixtures.test.sh	scripts/suite-durations-heavy.
 plugins/soleur/test/test-pyramid-fixtures.test.sh	scripts/suite-durations.tsv
 plugins/soleur/test/ux-design-lead-open-document-snapshot-guard.test.sh	AGENTS.md
 plugins/soleur/test/vendor-bundle-coverage.test.sh	.github/workflows/vendor-pin-verify.yml
-plugins/soleur/test/vendor-bundle-coverage.test.sh	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts
 plugins/soleur/test/vendor-bundle-coverage.test.sh	lefthook.yml
 plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/vendor-pin-integrity.test.sh	lefthook.yml
@@ -717,7 +710,6 @@ plugins/soleur/test/worktree-manager-install-bounded.test.sh	bunfig.toml
 plugins/soleur/test/worktree-manager-install-bounded.test.sh	package-lock.json
 plugins/soleur/test/worktree-manager-install-bounded.test.sh	package.json
 plugins/soleur/test/zot-http-deadlines-required.test.sh	apps/web-platform/infra/cloud-init-registry.yml
-plugins/soleur/test/zot-http-deadlines-required.test.sh	apps/web-platform/infra/zot-config-deadlines.test.sh
 plugins/soleur/test/zot-image-mirror-publish.test.sh	.github/workflows/zot-image-mirror.yml
 plugins/soleur/test/zot-image-mirror-publish.test.sh	apps/web-platform/infra/zot-image-oci-archive.sh
 scripts/actions-queue-health	.github/workflows/scheduled-actions-queue-health.yml
@@ -1070,7 +1062,6 @@ scripts/registry-htpasswd-stdin-10119	scripts/betterstack-query.sh
 scripts/registry-luks-live-8386	.github/workflows/apply-web-platform-infra.yml
 scripts/registry-luks-live-8386	scripts/betterstack-query.sh
 scripts/registry-luks-live-8386	scripts/encryption-posture-ledger.json
-scripts/rules-loader-stamp-probe	.claude/hooks/session-rules-loader.sh
 scripts/rules-loader-stamp-probe	AGENTS.md
 scripts/rules-loader-stamp-probe	AGENTS.rules.md
 scripts/rules-loader-stamp-probe	knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
@@ -1490,7 +1481,6 @@ tests/scripts/betterstack-ingest-probe	scripts/followthroughs/betterstack-roundt
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/betterstack-query-archive	scripts/ensure-doppler.sh
 tests/scripts/betterstack-roundtrip-latency	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh
-tests/scripts/betterstack-roundtrip-latency	scripts/lint-followthrough-varq-ban.sh
 tests/scripts/cleanup-merged-space	.gitignore
 tests/scripts/cleanup-merged-space	AGENTS.md
 tests/scripts/cleanup-merged-space	CLAUDE.md
@@ -1531,7 +1521,6 @@ tests/scripts/inngest-host-shape-gate	.github/workflows/apply-web-platform-infra
 tests/scripts/kb-drift-walker	AGENTS.md
 tests/scripts/kb-drift-walker	AGENTS.rules.md
 tests/scripts/lint-rule-bodies	AGENTS.rules.md
-tests/scripts/lint-rule-bodies	scripts/lint-rule-bodies.py
 tests/scripts/lint-rule-bodies	scripts/migrated-rule-ids.txt
 tests/scripts/lint-rule-ids	AGENTS.md
 tests/scripts/lint-rule-ids	AGENTS.rules.md

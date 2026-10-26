@@ -1,0 +1,4 @@
+# round 1, the 11 surviving edges, no accept rows: 25 new pairs (<60, <130)
+SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=1654 baseline=1640
+new-pair entries: 25  stale-line entries: 11
+wall: wall=174
