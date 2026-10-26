@@ -1076,6 +1076,106 @@ assert_contains "$HOOK_OUT" '"decision": "block"' "block emitted with no ledger 
 cleanup_test "$TEST_DIR"
 echo ""
 
+# --- RL-B3: the constant reminder in the model-visible `reason` (ADR-084 addendum, 2026-10-26; CTO ruling B3c) ---
+# Inside this loop every Stop after the first is unjudged by the closing gate, so the ralph block carries a constant reminder to route a
+# technical decision to the CTO before a turn ends with Blocked: or Paused:. The oracle is THIS literal, not the hook's own extraction;
+# the reminder goes in `reason` (the model reads it) after the unchanged stored prompt and never in `systemMessage` (user-visible only).
+RB3_PROMPT=$'Line one\n\nLine two ends here'
+RB3_REMINDER='Before ending a turn with Blocked: or Paused:, class every decision the reason leaves to the operator. Send the technical ones to soleur:engineering:cto first (legal ones to soleur:legal:clo) and name only the operator-only remainder. Money, scope, priority, schedule, irreversible, production-mutating, legal-risk and brand decisions stay with the operator, and a CTO ruling never authorizes such an act. See section 8.1 of skills/brainstorm-techniques/references/technical-ruling-delegation.md in the Soleur plugin.'
+RB3_PROMPT_AWK='/^---$/{i++; next} i>=2'
+
+rb3_state() { # <dir> <iteration> <promise>: a state file whose stored prompt is RB3_PROMPT (no blank line, no --- line inside it)
+  local f="$1/.claude/ralph-loop.${TEST_PID}.local.md"
+  create_state_file "$1" "$2" 0 "$3" 0 3
+  awk '{ print } /^---$/ { c++ } c == 2 { exit }' "$f" > "$f.new" && printf '%s\n' "$RB3_PROMPT" >> "$f.new" && mv "$f.new" "$f"
+}
+rb3_banner() { # <next iteration> <promise literal as written to the state file>
+  if [[ "$2" == null ]]; then printf 'Ralph iteration %s | No completion promise set - loop runs infinitely' "$1"
+  else printf 'Ralph iteration %s | To stop: output <promise>%s</promise> (ONLY when statement is TRUE - do not lie to exit!)' "$1" "${2//\"/}"; fi
+}
+RB3_ERR=""; RB3_STORED_BEFORE=""; RB3_STORED_AFTER=""; RB3_STUCK=""
+rb3_check() { # <hook path> <iteration> <promise>: sets RB3_V = ok | nonblock | bad-reason | bad-banner, plus RB3_OUT/RB3_ERR and the stored-prompt/stuck observables (current shell, never a substitution)
+  local hook="$1" it="$2" pr="$3" d out dec reason sys state
+  d=$(setup_test); rb3_state "$d" "$it" "$pr"
+  state="$d/.claude/ralph-loop.${TEST_PID}.local.md"
+  RB3_STORED_BEFORE=$(awk "$RB3_PROMPT_AWK" "$state")
+  out=$( (cd "$d" && jq -n --arg msg "$SUBSTANTIVE_RESPONSE" '{"last_assistant_message": $msg}' | bash "$hook" 2>"$d/rb3.stderr") || true )
+  RB3_ERR=$(cat "$d/rb3.stderr" 2>/dev/null || true)
+  RB3_STORED_AFTER=$(awk "$RB3_PROMPT_AWK" "$state" 2>/dev/null || true)
+  RB3_STUCK=$(grep '^stuck_count:' "$state" 2>/dev/null | sed 's/stuck_count: *//' || true)
+  cleanup_test "$d"
+  dec=$(jq -r '.decision // "none"' <<<"${out:-{\}}" 2>/dev/null || echo none)
+  RB3_OUT="$out"
+  [[ "$dec" == "block" ]] || { RB3_V=nonblock; return 0; }
+  reason=$(jq -r '.reason' <<<"$out" 2>/dev/null || true); sys=$(jq -r '.systemMessage' <<<"$out" 2>/dev/null || true)
+  [[ "$reason" == "${RB3_PROMPT}"$'\n\n'"${RB3_REMINDER}" ]] || { RB3_V=bad-reason; return 0; }
+  [[ "$sys" == "$(rb3_banner $((it + 1)) "$pr")" ]] || { RB3_V=bad-banner; return 0; }
+  RB3_V=ok
+}
+RB3_OUT=""; RB3_V=""
+
+echo "Test RL-B3: the ralph block carries the constant reminder in the model-visible reason, after the unchanged prompt"
+for rb3_it in 1 7; do
+  for rb3_pr in null "\"DONE\""; do
+    rb3_check "$HOOK" "$rb3_it" "$rb3_pr"; rb3_v="$RB3_V"
+    # RL-B3a: the decision is asserted FIRST, so a hook that emits no block cannot pass by having nothing to compare.
+    assert_eq "block" "$(jq -r '.decision // "none"' <<<"${RB3_OUT:-{\}}" 2>/dev/null || echo none)" "RL-B3a iteration $rb3_it promise $rb3_pr: a block is emitted"
+    assert_eq "${RB3_PROMPT}"$'\n\n'"${RB3_REMINDER}" "$(jq -r '.reason' <<<"${RB3_OUT:-{\}}" 2>/dev/null || true)" "RL-B3a iteration $rb3_it promise $rb3_pr: reason is the stored prompt, two newlines, the literal reminder"
+    for rb3_n in 'soleur:engineering:cto' 'soleur:legal:clo' 'section 8.1' 'Blocked:' 'Paused:' 'technical-ruling-delegation.md'; do
+      assert_contains "$(jq -r '.reason' <<<"${RB3_OUT:-{\}}" 2>/dev/null || true)" "$rb3_n" "RL-B3a iteration $rb3_it promise $rb3_pr: reason names $rb3_n"
+    done
+    # RL-B3b: systemMessage is the user-visible banner byte-for-byte and does not carry the reminder; the stored prompt and the counters are untouched.
+    assert_eq "$(rb3_banner $((rb3_it + 1)) "$rb3_pr")" "$(jq -r '.systemMessage' <<<"${RB3_OUT:-{\}}" 2>/dev/null || true)" "RL-B3b iteration $rb3_it promise $rb3_pr: systemMessage is the banner, no reminder"
+    assert_eq "$RB3_PROMPT" "$RB3_STORED_AFTER" "RL-B3b iteration $rb3_it promise $rb3_pr: the stored prompt block is unchanged by the run"
+    assert_eq "0" "$RB3_STUCK" "RL-B3b iteration $rb3_it promise $rb3_pr: stuck_count is unchanged (loop control untouched)"
+    assert_eq "ok" "$rb3_v" "RL-B3 iteration $rb3_it promise $rb3_pr: combined verdict"
+  done
+done
+echo ""
+
+# Mutation rows. Each builds a mutant tree that mirrors hooks/ and scripts/ (the hook sources ../scripts/resolve-git-root.sh, so a tree
+# without it exits at "not in a git repo" and every row would redden vacuously), requires the UNMUTATED control to block with the reminder
+# on both iterations, applies ONE first-occurrence mutation that must land and parse, and requires the mutant to differ.
+rb3_apply() { # <file> <old> <new>: 0 only if the anchor was present and the mutant still parses
+  local f="$1" old="$2" new="$3" c
+  c="$(cat "$f"; printf x)"; c="${c%x}"
+  [[ "$c" == *"$old"* ]] || return 1
+  assert_fixture_dir "$f"
+  printf '%s' "${c/"$old"/"$new"}" > "$f" || return 1
+  bash -n "$f" 2>/dev/null
+}
+rb3_tree() { # <id> -> RB3_MT, a mutant tree holding a copy of the hook and the real scripts directory
+  RB3_MT="$SUITE_TMP/rb3mut-$1"
+  assert_fixture_dir "$RB3_MT"
+  mkdir -p "$RB3_MT/hooks" && cp "$HOOK" "$RB3_MT/hooks/stop-hook.sh" && ln -s "$SCRIPT_DIR/../scripts" "$RB3_MT/scripts"
+}
+rb3_mut() { # <id> <expect: bad|second-member|nonblock> <old> <new> [<old2> <new2>]
+  local id="$1" expect="$2" old="$3" new="$4" old2="${5:-}" new2="${6:-}" ctl1 ctl7 m1 m7 landed=yes parsed=yes
+  rb3_tree "$id" || { echo "  FAIL: RL-B3 $id could not build the mutant tree"; FAIL=$((FAIL + 1)); return 0; }
+  rb3_check "$RB3_MT/hooks/stop-hook.sh" 1 null; ctl1="$RB3_V"; rb3_check "$RB3_MT/hooks/stop-hook.sh" 7 "\"DONE\""; ctl7="$RB3_V"
+  assert_eq "ok/ok" "$ctl1/$ctl7" "RL-B3 $id: the unmutated control blocks with the reminder on iteration 1 and 7"
+  rb3_apply "$RB3_MT/hooks/stop-hook.sh" "$old" "$new" || landed=no
+  if [[ -n "$old2" ]]; then rb3_apply "$RB3_MT/hooks/stop-hook.sh" "$old2" "$new2" || landed=no; fi
+  assert_eq "yes" "$landed" "RL-B3 $id: the mutation landed and the mutant parses"
+  cmp -s "$HOOK" "$RB3_MT/hooks/stop-hook.sh" && parsed=identical
+  assert_eq "yes" "$parsed" "RL-B3 $id: the mutant differs from the pristine hook"
+  rb3_check "$RB3_MT/hooks/stop-hook.sh" 1 null; m1="$RB3_V"; rb3_check "$RB3_MT/hooks/stop-hook.sh" 7 "\"DONE\""; m7="$RB3_V"
+  case "$expect" in
+    nonblock) assert_eq "nonblock/nonblock" "$m1/$m7" "RL-B3 $id: killed (no block is emitted at all)"
+              if grep -qE '(^|: )line [0-9]+: ' <<<"$RB3_ERR"; then echo "  FAIL: RL-B3 $id: the mutant crashed with a bash diagnostic, not a behavioural kill"; FAIL=$((FAIL + 1)); fi ;;
+    second-member) assert_eq "ok/bad-reason" "$m1/$m7" "RL-B3 $id: killed on iteration 7 only (iteration 1 alone would pass)" ;;
+    *) [[ "$m1" != "ok" && "$m7" != "ok" ]] && { echo "  PASS: RL-B3 $id: killed ($m1/$m7)"; PASS=$((PASS + 1)); } \
+         || { echo "  FAIL: RL-B3 $id: survived ($m1/$m7)"; FAIL=$((FAIL + 1)); } ;;
+  esac
+}
+rb3_mut delete-reminder bad '"reason": ($prompt + "\n\n" + $rem),' '"reason": $prompt,'
+rb3_mut exit-before-block nonblock '# Output JSON to block the stop and feed prompt back' 'exit 0'
+rb3_mut second-iteration-only second-member '--arg rem "$REMINDER" \' '--arg rem "$([[ "$NEXT_ITERATION" == 2 ]] && printf "%s" "$REMINDER")" \'
+rb3_mut system-message-only bad '"reason": ($prompt + "\n\n" + $rem),' '"reason": $prompt,' '"systemMessage": $msg' '"systemMessage": ($msg + "\n\n" + $rem)'
+rb3_mut prepend-not-append bad '"reason": ($prompt + "\n\n" + $rem),' '"reason": ($rem + "\n\n" + $prompt),'
+echo ""
+
 # --- Summary ---
 
-print_results
+# 180 = the green run after RL-B3 landed (PASS + FAIL + SKIPPED); deleting the RL-B3 block drops the count below it and trips the floor.
+print_results 180
