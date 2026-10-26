@@ -12,11 +12,11 @@ Plan: `knowledge-base/project/plans/2026-10-26-chore-trim-inngest-user-data-befo
 ## Phase 1: Red tests first
 
 - [ ] 1.1 In `apps/web-platform/infra/inngest-carrier-vocabulary.test.sh` add `apps/web-platform/infra/cloud-init-inngest.yml` to `DELIVERY_FILES`
-  - [ ] 1.1.1 Add the Guard 1 mutation rows (unmodified template, bare stem, STAGED re-add, quiesce-loop re-add after a compliant first member, brace form, snake and upper-case spellings, file removed)
+  - [ ] 1.1.1 Add the Guard 1 rows (unmodified template, generated bare-stem row, realistic STAGED plus quiesce-loop re-add, the three other spellings, file removed); raise the anti-vacuity floor and its tally comment to the measured count; add a named pin that `DELIVERY_FILES` contains the template
   - [ ] 1.1.2 Add the must-PASS rows (stem in a whole-line comment stays GREEN; a code line with a trailing comment naming the stem is RED) (no new negative control; the existing `neg-*` controls stand)
   - [ ] 1.1.3 Replace the header's "NOT COVERED (1)" paragraph
   - [ ] 1.1.4 Run the suite: the real-tree row is RED with 6 stem hits (the failing test for change A)
-- [ ] 1.2 Prepare the quiesce-battery adaptation in `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh`: T4 on the flip timer; drop Q2 and Q3 and the `luks-cutover` fixture state; keep Q1, Q4, Q5 (flip flag only); re-point `Q_OPEN` and the G2-r14 mutation row; take row counts from an executed run (the header says 83, the suite reports 88)
+- [ ] 1.2 Prepare the quiesce-battery adaptation in `apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh`: T4 on the flip timer plus a T4 variant with the flip timer inactive (no restart) and one unconditional-restart mutation row; drop Q2 and Q3 and the `luks-cutover` fixture state; keep Q1, Q4, Q5 (flip flag only); change the T4 stop-line regex; re-point `Q_OPEN` (anchors G2-r10, G2-r11, G3-r2) and G2-r14; take row counts from an executed run (baseline 88/79/9, header says 83; expect 89/80/9)
 
 ## Phase 2: Template edits (`apps/web-platform/infra/cloud-init-inngest.yml`), measure after each step
 
@@ -30,7 +30,8 @@ Plan: `knowledge-base/project/plans/2026-10-26-chore-trim-inngest-user-data-befo
 
 ## Phase 3: Verification (one suite at a time)
 
-- [ ] 3.1 Quick suites: `inngest-carrier-vocabulary`, `inngest-host`, `inngest-boot-emitter`, `cloud-init-inngest-bootstrap`, `inngest-redis-luks`, `inngest-redis-luks-loopback` (needs root and a loop device; record if unavailable), `journald-config`, `inngest-config-refresh`, `templatefile-bare-dollar-guard`, `credential-persist-home-guard`, `doppler-injection-bound`, `cloud-init-ghcr-seed-login`, `cloud-init-web-zot-seed`, `web-zot-consumer-probe`, `inngest-nic-wait`, `inngest-cutover-flip`, `inngest-server-flip-guard`, `inngest-provision-rehearsal` (all `apps/web-platform/infra/*.test.sh`)
+- [ ] 3.1 Quick suites: `inngest-carrier-vocabulary`, `inngest-host`, `inngest-boot-emitter`, `cloud-init-inngest-bootstrap`, `inngest-redis-luks`, `inngest-redis-luks-loopback` (needs root and a loop device; record if unavailable), `journald-config`, `inngest-config-refresh`, `templatefile-bare-dollar-guard`, `credential-persist-home-guard`, `doppler-injection-bound`, `cloud-init-ghcr-seed-login`, `cloud-init-web-zot-seed`, `web-zot-consumer-probe`, `inngest-nic-wait`, `inngest-cutover-flip`, `inngest-server-flip-guard`, `inngest-provision-rehearsal`, `inngest.test.sh`, `ci-deploy.test.sh`, `cutover-inngest-workflow.test.sh`, `soleur-host-bootstrap-observability.test.sh` (all `apps/web-platform/infra/*.test.sh`)
+- [ ] 3.1b Also run `bash scripts/vector-terminator-filter.test.sh` and update the comment in `apps/web-platform/infra/ci-deploy.test.sh` that quotes the old timer list
 - [ ] 3.2 Slow suites in the background with a completion wait: `cloud-init-inngest-zot-pull-mutation.test.sh` (about 227 s), `cloud-init-inngest-provision-unit.test.sh` (about 4 min; prints `PROVISION_UNIT_SUITE_OK`)
 - [ ] 3.3 Required-CI set: `bun test plugins/soleur/test/cloud-init-user-data-size.test.ts`, `bun test plugins/soleur/test/terraform-target-parity.test.ts`, `bash .claude/hooks/grep-q-pipe-guard.test.sh`, `python3 scripts/lint-encryption-posture.py --repo-sweep`, `bash tests/scripts/test-argv-bearer-sweep.sh`, `bash .github/scripts/validate-infra-templates.sh apps/web-platform/infra`
 - [ ] 3.4 Run the plan's AC1 to AC8 commands and record each result
