@@ -20,6 +20,14 @@
 # already satisfied.
 set -euo pipefail
 
+# Refuse to run under tracing FIRST (the #7797/#11103 shape): this script installs
+# credential-resolving scripts (the ACLEOF acl writer below), and a traced run echoes
+# their bodies into stderr, which journald ships off-box. Unconditional, tests the
+# STATE ($-), works in bash and dash, value-free message.
+case $- in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script installs credential-handling scripts and -x would echo their bodies (see #11103)\n' >&2; exit 78 ;;
+esac
+
 log() { echo "[inngest-redis-bootstrap] $*"; }
 
 REDIS_DATA_DIR="/mnt/data/redis"
