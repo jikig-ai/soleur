@@ -1,0 +1,286 @@
+# Destroy the retired PLAINTEXT git-data volume (Hetzner id 106867358, name soleur-git-data-store)
+# through Terraform — Option B of the W0 route, ADR-239 Amendment 2026-10-26 (DRAFT, pending CLO
+# attestation). Dispatch-only, reviewer-gated, single-use.
+#
+# WHY A DEDICATED FILE: apply-web-platform-infra.yml is at its 490,000-byte size gate. A new job there
+# would breach it.
+#
+# WHAT MERGING THE HCL DOES: nothing in production. git-data.tf no longer declares
+# hcloud_volume.git_data / hcloud_volume_attachment.git_data, but the Terraform state still holds both
+# addresses until THIS workflow runs, and no per-merge apply targets them. The module input
+# git_data_volume_id is now the literal "106867358", so the git-data host's rendered user_data is
+# byte-identical and hcloud_server.git_data plans NO change.
+#
+# THE CONTROLS, OUTSIDE THE REVIEWER'S APPROVAL (prevent_self_review=false: the owner can approve their
+# own run, so these do not depend on that approval):
+#   1. `validate` job (no environment): both typed inputs are compared as literals BEFORE any approval
+#      is requested, so a typo never consumes a reviewer approval.
+#   2. The pre-plan read (git-data-plaintext-volume-state.sh): proves the token can see server
+#      170370833 holding the LUKS volume 107140231 (a 404 from another project's token means nothing),
+#      then decides the shape. Unexpected shapes are refused before any plan exists.
+#   3. The plan gate (tests/scripts/lib/git-data-plaintext-destroy-gate.sh): the saved plan must delete
+#      exactly the pinned volume (and optionally its attachment) and change nothing else.
+#   4. The read-back: 404 by id, empty list by name, LUKS volume still present on the server.
+#
+# CONCURRENCY: workflow-level terraform-apply-web-platform-host is the serializer of the lockless R2
+# state (main.tf `use_lockfile = false`); job-level git-data-state is the mutex with git-data-cutover,
+# rung-2 and the root-key workflow. Both coexist (apply-web-platform-infra.yml does the same). A run
+# holds the workflow-level group from its start, INCLUDING while it waits for approval, and GitHub
+# keeps one pending run per group: dispatch only when the reviewer can approve at once.
+#
+# CLAIM LIMITS: the end event is "device deleted at the provider API" and nothing wider — see the
+# ADR-239 amendment. No volume content is read or logged; this workflow prints counts and identifiers.
+#
+# RECOVERY: a failed or partial run is re-dispatched through this same workflow. A re-dispatch after
+# success finds the volume gone, skips plan/gate/apply, and re-proves the end event.
+name: Destroy retired plaintext git-data volume
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_volume_id:
+        description: "Hetzner id of the plaintext volume to delete. Must equal 106867358."
+        required: true
+        type: string
+      confirm:
+        description: "Typo guard. Must be exactly DESTROY-PLAINTEXT-GIT-DATA-VOLUME. NOT the authorization — the environment reviewer is."
+        required: true
+        type: string
+
+concurrency:
+  group: terraform-apply-web-platform-host
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  # MUST equal TERRAFORM_VERSION (terraform-target-parity pins it).
+  TF_VAR_terraform_version: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate dispatch inputs (before any approval is requested)
+        env:
+          EXPECTED_RAW: ${{ inputs.expected_volume_id }}
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$EXPECTED_RAW" != "106867358" ]]; then
+            echo "::error::verdict=input_mismatch — expected_volume_id must be exactly 106867358."
+            exit 1
+          fi
+          if [[ "$CONFIRM_RAW" != "DESTROY-PLAINTEXT-GIT-DATA-VOLUME" ]]; then
+            echo "::error::verdict=input_mismatch — confirm must be exactly DESTROY-PLAINTEXT-GIT-DATA-VOLUME. This is a typo guard, NOT the authorization."
+            exit 1
+          fi
+          echo "dispatch inputs validated"
+
+  destroy:
+    needs: validate
+    runs-on: ubuntu-24.04
+    # The sole HUMAN authorization on this path: reviewer-gated, main-only deployment branch policy. The
+    # branch pin is load-bearing — the gate and the probe are sourced from ${GITHUB_WORKSPACE}, so without
+    # it a branch dispatch could source a neutered gate and approve itself.
+    environment: web-platform-infra-apply
+    concurrency:
+      group: git-data-state
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan time regardless of -target filtering; a throwaway key satisfies
+        # var.ssh_key_path. It is never consumed: nothing here has an SSH provisioner.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract R2 backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      # The pre-plan read. HCLOUD_TOKEN is loader-exported (the probe reads HCLOUD_TOKEN_READONLY first,
+      # then HCLOUD_TOKEN). Counts and identifiers only; never a response body.
+      - name: Pre-plan read (shape of the plaintext volume; refuses unexpected shapes)
+        id: pre
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (a Hetzner token is in scope)"; exit 78 ;; esac
+          set -uo pipefail
+          rc=0
+          out="$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-plaintext-volume-state.sh")" || rc=$?
+          printf '%s\n' "$out"
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::verdict=pre_plan_read_failed (exit ${rc}) — the Hetzner read could not be completed or the presence proof failed; nothing was planned."
+            exit 1
+          fi
+          shape="$(printf '%s\n' "$out" | sed -n 's/^shape=//p' | head -1)"
+          luks="$(printf '%s\n' "$out" | sed -n 's/^luks_volume=//p' | head -1)"
+          luks_server="$(printf '%s\n' "$out" | sed -n 's/^luks_server_id=//p' | head -1)"
+          if [[ "$luks" != "present" || "$luks_server" != "170370833" ]]; then
+            echo "::error::verdict=luks_volume_missing — the LUKS volume 107140231 is not present on server 170370833 (luks_volume=${luks} luks_server_id=${luks_server}); refusing."
+            exit 1
+          fi
+          case "$shape" in
+            present_attached|present_detached) echo "already_gone=false" >> "$GITHUB_OUTPUT" ;;
+            gone) echo "already_gone=true" >> "$GITHUB_OUTPUT"
+                  echo "the volume is already gone (404 by id, empty name lookup): plan, gate and apply are skipped; the read-back below re-proves the end event" ;;
+            *) echo "::error::verdict=${shape} — unexpected Hetzner shape for the plaintext volume; refusing before any plan exists."
+               exit 1 ;;
+          esac
+          echo "shape=${shape}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform plan (only the two retired addresses) + destroy gate
+        if: steps.pre.outputs.already_gone == 'false'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          EXPECTED_VOLUME_ID: ${{ inputs.expected_volume_id }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          # set +e so the rc diagnostic below runs — GitHub runs `run:` under an inherited -e that
+          # `set -uo pipefail` does not clear. Re-armed after.
+          set +e
+          set -uo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -target='hcloud_volume_attachment.git_data' \
+              -target='hcloud_volume.git_data' \
+              -var="ssh_key_path=${CI_SSH_PUB}"
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan failed (exit ${rc}); nothing was applied."
+            exit $rc
+          fi
+          set -e
+          # The plan JSON embeds prior-state values (passphrase, service tokens): it is read only by the
+          # gate, never printed or uploaded, and removed by the cleanup step.
+          terraform show -json tfplan > tfplan.json
+          # shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/plan-gate-preamble.sh"
+          # shellcheck source=tests/scripts/lib/git-data-plaintext-destroy-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-plaintext-destroy-gate.sh"
+          if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID"; then
+            echo "::error::plaintext-volume destroy gate REFUSED: the plan is not exactly the pinned delete of hcloud_volume.git_data (and optionally its attachment). The gate message above names the verdict. Nothing has been applied."
+            jq -r '[.resource_changes[]? | select(.change.actions != ["no-op"] and .change.actions != ["read"]) | "\(.address) \(.change.actions | join(","))"] | .[]' tfplan.json >&2 || true
+            exit 1
+          fi
+          echo "plaintext-volume destroy gate PASSED."
+
+      - name: Terraform apply (destroy the retired plaintext volume)
+        id: apply
+        if: steps.pre.outputs.already_gone == 'false'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            echo "::error::terraform apply failed. The attachment and the volume are destroyed in dependency order and each is recorded in the state as it completes, so a partial apply is re-dispatchable: the read-back below reports the actual state."
+            exit 1
+          fi
+
+      # Runs on success AND failure of the apply (an apply that failed after the attachment was
+      # destroyed must still report the actual state), but not when the run was cancelled.
+      - name: Read-back (404 by id, empty list by name, LUKS volume still present)
+        id: readback
+        if: success() || failure()
+        env:
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          ALREADY_GONE: ${{ steps.pre.outputs.already_gone }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (a Hetzner token is in scope)"; exit 78 ;; esac
+          set -uo pipefail
+          rc=0
+          out="$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-plaintext-volume-state.sh")" || rc=$?
+          printf '%s\n' "$out"
+          {
+            echo "### Plaintext git-data volume destroy"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| run | ${GITHUB_RUN_ID} |"
+            echo "| apply outcome | ${APPLY_OUTCOME:-skipped} |"
+            echo "| already gone before plan | ${ALREADY_GONE:-unknown} |"
+            printf '%s\n' "$out" | sed -n 's/^\([a-z_]*\)=\(.*\)$/| \1 | \2 |/p'
+            echo "| read-back at (UTC) | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::verdict=read_back_failed (exit ${rc}) — the Hetzner read could not be completed."
+            exit 1
+          fi
+          summary="$(printf '%s\n' "$out" | sed -n 's/^plaintext_volume=//p' | head -1)"
+          luks="$(printf '%s\n' "$out" | sed -n 's/^luks_volume=//p' | head -1)"
+          luks_server="$(printf '%s\n' "$out" | sed -n 's/^luks_server_id=//p' | head -1)"
+          if [[ "$luks" != "present" || "$luks_server" != "170370833" ]]; then
+            echo "::error::verdict=luks_volume_missing — the LUKS volume 107140231 is no longer present on server 170370833. STOP and escalate to the owner."
+            exit 1
+          fi
+          if [[ "${APPLY_OUTCOME:-}" == "success" || "${ALREADY_GONE:-}" == "true" ]]; then
+            if [[ "$summary" != "absent" ]]; then
+              echo "::error::verdict=volume_still_present — the apply reported success (or the volume was already gone) but the plaintext volume is still present."
+              exit 1
+            fi
+            echo "end event proven: volume 106867358 returns 404 and the name lookup is empty; the LUKS volume is present on the server."
+          elif [[ "${APPLY_OUTCOME:-}" == "failure" ]]; then
+            echo "::error::verdict=volume_still_present_after_failed_apply — plaintext_volume=${summary}. Re-dispatch this workflow; it will plan only what remains."
+            exit 1
+          else
+            echo "apply did not run (an earlier step refused): plaintext_volume=${summary}; nothing was changed by this run."
+          fi
+
+      - name: Remove plan files (they embed prior-state values)
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        run: rm -f tfplan tfplan.json
