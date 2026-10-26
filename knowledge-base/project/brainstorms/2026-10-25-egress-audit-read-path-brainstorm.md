@@ -50,6 +50,10 @@ Inherited rulings kept: A (collection off for externals until PR2 plus owner not
 - **Vector:** a leak across workspaces, or to a pending or removed member, would reveal which external hosts one workspace's agents contacted, which can disclose what a founder asked an agent to research; a surveillance-style framing would harm trust.
 - **Threshold:** `single-user incident`.
 
+## Plan-review amendments (2026-10-26)
+
+CTO rulings after the plan-review panel, recorded here so the brainstorm does not contradict the plan: no HTTP route (a server-rendered page calls the RPC through the loader; the earlier "thin GET route" and `withUserRateLimit` decisions are superseded); no `statement_timeout` function clause (proved a no-op for the running statement on Postgres 17); no window parameter (fixed 30 days); fail-loud workspace reader instead of the fallback resolver; the migration number is picked at the last rebase because 164 is claimed by open draft PRs; wireframe copy deltas remove every retention date and the "recording since" date (no data source). See the plan: `knowledge-base/project/plans/2026-10-26-feat-egress-audit-read-path-plan.md`.
+
 ## Domain Assessments
 
 **Assessed:** Marketing, Engineering, Operations, Product, Legal, Sales, Finance, Support
