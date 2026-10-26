@@ -3286,14 +3286,14 @@ if [ -n "${PR_AFFECTED_REPLAY_GR_FALLBACK:-}" ]; then
 fi
 if [ -n "${PR_AFFECTED_REPLAY_GR_NOROWS:-}" ]; then printf 'AFFECTED_SUMMARY selected=0 of=0 always_on=0 edge=0 fallback=none\n'; exit 0; fi
 inv() { if [ "${PR_AFFECTED_REPLAY_GR_BREAK:-}" = "$1" ]; then if [ "$2" = 1 ]; then echo 0; else echo 1; fi; else echo "$2"; fi; }
-sel() { printf 'AFFECTED_SELECTED\t%s\t%s\t%s\t%s\n' "$1" "$(inv "$1" "$4")" "$2" "$3"; }
+sel() { [ "${PR_AFFECTED_REPLAY_GR_DROP:-}" = "$1" ] && return 0; printf 'AFFECTED_SELECTED\t%s\t%s\t%s\t%s\n' "$1" "$(inv "$1" "$4")" "$2" "$3"; }
 a_one=0; case ",$paths," in *,gr-fx/a/one.sh,*) a_one=1 ;; esac
 d_dir=0; case ",$paths," in *,gr-fx/d/*) d_dir=1 ;; esac
 e_dir=0; case ",$paths," in *,gr-fx/e/*) e_dir=1 ;; esac
 none=0; case ",$paths," in *,gr-fx/b/two.sh,*) none=1 ;; esac
 b1=0; case ",$paths," in *,gr-fx/m/*|*,gr-fx/a/three.md,*|*,gr-fx/a/four.sh,*) b1=1 ;; esac
 if [ -n "${PR_AFFECTED_REPLAY_GR_LOG:-}" ]; then printf '%s\n' "$paths" >> "$PR_AFFECTED_REPLAY_GR_LOG"; fi
-if [ "${PR_AFFECTED_REPLAY_GR_DROP:-}" != gA ]; then sel gA edge:declared '^gr-fx/a/one.sh' "$a_one"; fi
+sel gA edge:declared '^gr-fx/a/one.sh' "$a_one"
 sel gB1 edge:declared '^gr-fx/m/|^gr-fx/a/three.md|^gr-fx/a/four.sh' "$b1"
 sel gT4 edge:declared '^gr-fx/a/one.sh' "$a_one"
 sel gS edge:declared '^gr-fx/b/two.sh' "$none"
@@ -3535,8 +3535,11 @@ row_gr_tree_noext() {   # @tree with no recognised extension is refused (an empt
   return "$ok"
 }
 row_gr_spot_per_suite() {   # every candidate suite must be compared on at least one sampled diff: a suite the real selector never printed is not verified
-  RUN_ENV=(PR_AFFECTED_REPLAY_GR_DROP=gA); gr_main; RUN_ENV=()
-  [[ "$GR_RC" -eq 4 ]] && grep -q 'never compared candidate suite gA' "$SANDBOX/gr.stderr"
+  local s
+  for s in gA gT4; do
+    RUN_ENV=(PR_AFFECTED_REPLAY_GR_DROP="$s"); gr_main; RUN_ENV=()
+    [[ "$GR_RC" -eq 4 ]] && grep -q "never compared candidate suite $s" "$SANDBOX/gr.stderr" || return 1
+  done
 }
 row_gr_spot_calls() {   # the real selector runs once per sampled diff: K calls, K distinct diffs
   local log="$SANDBOX/gr-spot.log"; : > "$log"
@@ -3547,6 +3550,7 @@ row_gr_spot_default() {   # no flag means 3, and 0 is refused: a verdict is neve
   local ok=0
   gr_main; { [[ "$GR_RC" -eq 0 ]] && tail -1 "$SANDBOX/gr.stdout" | grep -q ' spot_check=3 spot_compared=[1-9]'; } || ok=1
   gr_main --spot-check 0; [[ "$GR_RC" -eq 2 ]] || ok=1
+  gr_main --spot-check 1; [[ "$GR_RC" -ne 2 ]] || ok=1   # 1 is a valid minimum (it may legitimately exit 4 on this fixture, never 2)
   return "$ok"
 }
 row_gr_quoted_labels() {   # a hostile suite label (an ESC sequence) is printed escaped in the table and on stdout, like every other path the tool prints
@@ -3554,7 +3558,10 @@ row_gr_quoted_labels() {   # a hostile suite label (an ESC sequence) is printed 
   { cat "$GR_ROWS"; printf 'AFFECTED_SELECTED\t%s\t0\tedge:declared\t^gr-fx/b/two.sh\n' "$esc"; } > "$r"
   printf '%s\t\n' "$esc" > "$c"
   GR_ROWSF="$r" GR_CANDF="$c" gr_main
-  [[ "$GR_RC" -eq 0 ]] && ! grep -q $'\033' "$GR_OUT/glob-rate.tsv" && ! grep -q $'\033' "$SANDBOX/gr.stdout" && grep -qF 'x1b' "$GR_OUT/glob-rate.tsv"
+  { [[ "$GR_RC" -eq 0 ]] && ! grep -q $'\033' "$GR_OUT/glob-rate.tsv" && ! grep -q $'\033' "$SANDBOX/gr.stdout" && grep -qF 'x1b' "$GR_OUT/glob-rate.tsv"; } || return 1
+  { cat "$GR_ROWS"; printf 'AFFECTED_SELECTED\t%s\t0\tedge:declared\t^gr-fx/b/two.sh\nAFFECTED_SELECTED\t%s\t0\tedge:declared\t^gr-fx/a/four.sh\n' "$esc" "$esc"; } > "$r"
+  GR_ROWSF="$r" GR_CANDF="$c" gr_main   # the refusal text names the label: escaped there too
+  [[ "$GR_RC" -eq 2 ]] && grep -q 'differing edge sets' "$SANDBOX/gr.stderr" && ! grep -q $'\033' "$SANDBOX/gr.stderr"
 }
 chk "glob-rate: the verdict function applies PR4b row 6 exactly (60000/60001 ms, 30000/30001 ms, 50/51 of 200, floor and missing never qualify, an incomplete set is judged on the existing rate)" row_gr_decide
 chk "glob-rate: a run decides every row, writes the table and the marker, and an exit 0 means every row is decided" row_gr_run_ok
@@ -4437,6 +4444,7 @@ mutate gr-tree-single-dot-extension-only 'if re.match(r"^(\.[A-Za-z0-9]+)+$", ta
 mutate gr-spot-first-unit-only '    for sha, files, _kind, _deleted in sample:' '    for sha, files, _kind, _deleted in sample[:1]:' row_gr_spot_calls
 mutate gr-spot-suite-never-compared-passes '    if unseen:' '    if False:' row_gr_spot_per_suite
 mutate gr-spot-check-default-off 'default=3, dest="spot_check"' 'default=0, dest="spot_check"' row_gr_spot_default
+mutate gr-differing-rows-label-printed-raw 'has rows with differing edge sets: refused, not guessed" % quote_field(label))' 'has rows with differing edge sets: refused, not guessed" % label)' row_gr_quoted_labels
 mutate gr-suite-label-printed-raw 'out_rows.append((quote_field(suite), str(len(entries))' 'out_rows.append((suite, str(len(entries))' row_gr_quoted_labels
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== controls: the harness reports a survivor, an unparseable mutant, a red row and an edit that did not land"
@@ -4512,12 +4520,12 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1151   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 82 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 48 mutant kills) (measured below)
+FLOOR_ASSERTIONS=1152   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) (measured below)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=468   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 + 56 added by the S4 ratchet PR3a + 63 added by its review fix round A + 3 scan-hidden collection-materialization spellings (#10724) + 48 added by S4 PR5 glob-rate
+FLOOR_MUTANTS=469   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 + 56 added by the S4 ratchet PR3a + 63 added by its review fix round A + 3 scan-hidden collection-materialization spellings (#10724) + 49 added by S4 PR5 glob-rate
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi
