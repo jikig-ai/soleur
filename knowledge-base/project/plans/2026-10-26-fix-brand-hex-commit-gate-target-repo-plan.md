@@ -15,6 +15,22 @@ requires_cpo_signoff: false
 
 # fix(hooks): brand-hex-commit-gate scans the repository a git commit targets
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Sections enhanced:** Scope Check (schema-complete), Observability (5-field block), Research Insights (empirical probe), Sharp Edges
+**Research agents used:** CTO ruling agent (5 interpretation forks, carve-outs A-C folded in), scratch-repo probe of the lib, guard-contract lint
+
+### Key Improvements
+1. Every Design assumption about `ctr_collect` / `ctr_resolve_roots` / `CTR_COMMIT_ALL` was confirmed on a real bare-root + worktree fixture rather than from the lib header.
+2. Scope Check now carries the Ask Mapping / Provenance / Split Assessment tables the deepen halt verifies; the one inferred item is justified.
+3. The bare-root cwd toplevel failure (rc 128) is pinned as "no cwd root", not an undeterminable error.
+
+### New Considerations Discovered
+- The sibling secret-scan hook blocks inline shell text that pairs a variable path with git commit; fixture probes run from script files.
+- The CTO's carve-out A (lexer unavailable, no target-moving token -> unchanged cwd path) prevents a perl-less host from silencing the gate on every plain commit.
+
+
 ## Overview
 
 `.claude/hooks/brand-hex-commit-gate.sh` blocks a commit that adds raw hex colour literals to staged
@@ -76,6 +92,8 @@ rejected scanning every worktree and rejected denying every no-toplevel commit).
 - Pin `LC_ALL=C` on any git call whose English error text is matched (the lib already does; the gate matches none).
 - Text containing the words git commit inside a quoted argument of a shell command trips the commit-on-main guard: commit messages and the PR body go through `-F` / `--body-file`.
 
+**Deepen-pass verification (empirical, scratch repo with a `core.bare=true` root and a linked worktree).** `git rev-parse --is-inside-work-tree` at the bare root prints `false` with rc 0; `git rev-parse --show-toplevel` exits 128 with "this operation must be run in a work tree". `ctr_collect`+`ctr_resolve_roots` returned the worktree toplevel for `cd <abs wt> && git commit`, `git -C <abs wt> commit`, and the relative `cd .worktrees/wt && git commit` (resolved against the bare-root `$PWD`); `CTR_COMMIT_ALL=1` for `git -C <wt> commit -a` and `-p`, 0 otherwise; `cd "$WT" && git commit` -> `CTR_BAD` = "the path '$WT' contains an expansion" with empty roots; a quoted prose mention -> `CTR_COMMIT_SEEN=0`; `cd /nonexistent && git commit` -> empty roots and empty `CTR_BAD` (so it falls to the cwd root). The baseline suite prints `=== 24 passed, 0 failed ===`. All Design assumptions hold.
+
 **Decisions** (full rows in `knowledge-base/project/specs/feat-one-shot-10793-brand-hex-gate-target-repo/decision-challenges.md`): all technical, ruled by the CTO agent on 2026-10-26 on top of the 2026-10-23 issue ruling.
 
 ## Open Code-Review Overlap
@@ -84,16 +102,36 @@ One open code-review issue names a file this plan edits: #8800 (census sandbox s
 
 ## Scope Check
 
-| Ask (brief / issue) | Plan item |
-|---|---|
-| Scan the target of `cd W && git commit` / `git -C W commit` from a bare-root cwd | Phases 1-2 (tests, hook) |
-| No-cd path unchanged | AC3, tests T28-T29 (regression rows) |
-| Undeterminable target warns and allows | Phase 2, AC4, test T33-T35 |
-| Correct the header comment | Phase 3, AC7 |
-| Reuse `commit-target-roots.sh`; do not adopt the sim lib; do not touch secret scan / sim lib | Files to Edit list excludes them; AC9 |
-| Repo-global checks from the #10893 lessons | Phase 4, AC8 |
+### Ask Mapping
 
-No inferred items. Split assessment: one hook, one suite, a handful of ledger lines - single PR.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "`cd <worktree> && git commit` and `git -C <worktree> commit` from a bare-root cwd are checked against the worktree's staged files" | Design steps 1-5, 7; Phases 1-2; AC1, AC2 | mapped |
+| 2 | "the no-cd path is unchanged" | Design step 6 (textual diff-base regex kept), Cut List (b); AC3; tests T27, T28 | mapped |
+| 3 | "When the target is undeterminable the gate WARNS AND ALLOWS" | Design step 4; AC4; tests T33-T35 | mapped |
+| 4 | "the header comment is corrected" | Phase 3.1; AC7; test T36 | mapped |
+| 5 | "Resolve the commit's target repositories with the existing lib .claude/hooks/lib/commit-target-roots.sh" | Design steps 2-3, 5 | mapped |
+| 6 | "Do NOT adopt .claude/hooks/lib/commit-index-sim.sh in this PR ... do not touch git-commit-secret-scan.sh or the sim lib" | Cut List (a); AC9 | mapped |
+| 7 | "Tests first (TDD), in the hook's existing suite ... cd form, -C form, bare-root cwd, no-cd unchanged, undeterminable target warns+allows, plus allow twins" | Phase 1; T25-T37 | mapped |
+| 8 | "run the repo-global checks a file-selected suite cannot see" and "commit AND PUSH after every logical unit" | Phase 4; AC8, AC10 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Loose both-words trigger | "`git -C <worktree> commit` from a bare-root cwd" (the strict regex cannot see this form) | asked |
+| Per-root palette reset and root-basename prefix | "checked against the worktree's staged files" (a second root needs its own palette; CTO Q2/Q5) | asked |
+| Lexer-unavailable split on target-moving tokens | "The no-cd path stays unchanged" (a perl-less host must not go silent on plain commits; CTO carve-out A) | asked |
+| `CTR_COMMIT_ALL` for the -C diff base | "`git -C <worktree> commit` ... checked against the worktree's staged files" (CTO Q3) | asked |
+| README paragraph and guardrail-audit consumer text | — | inferred — justification: the repo keeps hook behaviour documented in .claude/hooks/README.md and the manifest test requires guardrail-audit.md to stay accurate; two short text edits, no code |
+| `scripts/lib/test-affected-paths.sh` array edit | "run the repo-global checks a file-selected suite cannot see" (declare real reads in ONE AFFECTED_*_PATHS definition) | asked |
+
+### Split Assessment
+
+- Subsystems touched: 2 - `.claude/hooks/`, `scripts/lib/` (plus one text edit under `plugins/soleur/skills/verification-scaffold/references/` and a possible re-key in `plugins/soleur/test/`)
+- Planned files: 7 edited + 2 created | Estimated changed lines: ~420 (about 300 test, 90 hook, 30 other)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Files to Edit
 
@@ -213,7 +251,31 @@ No architectural decision: the plan reuses an existing library through its exist
 
 ## Observability
 
-Skipped: Files-to-Edit contain no code-class file under `apps/*/server`, `apps/*/src`, `apps/*/infra` or `plugins/*/scripts`, and no new infrastructure. The hook is its own telemetry surface: the undeterminable arm writes an `emit ... bypass` incident row (queryable by `rule-metrics-aggregate.sh`) and a stderr WARN, covered by test T33.
+The hook is its own telemetry surface (it is not under `apps/*/server`, `apps/*/src`, `apps/*/infra` or `plugins/*/scripts`; the block is included because the deepen gate treats any non-docs path as in scope).
+
+```yaml
+liveness_signal:
+  what: a bypass row in the incident ledger (emit_incident brand-hex-commit-gate bypass "target undeterminable: <kind>") plus one stderr WARN line per undeterminable commit
+  cadence: per git commit tool call
+  alert_target: .claude/.rule-incidents.jsonl, aggregated weekly by rule-metrics-aggregate.sh
+  configured_in: .claude/hooks/brand-hex-commit-gate.sh (the undeterminable arm)
+error_reporting:
+  destination: stderr WARN (operator-visible in the tool result) and the incident ledger row
+  fail_loud: false - fail-open by CTO ruling; a defect degrades to the pre-fix unscanned commit
+failure_modes:
+  - mode: target undeterminable (variable, glob, tilde, GIT_DIR, no perl, lib missing)
+    detection: bypass row with the kind word plus the stderr WARN
+    alert_route: weekly rule-metrics aggregate; a rising bypass count on ordinary no-cd commits is the evidence that flips CTO Q1
+  - mode: hook crashes before a decision
+    detection: tool call proceeds with no JSON; hook-input-contract suite and the explicit declare -f guard cover the missing-helper case
+    alert_route: hook-input-contract.test.sh in CI
+logs:
+  where: stderr of the hook and .claude/.rule-incidents.jsonl
+  retention: ledger is git-ignored local state, rotated by the existing incident tooling
+discoverability_test:
+  command: grep -o 'target undeterminable' .claude/hooks/brand-hex-commit-gate.sh
+  expected_output: target undeterminable
+```
 
 ## Guard Contract
 
@@ -252,6 +314,8 @@ See Phase 1 (T25-T37). Additionally run the full suite under `bash --version` 5.
 - At a bare root `git rev-parse --is-inside-work-tree` prints `false` with rc 0: do not use its exit status as the work-tree test.
 - `ctr_resolve_roots` returns toplevels PHYSICALLY; fixture paths must come from `pwd -P`, and findings are prefixed with a basename, never a full path, so tmpdir symlinks cannot break assertions.
 - Source the lib from `${BASH_SOURCE[0]}`, not `$CLAUDE_PROJECT_DIR`: the suite sets the latter to a temp repo that has no hooks.
+- The cwd toplevel lookup is a fail-open probe: at a bare root it exits 128 ("must be run in a work tree"); treat ANY failure of that one call as "no cwd root" (the existing `|| echo ""` behaviour), never as `CTR_ROOT_ERR`. Only an error from `ctr_resolve_roots` (a repository git cannot read) is "undeterminable".
+- The sibling secret-scan hook will itself block a shell command whose text carries a variable path next to git commit; run fixture-building probes from a script file, not an inline `bash -c`.
 - Do not use `printf ... | grep -q` anywhere in new hook code (SIGPIPE under pipefail, #6992); use herestrings.
 - The tests' own commit messages and the PR body must not contain the phrase git commit inside a quoted shell argument; use `-F` / `--body-file`.
 - A `## User-Brand Impact` section with `threshold: none` on a sensitive path needs the scope-out line - present above (`.claude/hooks/` is not in the preflight sensitive-path regex, line kept as a belt-and-braces).

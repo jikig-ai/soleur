@@ -24,7 +24,7 @@ Rule for every phase: commit AND push before starting the next one. Commit messa
 - [ ] 2.1 Loose trigger after the unchanged strict test (keep line 119 stable)
 - [ ] 2.2 Fail-soft lib load + explicit declare -f / CTR_STAGE_API assertions (no sim lib)
 - [ ] 2.3 ctr_collect / ctr_resolve_roots flow; commit-seen handling; undeterminable -> warn + bypass row + allow
-- [ ] 2.4 Root set = CTR_ROOTS + process-cwd toplevel, deduped; unset ambient GIT_* on the lexed path
+- [ ] 2.4 Root set = CTR_ROOTS + process-cwd toplevel, deduped (a failing cwd lookup at a bare root, rc 128, means no cwd root - never undeterminable); unset ambient GIT_* on the lexed path
 - [ ] 2.5 NAME_REF: textual regex when `git commit` present, else CTR_COMMIT_ALL
 - [ ] 2.6 scan_root function with per-root palette reset; multi-root basename prefix; explicit `return 0`
 - [ ] 2.7 Suite green, shellcheck clean; commit and push
