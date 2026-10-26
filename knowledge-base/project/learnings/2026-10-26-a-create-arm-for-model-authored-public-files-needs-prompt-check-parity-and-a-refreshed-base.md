@@ -68,5 +68,6 @@ a closed token so the operator can diagnose it without SSH.
    **Prevention:** none needed (one-off).
 
 ## Tags
+
 category: workflow-patterns
 module: compound-promote
