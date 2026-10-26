@@ -10,8 +10,8 @@ import path from "node:path";
 // dev's ~295k-row users table, past the ~8s API statement_timeout, so a denied
 // cross-tenant UPDATE surfaces 57014 instead of 42501/[] once the table-level
 // grant exists. The fix wraps each own-row lookup in a plpgsql STABLE SECURITY
-// INVOKER function (plpgsql is never inlined; LANGUAGE sql could inline back into
-// the same InitPlan). These tests pin the load-bearing shapes: function language,
+// DEFINER function (plpgsql never inlines — LANGUAGE sql would; DEFINER bypasses
+// the caller's SELECT-RLS entanglement that re-hung the INVOKER variant). These tests pin the load-bearing shapes: function language,
 // search_path pin, EXECUTE privilege surface, policy-name preservation, and the
 // absence of a bare self-subquery in the recreated policy expressions.
 

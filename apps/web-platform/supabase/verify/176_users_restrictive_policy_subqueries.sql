@@ -85,11 +85,13 @@ SELECT 'users_policy_expr_self_subquery', count(*)::int
      'Prevent client health_snapshot update'
    )
    AND (
+     -- pg_get_expr de-qualifies relations already on search_path, so match
+     -- 'FROM users' / 'FROM public.users' alike (word boundary, no schema pin).
      COALESCE(pg_get_expr(polcat.polqual, polcat.polrelid), '')
-       ~* 'SELECT[^)]*public\.users[^)]*auth\.uid'
+       ~* 'SELECT[^)]*(public\.)?users\s[^)]*auth\.uid'
      OR
      COALESCE(pg_get_expr(polcat.polwithcheck, polcat.polrelid), '')
-       ~* 'SELECT[^)]*public\.users[^)]*auth\.uid'
+       ~* 'SELECT[^)]*(public\.)?users\s[^)]*auth\.uid'
    )
 
 UNION ALL
@@ -107,6 +109,8 @@ SELECT 'users_own_fn_exec_grants_wrong', count(*)::int
      NOT (COALESCE(p.proacl::text, '') ~ 'authenticated=[^,}]*X')
      -- anon must NOT hold EXECUTE (public.users is not an anon surface)
      OR COALESCE(p.proacl::text, '') ~ 'anon=[^,}]*X'
+     -- service_role must NOT hold EXECUTE (it bypasses RLS; grant is dead surface)
+     OR COALESCE(p.proacl::text, '') ~ 'service_role=[^,}]*X'
      -- PUBLIC must NOT hold EXECUTE (the PUBLIC aclitem prints as =X/...)
      OR COALESCE(p.proacl::text, '') ~ '(^|[{,])=X'
-   )
+   );
