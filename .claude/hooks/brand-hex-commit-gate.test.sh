@@ -450,9 +450,11 @@ _run_cmd() {
   payload=$(jq -nc --arg w "$cwd" --arg c "$cmd" '{tool_name: "Bash", cwd: $w, tool_input: {command: $c}}')
   RC=0
   if [[ -n "$pd" ]]; then
-    OUT=$(cd "$cwd" && env PATH="$pd" CLAUDE_PROJECT_DIR="$REPO_ROOT" "$pd/bash" "${HOOK_UNDER:-$HOOK}" <<<"$payload" 2>"$errf") || RC=$?
+    # shellcheck disable=SC2086  # RUN_ENV is a space-free VAR=value list from the test itself
+    OUT=$(cd "$cwd" && env PATH="$pd" ${RUN_ENV:-} CLAUDE_PROJECT_DIR="$REPO_ROOT" "$pd/bash" "${HOOK_UNDER:-$HOOK}" <<<"$payload" 2>"$errf") || RC=$?
   else
-    OUT=$(cd "$cwd" && CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "${HOOK_UNDER:-$HOOK}" <<<"$payload" 2>"$errf") || RC=$?
+    # shellcheck disable=SC2086
+    OUT=$(cd "$cwd" && env ${RUN_ENV:-} CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "${HOOK_UNDER:-$HOOK}" <<<"$payload" 2>"$errf") || RC=$?
   fi
   ERR=$(cat "$errf"); rm -f "$errf"
 }
@@ -475,14 +477,12 @@ _seed_bare() {
 
 _phys() { ( cd "$1" && pwd -P ); }
 
-# PATH directory carrying the tools the hook needs; "perl" adds perl (the lexer needs it).
+# PATH directory carrying the tools the hook needs, and NOT perl (the lexer needs it).
 _mk_path_dir() {
-  local d t p extra=""
-  [[ "${1:-}" == perl ]] && extra=perl
+  local d t p
   d=$(mktemp -d "$SUITE_TMP/path.XXXXXX")
   for t in bash sh git jq mktemp grep cat dirname basename rm date flock sed awk tr head tail cut wc \
-           sort env readlink realpath mkdir chmod touch id stat ls cp mv ln find xargs expr uname seq \
-           $extra; do
+           sort env readlink realpath mkdir chmod touch id stat ls cp mv ln find xargs expr uname seq; do
     p=$(command -v "$t" 2>/dev/null) || continue
     [[ "$p" == /* ]] && ln -s "$p" "$d/$t"
   done
@@ -644,15 +644,16 @@ t_t32_relative_quoted_and_missing_targets() {
 t_t33_undeterminable_warns_and_allows() {
   local repo; repo=$(_seed_repo)
   _stage "$repo" "$BANNER" "$OFFBRAND_TSX"   # the cwd repo would DENY if it were scanned
-  local c
+  local c rows
+  # Single quotes on purpose: $WT / ~ / the glob must reach the hook as LITERAL text, unexpanded.
   for c in 'cd "$WT" && git commit -m x' 'cd ~/x && git commit -m x' 'cd wt* && git commit -m x' \
            'GIT_DIR=/x git commit -m x' 'git --git-dir=/x commit -m x'; do
     _run_cmd "$repo" "$c"
     _expect_warn_allow "T33 undeterminable target [$c] -> WARN + allow, no scan (cwd repo holds off-brand)"
+    rows=$(_gate_rows)
+    _expect "T33b [$c] records a bypass row" "rows=$rows" \
+      bash -c '[[ "$1" == *"bypass|target undeterminable"* ]]' _ "$rows"
   done
-  local rows; rows=$(_gate_rows)
-  _expect "T33b the undeterminable arm records a bypass row" "rows=$rows" \
-    bash -c '[[ "$1" == *"bypass|target undeterminable"* ]]' _ "$rows"
   rm -rf "$repo"
 }
 
@@ -663,6 +664,8 @@ t_t34_no_perl() {
   [[ ! -e "$nop/perl" ]] || { _report "T34 fixture: PATH dir has no perl" fail "perl present"; return; }
   _run_cmd "$BARE" "git -C $WT commit -m x" "$nop"
   _expect_warn_allow "T34 no perl: 'git -C <wt> commit' -> WARN + allow"
+  _expect "T34d ... the row names the lexer as the cause" "rows=$(_gate_rows)" \
+    bash -c '[[ "$1" == *"target undeterminable: lexer unavailable"* ]]' _ "$(_gate_rows)"
   _run_cmd "$BARE" "cd $WT && git commit -m x" "$nop"
   _expect_warn_allow "T34b no perl: 'cd <wt> && git commit' -> WARN + allow"
   rm -rf "$BARE"
@@ -685,6 +688,8 @@ t_t35_lib_missing() {
   _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
   HOOK_UNDER="$tmp/brand-hex-commit-gate.sh" _run_cmd "$BARE" "git -C $WT commit -m x"
   _expect_warn_allow "T35 lib missing: 'git -C <wt> commit' -> WARN + allow"
+  _expect "T35c ... the row names the missing lib as the cause" "rows=$(_gate_rows)" \
+    bash -c '[[ "$1" == *"target undeterminable: lib missing"* ]]' _ "$(_gate_rows)"
   rm -rf "$BARE"
   local repo; repo=$(_seed_repo)
   _stage "$repo" "$BANNER" "$OFFBRAND_TSX"
@@ -697,7 +702,8 @@ t_t35_lib_missing() {
 t_t36_header_no_longer_claims_identity() {
   local hook="$REPO_ROOT/.claude/hooks/brand-hex-commit-gate.sh" n_ident n_lib
   n_ident=$(grep -cE 'identical (copy|to git-commit-secret-scan)' "$hook" || true)
-  n_lib=$(grep -c 'commit-target-roots.sh' "$hook" || true)
+  # the first 40 lines are the header paragraph; a `# shellcheck source=` directive further down is not it
+  n_lib=$(sed -n 1,40p "$hook" | grep -c '^# .*lib/commit-target-roots.sh' || true)
   _expect "T36 header/in-body comments drop the 'identical to the secret scan' claim and name the lib" \
     "identical=$n_ident lib=$n_lib" test "$n_ident" -eq 0 -a "$n_lib" -ge 1
 }
@@ -724,6 +730,190 @@ t_t34_no_perl
 t_t35_lib_missing
 t_t36_header_no_longer_claims_identity
 t_t37_fixture_control
+
+# ---- review round (#10793): rows for the mutants the first battery could not reach ----
+
+# Repos are cloned under a stable parent so two of them can share a basename.
+_dup_basename_repos() {
+  local x y
+  x="$SUITE_TMP/dupx"; y="$SUITE_TMP/dupy"; mkdir -p "$x" "$y"
+  DUPA=$(_seed_repo); mv "$DUPA" "$x/app"; DUPA=$(_phys "$x/app")
+  DUPB=$(_seed_repo); mv "$DUPB" "$y/app"; DUPB=$(_phys "$y/app")
+}
+
+t_t38_target_config_cannot_run_code() {
+  _seed_bare
+  local mk="$SUITE_TMP/mk38" tc="$SUITE_TMP/tc38.sh" fm="$SUITE_TMP/fm38.sh"
+  mkdir -p "$mk"
+  printf '#!/bin/sh\n: > "%s/textconv"\ncat "$1"\n' "$mk" > "$tc"
+  printf '#!/bin/sh\n: > "%s/fsmonitor"\nexit 0\n' "$mk" > "$fm"
+  chmod +x "$tc" "$fm"
+  ( cd "$WT" && mkdir -p "$(dirname "$BANNER")" && printf '%s\n' "$CLEAN_TSX" > "$BANNER" \
+      && printf '*.tsx diff=evil\n' > .gitattributes && git add "$BANNER" && git commit -q -m "seed banner"
+    git config diff.evil.textconv "$tc"; git config core.fsmonitor "$fm"
+    printf '%s\n' "$OFFBRAND_TSX" > "$BANNER" )
+  rm -f "$mk"/textconv "$mk"/fsmonitor
+  _run_cmd "$BARE" "git -C $WT commit -a -m x"
+  _expect "T38 a target repo's textconv driver and fsmonitor hook do not run in the gate (still denies)" \
+    "d=$(_decision "$OUT") textconv=$([[ -e $mk/textconv ]] && echo RAN || echo no) fsmonitor=$([[ -e $mk/fsmonitor ]] && echo RAN || echo no)" \
+    bash -c '[[ "$1" == deny && ! -e "$2/textconv" && ! -e "$2/fsmonitor" ]]' _ "$(_decision "$OUT")" "$mk"
+  rm -rf "$BARE"
+}
+
+# Two repos, each with its OWN on-brand email colour, each staging it. Whatever order the roots are
+# scanned in, a palette leaked from the first would turn the second's on-brand colour into a deny.
+t_t39_palette_symmetric() {
+  local a b
+  a=$(_seed_repo); a=$(_phys "$a"); b=$(_seed_repo); b=$(_phys "$b")
+  ( cd "$a" && printf '  --brand-x: #123456;\n' >> apps/web-platform/app/globals.css \
+      && git add -A && git commit -q -m "token x" )
+  ( cd "$b" && printf '  --brand-y: #654321;\n' >> apps/web-platform/app/globals.css \
+      && git add -A && git commit -q -m "token y" )
+  _stage "$a" "apps/web-platform/server/notifications.ts" 'const a = { color: "#123456" };'
+  _stage "$b" "apps/web-platform/server/notifications.ts" 'const a = { color: "#654321" };'
+  _run_cmd "$a" "cd $b && git commit -m x"
+  _expect "T39 each root's own on-brand email colour allows (cwd=a, target=b)" "d=$(_decision "$OUT") r=$(_reason "$OUT" | head -c 140)" _is_allow
+  _run_cmd "$b" "cd $a && git commit -m x"
+  _expect "T39b each root's own on-brand email colour allows (cwd=b, target=a)" "d=$(_decision "$OUT") r=$(_reason "$OUT" | head -c 140)" _is_allow
+  rm -rf "$a" "$b"
+}
+
+t_t40_inherited_git_dir_does_not_redirect_the_scan() {
+  local a b
+  a=$(_seed_repo); a=$(_phys "$a"); b=$(_seed_repo); b=$(_phys "$b")
+  _stage "$a" "$BANNER" "$OFFBRAND_TSX"
+  RUN_ENV="GIT_DIR=$b/.git" _run_cmd "$b" "cd $a && git commit -m x"
+  _expect "T40 an inherited GIT_DIR (clean repo b) does not hide the named repo a's off-brand staged file" \
+    "d=$(_decision "$OUT")" _is_deny
+  rm -rf "$a" "$b"
+}
+
+t_t41_diff_base_comes_from_the_lexer() {
+  _seed_bare
+  ( cd "$WT" && mkdir -p "$(dirname "$BANNER")" && printf '%s\n' "$CLEAN_TSX" > "$BANNER" && git add "$BANNER" \
+      && git commit -q -m "seed banner"
+    printf '%s\n' "$OFFBRAND_TSX" > "$BANNER" )   # tracked, modified, NOT staged
+  _run_cmd "$BARE" "ls -la && git -C $WT commit -m x"
+  _expect "T41 'ls -la' before a -C commit does not read as commit -a -> allow" "d=$(_decision "$OUT")" _is_allow
+  _run_cmd "$BARE" "git -C $WT commit -a -m 'do git commit now'"
+  _expect "T41b a quoted 'git commit' in the message does not hide the real -a -> deny" "d=$(_decision "$OUT")" _is_deny
+  _run_cmd "$BARE" "git -C $WT commit -a -m x && git commit -m y"
+  _expect "T41c '-C W commit -a' followed by a plain commit still sees the -a -> deny" "d=$(_decision "$OUT")" _is_deny
+  _run_cmd "$BARE" "cd $WT && git commit -p -m x"
+  _expect "T41d 'cd W && git commit -p' takes the working-tree base -> deny" "d=$(_decision "$OUT")" _is_deny
+  _run_cmd "$BARE" "cd $WT && git commit -m 'see git commit -a docs'"
+  _expect "T41e '-a' inside a quoted 'git commit' in the message does not flip the base -> allow" "d=$(_decision "$OUT")" _is_allow
+  rm -rf "$BARE"
+}
+
+t_t42_no_perl_fallback() {
+  local nop repo; nop=$(_mk_path_dir)
+  repo=$(_seed_repo); _stage "$repo" "$BANNER" "$OFFBRAND_TSX"
+  local c
+  for c in "git commit -m 'fix cd handling'" "GIT_AUTHOR_DATE=2020-01-01T00:00:00 git commit -m x" "git commit -C HEAD"; do
+    _run_cmd "$repo" "$c" "$nop"
+    _expect "T42 no perl: ordinary commit [$c] is still scanned -> deny" "d=$(_decision "$OUT") err=${ERR:0:100}" _is_deny
+  done
+  _run_cmd "$repo" "cd /tmp && git log --oneline --grep=commit" "$nop"
+  _expect "T42b no perl: a non-commit that mentions cd and 'commit' -> silent allow (no WARN, no row)" \
+    "d=$(_decision "$OUT") err=${ERR:0:100} rows=$(_gate_rows)" \
+    bash -c '[[ "$1" == allow && "$2" != *WARN* && -z "$3" ]]' _ "$(_decision "$OUT")" "$ERR" "$(_gate_rows)"
+  rm -rf "$repo"
+  _seed_bare
+  _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
+  for c in "env --chdir=$WT git commit -m x" "bash -c 'cd $WT && git commit -m x'" "git -c core.worktree=$WT commit -m x"; do
+    _run_cmd "$BARE" "$c" "$nop"
+    _expect_warn_allow "T42c no perl: target-moving form [${c%% *}...] -> WARN + allow"
+  done
+  rm -rf "$BARE"
+}
+
+# perl is present but the lexer cannot parse the text (an unterminated quote): the same WARN + allow.
+t_t43_lexer_failure_with_perl() {
+  local a b
+  a=$(_seed_repo); b=$(_seed_repo)
+  _stage "$b" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$a" "cd $b && git commit -m 'unterminated"
+  _expect_warn_allow "T43 lexer cannot parse the command -> WARN + allow"
+  _expect "T43b ... and the row names the lexer as the cause" "rows=$(_gate_rows)" \
+    bash -c '[[ "$1" == *"bypass|target undeterminable: lexer unavailable"* ]]' _ "$(_gate_rows)"
+  rm -rf "$a" "$b"
+}
+
+t_t44_cwd_equals_target_is_one_root() {
+  local a; a=$(_seed_repo); a=$(_phys "$a")
+  _stage "$a" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$a" "cd $a && git commit -m x"
+  _expect "T44 target == cwd repo is ONE root: one finding, no [prefix]" "r=$(_reason "$OUT" | head -c 140)" \
+    bash -c '[[ "$1" == deny && "$2" == *"found 1 raw"* && "$2" != *"["*"]"* ]]' _ "$(_decision "$OUT")" "$(_reason "$OUT")"
+  rm -rf "$a"
+}
+
+t_t45_unreadable_target_repo() {
+  local a b; a=$(_seed_repo); b=$(_seed_repo)
+  printf '[core\n bad' >> "$b/.git/config"
+  _run_cmd "$a" "cd $b && git commit -m x"
+  _expect_warn_allow "T45 a target repository git cannot read -> WARN + allow"
+  rm -rf "$a" "$b"
+}
+
+t_t46_same_basename_roots_are_told_apart() {
+  _dup_basename_repos
+  _stage "$DUPB" "$BANNER" "$OFFBRAND_TSX"
+  _stage "$DUPA" "$BANNER" "$OFFBRAND_TSX"
+  _run_cmd "$DUPA" "cd $DUPB && git commit -m x"
+  _expect "T46 two roots both named 'app': the finding prefixes carry the full paths" "r=$(_reason "$OUT" | head -c 200)" \
+    bash -c '[[ "$1" == deny && "$2" == *"[$3] "* && "$2" == *"[$4] "* ]]' _ "$(_decision "$OUT")" "$(_reason "$OUT")" "$DUPA" "$DUPB"
+  rm -rf "$SUITE_TMP/dupx" "$SUITE_TMP/dupy"
+}
+
+# U+2028 / U+0085 survive a [[:cntrl:]] strip in a non-UTF-8 locale; the WARN carries the target text.
+t_t47_warn_text_is_locale_proof() {
+  local repo sep nel; repo=$(_seed_repo)
+  sep=$(printf '\342\200\250'); nel=$(printf '\302\205')
+  RUN_ENV="LC_ALL=C" _run_cmd "$repo" "cd /x${sep}y${nel}z/\$HOME && git commit -m x"
+  _expect "T47 the WARN holds no U+2028 / U+0085 bytes under LC_ALL=C" "err=$(printf '%s' "$ERR" | od -c | head -3)" \
+    bash -c '[[ "$1" == *WARN* && "$1" != *"$2"* && "$1" != *"$3"* ]]' _ "$ERR" "$sep" "$nel"
+  rm -rf "$repo"
+}
+
+# The harness's own deciders: a suite that cannot fail proves nothing. Drive each once with an input
+# that MUST be rejected, then unwind the counters so the floor below stays exact.
+_selftest_instrument() {
+  local p0=$pass f0=$fail ok=1 saved_out="${OUT:-}"
+  _report "selftest-pass" ok >/dev/null
+  _report "selftest-fail" fail "expected (instrument self-test)" 2>/dev/null
+  [[ "$pass" -eq $((p0 + 1)) && "$fail" -eq $((f0 + 1)) ]] || ok=0
+  pass=$p0; fail=$f0
+  OUT='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+  _is_deny && ok=0
+  OUT='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}'
+  _is_allow && ok=0
+  _expect "selftest-expect" "expected (instrument self-test)" false 2>/dev/null
+  [[ "$fail" -eq $((f0 + 1)) ]] || ok=0
+  pass=$p0; fail=$f0; OUT="$saved_out"
+  [[ "$ok" -eq 1 ]] || { printf 'FATAL: instrument self-test failed - the suite cannot report a failure\n' >&2; exit 1; }
+}
+
+t_t38_target_config_cannot_run_code
+t_t39_palette_symmetric
+t_t40_inherited_git_dir_does_not_redirect_the_scan
+t_t41_diff_base_comes_from_the_lexer
+t_t42_no_perl_fallback
+t_t43_lexer_failure_with_perl
+t_t44_cwd_equals_target_is_one_root
+t_t45_unreadable_target_repo
+t_t46_same_basename_roots_are_told_apart
+t_t47_warn_text_is_locale_proof
+_selftest_instrument
+
+# Assertion floor: not equality (every added assertion would then be a spurious failure); reported with
+# printf + exit, never through the helpers it backstops.
+MIN_ASSERTIONS=88
+if [[ $((pass + fail)) -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FATAL: only %s assertions ran, floor is %s - the suite is not asserting\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

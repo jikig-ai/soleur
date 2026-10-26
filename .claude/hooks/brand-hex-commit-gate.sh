@@ -20,6 +20,9 @@
 # literally (a variable, glob, `~`, GIT_DIR, --git-dir) warns on stderr and ALLOWS, never denies (#10793).
 # Known limits: a same-command `git add X && git commit` is judged against the pre-command index, and
 # `git commit <pathspec>` / `-o` / `-i` keep the plain diff base; the would-be-index lib is a follow-up (ADR-301).
+# One diff base serves the whole command, so `git -C A commit -a && git commit` is judged as one. Without perl
+# the lexer cannot run: a plain commit still takes the cwd path, one whose text moves the target warns and
+# allows, and a loose-only `git -x commit` form is allowed unscanned.
 #
 # Decision mechanism: this hook emits the repo-standard PreToolUse JSON
 # `{permissionDecision: deny}` with exit 0 (NOT a bare `exit 2`). Every sibling
@@ -143,16 +146,25 @@ fi
 # Warn on stderr, record a bypass row, allow. Never a deny or an ask.
 warn_allow_undeterminable() {
   local kind="$1" cause="$2"
-  cause="${cause//[[:cntrl:]]/ }"; cause="${cause:0:200}"
-  echo "[brand-hex-commit-gate] WARN: cannot determine which repository this git commit targets (${cause}) - brand-hex scan skipped." >&2
+  # LC_ALL=C: [[:cntrl:]] misses U+2028 / U+0085 in a non-UTF-8 locale; tr -c keeps printable ASCII only.
+  cause="$(printf '%s' "${cause:0:200}" | LC_ALL=C tr -c '[:print:]' ' ')"
+  echo "[brand-hex-commit-gate] WARN: cannot determine which repository this git commit targets (${cause}) - brand-hex scan skipped. Name the repository as a literal absolute path (git -C /abs commit, or cd /abs && git commit) to have it scanned." >&2
   emit brand-hex-commit-gate bypass "target undeterminable: ${kind}"
   allow
 }
 
-# A command whose text moves the target (a cd, a -C, a GIT_* variable) cannot be trusted to the
-# cwd repository when the lexer is unavailable. Over-inclusive on purpose: it only decides between
-# "warn + allow" and "scan the cwd repository".
-moving_re='(^|[[:space:];&|(])(cd|pushd)[[:space:]]|[[:space:]]-C|--git-dir|--work-tree|GIT_'
+# A command whose text moves the target cannot be trusted to the cwd repository when the lexer is
+# unavailable. It only decides between "warn + allow" and "scan the cwd repository", so it errs toward
+# moving, but narrowly: `cd` / `pushd` only at command position (a message saying "fix cd handling" is
+# not one), `-C` only as a `git` option (never `git commit -C <rev>`), and only the GIT_* variables that
+# relocate the repository (never GIT_AUTHOR_DATE). Mirrors what lib/commit-target-roots.sh refuses.
+moving_re='(^|[;&|({`"'"'"'])[[:space:]]*(builtin[[:space:]]+)?\\?(cd|pushd)([[:space:]]|$)'
+moving_re+='|git[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*-C[[:space:]]'
+moving_re+='|--git-dir|--work-tree|--chdir|[[:space:]]-D[[:space:]]|core\.(worktree|bare)|--config-env'
+moving_re+='|GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CONFIG)'
+moving_re+='|(chroot|nsenter|unshare)[[:space:]]'
+# Lexer unavailable: does a loose-only text read as a git commit command at all?
+loose_commit_re='git[^;&|]*[[:space:]]commit([[:space:]]|$)'
 
 roots=()
 add_root() {
@@ -187,6 +199,8 @@ else
   # Lexer or lib unavailable. A plain commit still takes the cwd path, so a host without perl does
   # not go silent on every commit; one that moves its target cannot be resolved.
   if [[ "$command" =~ $moving_re ]]; then
+    # A loose-only text that does not read as a commit (git log --grep=commit) is not one: no WARN, no row.
+    if [ "$strict_match" -eq 0 ] && ! [[ "$command" =~ $loose_commit_re ]]; then allow; fi
     if [ "$ctr_ok" -eq 1 ]; then
       warn_allow_undeterminable "lexer unavailable" "${CTR_LEX_WHY:-the command lexer could not run}"
     else
@@ -209,10 +223,14 @@ fi
 # base must be the working tree (vs HEAD) rather than the index. Detect a
 # combined short flag containing `a` (e.g. -a, -am, -ma) or `--all`. `--amend`
 # does not match (it starts with `--` so the `-[A-Za-z]*a` short-flag form
-# cannot apply, and it is not `--all`). A strict match keeps this textual test
-# unchanged; a `git -C W commit` has no `git commit` text to cut at, so it takes
-# the lexer's own -a/-p/--all fact instead.
-if [ "$strict_match" -eq 1 ]; then
+# cannot apply, and it is not `--all`). With the lexer this is its own fact (the
+# first branch); the textual test below is what a perl-less host and a strict
+# match the lexer saw no commit record for keep.
+if [ "$lexed" -eq 1 ] && [ "$CTR_COMMIT_SEEN" -eq 1 ]; then
+  # The lexer's own -a / -p / --all fact: immune to flag-like text inside a message, to a quoted
+  # `git commit` that the textual cut below would land on, and to a second plain commit later in the line.
+  if [ "${CTR_COMMIT_ALL:-0}" -eq 1 ]; then NAME_REF="HEAD"; else NAME_REF="--cached"; fi
+elif [ "$strict_match" -eq 1 ]; then
   commit_args="${command#*git commit}"
   # Strip quoted argument values (e.g. -m '... -a ...') first so flag-like text inside
   # the commit message cannot flip the diff base and cause a false deny.
@@ -222,8 +240,6 @@ if [ "$strict_match" -eq 1 ]; then
   else
     NAME_REF="--cached"
   fi
-elif [ "${CTR_COMMIT_ALL:-0}" -eq 1 ]; then
-  NAME_REF="HEAD"
 else
   NAME_REF="--cached"
 fi
@@ -331,7 +347,10 @@ scan_root() {
   cd "$root" 2>/dev/null || return 0
   PALETTE=(); PALETTE_NAME=(); palette_built=0
   # With more than one root the finding names which repository it came from (basename only).
-  if [ "${#roots[@]}" -gt 1 ]; then pfx="[$(basename "$root")] "; fi
+  # A bare basename is ambiguous when two roots share one (two checkouts both named app): then the path.
+  if [ "${#roots[@]}" -gt 1 ]; then
+    if [ "$dup_base" -eq 1 ]; then pfx="[$root] "; else pfx="[$(basename "$root")] "; fi
+  fi
   # Gather the files about to be committed (NUL-delimited; bash-native read, no
   # `grep -z` — host grep is ugrep where -z means --decompress).
   mapfile -d '' -t changed_files < <(git diff "$NAME_REF" --name-only -z 2>/dev/null)
@@ -387,7 +406,7 @@ scan_root() {
           fi
         done < <(printf '%s' "$seg" | grep -oE '#[0-9a-fA-F]{3,8}')
       done <<< "$segs"
-    done < <(git diff "$NAME_REF" -U0 --no-color --no-ext-diff -- "$f" 2>/dev/null | awk '
+    done < <(git diff "$NAME_REF" -U0 --no-color --no-ext-diff --no-textconv -- "$f" 2>/dev/null | awk '
       /^@@/      { if (match($0, /\+[0-9]+/)) { ln = substr($0, RSTART+1, RLENGTH-1) + 0 } ; next }
       /^\+\+\+/  { next }
       /^\+/      { print ln "\t" substr($0, 2); ln++ }
@@ -396,6 +415,17 @@ scan_root() {
 
   return 0
 }
+
+# The scan now reaches repositories the command text names, so their own config must not run code in
+# this hook: no textconv driver (--no-textconv above) and no fsmonitor hook (command-scope config wins).
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false
+
+dup_base=0
+for root in "${roots[@]}"; do
+  for other in "${roots[@]}"; do
+    if [ "$root" != "$other" ] && [ "$(basename "$root")" = "$(basename "$other")" ]; then dup_base=1; fi
+  done
+done
 
 for root in "${roots[@]}"; do
   scan_root "$root"

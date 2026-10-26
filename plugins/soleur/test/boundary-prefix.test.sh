@@ -208,7 +208,7 @@ echo "-- consumption census (derived site set, not a member list) --"
 
 # Justified exemptions — file:line with a reason. Each entry must still exist on
 # disk AND the exemption is positional (a moved line re-enters the census).
-#   brand-hex-commit-gate.sh:127, git-commit-secret-scan.sh:254,
+#   brand-hex-commit-gate.sh:130, git-commit-secret-scan.sh:254,
 #   guardrails.sh:231 — bare-[[:space:]] in the boundary alternation already
 #     matches `rtk git …` / `rtk rm …` via the space.
 #   guardrails.sh:705 — [^A-Za-z0-9_-] word-boundary class, space before `gh`
@@ -235,7 +235,7 @@ echo "-- consumption census (derived site set, not a member list) --"
 #   delegation-verify.test.sh:1298 — a mutation-kill row: the mutant replacement text for CMDPOS_RE
 #     and the `gh workflow run` command it is run against, both test data not a gate pattern.
 EXEMPTIONS=(
-  ".claude/hooks/brand-hex-commit-gate.sh:127"
+  ".claude/hooks/brand-hex-commit-gate.sh:130"
   ".claude/hooks/git-commit-secret-scan.sh:254"
   ".claude/hooks/guardrails.sh:231"
   ".claude/hooks/guardrails.sh:705"
