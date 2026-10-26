@@ -38,3 +38,15 @@ AC9 verified: grep -c 'bash -c' inngest-redis.service = 0; rendered server unit 
 Notable: #7286 lockstep selector widened ExecStart->Exec(Start|StartPre|StartPost) (doppler call moved to ExecStartPre — same hazard class). Scanner's @@-fragment resolution is quote-aware (single-quoted full scan; double-quoted only backslash-literal \$) — avoids the SDK_URL="${SDK_URL:-...}" render-time-default false positive. INNGEST_REDIS_ACL_FILE is a test-only override seam (--only-secrets injects only the password; nothing writes it to the env file, and a stray ambient value is confined by ReadWritePaths=/mnt/data/redis).
 
 Commits: 9cfa25769b (tests), d211a1488b (source), b9e8a10aa7 (docs). Pushed to the PR head (b9e8a10aa7).
+
+## Review Phase
+
+Status: COMPLETE — soleur:review, sequential-fallback (no nested-agent tool in this harness; 12 seat-passes run inline by the lead).
+
+- Class: code | Tier: aggregate pattern (plan frontmatter) | Design-risk: yes (design pass: code-simplicity + architecture-strategist ran first, deduped from panel)
+- Seats (12/12, sequential inline): code-simplicity, architecture-strategist, git-history, pattern-recognition, security-sentinel, performance-oracle, data-integrity, agent-native, code-quality, user-impact, structural-enumeration, test-design; deterministic: shellcheck rc=0
+- Findings: 4 (0 P1 / 3 P2 / 1 P3), all pr-introduced. Fixed inline: aclfile `>`→`#<sha256>` spelling (c93e281846, P2 — cleartext no longer at rest); KB doc nits (7c81057b20, P3). Filed meta/machinery: #11171 (inner-c stage grammar window), #11172 (acl default-path unpinned wire).
+- Suites re-verified post-fix: inngest 585/585, doppler-injection-bound 71/71, ci-deploy 735/735, carrier-vocab 52/52, workflow-guard 13/13, config-refresh 163/163; loopback LUKS suite environmentally unavailable (needs root+losetup).
+- Trailer: f0b013fc9d (`Reviewed-Coverage: sequential-fallback 12/12`); Review-Evidence comment posted on PR #11159. Branch NOT pushed per parent constraint — push + ship remain for the orchestrator.
+
+Remaining: push branch, then soleur:compound -> soleur:ship.
