@@ -168,11 +168,32 @@ What a streak means when you read the weekly marker:
   counts this red check as a failure.
 - **`edit-target-too-large`**: the target exceeds 120,000 bytes. It clears as the largest skills are
   shortened (#10551).
-- **`skill-conflict-guard`** every week: any open PR that mentions `plugins/soleur/skills` blocks a
-  skill-targeting cluster, and the guard posts the proposed diff as a comment on that PR. `AGENTS.rules.md`
-  clusters are unaffected. This guard had never run in production before this change. The comment lands
-  on an unrelated open PR and no PR is opened, so the ledger never sees the cluster and the same cluster
-  can re-comment weekly while that PR stays open.
+- **`skill-conflict-guard`**: an open PR changes the SAME target file as the skill-targeting cluster
+  (matched exactly against the PR's changed `filename` or `previous_filename`; a PR that merely mentions
+  `plugins/soleur/skills` in its title or body no longer matches, and Dependabot PRs are skipped). No
+  comment is posted anywhere. The conflicting PR number appears only in the Better Stack warn line
+  `skill-conflict-guard-refused` (fields `fn`, `hash`, `pr`, `target`):
+  `scripts/betterstack-query.sh --grep skill-conflict-guard-refused`. `AGENTS.rules.md` clusters are
+  unaffected. The App's own earlier open draft promote PR on the same SKILL.md also triggers it, by
+  design (no two competing drafts on one file); the cluster re-proposes after that draft merges or
+  closes. Both skill clusters in a run share one snapshot of the open PRs, so a PR opened after the scan
+  and before the commit is not seen; the consequence is a merge conflict a reviewer resolves on the
+  human-gated draft PR.
+- **`skill-conflict-guard-unverifiable`**: the guard hit a scan bound with no match, so it refuses
+  rather than report "no conflict". The bounds: 300 or more open PRs (`bound=prs`), a PR with
+  1000 or more changed files (`bound=files`), or more than 150 file-list requests in one run
+  (`bound=requests`). While such a PR or PR count exists, every skill cluster is unverifiable until it
+  closes (fail closed by design; any contributor, including a fork, can cause it). `AGENTS.rules.md`
+  clusters are unaffected. Signals: the warn line `skill-conflict-guard-unverifiable` (fields `fn`,
+  `hash`, `bound`) in Better Stack, and a Sentry event (op `skill-conflict-guard-unverifiable`, tag
+  `bound`). A failed GitHub request is different: it fails the scan step, Inngest retries, and no PR
+  opens (the run errors).
+- **`edit-invalid` with Sentry `cause=too-long`**: a model-written line exceeded the per-line cap. The cap
+  is 600 characters for `AGENTS.rules.md` (pinned by a test to `PER_RULE_CAP` in
+  `scripts/lint-agents-rule-budget.py`, so the validator refuses exactly what the corpus lint would) and
+  1000 for `SKILL.md` (no lint governs skill lines; revisit only if refusal rows show 1000 being hit).
+  The prompt states a soft target of 500 characters and the hard cap. There is no retry: a too-long line
+  refuses the whole cluster.
 - **`edit-derive-failed` or `diff-underivable-apply`**: a SERVER defect (a derived diff is additive by
   construction). Both go to Sentry; the follow-through probe exits 1.
 

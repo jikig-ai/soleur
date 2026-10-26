@@ -88,7 +88,7 @@ Readers whose root is above `learnings/` were classified by reading each on 2026
   - A zero-hit ledger read is accepted as an empty ledger (the live search returns 0 today). Search-index lag can briefly return 0 after a PR opens; the consequence is at most one duplicate DRAFT PR, bounded by the week cap and human review.
   - Slot starvation: the model's clusters are sliced to the week-cap `remaining` (at most 2) before suppression, and the model is not told which hashes are suppressed, so a repeatedly proposed rejected or merged cluster, or a same-evidence duplicate refused `cluster-duplicate`, can occupy the slots and end a week `no-qualifying-clusters` with `ledger_suppressed >= 1`. The slot top-up was cut by ruling.
   - Subset evasion: the model may cite any subset of at least 5 from the open pages' evidence union, so exact-hash suppression can be evaded by citing a different subset (tracked in #10977).
-  - The skill-conflict guard posts a cluster's diff as a comment on an unrelated open PR and returns `skill-conflict-guard`; no PR opens, so the ledger never sees it and the same cluster can re-comment weekly while that PR stays open.
+  - The skill-conflict guard no longer posts a comment (removed 2026-10-26, #10552). It now checks whether an open PR changes the same target file, returns `skill-conflict-guard` (or `skill-conflict-guard-unverifiable` when a scan bound is reached), and no PR opens, so the ledger never sees the refusal; the cluster re-proposes weekly until the conflicting PR closes.
   - Per-key evidence attrition (archived, retired, PII, unreadable) is reported to Sentry and the pino error mirror shipped to Better Stack (op `pattern-evidence-dropped`, closed cause and count only); the marker does not carry it.
 
 ## Cost Impacts
