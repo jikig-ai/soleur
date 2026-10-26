@@ -1197,7 +1197,8 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 # `orphan-sweeps-checkin` aggregator job posts `ok` only when both sweep jobs concluded success (see the
 # rule in the comment block above that job). The 25-minute job cap puts a worst-case check-in about 30
 # minutes after the slot, inside checkin_margin_minutes = 60. max_runtime_minutes has no effect (a
-# single check-in). Created UNROUTED under the two-PR rule (cron-monitor-alerts.tf); routing is #10972.
+# single check-in). Created under the two-PR rule (#10952) and routed through sentry_alert.cron_monitor_failure
+# (cron-monitor-alerts.tf) by the second PR (#10972, 2026-10-26).
 resource "sentry_cron_monitor" "scheduled_orphan_sweeps" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
