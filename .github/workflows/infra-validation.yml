@@ -874,6 +874,12 @@ jobs:
       - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
         run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
 
+      # (#9927) The LUKS key-continuity probe paging alert: its SQL (token=fail_ present, indeterminate
+      # absent), parameters, both -target lines, a negative row that no dead-man resource ships here
+      # (ruling D12), and the mutation rows that each require this guard to red.
+      - name: Run inngest LUKS key-continuity probe alert drift guard (#9927)
+        run: bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh
+
       # (#9045) The workspaces-LUKS dead-man FIRED Logs alert: the tag, host, marker and result=fired
       # conjuncts (read against the fire command's own logger line), the paging semantics, both
       # -target lines, and the mutation rows that each require this guard to red.

@@ -1,35 +1,33 @@
 #!/usr/bin/env bash
 #
-# Drift guard for the two Better Stack Logs alerts that read the on-host LUKS key-continuity probe
+# Drift guard for the Better Stack Logs alert that reads the on-host LUKS key-continuity probe
 # (#9927 item 2; apps/web-platform/infra/betterstack-logs-alerts.tf):
 #
 #   inngest_luks_key_probe_fail  pages on a FAILED verdict   (token=fail_*)
-#   inngest_luks_key_probe_dark  self-arming dead-man        (a once-seen probe stopped producing a
-#                                                             MEASURED verdict: no ok / fail_ row)
+#
+# THE DEAD-MAN IS NOT SHIPPED HERE (CTO ruling D12). The self-arming absence alert
+# (`inngest_luks_key_probe_dark`, query_period 2592000) moves to a follow-up PR that lands only after
+# an owner-authorized create-and-delete probe proves the Better Stack API accepts that value; that
+# follow-up is a blocking prerequisite of the bundle promotion (#11266). The NEGATIVE rows below pin
+# the split: no dead-man resource, SQL local or -target line may appear in this change.
 #
 # WHAT THIS FILE IS, AND IS NOT. Text-level assertions over the Terraform SOURCE and the apply
-# workflow's -target allowlist. It pins the SQL and the parameters the CTO rulings D4/D5b/D10 fixed
+# workflow's -target allowlist. It pins the SQL and the parameters the CTO rulings D4/D5b/D12 fixed
 # (knowledge-base/project/specs/feat-one-shot-9927-key-continuity-probe/decision-challenges.md). It
 # does NOT prove the SQL's BEHAVIOUR (that is the read-only substitution run through
-# scripts/betterstack-query.sh: live marker -> 0, empty marker -> 0, shortened window -> 1, an
-# indeterminate-first stream -> 0), does NOT prove the provider accepts query_period = 2592000, and
-# does NOT prove the alerts are unpaused in Better Stack.
+# scripts/betterstack-query.sh) and does NOT prove the alert is unpaused in Better Stack.
 #
 # WHY EACH ROW EXISTS rather than "the SQL looks right":
 #   * The paging SQL carries `token=fail_` and NOT `indeterminate`: an unmeasured verdict must never
 #     page on its own (a transient low-memory skip would page a day).
-#   * The dead-man counts recency over `token=ok` / `token=fail_` rows ONLY. Counting every marker
-#     row would let a probe that emits `indeterminate` forever read as health.
-#   * The dead-man ARMS on `count(*) > 0 AND min(dt) < end - 26 h` (D10): arming on count alone lets
-#     a first `indeterminate` row fire the alert at the next hourly check.
-#   * Both SQLs anchor the marker at message position 1 (`position(...)=1`) and never use a
+#   * The paging SQL anchors the marker at message position 1 (`position(...)=1`) and never uses a
 #     `raw LIKE` prefilter: webhook payloads that QUOTE the marker (a PR body, the runbook) reach
 #     this source and would count as live probe rows.
-#   * Both filter on the `dt` COLUMN, never the `time` alias (the alias is a single end-of-window
+#   * It filters on the `dt` COLUMN, never the `time` alias (the alias is a single end-of-window
 #     value; a filter on it would test the wrong thing).
 #   * One whole-window aggregate, no GROUP BY: a per-bucket form reads "no bucket" as "no row".
-#   * Each alert resource has BOTH of its -target= lines in the apply allowlist (#5566: an
-#     untargeted resource is never applied and never exists).
+#   * The alert resource has BOTH of its -target= lines in the apply allowlist (#5566: an
+#     untargeted resource is never applied and never exists), and exactly those two.
 #
 # Mutation rows live at the bottom. Each one COPIES a source file into a scratch dir, mutates the
 # COPY, and re-runs this guard against the copy through the KEYPROBE_GUARD_{TF,WF} overrides. No
@@ -75,7 +73,6 @@ done
 
 MARKER='SOLEUR_INNGEST_LUKS_KEY_PROBE'
 FAIL_NAME='inngest_luks_key_probe_fail'
-DARK_NAME='inngest_luks_key_probe_dark'
 
 # The SQL heredoc local, extracted from its FIRST UNCOMMENTED opening line to the closing `  SQL`.
 sql_local() {  # sql_local <local-name>  -> whitespace-stripped SQL on stdout
@@ -94,26 +91,18 @@ param() {  # param <block> <key> <value-ERE>
 }
 
 FAIL_SQL="$(sql_local inngest_luks_key_probe_fail_sql)"
-DARK_SQL="$(sql_local inngest_luks_key_probe_dark_sql)"
 
 FAIL_CANON="SELECTtoDateTime({{end_time}})AStime,count(*)ASvalueFROM{{source}}WHEREdtBETWEEN{{start_time}}AND{{end_time}}ANDposition(JSONExtractString(raw,'message'),'${MARKER}')=1ANDposition(JSONExtractString(raw,'message'),'token=fail_')>0"
-DARK_CANON="SELECTtoDateTime({{end_time}})AStime,if(count(*)>0ANDmin(dt)<toDateTime({{end_time}})-INTERVAL26HOURANDcountIf(dt>=toDateTime({{end_time}})-INTERVAL26HOURAND(position(JSONExtractString(raw,'message'),'token=ok')>0ORposition(JSONExtractString(raw,'message'),'token=fail_')>0))=0,1,0)ASvalueFROM{{source}}WHEREdtBETWEEN{{start_time}}AND{{end_time}}ANDposition(JSONExtractString(raw,'message'),'${MARKER}')=1"
 ANCHOR="position(JSONExtractString(raw,'message'),'${MARKER}')=1"
 
 # ── presence rows: the SQL locals ─────────────────────────────────────────────────────────────
 [ -n "$FAIL_SQL" ] \
   && ok "the paging predicate local is a heredoc this guard can read" \
   || no "inngest_luks_key_probe_fail_sql: heredoc not found — every paging-SQL row below would be vacuous"
-[ -n "$DARK_SQL" ] \
-  && ok "the dead-man predicate local is a heredoc this guard can read" \
-  || no "inngest_luks_key_probe_dark_sql: heredoc not found — every dead-man-SQL row below would be vacuous"
 
 [ "$FAIL_SQL" = "$FAIL_CANON" ] \
   && ok "paging SQL is exactly the ruled form (whitespace-insensitive)" \
   || no "paging SQL differs from the ruled form: $FAIL_SQL"
-[ "$DARK_SQL" = "$DARK_CANON" ] \
-  && ok "dead-man SQL is exactly the ruled form incl. the D10 arming amendment (whitespace-insensitive)" \
-  || no "dead-man SQL differs from the ruled form: $DARK_SQL"
 
 # ── presence rows: paging SQL, named properties ───────────────────────────────────────────────
 grep -qF "'token=fail_')>0" <<< "$FAIL_SQL" \
@@ -132,55 +121,17 @@ grep -qE '(^|[^A-Za-z_])time(BETWEEN|>|<|=)' <<< "$FAIL_SQL" \
   && no "paging SQL filters on the time alias" \
   || ok "paging SQL filters on the dt column, not the time alias"
 
-# ── presence rows: dead-man SQL, named properties ─────────────────────────────────────────────
-[ "$(grep -o "SOLEUR_[A-Z_]*" <<< "$DARK_SQL" | sort -u | tr '\n' ' ')" = "$MARKER " ] \
-  && [ "$(grep -o "SOLEUR_[A-Z_]*" <<< "$DARK_SQL" | wc -l)" -eq 1 ] \
-  && ok "dead-man SQL carries exactly ONE marker literal (no second spelling)" \
-  || no "dead-man SQL does not carry exactly one marker literal $MARKER"
-grep -qF "$ANCHOR" <<< "$DARK_SQL" \
-  && ok "dead-man SQL anchors the marker at message position 1" \
-  || no "dead-man SQL does not anchor the marker with position(...)=1"
-grep -qiE 'LIKE' <<< "$DARK_SQL" \
-  && no "dead-man SQL has a LIKE — a webhook payload quoting the marker would read as a live probe row" \
-  || ok "dead-man SQL has no raw LIKE prefilter"
-grep -qiF 'GROUPBY' <<< "$DARK_SQL" \
-  && no "dead-man SQL has a GROUP BY — it must be ONE whole-window aggregate" \
-  || ok "dead-man SQL has no GROUP BY (one whole-window aggregate)"
-[ "$(grep -o 'SELECT' <<< "$DARK_SQL" | wc -l)" -eq 1 ] && [ "$(grep -o 'FROM' <<< "$DARK_SQL" | wc -l)" -eq 1 ] \
-  && ok "dead-man SQL is a single SELECT over a single FROM (no subquery)" \
-  || no "dead-man SQL is not a single SELECT over a single FROM"
-grep -qE '(^|[^A-Za-z_])time(BETWEEN|>|<|=)' <<< "$DARK_SQL" \
-  && no "dead-man SQL filters on the time alias" \
-  || ok "dead-man SQL filters on the dt column, not the time alias"
-grep -qF 'WHEREdtBETWEEN{{start_time}}AND{{end_time}}' <<< "$DARK_SQL" \
-  && ok "dead-man SQL windows on dt BETWEEN {{start_time}} AND {{end_time}}" \
-  || no "dead-man SQL does not window on dt"
-[ "$(grep -o "'token=[a-z_]*'" <<< "$DARK_SQL" | sort | tr '\n' ' ')" = "'token=fail_' 'token=ok' " ] \
-  && ok "dead-man recency terms are exactly token=ok and token=fail_ (measured verdicts only)" \
-  || no "dead-man recency terms are not exactly {token=ok, token=fail_}"
-grep -qiF 'indeterminate' <<< "$DARK_SQL" \
-  && no "dead-man SQL names indeterminate — an indeterminate-only stream would read as health" \
-  || ok "dead-man SQL does NOT name indeterminate"
-grep -qF 'if(count(*)>0ANDmin(dt)<toDateTime({{end_time}})-INTERVAL26HOURAND' <<< "$DARK_SQL" \
-  && ok "dead-man ARMS on count(*)>0 AND min(dt) < end-26h (D10: a first indeterminate row cannot fire it)" \
-  || no "dead-man arming is not 'count(*)>0 AND min(dt) < end - 26 HOUR' (D10)"
-[ "$(grep -o 'INTERVAL26HOUR' <<< "$DARK_SQL" | wc -l)" -eq 2 ] && ! grep -qE 'INTERVAL[0-9]+(DAY|MINUTE|SECOND|WEEK)' <<< "$DARK_SQL" \
-  && ok "dead-man uses the 26 h recency in both the arming and the recency term, no other interval" \
-  || no "dead-man recency/arming intervals are not exactly two INTERVAL 26 HOUR"
-
 # ── presence rows: resources and parameters ───────────────────────────────────────────────────
 FAIL_EX="$(res_block logtail_exploration "$FAIL_NAME")"
 FAIL_AL="$(res_block logtail_exploration_alert "$FAIL_NAME")"
-DARK_EX="$(res_block logtail_exploration "$DARK_NAME")"
-DARK_AL="$(res_block logtail_exploration_alert "$DARK_NAME")"
 
-if [ -n "$FAIL_EX" ] && [ -n "$FAIL_AL" ] && [ -n "$DARK_EX" ] && [ -n "$DARK_AL" ]; then
-  ok "all four resources are declared (two explorations, two alerts)"
+if [ -n "$FAIL_EX" ] && [ -n "$FAIL_AL" ]; then
+  ok "both resources are declared (one exploration, one alert)"
 else
-  no "a resource block is missing (fail_ex=${#FAIL_EX} fail_al=${#FAIL_AL} dark_ex=${#DARK_EX} dark_al=${#DARK_AL}) — every parameter row below would be vacuous"
+  no "a resource block is missing (fail_ex=${#FAIL_EX} fail_al=${#FAIL_AL}) — every parameter row below would be vacuous"
 fi
 
-for pair in "fail:$FAIL_EX:$FAIL_AL" "dark:$DARK_EX:$DARK_AL"; do
+for pair in "fail:$FAIL_EX:$FAIL_AL"; do
   _k="${pair%%:*}"; _rest="${pair#*:}"; _ex="${_rest%%:*}"
   _al="${_rest#*:}"
   _nm="inngest_luks_key_probe_$_k"
@@ -221,9 +172,6 @@ done
 param "$FAIL_AL" check_period 300 && param "$FAIL_AL" query_period 10800 && param "$FAIL_AL" recovery_period 3600 \
   && ok "paging alert window: check 300 s, query 10800 s (3 h), recovery 3600 s" \
   || no "paging alert windows are not check 300 / query 10800 / recovery 3600"
-param "$DARK_AL" check_period 3600 && param "$DARK_AL" query_period 2592000 && param "$DARK_AL" recovery_period 7200 \
-  && ok "dead-man window: check 3600 s, query 2592000 s (30 d), recovery 7200 s" \
-  || no "dead-man windows are not check 3600 / query 2592000 / recovery 7200"
 
 grep -qE '^[[:space:]]*inngest_luks_key_probe_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894\.md#key-continuity-probe-9927-item-2"[[:space:]]*$' "$TF" \
   && ok "the runbook local is the clickable URL of the 'Key-continuity probe (#9927 item 2)' subsection" \
@@ -231,21 +179,37 @@ grep -qE '^[[:space:]]*inngest_luks_key_probe_runbook_url[[:space:]]*=[[:space:]
 
 # ── presence rows: -target parity with the apply workflow ─────────────────────────────────────
 _miss=""
-for nm in "$FAIL_NAME" "$DARK_NAME"; do
+for nm in "$FAIL_NAME"; do
   for ty in logtail_exploration logtail_exploration_alert; do
     grep -qE "^[[:space:]]*-target=$ty\\.$nm \\\\\$" "$WF" || _miss="$_miss $ty.$nm"
   done
 done
 [ -z "$_miss" ] \
-  && ok "all four resources have an anchored -target= line in the apply workflow (#5566)" \
+  && ok "both resources have an anchored -target= line in the apply workflow (#5566)" \
   || no "missing -target= line(s):$_miss — the resource would never be applied"
 
-# Census over the .tf: every key-probe resource DECLARED has both -target lines, and the declared
-# set is exactly the two expected pairs (a third silently added resource is a finding).
+# Census over the .tf: the declared key-probe set is exactly the ONE paging pair (a second silently
+# added resource, the dead-man included, is a finding).
 _declared="$(sed -n 's/^resource "logtail_exploration\(_alert\)\{0,1\}" "\(inngest_luks_key_probe_[A-Za-z0-9_]*\)" {$/\2/p' "$TF" | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
-[ "$_declared" = " 2 inngest_luks_key_probe_dark; 2 inngest_luks_key_probe_fail;" ] \
-  && ok "the .tf declares exactly the two key-probe pairs (each name once as an exploration and once as an alert)" \
-  || no "declared key-probe resources are not exactly the two pairs: $_declared"
+[ "$_declared" = " 2 inngest_luks_key_probe_fail;" ] \
+  && ok "the .tf declares exactly the one key-probe pair (the name once as an exploration and once as an alert)" \
+  || no "declared key-probe resources are not exactly the one paging pair: $_declared"
+
+# ── NEGATIVE rows (D12): the dead-man is a follow-up PR, so nothing of it may exist here ─────────
+# Whole-file greps on purpose (comments and strings included): a half-landed dead-man in any form
+# is the regression this split must never silently suffer.
+grep -qE 'logtail_exploration(_alert)?"[[:space:]]+"inngest_luks_key_probe_dark"' "$TF" \
+  && no "the .tf declares an inngest_luks_key_probe_dark resource — the dead-man is NOT shipped in this change (D12)" \
+  || ok "the .tf declares NO inngest_luks_key_probe_dark resource (dead-man deferred, D12)"
+grep -qE 'inngest_luks_key_probe_dark' "$TF" \
+  && no "the .tf names inngest_luks_key_probe_dark (SQL local or reference) — the dead-man is NOT shipped in this change (D12)" \
+  || ok "the .tf carries NO inngest_luks_key_probe_dark SQL local or reference (D12)"
+grep -qE 'inngest_luks_key_probe_dark' "$WF" \
+  && no "the apply workflow carries an inngest_luks_key_probe_dark -target line — the dead-man is NOT shipped in this change (D12)" \
+  || ok "the apply workflow carries NO inngest_luks_key_probe_dark -target line (D12)"
+[ "$(grep -cE '^[[:space:]]*-target=logtail_exploration(_alert)?\.inngest_luks_key_probe_[A-Za-z0-9_]* \\$' "$WF")" -eq 2 ] \
+  && ok "the apply workflow carries exactly the 2 paging -target lines for the key probe" \
+  || no "the apply workflow does not carry exactly 2 key-probe -target lines"
 
 # ── Mutation rows: each must make a row above RED ─────────────────────────────────────────────
 SELF="${BASH_SOURCE[0]}"
@@ -274,10 +238,7 @@ def edit(s, anchor, old, new, end="\n}\n"):
     assert region.count(old) == 1, "anchor drift: %r occurs %d times" % (old, region.count(old))
     return s[:i] + region.replace(old, new) + s[j:]
 FAILSQL = "inngest_luks_key_probe_fail_sql = <<-SQL"
-DARKSQL = "inngest_luks_key_probe_dark_sql = <<-SQL"
 FAILAL = "resource \"logtail_exploration_alert\" \"inngest_luks_key_probe_fail\" {"
-DARKAL = "resource \"logtail_exploration_alert\" \"inngest_luks_key_probe_dark\" {"
-DARKEX = "resource \"logtail_exploration\" \"inngest_luks_key_probe_dark\" {"
 SQLEND = "\n  SQL\n"'
 
   mutate_red() {  # mutate_red <label> <TF|WF> <python-program-on-s>
@@ -323,51 +284,31 @@ PY
     's = edit(s, FAILSQL, "SOLEUR_INNGEST_LUKS_KEY_PROBE", "SOLEUR_INNGEST_LUKS_KEY_PROBX", SQLEND)'
   mutate_red "paging SQL filters on the time alias" TF \
     's = edit(s, FAILSQL, "WHERE dt BETWEEN", "WHERE time BETWEEN", SQLEND)'
-  mutate_red "dead-man recency starts counting indeterminate rows" TF \
-    's = edit(s, DARKSQL, "OR position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"token=fail_"+Q+") > 0", "OR position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"indeterminate"+Q+") > 0", SQLEND)'
-  mutate_red "dead-man recency drops the ok term (a healthy probe would read dark)" TF \
-    's = edit(s, DARKSQL, "position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"token=ok"+Q+") > 0\n                          OR ", "", SQLEND)'
-  mutate_red "dead-man arms on count(*) > 0 alone (D10: a first indeterminate row fires it)" TF \
-    's = edit(s, DARKSQL, "         AND min(dt) < toDateTime({{end_time}}) - INTERVAL 26 HOUR\n", "", SQLEND)'
-  mutate_red "dead-man loses its position-1 marker anchor" TF \
-    's = edit(s, DARKSQL, Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") = 1", Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") > 0", SQLEND)'
-  mutate_red "dead-man gains a raw LIKE prefilter (a quoting webhook row counts as a live probe)" TF \
-    's = edit(s, DARKSQL, "WHERE dt BETWEEN {{start_time}} AND {{end_time}}", "WHERE dt BETWEEN {{start_time}} AND {{end_time}}\n      AND raw LIKE "+Q+"%SOLEUR_INNGEST_LUKS_KEY_PROBE%"+Q, SQLEND)'
-  mutate_red "dead-man gains a second marker spelling" TF \
-    's = edit(s, DARKSQL, "AND position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") = 1", "AND (position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE"+Q+") = 1 OR position(JSONExtractString(raw, "+Q+"message"+Q+"), "+Q+"SOLEUR_INNGEST_LUKS_KEY_PROBE_V2"+Q+") = 1)", SQLEND)'
-  mutate_red "dead-man becomes a bucketed query (GROUP BY)" TF \
-    's = edit(s, DARKSQL, "PROBE"+Q+") = 1", "PROBE"+Q+") = 1\n    GROUP BY time", SQLEND)'
-  mutate_red "dead-man filters on the time alias" TF \
-    's = edit(s, DARKSQL, "WHERE dt BETWEEN", "WHERE time BETWEEN", SQLEND)'
   mutate_red "paging window widens to 25 h (an incident would stay open for a day)" TF \
     's = edit(s, FAILAL, "query_period        = 10800", "query_period        = 90000")'
-  mutate_red "dead-man window shrinks to 7 d (a silent fallback the owner never approved)" TF \
-    's = edit(s, DARKAL, "query_period        = 2592000", "query_period        = 604800")'
-  mutate_red "dead-man check_period changes" TF \
-    's = edit(s, DARKAL, "check_period        = 3600", "check_period        = 300")'
-  mutate_red "dead-man operator inverts to lower_than (fires while the probe is alive)" TF \
-    's = edit(s, DARKAL, "operator            = "+chr(34)+"higher_than"+chr(34), "operator            = "+chr(34)+"lower_than"+chr(34))'
-  mutate_red "dead-man is paused" TF \
-    's = edit(s, DARKAL, "paused = false", "paused = true")'
   mutate_red "paging alert reads missing data as ok-forever (treat_as_zero dropped)" TF \
     's = edit(s, FAILAL, chr(34)+"treat_as_zero"+chr(34), chr(34)+"treat_as_null"+chr(34))'
-  mutate_red "dead-man exploration no longer reads its predicate local" TF \
-    's = edit(s, DARKEX, "local.inngest_luks_key_probe_dark_sql", "local.inngest_luks_key_probe_fail_sql")'
   mutate_red "the paging alert is dropped from the apply allowlist" WF \
     'old = "              -target=logtail_exploration_alert.inngest_luks_key_probe_fail \\\n"
 assert s.count(old) == 1
 s = s.replace(old, "")'
-  mutate_red "the dead-man exploration is dropped from the apply allowlist" WF \
-    'old = "              -target=logtail_exploration.inngest_luks_key_probe_dark \\\n"
+  mutate_red "the dead-man is smuggled back: a dark -target line joins the apply allowlist" WF \
+    'old = "              -target=logtail_exploration_alert.inngest_luks_key_probe_fail \\\n"
 assert s.count(old) == 1
-s = s.replace(old, "")'
+s = s.replace(old, old + "              -target=logtail_exploration.inngest_luks_key_probe_dark \\\n")'
+  mutate_red "the dead-man is smuggled back: a dark resource joins the .tf" TF \
+    's = s + "\nresource " + chr(34) + "logtail_exploration" + chr(34) + " " + chr(34) + "inngest_luks_key_probe_dark" + chr(34) + " {\n}\n"'
+  mutate_red "the dead-man is smuggled back: a dark SQL local joins the .tf" TF \
+    'old = "  inngest_luks_key_probe_runbook_url ="
+assert s.count(old) == 1
+s = s.replace(old, "  inngest_luks_key_probe_dark_sql = <<-SQL\n    SELECT 1\n  SQL\n" + old)'
 fi
 
 # PRESENCE_ROWS is exactly the count of presence rows an inner (MUT_SKIP) run asserts; the outer run
 # adds one row per mutation. The instrument control above is what catches a floor that drifts past
 # the presence rows (that control, not this comment, is the guard against a dead battery).
-PRESENCE_ROWS=46
-MUT_ROWS=22
+PRESENCE_ROWS=26
+MUT_ROWS=11
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))

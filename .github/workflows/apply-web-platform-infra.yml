@@ -654,8 +654,6 @@ jobs:
               -target=logtail_exploration_alert.inngest_luks_wrong_volume \
               -target=logtail_exploration.inngest_luks_key_probe_fail \
               -target=logtail_exploration_alert.inngest_luks_key_probe_fail \
-              -target=logtail_exploration.inngest_luks_key_probe_dark \
-              -target=logtail_exploration_alert.inngest_luks_key_probe_dark \
               -target=logtail_exploration.registry_store_not_luks \
               -target=logtail_exploration_alert.registry_store_not_luks \
               -target=logtail_exploration.registry_clientip_not_rfc1918 \

@@ -623,18 +623,13 @@ A daily, read-only probe on the dedicated Inngest host asks cryptsetup whether t
 | --- | --- | --- |
 | `fail_key_absent` or `fail_passphrase` | The next reboot cannot reopen the store (key absent), or the header or keyslot no longer matches the host key. | STOP. Dispatch no host replace until the cause is established: a replace re-reads Doppler and may not open the volume. Read the 12-hour drift plan for the Doppler copy. The owner follows the existing "Per-loss-mode owner and procedure" table above (Doppler secret overwritten, state lost, header corrupted). |
 | `fail_header` | The device no longer reads as a LUKS volume. | ADR-282 "No recovery". Follow "After a total loss" if the data is unreadable, and open an incident with `soleur:incident`. |
-| `indeterminate` (no page of its own) | The probe could not measure. | Read the `at=` literal from the rows (query below). A dead-man page without a fail page means the probe cannot measure (`mount`, `status`, `mem`, `shield`, `kdf`): fix the measurement; it is not health. |
+| `indeterminate` (no page of its own) | The probe could not measure. | Read the `at=` literal from the rows (query below). A probe that keeps emitting `indeterminate` and never `ok` cannot measure (`mount`, `status`, `mem`, `shield`, `kdf`): fix the measurement; it is not health, and until the dead-man alert ships nothing pages on it. |
 
 A fail page re-runs hourly while the verdict stays non-`ok`, and the alert clears within about three hours of the first `ok`.
 
-**The dead-man.** A second alert fires when the probe has been seen at least once (the oldest marker row is more than 26 hours old) and then produces no `ok` or `fail_*` row for 26 hours. It counts only measured verdicts, so an `indeterminate`-only stream fires it after 26 hours and a failing probe leaves it quiet (the paging alert owns that). It is quiet before delivery. Its accepted residuals, stated and not hidden:
+**The dead-man: planned follow-up, not yet shipped.** Only the paging alert ships with this change. A second, self-arming alert is planned in a follow-up PR: it would arm once the oldest marker row is 26 hours old, count only measured verdicts (`ok` or `fail_*`, so an `indeterminate`-only stream is not health), and need a `query_period` of 2592000. That PR lands only after an owner-authorized create-and-delete probe proves the Better Stack API accepts that value. Until the dead-man alert ships, a silent probe is covered only by the first-row verification on both channels (journald and phone-home); the dead-man PR is a blocking prerequisite of the bundle promotion (#11266). Its design residuals are recorded in the ADR-282 addendum and on that follow-up, not here as shipped behaviour.
 
-- a bundle revert, or promotion of an older bundle, fires it about 26 hours later (correct: the probe is gone);
-- a log-pipeline outage longer than 26 hours fires it;
-- it self-disarms after 30 days with no marker rows at all (its query window is 30 days); if the probe is ever dark that long, the dead-man must be converted to a count-variable form (recorded on the keeper follow-up under #9927);
-- a bundle that is never promoted keeps it quiet forever; the owner-hold tracker for delivery, not the alert, covers that.
-
-**Check the pipeline before the host.** A dead-man page far more often means the pipeline or the bundle than the volume. Diagnose with no host login, in this order (both commands are read-only; read each result by meaning, since a webhook payload that quotes the marker is not a probe row):
+**Check the pipeline before the host.** A silent probe (no `ok` row where one is due, found by the first-row verification below or, once the dead-man ships, by its page) far more often means the pipeline or the bundle than the volume. Diagnose with no host login, in this order (both commands are read-only; read each result by meaning, since a webhook payload that quotes the marker is not a probe row):
 
 ```
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 72h --grep SOLEUR_INNGEST_LUKS_KEY_PROBE --limit 20
@@ -650,7 +645,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 7
 
 What the merge does by itself (automation, no operator step):
 
-- `apply-web-platform-infra.yml` creates the alert resources.
+- `apply-web-platform-infra.yml` creates the paging alert resources (the dead-man alert is not part of this change).
 - `apply-deploy-pipeline-fix.yml` fires: `inngest-cutover-flip.sh` is a `triggers_replace` hash input of `terraform_data.deploy_pipeline_fix` and is in that workflow's `paths:`. It pushes the web-host payload (webhook plus the tunnelled SSH bridge) to the web hosts, where the script is an inert file (no flip timer on web). Expect `files_written == files_total` in the run; the ship skill's `DEPLOY_PIPELINE_FIX_TRIGGERS` gate applies; no `[skip-deploy-fix-apply]` marker is used (the web copy must stay in lockstep with the trigger lists).
 - `mint-inngest-bootstrap-tag.yml` mints a `vinngest` tag because `inngest-cutover-flip.sh` is a `cp`-staged carrier, and the bot opens a pin-bump PR that edits `cloud-init-inngest.yml`. That bump is routine: merge-apply `-target` lists exclude `hcloud_server.*`, so it shows only as standing drift (#10835, #10768) and replaces nothing. It is a separate PR from the probe's.
 
@@ -658,8 +653,9 @@ What reaches the dedicated host only after the owner acts (held; production-muta
 
 1. Pre-promotion checks (read-only, recorded on the tracker): `bash -n` and a `--fixture-seams` smoke run of the script as packed into the built bundle; the sandbox rehearsal result; a review of the member diff since the last promoted bundle (the bundle is built from the default branch, so any other member edit merged since then ships too); a pre-built, unpromoted revert bundle at the next higher version (the channel is monotonic, so a rollback is a roll-forward).
 2. Dispatch `build-inngest-config-bundle.yml` from the default branch at a version above the applied one (read it from the newest `SOLEUR_INFRA_PULL_APPLIED version=` row; if that row is absent or past retention, read the drift comparator summary), approved in the `inngest-config-signing` environment. The exact steps are in [`inngest-config-refresh.md`](./inngest-config-refresh.md) "Ship a host-script change".
-3. Promote the digest (`INNGEST_CONFIG_DIGEST` in `soleur/prd_terraform`, then the targeted apply per `inngest-config-refresh.md` step 3; #9060 automation is still open).
-4. Before ANY future host replace, promote a probe-carrying bundle: a replaced host applies the currently promoted bundle over the image-baked script, so a promoted bundle that predates the probe silently drops it.
+3. Do not promote until the dead-man alert PR (the follow-up described under "The dead-man" above) has merged and its apply is read back: it is a blocking prerequisite of this step (#11266), because without it a silent probe is covered only by the first-row verification below.
+4. Promote the digest (`INNGEST_CONFIG_DIGEST` in `soleur/prd_terraform`, then the targeted apply per `inngest-config-refresh.md` step 3; #9060 automation is still open), only after step 3.
+5. Before ANY future host replace, promote a probe-carrying bundle: a replaced host applies the currently promoted bundle over the image-baked script, so a promoted bundle that predates the probe silently drops it.
 
 **First-row verification** (read-only, no host login; also the close condition of the owner-hold tracker):
 
@@ -669,9 +665,9 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2
 
 Read by meaning: a row from the SYSLOG_IDENTIFIER `inngest-cutover-flip` channel AND a phone-home row, both `token=ok rc=0`, within about two minutes of the next applied bundle (the 60-second refresh timer, then the first 30-second tick with no stamp). A webhook payload that quotes the marker, or an `indeterminate` row, does not satisfy it. A `token=fail_*` row pages. The first `ok` row is also the delivery proof (`GUARD_REV` is deliberately not bumped).
 
-**Rollback (independent of the probe path):** a revert PR restoring the previous script, a new bundle at a higher version (pre-built per step 1), and the same promotion. The refresh engine and units are not members, so the rollback path does not run through the probe. Expected side effect: the dead-man fires about 26 hours after the measured rows stop. A script that breaks every tick would kill the only no-SSH rollback channel on the dedicated host, which is why step 1 exists.
+**Rollback (independent of the probe path):** a revert PR restoring the previous script, a new bundle at a higher version (pre-built per step 1), and the same promotion. The refresh engine and units are not members, so the rollback path does not run through the probe. Expected side effect: the measured rows stop; once the dead-man follow-up ships it fires about 26 hours later, and until then nothing alerts on the silence. A script that breaks every tick would kill the only no-SSH rollback channel on the dedicated host, which is why step 1 exists.
 
-**Residuals stated, not hidden:** if the bundle is never promoted, the dead-man stays quiet forever (the owner-hold tracker carries a due date); the dead-man self-disarms after 30 days with no rows at all; the bot pin-bump PR is merged or closed per the existing image-release runbook and its standing drift is harmless.
+**Residuals stated, not hidden:** if the bundle is never promoted, the probe stays inert (the owner-hold tracker carries a due date); until the dead-man PR ships a silent probe is covered only by the first-row verification on both channels; the bot pin-bump PR is merged or closed per the existing image-release runbook and its standing drift is harmless.
 <!-- lint-infra-ignore end -->
 
 ### Deliberate unprotect (two reviewed changes; no sanctioned erase path)

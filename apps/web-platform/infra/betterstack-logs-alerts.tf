@@ -312,23 +312,21 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   }
 }
 
-# ── #9927 item 2: the on-host LUKS key-continuity probe (two alerts) ────────────────────────────
+# ── #9927 item 2: the on-host LUKS key-continuity probe (paging alert) ──────────────────────────
 # The dedicated Inngest host runs a bounded probe (luks_key_probe_tick in inngest-cutover-flip.sh)
 # that asks cryptsetup whether the key the host holds still unlocks the LUKS2 header behind
 # /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE token=<tok> rc=<n> at=<where>`,
 # token in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
 # journald tag inngest-cutover-flip, and a curl-direct phone-home whose message BEGINS with the marker).
-# Rulings: decision-challenges.md D4 (paging), D5b and D10 (dead-man), plan
-# 2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md Phase 3. Pinned by
-# apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh.
+# Rulings: decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
+# ships in a follow-up PR once an owner-authorized create-and-delete probe proves the API accepts
+# query_period = 2592000; tracked on the owner-hold issue #11266, a blocking prerequisite of the
+# bundle promotion), plan 2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md Phase 3.
+# Pinned by apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh.
 #
-# SHARED SQL RULES (both alerts): the marker is anchored at message position 1, never a `raw LIKE`
-# prefilter (webhook payloads that quote the marker reach this source); the window filter is the
-# `dt` COLUMN, never the `time` alias; one whole-window aggregate, no GROUP BY.
-#
-# NOT LIVE-PROBED IN THIS FILE: the substitution controls (live marker -> 0, empty marker -> 0,
-# shortened window -> 1, an indeterminate-first stream -> 0) and the provider's acceptance of
-# query_period = 2592000 are run read-only by the owner of the change, not asserted by the source.
+# SQL RULES: the marker is anchored at message position 1, never a `raw LIKE` prefilter (webhook
+# payloads that quote the marker reach this source); the window filter is the `dt` COLUMN, never
+# the `time` alias; one whole-window aggregate, no GROUP BY.
 locals {
   # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
   # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
@@ -339,28 +337,6 @@ locals {
     WHERE dt BETWEEN {{start_time}} AND {{end_time}}
       AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
       AND position(JSONExtractString(raw, 'message'), 'token=fail_') > 0
-  SQL
-
-  # SELF-ARMING DEAD-MAN: value 1 only when the probe has been seen (the OLDEST marker row in the
-  # 30 d window is older than 26 h) AND no MEASURED verdict (`ok` or `fail_*`) arrived in the last
-  # 26 h. Before first delivery there is no row, count(*) = 0, value 0: quiet, no flip variable.
-  # Arming on `count(*) > 0` alone would let a first `indeterminate` row (a transient low-memory
-  # skip before the first ok) fire at the next hourly check (D10); counting `indeterminate` as
-  # recency would let a probe that never measures read as health. A failing probe keeps this quiet
-  # (the paging alert owns that). Accepted residuals (runbook): a bundle revert or an older bundle
-  # fires it about 26 h later, a pipeline outage over 26 h fires it, it self-disarms after 30 days
-  # with no rows at all, and a bundle that is never promoted keeps it quiet forever.
-  inngest_luks_key_probe_dark_sql = <<-SQL
-    SELECT toDateTime({{end_time}}) AS time,
-      if(count(*) > 0
-         AND min(dt) < toDateTime({{end_time}}) - INTERVAL 26 HOUR
-         AND countIf(dt >= toDateTime({{end_time}}) - INTERVAL 26 HOUR
-                     AND (position(JSONExtractString(raw, 'message'), 'token=ok') > 0
-                          OR position(JSONExtractString(raw, 'message'), 'token=fail_') > 0)) = 0,
-         1, 0) AS value
-    FROM {{source}}
-    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
-      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
   SQL
 
   # The subsection is written by the same change (runbook section 5c, "Key-continuity probe (#9927 item 2)").
@@ -414,68 +390,6 @@ resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
   critical_alert = false
 
   incident_cause = "The on-host LUKS key-continuity probe on the dedicated Inngest host reports a FAILED verdict (token=fail_passphrase, fail_header or fail_key_absent): the key the host holds no longer opens the volume behind /mnt/data, or is absent. The next reboot may not be able to reopen the store, and no header backup exists. Do NOT replace the host until the cause is established. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
-  metadata = {
-    runbook = local.inngest_luks_key_probe_runbook_url
-  }
-
-  escalation_target {
-    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
-    team_name = var.betterstack_paid_tier ? null : "Your team"
-  }
-}
-
-resource "logtail_exploration" "inngest_luks_key_probe_dark" {
-  name      = "soleur-inngest-luks-key-probe-dark-prd"
-  team_name = "Your team"
-
-  chart {
-    chart_type = "line_chart"
-  }
-
-  query {
-    query_type      = "sql_expression"
-    source_variable = "source"
-    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
-    sql_query = replace(trimspace(local.inngest_luks_key_probe_dark_sql), "/\\s+/", " ")
-  }
-
-  variable {
-    name          = "source"
-    variable_type = "source"
-    values        = [local.vector_prd_source_id]
-  }
-}
-
-resource "logtail_exploration_alert" "inngest_luks_key_probe_dark" {
-  exploration_id = logtail_exploration.inngest_luks_key_probe_dark.id
-  name           = "soleur-inngest-luks-key-probe-dark-prd"
-
-  # The SQL is a fire-flag (0 or 1), so this is `higher_than 0` (the sibling luks_monitor_host_timer_dark
-  # counts rows and uses `lower_than 1`). query_period is 30 days so the OLDEST marker row can be
-  # seen: the one precedent in this file tops out at 97200 s, and the provider does not validate
-  # the value client-side, so the API's acceptance of 2592000 is proven read-only before the
-  # -target lines for this pair are kept in apply-web-platform-infra.yml. Fallback ladder if it is
-  # refused: 604800 (7 d), then a count variable defaulting to false (a second owner act).
-  # recovery_period 2 h covers two hourly checks, so one good row does not flap the incident.
-  alert_type          = "threshold"
-  operator            = "higher_than"
-  value               = 0
-  check_period        = 3600
-  query_period        = 2592000
-  confirmation_period = 0
-  recovery_period     = 7200
-  # A missing value must read as 0 (quiet): before first delivery there is no row at all.
-  on_missing_data = "treat_as_zero"
-
-  paused = false
-
-  email          = true
-  push           = false
-  call           = false
-  sms            = false
-  critical_alert = false
-
-  incident_cause = "The on-host LUKS key-continuity probe was seen on the dedicated Inngest host but has produced no MEASURED verdict (no token=ok and no token=fail_ row) for 26 hours: the probe is dark, or it can only report indeterminate. Expected causes: the config bundle was reverted or an older bundle was applied, the log pipeline (Vector or the sink) is down, the probe cannot measure (see the at= literal of any indeterminate row), or the host was replaced and not yet probed. Check the pipeline before the host; a dark probe is NOT health. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
   metadata = {
     runbook = local.inngest_luks_key_probe_runbook_url
   }
