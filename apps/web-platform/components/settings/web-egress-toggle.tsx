@@ -26,9 +26,10 @@ import { usePendingAction } from "@/hooks/use-pending-action";
  */
 const RECORDING_NOTICE =
   "Hosts your agents contact are recorded as best-effort summary counts: the host, whether the request was allowed, blocked or ended another way, and the number of requests. Every current member of this workspace can view them, including activity from before they joined. No member or session is recorded, some entries may be missing, and counts are minimums. Records are deleted about 30 days after they were recorded. Turning web access off stops new records but does not delete existing ones.";
-// "unknown" = the loader (readEgressAuditCollectionState) maps a Flagsmith outage to it, and so does a
-// failed org lookup. Either way the state could not be determined, and an outage must never hide the
-// disclosure from the owner who is about to enable web access: the full notice is shown, conditionally.
+// "unknown" = any case where the loader could not determine it (Flagsmith outage, failed org lookup,
+// pointer fault or timeout, unbound workspace, overall bound, the page's workspace-mismatch override).
+// In every such case the state is undetermined, and it must never hide the disclosure from the owner who
+// is about to enable web access: the full notice is shown, conditionally.
 const RECORDING_NOTICE_UNKNOWN = `We couldn't check whether recording is on for this workspace. If it is, the following applies. ${RECORDING_NOTICE}`;
 const CARD_NOTE: Record<"true" | "unknown", string> = {
   true: "Activity through web access is recorded for this workspace and visible to every current member.",

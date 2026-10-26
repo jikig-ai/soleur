@@ -19,6 +19,12 @@ import { WebEgressToggle } from "@/components/settings/web-egress-toggle";
 import type { CollectionState } from "@/lib/egress-audit/summary";
 
 const LINK = "/dashboard/settings/scope-grants/egress-audit";
+// Independent literals copied from the CLO ruling (knowledge-base/legal/audits/2026-10-counsel-review-9545.md,
+// "verbatim as ruled"); deliberately NOT imported from the component, so a copy edit cannot pass by echo.
+const RULED_NOTICE =
+  "Hosts your agents contact are recorded as best-effort summary counts: the host, whether the request was allowed, blocked or ended another way, and the number of requests. Every current member of this workspace can view them, including activity from before they joined. No member or session is recorded, some entries may be missing, and counts are minimums. Records are deleted about 30 days after they were recorded. Turning web access off stops new records but does not delete existing ones.";
+const RULED_UNKNOWN =
+  "We couldn't check whether recording is on for this workspace. If it is, the following applies. " + RULED_NOTICE;
 const NOTICE_START = "Hosts your agents contact are recorded as best-effort summary counts: the host, whether the request was allowed, blocked or ended another way, and the number of requests.";
 const UNKNOWN_LEAD = "We couldn't check whether recording is on for this workspace. If it is, the following applies.";
 const CARD_TRUE = "Activity through web access is recorded for this workspace and visible to every current member.";
@@ -92,11 +98,16 @@ describe("WebEgressToggle — audit link and hint", () => {
     let seen = 0;
     for (const isOwner of [true, false]) {
       card({ isOwner, collection: true });
+      expect(screen.getByText(CARD_TRUE).textContent).toBe(
+        "Activity through web access is recorded for this workspace and visible to every current member.",
+      );
       expect(screen.getByText(CARD_TRUE)).toBeTruthy();
       expect(screen.queryByText(CARD_UNKNOWN)).toBeNull();
       cleanup();
       card({ isOwner, collection: "unknown" });
-      expect(screen.getByText(CARD_UNKNOWN)).toBeTruthy();
+      expect(screen.getByText(CARD_UNKNOWN).textContent).toBe(
+        "Activity through web access may be recorded for this workspace and visible to every current member.",
+      );
       expect(screen.queryByText(CARD_TRUE)).toBeNull();
       cleanup();
       card({ isOwner, collection: false });
@@ -138,6 +149,18 @@ describe("WebEgressToggle — enable dialog copy", () => {
     expect(text).toContain("Turning web access off stops new records but does not delete existing ones.");
     expect(text).not.toContain(UNKNOWN_LEAD);
     expect(text).not.toMatch(FORBIDDEN);
+  });
+
+  it("collection on: the notice paragraph is exactly the CLO-ruled string (whole-string pin)", () => {
+    const paras = Array.from(open(true).querySelectorAll("p")).map((p) => p.textContent);
+    expect(paras.filter((t) => t === RULED_NOTICE)).toHaveLength(1);
+    expect(paras.filter((t) => t?.includes(UNKNOWN_LEAD))).toHaveLength(0);
+  });
+
+  it("collection unknown: the notice paragraph is exactly the CLO-ruled composition (whole-string pin)", () => {
+    const paras = Array.from(open("unknown").querySelectorAll("p")).map((p) => p.textContent);
+    expect(paras.filter((t) => t === RULED_UNKNOWN)).toHaveLength(1);
+    expect(paras.filter((t) => t === RULED_NOTICE)).toHaveLength(0);
   });
 
   it("collection unknown: says it could not check, then shows the full notice so an outage cannot hide the disclosure", () => {

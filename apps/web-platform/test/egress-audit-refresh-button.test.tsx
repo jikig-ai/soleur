@@ -4,8 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // #9545 PR2 — the Try again / Refresh button. router.refresh() is mocked: the transition around it is
 // held pending by returning a promise from the mock (React treats a promise-returning transition
-// callback as an async action), standing in for "the server data has not arrived yet". The real
-// router.refresh() returns void and Next keeps the transition pending until the RSC payload commits.
+// callback as an async action), standing in for "the server data has not arrived yet".
+//
+// What is unit-proven here: the component starts a transition, the busy state tracks that transition,
+// and the focus rules. What is NOT unit-proven: that Next keeps a real router.refresh() transition
+// pending until the RSC payload commits (the real one returns void; this mock does not).
 
 const pendingRefreshes: (() => void)[] = [];
 const refresh = vi.fn(
@@ -44,7 +47,7 @@ describe("EgressAuditRefreshButton", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("a click calls router.refresh once and the button stays busy until the transition settles", async () => {
+  it("a click starts one transition around router.refresh and the busy state tracks it (the mock holds it pending; real Next behaviour is not proven here)", async () => {
     render(<EgressAuditRefreshButton label="Refresh" />);
     const btn = screen.getByRole("button", { name: "Refresh" });
     await act(async () => {
@@ -74,21 +77,57 @@ describe("EgressAuditRefreshButton", () => {
     await settle();
   });
 
-  it("moves focus to the page heading when the refresh settles", async () => {
+  it("a retry that settles with the button still mounted (failed retry, same alert) keeps focus on the button, not the heading", async () => {
     render(
       <>
         <h1 id={EGRESS_AUDIT_HEADING_ID} tabIndex={-1}>
           Egress audit log
         </h1>
-        <EgressAuditRefreshButton label="Refresh" />
+        <EgressAuditRefreshButton label="Try again" />
+      </>,
+    );
+    const btn = screen.getByRole("button");
+    btn.focus();
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+    await settle();
+    const after = screen.getByRole("button", { name: "Try again" });
+    expect(document.activeElement).toBe(after);
+    expect(document.activeElement?.id).not.toBe(EGRESS_AUDIT_HEADING_ID);
+  });
+
+  it("a settled retry returns focus to the button when a disabled busy button dropped it to <body>", async () => {
+    render(
+      <>
+        <h1 id={EGRESS_AUDIT_HEADING_ID} tabIndex={-1}>
+          Egress audit log
+        </h1>
+        <EgressAuditRefreshButton label="Try again" />
       </>,
     );
     await act(async () => {
       fireEvent.click(screen.getByRole("button"));
     });
-    expect(document.activeElement?.id).not.toBe(EGRESS_AUDIT_HEADING_ID);
+    (document.activeElement as HTMLElement | null)?.blur();
     await settle();
-    expect(document.activeElement?.id).toBe(EGRESS_AUDIT_HEADING_ID);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Try again" }));
+  });
+
+  it("does not steal focus when the user moved it elsewhere during the refresh", async () => {
+    render(
+      <>
+        <input aria-label="elsewhere" />
+        <EgressAuditRefreshButton label="Try again" />
+      </>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    const input = screen.getByLabelText("elsewhere");
+    input.focus();
+    await settle();
+    expect(document.activeElement).toBe(input);
   });
 
   it("moves focus to the heading when the button unmounts mid-refresh (the card was swapped out)", async () => {
@@ -109,6 +148,29 @@ describe("EgressAuditRefreshButton", () => {
       </h1>,
     );
     expect(document.activeElement?.id).toBe(EGRESS_AUDIT_HEADING_ID);
+  });
+
+  it("an idle unmount (no refresh started) does not move focus to the heading", () => {
+    const { rerender } = render(
+      <>
+        <h1 id={EGRESS_AUDIT_HEADING_ID} tabIndex={-1}>
+          Egress audit log
+        </h1>
+        <input aria-label="elsewhere" />
+        <EgressAuditRefreshButton label="Refresh" />
+      </>,
+    );
+    screen.getByLabelText("elsewhere").focus();
+    rerender(
+      <>
+        <h1 id={EGRESS_AUDIT_HEADING_ID} tabIndex={-1}>
+          Egress audit log
+        </h1>
+        <input aria-label="elsewhere" />
+      </>,
+    );
+    expect(document.activeElement?.id).not.toBe(EGRESS_AUDIT_HEADING_ID);
+    expect(document.activeElement).toBe(screen.getByLabelText("elsewhere"));
   });
 
   it("settling with no heading in the document is a no-op (no throw)", async () => {

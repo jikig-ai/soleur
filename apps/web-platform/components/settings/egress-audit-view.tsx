@@ -149,12 +149,10 @@ function Chips({ filter }: { filter: DecisionFilter }) {
   );
 }
 
+// A plain span, not <time dateTime>: the machine-readable attribute would put the full ISO timestamp
+// (minute resolution and finer) on every cell, defeating the removal of the hover time (DPIA C7).
 function TimeText({ iso, now }: { iso: string; now: number }) {
-  return (
-    <time dateTime={iso}>
-      {formatAgo(iso, now)}
-    </time>
-  );
+  return <span>{formatAgo(iso, now)}</span>;
 }
 
 function Row({
@@ -303,7 +301,7 @@ function UnavailableCard() {
       danger
       icon={<TriangleAlert className="h-6 w-6" />}
       title="Couldn't load the egress audit log."
-      body="This is a loading error, not an empty log. Nothing has been deleted. Try again, and contact support if it keeps failing."
+      body="This is a loading error, not an empty log. Try again. If it keeps happening, try again in a minute. Contact support if it keeps failing."
       action={<EgressAuditRefreshButton label="Try again" />}
     />
   );

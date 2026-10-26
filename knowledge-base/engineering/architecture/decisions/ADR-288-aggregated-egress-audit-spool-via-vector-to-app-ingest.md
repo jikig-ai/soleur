@@ -199,15 +199,18 @@ that said a policy "lands in PR2" (migration 162 is immutable on `main`; its hea
   through `readRuntimeFlagDetailed` / `readEgressAuditCollectionState`; ingest stays boolean. The op registry gains
   `hint_workspace_read` and `web_access_read` (unpaged) and every mirror carries a sanitised `pg_code` tag. Bounds: page pointer
   2000 ms, collection and web-access reads 1500 ms each after the RPC; card pointer 600 ms, org 800 ms, hint 800 ms, overall 1200 ms.
-  Independent reads are not started before the RPC (rejected: they would run before the caller is authorised). Page and card guard
-  against a workspace mismatch between the authorised id and the extra reads.
+  Independent reads are not started before the RPC (rejected: they would run before the caller is authorised). Only the Scope Grants
+  page guards against a workspace mismatch (it forces the card's collection state to `unknown`); the destination page resolves the
+  workspace once, so it has no second read to compare.
 - **Agent prompt.** `WEB_EGRESS_PROMPT_ADDENDUM` no longer claims "every decision is logged with workspace attribution"; it says
   requests may be recorded best-effort and points to the audit view.
 - **Page caching.** The page response carries `Cache-Control: no-store`.
 
 ### Accepted residuals (read path)
 
-1. **Adversarial worst case.** About 1.44M (host, decision) groups for one workspace takes about 3.5 s after the rewrite. Accepted as
+1. **Adversarial worst case.** About 1.44M (host, decision) groups for one workspace took 5.4-6.3 s on the local database after the rewrite (an earlier note here said about 3.5 s; the AC3a measurement in the plan supersedes it),
+   leaving only about 1.7-2.6 s of headroom against the 8 s role timeout. A slower production host can push this case over the timeout and turn
+   the accepted fail-closed outcome into routine `rpc_timeout` pages. Accepted as
    a documented limit: collection is off for external organisations (gated by #11237) and the failure mode is fail-closed
    (`unavailable`, never a wrong answer). A per-workspace distinct-host cap and fold policy at ingest (PR1 scope, a new migration
    because 162 is immutable) and a limiter for member-callable aggregation RPCs are **#11237 enablement blockers**.

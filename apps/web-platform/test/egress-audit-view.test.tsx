@@ -24,6 +24,7 @@ import { EGRESS_AUDIT_PATH, PAGE_LIMIT, type EgressAuditPayload, type EgressAudi
 // The completeness-claim rules (spec FR4): never these words, never a calendar date in a retention sentence.
 const FORBIDDEN = /\bcomplete\b|every connection|tamper-proof|\bsessions\b/i;
 // "all"/"every" used as a claim that the list is complete (not "every current member", not "(all outcomes)").
+const ISO_STAMP = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 const COMPLETENESS_CLAIM = /\ball (?:requests|hosts|sites|connections|traffic|activity)\b|\bevery (?:request|host|site|outbound|connection)\b|\bcomplete (?:list|record|log)\b/i;
 
 const NOW = Date.parse("2026-10-26T12:10:00Z");
@@ -156,6 +157,13 @@ describe("EgressAuditView — populated", () => {
     expect(document.querySelector("time[title]")).toBeNull();
   });
 
+  it("no <time> element and no ISO timestamp anywhere in the markup (DPIA C7: no full timestamp on any time cell)", () => {
+    show(ready(payload()));
+    expect(document.querySelector("time")).toBeNull();
+    expect(document.body.innerHTML).not.toMatch(ISO_STAMP);
+    expect(screen.getByText("2 minutes ago")).toBeTruthy();
+  });
+
   it("table semantics survive the mobile restack: explicit roles and a visible label on every value", () => {
     show(ready(payload()));
     expect(screen.getByRole("table")).toBeTruthy();
@@ -176,6 +184,19 @@ describe("EgressAuditView — populated", () => {
     for (const c of cells) expect(c.getAttribute("role")).toBe("cell");
     expect(within(row).getByRole("rowheader").getAttribute("role")).toBe("rowheader");
     for (const h of screen.getAllByRole("columnheader")) expect(h.getAttribute("role")).toBe("columnheader");
+  });
+
+  it("the 'Scope Grants' back link points at the scope grants settings page", () => {
+    show(ready(payload()));
+    expect(screen.getByRole("link", { name: "Scope Grants" }).getAttribute("href")).toBe("/dashboard/settings/scope-grants");
+  });
+
+  it("an empty or missing workspace name falls back to 'your workspace's' in the subtitle", () => {
+    show(ready(payload(), { workspaceName: "" }));
+    expect(screen.getByText(/^Sites your workspace's agents contacted in about the last 30 days/)).toBeTruthy();
+    cleanup();
+    show(ready(payload(), { workspaceName: null }));
+    expect(screen.getByText(/^Sites your workspace's agents contacted in about the last 30 days/)).toBeTruthy();
   });
 
   it("the heading is a focus target for the refresh button", () => {
@@ -275,6 +296,8 @@ describe("EgressAuditView — error and access states", () => {
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("Couldn't load the egress audit log.");
     expect(alert.textContent).toContain("This is a loading error, not an empty log.");
+    expect(alert.textContent).toContain("If it keeps happening, try again in a minute.");
+    expect(alert.textContent).not.toMatch(/Nothing has been deleted/i);
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
     expect(screen.queryByRole("row")).toBeNull();
   });
@@ -282,7 +305,7 @@ describe("EgressAuditView — error and access states", () => {
   it("forbidden says access is gone, shows no rows, and links to switch workspace", () => {
     show({ kind: "forbidden" });
     expect(screen.getByText("You no longer have access to this workspace.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Switch workspace" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Switch workspace" }).getAttribute("href")).toBe("/dashboard");
     expect(screen.queryByRole("row")).toBeNull();
     expect(screen.queryByText("A best-effort summary, not a full record.")).toBeNull();
   });
@@ -295,9 +318,10 @@ describe("EgressAuditView — error and access states", () => {
     expect(screen.getByRole("alert").textContent).toContain("We couldn't determine your workspace.");
   });
 
-  it("unbound says the workspace could not be determined", () => {
+  it("unbound says the workspace could not be determined and links to switch workspace", () => {
     show({ kind: "unbound" });
     expect(screen.getByText("We couldn't determine your workspace.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Switch workspace" }).getAttribute("href")).toBe("/dashboard");
     expect(screen.queryByRole("row")).toBeNull();
   });
 });
@@ -334,6 +358,8 @@ describe("EgressAuditView — copy rules", () => {
       expect(text.length).toBeGreaterThan(0);
       expect(text).not.toMatch(FORBIDDEN);
       expect(text).not.toMatch(COMPLETENESS_CLAIM);
+      expect(document.querySelector("time")).toBeNull();
+      expect(document.body.innerHTML).not.toMatch(ISO_STAMP);
       expect(text).not.toMatch(/(?:until|since|on)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d/);
       unmount();
     }
