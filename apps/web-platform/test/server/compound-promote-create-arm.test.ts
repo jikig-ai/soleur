@@ -319,12 +319,29 @@ describe("Step A with a valid create proposal", () => {
     expect(v).toMatchObject({ kind: "create", clusterHash: HASH });
   });
 
-  it("A: a cluster hash the EDIT loop recorded this run is suppressed, not created (both arms build the same branch)", async () => {
-    const post = vi.fn(async (_: unknown) => ({ text: "", stopReason: "end_turn" }));
-    const a = createArgs({ sameRunHashes: [HASH] });
-    const v = await runCreateProposeStep(a);
-    expect(v).toEqual({ kind: "suppressed", clusterHash: HASH });
+  it("G4: when EVERY pattern is owned by the edit loop this run, the arm ends no_action(other) BEFORE any read, request or model call", async () => {
+    const post = vi.fn();
+    const request = vi.fn();
+    const a = createArgs({ sameRunHashes: [HASH], post: post as never, octokit: { request } as never });
+    expect(await runCreateProposeStep(a)).toEqual({ kind: "no_action", reason: "other" });
     expect(post).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(reportSilentFallback).not.toHaveBeenCalled(); // a clean outcome, nothing mirrored
+  });
+
+  it("G4: an owned pattern is NOT offered to the model (the prompt lists only the others); the week cap still comes first", async () => {
+    const other: PatternPage = { ...PATTERN, slug: "other-pattern", evidence: [6, 7, 8, 9, 10].map((n) => `knowledge-base/project/learnings/2026-10-${n < 10 ? "0" : ""}${n}-synthetic-${n}.md`) };
+    const post = vi.fn(async (_a: unknown) => ({ text: JSON.stringify({ decision: "no_action", reason_class: "other" }), stopReason: "end_turn" }));
+    await runCreateProposeStep(createArgs({ patterns: [PATTERN, other], sameRunHashes: [HASH], post: post as never }));
+    const prompt = String((post.mock.calls[0][0] as { messages: Array<{ content: string }> }).messages[0].content);
+    expect(prompt).toContain("other-pattern");
+    expect(prompt).not.toContain(PATTERN.slug);
+    expect(await runCreateProposeStep(createArgs({ sameRunHashes: [HASH], capLeft: 0 }))).toMatchObject({ class: "week-cap" });
+  });
+
+  it("G4 backstop: a model that names an owned pattern anyway (not offered, but present in the list) is still SUPPRESSED, never created", async () => {
+    const other: PatternPage = { ...PATTERN, slug: "other-pattern", evidence: [6, 7, 8, 9, 10].map((n) => `knowledge-base/project/learnings/2026-10-${n < 10 ? "0" : ""}${n}-synthetic-${n}.md`) };
+    expect(await runCreateProposeStep(createArgs({ patterns: [PATTERN, other], sameRunHashes: [HASH] }))).toEqual({ kind: "suppressed", clusterHash: HASH });
   });
 
   it("A: an unrelated same-run hash does not suppress", async () => {

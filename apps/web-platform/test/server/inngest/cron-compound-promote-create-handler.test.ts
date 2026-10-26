@@ -850,18 +850,57 @@ describe("the marker for a create run", () => {
 
 // ---------------------------------------------------------------------------------------------------------
 describe("review round -- the same-run collision, the token, the lost clone, the bounds", () => {
-  it("A: a create that picks the cluster hash the EDIT loop just opened is suppressed (same branch shape), never committed", async () => {
+  it("G4: a pattern whose hash the EDIT loop just opened is NOT offered; with another pattern present the model is called, and one that names the owned pattern anyway is the backstop: no_action(other), not a second suppression", async () => {
     // The edit loop opens a PR on exactly the create pattern's evidence set -> its branch is `self-healing/auto-<ENTRY_HASH>-<date>`.
     editClusters = [{ ...EDIT_CLUSTER, source_learnings: CREATE_EVIDENCE }];
     const r = await run(PATTERNS_CREATE());
     expect(editCommits()).toHaveLength(1);
     expect((editCommits()[0][0] as { branchName: string }).branchName).toContain(ENTRY_HASH);
-    expect(createPrompts()).toHaveLength(1); // the model was asked ...
-    expect(createCommits()).toHaveLength(0); // ... but the colliding pattern is not created
+    expect(createPrompts()).toHaveLength(1); // page-two is still offered
+    expect(String((createPrompts()[0][0] as { messages: Array<{ content: string }> }).messages[0].content)).not.toContain(CREATE_PATTERN_SLUG);
+    expect(createCommits()).toHaveLength(0); // the model named the owned pattern anyway: suppressed, never created
     expect(r.names).not.toContain("create-persist");
-    expect(r.last).toMatchObject({ clusters_opened: 1, create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 1 });
-    expect(r.last.refusals).toContain("ledger-suppressed");
+    expect(r.last).toMatchObject({ clusters_opened: 1, create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 0 });
+    expect(r.last.refusals).not.toContain("ledger-suppressed"); // the edit loop OPENED that hash; nothing was refused
     expect(r.last).not.toHaveProperty("create_pr");
+  });
+
+  it("G4: when the only pattern is owned by the edit loop this run there is NO create model call at all", async () => {
+    const git = gitFixture(remoteDir);
+    execFileSync("git", ["-C", remoteDir, "rm", "-q", "knowledge-base/project/patterns/page-two.md"]);
+    git(["commit", "-qm", "drop page two"]);
+    try {
+      editClusters = [{ ...EDIT_CLUSTER, source_learnings: CREATE_EVIDENCE }];
+      const r = await run(PATTERNS_CREATE());
+      expect(createPrompts()).toHaveLength(0);
+      expect(r.names).toContain("create-propose");
+      expect(r.names).not.toContain("create-persist");
+      expect(r.last).toMatchObject({ create_arm: "ran", create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 0 });
+      expect(r.last).not.toHaveProperty("create_refusal_class");
+    } finally {
+      git(["reset", "-q", "--hard", "HEAD~1"]);
+    }
+  });
+
+  it("G4: a hash the edit loop REFUSED (one refusal_detail entry) is not recorded a second time by the backstop; the counter stays 0", async () => {
+    // an off-allowlist target is refused by the edit loop (`target-path-refused`) but its hash is still the run's
+    editClusters = [{ ...EDIT_CLUSTER, target_path: "not/allowed.md", source_learnings: CREATE_EVIDENCE }];
+    const r = await run(PATTERNS_CREATE());
+    const entries = (r.last.refusal_detail as Array<{ cluster_hash: string; reason: string }>).filter((e) => e.cluster_hash === ENTRY_HASH);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].reason).not.toBe("ledger-suppressed");
+    expect(r.last).toMatchObject({ create_outcome: "no_action", create_no_action_reason: "other", ledger_suppressed: 0 });
+  });
+
+  it("G4: a hash the LEDGER suppresses (a prior PR) is still recorded once and counted once", async () => {
+    h.ledger.items = [{
+      title: promotePrTitle(ENTRY_HASH, "2026-10-04"), state: "open", closed_at: null,
+      user: { login: "soleur-ai[bot]" }, pull_request: { merged_at: null },
+    }];
+    const r = await run(PATTERNS_CREATE());
+    const entries = (r.last.refusal_detail as Array<{ cluster_hash: string; reason: string }>).filter((e) => e.cluster_hash === ENTRY_HASH);
+    expect(entries).toHaveLength(1);
+    expect(r.last).toMatchObject({ ledger_suppressed: 1 });
   });
 
   it("A: the create-propose step receives exactly the hashes the edit loop recorded (opened or attempted)", async () => {

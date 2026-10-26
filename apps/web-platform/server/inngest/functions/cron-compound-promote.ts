@@ -2230,8 +2230,12 @@ export async function cronCompoundPromoteHandler({
       }
       if (proposed.kind === "suppressed") {
         // The pattern is already proposed (open, merged or closed under 60 days): the existing ledger reason, no new one.
-        record(proposed.clusterHash, { kind: "refused", reason: "ledger-suppressed" });
-        ledgerSuppressed++;
+        // A hash the edit loop recorded this run is already in the marker (opened, or one `refusal_detail` entry): the
+        // backstop hit is not a second suppression, so it is neither recorded nor counted again.
+        if (!runHashes.has(proposed.clusterHash)) {
+          record(proposed.clusterHash, { kind: "refused", reason: "ledger-suppressed" });
+          ledgerSuppressed++;
+        }
         createOutcome = "no_action";
         createNoAction = "other";
         return;
