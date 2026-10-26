@@ -4,6 +4,15 @@
 # No set -euo pipefail: soft dependency checks and install failures
 # must not abort the script. Each check uses explicit if/then.
 
+case "$-" in
+  *x*)
+    if [ -n "${PENCIL_CLI_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 AUTO_INSTALL=false
 CHECK_ADAPTER_DRIFT=false
 for arg in "$@"; do

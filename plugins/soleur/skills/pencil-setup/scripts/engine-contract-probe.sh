@@ -21,6 +21,15 @@
 
 set -uo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${PENCIL_CLI_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -z "${PENCIL_CLI_KEY:-}" ]]; then
