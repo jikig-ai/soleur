@@ -217,7 +217,7 @@ clock with `vi.setSystemTime` wherever the 23h gate is read.
    from `AS_ID`, so a replay that dispatched the INSERT's id would go red; any case that reaches the real backoff uses fake
    timers)
    - Replay: pending row within 23h with matching hash -> `writeActionSend` NOT called, `inngest.send` called with the ROW's
-     `action_send_id` and `id`, draft archived (store status flips), 200, op `inngest-enqueue-replay`; a re-click afterwards
+     `action_send_id` and `id`, draft archived (the stored row status becomes archived), 200, op `inngest-enqueue-replay`; a re-click afterwards
      returns 409 `not_a_draft` (real state transition).
    - Replay whose enqueue fails again -> 503, draft still `draft`, `extra.replay === true`.
    - Terminal rows via `it.each` (acknowledged_at / failure_reason / undone_at / cancellation_requested_at set) -> archive,
