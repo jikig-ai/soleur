@@ -584,12 +584,33 @@ describe("Step B runCreatePersistStep -- guards before any write", () => {
     expect(await runCreatePersistStep(b as never)).toMatchObject({ class: "persist", detail: "branch-taken" });
   });
 
-  it("G: a missing clone directory is its own named refusal before ANY request or write", async () => {
+  it("G: a missing clone directory is its own named refusal after the own-PR lookup (which needs no clone) and before any write or commit", async () => {
     const request = vi.fn(async () => ({ data: [] }));
     const a = persistArgs({ repoRoot: join(tmpdir(), "create-arm-gone-" + Date.now()), octokit: { request, graphql: async () => ({}) } });
     expect(await runCreatePersistStep(a as never)).toEqual({ kind: "refused", class: "persist", detail: "clone-missing" });
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(1); // only the own-PR lookup
     expect(a.safeCommit).not.toHaveBeenCalled();
+  });
+
+  it("V2: a replay of a SUCCESSFUL attempt on a replaced container (clone gone, our create PR open) resumes as opened, not clone-missing", async () => {
+    const a = persistArgs({
+      repoRoot: join(tmpdir(), "create-arm-gone-" + Date.now()),
+      octokit: { request: async () => ({ data: [{ number: 31, body: `${CREATE_PR_BODY_LINE}\nrest` }] }), graphql: async () => ({}) },
+    });
+    expect(await runCreatePersistStep(a as never)).toEqual({ kind: "opened", pr: 31 });
+    expect(a.safeCommit).not.toHaveBeenCalled();
+    // an EDIT PR on the branch is still branch-taken (the lookup's own rule), clone or no clone
+    const edit = persistArgs({
+      repoRoot: join(tmpdir(), "create-arm-gone-" + Date.now()),
+      octokit: { request: async () => ({ data: [{ number: 32, body: "Tier: agents-core" }] }), graphql: async () => ({}) },
+    });
+    expect(await runCreatePersistStep(edit as never)).toMatchObject({ class: "persist", detail: "branch-taken" });
+    // a failed lookup on a lost clone is clone-missing (mirrored lookup failure, then the clone check)
+    const failing = persistArgs({
+      repoRoot: join(tmpdir(), "create-arm-gone-" + Date.now()),
+      octokit: { request: async () => { throw Object.assign(new Error("x"), { status: 502 }); }, graphql: async () => ({}) },
+    });
+    expect(await runCreatePersistStep(failing as never)).toEqual({ kind: "refused", class: "persist", detail: "clone-missing" });
   });
 
   it("a failed own-PR lookup is mirrored and does NOT end the step (the branch-exists probe before the commit is what stops a second push)", async () => {

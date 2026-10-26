@@ -5,10 +5,10 @@
 // new synthetic-check list or step-callback shape. The create arm's own commit call lives HERE, outside `functions/`
 // (see the ADR-054 note and `cron-safe-commit-parity.test.ts`, which walks this file too):
 //
-//   Step A `create-propose`  runCreateProposeStep   week-cap -> clone-present -> create-open -> budget -> prompt ->
+//   Step A `create-propose`  runCreateProposeStep   week-cap -> index-empty -> same-run -> clone-present -> create-open -> budget -> prompt ->
 //                                                   ONE model call -> checkCreate. MEMOIZED and NEVER THROWS: every
 //                                                   failure is a returned refusal with a closed class.
-//   Step B `create-persist`  runCreatePersistStep   page lookup -> own-PR lookup -> refresh the clone to main (R5) ->
+//   Step B `create-persist`  runCreatePersistStep   page lookup -> own-PR lookup -> clone check -> refresh the clone to main (R5) ->
 //                                                   strip the token from `.git/config` (R4) -> re-check -> render ->
 //                                                   write -> scan -> README sync -> collect -> bytes check -> restore
 //                                                   the token, fetch again and compare the base (blobs, new-slug dirs,
@@ -610,7 +610,6 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
   if (!BRANCH_SHAPE_RE.test(branchName)) return fail("persist", "branch-shape");
   const page = a.patterns.find((p) => p.slug === v.proposal.pattern_slug);
   if (!page) return fail("persist", "page-missing"); // unreachable in practice (Step A resolved it from this very list); mirrored, not assumed
-  if (!existsSync(a.repoRoot)) return fail("persist", "clone-missing");
 
   // Replay: a previous attempt of THIS step may already have opened our PR. A hit is success, not a second PR, but
   // ONLY when it is a create PR: the edit arm builds the same branch shape, and an edit PR is not our PR.
@@ -633,6 +632,10 @@ export async function runCreatePersistStep(a: CreatePersistArgs): Promise<Create
     // refuses (a refusal, not a second PR); `safeCommitAndPr`'s own resume does not apply, the clone being reset to main.
     reportSilentFallback(err, { feature: CREATE_ARM_FEATURE, op: "create-own-pr-lookup-failed", message: "own open PR lookup failed", extra: { cause: causeToken(err) } });
   }
+
+  // The lookup above needs no clone, so a replay of a SUCCESSFUL attempt on a replaced container resumes as `opened`; a
+  // clone that is gone only matters once the step has to work on it.
+  if (!existsSync(a.repoRoot)) return fail("persist", "clone-missing");
 
   const now = a.now ?? Date.now;
   const deadlineAt = now() + (a.deadlineMs ?? CREATE_PERSIST_DEADLINE_MS);

@@ -334,7 +334,7 @@ six-path set, own verdict union) and the ADR-300 addendum of the same date.
   separate piece of work. If the final strip of the token from `.git/config` fails twice, the arm mirrors Sentry op
   `create-origin-strip-failed` (the token stays on the ephemeral workspace's disk until it is torn down).
 - **Clone loss and token expiry.** The memoized clone path lives on the worker. If the container restarted between
-  the two steps, or before a replay, the directory is gone: `persist/clone-missing` (either step), nothing written.
+  the two steps, or before a replay, the directory is gone: `persist/clone-missing` (either step), nothing written. `create-persist` looks up its own open PR first (that needs no clone), so a replay of an attempt that already opened the draft still ends `opened`.
   The installation token is minted once per run and lasts about an hour: a replay of `create-persist` more than
   roughly an hour later hands it an EXPIRED token, and the first fetch fails as `persist/fetch-failed` (or
   `origin-failed`) with `extra.cause` like `exit128`. Neither case writes anything; a new manual run starts from a
