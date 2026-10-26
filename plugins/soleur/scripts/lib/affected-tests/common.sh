@@ -205,13 +205,11 @@ affected_timeout() {
 AFFECTED_BUDGET_ACTIVE=0
 AFFECTED_DEADLINE=0
 # The content trigger (lib content-trigger.sh) is armed by the gate only after the
-# whole three-key config group validates, made eligible only at the exits that
-# ran a selected/inert verdict, and put in explain mode only at the two explain
-# exits that report a selection. Same rule as above: initialised here, never
-# inherited from the caller's environment.
+# whole three-key config group validates, and made eligible only at the exits that
+# ran or reported a non-`--full` verdict. Same rule as above: initialised here,
+# never inherited from the caller's environment.
 AFFECTED_CT_ARMED=0
 AFFECTED_CT_ELIGIBLE=0
-AFFECTED_CT_EXPLAIN=0
 affected_bound() {
   if [[ "$AFFECTED_BUDGET_ACTIVE" == "1" ]]; then
     local rem
@@ -313,14 +311,13 @@ finish() {
   local rc="$1" mode="${2:--}" reason="${3:--}" stack="${4:--}" ci="${5:-none}"
   local ran="${6:--}" of="${7:--}" skipped="${8:--}" ct_field=""
   # Content trigger (content-trigger.sh): runs the configured command after a
-  # passing selected/inert verdict whose diff adds the configured string, folds its
-  # result into rc/reason, and names the outcome in one trailing marker field. The
-  # hook never exits and never calls finish(); an unarmed gate skips this block
-  # byte-for-byte.
-  if [[ "${AFFECTED_CT_ARMED:-0}" == 1 ]] && declare -F affected_ct_hook >/dev/null 2>&1; then
-    affected_ct_hook "$rc" "$mode" "$reason"
-    rc="$AFFECTED_CT_OUT_RC"; mode="$AFFECTED_CT_OUT_MODE"; reason="$AFFECTED_CT_OUT_REASON"
-    if [[ "${AFFECTED_CT_OUT_COUNTS:-0}" == 1 ]]; then ran="-"; of="-"; skipped="-"; fi
+  # passing verdict whose diff adds the configured string, folds its result into
+  # rc/reason, and names the outcome in one trailing marker field. The hook never
+  # exits and never calls finish(); an unarmed gate skips this block byte-for-byte.
+  if [[ "${AFFECTED_CT_ARMED:-0}" == 1 ]]; then
+    affected_ct_hook "$rc" "$reason"
+    rc="$AFFECTED_CT_OUT_RC"; reason="$AFFECTED_CT_OUT_REASON"
+    if [[ "${AFFECTED_CT_OUT_RESET:-0}" == 1 ]]; then mode="selected"; ran="-"; of="-"; skipped="-"; fi
     ct_field="$AFFECTED_CT_OUT_FIELD"
   fi
   case "$rc" in

@@ -52,7 +52,7 @@ gate probes registration, not presence.
 | rc | Meaning | Skill action |
 |----|---------|--------------|
 | 0 | Selected tests passed, or `NO_TESTS_AFFECTED` (all-inert diff) | proceed |
-| 1 | A selected test failed / runner signal-killed / the content-trigger command failed (`reason=content-trigger-failed`) | stop; report failures |
+| 1 | A selected test failed / runner signal-killed / the content-trigger command failed (`reason=content-trigger-failed`) | stop; report failures (for `content-trigger-failed`, re-run the `content_trigger_command` directly) |
 | 4 | `AFFECTED_GATE_REFUSED reason=<no-stack\|bad-config\|vacuous-test-command\|no-base-ref\|not-a-repo\|toolchain-missing\|runner-refused>` + a `remedy:` line | stop; fix the named cause — never retry blindly |
 | 6 | `AFFECTED_GATE_BUDGET_DEFERRED` — budget expired AND a CI test workflow exists | proceed to CI; record CI as the authoritative gate; never label the run passed |
 | 7 | No test suite detected at all | proceed with the disclosed note; never label passed |
@@ -102,7 +102,7 @@ runner `3` → rc 1 `reason=runner-signal`.
 | `budget_seconds` | number | Wall-clock cap; enforced only when CI detected; default 900; must be a positive integer |
 | `max_workers` | number | Overrides `max(1, ncpu/2) / (1 + running gate processes)`; positive integer |
 | `budget_ci` | boolean | Forces CI-deferral eligibility |
-| `content_trigger_pattern`, `content_trigger_paths`, `content_trigger_command` | string, string[], string | The content trigger below. All three or none: a partial group is `bad-config key=<the missing key>`; an empty pattern (or one with a newline), an empty `content_trigger_paths`, a glob that matches an arbitrary path (`*`, `**/*`), an empty command, or a vacuous command (same denylist as `test_command`) is refused the same way |
+| `content_trigger_pattern`, `content_trigger_paths`, `content_trigger_command` | string, string[], string | The content trigger below. All three or none: a partial or empty group, a multi-line pattern, an empty or match-everything glob (`*`, `**/*`), a glob that can never match a repo-relative path (leading `./` or `/`, trailing `/`), or an empty or vacuous command (same denylist as `test_command`) is `bad-config key=<the offending key>` |
 
 ## Content trigger
 
@@ -111,34 +111,49 @@ contains a repo directory). The trigger covers that class from config, so the pl
 repo-agnostic: when the diff **adds** a line (tracked files) or any file **holds** a line
 (untracked files) containing the fixed string `content_trigger_pattern`, in a file matching
 one of `content_trigger_paths`, a passing run ALSO runs `content_trigger_command` (via
-`bash -c` from the repo root — the same trust level as `test_command`; a PR can edit the
-config and the code together, so CI stays the independent gate).
+`bash -c` from the repo root with the gate's environment — the same trust level as
+`test_command`; a PR can edit the config and the code together, so CI stays the independent
+gate). Its exit status is the only failure signal.
 
-- **Order and scope.** It runs after the primary run, only on a passing **selected**
-  verdict (delegated, adapter, or an inert diff). `--full`, `test_command`, `--self-check`,
-  help, refusals and a failed or budget-deferred primary never run it (marker field
-  `skipped` where an eligible exit failed). The command runs under the same remaining
-  wall-clock budget: with a detected CI workflow an expiry is rc 6, else rc 1.
-- **What counts.** Added lines only, taken from one `git diff -U0` of the working tree
-  against `merge-base(<base>, HEAD)` plus untracked files (binary skipped). The base is
-  `--base`, else `origin/main`, else `origin/master` — never the upstream ref, which on a
-  pushed branch would hide every pushed fixture. A path or removal line that names the
-  string never fires. The string is matched as a fixed string, not a regex.
-- **Fail direction.** A scan that cannot decide (no base, a git failure) RUNS the command and
-  says so (`content_trigger=scan-error`); a miss is a CI-only red, a spurious run is minutes.
+- **Order and scope.** It runs after the primary run, on any passing verdict the operator
+  did not make `--full`: delegated, adapter, an inert diff, and a gate-side escalation to
+  full (global paths, empty diff, degraded census, no selector — the stack adapter's full
+  run never runs the repo-declared command). An operator's own `--full`, `test_command`,
+  `--self-check`, help, refusals, and `rc 7` (no test suite) never run it, and neither does
+  `--explain` (it only reports). A failed primary (marker field `skipped`) owns the verdict.
+  The command runs under the same remaining wall-clock budget: with a detected CI workflow
+  an expiry is rc 6 (field `deferred`), else rc 1.
+- **What counts.** Added lines only, taken from one `git diff -U0 --text` of the working tree
+  against `merge-base(<base>, HEAD)` plus untracked files (binary and symlinks skipped). The
+  base is `--base`, else `origin/main`, else `origin/master` — never the upstream ref, which on
+  a pushed branch would hide every pushed fixture. A path or removal line that names the
+  string never fires; a pure rename adds no line and does not fire. The string is matched as a
+  fixed string, not a regex. Globs: a pattern with a `/` matches the whole path (and `*`
+  crosses `/`, `**/` also matches zero directories); a bare name matches the basename.
+- **Fail direction.** A scan that cannot decide runs the command and says so
+  (`content_trigger=scan-error`, with `leg=` on stdout): no base ref, a failing `git`, a path
+  git C-quotes (a name holding a quote, backslash or control byte), a `--base` that looks
+  like an option, or an untracked tree past 20000 listed paths or 500 candidate files.
+  A miss is a CI-only red, a spurious run is minutes.
 - **Marker.** One trailing field on the `AFFECTED_GATE` line, only when armed and only on an
-  eligible exit: `content_trigger=<clear|ran|failed|skipped|scan-error>`. The command's
-  failure is rc 1 `reason=content-trigger-failed`; an inert diff that ran it reports
-  `reason=inert-content-trigger` (no "docs-only" claim). An unarmed gate's line is unchanged.
+  eligible exit: `content_trigger=<clear|ran|failed|deferred|skipped|scan-error>`. `failed` is
+  the command exiting non-zero (rc 1 `reason=content-trigger-failed`, with a
+  `CONTENT_TRIGGER_FAILED rc=N` line and a remedy); `deferred` is the command hitting the
+  shared budget with CI authoritative (rc 6); `skipped` is a primary that did not pass. An
+  inert diff that ran it reports `mode=selected` with `-` counts and `reason=inert-content-trigger`
+  on a pass (no "docs-only" claim). An unarmed gate's line is unchanged.
 - **`--explain`** prints `CONTENT_TRIGGER armed=1 state=<none|fired|scan-error> paths=<n>`
   and runs nothing (the `test_command` explain arm prints nothing: `test_command`
-  bypasses selection).
+  bypasses selection, so an armed trigger beside it is inert).
 - **Double run.** When the primary run already selected the same suite, it runs twice; this
   is accepted (about a minute and a half for this repo's ratchet) rather than deduplicated.
 - **Choosing `content_trigger_paths`.** Keep the globs to trees where a fixture legitimately
   names the string; the trigger rate over recent history should stay small (this repo's
   set was held to about 10 percent of first-parent commits). Re-measure when the globs
   change: count commits whose diff adds the string to a file under the globs.
+- **Known limits.** A tracked file that git filters (clean/smudge, LFS pointers) is diffed
+  after the filter; a file in a nested repository is not read; a command that swallows its
+  own exit status (`cmd | cat`, a trailing `&`) is outside the vacuity denylist.
 
 ## Worked examples
 

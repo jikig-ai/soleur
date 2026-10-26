@@ -33,3 +33,12 @@ Time-boxed read of `melodic-software/claude-code-plugins` `plugins/toolchain`: a
 - Every skill call site names one entry point; repos with no runner get adapters, repos with a capability-positive runner delegate, repos with a `test_command` override bypass selection.
 - The gate is a local evidence layer only; the PR-merge authority stays with CI's required `test` context.
 - The Soleur-repo behavior is NOT unchanged-modulo-indirection: delegation moves base resolution, inert classification (an all-docs diff no longer exits `NO_TESTS_AFFECTED` gate-side — `test-all.sh`'s own always-on ratchets still run), and global/empty-diff handling (`--full` is now sent only when the operator asked) into the runner, which is strictly better informed. Adapter-arm semantics (the inert/global tables, `reason=empty-selection`, `no-base-ref`) apply only where no capable runner exists.
+
+## Addendum (2026-10-26)
+
+The gate gained a config-declared content trigger (three `.soleur-test-gate.json` keys; #10924 P4b): when a diff adds a configured fixed string to a file under configured globs, a passing run that the operator did not make `--full` also runs a configured command (marker field `content_trigger=<clear|ran|failed|deferred|skipped|scan-error>`, contract in `affected-gate-contract.md`).
+
+- It is an additive, per-repo-declared coverage channel. It does not reverse ADR-242 decision 8's deferral of NARROWING selection by token-level diff edges; it can only add a run, never remove one.
+- A scan that cannot decide runs the command (fail toward coverage, as in ADR-242 decision 3).
+- The command is trusted like `test_command`: a config string run through `bash -c`, with CI as the independent gate.
+- It hooks `finish()` behind an explicit eligibility flag, so a new exit site is ineligible until it opts in.
