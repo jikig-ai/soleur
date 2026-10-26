@@ -23,14 +23,17 @@ Product scope was minimal by operator choice (2026-10-25): host list and decisio
 |---|---|---|
 | Who can read | Every current workspace member (`is_workspace_member`, which excludes pending and removed). Not gated on `web_egress` or the collection flag, so history stays readable after a toggle-off | CLO, CPO, CTO agree; ruling D |
 | Read path | SECURITY DEFINER RPC through the tenant client; **no member SELECT policy and no table grant**; RPC raises `42501` for non-members (route maps to 403). Direct `.from(table).select()` stays a permission error | Ruled by CTO agent |
-| Shape | Group by (requested_host, decision) over a window; RPC takes a window enum, v1 UI fixes 30 days; limit 200 (clamp 500), `truncated` flag, `(other)` overflow row, `statement_timeout 5s` | Ruled by CTO agent; window scope by operator |
+| Shape | Group by (requested_host, decision) over a window; RPC takes a window enum, v1 UI fixes 30 days; limit 200 (clamp 500), `truncated` flag, typed `overflow` field (see Overflow row; supersedes the earlier `(other)` row), `statement_timeout 5s` | Ruled by CTO agent; window scope by operator |
 | Honest claims | "at least N requests", "N sites contacted plus unlisted overflow", "N blocked", last activity; never "complete", "every connection", "tamper-proof", never sessions | CTO, CPO, CLO |
 | Copy | Hosts and outcome are best-effort and entries may be missing (flood cap, `drop_newest`); history visible to all current members including pre-join activity; no member/session recorded; about 30 days then deleted, separate operator copy exists; toggle-off stops new records but deletes nothing; erasure path linked | CLO, CPO |
 | DSAR | The view does not satisfy an Art. 15 request; `egress-audit-dsar` runbook stays the path (add a line). No CSV export | CLO |
 | Flag | No new read-side flag; data is already gated by per-org collection (off for externals until after PR2 plus a 7-day owner notice) | Ruled by CTO agent |
 | Migration | `164_*` additive (function plus REVOKE/GRANT), `.down.sql` drops the function (163 is taken) | Ruled by CTO agent |
 | Rate limit and observability | `withUserRateLimit` (about 30/min/user), `Cache-Control: private, no-store`, `reportSilentFallback` feature `egress-audit-read` with reason codes only | Ruled by CTO agent |
-| Visual design | New wireframe for the destination view and the card in both toggle states, committed before implementation | `wg-ui-feature-requires-pen-wireframe`; ux-design-lead running |
+| Visual design | `knowledge-base/product/design/settings/egress-audit-log.pen`; screenshots `07-01..07-21` (card both toggle states with "Last request: X ago", enable dialog, destination populated, populated with web access off, truncated, loading, error and three empty states; desktop and mobile). Added 2026-10-26 | `wg-ui-feature-requires-pen-wireframe` |
+| Overflow row | Typed `overflow` field in the RPC, not the literal `(other)` row. UI label "Other hosts, not listed individually" with `at least N requests` and a tooltip that counts are minimums; one row per decision; the filter applies to it. Overflow counts merge with `GREATEST`, so they are very loose lower bounds | Ruled by CTO agent 2026-10-26 |
+| Decision labels | Filter All / Allowed / Blocked / Other. DB `denied` shows as "Blocked"; `other` is a third visible state (neither folded into Blocked nor Allowed). Each state is icon plus text plus colour, never colour alone | Ruled by CTO agent 2026-10-26 |
+| Enable-dialog copy | "Every outbound request is logged with workspace attribution" is removed (conflicts with the forbidden word "every", implies a per-request log, and over-promises while collection is off for externals). Replaced by the best-effort recording notice in wireframe 07-02, rendered only when `egress-audit-collection` is on for the org. Needs CLO sign-off with the document mirrors | Ruled by CTO agent 2026-10-26; CLO sign-off pending |
 
 Inherited rulings kept: A (collection off for externals until PR2 plus owner notice at least 7 days), B (notice, not re-confirmation), D (toggle off is not a purge).
 
@@ -68,6 +71,7 @@ Members may read; t6 re-screen concludes "no full DPIA, conditional" (nine field
 - Does any member have a per-user private agent session? If so, one member's hosts become visible to another and the t6 re-screen must weigh it (CLO, confirm with CPO).
 - The owner notice (ruling B) goes to owners only; whether non-owner members need a notice or the in-view disclosure suffices (CLO).
 - Real customer volume is still unmeasured (zero real-workspace rows); it cannot be measured before collection is enabled, so PR2 does not wait on it. Sizing stays on the CTO's assumption (about 80k rows/day at 1,000 workspaces) and the RPC is bounded by limit and `statement_timeout`.
+- The enable-dialog notice depends on whether the client can read `egress-audit-collection` for the org; the plan must confirm how the value reaches the component (CTO).
 - Time-range selector and 24h request count on the card: deferred (out of scope for v1).
 - Per-member attribution and CSV export: excluded by design (out of scope).
 
