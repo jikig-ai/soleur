@@ -826,6 +826,12 @@ t_t41_diff_base_comes_from_the_lexer() {
   _expect "T41d 'cd W && git commit -p' takes the working-tree base -> deny" "d=$(_decision "$OUT")" _is_deny
   _run_cmd "$BARE" "cd $WT && git commit -m 'see git commit -a docs'"
   _expect "T41e '-a' inside a quoted 'git commit' in the message does not flip the base -> allow" "d=$(_decision "$OUT")" _is_allow
+  # Text misreads the lexer gets right (CTO upheld the amendment to T5): -ma is -m with the message "a",
+  # -uall is a untracked-files mode, and "-a" after `--` is a pathspec. None of them is commit -a.
+  for c in "git -C $WT commit -ma" "git -C $WT commit -uall -m x" "git -C $WT commit -m x -- -a"; do
+    _run_cmd "$BARE" "$c"
+    _expect "T41f [${c#git -C * }] is not 'commit -a' -> allow (nothing staged)" "d=$(_decision "$OUT")" _is_allow
+  done
   rm -rf "$BARE"
 }
 
@@ -974,7 +980,7 @@ _selftest_instrument
 
 # Assertion floor: not equality (every added assertion would then be a spurious failure); reported with
 # printf + exit, never through the helpers it backstops.
-MIN_ASSERTIONS=100
+MIN_ASSERTIONS=103
 if [[ $((pass + fail)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran, floor is %s - the suite is not asserting\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
