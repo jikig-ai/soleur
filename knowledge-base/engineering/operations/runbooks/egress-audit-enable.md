@@ -23,7 +23,7 @@ every box for that scope is checked.
 
 ## Any external workspace (in addition)
 
-- [ ] PR2 of #9545 has merged (member read policy, read route, card, wireframe, DPIA trigger t6 re-screen).
+- [ ] PR2 of #9545 has merged (member read function and audit view, card, wireframe, DPIA trigger t6 re-screen at addendum section 12; there is no member read policy and no read route).
 - [ ] The owner notice (email and in-app) has been out for at least 7 days.
 - [ ] The CLO-reviewed public wording is merged and the counsel items recorded on the PR are resolved or accepted.
 - [ ] The operator has explicitly authorized the production flip.
