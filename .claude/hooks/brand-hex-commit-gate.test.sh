@@ -907,13 +907,14 @@ t_t48_no_perl_movers_and_messages() {
   _seed_bare
   _stage "$WT" "$BANNER" "$OFFBRAND_TSX"
   for c in "$(printf 'echo hi\ncd %s\ngit commit -m x' "$WT")" "env -C $WT git commit -m x" \
-           "if cd $WT; then git commit -m x; fi" "'cd' $WT && git commit -m x"; do
+           "if cd $WT; then git commit -m x; fi" "'cd' $WT && git commit -m x" "env --cd=$WT git commit -m x"; do
     _run_cmd "$BARE" "$c" "$nop"
     _expect_warn_allow "T48 no perl: mover shape [${c:0:22}] -> WARN + allow"
   done
   rm -rf "$BARE"
   repo=$(_seed_repo); _stage "$repo" "$BANNER" "$OFFBRAND_TSX"
-  for c in 'git commit -m "cd into dir fix"' "git commit -m 'document GIT_DIR and --chdir'" 'git commit -am "build && cd out"'; do
+  for c in 'git commit -m "cd into dir fix"' "git commit -m 'document GIT_DIR and --chdir'" 'git commit -am "build && cd out"' \
+           'git diff --check && git commit -m x' 'npm test -- --changed && git commit -m x'; do
     _run_cmd "$repo" "$c" "$nop"
     _expect "T48b no perl: a mover named only in the message is still scanned [$c] -> deny" "d=$(_decision "$OUT") err=${ERR:0:100}" _is_deny
   done
@@ -973,7 +974,7 @@ _selftest_instrument
 
 # Assertion floor: not equality (every added assertion would then be a spurious failure); reported with
 # printf + exit, never through the helpers it backstops.
-MIN_ASSERTIONS=97
+MIN_ASSERTIONS=100
 if [[ $((pass + fail)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran, floor is %s - the suite is not asserting\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -22,7 +22,8 @@
 # `git commit <pathspec>` / `-o` / `-i` keep the plain diff base; the would-be-index lib is a follow-up (ADR-301).
 # One diff base serves the whole command, so `git -C A commit -a && git commit` is judged as one. Without perl
 # the lexer cannot run: a plain commit still takes the cwd path, one whose text moves the target warns and
-# allows, and a loose-only `git -x commit` form is allowed unscanned.
+# allows, and a loose-only `git -x commit` form is allowed unscanned (with a bypass row). Its regexes inspect
+# only the first 4 KB of the command (they are super-linear), so a mover past that point is not seen.
 #
 # Decision mechanism: this hook emits the repo-standard PreToolUse JSON
 # `{permissionDecision: deny}` with exit 0 (NOT a bare `exit 2`). Every sibling
@@ -163,7 +164,7 @@ warn_allow_undeterminable() {
 moving_re='(^|[[:space:];&|({`"'"'"'!])(builtin[[:space:]]+)?\\?['"'"'"]?(cd|pushd)['"'"'"]?([[:space:]]|$)'
 moving_re+='|git[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*-C[[:space:]]'
 moving_re+='|(^|[[:space:]])env([[:space:]]+-[^[:space:]]+)*[[:space:]]+-[A-Za-z]*C([[:space:]]|$)'
-moving_re+='|--git-dir|--work-tree|--ch[a-z]*|--wd|--working-directory|[[:space:]]-D[[:space:]]|core\.(worktree|bare)|--config-env'
+moving_re+='|--git-dir|--work-tree|--(c|cd|ch|chd|chdi|chdir)([[:space:]=]|$)|--wd|--working-directory|[[:space:]]-D[[:space:]]|core\.(worktree|bare)|--config-env'
 moving_re+='|GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CONFIG)'
 moving_re+='|(chroot|nsenter|unshare)[[:space:]]'
 # Lexer unavailable: does a loose-only text read as a git commit command at all?
