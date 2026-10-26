@@ -3050,7 +3050,20 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the post-replace check reads the keeper's host-emitted row through the Better Stack ClickHouse read connection
   // (BETTERSTACK_QUERY_*, Doppler soleur/prd_terraform). NO SUBSTITUTE: the host is deny-all-public with no SSH and the ingest token is
   // write-only; the offline suites prove the row grammar, not that the stored stream carries it. Genuine.
-  const BASELINE_DECLARED_PROBES = 81;
+  // #11139 (2026-10-26): +1 (81 -> 82) for `2026-10-26-chore-trim-inngest-user-data-before-host-replace-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash apps/web-platform/infra/inngest-userdata-budget.sh --json`) renders the template with Terraform's
+  // `templatefile()` and `base64gzip()`; the `terraform` binary is not on Check 10's sandbox PATH and no allowlisted verb renders it.
+  // The declaration says so and says it is a tool-absence waiver, not a credential. NO SUBSTITUTE: the real gate is the CI job
+  // `inngest-userdata-budget` (it runs on every infra PR and every push to main) plus the same script run locally. Genuine, and the
+  // narrowest reading of the field: Check 10 records SKIP-DECLARED instead of a FAIL on an `rc=127` that proves nothing.
+  // #10552 (2026-10-26): +1 (82 -> 83) for `2026-10-26-fix-compound-promote-proposer-refusal-line-cap-and-skill-guard-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/compound-promote-draft-edit-10552.sh`) reads the proposer's outcome rows from the
+  // Better Stack ClickHouse read connection (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_scheduled). NO SUBSTITUTE: the
+  // refusal rows exist only in Better Stack and the warehouse has no unauthenticated read path; the offline suites prove the marker
+  // grammar and the probe's grading, not that the stored stream carries a run's rows. Genuine.
+  const BASELINE_DECLARED_PROBES = 83;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
