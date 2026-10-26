@@ -13,6 +13,35 @@ requires_cpo_signoff: true
 
 > Spec lacks valid lane: — no `spec.md` exists for this branch; defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Sections enhanced:** Technical Considerations, Research Insights, Guard Contract, Alternatives
+**Research agents used:** none spawnable in this harness — all deepen-plan mechanical halt gates and quality checks were applied directly by the planning agent (recorded below); the per-section/review-agent fan-out (skill phases 2–6) could not run and is flagged in `decision-challenges.md` + the session summary.
+
+### Deepen halt-gate results
+
+| Gate | Result |
+|---|---|
+| 4.4 precedent-diff | PASS — precedent locations cited (049/079/084/107 grant shapes, `definer-grants.ts:100` noise-stripper, `lint-migration-fk-preconditions.sh`, `rpc-cases.ts` registry); no novel pattern introduced |
+| 4.5 network-outage | N/A — no trigger patterns |
+| 4.55 downtime/cutover | Evaluated — no downtime class (grants-only DDL; note added to Technical Considerations) |
+| 4.6 user-brand impact | PASS — section present, `single-user incident`, concrete content |
+| 4.7 observability | PASS — 5 fields, probe `grep` allowlisted, literal `expected_output`, no ssh, <15s |
+| 4.8 PAT-shaped variable | PASS — regex sweep zero hits |
+| 4.9 UI-wireframe | N/A — no UI-surface files |
+| 4.10 encryption posture | PASS — fields non-boilerplate, `does_not_defend` non-empty, no exception needed |
+| 4.11 guard contract | PASS — `lint-guard-contract.py` green (2 entries, matrices ≥3 rows, structural assemblies) |
+| 4.12 scope check | PASS — 1 unfenced section, all asks mapped, `Recommendation:` present |
+| 4.13 task-design | N/A — no new autonomous-task surface (existing workflows edited only) |
+
+### Key Improvements from the deepen pass
+
+1. **Stale citation corrected** — #6340 auto-closed stale 2026-10-10 (NOT_PLANNED); the ADP live-probe never ran, so "pending probe" claims now read "no validated ADP path exists" (strengthens the per-table-grants choice).
+2. **Lexer requirement folded into the lint spec** — the detector must noise-strip comments/dollar-bodies/strings per `definer-grants.ts:100` (a line-scanner would false-positive/negative); the `EXECUTE`-dynamic blind spot is explicitly assigned to the runtime tier.
+3. **Snapshot scope pinned to the three api roles** — non-API-role grants (e.g., `supabase_auth_admin` in 049) replay verbatim and are outside the flip; grantee-set widening ruled out.
+4. **ADR ordinal re-verified against freshly-fetched `origin/main`** — 303 confirmed next free; labels `domain/engineering` + `type/chore` verified live via `gh label list`; #4027/#4647 states verified live.
+
 ## Overview
 
 On 2026-10-30 Supabase applies the post-May new-project default to all existing projects: tables created in `public` stop receiving automatic `SELECT,INSERT,UPDATE,DELETE` grants to `anon`/`authenticated`/`service_role` ([changelog 45329](https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically)). Existing tables keep their grants; only tables *created after* the flip are affected on an existing project — but every *fresh* environment (new project, preview branch, `supabase db reset`, a post-flip local `supabase start` per supabase/cli#5524) replays all 182 up-migrations into a world with no default table grants, so every relation the repo expects to be API-reachable needs explicit `GRANT`s.
@@ -54,7 +83,7 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 - `apps/web-platform/docs/migration-rollback.md` — forward-only convention; `.down.sql` files are manual aids, not automation.
 - Learnings: `2026-03-20-supabase-column-level-grant-override.md` (table grant subsumes column grants — the 006/079 trap), `2026-05-21-rls-restrictive-policy-plus-column-grant-blocks-tenant-writes.md` (missing grant = silent write failure, #4224), `2026-05-22-schema-vs-ledger-drift-on-dev-supabase.md` (`to_regclass` precondition convention).
 
-**ADRs read (Phase 0.6 corpus grep):** ADR-111 (fuzz harness; `supabase db reset` structurally incompatible — 29 duplicate numeric prefixes; faithfulness contract includes `role_table_grants` parity), ADR-112 (two-tier guard precedent; `ALTER DEFAULT PRIVILEGES` deferred to #6340 pending a live role-scope probe — a mis-scoped ADP is a silent no-op under `supabase_admin`), ADR-153 (loopback binding), ADR-044/ADR-101 (workspace tenancy + client-RPC conventions). No ADR decided the *table-grant* question — this plan's mechanism is not a rejected alternative; ADR-112's ADP-deferral reasoning (mis-scope = silent no-op) is the load-bearing precedent applied here.
+**ADRs read (Phase 0.6 corpus grep):** ADR-111 (fuzz harness; `supabase db reset` structurally incompatible — 29 duplicate numeric prefixes; faithfulness contract includes `role_table_grants` parity), ADR-112 (two-tier guard precedent; `ALTER DEFAULT PRIVILEGES` deferred to #6340 pending a live role-scope probe — a mis-scoped ADP is a silent no-op under `supabase_admin`; **#6340 auto-closed stale 2026-10-10, NOT_PLANNED — the probe never ran**, so no validated ADP path exists either way), ADR-153 (loopback binding), ADR-044/ADR-101 (workspace tenancy + client-RPC conventions). No ADR decided the *table-grant* question — this plan's mechanism is not a rejected alternative; ADR-112's ADP-deferral reasoning (mis-scope = silent no-op) is the load-bearing precedent applied here.
 
 **External docs:** Supabase changelog 45329 (the breaking change; existing tables keep grants), `supabase.com/docs/guides/api/securing-your-api` (default-privilege table: the flip removes `select,insert,update,delete` but tables KEEP `truncate,references,trigger,maintain` and sequences keep only `update` — **sequence `USAGE` is lost**, so serial/identity inserts via Data API would fail even with a table grant), `supabase/cli#5524` (`[api].auto_expose_new_tables` tri-state; unset now = revoke; `true` deprecated, removed 2026-10-30).
 
@@ -118,6 +147,9 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 - **Sequences.** Post-change, new sequences keep only `update` — `USAGE` (needed for `nextval`/identity inserts via Data API) is lost. The snapshot and lint both cover `public` sequences.
 - **Down-migration semantics.** Convention ships a `.down.sql` sibling, but this migration's honest down is a no-op: `GRANT`s that duplicate already-effective privileges cannot be "un-added" — `REVOKE` removes the ACL entry regardless of whether it came from defaults or the explicit grant, so a revoke-down on prd would *reduce* access below the pre-164 state. The `.down.sql` documents this; a real rollback is the manual procedure in `docs/migration-rollback.md`.
 - **False-green kill.** The fuzz gate asserts grant *state* (`has_table_privilege`), not access *behavior* — a missing grant can no longer masquerade as an RLS denial (both are 42501 at the SQL layer).
+- **Availability during apply (deepen 4.55 evaluated — no downtime class).** The migration is grants-only DDL: `GRANT` takes a brief metadata lock per relation, no table rewrite, no `CONCURRENTLY`-forbidden constructs, one `--single-transaction` apply. Zero-downtime by construction; the offline-inducing trigger list (rewrite DDL, hot-table locks, deploy/router changes) does not match.
+- **Scope of the snapshot: the three api roles only.** `anon`/`authenticated`/`service_role` are the roles the flip affects. Non-API-role grants already explicit in migrations (e.g., 049's `supabase_auth_admin`) replay verbatim on fresh builds and are unaffected — do NOT widen the snapshot's grantee set.
+- **Migration role grant-authority.** `run-migrations.sh` applies files as the connecting role, which owns the tables it created — `GRANT` needs no extra privilege. Assumes the same DSN role used on every apply path (prd migrate job + fuzz stack both use it; the fuzz run is itself the proof).
 - **Attack surface enumeration (grant surface):** every `public`-schema relation is reachable through (a) PostgREST/supabase-js as `anon`/`authenticated` (RLS-bounded), (b) `service_role` (RLS-bypassing — server-only), (c) SECURITY DEFINER RPCs (owner rights, grant-independent — governed by ADR-112's AC8, out of scope), (d) direct SQL as the migration/postgres owner (grant-independent). The snapshot only materializes (a)/(b)'s existing state; (c)/(d) are unaffected by definition.
 - **NFR:** no performance impact (ACL metadata); security posture preserved exactly; compliance posture preserved exactly (no new processing — see GDPR note).
 - **GDPR advisory (Phase 2.7 gate fires — `.sql` surfaces).** The change alters no data flow: it re-states privileges already effective on prd. PII-bearing relations (`dsar_export_audit_pii`, `beta_contacts`, `email_*`, `messages`, `conversations`) receive exactly their current grants; the narrowing follow-up is where any Art. 5(1)(c) minimization of the API surface would land. No Critical findings anticipated; no `compliance-posture.md` write.
@@ -340,7 +372,7 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 
 | Approach | Verdict |
 |---|---|
-| `ALTER DEFAULT PRIVILEGES FOR ROLE <migration-role> IN SCHEMA public GRANT …` to keep auto-expose | Rejected — re-opens the exact over-exposure Supabase is closing (every internal table becomes API-granted under RLS), contradicts #4027's narrowing direction, and ADR-112 established that a mis-scoped ADP under `supabase_admin` is a silent no-op pending the #6340 live probe |
+| `ALTER DEFAULT PRIVILEGES FOR ROLE <migration-role> IN SCHEMA public GRANT …` to keep auto-expose | Rejected — re-opens the exact over-exposure Supabase is closing (every internal table becomes API-granted under RLS), contradicts #4027's narrowing direction, and ADR-112 established that a mis-scoped ADP under `supabase_admin` is a silent no-op (the #6340 probe meant to validate ADP auto-closed stale 2026-10-10 and never ran — no validated ADP path exists) |
 | Hand-audit each of ~70 relations and hand-write grants | Rejected as the grant source — snapshot-from-catalog IS the audit materialized; the hand audit still runs to produce the classification registry + narrowing list, but not the DDL |
 | Tighten internal-table grants during the backfill | **Deferred** — any narrowing changes prd behavior (P1 forbids) and needs per-relation consumer proof; filed as follow-up issue paired with #4027 |
 | Edit the 42 historical migrations to carry grants | Rejected — `lint-migration-immutability.sh` forbids mutating applied history; a single forward backfill covers the corpus |
