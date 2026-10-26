@@ -110,6 +110,9 @@
 #                  unless the cache dir is owned, non-symlink and was just created. The two test
 #                  suites added by the same PR carry NO baseline rows: every fixture write is under
 #                  a canonical `assert_fixture_dir`.
+#   -12 (2026-10-24) #10112: inngest-luks-cutover.sh (11 rows) and inngest-luks-cutover.test.sh (1 row)
+#                  were DELETED with the retired cutover trio, so both rows leave the baseline and no
+#                  other row moves. The three entries below that name those files are history.
 #   1439 -> 1440   #6894, ship-time advisor round: one more `$STATE_DIR` write in
 #                  inngest-luks-cutover.sh (the rollback-verified latch) — same root class as the
 #                  ten rows already itemised below; the row goes 10 -> 11 and nothing else moves.
@@ -208,8 +211,6 @@
 2	apps/web-platform/infra/inngest-doublefire-probe.sh
 5	apps/web-platform/infra/inngest-inventory.sh
 1	apps/web-platform/infra/inngest-inventory.test.sh
-11	apps/web-platform/infra/inngest-luks-cutover.sh
-1	apps/web-platform/infra/inngest-luks-cutover.test.sh
 7	apps/web-platform/infra/inngest-nic-wait.test.sh
 2	apps/web-platform/infra/inngest-provision-rehearsal.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh

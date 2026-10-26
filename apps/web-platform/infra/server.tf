@@ -2271,7 +2271,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
     file("${path.module}/inngest-registry-probe.sh"),
     file("${path.module}/inngest-doublefire-probe.sh"),
-    # #6780 — the five dedicated-host carriers (the ADR-135 refresh set). Webhook-
+    # #6780 — the four dedicated-host carriers (the ADR-135 refresh set). Webhook-
     # delivered so FILE_MAP/payload stay consistent; on web hosts they are inert
     # /usr/local/bin files. Registered here so a body-only edit re-fires the push,
     # same #5492 rationale. Lockstep: DEPLOY_PIPELINE_FIX_TRIGGERS + DPF_REGEX + the
@@ -2280,7 +2280,6 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/inngest-cutover-flip.sh"),
     file("${path.module}/inngest-server-flip-guard.sh"),
     file("${path.module}/cat-inngest-cutover-state.sh"),
-    file("${path.module}/inngest-luks-cutover.sh"),
     # #5934 — the privileged char-device config.lock substrate sweep is
     # webhook-delivered (push-infra-config.sh payload + FILE_MAP + DEST_SPEC), so a
     # body-only edit must re-fire deploy_pipeline_fix to reach /usr/local/bin (same

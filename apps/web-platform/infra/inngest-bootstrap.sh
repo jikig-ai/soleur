@@ -5,7 +5,7 @@
 #   - Downloads pinned inngest-cli, SHA256-verifies, installs to /usr/local/bin.
 #   - Writes systemd units for inngest-server.service, inngest-heartbeat.{service,timer},
 #     inngest-heartbeat-failure-log.service, inngest-server-probe.{service,timer}, and
-#     vector.service; stages the flip + LUKS cutover units from the image's /tmp payload.
+#     vector.service; stages the flip units from the image's /tmp payload (the LUKS cutover trio was retired, #10112).
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
 #   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then
@@ -1510,7 +1510,6 @@ fi
 # gate silently fell through to DEDICATED_FLIP=0.) This runs BEFORE the inngest-server unit
 # write + restart below so the ExecStartPre guard script exists on disk first.
 DEDICATED_FLIP=0
-DEDICATED_LUKS_CUTOVER=0
 if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   if [[ -f /tmp/inngest-cutover-flip.sh && -f /tmp/inngest-server-flip-guard.sh \
         && -f /tmp/inngest-cutover-flip.service && -f /tmp/inngest-cutover-flip.timer ]]; then
@@ -1530,27 +1529,9 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   else
     log "warn: cutover flip assets not staged at /tmp/inngest-cutover-flip.* (pre-#6178 image or undelivered assets); skipping flip install"
   fi
-  # LUKS blue-green cutover trio (#6894) — dedicated host only, delivered like the flip trio.
-  # FAIL-CLOSED, deliberately NOT a mirror of the flip's skip arm above: a skipped install yields a
-  # host that boots healthy with a flag nothing polls, so op=luks-cutover "succeeds" while the host
-  # never moves. A missing trio therefore emits install_missing under the unit's own tag (shipped by
-  # Vector, the only off-box read of this host) and the timer is NOT enabled. It does not abort the
-  # bootstrap: the scheduler this host exists to run must still come up.
-  if [[ -f /tmp/inngest-luks-cutover.sh && -f /tmp/inngest-luks-cutover.service && -f /tmp/inngest-luks-cutover.timer ]]; then
-    log "installing LUKS cutover trio (#6894)"
-    install -m 0755 /tmp/inngest-luks-cutover.sh /usr/local/bin/inngest-luks-cutover.sh
-    install -m 0644 /tmp/inngest-luks-cutover.service /etc/systemd/system/inngest-luks-cutover.service
-    install -m 0644 /tmp/inngest-luks-cutover.timer /etc/systemd/system/inngest-luks-cutover.timer
-    DEDICATED_LUKS_CUTOVER=1
-  else
-    log "ERROR: LUKS cutover assets not staged at /tmp/inngest-luks-cutover.{sh,service,timer}; the cutover timer will NOT be enabled (install_missing, #6894)"
-    logger -t inngest-luks-cutover '{"marker":"SOLEUR_INNGEST_LUKS_CUTOVER","exit_code":1,"reason":"install_missing","flag":"unknown","detail":"the cutover trio was not staged to /tmp by cloud-init; the timer is not enabled","guard":"6894"}' 2>/dev/null || true
-    # AND the Vector-independent path. This is a BOOT-time failure, which is exactly the case where
-    # the journald->Vector leg may not exist yet: Vector is installed later in this same script, and
-    # its own install is non-fatal. A marker that depends on the shipper to report that delivery
-    # failed is the shape that hid #6178 for a whole cutover attempt.
-    /usr/local/bin/inngest-boot-phone-home.sh luks-cutover-install-MISSING "the cutover trio was not staged to /tmp; inngest-luks-cutover.timer is NOT enabled (#6894)" 2>/dev/null || true
-  fi
+  # The LUKS blue-green cutover trio (inngest-luks-cutover.{sh,service,timer}, #6894) is retired from
+  # the image (#10112): this script neither installs nor looks for it, so a host staged by an older
+  # cloud-init that still names it logs nothing and enables nothing.
 fi
 
 # Write the inngest-server systemd unit. RECONCILE-ALWAYS — deliberately
@@ -1855,12 +1836,6 @@ systemctl start inngest-server-probe.service || log "warn: server-probe oneshot 
 if [[ "${DEDICATED_FLIP:-0}" == "1" ]]; then
   systemctl enable --now inngest-cutover-flip.timer
   log "cutover flip poll timer enabled (#6178)"
-fi
-# #6894: the LUKS cutover poll. Its flag is unset on every host until op=luks-cutover, and unset is
-# a no-op, so enabling it is inert until an operator arms it.
-if [[ "${DEDICATED_LUKS_CUTOVER:-0}" == "1" ]]; then
-  systemctl enable --now inngest-luks-cutover.timer
-  log "LUKS cutover poll timer enabled (#6894)"
 fi
 
 # In-place upgrade completion marker. Logged even when the restart above was refused

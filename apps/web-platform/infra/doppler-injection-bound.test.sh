@@ -532,7 +532,7 @@ INDIRECT_RE = re.compile(r'\$\{!(\w+)(?:\[[^\]]*\])?(?:[-+=?:#%/^,@*][^}]*)?\}')
 # key NAME an env file carries), in every spelling the unit-side regex knows (the two share one grammar). The array
 # index list `${!MAP_KEY[@]}` matches too: it is not a secret lookup, and a doppler script that iterates a `*_KEY` array
 # would enter the population as a false positive, which fails closed (an ack or a bound resolves it). Bound to the `_KEY` convention on purpose: the unrestricted form also matched
-# `${!_seam+x}` in inngest-luks-cutover.sh, pulling that unit into the population and turning it red.
+# `${!_seam+x}` in the (since retired) inngest-luks-cutover.sh, pulling that unit into the population and turning it red.
 SCRIPT_KEY_INDIRECT_RE = re.compile(r'\$\{!(\w*_KEY)(?:\[[^\]]*\])?(?:[-+=?:#%/^,@*][^}]*)?\}')
 PATH_TOKEN_RE = re.compile(r'/usr/(?:local/)?bin/([A-Za-z0-9._-]+)')
 
@@ -902,17 +902,8 @@ _pin_seen "the web-host vector unit from soleur-host-bootstrap.sh (heredoc surfa
   'soleur-vector-install'
 # The unit this change is about.
 _pin_seen "inngest-cutover-flip.service" 'inngest-cutover-flip\.service'
-# #6894: the LUKS cutover unit is a SECOND root doppler-run unit on the same host, and it moves the
-# store. Seen AND bound — a bound that silently lapsed would put every name in soleur-inngest/prd
-# into the environment of a root script that executes several of them.
-_pin_seen "inngest-luks-cutover.service (#6894)" 'inngest-luks-cutover\.service'
-if grep -qE '^  UNIT: +inngest-luks-cutover\.service +surface=service +bound=True' "$CONTROL_OUT"
-then
-  pass "the LUKS cutover unit's --only-secrets bound is DETECTED (its list is on continuation lines too)"
-else
-  fail "the LUKS cutover unit reads as UNBOUNDED" \
-    "$(grep -E '^  UNIT: +inngest-luks-cutover' "$CONTROL_OUT")"
-fi
+# #6894 (RETIRED, #10112): the LUKS cutover unit was a SECOND root doppler-run unit on this host; its two pins
+# (seen, and bound=True) went with the unit when the cutover trio left the image.
 
 # THE JOIN IS LOAD-BEARING. The flip unit's bound lives ENTIRELY on continuation lines; without
 # CONT_RE the scanner reads it as unbounded and every row below is meaningless. Assert the
@@ -1417,7 +1408,8 @@ expect_green "H4 runcmd doppler invocation is NOT flagged (boot self-check must 
 TOTAL=$((PASS + FAIL))
 # 25 -> 29 -> 45 -> 61 (#9639: the wrapper-stage rows, then the review round's spelling and ack-exactness rows): set to the measured green count, not below it. Slack in a floor is the budget an
 # attacker (or an accidental deletion) gets for free.
-MIN_ASSERTIONS=61
+# 61 -> 59 (#10112): the two LUKS cutover unit pins (seen, bound) left with the retired unit; set to the measured green count.
+MIN_ASSERTIONS=59
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
