@@ -3503,7 +3503,7 @@ row_gr_history() {   # fewer first-parent commits than --commits, an unknown bas
   GR_BASEARG=no-such-ref gr_main; [[ "$GR_RC" -eq 2 ]] || ok=1
   return "$ok"
 }
-row_gr_spot_ok() { gr_main --spot-check 3; [[ "$GR_RC" -eq 0 ]] && tail -1 "$SANDBOX/gr.stdout" | grep -q ' spot_check=3 spot_compared=[1-9][0-9]*$'; }
+row_gr_spot_ok() { gr_main --spot-check 3; [[ "$GR_RC" -eq 0 ]] && grep -q ' spot_check=3 spot_compared=[1-9][0-9]*$' < <(tail -1 "$SANDBOX/gr.stdout"); }
 row_gr_spot_diverge() {   # a stub that disagrees on ONE suite stops the run (rc 4) naming the suite and the diff, and writes no table
   RUN_ENV=(PR_AFFECTED_REPLAY_GR_BREAK=gA); gr_main --spot-check 3; RUN_ENV=()
   [[ "$GR_RC" -eq 4 ]] && grep -Eq 'diff [0-9a-f]{12}: the model says [01] for suite gA' "$SANDBOX/gr.stderr" && [[ ! -e "$GR_OUT/glob-rate.tsv" ]]
@@ -3520,7 +3520,7 @@ row_gr_read_only() {   # the subcommand writes only under --out: the fixture rep
   gr_main --spot-check 3; after="$(gitq -C "$GR" status --porcelain=v1 | wc -l)$(md5sum < "$GR_ROWS")"
   [[ "$GR_RC" -eq 0 && "$before" == "$after" && "$(gitq -C "$GR" rev-parse HEAD)" == "$GR_HEAD" ]]
 }
-row_gr_help() { local o; o="$(python3 "$SUT" --help 2>&1)"; grep -q 'glob-rate' <<<"$o" && python3 "$SUT" glob-rate --help 2>&1 | grep -q -- '--spot-check'; }
+row_gr_help() { local o; o="$(python3 "$SUT" --help 2>&1)"; grep -q 'glob-rate' <<<"$o" && grep -q -- '--spot-check' < <(python3 "$SUT" glob-rate --help 2>&1); }
 row_gr_no_coverage_proof() {   # a glob verdict needs something that proves the cover: a pair list to cover, or an @tree cover; with neither it is baselined
   local c="$SANDBOX/gr-cand-nocov.tsv"
   printf 'gA\tglob:gr-fx/a/**.sh\n' > "$c"
@@ -3548,7 +3548,7 @@ row_gr_spot_calls() {   # the real selector runs once per sampled diff: K calls,
 }
 row_gr_spot_default() {   # no flag means 3, and 0 is refused: a verdict is never accepted without the model-versus-selector check
   local ok=0
-  gr_main; { [[ "$GR_RC" -eq 0 ]] && tail -1 "$SANDBOX/gr.stdout" | grep -q ' spot_check=3 spot_compared=[1-9]'; } || ok=1
+  gr_main; { [[ "$GR_RC" -eq 0 ]] && grep -q ' spot_check=3 spot_compared=[1-9]' < <(tail -1 "$SANDBOX/gr.stdout"); } || ok=1
   gr_main --spot-check 0; [[ "$GR_RC" -eq 2 ]] || ok=1
   gr_main --spot-check 1; [[ "$GR_RC" -ne 2 ]] || ok=1   # 1 is a valid minimum (it may legitimately exit 4 on this fixture, never 2)
   return "$ok"
