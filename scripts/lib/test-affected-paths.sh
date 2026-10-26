@@ -338,6 +338,9 @@ ALWAYS_ON_SUITES=(
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
   # fast-tier budget lint (scripts/test-all-fast-tier-budget) pins this set.
 
+  # S4 PR5 (#10861), PR4b row 6 (2): a whole-tree reader (it walks every tracked file of PJ_EXTS and SWEEP_EXTS) whose existing edges alone select it in
+  # more than 25% of the last 200 merged PRs, and which takes 30 s or less (measured 6081 ms, src=measured). Receipts: the pr5-glob-measurements spec directory (receipts/glob-rate/, under knowledge-base/project/specs/archive/ once the PR is shipped).
+  ".claude/hooks/grep-q-pipe-guard.test.sh"
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -1905,7 +1908,8 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PERSIST_SAFE_INTEGRATION_TEST_S
 # S4 PR4 (#10860): this list is PARTIAL on purpose. The suite also walks every tracked file whose extension is in PJ_EXTS (sh bash yml yaml tf tftpl template
 # service tmpl; pj_join_pairs over git ls-files, :2521-2527), which no exact-file list can express, so it names only the files its PRODUCER_JOIN,
 # SWEEP_DEFERRALS and SWEEP_TEST_CANARIES tables key on (each row's consumer loop is quoted in pairs-decisions.tsv). The
-# whole-tree read is a selection-policy call (criterion (c)), and the edges whose declaration reveals mentions stay held back (#10959).
+# whole-tree read was the selection-policy call of S4 PR5 (#10861): the suite is now in ALWAYS_ON_SUITES (measured verdict `always_on`), so these exact edges are
+# inert for selection and the audit skips the suite.
 AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(
   ".claude/hooks/"
   ".github/scripts/test/fixtures-validate-infra-templates.sh"
