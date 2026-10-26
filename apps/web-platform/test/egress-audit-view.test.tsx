@@ -21,6 +21,10 @@ import { EgressAuditView } from "@/components/settings/egress-audit-view";
 import { EGRESS_AUDIT_HEADING_ID } from "@/components/settings/egress-audit-focus";
 import { EGRESS_AUDIT_PATH, PAGE_LIMIT, type EgressAuditPayload, type EgressAuditResult } from "@/lib/egress-audit/summary";
 
+// Substring match on the accessible name: a host is data here, not a pattern.
+const rowFor = (host: string) =>
+  screen.getByRole("row", { name: (accessibleName) => accessibleName.includes(host) });
+
 // The completeness-claim rules (spec FR4): never these words, never a calendar date in a retention sentence.
 const FORBIDDEN = /\bcomplete\b|every connection|tamper-proof|\bsessions\b/i;
 // "all"/"every" used as a claim that the list is complete (not "every current member", not "(all outcomes)").
@@ -71,13 +75,13 @@ afterEach(cleanup);
 describe("EgressAuditView — populated", () => {
   it("lists hosts with outcome text, 'at least' counts and relative times; overflow rows are labelled and never host rows", () => {
     show(ready(payload()));
-    const row = screen.getByRole("row", { name: /github\.com/ });
+    const row = rowFor("github.com");
     expect(within(row).getByText("Allowed")).toBeTruthy();
     expect(within(row).getByText("at least 4,812")).toBeTruthy();
     expect(within(row).getByText("2 minutes ago")).toBeTruthy();
-    expect(screen.getByRole("row", { name: /example-tracker\.net/ })).toBeTruthy();
-    expect(within(screen.getByRole("row", { name: /example-tracker\.net/ })).getByText("Blocked")).toBeTruthy();
-    expect(within(screen.getByRole("row", { name: /httpbin\.org/ })).getByText("Other")).toBeTruthy();
+    expect(rowFor("example-tracker.net")).toBeTruthy();
+    expect(within(rowFor("example-tracker.net")).getByText("Blocked")).toBeTruthy();
+    expect(within(rowFor("httpbin.org")).getByText("Other")).toBeTruthy();
     const overflow = screen.getAllByText("Other hosts, not listed individually");
     expect(overflow).toHaveLength(2);
     expect(screen.queryByText("(other)")).toBeNull();
@@ -171,7 +175,7 @@ describe("EgressAuditView — populated", () => {
     expect(screen.getAllByRole("columnheader").map((c) => c.textContent)).toEqual(["Host", "Outcome", "Requests (minimum)", "Last seen"]);
     const rows = screen.getAllByRole("row");
     expect(rows).toHaveLength(1 + 3 + 2);
-    const row = screen.getByRole("row", { name: /github\.com/ });
+    const row = rowFor("github.com");
     expect(within(row).getByRole("rowheader").textContent).toContain("github.com");
     const cells = within(row).getAllByRole("cell");
     expect(cells).toHaveLength(3);
@@ -208,7 +212,7 @@ describe("EgressAuditView — populated", () => {
 
   it("web access unknown (null) with data shows rows and NO 'Web access is off' notice", () => {
     show(ready(payload(), { webAccess: null }));
-    expect(screen.getByRole("row", { name: /github\.com/ })).toBeTruthy();
+    expect(rowFor("github.com")).toBeTruthy();
     expect(screen.queryByText("Web access is off. Nothing new is recorded.")).toBeNull();
   });
 
@@ -226,7 +230,7 @@ describe("EgressAuditView — populated", () => {
 
   it("only host rows (no overflow) is still data", () => {
     show(ready(payload({ overflow: [] })));
-    expect(screen.getByRole("row", { name: /github\.com/ })).toBeTruthy();
+    expect(rowFor("github.com")).toBeTruthy();
     expect(screen.queryByText("No requests recorded yet")).toBeNull();
   });
 
@@ -234,13 +238,13 @@ describe("EgressAuditView — populated", () => {
     show(ready(payload(), { webAccess: false }));
     expect(screen.getByText("Web access is off. Nothing new is recorded.")).toBeTruthy();
     expect(screen.getByText("Records are deleted about 30 days after they were recorded.")).toBeTruthy();
-    expect(screen.getByRole("row", { name: /github\.com/ })).toBeTruthy();
+    expect(rowFor("github.com")).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/\b20\d\d\b[^:]*\bNov\b|until [A-Z][a-z]{2} \d/);
   });
 
   it("rows are shown even when collection is off now (history stays visible), and the banner stays", () => {
     show(ready(payload(), { collection: false }));
-    expect(screen.getByRole("row", { name: /github\.com/ })).toBeTruthy();
+    expect(rowFor("github.com")).toBeTruthy();
     expect(screen.getByText("A best-effort summary, not a full record.")).toBeTruthy();
   });
 });

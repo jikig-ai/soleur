@@ -198,7 +198,7 @@ describe("177_egress_audit_summary_rpc.sql (shape)", () => {
 
   it("revokes from PUBLIC, anon, authenticated and service_role, then grants authenticated only", () => {
     expect(upExec).toMatch(
-      new RegExp(`REVOKE\\s+ALL\\s+ON\\s+FUNCTION\\s+${SIG.replace(/[().]/g, "\\$&")}\\s+FROM\\s+PUBLIC,\\s*anon,\\s*authenticated,\\s*service_role`, "i"),
+      new RegExp(`REVOKE\\s+ALL\\s+ON\\s+FUNCTION\\s+${SIG.replace(/[\\().]/g, "\\$&")}\\s+FROM\\s+PUBLIC,\\s*anon,\\s*authenticated,\\s*service_role`, "i"),
     );
     const grants = [...upExec.matchAll(/GRANT\s+EXECUTE\s+ON\s+FUNCTION[\s\S]*?;/gi)].map((m) => m[0]);
     expect(grants).toHaveLength(1);

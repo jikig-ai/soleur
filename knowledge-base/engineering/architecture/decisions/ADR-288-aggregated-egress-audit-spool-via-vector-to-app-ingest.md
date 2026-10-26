@@ -194,7 +194,7 @@ that said a policy "lands in PR2" (migration 162 is immutable on `main`; its hea
 - **Cost shape.** The page query is a top-N rewrite (`ORDER BY last_seen DESC LIMIT p_limit + 1` over real-host groups), the function
   pins `SET plan_cache_mode = force_custom_plan` (after five executions in one session plpgsql would flip to a generic plan), and sums
   are clamped to 9007199254740991 (JS `MAX_SAFE_INTEGER`). `p_limit` stays clamped to 0..500; it is not the cost driver.
-- **Loader.** `forbidden` only when the 42501 message starts with `egress audit: `; any other 42501 (an engine "permission denied for
+- **Loader.** `forbidden` only when the 42501 message starts with the constant prefix `egress audit:` and a space; any other 42501 (an engine "permission denied for
   function", a lost EXECUTE grant) is a paged `rpc_error` with `pg_code=42501`. A Flagsmith outage maps to `collection: "unknown"`
   through `readRuntimeFlagDetailed` / `readEgressAuditCollectionState`; ingest stays boolean. The op registry gains
   `hint_workspace_read` and `web_access_read` (unpaged) and every mirror carries a sanitised `pg_code` tag. Bounds: page pointer
