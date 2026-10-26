@@ -25,13 +25,13 @@ Ruled by CTO agent, 2026-10-26: Per-table explicit GRANTs in each creating/backf
 
 Ruled by CTO agent, 2026-10-26: Generated snapshot from the live prd catalog, replayed verbatim; zero prd behavior change; narrowing deferred to a follow-up paired with #4027 - effective privileges compose defaults + explicit grants + revokes and cannot be read from source text; the catalog is the only ground truth, and mid-backfill narrowing without per-relation consumer proof is the #4647 silent-failure class.
 
-**Decision:** Generate the backfill from a read-only prd catalog extraction (`role_table_grants` + `column_privileges` + `role_usage_grants`), emitting table-level GRANTs where held and per-column GRANTs where table-level was deliberately revoked. No narrowing inside migration 164.
+**Decision:** Generate the backfill from a read-only prd catalog extraction (`role_table_grants` + `column_privileges` + `role_usage_grants`), emitting table-level GRANTs where held and per-column GRANTs where table-level was deliberately revoked. No narrowing inside migration 174.
 
 **Rationale:** Verified repo evidence shows effective state is not derivable from migration text: `006_restrict_tc_accepted_at_update.sql:7-11` (`REVOKE UPDATE` then `GRANT UPDATE (email)` on `users`), `079_workspace_repo_ownership_schema.sql:88-89` (`REVOKE SELECT` then column-list re-grant on `workspaces`), `049_runtime_mint_intent.sql:66-78` (`REVOKE ALL … FROM PUBLIC, anon, authenticated` then `GRANT INSERT`/`GRANT UPDATE(created_at)` to `service_role` and `GRANT SELECT, DELETE` to `supabase_auth_admin`). A table-level GRANT would silently subsume the 006/079 column splits (the `2026-03-20` learning) — hand-guessing that boundary across ~70 relations is exactly where a snapshot-error becomes a PII exposure. The hand-audit still runs: it produces the per-relation classification that seeds `table-grants.ts` and the narrowing list — but as analysis, not as DDL.
 
 **Rejected alternatives:** Hand-write the grant DDL per relation (rots before review, cannot see effective state); narrow during backfill (violates P1 — any effective-state change on prd is behavior change; each narrowing needs a consumer-access proof that belongs in the follow-up issue with #4027, not in a 4-day remediation).
 
-**Dissent:** The snapshot's correctness rests on the generator actually reading `column_privileges` — a generator that reads only `role_table_grants` and emits `GRANT … ON TABLE` would re-open `github_installation_id`/`tc_accepted_at`. The verify/164 column-privilege assertions and the fuzz gate's column checks are the containment; AC2 names the three shapes explicitly.
+**Dissent:** The snapshot's correctness rests on the generator actually reading `column_privileges` — a generator that reads only `role_table_grants` and emits `GRANT … ON TABLE` would re-open `github_installation_id`/`tc_accepted_at`. The verify/174 column-privilege assertions and the fuzz gate's column checks are the containment; AC2 names the three shapes explicitly.
 
 ---
 
@@ -63,17 +63,17 @@ Ruled by CTO agent, 2026-10-26: All four relkinds (tables, views, materialized v
 
 ---
 
-## Item 5: `164_api_data_grants_snapshot.down.sql` — REVOKE-down vs documented no-op
+## Item 5: `174_api_data_grants_snapshot.down.sql` — REVOKE-down vs documented no-op
 
-Ruled by CTO agent, 2026-10-26: Documented no-op - REVOKE cannot distinguish grant provenance: on prd the privileges are already effective pre-164, so a revoke strips the ACL entry regardless of source and reduces access *below* the pre-164 state — strictly worse than the forward state.
+Ruled by CTO agent, 2026-10-26: Documented no-op - REVOKE cannot distinguish grant provenance: on prd the privileges are already effective pre-174, so a revoke strips the ACL entry regardless of source and reduces access *below* the pre-174 state — strictly worse than the forward state.
 
-**Decision:** Ship `164_api_data_grants_snapshot.down.sql` as a comment-only documented no-op explaining why REVOKE-down is unsafe on prd, per the forward-only convention (`docs/migration-rollback.md`).
+**Decision:** Ship `174_api_data_grants_snapshot.down.sql` as a comment-only documented no-op explaining why REVOKE-down is unsafe on prd, per the forward-only convention (`docs/migration-rollback.md`).
 
-**Rationale:** Privileges are additive ACL entries with no provenance tag. Pre-164 on prd, every targeted privilege is already effective (via the default-era grants); the up-migration's GRANTs are idempotent re-declarations. A REVOKE-down therefore cannot "un-add" them — it removes the underlying privilege and leaves prd *less* privileged than before the migration ran: a guaranteed regression on the `users`/`workspaces` column-split postures and every default-era table grant. The repo's own precedent agrees: `079_workspace_repo_ownership_schema.down.sql:70-72` documents "Restore the Supabase default table-level SELECT grant" — i.e., a correct down restores the *prior* grant posture, and for 164 prior == post. On a fresh post-flip replay, a REVOKE-down would instead reintroduce the precise broken state the backfill fixes. The convention (112 `.down.sql` siblings, manual aids under a forward-only strategy) requires the file to exist and be honest; a no-op with the reasoning written down is both.
+**Rationale:** Privileges are additive ACL entries with no provenance tag. Pre-174 on prd, every targeted privilege is already effective (via the default-era grants); the up-migration's GRANTs are idempotent re-declarations. A REVOKE-down therefore cannot "un-add" them — it removes the underlying privilege and leaves prd *less* privileged than before the migration ran: a guaranteed regression on the `users`/`workspaces` column-split postures and every default-era table grant. The repo's own precedent agrees: `079_workspace_repo_ownership_schema.down.sql:70-72` documents "Restore the Supabase default table-level SELECT grant" — i.e., a correct down restores the *prior* grant posture, and for 174 prior == post. On a fresh post-flip replay, a REVOKE-down would instead reintroduce the precise broken state the backfill fixes. The convention (112 `.down.sql` siblings, manual aids under a forward-only strategy) requires the file to exist and be honest; a no-op with the reasoning written down is both.
 
 **Rejected alternatives:** REVOKE-down mirroring the up file (provably regressive on prd); no `.down.sql` at all (breaks the sibling convention the corpus follows — 112 down files).
 
-**Dissent:** None. If a genuine rollback of 164 is ever needed it is a forward migration revoking a named, audited set — the manual procedure in `docs/migration-rollback.md` — not a `.down.sql` replay.
+**Dissent:** None. If a genuine rollback of 174 is ever needed it is a forward migration revoking a named, audited set — the manual procedure in `docs/migration-rollback.md` — not a `.down.sql` replay.
 
 ---
 

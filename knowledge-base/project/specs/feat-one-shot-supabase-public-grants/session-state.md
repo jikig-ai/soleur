@@ -11,7 +11,7 @@
 - markdownlint: 3 MD034 bare-URL errors found and fixed pre-commit; final lint clean.
 
 ### Decisions
-- Backfill shape: generated snapshot of prd's effective privileges emitted as explicit GRANTs in `164_api_data_grants_snapshot.sql` — zero prd behavior change; per-table narrowing deferred to a follow-up paired with #4027. Per-table grants chosen over `ALTER DEFAULT PRIVILEGES`.
+- Backfill shape: generated snapshot of prd's effective privileges emitted as explicit GRANTs in `174_api_data_grants_snapshot.sql` — zero prd behavior change; per-table narrowing deferred to a follow-up paired with #4027. Per-table grants chosen over `ALTER DEFAULT PRIVILEGES`.
 - Two-tier guard: authoritative live-catalog gate (`test/rls-fuzz/rls-grants.integration.test.ts` + `table-grants.ts` registry); subordinate `lint-migration-api-grants.sh --from-pr-diff` in `tenant-integration.yml`, with `soleur:no-data-api:` sentinel escape hatch and a sequence-USAGE arm.
 - `auto_expose_new_tables = false` in `supabase/config.toml` makes the local fuzz stack model the post-10-30 world.
 - All deepen-plan halt gates (4.4–4.13) pass.

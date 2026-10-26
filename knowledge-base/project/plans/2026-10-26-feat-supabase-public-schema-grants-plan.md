@@ -60,11 +60,11 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 **Do not widen, do not hand-guess — snapshot.** Generate the backfill from the live prd catalog so the declared grant set IS today's audited effective state:
 
 1. **Audit + generate.** A read-only catalog extraction (run via the existing `doppler run -c prd` run-verify path) dumps, per `public` relation (relkind `r`,`v`,`m`,`S`), the effective privileges for `anon`/`authenticated`/`service_role` from `information_schema.role_table_grants`, `information_schema.column_privileges`, and `information_schema.role_usage_grants`. Output = explicit `GRANT`/`REVOKE`-free DDL reproducing that state verbatim (table-level where held, per-column where table-level was deliberately revoked). The same extraction emits the per-relation classification (client-exposed / service-role-only / internal) that seeds the fuzz registry and the narrowing follow-up list.
-2. **Backfill migration** `164_api_data_grants_snapshot.sql` (number provisional — next free at plan time; renumber per convention if a sibling lands first): the generated grants, idempotent (`GRANT` is idempotent; `IF EXISTS` guards not needed for grants but relation-existence `to_regclass` preconditions keep the file self-describing per the FK-lint convention). On prd this is a no-op (the privileges are already effective); on fresh builds it restores the exact prd posture.
+2. **Backfill migration** `174_api_data_grants_snapshot.sql` (number provisional — next free at plan time; renumber per convention if a sibling lands first): the generated grants, idempotent (`GRANT` is idempotent; `IF EXISTS` guards not needed for grants but relation-existence `to_regclass` preconditions keep the file self-describing per the FK-lint convention). On prd this is a no-op (the privileges are already effective); on fresh builds it restores the exact prd posture.
 3. **Flip the local stack to the new world (Ruled by CTO agent, 2026-10-26).** A post-start normalize step in `apps/web-platform/scripts/supabase-local.sh` applies Supabase's documented "Revoke default privileges" SQL after stack start — the PRIMARY path, not a fallback. The `[api] auto_expose_new_tables` config key does NOT exist on pinned CLI 2.84.2 (it was added by `supabase/cli#5239`, merged 2026-05-26; 2.84.2 released 2026-03-25) — writing it is dead config at best, a parse failure at worst. All local+CI starts funnel through the wrapper (`package.json` `db:start`; fuzz job `rls-authz-fuzz.yml:60-62`), so one normalize step covers both. With defaults off, the fuzz stack's grant state = explicit migration grants only, i.e., exactly the post-10-30 world. On any future CLI bump to >=v2.116.0 the swap to the declarative key is REQUIRED (unset re-enables auto-expose there) — recorded in ADR-303.
 4. **Runtime authoritative gate.** Extend `test/rls-fuzz/catalog.ts` with a public-relation + sequence enumerator; new registry `test/rls-fuzz/table-grants.ts` (mirroring `rpc-cases.ts`) recording each relation's intended api-role privilege set; new gate `test/rls-fuzz/rls-grants.integration.test.ts` asserting `has_table_privilege`/`has_column_privilege`/`has_sequence_privilege` per registry on the applied stack, with catalog⇔registry parity so an unclassified new relation reds.
 5. **Static subordinate lint.** `apps/web-platform/scripts/lint-migration-api-grants.sh` (+`.test.sh`), `--from-pr-diff`, wired into `tenant-integration.yml` beside `lint-migration-fk-preconditions.sh`: every diff-touched migration creating a `public` relation (table/view/materialized view, `temp` excluded) must carry an api-role `GRANT` for it in-file, or a `-- soleur:no-data-api: <relation> — <reason>` sentinel; serial/identity/sequence-using tables additionally require a sequence `GRANT USAGE` presence or the sentinel.
-6. **Deploy-time sentinel.** `apps/web-platform/supabase/verify/164_*.sql` asserting expected-vs-effective grants on prd post-apply (runs automatically in the release `verify-migrations` job via `run-verify.sh`), plus the existing `rls-parity-check.ts` `role_table_grants` local-vs-prod diff as a continuous drift detector.
+6. **Deploy-time sentinel.** `apps/web-platform/supabase/verify/174_*.sql` asserting expected-vs-effective grants on prd post-apply (runs automatically in the release `verify-migrations` job via `run-verify.sh`), plus the existing `rls-parity-check.ts` `role_table_grants` local-vs-prod diff as a continuous drift detector.
 
 ## Research Insights
 
@@ -103,22 +103,22 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 
 ## Open Code-Review Overlap
 
-- #3220 (`ci: postmerge verification of trigger-bearing migrations in prd`) — **Acknowledge.** Same directory but a different property (trigger presence vs relation grant state). This plan's `verify/164_*.sql` asserts grant state only; it does not close #3220 and #3220 does not cover grants.
+- #3220 (`ci: postmerge verification of trigger-bearing migrations in prd`) — **Acknowledge.** Same directory but a different property (trigger presence vs relation grant state). This plan's `verify/174_*.sql` asserts grant state only; it does not close #3220 and #3220 does not cover grants.
 - No other open `code-review` issue bodies reference the planned file paths (queried 2026-10-26: catalog.ts, rpc-cases.ts, tenant-integration.yml, lint-migration paths, migrations/, rls-authz-fuzz.yml).
 
 ## Implementation Phases
 
 ### Phase A — Audit + snapshot generation
 
-1. Write `apps/web-platform/scripts/dump-api-grants.sh` (or `.ts` next to `rls-parity-check.ts`): read-only extraction emitting (a) the GRANT DDL for migration 164 — table-level `GRANT <verbs> ON public.<r> TO <roles>` where held at table level, per-column `GRANT <verb> (<cols>)` where table-level was deliberately revoked (006/079 shape), `GRANT USAGE,SELECT ON SEQUENCE` per role_usage_grants — and (b) a per-relation classification block (RLS enabled? permissive policies per role? serial/identity columns?) used to seed `table-grants.ts` and the narrowing follow-up issue. <!-- verified: 2026-10-26 source: https://supabase.com/docs/guides/troubleshooting/database-api-42501-errors (role_table_grants), https://supabase.com/docs/guides/api/securing-your-api (default-privilege table) -->
+1. Write `apps/web-platform/scripts/dump-api-grants.sh` (or `.ts` next to `rls-parity-check.ts`): read-only extraction emitting (a) the GRANT DDL for migration 174 — table-level `GRANT <verbs> ON public.<r> TO <roles>` where held at table level, per-column `GRANT <verb> (<cols>)` where table-level was deliberately revoked (006/079 shape), `GRANT USAGE,SELECT ON SEQUENCE` per role_usage_grants — and (b) a per-relation classification block (RLS enabled? permissive policies per role? serial/identity columns?) used to seed `table-grants.ts` and the narrowing follow-up issue. <!-- verified: 2026-10-26 source: https://supabase.com/docs/guides/troubleshooting/database-api-42501-errors (role_table_grants), https://supabase.com/docs/guides/api/securing-your-api (default-privilege table) -->
 2. Run it via `doppler run -c prd` against prd (read-only catalog introspection — the same access class `run-verify.sh` already uses).
 3. Hand-review the generated grant matrix against the classification: flag any relation where the audit shows a *narrower* intended set than the snapshot (internal tables that hold default-era anon/auth grants they never use) — that list goes into the follow-up issue, NOT into this migration (P1: zero prd behavior change).
 
 ### Phase B — Backfill migration + sentinel
 
-4. Write `apps/web-platform/supabase/migrations/164_api_data_grants_snapshot.sql` — header documenting provenance (generated from prd catalog on <date>; generation command), `to_regclass` preconditions per convention, then the generated GRANT DDL grouped by relation with the classification annotation per relation. Covers tables, views, materialized views, sequences.
-5. Write `164_api_data_grants_snapshot.down.sql` — **documented no-op** (comment-only body): the up adds grants already effective on prd; a `REVOKE` down would strip pre-existing default-era access and break prd — strictly worse than the forward state (see Down-migration analysis below).
-6. Write `apps/web-platform/supabase/verify/164_api_data_grants_snapshot.sql` — per-relation `has_table_privilege`/`has_column_privilege`/`has_sequence_privilege` assertions for the full registered set, idempotent and re-runnable (the verify-migrations job re-runs it for the idempotence probe).
+4. Write `apps/web-platform/supabase/migrations/174_api_data_grants_snapshot.sql` — header documenting provenance (generated from prd catalog on <date>; generation command), `to_regclass` preconditions per convention, then the generated GRANT DDL grouped by relation with the classification annotation per relation. Covers tables, views, materialized views, sequences.
+5. Write `174_api_data_grants_snapshot.down.sql` — **documented no-op** (comment-only body): the up adds grants already effective on prd; a `REVOKE` down would strip pre-existing default-era access and break prd — strictly worse than the forward state (see Down-migration analysis below).
+6. Write `apps/web-platform/supabase/verify/174_api_data_grants_snapshot.sql` — per-relation `has_table_privilege`/`has_column_privilege`/`has_sequence_privilege` assertions for the full registered set, idempotent and re-runnable (the verify-migrations job re-runs it for the idempotence probe).
 
 ### Phase C — Flip the local stack to post-change defaults
 
@@ -128,7 +128,7 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 
 ### Phase D — Guards (runtime authoritative + static subordinate)
 
-10. `apps/web-platform/test/rls-fuzz/table-grants.ts` — registry mirroring `rpc-cases.ts`: per public relation + sequence, `EXPOSED: { role: Set<verb> }` (matching the 164 snapshot) or `INTERNAL` with a reason citing the classification audit.
+10. `apps/web-platform/test/rls-fuzz/table-grants.ts` — registry mirroring `rpc-cases.ts`: per public relation + sequence, `EXPOSED: { role: Set<verb> }` (matching the 174 snapshot) or `INTERNAL` with a reason citing the classification audit.
 11. `apps/web-platform/test/rls-fuzz/catalog.ts` — add `publicApiRelations()` + `publicApiSequences()` enumerators from `pg_class`.
 12. `apps/web-platform/test/rls-fuzz/rls-grants.integration.test.ts` — the gate: for every catalog member, assert effective privileges equal the registered set (`has_table_privilege` per verb per role; column-privilege assertions for the 006/079 shapes; `has_sequence_privilege` for sequences); catalog⇔registry parity assertion (unclassified member red; registry entry for a nonexistent relation red).
 13. `apps/web-platform/scripts/lint-migration-api-grants.sh` + `.test.sh` — PR-diff static lint per the FK-lint shape: detector for `create (unlogged )?table|view|materialized view` on `public` relations (case-insensitive, `if not exists`, `partition of` excluded if inherited — decide at implementation; `temp` excluded), per-relation requirement of an in-file `GRANT … TO (anon|authenticated|service_role)` or a `soleur:no-data-api:` sentinel; serial/identity tables additionally require a sequence-grant presence or sentinel. **Lexer requirement:** the detector MUST strip SQL noise first — `--`/`/* */` comments, dollar-quoted bodies, single-quoted strings — mirroring `test/migration-lint/definer-grants.ts:100` (the noise-stripper precedent; port or reuse it, do not line-scan raw text). Documented blind spot, owned by the runtime tier: a relation created via dynamic `EXECUTE format(...)` inside a `DO` block is invisible to source-form detection — the fuzz gate's live-catalog enumeration is the backstop, exactly the ADR-112 two-tier split.
@@ -145,7 +145,7 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 - **Immutability.** The 42 historical create-table migrations are applied history — `lint-migration-immutability.sh` forbids editing them. All grant materialization lives in the forward migration only.
 - **Postgres privilege resolution.** A table-level grant subsumes all column-level grants/revokes on the same table (`2026-03-20` learning). The snapshot MUST emit per-column grants where table-level was deliberately revoked — verified against `column_privileges`, not guessed.
 - **Sequences.** Post-change, new sequences keep only `update` — `USAGE` (needed for `nextval`/identity inserts via Data API) is lost. The snapshot and lint both cover `public` sequences.
-- **Down-migration semantics.** Convention ships a `.down.sql` sibling, but this migration's honest down is a no-op: `GRANT`s that duplicate already-effective privileges cannot be "un-added" — `REVOKE` removes the ACL entry regardless of whether it came from defaults or the explicit grant, so a revoke-down on prd would *reduce* access below the pre-164 state. The `.down.sql` documents this; a real rollback is the manual procedure in `docs/migration-rollback.md`.
+- **Down-migration semantics.** Convention ships a `.down.sql` sibling, but this migration's honest down is a no-op: `GRANT`s that duplicate already-effective privileges cannot be "un-added" — `REVOKE` removes the ACL entry regardless of whether it came from defaults or the explicit grant, so a revoke-down on prd would *reduce* access below the pre-174 state. The `.down.sql` documents this; a real rollback is the manual procedure in `docs/migration-rollback.md`.
 - **False-green kill.** The fuzz gate asserts grant *state* (`has_table_privilege`), not access *behavior* — a missing grant can no longer masquerade as an RLS denial (both are 42501 at the SQL layer).
 - **Availability during apply (deepen 4.55 evaluated — no downtime class).** The migration is grants-only DDL: `GRANT` takes a brief metadata lock per relation, no table rewrite, no `CONCURRENTLY`-forbidden constructs, one `--single-transaction` apply. Zero-downtime by construction; the offline-inducing trigger list (rewrite DDL, hot-table locks, deploy/router changes) does not match.
 - **Scope of the snapshot: the three api roles only.** `anon`/`authenticated`/`service_role` are the roles the flip affects. Non-API-role grants already explicit in migrations (e.g., 049's `supabase_auth_admin`) replay verbatim on fresh builds and are unaffected — do NOT widen the snapshot's grantee set.
@@ -156,9 +156,9 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 
 ## Files to Create
 
-- `apps/web-platform/supabase/migrations/164_api_data_grants_snapshot.sql`
-- `apps/web-platform/supabase/migrations/164_api_data_grants_snapshot.down.sql` (documented no-op)
-- `apps/web-platform/supabase/verify/164_api_data_grants_snapshot.sql`
+- `apps/web-platform/supabase/migrations/174_api_data_grants_snapshot.sql`
+- `apps/web-platform/supabase/migrations/174_api_data_grants_snapshot.down.sql` (documented no-op)
+- `apps/web-platform/supabase/verify/174_api_data_grants_snapshot.sql`
 - `apps/web-platform/scripts/dump-api-grants.sh` (or `.ts` — implementer picks the file shape that matches `rls-parity-check.ts` conventions)
 - `apps/web-platform/scripts/lint-migration-api-grants.sh`
 - `apps/web-platform/scripts/lint-migration-api-grants.test.sh`
@@ -185,7 +185,7 @@ This plan (1) lands a generated backfill migration that materializes today's eff
 
 ```yaml
 liveness_signal:
-  what: "release pipeline `migrate` job applies 164 via run-migrations.sh; `verify-migrations` job then runs supabase/verify/164 sentinel against prd (plus idempotence re-run)"
+  what: "release pipeline `migrate` job applies 174 via run-migrations.sh; `verify-migrations` job then runs supabase/verify/174 sentinel against prd (plus idempotence re-run)"
   cadence: per-release (on merge to main)
   alert_target: GitHub required-check red on the release workflow; post-merge monitor arm
   configured_in: .github/workflows/web-platform-release.yml (migrate :1021, verify-migrations :1023)
@@ -193,11 +193,11 @@ error_reporting:
   destination: GitHub Actions job logs + workflow conclusion (no Sentry surface — CI/deploy artifact)
   fail_loud: "nonzero exit from run-migrations.sh (migrate red, deploy blocked) or run-verify.sh (verify-migrations red)"
 failure_modes:
-  - mode: migration 164 fails to apply on prd
+  - mode: migration 174 fails to apply on prd
     detection: `migrate` job exits nonzero; deploy arm stops before deploy
     alert_route: workflow red on the merge; operator sees failed required check
   - mode: effective grants on prd drift from the registered set
-    detection: `verify/164` sentinel red in verify-migrations; rls-parity-check.ts role_table_grants diff red in rls-authz-fuzz
+    detection: `verify/174` sentinel red in verify-migrations; rls-parity-check.ts role_table_grants diff red in rls-authz-fuzz
     alert_route: workflow red
   - mode: future migration creates a public relation without grants
     detection: lint-migration-api-grants.sh --from-pr-diff red in tenant-integration; fuzz rls-grants gate red
@@ -206,7 +206,7 @@ logs:
   where: GitHub Actions job logs (web-platform-release.yml, tenant-integration.yml, rls-authz-fuzz.yml)
   retention: GitHub Actions default retention
 discoverability_test:
-  command: grep -m1 'GRANT ' apps/web-platform/supabase/migrations/164_api_data_grants_snapshot.sql
+  command: grep -m1 'GRANT ' apps/web-platform/supabase/migrations/174_api_data_grants_snapshot.sql
   expected_output: GRANT
 ```
 
@@ -218,9 +218,9 @@ at_rest:
     mechanism: provider-managed:Supabase disk encryption at rest
     evidence: "Supabase security docs — https://supabase.com/security (retrieved 2026-10-26); unchanged by this change"
     defends_against: nothing new — ACL metadata only; storage posture identical to pre-change
-    does_not_defend: "an over-broad GRANT itself — bounded by snapshot-exact generation + verify/164 + fuzz gate, not by storage encryption"
+    does_not_defend: "an over-broad GRANT itself — bounded by snapshot-exact generation + verify/174 + fuzz gate, not by storage encryption"
     disclosed_as: not-publicly-claimed
-    live_verification: available:verify/164 role_table_grants sentinel post-apply
+    live_verification: available:verify/174 role_table_grants sentinel post-apply
 in_transit:
   - connection: release-runner -> supabase.prd (existing migrate path)
     enforced_at: apps/web-platform/scripts/run-migrations.sh (DATABASE_URL/DATABASE_URL_POOLER)
@@ -237,7 +237,7 @@ in_transit:
 
 **Property.** Every migration file touched by a PR that creates a `public`-schema Data-API-visible relation (table, view, materialized view — temp and partition-child excluded) carries an in-file api-role `GRANT` for that relation (plus a sequence `GRANT USAGE` when the table has serial/identity columns), or an explicit `soleur:no-data-api:` sentinel recording intent.
 
-**Assembly.** All `apps/web-platform/supabase/migrations/*.sql` files (forward files only — `.down.sql` is a manual-aid sibling never applied by run-migrations.sh) that appear in the `git diff origin/main...HEAD` name list. The chokepoint is the `--from-pr-diff` step in `tenant-integration.yml` — the single CI path migration PRs flow through; direct file-arg invocation is the local path. The corpus is deliberately NOT asserted (the 28 pre-existing ungranted create-table files are covered by migration 164, not by self-grants; the lint's window is new/modified files).
+**Assembly.** All `apps/web-platform/supabase/migrations/*.sql` files (forward files only — `.down.sql` is a manual-aid sibling never applied by run-migrations.sh) that appear in the `git diff origin/main...HEAD` name list. The chokepoint is the `--from-pr-diff` step in `tenant-integration.yml` — the single CI path migration PRs flow through; direct file-arg invocation is the local path. The corpus is deliberately NOT asserted (the 28 pre-existing ungranted create-table files are covered by migration 174, not by self-grants; the lint's window is new/modified files).
 
 **Mutation matrix:**
 
@@ -267,7 +267,7 @@ in_transit:
 | 2 | Fixture migration creates `public.new_t` with no `table-grants.ts` entry | RED (own-dispatch — catalog enumerates a member the registry cannot classify) |
 | 3 | Registry expects `{authenticated: {SELECT}}` on `t`; migration grants only `anon` | RED (role-set mismatch) |
 | 4 | Reorder/short-circuit: gate returns after the FIRST catalog member; second member is mis-granted | RED (order/lifetime row — assertion must live inside the enumeration, not after it) |
-| 5 | Remove one registered relation's GRANT lines from the generated migration 164 on the defaults-off stack | RED (remediation's own output tested against the guard — the post-change tree, not the pre-change tree) |
+| 5 | Remove one registered relation's GRANT lines from the generated migration 174 on the defaults-off stack | RED (remediation's own output tested against the guard — the post-change tree, not the pre-change tree) |
 | 6 | Registry marks relation `INTERNAL`, it carries zero api-role grants on the stack | PASS (must-PASS non-canonical — the unexposed member path) |
 | 7 | Mutate the harness: stub `has_table_privilege` to always-true while a fixture mis-grants | RED via the parity/vacuity assertion (a satisfied-by-nothing gate cannot pass) |
 
@@ -293,10 +293,10 @@ The ADR ships in this PR describing the landed state (`status: accepted`); the g
 
 | # | User ask (verbatim) | Plan item | Status |
 |---|---|---|---|
-| 1 | "A backfill migration (or equivalent) that explicitly grants the correct Data API privileges on ALL existing public-schema tables to anon/authenticated/service_role, matching whatever access each table is actually meant to have — audit how each table is accessed" | Phase A audit+generate; Phase B migration 164; snapshot-exact preserves "actually meant to have" as the audited effective state; per-table classification seeds the fuzz registry + narrowing follow-up | mapped |
+| 1 | "A backfill migration (or equivalent) that explicitly grants the correct Data API privileges on ALL existing public-schema tables to anon/authenticated/service_role, matching whatever access each table is actually meant to have — audit how each table is accessed" | Phase A audit+generate; Phase B migration 174; snapshot-exact preserves "actually meant to have" as the audited effective state; per-table classification seeds the fuzz registry + narrowing follow-up | mapped |
 | 2 | "Consider ALTER DEFAULT PRIVILEGES for the migration role vs per-table grants — weigh over-exposure risk for internal-only tables" | Cut List + Alternatives: ADP rejected (over-exposure + ADR-112 mis-scope precedent); per-table explicit grants chosen | mapped |
 | 3 | "A durable guard so a future create table migration without the required grants fails before merge" | Phase D: fuzz grant gate (authoritative) + lint-migration-api-grants.sh (subordinate) + tenant-integration wiring | mapped |
-| 4 | "match how this repo already lints migrations; check apps/web-platform/supabase/scripts/ and verify/ and existing lefthook/CI gates" | Lint mirrors `lint-migration-fk-preconditions.sh` shape + `--from-pr-diff` in tenant-integration.yml; `verify/164` sentinel mirrors the verify/ convention | mapped |
+| 4 | "match how this repo already lints migrations; check apps/web-platform/supabase/scripts/ and verify/ and existing lefthook/CI gates" | Lint mirrors `lint-migration-fk-preconditions.sh` shape + `--from-pr-diff` in tenant-integration.yml; `verify/174` sentinel mirrors the verify/ convention | mapped |
 | 5 | "Down-migration implications" | `.down.sql` documented no-op + Technical Considerations analysis | mapped |
 | 6 | "whether tests/CI (rls-authz-fuzz) can prove the fix" | `supabase-local.sh` post-start normalize (defaults-off stack) + catalog grant-state gate + `rls-parity-check.ts` role_table_grants diff | mapped |
 
@@ -309,7 +309,7 @@ The ADR ships in this PR describing the landed state (`status: accepted`); the g
 | lint script + workflow step | "durable guard … fails before merge (lint script / CI check)" (ask 3) | asked |
 | ADR-303 + narrowing follow-up issue | inferred — cross-cutting convention change requires an ADR (plan Phase 2.10 gate); deferral-tracking checklist requires filing deferred items | inferred (justified) |
 | sequence USAGE coverage | inferred — "Data API privileges … matching whatever access each table is actually meant to have"; inserts via API fail without sequence usage post-flip (Supabase docs) | inferred (justified) |
-| `verify/164` sentinel | "check … verify/ and existing … gates for migrations" (ask 4) | asked |
+| `verify/174` sentinel | "check … verify/ and existing … gates for migrations" (ask 4) | asked |
 
 ### Split Assessment
 
@@ -326,15 +326,15 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 
 ## Acceptance Criteria
 
-- [ ] **AC1.** `apps/web-platform/supabase/migrations/164_api_data_grants_snapshot.sql` exists, is generated from a prd catalog extraction (provenance comment names the command + date), applies cleanly via `run-migrations.sh` on a fresh defaults-off stack, and its grant set covers EVERY `public` relation (relkind r,v,m) and sequence that holds api-role privileges on prd — completeness proven by the verify sentinel, not by file inspection.
-- [ ] **AC2.** Post-apply on prd, effective api-role privileges for every public relation are IDENTICAL to pre-apply (snapshot-exact): `verify/164` per-relation `has_*_privilege` assertions pass and the `rls-parity-check.ts` `role_table_grants` diff shows no drift. No table-level grant is added where column-level postures exist (`users` UPDATE-email-only, `repos` column-split, `runtime_mint_intent` service_role-scoped — the 006/079/049 shapes asserted verbatim).
+- [ ] **AC1.** `apps/web-platform/supabase/migrations/174_api_data_grants_snapshot.sql` exists, is generated from a prd catalog extraction (provenance comment names the command + date), applies cleanly via `run-migrations.sh` on a fresh defaults-off stack, and its grant set covers EVERY `public` relation (relkind r,v,m) and sequence that holds api-role privileges on prd — completeness proven by the verify sentinel, not by file inspection.
+- [ ] **AC2.** Post-apply on prd, effective api-role privileges for every public relation are IDENTICAL to pre-apply (snapshot-exact): `verify/174` per-relation `has_*_privilege` assertions pass and the `rls-parity-check.ts` `role_table_grants` diff shows no drift. No table-level grant is added where column-level postures exist (`users` UPDATE-email-only, `repos` column-split, `runtime_mint_intent` service_role-scoped — the 006/079/049 shapes asserted verbatim).
 - [ ] **AC3.** `apps/web-platform/scripts/supabase-local.sh` normalizes default privileges post-start (Supabase's documented revoke-default-privileges SQL), the fuzz job asserts the local stack's `pg_default_acl` carries no api-role default table grants, and `config.toml` carries NO `auto_expose_new_tables` key (absent on pinned CLI 2.84.2).
 - [ ] **AC4.** `bash apps/web-platform/scripts/lint-migration-api-grants.sh --from-pr-diff` exits 1 on a create-table-without-grant diff, 0 on granted/sentinel fixtures, and runs as a step in `tenant-integration.yml`; `lint-migration-api-grants.test.sh` covers the mutation-matrix rows (table, view, second-member, serial/identity-sequence arm, down-file skip, sentinel, case-insensitivity).
 - [ ] **AC5.** `test/rls-fuzz/rls-grants.integration.test.ts` enumerates live `pg_class` and asserts registered grant state with catalog⇔registry parity; `bun run test:rls-fuzz` is green including the new gate; a new unclassified public relation demonstrably reds it (fixture run or test case).
-- [ ] **AC6.** `verify/164_api_data_grants_snapshot.sql` passes under `run-verify.sh` post-apply on prd and is idempotent (verify-migrations re-runs it).
+- [ ] **AC6.** `verify/174_api_data_grants_snapshot.sql` passes under `run-verify.sh` post-apply on prd and is idempotent (verify-migrations re-runs it).
 - [ ] **AC7.** `ADR-303-*.md` exists with the decision, alternatives (incl. ADP-restore rejection), `related_adrs` cross-refs; ADR-112's header gains the reciprocal pointer.
 - [ ] **AC8.** The grant-narrowing follow-up issue is filed carrying the Phase-A per-relation audit list, relates #4027, and carries re-evaluation criteria.
-- [ ] **AC9.** `164_api_data_grants_snapshot.down.sql` exists and is a documented no-op explaining why REVOKE-down is unsafe on prd.
+- [ ] **AC9.** `174_api_data_grants_snapshot.down.sql` exists and is a documented no-op explaining why REVOKE-down is unsafe on prd.
 - [ ] **AC10.** Every new migration-creating relation on the defaults-off local stack is API-reachable exactly per its registered classification — the P2 property proven end-to-end by the fuzz job on this PR's own migrations.
 
 ## Test Scenarios
@@ -346,14 +346,14 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 - Given a fixture with `GENERATED ALWAYS AS IDENTITY` + table grant + no sequence grant, when the lint runs, then exit 1 — `unit`.
 - Given the full corpus applied on the defaults-off stack, when `rls-grants.integration.test.ts` runs, then every registered relation matches its classification and parity holds — `integration`.
 - Given a scratch migration adding `public.unregistered_probe` on the fuzz stack, when the gate runs, then RED via the catalog⇔registry parity assertion — `integration`.
-- Given 164 applied on prd, when `run-verify.sh` executes `verify/164`, then all privilege assertions pass; re-run → still pass (idempotent) — `integration`.
-- Given `users` and `repos` post-164, when `column_privileges` is read, then `authenticated` holds UPDATE(email)-only on users and the 079 column split on repos — never a table-level grant — `integration` (verify/164 arm).
+- Given 174 applied on prd, when `run-verify.sh` executes `verify/174`, then all privilege assertions pass; re-run → still pass (idempotent) — `integration`.
+- Given `users` and `repos` post-174, when `column_privileges` is read, then `authenticated` holds UPDATE(email)-only on users and the 079 column split on repos — never a table-level grant — `integration` (verify/174 arm).
 - Given the release merges, when `verify-migrations` runs, then the sentinel passes and `rls-parity-check.ts` shows zero `role_table_grants` drift — `e2e`, `pyramid-justified: the property is prod-vs-local catalog equality; only exercisable in the release path`.
 
 ## Success Metrics
 
 - `bun run test:rls-fuzz` green including the new grant gate on this PR.
-- Post-release `verify-migrations` green with `verify/164` passing on prd.
+- Post-release `verify-migrations` green with `verify/174` passing on prd.
 - `rls-parity-check.ts` `role_table_grants` local-vs-prod diff clean on the PR's own fuzz run.
 - A deliberately-ungranted create-table fixture reds both the lint and the fuzz gate (mutation-matrix proof).
 - Zero `permission denied` regressions: tenant-integration + ordinary suites green.
@@ -376,7 +376,7 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 | Tighten internal-table grants during the backfill | **Deferred** — any narrowing changes prd behavior (P1 forbids) and needs per-relation consumer proof; filed as follow-up issue paired with #4027 |
 | Edit the 42 historical migrations to carry grants | Rejected — `lint-migration-immutability.sh` forbids mutating applied history; a single forward backfill covers the corpus |
 | Vitest static tier (`test/migration-lint/table-grants.ts`) instead of bash lint | Rejected — the FK-lint bash `--from-pr-diff` shape is where migration PR-diff checks already live (fails fast, pre-DB); the authoritative tier is the fuzz gate either way |
-| No `.down.sql` | Rejected — convention ships a sibling per migration; the honest down is a documented no-op (REVOKE-down would reduce prd below pre-164 state) |
+| No `.down.sql` | Rejected — convention ships a sibling per migration; the honest down is a documented no-op (REVOKE-down would reduce prd below pre-174 state) |
 
 ## References & Research
 
@@ -396,6 +396,6 @@ Engineering-domain infrastructure change executed inside the engineering pipelin
 - Do NOT skip the sequence arm — post-change sequences lose `USAGE`; serial/identity inserts via Data API fail even with the table granted.
 - Do NOT write a REVOKE-bearing `.down.sql` — it strips default-era effective access on prd, strictly worse than the forward state.
 - Do NOT leave the local stack on implicit defaults — without the `supabase-local.sh` normalize the gate measures platform defaults, not migration grants, and the whole proof is circular. Do NOT write `auto_expose_new_tables` to `config.toml` — the key does not exist on pinned CLI 2.84.2 (added 2026-05-26, post-2.84.2); dead config at best, parse failure at worst.
-- Do NOT forget the migration number is provisional (164 at plan time) — a sibling `16x` can land first; renumber the up/down/verify trio together.
+- Do NOT forget the migration number is provisional — renumbered to 174 at implementation after sibling branches took 164; if another `17x` lands first, renumber the up/down/verify trio together again.
 - The lint's `soleur:no-data-api:` sentinel requires a reason — an uncommented sentinel is an allowlist entry with no rationale (the ADR-112 EXCLUDED-class escape-hatch lesson).
 - CPO sign-off was required before `soleur:work` (threshold `single-user incident`) — discharged 2026-10-26: CPO agent + user-impact-reviewer both GRANTED (`decision-challenges.md`).
