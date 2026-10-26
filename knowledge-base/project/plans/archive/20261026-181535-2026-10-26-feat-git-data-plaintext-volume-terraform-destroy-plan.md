@@ -210,7 +210,7 @@ Full relevant suites, `soleur:review`, `soleur:qa` (no UI scenarios; skips), com
 
 **Brand-survival threshold:** single-user incident
 
-The threshold is `single-user incident` because a mis-scoped destroy of the LUKS volume, an unplanned host replace, or a disabled recovery route is outage/data-loss class on the git-data store. The CTO and CLO rulings of 2026-10-26 are the recorded technical and legal sign-offs; CPO sign-off is requested at plan time (Phase 2.6) before `soleur:work`; `soleur:engineering:review:user-impact-reviewer` runs at review; the owner's merge and dispatch are the authorization.
+The threshold is `single-user incident` because a mis-scoped destroy of the LUKS volume, an unplanned host replace, or a disabled recovery route is an availability-and-data-loss class risk on the git-data store. The CTO and CLO rulings of 2026-10-26 are the recorded technical and legal sign-offs; CPO sign-off is requested at plan time (Phase 2.6) before `soleur:work`; `soleur:engineering:review:user-impact-reviewer` runs at review; the owner's merge and dispatch are the authorization.
 
 ## Domain Review
 
