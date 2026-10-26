@@ -147,6 +147,11 @@ finish() {
   esac
   printf 'PREPUSH_SECRET_SCAN verdict=%s base=%s head=%s fetch=%s range=%s scanned=%s cfg_changed=%s cfg=%s published=%s attr=%s gitleaks=%s reason=%s\n' \
     "$verdict" "$R_BASE" "$R_HEAD" "$R_FETCH" "$R_RANGE" "$R_SCANNED" "$R_CFG" "$R_CFGSRC" "$R_PUB" "$R_ATTR" "$R_GL" "$reason"
+  # The verdict covers the HEAD it printed, not whatever HEAD is when the push runs (a version-bump or
+  # review-fix commit in between would go unscanned); a git pre-push hook that sees the pushed SHAs is #11126.
+  if [ "$final_rc" -eq 0 ] || [ "$final_rc" -eq 43 ]; then
+    printf 'NOTE: this verdict covers head=%s; run the scan again if HEAD moves before you push.\n' "$R_HEAD" >&2
+  fi
   if [ "$verdict" = NOT_RUN ]; then
     printf 'WARN: secret-scan NOT RUN (%s): the commits were not scanned locally; CI secret-scan.yml gates the merge, not the publication. This is the sanctioned continue path: put the secret-scan: line below in the PR body; do not retry or install anything.\n' "$reason" >&2
     printf 'secret-scan: not run (%s)\n' "$reason"

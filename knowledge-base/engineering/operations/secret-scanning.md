@@ -606,6 +606,8 @@ What it does **not** cover (documented, not claimed away):
   ignored there; `--text` still holds).
 - **Version skew.** CI pins gitleaks 8.24.2; a newer local pack can flag something CI accepts. That is still a stop;
   `.gitleaks.toml` is read from the base, so a false positive is cleared by a reviewed allowlist PR, not in place.
+- **A commit made between the scan and the push.** A continue verdict covers the `head=` it printed and says so on stderr;
+  re-run the scan if HEAD moves. Binding the scan to the pushed SHAs needs the `git pre-push` hook (#11126).
 - **Pushes that never reach it.** Another script's push (`pre-merge-rebase.sh`, `sync-pr-behind.sh`), `merge-pr`,
   `fix-issue` and the resolve workflows rely on a `git pre-push` hook that does not exist yet (tracked in #11126).
 

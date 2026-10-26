@@ -311,6 +311,7 @@ if [[ "$_rline" =~ ^PREPUSH_SECRET_SCAN\ verdict=CLEAN\ base=[0-9a-f]{40}\ head=
 else
   fail "receipt line shape drifted: $_rline"
 fi
+want_in "a continue verdict says which HEAD it covers" "$ERRV" "NOTE: this verdict covers head=$(git -C "$ST" rev-parse HEAD)"
 want_in "the scan read the BASE's committed config (byte count)" "$(cat "$STUB_LOGF")" "cfgbytes: $BASE_TOML_BYTES"
 want_in "gitleaks is pointed at the git dir, not the work tree" "$(cat "$STUB_LOGF")" "source: $ST/.git"
 
@@ -1086,7 +1087,7 @@ echo "stub-arm assertions: $PASS, real-arm assertions: $RPASS, failed: $FAIL"
 if [ "${#SKIPPED_ARMS[@]}" -gt 0 ]; then
   echo "SKIPPED arms: ${SKIPPED_ARMS[*]}"
 fi
-FLOOR=151
+FLOOR=152
 if [ "$PASS" -lt "$FLOOR" ]; then
   printf 'FATAL: only %s stub-arm assertions passed; floor is %s (a stub or a gutted suite)\n' "$PASS" "$FLOOR" >&2
   exit 1
