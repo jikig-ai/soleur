@@ -22,3 +22,11 @@
 - soleur:plan (run end-to-end), soleur:deepen-plan (halt gates applied)
 - Live dev-Supabase introspection via doppler -p soleur -c dev + psql (read-only, session mode :5432); prd read-only verification
 - gh run/issue/pr inspection (#10764, runs 40338809043 / 40326599239 / 40326344091, PRs #11180 / #9051)
+
+## Work Phase (complete)
+- Migration 176 + down + verify + shape test committed & pushed (HEAD c34ecfbb5d incl. learning commit).
+- INVOKER->DEFINER flip at implementation (CTO dissent flip-condition fired): INVOKER inner SELECT inherited caller SELECT-RLS (users_jti_not_denied -> per-row is_jti_denied) and re-hung for fresh-caller JWTs (57014/8073ms REST-reproduced); DEFINER bypasses caller RLS, still auth.uid()-pinned own-row only. search_path pinned `public, pg_temp`; REVOKE covers PUBLIC,anon,authenticated,service_role (Supabase default-privileges grant EXECUTE explicitly — verify file's proacl check caught the PUBLIC-only insufficiency).
+- Verified live on dev: verify/176 all bad=0; fresh-caller PATCH 200 [] @79ms; session-sync.tenant-isolation 6/6 green; shape test 23/23.
+- PR #11224 body updated w/ full evidence. Follow-ups: #11235, #11236 filed; comment on #11193. Learning committed.
+- IN FLIGHT at checkpoint: review subagent (agent 4c3c09df) on the diff; tenant-integration PR run 40352062363 queued.
+- REMAINING: review findings -> fix -> ready PR -> `gh pr merge 11224 --squash --auto` -> poll MERGED -> verify tenant-integration green on main (auto-closes #10764 via check-red-on-main.sh --report) -> postmerge -> release lease -> DONE.
