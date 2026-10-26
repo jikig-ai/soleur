@@ -91,19 +91,32 @@ describe("gitDataKeyFileContents", () => {
   });
 });
 
+// CI must not skip silently: the shell suite (git-data-cutover-access.test.sh) fails SETUP without ssh-keygen,
+// and so does this block when CI=true.
+const IN_CI = !!process.env.CI && process.env.CI !== "false";
+
+describe("ssh-keygen availability", () => {
+  it.skipIf(!IN_CI)("is installed in CI (the parseability and agreement rows need it)", () => {
+    expect(HAS_SSH_KEYGEN).toBe(true);
+  });
+});
+
 describe.skipIf(!HAS_SSH_KEYGEN)("probe and app agree on the key bytes (infra/git-data-container-probe.sh)", () => {
   const PROBE = path.resolve(__dirname, "../infra/git-data-container-probe.sh");
 
   // Run the REAL probe body to the point where it has written the key file, with an inner
   // ssh stub that copies the file it was handed to a path we read back. The stub answers with
-  // the wrapper prefix so the body exits 0.
-  function runProbeWithKey(envKey: string): { rc: number; written: string | null; out: string } {
+  // the wrapper prefix so the body exits 0. `fakeKeygen` puts a stub ssh-keygen that always
+  // succeeds first on PATH, so the probe's shape check passes and the bytes it WROTE can be
+  // compared even for a value that is not a parseable key (a BOM, say).
+  function runProbeWithKey(envKey: string, opts: { fakeKeygen?: boolean } = {}): { rc: number; written: string | null; out: string } {
     const dir = mkdtempSync(path.join(tmpdir(), "gdk-probe-"));
     try {
       const wt = path.join(dir, "wt");
       const tmp = path.join(dir, "tmp");
       const copy = path.join(dir, "copy");
-      spawnSync("mkdir", ["-p", wt, tmp]);
+      const bin = path.join(dir, "bin");
+      spawnSync("mkdir", ["-p", wt, tmp, bin]);
       const stub = path.join(dir, "ssh-stub");
       writeFileSync(
         stub,
@@ -111,9 +124,10 @@ describe.skipIf(!HAS_SSH_KEYGEN)("probe and app agree on the key bytes (infra/gi
           "echo 'remote: git-data transport: repo does not exist' >&2\nexit 1\n",
         { mode: 0o755 },
       );
+      if (opts.fakeKeygen) writeFileSync(path.join(bin, "ssh-keygen"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       const r = spawnSync("sh", [PROBE], {
         env: {
-          PATH: "/usr/bin:/bin",
+          PATH: `${bin}:/usr/bin:/bin`,
           TMPDIR: tmp,
           WORKTREE_ROOT: wt,
           GIT_TRANSPORT_SSH_PRIVATE_KEY: envKey,
@@ -147,6 +161,31 @@ describe.skipIf(!HAS_SSH_KEYGEN)("probe and app agree on the key bytes (infra/gi
     expect(probe.rc).toBe(0);
     expect(probe.written).toBe(gitDataKeyFileContents(KEY_BODY));
     expect(probe.written).toBe(`${KEY_BODY}\n`);
+  });
+
+  // Differential rows: the same input through the real probe body and the app, bytes compared.
+  // The four trimmed characters are removed by both; every other character (form feed, BOM, NBSP)
+  // is kept by both, so the two cannot drift apart on the ends of a value.
+  const DIFFERENTIAL: Array<[string, string]> = [
+    ["trailing literal backslash-n pair (docker form that kept the final newline)", `${DOCKER}\\n`],
+    ["surrounding spaces and tabs", `  \t${DOCKER}\t  `],
+    ["surrounding CR and LF", `\r\n${DOCKER}\r\n`],
+    ["real-newline key with surrounding blank lines", `\n\n${KEY_BODY}\n\n`],
+    ["leading and trailing form feed (kept by both)", `\f${DOCKER}\f`],
+    ["leading and trailing BOM (kept by both)", `\uFEFF${DOCKER}\uFEFF`],
+    ["leading and trailing NBSP (kept by both)", `\u00A0${DOCKER}\u00A0`],
+    ["a real-newline value with a literal backslash-n in a trailing comment line", `${KEY_BODY}\n# c\\nd`],
+  ];
+  it.each(DIFFERENTIAL)("differential: %s", (_label, value) => {
+    const probe = runProbeWithKey(value, { fakeKeygen: true });
+    expect(probe.rc).toBe(0);
+    expect(probe.written).toBe(gitDataKeyFileContents(value));
+  });
+
+  it("form feed, BOM and NBSP are not trimmed by the app (the probe does not trim them either)", () => {
+    for (const c of ["\f", "\uFEFF", "\u00A0"]) {
+      expect(normalizeGitDataKey(`${c}${DOCKER}${c}`)).toBe(`${c}${KEY_BODY}${c}`);
+    }
   });
 
   it("a real-newline value carrying a literal backslash-n in a trailing line is left alone by both", () => {

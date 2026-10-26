@@ -3064,6 +3064,26 @@ case_cpx_nokg() { # <key env value> -> sets NOKG_RC
 case_cpx_nokg_ok() { case_cpx_nokg "$CP_KEYDOCKER"; [ "$NOKG_RC" = 0 ] && grep -qxF 'container_probe ok worktree_root=writable transport=answered' "$CP/nokg.out" && [ -z "$(ls -A "$CP/tmp")" ]; }
 case_cpx_nokg_nomarker() { case_cpx_nokg "$(printf '%s\n%s\n%s' 'bm90LWEtcGVtLWF0LWFsbA==' 'bm90LWEtcGVtLWF0LWFsbA==' 'bm90LWEtcGVtLWF0LWFsbA==')"; [ "$NOKG_RC" = 31 ] && [ -z "$(ls -A "$CP/tmp")" ]; }
 case_cpx_nokg_short() { case_cpx_nokg "$(printf '%s\n%s' "$CP_PEM_B" "$CP_PEM_E")"; [ "$NOKG_RC" = 31 ] && [ -z "$(ls -A "$CP/tmp")" ]; }
+printf '#!/bin/sh\necho "ssh: something nobody classified" >&2\nexit 255\n' > "$CP/ssh-other" && chmod +x "$CP/ssh-other" || { printf 'FAIL SETUP: ssh-other\n' >&2; exit 1; }
+case_cpx_nokg_3line() { # exactly the floor: BEGIN, one body line, END -> passes the shape check and reaches the dial
+  rm -rf "$CP/tmp" "$CP/wt"; mkdir -p "$CP/tmp" "$CP/wt"; NOKG_RC=0
+  env -i PATH="$CP_NOKG" TMPDIR="$CP/tmp" WORKTREE_ROOT="$CP/wt" GIT_TRANSPORT_SSH_PRIVATE_KEY="$(printf '%s\n%s\n%s' "$CP_PEM_B" 'bm90LWEtcGVtLWF0LWFsbA==' "$CP_PEM_E")" GIT_DATA_SSH_HOST_KEY="$CP_PINV" \
+    GIT_DATA_SSH_HOST=10.0.1.20 GDCP_SSH="$CP/ssh-other" GDCP_TIMEOUT=15 "$CP_DASH" "${CASE_BODY:-$CPBODY}" </dev/null > "$CP/nokg.out" 2>&1 || NOKG_RC=$?
+  [ "$NOKG_RC" = 28 ] && [ -z "$(ls -A "$CP/tmp")" ]
+}
+case_cpx_nokg_noend() { case_cpx_nokg "$(printf '%s\n%s\n%s' "$CP_PEM_B" 'bm90LWEtcGVtLWF0LWFsbA==' 'bm90LWEtcGVtLWF0LWFsbA==')"; [ "$NOKG_RC" = 31 ] && [ -z "$(ls -A "$CP/tmp")" ]; }
+case_cpx_nokg_nobegin() { case_cpx_nokg "$(printf '%s\n%s\n%s' 'bm90LWEtcGVtLWF0LWFsbA==' 'bm90LWEtcGVtLWF0LWFsbA==' "$CP_PEM_E")"; [ "$NOKG_RC" = 31 ] && [ -z "$(ls -A "$CP/tmp")" ]; }
+if case_cpx_nokg_3line; then pass "CPX16: no ssh-keygen, exactly three lines (BEGIN, one body line, END) -> the shape check passes and the dial is made (unclassified, exit 28, NOT 31): the 3-line floor is pinned from above"
+else fail "CPX16: a BEGIN/body/END key did not reach the dial" "rc=$NOKG_RC out=[$(head -c 200 "$CP/nokg.out" | tr '\n' '|')]"; fi
+if case_cpx_nokg_noend; then pass "CPX17: no ssh-keygen, BEGIN with no END line -> key_shape (exit 31)"
+else fail "CPX17: a key with no END line was not refused" "rc=$NOKG_RC"; fi
+if case_cpx_nokg_nobegin; then pass "CPX18: no ssh-keygen, END with no BEGIN line -> key_shape (exit 31)"
+else fail "CPX18: a key with no BEGIN line was not refused" "rc=$NOKG_RC"; fi
+case_cpx_dockerkey_ws() { # a trailing literal backslash-n pair and surrounding whitespace around the docker form: the same key file
+  case_cpx_via dockerkey-ws ok CP_KEY_ENV="$(printf '\t ')${CP_KEYDOCKER}"'\n'"$(printf ' \r\n')" && grep -qxF 'inner-creds ok' "$CP_LOGF"
+}
+if case_cpx_dockerkey_ws; then pass "CPX19: the docker form with a trailing literal backslash-n pair and surrounding space, tab, CR, LF -> the ssh key file is still byte-equal to the fixture (the probe and the app trim the same four characters)"
+else fail "CPX19: surrounding whitespace or a trailing backslash-n pair changed the key file" "$(ctx)"; fi
 if case_cpx_nokg_ok; then pass "CPX13: no ssh-keygen in the container, a docker-form key -> repaired, the BEGIN/END shape holds, the dial is made, ok"
 else fail "CPX13: the no-ssh-keygen path did not clear a good docker-form key" "rc=$NOKG_RC out=[$(head -c 200 "$CP/nokg.out" | tr '\n' '|')]"; fi
 if case_cpx_nokg_nomarker; then pass "CPX14: no ssh-keygen, three lines without the BEGIN/END markers -> key_shape (exit 31)"
@@ -3151,6 +3171,9 @@ cp_body_row cpb-keygen-unchecked 2 's#^  ssh-keygen -y -f "\$d/k" </dev/null >/d
 cp_body_row cpb-linefloor-dropped 2 's#^if \[ "\$klines" -lt 3 \]; then exit 31; fi$#:#' case_cpx_nokg_short
 cp_body_row cpb-shape-markers-dropped 4 's#^  case "\$(first|last)" in .*$#  :#' case_cpx_nokg_nomarker
 cp_body_row cpb-blank-trim-dropped 2 's#^trim_key$#:#' case_cpx_blankkey
+cp_body_row cpb-first-check-dropped 2 's#^  case "\$first" in .*$#  :#' case_cpx_nokg_nobegin
+cp_body_row cpb-last-check-dropped 2 's#^  case "\$last" in .*$#  :#' case_cpx_nokg_noend
+cp_body_row cpb-floor-raised 2 's#^if \[ "\$klines" -lt 3 \]; then exit 31; fi$#if [ "$klines" -lt 4 ]; then exit 31; fi#' case_cpx_nokg_3line
 
 # ── RB — every store-probe word has a runbook row, and every verdict-map row names a live word ──
 # Scope: the store and fence probes' verdict and reason words (everything through _store_*). The
@@ -4081,7 +4104,8 @@ fi
 # Group B (#11072): plus cpb-unrunnable-unclassified, cpb-bare-timeout, cpb-closed-as-blackhole and cpb-term-trap-dropped = 4, so exactly 171.
 # Group C (#11072): plus cp-stderr-dropped and cp-first-host-only = 2, so exactly 173.
 # #8211 PR-G: plus cp-keyshape-unmapped, cpb-normalise-dropped, cpb-keygen-unchecked, cpb-linefloor-dropped, cpb-shape-markers-dropped, cpb-blank-trim-dropped = 6, so exactly 179.
-MUTANT_FLOOR=179
+# PR-G review round: plus cpb-first-check-dropped, cpb-last-check-dropped, cpb-floor-raised = 3, so exactly 182.
+MUTANT_FLOOR=182
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4115,7 +4139,8 @@ fi
 # Group B (#11072): CP2 r29/r30 (2), CPX4 +6, CPX6 (1) = 9 standalone, plus 4 mutants x 2 (8) = 17 more: 719 -> 736.
 # Group C (#11072): CP6, CP5b, CPX7 (3; CPX7 is a SKIP when run as root, still counted) + 2 mutants x 2 (4) = 7 more: 736 -> 743.
 # #8211 PR-G (docker-format key, key_shape): CP2 r31 (1), CPX8-CPX15 (8) = 9 standalone, plus 6 mutants x 2 (12) = 21 more: 743 -> 764.
-FLOOR=764
+# PR-G review round: CPX16-CPX19 (4) + 3 mutants x 2 (6) = 10 more: 764 -> 774.
+FLOOR=774
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

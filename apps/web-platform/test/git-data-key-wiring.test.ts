@@ -96,7 +96,15 @@ describe("docker-format key env -> the transport helpers receive the multi-line 
     expect(sshProvision.mock.calls[0][2]).toBe(KEY);
   });
 
-  it("the armed predicate still reads a docker-format remove key as present (no skipped/unconfigured flip)", async () => {
+  it("a blank-after-normalising sibling key (literal backslash-n only) does NOT arm: removeGitDataRepo reads skipped, where a raw trim would read unconfigured", async () => {
+    vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "");
+    vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", "\\n"); // two characters: backslash, n
+    vi.stubEnv("GIT_DATA_SSH_HOST", "");
+    await expect(removeGitDataRepo(WS)).resolves.toEqual({ status: "skipped" });
+    expect(sshProvision).not.toHaveBeenCalled();
+  });
+
+  it("a docker-format provision key arms the predicate when the remove key is absent (unconfigured, not skipped)", async () => {
     vi.stubEnv("GIT_REMOVE_SSH_PRIVATE_KEY", "");
     vi.stubEnv("GIT_PROVISION_SSH_PRIVATE_KEY", DOCKER);
     await expect(removeGitDataRepo(WS)).resolves.toMatchObject({ status: "unconfigured" });

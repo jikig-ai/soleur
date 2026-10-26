@@ -18,18 +18,30 @@ export const GIT_DATA_KEY_ENV_NAMES = [
 
 export type GitDataKeyEnvName = (typeof GIT_DATA_KEY_ENV_NAMES)[number];
 
+// Exactly the four characters the container probe trims (infra/git-data-container-probe.sh
+// trim_key: space, tab, CR, LF). NOT String.prototype.trim(): that also strips form feed, NBSP,
+// the BOM and other Unicode space, which the probe's POSIX sh does not, so the two would write
+// different bytes for the same value.
+const KEY_END_WS = /^[ \t\r\n]+|[ \t\r\n]+$/g;
+
+function trimKeyEnds(v: string): string {
+  return v.replace(KEY_END_WS, "");
+}
+
 /**
- * Repair the docker-env-file form of a key. A value with NO real newline that contains a
- * literal backslash-n pair has each pair replaced by a real newline; any other value
- * (already multi-line, or single-line without the pair) is returned unchanged apart from
- * the ends being trimmed. A multi-line key is never touched inside: a `\n` in its comment
- * is the comment's own text. Absent or whitespace-only reads as "" (not configured).
+ * Repair the docker-env-file form of a key. The ends are trimmed (space, tab, CR, LF only);
+ * a value with NO real newline that contains a literal backslash-n pair then has each pair
+ * replaced by a real newline and is trimmed again; any other value (already multi-line, or
+ * single-line without the pair) is returned as trimmed. A multi-line key is never touched
+ * inside: a `\n` in its comment is the comment's own text. Absent or blank reads as ""
+ * (not configured). The probe applies the same transform; the agreement rows in
+ * test/git-data-key.test.ts hold the two to the same bytes for the same value.
  */
 export function normalizeGitDataKey(raw: string | undefined | null): string {
-  const trimmed = (raw ?? "").trim();
+  const trimmed = trimKeyEnds(raw ?? "");
   if (!trimmed) return "";
   if (!trimmed.includes("\n") && trimmed.includes("\\n")) {
-    return trimmed.replace(/\\n/g, "\n").trim();
+    return trimKeyEnds(trimmed.replace(/\\n/g, "\n"));
   }
   return trimmed;
 }
