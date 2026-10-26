@@ -238,4 +238,15 @@ describe("verify 178_api_data_grants_narrowing", () => {
       /has_table_privilege\(\s*'authenticated'\s*,\s*'public\."users"'\s*,\s*'UPDATE'\s*\)/i,
     );
   });
+
+  it("carries the complement sweep over attacl (no uncovered column grants)", () => {
+    // Table-level REVOKE ALL does not clear attacl — the sentinel must probe
+    // the complement, not just the enumerated universe. Pin the row name and
+    // that it scopes to the seven narrowed relations via pg_attribute.
+    expect(verifyExec).toMatch(/no_uncovered_col_grants_narrowed/i);
+    expect(verifyExec).toMatch(/aclexplode|pg_attribute/i);
+    for (const col of USERS_CENSUS_COLS) {
+      expect(verifyExec).toMatch(new RegExp(`'${col}'`, "i"));
+    }
+  });
 });

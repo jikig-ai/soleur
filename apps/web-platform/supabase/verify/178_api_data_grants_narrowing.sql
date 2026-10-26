@@ -3,7 +3,11 @@
 -- the TABLE_VERBS probe universe; every kept grant asserts held -> bad counts
 -- the misses. For `users` the census column grants assert has_column_privilege
 -- (table-level UPDATE must be gone — the explicit negative row pins that a
--- column-level-only UPDATE does not satisfy has_table_privilege).
+-- column-level-only UPDATE does not satisfy has_table_privilege). The final
+-- row is the complement sweep: a table-level REVOKE ALL does not clear
+-- column-level attacl entries, so any api-role column privilege outside the
+-- census (and not already covered by a held table-level verb — the fuzz
+-- gate's coveredByTable exemption) counts bad.
 
 -- _schema_migrations: zero api-role grants — all three roles revoked.
 SELECT 'revoked__schema_migrations_all_roles' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE has_table_privilege('anon','public."_schema_migrations"',v.verb) OR has_table_privilege('authenticated','public."_schema_migrations"',v.verb) OR has_table_privilege('service_role','public."_schema_migrations"',v.verb)
@@ -76,4 +80,24 @@ SELECT 'kept_users_col_update_pwa_banner_dismissed_at', CASE WHEN has_column_pri
 UNION ALL
 SELECT 'kept_users_col_update_runtime_explainer_dismissed_at', CASE WHEN has_column_privilege('authenticated','public."users"','runtime_explainer_dismissed_at','UPDATE') THEN 0 ELSE 1 END
 UNION ALL
-SELECT 'kept_users_col_update_nudges_dismissed', CASE WHEN has_column_privilege('authenticated','public."users"','nudges_dismissed','UPDATE') THEN 0 ELSE 1 END;
+SELECT 'kept_users_col_update_nudges_dismissed', CASE WHEN has_column_privilege('authenticated','public."users"','nudges_dismissed','UPDATE') THEN 0 ELSE 1 END
+UNION ALL
+
+-- Complement sweep over attacl (review fix, PR #11253): column-level grants
+-- survive the table-level REVOKE ALL — assert none exist on the narrowed
+-- relations for anon/authenticated beyond the users census columns, and none
+-- that a held table-level verb does not already cover (mirrors the fuzz
+-- gate's registered-or-covered rule).
+SELECT 'no_uncovered_col_grants_narrowed', count(*)::int
+FROM pg_attribute a
+JOIN pg_class c ON c.oid = a.attrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN (VALUES ('anon'),('authenticated')) r(role)
+CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('REFERENCES')) v(verb)
+WHERE n.nspname = 'public'
+  AND c.relname IN ('_schema_migrations','api_keys','audit_byok_use','audit_github_token_use','dsar_export_jobs','flag_flip_audit','users')
+  AND a.attnum > 0 AND NOT a.attisdropped
+  AND NOT (r.role = 'authenticated' AND c.relname = 'users' AND v.verb = 'UPDATE'
+           AND a.attname IN ('email','onboarding_completed_at','pwa_banner_dismissed_at','runtime_explainer_dismissed_at','nudges_dismissed'))
+  AND has_column_privilege(r.role, c.oid, a.attname, v.verb)
+  AND NOT has_table_privilege(r.role, c.oid, v.verb);
