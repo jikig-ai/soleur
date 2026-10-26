@@ -125,8 +125,8 @@ resource "betteruptime_heartbeat" "web_bash_synthetic" {
 }
 
 # Per-host heartbeat URLs → Doppler soleur/prd. Each probe/guard resolves its host's own URL by
-# indirect expansion (${!<KEY>}) over the WEB_*_URL_KEY name baked into its env file: all four SCRIPTS
-# (nic-guard, zot, git-data, inngest-consumer) do it after their xtrace refusal (#9639 F6) — the
+# indirect expansion (${!<KEY>}) over the WEB_*_URL_KEY name baked into its env file: all five SCRIPTS
+# (nic-guard, zot, git-data, inngest-consumer, web-bash-synthetic) do it after their xtrace refusal (#9639 F6) — the
 # units expand nothing in their ExecStart — so these secrets are GENUINELY consumed (not a reserved-but-inert reservation — the anti-pattern
 # doppler_secret.zot_heartbeat_url_prd was deleted for, #6438 B3). Masked, same class as every
 # existing heartbeat URL secret.

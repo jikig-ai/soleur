@@ -835,6 +835,10 @@ def main():
                     'directive that invokes `doppler run`: the expansion runs before the target script can refuse to '
                     'run under xtrace; resolve the key inside the script after its refusal src=%s'
                     % (u['name'], ','.join('${!%s}' % i for i in w_ind), u['source']))
+            # NOTE: this elif (ack-mismatch arm) is UNREACHABLE while WRAPPER_ACK_REASONS is {} —
+            # every expanding unit hits the unacked FINDING above first. If a future unfixed sibling
+            # legitimately re-enters the dict, the author MUST also re-add the mismatch mutation rows
+            # deleted with the git-data drain (see the deleted-rows note in this file's G1 block).
             elif set(w_ind) != set(WRAPPER_ACK_REASONS[u['name']][0]):
                 findings.append(
                     'FINDING unit=%s reason=wrapper-acked unit expands %s but its ack names only %s: an ack covers the '
