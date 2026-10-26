@@ -438,7 +438,10 @@ attempt_headless_install() {
   # Package name is @pencil.dev/cli (not @anthropic-ai/pencil-cli — that 404s).
   # The detect_headless_cli function on line 182 already expects @pencil.dev/cli
   # in the symlink target; the previous install command was inconsistent.
-  if "$npm_bin" install --prefix "$HOME/.local" @pencil.dev/cli 2>&1; then
+  # Pinned to 0.2.9: the adapter's REPL surface table (pencil-repl-surface.mjs)
+  # is that version's signature list. Bumping this pin requires running
+  # engine-contract-probe.sh first (see #11143; migration tracked in #11156).
+  if "$npm_bin" install --prefix "$HOME/.local" @pencil.dev/cli@0.2.9 2>&1; then
     detect_headless_cli && return 0
     echo "  [FAILED] Install succeeded but binary not found"
   else

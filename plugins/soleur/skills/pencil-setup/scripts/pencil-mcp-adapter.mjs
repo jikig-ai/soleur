@@ -62,22 +62,30 @@ if (!process.env.PENCIL_CLI_KEY) {
 // trace. Matches the hard-fail UX of the PENCIL_CLI_KEY gate above.
 
 let McpServer, StdioServerTransport, z, nodeSpawn;
-let existsSync, mkdirSync, renameSync, writeFileSync;
-let dirname, join, homedir, tmpdir;
-let enrichErrorMessage, sanitizeFilename, classifyResponse, shouldSkipSave, stripAnsi;
+let existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync;
+let dirname, join, resolve, homedir, tmpdir;
+let enrichErrorMessage, sanitizeFilename, classifyResponse, stripAnsi;
+let shouldSkipSave, runGuardedSave, diskTopLevelCount, memoryTopLevelCount;
+let formatReplCommand, planSpawn;
 
 try {
   ({ McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js"));
   ({ StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js"));
   ({ z } = await import("zod"));
   ({ spawn: nodeSpawn } = await import("node:child_process"));
-  ({ existsSync, mkdirSync, renameSync, writeFileSync } = await import("node:fs"));
-  ({ dirname, join } = await import("node:path"));
+  ({ existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } = await import("node:fs"));
+  ({ dirname, join, resolve } = await import("node:path"));
   ({ homedir, tmpdir } = await import("node:os"));
   ({ enrichErrorMessage } = await import("./pencil-error-enrichment.mjs"));
   ({ sanitizeFilename } = await import("./sanitize-filename.mjs"));
   ({ classifyResponse, stripAnsi } = await import("./pencil-response-classify.mjs"));
-  ({ shouldSkipSave } = await import("./pencil-save-gate.mjs"));
+  ({
+    shouldSkipSave,
+    runGuardedSave,
+    diskTopLevelCount,
+    memoryTopLevelCount,
+  } = await import("./pencil-save-gate.mjs"));
+  ({ formatReplCommand, planSpawn } = await import("./pencil-repl-surface.mjs"));
 } catch (err) {
   process.stderr.write(
     `[pencil-adapter] ERROR: dependency import failed: ${err?.message ?? err}\n` +
@@ -154,63 +162,93 @@ function findPencilBinary() {
 
 // --- PencilProcess class ---
 
+const FS_PROBE = {
+  exists: (p) => existsSync(p),
+  size: (p) => {
+    try {
+      return statSync(p).size;
+    } catch {
+      return 0;
+    }
+  },
+};
+
 class PencilProcess {
   constructor() {
     this.child = null;
     this.ready = false;
     this.buffer = "";
     this.stderrBuffer = "";
+    // Set only after the child reaches its first prompt, so a failed spawn
+    // never leaves a path the auto-restart would respawn against.
     this.outputFile = null;
-    this.inputFile = null;
     this._dataHandler = null;
+    this._onExit = null;
   }
 
-  async spawn(outFile, inFile = null) {
+  // `explicitInFile` is the caller's template (open_document `inputPath`) and
+  // applies to this spawn only. A respawn passes none, and `planSpawn` then
+  // reloads `outFile`, so saved edits are never overwritten by a template.
+  async spawn(outFile, explicitInFile = null) {
     const binary = process.env.PENCIL_BINARY || findPencilBinary();
+    const { inFile } = planSpawn({
+      outFile,
+      initialInFile: explicitInFile,
+      probe: FS_PROBE,
+    });
     const args = ["interactive", "--out", outFile];
     if (inFile) {
       args.push("--in", inFile);
     }
 
-    this.outputFile = outFile;
-    this.inputFile = inFile;
+    this.outputFile = null;
     this.buffer = "";
+    this.stderrBuffer = "";
 
     // Spawn pencil using the adapter's own Node binary (process.execPath)
     // instead of relying on the pencil script's #!/usr/bin/env node shebang,
     // which resolves to the system Node (potentially <22) and fails with
     // ERR_REQUIRE_ESM. This guarantees the child process uses the same
     // Node version (22+) that runs the adapter.
-    this.child = nodeSpawn(process.execPath, [binary, ...args], {
+    const child = nodeSpawn(process.execPath, [binary, ...args], {
       stdio: ["pipe", "pipe", "pipe"],
       env: buildPencilEnv(),
     });
+    this.child = child;
 
     // Capture child stderr for error reporting AND pipe to adapter stderr
-    this.child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk) => {
       this.stderrBuffer += chunk.toString();
       process.stderr.write(chunk);
     });
 
-    // Crash detection
-    this.child.on("exit", (code, signal) => {
-      this.ready = false;
-      this.child = null;
+    // Handlers are bound to THIS child: the exit event of a killed child can
+    // arrive after its replacement was spawned and must not null the new one.
+    child.on("exit", (code, signal) => {
       process.stderr.write(
         `[pencil-adapter] pencil process exited: code=${code} signal=${signal}\n`
       );
+      if (this.child === child) {
+        this.ready = false;
+        this.child = null;
+      }
+      if (this._onExit) this._onExit(code, signal, this.child === null);
     });
 
-    this.child.on("error", (err) => {
-      this.ready = false;
-      this.child = null;
+    child.on("error", (err) => {
       process.stderr.write(
         `[pencil-adapter] pencil process error: ${err.message}\n`
       );
+      if (this.child === child) {
+        this.ready = false;
+        this.child = null;
+      }
+      if (this._onExit) this._onExit(null, null, true, err);
     });
 
     // Consume welcome banner + initial prompt
     await this.waitForPrompt(30000);
+    this.outputFile = outFile;
     this.ready = true;
   }
 
@@ -222,11 +260,11 @@ class PencilProcess {
     }
   }
 
-  async restart(outFile, inFile = null) {
+  async restart(outFile, explicitInFile = null) {
     await this.kill();
     // Brief delay to let the old process clean up
     await new Promise((r) => setTimeout(r, 200));
-    await this.spawn(outFile, inFile);
+    await this.spawn(outFile, explicitInFile);
   }
 
   async sendCommand(cmd) {
@@ -245,18 +283,39 @@ class PencilProcess {
   }
 
   waitForPrompt(timeoutMs = 30000) {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        if (this._dataHandler && this.child) {
-          this.child.stdout.removeListener("data", this._dataHandler);
-        }
+    return new Promise((resolvePrompt, reject) => {
+      const child = this.child;
+      if (!child) {
+        reject(new Error("[pencil-adapter] No child process to listen to"));
+        return;
+      }
+      const cleanup = () => {
+        clearTimeout(timeout);
+        child.stdout.removeListener("data", this._dataHandler);
         this._dataHandler = null;
+        this._onExit = null;
+      };
+      const timeout = setTimeout(() => {
+        cleanup();
         reject(
           new Error(
             `[pencil-adapter] Timed out waiting for prompt after ${timeoutMs}ms`
           )
         );
       }, timeoutMs);
+
+      // A child that exits before its prompt (bad --in file, auth failure)
+      // fails the wait immediately with its stderr tail, not after 30 s.
+      this._onExit = (code, signal, _isCurrent, err) => {
+        cleanup();
+        const tail = this.stderrBuffer.trim().split("\n").slice(-5).join("\n");
+        reject(
+          new Error(
+            `[pencil-adapter] pencil exited before it was ready (code=${code} signal=${signal}${err ? ` error=${err.message}` : ""})` +
+              (tail ? `: ${tail}` : "")
+          )
+        );
+      };
 
       this._dataHandler = (chunk) => {
         this.buffer += chunk.toString();
@@ -266,12 +325,7 @@ class PencilProcess {
         const startsWithPrompt = stripped.startsWith("pencil > ");
 
         if (promptIdx !== -1 || startsWithPrompt) {
-          clearTimeout(timeout);
-          if (this.child) {
-            this.child.stdout.removeListener("data", this._dataHandler);
-          }
-          this._dataHandler = null;
-
+          cleanup();
           let response;
           if (promptIdx !== -1) {
             response = stripped.substring(0, promptIdx);
@@ -279,16 +333,11 @@ class PencilProcess {
             // Buffer starts with prompt — empty response (initial prompt)
             response = "";
           }
-          resolve(response.trim());
+          resolvePrompt(response.trim());
         }
       };
 
-      if (this.child) {
-        this.child.stdout.on("data", this._dataHandler);
-      } else {
-        clearTimeout(timeout);
-        reject(new Error("[pencil-adapter] No child process to listen to"));
-      }
+      child.stdout.on("data", this._dataHandler);
     });
   }
 }
@@ -303,50 +352,55 @@ class CommandQueue {
   }
 
   async enqueue(command) {
-    return new Promise((resolve, reject) => {
-      this.queue.push({ command, resolve, reject });
+    return new Promise((resolveJob, reject) => {
+      this.queue.push({ command, resolve: resolveJob, reject });
       if (!this.running) this._drain();
     });
+  }
+
+  // Run `fn` as ONE queue job: no other queued command, and no restart, can
+  // land while it runs. `fn` receives `send(cmd)`, which talks to the process
+  // directly (enqueueing from inside a job would wait on itself). This is what
+  // makes the save sentinel's probe-then-save atomic.
+  async runExclusive(fn, { ensure = true } = {}) {
+    return new Promise((resolveJob, reject) => {
+      this.queue.push({ job: fn, ensure, resolve: resolveJob, reject });
+      if (!this.running) this._drain();
+    });
+  }
+
+  async _ensureAlive() {
+    // Auto-restart if process died. No explicit input: the respawn reloads
+    // the output file (see PencilProcess.spawn).
+    if (!this.process.ready && !this.process.child) {
+      if (this.process.outputFile) {
+        await this.process.spawn(this.process.outputFile);
+      } else {
+        throw new Error(
+          "Pencil process not running and no file to restart with"
+        );
+      }
+    }
   }
 
   async _drain() {
     this.running = true;
     while (this.queue.length > 0) {
-      const { command, resolve: res, reject: rej } = this.queue.shift();
+      const item = this.queue.shift();
       try {
-        // Auto-restart if process died
-        if (!this.process.ready && !this.process.child) {
-          if (this.process.outputFile) {
-            await this.process.spawn(
-              this.process.outputFile,
-              this.process.inputFile
-            );
-          } else {
-            throw new Error(
-              "Pencil process not running and no file to restart with"
-            );
-          }
+        if (item.job) {
+          if (item.ensure) await this._ensureAlive();
+          item.resolve(await item.job((cmd) => this.process.sendCommand(cmd)));
+        } else {
+          await this._ensureAlive();
+          item.resolve(await this.process.sendCommand(item.command));
         }
-        const result = await this.process.sendCommand(command);
-        res(result);
       } catch (err) {
-        rej(err);
+        item.reject(err);
       }
     }
     this.running = false;
   }
-}
-
-// --- REPL command formatting ---
-
-function formatReplCommand(toolName, params) {
-  if (!params || Object.keys(params).length === 0) {
-    return `${toolName}()`;
-  }
-  if (toolName === "batch_design") {
-    return `batch_design({ operations: ${JSON.stringify(params.operations)} })`;
-  }
-  return `${toolName}(${JSON.stringify(params)})`;
 }
 
 // --- Lazy spawn helper ---
@@ -354,18 +408,19 @@ function formatReplCommand(toolName, params) {
 const pencilProcess = new PencilProcess();
 const commandQueue = new CommandQueue(pencilProcess);
 
-// Tracks the classification of the most recent REPL mutation so open_document's
-// pre-restart save() can skip when the prior mutation errored. See
-// `shouldSkipSave` and the #2630 regression.
+// Tracks the classification of the most recent REPL mutation so a failed
+// mutation never triggers an auto-save. See `shouldSkipSave` and #2630.
 let lastMutationClassification = null;
+
+// Set when open_document could not load the file it was given. Every tool
+// errors until the next successful open_document, so nothing runs (or saves)
+// against a document that is not the one the caller asked for.
+let openFailure = null;
 
 async function ensureProcess() {
   if (!pencilProcess.ready && !pencilProcess.child) {
     if (pencilProcess.outputFile) {
-      await pencilProcess.spawn(
-        pencilProcess.outputFile,
-        pencilProcess.inputFile
-      );
+      await pencilProcess.spawn(pencilProcess.outputFile);
     } else {
       // No document opened yet — use a temp file
       const tempFile = join(
@@ -377,6 +432,42 @@ async function ensureProcess() {
   }
 }
 
+// --- Guarded save (the ONLY place the REPL `save` command is emitted) ---
+//
+// One exclusive queue job: read the file on disk, probe the in-memory
+// document, decide, then save. An empty document is never written over a
+// file that still holds nodes (#11143; see pencil-save-gate.mjs). Callers:
+// the post-mutation auto-save and the explicit `save` tool.
+
+async function guardedSave(source) {
+  return commandQueue.runExclusive(async (send) => {
+    const file = pencilProcess.outputFile;
+    return runGuardedSave({
+      file,
+      source,
+      readDisk: async () => {
+        try {
+          return readFileSync(file, "utf8");
+        } catch {
+          return null;
+        }
+      },
+      probeMemory: async () => {
+        try {
+          return classifyResponse(await send(formatReplCommand("batch_get", {}))).text;
+        } catch {
+          return null;
+        }
+      },
+      send: async () => send(formatReplCommand("save", {})),
+    });
+  });
+}
+
+function errorResult(text) {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
 // --- MCP Server setup ---
 
 const server = new McpServer({
@@ -384,27 +475,48 @@ const server = new McpServer({
   version: "0.0.1",
 });
 
+// Every tool goes through here: an open-failed adapter refuses everything but
+// open_document, and any thrown error (a REPL contract violation, a dead
+// process, a timeout) becomes an isError result with the replacement hints.
+function registerTool(name, schema, handler, { allowWhenOpenFailed = false } = {}) {
+  server.tool(name, schema, async (params) => {
+    if (openFailure && !allowWhenOpenFailed) {
+      return errorResult(
+        `open failed: ${openFailure}\nCall open_document with a valid file to continue; no tool runs until then.`
+      );
+    }
+    try {
+      return await handler(params ?? {});
+    } catch (err) {
+      return errorResult(enrichErrorMessage(String(err?.message ?? err)));
+    }
+  });
+}
+
 // --- Read-only tool handler factory ---
 
 function registerReadOnlyTool(name, schema, handler) {
-  server.tool(name, schema, async (params) => {
-    await ensureProcess();
+  registerTool(name, schema, async (params) => {
     const cmd = formatReplCommand(name, params);
+    await ensureProcess();
     const raw = await commandQueue.enqueue(cmd);
     const { text, isError } = classifyResponse(raw);
     if (handler) {
       return handler(text, isError);
     }
-    return { content: [{ type: "text", text }], isError };
+    return {
+      content: [{ type: "text", text: isError ? enrichErrorMessage(text) : text }],
+      isError,
+    };
   });
 }
 
 // --- Mutating tool handler factory ---
 
 function registerMutatingTool(name, schema) {
-  server.tool(name, schema, async (params) => {
-    await ensureProcess();
+  registerTool(name, schema, async (params) => {
     const cmd = formatReplCommand(name, params);
+    await ensureProcess();
     const raw = await commandQueue.enqueue(cmd);
     const classification = classifyResponse(raw);
     lastMutationClassification = classification;
@@ -415,15 +527,34 @@ function registerMutatingTool(name, schema) {
       process.stderr.write(
         `[pencil-adapter] SKIPPED save (${name} errored): ${text.slice(0, 200)}\n`
       );
-      return { content: [{ type: "text", text: enrichErrorMessage(text) }], isError: true };
+      return errorResult(enrichErrorMessage(text));
     }
     // Auto-save after mutating operations — gated by `shouldSkipSave` so a
-    // failed mutation does not trigger a save that overwrites valid .pen
-    // content with empty or stale state.
+    // failed mutation does not trigger a save, and by the empty-overwrite
+    // sentinel so an empty document never replaces a file that holds nodes.
     if (!shouldSkipSave(classification)) {
-      await commandQueue.enqueue("save()");
+      const saved = await guardedSave("auto-save");
+      if (saved.refused) {
+        process.stderr.write(`[pencil-adapter] ${saved.message.split("\n")[0]}\n`);
+        return errorResult(`${saved.message}\n\nEngine response to the edit:\n${text}`);
+      }
+      const after = classifyResponse(saved.raw);
+      if (after.isError) {
+        return errorResult(`Edit applied but the save failed: ${enrichErrorMessage(after.text)}`);
+      }
     }
     return { content: [{ type: "text", text }] };
+  });
+}
+
+// Tools @pencil.dev/cli 0.2.9 removed. They stay registered so Desktop-style
+// callers get a replacement hint (pencil-error-enrichment.mjs) instead of a
+// bare "tool not found"; formatReplCommand throws `Unknown tool:` for them, so
+// nothing reaches the engine and nothing is saved. Retire with #11156.
+function registerRemovedTool(name, schema) {
+  registerTool(name, schema, async () => {
+    formatReplCommand(name, {});
+    return errorResult(`Unknown tool: ${name}`);
   });
 }
 
@@ -440,22 +571,15 @@ registerReadOnlyTool("get_editor_state", {
 });
 
 registerReadOnlyTool("get_guidelines", {
-  topic: z.enum([
-    "code",
-    "table",
-    "tailwind",
-    "landing-page",
-    "design-system",
-    "slides",
-    "mobile-app",
-    "web-app",
-  ]),
+  category: z.string().optional(),
+  name: z.string().optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
 });
 
 // get_screenshot — special handling for base64 image data + auto-save to disk
-server.tool("get_screenshot", { nodeId: z.string() }, async ({ nodeId }) => {
-  await ensureProcess();
+registerTool("get_screenshot", { nodeId: z.string() }, async ({ nodeId }) => {
   const cmd = formatReplCommand("get_screenshot", { nodeId });
+  await ensureProcess();
   const raw = await commandQueue.enqueue(cmd);
   const { text, isError } = classifyResponse(raw);
   if (isError) {
@@ -495,16 +619,16 @@ server.tool("get_screenshot", { nodeId: z.string() }, async ({ nodeId }) => {
   return { content };
 });
 
-registerReadOnlyTool("get_style_guide", {
+registerRemovedTool("get_style_guide", {
   name: z.string().optional(),
   tags: z.array(z.string()).optional(),
 });
 
-registerReadOnlyTool("get_style_guide_tags", {});
+registerRemovedTool("get_style_guide_tags", {});
 
 registerReadOnlyTool("get_variables", {});
 
-registerReadOnlyTool("find_empty_space_on_canvas", {
+registerRemovedTool("find_empty_space_on_canvas", {
   direction: z.enum(["top", "right", "bottom", "left"]),
   height: z.number(),
   width: z.number(),
@@ -512,7 +636,7 @@ registerReadOnlyTool("find_empty_space_on_canvas", {
   nodeId: z.string().optional(),
 });
 
-registerReadOnlyTool("search_all_unique_properties", {
+registerRemovedTool("search_all_unique_properties", {
   parents: z.array(z.string()),
   properties: z.array(z.string()),
 });
@@ -524,7 +648,7 @@ registerReadOnlyTool("snapshot_layout", {
 });
 
 // export_nodes — custom handler to rename exported files using node names
-server.tool(
+registerTool(
   "export_nodes",
   {
     nodeIds: z.array(z.string()),
@@ -592,107 +716,94 @@ server.tool(
 
 registerMutatingTool("batch_design", { operations: z.string() });
 
-registerMutatingTool("replace_all_matching_properties", {
+registerRemovedTool("replace_all_matching_properties", {
   parents: z.array(z.string()),
   properties: z.record(z.string(), z.unknown()),
 });
 
-// set_variables — auto-coerce bare values into {type, value} objects
-server.tool(
-  "set_variables",
-  {
-    variables: z.record(z.string(), z.unknown()),
-    replace: z.boolean().optional(),
-  },
-  async ({ variables, replace }) => {
-    await ensureProcess();
-    // Coerce bare values: "#hex" → {type:"color"}, number → {type:"number"}, string → {type:"string"}
-    const coerced = {};
-    for (const [key, val] of Object.entries(variables)) {
-      if (val && typeof val === "object" && val.type && val.value !== undefined) {
-        coerced[key] = val; // already typed
-      } else if (typeof val === "string" && /^#[0-9a-fA-F]{3,8}$/.test(val)) {
-        coerced[key] = { type: "color", value: val };
-      } else if (typeof val === "number") {
-        coerced[key] = { type: "number", value: val };
-      } else if (typeof val === "string") {
-        coerced[key] = { type: "string", value: val };
-      } else {
-        coerced[key] = val; // pass through unknown shapes
-      }
-    }
-    const params = { variables: coerced };
-    if (replace !== undefined) params.replace = replace;
-    const cmd = formatReplCommand("set_variables", params);
-    const raw = await commandQueue.enqueue(cmd);
-    const classification = classifyResponse(raw);
-    lastMutationClassification = classification;
-    const { text, isError } = classification;
-    if (isError) {
-      let enriched = text;
-      if (/does not have a valid definition/i.test(text)) {
-        enriched += '\nExpected: { "type": "color" | "string" | "number", "value": <value> }';
-      } else if (/invalid type property/i.test(text)) {
-        enriched += "\nValid types: color, string, number";
-      }
-      process.stderr.write(
-        `[pencil-adapter] SKIPPED save (set_variables errored): ${text.slice(0, 200)}\n`
-      );
-      return { content: [{ type: "text", text: enriched }], isError: true };
-    }
-    if (!shouldSkipSave(classification)) {
-      await commandQueue.enqueue("save()");
-    }
-    return { content: [{ type: "text", text }] };
-  }
-);
+registerRemovedTool("set_variables", {
+  variables: z.record(z.string(), z.unknown()),
+  replace: z.boolean().optional(),
+});
 
 // --- Meta tools ---
 
-server.tool(
+registerTool(
   "open_document",
   {
     filePath: z.string(),
     inputPath: z.string().optional(),
   },
   async ({ filePath, inputPath }) => {
-    // Save current document first if process is running — but skip when the
-    // preceding mutation errored (would overwrite good content with 0 bytes).
-    if (pencilProcess.ready && !shouldSkipSave(lastMutationClassification)) {
-      try {
-        await commandQueue.enqueue("save()");
-      } catch {
-        // Process may have died — proceed with restart
-      }
-    } else if (pencilProcess.ready && shouldSkipSave(lastMutationClassification)) {
-      process.stderr.write(
-        "[pencil-adapter] SKIPPED pre-restart save (prior mutation errored)\n"
-      );
-    }
-    await pencilProcess.restart(filePath, inputPath);
-    // Reset classification — new document means prior error is no longer relevant.
-    lastMutationClassification = null;
-    return {
-      content: [{ type: "text", text: `Opened ${filePath}` }],
-    };
-  }
+    // Absolute paths: the child process and the save sentinel must agree on
+    // which file is meant regardless of either side's working directory.
+    const outFile = resolve(filePath);
+    const inFile = inputPath ? resolve(inputPath) : null;
+
+    // The kill-and-respawn runs inside the same exclusive section as the
+    // saves, so no queued command or save can land between the old document
+    // going away and the new one loading. There is no pre-switch save: every
+    // mutation already auto-saves, so it could only persist state the
+    // sentinel would refuse.
+    return commandQueue.runExclusive(
+      async (send) => {
+        try {
+          openFailure = null;
+          await pencilProcess.restart(outFile, inFile);
+          lastMutationClassification = null;
+          const memoryCount = memoryTopLevelCount(
+            classifyResponse(await send(formatReplCommand("batch_get", {}))).text
+          );
+          const diskCount = diskTopLevelCount(
+            (() => {
+              try {
+                return readFileSync(outFile, "utf8");
+              } catch {
+                return null;
+              }
+            })()
+          );
+          if (!inFile && diskCount !== null && diskCount > 0 && !(memoryCount > 0)) {
+            throw new Error(
+              `${outFile} holds ${diskCount} top-level node(s) on disk but loaded empty; it was not modified`
+            );
+          }
+          const shown = memoryCount === null ? "unknown" : String(memoryCount);
+          return {
+            content: [
+              { type: "text", text: `Opened ${outFile} (${shown} top-level node(s) loaded)` },
+            ],
+          };
+        } catch (err) {
+          openFailure = String(err?.message ?? err);
+          await pencilProcess.kill();
+          process.stderr.write(`[pencil-adapter] open failed: ${openFailure}\n`);
+          return errorResult(`open failed: ${openFailure}`);
+        }
+      },
+      { ensure: false }
+    );
+  },
+  { allowWhenOpenFailed: true }
 );
 
-server.tool("save", {}, async () => {
+registerTool("save", {}, async () => {
   await ensureProcess();
-  // Explicit save requests are NOT gated — the caller has asked for save
-  // and the adapter must surface its actual result. But when a prior
-  // mutation classified as an error, log a stderr note so the sequence
-  // (failed mutation → explicit save) is visible in the MCP log. Matches
-  // the observability posture for gated auto-saves in registerMutatingTool.
+  // Explicit saves are subject to the same empty-overwrite sentinel as the
+  // auto-save. When a prior mutation classified as an error, log a stderr note
+  // so the sequence (failed mutation → explicit save) is visible in the MCP log.
   if (shouldSkipSave(lastMutationClassification)) {
     process.stderr.write(
-      "[pencil-adapter] NOTE: explicit save() after preceding errored mutation " +
+      "[pencil-adapter] NOTE: explicit save after preceding errored mutation " +
       "— running at caller's request, but the saved file may not reflect intended state.\n"
     );
   }
-  const raw = await commandQueue.enqueue("save()");
-  const { text, isError } = classifyResponse(raw);
+  const saved = await guardedSave("save");
+  if (saved.refused) {
+    process.stderr.write(`[pencil-adapter] ${saved.message.split("\n")[0]}\n`);
+    return errorResult(saved.message);
+  }
+  const { text, isError } = classifyResponse(saved.raw);
   return { content: [{ type: "text", text }], isError };
 });
 
