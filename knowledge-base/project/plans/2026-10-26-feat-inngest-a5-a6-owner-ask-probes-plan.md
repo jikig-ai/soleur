@@ -92,6 +92,8 @@ File one tracker (`follow-through`, `action-required`, `meta/machinery`, milesto
 
 **Assembly.** The decision table in `inngest-a5-a6-owner-ask-10136.sh` is the single chokepoint. Its inputs are four reads: #11215 state, #10540 state, #10543 state, and the trusted anchors on #10136. The sweeper's exit-code mapping in `scripts/sweep-followthroughs.sh` is the consumer.
 
+**Mutation matrix.**
+
 | # | Mutation | Must go RED because |
 |---|---|---|
 | 1 | Accept an anchor from an author without write permission | the untrusted-author fixture expects row 4, not row 3 |
