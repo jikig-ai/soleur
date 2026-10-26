@@ -705,7 +705,8 @@ Reading it:
   cluster was refused" — the two states #8281 was filed to distinguish. The
   refusal enums name the gate: `diff-structural-op` / `diff-path-refused` (the
   allowlist), `corpus-shrink-refused` (the post-apply floor),
-  `skill-conflict-guard`, `byte-budget-overflow`, `not-committed-*`.
+  `skill-conflict-guard`, `skill-conflict-guard-unverifiable`, `byte-budget-overflow`,
+  `not-committed-*`.
   `refusal_detail[].cluster_hash` recurring week over week is a cluster the
   proposer keeps producing and the gates keep refusing.
 - **`diff-underivable` is no longer an emitted value (#8427).** It was ONE
