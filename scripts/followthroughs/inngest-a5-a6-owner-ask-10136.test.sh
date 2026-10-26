@@ -13,7 +13,7 @@ set -uo pipefail
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROBE="$REPO_ROOT/scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh"
 
 passes=0
@@ -27,6 +27,17 @@ abort() { printf 'harness: %s\n' "$1" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR}/owner-ask.XXXXXXXX")" || abort "mktemp failed"
 trap 'rm -rf "$WORK"' EXIT
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; a write would land in %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$WORK"
 mkdir -p "$WORK/bin" || abort "mkdir failed"
 
 # --- the gh shim -----------------------------------------------------------------------------------------------
@@ -118,11 +129,23 @@ reset_fixture() {
   mk_comments
 }
 
-# --- instrument self-test: both helpers move their counters -----------------------------------------------------
-p0=$passes; f0=$fails
+# --- instrument self-test: both helpers move their counters, and expect() can REJECT -----------------------------
+p0=$passes; f0=$fails; c0=$cases
 pass "self-test pass helper" >/dev/null; fail "self-test fail helper" >/dev/null
 if [[ $((passes - p0)) -ne 1 || $((fails - f0)) -ne 1 ]]; then abort "assertion helpers do not move their counters"; fi
 passes=$p0; fails=$f0
+# expect() owns its own verdict, so the pass/fail control above cannot see it going soft: drive it once per
+# rejection arm (wrong rc, missing needle, forbidden needle) and once accepting, and require exactly the right moves.
+RC=5; OUT="needle-present"
+expect "self-test: wrong rc" 2 "needle-present" >/dev/null
+[[ $((fails - f0)) -eq 1 && $passes -eq $p0 ]] || abort "expect() accepted a wrong exit code"
+expect "self-test: missing needle" 5 "absent-needle" >/dev/null
+[[ $((fails - f0)) -eq 2 && $passes -eq $p0 ]] || abort "expect() accepted a missing needle"
+expect "self-test: forbidden needle" 5 "needle-present" "needle-present" >/dev/null
+[[ $((fails - f0)) -eq 3 && $passes -eq $p0 ]] || abort "expect() accepted a forbidden needle"
+expect "self-test: accepting" 5 "needle-present" "other" >/dev/null
+[[ $((fails - f0)) -eq 3 && $((passes - p0)) -eq 1 ]] || abort "expect() rejected a correct call"
+passes=$p0; fails=$f0; cases=$c0
 
 # --- row 1: A6 recorded ----------------------------------------------------------------------------------------
 reset_fixture
@@ -134,28 +157,28 @@ expect "row 1: a trusted S6 anchor ends the asks" 2 "Close this tracker"
 reset_fixture
 mk_comments "drive-by|S6-A6-DONE: 2026-11-20T10:00:00Z"
 run_case 2026-10-30
-expect "row 1 guard: an author without write permission cannot post the done anchor" 2 "waiting on the soak" "Close this tracker"
+expect "row 1 guard: an author without write permission cannot post the done anchor" 2 "waiting on the 48-hour check" "Close this tracker"
 
 # a trusted but malformed anchor (no ISO time) does not count
 reset_fixture
 mk_comments "owner1|S6-A6-DONE: soon"
 run_case 2026-10-30
-expect "row 1 guard: an anchor without an ISO time does not count" 2 "waiting on the soak" "Close this tracker"
+expect "row 1 guard: an anchor without an ISO time does not count" 2 "waiting on the 48-hour check" "Close this tracker"
 
 # an anchor inside a code fence does not count
 reset_fixture
 mk_comments "owner1|$(printf '```\nS6-A6-DONE: 2026-11-20T10:00:00Z\n```')"
 run_case 2026-10-30
-expect "row 1 guard: a fenced anchor does not count" 2 "waiting on the soak" "Close this tracker"
+expect "row 1 guard: a fenced anchor does not count" 2 "waiting on the 48-hour check" "Close this tracker"
 
 # --- row 3: A5 recorded, A6 asked ------------------------------------------------------------------------------
 reset_fixture
-mk_comments "owner1|S5-A5-DONE: 2026-11-01T10:00:00Z"
+mk_comments "owner1|$(printf 'S5-A5-DONE: 2026-11-01T10:00:00Z\nCANARY-LEAK-7f3')"
 run_case 2026-11-05
 expect "row 3: a trusted S5 anchor asks for A6" 5 "no-known-access" "Close this tracker"
-cases=$((cases + 1)); grep -qF "2026-12-10" <<<"$OUT" && grep -qE '[0-9]+ days' <<<"$OUT" \
-  && pass "row 3: the A6 ask prints the lapse date and the days left" \
-  || fail "row 3: the A6 ask lacks the lapse date or the days left"
+cases=$((cases + 1)); grep -qF "lapses 2026-12-10 (35 days left)" <<<"$OUT" \
+  && pass "row 3: the A6 ask prints the lapse date and exactly 35 days left on 2026-11-05" \
+  || fail "row 3: the A6 ask lacks the lapse date or the right days left"
 
 # row 3 takes precedence over row 2 (anchor present, route still open, date past the dead-man)
 reset_fixture
@@ -169,7 +192,7 @@ run_case 2026-11-09
 expect "row 2: from 2026-11-09 with the route open the bridge-risk ask fires" 5 "schedule"
 reset_fixture
 run_case 2026-11-08
-expect "row 2 boundary: the day before the dead-man stays quiet" 2 "waiting on the soak"
+expect "row 2 boundary: the day before the dead-man stays quiet" 2 "waiting on the 48-hour check"
 reset_fixture
 run_case 2026-11-13
 expect "row 2: after the bridge date the text says it has passed" 5 "has passed"
@@ -178,7 +201,19 @@ run_case 2026-11-09
 expect "row 2: a route closed as not planned is not a landed route" 5 "schedule"
 reset_fixture; GH_ISSUE_10540="CLOSED:COMPLETED"
 run_case 2026-11-09
-expect "row 2 off: a route closed as completed is not at risk" 2 "waiting on the soak" "schedule"
+expect "dead-man: route landed but the soak still open past 2026-11-09 still warns" 5 "has not finished" "is not done"
+reset_fixture; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_11215="CLOSED:NOT_PLANNED"
+run_case 2026-11-09
+expect "dead-man: a soak closed without a completed result warns" 5 "closed without a completed result"
+reset_fixture; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_11215="CLOSED:COMPLETED"
+run_case 2026-11-09
+expect "dead-man off: soak and route both complete means the A5 ask, not the warning" 5 "A5 is ready" "bridge"
+reset_fixture
+run_case 2026-11-12
+expect "row 2 boundary: on the bridge date itself the text says it ends" 5 "ends 2026-11-12" "The legal bridge date of"
+reset_fixture
+run_case 2026-12-11
+expect "row 2: after the extended date the text says so" 5 "extended date of 2026-12-10 has also passed"
 # soak open and past the date: the bridge-risk row must come BEFORE the soak rows
 reset_fixture; GH_ISSUE_11215="OPEN:"
 run_case 2026-11-10
@@ -187,7 +222,7 @@ expect "ordering: the date risk is evaluated before the soak rows" 5 "schedule"
 # --- rows 4 to 6: the soak and the route -----------------------------------------------------------------------
 reset_fixture
 run_case 2026-10-30
-expect "row 4: the soak tracker open means wait" 2 "waiting on the soak"
+expect "row 4: the soak tracker open means wait" 2 "waiting on the 48-hour check"
 reset_fixture; GH_ISSUE_11215="CLOSED:NOT_PLANNED"; GH_ISSUE_10540="CLOSED:COMPLETED"
 run_case 2026-10-30
 expect "row 5: a soak closed without a completed result cannot be established" 3 "was closed without a completed result"
@@ -199,17 +234,33 @@ expect "row 6: the soak passed but the route is open" 2 "blocked on #10540"
 reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_10543="OPEN:"
 run_case 2026-10-30
 expect "row 7: soak passed and route landed asks for A5" 5 "replaces the scheduler's signing key"
-cases=$((cases + 1)); grep -qF "quiesced window" <<<"$OUT" && grep -qF "S5-A5-DONE" <<<"$OUT" \
+cases=$((cases + 1)); grep -qF "quiet window" <<<"$OUT" && grep -qF "S5-A5-DONE" <<<"$OUT" \
   && pass "row 7: with #10543 open the ask names the quiesced window and the done line" \
   || fail "row 7: the ask lacks the quiesced window or the done line"
 reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_10543="CLOSED:COMPLETED"
 run_case 2026-10-30
-expect "row 7: with #10543 fixed the ask drops the quiesced window" 5 "replaces the scheduler's signing key" "quiesced window"
+expect "row 7: with #10543 fixed the ask drops the quiesced window" 5 "replaces the scheduler's signing key" "quiet window"
 
-# harness row: a stub that reports every issue open must NOT reach the A5 ask
+# --- the A6 ask after the lapse date; A6 without A5; malformed anchors -----------------------------------------------
 reset_fixture
+mk_comments "owner1|S5-A5-DONE: 2026-11-01T10:00:00Z"
+run_case 2026-12-13
+expect "row 3: past the lapse date the A6 ask says it lapsed" 5 "lapsed on 2026-12-10 (3 days ago)" "days left"
+reset_fixture
+mk_comments "owner1|S6-A6-DONE: 2026-11-20T10:00:00Z"
+run_case 2026-11-10
+expect "row 1 guard: A6 recorded without A5 cannot establish (never 'both recorded')" 3 "A6 is recorded" "both recorded"
+reset_fixture
+mk_comments "owner1|S5-A5-DONE: 2026-11-01Tgarbage"
 run_case 2026-10-30
-cases=$((cases + 1)); [[ "$RC" -ne 5 ]] && pass "harness: all issues open never reaches the A5 ask" || fail "harness: all-open fixture reached an exit 5"
+expect "anchor: a malformed time is not an anchor (soak still gates)" 2 "waiting on the 48-hour check"
+reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"
+mk_comments "owner1|S5-A5-DONE: 2026-11-01Tgarbage"
+run_case 2026-10-30
+expect "anchor: a malformed S5 line is named in the A5 ask" 5 "not in the right format"
+reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_10543="CLOSED:NOT_PLANNED"
+run_case 2026-10-30
+expect "row 7: a replay-defect tracker closed as not planned is not 'fixed'" 5 "quiet window" "is fixed"
 
 # --- read failures are exit 3, never an ask ---------------------------------------------------------------------
 reset_fixture; GH_ISSUE_11215="FAIL"
@@ -218,6 +269,9 @@ expect "read failure: the soak tracker read" 3 "could not read the soak tracker"
 reset_fixture; GH_ISSUE_10540="FAIL"
 run_case 2026-11-09
 expect "read failure: the route read (row 2)" 3 "could not read the rotation route tracker"
+reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="FAIL"
+run_case 2026-10-30
+expect "read failure: the route read (row 6) is not read as landed" 3 "could not read the rotation route tracker"
 reset_fixture; GH_ISSUE_11215="CLOSED:COMPLETED"; GH_ISSUE_10540="CLOSED:COMPLETED"; GH_ISSUE_10543="FAIL"
 run_case 2026-10-30
 expect "read failure: the replay-defect read (row 7)" 3 "could not read the dashboard-send defect tracker"
@@ -227,10 +281,13 @@ expect "read failure: the anchor read" 3 "could not read the owner's done lines"
 unset GH_COMMENTS_FAIL
 reset_fixture; GH_ISSUE_11215="GARBAGE"
 run_case 2026-10-30
-expect "malformed gh output is exit 3" 3 "CANNOT ESTABLISH"
+expect "malformed gh output is exit 3" 3 "could not read the soak tracker"
 reset_fixture
 run_case "not-a-date"
-expect "a malformed date is exit 3" 3 "CANNOT ESTABLISH"
+expect "a malformed date is exit 3" 3 "is not YYYY-MM-DD"
+reset_fixture
+run_case "2026-13-45"
+expect "an impossible date is exit 3" 3 "does not parse"
 
 # --- never exit 0 or 1; output hygiene --------------------------------------------------------------------------
 cases=$((cases + 1))
@@ -240,7 +297,7 @@ for r in "${ALL_RCS[@]}"; do case "$r" in 2|3|5) : ;; *) bad_rc="$bad_rc $r" ;; 
 
 cases=$((cases + 1))
 hyg=""
-for tok in owner1 drive-by hetzner "CLO-internal" INNGEST_SIGNING_KEY INNGEST_EVENT_KEY; do
+for tok in owner1 drive-by hetzner "CLO-internal" INNGEST_SIGNING_KEY INNGEST_EVENT_KEY CANARY-LEAK-7f3; do
   grep -qF -- "$tok" <<<"$ALL_OUT" && hyg="$hyg $tok"
 done
 [[ -z "$hyg" ]] && pass "no output line names a login, a host, a key name or internal text" || fail "output hygiene: found:$hyg"
@@ -251,10 +308,11 @@ cases=$((cases + 1))
   && pass "the probe reads anchors through trusted_verdict_bodies on the epic" \
   || fail "the probe does not call trusted_verdict_bodies on the epic"
 cases=$((cases + 1))
-if grep -nE 'gh (issue|api) .*(--comments|/comments)' "$PROBE" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -q .; then
-  fail "the probe reads comments directly instead of through the trusted lib"
+gh_calls="$(grep -nE '(^|[^[:alnum:]_-])gh (issue|api|pr|search)' "$PROBE" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+if [[ "$(grep -c . <<<"$gh_calls")" -eq 1 ]] && grep -qF 'gh issue view "$1" --repo "$REPO" --json state,stateReason' <<<"$gh_calls"; then
+  pass "the probe's only gh call is the state read (every comment read goes through the trusted lib)"
 else
-  pass "the probe makes no direct comment read"
+  fail "the probe makes a gh call other than the state read: $(head -c 200 <<<"$gh_calls")"
 fi
 
 echo "---"
@@ -264,7 +322,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
     "$((passes + fails))" "$cases" >&2
   exit 1
 fi
-MIN_ASSERTIONS=30
+MIN_ASSERTIONS=40
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1
