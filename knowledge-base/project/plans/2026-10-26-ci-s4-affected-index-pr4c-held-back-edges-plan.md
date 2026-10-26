@@ -291,6 +291,14 @@ The Acceptance Criteria are the single list of checks; the scenarios name only t
 - [ ] Runbook section 7 edited as in 4.1 (with N declared edges: `grep -nE 'PR4b and PR4c|PR4c or PR5' <runbook>` prints nothing when N is at least 10; unchanged when N is zero; PR4d wording absent when N is below 10); #10959 body updated with the remaining-edge list by reason code, PR4d eligibility and the series end; #10861 commented with the PR5 handoff; the PR body uses `Ref #10959`, `Ref #10448`, `Ref #9729` only (not `Closes`), lists yield and holds by reason, names what moves to PR4d or PR5 and why, states "PR4d is the last drain PR; anything left goes to PR5 (#10861)", restates the holds and the window consequence, and reports the final local ratchet wall.
 - [ ] `origin/main` was merged into the branch immediately before arming merge, the lease file existed, and no push followed the arming: evidenced by the single PR comment of 5.1 (ancestor-check result, lease `ls`, head SHA) whose head SHA equals the PR head SHA at merge.
 
+- [ ] CTO row 7 AC1 (scope): the diff has zero `glob:` entries and no change to `ALWAYS_ON_SUITES` in `scripts/lib/test-affected-paths.sh` or any other edge-declaration file (diff check), and the PR body says so.
+- [ ] CTO row 7 AC2 (the 43 untouched): the 43 `deferred-sweep` pairs stay baselined; the only baseline diff is prune-only for declared edges (plus the explained extra drained lines), and the final audit shows none of the 43 as drained, accepted or stale.
+- [ ] CTO row 7 AC3 (receipt): `receipts/handoff-pr5-deferred-sweep.tsv` lists the 43 (suite, path) pairs by suite name with the PR4b row 6 policy text copied verbatim, labelled "not yet measured; PR5 measures duration and the 200-PR replay at its work time"; no duration or replay number is stored in PR4c.
+- [ ] CTO row 7 AC4 (handoff text): the PR body and the #10959 body update name the 43 under PR5 together with the row 3 PR5 list (grep-q-pipe-guard, git-data-birth-readiness-gate, bulk-reader and still-unproven recorder holds, any PR4d leftover) and the policy, and state "the two measurements are executed by PR5".
+- [ ] CTO row 7 AC5 (log): decision-challenges row 7 carries the CTO ruling (done at plan time).
+- [ ] CTO row 7 AC6 (PR5 comment): #10861 gets a one-line comment (or the #10959 closing handoff carries it) that PR5 owns the row 6 policy execution and both measurements, with the stop line: no pair is globbed or added to `ALWAYS_ON_SUITES` unless both measurements were taken in PR5 and meet the row 6 thresholds; otherwise it stays baselined for an explicit PR5 call.
+- [ ] CTO row 7 AC7 (PR4d): the same stop line binds a PR4d, which carries none of the 43.
+
 ### Post-merge
 
 - [ ] The merge SHA is commented on #10865 with the window-restart sentence (skipped in the zero-edge case).
