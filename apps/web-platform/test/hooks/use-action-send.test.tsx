@@ -284,4 +284,26 @@ describe("in-flight guard (#10543, CTO Q7)", () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length - before,
     ).toBe(1);
   });
+
+  it("onConfirmTyped releases the guard after a 503: the next typed submit sends again and acknowledges", async () => {
+    const hook = setup();
+    await openConfirm(hook);
+    const before = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .length;
+
+    responses.push({
+      status: 503,
+      body: { error: "enqueue_unavailable", retryable: true },
+    });
+    act(() => hook.result.current.onConfirmTyped(true, "SEND"));
+    await waitFor(() => expect(hook.result.current.error).toBe(COPY_503));
+    expect(hook.result.current.confirming).not.toBeNull();
+
+    responses.push({ status: 200, body: {} });
+    act(() => hook.result.current.onConfirmTyped(true, "SEND"));
+    await waitFor(() => expect(hook.result.current.acknowledged).toBe(true));
+    expect(
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length - before,
+    ).toBe(2);
+  });
 });
