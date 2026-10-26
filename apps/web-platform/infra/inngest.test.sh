@@ -2784,6 +2784,11 @@ assert "acl-writer ACLEOF block extracted from inngest-redis-bootstrap.sh (non-e
   "[[ -n \"\$ACL_BLOCK\" ]] && [[ \$(printf '%s\n' \"\$ACL_BLOCK\" | wc -l) -ge 5 ]]"
 assert "acl writer is installed 0755 via /dev/stdin (the mount-guard precedent, reconcile-always)" \
   "grep -qF 'install -m 0755 /dev/stdin /usr/local/bin/inngest-redis-acl.sh' '$REDIS_BOOTSTRAP'"
+# #11172: the writer's default path and the conf's aclfile directive are ONE wire — a drift
+# either way fails loud at runtime but stays green here (every replay row uses the override).
+ACL_DEFAULT_PATH=$(printf '%s\n' "$ACL_BLOCK" | sed -n 's/.*INNGEST_REDIS_ACL_FILE:-\([^}]*\)}.*/\1/p' | sed -n '1p')
+assert "acl writer's default ACL_FILE equals the conf's declared aclfile path (#11172)" \
+  "[[ \"\$ACL_DEFAULT_PATH\" == '/mnt/data/redis/inngest-redis.acl' ]]"
 ACL_BODY=$(printf '%s\n' "$ACL_BLOCK" | sed '1d;$d')
 ACL_FIRST_EXEC=$(printf '%s\n' "$ACL_BODY" | grep -vE '^#!|^[[:space:]]*(#|$)' | sed -n '1p' || true)
 assert "acl writer's FIRST executable statement is the unconditional \`case \$- in\` xtrace refusal" \
@@ -3264,8 +3269,9 @@ if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 
 # #10112: 557 -> 549 (the eight #9939 rows asserting the retired cutover trio went with it).
 # #11103: 549 -> 585 (the SERVERLAUNCHEOF extraction/ordering/replay rows, the ACLEOF acl-writer
 # rows, and the re-anchored ExecStart + redis.service asserts; measured 585/585 with terraform
-# fmt and the pinned-container dash rows).
-INNGEST_MIN_ASSERTIONS_FULL=585
+# fmt and the pinned-container dash rows). 585 -> 586 (#11172: writer-default == conf aclfile
+# path pin).
+INNGEST_MIN_ASSERTIONS_FULL=586
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
