@@ -339,13 +339,13 @@ No ADR and no C4 change, per the CTO ruling: the plan adds a config-declared ste
 
 ### Pre-merge (PR)
 
-- [ ] AC-1 `bash plugins/soleur/scripts/affected-tests.test.sh` exits 0 with the new rows T1-T15 present and each mutation M1-M10 demonstrated RED by hand once (recorded in the PR body).
-- [ ] AC-2 With the repo config, a synthesized new test-tree file containing the string-joined pattern makes `bash plugins/soleur/scripts/affected-tests.sh --explain` print `CONTENT_TRIGGER armed=1 state=fired`, and a diff without it prints `state=none`.
-- [ ] AC-3 An unarmed gate prints an `AFFECTED_GATE` line byte-identical to the pre-change line (row H3).
-- [ ] AC-4 `bash scripts/test-affected-kb-consumers.test.sh` exits 0 with no new baseline row; every new test row spells the literal string-joined.
-- [ ] AC-5 The measured trigger rate for the final `content_trigger_paths` is at or under 10 percent of the last 150 first-parent non-merge commits, and the PR body states the number and the command.
+- [x] AC-1 `bash plugins/soleur/scripts/affected-tests.test.sh` exits 0 with the new rows T1-T15 present and each mutation M1-M10 demonstrated RED by hand once (recorded in the PR body).
+- [x] AC-2 With the repo config, a synthesized new test-tree file containing the string-joined pattern makes `bash plugins/soleur/scripts/affected-tests.sh --explain` print `CONTENT_TRIGGER armed=1 state=fired`, and a diff without it prints `state=none`.
+- [x] AC-3 An unarmed gate prints an `AFFECTED_GATE` line byte-identical to the pre-change line (row H3).
+- [x] AC-4 `bash scripts/test-affected-kb-consumers.test.sh` exits 0 with no new baseline row; every new test row spells the literal string-joined.
+- [x] AC-5 The measured trigger rate for the final `content_trigger_paths` is at or under 10 percent of the last 150 first-parent non-merge commits, and the PR body states the number and the command.
 - [ ] AC-6 `AC-DIFF1`: `git diff --name-only origin/main...HEAD` lists nothing under `apps/`, nothing named `scripts/registry-restore-from-ghcr.sh`, nothing under `.github/workflows/`, and neither `scripts/test-all.sh` nor `scripts/lib/test-affected-paths.sh`; `bash scripts/test-all.sh --print-selection` (cold derive takes more than 10 minutes in this checkout: run it detached, bounded, output to a file) reports `fallback=none` for the diff. The diff-scope checks use the merge-base form `git diff --name-only origin/main...HEAD`, never `origin/main` alone.
-- [ ] AC-7 `plugins/soleur/skills/ship/references/affected-gate-contract.md` documents the three keys, the marker field, the order of evaluation, the double-run note and the trust note.
+- [x] AC-7 `plugins/soleur/skills/ship/references/affected-gate-contract.md` documents the three keys, the marker field, the order of evaluation, the double-run note and the trust note.
 - [ ] AC-PR1 The PR body carries `Ref #9757` and `Ref #10924` and no closing keyword; merge is `gh pr merge <N> --squash --auto` via the queue.
 
 ### Post-merge (operator-free)
