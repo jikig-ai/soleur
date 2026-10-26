@@ -15,8 +15,8 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Adopting.** PR1 (this decision) ships the pipeline dark: nothing reads the table and collection is off for every external
-workspace. The status moves to `accepted` when PR2 (member read policy, read route, card) has merged and the owner notice has been
-out for at least 7 days. The ordinal was verified free against `origin/main` (highest ADR-287) and is re-verified at ship.
+workspace. The status moves to `accepted` when PR2 (member read path and card; see the amendment below, which replaced the read
+policy and route with a member RPC) has merged and the owner notice has been out for at least 7 days. The ordinal was verified free against `origin/main` (highest ADR-287) and is re-verified at ship.
 
 ## Context
 
@@ -90,7 +90,7 @@ gateway log held 3,434 rows, 3,425 from its own synthetic probe and 9 unauthenti
    processes rows in workspace order and either side retries, which is rare and only reachable once collection is on. Ingest counts
    an orphaned workspace as `skipped_orphan`, separately from `skipped_unknown`.
 8. **Nothing is readable in PR1.** The table has RLS enabled, no policy and every privilege revoked from `anon` and
-   `authenticated`. The member `SELECT` policy lands in PR2, with the DPIA t6 re-screen as its merge gate.
+   `authenticated`. *(Superseded 2026-10-26 by the PR2 amendment below: no member `SELECT` policy lands; members read through one RPC.)*
 9. **Counts are best-effort lower bounds; the host set is exact only below the cap.** A restart loses partial buckets and the cap
    discards events above 1,000 per workspace per window. Any later user-facing copy must say so.
 
@@ -141,7 +141,7 @@ account-delete saga calls `erase_egress_audit_rollup`, and a missing function ab
 | App reads Better Stack directly | Needs a workspace-unscopable ClickHouse read credential on the app runtime; the log-query runbook and `cron-inngest-config-drift.ts` keep that credential off the app deliberately. |
 | Per-event spool table | Per-event inserts were 63% of production WAL once (PR #5736); retained raw rows serve no stated need. |
 | Per-row HMAC with a replay window | Same trust root as a bearer token (anything that reads the app environment holds the key), `GREATEST` already makes replays harmless, and a replay window defeats the disk buffer after an app outage. Reversed by the CTO on plan review. |
-| Member `SELECT` policy in PR1 | A readable table is a viewer in fact and triggers the DPIA t6 re-screen at PR1. Ships in PR2. |
+| Member `SELECT` policy in PR1 | A readable table is a viewer in fact and triggers the DPIA t6 re-screen at PR1. *Not shipped in PR2 either: replaced by the member RPC (amendment 2026-10-26).* |
 | New Inngest prune function | Adds a Sentry cron monitor, which the two-PR monitor rule forbids routing in the PR that creates it; `pg_cron` retention sweeps already exist. |
 | Global flag read at the top of the route | Cannot see a per-org override, so the canary would be dropped or every external organisation enabled. Replaced by per-org evaluation after authentication. |
 | Cloudflare rule blocking the ingest path | A Terraform change for little gain: the other internal routes must stay public and the token is the real control. |
@@ -158,3 +158,33 @@ account-delete saga calls `erase_egress_audit_rollup`, and a missing function ab
   wording lands as the last commits of the PR1 branch and gates enabling, not merging.
 - The forced-error acceptance of ADR-281's `image_cve_scan` monitor is corrected in the same PR (the workflow fired with an email
   action; mailbox receipt was unobserved).
+
+## Amendment 2026-10-26 (#9545 PR2): the member read path is an RPC, not a policy
+
+**Decision.** Members read the rollup through ONE `SECURITY DEFINER` function, `get_egress_audit_summary(p_workspace_id, p_limit,
+p_decision)` (migration 177). There is **no member `SELECT` policy and no table grant**: a direct `.from(table).select()` stays a
+permission error, so the table is still an excluded, zero-policy target in the RLS fuzz harness. This corrects the PR1 text above
+that said a policy "lands in PR2" (migration 162 is immutable on `main`; its header and table comment are left as written).
+
+- **Authorization is the function's.** First statement: `auth.uid() IS NULL OR NOT is_workspace_member(p_workspace_id, auth.uid())`
+  raises SQLSTATE `42501` with a constant message that differs from the engine's grant-denial text. Pending invitees and removed
+  members are not members. Every aggregate carries `workspace_id = p_workspace_id`: a definer bypasses RLS, so that predicate is the
+  tenant boundary once the gate passes. `EXECUTE` is revoked from PUBLIC, `anon`, `authenticated` and `service_role`, then granted to
+  `authenticated` only.
+- **Deliberately not gated on the collection flag or on `web_egress`.** The data exists only where collection is on, and history must
+  stay readable after the toggle is switched off (ruling D: switching off stops new records and deletes nothing). The flag decides
+  only which empty state the view shows and whether the enable dialog may say hosts are recorded; the three readers share
+  `server/egress-audit-collection.ts`.
+- **No HTTP route.** A server-rendered page calls the RPC through the caller's cookie client (CTO ruling 2026-10-26, reversing the
+  earlier thin-route decision: nothing consumes a route). The workspace id comes only from the fail-loud `readWorkspaceIdFromDb`.
+- **No `statement_timeout` clause.** A function-level setting does not re-arm the already-running outer statement (proved on
+  Postgres 17); the bound is the role timeout, `p_limit` at most 500, the primary-key range scan and the caller's abort signal.
+- **Shape.** Fixed 30-day window on `last_seen` (the daily purge keys on it), bounded above by `now()`. Overflow (`'(other)'`) is a
+  separate typed field summed across buckets and source hosts, never a host row; `source_host` is never exposed. `p_limit = 0`
+  returns only the last-request probe (the card hint).
+- **Verified against the repo.** The `decision` column has a `CHECK IN ('allowed','denied','other')`; `other` is shown as a third
+  visible state, never folded into Blocked. Overflow counts merge with `GREATEST` at ingest, so they are very loose lower bounds and
+  the view always says "at least".
+
+The status stays **Adopting**: it moves to `accepted` after PR2 has merged and the owner notice has been out for at least 7 days (an
+enablement step; the flag flip is tracked in #11237, not part of PR2).

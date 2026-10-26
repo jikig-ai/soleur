@@ -419,6 +419,10 @@ export function infoSilentFallback(
  * - `feature-flags` family: `flagsmith:getidentityflags-timeout` (warn-level
  *   via `mirrorWarnWithDebounce`; dedup key is the per-segment snapshot cache
  *   key `${role}:${orgId ?? "__anon__"}`, NOT a userId — see #4571).
+ * - `egress-audit-read` family: `workspace_read_error`, `hint_timeout`, `hint_rpc_error`, `org_read`, `flag_eval`
+ *   (warn-level via `mirrorWarnWithDebounce`; dedup key is the constant feature name `egress-audit-read`, an
+ *   in-process token, NOT a userId — one slot per reason per process, because these are decorative reads
+ *   (the Scope Grants card hint, the view's collection state) that can fault on every page load; #9545).
  * - `workspace-reconcile-push` family: `workspace-reconcile-push:no-workspace-match`
  *   (warn-level via `mirrorWarnWithDebounce`; dedup key is
  *   `${installationId}:${targetRepoUrl}`, an in-process token, NOT a userId —

@@ -97,7 +97,11 @@ const RUNTIME_FLAGS = {
   // apps/web-platform/server/egress-audit-ingest.ts). Dark by default and evaluated PER
   // ORG after the ingest route has authenticated the batch: environment default OFF
   // (kill switch), a Jikigai-owned canary org enabled by a per-org segment override (ruling
-  // A); external orgs stay OFF until PR2 ships. Read ONLY through the ingest module.
+  // A); external orgs stay OFF until an operator enables them (after PR2's member read path and
+  // the owner notice). Evaluated through server/egress-audit-collection.ts, which three readers
+  // share so the per-org identity cannot drift: the ingest module, the egress audit view
+  // (which empty state is true) and the Scope Grants card (whether the enable dialog may say
+  // hosts are recorded). The member read itself is NOT gated on this flag (history stays readable).
   // Fail-closed: FLAG_EGRESS_AUDIT_COLLECTION=0 mirror.
   "egress-audit-collection": "FLAG_EGRESS_AUDIT_COLLECTION",
   // #10455 (a) / ADR-075 addendum 2026-10-19 — selects the AF_UNIX-deny seccomp artifact for NO-EGRESS

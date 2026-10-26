@@ -2657,7 +2657,7 @@
 "id": "120wikl"
 },
 "1rjzqbp": {
-"title": "Vector on the web host posts closed 15-minute egress-audit buckets (workspace, host, allowed/denied, best-effort counts; no IP, user or path) to POST /api/internal/egress-audit-ingest -- loopback Host only, forwarded requests rejected, bearer token compared in constant time (current + previous for rotation). The route evaluates the egress-audit-collection flag per organisation and writes through ingest_egress_audit_rollup; the table is dark until PR2 (no member read policy). ADR-288.",
+"title": "Vector on the web host posts closed 15-minute egress-audit buckets (workspace, host, allowed/denied, best-effort counts; no IP, user or path) to POST /api/internal/egress-audit-ingest -- loopback Host only, forwarded requests rejected, bearer token compared in constant time (current + previous for rotation). The route evaluates the egress-audit-collection flag per organisation and writes through ingest_egress_audit_rollup; members read it only through the get_egress_audit_summary RPC (no member read policy; ADR-288 amendment 2026-10-26).",
 "technology": "HTTP (same-host loopback), bearer",
 "source": {
 "model": "platform.infra.hetzner"

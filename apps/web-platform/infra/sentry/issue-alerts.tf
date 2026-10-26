@@ -1005,6 +1005,54 @@ resource "sentry_alert" "egress_blocked" {
   }
 }
 
+# ── Egress audit read path (#9545 PR2, ADR-288 amendment) — member view of the egress rollup ──
+# apps/web-platform/server/egress-audit-read.ts mirrors faults on the destination page with
+# feature=egress-audit-read and the reason in `op`, `err = null` and a STATIC message per reason, so
+# each reason is its own Sentry issue group and this tag filter matches (an Error object would let the
+# pino mirror capture it first and de-duplicate the tagged event away, #8629). Paged ops:
+#   rpc_error              -> the summary RPC failed or returned a malformed body
+#   rpc_timeout            -> the summary RPC outlived its bound
+#   workspace_read_error   -> the current-workspace pointer read threw (the view renders `unavailable`)
+# The card's hint ops (hint_timeout, hint_rpc_error) and the collection-state ops (org_read, flag_eval)
+# are WARNING-level debounced mirrors of a decorative read and are deliberately NOT routed here: this
+# rule has no level filter, so routing them would email a person for a hidden "Last recorded request".
+# The expected 42501 denial (a removed member or stale pointer) is never mirrored at all.
+# Do NOT rename this resource or the live rule name (`egress-audit-read-failure`): a rename is a
+# destroy/create of a live paging rule. frequency_minutes=41 is distinct from every other rule (Sentry
+# de-duplicates on action_match+logic_type+frequency+actions-shape, not on conditions). The feature
+# and op literals are pinned against the loader by
+# apps/web-platform/test/sentry-egress-audit-read-alert-op-contract.test.ts.
+resource "sentry_alert" "egress_audit_read_failure" {
+  organization      = var.sentry_org
+  name              = "egress-audit-read-failure"
+  enabled           = true
+  frequency_minutes = 41
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "egress-audit-read" } },
+        { tagged_event = { key = "op", match = "in", value = "rpc_error,rpc_timeout,workspace_read_error" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # ── Disk-IO WAL-concentration alert (#5736) — APPLY-CREATED, NOT import-only ────
 # server/inngest/functions/cron-supabase-disk-io.ts: the 6-hourly disk-IO monitor
 # now reads the per-statement WAL signal (migration 114: top_wal_statements +
