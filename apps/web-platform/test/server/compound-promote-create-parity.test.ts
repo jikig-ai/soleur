@@ -379,7 +379,51 @@ describe("the ADR-092 create-only amendment is pinned to the exported constants 
     expect(amendment).toContain("`allowedPaths: []`");
     expect(amendment).toContain("`mergeMode: \"none\"`");
     expect(amendment).toContain("the edit arm still never accepts status `A`");
-    expect(amendment).toContain("`skill-security-scan PR gate` or `test`");
+    expect(amendment).toContain("only the synthetic `skill-security-scan PR gate` and `test` checks are excluded from the create PR");
+    expect(amendment).toContain("every other synthetic check the helper posts remains synthetic");
+  });
+
+  it("separates pre-model preconditions from post-model gates and lists the post-model gates in code order", () => {
+    expect(amendment).toContain("Pre-model preconditions, in order:");
+    expect(amendment).toContain("Then ONE model call with no retry.");
+    expect(amendment).toContain("Post-model gates, in the order the code runs them:");
+    // Anchors are whole phrases of the sentence above; their positions must ascend (the order is the claim).
+    const order = [
+      "the week cap (shared with the edit arm",
+      "one open create at a time",
+      "a readable budget (cap and total, failing closed)",
+      "the input-size ceiling",
+      "Then ONE model call with no retry.",
+      "shape, instruction-risk, claim-word and PII and credential screens over every model string",
+      "the ledger (a pattern with an existing proposal",
+      "slug collision (skill, agent, command stem, Cursor stub directory",
+      "prefer-patch (the model must name",
+      "the description-budget gate. Step B then refreshes the clone",
+      "runs the rendered-output gate",
+      "including the instruction-risk scan over the model-derived segments",
+      "then `soleur:skill-security-scan` on BOTH files",
+      "the README sync (changed set exactly the two README paths)",
+      "the stub self-consistency check",
+      "the base-moved check",
+      "and only then the commit.",
+    ];
+    const at = order.map((o) => amendment.indexOf(o));
+    expect(at.filter((i) => i < 0), `missing anchors: ${order.filter((_, i) => at[i] < 0).join(" | ")}`).toEqual([]);
+    expect([...at].sort((x, y) => x - y)).toEqual(at);
+  });
+
+  it("states the controls, the tripwire status of the denylist, the cap enforcement wording, the path function and the token and base-moved sequence", () => {
+    expect(amendment).toContain("The controls are the DRAFT pull request, `mergeMode: \"none\"`, the LOW-RISK scan and the human reviewer of every draft");
+    expect(amendment).toContain("the instruction-risk denylist is a tripwire, not a control");
+    expect(amendment).toContain("a reviewer may add `disable-model-invocation: true` by hand before merge");
+    expect(amendment).toContain("enforced by CI at the cap value until a human changes the cap");
+    expect(amendment).not.toContain("never exceed 2436");
+    expect(amendment).toContain("derived by one exported function, `createPathList(slug)`");
+    expect(amendment).toContain("sets `origin` to the token-free HTTPS URL before any create-arm script is spawned");
+    expect(amendment).toContain("calls `setOriginToken` immediately before `safeCommitAndPr`");
+    expect(amendment).toContain("`git fetch --depth=1 origin main` and `git reset --hard FETCH_HEAD`");
+    expect(amendment).toContain("returns `persist/base-moved` on any difference");
+    expect(amendment).toContain("the server renders them from the validated pattern slug, the evidence count and the run date");
   });
 
   it("limits stated in the amendment's own words agree with the constants", () => {
