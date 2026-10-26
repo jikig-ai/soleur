@@ -15,6 +15,23 @@ lane: cross-domain
 
 # Plan: trim the Inngest host `user_data` by at least 500 B (#11080)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Sections enhanced:** Research Reconciliation, Guard Contract, Observability, Encryption Posture, Acceptance Criteria, Implementation Phases, Test surface
+**Review and research agents used:** learnings-researcher, repo-research-analyst, CTO (rulings R1 to R4), DHH, Kieran and code-simplicity plan reviewers, observability-coverage-reviewer, a verify-the-negative sweep, and a catalogue-wide sharp-edges verification pass.
+
+### Key improvements
+1. The merge path was verified by reading and by run evidence: the per-merge push apply never plans `hcloud_server.inngest`, so no marker is used (R2); a pre-merge gate and a post-merge apply-run read replace it.
+2. The first plan version's fallback was arithmetically unable to reach the floor if the log-tail cut had to be reverted; the plan now says stop and re-ask (note P4).
+3. The runbook edit became unconditional, because the cut log tails are the only readable home of the curl return-code map and the token-file diagnosis once the render strips comments.
+4. Acceptance criteria now diff against the merge-base (three-dot), carry positive controls, and the test census (40 files) replaced the hand list.
+
+### New considerations discovered
+- A second Terraform root (`inngest-provision-rehearsal/rehearsal.tf`) renders the same template; edits must add or remove no template variable.
+- The quiesce battery's old T4 was the only test of "restart exactly the timers that were active"; a variant is kept.
+- The `discoverability_test` cannot run in the preflight sandbox (no terraform binary on its PATH), so it declares that dependency.
+
 ## Overview
 
 The Inngest host's rendered `user_data` sits 280 B under Hetzner's 32,768 B cap on current main. The replace precondition ruled in T4 needs at least 300 B of CI-rendered margin, and issue #11080 asks for a separate trim of at least 500 B so that margin is reached with room for the next edits. This plan trims `apps/web-platform/infra/cloud-init-inngest.yml` and nothing else on the delivery path, measured offline at 520 B removed (headroom 280 B to 800 B), clearing the ruled floor of 780 B.
