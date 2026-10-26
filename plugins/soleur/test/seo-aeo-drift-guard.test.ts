@@ -3122,7 +3122,7 @@ describe("#9579 hero structure — privacy line visible, one install CTA, hosted
 
 // -- Test N: pillar/cluster link graph (#8143/#8144/#5616) -------------------
 // Entry-point + mesh link-equity guard for the fix shipped under
-// knowledge-base/project/plans/2026-10-26-fix-gsc-index-link-equity-plan.md:
+// knowledge-base/project/plans/archive/20261026-141820-2026-10-26-fix-gsc-index-link-equity-plan.md:
 // every pillar/cluster URL is reachable from the rendered global nav or the
 // homepage body, the pillar<->cluster mesh links exist in built output, and a
 // census over plugins/soleur/docs/pages/** requires every page file to be

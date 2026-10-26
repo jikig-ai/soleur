@@ -4,7 +4,7 @@ date: 2026-10-26
 category: workflow-patterns
 tags: [testing, seo, mutation-testing, assertion-scope]
 related:
-  - knowledge-base/project/specs/feat-one-shot-gsc-index-link-equity/
+  - knowledge-base/project/specs/archive/20261026-141820-feat-one-shot-gsc-index-link-equity/
   - plugins/soleur/test/seo-aeo-drift-guard.test.ts
 ---
 
