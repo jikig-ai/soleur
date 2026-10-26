@@ -504,6 +504,18 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "pKB6B",
+                              "name": "Records kept note",
+                              "fill": "$text-muted",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Existing records stay visible to members until deleted about 30 days after they were recorded.",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
                             }
                           ]
                         },
@@ -618,7 +630,7 @@
                               "id": "v6FcW",
                               "name": "Last request hint",
                               "fill": "$text-muted",
-                              "content": "Last request: 3 days ago",
+                              "content": "Last recorded request: 3 days ago",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -1135,6 +1147,18 @@
                               "name": "Status line",
                               "fill": "$text-secondary",
                               "content": "Off. Agents have no network access.",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "E5wJPA",
+                              "name": "Records kept note",
+                              "fill": "$text-muted",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Existing records stay visible to members until deleted about 30 days after they were recorded.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -1980,7 +2004,7 @@
                               "id": "y4pIZ",
                               "name": "Last request hint",
                               "fill": "$text-muted",
-                              "content": "Last request: 4 minutes ago",
+                              "content": "Last recorded request: 4 minutes ago",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -2400,7 +2424,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                           "fontFamily": "$font",
                           "fontSize": 14,
                           "fontWeight": "normal"
@@ -2470,35 +2494,6 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
-                            },
-                            {
-                              "type": "frame",
-                              "id": "t5DsUo",
-                              "name": "Erasure link",
-                              "gap": 6,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "lW4TG",
-                                  "name": "Erasure link text",
-                                  "fill": "$gold",
-                                  "content": "How to request erasure",
-                                  "fontFamily": "$font",
-                                  "fontSize": 12,
-                                  "fontWeight": "medium"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "c9wgpT",
-                                  "name": "Link arrow",
-                                  "width": 12,
-                                  "height": 12,
-                                  "icon": "arrow-right",
-                                  "library": "lucide",
-                                  "fill": "$gold"
-                                }
-                              ]
                             }
                           ]
                         }
@@ -2511,7 +2506,7 @@
                       "fill": "$text-primary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "At least 14,326 requests  ·  12 sites listed  ·  at least 121 blocked",
+                      "content": "At least 14,326 requests  ·  at least 121 blocked",
                       "fontFamily": "$font",
                       "fontSize": 13,
                       "fontWeight": "medium"
@@ -2534,7 +2529,7 @@
                               "type": "frame",
                               "id": "rGg8b",
                               "name": "Filter All",
-                              "fill": "$inset",
+                              "fill": "#2A2A2A",
                               "stroke": "$gold",
                               "strokeWidth": 1,
                               "padding": [
@@ -4141,6 +4136,36 @@
                           ]
                         }
                       ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "DDOvm",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "q1MTy",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "h3DlMF",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
                     }
                   ]
                 }
@@ -4553,7 +4578,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                           "fontFamily": "$font",
                           "fontSize": 14,
                           "fontWeight": "normal"
@@ -4623,35 +4648,6 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
-                            },
-                            {
-                              "type": "frame",
-                              "id": "KH0qv",
-                              "name": "Erasure link",
-                              "gap": 6,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "i0aIx4",
-                                  "name": "Erasure link text",
-                                  "fill": "$gold",
-                                  "content": "How to request erasure",
-                                  "fontFamily": "$font",
-                                  "fontSize": 12,
-                                  "fontWeight": "medium"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "DAmLc",
-                                  "name": "Link arrow",
-                                  "width": 12,
-                                  "height": 12,
-                                  "icon": "arrow-right",
-                                  "library": "lucide",
-                                  "fill": "$gold"
-                                }
-                              ]
                             }
                           ]
                         }
@@ -4716,7 +4712,7 @@
                               "fill": "$text-secondary",
                               "textGrowth": "fixed-width",
                               "width": "fill_container",
-                              "content": "History stays available until Nov 25, 2026, then is deleted.",
+                              "content": "Records are deleted about 30 days after they were recorded.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -4732,7 +4728,7 @@
                       "fill": "$text-primary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "At least 14,326 requests  ·  12 sites listed  ·  at least 121 blocked",
+                      "content": "At least 14,326 requests  ·  at least 121 blocked",
                       "fontFamily": "$font",
                       "fontSize": 13,
                       "fontWeight": "medium"
@@ -4755,7 +4751,7 @@
                               "type": "frame",
                               "id": "zDe5C",
                               "name": "Filter All",
-                              "fill": "$inset",
+                              "fill": "#2A2A2A",
                               "stroke": "$gold",
                               "strokeWidth": 1,
                               "padding": [
@@ -6362,6 +6358,36 @@
                           ]
                         }
                       ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "k3tJFu",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "bShQC",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "vcmJ9",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
                     }
                   ]
                 }
@@ -6774,7 +6800,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                           "fontFamily": "$font",
                           "fontSize": 14,
                           "fontWeight": "normal"
@@ -6844,35 +6870,6 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
-                            },
-                            {
-                              "type": "frame",
-                              "id": "gUobv",
-                              "name": "Erasure link",
-                              "gap": 6,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "KOech",
-                                  "name": "Erasure link text",
-                                  "fill": "$gold",
-                                  "content": "How to request erasure",
-                                  "fontFamily": "$font",
-                                  "fontSize": 12,
-                                  "fontWeight": "medium"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "R8F170",
-                                  "name": "Link arrow",
-                                  "width": 12,
-                                  "height": 12,
-                                  "icon": "arrow-right",
-                                  "library": "lucide",
-                                  "fill": "$gold"
-                                }
-                              ]
                             }
                           ]
                         }
@@ -6925,7 +6922,7 @@
                               "id": "QP9PW",
                               "name": "Notice lead",
                               "fill": "$text-primary",
-                              "content": "Showing the 200 most recent sites.",
+                              "content": "Showing the 200 most recent entries.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -6937,7 +6934,7 @@
                               "fill": "$text-secondary",
                               "textGrowth": "fixed-width",
                               "width": "fill_container",
-                              "content": "Older sites in this 30-day window are not listed, and counts are minimums.",
+                              "content": "Older entries in this 30-day window are not listed, and counts are minimums.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
@@ -6953,7 +6950,7 @@
                       "fill": "$text-primary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "At least 52,018 requests  ·  200 sites listed  ·  at least 1,402 blocked",
+                      "content": "At least 52,018 requests  ·  at least 1,402 blocked",
                       "fontFamily": "$font",
                       "fontSize": 13,
                       "fontWeight": "medium"
@@ -6976,7 +6973,7 @@
                               "type": "frame",
                               "id": "wUpm1",
                               "name": "Filter All",
-                              "fill": "$inset",
+                              "fill": "#2A2A2A",
                               "stroke": "$gold",
                               "strokeWidth": 1,
                               "padding": [
@@ -8581,30 +8578,36 @@
                               "fontWeight": "normal"
                             }
                           ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "sRZ0c",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "V7VOeB",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
                         },
                         {
-                          "type": "frame",
-                          "id": "ZBFqo",
-                          "name": "Table end",
-                          "width": "fill_container",
-                          "padding": [
-                            12,
-                            14
-                          ],
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "qMoZp",
-                              "name": "Table end text",
-                              "fill": "$text-muted",
-                              "textGrowth": "fixed-width",
-                              "width": "fill_container",
-                              "content": "200 sites shown. Older sites in this window are not listed.",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "normal"
-                            }
-                          ]
+                          "type": "text",
+                          "id": "L4bzB",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
                         }
                       ]
                     }
@@ -9019,7 +9022,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                           "fontFamily": "$font",
                           "fontSize": 14,
                           "fontWeight": "normal"
@@ -9089,35 +9092,6 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
-                            },
-                            {
-                              "type": "frame",
-                              "id": "y1MZKi",
-                              "name": "Erasure link",
-                              "gap": 6,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "ka64F",
-                                  "name": "Erasure link text",
-                                  "fill": "$gold",
-                                  "content": "How to request erasure",
-                                  "fontFamily": "$font",
-                                  "fontSize": 12,
-                                  "fontWeight": "medium"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "r5AoM",
-                                  "name": "Link arrow",
-                                  "width": 12,
-                                  "height": 12,
-                                  "icon": "arrow-right",
-                                  "library": "lucide",
-                                  "fill": "$gold"
-                                }
-                              ]
                             }
                           ]
                         }
@@ -9150,7 +9124,7 @@
                               "id": "I81q6k",
                               "name": "Filter All",
                               "opacity": 0.45,
-                              "fill": "$inset",
+                              "fill": "#2A2A2A",
                               "stroke": "$gold",
                               "strokeWidth": 1,
                               "padding": [
@@ -9806,6 +9780,36 @@
                       "fontFamily": "$font",
                       "fontSize": 12,
                       "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "hoC3r",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "qu75n",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "kPnbQ",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
                     }
                   ]
                 }
@@ -10218,7 +10222,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                           "fontFamily": "$font",
                           "fontSize": 14,
                           "fontWeight": "normal"
@@ -10288,35 +10292,6 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
-                            },
-                            {
-                              "type": "frame",
-                              "id": "S1EC5",
-                              "name": "Erasure link",
-                              "gap": 6,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "Q0ghyg",
-                                  "name": "Erasure link text",
-                                  "fill": "$gold",
-                                  "content": "How to request erasure",
-                                  "fontFamily": "$font",
-                                  "fontSize": 12,
-                                  "fontWeight": "medium"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "s5zgV",
-                                  "name": "Link arrow",
-                                  "width": 12,
-                                  "height": 12,
-                                  "icon": "arrow-right",
-                                  "library": "lucide",
-                                  "fill": "$gold"
-                                }
-                              ]
                             }
                           ]
                         }
@@ -10393,6 +10368,36 @@
                               "fontWeight": "medium"
                             }
                           ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "eeRmt",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "a7oF8",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "wrmwC",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
                         }
                       ]
                     }
@@ -10807,7 +10812,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                           "fontFamily": "$font",
                           "fontSize": 14,
                           "fontWeight": "normal"
@@ -10817,8 +10822,11 @@
                     {
                       "type": "frame",
                       "id": "znYHZ",
+                      "x": 0,
+                      "y": 128,
                       "name": "Disclosure",
-                      "width": "fill_container",
+                      "enabled": false,
+                      "width": "fill_container(760)",
                       "fill": "$inset",
                       "stroke": "$border",
                       "strokeWidth": 1,
@@ -10877,35 +10885,6 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
-                            },
-                            {
-                              "type": "frame",
-                              "id": "x6gDFg",
-                              "name": "Erasure link",
-                              "gap": 6,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "hcSmE",
-                                  "name": "Erasure link text",
-                                  "fill": "$gold",
-                                  "content": "How to request erasure",
-                                  "fontFamily": "$font",
-                                  "fontSize": 12,
-                                  "fontWeight": "medium"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "ME3q8",
-                                  "name": "Link arrow",
-                                  "width": 12,
-                                  "height": 12,
-                                  "icon": "arrow-right",
-                                  "library": "lucide",
-                                  "fill": "$gold"
-                                }
-                              ]
                             }
                           ]
                         }
@@ -10959,6 +10938,36 @@
                           "fontFamily": "$font",
                           "fontSize": 13,
                           "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "o3XCSo",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "h1m5GF",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "URAhK",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
                         }
                       ]
                     }
@@ -11373,7 +11382,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                           "fontFamily": "$font",
                           "fontSize": 14,
                           "fontWeight": "normal"
@@ -11443,35 +11452,6 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
-                            },
-                            {
-                              "type": "frame",
-                              "id": "goRVS",
-                              "name": "Erasure link",
-                              "gap": 6,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "la2Q0",
-                                  "name": "Erasure link text",
-                                  "fill": "$gold",
-                                  "content": "How to request erasure",
-                                  "fontFamily": "$font",
-                                  "fontSize": 12,
-                                  "fontWeight": "medium"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "DZheD",
-                                  "name": "Link arrow",
-                                  "width": 12,
-                                  "height": 12,
-                                  "icon": "arrow-right",
-                                  "library": "lucide",
-                                  "fill": "$gold"
-                                }
-                              ]
                             }
                           ]
                         }
@@ -11507,7 +11487,7 @@
                           "fill": "$text-primary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Recording since Oct 26, 2026. No requests yet.",
+                          "content": "No requests recorded yet",
                           "textAlign": "center",
                           "fontFamily": "$font",
                           "fontSize": 15,
@@ -11520,11 +11500,64 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Agents haven't contacted any site since recording started. A request can take a few minutes to appear.",
+                          "content": "Nothing has been recorded yet. Requests can take a few minutes to appear.",
                           "textAlign": "center",
                           "fontFamily": "$font",
                           "fontSize": 13,
                           "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "p8idS",
+                          "name": "Refresh",
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "GkYxn",
+                              "name": "Try again label",
+                              "fill": "$text-primary",
+                              "content": "Refresh",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "I7mZCm",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Iskse",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "i26fv",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
                         }
                       ]
                     }
@@ -11939,7 +11972,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                           "fontFamily": "$font",
                           "fontSize": 14,
                           "fontWeight": "normal"
@@ -12009,35 +12042,6 @@
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "normal"
-                            },
-                            {
-                              "type": "frame",
-                              "id": "sBRyX",
-                              "name": "Erasure link",
-                              "gap": 6,
-                              "alignItems": "center",
-                              "children": [
-                                {
-                                  "type": "text",
-                                  "id": "VwFuc",
-                                  "name": "Erasure link text",
-                                  "fill": "$gold",
-                                  "content": "How to request erasure",
-                                  "fontFamily": "$font",
-                                  "fontSize": 12,
-                                  "fontWeight": "medium"
-                                },
-                                {
-                                  "type": "icon",
-                                  "id": "ZH0Sl",
-                                  "name": "Link arrow",
-                                  "width": 12,
-                                  "height": 12,
-                                  "icon": "arrow-right",
-                                  "library": "lucide",
-                                  "fill": "$gold"
-                                }
-                              ]
                             }
                           ]
                         }
@@ -12073,7 +12077,7 @@
                           "fill": "$text-primary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "No records in the last 30 days.",
+                          "content": "Nothing recorded in the last 30 days",
                           "textAlign": "center",
                           "fontFamily": "$font",
                           "fontSize": 15,
@@ -12086,11 +12090,41 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Web access is off, so nothing new is recorded. Records already kept stay available until Nov 25, 2026, then are deleted.",
+                          "content": "Web access is off, so nothing new is recorded. Records are deleted about 30 days after they were recorded.",
                           "textAlign": "center",
                           "fontFamily": "$font",
                           "fontSize": 13,
                           "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "mjmKv",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "CeUf4",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "jK5WN",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
                         }
                       ]
                     }
@@ -12454,7 +12488,7 @@
                           "id": "BONVh",
                           "name": "Last request hint",
                           "fill": "$text-muted",
-                          "content": "Last request: 4 minutes ago",
+                          "content": "Last recorded request: 4 minutes ago",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
@@ -12707,6 +12741,18 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "F8ciY5",
+                          "name": "Records kept note",
+                          "fill": "$text-muted",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Existing records stay visible to members until deleted about 30 days after they were recorded.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -12820,7 +12866,7 @@
                           "id": "u7akFq",
                           "name": "Last request hint",
                           "fill": "$text-muted",
-                          "content": "Last request: 3 days ago",
+                          "content": "Last recorded request: 3 days ago",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
@@ -12970,7 +13016,7 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                       "fontFamily": "$font",
                       "fontSize": 14,
                       "fontWeight": "normal"
@@ -13040,35 +13086,6 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "WIktB",
-                          "name": "Erasure link",
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "AyYPl",
-                              "name": "Erasure link text",
-                              "fill": "$gold",
-                              "content": "How to request erasure",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "medium"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "V82M5",
-                              "name": "Link arrow",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "arrow-right",
-                              "library": "lucide",
-                              "fill": "$gold"
-                            }
-                          ]
                         }
                       ]
                     }
@@ -13081,7 +13098,7 @@
                   "fill": "$text-primary",
                   "textGrowth": "fixed-width",
                   "width": "fill_container",
-                  "content": "At least 14,326 requests  ·  12 sites listed  ·  at least 121 blocked",
+                  "content": "At least 14,326 requests  ·  at least 121 blocked",
                   "fontFamily": "$font",
                   "fontSize": 13,
                   "fontWeight": "medium"
@@ -13104,7 +13121,7 @@
                           "type": "frame",
                           "id": "VFbUV",
                           "name": "Filter All",
-                          "fill": "$inset",
+                          "fill": "#2A2A2A",
                           "stroke": "$gold",
                           "strokeWidth": 1,
                           "padding": [
@@ -14319,6 +14336,36 @@
                       ]
                     }
                   ]
+                },
+                {
+                  "type": "frame",
+                  "id": "cn6jK",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "D9IQeT",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "a3hojZ",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    }
+                  ]
                 }
               ]
             }
@@ -14461,7 +14508,7 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                       "fontFamily": "$font",
                       "fontSize": 14,
                       "fontWeight": "normal"
@@ -14531,35 +14578,6 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "w1HC17",
-                          "name": "Erasure link",
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "hR4NO",
-                              "name": "Erasure link text",
-                              "fill": "$gold",
-                              "content": "How to request erasure",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "medium"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "o8idx",
-                              "name": "Link arrow",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "arrow-right",
-                              "library": "lucide",
-                              "fill": "$gold"
-                            }
-                          ]
                         }
                       ]
                     }
@@ -14612,7 +14630,7 @@
                           "id": "K5PNE",
                           "name": "Notice lead",
                           "fill": "$text-primary",
-                          "content": "Showing the 200 most recent sites.",
+                          "content": "Showing the 200 most recent entries.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -14624,7 +14642,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "Older sites in this 30-day window are not listed, and counts are minimums.",
+                          "content": "Older entries in this 30-day window are not listed, and counts are minimums.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
@@ -14640,7 +14658,7 @@
                   "fill": "$text-primary",
                   "textGrowth": "fixed-width",
                   "width": "fill_container",
-                  "content": "At least 52,018 requests  ·  200 sites listed  ·  at least 1,402 blocked",
+                  "content": "At least 52,018 requests  ·  at least 1,402 blocked",
                   "fontFamily": "$font",
                   "fontSize": 13,
                   "fontWeight": "medium"
@@ -14663,7 +14681,7 @@
                           "type": "frame",
                           "id": "SKMZC",
                           "name": "Filter All",
-                          "fill": "$inset",
+                          "fill": "#2A2A2A",
                           "stroke": "$gold",
                           "strokeWidth": 1,
                           "padding": [
@@ -15876,30 +15894,36 @@
                           ]
                         }
                       ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "W7fx6",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Nkao0",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
                     },
                     {
-                      "type": "frame",
-                      "id": "ObN71",
-                      "name": "List end",
-                      "width": "fill_container",
-                      "padding": [
-                        12,
-                        0
-                      ],
-                      "children": [
-                        {
-                          "type": "text",
-                          "id": "aZCiQ",
-                          "name": "List end text",
-                          "fill": "$text-muted",
-                          "textGrowth": "fixed-width",
-                          "width": "fill_container",
-                          "content": "200 sites shown. Older sites in this window are not listed.",
-                          "fontFamily": "$font",
-                          "fontSize": 12,
-                          "fontWeight": "normal"
-                        }
-                      ]
+                      "type": "text",
+                      "id": "B9i8k",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
                     }
                   ]
                 }
@@ -16044,7 +16068,7 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                       "fontFamily": "$font",
                       "fontSize": 14,
                       "fontWeight": "normal"
@@ -16114,35 +16138,6 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "wOxe0",
-                          "name": "Erasure link",
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "x3F6vA",
-                              "name": "Erasure link text",
-                              "fill": "$gold",
-                              "content": "How to request erasure",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "medium"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "ptiY1",
-                              "name": "Link arrow",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "arrow-right",
-                              "library": "lucide",
-                              "fill": "$gold"
-                            }
-                          ]
                         }
                       ]
                     }
@@ -16207,7 +16202,7 @@
                           "fill": "$text-secondary",
                           "textGrowth": "fixed-width",
                           "width": "fill_container",
-                          "content": "History stays available until Nov 25, 2026, then is deleted.",
+                          "content": "Records are deleted about 30 days after they were recorded.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
@@ -16223,7 +16218,7 @@
                   "fill": "$text-primary",
                   "textGrowth": "fixed-width",
                   "width": "fill_container",
-                  "content": "At least 14,326 requests  ·  12 sites listed  ·  at least 121 blocked",
+                  "content": "At least 14,326 requests  ·  at least 121 blocked",
                   "fontFamily": "$font",
                   "fontSize": 13,
                   "fontWeight": "medium"
@@ -16246,7 +16241,7 @@
                           "type": "frame",
                           "id": "An4qd",
                           "name": "Filter All",
-                          "fill": "$inset",
+                          "fill": "#2A2A2A",
                           "stroke": "$gold",
                           "strokeWidth": 1,
                           "padding": [
@@ -17461,6 +17456,36 @@
                       ]
                     }
                   ]
+                },
+                {
+                  "type": "frame",
+                  "id": "XxTWx",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ZLHr1",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "mtjNg",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    }
+                  ]
                 }
               ]
             }
@@ -17603,7 +17628,7 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                       "fontFamily": "$font",
                       "fontSize": 14,
                       "fontWeight": "normal"
@@ -17673,35 +17698,6 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "oyPib",
-                          "name": "Erasure link",
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "uwTpP",
-                              "name": "Erasure link text",
-                              "fill": "$gold",
-                              "content": "How to request erasure",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "medium"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "gU1f2",
-                              "name": "Link arrow",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "arrow-right",
-                              "library": "lucide",
-                              "fill": "$gold"
-                            }
-                          ]
                         }
                       ]
                     }
@@ -17734,7 +17730,7 @@
                           "id": "K7Vau",
                           "name": "Filter All",
                           "opacity": 0.45,
-                          "fill": "$inset",
+                          "fill": "#2A2A2A",
                           "stroke": "$gold",
                           "strokeWidth": 1,
                           "padding": [
@@ -18142,6 +18138,36 @@
                   "fontFamily": "$font",
                   "fontSize": 12,
                   "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "aVgVI",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "pnpIB",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "iEpHu",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    }
+                  ]
                 }
               ]
             }
@@ -18284,7 +18310,7 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                       "fontFamily": "$font",
                       "fontSize": 14,
                       "fontWeight": "normal"
@@ -18354,35 +18380,6 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "xF8Qs",
-                          "name": "Erasure link",
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "LrVWF",
-                              "name": "Erasure link text",
-                              "fill": "$gold",
-                              "content": "How to request erasure",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "medium"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "mcOJf",
-                              "name": "Link arrow",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "arrow-right",
-                              "library": "lucide",
-                              "fill": "$gold"
-                            }
-                          ]
                         }
                       ]
                     }
@@ -18459,6 +18456,36 @@
                           "fontWeight": "medium"
                         }
                       ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "yiOTn",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "eg2No",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "HzZbl",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
                     }
                   ]
                 }
@@ -18603,7 +18630,7 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                       "fontFamily": "$font",
                       "fontSize": 14,
                       "fontWeight": "normal"
@@ -18613,8 +18640,11 @@
                 {
                   "type": "frame",
                   "id": "a3yYxa",
+                  "x": 16,
+                  "y": 152,
                   "name": "Disclosure",
-                  "width": "fill_container",
+                  "enabled": false,
+                  "width": "fill_container(358)",
                   "fill": "$inset",
                   "stroke": "$border",
                   "strokeWidth": 1,
@@ -18673,35 +18703,6 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "k1yzX",
-                          "name": "Erasure link",
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "SLMjZ",
-                              "name": "Erasure link text",
-                              "fill": "$gold",
-                              "content": "How to request erasure",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "medium"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "PHQrW",
-                              "name": "Link arrow",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "arrow-right",
-                              "library": "lucide",
-                              "fill": "$gold"
-                            }
-                          ]
                         }
                       ]
                     }
@@ -18755,6 +18756,36 @@
                       "fontFamily": "$font",
                       "fontSize": 13,
                       "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "X14h5",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "CGFp7",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "XBv7J",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
                     }
                   ]
                 }
@@ -18899,7 +18930,7 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                       "fontFamily": "$font",
                       "fontSize": 14,
                       "fontWeight": "normal"
@@ -18969,35 +19000,6 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "LW3Fj",
-                          "name": "Erasure link",
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "gIGoE",
-                              "name": "Erasure link text",
-                              "fill": "$gold",
-                              "content": "How to request erasure",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "medium"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "lc18h",
-                              "name": "Link arrow",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "arrow-right",
-                              "library": "lucide",
-                              "fill": "$gold"
-                            }
-                          ]
                         }
                       ]
                     }
@@ -19033,7 +19035,7 @@
                       "fill": "$text-primary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Recording since Oct 26, 2026. No requests yet.",
+                      "content": "No requests recorded yet",
                       "textAlign": "center",
                       "fontFamily": "$font",
                       "fontSize": 15,
@@ -19046,11 +19048,64 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Agents haven't contacted any site since recording started. A request can take a few minutes to appear.",
+                      "content": "Nothing has been recorded yet. Requests can take a few minutes to appear.",
                       "textAlign": "center",
                       "fontFamily": "$font",
                       "fontSize": 13,
                       "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "xkCaj",
+                      "name": "Refresh",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "padding": [
+                        8,
+                        16
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "ZnXQk",
+                          "name": "Try again label",
+                          "fill": "$text-primary",
+                          "content": "Refresh",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "YrMtT",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "kwYZK",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "GgUFB",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
                     }
                   ]
                 }
@@ -19195,7 +19250,7 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Which sites your workspace's agents contacted in the last 30 days, and whether each request was allowed, blocked or neither.",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
                       "fontFamily": "$font",
                       "fontSize": 14,
                       "fontWeight": "normal"
@@ -19265,35 +19320,6 @@
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "normal"
-                        },
-                        {
-                          "type": "frame",
-                          "id": "oDauF",
-                          "name": "Erasure link",
-                          "gap": 6,
-                          "alignItems": "center",
-                          "children": [
-                            {
-                              "type": "text",
-                              "id": "yDVvn",
-                              "name": "Erasure link text",
-                              "fill": "$gold",
-                              "content": "How to request erasure",
-                              "fontFamily": "$font",
-                              "fontSize": 12,
-                              "fontWeight": "medium"
-                            },
-                            {
-                              "type": "icon",
-                              "id": "jnRhW",
-                              "name": "Link arrow",
-                              "width": 12,
-                              "height": 12,
-                              "icon": "arrow-right",
-                              "library": "lucide",
-                              "fill": "$gold"
-                            }
-                          ]
                         }
                       ]
                     }
@@ -19329,7 +19355,7 @@
                       "fill": "$text-primary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "No records in the last 30 days.",
+                      "content": "Nothing recorded in the last 30 days",
                       "textAlign": "center",
                       "fontFamily": "$font",
                       "fontSize": 15,
@@ -19342,11 +19368,2059 @@
                       "fill": "$text-secondary",
                       "textGrowth": "fixed-width",
                       "width": "fill_container",
-                      "content": "Web access is off, so nothing new is recorded. Records already kept stay available until Nov 25, 2026, then are deleted.",
+                      "content": "Web access is off, so nothing new is recorded. Records are deleted about 30 days after they were recorded.",
                       "textAlign": "center",
                       "fontFamily": "$font",
                       "fontSize": 13,
                       "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "tcmnP",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "YFjd2",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "z3f7by",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "b9EJ3N",
+      "x": 2800,
+      "y": 3500,
+      "name": "V9 Destination, forbidden (403)",
+      "layout": "vertical",
+      "gap": 12,
+      "children": [
+        {
+          "type": "text",
+          "id": "CuI9c",
+          "name": "Frame label",
+          "fill": "$text-secondary",
+          "content": "V9 Destination, forbidden (403) (desktop)",
+          "fontFamily": "$font",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "gT43H",
+          "name": "Screen",
+          "clip": true,
+          "width": 1280,
+          "height": 820,
+          "fill": "$bg",
+          "children": [
+            {
+              "type": "frame",
+              "id": "xzjzW",
+              "name": "Nav rail",
+              "width": 220,
+              "height": "fill_container",
+              "fill": "$bg",
+              "stroke": "$border",
+              "strokeWidth": {
+                "right": 1
+              },
+              "layout": "vertical",
+              "gap": 34,
+              "padding": [
+                28,
+                0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "y5jTPc",
+                  "name": "Wordmark",
+                  "padding": [
+                    0,
+                    20
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "u99RBK",
+                      "name": "Wordmark text",
+                      "fill": "$text-secondary",
+                      "content": "SOLEUR",
+                      "fontFamily": "$font",
+                      "fontSize": 11,
+                      "fontWeight": "semibold"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "SOdeD",
+                  "name": "Nav items",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "tz30q",
+                      "name": "Nav General",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "xQeJ9",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "RQmh4",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "SZyF9",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "ud1TE",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "General",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "TJH9E",
+                      "name": "Nav Domain Leaders",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "gms26",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "K44F1C",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "V30XWg",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "aAHkL",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Domain Leaders",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Eq5uA",
+                      "name": "Nav Integrations",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "Wvy2B",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "v792IH",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "GpRDV",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "hEXa1",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Integrations",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "d3kZm",
+                      "name": "Nav Scope Grants",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "S9NH6t",
+                          "name": "Indicator",
+                          "fill": "$gold",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "phA9n",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "VqUmp",
+                              "name": "Dot",
+                              "fill": "$gold",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "mZMAW",
+                              "name": "Nav label",
+                              "fill": "$text-primary",
+                              "content": "Scope Grants",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "dgEGN",
+                      "name": "Nav Billing",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "R6Q2l",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "z897Z",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "XGS0J",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "GuRKV",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Billing",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "LPwnl",
+              "name": "Content area",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "padding": [
+                48,
+                60
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "oxD21",
+                  "name": "Column",
+                  "width": 760,
+                  "layout": "vertical",
+                  "gap": 20,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "DK931",
+                      "name": "Back link",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "hrWmq",
+                          "name": "Back arrow",
+                          "width": 12,
+                          "height": 12,
+                          "icon": "arrow-left",
+                          "library": "lucide",
+                          "fill": "$gold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "c7NJk",
+                          "name": "Back text",
+                          "fill": "$gold",
+                          "content": "Scope Grants",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "UJ0P8",
+                      "name": "Page header",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "bxOaK",
+                          "name": "Page title",
+                          "fill": "$text-primary",
+                          "content": "Egress audit log",
+                          "fontFamily": "$font",
+                          "fontSize": 24,
+                          "fontWeight": "medium"
+                        },
+                        {
+                          "type": "text",
+                          "id": "dW0fv",
+                          "name": "Page subtitle",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
+                          "fontFamily": "$font",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "fLmuG",
+                      "name": "Disclosure",
+                      "width": "fill_container",
+                      "fill": "$inset",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "gap": 10,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "dV9vJ",
+                          "name": "Glyph wrap",
+                          "padding": [
+                            2,
+                            0,
+                            0,
+                            0
+                          ],
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "JmZNc",
+                              "name": "Info glyph",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "info",
+                              "library": "lucide",
+                              "fill": "$gold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Ysgo8",
+                          "name": "Disclosure text",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 5,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "inCUT",
+                              "name": "Disclosure lead",
+                              "fill": "$text-primary",
+                              "content": "A best-effort summary, not a complete record.",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "semibold"
+                            },
+                            {
+                              "type": "text",
+                              "id": "yc6ll",
+                              "name": "Disclosure body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are kept for about 30 days, then deleted.",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "gz6Bl",
+                      "name": "Error state",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$block",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 40,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "f9HtH",
+                          "name": "Error glyph",
+                          "width": 24,
+                          "height": 24,
+                          "icon": "lock",
+                          "library": "lucide",
+                          "fill": "$block"
+                        },
+                        {
+                          "type": "text",
+                          "id": "EJxBR",
+                          "name": "Error title",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "You no longer have access to this workspace.",
+                          "textAlign": "center",
+                          "fontFamily": "$font",
+                          "fontSize": 15,
+                          "fontWeight": "semibold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "pFwgk",
+                          "name": "Error body",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Ask a workspace owner to add you again, or switch workspace.",
+                          "textAlign": "center",
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "ykEcy",
+                          "name": "Try again",
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "BBLbV",
+                              "name": "Try again label",
+                              "fill": "$text-primary",
+                              "content": "Switch workspace",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "kZuw7",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "YXC4F",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "uG8FE",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "D14qZO",
+      "x": 4200,
+      "y": 3500,
+      "name": "V10 Destination, filtered, no matches",
+      "layout": "vertical",
+      "gap": 12,
+      "children": [
+        {
+          "type": "text",
+          "id": "l5WBo",
+          "name": "Frame label",
+          "fill": "$text-secondary",
+          "content": "V10 Destination, filtered, no matches (desktop)",
+          "fontFamily": "$font",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "NRgcy",
+          "name": "Screen",
+          "clip": true,
+          "width": 1280,
+          "height": 760,
+          "fill": "$bg",
+          "children": [
+            {
+              "type": "frame",
+              "id": "T1Fj1t",
+              "name": "Nav rail",
+              "width": 220,
+              "height": "fill_container",
+              "fill": "$bg",
+              "stroke": "$border",
+              "strokeWidth": {
+                "right": 1
+              },
+              "layout": "vertical",
+              "gap": 34,
+              "padding": [
+                28,
+                0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "SNPql",
+                  "name": "Wordmark",
+                  "padding": [
+                    0,
+                    20
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Amkna",
+                      "name": "Wordmark text",
+                      "fill": "$text-secondary",
+                      "content": "SOLEUR",
+                      "fontFamily": "$font",
+                      "fontSize": 11,
+                      "fontWeight": "semibold"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Y1j4x",
+                  "name": "Nav items",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "MJSjG",
+                      "name": "Nav General",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "dqgGO",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "nzRpz",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "roatj",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "pDbOZ",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "General",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "r7uUeV",
+                      "name": "Nav Domain Leaders",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "cqCWU",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "o9evco",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "KkjYP",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "KtdhL",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Domain Leaders",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "x2VriL",
+                      "name": "Nav Integrations",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "kwYYz",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "ztzdZ",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "v3nET",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "A0HVz",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Integrations",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "XpSLY",
+                      "name": "Nav Scope Grants",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "ke7wP",
+                          "name": "Indicator",
+                          "fill": "$gold",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "i4Ctaq",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "k2Hpgr",
+                              "name": "Dot",
+                              "fill": "$gold",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "uLh0u",
+                              "name": "Nav label",
+                              "fill": "$text-primary",
+                              "content": "Scope Grants",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "H4uyRP",
+                      "name": "Nav Billing",
+                      "width": "fill_container",
+                      "height": 34,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "id": "DnxN9",
+                          "name": "Indicator",
+                          "fill": "#00000000",
+                          "width": 2,
+                          "height": "fill_container"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "xfOYx",
+                          "name": "Nav inner",
+                          "height": "fill_container",
+                          "gap": 10,
+                          "padding": [
+                            0,
+                            18
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "OtLh2",
+                              "name": "Dot",
+                              "fill": "#3A3A3A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "z8a55",
+                              "name": "Nav label",
+                              "fill": "$text-muted",
+                              "content": "Billing",
+                              "fontFamily": "$font",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "PMFO1",
+              "name": "Content area",
+              "width": "fill_container",
+              "height": "fill_container",
+              "layout": "vertical",
+              "padding": [
+                48,
+                60
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "lQibV",
+                  "name": "Column",
+                  "width": 760,
+                  "layout": "vertical",
+                  "gap": 20,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "p5vZyX",
+                      "name": "Back link",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "XYHuz",
+                          "name": "Back arrow",
+                          "width": 12,
+                          "height": 12,
+                          "icon": "arrow-left",
+                          "library": "lucide",
+                          "fill": "$gold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "f50kvr",
+                          "name": "Back text",
+                          "fill": "$gold",
+                          "content": "Scope Grants",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "h3s0s",
+                      "name": "Page header",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "aLucd",
+                          "name": "Page title",
+                          "fill": "$text-primary",
+                          "content": "Egress audit log",
+                          "fontFamily": "$font",
+                          "fontSize": 24,
+                          "fontWeight": "medium"
+                        },
+                        {
+                          "type": "text",
+                          "id": "S8GUSL",
+                          "name": "Page subtitle",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
+                          "fontFamily": "$font",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "usL4z",
+                      "name": "Disclosure",
+                      "width": "fill_container",
+                      "fill": "$inset",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "gap": 10,
+                      "padding": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "OJ9Ks",
+                          "name": "Glyph wrap",
+                          "padding": [
+                            2,
+                            0,
+                            0,
+                            0
+                          ],
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "Yngz7",
+                              "name": "Info glyph",
+                              "width": 14,
+                              "height": 14,
+                              "icon": "info",
+                              "library": "lucide",
+                              "fill": "$gold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "RbWVm",
+                          "name": "Disclosure text",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 5,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "jjGcz",
+                              "name": "Disclosure lead",
+                              "fill": "$text-primary",
+                              "content": "A best-effort summary, not a complete record.",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "semibold"
+                            },
+                            {
+                              "type": "text",
+                              "id": "RZNyK",
+                              "name": "Disclosure body",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are kept for about 30 days, then deleted.",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "x9Jm4",
+                      "name": "Summary",
+                      "fill": "$text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "At least 14,326 requests  ·  at least 121 blocked (all outcomes)",
+                      "fontFamily": "$font",
+                      "fontSize": 13,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "aNNJM",
+                      "name": "Filter block",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "ClKj6",
+                          "name": "Filter",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Ds0Q4",
+                              "name": "Filter All",
+                              "fill": "#00000000",
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "padding": [
+                                7,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "SwwIQ",
+                                  "name": "Filter label",
+                                  "fill": "$text-muted",
+                                  "content": "All",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "medium"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "A21zs",
+                              "name": "Filter Allowed",
+                              "fill": "#00000000",
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "padding": [
+                                7,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Viszl",
+                                  "name": "Filter label",
+                                  "fill": "$text-muted",
+                                  "content": "Allowed",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "medium"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "B1DHws",
+                              "name": "Filter Blocked",
+                              "fill": "#2A2A2A",
+                              "stroke": "$gold",
+                              "strokeWidth": 1,
+                              "padding": [
+                                7,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "octKg",
+                                  "name": "Filter label",
+                                  "fill": "$text-primary",
+                                  "content": "Blocked",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "semibold"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "GrDbl",
+                              "name": "Filter Other",
+                              "fill": "#00000000",
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "padding": [
+                                7,
+                                16
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "FjvQi",
+                                  "name": "Filter label",
+                                  "fill": "$text-muted",
+                                  "content": "Other",
+                                  "fontFamily": "$font",
+                                  "fontSize": 12,
+                                  "fontWeight": "medium"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "wH4KL",
+                          "name": "Other helper",
+                          "fill": "$text-muted",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Other: the request was neither completed as allowed nor blocked by policy, for example because the destination returned an error.",
+                          "fontFamily": "$font",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "QeCxd",
+                      "name": "No matches message",
+                      "width": "fill_container",
+                      "fill": "$inset",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "gap": 8,
+                      "padding": 16,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "EZ8Sr",
+                          "name": "No matches text",
+                          "fill": "$text-secondary",
+                          "content": "No Blocked requests in the last 30 days.",
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "u7lNGl",
+                          "name": "Show all link",
+                          "fill": "$gold",
+                          "content": "Show all",
+                          "fontFamily": "$font",
+                          "fontSize": 13,
+                          "fontWeight": "medium"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Qxvfk",
+                      "name": "Page footer",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "K8tlae",
+                          "name": "Footer note",
+                          "fill": "$text-muted",
+                          "content": "History can't be deleted from this page.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "F3YIW",
+                          "name": "Erasure link text",
+                          "fill": "$gold",
+                          "content": "How to request erasure",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "MPL9e",
+      "x": 2390,
+      "y": 6700,
+      "name": "M11 Destination, forbidden (403)",
+      "width": 390,
+      "layout": "vertical",
+      "gap": 12,
+      "children": [
+        {
+          "type": "text",
+          "id": "ScHZ2",
+          "name": "Frame label",
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": 390,
+          "content": "M11 Destination, forbidden (403) (mobile)",
+          "fontFamily": "$font",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "wqZKZ",
+          "name": "Screen",
+          "clip": true,
+          "width": 390,
+          "fill": "$bg",
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "aoVlg",
+              "name": "Top bar",
+              "width": "fill_container",
+              "stroke": "$border",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "padding": [
+                14,
+                16
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "vuW7y",
+                  "name": "Wordmark text",
+                  "fill": "$text-secondary",
+                  "content": "SOLEUR",
+                  "fontFamily": "$font",
+                  "fontSize": 11,
+                  "fontWeight": "semibold"
+                },
+                {
+                  "type": "icon",
+                  "id": "wIbGV",
+                  "name": "Menu glyph",
+                  "width": 18,
+                  "height": 18,
+                  "icon": "menu",
+                  "library": "lucide",
+                  "fill": "$text-secondary"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "k1WtbF",
+              "name": "Content",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": [
+                20,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "GCOQh",
+                  "name": "Back link",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "XOcfN",
+                      "name": "Back arrow",
+                      "width": 12,
+                      "height": 12,
+                      "icon": "arrow-left",
+                      "library": "lucide",
+                      "fill": "$gold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "XEqu8",
+                      "name": "Back text",
+                      "fill": "$gold",
+                      "content": "Scope Grants",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "yON8N",
+                  "name": "Page header",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 10,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "B0nIgq",
+                      "name": "Page title",
+                      "fill": "$text-primary",
+                      "content": "Egress audit log",
+                      "fontFamily": "$font",
+                      "fontSize": 20,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "f53nE1",
+                      "name": "Page subtitle",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
+                      "fontFamily": "$font",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "QvQVM",
+                  "name": "Disclosure",
+                  "width": "fill_container",
+                  "fill": "$inset",
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "gap": 10,
+                  "padding": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "ZG5ci",
+                      "name": "Glyph wrap",
+                      "padding": [
+                        2,
+                        0,
+                        0,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "VC2FQ",
+                          "name": "Info glyph",
+                          "width": 14,
+                          "height": 14,
+                          "icon": "info",
+                          "library": "lucide",
+                          "fill": "$gold"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "A8Js9X",
+                      "name": "Disclosure text",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "dw30P",
+                          "name": "Disclosure lead",
+                          "fill": "$text-primary",
+                          "content": "A best-effort summary, not a complete record.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "semibold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "oXKlq",
+                          "name": "Disclosure body",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are kept for about 30 days, then deleted.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "j45UEB",
+                  "name": "Error state",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "stroke": "$block",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "V74dF",
+                      "name": "Error glyph",
+                      "width": 24,
+                      "height": 24,
+                      "icon": "lock",
+                      "library": "lucide",
+                      "fill": "$block"
+                    },
+                    {
+                      "type": "text",
+                      "id": "t9iTm",
+                      "name": "Error title",
+                      "fill": "$text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "You no longer have access to this workspace.",
+                      "textAlign": "center",
+                      "fontFamily": "$font",
+                      "fontSize": 15,
+                      "fontWeight": "semibold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "PzLvT",
+                      "name": "Error body",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Ask a workspace owner to add you again, or switch workspace.",
+                      "textAlign": "center",
+                      "fontFamily": "$font",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "hb3lk",
+                      "name": "Try again",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "padding": [
+                        8,
+                        16
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "XVjgT",
+                          "name": "Try again label",
+                          "fill": "$text-primary",
+                          "content": "Switch workspace",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "medium"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "UhdGU",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "OFFAm",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "KQv9j",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "DMP7G",
+      "x": 2900,
+      "y": 6700,
+      "name": "M12 Destination, filtered, no matches",
+      "width": 390,
+      "layout": "vertical",
+      "gap": 12,
+      "children": [
+        {
+          "type": "text",
+          "id": "pJJT6",
+          "name": "Frame label",
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": 390,
+          "content": "M12 Destination, filtered, no matches (mobile)",
+          "fontFamily": "$font",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "k9Mur",
+          "name": "Screen",
+          "clip": true,
+          "width": 390,
+          "fill": "$bg",
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "M2Me1p",
+              "name": "Top bar",
+              "width": "fill_container",
+              "stroke": "$border",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "padding": [
+                14,
+                16
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "B2inM",
+                  "name": "Wordmark text",
+                  "fill": "$text-secondary",
+                  "content": "SOLEUR",
+                  "fontFamily": "$font",
+                  "fontSize": 11,
+                  "fontWeight": "semibold"
+                },
+                {
+                  "type": "icon",
+                  "id": "ekICJ",
+                  "name": "Menu glyph",
+                  "width": 18,
+                  "height": 18,
+                  "icon": "menu",
+                  "library": "lucide",
+                  "fill": "$text-secondary"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "S7F0CN",
+              "name": "Content",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": [
+                20,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "SZ676",
+                  "name": "Back link",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "h9EdYw",
+                      "name": "Back arrow",
+                      "width": 12,
+                      "height": 12,
+                      "icon": "arrow-left",
+                      "library": "lucide",
+                      "fill": "$gold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "ReKH7",
+                      "name": "Back text",
+                      "fill": "$gold",
+                      "content": "Scope Grants",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "KiLDe",
+                  "name": "Page header",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 10,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "TNLss",
+                      "name": "Page title",
+                      "fill": "$text-primary",
+                      "content": "Egress audit log",
+                      "fontFamily": "$font",
+                      "fontSize": 20,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "kqnwQ",
+                      "name": "Page subtitle",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Sites Acme's agents contacted in about the last 30 days, with the outcome of each (best-effort).",
+                      "fontFamily": "$font",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "IgEbR",
+                  "name": "Disclosure",
+                  "width": "fill_container",
+                  "fill": "$inset",
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "gap": 10,
+                  "padding": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "m15G3",
+                      "name": "Glyph wrap",
+                      "padding": [
+                        2,
+                        0,
+                        0,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "m4aaY",
+                          "name": "Info glyph",
+                          "width": 14,
+                          "height": 14,
+                          "icon": "info",
+                          "library": "lucide",
+                          "fill": "$gold"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "MVVkb",
+                      "name": "Disclosure text",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 5,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "ldP9Z",
+                          "name": "Disclosure lead",
+                          "fill": "$text-primary",
+                          "content": "A best-effort summary, not a complete record.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "semibold"
+                        },
+                        {
+                          "type": "text",
+                          "id": "boi5n",
+                          "name": "Disclosure body",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are kept for about 30 days, then deleted.",
+                          "fontFamily": "$font",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "ejL4C",
+                  "name": "Summary",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "At least 14,326 requests  ·  at least 121 blocked (all outcomes)",
+                  "fontFamily": "$font",
+                  "fontSize": 13,
+                  "fontWeight": "medium"
+                },
+                {
+                  "type": "frame",
+                  "id": "Z9iKdM",
+                  "name": "Filter block",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "X4nYho",
+                      "name": "Filter",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "moEDa",
+                          "name": "Filter All",
+                          "fill": "#00000000",
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "padding": [
+                            7,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "UtpCY",
+                              "name": "Filter label",
+                              "fill": "$text-muted",
+                              "content": "All",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "S08vbP",
+                          "name": "Filter Allowed",
+                          "fill": "#00000000",
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "padding": [
+                            7,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "YJ1Al",
+                              "name": "Filter label",
+                              "fill": "$text-muted",
+                              "content": "Allowed",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "bY9J0",
+                          "name": "Filter Blocked",
+                          "fill": "#2A2A2A",
+                          "stroke": "$gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            7,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "jomEU",
+                              "name": "Filter label",
+                              "fill": "$text-primary",
+                              "content": "Blocked",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "semibold"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "C5zsnd",
+                          "name": "Filter Other",
+                          "fill": "#00000000",
+                          "stroke": "$border",
+                          "strokeWidth": 1,
+                          "padding": [
+                            7,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Dbteb",
+                              "name": "Filter label",
+                              "fill": "$text-muted",
+                              "content": "Other",
+                              "fontFamily": "$font",
+                              "fontSize": 12,
+                              "fontWeight": "medium"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "d3RxEI",
+                      "name": "Other helper",
+                      "fill": "$text-muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Other: the request was neither completed as allowed nor blocked by policy, for example because the destination returned an error.",
+                      "fontFamily": "$font",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "WQ8N5",
+                  "name": "No matches message",
+                  "width": "fill_container",
+                  "fill": "$inset",
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "k8EZD",
+                      "name": "No matches text",
+                      "fill": "$text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "No Blocked requests in the last 30 days.",
+                      "fontFamily": "$font",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "h3Mc2",
+                      "name": "Show all link",
+                      "fill": "$gold",
+                      "content": "Show all",
+                      "fontFamily": "$font",
+                      "fontSize": 13,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "eYudY",
+                  "name": "Page footer",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Qq31X",
+                      "name": "Footer note",
+                      "fill": "$text-muted",
+                      "content": "History can't be deleted from this page.",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "g5pJeJ",
+                      "name": "Erasure link text",
+                      "fill": "$gold",
+                      "content": "How to request erasure",
+                      "fontFamily": "$font",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
                     }
                   ]
                 }
