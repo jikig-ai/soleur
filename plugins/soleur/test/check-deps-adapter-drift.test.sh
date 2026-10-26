@@ -182,11 +182,11 @@ while IFS=$'\t' read -r layout _adapter want_cd want_legacy _note; do
     assert_eq "no" "no" "identity row '$layout': no leftover warning"
   fi
 done < "$CASES"
-if [[ "$rows" -ge 14 ]]; then
-  assert_eq "ok" "ok" "identity table ran $rows rows (anti-vacuity floor 14)"
-else
-  assert_eq ">=14 rows" "$rows rows" "identity table ran enough rows"
+if [[ "$rows" -lt 14 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s identity rows ran, expected at least 14\n' "$rows"
+  exit 1
 fi
+assert_eq "ok" "ok" "identity table ran $rows rows (anti-vacuity floor 14)"
 
 # version != pin is accepted but says so
 home="$tmp_dir/ident-version-differs"
@@ -366,4 +366,4 @@ out=$(env -u PEN_CLI_KEY -u PENCIL_CLI_KEY HOME="$home" NVM_DIR="$home/.nvm" FNM
 assert_contains "$out" "install_rc=1" "install: a failing npm ci returns non-zero"
 assert_contains "$out" "FAILED" "install: a failing npm ci says FAILED"
 
-print_results
+print_results 116

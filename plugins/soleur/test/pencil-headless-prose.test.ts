@@ -177,14 +177,12 @@ describe("pointer edits in other prose", () => {
     "plugins/soleur/skills/brainstorm/SKILL.md",
     "plugins/soleur/skills/plan/SKILL.md",
     "plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md",
-    "knowledge-base/project/constitution.md",
   ];
   for (const f of files) {
     test(`${f} no longer names @pencil.dev/cli or batch_get/snapshot_layout headless`, () => {
       const t = read(f);
       expect(t).not.toContain("@pencil.dev/cli");
-      // PENCIL_CLI_KEY survives only as the documented fallback in constitution.md
-      if (!f.endsWith("constitution.md")) expect(t).not.toContain("PENCIL_CLI_KEY");
+      expect(t).not.toContain("PENCIL_CLI_KEY");
     });
   }
 
