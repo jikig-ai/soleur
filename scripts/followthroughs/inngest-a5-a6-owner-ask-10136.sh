@@ -187,7 +187,7 @@ main() {
   if [ "$a5" = ok ]; then
     local left=$(( ( lapse_e - today_e ) / 86400 ))
     say "ACTION REQUIRED: A5 is recorded. Next is A6, the no-known-access record."
-    say "Write it under knowledge-base/legal/audits/ and link it from #$LINKED and #$EPIC. The legal reviewer attests it separately."
+    say "Write it in the legal audits folder of the knowledge base and link it from #$LINKED and #$EPIC. The legal reviewer attests it separately."
     say "It needs the measured firewall-rule re-read from the host and the read-only list of Hetzner members on the private network."
     if [ "$left" -lt 0 ]; then
       say "The Inngest accepted-risk entry lapsed on $LAPSE ($(days "$(( -left ))") ago)."
