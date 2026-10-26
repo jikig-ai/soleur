@@ -997,13 +997,25 @@ describe("edit line caps: per-target hard cap, pinned to the corpus lint", () =>
       expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
     });
 
-    it("a 600-character line is NOT refused by the old 500-character cap (the #10552 defect)", async () => {
+    it("an over-cap line in the MIDDLE of three is refused (every line is checked, not the first or last)", async () => {
+      const lines = [ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 0), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS + 1, 1), ruleOfLength(AGENTS_EDIT_LINE_MAX_CHARS, 2)];
+      const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: lines });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
+    it("a 597-character rule line is NOT refused by the old 500-character cap (the #10552 defect)", async () => {
       const r = await derive(AGENTS, { insert_after_line: ANCHOR, new_lines: [ruleOfLength(597, 0)] });
       expect(r.ok).toBe(true);
     });
   });
 
   describe("SKILL.md boundary is its own cap, not the AGENTS one", () => {
+    it("an over-cap SKILL.md line in the MIDDLE of three is refused", async () => {
+      const ok = "c".repeat(SKILL_EDIT_LINE_MAX_CHARS);
+      const r = await derive(SKILL_ALPHA, { insert_after_line: "## Steps", new_lines: [ok, ok + "c", ok] });
+      expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "too-long" });
+    });
+
     it(`a ${AGENTS_EDIT_LINE_MAX_CHARS + 1}-character SKILL.md line is accepted`, async () => {
       const r = await derive(SKILL_ALPHA, {
         insert_after_line: "## Steps",
@@ -1015,10 +1027,11 @@ describe("edit line caps: per-target hard cap, pinned to the corpus lint", () =>
 
   describe("chars equal bytes because the printable-ASCII screen runs first", () => {
     it.each([
-      ["AGENTS.rules.md", AGENTS, ANCHOR],
-      ["SKILL.md", SKILL_ALPHA, "## Steps"],
-    ])("a 301-character line of two-byte characters is refused as charset (%s)", async (_l, path, anchor) => {
-      const r = await derive(path, { insert_after_line: anchor, new_lines: ["é".repeat(301)] });
+      ["AGENTS.rules.md", AGENTS, ANCHOR, AGENTS_EDIT_LINE_MAX_CHARS],
+      ["SKILL.md", SKILL_ALPHA, "## Steps", SKILL_EDIT_LINE_MAX_CHARS],
+    ])("a two-byte-character line that fits the cap in characters but not in bytes is refused as charset (%s)", async (_l, path, anchor, cap) => {
+      // Half the cap plus one is under the character cap and OVER it in UTF-8 bytes.
+      const r = await derive(path, { insert_after_line: anchor, new_lines: [String.fromCharCode(0xe9).repeat(Math.floor(cap / 2) + 1)] });
       expect(r).toMatchObject({ ok: false, reason: "edit-invalid", cause: "charset" });
     });
   });

@@ -85,7 +85,7 @@ describe("the guard decides on the FILE, not on the words of a PR", () => {
       { number: 10812, user: { login: "dependabot[bot]" }, files: [{ filename: "plugins/soleur/skills/gemini-imagegen/requirements.txt" }] },
     ];
     const { s, calls } = await scan(prs, [ALPHA]);
-    expect(s).toEqual({ changed: {}, incomplete: null });
+    expect(s).toEqual({ changed: {}, incomplete: null, scanned: [ALPHA] });
     expect(skillConflictVerdict(s, ALPHA)).toEqual({ kind: "clear" });
     // Dependabot is skipped for call saving: its file list is never fetched.
     expect(count(calls, FILES)).toBe(0);
@@ -147,7 +147,7 @@ describe("the guard decides on the FILE, not on the words of a PR", () => {
 
   it("no open PR at all is clear after a single request", async () => {
     const { s, calls } = await scan([], [ALPHA]);
-    expect(s).toEqual({ changed: {}, incomplete: null });
+    expect(s).toEqual({ changed: {}, incomplete: null, scanned: [ALPHA] });
     expect(calls).toHaveLength(1);
   });
 });
@@ -174,9 +174,11 @@ describe("the result is bounded and replay-safe", () => {
     const { s } = await scan([{ number: 13, files: [{ filename: ALPHA }] }], [ALPHA, "constructor", "__proto__", "toString"]);
     const replayed = JSON.parse(JSON.stringify(s)) as typeof s;
     expect(skillConflictVerdict(replayed, ALPHA)).toEqual({ kind: "conflict", pr: 13 });
-    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    for (const name of ["constructor", "__proto__", "toString"]) {
       expect(skillConflictVerdict(replayed, name)).toEqual({ kind: "clear" });
     }
+    // Never scanned: unverifiable, and still never a conflict from the prototype chain.
+    expect(skillConflictVerdict(replayed, "hasOwnProperty")).toEqual({ kind: "unverifiable", bound: "targets" });
   });
 
   it("stops requesting once every target is found", async () => {
@@ -246,6 +248,66 @@ describe("a bound reached without a match is unverifiable, never clear", () => {
   });
 });
 
+describe("a PARTIAL last page is not a bound (the bounds fire only on a full final page)", () => {
+  it("250 open PRs (two full pages and a partial third) scan clean", async () => {
+    const prs: Pr[] = Array.from({ length: 250 }, (_, i) => ({ number: i + 1, user: { login: "dependabot[bot]" } }));
+    const { s, calls } = await scan(prs, [ALPHA]);
+    expect(s.incomplete).toBeNull();
+    expect(count(calls, PULLS)).toBe(3);
+    expect(skillConflictVerdict(s, ALPHA)).toEqual({ kind: "clear" });
+  });
+
+  it("a PR with 950 files (nine full pages and a partial tenth) scans clean", async () => {
+    const { s, calls } = await scan([{ number: 40, files: filler(950) }], [ALPHA]);
+    expect(s.incomplete).toBeNull();
+    expect(count(calls, FILES)).toBe(10);
+  });
+
+  it("exactly the request budget with no further PR scans clean", async () => {
+    const prs: Pr[] = Array.from({ length: SKILL_GUARD_FILE_REQUEST_BUDGET }, (_, i) => ({ number: i + 1, files: filler(1) }));
+    const { s, calls } = await scan(prs, [ALPHA]);
+    expect(s.incomplete).toBeNull();
+    expect(count(calls, FILES)).toBe(SKILL_GUARD_FILE_REQUEST_BUDGET);
+  });
+
+  it("trailing Dependabot PRs after the budget is spent are skipped, not counted as a bound", async () => {
+    const humans: Pr[] = Array.from({ length: SKILL_GUARD_FILE_REQUEST_BUDGET }, (_, i) => ({ number: i + 1, files: filler(1) }));
+    const bots: Pr[] = Array.from({ length: 5 }, (_, i) => ({ number: 1000 + i, user: { login: "dependabot[bot]" } }));
+    const { s } = await scan([...humans, ...bots], [ALPHA]);
+    expect(s.incomplete).toBeNull();
+  });
+
+  it("the request budget stops the PR list too: no further pulls page is read once it is spent", async () => {
+    const prs: Pr[] = Array.from({ length: SKILL_GUARD_FILE_REQUEST_BUDGET + 20 }, (_, i) => ({ number: i + 1, files: filler(1) }));
+    const { calls } = await scan(prs, [ALPHA]);
+    expect(count(calls, PULLS)).toBe(2);
+  });
+});
+
+describe("every request is bounded in time", () => {
+  it("both routes carry an abort signal", async () => {
+    const prs: Pr[] = [{ number: 1, files: filler(1) }];
+    const { calls } = await scan(prs, [ALPHA]);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const c of calls) {
+      const req = c.params.request as { signal?: unknown } | undefined;
+      expect(req?.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+});
+
+describe("attacker-controlled names never reach the stored result", () => {
+  it("hostile filenames, previous_filenames and logins leave only the target, an integer and the scanned list", async () => {
+    const hostile = "evil\nname\u2028with-control-chars";
+    const prs: Pr[] = [
+      { number: 5, user: { login: hostile }, files: [{ filename: hostile, previous_filename: `${hostile}-old` }, { filename: ALPHA }] },
+    ];
+    const { s } = await scan(prs, [ALPHA]);
+    expect(JSON.stringify(s)).not.toContain("evil");
+    expect(s).toEqual({ changed: { [ALPHA]: 5 }, incomplete: null, scanned: [ALPHA] });
+  });
+});
+
 describe("fail closed on an API fault", () => {
   it("a pulls request error rejects", async () => {
     const octokit = { request: async () => { throw new Error("HTTP 502"); } } as unknown as Parameters<typeof scanOpenPrSkillPaths>[0]["octokit"];
@@ -264,20 +326,50 @@ describe("fail closed on an API fault", () => {
       (e: unknown) => e as Error,
     );
     expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toMatch(/pulls payload was not an array/);
     expect(err!.message).not.toContain("SECRET-PAYLOAD-TEXT");
+  });
+
+  it("a STRING pulls payload (iterable, not an array) is rejected rather than read as a list", async () => {
+    const octokit = { request: async () => ({ data: "rate limited" }) } as unknown as Parameters<typeof scanOpenPrSkillPaths>[0]["octokit"];
+    await expect(scanOpenPrSkillPaths({ octokit, owner: "o", repo: "r", targets: [ALPHA] })).rejects.toThrow(/pulls payload was not an array/);
+  });
+
+  it("a pull request without an integer number is rejected, even if the author would be skipped", async () => {
+    for (const bad of [{}, { number: "7" }, { number: 1.5 }, { number: null, user: { login: "dependabot[bot]" } }]) {
+      const octokit = { request: async () => ({ data: [bad] }) } as unknown as Parameters<typeof scanOpenPrSkillPaths>[0]["octokit"];
+      await expect(scanOpenPrSkillPaths({ octokit, owner: "o", repo: "r", targets: [ALPHA] })).rejects.toThrow(/without a number/);
+    }
   });
 
   it("a non-array files payload rejects", async () => {
     const f = fake([{ number: 1 }], { fileFor: () => ({ message: "nope" }) });
-    await expect(scanOpenPrSkillPaths({ octokit: f.octokit, owner: "o", repo: "r", targets: [ALPHA] })).rejects.toThrow();
+    await expect(scanOpenPrSkillPaths({ octokit: f.octokit, owner: "o", repo: "r", targets: [ALPHA] })).rejects.toThrow(/files payload was not an array/);
+  });
+
+  it("a STRING files payload is rejected, never read as an empty list (a silent clear)", async () => {
+    const f = fake([{ number: 1 }], { fileFor: () => "rate limited" });
+    await expect(scanOpenPrSkillPaths({ octokit: f.octokit, owner: "o", repo: "r", targets: [ALPHA] })).rejects.toThrow(/files payload was not an array/);
   });
 });
 
 describe("skillConflictVerdict", () => {
+  const mk = (over: Partial<Parameters<typeof skillConflictVerdict>[0]>) => ({ changed: {}, incomplete: null, scanned: [ALPHA], ...over });
+
   it("clear / conflict / unverifiable, and a conflict outranks an incomplete scan", () => {
-    expect(skillConflictVerdict({ changed: {}, incomplete: null }, ALPHA)).toEqual({ kind: "clear" });
-    expect(skillConflictVerdict({ changed: { [ALPHA]: 9 }, incomplete: null }, ALPHA)).toEqual({ kind: "conflict", pr: 9 });
-    expect(skillConflictVerdict({ changed: {}, incomplete: "requests" }, ALPHA)).toEqual({ kind: "unverifiable", bound: "requests" });
-    expect(skillConflictVerdict({ changed: { [ALPHA]: 9 }, incomplete: "prs" }, ALPHA)).toEqual({ kind: "conflict", pr: 9 });
+    expect(skillConflictVerdict(mk({}), ALPHA)).toEqual({ kind: "clear" });
+    expect(skillConflictVerdict(mk({ changed: { [ALPHA]: 9 } }), ALPHA)).toEqual({ kind: "conflict", pr: 9 });
+    expect(skillConflictVerdict(mk({ incomplete: "requests" }), ALPHA)).toEqual({ kind: "unverifiable", bound: "requests" });
+    expect(skillConflictVerdict(mk({ changed: { [ALPHA]: 9 }, incomplete: "prs" }), ALPHA)).toEqual({ kind: "conflict", pr: 9 });
+  });
+
+  it("a target the scan was never asked about is unverifiable, never clear", () => {
+    expect(skillConflictVerdict(mk({}), BETA)).toEqual({ kind: "unverifiable", bound: "targets" });
+    expect(skillConflictVerdict(mk({ scanned: [] }), ALPHA)).toEqual({ kind: "unverifiable", bound: "targets" });
+  });
+
+  it("the scan records exactly the targets it was given", async () => {
+    const { s } = await scan([], [ALPHA, BETA, ALPHA]);
+    expect(s.scanned.sort()).toEqual([ALPHA, BETA]);
   });
 });

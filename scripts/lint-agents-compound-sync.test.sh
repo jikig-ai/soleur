@@ -121,6 +121,7 @@ EOF
   cat > "$root/apps/web-platform/server/inngest/functions/cron-compound-promote.ts" <<EOF
 const MAX_ALWAYS_LOADED_BYTES = ${FIX_REJECT};
 const PROPOSE_ALWAYS_LOADED_BUDGET = ${FIX_WARN};
+export const AGENTS_EDIT_LINE_MAX_CHARS = ${FIX_CAP};
 EOF
 
   cat > "$root/scripts/compound-promote.sh" <<EOF
@@ -466,6 +467,7 @@ t8_per_rule_cap_covers_every_site() {
   assert_contains "T8 covers AGENTS.rules.md"        "AGENTS.rules.md"    "$GUARD_OUT"
   assert_contains "T8 covers plan sharp-edges"      "plan-sharp-edges.md" "$GUARD_OUT"
   assert_contains "T8 covers compound/SKILL.md"     "compound/SKILL.md" "$GUARD_OUT"
+  assert_contains "T8 covers the cron edit-line cap" "cron-compound-promote.ts" "$GUARD_OUT"
   rm -rf "$root"
 }
 

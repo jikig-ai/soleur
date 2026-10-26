@@ -40,6 +40,16 @@ vi.mock("@octokit/core", () => ({
     // Route-aware (#10552): the skill-conflict guard lists open PRs and their changed files.
     request = async (route: string, params: Record<string, unknown> = {}) => {
       h.requests.push({ route, params });
+      if (route === "GET /repos/{owner}/{repo}/pulls" || route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
+        // The guard must ask for open PRs, 100 per page, of a real repo (a swapped or empty owner/repo
+        // would silently scan nothing in production).
+        if (typeof params.owner !== "string" || !params.owner || typeof params.repo !== "string" || !params.repo || params.owner === params.repo) {
+          throw new Error(`bad owner/repo: ${String(params.owner)}/${String(params.repo)}`);
+        }
+        if (params.per_page !== 100 || (route.endsWith("/pulls") && params.state !== "open")) {
+          throw new Error(`bad list params: ${JSON.stringify(params)}`);
+        }
+      }
       if (route === "GET /repos/{owner}/{repo}/pulls") {
         if (h.pullsError) throw h.pullsError;
         const page = Number(params.page ?? 1);
@@ -636,6 +646,8 @@ describe("#10552: the skill-conflict guard decides on the same file and never po
   const fileLists = () => h.requests.filter((r) => r.route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files");
   const sentryOps = () => vi.mocked(reportSilentFallback).mock.calls.map((c) => (c[1] as { op: string }).op);
   const warnLines = (logger: { warn: ReturnType<typeof vi.fn> }) => logger.warn.mock.calls.map((c) => String(c[1]));
+  // The removed guard was a title/body SEARCH; nothing in the handler may ask for it again.
+  const searchedByFiles = () => h.requests.filter((r) => /in:files|plugins\/soleur\/skills/.test(String(r.params.q ?? "")));
 
   it("different-file: an open PR that touches OTHER files (the live #10812 shape) does not block the skill cluster", async () => {
     h.openPrs = [{ number: 10812, files: [{ filename: "plugins/soleur/skills/gemini-imagegen/requirements.txt" }] }];
@@ -643,6 +655,7 @@ describe("#10552: the skill-conflict guard decides on the same file and never po
     const { last } = await run();
     expect(last).toMatchObject({ clusters_proposed: 2, clusters_opened: 2, refusals: [] });
     expect(fileLists()).toHaveLength(1);
+    expect(searchedByFiles()).toHaveLength(0);
   });
 
   it("same-file: an open PR that changes the target refuses it as skill-conflict-guard, with no POST and no comment", async () => {
@@ -657,6 +670,7 @@ describe("#10552: the skill-conflict guard decides on the same file and never po
     const line = logger.warn.mock.calls.find((c) => c[1] === "skill-conflict-guard-refused")![0] as Record<string, unknown>;
     expect(line).toMatchObject({ pr: 4242, target: SKILL });
     expect(sentryOps().some((o) => o.startsWith("skill-conflict-guard"))).toBe(false);
+    expect(searchedByFiles()).toHaveLength(0);
   });
 
   it("unverifiable: a scan that hits its bound refuses the skill cluster by name, mirrors it to Sentry, and the AGENTS cluster still opens", async () => {
@@ -670,6 +684,40 @@ describe("#10552: the skill-conflict guard decides on the same file and never po
       expect.objectContaining({ op: "skill-conflict-guard-unverifiable", tags: { bound: "prs" } }),
     );
     expect(warnLines(logger)).toContain("skill-conflict-guard-unverifiable");
+    const warn = logger.warn.mock.calls.find((c) => c[1] === "skill-conflict-guard-unverifiable")![0] as Record<string, unknown>;
+    expect(warn).toMatchObject({ fn: "cron-compound-promote", bound: "prs" });
+    expect(warn.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(reportSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        message: "skill conflict scan incomplete: prs",
+        extra: { cluster_hash: warn.hash },
+      }),
+    );
+  });
+
+  it("unverifiable via the FILES bound (one PR whose list fills every page) carries that bound end to end", async () => {
+    h.openPrs = [{ number: 77, files: Array.from({ length: 1000 }, (_, i) => ({ filename: `docs/f-${i}.md` })) }];
+    stubModel([AGENTS_CLUSTER, SKILL_CLUSTER], EDITS);
+    const { last, logger } = await run();
+    expect(last).toMatchObject({ clusters_opened: 1, refusals: ["skill-conflict-guard-unverifiable"] });
+    expect(reportSilentFallback).toHaveBeenCalledWith(null, expect.objectContaining({ tags: { bound: "files" } }));
+    const warn = logger.warn.mock.calls.find((c) => c[1] === "skill-conflict-guard-unverifiable")![0] as Record<string, unknown>;
+    expect(warn.bound).toBe("files");
+  });
+
+  it("verdict order is per cluster: a CONFLICTING cluster first does not taint a clean one after it", async () => {
+    h.openPrs = [{ number: 9, files: [{ filename: SKILL }] }];
+    stubModel([SKILL_CLUSTER, SKILL_B_CLUSTER], EDITS);
+    const { last, logger } = await run();
+    expect(last).toMatchObject({ clusters_proposed: 2, clusters_opened: 1, refusals: ["skill-conflict-guard"] });
+    const refused = logger.warn.mock.calls.filter((c) => c[1] === "skill-conflict-guard-refused").map((c) => (c[0] as { target: string }).target);
+    expect(refused).toEqual([SKILL]);
+    // The opened PR is the clean one (SKILL_B), not the conflicting one.
+    const opened = h.safeCommit.mock.calls.map((c) => JSON.stringify(c[0]));
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toContain("beta");
+    expect(opened[0]).not.toContain("alpha");
   });
 
   it("one scan is shared by two skill clusters, and the second still gets its own verdict", async () => {
