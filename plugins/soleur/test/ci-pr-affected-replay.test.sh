@@ -3246,7 +3246,7 @@ build_gr_repo() {
     cd "$GR" || exit 1
     gitq init -q -b main . || exit 1
     {
-      printf 'gA\t6000\tmeasured\ngE\t6000\tmeasured\ngH\t20000\tmeasured\ngI\t50000\tmeasured\ngR\t6000\tmeasured\n'
+      printf 'gA\t6000\tmeasured\ngE\t6000\tmeasured\ngH\t9000\tmeasured\ngI\t50000\tmeasured\ngR\t6000\tmeasured\ngB1\t6000\tmeasured\ngT4\t6000\tmeasured\ngS\t6000\n'
       printf 'gT\t6000\tmeasured\ngT2\t6000\tmeasured\ngT3\t6000\tmeasured\ngP\t6000\tmeasured\ngAO\t6000\tmeasured\n'
       printf 'gF\t1000\tfloor\ngO\t1000\tmeasured\n'
     } > "$GR/scripts/suite-durations.tsv"
@@ -3270,6 +3270,10 @@ build_gr_repo || { echo "[FATAL] could not build the glob-rate fixture repo" >&2
 GR_BASE="$(gitq -C "$GR" rev-parse HEAD)"
 GR_N=43
 [[ "$(gitq -C "$GR" rev-list --first-parent --count HEAD)" -eq $((GR_N + 1)) ]] || { echo "[FATAL] glob-rate fixture: expected $((GR_N + 1)) commits" >&2; exit 1; }
+# one commit AFTER the base: the measurement is taken at a recorded SHA that is not HEAD (the production shape)
+printf 'post\n' > "$GR/gr-fx/m/post.txt" && gitq -C "$GR" add -A && gitq -C "$GR" commit -qm "post-base" || { echo "[FATAL] glob-rate fixture: post-base commit failed" >&2; exit 1; }
+GR_HEAD="$(gitq -C "$GR" rev-parse HEAD)"
+[[ "$GR_HEAD" != "$GR_BASE" ]] || { echo "[FATAL] glob-rate fixture: HEAD must differ from the base" >&2; exit 1; }
 cat > "$BIN/selgr.sh" <<'SEL'
 #!/usr/bin/env bash
 # the real selector, stood in for: the bit of each row is decided from the path list by plain case patterns, NOT by the model under test.
@@ -3287,7 +3291,13 @@ a_one=0; case ",$paths," in *,gr-fx/a/one.sh,*) a_one=1 ;; esac
 d_dir=0; case ",$paths," in *,gr-fx/d/*) d_dir=1 ;; esac
 e_dir=0; case ",$paths," in *,gr-fx/e/*) e_dir=1 ;; esac
 none=0; case ",$paths," in *,gr-fx/b/two.sh,*) none=1 ;; esac
-sel gA edge:declared '^gr-fx/a/one.sh' "$a_one"
+b1=0; case ",$paths," in *,gr-fx/m/*|*,gr-fx/a/three.md,*|*,gr-fx/a/four.sh,*) b1=1 ;; esac
+if [ -n "${PR_AFFECTED_REPLAY_GR_LOG:-}" ]; then printf '%s\n' "$paths" >> "$PR_AFFECTED_REPLAY_GR_LOG"; fi
+if [ "${PR_AFFECTED_REPLAY_GR_DROP:-}" != gA ]; then sel gA edge:declared '^gr-fx/a/one.sh' "$a_one"; fi
+sel gB1 edge:declared '^gr-fx/m/|^gr-fx/a/three.md|^gr-fx/a/four.sh' "$b1"
+sel gT4 edge:declared '^gr-fx/a/one.sh' "$a_one"
+sel gS edge:declared '^gr-fx/b/two.sh' "$none"
+sel "$(printf 'gX\033[2J')" edge:declared '^gr-fx/b/two.sh' "$none"
 sel gE edge:declared '^gr-fx/a/one.sh' "$a_one"
 sel gH edge:declared '^gr-fx/d/' "$d_dir"
 sel gI edge:declared '^gr-fx/d/' "$d_dir"
@@ -3305,7 +3315,9 @@ SEL
 chmod +x "$BIN/selgr.sh"
 GR_ROWS="$SANDBOX/gr-rows.txt"
 {
-  for s in gA gE gT gT2 gT3; do printf 'AFFECTED_SELECTED\t%s\t0\tedge:declared\t^gr-fx/a/one.sh\n' "$s"; done
+  for s in gA gE gT gT2 gT3 gT4; do printf 'AFFECTED_SELECTED\t%s\t0\tedge:declared\t^gr-fx/a/one.sh\n' "$s"; done
+  printf 'AFFECTED_SELECTED\tgB1\t0\tedge:declared\t^gr-fx/m/|^gr-fx/a/three.md|^gr-fx/a/four.sh\n'
+  printf 'AFFECTED_SELECTED\tgS\t0\tedge:declared\t^gr-fx/b/two.sh\n'
   for s in gH gI; do printf 'AFFECTED_SELECTED\t%s\t0\tedge:declared\t^gr-fx/d/\n' "$s"; done
   printf 'AFFECTED_SELECTED\tgR\t0\tedge:declared\t^gr-fx/e/\n'
   for s in gO gF gM gP; do printf 'AFFECTED_SELECTED\t%s\t0\tedge:declared\t^gr-fx/b/two.sh\n' "$s"; done
@@ -3315,7 +3327,8 @@ GR_ROWS="$SANDBOX/gr-rows.txt"
 GR_CAND="$SANDBOX/gr-cand.tsv"
 {
   printf 'gA\tglob:gr-fx/a/**.sh\n'
-  for s in gAO gE gF gI gM gO gR; do printf '%s\t\n' "$s"; done
+  for s in gAO gE gF gI gM gO gR gB1 gS; do printf '%s\t\n' "$s"; done
+  printf 'gT4\t@tree\ngT4\tglob:gr-fx/d/**.txt\n'
   printf 'gH\tgr-fx/d/\n'
   printf 'gT\t@tree\ngT\tglob:gr-fx/a/**.sh\n'
   printf 'gT2\t@tree\ngT2\tglob:gr-fx/a/**.sh\ngT2\tglob:scripts/**.sh\ngT2\tglob:*.sh\n'
@@ -3340,7 +3353,7 @@ gr_decide() {  # gr_decide <dur> <src> <hits> <units> <complete>: the verdict fu
   python3 - "$SUT" "$@" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sut", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-dur = None if sys.argv[2] == "-" else int(sys.argv[2]); src = None if sys.argv[3] == "-" else sys.argv[3]
+dur = None if sys.argv[2] == "-" else int(sys.argv[2]); src = None if sys.argv[3] == "-" else ("" if sys.argv[3] == "_" else sys.argv[3])
 print("%s %s" % m.glob_decide(dur, src, int(sys.argv[4]), int(sys.argv[5]), sys.argv[6] == "1"))
 PY
 }
@@ -3353,7 +3366,9 @@ row_gr_decide() {   # every branch and both sides of every boundary of PR4b row 
 60000 measured 50 200 1|glob within-25-percent
 60000 measured 51 200 1|baselined rate-over-and-duration-over-30s
 60001 measured 0 200 1|baselined duration-over
-30000 measured 51 200 1|always_on over-25-percent
+10000 measured 51 200 1|always_on over-25-percent
+10001 measured 51 200 1|baselined always-on-over-fast-tier-cap
+30000 measured 51 200 1|baselined always-on-over-fast-tier-cap
 30001 measured 51 200 1|baselined rate-over-and-duration-over-30s
 30000 measured 50 200 1|glob within-25-percent
 6000 measured 2 8 1|glob within-25-percent
@@ -3362,7 +3377,8 @@ row_gr_decide() {   # every branch and both sides of every boundary of PR4b row 
 1000 floor 200 200 1|baselined duration-floor
 - - 0 200 1|baselined duration-missing
 6000 measured 50 200 0|baselined no-complete-set
-30000 measured 51 200 0|always_on over-25-percent
+10000 measured 51 200 0|always_on over-25-percent
+6000 _ 0 200 1|baselined duration-floor
 6000 measured 0 0 1|baselined no-units
 CASES
   return "$ok"
@@ -3370,11 +3386,11 @@ CASES
 row_gr_run_ok() { gr_main --spot-check 3; [[ "$GR_RC" -eq 0 && -s "$GR_OUT/glob-rate.tsv" && -s "$GR_OUT/glob-rate.marker" ]]; }
 row_gr_table_shape() {   # the instrument must not pass on an empty table: 12 suites, 21 columns, the header, the marker as the last stdout line
   gr_main --spot-check 3 || true
-  [[ "$GR_RC" -eq 0 && "$(wc -l < "$GR_OUT/glob-rate.tsv")" -eq 13 && "$(awk -F'\t' 'NF != 21' "$GR_OUT/glob-rate.tsv" | wc -l)" -eq 0 ]] \
+  [[ "$GR_RC" -eq 0 && "$(wc -l < "$GR_OUT/glob-rate.tsv")" -eq 16 && "$(awk -F'\t' 'NF != 21' "$GR_OUT/glob-rate.tsv" | wc -l)" -eq 0 ]] \
     && [[ "$(head -1 "$GR_OUT/glob-rate.tsv" | cut -f1,20,21)" == "suite${TAB}verdict${TAB}reason" ]] \
     && [[ "$(tail -1 "$SANDBOX/gr.stdout")" == SOLEUR_PR_AFFECTED_GLOB_RATE\ * ]]
 }
-row_gr_verdicts() {   # the 12 verdicts with their reason codes, derived by hand from the fixture
+row_gr_verdicts() {   # the 15 verdicts with their reason codes, derived by hand from the fixture
   gr_main --spot-check 3
   local ok=0 s v
   [[ "$GR_RC" -eq 0 ]] || return 1
@@ -3383,6 +3399,7 @@ row_gr_verdicts() {   # the 12 verdicts with their reason codes, derived by hand
   done <<'EXP'
 gA glob within-25-percent
 gAO always_on over-25-percent
+gB1 always_on over-25-percent
 gE baselined no-candidate-set
 gF baselined duration-floor
 gH always_on over-25-percent
@@ -3390,9 +3407,11 @@ gI baselined rate-over-and-duration-over-30s
 gM baselined duration-missing
 gO baselined duration-over
 gR baselined readings-disagree
+gS baselined duration-floor
 gT baselined no-complete-set
 gT2 glob within-25-percent
 gT3 baselined no-complete-set
+gT4 baselined no-complete-set
 EXP
   return "$ok"
 }
@@ -3419,7 +3438,7 @@ row_gr_deleted_unit() {   # a unit that touches a path absent at --base is selec
   gr_main
   [[ "$GR_RC" -eq 0 && "$(gr_cell gR rate_conservative)" == "12/43" && "$(gr_cell gR rate_excluded)" == "7/39" ]]
 }
-row_gr_ci_seconds() { gr_main; [[ "$GR_RC" -eq 0 && "$(gr_cell gA ci_seconds_added)" == 6 && "$(gr_cell gH ci_seconds_added)" == 380 && "$(gr_cell gI ci_seconds_added)" == - ]]; }
+row_gr_ci_seconds() { gr_main; [[ "$GR_RC" -eq 0 && "$(gr_cell gA ci_seconds_added)" == 6 && "$(gr_cell gH ci_seconds_added)" == 171 && "$(gr_cell gI ci_seconds_added)" == - ]]; }
 row_gr_drained() { gr_main; [[ "$GR_RC" -eq 0 && "$(gr_cell gA drained_pairs)" == 2 && "$(gr_cell gH drained_pairs)" == 1 && "$(gr_cell gI drained_pairs)" == - ]]; }
 row_gr_heavy_wins() { gr_main; [[ "$GR_RC" -eq 0 && "$(gr_cell gO duration_ms)" == 90000 && "$(gr_cell gF src)" == floor && "$(gr_cell gM src)" == missing ]]; }
 row_gr_deterministic() {   # no clock in the table: a re-run on the same SHA is byte-identical; the date is only in the marker
@@ -3499,13 +3518,48 @@ row_gr_spot_empty() {   # an empty sample must not pass: more units wanted than 
 row_gr_read_only() {   # the subcommand writes only under --out: the fixture repository and the rows file are untouched
   local before after; before="$(gitq -C "$GR" status --porcelain=v1 | wc -l)$(md5sum < "$GR_ROWS")"
   gr_main --spot-check 3; after="$(gitq -C "$GR" status --porcelain=v1 | wc -l)$(md5sum < "$GR_ROWS")"
-  [[ "$GR_RC" -eq 0 && "$before" == "$after" && "$(gitq -C "$GR" rev-parse HEAD)" == "$GR_BASE" ]]
+  [[ "$GR_RC" -eq 0 && "$before" == "$after" && "$(gitq -C "$GR" rev-parse HEAD)" == "$GR_HEAD" ]]
 }
 row_gr_help() { local o; o="$(python3 "$SUT" --help 2>&1)"; grep -q 'glob-rate' <<<"$o" && python3 "$SUT" glob-rate --help 2>&1 | grep -q -- '--spot-check'; }
+row_gr_no_coverage_proof() {   # a glob verdict needs something that proves the cover: a pair list to cover, or an @tree cover; with neither it is baselined
+  local c="$SANDBOX/gr-cand-nocov.tsv"
+  printf 'gA\tglob:gr-fx/a/**.sh\n' > "$c"
+  GR_CANDF="$c" gr_main --pairs /dev/null
+  [[ "$GR_RC" -eq 0 && "$(gr_cell gA verdict) $(gr_cell gA reason)" == "baselined no-coverage-proof" ]]
+}
+row_gr_tree_noext() {   # @tree with no recognised extension is refused (an empty cover is vacuous); a multi-dot tail is an extension
+  local c="$SANDBOX/gr-cand-noext.tsv" ok=0
+  printf 'gT\t@tree\ngT\tgr-fx/d/\n' > "$c"; GR_CANDF="$c" gr_main --pairs /dev/null; [[ "$GR_RC" -eq 2 ]] || ok=1
+  printf 'gT\t@tree\ngT\tglob:gr-fx/x-scripts/**.sh.bak\n' > "$c"; GR_CANDF="$c" gr_main --pairs /dev/null
+  [[ "$GR_RC" -eq 0 && "$(gr_cell gT tree_files)" == 1 && "$(gr_cell gT tree_missing)" == 0 && "$(gr_cell gT verdict)" == glob ]] || ok=1
+  return "$ok"
+}
+row_gr_spot_per_suite() {   # every candidate suite must be compared on at least one sampled diff: a suite the real selector never printed is not verified
+  RUN_ENV=(PR_AFFECTED_REPLAY_GR_DROP=gA); gr_main; RUN_ENV=()
+  [[ "$GR_RC" -eq 4 ]] && grep -q 'never compared candidate suite gA' "$SANDBOX/gr.stderr"
+}
+row_gr_spot_calls() {   # the real selector runs once per sampled diff: K calls, K distinct diffs
+  local log="$SANDBOX/gr-spot.log"; : > "$log"
+  RUN_ENV=(PR_AFFECTED_REPLAY_GR_LOG="$log"); gr_main --spot-check 3; RUN_ENV=()
+  [[ "$GR_RC" -eq 0 && "$(wc -l < "$log")" -eq 3 && "$(sort -u "$log" | wc -l)" -eq 3 ]]
+}
+row_gr_spot_default() {   # no flag means 3, and 0 is refused: a verdict is never accepted without the model-versus-selector check
+  local ok=0
+  gr_main; { [[ "$GR_RC" -eq 0 ]] && tail -1 "$SANDBOX/gr.stdout" | grep -q ' spot_check=3 spot_compared=[1-9]'; } || ok=1
+  gr_main --spot-check 0; [[ "$GR_RC" -eq 2 ]] || ok=1
+  return "$ok"
+}
+row_gr_quoted_labels() {   # a hostile suite label (an ESC sequence) is printed escaped in the table and on stdout, like every other path the tool prints
+  local r="$SANDBOX/gr-rows-esc.txt" c="$SANDBOX/gr-cand-esc.tsv" esc; esc="$(printf 'gX\033[2J')"
+  { cat "$GR_ROWS"; printf 'AFFECTED_SELECTED\t%s\t0\tedge:declared\t^gr-fx/b/two.sh\n' "$esc"; } > "$r"
+  printf '%s\t\n' "$esc" > "$c"
+  GR_ROWSF="$r" GR_CANDF="$c" gr_main
+  [[ "$GR_RC" -eq 0 ]] && ! grep -q $'\033' "$GR_OUT/glob-rate.tsv" && ! grep -q $'\033' "$SANDBOX/gr.stdout" && grep -qF 'x1b' "$GR_OUT/glob-rate.tsv"
+}
 chk "glob-rate: the verdict function applies PR4b row 6 exactly (60000/60001 ms, 30000/30001 ms, 50/51 of 200, floor and missing never qualify, an incomplete set is judged on the existing rate)" row_gr_decide
 chk "glob-rate: a run decides every row, writes the table and the marker, and an exit 0 means every row is decided" row_gr_run_ok
-chk "glob-rate: the table is not empty (13 lines, 21 columns, a header) and the marker is the last stdout line" row_gr_table_shape
-chk "glob-rate: the 12 fixture verdicts and reason codes match the hand-derived ones" row_gr_verdicts
+chk "glob-rate: the table is not empty (16 lines, 21 columns, a header) and the marker is the last stdout line" row_gr_table_shape
+chk "glob-rate: the 15 fixture verdicts and reason codes match the hand-derived ones" row_gr_verdicts
 chk "glob-rate: glob-only, existing-only, total and incremental counts and both readings of the rate on crafted commits" row_gr_counts
 chk "glob-rate: a row of class always_on selects on every attributable unit" row_gr_always_on_class
 chk "glob-rate: runner-changed (a substring match), empty and not-evaluable units are counted and printed" row_gr_nonattributable
@@ -3528,11 +3582,17 @@ chk "glob-rate: a stub that disagrees on one suite stops the run with exit 4 nam
 chk "glob-rate: an empty spot-check sample never passes (too few units, no rows, a fallback: exit 4)" row_gr_spot_empty
 chk "glob-rate: the subcommand is read-only (the fixture repository and the rows file are unchanged)" row_gr_read_only
 chk "glob-rate: the subcommand and its --spot-check flag are in --help" row_gr_help
+chk "glob-rate: a glob verdict with neither a pair list nor an @tree cover is baselined (no-coverage-proof)" row_gr_no_coverage_proof
+chk "glob-rate: @tree with no recognised extension is refused, and a multi-dot extension counts" row_gr_tree_noext
+chk "glob-rate: a candidate suite the real selector never printed on a sampled diff stops the run (exit 4)" row_gr_spot_per_suite
+chk "glob-rate: the spot-check runs the real selector once per sampled diff, on K distinct diffs" row_gr_spot_calls
+chk "glob-rate: the spot-check defaults to 3 and 0 is refused (exit 2)" row_gr_spot_default
+chk "glob-rate: a hostile suite label is printed escaped in the table and on stdout" row_gr_quoted_labels
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== mutation rows (each edit lands once, leaves valid python, leaves the row GREEN on the pristine SUT, and the named row must then FAIL)"
 MUT_RUN=0; MUT_KILLED=0
 declare -A PRISTINE_OK=() PRISTINE_RC4=()
-CRASH_IS_THE_POINT=" row_acc_isdir:accept-os-error-unmapped row_cp_big:cp-overflow row_sym:read-oserror-unmapped row_scan_ops:scan-hidden-copy-tracked-per-scan row_rt_generic:ratchet-generic-arm-dropped row_rt_sel_rc:ratchet-readerror-arm-dropped row_rt_base_infra_error:ratchet-infra-conversion-dropped row_rt_helper_renamed:ratchet-helper-names-unchecked row_rt_fl_nofb:ratchet-floor-fallback-none-unchecked row_rt_fl_noof:ratchet-floor-of-none-unchecked row_rt_helper_base_uncompilable:ratchet-helper-compile-error-uncaught row_rt_reasons_fail_closed:ratchet-reasons-read-error-uncaught row_rt_report_paths:ratchet-report-write-failure-is-fatal row_rt_fault_census:ratchet-oserror-arm-dropped "   # row:mutant pairs whose property IS "does not crash": an unmapped OSError is rc 4 instead of rc 3; the float-product cp_upper overflows
+CRASH_IS_THE_POINT=" row_acc_isdir:accept-os-error-unmapped row_cp_big:cp-overflow row_sym:read-oserror-unmapped row_scan_ops:scan-hidden-copy-tracked-per-scan row_rt_generic:ratchet-generic-arm-dropped row_rt_sel_rc:ratchet-readerror-arm-dropped row_rt_base_infra_error:ratchet-infra-conversion-dropped row_rt_helper_renamed:ratchet-helper-names-unchecked row_rt_fl_nofb:ratchet-floor-fallback-none-unchecked row_rt_fl_noof:ratchet-floor-of-none-unchecked row_rt_helper_base_uncompilable:ratchet-helper-compile-error-uncaught row_rt_reasons_fail_closed:ratchet-reasons-read-error-uncaught row_rt_report_paths:ratchet-report-write-failure-is-fatal row_rt_fault_census:ratchet-oserror-arm-dropped row_gr_always_on_class:gr-always-on-row-not-a-hit row_gr_missing_label:gr-missing-row-is-zero-hits "   # row:mutant pairs whose property IS "does not crash": an unmapped OSError is rc 4 instead of rc 3; the float-product cp_upper overflows
 crash_seen() {  # crash_seen <row output file>: rc 4 was logged, a Traceback printed, or main() reported an internal error
   grep -qx 4 "$RCLOG" || grep -q 'Traceback (most recent call last)\|replay: internal error' "$1"
 }
@@ -4327,12 +4387,12 @@ mutate gr-summary-not-required '    if not summary_ok:' '    if False:' row_gr_r
 mutate gr-degraded-summary-accepted '            if "fallback=none" not in line:' '            if False:' row_gr_rows_refusals
 mutate gr-fallback-line-accepted '        if f[0] == "AFFECTED_FALLBACK":' '        if False:' row_gr_rows_refusals
 mutate gr-differing-rows-accepted '        if len(set(rs)) != 1:' '        if False:' row_gr_or_across_rows
-mutate gr-missing-row-is-zero-hits '            raise ValueError("no selector row for suite %s (a relevance-declined record prints none): refused, not counted as zero hits" % suite)' '            rows[suite] = ("edge:declared", [])' row_gr_missing_label
+mutate gr-missing-row-is-zero-hits '            raise ValueError("no selector row for suite %s (a relevance-declined record prints none): refused, not counted as zero hits" % quote_field(suite))' '            rows[suite] = ("edge:declared", [])' row_gr_missing_label
 mutate gr-malformed-entry-accepted '        if _edge(pt, "\x01\x02"):' '        if False:' row_gr_candidate_refusals
 mutate gr-dead-entry-accepted '    if not any(_edge(pt, f) for f in tracked):' '    if False:' row_gr_candidate_refusals
 mutate gr-comment-line-is-a-suite '        if not line.strip() or line.lstrip().startswith("#"):' '        if not line.strip():' row_gr_noncanonical
 mutate gr-tree-always-complete '            complete, tfiles, tmiss = not miss, str(n), str(len(miss))' '            complete, tfiles, tmiss = True, str(n), str(len(miss))' row_gr_verdicts
-mutate gr-tree-extensions-ignored '            if re.match(r"^\.[A-Za-z0-9]+$", tail):' '            if False:' row_gr_tree_cover
+mutate gr-tree-extensions-ignored '            if re.match(r"^(\.[A-Za-z0-9]+)+$", tail):' '            if False:' row_gr_tree_cover
 mutate gr-glob-without-entries-qualifies '        if verdict == "glob" and not edges:' '        if False:' row_gr_verdicts
 mutate gr-glob-ci-cost-off-by-one '            ci = "%d" % ((dur // 1000) * (total - existing)) if dur is not None else "-"' '            ci = "%d" % ((dur // 1000) * (total - existing + 1)) if dur is not None else "-"' row_gr_ci_seconds
 mutate gr-always-on-ci-cost-uses-all-units '            ci = "%d" % ((dur // 1000) * (len(attr) - existing))' '            ci = "%d" % ((dur // 1000) * (total_units - existing))' row_gr_ci_seconds
@@ -4360,10 +4420,24 @@ mutate gr-light-table-wins 'for name in ("suite-durations.tsv", "suite-durations
 mutate gr-src-column-dropped 'd[f[0]] = (int(f[1]), f[2] if len(f) >= 3 else "")' 'd[f[0]] = (int(f[1]), "measured")' row_gr_verdicts
 mutate gr-short-history-accepted '    if len(shas) != n:' '    if False:' row_gr_history
 mutate gr-divergence-not-compared '            if sorted(real[label]) != [want] * len(real[label]):' '            if False:' row_gr_spot_diverge
-mutate gr-empty-spot-sample-passes '    if compared == 0:' '    if False:' row_gr_spot_empty
 mutate gr-divergence-exit-code '        print("replay: model diverges from the real selector: %s" % e, file=sys.stderr)
         return 4' '        print("replay: model diverges from the real selector: %s" % e, file=sys.stderr)
         return 1' row_gr_spot_diverge
+mutate gr-fast-tier-cap-dropped '    if dur <= GLOB_ALWAYS_POLICY_MS:
+        return "baselined", "always-on-over-fast-tier-cap"' '    if False:
+        return "baselined", "always-on-over-fast-tier-cap"' row_gr_decide
+mutate gr-excluded-denominator-is-all-units '        v_excl = glob_decide(dur, src, basis_excl, len(attr), complete)' '        v_excl = glob_decide(dur, src, basis_excl, total_units, complete)' row_gr_verdicts
+mutate gr-incomplete-basis-uses-glob-hits '            b = th if complete else eh' '            b = th' row_gr_verdicts
+mutate gr-two-column-duration-row-is-measured 'd[f[0]] = (int(f[1]), f[2] if len(f) >= 3 else "")' 'd[f[0]] = (int(f[1]), f[2] if len(f) >= 3 else "measured")' row_gr_verdicts
+mutate gr-coverage-proof-dropped '        if verdict == "glob" and not (pairs.get(suite) or suite in tree_suites):' '        if False:' row_gr_no_coverage_proof
+mutate gr-tree-zero-files-complete '            if n == 0:
+                raise ValueError("suite %s: @tree names' '            if False:
+                raise ValueError("suite %s: @tree names' row_gr_tree_noext
+mutate gr-tree-single-dot-extension-only 'if re.match(r"^(\.[A-Za-z0-9]+)+$", tail):' 'if re.match(r"^\.[A-Za-z0-9]+$", tail):' row_gr_tree_noext
+mutate gr-spot-first-unit-only '    for sha, files, _kind, _deleted in sample:' '    for sha, files, _kind, _deleted in sample[:1]:' row_gr_spot_calls
+mutate gr-spot-suite-never-compared-passes '    if unseen:' '    if False:' row_gr_spot_per_suite
+mutate gr-spot-check-default-off 'default=3, dest="spot_check"' 'default=0, dest="spot_check"' row_gr_spot_default
+mutate gr-suite-label-printed-raw 'out_rows.append((quote_field(suite), str(len(entries))' 'out_rows.append((suite, str(len(entries))' row_gr_quoted_labels
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== controls: the harness reports a survivor, an unparseable mutant, a red row and an edit that did not land"
 row_always_red() { false; }
@@ -4438,12 +4512,12 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1135   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 66 added by S4 PR5 glob-rate (26 rows, 2 harness rows, 38 mutant kills) (measured below)
+FLOOR_ASSERTIONS=1151   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 82 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 48 mutant kills) (measured below)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
 fi
-FLOOR_MUTANTS=458   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 + 56 added by the S4 ratchet PR3a + 63 added by its review fix round A + 3 scan-hidden collection-materialization spellings (#10724) + 38 added by S4 PR5 glob-rate
+FLOOR_MUTANTS=468   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 + 56 added by the S4 ratchet PR3a + 63 added by its review fix round A + 3 scan-hidden collection-materialization spellings (#10724) + 48 added by S4 PR5 glob-rate
 if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
 fi

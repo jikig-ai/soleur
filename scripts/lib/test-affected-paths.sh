@@ -339,7 +339,7 @@ ALWAYS_ON_SUITES=(
   # fast-tier budget lint (scripts/test-all-fast-tier-budget) pins this set.
 
   # S4 PR5 (#10861), PR4b row 6 (2): a whole-tree reader (it walks every tracked file of PJ_EXTS and SWEEP_EXTS) whose existing edges alone select it in
-  # more than 25% of the last 200 merged PRs, and which takes 30 s or less (measured 6081 ms, src=measured). Receipts: knowledge-base/project/specs/*pr5-glob-measurements/receipts/glob-rate/.
+  # more than 25% of the last 200 merged PRs, and which takes 30 s or less (measured 6081 ms, src=measured). Receipts: the pr5-glob-measurements spec directory (receipts/glob-rate/, under knowledge-base/project/specs/archive/ once the PR is shipped).
   ".claude/hooks/grep-q-pipe-guard.test.sh"
 )
 

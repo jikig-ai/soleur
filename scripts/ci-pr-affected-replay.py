@@ -163,9 +163,9 @@ checkout HEAD^1 is just the previous local commit, so those are not meaningful t
   EXIT-2 REASONS  selector-failed, selector-timeout, floor-summary, floor-fallback, floor-extra, floor-short-row, floor-bad-row, floor-rows-vs-of, floor-unreadable,
   floor-no-suites, base-unresolved, baseline-unreadable, accept-unreadable, census-degraded (--print-baseline only), internal.
 
-EXIT CODES (collect, ejections, aggregate, audit): 0 done and clean; 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
+EXIT CODES (collect, ejections, aggregate, audit, glob-rate): 0 done and clean (glob-rate: every row decided, whatever the verdicts); 1 audit found gaps, unaudited suites or stale accept rows; 2 usage or
 a value error (a malformed --since, an unknown status, an incomplete aggregate directory); 3 a remote or local READ
-failed (git, the selector, a file the audit must read, the --accept or --list file); 4 an internal error. `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
+failed (git, the selector, a file the audit must read, the --accept or --list file); 4 an internal error (glob-rate: also the model disagreeing with the real selector, or a spot-check that compared nothing). `verdict` and `cp-upper` exit 0 whatever they print: read `computed=GO|NO-GO|UNDECIDED`
 on stdout, the exit code carries no verdict. An uncaught Python error is rc 4, never rc 1.
 """
 import argparse
@@ -2132,7 +2132,8 @@ def cmd_audit(a):
 
 GLOB_MARKER = "SOLEUR_PR_AFFECTED_GLOB_RATE"
 GLOB_MAX_MS = 60000          # row 6 (1): a glob: edge needs a measured duration of at most this ...
-GLOB_ALWAYS_MAX_MS = 30000   # row 6 (2): an ALWAYS_ON_SUITES entry needs a measured duration of at most this
+GLOB_ALWAYS_POLICY_MS = 30000   # row 6 (2): the policy bound for an ALWAYS_ON_SUITES entry
+GLOB_ALWAYS_MAX_MS = 10000      # but the fast-tier budget lint (scripts/test-all-fast-tier-budget.test.sh, LOCAL_FAST_CAP_MS, ADR-262) rejects any always-on label above this: a verdict that cannot be installed is `baselined`
 GLOB_TSV_COLUMNS = ("suite", "entries", "duration_ms", "src", "existing_hits", "glob_hits", "total_hits", "incremental_hits", "units",
                     "runner_changed", "not_evaluable", "empty", "deleted_path_units", "rate_conservative", "rate_excluded",
                     "ci_seconds_added", "drained_pairs", "tree_files", "tree_missing", "verdict", "reason")
@@ -2183,6 +2184,8 @@ def glob_decide(dur, src, hits, units, complete=True):
         return "baselined", "no-complete-set"
     if dur <= GLOB_ALWAYS_MAX_MS:
         return "always_on", "over-25-percent"
+    if dur <= GLOB_ALWAYS_POLICY_MS:
+        return "baselined", "always-on-over-fast-tier-cap"
     return "baselined", "rate-over-and-duration-over-30s"
 
 
@@ -2256,10 +2259,10 @@ def glob_selector_rows(lines):
     for line in lines:
         f = line.split("\t")
         if f[0] == "AFFECTED_FALLBACK":
-            raise ValueError("the rows file records %s: a degraded selector gives no per-suite edges" % line.strip())
+            raise ValueError("the rows file records %s: a degraded selector gives no per-suite edges" % quote_field(line.strip()[:200]))
         if line.startswith("AFFECTED_SUMMARY"):
             if "fallback=none" not in line:
-                raise ValueError("the rows file's summary does not say fallback=none: %s" % line.strip())
+                raise ValueError("the rows file's summary does not say fallback=none: %s" % quote_field(line.strip()[:200]))
             summary_ok = True
         if f[0] == "AFFECTED_SELECTED" and len(f) >= 5:
             by.setdefault(f[1], []).append((f[3], tuple(x for x in f[4].split("|") if x)))
@@ -2270,7 +2273,7 @@ def glob_selector_rows(lines):
     rows = {}
     for label, rs in by.items():
         if len(set(rs)) != 1:
-            raise ValueError("label %s has rows with differing edge sets: refused, not guessed" % label)
+            raise ValueError("label %s has rows with differing edge sets: refused, not guessed" % quote_field(label))
         rows[label] = (rs[0][0], list(rs[0][1]))
     return rows
 
@@ -2289,9 +2292,9 @@ def glob_tree_cover(entries, edges, tracked):
     for ent in entries:
         if ent.startswith("glob:"):
             tail = ent.rsplit("*", 1)[1]
-            if re.match(r"^\.[A-Za-z0-9]+$", tail):
+            if re.match(r"^(\.[A-Za-z0-9]+)+$", tail):
                 exts.add(tail)
-    files = sorted(f for f in tracked if os.path.splitext(f)[1] in exts)
+    files = sorted(f for f in tracked if any(f.endswith(x) for x in exts))
     return len(files), sorted(f for f in files if not any(_edge(pt, f) for pt in edges))
 
 
@@ -2301,7 +2304,7 @@ def glob_units(root, base, n):
         raise ValueError("--commits must be at least 1")
     sha = run(["git", "rev-parse", "--verify", base + "^{commit}"], cwd=root, check=False)
     if sha.returncode != 0:
-        raise ValueError("--base %s is not a commit" % base)
+        raise ValueError("--base %s is not a commit" % quote_field(base))
     base_sha = sha.stdout.strip()
     shas = run(["git", "rev-list", "--first-parent", "-n", str(n), base_sha], cwd=root).stdout.split()
     if len(shas) != n:
@@ -2323,18 +2326,14 @@ def glob_units(root, base, n):
     return base_sha, units
 
 
-def glob_spot_check(root, rows, units, k):
+def glob_spot_check(root, rows, units, k, suites):
     """Run the REAL selector on k evenly spaced attributable units and compare every sampled label's bit with the model's. Raises Divergence
-    on a mismatch, a fallback, or a sample that is not exactly k units with at least one label compared (an empty sample must not pass)."""
-    if k <= 0:
-        return 0, 0
+    on a mismatch, a fallback, or a sample that compared nothing, or never compared one of the candidate `suites` (an empty sample must not pass)."""
     elig = [u for u in units if u[2] == "attributable"]
     if len(elig) < k:
         raise Divergence("spot-check wants %d units, only %d attributable units exist" % (k, len(elig)))
     sample = [elig[(2 * i + 1) * len(elig) // (2 * k)] for i in range(k)]
-    if len(set(u[0] for u in sample)) != k:
-        raise Divergence("spot-check sampled %d distinct units, wanted %d" % (len(set(u[0] for u in sample)), k))
-    compared = 0
+    compared, compared_by = 0, set()
     for sha, files, _kind, _deleted in sample:
         p = run_selector(root, ["--paths=" + ",".join(files)])
         if p.returncode != 0:
@@ -2354,10 +2353,12 @@ def glob_spot_check(root, rows, units, k):
                 continue   # a relevance-declined record prints no row for this diff: nothing to compare
             want = "1" if glob_existing_hit(cls, edges, files) else "0"
             if sorted(real[label]) != [want] * len(real[label]):
-                raise Divergence("diff %s: the model says %s for suite %s, the real selector says %s" % (sha[:12], want, label, ",".join(sorted(real[label]))))
+                raise Divergence("diff %s: the model says %s for suite %s, the real selector says %s" % (sha[:12], want, quote_field(label), ",".join(sorted(real[label]))))
             compared += 1
-    if compared == 0:
-        raise Divergence("spot-check compared no suite")
+            compared_by.add(label)
+    unseen = [x for x in sorted(suites) if x not in compared_by]
+    if unseen:
+        raise Divergence("spot-check never compared candidate suite %s on any sampled diff" % quote_field(unseen[0]))
     return k, compared
 
 
@@ -2371,6 +2372,8 @@ def cmd_glob_rate(a):
     not evaluable (comma or non-printable byte in a path, list over the limit) or empty count as SELECTED in the conservative reading and are excluded
     in the other; a unit touching a path absent at --base counts as selected in the conservative reading. The verdict needs both readings to agree.
     Exit 0 every row decided; 2 usage or a refused input; 3 a read failed; 4 the spot-check diverged or an internal error."""
+    if a.spot_check < 1:
+        raise ValueError("--spot-check must be at least 1: a verdict is not accepted until the model has agreed with the real selector")
     root = a.root or repo_root()
     cands, tree_suites = glob_candidates(a.candidates)
     rows = glob_selector_rows(load_rows(a.list, root))
@@ -2379,13 +2382,13 @@ def cmd_glob_rate(a):
     durs = durations_src(root)
     for suite in cands:
         if suite not in rows:
-            raise ValueError("no selector row for suite %s (a relevance-declined record prints none): refused, not counted as zero hits" % suite)
+            raise ValueError("no selector row for suite %s (a relevance-declined record prints none): refused, not counted as zero hits" % quote_field(suite))
     base_sha, units = glob_units(root, a.base, a.commits)
     total_units = len(units)
     attr = [u for u in units if u[2] == "attributable"]
     counts = Counter(u[2] for u in units)
     deleted_units = sum(1 for u in units if u[3])
-    spot_k, spot_cmp = glob_spot_check(root, rows, units, a.spot_check)
+    spot_k, spot_cmp = glob_spot_check(root, rows, units, a.spot_check, cands)
     out_rows, verdicts = [], Counter()
     for suite in sorted(cands):
         entries = sorted(cands[suite])
@@ -2394,6 +2397,8 @@ def cmd_glob_rate(a):
         complete, tfiles, tmiss = True, "-", "-"
         if suite in tree_suites:
             n, miss = glob_tree_cover(entries, edges, tracked)
+            if n == 0:
+                raise ValueError("suite %s: @tree names no `glob:head/**.ext` extension, or no tracked file carries it: the cover cannot be shown" % quote_field(suite))
             complete, tfiles, tmiss = not miss, str(n), str(len(miss))
         existing = glob_only = total = 0
         basis_cons = basis_excl = 0
@@ -2415,6 +2420,8 @@ def cmd_glob_rate(a):
         verdict, reason = v_cons if v_cons[0] == v_excl[0] else ("baselined", "readings-disagree")
         if verdict == "glob" and not edges:
             verdict, reason = "baselined", "no-candidate-set"
+        if verdict == "glob" and not (pairs.get(suite) or suite in tree_suites):
+            verdict, reason = "baselined", "no-coverage-proof"   # neither a pair list to cover nor an @tree cover: a glob would rest on nothing
         covered = "-"
         if verdict == "glob":
             miss = [p for p in pairs.get(suite, []) if not any(_edge(pt, p) for pt in edges)]
@@ -2430,7 +2437,7 @@ def cmd_glob_rate(a):
         else:
             ci = "-"
         verdicts[verdict] += 1
-        out_rows.append((suite, str(len(entries)), "-" if dur is None else str(dur), src or "missing", str(existing), str(glob_only), str(total),
+        out_rows.append((quote_field(suite), str(len(entries)), "-" if dur is None else str(dur), src or "missing", str(existing), str(glob_only), str(total),
                          str(total - existing), str(total_units), str(counts["runner"]), str(counts["not_evaluable"]), str(counts["empty"]),
                          str(deleted_units), "%d/%d" % (cons_hits, total_units), "%d/%d" % (basis_excl, len(attr)), ci, covered, tfiles, tmiss,
                          verdict, reason))
@@ -2505,7 +2512,10 @@ def main(argv):
     r.add_argument("--base", default="", help="the ref the growth rule, the baseline-state table, the cause text and the helper copy come from (default HEAD^1; meaningful in CI, where HEAD is a merge commit)")
     r.add_argument("--print-baseline", action="store_true", dest="print_baseline", help="print the baseline to stdout (every live pair when no baseline exists, else the baseline lines still live) and write nothing; refuses (exit 2) on a degraded census")
     r.add_argument("--report", default="", help="also write the full, uncapped failure text to FILE (on a verdict, on an exit-2 stop and under --print-baseline; an unwritable path costs one stderr line)")
-    gr = sub.add_parser("glob-rate", help="row 6 measurement: per candidate suite the duration (with its src) and the selection rate over the last N first-parent commits, with a verdict (read-only)")
+    gr = sub.add_parser("glob-rate", formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog="exit codes: 0 every row decided (read the verdict column: it does not mean a suite qualified); 2 usage or a refused input; 3 a read failed; 4 the spot-check diverged from the real selector, or an internal error. "
+                               "Rows file: bash scripts/test-all.sh --print-selection --paths=README.md > rows.txt (take it BEFORE any index edit). Base: git rev-parse origin/main (record it).",
+                        help="row 6 measurement: per candidate suite the duration (with its src) and the selection rate over the last N first-parent commits, with a verdict (read-only)")
     gr.add_argument("--candidates", required=True, help="TSV: suite<TAB>entry (a glob:, dir/ or file entry as spelled in the index arrays; a blank entry lists the suite with no candidate; @tree demands a complete cover of the extensions the glob entries name)")
     gr.add_argument("--out", required=True, help="directory glob-rate.tsv and glob-rate.marker are written under")
     gr.add_argument("--root", default="", help="the tree to read (default: the current checkout)")
@@ -2513,7 +2523,7 @@ def main(argv):
     gr.add_argument("--pairs", default="", help="TSV: suite<TAB>path, the baselined pairs a glob verdict must cover (a candidate set that leaves one unhit is refused)")
     gr.add_argument("--commits", type=int, default=200, help="how many first-parent commits of --base form the units (default 200)")
     gr.add_argument("--base", default="origin/main", help="the commit or ref whose first-parent history is replayed; pass the recorded SHA, not a moving ref")
-    gr.add_argument("--spot-check", type=int, default=0, dest="spot_check", help="run the REAL selector on K evenly spaced diffs and require the model to agree (exit 4 on a divergence or an empty sample)")
+    gr.add_argument("--spot-check", type=int, default=3, dest="spot_check", help="run the REAL selector on K (at least 1, default 3) evenly spaced diffs and require the model to agree on every candidate suite (exit 4 on a divergence or an empty sample)")
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
         print("replay: --chunk must be I/K with I,K >= 1", file=sys.stderr)
