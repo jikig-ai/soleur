@@ -12,7 +12,7 @@ None blocking. Detector-id contingency (forensics artifact) does not exist for t
 - Merge gate: 2026-10-26T18:00Z and 2026-10-27T06:00Z slots must both read ok before mark-ready; merge by 2026-10-27.
 - Detector id source: plan_pr artifact sentry-alert-reference-expected-<run-id>, no token read.
 - Apply convergence: sentry_alert live fidelity step on the merge-SHA apply run.
-- Re-look: enroll #10972 in the follow-through sweeper (new probe, 14-row suite), at Phase 6 step 6 before arming merge.
+- Re-look: enroll #10972 in the follow-through sweeper (new probe, mutant-justified suite of 166 assertions after the review rounds), at Phase 6 step 6 before arming merge.
 - Prose scope: .tf comment and runbook only; deferral issue for stale workflow comments.
 
 ### Components Invoked

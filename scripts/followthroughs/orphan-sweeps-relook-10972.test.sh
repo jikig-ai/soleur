@@ -88,11 +88,11 @@ calls_are() { # calls_are <expected-request-count> <label>   (reads NCALLS from 
 }
 
 # finish: the suite's final verdict, driven in-process by the instrument self-test below. The floor literal
-# sits directly above its `if` so the repo's vacuity meta-guard can construct the mutant.
+# and its `total` assignment sit directly above the `if`, the shape the repo's vacuity meta-guard slices.
 finish() {
   echo
   echo "executed assertions: $((passes + fails)) (pass=$passes fail=$fails)"
-  EXPECTED_MIN=125
+  EXPECTED_MIN=166
   total=$((passes + fails))
   if [[ "$total" -lt "$EXPECTED_MIN" ]]; then
     printf 'FATAL: only %s assertions executed (floor %s): the suite dispatched too little\n' "$total" "$EXPECTED_MIN" >&2
@@ -102,6 +102,8 @@ finish() {
   return 0
 }
 
+# Accepted survivor (unobservable by construction): deleting the nested-gate `if` itself leaves nothing in this
+# file able to notice; every other mutation of the nested gate (wrong path, no injected failure) is pinned.
 # --- instrument self-test (every verdict-owning helper must be able to say NO) --------------------
 # Each helper is driven in a subshell with a deliberately wrong expectation; its failure counter must move.
 # Reported with printf + exit, never through the helpers under test.
@@ -193,6 +195,7 @@ check "$RC" 0 "1  clean fixture: all 28 slots have an ok row"
 present "PASS" "$OUT" "1b clean run prints a PASS line"
 present "were not measured" "$OUT" "1c output states what was not measured"
 calls_are 1 "1d exactly one request sent"
+present "counts in window: ok=28" "$OUT" "1e the per-status counts are printed"
 
 run_probe "[]" 200 "$NOW_AFTER"
 check "$RC" 3 "2  empty array (zero rows) is exit 3, never 0"
@@ -223,8 +226,23 @@ check "$RC" 1 "6c a bad row exactly AT the window start is inside it (start is i
 run_probe "$(with "$CLEAN" "$(row missed $((WIN_START - 1)))")" 200 "$NOW_AFTER"
 check "$RC" 0 "6d a bad row one second before the window start is ignored"
 
-run_probe "$(with "$CLEAN" "$(row missed $B_T3)" '{"status":"failed","leak":"x","dateAdded":"2026-10-30T06:00:00Z"}')" 200 "$NOW_AFTER"
+run_probe "$(with "$CLEAN" "$(row missed $B_T3)" '{"status":"failed","leak":"'"$LEAK"'","dateAdded":"2026-10-30T06:00:00Z"}')" 200 "$NOW_AFTER"
 check "$RC" 1 "6e a bad row outranks an unrecognised status"
+
+run_probe "$(with "$(padded 72 40)" "$(row missed $B_T3)")" 200 "$NOW_AFTER"
+check "$RC" 1 "6f a bad row on a full truncated page is still a FAIL (exit 1, not 3)"
+run_probe "$(with "$(slot_rows 27)" "$(row missed $B_T3)")" 200 "$NOW_AFTER"
+check "$RC" 1 "6g a bad row with an uncovered slot is still a FAIL (exit 1, not 3)"
+run_probe "$(with "$CLEAN" "$(row missed $B_T3)" '{"status":"ok","leak":"'"$LEAK"'","dateAdded":"'"$LEAK"'"}')" 200 "$NOW_AFTER"
+check "$RC" 3 "6h an unparseable row outranks a bad row (documented order: integrity first)"
+run_probe "$(with "$CLEAN" "$(row failed $((WIN_START - 5)))" "$(row weird $((WIN_END + 5)))")" 200 "$NOW_AFTER"
+check "$RC" 0 "6i an unrecognised status outside the window is ignored"
+bad_rows=(); for k in $(seq 0 13); do bad_rows+=("$(row missed $((WIN_START + k * 3600 + 60)))"); done
+run_probe "$(with "$CLEAN" "${bad_rows[@]}")" 200 "$NOW_AFTER"
+check "$RC" 1 "6j fourteen bad rows are a FAIL"
+check "$(grep -c '^  - ' "$OUT")" 10 "6k the itemised bad-row list is capped at 10 lines (count shown in the exit slot)"
+run_probe "$(with "$CLEAN" "$(row error $B_T9)" "$(row timeout $B_T3)")" 200 "$NOW_AFTER"
+check "$(grep '^  - ' "$OUT" | head -1)" "  - timeout @ $(iso $B_T3)" "6l itemised rows are oldest first (the exit slot shows the first line)"
 
 echo "== truncation"
 run_probe "$(padded 72 40)" 200 "$NOW_AFTER"
@@ -242,6 +260,9 @@ echo "== slot coverage (distinct slots, not row count)"
 run_probe "$(slot_rows 27)" 200 "$NOW_AFTER"
 check "$RC" 3 "9  27 slots with an ok row: exit 3"
 present "1 of 28 slots have no ok check-in" "$OUT" "9b the coverage check names the count"
+run_probe "$(slot_rows 5)" 200 "$NOW_AFTER"
+check "$RC" 3 "9b2 five slots covered is exit 3"
+check "$(grep -oE '20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:]+Z' "$OUT" | wc -l | tr -d ' ')" 10 "9b3 the uncovered-slot list is capped at 10 timestamps (count shown in the exit slot)"
 DUP="$("$REAL_JQ" -n -c --argjson b "$CLEAN" '$b | .[1:] + [.[1]]')"
 run_probe "$DUP" 200 "$NOW_AFTER"
 check "$RC" 3 "9c 28 ok rows but slot 0 uncovered (a duplicate stands in): exit 3"
@@ -260,7 +281,7 @@ run_probe "$(with "$CLEAN" "$(row in_progress $((WIN_START + 7 * SLOT + 5)))")" 
 check "$RC" 0 "9j an in_progress row inside a covered slot is ignored"
 
 echo "== status vocabulary (allowlist)"
-for odd in failed 'error ' miss ERROR OK unknown; do
+for odd in failed 'error ' miss unknown; do
   run_probe "$(with "$CLEAN" "$(row "$odd" $B_T3)")" 200 "$NOW_AFTER"
   check "$RC" 3 "10 unrecognised status '$odd' is exit 3, never 0"
 done
@@ -268,12 +289,18 @@ present "does not recognise" "$OUT" "10b the vocabulary gap names itself"
 run_probe "$(with "$CLEAN" "$(row zzstatus-7q $B_T3)")" 200 "$NOW_AFTER"
 check "$RC" 3 "10c an unrecognised status word is exit 3"
 absent "zzstatus-7q" "$OUT" "10d the raw unrecognised word is never printed (closed output token set)"
-run_probe "$(with "$CLEAN" '{"leak":"x","dateAdded":"2026-10-30T06:00:00Z"}')" 200 "$NOW_AFTER"
+run_probe "$(with "$CLEAN" '{"leak":"'"$LEAK"'","dateAdded":"2026-10-30T06:00:00Z"}')" 200 "$NOW_AFTER"
 check "$RC" 3 "10e a row with no status is exit 3"
-run_probe "$(with "$CLEAN" '{"status":5,"leak":"x","dateAdded":"2026-10-30T06:00:00Z"}')" 200 "$NOW_AFTER"
+run_probe "$(with "$CLEAN" '{"status":5,"leak":"'"$LEAK"'","dateAdded":"2026-10-30T06:00:00Z"}')" 200 "$NOW_AFTER"
 check "$RC" 3 "10f a numeric status is exit 3"
-run_probe "$(with "$CLEAN" '{"status":null,"leak":"x","dateAdded":"2026-10-30T06:00:00Z"}')" 200 "$NOW_AFTER"
+run_probe "$(with "$CLEAN" '{"status":null,"leak":"'"$LEAK"'","dateAdded":"2026-10-30T06:00:00Z"}')" 200 "$NOW_AFTER"
 check "$RC" 3 "10g a null status is exit 3"
+
+run_probe "$(with "$CLEAN" "$(row MISSED $B_T3)")" 200 "$NOW_AFTER"
+check "$RC" 1 "10h an upper-case bad status is folded and read as missed (ruling D3)"
+present "  - missed @ $(iso $B_T3)" "$OUT" "10i the folded status is printed as the closed token"
+run_probe "$(with "$(slot_rows 27)" "$(row OK $((WIN_START + 27 * SLOT + 40)))")" 200 "$NOW_AFTER"
+check "$RC" 0 "10j an upper-case OK covers its slot (the ok side of the fold)"
 
 echo "== inputs, pins, clock"
 run_probe "$CLEAN" 200 "$NOW_AFTER" SENTRY_ORG=other-org
@@ -293,6 +320,14 @@ CHARSET_TOKEN='sntrys_aB3.dE4+fG5/hI6~jK7=='
 run_probe "$CLEAN" 200 "$NOW_AFTER" SENTRY_ACTIONS_RO_TOKEN="$CHARSET_TOKEN" FT_TOKEN="$CHARSET_TOKEN"
 check "$RC" 0 "12e every character of the token allowlist (_ . ~ + / = -) is accepted"
 
+i=0
+for stray in '"' ' ' $'\\' $'\t' $'\r' ';' $'\''; do
+  i=$((i + 1))
+  run_probe "$CLEAN" 200 "$NOW_AFTER" SENTRY_ACTIONS_RO_TOKEN="abc${stray}def" FT_TOKEN="abc${stray}def"
+  check "$RC" 3 "12f stray token character #$i is refused"
+  calls_are 0 "12g no request sent for stray token character #$i"
+done
+
 # xtrace with a token set → 78, and the token is not in the output
 printf '%s' "$CLEAN" > "$FIX"; : > "$CALLS"
 env -i PATH="$SHIMS:$PATH" HOME="${HOME:-/}" TMPDIR="$TMPDIR" FT_FIXTURE="$FIX" FT_STATUS=200 FT_CALLS="$CALLS" \
@@ -310,6 +345,8 @@ run_probe "$CLEAN" 200 "08"
 check "$RC" 3 "14d a leading-zero clock reading is exit 3, not a fall-through to PASS"
 run_probe "$CLEAN" 200 "abc"
 check "$RC" 3 "14e a non-numeric clock reading is exit 3"
+run_probe "$CLEAN" 200 "99999999999999999999"
+check "$RC" 3 "14f a 20-digit clock reading is exit 3 (bash arithmetic would overflow)"
 
 echo "== reads and integrity failures"
 run_probe "{\"detail\":\"$LEAK\"}" 401 "$NOW_AFTER"
@@ -328,11 +365,11 @@ run_probe "$CLEAN" 200 "$NOW_AFTER" FT_CURL_RC=7
 check "$RC" 3 "15h a failed request (curl rc 7) is exit 3"
 present "curl rc 7" "$OUT" "15i the transport failure names itself"
 
-run_probe "$(with "$CLEAN" '{"status":"ok","leak":"x","dateAdded":"not-a-date"}')" 200 "$NOW_AFTER"
+run_probe "$(with "$CLEAN" '{"status":"ok","leak":"'"$LEAK"'","dateAdded":"'"$LEAK"'"}')" 200 "$NOW_AFTER"
 check "$RC" 3 "16 a row with an unparseable timestamp is exit 3"
-run_probe "$(with "$CLEAN" '{"status":"ok","leak":"x"}')" 200 "$NOW_AFTER"
+run_probe "$(with "$CLEAN" '{"status":"ok","leak":"'"$LEAK"'"}')" 200 "$NOW_AFTER"
 check "$RC" 3 "16b a row with no timestamp is exit 3"
-run_probe "$(with "$CLEAN" '{"status":"missed","leak":"x","dateAdded":"2026-10-30T06:00:00+00:00"}')" 200 "$NOW_AFTER"
+run_probe "$(with "$CLEAN" '{"status":"missed","leak":"'"$LEAK"'","dateAdded":"2026-10-30T06:00:00+00:00"}')" 200 "$NOW_AFTER"
 check "$RC" 3 "16c a timestamp with an offset instead of Z is exit 3"
 run_probe "$(with "$CLEAN" "$(row missed $B_T3 dateCreated)")" 200 "$NOW_AFTER"
 check "$RC" 1 "16d a bad row carrying only dateCreated is read (the fallback field)"
@@ -340,14 +377,17 @@ check "$RC" 1 "16d a bad row carrying only dateCreated is read (the fallback fie
 }
 
 # --- nested gate self-test: the LAST lines of this file must turn a failed row into a nonzero exit ---------
-# A child run of this very file skips every row, records one injected failure, and must exit nonzero. Deleting
-# or neutering the final `finish` / `exit` below (which no in-process check can see) turns that child green.
+# A child run of this very file skips every row, records one injected failure, and must exit 1 and say so.
+# It proves the final `finish` / `exit $?` below are wired (neutering either turns the child green, which no
+# in-process check can see); the `fails > 0` branch of finish() itself is pinned by the in-process self-test above.
 if [[ -n "${FT_NESTED_GATE:-}" ]]; then
   fail "injected failure (nested gate self-test)"
 else
   main_rows
-  if FT_NESTED_GATE=1 "$REAL_BASH" "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
-    printf 'FATAL: nested gate self-test: a run with an injected failed assertion exited 0\n' >&2
+  child_rc=0
+  child_out=$(FT_NESTED_GATE=1 "$REAL_BASH" "${BASH_SOURCE[0]}" 2>&1) || child_rc=$?
+  if [[ "$child_rc" -ne 1 || "$child_out" != *"injected failure"* ]]; then
+    printf 'FATAL: nested gate self-test: the child run (injected failed assertion) must exit 1 and report it; got rc=%s\n' "$child_rc" >&2
     exit 1
   fi
 fi

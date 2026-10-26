@@ -17,7 +17,10 @@
 # `dateAdded` (or `dateCreated`). Exit 0 needs every bucket 0..27 to hold at least one `ok` row. A duplicate
 # `ok` row (a manual re-dispatch, a re-run) can only re-cover a bucket that already has one, so it cannot make
 # up for a slot that has none. Accepted residual: a manual re-dispatch inside a bucket whose scheduled run
-# was lost covers that bucket, because a real sweep ran and reported `ok`.
+# was lost covers that bucket, because a real sweep ran and reported `ok`. Accepted residual in the other
+# direction: a run queued in the `terraform-drift` concurrency group can start so late that its check-in lands
+# past the monitor's 60-minute margin (or a pending slot run can be replaced by a newer dispatch and never start);
+# Sentry may then record a `missed` row, and this probe's exit 1 is permanent, so the owner closes #10972 by hand.
 #
 # Exit semantics (scripts/sweep-followthroughs.sh contract):
 #   0 = PASS    no missed/timeout/error row in the window AND every one of the 28 slots has an `ok` row
@@ -31,9 +34,9 @@
 #               token, an HTTP/auth failure, an unusable clock. Never 0 and never 1.
 #   78 = refused to run under xtrace with a live credential (#7797)
 #   `in_progress` rows are ignored (not a verdict). Rows outside the window are ignored.
-#   Statuses are matched exactly (lowercase, no trimming): `ok`, `in_progress`, `missed`, `timeout`,
-#   `timed_out` (printed as `timeout`), `error`. Anything else in the window is `other` and is exit 3, because
-#   an unknown word means this probe's vocabulary has a gap, not that a slot failed.
+#   Statuses are matched after lowercasing, with no trimming (CTO ruling D3): `ok`, `in_progress`, `missed`,
+#   `timeout`, `timed_out` (printed as `timeout`), `error`. Anything else in the window is `other` and is exit 3,
+#   because an unknown word means this probe's vocabulary has a gap, not that a slot failed.
 #
 # Credential posture: ONE credential, SENTRY_ACTIONS_RO_TOKEN (the org-level read-only `actions-read-prd`
 # integration, ADR-031; rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
@@ -51,7 +54,8 @@
 #
 # PAGE LIMIT: one request, per_page=100, no pagination. The newest 100 rows cover about 50 days at two
 # slots a day, so the window stays reachable for about 36 days after it closes; after that the read is a
-# truncation (exit 3) and the owner re-reads by hand. The reply is capped at 5 MiB (curl --max-filesize).
+# truncation (exit 3) and the owner re-reads by hand. The reply is capped at 5 MiB where curl enforces
+# --max-filesize for a body of unknown size (curl 8.4 and later); on older curl, --max-time 30 is the bound.
 #
 # RETIREMENT: when #10972 closes, delete this probe, its suite orphan-sweeps-relook-10972.test.sh, the
 # run_suite line for it in scripts/test-all.sh, its rows in the two generated manifests
@@ -140,7 +144,7 @@ RESULT=$(jq -s -c --argjson ws "$WIN_START" --argjson we "$WIN_END" --argjson sl
   --argjson slots "$SLOT_FLOOR" '
   def ts: (.dateAdded // .dateCreated // null)
           | if type == "string" then (sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch null) else null end;
-  def st: (.status | if type == "string" then . else null end) as $s
+  def st: (.status | if type == "string" then ascii_downcase else null end) as $s
           | if $s == "ok" or $s == "in_progress" or $s == "missed" or $s == "timeout" or $s == "error" then $s
             elif $s == "timed_out" then "timeout"
             else "other" end;

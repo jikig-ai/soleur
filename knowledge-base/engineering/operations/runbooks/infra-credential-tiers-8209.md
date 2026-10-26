@@ -276,7 +276,7 @@ posts one Sentry check-in (slug `scheduled-orphan-sweeps`, `ok` only when both s
 slot where either sweep is not `success`, so a failed checkout, a cancel or a timeout now reaches a person too. Stated residuals:
 the monitor was created unrouted under the two-PR rule and is routed through `sentry_alert.cron_monitor_failure` by the routing follow-up
 (Ref #10972, written 2026-10-26), so a missed or failed slot also raises a Sentry alert once the Sentry apply for that change has converged (the binding is
-checked by the apply's own fidelity step, which must read `success` on the apply run for the merge commit; delivery of the alert has not been measured), while
+checked by the apply's `sentry_alert live fidelity` step, and that step and the `Terraform apply` step must both read `success` on the apply run for the merge commit; delivery of the alert has not been measured), while
 the aggregator email and the sweeps' own emails share one mail key; if the aggregator itself never runs nothing is sent from it; an unproven identity suppresses the orphan listing
 for that run; `ok` means job success and not delivery (a dead scratch-config filer plus a rejected email in one run still reads `ok`);
 and the sole-copy job still has no check-in (#10430).
