@@ -239,6 +239,8 @@ const FS_PROBE = {
 // until the next successful open_document, so nothing runs (or saves) against a
 // document that is not the one the caller asked for. Cleared ONLY on success.
 let openFailure = null;
+const OPEN_FAILED_NEXT =
+  "Next step: open_document a different .pen path (the failed file was not modified), or restore it from version control. Do not delete it to bypass this.";
 
 class PencilProcess {
   constructor() {
@@ -265,13 +267,14 @@ class PencilProcess {
 
   // Called only from inside the command queue, so spawns are serialized.
   async ensureAlive() {
-    if (openFailure) throw new Error(`open failed: ${openFailure}`);
+    if (openFailure) throw new Error(`open failed: ${openFailure}\n${OPEN_FAILED_NEXT}`);
     if (this.child && this.ready) return;
     if (this.child) await this.kill(); // a half-started child is never reused
     if (this.outputFile) {
       // Respawn: no explicit input, so planSpawn reloads the saved file and a
-      // template can never overwrite saved edits.
-      await this.spawn(this.outputFile);
+      // template can never overwrite saved edits. Before the first save it
+      // falls back to the template the target was opened from.
+      await this.spawn(this.outputFile, null, this.lastInFile);
       return;
     }
     // No document opened yet: a private scratch document, so tools that need
@@ -283,11 +286,15 @@ class PencilProcess {
   }
 
   // `explicitInFile` is the caller's template (open_document `inputPath`).
-  async spawn(outFile, explicitInFile = null) {
+  async spawn(outFile, explicitInFile = null, resumeInFile = null) {
     const binary = process.env.PENCIL_BINARY || findPencilBinary();
+    if (process.env.PENCIL_BINARY && !isAbsolute(process.env.PENCIL_BINARY)) {
+      throw new Error("PENCIL_BINARY must be an absolute path");
+    }
     const { inFile } = planSpawn({
       outFile,
       initialInFile: explicitInFile,
+      resumeInFile,
       probe: FS_PROBE,
     });
     const args = ["interactive", "--out", outFile];
@@ -390,10 +397,11 @@ class PencilProcess {
       throw err;
     }
     // If stdout response is empty but stderr has content, use stderr
+    // Every reply leaves here, so one redaction covers every sink that follows.
     if (!raw && this.stderrBuffer) {
-      return this.stderrBuffer;
+      return redactKey(this.stderrBuffer);
     }
-    return raw;
+    return redactKey(raw);
   }
 
   waitForPrompt(timeoutMs = 30000) {
@@ -559,7 +567,7 @@ function registerTool(name, schema, handler, { allowWhenOpenFailed = false, desc
   const callback = async (params) => {
     if (openFailure && !allowWhenOpenFailed) {
       return errorResult(
-        `open failed: ${openFailure}\nNo tool runs until open_document succeeds on a valid .pen file.`
+        `open failed: ${openFailure}\nNo tool runs until open_document succeeds on a valid .pen file. ${OPEN_FAILED_NEXT}`
       );
     }
     try {
@@ -660,9 +668,16 @@ registerReadOnlyTool("batch_get", {
   includePathGeometry: z.boolean().optional(),
 });
 
-registerReadOnlyTool("get_editor_state", {
-  include_schema: z.boolean(),
-});
+registerReadOnlyTool(
+  "get_editor_state",
+  {
+    include_schema: z.boolean(),
+  },
+  {
+    description:
+      "Editor state of the open document. Pass { include_schema: true } once to get the full batch_design operation grammar.",
+  }
+);
 
 registerReadOnlyTool("get_guidelines", {
   category: z.string().optional(),
@@ -882,15 +897,18 @@ registerTool(
           await pencilProcess.kill();
           process.stderr.write(`[pencil-adapter] open failed: ${openFailure}\n`);
           return errorResult(
-            `open failed: ${openFailure}\nNo other tool runs until open_document succeeds. ` +
-              "Next step: open_document a different .pen path (this file was not modified), or restore it from version control. Do not delete it to bypass this."
+            `open failed: ${openFailure}\nNo other tool runs until open_document succeeds. ${OPEN_FAILED_NEXT}`
           );
         }
       },
       { ensure: false }
     );
   },
-  { allowWhenOpenFailed: true }
+  {
+    allowWhenOpenFailed: true,
+    description:
+      "Open (or create) a .pen document. Reports how many top-level nodes loaded. A failure leaves the file untouched and refuses every other tool until open_document succeeds; recover by opening a different path.",
+  }
 );
 
 registerTool("save", {}, async () => {

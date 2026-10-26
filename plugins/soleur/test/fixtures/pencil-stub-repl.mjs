@@ -16,6 +16,7 @@
 //     bigBatchGet    pad batch_get() past 64 KiB (a large design)
 //     junkBatchGet   batch_get() answers text that is not a node list
 //     failSave       save() answers an engine error and writes nothing
+//     echoKey        batch_design answers an error that echoes PENCIL_CLI_KEY
 //
 // The signature whitelist below is the second of three copies of the 0.2.9
 // surface (module table, this stub, the live --help). It exits 64 on an
@@ -144,6 +145,7 @@ rl.on("line", (line) => {
   }
   if (tool === "batch_design") {
     const input = String(args.input ?? "");
+    if (flags().echoKey) return reply(`Error: auth failed for key ${process.env.PENCIL_CLI_KEY}`);
     if (input.includes("BADOP")) return reply("Error: invalid operation BADOP");
     const inserts = (input.match(/\bInsert\(|\bI\(/g) ?? []).length;
     const out = [];

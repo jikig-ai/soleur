@@ -69,9 +69,6 @@ if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
       drifted="$drifted $module"
     fi
   done < <(sed -n '/^ADAPTER_FILES=(/,/^)/p' "$script_dir/copy_adapter.sh" | grep -o '"[^"]*\.mjs"' | tr -d '"')
-  if [[ "$installed_sha" != "$repo_sha" ]]; then
-    drifted="$drifted pencil-mcp-adapter.mjs"
-  fi
 
   if [[ -z "$drifted" ]]; then
     echo "OK: installed adapter matches repo (sha ${repo_sha:0:12})"

@@ -112,9 +112,14 @@ export function formatReplCommand(toolName, params) {
 // before this, `open_document({ filePath })` started an empty document at
 // `--out` and the next save replaced the file with 96 bytes.
 //
+// `resumeInFile` is the template a previous spawn of the SAME target loaded
+// from. It applies only while `outFile` holds nothing saved: a child that dies
+// before the first save would otherwise respawn empty and silently drop the
+// template. Saved edits in `outFile` always win over it.
+//
 // `probe` is `{ exists(path): boolean, size(path): number }`, injected so this
 // stays pure.
-export function planSpawn({ outFile, initialInFile, probe }) {
+export function planSpawn({ outFile, initialInFile, resumeInFile = null, probe }) {
   if (initialInFile) {
     if (!probe.exists(initialInFile)) {
       throw new Error(`Input file not found: ${initialInFile}`);
@@ -123,6 +128,9 @@ export function planSpawn({ outFile, initialInFile, probe }) {
   }
   if (probe.exists(outFile) && probe.size(outFile) > 0) {
     return { inFile: outFile };
+  }
+  if (resumeInFile && probe.exists(resumeInFile)) {
+    return { inFile: resumeInFile };
   }
   return { inFile: null };
 }

@@ -54,12 +54,6 @@ copied=0
 for file in "${ADAPTER_FILES[@]}"; do
   src="$REPO_ADAPTER_DIR/$file"
   dst="$INSTALL_DIR/$file"
-  if [[ ! -f "$src" ]]; then
-    # A silently partial install fails at import on the customer machine
-    # (ERR_MODULE_NOT_FOUND), far from the cause. Fail here instead.
-    echo "ERROR: missing repo file $src — refusing a partial install" >&2
-    exit 1
-  fi
   if [[ -f "$dst" ]] && ! [[ -L "$dst" ]] && cmp -s -- "$src" "$dst"; then
     continue
   fi

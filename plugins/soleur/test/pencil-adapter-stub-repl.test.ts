@@ -101,6 +101,7 @@ describe("open_document on an existing file (AC2)", () => {
     const next = await s.call("batch_get", {});
     expect(next.isError).toBe(true);
     expect(next.text).toMatch(/open failed/i);
+    expect(next.text).toMatch(/Next step: open_document a different \.pen path/);
     expect(readFileSync(f, "utf8")).toBe(before);
     expect(logOf(f).some((l) => l === "save()")).toBe(false);
   }, 60_000);
@@ -171,9 +172,9 @@ describe("removed tools (AC5)", () => {
     const s = await session();
     await s.call("open_document", { filePath: f });
     for (const [tool, args, hint] of [
-      ["set_variables", { variables: { a: "#fff" } }, /SetVariables\(/],
-      ["find_empty_space_on_canvas", { direction: "right", height: 1, width: 1, padding: 1 }, /FindEmptySpace\(/],
-      ["get_style_guide_tags", {}, /get_guidelines/],
+      ["set_variables", { variables: { a: "#fff" } }, /SetVariables\(.*include_schema: true/],
+      ["find_empty_space_on_canvas", { direction: "right", height: 1, width: 1, padding: 1 }, /FindEmptySpace\(.*include_schema: true/],
+      ["get_style_guide_tags", {}, /get_guidelines\(\) with no arguments/],
     ] as const) {
       const r = await s.call(tool, args as any);
       expect(r.isError).toBe(true);
@@ -205,6 +206,23 @@ describe("crash respawn (AC2)", () => {
     const args = logOf(f).filter((l) => l.startsWith("ARGS"));
     expect(args.length).toBe(2);
     expect(args[1]).toBe(`ARGS interactive --out ${f} --in ${f}`);
+  }, 60_000);
+
+  test("a crash before the first save respawns from the template, not an empty document", async () => {
+    const d = caseDir("respawn-before-save");
+    const tpl = join(d, "tpl.pen");
+    const f = join(d, "a.pen");
+    writeFileSync(tpl, pen(2));
+    const s = await session();
+    expect((await s.call("open_document", { filePath: f, inputPath: tpl })).isError).toBe(false);
+    expect(existsSync(f)).toBe(false); // nothing saved yet
+    process.kill(Number(readFileSync(`${f}.pid`, "utf8")), "SIGKILL");
+    await new Promise((r) => setTimeout(r, 300));
+    const g = await s.call("batch_get", {});
+    expect(g.isError).toBe(false);
+    expect(JSON.parse(g.text).nodes.length).toBe(2);
+    const args = logOf(f).filter((l) => l.startsWith("ARGS"));
+    expect(args[1]).toBe(`ARGS interactive --out ${f} --in ${tpl}`);
   }, 60_000);
 });
 
@@ -523,7 +541,30 @@ describe("registered tools (review round)", () => {
   }, 60_000);
 });
 
+describe("credential redaction (review round)", () => {
+  test("an engine reply that echoes the key never reaches the tool result", async () => {
+    const f = join(caseDir("echo-key"), "a.pen");
+    const s = await session();
+    expect((await s.call("open_document", { filePath: f })).isError).toBe(false);
+    writeFileSync(`${f}.flags`, JSON.stringify({ echoKey: true }));
+    const r = await s.call("batch_design", { operations: 'a=Insert(document,{type:"frame"})' });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("<redacted>");
+    expect(r.text).not.toContain("stub-key");
+    expect(s.stderr()).not.toContain("stub-key");
+  }, 60_000);
+});
+
 describe("binary resolution (review round)", () => {
+  test("a relative PENCIL_BINARY is refused", async () => {
+    const d = caseDir("relative-binary");
+    const s = await connectAdapter({ installDir, binary: "relative/pencil.js", cwd: d });
+    sessions.push(s);
+    const r = await s.call("open_document", { filePath: join(d, "a.pen") });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/PENCIL_BINARY must be an absolute path/);
+  }, 60_000);
+
   test("with no pencil on PATH the adapter errors; it never runs ./pencil.js from the working directory", async () => {
     const d = caseDir("no-binary");
     const project = join(d, "project");

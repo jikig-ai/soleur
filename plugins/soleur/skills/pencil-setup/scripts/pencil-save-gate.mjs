@@ -3,7 +3,7 @@
 // importing the adapter.
 //
 // Why this exists: the adapter previously called save() unconditionally
-// after every mutating op (batch_design, open_document, set_variables,
+// after every mutating op (batch_design, open_document,
 // etc.). When a mutation errored (auth failure, invalid property), the
 // follow-up save() still ran and wrote a 0-byte or stale .pen file to
 // disk. The caller saw a successful save but no real content — the
@@ -125,7 +125,7 @@ export function refusalMessage({ file, source, diskCount, memoryCount, memoryRea
   const lines = [`REFUSED save: ${file} was not modified.`];
   if (diskCount === DISK_UNRECOGNIZED) {
     lines.push(
-      `It exists but is not a recognizable .pen document${diskReason ? ` (${diskReason})` : ""}: unparseable JSON, a byte-order mark, git conflict markers, or not a Pencil file. The engine would load it as an empty document and the save would destroy content you may still be able to recover.`,
+      `It exists but is not a recognizable .pen document${diskReason ? ` (${diskReason})` : ""}: unparseable JSON, git conflict markers, or not a Pencil file. The engine would load it as an empty document and the save would destroy content you may still be able to recover.`,
       "Next step: open_document a new file path and continue the design there. Do not delete or recreate the file to bypass this check."
     );
   } else if (memoryCount === null || memoryCount === undefined) {

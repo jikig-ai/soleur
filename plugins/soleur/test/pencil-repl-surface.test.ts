@@ -183,4 +183,20 @@ describe("planSpawn", () => {
       planSpawn({ outFile: "/d/new.pen", initialInFile: null, probe: probeOf({ "/d/new.pen": 700, "/t/tpl.pen": 300 }) })
     ).toEqual({ inFile: "/d/new.pen" });
   });
+
+  test("a respawn before the first save falls back to the template; saved edits still win", () => {
+    const resume = "/t/tpl.pen";
+    expect(
+      planSpawn({ outFile: "/d/new.pen", initialInFile: null, resumeInFile: resume, probe: probeOf({ "/t/tpl.pen": 300 }) })
+    ).toEqual({ inFile: resume });
+    expect(
+      planSpawn({ outFile: "/d/new.pen", initialInFile: null, resumeInFile: resume, probe: probeOf({ "/d/new.pen": 0, "/t/tpl.pen": 300 }) })
+    ).toEqual({ inFile: resume });
+    expect(
+      planSpawn({ outFile: "/d/new.pen", initialInFile: null, resumeInFile: resume, probe: probeOf({ "/d/new.pen": 700, "/t/tpl.pen": 300 }) })
+    ).toEqual({ inFile: "/d/new.pen" });
+    expect(
+      planSpawn({ outFile: "/d/new.pen", initialInFile: null, resumeInFile: resume, probe: probeOf({}) })
+    ).toEqual({ inFile: null });
+  });
 });
