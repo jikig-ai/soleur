@@ -5912,6 +5912,9 @@ if want_scripts; then
   # fake gh (trusted-verdict lib) and an argv-asserting fake betterstack-query.sh: the seven Guard 2 mutation rows, the two
   # harness rows, the anchor trust rows, and per-check deletion mutants of the probe copy.
   run_suite "scripts/inngest-tls-soak-10136" bash scripts/followthroughs/inngest-tls-soak-10136.test.sh
+  # #11218 owner-ask probe for A5/A6 of the Inngest TLS arc (#10136). Notify-only (never exits 0 or 1): drives the 7-row
+  # decision table through a gh shim and the REAL trusted-verdict lib (untrusted-author and fenced-anchor rows included).
+  run_suite "scripts/inngest-a5-a6-owner-ask-10136" bash scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes

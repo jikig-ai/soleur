@@ -1427,6 +1427,8 @@ See [references/key-principles.md](${CLAUDE_PLUGIN_ROOT}/skills/work/references/
 
 - When changing harness-owned commands, test commands extracted from the actual harness registries across supported repository layouts; a copied helper test alone does not verify registration wiring.
 
+- **Run `git ls-files` ratchets after `git add`** (#11207).
+
 - **A sibling sweep is done when the SHAPE LISTS that drive the guards match, not when the guards match.** When a new guard joins an existing one (a `transitions` check beside a `sub_steps` check), diff the two enumerations beneath them — the fixture rows, the FATAL modes the message names, the shapes the suite drives — line for line. Parallel-looking guard bodies over unequal shape lists ship one side container-only. **Why:** #8382 — `transitions` asserted the container while `sub_steps` asserted members; the suite drove 5 shapes vs 2. See `knowledge-base/project/learnings/2026-09-21-a-conflict-starved-merge-ref-reads-as-ci-never-ran.md`.
 
 - **A claim about a platform's runtime semantics is a measurement you have not taken yet — take it
