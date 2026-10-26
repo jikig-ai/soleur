@@ -597,6 +597,7 @@ tests/scripts/git-data-birth-readiness-gate	159595	measured
 tests/scripts/git-data-boot-signal-poll	2829	measured
 tests/scripts/git-data-host-birth-gate	20765	measured
 tests/scripts/git-data-host-replace-gate	2649	measured
+tests/scripts/git-data-plaintext-destroy-gate	1200	floor
 tests/scripts/git-data-root-key-arm	5960	measured
 tests/scripts/git-data-root-token-census	22452	measured
 tests/scripts/git-data-rung2-evidence-capture	14744	measured
