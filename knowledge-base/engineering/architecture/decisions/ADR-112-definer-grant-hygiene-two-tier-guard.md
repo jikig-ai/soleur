@@ -6,7 +6,7 @@ amends: [ADR-101, ADR-111]
 supersedes: none
 issue: 6328
 related: [6306, 6318, 6256, 6332]
-related_adrs: [ADR-101, ADR-111]
+related_adrs: [ADR-101, ADR-111, ADR-303]
 brand_survival_threshold: aggregate pattern
 ---
 
