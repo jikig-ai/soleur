@@ -218,7 +218,7 @@ echo "-- consumption census (derived site set, not a member list) --"
 #     class; `rtk git --no-verify` already matches via the space, pre-fragment.
 #   incidents.test.sh:228/234/240 — test-internal assertion literals inside
 #     strip_command_bodies cases (fixture text, not a gate pattern).
-#   pre-closing-technical-fork-gate.test.sh:666 — a stderr-line regex
+#   pre-closing-technical-fork-gate.test.sh:846 — a stderr-line regex
 #     `(^|: )line [0-9]+:`; `rm ` inside `arm ` trips candidacy — not a
 #     command boundary.
 #   resolve-regenerable-conflicts.test.sh:719 — `_PUSH_RE` `[^-[:alnum:]]`
@@ -244,7 +244,7 @@ EXEMPTIONS=(
   ".claude/hooks/lib/incidents.sh:316"
   ".claude/hooks/lib/incidents.sh:321"
   ".claude/hooks/incidents.test.sh:228"
-  ".claude/hooks/pre-closing-technical-fork-gate.test.sh:666"
+  ".claude/hooks/pre-closing-technical-fork-gate.test.sh:846"
   ".claude/hooks/incidents.test.sh:234"
   ".claude/hooks/incidents.test.sh:240"
   "plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh:719"
