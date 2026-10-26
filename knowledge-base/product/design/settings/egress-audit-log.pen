@@ -1,0 +1,16 @@
+{
+  "version": "2.18",
+  "variables": {
+    "bg": { "type": "color", "value": "#0A0A0A" },
+    "surface": { "type": "color", "value": "#141414" },
+    "inset": { "type": "color", "value": "#1A1A1A" },
+    "border": { "type": "color", "value": "#2A2A2A" },
+    "gold": { "type": "color", "value": "#C9A962" },
+    "text-primary": { "type": "color", "value": "#FFFFFF" },
+    "text-secondary": { "type": "color", "value": "#848484" },
+    "text-muted": { "type": "color", "value": "#6A6A6A" },
+    "track-off": { "type": "color", "value": "#1F1F1F" },
+    "font": { "type": "string", "value": "Inter" }
+  },
+  "children": []
+}
