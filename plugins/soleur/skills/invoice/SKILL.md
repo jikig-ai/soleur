@@ -1,6 +1,6 @@
 ---
 name: invoice
-description: "This skill should be used when the founder wants to get paid through Stripe: list who owes them, send an invoice behind a human-approval preview, or chase an overdue one. Test-mode only."
+description: "This skill should be used when the founder wants to get paid through their own Stripe: list who owes them, create and send an invoice behind a human-approval preview, or chase an overdue one. Test-mode only."
 allowed-tools:
   - mcp__plugin_soleur_stripe__get_stripe_account_info
   - mcp__plugin_soleur_stripe__stripe_api_read
