@@ -1,6 +1,6 @@
 suite	F	outcome	reason	accept_rows	commits_90d_F	index_entries_of_F	chain	extra_drained
 .claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/scripts/delegation-verify.test.sh	held-pr5	CTO row 2	-	1	0	-	-
-.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/boundary-prefix.test.sh	held-pr5	CTO row 2	-	4	0	-	-
+.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/boundary-prefix.test.sh	held-pr5	CTO row 2	-	5	0	-	-
 .claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/ci-pr-affected-preactivation.test.sh	held-pr5	CTO row 2	-	1	0	-	-
 .claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/deploy-arm-mutations.sh	held-pr5	CTO row 2	-	1	0	-	-
 .claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/deploy-arm.test.sh	held-pr5	CTO row 2	-	2	0	-	-
@@ -40,7 +40,7 @@ scripts/betterstack-emitter-read	scripts/check-deploy-script-parity.sh	held-pr5	
 scripts/betterstack-emitter-read	scripts/cutover-inngest.sh	held-pr5	PR4d not eligible: PR4c declared 9 edges, below the 10 of CTO row 3; no recorder evidence was taken (past the plan's ascending cut)	-	31	1	-	-
 scripts/betterstack-emitter-read	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	held-pr5	PR4d not eligible: PR4c declared 9 edges, below the 10 of CTO row 3; no recorder evidence was taken (past the plan's ascending cut)	-	4	0	-	-
 scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rehearsal-evidence.sh	held-pr5	PR4d not eligible: PR4c declared 9 edges, below the 10 of CTO row 3; no recorder evidence was taken (past the plan's ascending cut)	-	1	0	-	-
-scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rung2-evidence-capture.sh	held-pr5	PR4d not eligible: PR4c declared 9 edges, below the 10 of CTO row 3; no recorder evidence was taken (past the plan's ascending cut)	-	15	1	-	-
+scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rung2-evidence-capture.sh	held-pr5	PR4d not eligible: PR4c declared 9 edges, below the 10 of CTO row 3; no recorder evidence was taken (past the plan's ascending cut)	-	15	0	-	-
 scripts/betterstack-emitter-read	scripts/followthroughs/inngest-soak-6178.sh	held-pr5	PR4d not eligible: PR4c declared 9 edges, below the 10 of CTO row 3; no recorder evidence was taken (past the plan's ascending cut)	-	4	0	-	-
 scripts/betterstack-emitter-read	scripts/followthroughs/registry-clientip-alert-7530.sh	held-pr5	PR4d not eligible: PR4c declared 9 edges, below the 10 of CTO row 3; no recorder evidence was taken (past the plan's ascending cut)	-	2	1	-	-
 scripts/betterstack-emitter-read	scripts/followthroughs/registry-htpasswd-stdin-10119.sh	held-pr5	PR4d not eligible: PR4c declared 9 edges, below the 10 of CTO row 3; no recorder evidence was taken (past the plan's ascending cut)	-	1	0	-	-
@@ -70,9 +70,9 @@ apps/cla-evidence/test/ccla-add.test.sh	apps/web-platform/scripts/cla-evidence/c
 plugins/soleur/scripts/precommit-guard.test.sh	.claude/hooks/guardrails.sh	held-hot	held-hot	-	13	1	-	-
 plugins/soleur/skills/incident/test/redact-sentinel.test.sh	apps/web-platform/test/plugin-root-anchoring.test.ts	held-hot	F has 11 commits in 90 days; round-1 trial revealed 10 pairs, code lines in a file the suite only greps (redact-sentinel.test.sh:879-883), recorder contaminated, so the three conditions of 'code line in a file read only as text' cannot be shown	-	11	0	-	-
 plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/brand-hex-commit-gate.sh	declare	awk-scanned by the hook census (boundary-prefix.test.sh:285-299), opened in both recordings	1	4	1	B	0
-plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/git-commit-secret-scan.sh	declare	same scan; 8 accept rows (limit 10)	8	4	1	B	0
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/git-commit-secret-scan.sh	declare	same scan; 10 accept rows after the merge of origin/main 39ba94781f (limit: more than 10 holds)	10	5	2	B	0
 plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/guardrails.sh	held-hot	F and mention-line file guardrails.sh has 13 commits in 90 days and the edge needs accept rows	-	13	1	-	-
-plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/lib/incidents.sh	declare	same scan	1	4	5	B	0
+plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/lib/incidents.sh	declare	same scan	1	5	5	B	0
 plugins/soleur/test/boundary-prefix.test.sh	.claude/hooks/pre-closing-technical-fork-gate.test.sh	declare	same scan	1	3	1	B	0
 plugins/soleur/test/gdpr-gate-self-test.test.sh	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts	declare	stat test at gdpr-gate-self-test.test.sh:140; recorder reliable, F not opened x2	2	5	2	A	0
 plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/rule-metrics-aggregate.sh	held-unsure	bulk-reader	-	10	1	-	-
@@ -80,7 +80,7 @@ plugins/soleur/test/net-issue-flow.test.sh	scripts/rule-metrics-aggregate.sh	hel
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/affected-tests.sh	held-unsure	recorder-unreliable-2: recorder contaminated	-	1	1	-	-
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh	held-unsure	recorder-unreliable-2: recorder contaminated	-	9	0	-	-
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js	held-unsure	recorder-unreliable-2: recorder contaminated	-	6	0	-	-
-plugins/soleur/test/required-checks-canonical-parity.test.sh	.claude/hooks/git-commit-secret-scan.sh	held-brittle	held-brittle	-	4	1	-	-
+plugins/soleur/test/required-checks-canonical-parity.test.sh	.claude/hooks/git-commit-secret-scan.sh	held-brittle	held-brittle	-	5	2	-	-
 plugins/soleur/test/required-checks-merge-group-coverage.test.sh	tests/scripts/test-audit-ruleset-bypass.sh	held-brittle	round-1 trial: 31 boundary lines (more than 10 accept rows per edge); the suite reads the file as text only, recorder: 13 of 14 pairs not opened	-	7	0	-	-
 scripts/battery-tag-authorship	.github/scripts/test/test-vinngest-digest-freshness.sh	held-pr5	bulk-reader: 1596 files opened by the recorder	-	1	0	-	-
 scripts/battery-tag-authorship	apps/web-platform/infra/run-registered-suites.sh	held-pr5	bulk-reader: 1596 files opened by the recorder	-	31	1	-	-
@@ -94,12 +94,12 @@ scripts/followthrough-varq-ban	scripts/betterstack-query.sh	held-unsure	declared
 scripts/followthrough-varq-ban	scripts/sweep-followthroughs.sh	held-unsure	declared-F-never-opened-2: same git ls-files membership check	-	10	0	-	-
 scripts/followthroughs/ccla-representative-icla-7922	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts	declare	suite builds and runs a program importing the gate (ccla-representative-icla-7922.test.sh:328,1179); recorder rc=1, static proof	2	2	1	A	0
 scripts/followthroughs/t5-skip-persistence-bound-7510	apps/web-platform/infra/run-registered-suites.sh	held-hot	F has 31 commits in 90 days and 16 of 18 revealed pairs are mentions on F itself (accept rows on a hot file)	-	31	1	-	-
-scripts/git-data-reboot-evidence-landed-8210	tests/scripts/lib/git-data-birth-readiness-gate.sh	held-hot	held-hot	-	17	1	-	-
+scripts/git-data-reboot-evidence-landed-8210	tests/scripts/lib/git-data-birth-readiness-gate.sh	held-hot	held-hot	-	16	1	-	-
 scripts/tmpfs-guard	plugins/soleur/scripts/lib/tmp-classify.sh	declare	tmpfs-guard.test.sh runs tmpfs-guard.sh (:309), which sources the library (tmpfs-guard.sh:176-178); recorder rc=127, static proof	6	5	5	A	0
-tests/scripts/betterstack-roundtrip-latency	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	held-hot	chain: real read betterstack-query.sh (9 commits) reveals mentions on a hot file	-	4	0	-	-
-tests/scripts/git-data-birth-readiness-gate	.claude/hooks/grep-q-pipe-guard.test.sh	held-pr5	CTO row 2 / PR4b row 3 (151 pairs, above the 60 per-edge ceiling)	-	53	1	-	-
-tests/scripts/git-data-rung2-evidence-capture	scripts/betterstack-query.sh	declare	one arm runs the real transport under a shimmed curl (test-git-data-rung2-evidence-capture.sh:1038+)	4	8	5	A	0
-tests/scripts/git-data-rung2-evidence-capture	scripts/followthroughs/git-data-rung2-evidence-capture.sh	declare	the SUT (test-git-data-rung2-evidence-capture.sh:22); hot-F exception: 15 commits x 1 declaring suite = 15 <= 72, every revealed pair a real read, zero accept rows	0	15	1	A	0
+tests/scripts/betterstack-roundtrip-latency	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	held-hot	carried from PR4b: its chain reveals mentions on betterstack-query.sh, which had 9 commits in 90 days at PR4b and has 8 today (a window roll); the hold is carried forward and not re-decided, PR5 may reopen it	-	4	0	-	-
+tests/scripts/git-data-birth-readiness-gate	.claude/hooks/grep-q-pipe-guard.test.sh	held-pr5	CTO row 2 / PR4b row 3 (151 pairs, above the 60 per-edge ceiling)	-	54	1	-	-
+tests/scripts/git-data-rung2-evidence-capture	scripts/betterstack-query.sh	declare	one arm runs the real transport under a shimmed curl (test-git-data-rung2-evidence-capture.sh:1038+)	3	8	5	A	0
+tests/scripts/git-data-rung2-evidence-capture	scripts/followthroughs/git-data-rung2-evidence-capture.sh	held-unsure	real-read-unproven: the SUT is executed, but its revealed pair cloud-init-git-data.yml is only the SUT default (git-data-rung2-evidence-capture.sh:126) and every suite arm passes --cloud-init with a fixture, so the pair is not a real read and an accept row would sit on a hot file (15 commits); found at review (security-sentinel, user-impact-reviewer), edge dropped	-	15	0	-	-
 tests/scripts/inngest-host-dark-gate	scripts/cutover-inngest.sh	held-hot	held-hot	-	31	1	-	-
 tests/scripts/no-tofu-ssh-mutation	apps/web-platform/infra/infra-config-gate.test.sh	held-unsure	bulk-reader	-	7	0	-	-
 tests/scripts/zot-log-channel-probe	scripts/betterstack-query.sh	held-unsure	declared-F-never-opened-2: the suite names the script only in comments and models it with a stub	-	8	5	-	-

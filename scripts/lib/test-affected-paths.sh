@@ -1044,13 +1044,10 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
 # tests/scripts/git-data-rung2-evidence-capture — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
-  "apps/web-platform/infra/cloud-init-git-data.yml"
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "scripts/betterstack-ingest-probe.sh"
   "scripts/betterstack-query.sh"
   "scripts/compound-promote.test.sh"
-  "scripts/followthroughs/git-data-rung2-evidence-capture.sh"
-  "scripts/lib/betterstack-absence.sh"
   "scripts/lib/betterstack-sources.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-issue.sh"

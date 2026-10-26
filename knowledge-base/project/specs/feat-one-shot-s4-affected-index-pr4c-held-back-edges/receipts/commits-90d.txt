@@ -1,4 +1,5 @@
-# git log --since=90.days --oneline origin/main -- F | wc -l, measured 2026-10-26T07:41Z on origin/main 81192540bf
+# git log --since=90.days --oneline origin/main -- F | wc -l; recomputed 2026-10-26T09:44Z on origin/main 39ba94781f after the review-time merge (the first pass at 81192540bf is superseded). Hot means more than 8.
+16	apps/web-platform/infra/cloud-init-git-data.yml
 7	apps/web-platform/infra/infra-config-gate.test.sh
 5	apps/web-platform/infra/push-infra-config.sh
 31	apps/web-platform/infra/run-registered-suites.sh
@@ -9,11 +10,15 @@
 11	apps/web-platform/test/plugin-root-anchoring.test.ts
 4	.claude/hooks/brand-hex-commit-gate.sh
 3	.claude/hooks/brand-hex-commit-gate.test.sh
-4	.claude/hooks/git-commit-secret-scan.sh
-53	.claude/hooks/grep-q-pipe-guard.test.sh
+5	.claude/hooks/git-commit-secret-scan.sh
+54	.claude/hooks/grep-q-pipe-guard.test.sh
 13	.claude/hooks/guardrails.sh
-4	.claude/hooks/lib/incidents.sh
+1	.claude/hooks/lib/commit-index-sim.sh
+2	.claude/hooks/lib/commit-target-roots.sh
+5	.claude/hooks/lib/incidents.sh
+3	.claude/hooks/lib/technical-fork-cues.sh
 3	.claude/hooks/phase-surface-hint.test.sh
+2	.claude/hooks/pre-closing-technical-fork-gate.sh
 3	.claude/hooks/pre-closing-technical-fork-gate.test.sh
 14	.claude/hooks/pre-merge-rebase.sh
 5	.claude/hooks/prod-write-defer-gate.test.sh
@@ -28,7 +33,7 @@
 9	plugins/soleur/scripts/grok-pre-push-gate.sh
 5	plugins/soleur/scripts/lib/tmp-classify.sh
 6	plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js
-4	plugins/soleur/test/boundary-prefix.test.sh
+5	plugins/soleur/test/boundary-prefix.test.sh
 8	plugins/soleur/test/ci-e2e-skip-anchors.test.sh
 1	plugins/soleur/test/ci-pr-affected-preactivation.test.sh
 9	plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh
@@ -50,6 +55,7 @@
 2	plugins/soleur/test/technical-ruling-gate.test.sh
 3	scripts/actions-queue-health.test.sh
 2	scripts/battery-ref-guard.test.sh
+4	scripts/betterstack-ingest-probe.sh
 8	scripts/betterstack-query.sh
 3	scripts/check-deploy-script-parity.sh
 1	scripts/ci-demand-census.test.sh
@@ -72,6 +78,7 @@
 2	scripts/inngest-probe-heartbeat-feeder.sh
 2	scripts/inngest-probe-heartbeat-feeder.test.sh
 9	scripts/learning-retrieval-bench.sh
+1	scripts/lib/betterstack-absence.sh
 1	scripts/lib/inngest-probe-row.sh
 5	scripts/lib/repo-write-boundary.test.sh
 4	scripts/lint-agents-rule-budget.test.sh
@@ -87,7 +94,7 @@
 1	scripts/test-jaccard-duplicates.sh
 1	scripts/watch-registration-narrowing-9564.test.sh
 7	scripts/zot-restart-loop-alarm.sh
-17	tests/scripts/lib/git-data-birth-readiness-gate.sh
+16	tests/scripts/lib/git-data-birth-readiness-gate.sh
 7	tests/scripts/test-audit-ruleset-bypass.sh
 19	tests/scripts/test-infra-privileged-tier-census.sh
 1	tests/scripts/test-plan-gate-preamble.sh

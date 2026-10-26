@@ -1503,6 +1503,7 @@ tests/scripts/git-data-root-key-arm	apps/web-platform/infra/git-data-root-key.fi
 tests/scripts/git-data-rung2-evidence-capture	.github/workflows/git-data-rung2-rehearsal.yml
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+tests/scripts/git-data-rung2-evidence-capture	scripts/followthroughs/git-data-rung2-evidence-capture.sh
 tests/scripts/inngest-host-dark-gate	.github/workflows/apply-web-platform-infra.yml
 tests/scripts/inngest-host-dark-gate	scripts/cutover-inngest.sh
 tests/scripts/inngest-host-dark-gate	scripts/lib/inngest-probe-row.sh
