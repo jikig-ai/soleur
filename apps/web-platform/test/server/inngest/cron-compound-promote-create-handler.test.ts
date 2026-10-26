@@ -118,7 +118,7 @@ import {
   type SkillRecord,
 } from "@/server/compound-promote-create";
 import { createSyntheticCheckNames } from "@/server/compound-promote-create-gates";
-import { gitFixture } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
+import { gitFixture, gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 const FIX = join(__dirname, "..", "..", "fixtures", "compound-promote-create");
 const Q = 5;
@@ -294,7 +294,7 @@ async function run(event: { name: string; data?: Record<string, unknown> }): Pro
       memo.set(name, v);
       const repo = (memo.get("read-config") as { repoRoot: string } | undefined)?.repoRoot;
       if (name === "create-persist" && repo && existsSync(repo)) {
-        statusAfterPersist.push(execFileSync("git", ["-C", repo, "status", "--porcelain", "-uall"], { encoding: "utf8" }));
+        statusAfterPersist.push(execFileSync("git", ["-C", repo, "status", "--porcelain", "-uall"], { encoding: "utf8", env: gitFixtureEnv(repo) }));
       }
       return v;
     },
@@ -718,7 +718,7 @@ describe("Step B: create-persist -- the closed six-path commit in exactPaths mod
 
   it("a rendered-output refusal (template unreadable) happens before any file is written or scan run", async () => {
     const git = gitFixture(remoteDir);
-    execFileSync("git", ["-C", remoteDir, "rm", "-q", "plugins/soleur/skills/skill-creator/templates/purpose.md"]);
+    execFileSync("git", ["-C", remoteDir, "rm", "-q", "plugins/soleur/skills/skill-creator/templates/purpose.md"], { env: gitFixtureEnv(remoteDir) });
     git(["commit", "-qm", "drop template"]);
     try {
       const r = await run(PATTERNS_CREATE());
@@ -836,7 +836,7 @@ describe("review round -- the same-run collision, the token, the lost clone, the
 
   it("G4: when the only pattern is owned by the edit loop this run there is NO create model call at all", async () => {
     const git = gitFixture(remoteDir);
-    execFileSync("git", ["-C", remoteDir, "rm", "-q", "knowledge-base/project/patterns/page-two.md", "knowledge-base/project/patterns/zz-page-three.md"]);
+    execFileSync("git", ["-C", remoteDir, "rm", "-q", "knowledge-base/project/patterns/page-two.md", "knowledge-base/project/patterns/zz-page-three.md"], { env: gitFixtureEnv(remoteDir) });
     git(["commit", "-qm", "drop pages two and three"]);
     try {
       editClusters = [{ ...EDIT_CLUSTER, source_learnings: CREATE_EVIDENCE }];

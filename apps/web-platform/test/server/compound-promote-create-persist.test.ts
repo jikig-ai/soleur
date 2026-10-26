@@ -127,7 +127,7 @@ function installGitWrapper(): GitWrapper {
   writeFileSync(file("fail-count"), "0");
   writeFileSync(file("bump"), "none 0");
   writeFileSync(file("inject"), "none 0 fail");
-  const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  const real = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8", env: cleanEnv() }).trim();
   const script = [
     "#!/bin/sh",
     'ev=""',
