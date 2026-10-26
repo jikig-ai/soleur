@@ -31,6 +31,7 @@ Two enforcement layers, one source of truth.
 |---|---|---|---|---|
 | **Lefthook `gitleaks-staged`** | local pre-commit | every `git commit` | yes (`--no-verify`, hook removal) | fast feedback before a leak hits the local index |
 | **Lefthook `lint-fixture-content`** | local pre-commit | every `git commit` | yes | catches semi-sensitive shapes (real emails, prod-shape UUIDs, Supabase project refs) gitleaks misses |
+| **Ship `prepush-secret-scan.sh`** | local, run by `soleur:ship` before each push | once before the first push (later pushes by prose) | yes (it is a script the skill calls; CI is the net) | catches a secret-bearing commit while its history is still local, where a rewrite can still clear it |
 | **CI `secret-scan` workflow** | GitHub Actions | PR + merge_group + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
 
 Each trigger scans a **different set of commits** — see
@@ -566,6 +567,32 @@ line containing `gitleaks:allow` (across the whole tree) and rejects any
 without an `issue:#[0-9]+\s+\S{3,}` trailer. Failure blocks merge;
 CODEOWNERS guards the job definition itself so the gate cannot be removed
 without a 2nd-reviewer.
+
+## Local pre-push range scan (`soleur:ship`)
+
+`plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh` runs `gitleaks git` over the non-merge commits of
+`origin/main..HEAD` before `soleur:ship` pushes, using the same range shape as the CI `pull_request` arm
+(`--log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"`). The point is timing: a secret caught here sits in an
+unpublished commit and is cleared by rewriting it. Once pushed, a later "fix" commit cannot clear the CI range scan,
+because that scan reads every commit in the range, not the tip.
+
+The contract is in the script header: exit `0` CLEAN, `1` FINDINGS (stop), `43` NOT_RUN (record
+`secret-scan: not run (<reason>)` in the PR body and continue, since CI is the gate). Any other exit is a stop. A
+`CLEAN` verdict needs gitleaks to exit 0 **and** write a report of exactly `[]`; a missing or empty report is
+`NOT_RUN`, never `CLEAN`. The receipt line carries the full base and head SHAs, the range size, the commit count
+gitleaks reports, whether the range touched the gitleaks config, and the local gitleaks version.
+
+What it does **not** cover (documented, not claimed away):
+
+- **Content that exists only in a conflict-resolution merge commit.** `--no-merges` mirrors CI's range arm and
+  misses it (measured: rc 0, while `-m` and `gitleaks dir` find it). CI's `gitleaks dir .` step is the net.
+- **A path marked `-diff` in a gitattributes file.** gitleaks reads patches, and such a path yields none.
+- **A PR that widens its own allowlist.** The scan uses the working-tree config, as CI does, so the receipt's
+  `cfg_changed=1` makes it visible and CI's `allowlist-diff` job is the independent check.
+- **Version skew.** CI pins gitleaks 8.24.2; a newer local pack can flag something CI accepts. That is still a stop;
+  clear a false positive with a per-rule allowlist.
+- **Later pushes.** Only the first push in the ship flow is structurally preceded by the scan. The other push sites
+  rely on the skill text until a `git push` hook exists (tracked in #11126).
 
 ## When an alert fires
 
