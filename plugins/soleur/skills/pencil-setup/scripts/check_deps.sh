@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # pencil-setup dependency checker with four-tier MCP detection
-# Priority: (0) Headless CLI, (1) pencil CLI, (2) Desktop binary, (3) IDE extension
+# Priority: (0) Headless CLI (@pen.dev/cli), (1) pencil CLI, (2) Desktop binary, (3) IDE extension
 # No set -euo pipefail: soft dependency checks and install failures
 # must not abort the script. Each check uses explicit if/then.
 
 case "$-" in
   *x*)
-    if [ -n "${PENCIL_CLI_KEY:+x}" ]; then
+    if [ -n "${PEN_CLI_KEY:+x}" ] || [ -n "${PENCIL_CLI_KEY:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -21,6 +21,21 @@ for arg in "$@"; do
     --check-adapter-drift) CHECK_ADAPTER_DRIFT=true ;;
   esac
 done
+
+# Headless engine: @pen.dev/cli at an EXACT pin, installed from the committed lockfile pair in
+# ./pen-cli/ into its own prefix. A separate prefix (not ~/.local) means the deprecated
+# engine's old `pencil` bin link can never be reached through the new engine's bin names, and an
+# old adapter copy can never find the new engine. The pin below, pen-cli/package.json and
+# pen-cli/package-lock.json move together; bumping it requires a green engine-contract-probe.sh
+# run first (see SKILL.md) and re-capturing the transcript fixture (a test pins its header to this).
+PEN_CLI_VERSION="0.3.13"
+PEN_CLI_PACKAGE="@pen.dev/cli"
+PEN_CLI_PREFIX="$HOME/.local/share/pen-cli"
+# Node floor, from the package's `engines.node` (>=22.19.0). One definition, compared numerically.
+NODE_FLOOR_MAJOR=22
+NODE_FLOOR_MINOR=19
+NODE_FLOOR_PATCH=0
+NODE_FLOOR="${NODE_FLOOR_MAJOR}.${NODE_FLOOR_MINOR}.${NODE_FLOOR_PATCH}"
 
 # -- Adapter drift check (early short-circuit) --
 #
@@ -151,16 +166,40 @@ find_extracted_mcp_binary() {
 
 # -- Detection Functions --
 
-# Find a Node binary >= 22.9.0 (checks system, nvm, fnm)
+# Numeric dotted-version compare against the Node floor (never lexical: 22.100.0 is above the
+# floor, an older minor is below it). Accepts an optional leading "v" and ignores a prerelease/build suffix.
+# Anything that is not major.minor.patch fails closed.
+node_version_ok() {
+  local v="${1#v}" major minor patch rest
+  [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || return 1
+  major=${v%%.*}
+  rest=${v#*.}
+  minor=${rest%%.*}
+  patch=${rest#*.}
+  patch=${patch%%[!0-9]*}
+  major=$((10#$major)); minor=$((10#$minor)); patch=$((10#$patch))
+  if (( major != NODE_FLOOR_MAJOR )); then
+    (( major > NODE_FLOOR_MAJOR )); return
+  fi
+  if (( minor != NODE_FLOOR_MINOR )); then
+    (( minor > NODE_FLOOR_MINOR )); return
+  fi
+  (( patch >= NODE_FLOOR_PATCH ))
+}
+
+# Print the version of a node binary, or nothing.
+_node_version() {
+  "$1" --version 2>/dev/null | sed 's/^v//'
+}
+
+# Find a Node binary >= the floor (checks system, nvm, fnm)
 find_node22() {
-  local node_bin version major minor
+  local node_bin version
   # Check system node first
   node_bin=$(command -v node 2>/dev/null)
   if [[ -n "$node_bin" ]]; then
-    version=$("$node_bin" --version 2>/dev/null | sed 's/^v//')
-    major=${version%%.*}
-    minor=$(echo "$version" | cut -d. -f2)
-    if [[ "$major" -gt 22 || ("$major" -eq 22 && "$minor" -ge 9) ]]; then
+    version=$(_node_version "$node_bin")
+    if node_version_ok "$version"; then
       echo "$node_bin"
       return 0
     fi
@@ -171,10 +210,8 @@ find_node22() {
     local nvm_node
     for nvm_node in "$nvm_dir"/versions/node/v2[2-9]*/bin/node "$nvm_dir"/versions/node/v[3-9]*/bin/node; do
       [[ -x "$nvm_node" ]] || continue
-      version=$("$nvm_node" --version 2>/dev/null | sed 's/^v//')
-      major=${version%%.*}
-      minor=$(echo "$version" | cut -d. -f2)
-      if [[ "$major" -gt 22 || ("$major" -eq 22 && "$minor" -ge 9) ]]; then
+      version=$(_node_version "$nvm_node")
+      if node_version_ok "$version"; then
         echo "$nvm_node"
         return 0
       fi
@@ -186,10 +223,8 @@ find_node22() {
     local fnm_node
     for fnm_node in "$fnm_dir"/node-versions/v2[2-9]*/installation/bin/node "$fnm_dir"/node-versions/v[3-9]*/installation/bin/node; do
       [[ -x "$fnm_node" ]] || continue
-      version=$("$fnm_node" --version 2>/dev/null | sed 's/^v//')
-      major=${version%%.*}
-      minor=$(echo "$version" | cut -d. -f2)
-      if [[ "$major" -gt 22 || ("$major" -eq 22 && "$minor" -ge 9) ]]; then
+      version=$(_node_version "$fnm_node")
+      if node_version_ok "$version"; then
         echo "$fnm_node"
         return 0
       fi
@@ -198,28 +233,97 @@ find_node22() {
   return 1
 }
 
-# Detect headless CLI installed at ~/.local/node_modules/.bin/pencil
-# Does NOT run the binary (requires Node 22+) — checks existence and symlink target
+# Absolute, symlink-resolved path. The GNU-only link-resolving readlink flag is not portable to
+# macOS, so: realpath when present (GNU, macOS 13+), else Node's fs.realpathSync. Prints nothing and
+# fails when the path does not exist.
+_realpath() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath -- "$1" 2>/dev/null
+    return
+  fi
+  local n
+  n=$(command -v node 2>/dev/null) || return 1
+  "$n" -e 'try{process.stdout.write(require("fs").realpathSync(process.argv[1]))}catch{process.exit(1)}' "$1" 2>/dev/null
+}
+
+# The credential, resolved once as PEN_CLI_KEY, else the deprecated PENCIL_CLI_KEY. An empty or
+# whitespace-only value counts as unset. Prints the value; callers must never echo it.
+resolve_pen_key() {
+  local k="${PEN_CLI_KEY:-}"
+  k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
+  if [[ -z "$k" ]]; then
+    k="${PENCIL_CLI_KEY:-}"
+    k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
+  fi
+  printf '%s' "$k"
+}
+
+# Print "<package name>\n<bin.pen>\n<version>" from a package.json. Any JSON-capable node will do
+# (parsing needs no 22.19 features); the path is argv, never interpolated into code.
+_pen_pkg_facts() {
+  local n
+  n=$(command -v node 2>/dev/null) || return 1
+  "$n" -e '
+    try {
+      const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      const b = p.bin && typeof p.bin === "object" ? p.bin.pen : "";
+      console.log(String(p.name || "")); console.log(typeof b === "string" ? b : ""); console.log(String(p.version || ""));
+    } catch { process.exit(1); }
+  ' "$1" 2>/dev/null
+}
+
+# Identity rule for the headless engine (Guard 2). The credential is only ever handed to a binary
+# that is the installed @pen.dev/cli package's OWN declared bin.pen:
+#   - <prefix>/node_modules/.bin/pen exists, and the package.json beside it names @pen.dev/cli;
+#   - realpath(.bin/pen) is EQUAL to realpath(<package dir>/<declared bin.pen>), and that target
+#     sits inside the package directory on a separator boundary (no sibling-prefix match, no escape);
+#   - only `pen` is read: the `pencil` alias is never a candidate and there is no PATH fallback.
+# Prints the resolved binary path on success. Does NOT run the binary. The adapter's findPenBinary()
+# applies the same rule (shared table: test/fixtures/pen-identity-cases.tsv).
 detect_headless_cli() {
-  local pencil_bin="$HOME/.local/node_modules/.bin/pencil"
-  [[ -e "$pencil_bin" ]] || return 1
-  # Verify it's the headless CLI package by checking the symlink target
-  # The headless CLI links to @pencil.dev/cli/dist/index.cjs
-  local target
-  target=$(readlink -f "$pencil_bin" 2>/dev/null) || return 1
-  # Must contain the pencil CLI package path (not Desktop CLI)
-  [[ "$target" == *"@pencil.dev/cli"* || "$target" == *"pencil-cli"* ]] || return 1
+  local bin="$PEN_CLI_PREFIX/node_modules/.bin/pen"
+  local pkgjson="$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE/package.json"
+  [[ -e "$bin" && -f "$pkgjson" ]] || return 1
+  local facts name declared real_bin real_pkg expected
+  facts=$(_pen_pkg_facts "$pkgjson") || return 1
+  name=$(printf '%s\n' "$facts" | sed -n 1p)
+  declared=$(printf '%s\n' "$facts" | sed -n 2p)
+  [[ "$name" == "$PEN_CLI_PACKAGE" && -n "$declared" ]] || return 1
+  real_bin=$(_realpath "$bin") || return 1
+  real_pkg=$(_realpath "$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE") || return 1
+  expected=$(_realpath "$real_pkg/$declared") || return 1
+  [[ -n "$real_bin" && -n "$real_pkg" && -f "$expected" ]] || return 1
+  [[ "$expected" == "$real_pkg"/* ]] || return 1
+  [[ "$real_bin" == "$expected" ]] || return 1
+  printf '%s\n' "$real_bin"
+  return 0
+}
+
+# One-line advisories about the install state. Never fatal, never uses the deprecated package.
+warn_pen_cli_state() {
+  local legacy_pkg="$HOME/.local/node_modules/@pencil.dev/cli"
+  if [[ -d "$legacy_pkg" ]]; then
+    echo "  [warn] Deprecated @pencil.dev/cli found under ~/.local/node_modules: it is not used. The headless tier runs $PEN_CLI_PACKAGE from $PEN_CLI_PREFIX. Remove with: npm uninstall --prefix ~/.local @pencil.dev/cli"
+  fi
+  local pkgjson="$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE/package.json" facts installed
+  if [[ -f "$pkgjson" ]]; then
+    facts=$(_pen_pkg_facts "$pkgjson") && installed=$(printf '%s\n' "$facts" | sed -n 3p)
+    if [[ -n "${installed:-}" && "$installed" != "$PEN_CLI_VERSION" ]]; then
+      echo "  [warn] $PEN_CLI_PACKAGE $installed is installed but the pin is $PEN_CLI_VERSION; re-run with --auto to reinstall from the lockfile"
+    fi
+  fi
   return 0
 }
 
 # Check if the pencil CLI in PATH is pencil.dev (not evolus/pencil)
 detect_pencil_cli() {
   command -v pencil >/dev/null 2>&1 || return 1
-  # Negative guard: if the PATH pencil resolves to the headless CLI package,
+  # Negative guard: if the PATH pencil resolves to either headless CLI package (the deprecated
+  # @pencil.dev/cli or the maintained @pen.dev/cli, whose second bin is also named `pencil`),
   # skip it for Tier 1 (handled by Tier 0)
   local resolved
-  resolved=$(readlink -f "$(command -v pencil)" 2>/dev/null)
-  if [[ "$resolved" == *"@pencil.dev/cli"* || "$resolved" == *"pencil-cli"* ]]; then
+  resolved=$(_realpath "$(command -v pencil)")
+  if [[ "$resolved" == *"@pencil.dev/cli"* || "$resolved" == *"@pen.dev/cli"* || "$resolved" == *"pencil-cli"* ]]; then
     return 1
   fi
   # Guard against evolus/pencil name collision
@@ -415,23 +519,33 @@ auto_launch_desktop() {
 # -- Tier Functions (early-exit pattern) --
 
 try_headless_cli_tier() {
-  detect_headless_cli || return 1
+  local pen_bin
+  pen_bin=$(detect_headless_cli) || return 1
   # Node version gate
   local node_bin
   node_bin=$(find_node22)
   if [[ -z "$node_bin" ]]; then
-    echo "  [skip] Headless CLI found but Node >= 22.9.0 not available"
-    echo "    Install Node 22+ via nvm: nvm install 22"
+    echo "  [skip] Headless CLI found but Node >= $NODE_FLOOR not available"
+    echo "    Install Node 22+ via nvm: nvm install 22   (the engine requires >= $NODE_FLOOR)"
     return 1
   fi
-  # Auth check — must use the found Node 22+ binary to run pencil
-  local pencil_bin="$HOME/.local/node_modules/.bin/pencil"
-  local pencil_target
-  pencil_target=$(readlink -f "$pencil_bin" 2>/dev/null)
-  if ! PENCIL_CLI_KEY="${PENCIL_CLI_KEY:-}" "$node_bin" "$pencil_target" status >/dev/null 2>&1; then
+  # Auth check: PEN_CLI_KEY (or the deprecated PENCIL_CLI_KEY fallback; empty counts as unset) is
+  # handed to `pen status` as PEN_CLI_KEY only. A fail-open engine still runs with a bad key, so
+  # exit 0 is not enough: the reply must report Active. Output carries account details and is
+  # never printed.
+  local key status_out
+  key=$(resolve_pen_key)
+  if [[ -z "$key" ]]; then
+    echo "  [skip] Headless CLI found but auth failed: PEN_CLI_KEY is not set"
+    echo "    Set the PEN_CLI_KEY environment variable (the adapter needs it; a pen login is not enough)"
+    return 1
+  fi
+  if status_out=$(env -u PENCIL_CLI_KEY PEN_CLI_KEY="$key" "$node_bin" "$pen_bin" status 2>&1) \
+     && printf '%s' "$status_out" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -q 'Active'; then
+    :
+  else
     echo "  [skip] Headless CLI found but auth failed"
-    echo "    Run: $pencil_bin login"
-    echo "    Or set PENCIL_CLI_KEY environment variable"
+    echo "    Set a valid PEN_CLI_KEY environment variable (PENCIL_CLI_KEY is still read as a deprecated fallback)"
     return 1
   fi
   echo "  [ok] Headless CLI (Tier 0)"
@@ -453,7 +567,7 @@ attempt_headless_install() {
   local node_bin
   node_bin=$(find_node22)
   if [[ -z "$node_bin" ]]; then
-    echo "  [skip] Cannot auto-install headless CLI: Node >= 22.9.0 not available"
+    echo "  [skip] Cannot auto-install headless CLI: Node >= $NODE_FLOOR not available"
     return 1
   fi
   local npm_bin
@@ -463,18 +577,31 @@ attempt_headless_install() {
     echo "  [skip] Cannot auto-install headless CLI: npm not found"
     return 1
   fi
-  echo "  [installing] Headless CLI to ~/.local..."
-  # Package name is @pencil.dev/cli (not @anthropic-ai/pencil-cli — that 404s).
-  # The detect_headless_cli function on line 182 already expects @pencil.dev/cli
-  # in the symlink target; the previous install command was inconsistent.
-  # Pinned to 0.2.9: the adapter's REPL surface table (pencil-repl-surface.mjs)
-  # is that version's signature list. Bumping this pin requires running
-  # engine-contract-probe.sh first (see #11143; migration tracked in #11156).
-  if "$npm_bin" install --prefix "$HOME/.local" @pencil.dev/cli@0.2.9 2>&1; then
-    detect_headless_cli && return 0
-    echo "  [FAILED] Install succeeded but binary not found"
+  local src_dir
+  src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pen-cli"
+  [[ "$src_dir" == /* && "$PEN_CLI_PREFIX" == /* ]] || { echo "  [FAILED] install paths are not absolute"; return 1; }
+  if [[ ! -f "$src_dir/package.json" || ! -f "$src_dir/package-lock.json" ]]; then
+    echo "  [FAILED] Missing committed lockfile pair in $src_dir (package.json, package-lock.json)"
+    return 1
+  fi
+  echo "  [installing] Headless CLI $PEN_CLI_PACKAGE@$PEN_CLI_VERSION to $PEN_CLI_PREFIX (lockfile, scripts ignored)..."
+  mkdir -p "$PEN_CLI_PREFIX" || { echo "  [FAILED] cannot create $PEN_CLI_PREFIX"; return 1; }
+  local f
+  for f in package.json package-lock.json; do
+    # unlink first so a pre-planted symlink at the destination is replaced, not followed
+    rm -f -- "$PEN_CLI_PREFIX/$f"
+    install -m 0644 -- "$src_dir/$f" "$PEN_CLI_PREFIX/$f" || { echo "  [FAILED] cannot copy $f"; return 1; }
+  done
+  # `npm ci` from the pinned lockfile: every transitive version and integrity hash is fixed, and
+  # the credential is removed from the environment so install-time code never sees it. Lifecycle
+  # scripts are ignored (verified: the engine opens, exports and screenshots without them, see
+  # engine-contract-probe.sh). The old ~/.local/node_modules tree is deliberately left alone.
+  # Node's directory goes first on PATH so npm's `#!/usr/bin/env node` uses the vetted binary.
+  if (cd "$PEN_CLI_PREFIX" && env -u PEN_CLI_KEY -u PENCIL_CLI_KEY PATH="$(dirname "$node_bin"):$PATH" "$npm_bin" ci --ignore-scripts 2>&1); then
+    detect_headless_cli >/dev/null && return 0
+    echo "  [FAILED] Install succeeded but the $PEN_CLI_PACKAGE binary was not found or failed the identity check"
   else
-    echo "  [FAILED] npm install returned non-zero"
+    echo "  [FAILED] npm ci returned non-zero"
   fi
   return 1
 }
@@ -536,24 +663,32 @@ try_ide_tier() {
   return 0
 }
 
+# Sourced (by tests): expose the functions without running any tier.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 # -- Main Flow --
 
 echo "=== Pencil Setup Dependency Check ==="
 echo
 
+# Leftover deprecated engine / version drift against the pin (advisory only)
+warn_pen_cli_state
+
 # Warn about evolus/pencil collision
-if ! detect_pencil_cli && ! detect_headless_cli && command -v pencil >/dev/null 2>&1; then
+if ! detect_pencil_cli && ! detect_headless_cli >/dev/null && command -v pencil >/dev/null 2>&1; then
   echo "  [info] pencil CLI found but is not pencil.dev (possible evolus/pencil)"
 fi
 
 # Try tiers in priority order -- first success wins
-# Tier 0: Headless CLI (no GUI required)
+# Tier 0: Headless CLI, @pen.dev/cli (no GUI required)
 # Tier 1: Desktop CLI (needs Desktop running)
 # Tier 2: Desktop binary (needs Desktop running)
 # Tier 3: IDE extension
 if ! try_headless_cli_tier; then
   # Auto-install headless CLI if --auto
-  if [[ "$AUTO_INSTALL" == "true" ]] && ! detect_headless_cli; then
+  if [[ "$AUTO_INSTALL" == "true" ]] && ! detect_headless_cli >/dev/null; then
     attempt_headless_install && try_headless_cli_tier
   fi
 fi
