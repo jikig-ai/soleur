@@ -33,15 +33,19 @@
 # Suite-file hygiene (guard-vacuity-floor defect class): this file must never
 # carry a bare less-than-less-than or here-string token outside a real heredoc —
 # the meta-guard's heredoc blanker reads ANY such token as a heredoc opener and
-# would swallow the tail floor. The only occurrences below are the three real
-# quoted heredocs feeding python3/cat; all floor/conservation reporting sits
+# would swallow the tail floor. The only occurrences below are the four real
+# quoted heredocs feeding python3/cat (the model, the emulator, the structure checker and the mutation harness); all floor/conservation reporting sits
 # AFTER them, reports with printf + exit 1, and never routes through ok()/no().
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-VECTOR_TOML="$REPO_ROOT/apps/web-platform/infra/vector.toml"
+REAL_VECTOR_TOML="$REPO_ROOT/apps/web-platform/infra/vector.toml"
+# VECTOR_TOML_UNDER_TEST points the whole suite at a different file: the mutation rows below re-run
+# THIS suite as a child over a mutated copy and require it to go RED (ADMISSION_MUTATION_CHILD=1
+# makes the child skip the mutation section and print verdicts only; the parent carries the floor).
+VECTOR_TOML="${VECTOR_TOML_UNDER_TEST:-$REAL_VECTOR_TOML}"
 
 command -v python3 >/dev/null 2>&1 || { echo "SETUP FAILED: python3 absent (need >=3.11 for tomllib)" >&2; exit 2; }
 python3 -c 'import tomllib' 2>/dev/null || { echo "SETUP FAILED: python3 tomllib absent (need >=3.11)" >&2; exit 2; }
@@ -99,6 +103,12 @@ print(json.dumps(out))
 PYEOF
 )" || { echo "SETUP FAILED: tomllib parse of $VECTOR_TOML" >&2; exit 2; }
 [[ "$MODEL" == *inngest_journald* ]] || { echo "SETUP FAILED: source model empty — parse produced nothing" >&2; exit 2; }
+# A model whose journald sources all lost their type parses without error and would evaluate every
+# record against an empty set: refuse, never report "0 checked" as a pass (Guard 1 mutation row 3).
+JOURNALD_N="$(python3 -c 'import json,sys; m=json.loads(sys.argv[1]); print(sum(1 for s in m["sources"].values() if s.get("type")=="journald"))' "$MODEL")" \
+  || { echo "SETUP FAILED: journald-source count" >&2; exit 2; }
+[[ "$JOURNALD_N" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "SETUP FAILED: the source model holds zero journald sources (a mutated or renamed type); refusing to evaluate an empty model" >&2; exit 2; }
 
 # ---------- the evaluator (journald.rs filter_matches semantics) ----------------
 EVAL_SRC="$(cat <<'PYEOF'
@@ -173,6 +183,40 @@ run_case "inngest-server.service PRIORITY 6 (unit arm, not capped)" \
 run_case "inngest-server.service PRIORITY 0 (unit arm; S2 exclude drops it there)" \
   '{"_SYSTEMD_UNIT":"inngest-server.service","PRIORITY":"0"}' \
   "inngest_journald"
+
+# The TLS terminator unit (stunnel4, soleur-inngest-tls.service) rides the same unit arm. Its
+# lines carry no <N> prefix, so the journald PRIORITY is derived (systemd's default), not measured on
+# the host: the literal rows below cover the values 0 and 2 to 6 a build could assign, and a PRIORITY test can
+# never split its LOG3 refusal lines from its LOG5 healthy lines (plan, Sharp Edges).
+run_case "terminator soleur-inngest-tls.service PRIORITY 6 (unit arm; the expected default)" \
+  '{"_SYSTEMD_UNIT":"soleur-inngest-tls.service","SYSLOG_IDENTIFIER":"stunnel4","PRIORITY":"6"}' \
+  "inngest_journald"
+run_case "terminator soleur-inngest-tls.service PRIORITY 5 (unit arm)" \
+  '{"_SYSTEMD_UNIT":"soleur-inngest-tls.service","SYSLOG_IDENTIFIER":"stunnel4","PRIORITY":"5"}' \
+  "inngest_journald"
+run_case "terminator soleur-inngest-tls.service PRIORITY 4 (unit arm AND the {3,4} arm: one source either way)" \
+  '{"_SYSTEMD_UNIT":"soleur-inngest-tls.service","SYSLOG_IDENTIFIER":"stunnel4","PRIORITY":"4"}' \
+  "inngest_journald"
+run_case "terminator soleur-inngest-tls.service PRIORITY 3 (stderr class; unit arm AND the {3,4} arm)" \
+  '{"_SYSTEMD_UNIT":"soleur-inngest-tls.service","SYSLOG_IDENTIFIER":"stunnel4","PRIORITY":"3"}' \
+  "inngest_journald"
+run_case "terminator soleur-inngest-tls.service PRIORITY 2 (its own crit record: S1 admits, S2 excludes the unit)" \
+  '{"_SYSTEMD_UNIT":"soleur-inngest-tls.service","SYSLOG_IDENTIFIER":"stunnel4","PRIORITY":"2"}' \
+  "inngest_journald"
+run_case "terminator soleur-inngest-tls.service PRIORITY 0 (unit arm; S2 exclude drops it there)" \
+  '{"_SYSTEMD_UNIT":"soleur-inngest-tls.service","SYSLOG_IDENTIFIER":"stunnel4","PRIORITY":"0"}' \
+  "inngest_journald"
+# The unit's ExecStartPre fetch script (soleur-inngest-tls fetch) runs inside the unit: its output
+# carries the script's identifier but the unit's name, and it is not an S4 tag, so the unit arm ships it.
+run_case "terminator ExecStartPre fetch output (identifier soleur-inngest-tls, PRIORITY 3)" \
+  '{"_SYSTEMD_UNIT":"soleur-inngest-tls.service","SYSLOG_IDENTIFIER":"soleur-inngest-tls","PRIORITY":"3"}' \
+  "inngest_journald"
+# The #7898 off-box refusal path. The health unit is a DIFFERENT unit from the terminator, so
+# exclude_units (an exact unit-name match) does not touch it: its crit refusal record keeps shipping
+# through Source 2, and only Source 2 (its identifier is not an S4 tag; Source 1's arm is {3,4}).
+run_case "health unit refusal record (inngest-tls-health, PRIORITY 2) still ships through S2 only" \
+  '{"_SYSTEMD_UNIT":"soleur-inngest-tls-health.service","SYSLOG_IDENTIFIER":"inngest-tls-health","PRIORITY":"2"}' \
+  "system_journald"
 
 # The never-ship class: routine PID-1 PRIORITY-6 chatter.
 run_case "systemd PRIORITY-6 Started/Stopped (deliberately unshipped)" \
@@ -291,12 +335,17 @@ emit("S1 include_matches.PRIORITY is exactly {3,4}",
 emit("S2 include_matches.PRIORITY is exactly {0,1,2}",
      s2.get("include", {}).get("PRIORITY") == ["0", "1", "2"],
      "got: %s" % s2.get("include", {}).get("PRIORITY"))
-emit("S1 include_units == [inngest-server.service]",
-     s1.get("include", {}).get("_SYSTEMD_UNIT") == ["inngest-server.service"],
+TWO_UNITS = ["inngest-server.service", "soleur-inngest-tls.service"]
+emit("S1 include_units == [inngest-server.service, soleur-inngest-tls.service]",
+     s1.get("include", {}).get("_SYSTEMD_UNIT") == TWO_UNITS,
      "got: %s" % s1.get("include", {}).get("_SYSTEMD_UNIT"))
-emit("S2 exclude_units narrowed to [inngest-server.service] (vector.service's crit path moved here)",
-     s2.get("exclude", {}).get("_SYSTEMD_UNIT") == ["inngest-server.service"],
+emit("S2 exclude_units == the same two units (vector.service's crit path stays with S2; the units move together)",
+     s2.get("exclude", {}).get("_SYSTEMD_UNIT") == TWO_UNITS,
      "got: %s" % s2.get("exclude", {}).get("_SYSTEMD_UNIT"))
+emit("S1 include_units and S2 exclude_units are set-equal (a unit added to one list only double-ships or silences)",
+     s1.get("include", {}).get("_SYSTEMD_UNIT") == s2.get("exclude", {}).get("_SYSTEMD_UNIT"),
+     "S1-incl: %s S2-excl: %s" % (s1.get("include", {}).get("_SYSTEMD_UNIT"),
+                                  s2.get("exclude", {}).get("_SYSTEMD_UNIT")))
 emit("S1 exclude_matches.SYSLOG_IDENTIFIER == S4 include tag set",
      s1.get("exclude", {}).get("SYSLOG_IDENTIFIER") ==
      s4.get("include", {}).get("SYSLOG_IDENTIFIER"),
@@ -372,6 +421,94 @@ while IFS=$'\t' read -r pname prc pdetail; do
   fi
 done < "$STRUCT_OUT"
 
+# ---------- Guard 1 mutation rows (plan: terminator admission partition) ---------------------
+# Each row edits a COPY of vector.toml (never the real file), re-runs this suite as a child over it
+# and requires the child to go RED for the INTENDED reason: the expected exit code AND a message only
+# that pin prints. An UNMUTATED control child must be green first, or every row below is void; a
+# mutation that did not land (the copy equals the original) is a harness failure, never a pass.
+# The child skips this section (ADMISSION_MUTATION_CHILD=1), so there is no recursion.
+if [[ "${ADMISSION_MUTATION_CHILD:-0}" != 1 ]]; then
+  echo ""
+  echo "--- Guard 1 mutation rows (suite re-run over a mutated copy of vector.toml) ---"
+  MUT_SRC="$(cat <<'PYEOF'
+import re, sys
+
+mode, src_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(src_path, encoding="utf-8").read()
+BOTH = '["inngest-server.service", "soleur-inngest-tls.service"]'
+
+def swap(text, old, new, count=1):
+    if old not in text:
+        sys.stderr.write("mutation anchor missing: %r\n" % old)
+        sys.exit(3)
+    return text.replace(old, new, count)
+
+if mode == "control":
+    pass
+elif mode == "drop_s1_unit":
+    text = swap(text, "include_units = " + BOTH, 'include_units = ["inngest-server.service"]')
+elif mode == "drop_s2_unit":
+    text = swap(text, "exclude_units = " + BOTH, 'exclude_units = ["inngest-server.service"]')
+elif mode == "third_unit_s1_only":
+    text = swap(text, "include_units = " + BOTH,
+                'include_units = ["inngest-server.service", "soleur-inngest-tls.service", "zz-extra.service"]')
+elif mode == "rename_journald_types":
+    text = swap(text, 'type = "journald"', 'type = "journaldx"', count=text.count('type = "journald"'))
+elif mode == "reverse_both_lists":
+    rev = '["soleur-inngest-tls.service", "inngest-server.service"]'
+    text = swap(text, "include_units = " + BOTH, "include_units = " + rev)
+    text = swap(text, "exclude_units = " + BOTH, "exclude_units = " + rev)
+else:
+    sys.stderr.write("unknown mutation mode %r\n" % mode)
+    sys.exit(4)
+open(out_path, "w", encoding="utf-8").write(text)
+PYEOF
+)"
+  # mut_row <mode> <want-rc> <needle> <label>: the child must exit <want-rc> and print <needle>.
+  mut_row() {
+    local mode="$1" want="$2" needle="$3" label="$4"
+    local f="$TMP/m-$mode.toml" o="$TMP/m-$mode.out" crc=0 mrc=0
+    python3 -c "$MUT_SRC" "$mode" "$REAL_VECTOR_TOML" "$f" || mrc=$?
+    if [[ "$mrc" -ne 0 ]]; then
+      expect 1 "" "$label: the mutation could not be applied (rc $mrc; anchor drifted, so this row measured nothing)"
+      return
+    fi
+    if [[ "$mode" != control && "$mode" != reverse_both_lists ]] && cmp -s "$REAL_VECTOR_TOML" "$f"; then
+      expect 1 "" "$label: the mutation did not land (the copy equals the original; a mutation that does not land reports the baseline)"
+      return
+    fi
+    VECTOR_TOML_UNDER_TEST="$f" ADMISSION_MUTATION_CHILD=1 bash "${BASH_SOURCE[0]}" </dev/null >"$o" 2>&1 || crc=$?
+    if [[ "$crc" -eq "$want" ]] && grep -qF -- "$needle" "$o"; then
+      expect 0 "$label (child rc $crc, saw: $needle)" ""
+    else
+      expect 1 "" "$label: expected child rc $want printing [$needle], got rc $crc"
+    fi
+  }
+
+  mut_row control 0 "PASSED" "control: the unmutated copy is green (a red baseline would void every row)"
+  mut_row drop_s1_unit 1 "NO: S1 include_units ==" "mutation 1: terminator unit removed from S1 include_units goes RED"
+  mut_row drop_s2_unit 1 "NO: S2 exclude_units ==" "mutation 2: terminator unit removed from S2 exclude_units goes RED"
+  mut_row rename_journald_types 2 "zero journald sources" "mutation 3: renamed source types parse to an empty model and exit 2, never 0 checked"
+  mut_row third_unit_s1_only 1 "NO: S1 include_units and S2 exclude_units are set-equal" "mutation 4: a third unit added to S1 only goes RED on the set-equality pin"
+  mut_row reverse_both_lists 0 "PASSED" "must-pass: both lists in the opposite order are green (this suite compares sorted sets; the PII and 524 suites pin the literal order)"
+
+  # Harness row: edit the SUITE, not the SUT. A copy whose evaluator ignores every exclude map must
+  # redden the multiplicity aggregate (S2's exclude_units is what keeps the unit arm single-ship).
+  HARNESS_COPY="$TMP/suite-ignores-excludes.sh"
+  sed 's/for field, allowed in src\["exclude"\].items():/for field, allowed in []:/' "${BASH_SOURCE[0]}" > "$HARNESS_COPY"
+  hrc=0
+  if cmp -s "${BASH_SOURCE[0]}" "$HARNESS_COPY"; then
+    expect 1 "" "harness row: the suite mutation did not land (the evaluator line drifted)"
+  else
+    VECTOR_TOML_UNDER_TEST="$REAL_VECTOR_TOML" ADMISSION_MUTATION_CHILD=1 bash "$HARNESS_COPY" </dev/null >"$TMP/m-harness.out" 2>&1 || hrc=$?
+    if [[ "$hrc" -eq 1 ]] && grep -qF -- "multiplicity > 1 on:" "$TMP/m-harness.out"; then
+      expect 0 "harness row: an evaluator that ignores exclude maps goes RED (multiplicity aggregate)" ""
+    else
+      expect 1 "" "harness row: expected child rc 1 printing [multiplicity > 1 on:], got rc $hrc"
+    fi
+  fi
+fi
+
 echo ""
 
 # --- Accounting conservation (ADR-193 #3): reported DIRECTLY, never through
@@ -391,7 +528,15 @@ _p=$ok_count; _f=$no_count; _c=$cases; _n=${#LEDGER[@]}
 if (( _n > 0 )); then _saved=("${LEDGER[@]}"); else _saved=(); fi
 expect 0 "self-test probe (pass branch)" "unreachable"
 expect 1 "unreachable" "self-test probe (fail branch; expected, unwound)"
-if (( ok_count != _p + 1 || no_count != _f + 1 || cases != _c + 2 || ${#LEDGER[@]} != _n + 1 )); then
+# run_case owns the verdict of every corpus row (the compare against the expected set), so it gets its own
+# control: one record whose admitted set is known (the #6551 verbatim row) driven with the right expected
+# set and with a wrong one. A compare that always said yes would leave the pass branch alone and never
+# record the wrong-expected case as a failure.
+SELFTEST_REC='{"_SYSTEMD_UNIT":"init.scope","SYSLOG_IDENTIFIER":"systemd","PRIORITY":"3","MESSAGE":"fixture"}'
+run_case "self-test run_case (right expected set)" "$SELFTEST_REC" "inngest_journald" >/dev/null
+run_case "self-test run_case (wrong expected set; expected, unwound)" "$SELFTEST_REC" "system_journald" >/dev/null 2>&1
+MULTI=""
+if (( ok_count != _p + 2 || no_count != _f + 2 || cases != _c + 4 || ${#LEDGER[@]} != _n + 2 )); then
   printf '[FATAL] instrument self-test: expect() did not move every observable (ok %d->%d, no %d->%d, cases %d->%d, ledger %d->%d)\n' \
     "$_p" "$ok_count" "$_f" "$no_count" "$_c" "$cases" "$_n" "${#LEDGER[@]}" >&2
   exit 1
@@ -399,16 +544,30 @@ fi
 ok_count=$_p; no_count=$_f; cases=$_c
 if (( _n > 0 )); then LEDGER=("${_saved[@]}"); else LEDGER=(); fi
 
+# --- Child of a mutation row: verdicts only. The parent carries the floor (a child that went RED by
+# tripping a floor sized for the parent's extra rows would satisfy nothing: every row also requires
+# the needle only the targeted pin prints). The final accounting line stays, so a child that died
+# before reaching here is visible to the parent as a missing needle. ---
+if [[ "${ADMISSION_MUTATION_CHILD:-0}" == 1 ]]; then
+  printf '\n=== %d ok, %d no (%d cases, child run: floor enforced by the parent) ===\n' "$ok_count" "$no_count" "$cases"
+  if (( no_count == 0 && ${#LEDGER[@]} == 0 )); then
+    echo "PASSED"
+    exit 0
+  fi
+  printf 'FAILED: %d\n' "$no_count" >&2
+  exit 1
+fi
+
 # --- Anti-vacuity floor (ADR-193 #1): literal bound on the executed count, on
 # its own if, exiting inside the block — a stranded run must never report clean.
 # Ratchet this number in the same commit that adds a case; it is the measured
 # green count, zero headroom (the convention the sibling suites use). ---
-if [[ "$cases" -lt 42 ]]; then
-  printf '[FATAL] anti-vacuity floor: only %d verdicts recorded, floor is 42 — fixtures or pins were deleted\n' "$cases" >&2
+if [[ "$cases" -lt 58 ]]; then
+  printf '[FATAL] anti-vacuity floor: only %d verdicts recorded, floor is 58 — fixtures or pins were deleted\n' "$cases" >&2
   exit 1
 fi
 
-printf '\n=== %d ok, %d no (%d cases, floor 42) ===\n' "$ok_count" "$no_count" "$cases"
+printf '\n=== %d ok, %d no (%d cases, floor 58) ===\n' "$ok_count" "$no_count" "$cases"
 if (( no_count == 0 && ${#LEDGER[@]} == 0 )); then
   echo "PASSED"
   exit 0
