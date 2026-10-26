@@ -69,7 +69,8 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------------------------------------
 describe("findOpenCreatePr -- one open create at a time", () => {
   const HEAD = `${CREATE_HEAD_PREFIX}${"a".repeat(64)}-2026-10-26`;
-  const pr = (n: number, body: string, ref: string | null = HEAD) => ({ number: n, body, head: ref === null ? null : { ref } });
+  const pr = (n: number, body: string, ref: string | null = HEAD, fullName: string | null = "o/r") =>
+    ({ number: n, body, head: ref === null ? null : { ref, ...(fullName === null ? {} : { repo: { full_name: fullName } }) } });
   const octokitOf = (pages: unknown[][] | Error) => {
     const calls: Array<Record<string, unknown>> = [];
     return {
@@ -91,13 +92,27 @@ describe("findOpenCreatePr -- one open create at a time", () => {
   });
 
   it("does NOT depend on the best-effort label: a labelless create PR still counts (a label failure must not allow a second open create)", async () => {
-    const labelless = { number: 7, body: CREATE_PR_BODY_LINE, head: { ref: HEAD }, labels: [] };
+    const labelless = { number: 7, body: CREATE_PR_BODY_LINE, head: { ref: HEAD, repo: { full_name: "o/r" } }, labels: [] };
     expect(await findOpenCreatePr(octokitOf([[labelless]]).octokit, "o", "r")).toEqual({ kind: "open", pr: 7 });
   });
 
   it("ignores the line on a PR whose head is not a bot branch, a bot branch without the line, and null shapes", async () => {
-    const { octokit } = octokitOf([[pr(1, CREATE_PR_BODY_LINE, "feature/x"), pr(2, "edit"), pr(3, CREATE_PR_BODY_LINE, null), { number: 4, body: null, head: { ref: HEAD } }, { number: 5, body: CREATE_PR_BODY_LINE }]]);
+    const { octokit } = octokitOf([[pr(1, CREATE_PR_BODY_LINE, "feature/x"), pr(2, "edit"), pr(3, CREATE_PR_BODY_LINE, null), { number: 4, body: null, head: { ref: HEAD, repo: { full_name: "o/r" } } }, { number: 5, body: CREATE_PR_BODY_LINE }]]);
     expect(await findOpenCreatePr(octokit, "o", "r")).toEqual({ kind: "none" });
+  });
+
+  it("G2: a FORK PR (head repo is not this repo, or unknown/deleted) with the bot branch name and the body line does NOT block the arm", async () => {
+    const { octokit } = octokitOf([[
+      pr(1, CREATE_PR_BODY_LINE, HEAD, "attacker/r"),
+      pr(2, CREATE_PR_BODY_LINE, HEAD, "o/r-fork"),
+      pr(3, CREATE_PR_BODY_LINE, HEAD, null), // head.repo missing (a deleted fork): not ours
+      { number: 4, body: CREATE_PR_BODY_LINE, head: { ref: HEAD, repo: null } },
+      pr(5, CREATE_PR_BODY_LINE, HEAD, "O/R"), // case differs: GitHub reports the canonical name, so a mismatch is not ours either
+    ]]);
+    expect(await findOpenCreatePr(octokit, "o", "r")).toEqual({ kind: "none" });
+    // and the same PR from THIS repo is found (the assertion can fail)
+    const { octokit: own } = octokitOf([[pr(1, CREATE_PR_BODY_LINE, HEAD, "attacker/r"), pr(9, CREATE_PR_BODY_LINE, HEAD, "o/r")]]);
+    expect(await findOpenCreatePr(own, "o", "r")).toEqual({ kind: "open", pr: 9 });
   });
 
   it("walks pages until a short one; a FULL last allowed page is unverifiable (never inferred clear)", async () => {

@@ -209,11 +209,21 @@ function headRef(pr: ListedPr): string | null {
   return typeof ref === "string" ? ref : null;
 }
 
+/** Is the PR's head branch in THIS repository? A fork (or a deleted fork: `head.repo` null/absent) is never ours. */
+function headIsThisRepo(pr: ListedPr, owner: string, repo: string): boolean {
+  if (typeof pr.head !== "object" || pr.head === null) return false;
+  const headRepo = (pr.head as { repo?: unknown }).repo;
+  if (typeof headRepo !== "object" || headRepo === null) return false;
+  return (headRepo as { full_name?: unknown }).full_name === `${owner}/${repo}`;
+}
+
 /**
  * Is another create PR already open? `GET /pulls` (state open), never the search API (the search index lags and a
  * stale miss would open a second create). A PR counts when its head ref starts with `self-healing/auto-` AND its body
- * contains the fixed `CREATE (new skill)` line: both are set by this arm at creation, whereas the `self-healing/auto`
- * label is applied best effort afterwards and is NOT required (a label failure must not allow a second open create).
+ * contains the fixed `CREATE (new skill)` line AND its head branch lives in THIS repository: the first two are set by
+ * this arm at creation, whereas the `self-healing/auto` label is applied best effort afterwards and is NOT required (a
+ * label failure must not allow a second open create). The head-repo check keeps a stranger's fork PR (any account may
+ * open one with a branch named `self-healing/auto-x` and the fixed body line) from blocking the arm for good.
  * A list that cannot be read, or whose last allowed page is full, is `unverifiable` and refuses: absence is never
  * inferred from a read that did not complete.
  */
@@ -232,7 +242,7 @@ export async function findOpenCreatePr(octokit: ArmOctokit, owner: string, repo:
     if (!Array.isArray(data)) return { kind: "unverifiable", detail: "list-failed", cause: "non-array" };
     for (const pr of data as ListedPr[]) {
       const ref = headRef(pr);
-      if (ref !== null && ref.startsWith(CREATE_HEAD_PREFIX) && typeof pr.body === "string" && pr.body.includes(CREATE_PR_BODY_LINE)) {
+      if (ref !== null && ref.startsWith(CREATE_HEAD_PREFIX) && typeof pr.body === "string" && pr.body.includes(CREATE_PR_BODY_LINE) && headIsThisRepo(pr, owner, repo)) {
         return { kind: "open", pr: Number.isInteger(pr.number) ? (pr.number as number) : 0 };
       }
     }

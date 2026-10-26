@@ -483,7 +483,7 @@ describe("the week cap (CTO G2): the edit loop runs first and shares the cap", (
 
 // ---------------------------------------------------------------------------------------------------------
 describe("one open create at a time (CTO G2)", () => {
-  const BOT_HEAD = { ref: `${PROMOTE_BRANCH_PREFIX}${"c".repeat(64)}-2026-10-20` };
+  const BOT_HEAD = { ref: `${PROMOTE_BRANCH_PREFIX}${"c".repeat(64)}-2026-10-20`, repo: { full_name: "jikig-ai/soleur" } };
   const OPEN_CREATE = { number: 777, body: `${CREATE_PR_BODY_LINE}\n\nProposed by the loop.`, labels: [{ name: "self-healing/auto" }], head: BOT_HEAD };
 
   it("another open self-healing/auto PR carrying the fixed CREATE line refuses create-open before any model call", async () => {
@@ -505,6 +505,8 @@ describe("one open create at a time (CTO G2)", () => {
     h.pulls.list = [
       { number: 1, body: CREATE_PR_BODY_LINE, labels: [{ name: "other" }], head: { ref: "feature/quote-the-line" } },
       { number: 2, body: "an edit PR", labels: [{ name: "self-healing/auto" }], head: BOT_HEAD },
+      // G2: a FORK PR with the bot branch name and the fixed line is not ours and must not block the arm
+      { ...OPEN_CREATE, number: 3, head: { ...BOT_HEAD, repo: { full_name: "someone-else/soleur" } } },
     ];
     const r = await run(PATTERNS_CREATE());
     expect(r.last).toMatchObject({ create_outcome: "opened" });
