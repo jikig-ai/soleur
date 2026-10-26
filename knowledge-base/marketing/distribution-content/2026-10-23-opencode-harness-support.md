@@ -11,7 +11,7 @@ pr_reference: "#10723"
 
 ## X/Twitter Thread
 
-Soleur now runs on OpenCode — the fifth supported harness alongside Claude Code, Grok Build, Codex, and Devin CLI. Run the full 67-agent, 103-skill AI organization on open-weights models or any BYOK provider while keeping your company memory in plain files you own.
+Soleur now runs on OpenCode (@opencode) — the fifth supported harness alongside Claude Code, Grok Build, Codex, and Devin CLI. Run the full 67-agent, 103-skill AI organization on open-weights models or any BYOK provider while keeping your company memory in plain files you own.
 
 2/ One command to install: npx @soleur/opencode install (or bunx @soleur/opencode install). It vendors the full Soleur payload into ~/.config/opencode/soleur/ so skills, agent stubs, /go routing, and shell guards survive npx cache pruning.
 
@@ -19,4 +19,4 @@ Soleur now runs on OpenCode — the fifth supported harness alongside Claude Cod
 
 ## Bluesky
 
-Soleur now runs on OpenCode — the fifth supported harness alongside Claude Code, Grok Build, Codex, and Devin CLI. Install with npx @soleur/opencode install and run all 67 agents and 103 skills on open-weights models or any BYOK provider while owning your memory in Git.
+Soleur now runs on OpenCode (@opencode) — the fifth supported harness alongside Claude Code, Grok Build, Codex, and Devin CLI. Install with npx @soleur/opencode install and run all 67 agents and 103 skills on open-weights models or any BYOK provider while owning your memory in Git.
