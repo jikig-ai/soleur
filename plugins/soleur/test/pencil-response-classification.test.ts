@@ -67,3 +67,14 @@ describe("classifyResponse — auth-failure patterns (new)", () => {
     expect(isError).toBe(false);
   });
 });
+
+// #11143 — 0.2.9 answers a tool it no longer has with `Unknown tool: <name>`.
+// The classifier treated that as success, so the auto-save ran after it.
+describe("classifyResponse — Unknown tool (#11143)", () => {
+  test("`Unknown tool: x` is an error", () => {
+    expect(classifyResponse("Unknown tool: find_empty_space_on_canvas").isError).toBe(true);
+  });
+  test("a node name containing the phrase mid-line is not an error", () => {
+    expect(classifyResponse('{"name":"Unknown tool: label"}').isError).toBe(false);
+  });
+});

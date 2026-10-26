@@ -20,6 +20,8 @@
 #   28  anything else                                                                                        -> probe_failed reason=unclassified
 #   29  ssh (or timeout) could not be run at all: rc 126 / 127                                               -> probe_failed reason=ssh_unrunnable
 #   30  the endpoint closed or reset the connection (it answered at the TCP level, so not a blackhole)       -> probe_failed reason=ssh_closed
+#   31  the transport key, after normalisation, is not a parseable key file (under 3 lines, or ssh-keygen -y   -> probe_failed reason=key_shape
+#       refuses it; without ssh-keygen only the BEGIN/END line shape is checked). Checked BEFORE any dial.
 #    0  the transport wrapper answered
 #
 # The egress read dials the git-data endpoint with the TRANSPORT key and the same pinned options the app uses, asking
@@ -27,6 +29,12 @@
 # absent repo (or a frozen or unverified store) at once with a `remote: git-data transport: ...` line. That line proves
 # reachability, the key, the pin AND the wrapper in one dial; a timeout means the egress is a blackhole. The probe asks
 # for no real repository, touches no ref, and cannot change the store.
+#
+# Key shape (#8211 PR-G): Doppler holds the key as a multi-line value, but ci-deploy.sh loads prd with `doppler secrets download
+# --format docker` + `docker --env-file`, which collapses it to ONE line with literal backslash-n pairs (rehearsal-2 flip run
+# 40305860011: ssh got an unparseable key and the dial read auth_refused). This body applies the SAME transform as the app
+# (server/git-data-key.ts normalizeGitDataKey): a value with NO real newline that contains a literal backslash-n has each pair
+# replaced by a real newline; any other value is left as it is. test/git-data-key.test.ts pins the two to the same bytes.
 #
 # Key handling: the key goes from this process's environment into a 0600 file in a 0700 scratch directory, never into
 # argv and never to stdout or stderr; ssh's stderr goes to a file inside that directory, is only pattern-matched, and
@@ -58,6 +66,33 @@ rmdir "$probe_dir" 2>/dev/null || exit 21
 
 # Read 2: the transport, from inside this container.
 key="${GIT_TRANSPORT_SSH_PRIVATE_KEY:-}"
+# Normalise the docker-format key (see "Key shape" above). Ends trimmed (space, tab, CR, LF: what the app's trim() removes), then: a real
+# newline present -> untouched; otherwise each literal backslash-n becomes a newline and the ends are trimmed again. The printf below
+# writes the one final LF OpenSSH requires.
+nl='
+'
+tab="$(printf '\t')"
+cr="$(printf '\r')"
+trim_key() {
+  while :; do
+    case "$key" in
+      " "*|"$tab"*|"$cr"*|"$nl"*) key="${key#?}" ;;
+      *) break ;;
+    esac
+  done
+  while :; do
+    case "$key" in
+      *" "|*"$tab"|*"$cr"|*"$nl") key="${key%?}" ;;
+      *) break ;;
+    esac
+  done
+}
+trim_key
+case "$key" in
+  *"$nl"*) : ;;
+  *'\n'*) key="$(printf '%s' "$key" | sed 's/\\n/\
+/g')"; trim_key ;;
+esac
 pin="${GIT_DATA_SSH_HOST_KEY:-}"
 host="${GIT_DATA_SSH_HOST:-}"
 if [ -z "$key" ] || [ -z "$pin" ] || [ -z "$host" ]; then exit 23; fi
@@ -80,6 +115,20 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 printf '%s\n' "$key" > "$d/k" || exit 22
 printf 'git-data %s\n' "$pin" > "$d/kh" || exit 22
+
+# Key shape, before any dial: a key that cannot parse would read as auth_refused, which sends the operator to key rotation.
+# Fixed word only; the key text is never printed. stdin is /dev/null (this script's own stdin is its text).
+klines="$(wc -l < "$d/k")" || exit 22
+klines=$((klines + 0))
+if [ "$klines" -lt 3 ]; then exit 31; fi
+if command -v ssh-keygen >/dev/null 2>&1; then
+  ssh-keygen -y -f "$d/k" </dev/null >/dev/null 2>&1 || exit 31
+else
+  first="$(head -n 1 "$d/k")"
+  last="$(tail -n 1 "$d/k")"
+  case "$first" in "-----BEGIN "*"PRIVATE KEY-----") : ;; *) exit 31 ;; esac
+  case "$last" in "-----END "*"PRIVATE KEY-----") : ;; *) exit 31 ;; esac
+fi
 
 repo_root="${GDCP_REPO_ROOT:-/mnt/git-data/repositories}"
 rc=0
