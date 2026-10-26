@@ -2478,7 +2478,7 @@
                               "id": "rxXkh",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -4632,7 +4632,7 @@
                               "id": "VLTQ2",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -6854,7 +6854,7 @@
                               "id": "xtCHl",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -9076,7 +9076,7 @@
                               "id": "TrNZ2",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -10276,7 +10276,7 @@
                               "id": "RyJiO",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -10869,7 +10869,7 @@
                               "id": "EZnlB",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -11436,7 +11436,7 @@
                               "id": "w2aTY",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -12026,7 +12026,7 @@
                               "id": "g5WUX",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -13070,7 +13070,7 @@
                           "id": "Dz2cA",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -14562,7 +14562,7 @@
                           "id": "ahkiC",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -16122,7 +16122,7 @@
                           "id": "Qgtde",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -17682,7 +17682,7 @@
                           "id": "RZR8v",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -18364,7 +18364,7 @@
                           "id": "wK7oh",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -18687,7 +18687,7 @@
                           "id": "mgDHf",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -18984,7 +18984,7 @@
                           "id": "LfZTp",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -19304,7 +19304,7 @@
                           "id": "ZV1l6",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -19869,7 +19869,7 @@
                               "id": "inCUT",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -20459,7 +20459,7 @@
                               "id": "jjGcz",
                               "name": "Disclosure lead",
                               "fill": "$text-primary",
-                              "content": "A best-effort summary, not a complete record.",
+                              "content": "A best-effort summary, not a full record.",
                               "fontFamily": "$font",
                               "fontSize": 12,
                               "fontWeight": "semibold"
@@ -20879,7 +20879,7 @@
                           "id": "dw30P",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"
@@ -21199,7 +21199,7 @@
                           "id": "ldP9Z",
                           "name": "Disclosure lead",
                           "fill": "$text-primary",
-                          "content": "A best-effort summary, not a complete record.",
+                          "content": "A best-effort summary, not a full record.",
                           "fontFamily": "$font",
                           "fontSize": 12,
                           "fontWeight": "semibold"

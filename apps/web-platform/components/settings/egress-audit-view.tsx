@@ -102,7 +102,7 @@ function Banner() {
     <Notice
       icon={<Info aria-hidden="true" className="h-3.5 w-3.5" />}
       lead="A best-effort summary, not a full record."
-      body="Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are deleted about 30 days after they were recorded."
+      body="Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are kept for about 30 days, then deleted."
     />
   );
 }
