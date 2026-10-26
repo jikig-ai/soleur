@@ -88,15 +88,7 @@ SELECT 'grants_conversations_authenticated' AS check_name, count(*)::int AS bad 
 UNION ALL
 SELECT 'grants_conversations_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."conversations"',v.verb)
 UNION ALL
-SELECT 'grants_denied_jti_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."denied_jti"',v.verb)
-UNION ALL
-SELECT 'grants_denied_jti_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."denied_jti"',v.verb)
-UNION ALL
 SELECT 'grants_denied_jti_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."denied_jti"',v.verb)
-UNION ALL
-SELECT 'grants_dsar_export_audit_pii_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."dsar_export_audit_pii"',v.verb)
-UNION ALL
-SELECT 'grants_dsar_export_audit_pii_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."dsar_export_audit_pii"',v.verb)
 UNION ALL
 SELECT 'grants_dsar_export_audit_pii_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."dsar_export_audit_pii"',v.verb)
 UNION ALL
@@ -162,10 +154,6 @@ SELECT 'grants_messages_authenticated' AS check_name, count(*)::int AS bad FROM 
 UNION ALL
 SELECT 'grants_messages_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."messages"',v.verb)
 UNION ALL
-SELECT 'grants_mint_rate_window_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."mint_rate_window"',v.verb)
-UNION ALL
-SELECT 'grants_mint_rate_window_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."mint_rate_window"',v.verb)
-UNION ALL
 SELECT 'grants_mint_rate_window_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."mint_rate_window"',v.verb)
 UNION ALL
 SELECT 'grants_organizations_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."organizations"',v.verb)
@@ -179,10 +167,6 @@ UNION ALL
 SELECT 'grants_outbound_sends_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."outbound_sends"',v.verb)
 UNION ALL
 SELECT 'grants_outbound_sends_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."outbound_sends"',v.verb)
-UNION ALL
-SELECT 'grants_pending_checkout_sessions_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."pending_checkout_sessions"',v.verb)
-UNION ALL
-SELECT 'grants_pending_checkout_sessions_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."pending_checkout_sessions"',v.verb)
 UNION ALL
 SELECT 'grants_pending_checkout_sessions_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."pending_checkout_sessions"',v.verb)
 UNION ALL
@@ -238,10 +222,6 @@ SELECT 'grants_scope_grants_service_role' AS check_name, count(*)::int AS bad FR
 UNION ALL
 SELECT 'grants_statutory_repin_send_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."statutory_repin_send"',v.verb)
 UNION ALL
-SELECT 'grants_tc_acceptances_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."tc_acceptances"',v.verb)
-UNION ALL
-SELECT 'grants_tc_acceptances_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."tc_acceptances"',v.verb)
-UNION ALL
 SELECT 'grants_tc_acceptances_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."tc_acceptances"',v.verb)
 UNION ALL
 SELECT 'grants_team_names_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."team_names"',v.verb)
@@ -255,10 +235,6 @@ UNION ALL
 SELECT 'grants_template_authorizations_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."template_authorizations"',v.verb)
 UNION ALL
 SELECT 'grants_template_authorizations_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."template_authorizations"',v.verb)
-UNION ALL
-SELECT 'grants_tenant_deploy_audit_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."tenant_deploy_audit"',v.verb)
-UNION ALL
-SELECT 'grants_tenant_deploy_audit_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."tenant_deploy_audit"',v.verb)
 UNION ALL
 SELECT 'grants_tenant_deploy_audit_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."tenant_deploy_audit"',v.verb)
 UNION ALL
@@ -305,10 +281,6 @@ UNION ALL
 SELECT 'grants_workspace_invitations_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."workspace_invitations"',v.verb)
 UNION ALL
 SELECT 'grants_workspace_invitations_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."workspace_invitations"',v.verb)
-UNION ALL
-SELECT 'grants_workspace_member_actions_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('MAINTAIN'),('REFERENCES'),('TRIGGER'),('TRUNCATE')) v(verb) WHERE NOT has_table_privilege('anon','public."workspace_member_actions"',v.verb)
-UNION ALL
-SELECT 'grants_workspace_member_actions_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('MAINTAIN'),('REFERENCES'),('TRIGGER'),('TRUNCATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."workspace_member_actions"',v.verb)
 UNION ALL
 SELECT 'grants_workspace_member_actions_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."workspace_member_actions"',v.verb)
 UNION ALL

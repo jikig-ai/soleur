@@ -215,7 +215,18 @@ const RETIRED: Record<string, string> = {};
  * prd posture. OVERRIDES entries REPLACE parsed snapshot entries for the same
  * name; INTERNAL entries must NOT collide (a relation cannot be both).
  */
-const OVERRIDES: Record<string, RegistryEntry> = {};
+// OVERRIDES for migration 175's shape-(iv) revokes: 174's parsed snapshot still
+// expects anon/authenticated grants on these seven tables, but the corpus's
+// effective state post-175 is service_role-only — the TOM-4 documented posture.
+const OVERRIDES: Record<string, RegistryEntry> = {
+  "denied_jti": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
+  "dsar_export_audit_pii": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
+  "mint_rate_window": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
+  "pending_checkout_sessions": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
+  "tc_acceptances": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
+  "tenant_deploy_audit": exposed({ service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
+  "workspace_member_actions": exposed({ service_role: ["MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE"] }, { provenance: "migration 175 revokes anon/authenticated on TOM-4 shape-(iv) tables (inert on prd, RLS already denies); aligns corpus with the documented service-role-only posture" }),
+};
 
 const SNAPSHOT_GRANTS = parseSnapshotGrants(readFileSync(SNAPSHOT_PATH, "utf8"));
 

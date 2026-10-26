@@ -349,11 +349,11 @@ if [[ "$rc" == "1" ]] && grep -Eq 'sequence|USAGE' <<<"$out"; then pass "exit 1 
 # Assertion-count floor — deleting cases or no-op-ing pass/fail must not let
 # the suite certify nothing (the supabase-local.test.sh precedent).
 # ----------------------------------------------------------------------
-MIN_ASSERTIONS=30
 echo ""
 echo "lint-migration-api-grants.test.sh: $PASS passed, $FAIL failed"
+MIN_ASSERTIONS=30
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
-  echo "ASSERTION FLOOR BREACHED: ran $PASS, expected >= $MIN_ASSERTIONS." >&2
+  echo "assertion floor breached: only $PASS assertions ran, expected >= $MIN_ASSERTIONS." >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
