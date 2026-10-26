@@ -813,7 +813,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/inngest-doublefire-probe.sh"
   "apps/web-platform/infra/inngest-enumerate-reminders.sh"
   "apps/web-platform/infra/inngest-inventory.sh"
-  "apps/web-platform/infra/inngest-luks-cutover.sh"
   "apps/web-platform/infra/inngest-rearm-reminders.sh"
   "apps/web-platform/infra/inngest-redis-bootstrap.sh"
   "apps/web-platform/infra/inngest-registry-probe.sh"

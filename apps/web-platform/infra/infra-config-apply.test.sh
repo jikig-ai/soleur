@@ -126,14 +126,13 @@ export_valid_env_vars() {
   export GIT_LOCK_CHARDEVICE_SWEEP_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_REGISTRY_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_DOUBLEFIRE_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
-  # #6780 — the five dedicated-host carriers (ADR-135 D3 refresh-set members), payload
+  # #6780 — the four dedicated-host carriers (ADR-135 D3 refresh-set members), payload
   # fields mirrored from push-infra-config.sh; on web hosts they land as inert
   # /usr/local/bin files, their real channel being the dedicated host's bundle pull.
   export INNGEST_REDIS_BOOTSTRAP_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_CUTOVER_FLIP_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_SERVER_FLIP_GUARD_SH_B64=$(_payload_file "#!/bin/bash")
   export CAT_INNGEST_CUTOVER_STATE_SH_B64=$(_payload_file "#!/bin/bash")
-  export INNGEST_LUKS_CUTOVER_SH_B64=$(_payload_file "#!/bin/bash")
   # #7095 — the re-deliverable Doppler credential + the two drop-ins re-pointing the
   # generated units (vector, inngest-heartbeat) at it. The credential payload MUST be valid
   # KEY=VALUE: infra-config-install.sh rejects a malformed /etc/default/* payload outright
