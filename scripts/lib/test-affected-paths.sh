@@ -1501,6 +1501,25 @@ AFFECTED_PLUGINS_SOLEUR_SCRIPTS_MERGE_EFFECT_CLASS_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/ship-prepush-secret-scan.test.sh — reads the script under test, the ship SKILL.md call site, the repo's own
+# gitleaks pack and the CI range arm it must stay in parity with; the shared libs it sources are named so an edit to them selects it.
+AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PREPUSH_SECRET_SCAN_TEST_SH_PATHS=(
+  ".github/workflows/secret-scan.yml"
+  ".claude/hooks/lib/incidents.sh"
+  ".claude/hooks/ship-unpushed-commits-gate.sh"
+  ".gitleaks.toml"
+  "plugins/soleur/skills/review/SKILL.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/test/lib/gitleaks-probe.sh"
+  "plugins/soleur/test/ship-prepush-secret-scan.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/rule-metrics-constants.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_TEST_AGGREGATOR_DIAGNOSIS_TEST_SH_PATHS=(
