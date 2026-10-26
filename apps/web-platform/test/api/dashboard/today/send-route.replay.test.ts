@@ -368,7 +368,7 @@ describe("gates still apply to the dispatch arm", () => {
   });
 });
 
-describe("a replay is bound to the whole approval", () => {
+describe("a replay is bound to the draft body", () => {
   test("edited draft → 409 draft_changed_since_approval BEFORE any gate; draft kept; replay-draft-changed op", async () => {
     setup({ draft_preview: "edited after approval" });
     // A revoked grant must NOT turn this into a 403: the hash check precedes isGranted.
@@ -399,43 +399,6 @@ describe("a replay is bound to the whole approval", () => {
       "draft_changed_since_approval",
     );
     expect(mockIsGranted).not.toHaveBeenCalled();
-    expect(mockInngestSend).not.toHaveBeenCalled();
-  });
-
-  test("tier drift (row written under draft_one_click, grant is now approve_every_time) → 409 after isGranted, before the template gate", async () => {
-    setup({ row: { tier_at_send: "draft_one_click" } });
-    mockIsGranted.mockResolvedValue({
-      id: GRANT_ID,
-      tier: "approve_every_time",
-    });
-
-    const res = await POST(
-      makeRequest({
-        confirmed_typed: true,
-        typed_value: "SEND",
-        expected_draft_preview_hash: DRAFT_HASH,
-      }),
-      ctx(),
-    );
-    expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: string }).error).toBe(
-      "draft_changed_since_approval",
-    );
-    expect(mockIsGranted).toHaveBeenCalledTimes(1);
-    expect(mockRunTemplateGate).not.toHaveBeenCalled();
-    expect(mockInngestSend).not.toHaveBeenCalled();
-    expect(store.messageStatus()).toBe("draft");
-  });
-
-  test("action_class drift → 409 draft_changed_since_approval, template gate not called", async () => {
-    setup({ row: { action_class: "finance.payment_failed" } });
-
-    const res = await POST(makeRequest({}), ctx());
-    expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: string }).error).toBe(
-      "draft_changed_since_approval",
-    );
-    expect(mockRunTemplateGate).not.toHaveBeenCalled();
     expect(mockInngestSend).not.toHaveBeenCalled();
   });
 });
@@ -469,22 +432,67 @@ describe("the 23h replay age gate (server clock, fail-closed)", () => {
     expect(mockWarnSilentFallback.mock.calls[0][1]).toMatchObject({
       feature: "spawn-agent",
       op: "inngest-replay-stale",
+      extra: expect.objectContaining({ reason: "expired" }),
     });
+  });
+
+  test("exactly 23h replays; 23h + 1ms is expired (boundary pins, fixed clock)", async () => {
+    setup({
+      row: { clicked_at: new Date(NOW.getTime() - 23 * HOUR).toISOString() },
+    });
+    expect((await POST(makeRequest({}), ctx())).status).toBe(200);
+
+    vi.clearAllMocks();
+    mockValidateOrigin.mockReturnValue({
+      valid: true,
+      origin: "https://app.soleur.ai",
+    });
+    mockGetUser.mockResolvedValue({ data: { user: { id: FOUNDER_A } } });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockInngestSend.mockResolvedValue({ ids: ["evt-1"] });
+    mockRunTemplateGate.mockResolvedValue({ kind: "allow" });
+    setup({
+      row: {
+        clicked_at: new Date(NOW.getTime() - 23 * HOUR - 1).toISOString(),
+      },
+    });
+    const late = await POST(makeRequest({}), ctx());
+    expect(late.status).toBe(409);
+    expect(((await late.json()) as { error: string }).error).toBe(
+      "approval_expired",
+    );
+  });
+
+  test("clock skew (CTO Q5): a click up to 60s in the FUTURE still replays", async () => {
+    setup({
+      row: { clicked_at: new Date(NOW.getTime() + 30_000).toISOString() },
+    });
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
   });
 
   test.each([
     ["garbage", "not-a-timestamp"],
     ["null", null],
-    ["future", "2027-01-01T00:00:00.000Z"],
-  ])("a %s clicked_at fails closed to approval_expired", async (_n, value) => {
-    setup({ row: { clicked_at: value } });
-    const res = await POST(makeRequest({}), ctx());
-    expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: string }).error).toBe(
-      "approval_expired",
-    );
-    expect(mockInngestSend).not.toHaveBeenCalled();
-  });
+    ["120s in the future", new Date(NOW.getTime() + 120_000).toISOString()],
+  ])(
+    "a %s clicked_at fails closed: 409 approval_expired, NO dispatch and NO archive (self-heals)",
+    async (_n, value) => {
+      setup({ row: { clicked_at: value } });
+      const res = await POST(makeRequest({}), ctx());
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toBe(
+        "approval_expired",
+      );
+      expect(mockInngestSend).not.toHaveBeenCalled();
+      expect(store.messageStatus()).toBe("draft");
+      expect(mockWarnSilentFallback.mock.calls[0][1]).toMatchObject({
+        op: "inngest-replay-stale",
+        extra: expect.objectContaining({ reason: "future_clicked_at" }),
+      });
+    },
+  );
 });
 
 describe("pending rows with nothing to dispatch are ungated", () => {
@@ -572,7 +580,6 @@ describe("concurrency, scoping and failure arms", () => {
     expect(store.actionSendsSelects[0]).toEqual([
       "id",
       "per_send_body_sha256",
-      "action_class",
       "tier_at_send",
       "clicked_at",
       "acknowledged_at",
@@ -608,5 +615,123 @@ describe("concurrency, scoping and failure arms", () => {
     );
     expect(JSON.stringify(replayExtra)).not.toContain(DRAFT_PREVIEW);
     expect(JSON.stringify(replayExtra)).not.toContain(DRAFT_HASH);
+  });
+});
+
+describe("review-round pins (#10543)", () => {
+  const OTHER_MSG = "99999999-9999-4999-aaaa-999999999999";
+  const OTHER_ROW = "55555555-5555-4555-aaaa-555555555555";
+
+  test("the lookup is scoped to THIS message: another message's approval row for the same user is never replayed", async () => {
+    setup({
+      row: null,
+      rows: [
+        // listed FIRST so a lookup that dropped its message_id filter would pick it
+        pendingActionSendRow({
+          id: OTHER_ROW,
+          message_id: OTHER_MSG,
+          user_id: FOUNDER_A,
+          per_send_body_sha256: DRAFT_HASH,
+          action_class: ACTION_CLASS,
+          clicked_at: new Date(NOW.getTime() - HOUR).toISOString(),
+        }),
+        pendingActionSendRow({
+          id: ROW_ID,
+          message_id: MSG_ID,
+          user_id: FOUNDER_A,
+          per_send_body_sha256: DRAFT_HASH,
+          action_class: ACTION_CLASS,
+          clicked_at: new Date(NOW.getTime() - HOUR).toISOString(),
+        }),
+      ],
+    });
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(200);
+    const sent = mockInngestSend.mock.calls[0][0] as { id: string };
+    expect(sent.id).toBe(`agent-spawn-${ROW_ID}`);
+    expect(sent.id).not.toContain(OTHER_ROW);
+  });
+
+  test("a terminal row on an UNPARSEABLE source_ref is already_sent, not a degraded 200 (arm order)", async () => {
+    setup({
+      source_ref: "link-deadbeef00000000",
+      row: { acknowledged_at: "2026-10-26T11:30:00.000Z" },
+    });
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      "already_sent",
+    );
+  });
+
+  test("tier tightened since the click (row draft_one_click, grant now approve_every_time): replay needs a re-typed SEND, then replays", async () => {
+    setup({ row: { tier_at_send: "draft_one_click" } });
+    mockIsGranted.mockResolvedValue({
+      id: GRANT_ID,
+      tier: "approve_every_time",
+    });
+
+    const blocked = await POST(makeRequest({}), ctx());
+    expect(blocked.status).toBe(409);
+    expect(((await blocked.json()) as { error: string }).error).toBe(
+      "requires_confirmation",
+    );
+    expect(mockInngestSend).not.toHaveBeenCalled();
+
+    const ok = await POST(
+      makeRequest({
+        confirmed_typed: true,
+        typed_value: "SEND",
+        expected_draft_preview_hash: DRAFT_HASH,
+      }),
+      ctx(),
+    );
+    expect(ok.status).toBe(200);
+    expect(mockWriteActionSend).not.toHaveBeenCalled();
+  });
+
+  test("tier loosened since the click (row approve_every_time, grant now draft_one_click): the replay still dispatches", async () => {
+    setup({ row: { tier_at_send: "approve_every_time" } });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(200);
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
+  });
+
+  test("a grant moved to an autonomous tier since the click is refused 400 and dispatches nothing", async () => {
+    setup();
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "auto" });
+
+    const res = await POST(makeRequest({}), ctx());
+    expect(res.status).toBe(400);
+    expect(mockInngestSend).not.toHaveBeenCalled();
+    expect(store.messageStatus()).toBe("draft");
+  });
+
+  test("the template gate is told to EXCLUDE the replayed row from its quota count; a fresh send passes no exclusion", async () => {
+    setup();
+    await POST(makeRequest({}), ctx());
+    expect(mockRunTemplateGate).toHaveBeenCalledTimes(1);
+    expect(mockRunTemplateGate.mock.calls[0][0]).toMatchObject({
+      excludeActionSendId: ROW_ID,
+    });
+
+    vi.clearAllMocks();
+    mockValidateOrigin.mockReturnValue({
+      valid: true,
+      origin: "https://app.soleur.ai",
+    });
+    mockGetUser.mockResolvedValue({ data: { user: { id: FOUNDER_A } } });
+    mockIsGranted.mockResolvedValue({ id: GRANT_ID, tier: "draft_one_click" });
+    mockWriteActionSend.mockResolvedValue({ id: AS_ID });
+    mockInngestSend.mockResolvedValue({ ids: ["evt-1"] });
+    mockRunTemplateGate.mockResolvedValue({ kind: "allow" });
+    setup({ row: null });
+    await POST(makeRequest({}), ctx());
+    expect(mockRunTemplateGate.mock.calls[0][0]).not.toHaveProperty(
+      "excludeActionSendId",
+    );
   });
 });

@@ -49,8 +49,10 @@ The founder-callable send route (`apps/web-platform/app/api/dashboard/today/[id]
 `action_sends` approval row, then issues ONE bare enqueue of the spawn event with no retry and no event id, then flips
 the draft to archived. When that single enqueue throws, the route still archives the draft and answers 200 with a
 degraded marker, so the founder's approved Concierge action is silently lost. Worse, the loss is unrecoverable by the
-founder: a re-click inserts a second `action_sends` row, hits the unique-per-message constraint (23505), and the route
-answers `already_sent`, which the client treats as a soft success.
+founder: the draft is already archived, so a re-click is refused with 409 `not_a_draft` (the client shows a generic
+"Send failed (409)") and nothing re-dispatches the saved approval row. (An earlier draft of this paragraph said a
+re-click hit the unique constraint and read as `already_sent`; the published route archives before any re-click, so
+the `not_a_draft` gate answers first: corrected after review, history seat.)
 
 This plan routes the enqueue through the shared retry helper with a stable event id, makes the archive conditional on the
 enqueue having been accepted, turns an exhausted enqueue into a retryable 503 that leaves the draft visible, and adds a

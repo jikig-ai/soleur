@@ -99,4 +99,38 @@ describe("enqueueAgentSpawn", () => {
 
     expect(mockInngestSend).toHaveBeenCalledTimes(3);
   });
+  test("a HUNG attempt times out after 6s, is retried with the SAME id, and a later accept resolves", async () => {
+    mockInngestSend
+      .mockImplementationOnce(() => new Promise(() => {})) // never settles
+      .mockResolvedValueOnce({ ids: ["evt-2"] });
+
+    const p = enqueueAgentSpawn({ ...ARGS });
+    await vi.advanceTimersByTimeAsync(6_000 + 500);
+    await expect(p).resolves.toBeUndefined();
+
+    expect(mockInngestSend).toHaveBeenCalledTimes(2);
+    const ids = mockInngestSend.mock.calls.map(
+      (c) => (c[0] as { id: string }).id,
+    );
+    expect(ids).toEqual([`agent-spawn-${AS_ID}`, `agent-spawn-${AS_ID}`]);
+  });
+
+  test("three HUNG attempts reject with a TimeoutError inside the 30s browser watchdog (19.5s budget)", async () => {
+    mockInngestSend.mockImplementation(() => new Promise(() => {}));
+
+    const p = enqueueAgentSpawn({ ...ARGS });
+    const settled = expect(p).rejects.toMatchObject({ name: "TimeoutError" });
+    // 3 x 6s attempts + 0.5s + 1s backoff = 19.5s; one ms short must still be pending.
+    await vi.advanceTimersByTimeAsync(19_499);
+    let done = false;
+    void p.catch(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await settled;
+
+    expect(mockInngestSend).toHaveBeenCalledTimes(3);
+  });
 });

@@ -42,8 +42,8 @@ const COPY_503 =
   "Your approval is saved, but we couldn't start the agent. Click Send again to retry.";
 const COPY_NO_LONGER = "This approval can no longer run. Refresh to update this card.";
 const COPY_CHANGED =
-  "This draft changed after you approved it. Restore the approved text or refresh.";
-const COPY_IN_PROGRESS = "Another send is in progress - try again in a moment";
+  "This draft changed after you approved it, so this approval can't run.";
+const COPY_IN_PROGRESS = "Another send is in progress — try again in a moment";
 const COPY_PERMISSIONS =
   "Permissions changed since you approved. This action can't run.";
 
@@ -194,5 +194,94 @@ describe("onConfirmTyped", () => {
     await waitFor(() =>
       expect(hook.result.current.error).toBe("Send failed (409)"),
     );
+  });
+});
+
+describe("bare 503 (no enqueue_unavailable body) is not an 'approval saved' claim", () => {
+  it("onSend: a gateway 503 falls through to 'Send failed (503)'", async () => {
+    const hook = setup();
+    responses.push({ status: 503, body: {} });
+
+    act(() => hook.result.current.onSend());
+    await waitFor(() =>
+      expect(hook.result.current.error).toBe("Send failed (503)"),
+    );
+    expect(hook.result.current.error).not.toMatch(/approval is saved/);
+  });
+
+  it("onConfirmTyped: a gateway 503 falls through to 'Send failed (503)'", async () => {
+    const hook = setup();
+    await openConfirm(hook);
+    responses.push({ status: 503, body: {} });
+
+    act(() => hook.result.current.onConfirmTyped(true, "SEND"));
+    await waitFor(() =>
+      expect(hook.result.current.error).toBe("Send failed (503)"),
+    );
+  });
+});
+
+describe("in-flight guard (#10543, CTO Q7)", () => {
+  it("a double onSend in one tick makes ONE fetch", async () => {
+    const hook = setup();
+    responses.push({ status: 200, body: {} });
+
+    act(() => {
+      hook.result.current.onSend();
+      hook.result.current.onSend();
+    });
+    await waitFor(() => expect(hook.result.current.acknowledged).toBe(true));
+    expect(globalThis.fetch as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it("the guard releases after a 503, so the next click sends again", async () => {
+    const hook = setup();
+    responses.push({
+      status: 503,
+      body: { error: "enqueue_unavailable", retryable: true },
+    });
+    act(() => hook.result.current.onSend());
+    await waitFor(() => expect(hook.result.current.error).toBe(COPY_503));
+
+    responses.push({ status: 200, body: {} });
+    act(() => hook.result.current.onSend());
+    await waitFor(() => expect(hook.result.current.acknowledged).toBe(true));
+    expect(globalThis.fetch as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(
+      2,
+    );
+  });
+
+  it("the guard releases after a thrown fetch", async () => {
+    const hook = setup();
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("network down"),
+    );
+    act(() => hook.result.current.onSend());
+    await waitFor(() =>
+      expect(hook.result.current.error).toBe("Send failed — network error"),
+    );
+
+    responses.push({ status: 200, body: {} });
+    act(() => hook.result.current.onSend());
+    await waitFor(() => expect(hook.result.current.acknowledged).toBe(true));
+  });
+
+  it("onConfirmTyped is guarded the same way: a double submit makes ONE confirm fetch", async () => {
+    const hook = setup();
+    await openConfirm(hook);
+    const before = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .length;
+    responses.push({ status: 200, body: {} });
+
+    act(() => {
+      hook.result.current.onConfirmTyped(true, "SEND");
+      hook.result.current.onConfirmTyped(true, "SEND");
+    });
+    await waitFor(() => expect(hook.result.current.acknowledged).toBe(true));
+    expect(
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length - before,
+    ).toBe(1);
   });
 });

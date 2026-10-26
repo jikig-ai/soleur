@@ -27,16 +27,25 @@
 // ACCEPTED enqueue → archive. An enqueue that is not accepted leaves the draft
 // visible and the row replayable: the founder's re-click re-dispatches the SAME
 // event id (agent-spawn-<actionSendId>) from the existing row, never a second
-// row. A replay is bound to the whole approval (draft hash, action class,
-// tier) and capped at 23h so Inngest's ~24h event dedup is never straddled.
+// row. A replay is bound to the draft body (hash) and capped at 23h so
+// Inngest's ~24h event dedup is never straddled (decide-replay.ts).
+//
+// Exceptions, where the draft is archived although THIS request enqueued
+// nothing: (1) a terminal row (the run already settled or was cancelled);
+// (2) a source_ref with no dispatchable target (nothing was ever going to be
+// enqueued); (3) an approval older than 23h (R1: fail closed rather than risk a
+// second artifact: this ABANDONS an approval whose enqueue may never have been
+// accepted, mirrored at warn level as inngest-replay-stale, sweeper tracked in
+// #11211). A click time implausibly in the future fails closed WITHOUT archiving.
 //
 // Per cq-nextjs-route-files-http-only-exports: only HTTP exports + dynamic.
-// reportSilentFallback wraps 4 distinct error surfaces; will migrate to
+// reportSilentFallback wraps the distinct error surfaces below; will migrate to
 // reportSilentFallbackWithUser when #3739 ships.
 
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
@@ -55,6 +64,11 @@ import { tierRequiresTemplateAuth } from "@/server/templates/is-template-authori
 import { getTemplateHash } from "@/server/templates/template-registry";
 import { runTemplateGate } from "@/server/templates/run-template-gate";
 import { enqueueAgentSpawn } from "@/server/action-sends/enqueue-agent-spawn";
+import {
+  decideReplay,
+  type ExistingApprovalRow,
+} from "@/server/action-sends/decide-replay";
+import { PG_UNIQUE_VIOLATION, sqlStateFromError } from "@/lib/postgres-errors";
 import { isTransientFetchError } from "@/server/inngest/send-with-retry";
 import { parseSourceRef } from "@/server/inngest/agent-acknowledgment-templates";
 import { verifiedUserId } from "@/server/request-auth";
@@ -85,45 +99,31 @@ function assertNeverTier(tier: never): never {
   throw new Error(`unhandled tier: ${String(tier)}`);
 }
 
-// A replay older than this is refused: Inngest dedups an event id for ~24h and the consumer can leave
-// acknowledged_at/failure_reason NULL on a run that executed, so an older replay could post a second
-// artifact. 23h leaves a 1h margin (plan-level choice, not verified against the DB clock; CTO R1).
-const REPLAY_MAX_AGE_MS = 23 * 60 * 60 * 1000;
-
-interface ActionSendLookupRow {
-  id: string;
-  per_send_body_sha256: string | null;
-  action_class: string;
-  tier_at_send: string;
-  clicked_at: string | null;
-  acknowledged_at: string | null;
-  failure_reason: string | null;
-  undone_at: string | null;
-  cancellation_requested_at: string | null;
-}
+// Seconds the 503 asks the caller to wait before retrying (browser callers re-click; others honor the header).
+const ENQUEUE_RETRY_AFTER_S = "5";
 
 // Read-only, cookie-scoped (owner RLS) lookup of an existing approval row for this draft.
 async function lookupActionSend(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseClient,
   userId: string,
   messageId: string,
-): Promise<{ row: ActionSendLookupRow | null; error: unknown }> {
+): Promise<{ row: ExistingApprovalRow | null; error: unknown }> {
   const { data, error } = await supabase
     .from("action_sends")
     .select(
-      "id, per_send_body_sha256, action_class, tier_at_send, clicked_at, acknowledged_at, failure_reason, undone_at, cancellation_requested_at",
+      "id, per_send_body_sha256, tier_at_send, clicked_at, acknowledged_at, failure_reason, undone_at, cancellation_requested_at",
     )
     .eq("message_id", messageId)
     .eq("user_id", userId)
     .maybeSingle();
-  return { row: (data as ActionSendLookupRow | null) ?? null, error };
+  return { row: (data as ExistingApprovalRow | null) ?? null, error };
 }
 
 // Flip the draft to archived. RLS owner-update; filtered on status = 'draft' so a concurrent
 // state change is never overwritten. Failure is non-fatal at the route layer: the action_sends
 // row IS the load-bearing artefact, and a re-click finds it again.
 async function archiveDraft(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: SupabaseClient,
   userId: string,
   messageId: string,
   actionSendId: string,
@@ -240,9 +240,10 @@ export async function POST(
 
   // #10543 — look up an existing approval row BEFORE the gates. Only the arms
   // that dispatch nothing are ungated here (a terminal row, a row with no
-  // dispatchable source_ref, an expired approval): gating them would only
-  // produce a spurious 403/409 on a draft that needs archiving. Every arm
-  // that DOES dispatch (the replay) still passes every gate below.
+  // dispatchable source_ref, an expired or implausible-click-time approval, a
+  // changed draft): gating them would only produce a spurious 403/409 on a draft
+  // that needs archiving or refusing. Every arm that DOES dispatch (the replay)
+  // still passes every gate below.
   const { row: existing, error: lookupErr } = await lookupActionSend(
     supabase,
     userId,
@@ -258,81 +259,90 @@ export async function POST(
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
 
-  let replay = false;
+  let replayRow: ExistingApprovalRow | null = null;
   if (existing) {
-    const terminal =
-      existing.acknowledged_at !== null ||
-      existing.failure_reason !== null ||
-      existing.undone_at !== null ||
-      existing.cancellation_requested_at !== null;
-    if (terminal) {
-      // The run already settled (or was cancelled/undone). The mounted
-      // LeaderLoopStatus is driven by the real row state, so the client
-      // treats already_sent as a soft success.
-      await archiveDraft(supabase, userId, messageIdStr, existing.id);
-      return NextResponse.json(
-        { error: "already_sent", message_id: messageId },
-        { status: 409 },
-      );
+    const decision = decideReplay({
+      existing,
+      parsed: parsed !== null,
+      nowMs: Date.now(),
+      draftPreviewHash,
+    });
+    switch (decision.kind) {
+      case "terminal":
+        // The run already settled (or was cancelled/undone). The mounted LeaderLoopStatus is
+        // driven by the real row state, so the client treats already_sent as a soft success.
+        await archiveDraft(supabase, userId, messageIdStr, existing.id);
+        return NextResponse.json(
+          { error: "already_sent", message_id: messageId },
+          { status: 409 },
+        );
+      case "no_artifact":
+        // Nothing would be dispatched for this source_ref shape: finish the archive that a
+        // previous click could not.
+        await archiveDraft(supabase, userId, messageIdStr, existing.id);
+        return NextResponse.json({
+          id: existing.id,
+          action_class: actionClass,
+          tier: existing.tier_at_send,
+          action_send_id: existing.id,
+          artifact_view_url: "",
+          ...(sourceRef ? { degraded: "no_artifact_in_pr_a" as const } : {}),
+        });
+      case "expired":
+      case "clock_skew":
+        // expired: archive so the card clears (CTO S1; the approval is abandoned, see the header).
+        // clock_skew: a click time implausibly in the future: fail closed WITHOUT archiving, it
+        // self-heals when the clock catches up (CTO Q5).
+        if (decision.kind === "expired") {
+          await archiveDraft(supabase, userId, messageIdStr, existing.id);
+        }
+        warnSilentFallback(null, {
+          feature: "spawn-agent",
+          op: "inngest-replay-stale",
+          message:
+            "approval replay refused: action_sends row outside the replay window",
+          extra: {
+            userId,
+            messageId,
+            actionSendId: existing.id,
+            replay: true,
+            reason:
+              decision.kind === "expired" ? "expired" : "future_clicked_at",
+          },
+        });
+        return NextResponse.json(
+          { error: "approval_expired", message_id: messageId },
+          { status: 409 },
+        );
+      case "draft_changed":
+        // The approval is bound to the body the founder saw. Runs BEFORE isGranted so a refused
+        // replay never reaches the template gate (whose first-send authorization has a side
+        // effect). The draft is kept; /edit refuses once an approval row exists, so the only
+        // way here is a race, which the 23h expiry archive self-heals (CTO Q2).
+        reportSilentFallback(null, {
+          feature: "spawn-agent",
+          op: "replay-draft-changed",
+          message:
+            "approval replay refused: draft changed since the approval row was written",
+          extra: {
+            userId,
+            messageId,
+            actionSendId: existing.id,
+            replay: true,
+          },
+        });
+        return NextResponse.json(
+          { error: "draft_changed_since_approval", message_id: messageId },
+          { status: 409 },
+        );
+      case "replay":
+        replayRow = existing;
+        break;
+      default: {
+        const _exhaustive: never = decision;
+        void _exhaustive;
+      }
     }
-    if (!parsed) {
-      // Nothing would be dispatched for this source_ref shape: finish the
-      // archive that a previous click could not.
-      await archiveDraft(supabase, userId, messageIdStr, existing.id);
-      return NextResponse.json({
-        id: existing.id,
-        action_class: actionClass,
-        tier: existing.tier_at_send,
-        action_send_id: existing.id,
-        artifact_view_url: "",
-        ...(sourceRef ? { degraded: "no_artifact_in_pr_a" as const } : {}),
-      });
-    }
-    // `age >= 0` and isFinite make an unparseable, null or future clicked_at
-    // fail closed to expiry rather than replaying.
-    const age = Date.now() - Date.parse(existing.clicked_at ?? "");
-    if (!(Number.isFinite(age) && age >= 0 && age <= REPLAY_MAX_AGE_MS)) {
-      await archiveDraft(supabase, userId, messageIdStr, existing.id);
-      warnSilentFallback(null, {
-        feature: "spawn-agent",
-        op: "inngest-replay-stale",
-        message:
-          "approval replay refused: action_sends row older than the replay window",
-        extra: {
-          userId,
-          messageId,
-          actionSendId: existing.id,
-          replay: true,
-        },
-      });
-      return NextResponse.json(
-        { error: "approval_expired", message_id: messageId },
-        { status: 409 },
-      );
-    }
-    // The approval is bound to the body the founder saw: a NULL or different
-    // stored hash means the draft changed since. Runs BEFORE isGranted so a
-    // refused replay never reaches the template gate (whose first-send
-    // authorization has a side effect). The draft is kept: recoverable.
-    if (existing.per_send_body_sha256 !== draftPreviewHash) {
-      reportSilentFallback(null, {
-        feature: "spawn-agent",
-        op: "replay-draft-changed",
-        message:
-          "approval replay refused: draft changed since the approval row was written",
-        extra: {
-          userId,
-          messageId,
-          actionSendId: existing.id,
-          replay: true,
-        },
-      });
-      return NextResponse.json(
-        { error: "draft_changed_since_approval", message_id: messageId },
-        { status: 409 },
-      );
-    }
-    replay = true;
   }
 
   // Re-check isGranted at click-time. Plan Phase 4.3 + TR8: revocation
@@ -369,29 +379,6 @@ export async function POST(
       assertNeverTier(grant.tier);
   }
 
-  // A replay re-dispatches an approval written under a specific class and
-  // tier; if either changed since, the approval no longer matches what the
-  // founder is now allowed to do. Before the template gate so a refused
-  // replay has no side effect.
-  if (
-    replay &&
-    existing &&
-    (existing.action_class !== actionClass ||
-      existing.tier_at_send !== grant.tier)
-  ) {
-    reportSilentFallback(null, {
-      feature: "spawn-agent",
-      op: "replay-draft-changed",
-      message:
-        "approval replay refused: action class or tier changed since the approval row was written",
-      extra: { userId, messageId, actionSendId: existing.id, replay: true },
-    });
-    return NextResponse.json(
-      { error: "draft_changed_since_approval", message_id: messageId },
-      { status: 409 },
-    );
-  }
-
   // PR-I (#4078) — Template-authorization two-probe gate.
   // Fires AFTER isGranted and BEFORE the tier-specific confirm gate.
   // Only `draft_one_click` requires template authorization in v1; the
@@ -413,6 +400,8 @@ export async function POST(
       grantId: grant.id,
       actionClass,
       messageId,
+      // The replayed row is already counted in sendsUsed (see is-template-authorized.ts).
+      ...(replayRow ? { excludeActionSendId: replayRow.id } : {}),
     });
     switch (gate.kind) {
       case "predicate_error":
@@ -481,8 +470,8 @@ export async function POST(
   // row), otherwise write it. The try wraps ONLY the write, so a failure
   // later (enqueue, archive) can never be mistaken for an insert failure.
   let actionSendId: string;
-  if (replay && existing) {
-    actionSendId = existing.id;
+  if (replayRow) {
+    actionSendId = replayRow.id;
   } else {
     try {
       const written = await writeActionSend({
@@ -509,11 +498,7 @@ export async function POST(
       // immutable WORM table cannot be rectified by overwrite, and this
       // loser must neither dispatch nor archive: the next click finds the
       // winner's pending row and replays it.
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? (err as { code?: unknown }).code
-          : undefined;
-      if (code === "23505") {
+      if (sqlStateFromError(err) === PG_UNIQUE_VIOLATION) {
         return NextResponse.json(
           { error: "send_in_progress", message_id: messageId },
           { status: 409 },
@@ -534,7 +519,7 @@ export async function POST(
   // `degraded: "no_artifact_in_pr_a"` so the card renders an honest pill.
   //
   // installationId is OMITTED from the event payload by design — the
-  // Inngest function server-resolves it from users.github_installation_id
+  // Inngest function server-resolves it from workspaces.github_installation_id
   // keyed by founderId per AC2 (see enqueue-agent-spawn.ts).
   let degraded: "no_artifact_in_pr_a" | undefined;
   let artifactViewUrl = "";
@@ -559,13 +544,13 @@ export async function POST(
         feature: "spawn-agent",
         op: "inngest-enqueue",
         message:
-          "inngest.send failed after retries; approval row stays committed and replayable, draft not archived",
+          "inngest.send failed (retried only when transient); approval row stays committed and replayable, draft not archived",
         extra: {
           userId,
           messageId,
           actionSendId,
           errorName: sendErr instanceof Error ? sendErr.name : "unknown",
-          replay,
+          replay: replayRow !== null,
           transient: isTransientFetchError(sendErr),
         },
       });
@@ -575,10 +560,13 @@ export async function POST(
           action_send_id: actionSendId,
           retryable: true,
         },
-        { status: 503, headers: { "Retry-After": "5" } },
+        {
+          status: 503,
+          headers: { "Retry-After": ENQUEUE_RETRY_AFTER_S },
+        },
       );
     }
-    if (replay) {
+    if (replayRow) {
       warnSilentFallback(null, {
         feature: "spawn-agent",
         op: "inngest-enqueue-replay",

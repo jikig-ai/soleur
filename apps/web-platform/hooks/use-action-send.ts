@@ -40,7 +40,7 @@
 //   onConfirmTyped    — called from the typed-confirm modal submit.
 //   onCancelConfirm   — called from the typed-confirm modal cancel.
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 
 import { reportSilentFallback } from "@/lib/client-observability";
 // Shared 30s termination horizon with the pending watchdog — one clock for
@@ -101,6 +101,10 @@ export function useActionSend(
   const [confirming, setConfirming] = useState<ConfirmationPayload | null>(
     null,
   );
+  // In-flight guard (#10543, CTO Q7): GitHubCard and KbDriftCard bind no `disabled` to isPending, and
+  // isPending is stale inside a closure on a rapid double-click, so a ref is checked synchronously.
+  // Released in a `finally`, so a 503, a 30s abort and a thrown fetch all release it.
+  const inFlight = useRef(false);
 
   async function postSend(extra?: {
     confirmed_typed: true;
@@ -122,8 +126,10 @@ export function useActionSend(
   // Founder-facing copy for the statuses the send route can answer with besides 200 / already_sent /
   // requires_confirmation. Card-neutral on purpose: GitHubCard and KbDriftCard bind no `disabled` to a
   // hook flag and have no Discard/Edit, so every state here must be recoverable by a refresh and the
-  // copy names no affordance (CTO S1). Pure over (status, parsed body); returns null when the status
-  // is not one of these (the caller falls through to its generic "Send failed (NNN)").
+  // copy names no affordance (CTO S1). Pure over (status, parsed body) apart from the `denyReasonCopy`
+  // option it closes over; returns null when the status is not one of these (the caller falls through
+  // to its generic "Send failed (NNN)"). A 503 only reads as "approval saved" when the body says so: a
+  // bare gateway 503 must not claim an approval exists.
   function failureCopy(
     status: number,
     json: { error?: string; deny_reason?: string },
@@ -137,9 +143,9 @@ export function useActionSend(
         case "not_a_draft":
           return "This approval can no longer run. Refresh to update this card.";
         case "draft_changed_since_approval":
-          return "This draft changed after you approved it. Restore the approved text or refresh.";
+          return "This draft changed after you approved it, so this approval can't run.";
         case "send_in_progress":
-          return "Another send is in progress - try again in a moment";
+          return "Another send is in progress — try again in a moment";
         default:
           return null;
       }
@@ -194,6 +200,8 @@ export function useActionSend(
   }
 
   function onSend() {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setError(null);
     startTransition(async () => {
       try {
@@ -247,11 +255,15 @@ export function useActionSend(
         setError(`Send failed (${res.status})`);
       } catch (err) {
         setError(sendFailureMessage(err));
+      } finally {
+        inFlight.current = false;
       }
     });
   }
 
   function onConfirmTyped(_confirmedTyped: boolean, typedValue: string) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     const pendingHash = confirming?.expectedDraftPreviewHash ?? "";
     setError(null);
     // `confirming` stays set for the whole flight — the modal renders the
@@ -309,6 +321,8 @@ export function useActionSend(
         setError(`Send failed (${res.status})`);
       } catch (err) {
         setError(sendFailureMessage(err));
+      } finally {
+        inFlight.current = false;
       }
     });
   }

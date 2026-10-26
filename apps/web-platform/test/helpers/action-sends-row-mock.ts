@@ -65,9 +65,15 @@ export interface ActionSendsStore {
   archiveCount: () => number;
 }
 
+// PostgREST answers an unknown column with 42703 at runtime (the client is untyped, so tsc is
+// blind to it); the store throws instead of projecting `undefined`, so a mistyped or renamed
+// column in the route's select goes red here rather than reading as a "null" field.
 function project(row: AnyRow, cols: string[]): AnyRow {
   const out: AnyRow = {};
-  for (const c of cols) out[c] = row[c];
+  for (const c of cols) {
+    if (!(c in row)) throw new Error(`unknown column: ${c}`);
+    out[c] = row[c];
+  }
   return out;
 }
 
@@ -153,7 +159,7 @@ export function createActionSendsStore(opts: StoreOptions): ActionSendsStore {
       if (table === "action_sends") {
         return { select: (cols: string) => selectBuilder("action_sends", cols) };
       }
-      return {};
+      throw new Error(`unexpected table: ${table}`);
     },
     messages,
     actionSends,
