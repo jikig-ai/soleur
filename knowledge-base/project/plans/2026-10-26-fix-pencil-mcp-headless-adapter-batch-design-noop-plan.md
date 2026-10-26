@@ -15,6 +15,21 @@ requires_cpo_signoff: true
 
 # fix: headless Pencil MCP adapter silently drops design operations and opens existing files empty
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-26
+**Method:** the research the deepen pass would fan out was already done live before drafting (authenticated runs of both CLIs, an SDK spike), so this pass ran the halt gates and the verification sweeps instead of a 40-agent fan-out. A six-seat plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO devex) had already reviewed the finished plan; its findings are folded in (decision-challenges.md R9-R12).
+
+### Key improvements from this pass
+
+1. The `discoverability_test` was a bun suite, which Phase 4.7 rejects as suite-shaped for a block authored in this run. Replaced with a one-line `node -e` probe that prints the sentinel's verdict (`false`), well inside Check 10's 15-second cap.
+2. `decideSave` now has a stated return shape (`{ allow, reason }`) so that probe and the unit tests share one contract.
+3. Verification sweeps confirmed the plan's negative claims against the code: `nodeIdMap` and `extractNodeIds` are written but never read (safe to delete); the adapter has exactly four `"save()"` literals (batch_design auto-save, `set_variables` auto-save, pre-switch save, explicit `save`), matching the Guard 1 assembly; the adapter has four sibling imports today, five after this change.
+
+### Gates run (all pass)
+
+Phase 4.6 user-brand impact (threshold `single-user incident`), 4.7 observability (5 fields, no SSH, allowlisted verb, matchable literal), 4.8 no PAT-shaped variables, 4.9 not a UI surface, 4.11 `lint-guard-contract.py` (3 guards), 4.12 one unfenced `## Scope Check`, no block marker. Cited issues #3274, #4859, #2630, #11143, #11156 resolved live; cited rule IDs exist; labels `type/chore`, `domain/engineering`, `priority/p3-low` exist.
+
 Spec lacks a valid `lane:` (one-shot path, no brainstorm or spec) — defaulted to cross-domain (fail-closed).
 
 ## Overview
@@ -125,7 +140,7 @@ None. Open `code-review` issues queried for `pencil-setup`, `pencil-mcp-adapter`
 All under `plugins/soleur/skills/pencil-setup/scripts/`, with logic in zero-import `.mjs` modules so bun tests need no MCP SDK.
 
 1. **`pencil-repl-surface.mjs` (new, pure; header: "retire with #11156").** The 0.2.9 signature table (tool to allowed keys, including `save` with none), the `batch_design` preamble, `formatReplCommand(tool, params)` (this **moves and replaces** the adapter's existing local function), and `planSpawn`. `formatReplCommand` throws `ReplContractError` for an unknown tool or key and for empty `operations`; `batch_design` becomes `batch_design({ input: <preamble>\n<operations> })`. `planSpawn({ outFile, initialInFile, probe })`: an explicit initial `inFile` must exist (fail fast); otherwise `--in` equals `--out` when that file exists and is non-empty. The explicit `inFile` is used for the **first** spawn only; every respawn after a crash uses `--in <outFile>` so a template `inputPath` can never overwrite saved edits.
-2. **`pencil-save-gate.mjs` (extend).** `diskTopLevelCount(text)` (null for missing, empty or unparseable: nothing recoverable to protect, allow), `memoryTopLevelCount(batchGetText)` (null when undeterminable), `decideSave({ diskCount, memoryCount })`, `refusalMessage(...)`, and a dependency-injected `runGuardedSave({ readDisk, probeMemory, send })` so "check happens before save, no save sent on refusal" is unit-testable without the SDK. `shouldSkipSave` stays.
+2. **`pencil-save-gate.mjs` (extend).** `diskTopLevelCount(text)` (null for missing, empty or unparseable: nothing recoverable to protect, allow), `memoryTopLevelCount(batchGetText)` (null when undeterminable), `decideSave({ diskCount, memoryCount })` (returns `{ allow: boolean, reason: string }`), `refusalMessage(...)`, and a dependency-injected `runGuardedSave({ readDisk, probeMemory, send })` so "check happens before save, no save sent on refusal" is unit-testable without the SDK. `shouldSkipSave` stays.
 3. **`pencil-response-classify.mjs` and `pencil-error-enrichment.mjs` (extend).** `^Unknown tool:` classifies as an error; the enrichment appends the replacement hint per removed tool (`SetVariables(...)` inside `batch_design`; `FindEmptySpace(...)` likewise; `get_guidelines({ category: "style" })` for the style tools; no headless equivalent for the two bulk-property tools). Read-only handlers pass errors through the enrichment.
 4. **Adapter wiring.** Paths are absolutized (`path.resolve`) on entry. `spawn()` sets `outputFile` only after the prompt is reached; a child that exits first rejects the pending wait with the stderr tail and cleans the listener and timer. A failed `open_document` leaves the adapter in an explicit "open failed" state that errors every tool until the next successful open (no silent respawn against the bad path). `guardedSave(source)` is the **only** place that emits `save`, and it runs as **one exclusive queue job** (disk read, memory probe, decide, save) via a new `CommandQueue.runExclusive(fn)`; `open_document`'s kill-and-respawn runs inside the same exclusive section, so no queued command or restart can land between probe and save. Callers: the `batch_design` auto-save and the explicit `save` tool. The pre-switch save is deleted. `open_document` reports the loaded top-level node count and fails (and enters the open-failed state) if a non-empty file loaded empty. Dead `extractNodeIds` / `nodeIdMap` / `postHandler` go in a separate commit. `get_guidelines` takes `{ category, name, params }`.
 5. **Refusal text** (CPO condition): names the file, says it was not modified, says the likely cause, gives one next step (call `open_document` on the file, which now loads it; to start over use a new file path), and says not to delete or recreate the file to bypass the check. The auto-save variant also says the edit is applied in memory but not persisted and will be lost on the next `open_document`. It goes to the tool result (`isError: true`) and stderr.
@@ -298,8 +313,8 @@ logs:
   retention: per Claude Code session log retention on the developer's machine
 
 discoverability_test:
-  command: bun test plugins/soleur/test/pencil-save-gate.test.ts
-  expected_output: 0 fail
+  command: node -e "import('./plugins/soleur/skills/pencil-setup/scripts/pencil-save-gate.mjs').then(m=>console.log(m.decideSave({diskCount:3,memoryCount:0}).allow))"
+  expected_output: false
 ```
 
 ## Guard Contract
