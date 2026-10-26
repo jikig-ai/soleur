@@ -3426,9 +3426,9 @@ row_gr_deterministic() {   # no clock in the table: a re-run on the same SHA is 
   gr_main; cp "$GR_OUT/glob-rate.tsv" "$SANDBOX/gr-1.tsv"; gr_main
   [[ "$GR_RC" -eq 0 ]] && cmp -s "$SANDBOX/gr-1.tsv" "$GR_OUT/glob-rate.tsv" && ! grep -q '20[0-9][0-9]-' "$GR_OUT/glob-rate.tsv" && grep -q ' date=20[0-9][0-9]-' "$GR_OUT/glob-rate.marker"
 }
-row_gr_tree_cover() {   # the directory-completeness check: a second enumerator (git ls-files | grep) agrees with the tool's file count, a root-level file is missed without glob:*.sh
+row_gr_tree_cover() {   # the directory-completeness check: a second enumerator (ls-tree | grep) agrees with the tool's file count, a root-level file is missed without glob:*.sh
   gr_main
-  local n; n="$(gitq -C "$GR" ls-files | grep -cE '\.sh$')"
+  local n; n="$(gitq -C "$GR" ls-tree -r --name-only HEAD | grep -cE '\.sh$')"
   [[ "$GR_RC" -eq 0 && "$n" -eq 4 && "$(gr_cell gT2 tree_files)" == "$n" && "$(gr_cell gT2 tree_missing)" == 0 && "$(gr_cell gT3 tree_missing)" == 1 && "$(gr_cell gT tree_missing)" == 2 ]]
 }
 row_gr_noncanonical() {   # comments, blank lines, CRLF, shuffled order and an extra suite give the rows of the canonical file (a guard that rejects everything is invisible to RED rows)
