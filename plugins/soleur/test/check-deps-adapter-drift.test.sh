@@ -38,14 +38,17 @@ tmp_dir=$(mktemp -d)
 
 repo_adapter="$REPO_ROOT/plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs"
 
+scripts_dir="$REPO_ROOT/plugins/soleur/skills/pencil-setup/scripts"
+# The runtime set copy_adapter.sh installs: every module plus the dependency manifest pair.
+copy_adapter_set() { cp "$scripts_dir"/*.mjs "$scripts_dir/package.json" "$scripts_dir/package-lock.json" "$1/"; }
+
 # Each case gets an isolated install dir so a failure in one case cannot
 # cascade through shared state into the next case's assertions.
 
 # --- Case 1: installed adapter matches repo → no drift, exit 0 ---
 case1_dir="$tmp_dir/case1"
 mkdir -p "$case1_dir"
-scripts_dir="$REPO_ROOT/plugins/soleur/skills/pencil-setup/scripts"
-cp "$scripts_dir"/*.mjs "$case1_dir/"
+copy_adapter_set "$case1_dir"
 set +e
 out=$(PENCIL_ADAPTER_INSTALL_DIR="$case1_dir" bash "$CHECK_DEPS" --check-adapter-drift 2>&1)
 rc=$?
@@ -70,7 +73,7 @@ assert_contains "$out" "DRIFT" "drifted sha: prints DRIFT marker"
 # main file reported OK while the guards were stale.
 case2b_dir="$tmp_dir/case2b"
 mkdir -p "$case2b_dir"
-cp "$scripts_dir"/*.mjs "$case2b_dir/"
+copy_adapter_set "$case2b_dir"
 echo "// stale" >> "$case2b_dir/pencil-save-gate.mjs"
 set +e
 out=$(PENCIL_ADAPTER_INSTALL_DIR="$case2b_dir" bash "$CHECK_DEPS" --check-adapter-drift 2>&1)
@@ -82,7 +85,7 @@ assert_contains "$out" "pencil-save-gate.mjs" "stale sibling: names the drifted 
 # --- Case 2c: a MISSING sibling is drift ---
 case2c_dir="$tmp_dir/case2c"
 mkdir -p "$case2c_dir"
-cp "$scripts_dir"/*.mjs "$case2c_dir/"
+copy_adapter_set "$case2c_dir"
 rm "$case2c_dir/pencil-repl-surface.mjs"
 set +e
 out=$(PENCIL_ADAPTER_INSTALL_DIR="$case2c_dir" bash "$CHECK_DEPS" --check-adapter-drift 2>&1)
@@ -91,34 +94,157 @@ set -e
 assert_eq "3" "$rc" "missing sibling: exit 3"
 assert_contains "$out" "pencil-repl-surface.mjs" "missing sibling: names the missing module"
 
-# --- Case 2c: an unparseable module list is an error, never a clean OK ---
-case2c_scripts="$tmp_dir/case2c-scripts"
-case2c_dir="$tmp_dir/case2c"
-mkdir -p "$case2c_scripts" "$case2c_dir"
-cp "$CHECK_DEPS" "$case2c_scripts/check_deps.sh"
-cp "$repo_adapter" "$case2c_scripts/pencil-mcp-adapter.mjs"
-cp "$repo_adapter" "$case2c_dir/pencil-mcp-adapter.mjs"
-echo "# no module list here" > "$case2c_scripts/copy_adapter.sh"
+# --- Case 2d: an unparseable module list is an error, never a clean OK ---
+case2d_scripts="$tmp_dir/case2d-scripts"
+case2d_dir="$tmp_dir/case2d"
+mkdir -p "$case2d_scripts" "$case2d_dir"
+cp "$CHECK_DEPS" "$case2d_scripts/check_deps.sh"
+cp "$repo_adapter" "$case2d_scripts/pencil-mcp-adapter.mjs"
+cp "$repo_adapter" "$case2d_dir/pencil-mcp-adapter.mjs"
+echo "# no module list here" > "$case2d_scripts/copy_adapter.sh"
 set +e
-out=$(PENCIL_ADAPTER_INSTALL_DIR="$case2c_dir" bash "$case2c_scripts/check_deps.sh" --check-adapter-drift 2>&1)
+out=$(PENCIL_ADAPTER_INSTALL_DIR="$case2d_dir" bash "$case2d_scripts/check_deps.sh" --check-adapter-drift 2>&1)
 rc=$?
 set -e
 assert_eq "2" "$rc" "empty module list: exit 2"
 assert_contains "$out" "no adapter modules parsed" "empty module list: says why"
 
-# --- Case 3: --auto re-copies and then exits 0 ---
-case3_dir="$tmp_dir/case3"
+# Run a check_deps.sh function (sourced, so no tiers run) under a fake HOME with the credential
+# names scrubbed. Prints the function's output and a final `rc=<n>` line. A plain `bash -c`, not
+# the suite's shell: errexit must not leak into the sourced script.
+in_home() { # <home> <fn> [args...]
+  local home="$1"; shift
+  env -u PEN_CLI_KEY -u PENCIL_CLI_KEY -u PENCIL_ADAPTER_INSTALL_DIR \
+    HOME="$home" NVM_DIR="$home/.nvm" FNM_DIR="$home/.fnm" PATH="$home/fakebin:$PATH" \
+    bash -c 'f="$1"; shift; args=("$@"); set --; source "$f"; "${args[@]}"; echo "rc=$?"' _ "$CHECK_DEPS" "$@" </dev/null 2>&1 || true
+}
+verdict_of() { # extract rc from in_home output: accept (0) | refuse (non-zero)
+  case "$(printf '%s\n' "$1" | sed -n 's/^rc=//p' | tail -1)" in 0) echo accept ;; *) echo refuse ;; esac
+}
+
+# Hermetic installer fixtures for every --auto path below: a fake HOME whose first PATH entry
+# carries a `node` link (find_node22 resolves it, and npm is looked up next to it) and a FAKE npm.
+# The fake logs one line per call (args, cwd, how many credential variables it can see), emits
+# FAKE_NPM_NOISE lines of output, can fail the engine install, and for the engine prefix rebuilds
+# the `good` tree the way a real `npm ci` would. No test below can reach the network or a real
+# prefix, and none can leave a credential anywhere but the child it is checking.
+TREE="$SCRIPT_DIR/lib/pen-identity-tree.mjs"
+cat > "$tmp_dir/fake-npm.sh" <<'FAKE_NPM_EOF'
+#!/usr/bin/env bash
+echo "ARGS=$* CWD=$PWD CRED_VARS=$(env | grep -c -E '^(PEN_CLI_KEY|PENCIL_CLI_KEY)=' || true)" >> "$FAKE_NPM_LOG"
+if [[ -n "${FAKE_NPM_NOISE:-}" ]]; then for i in $(seq 1 "$FAKE_NPM_NOISE"); do echo "npmnoise $i"; done; fi
+if [[ "$PWD" == */share/pen-cli ]]; then
+  [[ -z "${FAKE_NPM_FAIL_ENGINE:-}" ]] || exit 7
+  rm -rf node_modules
+  node "$FAKE_TREE_HELPER" "$HOME" good >/dev/null
+else
+  mkdir -p node_modules
+fi
+FAKE_NPM_EOF
+make_fake_home() { # <name> -> fake HOME with fakebin/{node,npm}
+  local h="$tmp_dir/$1"
+  mkdir -p "$h/fakebin"
+  ln -s "$(command -v node)" "$h/fakebin/node"
+  cp "$tmp_dir/fake-npm.sh" "$h/fakebin/npm"
+  chmod 0755 "$h/fakebin/npm"
+  # A run that falls through every tier must never reach a REAL editor or Pencil on this machine:
+  # a --auto run would otherwise try to install an extension / launch the app. Inert stubs.
+  local stub
+  for stub in cursor code pencil; do
+    printf '#!/bin/sh\necho "STUB %s called: $*" >> "${FAKE_NPM_LOG:-/dev/null}.stubs"\nexit 1\n' "$stub" > "$h/fakebin/$stub"
+    chmod 0755 "$h/fakebin/$stub"
+  done
+  printf '%s' "$h"
+}
+# Run a command with that HOME, a canary credential in BOTH names, and the fake npm's knobs.
+in_fake_home() { # <home> [VAR=val ...] -- cmd args...
+  local h="$1" rc=0; shift
+  local extra=()
+  while [[ "$1" != "--" ]]; do extra+=("$1"); shift; done
+  shift
+  env -u PEN_CLI_KEY -u PENCIL_CLI_KEY -u PENCIL_ADAPTER_INSTALL_DIR \
+    HOME="$h" NVM_DIR="$h/.nvm" FNM_DIR="$h/.fnm" PATH="$h/fakebin:$PATH" \
+    FAKE_NPM_LOG="$h/npm.log" FAKE_TREE_HELPER="$TREE" "${extra[@]}" "$@" </dev/null 2>&1 || rc=$?
+  echo "rc=${rc:-0}"
+}
+
+# --- Case 3: --auto re-copies, installs the adapter's deps AND the engine, then exits 0 ---
+# (the new adapter must never be installed ahead of the engine it needs)
+home3=$(make_fake_home case3-home)
+case3_dir="$home3/.local/share/pencil-adapter"
 mkdir -p "$case3_dir"
 cp "$repo_adapter" "$case3_dir/pencil-mcp-adapter.mjs"
 echo "// drift" >> "$case3_dir/pencil-mcp-adapter.mjs"
-set +e
-out=$(PENCIL_ADAPTER_INSTALL_DIR="$case3_dir" bash "$CHECK_DEPS" --check-adapter-drift --auto 2>&1)
-rc=$?
-set -e
-assert_eq "0" "$rc" "--auto re-copy: exit 0"
+out=$(in_fake_home "$home3" PEN_CLI_KEY=synthetic-canary-1 PENCIL_CLI_KEY=synthetic-canary-2 -- bash "$CHECK_DEPS" --check-adapter-drift --auto)
+assert_contains "$out" "OK: re-copied adapter" "--auto re-copy: says it re-copied"
 installed_sha=$(sha256sum "$case3_dir/pencil-mcp-adapter.mjs" | awk '{print $1}')
 repo_sha=$(sha256sum "$repo_adapter" | awk '{print $1}')
 assert_eq "$repo_sha" "$installed_sha" "--auto re-copy: installed sha now matches repo"
+npm_log3=$(cat "$home3/npm.log" 2>/dev/null || true)
+assert_contains "$npm_log3" "CWD=$case3_dir" "--auto drift: adapter dependencies installed in the adapter dir"
+assert_contains "$npm_log3" "CWD=$home3/.local/share/pen-cli" "--auto drift: the engine is installed after the adapter copy"
+assert_eq "2" "$(printf '%s\n' "$npm_log3" | grep -c 'ARGS=ci --ignore-scripts')" "--auto drift: exactly two npm ci --ignore-scripts runs (adapter deps, engine)"
+assert_eq "0" "$(printf '%s\n' "$npm_log3" | grep -c -v 'CRED_VARS=0' || true)" "--auto drift: neither credential name reaches either npm ci"
+assert_eq "accept" "$(verdict_of "$(in_home "$home3" detect_headless_cli)")" "--auto drift: the engine installed by the repair passes the identity rule"
+# Drift again with the engine now at the pin: only the adapter step runs, the engine is not reinstalled
+echo "// drift" >> "$case3_dir/pencil-mcp-adapter.mjs"
+: > "$home3/npm.log"
+out=$(in_fake_home "$home3" -- bash "$CHECK_DEPS" --check-adapter-drift --auto)
+assert_contains "$out" "rc=0" "--auto drift with the engine already at the pin: exit 0"
+assert_eq "0" "$(grep -c 'share/pen-cli' "$home3/npm.log" || true)" "--auto drift with the engine at the pin: engine not reinstalled"
+# Engine installed at a DIFFERENT version: the repair reinstalls it from the lockfile
+home3b=$(make_fake_home case3b-home)
+mkdir -p "$home3b/.local/share/pencil-adapter"
+cp "$repo_adapter" "$home3b/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
+echo "// drift" >> "$home3b/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
+node "$TREE" "$home3b" version-differs >/dev/null
+out=$(in_fake_home "$home3b" -- bash "$CHECK_DEPS" --check-adapter-drift --auto)
+assert_contains "$(cat "$home3b/npm.log" 2>/dev/null)" "CWD=$home3b/.local/share/pen-cli" "--auto drift with a pin-drifted engine: engine reinstalled"
+# A failing engine install is an error, not a green "re-copied"
+home3c=$(make_fake_home case3c-home)
+mkdir -p "$home3c/.local/share/pencil-adapter"
+cp "$repo_adapter" "$home3c/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
+echo "// drift" >> "$home3c/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
+out=$(in_fake_home "$home3c" FAKE_NPM_FAIL_ENGINE=1 -- bash "$CHECK_DEPS" --check-adapter-drift --auto)
+assert_contains "$out" "rc=2" "--auto drift with a failing engine install: exit 2"
+assert_contains "$out" "engine" "--auto drift with a failing engine install: names the engine"
+
+# --- Case 3b: drift also covers the dependency manifests (.json), not only .mjs ---
+for jf in package-lock.json package.json; do
+  d="$tmp_dir/case3-$jf"
+  mkdir -p "$d"
+  copy_adapter_set "$d"
+  echo " " >> "$d/$jf"
+  set +e
+  out=$(PENCIL_ADAPTER_INSTALL_DIR="$d" bash "$CHECK_DEPS" --check-adapter-drift 2>&1)
+  rc=$?
+  set -e
+  assert_eq "3" "$rc" "stale $jf: exit 3"
+  assert_contains "$out" "$jf" "stale $jf: names the drifted manifest"
+done
+
+# --- copy_adapter.sh: npm ci is keyed on the lockfile hash, and never sees a credential ---
+COPY="$scripts_dir/copy_adapter.sh"
+home5=$(make_fake_home copy-home)
+run_copy() { in_fake_home "$home5" PENCIL_ADAPTER_INSTALL_DIR="$home5/inst" PEN_CLI_KEY=synthetic-canary-1 PENCIL_CLI_KEY=synthetic-canary-2 -- bash "$COPY"; }
+count_ci() { grep -c 'ARGS=ci --ignore-scripts' "$home5/npm.log" 2>/dev/null || true; }
+run_copy >/dev/null
+assert_eq "1" "$(count_ci)" "copy_adapter.sh: first install runs npm ci once"
+assert_contains "$(cat "$home5/npm.log")" "CRED_VARS=0" "copy_adapter.sh: npm ci runs without PEN_CLI_KEY / PENCIL_CLI_KEY"
+assert_eq "0" "$(grep -c -v 'CRED_VARS=0' "$home5/npm.log" || true)" "copy_adapter.sh: no npm ci run sees a credential"
+run_copy >/dev/null
+assert_eq "1" "$(count_ci)" "copy_adapter.sh: an unchanged lockfile does not re-run npm ci"
+# a node_modules built from an OLDER lockfile: its stamp disagrees with the lockfile now in place
+echo "0000-stamp-from-an-older-lockfile" > "$home5/inst/node_modules/.soleur-package-lock.sha256"
+run_copy >/dev/null
+assert_eq "2" "$(count_ci)" "copy_adapter.sh: a node_modules stamped with another lockfile hash re-runs npm ci (keyed on the lockfile hash)"
+run_copy >/dev/null
+assert_eq "2" "$(count_ci)" "copy_adapter.sh: the refreshed stamp keeps it quiet"
+rm -f "$home5/inst/node_modules"/.soleur-* 2>/dev/null || true
+run_copy >/dev/null
+assert_eq "3" "$(count_ci)" "copy_adapter.sh: node_modules with no lockfile stamp is re-installed once"
+run_copy >/dev/null
+assert_eq "3" "$(count_ci)" "copy_adapter.sh: and then stays quiet"
 
 # --- Case 4: install dir absent → exit 0 with NOT_INSTALLED marker ---
 case4_dir="$tmp_dir/case4-absent"
@@ -136,22 +262,8 @@ assert_contains "$out" "NOT_INSTALLED" "absent install: prints NOT_INSTALLED mar
 # with the adapter (fixtures/pen-identity-cases.tsv), the Node floor, the
 # credential names and the old-engine collision.
 # ===========================================================================
-TREE="$SCRIPT_DIR/lib/pen-identity-tree.mjs"
 CASES="$SCRIPT_DIR/fixtures/pen-identity-cases.tsv"
 PEN_VALID_KEY="valid-key"   # the fake engine in lib/pen-identity-tree.mjs accepts exactly this
-
-# Run a check_deps.sh function (sourced, so no tiers run) under a fake HOME with the credential
-# names scrubbed. Prints the function's output and a final `rc=<n>` line. A plain `bash -c`, not
-# the suite's shell: errexit must not leak into the sourced script.
-in_home() { # <home> <fn> [args...]
-  local home="$1"; shift
-  env -u PEN_CLI_KEY -u PENCIL_CLI_KEY -u PENCIL_ADAPTER_INSTALL_DIR \
-    HOME="$home" NVM_DIR="$home/.nvm" FNM_DIR="$home/.fnm" PATH="$home/fakebin:$PATH" \
-    bash -c 'f="$1"; shift; args=("$@"); set --; source "$f"; "${args[@]}"; echo "rc=$?"' _ "$CHECK_DEPS" "$@" </dev/null 2>&1 || true
-}
-verdict_of() { # extract rc from in_home output: accept (0) | refuse (non-zero)
-  case "$(printf '%s\n' "$1" | sed -n 's/^rc=//p' | tail -1)" in 0) echo accept ;; *) echo refuse ;; esac
-}
 
 # --- identity table: every row, plus layout/row coverage in both directions ---
 assert_file_exists "$TREE" "pen-identity-tree.mjs helper exists"
@@ -300,7 +412,7 @@ fi
 # --- a leftover @pencil.dev/cli + stale adapter copy: DRIFT, and never routed to the new engine ---
 home="$tmp_dir/legacy-world"; mkdir -p "$home/.local/share/pencil-adapter"
 node "$TREE" "$home" legacy-only >/dev/null
-cp "$scripts_dir"/*.mjs "$home/.local/share/pencil-adapter/"
+copy_adapter_set "$home/.local/share/pencil-adapter"
 echo "// stale" >> "$home/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
 set +e
 out=$(env -u PEN_CLI_KEY -u PENCIL_CLI_KEY -u PENCIL_ADAPTER_INSTALL_DIR HOME="$home" bash "$CHECK_DEPS" --check-adapter-drift 2>&1 </dev/null)
@@ -366,4 +478,68 @@ out=$(env -u PEN_CLI_KEY -u PENCIL_CLI_KEY HOME="$home" NVM_DIR="$home/.nvm" FNM
 assert_contains "$out" "install_rc=1" "install: a failing npm ci returns non-zero"
 assert_contains "$out" "FAILED" "install: a failing npm ci says FAILED"
 
-print_results 116
+# --- pin drift under --auto: an installed version != the pin is "needs install", reinstalled from the lockfile ---
+# (the version-differs layout is accepted without --auto, with a warning; --auto is the advice's way out)
+home=$(make_fake_home pin-drift-auto)
+node "$TREE" "$home" version-differs >/dev/null
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS" --auto)
+assert_contains "$(cat "$home/npm.log" 2>/dev/null)" "ARGS=ci --ignore-scripts CWD=$home/.local/share/pen-cli" "pin drift + --auto: the reinstall path is reached (npm ci in the engine prefix)"
+assert_contains "$(grep '"version"' "$home/.local/share/pen-cli/node_modules/@pen.dev/cli/package.json")" "0.3.13" "pin drift + --auto: the installed version is the pin afterwards"
+assert_contains "$out" "PREFERRED_MODE=headless_cli" "pin drift + --auto: the headless tier is selected after the reinstall"
+home=$(make_fake_home pin-drift-noauto)
+node "$TREE" "$home" version-differs >/dev/null
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS")
+assert_eq "no npm" "$([[ -s "$home/npm.log" ]] && echo "npm ran" || echo "no npm")" "pin drift without --auto: nothing is installed"
+assert_contains "$out" "0.3.12" "pin drift without --auto: the drift is reported"
+assert_contains "$out" "--auto" "pin drift without --auto: the advice names --auto"
+# at the pin: --auto does not reinstall
+home=$(make_fake_home pin-ok-auto)
+node "$TREE" "$home" good >/dev/null
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS" --auto)
+assert_eq "no npm" "$([[ -s "$home/npm.log" ]] && echo "npm ran" || echo "no npm")" "at the pin + --auto: no reinstall"
+
+# --- try_headless_cli_tier says why it skipped and what to do ---
+home=$(make_fake_home hint-none)
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS")
+assert_contains "$out" "not installed" "no engine installed: the headless tier says so"
+assert_contains "$out" "--auto" "no engine installed: and names --auto"
+home=$(make_fake_home hint-ident)
+node "$TREE" "$home" name-mismatch >/dev/null
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS")
+assert_contains "$out" "identity check" "engine present but failing the identity rule: the skip says so"
+assert_contains "$out" "--auto" "engine failing the identity rule: names --auto (reinstall from the lockfile)"
+
+# --- auth probe: coloured status passes; the child env is minimal; the key is never in an env argv ---
+home=$(make_fake_home auth-color)
+node "$TREE" "$home" good >/dev/null
+printf '%s\n' 'console.log("  Status  \x1b[32m●\x1b[0m \x1b[1mActive\x1b[0m"); process.exit(0);' > "$home/.local/share/pen-cli/node_modules/@pen.dev/cli/dist/index.mjs"
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key -- bash "$CHECK_DEPS")
+assert_contains "$out" "Headless CLI (Tier 0)" "auth: a status reply with ANSI colour around Active is accepted"
+home=$(make_fake_home auth-env)
+node "$TREE" "$home" good >/dev/null
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key AWS_SECRET_ACCESS_KEY=canary-unrelated GH_TOKEN=canary-token -- bash "$CHECK_DEPS")
+assert_contains "$out" "Headless CLI (Tier 0)" "auth with unrelated secrets in the environment: still succeeds"
+assert_eq "ARGS=status KEYS=PEN_CLI_KEY" "$(head -1 "$home/engine-env.log")" "auth: the pen status child sees PEN_CLI_KEY and no other key-like variable"
+assert_eq "0" "$(grep -c -E 'env .*PEN_CLI_KEY="\$key"' "$CHECK_DEPS" || true)" "check_deps.sh never hands the key to env as an argument (argv exposure)"
+assert_eq "0" "$(grep -c -F '\x1b' "$CHECK_DEPS" || true)" "check_deps.sh has no GNU-only x1b sed escape (macOS)"
+assert_eq "0" "$(grep -c -E '(^|[^a-z-])cq-pencil-' "$CHECK_DEPS" || true)" "check_deps.sh cites the retired rule only as ex-cq-..."
+
+# --- npm ci output is bounded ---
+home=$(make_fake_home bounded)
+out=$(in_fake_home "$home" PEN_CLI_KEY=valid-key FAKE_NPM_NOISE=200 -- bash "$CHECK_DEPS" --auto)
+noise=$(printf '%s\n' "$out" | grep -c 'npmnoise' || true)
+assert_eq "1" "$([[ "$noise" -gt 0 && "$noise" -le 20 ]] && echo 1 || echo 0)" "npm ci output is bounded to its last 20 lines (saw $noise)"
+
+# --- the leftover-package warning is only true when the installed adapter is in sync ---
+home=$(make_fake_home legacy-sync)
+node "$TREE" "$home" good-plus-legacy >/dev/null
+mkdir -p "$home/.local/share/pencil-adapter"
+copy_adapter_set "$home/.local/share/pencil-adapter"
+out=$(in_home "$home" warn_pen_cli_state)
+assert_contains "$out" "it is not used" "leftover deprecated package + adapter in sync: warned as unused"
+echo "// stale" >> "$home/.local/share/pencil-adapter/pencil-mcp-adapter.mjs"
+out=$(in_home "$home" warn_pen_cli_state)
+assert_eq "0" "$(printf '%s\n' "$out" | grep -c 'it is not used' || true)" "leftover deprecated package + STALE adapter: not claimed unused"
+assert_contains "$out" "check-adapter-drift --auto" "leftover deprecated package + STALE adapter: says how to sync the adapter"
+
+print_results 165

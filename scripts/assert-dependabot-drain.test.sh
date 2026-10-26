@@ -66,14 +66,14 @@ fail() { fails=$((fails + 1)); echo "[FAIL] $*" >&2; }
 cp "$GUARD" "$SANDBOX/pristine.py" || { echo "FATAL: could not seed the sandbox" >&2; exit 2; }
 
 # ---------------------------------------------------------------------------------------
-# Synthetic fixture tree: four lockfiles at the paths LOCKS names, relative to $FIX.
+# Synthetic fixture tree: five lockfiles at the paths LOCKS names, relative to $FIX.
 # ---------------------------------------------------------------------------------------
 FIX="$SANDBOX/fixture"
 build_fixture() {
   local extra_webplat="${1:-}"
   rm -rf "$FIX"
   mkdir -p "$FIX/apps/web-platform" \
-           "$FIX/plugins/soleur/skills/pencil-setup/scripts" \
+           "$FIX/plugins/soleur/skills/pencil-setup/scripts/pen-cli" \
            "$FIX/spike" || return 1
   python3 - "$FIX" "$extra_webplat" <<'PYEOF' || return 1
 import json, os, sys
@@ -115,11 +115,16 @@ rt["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
 rt["node_modules/d/node_modules/brace-expansion"] = {"version": "5.999.999"}
 
 pen = pkgs([("hono", 4), ("@hono/node-server", 1), ("ip-address", 10), ("fast-uri", 3)])
+# The pinned headless engine's own lockfile (#11156): its tree resolves hono 4, @hono/node-server 2,
+# ip-address 10, fast-uri 3, undici 8 and brace-expansion 5, each of which needs a row of its own.
+pencli = pkgs([("hono", 4), ("@hono/node-server", 2), ("ip-address", 10), ("fast-uri", 3),
+               ("undici", 8), ("brace-expansion", 5)])
 spike = pkgs([])
 
 for rel, p in [("apps/web-platform/package-lock.json", w),
                ("package-lock.json", rt),
                ("plugins/soleur/skills/pencil-setup/scripts/package-lock.json", pen),
+               ("plugins/soleur/skills/pencil-setup/scripts/pen-cli/package-lock.json", pencli),
                ("spike/package-lock.json", spike)]:
     with open(os.path.join(root, rel), "w") as fh:
         json.dump({"packages": p}, fh)
@@ -193,7 +198,7 @@ fi
 # per the cross-file-drift convention (work/SKILL.md): the first version used `head -1`,
 # and a shadowing `MIN_ROWS = 0` added later inside main() was reported "[ok] MIN_ROWS is
 # 19" while the effective floor was 0.
-for spec in "MIN_ROWS:21" "MIN_RESOLVED:21" "MIN_LOCKS:4"; do
+for spec in "MIN_ROWS:27" "MIN_RESOLVED:27" "MIN_LOCKS:5"; do
   name="${spec%%:*}"; floor="${spec##*:}"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *${name} = [0-9]+" "$GUARD" || true)"
@@ -219,7 +224,7 @@ done
 
 # The anchors are the floor under the CVE thresholds. Source-grepped here so that lowering
 # a threshold AND its anchor together is a three-file edit rather than a two-line one.
-for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2"; do
+for spec in "brace-expansion:1:1.1.18" "brace-expansion:2:2.1.4" "brace-expansion:5:5.0.9" "js-yaml:3:3.15.2" "js-yaml:4:4.3.2" "liquidjs:10:10.27.2" "undici:8:8.10.2" "@hono/node-server:2:2.0.10"; do
   IFS=: read -r pkg major want <<< "$spec"
   asserted=$((asserted + 1))
   n="$(grep -cE "^ *\(\"${pkg}\", ${major}\): \"[0-9.]+\"," "$GUARD" || true)"
@@ -279,7 +284,7 @@ i, j = s.index("REQUIRED = ["), s.index("]", s.index("(\"pencil-setup\", \"fast-
 sys.stdout.write(s[:i] + s[i:j].replace(chr(34) + "1.1.18" + chr(34), chr(34) + "1.1.16" + chr(34)) + s[j:])
 '
 
-mutate "a lockfile deleted from LOCKS REDs" "below the MANIFEST floor of 4" '
+mutate "a lockfile deleted from LOCKS REDs" "below the MANIFEST floor of 5" '
 import re, sys
 s = sys.stdin.read()
 sys.stdout.write(re.sub(r"^ *\"spike\": .*\n", "", s, count=1, flags=re.M))
@@ -293,7 +298,7 @@ sys.stdout.write(s.replace(
     chr(34) + "chalk" + chr(34) + ", 4, " + chr(34) + "4.999.0" + chr(34), 1))
 '
 
-mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 21" '
+mutate "deleting rows from the table REDs" "below the TABLE-SIZE floor of 27" '
 import re, sys
 s = sys.stdin.read()
 sys.stdout.write(re.sub(
@@ -301,7 +306,7 @@ sys.stdout.write(re.sub(
     "", s, flags=re.M))
 '
 
-mutate "a row renamed to a nonexistent package REDs" "below the RESOLVED-ROW floor of 21" '
+mutate "a row renamed to a nonexistent package REDs" "below the RESOLVED-ROW floor of 27" '
 import sys
 s = sys.stdin.read()
 sys.stdout.write(s.replace(chr(34) + "nanoid" + chr(34) + ", 3",
@@ -428,7 +433,7 @@ fi
 # an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
 # any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
 # an anti-vacuity floor is attack budget, not padding.
-MIN_ASSERTIONS=27
+MIN_ASSERTIONS=29
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

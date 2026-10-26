@@ -102,4 +102,4 @@ for label in "empty PEN_CLI_KEY" "both names empty" "both names whitespace-only"
   assert_contains "$empty_stderr" "PEN_CLI_KEY" "$label: stderr mentions PEN_CLI_KEY"
 done
 
-print_results
+print_results 10

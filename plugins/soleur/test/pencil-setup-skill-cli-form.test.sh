@@ -42,4 +42,4 @@ rc=$?
 set -e
 assert_eq "0" "$rc" "SKILL.md includes a <!-- verified: --> annotation"
 
-print_results
+print_results 4

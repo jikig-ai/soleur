@@ -203,3 +203,13 @@ choice is visible rather than an omission.
 than re-pointed: `npm ci` deletes `node_modules` unconditionally, so caching it is worse
 than useless. `setup-node`'s `cache: npm` caches the npm download cache — the part `npm ci`
 can reuse — matching what `web-platform-build` already did.
+
+**Addendum 2026-10-26 (#11156): a fifth lockfile directory.** `plugins/soleur/skills/pencil-setup/scripts/pen-cli/`
+holds the committed lockfile pair for the pinned headless engine (`@pen.dev/cli`), installed by
+`check_deps.sh` with `npm ci --ignore-scripts` into its own prefix. It is a fifth `package-lock.json`
+directory, separate from the adapter's own `pencil-setup/scripts/` lockfile, so
+`lint-dual-lockfile.sh` (`MIN_PACKAGE_LOCK_DIRS=5`), `assert-dependabot-drain.py` (its `pen-cli`
+manifest and rows) and `close-superseded-dependabot-prs.sh` (`lockfile_for`, matched before the
+broader `*pencil-setup*` arm) all name it. It carries **no `.npmrc` supply-chain floor by design**:
+its single direct dependency is pinned to an exact version and every transitive version and
+integrity hash is fixed by the lockfile, which is the stronger control than an age floor.

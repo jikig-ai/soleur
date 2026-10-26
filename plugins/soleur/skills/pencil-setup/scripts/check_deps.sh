@@ -36,88 +36,29 @@ NODE_FLOOR_MAJOR=22
 NODE_FLOOR_MINOR=19
 NODE_FLOOR_PATCH=0
 NODE_FLOOR="${NODE_FLOOR_MAJOR}.${NODE_FLOOR_MINOR}.${NODE_FLOOR_PATCH}"
+CHECK_DEPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# -- Adapter drift check (early short-circuit) --
-#
-# Compares the installed adapter at PENCIL_ADAPTER_INSTALL_DIR (default
-# ~/.local/share/pencil-adapter) against the repo source. Returns:
-#   exit 0 + OK            — hashes match
-#   exit 3 + DRIFT         — hashes differ (unless --auto, which re-copies then exits 0)
-#   exit 0 + NOT_INSTALLED — install dir absent
-#
-# Exists because the installed adapter had drifted 24 days behind repo source,
-# masking error-classification fixes and producing the #2630 silent-drop.
-# Rule: cq-pencil-mcp-silent-drop-diagnosis-checklist.
-
-if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  install_dir="${PENCIL_ADAPTER_INSTALL_DIR:-$HOME/.local/share/pencil-adapter}"
-  installed_adapter="$install_dir/pencil-mcp-adapter.mjs"
-  repo_adapter="$script_dir/pencil-mcp-adapter.mjs"
-
-  if [[ ! -d "$install_dir" ]] || [[ ! -f "$installed_adapter" ]]; then
-    echo "NOT_INSTALLED: $install_dir"
-    exit 0
-  fi
-
-  if [[ ! -f "$repo_adapter" ]]; then
-    echo "ERROR: repo adapter not found at $repo_adapter" >&2
-    exit 2
-  fi
-
-  # `--` terminators prevent user-supplied paths beginning with `-` (e.g.,
-  # PENCIL_ADAPTER_INSTALL_DIR=--help) from being interpreted as flags by
-  # sha256sum / cp. Defense-in-depth; the path quoting already blocks shell
-  # injection.
-  installed_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
-  repo_sha=$(sha256sum -- "$repo_adapter" | awk '{print $1}')
-
-  # Compare EVERY runtime module copy_adapter.sh installs, not only the main
-  # file: a stale sibling (the save sentinel, the REPL surface table) next to a
-  # fresh adapter is exactly the state this check exists to catch. The list is
-  # read from copy_adapter.sh so the two cannot disagree. (A while-read loop, not
-  # mapfile: this script also runs on macOS bash 3.2.)
-  drifted=""
-  compared=0
+# Compare EVERY runtime file copy_adapter.sh installs against an install dir, not only the main
+# adapter: a stale sibling (the save sentinel, the REPL surface table) or a stale dependency
+# manifest (package.json / package-lock.json) next to a fresh adapter is exactly the state the
+# drift check exists to catch. The list is read from copy_adapter.sh so the two cannot disagree.
+# Sets ADAPTER_COMPARED (count) and ADAPTER_DRIFTED (space-prefixed names of differing or missing
+# files). Returns 2 when no file name could be parsed: an unreadable list must never read as "no
+# drift". (A while-read loop, not mapfile: this script also runs on macOS bash 3.2.)
+adapter_drifted_modules() { # <install_dir>
+  local install_dir="$1" module
+  ADAPTER_COMPARED=0
+  ADAPTER_DRIFTED=""
   while IFS= read -r module; do
     [[ -n "$module" ]] || continue
-    compared=$((compared + 1))
-    if [[ ! -f "$install_dir/$module" ]] || ! cmp -s -- "$script_dir/$module" "$install_dir/$module"; then
-      drifted="$drifted $module"
+    ADAPTER_COMPARED=$((ADAPTER_COMPARED + 1))
+    if [[ ! -f "$install_dir/$module" ]] || ! cmp -s -- "$CHECK_DEPS_DIR/$module" "$install_dir/$module"; then
+      ADAPTER_DRIFTED="$ADAPTER_DRIFTED $module"
     fi
-  done < <(sed -n '/^ADAPTER_FILES=(/,/^)/p' "$script_dir/copy_adapter.sh" | grep -o '"[^"]*\.mjs"' | tr -d '"')
-  if [[ "$compared" -eq 0 ]]; then
-    # An unreadable module list must not read as "no drift": it would compare nothing.
-    echo "ERROR: no adapter modules parsed from $script_dir/copy_adapter.sh ADAPTER_FILES" >&2
-    exit 2
-  fi
+  done < <(sed -n '/^ADAPTER_FILES=(/,/^)/p' "$CHECK_DEPS_DIR/copy_adapter.sh" 2>/dev/null | grep -oE '"[^"]*\.(mjs|json)"' | tr -d '"')
+  [[ "$ADAPTER_COMPARED" -gt 0 ]]
+}
 
-  if [[ -z "$drifted" ]]; then
-    echo "OK: installed adapter matches repo (sha ${repo_sha:0:12})"
-    exit 0
-  fi
-
-  if [[ "$AUTO_INSTALL" == "true" ]]; then
-    # Delegate the full sync to copy_adapter.sh — it copies the adapter
-    # AND its sibling pure modules (pencil-response-classify.mjs,
-    # pencil-save-gate.mjs, etc.) AND runs npm ci when the install dir
-    # has a package.json but no node_modules. A bare `cp` here would
-    # leave the adapter ahead of its dependencies.
-    if PENCIL_ADAPTER_INSTALL_DIR="$install_dir" bash "$script_dir/copy_adapter.sh"; then
-      new_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
-      echo "OK: re-copied adapter (was ${installed_sha:0:12} → now ${new_sha:0:12})"
-      exit 0
-    else
-      echo "ERROR: copy_adapter.sh failed during drift auto-repair" >&2
-      exit 2
-    fi
-  fi
-
-  echo "DRIFT: installed ${installed_sha:0:12} != repo ${repo_sha:0:12}; differing or missing:${drifted}"
-  echo "       Run: bash $(basename "${BASH_SOURCE[0]}") --check-adapter-drift --auto"
-  echo "       Or re-run /soleur:pencil-setup to refresh the installed adapter."
-  exit 3
-fi
 
 # Detect OS and architecture for platform-specific checks
 _UNAME=$(uname -s)
@@ -299,18 +240,39 @@ detect_headless_cli() {
   return 0
 }
 
+# The installed @pen.dev/cli version (empty when the package.json is missing or unreadable).
+pen_cli_installed_version() {
+  local pkgjson="$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE/package.json" facts
+  [[ -f "$pkgjson" ]] || return 0
+  facts=$(_pen_pkg_facts "$pkgjson") || return 0
+  printf '%s\n' "$facts" | sed -n 3p
+}
+
+# True when an install exists at a version other than the pin. Without --auto that is only
+# reported; under --auto it counts as "needs install" (the lockfile is the way back to the pin).
+pen_cli_pin_drifted() {
+  local installed
+  installed=$(pen_cli_installed_version)
+  [[ -n "$installed" && "$installed" != "$PEN_CLI_VERSION" ]]
+}
+
 # One-line advisories about the install state. Never fatal, never uses the deprecated package.
 warn_pen_cli_state() {
   local legacy_pkg="$HOME/.local/node_modules/@pencil.dev/cli"
   if [[ -d "$legacy_pkg" ]]; then
-    echo "  [warn] Deprecated @pencil.dev/cli found under ~/.local/node_modules: it is not used. The headless tier runs $PEN_CLI_PACKAGE from $PEN_CLI_PREFIX. Remove with: npm uninstall --prefix ~/.local @pencil.dev/cli"
-  fi
-  local pkgjson="$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE/package.json" facts installed
-  if [[ -f "$pkgjson" ]]; then
-    facts=$(_pen_pkg_facts "$pkgjson") && installed=$(printf '%s\n' "$facts" | sed -n 3p)
-    if [[ -n "${installed:-}" && "$installed" != "$PEN_CLI_VERSION" ]]; then
-      echo "  [warn] $PEN_CLI_PACKAGE $installed is installed but the pin is $PEN_CLI_VERSION; re-run with --auto to reinstall from the lockfile"
+    # "It is not used" is only true of an adapter that targets the new engine. A stale installed
+    # adapter may still resolve the deprecated package, so say how to sync it instead.
+    local install_dir="${PENCIL_ADAPTER_INSTALL_DIR:-$HOME/.local/share/pencil-adapter}"
+    if [[ -f "$install_dir/pencil-mcp-adapter.mjs" ]] && { ! adapter_drifted_modules "$install_dir" || [[ -n "$ADAPTER_DRIFTED" ]]; }; then
+      echo "  [warn] Deprecated @pencil.dev/cli found under ~/.local/node_modules, and the installed adapter at $install_dir is out of date (it may still target it). Sync with: bash check_deps.sh --check-adapter-drift --auto"
+    else
+      echo "  [warn] Deprecated @pencil.dev/cli found under ~/.local/node_modules: it is not used. The headless tier runs $PEN_CLI_PACKAGE from $PEN_CLI_PREFIX. Remove with: npm uninstall --prefix ~/.local @pencil.dev/cli"
     fi
+  fi
+  local installed
+  installed=$(pen_cli_installed_version)
+  if [[ -n "$installed" && "$installed" != "$PEN_CLI_VERSION" ]]; then
+    echo "  [warn] $PEN_CLI_PACKAGE $installed is installed but the pin is $PEN_CLI_VERSION; re-run with --auto to reinstall from the lockfile"
   fi
   return 0
 }
@@ -520,7 +482,17 @@ auto_launch_desktop() {
 
 try_headless_cli_tier() {
   local pen_bin
-  pen_bin=$(detect_headless_cli) || return 1
+  if ! pen_bin=$(detect_headless_cli); then
+    # Say why the tier was skipped; a silent skip leaves the user guessing. Under --auto the
+    # install already ran, so the hint would only repeat what its own output says.
+    if [[ -e "$PEN_CLI_PREFIX/node_modules/.bin/pen" || -d "$PEN_CLI_PREFIX/node_modules/$PEN_CLI_PACKAGE" ]]; then
+      echo "  [skip] $PEN_CLI_PACKAGE at $PEN_CLI_PREFIX failed the identity check (its .bin/pen is not the package's declared bin.pen)"
+      [[ "$AUTO_INSTALL" == "true" ]] || echo "    Re-run with --auto to reinstall it from the committed lockfile"
+    elif [[ "$AUTO_INSTALL" != "true" ]]; then
+      echo "  [info] Headless CLI ($PEN_CLI_PACKAGE) not installed; re-run with --auto to install it from the committed lockfile"
+    fi
+    return 1
+  fi
   # Node version gate
   local node_bin
   node_bin=$(find_node22)
@@ -540,8 +512,24 @@ try_headless_cli_tier() {
     echo "    Set the PEN_CLI_KEY environment variable (the adapter needs it; a pen login is not enough)"
     return 1
   fi
-  if status_out=$(env -u PENCIL_CLI_KEY PEN_CLI_KEY="$key" "$node_bin" "$pen_bin" status 2>&1) \
-     && printf '%s' "$status_out" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -q 'Active'; then
+  # The key reaches the child through a subshell's environment, never through an argument list:
+  # `env NAME=value cmd` would put it in env's argv, readable by any local user via ps. The child
+  # also gets a minimal environment (no unrelated tokens, no deprecated name), keeping what it
+  # needs to run and reach the network.
+  local esc
+  esc=$(printf '\033')
+  if status_out=$(
+       unset PENCIL_CLI_KEY
+       for v in $(compgen -e); do
+         case "$v" in
+           HOME|PATH|LANG|LC_*|TERM|TMPDIR|TMP|TEMP|USER|LOGNAME|SHELL|XDG_*|*_PROXY|*_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR|NO_COLOR|PEN_CLI_KEY) ;;
+           *) unset "$v" 2>/dev/null ;;
+         esac
+       done
+       PEN_CLI_KEY="$key"
+       export PEN_CLI_KEY
+       exec "$node_bin" "$pen_bin" status 2>&1
+     ) && printf '%s' "$status_out" | sed "s/${esc}\[[0-9;]*[A-Za-z]//g" | grep -q 'Active'; then
     :
   else
     echo "  [skip] Headless CLI found but auth failed"
@@ -597,7 +585,13 @@ attempt_headless_install() {
   # scripts are ignored (verified: the engine opens, exports and screenshots without them, see
   # engine-contract-probe.sh). The old ~/.local/node_modules tree is deliberately left alone.
   # Node's directory goes first on PATH so npm's `#!/usr/bin/env node` uses the vetted binary.
-  if (cd "$PEN_CLI_PREFIX" && env -u PEN_CLI_KEY -u PENCIL_CLI_KEY PATH="$(dirname "$node_bin"):$PATH" "$npm_bin" ci --ignore-scripts 2>&1); then
+  # Only the tail of npm's output is shown (a failing resolve can print screens of it); the exit
+  # status is the command's own, captured before the output is trimmed.
+  local npm_out npm_rc
+  npm_out=$(cd "$PEN_CLI_PREFIX" && env -u PEN_CLI_KEY -u PENCIL_CLI_KEY PATH="$(dirname "$node_bin"):$PATH" "$npm_bin" ci --ignore-scripts 2>&1)
+  npm_rc=$?
+  [[ -z "$npm_out" ]] || printf '%s\n' "$npm_out" | tail -20
+  if [[ "$npm_rc" -eq 0 ]]; then
     detect_headless_cli >/dev/null && return 0
     echo "  [FAILED] Install succeeded but the $PEN_CLI_PACKAGE binary was not found or failed the identity check"
   else
@@ -668,6 +662,85 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
 
+# -- Adapter drift check (short-circuits the tier flow) --
+#
+# Compares the installed adapter files at PENCIL_ADAPTER_INSTALL_DIR (default
+# ~/.local/share/pencil-adapter) against the repo source. Exits:
+#   0 + OK            - every file matches
+#   3 + DRIFT         - a file differs or is missing (unless --auto: re-copies, then installs the
+#                       engine when it is missing or off the pin, then exits 0)
+#   0 + NOT_INSTALLED - install dir absent
+#   2                 - the file list is unreadable, or an --auto repair step failed
+#
+# Exists because the installed adapter had drifted 24 days behind repo source, masking
+# error-classification fixes and producing the #2630 silent-drop.
+# Rule: ex-cq-pencil-mcp-silent-drop-diagnosis-checklist (retired id, kept as the provenance).
+run_adapter_drift_check() {
+  local install_dir="${PENCIL_ADAPTER_INSTALL_DIR:-$HOME/.local/share/pencil-adapter}"
+  local installed_adapter="$install_dir/pencil-mcp-adapter.mjs"
+  local repo_adapter="$CHECK_DEPS_DIR/pencil-mcp-adapter.mjs"
+
+  if [[ ! -d "$install_dir" ]] || [[ ! -f "$installed_adapter" ]]; then
+    echo "NOT_INSTALLED: $install_dir"
+    exit 0
+  fi
+
+  if [[ ! -f "$repo_adapter" ]]; then
+    echo "ERROR: repo adapter not found at $repo_adapter" >&2
+    exit 2
+  fi
+
+  # `--` terminators prevent user-supplied paths beginning with `-` (e.g.,
+  # PENCIL_ADAPTER_INSTALL_DIR=--help) from being interpreted as flags by
+  # sha256sum / cp. Defense-in-depth; the path quoting already blocks shell
+  # injection.
+  local installed_sha repo_sha
+  installed_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
+  repo_sha=$(sha256sum -- "$repo_adapter" | awk '{print $1}')
+
+  if ! adapter_drifted_modules "$install_dir"; then
+    echo "ERROR: no adapter modules parsed from $CHECK_DEPS_DIR/copy_adapter.sh ADAPTER_FILES" >&2
+    exit 2
+  fi
+
+  if [[ -z "$ADAPTER_DRIFTED" ]]; then
+    echo "OK: installed adapter matches repo (sha ${repo_sha:0:12})"
+    exit 0
+  fi
+
+  if [[ "$AUTO_INSTALL" == "true" ]]; then
+    # Delegate the full sync to copy_adapter.sh: it copies the adapter AND its sibling modules
+    # and manifests, and runs npm ci when the lockfile changed. A bare `cp` would leave the
+    # adapter ahead of its dependencies.
+    if ! PENCIL_ADAPTER_INSTALL_DIR="$install_dir" bash "$CHECK_DEPS_DIR/copy_adapter.sh"; then
+      echo "ERROR: copy_adapter.sh failed during drift auto-repair" >&2
+      exit 2
+    fi
+    local new_sha
+    new_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
+    echo "OK: re-copied adapter (was ${installed_sha:0:12} -> now ${new_sha:0:12})"
+    # The new adapter refuses to start without its engine, so never leave the adapter ahead of
+    # it: install the engine too when it is missing or not at the pin.
+    if ! detect_headless_cli >/dev/null || pen_cli_pin_drifted; then
+      echo "  [info] Headless engine missing or not at the pin $PEN_CLI_VERSION: installing it as part of the repair"
+      if ! attempt_headless_install; then
+        echo "ERROR: adapter re-copied but the headless engine ($PEN_CLI_PACKAGE@$PEN_CLI_VERSION) could not be installed; fix the cause above and re-run: bash check_deps.sh --auto" >&2
+        exit 2
+      fi
+    fi
+    exit 0
+  fi
+
+  echo "DRIFT: installed ${installed_sha:0:12} != repo ${repo_sha:0:12}; differing or missing:${ADAPTER_DRIFTED}"
+  echo "       Run: bash $(basename "${BASH_SOURCE[0]}") --check-adapter-drift --auto   (also installs the engine when it is missing)"
+  echo "       Or re-run /soleur:pencil-setup to refresh the installed adapter."
+  exit 3
+}
+
+if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
+  run_adapter_drift_check
+fi
+
 # -- Main Flow --
 
 echo "=== Pencil Setup Dependency Check ==="
@@ -686,12 +759,12 @@ fi
 # Tier 1: Desktop CLI (needs Desktop running)
 # Tier 2: Desktop binary (needs Desktop running)
 # Tier 3: IDE extension
-if ! try_headless_cli_tier; then
-  # Auto-install headless CLI if --auto
-  if [[ "$AUTO_INSTALL" == "true" ]] && ! detect_headless_cli >/dev/null; then
-    attempt_headless_install && try_headless_cli_tier
-  fi
+# --auto installs when the engine is missing OR installed at a version other than the pin (the
+# version advice would otherwise be a dead end); the lockfile is the way back to the pin.
+if [[ "$AUTO_INSTALL" == "true" ]] && { ! detect_headless_cli >/dev/null || pen_cli_pin_drifted; }; then
+  attempt_headless_install || true
 fi
+try_headless_cli_tier || true
 [[ -n "$PREFERRED_MODE" ]] || try_cli_tier || try_desktop_tier || try_ide_tier
 
 # -- Result --
