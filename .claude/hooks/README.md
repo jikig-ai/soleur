@@ -18,6 +18,10 @@ exit 0
 Claude Code reads that JSON from stdout and blocks the tool call. Any deviation
 from this shape is treated as a pass-through.
 
+A hook that decides on the TEXT of a git message (`case "$out" in *"not a git repository"*`) runs that
+git call under `LC_ALL=C`: a translated git otherwise reports a non-repository cwd in its own language,
+the English match misses, and a routine commit is denied (#10696, found by the final verification pass).
+
 ### The third disposition: rewrite (ADR-162)
 
 The two sentences above described the contract completely until #7165. A
@@ -199,8 +203,14 @@ run order; in a straight-line list a refusal after the last commit is dropped.
 When the scanner's own tooling is unavailable the hook denies, and the text says so: a missing
 helper library denies every strict `git commit` and every loose form that carries an option or a
 quoting character; a missing perl or lexer denies a command that names a directory (`cd`, `-C`,
-`env`, ...) or is a loose `git ... commit` form, while a plain `git commit` with no directory
-token is still scanned. There is no override variable.
+`env`, ...), that stages and commits in one call (`git add ... && git commit`, `commit -a`, a pathspec
+commit) or is a loose `git ... commit` form, while a plain `git commit -m x` with none of those
+tokens is still scanned against the real index. Without perl the lexer cannot run, so ONLY a single simple
+`git commit` (plain flags, `-m "<text without a dollar sign, backtick or backslash>"`, no pathspec, no chaining) is
+scanned unread; anything else is a `tooling` deny (so a heredoc message or a pathspec commit is denied there until perl
+is installed, and the repair names `git add -u` / the staged-list check for `-a` and `--` commits). Where perl exists
+every strict commit is lexed, and a message the lexer cannot parse now denies a plain commit too. There is no
+override variable.
 
 Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one): a
 `git` or `commit` word spelled with quoting inside the word (`g''it`, `git com''mit`) or built
@@ -209,14 +219,56 @@ an alias, a stored string run as `$cmd`, `git -c alias.ci=commit ci`); `git comm
 `git submodule foreach`; `xargs -I@` placeholders; creators the walker does not know (`./setup.sh`,
 `gh repo clone`) and an existing empty directory that the command turns into a repository;
 a stdin-fed shell BEHIND a launcher (`sudo bash <<EOF`), launchers that take a command string or a chdir option the walker does not know (`tmux new-session`, `at`, `python -c`, `mise -C`, `yarn --cwd`, `direnv exec`, `systemd-run -p WorkingDirectory=`); `CDPATH`, a symlink-vs-logical `cd`, `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS`, `read` / `printf -v`
-into `GIT_DIR`, and a `GIT_DIR` exported by an earlier call; and the commit-time index changes the
-command makes itself (`git add -A && git commit`, `commit -a`, a pathspec commit): the hook scans
-the index as it is BEFORE the command runs (#10696). A `git commit` into a repository that has no
+into `GIT_DIR`, and a `GIT_DIR` exported by an earlier call. A `git commit` into a repository that has no
 `.gitleaks.toml` is skipped with a bypass row, as it always was. On a harness whose hook payload
 carries no `cwd` (Devin), a plain `git commit` after a separate `cd` call is scanned against the
 process cwd only: name the repository as a literal path (`git -C /abs/path commit`) there.
 Sessions anchored at the bare-root mirror pick the fix up after
 `worktree-manager.sh sync-bare-files`. Rationale: ADR-157 addendum (2026-10-21).
+
+### `git-commit-secret-scan` would-be index (#10696)
+
+A command that stages and commits in one call (`git add -A && git commit`, `commit -a`, `commit -am`,
+`commit -- <path>`) used to be scanned against the index as it was BEFORE the command ran, so a secret
+in the working tree passed unscanned. The hook now builds the index the commit will record:
+`lib/commit-target-roots.sh` records the command's own staging, and `lib/commit-index-sim.sh` copies
+the real index to a temp file in a 0700 directory, replays the staging onto the copy (an exact replay
+of the literal `git add` words when the directory is proven, else the superset `git add -A`), and runs
+the scan with the copy and a quarantined object directory exported. With a proven directory only that
+directory's repository is simulated and any other repository (the hook's cwd, the payload cwd) is
+scanned against its real index. Nothing in the real index content, listing or git directory or in the
+working tree is written (an existing object's mtime may be refreshed). The whole simulation and scan
+share one 30 s deadline.
+
+Every failure of the simulation **denies** (rule id `git-commit-secret-scan-sim-deny`, row text
+`mode=... cause=...`) and never bypasses, because the harness's own hook timeout is non-blocking. The deny
+text names a retry that fits the command: for `commit -a`, run `git add -u` as its own call and commit
+again WITHOUT `-a`; for a pathspec commit, `git add <paths>`, check `git diff --cached --name-only`, and
+commit WITHOUT the paths; otherwise `git add <paths>` as its own call, then the commit. A real finding keeps
+the rule id `git-commit-secret-scan` (row `mode=... cause=finding`). Staging the replay cannot reproduce is
+refused (`config-refused`): `-c` keys under `core. filter. diff. attr. include. includeif. add. apply. submodule.
+alias.`, `--namespace`, `--attr-source`, an environment variable outside the allowlist (`LC_*`, `LANG`, `LANGUAGE`,
+`TZ`, `TERM`, `NO_COLOR`, `CI`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_EDITOR`, `GIT_PAGER`, `GIT_TERMINAL_PROMPT`,
+and by exact name `HUSKY`, `HUSKY_SKIP_HOOKS`, `LEFTHOOK`, `LEFTHOOK_EXCLUDE`, `SKIP`, `PRE_COMMIT_ALLOW_NO_CONFIG`) on a
+staging command or exported earlier (also `set -a`), `env -i`, `exec -c`, `sudo` / `setpriv` / `bwrap` / `systemd-run`
+in front of it, and an inline alias definition on any git record of a committing command; content from outside the
+working tree (`update-index --add/--cacheinfo/--index-info`, `apply --index/--cached/--3way`) is denied
+`stage-unsimulable`. A path whose `diff` attribute hides its added lines (`-diff`, or a driver name) is re-scanned
+from its raw staged blob.
+The contract, the cause table and the residuals are indexed in
+[ADR-301](../../knowledge-base/engineering/architecture/decisions/ADR-301-scan-the-would-be-index-of-a-chained-git-commit.md).
+
+Accepted residuals (the threat model is a fallible cooperative agent, not a hostile one): what an
+EARLIER command in the same call changes (a producer, `sed -i` or `prettier --write` before `commit -a`,
+an edit of `.gitignore`, config or attributes, a `git mv` that moves a modified file out of a path-keyed allowlist,
+a `git stash pop` that brings never-committed content); a script or wrapper that runs `git add` inside, and
+user-config aliases; the raw-byte scan (a clean filter or Git LFS may record bytes the simulation never saw);
+checkout, stash, read-tree, cherry-pick, merge, revert, am, restore, mv and rm (they take the superset);
+a SIGKILL that leaves a 0700 temp directory behind (swept by the next simulation when it carries the marker and is
+older than 60 minutes); a concealed commit word (`git com""mit`, `c=commit; git $c`) after a staging command; a hung
+read-only git call outside the deadline; other tools that stage (an IDE); and a harness that sends no payload cwd
+(Devin), where a bare `git add a && git commit` takes the superset (a `cd /abs &&` or the same absolute `-C` still
+proves the directory). INT / TERM end the hook with 130 / 143, which the harness treats as non-blocking.
 
 ### Scope of the mandate
 

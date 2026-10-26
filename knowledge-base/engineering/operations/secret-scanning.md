@@ -33,6 +33,14 @@ Two enforcement layers, one source of truth.
 | **Lefthook `lint-fixture-content`** | local pre-commit | every `git commit` | yes | catches semi-sensitive shapes (real emails, prod-shape UUIDs, Supabase project refs) gitleaks misses |
 | **CI `secret-scan` workflow** | GitHub Actions | PR + merge_group + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
 
+The Claude Code `PreToolUse` hook `git-commit-secret-scan` scans the would-be index for same-command staging
+(`git add -A && git commit`, `commit -a`, a pathspec commit), because the real index does not hold that content
+yet when the hook runs (#10696; see `.claude/hooks/README.md` and ADR-301). It is a courtesy layer with a stated
+residual set, NOT a claim of full coverage: what an earlier command in the same call changes (a producer,
+`sed -i`, an edit of `.gitignore` or config), a script or alias that stages inside, a host without perl, the raw-byte
+scan (a clean filter or Git LFS may record other bytes) and checkout / stash / merge / cherry-pick / read-tree /
+restore / mv / rm are not simulated. CI stays the enforcer for all of them.
+
 Each trigger scans a **different set of commits** — see
 [Ref scope per event](#ref-scope-per-event-which-commits-each-trigger-actually-scans)
 below. That distinction is load-bearing: it is what determines whether a finding

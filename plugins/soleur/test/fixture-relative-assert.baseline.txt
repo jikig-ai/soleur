@@ -271,6 +271,7 @@
 1	.claude/hooks/devin-matcher-parity.test.sh
 2	.claude/hooks/docs-cli-verification.test.sh
 3	.claude/hooks/follow-through-directive-gate.test.sh
+1	.claude/hooks/git-commit-secret-scan.sh
 1	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/incidents.test.sh
 1	.claude/hooks/lib/freeze-lock.sh
