@@ -34,3 +34,8 @@
 - Fix round 1: seats resolved via fix-round-seats.sh (9), executed inline — caught the service_role gap above. One verification pass: live verify + positive controls + vitest 66/66 + lint-migration-api-grants green.
 - Trailer emitted `e2d297609e`; Review-Evidence comment posted. domain-ruling=CTO (recorded) + CPO sign-off.
 - CI cycles: pushed aeab414a04 + 12e21381a5 + e2d297609e.
+
+## QA Phase (2026-10-26, second session)
+- Task 3.5 PASS: SET-ROLE/jwt-claims probe matrix on local stack — 5/5 auth SELECTs, 5/5 census UPDATEs, 7/7 denied, RPC reroute lands row, anon denied, service_role correct.
+- Plan API-verify steps: RLS_FUZZ_LOCAL=1 rls-grants 7/7 green; run-verify.sh on local stack — verify/178 31/31 bad=0.
+- **P1 found in QA:** verify/174 asserted pre-178 grants — post-178 deploy would red 15 rows in `verify-migrations` (which `deploy` needs) → every later deploy blocked. Fixed inline: removed the 15 superseded rows + supersession comment; 150/150 rows bad=0 locally. Same class as review's sentinel-complement finding (verify files probe stated posture, not current truth).
