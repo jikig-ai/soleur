@@ -1676,6 +1676,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_MAIN_HEALTH_MONITOR_WORKFLOW_TEST_SH_PATHS=(
   "apps/web-platform/infra/run-registered-suites.sh"
   "knowledge-base/project/learnings/best-practices/"
   "plugins/soleur/test/main-health-monitor-workflow.test.sh"
+  "scripts/lib/scratch-root.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/lint-workflow-errexit-capture.py"
   "scripts/test-all.sh"
