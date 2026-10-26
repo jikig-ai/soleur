@@ -17,14 +17,15 @@ Plan: `knowledge-base/project/plans/2026-10-26-feat-egress-audit-read-path-plan.
 - [ ] 1.2 Shape test `test/supabase-migrations/NNN-egress-audit-summary-rpc.test.ts` (definer, search_path, `42501`, grants, no table grant or policy, no timeout clause)
 - [ ] 1.3 Migration `NNN_egress_audit_summary_rpc.sql` + `.down.sql` + `supabase/verify/NNN_*.sql` (records `authenticated` rolconfig)
 - [ ] 1.4 Run `bun run test:rls-fuzz` and `cd apps/web-platform && ./node_modules/.bin/vitest run test/migration-rpc-grants.test.ts`
-- [ ] 1.5 Measure per plan AC3a: `EXPLAIN (ANALYZE, BUFFERS)` cold and warm on three seeds (unique hosts; 100 repeating hosts at 500 rows per bucket; same with ~50 interleaved tenants), after `ANALYZE`/`VACUUM`, 6+ calls; budgets hint probe <= 20 ms, page warm p95 < 500 ms; record `authenticated` `rolconfig`. The hint uses the latest-bucket probe from the start
+- [ ] 1.5 Measure per plan AC3a: `EXPLAIN (ANALYZE, BUFFERS)` of the rewritten function for calls 1..8 in one session (no generic-plan flip: `plan_cache_mode = force_custom_plan` is pinned); scaling table at 50k / 250k / ~1.44M rollup rows; `p_limit = 0` hint probe <= 20 ms; `p_limit` 200-vs-500 timing; record `authenticated` `rolconfig` (`statement_timeout=8s`); warm p95 < 500 ms claimed only for workspaces under ~100k window rows (larger ones are covered by the #11237 blockers). The hint uses the latest-bucket probe from the start
+- [ ] 1.7 RPC rulings: second statement is the jti denylist (`'egress audit: token denied'`, 42501), top-N page query, `SET plan_cache_mode = force_custom_plan`, sums clamped to 9007199254740991
 - [ ] 1.6 Tenant-boundary mutants: seed tenant B with distinct data and assert A sees none of it in every branch; membership check is the first statement (order oracle with an invalid `p_decision`); constant in-body message distinct from the grant-denial text; seed aggregation cases through `ingest_egress_audit_rollup`
 
 ## Phase 2: Loader and shared helper
 
 - [ ] 2.1 Failing tests `test/egress-audit-read-loader.test.ts` (null workspace -> unbound; reader throw -> unavailable; RPC not called in either; 42501 -> forbidden and not mirrored; other errors and abort -> unavailable with one mirror; forged query params ignored; collection tri-state incl. unknown; webAccess null)
 - [ ] 2.2 `server/egress-audit-collection.ts` (`isEgressAuditCollectionOn`); swap the inline call in `server/egress-audit-ingest.ts`; amend the flag comment in `lib/feature-flags/server.ts`
-- [ ] 2.3 `server/egress-audit-read.ts` and `lib/egress-audit/summary.ts`
+- [ ] 2.3 `server/egress-audit-read.ts` and `lib/egress-audit/summary.ts`. Review-round rulings (plan D6): no "outage reads off" on the read side (`readRuntimeFlagDetailed` / `readEgressAuditCollectionState` map an outage to `"unknown"`; ingest stays boolean); op registry gains `hint_workspace_read` and `web_access_read` (unpaged) and every mirror carries a sanitised `pg_code` tag; bounds: page pointer 2000 ms, collection and web-access reads 1500 ms each after the RPC; card pointer 600, org 800, hint 800, overall 1200 ms; `forbidden` only when the 42501 message starts with `egress audit: `, otherwise a paged `rpc_error` with `pg_code`; page/card workspace-mismatch guard; no reads started before the RPC (rejected: pre-authorization reads); the op-contract test derives PAGED/UNPAGED from the loader source; reword `WEB_EGRESS_PROMPT_ADDENDUM` in `server/cc-dispatcher.ts`
 - [ ] 2.4 Sentry rule `egress-audit-read-failure` (`infra/sentry/issue-alerts.tf`, `alert-reference.json`; filter `feature eq egress-audit-read` and `op in rpc_error,rpc_timeout,workspace_read_error`) plus the op-contract test; reasons go in `op` with `err = null` and a static message per reason; hint mirror uses `mirrorWarnWithDebounce` with a stated key and distinct `errorClass`, registered in `server/observability.ts`
 
 ## Phase 3: UI
@@ -33,7 +34,7 @@ Plan: `knowledge-base/project/plans/2026-10-26-feat-egress-audit-read-path-plan.
 - [ ] 3.2 `app/(dashboard)/dashboard/settings/scope-grants/egress-audit/page.tsx` (force-dynamic, awaited `searchParams`) and `components/settings/egress-audit-view.tsx` plus the retry/refresh client island
 - [ ] 3.3 Scope Grants page: concurrent bounded `p_limit = 0` read, collection check, debounced mirror, props to the toggle; remove the stale comment
 - [ ] 3.4 `components/settings/web-egress-toggle.tsx`: link in both states, client-rendered "Last recorded request: X ago" (clamped at zero), Off status retention sentence when a last request exists, one-line recording notice for non-owners when collection is on, dialog notice tri-state (generic sentence on "unknown"); remove the stale comment
-- [ ] 3.4a Page: workspace name in the subtitle, "(all outcomes)" summary label under a filter, footer erasure statement and link, banner text about pre-join visibility, `Cache-Control: private, no-store` verified in a browser or integration fetch
+- [ ] 3.4a Page: workspace name in the subtitle, "(all outcomes)" summary label under a filter, footer erasure statement and link, banner text about pre-join visibility, `Cache-Control: no-store` asserted by `test/middleware.no-store.test.ts` (the middleware sets `no-store, no-cache, must-revalidate`)
 - [ ] 3.5 `tsc`, unit and component projects (vitest, not `bun test`)
 
 ## Phase 4: Records and documents

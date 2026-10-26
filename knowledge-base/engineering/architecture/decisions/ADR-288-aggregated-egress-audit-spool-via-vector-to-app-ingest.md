@@ -186,5 +186,41 @@ that said a policy "lands in PR2" (migration 162 is immutable on `main`; its hea
   visible state, never folded into Blocked. Overflow counts merge with `GREATEST` at ingest, so they are very loose lower bounds and
   the view always says "at least".
 
+### Read-path rulings (review round, 2026-10-26)
+
+- **Second gate statement.** After the membership check the function refuses a revoked-but-unexpired JWT of a current member
+  (`is_jti_denied_from_jwt()`, mirroring migration 127): SQLSTATE `42501`, message `'egress audit: token denied'`. A definer bypasses
+  the RESTRICTIVE jti policies, so the denylist has to be restated in the body.
+- **Cost shape.** The page query is a top-N rewrite (`ORDER BY last_seen DESC LIMIT p_limit + 1` over real-host groups), the function
+  pins `SET plan_cache_mode = force_custom_plan` (after five executions in one session plpgsql would flip to a generic plan), and sums
+  are clamped to 9007199254740991 (JS `MAX_SAFE_INTEGER`). `p_limit` stays clamped to 0..500; it is not the cost driver.
+- **Loader.** `forbidden` only when the 42501 message starts with `egress audit: `; any other 42501 (an engine "permission denied for
+  function", a lost EXECUTE grant) is a paged `rpc_error` with `pg_code=42501`. A Flagsmith outage maps to `collection: "unknown"`
+  through `readRuntimeFlagDetailed` / `readEgressAuditCollectionState`; ingest stays boolean. The op registry gains
+  `hint_workspace_read` and `web_access_read` (unpaged) and every mirror carries a sanitised `pg_code` tag. Bounds: page pointer
+  2000 ms, collection and web-access reads 1500 ms each after the RPC; card pointer 600 ms, org 800 ms, hint 800 ms, overall 1200 ms.
+  Independent reads are not started before the RPC (rejected: they would run before the caller is authorised). Page and card guard
+  against a workspace mismatch between the authorised id and the extra reads.
+- **Agent prompt.** `WEB_EGRESS_PROMPT_ADDENDUM` no longer claims "every decision is logged with workspace attribution"; it says
+  requests may be recorded best-effort and points to the audit view.
+- **Page caching.** The page response carries `Cache-Control: no-store`.
+
+### Accepted residuals (read path)
+
+1. **Adversarial worst case.** About 1.44M (host, decision) groups for one workspace takes about 3.5 s after the rewrite. Accepted as
+   a documented limit: collection is off for external organisations (gated by #11237) and the failure mode is fail-closed
+   (`unavailable`, never a wrong answer). A per-workspace distinct-host cap and fold policy at ingest (PR1 scope, a new migration
+   because 162 is immutable) and a limiter for member-callable aggregation RPCs are **#11237 enablement blockers**.
+2. **Writer-side evasion.** A prompt-injected agent can push a host out of the view by contacting more than 200 decoy hosts more
+   recently, or more than 500 in one bucket (folded into the nameless `(other)` row at ingest). This is a transparency log for
+   members, **not** a forensic or exfiltration-detection control; the overflow count is the residual signal. Ordering and filters were
+   rejected as mitigations because the attacker controls denied decoys too.
+3. **Direct member RPC loops.** A member can call the RPC in a loop from their own client; it is bounded only by the
+   `authenticated` role's 8 s `statement_timeout` and per-workspace scope. The `p_limit` clamp stays 500 because it is not the cost driver.
+4. **Router Cache window.** The 30 s Router Cache (`staleTimes.dynamic`, ADR-067) lets a just-removed member's already-open session
+   re-display a payload fetched earlier.
+5. **Agent-readable surface parity gap.** The RPC is callable by any authenticated member client but no agent/MCP tool exists. A
+   follow-up issue tracks it.
+
 The status stays **Adopting**: it moves to `accepted` after PR2 has merged and the owner notice has been out for at least 7 days (an
 enablement step; the flag flip is tracked in #11237, not part of PR2).

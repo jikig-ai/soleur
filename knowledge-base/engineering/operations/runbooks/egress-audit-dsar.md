@@ -8,7 +8,7 @@ related_adrs: [ADR-288, ADR-278]
 # Egress audit rollup — data-subject export and erasure by workspace
 
 Use this when an Art. 15 (access) or Art. 17 (erasure) request concerns what a workspace's agents contacted on the open web, and
-before collection is ever enabled for an external workspace (collection stays off for external workspaces until the enablement steps on #11237 are done; the member audit view, which ships with PR2 of #9545, exists but shows nothing for a workspace where collection is off). The table
+before collection is ever enabled for an external workspace (collection stays off for external workspaces until the enablement steps on #11237 are done; the member audit view, which ships with PR2 of #9545, exists but shows nothing for a workspace where collection was never on, and keeps showing earlier rows after collection or web access is switched off until they age out). The table
 `public.workspace_egress_audit_rollup` is keyed by `workspace_id`; it holds the host, allowed/denied, best-effort counts and
 timestamps, and no IP, user, session or path value (ADR-288). Rows are kept 30 days and are deleted with the workspace.
 

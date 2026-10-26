@@ -82,3 +82,7 @@ Members may read; t6 re-screen concludes "no full DPIA, conditional" (nine field
 ## Capability Gaps
 
 None. Evidence: repo research found no existing "View egress audit log" link (only two stale TODO comments), no read-side flag, and migration 162 with no member policy.
+
+## Correction note (2026-10-26, PR2 review round; append-only)
+
+The decision table above (row "Rate limit and observability") names `Cache-Control: private, no-store`, a rate-limited route (`withUserRateLimit`) and a `statement_timeout` bound. Superseded: there is no route (plan review 2026-10-26); the page response carries `Cache-Control: no-store` (the middleware sets `no-store, no-cache, must-revalidate` and a test asserts it); a function-level `statement_timeout` is a no-op for the running statement, and the real bound is the `authenticated` role's 8 s timeout plus the structural bounds. The migration ordinal is 177, not 164. See the plan (`knowledge-base/project/plans/2026-10-26-feat-egress-audit-read-path-plan.md`, section D6) and the ADR-288 amendment.

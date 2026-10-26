@@ -576,7 +576,7 @@ model {
     technology "systemd unit dependency"
   }
   webapp -> engine "Thin view/control layer" { technology "WebSocket" }
-  webapp -> supabase "Auth and data" { technology "HTTPS" }
+  webapp -> supabase "Auth and data. Includes the member egress-audit read path (#9545 PR2, ADR-288 amendment 2026-10-26): the server-rendered Scope Grants audit page and card call the get_egress_audit_summary RPC through the signed-in member's cookie client over workspace_egress_audit_rollup. Authenticated workspace members only (membership and jti-denylist checks in the function body); no member SELECT policy, no table grant, no HTTP route; best-effort minimum counts over a fixed 30-day window" { technology "HTTPS" }
   webapp -> stripe "Checkout and billing" { technology "HTTPS" }
   webapp -> plausible "Page view events" { technology "JS snippet" }
   webapp -> github "Reads release notes for the in-app Releases page" { technology "HTTPS (GitHub REST API)" }
