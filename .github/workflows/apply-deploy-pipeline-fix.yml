@@ -2549,9 +2549,49 @@ jobs:
       # when its newest recorded plan is readable, complete and shows no hcloud_server action, and
       # leaves everything else open with a ::notice::. The `if:` below is pinned verbatim by
       # apps/web-platform/infra/infra-config-gate.test.sh AC18: change it there too.
+      #
+      # THIRD GATE, THIRD EVIDENCE (#9061). Both gates above read evidence recorded BEFORE this
+      # apply: the infra-config verdict adjudicates the host's config files, and the issue's
+      # newest recorded plan was written by the drift cron before this run. Neither re-measures
+      # the root — measured on #8754, an issue was closed while its whole standing tail still
+      # stood, and the next drift run filed a duplicate. This step re-runs the drift cron's own
+      # read-only invocation AFTER the apply, and the close step below requires its exit code 0 —
+      # so a close now literally means "a full-root plan read no changes". `set +e` + captured
+      # EXIT_CODE mirror the cron's drift step; PLAN_OUTPUT stays in the variable (refresh lines
+      # print random_id key bytes — #11294) and only the `^Plan:` count line reaches the summary.
+      # A non-0/2 exit is `::error::` but does NOT fail the job: the apply already ran and was
+      # verified, and a failed diagnostic must not red a green apply — it fails closed instead.
+      - name: Post-apply full-root drift plan
+        id: drift_plan
+        if: >-
+          success() && env.PLAN_HAS_CHANGES == 'true'
+          && (steps.infra_config_gate.outputs.verdict == 'verified'
+              || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set +e
+          PLAN_OUTPUT=$(doppler run --preserve-env --name-transformer tf-var -- \
+            terraform plan -detailed-exitcode -no-color -input=false \
+            -var="ssh_key_path=${CI_SSH_PUB}" 2>&1)
+          EXIT_CODE=$?
+          set -e
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          case "$EXIT_CODE" in
+            0) echo "::notice::Post-apply full-root plan is clean — the close step may run." ;;
+            2) echo "::notice::Post-apply full-root plan still shows changes — every drift issue stays open." ;;
+            *) echo "::error::Post-apply full-root plan FAILED (exit $EXIT_CODE) — not readable as clean; drift issues stay open and this run asserts nothing about drift." ;;
+          esac
+          printf '%s\n' "$PLAN_OUTPUT" | grep -E '^Plan: [0-9]+ to ' \
+            >> "$GITHUB_STEP_SUMMARY" || true
+
       - name: Auto-close any open drift issues for this stack
         if: >-
           success() && env.PLAN_HAS_CHANGES == 'true'
+          && steps.drift_plan.outputs.exit_code == '0'
           && (steps.infra_config_gate.outputs.verdict == 'verified'
               || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
         env:

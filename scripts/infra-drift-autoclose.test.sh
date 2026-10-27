@@ -472,9 +472,12 @@ except Exception as e:  # pragma: no cover
 wf, repo, name = sys.argv[1:4]
 doc = yaml.safe_load(open(wf))
 steps = []
+close_job = None
 for job in (doc.get("jobs") or {}).values():
-    for st in job.get("steps") or []:
-        steps.append(st)
+    jsteps = job.get("steps") or []
+    steps.extend(jsteps)
+    if any(s.get("name") == name for s in jsteps):
+        close_job = job
 named = [s for s in steps if s.get("name") == name]
 if len(named) != 1:
     print("step-found:%d" % len(named)); sys.exit(0)
@@ -502,13 +505,39 @@ for s in steps:
     r = s.get("run") or ""
     if "gh issue close" in r and "infra-drift" in r:
         print("second-closer:" + str(s.get("name"))); sys.exit(0)
+# --- Guard-1 structural rows (#9061) ---------------------------------------------------------
+# The close gate reads a FRESH full-root plan's exit code, produced by the
+# drift_plan step in the SAME job as the close step. Every load-bearing
+# property is structural: the step exists, precedes the close step, runs an
+# untargeted `terraform plan -detailed-exitcode`, resolves to
+# apps/web-platform/infra, and writes exit_code to $GITHUB_OUTPUT.
+jsteps = (close_job or {}).get("steps") or []
+dp = [s for s in jsteps if s.get("id") == "drift_plan"]
+if len(dp) != 1:
+    print("drift-plan-step:%d" % len(dp)); sys.exit(0)
+if jsteps.index(dp[0]) >= jsteps.index(st):
+    print("drift-plan-after-close"); sys.exit(0)
+dprun = dp[0].get("run") or ""
+if "terraform plan" not in dprun or "-detailed-exitcode" not in dprun:
+    print("drift-plan-not-detailed-exitcode"); sys.exit(0)
+if "-target" in dprun:
+    print("drift-plan-targeted"); sys.exit(0)
+wd = dp[0].get("working-directory") or dp[0].get("working_directory") or ""
+if wd.startswith("${{"):
+    key = wd.strip().strip("{}$ ").replace("env.", "", 1)
+    wd = ((close_job or {}).get("env") or {}).get(key) \
+        or (doc.get("env") or {}).get(key) or ""
+if wd != "apps/web-platform/infra":
+    print("drift-plan-wrong-directory:" + wd); sys.exit(0)
+if "exit_code=" not in dprun or "$GITHUB_OUTPUT" not in dprun:
+    print("drift-plan-no-exit-code-output"); sys.exit(0)
 print("ok")
 PY
 }
 echo "# workflow wiring"
 CASES=$((CASES + 1))
 w=$(wiring_check "$WORKFLOW")
-if [[ "$w" == "ok" ]]; then ok "the step is one invocation of the script, no inline gh issue close, env intact"; else bad "wiring: $w"; fi
+if [[ "$w" == "ok" ]]; then ok "the step is one invocation of the script, no inline gh issue close, env intact; drift_plan step exists, precedes it, runs an untargeted -detailed-exitcode in the right directory and exports exit_code (#9061)"; else bad "wiring: $w"; fi
 
 # ---------------------------------------------------------------------------------------------
 # Harness self-tests (always on): bad() must record a FAILURE into FAIL and the append-only
@@ -692,10 +721,36 @@ elif mode == "W3":
     key = 'name: ' + name
     if t.count(key) != 1: sys.exit(3)
     t = t.replace(key, 'name: Renamed away')
+elif mode == "W4":
+    # Guard-1 row 2: the producer's id is gone — the gate's dispatch never ran
+    key = '        id: drift_plan'
+    if t.count(key) != 1: sys.exit(3)
+    t = t.replace(key, '        id: drift_plan_x')
+elif mode == "W5":
+    # Guard-1 row 3: the id lands on the CLOSE step instead — the measurement
+    # no longer precedes the close
+    src_key = '        id: drift_plan'
+    dst_key = 'name: ' + name
+    if t.count(src_key) != 1 or t.count(dst_key) != 1: sys.exit(3)
+    t = t.replace(src_key + '\n', '')
+    t = t.replace(dst_key, dst_key + '\n        id: drift_plan')
+elif mode == "W6":
+    # Guard-1 row 4: a plan that exits 0 with changes pending
+    key = 'terraform plan -detailed-exitcode'
+    if t.count(key) != 1: sys.exit(3)
+    t = t.replace(key, 'terraform plan')
+elif mode == "W7":
+    # Guard-1 row 5: a scoped plan masquerading as full-root
+    key = '-var="ssh_key_path=${CI_SSH_PUB}"'
+    hits = t.count(key)
+    if hits < 1: sys.exit(3)
+    i = t.index('id: drift_plan')
+    j = t.index(key, i)
+    t = t[:j] + '-target=terraform_data.deploy_pipeline_fix \\\n            ' + t[j:]
 open(out, 'w').write(t)
 PY
   }
-  for m in W1 W2 W3; do
+  for m in W1 W2 W3 W4 W5 W6 W7; do
     wmut "$MUT/$m.yml" "$m" || fatal_harness "wiring mutation $m did not apply"
     if cmp -s "$WORKFLOW" "$MUT/$m.yml"; then fatal_harness "wiring mutation $m did not change the workflow"; fi
     CASES=$((CASES + 1))
@@ -761,7 +816,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
 fi
 
 if [[ -z "${DRIFT_NO_BATTERY:-}" ]]; then
-  DRIFT_MIN_ASSERTIONS=98  # == the exact count: a ratchet, raise it with every added case
+  DRIFT_MIN_ASSERTIONS=102  # == the exact count: a ratchet, raise it with every added case
   if [[ "$CASES" -lt "$DRIFT_MIN_ASSERTIONS" ]]; then
     printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
       "$CASES" "$DRIFT_MIN_ASSERTIONS" >&2

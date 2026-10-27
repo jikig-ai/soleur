@@ -8,6 +8,11 @@
 # comment "re-aligned with HEAD" is only substantiated for the targets; an issue whose plan shows
 # a pending hcloud_server replacement is NOT re-aligned and must stay open.
 #
+# THIRD EVIDENCE (#9061): the step only runs at all when the workflow's `drift_plan` step — a
+# fresh untargeted `terraform plan -detailed-exitcode` executed AFTER the apply — exited 0. The
+# recorded-plan grading below is the per-issue filter on top of that gate, not its substitute:
+# the issue's newest recorded plan predates the apply and cannot substantiate a close on its own.
+#
 # Modes:
 #   (default)    loop over open `infra-drift` issues; close each one the classifier clears.
 #   --classify   read {"body": <string>, "comments": [<string>, ...]} on stdin, print exactly one
@@ -179,7 +184,7 @@ read_issue() {
 
 do_close() {  # <issue>
   local text rc=0
-  text="Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA:-unknown}. This workflow applies a fixed set of terraform_data targets; the newest bot-recorded drift plan on this issue showed no pending hcloud_server replacement and was complete, so the drift is treated as re-aligned with HEAD."
+  text="Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA:-unknown}: a fresh full-root \`terraform plan -detailed-exitcode\` run by this job after the apply read no changes, and the newest bot-recorded drift plan on this issue was readable, complete and showed no pending hcloud_server replacement. The drift is treated as re-aligned with HEAD."
   gh issue close "$1" --reason completed --comment "$text" >/dev/null 2>"$ERRF" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     CLOSE_FAILED=$((CLOSE_FAILED + 1))
