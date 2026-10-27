@@ -2983,7 +2983,7 @@ OW_MSHA=0123456789abcdef0123456789abcdef01234567
 OW_STEP="$(wf_block "$WF_REAL" $RJOB | sed -n 's/^      - name: \(.*\)$/\1/p')"   # read from the workflow; row_ow_parity ties it to the probe's STEP
 OW_KBD="knowledge-""base"   # assembled: the dropped-consumer census must not read this suite as a knowledge-base reader
 OW_BL_PATH="repos/$R/contents/scripts/ci-pr-affected-audit.baseline.tsv"
-OW_UNITS=()
+OW_UNITS=(); OW_MUT_RUN=0
 OW_RCS=()   # every exit code the probe returned in this section: none may be 1 (exit 1 is not used by the probe)
 ow_base_units() {
   OW_UNITS=("5001 pull_request shaA feat/a 2031-02-02T01:00:00Z 1 11 0 150" "5002 pull_request shaB docs/b 2031-02-02T02:00:00Z 1 12 0 140"
@@ -3357,6 +3357,7 @@ chk "window probe: jq's error text reaches the failure message, allow-listed and
 chk "window probe: SIGTERM while a read is in flight leaves no worker and no work directory (exit 143)" row_ow_trap
 ow_mutate() {   # ow_mutate <name> <old> <new> <row>: one edit of the PROBE (it must land once and parse); the row is GREEN on the real probe and must be RED on the mutant
   local m="$SANDBOX/owmut-$1.sh" real="$OW_SCRIPT" red=0
+  OW_MUT_RUN=$((OW_MUT_RUN + 1))   # the section's own floor counts every call (ow_mutate does not feed MUT_RUN, so FLOOR_MUTANTS is not the guard for these)
   cp "$real" "$m"
   python3 - "$m" "$2" "$3" 2>/dev/null <<'PY' || { fail "probe mutant $1: the edit did not land exactly once"; return 0; }
 import sys
@@ -4708,7 +4709,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # earlier one (same edit, same row), so a renamed duplicate adds no kill.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1152   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) (measured below)
+FLOOR_ASSERTIONS=1186   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) + 34 added by the observation-window probe fix (15 rows, 19 mutant kills) (measured below)
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
@@ -4720,6 +4721,8 @@ fi
 # the counted floors (not `if` openers: they need the grep counts above, which a mutant of the literal floors above cannot carry)
 # every `mutate` line must have run (an exact reconciliation: a skipped or conditional line is a missing mutant)
 [[ "$MUT_RUN" -ge "$SITES_MUTATE" ]] || { printf '[FATAL] mutation floor: %s mutants ran but this file has %s mutate lines\n' "$MUT_RUN" "$SITES_MUTATE" >&2; exit 1; }
+OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"   # the observation-window section's own floor: every ow_mutate line must have run
+[[ "$OW_MUT_RUN" -ge "$OW_SITES" && "$OW_SITES" -ge 40 ]] || { printf '[FATAL] observation-window mutation floor: %s ow_mutate calls ran, this file has %s lines (and at least 40 are required)\n' "$OW_MUT_RUN" "$OW_SITES" >&2; exit 1; }
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
 printf 'FAILED: %s\n' "${FAILED[@]}" >&2

@@ -36,13 +36,20 @@
 #       tip is the end state and fine; absent at the merge commit, or a read failure, is CANNOT ESTABLISH.
 #
 # WHAT A PASS CERTIFIES. Runs are listed newest first up to MAX_PAGES (40) pages per event, then read OLDEST first, at most MAX_UNITS (250) runs per sweep,
-# PLUS always the newest 10 merge_group runs (the pause check and the defects): a PASS certifies the earliest prefix plus the newest queue state, and the status
-# line prints runs_listed, units_read and truncated=0|1. The oldest runs never change, so evidence latches across sweeps without any tracker write. A run whose
+# PLUS always the newest 10 merge_group runs (the pause check and the defects), which are dispatched FIRST and are exempt from the read budget: a PASS certifies the
+# earliest prefix plus the newest queue state, and the status line prints runs_listed, units_read and truncated=0|1. Reads run SOAK_PARALLEL (4) at a time under a
+# SOAK_BUDGET_S (300 s) deadline that also bounds the per-PR facts loop: past it the remaining oldest-first runs wait for the next sweep (truncated=1; a budget hit is
+# NOT YET unless every criterion already holds on what was read, and is never CANNOT ESTABLISH). Measured serially on 2026-10-27: 265 jobs reads at 2.1 s and 264 job logs
+# at 1.1 s (about 15 minutes) against a sweeper job limit of 15 minutes for every tracker. The oldest runs never change, so evidence latches across sweeps without any tracker write. A run whose
 # conclusion is `cancelled` is skipped before any jobs read. Closing #10865 authorizes nothing: PR3b (#10859) stays held.
 #
 # Exit codes (sweep-followthroughs.sh contract): 0 PASS; 2 NOT YET (an unmet criterion; the sweeper comments and leaves the tracker open); 3 CANNOT ESTABLISH
 # (a tool, GH_TOKEN or a read failed, or a job log carried no marker for a run that concluded success: the sweeper retries); 78 refused to run under xtrace
-# while GH_TOKEN is set (#7797). Test seams (inert under the sweeper's env -i): SOAK_NOW_EPOCH, SOAK_MAX_PAGES, SOAK_MAX_UNITS. The rows live in
+# while GH_TOKEN is set (#7797). Test seams (inert under the sweeper's env -i): SOAK_NOW_EPOCH, SOAK_MAX_PAGES, SOAK_MAX_UNITS, SOAK_PARALLEL (1..8), SOAK_BUDGET_S
+# (1..600), SOAK_PROGRESS=1 (a heartbeat per 25 reads on stderr). The sweeper's GITHUB_TOKEN allows about 1,000 REST requests per hour per repository, shared: the probe reads
+# rate_limit first and is CANNOT ESTABLISH (exit 3) when the planned reads (2 per run, 5 per PR, 200 reserve) do not fit, and an HTTP 403 or 429 stops further reads.
+# Progress is on stderr (three phase lines, counts only); stdout is the status line, the verdict and a `quota:` line. NO API payload may travel on a jq argv (one argv entry
+# is capped at 131072 bytes): pages go to jq on stdin. The rows live in
 # plugins/soleur/test/ci-pr-affected-replay.test.sh (stub gh; a registered scripts/followthroughs/*.test.sh would need a run_suite line in scripts/test-all.sh).
 #
 # CREDENTIAL POSTURE: needs GH_TOKEN, declared in the tracker directive's `secrets=GH_TOKEN` clause, for REST reads of Actions metadata, job logs, pulls,
