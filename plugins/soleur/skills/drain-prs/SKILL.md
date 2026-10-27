@@ -1,6 +1,6 @@
 ---
 name: drain-prs
-description: "This skill should be used when draining open remote GitHub PRs: triage every open pull request into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
+description: "This skill should be used when draining open GitHub PRs: triage them into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
 ---
 
 <!-- soleur-cloud-mode:start -->

@@ -228,6 +228,10 @@ _EMIT_COMMANDS=0
 # An unknown `--flag` is NOT consumed: it falls through to the TEST_GROUP
 # positional below and dies on validation — fail-closed, unchanged.
 _AFFECTED_REQ=0        # --affected (or --print-affected-set) named explicitly
+# The bare --affected flag ONLY — print arms also raise _AFFECTED_REQ, so it
+# cannot witness "the --affected spelling was named twice" for the alias
+# ambiguity refusal below.
+_AFFECTED_FLAG=0
 _FULL_REQ=0            # --full named explicitly
 _PRINT_AFFECTED=0
 # --print-selection (#9307): run the affected pre-pass and print what THIS diff
@@ -294,6 +298,7 @@ while [[ "${1:-}" == --* ]]; do
       ;;
     --affected)
       _AFFECTED_REQ=1
+      _AFFECTED_FLAG=1
       ;;
     --affected-scope=*)
       _AFF_SCOPE="${1#--affected-scope=}"
@@ -378,6 +383,8 @@ Modes (local default is --affected; CI runs the full battery, except that a pull
 declines five self-test mutation batteries whose subject the diff does not touch — ADR-262):
   --affected            run the suites this diff can move, plus every always-on
                         repo-global ratchet. Exempt from the full-gate refusals.
+                        TEST_GROUP=affected is a deprecated compat alias of this
+                        flag (#8621 — the #8591 heuristic selector was folded).
   --full                the whole battery. Refused under SOLEUR_SUBAGENT=1 or
                         measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
   --print-affected-set  emit AFFECTED_CLASS receipts per registration; runs nothing.
@@ -414,9 +421,9 @@ RUNNER EDITS (a diff touching scripts/test-all.sh or scripts/lib/test-affected-p
   Scope an edit you have judged safe (selects on the INDEX only, so stage the new
   suite's files too):
       git add <files> && bash scripts/test-all.sh --affected --affected-scope=staged
-  TEST_GROUP=affected is a DIFFERENT, heuristic selector (#8591): it has no runner-changed
-  arm, its content-reference signal selects every suite whose text mentions the changed
-  path, and it cannot be combined with --affected. It is not an escape from the fallback.
+  TEST_GROUP=affected is a deprecated compat ALIAS of --affected (#8621 — the
+  #8591 heuristic selector was folded into the declared-edge axis): it carries
+  the same runner-changed fallback and cannot be combined with --affected or --full.
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass),
@@ -433,7 +440,8 @@ ${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/ and print
 log=<path> on the summary line — SOLEUR_TEST_ALL_LOG_DIR relocates it.
 
 Weight drift (#9814): local affected-shaped runs (TEST_TIMING_LOG unset, CI
-unset, TEST_GROUP=affected or the all-group default) default TEST_TIMING_LOG
+unset, --affected / the TEST_GROUP=affected alias / the all-group local
+default) default TEST_TIMING_LOG
 to <log-dir>/suite-timings.tsv and the epilogue compares each ran suite's
 local ms against committed scripts/suite-durations*.tsv weights — warn-only
 WEIGHT_DRIFT <label> committed=<ms|unmeasured> [basis=floor] local=<ms>
@@ -479,14 +487,20 @@ if (( _FULL_REQ == 1 )); then
   _FULL_GATE=1
 fi
 _AFFECTED=0
-# TEST_GROUP=affected is a DISTINCT selector (#8591): naming it must never also
-# arm this axis, or a heuristic-scoped run would silently also carry #8322's
-# pre-pass, decline path and degraded-full recheck. The positional group is
-# still $1 here (TEST_GROUP resolves below); computing the effective group
-# early keeps the two selectors disjoint by construction.
+# TEST_GROUP=affected is no longer a distinct selector (#8621): the #8591
+# heuristic was folded into #8322's declared-edge axis after the decline-set
+# comparison measured misses on every corpus diff
+# (knowledge-base/project/specs/feat-one-shot-8621-converge-selectors/measurements.md).
+# The spelling survives as a compat ALIAS of --affected: naming it arms this
+# axis exactly like the explicit flag. The positional group is still $1 here
+# (TEST_GROUP resolves below); computing the effective group early keeps the
+# alias decision ahead of TEST_GROUP's own resolution.
+_TG_AFFECTED_ALIAS=0
 _aff_group_req="${TEST_GROUP:-${1:-all}}"
-if [[ "$_aff_group_req" != "affected" ]] \
-  && { (( _AFFECTED_REQ == 1 )) || { [[ -z "${CI:-}" ]] && (( _FULL_GATE == 0 )); }; }; then
+if [[ "$_aff_group_req" == "affected" ]]; then
+  _TG_AFFECTED_ALIAS=1
+  _AFFECTED=1
+elif (( _AFFECTED_REQ == 1 )) || { [[ -z "${CI:-}" ]] && (( _FULL_GATE == 0 )); }; then
   _AFFECTED=1
 fi
 
@@ -1109,12 +1123,13 @@ fi
 #            explicit ask bypasses the diff check, so an infra run is reachable
 #            without fabricating a diff. It is deliberately NOT part of `all`'s
 #            shard set in ci.yml — infra gates through infra-validation.yml there.
-#   affected every registration still passes the chokepoint, but run_suite declines
+#   affected DEPRECATED COMPAT ALIAS of --affected (#8621): resolves to `all`
+#            at parse time with the declared-edge affected axis armed — every
+#            registration still passes the chokepoint and run_suite declines
 #            each suite the diff cannot reach (the counted-decline path, same as
-#            skip_suite — declines stay in the denominator). The local targeted
-#            mode: it exists because the repo-global advisory lock serialises full
-#            batteries, and a session that only needs its own diff's coverage was
-#            paying the whole battery's lock occupancy for it. It is NOT a CI
+#            skip_suite — declines stay in the denominator). The heuristic
+#            group it used to name (#8591) was folded after the decline-set
+#            measurement showed misses on every corpus diff. It is NOT a CI
 #            group — the matrix keeps running the full shards — and it does not
 #            satisfy the ship-time full-gate requirement (ADR-183).
 #
@@ -1132,19 +1147,30 @@ case "$TEST_GROUP" in
     ;;
 esac
 
-# Two affected selectors coexist (#8322's declared-edge `--affected`, #8591's
-# heuristic `TEST_GROUP=affected`) and they are DISTINCT modes — naming both on
-# one invocation cannot mean "run both" (the runner has one selection axis) and
-# silently preferring either would misreport which selection the evidence came
-# from. Fail closed with the usage-error rc, same class as --affected/--full
-# above.
+# TEST_GROUP=affected is a compat ALIAS of --affected (#8621: the #8591
+# heuristic selector was folded into the declared-edge axis after the
+# decline-set measurement — see the _AFFECTED arming above). Naming both
+# spellings of the same axis on one invocation is still ambiguous, and --full
+# still contradicts either, so those two combinations fail closed with the
+# usage-error rc, same class as --affected/--full above. Print/enumerate
+# plumbing (--print-selection, --print-affected-set, --paths, --affected-scope)
+# is not ambiguous: it composes with the alias exactly as it does with the flag.
 if [[ "$TEST_GROUP" == "affected" ]] \
-  && (( _AFFECTED_REQ == 1 || _FULL_REQ == 1 || _PRINT_AFFECTED == 1 )); then
-  echo "ERROR: TEST_GROUP=affected cannot be combined with --affected/--full/--print-affected-set." >&2
-  echo "       Pick one selector: 'bash scripts/test-all.sh --affected' (declared-edge gate)" >&2
-  echo "       or 'TEST_GROUP=affected bash scripts/test-all.sh' (heuristic scope)." >&2
+  && (( _AFFECTED_FLAG == 1 || _FULL_REQ == 1 )); then
+  echo "ERROR: TEST_GROUP=affected cannot be combined with --affected/--full." >&2
+  echo "       TEST_GROUP=affected IS --affected (#8621 alias): run 'bash scripts/test-all.sh --affected'" >&2
+  echo "       or the deprecated-compat 'TEST_GROUP=affected bash scripts/test-all.sh' — not both." >&2
   exit 2
 fi
+# The alias resolves HERE — after the ambiguity refusal above names it, before
+# every downstream consumer (--print-selection's TEST_GROUP=all requirement,
+# --affected-scope's group check, the want_* predicates, _affected_classify's
+# group rung, the pre-pass enumerate child, and the epilogue) — so an alias run
+# is byte-identical in shape to an explicit --affected run. _TG_AFFECTED_ALIAS
+# (set at the _AFFECTED arming above) carries the memory of the spelling for
+# the deprecation note; nothing below may branch on TEST_GROUP=affected
+# because it can no longer observe that value.
+if [[ "$TEST_GROUP" == "affected" ]]; then TEST_GROUP=all; fi
 
 # --print-selection reports the affected pre-pass, which exists only for
 # TEST_GROUP=all and never alongside the class-only enumerate plumbing.
@@ -1184,7 +1210,7 @@ if (( _AFF_SCOPE_REQ == 1 )); then
     echo "       Valid invocations: --affected [--affected-scope=branch|staged] or TEST_GROUP=affected." >&2
     exit 2
   fi
-  if [[ "$TEST_GROUP" != "all" && "$TEST_GROUP" != "affected" ]]; then
+  if [[ "$TEST_GROUP" != "all" ]]; then
     echo "ERROR: --affected-scope scopes an affected selection only; TEST_GROUP=$TEST_GROUP is a different axis." >&2
     echo "       Valid invocations: --affected (explicit or the local default) or TEST_GROUP=affected." >&2
     exit 2
@@ -1385,14 +1411,14 @@ unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
 # run from a spawned agent at all.
-# Both affected modes are exempt. `TEST_GROUP=affected` (#8591) is the targeted-suite
-# substitute this refusal prescribes, expressed mechanically instead of as hand-picked
-# suite files; `--affected` (#8322) is minutes-scale by construction and contends on
-# nothing the full-battery measurement cares about. When the `--affected` axis DEGRADES
+# Both affected spellings are exempt. `--affected` (#8322) is minutes-scale by
+# construction and contends on nothing the full-battery measurement cares about;
+# `TEST_GROUP=affected` is its compat alias (#8621) and reaches this guard with
+# _AFFECTED already armed. When the `--affected` axis DEGRADES
 # to full (undecidable diff, missing index, runner-changed), the degraded run is
 # re-refused post-derivation at the sibling arm — this early site cannot see that
 # verdict yet because `_diff_names` does not exist this high in the file.
-if (( _ENUMERATE == 0 && _AFFECTED == 0 )) && [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" && "$TEST_GROUP" != "affected" ]]; then
+if (( _ENUMERATE == 0 && _AFFECTED == 0 )) && [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
   echo "ERROR: refusing a full-gate run — SOLEUR_SUBAGENT=1 is set (TEST_GROUP=$TEST_GROUP)." >&2
   echo "" >&2
   echo "Spawned agents run only the suites targeting the files they were given. Concurrent" >&2
@@ -1416,26 +1442,28 @@ if (( _ENUMERATE == 0 && _AFFECTED == 0 )) && [[ "${SOLEUR_SUBAGENT:-}" == "1" &
   exit 4
 fi
 
-# `affected` widens EVERY want_*, deliberately: the selection is not a shard — it happens
-# per-suite at the run_suite chokepoint via _suite_affected, so all five registration
-# families must still walk. Folding the filter into these predicates would decline whole
-# groups silently (a `bun`-only diff would erase every scripts suite without a counted
-# decline), which is exactly the "green that is not evidence" shape ADR-181 closes.
-want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" || "$TEST_GROUP" == "affected" ]]; }
+# The affected axis is not a shard: selection happens per-registration at the
+# run_suite chokepoint via the pre-pass `_aff_sel` map, so under it TEST_GROUP
+# stays `all` — the `TEST_GROUP=affected` alias is normalised to `all` at parse
+# time (#8621) and these predicates never observe it. Folding a group filter
+# into the selection axis would decline whole groups silently (a `bun`-only
+# diff would erase every scripts suite without a counted decline), which is
+# exactly the "green that is not evidence" shape ADR-181 closes.
+want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" ]]; }
 # `scripts-heavy` (#8006): the three cost-heaviest registrations live under this gate so
 # ci.yml's dedicated test-scripts-heavy matrix partitions them one-per-leg. `all` must
 # include them — dropping that arm would silently remove the most expensive suites from
 # every full-gate run (ship Phase 4, lefthook, main-health-monitor).
-want_scripts_heavy() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts-heavy" || "$TEST_GROUP" == "affected" ]]; }
-want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun"     || "$TEST_GROUP" == "affected" ]]; }
-want_webplat() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "webplat" || "$TEST_GROUP" == "affected" ]]; }
+want_scripts_heavy() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts-heavy" ]]; }
+want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun" ]]; }
+want_webplat() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "webplat" ]]; }
 # `infra` is reachable from `all` (so a default local run covers it when the diff is
 # relevant) and from an explicit ask. It is NOT folded into `scripts`: that shard is a CI
 # matrix job with no terraform/cloud-init toolchain, and registering an 87-suite runner
 # into it would red a required check for want of a binary (#6454's exact shape). Under
-# `affected` it registers too — its own `_infra_in_diff` gate still decides whether it
+# the affected axis it registers too — its own `_infra_in_diff` gate still decides whether it
 # actually runs, which is the distinction the group/not_in_diff skip reasons carry.
-want_infra()   { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "infra"   || "$TEST_GROUP" == "affected" ]]; }
+want_infra()   { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "infra" ]]; }
 
 # --- Run Tests Per Directory ---
 failed=0
@@ -1710,25 +1738,6 @@ _shard_enumerate_declined_emit() {
 run_suite() {
   local label="$1"; shift
   _shard_selects "$label" || return 0
-  # TEST_GROUP=affected selection lives HERE, after the shard filter consumed its ordinal
-  # and before enumerate/exec diverge — the same chokepoint discipline _shard_selects
-  # carries, so denominators and the command record stay honest in every mode. The
-  # decline goes through the counted path skip_suite established (suites and skipped both
-  # increment, a timing row is written, and enumerate mode emits a DECLINED record rather
-  # than omitting the line) — an affected run must never read as a full battery.
-  if [[ "$TEST_GROUP" == "affected" ]] && ! _suite_affected "$label" "$@"; then
-    if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$*"; return 0; fi
-    suites=$((suites + 1))
-    skipped=$((skipped + 1))
-    _affected_declined=$((_affected_declined + 1))
-    echo ""
-    echo "[skip] $label (affected)"
-    echo "      Nothing in this diff reaches it. Re-run with:"
-    echo "        $*"
-    echo ""
-    printf '%s\t%d\tskip=%s\n' "$label" 0 "affected" >> "${TEST_TIMING_LOG:-/dev/null}"
-    return 0
-  fi
   if (( _ENUMERATE == 1 )); then
     if (( _PRINT_AFFECTED == 1 )); then _affected_emit_receipt "$label" "$@"; fi
     _shard_enumerate_dispatch "$label" "$@"; return 0
@@ -1754,10 +1763,9 @@ run_suite() {
   # `_shard_selects` just incremented for this registration; `${...:-1}` makes
   # any gap in the map SELECT rather than decline — the fail-safe direction.
   if (( _aff_ready == 1 )) && [[ "${_aff_sel[$_shard_ordinal]:-1}" == "0" ]]; then
-    # Both affected axes count the same way (#8591's chokepoint decline set the
-    # shape): skipped + _affected_declined, so the epilogue's skipped term
-    # carries either mode's declines and _affected_declined stays the per-axis
-    # count the field, lever and NOTE read.
+    # skipped + _affected_declined, so the epilogue's skipped term carries the
+    # selection declines and _affected_declined stays the per-axis count the
+    # field, lever and NOTE read.
     skipped=$((skipped + 1))
     _affected_declined=$(( _affected_declined + 1 ))
     printf '[skip] %s (not-affected — the diff does not reach it)\n' "$label"
@@ -2137,12 +2145,12 @@ $(if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then :; else git ls-files --othe
 # conditional truncates that extraction mid-statement. The scoped append under
 # affected mode contributes only duplicates of what the unscoped one already
 # lists, which substring matching makes a non-event.
-# Under TEST_GROUP=affected the same untracked-files blind spot widens to the whole tree: a
+# The same untracked-files blind spot widens to the whole tree under the affected axis: a
 # brand-new suite file or SUT that has never been `git add`ed must still select the suites
-# covering it, and no curated prefix list enumerates "anywhere a test could live". Either
-# affected axis trips the same unscoped append — as two separate blocks, because each
-# axis's regression suite anchors on its own opener line, and the modes are now disjoint
-# (TEST_GROUP=affected never arms _AFFECTED), so exactly one of these ever fires.
+# covering it, and no curated prefix list enumerates "anywhere a test could live". The
+# `TEST_GROUP=affected` alias arms `_AFFECTED` identically (#8621), so this one block
+# covers both spellings — the heuristic-era twin append that gated on the group value
+# directly was removed with the fold.
 if (( _AFFECTED == 1 )); then
   # Skipped under staged scope — untracked content is not in the commit. The
   # guard is nested rather than merged into the opener because
@@ -2153,19 +2161,6 @@ if (( _AFFECTED == 1 )); then
 $(git ls-files --others --exclude-standard 2>/dev/null || true)"
   fi
 fi
-# The TEST_GROUP=affected append below carries the same nested scope guard as
-# the _AFFECTED block above — and the guard MUST stay nested in the same
-# shape: test-all-group-affected.test.sh's A7 arm pins `git ls-files` at
-# exactly opener+3 via grep -A3, so ANY line inserted inside this block
-# (including a comment) pushes the command past the pin. If the layout must
-# change, change the sibling pin with it.
-if [[ "$TEST_GROUP" == "affected" ]]; then
-  if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
-  _diff_names="${_diff_names}
-$(git ls-files --others --exclude-standard 2>/dev/null || true)"
-  fi
-fi
-
 # --paths (#9307): the caller named the paths, so they ARE the diff. Both detection
 # arms are set -- a named path list is fully determined, so neither undecidable-diff
 # arm can fire -- while the runner-changed arm still reads the names honestly (a
@@ -3567,199 +3562,10 @@ _affected_emit_receipt() {
   printf 'AFFECTED_CLASS\t%s\t%s\n' "$_label" "$_AC_CLASS"
 }
 
-# --- TEST_GROUP=affected: mechanical diff-scoped selection -------------------------------
-#
-# The premise: a full local battery holds the repo-global advisory lock for ~45 minutes
-# uncontended (and has measured 5787s contended), so three sessions working three unrelated
-# diffs serialise into each other even though each only needs its own coverage. The skills
-# already told agents to "run the shards your diff touches", but that left the mapping from
-# diff to suites as hand-derived prose — the failure mode this file exists to remove is a
-# paragraph of agent discretion standing where a mechanism belongs.
-#
-# `_suite_affected` is that mechanism. run_suite consults it once per registration, AFTER
-# _shard_selects; a negative verdict takes the counted-decline path, so the summary keeps
-# the declined suites in its denominator and prints each one as `[skip] (affected)`.
-#
-# The predicate answers one question: can any signal tie this suite to a changed path?
-# FOUR signals, each one a distinct claim:
-#
-#   1. ARGV PATH CONTAINMENT — the suite's own file changed, or an argv element names a
-#      path the diff touches (the `-live` linters carry their SUT and inputs in argv, e.g.
-#      `python3 scripts/lint-rule-ids.py … AGENTS.md`, and `bun test plugins/soleur/`
-#      carries its corpus dir as a prefix). Substring, same convention as _diff_touches:
-#      over-matching runs the suite, which is the safe direction.
-#   2. CONTENT REFERENCE — the suite file greps a changed path, its last two components,
-#      or its basename when that basename is distinctive (multi-word stems only: a bare
-#      `SKILL.md`/`index.ts` pattern would re-select most of the corpus and convert a
-#      scoped run back into a battery). This is the strongest signal that a suite
-#      exercises a differently-named SUT — the file has to mention what it drives.
-#   3. STEM EQUALITY — the repo's test-naming conventions, normalised: `foo.test.sh`,
-#      `test-foo.sh`, `test_foo.py` all stem to `foo`, matching a changed `foo.*`.
-#   4. CENSUS BACKSTOP — a suite that enumerates repository state (git ls-files, tree
-#      globbing, baseline ratchets, whole-diff assertions against origin/main) can never
-#      be proven unaffected by a path match: its subject IS the repo. It always runs.
-#
-# …and three overrides, each declared rather than derived:
-#
-#   EXEMPT LABELS. Ten registrations carry their own _diff_touches/_infra_in_diff gate at
-#   the call site — a curated predicate strictly better-informed than a generic file
-#   match. When such a gate says run, run_suite is called and this predicate must not
-#   second-guess it; when it says no, skip_suite is called and this predicate never sees
-#   the label. `apps/web-platform [repo-wide+component]` is exempt for the other reason:
-#   it is never gated BY DESIGN (its subject is the repository — it exists to catch drift
-#   in exactly the diffs that name no app file, the same class a path selector cannot
-#   prove safe).
-#
-#   FAIL-SAFE. SOLEUR_TEST_FORCE_ALL, CI, or an undeterminable diff each run everything HERE.
-#   The CI arm matters even though no workflow sets this group — if one ever does, the required
-#   matrix must not silently shrink. This selector never declines under CI; the five self-test
-#   batteries that DO decline on a pull_request run (ADR-262) do it at their own call site through
-#   `_diff_touches --pr-gated`, which runs before this predicate is reached (they are EXEMPT above).
-#
-#   UNDECIDABLE. An argv carrying no path-like token at all runs — a selector that cannot
-#   name a suite's subject does not get to decline it.
-#
-# Deliberately NOT here: a hand-maintained suite→path map. The registration lines are the
-# map — the selector reads the same argv the runner executes, so it cannot drift from what
-# is registered, which is the property lint-orphan-test-suites.sh enforces for discovery.
-
-# Normalise a basename to its subject stem: strip test-affixes and extensions so the
-# repo's `foo.test.sh` / `test-foo.sh` / `test_foo.py` conventions all land on `foo`.
-_aff_stem() {
-  local b="${1##*/}"
-  b="${b%.test.*}"                    # foo.test.sh -> foo
-  b="${b%.*}"                         # foo.sh -> foo ; test_foo.py -> test_foo
-  b="${b#test-}"; b="${b#test_}"      # test-foo -> foo ; test_foo -> foo
-  b="${b%-test}"; b="${b%_test}"
-  printf '%s' "$b"
-}
-
-# Fixed-string content-grep patterns derived from the diff (full path, last-two-components,
-# distinctive basename) and the diff's stem set for signal 3. Built ONCE, not per-suite —
-# the per-call cost of this predicate stays a couple of greps against ~500 registrations.
-# Both are consumed only under TEST_GROUP=affected; declared unconditionally so a sandbox
-# spliced before this block still has the variables bound under `set -u`.
-_AFFECT_PATTERNS=""
-_AFFECT_STEMS=""
-if [[ "$TEST_GROUP" == "affected" ]]; then
-  _affect_line="" _affect_tok="" _affect_dir="" _affect_stem_v=""
-  while IFS= read -r _affect_line; do
-    # `_diff_names` mixes bare paths (--name-only, ls-files) with `STATUS\tpath` and
-    # `R100\told\tnew` rows (--name-status). Word-splitting keeps every path field and
-    # drops the status tokens, which carry no `/` and no extension.
-    # `read -a`, not `for tok in $line`: word-splitting without pathname expansion, so a
-    # filename or argv token carrying a glob metacharacter cannot expand against cwd.
-    _affect_words=()
-    IFS=$' \t' read -r -a _affect_words <<< "$_affect_line" || true
-    for _affect_tok in "${_affect_words[@]:-}"; do
-      case "$_affect_tok" in
-        */*|*.*) ;;
-        *) continue ;;
-      esac
-      _AFFECT_PATTERNS="${_AFFECT_PATTERNS}${_affect_tok}
-"
-      _affect_dir="${_affect_tok%/*}"
-      if [[ "$_affect_dir" != "$_affect_tok" ]]; then
-        _AFFECT_PATTERNS="${_AFFECT_PATTERNS}${_affect_dir##*/}/${_affect_tok##*/}
-"
-      fi
-      _affect_stem_v="$(_aff_stem "$_affect_tok")"
-      _AFFECT_STEMS="${_AFFECT_STEMS}${_affect_stem_v}
-"
-      # Basename as a content pattern only when the stem carries a separator or digit —
-      # `admin-merge-ready.sh` names its subject; `SKILL.md`/`index.ts`/`package.json`
-      # would match suites that merely mention the generic name.
-      case "$_affect_stem_v" in
-        *[-_0-9]*) _AFFECT_PATTERNS="${_AFFECT_PATTERNS}${_affect_tok##*/}
-" ;;
-      esac
-    done
-  done <<<"$_diff_names"
-fi
-
-_suite_affected() {
-  local label="$1"; shift
-  # EXEMPT LABELS — see the design comment above. These either carry their own curated
-  # gate upstream of run_suite, or are never gated by design.
-  case "$label" in
-    "tests/scripts/registry-gate-mutation-battery"|"apps/web-platform [unit]"|"apps/web-platform [repo-wide+component]"|"scripts/cf-tunnel-liveness-gate-mutations"|"scripts/lint-orphan-test-suites-mutations-a"|"scripts/lint-orphan-test-suites-mutations-b"|"scripts/battery-tag-authorship-mutations"|"scripts/test-all-affected"|"plugins/soleur/test/c4-from-components.test.sh"|".github/scripts/test/run-all.sh"|"apps/web-platform/infra/run-registered-suites.sh")
-      return 0 ;;
-  esac
-  # Explicit `if` blocks, never `[[ ]] && return 0` — same set -e call-site hazard as
-  # _diff_touches documents.
-  if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then return 0; fi
-  if [[ -n "${CI:-}" ]]; then return 0; fi
-  if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
-
-  local a t stem saw_path=0
-  local -a _words
-  for a in "$@"; do
-    # Split composite argv elements too — `env VAR= bash -c 'cd dir && …'` carries its
-    # real path argument inside the -c payload. `read -a` word-splits WITHOUT pathname
-    # expansion, so a payload containing a glob metacharacter cannot expand against cwd.
-    _words=()
-    while IFS=$' \t' read -r -a _words; do
-    for t in "${_words[@]:-}"; do
-      t="${t%\"}"; t="${t#\"}"; t="${t%\'}"; t="${t#\'}"; t="${t%;}"
-      t="${t#./}"                       # git emits clean paths; ./x.sh never substring-matches x.sh
-      case "$t" in
-        -*|*=*) continue ;;   # flags and env assignments are never paths
-        *[a-z_].[a-z_]*.[a-z_]*)
-          # `python3 -m unittest tests.scripts.test_foo` carries a DOTTED module, not a
-          # path — translate it so it lands in the same matching space as its file.
-          if [[ "$t" != */* && "$t" != *.py && "$t" != *.ts && "$t" != *.sh && "$t" != *.mjs && "$t" != *.js && "$t" != *.md ]]; then
-            t="${t//.//}.py"
-          fi ;;
-      esac
-      case "$t" in
-        */*|*.sh|*.py|*.ts|*.tsx|*.mjs|*.cjs|*.jsx|*.js|*.yml|*.yaml|*.json|*.jsonl|*.md|*.c4|*.likec4|*.tf|*.txt|test_*) ;;
-        *) continue ;;
-      esac
-      saw_path=1
-      # Signal 1 — argv path containment. Covers the suite file itself being in the
-      # diff, SUT/fixture argv elements, and directory argv like `plugins/soleur/`
-      # prefix-matching a diff path beneath it.
-      if grep -qF -- "$t" <<<"$_diff_names"; then return 0; fi
-      if [[ -d "$t" ]]; then
-        # Directory argv (`bun test <dir>/`): the corpus is the tree, so a suite file
-        # beneath it that NAMES a changed path selects the suite too.
-        # `${var%$'\n'}` strips the trailing newline each append leaves: a herestring
-        # adds one back, so the pattern list ends with an EMPTY LINE — and an empty
-        # fixed-string pattern matches every line, silently disabling the signal.
-        if [[ -n "$_AFFECT_PATTERNS" ]] \
-          && grep -rqFf - -- "$t" <<<"${_AFFECT_PATTERNS%$'\n'}" 2>/dev/null; then return 0; fi
-        continue
-      fi
-      if [[ -f "$t" ]]; then
-        # Signal 4 — census backstop. A suite that enumerates repository state is
-        # affected by construction; a path selector cannot prove it safe to decline.
-        # The census set is deliberately broad and multi-language: shell enumerators
-        # (git ls-files/ls-tree/diff/status, rg --files, find, glob-expanded for-loops,
-        # baseline ratchets, origin/main comparisons) and the Python/JS equivalents the
-        # -live linters actually use (rglob, os.walk/listdir/scandir, iterdir, subprocess,
-        # globSync, readdirSync). Over-matching costs a suite run; under-matching here is
-        # the false-decline class this signal exists to prevent — a corpus scanner declined
-        # by a path match it could never satisfy.
-        if grep -qE 'git ls-files|git grep|git ls-tree|git diff|git status|origin/main|baseline\.txt|rg --files|rg -l |find |for [a-zA-Z_]+ in [^|;]*\*|glob\.glob|rglob|os\.walk|os\.listdir|os\.scandir|iterdir|subprocess|readdirSync|globSync|readdir\(|fast-glob|tinyglobby' -- "$t"; then return 0; fi
-        # Signal 2 — the suite file names a changed path: it exercises it. Same
-        # empty-pattern-line hazard as the directory corpus grep above.
-        if [[ -n "$_AFFECT_PATTERNS" ]] \
-          && grep -qFf - -- "$t" <<<"${_AFFECT_PATTERNS%$'\n'}"; then return 0; fi
-        # Signal 3 — stem convention: foo.test.sh ↔ foo.sh, test_foo.py ↔ foo.py.
-        stem="$(_aff_stem "$t")"
-        if [[ -n "$stem" ]] && grep -qxF -- "$stem" <<<"$_AFFECT_STEMS"; then return 0; fi
-      fi
-    done
-    done <<<"$a"
-  done
-  # UNDECIDABLE — argv carried nothing path-like, so there is no signal to decline on.
-  if (( saw_path == 0 )); then return 0; fi
-  return 1
-}
-
-# Counted at the run_suite chokepoint, alongside but separate from `_relevance_declined`:
-# the epilogue's FORCE_ALL lever names "relevance-gated" suites (the curated call sites
-# that counter tracks), while an affected decline's honest recovery is the full battery.
+# Counted at the run_suite chokepoint (the `_aff_sel` decline above), alongside
+# but separate from `_relevance_declined`: the epilogue's FORCE_ALL lever names
+# "relevance-gated" suites (the curated call sites that counter tracks), while
+# an affected decline's honest recovery is the full battery.
 _affected_declined=0
 
 # Counted at the RELEVANCE call sites only. `skipped` also carries the infra runner's incident and
@@ -3876,7 +3682,7 @@ _aff_runner_banner() {
   if (( _staged == 1 )); then
     echo "[affected] to scope an edit you have judged safe: git add it, then bash scripts/test-all.sh --affected --affected-scope=staged (selects on the INDEX only: committed edits are not in that window, and a NEW suite is selected only if its files are staged)." >&2
   fi
-  echo "[affected] TEST_GROUP=affected is a different selector and does not narrow a runner edit; see --help (RUNNER EDITS)." >&2
+  echo "[affected] TEST_GROUP=affected aliases --affected (#8621) — the same fallback applies; see --help (RUNNER EDITS)." >&2
 }
 
 # --- Affected derivation pre-pass (#8322) ------------------------------------
@@ -3906,7 +3712,8 @@ _aff_runner_banner() {
 # #10331: +2 always-on (the lint-ratchet pair); re-pinned at 116-5.
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
 # #10664: +1 always-on (the hcloud-token read-only no-fallback scan); re-pinned at 119-5.
-_MIN_ALWAYS_ON_DECLARED=114
+# #10861: +1 always-on (the grep-q-pipe-guard whole-tree reader, PR4b row 6 verdict); re-pinned at 120-5.
+_MIN_ALWAYS_ON_DECLARED=115
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4160,12 +3967,12 @@ fi
 # Loud about WHICH diff selected (#9173): a staged-scope run always names its
 # scope beside the MODE line — silent narrowing is the failure class this
 # telemetry exists against. Gated on an axis that consumes the diff (the
-# `_AFFECTED` pre-pass or the TEST_GROUP=affected heuristic), not on
-# _ENUMERATE — `--print-affected-set` receipts must name their scope too. A
+# `_AFFECTED` pre-pass — the TEST_GROUP=affected alias arms it too, #8621), not
+# on _ENUMERATE — `--print-affected-set` receipts must name their scope too. A
 # staged flag under CI/full (`_AFFECTED=0`) prints nothing: the flag is a
 # no-op there and the line would claim a scope no run consulted.
 if [[ "${_AFF_SCOPE:-branch}" == "staged" ]] \
-  && { (( _AFFECTED == 1 || _PRINT_AFFECTED == 1 )) || [[ "$TEST_GROUP" == "affected" ]]; }; then
+  && (( _AFFECTED == 1 || _PRINT_AFFECTED == 1 )); then
   printf 'AFFECTED_SCOPE\tscope=staged\n'
 fi
 
@@ -4377,14 +4184,14 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ -n "$_aff_fallback" \
   exit 4
 fi
 
-# TEST_GROUP=affected is exempt here for the same reason as the SOLEUR_SUBAGENT refusal
-# above: it is the targeted substitute this refusal prescribes, and it still queues on the
-# advisory lock like any run — so an agent arriving mid-battery gets its scoped evidence
-# serialised rather than refused outright (which would push it to lock-free per-file
-# invocations, the very contention shape this refusal exists to prevent).
+# The affected axis is exempt here for the same reason as the SOLEUR_SUBAGENT refusal
+# above: it is the targeted substitute this refusal prescribes (in either spelling —
+# TEST_GROUP=affected normalises to the --affected axis at parse, #8621), and it still
+# queues on the advisory lock like any run — so an agent arriving mid-battery gets its
+# scoped evidence serialised rather than refused outright (which would push it to
+# lock-free per-file invocations, the very contention shape this refusal exists to prevent).
 if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${TC_SIBLING_RUN_COUNT_PID:-}" == "$$" \
       && "$_ENUMERATE" == "0" \
-      && "$TEST_GROUP" != "affected" \
       && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" \
       && ( "$_AFFECTED" == "0" || -n "$_aff_fallback" ) ]]; then
   echo "ERROR: refusing a full-gate run — ${TC_SIBLING_RUN_COUNT} sibling full-gate run(s) already in flight (TEST_GROUP=$TEST_GROUP)." >&2
@@ -4506,13 +4313,14 @@ esac
 # reads it in this process). The writability probe is load-bearing: run_suite
 # appends with >> under set -e, so an unwritable target aborts the run
 # mid-suite — degrade to "no timing log", never to "dead runner".
-# TEST_GROUP=affected (#8591) and _AFFECTED==1 on the all-group local default
-# (ADR-242) are the two disjoint selectors; enumerate/print paths are
-# side-effect-free by contract, so they decline before paying a mkdir.
+# _AFFECTED==1 is the single arming fact (ADR-242): the local all-group default
+# arms it, an explicit --affected arms it, and the TEST_GROUP=affected alias
+# arms it identically before being normalised to `all` at parse (#8621).
+# enumerate/print paths are side-effect-free by contract, so they decline
+# before paying a mkdir.
 if [[ -z "${TEST_TIMING_LOG:-}" ]] && [[ -z "${CI:-}" ]] \
   && (( _ENUMERATE == 0 && _PRINT_SELECTION == 0 )) \
-  && { [[ "${TEST_GROUP:-}" == "affected" ]] \
-       || { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }; }; then
+  && { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }; then
   if mkdir -p "$_durable_log_dir" 2>/dev/null \
     && [[ -w "$_durable_log_dir" && -O "$_durable_log_dir" ]]; then
     # -O: the leaf name is predictable (basename-$$-EPOCHSECONDS); a co-tenant
@@ -5376,6 +5184,10 @@ if want_scripts; then
   # in a plan reds CI, not just the fixtures.
   run_suite "scripts/lint-guard-contract" bash scripts/lint-guard-contract.test.sh
   run_suite "scripts/lint-guard-contract-live" python3 scripts/lint-guard-contract.py
+
+  # #8764 — step-boundary error-identity census over server/inngest/functions/*.ts
+  run_suite "scripts/lint-inngest-step-boundary-unit" bash scripts/lint-inngest-step-boundary.test.sh
+  run_suite "scripts/lint-inngest-step-boundary-live" python3 scripts/lint-inngest-step-boundary.py
   # Window-derived closure assertions must DECLARE their assembly (per helper).
   # Enforces a declaration, not semantic completeness — no static checker can
   # prove a regex window equals its assembly. TS-1..TS-11 + MB-1..MB-2.
@@ -5912,6 +5724,9 @@ if want_scripts; then
   # fake gh (trusted-verdict lib) and an argv-asserting fake betterstack-query.sh: the seven Guard 2 mutation rows, the two
   # harness rows, the anchor trust rows, and per-check deletion mutants of the probe copy.
   run_suite "scripts/inngest-tls-soak-10136" bash scripts/followthroughs/inngest-tls-soak-10136.test.sh
+  # #11218 owner-ask probe for A5/A6 of the Inngest TLS arc (#10136). Notify-only (never exits 0 or 1): drives the 7-row
+  # decision table through a gh shim and the REAL trusted-verdict lib (untrusted-author and fenced-anchor rows included).
+  run_suite "scripts/inngest-a5-a6-owner-ask-10136" bash scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
@@ -6327,6 +6142,8 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # Plaintext git-data volume destroy plan gate (Option B of the W0 route; pins volume 106867358 + its attachment, refuses anything else).
+  run_suite "tests/scripts/git-data-plaintext-destroy-gate" bash tests/scripts/test-git-data-plaintext-destroy-gate.sh
   run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
@@ -6665,8 +6482,7 @@ if want_webplat; then
   if (( _ENUMERATE == 0 )) && [[ -z "${CI:-}" ]] \
      && [[ "${SOLEUR_TEST_FORCE_ALL:-}" != "1" ]] \
      && [[ "$_diff_detect_ok" == "1" && "$_diff_head_ok" == "1" ]] \
-     && { [[ "$TEST_GROUP" == "affected" ]] \
-          || { (( _AFFECTED == 1 )) && [[ -z "$_aff_fallback" ]]; }; }; then
+     && { (( _AFFECTED == 1 )) && [[ -z "$_aff_fallback" ]]; }; then
     if _meta="$(webplat_related_meta_hit "$_diff_names")"; then
       echo "[vitest-related] meta path in diff (${_meta}) — webplat vitest runs the FULL projects." >&2
     else
@@ -6848,8 +6664,8 @@ if want_scripts; then
     skip_suite "scripts/test-all-affected" "relevance" \
       "bash scripts/test-all-affected.test.sh"
   fi
-  # TEST_GROUP=affected (#8591) — this runner's diff-scoped selection mode, the
-  # heuristic sibling of the --affected flag above. Registered explicitly beside
+  # TEST_GROUP=affected (#8621) — the compat alias of the --affected axis
+  # (the #8591 heuristic it replaced was folded in). Registered explicitly beside
   # its neighbours for the reason they state: repo-root `scripts/*.test.sh` is
   # NOT in SUITE_GLOBS, so an unregistered suite runs in zero runners and stays
   # green forever. The suite drives sandbox copies against a fixture git repo,
@@ -7307,10 +7123,15 @@ fi
 # level up: the RUN itself must not read as the battery it replaced. The denominator
 # already carries them; this line names the mode so a reader (or a poll grepping the
 # terminal marker) can tell scoped evidence from the ship gate without counting skips.
-if [[ "$TEST_GROUP" == "affected" ]]; then
-  echo "NOTE: TEST_GROUP=affected — ${_affected_declined} suite(s) declined as unreachable from"
-  echo "      this diff. This is scoped evidence, not the full battery; ship still requires"
-  echo "      TEST_GROUP=all. To run everything: bash scripts/test-all.sh"
+if (( ${_TG_AFFECTED_ALIAS:-0} == 1 )); then
+  if (( ${_aff_ready:-0} == 1 )); then
+    echo "NOTE: TEST_GROUP=affected is a deprecated alias of --affected (#8621) — the run"
+    echo "      above IS the declared-edge affected selection. This is scoped evidence, not"
+    echo "      the full battery. To run everything: bash scripts/test-all.sh --full"
+  else
+    echo "NOTE: TEST_GROUP=affected is a deprecated alias of --affected (#8621) — the run"
+    echo "      above degraded to the full battery; the banner names the reason."
+  fi
 fi
 echo "=== $((suites - failed - killed - skipped - _ceiling_declined))/$suites suites passed ==="
 

@@ -270,6 +270,18 @@ read-only git call outside the deadline; other tools that stage (an IDE); and a 
 (Devin), where a bare `git add a && git commit` takes the superset (a `cd /abs &&` or the same absolute `-C` still
 proves the directory). INT / TERM end the hook with 130 / 143, which the harness treats as non-blocking.
 
+### `brand-hex-commit-gate` target resolution (#10793)
+
+The brand-hex gate reads which repositories a commit targets from the command text, through the same
+`lib/commit-target-roots.sh` as the secret scan, so `cd <worktree> && git commit` and `git -C <worktree> commit`
+run from a `core.bare=true` root are scanned against the worktree's staged files. Its trigger is the strict
+`git commit` regex plus a loose both-words test that the lexer must confirm. Unlike the secret scan, a target the
+text does not name literally (a variable, glob, `~`, `GIT_DIR`, `--git-dir`, no perl with a moving target, a
+missing lib) warns on stderr, records a `bypass` row (`target undeterminable: <kind>`) and allows; it never
+denies or asks, because a skipped brand-colour scan carries no secret-leak blast radius. It does not use
+`lib/commit-index-sim.sh`, so a same-command `git add X && git commit` is still judged against the pre-command
+index (follow-up, ADR-301).
+
 ### Scope of the mandate
 
 **Mandatory** for hooks on the `Bash` matcher and for blocking write guards —

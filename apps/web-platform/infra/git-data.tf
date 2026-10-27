@@ -20,8 +20,10 @@
 # `workflow_dispatch` path now exists (apply-web-platform-infra.yml, mirroring
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
 # WITHOUT SSH — a scoped, destroy-guarded `terraform apply -replace='hcloud_server.git_data'`
-# that PRESERVES BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) and
-# the LUKS passphrase by OMISSION. It is a maintenance-window dispatch, not a per-PR apply;
+# that PRESERVES the data volume (hcloud_volume.git_data_luks) and the LUKS passphrase by OMISSION.
+# DISABLED from the Option B merge until #11194 retires the plaintext arms from its gates: the
+# replace, rotate and create gates still demand the retired plaintext addresses, so they refuse every
+# plan (ADR-239 Amendment 2026-10-26, item 4). It is a maintenance-window dispatch, not a per-PR apply;
 # these resources remain excluded from the per-PR `-target=` list. Before it, git-data had
 # ZERO non-SSH reprovision path (hr-prod-host-config-change-immutable-redeploy gap). The
 # invariant that a boot-armed heartbeat needs such a path is mechanically enforced by
@@ -379,11 +381,13 @@ resource "doppler_secret" "git_data_ssh_host_key" {
 # The strip expression and the map now live in modules/git-data-userdata/main.tf. The
 # rung-2 gate derives its hash-input set by grepping THAT file — see
 # tests/scripts/lib/git-data-birth-readiness-gate.sh.
+# git_data_volume_id below is a LITERAL (the retired plaintext volume):
+# SOLEUR-DEBT: literal id naming a device that the dispatched git-data-plaintext-volume-destroy workflow deletes at the provider API (it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change, ADR-239 Amendment 2026-10-26) and after that any host rebirth boots into the bootstrap plaintext_unverified FATAL; when #11194 merges (plaintext arms retired from the host replace/birth/rotate gates) set this to "" in a deliberate, owner-named host replace.
 module "git_data_userdata" {
   source = "./modules/git-data-userdata"
 
   host_name               = "soleur-git-data"
-  git_data_volume_id      = hcloud_volume.git_data.id
+  git_data_volume_id      = "106867358"
   git_data_luks_volume_id = hcloud_volume.git_data_luks.id
   doppler_token           = doppler_service_token.git_data.key
   # (#7025, R1) The literal this template carried until #7025, now passed explicitly. It
@@ -531,29 +535,15 @@ resource "hcloud_server" "git_data" {
   }
 }
 
-# --- Bare-repo block volume --------------------------------------------------
-# The bare repos AND the per-(workspace,worktree) fence sidecar/lock live here —
-# never tmpfs (a reboot resetting the fence max to 0 would let a stale writer
-# win). Shape mirrors hcloud_volume.workspaces (server.tf:926-940).
-resource "hcloud_volume" "git_data" {
-  name     = "soleur-git-data-store"
-  size     = var.git_data_volume_size
-  location = var.location
-  format   = "ext4"
-
-  labels = {
-    app = "soleur-web-platform"
-  }
-}
-
-# (#8211) automount = false, matching rung2-rehearsal/rehearsal.tf and the provider default (so
-# the plan shows no change). Since #8211 nothing mounts this plaintext volume after boot: the
-# bootstrap only mounts it read-only, briefly, to prove it holds no repository.
-resource "hcloud_volume_attachment" "git_data" {
-  volume_id = hcloud_volume.git_data.id
-  server_id = hcloud_server.git_data.id
-  automount = false
-}
+# --- Retired plaintext bare-repo block volume --------------------------------
+# hcloud_volume.git_data (name soleur-git-data-store, id 106867358) and its attachment were
+# declared here until the plaintext volume was retired (ADR-239 Amendment 2026-10-26, Option B).
+# The device is deleted by the dispatched, reviewer-gated workflow
+# .github/workflows/git-data-plaintext-volume-destroy.yml, whose plan gate
+# (tests/scripts/lib/git-data-plaintext-destroy-gate.sh) accepts only that exact delete. Removing
+# the HCL here changes nothing in production by itself: the state still holds both addresses until
+# that workflow runs, so untargeted plans show the two destroys in the meantime. The LUKS store is
+# hcloud_volume.git_data_luks (git-data-luks.tf).
 
 # --- Deny-all PUBLIC ingress firewall ----------------------------------------
 # ZERO inbound rules = deny-all on the PUBLIC interface (P1). Hetzner firewalls

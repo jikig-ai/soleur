@@ -1,0 +1,5 @@
+label	duration_ms	src
+.claude/hooks/grep-q-pipe-guard.test.sh	6081	measured
+plugins/soleur	-	missing
+tests/scripts/argv-bearer-sweep	47034	measured
+plugins/soleur/test/boundary-prefix.test.sh	1184	floor
