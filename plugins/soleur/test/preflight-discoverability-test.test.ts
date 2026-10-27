@@ -3069,12 +3069,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // name) with HCLOUD_TOKEN_READONLY from Doppler soleur/prd_terraform. NO SUBSTITUTE: the provider API has no unauthenticated read of
   // volume state, the host is no-SSH, and the offline suite drives the probe against a curl shim, not against the provider. Genuine.
   // #10550 (2026-10-26): +1 (84 -> 85) for `2026-10-26-feat-wikiskill-phase-2-gated-new-skill-creation-plan.md` (now under plans/archive/).
+  // #10550 (2026-10-27): +1 (85 -> 86) for `2026-10-27-fix-create-arm-reserve-week-cap-slot-plan.md` (now under plans/archive/): the same
+  // marker-stream probe as the entry above, for the same reason (the marker exists only in production logs; no unauthenticated read path). Genuine.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the command (`bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 5`) reads the
   // proposer's outcome marker rows from the Better Stack ClickHouse read connection (Better Stack Logs read token, Doppler). NO SUBSTITUTE:
   // the marker exists only in production logs and the warehouse has no unauthenticated read path; the offline suites prove the marker
   // grammar, not that the stored stream carries a run's rows. Genuine.
-  const BASELINE_DECLARED_PROBES = 85;
+  const BASELINE_DECLARED_PROBES = 86;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
