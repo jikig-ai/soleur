@@ -1195,9 +1195,14 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 # #10952 — liveness and outcome for the two Hetzner orphan sweeps (scheduled-terraform-drift.yml →
 # rung2-rehearsal-orphan-sweep and inngest-rehearsal-orphan-sweep). ONE slug for the pair: the
 # `orphan-sweeps-checkin` aggregator job posts `ok` only when both sweep jobs concluded success (see the
-# rule in the comment block above that job). The 25-minute job cap puts a worst-case check-in about 30
-# minutes after the slot, inside checkin_margin_minutes = 60. max_runtime_minutes has no effect (a
-# single check-in). Created UNROUTED under the two-PR rule (cron-monitor-alerts.tf); routing is #10972.
+# rule in the comment block above that job). The sweeps run in parallel (25-minute job cap each) and the
+# aggregator adds up to 8 minutes, so a worst-case check-in is about 33 minutes after the run starts, inside
+# checkin_margin_minutes = 60. A run queued behind another run in the `terraform-drift` concurrency group
+# (cancel-in-progress is false) starts later, and a pending run can be replaced by a newer dispatch and never
+# start; a check-in later than the margin may be recorded as missed (not verified in this repo).
+# max_runtime_minutes has no effect (a single check-in). Created under the two-PR rule (#10952) and routed
+# through sentry_alert.cron_monitor_failure
+# (cron-monitor-alerts.tf) by the second PR (#10972, 2026-10-26).
 resource "sentry_cron_monitor" "scheduled_orphan_sweeps" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
