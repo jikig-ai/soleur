@@ -85,7 +85,7 @@ Pinned image identity is preserved: same registry, same CLI-resolved tags — on
 |---|---|---|
 | "the repository's existing authenticated GitHub Container Registry path" | Exists, but every precedent authenticates against *jikig-ai-owned private* packages; `ghcr.io/supabase/*` is a public foreign-org package | Use the same `docker/login-action` + `GITHUB_TOKEN` shape; the auth that matters is credential presence (moves pulls off the anonymous bucket), not package ownership |
 | "the Supabase stack pulls `ghcr.io/supabase/postgres:17.6.1.095`" | `supabase start` fans out ~12 pulls across the whole `supabase/*` namespace | The fix targets the registry transport (login) + the whole `start` verb (retry), not one image |
-| "a bounded retry/cache strategy" | No image cache is viable (CLI-internal tags unreachable by cache key); bounded retry is the only arm of that pair that holds | Retry the `start` verb, gated on the measured throttle signature |
+| "a bounded retry/cache strategy" | No image cache is viable (CLI-internal tags invisible to any cache key); bounded retry is the only arm of that pair that holds | Retry the `start` verb, gated on the measured throttle signature |
 | Implicit: retry the pull | The pull is inside the CLI's Go client; it already retries 4s/8s and self-cleans containers on failure | Retry at `supabase-local.sh start` level in the workflow — the layer where the fan-out lives |
 
 ## Problem Statement / Motivation
@@ -101,7 +101,7 @@ In `.github/workflows/rls-authz-fuzz.yml`, on the `rls-fuzz` job:
 3. Create `.github/scripts/ghcr-pull-with-retry.sh` — a CI-only helper that runs an argv command (`./scripts/supabase-local.sh start`) under `set -uo pipefail`. Each attempt: `"$@" 2>&1 | tee "$log"` into a FRESH per-attempt log (stderr merge is load-bearing — the CLI's pull errors can ride stderr; spec-flow P1-1) with rc read via `${PIPESTATUS[0]}` (spec-flow P1-4: `rc=$?` reads tee's status and inverts the whole contract). Retry only when all hold: `rc != 0`, `rc != 2` (the wrapper's deterministic not-started/unverified class — never a pull failure), and the TAIL of that attempt's log (last ~40 lines — `toomanyrequests` can appear mid-attempt then recover before a later deterministic failure; only the terminal region classifies — spec-flow P1-2) matches `toomanyrequests` (case-insensitive; the daemon's literal token — `Retrying after`, `failed to pull docker image` and `failed to display json stream` are deliberately NOT in the gate: they also fire on non-throttle failures, including post-login `denied`, so they misclassify — advisor + CTO ruling). Bound: 3 attempts; sleeps `20 45` overridable via `GHCR_PULL_RETRY_SLEEPS` env (tests set `0 0`). `::warning::attempt N/3 failed on a measured pull throttle: <matching line>` per retry, with the echoed line sanitized (`%`→`%25`, CR/LF stripped — annotation protocol is line-oriented, spec-flow P2-8); on exhaustion `::error::` naming the last measured line, re-emit the failing log's TAIL (~200 lines — registry errors print at the end of the pull stream; head-truncation clips the diagnostic, CTO Item C) and exit the command's rc; a deterministic failure also emits `::error::<cmd> failed (rc=N) — last log line: <line>` before exiting on attempt 1 (symmetric attribution — spec-flow P2-6).
 4. Change the "Start local Supabase stack (loopback-bound)" step's `run:` to a single line — `bash "${GITHUB_WORKSPACE}/.github/scripts/ghcr-pull-with-retry.sh" ./scripts/supabase-local.sh start` — keeping `working-directory: apps/web-platform`. No `rc` read in the `run:` body → `lint-workflow-errexit-capture.py` is not engaged.
 5. Add a bash-only test `.github/scripts/test/test-rls-fuzz-ghcr-resilience.sh` with two arms: (a) wiring — `packages: read` present on the job; the `uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9` line (FULL pinned SHA, not just the action name — spec-flow P2-10) ordered before the start step; the start step invokes the helper script; NO `logout:` key anywhere in the login step (`logout: 'false'` slips a `logout: false` grep — spec-flow P2-10); the helper contains the literal tokens `2>&1`, `${PIPESTATUS[0]}`, and `toomanyrequests`; (b) behavior — PATH-stubbed fake commands exercising the helper: throttle-line failure retried then passed, non-signature failure exits attempt 1, rc=2 never retried, exhaustion emits `::error::` and the command's rc, a decoy log (`Retrying after` without `toomanyrequests`) is NOT retried, and a stale-signature attempt (throttle on attempt N, clean-log failure on N+1) does not wrongly retry N+1. Auto-joins the `test-*.sh` glob of `.github/scripts/test/run-all.sh` (required check `guard-script-fixture-tests`, bash-only).
-6. Bump `MIN_SUITES=15`→`16` in `.github/scripts/test/run-all.sh` — the floor must rise with the suite count or the new guard is itself silently deletable (spec-flow P2-5).
+6. Bump `MIN_SUITES=15`→`17` in `.github/scripts/test/run-all.sh` — the floor must rise to the post-addition count or the new guard is itself silently deletable (spec-flow P2-5; plan-review found the floor ALREADY lags: 16 `test-*.sh` suites exist on `origin/main` against `MIN_SUITES=15`, i.e. the set is deletable-by-one today — a pre-existing lag worth a tracking note, fixed here by landing the accurate count).
 7. Bump the `rls-fuzz` job `timeout-minutes: 25`→`30` — worst case adds ~5–9 min of retried starts + sleeps inside the budget (spec-flow P2-7).
 8. Add a positive-control step after login: `docker manifest inspect ghcr.io/supabase/postgres:17.6.1.095 >/dev/null` — ~1s, turns the login→CLI hand-off assumption into a measurement (ADR-166; spec-flow P2-9). If GHCR is down the job now fails at login or this probe — attribution unambiguous.
 
@@ -111,7 +111,7 @@ In `.github/workflows/rls-authz-fuzz.yml`, on the `rls-fuzz` job:
 - **ADR-166 compliance:** every annotation names a line the helper actually measured (`toomanyrequests …` from that attempt's log, or the command's own last line); no message asserts "GHCR throttled" unless the signature grep matched.
 - **Exit-code contract:** the wrapped command's rc is propagated verbatim — `supabase-local.sh start` exit 2 (normalize could not prove state / network unsafe) and exit 1 remain distinct; rc 2 is never retried, and a retry is conditioned on THIS attempt's fresh log matching `toomanyrequests` — a prior attempt's match cannot leak into the classification of a later attempt (each attempt writes a fresh log file).
 - **Idempotency of retried `start`:** the daemon's layer cache persists across attempts (already-pulled layers are free), and the CLI runs `Stopping containers...` on pull failure (measured in run 40353999484), so a re-run resumes rather than colliding.
-- **Timeout budget:** worst case ≈ 3 starts (~2 min each when images partially cached) + 65 s of sleeps ≈ +5–6 min inside `timeout-minutes: 25`.
+- **Timeout budget:** worst case ≈ 3 starts (~2–3 min each when images partially cached) + 65 s of sleeps ≈ +5–9 min inside `timeout-minutes: 30` (bumped from 25 — spec-flow P2-7).
 - **ADR-096/088 consulted, not extended:** zot is production's deploy registry on the private net — not a CI pull path; no ADR change is warranted by reusing the documented `GITHUB_TOKEN`-to-GHCR pattern.
 
 ### Attack Surface Enumeration
@@ -220,12 +220,12 @@ discoverability_test:
 
 - [ ] AC1 — The `rls-fuzz` job declares `packages: read` in a job-level `permissions:` block (alongside `contents: read`); the workflow's top-level `permissions:` block is unchanged.
 - [ ] AC2 — A `docker/login-action` step pinned to `c94ce9fb468520275223c153574b00df6fe4bcc9` (`# v3.7.0`) logs in to `ghcr.io` as `github.actor` / `secrets.GITHUB_TOKEN`, positioned after `actions/checkout` and before the "Start local Supabase stack (loopback-bound)" step; no `logout: false` override.
-- [ ] AC3 — `.github/scripts/ghcr-pull-with-retry.sh` exists (`#!/usr/bin/env bash`, `set -uo pipefail`), takes the wrapped command as argv, runs it at most 3 attempts with sleeps `20 45` (overridable via `GHCR_PULL_RETRY_SLEEPS`), captures each attempt's combined output to a FRESH per-attempt log (`tee`), reads the command rc via `${PIPESTATUS[0]}`, and retries only when `rc != 0` AND `rc != 2` AND that attempt's log matches `toomanyrequests` (case-insensitive). The tokens `Retrying after`, `failed to pull docker image`, `failed to display json stream` are NOT in the retry gate.
+- [ ] AC3 — `.github/scripts/ghcr-pull-with-retry.sh` exists (`#!/usr/bin/env bash`, `set -uo pipefail`), takes the wrapped command as argv, runs it at most 3 attempts with sleeps `20 45` (overridable via `GHCR_PULL_RETRY_SLEEPS`), resolves `log_dir="${RUNNER_TEMP:-$(mktemp -d)}"` so the script survives outside Actions (set -u + unset RUNNER_TEMP would abort otherwise — review finding 4), captures each attempt's combined output to a FRESH per-attempt log under `$log_dir` (`tee`), reads the command rc via `${PIPESTATUS[0]}`, and retries only when `rc != 0` AND `rc != 2` AND that attempt's log matches `toomanyrequests` (case-insensitive). The tokens `Retrying after`, `failed to pull docker image`, `failed to display json stream` are NOT in the retry gate.
 - [ ] AC4 — Each retried attempt emits `::warning::` containing the measured `toomanyrequests` line; exhaustion emits `::error::` naming the last measured line and exits with the command's nonzero rc; a failure without the signature (or rc 2) exits on attempt 1 propagating the command's rc.
 - [ ] AC5 — No image reference, tag, or registry is rewritten or overridden in the diff (`SUPABASE_INTERNAL_IMAGE_REGISTRY` untouched; no `docker pull`/`tag`/`save`/`load` added); the start step's `run:` is the single helper invocation `bash "${GITHUB_WORKSPACE}/.github/scripts/ghcr-pull-with-retry.sh" ./scripts/supabase-local.sh start` under unchanged `working-directory: apps/web-platform`.
 - [ ] AC6 — `.github/scripts/test/test-rls-fuzz-ghcr-resilience.sh` exists, is bash-only, covers Guard 1's wiring arm AND behavioral arm (PATH-stubbed fake commands asserting attempt counts, retry/no-retry classification, rc propagation, annotation emission, per-attempt log freshness), and carries a `MIN_ASSERTIONS` floor; `bash .github/scripts/test/test-rls-fuzz-ghcr-resilience.sh` prints `0 failed` locally and `bash .github/scripts/test/run-all.sh` passes.
 - [ ] AC7 — `bash scripts/lint-workflows.sh` (the registered workflow-lint arm, incl. actionlint + `lint-workflow-errexit-capture.py`) passes on the edited workflow.
-- [ ] AC8 — The `rls-fuzz` job's `timeout-minutes` is 30; `.github/scripts/test/run-all.sh`'s `MIN_SUITES` is 16 (raised with the new suite); a `docker manifest inspect ghcr.io/supabase/postgres:17.6.1.095 >/dev/null` positive-control step sits between the login step and the start step.
+- [ ] AC8 — The `rls-fuzz` job's `timeout-minutes` is 30; `.github/scripts/test/run-all.sh`'s `MIN_SUITES` is 17 (raised to the accurate post-addition suite count — main already has 16 suites vs floor 15); a `docker manifest inspect ghcr.io/supabase/postgres:17.6.1.095 >/dev/null` positive-control step sits between the login step and the start step.
 - [ ] AC9 — The PR's own `RLS authz fuzz` check runs the edited workflow (the file is in its own `paths:` trigger) and goes green.
 - [ ] PR body includes `Closes #10868`.
 
@@ -287,7 +287,7 @@ No cross-domain implications detected — CI-machinery resilience change on a re
 ## Files to Edit
 
 - `.github/workflows/rls-authz-fuzz.yml` — job-level `permissions:` gains `packages: read`; `docker/login-action` (pinned v3.7.0 SHA) step after checkout; `docker manifest inspect` positive control after login; start step's `run:` becomes the helper invocation; `timeout-minutes` 25→30.
-- `.github/scripts/test/run-all.sh` — `MIN_SUITES` 15→16 (floor rises with the new suite).
+- `.github/scripts/test/run-all.sh` — `MIN_SUITES` 15→17 (floor rises to the accurate post-addition count; 16 suites already exist on main vs floor 15).
 
 ## Files to Create
 
@@ -305,4 +305,24 @@ None — `gh issue list --label code-review` bodies contain no reference to `.gi
 - Do not retag, mirror, or `docker save/load` images — pinned identity is preserved by pulling the same `ghcr.io/supabase/*` refs authenticated.
 - Do not move the retry into `supabase-local.sh` without re-scoping — its callers include local-dev `db:*` scripts and the SessionStart hook, and its fixture suite must keep passing.
 - An empty or `TBD`-filled `## User-Brand Impact` fails deepen-plan Phase 4.6 — it is filled above.
-- `## Scope Check` must appear exactly once unfenced; `status: BLOCKED` lines belong inside it, never in frontmatter.
+- `## Scope Check` must appear exactly once unfenced; a blocked-verdict line belongs inside it, never in frontmatter.
+
+## Enhancement Summary
+
+Deepen-plan pass (2026-10-27): spec-flow analyzer (4 P1 + 6 P2), solo-advisor consult, CTO ruling (forks A/B/C), three-lens review panel, and all halt gates run against this file.
+
+### Key Improvements
+
+- Retry moved from an inline `run:` loop into `.github/scripts/ghcr-pull-with-retry.sh` (CTO fork A → a3): behaviorally testable, wrapper untouched, `run:` body stays one line (no `set +e`/`PIPESTATUS` in YAML).
+- Signature narrowed to `toomanyrequests` only, tail-scoped (~40 lines) on a FRESH per-attempt log (CTO fork B → b3; spec-flow P1-2/P1-3; advisor): `Retrying after`/`failed to pull docker image`/`failed to display json stream` are decoys that fire on non-throttle failures.
+- `2>&1` merge and `${PIPESTATUS[0]}` pinned as load-bearing tokens asserted by the wiring test (spec-flow P1-1/P1-4).
+- Symmetric `::error::` on deterministic exit (P2-6); annotation text sanitized `%`→`%25`, CR/LF stripped (P2-8); exhaustion re-emits the failing log's tail ~200 lines (CTO Item C).
+- `timeout-minutes` 25→30 (P2-7); `docker manifest inspect` positive control after login (P2-9); `MIN_SUITES` 15→17 — review found the floor already lags the real suite count (16 vs 15) on main.
+- `log_dir="${RUNNER_TEMP:-$(mktemp -d)}"` fallback (review finding 4); `logout:`-key absence (not `logout: false` literal) and full-SHA `uses:` assertions (P2-10).
+
+### New Considerations Discovered
+
+- Login moves the failure point: a GHCR outage now fails the login/manifest-inspect step — attribution unambiguous (R2b).
+- rc≠2 exclusion is redundant-belt documentation of the wrapper's deterministic class (review finding 2, CTO: "documents intent at zero cost").
+- Gate results: 4.5 network-outage N/A (no trigger patterns); 4.6 User-Brand present (`threshold: none` + scope-out); 4.7 Observability 5-field schema present, discoverability_test `bash`-first; 4.8 PAT-shaped vars none; 4.9 UI N/A; 4.10 encryption N/A; 4.11 guard-contract lint PASS (1 entry); 4.12 Scope Check exactly one unfenced section, no blocked-verdict; 4.13 task-design N/A (existing workflow edit).
+- False-halt tokens neutralized: literal `status: BLOCKED` and `unreachable` removed from non-gated prose.
