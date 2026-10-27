@@ -26,3 +26,22 @@ soleur:plan, soleur:spec-templates, soleur:plan-review (in-process; the panel wa
 - T1: 7 days, pipelines A/B/C, no production delete in the mechanism PR, do not close #10848.
 - T2: conditional 7-day public clause; host not yet replaced is not yet pruning; Last Updated does not move.
 - T3: proceed to work; do not re-run the plan-review panel.
+
+## Review dedup ledger
+
+dedup: 8 raw defects fixed. Residuals below were not applied. Panel snapshot `2d35a86196009ac251ed8cc46c8882fc10736a5a`. Main panel 13/13 (2 design + 11 review). Fix round 1 reviewed `2d35a86196..aa47db9400`. Fix round 2 reviewed `aa47db9400..b269167bf2` with security, performance, user-impact, test-design, data-integrity, and shellcheck in-process (exit 0). Verification on `2d35a86196..b269167bf2` found nothing left open. Tally after that pass: seats=31 ci_cycles=2 fix_rounds=0 agent_rounds=4. The fix_rounds counter was not incremented; two targeted rounds and one verification pass ran. Local `test-all --affected` was not started: `scripts/test-all.sh --capacity` printed CAPACITY_CONTENDED. CI's required `test` check is the merge gate.
+
+| raw finding | canonical defect key | reporting seat(s) | fix commit |
+|---|---|---|---|
+| capped pass deleted anchors while children remained | anchor-deleted-while-children-remain | data-integrity-guardian | aa47db9400, held to the anchor only in b269167bf2 |
+| events delete planned a sequential scan | events-received-at-unindexed | user-impact-reviewer | aa47db9400 |
+| Postgres millisecond cutoff overflowed int4 | postgres-millis-int4 | code-quality-analyst | aa47db9400 |
+| closer counted a quoted doppler row | followthrough-substring-close | agent-native-reviewer | aa47db9400 |
+| article-30 bound split from the not-yet-pruning clause | article-30-same-sentence | legal-compliance-auditor | aa47db9400 |
+| static guard missed quoted names, a second delete, and in-flight status tokens | static-guard-proportionate | structural-enumeration | aa47db9400 |
+| stub accepted a delete with no age comparison | stub-age-compare | test-design-reviewer | aa47db9400 |
+| a spans cap starved history and events for the whole catch-up | catchup-starves-other-pipelines | user-impact-reviewer | b269167bf2 |
+
+Not applied, on purpose: keep an event until its finish is also outside the window (locked pipeline C); replace `pg_database_size` with `pg_wal_lsn_diff`; add a `suite-durations.tsv` row; build a SQL parser for one-line guard bypasses; drop the four simplicity leftovers; repair the PA-13 quotation mark; run SQLite `EXPLAIN QUERY PLAN`.
+
+gdpr-gate advisory, 2026-10-27: days stale 1. Path scan of `origin/main...HEAD` examined 36 paths and matched 2 (`*.sql`). No new column, no Art. 9 column name, no new vendor, no new foreign key to `users`. No Critical finding. The gate does not write `compliance-posture.md`.
