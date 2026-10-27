@@ -290,15 +290,102 @@ rc=$(run_wrap_c1 "$root" "git-upload-pack '${root}/ws-c1.git'" "$STORE_SRC" "$SE
 c1_refused "C1f findmnt absent" "$rc" "findmnt unavailable"
 drop_fixture "$root"; drop_fixture "$curated"
 
+# ── (#8211) U — the command REAL git emits for the APP's remote URL is accepted ────────────
+# The rows above hand-write absolute paths under the fixture root, so nothing tied the wrapper
+# to the path the app actually dials: the app emitted `ssh://host/repositories/<id>.git`, git
+# sent `'/repositories/<id>.git'` verbatim (an ssh:// path is absolute), and the wrapper refused
+# every fetch and push on the first rehearsal. The prefix below is NOT typed here: it is
+# extracted from the app constant's DECLARATION (a use site that bypassed the constant is pinned by
+# test/git-data-remote-url-wrapper.test.ts R-URL, not here). A recording shim named
+# `ssh` stands in for the transport (the name matters: any other name makes git send an `ssh -G`
+# capability probe first). The literal prefix is path-mapped onto the fixture root, because the
+# runner has no /mnt/git-data; the app<->wrapper default equality is pinned separately in
+# apps/web-platform/test/git-data-remote-url-wrapper.test.ts (R-PARITY).
+APP_TS="${DIR}/../server/git-data-replication.ts"
+U_WRAP_ROOT="$(sed -nE 's#^REPO_ROOT="\$\{GIT_DATA_REPO_ROOT:-([^}]+)\}"$#\1#p' "$WRAPPER")"
+U_PREFIX_LINES="$(grep -cE '^const GIT_DATA_REPO_PATH_PREFIX = "[^"]+";$' "$APP_TS")" || U_PREFIX_LINES=0
+U_PREFIX="$(sed -nE 's#^const GIT_DATA_REPO_PATH_PREFIX = "([^"]+)";$#\1#p' "$APP_TS")"
+if [ "$U_PREFIX_LINES" = "1" ] && [ -n "$U_PREFIX" ]; then pass; else fail "U0 expected exactly one GIT_DATA_REPO_PATH_PREFIX assignment in $APP_TS, got $U_PREFIX_LINES"; U_PREFIX="$U_WRAP_ROOT"; fi
+
+# U0b: the path-mapping below swaps the app's prefix for the fixture root, so on its own it would
+# stay green for ANY prefix. This is the row that does not map: the app's prefix must equal the
+# root the wrapper itself defaults to (the one a client cannot override over sshd).
+if [ -n "$U_WRAP_ROOT" ] && [ "$U_PREFIX" = "$U_WRAP_ROOT" ]; then pass; else fail "U0b the app prefix '$U_PREFIX' is not the wrapper's default bare-repo root '$U_WRAP_ROOT'"; fi
+
+U_DIR="$(mktemp -d "${SEAMS}/u.XXXXXX")"   # under SEAMS, so the EXIT trap reaps it on any abort
+U_LOG="${U_DIR}/dialed.log"
+mkdir -p "${U_DIR}/bin"
+cat > "${U_DIR}/bin/ssh" <<'SHIM'
+#!/usr/bin/env bash
+# Records the remote command git emitted (the LAST argv). U_MODE=record stops there; otherwise the
+# literal prefix is mapped onto the fixture root and the REAL wrapper runs under env -i.
+for last; do :; done
+printf '%s\n' "$last" >> "$U_LOG"
+[ "${U_MODE:-exec}" = "record" ] && exit 1
+cmd="${last//"$U_PREFIX"/"$U_ROOT"}"
+exec env -i PATH="$U_PATH" GIT_DATA_REPO_ROOT="$U_ROOT" GIT_DATA_MOUNT_ROOT="$U_MNT" \
+  GIT_DATA_HOOKS_DIR="$U_HOOKS" GIT_DATA_STORE_DEVICE="$U_DEV" GIT_DATA_STORE_VERIFIED="$U_MARKER" \
+  SSH_ORIGINAL_COMMAND="$cmd" bash "$U_WRAPPER"
+SHIM
+chmod +x "${U_DIR}/bin/ssh"
+git_fixture_env "$U_DIR" || { printf 'FAIL SETUP: git_fixture_env refused %s\n' "$U_DIR" >&2; exit 1; }
+u_git() { # u_git <mode> <git args...> — runs git with the recording/exec shim as its transport
+  local mode="$1"; shift
+  U_MODE="$mode" U_LOG="$U_LOG" U_PREFIX="$U_PREFIX" U_ROOT="$U_ROOT" U_PATH="$SPATH" U_MNT="$(stat -c %m "$U_ROOT")" \
+    U_HOOKS="$SEAMS/hooks" U_DEV="$STORE_SRC" U_MARKER="$SEAMS/marker" U_WRAPPER="$WRAPPER" \
+    GIT_SSH_COMMAND="${U_DIR}/bin/ssh" git "$@" >/dev/null 2>"$ERR"
+}
+U_ROOT="${U_DIR}/store"; mkdir -p "$U_ROOT"
+U_ID="ws-u1"; fixture_bare "${U_ROOT}/${U_ID}.git"
+U_CLIENT="${U_DIR}/client"; mkdir -p "$U_CLIENT"
+git -C "$U_CLIENT" init -q && git -C "$U_CLIENT" symbolic-ref HEAD refs/heads/main \
+  && git -C "$U_CLIENT" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m u
+U_URL="ssh://git@10.0.1.20${U_PREFIX}/${U_ID}.git"
+OLD_URL="ssh://git@10.0.1.20/repositories/${U_ID}.git"
+
+# U1/U2: what git emits for the app URL, fed straight into the wrapper (dry-run).
+: > "$U_LOG"; u_git record -C "$U_CLIENT" fetch "$U_URL" "+refs/heads/*:refs/remotes/x/*" || true
+u_up="$(tail -n 1 "$U_LOG")"
+: > "$U_LOG"; u_git record -C "$U_CLIENT" push "$U_URL" "refs/heads/*:refs/soleur/worktrees/w1/heads/*" || true
+u_rp="$(tail -n 1 "$U_LOG")"
+if [ "$u_up" = "git-upload-pack '${U_PREFIX}/${U_ID}.git'" ]; then pass; else fail "U1 git emitted '$u_up' for the fetch URL"; fi
+rc=$(run_wrap "$U_ROOT" "${u_up//"$U_PREFIX"/"$U_ROOT"}"); if [ "$rc" = "0" ]; then pass; else fail "U1 emitted upload-pack refused: rc=$rc ($(head -c 160 "$ERR"))"; fi
+out=$(run_wrap_out "$U_ROOT" "${u_up//"$U_PREFIX"/"$U_ROOT"}")
+case "$out" in *"upload-pack ${U_ROOT}/${U_ID}.git"*) pass ;; *) fail "U1 canonicalized exec does not name the repo: $out" ;; esac
+if [ "$u_rp" = "git-receive-pack '${U_PREFIX}/${U_ID}.git'" ]; then pass; else fail "U2 git emitted '$u_rp' for the push URL"; fi
+rc=$(run_wrap "$U_ROOT" "${u_rp//"$U_PREFIX"/"$U_ROOT"}"); if [ "$rc" = "0" ]; then pass; else fail "U2 emitted receive-pack refused: rc=$rc ($(head -c 160 "$ERR"))"; fi
+out=$(run_wrap_out "$U_ROOT" "${u_rp//"$U_PREFIX"/"$U_ROOT"}")
+case "$out" in *"receive-pack ${U_ROOT}/${U_ID}.git"*) pass ;; *) fail "U2 canonicalized exec does not name the repo: $out" ;; esac
+
+# U3: the OLD form (the defect). Precondition: /repositories is absent at the root of this host,
+# as it is on the git-data host. The emitted command is ABSOLUTE and the wrapper refuses it.
+: > "$U_LOG"; u_git record -C "$U_CLIENT" push "$OLD_URL" "refs/heads/*:refs/soleur/worktrees/w1/heads/*" || true
+u_old="$(tail -n 1 "$U_LOG")"
+if [ ! -e /repositories ]; then pass; else fail "U3 precondition: /repositories exists on this runner, so the old-form refusal cannot be reproduced"; fi
+if [ "$u_old" = "git-receive-pack '/repositories/${U_ID}.git'" ]; then rc=$(run_wrap "$U_ROOT" "$u_old"); else rc="not-emitted"; fi
+if [ "$rc" != "0" ] && [ "$rc" != "not-emitted" ] && grep -qF "repo path does not resolve: '/repositories/${U_ID}.git'" "$ERR"; then pass; else fail "U3 old form: expected the incident's refusal, got rc=$rc ($(head -c 200 "$ERR"))"; fi
+
+# U4: a REAL push and fetch through git -> ssh shim -> real wrapper -> real receive-pack/upload-pack.
+u_git exec -C "$U_CLIENT" push --force "$U_URL" "refs/heads/*:refs/soleur/worktrees/w1/heads/*"; rc=$?
+if [ "$rc" = "0" ]; then pass; else fail "U4 push through the wrapper failed: rc=$rc ($(head -c 200 "$ERR"))"; fi
+u_refs="$(git --git-dir="${U_ROOT}/${U_ID}.git" for-each-ref --format='%(refname)')"
+if [ "$u_refs" = "refs/soleur/worktrees/w1/heads/main" ]; then pass; else fail "U4 refs after push: expected only refs/soleur/worktrees/w1/heads/main, got: $u_refs"; fi
+u_sha="$(git -C "$U_CLIENT" rev-parse refs/heads/main)"
+if [ "$(git --git-dir="${U_ROOT}/${U_ID}.git" rev-parse refs/soleur/worktrees/w1/heads/main 2>/dev/null)" = "$u_sha" ]; then pass; else fail "U4 pushed ref does not carry the client's commit $u_sha"; fi
+u_git exec -C "$U_CLIENT" fetch "$U_URL" "+refs/soleur/worktrees/w1/heads/*:refs/remotes/git-data/*"; rc=$?
+if [ "$rc" = "0" ]; then pass; else fail "U4 fetch through the wrapper failed: rc=$rc ($(head -c 200 "$ERR"))"; fi
+if [ "$(git -C "$U_CLIENT" rev-parse refs/remotes/git-data/main 2>/dev/null)" = "$u_sha" ]; then pass; else fail "U4 fetched ref does not equal the pushed commit"; fi
+drop_fixture "$U_DIR"
+
 # --- MUTATION meta-check: the reject assertions have teeth ---
 # An always-exit-0 stub stands in for a wrapper whose allowlist/canonicalize guard
 # was removed. Representative reject inputs MUST exit 0 against it — i.e. WITHOUT the
 # real guard they would sail through, so the T3/T4 `rc != 0` checks are meaningful.
-stub="$(mktemp "${TMPDIR:-/tmp}/gdxport-stub.XXXXXX")"
+stub="$(mktemp "${SEAMS}/stub.XXXXXX")"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$stub"
 chmod +x "$stub"
 mut_root=$(fresh_root)
-for bad in "rm -rf /" "git-upload-pack '${mut_root}/../etc/passwd'"; do
+for bad in "rm -rf /" "git-upload-pack '${mut_root}/../etc/passwd'" "git-receive-pack '/repositories/ws-u1.git'"; do
   rc=$(env -i PATH="$PATH" SSH_ORIGINAL_COMMAND="$bad" bash "$stub" >/dev/null 2>&1; echo $?)
   if [ "$rc" = "0" ]; then pass; else fail "MUTATION: stub-accept did not exit 0 for '$bad' — reject assertion may have no teeth"; fi
 done
@@ -306,9 +393,11 @@ rm -f "$stub"; rm -rf "$mut_root"
 
 # --- Minimum-cardinality guard (a silent-empty extraction must fail loud) ---
 # 33 -> 53 with the C1 store rows (#8211): C1a 2, C1b 3, C1c 2x3, C1d 3, C1e 3, C1f 3 = 20.
+# 54 measured + 16 for section U (#8211: U0 1, U0b 1, U1 3, U2 3, U3 2, U4 5, stub-loop input 1) = 70.
+# The floor is the measured total, so one dropped row reds.
 total=$((passes + fails))
-if [ "$total" -lt 53 ]; then
-  echo "FAIL: ran only ${total} assertions (<53) — suite did not execute fully" >&2
+if [ "$total" -lt 70 ]; then
+  echo "FAIL: ran only ${total} assertions (<70) — suite did not execute fully" >&2
   exit 1
 fi
 
