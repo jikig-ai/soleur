@@ -453,9 +453,13 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
   includes `nonce_hash`, then the respective gate turns red.
 - Given the frozen migrations 165 and 175, when their exact path+digest
   declarations are accepted by static lint, then the runtime registry still
-  classifies the 165 DSAR projection columns as service-role-only and the 175
-  issuance table as INTERNAL; disposable catalog parity rejects any widened
-  role/column set and remains a qualification gate.
+  classifies only `agent_engine_attempts(id, run_id, status, created_at,
+  updated_at, terminal_at, accepted_at)` and
+  `agent_engine_recovery_checkpoints(run_id, updated_at)` as service-role
+  SELECT; `attempt_key`, `checkpoint`, anon and authenticated remain denied.
+  The `codex_history_transfer_notice_issuances` table stays INTERNAL with zero
+  API privileges. Disposable catalog parity rejects any deviation and remains
+  a qualification gate.
 - Given an issuance before expiry, at the exact boundary and after expiry,
   when delivery repair or acknowledgment runs, then only the pre-expiry case
   can proceed.
@@ -509,10 +513,14 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
    independent monitoring and all privacy-document mirrors. Recheck migration
    ordinals before each slice. Keep frozen migrations 165 and 175 byte-for-byte.
    The exact-hash static declarations do not grant access or replace RLS-fuzz
-   parity. In the stacked forward correction, grant the DSAR worker only the
-   `service_role` metadata columns selected from the migration 165 tables,
-   classify those effective grants in `table-grants.ts`, and register the
-   migration 175 issuance table as INTERNAL with zero direct API privileges.
+   parity. In the stacked forward correction, grant the DSAR worker only
+   `service_role` SELECT on `agent_engine_attempts(id, run_id, status,
+   created_at, updated_at, terminal_at, accepted_at)` and
+   `agent_engine_recovery_checkpoints(run_id, updated_at)`. Do not grant
+   `attempt_key` or `checkpoint`. Classify those exact effective grants in
+   `table-grants.ts`, and register the migration 175
+   `codex_history_transfer_notice_issuances` table as INTERNAL with zero direct
+   API privileges.
    Verify catalog-to-registry parity and unauthorized column denial only on a
    disposable database before qualification. The estimate is at least 25 files
    across five roots and exceeds the split threshold.
