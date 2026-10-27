@@ -3293,15 +3293,15 @@ row_ow_jq_error_text() {
 }
 row_ow_trap() {   # SIGTERM while a slow read is in flight: exit 143, no worker survives, the work directory is gone
   ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
-  local before after pid i spid alive=0
+  local before after pid i spid alive=0 t_kill
   before="$(ls -d "$SANDBOX"/tmp.* 2>/dev/null | wc -l)"
   env -u SOAK_PARALLEL PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" SLOW_S=30 SOAK_PARALLEL=2 bash "$OW_SCRIPT" > /dev/null 2>&1 & pid=$!
   for i in $(seq 1 100); do [[ -s "$GHLOG.slowpids" ]] && break; sleep 0.2; done
   [[ -s "$GHLOG.slowpids" ]] || { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 1; }
-  kill -TERM "$pid"; RC=0; wait "$pid" || RC=$?; OW_RCS+=("$RC")
+  t_kill=$SECONDS; kill -TERM "$pid"; RC=0; wait "$pid" || RC=$?; OW_RCS+=("$RC")   # a probe that waits for its 30 s read instead of stopping it would also leave no worker behind: the exit must be quick
   while read -r spid; do kill -0 "$spid" 2>/dev/null && alive=1; done < "$GHLOG.slowpids"
   after="$(ls -d "$SANDBOX"/tmp.* 2>/dev/null | wc -l)"
-  [[ "$RC" -eq 143 && "$alive" -eq 0 && "$before" -eq "$after" ]]
+  [[ "$RC" -eq 143 && "$alive" -eq 0 && "$before" -eq "$after" && $((SECONDS - t_kill)) -lt 10 ]]
 }
 row_ow_never_one() { local n=0 rc; for rc in "${OW_RCS[@]}"; do n=$((n + 1)); [[ "$rc" -ne 1 ]] || return 1; done; [[ "$n" -ge 30 ]]; }   # exit 1 is unreachable by design: no stub scenario of this section returned it
 chk "window probe: a healthy window passes (the canary is excluded from the 4 distinct PRs, the echoed run: source in the logs is not read as a marker)" row_ow_pass
@@ -3374,8 +3374,8 @@ ow_mutate not-yet-is-exit-1 'printf '"'"'NOT YET: %s\n'"'"' "${nots[@]}"
   exit 2' 'printf '"'"'NOT YET: %s\n'"'"' "${nots[@]}"
   exit 1' row_ow_few_prs
 ow_mutate unmerged-is-exit-1 'the window has not opened"; exit 2' 'the window has not opened"; exit 1' row_ow_notmerged
-ow_mutate units-read-newest-first 'head -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/read.tsv"' 'tail -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/read.tsv"' row_ow_unit_cap
-ow_mutate newest-merge-group-not-forced 'tail -n "$NEWEST_MG" '"$GT$GT"' "$WORK/read.tsv"' 'tail -n 0 '"$GT$GT"' "$WORK/read.tsv"' row_ow_unit_cap
+ow_mutate units-read-newest-first 'head -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/oldest.tsv"' 'tail -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/oldest.tsv"' row_ow_unit_cap
+ow_mutate newest-merge-group-not-forced 'tail -n "$NEWEST_MG" '"$GT"' "$WORK/extras.tsv"' 'tail -n 0 '"$GT"' "$WORK/extras.tsv"' row_ow_unit_cap
 ow_mutate cancelled-run-read 'awk -F'"'"'\t'"'"' '"'"'$8 != "cancelled"'"'"' "$RUNS"' 'awk -F'"'"'\t'"'"' '"'"'1'"'"' "$RUNS"' row_ow_cancel_run
 ow_mutate one-page-only '    [ "$n" -ge 100 ] || break' '    break' row_ow_pages
 ow_mutate page-cap-ignored '    if [ "$page" -ge "$MAX_PAGES" ]; then TRUNC=1; break; fi' '    :' row_ow_one_page
@@ -3398,6 +3398,25 @@ ow_mutate ceiling-owed-note-dropped '(PROVISIONAL ceiling; ceiling re-rule owed:
   (( max <= MAX_MAX ))' '(PROVISIONAL ceiling)"); nwall=$((nwall + 1)); }
   (( max <= MAX_MAX ))' row_ow_slow
 ow_mutate merged-at-spliced 'jq -r --arg m "$merged_at" --arg ev "$ev" '"'"'.workflow_runs[]? | select(.created_at > $m)' 'jq -r --arg ev "$ev" '"'"'.workflow_runs[]? | select(.created_at > "'"'"'"$merged_at"'"'"'")' row_ow_static
+ow_mutate args-accumulator $'files="$(printf \'%s\\n%s\\n\' "$files" "$proj" | jq -s -c \'add\' 2>/dev/null)" || fail_api "pull $n files (parse)"' $'files="$(jq -c -n --argjson a "$files" --argjson b "$page_files" \'$a + $b\' 2>/dev/null)" || fail_api "pull $n files (parse)"' row_ow_big_patch
+ow_mutate oracle-argv $'jq -s -r --argjson oracle "$ORACLE_JSON" \'.[0] as $p | .[1] as $files | $p | if' $'jq -s -r --argjson oracle "$ORACLE_JSON" --argjson files "$files" \'.[0] as $p | $p | if' row_ow_long_names
+ow_mutate progress-to-stdout $'printf \'soak-progress: %s\\n\' "$*" >&2;' $'printf \'soak-progress: %s\\n\' "$*";' row_ow_progress
+ow_mutate heartbeat-always-on $'{ [ "${SOAK_PROGRESS:-}" = 1 ] || [ -t 2 ]; } && HB=1' $'HB=1' row_ow_heartbeat
+ow_mutate heartbeat-never $'if [ "$HB" = 1 ] && (( done_n % 25 == 0 )); then' $'if false; then' row_ow_heartbeat
+ow_mutate parallel-rc-ignored $'if [ "$(cat "$wrc_file")" != 0 ]; then' $'if false; then' row_ow_worker_fail
+ow_mutate budget-ignored $'if (( o_launched > 0 && SECONDS - T0 >= BUDGET )); then BUDGET_CUT=1; break; fi' $':' row_ow_budget
+ow_mutate deadline-gates-first-oldest-first $'if (( o_launched > 0 && SECONDS - T0 >= BUDGET )); then' $'if (( SECONDS - T0 >= BUDGET )); then' row_ow_budget
+ow_mutate deadline-gates-extras $'  if [ "$kind" = O ]; then' $'  if [ -n "$kind" ]; then' row_ow_budget
+ow_mutate extras-last $'{ sed \'s/^/E\\t/\' "$WORK/extras.tsv"; sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; } > "$WORK/dispatch.tsv"' $'{ sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; sed \'s/^/E\\t/\' "$WORK/extras.tsv"; } > "$WORK/dispatch.tsv"' row_ow_budget
+ow_mutate unit-sort-dropped $'sort -t$\'\\t\' -k5,5 -k1,1n -s -o "$UNITS" "$UNITS" || fail_api "unit sort"' $':' row_ow_parallel_same
+ow_mutate draft-cache-dropped $'[ -n "${PR_TL[$n]+x}" ] || { PR_TL' $'{ PR_TL' row_ow_pr_facts_cached
+ow_mutate jq-detail-unbounded $'| LC_ALL=C cut -c1-160; }' $'| cat; }' row_ow_jq_error_text
+ow_mutate jq-detail-unfiltered $'LC_ALL=C tr -c \'A-Za-z0-9 ._:,()-\' \'?\' | ' $'' row_ow_jq_error_text
+ow_mutate quota-guard-dropped $'if (( RL_REM - LISTCALLS < need )); then' $'if false; then' row_ow_quota
+ow_mutate rate-limit-403-continues $'if [ -e "$FAILED_FLAG" ] || [ -e "$RL_FLAG" ]; then break; fi' $'if false; then break; fi' row_ow_quota
+ow_mutate trap-kill-dropped $'for p in $(jobs -p 2>/dev/null); do kill_tree "$p"; done; wait' $'wait' row_ow_trap
+ow_mutate facts-budget-ignored $'if [ -z "${PR_DOCS[$prn]+x}" ] && (( SECONDS - T0 >= BUDGET )); then FACTS_CUT=1; TRUNC=1; break; fi' $':' row_ow_budget_facts
+ow_mutate seam-cap-parallel-dropped $'[[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]]' $'[[ "$PAR" =~ ^[1-9][0-9]*$ ]]' row_ow_seam_caps
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
 # ---------------------------------------------------------------------------------------------------------------------
