@@ -2221,7 +2221,7 @@ _pj_launch() {
   # ADR-196 refusal. exec'd, /proc/<pid>/cmdline carries the suite argv.
   # stdout and stderr are captured separately so the replay puts each byte
   # back on the fd the suite wrote it to.
-  eval "( exec ${_pj_argvs[idx]} ) >\"${_pj_cap}/${idx}.out\" 2>\"${_pj_cap}/${idx}.err\" &"
+  eval "( exec bash -c 'rcf=\"\$1\"; shift; \"\$@\"; _wrc=\$?; printf %s \"\$_wrc\" >\"\$rcf\"; exit \"\$_wrc\"' _ \"${_pj_cap}/${idx}.rc\" ${_pj_argvs[idx]} ) >\"${_pj_cap}/${idx}.out\" 2>\"${_pj_cap}/${idx}.err\" &"
   _pj_pid[idx]=$!
   _pj_state[idx]=live
   _pj_start[idx]="${EPOCHREALTIME:-}"
@@ -2252,7 +2252,28 @@ _pj_reap() {  # reap ONE completed worker; returns 1 when nothing live/observeab
   (( _pj_live_n == 0 )) && return 1
   local rp="" rc=0
   wait -n -p rp -- "${_pj_live_pids[@]}" || rc=$?
-  if [[ -z "$rp" ]]; then
+  if [[ -z "${rp:-}" ]]; then
+    # A completed child can leave the job table before wait -n reaches it —
+    # "wait: <pid>: no such job" with an empty -p var, and -p may leave rp
+    # UNSET (the ${rp:-} form is load-bearing). The sidecar .rc the worker
+    # writes is the second channel: it exists for natural completions even
+    # when the reap path is torn. Signal-killed workers write nothing and
+    # still render through their wait status.
+    local j found=0
+    for (( j = 0; j < _pj_next; j++ )); do
+      [[ "${_pj_state[j]:-}" == "live" && -f "${_pj_cap}/${j}.rc" ]] || continue
+      _pj_rc[j]="$(<"${_pj_cap}/${j}.rc")"
+      _pj_end[j]="${EPOCHREALTIME:-}"
+      _pj_tmpdelta[j]=unattributed
+      _pj_state[j]=done
+      _pj_live_n=$(( _pj_live_n - 1 ))
+      local _np=() _p
+      for _p in "${_pj_live_pids[@]}"; do [[ "$_p" != "${_pj_pid[j]}" ]] && _np+=("$_p"); done
+      if ((${#_np[@]})); then _pj_live_pids=("${_np[@]}"); else _pj_live_pids=(); fi
+      printf '[run] %s done (rc=%s)\n' "${_pj_label[j]}" "${_pj_rc[j]}" >&2
+      found=1
+    done
+    (( found == 1 )) && return 0
     # rc 127 + empty pid var = job table empty (not a suite's own exit 127).
     # 128+N + empty pid var = the PARENT was signalled — no child was reaped,
     # so rendering it as a suite's signal shape would be mimicry (ADR-187 §2).
