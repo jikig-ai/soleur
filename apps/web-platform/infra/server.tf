@@ -422,15 +422,32 @@ resource "hcloud_server" "web" {
     # only /hooks/deploy fans out, so deploy-status, infra-config (a WRITE) and ssh. all
     # land coin-flipped. One connector ⇒ deterministic by construction.
     #
-    # The predicate is `each.key == "web-1"` — the in-file idiom (`name` above, `host_name`
+    # The predicate is `each.key == "web-2"` — the in-file idiom (`name` above, `host_name`
     # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
     # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
     # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
-    # dns.tf 1 (the app A record), ci-ssh-key.tf 1). Promotion must move all of them in
-    # lockstep; a lone connector flip would put the connector on web-2 while the A record
-    # still points at web-1 — ingress split, at 3am. The coupling is recorded in ADR-068.
-    # (No load balancer exists yet — ADR-068 §(c)'s LB weight is future-tense, so it is NOT
-    # part of this coupling today. Fold it in when the LB actually lands.)
+    # dns.tf 1 (the app A record), ci-ssh-key.tf 1) and stays pinned — the A record
+    # still points at web-1 BY DESIGN.
+    #
+    # Why the connector lives on web-2 permanently: the connector role must sit on a
+    # REPLACEABLE host, and web-1 is not one. `web-host-replace` refuses web-1 by name
+    # (LUKS-pinned — hcloud_volume_attachment.workspaces_luks.server_id is hardcoded to it
+    # and carries prevent_destroy; ADR-148, tracker #6964) and in-place host mutation is
+    # forbidden, so web-1 could never carry a binary security fix such as the cloudflared
+    # >= 2026.10.2 eMudhra remediation. web-2 is the cattle standby the replace dispatch
+    # was built for — a fresh web-2 renders this flag and installs the pinned cloudflared
+    # .deb at birth. When web-1's eventual #6964 replacement lands it will NOT re-acquire
+    # the connector.
+    #
+    # The old ingress-split objection to moving the connector does not apply: all three
+    # tunnel ingress services are origin-RELATIVE to private IPs (tunnel.tf — deploy.→
+    # ${web_hosts["web-1"].private_ip}:9000, ssh.→…:22, registry.→10.0.1.30:5000), so a
+    # connector on web-2 proxies to web-1's services over the private net; ADR-114 I1's
+    # single-connector invariant is unchanged (still exactly one). The ADR-068 A-record
+    # coupling concern was about the connector following the A record — it does not have
+    # to, once ingress is origin-relative. (No load balancer exists yet — ADR-068 §(c)'s
+    # LB weight is future-tense, so it is NOT part of this coupling today. Fold it in
+    # when the LB actually lands.)
     #
     # `tunnel_token` above stays in this map unconditionally and is NOT ternary'd to "":
     # templatefile pre-checks expr.Variables() across BOTH branches of the `if` directive, so
@@ -438,7 +455,7 @@ resource "hcloud_server" "web" {
     # from this one — web-1 rendering gate-on with an empty token would `service install `,
     # fail the readiness poll, and boot the LIVE host with deploy+ssh+registry dark. One
     # predicate, one place.
-    web_tunnel_connector = each.key == "web-1"
+    web_tunnel_connector = each.key == "web-2"
     # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret
@@ -611,8 +628,12 @@ resource "hcloud_server" "web" {
   # coupling #2, so a plaintext web-2 cannot be pooled). Pooling web-2 before all three = a request
   # lands on a host without that user's /workspaces → empty workspace → "workspace-gone" single-user
   # incident. SHAPE-ONLY (prints requires_runtime_bind_probe=true) so exit 0 is NOT weight authorization.
-  # Committed-config anti-pooling (dns.tf web-1-only, connector excludes web-2, no LB pools web-2) is
-  # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-143 + moved-block-wedge-cutover-5887.md §Scope B.
+  # Committed-config anti-pooling (dns.tf web-1-only, no LB pools web-2) is
+  # Condition C in lb-weight-gate.test.sh. The tunnel connector on web-2
+  # (web_tunnel_connector above) is management-plane ingress for deploy./ssh./registry.
+  # only — it proxies to the origin-relative private IPs and puts NO app.soleur.ai
+  # serving weight on web-2, so it is not pooling. See ADR-068 §(c) + ADR-143 +
+  # moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
 

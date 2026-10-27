@@ -1303,10 +1303,12 @@ jobs:
           [[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
           if [[ -z "$CF_API_TOKEN" || -z "$CF_ACCOUNT_ID" ]]; then
             # Unreadable creds are census_unavailable — NOT zero connectors. Fail soft.
+            # An unreadable census cannot prove versions either → version_unreadable (soft).
             echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
             echo "count=-1" >> "$GITHUB_OUTPUT"
+            echo "version_verdict=version_unreadable" >> "$GITHUB_OUTPUT"
             echo "detail=doppler read failed for CF_API_TOKEN/CF_ACCOUNT_ID" >> "$GITHUB_OUTPUT"
-            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 reason=doppler_read_failed"
+            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 version_verdict=version_unreadable reason=doppler_read_failed"
             exit 0
           fi
 
@@ -1316,8 +1318,9 @@ jobs:
           if [[ -z "$TUNNEL_ID" ]]; then
             echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
             echo "count=-1" >> "$GITHUB_OUTPUT"
+            echo "version_verdict=version_unreadable" >> "$GITHUB_OUTPUT"
             echo "detail=could not resolve tunnel id for soleur-web-platform" >> "$GITHUB_OUTPUT"
-            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 reason=tunnel_id_unresolved"
+            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 version_verdict=version_unreadable reason=tunnel_id_unresolved"
             exit 0
           fi
 
@@ -1328,21 +1331,32 @@ jobs:
 
           read -r VERDICT COUNT <<<"$(classify_connector_census "$CODE" "$BODY")"
           EVIDENCE=$(describe_connectors "$BODY")
+          # Second classifier, SAME body (eMudhra advisory floor): every live conn's
+          # client_version must be >= 2026.10.2 — a connector can be the right COUNT and
+          # still run a compromised-trust-store binary. Per-conn, numeric field-wise compare.
+          read -r VVERDICT VBELOW VUNREAD <<<"$(classify_conn_versions "$BODY")"
+          VEVIDENCE=$(describe_conn_versions "$BODY")
 
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
-          echo "detail=http=$CODE connectors=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "version_verdict=$VVERDICT" >> "$GITHUB_OUTPUT"
+          echo "detail=http=$CODE connectors=$COUNT version=$VVERDICT below=$VBELOW unreadable=$VUNREAD" >> "$GITHUB_OUTPUT"
           {
             echo "evidence<<CENSUS_EOF"
             echo "${EVIDENCE:-(no live connectors)}"
             echo "CENSUS_EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "version_evidence<<VCENSUS_EOF"
+            echo "${VEVIDENCE:-(no live conns)}"
+            echo "VCENSUS_EOF"
           } >> "$GITHUB_OUTPUT"
 
           # Agent-facing breadcrumb, mirroring SOLEUR_INNGEST_LIVENESS_VERDICT / SOLEUR_ZOT_DISK.
           # This is a DIAGNOSTIC marker in the run log, NOT an alert route — a log marker nobody
           # greps is how the last 16h investigation started. The action-required issue below is
           # the alert.
-          echo "SOLEUR_ORIGIN_HOST_CHURN verdict=$VERDICT count=$COUNT tunnel=${TUNNEL_ID:0:8}"
+          echo "SOLEUR_ORIGIN_HOST_CHURN verdict=$VERDICT count=$COUNT version_verdict=$VVERDICT below_floor_conns=$VBELOW unreadable_conns=$VUNREAD tunnel=${TUNNEL_ID:0:8}"
           # Guard on non-empty rather than filtering inside the loop. Under `set -euo pipefail`
           # a `while read` whose last body command is a false `[[ -n "$line" ]]` exits 1, so an
           # EMPTY $EVIDENCE failed this step — and $EVIDENCE is empty precisely and only on
@@ -1386,8 +1400,8 @@ jobs:
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
               printf '### What this means\n\nCloudflare binds ingress to a **tunnel**, then picks a connector **per edge colo**. With more than one connector, `localhost:` ingress no longer means "this host" — it means "whichever replica answered". Only `/hooks/deploy` fans out to peers, so everything else is now coin-flipped:\n\n- `/hooks/deploy-status` + `/hooks/inngest-liveness` read a **random host** (a freshly-recreated non-primary host has no `inngest-inventory.sh` at all → false `inngest_down` P1s)\n- `/hooks/infra-config` is a coin-flipped **WRITE**, self-verified against a separately coin-flipped read\n- `ssh.soleur.ai` lands the seccomp/apparmor SSH bridge on a **random host** — a sandbox-escape control update can silently land on the wrong host while CI reports green\n\nThis is the #6425 regression. Users are not directly affected (`app.soleur.ai` is a direct A record to web-1, never through the tunnel).\n\n'
               printf '### Live connectors\n\n```\n%s\n```\n\n' "$EVIDENCE"
-              printf 'Colo geography attributes a connector to a host (`origin_ip` is null on this endpoint): `ams*`/`hel*` = hel1 = **web-1**, which since the #6538 retire is the ONLY web host. A connector in any other colo therefore attributes to NO fleet host — it is a stray `cloudflared` (leftover process, container, or off-fleet machine holding a valid tunnel token).\n\n'
-              printf '### Remediation\n\n1. **Identify the extra connector** from the colo attribution and the `Live connectors` block above. web-1 is the only host `server.tf` grants a connector to (`web_tunnel_connector = each.key == "web-1"`, which gates the `cloudflared` install in `cloud-init.yml`), so every connector beyond the one hel1/ams connector is a stray.\n2. **Evict it, no-SSH first:** DELETE the stray client_id under `accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections` (the same endpoint this check reads), then rotate the tunnel token so the stray cannot re-register with the credential it holds. **There is no recreate dispatch you can use HERE** — `apply_target=web-2-recreate` and `warm-standby` were removed with the web-2 retire (#6575/#6538). `apply_target=web-host-create` (#6730, ADR-145) BIRTHS a declared-but-absent host; it is additive-only and its gate refuses any plan that destroys or replaces, so it is NOT a recreate. `apply_target=web-host-replace` (#6969, ADR-148) IS a real recreate — but it REFUSES web-1 by name (the LUKS-pinned host; see its gate header), and web-1 is the only host granted a connector, so it cannot be the remedy for a stray connector either. The earlier blanket wording here ("there is NO recreate dispatch", "recreating a host is not available") went false when #6969 landed and is corrected rather than left standing: the mechanism exists, it just does not reach this host.\n3. **If the predicate itself regressed** (i.e. `web_tunnel_connector` would evaluate true for a host that must not run `cloudflared`), fix `server.tf` and ship it on the normal merge path; the running host reconciles via the infra-config push. Recreating a host is NOT the remedy here (and for web-1 it is not available — see step 2).\n4. Do **not** "fix" this by adding a per-hostname ingress rule — ADR-114 records that as a normative anti-pattern: a per-hostname rule does not pin a connector.\n5. Re-pooling a host is NOT a weight flip and is blocked on #6466 (host-addressability).\n\nRefs #6425 (the regression class this detects; the issue itself is closed), ADR-114 (I1/I2), ADR-068.\n'
+              printf 'Colo geography attributes a connector to a host (`origin_ip` is null on this endpoint): `ams*`/`hel*` = hel1, which hosts **both** web hosts today — colo cannot distinguish web-1 from web-2, so a hel1 connector attributes to "a web host", not to a named one. The granted connector host is **web-2** (`web_tunnel_connector = each.key == "web-2"` in server.tf; web-1 is LUKS-pinned and unreplaceable, so the role moved permanently to the cattle standby for the cloudflared >= 2026.10.2 eMudhra fix). A connector in any non-hel1 colo attributes to NO fleet host — it is a stray `cloudflared` (leftover process, container, or off-fleet machine holding a valid tunnel token).\n\n'
+              printf '### Remediation\n\n1. **Identify the extra connector** from the colo attribution and the `Live connectors` block above. web-2 is the only host `server.tf` grants a connector to (`web_tunnel_connector = each.key == "web-2"`, which gates the `cloudflared` service install in `cloud-init.yml`), so every connector beyond the one hel1 connector is a stray — and a SECOND hel1 connector is most plausibly web-1's still-running legacy cloudflared (kill its credential: DELETE its client_id below, then rotate the tunnel token).\n2. **Evict it, no-SSH first:** DELETE the stray client_id under `accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections` (the same endpoint this check reads), then rotate the tunnel token so the stray cannot re-register with the credential it holds. `apply_target=web-host-create` (#6730, ADR-145) BIRTHS a declared-but-absent host; it is additive-only and its gate refuses any plan that destroys or replaces, so it is NOT a recreate. `apply_target=web-host-replace` (#6969, ADR-148) IS a real recreate and now DOES reach the connector host: it refuses web-1 by name (the LUKS-pinned host; see its gate header), but web-2 — the granted connector host since the eMudhra migration — is exactly the cattle host it was built for.\n3. **If the predicate itself regressed** (i.e. `web_tunnel_connector` would evaluate true for a host that must not run `cloudflared`), fix `server.tf` and ship it on the normal merge path; the running host reconciles via the infra-config push. Recreating a host is NOT the remedy for a stray connector — and for web-1 it is not available at all (the replace gate refuses it by name — see step 2).\n4. Do **not** "fix" this by adding a per-hostname ingress rule — ADR-114 records that as a normative anti-pattern: a per-hostname rule does not pin a connector.\n5. Re-pooling a host is NOT a weight flip and is blocked on #6466 (host-addressability).\n\nRefs #6425 (the regression class this detects; the issue itself is closed), ADR-114 (I1/I2), ADR-068.\n'
             } > "$BODY_FILE"
           else
             ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has ZERO live connectors — every tunnel-routed surface is dark"
@@ -1397,7 +1411,7 @@ jobs:
               printf -- '- **Detected at:** %s\n' "$NOW"
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
               printf '### What this means\n\nCloudflare answered and reported **no** live connectors — this is a well-formed census, not a failed read. Every tunnel-routed surface is dark: `deploy.soleur.ai` (the deploy pipeline), `ssh.soleur.ai` (the SSH bridge), `registry.soleur.ai`.\n\n**`app.soleur.ai` is unaffected** — it is a direct CF-proxied A record to web-1 and never traverses the tunnel. So users are still served; what is lost is the ability to deploy to and remediate the host serving them.\n\n'
-              printf '### Remediation\n\n1. Check `cloudflared` on the designated ingress host (web-1). It is `restart-on-failure` under systemd, so a total absence points at the host, not the process.\n2. `app.soleur.ai` still resolves directly, so user-facing checks will look green — do not read that as "the tunnel is fine".\n3. Since #6425 only the designated ingress host runs a connector by construction, so there is no second connector to absorb this. That trade is deliberate and recorded in ADR-068: a silent-wrong-answer mode was traded for a loud-total-outage mode.\n\nRefs #6425, ADR-114 (I1), ADR-068.\n'
+              printf '### Remediation\n\n1. Check `cloudflared` on the designated connector host (web-2 — `web_tunnel_connector` in server.tf). It is `restart-on-failure` under systemd, so a total absence points at the host, not the process. `apply_target=web-host-replace -f web_host_key=web-2` is the sanctioned re-birth path (the dispatch refuses web-1 by name; web-2 is exactly the cattle host it was built for).\n2. `app.soleur.ai` still resolves directly, so user-facing checks will look green — do not read that as "the tunnel is fine".\n3. Since #6425 only the designated connector host runs a connector by construction, so there is no second connector to absorb this. That trade is deliberate and recorded in ADR-068: a silent-wrong-answer mode was traded for a loud-total-outage mode.\n\nRefs #6425, ADR-114 (I1), ADR-068.\n'
             } > "$BODY_FILE"
           fi
 
@@ -1412,6 +1426,49 @@ jobs:
           else
             gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
               --label "ci/tunnel-connector-drift" --label "action-required" --label "priority/p1-high" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: File action-required on a below-floor connector version (eMudhra)
+        # below_floor PAGES: a live conn on cloudflared < 2026.10.2 trusts the compromised
+        # eMudhra intermediates and can be MITM'd — on the management plane (deploy./ssh./
+        # registry.), not a theoretical surface. version_unreadable and version_floor_invalid
+        # are deliberately excluded (soft breadcrumbs, same posture as census_unavailable).
+        # Distinct label from ci/tunnel-connector-drift: a below-floor conn is a COUNT-correct,
+        # VERSION-wrong connector — the drift arm above cannot see it.
+        if: always() && steps.census.outputs.version_verdict == 'below_floor'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VEVIDENCE: ${{ steps.census.outputs.version_evidence }}
+          DETAIL: ${{ steps.census.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +'%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp)
+          gh label create "ci/tunnel-connector-version" --repo "$GH_REPO" \
+            --description "Live tunnel conn runs cloudflared below the 2026.10.2 eMudhra advisory floor" \
+            --color "B60205" 2>/dev/null || true
+
+          ISSUE_TITLE="[ci/tunnel-connector-version] Live tunnel conn runs cloudflared below the 2026.10.2 advisory floor"
+          {
+            printf '## A live tunnel connection is running cloudflared below the advisory floor\n\n'
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Census detail:** `%s`\n' "$DETAIL"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What this means\n\nCloudflare'"'"'s 2026-10-20 advisory disclosed that eight eMudhra (emSign) intermediate CA keys are compromised — any holder can mint certificates for any hostname, so a `cloudflared` whose trust store still chains to them can be MITM'"'"'d. The fix shipped in **2026.10.2**. A conn below the floor means the connector↔edge QUIC link — which carries `deploy.` webhooks, the `ssh.` CI bridge, and `registry.` pushes — is MITM-able on the management plane. The connector COUNT may still be 1 (`ok` above); this verdict is about the binary, not the topology.\n\n'
+            printf '### Live conns\n\n```\n%s\n```\n\n' "$VEVIDENCE"
+            printf '### Remediation\n\n1. **If this is the post-migration window:** the connector host is web-2 (`web_tunnel_connector = each.key == "web-2"`). A below-floor conn there means the host predates the pinned-.deb cloud-init — re-born it: `gh workflow run apply-web-platform-infra.yml -f apply_target=web-host-replace -f web_host_key=web-2 -f confirm=REPLACE-web-2 -f reason="cloudflared floor remediation" -f image_tag=<PINNED>` (stock preflight is mandatory).\n2. **If the conn attributes to NO fleet host** (non-hel1 colo): it is a stray holding a live tunnel token — DELETE its client_id under `accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections` and rotate the tunnel token.\n3. **web-1 cannot be the remedy:** `web-host-replace` refuses it by name (LUKS-pinned) and in-place host mutation is forbidden. If the below-floor conn IS web-1'"'"'s still-running legacy cloudflared, kill its credential per step 2 — do not try to patch it.\n4. **Provisioning is already deterministic:** `cloud-init.yml` installs a pinned `.deb` + sha256 (`CLOUDFLARED_VERSION="2026.10.4"`), so a fresh host cannot regress below the floor. This alert means something ALREADY RUNNING is stale, not that future births are.\n\n'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/tunnel-connector-version" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::tunnel-connector-version: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still \`below_floor\` at ${NOW}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/tunnel-connector-version" --label "action-required" --label "priority/p1-high" \
               --body-file "$BODY_FILE"
           fi
 
@@ -1430,4 +1487,22 @@ jobs:
           if [[ -n "$EXISTING" ]]; then
             gh issue close "$EXISTING" --repo "$GH_REPO" \
               --comment "Connector invariant restored (census = 1) at $(date -u +'%Y-%m-%d %H:%M UTC'). Run: ${RUN_URL}"
+          fi
+
+      - name: Auto-resolve the version issue once every live conn is at/above the floor
+        # versions_ok is the quiet state. version_unreadable does NOT resolve — an unreadable
+        # read is not proof of compliance, and a self-resolving alert on a blind read is the
+        # false-recovery shape this file exists to prevent.
+        if: always() && steps.census.outputs.version_verdict == 'versions_ok'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search 'in:title "[ci/tunnel-connector-version]"' \
+            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [[ -n "$EXISTING" ]]; then
+            gh issue close "$EXISTING" --repo "$GH_REPO" \
+              --comment "Every live conn reports client_version >= 2026.10.2 at $(date -u +'%Y-%m-%d %H:%M UTC'). Run: ${RUN_URL}"
           fi
