@@ -15,7 +15,7 @@ fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="$HERE/inngest-trace-retention.sh"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/inngest-trace-retention-probe.XXXXXXXX")"
+WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 python3 - "$WORK/main.db" <<'PY'

@@ -12,7 +12,7 @@ fail() { fails=$((fails + 1)); printf 'FAIL: %s\n' "$1" >&2; }
 [[ -f "$PROBE" ]] || { printf 'FATAL: probe missing\n' >&2; exit 1; }
 bash -n "$PROBE" && pass || fail "probe bash -n"
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/inngest-trace-retention-5150.XXXXXXXX")"
+WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 OK_ROW='{"message":"INNGEST_TRACE_RETENTION_OUTCOME=ok","_SYSTEMD_UNIT":"inngest-trace-retention.service"}'

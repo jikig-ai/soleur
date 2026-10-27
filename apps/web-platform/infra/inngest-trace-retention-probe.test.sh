@@ -19,6 +19,7 @@ else
 fi
 
 OUT="$(mktemp)"
+trap 'rm -f "$OUT" "$OUT.err"' EXIT
 env -i PATH="$PATH" \
   INNGEST_POSTGRES_URI="postgres://retention:secret@127.0.0.1:9/inngest" \
   bash "$PROBE" --self-test >"$OUT" 2>"$OUT.err"

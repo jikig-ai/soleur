@@ -41,6 +41,7 @@ pass() {
 cleanup() {
   local d
   for d in "${CLEANUPS[@]}"; do
+    assert_fixture_dir "$d"
     rm -rf "$d"
   done
 }
@@ -99,6 +100,7 @@ require_green() {
 # Every retention invocation goes through here. --ensure-indexes is never a test path.
 run_retention() {
   local outfile="$1"
+  assert_fixture_dir "$outfile"
   shift
   local arg
   for arg in "$@"; do
@@ -118,6 +120,7 @@ run_retention() {
 
 run_guard() {
   local dir="$1" outfile="$2"
+  assert_fixture_dir "$outfile"
   set +e
   env -u INNGEST_POSTGRES_URI bash "$RUNNER" --guard "$dir" >"$outfile" 2>&1
   RET_RC=$?
@@ -547,6 +550,7 @@ PY
 
 write_stub() {
   local path="$1"
+  assert_fixture_dir "$path"
   cat >"$path" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
