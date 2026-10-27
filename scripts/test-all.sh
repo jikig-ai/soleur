@@ -314,7 +314,13 @@ while [[ "${1:-}" == --* ]]; do
       _AFF_SCOPE_REQ=1
       ;;
     --jobs=*)
+      # An explicit empty operand is a bad invocation, not "unset" — reject it
+      # like every other --flag= form instead of silently falling to the env.
       _JOBS_REQ="${1#--jobs=}"
+      if [[ -z "$_JOBS_REQ" ]]; then
+        echo "ERROR: --jobs requires a value (N or auto), e.g. --jobs=4 or --jobs=auto." >&2
+        exit 2
+      fi
       ;;
     --full)
       _FULL_REQ=1
@@ -2331,13 +2337,33 @@ _pj_render() {  # _pj_render <idx> — print one suite's block in registration o
 _pj_drain() {
   (( _pj_mode == 1 )) || return 0
   while (( _pj_live_n > 0 )) && (( _pj_sig == 0 )); do _pj_reap || break; done
-  _pj_fill || true
+  (( _pj_sig == 0 )) && _pj_fill || true
   if (( _pj_sig == 1 )); then
-    # Interrupted: children share the process group and already received the
-    # signal; give them a bounded reap window, KILL stragglers, and mark
-    # everything unmeasured UNACCOUNTED — never a guessed class.
+    # Interrupted: TERM live workers explicitly — a signal targeted at the
+    # runner (kill -TERM <runner-pid>) never reaches them the way a
+    # group-directed SIGINT does. Bound the reap to a fixed window and KILL
+    # what survives it: `wait -n` blocks until the NEXT natural completion,
+    # so a reap-only loop cannot bound itself — poll with kill -0 instead.
+    # Everything still unmeasured after the window is UNACCOUNTED, never a
+    # guessed class.
     local j d=0
-    while (( _pj_live_n > 0 && d < 30 )); do _pj_reap || { sleep 0.1; d=$(( d + 1 )); }; done
+    for (( j = 0; j < _pj_next; j++ )); do
+      [[ "${_pj_state[j]:-}" == "live" ]] && kill -TERM "${_pj_pid[j]}" 2>/dev/null || true
+    done
+    while (( _pj_live_n > 0 && d < 50 )); do
+      sleep 0.1; d=$(( d + 1 ))
+      for (( j = 0; j < _pj_next; j++ )); do
+        if [[ "${_pj_state[j]:-}" == "live" ]] && ! kill -0 "${_pj_pid[j]}" 2>/dev/null; then
+          wait "${_pj_pid[j]}" 2>/dev/null
+          _pj_rc[j]=$?
+          _pj_end[j]="${EPOCHREALTIME:-}"
+          _pj_tmpdelta[j]=unattributed
+          _pj_state[j]=done
+          _pj_live_n=$(( _pj_live_n - 1 ))
+          printf '[run] %s done (rc=%s)\n' "${_pj_label[j]}" "${_pj_rc[j]}" >&2
+        fi
+      done
+    done
     for (( j = 0; j < _pj_next; j++ )); do
       if [[ "${_pj_state[j]:-}" == "live" ]]; then
         kill -KILL "${_pj_pid[j]}" 2>/dev/null || true
@@ -2353,7 +2379,9 @@ _pj_drain() {
   fi
   local i
   for (( i = 0; i < _pj_next; i++ )); do
-    if [[ "${_pj_state[i]:-}" == "queued" ]]; then
+    if [[ "${_pj_state[i]:-}" == "queued" || "${_pj_state[i]:-}" == "live" ]]; then
+      # A suite still live at render (reap-failure path) is UNACCOUNTED — its
+      # coverage is unresolved, not a guessed FAIL.
       _pj_state[i]=unaccounted
       _pj_unaccounted=$(( _pj_unaccounted + 1 ))
     fi
@@ -2372,6 +2400,10 @@ _pj_drain() {
     printf 'ERROR: parallel accounting mismatch — submitted=%s rendered=%s.\n' "$_pj_submitted" "$_pj_rendered" >&2
     _pj_unaccounted=$(( _pj_unaccounted + 1 ))
   fi
+  # Disarm on the way out: a signal landing after the drain (repo-write-boundary
+  # sample, summary block) must kill the runner the way it does in serial mode —
+  # leaving `_pj_sig=1` armed would swallow it and still print the green marker.
+  trap - INT TERM
   (( _pj_sig == 1 )) && exit 1
   return 0
 }
@@ -4910,6 +4942,11 @@ _wd_descendants() {  # _wd_descendants <exclude-pid> <root-pid...>
 # _soleur_scratch_cleanup in the trap chain — that cleanup deletes the
 # scratch root the source file lives in.
 _run_log_retain() {
+  # #8231: parallel-mode captures for suites that never rendered, plus the
+  # mktemp capture dir when the session root was unavailable. Runs BEFORE the
+  # serial-mode early return — _suite_log_in_flight is only set on the serial
+  # exec path, so under _pj_mode this branch would never reach the call.
+  declare -F _pj_retain >/dev/null 2>&1 && _pj_retain || true
   local src="${_suite_log_in_flight:-}"
   [[ -n "$src" && -f "$src" ]] || return 0
   if mkdir -p "$_durable_log_dir" 2>/dev/null; then
@@ -4918,9 +4955,6 @@ _run_log_retain() {
       printf '[suite-log] mid-termination retention: %s\n' "$dst" >&2 || true
     fi
   fi
-  # #8231: parallel-mode captures for suites that never rendered, plus the
-  # mktemp capture dir when the session root was unavailable.
-  declare -F _pj_retain >/dev/null 2>&1 && _pj_retain || true
   return 0
 }
 # #7697: test-all never calls release_lock — the fd dies with the process —
@@ -7478,7 +7512,7 @@ _repo_boundary_reported=1
 # from the numerator: with skips in the denominator but not in `failed`, the numerator would
 # report a gated suite as PASSED — a green that is not evidence, produced by the very change
 # that added the gate.
-if (( killed > 0 || skipped > 0 || _ceiling_declined > 0 || _affected_declined > 0 || _pj_unaccounted > 0 || ${_repo_observations:-0} > 0 || ${_repo_unmeasured_dims:-0} > 0 )); then
+if (( killed > 0 || skipped > 0 || _ceiling_declined > 0 || _affected_declined > 0 || ${_pj_unaccounted:-0} > 0 || ${_repo_observations:-0} > 0 || ${_repo_unmeasured_dims:-0} > 0 )); then
   # `_repo_observations` is APPENDED, never interleaved: every existing field keeps its position
   # so anchored readers of this line stay valid. Shown only when non-zero — a field that is 0 on
   # essentially every run carries no information, whereas `skipped` is routinely non-zero.
@@ -7504,10 +7538,10 @@ if (( killed > 0 || skipped > 0 || _ceiling_declined > 0 || _affected_declined >
   fi
   # #8231: appended, never interleaved — same rule as _repo_obs_field.
   _unacct_field=""
-  if (( _pj_unaccounted > 0 )); then
+  if (( ${_pj_unaccounted:-0} > 0 )); then
     _unacct_field=", ${_pj_unaccounted} unaccounted (dispatched, never measured — coverage unresolved)"
   fi
-  echo "=== $suites suites: $((suites - failed - killed - skipped - _ceiling_declined)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff)${_ceiling_field}${_aff_field}${_unacct_field}${_repo_obs_field} ==="
+  echo "=== $suites suites: $((suites - failed - killed - skipped - _ceiling_declined - ${_pj_unaccounted:-0})) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff)${_ceiling_field}${_aff_field}${_unacct_field}${_repo_obs_field} ==="
 fi
 # THE LEVER, PRINTED ONCE, ONLY WHEN IT CAN ACTUALLY HELP. SOLEUR_TEST_FORCE_ALL appeared exactly
 # once in this runner -- inside _diff_touches's early return -- and was printed nowhere, while the
@@ -7555,7 +7589,7 @@ if (( ${_TG_AFFECTED_ALIAS:-0} == 1 )); then
     echo "      above degraded to the full battery; the banner names the reason."
   fi
 fi
-echo "=== $((suites - failed - killed - skipped - _ceiling_declined))/$suites suites passed ==="
+echo "=== $((suites - failed - killed - skipped - _ceiling_declined - ${_pj_unaccounted:-0}))/$suites suites passed ==="
 
 # Restatement of the PREAMBLE notice (#6730/#7014, re-pointed by #7103). Since the infra
 # runner is now a REGISTERED nested suite, the thing worth restating inverted: it is no
