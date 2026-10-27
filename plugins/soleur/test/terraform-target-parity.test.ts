@@ -1799,9 +1799,9 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
 //
 // The fix is NOT to add these bases to the per-PR `-target=` allow-list:
 // `hcloud_server.web` carries `for_each = var.web_hosts` (server.tf): a
-// `server_type` or other non-ignored delta on it in the UNATTENDED per-PR path
-// forces a reboot of the running prod host, and targeting it transitively
-// creates the placement group / a second host. (The placement_group_id attach
+// reboot-class non-ignored delta (`server_type`) on it in the UNATTENDED per-PR
+// path forces a reboot of the running prod host, and targeting it would
+// transitively have created the placement group / a second host. (The placement_group_id attach
 // itself is suppressed while the attribute sits in lifecycle.ignore_changes —
 // the deferral this file's later describe pins.) They are consumed by the operator's ADR-068 Phase-3
 // MAINTENANCE-WINDOW apply, after which no pending moves remain and the targeted
