@@ -819,12 +819,9 @@ runcmd:
     # Fresh-host post-container egress-enforcement probe (#5933; details in the script
     # header). Fail-closed: a non-enforcing host poweroffs rather than serve an open
     # exfil path. The probe emits an SSH-free Sentry event before exiting non-zero.
-    # #9639 F7: `if ! probe` would destroy the real exit code (inside a negated-if branch
-    # $? reads 0), so the block is restructured to capture it: rc=<n> lands in the stage
-    # detail file, discriminating a REFUSED probe (78 — deliberately silent, no Sentry
-    # event of its own) from a FAILED one (1). #6396: poweroff -f is signal death, so
-    # the EXIT trap does NOT run — emit explicitly BEFORE it (the hostscripts_incomplete
-    # precedent above).
+    # #9639 F7: `if ! probe` destroys the real exit code, so capture it: rc=<n> lands in
+    # the stage detail file (78=REFUSED/silent vs 1=FAILED). #6396: poweroff -f is signal
+    # death — emit BEFORE it, the EXIT trap never runs.
     if /usr/local/bin/cron-egress-enforce-probe.sh; then
       :
     else

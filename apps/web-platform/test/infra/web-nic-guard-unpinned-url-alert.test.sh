@@ -58,7 +58,7 @@ no() { fail=$((fail + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
 # override yields EMPTY and would root every read at /.
 assert_fixture_dir() {
   case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY; refusing\n' >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
     */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
     /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
     /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
@@ -113,7 +113,7 @@ fi
 # The refusal withholds the beat: the unpinned arm must sit inside a SHIP_REFUSED=true branch, or
 # a page would mean "alert on a healthy POST". Read the arm ordering: SHIP_REFUSED=true must be
 # assigned in the arm that echoes the needle.
-if grep -nB6 'unpinned_url' "$EM" | grep -qE 'SHIP_REFUSED=true'; then
+if grep -qE 'SHIP_REFUSED=true' < <(grep -nB6 'unpinned_url' "$EM"); then
   ok "the unpinned_url arm withholds the beat (SHIP_REFUSED=true sits in the same arm)"
 else
   no "the unpinned_url arm no longer sets SHIP_REFUSED — the alert would page on a beat the guard still sends"
