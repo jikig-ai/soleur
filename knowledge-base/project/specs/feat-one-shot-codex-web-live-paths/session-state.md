@@ -3025,8 +3025,10 @@
   define privilege parity surfaces and role set; the local plan now specifies
   the existing RLS-fuzz `API_ROLES`/`TABLE_VERBS`, effective table and column
   privilege checks including `PUBLIC`/inherited grants, current-catalog scope,
-  and separate RPC execution coverage. This clarification remains unpushed
-  pending a focused recheck at the next pushed plan head.
+  and separate RPC execution coverage. Pushed this clarification at
+  `56c62dd6783f6878baf65a6b88229249feba2aaf`; the focused exact-head recheck
+  found no remaining plan registry/grant criterion gap. The review was
+  plan-only and did not verify live privileges.
 - The ordinary commit hook misidentified this feature worktree as main/master
   twice while recording the preview; `git -C <verified worktree> commit`
   succeeded and kept the commit on the feature branch. No wrong-branch commit
