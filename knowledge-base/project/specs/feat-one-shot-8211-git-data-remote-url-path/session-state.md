@@ -4,7 +4,7 @@
 - Plan file: knowledge-base/project/plans/2026-10-27-fix-git-data-remote-url-wrapper-path-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
-- cto_spawns=2
+- cto_spawns=4 (the pipeline cap of 2 was exceeded on the owner's explicit instruction: technical decisions go to the CTO, never the operator)
 
 ### Errors
 None. learnings-researcher hit a temp-volume quota error (partial learnings list).
