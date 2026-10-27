@@ -42,3 +42,12 @@
 - Earlier session work (outside this PR): AC7 soak #10390 PASSED manually + directive retired (epic stays open); machinery issue #11333 filed; #11103 found already CLOSED.
 - CLAUDE_PLUGIN_ROOT=/home/jean/.local/share/devin/cli/plugins/cache/github.com_jikig-ai_soleur_plugins_soleur-5a09ea60/0.0.0-unversioned ; cloud-detect=local
 - Pipeline: one-shot Step 4 (review) → then 5 findings, 5.5 qa, 6 compound, 7 ship → merged PR + DONE
+
+## Review Phase — panel complete + fixes applied
+- All 10 seats reported. Findings: P2 x3 themes (dirFh/dirPath desync [fixed c3f0213767], exported-helper segment validation gap [fixed 868b481c2f], errno-mapping dedup [fixed]); P3 cluster mostly fixed inline; deferred P3s: procfs-less-Linux probe, non-Linux fallback coverage, beforeOpen positional-seam ergonomics, error-prefix family naming.
+- Fix commits pushed: c3f0213767 (design simplify), 868b481c2f (panel fixes). HEAD=868b481c2f. 105/105 vitest + tsc green.
+- PR #11334 body now carries Summary+Changelog+10x `Closes #N` + test plan.
+- NEXT: ADR-267 fix-round review over `git diff 9192af70-panel-era..HEAD` — since the panel reviewed pre-868b481c2f (post-c3f0213767? seats read diff at ~e42026a5..9d06a35e era; fix range = commits after panel spawn: c3f0213767 + 868b481c2f, i.e. `git diff 9d06a35e4c..HEAD` covers design-simplify+panel-fixes? Actually c3f0213767 was AFTER design pass but BEFORE panel — panel reviewed the simplified code. So fix range = 868b481c2f only: `git diff c3f0213767^..HEAD` i.e. `git diff c3f0213767..HEAD`... verify: panel spawned after c3f0213767 push. Fix commits = 868b481c2f. Range: `git diff c3f0213767..868b481c2f`.
+- Fix-round seats (reporting ∪ path-mapped ∪ security-sentinel guard-shape): security-sentinel, code-quality-analyst, data-integrity-guardian, pattern-recognition-specialist, test-design-reviewer. Then 1 verification pass.
+- BG: affected gate still queued /tmp/testall-affected-10368.log.
+- Remaining pipeline: fix-round → resolve → 5.5 qa → 6 compound → 7 ship (awaits affected gate + CI) → 8 DONE.
