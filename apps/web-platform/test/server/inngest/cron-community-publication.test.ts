@@ -12,7 +12,7 @@
 // very same checks against stub parsers and assert the checks can fail.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile, lstat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile, lstat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -48,6 +48,8 @@ import {
   upsertDigestIssue,
   withDigestNotice,
   writeDigestFileContained,
+  openContainedDir,
+  createContainedFile,
   type CommunityDraft,
   type CommunityOctokit,
 } from "@/server/inngest/functions/_cron-community-publication";
@@ -1094,6 +1096,67 @@ describe("writeDigestFileContained", () => {
   it("refuses absolute, parent-traversing and empty relative paths", async () => {
     for (const bad of ["", "/etc/passwd", "../escape.md", "a/../../escape.md", "a//b.md", "./a.md"]) {
       await expect(writeDigestFileContained(root, bad, "x"), bad).rejects.toThrow(/clean relative path/);
+    }
+  });
+
+  it("refuses a spawnCwd that is itself a symlink (and writes nothing outside)", async () => {
+    const real = await mkdtemp(join(tmpdir(), "community-pub-real-"));
+    const link = join(tmpdir(), `community-pub-link-${process.pid}-${Date.now()}`);
+    await symlink(real, link);
+    try {
+      await expect(writeDigestFileContained(link, REL, "x")).rejects.toThrow(/plain directory/);
+      expect(await readdir(real)).toEqual([]);
+    } finally {
+      await rm(link, { force: true });
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  // Linux-only: the dentry pin lives on /proc/self/fd. Renaming the real
+  // ancestor out from under an already-open dirfd, then planting a symlink
+  // decoy at its old name, exercises inside the lstat→write race window by
+  // construction — a path-resolved write would land in the decoy.
+  it.skipIf(process.platform !== "linux")(
+    "writes the leaf through the pinned dirfd even when the ancestor is renamed and a symlink decoy occupies its name",
+    async () => {
+      const parent = join(root, "knowledge-base/support/community");
+      await mkdir(parent, { recursive: true });
+      const dirFh = await openContainedDir(root, ["knowledge-base", "support", "community"]);
+      const leaf = "2026-10-06-digest.md";
+      try {
+        const renamed = join(root, "knowledge-base/support/community-renamed");
+        await rename(parent, renamed);
+        const decoy = join(outside, "decoy");
+        await mkdir(decoy);
+        await symlink(decoy, parent);
+        const fh = await createContainedFile(dirFh, parent, leaf);
+        try {
+          await fh.writeFile("pinned\n");
+        } finally {
+          await fh.close();
+        }
+        expect(await readFile(join(renamed, leaf), "utf8")).toBe("pinned\n");
+        expect(await readdir(decoy)).toEqual([]);
+      } finally {
+        await dirFh.close().catch(() => {});
+      }
+    },
+  );
+
+  it("fails closed when the leaf is re-created between unlink and open (injected seam)", async () => {
+    const parent = join(root, "knowledge-base/support/community");
+    await mkdir(parent, { recursive: true });
+    const dirFh = await openContainedDir(root, ["knowledge-base", "support", "community"]);
+    const leaf = "2026-10-06-digest.md";
+    try {
+      await expect(
+        createContainedFile(dirFh, parent, leaf, async () => {
+          await writeFile(join(parent, leaf), "racer");
+        }),
+      ).rejects.toThrow();
+      expect(await readFile(join(parent, leaf), "utf8")).toBe("racer");
+    } finally {
+      await dirFh.close().catch(() => {});
     }
   });
 });
