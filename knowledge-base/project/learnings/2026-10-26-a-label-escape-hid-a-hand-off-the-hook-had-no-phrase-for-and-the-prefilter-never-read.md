@@ -23,10 +23,9 @@ The ralph-loop inertness (only the first Stop of a chain is judged) was real but
 2. **Measure the exemption before removing it.** Neutralising the label word on 11,421 local closings made the old hook block 3, so the label hid almost nothing the cues could see; the fix was a cue and a pre-filter, not a wider de-exemption. Measured cue candidates went through the real vetoes: `your ruling` fired once in 10,695 label sentences, bare `your call` 19 times with 12 operator-class.
 3. **The cue-growth tripwire tripped, so the remedy changed.** Three founder-reported misses in 30 days: the control moves from adding phrases to the source of the decision (the skill pre-check) and the loop reminder. The next miss in a label sentence adds no cue.
 4. **A channel is a contract.** `systemMessage` is shown to the user; the model reads `reason`. A reminder for the model in `systemMessage` is a reminder nobody acts on (the first ruling named the wrong field and a follow-up spawn corrected it).
-5. **Pin both ends of an anchored mutation.** Every new mutation row asserts its anchor occurs exactly once before the first-occurrence applier runs, and a self-check mutant is killed by the stderr cause disappearing, because deleting the check does not always flip the verdict.
+5. **Pin both ends of an anchored mutation.** Every new mutation row of the hook suite asserts its anchor occurs exactly once before the first-occurrence applier runs, and a self-check mutant is killed by the stderr cause disappearing, because deleting the check does not always flip the verdict.
 
 ## Session Errors
 
 - The first prototype blocked the incident for the wrong reason (the paragraph's "your call" kept the pre-filter open); caught by testing the label sentence alone.
 - A line-number-keyed exemption in the boundary-prefix census followed a moved suite line; re-pinned in the same PR.
-- The worktree directory vanished between the plan and work phases (not this session's doing); re-attached with `git worktree add` to the pushed branch head, nothing lost.

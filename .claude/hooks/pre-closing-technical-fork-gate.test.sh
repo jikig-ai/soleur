@@ -354,6 +354,28 @@ row "LP10b the label on a quoted line" pass "$STATUS
 row "LP11 an Operator-only sentence, then a label sentence that itself ends in a question mark" pass "Operator-only (money): the second seat is a spend call.
 Blocked: it needs your ruling on whether the failure counts, right?"
 row "LP12 the label sentence split by a full stop: unjudged (documents the residual)" pass "Blocked: CI read error. It needs your ruling on whether that counts."
+row "LP15 an abbreviation full stop inside the label sentence: unjudged (documents the residual)" pass "Blocked: CI (e.g. the install step) needs your ruling on whether the failure counts."
+row "LP2c the inline Operator-only form under a Paused: label" pass "Paused: Operator-only (scope): $LBL_BODY."
+# Every member of the phrase alternation blocks ALONE, and every negation member releases ALONE (review of 2026-10-26: six narrowing mutants survived).
+TOTAL=$((TOTAL+1))
+lb9_fail=""
+for lb9_m in "the failure needed your ruling." "it awaits your ruling." "it is awaiting your ruling." "we are waiting on your ruling." "we are waiting for your ruling." "it requires your ruling." "it is pending your ruling." "your ruling about whether it counts is open." "your ruling as to which design is open." "your ruling on if it counts is open."; do
+  spawn "$HOOK" "$(closing_json "Blocked: $lb9_m")"; [[ "$(verdict_from_out)" == "block" ]] || lb9_fail="$lb9_fail [$lb9_m]"
+done
+if [[ -z "$lb9_fail" ]]; then echo "  PASS: LB9 every member of the phrase alternation blocks alone"; PASS=$((PASS+1)); else printf '  FAIL: LB9 passed:%s\n' "$lb9_fail" >&2; FAIL=$((FAIL+1)); fi
+TOTAL=$((TOTAL+1))
+lb10_fail=""
+for lb10_m in "Blocked: needs **your ruling** on the design." "Blocked: needs _your ruling_ on the design." "Blocked: $LBL_BODY.   "; do
+  spawn "$HOOK" "$(closing_json "$STATUS $lb10_m")"; [[ "$(verdict_from_out)" == "block" ]] || lb10_fail="$lb10_fail [$lb10_m]"
+done
+if [[ -z "$lb10_fail" ]]; then echo "  PASS: LB10 emphasis inside the cue and trailing spaces do not defeat the label arm"; PASS=$((PASS+1)); else printf '  FAIL: LB10 passed:%s\n' "$lb10_fail" >&2; FAIL=$((FAIL+1)); fi
+TOTAL=$((TOTAL+1))
+lp14_fail=""
+for lp14_m in "it no longer awaits your ruling." "this never needed your ruling." "it is not awaiting your ruling, only CI." "it proceeds without awaiting your ruling." "nothing is awaiting your ruling." "nobody is waiting on your ruling." "no one is waiting for your ruling." "none pending your ruling." "it was previously awaiting your ruling, now ruled." "it is already pending your ruling no more." "this is not yet awaiting your ruling." "this isn"$'\xe2\x80\x99'"t awaiting your ruling."; do
+  spawn "$HOOK" "$(closing_json "Blocked: $lp14_m")"; [[ "$(verdict_from_out)" == "pass" ]] || lp14_fail="$lp14_fail [$lp14_m]"
+done
+if [[ -z "$lp14_fail" ]]; then echo "  PASS: LP14 every negation member and the curly apostrophe release a status line"; PASS=$((PASS+1)); else printf '  FAIL: LP14 blocked:%s\n' "$lp14_fail" >&2; FAIL=$((FAIL+1)); fi
+row "LP16 an inflected authorization verb vetoes the label arm (deleting)" pass "Blocked: needs your ruling on whether deleting the old volume is fine."
 # The 12-unit cap by VERDICT: B1 eleven units from the end is judged; B1 thirteen from the end is not.
 TINY11="$(printf 'a? %.0s' $(seq 1 11))"; TINY12="$(printf 'a? %.0s' $(seq 1 12))"
 row "L12a B1 followed by 11 tiny units is the 12th from the end: judged" block "$B1 $TINY11"
@@ -798,6 +820,7 @@ selfcheck_row() { # <label> <self-check line> <sed expression putting the lib in
 }
 selfcheck_row "G1-30 delete the self-check line that requires both label regex variables" '[[ -n "${TFC_LABEL_PHRASE_ERE-}" && -n "${TFC_LABEL_NEG_ERE-}" ]] || return 1' "s/^TFC_LABEL_PHRASE_ERE=.*/TFC_LABEL_PHRASE_ERE=''/"
 selfcheck_row "G1-37 delete the self-check line that requires the label function" 'declare -f tfc_is_label_handoff >/dev/null 2>&1 || return 1' 's/^tfc_is_label_handoff()/tfc_is_label_handoff_gone()/'
+mut_row1 "G1-38 delete the label inflected-authorization veto" lib "  grep -qE '\\b(deleting|deleted|deletion|cancell?ed|cancell?ing|deploying|deployed|deployment|merging|merged|revoking|revoked|rotating|rotated|wiping|wiped|shipped|shipping|released|releasing|pushed|pushing|reverted|reverting|migrating|migrated|restarted|restarting|applied|applying)\\b' <<<\"\$sentence\" && return 1" ':' pass "Blocked: needs your ruling on whether deleting the old volume is fine."
 
 # G2-1: a second RULING_*_RE definition in the closing hook must make the census report two sites.
 TOTAL=$((TOTAL+1))
@@ -894,13 +917,13 @@ if [[ -z "$d_missing" && "$RAN" -eq "$SPAWNS" && "$SPAWNS" -ge 70 ]]; then
   printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "$(wc -w <<<"$D_NAMES" | tr -d ' ')" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
 else printf '  FAIL: V5 missing=[%s] SUT markers=%s harness spawns=%s (want equal and >= 70)\n' "$d_missing" "$RAN" "$SPAWNS" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
-if [[ "$KILLED" -ge 51 ]]; then printf '  PASS: V6 %s mutants killed (floor 51)\n' "$KILLED"; PASS=$((PASS+1))
-else printf '  FAIL: V6 only %s mutants killed (floor 51)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$KILLED" -ge 52 ]]; then printf '  PASS: V6 %s mutants killed (floor 52)\n' "$KILLED"; PASS=$((PASS+1))
+else printf '  FAIL: V6 only %s mutants killed (floor 52)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 225 ]]; then echo "  PASS: V1 full inventory ran (225 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 225 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 232 ]]; then echo "  PASS: V1 full inventory ran (232 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 232 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -909,7 +932,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=225
+MIN_CASES=232
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

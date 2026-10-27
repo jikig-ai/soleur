@@ -21,7 +21,7 @@
 # sees two reasons, which is benign: the next Stop carries true for both). Every later Stop in the chain,
 # including the one-shot Step 8 closing, carries true and exits at arm 4, so mid-pipeline closing messages
 # are not judged. Two controls stand where this hook cannot (ADR-084 addendum, 2026-10-26): the pre-check before a Blocked:/Paused:
-# label in section 8.1 of technical-ruling-delegation.md, and the constant reminder the ralph stop hook appends to its model-visible
+# label in section 8.1b of technical-ruling-delegation.md, and the constant reminder the ralph stop hook appends to its model-visible
 # block text on every iteration. Neither is a barrier; both are signage at the carrier boundary.
 #
 # FAIL OPEN, AND WHY (ADR-157 "What this supersedes": absorbing a failure is correct for a Stop hook; a
@@ -32,8 +32,8 @@
 # matches every line), an unterminated fence. It never sources lib/hook-input.sh (PreToolUse-shaped).
 #
 # ESCAPES (each needs non-empty content). `<stop>OPERATOR-GATE: ...</stop>` or `<stop>BLOCKED: ...</stop>`
-# anywhere in the window pass the whole closing. A final-sentence plain `Paused:` / `Blocked:` label (shared with
-# unkept-promise-hook.sh, so one appended label disarms both gates) passes the whole closing too, EXCEPT that the labelled sentence
+# anywhere in the window pass the whole closing. A final-sentence plain `Paused:` / `Blocked:` label (the same label form
+# unkept-promise-hook.sh accepts, and that hook still exempts it) passes the whole closing too, EXCEPT that the labelled sentence
 # itself is judged by tfc_is_label_handoff (2026-10-26: "Blocked: ... needs your ruling on whether this failure counts" is a technical
 # hand-off, not a status): it blocks once unless an `Operator-only (category):` sentence of the same paragraph, or the label body
 # itself, covers it. The paragraph above the label is NOT judged, and only a final sentence that BEGINS with the label is.
@@ -98,7 +98,7 @@ PROSE="$(printf '%s\n' "$TAIL" | awk '
 # but the cue cannot see does not defeat the cue. Stripping can only make the hook block MORE on a real cue.
 NORM="$(printf '%s\n' "$PROSE" | tr -d '\r' \
   | sed -e 's/\xc2\xa0/ /g' -e 's/\xe2\x80[\x80-\x8a]/ /g' -e 's/\xe2\x80\xaf/ /g' -e 's/\xe2\x81\x9f/ /g' -e 's/\xe3\x80\x80/ /g' \
-        -e 's/\xe2\x80[\x8b-\x8f]//g' -e 's/\xe2\x81\xa0//g' -e 's/\xef\xbb\xbf//g' -e 's/\xc2\xad//g' -e 's/\xe1\xa0\x8e//g' \
+        -e 's/\xe2\x80[\x8b-\x8f]//g' -e 's/\xe2\x81\xa0//g' -e 's/\xe2\x80\x99/\x27/g' -e 's/\xef\xbb\xbf//g' -e 's/\xc2\xad//g' -e 's/\xe1\xa0\x8e//g' \
   | tr '\t' ' ' | tr '[:upper:]' '[:lower:]' | tr -s ' ')" || { _note "SKIPPED — normalise failed"; exit 0; }
 CUT=0
 (( ${#NORM} > 1500 )) && CUT=1
@@ -108,7 +108,7 @@ WIN="$(printf '%s' "$NORM" | tail -c 1500)"
 # declarative hand-off (CL4) or a label sentence handing over a ruling can hit, and both candidate expressions are the lib's own, so they cannot drift.
 # The sentence split mirrors the awk's, so a `^`-anchored alternative reads a sentence start in both. Captured into a variable and tested, never piped into a quiet grep.
 if [[ "$WIN" != *"?"* ]]; then
-  CAND_HIT="$(sed -E 's/([.!]) /\1\n/g' <<<"$WIN" | grep -E "$TFC_CL4_CANDIDATE_ERE|$TFC_LABEL_PHRASE_ERE" || true)"
+  CAND_HIT="$(sed -E 's/([.!]) /\1\n/g' <<<"$WIN"$'\n'"${WIN//[*_]/}" | grep -E "$TFC_CL4_CANDIDATE_ERE|$TFC_LABEL_PHRASE_ERE" || true)"
   [[ -n "$CAND_HIT" ]] || exit 0
 fi
 
@@ -141,6 +141,7 @@ UNITS="$(printf '%s\n' "$WIN" | awk -v cut="$CUT" -v cand="$TFC_CL4_CANDIDATE_ER
     }
     if (line ~ /^ *$/) { esc = 0; next }
     last_line = line
+    sub(/ +$/, "", last_line)
     rest = line
     while (rest != "") {
       q = 0
@@ -198,39 +199,39 @@ fi
 
 # --- judge the last 12 units, each alone (skipped when the label arm already has its hit) ------------
 if [[ -z "$HIT_UNIT" ]]; then
-declare -a JUDGE=()
-while IFS= read -r row; do
-  [[ "$row" == "U0${TAB}"* ]] && JUDGE+=("${row#"U0${TAB}"}")
-done <<<"$UNITS"
-COUNT=${#JUDGE[@]}
-START=0
-if (( COUNT > 12 )); then START=$((COUNT - 12)); _note "NOTE — $COUNT question units, judging the last 12"; fi
+  declare -a JUDGE=()
+  while IFS= read -r row; do
+    [[ "$row" == "U0${TAB}"* ]] && JUDGE+=("${row#"U0${TAB}"}")
+  done <<<"$UNITS"
+  COUNT=${#JUDGE[@]}
+  START=0
+  if (( COUNT > 12 )); then START=$((COUNT - 12)); _note "NOTE — $COUNT question units, judging the last 12"; fi
 
-# Declarative sentences (rows `D0`) are judged ONLY by tfc_is_handoff (CL4): they never reach the `?` cues and never spend the
-# 12-unit `?` budget above, so a run of courtesy closers cannot push a real fork out of the window. They have their own cap.
-declare -a JUDGE_D=()
-while IFS= read -r row; do
-  [[ "$row" == "D0${TAB}"* ]] && JUDGE_D+=("${row#"D0${TAB}"}")
-done <<<"$UNITS"
-COUNT_D=${#JUDGE_D[@]}
-START_D=0
-if (( COUNT_D > 12 )); then START_D=$((COUNT_D - 12)); _note "NOTE — $COUNT_D declarative hand-off candidates, judging the last 12"; fi
+  # Declarative sentences (rows `D0`) are judged ONLY by tfc_is_handoff (CL4): they never reach the `?` cues and never spend the
+  # 12-unit `?` budget above, so a run of courtesy closers cannot push a real fork out of the window. They have their own cap.
+  declare -a JUDGE_D=()
+  while IFS= read -r row; do
+    [[ "$row" == "D0${TAB}"* ]] && JUDGE_D+=("${row#"D0${TAB}"}")
+  done <<<"$UNITS"
+  COUNT_D=${#JUDGE_D[@]}
+  START_D=0
+  if (( COUNT_D > 12 )); then START_D=$((COUNT_D - 12)); _note "NOTE — $COUNT_D declarative hand-off candidates, judging the last 12"; fi
 
-for (( k = START_D; k < COUNT_D; k++ )); do
-  u="${JUDGE_D[$k]}"
-  if tfc_is_handoff "$u"; then HIT_UNIT="$u"; HIT_CUE="$TFC_HIT"; break; fi
-done
-for (( k = START; k < COUNT; k++ )); do
-  [[ -z "$HIT_UNIT" ]] || break
-  u="${JUDGE[$k]}"
-  # No per-unit size cap (Ruled by CTO agent, 2026-10-12 review): the 1500-byte window already bounds a unit, the
-  # regexes are linear (bounded gaps), and a cap would turn any long run-on question into an unjudged bypass.
-  # The suite pins a worst-case 1500-byte unit under a time bound instead.
-  tfc_is_fork "$u" shared+closing
-  rc=$?
-  if (( rc == 0 )); then HIT_UNIT="$u"; HIT_CUE="$TFC_HIT"; break; fi
-  (( rc == 2 )) && { _note "SKIPPED — tfc_is_fork rejected its arguments"; exit 0; }
-done
+  for (( k = START_D; k < COUNT_D; k++ )); do
+    u="${JUDGE_D[$k]}"
+    if tfc_is_handoff "$u"; then HIT_UNIT="$u"; HIT_CUE="$TFC_HIT"; break; fi
+  done
+  for (( k = START; k < COUNT; k++ )); do
+    [[ -z "$HIT_UNIT" ]] || break
+    u="${JUDGE[$k]}"
+    # No per-unit size cap (Ruled by CTO agent, 2026-10-12 review): the 1500-byte window already bounds a unit, the
+    # regexes are linear (bounded gaps), and a cap would turn any long run-on question into an unjudged bypass.
+    # The suite pins a worst-case 1500-byte unit under a time bound instead.
+    tfc_is_fork "$u" shared+closing
+    rc=$?
+    if (( rc == 0 )); then HIT_UNIT="$u"; HIT_CUE="$TFC_HIT"; break; fi
+    (( rc == 2 )) && { _note "SKIPPED — tfc_is_fork rejected its arguments"; exit 0; }
+  done
 fi
 [[ -n "$HIT_UNIT" ]] || exit 0
 

@@ -1081,10 +1081,10 @@ echo ""
 # technical decision to the CTO before a turn ends with Blocked: or Paused:. The oracle is THIS literal, not the hook's own extraction;
 # the reminder goes in `reason` (the model reads it) after the unchanged stored prompt and never in `systemMessage` (user-visible only).
 RB3_PROMPT=$'Line one\n\nLine two ends here'
-RB3_REMINDER='Before ending a turn with Blocked: or Paused:, class every decision the reason leaves to the operator. Send the technical ones to soleur:engineering:cto first (legal ones to soleur:legal:clo) and name only the operator-only remainder. Money, scope, priority, schedule, irreversible, production-mutating, legal-risk and brand decisions stay with the operator, and a CTO ruling never authorizes such an act. See section 8.1 of skills/brainstorm-techniques/references/technical-ruling-delegation.md in the Soleur plugin.'
+RB3_REMINDER='Before ending a turn with Blocked: or Paused:, class every decision the reason leaves to the operator. Send the technical ones to soleur:engineering:cto first (legal ones to soleur:legal:clo) and name only the operator-only remainder. See section 8.1b of skills/brainstorm-techniques/references/technical-ruling-delegation.md in the Soleur plugin.'
 RB3_PROMPT_AWK='/^---$/{i++; next} i>=2'
 
-rb3_state() { # <dir> <iteration> <promise>: a state file whose stored prompt is RB3_PROMPT (no blank line, no --- line inside it)
+rb3_state() { # <dir> <iteration> <promise>: a state file whose stored prompt is RB3_PROMPT (no --- line inside it, no leading blank line)
   local f="$1/.claude/ralph-loop.${TEST_PID}.local.md"
   create_state_file "$1" "$2" 0 "$3" 0 3
   assert_fixture_dir "$f"
@@ -1116,13 +1116,13 @@ rb3_check() { # <hook path> <iteration> <promise>: sets RB3_V = ok | nonblock | 
 RB3_OUT=""; RB3_V=""
 
 echo "Test RL-B3: the ralph block carries the constant reminder in the model-visible reason, after the unchanged prompt"
-for rb3_it in 1 7; do
+for rb3_it in 1 7 40; do
   for rb3_pr in null "\"DONE\""; do
     rb3_check "$HOOK" "$rb3_it" "$rb3_pr"; rb3_v="$RB3_V"
     # RL-B3a: the decision is asserted FIRST, so a hook that emits no block cannot pass by having nothing to compare.
     assert_eq "block" "$(jq -r '.decision // "none"' <<<"${RB3_OUT:-{\}}" 2>/dev/null || echo none)" "RL-B3a iteration $rb3_it promise $rb3_pr: a block is emitted"
     assert_eq "${RB3_PROMPT}"$'\n\n'"${RB3_REMINDER}" "$(jq -r '.reason' <<<"${RB3_OUT:-{\}}" 2>/dev/null || true)" "RL-B3a iteration $rb3_it promise $rb3_pr: reason is the stored prompt, two newlines, the literal reminder"
-    for rb3_n in 'soleur:engineering:cto' 'soleur:legal:clo' 'section 8.1' 'Blocked:' 'Paused:' 'technical-ruling-delegation.md'; do
+    for rb3_n in 'soleur:engineering:cto' 'soleur:legal:clo' 'section 8.1b' 'Blocked:' 'Paused:' 'technical-ruling-delegation.md'; do
       assert_contains "$(jq -r '.reason' <<<"${RB3_OUT:-{\}}" 2>/dev/null || true)" "$rb3_n" "RL-B3a iteration $rb3_it promise $rb3_pr: reason names $rb3_n"
     done
     # RL-B3b: systemMessage is the user-visible banner byte-for-byte and does not carry the reminder; the stored prompt and the counters are untouched.
@@ -1179,5 +1179,5 @@ echo ""
 
 # --- Summary ---
 
-# 184 = the green run after RL-B3 landed (PASS + FAIL + SKIPPED); deleting the RL-B3 block drops the count below it and trips the floor.
-print_results 184
+# 210 = the green run after RL-B3 landed (PASS + FAIL + SKIPPED); deleting the RL-B3 block drops the count below it and trips the floor.
+print_results 210

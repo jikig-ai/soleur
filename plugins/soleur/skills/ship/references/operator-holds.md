@@ -76,7 +76,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh" --plan <plan 
 | 3 | No `Delegation:` line is recorded: legacy prose holds | Evaluate by hand per section 3 |
 | any other status (127 script not found, 124 timed out, 137 killed) | The check did not run | Treat it as 2: the hold STANDS and was not checked. Say so; never read it as a no-op |
 
-Before naming a standing hold (exit 1 or 2), class it per section 8.1b of [technical-ruling-delegation.md](../../brainstorm-techniques/references/technical-ruling-delegation.md): a hold that stands on an evidence judgement (does a transient failure count, relax or keep a gate) is a technical ruling and goes to the CTO first; only an `Operator-reserved:` hold or a human-only condition is named to the operator.
+Before naming a standing hold (exit 1 or 2), class it per section 8.1b of [technical-ruling-delegation.md](../../brainstorm-techniques/references/technical-ruling-delegation.md): a hold that rests on an evidence judgement is a technical ruling and goes to the CTO first; a plain unmet gate (a date, CI, a missing tool) and an `Operator-reserved:` hold are named as they are.
 
 Exit 3 is decided before every other structure and tool check, so a plan written in the earlier prose format keeps the prose
 path whatever else it contains.

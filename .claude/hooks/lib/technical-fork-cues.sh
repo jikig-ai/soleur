@@ -102,17 +102,17 @@ TFC_CL4_AUTH_RE='\b(flip|dispatch|rotate|rotation|wipe|delete|revoke|deploy|rede
 # ones included) and to no cue in the pre-ask group.
 TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accountants?|lawyers?|investors?|customers?|features?|roadmap|milestones?)\b'
 
-# LABEL arm (2026-10-26, Ruled by CTO agent; cue 4 of 6 and the LAST one): the final sentence of a closing that begins `Paused:` or
+# LABEL arm (2026-10-26, Ruled by CTO agent; the last cue the ADR-084 tripwire budget allows): the final sentence of a closing that begins `Paused:` or
 # `Blocked:` used to end the whole check, and a label whose own sentence handed a technical ruling to the operator ("... needs your
 # ruling on whether this transient failure counts") passed it. `tfc_is_label_handoff` judges that ONE sentence (the text after the
 # label colon), apart from the `?` cues and from CL4. One phrase only: `your ruling` after a verb of waiting, or on/about/as to
 # whether|if|which. Measured on 2026-10-26 over 10,695 local label-ending messages: this phrase fired once (the incident) and never
 # wrongly; the wider "your call" fired 19 times, 12 of them operator-class, so it is NOT a cue here. The next miss in a label sentence
 # adds no cue: it opens the other ADR-084 remedy (judging a Decision-for-you list that carries no question mark), never a synonym.
-# NEG is bound to the verb: "this is not awaiting your ruling" is a status line, "no need for your ruling" is not a request.
-# The ledger hash for this cue covers the normalised text AFTER the label colon.
+# NEG is a negator within two words before the verb: "this is not awaiting your ruling" is a status line, "no need for your ruling" is not a request.
+# The ledger hash for this cue covers the normalised text AFTER the label colon with the emphasis markers * and _ removed.
 TFC_LABEL_PHRASE_ERE='\b(needs|needed|awaiting|awaits|requires|pending|waiting (on|for)) your ruling\b|\byour ruling (on|about|as to) (whether|if|which)\b'
-TFC_LABEL_NEG_ERE='(\b(not|no longer|never|without)\b|n'"'"'t) ([a-z]+ ){0,2}(needs?|awaiting|pending|requires?|waiting (on|for)) your ruling|\bno need for your ruling\b'
+TFC_LABEL_NEG_ERE='(\b(not|no longer|never|without|nothing|nobody|no one|none|previously|already)\b|n'"'"'t) ([a-z]+ ){0,2}(needs?|needed|awaiting|awaits?|pending|requires?|waiting (on|for)) your ruling|\bno need for your ruling\b'
 
 # ASK group (2026-10-14, Ruled by CTO agent): the DISPOSITION of items a brief already named. A brief that says "ask the
 # operator" about whether leftover roadmap items run as a new pipeline or are recorded as not fixed is a technical routing
@@ -250,6 +250,7 @@ tfc_is_label_handoff() {
   grep -qE "$TFC_CL4_AUTH_RE" <<<"$sentence" && return 1
   grep -qE "$RULING_PERM_RE" <<<"$sentence" && return 1
   grep -qE "$TFC_CLOSING_PERM_RE" <<<"$sentence" && return 1
+  grep -qE '\b(deleting|deleted|deletion|cancell?ed|cancell?ing|deploying|deployed|deployment|merging|merged|revoking|revoked|rotating|rotated|wiping|wiped|shipped|shipping|released|releasing|pushed|pushing|reverted|reverting|migrating|migrated|restarted|restarting|applied|applying)\b' <<<"$sentence" && return 1
   grep -qE "$TFC_LABEL_NEG_ERE" <<<"$sentence" && return 1
   # shellcheck disable=SC2034  # read by the sourcing hook
   TFC_HIT="label"
