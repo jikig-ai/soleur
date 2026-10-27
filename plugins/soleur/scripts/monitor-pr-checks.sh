@@ -61,6 +61,7 @@
 # the lock directory. A stale lock (dead, zombie or pid-reused holder) never blocks. The repo is --repo,
 # else GH_REPO, else `git remote get-url origin`. To see a holder:
 #   readlink "${XDG_RUNTIME_DIR:-/tmp}/soleur-monitor-locks-$(id -u)/pr-checks+<owner>+<repo>+<pr>.lock"
+# (owner and repo lowercased). On a fork clone where gh resolves a different repo than origin, pass --repo.
 #
 # CI_DRAFT_LIGHT (ADR-276 S3, #9728): a red `test` row is read through ci-head-verdict.sh. pending-full and no-run report it
 # PENDING (`test(ready run <state>)`), stalled and awaiting-approval end the watch (exit 1) with the recovery command, and

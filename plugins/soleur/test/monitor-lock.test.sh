@@ -23,7 +23,7 @@ ok()  { pass_n=$((pass_n+1)); printf '  [ok] %s\n' "$1"; }
 no()  { fail_n=$((fail_n+1)); printf '  [FAIL] %s\n' "$1" >&2; [[ -n "${2:-}" ]] && printf '        %s\n' "$2" >&2; return 0; }
 
 # INSTRUMENT SELF-TEST (ADR-193): drive both helpers once, then roll back.
-_p=$pass_n _f=$fail_n; ok "selftest"; no "selftest" >/dev/null 2>&1
+_p=$pass_n _f=$fail_n; ok "selftest" >/dev/null; no "selftest" >/dev/null 2>&1
 if [[ "$pass_n" -eq $((_p+1)) && "$fail_n" -eq $((_f+1)) ]]; then
   pass_n=$_p; fail_n=$_f; ok "INSTRUMENT: ok() and fail() each move their own counter"
 else
@@ -297,6 +297,32 @@ out="$(env -u SOLEUR_MONITOR_LOCK_DIR XDG_RUNTIME_DIR="$STUB/xdg" bash -c '. "$1
 xd="$STUB/xdg/soleur-monitor-locks-$(id -u)"
 [[ "$out" == "rc=0" && -L "$xd/pr-checks+acme+widgets+7.lock" && -n "$(find "$xd" -maxdepth 0 -perm 700 2>/dev/null)" ]] \
   && ok "U6 the default lock dir is \$XDG_RUNTIME_DIR/soleur-monitor-locks-<uid>, created mode 700" || no "U6 default lock dir" "out=[$out] ls=$(ls -ld "$xd" 2>&1)"
+# with neither variable set the default root is /tmp/soleur-monitor-locks-<uid>
+# This is the one arm that touches the REAL shared /tmp dir, so its PR number is unique per run: concurrent runs of this
+# suite (parallel worktrees) must not collide on one key.
+td="/tmp/soleur-monitor-locks-$(id -u)"; upr=$((900000000 + $$ % 99999999))
+out="$(env -u SOLEUR_MONITOR_LOCK_DIR -u XDG_RUNTIME_DIR bash -c '. "$1"; monitor_lock_acquire acme/widgets "$3"; echo "rc=$? repo=$ML_REPO"; [ -L "$2" ] && echo LINK; monitor_lock_release' _ "$LIB" "$td/$(lockname acme/widgets "$upr")" "$upr" 2>&1)"
+rmdir "$td" 2>/dev/null
+[[ "$out" == $'rc=0 repo=acme/widgets\nLINK' ]] && ok "U6 with XDG_RUNTIME_DIR unset the lock dir falls back to /tmp/soleur-monitor-locks-<uid>" || no "U6 /tmp fallback" "out=[$out]"
+# each of the two group/other write bits refuses on its own
+badm=""
+for m in 770 703; do
+  mkdir "$STUB/m$m" && chmod "$m" "$STUB/m$m"
+  out="$(SOLEUR_MONITOR_LOCK_DIR="$STUB/m$m" bash -c '. "$1"; monitor_lock_acquire acme/widgets 7; echo "$? $ML_STATE"' _ "$LIB" 2>&1)"; [[ "$out" == "2 unavailable" ]] || badm="$badm [$m -> $out]"
+done
+[[ -z "$badm" ]] && ok "U6 a lock dir with only the group-write bit (770), or only the other-write bit (703), is refused" || no "U6 single write bit" "$badm"
+# GH_HOST: gh would poll another host, and the key names github.com only
+out="$(GH_HOST=ghe.example.com lib_call "$(newdir)" 'monitor_lock_acquire acme/widgets 7; echo "$? $ML_STATE"' 2>&1)"
+out2="$(GH_HOST=github.com lib_call "$(newdir)" 'monitor_lock_acquire acme/widgets 7; echo "$? $ML_STATE"' 2>&1)"
+[[ "$out" == "2 unavailable" && "$out2" == "0 held" ]] && ok "U6b GH_HOST on another host fails open (rc 2 unavailable); GH_HOST=github.com keys normally" || no "U6b GH_HOST" "other=[$out] github=[$out2]"
+# a <lock>.reclaim guard left by a dead reclaimer: fresh => the key fails open loudly, old => swept and acquired
+L="$(newdir)"; sleep 0 & dead3=$!; wait "$dead3"
+ln -s "$dead3|Tue_Oct_27_00:00:00_2026|1" "$L/$(lockname acme/widgets 42)"; mkdir "$L/$(lockname acme/widgets 42).reclaim"
+out="$(lib_call "$L" 'monitor_lock_acquire acme/widgets 42; echo "$? $ML_STATE"' 2>&1)"
+[[ "$out" == "2 unavailable" ]] && ok "U6c a fresh stuck reclaim guard makes that key fail open (rc 2 unavailable), never a refusal" || no "U6c fresh stuck guard" "out=[$out]"
+touch -d '10 minutes ago' "$L/$(lockname acme/widgets 42).reclaim" 2>/dev/null || touch -t "$(date -v-10M +%Y%m%d%H%M 2>/dev/null)" "$L/$(lockname acme/widgets 42).reclaim"
+out="$(lib_call "$L" 'monitor_lock_acquire acme/widgets 42; echo "$? $ML_STATE"' 2>&1)"
+[[ "$out" == "0 held" ]] && ok "U6d a reclaim guard older than a minute is swept and the key acquires" || no "U6d old stuck guard" "out=[$out]"
 
 # repo spellings -> one key; credentials never reach a name; garbage fails open
 forms=( 'acme/widgets' 'Acme/Widgets' 'git@github.com:Acme/Widgets.git' 'https://github.com/Acme/Widgets' 'https://github.com/Acme/Widgets.git/'
@@ -348,9 +374,13 @@ else skip "U10b (ps cannot read pid 1 here; not counted)"; fi
 # F10: a live holder that RELEASES inside the grace window is acquired, not refused
 L="$(newdir)"
 ( SOLEUR_MONITOR_LOCK_DIR="$L" bash -c '. "$1"; monitor_lock_acquire acme/widgets 31 || exit 9; sleep 1; monitor_lock_release' _ "$LIB" ) &
-gp=$!; HOLDERS+=("$gp"); wait_link "$L/$(lockname acme/widgets 31)" 50
-out="$(SOLEUR_MONITOR_LOCK_GRACE_S=2 lib_call "$L" 'monitor_lock_acquire acme/widgets 31; echo "rc=$?"' 2>&1)"; wait "$gp" 2>/dev/null
-[[ "$out" == "rc=0" ]] && ok "U11 a holder that releases inside the grace window is acquired (the stop-then-re-arm path)" || no "U11 grace retry" "out=[$out]"
+gp=$!; HOLDERS+=("$gp")
+if wait_link "$L/$(lockname acme/widgets 31)" 50; then
+  # control: with NO grace the same live holder is refused, so the acquire below is only reachable through the retry
+  out0="$(SOLEUR_MONITOR_LOCK_GRACE_S=0 lib_call "$L" 'monitor_lock_acquire acme/widgets 31; echo "rc=$?"' 2>&1)"
+  out="$(SOLEUR_MONITOR_LOCK_GRACE_S=2 lib_call "$L" 'monitor_lock_acquire acme/widgets 31; echo "rc=$?"' 2>&1)"; wait "$gp" 2>/dev/null
+  [[ "$out0" == "rc=1" && "$out" == "rc=0" ]] && ok "U11 a live holder is refused with no grace, and acquired when it releases inside the grace window (stop-then-re-arm)" || no "U11 grace retry" "no-grace=[$out0] grace=[$out]"
+else no "U11 setup: the releasing holder never took the lock"; fi
 
 # several contenders against ONE stale record: exactly one may win (the reclaim must be serialised)
 race_bad=0; race_log="$STUB/race.log"
@@ -487,7 +517,7 @@ for c in chk_refuse chk_keys_pr chk_keys_repo chk_lstart chk_zombie chk_release 
 printf '\n%s passed, %s failed\n' "$pass_n" "$fail_n"
 # FLOOR counts every arm, a skipped one included (each skip() is one arm that could not run on this box), and is the
 # exact arm count: raise it in the same edit that adds an arm. Deleting an assertion therefore trips it.
-FLOOR=69
+FLOOR=74
 _ran=$((pass_n + fail_n + skip_n))
 if [[ "$_ran" -lt "$FLOOR" ]]; then
   printf '  FAIL ANTI-VACUITY: only %s assertions ran (+%s skipped), floor is %s.\n' "$((pass_n + fail_n))" "$skip_n" "$FLOOR" >&2

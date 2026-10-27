@@ -21,7 +21,11 @@
 # KNOWN RESIDUALS (each degrades to a duplicate monitor, today's behaviour, never to a silent false
 # refusal): a holder in another PID namespace reads as dead; two sessions that resolve different lock
 # directories never see each other; a wall-clock step can shift `lstart`; a holder whose stdout reader
-# vanished keeps the lock until its next write, and INT/QUIT do not stop a backgrounded bash.
+# vanished keeps the lock until its next write, and INT/QUIT do not stop a backgrounded bash. The key is the
+# repo gh will poll (--repo, GH_REPO, else origin), so on a fork clone where gh resolves a different repo than
+# origin (an `upstream` remote, `gh repo set-default`) it can FALSE-REFUSE a watch of a same-numbered PR in the
+# fork: pass --repo there. A `<lock>.reclaim` guard stuck by a killed reclaimer fails that key open (loudly)
+# until it is a minute or two old, then is swept.
 #
 # API (main shell only: a `$(...)` subshell would drop the state and never run the EXIT trap)
 #   monitor_lock_acquire <owner/repo | origin-url> <pr>
@@ -66,10 +70,14 @@ _ml_norm() {
 # /tmp path, or a loosely-shared SOLEUR_MONITOR_LOCK_DIR, from becoming the lock root.
 _ml_dir() {
   local d="${SOLEUR_MONITOR_LOCK_DIR:-${XDG_RUNTIME_DIR:-/tmp}/soleur-monitor-locks-$(id -u 2>/dev/null || echo 0)}"
+  local loose
   _ML_D=""
+  case "$d" in /*) : ;; *) d="./$d" ;; esac   # a relative dir starting with - must not read as a find predicate
   if [ -L "$d" ]; then return 1; fi
   if [ ! -e "$d" ]; then ( umask 077; mkdir -p "$d" ) 2>/dev/null || return 1; fi
-  if [ -d "$d" ] && [ -O "$d" ] && [ -w "$d" ] && [ -z "$(find "$d" -maxdepth 0 \( -perm -020 -o -perm -002 \) 2>/dev/null)" ]; then
+  # A failing find must refuse (empty output would otherwise read as "nobody else can write").
+  loose="$(find "$d" -maxdepth 0 \( -perm -020 -o -perm -002 \) 2>/dev/null)" || return 1
+  if [ -d "$d" ] && [ -O "$d" ] && [ -w "$d" ] && [ -z "$loose" ]; then
     _ML_D="$d"; return 0
   fi
   return 1
@@ -127,6 +135,8 @@ monitor_lock_acquire() {
   local spins=0 reclaims=0 waited=0 grace="${SOLEUR_MONITOR_LOCK_GRACE_S:-1}"
   if [ "${SOLEUR_MONITOR_LOCK:-}" = "off" ]; then ML_STATE="disabled"; ML_WHY="SOLEUR_MONITOR_LOCK=off"; return 2; fi
   ML_REPO="$(_ml_norm "${1:-}")" || { ML_REPO=""; _ml_unavailable "repo not derivable (needs a github.com owner/repo)"; return 2; }
+  # gh honours GH_HOST, and the key names github.com only: another host's same-numbered PR must not collide with it.
+  case "${GH_HOST:-github.com}" in github.com|www.github.com) ;; *) _ml_unavailable "GH_HOST targets another host (the lock keys github.com repos only)"; return 2 ;; esac
   [[ "$pr" =~ ^[0-9]{1,9}$ ]] || { _ml_unavailable "PR number is not numeric"; return 2; }
   pr=$((10#$pr))
   _ml_dir || { _ml_unavailable "lock directory unusable (must be a real directory we own, not writable by others)"; return 2; }
