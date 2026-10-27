@@ -622,6 +622,19 @@ AFFECTED_SCRIPTS_LINT_AGENTS_COMPOUND_SYNC_UNIT_PATHS=(
   "scripts/lint-agents-compound-sync.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #8764 — the step-boundary census's verdict is scoped to the corpus it walks
+# (server/inngest/functions/) plus the lint itself; a scoped scanner takes a
+# declared edge, not ALWAYS_ON.
+AFFECTED_SCRIPTS_LINT_INNGEST_STEP_BOUNDARY_LIVE_PATHS=(
+  "apps/web-platform/server/inngest/functions/"
+  "scripts/lint-inngest-step-boundary.py"
+  "scripts/lib/test-affected-paths.sh"
+)
+AFFECTED_SCRIPTS_LINT_INNGEST_STEP_BOUNDARY_UNIT_PATHS=(
+  "scripts/lint-inngest-step-boundary.py"
+  "scripts/lint-inngest-step-boundary.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 # #6931: the web-2 follow-through test drives its stub against the probe-row parser; its verdict is
 # scoped to the script, the parser it sources and the Better Stack query helper, not to corpus drift.
 AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
