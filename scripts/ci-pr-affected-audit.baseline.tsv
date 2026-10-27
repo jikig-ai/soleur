@@ -629,6 +629,7 @@ scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rehearsal-evide
 scripts/betterstack-emitter-read	scripts/followthroughs/git-data-rung2-evidence-capture.sh
 scripts/betterstack-emitter-read	scripts/followthroughs/inngest-private-nic-8539.sh
 scripts/betterstack-emitter-read	scripts/followthroughs/inngest-soak-6178.sh
+scripts/betterstack-emitter-read	scripts/followthroughs/inngest-trace-retention-5150.sh
 scripts/betterstack-emitter-read	scripts/followthroughs/registry-clientip-alert-7530.sh
 scripts/betterstack-emitter-read	scripts/followthroughs/registry-htpasswd-stdin-10119.sh
 scripts/betterstack-emitter-read	scripts/followthroughs/registry-luks-live-8386.sh

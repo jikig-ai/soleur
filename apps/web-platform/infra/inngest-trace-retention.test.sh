@@ -51,7 +51,6 @@ new_fix() {
   local d
   d="$(mktemp -d)"
   assert_fixture_dir "$d"
-  CLEANUPS+=("$d")
   printf '%s\n' "$d"
 }
 
@@ -161,6 +160,7 @@ fi
 pass "no VACUUM token"
 
 FIX="$(new_fix)"
+CLEANUPS+=("$FIX")
 OUT="${FIX}/out"
 
 # --- xtrace refusal prints neither the URI nor the password ---
@@ -274,6 +274,7 @@ row_red() {
   local mode="$1" label="$2" needle="${3-}"
   local dir
   dir="$(new_fix)"
+  CLEANUPS+=("$dir")
   mutate "$mode" "$dir"
   run_guard "$dir" "$OUT"
   require_red "$label" "$OUT"
@@ -284,6 +285,7 @@ row_red() {
 
 row_red drop-anchor-status "row1 anchor status set dropped is red"
 EMPTY="$(new_fix)"
+CLEANUPS+=("$EMPTY")
 run_guard "$EMPTY" "$OUT"
 require_red "row2 empty directory is red" "$OUT"
 require_out "$OUT" "guard checked 0 files" "row2 names the empty glob"
@@ -292,6 +294,7 @@ row_red reorder-anchor "row4 trace_runs deleted before spans is red"
 row_red drop-events-not-exists "row5 events age predicate without NOT EXISTS is red"
 row_red widen-status "row6 in-flight status widens the predicate" "in-flight status"
 THIRD="$(new_fix)"
+CLEANUPS+=("$THIRD")
 mutate third-file "$THIRD"
 run_guard "$THIRD" "$OUT"
 require_green "row7 third file with the same predicates passes" "$OUT"

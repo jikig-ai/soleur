@@ -126,11 +126,9 @@ else
 fi
 
 MIN_ASSERTIONS=14
-if [[ "$passes" -ge "$MIN_ASSERTIONS" ]]; then
-  pass
-else
-  printf 'FLOOR: %s assertions < floor %s\n' "$passes" "$MIN_ASSERTIONS" >&2
-  fails=$((fails + 1))
+if [[ "$passes" -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FLOOR: only %s assertions ran, expected at least %s\n' "$passes" "$MIN_ASSERTIONS" >&2
+  exit 1
 fi
 
 printf 'inngest-trace-retention-5150.test.sh: %s passed, %s failed\n' "$passes" "$fails"
