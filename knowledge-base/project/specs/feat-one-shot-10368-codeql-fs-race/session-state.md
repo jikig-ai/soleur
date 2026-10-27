@@ -62,3 +62,8 @@
 - Compound: learnings file knowledge-base/project/learnings/security-issues/2026-10-27-exported-containment-primitives-must-self-validate.md committed.
 - NEXT: Step 7 ship — invoke soleur:ship; affected gate /tmp/testall-affected-10368.log still running (was mid-suites at last check). Ship owns merge + postmerge; post-merge verify CodeQL alert 248 state via gh api repos/jikig-ai/soleur/code-scanning/alerts/248 --jq .state.
 - HEAD includes fix-round resolutions; PR #11334 body carries 10x Closes.
+
+## Ship Phase progress
+- Phase 5.5 gates: code-review-completion PASS (15 seats evidence), review-findings-exit PASS (0 unresolved), net-issue-flow PASS (net +0), advisor consult COMPLETE.
+- BLOCKED: local affected gate /tmp/testall-affected-10368.log mid-run (2034+ ok lines, ~157 suites selected). When it exits 0: `gh pr ready 11334`, `gh pr merge --auto --squash` (merge queue repo — poll to MERGED), then post-merge: `git fetch origin main`, `gh api repos/jikig-ai/soleur/code-scanning/alerts/248 --jq .state`, verify squash merge sha + issue closures, update epic #10390 progress log, emit DONE.
+- PR #11334 draft still — ready on green gate.
