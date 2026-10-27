@@ -528,7 +528,7 @@ describe("ChatPage", () => {
       expect(screen.getByText(/Review gate not found/)).toBeInTheDocument();
     });
 
-    it("has role=group and aria-label on card container", async () => {
+    it("has role=group and a short fixed aria-label on card container (the question stays visible text)", async () => {
       wsReturn.messages = [
         {
           id: "gate-g1", role: "assistant", content: "Which library?",
@@ -537,8 +537,9 @@ describe("ChatPage", () => {
         },
       ];
       await renderChatPage();
-      const group = screen.getByRole("group", { name: "Which library?" });
+      const group = screen.getByRole("group", { name: "Approval needed" });
       expect(group).toBeInTheDocument();
+      expect(screen.getByText("Which library?")).toBeInTheDocument();
     });
 
     it("sets aria-busy during pending state", async () => {
@@ -550,7 +551,7 @@ describe("ChatPage", () => {
         },
       ];
       await renderChatPage();
-      const group = screen.getByRole("group", { name: "Choose" });
+      const group = screen.getByRole("group", { name: "Approval needed" });
       expect(group).toHaveAttribute("aria-busy", "false");
       await userEvent.click(screen.getByRole("button", { name: "Yes" }));
       expect(group).toHaveAttribute("aria-busy", "true");
