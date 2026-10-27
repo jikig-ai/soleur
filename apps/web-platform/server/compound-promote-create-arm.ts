@@ -366,7 +366,8 @@ function openPrAgentOrCommandCollision(slug: string, openPrPaths: readonly strin
 }
 
 async function proposeInner(a: CreateProposeArgs): Promise<CreateVerdict> {
-  // week-cap: the edit loop ran first and shares the cap (`remaining - editPrsOpenedThisRun`).
+  // week-cap: the edit loop ran first and shares the cap (`remaining - editPrsOpenedThisRun`). The handler holds the loop to
+  // the free slots minus one on an `allow_create` run, so `capLeft >= 1` here by construction; this refusal is a defensive backstop.
   if (!(a.capLeft > 0)) return fail("week-cap", "no-slot");
 
   // index-empty before any I/O: a create needs a pattern to be about.
