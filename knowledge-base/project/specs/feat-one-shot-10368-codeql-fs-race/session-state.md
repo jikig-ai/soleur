@@ -51,3 +51,8 @@
 - Fix-round seats (reporting ∪ path-mapped ∪ security-sentinel guard-shape): security-sentinel, code-quality-analyst, data-integrity-guardian, pattern-recognition-specialist, test-design-reviewer. Then 1 verification pass.
 - BG: affected gate still queued /tmp/testall-affected-10368.log.
 - Remaining pipeline: fix-round → resolve → 5.5 qa → 6 compound → 7 ship (awaits affected gate + CI) → 8 DONE.
+
+## Fix-round complete (ADR-267)
+- 5 fix-round seats reported; P1 (dead `open` destructure, eslint ratchet) + P2s (EPERM regression, stale-fd guard missing on unlink) all fixed inline; `\` rejection + single-sourced relPath check + stale-fd test added. 107/107 vitest, tsc, eslint all green.
+- HEAD after this commit: fix-round-resolutions (pending commit id). Remaining: 1 verification pass over fix range, then Step 5.5 qa (unit-scoped, likely quick), 6 compound, 7 ship (awaits affected gate /tmp/testall-affected-10368.log + CI), 8 DONE.
+- Deferred P3s (won't fix this PR): procfs-less-Linux probe, non-Linux fallback test coverage, fh.close() lone-writeback masking, error-prefix family naming, fuller /race refused/ regex anchor.
