@@ -239,6 +239,16 @@ No cross-domain implications detected — infrastructure/tooling change. Product
 - `knowledge-base/project/specs/feat-one-shot-11361-egress-probe-token-mint/tasks.md` — planning artifact (generated with this plan).
 - `knowledge-base/project/specs/feat-one-shot-11361-egress-probe-token-mint/decision-challenges.md` — planning artifact (technical rulings).
 
+## Enhancement Summary
+
+Deepen-pass (`soleur:deepen-plan`, 2026-10-27, executed inline — this run has no Task-spawning tool; the per-section research and review-agent fan-outs were folded into a single orchestrator pass over the same greps and gate checks):
+
+**Halt gates evaluated:** 4.4 precedent-diff — PASSED via byte-level sibling precedent (`cron-egress-resolve.sh:958` mint + `cron-egress-firewall.test.sh` mint pins adopted verbatim, not invented); 4.45 verify-the-negative — all three negative claims grep-verified ("no user-facing artifact", "never a credential" per helper header, "no other host bundle bakes the probe" per `grep -rln 'cron-egress-enforce-probe' apps/`); 4.5 network-outage — evaluated, does not fire (trigger tokens appear only outside Overview/Problem — filename `cron-egress-firewall.test.sh` and the `503` test knob; the root cause is deterministic L7 auth since Squid answered 407, which itself proves L3 allow-list, L3 routing, and L7 TLS all worked); 4.55 downtime — does not fire (no serving-surface operation; the change lands on hosts that do not run the probe mid-life); 4.6 User-Brand — PASSED (threshold `none` + sensitive-path scope-out line present); 4.7 Observability — PASSED (5 fields non-placeholder; `discoverability_test.command` = `bash apps/web-platform/infra/cron-egress-enforce-probe.test.sh`, allowlisted verb, measured 5.6s < 15s cap, literal expected_output `0 failed`); 4.8 PAT — PASSED (no PAT-shaped tokens); 4.9 UI-wireframe — skipped (no UI surface); 4.10 encryption — skipped (no new store/connection); 4.11 Guard Contract — PASSED (`scripts/lint-guard-contract.py` green: 1 entry, ≥3-row matrix; assembly is structural — the single mint write is the chokepoint all gateway-authenticated CONNECTs flow through); 4.12 Scope Check — PASSED (one live section, all asks quoted verbatim from #11361 + brief, one `inferred` row justified); 4.13 task-design — skipped (followthrough script rides the existing sweeper — no new scheduler surface).
+
+**Key improvements folded in by the deepen pass:** the stub-contract design was sharpened to observe the file *at CONNECT time* (before the probe's `rm -f`), since a post-run assertion can never see the minted bytes; the deny-leg semantic restoration (403 real-ACL vs 407 auth-refusal) was recorded as an explicit technical consideration; the follow-through was shaped to require positive birth evidence rather than absence-of-failures alone (a zero count on a never-replaced fleet would be certain-but-meaningless).
+
+**New considerations discovered:** none blocking — blast radius confirmed web-hosts-only at plan time; the only post-merge step is the operator's already-gated #11321 O2 re-dispatch pinned to the new image tag.
+
 ## Success Metrics
 
 - `bash apps/web-platform/infra/cron-egress-enforce-probe.test.sh` → `0 failed` with the defect-mutation battery demonstrably red on scratch copies.
