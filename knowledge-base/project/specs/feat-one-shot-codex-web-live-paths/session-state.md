@@ -2978,3 +2978,31 @@
   consistency gap; the registry/grant correction and live parity remain open.
   The P1 is deliberately not treated as passed or verified by the cancelled
   RLS run.
+
+### Recovery continuation — 2026-10-27, pushed preview and CI holds
+
+- Pushed exact-column clarification in `98e255c7e8d00fa51f6dd7d7abd01bcce960a92b`.
+  The PR remains open/draft, auto-merge off, mergeable but blocked. `git diff
+  --check` passes and the worktree was clean. Pre-push scan again reported only
+  the previously approved historical Pencil UUID false positive; scanner
+  configuration and rules remain unchanged.
+- A default-mode catalog preview bound to `98e255c7e8d00fa51f6dd7d7abd01bcce960a92b`
+  returned `preview-no-external-actions`, application_rows=0, mutations=0,
+  writer_clearance=false, 60-second work bound and 4 MiB output bound. It
+  confirmed the collector, resolver and lockfile hashes, the pinned postgres
+  3.4.9 archive integrity and CA hash. The first invocation used a wrong full
+  SHA and was refused at source binding; the second used a relative output
+  path and was refused because the collector requires an absolute path. The
+  corrected invocation succeeded and wrote no files. Earlier shell startup
+  failed when mise attempted to install `gh` read-only; subsequent commands
+  used login-disabled shell startup. One transient GitHub API network failure
+  was retried successfully.
+- Tenant integration run `40486485340` and RLS authz fuzz run `40486485344`
+  for this head were cancelled and verified completed/cancelled. The first
+  cancellation verification raced with GitHub's transition and showed queued
+  or in-progress; subsequent status checks confirmed both cancelled. No
+  reconciliation, catalog execution, provider request or customer processing
+  occurred. Fresh shared capture still requires a separate exact-action
+  approval; writer coordination/clearance, filename-map validation, isolated
+  rehearsal, RLS registry correction, qualification, QA, exact-head review,
+  preflight and readiness remain incomplete.
