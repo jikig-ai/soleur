@@ -2966,3 +2966,15 @@
   reconciliation, writer clearance, provider request or processing clearance
   exists. Full qualification, QA, code review, preflight and readiness/ship
   remain held. Keep the PR draft and do not merge.
+- At pushed head `b2ba81f6d63536dc92679ec2f34c7f3a8748b9a5`, the focused
+  design-validity pass found no simplification finding. Architecture review
+  identified a P1: RLS-fuzz `table-grants.ts` does not yet classify the two
+  migration 165 tables or migration 175 issuance table. The reviewer also
+  identified that ADR-303 still states the strict in-file-only static rule.
+  Amended ADR-303 to describe the exact path+digest static declaration while
+  retaining RLS registry parity as authoritative, and updated the notice plan
+  to require the three classifications and the column-scoped 165 grants in the
+  stacked forward correction before qualification. This resolves the ADR
+  consistency gap; the registry/grant correction and live parity remain open.
+  The P1 is deliberately not treated as passed or verified by the cancelled
+  RLS run.

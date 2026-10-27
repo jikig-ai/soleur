@@ -451,6 +451,11 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
 - Given the issuance table, when a source/test mutant grants direct service
   `SELECT`, adds an RLS policy/client grant, broadens the admission snapshot or
   includes `nonce_hash`, then the respective gate turns red.
+- Given the frozen migrations 165 and 175, when their exact path+digest
+  declarations are accepted by static lint, then the runtime registry still
+  classifies the 165 DSAR projection columns as service-role-only and the 175
+  issuance table as INTERNAL; disposable catalog parity rejects any widened
+  role/column set and remains a qualification gate.
 - Given an issuance before expiry, at the exact boundary and after expiry,
   when delivery repair or acknowledgment runs, then only the pre-expiry case
   can proceed.
@@ -502,8 +507,15 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
    job/retry semantics, archive and snapshot lifecycle, exact contract-subject
    eligibility source, cron role/privileges, one-minute backlog capacity,
    independent monitoring and all privacy-document mirrors. Recheck migration
-   ordinals before each slice. The estimate is at least 25 files across five
-   roots and exceeds the split threshold.
+   ordinals before each slice. Keep frozen migrations 165 and 175 byte-for-byte.
+   The exact-hash static declarations do not grant access or replace RLS-fuzz
+   parity. In the stacked forward correction, grant the DSAR worker only the
+   `service_role` metadata columns selected from the migration 165 tables,
+   classify those effective grants in `table-grants.ts`, and register the
+   migration 175 issuance table as INTERNAL with zero direct API privileges.
+   Verify catalog-to-registry parity and unauthorized column denial only on a
+   disposable database before qualification. The estimate is at least 25 files
+   across five roots and exceeds the split threshold.
 3. **Slice A — request-time rights snapshot:** add RED tests for atomic
    admission-time capture, same-request retry versus new request, completed-job
    non-reuse, job-bound worker reads, email admission, tenant scope, snapshot
