@@ -539,15 +539,17 @@ mkdir -p "$FAKE_BIN_DIR"
 } > "$FAKE_BIN_DIR/supabase"
 chmod +x "$FAKE_BIN_DIR/supabase"
 
-# docker stub: logs `pull <img>` argv lines to $STUB_CALLS; DOCKER_MODE picks
-# the behavior arm (ok | throttle-once | always).
+# docker stub: logs `pull <img>` / `tag <src> <dst>` argv lines to
+# $STUB_CALLS; DOCKER_MODE picks the behavior arm
+# (ok | throttle-once | always | ecr-fail).
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'echo "$*" >> "${STUB_CALLS:?unset}"' \
-  'n=$(wc -l < "$STUB_CALLS" | tr -d " ")' \
+  'n=$(grep -c "^pull " "$STUB_CALLS" || true)' \
   'case "${DOCKER_MODE:-ok}" in' \
-  '  throttle-once) if [[ "$n" == "1" ]]; then echo "toomanyrequests: retry-after: 1s" >&2; exit 1; fi ;;' \
-  '  always) echo "toomanyrequests: retry-after: 1s" >&2; exit 1 ;;' \
+  '  throttle-once) if [[ "$*" == pull* && "$n" == "1" ]]; then echo "toomanyrequests: retry-after: 1s" >&2; exit 1; fi ;;' \
+  '  always) [[ "$*" == pull* ]] && { echo "toomanyrequests: retry-after: 1s" >&2; exit 1; } ;;' \
+  '  ecr-fail) [[ "$*" == pull*public.ecr.aws* ]] && { echo "name unknown" >&2; exit 1; } ;;' \
   'esac' \
   'exit 0' \
   > "$BIN/docker"
@@ -565,32 +567,50 @@ run_prepull() { # name path-prefix [docker-mode]
   LAST_RC=$?
 }
 
-# Happy path: 12 extracted refs (10 clean + 2 glue-cut), 12 serial pulls, rc 0.
+pull_count() { grep -c '^pull ' "$STUB_CALLS" || true; }
+tag_count() { grep -c '^tag ' "$STUB_CALLS" || true; }
+
+# Happy path: 12 extracted refs — each pulls from the ECR mirror then tags
+# onto the ghcr ref: 12 pulls + 12 tags, rc 0.
 run_prepull pp-ok "$FAKE_BIN_DIR:$BIN" ok
 assert_rc "c:happy-rc" 0
-assert_calls "c:happy-pulls" 12
+if [[ "$(pull_count)" == 12 ]]; then pass "c:happy-pulls" else fail "c:happy-pulls" "pulls=$(pull_count) want 12"; fi
+if [[ "$(tag_count)" == 12 ]]; then pass "c:happy-tags" else fail "c:happy-tags" "tags=$(tag_count) want 12"; fi
 assert_out_has "c:happy-echo" 'pre-pull: 12 images'
-# Serial order preserved: pull argv lines arrive in the extraction order,
-# prefixed with ghcr.io/ at pull time.
-if grep -qF 'pull ghcr.io/supabase/img-a:1.1.0' "$STUB_CALLS" && \
-   grep -qF 'pull ghcr.io/supabase/img-j:1.10.0' "$STUB_CALLS"; then pass "c:happy-args"
-else fail "c:happy-args" "pull argv missing extracted refs — $(cat "$STUB_CALLS" | tr '\n' '|')"; fi
+# Serial order preserved: pull argv lines hit the ECR mirror; the tag lands
+# each on the ghcr ref the CLI will look for.
+if grep -qF 'pull public.ecr.aws/supabase/img-a:1.1.0' "$STUB_CALLS" && \
+   grep -qF 'pull public.ecr.aws/supabase/img-j:1.10.0' "$STUB_CALLS"; then pass "c:happy-args"
+else fail "c:happy-args" "pull argv missing ECR refs — $(cat "$STUB_CALLS" | tr '\n' '|')"; fi
+if grep -qF 'tag public.ecr.aws/supabase/img-a:1.1.0 ghcr.io/supabase/img-a:1.1.0' "$STUB_CALLS"; then pass "c:happy-tag-ref"
+else fail "c:happy-tag-ref" "ecr image not retagged to the ghcr ref"; fi
+assert_out_has "c:happy-ecr-echo" 'via ecr mirror'
 # The foreign-org ref and the %-templated ref must NOT be pulled.
 if grep -qF 'other-org' "$STUB_CALLS"; then fail "c:happy-anchor" "extraction leaked a non-supabase ref"; else pass "c:happy-anchor"; fi
 if grep -qF 'template-no-tag' "$STUB_CALLS"; then fail "c:happy-tag-required" "extraction pulled an untagged/template ref"; else pass "c:happy-tag-required"; fi
 # Glue-cut: `v9.9.9password_...` pulls as `v9.9.9`, `3.0.1failed` as `3.0.1`,
 # and `orioledb-failed` never reaches a pull.
-if grep -qF 'pull ghcr.io/supabase/edge:v9.9.9' "$STUB_CALLS"; then pass "c:glue-cut-v"
+if grep -qF 'pull public.ecr.aws/supabase/edge:v9.9.9' "$STUB_CALLS"; then pass "c:glue-cut-v"
 else fail "c:glue-cut-v" "glued version tag not cut — $(cat "$STUB_CALLS" | tr '\n' '|')"; fi
-if grep -qF 'pull ghcr.io/supabase/old:3.0.1' "$STUB_CALLS"; then pass "c:glue-cut-failed"
+if grep -qF 'pull public.ecr.aws/supabase/old:3.0.1' "$STUB_CALLS"; then pass "c:glue-cut-failed"
 else fail "c:glue-cut-failed" "glued 'failed' suffix not cut"; fi
 if grep -qF 'orioledb' "$STUB_CALLS"; then fail "c:orioledb-excluded" "non-version tag pulled"; else pass "c:orioledb-excluded"; fi
 
-# Throttle on the first pull retried by the helper: N+1 calls, rc 0, warning.
+# Throttle on the first pull retried by the helper: N+1 pulls, rc 0, warning.
 run_prepull pp-retry "$FAKE_BIN_DIR:$BIN" throttle-once
 assert_rc "c:retry-rc" 0
-assert_calls "c:retry-pulls" 13
+if [[ "$(pull_count)" == 13 ]]; then pass "c:retry-pulls" else fail "c:retry-pulls" "pulls=$(pull_count) want 13"; fi
 assert_out_re "c:retry-warn" '^::warning::.*toomanyrequests'
+
+# ECR miss falls back to ghcr per image: deterministic failure skips retry.
+run_prepull pp-ecrfail "$FAKE_BIN_DIR:$BIN" ecr-fail
+assert_rc "c:ecrfail-rc" 0
+if [[ "$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS" || true)" == 12 ]]; then pass "c:ecrfail-ecr"
+else fail "c:ecrfail-ecr" "ecr tries=$(grep -c '^pull public\.ecr\.aws/' "$STUB_CALLS") want 12"; fi
+if [[ "$(grep -c '^pull ghcr\.io/' "$STUB_CALLS" || true)" == 12 ]]; then pass "c:ecrfail-ghcr"
+else fail "c:ecrfail-ghcr" "ghcr fallbacks=$(grep -c '^pull ghcr\.io/' "$STUB_CALLS") want 12"; fi
+if [[ "$(tag_count)" == 0 ]]; then pass "c:ecrfail-no-tags" else fail "c:ecrfail-no-tags" "tagged without an ecr image"; fi
+assert_out_has "c:ecrfail-echo" 'via ghcr'
 
 # Extraction floor: 3 refs < 8 fails loudly, docker never invoked.
 FEW_BIN_DIR="$TMP/few-bin"
@@ -603,11 +623,11 @@ assert_rc "c:floor-rc" 2
 assert_calls "c:floor-no-pulls" 0
 assert_out_re "c:floor-error" '^::error::.*expected >= 8'
 
-# Exhausted pull propagates: first image throttles 3 times, helper exits 1,
-# set -e stops the loop — no further pulls.
+# Exhausted pull propagates: first image throttles 3x on ECR then 3x on the
+# ghcr fallback, helper exits 1, set -e stops the loop — no further pulls.
 run_prepull pp-exhaust "$FAKE_BIN_DIR:$BIN" always
 assert_rc "c:exhaust-rc" 1
-assert_calls "c:exhaust-pulls" 3
+if [[ "$(pull_count)" == 6 ]]; then pass "c:exhaust-pulls" else fail "c:exhaust-pulls" "pulls=$(pull_count) want 6"; fi
 assert_out_re "c:exhaust-error" '^::error::.*toomanyrequests'
 
 # Missing CLI fails loudly instead of extracting nothing.
@@ -623,7 +643,7 @@ assert_out_re "c:nobin-error" '^::error::.*not on PATH'
 # report is printf + exit 1, never routed through the helpers it backstops.
 # ---------------------------------------------------------------------------
 
-MIN_ASSERTIONS=109
+MIN_ASSERTIONS=117
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertion(s) ran, expected >= %d — a deleted guard row must not green this suite\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

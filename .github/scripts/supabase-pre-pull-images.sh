@@ -25,6 +25,14 @@
 # and non-supabase-org refs (e.g. postgrest/postgrest, pulled from Docker
 # Hub, not the throttled GHCR bucket) are excluded by the `supabase/` anchor.
 # A floor check fails the step LOUDLY if extraction goes dark.
+#
+# ECR MIRROR. Run 40572250940 showed the ghcr bucket still saturated under
+# serial pulls (every attempt lost the contention lottery — retry-after ~1ms
+# yet always rejected). Supabase also publishes to the public ECR gallery
+# (`public.ecr.aws/supabase/*`), a DIFFERENT registry bucket with anonymous
+# pulls. Each ref tries ECR first; a success is `docker tag`ed onto the ghcr
+# ref so `supabase start` sees the image as already-present and skips its
+# own pull. An ECR miss (unmirrored image) or failure falls back to ghcr.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,6 +63,13 @@ fi
 
 printf 'pre-pull: %d images from %s\n' "${#IMAGES[@]}" "$SUPABASE_BIN"
 for img in "${IMAGES[@]}"; do
-  printf 'pre-pull: ghcr.io/%s\n' "$img"
-  bash "$RETRY" docker pull "ghcr.io/$img"
+  ecr="public.ecr.aws/$img"
+  ghcr="ghcr.io/$img"
+  if bash "$RETRY" docker pull "$ecr"; then
+    docker tag "$ecr" "$ghcr"
+    printf 'pre-pull: %s via ecr mirror\n' "$img"
+  else
+    printf 'pre-pull: %s via ghcr\n' "$img"
+    bash "$RETRY" docker pull "$ghcr"
+  fi
 done
