@@ -33,3 +33,12 @@
 - Conditional: test-design-reviewer (*.test.ts in diff)
 - Pre-checks: merge-tree clean, secret-scan CLEAN, collision=foreign test-all only
 - Settled rulings for seats: decision-challenges.md rows 1-5 (Ruled by CTO agent 2026-10-27)
+
+## Review Phase — progress checkpoint
+- Design pass DONE: code-simplicity=keep (7x P3), architecture=simplify (P2 dirFh/dirPath desync) → applied in c3f0213767 (pushed): openContainedDir returns {fh,dirPath}, handle-leak fix, error-map hardening, flag-constants consolidation. 105/105 vitest + tsc green after refactor.
+- REMAINING PANEL (spawn next): git-history-analyzer, pattern-recognition-specialist, security-sentinel, performance-oracle, data-integrity-guardian, agent-native-reviewer, code-quality-analyst + conditional test-design-reviewer = 8 seats, report-only contract, worktree /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-10368-codeql-fs-race, PR #11334, settled rulings in decision-challenges.md.
+- Deferred P3s recorded: spawnCwd procfs-less Linux fails loud (ok), fallback uncovered on Linux CI, beforeOpen seam documented.
+- BG: affected gate /tmp/testall-affected-10368.log (queued behind 3 sibling test-all runs).
+- Earlier session work (outside this PR): AC7 soak #10390 PASSED manually + directive retired (epic stays open); machinery issue #11333 filed; #11103 found already CLOSED.
+- CLAUDE_PLUGIN_ROOT=/home/jean/.local/share/devin/cli/plugins/cache/github.com_jikig-ai_soleur_plugins_soleur-5a09ea60/0.0.0-unversioned ; cloud-detect=local
+- Pipeline: one-shot Step 4 (review) → then 5 findings, 5.5 qa, 6 compound, 7 ship → merged PR + DONE
