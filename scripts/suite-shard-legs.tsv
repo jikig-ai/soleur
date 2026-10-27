@@ -553,6 +553,9 @@ scripts/tunnel-connector-census	3
 scripts/verify-agent-security-slice1	5
 scripts/verify-lockfile-guards	2
 scripts/verify-marketplace-ruleset	3
+scripts/watch-brand-hex-triggers-11177	1
+scripts/watch-code-quality-reeval-9730	1
+scripts/watch-lint-ratchet-reeval-10515	1
 scripts/watch-live-verify-pass	7
 scripts/watch-registration-narrowing-9564	3
 scripts/watchdog-arm-soak-9237	5

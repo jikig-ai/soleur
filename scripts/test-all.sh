@@ -6376,6 +6376,11 @@ if want_scripts; then
   # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
   # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
+  # Code-quality follow-up watchers (code-quality-followups-watch.yml): notify-once, read-only apart from one issue
+  # comment per tracker. Explicit registration (scripts/*.test.sh is not auto-globbed); appended LAST in the block.
+  run_suite "scripts/watch-code-quality-reeval-9730" bash scripts/watch-code-quality-reeval-9730.test.sh
+  run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
+  run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
 fi
 
 # Named bun-test entries — bun shard.
