@@ -11,10 +11,11 @@ repoints a mount — the flag-off readback is the rollback); `unfreeze` clears t
 There is no copy or repoint — the store has served the LUKS mapper since boot (ADR-239); the old
 plaintext volume is retained read-only until its wipe decision (#6897/#8571). The residue on it ends
 when that volume is destroyed by the DL-2 wipe, never mounted to purge in place; the target date and the slip
-rule are in ADR-239, amendment 2026-10-09. **[Superseded 2026-10-27 (#11195), as to "when that volume is destroyed by the DL-2 wipe": the volume was deleted at the
-provider API on 2026-10-27 by a Terraform destroy, not by the DL-2 wipe; see "Plaintext-volume destroy".]** Three further modes, `wipe_check`, `wipe` and `wipe_finish` (#10138),
+rule are in ADR-239, amendment 2026-10-09. Three further modes, `wipe_check`, `wipe` and `wipe_finish` (#10138),
 run in a separate job (`wipe`) and retire that volume by detaching it and deleting it at the provider API; they
 are owner-named and described in [The wipe](#the-wipe-dl-2-10138--6897).
+
+> **Superseded 2026-10-27 (#11195), as to "when that volume is destroyed by the DL-2 wipe":** the volume was deleted at the provider API on 2026-10-27 by a Terraform destroy, not by the DL-2 wipe; see "Plaintext-volume destroy".
 
 **No SSH in this runbook.** Every read below is a workflow annotation, a Better Stack API read or a
 Sentry query. The dispatch itself uses SSH transport off the app host; you never SSH a host to check
@@ -1406,7 +1407,7 @@ this sequence slips past about 2026-11-05, tell the CLO.
 
 ## The wipe (DL-2, #10138 / #6897)
 
-> **Superseded 2026-10-27 (#11195), as to "retires the plaintext rollback volume" and every `wipe_check`, `wipe`, `wipe_finish` and `snapshot_clear` dispatch described in this section: the volume was deleted by a Terraform destroy on 2026-10-27 and is gone (see "Plaintext-volume destroy"). Do not dispatch these modes against volume 106867358; the section is kept as the record of the reasoning and for the verdict words the Verdict map still uses.**
+> **Superseded 2026-10-27 (#11195), as to "retires the plaintext rollback volume" and every `wipe_check`, `wipe`, `wipe_finish` and `snapshot_clear` dispatch described in this section:** the volume was deleted by a Terraform destroy on 2026-10-27 and is gone (see "Plaintext-volume destroy"). Do not dispatch these modes against volume 106867358; the section is kept as the record of the reasoning and for the verdict words the Verdict map still uses.
 
 The `wipe` job of `git-data-cutover.yml` retires the plaintext rollback volume (Terraform `hcloud_volume.git_data`, the Hetzner volume named `soleur-git-data-store`) by detaching it and deleting it at the provider API. It has four modes (`wipe_check`, `wipe`, `wipe_finish`, `snapshot_clear`; the table under "The modes" gives their confirm tokens), every one behind the `web-platform-infra-apply` environment, and every one names the volume by its id (`volume_id`). The `cutover` job is skipped for all four.
 
@@ -1453,6 +1454,8 @@ Schedule. The outer date is 2026-11-12 (ADR-239). With the 7-day floor, a stamp 
 **Rule for the queue:** do not dispatch while another git-data run is pending (a pending run is replaced by any newer dispatch and a wipe waiting for approval holds the web-1-swap queue: approve or reject promptly). The replacement happens in the workflow-level `git-data-state` group, which keeps one pending run. A rejected or timed-out environment approval pages as `WIPE_STATE_UNKNOWN` (the job never published an output).
 
 ### Dispatch strings
+
+> **Superseded 2026-10-27 (#11195), as to "Dispatch strings":** the volume named `soleur-git-data-store` was deleted by a Terraform destroy on 2026-10-27 and is gone; do not dispatch these modes against it (see "Plaintext-volume destroy"). The strings below are kept as the record.
 
 The id is the Hetzner id of the volume named `soleur-git-data-store`, read at the provider API with the read-only token (a read; the id is also the dispatch input, so the run title carries it):
 
@@ -1537,7 +1540,7 @@ A `wipe_finish` publishes no phase before its delete gate (nothing in a finish w
 
 ### The wedge
 
-> **Superseded 2026-10-27 (#11195), as to "After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data`": this section describes the DL-2 wipe path, which was not the path taken. The volume was deleted by a Terraform destroy, and neither the state nor the HCL holds `hcloud_volume.git_data` or its attachment any more (see "Plaintext-volume destroy"). It is kept as the record of the reasoning.**
+> **Superseded 2026-10-27 (#11195), as to "After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data`":** this section describes the DL-2 wipe path, which was not the path taken. The volume was deleted by a Terraform destroy, and neither the state nor the HCL holds `hcloud_volume.git_data` or its attachment any more (see "Plaintext-volume destroy"). It is kept as the record of the reasoning.
 
 After the delete and before PR-C merges, Terraform state and HCL still list `hcloud_volume.git_data` (and its attachment). Read facts, from `tests/scripts/test-git-data-wipe-wedge.sh`:
 
@@ -1660,7 +1663,7 @@ The claim is limited to "device deleted at the provider API" (ADR-239 Amendment 
 
 **Retention and public disclosure (CLO 2026-10-26 and 2026-10-27).** `docs/legal/**` was not edited by the destroy or by the record PR (#11284, Ref #11195): a dispatch is not a deletion, and the public sentence may change only after the verified read-back, which now exists. The DPD section 10.3(b) refresh is a CLO-owned dated item with its own pull request: bound 2026-11-03 (read-back plus 7 days; CLO 2026-10-27), outer limit 2026-11-11, escalation by a comment on #6897. Until it is live the public sentence overstates retention, which is the conservative direction. The ledger row for the device and its `expires_on` were retired by #11195 (ADR-239 Amendment 2026-10-27, item 6); the provider-retention gap they described is unmeasured, not closed.
 
-**After the destroy.** The wipe-family modes of `git-data-cutover.yml` still exist and will see the volume gone; a rollback cannot use the plaintext volume as a target. #11195 deleted the destroy workflow, its gate, probe and tests, restored the counters those moved, retired the ledger row, and appended the run URL and read-back to ADR-239.
+**After the destroy.** The wipe-family modes of `git-data-cutover.yml` still exist and will see the volume gone; a rollback cannot use the plaintext volume as a target. The record PR (#11284, Ref #11195) deleted the destroy workflow, its gate, probe and tests, restored the counters those moved, retired the ledger row, and appended the run URL and read-back to ADR-239.
 
 ## Verdict map
 
