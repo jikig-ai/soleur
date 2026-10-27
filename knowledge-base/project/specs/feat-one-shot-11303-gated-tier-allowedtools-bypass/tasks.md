@@ -5,18 +5,18 @@ Branch: feat-one-shot-11303-gated-tier-allowedtools-bypass | Draft PR: #11304
 
 ## Phase 0: Setup and premise measurement (no commit)
 
-- [ ] 0.1 `git fetch origin main origin/feat-hitl-approval-queue`; confirm no `buildAllowedTools` / probe on origin/main
-- [ ] 0.2 Baseline vitest on touched suites + `tsc --noEmit`
-- [ ] 0.3 Re-derive the platform tool census from the builders (counts derived, never hard-coded)
-- [ ] 0.4 Cherry-pick `0acc541b6f` with `-n` into the working tree; scratch-edit the prompt to a plain string; run `PROBE_ONLY=email_send:no-allowed` against Doppler `ci` (never prd); expect `invoked=yes`; capture the `CAN_USE_TOOL_SHADOWED` line format. STOP and re-plan if `invoked=no`
-- [ ] 0.5 Confirm ws-handler late-click behaviour (error must say expired/not performed); `rg "User rejected the action"` in tests
-- [ ] 0.6 Prove the post-deploy channel: find a historical `CAN_USE_TOOL_SHADOWED` row in Better Stack (read-only query, Doppler prd_terraform), record `host_name` (`soleur-web-platform` / `soleur-web-2`), the discriminating journald field, and whether it lists auto-approve names; none found = post-deploy check recorded as unobservable up front
+- [x] 0.1 `git fetch origin main origin/feat-hitl-approval-queue`; confirm no `buildAllowedTools` / probe on origin/main
+- [x] 0.2 Baseline vitest on touched suites + `tsc --noEmit`
+- [x] 0.3 Re-derive the platform tool census from the builders (counts derived, never hard-coded)
+- [x] 0.4 Cherry-pick `0acc541b6f` with `-n` into the working tree; scratch-edit the prompt to a plain string; run `PROBE_ONLY=email_send:no-allowed` against Doppler `ci` (never prd); expect `invoked=yes`; capture the `CAN_USE_TOOL_SHADOWED` line format. STOP and re-plan if `invoked=no`
+- [x] 0.5 Confirm ws-handler late-click behaviour (error must say expired/not performed); `rg "User rejected the action"` in tests
+- [x] 0.6 Prove the post-deploy channel: find a historical `CAN_USE_TOOL_SHADOWED` row in Better Stack (read-only query, Doppler prd_terraform), record `host_name` (`soleur-web-platform` / `soleur-web-2`), the discriminating journald field, and whether it lists auto-approve names; none found = post-deploy check recorded as unobservable up front
 
 ## Phase 1: Gate lifecycle (commit 1)
 
-- [ ] 1.1 RED: `test/permission-callback-platform-gate-expiry.test.ts` (timeout, abort with controller aborted [both reasons], per-call abort, approve, reject, status-write failure hold/restore, concurrent gates, gate + Bash stacking, `agentID`, Bash regression, in-window status observation)
-- [ ] 1.2 GREEN: `holdForUser` options object + `gateClass`; gated branch via `holdForUser`; skip `active` write when `ctx.controllerSignal.aborted` (platform only); static deny texts; ops `platform-gate-status-hold|restore` with own static messages
-- [ ] 1.3 Commit `fix(security): gated platform-tool gate fails closed on expiry and restores status (#11303)`
+- [x] 1.1 RED: `test/permission-callback-platform-gate-expiry.test.ts` (timeout, abort with controller aborted [both reasons], per-call abort, approve, reject, status-write failure hold/restore, concurrent gates, gate + Bash stacking, `agentID`, Bash regression, in-window status observation)
+- [x] 1.2 GREEN: `holdForUser` options object + `gateClass`; gated branch via `holdForUser`; skip `active` write when `ctx.controllerSignal.aborted` (platform only); static deny texts; ops `platform-gate-status-hold|restore` with own static messages
+- [x] 1.3 Commit `fix(security): gated platform-tool gate fails closed on expiry and restores status (#11303)`
 
 ## Phase 2: The filter (commit 2)
 

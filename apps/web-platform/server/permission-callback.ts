@@ -310,6 +310,11 @@ const BASH_NOT_RUN_NO_RETRY =
   "The command was NOT run. Do not retry it and do not rephrase or respell it to get around the check. Tell the user what you were trying to do and ask how they want to proceed.";
 const BASH_GATE_EXPIRED_MESSAGE = `The approval request for this Bash command expired without an answer. ${BASH_NOT_RUN_NO_RETRY}`;
 const BASH_REJECTED_MESSAGE = `User rejected the Bash command. ${BASH_NOT_RUN_NO_RETRY}`;
+// #11303 — the gated platform-tool deny texts: static (no tool input), plain "was not performed" wording, and an explicit
+// no-retry instruction so the agent does not loop around the gate.
+const PLATFORM_GATE_EXPIRED_MESSAGE =
+  "The approval request expired before it was answered, so the action was not performed. Do not retry unless the user asks.";
+const PLATFORM_GATE_REJECTED_MESSAGE = "User rejected the action. Do not retry unless the user asks.";
 const AUTONOMOUS_NOTICE_EXPIRED_MESSAGE =
   "The autonomous-mode notice was not answered, so this command was held and NOT run. Ask the user to open the notice and choose, then retry once.";
 
@@ -342,17 +347,33 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   //     while another card is still waiting);
   //   - a status write that fails is mirrored to Sentry and never replaces the verdict.
   let pendingGates = 0;
+  // #11303 — the platform-tool gate reuses this helper (one lifecycle path, shared pending counter). `gateClass` only
+  // selects the Sentry op labels and the abort restore policy: a platform gate whose SESSION was aborted (user Stop or
+  // the disconnect grace) does NOT write `active`, because the abort branch of startAgentSession owns the terminal
+  // status and writes it only against an `active` row; a late restore would strand the conversation `active`.
+  const GATE_STATUS_OPS = {
+    bash: {
+      hold: { op: "bash-gate-status-hold", message: "Bash gate: failed to mark the conversation waiting_for_user" },
+      restore: { op: "bash-gate-status-restore", message: "Bash gate: failed to restore the conversation to active" },
+    },
+    platform: {
+      hold: { op: "platform-gate-status-hold", message: "Platform tool gate: failed to mark the conversation waiting_for_user" },
+      restore: { op: "platform-gate-status-restore", message: "Platform tool gate: failed to restore the conversation to active" },
+    },
+  } as const;
   const holdForUser = async (
     gateId: string,
     signal: AbortSignal,
     gateOptions: string[],
-    kind?: "autonomous_disclosure",
+    holdOptions: { kind?: "autonomous_disclosure"; gateClass?: "bash" | "platform" } = {},
   ): Promise<string | null> => {
+    const { kind, gateClass = "bash" } = holdOptions;
+    const ops = GATE_STATUS_OPS[gateClass];
     if (pendingGates++ === 0) {
       try {
         await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
       } catch (err) {
-        warnSilentFallback(err, { feature: "cc-permissions", op: "bash-gate-status-hold" });
+        warnSilentFallback(err, { feature: "cc-permissions", ...ops.hold });
       }
     }
     try {
@@ -364,11 +385,11 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       return null;
     } finally {
       pendingGates -= 1;
-      if (pendingGates === 0) {
+      if (pendingGates === 0 && !(gateClass === "platform" && ctx.controllerSignal.aborted)) {
         try {
           await deps.updateConversationStatus(ctx.conversationId, "active");
         } catch (err) {
-          warnSilentFallback(err, { feature: "cc-permissions", op: "bash-gate-status-restore" });
+          warnSilentFallback(err, { feature: "cc-permissions", ...ops.restore });
         }
       }
     }
@@ -890,7 +911,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             gateId,
             options.signal,
             ["Got it"],
-            "autonomous_disclosure",
+            { kind: "autonomous_disclosure" },
           );
           if (selection === null) {
             return gateExpiredDeny(toolName, "autonomous-disclosure-expired", AUTONOMOUS_NOTICE_EXPIRED_MESSAGE);
@@ -1046,7 +1067,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             gateId,
             options.signal,
             ["Keep autonomous on", "Ask me each time"],
-            "autonomous_disclosure",
+            { kind: "autonomous_disclosure" },
           );
           if (selection === null) {
             return gateExpiredDeny(toolName, "autonomous-disclosure-expired", AUTONOMOUS_NOTICE_EXPIRED_MESSAGE);
@@ -1364,17 +1385,24 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           );
         }
 
-        await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
+        // #11303 — hold/await/restore through the shared helper: a timeout or abort resolves to null (deny), never a throw
+        // that strands the conversation in waiting_for_user; parallel cards stack on the shared pending counter.
+        const selection = await holdForUser(gateId, options.signal, ["Approve", "Reject"], { gateClass: "platform" });
 
-        const selection = await deps.abortableReviewGate(
-          ctx.session,
-          gateId,
-          options.signal,
-          undefined,
-          ["Approve", "Reject"],
-        );
-
-        await deps.updateConversationStatus(ctx.conversationId, "active");
+        if (selection === null) {
+          log.warn(
+            {
+              sec: true,
+              tool: toolName,
+              tier,
+              decision: "platform-gate-expired",
+              repo: `${ctx.repoOwner}/${ctx.repoName}`,
+            },
+            "Platform tool gate expired without an answer; denied",
+          );
+          logPermissionDecision("canUseTool-platform-gated", toolName, "deny", "gate expired");
+          return { behavior: "deny" as const, message: PLATFORM_GATE_EXPIRED_MESSAGE };
+        }
 
         const decision = selection === "Approve" ? "approved" : "rejected";
         log.info(
@@ -1397,7 +1425,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           );
           return {
             behavior: "deny" as const,
-            message: "User rejected the action",
+            message: PLATFORM_GATE_REJECTED_MESSAGE,
           };
         }
 
