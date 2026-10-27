@@ -38,7 +38,7 @@ import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
 import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
 import { mirrorWarnWithDebounce, warnSilentFallback } from "./observability";
-import { PLUGIN_SERVER_NAME_RE, TOOL_TIER_MAP } from "./tool-tiers";
+import { isPreApprovable, parsePluginWildcard } from "./tool-tiers";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import {
   checkSeccompAgreement,
@@ -266,33 +266,42 @@ export interface AgentQueryOptionsArgs {
   skills?: string[];
 }
 
+/** An offending allowedTools entry is echoed in the error at most this many characters (it is a server-built string). */
+const ENTRY_ECHO_MAX = 120;
+
 /**
  * #11303 — fail-closed second line of defence behind `buildAllowedTools`.
  *
  * The SDK auto-approves a bare `allowedTools` entry BEFORE it consults `canUseTool`, so a gated platform tool (or the bare
  * server entry `mcp__soleur_platform`, or `mcp__*`, or a rule-content form such as `...email_send(*)`) in this list silently
  * removes its review gate. Allowlist, not denylist: any entry that looks like an MCP entry after trimming and lower-casing
- * must be (a) an exact FQN whose tier is auto-approve, looked up with no trimming or normalising, or (b)
- * `mcp__plugin_soleur_<name>__*` with `<name>` matching `^[a-z0-9-]+$`; everything else throws. Entries that are not MCP
- * entries (`Read`, `WebFetch`, ...) pass. `permissionMode: "bypassPermissions"` also skips `canUseTool` for every tool, so it
- * throws too. The message names the offending entry only (a server-controlled string), never a tool input.
+ * must be (a) an exact FQN that passes the shared keep-rule `isPreApprovable` (looked up with no trimming or normalising), or
+ * (b) a valid plugin wildcard (`parsePluginWildcard`); everything else throws. The Bash family (`Bash`, `Bash(...)`, any
+ * case) throws too: a pre-approved Bash skips the Bash review gate. Entries that are not MCP or Bash entries (`Read`,
+ * `WebFetch`, ...) pass; a full non-MCP allowlist is a follow-up. `permissionMode` may only be undefined or `"default"`:
+ * `bypassPermissions`, `acceptEdits`, `dontAsk` and `plan` all decide before `canUseTool`. The message names the offending
+ * entry only (a server-controlled string), never a tool input.
  */
-const PLUGIN_WILDCARD_RE = /^mcp__plugin_soleur_([a-z0-9-]+)__\*$/;
 export function assertAllowedToolsPreApprovalSafe(args: {
   allowedTools?: readonly string[];
   permissionMode?: SDKOptions["permissionMode"];
 }): void {
-  if (args.permissionMode === "bypassPermissions") {
-    throw new Error("buildAgentQueryOptions: permissionMode bypassPermissions skips canUseTool for every tool");
+  if (args.permissionMode !== undefined && args.permissionMode !== "default") {
+    throw new Error(
+      `buildAgentQueryOptions: permissionMode ${JSON.stringify(String(args.permissionMode).slice(0, 40))} would pre-approve tools ahead of canUseTool; only "default" is allowed`,
+    );
   }
   for (const entry of args.allowedTools ?? []) {
-    if (!entry.trim().toLowerCase().startsWith("mcp__")) continue;
-    const exactAutoTool = Object.hasOwn(TOOL_TIER_MAP, entry) && TOOL_TIER_MAP[entry] === "auto-approve";
-    const wildcard = PLUGIN_WILDCARD_RE.exec(entry);
-    const validPluginWildcard = wildcard !== null && PLUGIN_SERVER_NAME_RE.test(wildcard[1]);
-    if (!exactAutoTool && !validPluginWildcard) {
+    const normalised = entry.trim().toLowerCase();
+    if (normalised === "bash" || normalised.startsWith("bash(")) {
       throw new Error(
-        `buildAgentQueryOptions: allowedTools entry would pre-approve a tool ahead of canUseTool: ${JSON.stringify(entry.slice(0, 120))}`,
+        `buildAgentQueryOptions: allowedTools entry would pre-approve Bash ahead of canUseTool: ${JSON.stringify(entry.slice(0, ENTRY_ECHO_MAX))}`,
+      );
+    }
+    if (!normalised.startsWith("mcp__")) continue;
+    if (!isPreApprovable(entry) && parsePluginWildcard(entry) === null) {
+      throw new Error(
+        `buildAgentQueryOptions: allowedTools entry would pre-approve a tool ahead of canUseTool: ${JSON.stringify(entry.slice(0, ENTRY_ECHO_MAX))}`,
       );
     }
   }

@@ -647,15 +647,48 @@ describe("buildAgentQueryOptions — allowedTools pre-approval allowlist (#11303
     ["a plugin wildcard with an empty server name", "mcp__plugin_soleur___*"],
     ["a plugin wildcard with a path-ish server name", "mcp__plugin_soleur_a/b__*"],
   ];
+  // A pre-approved Bash skips the Bash review gate: the whole family is rejected, in any case or spacing.
+  const BASH_FAMILY: [string, string][] = [
+    ["bare Bash", "Bash"],
+    ["lower-case bash", "bash"],
+    ["upper-case BASH", "BASH"],
+    ["padded Bash", "  Bash  "],
+    ["a Bash rule-content form", "Bash(git status:*)"],
+    ["a wildcard Bash rule", "Bash(*)"],
+    ["a lower-case Bash rule", "bash(ls)"],
+  ];
 
   it.each(REJECTED)("throws on %s", (_label, entry) => {
-    expect(() => buildAgentQueryOptions({ ...minArgs, allowedTools: ["Read", entry] })).toThrow();
+    expect(() => buildAgentQueryOptions({ ...minArgs, allowedTools: ["Read", entry] })).toThrow(/pre-approv/i);
+  });
+
+  it.each(BASH_FAMILY)("throws on %s", (_label, entry) => {
+    expect(() => buildAgentQueryOptions({ ...minArgs, allowedTools: ["Read", entry] })).toThrow(
+      /pre-approve Bash ahead of canUseTool/,
+    );
+  });
+
+  it("entries that merely start with the letters of Bash are not the Bash family", () => {
+    const list = ["BashOutput", "KillBash"];
+    expect(buildAgentQueryOptions({ ...minArgs, allowedTools: list }).allowedTools).toEqual(list);
   });
 
   it("the error names the offending entry and nothing else (static prefix, no tool input)", () => {
     expect(() => buildAgentQueryOptions({ ...minArgs, allowedTools: [`${P}email_send`] })).toThrow(
-      `${P}email_send`,
+      `buildAgentQueryOptions: allowedTools entry would pre-approve a tool ahead of canUseTool: ${JSON.stringify(`${P}email_send`)}`,
     );
+  });
+
+  it("an over-long offending entry is echoed truncated to 120 characters", () => {
+    const entry = `${P}${"x".repeat(500)}`;
+    let message = "";
+    try {
+      buildAgentQueryOptions({ ...minArgs, allowedTools: [entry] });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain(JSON.stringify(entry.slice(0, 120)));
+    expect(message).not.toContain(entry.slice(0, 121));
   });
 
   it("an unclassified platform name appended after compliant entries still throws", () => {
@@ -664,7 +697,7 @@ describe("buildAgentQueryOptions — allowedTools pre-approval allowlist (#11303
         ...minArgs,
         allowedTools: [`${P}kb_share_list`, `${P}narrate`, `${P}new_write_tool`],
       }),
-    ).toThrow();
+    ).toThrow(/pre-approv/i);
   });
 
   it.each([
@@ -681,14 +714,17 @@ describe("buildAgentQueryOptions — allowedTools pre-approval allowlist (#11303
     expect("allowedTools" in buildAgentQueryOptions(minArgs)).toBe(false);
   });
 
-  it("throws when permissionMode is bypassPermissions (it skips canUseTool for every tool)", () => {
-    expect(() => buildAgentQueryOptions({ ...minArgs, permissionMode: "bypassPermissions" })).toThrow(
-      /bypassPermissions/,
-    );
-  });
+  it.each(["bypassPermissions", "acceptEdits", "dontAsk", "plan", "auto"])(
+    "throws on permissionMode %s (anything but undefined or default decides before canUseTool)",
+    (mode) => {
+      expect(() => buildAgentQueryOptions({ ...minArgs, permissionMode: mode as never })).toThrow(
+        new RegExp(`permissionMode "${mode}" would pre-approve tools ahead of canUseTool`),
+      );
+    },
+  );
 
-  it("still accepts the default and plan permission modes", () => {
+  it("accepts an undefined or default permissionMode", () => {
     expect(buildAgentQueryOptions({ ...minArgs, permissionMode: "default" }).permissionMode).toBe("default");
-    expect(buildAgentQueryOptions({ ...minArgs, permissionMode: "plan" }).permissionMode).toBe("plan");
+    expect(buildAgentQueryOptions(minArgs).permissionMode).toBe("default");
   });
 });
