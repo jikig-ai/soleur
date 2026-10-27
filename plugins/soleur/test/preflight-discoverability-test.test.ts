@@ -3068,6 +3068,8 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the command (`bash apps/web-platform/infra/git-data-plaintext-volume-state.sh`) reads the Hetzner API (volumes and servers by
   // name) with HCLOUD_TOKEN_READONLY from Doppler soleur/prd_terraform. NO SUBSTITUTE: the provider API has no unauthenticated read of
   // volume state, the host is no-SSH, and the offline suite drives the probe against a curl shim, not against the provider. Genuine.
+  // #11195 (2026-10-27): the probe command above is RETIRED (the script was deleted with the one-shot destroy workflow after run
+  // 40478209838). The declaration stays in the archived plan as history, so the count stays 85 and the TRUTH note above no longer holds.
   // #10550 (2026-10-26): +1 (84 -> 85) for `2026-10-26-feat-wikiskill-phase-2-gated-new-skill-creation-plan.md` (now under plans/archive/).
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the command (`bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 5`) reads the

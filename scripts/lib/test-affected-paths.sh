@@ -813,7 +813,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".claude/hooks/lib/log-rotation.sh"
   ".claude/hooks/memory-backstop-resolve.sh"
   ".claude/hooks/memory-backstop.sh"
-  ".github/workflows/git-data-plaintext-volume-destroy.yml"
   "apps/web-platform/app/layout.tsx"
   "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/cat-deploy-state.sh"
@@ -822,7 +821,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/cat-inngest-verify-state.sh"
   "apps/web-platform/infra/ci-deploy-wrapper.sh"
   "apps/web-platform/infra/ci-deploy.sh"
-  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh"
   "apps/web-platform/infra/infra-config-apply.sh"
   "apps/web-platform/infra/infra-config-install.sh"
@@ -864,7 +862,6 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "scripts/ship-incident-pir-gate.sh"
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
-  "tests/scripts/lib/git-data-plaintext-destroy-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
@@ -1072,15 +1069,6 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "scripts/sentry-issue.sh"
   "tests/scripts/lib/git-data-birth-readiness-gate.sh"
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
-)
-
-# tests/scripts/git-data-plaintext-destroy-gate — derived edges could not reach its subject: the suite executes the destroy
-# workflow's run blocks and the read-only probe it names (the gate library itself is reached through the source closure).
-AFFECTED_TESTS_SCRIPTS_GIT_DATA_PLAINTEXT_DESTROY_GATE_PATHS=(
-  ".github/workflows/git-data-plaintext-volume-destroy.yml"
-  "apps/web-platform/infra/git-data-plaintext-volume-state.sh"
-  "scripts/lib/test-affected-paths.sh"
-  "tests/scripts/test-git-data-plaintext-destroy-gate.sh"
 )
 
 # tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
