@@ -1106,11 +1106,6 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    Run it even when step 2 committed something: the trailer is the durable
    machine-readable signal, and the commit subject is only a legacy fallback.
 
-   **Count `--agents-expected` from the panel THIS diff's class prescribes after the skill's own substitutions** (the
-   structural-enumeration seat replaces one adversarial seat; shellcheck replaces semgrep on a bash-only diff), not from
-   every seat you considered: an over-count commits `Reviewed-Coverage: degraded`, and the fix is a `git reset --soft` of
-   the unpushed empty commits plus a re-emit. **Why:** #11286 — expected 11 for a 9-seat panel.
-
    **Then post the evidence a merge can see:** one `Review-Evidence:` PR comment, following
    [review-evidence-comment.md](./references/review-evidence-comment.md) (merge gate = agent review + green CI; no human approval).
 4. **Continue to `soleur:ship` in the same turn — review is not a stopping point.**
