@@ -18,7 +18,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { lstat, readFile, readlink, realpath, stat } from "node:fs/promises";
+import { lstat, open, readFile, readlink, realpath, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, sep } from "node:path";
@@ -440,12 +440,26 @@ export async function snapshotClone(root: string, baseEnv: BaseEnv = process.env
   if (!paths) return null;
   const out: CloneSnapshot = new Map();
   for (const p of paths) {
+    const abs = join(root, p);
     try {
-      const abs = join(root, p);
-      const st = await lstat(abs);
-      out.set(p, st.isSymbolicLink() ? `link:${await readlink(abs)}` : createHash("sha256").update(await readFile(abs)).digest("hex"));
-    } catch {
-      // review: swallowed -- a path git lists that cannot be lstat'd is recorded as "deleted" in the snapshot, which is what it is.
+      // One open, no check-then-read gap (CodeQL js/file-system-race): O_NOFOLLOW makes a symlink fail with ELOOP instead of
+      // being read through, and the hash is taken from the same descriptor.
+      const fh = await open(abs, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        out.set(p, createHash("sha256").update(await fh.readFile()).digest("hex"));
+      } finally {
+        await fh.close();
+      }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ELOOP") {
+        try {
+          out.set(p, `link:${await readlink(abs)}`);
+          continue;
+        } catch {
+          // review: swallowed -- the link vanished between the open and the readlink; recorded as "deleted" below, which is what it is.
+        }
+      }
+      // review: swallowed -- a path git lists that cannot be opened is recorded as "deleted" in the snapshot, which is what it is.
       out.set(p, "deleted");
     }
   }
