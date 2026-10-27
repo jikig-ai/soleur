@@ -703,7 +703,13 @@ async function openDirOrThrow(
  * the containment invariant, and `/proc/self/fd/<fd>/..` resolves outside the
  * pinned dentry, so the primitives enforce it rather than trusting callers. */
 function containedCleanSegment(segment: string): boolean {
-  return segment !== "" && segment !== "." && segment !== ".." && !segment.includes("/");
+  return (
+    segment !== "" &&
+    segment !== "." &&
+    segment !== ".." &&
+    !segment.includes("/") &&
+    !segment.includes("\\")
+  );
 }
 
 /**
@@ -720,7 +726,7 @@ export async function openContainedDir(
   spawnCwd: string,
   dirSegments: string[],
 ): Promise<ContainedDir> {
-  const { open, mkdir } = await import("node:fs/promises");
+  const { mkdir } = await import("node:fs/promises");
   const { join } = await import("node:path");
   const dirFlags = (await containedFlagConstants()).dir;
 
@@ -790,21 +796,26 @@ export async function createContainedFile(
     ? `${CONTAINED_FD_BASE}/${capturedFd}/${leaf}`
     : join(dir.dirPath, leaf);
 
+  // The pinned path embeds the fd number captured above; if the handle was
+  // closed mid-flight its fd reads -1 and a recycled number would anchor the
+  // leaf under an unrelated dentry — refuse rather than resolve stale. Runs
+  // before EVERY use of the pinned path, unlink included.
+  const fdIsLive = (): boolean => dir.fh.fd === capturedFd && dir.fh.fd >= 0;
+  if (!fdIsLive()) {
+    throw new Error("writeDigestFileContained: pinned dir handle closed during write");
+  }
   try {
     // unlink removes a symlink itself, never the file it points at.
     await unlink(leafPath);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EISDIR") {
+    if (code === "EISDIR" || code === "EPERM") {
       throw new Error("writeDigestFileContained: target is a directory");
     }
     if (code !== "ENOENT") throw err;
   }
   if (beforeOpen) await beforeOpen();
-  // The pinned path embeds the fd number captured above; if the handle was
-  // closed mid-flight its fd reads -1 and a recycled number would anchor the
-  // leaf under an unrelated dentry — refuse rather than resolve stale.
-  if (dir.fh.fd !== capturedFd || dir.fh.fd < 0) {
+  if (!fdIsLive()) {
     throw new Error("writeDigestFileContained: pinned dir handle closed during write");
   }
   try {
@@ -829,7 +840,7 @@ export async function writeDigestFileContained(
   if (
     relPath === "" ||
     isAbsolute(relPath) ||
-    segments.some((s) => s === "" || s === "." || s === "..")
+    segments.some((s) => !containedCleanSegment(s))
   ) {
     throw new Error("writeDigestFileContained: relPath must be a clean relative path");
   }

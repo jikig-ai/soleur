@@ -1144,14 +1144,28 @@ describe("writeDigestFileContained", () => {
   );
 
   it("refuses non-basename segments and leaves in the exported helpers", async () => {
-    for (const bad of ["..", ".", "", "a/b", "/abs"]) {
+    for (const bad of ["..", ".", "", "a/b", "/abs", "..\\evil"]) {
       await expect(openContainedDir(root, [bad]), bad).rejects.toThrow(/clean basenames/);
     }
     const dir = await openContainedDir(root, ["knowledge-base"]);
     try {
-      for (const bad of ["..", ".", "", "a/b", "/abs"]) {
+      for (const bad of ["..", ".", "", "a/b", "/abs", "..\\evil"]) {
         await expect(createContainedFile(dir, bad), bad).rejects.toThrow(/clean basename/);
       }
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+  });
+
+  it("refuses when the pinned dir handle closes mid-flight (stale fd)", async () => {
+    await mkdir(join(root, "knowledge-base"), { recursive: true });
+    const dir = await openContainedDir(root, ["knowledge-base"]);
+    try {
+      await expect(
+        createContainedFile(dir, "leaf.md", async () => {
+          await dir.fh.close();
+        }),
+      ).rejects.toThrow(/pinned dir handle closed/);
     } finally {
       await dir.fh.close().catch(() => {});
     }
