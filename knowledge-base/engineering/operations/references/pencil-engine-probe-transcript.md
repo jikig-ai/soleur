@@ -9,7 +9,7 @@ Credential, `$HOME`, absolute paths, UUIDs (including a document `fileToken`) an
 ```text
 PASS pen status reports Active for the credential (fail-open engine guard)
 PASS installed @pen.dev/cli version equals the check_deps.sh pin
-RECORD undici version in the engine tree under test: 8.10.2
+RECORD undici version in the engine tree under test: 8.12.2
 PASS parsed tool signatures from --help
 PASS every REPL_SURFACE tool has exactly the signature the CLI prints
 PASS none of the 9 removed tools is listed in --help
@@ -133,7 +133,7 @@ RECORD files the engine wrote under HOME in a session: none
 PASS no file the engine wrote under HOME contains a form of the canary credential
 PASS positive control: this probe's own redactor removes the canary in all three forms
 RECORD lockfile packages declaring an install script (skipped by --ignore-scripts): @google/genai, protobufjs, sharp
-RECORD install method: npm 11.20.0 ci --ignore-scripts rc=0 in 43 s; node v26.12.1
+RECORD install method: npm 11.20.0 ci --ignore-scripts rc=0 in 19 s; node v26.12.1
 PASS npm ci --ignore-scripts from the committed lockfile succeeds
 PASS npm ci left the lockfile byte-identical
 PASS the --ignore-scripts install holds the pinned engine version
@@ -234,6 +234,7 @@ RECORD acceptance kb viewer shared document diagram render.pen: disk=5 loaded=5
 RECORD acceptance kb kb sidebar resize handle bar.pen: disk=5 loaded=5
 RECORD acceptance marketing homepage fanout demo 9577.pen: disk=4 loaded=4
 RECORD acceptance marketing homepage hero trust 9579.pen: disk=12 loaded=12
+RECORD acceptance marketing learn nav go deeper rail.pen: disk=2 loaded=2
 RECORD acceptance mobile chat tour revision mobile chat and tour revision.pen: disk=10 loaded=10
 RECORD acceptance mobile kanban mobile kanban board phase 3.pen: disk=17 loaded=17
 RECORD acceptance mobile phase 3 mobile phase 3 tables and sheets.pen: disk=7 loaded=7
@@ -261,6 +262,7 @@ RECORD acceptance scope grants pr g cohort onboarding.pen: disk=7 loaded=7
 RECORD acceptance settings agent web access.pen: disk=3 loaded=3
 RECORD acceptance settings concierge command execution.pen: disk=4 loaded=4
 RECORD acceptance settings connected services.pen: disk=3 loaded=3
+RECORD acceptance settings egress audit log.pen: disk=25 loaded=25
 RECORD acceptance settings general workspace identity relocation.pen: disk=1 loaded=1
 RECORD acceptance settings kb reconnect affordance.pen: disk=2 loaded=2
 RECORD acceptance shared document cta banner visibility states.pen: disk=8 loaded=8
@@ -281,7 +283,7 @@ RECORD acceptance workstream workstream filter bar.pen: disk=3 loaded=3
 RECORD acceptance workstream workstream issue crud.pen: disk=29 loaded=29
 RECORD acceptance workstream workstream kanban.pen: disk=5 loaded=5
 RECORD acceptance REFUSED dashboard dashboard load states.pen: open failed: [pencil-adapter] pen exited before it was ready (code=1 signal=null):
-RECORD load-fidelity acceptance summary: 106 committed design .pen files, 106 parse as documents, 105 load faithfully, 1 refused by the engine, 0 load with fewer top-level nodes, 210 s
+RECORD load-fidelity acceptance summary: 108 committed design .pen files, 108 parse as documents, 107 load faithfully, 1 refused by the engine, 0 load with fewer top-level nodes, 107 s
 PASS acceptance: every committed file was evaluated
 PASS acceptance (ruling 6): no committed design .pen loads with fewer top-level nodes than on disk
 PASS acceptance: the committed files the engine refuses to open are exactly the pinned set
