@@ -413,8 +413,8 @@ if [[ -f "$PREPULL" ]] && grep -qF 'ghcr-pull-with-retry.sh' "$PREPULL"; then pa
 else fail "wiring:prepull-via-helper" "pre-pull does not route pulls through the retry helper"; fi
 if [[ -f "$PREPULL" ]] && grep -qF 'docker pull' "$PREPULL"; then pass "wiring:prepull-docker-pull"
 else fail "wiring:prepull-docker-pull" "pre-pull does not docker pull"; fi
-if [[ -f "$PREPULL" ]] && grep -qF 'ghcr\.io/supabase/' "$PREPULL"; then pass "wiring:prepull-ghcr-anchored"
-else fail "wiring:prepull-ghcr-anchored" "pre-pull extraction is not anchored on ghcr.io/supabase/"; fi
+if [[ -f "$PREPULL" ]] && grep -qF 'supabase/[a-z0-9-]+:' "$PREPULL"; then pass "wiring:prepull-ghcr-anchored"
+else fail "wiring:prepull-ghcr-anchored" "pre-pull extraction is not anchored on supabase/ refs"; fi
 if [[ -f "$PREPULL" ]] && grep -qF 'strings "$SUPABASE_BIN"' "$PREPULL"; then pass "wiring:prepull-binary-strings"
 else fail "wiring:prepull-binary-strings" "pre-pull does not extract refs from the CLI binary"; fi
 if [[ -f "$PREPULL" ]] && grep -qF 'MIN_IMAGES' "$PREPULL"; then pass "wiring:prepull-floor"
@@ -517,8 +517,8 @@ assert_calls "b:two-arg-calls" 1
 echo "=== Guard 1c: pre-pull behavior (fake binary + stubbed docker) ==="
 
 # A fake CLI binary: `strings` extracts the printable refs embedded in it —
-# 10 refs clears the MIN_IMAGES=8 floor; noise lines prove only anchored
-# ghcr.io/supabase refs are extracted.
+# 10 refs clears the MIN_IMAGES=8 floor; glue-shaped refs prove the
+# version-shape cutter; noise lines prove only anchored supabase/ refs pull.
 FAKE_BIN_DIR="$TMP/fake-bin"
 assert_fixture_dir "$FAKE_BIN_DIR"
 mkdir -p "$FAKE_BIN_DIR"
@@ -528,10 +528,13 @@ mkdir -p "$FAKE_BIN_DIR"
   n=0
   for i in a b c d e f g h i j; do
     n=$((n+1))
-    printf 'ghcr.io/supabase/img-%s:1.%d.0\n' "$i" "$n"
+    printf 'supabase/img-%s:1.%d.0\n' "$i" "$n"
   done
-  printf 'ghcr.io/other-org/not-counted:1.0\n'
-  printf 'ghcr.io/supabase/template-no-tag:%%s\n'
+  printf 'supabase/edge:v9.9.9password_verification_attemptfailed\n'
+  printf 'supabase/old:3.0.1failed\n'
+  printf 'supabase/postgres:orioledb-failed\n'
+  printf 'other-org/not-counted:1.0\n'
+  printf 'supabase/template-no-tag:%%s\n'
   printf 'more noise\n'
 } > "$FAKE_BIN_DIR/supabase"
 chmod +x "$FAKE_BIN_DIR/supabase"
@@ -562,23 +565,31 @@ run_prepull() { # name path-prefix [docker-mode]
   LAST_RC=$?
 }
 
-# Happy path: 10 extracted refs, 10 serial pulls, rc 0.
+# Happy path: 12 extracted refs (10 clean + 2 glue-cut), 12 serial pulls, rc 0.
 run_prepull pp-ok "$FAKE_BIN_DIR:$BIN" ok
 assert_rc "c:happy-rc" 0
-assert_calls "c:happy-pulls" 10
-assert_out_has "c:happy-echo" 'pre-pull: 10 images'
-# Serial order preserved: pull argv lines arrive in the extraction order.
+assert_calls "c:happy-pulls" 12
+assert_out_has "c:happy-echo" 'pre-pull: 12 images'
+# Serial order preserved: pull argv lines arrive in the extraction order,
+# prefixed with ghcr.io/ at pull time.
 if grep -qF 'pull ghcr.io/supabase/img-a:1.1.0' "$STUB_CALLS" && \
    grep -qF 'pull ghcr.io/supabase/img-j:1.10.0' "$STUB_CALLS"; then pass "c:happy-args"
 else fail "c:happy-args" "pull argv missing extracted refs — $(cat "$STUB_CALLS" | tr '\n' '|')"; fi
 # The foreign-org ref and the %-templated ref must NOT be pulled.
 if grep -qF 'other-org' "$STUB_CALLS"; then fail "c:happy-anchor" "extraction leaked a non-supabase ref"; else pass "c:happy-anchor"; fi
 if grep -qF 'template-no-tag' "$STUB_CALLS"; then fail "c:happy-tag-required" "extraction pulled an untagged/template ref"; else pass "c:happy-tag-required"; fi
+# Glue-cut: `v9.9.9password_...` pulls as `v9.9.9`, `3.0.1failed` as `3.0.1`,
+# and `orioledb-failed` never reaches a pull.
+if grep -qF 'pull ghcr.io/supabase/edge:v9.9.9' "$STUB_CALLS"; then pass "c:glue-cut-v"
+else fail "c:glue-cut-v" "glued version tag not cut — $(cat "$STUB_CALLS" | tr '\n' '|')"; fi
+if grep -qF 'pull ghcr.io/supabase/old:3.0.1' "$STUB_CALLS"; then pass "c:glue-cut-failed"
+else fail "c:glue-cut-failed" "glued 'failed' suffix not cut"; fi
+if grep -qF 'orioledb' "$STUB_CALLS"; then fail "c:orioledb-excluded" "non-version tag pulled"; else pass "c:orioledb-excluded"; fi
 
 # Throttle on the first pull retried by the helper: N+1 calls, rc 0, warning.
 run_prepull pp-retry "$FAKE_BIN_DIR:$BIN" throttle-once
 assert_rc "c:retry-rc" 0
-assert_calls "c:retry-pulls" 11
+assert_calls "c:retry-pulls" 13
 assert_out_re "c:retry-warn" '^::warning::.*toomanyrequests'
 
 # Extraction floor: 3 refs < 8 fails loudly, docker never invoked.
@@ -612,7 +623,7 @@ assert_out_re "c:nobin-error" '^::error::.*not on PATH'
 # report is printf + exit 1, never routed through the helpers it backstops.
 # ---------------------------------------------------------------------------
 
-MIN_ASSERTIONS=106
+MIN_ASSERTIONS=109
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertion(s) ran, expected >= %d — a deleted guard row must not green this suite\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

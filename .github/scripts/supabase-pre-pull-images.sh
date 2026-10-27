@@ -1,27 +1,30 @@
 #!/usr/bin/env bash
 # supabase-pre-pull-images.sh — serial, per-image-retried pre-pull of the
-# Supabase image set — #10868 follow-up (measured on run 40525753531).
+# Supabase image set — #10868 follow-up (measured on runs 40525753531 and
+# 40561028313).
 #
 # WHY. The org-namespace pull budget (`allowed: 44000/minute`, identical under
 # anonymous AND authenticated pulls) saturates on GLOBAL load, so a single
 # `supabase start` fan-out fires ~150 requests into the same bucket each
 # attempt — bounded whole-command retry cannot win when every attempt
-# re-bursts. Splitting the fan-out into ~15 independent `docker pull`s makes
+# re-bursts. Splitting the fan-out into ~10 independent `docker pull`s makes
 # each pull a small retryable unit: a pull needs ONE calm instant per
 # registry request, and the retry helper (ghcr-pull-with-retry.sh) paces
 # throttle-signature failures per image instead of re-firing the whole fan-out.
 # A completed pull lands in the daemon cache, so `supabase start` afterwards
 # issues minimal (often zero) registry traffic.
 #
-# IMAGE ENUMERATION. The CLI embeds its pinned image refs as plain strings in
-# the Go binary (self-updating across the pinned version bumps in
-# rls-authz-fuzz.yml — no manual tag list to drift). A floor check fails the
-# step LOUDLY if the extraction shape changes (e.g., refs move to a template
-# form), never silently skipping the pre-pull.
-#
-# Pulls run through the same retry helper the start step uses, so a
-# permanently-throttled image propagates the daemon's rc and an ::error::
-# annotation instead of dying ambiguously.
+# IMAGE ENUMERATION. The CLI embeds its pinned refs in the binary as bare
+# `supabase/<name>:<tag>` strings (verified against CLI 2.84.2 — there is NO
+# `ghcr.io/` prefix in the binary; the CLI prepends the registry at pull
+# time). `strings` glues adjacent Go literals together, so raw refs come out
+# corrupted (`supabase/edge-runtime:v1.68.4password_verification_attemptfailed`,
+# `supabase/postgres:14.1.0.89failed`, `supabase/postgres:orioledb-failed`).
+# The tag alternation below only accepts version-shaped tags — it CUTS the
+# glue after the last numeric component instead of mispulling a fake tag —
+# and non-supabase-org refs (e.g. postgrest/postgrest, pulled from Docker
+# Hub, not the throttled GHCR bucket) are excluded by the `supabase/` anchor.
+# A floor check fails the step LOUDLY if extraction goes dark.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,11 +37,13 @@ if [[ -z "$SUPABASE_BIN" ]]; then
   exit 2
 fi
 
-# Only fully-tagged ghcr.io/supabase refs count: template forms (`...:%s`)
-# and untagged names are skipped rather than mispulled as :latest.
+# `v?[0-9]+(\.[0-9]+)+` cuts glued suffixes at the last numeric boundary
+# (`v1.68.4password...` -> `v1.68.4`, `14.1.0.89failed` -> `14.1.0.89`);
+# `-sha-<hex>` keeps studio's date-sha tags; `cli-X.Y` keeps pgadmin-schema-diff.
+# `orioledb-failed` and other non-version tags never match.
 mapfile -t IMAGES < <(
   strings "$SUPABASE_BIN" \
-    | grep -oE 'ghcr\.io/supabase/[a-z0-9._-]+:[A-Za-z0-9._-]+' \
+    | grep -oE 'supabase/[a-z0-9-]+:(v?[0-9]+(\.[0-9]+)+(-sha-[0-9a-f]{6,})?|cli-[0-9.]+)' \
     | sort -u
 )
 
@@ -50,6 +55,6 @@ fi
 
 printf 'pre-pull: %d images from %s\n' "${#IMAGES[@]}" "$SUPABASE_BIN"
 for img in "${IMAGES[@]}"; do
-  printf 'pre-pull: %s\n' "$img"
-  bash "$RETRY" docker pull "$img"
+  printf 'pre-pull: ghcr.io/%s\n' "$img"
+  bash "$RETRY" docker pull "ghcr.io/$img"
 done
