@@ -138,6 +138,7 @@ import {
   DEFAULT_API_KEY_ROW,
   createSupabaseMockImpl,
   createQueryMock,
+  registeredPlatformTools,
 } from "./helpers/agent-runner-mocks";
 
 // ---------------------------------------------------------------------------
@@ -155,11 +156,8 @@ function setupQueryMockImmediate() {
   createQueryMock(mockQuery);
 }
 
-// Registered tool short names of the in-process soleur_platform MCP server (the `tool` mock returns { name, handler }).
-// #11303: `allowedTools` now holds only auto-approve tools, so "is this tool registered?" must be asked of the server.
-function registeredPlatformTools(options: { mcpServers?: { soleur_platform?: { instance: { tools: { name: string }[] } } } }) {
-  return (options.mcpServers?.soleur_platform?.instance.tools ?? []).map((t) => t.name);
-}
+// #11303: `allowedTools` now holds only auto-approve tools, so "is this tool registered?" is asked of the server via the
+// shared `registeredPlatformTools` helper (helpers/agent-runner-mocks.ts).
 
 // ---------------------------------------------------------------------------
 // Tests

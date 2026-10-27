@@ -21,6 +21,7 @@ import {
   pluginWildcard,
   parsePluginWildcard,
 } from "../server/tool-tiers";
+import { EXPECTED_GATED } from "./helpers/expected-tool-tiers";
 
 describe("getToolTier", () => {
   test("returns auto-approve for github_read_ci_status", () => {
@@ -246,7 +247,8 @@ describe("explicit tier entries (#11303)", () => {
 
 describe("gate messages for tools that become reachable (#11303)", () => {
   test("no gated tool's card is the generic default", () => {
-    expect(GATED_KEYS.length).toBeGreaterThan(15);
+    // the universe is the hand-written gated list, not a floor derived from the map under test
+    expect([...GATED_KEYS].sort()).toEqual(EXPECTED_GATED.map((n) => `${P}${n}`).sort());
     for (const key of GATED_KEYS) {
       const short = key.replace(P, "");
       expect(buildGateMessage(key, {})).not.toBe(`Agent wants to use **${short}**. Allow?`);

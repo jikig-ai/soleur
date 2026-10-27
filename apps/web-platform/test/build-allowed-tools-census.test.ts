@@ -7,7 +7,7 @@
  * is ever handed to the SDK as pre-approved by any runner.
  *
  * Layout:
- *   1. unit census over `buildAllowedTools` (derived universe, pinned floors)
+ *   1. unit census over `buildAllowedTools` (booted universe, hand-written full tier table)
  *   2. mutation battery: mutant filters run through ONE oracle (`assertCensus`) that must flag each of them, plus a
  *      direct sensitivity check on the oracle (an always-green oracle fails the suite)
  *   3. explicit-tier-entry check over the names a booted `startAgentSession` really registers
@@ -109,6 +109,7 @@ vi.mock("../server/service-tools", () => ({
 vi.mock("../server/observability", () => ({
   reportSilentFallback: vi.fn(),
   reportSilentFallbackWarning: vi.fn(),
+  warnSilentFallback: vi.fn(),
 }));
 vi.mock("../server/permission-callback", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server/permission-callback")>();
@@ -123,38 +124,21 @@ vi.mock("../server/permission-callback", async (importOriginal) => {
 
 import { join } from "node:path";
 import { startAgentSession } from "../server/agent-runner";
-import { buildAllowedTools, getToolTier, TOOL_TIER_MAP } from "../server/tool-tiers";
+import { buildAllowedTools, buildOfflineGateMessage, getToolTier, TOOL_TIER_MAP } from "../server/tool-tiers";
+import { assertAllowedToolsPreApprovalSafe } from "../server/agent-runner-query-options";
 import { DEFAULT_API_KEY_ROW, createSupabaseMockImpl, createQueryMock } from "./helpers/agent-runner-mocks";
+import { EXPECTED_AUTO_APPROVE, EXPECTED_GATED, EXPECTED_TOOL_TIERS } from "./helpers/expected-tool-tiers";
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Pinned anchors (live in the test on purpose: a single diff that edits the tier map AND this file is what review catches;
-// the real-SDK probe independently refuses to run if these eight are not gated).
+// The expected tier of every platform tool is the hand-written table in helpers/expected-tool-tiers.ts. It is NOT derived
+// from TOOL_TIER_MAP, so flipping a tool's tier needs a second visible edit there and a flip alone reds the suite.
 // ---------------------------------------------------------------------------------------------------------------------
 const PREFIX = "mcp__soleur_platform__";
 const fqn = (n: string) => `${PREFIX}${n}`;
 const wildcard = (s: string) => `mcp__plugin_soleur_${s}__*`;
 
-const PINNED_GATED = [
-  "email_send",
-  "email_reply",
-  "email_suppress",
-  "github_push_branch",
-  "create_pull_request",
-  "github_trigger_workflow",
-  "kb_share_create",
-  "workspace_set_autonomous",
-].map(fqn);
-const PINNED_AUTO = [
-  "kb_share_list",
-  "kb_share_preview",
-  "email_triage_list",
-  "email_triage_get",
-  "inbox_list",
-  "crm_contact_list",
-  "github_read_issue",
-  "conversations_lookup",
-  "workspace_get_autonomous",
-].map(fqn);
+const PINNED_GATED = EXPECTED_GATED.map(fqn);
+const PINNED_AUTO = EXPECTED_AUTO_APPROVE.map(fqn);
 
 const PLUGIN_SERVERS = ["context7", "cloudflare", "vercel", "stripe"];
 
@@ -190,16 +174,18 @@ async function bootLegacySession(): Promise<Booted> {
 function assertCensus(output: readonly string[], universe: readonly string[], plugins: readonly string[]): string[] {
   const problems: string[] = [];
   for (const n of output) {
-    if (n.startsWith(PREFIX) && getToolTier(n) !== "auto-approve") problems.push(`non-auto platform tool pre-approved: ${n}`);
+    if (n.startsWith(PREFIX) && EXPECTED_TOOL_TIERS[n] !== "auto-approve") problems.push(`non-auto platform tool pre-approved: ${n}`);
   }
-  // floors: a vacuous census or a vacuous filter must not read as green
-  if (universe.length < PINNED_GATED.length + PINNED_AUTO.length) problems.push("census smaller than the pinned floor");
+  // a vacuous census or a vacuous filter must not read as green: the booted universe must be non-trivial in BOTH tiers
+  const gatedInUniverse = universe.filter((n) => EXPECTED_TOOL_TIERS[n] === "gated");
+  const autoInUniverse = universe.filter((n) => EXPECTED_TOOL_TIERS[n] === "auto-approve");
+  if (gatedInUniverse.length === 0 || autoInUniverse.length === 0) problems.push("census holds no tool of one tier");
   for (const g of PINNED_GATED) {
-    if (!universe.includes(g)) problems.push(`pinned gated tool missing from the census: ${g}`);
-    if (getToolTier(g) !== "gated") problems.push(`pinned gated tool changed tier: ${g}`);
+    if (getToolTier(g) !== "gated") problems.push(`gated tool changed tier: ${g}`);
   }
   for (const a of PINNED_AUTO) {
-    if (universe.includes(a) && !output.includes(a)) problems.push(`pinned auto-approve tool dropped from the output: ${a}`);
+    if (getToolTier(a) !== "auto-approve") problems.push(`auto-approve tool changed tier: ${a}`);
+    if (universe.includes(a) && !output.includes(a)) problems.push(`auto-approve tool dropped from the output: ${a}`);
   }
   if (!output.some((n) => n.startsWith(PREFIX))) problems.push("no auto-approve platform tool in the output");
   for (const s of plugins) {
@@ -222,25 +208,40 @@ describe("buildAllowedTools: unit census", () => {
     booted = await bootLegacySession();
   });
 
-  test("the universe is derived from the real builders, covers the pinned sets, and the output is exactly its auto-approve part", () => {
-    const { platformToolNames } = booted;
-    for (const n of [...PINNED_GATED, ...PINNED_AUTO]) expect(platformToolNames).toContain(n);
-    const out = buildAllowedTools(platformToolNames, PLUGIN_SERVERS);
-    const platformOut = out.filter((n) => n.startsWith(PREFIX));
-    expect([...platformOut].sort()).toEqual(
-      [...new Set(platformToolNames.filter((n) => getToolTier(n) === "auto-approve"))].sort(),
-    );
-    expect(assertCensus(out, platformToolNames, PLUGIN_SERVERS)).toEqual([]);
-    // the gated part of the universe is non-trivial and entirely absent
-    const gated = platformToolNames.filter((n) => getToolTier(n) !== "auto-approve");
-    expect(gated.length).toBeGreaterThan(PINNED_GATED.length - 1);
-    for (const g of gated) expect(out).not.toContain(g);
+  test("the tier map equals the hand-written full table exactly (a one-sided flip of any tool, in either direction, reds here)", () => {
+    expect(TOOL_TIER_MAP).toEqual(EXPECTED_TOOL_TIERS);
+    expect(Object.keys(EXPECTED_TOOL_TIERS)).toHaveLength(EXPECTED_AUTO_APPROVE.length + EXPECTED_GATED.length);
+    expect(new Set(Object.keys(EXPECTED_TOOL_TIERS)).size).toBe(EXPECTED_AUTO_APPROVE.length + EXPECTED_GATED.length); // no name in both lists
   });
 
-  test("every TOOL_TIER_MAP gated entry is absent even when handed to the filter explicitly", () => {
-    const gatedKeys = Object.entries(TOOL_TIER_MAP).filter(([, t]) => t === "gated").map(([k]) => k);
-    expect(gatedKeys.length).toBeGreaterThan(PINNED_GATED.length - 1);
-    expect(buildAllowedTools(gatedKeys, PLUGIN_SERVERS)).toEqual(PLUGIN_SERVERS.map(wildcard));
+  test("the booted universe is exactly the registered tools; each is in the table; auto-approve ones are pre-approved and gated ones are not", () => {
+    const { platformToolNames, options } = booted;
+    for (const n of platformToolNames) expect(EXPECTED_TOOL_TIERS, `no expected tier for registered tool ${n}`).toHaveProperty([n]);
+    const allowed = options.allowedTools as string[];
+    const autoRegistered = platformToolNames.filter((n) => EXPECTED_TOOL_TIERS[n] === "auto-approve");
+    const gatedRegistered = platformToolNames.filter((n) => EXPECTED_TOOL_TIERS[n] === "gated");
+    expect(autoRegistered.length).toBeGreaterThan(0);
+    expect(gatedRegistered.length).toBeGreaterThan(0);
+    for (const n of autoRegistered) expect(allowed, `auto-approve tool missing from allowedTools: ${n}`).toContain(n);
+    for (const n of gatedRegistered) expect(allowed, `gated tool pre-approved: ${n}`).not.toContain(n);
+    // and the platform part of allowedTools is exactly the auto-approve registered set
+    expect(allowed.filter((n) => n.startsWith(PREFIX)).sort()).toEqual([...new Set(autoRegistered)].sort());
+    expect(assertCensus(buildAllowedTools(platformToolNames, PLUGIN_SERVERS), platformToolNames, PLUGIN_SERVERS)).toEqual([]);
+  });
+
+  test("the booted legacy session registers every hand-listed tool except the cc-only ones (a deleted or renamed tool shows here)", () => {
+    const ccOnly = new Set(["edit_c4_diagram", "narrate", "summarize", "auth_revocation_status"].map(fqn));
+    const expectedRegistered = [...PINNED_GATED, ...PINNED_AUTO].filter((n) => !ccOnly.has(n));
+    for (const n of expectedRegistered) expect(booted.platformToolNames, `expected registered: ${n}`).toContain(n);
+  });
+
+  test("every hand-listed gated entry is absent even when handed to the filter explicitly", () => {
+    expect(buildAllowedTools(PINNED_GATED, PLUGIN_SERVERS)).toEqual(PLUGIN_SERVERS.map(wildcard));
+  });
+
+  test("every gated tool has a content-free offline label (not the generic fallback)", () => {
+    const generic = buildOfflineGateMessage(fqn("some_unlisted_future_tool"), {});
+    for (const g of PINNED_GATED) expect(buildOfflineGateMessage(g, {}), `no OFFLINE_ACTION_LABELS entry for ${g}`).not.toBe(generic);
   });
 
   // --- must-PASS inputs that are not the canonical one -----------------------------------------------------------------
@@ -341,14 +342,33 @@ describe("buildAllowedTools: unit census", () => {
       expect(bad.join("\n")).toContain(fqn("email_send"));
     });
 
-    test("tier flip: email_send made auto-approve in the map is caught by the pinned set", () => {
+    test.each(["routine_run", "crm_contact_upsert", "crm_contact_set_stage", "workstream_issue_create", "workstream_issue_set_status", "workstream_issue_update_title"])(
+      "tier flip: %s made auto-approve is caught by the full table (it was NOT caught by the eight-name pin)",
+      (name) => {
+        const original = TOOL_TIER_MAP[fqn(name)];
+        TOOL_TIER_MAP[fqn(name)] = "auto-approve";
+        try {
+          const universe = [...booted.platformToolNames];
+          const out = real(universe, PLUGIN_SERVERS);
+          expect(out).toContain(fqn(name));
+          expect(assertCensus(out, universe, PLUGIN_SERVERS).join("\n")).toContain(`gated tool changed tier: ${fqn(name)}`);
+          expect(TOOL_TIER_MAP).not.toEqual(EXPECTED_TOOL_TIERS);
+        } finally {
+          TOOL_TIER_MAP[fqn(name)] = original;
+        }
+        expect(getToolTier(fqn(name))).toBe("gated");
+      },
+    );
+
+    test("tier flip: email_send made auto-approve in the map is caught by the table", () => {
       const original = TOOL_TIER_MAP[fqn("email_send")];
       TOOL_TIER_MAP[fqn("email_send")] = "auto-approve";
       try {
         const universe = [...booted.platformToolNames];
         const out = real(universe, PLUGIN_SERVERS);
         expect(out).toContain(fqn("email_send")); // the flipped filter now keeps it...
-        expect(assertCensus(out, universe, PLUGIN_SERVERS).join("\n")).toMatch(/pinned gated tool changed tier/); // ...and the pin says so
+        expect(assertCensus(out, universe, PLUGIN_SERVERS).join("\n")).toMatch(/gated tool changed tier/); // ...and the table says so
+        expect(TOOL_TIER_MAP).not.toEqual(EXPECTED_TOOL_TIERS);
       } finally {
         TOOL_TIER_MAP[fqn("email_send")] = original;
       }
@@ -363,6 +383,17 @@ describe("buildAllowedTools: unit census", () => {
     test("every name handed to canUseTool has an explicit TOOL_TIER_MAP entry (a new tool fails CI until its tier is decided)", () => {
       const missing = booted.platformToolNames.filter((n) => !Object.hasOwn(TOOL_TIER_MAP, n));
       expect(missing).toEqual([]);
+    });
+
+    test("the cc-soleur-go registry names (narrate/summarize, edit_c4_diagram, the crm-lead set) are decided in the table too", async () => {
+      const { CC_REGISTERED_PLATFORM_TOOL_NAMES, crmLeadPermissionToolNames } = await import("../server/cc-dispatcher");
+      const { C4_TOOL_FQN } = await import("../server/c4-concierge-tools");
+      const ccNames = [...CC_REGISTERED_PLATFORM_TOOL_NAMES, C4_TOOL_FQN, ...crmLeadPermissionToolNames(true)];
+      expect(ccNames.length).toBeGreaterThan(5); // not vacuous: narrate, summarize, c4 and the crm tools
+      for (const n of ccNames) {
+        expect(Object.hasOwn(TOOL_TIER_MAP, n), `no explicit tier for cc-registered tool ${n}`).toBe(true);
+        expect(TOOL_TIER_MAP[n]).toBe(EXPECTED_TOOL_TIERS[n]);
+      }
     });
 
     test("vacuity guard: the booted census really includes the Plausible, GitHub, account, routines, workstream and CRM builders", () => {
@@ -393,7 +424,9 @@ describe("buildAllowedTools: unit census", () => {
     test("non-empty, holds an auto-approve tool and the plugin wildcards, holds no registered tool that is not auto-approve", () => {
       const allowed = booted.options.allowedTools as string[];
       expect(allowed.length).toBeGreaterThan(0);
-      for (const a of PINNED_AUTO) expect(allowed).toContain(a);
+      const autoBooted = PINNED_AUTO.filter((n) => booted.platformToolNames.includes(n));
+      expect(autoBooted.length).toBeGreaterThan(10);
+      for (const a of autoBooted) expect(allowed).toContain(a);
       for (const s of PLUGIN_SERVERS) expect(allowed).toContain(wildcard(s));
       for (const n of booted.registered) {
         if (getToolTier(n) !== "auto-approve") expect(allowed).not.toContain(n);
@@ -418,6 +451,28 @@ describe("buildAllowedTools: unit census", () => {
     });
   });
 
+  describe("non-interactive wiring (auto-sync)", () => {
+    test("startAgentSession(..., nonInteractive=true) hands the flag to canUseTool, which then denies a gated tool at once", async () => {
+      const { abortableReviewGate } = await import("../server/review-gate");
+      mockQuery.mockClear();
+      canUseToolSpy.mockClear();
+      vi.mocked(abortableReviewGate).mockClear();
+      await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-2", undefined, undefined, "/soleur:sync --headless", undefined, undefined, false, true);
+      expect((canUseToolSpy.mock.calls[0][0] as { nonInteractive?: boolean }).nonInteractive).toBe(true);
+      const options = mockQuery.mock.calls[0][0].options;
+      const verdict = await options.canUseTool(fqn("email_send"), { to: "a@example.invalid", subject: "s", body: "b" }, { signal: new AbortController().signal });
+      expect(verdict).toEqual({
+        behavior: "deny",
+        message: "This action needs interactive approval and is not available in background sync. Do not retry.",
+      });
+      expect(abortableReviewGate).not.toHaveBeenCalled();
+    });
+
+    test("an ordinary session leaves the flag unset", () => {
+      expect((canUseToolSpy.mock.calls[0][0] as { nonInteractive?: boolean }).nonInteractive).toBeUndefined();
+    });
+  });
+
   // -------------------------------------------------------------------------------------------------------------------
   // Sentinels for the other routes that could pre-approve a tool ahead of canUseTool.
   // -------------------------------------------------------------------------------------------------------------------
@@ -427,7 +482,63 @@ describe("buildAllowedTools: unit census", () => {
       for (const extras of toolExtras) expect(extras).toBeUndefined();
     });
 
-    test("no plugin skill or agent frontmatter names mcp__soleur_platform__ (skill allowed-tools is a pre-approval route)", async () => {
+    // Skill and agent frontmatter `allowed-tools` / `tools` is a pre-approval route. Parse the entries and apply the SAME
+    // entry grammar as assertAllowedToolsPreApprovalSafe (not a substring match) to every MCP entry.
+    const FRONTMATTER_KEYS = new Set(["allowed-tools", "tools"]);
+    function frontmatterToolEntries(text: string): string[] {
+      const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+      if (m === null) return [];
+      const lines = m[1].split(/\r?\n/);
+      const entries: string[] = [];
+      const splitTopLevel = (v: string): string[] => {
+        const parts: string[] = [];
+        let depth = 0;
+        let cur = "";
+        for (const ch of v) {
+          if (ch === "(") depth += 1;
+          if (ch === ")") depth = Math.max(0, depth - 1);
+          if ((ch === "," || ch === " ") && depth === 0) {
+            if (cur.trim()) parts.push(cur.trim());
+            cur = "";
+          } else cur += ch;
+        }
+        if (cur.trim()) parts.push(cur.trim());
+        return parts;
+      };
+      for (let i = 0; i < lines.length; i++) {
+        const kv = /^([A-Za-z-]+):\s*(.*)$/.exec(lines[i]);
+        if (kv === null || !FRONTMATTER_KEYS.has(kv[1])) continue;
+        const inline = kv[2].replace(/^\[|\]$/g, "").trim();
+        if (inline) entries.push(...splitTopLevel(inline).map((e) => e.replace(/^["']|["']$/g, "")));
+        for (let j = i + 1; j < lines.length; j++) {
+          const item = /^\s+-\s+(.*)$/.exec(lines[j]);
+          if (item === null) break;
+          entries.push(item[1].trim().replace(/^["']|["']$/g, ""));
+        }
+      }
+      return entries;
+    }
+
+    test("the frontmatter parser handles inline, bracketed and block lists, and parenthesised commas", () => {
+      expect(frontmatterToolEntries("---\nname: x\nallowed-tools: Read, Bash(git add:*, git commit:*), mcp__a__b\n---\nbody")).toEqual([
+        "Read",
+        "Bash(git add:*, git commit:*)",
+        "mcp__a__b",
+      ]);
+      expect(frontmatterToolEntries('---\ntools: ["Read", "mcp__soleur_platform__email_send"]\n---')).toEqual(["Read", "mcp__soleur_platform__email_send"]);
+      expect(frontmatterToolEntries("---\nallowed-tools:\n  - Read\n  - mcp__soleur_platform__email_send\nother: 1\n---")).toEqual([
+        "Read",
+        "mcp__soleur_platform__email_send",
+      ]);
+      expect(frontmatterToolEntries("no frontmatter")).toEqual([]);
+    });
+
+    test("the entry grammar the sentinel applies rejects a gated platform entry in skill frontmatter and accepts an auto-approve one", () => {
+      expect(() => assertAllowedToolsPreApprovalSafe({ allowedTools: ["mcp__soleur_platform__email_send"] })).toThrow(/pre-approv/i);
+      expect(() => assertAllowedToolsPreApprovalSafe({ allowedTools: ["mcp__soleur_platform__kb_share_list"] })).not.toThrow();
+    });
+
+    test("no plugin skill or agent frontmatter pre-approves a platform tool the assertion would refuse", async () => {
       const fs = await vi.importActual<typeof import("fs")>("fs");
       const root = join(__dirname, "..", "..", "..", "plugins", "soleur");
       const files: string[] = [];
@@ -441,11 +552,22 @@ describe("buildAllowedTools: unit census", () => {
       walk(join(root, "skills"), (f) => f === "SKILL.md");
       walk(join(root, "agents"), (f) => f.endsWith(".md"));
       expect(files.length).toBeGreaterThan(20); // not vacuous: the walk found the plugin
-      const offenders = files.filter((f) => {
-        const text = fs.readFileSync(f, "utf8");
-        const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-        return m !== null && m[1].includes("mcp__soleur_platform__");
-      });
+      let parsedEntries = 0;
+      const offenders: string[] = [];
+      for (const f of files) {
+        for (const entry of frontmatterToolEntries(fs.readFileSync(f, "utf8"))) {
+          parsedEntries += 1;
+          // Platform entries only. Third-party plugin MCP entries (stripe, linear) are pre-approved by their skills by design
+          // and are outside this guard: they are not gated platform tools (reported separately in the PR notes).
+          if (!entry.trim().toLowerCase().startsWith("mcp__soleur_platform")) continue;
+          try {
+            assertAllowedToolsPreApprovalSafe({ allowedTools: [entry] });
+          } catch {
+            offenders.push(`${f}: ${entry}`);
+          }
+        }
+      }
+      expect(parsedEntries).toBeGreaterThan(0); // the parser found real allowed-tools entries
       expect(offenders).toEqual([]);
     });
   });

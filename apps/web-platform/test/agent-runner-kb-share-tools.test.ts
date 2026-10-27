@@ -135,6 +135,7 @@ import {
 import {
   createSupabaseMockImpl,
   createQueryMock,
+  registeredPlatformTools,
 } from "./helpers/agent-runner-mocks";
 
 function setupSupabaseMock(userData: Record<string, unknown>) {
@@ -158,11 +159,6 @@ const USER_WITHOUT_GITHUB = {
   github_installation_id: null,
   repo_url: null,
 };
-
-// Registered tool short names of the in-process soleur_platform MCP server (the `tool` mock returns { name, handler }).
-function registeredPlatformTools(options: { mcpServers?: { soleur_platform?: { instance: { tools: { name: string }[] } } } }) {
-  return (options.mcpServers?.soleur_platform?.instance.tools ?? []).map((t) => t.name);
-}
 
 describe("agent-runner kb_share_* tool wiring", () => {
   beforeEach(() => {

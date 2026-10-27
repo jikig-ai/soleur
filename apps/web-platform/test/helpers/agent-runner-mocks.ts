@@ -241,3 +241,10 @@ export function createQueryMock(
     throw: vi.fn(),
   } as any);
 }
+
+/** Short names of the platform tools the in-process `soleur_platform` MCP server registered (the `tool` mock returns `{ name, handler }`). */
+export function registeredPlatformTools(options: {
+  mcpServers?: { soleur_platform?: { instance: { tools: { name: string }[] } } };
+}): string[] {
+  return (options.mcpServers?.soleur_platform?.instance.tools ?? []).map((t) => t.name);
+}
