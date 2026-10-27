@@ -1106,9 +1106,10 @@ let engineGuideNames = [];
     record("load-fidelity acceptance summary", `${rows.length} committed design .pen files, ${valid.length} parse as documents, ${valid.length - refused.length - fewer.length} load faithfully, ${refused.length} refused by the engine, ${fewer.length} load with fewer top-level nodes, ${Math.round((Date.now() - t0) / 1000)} s`);
     check(rows.length === files.length, "acceptance: every committed file was evaluated", `evaluated=${rows.length} of ${files.length}`);
     check(fewer.length === 0, "acceptance (ruling 6): no committed design .pen loads with fewer top-level nodes than on disk", fewer.map((r) => `${r.rel}:${r.disk}->${r.loaded ?? "unknown"}`).join(" "));
-    // pinned: committed files whose content the engine rejects outright (schema-invalid: node type "rect" is not a node type).
+    // pinned: committed files whose content the engine rejects outright (schema-invalid, for example a node type that is not a node type).
     // A repaired file must leave this list; a new rejection fails here instead of passing silently.
-    const PINNED_ENGINE_REJECTS = ["knowledge-base/product/design/dashboard/dashboard-load-states.pen"];
+    // Empty since dashboard/dashboard-load-states.pen was repaired ("rect" -> "rectangle", PR #11225).
+    const PINNED_ENGINE_REJECTS = [];
     const gotRejects = refused.map((r) => r.rel).sort();
     check(JSON.stringify(gotRejects) === JSON.stringify(PINNED_ENGINE_REJECTS), "acceptance: the committed files the engine refuses to open are exactly the pinned set", `observed=${gotRejects.join(",") || "none"}`);
     check(rows.every((r) => r.intact), "acceptance: opening every file left every copy byte-identical", rows.filter((r) => !r.intact).map((r) => r.rel).join(","));
