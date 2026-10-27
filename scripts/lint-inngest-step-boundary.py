@@ -192,7 +192,8 @@ def identity_hits(body: str, param: str) -> list[str]:
 
 
 def scan_file(path: str) -> list[str]:
-    src = strip_comments(open(path, encoding="utf-8").read())
+    with open(path, encoding="utf-8") as f:
+        src = strip_comments(f.read())
     basename = os.path.basename(path)
     runs = list(step_run_spans(src))
     problems = []
