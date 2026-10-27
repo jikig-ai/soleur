@@ -3093,3 +3093,21 @@
   formal exact-head review, QA, preflight, rights/retention completion and
   final CLO processing/data-lifecycle clearance remain open. Readiness is
   not established; retain the draft hold.
+
+### Recovery continuation — 2026-10-27, writer-window preparation
+
+- Read both October 27 checkpoint records and verified the supplied recovery
+  and companion heads. Read-only GitHub inspection confirms PR #9051 remains
+  open/draft, auto-merge off, at remote `4225c68a3e`.
+- Prepared `writer-window-preparation-2026-10-27.md`: exact workflow-ID pause
+  and conditional restoration commands, bounded natural drain, partial-failure
+  handling and direct-holder evidence requirements. Commands are proposals;
+  no pause, cancellation, restoration, capture retry or shared write ran.
+- Activation remains unavailable. The CI mutex is fail-open; workflow pause
+  does not fence direct holders. Complete holder/fence evidence and a rehearsed
+  independent restoration controller are prerequisites to an exact approval
+  request. No writer clearance, push, readiness or processing authority changed.
+- Ruled by CTO agent, 2026-10-27: the concrete local proposal and this append
+  are accepted as preparation only; no blocking text finding, dissent none.
+  This does not complete formal exact-head PR review. Offline command identity,
+  order and shell-syntax checks pass; no operational transition was exercised.

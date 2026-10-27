@@ -85,3 +85,20 @@ Session tooling corrections:
   isolated web-platform rerun then queued behind the same shared lock and was
   stopped. The commit was created only after the targeted registry test was green;
   the full-gate failures remain an open validation issue to resolve before merge.
+
+## Addendum — 2026-10-27, recovery writer-window preparation
+
+- Cleanup lock writes and two `gh workflow ... --help` mise probes were refused
+  by the sandbox. Approved escalation completed the cleanup without reaping
+  entries and verified both help commands. Do not count the refused attempts
+  as success or widen shared-operation authority because local tools ran.
+  The local checkpoint commit also required approved escalation for its Git
+  index lock; this saved only local documentation and did not push.
+- A speculative `.soleur/*window*` glob and an app-relative mutex path produced
+  missing-path errors. Enumerating files and reading `scripts/dev-suite-mutex.sh`
+  resolved them. Discover paths before reading; do not infer absence from a
+  failing shell glob or a guessed directory.
+- Multi-file skill reads and the initial first-page run census were truncated.
+  Re-read required sections separately. A first page or single-status query
+  remains partial observation; it cannot establish an empty writer census.
+  The recovery proposal records this limitation and blocks window activation.
