@@ -163,10 +163,13 @@ run_arm() {  # <arm> [jobs-env] — an EMPTY second arg leaves the knob unset (s
   ARM_OUT=""; ARM_RC=-1
   rm -f "$FIXTURES/timeline.log"
   build_sandbox "$sb" "$arm" >/dev/null || { fail "sandbox build failed: $arm"; return 1; }
-  ARM_OUT=$(cd "$REPO_ROOT" && env -u CI SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+  if ARM_OUT=$(cd "$REPO_ROOT" && env -u CI SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
             TEST_TIMING_LOG="${TIMING_FILE:-/dev/null}" TEST_GROUP=all \
-            ${jobs:+SOLEUR_TEST_JOBS="$jobs"} timeout 120 bash "$sb" 2>&1)
-  ARM_RC=$?
+            ${jobs:+SOLEUR_TEST_JOBS="$jobs"} timeout 120 bash "$sb" 2>&1); then
+    ARM_RC=0
+  else
+    ARM_RC=$?
+  fi
   return 0
 }
 
@@ -214,7 +217,7 @@ fi
 
 # --- A3: registration-order rendering ---------------------------------------
 run_arm order 4 || true
-order_out="$(grep -E '^--- (first|second|third) ---$' <<<"$ARM_OUT" | tr -d '-' | tr -d ' ' | paste -sd, -)"
+order_out="$(grep -E '^--- (first|second|third) ---$' <<<"$ARM_OUT" | tr -d '-' | tr -d ' ' | paste -sd, -)" || true
 if [[ "$order_out" == "first,second,third" ]]; then
   pass "A3 — verdict blocks print in registration order after drain"
 else

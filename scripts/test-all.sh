@@ -2375,8 +2375,15 @@ _pj_drain() {
       sleep 0.1; d=$(( d + 1 ))
       for (( j = 0; j < _pj_next; j++ )); do
         if [[ "${_pj_state[j]:-}" == "live" ]] && ! kill -0 "${_pj_pid[j]}" 2>/dev/null; then
-          wait "${_pj_pid[j]}" 2>/dev/null
-          _pj_rc[j]=$?
+          if [[ -f "${_pj_cap}/${j}.rc" ]]; then
+            _pj_rc[j]="$(<"${_pj_cap}/${j}.rc")"
+          elif wait "${_pj_pid[j]}" 2>/dev/null; then
+            _pj_rc[j]=0
+          else
+            _wrc=$?
+            (( _wrc == 127 )) && continue
+            _pj_rc[j]=$_wrc
+          fi
           _pj_end[j]="${EPOCHREALTIME:-}"
           _pj_tmpdelta[j]=unattributed
           _pj_state[j]=done

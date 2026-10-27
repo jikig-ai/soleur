@@ -110,10 +110,10 @@ PY
 }
 
 # --- C1a: the lock precedes the pool — anchored file-order assertion ---------
-acq_line=$(grep -n '^tc_acquire "test-all"$' "$TARGET" | cut -d: -f1)
-res_line=$(grep -n '^_pj_resolve_run_mode$' "$TARGET" | cut -d: -f1)
-drain_line=$(grep -n '^_pj_drain$' "$TARGET" | cut -d: -f1)
-epi_line=$(grep -n '^tc_epilogue ' "$TARGET" | cut -d: -f1)
+acq_line=$(grep -n '^tc_acquire "test-all"$' "$TARGET" | cut -d: -f1) || true
+res_line=$(grep -n '^_pj_resolve_run_mode$' "$TARGET" | cut -d: -f1) || true
+drain_line=$(grep -n '^_pj_drain$' "$TARGET" | cut -d: -f1) || true
+epi_line=$(grep -n '^tc_epilogue ' "$TARGET" | cut -d: -f1) || true
 if [[ -n "$acq_line" && -n "$res_line" && -n "$drain_line" && -n "$epi_line" \
       && "$acq_line" -lt "$res_line" && "$res_line" -lt "$drain_line" && "$drain_line" -lt "$epi_line" ]]; then
   pass "C1 — ordering: tc_acquire < resolve < drain < epilogue (the lock precedes the pool, the drain precedes the boundary)"
