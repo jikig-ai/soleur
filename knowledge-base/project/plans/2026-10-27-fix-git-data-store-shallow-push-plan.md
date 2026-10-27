@@ -336,17 +336,17 @@ No cross-domain implications detected — infrastructure/tooling change.
 
 ## Acceptance Criteria
 
-- [ ] AC1: `git-data-transport-wrapper.sh` execs `git receive-pack` with `-c receive.shallowUpdate=true` and execs `git-upload-pack` with argv byte-identical to `origin/main`'s; the DRYRUN echo mirrors each verb's real argv; the comment at ~:125-131 explains the `-c` pinning rationale for the flag.
-- [ ] AC2: `git-data-client.ts` `fetchFromGitData` passes `"--update-shallow"` immediately after `"fetch"`.
-- [ ] AC3: `git-data-replication.ts` retries the push at most once, only when the failure's stderr/message matches `remote failure|failed to report status`; `shallow update not allowed` and fence rejects are never retried.
-- [ ] AC4: R-PUSH-SHALLOW fails on `origin/main` and passes after the wrapper change — a push from a `git clone --depth 1 file://` clone through the REAL wrapper lands `refs/soleur/worktrees/<WT>/heads/*` on the bare fixture repo.
-- [ ] AC5: R-FETCH-OVERLAY fails on `origin/main` (fetch produces no `refs/remotes/git-data/*` when the pack requires a `.git/shallow` update) and passes after the flag — the production `fetchFromGitData` drives real git via the passthrough.
-- [ ] AC6: Retry unit tests: transient → exactly 2 calls and `{status:"replicated"}`; `shallow update not allowed` → exactly 1 call, rejects; fence reject → exactly 1 call, rejects; two transients → exactly 2 calls, rejects.
-- [ ] AC7: `git-data-transport-wrapper.test.sh` — T2 expects the flag on receive-pack DRYRUN, T11 pins both exec lines, a new case pins NO flag on the upload-pack DRYRUN, and the suite's exact floor equals the new measured count.
-- [ ] AC8: The runbook's R3 row records the 2026-10-27 re-run verdict FAILED with the Better Stack hit detail and the `git-data-host-replace`-only delivery note.
-- [ ] AC9: ADR-068's 2026-10-27 addendum records the shallow-acceptance posture.
+- [x] AC1: `git-data-transport-wrapper.sh` execs `git receive-pack` with `-c receive.shallowUpdate=true` and execs `git-upload-pack` with argv byte-identical to `origin/main`'s; the DRYRUN echo mirrors each verb's real argv; the comment at ~:125-131 explains the `-c` pinning rationale for the flag.
+- [x] AC2: `git-data-client.ts` `fetchFromGitData` passes `"--update-shallow"` immediately after `"fetch"`.
+- [x] AC3: `git-data-replication.ts` retries the push at most once, only when the failure's stderr/message matches `remote failure|failed to report status`; `shallow update not allowed` and fence rejects are never retried.
+- [x] AC4: R-PUSH-SHALLOW fails on `origin/main` and passes after the wrapper change — a push from a `git clone --depth 1 file://` clone through the REAL wrapper lands `refs/soleur/worktrees/<WT>/heads/*` on the bare fixture repo.
+- [x] AC5: R-FETCH-OVERLAY fails on `origin/main` (fetch produces no `refs/remotes/git-data/*` when the pack requires a `.git/shallow` update) and passes after the flag — the production `fetchFromGitData` drives real git via the passthrough.
+- [x] AC6: Retry unit tests: transient → exactly 2 calls and `{status:"replicated"}`; `shallow update not allowed` → exactly 1 call, rejects; fence reject → exactly 1 call, rejects; two transients → exactly 2 calls, rejects.
+- [x] AC7: `git-data-transport-wrapper.test.sh` — T2 expects the flag on receive-pack DRYRUN, T11 pins both exec lines, a new case pins NO flag on the upload-pack DRYRUN, and the suite's exact floor equals the new measured count.
+- [x] AC8: The runbook's R3 row records the 2026-10-27 re-run verdict FAILED with the Better Stack hit detail and the `git-data-host-replace`-only delivery note.
+- [x] AC9: ADR-068's 2026-10-27 addendum records the shallow-acceptance posture.
 - [ ] AC10: PR body opens `Ref #8211`; no new issues filed; the merge-safety proof stands (no auto-replace of `hcloud_server.git_data` or its volumes on merge).
-- [ ] AC11: `pin_ex` in `git-data-cutover.sh` and the P2 parity test still pass with the probe unchanged — the generic exec line is preserved verbatim (proof that the host fence probe stays green across the wrapper change).
+- [x] AC11: `pin_ex` in `git-data-cutover.sh` and the P2 parity test still pass with the probe unchanged — the generic exec line is preserved verbatim (proof that the host fence probe stays green across the wrapper change).
 
 ## Test Scenarios
 
