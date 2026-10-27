@@ -23,12 +23,13 @@ The change delivers the route only. No task dispatches `rotate` or `converge`, a
 
 ## Phase 2: Script (`scripts/inngest-key-rotate.sh`), test-first against stubs
 
+- [ ] 2.0 First, the `--print-contract` mode (prints `inngest-key-rotate verdict-tokens` plus the fixed token list; offline, no credentials, under 15 seconds): it is the plan's `discoverability_test.command` for preflight Check 10.
 - [ ] 2.1 Refusal ladder (confirm format, `run_attempt`, `quiet_window`, link flag `1`, soak #11215, in-flight runs, server name + IP, pre-reboot SERVING for `rotate`); `plan` reports booleans only.
 - [ ] 2.2 `kr_tf` wrapper (streams to a file, `TF_LOG` unset, never printed or uploaded), `kr_scrub` for short error bodies, Gate A and Gate B built from one table, exact addresses/actions/count.
 - [ ] 2.3 Value-silent compare (hash on the pipe, booleans only).
 - [ ] 2.4 Reboot function: one POST latch, Hetzner action poll, 10-minute new-`boot_id` wait, 15-minute SERVING + `tls-health` read via `inngest-host-state.sh` / `betterstack-query.sh`.
 - [ ] 2.5 Redeploy driver via `track.sh`; converge derivation from the newest non-plan run that reached apply1; Hetzner action-list check; stop sentences with the exact converge command; issue filing; `S5-A5-DONE` line and evidence block printed only.
-- [ ] 2.6 BUDGET TABLE and `--print-contract`.
+- [ ] 2.6 BUDGET TABLE (apply1, reboot POST + 10-minute new-boot wait + 15-minute read, apply2, redeploy bounded by the 4800-second pipeline ceiling). The guard takes the read-only Hetzner key; only the reboot step receives the write key.
 
 ## Phase 3: Workflow and static suite
 

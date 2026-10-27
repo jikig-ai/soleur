@@ -17,6 +17,24 @@ lane: cross-domain
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 <!-- Phase 2.8 review note: the whole route is automated and IaC-routed (Terraform -replace plus a workflow). The only phrases the write guard matches are verbatim quotes of the issue text and runbook wording (the issue says the app copy is copied "out of band"), which this plan replaces. The CTO agent reviewed the infrastructure routing on 2026-10-27. -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-27 (after the five-agent plan review and three CTO rulings)
+**Sections enhanced:** Research Insights (deepen findings), Proposed Solution (two-phase jobs), Failure semantics, Guard Contract (four guards re-derived from the review), Acceptance Criteria, Risks.
+**Agents and sources used:** CTO (three rulings), CPO, CLO, DHH-style, Kieran-style, code-simplicity, architecture-strategist and spec-flow reviewers; repo verification of every cited path and number; Hetzner API and Terraform provider semantics check.
+
+### Key improvements
+
+1. The restart lever was wrong in the issue and the runbook (the hook channel never reaches 10.0.1.40); the route now reboots the host through the Hetzner control plane and reads the result from Better Stack.
+2. A two-phase apply keeps the `soleur/prd` key that unrelated deploys read untouched until the scheduler is verified SERVING.
+3. Raw Terraform output is treated as key material (the `random_id` `id` is the key in base64url); the route never prints a Terraform stream.
+4. A GitHub re-run can no longer bypass the owner's go (`run_attempt` must be 1), and `converge` is the defined recovery.
+
+### New considerations discovered
+
+- The existing dispatch jobs that print Terraform output may already have published the dedicated key pair in a public log (#11294).
+- The Hetzner `reboot` action reporting `success` only means the request reached the guest; evidence is the new `boot_id`, never the action status.
+
 ## Overview
 
 Build the repo-side route that a later, owner-authorised rotation of the two Inngest shared secrets will travel through. The route covers the dedicated-host copy (`soleur-inngest/prd`) and the web app copy (`soleur/prd`) of each key, the same-window event-key rotation, and the back-to-back host restart and fleet redeploy. This change delivers the route only. It executes no rotation and no production apply; the first (and only) dispatch this change permits itself is a read-only `mode=plan` rehearsal after merge.
@@ -79,6 +97,14 @@ Cut List (mechanism, property it would buy, what already covers it or why cut):
 - **Evidence for the dedicated host comes from Better Stack only.** `scripts/inngest-host-state.sh` pins `host=soleur-inngest` AND `host_role=dedicated`; the `tls-health` row (every 5 minutes) carries `boot_id`, `listener`, `fetch_rc`, `served_sha256`/`cert_sha256`. The probe timer runs `OnBootSec=90s` then hourly.
 - **Soak signal is machine-readable.** Tracker #11215 closed COMPLETED is the A4 PASS (the sweeper closes it); the route reads `state`/`stateReason`.
 - **The `done-owner` marker survives a reboot** (root disk) and is destroyed only by a replace, so the start guard takes the ALLOW arm. Unverified: the production dedicated host has never been rebooted with its LUKS volume and live scheduler. The owner's go must name this.
+
+### Deepen-pass verification (2026-10-27)
+
+- **Halts run:** User-Brand Impact present with a valid threshold (4.6); Observability present with all five fields and a command that is an allowlisted verb in a script this PR creates (4.7); no PAT-shaped variable (4.8); no UI surface so no wireframe halt (4.9); Encryption Posture present with non-empty `does_not_defend` (4.10); `lint-guard-contract.py` green on four guards (4.11); Scope Check present once, three subsections, a `Recommendation:` line (4.12); Task Design present once (4.13). Every cited rule id exists in `AGENTS.md`; every cited issue (#10540, #10205, #10382, #10136, #11215, #11218, #11207, #11292, #11293, #11294, #8735, #7942) resolves OPEN.
+- **Observability command note.** `bash scripts/inngest-key-rotate.sh --print-contract` does not exist on this branch yet because the script is created by this PR (the template allows a committed repo-relative script in the same PR); the work phase must add the `--print-contract` mode first so preflight Check 10 can execute it within 15 seconds with no credentials. The block is new in this plan, so the Check 10 conditions apply as halting rules and are satisfied (literal `expected_output`, no suite).
+- **Hetzner reboot semantics.** The `reboot` action is an ACPI soft reboot; an `action.status = success` records that the request reached the guest, not that the OS restarted, and a guest that ignores ACPI does nothing (Hetzner Cloud API reference for `POST /servers/{id}/actions/reboot`; third-party mirrors agree). This is why verification keys on a new `boot_id`, why the wait is bounded at 10 minutes, and why a hard reset stays a separate owner go. The dedicated unit's `TimeoutStopSec=180` (`inngest-bootstrap.sh`, the inngest-server unit) sits inside that bound.
+- **Terraform semantics.** Providers pinned in `.terraform.lock.hcl`: `dopplerhq/doppler` 1.21.2, `hashicorp/random` 3.9.0 (the `random_id` `id` is the base64url of the bytes, measured on a throwaway resource). `-replace` is destroy-then-create unless `create_before_destroy`, which cannot apply to a `doppler_secret` keyed by (project, config, name); Phase 0.8 confirms the replaced secret is created with the new value despite `ignore_changes=[value]`.
+- **Token binding (verify-the-negative).** Claim "no CI token can write the `soleur/prd` root generically" confirmed: `DOPPLER_TOKEN_WRITE` is `prd_terraform`, `DOPPLER_TOKEN_INNGEST_ARM` is `soleur-inngest/prd`, `DOPPLER_TOKEN_GIT_DATA_FLAG` writes `soleur/prd` but is bound to `web-platform-infra-apply` with unverified scope. Claim "`HCLOUD_TOKEN_READONLY` is available to the guard" confirmed: it is a Tier-A `prd_terraform` key that the loader and `workspaces-luks-cutover.yml` already read; the guard takes the read-only key and only the reboot step receives the write key. Claim "`web-platform-release` is not serialized against the route" confirmed: its group is `web-platform-release-<sha>`; `deploy-inngest-restart` is shared by `cutover-inngest`, `deploy-inngest-image`, `restart-inngest-server` and two jobs of `apply-web-platform-infra`.
 
 ### Institutional learnings applied
 
@@ -582,7 +608,8 @@ Earliest A5 date: after #11215 closes COMPLETED (earliest check 2026-10-28T13:56
 - Risk: the unit boots on a cached old key (Doppler fallback cache). Mitigation: Phase 0.7 reads the unit; if it ever happened, the redeploy canary fails against the mismatched server and the old containers keep running.
 - Risk: a merge or release deploying between the phases reads the old app key against the new scheduler and fails its canary (a red release, no outage). Mitigation: the in-flight-run refusal before every write job and the quiet-window attestation; stated in the go text.
 - Risk: per-merge closure now includes the dedicated `random_id`s through the new edge. Mitigation: closure test with no `hcloud_*` member; per-merge plan stays quiet by `ignore_changes`.
-- Residual: the guard in Guard 3 reads GitHub run history; deleted history resets it (documented).
+- Residual: the guard in Guard 3 reads GitHub run history; retention (90 days) and deletion reset it, and a direct dispatch of the apply workflow bypasses it (documented in ADR-304 and the runbook).
+- Risk: public-log exposure of key bytes by existing jobs is outside this PR's reach (#11294); the owner's go text should mention that the rotation also retires any value those logs may have carried.
 
 ## References
 
