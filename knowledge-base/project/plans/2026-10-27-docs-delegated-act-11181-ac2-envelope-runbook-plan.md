@@ -1,6 +1,6 @@
 ---
 title: "docs: Commit the AC2 delegation-envelope runbook for epic #11181"
-type: chore
+type: docs
 date: 2026-10-27
 slug: docs-delegated-act-11181-ac2-envelope-runbook
 branch: feat-one-shot-11181-ac2-envelope-runbook
@@ -130,6 +130,8 @@ None. (Planning artifacts — this plan file and `knowledge-base/project/specs/f
 - AC-3 body greps probed against a compliant sample body (absence check rc 1, `Ref #11181` present rc 0) and against the trap body ("Never write Closes #11181…"), which the absence check matched — motivating the prose rule in step 3.
 - All `knowledge-base/**.md` citations in this plan glob-resolve (the sole unresolved one is the destination file itself, which this plan creates).
 
+> **Addendum — 2026-10-27 (review fix round, F1/F4, CTO-ruled):** the three bullets above are plan-time snapshots recording pre-amendment predicates; at ship-time verification the amended forms govern — AC-4 = `grep -vE '^knowledge-base/|^\.markdownlintignore$'` exiting 1 (one exemption line added, precedent #9757/#10789), AC-5 = the copy-census form (two name-matching paths, one `cmp` match). The bullets also record the class the plan missed: no probe asked whether the byte-frozen runbook passes the required repo-sweep `markdown-lint` job (it yields MD034:5, MD032:18, MD032:27), which the sibling archives carried `.markdownlintignore` exemptions for. Durable prevention lands as an addendum to the existing 2026-10-22 learning (compound step, ruling F2).
+
 ## Scope Check
 
 ### Ask Mapping
@@ -174,7 +176,7 @@ Assessment ran inline (sequential-fallback — see Research Insights; no domain-
 - [x] AC-1 — Byte-identical archival: `git show HEAD:knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md | sha256sum` equals `ffa9cbe118ac875635f5ae051682c418f678f069b22a9d546e2e9c901d038b5f` on the PR head.
 - [x] AC-2 — No credential values in the added file: `git show HEAD:knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md | grep -cE 'sdu_[A-Za-z0-9]+|dop_(pat|oi|st)_[A-Za-z0-9]+|gh(p|o|u)_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|-----BEGIN'` exits 1 (zero matching lines).
 - [ ] AC-3 — Epic stays open: the PR body contains the literal text `Ref #11181` and no case-insensitive `closes #11181` / `fixes #11181` / `close #11181` token; after merge, `gh issue view 11181 --json state -q .state` returns `OPEN`.
-- [x] AC-4 — KB-only diff: `git diff --name-only origin/main...HEAD` lists only paths starting with `knowledge-base/`.
+- [x] AC-4 — KB-only diff. Amended at work-time (explicit, per verify-by-literal-command discipline; review finding F1, CTO-ruled 2026-10-27): `git diff --name-only origin/main...HEAD` lists only paths under `knowledge-base/` **plus the single `.markdownlintignore` exemption line** — the exemption is forced by the required repo-sweep `markdown-lint` CI job against a byte-pinned file (fixing in place is forbidden by ruling T1 / ADR-289 V4) and is precedented by the #9757 block and the 10789 same-PR exemption (Phase 2 of its plan). AC-4's intent (no code or infra change) survives; the verification command becomes `git diff --name-only origin/main...HEAD | grep -vE '^knowledge-base/|^\.markdownlintignore$'` exiting 1 (empty).
 - [x] AC-5 — Destination exactness: the file exists at `knowledge-base/engineering/operations/runbooks/delegated-act-11181-ac2-envelope.md` and is the tree's only committed copy. Amended at work-time (explicit, per verify-by-literal-command discipline): the plan-time form `git ls-files knowledge-base | grep delegated-act-11181` measured 1 line only because this plan was still untracked then; after the plan commit it also matches this plan's filename. Fixed predicate: `git ls-files | grep delegated-act-11181` names exactly two paths, of which exactly one `cmp`-matches the source bytes (the runbook); the other is this branch's planning artifact, not a copy of the envelope. Measured 2026-10-27: `ENVELOPE-COPY` count = 1.
 
 ## Test Scenarios
