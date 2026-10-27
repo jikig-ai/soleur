@@ -148,3 +148,29 @@ The precursor does not complete Slice A or grant processing clearance.
 PR #9051 remains draft with auto-merge off. Shared reconciliation, writer
 clearance, provider requests, customer processing, full qualification, QA,
 exact-head code review, preflight and readiness remain incomplete.
+
+## Addendum — local grant precursor checkpoint
+
+The companion branch `fix-codex-notice-rights-slice-a` now has local commit
+`4f0c8407aba51fdd9c846c252e8d1edceb1cb3d1`. It contains the dedicated
+179 grant migration, effective-privilege verifier, three registry entries,
+column-aware non-vacuity assertion, regression tests and reusable disposable
+test harness. Eight focused tests, scoped ESLint, full app TypeScript under
+Node 26, and twenty actual PostgreSQL 17.6 checks pass. The owned synthetic
+database was dropped; no shared application data was used. Migrations 165 and
+175 remain unchanged. Full RLS-stack parity and recovery rehearsal are not
+established by these focused checks.
+
+Its report is
+`knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/slice-a-grants-2026-10-27.md`
+in worktree
+`/data/git-repositories/jikig-ai/soleur/.worktrees/fix-codex-notice-rights-slice-a`.
+The branch remains unpushed under the CTO's scoped local-only ruling because
+the existing shared-dev CI exceeds current authority. This grant-only
+checkpoint does not complete Slice A's rights snapshot, Slice B's retention
+work, formal exact-head review, QA, preflight or final processing clearance.
+
+Final GitHub reinspection still reports PR #9051 open/draft, auto-merge off,
+and remote head `4225c68a3eb1e9bdb917f899ae85618848b2c691`. Neither this
+evidence checkpoint nor the companion code was pushed. The shared writer
+window and all independent readiness holds remain outstanding.

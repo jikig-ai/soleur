@@ -138,3 +138,9 @@ installed manager, invoke creation from the verified common repository root
 and still verify its output path. Its explicit `--no-install` warning was
 intentional: dependencies were reused only after lockfile equality, without
 network installation or environment-file copying.
+
+A final lead-agent read-only inspection also failed during sandbox startup:
+the synthetic bubblewrap mount target `/tmp/.git` could not be registered
+because the host quota was exhausted (error 122). The approved read-only
+rerun completed outside that sandbox. Treat this as an unexecuted inspection,
+not a source/test verdict, and retain the quota diagnostic with the handoff.

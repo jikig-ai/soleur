@@ -3071,3 +3071,25 @@
 - PR #9051 remains draft with auto-merge off. Final processing/data-lifecycle
   clearance, provider requests, shared reconciliation, qualification, QA,
   exact-head review, preflight and readiness remain withheld or incomplete.
+
+### Recovery continuation — 2026-10-27, local grant precursor verified
+
+- Companion commit `4f0c8407aba51fdd9c846c252e8d1edceb1cb3d1` on
+  `fix-codex-notice-rights-slice-a` implements the dedicated 179 column-grant
+  correction, verifier, registry and non-vacuity fix. Eight focused tests,
+  scoped ESLint, Node 26 TypeScript and twenty actual disposable PostgreSQL
+  17.6 checks pass. The synthesized database was dropped. Frozen migrations
+  165/175 are unchanged. See the companion's
+  `slice-a-grants-2026-10-27.md` report and reusable
+  `apps/web-platform/scripts/test-codex-dsar-column-grants.py` harness.
+- Both branches remain unpushed: the recovery evidence was checkpointed
+  locally, and CTO's ruling retains the companion's local-only scope because
+  its shared-dev integration would exceed current authority. GitHub still
+  reports PR #9051 open/draft with auto-merge off and remote head
+  `4225c68a3eb1e9bdb917f899ae85618848b2c691`.
+- No new capture is authorized: the successful invocation consumed its exact
+  approval. Writer exclusion/control-plane authorization, live-schema
+  comparison, full recovery rehearsal, full RLS-stack parity, qualification,
+  formal exact-head review, QA, preflight, rights/retention completion and
+  final CLO processing/data-lifecycle clearance remain open. Readiness is
+  not established; retain the draft hold.
