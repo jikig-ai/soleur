@@ -5184,6 +5184,10 @@ if want_scripts; then
   # in a plan reds CI, not just the fixtures.
   run_suite "scripts/lint-guard-contract" bash scripts/lint-guard-contract.test.sh
   run_suite "scripts/lint-guard-contract-live" python3 scripts/lint-guard-contract.py
+
+  # #8764 — step-boundary error-identity census over server/inngest/functions/*.ts
+  run_suite "scripts/lint-inngest-step-boundary-unit" bash scripts/lint-inngest-step-boundary.test.sh
+  run_suite "scripts/lint-inngest-step-boundary-live" python3 scripts/lint-inngest-step-boundary.py
   # Window-derived closure assertions must DECLARE their assembly (per helper).
   # Enforces a declaration, not semantic completeness — no static checker can
   # prove a regex window equals its assembly. TS-1..TS-11 + MB-1..MB-2.

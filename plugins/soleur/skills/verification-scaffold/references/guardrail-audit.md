@@ -89,7 +89,7 @@ template rather than shipping the monolith.
 | `supabase-loopback-warn.sh` | soleur-coupled | Supabase vendor stack check (ADR-153). |
 | `worktree-write-guard.sh` | generic-after-extraction | Blocks writes to the main checkout while worktrees exist — repo-generic idea (v2); couplings = `incidents.sh`/`hook-input.sh` sourcing. |
 
-## Census — `scripts/lint-*` (47)
+## Census — `scripts/lint-*` (48)
 
 | File | Verdict | Rationale |
 |---|---|---|
@@ -114,6 +114,7 @@ template rather than shipping the monolith.
 | `lint-guard-contract.py` | soleur-coupled | Soleur plan/SKILL.md guard-contract shape (deepen-plan §4.11). |
 | `lint-hcloud-token-readonly-no-fallback.sh` | soleur-coupled | Tree scan for the read/write Hetzner token read (ADR-241 D4); the Soleur secret store and its one allowlisted `op=backup` read. |
 | `lint-infra-no-human-steps.py` | soleur-coupled | `hr-no-ssh-fallback-in-runbooks` on `knowledge-base` docs. |
+| `lint-inngest-step-boundary.py` | soleur-coupled | `apps/web-platform/server/inngest/functions/` step-boundary error-identity census + named allowlist. |
 | `lint-integration-env-gates.sh` | soleur-coupled | `apps/web-platform/{test,lib}` env-gate wiring + `scheduled-integration-suites.yml`. |
 | `lint-legal-mirror-drift-baseline.sh` | soleur-coupled | Legal mirror corpus (`plugins/soleur/docs/pages/legal`). |
 | `lint-legal-registers.sh` | soleur-coupled | `knowledge-base/legal/` registers. |
