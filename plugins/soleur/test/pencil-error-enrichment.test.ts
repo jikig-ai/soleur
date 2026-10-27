@@ -4,6 +4,7 @@ import {
   removedToolHint,
   LIVE_TOOL_NAMES,
   REMOVED_TOOL_NAMES,
+  RAW_CALL_STEERING,
 } from "../skills/pencil-setup/scripts/pencil-error-enrichment.mjs";
 
 describe("enrichErrorMessage", () => {
@@ -87,6 +88,14 @@ describe("tool name lists", () => {
   });
 });
 
+describe("RAW_CALL_STEERING (shared text contract)", () => {
+  test("is the exact sentence the tool description, SKILL.md and ux-design-lead.md quote", () => {
+    expect(RAW_CALL_STEERING).toBe(
+      "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path lands in a scratch directory that is deleted on exit)."
+    );
+  });
+});
+
 describe("enrichErrorMessage — removed tools", () => {
   const cases: Array<[string, RegExp]> = [
     ["batch_get", /Get\(.*Print\(.*batch_design.*auto-?saves?.*get_editor_state/s],
@@ -114,8 +123,9 @@ describe("enrichErrorMessage — removed tools", () => {
   test("the measuring hints name the visitor forms the layout audit uses: c.bounds and c.problems", () => {
     for (const tool of ["batch_get", "snapshot_layout"]) {
       const hint = removedToolHint(tool) as string;
-      expect(hint).toContain("Get(id,(n,c)=>Print(c.bounds.width))");
-      expect(hint).toContain("c.problems");
+      expect(hint).toContain("Get(id,(n,c)=>Print(n.id+' '+c.bounds.width))");
+      expect(hint).toMatch(/c\.problems reports clipping \(partially or fully clipped\)/);
+      expect(hint).not.toMatch(/layout problems of a node/);
     }
   });
 

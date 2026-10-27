@@ -41,6 +41,13 @@ describe("classifyResponse — pre-existing error prefixes (regression guard)", 
     expect(classifyResponse("\x1b[?25l\x1b[31mError: red\x1b[39m").isError).toBe(true);
   });
 
+  test("the class covers every CSI parameter byte (`:`, `<`, `=`, `>`, `?`) and every final byte (`@`..`~`)", () => {
+    expect(stripAnsi("a\x1b[38:2:1:2:3mb")).toBe("ab"); // colon-separated sub-parameters
+    expect(stripAnsi("a\x1b[>4;2mb\x1b[=1cc\x1b[<1ud")).toBe("abcd"); // private parameter prefixes
+    expect(stripAnsi("a\x1b[2@b\x1b[3~c\x1b[5`d")).toBe("abcd"); // final bytes outside [a-zA-Z]
+    expect(stripAnsi("Act\x1b[0mive")).toBe("Active");
+  });
+
   test("strips ANSI escape sequences", () => {
     const { text } = classifyResponse("\x1b[31mError: red\x1b[0m");
     expect(text).toBe("Error: red");

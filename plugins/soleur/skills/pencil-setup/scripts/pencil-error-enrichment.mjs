@@ -18,12 +18,17 @@ export const LIVE_TOOL_NAMES = Object.freeze([
   "read_skill",
 ]);
 
+// The one steering sentence for the raw DSL calls that bypass the adapter's tools (the
+// batch_design description, SKILL.md and ux-design-lead.md step 2 quote it verbatim).
+export const RAW_CALL_STEERING =
+  "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path lands in a scratch directory that is deleted on exit).";
+
 // Every hint starts with the removed tool's own name and names a tool that exists.
 const REMOVED_TOOL_HINTS = Object.freeze({
   batch_get:
-    "batch_get was removed (the engine has no node-dump tool). Read nodes with Get(...) and Print(...) inside batch_design, for example Get(id,(n,c)=>Print(c.bounds.width)) for a node's measured size; the visitor's second argument also carries the node's layout problems as c.problems. A batch_design call also auto-saves. get_editor_state lists the top-level nodes.",
+    "batch_get was removed (the engine has no node-dump tool). Read nodes with Get(...) and Print(...) inside batch_design, for example Get(id,(n,c)=>Print(n.id+' '+c.bounds.width)) for a node's measured size; in the same visitor c.problems reports clipping (partially or fully clipped). A batch_design call also auto-saves. get_editor_state lists the top-level nodes.",
   snapshot_layout:
-    "snapshot_layout was removed. Layout problems arrive as an `## issues detected:` block on batch_design replies; fix them with Update(...) inside batch_design. To measure a node, Print its bounds: Get(id,(n,c)=>Print(c.bounds.width)); the layout problems of a node are in c.problems (grammar: read_skill({ path: \"execute.md\" })).",
+    "snapshot_layout was removed. Layout problems arrive as an `## issues detected:` block on batch_design replies; fix them with Update(...) inside batch_design. To measure a node, Print its bounds: Get(id,(n,c)=>Print(n.id+' '+c.bounds.width)); c.problems reports clipping (partially or fully clipped) (grammar: read_skill({ path: \"execute.md\" })).",
   get_guidelines:
     'get_guidelines was removed. Read design guidance with read_skill({ path: "guide/<name>.md" }); call read_skill() with no path for the index.',
   get_style_guide:

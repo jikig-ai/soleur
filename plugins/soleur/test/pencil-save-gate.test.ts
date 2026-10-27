@@ -16,6 +16,12 @@ import {
   loadFidelityFailure,
   isDefiniteSaveFailure,
   saveFailureLine,
+  REFUSAL_REASON_CODES,
+  NOT_PERSISTED_REASON_CODES,
+  REASON_CODES,
+  REPLAY_SAFETY_SENTENCE,
+  ONLY_COPY_SENTENCE,
+  UNTRACKED_HINT,
 } from "../skills/pencil-setup/scripts/pencil-save-gate.mjs";
 
 // #11143 — empty-overwrite sentinel (Guard 1). An empty in-memory document
@@ -109,7 +115,7 @@ describe("decideSave", () => {
 
 describe("refusalMessage", () => {
   test("names the file, says it was not modified, gives the next step", () => {
-    const m = refusalMessage({ file: "/d/a.pen", source: "save", diskCount: 3, memoryCount: 0 });
+    const m = refusalMessage({ file: "/d/a.pen", source: "save", code: "empty", diskCount: 3, memoryCount: 0 });
     expect(m).toContain("REFUSED save:");
     expect(m).toContain("/d/a.pen");
     expect(m).toMatch(/not modified/i);
@@ -118,9 +124,9 @@ describe("refusalMessage", () => {
     expect(m).toMatch(/do not delete or recreate/i);
   });
   test("names exactly one next step per cause, and always forbids delete-to-bypass", () => {
-    const empty = refusalMessage({ file: "/d/a.pen", source: "save", diskCount: 3, memoryCount: 0 });
-    const unreadable = refusalMessage({ file: "/d/a.pen", source: "save", diskCount: 3, memoryCount: null, memoryReason: "boom" });
-    const garbage = refusalMessage({ file: "/d/a.pen", source: "save", diskCount: DISK_UNRECOGNIZED, memoryCount: 2 });
+    const empty = refusalMessage({ file: "/d/a.pen", source: "save", code: "empty", diskCount: 3, memoryCount: 0 });
+    const unreadable = refusalMessage({ file: "/d/a.pen", source: "save", code: "empty", diskCount: 3, memoryCount: null, memoryReason: "boom" });
+    const garbage = refusalMessage({ file: "/d/a.pen", source: "save", code: "unrecognized", diskCount: DISK_UNRECOGNIZED, memoryCount: 2 });
     for (const m of [empty, unreadable, garbage]) {
       expect(m).toContain("REFUSED save:");
       expect(m).toMatch(/Next step:/);
@@ -135,7 +141,7 @@ describe("refusalMessage", () => {
     expect(garbage).not.toMatch(/never loaded/i);
   });
   test("the auto-save variant says the edit is applied in memory but not persisted", () => {
-    const m = refusalMessage({ file: "/d/a.pen", source: "auto-save", diskCount: 3, memoryCount: 0 });
+    const m = refusalMessage({ file: "/d/a.pen", source: "auto-save", code: "empty", diskCount: 3, memoryCount: 0 });
     expect(m).toMatch(/in memory but not (persisted|saved)/i);
     expect(m).toMatch(/lost on the next open_document/i);
   });
@@ -143,7 +149,7 @@ describe("refusalMessage", () => {
 
 
 describe("refusalMessage: the stale family (#11168)", () => {
-  const stale = refusalMessage({ file: "/d/a.pen", source: "auto-save", stale: "stale" });
+  const stale = refusalMessage({ file: "/d/a.pen", source: "auto-save", code: "stale" });
   test("stale: names the change, warns that re-opening discards edits, says re-open then replay in order", () => {
     expect(stale).toContain("REFUSED save:");
     expect(stale).toContain("/d/a.pen was not modified");
@@ -158,29 +164,32 @@ describe("refusalMessage: the stale family (#11168)", () => {
     expect(stale.match(/Next step:/g)!.length).toBe(1);
     expect(stale).toMatch(/in memory but not persisted/i);
   });
-  test("`changed` is no longer an alias: only the decideStale codes are codes", () => {
-    expect(refusalMessage({ file: "x.pen", source: "save", stale: "changed" })).toContain("[reason=changed]");
+  test("an unknown or missing code is a programming error, never a message (`changed` is no alias)", () => {
+    for (const code of ["changed", "missing", "nope", undefined]) {
+      expect(() => refusalMessage({ file: "x.pen", source: "save", code: code as any })).toThrow(/unknown code/);
+    }
   });
   test("each state has its own wording, distinct from the others", () => {
-    const missing = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending", restart: "file-missing" });
-    const external = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending", restart: "external-change" });
-    const unconfirmed = refusalMessage({ file: "/d/a.pen", source: "save", stale: "unknown-baseline", cause: "unconfirmed-save" });
-    const postRead = refusalMessage({ file: "/d/a.pen", source: "save", stale: "unknown-baseline", cause: "post-save-read-failed" });
-    const capture = refusalMessage({ file: "/d/a.pen", source: "save", stale: "unknown-baseline", cause: "capture-failed", detail: "ELOOP" });
-    const pending = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending" });
-    const restarted = refusalMessage({ file: "/d/a.pen", source: "save", stale: "refusal-pending", restart: "restart" });
+    const missing = refusalMessage({ file: "/d/a.pen", source: "save", code: "refusal-pending", restart: "file-missing" });
+    const external = refusalMessage({ file: "/d/a.pen", source: "save", code: "refusal-pending", restart: "external-change" });
+    const unconfirmed = refusalMessage({ file: "/d/a.pen", source: "save", code: "unknown-baseline", cause: "unconfirmed-save" });
+    const postRead = refusalMessage({ file: "/d/a.pen", source: "save", code: "unknown-baseline", cause: "post-save-read-failed" });
+    const capture = refusalMessage({ file: "/d/a.pen", source: "save", code: "unknown-baseline", cause: "capture-failed", detail: "ELOOP" });
+    const pending = refusalMessage({ file: "/d/a.pen", source: "save", code: "refusal-pending" });
+    const restarted = refusalMessage({ file: "/d/a.pen", source: "save", code: "refusal-pending", restart: "restart" });
     expect(missing).toMatch(/no longer exists on disk/i);
     expect(missing).toMatch(/recreate the edits from your context/);
     expect(missing).not.toMatch(/changed on disk since/);
     expect(external).toMatch(/engine reloaded NEW content/);
     expect(external).toMatch(/Nothing on disk was overwritten/);
-    expect(external).toMatch(/call open_document on \/d\/a\.pen, then replay/);
+    expect(external).toMatch(/call open_document on \/d\/a\.pen \(in the Soleur repo[^)]*\), then replay/);
     expect(unconfirmed).toMatch(/last save was not confirmed/i);
     expect(unconfirmed).not.toMatch(/changed on disk since/);
     expect(postRead).toMatch(/could not be read back/i);
     expect(capture).toContain("ELOOP");
     expect(restarted).toMatch(/session restarted/i);
     expect(restarted).toMatch(/earlier edits were discarded/i);
+    expect(restarted).toMatch(/not persisted \(a refused, failed or unconfirmed save\)/);
     expect(pending).not.toMatch(/session restarted/i);
     const all = [stale, missing, external, unconfirmed, postRead, capture, pending, restarted];
     for (const m of all) {
@@ -195,25 +204,79 @@ describe("refusalMessage: the stale family (#11168)", () => {
 describe("the marker contract: the first line of every refusal is `REFUSED save: [reason=<code>] <file> was not modified.`", () => {
   const first = (m: string) => m.split("\n")[0];
   const cases: Array<[string, any]> = [
-    ["empty", { diskCount: 3, memoryCount: 0 }],
-    ["empty", { diskCount: 3, memoryCount: null, memoryReason: "boom" }],
-    ["unrecognized", { diskCount: DISK_UNRECOGNIZED, memoryCount: 2 }],
-    ["stale", { stale: "stale" }],
-    ["unknown-baseline", { stale: "unknown-baseline", cause: "unconfirmed-save" }],
-    ["refusal-pending", { stale: "refusal-pending" }],
-    ["refusal-pending", { stale: "refusal-pending", restart: "restart" }],
-    ["refusal-pending", { stale: "refusal-pending", restart: "external-change" }],
-    ["refusal-pending", { stale: "refusal-pending", restart: "file-missing" }],
+    ["empty", { code: "empty", diskCount: 3, memoryCount: 0 }],
+    ["empty", { code: "empty", diskCount: 3, memoryCount: null, memoryReason: "boom" }],
+    ["unrecognized", { code: "unrecognized", diskCount: DISK_UNRECOGNIZED, memoryCount: 2 }],
+    ["stale", { code: "stale" }],
+    ["unknown-baseline", { code: "unknown-baseline", cause: "unconfirmed-save" }],
+    ["refusal-pending", { code: "refusal-pending" }],
+    ["refusal-pending", { code: "refusal-pending", restart: "restart" }],
+    ["refusal-pending", { code: "refusal-pending", restart: "external-change" }],
+    ["refusal-pending", { code: "refusal-pending", restart: "file-missing" }],
   ];
   for (const [code, args] of cases) {
     test(`reason=${code} ${JSON.stringify(args)}`, () => {
       expect(first(refusalMessage({ file: "/d/a.pen", source: "save", ...args }))).toBe(`REFUSED save: [reason=${code}] /d/a.pen was not modified.`);
     });
   }
-  test("the next steps for the recoverable refusals name the repo's open guard", () => {
-    for (const stale of ["stale", "refusal-pending", "unknown-baseline"]) {
-      expect(refusalMessage({ file: "/d/a.pen", source: "save", stale })).toMatch(/commit an empty placeholder first/);
+  test("the next steps for the recoverable refusals carry the exact UNTRACKED_HINT (ask the user; never commit unprompted)", () => {
+    expect(UNTRACKED_HINT).toBe("(in the Soleur repo the open guard needs the path tracked: ask the user, then commit an empty placeholder)");
+    for (const code of ["stale", "refusal-pending", "unknown-baseline"]) {
+      expect(refusalMessage({ file: "/d/a.pen", source: "save", code })).toContain(UNTRACKED_HINT);
     }
+  });
+});
+
+describe("the exported reason-code lists (the prose test imports them)", () => {
+  test("refusal codes are the five real ones, not-persisted codes the three, REASON_CODES is their union", () => {
+    expect([...REFUSAL_REASON_CODES]).toEqual(["stale", "unknown-baseline", "refusal-pending", "empty", "unrecognized"]);
+    expect([...NOT_PERSISTED_REASON_CODES]).toEqual(["save-failed", "unconfirmed", "save-incomplete"]);
+    expect([...REASON_CODES]).toEqual([...REFUSAL_REASON_CODES, ...NOT_PERSISTED_REASON_CODES]);
+  });
+  test("every listed code produces a message whose first line carries exactly that code", () => {
+    for (const code of REFUSAL_REASON_CODES) {
+      const m = refusalMessage({ file: "/d/a.pen", source: "save", code, diskCount: code === "unrecognized" ? DISK_UNRECOGNIZED : 3, memoryCount: 0 });
+      expect(m.split("\n")[0]).toBe(`REFUSED save: [reason=${code}] /d/a.pen was not modified.`);
+    }
+    for (const code of NOT_PERSISTED_REASON_CODES) {
+      expect(notPersistedMessage({ code, file: "/d/a.pen" }).split("\n")[0]).toMatch(new RegExp(`^NOT PERSISTED: \\[reason=${code}\\] /d/a\\.pen`));
+    }
+  });
+});
+
+describe("the shared text contract", () => {
+  test("replay-safety: unconfirmed, save-incomplete and the refusal-pending external-change cause say to check whether the edit is already present", () => {
+    expect(REPLAY_SAFETY_SENTENCE).toBe(
+      "Before replaying, check whether the edit is already present (compare the node count open_document reports, or Get the nodes): this session's own interrupted save may already have written it."
+    );
+    expect(notPersistedMessage({ code: "unconfirmed", file: "/d/a.pen" })).toContain(REPLAY_SAFETY_SENTENCE);
+    expect(notPersistedMessage({ code: "save-incomplete", file: "/d/a.pen" })).toContain(REPLAY_SAFETY_SENTENCE);
+    expect(refusalMessage({ file: "/d/a.pen", source: "save", code: "refusal-pending", restart: "external-change" })).toContain(REPLAY_SAFETY_SENTENCE);
+    // not where the edit cannot have been written
+    expect(notPersistedMessage({ code: "save-failed", file: "/d/a.pen" })).not.toContain(REPLAY_SAFETY_SENTENCE);
+  });
+  test("only-copy: save-failed and the unrecognized refusal say the in-memory document is the only complete copy and to read it out BEFORE open_document", () => {
+    expect(ONLY_COPY_SENTENCE).toBe(
+      "If a retry is refused, the in-memory document is the only complete copy: read it out (get_editor_state, or Get/Print inside batch_design) or export it BEFORE calling open_document."
+    );
+    expect(notPersistedMessage({ code: "save-failed", file: "/d/a.pen" })).toContain(ONLY_COPY_SENTENCE);
+    expect(refusalMessage({ file: "/d/a.pen", source: "save", code: "unrecognized", diskCount: DISK_UNRECOGNIZED })).toContain(ONLY_COPY_SENTENCE);
+  });
+  test("file-missing: restore from version control first", () => {
+    expect(refusalMessage({ file: "/d/a.pen", source: "save", code: "refusal-pending", restart: "file-missing" })).toContain(
+      "If the file is tracked, restore it from version control first."
+    );
+  });
+  test("a save that failed while the file changed names the changed file and the only copy", () => {
+    const m = notPersistedMessage({ code: "save-failed", file: "/d/a.pen", detail: "Save failed: EIO", changed: true });
+    expect(m.split("\n")[0]).toMatch(/^NOT PERSISTED: \[reason=save-failed\] \/d\/a\.pen /);
+    expect(m).toContain("the file changed during the failed write; the in-memory document is the only complete copy");
+    expect(m).not.toMatch(/call save again/);
+  });
+  test("a recreate whose path changed refuses as unknown-baseline with its own cause", () => {
+    const m = refusalMessage({ file: "/d/a.pen", source: "save", code: "unknown-baseline", cause: "recreate-path-changed" });
+    expect(m).toMatch(/directory on the way to it is now a link or has moved/);
+    expect(m).toContain(UNTRACKED_HINT);
   });
 });
 
@@ -544,6 +607,48 @@ describe("runGuardedSave (dependency-injected, ordering)", () => {
     expect(m.adopted).toEqual([]);
     expect(m.baseline()).toBe(before);
     expect(m.calls).not.toContain("readAfterSave");
+    expect(r.changedDuringFailedWrite).toBe(false);
+    expect(r.arm).toBeFalsy();
+  });
+
+  test("a definite failure after which the file differs from the baseline arms the refusal and says the file changed (data integrity)", async () => {
+    const m = mk({ saveReply: "Save failed: EIO" });
+    (m.deps as any).isDefiniteFailure = (raw: string) => /^Save failed:/.test(raw);
+    let reads = 0;
+    const original = m.deps.readFresh;
+    m.deps.readFresh = async () => (++reads === 1 ? await original() : penWith(1)); // 2nd read = after the failed write: a partial write
+    const r = await runGuardedSave(m.deps);
+    expect(r).toMatchObject({ failed: true, changedDuringFailedWrite: true, arm: true });
+    expect(m.adopted).toEqual([]);
+    // an unreadable file after the failure makes no claim
+    const n = mk({ saveReply: "Save failed: EIO" });
+    (n.deps as any).isDefiniteFailure = () => true;
+    let k = 0;
+    const orig = n.deps.readFresh;
+    n.deps.readFresh = async () => {
+      if (++k === 1) return await orig();
+      throw new Error("EIO");
+    };
+    expect(await runGuardedSave(n.deps)).toMatchObject({ failed: true, changedDuringFailedWrite: false });
+  });
+
+  test("a failed save over a recreate (file already missing) is not 'changed' while the file is still missing", async () => {
+    const m = mk({ disk: null, fresh: null, baseline: H(penWith(2)), saveReply: "Save failed: EACCES" });
+    (m.deps as any).isDefiniteFailure = () => true;
+    const r = await runGuardedSave(m.deps);
+    expect(r).toMatchObject({ failed: true, recreated: true, changedDuringFailedWrite: false });
+  });
+
+  test("a recreate whose path is no longer the canonical one refuses as unknown-baseline/recreate-path-changed, nothing sent", async () => {
+    const m = mk({ disk: null, fresh: null, baseline: H(penWith(2)) });
+    (m.deps as any).canRecreate = async () => false;
+    const r = await runGuardedSave(m.deps);
+    expect(r).toMatchObject({ refused: true, code: "unknown-baseline", cause: "recreate-path-changed" });
+    expect(m.calls).not.toContain("send:save");
+    // a path that is still canonical recreates as before
+    const ok = mk({ disk: null, fresh: null, baseline: H(penWith(2)), after: [penWith(2)] });
+    (ok.deps as any).canRecreate = async () => true;
+    expect(await runGuardedSave(ok.deps)).toMatchObject({ saved: true, recreated: true });
   });
 
   test("without isDefiniteFailure, or when it says no, the reply is unconfirmed and the baseline becomes unknown", async () => {
