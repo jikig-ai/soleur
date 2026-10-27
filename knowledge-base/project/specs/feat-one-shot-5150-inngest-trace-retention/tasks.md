@@ -7,7 +7,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 ## Phase 1: Failing tests
 
 - [ ] 1.1 Write `apps/web-platform/infra/inngest-trace-retention.test.sh` before the runner. Seed a temporary SQLite file with five situations: a finished run older than the window, a finished run newer than the window, an in-flight run older than the window, an old event that in-flight run still references, and an old event with no unfinished run.
-- [ ] 1.2 Assert only the safe set is deleted and that children go before anchors. Assert the Postgres text and the SQLite text name the same status set `(50, 300, 400, 500, 600)` and the same unfinished-run guard.
+- [ ] 1.2 Assert only the safe set is deleted and that children go before anchors. The fixture fails if the safe delete count is zero. A `traces` row with a null `run_id` remains. Assert the Postgres text and the SQLite text name the same status set `(50, 300, 400, 500, 600)` and the same unfinished-run guard.
 - [ ] 1.3 Assert no delete names `apps`, `functions`, `worker_connections`, `migrations`, `goose_db_version`, `queue_snapshot_chunks`, or Redis, and that neither file deletes `events` or `history` by age alone.
 - [ ] 1.4 Run the test. It fails because the runner does not exist yet. The probe's external binaries are `bash` and `python3`. Do not call `date -d`, `timeout`, `flock`, or `stat -c` from the probe.
 
@@ -21,7 +21,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 ## Phase 3: Host wiring
 
 - [ ] 3.1 In `apps/web-platform/infra/inngest-bootstrap.sh`, render `inngest-trace-retention.service` and its timer the same way the heartbeat timer is rendered. `OnCalendar=daily`, `Persistent=false`, `RandomizedDelaySec` bounded. Call `--ensure-indexes` and only then install the timer.
-- [ ] 3.2 The service takes `flock -n` on `/run/lock/inngest-trace-retention.lock` and writes a UTC-date marker only after a successful pass.
+- [ ] 3.2 The service takes `flock -n` on `/run/lock/inngest-trace-retention.lock`. After a successful pass it writes the UTC-date marker through a temp file in the same directory and renames it onto the marker path. A partial temp file is not the marker. Do not add `fdatasync`.
 - [ ] 3.3 Add `inngest-trace-retention.service` to both `include_units` and `exclude_units` in `apps/web-platform/infra/vector.toml`. Update the exact pin in `apps/web-platform/test/infra/vector-admission.test.sh`.
 - [ ] 3.4 Extend `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` so a missing unit fails the render test. Success logs are priority info. A non-zero exit logs `INNGEST_TRACE_RETENTION_OUTCOME=error` at priority err.
 

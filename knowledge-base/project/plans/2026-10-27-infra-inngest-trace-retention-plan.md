@@ -17,6 +17,23 @@ requires_cpo_signoff: false
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-27
+**Sections enhanced:** 4 (Proposed Solution, Dependencies & Risks, Acceptance Criteria, tasks)
+**Research agents used:** none spawned (no subagent tool). In-process: baseline SQL read, mint workflow read, `gh issue view` 5150 / 7465 / 6911, `gh pr view` 11311, `gh api repos/inngest/inngest/pulls/4357`, and the learnings named below.
+
+### Key Improvements
+
+1. The UTC-date marker is written through a temp file and a same-directory rename, so a crash mid-write cannot look like a finished pass.
+2. Column types below are taken from the v1.45.1 baseline, including nullable `traces.run_id`. Those rows are not age-deleted.
+3. A fixture success must delete at least one row. A live night that deletes zero after catch-up is still success. The close stays on the marker.
+
+### New Considerations Discovered
+
+- The v1.45.1 baseline has no trigger and no policy. The app-database WORM learning does not apply to this project.
+- `inngest/inngest` pull 4357 is merged (2026-07-17) and is the retention guide. Mint on this repo publishes an image and does not replace the host. Issue #5150, #7465, and #6911 are open. Draft PR #11311 is open.
+
 ## Overview
 
 Finished Inngest trace and log history on Soleur's dedicated store has no expiry. The server pinned in this repo does not delete those rows, and the public legal text says so. This plan ships a status-gated retention job, the same shape Inngest documents for self-hosted Postgres, on a short window aligned with Inngest Cloud's Pro trace-and-log history, for the hosted store every Soleur workspace shares and for the host setup a deployment of this infra follows. Rows an in-flight run still needs stay. Production enablement stays behind the existing host-replace ack. The mechanism PR does not itself prune the live database.
@@ -39,7 +56,7 @@ The window is `INNGEST_TRACE_RETENTION_DAYS`, default 7, pending the technical r
 
 Merging this diff does not mutate the live Inngest store. That sentence is the mechanism PR body's first line. `mint-inngest-bootstrap-tag.yml` path-filters `apps/web-platform/infra/inngest*` and `apps/web-platform/infra/vector.*` on push to `main` and publishes an image. It does not replace the live host. `build-inngest-bootstrap-image.yml` publishes only an existing tag, and only on `workflow_dispatch`. The timer, the Vector unit pair, and the first index build reach production only through the existing `apply_target=inngest-host-replace` ack. This plan ships that mechanism. The PR body uses `Ref #5150` and does not use a closing keyword. `scripts/followthroughs/inngest-trace-retention-5150.sh` closes the issue when a Better Stack row shows the success marker after that replace.
 
-Coordination signals, one consumer each. The UTC-date marker is written only by the runner, and only after a successful pass. A later start the same UTC date reads it and skips the delete. A start with no marker, or a marker from another date, runs the delete. `flock -n` on `/run/lock/inngest-trace-retention.lock` refuses an overlapping start. It carries no date and drops when the process exits. `INNGEST_POSTGRES_URI` presence means run the Postgres pipelines. The durable arm of `inngest-bootstrap.sh` (`REDIS_READY=1`) is what leaves the variable set. The runner does not decide durability. `/var/lib/inngest/main.db` presence means run the SQLite pipelines against that file. The fail-safe arm is what creates the file. Absence of the file does not mean the durable store is healthy. When both are present, both pipelines run.
+Coordination signals, one consumer each. The UTC-date marker is written only by the runner, and only after a successful pass. The write uses a temp file in the same directory and a rename onto the marker path, matching the bootstrap's `mktemp` plus `install` replace pattern. A partial temp file is not the marker. `inngest-bootstrap.sh` has no `fdatasync` call, so this plan does not add one. A later start the same UTC date reads the marker and skips the delete. A start with no marker, or a marker from another date, runs the delete. `flock -n` on `/run/lock/inngest-trace-retention.lock` refuses an overlapping start. It carries no date and drops when the process exits. `INNGEST_POSTGRES_URI` presence means run the Postgres pipelines. The durable arm of `inngest-bootstrap.sh` (`REDIS_READY=1`) is what leaves the variable set. The runner does not decide durability. `/var/lib/inngest/main.db` presence means run the SQLite pipelines against that file. The fail-safe arm is what creates the file. Absence of the file does not mean the durable store is healthy. When both are present, both pipelines run.
 
 ### Safe tables and predicates
 
@@ -63,7 +80,30 @@ Before any delete, the Postgres arm explains the anchor select. A sequential sca
 
 ### What the disclosures will say
 
-Pending the legal ruling in the same decision-challenges file. The assumed wording, parameterized on the ruled day count, replaces "no automatic deletion" and "until operator-side store maintenance" for finished trace and log history only. Redis queue and in-flight run state stay described as not age-deleted. The SQLite fail-safe file is named in the same sentence as the Postgres store, with the same bound. The sentence does not claim the live host is already pruning until the follow-through has seen the marker. Suggested shape, for the CLO to accept or replace: finished trace and log history in the dedicated Postgres event store, and in the SQLite file when that file is the store, is removed after the ruled number of days by a status-gated job that leaves in-flight runs in place. The public docs and `plugins/soleur/docs/pages/legal/` change in the same commit (`scripts/lint-legal-mirror-drift-baseline.sh`). Whether "Last Updated" moves follows the corpus rule recorded under #7465. This plan does not bump it on its own.
+Pending the legal ruling in the same decision-challenges file. The assumed wording, parameterized on the ruled day count, replaces "no automatic deletion" and "until operator-side store maintenance" for finished trace and log history only. Redis queue and in-flight run state stay described as not age-deleted. The SQLite fail-safe file is named in the same sentence as the Postgres store, with the same bound. The sentence does not claim the live host is already pruning until the follow-through has seen the marker. Suggested shape, for the CLO to accept or replace: finished trace and log history in the dedicated Postgres event store, and in the SQLite file when that file is the store, is removed after the ruled number of days by a status-gated job that leaves in-flight runs in place. The public docs and `plugins/soleur/docs/pages/legal/` change in the same commit (`scripts/lint-legal-mirror-drift-baseline.sh`). Whether "Last Updated" moves follows the corpus rule recorded under #7465 (open as of this deepen pass). This plan does not bump it on its own.
+
+### Research Insights
+
+**Best Practices:**
+
+- Children before anchors, status-gated, batched. That is the merged upstream guide (`inngest/inngest` pull 4357, merged 2026-07-17, title "docs: Add guidance on Postgres retention for self-hosting").
+- The image build does not deploy. Learning `knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md` records that split. Its tag-push step is not the current path: `mint-inngest-bootstrap-tag.yml` mints on a `main` push that matches the path filter, and `build-inngest-bootstrap-image.yml` is `workflow_dispatch` of an existing tag. Verified in this pass. Neither file replaces the host.
+
+**Implementation Details:**
+
+The v1.45.1 baseline (`000001_baseline.sql`, read this pass) declares `trace_runs.run_id CHAR(26)`, `trace_runs.ended_at BIGINT NOT NULL`, `trace_runs.status INT NOT NULL`, `spans.run_id TEXT NOT NULL`, `traces.run_id CHAR(26)` with no NOT NULL, `event_batches.run_id CHAR(26) NOT NULL`, `function_finishes.status VARCHAR NOT NULL`, `function_finishes.created_at TIMESTAMP NOT NULL`, `function_finishes.run_id BYTEA`, `function_runs.run_id BYTEA NOT NULL`, `function_runs.event_id BYTEA NOT NULL`, `history.run_id BYTEA NOT NULL`, `events.internal_id BYTEA` (indexed by `idx_events_internal_id`), `events.received_at TIMESTAMP NOT NULL`, `events.event_data VARCHAR`. The same file creates `idx_spans_run_id`, `idx_function_finishes_run_id`, `idx_function_runs_event_id`, `idx_function_runs_run_id`, and `idx_history_run_id_created`. It does not create an index on `trace_runs (status, ended_at)`, `function_finishes (created_at)`, or `traces (run_id)`. It contains no trigger and no policy.
+
+`ended_at` is already NOT NULL, so the `IS NOT NULL` arm is redundant on this baseline and stays, in case a later migration relaxes the column. `traces.run_id` can be null. Those rows do not match the join. Do not age-delete them. A null run id can be a trace still being written.
+
+**Edge Cases:**
+
+- A live night that deletes zero rows after catch-up is success. Learning `knowledge-base/project/learnings/database-issues/2026-06-14-pg-cron-retention-window-exceeding-table-age-is-silent-unbounded-growth.md` is the opposite failure: a window longer than the oldest row reports success and deletes nothing while the table grows. The fixture must contain a row older than the window and must fail if that row survives. The follow-through does not fail a live zero count.
+- Learning `knowledge-base/project/learnings/2026-05-15-worm-trigger-blocks-pg-cron-retention-sweep.md` applies to the app database's WORM triggers. This project's baseline has none. Do not add a bypass role for a trigger that is not there.
+
+**References:**
+
+- [POSTGRES_RETENTION.md](https://github.com/inngest/inngest/blob/main/docs/POSTGRES_RETENTION.md)
+- `apps/web-platform/infra/inngest-cli.provenance.md` pinned version v1.45.1. The launch line is `exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest "$@"`. No retention flag is on that line.
 
 Surfaces: `docs/legal/data-protection-disclosure.md` §2.3(o); `docs/legal/privacy-policy.md` (the "performs no automatic deletion" sentence); `docs/legal/gdpr-policy.md` (the ADR-269 recipient-address sentence); `knowledge-base/legal/article-30-register.md` PA-13 (f), PA-21 (f), PA-22 (f) where they point at the Inngest store, and PA-27 (f); `knowledge-base/legal/compliance-posture.md` PA-27 Active Items (iv); the three plugin legal mirrors.
 
@@ -419,7 +459,7 @@ Corpus staleness banners, if the gate prints them at work time, do not pause thi
 - Subsystems touched: 5 — `apps/web-platform`, `plugins/soleur`, `docs`, `knowledge-base`, `scripts`
 - Planned files: 22 | Estimated changed lines: 1540
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR — the file count is under 25 and the root count and the line estimate are over the threshold, so the default offer is a split between the host job and the legal text. That split is rejected because one half would publish a bound the job does not enforce and the other half would enforce a job the disclosure does not name. The issue exists to close that gap. The plugin mirror has to land in the same commit as `docs/legal` or `lint-legal-mirror-drift` fails.
+- Recommendation: single PR — the file count is under 25 and the root count and the line estimate are over the threshold, so the default offer is a split between the host job and the legal text. That split is rejected because one half would publish a bound the job does not enforce and the other half would enforce a job the disclosure does not name. The issue exists to close that gap. The plugin mirror has to land in the same commit as `docs/legal` or `scripts/lint-legal-mirror-drift-baseline.sh` fails.
 
 ## Acceptance Criteria
 
@@ -427,7 +467,7 @@ Corpus staleness banners, if the gate prints them at work time, do not pause thi
 
 ### Pre-merge (PR)
 
-- [ ] A temporary SQLite fixture with the five situations in Phase 1 loses only the finished run older than the window, its children, and the old event that no unfinished run references.
+- [ ] A temporary SQLite fixture with the five situations in Phase 1 loses only the finished run older than the window, its children, and the old event that no unfinished run references. The fixture fails if that delete count is zero. A `traces` row with a null `run_id` remains.
 - [ ] The same fixture keeps the in-flight run, its history, and the old event that run still references.
 - [ ] The Postgres SQL and the SQLite SQL name the same terminal status set `(50, 300, 400, 500, 600)` and the same unfinished-run guard, and neither deletes `events` or `history` by age alone.
 - [ ] No delete statement names `apps`, `functions`, `worker_connections`, `migrations`, `goose_db_version`, `queue_snapshot_chunks`, or Redis.
