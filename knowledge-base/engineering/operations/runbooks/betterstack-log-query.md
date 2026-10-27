@@ -652,7 +652,7 @@ complete), `refusal_detail[]` (capped at 20 — see below; #8427 widened it past
 row carries `component: "compound-promote"` (emitter:
 `server/compound-promote-marker.ts`, PR #8344).
 
-Six further fields appear **only on a manual run with `input:"patterns"`** (ADR-300);
+Further fields appear **only on a manual run with `input:"patterns"`** (ADR-300);
 the scheduled row's field set is unchanged, so their absence is the normal shape for
 `trigger: "cron"`: `input_source` (`patterns`; never emitted on the corpus arm), `patterns_open` (count of open
 pattern pages loaded), `ledger_read` (`ok` | `failed`; `failed` rides a `status: "error"`
@@ -662,8 +662,8 @@ proposed, each also a `ledger-suppressed` entry in `refusals[]` / `refusal_detai
 and `ledger_title_skipped` (bot-authored search items skipped because the title did not
 match the anchored promote-cluster title pattern; warn-level, does not fail by itself, but if
 every bot PR was retitled the read fails `drift`; a human-retitled PR stops suppressing). The
-early terminal rows `disabled`, `deduped` and `week-cap-reached` carry ONLY `input_source`. All six
-are numbers or closed enums. The ledger read has a usable ceiling of 999 search hits (10 pages of
+early terminal rows `disabled`, `deduped` and `week-cap-reached` carry ONLY `input_source` (and the boolean `create_requested`, below). Every one
+is a number or a closed enum (`create_requested` is a boolean). The ledger read has a usable ceiling of 999 search hits (10 pages of
 100, and a full last page throws `page-cap`). On a failed read the marker has no cause field:
 after Inngest retries (`retries:1`) it shows `status=error`, `ledger_read=failed`,
 a static `error_message` and an `error_class` that is `StepError` in the SDK's shape (an exhausted `step.run` reaches the handler as `StepError`, and a production bundle may minify class names, so key on `ledger_read=failed`, not on the class name); the seven causes (`http-5xx`,
@@ -701,6 +701,42 @@ doppler run -p soleur -c prd_terraform -- \
                  (.ledger_suppressed//"-"), (.ledger_prs_scanned//"-"), (.ledger_title_skipped//"-"),
                  (.error_class//"-")] | @tsv'
 ```
+
+The gated new-skill create arm (#10550, dark-launched, ADR-092 create-only amendment) adds closed fields. On a
+manual `patterns` row `create_requested` (boolean) records whether the event carried `allow_create === true`, also on
+the early `disabled`, `deduped` and `week-cap-reached` rows; the scheduled row and a manual corpus row carry none of
+the create fields. When the arm ran the row also carries `create_arm` (`ran`, emitted ONLY then), `kind` (`create`),
+`create_outcome` (`no_action` | `refused` | `opened`) and, as the case needs, `create_no_action_reason`
+(`no-pattern-qualifies` | `all-owned` | `other`), `create_refusal_class` (one of `week-cap`, `create-open`,
+`index-empty`, `input-size`, `model-invalid`, `shape`, `slug`, `prefer-patch`, `budget`, `scan`, `readme-sync`,
+`stub-drift`, `persist`), `create_detail` (a closed token, never model text), the numbers `create_words`,
+`create_cap`, `create_total`, `create_top1`, `create_nearest_rank`, the refusal evidence numbers `create_tokens`,
+`create_max`, `create_bytes` (input-size), `create_path_index`, `create_file_index`, `create_missing_tools`,
+`create_exit` (a gate script's exit code, or the exit status of a failed git call in the persist step), `create_changed_count`, and `create_pr` (the draft PR number). A refused
+create adds ONE entry `create-refused` to `refusals[]` (the refusal reason; its class is the field above) and is
+mirrored to Sentry as op `create-refused` tagged `class`. The create outcome rides the edit loop's `status`
+(`completed` or `no-qualifying-clusters`), and `clusters_opened` counts edit PRs only. How to read each class and each
+`create_detail` token: [`compound-promote-runbook.md`](./compound-promote-runbook.md) section "The gated new-skill
+create arm". Copy-paste recipe. It selects every MANUAL `patterns` row (`create_requested` is `true` OR `false`
+there); the rows that asked for a create are those with `.create_requested == true`. Empty output means no manual
+`patterns` run in the window; an `allow_create` sent WITHOUT `input:"patterns"` leaves no trace on any row:
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
+  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?|objects).message
+              | select(type == "object" and .SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote" and .trigger == "manual" and .create_requested != null)
+              | [$r.dt, .status, (.create_requested|tostring), (.create_arm//"-"), (.create_outcome//"-"),
+                 (.create_refusal_class//"-"), (.create_detail//"-"), (.create_no_action_reason//"-"),
+                 (.create_words//"-"), (.create_cap//"-"), (.create_total//"-"), (.create_top1//"-"),
+                 (.create_nearest_rank//"-"), (.create_tokens//"-"), (.create_path_index//"-"), (.create_file_index//"-"),
+                 (.create_missing_tools//"-"), (.create_exit//"-"), (.create_changed_count//"-"), (.create_pr//"-")] | @tsv'
+```
+
+A row with `create_requested: true` and `-` in the `create_arm` column ended before the arm (read `status`: a saturated
+week cap ends `week-cap-reached`; `empty-corpus`, `deduped` and `disabled` are early exits too, and `anthropic-truncated`
+means the edit clustering answer was truncated, which skips the arm on that path). A `create_requested` of `false` on a row you expected to create means the
+`allow_create` event field did not reach the handler as the boolean `true`.
 
 Reading it:
 
@@ -760,6 +796,7 @@ Reading it:
   | `quorum-not-met` | the cluster had fewer than `PROMOTION_QUORUM` (5) distinct corpus-resolved source learnings; refused before the target file is read and before the phase-2 model call (the draft step's API-key check and always-loaded read still run first; ADR-092 Amendment 2026-10-20). Sentry tags `reason=quorum-not-met`, `cause=below-quorum`; `extra.source_count` (distinct resolved) and `extra.proposed_count` (the model's raw list length) are bare integers, also present on the mirrored error row (key `cluster_hash`), not on the `hash`-keyed warn line | N |
   | `ledger-suppressed` | patterns arm only: the cluster's recomputed hash is already proposed (open, merged, or closed unmerged within 60 days). Counted in `ledger_suppressed`; `clusters_proposed` stays pre-suppression. The model's clusters are sliced to the week-cap `remaining` before suppression, so a repeated suppressed cluster can end a week `no-qualifying-clusters` (accepted) | N |
   | `cluster-duplicate` | patterns arm only: a second cluster with the same source set in one run | N |
+  | `create-refused` | create arm only (manual `patterns` + `allow_create`): a gate refused the one create; the closed `class` and `detail` are the marker fields `create_refusal_class` and `create_detail`, not part of this enum. Written once per refused create, no `refusal_detail` entry (no `diff_*` shape) | N |
 
   `diff-path-off-target`, `corpus-shrink-refused` and `agents-core-hr-rule-edit-refused` can no longer fire
   for a correct server derivation (the diff touches only the declared target, removes nothing, and cannot mint

@@ -381,8 +381,8 @@ webplat_related_meta_hit() {
 }
 
 # webplat_related_files <diff_names_blob> — prints app-relative paths under
-# apps/web-platform/, one per line, deduped. Tokenizes like the runner's
-# _AFFECT_PATTERNS loop (IFS space+tab: `M\tpath` and `R100\told\tnew` rows keep
+# apps/web-platform/, one per line, deduped. Tokenizes the way the runner's
+# diff blob readers do (IFS space+tab: `M\tpath` and `R100\told\tnew` rows keep
 # every path field and drop status tokens).
 webplat_related_files() {
   local _line _tok

@@ -148,3 +148,7 @@ The pattern-wiki structure (one curated page per recurring pattern, an open/clos
 ## Follow-ups
 
 The flip decision, the effect measurement and the deferred deliverables are tracked in #10977; `/compound` upserting pattern pages is tracked in #10978. Neither is a prerequisite of this decision.
+
+## Addendum 2026-10-26 (#10550)
+
+The dark-launched create arm (ADR-092, create-only amendment of 2026-10-26) reuses this ADR's ledger, cluster-hash and branch and title shapes unchanged; the closed marker field `kind` (`edit` or `create`) distinguishes it, a refused create writes no ledger row, and the status stays `adopting`.

@@ -1,0 +1,11 @@
+# boundary-prefix.test.sh scan scope (boundary-prefix.test.sh, the CANDIDATES loop): four directory globs
+.claude/hooks/*.sh
+.claude/hooks/lib/*.sh
+plugins/soleur/scripts/*.sh
+plugins/soleur/scripts/lib/*.sh
+# intended expression (NOT declared: the suite has src=floor, verdict duration-floor):
+glob:.claude/hooks/**.sh
+glob:plugins/soleur/scripts/**.sh
+scanned_tracked_files=165
+files_matched_by_the_two_globs=170
+excess_files=5

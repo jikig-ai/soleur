@@ -519,7 +519,9 @@ describe("containment", () => {
 const COMMON_KEYS = ["clusters_opened", "clusters_proposed", "corpus_count", "corpus_input_bytes", "run_id", "status", "trigger"];
 const PATTERNS_KEYS = ["input_source", "ledger_prs_scanned", "ledger_read", "ledger_suppressed", "ledger_title_skipped", "patterns_open"];
 
-const ROW_ALLOWED = new Set([...COMMON_KEYS, ...PATTERNS_KEYS, "refusals", "refusal_detail", "error_class", "error_message"]);
+// #10550: a manual patterns row also records whether the gated create arm was requested (`create_requested`, a boolean,
+// false here: none of these cases sends allow_create). It is the ONLY create field these rows may carry.
+const ROW_ALLOWED = new Set([...COMMON_KEYS, ...PATTERNS_KEYS, "create_requested", "refusals", "refusal_detail", "error_class", "error_message"]);
 
 describe("the marker rows the handler actually emits on the patterns arm (closed vocabulary, asserted on emitted rows)", () => {
   const ALLOWED = ROW_ALLOWED;
@@ -539,14 +541,14 @@ describe("the marker rows the handler actually emits on the patterns arm (closed
     stubModel([AGENTS_CLUSTER], EDITS);
     const completed = await run(MANUAL("patterns"));
     assertClosed(completed.last);
-    expect(keysOf(completed.last)).toEqual([...COMMON_KEYS, ...PATTERNS_KEYS, "refusal_detail", "refusals"].sort());
+    expect(keysOf(completed.last)).toEqual([...COMMON_KEYS, ...PATTERNS_KEYS, "create_requested", "refusal_detail", "refusals"].sort());
 
     h.marker.mockReset();
     h.ledger.items = [prior(hashOf(AGENTS_CLUSTER.source_learnings))];
     stubModel([AGENTS_CLUSTER], EDITS);
     const none = await run(MANUAL("patterns"));
     assertClosed(none.last);
-    expect(keysOf(none.last)).toEqual([...COMMON_KEYS, ...PATTERNS_KEYS, "refusal_detail", "refusals"].sort());
+    expect(keysOf(none.last)).toEqual([...COMMON_KEYS, ...PATTERNS_KEYS, "create_requested", "refusal_detail", "refusals"].sort());
 
     h.marker.mockReset();
     h.ledger.items = [];
