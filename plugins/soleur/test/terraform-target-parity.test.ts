@@ -1798,10 +1798,12 @@ describe("concurrency-group + cloudflared-pin parity across the two workflows (#
 // `["web-1"]` for_each key. That wedged the targeted CI plan RED on every run.
 //
 // The fix is NOT to add these bases to the per-PR `-target=` allow-list:
-// `hcloud_server.web` carries `placement_group_id` + `for_each = var.web_hosts`
-// (server.tf), so targeting it in the UNATTENDED per-PR path forces a power-off
-// reboot of the running prod host (and transitively creates the placement group
-// / a second host). They are consumed by the operator's ADR-068 Phase-3
+// `hcloud_server.web` carries `for_each = var.web_hosts` (server.tf): a
+// `server_type` or other non-ignored delta on it in the UNATTENDED per-PR path
+// forces a reboot of the running prod host, and targeting it transitively
+// creates the placement group / a second host. (The placement_group_id attach
+// itself is suppressed while the attribute sits in lifecycle.ignore_changes —
+// the deferral this file's later describe pins.) They are consumed by the operator's ADR-068 Phase-3
 // MAINTENANCE-WINDOW apply, after which no pending moves remain and the targeted
 // CI plan self-heals with zero workflow change. This guard therefore asserts
 // every `moved` endpoint is EITHER `-target=`ed OR documented as operator-consumed

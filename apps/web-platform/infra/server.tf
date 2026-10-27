@@ -595,6 +595,8 @@ resource "hcloud_server" "web" {
   # applies — unwedging #5887 with ZERO reboot. web-2 was born INTO the group at
   # create time, so this defers ONLY web-1. REMOVE this entry in the GA maintenance-
   # window PR as its FIRST diff, then take the reboot on a drained host (blue-green).
+  # The same removal must update the vector_out_of_scope_changes allow-set
+  # (knowledge-base/engineering/operations/runbooks/vector-redeliver.md).
   # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
   # dropped silently.
   #
