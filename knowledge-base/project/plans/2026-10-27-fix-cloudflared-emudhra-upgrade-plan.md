@@ -214,7 +214,14 @@ check and a rollback guard silently invert.
   provisioning.md`; `2026-09-28-this-repos-releases-are-immutable` (release
   integrity — recompute sha, never paste).
 
-## Hypotheses (connectivity layers, L3→L7)
+## Hypotheses — Network-Outage Deep-Dive (connectivity layers, L3→L7)
+
+Gate fired: plan contains SSH/firewall keywords and drives `terraform apply`
+against the web-platform root (which contains `terraform_data` SSH-provisioner
+resources, though none are in the migration's `-replace`/dispatch target set —
+verified: no `provisioner`/`connection` blocks in `inngest*.tf`; the web-1-scoped
+provisioners are untouched). Each layer cites an artifact or an explicit
+"not verified" note; L3 precedes L7.
 
 The change's riskiest window is the post-merge migration (connector re-registration
 on a re-created tunnel/token). L3 checks precede any service-layer conclusion:
@@ -235,6 +242,56 @@ on a re-created tunnel/token). L3 checks precede any service-layer conclusion:
 4. **Service layer (deferred).** A connector that registered but cannot serve an
    ingress surfaces as route-specific failure — verify each of deploy./ssh./registry.
    after L3+L7 clear. [to verify post-migration]
+
+## Downtime & Cutover
+
+**Offline-inducing operation and affected surface.** The credential kill
+(tunnel `-replace` or token rotation + `DELETE /connections`) drops every
+connector holding the old token — the sole serving connector today. Until a new
+connector registers, `deploy.`, `ssh.`, and `registry.` are dark (the whole
+management plane). `app.soleur.ai` is NOT affected (direct CF-proxied A record;
+never traverses the tunnel — measured design, dns.tf). web-2's own host replace
+adds a bounded reboot window for its watchdog/dispatch-clock role only.
+
+**Zero-downtime evaluation (required default).**
+
+- *Expand-contract on the tunnel (true zero-dark):* create a SECOND tunnel
+  resource (`web_v2`) in apply A without repointing records; dispatch the web-2
+  replace so its connector registers on the v2 token while the OLD tunnel still
+  serves; apply B repoints `deploy./ssh./registry.` records to v2 and destroys
+  the old tunnel — web-1's connector is then permanently orphaned with no route
+  gap at any point. Cost: a transient second tunnel + two applies + a
+  create-then-destroy resource dance, for a surface that is management-plane
+  only.
+- *Token-rotation semantics do NOT close the gap alone:* per Cloudflare docs,
+  existing connections REMAIN ACTIVE after rotation — only NEW connections need
+  the new token. So rotation-then-birth still leaves a gap (rotation → new
+  connector registers), and birth-then-rotation leaves web-2 holding a dead
+  credential (needs a second replace or a forbidden in-place re-install).
+- *Blue-green / rolling:* not applicable to the credential itself — Cloudflare
+  issues one token per tunnel; two valid credentials cannot overlap on one
+  tunnel.
+
+**Chosen path (residual downtime, justified).** The bounded-window path:
+O1 credential kill → O2 `web-host-replace` web-2 → O3 census verify. Justification
+for accepting residual downtime: the affected surface is management-plane only
+(deploy/ssh/registry — internal, self-remediating on re-registration), user
+serving is structurally untouched, the window is bounded by one dispatch
+(≤40 min job timeout; expected ~10–20 min), and the expand-contract alternative
+buys zero user-visible improvement for a transient second tunnel + two applies.
+**Bounded maintenance window:** one `web-host-replace` dispatch duration.
+**Operator sign-off:** each step is individually authorized per
+`hr-menu-option-ack-not-prod-write-auth` (the O1 apply and the O2 dispatch each
+get explicit per-command go-ahead — the follow-through issue carries the
+commands); the operator MAY instead elect the expand-contract path above for
+zero dark at higher ceremony.
+
+**Per-stage verification/rollback.** After O1: `/connections` shows the old
+client_id gone (rollback = none needed — nothing created yet; the old tunnel
+is already destroyed though, so forward-only: proceed to O2). After O2: census
+verdict `ok` + floor verdict clean; if web-2 fails to register, the previous
+state is reproducible by re-dispatching (the host is cattle). After O3:
+`dig deploy.soleur.ai` resolves + one `cloudflared access` probe per route.
 
 ## User-Brand Impact
 
@@ -639,3 +696,30 @@ surface.)
 - **#2197** (billing `SubscriptionStatus`) names `infra/server.tf` as a hypothetical
   hazard if someone adds `count = 2`. **Acknowledge** — our server.tf edit flips a
   template flag, not host count.
+
+## Enhancement Summary (deepen-plan pass)
+
+Deepened in-place (headless; no subagent channel — per-section research and review
+fan-outs ran as inline verification passes):
+
+- Added `## Downtime & Cutover` (gate 4.55): names the credential-kill window on the
+  sole connector, evaluates expand-contract (two-tunnel) as the true zero-dark path,
+  and justifies the bounded-window default with operator sign-off per step.
+- Upgraded `## Hypotheses` to the Network-Outage Deep-Dive contract (gate 4.5):
+  layer-by-layer L3→L7 artifact/unverified marking.
+- Split `## Acceptance Criteria` into Pre-merge (PR) / Post-merge
+  (operator-authorized) subsections (sharp-edge #69).
+- Verified mechanically: `lint-guard-contract.py` → 3 guard entries, no failures;
+  `lint-encryption-posture.py` is repo-sweep-scoped (no per-plan arg).
+- Verify-the-negative pass (inline): "no other prod host runs cloudflared" confirmed
+  by grep census (`install.*cloudflared` hits only web cloud-init + the two bridge
+  actions); "no dockerized cloudflared" confirmed; "web-1 user_data ignored"
+  confirmed at server.tf:616; "web-host-replace refuses web-1" confirmed at
+  apply-web-platform-infra.yml:5196 + ADR-148.
+
+### Residual risks accepted
+
+- Connector placement ruling is `pending - assumed: web-2` in
+  `specs/<branch>/decision-challenges.md` (no CTO agent channel on this harness) —
+  a CTO/agent session may supersede before work starts.
+- The measured sha256s are provisional: work re-computes against live assets.
