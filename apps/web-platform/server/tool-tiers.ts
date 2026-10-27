@@ -8,6 +8,12 @@
  * - auto-approve: read-only tools, pass through without review gate
  * - gated: write tools, require founder confirmation via review gate
  * - blocked: destructive patterns, rejected unconditionally
+ *
+ * Invariant (#11303): the Agent SDK approves a bare `allowedTools` entry BEFORE it consults
+ * `canUseTool`, so only `auto-approve` platform tools may ever be handed to the SDK as
+ * pre-approved. `buildAllowedTools` is the single filter; `canUseTool` is the only approver
+ * of every other tier. This module stays import-free so tests and the real-SDK probe can
+ * load it without booting the runner.
  */
 
 export type ToolTier = "auto-approve" | "gated" | "blocked";
@@ -160,14 +166,25 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__narrate": "auto-approve",
   "mcp__soleur_platform__summarize": "auto-approve",
 
-  // NOTE (#2909 review): `mcp__soleur_platform__conversations_lookup` is
-  // registered at `agent-runner.ts:1372` but DELIBERATELY omitted from this
-  // map — the legacy `startAgentSession` path relies on `getToolTier()`'s
-  // "gated" fallback for it, and changing that semantic is out of scope
-  // for #2909 Phase 1 (see spec NG2 + Sharp Edge "TOOL_TIER_MAP shared with
-  // legacy path"). cc-router (#2909): Tier 1 candidate — promotion to
-  // explicit "auto-approve" (parity with kb_share_list/preview rationale,
-  // closure-bound userId scoping) tracked at #3722.
+  // KB-chat thread discovery (#2512): read-only. The handler does a `users` SELECT probe and a
+  // `conversations` + `messages(count)` SELECT through the tenant client (lookupConversationForPath),
+  // plus a SELECT in getCurrentRepoUrl; userId is closure-bound and nothing is written. Auto-approve
+  // (parity with kb_share_list). Verified read-only at #11303; the registered siblings
+  // (conversations_list, conversation_archive, ...) are NOT on the canUseTool allowlist and stay
+  // unclassified (denied by canUseTool's deny-default).
+  // cc-router (#2909): Tier 1 candidate.
+  "mcp__soleur_platform__conversations_lookup": "auto-approve",
+
+  // Explicit `gated` entries (#11303). Behaviour is unchanged (getToolTier already defaulted these to
+  // gated); the entries exist so a census can tell "decided" from "defaulted" and a NEW platform tool
+  // fails CI until someone decides its tier.
+  // Plausible: a shared, cross-tenant PLAUSIBLE_API_KEY with no per-site enforcement.
+  "mcp__soleur_platform__plausible_create_site": "gated",
+  "mcp__soleur_platform__plausible_add_goal": "gated",
+  "mcp__soleur_platform__plausible_get_stats": "gated",
+  // Account: export bundles the user's data and files; delete is destructive and permanent.
+  "mcp__soleur_platform__account_export_enqueue": "gated",
+  "mcp__soleur_platform__account_delete_initiate": "gated",
 };
 
 /**
@@ -187,10 +204,9 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
  * See brainstorm Key Decision #3:
  *   knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-13-mcp-tier-classify-cc-soleur-go-brainstorm.md
  *
- * NOTE: legacy `TOOL_TIER_MAP` entries for Plausible tools do not exist;
- * `getToolTier()` returns "gated" by default for them on the legacy path,
- * which is correct (legacy review-gate UX surfaces them with founder
- * confirmation). This denylist is the cc-router-specific permanent block.
+ * NOTE: the legacy `TOOL_TIER_MAP` carries explicit `gated` entries for the Plausible
+ * tools (#11303), so the legacy review-gate surfaces them with founder confirmation.
+ * This denylist is the cc-router-specific permanent block.
  */
 export const CC_ROUTER_TIER3_DENYLIST: ReadonlySet<string> = new Set([
   "mcp__soleur_platform__plausible_create_site",
@@ -204,7 +220,35 @@ export const CC_ROUTER_TIER3_DENYLIST: ReadonlySet<string> = new Set([
  * require explicit tier assignment before they can auto-approve).
  */
 export function getToolTier(toolName: string): ToolTier {
-  return TOOL_TIER_MAP[toolName] ?? "gated";
+  // hasOwn: a prototype key ("constructor", "__proto__") must resolve to the fail-closed default, not an inherited value.
+  return Object.hasOwn(TOOL_TIER_MAP, toolName) ? TOOL_TIER_MAP[toolName] : "gated";
+}
+
+/** Plugin MCP server names come from `plugin.json`; only this shape may be interpolated into a wildcard entry. */
+export const PLUGIN_SERVER_NAME_RE = /^[a-z0-9-]+$/;
+
+/**
+ * The SDK `allowedTools` pre-approval list for the legacy runner (#11303).
+ *
+ * The SDK auto-approves a bare `allowedTools` entry BEFORE it consults `canUseTool`, so any `gated` platform tool listed
+ * there runs with no review card. This keeps a platform name only when its effective tier is `auto-approve`
+ * (fail-closed: `gated`, `blocked` and unclassified names all drop out, and a new tool is gated until someone decides),
+ * and appends `mcp__plugin_soleur_<server>__*` for each validly-named plugin MCP server (third-party plugin servers
+ * are allowed by design, as `canUseTool` also allows them). Pure; never mutates its inputs; always returns an array
+ * (the call site omits the key when it is empty). `createCanUseTool` must keep receiving the UNFILTERED platform list.
+ */
+export function buildAllowedTools(
+  platformToolNames: readonly string[],
+  pluginMcpServerNames: readonly string[],
+): string[] {
+  const out = new Set<string>();
+  for (const name of platformToolNames) {
+    if (getToolTier(name) === "auto-approve") out.add(name);
+  }
+  for (const server of pluginMcpServerNames) {
+    if (PLUGIN_SERVER_NAME_RE.test(server)) out.add(`mcp__plugin_soleur_${server}__*`);
+  }
+  return [...out];
 }
 
 /**
@@ -220,27 +264,113 @@ export function summarizeOutboundEmailInput(toolName: string, input: unknown): s
 }
 
 /**
- * The gate question for the OFFLINE path (push + Resend email via
- * notifyOfflineUser). The in-app gate must show the outbound recipient and body
- * (see buildGateMessage), but a push payload and a vendor-retained email are
- * stores the privacy notice does not list (#8532), so outbound-email gates are
- * content-free here and the operator reviews the details in the app.
+ * Card-field helpers (#11303). Once the gate is reachable, the review card is the only control, and its text is built
+ * from model-controlled tool input. Every scalar interpolated into a card goes through `cardField`: control, bidi and
+ * zero-width characters are stripped, newlines and markdown emphasis/link/html characters are removed, the value is
+ * length-capped, and a non-scalar becomes the literal word `unknown` (never an object).
  */
+const CARD_FIELD_MAX = 120;
+const CARD_BODY_PREVIEW_MAX = 240;
+// Controls (incl. newline and tab, which are folded to a space first), DEL and C1, zero-width and bidi marks, line and
+// paragraph separators, bidi embeddings/overrides/isolates, word joiner and the BOM. Escapes only: no literal separators.
+// eslint-disable-next-line no-control-regex -- stripping control characters is the point
+const CARD_STRIP_RE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/g;
+// Markdown emphasis, code, link and html characters.
+const CARD_MARKDOWN_RE = /[*`[\]<>\\~|]/g;
+
+function cardScalar(v: unknown): string | null {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") return String(v);
+  return null;
+}
+
+function cleanForCard(raw: string): string {
+  return raw
+    .replace(/[\r\n\t\u2028\u2029]+/g, " ")
+    .replace(CARD_STRIP_RE, "")
+    .replace(CARD_MARKDOWN_RE, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cardField(v: unknown, fallback = "unknown", max = CARD_FIELD_MAX): string {
+  const raw = cardScalar(v);
+  if (raw === null) return fallback;
+  const cleaned = cleanForCard(raw);
+  if (cleaned === "") return fallback;
+  return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
+}
+
+/** A card field as a quoted value (double quotes inside the value become single quotes so it cannot close the quote). */
+function quoted(v: unknown, fallback = "unknown", max = CARD_FIELD_MAX): string {
+  return `"${cardField(v, fallback, max).replace(/"/g, "'")}"`;
+}
+
+/** A short list of scalars (labels, assignees, lens); a non-array is the word `unknown`. */
+function cardList(v: unknown, sep = ", "): string {
+  if (!Array.isArray(v)) return "unknown";
+  return v.slice(0, 10).map((x) => cardField(x, "?", 40)).join(sep);
+}
+
+/**
+ * The email body preview: capped at 240 characters and DISPLAY-ONLY untrusted content. A body longer than the cap says so
+ * and reports the full length, so a payload placed after the preview is never silently hidden.
+ */
+function bodyPreview(body: unknown): string {
+  const raw = cardScalar(body) ?? "";
+  const shown = cleanForCard(raw.slice(0, CARD_BODY_PREVIEW_MAX));
+  if (raw.length <= CARD_BODY_PREVIEW_MAX) return shown;
+  return `${shown}… [+${raw.length - CARD_BODY_PREVIEW_MAX} more characters not shown, total ${raw.length}]`;
+}
+
+/**
+ * The gate question for the OFFLINE path (push + Resend email via notifyOfflineUser). The in-app card shows the detail;
+ * a push payload and a vendor-retained email are stores the privacy notice does not list (#8532), so EVERY gated tool is
+ * content-free here: a static sentence with a fixed per-tool action label, never a tool-input value (#11303 inverted this
+ * from an email-only exception to an allowlist, because the gate now fires for every gated tool). `toolInput` is accepted
+ * for call-site compatibility and deliberately unused.
+ */
+const OFFLINE_ACTION_LABELS: Record<string, string> = {
+  email_send: "an outbound email action",
+  email_reply: "an outbound email action",
+  email_suppress: "an outbound email action",
+  github_push_branch: "a GitHub push",
+  create_pull_request: "a GitHub pull request",
+  create_issue: "a GitHub issue",
+  github_trigger_workflow: "a GitHub workflow run",
+  kb_share_create: "a public document share",
+  kb_share_revoke: "a share link revocation",
+  routine_run: "a routine run",
+  workspace_set_autonomous: "a workspace autonomy change",
+  account_delete_initiate: "an account deletion",
+  account_export_enqueue: "an account data export",
+  plausible_create_site: "an analytics site change",
+  plausible_add_goal: "an analytics goal change",
+  plausible_get_stats: "an analytics stats request",
+  crm_contact_upsert: "a CRM record change",
+  crm_note_append: "a CRM record change",
+  crm_contact_set_stage: "a CRM record change",
+  workstream_issue_create: "a GitHub issue change",
+  workstream_issue_set_status: "a GitHub issue change",
+  workstream_issue_update_title: "a GitHub issue change",
+  workstream_issue_update_fields: "a GitHub issue change",
+  workstream_issue_close: "a GitHub issue change",
+};
+
 export function buildOfflineGateMessage(
   toolName: string,
-  toolInput: Record<string, unknown>,
+  _toolInput: Record<string, unknown>,
 ): string {
   const shortName = toolName.replace("mcp__soleur_platform__", "");
-  if (shortName === "email_send" || shortName === "email_reply" || shortName === "email_suppress") {
-    return "An agent is waiting for your approval on an outbound email action. Open the conversation to review it.";
-  }
-  return buildGateMessage(toolName, toolInput);
+  const label = Object.hasOwn(OFFLINE_ACTION_LABELS, shortName) ? OFFLINE_ACTION_LABELS[shortName] : "an action";
+  return `An agent is waiting for your approval on ${label}. Open the conversation to review it.`;
 }
 
 /**
  * Build a human-readable review gate message for a gated tool invocation.
  * The message should clearly describe what the agent wants to do so the
- * founder can make an informed approval decision.
+ * founder can make an informed approval decision. Every interpolated tool-input
+ * value goes through the card-field helpers above (bounded and neutralised).
  */
 export function buildGateMessage(
   toolName: string,
@@ -250,42 +380,35 @@ export function buildGateMessage(
 
   switch (shortName) {
     case "github_trigger_workflow":
-      return `Agent wants to trigger workflow **${toolInput.workflow_id ?? "unknown"}** on branch **${toolInput.ref ?? "unknown"}**. Allow?`;
+      return `Agent wants to trigger workflow **${cardField(toolInput.workflow_id)}** on branch **${cardField(toolInput.ref)}**. Allow?`;
     case "github_push_branch":
-      return `Agent wants to push to branch **${toolInput.branch ?? "unknown"}**. Allow?`;
+      return `Agent wants to push to branch **${cardField(toolInput.branch)}**. Allow?`;
     case "create_pull_request":
-      return `Agent wants to open PR: **${toolInput.title ?? "untitled"}** (${toolInput.base ?? "main"} ← ${toolInput.head ?? "unknown"}). Allow?`;
+      return `Agent wants to open PR: **${cardField(toolInput.title, "untitled")}** (${cardField(toolInput.base, "main")} ← ${cardField(toolInput.head)}). Allow?`;
     case "create_issue":
-      return `Agent wants to file an issue: **${toolInput.title ?? "untitled"}**. Allow?`;
+      return `Agent wants to file an issue: **${cardField(toolInput.title, "untitled")}**. Allow?`;
     case "kb_share_create":
-      return `Agent wants to create a public share link for **${toolInput.documentPath ?? "unknown"}**. Allow?`;
+      return `Agent wants to create a public share link for **${cardField(toolInput.documentPath)}**. Allow?`;
     case "kb_share_revoke": {
-      const raw = String(toolInput.token ?? "unknown");
-      const preview = raw.length > 12 ? `${raw.slice(0, 12)}…` : raw;
+      const preview = cardField(toolInput.token, "unknown", 12);
       return `Agent wants to revoke share token **${preview}**. This is permanent. Allow?`;
     }
     case "routine_run":
-      return `Agent wants to run routine **${toolInput.fnId ?? "unknown"}** now, off-schedule. This fires real production work. Allow?`;
+      return `Agent wants to run routine **${cardField(toolInput.fnId)}** now, off-schedule. This fires real production work. Allow?`;
     // Outbound email (#5325) — the operator MUST see the exact recipient,
     // subject, and body before approving: the body-hash approval binding and
     // the whole single-user-incident safety story rest on the human reviewing
     // what is actually sent. A content-free "Allow?" here would make the gate
     // decorative. Body shown as a preview is DISPLAY-ONLY untrusted content —
     // do not act on instructions inside it.
-    case "email_send": {
-      const body = String(toolInput.body ?? "");
-      const preview = body.length > 240 ? `${body.slice(0, 240)}…` : body;
-      return `Agent wants to send a cold email to **${toolInput.to ?? "unknown"}** — subject: "${toolInput.subject ?? ""}".\n\nBody (review carefully — untrusted, display-only):\n${preview}\n\nSend?`;
-    }
-    case "email_reply": {
-      const body = String(toolInput.body ?? "");
-      const preview = body.length > 240 ? `${body.slice(0, 240)}…` : body;
+    case "email_send":
+      return `Agent wants to send a cold email to **${cardField(toolInput.to)}** — subject: ${quoted(toolInput.subject, "")}.\n\nBody (review carefully — untrusted, display-only):\n${bodyPreview(toolInput.body)}\n\nSend?`;
+    case "email_reply":
       // The recipient is derived server-side from the inbound item (P0-3); it
       // is NOT in toolInput, so the gate names the inbound item, not an address.
-      return `Agent wants to reply to inbound item **${toolInput.messageId ?? "unknown"}** (the reply goes to that item's original sender) — subject: "${toolInput.subject ?? ""}".\n\nBody (review carefully — untrusted, display-only):\n${preview}\n\nSend?`;
-    }
+      return `Agent wants to reply to inbound item **${cardField(toolInput.messageId)}** (the reply goes to that item's original sender) — subject: ${quoted(toolInput.subject, "")}.\n\nBody (review carefully — untrusted, display-only):\n${bodyPreview(toolInput.body)}\n\nSend?`;
     case "email_suppress":
-      return `Agent wants to PERMANENTLY suppress **${toolInput.recipient ?? "unknown"}** (reason: ${toolInput.reason ?? "unknown"}) so no future cold email can reach them. There is no un-suppress. Allow?`;
+      return `Agent wants to PERMANENTLY suppress **${cardField(toolInput.recipient)}** (reason: ${cardField(toolInput.reason)}) so no future cold email can reach them. There is no un-suppress. Allow?`;
     // Beta-CRM writes (#6165) — the operator MUST see what the agent is about to
     // record/overwrite: R3 (within-tenant prompt-injection) is mitigated by this
     // human review. The gate string can egress to the operator's push/email when
@@ -297,14 +420,14 @@ export function buildGateMessage(
     // F1: don't widen the third-party-PII egress surface beyond PA-30 recipients.)
     case "crm_contact_upsert": {
       const isNew = toolInput.contactId == null;
-      const target = isNew ? "a NEW contact" : `contact **${toolInput.contactId}**`;
+      const target = isNew ? "a NEW contact" : `contact **${cardField(toolInput.contactId)}**`;
       const parts: string[] = [];
-      if (toolInput.stage != null) parts.push(`stage→${toolInput.stage}`);
+      if (toolInput.stage != null) parts.push(`stage→${cardField(toolInput.stage)}`);
       if (toolInput.amount != null)
-        parts.push(`amount→${toolInput.amount}${toolInput.currency ? ` ${toolInput.currency}` : ""}`);
-      if (toolInput.lastContact != null) parts.push(`last_contact→${toolInput.lastContact}`);
-      if (toolInput.nextActionDate != null) parts.push(`next_action_date→${toolInput.nextActionDate}`);
-      if (toolInput.expectedCloseDate != null) parts.push(`expected_close→${toolInput.expectedCloseDate}`);
+        parts.push(`amount→${cardField(toolInput.amount)}${toolInput.currency ? ` ${cardField(toolInput.currency)}` : ""}`);
+      if (toolInput.lastContact != null) parts.push(`last_contact→${cardField(toolInput.lastContact)}`);
+      if (toolInput.nextActionDate != null) parts.push(`next_action_date→${cardField(toolInput.nextActionDate)}`);
+      if (toolInput.expectedCloseDate != null) parts.push(`expected_close→${cardField(toolInput.expectedCloseDate)}`);
       const textFields = ["name", "company", "role", "source", "nextAction", "amountBasis"].filter(
         (f) => toolInput[f] != null,
       );
@@ -313,42 +436,55 @@ export function buildGateMessage(
       return `Agent wants to save ${target}${detail}. Open the record in-app to review the exact text before approving. Allow?`;
     }
     case "crm_note_append": {
-      const lens = Array.isArray(toolInput.lens) ? toolInput.lens.join("+") : String(toolInput.lens ?? "");
-      const when = toolInput.occurredAt ? ` dated ${toolInput.occurredAt}` : "";
+      const lens = Array.isArray(toolInput.lens) ? cardList(toolInput.lens, "+") : cardField(toolInput.lens, "");
+      const when = toolInput.occurredAt ? ` dated ${cardField(toolInput.occurredAt)}` : "";
       // The verbatim note body is third-party conversation PII — do NOT include it
       // (it would egress via offline push/email). Review the note text in-app.
-      return `Agent wants to append a ${lens} note${when} to contact **${toolInput.contactId ?? "unknown"}**. Open the record in-app to review the note text before approving. Allow?`;
+      return `Agent wants to append a ${lens} note${when} to contact **${cardField(toolInput.contactId)}**. Open the record in-app to review the note text before approving. Allow?`;
     }
     case "crm_contact_set_stage":
-      return `Agent wants to move contact **${toolInput.contactId ?? "unknown"}** to stage **${toolInput.toStage ?? "unknown"}**. Allow?`;
+      return `Agent wants to move contact **${cardField(toolInput.contactId)}** to stage **${cardField(toolInput.toStage)}**. Allow?`;
     // Workstream writes (#6304) — name the DECISION-relevant fields so the
     // founder can approve informed (the write hits a real GitHub issue).
     case "workstream_issue_create":
-      return `Agent wants to create a GitHub issue: **${toolInput.title ?? "untitled"}**${toolInput.status ? ` (→ ${toolInput.status})` : ""}. Allow?`;
+      return `Agent wants to create a GitHub issue: **${cardField(toolInput.title, "untitled")}**${toolInput.status ? ` (→ ${cardField(toolInput.status)})` : ""}. Allow?`;
     case "workstream_issue_set_status":
-      return `Agent wants to move issue **#${toolInput.number ?? "?"}** to **${toolInput.status ?? "unknown"}**${toolInput.state_reason ? ` (${toolInput.state_reason})` : ""}. Allow?`;
+      return `Agent wants to move issue **#${cardField(toolInput.number, "?")}** to **${cardField(toolInput.status)}**${toolInput.state_reason ? ` (${cardField(toolInput.state_reason)})` : ""}. Allow?`;
     case "workstream_issue_update_title":
-      return `Agent wants to rename issue **#${toolInput.number ?? "?"}** to **${toolInput.title ?? "untitled"}**. Allow?`;
+      return `Agent wants to rename issue **#${cardField(toolInput.number, "?")}** to **${cardField(toolInput.title, "untitled")}**. Allow?`;
     case "workstream_issue_update_fields": {
       const parts: string[] = [];
       if (toolInput.body !== undefined) parts.push("body");
-      if (Array.isArray(toolInput.labels))
-        parts.push(`labels→[${(toolInput.labels as string[]).join(", ")}]`);
-      if (Array.isArray(toolInput.assignees))
-        parts.push(
-          `assignees→[${(toolInput.assignees as string[]).join(", ")}]`,
-        );
+      if (Array.isArray(toolInput.labels)) parts.push(`labels→[${cardList(toolInput.labels)}]`);
+      if (Array.isArray(toolInput.assignees)) parts.push(`assignees→[${cardList(toolInput.assignees)}]`);
       if (toolInput.milestone !== undefined)
-        parts.push(
-          `milestone→${toolInput.milestone === null ? "none" : toolInput.milestone}`,
-        );
+        parts.push(`milestone→${toolInput.milestone === null ? "none" : cardField(toolInput.milestone)}`);
       const detail = parts.length ? ` — ${parts.join("; ")}` : "";
-      return `Agent wants to edit issue **#${toolInput.number ?? "?"}**${detail}. Allow?`;
+      return `Agent wants to edit issue **#${cardField(toolInput.number, "?")}**${detail}. Allow?`;
     }
     case "workstream_issue_close":
       return toolInput.reopen
-        ? `Agent wants to REOPEN issue **#${toolInput.number ?? "?"}**. Allow?`
-        : `Agent wants to close issue **#${toolInput.number ?? "?"}** (${toolInput.reason ?? "completed"}). Allow?`;
+        ? `Agent wants to REOPEN issue **#${cardField(toolInput.number, "?")}**. Allow?`
+        : `Agent wants to close issue **#${cardField(toolInput.number, "?")}** (${cardField(toolInput.reason, "completed")}). Allow?`;
+    // Tools whose gate became reachable with #11303 (previously default-gated and pre-approved around the gate): the card
+    // must say what is being approved. None of these echo tool input beyond the named fields, and none puts a secret or
+    // a confirmation email in the text (the offline path is content-free regardless).
+    case "workspace_set_autonomous":
+      return toolInput.value === true
+        ? "Agent wants to turn autonomous mode ON for this workspace. While it is ON, the agent can run shell commands in the workspace without asking you first. Allow?"
+        : toolInput.value === false
+          ? "Agent wants to turn autonomous mode OFF for this workspace. The agent will ask before running shell commands. Allow?"
+          : "Agent wants to change the autonomous-mode setting for this workspace. When it is ON, the agent runs shell commands without asking you first. Allow?";
+    case "account_delete_initiate":
+      return "Agent wants to start PERMANENT deletion of your account and all of its data. This cannot be undone. Allow?";
+    case "account_export_enqueue":
+      return "Agent wants to request a full export of your account data. Allow?";
+    case "plausible_create_site":
+      return `Agent wants to create the Plausible Analytics site **${cardField(toolInput.domain)}**. Allow?`;
+    case "plausible_add_goal":
+      return `Agent wants to add a Plausible Analytics **${cardField(toolInput.goal_type)}** goal **${cardField(toolInput.value)}** to site **${cardField(toolInput.site_id)}**. Allow?`;
+    case "plausible_get_stats":
+      return `Agent wants to read Plausible Analytics stats for site **${cardField(toolInput.site_id)}** over **${cardField(toolInput.period, "30d")}**. Allow?`;
     default:
       return `Agent wants to use **${shortName}**. Allow?`;
   }

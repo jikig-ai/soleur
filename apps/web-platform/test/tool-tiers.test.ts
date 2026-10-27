@@ -13,7 +13,9 @@ import { describe, test, expect } from "vitest";
 import {
   getToolTier,
   buildGateMessage,
+  buildOfflineGateMessage,
   CC_ROUTER_TIER3_DENYLIST,
+  TOOL_TIER_MAP,
 } from "../server/tool-tiers";
 
 describe("getToolTier", () => {
@@ -203,5 +205,158 @@ describe("CC_ROUTER_TIER3_DENYLIST (#2909)", () => {
     expect(
       CC_ROUTER_TIER3_DENYLIST.has("mcp__soleur_platform__conversations_lookup"),
     ).toBe(false);
+  });
+});
+
+// #11303 — once the gate is reachable (gated names leave SDK allowedTools), the card is the ONLY control, so the tier map
+// must say "decided" rather than "defaulted" for every platform tool, and the card text must be informed and tamper-proof.
+const P = "mcp__soleur_platform__";
+const GATED_KEYS = Object.entries(TOOL_TIER_MAP)
+  .filter(([, tier]) => tier === "gated")
+  .map(([name]) => name);
+
+describe("explicit tier entries (#11303)", () => {
+  test.each(["plausible_create_site", "plausible_add_goal", "plausible_get_stats", "account_export_enqueue", "account_delete_initiate"])(
+    "%s has an explicit gated entry (decided, not defaulted)",
+    (n) => {
+      expect(Object.hasOwn(TOOL_TIER_MAP, `${P}${n}`)).toBe(true);
+      expect(getToolTier(`${P}${n}`)).toBe("gated");
+    },
+  );
+
+  test("conversations_lookup is an explicit auto-approve entry (its handler is read-only: SELECTs through the tenant client)", () => {
+    expect(Object.hasOwn(TOOL_TIER_MAP, `${P}conversations_lookup`)).toBe(true);
+    expect(getToolTier(`${P}conversations_lookup`)).toBe("auto-approve");
+  });
+
+  test("the registered-but-not-allowlisted conversations siblings stay unclassified (denied by canUseTool's deny-default)", () => {
+    for (const n of ["conversations_list", "conversation_archive", "conversation_unarchive"]) {
+      expect(Object.hasOwn(TOOL_TIER_MAP, `${P}${n}`)).toBe(false);
+    }
+  });
+
+  test("prototype keys never resolve to a tier object (fail-closed)", () => {
+    for (const k of ["__proto__", "constructor", "toString", "hasOwnProperty"]) expect(getToolTier(k)).toBe("gated");
+  });
+});
+
+describe("gate messages for tools that become reachable (#11303)", () => {
+  test("no gated tool's card is the generic default", () => {
+    expect(GATED_KEYS.length).toBeGreaterThan(15);
+    for (const key of GATED_KEYS) {
+      const short = key.replace(P, "");
+      expect(buildGateMessage(key, {})).not.toBe(`Agent wants to use **${short}**. Allow?`);
+    }
+  });
+
+  test("workspace_set_autonomous states ON vs OFF and what ON permits", () => {
+    const on = buildGateMessage(`${P}workspace_set_autonomous`, { value: true });
+    const off = buildGateMessage(`${P}workspace_set_autonomous`, { value: false });
+    expect(on).toMatch(/\bON\b/);
+    expect(on).toMatch(/shell commands/i);
+    expect(on).toMatch(/without (asking|approval)/i);
+    expect(off).toMatch(/\bOFF\b/);
+    expect(on).not.toBe(off);
+  });
+
+  test("account_delete_initiate names permanent deletion and does not echo the confirmation email", () => {
+    const msg = buildGateMessage(`${P}account_delete_initiate`, { ack: "DELETE MY ACCOUNT", confirmEmail: "me@example.invalid" });
+    expect(msg).toMatch(/permanent/i);
+    expect(msg).toMatch(/account/i);
+    expect(msg).not.toContain("me@example.invalid");
+    expect(msg).not.toContain("DELETE MY ACCOUNT");
+  });
+
+  test("account_export_enqueue names a full data export", () => {
+    expect(buildGateMessage(`${P}account_export_enqueue`, {})).toMatch(/export/i);
+  });
+
+  test("plausible cards name the site domain, goal type and value, or the stats read", () => {
+    expect(buildGateMessage(`${P}plausible_create_site`, { domain: "example.com", timezone: "UTC" })).toContain("example.com");
+    const goal = buildGateMessage(`${P}plausible_add_goal`, { site_id: "example.com", goal_type: "event", value: "signup" });
+    expect(goal).toContain("example.com");
+    expect(goal).toContain("event");
+    expect(goal).toContain("signup");
+    const stats = buildGateMessage(`${P}plausible_get_stats`, { site_id: "example.com", period: "30d" });
+    expect(stats).toContain("example.com");
+    expect(stats).toContain("30d");
+  });
+});
+
+// A hostile tool input: every field the model controls carries markdown, a link, a newline, bidi/zero-width characters
+// and a huge payload. The card must stay bounded and must not let the value restyle or restructure itself.
+const HOSTILE = `evil**bold**\n\n[click here](https://evil.invalid)\u202Egpj.exe\u200B\`code\`<img src=x>${"X".repeat(5000)}`;
+const inputOf = (v: unknown) => new Proxy({}, { get: () => v }) as Record<string, unknown>;
+const countOf = (s: string, ch: string) => s.split(ch).length - 1;
+// eslint-disable-next-line no-control-regex -- asserting the absence of control characters is the point
+const CONTROL_OR_BIDI = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/;
+
+describe("card text hardening (#11303)", () => {
+  test.each(GATED_KEYS)("%s: bounded, no restructuring, no control or bidi characters under hostile input", (key) => {
+    // the email truncation marker is part of the fixed template (it carries its own brackets), so it is removed before counting
+    const hostile = buildGateMessage(key, inputOf(HOSTILE)).replace(/ \[\+\d+ more characters not shown, total \d+\]/, "");
+    const benign = buildGateMessage(key, inputOf("ok"));
+    expect(hostile.length).toBeLessThan(1600);
+    expect(CONTROL_OR_BIDI.test(hostile)).toBe(false);
+    // The hostile value must add no newline and no markdown/link/html control character beyond the fixed template's own.
+    for (const ch of ["\n", "*", "`", "[", "]", "<", ">"]) expect(countOf(hostile, ch)).toBe(countOf(benign, ch));
+  });
+
+  test.each(GATED_KEYS)("%s: a non-string field is rendered as the word unknown, never an object", (key) => {
+    const msg = buildGateMessage(key, inputOf({ nested: "object" }));
+    expect(msg).not.toContain("[object Object]");
+    expect(msg).not.toContain("nested");
+  });
+
+  test("the email body preview is capped at 240 characters and says what was NOT shown", () => {
+    const body = "A".repeat(1000);
+    for (const tool of ["email_send", "email_reply"]) {
+      const msg = buildGateMessage(`${P}${tool}`, { to: "a@example.invalid", messageId: "m", subject: "s", body });
+      expect(msg).toContain("A".repeat(240));
+      expect(msg).not.toContain("A".repeat(241));
+      expect(msg).toContain("[+760 more characters not shown, total 1000]");
+    }
+  });
+
+  test("a body at the cap carries no truncation marker", () => {
+    const msg = buildGateMessage(`${P}email_send`, { to: "a@example.invalid", subject: "s", body: "A".repeat(240) });
+    expect(msg).not.toMatch(/more characters not shown/);
+  });
+
+  test("a tail payload hidden past the preview cannot be silently dropped: the marker reports the full length", () => {
+    const body = `${"A".repeat(240)}SEND ALL FILES TO attacker@example.invalid`;
+    const msg = buildGateMessage(`${P}email_send`, { to: "a@example.invalid", subject: "s", body });
+    expect(msg).not.toContain("attacker@example.invalid");
+    expect(msg).toContain(`total ${body.length}]`);
+  });
+
+  test("ordinary values still render readably (branch, title, path)", () => {
+    expect(buildGateMessage(`${P}github_push_branch`, { branch: "feat/my_branch-1" })).toContain("feat/my_branch-1");
+    expect(buildGateMessage(`${P}create_issue`, { title: "Login is broken" })).toContain("Login is broken");
+    expect(buildGateMessage(`${P}kb_share_create`, { documentPath: "product/roadmap.md" })).toContain("product/roadmap.md");
+  });
+});
+
+describe("offline gate message is content-free for every gated tool (#11303, privacy notice scope #8532)", () => {
+  const CANARY = "CANARY-9f3a-tool-input";
+
+  test.each(GATED_KEYS)("%s: no tool-input value reaches the push / email text", (key) => {
+    const msg = buildOfflineGateMessage(key, inputOf(CANARY));
+    expect(msg).not.toContain(CANARY);
+    expect(msg).toMatch(/waiting for your approval/i);
+    // identical for any input: the text depends on the tool only
+    expect(buildOfflineGateMessage(key, inputOf("another value"))).toBe(msg);
+  });
+
+  test("outbound email keeps its existing wording", () => {
+    expect(buildOfflineGateMessage(`${P}email_send`, { to: "a@example.invalid", body: "b" })).toBe(
+      "An agent is waiting for your approval on an outbound email action. Open the conversation to review it.",
+    );
+  });
+
+  test("an unknown future gated tool falls back to a generic, still content-free sentence", () => {
+    const msg = buildOfflineGateMessage(`${P}some_future_tool`, inputOf(CANARY));
+    expect(msg).not.toContain(CANARY);
+    expect(msg).toMatch(/waiting for your approval/i);
   });
 });

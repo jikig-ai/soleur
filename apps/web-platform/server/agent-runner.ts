@@ -151,7 +151,7 @@ function resolveSessionErrorCode(
 }
 
 import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
-import { summarizeOutboundEmailInput } from "./tool-tiers";
+import { buildAllowedTools, summarizeOutboundEmailInput } from "./tool-tiers";
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
@@ -2116,13 +2116,10 @@ are the requirements to implement.`;
     // disallowedTools). Per-call divergent fields (maxTurns, mcpServers,
     // allowedTools) flow through args. Drift-guarded by
     // `agent-runner-query-options.test.ts`. See #2922.
-    const allowedToolsList =
-      platformToolNames.length > 0 || pluginMcpServerNames.length > 0
-        ? [
-            ...platformToolNames,
-            ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
-          ]
-        : undefined;
+    // #11303 — `allowedTools` is the SDK PRE-APPROVAL list: the SDK runs a bare entry before it consults `canUseTool`, so
+    // a gated tool listed here never shows its review card. Only auto-approve platform tools and plugin MCP wildcards
+    // go in; `createCanUseTool` below still receives the UNFILTERED `platformToolNames` (its own allowlist).
+    const allowedToolsList = buildAllowedTools(platformToolNames, pluginMcpServerNames);
 
     // Thread-shape guard for #3250 — drop `resume:` when the persisted
     // SDK session ends on `assistant`. Domain leaders default to
@@ -2202,7 +2199,7 @@ are the requirements to implement.`;
         // `Options.abortController` (sdk.d.ts:816).
         abortController: controller,
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
-        ...(allowedToolsList ? { allowedTools: allowedToolsList } : {}),
+        ...(allowedToolsList.length > 0 ? { allowedTools: allowedToolsList } : {}),
         // Permission callback (SDK chain step 5). File-tool checks are
         // defense-in-depth — PreToolUse hooks (step 1) are the primary
         // enforcement. See #891. The callback body lives in

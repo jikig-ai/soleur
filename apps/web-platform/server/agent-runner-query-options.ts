@@ -38,6 +38,7 @@ import { makeSandboxedSpawn, outerWrapEnabled } from "./agent-outer-wrap";
 import { resolveWorkspaceMode, type WorkspaceMode } from "./workspace-mode";
 import { assertTrustedPluginPath, getPluginPath } from "./plugin-path";
 import { mirrorWarnWithDebounce, warnSilentFallback } from "./observability";
+import { PLUGIN_SERVER_NAME_RE, TOOL_TIER_MAP } from "./tool-tiers";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 import {
   checkSeccompAgreement,
@@ -165,7 +166,11 @@ export interface AgentQueryOptionsArgs {
   sessionId?: string;
   /** Per-call MCP server registration. Legacy: `{ soleur_platform: ... }` when platform tools register; cc: `{}`. */
   mcpServers?: Record<string, unknown>;
-  /** Per-call allowedTools list (legacy: platform tool names + plugin MCP wildcards; cc: omitted at V1). */
+  /**
+   * Per-call allowedTools list = the SDK PRE-APPROVAL list (legacy: `buildAllowedTools` output, i.e. auto-approve platform
+   * tool names + plugin MCP wildcards; cc: built-in auto-approve tools). The SDK approves a bare entry before it consults
+   * `canUseTool`, so `assertAllowedToolsPreApprovalSafe` rejects anything else that looks like an `mcp__` entry (#11303).
+   */
   allowedTools?: string[];
   /**
    * Per-call disallowedTools extension (#3338). Merged with the canonical
@@ -262,6 +267,38 @@ export interface AgentQueryOptionsArgs {
 }
 
 /**
+ * #11303 — fail-closed second line of defence behind `buildAllowedTools`.
+ *
+ * The SDK auto-approves a bare `allowedTools` entry BEFORE it consults `canUseTool`, so a gated platform tool (or the bare
+ * server entry `mcp__soleur_platform`, or `mcp__*`, or a rule-content form such as `...email_send(*)`) in this list silently
+ * removes its review gate. Allowlist, not denylist: any entry that looks like an MCP entry after trimming and lower-casing
+ * must be (a) an exact FQN whose tier is auto-approve, looked up with no trimming or normalising, or (b)
+ * `mcp__plugin_soleur_<name>__*` with `<name>` matching `^[a-z0-9-]+$`; everything else throws. Entries that are not MCP
+ * entries (`Read`, `WebFetch`, ...) pass. `permissionMode: "bypassPermissions"` also skips `canUseTool` for every tool, so it
+ * throws too. The message names the offending entry only (a server-controlled string), never a tool input.
+ */
+const PLUGIN_WILDCARD_RE = /^mcp__plugin_soleur_([a-z0-9-]+)__\*$/;
+export function assertAllowedToolsPreApprovalSafe(args: {
+  allowedTools?: readonly string[];
+  permissionMode?: SDKOptions["permissionMode"];
+}): void {
+  if (args.permissionMode === "bypassPermissions") {
+    throw new Error("buildAgentQueryOptions: permissionMode bypassPermissions skips canUseTool for every tool");
+  }
+  for (const entry of args.allowedTools ?? []) {
+    if (!entry.trim().toLowerCase().startsWith("mcp__")) continue;
+    const exactAutoTool = Object.hasOwn(TOOL_TIER_MAP, entry) && TOOL_TIER_MAP[entry] === "auto-approve";
+    const wildcard = PLUGIN_WILDCARD_RE.exec(entry);
+    const validPluginWildcard = wildcard !== null && PLUGIN_SERVER_NAME_RE.test(wildcard[1]);
+    if (!exactAutoTool && !validPluginWildcard) {
+      throw new Error(
+        `buildAgentQueryOptions: allowedTools entry would pre-approve a tool ahead of canUseTool: ${JSON.stringify(entry.slice(0, 120))}`,
+      );
+    }
+  }
+}
+
+/**
  * Build the canonical SDK Options object both consumers pass to
  * `query({ prompt, options })`. The returned object is structurally
  * identical for shared fields; divergent fields originate from `args`.
@@ -273,6 +310,8 @@ export function buildAgentQueryOptions(
   args: AgentQueryOptionsArgs,
   // biome-ignore lint/suspicious/noExplicitAny: SDK Options has many optional fields not all present in our subset
 ): SDKOptions & Record<string, any> {
+  // #11303 — before any side effect (temp dirs, env): a pre-approval that would skip canUseTool fails the session start.
+  assertAllowedToolsPreApprovalSafe(args);
   const subagentOverride = args.subagentStartPayloadOverride;
   const sanitizeFn = subagentOverride?.sanitizer ?? defaultSubagentSanitize;
   const extraLogFields = subagentOverride?.extraLogFields ?? {};

@@ -159,6 +159,11 @@ const USER_WITHOUT_GITHUB = {
   repo_url: null,
 };
 
+// Registered tool short names of the in-process soleur_platform MCP server (the `tool` mock returns { name, handler }).
+function registeredPlatformTools(options: { mcpServers?: { soleur_platform?: { instance: { tools: { name: string }[] } } } }) {
+  return (options.mcpServers?.soleur_platform?.instance.tools ?? []).map((t) => t.name);
+}
+
 describe("agent-runner kb_share_* tool wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -177,9 +182,14 @@ describe("agent-runner kb_share_* tool wiring", () => {
     await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.allowedTools).toContain("mcp__soleur_platform__kb_share_create");
+    // #11303: create/revoke are gated (user-visible side effects), so they are NOT pre-approved; list/preview are.
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__kb_share_create");
     expect(options.allowedTools).toContain("mcp__soleur_platform__kb_share_list");
-    expect(options.allowedTools).toContain("mcp__soleur_platform__kb_share_revoke");
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__kb_share_revoke");
+    // ...but all three are still REGISTERED (so the gate, not absence, is what guards them).
+    expect(registeredPlatformTools(options)).toEqual(
+      expect.arrayContaining(["kb_share_create", "kb_share_list", "kb_share_revoke"]),
+    );
   });
 
   // Applies learning 2026-04-10-service-tool-registration-scope-guard:
@@ -197,11 +207,14 @@ describe("agent-runner kb_share_* tool wiring", () => {
     expect(options.allowedTools).not.toContain(
       "mcp__soleur_platform__create_pull_request",
     );
-    expect(options.allowedTools).toContain("mcp__soleur_platform__kb_share_create");
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__kb_share_create");
     expect(options.allowedTools).toContain("mcp__soleur_platform__kb_share_list");
-    expect(options.allowedTools).toContain("mcp__soleur_platform__kb_share_revoke");
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__kb_share_revoke");
     // mcpServers built even without GitHub because KB share tools exist.
     expect(options.mcpServers?.soleur_platform).toBeDefined();
+    expect(registeredPlatformTools(options)).toEqual(
+      expect.arrayContaining(["kb_share_create", "kb_share_list", "kb_share_revoke"]),
+    );
   });
 
   test("canUseTool routes kb_share_list as auto-approve (read-only)", async () => {
