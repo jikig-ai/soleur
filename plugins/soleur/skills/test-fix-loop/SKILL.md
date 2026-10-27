@@ -157,3 +157,4 @@ On success, fixes are staged but NOT committed. Commit through `soleur:ship`, wh
 - Stage, do not commit -- respect the Workflow Completion Protocol
 - Probes are not fixes -- a `[DEBUG-<hex4>]` line never checkpoints or stages (ADR-230)
 - Pass-on-retry is a flake to quarantine, not a fix to report
+- Early-exit readers break pipefail verdicts -- under `set -o pipefail`, a pipeline ending in `grep -q` or `head` can exit 141 (SIGPIPE) on a successful match and invert the check, which also shows up as an intermittent flake. Read from a file, a here-string, or a process substitution instead of piping into the reader, and confirm the verdict against both the match and no-match cases before trusting it.
