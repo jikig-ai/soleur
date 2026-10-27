@@ -577,7 +577,9 @@ new_case
 mkdir -p "$WORK/shim"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/shim/head"
 chmod +x "$WORK/shim/head"
+RUN_PREFIX="env --default-signal=PIPE"
 verdict "head fails: cryptsetup is fed an empty key, so the row is indeterminate at=key (not fail_passphrase)" indeterminate 1 key PATH="$WORK/shim:$PATH"
+RUN_PREFIX=""
 end_case
 new_case
 verdict "key file is a directory (grep rc 2 with the path present): a read fault, not an absent key" indeterminate 2 key CUTOVER_LUKS_KEY_FILE="$WORK"
@@ -1013,8 +1015,28 @@ pred_early_exit_rc() {
     rm -f "$STAMP"
     : > "$LOGTRACE"
     : > "$PHONETRACE"
+    RUN_PREFIX="env --default-signal=PIPE"
     run_tick "done" STUB_EARLY_RC=4
+    RUN_PREFIX=""
     [[ "$(probe_summary)" == "$(expect_summary 'token=indeterminate rc=4 at=kdf' indeterminate)" ]] || bad=$((bad + 1))
+  done
+  end_case
+  SUT="$TARGET"
+  [[ "$bad" -eq 0 ]]
+}
+pred_early_exit_sigpipe_ignored() {
+  SUT="$1"
+  new_case
+  local bad=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    rm -f "$STAMP"
+    : > "$LOGTRACE"
+    : > "$PHONETRACE"
+    RUN_PREFIX="env --ignore-signal=PIPE"
+    run_tick "done" STUB_EARLY_RC=4
+    RUN_PREFIX=""
+    # tr (EPIPE, exit 1) or cryptsetup's own rc both land on indeterminate; never a key verdict, never ok
+    [[ "$(probe_summary)" == 1:token=indeterminate\ *:1:token=indeterminate\ *:indeterminate ]] || bad=$((bad + 1))
   done
   end_case
   SUT="$TARGET"
@@ -1026,7 +1048,11 @@ pred_upstream_fail() {
   mkdir -p "$WORK/shim"
   printf '#!/bin/sh\nexit 1\n' > "$WORK/shim/head"
   chmod +x "$WORK/shim/head"
+  # SIGPIPE default: a runner (and systemd) starts steps with it IGNORED, which turns sed's 141 into
+  # an EPIPE exit 4 and changes the row's rc; pin the disposition so the rc is deterministic.
+  RUN_PREFIX="env --default-signal=PIPE"
   run_tick "done" PATH="$WORK/shim:$PATH"
+  RUN_PREFIX=""
   local sum
   sum="$(probe_summary)"
   end_case
@@ -1035,6 +1061,7 @@ pred_upstream_fail() {
 }
 assert_true "pristine: a failing upstream stage is indeterminate at=key" pred_upstream_fail "$TARGET"
 assert_true "pristine: a cryptsetup that exits before reading (tr takes SIGPIPE in about 4 of 10 runs) keeps its own rc: 20 runs, all indeterminate rc=4 at=kdf" pred_early_exit_rc "$TARGET"
+assert_true "pristine: with SIGPIPE ignored (the runner and systemd default) an early cryptsetup exit is still indeterminate, never a key verdict: 20 runs" pred_early_exit_sigpipe_ignored "$TARGET"
 mutate g4_m2 <<'PY'
 s = s.replace('    0:0:0|141:0:0|0:0:141) ;;', '    0:0:0|141:0:0) ;;', 1)
 PY
@@ -1277,7 +1304,7 @@ fi
 # The inventory is fixed by this file; a count that drifts (an assertion deleted, a block silently
 # skipped) is itself a RED. Bump it in the same edit that adds an assertion. Optional arms that
 # skipped with an explicit marker above are subtracted by their own constants.
-EXPECTED_ASSERTIONS=157
+EXPECTED_ASSERTIONS=158
 REAL_ARM_ASSERTIONS=11
 REFUSAL_ARM_ASSERTIONS=2
 EXPECTED=$EXPECTED_ASSERTIONS

@@ -1121,8 +1121,11 @@ luks_key_probe_tick() {
   pst=("${PIPESTATUS[@]}")
   rc="${pst[3]:-1}"
   # An upstream stage that died or timed out fed cryptsetup a short or empty key: that is not a
-  # verdict on the key. sed may legitimately take SIGPIPE (141) once head has its line, and tr
-  # does when cryptsetup exits before reading (its own rc, e.g. 4, then stays the verdict).
+  # verdict on the key. With SIGPIPE at its default sed may legitimately take 141 once head has its
+  # line, and tr does when cryptsetup exits before reading (its own rc, e.g. 4, then stays the
+  # verdict). A unit starts with SIGPIPE IGNORED (systemd IgnoreSIGPIPE=yes): the same events then
+  # surface as EPIPE write errors (sed 4, tr 1), which land in the default arm below as
+  # indeterminate at=key, a safe verdict that merely carries a less precise rc.
   case "${pst[0]:-1}:${pst[1]:-1}:${pst[2]:-1}" in
     0:0:0|141:0:0|0:0:141) ;;
     *)
