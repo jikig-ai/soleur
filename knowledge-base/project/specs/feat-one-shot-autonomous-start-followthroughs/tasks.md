@@ -13,18 +13,18 @@ Refs only (never a closing keyword): #9730, #10515, #11177, #10331 (closed 2026-
 
 ## Phase 2: shared library
 
-- 2.1 `scripts/lib/watch-notify-once.sh`: `wn_now`/`wn_reached`, `wn_read_issue`, `wn_sentinel_present`, `wn_post`, `wn_sanitize_title`, `wn_billing_month` (single jq aggregate), `wn_preflight`, `wn_notify_once_main`.
+- 2.1 `scripts/lib/watch-notify-once.sh`: `wn_now`/`wn_reached`, `wn_read_issue` (404/410 = terminal notice), `wn_sentinel_present` (exact last-line printf constants, bot-only), `wn_post`, `wn_sanitize` (code spans, bidi/zero-width strip), `wn_billing_month` (`code_quality`-only jq aggregate; 401/404/non-rate-limit 403 degrade, everything else rc 3), `wn_preflight`, `wn_notify_once_main`.
 
 ## Phase 3: scripts
 
 - 3.1 `scripts/watch-code-quality-reeval-9730.sh` (gather: PR volume via chunked aliased GraphQL, billing; compose; `--dry-run`).
 - 3.2 `scripts/watch-lint-ratchet-reeval-10515.sh`.
-- 3.3 `scripts/watch-brand-hex-triggers-11177.sh` (spike re-confirmed first: gate runs from the main checkout against a `--no-checkout` worktree).
+- 3.3 `scripts/watch-brand-hex-triggers-11177.sh` (spike re-confirmed first: gate runs from the main checkout against one reused `--no-checkout` worktree; sentinel checked before judging each commit; unjudgeable-commit finding; 600 s loop budget; newest-200 cap).
 - 3.4 chmod +x; confirm `scripts/followthrough-exec-bit.test.sh` and shellcheck-style lints stay green.
 
 ## Phase 4: workflow
 
-- 4.1 `.github/workflows/code-quality-followups-watch.yml`: cron `17 9 * * 1`, `workflow_dispatch` with `dry_run`, three jobs guarded by `github.ref == 'refs/heads/main'`, concurrency group, exact permissions, checkout depths, header with rationale and RETIREMENT list.
+- 4.1 `.github/workflows/code-quality-followups-watch.yml`: cron `17 9 * * 1`, `workflow_dispatch` with `dry_run` (via `env:`), three jobs guarded by `github.ref_name == github.event.repository.default_branch`, concurrency group, workflow-level `permissions: {}` with per-job `contents: read` + `issues: write`, SHA-pinned actions, checkout depths (1 / 0 / 0), `timeout-minutes` 5 / 5 / 15, header with rationale, residual-risk note and RETIREMENT list.
 
 ## Phase 5: registry
 

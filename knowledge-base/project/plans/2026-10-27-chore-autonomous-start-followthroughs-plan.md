@@ -12,6 +12,19 @@ lane: cross-domain
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-27. **Gates run:** 4.4 scheduled-work pattern, 4.6 user-brand, 4.7 observability, 4.8 PAT-shaped, 4.11 guard contract (lint green), 4.12 scope check, 4.13 task design; cited PR numbers and rule IDs verified live. **Agents:** DHH, Kieran and simplicity (plan-review), security-sentinel, spec-flow-analyzer, learnings-researcher, CTO x3.
+
+### Key improvements
+1. Dry-run for all three scripts, exact-permission and allowlist-census guard, concurrency block, default-branch-rename-proof job guard, per-job permissions.
+2. Third-party text is code-spanned and sanitized end to end; sentinels are exact-last-line printf constants; billing is a `code_quality`-only allowlist that never publishes the org's bill.
+3. Billing blips and transient failures retry instead of spending the one-shot; every month from 2026-09 is covered; one slow commit becomes a sentineled `unjudgeable` finding instead of a perma-red.
+
+### New considerations
+- A disabled workflow is a documented residual (no dead-man), per CTO S2.
+- Fixed a discoverability `expected_output` that the preflight tokenizer would have rejected as prose.
+
 ## Overview
 
 Three open trackers wait on a date or an event and today depend on someone remembering to look: #9730 (re-evaluate GitHub Code Quality, due on or after 2026-11-14), #10515 (lint-ratchet user-mode deferrals, due on or after 2027-01-18) and #11177 (brand-hex gate misses a chained add-then-commit; event-gated, P3). This plan gives each an autonomous start: a committed, read-only watcher script per tracker that gathers the data its re-evaluation needs and posts it once as a comment, run weekly by one repo-scoped `*-watch.yml` workflow. All three trackers stay open. Nothing here turns Code Quality on, changes a repository setting, closes, relabels or edits a tracker, or implements the #11177 fix.
@@ -23,6 +36,8 @@ PR body reminder (no closing keyword anywhere, not in the title either): `Ref #9
 ## Research Insights
 
 **Premise validation (Phase 0.6).** Checked with `gh issue view`: #9730, #10515, #11177 are OPEN; #10331 is CLOSED (2026-10-20), so it is a `Ref` only. #9730's thread shows Code Quality was turned OFF on 2026-10-19 (CTO ruling, ADR-276 amendment) and the billing stop was confirmed on 2026-10-22; the 2026-11-14 item is therefore "re-enable only if (i) a consumer for the findings exists and (ii) the AI-credit spend can be capped by a billing budget on the `code_quality` product", not "keep or switch off". #11177's thread (2026-10-27) records both triggers as not met. Collision pre-check: no open PR names any of the three issues; foreign `test-all.sh` processes belong to other worktrees. Open sibling PR #11154 (orphan-sweeps re-look probe) edits `followthrough-convention.md`, `scripts/test-all.sh`, both `suite-*.tsv` files and `tests/scripts/test-argv-bearer-sweep.sh`; this plan avoids the runbook and the argv-bearer file and plans a union-resolve for the rest. ADR corpus: ADR-033 (Inngest-first scheduling) allows repo-scoped GitHub Actions watchers by precedent (`registration-narrowing-watch.yml`, `codeql-1537-revisit-watch.yml`); the `new-scheduled-cron-prefer-inngest.sh` hook gates only `scheduled-*.yml` file names.
+
+**Scheduled-work pattern check (deepen Phase 4.4).** `git ls-files | grep cron-` shows Inngest cron functions exist, so Inngest is the default substrate (ADR-033). GitHub Actions cron is acceptable here because the work is purely repo-scoped (GitHub API reads, git history, one issue comment), uses only the default token with no app secret, no Sentry integration, and gains nothing from `step.run` replay; the existing `registration-narrowing-watch.yml` and `codeql-1537-revisit-watch.yml` are the in-repo precedents, and the `*-watch.yml` name keeps clear of the filename-gated hook. Mechanism (diff against precedent): same cron-plus-main-guard-plus-sentinel-plus-self-disable shape; differences are three jobs in one file and a shared lib.
 
 **Measured at plan time (read-only spikes).** (1) The gate-reuse mechanism of F4c works: a `git worktree add --no-checkout --detach <parent>`, `git read-tree <commit>` in that worktree's own index, a plain `git commit -m x` JSON payload and `CLAUDE_PROJECT_DIR` at an empty directory returned `allow` for a real recent main commit touching `apps/web-platform/components/*.tsx`, and returned `deny` naming `components/zz-probe.tsx:1 (component #ff00aa; use a design token)` for a synthetic index entry carrying a raw hex colour; the hook ran from the main checkout (the `--no-checkout` worktree holds no hook files), and the gate `unset`s `GIT_INDEX_FILE`, which is why the worktree's own index is used. (2) One GraphQL request with 40 aliased `search(type:ISSUE, first:1){issueCount}` fields (20 days, opened plus merged) returned in about 3 s at cost 1. (3) `gh issue view --json state,createdAt,comments` carries the fields the lib reads. (4) 2026-11-14 is a Saturday (first cron run 2026-11-16) and 2027-01-18 is a Monday.
 
@@ -80,27 +95,27 @@ shared: scripts/lib/watch-notify-once.sh
 - `wn_read_issue N`: `gh issue view N --json state,createdAt,comments`; sets `WN_STATE`, `WN_JSON`; any failure is rc 3 (post nothing).
 - `wn_sentinel_present KEY`: true only for a comment authored by `github-actions` or `github-actions[bot]` whose body contains the sentinel; a human-authored sentinel never suppresses. A jq failure is rc 3, never "absent".
 - `wn_post N`: `gh issue comment N --body-file -`; failure is rc 1.
-- `wn_sanitize_title`: code-span wrap, neutralise `@`, `<`, `>`, backtick and `&`, drop control bytes, cut to 100 characters (third-party text).
-- `wn_billing_month Y M`: `gh api 'orgs/jikig-ai/settings/billing/usage?year=Y&month=M'` (year and month in the URL, never `-f`/`-F`, so the call stays a GET); runs the single jq aggregate (per-product gross and net, plus the first and last dated `code_quality` line) so scripts 1 and 2 only render its output, and sets `WN_BILL_STATUS` to `ok` or `unreadable:<status>` where status is the `HTTP [0-9]{3}` match in gh's stderr, else `unknown` (never an error exit); only aggregates are kept. The suite's stub emits gh's real stderr shape (`gh: ... (HTTP 403)`).
-- Sentinels are full namespaced HTML comments, `<!-- code-quality-followups-watch:<key> -->`, matched with `contains` on the whole string including the closing `-->`; keys are full values (`trigger-2:<40-char sha>`, `trigger-1:v1`), so a short sha or `v10` cannot false-match; a suite row pins a prefix-colliding key.
+- `wn_sanitize` (renamed from `wn_sanitize_title`; security review S1/S5): EVERY interpolated third-party string (issue titles, logins, file paths, commit subjects, gate deny reasons) is rendered inside a code span with backticks removed, so `@mentions`, `#N` back-references and bare URLs do not notify or autolink; it also drops C0 controls, DEL, U+2028/2029, bidi overrides (U+202A-202E, U+2066-2069) and zero-width characters, neutralises `<`, `>` and `&`, and cuts to 100 characters. Bodies are never pasted.
+- `wn_billing_month Y M`: `gh api 'orgs/jikig-ai/settings/billing/usage?year=Y&month=M'` (year and month in the URL, never `-f`/`-F`, so the call stays a GET); runs the single jq aggregate (per-product gross and net, plus the first and last dated `code_quality` line) so scripts 1 and 2 only render its output, and sets `WN_BILL_STATUS` to `ok`, `unreadable:<status>` (401/404/non-rate-limit 403, status = the `HTTP [0-9]{3}` match in gh's stderr) or rc 3 for everything else; only `code_quality` aggregates are kept. The suite's stub emits gh's real stderr shape (`gh: ... (HTTP 403)`).
+- Sentinels are full namespaced HTML comments, `<!-- code-quality-followups-watch:<key> -->`, matched with `contains` on the whole string including the closing `-->`; keys are full values (`trigger-2:<40-char sha>`, `trigger-1:v1`), so a short sha or `v10` cannot false-match; a suite row pins a prefix-colliding key. The sentinel is always the exact LAST line of the comment, built only from `printf` constants plus a sha validated `^[0-9a-f]{40}$`, and the suite asserts that no sanitized data string can contain `-->` (security review S2: a title or path echoed into some other bot comment must not be able to forge or pre-spend a sentinel).
 - `wn_preflight`: `perl` and `jq` must be present (script 3 needs both for the gate), else rc 3.
 
 ### Script 1: `scripts/watch-code-quality-reeval-9730.sh`
 
-Order: xtrace refusal (rc 78) -> earliest gate -> tracker OPEN? -> sentinel present? (`<!-- code-quality-reeval-watch:v1 tracker=9730 -->`) -> gather -> compose -> post.
+Order: xtrace refusal (rc 78) -> earliest gate -> tracker OPEN? -> sentinel present? (`<!-- code-quality-followups-watch:reeval-9730:v1 -->`) -> gather -> compose -> post.
 
 - PR volume per day, 2026-09-01 through today (UTC): `gh api graphql` with aliased `search(type:ISSUE, first:1){issueCount}` fields, opened (`created:DAY`) and merged (`merged:DAY`) per day, in chunks of 20 days (measured: 40 aliases in about 3 s, cost 1) with a short pause between chunks. Every count must be an integer and every day must be present; a secondary-rate-limit or any partial response is rc 3 with nothing posted (retry next week), never a partial result.
-- Billing for months 9, 10 and the current month when it is 11 or later via `wn_billing_month`: per-product gross and net totals and, for product `code_quality`, the first and last dated line (the product string comes from the ADR-276 prose, so Phase 6 confirms it against the live response; if it does not match, fall back to showing every product's aggregate). If unreadable: say so, give the three `gh api` commands the ruling session runs with the operator's auth, `::warning::`, continue (exit 0 after posting).
+- Billing for EVERY month from 2026-09 through the current month (a first post that slips into December still carries November) via `wn_billing_month`: only the `code_quality` product is kept - gross, net, line count, first and last dated line - never other products (a fail-closed allowlist: the org's whole bill is not published on a public issue; security review S4). The product string comes from the ADR-276 prose, so Phase 6 confirms it against the live response; if no `code_quality` line exists the comment says exactly that. Failure classes: 401, 404 and a non-rate-limit 403 mean `unreadable:<status>` (degrade and post); a 5xx, 429, rate-limit 403, network error or unparseable body is rc 3 (retry next Monday - a transient blip must not spend the one-shot with a degraded comment; spec-flow P0). If unreadable: say so, give the three `gh api` commands the ruling session runs with the operator's auth, `::warning::`, continue (exit 0 after posting).
 - Comment body: the re-enable criteria quoted from the ADR-276 amendment, the current state (OFF since 2026-10-19), weekly totals and a collapsed per-day list, billing section, and the sentence that no ruling is made here: the next `soleur:go` session has the CTO agent record the keep-off or turn-on ruling from this data and moves the re-evaluation to its successor before closing the tracker. "Nothing was changed" line. Sentinel last.
 - `--dry-run` (all three scripts): gather and print the would-be body, skip the earliest gate and the post, never spend a sentinel; a suite scenario per script asserts zero `issue comment` calls. The workflow's `dry_run` dispatch input passes it to all three jobs.
 
 ### Script 2: `scripts/watch-lint-ratchet-reeval-10515.sh`
 
-Same order, sentinel `<!-- lint-ratchet-reeval-watch:v1 tracker=10515 -->`, earliest 2027-01-18. Data, per CTO ruling F5, window starting 2026-10-19 (PR #10514 merge):
+Same order, sentinel `<!-- code-quality-followups-watch:reeval-10515:v1 -->`, earliest 2027-01-18. Data, per CTO ruling F5, window starting 2026-10-19 (PR #10514 merge):
 
 - For each deferred item (six items, with item 4 split into Windows and notebooks as the 2026-10-22 triage comment does, so seven searches), a hardcoded issue/PR search (keywords pointing at that comment), up to 20 hits; item 5 (telemetry) prints a static line "build blocked on `soleur:legal:clo` review" next to its hits, and item 6 searches the single keyword `ever-better` (CTO round 2, R3: a hit on either is a valid flip signal even though building stays blocked); each with number, state, created date, author login, the author's association and an `external` mark when it is not OWNER, MEMBER or a bot. Hits are leads, not verdicts. The tracker itself and #10331 are excluded.
 - The sharpened-trigger signals: issues naming `ruff exceeded the total budget` or a ruff timeout from `lint-ratchet.py auto`.
-- Code Quality state: the expense-ledger line for "GitHub Code Quality" and the ADR-276 amendment heading, both printed verbatim, not parsed; `code_quality` billing lines dated after 2026-10-19 only when billing is readable.
+- Code Quality state: the expense-ledger line for "GitHub Code Quality" and the ADR-276 amendment heading, both printed verbatim, not parsed (checked: the ledger row holds amounts, status and dates only - no account ID or invoice number; the suite pins that the printed line matches `^\\| GitHub Code Quality`); `code_quality` billing lines dated after 2026-10-19 only when billing is readable.
 - Commits touching `plugins/soleur/scripts/lint-ratchet.py` since 2026-10-19 (`git log --first-parent`, sanitized subjects).
 - The sentence that the next `soleur:go` session has the CTO agent apply the flip condition to this data. Search failure: rc 3, nothing posted.
 
@@ -109,9 +124,9 @@ Same order, sentinel `<!-- lint-ratchet-reeval-watch:v1 tracker=10515 -->`, earl
 Runs every Monday; posts only when a trigger fires; never touches the issue otherwise.
 
 - Trigger 1 (a third hook sourcing the simulated index): tracked `.claude/hooks/*.sh` and any existing `plugins/**/hooks/*.sh`, excluding `lib/` and `*.test.sh`, minus `git-commit-secret-scan.sh` and `brand-hex-commit-gate.sh`; a non-comment line naming `commit-index-sim`. Notify once (`trigger-1:v1`).
-- Trigger 2 (an off-brand colour reached main): first-parent commits on the default branch, window = since the tracker's `createdAt`, capped at the newest 200 first-parent commits that touch the gate's path classes (CTO round 2, R1: a fixed 9-day cap would slide a commit out after two consecutive exit-3 runs, and notify-once makes re-examination free); when the cap truncates, print `examined=N truncated=1` plus a `::warning::` and exit 0. For each commit, run the real gate in ONE `git worktree add --no-checkout --detach` reused for the whole loop with one cleanup trap (`git worktree remove --force` plus `rm -rf`): per commit `git reset --mixed -q <first-parent>` then `git read-tree <commit>` into that worktree's own index (the gate unsets `GIT_INDEX_FILE`, so an env-var index would be ignored), a plain `git commit -m x` payload on stdin, `CLAUDE_PROJECT_DIR` pointed at an empty directory so no incident ledger is written, the call wrapped in `timeout -k 5 60`. A `deny` is a finding; exit 124/137, anything that is not a well-formed `allow`/`deny` JSON, or a stderr `WARN`, is rc 3, never allow. The 60 s value is a starting point: Phase 6 measures the real per-commit time and sets the timeout at about 10 times the worst case seen. Fallback only if this proves infeasible at /work: extract `UI_RE`/`EMAIL_RE`/`COLOR_RE` from the hook source with a parity test that fails when they move.
+- Trigger 2 (an off-brand colour reached main): first-parent commits on the default branch, window = since the tracker's `createdAt`, capped at the newest 200 first-parent commits that touch the gate's path classes (CTO round 2, R1: a fixed 9-day cap would slide a commit out after two consecutive exit-3 runs, and notify-once makes re-examination free); when the cap truncates, print `examined=N truncated=1` plus a `::warning::` and exit 0. For each commit, run the real gate in ONE `git worktree add --no-checkout --detach` reused for the whole loop with one cleanup trap (`git worktree remove --force` plus `rm -rf`): per commit `git reset --mixed -q <first-parent>` then `git read-tree <commit>` into that worktree's own index (the gate unsets `GIT_INDEX_FILE`, so an env-var index would be ignored), a plain `git commit -m x` payload on stdin, `CLAUDE_PROJECT_DIR` pointed at an empty directory so no incident ledger is written, the call wrapped in `timeout -k 5 60`. A `deny` is a finding. The sentinel is checked BEFORE judging each commit (`trigger-2:<sha>` and `trigger-2-unjudgeable:<sha>`), so a sentineled commit is never re-run through the gate. For ONE commit, exit 124/137, a non-`allow`/`deny` result or a stderr `WARN` is an "unjudgeable commit" (own sentinel `trigger-2-unjudgeable:<sha>`, commit skipped, loop continues; the comment says "could not be judged by the gate (timeout or unusable output)", never "off-brand colour"); it is never an allow. Systemic failure stays rc 3: preflight (hook file, perl, jq, readable history) before the loop, or the first three judged commits all unjudgeable. A total loop budget of 600 s (job `timeout-minutes: 15` leaves the rest for checkout and the post) truncates like the 200-cap: `examined=N truncated=1 budget=1`, `::warning::`, exit 0; newest-first order can starve the oldest clean commits, a documented residual with no watermark (CTO round 3, S1). The 60 s value is a starting point: Phase 6 measures the real per-commit time and sets the timeout at about 10 times the worst case seen. Fallback only if this proves infeasible at /work: extract `UI_RE`/`EMAIL_RE`/`COLOR_RE` from the hook source with a parity test that fails when they move.
 - Notify once per finding (`trigger-2:<sha>`); one comment lists only new findings (summary above 10). The comment states that the route cannot be inferred from main: a chained add-then-commit, a `--no-verify` commit and a human commit look alike, so it is a lead for the ruling session.
-- Tracker CLOSED: `::notice::`, exit 0. `--dry-run`: runs both detectors and prints the would-be comment without posting or spending a sentinel. `--print-state`: local git only, prints `watch=brand-hex-11177 mode=print-state`, the trigger-1 hook list and the trigger-2 candidate-commit count; this is the discoverability probe.
+- Tracker CLOSED: `::notice::`, exit 0. A tracker that no longer resolves (gh error text "Could not resolve to an issue" or `HTTP 404/410`) is a terminal `::notice::tracker gone, nothing to watch`, exit 0; any other or unrecognised read error stays rc 3 (CTO round 3, S2). `--dry-run`: runs both detectors and prints the would-be comment without posting or spending a sentinel. `--print-state`: local git only, prints `watch=brand-hex-11177 mode=print-state`, the trigger-1 hook list and the trigger-2 candidate-commit count; this is the discoverability probe.
 
 ### Exit codes (all three)
 
@@ -125,6 +140,7 @@ Runs every Monday; posts only when a trigger fires; never touches the issue othe
 - **Test-suite registration** follows the registry rules: explicit `run_suite` lines appended last in the `want_scripts` block (the file notes `scripts/*.test.sh` is not auto-globbed); TSV rows inserted alphabetically at floor weight, headers untouched.
 - **gh stub fidelity.** The suites' fake `gh` whitelists real flags only (learning 2026-09-25: a stub that accepts invented flags makes dead code look green).
 - **grep-q-pipe-guard.** No `cmd | grep -q` under `pipefail`; use herestrings or `grep -q` on files (`bash .claude/hooks/grep-q-pipe-guard.test.sh` is in the repo-global list).
+- **Header notes the workflow carries (spec-flow P2).** A human-deleted or edited bot comment means the next Monday re-posts once (acceptable); a tracker closed then reopened resumes and reads its sentinel correctly; `gh issue view --json comments` returns every page of comments (measured in the convention's Paging note), so a long thread cannot hide a sentinel.
 - **Date arithmetic.** `earliest` constants are ISO-8601 `Z` strings validated `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`; epoch values validated `^[1-9][0-9]{0,15}$` before arithmetic (a leading zero is octal in bash).
 
 ## User-Brand Impact
@@ -164,7 +180,7 @@ logs:
   retention: GitHub default (90 days)
 discoverability_test:
   command: bash scripts/watch-brand-hex-triggers-11177.sh --print-state
-  expected_output: watch=brand-hex-11177 mode=print-state
+  expected_output: mode=print-state
 ```
 
 ## Task Design
@@ -176,14 +192,14 @@ tasks:
     services: reads GitHub GraphQL search and the org billing usage endpoint; writes one issue comment on #9730
     next: nothing; the next soleur:go session reads the comment and has the CTO agent record the ruling
     human_reentry: stop by deleting the workflow job and script (RETIREMENT block in the workflow header); closing #9730 makes every later run a no-op
-    dedupe: bot-authored sentinel comment `code-quality-reeval-watch:v1 tracker=9730` checked before any gather (beyond concurrency group); a human-pasted sentinel never suppresses
+    dedupe: bot-authored sentinel comment `code-quality-followups-watch:reeval-9730:v1` checked before any gather (beyond concurrency group); a human-pasted sentinel never suppresses
     source_dedupe: not a ticket source
   - task: lint-ratchet-reeval-10515-watch
     trigger: same workflow, own job; earliest 2027-01-18 constant
     services: reads GitHub GraphQL search, the git history of the checkout, the expense ledger and ADR-276 files; writes one issue comment on #10515
     next: nothing; the ruling session applies the flip condition
     human_reentry: same as above; closing #10515 makes later runs no-ops
-    dedupe: bot-authored sentinel comment `lint-ratchet-reeval-watch:v1 tracker=10515`
+    dedupe: bot-authored sentinel comment `code-quality-followups-watch:reeval-10515:v1`
     source_dedupe: not a ticket source
   - task: brand-hex-triggers-11177-watch
     trigger: same workflow, own job, every Monday
@@ -278,7 +294,8 @@ No new architectural decision. The mechanism is the existing repo-scoped watcher
 | 5 | Stub the gate to print garbage / the gate prints a stderr `WARN` | RED if exit is not 3 |
 | 6 | Email-class file adds an off-palette hex vs a palette hex | RED if off-palette is not flagged or the palette hex is |
 | 7 | Skip the per-iteration `reset --mixed` + `read-tree` in the reused worktree; an offending commit is followed by a clean one | RED (stale index state would carry the first verdict into the second) |
-| 8 | Gate wrapper returns exit 124 (timeout) or a stderr `WARN` | RED if the exit is not 3 |
+| 8 | Gate wrapper returns exit 124 (timeout) or a stderr `WARN` for ONE commit, with later commits clean/offending | RED unless that commit is reported unjudgeable (once, sentineled, never "off-brand"), the loop continues, and the next week's run does not re-run it through the gate |
+| 9 | The first three judged commits are all unjudgeable, or preflight finds no `perl` / no hook file | RED unless exit 3 |
 
 **Harness rows.** Remove the worktree `read-tree` step: row 1 must go RED (the gate sees an empty index and allows everything, which is exactly the vacuity to catch); must-PASS non-canonical: a commit touching only files outside the path classes is skipped without running the gate.
 
@@ -364,11 +381,11 @@ Phase 2 — `scripts/lib/watch-notify-once.sh`.
 
 Phase 3 — Script 1, then script 2, then script 3 (smallest blast radius first; script 3 last because of the worktree and gate mechanics). After each, its suite goes green.
 
-Phase 4 — The workflow (three jobs, `if: github.ref == 'refs/heads/main'`, `concurrency: group: code-quality-followups-watch, cancel-in-progress: false`, `persist-credentials: false`, `fetch-depth: 1` for job 1 (no history needed) and `fetch-depth: 0` for jobs 2 and 3 (git log, the gate worktrees), `dry_run` dispatch input passed as `--dry-run` to all three jobs, header with purpose, noise rationale, self-disable, RETIREMENT list: workflow, three scripts and suites, lib, the `run_suite` lines, the TSV rows).
+Phase 4 — The workflow (three jobs, `if: github.ref_name == github.event.repository.default_branch` (a default-branch rename must not turn every run into a green skip), actions pinned by full 40-char SHA exactly as the precedent pins `actions/checkout`, workflow-level `permissions: {}` with the grants on each job (`contents: read`, `issues: write`), `dry_run` passed through `env:` and never interpolated inline in `run:`, `concurrency: group: code-quality-followups-watch, cancel-in-progress: false`, `persist-credentials: false`, `fetch-depth: 1` for job 1 (no history needed) and `fetch-depth: 0` for jobs 2 and 3 (git log, the gate worktrees), `dry_run` dispatch input passed as `--dry-run` to all three jobs, header with purpose, noise rationale, self-disable, RETIREMENT list: workflow, three scripts and suites, lib, the `run_suite` lines, the TSV rows).
 
 Phase 5 — Registry edits (`test-all.sh`, both TSVs); run `scripts-shard-manifest`, totality and runtime-coverage suites.
 
-Phase 6 — Live read-only dry runs from the worktree: each script with `--dry-run` against real GitHub using the operator's auth (billing readable locally, so the "readable" branch is exercised for real), compare the PR-volume totals to an independent `gh api` count, keep the output out of the repo. Run the repo-global checks (see Acceptance Criteria). Commit, `soleur:review`, `soleur:ship`.
+Phase 6 — Live read-only dry runs from the worktree (script 3's dry run is also the first-run-flood check: whatever it would post for commits already on main is reviewed BEFORE merge, so the first real Monday run does not alarm the tracker with known history; every GraphQL search string hardcodes `repo:jikig-ai/soleur` and built-in keywords only, with no third-party text interpolated into a query): each script with `--dry-run` against real GitHub using the operator's auth (billing readable locally, so the "readable" branch is exercised for real), compare the PR-volume totals to an independent `gh api` count, keep the output out of the repo. Run the repo-global checks (see Acceptance Criteria). Commit, `soleur:review`, `soleur:ship`.
 
 ## Acceptance Criteria
 
@@ -388,7 +405,7 @@ Phase 6 — Live read-only dry runs from the worktree: each script with `--dry-r
 ### Post-merge (operator-free; run by `soleur:postmerge`)
 
 - [ ] AC11: `gh workflow list` shows `code-quality-followups-watch`; `gh workflow run code-quality-followups-watch.yml -f dry_run=true` on main completes green with zero issue comments posted by the run; the three job logs are read and the Actions token's billing HTTP status is captured (the F3 expectation, now a measurement) for AC12.
-- [ ] AC12: One pointer comment on #9730 and one on #10515 (no closing keyword) stating the watcher, its date, that it comments once, and that the next `soleur:go` session has the CTO agent record the ruling; the #9730 comment also records the measured billing status from AC11. No pointer comment on #11177 (the ask says it is commented on only when a trigger fires). All three trackers verified still OPEN and #10331 still CLOSED.
+- [ ] AC12: One pointer comment on #9730 and one on #10515 (no closing keyword) stating the watcher, its date, that it comments once, and that the next `soleur:go` session has the CTO agent record the ruling and decides any successor tracker or watcher before closing the tracker (this PR sets none up); the #9730 comment also records the measured billing status from AC11. No pointer comment on #11177 (the ask says it is commented on only when a trigger fires). All three trackers verified still OPEN and #10331 still CLOSED.
 - [ ] AC13: Follow-through of the first real runs is noted on the trackers' own comment threads, not in a new issue: the first non-dry-run post is expected on the Monday after 2026-11-14 (2026-11-16) and after 2027-01-18 (the same Monday).
 
 ## Test Scenarios
@@ -409,6 +426,8 @@ Phase 6 — Live read-only dry runs from the worktree: each script with `--dry-r
 14. Preflight: `perl` or `jq` absent from PATH -> script 3 exits 3. Reused-worktree loop: an offending commit followed by a clean one reports exactly the first; a truncated window (more than 200 commits) prints `examined=200 truncated=1` and exits 0.
 
 ## Risks
+
+- **Residual: a disabled or never-run workflow is visible only as a missing or red run.** GitHub disables scheduled workflows after 60 days of repo inactivity and a persistent exit 3 shows only as a red run; the CTO (round 3, S2) rejected a sweeper dead-man (it would recreate the daily noise) and an in-script "cannot establish" notice (it depends on the same failing read); the post-merge check is `gh workflow list` plus the `dry_run` dispatch, and the repo commits daily. Recorded in the workflow header.
 
 - **Actions token cannot read org billing (expected).** Handled by design (F3) and measured post-merge (AC11). If it turns out readable, nothing else changes.
 - **Union-resolve with #11154** in `test-all.sh` and both TSVs. Mitigation: rows inserted alphabetically, headers untouched, the conflict is two sides of an additive list; re-run the registry checks after any resolve. Do not re-sync by hand when BEHIND with auto-merge armed: wait for the merge queue via Monitor.
