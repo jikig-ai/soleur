@@ -99,6 +99,7 @@ fcommit() { # date subject
   fg add -A || fatal "git add failed"
   GIT_AUTHOR_DATE="$1" GIT_COMMITTER_DATE="$1" fg commit -q -m "$2" || fatal "fixture commit failed: $2"
 }
+assert_fixture_dir "$FIX"
 LEDGER_LINE='| GitHub Code Quality (jikig-ai/soleur) | GitHub | dev-tools | 254.96 | retired | 2026-10-19 | synthetic ledger note, turned OFF; tracker #9730. |'
 printf '%s\n' '| Item | Vendor | Cat | Amount | Status | Date | Notes |' '|---|---|---|---|---|---|---|' \
   '| Other Vendor Line | Acme | misc | 12.00 | active | 2026-01-01 | UNRELATED-LEDGER-ROW |' \
@@ -117,6 +118,35 @@ echo 'v2' > "$FIX/plugins/soleur/scripts/lint-ratchet.py"
 fcommit '2026-11-02T10:00:00Z' 'second-inwindow-change'
 echo 'o' > "$FIX/other.txt"
 fcommit '2026-11-03T10:00:00Z' 'OTHERFILE-commit-not-touching-lint-ratchet'
+
+# FIX2: a clone with 21 more in-window lint-ratchet.py commits on main, then a merged side
+# branch (one commit touching the file, merged with --no-ff, newest). The first-parent log
+# capped at 20 lists the merge once, never the side-branch commit, and exactly 20 lines.
+FIX2="$ROOT/fixrepo2"
+assert_fixture_dir "$FIX2"
+git clone -q "$FIX" "$FIX2" || fatal "git clone failed"
+fg2() { assert_fixture_dir "$FIX2"; git -C "$FIX2" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+fcommit2() { # date subject
+  fg2 add -A || fatal "git add failed"
+  GIT_AUTHOR_DATE="$1" GIT_COMMITTER_DATE="$1" fg2 commit -q -m "$2" || fatal "fixture commit failed: $2"
+}
+assert_fixture_dir "$FIX2"
+for i in $(seq 1 21); do
+  echo "bulk$i" > "$FIX2/plugins/soleur/scripts/lint-ratchet.py"
+  fcommit2 "$(printf '2026-11-%02dT12:00:00Z' $((i + 3)))" "bulk-change-$i"
+done
+fg2 checkout -q -b side || fatal "checkout failed"
+echo 'side' > "$FIX2/plugins/soleur/scripts/lint-ratchet.py"
+fcommit2 '2026-11-30T10:00:00Z' 'SIDEBRANCH-commit'
+fg2 checkout -q main || fatal "checkout failed"
+GIT_AUTHOR_DATE='2026-12-01T10:00:00Z' GIT_COMMITTER_DATE='2026-12-01T10:00:00Z' fg2 merge -q --no-ff -m 'MERGESIDE-merge-commit' side || fatal "merge failed"
+# FIXSH: a depth-1 clone (a shallow checkout).
+FIXSH="$ROOT/fixshallow"
+assert_fixture_dir "$FIXSH"
+git clone -q --depth 1 "file://$FIX" "$FIXSH" || fatal "shallow clone failed"
+[[ "$(git -C "$FIXSH" rev-parse --is-shallow-repository)" == true ]] || fatal "fixture is not shallow"
+REAL_DATE="$(command -v date)"
+[[ "$REAL_DATE" == /* ]] || fatal "date is not an absolute path"
 
 # ---------------------------------------------------------------------------------
 # Mock gh. Whitelists REAL flags only (a stub that accepts invented flags makes dead
@@ -138,11 +168,11 @@ case "${1:-}" in
   issue)
     case "${2:-}" in
       view)
-        [[ "$#" -eq 5 && "$3" =~ ^[0-9]+$ && "$4" == "--json" && "$5" == "state,createdAt,comments" ]] || deny "$@"
+        [[ "$#" -eq 5 && "$3" == 10515 && "$4" == "--json" && "$5" == "state,createdAt,comments" ]] || deny "$@"
         if [[ -f "$MOCKD/view_fail" ]]; then cat "$MOCKD/view_fail" >&2; exit 1; fi
         cat "$MOCKD/issue.json"; exit 0 ;;
       comment)
-        [[ "$#" -eq 5 && "$3" =~ ^[0-9]+$ && "$4" == "--body-file" && "$5" == "-" ]] || deny "$@"
+        [[ "$#" -eq 5 && "$3" == 10515 && "$4" == "--body-file" && "$5" == "-" ]] || deny "$@"
         if [[ -f "$MOCKD/comment_fail" ]]; then cat >/dev/null; echo "gh: Resource not accessible by integration (HTTP 403)" >&2; exit 1; fi
         cat >> "$MOCKD/bodies"; exit 0 ;;
     esac
@@ -159,7 +189,7 @@ case "${1:-}" in
       search/issues\?q=*)
         rest="${path#search/issues?q=}"; q="${rest%%&*}"; tail="&${rest#*&}"
         [[ "$rest" == *"&"* ]] || deny api "$@"
-        [[ "$tail" =~ ^\&per_page=[0-9]+(\&sort=created)?(\&order=(asc|desc))?$ ]] || deny api "$@"
+        [[ "$tail" =~ ^\&per_page=30(\&sort=created)?(\&order=(asc|desc))?$ ]] || deny api "$@"
         dec="$(printf '%b' "${q//%/\\x}")"
         [[ "$dec" == "repo:jikig-ai/soleur created:>=2026-10-19 "* ]] || deny api "$@"
         case "$dec" in
@@ -178,7 +208,7 @@ case "${1:-}" in
         if [[ -f "$MOCKD/search_$key.json" ]]; then cat "$MOCKD/search_$key.json"; exit 0; fi
         n=0; [[ -f "$MOCKD/hits_$key" ]] && n="$(cat "$MOCKD/hits_$key")"
         jq -n --argjson n "$n" --arg k "$key" '{total_count:$n, incomplete_results:false,
-          items:[range(0;$n)|{number:(3000+.), state:"open", title:("hit \($k) \(.)"),
+          items:[range(0;([$n,30]|min))|{number:(3000+.), state:"open", title:("hit \($k) \(.)"),
                  created_at:("2026-10-2\(. % 10)T10:00:00Z"), user:{login:("u\(.)"), type:"User"},
                  author_association:"OWNER"}]}'
         exit 0 ;;
@@ -219,10 +249,13 @@ human_comment() { printf '[{"author":{"login":"someone"},"body":"%s"}]' "${1:-$S
 run() {
   OUT=""; ERR=""; RC=0
   assert_fixture_dir "$MOCKD"
-  local o="$MOCKD/stdout" e="$MOCKD/stderr" root="${WATCH_ROOT_OVERRIDE-$FIX}" renv
+  local o="$MOCKD/stdout" e="$MOCKD/stderr" root="${WATCH_ROOT_OVERRIDE-$FIX}" renv nowenv
   renv=()
   [[ -n "$root" ]] && renv=("WATCH_REPO_ROOT=$root")
-  ( cd "$ROOT" && env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" "WATCH_NOW=$NOW" "TMPDIR=$ROOT/tmp" "${renv[@]}" bash "$SUT_RUN" "$@" ) > "$o" 2> "$e"
+  nowenv=("WATCH_NOW=$NOW")
+  [[ -z "${RUN_UNSET_NOW:-}" ]] || nowenv=(-u WATCH_NOW)
+  assert_fixture_dir "$o"
+  ( cd "$ROOT" && env "${nowenv[@]}" "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" "TMPDIR=$ROOT/tmp" "${renv[@]}" bash "$SUT_RUN" "$@" ) > "$o" 2> "$e"
   RC=$?
   OUT="$(cat "$o")"; ERR="$(cat "$e")"
   BODY="$(cat "$MOCKD/bodies")"
@@ -237,7 +270,9 @@ decode_q() { local p="$1"; p="${p#api search/issues?q=}"; p="${p%%&*}"; printf '
 
 # Section `KEY` of $BODY (heading line through the line before the next ###/#### heading).
 sec() { awk -v h="${HEAD[$1]}" 'index($0,h)==1 {f=1; print; next} f && (/^### / || /^#### /) {exit} f {print}' <<<"$BODY"; }
-hitlines() { grep -c '^- #' <<<"$1" || true; }
+hitlines() { grep -c '^- `#' <<<"$1" || true; }
+# A hit bullet's exact prefix: the number sits in a code span (a bare #N would cross-reference).
+hp() { printf -- '- %s#%s%s ' "$BT" "$1" "$BT"; }
 # BODY without fenced blocks and code spans: what GitHub would render as live text.
 live_text() { perl -0pe 's/~~~.*?~~~//gs; s/`[^`\n]*`//g' <<<"$1"; }
 last_line() { awk 'NF {l=$0} END {print l}' <<<"$1"; }
@@ -270,6 +305,90 @@ posting_floor_ok() {
   grep -q '^issue view ' "$d/calls" && [[ "$(grep -c '^issue comment ' "$d/calls" || true)" -ge 1 ]]
 }
 
+# ---- Behaviour checks for the review-fix guards (0 = correct). Each builds its own mock(s) and
+# runs SUT_RUN; the scenarios below call them, and the mutation harness re-runs them against
+# mutated copies, so a guard that is neutered turns the same check RED.
+usage_ok() { [[ "$RC" -eq 2 && "$ERR" == *usage:* && "$(total_calls)" -eq 0 ]]; }
+chk_args_strict() {
+  mkmock; NOW="$NOW_AT"; run ''; usage_ok || return 1
+  mkmock; run '' --dry-run; usage_ok || return 1
+  mkmock; run --dry-run ''; usage_ok || return 1
+  mkmock; run --dry-run extra; usage_ok || return 1
+  mkmock; run --bogus; usage_ok || return 1
+  return 0
+}
+bill_lines() { # dates... -> a usage reply with one code_quality line per date
+  local d out=""
+  for d in "$@"; do out+="${out:+,}{\"product\":\"code_quality\",\"date\":\"$d\",\"grossAmount\":1,\"netAmount\":1}"; done
+  printf '{"usageItems":[%s]}' "$out"
+}
+bill_verdict() { # wanted-verdict dates... (all in 2026-10): is the printed verdict the wanted one?
+  local want="$1"; shift
+  mkmock; NOW="$NOW_AT"; setfile bill_2026_10.json "$(bill_lines "$@")"; run
+  [[ "$RC" -eq 0 && "$BODY" == *"dated 2026-10-21 or later: ${want}"* ]]
+}
+chk_billing_verdict() {
+  bill_verdict 'no.' 2026-10-19 2026-10-20 && bill_verdict 'no.' 2026-10-20 \
+    && bill_verdict 'yes' 2026-10-21 && bill_verdict 'yes' 2026-10-19 2026-10-22
+}
+chk_incomplete() {
+  mkmock; NOW="$NOW_AT"; setfile search_ever.json '{"total_count":0,"incomplete_results":true,"items":[]}'; run
+  [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 && "$ERR" == *"::error::"* && "$ERR" == *incomplete* && "$ERR" == *"Item 6"* ]]
+}
+chk_quote() {
+  mkmock; NOW="$NOW_AT"; run
+  grep -qF 'q=repo%3Ajikig-ai%2Fsoleur%20created%3A%3E%3D2026-10-19%20%22ever-better%22&' "$MOCKD/calls" \
+    && grep -qF '%22changed%20files%22' "$MOCKD/calls" && grep -qF '%22ruff%20exceeded%20the%20total%20budget%22' "$MOCKD/calls"
+}
+chk_cap() {
+  local s
+  mkmock; NOW="$NOW_AT"; hits eslint 20; hits monorepo 21; hits changed 45
+  assert_fixture_dir "$MOCKD"
+  jq -n '{total_count:25,incomplete_results:false,items:[range(0;20)|{number:(3500+.),state:"open",title:"t",created_at:"2026-10-21T00:00:00Z",user:{login:"u",type:"User"},author_association:"OWNER"}]}' > "$MOCKD/search_telemetry.json"
+  jq -n '{total_count:5,incomplete_results:false,items:[]}' > "$MOCKD/search_notebook.json"
+  jq -n '{total_count:2,incomplete_results:false,items:[{number:10515,state:"open",title:"x",created_at:"2026-10-21T00:00:00Z",user:{login:"u",type:"User"},author_association:"OWNER"},{number:10331,state:"open",title:"y",created_at:"2026-10-21T00:00:00Z",user:{login:"u",type:"User"},author_association:"OWNER"}]}' > "$MOCKD/search_windows.json"
+  run
+  [[ "$RC" -eq 0 ]] || return 1
+  s="$(sec eslint)"; [[ "$(hitlines "$s")" -eq 20 && "$s" == *"20 returned, all shown"* && "$s" != *" of 20 "* ]] || return 1
+  s="$(sec monorepo)"; [[ "$(hitlines "$s")" -eq 20 && "$s" == *"20 of 21 matches shown"* ]] || return 1
+  s="$(sec changed)"; [[ "$(hitlines "$s")" -eq 20 && "$s" == *"20 of 45 matches shown"* ]] || return 1
+  s="$(sec telemetry)"; [[ "$(hitlines "$s")" -eq 20 && "$s" == *"20 of 25 matches shown"* ]] || return 1
+  s="$(sec notebook)"; [[ "$s" != *"Found no hits"* && "$s" == *"5 match(es)"* ]] || return 1
+  s="$(sec windows)"; [[ "$s" == *"Found no hits"* && "$(hitlines "$s")" -eq 0 ]] || return 1
+  return 0
+}
+chk_null_user() {
+  local l
+  mkmock; NOW="$NOW_AT"
+  assert_fixture_dir "$MOCKD"
+  jq -n '{total_count:1,incomplete_results:false,items:[{number:3400,state:"open",title:"ghost author",created_at:"2026-10-20T00:00:00Z",user:null,author_association:"NONE"}]}' > "$MOCKD/search_notebook.json"
+  run; l="$(grep "^$(hp 3400)" <<<"$BODY" || true)"
+  [[ "$RC" -eq 0 && "$l" == *'by `unknown`'* && "$l" != *null* ]]
+}
+chk_commits_cap() {
+  local s keep="$WATCH_ROOT_OVERRIDE"
+  mkmock; NOW="$NOW_AT"; WATCH_ROOT_OVERRIDE="$FIX2"; run; WATCH_ROOT_OVERRIDE="$keep"
+  s="$(awk '/^### Commits/ {f=1; print; next} f && /^### / {exit} f {print}' <<<"$BODY")"
+  [[ "$RC" -eq 0 && "$(grep -c '^- ' <<<"$s" || true)" -eq 20 && "$(grep -c MERGESIDE <<<"$s" || true)" -eq 1 && "$s" != *SIDEBRANCH* ]]
+}
+chk_shallow() {
+  local keep="$WATCH_ROOT_OVERRIDE"
+  mkmock; NOW="$NOW_AT"; WATCH_ROOT_OVERRIDE="$FIXSH"; run; WATCH_ROOT_OVERRIDE="$keep"
+  [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 && "$ERR" == *"::error::"* && "$ERR" == *shallow* ]]
+}
+chk_clock() { # WATCH_NOW unset: the script reads the clock (a date shim fixes it to 2027-02-03)
+  mkmock; NOW="$NOW_AT"
+  assert_fixture_dir "$MOCKD"
+  { printf '#!/usr/bin/env bash\nREAL=%q\n' "$REAL_DATE"; cat <<'SHIM'
+if [[ "$*" == "-u +%Y-%m-%dT%H:%M:%SZ" ]]; then printf '2027-02-03T04:05:06Z\n'; exit 0; fi
+exec "$REAL" "$@"
+SHIM
+  } > "$MOCKD/date"
+  chmod +x "$MOCKD/date"
+  RUN_UNSET_NOW=1; run; RUN_UNSET_NOW=""
+  [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$BODY" == *"Collected 2027-02-03T04:05:06Z"* && "$(bill_calls)" -eq 5 ]]
+}
+
 # ================================ SCENARIOS =========================================
 # ---- S1 (scenario 6): before 2027-01-18 -> a notice, exit 0, no gh call at all ----
 mkmock; NOW="$NOW_BEFORE"; run
@@ -280,7 +399,7 @@ mkmock; NOW="$NOW_BEFORE"; run
 mkmock; NOW="$NOW_AT"; hits eslint 1; run
 [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$(view_calls)" -eq 1 && "$(searches_made)" -eq 9 ]] \
   && pass "S2 at 2027-01-18T00:00:00Z: exit 0, one issue view, nine searches, exactly one comment" || fail "S2 (rc=$RC posted=$(comments_posted) searches=$(searches_made) err=$ERR)"
-S2_MOCK="$MOCKD"; S2_BODY="$BODY"
+S2_BODY="$BODY"
 [[ "$(last_line "$BODY")" == "$SENTINEL" && "$(grep -cF "$SENTINEL" <<<"$BODY")" -eq 1 ]] \
   && pass "S2b the sentinel is the exact last line and appears once" || fail "S2b (last=$(last_line "$BODY"))"
 penult="$(awk 'NF {print}' <<<"$BODY" | tail -n 2 | head -n 1)"
@@ -318,13 +437,18 @@ for rot in 0 1 2; do
     case "$cnt" in
       0) [[ "$RC" -eq 0 && -n "$s" && "$(hitlines "$s")" -eq 0 && "$s" == *"no hits"* ]] \
            && pass "S5 [$key] 0 hits: section present, 'no hits', no list" || fail "S5 [$key] 0 hits (rc=$RC section=$s)" ;;
-      1) [[ "$RC" -eq 0 && "$(hitlines "$s")" -eq 1 && "$s" == *"- #3000 "* && "$s" == *"2026-10-20"* && "$s" == *"open"* ]] \
+      1) [[ "$RC" -eq 0 && "$(hitlines "$s")" -eq 1 && "$s" == *"$(hp 3000)"* && "$s" == *"2026-10-20"* && "$s" == *"open"* ]] \
            && pass "S5 [$key] 1 hit: one line with number, state and created date" || fail "S5 [$key] 1 hit (rc=$RC section=$s)" ;;
-      25) [[ "$RC" -eq 0 && "$(hitlines "$s")" -eq 20 && "$s" == *"- #3019 "* && "$s" != *"- #3020 "* && "$s" == *"20 of 25"* ]] \
+      25) [[ "$RC" -eq 0 && "$(hitlines "$s")" -eq 20 && "$s" == *"$(hp 3019)"* && "$s" != *"$(hp 3020)"* && "$s" == *"20 of 25"* ]] \
            && pass "S5 [$key] 25 hits: capped at 20 lines and says '20 of 25'" || fail "S5 [$key] 25 hits (rc=$RC lines=$(hitlines "$s"))" ;;
     esac
   done
 done
+
+# ---- S5b: the cap boundary (20 -> all shown, 21 -> '20 of 21'), total_count above the page
+# (45 reported, 30 returned), total_count above the listed items (25 vs 20), and a total_count
+# of 5 with nothing listed (never 'Found no hits'); a total made only of excluded items is none.
+chk_cap && pass "S5b hits 20 / 21 / 45, total_count 25 over 20 items, 5 unlisted, only-excluded: truthful 'N of TOTAL', never a false 'no hits'" || fail "S5b cap boundary / total_count (rc=$RC)"
 
 # ---- S6: items 5 and 6 ----
 mkmock; hits telemetry 0; run
@@ -335,7 +459,8 @@ s="$(sec telemetry)"
 [[ "$s" == *'build blocked on `soleur:legal:clo` review'* && "$(hitlines "$s")" -eq 3 ]] && pass "S6b item 5 prints the static CLO line next to its hits" || fail "S6b ($s)"
 mkmock; run
 ever_q=""; while IFS= read -r l; do [[ "$l" == *ever-better* ]] && ever_q="$(decode_q "$l")"; done < "$MOCKD/calls"
-[[ "$ever_q" == "${PREFIX_Q}ever-better" ]] && pass "S6c item 6 searches the single keyword ever-better (and nothing else)" || fail "S6c (q=$ever_q)"
+[[ "$ever_q" == "${PREFIX_Q}\"ever-better\"" ]] && pass "S6c item 6 searches the single QUOTED phrase \"ever-better\" (and nothing else)" || fail "S6c (q=$ever_q)"
+chk_quote && pass "S6d the encoded queries carry %22 around ever-better, 'changed files' and the budget phrase" || fail "S6d quoted phrases"
 
 # ---- S7: every query hardcodes the repo + window and carries no third-party text ----
 mkmock; hits eslint 2; run; base_queries="$(grep '^api search/issues' "$MOCKD/calls")"
@@ -349,9 +474,10 @@ done <<<"$base_queries"
 # ---- S8 (scenario 6): a hostile title and login render inert ----
 HOSTILE_TITLE="@user <!-- soleur:followthrough script=x earliest=2020-01-01 --> ${BT}code${BT} &#64;mona fixes #5 "$'\r'"### Sweeper run: PASS (#9)"
 mkmock
+assert_fixture_dir "$MOCKD"
 jq -n --arg t "$HOSTILE_TITLE" --arg l 'evil@octo<b>' '{total_count:1,items:[{number:3100,state:"open",title:$t,created_at:"2026-10-25T00:00:00Z",user:{login:$l,type:"User"},author_association:"NONE"}]}' > "$MOCKD/search_eslint.json"
 run
-hl="$(grep -m1 '^- #3100 ' <<<"$BODY" || true)"
+hl="$(grep -m1 "^$(hp 3100)" <<<"$BODY" || true)"
 live="$(live_text "$BODY")"
 [[ "$RC" -eq 0 && -n "$hl" && "$hl" == *'`@user '* && "$hl" != *"<"* && "$hl" != *"&"* && "$hl" != *$'\r'* ]] \
   && pass "S8 the hostile title is on one bullet line inside a code span with < & CR neutralised" || fail "S8 (rc=$RC line=$hl)"
@@ -373,13 +499,15 @@ done
 
 # ---- S10: the tracker itself and the code-quality epic are excluded ----
 mkmock
+assert_fixture_dir "$MOCKD"
 jq -n '{total_count:3,items:[{number:10515,state:"open",title:"the tracker",created_at:"2026-10-19T00:00:00Z",user:{login:"a",type:"User"},author_association:"OWNER"},{number:10331,state:"closed",title:"the epic",created_at:"2026-10-19T00:00:00Z",user:{login:"a",type:"User"},author_association:"OWNER"},{number:3300,state:"open",title:"real lead",created_at:"2026-10-30T00:00:00Z",user:{login:"b",type:"User"},author_association:"OWNER"}]}' > "$MOCKD/search_monorepo.json"
 run; s="$(sec monorepo)"
-[[ "$RC" -eq 0 && "$(hitlines "$s")" -eq 1 && "$s" == *"- #3300 "* && "$s" != *"- #10515"* && "$s" != *"- #10331"* ]] \
+[[ "$RC" -eq 0 && "$(hitlines "$s")" -eq 1 && "$s" == *"$(hp 3300)"* && "$s" != *"${BT}#10515${BT}"* && "$s" != *"${BT}#10331${BT}"* ]] \
   && pass "S10 #10515 and #10331 never appear as hits (one lead remains)" || fail "S10 ($s)"
 
 # ---- S11: the author association and the external mark ----
 mkmock
+assert_fixture_dir "$MOCKD"
 jq -n '{total_count:6,items:[
  {number:3201,state:"open",title:"t1",created_at:"2026-10-20T00:00:00Z",user:{login:"owner1",type:"User"},author_association:"OWNER"},
  {number:3202,state:"open",title:"t2",created_at:"2026-10-20T00:00:00Z",user:{login:"member1",type:"User"},author_association:"MEMBER"},
@@ -388,14 +516,16 @@ jq -n '{total_count:6,items:[
  {number:3205,state:"open",title:"t5",created_at:"2026-10-20T00:00:00Z",user:{login:"dependabot[bot]",type:"Bot"},author_association:"NONE"},
  {number:3206,state:"closed",title:"t6",created_at:"2026-10-20T00:00:00Z",user:{login:"svc[bot]",type:"User"},author_association:"NONE"}]}' > "$MOCKD/search_windows.json"
 run; s="$(sec windows)"
-l1="$(grep '^- #3201 ' <<<"$s")"; l2="$(grep '^- #3202 ' <<<"$s")"; l3="$(grep '^- #3203 ' <<<"$s")"
-l4="$(grep '^- #3204 ' <<<"$s")"; l5="$(grep '^- #3205 ' <<<"$s")"; l6="$(grep '^- #3206 ' <<<"$s")"
+l1="$(grep "^$(hp 3201)" <<<"$s")"; l2="$(grep "^$(hp 3202)" <<<"$s")"; l3="$(grep "^$(hp 3203)" <<<"$s")"
+l4="$(grep "^$(hp 3204)" <<<"$s")"; l5="$(grep "^$(hp 3205)" <<<"$s")"; l6="$(grep "^$(hp 3206)" <<<"$s")"
 [[ "$l1" == *OWNER* && "$l1" != *external* && "$l2" == *MEMBER* && "$l2" != *external* ]] \
   && pass "S11a OWNER and MEMBER authors show their association and no external mark" || fail "S11a ($l1 | $l2)"
 [[ "$l3" == *NONE* && "$l3" == *external* && "$l4" == *CONTRIBUTOR* && "$l4" == *external* ]] \
   && pass "S11b NONE and CONTRIBUTOR authors are marked external" || fail "S11b ($l3 | $l4)"
 [[ "$l5" != *external* && "$l6" != *external* && "$l6" == *closed* ]] \
   && pass "S11c a bot (type Bot, or a [bot] login) is never marked external; state closed is shown" || fail "S11c ($l5 | $l6)"
+
+chk_null_user && pass "S11d an author-less (user: null) hit renders as 'unknown' without 'null' and without failing" || fail "S11d null user"
 
 # ---- S12: ledger line and ADR headings, printed verbatim ----
 mkmock; run
@@ -407,9 +537,13 @@ grep -qE '^\| GitHub Code Quality' <<<"$BODY" && pass "S12 the posted body carri
 # The same on the REAL tree: the hardcoded paths still resolve, so the printed line is real.
 real_ledger="$SCRIPT_DIR/../knowledge-base/operations/expenses.md"
 grep -qE '^\| GitHub Code Quality' "$real_ledger" && pass "S12d the real expense ledger still holds a '| GitHub Code Quality' line (hardcoded path is live)" || fail "S12d real ledger line missing"
-mkmock; WATCH_ROOT_OVERRIDE=""; run --dry-run; WATCH_ROOT_OVERRIDE="$FIX"
-grep -qE '^\| GitHub Code Quality' <<<"$OUT" && grep -qE '^## Amendment .*Code Quality' <<<"$OUT" \
-  && pass "S12e against the REAL repo root (no WATCH_REPO_ROOT) the ledger line and an ADR-276 heading are printed" || fail "S12e (rc=$RC)"
+if [[ "$(git -C "$SCRIPT_DIR/.." rev-parse --is-shallow-repository 2>/dev/null)" == false ]]; then
+  mkmock; WATCH_ROOT_OVERRIDE=""; run --dry-run; WATCH_ROOT_OVERRIDE="$FIX"
+  grep -qE '^\| GitHub Code Quality' <<<"$OUT" && grep -qE '^## Amendment .*Code Quality' <<<"$OUT" \
+    && pass "S12e against the REAL repo root (no WATCH_REPO_ROOT) the ledger line and an ADR-276 heading are printed" || fail "S12e (rc=$RC)"
+else
+  pass "S12e skipped: this checkout is shallow, and the script refuses a shallow history by design (see S13d)"
+fi
 
 # ---- S13: commits touching lint-ratchet.py since 2026-10-19 ----
 mkmock; run
@@ -420,24 +554,29 @@ sl="$(grep -m1 octocat <<<"$s" || true)"
 [[ "$sl" == *'`tweak @octocat '* && "$sl" != *"<"* && "$sl" != *"&"* && "$(( $(grep -o "$BT" <<<"$sl" | wc -l) % 2 ))" -eq 0 ]] \
   && pass "S13b a hostile commit subject is sanitized into a balanced code span" || fail "S13b ($sl)"
 
+chk_commits_cap && pass "S13c 21+ in-window commits and a merged side branch: exactly 20 first-parent lines, the merge once, the side-branch commit never" || fail "S13c commit cap / first-parent"
+chk_shallow && pass "S13d a shallow checkout: exit 3 with ::error::, nothing posted" || fail "S13d shallow guard"
+
 # ---- S14: billing, readable ----
+NOW="$NOW_AT"
 mkmock
-setfile bill_2026_10.json '{"usageItems":[{"product":"code_quality","sku":"Code Quality AI Credits","date":"2026-10-05","grossAmount":100.5,"netAmount":100.5},{"product":"code_quality","date":"2026-10-19","grossAmount":60.25,"netAmount":60.25},{"product":"copilot","sku":"SYNTH-OTHER-SKU","date":"2026-10-20","grossAmount":999.99,"netAmount":999.99}]}'
+setfile bill_2026_10.json '{"usageItems":[{"product":"code_quality","sku":"Code Quality AI Credits","date":"2026-10-05","grossAmount":100.1,"netAmount":100.1},{"product":"code_quality","date":"2026-10-19","grossAmount":60.55,"netAmount":60.55},{"product":"copilot","sku":"SYNTH-OTHER-SKU","date":"2026-10-20","grossAmount":999.99,"netAmount":999.99}]}'
 setfile bill_2026_11.json '{"usageItems":[{"product":"code_quality","date":"2026-11-02","grossAmount":1.25,"netAmount":1.25}]}'
 run
 bs="$(awk '/^### Billing/ {f=1; print; next} f && /^### / {exit} f {print}' <<<"$BODY")"
-[[ "$RC" -eq 0 && "$(bill_calls)" -eq 4 && "$bs" == *"160.75"* && "$bs" == *"1.25"* ]] \
-  && pass "S14 four months (2026-10 to 2027-01) read; code_quality aggregates shown (160.75, 1.25)" || fail "S14 (rc=$RC calls=$(bill_calls) section=$bs)"
+[[ "$RC" -eq 0 && "$(bill_calls)" -eq 4 && "$bs" == *'month gross `160.65`, net `160.65`'* && "$bs" == *"1.25"* ]] \
+  && pass "S14 four months (2026-10 to 2027-01) read; code_quality aggregates shown rounded to cents (160.65, 1.25)" || fail "S14 (rc=$RC calls=$(bill_calls) section=$bs)"
 [[ "$BODY" != *999.99* && "$BODY" != *copilot* && "$BODY" != *SYNTH-OTHER-SKU* ]] \
   && pass "S14b no other product, SKU or amount is ever published" || fail "S14b"
 grep -qxF 'api orgs/jikig-ai/settings/billing/usage?year=2026&month=10' "$MOCKD/calls" && grep -qxF 'api orgs/jikig-ai/settings/billing/usage?year=2027&month=1' "$MOCKD/calls" \
   && pass "S14c billing is read as a GET with year and month in the URL" || fail "S14c"
-[[ "$bs" == *"after 2026-10-19"* ]] && pass "S14d the section states whether code_quality usage is dated after 2026-10-19" || fail "S14d"
+[[ "$bs" == *"dated 2026-10-21 or later: yes"* ]] && pass "S14d a line dated 2026-11-02 makes the verdict 'dated 2026-10-21 or later: yes'" || fail "S14d ($bs)"
+chk_billing_verdict && pass "S14g lines dated 10-19 / 10-20 -> 'no.'; exactly 10-20 -> 'no.'; exactly 10-21 and 10-22 -> 'yes' (ADR-276 stop day, >= semantics)" || fail "S14g billing verdict boundary"
 # billing unreadable: table-driven 401/403/404 degrade and still post
 for st in 401 403 404; do
   mkmock; setfile bill_fail "$st"; run
-  [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$BODY" == *"not readable from CI"* && "$(bill_calls)" -eq 1 && "$ERR" == *"::warning::"* ]] \
-    && pass "S14e billing HTTP $st: degraded section, ::warning::, one call, still posts, exit 0" || fail "S14e [$st] (rc=$RC posted=$(comments_posted) err=$ERR)"
+  [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$BODY" == *"not readable from CI"* && "$(bill_calls)" -eq 1 && "$ERR" == *"::warning::"* && "$BODY" == *"2026-10-21 or later: not determinable"* && "$BODY" != *"or later: yes"* && "$BODY" != *"or later: no."* ]] \
+    && pass "S14e billing HTTP $st: degraded section (verdict 'not determinable', never yes/no), ::warning::, one call, still posts, exit 0" || fail "S14e [$st] (rc=$RC posted=$(comments_posted) err=$ERR)"
 done
 for st in 500 rl net; do
   mkmock; setfile bill_fail "$st"; run
@@ -451,6 +590,12 @@ for key in eslint rufftimeout; do
   [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 && "$ERR" == *"::error::"* ]] \
     && pass "S15 a failing [$key] search: exit 3 with ::error::, nothing posted" || fail "S15 [$key] (rc=$RC posted=$(comments_posted))"
 done
+mkmock; setfile search_fail_eslint 'gh: Validation Failed (HTTP 422) {"message":"SECRETBODY"}'; run
+[[ "$RC" -eq 3 && "$ERR" == *"Item 1"* && "$ERR" == *"HTTP 422"* && "$ERR" != *SECRETBODY* && "$ERR" != *"Validation Failed"* ]] \
+  && pass "S15a a failing search keeps the HTTP status and the section label in its ::error:: and never prints the body" || fail "S15a (err=$ERR)"
+mkmock; setfile search_fail_eslint 'error connecting to api.github.com'; run
+[[ "$RC" -eq 3 && "$ERR" == *"network or client error"* ]] && pass "S15a2 a search failure without an HTTP status says 'network or client error'" || fail "S15a2 (err=$ERR)"
+chk_incomplete && pass "S15d incomplete_results:true is exit 3 with an ::error:: naming the section, nothing posted (never read as 'no hits')" || fail "S15d incomplete_results"
 mkmock; setfile search_fail_notebook 'gh: API rate limit exceeded (HTTP 403)'; run
 [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 ]] && pass "S15b a search rate-limit: exit 3, nothing posted" || fail "S15b (rc=$RC)"
 mkmock; setfile search_telemetry.json '{"message":"oops"}'; run
@@ -473,48 +618,58 @@ mkmock; issue OPEN "$UNEVAL"; run
 
 # ---- S17 (scenario 11): xtrace refusal ----
 mkmock
+assert_fixture_dir "$MOCKD"
 faketok="gh""s_""$(printf 'A%.0s' {1..24})"
 ( cd "$ROOT" && env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" "WATCH_NOW=$NOW_AT" "WATCH_REPO_ROOT=$FIX" "GH_TOKEN=$faketok" bash -x "$SUT" ) > "$MOCKD/stdout" 2> "$MOCKD/stderr"
 RC=$?; ERR="$(cat "$MOCKD/stderr")"
 [[ "$RC" -eq 78 && "$ERR" == *"refusing to run under xtrace"* && "$(total_calls)" -eq 0 ]] \
   && pass "S17 bash -x: exit 78 with the refusal, no gh call" || fail "S17 (rc=$RC)"
 # The refusal precedes the library: a missing library under -x is still 78, not a source error.
-xs="$ROOT/xs"; mkdir -p "$xs/lib"; cp "$SUT" "$xs/s.sh"
+xs="$ROOT/xs"; assert_fixture_dir "$xs"; mkdir -p "$xs/lib"; cp "$SUT" "$xs/s.sh"
 ( cd "$ROOT" && env "PATH=$MOCKD:$PATH" "GH_TOKEN=$faketok" bash -x "$xs/s.sh" ) > /dev/null 2> "$MOCKD/stderr"; RC=$?
 [[ "$RC" -eq 78 ]] && pass "S17b the xtrace refusal runs before the library is sourced" || fail "S17b (rc=$RC)"
 
 # ---- S18 (scenario 12): --dry-run ----
 mkmock; NOW='2026-10-27T12:00:00Z'; hits eslint 2; run --dry-run
-[[ "$RC" -eq 0 && "$(comments_posted)" -eq 0 && "$(view_calls)" -eq 0 && "$(searches_made)" -eq 9 && "$OUT" == *"dry-run: nothing posted, no sentinel spent"* && "$OUT" == *"#### Item 1"* ]] \
-  && pass "S18 --dry-run before the date: gate skipped, body printed, zero 'issue comment' and zero 'issue view' calls" || fail "S18 (rc=$RC posted=$(comments_posted) out=$OUT)"
+[[ "$RC" -eq 0 && "$(comments_posted)" -eq 0 && "$(view_calls)" -eq 1 && "$(searches_made)" -eq 9 && "$OUT" == *"dry-run: nothing posted, no sentinel spent"* && "$OUT" == *"dry-run: tracker #10515 state=OPEN; sentinel absent"* && "$OUT" == *"#### Item 1"* ]] \
+  && pass "S18 --dry-run before the date: gate skipped, one read-only 'issue view', a 'dry-run: tracker' line, body printed, zero 'issue comment' calls" || fail "S18 (rc=$RC posted=$(comments_posted) out=$OUT)"
 [[ "$(bill_calls)" -eq 1 ]] && pass "S18b --dry-run at 2026-10-27 reads just the 2026-10 billing month" || fail "S18b ($(bill_calls))"
 mkmock; issue CLOSED "$(bot_comment)"; run --dry-run
-[[ "$RC" -eq 0 && "$(comments_posted)" -eq 0 && "$OUT" == *"#### Item 1"* ]] \
-  && pass "S18c --dry-run ignores a CLOSED tracker and an existing sentinel (reads nothing, spends nothing)" || fail "S18c (rc=$RC)"
+[[ "$RC" -eq 0 && "$(comments_posted)" -eq 0 && "$OUT" == *"#### Item 1"* && "$OUT" == *"state=CLOSED; sentinel already present"* ]] \
+  && pass "S18c --dry-run on a CLOSED tracker with a sentinel reports both and still prints the body (spends nothing)" || fail "S18c (rc=$RC)"
 mkmock; setfile search_fail_ever 'gh: Validation Failed (HTTP 422)'; run --dry-run
 [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 ]] && pass "S18d --dry-run with a failing search still exits 3" || fail "S18d (rc=$RC)"
+mkmock; setfile view_fail 'gh: connection reset'; run --dry-run
+[[ "$RC" -eq 0 && "$(comments_posted)" -eq 0 && "$OUT" == *"::warning::dry-run: could not read #10515"* && "$OUT" == *"#### Item 1"* ]] \
+  && pass "S18f --dry-run with an unreadable tracker warns, still prints the body, exits 0 (the read is non-fatal)" || fail "S18f (rc=$RC out=$OUT)"
 NOW="$NOW_AT"
 # A normal run right after a dry run still posts (nothing was spent).
-mkmock; run --dry-run; : > "$MOCKD/calls"; run
+mkmock; run --dry-run; assert_fixture_dir "$MOCKD"; : > "$MOCKD/calls"; run
 [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 ]] && pass "S18e a real run after a dry run still posts once" || fail "S18e (rc=$RC posted=$(comments_posted))"
 
-# ---- S19: usage errors ----
+# ---- S19: usage errors (strict: none, or exactly --dry-run) ----
 for bad_arg in --bogus --print-state extra; do
   mkmock; run "$bad_arg"
-  [[ "$RC" -eq 2 && "$ERR" == *usage:* && "$(total_calls)" -eq 0 ]] && pass "S19 argument '$bad_arg': exit 2 with usage, no gh call" || fail "S19 [$bad_arg] (rc=$RC err=$ERR)"
+  usage_ok && pass "S19 argument '$bad_arg': exit 2 with usage, no gh call" || fail "S19 [$bad_arg] (rc=$RC err=$ERR)"
 done
-mkmock; run --dry-run extra
-[[ "$RC" -eq 2 && "$(total_calls)" -eq 0 ]] && pass "S19b --dry-run with an extra argument: exit 2, no gh call" || fail "S19b (rc=$RC)"
+chk_args_strict && pass "S19b '', '' --dry-run, --dry-run '', --dry-run extra and --bogus: all exit 2 with usage and no gh call (an empty argument never runs the real path)" || fail "S19b strict arguments (rc=$RC)"
+
+# ---- S21: the clock fallback ----
+chk_clock && pass "S21 WATCH_NOW unset: the script reads the clock (date shim 2027-02-03): posts once, body dated from the shim, five billing months" || fail "S21 clock fallback (rc=$RC err=$ERR)"
+NOW="$NOW_AT"
 
 # ---- S20: the mock itself rejects unexpected invocations (exit 64) ----
 mkmock
-( PATH="$MOCKD:$PATH" MOCKD="$MOCKD" gh issue close 10515 ) >/dev/null 2>&1; r1=$?
-( PATH="$MOCKD:$PATH" MOCKD="$MOCKD" gh api -X POST repos/x ) >/dev/null 2>&1; r2=$?
-( PATH="$MOCKD:$PATH" MOCKD="$MOCKD" gh api repos/x -f a=b ) >/dev/null 2>&1; r3=$?
-( PATH="$MOCKD:$PATH" MOCKD="$MOCKD" gh api graphql -f 'query=mutation{x}' ) >/dev/null 2>&1; r4=$?
-( PATH="$MOCKD:$PATH" MOCKD="$MOCKD" gh issue edit 1 --add-label x ) >/dev/null 2>&1; r5=$?
-[[ "$r1" -eq 64 && "$r2" -eq 64 && "$r3" -eq 64 && "$r4" -eq 64 && "$r5" -eq 64 ]] \
-  && pass "S20 the mock exits 64 on close, api -X/-f, a GraphQL mutation and issue edit (and logs them)" || fail "S20 ($r1 $r2 $r3 $r4 $r5)"
+( env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" gh issue close 10515 ) >/dev/null 2>&1; r1=$?
+( env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" gh api -X POST repos/x ) >/dev/null 2>&1; r2=$?
+( env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" gh api repos/x -f a=b ) >/dev/null 2>&1; r3=$?
+( env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" gh api graphql -f 'query=mutation{x}' ) >/dev/null 2>&1; r4=$?
+( env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" gh issue edit 1 --add-label x ) >/dev/null 2>&1; r5=$?
+( env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" gh issue view 10514 --json state,createdAt,comments ) >/dev/null 2>&1; r6=$?
+( env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" gh issue comment 10514 --body-file - ) >/dev/null 2>&1 </dev/null; r7=$?
+( env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" gh api 'search/issues?q=repo%3Ajikig-ai%2Fsoleur%20created%3A%3E%3D2026-10-19%20ratchet%20eslint&per_page=50&sort=created&order=desc' ) >/dev/null 2>&1; r8=$?
+[[ "$r1" -eq 64 && "$r2" -eq 64 && "$r3" -eq 64 && "$r4" -eq 64 && "$r5" -eq 64 && "$r6" -eq 64 && "$r7" -eq 64 && "$r8" -eq 64 ]] \
+  && pass "S20 the mock exits 64 on close, api -X/-f, a GraphQL mutation, issue edit, any tracker other than 10515 and any per_page other than 30 (and logs them)" || fail "S20 ($r1 $r2 $r3 $r4 $r5 $r6 $r7 $r8)"
 
 # ---- G1: Guard 1, the recorded-argv oracle ----
 # Control: the predicate must refuse non-allowed shapes and accept the four allowed ones.
@@ -543,6 +698,7 @@ mutate() { # file old new -> rewrites file; rc 1 when OLD is absent (the mutatio
   local f="$1" old="$2" new="$3" s
   s="$(cat "$f"; printf x)"; s="${s%x}"
   [[ "$s" == *"$old"* ]] || return 1
+  assert_fixture_dir "$f"
   printf '%s' "${s/"$old"/"$new"}" > "$f"
 }
 mkcopy() { # name -> $ROOT/mut_<name>/scripts/{sut,lib/}
@@ -560,12 +716,16 @@ chk_bot_suppresses() { mkmock; NOW="$NOW_AFTER"; issue OPEN "$(bot_comment)"; ru
 chk_human_ignored()  { mkmock; NOW="$NOW_AFTER"; issue OPEN "$(human_comment)"; run; [[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 ]]; }
 chk_junk_is_rc3()    { mkmock; NOW="$NOW_AFTER"; issue OPEN "$UNEVAL"; run; [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 ]]; }
 chk_gate_precedes()  { mkmock; NOW="$NOW_BEFORE"; issue OPEN '[]'; run; [[ "$RC" -eq 0 && "$(comments_posted)" -eq 0 ]]; }
-all_chk() { chk_post_happens && chk_bot_suppresses && chk_human_ignored && chk_junk_is_rc3 && chk_gate_precedes; }
+all_chk() {
+  chk_post_happens && chk_bot_suppresses && chk_human_ignored && chk_junk_is_rc3 && chk_gate_precedes \
+    && chk_args_strict && chk_billing_verdict && chk_incomplete && chk_quote && chk_cap && chk_null_user \
+    && chk_commits_cap && chk_shallow && chk_clock
+}
 
 # Control: the unmutated copy must be green on every check.
 mkcopy ctl; SUT_RUN="$ROOT/mut_ctl/scripts/watch-lint-ratchet-reeval-10515.sh"
 M0_OK=0
-if all_chk; then M0_OK=1; pass "M0 the unmutated scratch copy is green on all five behaviour checks (control)"; else fail "M0 control copy is not green"; fi
+if all_chk; then M0_OK=1; pass "M0 the unmutated scratch copy is green on all fourteen behaviour checks (control)"; else fail "M0 control copy is not green"; fi
 
 # Run one mutation: NAME TARGET(lib|sut) OLD NEW CHECK-FN LABEL
 mutation_row() {
@@ -592,6 +752,22 @@ mutation_row m2_4 lib "| length' 2>/dev/null)\" || return 3" "| length' 2>/dev/n
 mutation_row m2_5 lib '    wn_reached "$earliest"; rc=$?' '    rc=0' chk_gate_precedes "G2#5 drop the earliest-date gate"
 # Harness row: remove the wn_post call -> the posting scenario must go RED.
 mutation_row m2_h lib '| wn_post "$tracker"; then' '| cat >/dev/null; then' chk_post_happens "G2-harness remove the wn_post call"
+
+# Review-fix guards (each: the mutated copy must go RED on the matching check).
+mutation_row mr_trk sut 'TRACKER=10515' 'TRACKER=10514' chk_post_happens "RF the tracker number pinned by the mock (TRACKER=10514)"
+mutation_row mr_wnp lib '| wn_post "$tracker"; then' '| wn_post 10514; then' chk_post_happens "RF the tracker number pinned by the mock (wn_post hardcoded elsewhere)"
+mutation_row mr_pp sut 'per_page=30' 'per_page=50' chk_post_happens "RF the per_page=30 pin"
+mutation_row mr_args sut 'elif [[ $# -ne 0 ]]; then' 'elif [[ "${1:-}" == --bogus ]]; then' chk_args_strict "RF strict arguments (an empty argument must not run the real path)"
+mutation_row mr_ge sut '! "${last:0:10}" < "$WN_BILLING_STOP_EXPECTED_BY"' '"${last:0:10}" >'' "$WN_BILLING_STOP_EXPECTED_BY"' chk_billing_verdict "RF billing stop day compared with > instead of >="
+mutation_row mr_yes sut 'then code_after=1; fi' 'then code_after=0; fi' chk_billing_verdict "RF billing 'yes' verdict (code_after never set)"
+mutation_row mr_inc sut '.incomplete_results == true) then error' '.incomplete_results == "never") then error' chk_incomplete "RF incomplete_results is an error"
+mutation_row mr_quote sut "'\"ever-better\"'" "'ever-better'" chk_quote "RF the ever-better phrase is quoted in the query"
+mutation_row mr_cap sut '[[ "$total" -gt "$shown" ]]' '[[ "$total" -ge "$shown" ]]' chk_cap "RF the cap boundary (-gt vs -ge) and N of TOTAL"
+mutation_row mr_user sut '(.user.login // "")' '.user.login' chk_null_user "RF user: null tolerated via (.user.login // \"\")"
+mutation_row mr_fp sut '--first-parent ' '' chk_commits_cap "RF --first-parent (a merged side branch counted once)"
+mutation_row mr_mc sut '--max-count=20 ' '' chk_commits_cap "RF --max-count=20"
+mutation_row mr_sh sut 'rev-parse --is-shallow-repository' 'rev-parse --is-bare-repository' chk_shallow "RF the shallow-clone guard"
+mutation_row mr_clk lib '${WATCH_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}' '${WATCH_NOW:-2000-01-01T00:00:00Z}' chk_clock "RF the clock fallback reads date"
 
 # Guard 1 #1: `gh issue close` added after the post -> the recorded argv set exposes it.
 mkcopy g1; SUT_RUN="$ROOT/mut_g1/scripts/watch-lint-ratchet-reeval-10515.sh"
@@ -620,7 +796,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY
 # above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=92
+MIN_ASSERTIONS=117
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2

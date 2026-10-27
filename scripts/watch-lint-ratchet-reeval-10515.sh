@@ -25,15 +25,19 @@
 #
 # Modes:
 #   (default)   post the data comment once (on or after the date)
-#   --dry-run   gather and print the would-be comment; skips the date gate, the tracker
-#               read and the sentinel read; never posts and never spends the sentinel
+#   --dry-run   gather and print the would-be comment; skips the date gate; performs the
+#               read-only tracker read and sentinel check (and says what it found);
+#               never posts and never spends the sentinel
+# Arguments are strict: none, or exactly `--dry-run`. Anything else (an empty string, a
+# second argument, an unknown flag) is a usage error (exit 2).
 # Env: GH_TOKEN (injected by the workflow); WATCH_NOW (test seam, ISO-8601 Z);
 #      WATCH_REPO_ROOT (test seam: the checkout whose git history, ledger and ADR are read).
 #
 # Exit: 0 posted / dry-run / any no-op (before the date, tracker not open, gone or already
 #         notified); 1 comment post failed; 2 usage; 3 cannot establish (a search, the
-#         tracker read, a billing read that is not a plain "unreadable" or git failed;
-#         nothing posted, so the next run retries); 78 refusing to run under xtrace.
+#         tracker read, a billing read that is not a plain "unreadable", an incomplete
+#         search result, a shallow checkout or git failed; nothing posted, so the next
+#         run retries); 78 refusing to run under xtrace.
 # A red run is the only failure signal (Actions tab + GitHub's failure email).
 set -uo pipefail
 
@@ -54,11 +58,11 @@ HIT_CAP=20
 
 usage() { echo "usage: ${0##*/} [--dry-run]" >&2; exit 2; }
 DRY=0
-case "${1:-}" in
-  "") ;;
-  --dry-run) DRY=1; [[ $# -eq 1 ]] || usage ;;
-  *) usage ;;
-esac
+if [[ $# -eq 1 && "$1" == --dry-run ]]; then
+  DRY=1
+elif [[ $# -ne 0 ]]; then
+  usage
+fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${WATCH_REPO_ROOT:-$(cd "$HERE/.." && pwd)}"
@@ -68,85 +72,107 @@ if [[ ! -r "$HERE/lib/watch-notify-once.sh" ]]; then
 fi
 # shellcheck source=lib/watch-notify-once.sh
 . "$HERE/lib/watch-notify-once.sh"
+# shellcheck disable=SC2034  # read by wn_notify_once_main in the sourced library
 WN_DRY_RUN="$DRY"
 
 BODY_ACC=""
 add() { BODY_ACC+="$1"$'\n'; }
 
 # ------------------------------------------------------------------- searches ----
-# Percent-encode in pure bash (no fork): everything outside the RFC 3986 unreserved set.
-URLENC=""
-urlenc() {
-  local in="$1" out="" c i h
-  for (( i = 0; i < ${#in}; i++ )); do
-    c="${in:i:1}"
-    case "$c" in
-      [A-Za-z0-9._~-]) out+="$c" ;;
-      *) printf -v h '%%%02X' "'$c"; out+="$h" ;;
-    esac
-  done
-  URLENC="$out"
-}
-
-# run_search TERMS -> SEARCH_JSON (the hits minus the excluded numbers). rc 3 on any failure.
+# run_search TERMS LABEL -> SEARCH_JSON {total, items} (the items minus the excluded numbers;
+# total is the search's total_count less the excluded items seen). rc 3 on any failure, with
+# an ::error:: naming LABEL and the cause (HTTP status only; a response body is never printed).
+# A result flagged incomplete_results is a failure too: a truncated search must not be read as
+# "no hits". Keyword search is fuzzy: phrases are double-quoted by the caller.
 SEARCH_JSON=""
 run_search() {
-  local q enc raw
+  local q enc raw errf rc err http label="$2"
   q="repo:jikig-ai/soleur created:>=${WINDOW_START} $1"
-  urlenc "$q"; enc="$URLENC"
-  [[ -n "$enc" ]] || return 3
-  raw="$(gh api "search/issues?q=${enc}&per_page=30&sort=created&order=desc" 2>/dev/null)" || return 3
+  enc="$(jq -rn --arg q "$q" '$q | @uri')" || enc=""
+  if [[ -z "$enc" ]]; then
+    echo "::error::search for '${label}' failed (could not encode the query); posting nothing (the next run retries)" >&2
+    return 3
+  fi
+  errf="$(mktemp "${TMPDIR:-/var/tmp}/wlr-err.XXXXXXXX")" || {
+    echo "::error::search for '${label}' failed (no temp file); posting nothing (the next run retries)" >&2
+    return 3
+  }
+  raw="$(gh api "search/issues?q=${enc}&per_page=30&sort=created&order=desc" 2>"$errf")"
+  rc=$?
+  err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
+  if [[ "$rc" -ne 0 ]]; then
+    http="$(printf '%s' "$err" | grep -oE 'HTTP [0-9]{3}' | head -n 1 || true)"
+    echo "::error::search for '${label}' failed (${http:-network or client error}); posting nothing (the next run retries)" >&2
+    return 3
+  fi
   SEARCH_JSON="$(printf '%s' "$raw" | jq -c --argjson ex "$EXCLUDE_JSON" '
-      if (.items | type) == "array" then
-        [.items[] | select((.number | type) == "number")
-                  | select(.number as $n | ($ex | index($n)) | not)]
-      else error("no items array") end' 2>/dev/null)" || return 3
-  [[ -n "$SEARCH_JSON" ]] || return 3
+      if (.incomplete_results == true) then error("incomplete")
+      elif (.items | type) == "array" then
+        [.items[] | select((.number | type) == "number")] as $all
+        | [$all[] | select(.number as $n | ($ex | index($n)) | not)] as $kept
+        | {items: $kept,
+           total: ([(if (.total_count | type) == "number" then .total_count else ($all | length) end)
+                    - (($all | length) - ($kept | length)), ($kept | length)] | max)}
+      else error("no items array") end' 2>/dev/null)"
+  rc=$?
+  if [[ "$rc" -ne 0 || -z "$SEARCH_JSON" ]]; then
+    if printf '%s' "$raw" | jq -e '.incomplete_results == true' >/dev/null 2>&1; then
+      echo "::error::search for '${label}' returned incomplete_results (GitHub timed out); posting nothing (the next run retries)" >&2
+    else
+      echo "::error::search for '${label}' returned an unexpected shape (no items array); posting nothing (the next run retries)" >&2
+    fi
+    return 3
+  fi
   return 0
 }
 
 # render_search HEADING TERMS [NOTE]: one `####` section; rc 3 when the search fails.
 render_search() {
-  local heading="$1" terms="$2" note="${3:-}" n shown rec num state date login assoc typ kind title ext
+  local heading="$1" terms="$2" note="${3:-}" total n shown rec num state date login assoc typ kind title ext
   local login_s assoc_s title_s
-  if ! run_search "$terms"; then
-    echo "::error::search '${terms}' failed; posting nothing (the next run retries)" >&2
-    return 3
-  fi
-  # ONE jq call: the first line is the hit count, then one record per shown hit.
+  run_search "$terms" "$heading" || return 3
+  # ONE jq call: the first line is the total, the second the number of listed items, then one
+  # record per shown hit.
   mapfile -t RECS < <(printf '%s' "$SEARCH_JSON" | jq -r --argjson cap "$HIT_CAP" '
-      length,
-      (.[:$cap][] | [(.number | tostring), (.state // ""), ((.created_at // "")[:10]),
-                     (.user.login // ""), (.author_association // ""), (.user.type // ""),
-                     (if .pull_request then "pull request" else "issue" end), (.title // "")]
-                  | map(tostring | gsub("[\\x00-\\x1f\\x7f]"; "")) | join("\u001f"))')
-  n="${RECS[0]:-}"
-  [[ "$n" =~ ^[0-9]+$ ]] || return 3
+      .total, (.items | length),
+      (.items[:$cap][] | [(.number | tostring), (.state // ""), ((.created_at // "")[:10]),
+                          (.user.login // ""), (.author_association // ""), (.user.type // ""),
+                          (if .pull_request then "pull request" else "issue" end), (.title // "")]
+                       | map(tostring | gsub("[\\x00-\\x1f\\x7f]"; "")) | join("\u001f"))')
+  total="${RECS[0]:-}"; n="${RECS[1]:-}"
+  [[ "$total" =~ ^[0-9]+$ && "$n" =~ ^[0-9]+$ ]] || return 3
   add "#### ${heading}"
   add ""
-  add "Search: \`${terms}\` (repo \`jikig-ai/soleur\`, created on or after ${WINDOW_START})."
+  add "Search: \`${terms}\` (repo \`jikig-ai/soleur\`, created on or after ${WINDOW_START}). Keyword search: hits are leads, not verdicts."
   [[ -z "$note" ]] || add "$note"
   add ""
-  if [[ "$n" -eq 0 ]]; then
+  if [[ "$total" -eq 0 && "$n" -eq 0 ]]; then
     add "Found no hits in the window."
     add ""
     return 0
   fi
+  if [[ "$n" -eq 0 ]]; then
+    add "The search reports ${total} match(es) but none are listed on the returned page; check the search by hand."
+    add ""
+    return 0
+  fi
   shown="$n"
-  if [[ "$n" -gt "$HIT_CAP" ]]; then
-    shown="$HIT_CAP"
-    add "${shown} of ${n} returned shown (cap ${HIT_CAP}). Hits are leads, not verdicts."
+  [[ "$shown" -le "$HIT_CAP" ]] || shown="$HIT_CAP"
+  if [[ "$total" -gt "$shown" ]]; then
+    add "${shown} of ${total} matches shown (cap ${HIT_CAP}, newest first)."
   else
-    add "${n} returned, all shown. Hits are leads, not verdicts."
+    add "${total} returned, all shown."
   fi
   add ""
-  for rec in "${RECS[@]:1}"; do
+  for rec in "${RECS[@]:2}"; do
     [[ -n "$rec" ]] || continue
     IFS=$'\x1f' read -r num state date login assoc typ kind title <<<"$rec"
     [[ "$num" =~ ^[0-9]+$ ]] || continue
     [[ "$state" =~ ^(open|closed)$ ]] || state="unknown"
     [[ "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || date="unknown"
     [[ "$kind" =~ ^(issue|pull\ request)$ ]] || kind="item"
+    [[ -n "$login" ]] || login="unknown"
+    [[ -n "$assoc" ]] || assoc="UNKNOWN"
     # Plain GitHub logins and association enums are already inert; anything else goes
     # through the sanitizer like every other third-party string.
     if [[ "$login" =~ ^[A-Za-z0-9-]{1,39}(\[bot\])?$ ]]; then login_s="\`${login}\`"; else login_s="$(wn_sanitize "$login")" || return 3; fi
@@ -157,7 +183,9 @@ render_search() {
       OWNER|MEMBER) ;;
       *) if [[ "$typ" != "Bot" && "$login" != *"[bot]" ]]; then ext=" **external**"; fi ;;
     esac
-    add "- #${num} ${kind}, ${state}, created ${date}, by ${login_s} (association ${assoc_s})${ext}: ${title_s}"
+    # The number sits in a code span: a bare #N would create a cross-reference event on that
+    # issue or pull request for every hit, every week.
+    add "- \`#${num}\` ${kind}, ${state}, created ${date}, by ${login_s} (association ${assoc_s})${ext}: ${title_s}"
   done
   add ""
   return 0
@@ -215,7 +243,7 @@ span_date() { if [[ "$1" == none || "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}([T\ ][0-
 # Only the `code_quality` product is aggregated (wn_billing_month); the org's whole bill is
 # never published. Months run from 2026-10 (the window) to the current month.
 billing_section() {
-  local now y m ny nm brc code_after=0 j lines gross net first last tag when unread_y="" unread_m=""
+  local now y m ny nm brc code_after=0 j lines gross net first last when unread_y="" unread_m=""
   now="$(wn_now_iso)"
   [[ "$now" =~ ^([0-9]{4})-([0-9]{2})- ]] || return 3
   ny="${BASH_REMATCH[1]}"; nm=$((10#${BASH_REMATCH[2]}))
@@ -240,10 +268,11 @@ billing_section() {
             [(.lines | tostring), (.gross | tostring), (.net | tostring), (.first // "none"), (.last // "none")]
             | map(tostring | gsub("[\\x00-\\x1f\\x7f]"; "")) | join("\u001f")') || return 3
         [[ "$lines" =~ ^[0-9]+$ ]] || return 3
-        tag="no line dated after ${WINDOW_START}"
-        if [[ "$lines" -gt 0 && "${last:0:10}" > "$WINDOW_START" ]]; then tag="usage dated after ${WINDOW_START}"; code_after=1; fi
+        # ADR-276: no line dated on or after the stop day is expected. A missing (`none`) or
+        # malformed last date is never "after the stop".
+        if [[ "$lines" -gt 0 && "${last:0:10}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && ! "${last:0:10}" < "$WN_BILLING_STOP_EXPECTED_BY" ]]; then code_after=1; fi
         when="$(printf '%04d-%02d' "$y" "$m")"
-        add "- ${when}: ${lines} line(s), month gross $(span_num "$gross"), net $(span_num "$net"), first $(span_date "$first"), last $(span_date "$last"); ${tag}"
+        add "- ${when}: ${lines} line(s), month gross $(span_num "$gross"), net $(span_num "$net"), first $(span_date "$first"), last $(span_date "$last")"
         ;;
       unreadable:*)
         unread_y="$y"; unread_m="$m"
@@ -260,15 +289,15 @@ billing_section() {
       add "- \`gh api 'orgs/jikig-ai/settings/billing/usage?year=${y}&month=${m}'\` (keep only the \`code_quality\` product)"
       m=$((m + 1)); if (( m > 12 )); then m=1; y=$((y + 1)); fi
     done
+    add ""
+    add "Any \`code_quality\` usage dated ${WN_BILLING_STOP_EXPECTED_BY} or later: not determinable (billing is unreadable from CI)."
     echo "::warning::org billing is not readable from CI (${WN_BILL_STATUS}); the comment says so and lists the commands to run locally" >&2
+  elif [[ "$code_after" -eq 1 ]]; then
+    add ""
+    add "Any \`code_quality\` usage dated ${WN_BILLING_STOP_EXPECTED_BY} or later: yes (ADR-276 expected billing to have stopped; investigate before any flip)."
   else
-    if [[ "$code_after" -eq 1 ]]; then
-      add ""
-      add "Any \`code_quality\` usage dated after ${WINDOW_START}: yes (billing was expected to stop with the 2026-10-19 toggle; investigate before any flip)."
-    else
-      add ""
-      add "Any \`code_quality\` usage dated after ${WINDOW_START}: no."
-    fi
+    add ""
+    add "Any \`code_quality\` usage dated ${WN_BILLING_STOP_EXPECTED_BY} or later: no."
   fi
   add ""
   return 0
@@ -276,6 +305,11 @@ billing_section() {
 
 commits_section() {
   local log h d s s_s
+  # A shallow checkout silently truncates the history: refuse rather than report "none".
+  if [[ "$(git -C "$ROOT" rev-parse --is-shallow-repository 2>/dev/null)" != false ]]; then
+    echo "::error::git history is not fully readable (shallow checkout or not a repository); use fetch-depth: 0; posting nothing (the next run retries)" >&2
+    return 3
+  fi
   log="$(git -C "$ROOT" log --first-parent --max-count=20 --since="${WINDOW_START}T00:00:00Z" --format='%h%x09%cs%x09%s' -- "$LINT_RATCHET_REL" 2>/dev/null)" || {
     echo "::error::git log for ${LINT_RATCHET_REL} failed; posting nothing (the next run retries)" >&2
     return 3
@@ -314,7 +348,7 @@ gather() {
   render_search 'Item 4a: native Windows' 'ratchet windows' || return 3
   render_search 'Item 4b: notebooks (.ipynb)' 'ratchet notebook' || return 3
   render_search 'Item 5: opt-in telemetry' 'ratchet telemetry' 'Static note: build blocked on `soleur:legal:clo` review; a hit here is still a valid flip signal ("any item above becomes a filed user request").' || return 3
-  render_search 'Item 6: ever-better as an alternative engine' 'ever-better' 'A hit here is a valid flip signal ("someone files a request to try it"); research only.' || return 3
+  render_search 'Item 6: ever-better as an alternative engine' '"ever-better"' 'A hit here is a valid flip signal ("someone files a request to try it"); research only.' || return 3
   add "### Sharpened trigger for item 3"
   add ""
   add "A filed issue reporting a ruff budget overrun or a ruff timeout from \`lint-ratchet.py auto\`, or a measured whole-tree run over 5 minutes on a user repository."
@@ -329,6 +363,7 @@ gather() {
   add "Flip condition (from the tracker): any deferred item becomes a filed user request, or the Code Quality keep-or-drop decision in the code-quality epic changes the value of in-agent linting. No ruling is made here and nothing was changed. This tracker stays open."
   add ""
   add "The next \`soleur:go\` session has the CTO agent apply the flip condition to this data."
+  # shellcheck disable=SC2034  # read by wn_notify_once_main in the sourced library
   WN_BODY="${BODY_ACC%$'\n'}"
   return 0
 }

@@ -20,18 +20,19 @@
 # 3 cannot establish, 78 refusing to run under xtrace.
 
 # The org whose billing the dated watchers read, and the repo whose search they run.
-WN_ORG="${WN_ORG:-jikig-ai}"
-WN_REPO_SLUG="${WN_REPO_SLUG:-jikig-ai/soleur}"
+WN_ORG=jikig-ai
+# ADR-276: the metered Code Quality line dated 2026-10-20 covers usage up to the switch-off
+# (the meter posts a day late), so NO `code_quality` line dated on or after this day is expected
+# once the switch-off took effect. Both billing watchers compare against this one constant.
+WN_BILLING_STOP_EXPECTED_BY=2026-10-21
 WN_SENTINEL_PREFIX='code-quality-followups-watch'
 
 WN_STATE=""; WN_CREATED=""; WN_JSON=""; WN_BODY=""; WN_BILL_STATUS=""; WN_BILL_JSON=""
-WN_DRY_RUN="${WN_DRY_RUN:-0}"
-
-wn_refuse_xtrace() {
-  case "$-" in
-    *x*) printf '[FATAL] refusing to run under xtrace: this script holds a live GitHub token and -x would print it (see #7797)\n' >&2; exit 78 ;;
-  esac
-}
+# Unconditional: only the --dry-run flag may enable dry-run. An inherited WN_DRY_RUN=1 must never
+# silently turn a real run into a dry one. (The xtrace refusal lives INLINE at the top of each script,
+# before this file is sourced, so no -x trace can print the token while sourcing.)
+WN_DRY_RUN=0
+WN_ERR_HTTP=""
 
 # wn_preflight: the tools every watcher needs. rc 3 names the first missing one.
 wn_preflight() {
@@ -72,6 +73,7 @@ wn_read_issue() {
   local rc=$?
   err="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
   if [[ "$rc" -ne 0 ]]; then
+    WN_ERR_HTTP="$(printf '%s' "$err" | grep -oE 'HTTP [0-9]{3}' | head -n 1 || true)"
     case "$err" in
       *"Could not resolve to an issue"*|*"HTTP 404"*|*"HTTP 410"*) return 4 ;;
     esac
@@ -106,8 +108,17 @@ wn_sentinel_present() {
 
 # The one writer. Body on stdin.
 wn_post() {
-  local n="$1"
-  gh issue comment "$n" --body-file - >/dev/null 2>&1 || return 1
+  local n="$1" errf rc
+  errf="$(mktemp "${TMPDIR:-/var/tmp}/wn-err.XXXXXXXX")" || errf=/dev/null
+  gh issue comment "$n" --body-file - >/dev/null 2>"$errf"
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    # Cause only (the HTTP status), never the response text.
+    WN_ERR_HTTP="$(grep -oE 'HTTP [0-9]{3}' "$errf" 2>/dev/null | head -n 1 || true)"
+    [[ "$errf" == /dev/null ]] || rm -f "$errf"
+    return 1
+  fi
+  [[ "$errf" == /dev/null ]] || rm -f "$errf"
   return 0
 }
 
@@ -121,7 +132,7 @@ wn_sanitize() {
   WN_S="$1" perl -e '
     use strict; use warnings; use Encode qw(decode encode);
     my $s = decode("UTF-8", $ENV{WN_S} // "", Encode::FB_DEFAULT);
-    $s =~ s/[\x00-\x1f\x7f\x{2028}\x{2029}\x{202A}-\x{202E}\x{2066}-\x{2069}\x{200B}-\x{200F}\x{2060}\x{FEFF}]//g;
+    $s =~ s/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\x{0085}\x{061C}\x{115F}\x{3164}\x{180B}-\x{180F}\x{FE00}-\x{FE0F}\x{E0000}-\x{E007F}]//g;
     $s =~ s/[`<>&]/ /g;
     $s = substr($s, 0, 100);
     print encode("UTF-8", "`" . $s . "`");'
@@ -148,21 +159,27 @@ wn_billing_month() {
       401|404) WN_BILL_STATUS="unreadable:${http}"; return 0 ;;
       403)
         case "$err" in
-          *[Rr]ate\ limit*|*secondary*) return 3 ;;
+          *[Rr]ate\ limit*|*secondary*)
+            echo "::error::billing read for ${y}-${m} was rate limited (HTTP 403); posting nothing, retrying next run" >&2
+            return 3 ;;
         esac
         WN_BILL_STATUS="unreadable:403"; return 0 ;;
     esac
+    echo "::error::billing read for ${y}-${m} failed (${http:+HTTP }${http:-no HTTP status; network or client error}); posting nothing, retrying next run" >&2
     return 3
   fi
   WN_BILL_JSON="$(printf '%s' "$out" | jq -c '
       if (.usageItems | type) == "array" then
         [.usageItems[] | select((.product // "") | test("code[ _-]?quality"; "i"))]
         | {lines: length,
-           gross: (map(.grossAmount // 0) | add // 0),
-           net: (map(.netAmount // 0) | add // 0),
+           gross: ((map(.grossAmount // 0) | add // 0) * 100 | round / 100),
+           net: ((map(.netAmount // 0) | add // 0) * 100 | round / 100),
            first: (map(.date // empty) | min // null),
            last: (map(.date // empty) | max // null)}
-      else error("no usageItems array") end' 2>/dev/null)" || return 3
+      else error("no usageItems array") end' 2>/dev/null)" || {
+    echo "::error::billing read for ${y}-${m} returned an unexpected shape (no usageItems array); posting nothing, retrying next run" >&2
+    return 3
+  }
   [[ -n "$WN_BILL_JSON" ]] || return 3
   WN_BILL_STATUS="ok"
   return 0
@@ -176,6 +193,10 @@ wn_billing_month() {
 wn_notify_once_main() {
   local tracker="$1" earliest="$2" key="$3" gather="$4" rc sentinel
   sentinel="$(wn_sentinel "$key")"
+  if ! declare -F "$gather" >/dev/null 2>&1; then
+    echo "::error::internal: gather function '${gather}' is not defined" >&2
+    return 3
+  fi
 
   if [[ "$WN_DRY_RUN" != 1 ]]; then
     wn_reached "$earliest"; rc=$?
@@ -186,7 +207,7 @@ wn_notify_once_main() {
     fi
     wn_read_issue "$tracker"; rc=$?
     if [[ "$rc" -eq 4 ]]; then echo "::notice::tracker #${tracker} no longer resolves; tracker gone, nothing to watch"; return 0; fi
-    if [[ "$rc" -ne 0 ]]; then echo "::error::could not read #${tracker} (state/comments); posting nothing" >&2; return 3; fi
+    if [[ "$rc" -ne 0 ]]; then echo "::error::could not read #${tracker} (state/comments; ${WN_ERR_HTTP:-no HTTP status}); posting nothing, retrying next run" >&2; return 3; fi
     if [[ "$WN_STATE" != "OPEN" ]]; then
       echo "::notice::#${tracker} is '${WN_STATE}' (not OPEN); nothing to watch; delete the watcher per the RETIREMENT block in code-quality-followups-watch.yml"
       return 0
@@ -194,12 +215,34 @@ wn_notify_once_main() {
     wn_sentinel_present "$key"; rc=$?
     if [[ "$rc" -eq 3 ]]; then echo "::error::could not evaluate the comments of #${tracker}; posting nothing" >&2; return 3; fi
     if [[ "$rc" -eq 0 ]]; then echo "already notified: sentinel present on #${tracker}"; return 0; fi
+  else
+    # Dry-run still exercises the live READ path (read-only), so the post-merge dry-run dispatch
+    # validates the tracker read and the sentinel reader. Never fatal here and never posts.
+    wn_read_issue "$tracker"; rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      wn_sentinel_present "$key"; rc=$?
+      case "$rc" in
+        0) echo "dry-run: tracker #${tracker} state=${WN_STATE}; sentinel already present (a real run would post nothing)" ;;
+        1) echo "dry-run: tracker #${tracker} state=${WN_STATE}; sentinel absent" ;;
+        *) echo "::warning::dry-run: could not evaluate the comments of #${tracker}" ;;
+      esac
+    else
+      echo "::warning::dry-run: could not read #${tracker} (${WN_ERR_HTTP:-rc ${rc}})"
+    fi
   fi
 
   WN_BODY=""
   "$gather"; rc=$?
-  if [[ "$rc" -ne 0 ]]; then return "$rc"; fi
+  if [[ "$rc" -ne 0 ]]; then
+    echo "::error::#${tracker}: gathering the data failed (exit ${rc}); posting nothing, retrying next run" >&2
+    return "$rc"
+  fi
   [[ -n "$WN_BODY" ]] || { echo "::error::gather produced no body; posting nothing" >&2; return 3; }
+  # GitHub rejects a comment over 65,536 characters; cut with a visible note rather than fail weekly.
+  if [[ "${#WN_BODY}" -gt 60000 ]]; then
+    WN_BODY="${WN_BODY:0:60000}"$'\n\n'"_(Truncated: the full data exceeded GitHub's comment size limit.)_"
+    echo "::warning::#${tracker}: comment body truncated to fit GitHub's size limit"
+  fi
 
   if [[ "$WN_DRY_RUN" == 1 ]]; then
     printf '%s\n\n%s\n' "$WN_BODY" "$sentinel"
@@ -208,7 +251,7 @@ wn_notify_once_main() {
   fi
   # The sentinel is always the exact LAST line, built from constants only.
   if ! printf '%s\n\n%s\n' "$WN_BODY" "$sentinel" | wn_post "$tracker"; then
-    echo "::error::posting the notice on #${tracker} failed" >&2
+    echo "::error::posting the notice on #${tracker} failed (${WN_ERR_HTTP:-no HTTP status}); nothing spent, retrying next run" >&2
     return 1
   fi
   echo "posted the one-time notice on #${tracker}"

@@ -15,29 +15,43 @@ name: code-quality follow-ups watch
 # WHY a dedicated workflow and not a follow-through sweeper tracker: the sweeper comments
 # on every non-pass verdict with no per-verdict dedup and exit 0 closes the issue, so a
 # notify-only probe on an OPEN tracker would comment daily; the follow-through convention
-# routes this shape to a dedicated scheduled workflow (CTO ruling F2). Placement follows
-# ADR-033 (repo-scoped GitHub Actions, default token only, no app secret). The `*-watch.yml`
-# name is deliberate (siblings: registration-narrowing-watch, codeql-1537-revisit-watch):
-# the Inngest-preference hook gates new `scheduled-*.yml` files by filename.
+# routes this shape to a dedicated scheduled workflow (CTO ruling F2).
 #
-# DEFAULT BRANCH ONLY: every job is skipped for a dispatch from any other ref, because the
-# scripts measure the checked-out history and a feature-branch run could spend a once-only
-# notice on commits that never merged. The guard compares against the repository's
-# default-branch NAME (not the literal `main`), so a default-branch rename cannot turn
-# every run into a green skip.
+# WHY GitHub Actions and not an Inngest cron: the work is purely repo-scoped (GitHub API reads,
+# git history, one issue comment), uses only the default token with no app secret and no Sentry
+# integration, and gains nothing from `step.run` replay. The in-repo precedent is
+# registration-narrowing-watch.yml (PR #9660) and codeql-1537-revisit-watch.yml; the Inngest-first
+# scheduling rule is ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md
+# (a different ADR of the same number covers agent-loop crons, not these watchers). The
+# `*-watch.yml` name is deliberate: the Inngest-preference hook gates new `scheduled-*.yml`
+# files by filename.
+#
+# DEFAULT BRANCH ONLY: a dispatch from any other ref is skipped, because the scripts measure
+# the checked-out history and a feature-branch run could spend a once-only notice on commits
+# that never merged. A `schedule` event always runs on the default branch, so the guard lets
+# it through without consulting the payload (the repository default-branch field is not
+# relied on for scheduled runs, where it was not observable before the first real Monday).
+# The dispatch arm compares the full ref against the repository's default-branch NAME (not the
+# literal `main`, and a tag of the same name does not match). The repository condition keeps
+# a fork that enabled Actions from posting this repository's numbers on the fork's own issues.
 #
 # NOISE: weekly cadence means up to 7 days between a date and the post (first post
 # 2026-11-16 for #9730; 2027-01-18 is itself a Monday). A human-deleted or edited bot
 # comment makes the next Monday re-post once (acceptable); a tracker closed then reopened
-# resumes and reads its sentinel correctly.
+# resumes and reads its sentinel correctly. The guarantee is AT-LEAST-ONCE: a post that
+# lands server-side but fails client-side is still deduplicated by its sentinel next run,
+# and an operator who posts a real (non-dry) run locally posts as themselves, which the
+# bot-only sentinel reader does not count - run locally with --dry-run only.
 #
 # SELF-DISABLE: once a tracker is not OPEN, or no longer resolves, its job is a cheap
 # no-op that prints a ::notice:: pointing here.
 #
-# RESIDUAL RISK (CTO ruling S2, documented not mitigated): GitHub disables scheduled
-# workflows after 60 days of repository inactivity, and a persistent exit 3 shows only as a
-# red run. There is deliberately no dead-man alarm (it would recreate the sweeper's daily
-# noise). The post-merge check is `gh workflow list` plus a `dry_run` dispatch.
+# RESIDUAL RISK (CTO ruling S2, documented not mitigated): a dropped or delayed scheduled run
+# and a persistent exit 3 show only as a missing or red run on the Actions tab; GitHub's failure
+# email goes to the account that last edited the cron line, which may not be watched. There is
+# deliberately no dead-man alarm (it would recreate the sweeper's daily noise). The post-merge
+# check is `gh workflow list` plus a `dry_run` dispatch, then confirming the first Monday's
+# scheduled run (`gh run list --event schedule`) did not skip the jobs.
 #
 # RETIREMENT: when #9730, #10515 and #11177 are all closed, delete every site below in one PR
 # (or one tracker's job, script and suite when only that tracker closes):
@@ -48,6 +62,8 @@ name: code-quality follow-ups watch
 #   - scripts/watch-brand-hex-triggers-11177.sh and its .test.sh
 #   - the three run_suite lines in scripts/test-all.sh
 #   - the matching rows in scripts/suite-durations.tsv and scripts/suite-shard-legs.tsv
+#   - the 12 false-positive accept rows for the three watch suites in
+#     scripts/ci-pr-affected-audit.accept.tsv (the replay ratchet fails on a stale accept row)
 #   - NOTE: scripts/watch-code-quality-reeval-9730.test.sh carries the ONE static forbidden-verb
 #     census; when that suite is deleted, move the census to the next surviving suite.
 #   - (leave the pointer comments on the trackers: they are harmless and a PR cannot delete them)
@@ -76,7 +92,7 @@ concurrency:
 
 jobs:
   reeval-9730:
-    if: github.ref_name == github.event.repository.default_branch
+    if: github.repository == 'jikig-ai/soleur' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -98,7 +114,7 @@ jobs:
           bash scripts/watch-code-quality-reeval-9730.sh ${args[@]+"${args[@]}"}
 
   reeval-10515:
-    if: github.ref_name == github.event.repository.default_branch
+    if: github.repository == 'jikig-ai/soleur' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -120,9 +136,9 @@ jobs:
           bash scripts/watch-lint-ratchet-reeval-10515.sh ${args[@]+"${args[@]}"}
 
   triggers-11177:
-    if: github.ref_name == github.event.repository.default_branch
+    if: github.repository == 'jikig-ai/soleur' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
       issues: write
