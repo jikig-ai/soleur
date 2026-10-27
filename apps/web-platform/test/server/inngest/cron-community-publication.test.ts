@@ -1121,7 +1121,7 @@ describe("writeDigestFileContained", () => {
     async () => {
       const parent = join(root, "knowledge-base/support/community");
       await mkdir(parent, { recursive: true });
-      const dirFh = await openContainedDir(root, ["knowledge-base", "support", "community"]);
+      const dir = await openContainedDir(root, ["knowledge-base", "support", "community"]);
       const leaf = "2026-10-06-digest.md";
       try {
         const renamed = join(root, "knowledge-base/support/community-renamed");
@@ -1129,7 +1129,7 @@ describe("writeDigestFileContained", () => {
         const decoy = join(outside, "decoy");
         await mkdir(decoy);
         await symlink(decoy, parent);
-        const fh = await createContainedFile(dirFh, parent, leaf);
+        const fh = await createContainedFile(dir, leaf);
         try {
           await fh.writeFile("pinned\n");
         } finally {
@@ -1138,7 +1138,7 @@ describe("writeDigestFileContained", () => {
         expect(await readFile(join(renamed, leaf), "utf8")).toBe("pinned\n");
         expect(await readdir(decoy)).toEqual([]);
       } finally {
-        await dirFh.close().catch(() => {});
+        await dir.fh.close().catch(() => {});
       }
     },
   );
@@ -1146,17 +1146,17 @@ describe("writeDigestFileContained", () => {
   it("fails closed when the leaf is re-created between unlink and open (injected seam)", async () => {
     const parent = join(root, "knowledge-base/support/community");
     await mkdir(parent, { recursive: true });
-    const dirFh = await openContainedDir(root, ["knowledge-base", "support", "community"]);
+    const dir = await openContainedDir(root, ["knowledge-base", "support", "community"]);
     const leaf = "2026-10-06-digest.md";
     try {
       await expect(
-        createContainedFile(dirFh, parent, leaf, async () => {
+        createContainedFile(dir, leaf, async () => {
           await writeFile(join(parent, leaf), "racer");
         }),
       ).rejects.toThrow();
       expect(await readFile(join(parent, leaf), "utf8")).toBe("racer");
     } finally {
-      await dirFh.close().catch(() => {});
+      await dir.fh.close().catch(() => {});
     }
   });
 });

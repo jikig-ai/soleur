@@ -661,25 +661,35 @@ export function renderCommunityPublication(
 const CONTAINED_FD_BASE = "/proc/self/fd";
 const containedHasProcFd = process.platform === "linux";
 
-async function containedDirFlags(): Promise<number> {
+async function containedFlagConstants(): Promise<{ dir: number; leaf: number }> {
   const { constants } = await import("node:fs");
-  return (constants.O_RDONLY ?? 0) | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0);
+  return {
+    dir: (constants.O_RDONLY ?? 0) | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0),
+    leaf:
+      (constants.O_WRONLY ?? 0) |
+      (constants.O_CREAT ?? 0) |
+      (constants.O_EXCL ?? 0) |
+      (constants.O_NOFOLLOW ?? 0),
+  };
 }
 
 /**
  * Open `spawnCwd` and each `dirSegments` ancestor as a directory FileHandle,
  * refusing symlinks and non-directories atomically at open time. Returns the
- * leaf parent's FileHandle; the caller closes it.
+ * leaf parent's FileHandle and its joined path (the non-Linux fallback needs
+ * the path; returning it keeps the validated dir and the write dir tied).
+ * The caller closes `fh`.
  */
 export async function openContainedDir(
   spawnCwd: string,
   dirSegments: string[],
-): Promise<import("node:fs/promises").FileHandle> {
+): Promise<{ fh: import("node:fs/promises").FileHandle; dirPath: string }> {
   const { open, mkdir } = await import("node:fs/promises");
   const { join } = await import("node:path");
-  const dirFlags = await containedDirFlags();
+  const dirFlags = (await containedFlagConstants()).dir;
 
   let dirFh;
+  let current = spawnCwd;
   try {
     dirFh = await open(spawnCwd, dirFlags);
   } catch (err) {
@@ -690,7 +700,6 @@ export async function openContainedDir(
     throw err;
   }
   try {
-    let current = spawnCwd;
     for (const segment of dirSegments) {
       const childPath = containedHasProcFd
         ? `${CONTAINED_FD_BASE}/${dirFh.fd}/${segment}`
@@ -706,44 +715,55 @@ export async function openContainedDir(
           } catch (mkErr) {
             if ((mkErr as NodeJS.ErrnoException).code !== "EEXIST") throw mkErr;
           }
-          child = await open(childPath, dirFlags);
+          try {
+            child = await open(childPath, dirFlags);
+          } catch (retryErr) {
+            const retryCode = (retryErr as NodeJS.ErrnoException).code;
+            if (retryCode === "ELOOP" || retryCode === "ENOTDIR") {
+              throw new Error("writeDigestFileContained: ancestor is not a plain directory");
+            }
+            throw retryErr;
+          }
         } else if (code === "ELOOP" || code === "ENOTDIR") {
           throw new Error("writeDigestFileContained: ancestor is not a plain directory");
         } else {
           throw err;
         }
       }
-      await dirFh.close();
+      // Assign before closing the old handle: if close() throws, `child` must
+      // already be the tracked handle so the outer catch releases it.
+      const previous = dirFh;
       dirFh = child;
+      await previous.close().catch(() => {});
       current = join(current, segment);
     }
   } catch (err) {
     await dirFh.close().catch(() => {});
     throw err;
   }
-  return dirFh;
+  return { fh: dirFh, dirPath: current };
 }
 
 /**
- * Create `leaf` inside the directory `dirFh` is pinned to, fail-closed.
- * `fallbackDirPath` is the joined path of that same directory, used only when
- * `/proc/self/fd` is unavailable. `beforeOpen` is a test seam that runs
- * between the unlink and the exclusive create. Returns the write FileHandle;
- * the caller writes and closes it.
+ * Create `leaf` inside the directory `dir.fh` is pinned to, fail-closed.
+ * `dir` is the `{ fh, dirPath }` `openContainedDir` returned — `dirPath` is
+ * used only when `/proc/self/fd` is unavailable, and tying it to the handle
+ * keeps a caller from writing into a directory that was never opened.
+ * `beforeOpen` is a test seam that runs between the unlink and the exclusive
+ * create. Returns the write FileHandle; the caller writes and closes it.
  */
 export async function createContainedFile(
-  dirFh: import("node:fs/promises").FileHandle,
-  fallbackDirPath: string,
+  dir: { fh: import("node:fs/promises").FileHandle; dirPath: string },
   leaf: string,
   beforeOpen?: () => Promise<void>,
 ): Promise<import("node:fs/promises").FileHandle> {
   const { open, unlink } = await import("node:fs/promises");
-  const { constants } = await import("node:fs");
   const { join } = await import("node:path");
+  const leafFlags = (await containedFlagConstants()).leaf;
 
   const leafPath = containedHasProcFd
-    ? `${CONTAINED_FD_BASE}/${dirFh.fd}/${leaf}`
-    : join(fallbackDirPath, leaf);
+    ? `${CONTAINED_FD_BASE}/${dir.fh.fd}/${leaf}`
+    : join(dir.dirPath, leaf);
 
   try {
     // unlink removes a symlink itself, never the file it points at.
@@ -757,16 +777,10 @@ export async function createContainedFile(
   }
   await beforeOpen?.();
   try {
-    return await open(
-      leafPath,
-      (constants.O_WRONLY ?? 0) |
-        (constants.O_CREAT ?? 0) |
-        (constants.O_EXCL ?? 0) |
-        (constants.O_NOFOLLOW ?? 0),
-      0o644,
-    );
+    return await open(leafPath, leafFlags, 0o644);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EEXIST" || code === "ELOOP") {
       throw new Error("writeDigestFileContained: target appeared during write (race refused)");
     }
     throw err;
@@ -778,7 +792,7 @@ export async function writeDigestFileContained(
   relPath: string,
   text: string,
 ): Promise<void> {
-  const { isAbsolute, join } = await import("node:path");
+  const { isAbsolute } = await import("node:path");
 
   const segments = relPath.split("/");
   if (
@@ -790,16 +804,16 @@ export async function writeDigestFileContained(
   }
 
   const dirSegments = segments.slice(0, -1);
-  const dirFh = await openContainedDir(spawnCwd, dirSegments);
+  const dir = await openContainedDir(spawnCwd, dirSegments);
   try {
-    const fh = await createContainedFile(dirFh, join(spawnCwd, ...dirSegments), segments[segments.length - 1]);
+    const fh = await createContainedFile(dir, segments[segments.length - 1]);
     try {
       await fh.writeFile(text);
     } finally {
       await fh.close();
     }
   } finally {
-    await dirFh.close().catch(() => {});
+    await dir.fh.close().catch(() => {});
   }
 }
 
