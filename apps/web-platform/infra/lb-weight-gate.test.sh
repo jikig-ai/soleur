@@ -298,27 +298,29 @@ assert_no_grep "C.1c: dns.tf does NOT reference hcloud_server.web[\"web-2\"] (li
 assert_grep    "C.2: server.tf tunnel connector predicate is each.key == \"web-1\"" server.tf \
   'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*"web-1"'
 
-# C.3 — no cloudflare_load_balancer pools web-2 at weight>0. Today there is NO LB at all (Phase 6),
-#       so the assertion is: no cloudflare_load_balancer_pool resource exists yet. When the LB lands
-#       in Phase 6, this assertion must be tightened to "no web-2 origin with weight>0 pre-flip".
-# Glob $SCRIPT_DIR explicitly (NOT a bare `*.tf`, which would expand against the CALLER's CWD and
-# make the assertion count — and the MIN_CASES guard — non-deterministic across invocation dirs;
-# the terraform-cwd class). One aggregate assertion over the whole infra dir: no .tf declares a
-# cloudflare_load_balancer yet (LB is Phase 6). When the LB lands, tighten this to "no web-2 origin
-# with weight>0 pre-flip". Fail-closed: zero .tf files found = a moved/renamed dir = FAIL.
-lb_hits=0; tf_seen=0
+# C.3 — no cloudflare_load_balancer pools web-2 at weight>0 (pre-flip). With the LB now
+#       landed (Phase 6 overlay-add, ADR-068 §(b)), the assertion tightens to: no pool origin
+#       references web-2 and no LB default_pool_ids includes a web-2 pool. web-2 stays
+#       structurally absent until the cutover soak marker (GIT_DATA_LUKS_CUTOVER_AT) is satisfied.
+# Glob $SCRIPT_DIR explicitly (terraform-cwd class). Fail-closed: zero .tf files = FAIL.
+web2_pool_hits=0; tf_seen=0
 for f in "$SCRIPT_DIR"/*.tf; do
   [[ -f "$f" ]] || continue
   tf_seen=$((tf_seen + 1))
-  grep -qE 'resource[[:space:]]+"cloudflare_load_balancer' "$f" && lb_hits=$((lb_hits + 1)) || true
+  # Only flag files that actually declare an LB AND address web-2 as an origin/pool.
+  if grep -qE 'resource[[:space:]]+"cloudflare_load_balancer' "$f"; then
+    if grep -qE 'hcloud_server\.web\["web-2"\]|name[[:space:]]*=[[:space:]]*"web-2"' "$f"; then
+      web2_pool_hits=$((web2_pool_hits + 1))
+    fi
+  fi
 done
 TOTAL=$((TOTAL + 1))
 if [[ "$tf_seen" -lt 1 ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no .tf files found under $SCRIPT_DIR (fail-closed — dir moved?)"
-elif [[ "$lb_hits" -eq 0 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: none of $tf_seen .tf files declares a cloudflare_load_balancer (LB is Phase 6)"
+elif [[ "$web2_pool_hits" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: no LB .tf references web-2 (web-2 structurally absent pre-flip)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $lb_hits .tf file(s) declare a cloudflare_load_balancer — tighten Condition C to assert web-2 weight==0 pre-flip"
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $web2_pool_hits LB .tf file(s) reference web-2 — keep web-2 out of default_pool_ids pre-flip"
 fi
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
