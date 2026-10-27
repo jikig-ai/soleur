@@ -132,8 +132,8 @@ PASS the saved .pen holds no form of the canary credential (bytes scanned)
 RECORD files the engine wrote under HOME in a session: none
 PASS no file the engine wrote under HOME contains a form of the canary credential
 PASS positive control: this probe's own redactor removes the canary in all three forms
-RECORD lockfile packages declaring an install script (skipped by --ignore-scripts): @google/genai, protobufjs, sharp
-RECORD install method: npm 11.20.0 ci --ignore-scripts rc=0 in 19 s; node v26.12.1
+RECORD lockfile packages declaring an install script (skipped by --ignore-scripts): @google/genai, protobufjs
+RECORD install method: npm 11.20.0 ci --ignore-scripts rc=0 in 25 s; node v26.12.1
 PASS npm ci --ignore-scripts from the committed lockfile succeeds
 PASS npm ci left the lockfile byte-identical
 PASS the --ignore-scripts install holds the pinned engine version
@@ -210,7 +210,7 @@ RECORD acceptance dashboard action feedback variant b instrumented spec.pen: dis
 RECORD acceptance dashboard action feedback variant c ember glow.pen: disk=4 loaded=4
 RECORD acceptance dashboard blueprint cards variant a two zones.pen: disk=3 loaded=3
 RECORD acceptance dashboard blueprint cards variant b enriched chips.pen: disk=2 loaded=2
-RECORD acceptance dashboard dashboard load states.pen: disk=6 loaded=REFUSED
+RECORD acceptance dashboard dashboard load states.pen: disk=6 loaded=6
 RECORD acceptance dashboard releases nav relocation.pen: disk=2 loaded=2
 RECORD acceptance dashboard sidebar resizer gold doubleclick.pen: disk=6 loaded=6
 RECORD acceptance debug mode debug mode stream.pen: disk=4 loaded=4
@@ -282,8 +282,7 @@ RECORD acceptance workstream creator attribution.pen: disk=2 loaded=2
 RECORD acceptance workstream workstream filter bar.pen: disk=3 loaded=3
 RECORD acceptance workstream workstream issue crud.pen: disk=29 loaded=29
 RECORD acceptance workstream workstream kanban.pen: disk=5 loaded=5
-RECORD acceptance REFUSED dashboard dashboard load states.pen: open failed: [pencil-adapter] pen exited before it was ready (code=1 signal=null):
-RECORD load-fidelity acceptance summary: 108 committed design .pen files, 108 parse as documents, 107 load faithfully, 1 refused by the engine, 0 load with fewer top-level nodes, 107 s
+RECORD load-fidelity acceptance summary: 108 committed design .pen files, 108 parse as documents, 108 load faithfully, 0 refused by the engine, 0 load with fewer top-level nodes, 119 s
 PASS acceptance: every committed file was evaluated
 PASS acceptance (ruling 6): no committed design .pen loads with fewer top-level nodes than on disk
 PASS acceptance: the committed files the engine refuses to open are exactly the pinned set

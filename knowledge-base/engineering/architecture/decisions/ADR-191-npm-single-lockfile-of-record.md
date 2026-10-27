@@ -217,3 +217,11 @@ versions, an age floor protects freshness when the lockfile is regenerated (whic
 does not have), and undici needed an `overrides` entry to leave a vulnerable transitive version.
 The engine install is also keyed on a stamp of the lockfile's hash, not only on the version string,
 so a lockfile change reaches an install that is already at the pin.
+
+**Addendum 2026-10-27 (#11156): a second `overrides` entry, `sharp`.** The engine's own range is `sharp ^0.34.5`, and
+0.34.5 carries three HIGH advisories (GHSA-f88m-g3jw-g9cj, GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w; patched in 0.35.0, 0.35.4
+and 0.35.5), which the `dependency-review` required check rejects (`fail-on-severity: high`). `pen-cli/package.json` now
+overrides `sharp` to `0.35.5`, a minor step on a 0.x line and therefore outside the engine's declared range, so it is covered
+by the live `engine-contract-probe.sh` (exports in png, jpeg and webp, screenshots, load fidelity), not only by the audit
+(`npm audit --omit=dev` reports 0 vulnerabilities on the regenerated lockfile). Drop the override when the engine's own range
+reaches a patched `sharp`; bump it only after a green probe, as for `undici`.
